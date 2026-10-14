@@ -27,6 +27,10 @@ const spies = vi.hoisted(() => ({
   updateDataSet: vi.fn(() => Promise.resolve({ message: '修改成功（演示）' })),
   openDialog: vi.fn(),
   showPrompt: vi.fn(),
+  // 指标三件套（旧 MeasureShow / MeasureAdd / MeasureAddNew）
+  openMeasureShow: vi.fn(),
+  openMeasureAdd: vi.fn(),
+  openMeasureAddNew: vi.fn(),
 }))
 
 // 只替掉请求函数（这里每个操作发哪条接口就是要验的东西）
@@ -81,21 +85,63 @@ vi.mock('./PromptDialog.vue', async () => {
   }
 })
 
+// 指标三件套（旧 MeasureShow / MeasureAdd / MeasureAddNew）也都是弹层，同样只验「用哪一行、
+// 什么入参打开的」。⚠️ MeasureAddDialog / MeasureAddNewDialog 是 indicatorsList 目录下的组件，
+// 路径要写对（跨目录 import），否则会真的挂载它们、连带拉进 JsonDefDialog 那一整串。
+vi.mock('./MeasureShowDialog.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      name: 'MeasureShowDialog',
+      setup(_props, { expose }) {
+        expose({ open: spies.openMeasureShow })
+        return () => h('div', { class: 'stub-measure-show' })
+      },
+    }),
+  }
+})
+
+vi.mock('../indicatorsList/MeasureAddDialog.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      name: 'MeasureAddDialog',
+      emits: ['saved'],
+      setup(_props, { expose }) {
+        expose({ open: spies.openMeasureAdd })
+        return () => h('div', { class: 'stub-measure-add' })
+      },
+    }),
+  }
+})
+
+vi.mock('../indicatorsList/MeasureAddNewDialog.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      name: 'MeasureAddNewDialog',
+      emits: ['saved'],
+      setup(_props, { expose }) {
+        expose({ open: spies.openMeasureAddNew })
+        return () => h('div', { class: 'stub-measure-add-new' })
+      },
+    }),
+  }
+})
+
 // confirmDanger 真实实现要弹 ElMessageBox（jsdom 里点不到「确认执行」），默认直接放行动作本身。
 vi.mock('@/utils/confirmDanger', () => ({
   confirmDanger: vi.fn((_title: string, _body: string, run: () => unknown) => run()),
   confirmOrRun: vi.fn((_need: boolean, _t: string, _b: string, run: () => unknown) => run()),
 }))
 
-// 路由页没有 props，旧版 props/created 的入参改从 $route.query 取；
-// 「指标三件套」入口改成 router.replace 跳页签（1014 接通），所以要带 useRouter 的替身。
+// 路由页没有 props，旧版 props/created 的入参改从 $route.query 取。
+// （1014 起本页不再有跳页签的入口，所以这里连 useRouter 都不用替身了。）
 const routeState = vi.hoisted(() => ({
   query: {} as Record<string, string>,
-  replace: vi.fn(),
 }))
 vi.mock('vue-router', () => ({
   useRoute: () => routeState,
-  useRouter: () => ({ replace: routeState.replace }),
 }))
 
 function row(over: Partial<DatasetRow> = {}): DatasetRow {
@@ -149,7 +195,6 @@ function lastQuery(): Record<string, unknown> {
 
 beforeEach(() => {
   Object.values(spies).forEach((fn) => fn.mockClear())
-  routeState.replace.mockClear()
   spies.datasetPaged.mockImplementation(async () => ({ list: ROWS, total: 3 }))
 })
 
@@ -323,31 +368,28 @@ describe('indicatorDataset · 行内操作', () => {
     expect(lastQuery()).toMatchObject({ datasetId: '' })
   })
 
-  it('增加指标 / 指标-新 → 跳「指标列表」页签并带上下文（旧 MeasureAdd / MeasureAddNew）', async () => {
+  it('「增加指标」/「指标-新」→ 原地打开对应抽屉，入参 (sourceId, 整行, entryTypeId)（旧 doEdit）', async () => {
     const w = mountPage()
     await flushPromises()
     // 首屏默认选中第一行（旧 loadData 里 `selectedRowKeys = [oriData[0].datasetId]`），
     // 而这两个入口要求**恰好选中 1 行**，所以直接点即可。
-    const context = {
-      tab: 'indicatorsList',
-      sourceId: '161725',
-      entryTypeId: '1001',
-      datasetId: '1001',
-      datasetName: '公告明细数据集',
-    }
     await btn(w, '增加指标').trigger('click')
-    expect(routeState.replace).toHaveBeenLastCalledWith({
-      path: '/metrics',
-      query: { ...context, add: '1' },
-    })
+    expect(spies.openMeasureAdd).toHaveBeenCalledWith(
+      161725,
+      expect.objectContaining({ datasetId: 1001, datasetName: '公告明细数据集', entryTypeId: 1001 }),
+      1001,
+    )
+    expect(spies.openMeasureAddNew).not.toHaveBeenCalled()
+
     await btn(w, '指标-新').trigger('click')
-    expect(routeState.replace).toHaveBeenLastCalledWith({
-      path: '/metrics',
-      query: { ...context, add: 'new' },
-    })
+    expect(spies.openMeasureAddNew).toHaveBeenCalledWith(
+      161725,
+      expect.objectContaining({ datasetId: 1001, datasetName: '公告明细数据集', entryTypeId: 1001 }),
+      1001,
+    )
   })
 
-  it('未选中恰好 1 行时「增加指标 / 指标-新」只报错、不跳转（旧 handleAddMeasure/New 的守卫）', async () => {
+  it('未选中恰好 1 行时「增加指标 / 指标-新」只报错、不开弹窗（旧 handleAddMeasure/New 的守卫）', async () => {
     const err = vi.spyOn(ElMessage, 'error')
     const w = mountPage()
     await flushPromises()
@@ -356,34 +398,25 @@ describe('indicatorDataset · 行内操作', () => {
     await flushPromises()
     await btn(w, '增加指标').trigger('click')
     await btn(w, '指标-新').trigger('click')
-    expect(routeState.replace).not.toHaveBeenCalled()
+    expect(spies.openMeasureAdd).not.toHaveBeenCalled()
+    expect(spies.openMeasureAddNew).not.toHaveBeenCalled()
     expect(String(err.mock.calls[0][0])).toContain('请选择要一行操作的数据集')
     // 第二句文案旧版尾部多一个「2」（原文照抄）
     expect(String(err.mock.calls[1][0])).toContain('请选择要一行操作的数据集2')
     err.mockRestore()
   })
 
-  it('行内「指标」/ 指标数标签 → 跳「指标列表」页签，只带上下文（旧 MeasureShow → MeasureList）', async () => {
+  it('行内「指标」/ 指标数标签 → 原地打开 MeasureShowDialog，入参 (sourceId, entryTypeId, datasetId)', async () => {
     const w = mountPage()
     await flushPromises()
-    const expected = {
-      path: '/metrics',
-      query: {
-        tab: 'indicatorsList',
-        sourceId: '161725',
-        entryTypeId: '1001',
-        datasetId: '1001',
-        datasetName: '公告明细数据集',
-      },
-    }
     await opLink(w, 0, '指标').trigger('click')
-    expect(routeState.replace).toHaveBeenLastCalledWith(expected)
+    expect(spies.openMeasureShow).toHaveBeenCalledWith(161725, 1001, 1001)
     // 指标数标签走同一个 handleShowMeasure
     // （测试环境把老式 <transition> 桩成了 transition-stub，类名落在桩上、真正的 click
     //   监听在它内层的 span.el-tag 上，所以要往里再点一层；浏览器里没有这层包装）
     await w.findAll('.el-table__body tr')[0].find('.ids-measure-tag .el-tag').trigger('click')
-    expect(routeState.replace).toHaveBeenCalledTimes(2)
-    expect(routeState.replace).toHaveBeenLastCalledWith(expected)
+    expect(spies.openMeasureShow).toHaveBeenCalledTimes(2)
+    expect(spies.openMeasureShow).toHaveBeenLastCalledWith(161725, 1001, 1001)
   })
 })
 

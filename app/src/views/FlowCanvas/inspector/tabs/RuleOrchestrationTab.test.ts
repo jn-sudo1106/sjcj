@@ -1209,11 +1209,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
 
     it('回填后直接保存：coreParam 写回已保存的模型对，而不是默认第一家（DeepSeek/deepseek-chat）', async () => {
-      const { wrapper } = mountOnSavedTagNode('{"providerCode":"DeepSeek","model":"deepseek-reasoner"}')
+      const { flow, wrapper } = mountOnSavedTagNode('{"providerCode":"DeepSeek","model":"deepseek-reasoner"}')
       await flushPromises()
       await flushPromises()
 
       expect(modelSelect(wrapper, 'tag-model').props('modelValue')).toBe('deepseek-reasoner')
+      // 回填本身不算修改（2026-10-14），保存按钮要等用户真的改了点什么；这里改一处与模型无关的字段
+      expect(flow.dirtyConfigNodes).not.toContain('tag-1')
+      flow.patchExecConfig('tag-1', { describe: '补一句描述' })
+      await flushPromises()
 
       const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
       await saveBtn.trigger('click')
@@ -3215,6 +3219,72 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
     expect(signal?.aborted).toBe(true)
     expect(wrapper.find('[data-testid="main-extract-result"]').exists()).toBe(false)
     expect(wrapper.find('.rc-file-selected').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+// 2026-10-14 反馈：流程中心画布里，从节点配置点到编排配置、什么都没改，节点配置就变成「有未保存修改」。
+// 原因是打开 Tab 时的自动回填（模型默认值 / 提示词模板 / 供应商加载失败时清空）走了会标脏的写入。
+describe('RuleOrchestrationTab · 打开编排 Tab 的自动回填不算修改（1014）', () => {
+  /** 已保存的 PDF 抓取节点：模型 / 提示词都是空的，等着自动回填 */
+  function mountOnSavedPdfNode({ providersFail = false, withPromptTemplate = false } = {}) {
+    mockAssets()
+    pdfPromptTemplateEnabled = withPromptTemplate
+    if (providersFail) {
+      const base = vi.mocked(globalThis.fetch).getMockImplementation()!
+      vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString()
+        if (url === '/api/model/providers') return new Response('{}', { status: 500 })
+        return base(input, init)
+      })
+    }
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['pdf-1'] = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    flow.configs['pdf-1'].configId = '1401175'
+    flow.select('pdf-1')
+    flow.setActiveTab('orchestration')
+    flow.markSaved()
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    return { flow, wrapper }
+  }
+
+  it('模型供应商加载失败（HTTP 500）：不出现「未保存修改」', async () => {
+    const { flow, wrapper } = mountOnSavedPdfNode({ providersFail: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('模型供应商加载失败')
+    expect(flow.dirtyConfigNodes).toEqual([])
+    expect(wrapper.find('.rc-insp-foot .foot-note').text()).toBe('无未保存修改')
+    wrapper.unmount()
+  })
+
+  it('供应商 / 模型默认值与提示词模板自动回填：值写进节点，但不标「未保存」', async () => {
+    const { flow, wrapper } = mountOnSavedPdfNode({ withPromptTemplate: true })
+    await flushPromises()
+    await flushPromises()
+
+    const exec = flow.configs['pdf-1'].execCfg!
+    expect(exec.modelProviderCode).toBe('DeepSeek')
+    expect(exec.modelCode).toBe('deepseek-chat')
+    expect(exec.systemPrompt).toContain('providerCode为DeepSeek')
+    expect(flow.dirtyConfigNodes).toEqual([])
+    expect(wrapper.find('.rc-insp-foot .foot-note').text()).toBe('无未保存修改')
+    wrapper.unmount()
+  })
+
+  it('用户真的改了东西仍然标脏：改描述后出现「未保存修改」', async () => {
+    const { flow, wrapper } = mountOnSavedPdfNode()
+    await flushPromises()
+    await flushPromises()
+    expect(flow.dirtyConfigNodes).toEqual([])
+
+    await wrapper.get('textarea').setValue('从 PDF 抽取合同金额')
+    await flushPromises()
+
+    expect(flow.dirtyConfigNodes).toContain('pdf-1')
+    expect(wrapper.find('.rc-insp-foot .foot-note').text()).toBe('节点配置有未保存修改')
     wrapper.unmount()
   })
 })

@@ -457,6 +457,25 @@ export function useStepWrite() {
     return { created, updated, skipped }
   }
 
+  /**
+   * 删除前先把直接下游改挂（2026-10-14）：后端 item/next/delete 拒绝删除仍被下游 lastStep 引用的
+   * 步骤（「请先重新连接引用该节点的后续节点」）。画布本地删除时 flow.remove 本来就把下游接到被删
+   * 节点的上游，这里把同一拓扑先落库再删：下游只挂在被删节点上 → 改挂它的上游；还有别的上游 →
+   * 只去掉被删节点。
+   */
+  async function relinkSuccessorsBeforeDelete(nodeId: string) {
+    const parents = (sourceStore.stepSnapshots[nodeId]?.dependsOn ?? []).filter((id) => id && id !== nodeId)
+    for (const child of Object.values(sourceStore.stepSnapshots)) {
+      if (!child?.dependsOn?.includes(nodeId)) continue
+      const others = child.dependsOn.filter((id) => id !== nodeId)
+      const dependsOn = others.length ? others : (parents.length ? parents : ['0'])
+      const step: Step = { ...child, dependsOn, flowId: flowIdOf() || child.flowId }
+      const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.stepModify(step, ...versionArgs(ref)))
+      assertOk(ack, `下游节点「${child.name}」改挂失败`)
+      sourceStore.rememberSteps([step], 'merge')
+    }
+  }
+
   async function deleteCanvasNode(nodeId: string, opts?: { confirmed?: boolean }): Promise<boolean> {
     if (!nodeId || nodeId === 'start' || nodeId === 'end' || nodeId === '0') return false
     // 0925：流程根节点不能单独删除（后端同样拒绝），画布直接拦下。
@@ -480,6 +499,7 @@ export function useStepWrite() {
     }
     try {
       if (isWritableStepId(nodeId)) {
+        await relinkSuccessorsBeforeDelete(nodeId)
         const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.deleteStep(nodeId, ...versionArgs(ref)))
         assertOk(ack, '删除步骤失败')
         sourceStore.forgetStep(nodeId)

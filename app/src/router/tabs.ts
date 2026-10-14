@@ -50,21 +50,21 @@ export interface TemplateConfigTabMeta {
 }
 
 export const TEMPLATE_CONFIG_TABS: TemplateConfigTabMeta[] = [
-  { key: 'sql-template', label: 'SQL模板配置', desc: 'SQL 模板内容与通过/拒绝条件、select/table/where/group by 校验表达式', permission: 'sql-template' },
-  { key: 'table-template', label: '表模板配置', desc: '问句样例与匹配规则、使用表范围、关联 sql 模板（旧接口域 question-temp）', permission: 'table-template' },
-  { key: 'dic-template', label: '自动补全配置', desc: '自动补全词典的内容与简称维护、导出（旧接口域 /poc/dic）', permission: 'dic-template' },
+  { key: 'sql-template', label: 'SQL模板配置', desc: '', permission: 'sql-template' },
+  { key: 'table-template', label: '表模板配置', desc: '', permission: 'table-template' },
+  { key: 'dic-template', label: '自动补全配置', desc: '', permission: 'dic-template' },
   // ⚠️ question-dic（问句改写）与上面的 table-template（端点域 question-temp）是两个不同模块，名字像不是一个东西。
-  { key: 'question-dic', label: '问句改写配置', desc: '按阶段与类型（简单/正则/字段替换）维护问句改写规则，支持启停与删除（旧接口域 /poc/question-dic）', permission: 'question-dic' },
+  { key: 'question-dic', label: '问句改写配置', desc: '', permission: 'question-dic' },
   // ⚠️ 与运行与监控组的 /sync（采集数据同步到目标环境）不是一回事，这一条是旧「数据索引同步」的索引配置。
-  { key: 'data-index-sync', label: '数据索引同步', desc: '维护 sql / 消息 / 分词三类索引同步配置并按行触发同步（旧接口域 /poc/data-index-sync）', permission: 'data-index-sync' },
+  { key: 'data-index-sync', label: '数据索引同步', desc: '', permission: 'data-index-sync' },
   // ⚠️ 数据字典配置在旧平台的组件名是 DataIndexList（端点域 data-index-config），与上面的数据索引同步是两个模块。
-  { key: 'data-index-config', label: '数据字典配置', desc: '按编码/类型/状态查询数据字典项并维护数据别名，支持导出与启停（旧接口域 /poc/data-index-config）', permission: 'data-index-config' },
+  { key: 'data-index-config', label: '数据字典配置', desc: '', permission: 'data-index-config' },
   // ⚠️ 提示词配置的标题与端点名不一致：旧路由 /demo/chat-flow-step-list、端点域 /poc/chat-flow-step，
   // 字段全是对话流程步骤口径（步骤编码/流程编码/下一步编码）。key 按端点域取 chat-flow-step，
   // 与 table-template（端点域 question-temp）那种「按菜单取名」不同，是为了避开与 api/prompt.ts（流程画布的提示词）混淆。
-  { key: 'chat-flow-step', label: '提示词配置', desc: '按流程编码维护对话步骤的提示词模板、入参/出参定义与清洗校验规则，支持启停（旧接口域 /poc/chat-flow-step）', permission: 'chat-flow-step' },
+  { key: 'chat-flow-step', label: '提示词配置', desc: '', permission: 'chat-flow-step' },
   // 分词配置（1014 迁入，模板域最后一个子模块）：一条 = 分词词典里的一个词条，「数据索引同步」的分词同步往里灌数据。
   // 旧列表没有单条新增入口，新增走批量端点（一行「类型,内容,分词类型」）。
-  { key: 'word-segment-config', label: '分词配置', desc: '按类型/内容/分词类型查询分词词条并维护启停，支持批量新增与导出（旧接口域 /poc/word-segment-config）', permission: 'word-segment-config' },
+  { key: 'word-segment-config', label: '分词配置', desc: '', permission: 'word-segment-config' },
 ]
 

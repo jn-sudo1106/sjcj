@@ -2,7 +2,7 @@
 // 指标列表页（旧 page/config/MeasureList.vue → MetricCenter/indicatorsList/index.vue）接线回归。
 // 与 indicatorDataset / queueCheck 的 index.test.ts 同一套思路：只验证「每个操作调到了哪条接口、
 // 带了什么参数」——旧页这一列操作本来就是直连后端，迁到新平台最容易出问题的地方是接线断了。
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import ElementPlus, { ElMessage } from 'element-plus'
@@ -28,8 +28,6 @@ const spies = vi.hoisted(() => ({
   copyMeasure: vi.fn(() => Promise.resolve({ msg: 'ok' })),
   openEdit: vi.fn(),
   openDetail: vi.fn(),
-  openAdd: vi.fn(),
-  openAddNew: vi.fn(),
 }))
 
 // 只替掉 6 条请求函数（这里每条操作发哪条接口就是要验的东西）
@@ -42,7 +40,7 @@ vi.mock('@/api/measure', () => ({
   copyMeasure: spies.copyMeasure,
 }))
 
-// 四个表格行内的弹层 / 左侧分类树用轻量替身：
+// 两个表格行内的弹层 / 左侧分类树用轻量替身：
 // 真弹窗内部是 teleport + 过渡，jsdom 里断言不到「被打开」，而这里要验的只是
 // 「父组件用哪一行、什么列集打开的它」；分类树同理，只验「filter 事件被接住了没」。
 vi.mock('../shared/ColumnEditDialog.vue', async () => ({
@@ -63,28 +61,6 @@ vi.mock('../shared/ColumnDetailDrawer.vue', async () => ({
     setup(_props, { expose }) {
       expose({ open: spies.openDetail })
       return () => h('div', { class: 'stub-detail' })
-    },
-  }),
-}))
-
-vi.mock('./MeasureAddDialog.vue', async () => ({
-  default: defineComponent({
-    name: 'MeasureAddDialog',
-    emits: ['saved'],
-    setup(_props, { expose }) {
-      expose({ open: spies.openAdd })
-      return () => h('div', { class: 'stub-add' })
-    },
-  }),
-}))
-
-vi.mock('./MeasureAddNewDialog.vue', async () => ({
-  default: defineComponent({
-    name: 'MeasureAddNewDialog',
-    emits: ['saved'],
-    setup(_props, { expose }) {
-      expose({ open: spies.openAddNew })
-      return () => h('div', { class: 'stub-add-new' })
     },
   }),
 }))
@@ -160,11 +136,20 @@ const ROWS: MeasureRow[] = [
   row({ measureId: 7003, measureCode: 'A00013', measureName: '旧指标', isDelete: -1, val1Def: 'oops' }),
 ]
 
-function mountPage(query: Record<string, string> = {}) {
+/** mountPage 建出来的实例，afterEach 统一卸掉。
+ *  ⚠️ 这里必须卸：`route.query` 是**跨用例共享**的同一个 reactive 对象，而本页挂着
+ *  `watch($route.query.configId)`。不卸的话，前一个用例留下的实例会在下一个用例改 query 时
+ *  一起重查 —— `measurePaged` 的调用次数会随「前面挂过几个」而漂移，断言 `toHaveBeenCalledTimes(1)`
+ *  就变成看运气（踩过一次：本条链路上最后一个用例读到了 31 次）。 */
+const mounted: VueWrapper[] = []
+
+function mountPage(query: Record<string, string> = {}, props: Record<string, unknown> = {}) {
   const route = routeState.route as unknown as { query: Record<string, string> }
   Object.keys(route.query).forEach((k) => delete route.query[k])
   Object.assign(route.query, query)
-  return mount(Page, MOUNT_OPTIONS)
+  const w = mount(Page, { ...MOUNT_OPTIONS, props })
+  mounted.push(w)
+  return w
 }
 
 /** 按可见文案找按钮（el-button 渲染成 <button><span>文案</span></button>） */
@@ -186,6 +171,13 @@ function filterInput(w: VueWrapper, index: number) {
  *  里用「空 row」预渲染一遍列插槽，直接 tbody tr 会命中那些幽灵节点） */
 function cell(w: VueWrapper, rowIndex: number, cellIndex: number) {
   return w.findAll('.el-table__body tr')[rowIndex].findAll('td')[cellIndex]
+}
+
+/** 按 prop 取某个表格列组件（勾选列的 prop 是 ''） */
+function columnByProp(w: VueWrapper, prop: string) {
+  const hit = w.findAllComponents({ name: 'ElTableColumn' }).find((c) => c.props('prop') === prop)
+  if (!hit) throw new Error(`找不到 prop=${prop} 的表格列`)
+  return hit
 }
 
 /** 工具条上的「操作..」下拉（不是表格行里那个） */
@@ -224,6 +216,10 @@ beforeEach(() => {
   spies.measurePaged.mockImplementation(async () => ({ list: ROWS, total: 3 }))
 })
 
+afterEach(() => {
+  mounted.splice(0).forEach((w) => w.unmount())
+})
+
 describe('indicatorsList · 首屏', () => {
   it('按 page=1&limit=20 拉列表（旧 `:pageSize="20"`），未排序时不带 sortField/sortOrder', async () => {
     mountPage()
@@ -247,6 +243,18 @@ describe('indicatorsList · 首屏', () => {
     await flushPromises()
     const headers = w.findAll('thead th').map((th) => th.text())
     expect(headers).toEqual(['', ...MEASURE_BASE.map((c) => c.title)])
+  })
+
+  it('「操作」列固定在右侧，其余列都不固定（横向滚动时操作仍可见）', async () => {
+    const w = mountPage()
+    await flushPromises()
+    expect(columnByProp(w, 'action').props('fixed')).toBe('right')
+    // 只固定操作列：勾选列与文本列跟着横向滚动（与 Monitor/taskList 同口径）
+    expect(MEASURE_BASE.filter((c) => c.fixed).map((c) => c.dataIndex)).toEqual(['action'])
+    // 未固定的列 `fixed` 是 undefined（Element Plus 没给这个 prop 声明 default，
+    // 显式传 undefined 即「不固定」，el-table 按真值判断 —— 不要写成 toBe(false)）
+    expect(columnByProp(w, 'measureId').props('fixed')).toBeUndefined()
+    expect(columnByProp(w, 'keyDef').props('fixed')).toBeUndefined()
   })
 
   it('ID 三态：在用纯文本 / 停用红标签 / 历史删除带告警图标', async () => {
@@ -497,8 +505,8 @@ describe('indicatorsList · JSON 子编辑器（旧 jsonSlot / jsonDimSlot）', 
   })
 })
 
-describe('indicatorsList · 路由 query（旧 props / created 的等价物）', () => {
-  it('sourceId / entryTypeId / datasetId / configId 透传进请求', async () => {
+describe('indicatorsList · 入参（旧 props/created 的等价物）', () => {
+  it('页签形态：sourceId / entryTypeId / datasetId / configId 从 $route.query 透传进请求', async () => {
     mountPage({ sourceId: '161725', entryTypeId: '1001', datasetId: '1001', configId: '70598' })
     await flushPromises()
     expect(lastQuery()).toMatchObject({
@@ -506,47 +514,38 @@ describe('indicatorsList · 路由 query（旧 props / created 的等价物）',
     })
   })
 
-  it('add=1 → 自动开「增加指标」弹窗，入参对齐旧 DatasetList 的 (sourceId, record, entryTypeId)', async () => {
-    mountPage({ sourceId: '161725', entryTypeId: '1001', datasetId: '1001', datasetName: '公告明细数据集', add: '1' })
+  it('弹窗形态：sourceId / entryTypeId / datasetId 三个 props 透传进请求（旧 MeasureShow 内嵌）', async () => {
+    mountPage({}, { sourceId: '161725', entryTypeId: '1001', datasetId: '1001' })
     await flushPromises()
-    expect(spies.openAdd).toHaveBeenCalledWith('161725', {
-      sourceId: '161725',
-      datasetId: '1001',
-      datasetName: '公告明细数据集',
-      entryTypeId: '1001',
-    }, '1001')
-    expect(spies.openAddNew).not.toHaveBeenCalled()
+    expect(lastQuery()).toMatchObject({ sourceId: '161725', entryTypeId: '1001', datasetId: '1001' })
   })
 
-  it('add=new → 自动开「指标-新」弹窗', async () => {
-    mountPage({ sourceId: '161725', entryTypeId: '1001', add: 'new' })
+  it('props 覆盖 $route.query（旧 created 的顺序：query 先写、props 后覆盖；空值不覆盖）', async () => {
+    mountPage(
+      { sourceId: '9', entryTypeId: '9', datasetId: '9' },
+      { sourceId: '161725', datasetId: '1001' },
+    )
     await flushPromises()
-    expect(spies.openAddNew).toHaveBeenCalledWith('161725', {
-      sourceId: '161725',
-      datasetId: undefined,
-      datasetName: undefined,
-      entryTypeId: '1001',
-    }, '1001')
-    expect(spies.openAdd).not.toHaveBeenCalled()
-  })
-
-  it('带 add 但没带 sourceId → 只提示、不开弹窗（旧 MeasureAdd 必须有源）', async () => {
-    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
-    mountPage({ add: '1' })
-    await flushPromises()
-    expect(spies.openAdd).not.toHaveBeenCalled()
-    expect(String(warn.mock.calls[0][0])).toContain('请先指定源ID')
-    warn.mockRestore()
+    // sourceId / datasetId 被 props 覆盖；entryTypeId 没传 → 保留 query 里的值
+    expect(lastQuery()).toMatchObject({ sourceId: '161725', entryTypeId: '9', datasetId: '1001' })
   })
 
   it('configId 变化时跟随改条件并重查（旧 `watch "$route.query.configId"`）', async () => {
-    const w = mountPage()
+    mountPage()
     await flushPromises()
     expect(spies.measurePaged).toHaveBeenCalledTimes(1)
     const route = routeState.route as unknown as { query: Record<string, string> }
     route.query.configId = '70599'
     await flushPromises()
     expect(lastQuery()).toMatchObject({ configId: '70599' })
-    w.unmount()
+  })
+
+  it('不再有 add=1|new 的自动开弹窗（1014 随跳页一起删除，文件头偏差第 12 条）', async () => {
+    // 传了也不该有任何副作用：本页不该再存在新增入口，只按普通筛选键处理
+    mountPage({ sourceId: '161725', add: '1', datasetName: '公告明细数据集' })
+    await flushPromises()
+    expect(spies.measurePaged).toHaveBeenCalledTimes(1)
+    expect(lastQuery()).toMatchObject({ sourceId: '161725' })
+    expect(Object.keys(lastQuery())).not.toContain('add')
   })
 })

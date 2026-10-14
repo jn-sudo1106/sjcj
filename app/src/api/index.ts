@@ -3013,7 +3013,8 @@ export const configApi = {
    * - list **不分页**，`typeName` 模糊匹配；读接口成功时 `code` 是 null（client 只把非空非 '0' 的 code 当失败，正好兼容）；
    * - add / update 走 **JSON body**；add 可不传 sourceType（后端取 max+1），返回 data = 新类型 ID；
    * - update 是**增量更新**：只传改动字段，其余不动——所以调用方只发变更字段，别把表单空值整份发过去；
-   * - delete 不接：被引用时后端会不会拒删无法无损验证（0924 方案 §4.2 / B-3），新平台不提供删除。
+   * - delete：GET `sourceType/delete?sourceType=`。2026-10-14 在 186 实测：类型被配置引用时后端拒绝
+   *   （success:false，msg「该源类型已被配置引用，无法删除」），**软删除的配置也算引用**；没被引用才删得掉。
    */
   nodeTypeList: async (typeName?: string): Promise<NodeType[]> => {
     const result = await request<unknown>('sourceType/list', { typeName }, {
@@ -3034,6 +3035,9 @@ export const configApi = {
     const body = nodeTypeBody(input)
     return request<Ack>('sourceType/add', body, { method: 'POST', httpParams: body })
   },
+  /** 删除节点类型（旧 deleteSourceType：GET，被配置 / 有效源引用时后端拒绝并回 msg） */
+  nodeTypeDelete: async (sourceType: string): Promise<Ack> =>
+    request<Ack>('sourceType/delete', { sourceType }, { method: 'GET', httpParams: { sourceType } }),
   /** `patch` 只放改动的字段；sourceType 是主键，必带 */
   nodeTypeUpdate: async (sourceType: string, patch: NodeTypeInput): Promise<Ack> => {
     const body = { ...nodeTypeBody(patch), sourceType: Number(sourceType) }

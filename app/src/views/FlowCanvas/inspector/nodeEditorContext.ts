@@ -19,7 +19,7 @@ export interface NodeEditorContext {
   /** 正在编辑的节点本身 */
   cfg: Ref<NodeConfig | undefined>
   /** 写回编排字段：规则/监控节点写 ruleCfg，其余写 execCfg（与 node store 同口径） */
-  patch: (patch: Partial<RuleOrchestration>) => void
+  patch: (patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) => void
   setMonitorMethods: (values: string[]) => void
   setMonitorAlertConfig: (config: MonitorAlertConfig) => void
   /** 写节点结构化配置（采集类写 collectCfg、非采集类写 NodeConfig 顶层，见 stores/node.ts）。
@@ -45,9 +45,9 @@ function flowStoreNodeEditorContext(): NodeEditorContext {
   return {
     id: computed(() => flow.selectedId),
     cfg: computed(() => flow.selectedNode),
-    patch: (p) => {
-      if (isRuleNode(flow.selectedNode)) flow.patchRuleConfig(flow.selectedId, p)
-      else flow.patchExecConfig(flow.selectedId, p)
+    patch: (p, opts) => {
+      if (isRuleNode(flow.selectedNode)) flow.patchRuleConfig(flow.selectedId, p, opts)
+      else flow.patchExecConfig(flow.selectedId, p, opts)
     },
     setMonitorMethods: (values) => flow.setMonitorMethods(flow.selectedId, values ?? []),
     setMonitorAlertConfig: (config) => flow.setMonitorAlertConfig(flow.selectedId, config),

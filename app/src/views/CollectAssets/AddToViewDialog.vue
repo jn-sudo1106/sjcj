@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// 源列表勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录（含根目录），把选中的源加进去；
-// 也可以当场新建一个视图（加在它的根目录）。视图只有自己能看到。
+// 源列表勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录，把选中的源加进去。
+// 10-14 起没有根目录：视图还没有目录、或者想放进新目录时，当场新建一个一级目录；新建视图时同样要给目录起名。视图只有自己能看到。
 import { computed, ref, watch } from 'vue'
 import { SOURCE_VIEW_NAME_MAX, sourceViewApi, type SourceView } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
-import { ROOT_ID, addSources, emptyTree, pathText } from './viewDirs'
+import { VIEW_DIR_NAME_MAX, addDir, addSources, emptyTree, pathText, type ViewTree } from './viewDirs'
 
 const props = defineProps<{ modelValue: boolean; sourceIds: string[] }>()
 const emit = defineEmits<{
@@ -17,23 +17,25 @@ const auth = useAuthStore()
 const userId = computed(() => (auth.info?.id != null ? String(auth.info.id) : ''))
 const views = ref<SourceView[]>([])
 const viewId = ref('')
-const dirId = ref(ROOT_ID)
+const tree = ref<ViewTree>(emptyTree())
+const treeLoading = ref(false)
+const dirId = ref(NEW)
 const newName = ref('')
+const newDirName = ref('')
 const busy = ref(false)
 const error = ref('')
 
 const view = computed(() => views.value.find((v) => v.viewId === viewId.value))
-const dirOptions = computed(() => {
-  const t = view.value?.tree
-  if (!t) return [{ id: ROOT_ID, label: '根目录' }]
-  return [{ id: ROOT_ID, label: '根目录' }, ...t.dirs.map((d) => ({ id: d.id, label: pathText(t, d.id) })).sort((a, b) => a.label.localeCompare(b.label, 'zh'))]
-})
+const dirOptions = computed(() => tree.value.dirs
+  .map((d) => ({ id: d.id, label: pathText(tree.value, d.id) }))
+  .sort((a, b) => a.label.localeCompare(b.label, 'zh')))
 
 watch(() => props.modelValue, async (open) => {
   if (!open) return
+  viewId.value = '' // 重开时也重读目录
   error.value = ''
   newName.value = ''
-  dirId.value = ROOT_ID
+  newDirName.value = ''
   try {
     views.value = await sourceViewApi.list(userId.value)
   } catch (e) {
@@ -42,22 +44,49 @@ watch(() => props.modelValue, async (open) => {
   }
   viewId.value = views.value.find((v) => v.isDefault)?.viewId ?? views.value[0]?.viewId ?? NEW
 })
-watch(viewId, () => { dirId.value = ROOT_ID })
+watch(viewId, async (id) => {
+  tree.value = emptyTree()
+  dirId.value = NEW
+  const v = view.value
+  if (!v) return
+  treeLoading.value = true
+  try {
+    const loaded = await sourceViewApi.loadTree(userId.value, v)
+    if (viewId.value !== id) return
+    tree.value = loaded
+    dirId.value = dirOptions.value[0]?.id ?? NEW
+  } catch (e) {
+    if (viewId.value === id) error.value = `目录加载失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    if (viewId.value === id) treeLoading.value = false
+  }
+})
 
 async function submit() {
   error.value = ''
   busy.value = true
   try {
+    const creatingDir = viewId.value === NEW || dirId.value === NEW
+    const base = viewId.value === NEW ? emptyTree() : tree.value
+    let target = dirId.value
+    let next = base
+    if (creatingDir) {
+      const r = addDir(base, null, newDirName.value)
+      next = r.tree
+      target = r.id
+    }
+    const before = new Set(next.dirs.find((d) => d.id === target)?.sources ?? [])
+    next = addSources(next, target, props.sourceIds)
+    const place = pathText(next, target)
+    const count = props.sourceIds.filter((id) => !before.has(id)).length
     if (viewId.value === NEW) {
-      const created = await sourceViewApi.add(userId.value, { viewName: newName.value, tree: addSources(emptyTree(), ROOT_ID, props.sourceIds) })
-      emit('added', created.viewName, '根目录', new Set(props.sourceIds).size)
+      const created = await sourceViewApi.add(userId.value, { viewName: newName.value, tree: next })
+      emit('added', created.viewName, place, count)
     } else {
       const v = view.value
       if (!v) throw new Error('视图不存在，请重新选择')
-      const before = new Set(v.tree.dirs.find((d) => d.id === dirId.value)?.sources ?? (dirId.value === ROOT_ID ? v.tree.root.sources : []))
-      const tree = addSources(v.tree, dirId.value, props.sourceIds)
-      await sourceViewApi.update(userId.value, { viewId: v.viewId, revision: v.revision, tree })
-      emit('added', v.viewName, pathText(v.tree, dirId.value), props.sourceIds.filter((id) => !before.has(id)).length)
+      await sourceViewApi.saveTree(userId.value, v, tree.value, next)
+      emit('added', v.viewName, place, count)
     }
     emit('update:modelValue', false)
   } catch (e) {
@@ -82,17 +111,22 @@ async function submit() {
       <span class="atv-label">名称</span>
       <el-input v-model="newName" :maxlength="SOURCE_VIEW_NAME_MAX" placeholder="新视图名称，例如：广发" data-testid="add-to-view-name" @keyup.enter="submit" />
     </div>
-    <div v-else class="atv-row">
+    <div v-if="viewId !== NEW" class="atv-row">
       <span class="atv-label">目录</span>
-      <el-select v-model="dirId" filterable style="flex: 1" data-testid="add-to-view-dir">
+      <el-select v-model="dirId" filterable :loading="treeLoading" style="flex: 1" data-testid="add-to-view-dir">
         <el-option v-for="d in dirOptions" :key="d.id" :value="d.id" :label="d.label" />
+        <el-option :value="NEW" label="＋ 新建目录" />
       </el-select>
     </div>
-    <p class="atv-hint">已在这个目录里的源会自动去重；视图只有你自己能看到。新建视图时源放在它的根目录，之后可以再建目录整理。</p>
+    <div v-if="viewId === NEW || dirId === NEW" class="atv-row">
+      <span class="atv-label">{{ viewId === NEW ? '目录' : '' }}</span>
+      <el-input v-model="newDirName" :maxlength="VIEW_DIR_NAME_MAX" placeholder="新目录名称（一级目录）" data-testid="add-to-view-dir-name" @keyup.enter="submit" />
+    </div>
+    <p class="atv-hint">已在这个目录里的源会自动去重；视图只有你自己能看到。</p>
     <p v-if="error" class="atv-error" data-testid="add-to-view-error">{{ error }}</p>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" :loading="busy" :disabled="!sourceIds.length" data-testid="add-to-view-submit" @click="submit">加入</el-button>
+      <el-button type="primary" :loading="busy" :disabled="!sourceIds.length || treeLoading" data-testid="add-to-view-submit" @click="submit">加入</el-button>
     </template>
   </el-dialog>
 </template>

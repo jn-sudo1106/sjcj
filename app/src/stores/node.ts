@@ -321,19 +321,23 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
-  function patchRuleConfig(id: string, patch: Partial<RuleOrchestration>) {
+  /**
+   * silent：界面自动回填（打开编排 Tab 时补模型默认值 / 提示词模板 / 配置详情），不是用户改的，
+   * 值照常写进节点但不标「未保存」——否则只是点到编排配置就出现「节点配置有未保存修改」。
+   */
+  function patchRuleConfig(id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) {
     const c = configs[id]
     if (!c) return
     c.ruleCfg = { ...makeDefaultRuleOrchestration(), ...c.ruleCfg, ...patch }
-    touchConfig(id)
+    if (!opts?.silent) touchConfig(id)
   }
 
   /** 非规则节点的编排配置（0804 S3-3）：与 patchRuleConfig 同款，写 execCfg 而不是 ruleCfg */
-  function patchExecConfig(id: string, patch: Partial<RuleOrchestration>) {
+  function patchExecConfig(id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) {
     const c = configs[id]
     if (!c) return
     c.execCfg = { ...makeDefaultExecConfig(), ...c.execCfg, ...patch }
-    touchConfig(id)
+    if (!opts?.silent) touchConfig(id)
   }
 
   /** 数据监控节点「监控方法」多选值（2026-09-01）：落在节点上，走配置脏标记（后续随节点配置写入通路持久化）。 */

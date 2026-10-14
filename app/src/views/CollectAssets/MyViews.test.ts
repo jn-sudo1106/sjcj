@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// 源管理「我的视图」目录版（2026-10-13）：视图下拉、目录树（多级 / 父目录汇总）、添加源 / 绑定来源组、
-// 随组带入的源排除与恢复、解绑、删除目录、旧条件视图提示、设为默认、跳到源详情不改写地址。
+// 源管理「我的视图」目录版（2026-10-13；10-14 没有根目录、父目录不汇总）：视图下拉、多级目录树、添加源 / 绑定来源组、
+// 随组带入的源排除与恢复、解绑、删除目录（有子目录时二次提醒）、旧条件视图提示、设为默认、跳到源详情不改写地址。
 // 右侧源列表 stub 掉：记下收到的源范围，并用固定的选中 ID 驱动批量操作槽位。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
@@ -16,7 +16,7 @@ import type { UserInfo } from '@/api/auth'
 import { localSourceViewApi, setSourceViewBackend, sourceViewApi } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
-import { ROOT_ID, addDir, addSources, bindGroup, emptyTree } from './viewDirs'
+import { addDir, addSources, bindGroup, emptyTree } from './viewDirs'
 
 vi.mock('./groupMembers', () => ({
   loadGroupMembers: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === 'g3' ? ['t1', 't2', 't3'] : []])),
@@ -75,15 +75,15 @@ const sorted = (ids?: string[]) => [...(ids ?? [])].sort()
 /** 广发：宏观 > 统计局（s1,s2）、央行（s3）；舆情（s4 + 来源组 g3 = t1,t2,t3） */
 async function seed() {
   let t = emptyTree()
-  let r = addDir(t, ROOT_ID, '宏观'); t = r.tree; const macro = r.id
+  let r = addDir(t, null, '宏观'); t = r.tree; const macro = r.id
   r = addDir(t, macro, '统计局'); t = addSources(r.tree, r.id, ['s1', 's2'])
   r = addDir(t, macro, '央行'); t = addSources(r.tree, r.id, ['s3'])
-  r = addDir(t, ROOT_ID, '舆情'); t = bindGroup(addSources(r.tree, r.id, ['s4']), r.id, 'g3')
+  r = addDir(t, null, '舆情'); t = bindGroup(addSources(r.tree, r.id, ['s4']), r.id, 'g3')
   return localSourceViewApi.add('7', { viewName: '广发', tree: t })
 }
 
 describe('我的视图 · 目录版', () => {
-  it('没有视图：提示新建；新建后选中根目录', async () => {
+  it('没有视图：提示新建；新建后提示先建目录，「＋ 目录」建一级目录并选中', async () => {
     await mountPage()
     expect(wrapper.text()).toContain('还没有视图')
     await wrapper.get('[data-testid="mv-new"]').trigger('click')
@@ -93,31 +93,37 @@ describe('我的视图 · 目录版', () => {
     input.dispatchEvent(new Event('input'))
     ;(document.querySelector('[data-testid="save-view-submit"]') as HTMLElement).click()
     await settle()
-    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 全部（根目录）')
-    expect(wrapper.find('[data-testid="view-dir-root"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('这个视图还没有目录')
+    expect(wrapper.find('[data-testid="view-dir-root"]').exists()).toBe(false)
+    expect(scopeSeen).toBeUndefined()
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValueOnce({ value: '宏观' } as never)
+    await wrapper.get('[data-testid="mv-new-dir"]').trigger('click')
+    await settle()
+    expect((await saved()).dirs.map((d) => [d.name, d.parentId])).toEqual([['宏观', null]])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观')
     expect(scopeSeen).toEqual([])
   })
 
-  it('父目录汇总子目录，根目录汇总整个视图（含来源组成员）；目录显示源数和「组」标记', async () => {
+  it('默认选中第一个一级目录；父目录不汇总子目录；目录显示自己的源数和「组」标记', async () => {
     await seed()
     await mountPage()
-    expect(sorted(scopeSeen)).toEqual(['s1', 's2', 's3', 's4', 't1', 't2', 't3'])
-    await dirNode('宏观').trigger('click')
-    await settle()
-    expect(sorted(scopeSeen)).toEqual(['s1', 's2', 's3'])
     expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观')
-    expect(dirNode('宏观').text()).toContain('3')
+    expect(scopeSeen).toEqual([])
+    await dirNode('统计局').trigger('click')
+    await settle()
+    expect(sorted(scopeSeen)).toEqual(['s1', 's2'])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观 / 统计局')
+    expect(dirNode('宏观').text()).toContain('0')
     expect(dirNode('舆情').text()).toContain('组')
     expect(dirNode('舆情').text()).toContain('4')
   })
 
-  it('新建子目录：建在选中目录下，建完选中它', async () => {
+  it('新建子目录：建在目录的「⋯」所在目录下，建完选中它', async () => {
     await seed()
     await mountPage()
-    await dirNode('宏观').trigger('click')
-    await settle()
+    const macroId = (await saved()).dirs.find((d) => d.name === '宏观')!.id
     vi.spyOn(ElMessageBox, 'prompt').mockResolvedValueOnce({ value: '财政部' } as never)
-    await wrapper.get('[data-testid="mv-new-dir"]').trigger('click')
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'newChild', macroId)
     await settle()
     const t = await saved()
     const fin = t.dirs.find((d) => d.name === '财政部')!
@@ -139,15 +145,6 @@ describe('我的视图 · 目录版', () => {
     expect((await saved()).dirs.find((d) => d.name === '统计局')!.groups).toEqual(['g3'])
     expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('twitter1')
     expect(scopeSeen).toEqual(expect.arrayContaining(['t1', 't2', 't3']))
-  })
-
-  it('根目录也能直接绑定来源组', async () => {
-    await seed()
-    await mountPage()
-    wrapper.findComponent(GroupSourcePicker).vm.$emit('bindGroup', 'g3')
-    await settle()
-    expect((await saved()).root.groups).toEqual(['g3'])
-    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('根目录绑定的来源组')
   })
 
   it('随来源组带入的源可单独移出（排除，组标签显示 2/3），可恢复；所在目录列标「随来源组」', async () => {
@@ -182,17 +179,33 @@ describe('我的视图 · 目录版', () => {
     expect(scopeSeen).toEqual(['s4'])
   })
 
-  it('删除目录连同子目录，回到根目录', async () => {
+  it('删除有子目录的目录：二次提醒，确认后连同子目录一起删，选中剩下的第一个目录；第二次取消就不删', async () => {
     await seed()
     await mountPage()
-    await dirNode('宏观').trigger('click')
-    await settle()
     const macroId = (await saved()).dirs.find((d) => d.name === '宏观')!.id
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never).mockRejectedValueOnce('cancel')
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', macroId)
+    await settle()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(String(confirm.mock.calls[1][0])).toContain('还有 2 个子目录')
+    expect((await saved()).dirs).toHaveLength(4)
+
+    confirm.mockReset().mockResolvedValue('confirm' as never)
     wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', macroId)
     await settle()
     expect((await saved()).dirs.map((d) => d.name)).toEqual(['舆情'])
-    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('全部（根目录）')
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 舆情')
+  })
+
+  it('删除没有子目录的目录：只确认一次', async () => {
+    await seed()
+    await mountPage()
+    const yq = (await saved()).dirs.find((d) => d.name === '舆情')!.id
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', yq)
+    await settle()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect((await saved()).dirs.map((d) => d.name)).not.toContain('舆情')
   })
 
   it('10-12 的条件视图读进来：提示改成目录视图；暂存本机时左栏提醒', async () => {

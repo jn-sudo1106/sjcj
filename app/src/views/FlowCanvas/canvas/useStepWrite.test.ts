@@ -928,6 +928,39 @@ describe('useStepWrite.deleteCanvasNode', () => {
     expect(flow.configs['40600']).toBeUndefined()
     expect(source.stepSnapshots['40600']).toBeUndefined()
   })
+
+  it('有下游时先把下游 lastStep 改挂到被删节点的上游再删（后端拒删仍被引用的步骤）', async () => {
+    setActivePinia(createPinia())
+    const { source } = loadTestSource()
+    const child: Step = { ...SNAPSHOT, stepId: '40601', name: '下游', dependsOn: ['40600'] }
+    const merged: Step = { ...SNAPSHOT, stepId: '40602', name: '合并', dependsOn: ['40600', '40599'] }
+    source.rememberSteps([child, merged], 'merge')
+    const order: string[] = []
+    const modify = vi.spyOn(itemApi, 'stepModify').mockImplementation(async (s) => { order.push(`modify:${s.stepId}`); return { ok: true, message: 'ok' } })
+    vi.spyOn(itemApi, 'deleteStep').mockImplementation(async (id) => { order.push(`delete:${id}`); return { ok: true, message: 'ok' } })
+
+    const { deleteCanvasNode } = useStepWrite()
+    await expect(deleteCanvasNode('40600', { confirmed: true })).resolves.toBe(true)
+
+    expect(order).toEqual(['modify:40601', 'modify:40602', 'delete:40600'])
+    expect(modify.mock.calls[0][0].dependsOn).toEqual(['0'])
+    expect(modify.mock.calls[1][0].dependsOn).toEqual(['40599'])
+    expect(source.stepSnapshots['40601'].dependsOn).toEqual(['0'])
+  })
+
+  it('下游改挂失败时不删除', async () => {
+    setActivePinia(createPinia())
+    const { flow, source } = loadTestSource()
+    source.rememberSteps([{ ...SNAPSHOT, stepId: '40601', name: '下游', dependsOn: ['40600'] }], 'merge')
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: false, message: '内容已变更' })
+    const del = vi.spyOn(itemApi, 'deleteStep').mockResolvedValue({ ok: true, message: 'ok' })
+
+    const { deleteCanvasNode } = useStepWrite()
+    await expect(deleteCanvasNode('40600', { confirmed: true })).resolves.toBe(false)
+
+    expect(del).not.toHaveBeenCalled()
+    expect(flow.configs['40600']).toBeDefined()
+  })
 })
 
 // 2026-09-04：新建网站 / 新建源之后一进画布，自动保存把**画布合成的虚拟起点**

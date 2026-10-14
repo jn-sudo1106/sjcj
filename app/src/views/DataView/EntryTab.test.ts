@@ -524,7 +524,7 @@ describe('EntryTab · 表ID列表', () => {
     expect(stats.text()).toContain('2')
   })
 
-  it('1013 表详情数据统计：无统计值的表显示「数据未统计」而非「0 行」', async () => {
+  it('1013 表详情数据统计：无统计值的表不显示「0 行」，标题行也不写「数据未统计」，卡片里数据条数显示「—」', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 't1', tableName: 'tb_a', fields: [] })
@@ -540,8 +540,9 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
-    expect(body.text()).toContain('数据未统计')
+    expect(body.text()).not.toContain('数据未统计')
     expect(body.text()).not.toContain('0 行')
+    expect(body.find('.et-d-sub').text()).toBe('表 ID t1')
     const stats = body.find('[data-testid="entry-detail-stats"]')
     expect(stats.text()).toContain('—')
   })

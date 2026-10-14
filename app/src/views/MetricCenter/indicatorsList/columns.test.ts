@@ -45,6 +45,13 @@ describe('indicatorsList · 列定义（旧 allColumns.MEASURE）', () => {
     expect(MEASURE_BASE.filter((c) => c.sorter).map((c) => c.dataIndex)).toEqual(['measureId'])
   })
 
+  it('只有「操作」列 fixed: right —— 本页列总宽超出内容区，横向滚动时操作要始终可见', () => {
+    expect(MEASURE_BASE.filter((c) => c.fixed).map((c) => c.dataIndex)).toEqual(['action'])
+    // 编辑弹窗 / 详情抽屉不吃这个字段（它们只按 title/span/noEdit/noDetail 走）
+    expect(editColumns().some((c) => c.fixed)).toBe(false)
+    expect(detailColumns().some((c) => c.fixed)).toBe(false)
+  })
+
   it('9 个插槽落在正确的列上（旧 scopedSlots：idSlot / nameSlot / jsonSlot / jsonDimSlot / actionSlot）', () => {
     const slots = MEASURE_BASE.filter((c) => c.slot).map((c) => `${c.dataIndex}:${c.slot}`)
     expect(slots).toEqual([

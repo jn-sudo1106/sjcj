@@ -108,6 +108,73 @@ export function firstOutputTableMissingNodeId(
   return undefined
 }
 
+/** 流程发布 / 发起抓取前检查出的节点问题（2026-10-14）。 */
+export interface FlowNodeIssue {
+  nodeId: string
+  title: string
+  /** unsaved：新节点还没保存过节点配置（没有配置、也没进草稿）；outputTableMissing：非文件节点输出表未选；
+   *  tableMismatch：输入表与上游输出表不一致（只提示） */
+  reason: 'unsaved' | 'outputTableMissing' | 'tableMismatch'
+  message: string
+}
+
+/**
+ * 2026-10-14：发布 / 发起抓取（以后手工运行草稿）前的节点完整性检查，逐个节点列出问题。
+ * 两条口径分别与 firstUnboundDraftNodeId、firstOutputTableMissingNodeId 一致，但覆盖分支链上的节点。
+ */
+export function collectFlowIssues(
+  main: string[],
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+  snapshots: Record<string, Step> = {},
+): FlowNodeIssue[] {
+  const issues: FlowNodeIssue[] = []
+  for (const id of persistableNodeIds(main, branchGroups)) {
+    if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id)) continue
+    const cfg = configs[id]
+    if (!cfg) continue
+    const title = cfg.title || id
+    if (!isWritableStepId(id) && !cfg.configId) {
+      issues.push({ nodeId: id, title, reason: 'unsaved', message: '尚未保存，请在右侧保存节点配置' })
+      continue
+    }
+    if (snapshots[id]?.isRoot) continue
+    if (outputTableMissing(cfg, snapshots[id])) {
+      issues.push({ nodeId: id, title, reason: 'outputTableMissing', message: '输出表未选择，请在右侧「表配置」补全' })
+    }
+  }
+  return issues
+}
+
+/**
+ * 2026-10-14：输入表与上游节点输出表不一致的节点（后端发布时会校验「输入表与上一个节点的输出表不一致」）。
+ * 前端只作提示、不拦截；两边任一没有表时不比较。
+ */
+export function collectTableMismatches(
+  main: string[],
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+): FlowNodeIssue[] {
+  const issues: FlowNodeIssue[] = []
+  for (const id of persistableNodeIds(main, branchGroups)) {
+    if (!isWritableStepId(id) || !configs[id]) continue
+    const parentId = lastStepIdsFromCanvas(main, id, branchGroups)[0]
+    const parent = parentId ? configs[parentId] : undefined
+    if (!parent) continue
+    const input = nodeInputTable(configs[id])
+    const upstream = effectiveOutputTable(parent)
+    if (input && upstream && input !== upstream) {
+      issues.push({
+        nodeId: id,
+        title: configs[id].title || id,
+        reason: 'tableMismatch',
+        message: `输入表（${input}）与上一个节点「${parent.title || parentId}」的输出表（${upstream}）不一致`,
+      })
+    }
+  }
+  return issues
+}
+
 /**
  * 新增节点的「适用源」默认值：`-1` = 该配置下所有源（2026-09-04 先落在规则处理 / 数据监控，
  * 2026-09-24 用户拍板扩到**所有类型**——新建节点不该一上来就锁死在当前源上）。

@@ -2,7 +2,8 @@
 // 「增加指标」抽屉 —— 1:1 迁移旧 data-view `src/page/base/measure/MeasureAdd.vue`。
 //
 // 入口：旧 DatasetList 的「增加指标」按钮 → `$refs.addMeasure.doEdit(sourceId, record, entryTypeId)`。
-// 新平台由 indicatorDataset 跳到本页并带 `add=1`（见 index.vue 的 openMeasureAdd）。
+// 新平台由 indicatorDataset **原地**打开本组件（不再跳「指标列表」页签），
+// 见 `../indicatorDataset/index.vue` 的 handleAddMeasure 与模板里的 `<MeasureAddDialog ref="addMeasureRef" />`。
 //
 // 旧形态（AntDV）：`a-drawer` width 900、**非模态**（`:mask="false"` + `:maskClosable="false"`）
 // + `a-form-model`：顶部两枚蓝色 tag（源ID / 数据集）+「加载指标配置样例」按钮，
@@ -114,9 +115,15 @@ async function loadEntryType(id: string) {
   }
 }
 
-/** 旧 doEdit(sourceId, record, entryTypeId) */
-async function open(sourceId: string | number, record: Record<string, unknown>, id?: string | number) {
-  curSource.value = sourceId
+/** 旧 doEdit(sourceId, record, entryTypeId)。
+ *  三个入参都收 null/undefined：旧 DatasetList 传的是 `curRecord.sourceId`（数据集记录上该字段可能为空），
+ *  旧 doEdit 也只是原样收下。 */
+async function open(
+  sourceId: string | number | null | undefined,
+  record: Record<string, unknown>,
+  id?: string | number | null,
+) {
+  curSource.value = sourceId ?? ''
   entryTypeId.value = id == null ? '' : String(id)
   datasetName.value = record?.datasetName == null ? undefined : String(record.datasetName)
   for (const key of Object.keys(form)) delete form[key]

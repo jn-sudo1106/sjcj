@@ -130,6 +130,8 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'source-view/update',
   'source-view/delete',
   'source-view/sort',
+  // 2026-10-14 我的视图目录里的源（整份覆盖）：只改自己视图目录的绑定关系，不碰源本身
+  'category/changeSources',
   'source-group/changeMembers',
   'source-group/bindFlows',
   'source-group/updateBindingState',

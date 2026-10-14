@@ -876,9 +876,6 @@ function onRowClickDetail(row: DataRow, event: Event) {
   if (window.getSelection()?.toString()) return
   openDetail(row)
 }
-function openParentDetail(row: DataRow) {
-  if (row.categoryId && row.parentId && row.parentId !== '0') void openDetailFor(row.categoryId, row.parentId)
-}
 
 // ---- 手动添加 / 手动修改（方案 §1.6-2/3，不自动刷新，原样保留） ----
 const editor = reactive<{ visible: boolean; mode: 'add' | 'edit'; row: DataRow | null }>({
@@ -1205,8 +1202,7 @@ onUnmounted(() => {
         </el-table-column>
         <el-table-column label="父ID" width="90">
           <template #default="{ row }">
-            <a v-if="row.categoryId && row.parentId && row.parentId !== '0'" class="dv-a" @click="openParentDetail(row)">{{ row.parentId }}</a>
-            <span v-else>{{ row.parentId || '—' }}</span>
+            <span>{{ row.parentId || '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="原始" width="70">
@@ -1399,13 +1395,7 @@ onUnmounted(() => {
           <dd>{{ detail.data.row.entryTypeName || '—' }}</dd>
           <dt>父ID</dt>
           <dd>
-            <a
-              v-if="detail.data.row.categoryId && detail.data.row.parentId && detail.data.row.parentId !== '0'"
-              class="dv-a"
-              data-testid="detail-open-parent"
-              @click="openParentDetail(detail.data.row)"
-            >{{ detail.data.row.parentId }}</a>
-            <span v-else>{{ detail.data.row.parentId || '—' }}</span>
+            <span>{{ detail.data.row.parentId || '—' }}</span>
           </dd>
           <dt>任务ID</dt>
           <dd>
