@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -197,6 +197,36 @@ export const chatFlowStepApi: TemplateCrudApi<ChatFlowStep> = {
       : request<Ack>('poc/chat-flow-step/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/chat-flow-step/update` }),
   changeStatus: (id: number, status: string) =>
     request<Ack>('poc/chat-flow-step/status', { id, status }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/chat-flow-step/status` }),
+}
+
+/** 分词配置的接口面：分页 + 修改 + 启停 + 批量新增（本域没有单条新增与复制） */
+export interface WordSegmentApi {
+  page(query: TemplatePageQuery): Promise<Paged<WordSegmentConfig>>
+  /** 修改（POST /poc/word-segment-config/update，body 带 id）—— 旧 wordSegmentConfigUpdate */
+  update(form: Partial<WordSegmentConfig>): Promise<Ack>
+  /** 启停（POST /poc/word-segment-config/status，⚠️ 参数走 body）—— 旧 wordSegmentConfigStatus */
+  changeStatus(id: number, status: string): Promise<Ack>
+  /** 批量新增（POST /poc/word-segment-config/batch）；body 是 **对象数组**，不是包装对象 */
+  batchAdd(rows: WordSegmentBatchItem[]): Promise<Ack>
+}
+
+/**
+ * 分词配置（旧「模板配置 → 分词配置」，src/demo/WordSegmentConfigList.vue + modal/WordSegmentConfigEditor.vue）。
+ *
+ * 同样没走 createTemplateCrudApi 工厂：本域**没有单条新增端点**（旧弹窗的 add 分支挂在 showAdd 上，
+ * 而旧列表没有任何按钮绑它，是死代码），新增能力由批量端点 /poc/word-segment-config/batch 承担；
+ * 旧后端也没有 word-segment-config/copy，所以不提供 copy（见 types/template.ts 的 WordSegmentConfig 注释）。
+ */
+export const wordSegmentApi: WordSegmentApi = {
+  // 分页：四个筛选都在 body —— name（旧搜索框标题「内容」，匹配 content）/ type / token / status
+  page: (query: TemplatePageQuery) =>
+    request<Paged<WordSegmentConfig>>('poc/word-segment-config/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/word-segment-config/page` }),
+  update: (form: Partial<WordSegmentConfig>) =>
+    request<Ack>('poc/word-segment-config/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/word-segment-config/update` }),
+  changeStatus: (id: number, status: string) =>
+    request<Ack>('poc/word-segment-config/status', { id, status }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/word-segment-config/status` }),
+  batchAdd: (rows: WordSegmentBatchItem[]) =>
+    request<Ack>('poc/word-segment-config/batch', rows as unknown as Record<string, unknown>, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/word-segment-config/batch` }),
 }
 
 /**

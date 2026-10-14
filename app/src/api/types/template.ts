@@ -3,8 +3,8 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词；后续要迁的兄弟模块（分词）
-// 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
+// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词、分词
+// （模板域最后一个子模块）；新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
 
 import type { Ack, Paged } from './common'
 
@@ -210,6 +210,43 @@ export interface ChatFlowStep extends TemplateRow {
   /** 变量1（旧页面就这两个泛化预留字段，编辑弹窗原样可改） */
   var1?: string | null
   var2?: string | null
+}
+
+/**
+ * 分词配置（旧「模板配置 → 分词配置」，src/demo/WordSegmentConfigList.vue + modal/WordSegmentConfigEditor.vue）。
+ *
+ * 一条 = 分词词典里的一个词条：type（词条归属类型）+ content（词条本体）+ token（分词类型），
+ * 数据索引同步里 type=2「分词同步」的 syncSql 正是 `select ... as CONTENT, 'PERSON' as TYPE, 'base' as TOKEN`，
+ * 三个列别名与本实体一一对应，同步就是把这张表灌进分词词典。
+ *
+ * ⚠️ 四处旧口径（src/demoApi/EntityApi.js:40-44、64-100）：
+ * · 新增走**批量端点** POST /poc/word-segment-config/batch，body 是 `{type,content,token}` **对象数组**；
+ *   旧单条新增端点（POST /poc/word-segment-config）只在旧弹窗的「新增」分支里用到，而旧列表根本没有
+ *   触发入口（showAdd 没绑到任何按钮，是死代码），所以本模块不迁单条新增；
+ * · 修改 POST /poc/word-segment-config/update（body 带 id）；
+ * · 启停 POST /poc/word-segment-config/status，参数走 **body**（旧 wordSegmentConfigStatus 用的是 axios data，
+ *   与 question-dic 的 query 不同，别混用）；
+ * · 分页四个筛选都在 body —— `name`（旧搜索框标题是「内容」，匹配 content）、`type`、`token`、`status`。
+ * type / token 是**字符串字面量**（186 实测真实行：ORGANIZATION / indicatorname / PERSON，token 为 base），
+ * 既不是问句改写的 '10'/'11'/'20'，也不是数据索引同步的数字 0/1/2 —— 旧页面三个字段都是自由文本输入框。
+ * 分页契约在 186 POC 服务实测（2026-10-14）：信封 {code,msg,count,data}，共 434 条，
+ * status 回的是**数字** 0（与 TemplateRow 声明的字符串不一致），比较一律走 String(row.status)。
+ * delFlag 后端没回（旧页面也没碰过），这里不声明，避免臆造字段。
+ */
+export interface WordSegmentConfig extends TemplateRow {
+  /** 类型（词条归属：PERSON / ORGANIZATION / indicatorname 这类字面量） */
+  type?: string | null
+  /** 内容（词条本体，分页 name 筛选项匹配的就是这个字段） */
+  content?: string | null
+  /** 分词类型（旧列标题就叫「分词类型」，实测值 base） */
+  token?: string | null
+}
+
+/** 批量新增的单行入参（POST /poc/word-segment-config/batch 的数组元素，旧页面只给这三段） */
+export interface WordSegmentBatchItem {
+  type: string
+  content: string
+  token: string
 }
 
 /** 数据字典「编码」下拉的选项（GET /poc/data-index-config/all-code 返回的裸数组元素） */

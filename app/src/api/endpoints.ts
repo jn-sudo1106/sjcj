@@ -246,6 +246,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/chat-flow-step/update', desc: '提示词配置修改 → POST /api/poc/chat-flow-step/update（body 带 id）', danger: true, impl: true, live: true },
   { path: 'poc/chat-flow-step/status', desc: '提示词配置启停 → POST /api/poc/chat-flow-step/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
 
+  // 分词配置（1014 迁入，模板域最后一个子模块）。契约来自旧 src/demoApi/EntityApi.js:40-44、64-100。
+  // 分页已在 186 POC 服务实测（2026-10-14）：434 条，type/token 是字符串字面量（PERSON/ORGANIZATION/base…），
+  // status 回的是**数字** 0。update / status / batch 三条写端点同域同进程，未逐条实测，联调时先核对。
+  // 与 dic / question-dic 同款是新增/修改分端点的域，但本域**没有单条新增**：旧列表没有任何入口触发
+  // wordSegmentConfigAdd（见 api/templateConfig.ts 的 wordSegmentApi），新增一律走 batch。
+  // ⚠️ status 的参数走 **body**（旧 wordSegmentConfigStatus 用的是 axios data，与 question-dic/status 的 query 不同）。
+  { path: 'poc/word-segment-config/page', desc: '分词配置分页 → POST /api/poc/word-segment-config/page（body: pageNo/pageSize/name/type/token/status，name 模糊匹配「内容」content）', impl: true, live: true },
+  { path: 'poc/word-segment-config/batch', desc: '分词配置批量新增 → POST /api/poc/word-segment-config/batch（body 是 {type,content,token} **对象数组**）', danger: true, impl: true, live: true },
+  { path: 'poc/word-segment-config/update', desc: '分词配置修改 → POST /api/poc/word-segment-config/update（body 带 id，type/content/token 都可改）', danger: true, impl: true, live: true },
+  { path: 'poc/word-segment-config/status', desc: '分词配置启停 → POST /api/poc/word-segment-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },

@@ -58,6 +58,11 @@ const routes: RouteRecordRaw[] = [
       // 流程画布用的提示词不是一回事。页面在 views/TemplateConfig/ChatFlowStep/ 自己实现
       // （状态下拉查询 + 16 字段弹窗），接口见 api/templateConfig.ts 的 chatFlowStepApi。
       { path: '/chat-flow-step', component: () => import('../views/TemplateConfig/ChatFlowStep/index.vue'), meta: { permission: 'chat-flow-step' } },
+      // 模板配置 → 分词配置（1014，旧 ai-chat-view「模板配置 / 分词配置」，端点域 /poc/word-segment-config，
+      // 模板域最后一个子模块）。页面在 views/TemplateConfig/WordSegmentConfig/ 自己实现
+      // （四条件查询 + 批量新增 + 导出 + 启停），接口见 api/templateConfig.ts 的 wordSegmentApi。
+      // 旧列表没有单条新增入口（showAdd 死代码），新增走批量端点 /batch。
+      { path: '/word-segment-config', component: () => import('../views/TemplateConfig/WordSegmentConfig/index.vue'), meta: { permission: 'word-segment-config' } },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

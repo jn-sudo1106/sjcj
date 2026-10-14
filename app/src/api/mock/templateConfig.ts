@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -841,5 +841,129 @@ export function mockChatFlowStepChangeStatus(params?: Record<string, unknown>) {
   row.status = String(params?.status ?? row.status)
   row.updateTime = stamp(new Date())
   return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/* ── 分词配置（旧「模板配置 → 分词配置」，端点域 /poc/word-segment-config） ── */
+
+/**
+ * 分词配置种子数据。
+ * 前三条取自 186 POC 服务的真实行（2026-10-14 抓样，共 434 条，token 基本都是 base，
+ * type 是 ORGANIZATION / indicatorname / PERSON 这类字面量）；
+ * ⚠️ 最后一条禁用行是**构造的**（真实样本里筛不到禁用项，留着便于对照状态筛选与开关回滚）。
+ * 内容能与「数据索引同步」里 type=2 的分词同步配置（YJZB_HY_JX → 'PERSON' as TYPE, 'base' as TOKEN）串起来。
+ */
+const blankWordSegment = (over: Partial<WordSegmentConfig>): WordSegmentConfig => ({
+  type: '',
+  content: '',
+  token: '',
+  status: '0',
+  ...over,
+})
+
+const WORD_SEGMENTS: WordSegmentConfig[] = [
+  blankWordSegment({
+    id: 2669,
+    type: 'ORGANIZATION',
+    content: '新城科技园',
+    token: 'base',
+    createTime: '2025-03-25 15:27:18',
+    updateTime: '2025-03-25 15:27:18',
+  }),
+  blankWordSegment({
+    id: 2668,
+    type: 'indicatorname',
+    content: '鑫动能',
+    token: 'base',
+    createTime: '2025-03-25 15:23:36',
+    updateTime: '2025-03-25 15:23:36',
+  }),
+  blankWordSegment({
+    id: 2667,
+    type: 'PERSON',
+    content: '张宪',
+    token: 'base',
+    createTime: '2025-03-25 15:07:55',
+    updateTime: '2025-03-25 15:07:55',
+  }),
+  blankWordSegment({
+    id: 2666,
+    type: 'ORGANIZATION',
+    content: '白下分行',
+    token: 'base',
+    status: '1',
+    createTime: '2025-03-20 18:28:52',
+    updateTime: '2025-03-20 18:28:52',
+  }),
+]
+
+let wordSegmentNextId = 2670
+
+/**
+ * 分页：旧页面四个筛选都在 body —— name（旧搜索框标题「内容」，匹配 content）、type、token、status，
+ * 空串都当「全部」不加权筛。
+ * ⚠️ type / token 在旧页面是自由文本输入框，后端是精确还是模糊没逐条实测，mock 统一按包含匹配。
+ */
+export function mockWordSegmentPaged(params?: Record<string, unknown>): Paged<WordSegmentConfig> {
+  const name = String(params?.name ?? '').trim()
+  const type = String(params?.type ?? '').trim()
+  const token = String(params?.token ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = WORD_SEGMENTS.filter(
+    (row) =>
+      (!name || String(row.content ?? '').includes(name)) &&
+      (!type || String(row.type ?? '').includes(type)) &&
+      (!token || String(row.token ?? '').includes(token)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 修改（POST /poc/word-segment-config/update，带 id）—— 旧 wordSegmentConfigUpdate */
+export function mockWordSegmentUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<WordSegmentConfig>
+  const row = WORD_SEGMENTS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的分词配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/word-segment-config/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 wordSegmentConfigStatus */
+export function mockWordSegmentChangeStatus(params?: Record<string, unknown>) {
+  const row = WORD_SEGMENTS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的分词配置' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/**
+ * 批量新增（POST /poc/word-segment-config/batch）—— 旧 wordSegmentConfigBatchAdd。
+ * ⚠️ body 是 **对象数组**（`[{type,content,token},…]`），不是包装对象；旧列表把文本框按行拆成三段后整批发过去。
+ * 状态按旧弹窗的初始口径落 '0'（启用），旧页面不给批量行指定状态。
+ */
+export function mockWordSegmentBatchAdd(params?: Record<string, unknown> | WordSegmentBatchItem[]) {
+  const rows = (Array.isArray(params) ? params : []).filter(
+    (item) => item && String(item.content ?? '').trim() && String(item.type ?? '').trim(),
+  )
+  if (!rows.length) return { ok: false, message: '没有要新增的分词配置' }
+  for (const item of rows) {
+    WORD_SEGMENTS.unshift(
+      blankWordSegment({
+        id: wordSegmentNextId++,
+        type: String(item.type ?? '').trim(),
+        content: String(item.content ?? '').trim(),
+        token: String(item.token ?? '').trim(),
+        createTime: stamp(new Date()),
+        updateTime: stamp(new Date()),
+      }),
+    )
+  }
+  return { ok: true, data: rows.length, message: `已新增 ${rows.length} 条（演示）` }
 }
 

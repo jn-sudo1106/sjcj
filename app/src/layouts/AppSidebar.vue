@@ -4,7 +4,7 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, ChatLineSquare, Clock, Connection, DataAnalysis, Document, EditPen, Files, Grid, Histogram, List, Monitor, Notebook, Odometer, Refresh, Setting, Tickets } from '@element-plus/icons-vue'
+import { Box, ChatLineSquare, Clock, Collection, Connection, DataAnalysis, Document, EditPen, Files, Grid, Histogram, List, Monitor, Notebook, Odometer, Refresh, Setting, Tickets } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
@@ -62,6 +62,8 @@ const navIcons: Record<string, Component> = {
   'data-index-config': Notebook,
   // 提示词配置（旧端点域 chat-flow-step），图标用对话气泡：这一域配的就是大模型对话步骤
   'chat-flow-step': ChatLineSquare,
+  // 分词配置（1014 迁入），图标用合集：这一域是喂给分词词典的词条集合
+  'word-segment-config': Collection,
   settings: Setting,
 }
 </script>

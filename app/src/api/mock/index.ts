@@ -106,6 +106,10 @@ import {
   mockChatFlowStepAdd,
   mockChatFlowStepUpdate,
   mockChatFlowStepChangeStatus,
+  mockWordSegmentPaged,
+  mockWordSegmentUpdate,
+  mockWordSegmentChangeStatus,
+  mockWordSegmentBatchAdd,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -419,4 +423,11 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/chat-flow-step': mockChatFlowStepAdd,
   'poc/chat-flow-step/update': mockChatFlowStepUpdate,
   'poc/chat-flow-step/status': mockChatFlowStepChangeStatus,
+
+  // 分词配置（1014 迁入，模板域最后一个子模块）：修改 + status（**body** 传参）+ batch（body 是对象数组）；
+  // 没有单条新增与 copy —— 旧列表的 showAdd 没绑任何按钮，新增一律走 batch（见 api/templateConfig.ts 的 wordSegmentApi）。
+  'poc/word-segment-config/page': mockWordSegmentPaged,
+  'poc/word-segment-config/update': mockWordSegmentUpdate,
+  'poc/word-segment-config/status': mockWordSegmentChangeStatus,
+  'poc/word-segment-config/batch': mockWordSegmentBatchAdd,
 }
