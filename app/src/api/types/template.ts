@@ -3,7 +3,7 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典；后续要迁的兄弟模块（提示词 / 分词）
+// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词；后续要迁的兄弟模块（分词）
 // 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
 
 import type { Ack, Paged } from './common'
@@ -162,6 +162,54 @@ export interface DataIndexConfig extends TemplateRow {
   /** 数据ID（旧列表列，页面无编辑入口，更新时原样带回） */
   contentCode?: string | null
   delFlag?: string
+}
+
+/**
+ * 提示词配置（旧「模板配置 → 提示词配置」，src/demo/ChatFlowStepList.vue + modal/ChatFlowStepEditor.vue）。
+ *
+ * ⚠️ 两处旧口径（src/demoApi/ChatFlowStepApi.js:3-8）：
+ * · 菜单标题叫「提示词配置」，但旧路由是 /demo/chat-flow-step-list、端点域是 /poc/chat-flow-step、
+ *   字段全是流程步骤口径（stepCode / flowCode / nextStepCode）。这是旧平台自身的命名不一致
+ *   （同表模板：菜单叫表模板、端点域是 question-temp），1:1 不改名，目录与路由都用 chat-flow-step。
+ * · 新增 POST /poc/chat-flow-step、修改 POST /poc/chat-flow-step/update，**两个端点**（同 dic / question-dic 域）；
+ *   启停 POST /poc/chat-flow-step/status 参数走 **body**（旧 chatFlowStepStatus 用的是 axios data）。
+ * 旧后端没有 chat-flow-step/copy，也没有删除端点 —— 旧列表只有「编辑」和「启用/禁用」。
+ * 分页只有「状态」一个筛选项，但旧 queryParam 里还固定带一个 `name: ''`（实体没有 name 字段，
+ * 后端忽略），1:1 保留这个入参形状。
+ * retryCount 是旧弹窗里唯一的 a-input-number，其余全是文本框 → 数字口径，不是字符串。
+ * delFlag 旧页面从头到尾没碰过（列表不显示、弹窗不提交），这里也不声明，避免臆造后端列。
+ */
+export interface ChatFlowStep extends TemplateRow {
+  /** 步骤编码（流程内唯一，nextStepCode 按它跳转） */
+  stepCode?: string | null
+  /** 流程编码 */
+  flowCode?: string | null
+  stepName?: string | null
+  /** 引用字典编码 */
+  dictCodes?: string | null
+  /** 入参定义 */
+  inputParams?: string | null
+  /** 执行条件 */
+  execCond?: string | null
+  /** 步骤动作 */
+  stepAction?: string | null
+  /** 系统 prompt */
+  systemPrompt?: string | null
+  /** 模板定义（旧弹窗里唯一的文本域，提示词正文） */
+  templateDef?: string | null
+  /** 结果清洗规则 */
+  cleanRule?: string | null
+  /** 结果校验规则 */
+  checkRule?: string | null
+  /** 输出字段 */
+  outputParams?: string | null
+  /** 重试次数 */
+  retryCount?: number | null
+  /** 下一步编码 */
+  nextStepCode?: string | null
+  /** 变量1（旧页面就这两个泛化预留字段，编辑弹窗原样可改） */
+  var1?: string | null
+  var2?: string | null
 }
 
 /** 数据字典「编码」下拉的选项（GET /poc/data-index-config/all-code 返回的裸数组元素） */

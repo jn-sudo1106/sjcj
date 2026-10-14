@@ -52,6 +52,12 @@ const routes: RouteRecordRaw[] = [
       // （四条件查询 + 编码远程下拉 + 导出 + 启停），接口见 api/templateConfig.ts 的 dataIndexConfigApi。
       // ⚠️ 与上面的 /data-index-sync（数据索引同步）是两个模块，名字像但不是一个东西。
       { path: '/data-index-config', component: () => import('../views/TemplateConfig/DataIndexConfig/index.vue'), meta: { permission: 'data-index-config' } },
+      // 模板配置 → 提示词配置（1014，旧 ai-chat-view「模板配置 / 提示词配置」，端点域 /poc/chat-flow-step）。
+      // 旧菜单标题叫「提示词」，路由与字段都是对话流程步骤口径（步骤编码/流程编码/下一步编码），
+      // 所以路径按端点域取 /chat-flow-step（旧路由 /demo/chat-flow-step-list），与 api/prompt.ts 那个
+      // 流程画布用的提示词不是一回事。页面在 views/TemplateConfig/ChatFlowStep/ 自己实现
+      // （状态下拉查询 + 16 字段弹窗），接口见 api/templateConfig.ts 的 chatFlowStepApi。
+      { path: '/chat-flow-step', component: () => import('../views/TemplateConfig/ChatFlowStep/index.vue'), meta: { permission: 'chat-flow-step' } },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

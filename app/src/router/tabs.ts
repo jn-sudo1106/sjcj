@@ -27,7 +27,7 @@ export const TABS: TabMeta[] = [
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
   // 模板配置（1013）：旧 ai-chat-view「模板配置」域的落位，与运行与监控、系统设置同级。
-  // 这一组会随迁移逐个长出来（还剩提示词 / 分词），接口共用 api/templateConfig.ts 的 CRUD 工厂；
+  // 这一组会随迁移逐个长出来（还剩分词），接口共用 api/templateConfig.ts 的 CRUD 工厂；
   // 列表页只有「简单字段」的模块才复用 components/templateConfig 的 schema 层，
   // 带远程多选 / 多条件查询的（如表模板、数据字典）在自己的目录里实现。
   { key: 'sql-template', path: '/sql-template', label: 'SQL模板配置', desc: 'SQL 模板内容与通过/拒绝条件、select/table/where/group by 校验表达式', group: 'template', permission: 'sql-template' },
@@ -39,6 +39,10 @@ export const TABS: TabMeta[] = [
   { key: 'data-index-sync', path: '/data-index-sync', label: '数据索引同步', desc: '维护 sql / 消息 / 分词三类索引同步配置并按行触发同步（旧接口域 /poc/data-index-sync）', group: 'template', permission: 'data-index-sync' },
   // ⚠️ 数据字典配置在旧平台的组件名是 DataIndexList（端点域 data-index-config），与上面的数据索引同步是两个模块。
   { key: 'data-index-config', path: '/data-index-config', label: '数据字典配置', desc: '按编码/类型/状态查询数据字典项并维护数据别名，支持导出与启停（旧接口域 /poc/data-index-config）', group: 'template', permission: 'data-index-config' },
+  // ⚠️ 提示词配置的菜单标题与端点名不一致：旧路由 /demo/chat-flow-step-list、端点域 /poc/chat-flow-step，
+  // 字段全是对话流程步骤口径（步骤编码/流程编码/下一步编码）。key 按端点域取 chat-flow-step，
+  // 与 table-template（端点域 question-temp）那种「按菜单取名」不同，是为了避开与 api/prompt.ts（流程画布的提示词）混淆。
+  { key: 'chat-flow-step', path: '/chat-flow-step', label: '提示词配置', desc: '按流程编码维护对话步骤的提示词模板、入参/出参定义与清洗校验规则，支持启停（旧接口域 /poc/chat-flow-step）', group: 'template', permission: 'chat-flow-step' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },

@@ -233,6 +233,19 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/data-index-config/status', desc: '数据字典启停 → POST /api/poc/data-index-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/data-index-config/all-code', desc: '数据字典编码选项（「编码」筛选下拉）→ GET /api/poc/data-index-config/all-code', impl: true, live: true },
 
+  // 提示词配置（1014 迁入，旧菜单「模板配置 → 提示词配置」）。
+  // 菜单叫「提示词配置」，端点域是 chat-flow-step（旧路由 /demo/chat-flow-step-list），1:1 不改名。
+  // 契约来自 src/demoApi/ChatFlowStepApi.js:3-8；与 dic / question-dic 同款：新增/修改是两个端点；
+  // 没有 copy、也没有删除端点（旧列表只有编辑与启停）。
+  // ⚠️ status 的参数走 **body**（旧 chatFlowStepStatus 用的是 axios data，与 question-dic/status 的 query 不同）。
+  // ⚠️ live 与同域其余模块一致（都走 186 的 POC 代理），但本轮沙箱直连探测返回 302（需登录态），
+  //    真实行样本没取到，mock 种子是按旧字段形状构造的示例（见 api/mock/templateConfig.ts）——
+  //    首次联调请核对 chat-flow-step 的列名与 status 口径后再确认。
+  { path: 'poc/chat-flow-step/page', desc: '提示词配置分页 → POST /api/poc/chat-flow-step/page（body: pageNo/pageSize/name/status，name 恒为空串）', impl: true, live: true },
+  { path: 'poc/chat-flow-step', desc: '提示词配置新增 → POST /api/poc/chat-flow-step（body: stepCode/flowCode/stepName/templateDef 等 16 个表单字段，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/chat-flow-step/update', desc: '提示词配置修改 → POST /api/poc/chat-flow-step/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/chat-flow-step/status', desc: '提示词配置启停 → POST /api/poc/chat-flow-step/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },

@@ -5,6 +5,7 @@
 //   POST {base}           body 整个表单（带 id = 更新，不带 = 新增）
 //   POST {base}/status    **query** {id,status}
 //   POST {base}/copy      **query** {id}
+// （提示词配置是这套约定的"半例外"：status 走 body 而不是 query，见下面的 chatFlowStepApi）
 // 所以这里做成一个 CRUD 工厂，迁一个模块只需声明 base + 端点清单，不再手写四个函数。
 //
 // 真实路径是站点根相对 /api/poc/…（**不是** /v1 域，也不拼 BASE_URL /api/v1/）：
@@ -14,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -174,6 +175,28 @@ export const dataIndexConfigApi: DataIndexConfigApi = {
   // 裸数组：真实信封 {code,data:[...]} 没有 count，client.ts 的 normalizeHttpPayload 直接透传 data
   allCode: () =>
     request<DataIndexCodeOption[]>('poc/data-index-config/all-code', {}, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/data-index-config/all-code` }),
+}
+
+/**
+ * 提示词配置（旧「模板配置 → 提示词配置」，src/demo/ChatFlowStepList.vue + modal/ChatFlowStepEditor.vue）。
+ *
+ * ⚠️ 菜单标题叫「提示词」，端点域是 chat-flow-step（旧路由 /demo/chat-flow-step-list），
+ * 字段全是对话流程步骤口径 —— 与表模板（菜单表模板 / 端点 question-temp）同款命名不一致，1:1 不改名。
+ *
+ * 同样没走 createTemplateCrudApi 工厂：新增/修改是两个端点（/poc/chat-flow-step 与 /poc/chat-flow-step/update）。
+ * 启停保留 /poc/chat-flow-step/status，⚠️ 参数走 **body**（旧 chatFlowStepStatus 用的是 axios 的 data，
+ * 与问句改写那个走 query 的 status 不同）；旧后端没有 copy，也没有删除端点。
+ */
+export const chatFlowStepApi: TemplateCrudApi<ChatFlowStep> = {
+  // 分页：旧页面只有「状态」一个下拉，queryParam 里固定还带一个 name: ''（实体没有该字段，照旧发过去）
+  page: (query: TemplatePageQuery) =>
+    request<Paged<ChatFlowStep>>('poc/chat-flow-step/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/chat-flow-step/page` }),
+  save: (form: Partial<ChatFlowStep>) =>
+    form.id == null
+      ? request<Ack>('poc/chat-flow-step', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/chat-flow-step` })
+      : request<Ack>('poc/chat-flow-step/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/chat-flow-step/update` }),
+  changeStatus: (id: number, status: string) =>
+    request<Ack>('poc/chat-flow-step/status', { id, status }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/chat-flow-step/status` }),
 }
 
 /**

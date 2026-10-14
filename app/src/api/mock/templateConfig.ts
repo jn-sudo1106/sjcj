@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -703,6 +703,141 @@ export function mockDataIndexConfigUpdate(params?: Record<string, unknown>) {
 export function mockDataIndexConfigChangeStatus(params?: Record<string, unknown>) {
   const row = DATA_INDEX_CONFIGS.find((r) => Number(r.id) === Number(params?.id))
   if (!row) return { ok: false, message: '未找到对应的字典项' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/* ── 提示词配置（旧「模板配置 → 提示词配置」，端点域 /poc/chat-flow-step） ── */
+
+/**
+ * 提示词配置种子数据。
+ * ⚠️ 按旧 ChatFlowStepList / ChatFlowStepEditor 的字段形状**构造的示例**（未取到 POC 服务真实行，
+ * 直连 186:9093 探测返回 302 需要登录态），联调后用真实响应校正。
+ * 一条 = 对话流程里的一个步骤（步骤编码 / 流程编码 / 提示词模板定义 templateDef / 下一步编码）；
+ * retryCount 是**数字**（旧弹窗唯一的 a-input-number），其余字段都是文本。
+ * var1 / var2 是旧实体的泛化预留字段（列表不展示、弹窗可改），这里保留一条演示值便于对照。
+ */
+const blankChatFlowStep = (over: Partial<ChatFlowStep>): ChatFlowStep => ({
+  stepCode: '',
+  flowCode: '',
+  stepName: '',
+  dictCodes: '',
+  inputParams: '',
+  execCond: '',
+  stepAction: '',
+  systemPrompt: '',
+  templateDef: '',
+  cleanRule: '',
+  checkRule: '',
+  outputParams: '',
+  retryCount: 0,
+  nextStepCode: '',
+  var1: '',
+  var2: '',
+  status: '0',
+  ...over,
+})
+
+const CHAT_FLOW_STEPS: ChatFlowStep[] = [
+  blankChatFlowStep({
+    id: 12,
+    stepCode: 'intent_recog',
+    flowCode: 'chat_main',
+    stepName: '意图识别',
+    inputParams: 'question,history',
+    stepAction: 'llm',
+    systemPrompt: '你是银行经营分析助手，判断用户问句的意图。',
+    templateDef: '用户问句：{{question}}\n可选意图：指标查询 / 同比环比 / 机构对比',
+    checkRule: "json.isValid(result)",
+    outputParams: 'intent',
+    retryCount: 2,
+    nextStepCode: 'sql_generate',
+    createTime: '2025-04-15 09:52:07',
+    updateTime: '2025-04-15 09:52:07',
+  }),
+  blankChatFlowStep({
+    id: 11,
+    stepCode: 'sql_generate',
+    flowCode: 'chat_main',
+    stepName: 'SQL 生成',
+    dictCodes: 'BRANCH_NAME,INDICATOR_DATE',
+    inputParams: 'question,intent',
+    execCond: "intent == '指标查询'",
+    stepAction: 'llm',
+    systemPrompt: '根据问句与字典生成可执行 SQL，只输出语句本身。',
+    templateDef: '问句：{{question}}\n可用表：KHFA_KHZBJG_JG',
+    cleanRule: "string.trim(result)",
+    outputParams: 'sql',
+    retryCount: 3,
+    nextStepCode: 'sql_check',
+    status: '1',
+    var1: 'KHFA_KHZBJG_JG',
+    createTime: '2025-01-08 15:21:40',
+    updateTime: '2025-04-11 10:50:30',
+  }),
+  blankChatFlowStep({
+    id: 10,
+    stepCode: 'answer_summary',
+    flowCode: 'chat_main',
+    stepName: '结果总结',
+    inputParams: 'sqlResult',
+    stepAction: 'llm',
+    systemPrompt: '把查询结果组织成一句自然的中文回答。',
+    templateDef: '查询结果：{{sqlResult}}',
+    outputParams: 'answer',
+    createTime: '2024-12-20 18:03:11',
+    updateTime: '2025-03-02 09:14:55',
+  }),
+]
+
+let chatFlowStepNextId = 100
+
+/** 提示词分页：旧页面只有一个「状态」下拉，name 固定空串（实体没有 name 字段，后端忽略）*/
+export function mockChatFlowStepPaged(params?: Record<string, unknown>): Paged<ChatFlowStep> {
+  const name = String(params?.name ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = CHAT_FLOW_STEPS.filter(
+    (row) =>
+      (!name || String(row.stepName ?? '').includes(name)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/chat-flow-step，不带 id）—— 旧 chatFlowStepAdd */
+export function mockChatFlowStepAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<ChatFlowStep>
+  const nextId = chatFlowStepNextId++
+  CHAT_FLOW_STEPS.unshift({
+    ...blankChatFlowStep({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/chat-flow-step/update，带 id）—— 旧 chatFlowStepUpdate；与新增是两个端点，不要合并 */
+export function mockChatFlowStepUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<ChatFlowStep>
+  const row = CHAT_FLOW_STEPS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的提示词配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/chat-flow-step/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 chatFlowStepStatus */
+export function mockChatFlowStepChangeStatus(params?: Record<string, unknown>) {
+  const row = CHAT_FLOW_STEPS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的提示词配置' }
   row.status = String(params?.status ?? row.status)
   row.updateTime = stamp(new Date())
   return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }

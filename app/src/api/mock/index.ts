@@ -102,6 +102,10 @@ import {
   mockDataIndexConfigAdd,
   mockDataIndexConfigUpdate,
   mockDataIndexConfigChangeStatus,
+  mockChatFlowStepPaged,
+  mockChatFlowStepAdd,
+  mockChatFlowStepUpdate,
+  mockChatFlowStepChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -408,4 +412,11 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/data-index-config': mockDataIndexConfigAdd,
   'poc/data-index-config/update': mockDataIndexConfigUpdate,
   'poc/data-index-config/status': mockDataIndexConfigChangeStatus,
+
+  // 提示词配置（1014 迁入，旧菜单「模板配置 → 提示词配置」，端点域 /poc/chat-flow-step）：
+  // 新增/修改两个端点 + status（**body** 传参，与 question-dic 的 query 不同）；没有 copy、没有删除。
+  'poc/chat-flow-step/page': mockChatFlowStepPaged,
+  'poc/chat-flow-step': mockChatFlowStepAdd,
+  'poc/chat-flow-step/update': mockChatFlowStepUpdate,
+  'poc/chat-flow-step/status': mockChatFlowStepChangeStatus,
 }
