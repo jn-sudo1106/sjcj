@@ -39,8 +39,8 @@ export const COLLECTOR_CAPABILITIES: Record<CollectorKind, CollectorCapability> 
     queueMode: 'fixed', fixedQueue: 'browser_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
   },
   wechat_official_html: {
-    kind: 'wechat_official_html', label: '公众号抓取', artifactType: 'html', outputMode: 'fixed', fixedOutputTable: 'raw_html_wechat_official',
-    queueMode: 'fixed', fixedQueue: 'wechat_official_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
+    kind: 'wechat_official_html', label: '公众号抓取', artifactType: 'html', outputMode: 'selectable', fixedOutputTable: 'raw_html_wechat_official',
+    queueMode: 'editable', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
   },
   app: { kind: 'app', label: 'APP 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: true, supportsUrlParams: false },
   file_download: { kind: 'file_download', label: '文件下载', artifactType: 'file', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: true, supportsLogin: false, supportsUrlParams: false },
@@ -417,7 +417,7 @@ const NODE_CONFIG_SEEDS = {
   // 0711 R8：公众号抓取——同构于浏览器抓取，仅固定表/队列取另一组能力键
   'wechat-html-collect': {
     title: '公众号抓取', sub: '[WECHAT] 公众号抓取 · 源配置', status: '待配置', planned: false, collect: true,
-    base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
+    base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件'], ['定时策略', '30 8 * * 1-5']],
     fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '']],
     inmap: [],
     params: [],
@@ -429,7 +429,7 @@ const NODE_CONFIG_SEEDS = {
       isDetail: false,
       collectorKind: 'wechat_official_html',
     },
-    taskCfg: { queue: COLLECTOR_CAPABILITIES.wechat_official_html.fixedQueue ?? '', urlRule: '' },
+    taskCfg: { queue: '', urlRule: '' },
   },
   // 网页登录：无输入表；登录配置清单维护多条完整登录数据配置，发起任务时可临时切换默认配置。
   'login-collect': {
@@ -871,22 +871,6 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'article-tag': '[730] - 文章打标签',
 }
 
-/**
- * 规则处理 / 媒体 / 文本 / OCR / PDF 抓取等节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列；
- * 2026-10-08 PDF 抓取补 dev_web_snatch_pdf）。
- * 在节点新增（insertAfter / addNodeToBranch）与任务配置时赋默认队列名。
- */
-export const DEFAULT_TASK_QUEUES: Record<string, string> = {
-  rule: 'dev_web_rulehandle',
-  ocr: 'dev_web_snatch_ocr',
-  pdf: 'dev_web_snatch_pdf',
-  translate: 'dev_web_translate',
-  'article-summary': 'dev_web_llm_generate',
-  'article-tag': 'dev_web_llm_generate',
-  'audio-text': 'dev_web_audiototext',
-  'video-audio': 'dev_web_videotoaudio',
-}
-
 // 左侧节点库分组
 export const LIB_GROUPS: LibGroup[] = [
   {
@@ -906,7 +890,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'file', code: '90', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
       // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
       { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
-      { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，固定表/队列', pill: 'p1' as Pill },
+      { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，HTML 文件', pill: 'p1' as Pill },
       // S4-1（方案 §6.1）：登录从采集节点的运行设置勾选项拆成独立节点，无输入表、有输出表（会话/凭据）
       { template: 'login', code: 'LOGIN', name: '网页登录', desc: '登录页 URL、账号、凭据，登录后交给后续抓取节点', pill: 'p1' as Pill },
     ]

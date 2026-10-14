@@ -10,6 +10,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
+import { useDictStore } from '@/stores/dict'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi } from '@/api'
 import type { EntryType } from '@/api'
@@ -130,7 +131,7 @@ describe('TaskTab · 上下文来源（对齐旧平台）', () => {
   })
 })
 
-describe('TaskTab · 默认队列名称（2026-09-23 用户拍板）', () => {
+describe('TaskTab · 默认队列名称（2026-10-14 起取节点类型 topic）', () => {
   it.each([
     ['rule', 'dev_web_rulehandle'],
     ['ocr', 'dev_web_snatch_ocr'],
@@ -142,6 +143,10 @@ describe('TaskTab · 默认队列名称（2026-09-23 用户拍板）', () => {
   ])('新增节点 %s 任务配置回显默认队列 %s', async (template, expectedQueue) => {
     mockAssets()
     setActivePinia(createPinia())
+    useDictStore().nodeTypeTopics = {
+      '600': 'dev_web_rulehandle', '150': 'dev_web_snatch_ocr', '800': 'dev_web_translate', '720': 'dev_web_llm_generate',
+      '730': 'dev_web_llm_generate', '710': 'dev_web_audiototext', '700': 'dev_web_videotoaudio',
+    }
     const flow = useFlowStore()
     flow.insertAfter('start', template)
     flow.setActiveTab('task')
