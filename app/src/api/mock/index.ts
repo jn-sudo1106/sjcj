@@ -45,7 +45,10 @@ import {
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
 } from './rules'
-import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
+// mockMeasures（M4 演示形状）已不再注册：1014 迁移「指标列表」页时，measure/measurePaged
+// 改成真实契约的分页端点（live），handler 换成 mock/measure.ts 的 mockMeasurePaged（旧平台字段名）。
+// metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
+import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
@@ -67,6 +70,16 @@ import {
 } from './commJob'
 import { mockTaskListPaged } from './taskList'
 import { mockTaskStat } from './taskStat'
+import {
+  mockMeasurePaged,
+  mockMeasureAdd,
+  mockMeasureUpdate,
+  mockMeasureDelete,
+  mockMeasureDeletePhy,
+  mockMeasureChangeEnable,
+  mockMeasureCopy,
+  mockMeasureGenFromSource,
+} from './measure'
 import {
   mockDatasetPaged,
   mockDatasetUpdate,
@@ -281,7 +294,6 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
 
   // 指标中心（M4）
   'dataset/datasetPaged': mockDatasets,
-  'measure/measurePaged': mockMeasures,
   'measure/stats': mockMetricStats,
   // 指标中心（M4）
   // dataset/datasetPaged = 逆向清单的逻辑名，只服务 api/index.ts 的 M4 演示服务（metricApi.datasets）。
@@ -294,6 +306,20 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'dataset/copy': mockDatasetCopy,
   'dataset/genFromSource': mockDatasetGenFromSource,
   'dataset/runNow': mockDatasetRunNow,
+
+  // 指标定义（1014 迁移「指标列表」页，旧 page/config/MeasureList.vue）。
+  // 这一页在旧平台的分页 / 新增 / 修改 / 批量启停 / 批量删除 / 物理删除 / 复制**本来就全部直连后端**，
+  // 所以这 8 条一起标 live：只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
+  // 注意 `measure/measurePaged` 这条的**逻辑名与真实路径同名**（旧 URL 就是 /v1/measure/measurePaged），
+  // 不存在 dataset 那种大小写别名问题；原来注册在这里的 mockMeasures（M4 演示形状）已随之下线。
+  'measure/measurePaged': mockMeasurePaged,
+  'measure/add': mockMeasureAdd,
+  'measure/update': mockMeasureUpdate,
+  'measure/delete': mockMeasureDelete,
+  'measure/deleteMeasurePhy': mockMeasureDeletePhy,
+  'measure/changeEnable': mockMeasureChangeEnable,
+  'measure/copy': mockMeasureCopy,
+  'measure/genMeasureFromSource': mockMeasureGenFromSource,
 
   // 数据查看（M4）
   'data/entryTypesGroup': mockEntryTypesGroup,

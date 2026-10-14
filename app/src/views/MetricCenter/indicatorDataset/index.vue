@@ -17,12 +17,19 @@
 //         copyDataset / updateDataSet（7 条全部走真实接口，见 api/dataset.ts）
 //
 // 有意偏差（都在交付说明里单列）：
-//   1. **指标相关入口暂不可用**：增加指标 / 指标-新 / 行内「指标」依赖旧项目的
-//      MeasureAdd（349 行）/ MeasureAddNew（286 行）/ MeasureShow → MeasureList（585 行，自带 dataSource
-//      与一堆级联选择器），这三套在新平台**尚未迁移**（MetricCenter 的 indicatorsList 还是占位）。
-//      本次保留入口与 1:1 布局，点击给明确提示，等指标页迁完再接回去。
-//      接线时的入参：旧 `handleAddMeasure/New` 传 `(record.sourceId, record, record.entryTypeId)`，
-//      `handleShowMeasure` 传 `(record.sourceId, record.entryTypeId, record.datasetId)`。
+//   1. **指标相关入口已接通**（1014 补）：增加指标 / 指标-新 / 行内「指标」三个入口，旧版分别打开
+//      旧项目的 MeasureAdd（349 行）/ MeasureAddNew（286 行）/ MeasureShow → MeasureList（585 行）。
+//      新平台没有「弹窗里嵌一个整页」这套形态，改成 `router.replace` 跳到 MetricCenter 的
+//      「指标列表」页签并带上上下文（`/metrics?tab=indicatorsList&sourceId=…&entryTypeId=…&datasetId=…&datasetName=…`），
+//      由 indicatorsList/index.vue 消费：
+//        · 增加指标 → 额外带 `add=1`（进页即打开 MeasureAddDialog）
+//        · 指标-新 → 额外带 `add=new`（进页即打开 MeasureAddNewDialog）
+//        · 行内「指标」/ 指标数标签 → 只带上下文（进页即筛出该数据集的指标）
+//      入参与旧版一一对应：旧 `handleAddMeasure/New` 传 `(record.sourceId, record, record.entryTypeId)`，
+//      即 MeasureAdd/New 会把整条数据集记录合并进提交体（datasetId / datasetName / entryTypeId…），
+//      所以 query 里把 datasetId / datasetName / entryTypeId / sourceId 四个键一并带过去，由新页重建这份 record；
+//      旧 `handleShowMeasure` 传 `(record.sourceId, record.entryTypeId, record.datasetId)`，同样落在这四个键上。
+//      「增加指标 / 指标-新」仍照旧要求**恰好选中 1 行**（旧版选了 0 行或 >1 行都给「请选择要一行操作的数据集」）。
 //   2. 不迁死代码：「操作日志」菜单项（`showLogModal` 里的 `$refs.logModal` 在模板里根本没注册，
 //      且传的是 `record.configId`——数据集记录上没有这个字段，双重失效）；旧 `resetSearchForm` /
 //      `handleSearch` / `handleReset` / `handleCloseCurrentTab` / `handleOpenTab` / `handleShowEntryType`
@@ -54,7 +61,7 @@
 //   9. 旧页 `filters.changeTime`（返回常量 '11' 的废 filter）与 `options.alert`（旧 s-table 的已选条数
 //      提示条，页面从没传 alert，故从未渲染）——不迁。
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
 import { ArrowDown, Plus, Scissor, Search, Setting, WarningFilled } from '@element-plus/icons-vue'
 import {
@@ -76,6 +83,7 @@ import PromptDialog from './PromptDialog.vue'
 defineOptions({ name: 'IndicatorDataset' })
 
 const route = useRoute()
+const router = useRouter()
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求）----
 const form = reactive({
@@ -342,10 +350,47 @@ function onRowCommand(command: string, row: DatasetRow) {
   if (command === 'copy') handleCopy(row)
 }
 
-// ---- 指标模块未迁移的占位入口（见文件头偏差第 1 条）----
-const MEASURE_PENDING = '指标模块（MeasureList / MeasureAdd / MeasureAddNew）尚未迁移，该入口暂未接通'
-function pendingMeasure(kind: string) {
-  ElMessage.warning(`${MEASURE_PENDING}（${kind}）`)
+// ---- 指标入口接线（旧 MeasureAdd / MeasureAddNew / MeasureShow，见文件头偏差第 1 条）----
+/**
+ * 跳到 MetricCenter 的「指标列表」页签并带上上下文。
+ * 与切页签（MetricCenter/index.vue 的 selectTab）共用同一套 query 键，
+ * 所以跳过去之后手动点页签也不会把上下文丢掉。
+ */
+function openMeasureList(row: DatasetRow, add?: '1' | 'new') {
+  void router.replace({
+    path: '/metrics',
+    query: {
+      tab: 'indicatorsList',
+      ...(row.sourceId ? { sourceId: String(row.sourceId) } : {}),
+      ...(row.entryTypeId ? { entryTypeId: String(row.entryTypeId) } : {}),
+      ...(row.datasetId ? { datasetId: String(row.datasetId) } : {}),
+      ...(row.datasetName ? { datasetName: String(row.datasetName) } : {}),
+      ...(add ? { add } : {}),
+    },
+  })
+}
+
+/** 旧 `handleAddMeasure()`：必须恰好选中 1 行，否则「请选择要一行操作的数据集」 */
+function handleAddMeasure() {
+  if (selected.value.length !== 1) {
+    ElMessage.error('请选择要一行操作的数据集')
+    return
+  }
+  openMeasureList(selectedRows.value[0], '1')
+}
+
+/** 旧 `handleAddMeasureNew()`：同上，文案尾部多一个「2」（旧版原文，保留） */
+function handleAddMeasureNew() {
+  if (selected.value.length !== 1) {
+    ElMessage.error('请选择要一行操作的数据集2')
+    return
+  }
+  openMeasureList(selectedRows.value[0], 'new')
+}
+
+/** 旧 `handleShowMeasure(record)`：行内「指标」/ 指标数标签 → 该数据集的指标列表 */
+function handleShowMeasure(row: DatasetRow) {
+  openMeasureList(row)
 }
 
 // ---- 表头排序（服务端）----
@@ -457,8 +502,8 @@ onMounted(() => {
 
     <!-- 操作条：旧版 .operation（`v-if="!modal"`；路由页没有 modal 形态，恒显示） -->
     <div class="ids-op-bar">
-      <el-button type="primary" :icon="Plus" @click="pendingMeasure('增加指标')">增加指标</el-button>
-      <el-button type="primary" :icon="Plus" @click="pendingMeasure('指标-新')">指标-新</el-button>
+      <el-button type="primary" :icon="Plus" @click="handleAddMeasure">增加指标</el-button>
+      <el-button type="primary" :icon="Plus" @click="handleAddMeasureNew">指标-新</el-button>
       <el-button @click="handleRunNow(null)">立即运行(从上次ID)</el-button>
       <el-button @click="handleRunNowWithId">立即执行(手工设ID)</el-button>
       <el-button @click="batchChangeEnable(0)">启用</el-button>
@@ -529,7 +574,7 @@ onMounted(() => {
               v-if="row.measureCnt"
               class="ids-measure-tag"
               size="small"
-              @click="pendingMeasure('指标')"
+              @click="handleShowMeasure(row)"
             >
               {{ row.measureCnt }}
             </el-tag>
@@ -541,7 +586,7 @@ onMounted(() => {
 
           <!-- 操作：旧 actionSlot —— 指标 | 详情 | 编辑 | 更多（制作副本） -->
           <span v-else-if="col.slot === 'action'" class="ids-actions">
-            <span class="ids-op-link" @click="pendingMeasure('指标')">指标</span>
+            <span class="ids-op-link" @click="handleShowMeasure(row)">指标</span>
             <span class="ids-op-divider">|</span>
             <span class="ids-op-link" @click="openDetail(row)">详情</span>
             <span class="ids-op-divider">|</span>

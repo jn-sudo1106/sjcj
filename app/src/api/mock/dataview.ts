@@ -291,6 +291,56 @@ for (let langIndex = 1; langIndex <= 24; langIndex += 1) {
   ]
 }
 
+// 「指标」表（旧部署里 /inst/measure-data 写死的表 ID = 999）在 mock 下也要有样例：
+// 否则指标结果页在本地 mock 环境里永远是空表（该页的动态列按字段的 `required` 生成，
+// 所以这里显式标出 4 个必填列 + 1 个 url 列，用来覆盖「必填列进表格 / 非必填只进编辑弹窗」的口径）。
+TABLES.push({
+  tableId: '999',
+  tableName: 'sense_data.TB_MEASURE',
+  name: '指标',
+  rowCount: 12,
+  state: 'C',
+  keyField: 'K2',
+  fields: [
+    { prop: 'K1', type: 'string', desc: '标题', columnName: 'K1', required: true, sample: '招商中证白酒指数日增' },
+    { prop: 'K2', type: 'string', desc: '指标编码', columnName: 'K2', required: true, sample: 'A00011' },
+    { prop: 'K3', type: 'date', desc: '指标日期', columnName: 'K3', required: true, sample: '2026-10-14' },
+    { prop: 'K4', type: 'num', desc: '指标值1', columnName: 'K4', required: true, sample: '12.35' },
+    { prop: 'K5', type: 'string', desc: '备注', columnName: 'K5', required: false, sample: '日频' },
+    { prop: 'K10', type: 'url', desc: '详情链接', columnName: 'K10', required: true, sample: 'https://example.com/m/910000' },
+  ],
+})
+QUERY_ROWS['999'] = Array.from({ length: 12 }, (_, i): DataRow => {
+  const dataId = String(910000 + i)
+  const day = String((i % 28) + 1).padStart(2, '0')
+  return {
+    dataId,
+    sourceId: i % 3 === 0 ? '161725' : '161801',
+    title: `指标样例 ${i + 1}`,
+    summary: '',
+    acceptState: 'accepted',
+    state: i % 7 === 0 ? 'E' : 'C',
+    // 前几行造出「父表可点」（categoryId > 0 && parentId > 0）与「无父表」两种情况
+    parentId: i % 5 === 0 ? String(880000 + i) : '',
+    categoryId: i % 5 === 0 ? '1001' : '',
+    detailId: String(5500 + i),
+    k0: i % 3 === 0 ? `json-${dataId}` : '',
+    createDt: `2026-10-${day} 03:00:12`,
+    updateDt: `2026-10-${day} 03:05:00`,
+    seq: String(i + 1),
+    times: String((i % 4) + 1),
+    fileId: String(9000 + i),
+    values: {
+      K1: `指标样例 ${i + 1}`,
+      K2: `A000${10 + i}`,
+      K3: `2026-10-${day}`,
+      K4: String(12.35 + i),
+      K5: i % 4 === 0 ? '日频' : '月频',
+      K10: `https://example.com/m/${dataId}`,
+    },
+  }
+})
+
 // 演示环境无源分组数据：main（默认选中表）留空，全部表放进 list1（UI 上对应「main」分组标签），
 // list2/list3 留空（entryTypeGroupFromLegacy 按此形状消化）
 /**
@@ -320,6 +370,35 @@ export function mockDataTableMeta(params?: Record<string, unknown>): DataTableMe
   const id = String(params?.tableId ?? '')
   return TABLES.find((t) => t.tableId === id) ?? null
 }
+/**
+ * 旧口径 `more`（= `RowQuery.sql`）的 mock 侧解析。
+ *
+ * 「指标结果」与「数据查询」两页把 more 当 SQL 条件片断发出去（真实后端按 SQL 执行）。
+ * mock 里只认 `buildMore` 会产出的两种子句：`Kx = 'v'` 与 `Kx LIKE '%v%'`，
+ * 基线 `1 = 1` 视为「无附加条件」。认不出的子句一律**忽略**——mock 要保持宽松，
+ * 不能因为一句不认识的 SQL 把整页数据滤成空（早期那版拿 sql 去 values 的 JSON 里做子串匹配，
+ * 结果连 `1 = 1` 基线都匹配不上，指标结果页在本地永远是空表）。
+ */
+function buildMoreMatcher(sql: string): ((row: DataRow) => boolean) | null {
+  const tests: ((row: DataRow) => boolean)[] = []
+  for (const raw of sql.split(/\band\b/i)) {
+    const clause = raw.trim()
+    if (!clause || /^1\s*=\s*1$/.test(clause)) continue
+    const like = /^([A-Za-z0-9_]+)\s+LIKE\s+'%(.*)%'$/i.exec(clause)
+    if (like) {
+      const [, column, keyword] = like
+      tests.push((row) => String((row.values ?? {})[column] ?? '').includes(keyword))
+      continue
+    }
+    const eq = /^([A-Za-z0-9_]+)\s*=\s*'(.*)'$/i.exec(clause)
+    if (eq) {
+      const [, column, value] = eq
+      tests.push((row) => String((row.values ?? {})[column] ?? '') === value)
+    }
+  }
+  return tests.length ? (row) => tests.every((test) => test(row)) : null
+}
+
 export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<DataRow> {
   const tableId = String(params?.tableId ?? '')
   const all = QUERY_ROWS[tableId] ?? []
@@ -327,7 +406,7 @@ export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<D
   const parentId = String(params?.parentId ?? '').trim()
   const states = String(params?.state ?? '').split(',').map((item) => item.trim()).filter(Boolean)
   const sourceId = String(params?.sourceId ?? '').trim()
-  const sql = String(params?.sql ?? '').trim()
+  const moreMatch = buildMoreMatcher(String(params?.sql ?? '').trim())
   // 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部源；sourceId 再在此范围内进一步收窄
   const siteId = String(params?.siteId ?? '').trim()
   const siteSourceIds = siteId ? new Set(SOURCES.filter((s) => s.siteId === siteId).map((s) => s.sourceId)) : null
@@ -337,7 +416,7 @@ export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<D
     if (states.length && !states.includes(r.state ?? '')) return false
     if (siteSourceIds && !siteSourceIds.has(r.sourceId)) return false
     if (sourceId && r.sourceId !== sourceId) return false
-    if (sql && !JSON.stringify(r.values ?? {}).includes(sql)) return false
+    if (moreMatch && !moreMatch(r)) return false
     return true
   })
   const page = Math.max(1, Number(params?.page ?? 1))
