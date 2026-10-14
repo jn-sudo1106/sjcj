@@ -29,13 +29,11 @@ import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
 import {
   effectiveOutputTable,
   isDataNode,
-  isRuleNode,
   nodeClassFor,
   nodeEntryCondition,
   nodeOutputTable,
   nodeInputTable,
   nodeTypeLabel,
-  collectorCapabilityOf,
   conditionGroupIsSet,
   conditionGroupLabel,
   type NodeConfig,
