@@ -6,6 +6,8 @@
 //      **必填字段**生成，只有前 12 个进表格（旧 `if (i >= 12) break`），编辑弹窗用全量。
 //      标题是 `中文名-列名`（如 `标题-K3`），`dataIndex` 就是物理列名（K1/K2/…）。
 //      宽度规则照抄旧代码：默认 120，字段名含「区间/时间/日期/周期」的算 140，再乘 0.9；
+//      **但落到列上是 `minWidth` 而不是 `width`**（见下方 `buildDynamicColumns` 的说明：
+//      只有非数字 width 的列才会去吸收容器富余宽度，否则必填字段少时表格右侧会留白）。
 //      `dataType === 'url'` 或字段名含 url 的渲染成外链（旧 dataUrlSlot）。
 //   2. 系统列（旧 MeasureData 内联在模板里的 u-table-column）：ENTRY_ID / SOURCE_ID / STATE /
 //      UPDATE_DT / CREATE_DT / DETAIL_ID / NEXT_FLAG / PARENT_ID / K0 / action。
@@ -63,6 +65,15 @@ export interface EntryDataColumn extends ColumnDef {
 /**
  * 旧 `columns()`（表格用，最多 12 个必填字段）与 `allColumns()`（编辑弹窗用，全量）。
  * @param limit 0 表示不限（= 旧 allColumns()）
+ *
+ * ⚠️ 宽度给的是 **`minWidth` 而不是 `width`**（数值仍是旧的 `120/140 * 0.9`）：
+ *   el-table 只把「容器富余宽度」分给**没有数字 `width`** 的列
+ *   （见 element-plus 的 `table-layout.updateColumnsWidth`：`flexColumns = columns.filter(c => !isNumber(c.width))`，
+ *   flexColumns 为空时直接 `bodyWidth = Σ width`）。本页数据列是唯一会随表变多/变少的「内容列」，
+ *   旧版全列定宽，遇到必填字段少的表时整张表只有 895px、右边空出 500+px 的白条。
+ *   改成 `minWidth` 后：容器够宽 → 富余按各列 minWidth 比例分给数据列（列自适应页面宽度、不留白）；
+ *   容器不够 → 各列退回自己的 minWidth 并横向滚动（与原来一致）。
+ *   编辑弹窗不看这个字段（`ColumnEditDialog` 按 `span` 走栅格），所以这里改名不影响弹窗。
  */
 export function buildDynamicColumns(items: EntryItem[], limit = 12): EntryDataColumn[] {
   const ret: EntryDataColumn[] = []
@@ -75,8 +86,8 @@ export function buildDynamicColumns(items: EntryItem[], limit = 12): EntryDataCo
       title: `${item.itemName}-${item.columnName}`,
       dataIndex: item.columnName,
       span: 4,
-      // 旧版 url 列没给 width（跟着内容走），普通列给 width*0.9
-      ...(url ? {} : { width: dynamicWidth(item.itemName) }),
+      // 旧版 url 列没给宽度（旧 `width` 也没给，跟着内容走）；普通列给 width*0.9 作为**最小**宽度
+      ...(url ? {} : { minWidth: dynamicWidth(item.itemName) }),
       url,
       slot: url ? 'dataUrl' : 'data',
     })

@@ -85,7 +85,16 @@ describe('indicatorsResult · buildDynamicColumns（旧 columns() / allColumns()
       item('K3', '统计周期'),
       item('K4', '时间区间'),
     ])
-    expect(cols.map((c) => c.width)).toEqual([108, 126, 126, 126])
+    expect(cols.map((c) => c.minWidth)).toEqual([108, 126, 126, 126])
+  })
+
+  it('宽度落在 `minWidth` 而不是 `width` —— 只有非数字 width 的列才会吸收容器富余宽度', () => {
+    // el-table 的 updateColumnsWidth：flexColumns = columns.filter(c => !isNumber(c.width))，
+    // flexColumns 为空时 bodyWidth 直接被定成 Σ width —— 那样必填字段少时表格只铺到 895px，
+    // 右侧留一条白。所以数据列必须只给 minWidth（这条用例就是防「改回 width」的）。
+    const cols = buildDynamicColumns([item('K1', '标题'), item('K2', '指标编码')])
+    expect(cols.map((c) => c.width)).toEqual([undefined, undefined])
+    expect(cols.map((c) => c.minWidth)).toEqual([108, 108])
   })
 
   it('url 列：dataType=url 或字段名含 url → 不加宽度、url=true、slot=dataUrl', () => {
@@ -96,8 +105,8 @@ describe('indicatorsResult · buildDynamicColumns（旧 columns() / allColumns()
     ])
     expect(cols.map((c) => c.url)).toEqual([true, true, false])
     expect(cols.map((c) => c.slot)).toEqual(['dataUrl', 'dataUrl', 'data'])
-    expect(cols[0].width).toBeUndefined()
-    expect(cols[2].width).toBe(108)
+    expect(cols[0].minWidth).toBeUndefined()
+    expect(cols[2].minWidth).toBe(108)
   })
 })
 

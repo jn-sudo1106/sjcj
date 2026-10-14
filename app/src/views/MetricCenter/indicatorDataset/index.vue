@@ -513,7 +513,7 @@ onMounted(() => {
            菜单里只有「删除」——「操作日志」是死代码，见文件头偏差第 2 条。 -->
       <el-dropdown class="ids-more" :disabled="!selected.length" @command="onBatchCommand">
         <el-button :icon="Setting" :disabled="!selected.length">
-          更多..
+          更多
           <el-icon class="ids-more-arrow"><ArrowDown /></el-icon>
         </el-button>
         <template #dropdown>
@@ -534,6 +534,7 @@ onMounted(() => {
       :data="rows"
       border
       size="small"
+      max-height="550"
       :row-key="(r: DatasetRow) => r.datasetId"
       @selection-change="onSelectionChange"
       @sort-change="onSortChange"

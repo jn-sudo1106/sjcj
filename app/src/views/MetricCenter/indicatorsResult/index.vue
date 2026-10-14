@@ -88,6 +88,15 @@
 //          新平台 `exportUrl` 的既定语义是把查询条件（含 sql→more）带上，这里按既定语义调用，
 //          筛选后导出与页面所见一致（这是修正，不是回归）。
 //       ② 旧版 `window.open(url, '_target')` 开的是一个**具名窗口**（会复用同一个），这里用 '_blank'。
+//   15. **动态列只给 `min-width`，不给 `width`**（数值仍是旧的 `120/140 * 0.9`）。el-table 只把容器
+//       富余宽度分给「没有数字 width」的列，旧版全列定宽，遇到必填字段少的表时整张表只铺到 895px、
+//       右侧空出一条白（用户反馈的就是这个）。改成 minWidth 后数据列会按比例撑满容器宽度；
+//       容器不够时退回各自的最小宽度并横向滚动（与旧版一致）。
+//       另外**没有动态列时**（该表一个必填字段都没有）在「原始」与「操作」之间补一个**弹性占位列**
+//       （`v-if="!dynamicCols.length"`，不给宽度 → 被 el-table 当弹性列），否则 11 个定宽系统列
+//       同样铺不满、右侧留白。这个做法与 `DataView/DataQueryTab.vue` 处理同一问题的口径一致。
+//   16. 操作列 `fixed="right"`、勾选列与 ENTRY_ID `fixed="left"`（旧版没有固定列）：本页列多时
+//       要横向滚动，固定后勾选/详情/操作始终可见（与 indicatorsResult 同批的 indicatorsList 一致）。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
@@ -822,6 +831,7 @@ watch(
       v-loading="loading"
       :data="rows"
       border
+      max-height="550"
       size="small"
       :row-key="(r: DataRow) => r.dataId"
       @selection-change="onSelectionChange"
@@ -842,13 +852,15 @@ watch(
         </template>
       </el-table-column>
 
-      <!-- 动态列：必填字段的前 12 个；值取 row.values[物理列名]；url 列渲染成外链 -->
+      <!-- 动态列：必填字段的前 12 个；值取 row.values[物理列名]；url 列渲染成外链。
+           ⚠️ 走 `min-width` 而非 `width`：el-table 只把容器富余宽度分给「没有数字 width」的列，
+           这样必填字段少时数据列会自动撑满，不会在右侧留一条白（见 columns.ts 的说明）。 -->
       <el-table-column
         v-for="col in dynamicCols"
         :key="col.dataIndex"
         :label="col.title"
         :prop="col.dataIndex"
-        :width="col.width"
+        :min-width="col.minWidth"
         show-overflow-tooltip
         :sortable="allSort ? 'custom' : false"
       >
@@ -909,6 +921,13 @@ watch(
           <span v-else>-</span>
         </template>
       </el-table-column>
+
+      <!-- 弹性占位列：**只在没有动态列时**出现（该数据表一个必填字段都没有，或字段缺 columnName）。
+           此时剩下的 11 个系统列全是定宽、合计 895px，在 1440 宽的内容区里会空出 500 多像素的白条。
+           这列不给宽度 → Element Plus 把它当弹性列吸收剩余空间，表格始终铺满容器宽度
+           （`DataView/DataQueryTab.vue` 里解决同一问题的同款做法）。有动态列时不需要它——
+           富余宽度会按各列 min-width 的比例分给数据列，那才是「列自适应页面宽度」。 -->
+      <el-table-column v-if="!dynamicCols.length" />
 
       <el-table-column label="操作" width="80" fixed="right">
         <template #default="{ row }">

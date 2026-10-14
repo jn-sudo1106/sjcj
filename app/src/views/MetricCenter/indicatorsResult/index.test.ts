@@ -327,6 +327,44 @@ describe('indicatorsResult · 首屏', () => {
     expect(cellOf(w, 1, 6).find('a').exists()).toBe(false)
   })
 
+  it('动态列只给 min-width、不给 width（否则容器有富余时表格右侧会留白）', async () => {
+    const w = mountPage()
+    await flushPromises()
+    const byProp = (prop: string) => {
+      const hit = w.findAllComponents({ name: 'ElTableColumn' }).find((c) => c.props('prop') === prop)
+      if (!hit) throw new Error(`找不到 prop=${prop} 的表格列`)
+      return hit
+    }
+    // 「发布日期-K3」= 140*0.9；「指标编码-K2」= 120*0.9
+    expect(byProp('K3').props('minWidth')).toBe(126)
+    expect(byProp('K2').props('minWidth')).toBe(108)
+    // 软定宽的属性必须留空：el-table 只把富余宽度分给「没有数字 width」的列
+    expect(byProp('K3').props('width')).toBe('')
+    expect(byProp('K2').props('width')).toBe('')
+    // 系统短列照旧定宽（模板里是静态属性，会以字符串形式落到 prop 上）
+    expect(String(byProp('STATE').props('width'))).toBe('70')
+  })
+
+  it('表里没有任何必填字段时补一个弹性占位列，表格仍然铺满容器（不留白）', async () => {
+    // 没有必填字段 → 没有动态列 → 只剩 11 个定宽系统列（合计 895px），
+    // 不补弹性列的话右侧会空出几百像素。占位列不给宽度，被 el-table 当作弹性列。
+    spies.tableMeta.mockImplementation(async () => ({
+      ...META,
+      fields: META.fields.map((f) => ({ ...f, required: false })),
+    }))
+    const w = mountPage()
+    await flushPromises()
+    const cols = w.findAllComponents({ name: 'ElTableColumn' })
+    // 勾选列 + 10 个系统列（ENTRY_ID…操作）+ 占位列
+    expect(cols).toHaveLength(12)
+    const filler = cols.filter((c) => c.props('type') === 'default' && !c.props('prop') && !c.props('label'))
+    expect(filler).toHaveLength(1)
+    // 占位列落在「原始」和「操作」之间
+    expect(w.findAll('thead th').map((th) => th.text())).toEqual([
+      '', 'ENTRY_ID', '源', '状态', '更新', '生成', '任务', '后续', '父ID', '原始', '', '操作',
+    ])
+  })
+
   it('状态列渲染 row.state（列名沿用旧模板的 prop="STATE"，行数据却是 camelCase，必须给插槽）', async () => {
     const w = mountPage()
     await flushPromises()

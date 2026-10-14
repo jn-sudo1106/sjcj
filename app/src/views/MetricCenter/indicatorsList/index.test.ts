@@ -188,6 +188,13 @@ function cell(w: VueWrapper, rowIndex: number, cellIndex: number) {
   return w.findAll('.el-table__body tr')[rowIndex].findAll('td')[cellIndex]
 }
 
+/** 按 prop 取某个表格列组件（勾选列的 prop 是 ''） */
+function columnByProp(w: VueWrapper, prop: string) {
+  const hit = w.findAllComponents({ name: 'ElTableColumn' }).find((c) => c.props('prop') === prop)
+  if (!hit) throw new Error(`找不到 prop=${prop} 的表格列`)
+  return hit
+}
+
 /** 工具条上的「操作..」下拉（不是表格行里那个） */
 function batchDropdown(w: VueWrapper) {
   const hit = w.findAllComponents({ name: 'ElDropdown' }).find((d) => !d.element.closest('.el-table'))
@@ -247,6 +254,18 @@ describe('indicatorsList · 首屏', () => {
     await flushPromises()
     const headers = w.findAll('thead th').map((th) => th.text())
     expect(headers).toEqual(['', ...MEASURE_BASE.map((c) => c.title)])
+  })
+
+  it('「操作」列固定在右侧，其余列都不固定（横向滚动时操作仍可见）', async () => {
+    const w = mountPage()
+    await flushPromises()
+    expect(columnByProp(w, 'action').props('fixed')).toBe('right')
+    // 只固定操作列：勾选列与文本列跟着横向滚动（与 Monitor/taskList 同口径）
+    expect(MEASURE_BASE.filter((c) => c.fixed).map((c) => c.dataIndex)).toEqual(['action'])
+    // 未固定的列 `fixed` 是 undefined（Element Plus 没给这个 prop 声明 default，
+    // 显式传 undefined 即「不固定」，el-table 按真值判断 —— 不要写成 toBe(false)）
+    expect(columnByProp(w, 'measureId').props('fixed')).toBeUndefined()
+    expect(columnByProp(w, 'keyDef').props('fixed')).toBeUndefined()
   })
 
   it('ID 三态：在用纯文本 / 停用红标签 / 历史删除带告警图标', async () => {

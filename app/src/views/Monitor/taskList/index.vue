@@ -365,7 +365,7 @@ function applyRouteQuery() {
               class="tl-date"
               @change="(v: [string, string] | null) => onDateChange(v)"
             />
-            <el-button size="small" class="tl-today" :icon="Calendar" @click="selectToday">当天</el-button>
+            <el-button class="tl-today" :icon="Calendar" @click="selectToday">当天</el-button>
           </el-form-item>
         </el-col>
         <el-col :md="3" :sm="24">
@@ -390,6 +390,7 @@ function applyRouteQuery() {
       :data="rows"
       border
       size="small"
+      max-height="500"
       :row-key="(r: TaskRow) => r.taskId"
       @selection-change="onSelectionChange"
     >
