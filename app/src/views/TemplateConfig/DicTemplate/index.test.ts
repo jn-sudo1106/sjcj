@@ -8,7 +8,7 @@ import { h } from 'vue'
 import ElementPlus from 'element-plus'
 import DicTemplatePage from './index.vue'
 import { dicTemplateApi } from '@/api/templateConfig'
-import { downloadCsv, toCsv } from '@/utils/csv'
+import { downloadXlsx } from '@/utils/format/xlsxExport'
 
 vi.mock('@/api/templateConfig', () => ({
   dicTemplateApi: {
@@ -24,10 +24,9 @@ vi.mock('@/api/templateConfig', () => ({
 }))
 
 // jsdom 没有 URL.createObjectURL，且下载会真触发 a.click —— 整个 util mock 掉，只验调用参数
-vi.mock('@/utils/csv', () => ({
-  toCsv: vi.fn(() => 'csv-content'),
-  downloadCsv: vi.fn(),
-  csvDateTag: vi.fn(() => '20261013'),
+vi.mock('@/utils/format/xlsxExport', () => ({
+  downloadXlsx: vi.fn(),
+  exportDateTag: vi.fn(() => '20261013'),
 }))
 
 const dialogOpen = vi.fn()
@@ -60,8 +59,7 @@ function lastPageQuery() {
 beforeEach(() => {
   dialogOpen.mockReset()
   vi.mocked(dicTemplateApi.page).mockClear()
-  vi.mocked(downloadCsv).mockClear()
-  vi.mocked(toCsv).mockClear()
+  vi.mocked(downloadXlsx).mockClear()
 })
 
 describe('DicTemplatePage', () => {
@@ -84,7 +82,7 @@ describe('DicTemplatePage', () => {
     expect(lastPageQuery()).toMatchObject({ pageNo: 1, name: '指标' })
   })
 
-  it('「导出」按已执行的筛选条件拉前 10000 条生成 CSV，文件名带日期后缀', async () => {
+  it('「导出」按已执行的筛选条件拉前 10000 条生成 xlsx，文件名带日期后缀', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
@@ -98,9 +96,12 @@ describe('DicTemplatePage', () => {
     await flushPromises()
 
     expect(lastPageQuery()).toMatchObject({ pageNo: 1, pageSize: 10000, name: '同比' })
-    // 表头 = 旧导出列（去掉操作列）
-    expect(vi.mocked(toCsv).mock.calls[0]?.[0]).toEqual(['id', '内容', '简称', '创建时间', '修改时间'])
-    expect(vi.mocked(downloadCsv).mock.calls[0]?.[0]).toBe('自动补全配置列表_20261013')
+    const [fileName, xlsxRows, sheetName] = vi.mocked(downloadXlsx).mock.calls[0] ?? []
+    expect(fileName).toBe('自动补全配置列表_20261013')
+    expect(sheetName).toBe('自动补全配置列表')
+    // 表头 = 旧导出列（去掉操作列）；旧页没有 updateTime 时该列留空
+    expect(xlsxRows?.[0]).toEqual(['id', '内容', '简称', '创建时间', '修改时间'])
+    expect(xlsxRows?.[1]).toEqual([3, '查询某机构某日期的客户指标结果', '机构 日期', '2025-04-15 09:52:07', ''])
   })
 
   it('导出失败只提示，不影响列表已加载的数据', async () => {
@@ -111,7 +112,7 @@ describe('DicTemplatePage', () => {
     await wrapper.findAll('.dt-filter-form button').find((b) => b.text().includes('导出'))!.trigger('click')
     await flushPromises()
 
-    expect(downloadCsv).not.toHaveBeenCalled()
+    expect(downloadXlsx).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('后端拒绝')
     expect(wrapper.findAll('.dt-op-link').length).toBe(2)
     document.body.innerHTML = ''

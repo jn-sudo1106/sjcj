@@ -7,8 +7,10 @@
 // 所以照表模板（TableTemplate/）的先例在本目录自己实现列表，接口走 api/templateConfig.ts 的 dicTemplateApi。
 //
 // 与旧版的有意偏差（旧版缺陷或依赖差异，交付说明单列）：
-// 1. 旧版导出用 xlsx-style 生成 .xlsx；本项目没有该依赖，改用现成的 utils/csv（带 BOM，
-//    Excel/WPS 直接打开不乱码），文件名口径不变：自动补全配置列表_YYYYMMDD。
+// 1. 旧版导出用 xlsx-style 带单元格样式生成 .xlsx；本项目不引这个依赖，改用自研的
+//    utils/format/xlsxExport 写出同样可被 Excel/WPS 直接打开的 .xlsx——列、列名、
+//    取数口径（当前筛选 + 前 10000 条）与文件名（自动补全配置列表_YYYYMMDD）都照旧版，
+//    只不带表头底色/字体/列宽这些样式。
 // 2. 旧版导出会直接改 this.queryParam 的 pageNo/pageSize，污染后续搜索；这里导出用独立参数。
 // 3. 旧版启停按钮本来就是注释掉的，且旧后端没有 /poc/dic/status —— 不提供状态列。
 import { onMounted, ref } from 'vue'
@@ -16,7 +18,7 @@ import { ElMessage } from 'element-plus'
 import { Download, Plus, Search } from '@element-plus/icons-vue'
 import { dicTemplateApi } from '@/api/templateConfig'
 import type { DicTemplate } from '@/api/types/template'
-import { csvDateTag, downloadCsv, toCsv, type CsvCell } from '@/utils/csv'
+import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
 import DicTemplateEditDialog from './DicTemplateEditDialog.vue'
 
 defineOptions({ name: 'DicTemplatePage' })
@@ -89,9 +91,9 @@ async function exportData() {
   exporting.value = true
   try {
     const res = await dicTemplateApi.page({ pageNo: 1, pageSize: 10000, name: appliedName.value })
-    const data = res.list ?? []
-    const csvRows: CsvCell[][] = data.map((row) => EXPORT_COLUMNS.map((col) => (row[col.prop] ?? '') as CsvCell))
-    downloadCsv(`自动补全配置列表_${csvDateTag()}`, toCsv(EXPORT_COLUMNS.map((col) => col.label), csvRows))
+    const rows: XlsxCell[][] = [EXPORT_COLUMNS.map((col) => col.label)]
+    for (const row of res.list ?? []) rows.push(EXPORT_COLUMNS.map((col) => (row[col.prop] ?? '') as XlsxCell))
+    downloadXlsx(`自动补全配置列表_${exportDateTag()}`, rows, '自动补全配置列表')
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '加载数据失败')
   } finally {

@@ -20,10 +20,11 @@
 //    零有效行不发请求。
 // 4. 旧版编辑提交不看校验，三个字段留空也能存进库；这里三个必填直接拦下
 //    （同 sql 模板、表模板、自动补全、数据索引同步的修正先例）。
-// 5. 旧版导出用 xlsx-style 生成 .xlsx；本项目没有该依赖，改用现成的 utils/csv（带 BOM，
-//    Excel/WPS 直接打开不乱码），文件名口径不变：分词配置列表_YYYYMMDD。导出的状态列渲染成 启用/禁用
-//    （旧版导出的是原码值 0/1，打开表还得对照字典看）。旧版导出会直接改 this.queryParam 的
-//    pageNo/pageSize 污染后续搜索，这里导出用独立参数。
+// 5. 旧版导出用 xlsx-style 带单元格样式生成 .xlsx；本项目不引这个依赖，改用自研的
+//    utils/format/xlsxExport 写出同样可被 Excel/WPS 直接打开的 .xlsx——列、列名、取数口径
+//    （当前筛选 + 前 10000 条）与文件名（分词配置列表_YYYYMMDD）都照旧版，只不带表头底色/字体/列宽。
+//    导出的状态列渲染成 启用/禁用（旧版导出的是原码值 0/1，打开表还得对照字典看）。
+//    旧版导出会直接改 this.queryParam 的 pageNo/pageSize 污染后续搜索，这里导出用独立参数。
 // 6. 旧版查询条件改了就直接带进下一次请求，这里与通用层一致：改了不自动查，点「搜索」才生效。
 // 7. 旧页 handleDetail 引用的 $refs.detail 在模板里不存在（点不到的死代码），不迁。
 import { onMounted, reactive, ref } from 'vue'
@@ -31,7 +32,7 @@ import { ElMessage } from 'element-plus'
 import { Download, Plus, Search } from '@element-plus/icons-vue'
 import { wordSegmentApi } from '@/api/templateConfig'
 import type { WordSegmentConfig } from '@/api/types/template'
-import { csvDateTag, downloadCsv, toCsv, type CsvCell } from '@/utils/csv'
+import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
 import {
   STATUS_ALL_OPTION_LABEL,
   WORD_SEGMENT_STATUS_OPTIONS,
@@ -132,13 +133,13 @@ async function exportData() {
   exporting.value = true
   try {
     const res = await wordSegmentApi.page({ pageNo: 1, pageSize: 10000, ...applied })
-    const data = res.list ?? []
-    const csvRows: CsvCell[][] = data.map((row) =>
-      EXPORT_COLUMNS.map((col) =>
-        col.prop === 'status' ? wordSegmentStatusLabel(row.status) : ((row[col.prop] ?? '') as CsvCell),
-      ),
-    )
-    downloadCsv(`分词配置列表_${csvDateTag()}`, toCsv(EXPORT_COLUMNS.map((col) => col.label), csvRows))
+    const rows: XlsxCell[][] = [EXPORT_COLUMNS.map((col) => col.label)]
+    for (const row of res.list ?? []) {
+      rows.push(EXPORT_COLUMNS.map((col) =>
+        col.prop === 'status' ? wordSegmentStatusLabel(row.status) : ((row[col.prop] ?? '') as XlsxCell),
+      ))
+    }
+    downloadXlsx(`分词配置列表_${exportDateTag()}`, rows, '分词配置列表')
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '加载数据失败')
   } finally {
