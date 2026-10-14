@@ -546,12 +546,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
     <div v-if="drawer.entry" class="et-d">
       <div class="et-d-title">{{ drawer.entry.name || drawer.entry.tableName }}</div>
       <div class="et-d-sub muted">
-        表 ID {{ drawer.entry.tableId }} ·
-        <template v-if="detailStats.loaded">
-          <template v-if="detailStats.dataCount != null">{{ detailStats.dataCount.toLocaleString() }} 条数据</template>
-          <template v-else>数据未统计</template>
-        </template>
-        <template v-else>数据统计中…</template>
+        表 ID {{ drawer.entry.tableId }}{{ detailStats.loaded ? (detailStats.dataCount != null ? ` · ${detailStats.dataCount.toLocaleString()} 条数据` : '') : ' · 数据统计中…' }}
       </div>
       <div v-if="detailStats.loaded" class="et-d-stats" data-testid="entry-detail-stats">
         <div class="et-d-stat"><span class="muted">数据条数</span><b>{{ detailStats.dataCount != null ? detailStats.dataCount.toLocaleString() : '—' }}</b></div>
