@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
+import type { DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -457,3 +457,128 @@ export function mockQuestionDicDelete(params?: Record<string, unknown>) {
   QUESTION_DICS.splice(index, 1)
   return { ok: true, message: '删除成功（演示）' }
 }
+
+/* ── 数据索引同步（旧「模板配置 → 数据索引同步」，端点域 /poc/data-index-sync） ── */
+
+/**
+ * 数据索引同步种子数据。
+ * 取自 186 POC 服务的真实行（2026-10-13 抓样，共 46 条：type 0 有 42 条、1 有 3 条、2 有 1 条，
+ * 状态全部启用），三种同步类型各留一条便于对照 mock 与联调。
+ * ⚠️ 真实响应的 status 回的是**数字** 0（与 TemplateRow 声明的字符串不一致），所以列表与筛选一律按
+ * String(row.status) 比；内存表按实体声明存 '0'，新建时也和旧弹窗一样恒为 '0'。
+ */
+const blankDataIndexSync = (over: Partial<DataIndexSync>): DataIndexSync => ({
+  type: 0,
+  comment: '',
+  tableName: '',
+  columnName: '',
+  syncSql: '',
+  beforeSql: null,
+  afterSql: null,
+  aliasColumn: null,
+  codeColumn: null,
+  status: '0',
+  lastSync: null,
+  delFlag: '0',
+  ...over,
+})
+
+const DATA_INDEX_SYNCS: DataIndexSync[] = [
+  blankDataIndexSync({
+    id: 56,
+    type: 0,
+    tableName: 'ADS_HFBI_ZQFXS_JGZBMX',
+    columnName: 'BRANCH_NAME',
+    comment: '机构指标数据表-机构名称',
+    syncSql: 'select distinct BRANCH_NAME,BRANCH_NO as CODE from ADS_HFBI_ZQFXS_JGZBMX',
+    lastSync: '2025-06-13 18:23:56',
+    createTime: '2025-04-22 18:56:48',
+    updateTime: '2025-04-22 18:56:48',
+  }),
+  blankDataIndexSync({
+    id: 47,
+    type: 2,
+    tableName: 'YJZB_HY_JX',
+    columnName: null,
+    comment: '分词同步配置',
+    syncSql: "select distinct HYMC as CONTENT, 'PERSON' as TYPE, 'base' as TOKEN from YJZB_HY_JX where HYMC is not null",
+    lastSync: '2025-03-12 21:32:17',
+    createTime: '2025-03-12 19:32:47',
+    updateTime: '2025-03-12 19:32:47',
+  }),
+  blankDataIndexSync({
+    id: 24,
+    type: 1,
+    tableName: 'dev_chat_table_config',
+    columnName: 'data_index',
+    comment: '数据索引同步',
+    syncSql: '{"type":"indexMsg","params":""}',
+    lastSync: null,
+    createTime: '2025-01-20 19:45:54',
+    updateTime: '2025-02-10 17:43:41',
+  }),
+]
+
+let dataIndexSyncNextId = 100
+
+/** 数据索引同步分页：旧口径两个筛选项都在 body —— name（模糊匹配「同步名称」comment）+ status，空串=全部 */
+export function mockDataIndexSyncPaged(params?: Record<string, unknown>): Paged<DataIndexSync> {
+  const name = String(params?.name ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = DATA_INDEX_SYNCS.filter(
+    (row) =>
+      (!name || String(row.comment ?? '').includes(name)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/data-index-sync，不带 id）—— 旧 dataIndexSyncConfigAdd */
+export function mockDataIndexSyncAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexSync>
+  const nextId = dataIndexSyncNextId++
+  DATA_INDEX_SYNCS.unshift({
+    ...blankDataIndexSync({}),
+    ...form,
+    id: nextId,
+    lastSync: null,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/data-index-sync/update，带 id）—— 旧 dataIndexSyncConfigUpdate；与新增是两个端点，不要合并 */
+export function mockDataIndexSyncUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexSync>
+  const row = DATA_INDEX_SYNCS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的同步配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/**
+ * 执行同步（POST /poc/data-index-sync/sync）—— 旧 dataIndexSync。
+ * ⚠️ 这个端点的 body 是 **id 数组**（`[56]`），不是对象，所以入参在这里拿到的是数组而不是 Record。
+ * 真实后端会按行的 beforeSql/syncSql/afterSql 重建索引并回写 lastSync；mock 只回写 lastSync。
+ */
+export function mockDataIndexSyncRun(params?: Record<string, unknown>) {
+  const ids = (Array.isArray(params) ? params : []).map((id) => Number(id))
+  if (!ids.length) return { ok: false, message: '没有要同步的配置' }
+  let hit = 0
+  for (const id of ids) {
+    const row = DATA_INDEX_SYNCS.find((r) => Number(r.id) === id)
+    if (!row) continue
+    row.lastSync = stamp(new Date())
+    hit += 1
+  }
+  if (!hit) return { ok: false, message: '未找到要同步的配置' }
+  return { ok: true, data: hit, message: `已同步 ${hit} 条（演示）` }
+}
+

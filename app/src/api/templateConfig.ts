@@ -14,7 +14,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -116,6 +116,31 @@ export const questionDicApi: QuestionDicApi = {
     request<Ack>('poc/question-dic/status', { id, status }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/question-dic/status` }),
   remove: (row: Partial<QuestionDic>) =>
     request<Ack>('poc/question-dic/deleteQuestionDic', { ...row }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/question-dic/deleteQuestionDic` }),
+}
+
+/** 数据索引同步的接口面：分页 + 新增/编辑 + 同步动作（本域没有启停与复制） */
+export interface DataIndexSyncApi extends TemplateCrudApi<DataIndexSync> {
+  /** 触发同步；body 是 **id 数组**（旧列表单行「同步」也发 `[row.id]`），不是 {ids:[...]} */
+  sync(ids: number[]): Promise<Ack>
+}
+
+/**
+ * 数据索引同步配置（旧「模板配置 → 数据索引同步」，src/demo/DataIndexSyncList.vue + modal/DataIndexSyncConfigEditor.vue）。
+ *
+ * 同样没走 createTemplateCrudApi 工厂：新增/修改是两个端点（/poc/data-index-sync 与 /poc/data-index-sync/update），
+ * 工厂的「带 id 即更新、同一个根端点」表达不了；旧后端也没有 data-index-sync/status、/copy，
+ * 旧列表与旧弹窗本身就没有启停与复制入口（见 types/template.ts 的 DataIndexSync 注释）。
+ */
+export const dataIndexSyncApi: DataIndexSyncApi = {
+  // 分页：name 模糊匹配「同步名称」comment，status 空串=全部，两者都进 body
+  page: (query: TemplatePageQuery) =>
+    request<Paged<DataIndexSync>>('poc/data-index-sync/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-sync/page` }),
+  save: (form: Partial<DataIndexSync>) =>
+    form.id == null
+      ? request<Ack>('poc/data-index-sync', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-sync` })
+      : request<Ack>('poc/data-index-sync/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-sync/update` }),
+  sync: (ids: number[]) =>
+    request<Ack>('poc/data-index-sync/sync', ids as unknown as Record<string, unknown>, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-sync/sync` }),
 }
 
 /**

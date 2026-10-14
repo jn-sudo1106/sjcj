@@ -3,7 +3,7 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板、自动补全、问句改写；后续要迁的兄弟模块（数据索引同步 / 数据字典 / 提示词 / 分词）
+// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步；后续要迁的兄弟模块（数据字典 / 提示词 / 分词）
 // 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
 
 import type { Ack, Paged } from './common'
@@ -103,6 +103,38 @@ export interface QuestionDic extends TemplateRow {
   targetContent?: string | null
   /** 标签：旧编辑弹窗固定提交空串，列表列已注释掉不展示 */
   tag?: string | null
+  delFlag?: string
+}
+
+/**
+ * 数据索引同步配置（旧「模板配置 → 数据索引同步」，src/demo/DataIndexSyncList.vue + modal/DataIndexSyncConfigEditor.vue）。
+ *
+ * ⚠️ 四处旧口径（EntityApi.js:29-32、152-175）：
+ * · 新增 POST /poc/data-index-sync、修改 POST /poc/data-index-sync/update，**两个端点**（同 dic / question-dic 域）；
+ * · 分页筛选参数叫 `name`，模糊匹配的却是「同步名称」comment（旧列表那一列的 dataIndex 就是 comment，
+ *   186 POC 服务实测：name=机构 命中 20/46 条，命中的全是 comment）；
+ * · 除 CRUD 外还有一条同步动作 POST /poc/data-index-sync/sync，body 是 **id 数组**（旧页面单行同步也发 [id]）；
+ * · 旧列表与旧弹窗都没有启停/删除/复制入口（弹窗 status 恒为 '0'），所以本模块不提供 changeStatus / copy。
+ * type 在这个域是**数字** 0 sql同步 / 1 消息同步 / 2 分词同步（旧新增弹窗默认 2），与问句改写的字符串 type 无关。
+ * status：TemplateRow 声明的是字符串，但 186 实测真实响应回的是**数字** 0，比较一律走 String(row.status)。
+ */
+export interface DataIndexSync extends TemplateRow {
+  /** 同步名称（列表「同步名称」列、分页 name 筛选项匹配的都是这个字段） */
+  comment?: string | null
+  /** 表/主题：sql同步放表名，消息同步放主题名 */
+  tableName?: string | null
+  /** 同步类型：0 sql同步 / 1 消息同步 / 2 分词同步 */
+  type?: number | string
+  columnName?: string | null
+  /** 同步内容：sql同步/分词同步是一段 select，消息同步是 {"type":...,"params":...} 串 */
+  syncSql?: string | null
+  beforeSql?: string | null
+  afterSql?: string | null
+  /** 别名列 / 编码列：旧后端实体里有这两列，旧页面没有入口；编辑保存时原样带回，避免被写成 null */
+  aliasColumn?: string | null
+  codeColumn?: string | null
+  /** 最近同步时间（后端在 sync 成功后回写，前端只读） */
+  lastSync?: string | null
   delFlag?: string
 }
 

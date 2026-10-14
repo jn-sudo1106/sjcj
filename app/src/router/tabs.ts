@@ -35,6 +35,8 @@ export const TABS: TabMeta[] = [
   { key: 'dic-template', path: '/dic-template', label: '自动补全配置', desc: '自动补全词典的内容与简称维护、导出（旧接口域 /poc/dic）', group: 'template', permission: 'dic-template' },
   // ⚠️ question-dic（问句改写）与上面的 table-template（端点域 question-temp）是两个不同模块，名字像不是一个东西。
   { key: 'question-dic', path: '/question-dic', label: '问句改写配置', desc: '按阶段与类型（简单/正则/字段替换）维护问句改写规则，支持启停与删除（旧接口域 /poc/question-dic）', group: 'template', permission: 'question-dic' },
+  // ⚠️ 与运行与监控组的 /sync（采集数据同步到目标环境）不是一回事，这一条是旧「数据索引同步」的索引配置。
+  { key: 'data-index-sync', path: '/data-index-sync', label: '数据索引同步', desc: '维护 sql / 消息 / 分词三类索引同步配置并按行触发同步（旧接口域 /poc/data-index-sync）', group: 'template', permission: 'data-index-sync' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },

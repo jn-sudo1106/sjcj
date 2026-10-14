@@ -93,6 +93,10 @@ import {
   mockQuestionDicUpdate,
   mockQuestionDicChangeStatus,
   mockQuestionDicDelete,
+  mockDataIndexSyncPaged,
+  mockDataIndexSyncAdd,
+  mockDataIndexSyncUpdate,
+  mockDataIndexSyncRun,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -385,4 +389,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/question-dic/update': mockQuestionDicUpdate,
   'poc/question-dic/status': mockQuestionDicChangeStatus,
   'poc/question-dic/deleteQuestionDic': mockQuestionDicDelete,
+
+  // 数据索引同步（1013 迁入）：新增/修改两个端点，没有 status/copy；sync 的 body 是 id 数组。
+  'poc/data-index-sync/page': mockDataIndexSyncPaged,
+  'poc/data-index-sync': mockDataIndexSyncAdd,
+  'poc/data-index-sync/update': mockDataIndexSyncUpdate,
+  'poc/data-index-sync/sync': mockDataIndexSyncRun,
 }

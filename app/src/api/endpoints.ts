@@ -215,6 +215,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/question-dic/status', desc: '问句改写启停 → POST /api/poc/question-dic/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/question-dic/deleteQuestionDic', desc: '问句改写删除 → POST /api/poc/question-dic/deleteQuestionDic（旧页面发整行，后端按 id 删）', danger: true, impl: true, live: true },
 
+  // 数据索引同步配置（1013 迁入，分页已在 186 POC 服务实测：46 条、name 模糊匹配 comment、status 空串=全部）。
+  // 与 dic / question-dic 同款：新增/修改是两个端点；没有 status/copy（旧列表与旧弹窗都没有启停入口）。
+  // ⚠️ sync 是**写操作**：后端按行里的 beforeSql/syncSql/afterSql 真跑一遍索引重建，旧页面点「同步」即执行、无二次确认。
+  { path: 'poc/data-index-sync/page', desc: '数据索引同步分页 → POST /api/poc/data-index-sync/page（body: pageNo/pageSize/name/status，name 模糊匹配「同步名称」comment）', impl: true, live: true },
+  { path: 'poc/data-index-sync', desc: '数据索引同步新增 → POST /api/poc/data-index-sync（body: comment/tableName/type/columnName/syncSql/beforeSql/afterSql，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-sync/update', desc: '数据索引同步修改 → POST /api/poc/data-index-sync/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-sync/sync', desc: '数据索引同步执行 → POST /api/poc/data-index-sync/sync（body 是 id **数组**，如 [56]）', danger: true, impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },

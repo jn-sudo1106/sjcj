@@ -43,6 +43,10 @@ const routes: RouteRecordRaw[] = [
       // 页面在 views/TemplateConfig/QuestionDic/ 自己实现（四条件查询 + 码值列 + 删除），接口见 api/templateConfig.ts 的 questionDicApi。
       // ⚠️ 与上面的 /table-template（端点域 question-temp）是**两个不同模块**，名字像但不是一个东西。
       { path: '/question-dic', component: () => import('../views/TemplateConfig/QuestionDic/index.vue'), meta: { permission: 'question-dic' } },
+      // 模板配置 → 数据索引同步（1013，旧 ai-chat-view「模板配置 / 数据索引同步」，端点域 /poc/data-index-sync）。
+      // 页面在 views/TemplateConfig/DataIndexSync/ 自己实现（同步类型码值列 + 每行「同步」动作），
+      // 接口见 api/templateConfig.ts 的 dataIndexSyncApi。⚠️ 与 /sync（采集数据同步到目标环境）不是一回事。
+      { path: '/data-index-sync', component: () => import('../views/TemplateConfig/DataIndexSync/index.vue'), meta: { permission: 'data-index-sync' } },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
