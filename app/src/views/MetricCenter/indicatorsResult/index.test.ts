@@ -35,7 +35,8 @@ const spies = vi.hoisted(() => ({
   openSourceDetail: vi.fn(),
   openApi: vi.fn(),
   openUpload: vi.fn(),
-  openSourceSelect: vi.fn(),
+  /** 源选择器 stub 的 reloadSid（旧 `$refs.sourceSelect.reloadSid`） */
+  reloadSid: vi.fn(),
 }))
 
 // `@/api` 是这一页唯一的请求出口（dataApi 取数 / entryApi 改表态）；
@@ -84,7 +85,15 @@ vi.mock('./EntrySourceSelect.vue', async () => ({
     name: 'EntrySourceSelect',
     props: ['modelValue', 'sid', 'detail'],
     emits: ['change', 'update:modelValue'],
-    setup() {
+    setup(_props, { expose, emit }) {
+      // 真组件 reloadSid 的行为：重拉候选 → 回填选中值 → emit('change', record)
+      // （页面 watcher 就是靠这条 change 带出重查的，见 index.vue 的 watch）
+      expose({
+        reloadSid: spies.reloadSid.mockImplementation((sid: string) => {
+          emit('update:modelValue', String(sid))
+          emit('change', { sourceId: String(sid), name: `源${sid}` })
+        }),
+      })
       return () => h('div', { class: 'stub-source-select' })
     },
   }),
@@ -573,6 +582,34 @@ describe('indicatorsResult · 工具条（state=C 才出现「数据操作」）
     expect(spies.openUpload).toHaveBeenCalledWith('999', '161725', '70598')
   })
 
+  it('「导入数据」的配置ID：首行没有时退到源选择器带回的那条记录（旧 this.source.configId）', async () => {
+    // 首行 CONFIG_ID 为空 → 旧版 `configId = this.source && this.source.configId`
+    spies.rowQueryPaged.mockImplementation(async () => ({
+      total: 1,
+      list: [rowData({ configId: '' })],
+    }))
+    const w = mountPage()
+    await flushPromises()
+    // 源选择器 change 带回来的记录（含 configId）
+    w.findComponent({ name: 'EntrySourceSelect' }).vm.$emit('change', {
+      sourceId: '161725', name: '新浪财经', configId: '70598',
+    })
+    await flushPromises()
+    await iconBtn(w, '导入数据').trigger('click')
+    expect(spies.openUpload).toHaveBeenLastCalledWith('999', '161725', '70598')
+  })
+
+  it('「导入数据」的配置ID：首行与源记录都没有 → 传空串（用户在弹窗里手填）', async () => {
+    spies.rowQueryPaged.mockImplementation(async () => ({
+      total: 1,
+      list: [rowData({ configId: '' })],
+    }))
+    const w = mountPage()
+    await flushPromises()
+    await iconBtn(w, '导入数据').trigger('click')
+    expect(spies.openUpload).toHaveBeenLastCalledWith('999', '161725', '')
+  })
+
   it('「导出EXCEL」→ 用 exportUrl 拼 URL 后新窗口直开（同源 Cookie 鉴权）', async () => {
     const w = mountPage({ sourceId: '161725' })
     await flushPromises()
@@ -756,5 +793,27 @@ describe('indicatorsResult · 路由 query（旧 props / created 的等价物）
     w.findComponent({ name: 'EntrySourceSelect' }).vm.$emit('change', { sourceId: '161725', name: '新浪财经' })
     await flushPromises()
     expect(lastQuery()).toMatchObject({ page: 1 })
+  })
+
+  it('拖拽带 sourceId → 调源选择器的 reloadSid（旧 $refs.sourceSelect.reloadSid(this.sid)）', async () => {
+    const w = mountPage()
+    await flushPromises()
+    // 首屏不调：旧 `created` 只是把 sid 交给组件自己 `loadData()`，reloadSid 只在路由变化时用
+    expect(spies.reloadSid).not.toHaveBeenCalled()
+
+    const route = routeState.route as unknown as { query: Record<string, string> }
+    route.query.sourceId = '161725'
+    await flushPromises()
+    expect(spies.reloadSid).toHaveBeenCalledWith('161725')
+    // reloadSid 内部 emit change → handleSourceChange → 回第 1 页重查
+    expect(lastQuery()).toMatchObject({ sourceId: '161725', page: 1 })
+
+    // sid 被清空：旧 `reloadSid` 直接 return（连候选都不动），改由页面自己补一次重查
+    spies.rowQueryPaged.mockClear()
+    delete route.query.sourceId
+    await flushPromises()
+    expect(spies.reloadSid).toHaveBeenCalledTimes(1)
+    expect(lastQuery().sourceId).toBeUndefined()
+    w.unmount()
   })
 })

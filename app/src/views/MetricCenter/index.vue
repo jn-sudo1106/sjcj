@@ -4,12 +4,14 @@
 // 页签状态放在 query 的 `tab` 上（旧平台是三张独立路由 + $multiTab，新平台收敛成一个入口）。
 // 除了 `tab`，还有一组**跨页签共享的上下文键**要在切页签时保留：
 //   sourceId / entryTypeId / entryType / datasetId / datasetName / configId
-// 它们由 indicatorDataset 的行内入口（「指标」/ 指标数标签 / 增加指标 / 指标-新）写进 query，
-// 由 indicatorsList（以及 indicatorsResult）消费。不保留的话，用户从数据集页钻取到指标列表后
-// 随手点一下页签，筛选条件就没了。
+// 这些键由页面消费：indicatorDataset 用 sourceId / entryTypeId 决定「增加数据集」是否出现，
+// indicatorsList 用 sourceId / entryTypeId / datasetId / configId 预置筛选条件。
+// 1014 起页面内**没有**再往 query 写这些键的入口了（指标三件套已改成原地弹层，见
+// indicatorDataset 文件头偏差第 1 条），保留这组键是为了「手工拼 URL / 外部深链」进来的场景：
+// 带着上下文的链接切一下页签还能把条件留住，不至于一点就丢。
 //
 // ⚠️ 动作类键（`add`）**不保留**：它是「进页就自动打开新增弹窗」的一次性指令，跟着页签跑会变成
-// 「每次点回指标列表都弹一次新增」。
+// 「每次点回指标列表都弹一次新增」。（该机制本身已在 1014 随跳页一起删除，这条留着是防回潮。）
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 const TABS: { key: string; label: string }[] = [
