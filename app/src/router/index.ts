@@ -29,40 +29,10 @@ const routes: RouteRecordRaw[] = [
       { path: '/sync', component: () => import('../views/DataSync/index.vue') },
       { path: '/sync/create', component: () => import('../views/DataSync/TaskWizard.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
-      // 模板配置 → SQL模板配置（1013，旧 ai-chat-view「模板配置 / sql模板配置」）。
-      // 走 /api/poc 独立服务，接口面见 api/templateConfig.ts，dev 代理见 vite.config.ts 的 '/api/poc'。
-      { path: '/sql-template', component: () => import('../views/TemplateConfig/SqlTemplatePage.vue'), meta: { permission: 'sql-template' } },
-      // 模板配置 → 表模板配置（1013，旧 ai-chat-view「模板配置 / 表模板配置」，端点域是 question-temp）。
-      // 页面在 views/TemplateConfig/TableTemplate/ 自己实现列表与编辑弹窗（远程多选 + JSON 字符串字段，
-      // 通用 schema 层表达不了），接口仍走 api/templateConfig.ts 的工厂。
-      { path: '/table-template', component: () => import('../views/TemplateConfig/TableTemplate/index.vue'), meta: { permission: 'table-template' } },
-      // 模板配置 → 自动补全配置（1013，旧 ai-chat-view「模板配置 / 自动补全配置」，端点域 /poc/dic）。
-      // 页面在 views/TemplateConfig/DicTemplate/ 自己实现（带导出、无启停/复制），接口见 api/templateConfig.ts 的 dicTemplateApi。
-      { path: '/dic-template', component: () => import('../views/TemplateConfig/DicTemplate/index.vue'), meta: { permission: 'dic-template' } },
-      // 模板配置 → 问句改写配置（1013，旧 ai-chat-view「模板配置 / 问句改写配置」，端点域 /poc/question-dic）。
-      // 页面在 views/TemplateConfig/QuestionDic/ 自己实现（四条件查询 + 码值列 + 删除），接口见 api/templateConfig.ts 的 questionDicApi。
-      // ⚠️ 与上面的 /table-template（端点域 question-temp）是**两个不同模块**，名字像但不是一个东西。
-      { path: '/question-dic', component: () => import('../views/TemplateConfig/QuestionDic/index.vue'), meta: { permission: 'question-dic' } },
-      // 模板配置 → 数据索引同步（1013，旧 ai-chat-view「模板配置 / 数据索引同步」，端点域 /poc/data-index-sync）。
-      // 页面在 views/TemplateConfig/DataIndexSync/ 自己实现（同步类型码值列 + 每行「同步」动作），
-      // 接口见 api/templateConfig.ts 的 dataIndexSyncApi。⚠️ 与 /sync（采集数据同步到目标环境）不是一回事。
-      { path: '/data-index-sync', component: () => import('../views/TemplateConfig/DataIndexSync/index.vue'), meta: { permission: 'data-index-sync' } },
-      // 模板配置 → 数据字典配置（1014，旧 ai-chat-view「模板配置 / 数据字典配置」，端点域 /poc/data-index-config，
-      // 旧页面组件名是 DataIndexList）。页面在 views/TemplateConfig/DataIndexConfig/ 自己实现
-      // （四条件查询 + 编码远程下拉 + 导出 + 启停），接口见 api/templateConfig.ts 的 dataIndexConfigApi。
-      // ⚠️ 与上面的 /data-index-sync（数据索引同步）是两个模块，名字像但不是一个东西。
-      { path: '/data-index-config', component: () => import('../views/TemplateConfig/DataIndexConfig/index.vue'), meta: { permission: 'data-index-config' } },
-      // 模板配置 → 提示词配置（1014，旧 ai-chat-view「模板配置 / 提示词配置」，端点域 /poc/chat-flow-step）。
-      // 旧菜单标题叫「提示词」，路由与字段都是对话流程步骤口径（步骤编码/流程编码/下一步编码），
-      // 所以路径按端点域取 /chat-flow-step（旧路由 /demo/chat-flow-step-list），与 api/prompt.ts 那个
-      // 流程画布用的提示词不是一回事。页面在 views/TemplateConfig/ChatFlowStep/ 自己实现
-      // （状态下拉查询 + 16 字段弹窗），接口见 api/templateConfig.ts 的 chatFlowStepApi。
-      { path: '/chat-flow-step', component: () => import('../views/TemplateConfig/ChatFlowStep/index.vue'), meta: { permission: 'chat-flow-step' } },
-      // 模板配置 → 分词配置（1014，旧 ai-chat-view「模板配置 / 分词配置」，端点域 /poc/word-segment-config，
-      // 模板域最后一个子模块）。页面在 views/TemplateConfig/WordSegmentConfig/ 自己实现
-      // （四条件查询 + 批量新增 + 导出 + 启停），接口见 api/templateConfig.ts 的 wordSegmentApi。
-      // 旧列表没有单条新增入口（showAdd 死代码），新增走批量端点 /batch。
-      { path: '/word-segment-config', component: () => import('../views/TemplateConfig/WordSegmentConfig/index.vue'), meta: { permission: 'word-segment-config' } },
+      // 问数配置 → 模板配置（1013 起从旧 ai-chat-view「模板配置」域逐个迁入的 8 个子模块，1015 收成页内 tab）。
+      // 8 个子模块不再有独立地址，元数据见 router/tabs.ts 的 TEMPLATE_CONFIG_TABS，
+      // 页面容器见 views/TemplateConfig/index.vue，权限码由页内 tab 过 canAccess 过滤。
+      { path: '/template-config', component: () => import('../views/TemplateConfig/index.vue') },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

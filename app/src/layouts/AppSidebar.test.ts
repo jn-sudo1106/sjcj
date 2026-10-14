@@ -37,11 +37,24 @@ describe('AppSidebar', () => {
     expect(groupTitles).toContain('全局数据')
     expect(groupTitles).toContain('流程与规则')
     expect(groupTitles).toContain('运行与监控')
-    // 模板配置（1013）：与运行与监控、系统设置同级的新菜单组，排在运行与监控之后、系统设置之前
-    expect(groupTitles).toContain('模板配置')
-    expect(groupTitles.indexOf('运行与监控')).toBeLessThan(groupTitles.indexOf('模板配置'))
-    expect(groupTitles.indexOf('模板配置')).toBeLessThan(groupTitles.indexOf('系统设置'))
+    // 问数配置（1015 前身为 1013 的「模板配置」组）：与运行与监控、系统设置同级，
+    // 排在运行与监控之后、系统设置之前；组下只剩「模板配置」一个入口，8 个子模块在页内以 tab 呈现
+    expect(groupTitles).toContain('问数配置')
+    expect(groupTitles.indexOf('运行与监控')).toBeLessThan(groupTitles.indexOf('问数配置'))
+    expect(groupTitles.indexOf('问数配置')).toBeLessThan(groupTitles.indexOf('系统设置'))
     expect(groupTitles.indexOf('系统设置')).toBe(groupTitles.length - 1)
+  })
+
+  it('问数配置组只剩模板配置一个入口，原 8 个子项不再出现在侧栏', async () => {
+    const { wrapper } = await mountAt('/template-config')
+    const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '问数配置')!
+    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['模板配置'])
+    const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
+    expect(active).toHaveLength(1)
+    expect(active[0].text()).toContain('模板配置')
+    for (const label of ['SQL模板配置', '表模板配置', '自动补全配置', '问句改写配置', '数据索引同步', '数据字典配置', '提示词配置', '分词配置']) {
+      expect(wrapper.text()).not.toContain(label)
+    }
   })
 
   // navIcons 是按 TAB key 索引的普通对象，漏一个不报错、只渲染成空图标方块。
