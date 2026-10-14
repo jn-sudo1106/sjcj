@@ -219,13 +219,13 @@ function onSourceChange() {
 <template>
   <div class="sc-shell" :class="{ 'sc-embedded': embedded }" v-loading="loading">
     <!-- 嵌入形态：外层由父组件弹窗包裹，这里直接渲染内容；独立形态：自己做卡片壳 -->
-    <div class="sc-head" v-if="!embedded">
+    <!-- <div class="sc-head" v-if="!embedded">
       <div class="sc-title">数据源告警</div>
       <div class="sc-sub">查看和管理各源的数据校验监控，可按源、状态、在用筛选。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧项目 a-form layout="inline" + a-row 栅格） -->
-    <el-form :inline="true" class="sc-filter-form" size="small">
+    <el-form :inline="true" class="sc-filter-form">
       <el-row :gutter="8" class="sc-filter-row">
         <el-col :md="4" :sm="24" v-if="!embedded">
           <el-form-item label="在用">

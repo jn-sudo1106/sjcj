@@ -109,5 +109,25 @@ export const useDictStore = defineStore('dict', () => {
     }
   }
 
-  return { snatchTypes, lastSyncAt, loading, loadSnatchTypes }
+  /**
+   * 节点类型编号 → 默认消息队列（cfg_source_type.topic，系统设置 → 节点类型）。
+   * 新建节点时按类型取默认队列；没配的类型不进表，新节点队列留空。
+   */
+  const nodeTypeTopics = ref<Record<string, string>>({})
+
+  async function loadNodeTypeTopics(): Promise<void> {
+    try {
+      const rows = await configApi.nodeTypeList()
+      const next: Record<string, string> = {}
+      for (const row of rows) {
+        const topic = row.topic.trim()
+        if (row.sourceType && topic) next[row.sourceType] = topic
+      }
+      nodeTypeTopics.value = next
+    } catch (e) {
+      console.warn('[dict] 加载节点类型默认队列失败，新建节点队列留空:', (e as Error)?.message ?? e)
+    }
+  }
+
+  return { snatchTypes, lastSyncAt, loading, loadSnatchTypes, nodeTypeTopics, loadNodeTypeTopics }
 })

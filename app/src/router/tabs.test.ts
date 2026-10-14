@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { TABS } from './tabs'
+import { TABS, TEMPLATE_CONFIG_TABS } from './tabs'
 import { router } from './index'
 
 describe('Phase 3.1 画布入口退役', () => {
@@ -57,22 +57,31 @@ describe('Phase 3.1 画布入口退役', () => {
     expect(redirect({ query: { state: 'E' } })).toEqual({ path: '/monitor', query: { state: 'E' } })
   })
 
-  // 1013：旧 ai-chat-view「模板配置 → sql模板配置」迁到 front-ce，独立成「模板配置」组。
-  // 这一组会随迁移逐个长出来（表模板 / 自动补全 / 问句改写 / 数据索引…），所以按组做通用断言：
-  // TABS 里每个 template 入口都要有路由落点，且 meta.permission 与 TABS 的 permission 同值
-  // ——侧栏读 TABS、路由守卫读 meta，两边不同值就会出现「菜单看得见、地址进不去」。
-  it('模板配置组每个入口都有路由，且 permission 两侧同值', () => {
-    const tab = TABS.find((t) => t.key === 'sql-template')
-    expect(tab?.label).toBe('SQL模板配置')
-    expect(tab?.group).toBe('template')
-
+  // 1013：旧 ai-chat-view「模板配置 → sql模板配置」迁到 front-ce，独立成一个菜单组。
+  // 1015：组改名「问数配置」，组下只留「模板配置」一个入口，8 个子模块收进页内 tab
+  // （元数据在 TEMPLATE_CONFIG_TABS，容器见 views/TemplateConfig/index.vue）。
+  // 8 个子模块不再有独立地址，只通过 ?tab= 访问。
+  it('侧栏只暴露模板配置一个入口，8 个子模块作为页内 tab', () => {
     const templateTabs = TABS.filter((t) => t.group === 'template')
-    expect(templateTabs.length).toBeGreaterThan(0)
+    expect(templateTabs.map((t) => `${t.key}:${t.label}`)).toEqual(['template-config:模板配置'])
+
     const shell = router.options.routes.find((r) => r.path === '/')
-    for (const t of templateTabs) {
-      const route = shell?.children?.find((r) => r.path === t.path)
-      expect(route, `路由缺 ${t.path}`).toBeTruthy()
-      expect(route?.meta?.permission).toBe(t.permission)
+    const route = shell?.children?.find((r) => r.path === '/template-config')
+    expect(route?.component).toBeTruthy()
+
+    expect(TEMPLATE_CONFIG_TABS.map((t) => t.key)).toEqual([
+      'sql-template',
+      'table-template',
+      'dic-template',
+      'question-dic',
+      'data-index-sync',
+      'data-index-config',
+      'chat-flow-step',
+      'word-segment-config',
+    ])
+    // 页内 tab 的权限码与原侧栏子项一一对应，接入菜单权限后 canAccess 直接按它过滤
+    for (const t of TEMPLATE_CONFIG_TABS) {
+      expect(t.permission).toBe(t.key)
     }
   })
 })

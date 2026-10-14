@@ -125,4 +125,15 @@ watch([() => props.modelValue, () => props.sourceId], async ([open, sourceId]) =
   font-size: 13px;
   font-weight: 700;
 }
+/* URL 长文本：在值单元格内断行，避免溢出到右侧并排字段（1014 数据查询-源详情） */
+.rc-kv dd a.dv-a {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  color: var(--rc-primary-ink);
+  cursor: pointer;
+  text-decoration: none;
+}
+.rc-kv dd a.dv-a:hover {
+  text-decoration: underline;
+}
 </style>

@@ -5,7 +5,9 @@ import { onMounted } from 'vue'
 import { useDictStore } from '@/stores/dict'
 
 onMounted(() => {
-  useDictStore().loadSnatchTypes().catch(() => {})
+  const dict = useDictStore()
+  dict.loadSnatchTypes().catch(() => {})
+  dict.loadNodeTypeTopics().catch(() => {})
 })
 </script>
 

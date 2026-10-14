@@ -202,6 +202,19 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'dataset/copy',
   'dataset/genFromSource',
   'dataset/runNow',
+  // 1014：指标定义（旧 page/config/MeasureList.vue）的七个写端点，与 dataset 那六个同一性质——
+  // 旧页面本来就直连后端在改真实指标：新增、修改、复制、批量启停、批量删除、物理删除、由源生成。
+  // 已在 endpoints.ts 标 live；不加进本清单则日常代理指向生产时会被写保护拦下（按钮点了后端收不到）。
+  // ⚠️ 破坏性：deleteMeasurePhy 是**从物理表删除该指标记录**（无法恢复，旧页文案「警告，是否从表中删除该记录」，
+  // 只对 isDelete === -1 的历史删除记录开放入口）；delete 是批量删除；copy / add / genMeasureFromSource 会多出记录。
+  // 与 source/check、dataset 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'measure/add',
+  'measure/update',
+  'measure/copy',
+  'measure/delete',
+  'measure/changeEnable',
+  'measure/deleteMeasurePhy',
+  'measure/genMeasureFromSource',
   // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',

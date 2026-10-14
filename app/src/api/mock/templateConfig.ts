@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -457,3 +457,513 @@ export function mockQuestionDicDelete(params?: Record<string, unknown>) {
   QUESTION_DICS.splice(index, 1)
   return { ok: true, message: '删除成功（演示）' }
 }
+
+/* ── 数据索引同步（旧「模板配置 → 数据索引同步」，端点域 /poc/data-index-sync） ── */
+
+/**
+ * 数据索引同步种子数据。
+ * 取自 186 POC 服务的真实行（2026-10-13 抓样，共 46 条：type 0 有 42 条、1 有 3 条、2 有 1 条，
+ * 状态全部启用），三种同步类型各留一条便于对照 mock 与联调。
+ * ⚠️ 真实响应的 status 回的是**数字** 0（与 TemplateRow 声明的字符串不一致），所以列表与筛选一律按
+ * String(row.status) 比；内存表按实体声明存 '0'，新建时也和旧弹窗一样恒为 '0'。
+ */
+const blankDataIndexSync = (over: Partial<DataIndexSync>): DataIndexSync => ({
+  type: 0,
+  comment: '',
+  tableName: '',
+  columnName: '',
+  syncSql: '',
+  beforeSql: null,
+  afterSql: null,
+  aliasColumn: null,
+  codeColumn: null,
+  status: '0',
+  lastSync: null,
+  delFlag: '0',
+  ...over,
+})
+
+const DATA_INDEX_SYNCS: DataIndexSync[] = [
+  blankDataIndexSync({
+    id: 56,
+    type: 0,
+    tableName: 'ADS_HFBI_ZQFXS_JGZBMX',
+    columnName: 'BRANCH_NAME',
+    comment: '机构指标数据表-机构名称',
+    syncSql: 'select distinct BRANCH_NAME,BRANCH_NO as CODE from ADS_HFBI_ZQFXS_JGZBMX',
+    lastSync: '2025-06-13 18:23:56',
+    createTime: '2025-04-22 18:56:48',
+    updateTime: '2025-04-22 18:56:48',
+  }),
+  blankDataIndexSync({
+    id: 47,
+    type: 2,
+    tableName: 'YJZB_HY_JX',
+    columnName: null,
+    comment: '分词同步配置',
+    syncSql: "select distinct HYMC as CONTENT, 'PERSON' as TYPE, 'base' as TOKEN from YJZB_HY_JX where HYMC is not null",
+    lastSync: '2025-03-12 21:32:17',
+    createTime: '2025-03-12 19:32:47',
+    updateTime: '2025-03-12 19:32:47',
+  }),
+  blankDataIndexSync({
+    id: 24,
+    type: 1,
+    tableName: 'dev_chat_table_config',
+    columnName: 'data_index',
+    comment: '数据索引同步',
+    syncSql: '{"type":"indexMsg","params":""}',
+    lastSync: null,
+    createTime: '2025-01-20 19:45:54',
+    updateTime: '2025-02-10 17:43:41',
+  }),
+]
+
+let dataIndexSyncNextId = 100
+
+/** 数据索引同步分页：旧口径两个筛选项都在 body —— name（模糊匹配「同步名称」comment）+ status，空串=全部 */
+export function mockDataIndexSyncPaged(params?: Record<string, unknown>): Paged<DataIndexSync> {
+  const name = String(params?.name ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = DATA_INDEX_SYNCS.filter(
+    (row) =>
+      (!name || String(row.comment ?? '').includes(name)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/data-index-sync，不带 id）—— 旧 dataIndexSyncConfigAdd */
+export function mockDataIndexSyncAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexSync>
+  const nextId = dataIndexSyncNextId++
+  DATA_INDEX_SYNCS.unshift({
+    ...blankDataIndexSync({}),
+    ...form,
+    id: nextId,
+    lastSync: null,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/data-index-sync/update，带 id）—— 旧 dataIndexSyncConfigUpdate；与新增是两个端点，不要合并 */
+export function mockDataIndexSyncUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexSync>
+  const row = DATA_INDEX_SYNCS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的同步配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/**
+ * 执行同步（POST /poc/data-index-sync/sync）—— 旧 dataIndexSync。
+ * ⚠️ 这个端点的 body 是 **id 数组**（`[56]`），不是对象，所以入参在这里拿到的是数组而不是 Record。
+ * 真实后端会按行的 beforeSql/syncSql/afterSql 重建索引并回写 lastSync；mock 只回写 lastSync。
+ */
+export function mockDataIndexSyncRun(params?: Record<string, unknown>) {
+  const ids = (Array.isArray(params) ? params : []).map((id) => Number(id))
+  if (!ids.length) return { ok: false, message: '没有要同步的配置' }
+  let hit = 0
+  for (const id of ids) {
+    const row = DATA_INDEX_SYNCS.find((r) => Number(r.id) === id)
+    if (!row) continue
+    row.lastSync = stamp(new Date())
+    hit += 1
+  }
+  if (!hit) return { ok: false, message: '未找到要同步的配置' }
+  return { ok: true, data: hit, message: `已同步 ${hit} 条（演示）` }
+}
+
+/* ── 数据字典配置（旧「模板配置 → 数据字典配置」，端点域 /poc/data-index-config） ── */
+
+/**
+ * 数据字典种子数据。
+ * ⚠️ 按旧 DataIndexList / DataIndexConfigEditor 的字段形状**构造的示例**（未取到 POC 服务真实行，
+ * 沙箱直连 186 探测不通），联调后用真实响应校正。
+ * 一条字典项 = code + type + content（+ 后端侧的 contentCode），alias 是页面上唯一能改的「数据别名」；
+ * 表名与「数据索引同步」种子（ADS_HFBI_ZQFXS_JGZBMX 的 BRANCH_NAME / BRANCH_NO）对得上，便于串链路。
+ */
+const blankDataIndexConfig = (over: Partial<DataIndexConfig>): DataIndexConfig => ({
+  code: '',
+  type: '',
+  content: '',
+  alias: '',
+  contentCode: null,
+  status: '0',
+  delFlag: '0',
+  ...over,
+})
+
+const DATA_INDEX_CONFIGS: DataIndexConfig[] = [
+  blankDataIndexConfig({
+    id: 41,
+    code: 'BRANCH_NAME',
+    type: 'ORG',
+    content: '城南支行',
+    alias: '城南',
+    contentCode: '1001',
+    createTime: '2025-04-22 18:56:48',
+    updateTime: '2025-05-09 10:12:33',
+  }),
+  blankDataIndexConfig({
+    id: 42,
+    code: 'BRANCH_NAME',
+    type: 'ORG',
+    content: '高新区支行',
+    alias: '',
+    contentCode: '1002',
+    createTime: '2025-04-22 18:56:48',
+    updateTime: '2025-04-22 18:56:48',
+  }),
+  blankDataIndexConfig({
+    id: 55,
+    code: 'INDICATOR_DATE',
+    type: 'DATE',
+    content: '数据日期',
+    alias: '统计口径日期',
+    contentCode: null,
+    status: '1',
+    createTime: '2025-03-12 19:32:47',
+    updateTime: '2025-06-13 18:23:56',
+  }),
+]
+
+let dataIndexConfigNextId = 100
+
+/**
+ * 数据字典分页：旧页面四个筛选都在 body —— name（旧搜索框标题「内容」，匹配 content）、
+ * code、type、status，空串都当「全部」不加权筛。
+ */
+export function mockDataIndexConfigPaged(params?: Record<string, unknown>): Paged<DataIndexConfig> {
+  const name = String(params?.name ?? '').trim()
+  const code = String(params?.code ?? '').trim()
+  const type = String(params?.type ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = DATA_INDEX_CONFIGS.filter(
+    (row) =>
+      (!name || String(row.content ?? '').includes(name)) &&
+      (!code || String(row.code ?? '') === code) &&
+      (!type || String(row.type ?? '').includes(type)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 编码下拉数据源（GET /poc/data-index-config/all-code）—— 返回 {code,type} 裸数组，旧页面一次拉全量 */
+export function mockDataIndexConfigAllCode(): DataIndexCodeOption[] {
+  const seen = new Set<string>()
+  const options: DataIndexCodeOption[] = []
+  for (const row of DATA_INDEX_CONFIGS) {
+    const key = `${row.code ?? ''}|${row.type ?? ''}`
+    if (!row.code || seen.has(key)) continue
+    seen.add(key)
+    options.push({ code: row.code, type: row.type ?? null })
+  }
+  return options
+}
+
+/** 新增（POST /poc/data-index-config，不带 id）—— 旧 dataIndexConfigAdd */
+export function mockDataIndexConfigAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexConfig>
+  const nextId = dataIndexConfigNextId++
+  DATA_INDEX_CONFIGS.unshift({
+    ...blankDataIndexConfig({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/data-index-config/update，带 id）—— 旧 dataIndexConfigUpdate；与新增是两个端点，不要合并 */
+export function mockDataIndexConfigUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexConfig>
+  const row = DATA_INDEX_CONFIGS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的字典项' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/data-index-config/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 dataIndexConfigStatus */
+export function mockDataIndexConfigChangeStatus(params?: Record<string, unknown>) {
+  const row = DATA_INDEX_CONFIGS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的字典项' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/* ── 提示词配置（旧「模板配置 → 提示词配置」，端点域 /poc/chat-flow-step） ── */
+
+/**
+ * 提示词配置种子数据。
+ * ⚠️ 按旧 ChatFlowStepList / ChatFlowStepEditor 的字段形状**构造的示例**（未取到 POC 服务真实行，
+ * 直连 186:9093 探测返回 302 需要登录态），联调后用真实响应校正。
+ * 一条 = 对话流程里的一个步骤（步骤编码 / 流程编码 / 提示词模板定义 templateDef / 下一步编码）；
+ * retryCount 是**数字**（旧弹窗唯一的 a-input-number），其余字段都是文本。
+ * var1 / var2 是旧实体的泛化预留字段（列表不展示、弹窗可改），这里保留一条演示值便于对照。
+ */
+const blankChatFlowStep = (over: Partial<ChatFlowStep>): ChatFlowStep => ({
+  stepCode: '',
+  flowCode: '',
+  stepName: '',
+  dictCodes: '',
+  inputParams: '',
+  execCond: '',
+  stepAction: '',
+  systemPrompt: '',
+  templateDef: '',
+  cleanRule: '',
+  checkRule: '',
+  outputParams: '',
+  retryCount: 0,
+  nextStepCode: '',
+  var1: '',
+  var2: '',
+  status: '0',
+  ...over,
+})
+
+const CHAT_FLOW_STEPS: ChatFlowStep[] = [
+  blankChatFlowStep({
+    id: 12,
+    stepCode: 'intent_recog',
+    flowCode: 'chat_main',
+    stepName: '意图识别',
+    inputParams: 'question,history',
+    stepAction: 'llm',
+    systemPrompt: '你是银行经营分析助手，判断用户问句的意图。',
+    templateDef: '用户问句：{{question}}\n可选意图：指标查询 / 同比环比 / 机构对比',
+    checkRule: "json.isValid(result)",
+    outputParams: 'intent',
+    retryCount: 2,
+    nextStepCode: 'sql_generate',
+    createTime: '2025-04-15 09:52:07',
+    updateTime: '2025-04-15 09:52:07',
+  }),
+  blankChatFlowStep({
+    id: 11,
+    stepCode: 'sql_generate',
+    flowCode: 'chat_main',
+    stepName: 'SQL 生成',
+    dictCodes: 'BRANCH_NAME,INDICATOR_DATE',
+    inputParams: 'question,intent',
+    execCond: "intent == '指标查询'",
+    stepAction: 'llm',
+    systemPrompt: '根据问句与字典生成可执行 SQL，只输出语句本身。',
+    templateDef: '问句：{{question}}\n可用表：KHFA_KHZBJG_JG',
+    cleanRule: "string.trim(result)",
+    outputParams: 'sql',
+    retryCount: 3,
+    nextStepCode: 'sql_check',
+    status: '1',
+    var1: 'KHFA_KHZBJG_JG',
+    createTime: '2025-01-08 15:21:40',
+    updateTime: '2025-04-11 10:50:30',
+  }),
+  blankChatFlowStep({
+    id: 10,
+    stepCode: 'answer_summary',
+    flowCode: 'chat_main',
+    stepName: '结果总结',
+    inputParams: 'sqlResult',
+    stepAction: 'llm',
+    systemPrompt: '把查询结果组织成一句自然的中文回答。',
+    templateDef: '查询结果：{{sqlResult}}',
+    outputParams: 'answer',
+    createTime: '2024-12-20 18:03:11',
+    updateTime: '2025-03-02 09:14:55',
+  }),
+]
+
+let chatFlowStepNextId = 100
+
+/** 提示词分页：旧页面只有一个「状态」下拉，name 固定空串（实体没有 name 字段，后端忽略）*/
+export function mockChatFlowStepPaged(params?: Record<string, unknown>): Paged<ChatFlowStep> {
+  const name = String(params?.name ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = CHAT_FLOW_STEPS.filter(
+    (row) =>
+      (!name || String(row.stepName ?? '').includes(name)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/chat-flow-step，不带 id）—— 旧 chatFlowStepAdd */
+export function mockChatFlowStepAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<ChatFlowStep>
+  const nextId = chatFlowStepNextId++
+  CHAT_FLOW_STEPS.unshift({
+    ...blankChatFlowStep({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/chat-flow-step/update，带 id）—— 旧 chatFlowStepUpdate；与新增是两个端点，不要合并 */
+export function mockChatFlowStepUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<ChatFlowStep>
+  const row = CHAT_FLOW_STEPS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的提示词配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/chat-flow-step/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 chatFlowStepStatus */
+export function mockChatFlowStepChangeStatus(params?: Record<string, unknown>) {
+  const row = CHAT_FLOW_STEPS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的提示词配置' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/* ── 分词配置（旧「模板配置 → 分词配置」，端点域 /poc/word-segment-config） ── */
+
+/**
+ * 分词配置种子数据。
+ * 前三条取自 186 POC 服务的真实行（2026-10-14 抓样，共 434 条，token 基本都是 base，
+ * type 是 ORGANIZATION / indicatorname / PERSON 这类字面量）；
+ * ⚠️ 最后一条禁用行是**构造的**（真实样本里筛不到禁用项，留着便于对照状态筛选与开关回滚）。
+ * 内容能与「数据索引同步」里 type=2 的分词同步配置（YJZB_HY_JX → 'PERSON' as TYPE, 'base' as TOKEN）串起来。
+ */
+const blankWordSegment = (over: Partial<WordSegmentConfig>): WordSegmentConfig => ({
+  type: '',
+  content: '',
+  token: '',
+  status: '0',
+  ...over,
+})
+
+const WORD_SEGMENTS: WordSegmentConfig[] = [
+  blankWordSegment({
+    id: 2669,
+    type: 'ORGANIZATION',
+    content: '新城科技园',
+    token: 'base',
+    createTime: '2025-03-25 15:27:18',
+    updateTime: '2025-03-25 15:27:18',
+  }),
+  blankWordSegment({
+    id: 2668,
+    type: 'indicatorname',
+    content: '鑫动能',
+    token: 'base',
+    createTime: '2025-03-25 15:23:36',
+    updateTime: '2025-03-25 15:23:36',
+  }),
+  blankWordSegment({
+    id: 2667,
+    type: 'PERSON',
+    content: '张宪',
+    token: 'base',
+    createTime: '2025-03-25 15:07:55',
+    updateTime: '2025-03-25 15:07:55',
+  }),
+  blankWordSegment({
+    id: 2666,
+    type: 'ORGANIZATION',
+    content: '白下分行',
+    token: 'base',
+    status: '1',
+    createTime: '2025-03-20 18:28:52',
+    updateTime: '2025-03-20 18:28:52',
+  }),
+]
+
+let wordSegmentNextId = 2670
+
+/**
+ * 分页：旧页面四个筛选都在 body —— name（旧搜索框标题「内容」，匹配 content）、type、token、status，
+ * 空串都当「全部」不加权筛。
+ * ⚠️ type / token 在旧页面是自由文本输入框，后端是精确还是模糊没逐条实测，mock 统一按包含匹配。
+ */
+export function mockWordSegmentPaged(params?: Record<string, unknown>): Paged<WordSegmentConfig> {
+  const name = String(params?.name ?? '').trim()
+  const type = String(params?.type ?? '').trim()
+  const token = String(params?.token ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = WORD_SEGMENTS.filter(
+    (row) =>
+      (!name || String(row.content ?? '').includes(name)) &&
+      (!type || String(row.type ?? '').includes(type)) &&
+      (!token || String(row.token ?? '').includes(token)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 修改（POST /poc/word-segment-config/update，带 id）—— 旧 wordSegmentConfigUpdate */
+export function mockWordSegmentUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<WordSegmentConfig>
+  const row = WORD_SEGMENTS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的分词配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/word-segment-config/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 wordSegmentConfigStatus */
+export function mockWordSegmentChangeStatus(params?: Record<string, unknown>) {
+  const row = WORD_SEGMENTS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的分词配置' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/**
+ * 批量新增（POST /poc/word-segment-config/batch）—— 旧 wordSegmentConfigBatchAdd。
+ * ⚠️ body 是 **对象数组**（`[{type,content,token},…]`），不是包装对象；旧列表把文本框按行拆成三段后整批发过去。
+ * 状态按旧弹窗的初始口径落 '0'（启用），旧页面不给批量行指定状态。
+ */
+export function mockWordSegmentBatchAdd(params?: Record<string, unknown> | WordSegmentBatchItem[]) {
+  const rows = (Array.isArray(params) ? params : []).filter(
+    (item) => item && String(item.content ?? '').trim() && String(item.type ?? '').trim(),
+  )
+  if (!rows.length) return { ok: false, message: '没有要新增的分词配置' }
+  for (const item of rows) {
+    WORD_SEGMENTS.unshift(
+      blankWordSegment({
+        id: wordSegmentNextId++,
+        type: String(item.type ?? '').trim(),
+        content: String(item.content ?? '').trim(),
+        token: String(item.token ?? '').trim(),
+        createTime: stamp(new Date()),
+        updateTime: stamp(new Date()),
+      }),
+    )
+  }
+  return { ok: true, data: rows.length, message: `已新增 ${rows.length} 条（演示）` }
+}
+

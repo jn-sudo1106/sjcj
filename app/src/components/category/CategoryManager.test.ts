@@ -27,10 +27,17 @@ const stubs = {
     name: 'ElTree',
     props: ['load', 'lazy', 'props', 'data'],
     setup(props: any, { slots }: any) {
-      if (props.data) {
+      if (props.data && props.data.length) {
+        // 非懒加载（1014）：data 里的根节点各包一层 node（带 parent.childNodes，让 isFirstSibling/上移可用）
+        const nodes = props.data.map((d: any) => ({
+          data: d,
+          expanded: true,
+          parent: { level: 0, childNodes: [] as any[] },
+        }))
+        nodes.forEach((n: any) => { n.parent.childNodes = nodes })
         return () => (
-          h('div', { class: 'el-tree-mock' }, props.data.map((d: any) =>
-            slots.default?.({ node: { expanded: true }, data: d }),
+          h('div', { class: 'el-tree-mock' }, nodes.map((n: any) =>
+            slots.default?.({ node: n, data: n.data }),
           ))
         )
       }

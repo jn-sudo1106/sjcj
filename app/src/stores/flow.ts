@@ -3,6 +3,7 @@
 // 组合 source.ts 和 node.ts 保持 API 不变
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { useDictStore } from '@/stores/dict'
 import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
 import { applyStepSourceDefault, hasRealBranches } from '@/utils/flow/stepPersist'
 import { inheritInputTable, nodeTablesSnapshot, tableForDownstream, propagateOutputChange, retargetFollowers, writeNodeOutputTable, type TableTopology } from '@/utils/flow/tableSync'
@@ -11,7 +12,6 @@ import {
   TEMPLATE_TO_NODE,
   TEMPLATE_TO_NAME,
   TEMPLATE_TO_SNATCH,
-  DEFAULT_TASK_QUEUES,
   cloneConfig,
   isDataNode,
   isRuleNode,
@@ -606,11 +606,13 @@ export const useFlowStore = defineStore('flow', () => {
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
       cfg.outputTable = upstreamTable
     }
-    const defaultQueue = DEFAULT_TASK_QUEUES[template]
-    if (defaultQueue) {
+    // 默认队列取系统设置 → 节点类型的「默认消息队列」（topic），按节点类型编号查；没配就留空，用户可在任务配置里改。
+    // 浏览器/公众号/登录/文件下载都按 90 落库，跟 90 用同一个默认值。固定队列的节点（浏览器抓取）保留种子里的固定值。
+    if (collectorCapabilityOf(cfg)?.queueMode !== 'fixed') {
+      const code = /^\[(\d+)\]/.exec(TEMPLATE_TO_SNATCH[template] ?? '')?.[1]
       cfg.taskCfg = {
         ...(cfg.taskCfg ?? { urlRule: '' }),
-        queue: defaultQueue,
+        queue: (code && useDictStore().nodeTypeTopics[code]) || '',
       }
     }
     return { srcKey, cfg }

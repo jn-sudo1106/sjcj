@@ -87,9 +87,16 @@ vi.mock('@/utils/confirmDanger', () => ({
   confirmOrRun: vi.fn((_need: boolean, _t: string, _b: string, run: () => unknown) => run()),
 }))
 
-// 路由页没有 props，旧版 props/created 的入参改从 $route.query 取
-const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
-vi.mock('vue-router', () => ({ useRoute: () => routeState }))
+// 路由页没有 props，旧版 props/created 的入参改从 $route.query 取；
+// 「指标三件套」入口改成 router.replace 跳页签（1014 接通），所以要带 useRouter 的替身。
+const routeState = vi.hoisted(() => ({
+  query: {} as Record<string, string>,
+  replace: vi.fn(),
+}))
+vi.mock('vue-router', () => ({
+  useRoute: () => routeState,
+  useRouter: () => ({ replace: routeState.replace }),
+}))
 
 function row(over: Partial<DatasetRow> = {}): DatasetRow {
   return {
@@ -142,6 +149,7 @@ function lastQuery(): Record<string, unknown> {
 
 beforeEach(() => {
   Object.values(spies).forEach((fn) => fn.mockClear())
+  routeState.replace.mockClear()
   spies.datasetPaged.mockImplementation(async () => ({ list: ROWS, total: 3 }))
 })
 
@@ -315,29 +323,67 @@ describe('indicatorDataset · 行内操作', () => {
     expect(lastQuery()).toMatchObject({ datasetId: '' })
   })
 
-  it('指标入口（增加指标 / 指标-新 / 行内「指标」）提示指标模块未迁移，不发请求', async () => {
-    const warn = vi.spyOn(ElMessage, 'warning')
+  it('增加指标 / 指标-新 → 跳「指标列表」页签并带上下文（旧 MeasureAdd / MeasureAddNew）', async () => {
     const w = mountPage()
+    await flushPromises()
+    // 首屏默认选中第一行（旧 loadData 里 `selectedRowKeys = [oriData[0].datasetId]`），
+    // 而这两个入口要求**恰好选中 1 行**，所以直接点即可。
+    const context = {
+      tab: 'indicatorsList',
+      sourceId: '161725',
+      entryTypeId: '1001',
+      datasetId: '1001',
+      datasetName: '公告明细数据集',
+    }
+    await btn(w, '增加指标').trigger('click')
+    expect(routeState.replace).toHaveBeenLastCalledWith({
+      path: '/metrics',
+      query: { ...context, add: '1' },
+    })
+    await btn(w, '指标-新').trigger('click')
+    expect(routeState.replace).toHaveBeenLastCalledWith({
+      path: '/metrics',
+      query: { ...context, add: 'new' },
+    })
+  })
+
+  it('未选中恰好 1 行时「增加指标 / 指标-新」只报错、不跳转（旧 handleAddMeasure/New 的守卫）', async () => {
+    const err = vi.spyOn(ElMessage, 'error')
+    const w = mountPage()
+    await flushPromises()
+    // 清掉首屏自动加上的那行勾选
+    w.findComponent({ name: 'ElTable' }).vm.$emit('selection-change', [])
     await flushPromises()
     await btn(w, '增加指标').trigger('click')
     await btn(w, '指标-新').trigger('click')
-    await opLink(w, 0, '指标').trigger('click')
-    expect(warn).toHaveBeenCalledTimes(3)
-    expect(String(warn.mock.calls[0][0])).toContain('尚未迁移')
-    warn.mockRestore()
+    expect(routeState.replace).not.toHaveBeenCalled()
+    expect(String(err.mock.calls[0][0])).toContain('请选择要一行操作的数据集')
+    // 第二句文案旧版尾部多一个「2」（原文照抄）
+    expect(String(err.mock.calls[1][0])).toContain('请选择要一行操作的数据集2')
+    err.mockRestore()
   })
 
-  it('指标数是可点的标签（旧 a-tag @click=handleShowMeasure），点击走同一个「未迁移」提示', async () => {
-    const warn = vi.spyOn(ElMessage, 'warning')
+  it('行内「指标」/ 指标数标签 → 跳「指标列表」页签，只带上下文（旧 MeasureShow → MeasureList）', async () => {
     const w = mountPage()
     await flushPromises()
-    // 测试环境把老式 <transition> 桩成了 transition-stub（多一层包装元素），类名落在桩上，
-    // 而真正的 click 监听在它内层的 span.el-tag 上——所以要往里再点一层。
-    // 浏览器里 Transition 不产生包装元素，#c41d7f 那颗标签本体就是监听目标，无需这层。
+    const expected = {
+      path: '/metrics',
+      query: {
+        tab: 'indicatorsList',
+        sourceId: '161725',
+        entryTypeId: '1001',
+        datasetId: '1001',
+        datasetName: '公告明细数据集',
+      },
+    }
+    await opLink(w, 0, '指标').trigger('click')
+    expect(routeState.replace).toHaveBeenLastCalledWith(expected)
+    // 指标数标签走同一个 handleShowMeasure
+    // （测试环境把老式 <transition> 桩成了 transition-stub，类名落在桩上、真正的 click
+    //   监听在它内层的 span.el-tag 上，所以要往里再点一层；浏览器里没有这层包装）
     await w.findAll('.el-table__body tr')[0].find('.ids-measure-tag .el-tag').trigger('click')
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toContain('尚未迁移')
-    warn.mockRestore()
+    expect(routeState.replace).toHaveBeenCalledTimes(2)
+    expect(routeState.replace).toHaveBeenLastCalledWith(expected)
   })
 })
 

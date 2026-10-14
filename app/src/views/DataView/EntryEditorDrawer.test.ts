@@ -316,4 +316,26 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     const drawer2 = wrapper.findComponent({ name: 'ElDrawer' })
     expect(drawer2.props('size')).toBe('980px')
   })
+
+  // 1013：编辑已有表时物理表名不允许修改（后端 modifyEntryType 会把 tableName 原样选择性更新，
+  // 改错会让表配置指向不存在的物理表）；新建时可编辑/自动生成。
+  it('编辑态：物理表名输入框 disabled，且带原因提示', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'code', desc: '编码', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    }
+    await mountEditor(entry)
+    const input = body().find('input[data-testid="entry-table-name"]')
+    expect((input.element as HTMLInputElement).disabled).toBe(true)
+    expect(input.attributes('title')).toContain('不允许修改')
+  })
+
+  it('新建态：物理表名输入框可编辑', async () => {
+    await mountEditor(null)
+    const input = body().find('input[data-testid="entry-table-name"]')
+    expect((input.element as HTMLInputElement).disabled).toBe(false)
+    await input.setValue('TB_NEW')
+    expect((input.element as HTMLInputElement).value).toBe('TB_NEW')
+  })
 })

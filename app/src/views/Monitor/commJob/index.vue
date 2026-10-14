@@ -239,13 +239,13 @@ onMounted(() => void load())
 
 <template>
   <div class="cj-shell" v-loading="loading">
-    <div class="cj-head">
+    <!-- <div class="cj-head">
       <div class="cj-title">自定义告警</div>
       <div class="cj-sub">通用定时任务（SQL-告警 / 定时 Job）的配置列表，支持批量启停、复制与运行。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；文本项不自动查，状态项 @change 即查） -->
-    <el-form :inline="true" class="cj-filter-form" size="small">
+    <el-form :inline="true" class="cj-filter-form">
       <el-row :gutter="8" class="cj-filter-row">
         <el-col :md="4" :sm="24">
           <el-form-item label="队列名">
