@@ -38,6 +38,7 @@ async function mountAs(roles: string[]) {
   setActivePinia(pinia)
   useAuthStore().roles = roles
   const reload = vi.spyOn(useDictStore(), 'loadSnatchTypes').mockResolvedValue()
+  vi.spyOn(useDictStore(), 'loadNodeTypeTopics').mockResolvedValue()
   const wrapper = mount(NodeTypeTab, { global: { plugins: [pinia, ElementPlus] } })
   await flushPromises()
   return { wrapper, reload }

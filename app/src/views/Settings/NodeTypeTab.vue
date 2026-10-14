@@ -121,8 +121,9 @@ async function save() {
     }
     editVisible.value = false
     void load()
-    // 画布里节点类型下拉用的是这份字典
+    // 画布里节点类型下拉用的是这份字典；新建节点的默认队列也从这里取
     void dict.loadSnatchTypes()
+    void dict.loadNodeTypeTopics()
   } catch (e) {
     ElMessage.error(`保存失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {

@@ -1429,6 +1429,19 @@ export const siteApi = {
     })
     return ackFromApiResult(result)
   },
+  /**
+   * 删除网站（旧平台 SiteList 同款，真实路径 GET /v1/site/delete）。逻辑删除（is_delete=1），
+   * 后端会校验网站下的源数量；调用方需先二次确认再调。单个删除走 siteId。
+   */
+  siteDelete: async (siteId: string): Promise<Ack> => {
+    if (!siteId?.trim()) return { ok: false, message: '缺少网站' }
+    const result = await request<unknown>('site/siteDelete', {}, {
+      method: 'GET',
+      httpEndpoint: 'site/delete',
+      httpParams: { siteId },
+    })
+    return ackFromApiResult(result)
+  },
   siteSources: (siteId: string, options: { force?: boolean } = {}): Promise<Source[]> => {
     const cached = siteSourcesCache.get(siteId)
     // 进行中的完整请求无论耗时多久都必须复用；TTL 只约束已经完成的值，否则一个 36s 请求
@@ -3908,6 +3921,15 @@ export interface FlowVersionRow {
   /** 0 正常；-1 已放弃 / 归档 */
   isDelete: number
   baseId: string | null
+  /** 2026-10-14 历史版本列表用（217 实测 overview 都有返回）：创建 / 发布 / 放弃或归档的时间和人 */
+  createDt?: string | null
+  createBy?: string | null
+  publishDt?: string | null
+  publishBy?: string | null
+  deleteDt?: string | null
+  deleteBy?: string | null
+  /** 版本内容指纹：放弃的草稿与基线相同 = 草稿里什么都没改 */
+  contentHash?: string | null
 }
 
 export interface FlowVersionOverview {
@@ -3944,6 +3966,13 @@ export const flowVersionApi = {
         isLock: Number(v.isLock ?? 0),
         isDelete: Number(v.isDelete ?? 0),
         baseId: str(v.baseId),
+        createDt: str(v.createDt),
+        createBy: str(v.createBy),
+        publishDt: str(v.publishDt),
+        publishBy: str(v.publishBy),
+        deleteDt: str(v.deleteDt),
+        deleteBy: str(v.deleteBy),
+        contentHash: str(v.contentHash),
       })),
     }
   },

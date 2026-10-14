@@ -612,6 +612,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 仍悄悄落回 mock（mockSiteUpdate 还是旧的 category/owner 必填形状，传新形状直接 `.trim()` 报错）。
   { path: 'site/updateSite', desc: '编辑网站基本信息 → POST /v1/site/update', danger: true, impl: true },
   { path: 'site/update', desc: '编辑网站基本信息（真实路径，见上方 site/updateSite 的说明）', danger: true, live: true },
+  // 1014：删除网站（旧平台 SiteList 同款，GET /v1/site/delete?siteId=，逻辑删除 is_delete=1）。
+  // 后端 SiteController.delete 会校验网站下的源数量（countBySiteId），调用方先二次确认。
+  { path: 'site/delete', desc: '删除网站 → GET /v1/site/delete?siteId=', danger: true, live: true },
   // 0915-14：后端 2026-09-16 交付的网站标签两件套——本条给候选清单，筛选走 sitePaged 的 tags 入参。
   // 返回的是**拆分去重后的数组**（如 ["服务","测试"]），不是各站原始的分号串。
   { path: 'site/siteTags', desc: '全局已用网站标签（候选清单）', live: true },

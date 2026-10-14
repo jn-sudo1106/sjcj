@@ -3,7 +3,7 @@
 // 原来是采集资产「全部分类」下拉底部唤起的抽屉（CategoryManageDrawer，2026-09-21），
 // 0924 会上认为"放在查询页面有点奇怪"，迁到「系统设置 → 分类目录」整页展示，逻辑原样搬过来。
 // 改完分类后采集资产那边的分类树缓存由 clearCategoryCache 清掉，切回去时静默重拉即可看到。
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Top, Bottom } from '@element-plus/icons-vue'
 import { sourceApi, categoryApi, clearCategoryCache, type SourceCategory } from '@/api'
@@ -35,6 +35,40 @@ function onNodeCollapse(data: SourceCategory) {
 
 // 缓存根分类列表以便快速计算新增权重及搜索兜底
 const rootCategories = ref<SourceCategory[]>([])
+
+/**
+ * 全量目录树（1014）：el-tree 懒加载模式下未展开过的节点一律显示展开箭头，
+ * 叶子节点（没有子目录）也被当成"可能有子级"，用户看着以为能展开。分类总量实测 159 个、
+ * 最深 4 层，前端 BFS 一次性拉全成本可接受（同 expandCategoryIds 的口径），
+ * 用**非懒加载** el-tree 渲染——el-tree 按 children 自动判断叶子，无子目录的节点不显示箭头。
+ */
+const fullTreeData = ref<SourceCategory[]>([])
+async function loadFullTree() {
+  try {
+    const roots = await sourceApi.sourceCategories(undefined)
+    rootCategories.value = roots
+    // BFS 逐层拉子级，组装 children（并行度对齐 expandCategoryIds 的 8 路）
+    const CONCURRENCY = 8
+    let frontier = [...roots]
+    for (let depth = 0; frontier.length && depth < 8; depth++) {
+      const next: SourceCategory[] = []
+      for (let i = 0; i < frontier.length; i += CONCURRENCY) {
+        const batch = frontier.slice(i, i + CONCURRENCY)
+        const childrenLists = await Promise.all(
+          batch.map((parent) => sourceApi.sourceCategories(String(parent.id)).catch(() => [] as SourceCategory[])),
+        )
+        batch.forEach((parent, idx) => {
+          parent.children = childrenLists[idx] ?? []
+          next.push(...childrenLists[idx])
+        })
+      }
+      frontier = next
+    }
+    fullTreeData.value = roots
+  } catch {
+    fullTreeData.value = []
+  }
+}
 
 function buildSearchTree(hits: SourceCategory[]): SourceCategory[] {
   if (!hits.length) return []
@@ -98,28 +132,21 @@ async function doSearch() {
   }
 }
 
-// 树节点懒加载
-async function loadTreeNodes(node: any, resolve: (data: SourceCategory[]) => void) {
-  try {
-    const parentId = node.level === 0 ? undefined : String(node.data.id ?? '')
-    const list = await sourceApi.sourceCategories(parentId)
-    if (node.level === 0) {
-      rootCategories.value = list
-    }
-    resolve(list)
-  } catch {
-    resolve([])
-  }
-}
-
 // 重新加载树
 function reloadTree() {
   clearCategoryCache()
   treeKey.value++
   if (isSearching.value) {
     void doSearch()
+  } else {
+    // 非懒加载后刷新要重拉全量树（原懒加载树靠 el-tree 内部重挂载触发）
+    void loadFullTree()
   }
 }
+
+onMounted(() => {
+  void loadFullTree()
+})
 
 // ---- 上移 / 下移排序逻辑 ----
 function getNodeSiblings(node: any): any[] {
@@ -466,13 +493,12 @@ async function handleDelete(node: { id: string; name: string }) {
         </template>
       </el-tree>
 
-      <!-- 常规懒加载目录树 -->
+      <!-- 常规目录树（1014 改非懒加载：全量预加载，el-tree 按 children 判叶子，无子目录不显示展开箭头） -->
       <el-tree
         v-else
         :key="treeKey"
-        lazy
-        :load="loadTreeNodes"
-        :props="{ label: 'name', children: 'children', isLeaf: 'isLeaf' }"
+        :data="fullTreeData"
+        :props="{ label: 'name', children: 'children' }"
         node-key="id"
         :default-expanded-keys="expandedKeys"
         class="ca-category-tree"

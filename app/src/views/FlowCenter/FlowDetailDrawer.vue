@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   configApi,
@@ -19,6 +19,7 @@ import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import FlowVersionBar from '@/views/FlowCanvas/canvas/FlowVersionBar.vue'
+import FlowVersionHistory from './FlowVersionHistory.vue'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
@@ -70,6 +71,7 @@ function ensureAutosaveUnbound() {
   // 不复位会残留 true——画布页 autosave.bind()（onMounted）早于 loadSourceFlow 的复位，
   // 窗口期内改动会按残留的旧流程 ID 锚定落库。
   canvas.setFlowIdMode(false)
+  flowVersion.exitHistory()
 }
 onBeforeUnmount(ensureAutosaveUnbound)
 /** 关工作区：先把最后一批步骤改动落库（防抖窗口内的草稿换 ID 等），再关抽屉。
@@ -186,6 +188,8 @@ watch(() => props.flow?.id, (id, prev) => {
   metaForm.description = props.flow?.description ?? ''
   workingFlow.value = null
   versionState.value = null
+  // 换流程 / 重新打开一律回到正常编辑，不沿用上次查看的历史版本
+  flowVersion.exitHistory()
 }, { immediate: true })
 /** 标签统一成逗号串：中英文逗号、空格分隔都收，去重去空（与新建表单同一口径） */
 function normalizeTags(raw: string): string {
@@ -343,6 +347,37 @@ watch(() => props.flow?.id, () => {
   if (props.flow) void openFlowInWorkspace(props.flow)
 }, { immediate: true })
 
+// ---- 查看历史版本（2026-10-14，设计稿/设计方案/1014-流程历史版本查看_开发设计方案）----
+// 选一个历史版本：画布按该版本重读步骤并整体只读；节点结构是当时的，节点配置不随版本保存（217 实测），
+// 提示条把这一点说清楚。只做查看，不做切换发布版本。
+const showVersionHistory = computed(() => flowVersion.enabled && flowVersion.flowId === (workingFlow.value?.id || props.flow?.id))
+const historyRow = computed(() => (showVersionHistory.value ? flowVersion.history : undefined))
+const viewingVersionId = computed(() => historyRow.value?.versionId ?? flowVersion.currentVersionId)
+const historyLabel = computed(() => {
+  const row = historyRow.value
+  if (!row) return ''
+  const title = row.state === 'W' ? `草稿 v${row.flowVer}` : `v${row.flowVer}`
+  const tag = row.isDelete !== 0 ? (row.state === 'W' ? '已放弃' : '已归档') : '已发布'
+  return `${title}（${tag}）`
+})
+const switchingVersion = ref(false)
+async function selectVersion(versionId: string | null) {
+  if (!props.flow || loadingDetail.value || switchingVersion.value) return
+  switchingVersion.value = true
+  try {
+    // 离开当前版本前先把没写完的改动落进草稿，否则切走就丢了
+    if (canvas.flowDirty || autosave.status.value === 'saving') await autosave.flush()
+    if (canvas.flowDirty || autosave.status.value === 'error' || autosave.status.value === 'pending') {
+      ElMessage.warning('画布还有未保存成功的改动，请先处理头部的保存提示，再查看历史版本')
+      return
+    }
+    flowVersion.viewHistory(versionId)
+    await openFlowInWorkspace(props.flow)
+  } finally {
+    switchingVersion.value = false
+  }
+}
+
 async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<FlowRecord | null> {
   if (!workingFlow.value || saving.value || publishing.value) return null
   const trimmed = name.value.trim()
@@ -472,7 +507,7 @@ async function publishVersion() {
     <header class="fd-head">
       <div class="fd-title">
         <span class="fd-kicker">流程工作区</span>
-        <input v-model="name" class="fd-name" aria-label="流程名称" @input="canvas.setFlowName(name)" />
+        <input v-model="name" class="fd-name" aria-label="流程名称" :disabled="!!historyRow" @input="canvas.setFlowName(name)" />
         <p>
           {{ workingFlow?.id || flow.id }} · 更新于 {{ workingFlow?.updatedAt || flow.updatedAt || '—' }}
           <span v-if="versionState?.draftFlowId" class="fd-badge draft" data-testid="flow-drawer-version-status">
@@ -483,6 +518,13 @@ async function publishVersion() {
           </span>
           <!-- 217 流程版本（2026-10-11）：紧凑徽标 + 放弃 / 发布，与源画布流程标签栏同一组件 -->
           <FlowVersionBar />
+          <FlowVersionHistory
+            v-if="showVersionHistory"
+            :overview="flowVersion.overview"
+            :viewing="viewingVersionId"
+            :disabled="loadingDetail || switchingVersion"
+            @select="(id) => void selectVersion(id)"
+          />
           <span v-if="workingFlow?.isTemplate" class="fd-badge" data-testid="flow-drawer-template-badge">模板</span>
           <span v-else-if="workingFlow?.fromTemplateId" class="fd-badge ghost">来自模板 #{{ workingFlow.fromTemplateId }}</span>
         </p>
@@ -512,18 +554,18 @@ async function publishVersion() {
     <div class="fd-meta">
       <label class="fd-meta-item">
         <span>分类</span>
-        <select v-model="metaForm.categoryId" class="fd-meta-input" data-testid="flow-meta-category">
+        <select v-model="metaForm.categoryId" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-category">
           <option value="">不设置</option>
           <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
       </label>
       <label class="fd-meta-item">
         <span>标签</span>
-        <input v-model="metaForm.tags" class="fd-meta-input" data-testid="flow-meta-tags" placeholder="多个用逗号或空格分隔" />
+        <input v-model="metaForm.tags" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-tags" placeholder="多个用逗号或空格分隔" />
       </label>
       <label class="fd-meta-item grow">
         <span>描述</span>
-        <input v-model="metaForm.description" class="fd-meta-input" data-testid="flow-meta-desc" placeholder="选填" />
+        <input v-model="metaForm.description" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-desc" placeholder="选填" />
       </label>
       <span v-if="flow.bizType" class="fd-meta-ro" title="业务大类（只读）">大类 {{ flow.bizType }}</span>
       <span v-if="flow.createdAt" class="fd-meta-ro">创建于 {{ flow.createdAt }}</span>
@@ -537,7 +579,14 @@ async function publishVersion() {
     </div>
     <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
          不写这行的话，用户会以为流程里已经存着这份定义。 -->
-    <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
+    <div v-if="historyRow" class="fd-history" data-testid="flow-history-banner">
+      <span>
+        正在查看 <b>{{ historyLabel }}</b>，只读 · 当前运行 v{{ flowVersion.overview?.curVer ?? '—' }}。
+        节点结构为该版本当时的样子；节点配置不随版本保存，显示的是当前内容。
+      </span>
+      <button type="button" class="fd-history-back" :disabled="loadingDetail || switchingVersion" data-testid="flow-history-exit" @click="void selectVersion(null)">返回当前版本</button>
+    </div>
+    <div v-if="!loadingDetail && derivedFromConfig && !historyRow" class="fd-derived" data-testid="flow-derived-note">
       <template v-if="versioned">该草稿尚未保存画布定义，以下节点按草稿工作副本（#{{ workingFlow?.id }}）还原，点“保存草稿”后写入草稿。</template>
       <template v-else>该流程尚未保存画布定义，以下节点按这个流程自己的配置（#{{ workingFlow?.id }}）还原，点「保存流程」后才会写入流程。</template>
     </div>
@@ -577,23 +626,28 @@ async function publishVersion() {
       <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
            答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
            这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
-      <span v-if="versioned" class="fd-foot-note">修改只保存到草稿，不影响当前运行版本；发布后，新发起的任务使用新版本，运行中的任务保持原版本。</span>
+      <span v-if="historyRow" class="fd-foot-note">历史版本只能查看；要修改请先返回当前版本。</span>
+      <span v-else-if="versioned" class="fd-foot-note">修改只保存到草稿，不影响当前运行版本；发布后，新发起的任务使用新版本，运行中的任务保持原版本。</span>
       <span v-else class="fd-foot-note">节点配置在右侧直接修改；关联到源后，这些源将共用本流程的配置——此后改这里会同时影响它们。</span>
       <button
         class="fd-secondary"
         type="button"
-        :disabled="saving || togglingTemplate"
+        :disabled="saving || togglingTemplate || !!historyRow"
         data-testid="flow-drawer-toggle-template"
         @click="toggleTemplate"
       >{{ workingFlow?.isTemplate ? '取消模板' : '标记为模板' }}</button>
-      <button class="fd-secondary" type="button" :disabled="saving || publishing" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
-      <button :class="versioned ? 'fd-secondary' : 'fd-primary'" type="button" :disabled="saving || publishing || loadingDetail" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : (versioned ? '保存草稿' : '保存流程') }}</button>
+      <button class="fd-secondary" type="button" :disabled="saving || publishing || !!historyRow" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
+      <button :class="versioned ? 'fd-secondary' : 'fd-primary'" type="button" :disabled="saving || publishing || loadingDetail || !!historyRow" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : (versioned ? '保存草稿' : '保存流程') }}</button>
       <button v-if="versioned" class="fd-primary" type="button" :disabled="saving || publishing || loadingDetail || !versionState?.draftFlowId" data-testid="flow-publish" @click="publishVersion">{{ publishing ? '发布中…' : `发布 v${versionState?.draftVersionNo ?? '—'}` }}</button>
     </footer>
   </aside>
 </template>
 
 <style scoped>
+.fd-history { display: flex; align-items: center; gap: 10px; padding: 6px 16px; border-bottom: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af; font-size: 12px; }
+.fd-history span { flex: 1; min-width: 0; }
+.fd-history-back { flex: none; height: 24px; padding: 0 10px; border: 1px solid #93c5fd; border-radius: 5px; background: #fff; color: #1d4ed8; font-size: 12px; cursor: pointer; }
+.fd-history-back:disabled { opacity: .55; cursor: not-allowed; }
 .fd-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--rc-border-soft); }
 .fd-meta-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rc-text-2); }
 .fd-meta-item.grow { flex: 1; min-width: 180px; }

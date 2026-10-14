@@ -709,3 +709,57 @@ describe('SourceTab 分类缓存重拉（0924-03）', () => {
   })
 })
 
+describe('SourceTab · 删除网站（1014 右键卡片菜单）', () => {
+  beforeEach(() => {
+    vi.mocked(ElMessage.warning).mockClear()
+    vi.mocked(ElMessage.success).mockClear()
+    vi.mocked(ElMessageBox.confirm).mockReset()
+  })
+
+  it('点删除：先弹二次确认，取消则不调 siteDelete', async () => {
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+    const sitePagedSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 1,
+      list: [{ siteId: 's1', name: '网站一', sourceCount: 0, errorCount: 0, updatedAt: '2026-10-14 10:00:00', tags: [], category: '', owner: '' }],
+    })
+    const deleteSpy = vi.spyOn(siteApi, 'siteDelete').mockResolvedValue({ ok: true, message: '' })
+    const { wrapper } = await mountAt()
+    await flushPromises()
+
+    const grid = wrapper.findComponent({ name: 'SiteCardGrid' })
+    await grid.vm.$emit('delete-site', { siteId: 's1', name: '网站一' })
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+    wrapper.unmount()
+    sitePagedSpy.mockRestore()
+    deleteSpy.mockRestore()
+  })
+
+  it('确认后调 siteDelete 并整体刷新；成功提示已删除', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValueOnce('confirm' as never)
+    const sitePagedSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 1,
+      list: [{ siteId: 's1', name: '网站一', sourceCount: 0, errorCount: 0, updatedAt: '2026-10-14 10:00:00', tags: [], category: '', owner: '' }],
+    })
+    const deleteSpy = vi.spyOn(siteApi, 'siteDelete').mockResolvedValue({ ok: true, message: '' })
+    const { wrapper } = await mountAt()
+    await flushPromises()
+    const callsBefore = sitePagedSpy.mock.calls.length
+
+    const grid = wrapper.findComponent({ name: 'SiteCardGrid' })
+    await grid.vm.$emit('delete-site', { siteId: 's1', name: '网站一' })
+    await flushPromises()
+    await flushPromises()
+
+    expect(deleteSpy).toHaveBeenCalledWith('s1')
+    expect(ElMessage.success).toHaveBeenCalledWith('已删除网站「网站一」')
+    // 删除后整体刷新（refreshAll → 重新拉列表）
+    expect(sitePagedSpy.mock.calls.length).toBeGreaterThan(callsBefore)
+    wrapper.unmount()
+    sitePagedSpy.mockRestore()
+    deleteSpy.mockRestore()
+  })
+})
+

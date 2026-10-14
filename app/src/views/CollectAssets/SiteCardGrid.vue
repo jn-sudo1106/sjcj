@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<{
 })
 // 编辑网站信息由父组件（SourceTab）统一挂 SiteEditorDialog —— 表格视图走的也是这个事件，
 // 两个视图共用一份弹窗状态，不在卡片里再挂一个（0915-01）。
-const emit = defineEmits<{ 'open-editor': [site: Site] }>()
+const emit = defineEmits<{ 'open-editor': [site: Site]; 'delete-site': [site: Site] }>()
 const router = useRouter()
 
 /**
@@ -183,7 +183,7 @@ function pickOverflow(s: Source) {
 // 而 transform 会让内部 position:fixed 的元素改以该卡片为包含块定位，菜单会飘到错误的位置。
 const menu = reactive<{ show: boolean; x: number; y: number; site: Site | null }>({ show: false, x: 0, y: 0, site: null })
 const MENU_W = 132
-const MENU_H = 44
+const MENU_H = 88
 
 function openMenu(event: MouseEvent, site: Site) {
   const el = event.currentTarget as HTMLElement | null
@@ -206,6 +206,11 @@ function onEditSite() {
   const site = menu.site
   closeMenu()
   if (site) emit('open-editor', site)
+}
+function onDeleteSite() {
+  const site = menu.site
+  closeMenu()
+  if (site) emit('delete-site', site)
 }
 function onGlobalKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') closeMenu()
@@ -366,7 +371,7 @@ onUnmounted(() => {
     </template>
     <div v-else-if="!sites.length" class="scg-empty-state">{{ emptyText }}</div>
 
-    <!-- 只有「编辑网站信息」一项：进入网站左击卡片即可，删除是高危操作不与改名同菜单（0915-01） -->
+    <!-- 编辑网站信息 + 删除网站（1014 按需求把删除加进右键菜单；删除是高危操作，父组件二次确认） -->
     <div
       v-if="menu.show"
       class="scg-card-menu"
@@ -375,6 +380,7 @@ onUnmounted(() => {
       @click.stop
     >
       <button type="button" data-testid="site-card-menu-edit" @click="onEditSite">编辑网站信息</button>
+      <button type="button" class="scg-menu-danger" data-testid="site-card-menu-delete" @click="onDeleteSite">删除网站</button>
     </div>
   </div>
 
@@ -435,6 +441,9 @@ onUnmounted(() => {
   background: transparent; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer;
 }
 .scg-card-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+/* 1014 删除网站：危险项红色，与「编辑」区分（对齐源侧栏 .ssw-row-menu 的删除项） */
+.scg-card-menu button.scg-menu-danger { color: #dc2626; }
+.scg-card-menu button.scg-menu-danger:hover { background: #fef2f2; color: #b91c1c; }
 
 .scg-head { display: flex; align-items: center; gap: 11px; }
 /* 平色块，不再是渐变 + 投影（2026-09-18）：30 张卡片各带一个投影堆在一起是视觉噪音，

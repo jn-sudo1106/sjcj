@@ -14,6 +14,7 @@ import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { cronSaveErrorHint, unpublishedFlowCronHint } from '@/utils/flow/cronSaveHint'
 import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
+import { nodeStatusOf } from '@/views/FlowCanvas/canvas/nodeStatus'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
@@ -31,6 +32,7 @@ import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
 import ConfigTab from './tabs/ConfigTab.vue'
 import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
+import { shortTime, versionCutoff } from '@/views/FlowCenter/flowVersionHistory'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
@@ -47,8 +49,10 @@ const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const tab = computed<string>(() => flow.activeTab)
 
-const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
-const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
+// 与画布卡片同一口径（nodeStatusOf），不直接显示种子里的占位 status
+const nodeStatus = computed(() => (cfg.value ? nodeStatusOf(cfg.value) : null))
+const statusText = computed(() => nodeStatus.value?.left ?? '')
+const statusClass = computed(() => (nodeStatus.value && ['运行', '运行中'].includes(nodeStatus.value.left) ? 'ok' : 'warn'))
 
 // 顶层 Tab：参数字段已并入任务配置。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props.hideAi }))
@@ -139,7 +143,18 @@ const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
 const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
-const footNote = computed(() => (readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+const viewingHistory = computed(() => !!flowVersion.history && flowVersion.flowId === canvasFlowIdOf(flow))
+const footNote = computed(() => (viewingHistory.value
+  ? '正在查看历史版本，只能查看'
+  : readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+/** 查看历史版本时：节点配置不随版本保存（217 实测），配置在该版本之后改过就提示一句（2026-10-14） */
+const historyConfigNote = computed(() => {
+  const row = viewingHistory.value ? flowVersion.history : undefined
+  const cutoff = row ? versionCutoff(row) : null
+  const updated = cfg.value?.configUpdateDt
+  if (!cutoff || !updated || updated.slice(0, 19) <= cutoff.slice(0, 19)) return ''
+  return `这份配置在该版本之后修改过（${shortTime(updated)}），显示的是当前内容，可能与该版本当时运行的不同`
+})
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）。
 //
@@ -447,6 +462,7 @@ onMounted(async () => {
         <span class="cb-origin" :class="{ fresh: !configId || isInitialSourceConfig }">{{ configOriginText }}</span>
         <NodeConfigSelect v-if="id" :node-id="id" />
       </div>
+      <div v-if="historyConfigNote" class="ni-history-note" data-testid="history-config-note">{{ historyConfigNote }}</div>
 
       <!-- 0929 F2：复制时配置去共享失败的常驻提示——该节点配置仍与来源流程共享，保存前会再弹确认。 -->
       <div v-if="sharedConfigWarning" class="ni-output-warn" data-testid="shared-config-warn">
@@ -553,6 +569,7 @@ onMounted(async () => {
 .rc-config-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fbfdff; }
 
 /* 0927 H1：输出表未就绪警告条（与配置条同宽节奏，紧凑不喧宾） */
+.ni-history-note { padding: 5px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fffbeb; color: #92400e; font-size: 11px; line-height: 1.5; }
 .ni-output-warn { padding: 6px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fffcf5; }
 .ni-output-warn .el-alert { padding: 6px 10px; }
 .ni-output-warn .el-alert__title { font-size: 11px; line-height: 1.4; }

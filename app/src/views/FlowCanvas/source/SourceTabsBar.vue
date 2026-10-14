@@ -276,10 +276,10 @@ function onDragEnd() {
       type="button"
       role="tab"
       :aria-selected="onList"
-      title="返回网站列表"
+      title="返回源管理"
       @click="goList"
     >
-      <span class="rc-src-tab-name">网站列表</span>
+      <span class="rc-src-tab-name">源管理</span>
     </button>
     <button
       v-for="(t, i) in ws.orderedTabs"
