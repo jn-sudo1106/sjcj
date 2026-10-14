@@ -707,13 +707,13 @@ watch(
 
 <template>
   <div class="ir-shell">
-    <div class="ir-head">
+    <!-- <div class="ir-head">
       <div class="ir-title">指标结果</div>
       <div class="ir-sub">
         查看某个数据表（默认「指标」表）下的数据行：按源 / 指标编码 / 名称 / 日期 / ID 区间检索，
         支持动态列、SQL 与取数 API 预览、导入导出，以及按行 / 按源 / 按时间删除与改为正式表。
       </div>
-    </div>
+    </div> -->
 
     <!-- 搜索栏（旧 a-form layout="inline"）：改条件不自动查，点「查询」或回车才发请求 -->
     <el-form :inline="true" class="ir-filter-form">
