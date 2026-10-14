@@ -241,7 +241,7 @@ onMounted(() => void load())
     </div>
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；改条件不自动查，点「查询」才发请求） -->
-    <el-form :inline="true" class="qc-filter-form" size="small">
+    <el-form :inline="true" class="qc-filter-form">
       <el-row :gutter="8" class="qc-filter-row">
         <el-col :md="4" :sm="24">
           <el-form-item label="队列名">

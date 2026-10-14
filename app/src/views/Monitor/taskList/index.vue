@@ -278,7 +278,7 @@ function applyRouteQuery() {
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格：多数 md=3；「展示类」md=2、时间 md=7，
          一行为 8×3=24 栅格，「日期区间 + 当天按钮」不换行）。
          文本项不自动查（回车 / 点查询），**状态下拉改完立刻查**（旧 @change="handleRefresh"）。 -->
-    <el-form :inline="true" class="tl-filter-form" size="small">
+    <el-form :inline="true" class="tl-filter-form">
       <el-row :gutter="8" class="tl-filter-row">
         <el-col :md="3" :sm="24">
           <el-form-item>
