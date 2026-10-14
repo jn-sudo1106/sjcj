@@ -8,6 +8,22 @@
 // ⚠️ 字段名一律用旧平台的名字（dataIndex / scopedSlots / values ...），**不做驼峰重命名**——
 // 这样从旧 column.config.js 里抄过来的列定义可以逐行对照，降低抄错的风险。
 
+/**
+ * 源选择器（EntrySourceSelect，「更多源」弹窗同理）`change` 事件带出去的那条记录。
+ *
+ * 旧 `DSourceSelect` 的 `change` 带出的是 `getSourceSame` 回来的**完整 Source 行**，
+ * 父页 `MeasureData.handleUploadData` 拿 `this.source.configId` 给「导入数据」弹窗做最后一级兜底。
+ * 新平台 `sourceApi.sourceSame` 返回的是精简的 `SourceOption`（只有 sourceId/name，见
+ * `adapters/sourceOptionFromLegacy`），所以这里把 `configId` 定成可选：
+ * 从下拉里直接选 → 只有前两个字段；从「更多源」弹窗里挑 → 那条来自 `sourcePaged` 的完整行
+ * 会把 `configId` 一起带上（恢复旧版的兜底链路）。
+ */
+export interface SourcePick {
+  sourceId: string
+  name: string
+  configId?: string
+}
+
 /** SELECT / INT_BOOL / TAGS 等下拉的候选项（旧 `values: [{ value, text }]`） */
 export interface ColumnOption {
   value: string | number

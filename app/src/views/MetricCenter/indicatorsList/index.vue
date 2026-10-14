@@ -32,10 +32,15 @@
 //      无法「按原样迁移」，也不该凭空发明一套批量复制语义，故只去掉这一个菜单项并在此存档。
 //      另外 `MeasureList` 还 import 了 `DataSetShow`（模板里没用到）——同样是死代码。
 //      「操作日志」菜单项也去掉：`showLogModal` 读 `$refs.logModal`，模板里同样没有注册。
-//   3. props 不迁，改从 `$route.query` 取：旧版有 `modal / sourceId / datasetId / entryTypeId /
-//      read` 五个 props（由 `MeasureShow` 弹窗与 DatasetList 内嵌使用）。新平台把「指标」做成
-//      MetricCenter 的独立 tab，改成读 query 的 sourceId / entryTypeId / datasetId / configId；
-//      额外支持 `add=1|new`（由 indicatorDataset 的「增加指标 / 指标-新」跳进来时自动开弹窗）。
+//   3. props 分两态（旧版有 `modal / sourceId / datasetId / entryTypeId / read` 五个 props）：
+//      · **弹窗形态** —— 旧 `MeasureShow` 内嵌（新 `MeasureShowDialog`）传
+//        `sourceId / entryTypeId / datasetId` 三个 props，写入顺序与旧 `created` 完全一致：
+//        先读 `$route.query`，再用 props 覆盖。
+//      · **页签形态** —— MetricCenter 的独立 tab，没有 props，只读 query 的
+//        sourceId / entryTypeId / datasetId / configId。
+//      旧 `modal` prop 只控制「操作..」下拉的显隐（`v-if="!modal"`），而旧 MeasureShow 并不传它
+//      → 弹窗里同样是显示；本页两种形态恒显示，故 `modal` 不迁。旧 `read` prop 在旧 MeasureList
+//      里从未被引用过（死 prop），也不迁。
 //   4. 查询条件是**同一个对象**（旧版就是 `Object.assign(parameter, this.queryParam)`，没有
 //      draft/executed 两态），所以改输入框不会自动重查，点「查询」才发请求；「重置」按旧版
 //      只清条件、**不重查**（旧 `@click="() => queryParam = {}"`）。
@@ -77,6 +82,11 @@
 //      `:deep(.sct-node-icon) { display: none }` 隐藏。**复选框保留**——那是组件默认
 //      `checkable: true`，旧页同样是 `:checkable="check"` + `checkedKeys`（多选），
 //      点节点名则是单选下钻，两边语义一致。
+//   12. **不再支持 `add=1|new`**（1014 删除）：那是上一版为「indicatorDataset 的
+//      「增加指标 / 指标-新」跳页签」造的自动开弹窗机制。1014 起数据集页改成**原地**打开
+//      MeasureAddDialog / MeasureAddNewDialog（与旧版 MeasureAdd / MeasureAddNew 抽屉一致），
+//      跳页签这件事整个没了 → `add` 没有任何生产者，本页随之回到「纯列表页」，
+//      旧 MeasureList 本来也没有任何新增入口（新增只从数据集页发起）。
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
@@ -111,10 +121,20 @@ import {
   editColumns,
   type MeasureColumn,
 } from './columns'
-import MeasureAddDialog from './MeasureAddDialog.vue'
-import MeasureAddNewDialog from './MeasureAddNewDialog.vue'
 
 defineOptions({ name: 'IndicatorsList' })
+
+/** 旧 MeasureList 的 props（由旧 MeasureShow 弹窗 / 新 MeasureShowDialog 传入）。
+ *  只声明旧版真正用到的三个：`modal` 只管操作下拉显隐而弹窗形态下也是显示（不迁），
+ *  `read` 在旧组件里从未被引用（死 prop，不迁）——见文件头偏差第 3 条。 */
+const props = withDefaults(
+  defineProps<{
+    sourceId?: string | number | null
+    entryTypeId?: string | number | null
+    datasetId?: string | number | null
+  }>(),
+  { sourceId: null, entryTypeId: null, datasetId: null },
+)
 
 const route = useRoute()
 
@@ -265,8 +285,6 @@ const editRef = ref<InstanceType<typeof ColumnEditDialog>>()
 const detailRef = ref<InstanceType<typeof ColumnDetailDrawer>>()
 const jsonDimRef = ref<InstanceType<typeof ColumnEditDialog>>()
 const jsonValRef = ref<InstanceType<typeof ColumnEditDialog>>()
-const addRef = ref<InstanceType<typeof MeasureAddDialog>>()
-const addNewRef = ref<InstanceType<typeof MeasureAddNewDialog>>()
 
 /** 旧 handleEdit → `$refs.measureEdit.doEdit(record)` */
 function handleEdit(row: MeasureRow) {
@@ -370,70 +388,31 @@ function onSizeChange(s: number) {
   void load()
 }
 
-// ---- 路由 query（旧 props + created + watch 的等价物）----
+// ---- 路由 query + props（旧 created + watch 的等价物）----
 function pickQuery(key: string): string {
   const value = route.query[key]
   const text = Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
   return text.trim()
 }
 
-const routeSourceId = ref('')
-const routeEntryTypeId = ref('')
-const routeDatasetId = ref('')
-const routeDatasetName = ref('')
-
 function applyRouteQuery() {
   const sourceId = pickQuery('sourceId')
-  if (sourceId) {
-    routeSourceId.value = sourceId
-    queryParam.sourceId = sourceId
-  }
+  if (sourceId) queryParam.sourceId = sourceId
   const entryTypeId = pickQuery('entryTypeId')
-  if (entryTypeId) {
-    routeEntryTypeId.value = entryTypeId
-    queryParam.entryTypeId = entryTypeId
-  }
+  if (entryTypeId) queryParam.entryTypeId = entryTypeId
   const datasetId = pickQuery('datasetId')
-  if (datasetId) {
-    routeDatasetId.value = datasetId
-    queryParam.datasetId = datasetId
-  }
-  routeDatasetName.value = pickQuery('datasetName')
+  if (datasetId) queryParam.datasetId = datasetId
   const configId = pickQuery('configId')
   if (configId) queryParam.configId = configId
 }
 
-/** indicatorDataset 的「增加指标 / 指标-新」跳进来时带的入参：
- *  旧 DatasetList 传的是 `(record.sourceId, record, record.entryTypeId)`，
- *  record 是整条数据集（doEdit 里 `Object.assign(form, record)` 会把 datasetId /
- *  datasetName / entryTypeId … 一并带进提交体）。这里用 query 里带过来的四个键重建这份 record。 */
-function buildDatasetRecord(): Record<string, unknown> {
-  return {
-    sourceId: routeSourceId.value || undefined,
-    datasetId: routeDatasetId.value || undefined,
-    datasetName: routeDatasetName.value || undefined,
-    entryTypeId: routeEntryTypeId.value || undefined,
-  }
-}
-
-function openMeasureAdd() {
-  if (!routeSourceId.value) {
-    ElMessage.warning('请先指定源ID（从数据集页的「增加指标」进入）')
-    return
-  }
-  addRef.value?.open(routeSourceId.value, buildDatasetRecord(), routeEntryTypeId.value)
-}
-
-function openMeasureAddNew() {
-  if (!routeSourceId.value) {
-    ElMessage.warning('请先指定源ID（从数据集页的「指标-新」进入）')
-    return
-  }
-  addNewRef.value?.open(routeSourceId.value, buildDatasetRecord(), routeEntryTypeId.value)
-}
-
-function onAddSaved() {
-  handleRefresh(true)
+/** 旧 `created` 的 props 段。顺序与原版一致：**先**读 `$route.query`（上面那个函数），
+ *  **再**用 props 覆盖 —— 弹窗形态（旧 MeasureShow / 新 MeasureShowDialog）就是靠这一步
+ *  把 query 里可能残留的上下文换成「当前这一行」的。空值不覆盖（旧版判的是 truthy）。 */
+function applyProps() {
+  if (props.sourceId) queryParam.sourceId = props.sourceId
+  if (props.entryTypeId) queryParam.entryTypeId = props.entryTypeId
+  if (props.datasetId) queryParam.datasetId = props.datasetId
 }
 
 // 旧 `watch '$route.query.configId'` → 改条件并重查
@@ -445,13 +424,11 @@ watch(
   },
 )
 
-// 旧 `created` 读 `$route.query.sourceId`；这里在挂载后统一处理 query + 自动开弹窗
+// 旧 `created`（读 query + 覆盖 props）→ 挂载后统一处理，再拉第一页
 onMounted(async () => {
   applyRouteQuery()
-  const add = pickQuery('add')
+  applyProps()
   await load()
-  if (add === '1') openMeasureAdd()
-  else if (add === 'new') openMeasureAddNew()
 })
 
 const MEASURE_COLUMNS = MEASURE_BASE
@@ -659,10 +636,6 @@ const DETAIL_COLUMNS = detailColumns()
     <!-- 两个 JSON 子编辑器旧版都不传 callback（点确定不关弹窗、不提示），这里保持同一形态 -->
     <ColumnEditDialog ref="jsonDimRef" :cols="MEASURE_JSON_DIM" />
     <ColumnEditDialog ref="jsonValRef" :cols="MEASURE_JSON_VAL" />
-
-    <!-- 指标三件套里的两个新增入口（旧 MeasureAdd / MeasureAddNew，由数据集页跳转触发） -->
-    <MeasureAddDialog ref="addRef" @saved="onAddSaved" />
-    <MeasureAddNewDialog ref="addNewRef" @saved="onAddSaved" />
   </div>
 </template>
 

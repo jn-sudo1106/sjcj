@@ -97,6 +97,11 @@
 //       同样铺不满、右侧留白。这个做法与 `DataView/DataQueryTab.vue` 处理同一问题的口径一致。
 //   16. 操作列 `fixed="right"`、勾选列与 ENTRY_ID `fixed="left"`（旧版没有固定列）：本页列多时
 //       要横向滚动，固定后勾选/详情/操作始终可见（与 indicatorsResult 同批的 indicatorsList 一致）。
+//   17. **源选择器补回 `reloadSid` 接线**（1014 修正）：旧 `watch '$route.query'` 的最后一步是
+//       `this.$refs.sourceSelect.reloadSid(this.sid)`（重拉同站源候选 + 主动选中 + emit change
+//       带出重查）；本页此前漏了这一步，同一 tab 内带 `sourceId` 切过来时下拉候选还是上一个源的、
+//       选中值只显示裸 ID。现在 watcher 里跟上，并保留 `currentSource` 供 `handleUploadData`
+//       兜底 configId（见该函数注释）。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
@@ -121,6 +126,7 @@ import ApiDescDialog from './ApiDescDialog.vue'
 import SourceDetailDialog from './SourceDetailDialog.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
 import UploadDataDialog from './UploadDataDialog.vue'
+import type { SourcePick } from '../shared/types'
 
 defineOptions({ name: 'IndicatorsResult' })
 
@@ -250,8 +256,19 @@ function clearSelection() {
   tableRef.value?.clearSelection()
 }
 
+/**
+ * 旧 `this.source`：源选择器 change 回来的那条记录。
+ * `handleUploadData` 用它给「导入数据」弹窗的 `configId` 做最后一级兜底 —— 旧
+ * `MeasureData.handleUploadData` 里就是 `configId = this.source && this.source.configId`。
+ * ⚠️ 新平台 `sourceApi.sourceSame` 只返回 `{sourceId, name}`（见 `sourceOptionFromLegacy`），
+ * 所以**从下拉里直接选**拿不到 configId；只有从「更多源」弹窗里挑的那条（来自 `sourcePaged` 的
+ * 完整行）会带上 —— 那一级兜底因此只是「部分恢复」，见 EntrySourceSelect 文件头第 3 条。
+ */
+const currentSource = ref<SourcePick | null>(null)
+
 /** 旧 `handleSourceChange(source)`：记下当前源并回第 1 页重查 */
-function handleSourceChange() {
+function handleSourceChange(record: SourcePick | null = null) {
+  currentSource.value = record
   handleRefresh(true)
 }
 
@@ -315,18 +332,26 @@ function handleShowApi() {
 
 /**
  * 旧 `handleUploadData`：表 ID + 源 ID + 配置 ID。
- * ⚠️ 旧版配置 ID 的最后一级兜底是 `this.source.configId`（源选择器 change 回来的那条记录），
- * 新平台 `sourceApi.sourceSame` 只返回 `{sourceId, name}`，候选项上没有 configId，所以那一级
- * 兜底取不到值；取不到时留空、由用户在弹窗里填（旧版弹窗本来就允许手填，且没填会拦下）。
+ *
+ * 旧版的三级取法（`if (this.oriData && this.oriData.length > 0)` 内）：
+ *   `sourceId = this.sourceId || first['SOURCE_ID']`、
+ *   `configId = first['CONFIG_ID']`，为空再退到 `this.source.configId`（源选择器 change 回来的那条记录）。
+ * 这里逐级对齐：`first.configId` → `currentSource.configId`。
+ * ⚠️ 新平台 `sourceApi.sourceSame` 只返回 `{sourceId, name}`，只有「更多源」弹窗里挑的源才带
+ * `configId`（见 EntrySourceSelect 文件头第 3 条）；两级都取不到时留空、由用户在弹窗里填
+ * （旧版弹窗本来就允许手填，且没填会拦下）。
  */
 function handleUploadData() {
   const entryTypeId = tableId.value
   let sourceId = queryForm.sourceId
+  let configId = ''
   const first = rows.value[0]
   if (first) {
     if (!sourceId) sourceId = first.sourceId
+    // 注意用 `||` 而不是 `??`：旧版是 `if (!configId)`，空串同样要往下一级退
+    configId = String(first.configId || currentSource.value?.configId || '')
   }
-  uploadRef.value?.open(entryTypeId, sourceId, String(first?.configId ?? ''))
+  uploadRef.value?.open(entryTypeId, sourceId, configId)
 }
 
 /** 旧 `handleExport`：纯 URL 直开，同源 Cookie 完成鉴权 */
@@ -501,6 +526,8 @@ const taskRef = ref<InstanceType<typeof TaskInstDialog>>()
 const sourceDetailRef = ref<InstanceType<typeof SourceDetailDialog>>()
 const apiRef = ref<InstanceType<typeof ApiDescDialog>>()
 const uploadRef = ref<InstanceType<typeof UploadDataDialog>>()
+/** 旧 `this.$refs.sourceSelect`（`handleUploadData` 用它兜底 configId、路由变化时调 reloadSid） */
+const sourceRef = ref<InstanceType<typeof EntrySourceSelect> | null>(null)
 
 /**
  * 旧 `EntryDetail.vue` 的列集：详情抽屉吃 `ENTRY_DETAIL.base` 的 16 个系统列，
@@ -692,24 +719,38 @@ function applyRouteQuery() {
   tableId.value = pickQuery('entryType') || pickQuery('entryTypeId') || DEFAULT_MEASURE_TABLE_ID
 }
 
+// ⚠️ 必须**同步**执行（不能放进 onMounted）：旧 Vue 2 的 `created` 是「父先子后」，父组件取好
+// `sid` 之后子组件才创建，所以 `DSourceSelect.created → loadData(props.sid)` 拿到的是真实值。
+// Vue 3 里子组件的 mounted 反而**早于**父组件的 mounted，放进 onMounted 会让
+// `EntrySourceSelect` 首帧拿到空 sid → 不请求 `sourceSame` → 下拉永远是空的（只有「更多源...」）。
+applyRouteQuery()
+
 onMounted(async () => {
-  applyRouteQuery()
   await loadTable()
 })
 
 // 同一 tab 内再次带 query 跳进来时（MetricCenter 用 router.replace 切页签，组件不会重新挂载），
-// 跟随 sourceId / entryType 变化重查——旧 `watch '$route.query'` 的等价物
+// 跟随 sourceId / entryType 变化重查——旧 `watch '$route.query'` 的等价物。
 watch(
   () => [pickQuery('sourceId'), pickQuery('entryType'), pickQuery('entryTypeId')] as const,
   ([sourceId, entryType, entryTypeId]) => {
+    routeSid.value = sourceId
     queryForm.sourceId = sourceId
     const next = entryType || entryTypeId || DEFAULT_MEASURE_TABLE_ID
-    if (next !== tableId.value) {
+    const tableChanged = next !== tableId.value
+    if (tableChanged) {
       tableId.value = next
       void loadTable()
-      return
     }
-    handleRefresh(true)
+    // 旧 watch 的后两步：`this.sid = this.queryParam.sourceId` + `this.$refs.sourceSelect.reloadSid(this.sid)`。
+    // reloadSid 会重拉「同站源」候选、主动选中该源，并把选中的源 emit 回来 →
+    // handleSourceChange → 回第 1 页重查（旧版正是靠这条链路带出查询的）。
+    // sid 为空时 reloadSid 直接 return（旧版同款，连候选都不动），此时得自己补一次重查。
+    if (sourceId) {
+      void sourceRef.value?.reloadSid(sourceId)
+    } else if (!tableChanged) {
+      handleRefresh(true)
+    }
   },
 )
 </script>
@@ -730,6 +771,7 @@ watch(
         <el-col :md="4" :sm="24">
           <el-form-item class="ir-source-item">
             <EntrySourceSelect
+              ref="sourceRef"
               v-model="queryForm.sourceId"
               :sid="routeSid || undefined"
               @change="handleSourceChange"

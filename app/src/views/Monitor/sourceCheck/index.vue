@@ -313,7 +313,7 @@ function onSourceChange() {
       <!-- 执行结果：剥时间戳前缀，超长省略 -->
       <el-table-column label="执行结果" min-width="200" prop="lastMsg" show-overflow-tooltip>
         <template #default="{ row }">
-          <span :title="row.lastMsg">{{ stripTimestamp(row.lastMsg) }}</span>
+          <span>{{ stripTimestamp(row.lastMsg) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="名称" width="150" prop="name" show-overflow-tooltip />

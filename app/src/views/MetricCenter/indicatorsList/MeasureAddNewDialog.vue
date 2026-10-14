@@ -2,7 +2,9 @@
 // 「指标-新」抽屉 —— 1:1 迁移旧 data-view `src/page/base/measure/MeasureAddNew.vue`。
 //
 // 入口：旧 DatasetList 的「指标-新」按钮 → `$refs.addMeasureNew.doEdit(sourceId, record, entryTypeId)`。
-// 新平台由 indicatorDataset 跳到本页并带 `add=new`（见 index.vue 的 openMeasureAddNew）。
+// 新平台由 indicatorDataset **原地**打开本组件（不再跳「指标列表」页签），
+// 见 `../indicatorDataset/index.vue` 的 handleAddMeasureNew 与模板里的
+// `<MeasureAddNewDialog ref="addMeasureNewRef" />`。
 //
 // 与「增加指标」(MeasureAdd) 的差别（逐条对照过两份旧文件）：
 //   1. 顶部保留 源ID / 数据集 两枚 tag + 「加载指标配置样例」按钮；
@@ -112,8 +114,13 @@ async function loadEntryType(id: string, inFlag: boolean) {
   }
 }
 
-/** 旧 doEdit(sourceId, record, entryTypeId) —— 注意旧版**没有** Object.assign(form, record) */
-async function open(sourceId: string | number, record: Record<string, unknown>, id?: string | number) {
+/** 旧 doEdit(sourceId, record, entryTypeId) —— 注意旧版**没有** Object.assign(form, record)。
+ *  三个入参都收 null/undefined（旧 DatasetList 传的 `curRecord.sourceId` 可能为空）。 */
+async function open(
+  sourceId: string | number | null | undefined,
+  record: Record<string, unknown>,
+  id?: string | number | null,
+) {
   entryTypeId.value = id == null ? '' : String(id)
   // 旧版只拿 datasetName 用于展示；outEntryType 取 record.outEntryType 兜底 2101977（第二处 load 是写死的）
   datasetName.value = record?.datasetName == null ? undefined : String(record.datasetName)
