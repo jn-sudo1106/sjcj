@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
@@ -406,6 +406,36 @@ function openSiteEditor(site: Site) {
 }
 
 /**
+ * 删除网站（1014 右键卡片菜单）。高危操作：
+ * 1) 弹窗二次确认；2) 确认后调 site/delete；3) 成功后整体刷新。
+ * 后端语义（反编译 SiteController.delete 确认）：**只删除网站本身（逻辑删除 is_delete=1），不会删源**——
+ * 网站下还有源时后端会直接拒绝（「该网站下还有 N 个源，请先解除关联后再删除」），必须先解除源关联才能删。
+ * 删除当前工作区正在编辑的网站时，其缓存（源/表引用）由 clearCollectAssetsCache 一并清掉。
+ */
+async function onDeleteSite(site: Site) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除网站「${site.name}」吗？该操作不可恢复。删除只移除网站本身、不影响网站下的源（网站下还有源时需先解除关联后才能删除）。`,
+      '删除网站',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const res = await siteApi.siteDelete(site.siteId)
+    if (!res.ok) {
+      ElMessage.error(res.message || '删除网站失败')
+      return
+    }
+    ElMessage.success(`已删除网站「${site.name}」`)
+    await refreshAll()
+  } catch (error) {
+    ElMessage.error(`删除失败: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/**
  * 新建网站（2026-09-18）。落点是列表工具条而不是顶栏：顶栏那个「新建采集」是总览页也挂着的
  * 全局入口（建网站 + 首批源一步到位），而这里是网站列表自己的对象级操作——只开一个空网站，
  * 源随后用侧栏的批量导入灌进去。旧平台也是这么分的（SiteList 操作栏：＋新增网站 / 批量导入 / 导出）。
@@ -508,7 +538,7 @@ onUnmounted(() => {
 
     <!-- 卡片视图 -->
     <div v-if="view === 'card'" v-loading="loading && !!sites.length" class="ca-card-body">
-      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" />
+      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" @delete-site="onDeleteSite" />
     </div>
 
     <!-- 源列表视图（0924-06）：一行一个源，复用网站详情的「源视图」，不限网站 -->
