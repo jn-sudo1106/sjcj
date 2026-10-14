@@ -4,9 +4,9 @@
  * 方案 `设计稿/设计方案/1013-我的视图目录版_开发设计方案_2026-10-13.md`）。
  *
  * 一个视图 = 用户自建的一套目录（广发、浦发各一套），只有自己能看到。左边：视图下拉 + 目录树；
- * 右边：选中目录（含子目录，父目录汇总）里的源，复用源列表 `SourceOverviewView`（`scopeSourceIds` 传算好的源 ID）。
+ * 右边：选中目录里的源（10-14 定：没有根目录、父目录不汇总子目录），复用源列表 `SourceOverviewView`（`scopeSourceIds` 传算好的源 ID）。
  * 目录里可以放单个源，也可以绑定来源组（组成员现拉，跟着组走）；随组带入的源可单独移出（排除，可恢复）。
- * 每次修改立即保存（带 revision），不再有「未保存的修改」。数据模型与操作见 viewDirs.ts。
+ * 每次修改立即保存（真实接口：目录走分类接口、源走 changeSources，见 api/sourceViews.ts）。数据模型与操作见 viewDirs.ts。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -24,9 +24,9 @@ import GroupSourcePicker from './GroupSourcePicker.vue'
 import ViewDirTree, { type DirCommand } from './ViewDirTree.vue'
 import { clearGroupMembersCache, loadGroupMembers } from './groupMembers'
 import {
-  ROOT_ID, addDir, addSources, bindGroup, boundGroups, containerOf, deleteDir, descendantIds, dirById, emptyTree, moveSources,
+  addDir, addSources, allIds, bindGroup, boundGroups, childrenOf, deleteDir, descendantIds, dirById, emptyTree, moveSources,
   onlyViaGroup, pathOf, pathText, placesOf, removeSources, renameDir, resolveIds, restoreExcluded, unbindGroup,
-  type GroupMembers, type ViewTree,
+  type GroupMembers, type ViewContainer, type ViewTree,
 } from './viewDirs'
 
 const route = useRoute()
@@ -40,9 +40,12 @@ const views = ref<SourceView[]>([])
 const loadError = ref('')
 const activeId = ref('')
 const active = computed(() => views.value.find((v) => v.viewId === activeId.value) ?? null)
-const tree = computed<ViewTree>(() => active.value?.tree ?? emptyTree())
-/** 选中的目录；ROOT_ID = 「全部（根目录）」 */
-const selectedDir = ref(ROOT_ID)
+/** 当前视图的目录树（真实接口下切视图时现读） */
+const tree = ref<ViewTree>(emptyTree())
+const treeLoading = ref(false)
+const treeError = ref('')
+/** 选中的目录；'' = 还没有目录 */
+const selectedDir = ref('')
 const backend = ref<SourceViewBackend | null>(null)
 const localLeft = ref(0)
 const importing = ref(false)
@@ -71,13 +74,14 @@ watch(() => boundGroups(tree.value).join(','), () => void loadMembers())
 // ---- 派生 ----
 const scopeIds = computed(() => resolveIds(tree.value, selectedDir.value, members.value))
 const counts = computed(() => {
-  const out: Record<string, number> = { [ROOT_ID]: resolveIds(tree.value, ROOT_ID, members.value).length }
+  const out: Record<string, number> = {}
   for (const d of tree.value.dirs) out[d.id] = resolveIds(tree.value, d.id, members.value).length
   return out
 })
-const container = computed(() => containerOf(tree.value, selectedDir.value) ?? tree.value.root)
-const pathLabel = computed(() => (selectedDir.value === ROOT_ID ? [] : pathOf(tree.value, selectedDir.value).map((d) => d.name)))
-const targetLabel = computed(() => (selectedDir.value === ROOT_ID ? `${active.value?.viewName ?? ''}（根目录）` : pathText(tree.value, selectedDir.value)))
+const totalCount = computed(() => allIds(tree.value, members.value).length)
+const container = computed<ViewContainer>(() => dirById(tree.value, selectedDir.value) ?? { sources: [], groups: [], excluded: [] })
+const pathLabel = computed(() => pathOf(tree.value, selectedDir.value).map((d) => d.name))
+const targetLabel = computed(() => pathText(tree.value, selectedDir.value))
 /** 移到目录的候选：除了当前目录，全部目录（按路径） */
 const moveTargets = computed(() => tree.value.dirs
   .filter((d) => d.id !== selectedDir.value)
@@ -116,30 +120,48 @@ async function load(preferId?: string) {
   selectView(next?.viewId ?? '', true)
 }
 function selectView(viewId: string, keepDir = false) {
-  if (viewId !== activeId.value || !keepDir) selectedDir.value = ROOT_ID
+  if (viewId !== activeId.value || !keepDir) selectedDir.value = ''
   activeId.value = viewId
-  if (selectedDir.value !== ROOT_ID && !dirById(tree.value, selectedDir.value)) selectedDir.value = ROOT_ID
+  void loadTree()
   // 只在本页自己的地址上改（本页被 KeepAlive 缓存，跳到源详情后还活着，见 aa368d5）
   if (onThisPage() && route.query.viewId !== (viewId || undefined)) {
     void router.replace({ path: route.path, query: { ...route.query, viewId: viewId || undefined } })
   }
 }
-
-/** 保存修改后的目录树（带 revision）。视图被别处改过就重读，让用户再操作一次 */
-async function commit(next: ViewTree, done?: string, extra: { display?: ViewDisplay } = {}) {
+/** 读当前视图的目录树；选中的目录没了就选第一个一级目录 */
+async function loadTree() {
   const view = active.value
-  if (!view || saving.value) return false
+  treeError.value = ''
+  if (!view) { tree.value = emptyTree(); selectedDir.value = ''; return }
+  treeLoading.value = true
+  try {
+    const loaded = await sourceViewApi.loadTree(userId.value, view)
+    if (activeId.value !== view.viewId) return
+    tree.value = loaded
+  } catch (e) {
+    if (activeId.value !== view.viewId) return
+    tree.value = emptyTree()
+    treeError.value = `目录加载失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    if (activeId.value === view.viewId) treeLoading.value = false
+  }
+}
+
+/** 保存修改后的目录树，返回保存后的树（新目录换成了真实 ID）。失败时前面的步骤可能已经生效，重读一次 */
+async function commit(next: ViewTree, done?: string): Promise<ViewTree | null> {
+  const view = active.value
+  if (!view || saving.value) return null
   saving.value = true
   try {
-    const saved = await sourceViewApi.update(userId.value, { viewId: view.viewId, revision: view.revision, tree: next, ...extra })
-    views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
+    const saved = await sourceViewApi.saveTree(userId.value, view, tree.value, next)
+    views.value = views.value.map((v) => (v.viewId === saved.view.viewId ? saved.view : v))
+    tree.value = saved.tree
     if (done) ElMessage.success(done)
-    return true
+    return saved.tree
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    ElMessage.error(message)
-    if (/视图已变化/.test(message)) await load(view.viewId)
-    return false
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+    await load(view.viewId)
+    return null
   } finally {
     saving.value = false
   }
@@ -167,7 +189,7 @@ async function submitName({ name, isDefault }: { name: string; isDefault: boolea
       const created = await sourceViewApi.add(userId.value, { viewName: name, tree: emptyTree(), isDefault })
       if (isDefault) setDefaultEntry()
       await load(created.viewId)
-      ElMessage.success(`已新建视图「${created.viewName}」，先建目录或直接往根目录添加源`)
+      ElMessage.success(`已新建视图「${created.viewName}」，先建目录，再往目录里添加源`)
     }
     nameOpen.value = false
   } catch (e) {
@@ -196,12 +218,12 @@ async function onViewCommand(command: string) {
   }
   if (command === 'delete') {
     try {
-      await ElMessageBox.confirm(`删除视图「${view.viewName}」？里面的目录一起删除，源本身不受影响，删除后不能恢复。`, '删除视图', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+      await ElMessageBox.confirm(`删除视图「${view.viewName}」？里面的目录和目录里源的关联关系一起删除，源本身不受影响，删除后不能恢复。`, '删除视图', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
     } catch {
       return
     }
     try {
-      await sourceViewApi.remove(userId.value, { viewId: view.viewId, revision: view.revision })
+      await sourceViewApi.remove(userId.value, view)
       if (view.isDefault && directories.preference === 'view') directories.setPreference('system')
       activeId.value = ''
       await load()
@@ -224,13 +246,14 @@ async function askDirName(title: string, value = ''): Promise<string | null> {
     return null
   }
 }
-async function newDir(parentId: string) {
-  const parentLabel = parentId === ROOT_ID ? '' : `在「${pathText(tree.value, parentId)}」下`
-  const name = await askDirName(`${parentLabel}新建${parentId === ROOT_ID ? '目录' : '子目录'}`)
+/** parentId 为 null 时建一级目录 */
+async function newDir(parentId: string | null) {
+  const name = await askDirName(parentId ? `在「${pathText(tree.value, parentId)}」下新建子目录` : '新建目录')
   if (!name) return
-  let createdId = ''
-  const next = tryTree(() => { const r = addDir(tree.value, parentId, name); createdId = r.id; return r.tree })
-  if (next && await commit(next)) selectedDir.value = createdId
+  const next = tryTree(() => addDir(tree.value, parentId, name).tree)
+  const saved = next && await commit(next)
+  // 真实接口下新目录的 ID 换成了分类 ID，按「同级同名」找（同级不重名）
+  if (saved) selectedDir.value = saved.dirs.find((d) => d.parentId === parentId && d.name === name)?.id ?? selectedDir.value
 }
 async function onDirCommand(command: DirCommand, id: string) {
   if (command === 'newChild') return newDir(id)
@@ -245,15 +268,20 @@ async function onDirCommand(command: DirCommand, id: string) {
   }
   if (command === 'delete') {
     const subCount = descendantIds(tree.value, id).length - 1
+    const danger = { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' as const, confirmButtonClass: 'el-button--danger' }
     try {
-      await ElMessageBox.confirm(`删除目录「${pathText(tree.value, id)}」${subCount ? `及 ${subCount} 个子目录` : ''}？目录里的源只是不在这个视图里了，源本身不受影响。`, '删除目录', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+      await ElMessageBox.confirm(`删除目录「${pathText(tree.value, id)}」？目录里的源只是不在这个视图里了，源本身不受影响。`, '删除目录', danger)
+      // 10-14 定：有子目录时再提醒一次，确认后子目录和它们的源关联关系一起删
+      if (subCount) await ElMessageBox.confirm(`「${pathText(tree.value, id)}」下还有 ${subCount} 个子目录，会一起删除，子目录里源的关联关系也一起删除（源本身不受影响）。确定继续？`, '目录下有子目录', { ...danger, confirmButtonText: '一起删除' })
     } catch {
       return
     }
-    await commit(deleteDir(tree.value, id), '已删除目录')
+    await commit(deleteDir(tree.value, id), subCount ? `已删除目录及 ${subCount} 个子目录` : '已删除目录')
   }
 }
-watch(tree, () => { if (selectedDir.value !== ROOT_ID && !dirById(tree.value, selectedDir.value)) selectedDir.value = ROOT_ID })
+watch(tree, () => {
+  if (!dirById(tree.value, selectedDir.value)) selectedDir.value = childrenOf(tree.value, null)[0]?.id ?? ''
+})
 
 // ---- 添加源 / 绑定来源组 ----
 const pickerOpen = ref(false)
@@ -281,9 +309,8 @@ async function restore() {
 async function removeSelected(ids: string[]) {
   if (!ids.length) return
   const via = ids.filter((id) => onlyViaGroup(tree.value, selectedDir.value, id, members.value)).length
-  const where = selectedDir.value === ROOT_ID ? '这个视图' : `「${targetLabel.value}」`
   try {
-    await ElMessageBox.confirm(`把 ${ids.length} 个源移出${where}？${via ? `其中 ${via} 个是随来源组带进来的，会在这里排除（来源组本身不变，可以恢复）。` : ''}源本身不受影响。`, '移出源', { confirmButtonText: '移出', cancelButtonText: '取消', type: 'warning' })
+    await ElMessageBox.confirm(`把 ${ids.length} 个源移出「${targetLabel.value}」？${via ? `其中 ${via} 个是随来源组带进来的，会在这里排除（来源组本身不变，可以恢复）。` : ''}源本身不受影响。`, '移出源', { confirmButtonText: '移出', cancelButtonText: '取消', type: 'warning' })
   } catch {
     return
   }
@@ -292,7 +319,7 @@ async function removeSelected(ids: string[]) {
 async function moveSelected(ids: string[], toId: string) {
   if (!ids.length) return
   const next = tryTree(() => moveSources(tree.value, selectedDir.value, toId, ids, members.value))
-  if (next) await commit(next, `已把 ${ids.length} 个源${selectedDir.value === ROOT_ID ? '加到' : '移到'}「${pathText(tree.value, toId)}」`)
+  if (next) await commit(next, `已把 ${ids.length} 个源移到「${pathText(tree.value, toId)}」`)
 }
 
 // ---- 显示设置 ----
@@ -304,7 +331,21 @@ function toggleColumn(key: string, show: boolean) {
   displayDraft.value.hiddenColumns = show ? hidden.filter((k) => k !== key) : [...hidden, key]
 }
 async function applyDisplay() {
-  if (await commit(tree.value, '显示设置已保存', { display: displayDraft.value })) displayOpen.value = false
+  const view = active.value
+  if (!view || saving.value) return
+  saving.value = true
+  try {
+    const saved = await sourceViewApi.update(userId.value, { viewId: view.viewId, revision: view.revision, display: displayDraft.value })
+    views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
+    ElMessage.success('显示设置已保存')
+    displayOpen.value = false
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    ElMessage.error(message)
+    if (/视图已变化/.test(message)) await load(view.viewId)
+  } finally {
+    saving.value = false
+  }
 }
 
 // ---- 本机视图导入账号（接口上线后） ----
@@ -380,12 +421,13 @@ onMounted(() => {
           </el-dropdown>
         </div>
         <template v-if="active">
-          <div class="mv-nav-title"><strong>目录</strong><small>{{ tree.dirs.length }} 个目录 · {{ counts[ROOT_ID] ?? 0 }} 个源</small></div>
+          <div class="mv-nav-title"><strong>目录</strong><small>{{ treeLoading ? '加载中…' : `${tree.dirs.length} 个目录 · ${totalCount} 个源` }}</small></div>
+          <p v-if="treeError" class="mv-tree-error" data-testid="mv-tree-error">{{ treeError }}</p>
           <div class="mv-tree">
             <ViewDirTree :tree="tree" :selected="selectedDir" :counts="counts" :group-name="groupName" @select="selectedDir = $event" @command="onDirCommand" />
           </div>
           <div class="mv-nav-foot">
-            <el-button size="small" :icon="Plus" data-testid="mv-new-dir" @click="newDir(selectedDir)">{{ selectedDir === ROOT_ID ? '目录' : '子目录' }}</el-button>
+            <el-button size="small" :icon="Plus" data-testid="mv-new-dir" @click="newDir(null)">目录</el-button>
           </div>
         </template>
         <div v-else class="mv-empty">{{ loadError || '还没有视图，点上面「＋」新建' }}</div>
@@ -400,32 +442,34 @@ onMounted(() => {
         <template v-if="active">
           <div class="mv-toolbar">
             <span class="mv-path" data-testid="mv-path">
-              {{ active.viewName }}<template v-for="(p, i) in pathLabel" :key="i"> / <b v-if="i === pathLabel.length - 1">{{ p }}</b><template v-else>{{ p }}</template></template><template v-if="selectedDir === ROOT_ID"> / <b>全部（根目录）</b></template>
+              {{ active.viewName }}<template v-for="(p, i) in pathLabel" :key="i"> / <b v-if="i === pathLabel.length - 1">{{ p }}</b><template v-else>{{ p }}</template></template>
             </span>
             <span class="mv-badge">🔒 仅自己可见</span>
             <div class="mv-actions">
-              <button class="mv-icon-btn" type="button" title="添加源 / 绑定来源组" aria-label="添加源" data-testid="mv-add-sources" @click="pickerOpen = true"><el-icon><Plus /></el-icon></button>
+              <button class="mv-icon-btn" type="button" title="添加源 / 绑定来源组" aria-label="添加源" data-testid="mv-add-sources" :disabled="!selectedDir" @click="pickerOpen = true"><el-icon><Plus /></el-icon></button>
               <button class="mv-icon-btn" type="button" title="显示设置" aria-label="显示设置" data-testid="mv-display" @click="openDisplay"><el-icon><Setting /></el-icon></button>
               <button class="mv-icon-btn" type="button" title="刷新（重新拉来源组成员）" aria-label="刷新" @click="refresh"><el-icon><Refresh /></el-icon></button>
             </div>
           </div>
-          <el-alert v-if="tree.convertedFromCondition" type="info" show-icon :closable="false" class="mv-alert" data-testid="mv-converted" title="这个视图原来是按条件筛选的，现在视图改成了目录：请新建目录或直接往根目录添加源（10-13 起不再支持条件视图）" />
+          <el-alert v-if="tree.convertedFromCondition" type="info" show-icon :closable="false" class="mv-alert" data-testid="mv-converted" title="这个视图原来是按条件筛选的，现在视图改成了目录：请新建目录再添加源（10-13 起不再支持条件视图）" />
           <el-alert v-if="membersError" type="error" show-icon :closable="false" class="mv-alert" :title="membersError" />
           <div v-if="container.groups.length || container.excluded.length" class="mv-groups" data-testid="mv-group-bar">
-            <span v-if="container.groups.length" class="mv-groups-label">{{ selectedDir === ROOT_ID ? '根目录' : '这个目录' }}绑定的来源组：</span>
+            <span v-if="container.groups.length" class="mv-groups-label">这个目录绑定的来源组：</span>
             <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里的源会自动出现在这里；在「我的分组」里维护成员">
               来源组 <b>{{ groupName(g) }}</b> · {{ (members[g] ?? []).filter((m) => !container.excluded.includes(m)).length }}/{{ (members[g] ?? []).length }} 个源
               <button type="button" title="解绑这个来源组" :aria-label="`解绑来源组 ${groupName(g)}`" data-testid="mv-unbind" @click="unbind(g)">×</button>
             </span>
             <span v-if="container.excluded.length" class="mv-groups-label">已从来源组排除 {{ container.excluded.length }} 个源 <el-button link type="primary" size="small" data-testid="mv-restore" @click="restore">恢复</el-button></span>
           </div>
+          <el-empty v-if="!selectedDir" :description="treeLoading ? '目录加载中…' : '这个视图还没有目录：点左下「＋ 目录」新建，再往目录里添加源'" />
           <SourceOverviewView
+            v-else
             :key="`${activeId}:${selectedDir}`"
             current-site-id=""
             group-ops
             :view-state="listState"
             :scope-source-ids="scopeIds"
-            :scope-empty-text="selectedDir === ROOT_ID ? '这个视图里还没有源：可以直接往根目录添加源、绑定来源组，也可以先在左边建目录' : '这个目录里还没有源，点右上「＋」添加'"
+            :scope-empty-text="'这个目录里还没有源，点右上「＋」添加'"
             extra-column-label="所在目录"
             @open-source="openSource"
             @open-source-data="openSource($event, 'data')"
@@ -438,14 +482,14 @@ onMounted(() => {
             </template>
             <template #selection-actions="{ ids }">
               <el-dropdown v-if="moveTargets.length" trigger="click" max-height="320px" @command="(to: string) => moveSelected(ids, to)">
-                <el-button size="small" data-testid="mv-move">{{ selectedDir === ROOT_ID ? '加到目录' : '移到目录' }} ▾</el-button>
+                <el-button size="small" data-testid="mv-move">移到目录 ▾</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item v-for="t in moveTargets" :key="t.id" :command="t.id">{{ t.label }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
-              <el-button size="small" data-testid="mv-remove-sources" @click="removeSelected(ids)">{{ selectedDir === ROOT_ID ? '从视图移出' : '移出此目录' }}</el-button>
+              <el-button size="small" data-testid="mv-remove-sources" @click="removeSelected(ids)">移出此目录</el-button>
             </template>
           </SourceOverviewView>
         </template>
@@ -472,7 +516,7 @@ onMounted(() => {
       :title="nameMode === 'newView' ? '新建视图' : '重命名视图'"
       :initial-name="nameMode === 'renameView' ? active?.viewName : ''"
       :show-default="nameMode === 'newView'"
-      :summary="nameMode === 'newView' ? '视图只有你自己能看到。建好后可以建多级目录，往目录里添加源或绑定来源组。' : ''"
+      :summary="nameMode === 'newView' ? '视图只有你自己能看到。建好后先建目录（可以多级），再往目录里添加源或绑定来源组。' : ''"
       :busy="nameBusy"
       :error="nameError"
       @submit="submitName"
@@ -525,6 +569,7 @@ onMounted(() => {
 .mv-view-switch :deep(.el-select__wrapper) { font-size: 13px; }
 .mv-tree { flex: 1; min-height: 0; overflow-y: auto; }
 .mv-nav-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rc-border-soft); }
+.mv-tree-error { margin: 0 0 6px; font-size: 12px; color: var(--el-color-danger); line-height: 1.5; }
 .mv-empty { color: var(--rc-faint); font-size: 12px; padding: 16px 8px; text-align: center; }
 .mv-note { font-size: 12px; color: var(--rc-faint); line-height: 1.6; margin: 8px 0 0; }
 .mv-import { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: #eff6ff; color: #1e40af; font-size: 12px; line-height: 1.5; }

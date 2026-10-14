@@ -1,19 +1,19 @@
 <script setup lang="ts">
 /**
  * 「我的视图」目录树（2026-10-13 目录版，原型 `设计稿/原型设计/源管理_我的视图_目录树原型_2026-10-13.html`）。
- * 第一行是「全部（根目录）」，下面是多级目录；每行显示源数（父目录汇总子目录）、绑了来源组的出「组」标记，
- * 悬停出「⋯」：新建子目录 / 添加源 / 重命名 / 删除（根目录只有添加源）。只负责展示和发事件，改树由父级做。
+ * 多级目录（10-14 定：没有根目录、父目录不汇总）；每行显示目录自己的源数、绑了来源组的出「组」标记，
+ * 悬停出「⋯」：新建子目录 / 添加源 / 重命名 / 删除。只负责展示和发事件，改树由父级做。
  */
 import { computed, ref } from 'vue'
-import { ArrowRight, Folder, FolderOpened, Files, MoreFilled } from '@element-plus/icons-vue'
-import { ROOT_ID, childrenOf, type ViewTree } from './viewDirs'
+import { ArrowRight, Folder, FolderOpened, MoreFilled } from '@element-plus/icons-vue'
+import { childrenOf, type ViewTree } from './viewDirs'
 
 export type DirCommand = 'newChild' | 'addSources' | 'rename' | 'delete'
 
 const props = defineProps<{
   tree: ViewTree
   selected: string
-  /** 目录 ID（含 ROOT_ID）→ 看到的源数 */
+  /** 目录 ID → 源数 */
   counts: Record<string, number>
   groupName: (id: string) => string
 }>()
@@ -49,27 +49,6 @@ const groupsTip = (groups: string[]) => `绑定了来源组：${groups.map(props
 <template>
   <div class="vdt" data-testid="view-dir-tree">
     <div
-      class="vdt-row"
-      :class="{ on: selected === ROOT_ID }"
-      data-testid="view-dir-root"
-      title="根目录：这个视图里的全部源；也可以直接在这里添加源、绑定来源组"
-      @click="emit('select', ROOT_ID)"
-    >
-      <el-icon class="vdt-ico"><Files /></el-icon>
-      <span class="vdt-name">全部<small>（根目录）</small></span>
-      <span v-if="tree.root.groups.length" class="vdt-group" :title="groupsTip(tree.root.groups)">组</span>
-      <span class="vdt-count">{{ counts[ROOT_ID] ?? 0 }}</span>
-      <el-dropdown trigger="click" @command="(c: DirCommand) => emit('command', c, ROOT_ID)" @click.stop>
-        <button class="vdt-more" type="button" title="根目录操作" aria-label="根目录操作" @click.stop><el-icon><MoreFilled /></el-icon></button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="newChild">新建目录</el-dropdown-item>
-            <el-dropdown-item command="addSources">添加源 / 绑定来源组</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-    </div>
-    <div
       v-for="row in rows"
       :key="row.id"
       class="vdt-row"
@@ -97,7 +76,7 @@ const groupsTip = (groups: string[]) => `绑定了来源组：${groups.map(props
         </template>
       </el-dropdown>
     </div>
-    <div v-if="!rows.length" class="vdt-empty">还没有目录，点下面「＋ 目录」新建；也可以直接往根目录添加源</div>
+    <div v-if="!rows.length" class="vdt-empty">还没有目录，点下面「＋ 目录」新建，再往目录里添加源</div>
   </div>
 </template>
 
@@ -115,7 +94,6 @@ const groupsTip = (groups: string[]) => `绑定了来源组：${groups.map(props
 .vdt-ico { flex: none; margin-right: 2px; color: #94a3b8; font-size: 15px; }
 .vdt-row.on .vdt-ico { color: var(--el-color-primary); }
 .vdt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vdt-name small { color: var(--rc-faint); font-size: 12px; }
 .vdt-group { flex: none; padding: 0 5px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; line-height: 16px; }
 .vdt-count { flex: none; min-width: 16px; text-align: right; color: var(--rc-faint); font-size: 11px; }
 .vdt-more { visibility: hidden; flex: none; width: 22px; height: 22px; display: inline-grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--rc-faint); cursor: pointer; }
