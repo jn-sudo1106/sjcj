@@ -5,6 +5,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
+import FlowVersionHistory from './FlowVersionHistory.vue'
 import { flowCenterApi, flowVersionApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
@@ -438,5 +439,45 @@ describe('流程详情抽屉 · 登录口令不进 flowConf（F3）', () => {
     const memCollect = canvas.configs['web-list']?.collectCfg as unknown as { password?: string; loginConfigs?: { loginPwd?: string }[] } | undefined
     expect(memCollect?.password).toBe('p@ss0rd')
     expect(memCollect?.loginConfigs?.[0]?.loginPwd).toBe('')
+  })
+})
+
+describe('流程详情抽屉 · 查看历史版本（2026-10-14）', () => {
+  const OVERVIEW = {
+    enabled: true, curVer: 2, nextVer: 3, publishId: '900', draftId: null,
+    versions: [
+      { versionId: '900', flowVer: 2, ver: 1, state: 'C', isLock: 0, isDelete: 0, baseId: '748', publishDt: '2026-10-11 01:51:01' },
+      { versionId: '748', flowVer: 1, ver: 1, state: 'C', isLock: 0, isDelete: 0, baseId: null, publishDt: '2026-10-10 13:10:00' },
+    ],
+  }
+
+  it('选历史版本：按该版本重读步骤，出只读提示条、保存等按钮禁用；返回当前版本后恢复', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(OVERVIEW)
+    const w = mountDrawer()
+    await flushPromises()
+    const steps = vi.mocked(flowCenterApi.steps)
+    expect(steps).toHaveBeenLastCalledWith('flow-1')
+    expect(w.find('[data-testid="flow-history-banner"]').exists()).toBe(false)
+
+    w.findComponent(FlowVersionHistory).vm.$emit('select', '748')
+    await flushPromises()
+    expect(steps).toHaveBeenLastCalledWith('flow-1', { versionId: '748' })
+    expect(w.get('[data-testid="flow-history-banner"]').text()).toContain('v1（已发布）')
+    expect(w.get('[data-testid="flow-history-banner"]').text()).toContain('节点配置不随版本保存')
+    expect(saveButton(w).attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="flow-apply-to-source"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[aria-label="流程名称"]').attributes('disabled')).toBeDefined()
+
+    await w.get('[data-testid="flow-history-exit"]').trigger('click')
+    await flushPromises()
+    expect(steps).toHaveBeenLastCalledWith('flow-1')
+    expect(w.find('[data-testid="flow-history-banner"]').exists()).toBe(false)
+    expect(saveButton(w).attributes('disabled')).toBeUndefined()
+  })
+
+  it('版本未启用的流程不显示历史版本入口', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    expect(w.findComponent(FlowVersionHistory).exists()).toBe(false)
   })
 })

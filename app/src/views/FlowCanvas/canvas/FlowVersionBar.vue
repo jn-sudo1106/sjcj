@@ -103,7 +103,8 @@ async function onAbandon() {
       <span v-else class="fvs-tag" data-testid="flow-version-published">已发布 v{{ version.overview?.curVer ?? '—' }}</span>
     </el-tooltip>
     <span v-if="version.draft?.isLock === 1" class="fvs-tag locked" data-testid="flow-version-locked">已锁定</span>
-    <template v-if="version.draft">
+    <!-- 查看历史版本时不给放弃 / 发布（2026-10-14），避免对着历史版本点发布 -->
+    <template v-if="version.draft && !version.history">
       <button class="fvs-btn" type="button" :disabled="busy" data-testid="flow-version-abandon" @click="onAbandon">放弃</button>
       <button class="fvs-btn publish" type="button" :disabled="busy" data-testid="flow-version-publish" @click="onPublish">发布 v{{ version.draft.flowVer }}</button>
     </template>

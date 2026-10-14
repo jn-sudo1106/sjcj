@@ -3908,6 +3908,15 @@ export interface FlowVersionRow {
   /** 0 正常；-1 已放弃 / 归档 */
   isDelete: number
   baseId: string | null
+  /** 2026-10-14 历史版本列表用（217 实测 overview 都有返回）：创建 / 发布 / 放弃或归档的时间和人 */
+  createDt?: string | null
+  createBy?: string | null
+  publishDt?: string | null
+  publishBy?: string | null
+  deleteDt?: string | null
+  deleteBy?: string | null
+  /** 版本内容指纹：放弃的草稿与基线相同 = 草稿里什么都没改 */
+  contentHash?: string | null
 }
 
 export interface FlowVersionOverview {
@@ -3944,6 +3953,13 @@ export const flowVersionApi = {
         isLock: Number(v.isLock ?? 0),
         isDelete: Number(v.isDelete ?? 0),
         baseId: str(v.baseId),
+        createDt: str(v.createDt),
+        createBy: str(v.createBy),
+        publishDt: str(v.publishDt),
+        publishBy: str(v.publishBy),
+        deleteDt: str(v.deleteDt),
+        deleteBy: str(v.deleteBy),
+        contentHash: str(v.contentHash),
       })),
     }
   },
