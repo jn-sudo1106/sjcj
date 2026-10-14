@@ -105,6 +105,7 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 **分仓协作（2026-10-09 起，原「一次 push 双写两边」作废）**
 
 - 分工：姜楠在本地改；leo 只改内网 master；zhonghe 只改 CNB master。本地仓库是唯一同时连着两边的地方。
+- **CNB 提交作者（2026-10-14 核对）**：外网线 master 上「迁移模板配置」系列（分词/提示词/数据字典/索引、指标、路由调整等）的**实际提交作者是 haigang（haigang <17610063690@163.com>）**，经 CNB 推上来。涉及这些模块的代码问题/Review 找 haigang（不是 zhonghe）。判断归属以 `git blame`/`git log --author` 为准。
 - 本地两条线：
   - 外网线 `master`：跟 CNB master，放自己的功能和 zhonghe 的改动，`git push` 推 CNB；
   - 内网线（分支名记在 `git config sjcj.intranetBranch`，当前 `merge/ce-leo-1008`，worktree 在 `../wt-merge-ce-leo`）：外网线全部 + leo 的代码 + 只能改在 leo 代码上的东西。
