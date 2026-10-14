@@ -12,7 +12,7 @@ import { h } from 'vue'
 import ElementPlus, { ElSelect } from 'element-plus'
 import DataIndexConfigPage from './index.vue'
 import { dataIndexConfigApi } from '@/api/templateConfig'
-import { downloadCsv, toCsv } from '@/utils/csv'
+import { downloadXlsx } from '@/utils/format/xlsxExport'
 
 vi.mock('@/api/templateConfig', () => ({
   dataIndexConfigApi: {
@@ -35,10 +35,9 @@ vi.mock('@/api/templateConfig', () => ({
 }))
 
 // jsdom 没有 URL.createObjectURL，且下载会真触发 a.click —— 整个 util mock 掉，只验调用参数
-vi.mock('@/utils/csv', () => ({
-  toCsv: vi.fn(() => 'csv-content'),
-  downloadCsv: vi.fn(),
-  csvDateTag: vi.fn(() => '20261014'),
+vi.mock('@/utils/format/xlsxExport', () => ({
+  downloadXlsx: vi.fn(),
+  exportDateTag: vi.fn(() => '20261014'),
 }))
 
 const dialogOpen = vi.fn()
@@ -105,8 +104,7 @@ beforeEach(() => {
   vi.mocked(dataIndexConfigApi.page).mockClear()
   vi.mocked(dataIndexConfigApi.changeStatus).mockClear()
   vi.mocked(dataIndexConfigApi.allCode).mockClear()
-  vi.mocked(downloadCsv).mockClear()
-  vi.mocked(toCsv).mockClear()
+  vi.mocked(downloadXlsx).mockClear()
 })
 
 afterEach(() => {
@@ -200,7 +198,7 @@ describe('DataIndexConfigPage', () => {
     expect(cells[6]).toBe('启用')
   })
 
-  it('「导出」按已执行的筛选条件拉前 10000 条生成 CSV，状态列导出成中文，文件名带日期后缀', async () => {
+  it('「导出」按已执行的筛选条件拉前 10000 条生成 xlsx，状态列导出成中文，文件名带日期后缀', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
@@ -214,9 +212,12 @@ describe('DataIndexConfigPage', () => {
     await flushPromises()
 
     expect(lastPageQuery()).toMatchObject({ pageNo: 1, pageSize: 10000, name: '支行' })
-    expect(vi.mocked(toCsv).mock.calls[0]?.[0]).toEqual(['id', '编码', '类型', '数据内容', '数据别名', '数据ID', '状态', '创建时间', '修改时间'])
-    expect(vi.mocked(toCsv).mock.calls[0]?.[1]?.[0]).toEqual([41, 'BRANCH_NAME', 'ORG', '城南支行', '城南', '1001', '启用', '2025-04-22 18:56:48', '2025-05-09 10:12:33'])
-    expect(vi.mocked(downloadCsv).mock.calls[0]?.[0]).toBe('数据字典列表_20261014')
+    const [fileName, xlsxRows, sheetName] = vi.mocked(downloadXlsx).mock.calls[0] ?? []
+    expect(fileName).toBe('数据字典列表_20261014')
+    expect(sheetName).toBe('数据字典列表')
+    // 表头 = 旧导出列（去掉操作列）；id 保持数值单元格，与旧 xlsx-style 一致
+    expect(xlsxRows?.[0]).toEqual(['id', '编码', '类型', '数据内容', '数据别名', '数据ID', '状态', '创建时间', '修改时间'])
+    expect(xlsxRows?.[1]).toEqual([41, 'BRANCH_NAME', 'ORG', '城南支行', '城南', '1001', '启用', '2025-04-22 18:56:48', '2025-05-09 10:12:33'])
   })
 
   it('导出用的是独立参数，不会把 pageSize=10000 污染到之后的列表查询', async () => {
@@ -239,7 +240,7 @@ describe('DataIndexConfigPage', () => {
     await buttonInFilter(wrapper, '导出').trigger('click')
     await flushPromises()
 
-    expect(downloadCsv).not.toHaveBeenCalled()
+    expect(downloadXlsx).not.toHaveBeenCalled()
     expect(rowsOf(wrapper)).toHaveLength(3)
   })
 

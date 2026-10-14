@@ -75,7 +75,7 @@ function open(record?: ChatFlowStep | null) {
     form[key] = value == null ? '' : String(value)
   }
   const rawRetry = record?.retryCount
-  retryCount.value = rawRetry == null || rawRetry === '' ? undefined : Number(rawRetry)
+  retryCount.value = rawRetry == null ? undefined : Number(rawRetry)
   visible.value = true
 }
 

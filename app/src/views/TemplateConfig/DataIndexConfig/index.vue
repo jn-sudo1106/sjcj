@@ -12,9 +12,10 @@
 //    仍然只发一次 /data-index-config/status（参数走 body，口径照旧），行为等价、可逆。旧列表本来就在状态列
 //    显示文字，换成开关不动列结构。旧版启停成功后还要重查当前页，这里与通用层、问句改写一致改为
 //    乐观更新（失败回滚），少一次请求。
-// 2. 旧版导出用 xlsx-style 生成 .xlsx；本项目没有该依赖，改用现成的 utils/csv（带 BOM，
-//    Excel/WPS 直接打开不乱码），文件名口径不变：数据字典列表_YYYYMMDD。导出的状态列渲染成 启用/禁用
-//    （旧版导出的是原码值 0/1，打开表还得对照字典看）。
+// 2. 旧版导出用 xlsx-style 带单元格样式生成 .xlsx；本项目不引这个依赖，改用自研的
+//    utils/format/xlsxExport 写出同样可被 Excel/WPS 直接打开的 .xlsx——列、列名、取数口径
+//    （当前筛选 + 前 10000 条）与文件名（数据字典列表_YYYYMMDD）都照旧版，只不带表头底色/字体/列宽。
+//    导出的状态列渲染成 启用/禁用（旧版导出的是原码值 0/1，打开表还得对照字典看）。
 // 3. 旧版导出会直接改 this.queryParam 的 pageNo/pageSize，污染后续搜索；这里导出用独立参数。
 // 4. 「编码」下拉加了 clearable：旧版选中一个编码后没有任何回退到「全部」的入口（没有空值项，也没开 allowClear）。
 //    旧版 @search 每次都重新拉全量（queryAllCode 根本没用到入参），这里改为挂载时拉一次、下拉内前端过滤，
@@ -26,7 +27,7 @@ import { ElMessage } from 'element-plus'
 import { Download, Plus, Search } from '@element-plus/icons-vue'
 import { dataIndexConfigApi } from '@/api/templateConfig'
 import type { DataIndexCodeOption, DataIndexConfig } from '@/api/types/template'
-import { csvDateTag, downloadCsv, toCsv, type CsvCell } from '@/utils/csv'
+import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
 import {
   DATA_INDEX_CONFIG_STATUS_OPTIONS,
   STATUS_ALL_OPTION_LABEL,
@@ -141,13 +142,13 @@ async function exportData() {
   exporting.value = true
   try {
     const res = await dataIndexConfigApi.page({ pageNo: 1, pageSize: 10000, ...applied })
-    const data = res.list ?? []
-    const csvRows: CsvCell[][] = data.map((row) =>
-      EXPORT_COLUMNS.map((col) =>
-        col.prop === 'status' ? dataIndexConfigStatusLabel(row.status) : ((row[col.prop] ?? '') as CsvCell),
-      ),
-    )
-    downloadCsv(`数据字典列表_${csvDateTag()}`, toCsv(EXPORT_COLUMNS.map((col) => col.label), csvRows))
+    const rows: XlsxCell[][] = [EXPORT_COLUMNS.map((col) => col.label)]
+    for (const row of res.list ?? []) {
+      rows.push(EXPORT_COLUMNS.map((col) =>
+        col.prop === 'status' ? dataIndexConfigStatusLabel(row.status) : ((row[col.prop] ?? '') as XlsxCell),
+      ))
+    }
+    downloadXlsx(`数据字典列表_${exportDateTag()}`, rows, '数据字典列表')
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '加载数据失败')
   } finally {

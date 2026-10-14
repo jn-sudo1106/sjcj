@@ -13,7 +13,7 @@ import { h } from 'vue'
 import ElementPlus, { ElSelect } from 'element-plus'
 import WordSegmentConfigPage from './index.vue'
 import { wordSegmentApi } from '@/api/templateConfig'
-import { downloadCsv, toCsv } from '@/utils/csv'
+import { downloadXlsx } from '@/utils/format/xlsxExport'
 
 vi.mock('@/api/templateConfig', () => ({
   wordSegmentApi: {
@@ -33,10 +33,9 @@ vi.mock('@/api/templateConfig', () => ({
 }))
 
 // jsdom 没有 URL.createObjectURL，且下载会真触发 a.click —— 整个 util mock 掉，只验调用参数
-vi.mock('@/utils/csv', () => ({
-  toCsv: vi.fn(() => 'csv-content'),
-  downloadCsv: vi.fn(),
-  csvDateTag: vi.fn(() => '20261014'),
+vi.mock('@/utils/format/xlsxExport', () => ({
+  downloadXlsx: vi.fn(),
+  exportDateTag: vi.fn(() => '20261014'),
 }))
 
 const editOpen = vi.fn()
@@ -111,8 +110,7 @@ beforeEach(() => {
   batchOpen.mockReset()
   vi.mocked(wordSegmentApi.page).mockClear()
   vi.mocked(wordSegmentApi.changeStatus).mockClear()
-  vi.mocked(downloadCsv).mockClear()
-  vi.mocked(toCsv).mockClear()
+  vi.mocked(downloadXlsx).mockClear()
 })
 
 afterEach(() => {
@@ -194,7 +192,7 @@ describe('WordSegmentConfigPage', () => {
     expect(cells[4]).toBe('启用')
   })
 
-  it('「导出」按已执行的筛选条件拉前 10000 条生成 CSV，状态列导出成中文，文件名带日期后缀', async () => {
+  it('「导出」按已执行的筛选条件拉前 10000 条生成 xlsx，状态列导出成中文，文件名带日期后缀', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
@@ -208,9 +206,11 @@ describe('WordSegmentConfigPage', () => {
     await flushPromises()
 
     expect(lastPageQuery()).toMatchObject({ pageNo: 1, pageSize: 10000, name: '分行' })
-    expect(vi.mocked(toCsv).mock.calls[0]?.[0]).toEqual(['id', '类型', '内容', '分词类型', '状态', '创建时间', '修改时间'])
-    expect(vi.mocked(toCsv).mock.calls[0]?.[1]?.[0]).toEqual([2669, 'ORGANIZATION', '新城科技园', 'base', '启用', '2025-03-25 15:27:18', '2025-03-25 15:27:18'])
-    expect(vi.mocked(downloadCsv).mock.calls[0]?.[0]).toBe('分词配置列表_20261014')
+    const [fileName, xlsxRows, sheetName] = vi.mocked(downloadXlsx).mock.calls[0] ?? []
+    expect(fileName).toBe('分词配置列表_20261014')
+    expect(sheetName).toBe('分词配置列表')
+    expect(xlsxRows?.[0]).toEqual(['id', '类型', '内容', '分词类型', '状态', '创建时间', '修改时间'])
+    expect(xlsxRows?.[1]).toEqual([2669, 'ORGANIZATION', '新城科技园', 'base', '启用', '2025-03-25 15:27:18', '2025-03-25 15:27:18'])
   })
 
   it('导出用的是独立参数，不会把 pageSize=10000 污染到之后的列表查询', async () => {
@@ -233,7 +233,7 @@ describe('WordSegmentConfigPage', () => {
     await buttonInFilter(wrapper, '导出').trigger('click')
     await flushPromises()
 
-    expect(downloadCsv).not.toHaveBeenCalled()
+    expect(downloadXlsx).not.toHaveBeenCalled()
     expect(rowsOf(wrapper)).toHaveLength(3)
   })
 
