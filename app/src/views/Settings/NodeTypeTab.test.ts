@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import NodeTypeTab from './NodeTypeTab.vue'
 import { configApi, type NodeType } from '@/api'
 import { useAuthStore } from '@/stores/auth'
@@ -51,12 +51,11 @@ describe('节点类型页面', () => {
     vi.spyOn(configApi, 'nodeTypeList').mockResolvedValue(ROWS.map((r) => ({ ...r })))
   })
 
-  it('列出节点类型；没有删除按钮', async () => {
+  it('列出节点类型；管理员每行有详情 / 编辑 / 删除', async () => {
     const { wrapper } = await mountAs(['admin'])
     expect(wrapper.findAll('[data-testid="node-type-row"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('共 2 个节点类型')
-    expect(wrapper.text()).not.toContain('删除</')
-    expect(wrapper.findAll('button').some((b) => b.text() === '删除')).toBe(false)
+    expect(wrapper.findAll('[data-testid="node-type-delete"]')).toHaveLength(2)
   })
 
   it('按名称查询把关键词传给接口', async () => {
@@ -67,10 +66,11 @@ describe('节点类型页面', () => {
     expect(configApi.nodeTypeList).toHaveBeenLastCalledWith('抓取')
   })
 
-  it('只读角色看不到新建 / 编辑', async () => {
+  it('只读角色看不到新建 / 编辑 / 删除', async () => {
     const { wrapper } = await mountAs(['read'])
     expect(wrapper.find('[data-testid="node-type-create"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="node-type-edit"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="node-type-delete"]').exists()).toBe(false)
   })
 
   it('新建不填类型 ID 时不带 sourceType；成功后刷新列表和抓取类型字典', async () => {
@@ -111,5 +111,48 @@ describe('节点类型页面', () => {
     await flushPromises()
     await clickSave()
     expect(add).not.toHaveBeenCalled()
+  })
+
+  describe('删除（2026-10-14）', () => {
+    it('二次确认文案同旧平台；确认后删除，成功提示并刷新列表和抓取类型字典', async () => {
+      const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+      const del = vi.spyOn(configApi, 'nodeTypeDelete').mockResolvedValue({ ok: true, message: '删除成功' })
+      const success = vi.spyOn(ElMessage, 'success')
+      const { wrapper, reload } = await mountAs(['admin'])
+
+      await wrapper.findAll('[data-testid="node-type-delete"]')[1]!.trigger('click')
+      await flushPromises()
+
+      expect(confirm).toHaveBeenCalledWith('是否确认删除源类型 [ 160 ] - Mail抓取 ?', '提示', expect.objectContaining({ confirmButtonText: '删除' }))
+      expect(del).toHaveBeenCalledWith('160')
+      expect(success).toHaveBeenCalledWith('删除成功：删除成功')
+      expect(configApi.nodeTypeList).toHaveBeenCalledTimes(2)
+      expect(reload).toHaveBeenCalled()
+    })
+
+    it('取消确认：不调删除接口，也不刷新', async () => {
+      vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+      const del = vi.spyOn(configApi, 'nodeTypeDelete')
+      const { wrapper } = await mountAs(['admin'])
+
+      await wrapper.findAll('[data-testid="node-type-delete"]')[0]!.trigger('click')
+      await flushPromises()
+
+      expect(del).not.toHaveBeenCalled()
+      expect(configApi.nodeTypeList).toHaveBeenCalledTimes(1)
+    })
+
+    it('被配置引用时后端拒绝：原样提示后端原因，列表照旧刷新（旧平台同口径）', async () => {
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+      vi.spyOn(configApi, 'nodeTypeDelete').mockRejectedValue(new Error('该源类型已被配置引用，无法删除'))
+      const error = vi.spyOn(ElMessage, 'error')
+      const { wrapper } = await mountAs(['admin'])
+
+      await wrapper.findAll('[data-testid="node-type-delete"]')[0]!.trigger('click')
+      await flushPromises()
+
+      expect(error).toHaveBeenCalledWith('删除失败：该源类型已被配置引用，无法删除')
+      expect(configApi.nodeTypeList).toHaveBeenCalledTimes(2)
+    })
   })
 })

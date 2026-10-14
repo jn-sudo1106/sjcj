@@ -143,11 +143,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/sourceTypes', desc: '抓取类型字典（节点类型 / configType 的权威取值）', impl: true, live: true },
   // 节点类型维护（0924-04，系统设置 → 节点类型；旧平台「配置 → 源类型」）。2026-09-24 生产逐个实测：
   // 读接口不分页；add/update 是 JSON body，update 为增量更新；临时类型 99901 新增→修改→删除闭环已清理。
-  // sourceType/delete **不收录**：被引用时是否拒删无法无损验证，新平台不提供删除（0924 方案 §4.2 / B-3）。
+  // sourceType/delete：2026-10-14 在 186 实测被配置引用时后端拒绝（连软删除的配置也算），可安全接入。
   { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊，不分页）', impl: true, live: true },
   { path: 'sourceType/detail', desc: '节点类型详情', impl: true, live: true },
   { path: 'sourceType/add', desc: '新增节点类型（sourceType 可不填，后端取 max+1）', danger: true, impl: true, live: true },
   { path: 'sourceType/update', desc: '修改节点类型（增量更新）', danger: true, impl: true, live: true },
+  { path: 'sourceType/delete', desc: '删除节点类型（被配置 / 有效源引用时后端拒绝）', danger: true, impl: true, live: true },
   { path: 'config/configParamAdd', desc: '配置绑定参数', danger: true, impl: true, live: true },
   { path: 'config/configParamDel', desc: '配置解绑参数', danger: true, impl: true, live: true },
   { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true, live: true },

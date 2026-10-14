@@ -235,6 +235,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'sourceType/detail': (params?: Record<string, unknown>) => ({ sourceType: Number(params?.sourceType), typeName: '网页抓取', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null }),
   'sourceType/add': mockAck,
   'sourceType/update': mockAck,
+  'sourceType/delete': mockAck,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。
