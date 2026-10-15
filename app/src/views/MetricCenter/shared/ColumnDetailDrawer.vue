@@ -129,7 +129,7 @@ defineExpose({ open })
     size="clamp(500px, 58vw, 850px)"
     class-name="rc-drawer cdd-drawer"
   >
-    <el-button @click="close">关闭本页</el-button>
+    <!-- <el-button @click="close">关闭本页</el-button> -->
 
     <el-descriptions :column="4" border size="small" style="margin-top: 12px">
       <el-descriptions-item v-for="col in cols" :key="col.dataIndex" :label="col.title" :span="col.span">
