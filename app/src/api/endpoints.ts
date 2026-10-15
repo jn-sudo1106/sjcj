@@ -113,8 +113,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'category/delete', desc: '删除分类', danger: true, live: true },
   // 2026-10-14「我的视图」目录：视图目录 = 带 rootViewId 的分类（categoryPaged / add / update 加 rootViewId，一级 parentId=-1）。
   // 前端按调用强制走真实（mode: 'http'），与 source-view/* 同口径，不标 live。
-  { path: 'category/listSources', desc: '视图目录绑定的源（GET categoryId；返回关系行 sourceId / state，不分页、不含子目录）' },
-  { path: 'category/changeSources', desc: '视图目录与源的绑定（POST { categoryId, sourceIds[] }，整份覆盖）', danger: true },
+  { path: 'category/listSources', desc: '视图目录绑定的源和来源组（GET categoryId；V2 返回 { sourceIds, sourceGroupIds }，不含子目录）' },
+  { path: 'category/changeSources', desc: '视图目录与源、来源组的绑定（POST { categoryId, sourceIds[], sourceGroupIds[] }，整份覆盖）', danger: true },
 
   /* ── config 配置 + 实体 + 参数（目标 35 / 收录 27） ── */
   { path: 'config/configPaged', desc: '配置分页', impl: true, live: true },

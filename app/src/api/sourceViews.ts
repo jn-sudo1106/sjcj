@@ -14,8 +14,8 @@
  *
  * **10-14 目录改走分类接口**（`设计稿/设计方案/1014-我的视图目录版_接口变更核对与疑问_2026-10-14.md`）：
  * 真实接口下视图的目录 = 带 `rootViewId` 的分类（`category/categoryPaged|add|update|delete`，一级 `parentId=-1`），
- * 目录里的源 = `category/listSources` / `category/changeSources`（整份覆盖）。不传 `rootViewId` 的就是系统目录。
- * 来源组绑定和排除后端还没有接口（10-14 定：功能保留、后端另加），**暂存在 queryJson**（`{ v: 3, dirs: { 分类ID: { groups, excluded } } }`）。
+ * 目录里的源和来源组 = `category/listSources` / `category/changeSources`（V2 接口 10-15：`sourceIds` + `sourceGroupIds`，整份覆盖）。
+ * 不传 `rootViewId` 的就是系统目录。随来源组带入后单独移出的源（排除）后端还没有接口，**暂存在 queryJson**（`{ v: 3, dirs: { 分类ID: { excluded } } }`）。
  * 本机兜底照旧整棵树存本机。
  */
 import { request } from './client'
@@ -30,12 +30,12 @@ export interface ViewDisplay {
 }
 export const defaultDisplay = (): ViewDisplay => ({ hiddenColumns: [], sortField: '', sortDirection: 'asc', pageSize: 20 })
 
-/** 目录上的来源组绑定和排除（真实接口暂存 queryJson，按分类 ID） */
-export type DirExtras = Record<string, Pick<ViewContainer, 'groups' | 'excluded'>>
+/** 目录上从来源组排除的源（真实接口暂存 queryJson，按分类 ID） */
+export type DirExtras = Record<string, Pick<ViewContainer, 'excluded'>>
 
 /**
  * 2026-10-13 目录版：视图 = 多级目录（见 views/CollectAssets/viewDirs.ts）。
- * 本机：整棵树存在 tree 里。真实接口：tree 不用（空树），目录和源用 `loadTree` 现读，`dirExtras` 是 queryJson 里的来源组 / 排除。
+ * 本机：整棵树存在 tree 里。真实接口：tree 不用（空树），目录和源用 `loadTree` 现读，`dirExtras` 是 queryJson 里的排除。
  */
 export interface SourceView {
   viewId: string
@@ -55,7 +55,7 @@ export const SOURCE_VIEW_NAME_MAX = 40
 export type SourceViewBackend = 'remote' | 'local'
 
 // ---------------------------------------------------------------------------------------------
-// 视图 ↔ 后端的两段 JSON：queryJson（真实接口：来源组 / 排除；本机旧数据：整棵树）、displayJson（显示设置）
+// 视图 ↔ 后端的两段 JSON：queryJson（真实接口：从来源组排除的源；本机旧数据：整棵树）、displayJson（显示设置）
 // ---------------------------------------------------------------------------------------------
 
 function parseObject(raw: unknown): Record<string, unknown> {
@@ -87,7 +87,7 @@ export function displayFromJson(displayJson: unknown, legacyQuery?: unknown): Vi
   }
 }
 
-/** queryJson v3 → 目录上的来源组 / 排除；更早的（1012/1013 存整棵树的测试数据，10-14 定不迁移）一律当空 */
+/** queryJson v3 → 目录上的排除；更早的（1012/1013 存整棵树的测试数据，10-14 定不迁移）一律当空 */
 export function extrasFromJson(queryJson: unknown): DirExtras {
   const query = parseObject(queryJson)
   if (query.v !== 3 || !query.dirs || typeof query.dirs !== 'object') return {}
@@ -95,15 +95,14 @@ export function extrasFromJson(queryJson: unknown): DirExtras {
   for (const [id, raw] of Object.entries(query.dirs as Record<string, unknown>)) {
     const c = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     const list = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String))] : [])
-    const groups = list(c.groups)
     const excluded = list(c.excluded)
-    if (groups.length || excluded.length) out[id] = { groups, excluded }
+    if (excluded.length) out[id] = { excluded }
   }
   return out
 }
 function extrasOf(tree: ViewTree): DirExtras {
   const out: DirExtras = {}
-  for (const d of tree.dirs) if (d.groups.length || d.excluded.length) out[d.id] = { groups: d.groups, excluded: d.excluded }
+  for (const d of tree.dirs) if (d.excluded.length) out[d.id] = { excluded: d.excluded }
   return out
 }
 const extrasJson = (extras: DirExtras) => JSON.stringify({ v: 3, dirs: extras })
@@ -301,16 +300,16 @@ const viewCategoryApi = {
   remove: async (categoryId: string) => {
     await call<unknown>('category/delete', 'POST', { id: categoryId }, 'query')
   },
-  listSources: async (categoryId: string): Promise<string[]> => {
+  /** 目录里单独添加的源和绑定的来源组（V2：`{ sourceIds, sourceGroupIds }`） */
+  listSources: async (categoryId: string): Promise<{ sources: string[]; groups: string[] }> => {
     const result = await call<unknown>('category/listSources', 'GET', { categoryId })
-    return [...new Set(rowsOf(result)
-      .filter((r) => r.state == null || r.state === 'ACTIVE')
-      .map((r) => String(r.sourceId ?? ''))
-      .filter(Boolean))]
+    const rec = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>
+    const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String).filter(Boolean))] : [])
+    return { sources: ids(rec.sourceIds), groups: ids(rec.sourceGroupIds) }
   },
-  /** 整份覆盖：传的就是这个目录最终的源清单 */
-  changeSources: async (categoryId: string, sourceIds: string[]) => {
-    await call<unknown>('category/changeSources', 'POST', { categoryId: Number(categoryId), sourceIds: sourceIds.map(Number) })
+  /** 整份覆盖：传的就是这个目录最终的源和来源组 */
+  changeSources: async (categoryId: string, sourceIds: string[], groupIds: string[]) => {
+    await call<unknown>('category/changeSources', 'POST', { categoryId: Number(categoryId), sourceIds: sourceIds.map(Number), sourceGroupIds: groupIds.map(Number) })
   },
 }
 
@@ -321,7 +320,7 @@ async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promis
   return out
 }
 
-/** 读整棵目录树：一级 parentId=-1，逐层往下；每个目录再拉绑定的源；来源组 / 排除从 queryJson 合进来 */
+/** 读整棵目录树：一级 parentId=-1，逐层往下；每个目录再拉绑定的源和来源组；排除从 queryJson 合进来 */
 async function loadRemoteTree(view: SourceView): Promise<ViewTree> {
   const dirs: ViewDir[] = []
   let level: string[] = [TOP_PARENT]
@@ -331,12 +330,12 @@ async function loadRemoteTree(view: SourceView): Promise<ViewTree> {
     const fresh = rows.filter((r) => !known.has(r.id))
     for (const r of fresh) {
       const extra = view.dirExtras[r.id]
-      dirs.push({ id: r.id, name: r.name, parentId: r.parentId === TOP_PARENT ? null : r.parentId, sortNo: r.seq, sources: [], groups: extra?.groups ?? [], excluded: extra?.excluded ?? [] })
+      dirs.push({ id: r.id, name: r.name, parentId: r.parentId === TOP_PARENT ? null : r.parentId, sortNo: r.seq, sources: [], groups: [], excluded: extra?.excluded ?? [] })
     }
     level = fresh.map((r) => r.id)
   }
-  const sources = await inBatches(dirs, 6, (d) => viewCategoryApi.listSources(d.id))
-  dirs.forEach((d, i) => { d.sources = sources[i] })
+  const bound = await inBatches(dirs, 6, (d) => viewCategoryApi.listSources(d.id))
+  dirs.forEach((d, i) => { d.sources = bound[i].sources; d.groups = bound[i].groups })
   return normalizeTree({ dirs })
 }
 
@@ -345,7 +344,7 @@ const depth = (tree: ViewTree, id: string) => pathOf(tree, id).length
 
 /**
  * 把目录树的修改写到后端：删目录（先清源关系，深的先删）→ 建目录（浅的先建，换成真实分类 ID）→ 改名 / 移动 / 排序 →
- * 源有变化的目录整份覆盖 → 来源组 / 排除有变化时写 queryJson（带 revision）。返回换成真实 ID 的树和最新视图。
+ * 源或来源组有变化的目录整份覆盖 → 排除有变化时写 queryJson（带 revision）。返回换成真实 ID 的树和最新视图。
  * 中途失败时前面的步骤已经生效，调用方应重读。
  */
 async function saveRemoteTree(view: SourceView, prev: ViewTree, next: ViewTree): Promise<{ view: SourceView; tree: ViewTree }> {
@@ -357,7 +356,7 @@ async function saveRemoteTree(view: SourceView, prev: ViewTree, next: ViewTree):
 
   const removed = prev.dirs.filter((d) => !nextIds.has(d.id)).sort((a, b) => depth(prev, b.id) - depth(prev, a.id))
   for (const d of removed) {
-    if (d.sources.length) await viewCategoryApi.changeSources(d.id, [])
+    if (d.sources.length || d.groups.length) await viewCategoryApi.changeSources(d.id, [], [])
     await viewCategoryApi.remove(d.id)
   }
   const added = next.dirs.filter((d) => !before.has(d.id)).sort((a, b) => depth(next, a.id) - depth(next, b.id))
@@ -373,7 +372,8 @@ async function saveRemoteTree(view: SourceView, prev: ViewTree, next: ViewTree):
     if (Object.keys(patch).length) await viewCategoryApi.update(view.viewId, d.id, patch)
   }
   for (const d of next.dirs) {
-    if (!sameList(before.get(d.id)?.sources ?? [], d.sources)) await viewCategoryApi.changeSources(real(d.id), d.sources)
+    const old = before.get(d.id)
+    if (!sameList(old?.sources ?? [], d.sources) || !sameList(old?.groups ?? [], d.groups)) await viewCategoryApi.changeSources(real(d.id), d.sources, d.groups)
   }
 
   const tree: ViewTree = {
