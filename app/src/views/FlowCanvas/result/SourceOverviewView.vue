@@ -91,6 +91,13 @@ const props = defineProps<{
    * 与其它筛选条件（名称 / 状态等）取交集，清空查询条件也不解除此范围。
    */
   scopeSourceGroupId?: string
+  /**
+   * 固定「我的视图」目录范围（10-15）：走 `sourcePaged` 的 `viewCategoryId`，后端算目录里的源 ∪ 绑定来源组的当前成员。
+   * 只有 sourcePaged 认这个条件，所以给了它时「按筛选范围调整来源组」禁用（那个接口会当成不限）。
+   */
+  scopeViewCategoryId?: string
+  /** 范围内容变了但范围参数没变（如往视图目录里加了源）时由父级加 1，触发重查 */
+  scopeVersion?: number
   /** 范围为空时的空态文案（如最近打开一个都没有） */
   scopeEmptyText?: string
   /**
@@ -430,6 +437,7 @@ function currentQuery(): SourceFilter {
     sourceIds: scopedSourceIds(props.scopeSourceIds, cond.sourceIds),
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
     sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
+    ...(props.scopeViewCategoryId ? { viewCategoryId: props.scopeViewCategoryId } : {}),
   }
 }
 
@@ -1154,8 +1162,8 @@ watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () =
   page.value = 1
   void loadSources()
 })
-// 来源组范围变了（来源组目录页签切组）：清掉勾选再重查
-watch(() => props.scopeSourceGroupId ?? null, () => {
+// 来源组 / 视图目录范围变了：清掉勾选再重查
+watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeVersion ?? 0}`, () => {
   clearSelection()
   page.value = 1
   void loadSources()
@@ -1559,6 +1567,7 @@ watch(() => ui.sourceListRevision, () => {
       :selected-sources="selectedSources"
       :query="currentQuery()"
       :has-query-filter="hasQueryFilter"
+      :range-blocked="!!scopeViewCategoryId"
       :query-text="describeFilters(currentQuery())"
       :groups="sourceGroupOptions"
       @close="adjustGroupOpen = false"

@@ -532,6 +532,10 @@ export const sourceApi = {
         tags: p?.tags ?? [],
         field: p?.field,
         type: p?.type,
+        // 10-15「我的视图」目录：后端按视图目录取源（目录里的源 ∪ 绑定来源组的当前成员）。
+        // **只放在 sourcePaged 里，不进 sourceCondParams**：changeMembersByRange 等其它按条件的接口不认它，
+        // 混进去会变成「不限」（按范围调整来源组甚至会带 confirmAll 改全平台）。
+        viewCategoryId: p?.viewCategoryId,
       },
     })
     return sourcePageFromLegacy(result)
