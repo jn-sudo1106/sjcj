@@ -4,7 +4,8 @@
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
 // 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词、分词
-// （模板域最后一个子模块）；新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
+// （模板域最后一个子模块），以及基础配置域的表字段管理、向量表数据浏览、选表规则配置；
+// 新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
 
 import type { Ack, Paged } from './common'
 
@@ -427,6 +428,36 @@ export interface VectorDataQuery {
   type: string
   pageSize: number
   pageNo: number
+}
+
+/**
+ * 选表规则配置（旧「基础配置 → 选表规则配置」，1015 迁入，端点域 /poc/match-table-config）。
+ * 一条 = 一张表的选表规则：问句选表（text_selection）按 rule 里的正则匹配问句，向量选表（vector_selection）走向量检索。
+ *
+ * 字段形状取自 186 POC 服务真实行（2026-10-15 抓样，共 2 条：YJZB_HY_GHKJ / YJZB_HY_JX，都是 text_selection + 禁用）。
+ *
+ * ⚠️ status 真实回的是**数字** 1（与 TemplateRow 声明的字符串不一致），比较一律走 String(row.status)；
+ * 启停端点本身收的是字符串 '0'/'1'（旧列表 changeStatus(row.id, '1') 原样），两端口径不同照旧。
+ * ⚠️ 「表名称」搜索框上送的参数名是 **name**，而实体列是 tableName（旧 MatchTableConfigList.vue:11、88-98）
+ * —— 旧平台自身就是这两个名字不一致，1:1 保留；实测按 name=表名片段查询确实只回那一条。
+ * ⚠️ 分页的 status 筛选**后端不生效**：status 传 '0' / '1' / 数字 / 不传，四种请求都回全量 2 条（2026-10-15 实测）。
+ * 旧平台同样是这个行为，所以 1:1 照迁、不做前端兜底过滤 —— 界面上的「状态」下拉目前只是个占位条件。
+ * ⚠️ 旧列表把 selectionType 渲染成「text_selection → 问句选表，**其余一律向量选表**」，
+ * 即后端回未知码值时会被静默标成向量选表；这里按本域 options.ts 的口径改成匹配不上留空。
+ */
+export interface MatchTableConfig extends TemplateRow {
+  /** 表名称（列展示与保存都用这个字段名） */
+  tableName?: string
+  /** 表 ID（旧页面不展示、弹窗也不能改，编辑时整行原样回传，见 MatchTableConfigEditDialog 的 passthrough） */
+  tableId?: number
+  /** 选表类型：'text_selection' 问句选表 / 'vector_selection' 向量选表 */
+  selectionType?: string
+  /** 旧平台遗留的粗分类（真实行恒为 '0'），列表与弹窗都没有入口，保存时整行带回 */
+  type?: string
+  /** 匹配规则（旧弹窗是文本域，列表整列展示；真实行是一串正则） */
+  rule?: string
+  /** 逻辑删除位（真实行恒为 '0'），保存时整行带回 */
+  delFlag?: string
 }
 
 /** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy） */

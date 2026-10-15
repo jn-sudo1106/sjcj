@@ -10,12 +10,14 @@ import { canAccess } from '@/composables/usePermission'
 import { BASE_CONFIG_TABS } from '@/router/tabs'
 import EntityConfigPage from './EntityConfig/index.vue'
 import VectorDataShowPage from './VectorDataShow/index.vue'
+import MatchTableConfigPage from './MatchTableConfig/index.vue'
 
 defineOptions({ name: 'BaseConfigPage' })
 
 const comps: Record<string, Component> = {
   'entity-config': EntityConfigPage,
   'vector-data': VectorDataShowPage,
+  'match-table-config': MatchTableConfigPage,
 }
 
 const route = useRoute()

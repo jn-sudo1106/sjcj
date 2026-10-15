@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -371,6 +371,110 @@ export function mockPocVectorDataQuery(params?: Record<string, unknown>): Vector
     : rows
   const pageSize = Number(params?.pageSize ?? 20) || 20
   return matched.slice(0, pageSize).map((row) => ({ ...row }))
+}
+
+/* ── 选表规则配置（旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config，1015 迁入） ── */
+
+/**
+ * 选表规则种子数据 —— 取自 186 POC 服务的真实行（2026-10-15 浏览器会话抓样，全库就这 2 条）。
+ * 两条都是 text_selection（问句选表）、rule 是 `^(?=.*…)(?=.*(行员|员工)).+$` 这种前瞻正则、且都是**禁用**；
+ * tableId / type / delFlag 三列旧页面不展示（编辑时要原样带回，见 MatchTableConfigEditDialog 的 passthrough）。
+ * ⚠️ 真实响应的 status 回的是**数字** 1（与 TemplateRow 声明的字符串不一致），列表与筛选一律按 String(row.status) 比；
+ * 内存表按实体声明存字符串，与数据索引同步同一口径。
+ * ⚠️ 真实后端**不认分页的 status 筛选**（'0'/'1'/数字/不传都回全量），这里按旧页面**期望**的语义实现，
+ * 所以 mock 下的「状态」下拉比真实环境更好用 —— 别据此以为后端支持它。
+ * 没有 vector_selection 的真实行，向量选表的码值形状按旧弹窗下拉（MatchTableConfigEditor.vue:28-30）保留。
+ */
+const blankMatchTableConfig = (over: Partial<MatchTableConfig>): MatchTableConfig => ({
+  tableName: '',
+  selectionType: 'text_selection',
+  rule: '',
+  type: '0',
+  delFlag: '0',
+  status: '0',
+  ...over,
+})
+
+const MATCH_TABLE_CONFIGS: MatchTableConfig[] = [
+  blankMatchTableConfig({
+    id: 8,
+    tableId: 1042,
+    tableName: 'YJZB_HY_GHKJ',
+    selectionType: 'text_selection',
+    rule: '^(?=.*管户口径 )(?=.*(行员|员工)).+$',
+    status: '1',
+    createTime: '2025-03-11 17:42:41',
+    updateTime: '2025-06-13 17:58:29',
+  }),
+  blankMatchTableConfig({
+    id: 7,
+    tableId: 1041,
+    tableName: 'YJZB_HY_JX',
+    selectionType: 'text_selection',
+    rule: '^(?=.*绩效口径)(?=.*(行员|员工)).+$',
+    status: '1',
+    createTime: '2025-03-11 17:42:41',
+    updateTime: '2025-06-13 17:58:30',
+  }),
+]
+
+let matchTableConfigNextId = 9
+
+/**
+ * 分页：旧页面两个筛选 —— name（搜索框标签「表名称」，实测按 tableName 模糊筛）与 status（空串 = 全部）。
+ */
+export function mockMatchTableConfigPaged(params?: Record<string, unknown>): Paged<MatchTableConfig> {
+  const name = String(params?.name ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = MATCH_TABLE_CONFIGS.filter(
+    (row) => (!name || String(row.tableName ?? '').includes(name)) && (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增 / 编辑同一个端点（POST /poc/match-table-config）—— 旧 editor：body 带 id 就地更新，不带 id 追加 */
+export function mockMatchTableConfigSave(params?: Record<string, unknown>) {
+  const form = params as Partial<MatchTableConfig>
+  const id = Number(form.id ?? 0)
+  if (id) {
+    const row = MATCH_TABLE_CONFIGS.find((r) => Number(r.id) === id)
+    if (!row) return { ok: false, message: '未找到要保存的选表规则' }
+    for (const [key, value] of Object.entries(form)) {
+      if (key === 'id') continue
+      ;(row as Record<string, unknown>)[key] = value
+    }
+    row.updateTime = stamp(new Date())
+    return { ok: true, message: '修改成功（演示）' }
+  }
+  const nextId = matchTableConfigNextId++
+  MATCH_TABLE_CONFIGS.unshift({
+    ...blankMatchTableConfig({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 启停（POST /poc/match-table-config/status，参数走 **query**）—— 旧 changeConfigStatus */
+export function mockMatchTableConfigChangeStatus(params?: Record<string, unknown>) {
+  const row = MATCH_TABLE_CONFIGS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的选表规则' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/** 删除（POST /poc/match-table-config/delete，id 走 **query**）—— 旧 deleteConfig */
+export function mockMatchTableConfigDelete(params?: Record<string, unknown>) {
+  const id = Number(params?.id)
+  const index = MATCH_TABLE_CONFIGS.findIndex((r) => Number(r.id) === id)
+  if (index < 0) return { ok: false, message: '未找到要删除的选表规则' }
+  MATCH_TABLE_CONFIGS.splice(index, 1)
+  return { ok: true, message: '删除成功（演示）' }
 }
 
 /* ── 自动补全配置（旧「模板配置 → 自动补全配置」，端点域 /poc/dic） ── */

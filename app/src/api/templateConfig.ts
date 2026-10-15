@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorDataQuery, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorDataQuery, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -294,6 +294,30 @@ export async function pocVectorDataQuery(query: VectorDataQuery): Promise<unknow
   if (Array.isArray(payload)) return payload
   const { list, total } = (payload ?? {}) as { list?: unknown; total?: unknown }
   return Array.isArray(list) && typeof total === 'number' ? list : payload
+}
+
+/** 选表规则的接口面：通用 CRUD 面 + 删除（本域没有复制） */
+export interface MatchTableConfigApi extends TemplateCrudApi<MatchTableConfig> {
+  /** 删除（POST /poc/match-table-config/delete，⚠️ id 走 **query**，旧 deleteConfig 用的是 axios params） */
+  remove(id: number): Promise<Ack>
+}
+
+/**
+ * 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」src/demo/MatchTableConfigList.vue +
+ * modal/MatchTableConfigEditor.vue，旧接口 src/demoApi/MatchTableConfigApi.js:3-8）。
+ *
+ * 走 createTemplateCrudApi 工厂：本域正是工厂默认的四种形态 ——
+ * 新增与修改是**同一个根端点**（POST /poc/match-table-config，body 带 id 即更新，旧 editor 函数一个端点两用）、
+ * 启停 POST /poc/match-table-config/status 且参数走 **query**（旧 changeConfigStatus 用的是 axios params，
+ * 与 chat-flow-step / data-index-config 那几个 body 传参的域不同）。
+ * operations.copy=false —— 旧域没有 /copy。工厂唯一表达不了的是 /delete（旧平台少见的删除端点，
+ * question-dic 也有删除但那里是发整行、这里是按 query 发 id），所以按 questionDicApi 的先例扩一个 remove。
+ * 分页的两个筛选都在 body：name（旧搜索框标签「表名称」，见 types/template.ts 的 MatchTableConfig 注释）/ status。
+ */
+export const matchTableConfigApi: MatchTableConfigApi = {
+  ...createTemplateCrudApi<MatchTableConfig>({ module: 'match-table-config', operations: { copy: false } }),
+  remove: (id: number) =>
+    request<Ack>('poc/match-table-config/delete', { id }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/match-table-config/delete` }),
 }
 
 /** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */

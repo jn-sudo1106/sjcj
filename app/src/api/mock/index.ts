@@ -95,6 +95,10 @@ import {
   mockPocDatabaseConfigSave,
   mockPocVectorConfigList,
   mockPocVectorDataQuery,
+  mockMatchTableConfigPaged,
+  mockMatchTableConfigSave,
+  mockMatchTableConfigChangeStatus,
+  mockMatchTableConfigDelete,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
@@ -436,6 +440,14 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 旧域的 config/page、config（保存）、mapping/info、sync、data-match、delete 属于「向量表管理」，未迁。
   'poc/vector/config/all': mockPocVectorConfigList,
   'poc/vector/data': mockPocVectorDataQuery,
+
+  // 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config）：
+  // 与 sql 模板同形态 —— 新增/编辑同一个根端点（带 id 即更新）+ status（**query** 传参）+ delete（**query** 只发 id）；
+  // 没有 copy（旧域没有该端点）。见 api/templateConfig.ts 的 matchTableConfigApi。
+  'poc/match-table-config/page': mockMatchTableConfigPaged,
+  'poc/match-table-config': mockMatchTableConfigSave,
+  'poc/match-table-config/status': mockMatchTableConfigChangeStatus,
+  'poc/match-table-config/delete': mockMatchTableConfigDelete,
 
   // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
   'poc/dic/page': mockDicTemplatePaged,

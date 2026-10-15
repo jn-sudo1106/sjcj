@@ -217,6 +217,19 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/vector/config/all', desc: '向量表选项（浏览页表名下拉）→ GET /api/poc/vector/config/all?name=（name 必填，空关键词也带）', impl: true, live: true },
   { path: 'poc/vector/data', desc: '向量表数据查询 → POST /api/poc/vector/data（body: input/type/pageSize/pageNo，返回整份 JSON 展示）', impl: true, live: true },
 
+  // 选表规则配置（1015 迁入，旧 ai-chat-view「基础配置 → 选表规则配置」src/demo/MatchTableConfigList.vue + modal/MatchTableConfigEditor.vue）。
+  // 契约来自旧 src/demoApi/MatchTableConfigApi.js:3-8，同为 186 POC 服务；分页已在 186 实测（2026-10-15 浏览器会话，共 2 条）。
+  // 与 sql 模板同形态：新增与修改是**同一个根端点**（body 带 id 即更新）；没有 copy。
+  // ⚠️ status 与 delete 的参数都走 **query**（旧 changeConfigStatus / deleteConfig 用的是 axios params，
+  //    与 chat-flow-step / data-index-config / system 那几个 body 传参的域不同）。
+  // ⚠️ 实测两条口径照旧、不改：name 确实是按 tableName 模糊筛；分页的 status 筛选**后端不生效**
+  //    （传 '0' / '1' / 数字 / 不传都回全量），旧平台同行为，所以 status 下拉按 1:1 保留、不在前端兜底过滤。
+  //    真实行的 status 回的是**数字** 1，比较走 String(row.status)。
+  { path: 'poc/match-table-config/page', desc: '选表规则分页 → POST /api/poc/match-table-config/page（body: pageNo/pageSize/name/status，name 是旧「表名称」搜索框的参数名、按 tableName 模糊筛；status 后端不生效）', impl: true, live: true },
+  { path: 'poc/match-table-config', desc: '选表规则新增/编辑 → POST /api/poc/match-table-config（body 带 id 即更新：tableName/selectionType/rule/status）', danger: true, impl: true, live: true },
+  { path: 'poc/match-table-config/status', desc: '选表规则启停 → POST /api/poc/match-table-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/match-table-config/delete', desc: '选表规则删除 → POST /api/poc/match-table-config/delete?id=（旧平台少见的删除端点，只发 id）', danger: true, impl: true, live: true },
+
   // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
   { path: 'poc/dic/page', desc: '自动补全分页 → POST /api/poc/dic/page（body: pageNo/pageSize/name，name 模糊匹配「内容」）', impl: true, live: true },
