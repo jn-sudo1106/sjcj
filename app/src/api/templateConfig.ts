@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorDataQuery, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorConfigPayload, VectorDataQuery, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -294,6 +294,47 @@ export async function pocVectorDataQuery(query: VectorDataQuery): Promise<unknow
   if (Array.isArray(payload)) return payload
   const { list, total } = (payload ?? {}) as { list?: unknown; total?: unknown }
   return Array.isArray(list) && typeof total === 'number' ? list : payload
+}
+
+/** 向量表管理的接口面：分页 + 保存（{config, items}）+ 列映射明细 + 同步 + 按名称删除 */
+export interface VectorConfigApi {
+  page(query: TemplatePageQuery): Promise<Paged<VectorTableConfig>>
+  /** 新增与修改同一个端点（config.id 有值即更新），但 body 是 {config, items} 包装，不是平铺表单 */
+  save(payload: VectorConfigPayload): Promise<Ack>
+  /** 列映射明细（旧 vectorMappingInfo → GET /poc/vector/mapping/info?configId=） */
+  mappingInfo(configId: number): Promise<VectorMappingItem[]>
+  /** 触发同步；body 是 **id 数组**（旧列表单行「同步」也发 `[row.id]`），同 data-index-sync/sync 口径 */
+  sync(ids: number[]): Promise<Ack>
+  /** 删除（旧 deleteVector → POST /poc/vector/delete）；⚠️ body 是 `{type: 向量表名称}`，按 name 删不按 id */
+  remove(type: string): Promise<Ack>
+}
+
+/**
+ * 向量表管理（1015 迁入「基础配置」，旧「基础配置 → 向量表管理」src/demo/VectorTableList.vue +
+ * modal/VectorMapping.vue，旧接口 src/demoApi/VectorApi.js）。
+ *
+ * 没走 createTemplateCrudApi 工厂：本域 save 的 body 是 `{config, items}` 包装（配置行 + 列映射整份），
+ * 与工厂「平铺表单、带 id 即更新」的形状不符；也没有 status/copy，多出 mapping/info、sync、delete 三个动作端点。
+ * 与已迁的 poc/vector/config/all、poc/vector/data（向量表数据浏览）同一后端域。
+ * ⚠️ 5 个端点都还没在 186 实测（POC 写链路要登录会话），未标 live，联调核对后逐条补（同 question-temp 先例）。
+ */
+export const vectorConfigApi: VectorConfigApi = {
+  // 分页：两个模糊筛选都在 body —— name（向量表名称）/ sourceTable（源表名称），旧 queryParam 原样
+  page: (query: TemplatePageQuery) =>
+    request<Paged<VectorTableConfig>>('poc/vector/config/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/config/page` }),
+  save: (payload: VectorConfigPayload) =>
+    request<Ack>('poc/vector/config', { ...payload }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/config` }),
+  // 与 database 域同信封风险（可能带 count:null 被包成 {list,total}），统一过 toRowArray 还原裸数组
+  mappingInfo: (configId: number) =>
+    request<VectorMappingItem[] | Paged<VectorMappingItem>>(
+      'poc/vector/mapping/info',
+      { configId: String(configId) },
+      { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/vector/mapping/info` },
+    ).then((payload) => toRowArray<VectorMappingItem>(payload)),
+  sync: (ids: number[]) =>
+    request<Ack>('poc/vector/sync', ids as unknown as Record<string, unknown>, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/sync` }),
+  remove: (type: string) =>
+    request<Ack>('poc/vector/delete', { type }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/delete` }),
 }
 
 /** 选表规则的接口面：通用 CRUD 面 + 删除（本域没有复制） */

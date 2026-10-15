@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorConfigPayload, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -311,18 +311,21 @@ export function mockPocDatabaseConfigSave(params?: Record<string, unknown>) {
   return { ok: true, message: '保存成功（演示）' }
 }
 
-/* ── 向量表数据浏览（旧「基础配置 → 向量表数据浏览」，端点域 /poc/vector，1015 迁入） ── */
+/* ── 向量表（旧「基础配置 → 向量表数据浏览 / 向量表管理」，端点域 /poc/vector，1015 迁入） ── */
 
 /**
- * 向量表选项种子。
+ * 向量表配置种子（「向量表数据浏览」的下拉与「向量表管理」的列表共用这一张内存表）。
  * ⚠️ 按旧 VectorTableList.vue 的列形状（name/comment/sourceTable/matchDegree/dataIndexCode/lastSync/updateTime）
- * **构造的示例**，未取到 POC 服务真实行，联调后用真实响应校正。
+ * **构造的示例**，未取到 POC 服务真实行，联调后用真实响应校正；
+ * sourceTableId 对齐 POC_TABLE_ENTRIES 的 entryTypeId（弹窗「源表」下拉回显与列映射的字段列表都靠它）。
  */
-const VECTOR_TABLES: VectorTableOption[] = [
-  { id: 1, name: 'DIM_JG_VECTOR', comment: '机构向量表', sourceTable: 'sense_data.DIM_JG', matchDegree: 0.85, dataIndexCode: '', lastSync: '2026-10-12 09:20:31', updateTime: '2026-10-12 09:20:31' },
-  { id: 2, name: 'KHFA_ZB_VECTOR', comment: '客户指标向量表', sourceTable: 'sense_data.KHFA_KHZBJG_JG', matchDegree: 0.9, dataIndexCode: 'ZB', lastSync: '2026-10-13 18:02:07', updateTime: '2026-10-13 18:02:07' },
-  { id: 3, name: 'DIC_YHH_VECTOR', comment: '用户号向量表', sourceTable: 'sense_data.DIC_YHH', matchDegree: 0.75, dataIndexCode: 'YHH', lastSync: '2026-09-30 07:45:00', updateTime: '2026-10-08 11:13:26' },
+const VECTOR_TABLES: VectorTableConfig[] = [
+  { id: 1, name: 'DIM_JG_VECTOR', comment: '机构向量表', sourceTable: 'sense_data.DIM_JG', sourceTableId: 3, matchDegree: 0.85, dataIndexCode: '', returnNum: 5, preRule: '', dataClearRule: '', lastSync: '2026-10-12 09:20:31', updateTime: '2026-10-12 09:20:31' },
+  { id: 2, name: 'KHFA_ZB_VECTOR', comment: '客户指标向量表', sourceTable: 'sense_data.KHFA_KHZBJG_JG', sourceTableId: 1, matchDegree: 0.9, dataIndexCode: 'ZB', returnNum: 1, preRule: '', dataClearRule: '', lastSync: '2026-10-13 18:02:07', updateTime: '2026-10-13 18:02:07' },
+  { id: 3, name: 'DIC_YHH_VECTOR', comment: '用户号向量表', sourceTable: 'sense_data.DIC_YHH', sourceTableId: 4, matchDegree: 0.75, dataIndexCode: 'YHH', returnNum: 10, preRule: '去空格', dataClearRule: '', lastSync: '2026-09-30 07:45:00', updateTime: '2026-10-08 11:13:26' },
 ]
+
+let vectorConfigNextId = 4
 
 /** mock 侧的向量表数据行（形状同上，是构造示例；旧页面不解析它，只整份 JSON 展示） */
 interface VectorMockRow {
@@ -371,6 +374,110 @@ export function mockPocVectorDataQuery(params?: Record<string, unknown>): Vector
     : rows
   const pageSize = Number(params?.pageSize ?? 20) || 20
   return matched.slice(0, pageSize).map((row) => ({ ...row }))
+}
+
+/**
+ * 列映射内存表（「向量表管理」弹窗的 items），key = 向量表配置 id。
+ * 首次读取按旧新建的三行形状（type '1' 编码 / '2' 内容 / '3' 别名）构造示例。
+ */
+const VECTOR_MAPPINGS = new Map<number, VectorMappingItem[]>()
+let vectorMappingNextId = 100
+
+function seedVectorMappings(configId: number): VectorMappingItem[] {
+  return [1, 2, 3].map((t) => ({
+    id: configId * 10 + t,
+    configId,
+    type: String(t),
+    sourceColumn: '',
+    targetColumn: '',
+    valueColumn: '',
+    rule: '',
+  }))
+}
+
+/**
+ * 分页（旧 vectorPage → POST /poc/vector/config/page）。
+ * 两个筛选都是模糊：name（向量表名称）/ sourceTable（源表名称，库里带 'sense_data.' 前缀，按原串包含筛）。
+ */
+export function mockVectorConfigPaged(params?: Record<string, unknown>): Paged<VectorTableConfig> {
+  const name = String(params?.name ?? '').trim()
+  const sourceTable = String(params?.sourceTable ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = VECTOR_TABLES.filter(
+    (row) =>
+      (!name || String(row.name ?? '').includes(name)) &&
+      (!sourceTable || String(row.sourceTable ?? '').includes(sourceTable)),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize).map((row) => ({ ...row })) }
+}
+
+/**
+ * 保存（旧 vectorSave → POST /poc/vector/config）—— body {config, items}，config 带 id 即更新。
+ * 与 data-index-sync 那种「新增/修改分两个端点」不同，这里是同一个根端点两用（旧 VectorApi.js:5）；
+ * 列映射整份覆盖该 configId 的行（旧页面每次保存都把弹窗里的 items 全部发过去）。
+ */
+export function mockVectorConfigSave(params?: Record<string, unknown>) {
+  const payload = params as unknown as VectorConfigPayload
+  const config = payload?.config
+  const items = payload?.items ?? []
+  if (!config?.name) return { ok: false, message: '向量表名称不能为空' }
+  const id = Number(config.id ?? 0)
+  if (id) {
+    const row = VECTOR_TABLES.find((r) => Number(r.id) === id)
+    if (!row) return { ok: false, message: '未找到要保存的向量表配置' }
+    Object.assign(row, { ...config, id })
+    row.updateTime = stamp(new Date())
+    VECTOR_MAPPINGS.set(id, items.map((item) => ({ ...item, configId: id, id: item.id ?? vectorMappingNextId++ })))
+    return { ok: true, message: '修改成功（演示）' }
+  }
+  const nextId = vectorConfigNextId++
+  VECTOR_TABLES.unshift({
+    ...config,
+    id: nextId,
+    status: config.status ?? '0',
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  VECTOR_MAPPINGS.set(nextId, items.map((item) => ({ ...item, configId: nextId, id: vectorMappingNextId++ })))
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 列映射明细（旧 vectorMappingInfo → GET /poc/vector/mapping/info?configId=），返回裸数组 */
+export function mockVectorMappingInfo(params?: Record<string, unknown>): VectorMappingItem[] | { ok: false; message: string } {
+  const configId = Number(params?.configId)
+  if (!VECTOR_TABLES.some((row) => Number(row.id) === configId)) return { ok: false, message: '未找到对应的向量表配置' }
+  if (!VECTOR_MAPPINGS.has(configId)) VECTOR_MAPPINGS.set(configId, seedVectorMappings(configId))
+  return VECTOR_MAPPINGS.get(configId)!.map((item) => ({ ...item }))
+}
+
+/**
+ * 同步（旧 sync → POST /poc/vector/sync）。
+ * ⚠️ body 是 **id 数组**（`[56]`），不是对象，入参在这里拿到的是数组而不是 Record（同 data-index-sync/sync）。
+ * 真实后端会重建向量数据并回写 lastSync；mock 只回写 lastSync/updateTime。
+ */
+export function mockVectorConfigSync(params?: Record<string, unknown>) {
+  const ids = (Array.isArray(params) ? params : []).map((id) => Number(id))
+  if (!ids.length) return { ok: false, message: '没有要同步的向量表' }
+  let hit = 0
+  for (const id of ids) {
+    const row = VECTOR_TABLES.find((r) => Number(r.id) === id)
+    if (!row) continue
+    row.lastSync = stamp(new Date())
+    hit += 1
+  }
+  if (!hit) return { ok: false, message: '未找到要同步的向量表' }
+  return { ok: true, data: hit, message: `已同步 ${hit} 条（演示）` }
+}
+
+/** 删除（旧 deleteVector → POST /poc/vector/delete）—— ⚠️ body {type: 向量表名称}，按 name 删不按 id */
+export function mockVectorConfigDelete(params?: Record<string, unknown>) {
+  const type = String(params?.type ?? '').trim()
+  const index = VECTOR_TABLES.findIndex((row) => String(row.name) === type)
+  if (index < 0) return { ok: false, message: '未找到要删除的向量表' }
+  const [removed] = VECTOR_TABLES.splice(index, 1)
+  if (removed?.id != null) VECTOR_MAPPINGS.delete(Number(removed.id))
+  return { ok: true, message: '删除成功（演示）' }
 }
 
 /* ── 选表规则配置（旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config，1015 迁入） ── */

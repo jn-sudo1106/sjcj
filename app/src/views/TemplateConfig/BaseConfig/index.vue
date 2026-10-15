@@ -11,6 +11,7 @@ import { BASE_CONFIG_TABS } from '@/router/tabs'
 import EntityConfigPage from './EntityConfig/index.vue'
 import VectorDataShowPage from './VectorDataShow/index.vue'
 import MatchTableConfigPage from './MatchTableConfig/index.vue'
+import VectorConfigPage from './VectorConfig/index.vue'
 
 defineOptions({ name: 'BaseConfigPage' })
 
@@ -18,6 +19,7 @@ const comps: Record<string, Component> = {
   'entity-config': EntityConfigPage,
   'vector-data': VectorDataShowPage,
   'match-table-config': MatchTableConfigPage,
+  'vector-config': VectorConfigPage,
 }
 
 const route = useRoute()

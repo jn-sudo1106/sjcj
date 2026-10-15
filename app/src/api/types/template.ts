@@ -431,6 +431,62 @@ export interface VectorDataQuery {
 }
 
 /**
+ * 向量表配置行（旧「基础配置 → 向量表管理」，1015 迁入，端点域 /poc/vector/config）。
+ * 列形状取自旧 VectorTableList.vue 的 columns 与旧弹窗 VectorMapping.vue 的 config 表单。
+ * ⚠️ 旧删除端点 POST /poc/vector/delete 的 body 是 `{type: 向量表名称}` —— **按 name 删，不按 id**（旧平台独有口径，1:1 保留）。
+ * 弹窗没有编辑入口的列（sourceTableId / preRule / dataClearRule / lastSync）在旧版编辑保存时随整行回传
+ * （旧 `this.form.config = record` 是引用整个列表行），这里同样整行带回，见 VectorConfigEditDialog 的 passthrough。
+ */
+export interface VectorTableConfig extends TemplateRow {
+  /** 向量表名称（旧新建时自动填 `源表名_VECTOR`，可改） */
+  name: string
+  /** 向量表备注（旧选源表时按 typeName 自动填充） */
+  comment?: string | null
+  /** 源表名（选源表时自动填充，旧口径剥掉 'sense_data.' 前缀） */
+  sourceTable?: string | null
+  /** 源表 id = database/entry-list 行的 entryTypeId（旧表单字段 config.sourceTableId，编辑时靠它拉源表字段） */
+  sourceTableId?: number | string | null
+  /** 匹配度（旧弹窗数字框 0~1、精度 2，新建默认 '0.60'） */
+  matchDegree?: number | string | null
+  /** 字典表类型（必填，旧弹窗是 textarea） */
+  dataIndexCode?: string | null
+  /** 召回数（最小 1，新建默认 1） */
+  returnNum?: number | string | null
+  /** 预处理规则（选填） */
+  preRule?: string | null
+  /** 数据清洗规则（选填） */
+  dataClearRule?: string | null
+  /** 最近同步时间（同步端点回写，列表只读列） */
+  lastSync?: string | null
+}
+
+/**
+ * 向量表列映射行（旧弹窗 form.items：GET /poc/vector/mapping/info?configId= 回显、保存整份随 body 回传）。
+ * 旧弹窗固定三行 —— type '1' 编码 / '2' 内容 / '3' 别名（新建即预置三行空映射，可以删）。
+ */
+export interface VectorMappingItem {
+  id?: number | string
+  configId?: number | string
+  /** 列类型：'1' 编码 / '2' 内容 / '3' 别名 */
+  type?: string
+  /** 源列名（下拉源为源表字段列表，值=itemCode） */
+  sourceColumn?: string | null
+  /** 改写后列名 */
+  targetColumn?: string | null
+  /** 取值列 */
+  valueColumn?: string | null
+  /** 改写规则 */
+  rule?: string | null
+  [key: string]: unknown
+}
+
+/** 向量表配置保存的 body（POST /poc/vector/config，config.id 有值即更新） */
+export interface VectorConfigPayload {
+  config: VectorTableConfig
+  items: VectorMappingItem[]
+}
+
+/**
  * 选表规则配置（旧「基础配置 → 选表规则配置」，1015 迁入，端点域 /poc/match-table-config）。
  * 一条 = 一张表的选表规则：问句选表（text_selection）按 rule 里的正则匹配问句，向量选表（vector_selection）走向量检索。
  *

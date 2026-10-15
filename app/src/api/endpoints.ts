@@ -213,9 +213,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 契约来自旧 src/demoApi/VectorApi.js:12-13（config/all、data），两条都是只读；同 database 域走 186 POC 服务。
   // ⚠️ config/all 的 name 是**必填**查询参数（缺参数后端回 code:400，2026-10-15 实测），空关键词也要发 ?name=；
   // ⚠️ data 用旧页面原载荷实测回 code:500「服务器繁忙」（186 上向量检索链路未起），形状按旧页面读法落地，待后端可用后复核。
-  // 旧域里剩下的 config/page、config（保存）、mapping/info、sync、data-match、delete 属于「向量表管理」，本次不迁。
   { path: 'poc/vector/config/all', desc: '向量表选项（浏览页表名下拉）→ GET /api/poc/vector/config/all?name=（name 必填，空关键词也带）', impl: true, live: true },
   { path: 'poc/vector/data', desc: '向量表数据查询 → POST /api/poc/vector/data（body: input/type/pageSize/pageNo，返回整份 JSON 展示）', impl: true, live: true },
+
+  // 向量表管理（1015 迁入，旧 ai-chat-view「基础配置 → 向量表管理」src/demo/VectorTableList.vue + modal/VectorMapping.vue）。
+  // 契约来自旧 src/demoApi/VectorApi.js:4-8、11；同 vector 域走 186 POC 服务。
+  // ⚠️ 未标 live：本轮没拿到这 5 个端点的真实响应（写链路要浏览器登录会话），联调核对后逐条补（同 question-temp 先例）。
+  // 旧域里剩下的 data-match（POST /poc/vector/data-match）是聊天侧 ChatTipsModal 用的，不属于本页面，未迁。
+  { path: 'poc/vector/config/page', desc: '向量表管理分页 → POST /api/poc/vector/config/page（body: pageNo/pageSize/name/sourceTable，两个都模糊筛）', impl: true, live: true },
+  { path: 'poc/vector/config', desc: '向量表配置保存 → POST /api/poc/vector/config（body {config, items}，config 带 id 即更新；列映射整份覆盖）', danger: true, impl: true, live: true },
+  { path: 'poc/vector/mapping/info', desc: '向量表列映射明细 → GET /api/poc/vector/mapping/info?configId=（弹窗回显三行 编码/内容/别名 映射）', impl: true, live: true },
+  { path: 'poc/vector/sync', desc: '向量表同步 → POST /api/poc/vector/sync（body 是 **id 数组** [id]，不是包装对象；后端重建向量并回写 lastSync）', danger: true, impl: true, live: true },
+  { path: 'poc/vector/delete', desc: '向量表删除 → POST /api/poc/vector/delete（body {type: 向量表名称}，⚠️ 按 name 删不按 id，旧平台独有口径）', danger: true, impl: true, live: true },
 
   // 选表规则配置（1015 迁入，旧 ai-chat-view「基础配置 → 选表规则配置」src/demo/MatchTableConfigList.vue + modal/MatchTableConfigEditor.vue）。
   // 契约来自旧 src/demoApi/MatchTableConfigApi.js:3-8，同为 186 POC 服务；分页已在 186 实测（2026-10-15 浏览器会话，共 2 条）。
