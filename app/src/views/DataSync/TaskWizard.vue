@@ -22,8 +22,10 @@ const customers = ref<SyncCustomer[]>([])
 const targets = ref<SyncDatabase[]>([])
 const fileTargets = ref<SyncDatabase[]>([])
 const tables = ref<SyncTable[]>([])
+// 选完客户时拿到的那页表，是没输入关键词时的候选来源
+const baseTables = ref<SyncTable[]>([])
 const tableLoading = ref(false)
-// 远程搜索会整页换掉选项，已选那张得留着，否则标签退化成裸 entryTypeId、中文名丢失
+// 已选那张表要能留进选项，见 withSelected
 const selectedTable = ref<SyncTable>()
 const columns = ref<SyncColumnMap[]>([])
 const originalColumns = ref<SyncColumnMap[]>([])
@@ -76,6 +78,8 @@ async function loadCustomerOptions() {
         .find((item) => item.tableName.toLowerCase() === requestedTable)
       if (matched) tables.value = [matched, ...tables.value]
     }
+    // 这页列表留作底：关键词清空时直接回给它，不再打一次空关键词的查询
+    baseTables.value = tables.value
     if (matched) { form.entryTypeId = matched.entryTypeId; selectTable(matched.entryTypeId) }
   } catch (error) {
     ElMessage.error(String(error))
@@ -93,6 +97,7 @@ watch(() => form.customerId, () => {
   targets.value = []
   fileTargets.value = []
   tables.value = []
+  baseTables.value = []
   selectedTable.value = undefined
   void loadCustomerOptions()
 })
@@ -121,18 +126,32 @@ function selectTable(id: string | number) {
   columns.value = []
 }
 
+/** 远程搜索会整页换掉选项，已选那张得留在首位，否则标签退化成裸 entryTypeId、中文名丢失 */
+function withSelected(list: SyncTable[]) {
+  const kept = selectedTable.value
+  return kept && !list.some((item) => String(item.entryTypeId) === String(kept.entryTypeId))
+    ? [kept, ...list]
+    : list
+}
+
 /** 源数据表按表名走服务端 LIKE：接口只回前 10 条，前端过滤搜不到没进首页的表 */
 let tableSeq = 0
 async function searchTables(name: string) {
+  const keyword = name.trim()
+  if (!keyword) {
+    // 没输入就不打后台：el-select 展开下拉、清空关键词都会回调一次 ''，每次都发等于一轮无意义的 LIKE '%%'
+    // 序号照样递增，作废还在飞的关键词请求，否则它的结果会盖回这份底表；转圈也在这里收掉
+    tableSeq++
+    tableLoading.value = false
+    tables.value = withSelected(baseTables.value)
+    return
+  }
   const seq = ++tableSeq
   tableLoading.value = true
   try {
-    const fresh = (await syncApi.tables(form.customerId, name.trim())) ?? []
+    const fresh = (await syncApi.tables(form.customerId, keyword)) ?? []
     if (seq !== tableSeq) return
-    const kept = selectedTable.value
-    tables.value = kept && !fresh.some((item) => String(item.entryTypeId) === String(kept.entryTypeId))
-      ? [kept, ...fresh]
-      : fresh
+    tables.value = withSelected(fresh)
   } catch (error) {
     if (seq !== tableSeq) return
     ElMessage.error(String(error))
@@ -159,12 +178,16 @@ function selectFileTarget(id: string | number) {
 }
 
 async function nextTable() {
-  if (!form.customerId || !form.entryTypeId || !form.targetDatabase || !form.targetTable.trim()) {
-    ElMessage.warning('请选择客户、源表和目标数据库，并填写目标表名')
-    return
-  }
-  if (form.fileSyncFlag && !form.targetFileDatabase) {
-    ElMessage.warning('请选择目标文件库')
+  // 逐项报出到底缺哪一项：整句「请选择客户、源表和目标数据库」在只缺一项时等于没提示，
+  // 而且非管理员看不到客户行，被要求「选客户」时根本无从下手
+  const missing: string[] = []
+  if (!form.customerId) missing.push(admin.value ? '客户 / 环境' : '登录会话里的客户 ID（请重新登录）')
+  if (!form.entryTypeId) missing.push('源数据表')
+  if (!form.targetDatabase) missing.push('目标数据库')
+  if (!String(form.targetTable ?? '').trim()) missing.push('目标表名称')
+  if (form.fileSyncFlag && !form.targetFileDatabase) missing.push('目标文件库')
+  if (missing.length) {
+    ElMessage.warning(`请完成：${missing.join('、')}`)
     return
   }
   loading.value = true
