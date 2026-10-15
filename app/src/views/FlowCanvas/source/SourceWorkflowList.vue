@@ -14,9 +14,10 @@ const router = useRouter()
 const loading = ref(false)
 const rows = ref<WorkflowBinding[]>([])
 const bindOpen = ref(false)
-// 入组的源统一使用来源组的流程，不能单独改绑（后端会拒绝）：整个列表只读，要改先退出来源组
+// 入组的源：来源组的流程只读（要改去来源组），源自有的流程照常关联 / 设主 / 解除（10-15 后端放行）
 const hasInherited = computed(() => rows.value.some(row => row.inherited))
-const writable = computed(() => !hasInherited.value)
+/** 本源自己绑定的行（来源组段里也可能有本源同时绑的） */
+const isOwn = (row: WorkflowBinding) => !row.inherited || !!row.own
 
 const roleText: Record<WorkflowBindingRole, string> = {
   MAIN: '主流程',
@@ -71,7 +72,7 @@ async function createFlow() {
       sourceId: props.sourceId,
       name: result.value.trim(),
       definition: makeBlankTemplateDefinition(),
-      primary: rows.value.length === 0,
+      primary: !rows.value.some(isOwn),
     })
     ElMessage.success('流程已创建')
     await router.replace({
@@ -132,16 +133,14 @@ onMounted(load)
           <p>一个源可关联多条流程；其中一条是默认（主）流程，正常运行时从它启动。</p>
         </div>
         <div class="swl-actions">
-          <template v-if="writable">
           <button class="rc-btn" type="button" @click="bindOpen = true">关联已有</button>
           <button class="rc-btn primary" type="button" @click="createFlow"><el-icon><Plus /></el-icon> 新增流程</button>
-          </template>
           <button class="swl-refresh" type="button" title="刷新" aria-label="刷新" @click="load"><el-icon><Refresh /></el-icon></button>
         </div>
       </div>
 
       <div v-if="hasInherited" class="swl-inherit" data-testid="workflow-group-locked">
-        当前源已加入来源组，统一使用来源组的流程，这里只能查看；需要单独配置流程，请先在源列表里把它退出来源组。
+        当前源已加入来源组：来源组的流程在这里只能查看，要改请到来源组里配置；源自己的流程可以照常关联、设主、解除。运行时本源的主流程优先，没有再用来源组的默认流程。
       </div>
 
       <el-table v-loading="loading" :data="rows" empty-text="当前源尚未关联流程" class="swl-table">
@@ -156,7 +155,7 @@ onMounted(load)
           <template #default="{ row }"><span class="swl-role-tag">{{ roleText[row.role as WorkflowBindingRole] }}</span></template>
         </el-table-column>
         <el-table-column label="来源" width="130">
-          <template #default="{ row }"><span :class="{ inherited: row.inherited }">{{ row.inherited ? '来源组统一流程' : '当前源' }}</span></template>
+          <template #default="{ row }"><span :class="{ inherited: row.inherited }">{{ row.inherited ? (row.own ? '来源组 + 当前源' : '来源组') : '当前源' }}</span><span v-if="row.groupDefault" class="swl-group-default">组默认</span></template>
         </el-table-column>
         <el-table-column label="运行入口" width="100" align="center">
           <template #default="{ row }"><span v-if="row.primary" class="swl-primary">主流程</span><span v-else>—</span></template>
@@ -164,8 +163,8 @@ onMounted(load)
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <button class="swl-op" type="button" @click="openFlow(row)">打开</button>
-            <button v-if="writable && !row.primary" class="swl-op" type="button" @click="setPrimary(row)">设为主流程</button>
-            <button v-if="writable && !row.inherited && !row.primary" class="swl-op danger" type="button" @click="unbind(row)">解除</button>
+            <button v-if="isOwn(row) && !row.primary" class="swl-op" type="button" @click="setPrimary(row)">设为主流程</button>
+            <button v-if="isOwn(row) && !row.primary" class="swl-op danger" type="button" @click="unbind(row)">解除</button>
           </template>
         </el-table-column>
       </el-table>
@@ -190,6 +189,7 @@ onMounted(load)
 .swl-role-tag, .swl-primary { padding: 2px 7px; border-radius: 10px; background: #f1f5f9; color: var(--rc-text-2); font-size: 11px; }
 .swl-primary { background: #dcfce7; color: #166534; }
 .inherited { color: #7c3aed; }
+.swl-group-default { margin-left: 5px; padding: 1px 5px; border-radius: 4px; background: #ede9fe; color: #6d28d9; font-size: 10px; }
 .swl-op { margin-right: 12px; font-size: 12px; }
 .swl-op.danger { color: #b91c1c; }
 .rc-btn { display: inline-flex; align-items: center; gap: 4px; }

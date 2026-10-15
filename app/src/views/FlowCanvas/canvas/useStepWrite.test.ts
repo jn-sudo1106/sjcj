@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { entryApi, flowCenterApi, itemApi, sourceApi } from '@/api'
+import { entryApi, flowCenterApi, flowVersionApi, itemApi, sourceApi } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { useFlowVersionStore } from '@/stores/flowVersion'
+import { outputTableMissing } from '@/utils/flow/stepPersist'
 import { useStepWrite } from './useStepWrite'
 import { cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 import type { Step } from '@/api'
@@ -259,6 +261,43 @@ describe('useStepWrite.persistFlowSteps', () => {
     ])
     const again = await persistFlowSteps()
     expect(again.created).toBe(1)
+  })
+
+  // 2026-10-15：186 实测启用版本的流程写草稿不校验 OUT_ENTRY——缺输出表的新节点照常建进草稿
+  it('流程启用版本：缺输出表的新节点照常 saveItemConfig 建进草稿（不带 outEntry）', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [SNAPSHOT],
+    )
+    source.rememberSteps([SNAPSHOT], 'replace')
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({
+      enabled: true, curVer: null, nextVer: 2, publishId: null, draftId: '1043',
+      versions: [{ versionId: '1043', flowVer: 1, ver: 4, state: 'W', isLock: 0, isDelete: 0, baseId: null }],
+    } as never)
+    await useFlowVersionStore().load('1400935')
+    const localId = flow.insertAfter('40600', 'excel-collect')!
+    flow.configs[localId].configId = '1401215'
+    flow.configs[localId].title = '缺输出表'
+    if (flow.configs[localId].collectCfg) flow.configs[localId].collectCfg!.outputTable = ''
+    expect(outputTableMissing(flow.configs[localId], undefined)).toBe(true)
+
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '41876', name: '缺输出表', configId: '1401215', outputTable: undefined, enabled: false, flowId: '1400935' },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    const result = await persistFlowSteps()
+
+    expect(result.created).toBe(1)
+    expect(create.mock.calls[0][0].outputTable ?? null).toBeNull()
+    expect(create.mock.calls[0][1]).toMatchObject({ flowId: '1400935', versionId: '1043', ver: 4 })
   })
 
   it('缺输出表的存量行（规则节点，输入表也为空）改名：先改画布并提示，不调 stepModify（0927 H1）', async () => {

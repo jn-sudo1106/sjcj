@@ -180,6 +180,8 @@ export const useFlowStore = defineStore('flow', () => {
   const flowDirty = computed(() => nodeStore.flowDirty)
   const flowRev = computed(() => nodeStore.flowRev)
   const dirtyConfigNodes = computed(() => nodeStore.dirtyConfigNodes)
+  /** 节点的定时策略是否被用户手动改过（还没同步到 job 表） */
+  const isScheduleEdited = (id: string) => nodeStore.scheduleEditedNodes.includes(id)
 
   // ---- 流程核心状态 ----
   const configs = reactive<Record<string, NodeConfig>>({})
@@ -1422,6 +1424,8 @@ export const useFlowStore = defineStore('flow', () => {
       : nodeStore.patchCollect(id, patch)),
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
     patchSchedule: (id: string, patch: Partial<import('@/views/FlowCanvas/canvas/flowModel').CollectorSchedule>) => nodeStore.patchSchedule(id, patch),
+    isScheduleEdited,
+    clearScheduleEdited: (id: string) => nodeStore.clearScheduleEdited(id),
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) => nodeStore.patchRuleConfig(id, patch, opts),
     patchExecConfig: (id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) => nodeStore.patchExecConfig(id, patch, opts),
     setMonitorMethods: (id: string, methods: string[]) => nodeStore.setMonitorMethods(id, methods),

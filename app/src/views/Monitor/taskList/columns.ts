@@ -58,7 +58,7 @@ export const TASK_LIST_BASE: TaskColumn[] = [
   // 旧 width 110px + fixed:'right'；详情 | 重发（**没有编辑**）
   {
     title: '操作', dataIndex: 'action', span: 2, width: 120,
-    noEdit: true, noDetail: true, fixed: 'right',
+    noEdit: true, noDetail: true, fixed: 'right', align: 'center',
   },
 ]
 

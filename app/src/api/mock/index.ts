@@ -91,6 +91,22 @@ import {
 } from './dataset'
 import {
   mockPocDatabaseEntryList,
+  mockPocDatabaseTableInfo,
+  mockPocDatabaseConfigSave,
+  mockPocVectorConfigList,
+  mockPocVectorDataQuery,
+  mockVectorConfigPaged,
+  mockVectorConfigSave,
+  mockVectorMappingInfo,
+  mockVectorConfigSync,
+  mockVectorConfigDelete,
+  mockMatchTableConfigPaged,
+  mockMatchTableConfigSave,
+  mockMatchTableConfigChangeStatus,
+  mockMatchTableConfigDelete,
+  mockReplaceTableConfigPaged,
+  mockReplaceTableConfigSave,
+  mockReplaceTableConfigChangeStatus,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
@@ -123,6 +139,13 @@ import {
   mockWordSegmentUpdate,
   mockWordSegmentChangeStatus,
   mockWordSegmentBatchAdd,
+  mockSystemConfigPaged,
+  mockSystemConfigDetail,
+  mockSystemConfigSave,
+  mockPageConfigPaged,
+  mockPageConfigBatchAdd,
+  mockPageConfigUpdate,
+  mockPageConfigChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -417,6 +440,35 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/question-temp/status': mockTableTemplateChangeStatus,
   // 表模板「使用表范围」下拉的数据表选项
   'poc/database/entry-list': mockPocDatabaseEntryList,
+  // 表字段管理（1015 迁入「基础配置」）：字段列表 + 整表覆盖保存，与 entry-list 同一张内存表
+  'poc/database/table-info': mockPocDatabaseTableInfo,
+  'poc/database/config': mockPocDatabaseConfigSave,
+
+  // 向量表（1015 迁入「基础配置」）：数据浏览两条只读 + 向量表管理五条（分页/保存/列映射/同步/删除），
+  // 浏览下拉与管理列表共用 VECTOR_TABLES 一张内存表（管理页增删改会同步影响浏览页的表名下拉）。
+  // 旧域里剩下的 data-match 是聊天侧 ChatTipsModal 用的，未迁。见 api/templateConfig.ts 的 vectorConfigApi。
+  'poc/vector/config/all': mockPocVectorConfigList,
+  'poc/vector/data': mockPocVectorDataQuery,
+  'poc/vector/config/page': mockVectorConfigPaged,
+  'poc/vector/config': mockVectorConfigSave,
+  'poc/vector/mapping/info': mockVectorMappingInfo,
+  'poc/vector/sync': mockVectorConfigSync,
+  'poc/vector/delete': mockVectorConfigDelete,
+
+  // 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config）：
+  // 与 sql 模板同形态 —— 新增/编辑同一个根端点（带 id 即更新）+ status（**query** 传参）+ delete（**query** 只发 id）；
+  // 没有 copy（旧域没有该端点）。见 api/templateConfig.ts 的 matchTableConfigApi。
+  'poc/match-table-config/page': mockMatchTableConfigPaged,
+  'poc/match-table-config': mockMatchTableConfigSave,
+  'poc/match-table-config/status': mockMatchTableConfigChangeStatus,
+  'poc/match-table-config/delete': mockMatchTableConfigDelete,
+
+  // 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」，端点域 /poc/replace-table-config）：
+  // 比选表规则配置还少一个端点 —— 旧域只有 page / 根（新增与编辑同一个）/ status（**query** 传参），
+  // 没有 copy 也没有删除，所以这里只有三个 handler。见 api/templateConfig.ts 的 replaceTableConfigApi。
+  'poc/replace-table-config/page': mockReplaceTableConfigPaged,
+  'poc/replace-table-config': mockReplaceTableConfigSave,
+  'poc/replace-table-config/status': mockReplaceTableConfigChangeStatus,
 
   // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
   'poc/dic/page': mockDicTemplatePaged,
@@ -457,4 +509,15 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/word-segment-config/update': mockWordSegmentUpdate,
   'poc/word-segment-config/status': mockWordSegmentChangeStatus,
   'poc/word-segment-config/batch': mockWordSegmentBatchAdd,
+
+  // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：
+  // 参数设置 分页/详情/修改（没有新增/删除/导出/刷新缓存入口，见 api/templateConfig.ts 的 systemConfigApi）；
+  // 页面配置 分页/batch（对象数组）/update/status（**body** 传参），没有单条新增与 copy。
+  'poc/system/config/page': mockSystemConfigPaged,
+  'poc/system/config/detail': mockSystemConfigDetail,
+  'poc/system/config': mockSystemConfigSave,
+  'poc/system/page-config/page': mockPageConfigPaged,
+  'poc/system/page-config/batch': mockPageConfigBatchAdd,
+  'poc/system/page-config/update': mockPageConfigUpdate,
+  'poc/system/page-config/status': mockPageConfigChangeStatus,
 }

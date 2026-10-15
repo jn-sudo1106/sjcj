@@ -65,6 +65,8 @@ const stubs = {
   ElTooltip: {
     name: 'ElTooltip',
     inheritAttrs: false,
+    // 行内操作改成图标后靠 content（原按钮文案）定位，声明成 prop 才拿得到
+    props: ['content'],
     template: '<span class="stub-tooltip"><slot /></span>',
   },
   ElPagination: {
@@ -278,8 +280,8 @@ describe('任务实例 · 重发', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    await cell(wrapper, '.tl-actions')[0].findAll('.tl-op-link')
-      .find((el) => el.text().trim() === '重发')!.trigger('click')
+    await cell(wrapper, '.tl-actions')[0].findAllComponents({ name: 'ElTooltip' })
+      .find((t: VueWrapper) => (t.props() as { content?: string }).content === '重发')!.find('.tl-op-icon').trigger('click')
     await flushPromises()
 
     expect(resend).toHaveBeenLastCalledWith(['8348509120'])
@@ -320,8 +322,8 @@ describe('任务实例 · 展示接线', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    await cell(wrapper, '.tl-actions')[0].findAll('.tl-op-link')
-      .find((el) => el.text().trim() === '详情')!.trigger('click')
+    await cell(wrapper, '.tl-actions')[0].findAllComponents({ name: 'ElTooltip' })
+      .find((t: VueWrapper) => (t.props() as { content?: string }).content === '详情')!.find('.tl-op-icon').trigger('click')
     await flushPromises()
     const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
     expect(drawer.props('modelValue')).toBe(true)

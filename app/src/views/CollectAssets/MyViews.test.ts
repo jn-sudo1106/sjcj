@@ -3,7 +3,7 @@
 // 随组带入的源排除与恢复、解绑、删除目录（有子目录时二次提醒）、旧条件视图提示、设为默认、跳到源详情不改写地址。
 // 右侧源列表 stub 掉：记下收到的源范围，并用固定的选中 ID 驱动批量操作槽位。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h } from 'vue'
+import { KeepAlive, defineComponent, h } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -18,8 +18,10 @@ import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { addDir, addSources, bindGroup, emptyTree } from './viewDirs'
 
+/** 来源组 g3 的当前成员（测试里可以改，模拟在「我的分组」里加减源） */
+const g3Members = vi.hoisted(() => ({ ids: ['t1', 't2', 't3'] }))
 vi.mock('./groupMembers', () => ({
-  loadGroupMembers: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === 'g3' ? ['t1', 't2', 't3'] : []])),
+  loadGroupMembers: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === 'g3' ? [...g3Members.ids] : []])),
   clearGroupMembersCache: () => {},
 }))
 
@@ -44,6 +46,7 @@ vi.mock('@/views/FlowCanvas/result/SourceOverviewView.vue', () => ({
 
 let wrapper: VueWrapper
 beforeEach(() => {
+  g3Members.ids = ['t1', 't2', 't3']
   setSourceViewBackend('local') // 单测不连后端：用本机实现
   localStorage.clear()
   scopeSeen = undefined
@@ -168,15 +171,75 @@ describe('我的视图 · 目录版', () => {
     expect(scopeSeen).toContain('t2')
   })
 
-  it('解绑来源组：组的源都不在了，单独添加的保留', async () => {
+  // 10-15 定：解绑时列出会随组移出的源，问要不要保留；保留的转成单独添加
+  it('解绑来源组：列出会移出的源；选「一起移出」→ 只剩单独添加的', async () => {
     await seed()
     await mountPage()
     await dirNode('舆情').trigger('click')
     await settle()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+    await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
+    await settle()
+    const message = mount({ render: () => confirm.mock.calls[0][0] as never })
+    expect(message.text()).toContain('下面 3 个随来源组带进来的源')
+    expect(message.findAll('li').map((li) => li.text())).toEqual(['t1', 't2', 't3'])
+    message.unmount()
+    expect(confirm.mock.calls[0][2]).toMatchObject({ confirmButtonText: '保留这些源', cancelButtonText: '一起移出', distinguishCancelAndClose: true })
+    expect(scopeSeen).toEqual(['s4'])
+    expect((await saved()).dirs.find((d) => d.name === '舆情')!.groups).toEqual([])
+  })
+
+  it('解绑来源组：选「保留这些源」→ 组解绑，组里的源转成单独添加（已排除的不算）', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    selectedIds = ['t2']
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never) // 先排除 t2
+    await wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$forceUpdate()
+    await settle()
+    await wrapper.get('[data-testid="mv-remove-sources"]').trigger('click')
+    await settle()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
     await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
     await settle()
-    expect(scopeSeen).toEqual(['s4'])
+    const yq = (await saved()).dirs.find((d) => d.name === '舆情')!
+    expect(yq).toMatchObject({ groups: [], excluded: [], sources: ['s4', 't1', 't3'] })
+    expect(sorted(scopeSeen)).toEqual(['s4', 't1', 't3'])
+  })
+
+  // 本页被 KeepAlive 缓存：去「我的分组」给组加了源再回来，要看到新成员（10-15 用户报：twitter 加到 27 个，视图里还是 26）
+  it('从别的页面回来时重读来源组成员：组里新加的源出现', async () => {
+    await seed()
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/collect', component: { template: '<div />' } }, { path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/collect', query: { tab: 'views' } })
+    await router.isReady()
+    const Host = defineComponent({
+      props: { show: Boolean },
+      setup: (props) => () => h(KeepAlive, null, [props.show ? h(MyViews) : null]),
+    })
+    wrapper = mount(Host, { props: { show: true }, global: { plugins: [ElementPlus, router] }, attachTo: document.body })
+    await settle()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('3/3')
+    await wrapper.setProps({ show: false })
+    g3Members.ids = ['t1', 't2', 't3', 't4']
+    await wrapper.setProps({ show: true })
+    await settle()
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('4/4')
+    expect(scopeSeen).toContain('t4')
+  })
+
+  it('解绑来源组：直接关掉弹窗 = 不解绑', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('close')
+    await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
+    await settle()
+    expect((await saved()).dirs.find((d) => d.name === '舆情')!.groups).toEqual(['g3'])
   })
 
   it('删除有子目录的目录：二次提醒，确认后连同子目录一起删，选中剩下的第一个目录；第二次取消就不删', async () => {

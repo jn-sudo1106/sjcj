@@ -92,16 +92,16 @@ function stateClass(state: string) {
     <!-- 轻量筛选 -->
     <div class="cl-filters">
       <span class="cl-field">源: <span class="mono">{{ filters.sourceId }}</span></span>
-      <el-select v-model="stateFilter" class="cl-select" size="small" clearable placeholder="状态（全部）">
+      <el-select v-model="stateFilter" class="cl-select" clearable placeholder="状态（全部）">
         <el-option label="告警" value="E" />
         <el-option label="正常" value="C" />
       </el-select>
-      <el-input v-model="nameFilter" class="cl-name" size="small" placeholder="日志名 / 内容" clearable @keyup.enter="runQuery" />
+      <el-input v-model="nameFilter" class="cl-name" placeholder="日志名 / 内容" clearable @keyup.enter="runQuery" />
       <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
       <button class="rc-btn" type="button" @click="reset">重置</button>
     </div>
 
-    <el-table :data="rows" border stripe size="small" row-key="logId" class="cl-table">
+    <el-table :data="rows" border stripe row-key="logId" class="cl-table" max-height="700">
       <el-table-column label="时间" width="170" prop="createDt" class-name="mono-cell" />
       <el-table-column label="消息" min-width="300" prop="logMsg" show-overflow-tooltip>
         <template #default="{ row }">
@@ -150,8 +150,7 @@ function stateClass(state: string) {
   font-size: 12px;
 }
 .cl-select {
-  width: 120px;
-  height: 28px;
+  width: 140px;
 }
 .cl-name {
   width: 180px;

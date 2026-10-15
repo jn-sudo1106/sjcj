@@ -28,6 +28,8 @@ export type SourceFilter = {
    *  defaultFlowId=21000006 得 256 条（twitter1 的 255 个成员 + 独立源），只匹配默认流程；
    *  flowId 匹配任一生效关联（含从组继承的），defaultFlowId 只匹配默认，两者独立可同时给。 */
   defaultFlowId?: string
+  /** 「我的视图」目录（10-15）：`sourcePaged` 的 `viewCategoryId`。只有 sourcePaged 认，其它按条件的接口不认 */
+  viewCategoryId?: string
   name?: string
   /** 按源 URL 子串过滤（2026-09-17）。后端 `sourcePaged` 的 `sourceUrl`，与 `name` 是两个
    *  独立条件、同时给则取交集——实测 name=盛科 4 条、sourceUrl=centec 1 条、两者同给 1 条、

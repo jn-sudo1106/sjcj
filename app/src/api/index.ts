@@ -532,6 +532,10 @@ export const sourceApi = {
         tags: p?.tags ?? [],
         field: p?.field,
         type: p?.type,
+        // 10-15「我的视图」目录：后端按视图目录取源（目录里的源 ∪ 绑定来源组的当前成员）。
+        // **只放在 sourcePaged 里，不进 sourceCondParams**：changeMembersByRange 等其它按条件的接口不认它，
+        // 混进去会变成「不限」（按范围调整来源组甚至会带 confirmAll 改全平台）。
+        viewCategoryId: p?.viewCategoryId,
       },
     })
     return sourcePageFromLegacy(result)
@@ -3299,7 +3303,7 @@ function isFlowNotFound(e: unknown): boolean {
 function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
   const view = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   const text = (v: unknown) => (v == null || v === '' ? undefined : String(v))
-  const bindings = (Array.isArray(view.bindings) ? view.bindings : []).map((item): SourceFlowBind => {
+  const bindRows = (list: unknown) => (Array.isArray(list) ? list : []).map((item): SourceFlowBind => {
     const row = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
     return {
       id: String(row.id ?? ''),
@@ -3312,16 +3316,24 @@ function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
       updatedAt: text(row.updateDt ?? row.updatedAt),
     }
   })
+  const sourceGroupId = text(view.sourceGroupId)
+  const flowIds = (Array.isArray(view.flowIds) ? view.flowIds : []).map(String)
+  const defaultFlowId = text(view.defaultFlowId)
+  const bindings = bindRows(view.bindings)
+  // 2026-10-15 起后端多返回 own*（源自有流程）。未入组时 own* 与顶层三项相同；
+  // 旧后端没有 own*：未入组回落到顶层，入组视为没有自有流程。
+  const hasOwn = 'ownFlowIds' in view || 'ownBindings' in view
   return {
     sourceId: text(view.sourceId),
-    sourceGroupId: text(view.sourceGroupId),
-    flowIds: (Array.isArray(view.flowIds) ? view.flowIds : []).map(String),
-    defaultFlowId: text(view.defaultFlowId),
+    sourceGroupId,
+    flowIds,
+    defaultFlowId,
     bindings,
+    ownFlowIds: hasOwn ? (Array.isArray(view.ownFlowIds) ? view.ownFlowIds : []).map(String) : (sourceGroupId ? [] : flowIds),
+    ownDefaultFlowId: hasOwn ? text(view.ownDefaultFlowId) : (sourceGroupId ? undefined : defaultFlowId),
+    ownBindings: hasOwn ? bindRows(view.ownBindings) : (sourceGroupId ? [] : bindings),
   }
 }
-
-const GROUP_FLOW_LOCKED = '来源使用组统一流程，请先退出来源组再设置独立流程'
 
 /** source-group/* 返回的成员行 → 前端口径（ID 一律字符串） */
 function sourceGroupMemberFromApi(value: unknown): { sourceId: string; sourceName: string; [key: string]: unknown } {
@@ -3520,7 +3532,7 @@ export const sourceGroupApi = {
 /**
  * 源的多流程绑定（画布流程标签栏 / 流程列表用）。底层是来源组接口文档里的 `source-group/*`
  * （bee-config SourceGroupController，2026-10-08 上线 217）：一个源可关联多条流程，有一条默认流程；
- * 入组的源统一使用来源组的流程，不能单独改绑。
+ * 入组的源同时有来源组的流程（只读，改要去来源组）和自己的流程（10-15 起可在这里维护）；运行入口本源默认优先。
  *
  * 保存只有一个端点 `bindSourceFlows`——**整体替换**绑定列表并指定默认，带并发快照。所以每次写都先读一遍
  * 最新绑定（sourceFlows），在它的基础上增 / 改 / 删，再连同读到的快照一起提交；别人刚改过会被后端拒绝
@@ -3542,21 +3554,33 @@ export const workflowBindingApi = {
     // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
     if (!/^\d+$/.test(sourceId)) return []
     const view = await workflowBindingApi.view(sourceId)
-    const active = view.bindings.filter((binding) => binding.state === 'ACTIVE')
+    const groupId = view.sourceGroupId
+    // 入组的源：来源组的流程在前（只读），源自有的流程在后（可改）；同一条流程两边都有时只出一行
+    const groupActive = groupId ? view.bindings.filter((binding) => binding.state === 'ACTIVE') : []
+    const ownActive = view.ownBindings.filter((binding) => binding.state === 'ACTIVE')
+    const byDefault = (a: SourceFlowBind, b: SourceFlowBind) => Number(b.isDefault) - Number(a.isDefault)
+    const groupDefaultId = groupActive.find((binding) => binding.isDefault)?.flowId
+    // 运行入口：本源默认优先，没有再用来源组默认（10-15 定）
+    const mainFlowId = ownActive.find((binding) => binding.isDefault)?.flowId ?? groupDefaultId
+    const ownIds = new Set(ownActive.map((binding) => binding.flowId))
+    const groupIds = new Set(groupActive.map((binding) => binding.flowId))
+    const ordered = [
+      ...groupActive.slice().sort(byDefault),
+      ...ownActive.filter((binding) => !groupIds.has(binding.flowId)).sort(byDefault),
+    ]
     // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
     const names = new Map<string, string>()
-    await Promise.all(active.map(async (binding) => {
+    await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
     }))
-    const inherited = !!view.sourceGroupId
-    return active
-      .slice()
-      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
-      .map((binding, index): WorkflowBinding => ({
+    return ordered.map((binding, index): WorkflowBinding => {
+      const inherited = groupIds.has(binding.flowId)
+      const primary = binding.flowId === mainFlowId
+      return {
         id: binding.id,
         bindType: inherited ? 'SOURCE_GROUP' : 'SOURCE',
-        bindId: inherited ? String(view.sourceGroupId) : sourceId,
+        bindId: inherited ? String(groupId) : sourceId,
         workflowId: binding.flowId,
         workflowCode: `FLOW-${binding.flowId}`,
         workflowName: names.get(binding.flowId) ?? `流程 #${binding.flowId}`,
@@ -3565,27 +3589,32 @@ export const workflowBindingApi = {
         workflowStatus: 'ACTIVE',
         versionManaged: false,
         followsCurrentVersion: true,
-        role: binding.isDefault ? 'MAIN' : 'AUX',
-        primary: binding.isDefault,
+        role: primary ? 'MAIN' : 'AUX',
+        primary,
         priority: index,
         status: 'ACTIVE',
         inherited,
+        own: ownIds.has(binding.flowId),
+        groupDefault: inherited && binding.flowId === groupDefaultId,
         updatedAt: binding.updatedAt,
-      }))
+      }
+    })
   },
-  /** 整体保存：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交 */
+  /**
+   * 整体保存源自有的流程：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交。
+   * 只动 own* 那一套；入组的源也能维护自有流程（10-15 后端放行），来源组的流程不经这里改。
+   */
   save: async (
     sourceId: string,
     change: (view: SourceFlowsView) => { flowIds: string[]; defaultFlowId: string | null },
   ): Promise<void> => {
     const view = await workflowBindingApi.view(sourceId)
-    if (view.sourceGroupId) throw new Error(GROUP_FLOW_LOCKED)
     const next = change(view)
     const body = {
       sourceId,
-      expectedFlowIds: view.flowIds,
+      expectedFlowIds: view.ownFlowIds,
       // 停用后也要提交读到的原值；没有默认就是 null
-      expectedDefaultFlowId: view.defaultFlowId ?? null,
+      expectedDefaultFlowId: view.ownDefaultFlowId ?? null,
       flowIds: next.flowIds,
       defaultFlowId: next.defaultFlowId,
     }
@@ -3596,20 +3625,20 @@ export const workflowBindingApi = {
   /** 关联一条已有流程；源上还没有默认流程、或明确要求 primary 时，把它设为默认 */
   bind: async (input: { sourceId: string; workflowId: string; primary?: boolean }) =>
     workflowBindingApi.save(input.sourceId, (view) => ({
-      flowIds: view.flowIds.includes(input.workflowId) ? view.flowIds : [...view.flowIds, input.workflowId],
-      defaultFlowId: input.primary || !view.defaultFlowId ? input.workflowId : view.defaultFlowId,
+      flowIds: view.ownFlowIds.includes(input.workflowId) ? view.ownFlowIds : [...view.ownFlowIds, input.workflowId],
+      defaultFlowId: input.primary || !view.ownDefaultFlowId ? input.workflowId : view.ownDefaultFlowId,
     })),
   setPrimary: async (sourceId: string, workflowId: string) =>
     workflowBindingApi.save(sourceId, (view) => {
-      if (!view.flowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
-      return { flowIds: view.flowIds, defaultFlowId: workflowId }
+      if (!view.ownFlowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
+      return { flowIds: view.ownFlowIds, defaultFlowId: workflowId }
     }),
   unbind: async (sourceId: string, workflowId: string) =>
     workflowBindingApi.save(sourceId, (view) => {
-      const rest = view.flowIds.filter((id) => id !== workflowId)
+      const rest = view.ownFlowIds.filter((id) => id !== workflowId)
       // 默认标记只能切换，不能直接删：还有别的流程时，要先把默认切走（与后端对「取消默认关联」的口径一致）
-      if (view.defaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
-      return { flowIds: rest, defaultFlowId: rest.length ? (view.defaultFlowId ?? null) : null }
+      if (view.ownDefaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
+      return { flowIds: rest, defaultFlowId: rest.length ? (view.ownDefaultFlowId ?? null) : null }
     }),
   /** 新建一条空白流程并关联到源：两步（先建流程、再关联），第二步失败时说明流程已建出来，别留下谁也不知道的孤儿 */
   createForSource: async (input: { sourceId: string; name: string; definition: FlowDefinition; primary?: boolean }): Promise<WorkflowBinding> => {

@@ -113,8 +113,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'category/delete', desc: '删除分类', danger: true, live: true },
   // 2026-10-14「我的视图」目录：视图目录 = 带 rootViewId 的分类（categoryPaged / add / update 加 rootViewId，一级 parentId=-1）。
   // 前端按调用强制走真实（mode: 'http'），与 source-view/* 同口径，不标 live。
-  { path: 'category/listSources', desc: '视图目录绑定的源（GET categoryId；返回关系行 sourceId / state，不分页、不含子目录）' },
-  { path: 'category/changeSources', desc: '视图目录与源的绑定（POST { categoryId, sourceIds[] }，整份覆盖）', danger: true },
+  // 10-15 V3：changeSources 已删（调用 500），改成增量的 addSources / delSources；sourcePaged 加 viewCategoryId
+  { path: 'category/listSources', desc: '视图目录的源行和来源组（GET categoryId；返回 { sourceIds, sourceGroupIds }，sourceIds 含来源组展开的成员，不含子目录）' },
+  { path: 'category/addSources', desc: '视图目录加入源 / 来源组（POST { categoryId, sourceIds[], sourceGroupIds[] }，增量，重复跳过；来源组会把当前成员展开成源行；返回新增源数）', danger: true },
+  { path: 'category/delSources', desc: '视图目录移出源 / 来源组（POST 同 addSources；删来源组连当前成员的源行一起删；同时传源和来源组只删一部分，前端分开调）', danger: true },
 
   /* ── config 配置 + 实体 + 参数（目标 35 / 收录 27） ── */
   { path: 'config/configPaged', desc: '配置分页', impl: true, live: true },
@@ -203,6 +205,56 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/question-temp', desc: '表模板新增/编辑 → POST /api/poc/question-temp（body 带 id 即更新；tableArr/sqlTempConfigIds 是 JSON 字符串）', danger: true, impl: true, live: true },
   { path: 'poc/question-temp/status', desc: '表模板启停 → POST /api/poc/question-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/database/entry-list', desc: '数据表选项（表模板「使用表范围」下拉）→ GET /api/poc/database/entry-list?name=', impl: true, live: true },
+  // 表字段管理（1015 迁入，旧 ai-chat-view「基础配置 → 表字段管理」src/demo/EntityConfig.vue，同 database 域）。
+  // 契约来自旧 src/demoApi/EntityApi.js:4-6；与 entry-list 同域同进程，live 对齐同域口径。
+  // ⚠️ config 是**整表覆盖**：一次保存同时写表头（entityType）与全部字段行（entityItems）。
+  { path: 'poc/database/table-info', desc: '表字段列表（表字段管理）→ GET /api/poc/database/table-info?tableId=', impl: true, live: true },
+  { path: 'poc/database/config', desc: '表字段配置保存 → POST /api/poc/database/config（body {entityType, entityItems}，整表覆盖）', danger: true, impl: true, live: true },
+
+  // 向量表数据浏览（1015 迁入，旧 ai-chat-view「基础配置 → 向量表数据浏览」src/demo/VectorDataShowTop.vue + VectorDataShow.vue）。
+  // 契约来自旧 src/demoApi/VectorApi.js:12-13（config/all、data），两条都是只读；同 database 域走 186 POC 服务。
+  // ⚠️ config/all 的 name 是**必填**查询参数（缺参数后端回 code:400，2026-10-15 实测），空关键词也要发 ?name=；
+  // ⚠️ data 用旧页面原载荷实测回 code:500「服务器繁忙」（186 上向量检索链路未起），形状按旧页面读法落地，待后端可用后复核。
+  { path: 'poc/vector/config/all', desc: '向量表选项（浏览页表名下拉）→ GET /api/poc/vector/config/all?name=（name 必填，空关键词也带）', impl: true, live: true },
+  { path: 'poc/vector/data', desc: '向量表数据查询 → POST /api/poc/vector/data（body: input/type/pageSize/pageNo，返回整份 JSON 展示）', impl: true, live: true },
+
+  // 向量表管理（1015 迁入，旧 ai-chat-view「基础配置 → 向量表管理」src/demo/VectorTableList.vue + modal/VectorMapping.vue）。
+  // 契约来自旧 src/demoApi/VectorApi.js:4-8、11；同 vector 域走 186 POC 服务。
+  // ⚠️ 未标 live：本轮没拿到这 5 个端点的真实响应（写链路要浏览器登录会话），联调核对后逐条补（同 question-temp 先例）。
+  // 旧域里剩下的 data-match（POST /poc/vector/data-match）是聊天侧 ChatTipsModal 用的，不属于本页面，未迁。
+  { path: 'poc/vector/config/page', desc: '向量表管理分页 → POST /api/poc/vector/config/page（body: pageNo/pageSize/name/sourceTable，两个都模糊筛）', impl: true, live: true },
+  { path: 'poc/vector/config', desc: '向量表配置保存 → POST /api/poc/vector/config（body {config, items}，config 带 id 即更新；列映射整份覆盖）', danger: true, impl: true, live: true },
+  { path: 'poc/vector/mapping/info', desc: '向量表列映射明细 → GET /api/poc/vector/mapping/info?configId=（弹窗回显三行 编码/内容/别名 映射）', impl: true, live: true },
+  { path: 'poc/vector/sync', desc: '向量表同步 → POST /api/poc/vector/sync（body 是 **id 数组** [id]，不是包装对象；后端重建向量并回写 lastSync）', danger: true, impl: true, live: true },
+  { path: 'poc/vector/delete', desc: '向量表删除 → POST /api/poc/vector/delete（body {type: 向量表名称}，⚠️ 按 name 删不按 id，旧平台独有口径）', danger: true, impl: true, live: true },
+
+  // 选表规则配置（1015 迁入，旧 ai-chat-view「基础配置 → 选表规则配置」src/demo/MatchTableConfigList.vue + modal/MatchTableConfigEditor.vue）。
+  // 契约来自旧 src/demoApi/MatchTableConfigApi.js:3-8，同为 186 POC 服务；分页已在 186 实测（2026-10-15 浏览器会话，共 2 条）。
+  // 与 sql 模板同形态：新增与修改是**同一个根端点**（body 带 id 即更新）；没有 copy。
+  // ⚠️ status 与 delete 的参数都走 **query**（旧 changeConfigStatus / deleteConfig 用的是 axios params，
+  //    与 chat-flow-step / data-index-config / system 那几个 body 传参的域不同）。
+  // ⚠️ 实测两条口径照旧、不改：name 确实是按 tableName 模糊筛；分页的 status 筛选**后端不生效**
+  //    （传 '0' / '1' / 数字 / 不传都回全量），旧平台同行为，所以 status 下拉按 1:1 保留、不在前端兜底过滤。
+  //    真实行的 status 回的是**数字** 1，比较走 String(row.status)。
+  { path: 'poc/match-table-config/page', desc: '选表规则分页 → POST /api/poc/match-table-config/page（body: pageNo/pageSize/name/status，name 是旧「表名称」搜索框的参数名、按 tableName 模糊筛；status 后端不生效）', impl: true, live: true },
+  { path: 'poc/match-table-config', desc: '选表规则新增/编辑 → POST /api/poc/match-table-config（body 带 id 即更新：tableName/selectionType/rule/status）', danger: true, impl: true, live: true },
+  { path: 'poc/match-table-config/status', desc: '选表规则启停 → POST /api/poc/match-table-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/match-table-config/delete', desc: '选表规则删除 → POST /api/poc/match-table-config/delete?id=（旧平台少见的删除端点，只发 id）', danger: true, impl: true, live: true },
+
+  // 表改写管理（1015 迁入，旧 ai-chat-view「基础配置 → 表改写管理」src/demo/ReplaceTableConfigList.vue + modal/ReplaceTableConfigEditor.vue）。
+  // 契约来自旧 src/demoApi/ReplaceTableConfigApi.js:4-6 —— 旧接口文件只有这三个函数：
+  // 与选表规则配置同形态（新增与修改**同一个根端点**、body 带 id 即更新；status 参数走 **query**），
+  // 没有 copy，也**没有删除**（旧列表操作列只有「编辑」和「启用/禁用」），所以本域就是 CRUD 工厂去掉 copy 的形状。
+  // 三条端点：分页 2026-10-15 在 186 只读实测（全库 2 条：两张表互相对换、都是 unionall + 禁用）；
+  // save / status 按旧契约接线并标 live，但本轮**没做写验证**（不往开发库造数据），联调跑通一条真实新增后再复核。
+  // 与选表规则配置**不同**的两点：
+  // ⚠️ 本域分页的 status 筛选后端**是生效的**（'0' 回 0 条、'1' 回全量 2 条，数字与字符串都认）；
+  // ⚠️ name 按 tableName 模糊筛但**大小写敏感**（name=JX 回 1 条、name=jx 回 0 条）。
+  // 另实测 replaceTableName / tableName 当筛选参数上送会被后端忽略（回全量），旧页面也没有这两个查询入口，不迁。
+  // 真实行的 status 回的是**数字** 1，比较走 String(row.status)；行里还带 delFlag（恒 '0'，页面不展示、编辑整行带回）。
+  { path: 'poc/replace-table-config/page', desc: '表改写分页 → POST /api/poc/replace-table-config/page（body: pageNo/pageSize/name/status，name 按 tableName 模糊筛、大小写敏感；status 后端生效）', impl: true, live: true },
+  { path: 'poc/replace-table-config', desc: '表改写新增/编辑 → POST /api/poc/replace-table-config（body 带 id 即更新：tableName/replaceType/replaceTableName/status）', danger: true, impl: true, live: true },
+  { path: 'poc/replace-table-config/status', desc: '表改写启停 → POST /api/poc/replace-table-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
 
   // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
@@ -261,6 +313,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/word-segment-config/batch', desc: '分词配置批量新增 → POST /api/poc/word-segment-config/batch（body 是 {type,content,token} **对象数组**）', danger: true, impl: true, live: true },
   { path: 'poc/word-segment-config/update', desc: '分词配置修改 → POST /api/poc/word-segment-config/update（body 带 id，type/content/token 都可改）', danger: true, impl: true, live: true },
   { path: 'poc/word-segment-config/status', desc: '分词配置启停 → POST /api/poc/word-segment-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
+  // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组 → 问数配置组「问数系统配置」页内两 tab）。
+  // 契约来自旧 src/api/system/config.js 与 src/api/system/pageConfig.js，端点域 /poc/system/*，同为 186 POC 服务。
+  // 参数设置：分页 + 详情（id 走**路径段**，逻辑键固定 poc/system/config/detail，真实请求靠 httpEndpoint 拼 id）+ 修改；
+  // 旧页面没有新增/删除/导出/刷新缓存入口（对应按钮全部注释掉），那几条端点不登记。
+  { path: 'poc/system/config/page', desc: '参数设置分页 → POST /api/poc/system/config/page（body: pageNo/pageSize/configKey/configName）', impl: true, live: true },
+  { path: 'poc/system/config/detail', desc: '参数设置详情 → GET /api/poc/system/config/{configId}（id 走路径段）', impl: true, live: true },
+  { path: 'poc/system/config', desc: '参数设置修改 → POST /api/poc/system/config（body 带 id 的整表单；该端点亦可新增，但旧页面没有新增入口）', danger: true, impl: true, live: true },
+  // 页面配置：分页 + batch（body 是 {content} **对象数组**）+ update + status（**body** 传参，同 word-segment-config）。
+  // 没有单条新增与 copy —— 旧弹窗 add 分支已注释、旧列表无入口，新增一律走 batch（见 api/templateConfig.ts 的 pageConfigApi）。
+  { path: 'poc/system/page-config/page', desc: '页面配置分页 → POST /api/poc/system/page-config/page（body: pageNo/pageSize/name/status/type，name/type 旧页面已注释但参数照发空串）', impl: true, live: true },
+  { path: 'poc/system/page-config/batch', desc: '页面配置批量新增 → POST /api/poc/system/page-config/batch（body 是 {content} **对象数组**）', danger: true, impl: true, live: true },
+  { path: 'poc/system/page-config/update', desc: '页面配置修改 → POST /api/poc/system/page-config/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/system/page-config/status', desc: '页面配置启停 → POST /api/poc/system/page-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },

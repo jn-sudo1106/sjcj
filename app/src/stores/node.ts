@@ -28,6 +28,8 @@ export const useNodeStore = defineStore('node', () => {
   // 节点增删/移动/连线/换配置/流程名/进入条件 → flowDirty，由步骤自动保存清。
   // dirty 保留为两者并集：发起抓取门槛、模板页恢复等老调用点语义不变。
   const dirtyConfigNodes = ref<string[]>([])
+  /** 用户手动改过定时策略的节点（只有 patchSchedule 会加）。保存节点时只给这些节点同步定时（2026-10-15） */
+  const scheduleEditedNodes = ref<string[]>([])
   const flowDirty = ref(false)
   /** 每次 touchFlow 自增。自动保存要靠它重开防抖：flowDirty 已经是 true 时再改不会触发 watch。 */
   const flowRev = ref(0)
@@ -38,6 +40,7 @@ export const useNodeStore = defineStore('node', () => {
       if (v) flowDirty.value = true
       else {
         dirtyConfigNodes.value = []
+        scheduleEditedNodes.value = []
         flowDirty.value = false
       }
     },
@@ -56,8 +59,12 @@ export const useNodeStore = defineStore('node', () => {
   function markConfigSaved(id: string) {
     dirtyConfigNodes.value = dirtyConfigNodes.value.filter((nodeId) => nodeId !== id)
   }
+  function clearScheduleEdited(id: string) {
+    scheduleEditedNodes.value = scheduleEditedNodes.value.filter((nodeId) => nodeId !== id)
+  }
   function markSaved() {
     dirtyConfigNodes.value = []
+    scheduleEditedNodes.value = []
     flowDirty.value = false
   }
   function markFlowSaved() {
@@ -172,6 +179,7 @@ export const useNodeStore = defineStore('node', () => {
     const c = configs[id]
     if (!c) return
     c.schedule = { ...c.schedule, ...patch }
+    if (!scheduleEditedNodes.value.includes(id)) scheduleEditedNodes.value.push(id)
     touchConfig(id)
   }
 
@@ -365,11 +373,13 @@ export const useNodeStore = defineStore('node', () => {
     flowDirty,
     flowRev,
     dirtyConfigNodes,
+    scheduleEditedNodes,
     // 操作
     touch,
     touchConfig,
     touchFlow,
     markConfigSaved,
+    clearScheduleEdited,
     markSaved,
     markFlowSaved,
     setTripleCell,

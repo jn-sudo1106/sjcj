@@ -68,6 +68,8 @@ const stubs = {
   ElTooltip: {
     name: 'ElTooltip',
     inheritAttrs: false,
+    // 行内操作改成图标后靠 content（原按钮文案）定位，声明成 prop 才拿得到
+    props: ['content'],
     template: '<span class="stub-tooltip"><slot /></span>',
   },
   ElPagination: {
@@ -111,10 +113,10 @@ async function moreCmd(wrapper: VueWrapper, cmd: string) {
 }
 /** 行内元素只在真实数据行里找（ElTable 会额外渲染一份 hidden-columns 量宽树） */
 const cell = (wrapper: VueWrapper, selector: string) => wrapper.findAll(`tr.el-table__row ${selector}`)
-/** 点某一行行内操作（编辑 / 复制 / 运行） */
+/** 点某一行行内操作（编辑 / 复制 / 运行）：已改成图标，按 tooltip 文案找 */
 async function clickOp(wrapper: VueWrapper, rowIndex: number, text: string) {
-  const ops = cell(wrapper, '.cj-actions')[rowIndex].findAll('.cj-op-link')
-  await ops.find((el) => el.text().trim() === text)!.trigger('click')
+  const tip = cell(wrapper, '.cj-actions')[rowIndex].findAllComponents({ name: 'ElTooltip' }).find((t: VueWrapper) => (t.props() as { content?: string }).content === text)!
+  await tip.find('.cj-op-icon').trigger('click')
   await flushPromises()
 }
 

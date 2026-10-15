@@ -16,7 +16,7 @@ const props = withDefaults(defineProps<{
   confirmText?: string
   /**
    * 「我的视图」目录版（2026-10-13）：查询条件加「来源组」。选中某个组后列表只列组成员，
-   * 上方给出「绑定整个来源组」（emit bindGroup，组成员变了视图跟着变）；不点就是只勾几个源。
+   * 上方给出「绑定整个来源组」（emit bindGroup，组里新加的源自动带进视图）；不点就是只勾几个源。
    */
   groupFilter?: boolean
   /** 目标里已经绑定的来源组：选中时提示已绑定，不再给绑定按钮 */
@@ -141,7 +141,7 @@ async function save() {
     <div v-if="groupFilter && selectedGroup" class="picker-bind" data-testid="picker-bind-bar">
       <template v-if="boundGroups.includes(selectedGroup.id)">来源组「{{ selectedGroup.name }}」已经绑定在这里了</template>
       <template v-else>
-        <span>来源组「{{ selectedGroup.name }}」共 {{ total }} 个源。<b>绑定整个来源组</b>：以后组里加减源，这里跟着变；或者在下面只勾需要的几个源。</span>
+        <span>来源组「{{ selectedGroup.name }}」共 {{ total }} 个源。<b>绑定整个来源组</b>：以后组里新加的源会自动出现在这里；或者在下面只勾需要的几个源。</span>
         <el-button size="small" data-testid="picker-bind-group" @click="bindSelectedGroup">绑定整个来源组</el-button>
       </template>
     </div>

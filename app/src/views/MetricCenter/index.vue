@@ -12,7 +12,7 @@
 //
 // ⚠️ 动作类键（`add`）**不保留**：它是「进页就自动打开新增弹窗」的一次性指令，跟着页签跑会变成
 // 「每次点回指标列表都弹一次新增」。（该机制本身已在 1014 随跳页一起删除，这条留着是防回潮。）
-import { ref, watch } from 'vue'
+import { ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 const TABS: { key: string; label: string }[] = [
   { key: 'indicatorDataset', label: '指标数据集' },
@@ -24,6 +24,13 @@ const CARRY_KEYS = ['sourceId', 'entryTypeId', 'entryType', 'datasetId', 'datase
 import IndicatorDataset from './indicatorDataset/index.vue'
 import IndicatorsList from './indicatorsList/index.vue'
 import IndicatorsResult from './indicatorsResult/index.vue'
+
+// key → 组件映射：改用具名组件 + <component :is>，好让内容区像「模板配置 / 监控」一样带过渡切换
+const comps: Record<string, Component> = {
+  indicatorDataset: IndicatorDataset,
+  indicatorsList: IndicatorsList,
+  indicatorsResult: IndicatorsResult,
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -67,9 +74,9 @@ function selectTab(key: string) {
     </div>
   </div>
 
-  <IndicatorDataset v-if="activeTab === 'indicatorDataset'" />
-  <IndicatorsList v-else-if="activeTab === 'indicatorsList'" />
-  <IndicatorsResult v-else />
+  <transition name="fade-slide" mode="out-in">
+    <component :is="comps[activeTab]" :key="activeTab" />
+  </transition>
 </template>
 
 <style scoped>
@@ -103,5 +110,19 @@ function selectTab(key: string) {
   background: #ffffff;
   color: #0f172a;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 内容区切换过渡：与 TemplateConfig / Monitor 保持同一套 fade-slide 效果 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 </style>

@@ -47,7 +47,14 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type TableInstance } from 'element-plus'
-import { Search, Refresh, Warning, Calendar } from '@element-plus/icons-vue'
+import {
+  Search,
+  Refresh,
+  Warning,
+  Calendar,
+  View,
+  RefreshRight,
+} from '@element-plus/icons-vue'
 import { taskInstPaged, resendTask, type TaskRow } from '@/api/taskList'
 import { confirmDanger } from '@/utils/confirmDanger'
 import { listColumns, STATE_OPTIONS, taskDotTone, timeAgoText } from './columns'
@@ -427,11 +434,14 @@ function applyRouteQuery() {
             <span class="tl-time">{{ timeText(row.updateDt) }}</span>
           </el-tooltip>
 
-          <!-- 操作：旧 actionSlot —— 详情 | 重发（没有编辑） -->
+          <!-- 操作：旧 actionSlot —— 详情 / 重发（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="tl-actions">
-            <span class="tl-op-link" @click="openDetail(row)">详情</span>
-            <span class="tl-op-divider">|</span>
-            <span class="tl-op-link" @click="resendOne(row)">重发</span>
+            <el-tooltip content="详情" placement="top">
+              <span class="tl-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="重发" placement="top">
+              <span class="tl-op-icon" @click="resendOne(row)"><el-icon :size="15"><RefreshRight /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列：直接显示字段值；长文本走列上的 show-overflow-tooltip -->
@@ -461,6 +471,10 @@ function applyRouteQuery() {
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.tl-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .tl-shell {
   display: flex;
   flex-direction: column;
@@ -559,18 +573,23 @@ function applyRouteQuery() {
 .tl-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 10px;
 }
-.tl-op-link {
-  color: var(--rc-primary, #2563eb);
+.tl-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.tl-op-link:hover {
-  text-decoration: underline;
-}
-.tl-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.tl-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .tl-pager {
   display: flex;
@@ -578,3 +597,4 @@ function applyRouteQuery() {
   padding: 8px 0 2px;
 }
 </style>
+
