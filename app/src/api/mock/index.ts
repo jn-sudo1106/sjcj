@@ -95,6 +95,11 @@ import {
   mockPocDatabaseConfigSave,
   mockPocVectorConfigList,
   mockPocVectorDataQuery,
+  mockVectorConfigPaged,
+  mockVectorConfigSave,
+  mockVectorMappingInfo,
+  mockVectorConfigSync,
+  mockVectorConfigDelete,
   mockMatchTableConfigPaged,
   mockMatchTableConfigSave,
   mockMatchTableConfigChangeStatus,
@@ -436,10 +441,16 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/database/table-info': mockPocDatabaseTableInfo,
   'poc/database/config': mockPocDatabaseConfigSave,
 
-  // 向量表数据浏览（1015 迁入「基础配置」）：只读两条 —— 向量表下拉 + 数据查询。
-  // 旧域的 config/page、config（保存）、mapping/info、sync、data-match、delete 属于「向量表管理」，未迁。
+  // 向量表（1015 迁入「基础配置」）：数据浏览两条只读 + 向量表管理五条（分页/保存/列映射/同步/删除），
+  // 浏览下拉与管理列表共用 VECTOR_TABLES 一张内存表（管理页增删改会同步影响浏览页的表名下拉）。
+  // 旧域里剩下的 data-match 是聊天侧 ChatTipsModal 用的，未迁。见 api/templateConfig.ts 的 vectorConfigApi。
   'poc/vector/config/all': mockPocVectorConfigList,
   'poc/vector/data': mockPocVectorDataQuery,
+  'poc/vector/config/page': mockVectorConfigPaged,
+  'poc/vector/config': mockVectorConfigSave,
+  'poc/vector/mapping/info': mockVectorMappingInfo,
+  'poc/vector/sync': mockVectorConfigSync,
+  'poc/vector/delete': mockVectorConfigDelete,
 
   // 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config）：
   // 与 sql 模板同形态 —— 新增/编辑同一个根端点（带 id 即更新）+ status（**query** 传参）+ delete（**query** 只发 id）；
