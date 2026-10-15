@@ -4,7 +4,8 @@
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
 // 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词、分词
-// （模板域最后一个子模块）；新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
+// （模板域最后一个子模块），以及基础配置域的表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理；
+// 新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
 
 import type { Ack, Paged } from './common'
 
@@ -250,6 +251,56 @@ export interface WordSegmentBatchItem {
   token: string
 }
 
+/**
+ * 参数设置（旧 ai-chat-view「系统配置 → 参数设置」，src/system/config/ConfigIndex.vue + modules/ConfigEditForm.vue，
+ * 端点域 /poc/system/config，1015 迁入问数配置组「问数系统配置」页内 tab）。
+ *
+ * ⚠️ 三处旧口径（src/api/system/config.js）：
+ * · 分页 POST /poc/system/config/page，body {pageNo,pageSize,configKey,configName,configType}，
+ *   旧 queryParam 里 configType 恒为 undefined（页面没有该筛选项，JSON 序列化后不上送）；
+ * · 详情 GET /poc/system/config/{configId} —— id 走**路径段**，旧弹窗点「修改」先查详情再回填；
+ * · 新增与修改是同一个端点 POST /poc/system/config（带 id 即更新），但旧列表没有新增/删除/导出/刷新缓存入口
+ *   （对应按钮全部被注释掉），所以本模块只迁 分页 + 详情 + 修改 三个操作。
+ * configType 是「是否内置参数」'Y' / 'N'（旧弹窗默认 'Y'）；旧页面把字典数组传成了空数组，
+ * 单选框实际渲染不出选项，迁移时按旧语义补 是(Y)/否(N) 两个选项（见页面偏差说明）。
+ */
+export interface SystemConfigParam extends TemplateRow {
+  /** 参数编码 */
+  configKey?: string | null
+  /** 参数名称 */
+  configName?: string | null
+  /** 参数值 */
+  configValue?: string | null
+  /** 是否内置参数：'Y' / 'N' */
+  configType?: string | null
+  /** 备注 */
+  remark?: string | null
+}
+
+/**
+ * 页面配置（旧 ai-chat-view「系统配置 → 页面配置」，src/system/config/SysPageConfigList.vue + modules/SysPageConfigEditor.vue，
+ * 端点域 /poc/system/page-config，1015 迁入「问数系统配置」页内 tab）。
+ *
+ * ⚠️ 四处旧口径（src/api/system/pageConfig.js，全部 POST + JSON body）：
+ * · 分页 /page 的旧 queryParam 固定带 name:''/type:''/status:''（类型/内容两个搜索框在旧页面被注释掉，
+ *   参数仍然照发，后端忽略空串），1:1 保留入参形状；
+ * · 新增只有**批量端点** /batch，body 是 `[{content}]` 对象数组（旧弹窗的单条 add 分支已注释、无入口，不迁）；
+ * · 修改 /update（body 带 id，旧页面把整行原样发回去，迁移后只发表单字段，见页面偏差说明）；
+ * · 启停 /status，参数走 **body**（同 word-segment-config，与 question-dic 的 query 不同）。
+ * 列表列只有 id/内容/状态/创建时间/修改时间，type 实体里有字段但页面从不展示、也从不编辑。
+ */
+export interface SysPageConfig extends TemplateRow {
+  /** 类型：旧页面（列与搜索框）全部注释掉，仅实体残留 */
+  type?: string | null
+  /** 内容 */
+  content?: string | null
+}
+
+/** 页面配置批量新增的单行入参（POST /poc/system/page-config/batch 的数组元素，旧页面只取每行逗号前的 content） */
+export interface SysPageConfigBatchItem {
+  content: string
+}
+
 /** 数据字典「编码」下拉的选项（GET /poc/data-index-config/all-code 返回的裸数组元素） */
 export interface DataIndexCodeOption {
   code?: string | null
@@ -257,12 +308,239 @@ export interface DataIndexCodeOption {
   [key: string]: unknown
 }
 
-/** 「使用表范围」下拉选项（旧 tableList → GET /poc/database/entry-list） */
-export interface PocTableEntry {
+/**
+ * 表字段管理的表头配置（旧「基础配置 → 表字段管理」src/demo/EntityConfig.vue 的 entityType，
+ * 1015 迁入问数配置组「基础配置」页内 tab）。
+ *
+ * ⚠️ 三处旧口径（src/demoApi/EntityApi.js:4-6）：
+ * · 表下拉 GET /poc/database/entry-list?name=（与表模板「使用表范围」同一端点，选中项按 entryTypeId 取值）；
+ * · 字段列表 GET /poc/database/table-info?tableId=，回 {code,data:[...]} 裸数组；
+ * · 保存 POST /poc/database/config，body {entityType, entityItems} **整表覆盖**，成功信封 code===0。
+ * 下拉行里带回 aiComment/aiRule/aiDesc/aliasName/useAlias（useAlias 是数字 0/1），选中后回填表头表单。
+ */
+export interface EntityConfigType {
+  entryTypeId?: number | string
+  tableName?: string | null
+  /** 表别名 */
+  aiComment?: string | null
+  /** 表描述 */
+  aiDesc?: string | null
+  /** 校验规则 */
+  aiRule?: string | null
+  /** 生产表名称 */
+  aliasName?: string | null
+  /** 使用生产名称：后端存 0/1，页面开关用 boolean */
+  useAlias?: number | boolean
+  [key: string]: unknown
+}
+
+/** 「使用表范围」/「选择表」下拉选项（旧 tableList → GET /poc/database/entry-list），行内即表头配置形状 */
+export interface PocTableEntry extends EntityConfigType {
   tableName: string
   /** 数据表所属类型名；旧下拉把选项渲染成 `表名【类型名】` */
   typeName?: string | null
+}
+
+/** 表字段管理的字段行（旧 entityItems，GET /poc/database/table-info 返回、保存时整表回传） */
+export interface EntityConfigField {
+  itemId?: number | string
+  /** 字段英文名 */
+  itemCode?: string | null
+  /** 字段中文名 */
+  itemName?: string | null
+  /** 生产字段 */
+  aliasName?: string | null
+  /** 数据类型（只读列） */
+  dataType?: string | null
+  /** 字段描述 */
+  aiComment?: string | null
+  /** 校验规则 */
+  aiRule?: string | null
+  /** 排序 */
+  aiSeq?: number | null
+  /** 指标类型：w 维度 / z 指标 / date 日期 / other 其他 */
+  aiIndexType?: string | null
+  /** 业务类型：int / float / date / text / url / geo */
+  aiBusinessType?: string | null
+  /** 业务类型格式：时点 total / 流量 increment / yyyyMMdd / yyyy-MM-dd… */
+  aiBusinessFormat?: string | null
+  /** 抽取规则类型：1 实体识别 / 2 正则 */
+  chooseType?: number | string | null
+  /** 规则内容 */
+  chooseRule?: string | null
+  /** 映射类型：1 编号 / 2 别名 */
+  mappingType?: number | string | null
+  /** 映射字段 */
+  mappingColumn?: string | null
+  /** 下钻sql配置 */
+  subSql?: string | null
+  /** 是否训练：'1' 是 / '0' 否 */
+  trainingData?: string | number | null
+  /** 数据索引：后端存 0/1，页面 checkbox 用 boolean（dataIndexFlag） */
+  dataIndex?: number | null
+  /** 向量索引：页面已无该列，保存时仍按旧口径原样回传 */
+  vector?: number | null
+  /** 行主键（旧 scopedSlots 行定位用，值=itemId），随旧版整行回传 */
+  key?: number | string
+  /** 序号列（页面派生，旧版也随整行回传） */
+  no?: number
+  /** 数据索引开关（页面 checkbox 绑定，保存前回写成 dataIndex 0/1） */
+  dataIndexFlag?: boolean
+  /** 向量索引开关（页面派生，保存前回写成 vector 0/1） */
+  vectorFlag?: boolean
   [key: string]: unknown
+}
+
+/** 保存表字段配置的 body（POST /poc/database/config） */
+export interface EntityConfigPayload {
+  entityType: EntityConfigType
+  entityItems: EntityConfigField[]
+}
+
+/**
+ * 向量表配置行（旧「基础配置 → 向量表数据浏览」的下拉数据源，GET /poc/vector/config/all?name=）。
+ * 旧页面只用到 name（下拉值、查询入参 type）与 comment（拼进选项文案 `名称[备注]`）；
+ * 其余字段是旧「向量表管理」列表（VectorTableList.vue 的 columns）的口径，浏览页不读，按旧字段名留着。
+ */
+export interface VectorTableOption {
+  id?: number | string
+  /** 向量表名称 —— 选中后作为查询入参 type 发给后端 */
+  name: string
+  /** 向量表备注 */
+  comment?: string | null
+  /** 源表名 */
+  sourceTable?: string | null
+  /** 匹配度 */
+  matchDegree?: number | string | null
+  /** 字典表类型 */
+  dataIndexCode?: string | null
+  /** 最近同步时间 */
+  lastSync?: string | null
+  updateTime?: string | null
+  [key: string]: unknown
+}
+
+/** 向量表数据浏览的查询入参（POST /poc/vector/data，旧 queryParam 原样：input/type/pageSize/pageNo） */
+export interface VectorDataQuery {
+  /** 文本搜索框内容 */
+  input: string
+  /** 选中的向量表名称（VectorTableOption.name） */
+  type: string
+  pageSize: number
+  pageNo: number
+}
+
+/**
+ * 向量表配置行（旧「基础配置 → 向量表管理」，1015 迁入，端点域 /poc/vector/config）。
+ * 列形状取自旧 VectorTableList.vue 的 columns 与旧弹窗 VectorMapping.vue 的 config 表单。
+ * ⚠️ 旧删除端点 POST /poc/vector/delete 的 body 是 `{type: 向量表名称}` —— **按 name 删，不按 id**（旧平台独有口径，1:1 保留）。
+ * 弹窗没有编辑入口的列（sourceTableId / preRule / dataClearRule / lastSync）在旧版编辑保存时随整行回传
+ * （旧 `this.form.config = record` 是引用整个列表行），这里同样整行带回，见 VectorConfigEditDialog 的 passthrough。
+ */
+export interface VectorTableConfig extends TemplateRow {
+  /** 向量表名称（旧新建时自动填 `源表名_VECTOR`，可改） */
+  name: string
+  /** 向量表备注（旧选源表时按 typeName 自动填充） */
+  comment?: string | null
+  /** 源表名（选源表时自动填充，旧口径剥掉 'sense_data.' 前缀） */
+  sourceTable?: string | null
+  /** 源表 id = database/entry-list 行的 entryTypeId（旧表单字段 config.sourceTableId，编辑时靠它拉源表字段） */
+  sourceTableId?: number | string | null
+  /** 匹配度（旧弹窗数字框 0~1、精度 2，新建默认 '0.60'） */
+  matchDegree?: number | string | null
+  /** 字典表类型（必填，旧弹窗是 textarea） */
+  dataIndexCode?: string | null
+  /** 召回数（最小 1，新建默认 1） */
+  returnNum?: number | string | null
+  /** 预处理规则（选填） */
+  preRule?: string | null
+  /** 数据清洗规则（选填） */
+  dataClearRule?: string | null
+  /** 最近同步时间（同步端点回写，列表只读列） */
+  lastSync?: string | null
+}
+
+/**
+ * 向量表列映射行（旧弹窗 form.items：GET /poc/vector/mapping/info?configId= 回显、保存整份随 body 回传）。
+ * 旧弹窗固定三行 —— type '1' 编码 / '2' 内容 / '3' 别名（新建即预置三行空映射，可以删）。
+ */
+export interface VectorMappingItem {
+  id?: number | string
+  configId?: number | string
+  /** 列类型：'1' 编码 / '2' 内容 / '3' 别名 */
+  type?: string
+  /** 源列名（下拉源为源表字段列表，值=itemCode） */
+  sourceColumn?: string | null
+  /** 改写后列名 */
+  targetColumn?: string | null
+  /** 取值列 */
+  valueColumn?: string | null
+  /** 改写规则 */
+  rule?: string | null
+  [key: string]: unknown
+}
+
+/** 向量表配置保存的 body（POST /poc/vector/config，config.id 有值即更新） */
+export interface VectorConfigPayload {
+  config: VectorTableConfig
+  items: VectorMappingItem[]
+}
+
+/**
+ * 选表规则配置（旧「基础配置 → 选表规则配置」，1015 迁入，端点域 /poc/match-table-config）。
+ * 一条 = 一张表的选表规则：问句选表（text_selection）按 rule 里的正则匹配问句，向量选表（vector_selection）走向量检索。
+ *
+ * 字段形状取自 186 POC 服务真实行（2026-10-15 抓样，共 2 条：YJZB_HY_GHKJ / YJZB_HY_JX，都是 text_selection + 禁用）。
+ *
+ * ⚠️ status 真实回的是**数字** 1（与 TemplateRow 声明的字符串不一致），比较一律走 String(row.status)；
+ * 启停端点本身收的是字符串 '0'/'1'（旧列表 changeStatus(row.id, '1') 原样），两端口径不同照旧。
+ * ⚠️ 「表名称」搜索框上送的参数名是 **name**，而实体列是 tableName（旧 MatchTableConfigList.vue:11、88-98）
+ * —— 旧平台自身就是这两个名字不一致，1:1 保留；实测按 name=表名片段查询确实只回那一条。
+ * ⚠️ 分页的 status 筛选**后端不生效**：status 传 '0' / '1' / 数字 / 不传，四种请求都回全量 2 条（2026-10-15 实测）。
+ * 旧平台同样是这个行为，所以 1:1 照迁、不做前端兜底过滤 —— 界面上的「状态」下拉目前只是个占位条件。
+ * ⚠️ 旧列表把 selectionType 渲染成「text_selection → 问句选表，**其余一律向量选表**」，
+ * 即后端回未知码值时会被静默标成向量选表；这里按本域 options.ts 的口径改成匹配不上留空。
+ */
+export interface MatchTableConfig extends TemplateRow {
+  /** 表名称（列展示与保存都用这个字段名） */
+  tableName?: string
+  /** 表 ID（旧页面不展示、弹窗也不能改，编辑时整行原样回传，见 MatchTableConfigEditDialog 的 passthrough） */
+  tableId?: number
+  /** 选表类型：'text_selection' 问句选表 / 'vector_selection' 向量选表 */
+  selectionType?: string
+  /** 旧平台遗留的粗分类（真实行恒为 '0'），列表与弹窗都没有入口，保存时整行带回 */
+  type?: string
+  /** 匹配规则（旧弹窗是文本域，列表整列展示；真实行是一串正则） */
+  rule?: string
+  /** 逻辑删除位（真实行恒为 '0'），保存时整行带回 */
+  delFlag?: string
+}
+
+/**
+ * 表改写配置（旧「基础配置 → 表改写管理」，1015 迁入，端点域 /poc/replace-table-config）。
+ * 一条 = 一张表在出 SQL 时整体换成另一张表；替换类型目前只有 unionall 一个码值（旧弹窗下拉的唯一选项）。
+ *
+ * 字段形状取自 186 POC 服务真实行（2026-10-15 只读抓样，全库 2 条：YJZB_HY_JX → YJZB_HY_GHKJ、
+ * YJZB_HY_GHKJ → YJZB_HY_JX，两张表互相对换，都是 unionall + 禁用）。
+ *
+ * ⚠️ status 真实回的是**数字** 1（与 TemplateRow 声明的字符串不一致），比较一律走 String(row.status)；
+ * 启停端点收的是字符串 '0'/'1'（旧列表 changeStatus(row.id, '1') 原样），两端口径不同照旧。
+ * ⚠️ 与选表规则配置**不同**：本域分页的 status 筛选后端**是生效的**（2026-10-15 实测 '0' 回 0 条、'1' 回全量 2 条，
+ * 数字与字符串都认），所以状态条件在这里不是占位控件。
+ * ⚠️ 「表名称」搜索框上送的参数名是 **name**，实体列是 tableName（旧 ReplaceTableConfigList.vue:11、90-98）
+ * —— 与选表规则配置同款命名不一致，1:1 保留；实测按 tableName 模糊筛，但**大小写敏感**（name=JX 回 1 条、name=jx 回 0 条）。
+ * ⚠️ 旧页面没有「替换表」的查询入口，实测把 replaceTableName / tableName 当筛选参数上送后端一律忽略（回全量）。
+ * ⚠️ delFlag（真实行恒为 '0'）列表与弹窗都没有入口，编辑保存时整行带回，见 ReplaceTableConfigEditDialog 的 passthrough。
+ */
+export interface ReplaceTableConfig extends TemplateRow {
+  /** 表名称（被改写的表，列展示与保存都用这个字段名） */
+  tableName?: string
+  /** 替换类型：旧平台只有 'unionall' 一个码值 */
+  replaceType?: string
+  /** 替换表（改写成哪张表，旧弹窗输入框标签是「替换表名称」） */
+  replaceTableName?: string
+  /** 逻辑删除位（真实行恒为 '0'），保存时整行带回 */
+  delFlag?: string
 }
 
 /** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy） */

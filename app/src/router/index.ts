@@ -29,10 +29,17 @@ const routes: RouteRecordRaw[] = [
       { path: '/sync', component: () => import('../views/DataSync/index.vue') },
       { path: '/sync/create', component: () => import('../views/DataSync/TaskWizard.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
+      // 基础配置（1015 迁入，旧 ai-chat-view「基础配置」组）：侧栏排在模板配置之前，
+      // 表字段管理在页内以 tab 呈现，页面代码放在 views/TemplateConfig/BaseConfig/ 下（同属问数配置域），
+      // 元数据见 router/tabs.ts 的 BASE_CONFIG_TABS。
+      { path: '/base-config', component: () => import('../views/TemplateConfig/BaseConfig/index.vue') },
       // 问数配置 → 模板配置（1013 起从旧 ai-chat-view「模板配置」域逐个迁入的 8 个子模块，1015 收成页内 tab）。
       // 8 个子模块不再有独立地址，元数据见 router/tabs.ts 的 TEMPLATE_CONFIG_TABS，
       // 页面容器见 views/TemplateConfig/index.vue，权限码由页内 tab 过 canAccess 过滤。
       { path: '/template-config', component: () => import('../views/TemplateConfig/index.vue') },
+      // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：参数设置 + 页面配置两个页内 tab，
+      // 页面代码放在 views/TemplateConfig/SystemConfig/ 下（与模板配置同域），元数据见 router/tabs.ts 的 SYSTEM_CONFIG_TABS。
+      { path: '/system-config', component: () => import('../views/TemplateConfig/SystemConfig/index.vue') },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

@@ -90,6 +90,24 @@ describe('表模板配置 · /api/poc HTTP 契约', () => {
     expect(list).toEqual(ENVELOPE_LIST.data)
   })
 
+  it('entry-list / table-info：真实信封带 count:null，client 会误判成分页结果，接口层要还原回数组', async () => {
+    // 2026-10-15 真实后端（124.223.180.186:9093）实测 {code:0,msg:'请求成功',count:null,data:[...]}，
+    // normalizeHttpPayload 的判定是 `'count' in envelope`（不看值），裸数组会被包成 {list,total}，
+    // 「选择表」下拉因此一个选项都渲染不出来
+    const envelope = { code: 0, msg: '请求成功', count: null, data: ENVELOPE_LIST.data }
+    fetchMock.mockResolvedValue(jsonResponse(envelope))
+    const { pocTableEntryList, pocTableFieldList } = await import('./templateConfig')
+
+    await expect(pocTableEntryList('YJZB')).resolves.toEqual(envelope.data)
+    const [entryUrl, entryInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(entryUrl).toBe('/api/poc/database/entry-list?name=YJZB')
+    expect(entryInit.method).toBe('GET')
+
+    await expect(pocTableFieldList(1046)).resolves.toEqual(envelope.data)
+    const [fieldUrl] = fetchMock.mock.calls[1] as [string]
+    expect(fieldUrl).toBe('/api/poc/database/table-info?tableId=1046')
+  })
+
   it('业务失败（code ≠ 0）抛出后端 msg，不静默成功', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: 500, msg: '问句样例已存在' }))
     const { tableTemplateApi } = await import('./templateConfig')

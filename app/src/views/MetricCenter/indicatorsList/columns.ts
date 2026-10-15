@@ -63,6 +63,7 @@ export const MEASURE_BASE: MeasureColumn[] = [
     noEdit: true,
     noDetail: true,
     slot: 'action',
+    align: 'center',
     // 本页列总宽（≈1470）超出内容区（≈1180）会横向滚动，操作列固定在右侧才不会
     // 「拉开滚动条才能点编辑」。旧 s-table 是 `:scroll="{x:1500}"` + 各列 width，
     // 没有 fixed；这里跟 Monitor/taskList 的口径统一。

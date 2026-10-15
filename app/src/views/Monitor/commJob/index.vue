@@ -42,7 +42,19 @@
 //      如果要加确认框，说一声即可。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type TableInstance } from 'element-plus'
-import { Search, Plus, Refresh, Setting, ArrowDown, Lightning, SwitchButton, Scissor } from '@element-plus/icons-vue'
+import {
+  Search,
+  Plus,
+  Refresh,
+  Setting,
+  ArrowDown,
+  Lightning,
+  SwitchButton,
+  Scissor,
+  DocumentCopy,
+  VideoPlay,
+  Edit
+} from '@element-plus/icons-vue'
 import type { CommJob } from '@/api'
 import {
   pagedCommJobCheck,
@@ -363,13 +375,17 @@ onMounted(() => void load())
             <span class="cj-time">{{ timeText(row[col.dataIndex as 'nextRun' | 'lastRun']) }}</span>
           </el-tooltip>
 
-          <!-- 操作：旧 actionSlot —— 编辑 | 复制 | 运行（没有详情，详情走定时ID/定时名） -->
+          <!-- 操作：旧 actionSlot —— 编辑 / 复制 / 运行（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="cj-actions">
-            <span class="cj-op-link" @click="openEdit(row)">编辑</span>
-            <span class="cj-op-divider">|</span>
-            <span class="cj-op-link" @click="copyJob(row)">复制</span>
-            <span class="cj-op-divider">|</span>
-            <span class="cj-op-link" @click="runJob(row)">运行</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="cj-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="复制" placement="top">
+              <span class="cj-op-icon" @click="copyJob(row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="运行" placement="top">
+              <span class="cj-op-icon" @click="runJob(row)"><el-icon :size="15"><VideoPlay /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列（含禁用列以外的短列）：直接显示字段值；长文本走列上的 show-overflow-tooltip -->
@@ -399,6 +415,10 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.cj-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .cj-shell {
   display: flex;
   flex-direction: column;
@@ -475,15 +495,28 @@ onMounted(() => void load())
   text-overflow: ellipsis;
   word-break: break-all;
 }
-.cj-link,
-.cj-op-link {
+.cj-link {
   color: var(--rc-primary, #2563eb);
   cursor: pointer;
   font-size: 12px;
 }
-.cj-link:hover,
-.cj-op-link:hover {
+.cj-link:hover {
   text-decoration: underline;
+}
+.cj-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.cj-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .cj-tag {
   cursor: pointer;
@@ -503,10 +536,8 @@ onMounted(() => void load())
 .cj-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.cj-op-divider {
-  color: var(--rc-faint, #94a3b8);
+  justify-content: center;
+  gap: 10px;
 }
 .cj-pager {
   display: flex;
@@ -514,3 +545,4 @@ onMounted(() => void load())
   padding: 8px 0 2px;
 }
 </style>
+

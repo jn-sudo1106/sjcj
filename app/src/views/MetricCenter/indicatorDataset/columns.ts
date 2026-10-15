@@ -58,7 +58,7 @@ export const DATASET_BASE: DatasetColumn[] = [
   { title: '执行', dataIndex: 'runCnt', span: 2, width: 80, align: 'center', noEdit: true }, // 旧 width 70
   { title: '成功', dataIndex: 'successCnt', span: 2, width: 80, align: 'center', noEdit: true }, // 旧 width 70
   { title: '状态', dataIndex: 'state', span: 2, width: 85, align: 'center', noEdit: true }, // 旧 width 80
-  { title: '操作', dataIndex: 'action', span: 2, width: 175, noEdit: true, noDetail: true, slot: 'action' }, // 旧 width 180
+  { title: '操作', dataIndex: 'action', span: 2, width: 175, noEdit: true, noDetail: true, slot: 'action', align: 'center' }, // 旧 width 180
 ]
 
 /** `allColumns.DATASET.other` —— 只在编辑弹窗 / 详情抽屉里出现（6 列） */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 const TABS: { key: string; label: string }[] = [
   { key: 'sourceCheck', label: '数据源告警' },
@@ -13,6 +13,15 @@ import QueueCheck from './queueCheck/index.vue'
 import CommJob from './commJob/index.vue'
 import TaskList from './taskList/index.vue'
 import TaskStat from './taskStat/index.vue'
+
+// key → 组件映射：改用具名组件 + <component :is>，好让内容区像「模板配置」一样带过渡切换
+const comps: Record<string, Component> = {
+  sourceCheck: SourceCheck,
+  queueCheck: QueueCheck,
+  commJob: CommJob,
+  taskList: TaskList,
+  taskStat: TaskStat,
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -45,11 +54,9 @@ function selectTab(key: string) {
     </div>
   </div>
 
-  <SourceCheck v-if="activeTab === 'sourceCheck'" />
-  <QueueCheck v-else-if="activeTab === 'queueCheck'" />
-  <CommJob v-else-if="activeTab === 'commJob'" />
-  <TaskList v-else-if="activeTab === 'taskList'" />
-  <TaskStat v-else />
+  <transition name="fade-slide" mode="out-in">
+    <component :is="comps[activeTab]" :key="activeTab" />
+  </transition>
 </template>
 
 <style scoped>
@@ -83,5 +90,19 @@ function selectTab(key: string) {
   background: #ffffff;
   color: #0f172a;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 内容区切换过渡：与 TemplateConfig 保持同一套 fade-slide 效果 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 </style>

@@ -98,6 +98,7 @@ import {
   Scissor,
   Search,
   Setting,
+  View,
   WarningFilled,
 } from '@element-plus/icons-vue'
 import {
@@ -545,6 +546,7 @@ const DETAIL_COLUMNS = detailColumns()
             :min-width="col.minWidth"
             :sortable="col.sorter ? 'custom' : false"
             :fixed="col.fixed"
+            :align="col.align ?? 'left'"
           >
             <template #default="{ row }">
               <!-- ID：旧 idSlot —— 在用=纯文本；停用=红标签；历史删除=感叹号 + 标签 -->
@@ -584,26 +586,20 @@ const DETAIL_COLUMNS = detailColumns()
                 </div>
               </el-popover>
 
-              <!-- 操作：旧 actionSlot —— 详情 | 编辑 | 更多（指标副本 / 物理删除） -->
+              <!-- 操作：旧 actionSlot —— 详情 / 编辑 / 指标副本 / 物理删除（图标化，原行内「更多」平铺） -->
               <span v-else-if="col.slot === 'action'" class="ml-actions">
-                <span class="ml-op-link" @click="handleDetail(row)">详情</span>
-                <span class="ml-op-divider">|</span>
-                <span class="ml-op-link" @click="handleEdit(row)">编辑</span>
-                <span class="ml-op-divider">|</span>
-                <el-dropdown trigger="hover" @command="(cmd: string) => onRowCommand(cmd, row)">
-                  <span class="ml-op-link ml-op-more"
-                    >更多<el-icon class="ml-more-caret"><ArrowDown /></el-icon
-                  ></span>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="copy" :icon="CopyDocument">指标副本</el-dropdown-item>
-                      <!-- 旧版 `v-if="record.isDelete === -1"`，同一口径 -->
-                      <el-dropdown-item v-if="Number(row.isDelete) === -1" command="deletePhy" :icon="Scissor" divided>
-                        删除指标(物理删除)
-                      </el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
+                <el-tooltip content="详情" placement="top">
+                  <span class="ml-op-icon" @click="handleDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+                </el-tooltip>
+                <el-tooltip content="编辑" placement="top">
+                  <span class="ml-op-icon" @click="handleEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+                </el-tooltip>
+                <el-tooltip content="指标副本" placement="top">
+                  <span class="ml-op-icon" @click="onRowCommand('copy', row)"><el-icon :size="15"><CopyDocument /></el-icon></span>
+                </el-tooltip>
+                <el-tooltip v-if="Number(row.isDelete) === -1" content="删除指标(物理删除)" placement="top">
+                  <span class="ml-op-icon ml-op-danger" @click="onRowCommand('deletePhy', row)"><el-icon :size="15"><Scissor /></el-icon></span>
+                </el-tooltip>
               </span>
 
               <!-- 其余列（编码 / 源ID / 数据集 / 启用）：直接显示字段值。
@@ -640,6 +636,10 @@ const DETAIL_COLUMNS = detailColumns()
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.ml-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .ml-shell {
   display: flex;
   flex-direction: column;
@@ -815,26 +815,30 @@ const DETAIL_COLUMNS = detailColumns()
 .ml-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 10px;
 }
-.ml-op-link {
-  color: var(--rc-primary, #2563eb);
-  cursor: pointer;
-  font-size: 12px;
-}
-.ml-op-link:hover {
-  text-decoration: underline;
-}
-.ml-op-divider {
-  color: var(--rc-faint, #94a3b8);
-}
-.ml-op-more {
+.ml-op-icon {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
 }
-.ml-more-caret {
-  margin-left: 2px;
-  vertical-align: -0.15em;
+.ml-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
+}
+.ml-op-icon.ml-op-danger {
+  color: var(--rc-danger, #dc2626);
+}
+.ml-op-icon.ml-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .ml-pager {
   display: flex;
@@ -842,3 +846,4 @@ const DETAIL_COLUMNS = detailColumns()
   padding: 10px 2px 2px;
 }
 </style>
+

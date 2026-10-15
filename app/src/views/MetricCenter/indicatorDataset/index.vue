@@ -69,7 +69,18 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
-import { ArrowDown, Plus, Scissor, Search, Setting, WarningFilled } from '@element-plus/icons-vue'
+import {
+  ArrowDown,
+  Plus,
+  Scissor,
+  Search,
+  Setting,
+  WarningFilled,
+  DataAnalysis,
+  View,
+  DocumentCopy,
+  Edit
+} from '@element-plus/icons-vue'
 import {
   changeDatasetEnable,
   copyDataset,
@@ -589,22 +600,20 @@ onMounted(() => {
           <!-- 上次运行 / 下次运行：旧 lastDateSlot —— timeago 相对时间 -->
           <span v-else-if="col.slot === 'lastDate'">{{ timeAgo(row[col.dataIndex] as string) }}</span>
 
-          <!-- 操作：旧 actionSlot —— 指标（弹窗）| 详情 | 编辑 | 更多（制作副本） -->
+          <!-- 操作：旧 actionSlot —— 指标 / 详情 / 编辑 / 制作副本（图标化，原行内「更多」平铺） -->
           <span v-else-if="col.slot === 'action'" class="ids-actions">
-            <span class="ids-op-link" @click="handleShowMeasure(row)">指标</span>
-            <span class="ids-op-divider">|</span>
-            <span class="ids-op-link" @click="openDetail(row)">详情</span>
-            <span class="ids-op-divider">|</span>
-            <span class="ids-op-link" @click="openEdit(row)">编辑</span>
-            <span class="ids-op-divider">|</span>
-            <el-dropdown trigger="hover" @command="(cmd: string) => onRowCommand(cmd, row)">
-              <span class="ids-op-link ids-op-more">更多<el-icon class="ids-more-caret"><ArrowDown /></el-icon></span>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="copy">制作副本</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <el-tooltip content="指标" placement="top">
+              <span class="ids-op-icon" @click="handleShowMeasure(row)"><el-icon :size="15"><DataAnalysis /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="详情" placement="top">
+              <span class="ids-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="编辑" placement="top">
+              <span class="ids-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="制作副本" placement="top">
+              <span class="ids-op-icon" @click="onRowCommand('copy', row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列（上次ID / 定时 / 执行 / 成功 / 状态）：直接显示字段值，不做映射（旧列配置就是裸字段） -->
@@ -642,6 +651,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.ids-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .ids-shell {
   display: flex;
   flex-direction: column;
@@ -706,15 +719,28 @@ onMounted(() => {
   max-width: 100%;
   overflow: hidden;
 }
-.ids-link,
-.ids-op-link {
+.ids-link {
   color: var(--rc-primary, #2563eb);
   cursor: pointer;
   font-size: 12px;
 }
-.ids-link:hover,
-.ids-op-link:hover {
+.ids-link:hover {
   text-decoration: underline;
+}
+.ids-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.ids-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .ids-history {
   display: inline-flex;
@@ -740,18 +766,8 @@ onMounted(() => {
 .ids-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.ids-op-divider {
-  color: var(--rc-faint, #94a3b8);
-}
-.ids-op-more {
-  display: inline-flex;
-  align-items: center;
-}
-.ids-more-caret {
-  margin-left: 2px;
-  vertical-align: -0.15em;
+  justify-content: center;
+  gap: 10px;
 }
 .ids-pager {
   display: flex;
@@ -759,3 +775,4 @@ onMounted(() => {
   padding: 8px 0 2px;
 }
 </style>
+

@@ -106,7 +106,20 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
 import {
-  ArrowDown, Connection, Delete, Download, Minus, Search, Select, Setting, Tickets, Upload, Warning,
+  ArrowDown,
+  Connection,
+  Delete,
+  Download,
+  Edit,
+  Minus,
+  Refresh,
+  Search,
+  Select,
+  Setting,
+  Tickets,
+  Upload,
+  View,
+  Warning,
 } from '@element-plus/icons-vue'
 import {
   dataApi, entryApi,
@@ -971,23 +984,25 @@ watch(
            富余宽度会按各列 min-width 的比例分给数据列，那才是「列自适应页面宽度」。 -->
       <el-table-column v-if="!dynamicCols.length" />
 
-      <el-table-column label="操作" width="80" fixed="right">
+      <el-table-column label="操作" width="160" fixed="right" align="center">
         <template #default="{ row }">
-          <el-dropdown trigger="hover" @command="(cmd: string) => onRowCommand(cmd, row)">
-            <span class="ir-link ir-op-more">操作<el-icon class="ir-more-caret"><ArrowDown /></el-icon></span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="detail">详情</el-dropdown-item>
-                <el-dropdown-item command="subTask">查后续任务实例</el-dropdown-item>
-                <!-- 下面两项只在测试表（state=C）出现，与旧 `v-if="curEntryType.state == 'C'"` 同口径 -->
-                <el-dropdown-item v-if="tableMeta?.state === 'C'" command="deleteOne" divided>
-                  删除单条【无法恢复】
-                </el-dropdown-item>
-                <el-dropdown-item v-if="tableMeta?.state === 'C'" command="edit">手动修改</el-dropdown-item>
-                <el-dropdown-item v-if="row.k0" command="reSave">重新保存原始JSON</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <div class="ir-actions">
+            <el-tooltip content="详情" placement="top">
+              <span class="ir-op-icon" @click="onRowCommand('detail', row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="查后续任务实例" placement="top">
+              <span class="ir-op-icon" @click="onRowCommand('subTask', row)"><el-icon :size="15"><Connection /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip v-if="tableMeta?.state === 'C'" content="删除单条【无法恢复】" placement="top">
+              <span class="ir-op-icon ir-op-danger" @click="onRowCommand('deleteOne', row)"><el-icon :size="15"><Delete /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip v-if="tableMeta?.state === 'C'" content="手动修改" placement="top">
+              <span class="ir-op-icon" @click="onRowCommand('edit', row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip v-if="row.k0" content="重新保存原始JSON" placement="top">
+              <span class="ir-op-icon" @click="onRowCommand('reSave', row)"><el-icon :size="15"><Refresh /></el-icon></span>
+            </el-tooltip>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -1048,6 +1063,10 @@ watch(
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.ir-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .ir-shell {
   display: flex;
   flex-direction: column;
@@ -1109,10 +1128,6 @@ watch(
   margin-left: 4px;
   vertical-align: -0.15em;
 }
-.ir-more-caret {
-  margin-left: 2px;
-  vertical-align: -0.15em;
-}
 .ir-tip {
   margin-bottom: 4px;
 }
@@ -1129,9 +1144,33 @@ watch(
 .ir-time {
   white-space: nowrap;
 }
-.ir-op-more {
+.ir-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.ir-op-icon {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.ir-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
+}
+.ir-op-icon.ir-op-danger {
+  color: var(--rc-danger, #dc2626);
+}
+.ir-op-icon.ir-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .ir-pager {
   display: flex;
@@ -1139,3 +1178,4 @@ watch(
   padding: 8px 0 2px;
 }
 </style>
+

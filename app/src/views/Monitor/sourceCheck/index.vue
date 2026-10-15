@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Plus } from '@element-plus/icons-vue'
+import {
+  Search,
+  Plus,
+  Document,
+  Edit,
+  View,
+  VideoPlay,
+  Delete,
+} from '@element-plus/icons-vue'
 import { type SourceCheck } from '@/api'
 import {
   pagedSourceCheck,
@@ -322,24 +330,25 @@ function onSourceChange() {
       <el-table-column label="下次" width="160" prop="nextRun" />
       <el-table-column label="上次" width="160" prop="lastRun" />
       <el-table-column label="源" width="110" prop="sourceId" class-name="mono-cell" />
-      <!-- 操作：日志 / 编辑（行内）+ 更多（详情 / 立即运行 / 删除） -->
-      <el-table-column label="操作" width="200" fixed="right">
+      <!-- 操作：日志 / 编辑 / 详情 / 立即运行 / 删除，全部图标化，悬浮 tooltip 说明 -->
+      <el-table-column label="操作" width="200" fixed="right" align="center">
         <template #default="{ row }">
-          <div style="display: flex; align-items: center; gap: 4px;">
-            <span class="sc-op-link" @click="openLogs(row)">日志</span>
-            <span class="sc-op-divider">|</span>
-            <span class="sc-op-link" @click="openEditDialog(row)">编辑</span>
-            <span class="sc-op-divider">|</span>
-            <el-dropdown trigger="click">
-              <span class="sc-more-link">更多 ▾</span>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="openDetail(row)">详情</el-dropdown-item>
-                  <el-dropdown-item @click="rowRunNow(row)">立即运行</el-dropdown-item>
-                  <el-dropdown-item divided @click="rowDelete(row)">删除</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+          <div class="sc-op-bar">
+            <el-tooltip content="日志" placement="top">
+              <span class="sc-op-icon" @click="openLogs(row)"><el-icon :size="15"><Document /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="编辑" placement="top">
+              <span class="sc-op-icon" @click="openEditDialog(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="详情" placement="top">
+              <span class="sc-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="立即运行" placement="top">
+              <span class="sc-op-icon" @click="rowRunNow(row)"><el-icon :size="15"><VideoPlay /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <span class="sc-op-icon sc-op-danger" @click="rowDelete(row)"><el-icon :size="15"><Delete /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -402,6 +411,10 @@ function onSourceChange() {
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.sc-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 /* 项目共享令牌缺失时回退值（与 TaskView 同口径） */
 .sc-shell {
   display: flex;
@@ -476,25 +489,33 @@ function onSourceChange() {
 .sc-batch-bar b {
   font-size: 14px;
 }
-.sc-more-link {
-  color: var(--rc-primary, #2563eb);
+.sc-op-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.sc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.sc-more-link:hover {
-  text-decoration: underline;
-}
-.sc-op-link {
+.sc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
   color: var(--rc-primary, #2563eb);
-  cursor: pointer;
-  font-size: 12px;
 }
-.sc-op-link:hover {
-  text-decoration: underline;
+.sc-op-icon.sc-op-danger {
+  color: var(--rc-danger, #dc2626);
 }
-.sc-op-divider {
-  margin: 0 4px;
-  color: var(--rc-faint, #94a3b8);
+.sc-op-icon.sc-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .sc-pager {
   display: flex;

@@ -602,6 +602,16 @@ textarea {
   word-break: break-all;
 }
 
+/* tooltip 浮层兜底限宽：Element Plus 的 tooltip popper 默认不设 max-width，长文本（SQL 报错、
+   长 URL、长 JSON）会被拉成横穿屏幕的一条。这里给 .el-popper 一个兜底上限并强制折行，
+   同时用 :not() 排除 dropdown/select/date-picker/popover 等需要更宽的浮层，避免误伤。
+   （表格 show-overflow-tooltip 内部生成的 tooltip 也走 .el-popper，此处一并生效） */
+.el-popper:not(.el-dropdown__popper):not(.el-select__popper):not(.el-cascader__popper):not(.el-popover):not(.el-date-picker__popper):not(.el-time-picker__popper):not(.el-picker__popper):not(.el-color-picker__popper):not(.el-autocomplete__popper) {
+  max-width: 520px;
+  word-break: break-all;
+  white-space: normal;
+}
+
 /* 复制流程确认框（utils/flow/confirmCopyFlow.ts）：ElMessageBox 挂在 body 下，只能写全局。
    单选项竖排、标题 + 说明两行，长说明允许换行（el-radio 默认 nowrap + 固定高度）。 */
 .copy-flow-box { width: min(480px, calc(100vw - 32px)); }
