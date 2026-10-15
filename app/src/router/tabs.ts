@@ -26,6 +26,9 @@ export const TABS: TabMeta[] = [
   { key: 'tasks', path: '/tasks', label: '任务中心', desc: '全局任务查询、详情与重发', group: 'tools' },
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
+  // 问数配置 → 基础配置（1015 迁入，旧 ai-chat-view「基础配置」组 /demo/entity-build）：
+  // 侧栏排在「模板配置」之前，子模块（表字段管理）在页内以 tab 呈现（见 BASE_CONFIG_TABS 与 views/TemplateConfig/BaseConfig/index.vue）。
+  { key: 'base-config', path: '/base-config', label: '基础配置', desc: '表字段管理（旧 ai-chat-view「基础配置」域）', group: 'template' },
   // 问数配置 → 模板配置（1014 起从旧 ai-chat-view「模板配置」域迁入的 8 个子模块，1014 迁完）。
   // 侧栏只放这一个入口，8 个子模块在页内以 tab 呈现（见 TemplateConfigTabMeta 与 views/TemplateConfig/index.vue）。
   { key: 'template-config', path: '/template-config', label: '模板配置', desc: 'SQL / 表 / 自动补全 / 问句改写 / 数据索引 / 数据字典 / 提示词 / 分词 八类问数模板配置', group: 'template' },
@@ -82,5 +85,15 @@ export const TEMPLATE_CONFIG_TABS: TemplateConfigTabMeta[] = [
 export const SYSTEM_CONFIG_TABS: TemplateConfigTabMeta[] = [
   { key: 'param-config', label: '参数设置', desc: '', permission: 'param-config' },
   { key: 'page-config', label: '页面配置', desc: '', permission: 'page-config' },
+]
+
+/**
+ * 基础配置页内的子模块（1015 从旧 ai-chat-view「基础配置」组迁入，落在问数配置组「模板配置」之前）。
+ * 口径同 TEMPLATE_CONFIG_TABS / SYSTEM_CONFIG_TABS：不进 TABS、侧栏只到「基础配置」一个入口，子模块以页内 tab 呈现
+ * （容器见 views/TemplateConfig/BaseConfig/index.vue）。
+ * key 与端点域对应：entity-config → /poc/database/*（旧路由 /demo/entity-build，表头 entityType + 字段 entityItems 整表保存）。
+ */
+export const BASE_CONFIG_TABS: TemplateConfigTabMeta[] = [
+  { key: 'entity-config', label: '表字段管理', desc: '', permission: 'entity-config' },
 ]
 

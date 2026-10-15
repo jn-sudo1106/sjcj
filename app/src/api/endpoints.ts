@@ -203,6 +203,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/question-temp', desc: '表模板新增/编辑 → POST /api/poc/question-temp（body 带 id 即更新；tableArr/sqlTempConfigIds 是 JSON 字符串）', danger: true, impl: true, live: true },
   { path: 'poc/question-temp/status', desc: '表模板启停 → POST /api/poc/question-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/database/entry-list', desc: '数据表选项（表模板「使用表范围」下拉）→ GET /api/poc/database/entry-list?name=', impl: true, live: true },
+  // 表字段管理（1015 迁入，旧 ai-chat-view「基础配置 → 表字段管理」src/demo/EntityConfig.vue，同 database 域）。
+  // 契约来自旧 src/demoApi/EntityApi.js:4-6；与 entry-list 同域同进程，live 对齐同域口径。
+  // ⚠️ config 是**整表覆盖**：一次保存同时写表头（entityType）与全部字段行（entityItems）。
+  { path: 'poc/database/table-info', desc: '表字段列表（表字段管理）→ GET /api/poc/database/table-info?tableId=', impl: true, live: true },
+  { path: 'poc/database/config', desc: '表字段配置保存 → POST /api/poc/database/config（body {entityType, entityItems}，整表覆盖）', danger: true, impl: true, live: true },
 
   // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。

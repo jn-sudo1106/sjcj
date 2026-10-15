@@ -307,12 +307,93 @@ export interface DataIndexCodeOption {
   [key: string]: unknown
 }
 
-/** 「使用表范围」下拉选项（旧 tableList → GET /poc/database/entry-list） */
-export interface PocTableEntry {
+/**
+ * 表字段管理的表头配置（旧「基础配置 → 表字段管理」src/demo/EntityConfig.vue 的 entityType，
+ * 1015 迁入问数配置组「基础配置」页内 tab）。
+ *
+ * ⚠️ 三处旧口径（src/demoApi/EntityApi.js:4-6）：
+ * · 表下拉 GET /poc/database/entry-list?name=（与表模板「使用表范围」同一端点，选中项按 entryTypeId 取值）；
+ * · 字段列表 GET /poc/database/table-info?tableId=，回 {code,data:[...]} 裸数组；
+ * · 保存 POST /poc/database/config，body {entityType, entityItems} **整表覆盖**，成功信封 code===0。
+ * 下拉行里带回 aiComment/aiRule/aiDesc/aliasName/useAlias（useAlias 是数字 0/1），选中后回填表头表单。
+ */
+export interface EntityConfigType {
+  entryTypeId?: number | string
+  tableName?: string | null
+  /** 表别名 */
+  aiComment?: string | null
+  /** 表描述 */
+  aiDesc?: string | null
+  /** 校验规则 */
+  aiRule?: string | null
+  /** 生产表名称 */
+  aliasName?: string | null
+  /** 使用生产名称：后端存 0/1，页面开关用 boolean */
+  useAlias?: number | boolean
+  [key: string]: unknown
+}
+
+/** 「使用表范围」/「选择表」下拉选项（旧 tableList → GET /poc/database/entry-list），行内即表头配置形状 */
+export interface PocTableEntry extends EntityConfigType {
   tableName: string
   /** 数据表所属类型名；旧下拉把选项渲染成 `表名【类型名】` */
   typeName?: string | null
+}
+
+/** 表字段管理的字段行（旧 entityItems，GET /poc/database/table-info 返回、保存时整表回传） */
+export interface EntityConfigField {
+  itemId?: number | string
+  /** 字段英文名 */
+  itemCode?: string | null
+  /** 字段中文名 */
+  itemName?: string | null
+  /** 生产字段 */
+  aliasName?: string | null
+  /** 数据类型（只读列） */
+  dataType?: string | null
+  /** 字段描述 */
+  aiComment?: string | null
+  /** 校验规则 */
+  aiRule?: string | null
+  /** 排序 */
+  aiSeq?: number | null
+  /** 指标类型：w 维度 / z 指标 / date 日期 / other 其他 */
+  aiIndexType?: string | null
+  /** 业务类型：int / float / date / text / url / geo */
+  aiBusinessType?: string | null
+  /** 业务类型格式：时点 total / 流量 increment / yyyyMMdd / yyyy-MM-dd… */
+  aiBusinessFormat?: string | null
+  /** 抽取规则类型：1 实体识别 / 2 正则 */
+  chooseType?: number | string | null
+  /** 规则内容 */
+  chooseRule?: string | null
+  /** 映射类型：1 编号 / 2 别名 */
+  mappingType?: number | string | null
+  /** 映射字段 */
+  mappingColumn?: string | null
+  /** 下钻sql配置 */
+  subSql?: string | null
+  /** 是否训练：'1' 是 / '0' 否 */
+  trainingData?: string | number | null
+  /** 数据索引：后端存 0/1，页面 checkbox 用 boolean（dataIndexFlag） */
+  dataIndex?: number | null
+  /** 向量索引：页面已无该列，保存时仍按旧口径原样回传 */
+  vector?: number | null
+  /** 行主键（旧 scopedSlots 行定位用，值=itemId），随旧版整行回传 */
+  key?: number | string
+  /** 序号列（页面派生，旧版也随整行回传） */
+  no?: number
+  /** 数据索引开关（页面 checkbox 绑定，保存前回写成 dataIndex 0/1） */
+  dataIndexFlag?: boolean
+  /** 向量索引开关（页面派生，保存前回写成 vector 0/1） */
+  vectorFlag?: boolean
   [key: string]: unknown
+}
+
+/** 保存表字段配置的 body（POST /poc/database/config） */
+export interface EntityConfigPayload {
+  entityType: EntityConfigType
+  entityItems: EntityConfigField[]
 }
 
 /** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy） */

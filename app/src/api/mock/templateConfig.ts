@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -246,22 +246,69 @@ export function mockTableTemplateChangeStatus(params?: Record<string, unknown>) 
 }
 
 /**
- * 数据表选项（旧 tableList → GET /poc/database/entry-list?name=），表模板「使用表范围」下拉的数据源。
+ * 数据表选项（旧 tableList → GET /poc/database/entry-list?name=），表模板「使用表范围」与
+ * 表字段管理「选择表」下拉的数据源。
  * 返回**裸数组**（真实信封 {code,data:[...]} 没有 count，client.ts 直接透传 data），按表名模糊筛。
  * ⚠️ 同样是为演示构造的示例表，名称与上面 sql 模板种子里的表名对得上，便于串起完整链路。
+ * entryTypeId + 表头字段（aiComment/aiRule/aiDesc/aliasName/useAlias）是表字段管理选中后回填用的形状。
  */
 const POC_TABLE_ENTRIES: PocTableEntry[] = [
-  { tableName: 'KHFA_KHZBJG_JG', typeName: '客户指标结果' },
-  { tableName: 'KHFA_ZB_DEF', typeName: '指标定义' },
-  { tableName: 'KHFA_JG_DEF', typeName: '机构定义' },
-  { tableName: 'KHFA_KHJBXX', typeName: '客户基本信息' },
-  { tableName: 'DIM_DATE', typeName: '日期维表' },
+  { entryTypeId: 1, tableName: 'KHFA_KHZBJG_JG', typeName: '客户指标结果', aiComment: '客户指标结果', aiDesc: '按机构与日期存储的客户指标结果', aiRule: '', aliasName: 'KHFA_KHZBJG_JG', useAlias: 0 },
+  { entryTypeId: 2, tableName: 'KHFA_ZB_DEF', typeName: '指标定义', aiComment: '指标定义', aiDesc: '指标口径定义表', aiRule: '', aliasName: 'KHFA_ZB_DEF', useAlias: 0 },
+  { entryTypeId: 3, tableName: 'KHFA_JG_DEF', typeName: '机构定义', aiComment: '机构定义', aiDesc: '机构层级与编码', aiRule: '', aliasName: 'KHFA_JG_DEF', useAlias: 0 },
+  { entryTypeId: 4, tableName: 'KHFA_KHJBXX', typeName: '客户基本信息', aiComment: '客户基本信息', aiDesc: '客户主档案', aiRule: '', aliasName: 'KHFA_KHJBXX', useAlias: 0 },
+  { entryTypeId: 5, tableName: 'DIM_DATE', typeName: '日期维表', aiComment: '日期维表', aiDesc: '自然日维度', aiRule: '', aliasName: 'DIM_DATE', useAlias: 0 },
 ]
 
 export function mockPocDatabaseEntryList(params?: Record<string, unknown>): PocTableEntry[] {
   const name = String(params?.name ?? '').trim().toUpperCase()
   if (!name) return POC_TABLE_ENTRIES.map((entry) => ({ ...entry }))
   return POC_TABLE_ENTRIES.filter((entry) => entry.tableName.toUpperCase().includes(name)).map((entry) => ({ ...entry }))
+}
+
+/**
+ * 表字段管理（旧「基础配置 → 表字段管理」，1015 迁入）的字段行内存表，key = entryTypeId。
+ * 首次访问按表头种子的列形状构造示例字段；保存（mockPocDatabaseConfigSave）整表覆盖这里与 POC_TABLE_ENTRIES 的表头字段。
+ */
+const POC_ENTITY_FIELDS = new Map<number, EntityConfigField[]>()
+
+function seedEntityFields(entryTypeId: number): EntityConfigField[] {
+  return [
+    { itemId: entryTypeId * 100 + 1, itemCode: 'JGMC', itemName: '机构名称', aliasName: 'BRANCH_NAME', dataType: 'VARCHAR2', aiComment: '机构名称', aiRule: '', aiSeq: 1, aiIndexType: 'w', aiBusinessType: 'text', aiBusinessFormat: '', chooseType: 1, chooseRule: '', mappingType: 2, mappingColumn: 'jgmc', subSql: '', trainingData: '0', dataIndex: 1, vector: 0 },
+    { itemId: entryTypeId * 100 + 2, itemCode: 'SJRQ', itemName: '数据日期', aliasName: 'DATA_DATE', dataType: 'DATE', aiComment: '数据日期', aiRule: '', aiSeq: 2, aiIndexType: 'date', aiBusinessType: 'date', aiBusinessFormat: 'yyyyMMdd', chooseType: null, chooseRule: '', mappingType: null, mappingColumn: '', subSql: '', trainingData: '0', dataIndex: 0, vector: 0 },
+    { itemId: entryTypeId * 100 + 3, itemCode: 'KHZBMC', itemName: '客户指标名称', aliasName: 'ZB_NAME', dataType: 'VARCHAR2', aiComment: '客户指标名称', aiRule: '', aiSeq: 3, aiIndexType: 'z', aiBusinessType: 'float', aiBusinessFormat: 'total', chooseType: 1, chooseRule: '', mappingType: null, mappingColumn: '', subSql: '', trainingData: '1', dataIndex: 1, vector: 0 },
+  ]
+}
+
+/** 字段列表（旧 tableDesc → GET /poc/database/table-info?tableId=），返回裸数组 */
+export function mockPocDatabaseTableInfo(params?: Record<string, unknown>): EntityConfigField[] | { ok: false; message: string } {
+  const tableId = Number(params?.tableId)
+  if (!POC_TABLE_ENTRIES.some((entry) => Number(entry.entryTypeId) === tableId)) {
+    return { ok: false, message: '未找到对应的数据表' }
+  }
+  if (!POC_ENTITY_FIELDS.has(tableId)) POC_ENTITY_FIELDS.set(tableId, seedEntityFields(tableId))
+  return POC_ENTITY_FIELDS.get(tableId)!.map((field) => ({ ...field }))
+}
+
+/** 保存配置（旧 saveConfig → POST /poc/database/config）—— {entityType, entityItems} 整表覆盖 */
+export function mockPocDatabaseConfigSave(params?: Record<string, unknown>) {
+  const payload = params as unknown as EntityConfigPayload
+  const entryTypeId = Number(payload?.entityType?.entryTypeId)
+  const row = POC_TABLE_ENTRIES.find((entry) => Number(entry.entryTypeId) === entryTypeId)
+  if (!row) return { ok: false, message: '未找到要保存的数据表' }
+  const { aiComment, aiDesc, aiRule, aliasName, useAlias } = payload.entityType
+  Object.assign(row, { aiComment, aiDesc, aiRule, aliasName, useAlias })
+  POC_ENTITY_FIELDS.set(
+    entryTypeId,
+    (payload.entityItems ?? []).map((field) => {
+      const clone = { ...field }
+      // 页面行上的派生展示键不进"库"（真实后端也只认实体字段），与旧 save 的整行回传口径一致地保留 dataIndex/vector
+      if (clone.dataIndexFlag != null) clone.dataIndex = clone.dataIndexFlag ? 1 : 0
+      if (clone.vectorFlag != null) clone.vector = clone.vectorFlag ? 1 : 0
+      return clone
+    }),
+  )
+  return { ok: true, message: '保存成功（演示）' }
 }
 
 /* ── 自动补全配置（旧「模板配置 → 自动补全配置」，端点域 /poc/dic） ── */

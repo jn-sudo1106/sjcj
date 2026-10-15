@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -230,12 +230,41 @@ export const wordSegmentApi: WordSegmentApi = {
 }
 
 /**
- * 「使用表范围」下拉的数据表选项（旧 tableList → GET /poc/database/entry-list?name=）。
- * 返回的是裸数组：真实信封 {code,data:[...]} 里没有 count，client.ts 的 normalizeHttpPayload
- * 会把 data 数组直接透传出来（见 client.ts:393 的分页判定）。
+ * 真实后端（124.223.180.186:9093 实测）这两个 /poc/database GET 端点的信封固定带 `count: null`，
+ * 而 client.ts 的分页判定是按 key 存在与否（`'count' in envelope`，client.ts:421），不看值，
+ * 所以裸数组会被包成 {list,total}。旧页面读的是 res.data，没有这一层，这里统一还原成数组。
  */
-export function pocTableEntryList(name = ''): Promise<PocTableEntry[]> {
-  return request<PocTableEntry[]>('poc/database/entry-list', { name }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/entry-list` })
+function toRowArray<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload as T[]
+  const list = (payload as { list?: unknown } | null)?.list
+  return Array.isArray(list) ? (list as T[]) : []
+}
+
+/**
+ * 「使用表范围」下拉的数据表选项（旧 tableList → GET /poc/database/entry-list?name=）。
+ * ⚠️ 见 toRowArray：真实响应带 count:null，client.ts 会误判成分页结果，这里还原回数组再返回。
+ */
+export async function pocTableEntryList(name = ''): Promise<PocTableEntry[]> {
+  const payload = await request<PocTableEntry[] | Paged<PocTableEntry>>('poc/database/entry-list', { name }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/entry-list` })
+  return toRowArray<PocTableEntry>(payload)
+}
+
+/**
+ * 表字段管理的字段列表（旧 tableDesc → GET /poc/database/table-info?tableId=，1015 迁入「基础配置 → 表字段管理」）。
+ * tableId 是 entry-list 行的 entryTypeId；同样要过 toRowArray 还原 count:null 信封带来的 {list,total} 包装。
+ */
+export async function pocTableFieldList(tableId: number | string): Promise<EntityConfigField[]> {
+  const payload = await request<EntityConfigField[] | Paged<EntityConfigField>>('poc/database/table-info', { tableId: String(tableId) }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/table-info` })
+  return toRowArray<EntityConfigField>(payload)
+}
+
+/**
+ * 表字段配置保存（旧 saveConfig → POST /poc/database/config）—— body {entityType, entityItems}，**整表覆盖**。
+ * 旧页面按 res.code===0 判成功；client.ts 的 normalizeHttpPayload 对 code!==0 直接抛错并带出后端 msg，
+ * 所以这里返回即成功，失败在调用方 catch（见 views/TemplateConfig/BaseConfig/EntityConfig）。
+ */
+export function pocEntityConfigSave(payload: EntityConfigPayload): Promise<Ack> {
+  return request<Ack>('poc/database/config', { ...payload }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/database/config` })
 }
 
 /** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */

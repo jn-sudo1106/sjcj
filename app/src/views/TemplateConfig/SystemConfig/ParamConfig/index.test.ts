@@ -114,7 +114,7 @@ describe('参数设置列表页', () => {
     await buttonInFilter(wrapper, '重置').trigger('click')
     await flushPromises()
     expect(lastPageQuery()).toEqual({ pageNo: 1, pageSize: 20, configKey: '', configName: '' })
-    expect(inputByPlaceholder(wrapper, '请输入参数名称').element.value).toBe('')
+    expect((inputByPlaceholder(wrapper, '请输入参数名称').element as HTMLInputElement).value).toBe('')
   })
 
   it('点修改：先按 id 拉详情，成功后才把详情交给弹窗', async () => {
