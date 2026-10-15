@@ -40,7 +40,18 @@
 //      旧版是「E 红、其余一律蓝」；文案仍走同一个 stateFilter，只是颜色更细。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type TableInstance } from 'element-plus'
-import { Search, Plus, Refresh, Setting, ArrowDown, Lightning, SwitchButton, Scissor } from '@element-plus/icons-vue'
+import {
+  Search,
+  Plus,
+  Refresh,
+  Setting,
+  ArrowDown,
+  Lightning,
+  SwitchButton,
+  Scissor,
+  Document,
+  EditPen,
+} from '@element-plus/icons-vue'
 import type { MqCheck } from '@/api'
 import {
   pagedQueueCheck,
@@ -348,11 +359,14 @@ onMounted(() => void load())
             :tone="stateTone(row.state)"
           />
 
-          <!-- 操作：旧 actionSlot —— 详情 | 编辑 -->
+          <!-- 操作：旧 actionSlot —— 详情 / 编辑（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="qc-actions">
-            <span class="qc-op-link" @click="openDetail(row)">详情</span>
-            <span class="qc-op-divider">|</span>
-            <span class="qc-op-link" @click="openEdit(row)">编辑</span>
+            <el-tooltip content="详情" placement="top">
+              <span class="qc-op-icon" @click="openDetail(row)"><el-icon :size="15"><Document /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="编辑" placement="top">
+              <span class="qc-op-icon" @click="openEdit(row)"><el-icon :size="15"><EditPen /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列（含执行结果 lastMsg）：直接显示字段值；长文本的「单行省略 + 悬停看全文」
@@ -384,6 +398,10 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.qc-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .qc-shell {
   display: flex;
   flex-direction: column;
@@ -459,15 +477,28 @@ onMounted(() => void load())
   text-overflow: ellipsis;
   word-break: break-all;
 }
-.qc-link,
-.qc-op-link {
+.qc-link {
   color: var(--rc-primary, #2563eb);
   cursor: pointer;
   font-size: 12px;
 }
-.qc-link:hover,
-.qc-op-link:hover {
+.qc-link:hover {
   text-decoration: underline;
+}
+.qc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--rc-primary, #2563eb);
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.qc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .qc-tag {
   cursor: pointer;
@@ -484,10 +515,7 @@ onMounted(() => void load())
 .qc-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.qc-op-divider {
-  color: var(--rc-faint, #94a3b8);
+  gap: 10px;
 }
 .qc-pager {
   display: flex;
