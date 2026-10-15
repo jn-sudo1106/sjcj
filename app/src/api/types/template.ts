@@ -4,7 +4,7 @@
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
 // 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词、分词
-// （模板域最后一个子模块），以及基础配置域的表字段管理、向量表数据浏览、选表规则配置；
+// （模板域最后一个子模块），以及基础配置域的表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理；
 // 新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
 
 import type { Ack, Paged } from './common'
@@ -512,6 +512,33 @@ export interface MatchTableConfig extends TemplateRow {
   type?: string
   /** 匹配规则（旧弹窗是文本域，列表整列展示；真实行是一串正则） */
   rule?: string
+  /** 逻辑删除位（真实行恒为 '0'），保存时整行带回 */
+  delFlag?: string
+}
+
+/**
+ * 表改写配置（旧「基础配置 → 表改写管理」，1015 迁入，端点域 /poc/replace-table-config）。
+ * 一条 = 一张表在出 SQL 时整体换成另一张表；替换类型目前只有 unionall 一个码值（旧弹窗下拉的唯一选项）。
+ *
+ * 字段形状取自 186 POC 服务真实行（2026-10-15 只读抓样，全库 2 条：YJZB_HY_JX → YJZB_HY_GHKJ、
+ * YJZB_HY_GHKJ → YJZB_HY_JX，两张表互相对换，都是 unionall + 禁用）。
+ *
+ * ⚠️ status 真实回的是**数字** 1（与 TemplateRow 声明的字符串不一致），比较一律走 String(row.status)；
+ * 启停端点收的是字符串 '0'/'1'（旧列表 changeStatus(row.id, '1') 原样），两端口径不同照旧。
+ * ⚠️ 与选表规则配置**不同**：本域分页的 status 筛选后端**是生效的**（2026-10-15 实测 '0' 回 0 条、'1' 回全量 2 条，
+ * 数字与字符串都认），所以状态条件在这里不是占位控件。
+ * ⚠️ 「表名称」搜索框上送的参数名是 **name**，实体列是 tableName（旧 ReplaceTableConfigList.vue:11、90-98）
+ * —— 与选表规则配置同款命名不一致，1:1 保留；实测按 tableName 模糊筛，但**大小写敏感**（name=JX 回 1 条、name=jx 回 0 条）。
+ * ⚠️ 旧页面没有「替换表」的查询入口，实测把 replaceTableName / tableName 当筛选参数上送后端一律忽略（回全量）。
+ * ⚠️ delFlag（真实行恒为 '0'）列表与弹窗都没有入口，编辑保存时整行带回，见 ReplaceTableConfigEditDialog 的 passthrough。
+ */
+export interface ReplaceTableConfig extends TemplateRow {
+  /** 表名称（被改写的表，列展示与保存都用这个字段名） */
+  tableName?: string
+  /** 替换类型：旧平台只有 'unionall' 一个码值 */
+  replaceType?: string
+  /** 替换表（改写成哪张表，旧弹窗输入框标签是「替换表名称」） */
+  replaceTableName?: string
   /** 逻辑删除位（真实行恒为 '0'），保存时整行带回 */
   delFlag?: string
 }

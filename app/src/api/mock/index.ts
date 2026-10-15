@@ -104,6 +104,9 @@ import {
   mockMatchTableConfigSave,
   mockMatchTableConfigChangeStatus,
   mockMatchTableConfigDelete,
+  mockReplaceTableConfigPaged,
+  mockReplaceTableConfigSave,
+  mockReplaceTableConfigChangeStatus,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
@@ -459,6 +462,13 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/match-table-config': mockMatchTableConfigSave,
   'poc/match-table-config/status': mockMatchTableConfigChangeStatus,
   'poc/match-table-config/delete': mockMatchTableConfigDelete,
+
+  // 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」，端点域 /poc/replace-table-config）：
+  // 比选表规则配置还少一个端点 —— 旧域只有 page / 根（新增与编辑同一个）/ status（**query** 传参），
+  // 没有 copy 也没有删除，所以这里只有三个 handler。见 api/templateConfig.ts 的 replaceTableConfigApi。
+  'poc/replace-table-config/page': mockReplaceTableConfigPaged,
+  'poc/replace-table-config': mockReplaceTableConfigSave,
+  'poc/replace-table-config/status': mockReplaceTableConfigChangeStatus,
 
   // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
   'poc/dic/page': mockDicTemplatePaged,

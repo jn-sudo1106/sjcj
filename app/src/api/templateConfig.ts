@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorConfigPayload, VectorDataQuery, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, ReplaceTableConfig, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorConfigPayload, VectorDataQuery, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -360,6 +360,25 @@ export const matchTableConfigApi: MatchTableConfigApi = {
   remove: (id: number) =>
     request<Ack>('poc/match-table-config/delete', { id }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/match-table-config/delete` }),
 }
+
+/**
+ * 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」src/demo/ReplaceTableConfigList.vue +
+ * modal/ReplaceTableConfigEditor.vue，旧接口 src/demoApi/ReplaceTableConfigApi.js:4-6）。
+ *
+ * 走 createTemplateCrudApi 工厂，且是本域最干净的一个模块 —— 旧接口文件只有三个函数
+ * （page / editor / changeConfigStatus），正是工厂去掉 copy 后的形状：
+ * 新增与修改同一个根端点（POST /poc/replace-table-config，body 带 id 即更新）、
+ * 启停 POST /poc/replace-table-config/status 且参数走 **query**（旧 changeConfigStatus 用的是 axios params，
+ * 同选表规则配置，与 chat-flow-step / data-index-config 那几个 body 传参的域不同）。
+ * operations.copy=false —— 旧域没有 /copy；也**没有删除端点**（旧列表操作列只有「编辑」和「启用/禁用」），
+ * 所以不像 matchTableConfigApi 那样扩 remove。
+ * 分页的两个筛选都在 body：name（旧搜索框标签「表名称」，实测按 tableName 模糊筛、大小写敏感）/ status
+ * （⚠️ 与选表规则配置不同，本域后端**认**这个条件，2026-10-15 在 186 实测）。
+ */
+export const replaceTableConfigApi: TemplateCrudApi<ReplaceTableConfig> = createTemplateCrudApi<ReplaceTableConfig>({
+  module: 'replace-table-config',
+  operations: { copy: false },
+})
 
 /** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */
 export interface SystemConfigApi {

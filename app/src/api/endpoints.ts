@@ -239,6 +239,21 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/match-table-config/status', desc: '选表规则启停 → POST /api/poc/match-table-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/match-table-config/delete', desc: '选表规则删除 → POST /api/poc/match-table-config/delete?id=（旧平台少见的删除端点，只发 id）', danger: true, impl: true, live: true },
 
+  // 表改写管理（1015 迁入，旧 ai-chat-view「基础配置 → 表改写管理」src/demo/ReplaceTableConfigList.vue + modal/ReplaceTableConfigEditor.vue）。
+  // 契约来自旧 src/demoApi/ReplaceTableConfigApi.js:4-6 —— 旧接口文件只有这三个函数：
+  // 与选表规则配置同形态（新增与修改**同一个根端点**、body 带 id 即更新；status 参数走 **query**），
+  // 没有 copy，也**没有删除**（旧列表操作列只有「编辑」和「启用/禁用」），所以本域就是 CRUD 工厂去掉 copy 的形状。
+  // 三条端点：分页 2026-10-15 在 186 只读实测（全库 2 条：两张表互相对换、都是 unionall + 禁用）；
+  // save / status 按旧契约接线并标 live，但本轮**没做写验证**（不往开发库造数据），联调跑通一条真实新增后再复核。
+  // 与选表规则配置**不同**的两点：
+  // ⚠️ 本域分页的 status 筛选后端**是生效的**（'0' 回 0 条、'1' 回全量 2 条，数字与字符串都认）；
+  // ⚠️ name 按 tableName 模糊筛但**大小写敏感**（name=JX 回 1 条、name=jx 回 0 条）。
+  // 另实测 replaceTableName / tableName 当筛选参数上送会被后端忽略（回全量），旧页面也没有这两个查询入口，不迁。
+  // 真实行的 status 回的是**数字** 1，比较走 String(row.status)；行里还带 delFlag（恒 '0'，页面不展示、编辑整行带回）。
+  { path: 'poc/replace-table-config/page', desc: '表改写分页 → POST /api/poc/replace-table-config/page（body: pageNo/pageSize/name/status，name 按 tableName 模糊筛、大小写敏感；status 后端生效）', impl: true, live: true },
+  { path: 'poc/replace-table-config', desc: '表改写新增/编辑 → POST /api/poc/replace-table-config（body 带 id 即更新：tableName/replaceType/replaceTableName/status）', danger: true, impl: true, live: true },
+  { path: 'poc/replace-table-config/status', desc: '表改写启停 → POST /api/poc/replace-table-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
   // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
   { path: 'poc/dic/page', desc: '自动补全分页 → POST /api/poc/dic/page（body: pageNo/pageSize/name，name 模糊匹配「内容」）', impl: true, live: true },

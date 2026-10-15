@@ -12,6 +12,7 @@ import EntityConfigPage from './EntityConfig/index.vue'
 import VectorDataShowPage from './VectorDataShow/index.vue'
 import MatchTableConfigPage from './MatchTableConfig/index.vue'
 import VectorConfigPage from './VectorConfig/index.vue'
+import ReplaceTableConfigPage from './ReplaceTableConfig/index.vue'
 
 defineOptions({ name: 'BaseConfigPage' })
 
@@ -20,6 +21,7 @@ const comps: Record<string, Component> = {
   'vector-data': VectorDataShowPage,
   'match-table-config': MatchTableConfigPage,
   'vector-config': VectorConfigPage,
+  'replace-table-config': ReplaceTableConfigPage,
 }
 
 const route = useRoute()
