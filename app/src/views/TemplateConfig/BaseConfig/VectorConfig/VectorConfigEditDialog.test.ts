@@ -46,7 +46,7 @@ function itemByLabel(label: string): HTMLElement {
   )!
 }
 function fill(label: string, value: string) {
-  const input = itemByLabel(label).querySelector('input, textarea')!
+  const input = itemByLabel(label).querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')!
   input.value = value
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }

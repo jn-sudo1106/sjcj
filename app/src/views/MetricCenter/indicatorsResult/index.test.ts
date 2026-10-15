@@ -262,8 +262,18 @@ function batchDropdown(w: VueWrapper) {
   return hit
 }
 
-function rowDropdown(w: VueWrapper, rowIndex: number) {
-  return w.findAll('.el-table__body tr')[rowIndex].findComponent({ name: 'ElDropdown' })
+/** el-tooltip 的 content（行内图标的原按钮文案） */
+const tipText = (t: VueWrapper) => (t.props() as { content?: string }).content
+
+/** 表格第 rowIndex 行的行内操作：原「操作」下拉已改成平铺图标（el-tooltip 的 content 是原菜单文案） */
+function rowTips(w: VueWrapper, rowIndex: number) {
+  return w.findAll('.el-table__body tr')[rowIndex].findAllComponents({ name: 'ElTooltip' })
+    .filter((t: VueWrapper) => t.find('.ir-op-icon').exists())
+}
+function rowOp(w: VueWrapper, rowIndex: number, text: string) {
+  const tip = rowTips(w, rowIndex).find((t: VueWrapper) => tipText(t) === text)
+  if (!tip) throw new Error(`第 ${rowIndex} 行找不到操作：${text}`)
+  return tip.find('.ir-op-icon')
 }
 
 function lastQuery(): Record<string, unknown> {
@@ -680,13 +690,13 @@ describe('indicatorsResult · 行内操作', () => {
     expect(cellOf(w, 1, 13).text()).toBe('-')
   })
 
-  it('操作下拉：测试表 + 有 K0 → 5 项；无 K0 时少「重新保存原始JSON」', async () => {
+  it('行内图标：测试表 + 有 K0 → 5 个；无 K0 时少「重新保存原始JSON」', async () => {
     const w = mountPage()
     await flushPromises()
-    expect(rowDropdown(w, 0).findAllComponents({ name: 'ElDropdownItem' }).map((i) => i.text())).toEqual([
+    expect(rowTips(w, 0).map(tipText)).toEqual([
       '详情', '查后续任务实例', '删除单条【无法恢复】', '手动修改', '重新保存原始JSON',
     ])
-    expect(rowDropdown(w, 1).findAllComponents({ name: 'ElDropdownItem' }).map((i) => i.text())).toEqual([
+    expect(rowTips(w, 1).map(tipText)).toEqual([
       '详情', '查后续任务实例', '删除单条【无法恢复】', '手动修改',
     ])
   })
@@ -695,7 +705,7 @@ describe('indicatorsResult · 行内操作', () => {
     spies.tableMeta.mockImplementation(async () => ({ ...META, state: 'AC' }))
     const w = mountPage()
     await flushPromises()
-    expect(rowDropdown(w, 0).findAllComponents({ name: 'ElDropdownItem' }).map((i) => i.text())).toEqual([
+    expect(rowTips(w, 0).map(tipText)).toEqual([
       '详情', '查后续任务实例', '重新保存原始JSON',
     ])
   })
@@ -703,7 +713,7 @@ describe('indicatorsResult · 行内操作', () => {
   it('「查后续任务实例」→ 以本行 ENTRY_ID 作 parentId 打开任务弹窗', async () => {
     const w = mountPage()
     await flushPromises()
-    rowDropdown(w, 0).vm.$emit('command', 'subTask')
+    await rowOp(w, 0, '查后续任务实例').trigger('click')
     await flushPromises()
     expect(spies.openTask).toHaveBeenCalledWith({
       sourceId: '161725', configId: null, taskId: '', parentId: '88213',
@@ -713,7 +723,7 @@ describe('indicatorsResult · 行内操作', () => {
   it('「删除单条」→ rowDelete(tableId, { sourceId, all:1, entryId })', async () => {
     const w = mountPage()
     await flushPromises()
-    rowDropdown(w, 0).vm.$emit('command', 'deleteOne')
+    await rowOp(w, 0, '删除单条【无法恢复】').trigger('click')
     await flushPromises()
     expect(spies.rowDelete).toHaveBeenCalledWith('999', {
       sourceId: '161725', all: 1, entryId: '88213',
@@ -723,7 +733,7 @@ describe('indicatorsResult · 行内操作', () => {
   it('「手动修改」→ 先 rowDetail 反填动态列，再用 keyField 作副标题打开编辑弹窗', async () => {
     const w = mountPage()
     await flushPromises()
-    rowDropdown(w, 0).vm.$emit('command', 'edit')
+    await rowOp(w, 0, '手动修改').trigger('click')
     await flushPromises()
     expect(spies.rowDetail).toHaveBeenCalledWith('999', '88213')
     expect(spies.openEdit).toHaveBeenCalledWith({
@@ -734,13 +744,12 @@ describe('indicatorsResult · 行内操作', () => {
     }, '去重列:K2')
   })
 
-  it('「重新保存原始JSON」→ 确认后 reSave(sourceId, K0)，K0 为空时什么都不做', async () => {
+  it('「重新保存原始JSON」→ 确认后 reSave(sourceId, K0)；K0 为空的行不出这个图标', async () => {
     const w = mountPage()
     await flushPromises()
-    rowDropdown(w, 1).vm.$emit('command', 'reSave')
-    await flushPromises()
+    expect(rowTips(w, 1).some((t: VueWrapper) => tipText(t) === '重新保存原始JSON')).toBe(false)
     expect(spies.reSave).not.toHaveBeenCalled()
-    rowDropdown(w, 0).vm.$emit('command', 'reSave')
+    await rowOp(w, 0, '重新保存原始JSON').trigger('click')
     await flushPromises()
     expect(spies.reSave).toHaveBeenCalledWith('161725', '12345')
   })

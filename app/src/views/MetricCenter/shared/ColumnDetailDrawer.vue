@@ -69,10 +69,6 @@ function open(data: Record<string, unknown>, name?: string) {
   visible.value = true
 }
 
-function close() {
-  visible.value = false
-}
-
 /** 主/子列表的取值：新平台的动态行可能是扁平字段，也可能挂在 values 上 */
 function cell(row: Record<string, unknown> | undefined, dataIndex: string): unknown {
   if (!row) return undefined

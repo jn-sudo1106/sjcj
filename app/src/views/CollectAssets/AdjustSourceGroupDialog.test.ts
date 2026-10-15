@@ -129,7 +129,7 @@ describe('调整来源组弹窗', () => {
   })
 
   it('连生产时「按筛选范围」置灰，不勾选也不会走 changeMembersByRange', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     const changeMembersByRange = vi.spyOn(sourceGroupApi, 'changeMembersByRange')
     const wrapper = mountDialog({ hasQueryFilter: true, query: { sourceGroupId: '1' } })
     await settle()

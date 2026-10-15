@@ -283,7 +283,7 @@ describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP
   })
 })
 
-// 生产写守卫：代理指向生产（118.25.96.217）时，danger 端点只放行新建网站/源/配置及编排元数据，改删一律拦截。
+// 生产写守卫：代理指向生产（115.227.21.133，2026-10-15 ruilx 由 217 改为 133）时，danger 端点只放行新建网站/源/配置及编排元数据，改删一律拦截。
 describe('生产写守卫', () => {
   const fetchMock = vi.fn()
 
@@ -312,7 +312,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，不在白名单的 danger 端点被拦截，不发 fetch', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     const { request, ProductionWriteBlockedError } = await import('./client')
 
     // 样例端点取 config/rebuildTable（重建数据表）——破坏性最强的一类，永远不会进白名单，
@@ -332,7 +332,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，task/resetTaskInsts 在白名单内（任务重发，只重排队不改删，2026-08-13 实测）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ success: true, data: null }))
     const { request } = await import('./client')
 
@@ -342,7 +342,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，config/modify/updateConfig 在白名单内（2026-08-28 拍板放开新建+保存配置）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -352,7 +352,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，entry/entryDelete 与 entry/entryDeleteBatch 在白名单内（源数据视图删除数据，2026-09-09 放开）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { success: 1 } }))
     const { request } = await import('./client')
 
@@ -373,7 +373,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，source/nextStep 与 source/nextStep2 在白名单内（数据视图发后续，与发抓取同性质）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已提交', data: null }))
     const { request } = await import('./client')
 
@@ -393,7 +393,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，source/markBatch 与 source/setColor 在白名单内（问题标记入库，旧平台可见）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -405,7 +405,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，config/copyAll 在白名单内（「复制节点 = 新增一套配置」的实现，纯新增）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -415,7 +415,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，item/next 步骤写接口在白名单内（节点名 / 进入条件 / 增删节点）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -428,7 +428,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，新建网站/源/配置及编排元数据在白名单内，正常放行', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -444,7 +444,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，源启停、换网站和复制源在白名单内（侧栏 / 源视图每天在用）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -458,7 +458,7 @@ describe('生产写守卫', () => {
   // 2026-09-22：用户在生产点「新建表 → 确定」毫无反应，根因是这两个端点不在白名单、
   // 守卫在发请求前就拦了，而调用处当时没 catch。拍板新建和修改都放开。
   it('连生产时，数据表的新建与修改在白名单内（画布「表配置」每天在用）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -470,7 +470,7 @@ describe('生产写守卫', () => {
 
   // 2026-10-10 拍板：来源组写接口除「按筛选范围调整」外都放开
   it('连生产时，来源组写接口放行，按范围调整成员仍拦截', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -486,7 +486,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，未放行的改删仍拦截', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     const { request } = await import('./client')
 
     await expect(request('site/updateSite', { siteId: '1' })).rejects.toThrow(/禁止改删/)
@@ -495,7 +495,7 @@ describe('生产写守卫', () => {
   })
 
   it('连生产时，文件上传端点直接放行，旧脚本编辑端点不再放行', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -510,7 +510,7 @@ describe('生产写守卫', () => {
 })
 
   it('非 danger 端点即使连生产也不受影响（只读请求正常发出）', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: [] }))
     const { request } = await import('./client')
 
@@ -521,21 +521,21 @@ describe('生产写守卫', () => {
 
   it('isProductionBackend 按 VITE_API_PROXY_TARGET 主机名判定，VITE_AUTH_PROXY_TARGET 作为兼容兜底', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', '')
-    vi.stubEnv('VITE_AUTH_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_AUTH_PROXY_TARGET', 'http://115.227.21.133:9999')
     const { isProductionBackend } = await import('./client')
 
     expect(isProductionBackend()).toBe(true)
   })
 
   it('isProductionCreateEnabled 需要同时指向生产并打开新建开关', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', 'production')
     const { isProductionCreateEnabled } = await import('./client')
     expect(isProductionCreateEnabled()).toBe(true)
   })
 
   it('只连生产但未打开新建开关时，isProductionCreateEnabled 为 false', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
     const { isProductionCreateEnabled } = await import('./client')
     expect(isProductionCreateEnabled()).toBe(false)

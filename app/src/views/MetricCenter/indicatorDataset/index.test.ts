@@ -181,10 +181,14 @@ function btn(w: VueWrapper, text: string) {
   return hit
 }
 
+/** el-tooltip 的 content（行内图标的原按钮文案） */
+const tipText = (t: VueWrapper) => (t.props() as { content?: string }).content
+
+/** 行内操作已改成图标（el-tooltip 的 content 是原文案），按行内 tooltip 文案找图标 */
 function opLink(w: VueWrapper, rowIndex: number, text: string) {
-  const hit = w.findAll('tbody tr')[rowIndex].findAll('.ids-op-link').find((l) => l.text() === text)
-  if (!hit) throw new Error(`第 ${rowIndex} 行找不到操作：${text}`)
-  return hit
+  const tip = w.findAll('tbody tr')[rowIndex].findAllComponents({ name: 'ElTooltip' }).find((t: VueWrapper) => tipText(t) === text)
+  if (!tip) throw new Error(`第 ${rowIndex} 行找不到操作：${text}`)
+  return tip.find('.ids-op-icon')
 }
 
 /** 最近一次 datasetPaged 的入参 */
@@ -349,7 +353,7 @@ describe('indicatorDataset · 行内操作', () => {
     expect(w.findComponent({ name: 'DatasetDetailDrawer' }).props('modelValue')).toBe(true)
   })
 
-  it('「更多」→ 制作副本 → copyDataset(datasetId)，并按旧版清掉查询条件后重查', async () => {
+  it('「制作副本」图标 → copyDataset(datasetId)，并按旧版清掉查询条件后重查', async () => {
     const w = mountPage()
     await flushPromises()
     // 先设一个筛选条件，验证复制后会被清掉
@@ -358,11 +362,10 @@ describe('indicatorDataset · 行内操作', () => {
     await flushPromises()
     expect(lastQuery()).toMatchObject({ datasetId: '1001' })
 
-    // 行内下拉：**必须按行定位**。el-table 会把列插槽用一个「假 row」预渲染一次
-    // （那块挂在 .hidden-columns 里、row 是空对象），于是页面上存在一个 row 为空的
-    // 幽灵 el-dropdown / 幽灵「指标」链接；`findAllComponents(ElDropdown)[1]` 会点到它，
-    // 拿到的 datasetId 就是 undefined。旧页所有行内操作同理，一律按 .el-table__body 行内找。
-    await w.findAll('.el-table__body tr')[0].findComponent({ name: 'ElDropdown' }).vm.$emit('command', 'copy')
+    // 行内操作**必须按行定位**。el-table 会把列插槽用一个「假 row」预渲染一次
+    // （那块挂在 .hidden-columns 里、row 是空对象），页面上存在 row 为空的幽灵图标，
+    // 全局找第一个会点到它，拿到的 datasetId 就是 undefined。一律按表体行内找（opLink）。
+    await opLink(w, 0, '制作副本').trigger('click')
     await flushPromises()
     expect(spies.copyDataset).toHaveBeenCalledWith(1001)
     expect(lastQuery()).toMatchObject({ datasetId: '' })
