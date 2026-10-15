@@ -396,6 +396,39 @@ export interface EntityConfigPayload {
   entityItems: EntityConfigField[]
 }
 
+/**
+ * 向量表配置行（旧「基础配置 → 向量表数据浏览」的下拉数据源，GET /poc/vector/config/all?name=）。
+ * 旧页面只用到 name（下拉值、查询入参 type）与 comment（拼进选项文案 `名称[备注]`）；
+ * 其余字段是旧「向量表管理」列表（VectorTableList.vue 的 columns）的口径，浏览页不读，按旧字段名留着。
+ */
+export interface VectorTableOption {
+  id?: number | string
+  /** 向量表名称 —— 选中后作为查询入参 type 发给后端 */
+  name: string
+  /** 向量表备注 */
+  comment?: string | null
+  /** 源表名 */
+  sourceTable?: string | null
+  /** 匹配度 */
+  matchDegree?: number | string | null
+  /** 字典表类型 */
+  dataIndexCode?: string | null
+  /** 最近同步时间 */
+  lastSync?: string | null
+  updateTime?: string | null
+  [key: string]: unknown
+}
+
+/** 向量表数据浏览的查询入参（POST /poc/vector/data，旧 queryParam 原样：input/type/pageSize/pageNo） */
+export interface VectorDataQuery {
+  /** 文本搜索框内容 */
+  input: string
+  /** 选中的向量表名称（VectorTableOption.name） */
+  type: string
+  pageSize: number
+  pageNo: number
+}
+
 /** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy） */
 export interface TemplateCrudPaths {
   page?: string

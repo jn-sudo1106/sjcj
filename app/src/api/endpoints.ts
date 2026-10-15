@@ -209,6 +209,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/database/table-info', desc: '表字段列表（表字段管理）→ GET /api/poc/database/table-info?tableId=', impl: true, live: true },
   { path: 'poc/database/config', desc: '表字段配置保存 → POST /api/poc/database/config（body {entityType, entityItems}，整表覆盖）', danger: true, impl: true, live: true },
 
+  // 向量表数据浏览（1015 迁入，旧 ai-chat-view「基础配置 → 向量表数据浏览」src/demo/VectorDataShowTop.vue + VectorDataShow.vue）。
+  // 契约来自旧 src/demoApi/VectorApi.js:12-13（config/all、data），两条都是只读；同 database 域走 186 POC 服务。
+  // ⚠️ config/all 的 name 是**必填**查询参数（缺参数后端回 code:400，2026-10-15 实测），空关键词也要发 ?name=；
+  // ⚠️ data 用旧页面原载荷实测回 code:500「服务器繁忙」（186 上向量检索链路未起），形状按旧页面读法落地，待后端可用后复核。
+  // 旧域里剩下的 config/page、config（保存）、mapping/info、sync、data-match、delete 属于「向量表管理」，本次不迁。
+  { path: 'poc/vector/config/all', desc: '向量表选项（浏览页表名下拉）→ GET /api/poc/vector/config/all?name=（name 必填，空关键词也带）', impl: true, live: true },
+  { path: 'poc/vector/data', desc: '向量表数据查询 → POST /api/poc/vector/data（body: input/type/pageSize/pageNo，返回整份 JSON 展示）', impl: true, live: true },
+
   // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
   { path: 'poc/dic/page', desc: '自动补全分页 → POST /api/poc/dic/page（body: pageNo/pageSize/name，name 模糊匹配「内容」）', impl: true, live: true },

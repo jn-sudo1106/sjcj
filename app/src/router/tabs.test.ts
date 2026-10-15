@@ -102,9 +102,10 @@ describe('Phase 3.1 画布入口退役', () => {
     }
   })
 
-  // 基础配置（1015 迁入旧「基础配置」组）：目前只有「表字段管理」一个页内 tab，也是无 ?tab= 时的默认。
-  it('基础配置的页内 tab：表字段管理，权限码与 key 一致', () => {
-    expect(BASE_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual(['entity-config:表字段管理'])
+  // 基础配置（1015 迁入旧「基础配置」组）：页内两个 tab，「表字段管理」是无 ?tab= 时的默认，
+  // 「向量表数据浏览」同日迁入（旧 /demo/vector-data）。
+  it('基础配置的页内 tab：表字段管理 + 向量表数据浏览，权限码与 key 一致', () => {
+    expect(BASE_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual(['entity-config:表字段管理', 'vector-data:向量表数据浏览'])
     for (const t of BASE_CONFIG_TABS) {
       expect(t.permission).toBe(t.key)
     }

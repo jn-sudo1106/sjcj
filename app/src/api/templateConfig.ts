@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorDataQuery, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -265,6 +265,35 @@ export async function pocTableFieldList(tableId: number | string): Promise<Entit
  */
 export function pocEntityConfigSave(payload: EntityConfigPayload): Promise<Ack> {
   return request<Ack>('poc/database/config', { ...payload }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/database/config` })
+}
+
+/**
+ * 向量表选项（旧「基础配置 → 向量表数据浏览」的 vectorConfigList → GET /poc/vector/config/all?name=）。
+ * 与 entry-list 同一个信封（带 count:null），同样要过 toRowArray 还原成裸数组。
+ * ⚠️ ?name= 必须拼在路径上：后端把它声明成必填，参数缺失直接回 code:400
+ * （"Required request parameter 'name' for method parameter type String is not present"，2026-10-15 在 186 实测），
+ * 而 client.ts 的 appendQuery 与 httpParams 都会跳过空串 —— 旧 axios 空关键词时也是发 ?name= 的，这里按旧口径显式拼。
+ */
+export async function pocVectorConfigList(name = ''): Promise<VectorTableOption[]> {
+  const payload = await request<VectorTableOption[] | Paged<VectorTableOption>>(
+    'poc/vector/config/all',
+    { name },
+    { method: 'GET', httpParams: {}, httpEndpoint: `${POC_API_PREFIX}/vector/config/all?name=${encodeURIComponent(name)}` },
+  )
+  return toRowArray<VectorTableOption>(payload)
+}
+
+/**
+ * 向量表数据查询（旧 vectorDataQuery → POST /poc/vector/data，body 是旧 queryParam：input/type/pageSize/pageNo）。
+ * 返回的是后端 data 里的原始载荷，旧页面整份 JSON.stringify 展示，所以这里不做字段加工。
+ * ⚠️ 只有 POC 信封带 count:null 时被 client.ts 误判成分页结果（见上方 toRowArray 注释）、包成了 {list,total}，
+ * 才还原回数组 —— 否则展示出来的 JSON 比旧平台多一层包装。
+ */
+export async function pocVectorDataQuery(query: VectorDataQuery): Promise<unknown> {
+  const payload = await request<unknown>('poc/vector/data', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/data` })
+  if (Array.isArray(payload)) return payload
+  const { list, total } = (payload ?? {}) as { list?: unknown; total?: unknown }
+  return Array.isArray(list) && typeof total === 'number' ? list : payload
 }
 
 /** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */

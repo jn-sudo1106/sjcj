@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 基础配置（1015）：旧 ai-chat-view「基础配置」组（/demo/entity-build 表字段管理）迁入，
+// 基础配置（1015）：旧 ai-chat-view「基础配置」组（/demo/entity-build 表字段管理、/demo/vector-data 向量表数据浏览）迁入，
 // 排在问数配置组的「模板配置」之前；子模块在这里以 tab 呈现，结构与口径照本域「模板配置 / 问数系统配置」页
 // （views/TemplateConfig/index.vue、SystemConfig/index.vue）：tab 落 URL query，刷新/深链回得到同一个 tab。
 // tab 元数据在 router/tabs.ts 的 BASE_CONFIG_TABS —— BASE_CONFIG_TABS[0]（表字段管理）是无 ?tab= 时的默认。
@@ -9,11 +9,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
 import { BASE_CONFIG_TABS } from '@/router/tabs'
 import EntityConfigPage from './EntityConfig/index.vue'
+import VectorDataShowPage from './VectorDataShow/index.vue'
 
 defineOptions({ name: 'BaseConfigPage' })
 
 const comps: Record<string, Component> = {
   'entity-config': EntityConfigPage,
+  'vector-data': VectorDataShowPage,
 }
 
 const route = useRoute()

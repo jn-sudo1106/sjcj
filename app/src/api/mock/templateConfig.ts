@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -309,6 +309,68 @@ export function mockPocDatabaseConfigSave(params?: Record<string, unknown>) {
     }),
   )
   return { ok: true, message: '保存成功（演示）' }
+}
+
+/* ── 向量表数据浏览（旧「基础配置 → 向量表数据浏览」，端点域 /poc/vector，1015 迁入） ── */
+
+/**
+ * 向量表选项种子。
+ * ⚠️ 按旧 VectorTableList.vue 的列形状（name/comment/sourceTable/matchDegree/dataIndexCode/lastSync/updateTime）
+ * **构造的示例**，未取到 POC 服务真实行，联调后用真实响应校正。
+ */
+const VECTOR_TABLES: VectorTableOption[] = [
+  { id: 1, name: 'DIM_JG_VECTOR', comment: '机构向量表', sourceTable: 'sense_data.DIM_JG', matchDegree: 0.85, dataIndexCode: '', lastSync: '2026-10-12 09:20:31', updateTime: '2026-10-12 09:20:31' },
+  { id: 2, name: 'KHFA_ZB_VECTOR', comment: '客户指标向量表', sourceTable: 'sense_data.KHFA_KHZBJG_JG', matchDegree: 0.9, dataIndexCode: 'ZB', lastSync: '2026-10-13 18:02:07', updateTime: '2026-10-13 18:02:07' },
+  { id: 3, name: 'DIC_YHH_VECTOR', comment: '用户号向量表', sourceTable: 'sense_data.DIC_YHH', matchDegree: 0.75, dataIndexCode: 'YHH', lastSync: '2026-09-30 07:45:00', updateTime: '2026-10-08 11:13:26' },
+]
+
+/** mock 侧的向量表数据行（形状同上，是构造示例；旧页面不解析它，只整份 JSON 展示） */
+interface VectorMockRow {
+  id: number
+  code: string
+  name: string
+  alias: string
+  score: number
+}
+
+const VECTOR_ROWS: Record<string, VectorMockRow[]> = {
+  DIM_JG_VECTOR: [
+    { id: 101, code: 'JG001', name: '杭州分行', alias: 'hangzhou branch', score: 0.93 },
+    { id: 102, code: 'JG002', name: '宁波分行', alias: 'ningbo branch', score: 0.81 },
+    { id: 103, code: 'JG003', name: '温州分行', alias: 'wenzhou branch', score: 0.62 },
+  ],
+  KHFA_ZB_VECTOR: [
+    { id: 201, code: 'ZB_AUM', name: '管理资产总额', alias: 'aum', score: 0.88 },
+    { id: 202, code: 'ZB_DK', name: '贷款余额', alias: 'loan balance', score: 0.7 },
+  ],
+  DIC_YHH_VECTOR: [
+    { id: 301, code: 'YHH0001', name: '活期存款', alias: 'CNY 活期', score: 0.95 },
+  ],
+}
+
+/** 向量表下拉（旧 vectorConfigList → GET /poc/vector/config/all?name=），返回裸数组 */
+export function mockPocVectorConfigList(params?: Record<string, unknown>): VectorTableOption[] {
+  const name = String(params?.name ?? '').trim().toUpperCase()
+  if (!name) return VECTOR_TABLES.map((row) => ({ ...row }))
+  return VECTOR_TABLES.filter((row) => `${row.name}${row.comment ?? ''}`.toUpperCase().includes(name)).map((row) => ({ ...row }))
+}
+
+/**
+ * 向量表数据查询（旧 vectorDataQuery → POST /poc/vector/data，body {input, type, pageSize, pageNo}）。
+ * 旧页面没有分页控件（pageNo/pageSize 固定 1/20 随表单发出），所以这里按 pageSize 截前若干条、
+ * input 对 code/name/alias 做不区分大小写的模糊匹配；type 为空按旧页面「未选表直接查询」的口径回空数组。
+ */
+export function mockPocVectorDataQuery(params?: Record<string, unknown>): VectorMockRow[] | { ok: false; message: string } {
+  const type = String(params?.type ?? '').trim()
+  if (!type) return []
+  const rows = VECTOR_ROWS[type]
+  if (!rows) return { ok: false, message: '未找到对应的向量表' }
+  const input = String(params?.input ?? '').trim().toUpperCase()
+  const matched = input
+    ? rows.filter((row) => `${row.code}${row.name}${row.alias}`.toUpperCase().includes(input))
+    : rows
+  const pageSize = Number(params?.pageSize ?? 20) || 20
+  return matched.slice(0, pageSize).map((row) => ({ ...row }))
 }
 
 /* ── 自动补全配置（旧「模板配置 → 自动补全配置」，端点域 /poc/dic） ── */

@@ -93,6 +93,8 @@ import {
   mockPocDatabaseEntryList,
   mockPocDatabaseTableInfo,
   mockPocDatabaseConfigSave,
+  mockPocVectorConfigList,
+  mockPocVectorDataQuery,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
@@ -429,6 +431,11 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 表字段管理（1015 迁入「基础配置」）：字段列表 + 整表覆盖保存，与 entry-list 同一张内存表
   'poc/database/table-info': mockPocDatabaseTableInfo,
   'poc/database/config': mockPocDatabaseConfigSave,
+
+  // 向量表数据浏览（1015 迁入「基础配置」）：只读两条 —— 向量表下拉 + 数据查询。
+  // 旧域的 config/page、config（保存）、mapping/info、sync、data-match、delete 属于「向量表管理」，未迁。
+  'poc/vector/config/all': mockPocVectorConfigList,
+  'poc/vector/data': mockPocVectorDataQuery,
 
   // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
   'poc/dic/page': mockDicTemplatePaged,
