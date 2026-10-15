@@ -262,6 +262,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/word-segment-config/update', desc: '分词配置修改 → POST /api/poc/word-segment-config/update（body 带 id，type/content/token 都可改）', danger: true, impl: true, live: true },
   { path: 'poc/word-segment-config/status', desc: '分词配置启停 → POST /api/poc/word-segment-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
 
+  // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组 → 问数配置组「问数系统配置」页内两 tab）。
+  // 契约来自旧 src/api/system/config.js 与 src/api/system/pageConfig.js，端点域 /poc/system/*，同为 186 POC 服务。
+  // 参数设置：分页 + 详情（id 走**路径段**，逻辑键固定 poc/system/config/detail，真实请求靠 httpEndpoint 拼 id）+ 修改；
+  // 旧页面没有新增/删除/导出/刷新缓存入口（对应按钮全部注释掉），那几条端点不登记。
+  { path: 'poc/system/config/page', desc: '参数设置分页 → POST /api/poc/system/config/page（body: pageNo/pageSize/configKey/configName）', impl: true, live: true },
+  { path: 'poc/system/config/detail', desc: '参数设置详情 → GET /api/poc/system/config/{configId}（id 走路径段）', impl: true, live: true },
+  { path: 'poc/system/config', desc: '参数设置修改 → POST /api/poc/system/config（body 带 id 的整表单；该端点亦可新增，但旧页面没有新增入口）', danger: true, impl: true, live: true },
+  // 页面配置：分页 + batch（body 是 {content} **对象数组**）+ update + status（**body** 传参，同 word-segment-config）。
+  // 没有单条新增与 copy —— 旧弹窗 add 分支已注释、旧列表无入口，新增一律走 batch（见 api/templateConfig.ts 的 pageConfigApi）。
+  { path: 'poc/system/page-config/page', desc: '页面配置分页 → POST /api/poc/system/page-config/page（body: pageNo/pageSize/name/status/type，name/type 旧页面已注释但参数照发空串）', impl: true, live: true },
+  { path: 'poc/system/page-config/batch', desc: '页面配置批量新增 → POST /api/poc/system/page-config/batch（body 是 {content} **对象数组**）', danger: true, impl: true, live: true },
+  { path: 'poc/system/page-config/update', desc: '页面配置修改 → POST /api/poc/system/page-config/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/system/page-config/status', desc: '页面配置启停 → POST /api/poc/system/page-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },

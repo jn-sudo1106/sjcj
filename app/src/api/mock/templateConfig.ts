@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -965,5 +965,166 @@ export function mockWordSegmentBatchAdd(params?: Record<string, unknown> | WordS
     )
   }
   return { ok: true, data: rows.length, message: `已新增 ${rows.length} 条（演示）` }
+}
+
+/* ── 参数设置（旧 ai-chat-view「系统配置 → 参数设置」，端点域 /poc/system/config，1015 迁入） ── */
+
+/**
+ * 参数设置种子数据。⚠️ 是按旧字段形状**构造**的示例（同 chat-flow-step 先例，本轮未取真实行样本），
+ * 首次联调核对 configKey / configType 的实际取值口径后再确认。
+ * 旧页面实体没有启停概念，status 只是 TemplateRow 公共形状里不展示的残留字段。
+ */
+const blankSystemConfig = (over: Partial<SystemConfigParam>): SystemConfigParam => ({
+  configKey: '',
+  configName: '',
+  configValue: '',
+  configType: 'Y',
+  remark: '',
+  ...over,
+})
+
+const SYSTEM_CONFIGS: SystemConfigParam[] = [
+  blankSystemConfig({
+    id: 1,
+    configKey: 'poc.answer.maxRows',
+    configName: '问数单次返回最大行数',
+    configValue: '200',
+    configType: 'Y',
+    remark: '超过该行数的查询结果在回答里截断',
+    createTime: '2025-03-20 10:12:00',
+    updateTime: '2025-06-11 09:30:00',
+  }),
+  blankSystemConfig({
+    id: 2,
+    configKey: 'poc.answer.llmTimeout',
+    configName: '大模型调用超时（秒）',
+    configValue: '30',
+    configType: 'Y',
+    createTime: '2025-03-20 10:12:00',
+    updateTime: '2025-03-20 10:12:00',
+  }),
+  blankSystemConfig({
+    id: 3,
+    configKey: 'poc.answer.welcomeText',
+    configName: '问数欢迎语',
+    configValue: '你好，可以直接向我提问数据相关问题。',
+    configType: 'N',
+    remark: '运营可改的非内置参数',
+    createTime: '2025-04-02 14:05:00',
+    updateTime: '2025-09-18 16:40:00',
+  }),
+]
+
+/**
+ * 分页：configKey / configName 两个模糊筛选（旧 ConfigIndex 搜索框），空串当「全部」。
+ * 旧 queryParam 里还有个恒 undefined 的 configType，不上送、这里也不筛。
+ */
+export function mockSystemConfigPaged(params?: Record<string, unknown>): Paged<SystemConfigParam> {
+  const configKey = String(params?.configKey ?? '').trim()
+  const configName = String(params?.configName ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = SYSTEM_CONFIGS.filter(
+    (row) =>
+      (!configKey || String(row.configKey ?? '').includes(configKey)) &&
+      (!configName || String(row.configName ?? '').includes(configName)),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 详情（GET /poc/system/config/{configId}，id 走路径段；真实请求 configId 只在 httpEndpoint 里，mock 从 params 取） */
+export function mockSystemConfigDetail(params?: Record<string, unknown>): SystemConfigParam | { ok: false; message: string } {
+  const row = SYSTEM_CONFIGS.find((r) => Number(r.id) === Number(params?.configId))
+  return row ?? { ok: false, message: '未找到对应的参数配置' }
+}
+
+/**
+ * 修改（POST /poc/system/config，body 带 id）—— 旧 saveConfig。
+ * 该端点不带 id 时后端会新增，但旧页面没有新增入口，页面侧只走带 id 的更新。
+ */
+export function mockSystemConfigSave(params?: Record<string, unknown>) {
+  const form = params as Partial<SystemConfigParam>
+  const row = SYSTEM_CONFIGS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的参数配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/* ── 页面配置（旧 ai-chat-view「系统配置 → 页面配置」，端点域 /poc/system/page-config，1015 迁入） ── */
+
+/**
+ * 页面配置种子数据。⚠️ 构造示例（同参数设置，本轮未取真实行样本）。
+ * 一条 = 问数前端可配置的一个页面标识（content），旧页面 type 列与搜索框均已注释掉。
+ */
+const blankPageConfig = (over: Partial<SysPageConfig>): SysPageConfig => ({
+  content: '',
+  status: '0',
+  ...over,
+})
+
+const PAGE_CONFIGS: SysPageConfig[] = [
+  blankPageConfig({ id: 1, content: '问数首页', createTime: '2025-03-21 10:00:00', updateTime: '2025-03-21 10:00:00' }),
+  blankPageConfig({ id: 2, content: '图表详情页', createTime: '2025-03-21 10:00:00', updateTime: '2025-05-06 11:20:00' }),
+  blankPageConfig({ id: 3, content: '指标解释弹层', status: '1', createTime: '2025-04-01 09:30:00', updateTime: '2025-04-01 09:30:00' }),
+]
+
+let pageConfigNextId = 4
+
+/**
+ * 分页：旧 queryParam 固定带 name:''/type:''/status:''（name/type 的输入框被注释掉但参数照发）。
+ * mock 按 status 精确筛；name 非空时按旧其它域的口径当 content 模糊筛（后端实际语义联调时核对）。
+ */
+export function mockPageConfigPaged(params?: Record<string, unknown>): Paged<SysPageConfig> {
+  const name = String(params?.name ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = PAGE_CONFIGS.filter(
+    (row) => (!name || String(row.content ?? '').includes(name)) && (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 批量新增（POST /poc/system/page-config/batch）—— body 是 **{content} 对象数组**；状态照旧弹窗初始口径落 '0' */
+export function mockPageConfigBatchAdd(params?: Record<string, unknown> | SysPageConfigBatchItem[]) {
+  const rows = (Array.isArray(params) ? params : []).filter((item) => item && String(item.content ?? '').trim())
+  if (!rows.length) return { ok: false, message: '没有要新增的页面配置' }
+  for (const item of rows) {
+    PAGE_CONFIGS.unshift(
+      blankPageConfig({
+        id: pageConfigNextId++,
+        content: String(item.content ?? '').trim(),
+        createTime: stamp(new Date()),
+        updateTime: stamp(new Date()),
+      }),
+    )
+  }
+  return { ok: true, data: rows.length, message: `已新增 ${rows.length} 条（演示）` }
+}
+
+/** 修改（POST /poc/system/page-config/update，body 带 id）—— 旧 pageConfigUpdate */
+export function mockPageConfigUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<SysPageConfig>
+  const row = PAGE_CONFIGS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的页面配置' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '操作成功（演示）' }
+}
+
+/** 启停（POST /poc/system/page-config/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 pageConfigStatus */
+export function mockPageConfigChangeStatus(params?: Record<string, unknown>) {
+  const row = PAGE_CONFIGS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的页面配置' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
 }
 

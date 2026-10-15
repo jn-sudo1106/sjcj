@@ -123,6 +123,13 @@ import {
   mockWordSegmentUpdate,
   mockWordSegmentChangeStatus,
   mockWordSegmentBatchAdd,
+  mockSystemConfigPaged,
+  mockSystemConfigDetail,
+  mockSystemConfigSave,
+  mockPageConfigPaged,
+  mockPageConfigBatchAdd,
+  mockPageConfigUpdate,
+  mockPageConfigChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -457,4 +464,15 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/word-segment-config/update': mockWordSegmentUpdate,
   'poc/word-segment-config/status': mockWordSegmentChangeStatus,
   'poc/word-segment-config/batch': mockWordSegmentBatchAdd,
+
+  // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：
+  // 参数设置 分页/详情/修改（没有新增/删除/导出/刷新缓存入口，见 api/templateConfig.ts 的 systemConfigApi）；
+  // 页面配置 分页/batch（对象数组）/update/status（**body** 传参），没有单条新增与 copy。
+  'poc/system/config/page': mockSystemConfigPaged,
+  'poc/system/config/detail': mockSystemConfigDetail,
+  'poc/system/config': mockSystemConfigSave,
+  'poc/system/page-config/page': mockPageConfigPaged,
+  'poc/system/page-config/batch': mockPageConfigBatchAdd,
+  'poc/system/page-config/update': mockPageConfigUpdate,
+  'poc/system/page-config/status': mockPageConfigChangeStatus,
 }

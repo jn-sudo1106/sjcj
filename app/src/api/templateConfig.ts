@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -236,4 +236,62 @@ export const wordSegmentApi: WordSegmentApi = {
  */
 export function pocTableEntryList(name = ''): Promise<PocTableEntry[]> {
   return request<PocTableEntry[]>('poc/database/entry-list', { name }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/entry-list` })
+}
+
+/** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */
+export interface SystemConfigApi {
+  page(query: TemplatePageQuery): Promise<Paged<SystemConfigParam>>
+  /** 详情（GET /poc/system/config/{configId}）—— id 走路径段；旧弹窗点「修改」先查详情再回填表单 */
+  detail(configId: number): Promise<SystemConfigParam>
+  /** 修改（POST /poc/system/config，body 带 id）—— 旧 saveConfig；该端点同时可用于新增，但旧页面没有新增入口 */
+  save(form: Partial<SystemConfigParam>): Promise<Ack>
+}
+
+/**
+ * 参数设置（1015 迁入「问数系统配置」，旧「系统配置 → 参数设置」src/system/config/ConfigIndex.vue + modules/ConfigEditForm.vue）。
+ *
+ * 没走 createTemplateCrudApi 工厂：本域分页筛选是 configKey/configName（不是 name），
+ * 详情端点 id 走**路径段**（GET /poc/system/config/{configId}，工厂表达不了），也没有 status/copy。
+ * 详情的 httpEndpoint 带动态 id、不在契约清单里，live/mock 判定按逻辑键 `poc/system/config/detail`
+ * （httpEndpoint 以 / 开头时 client.ts 回退用逻辑键，见 client.ts usesMockAdapter）；
+ * configId 只喂 mock handler，真实请求靠路径段，httpParams 置空避免多拼 ?configId=。
+ */
+export const systemConfigApi: SystemConfigApi = {
+  // 分页：configKey / configName 两个模糊筛选进 body（旧 queryParam 里的 configType 恒 undefined，不上送）
+  page: (query: TemplatePageQuery) =>
+    request<Paged<SystemConfigParam>>('poc/system/config/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/system/config/page` }),
+  detail: (configId: number) =>
+    request<SystemConfigParam>('poc/system/config/detail', { configId }, { method: 'GET', httpParams: {}, httpEndpoint: `${POC_API_PREFIX}/system/config/${configId}` }),
+  save: (form: Partial<SystemConfigParam>) =>
+    request<Ack>('poc/system/config', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/system/config` }),
+}
+
+/** 页面配置的接口面：分页 + 批量新增 + 修改 + 启停（本域没有单条新增与复制） */
+export interface PageConfigApi {
+  page(query: TemplatePageQuery): Promise<Paged<SysPageConfig>>
+  /** 批量新增（POST /poc/system/page-config/batch）；body 是 **对象数组** [{content}] */
+  batchAdd(rows: SysPageConfigBatchItem[]): Promise<Ack>
+  /** 修改（POST /poc/system/page-config/update，body 带 id）—— 旧 pageConfigUpdate */
+  update(form: Partial<SysPageConfig>): Promise<Ack>
+  /** 启停（POST /poc/system/page-config/status，⚠️ 参数走 body）—— 旧 pageConfigStatus */
+  changeStatus(id: number, status: string): Promise<Ack>
+}
+
+/**
+ * 页面配置（1015 迁入「问数系统配置」，旧「系统配置 → 页面配置」src/system/config/SysPageConfigList.vue + modules/SysPageConfigEditor.vue）。
+ *
+ * 同样没走 createTemplateCrudApi 工厂：本域**没有单条新增端点**（旧弹窗 add 分支已注释、旧列表无入口，
+ * 与分词配置同口径），新增能力由批量端点 /poc/system/page-config/batch 承担；
+ * 修改是独立端点 /update；启停 /status 参数走 **body**（同 word-segment-config / data-index-config）。
+ * 分页旧 queryParam 固定带 name:''/type:''/status:'' 三个键（类型/内容搜索框被注释掉但参数照发），1:1 保留。
+ */
+export const pageConfigApi: PageConfigApi = {
+  page: (query: TemplatePageQuery) =>
+    request<Paged<SysPageConfig>>('poc/system/page-config/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/system/page-config/page` }),
+  batchAdd: (rows: SysPageConfigBatchItem[]) =>
+    request<Ack>('poc/system/page-config/batch', rows as unknown as Record<string, unknown>, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/system/page-config/batch` }),
+  update: (form: Partial<SysPageConfig>) =>
+    request<Ack>('poc/system/page-config/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/system/page-config/update` }),
+  changeStatus: (id: number, status: string) =>
+    request<Ack>('poc/system/page-config/status', { id, status }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/system/page-config/status` }),
 }

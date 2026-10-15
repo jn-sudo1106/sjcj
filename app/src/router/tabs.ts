@@ -29,6 +29,9 @@ export const TABS: TabMeta[] = [
   // 问数配置 → 模板配置（1014 起从旧 ai-chat-view「模板配置」域迁入的 8 个子模块，1014 迁完）。
   // 侧栏只放这一个入口，8 个子模块在页内以 tab 呈现（见 TemplateConfigTabMeta 与 views/TemplateConfig/index.vue）。
   { key: 'template-config', path: '/template-config', label: '模板配置', desc: 'SQL / 表 / 自动补全 / 问句改写 / 数据索引 / 数据字典 / 提示词 / 分词 八类问数模板配置', group: 'template' },
+  // 问数系统配置（1015 迁入）：旧 ai-chat-view「系统配置」组（/config 参数设置 + /page-config 页面配置），
+  // 旧平台是两个独立路由页，这里与模板配置同口径收成侧栏一个入口 + 页内两个 tab（默认参数设置）。
+  { key: 'system-config', path: '/system-config', label: '问数系统配置', desc: '参数设置、页面配置（旧 ai-chat-view「系统配置」域）', group: 'template' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },
@@ -66,5 +69,18 @@ export const TEMPLATE_CONFIG_TABS: TemplateConfigTabMeta[] = [
   // 分词配置（1014 迁入，模板域最后一个子模块）：一条 = 分词词典里的一个词条，「数据索引同步」的分词同步往里灌数据。
   // 旧列表没有单条新增入口，新增走批量端点（一行「类型,内容,分词类型」）。
   { key: 'word-segment-config', label: '分词配置', desc: '', permission: 'word-segment-config' },
+]
+
+/**
+ * 问数系统配置页内的 2 个子模块（1015 从旧 ai-chat-view「系统配置」组迁入）。
+ * 口径同 TEMPLATE_CONFIG_TABS：不进 TABS、侧栏只到「问数系统配置」一个入口，子模块以页内 tab 呈现
+ * （容器见 views/TemplateConfig/SystemConfig/index.vue）。
+ * ⚠️ 顺序即默认：第一项「参数设置」是无 ?tab= 时落地的默认 tab（旧平台 /config 与 /page-config 两个
+ * 侧栏子项收成这里，需求明确默认进参数设置）。
+ * key 与端点域对应：param-config → /poc/system/config（旧菜单「参数设置」），page-config → /poc/system/page-config。
+ */
+export const SYSTEM_CONFIG_TABS: TemplateConfigTabMeta[] = [
+  { key: 'param-config', label: '参数设置', desc: '', permission: 'param-config' },
+  { key: 'page-config', label: '页面配置', desc: '', permission: 'page-config' },
 ]
 

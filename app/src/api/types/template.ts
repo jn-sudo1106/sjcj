@@ -250,6 +250,56 @@ export interface WordSegmentBatchItem {
   token: string
 }
 
+/**
+ * 参数设置（旧 ai-chat-view「系统配置 → 参数设置」，src/system/config/ConfigIndex.vue + modules/ConfigEditForm.vue，
+ * 端点域 /poc/system/config，1015 迁入问数配置组「问数系统配置」页内 tab）。
+ *
+ * ⚠️ 三处旧口径（src/api/system/config.js）：
+ * · 分页 POST /poc/system/config/page，body {pageNo,pageSize,configKey,configName,configType}，
+ *   旧 queryParam 里 configType 恒为 undefined（页面没有该筛选项，JSON 序列化后不上送）；
+ * · 详情 GET /poc/system/config/{configId} —— id 走**路径段**，旧弹窗点「修改」先查详情再回填；
+ * · 新增与修改是同一个端点 POST /poc/system/config（带 id 即更新），但旧列表没有新增/删除/导出/刷新缓存入口
+ *   （对应按钮全部被注释掉），所以本模块只迁 分页 + 详情 + 修改 三个操作。
+ * configType 是「是否内置参数」'Y' / 'N'（旧弹窗默认 'Y'）；旧页面把字典数组传成了空数组，
+ * 单选框实际渲染不出选项，迁移时按旧语义补 是(Y)/否(N) 两个选项（见页面偏差说明）。
+ */
+export interface SystemConfigParam extends TemplateRow {
+  /** 参数编码 */
+  configKey?: string | null
+  /** 参数名称 */
+  configName?: string | null
+  /** 参数值 */
+  configValue?: string | null
+  /** 是否内置参数：'Y' / 'N' */
+  configType?: string | null
+  /** 备注 */
+  remark?: string | null
+}
+
+/**
+ * 页面配置（旧 ai-chat-view「系统配置 → 页面配置」，src/system/config/SysPageConfigList.vue + modules/SysPageConfigEditor.vue，
+ * 端点域 /poc/system/page-config，1015 迁入「问数系统配置」页内 tab）。
+ *
+ * ⚠️ 四处旧口径（src/api/system/pageConfig.js，全部 POST + JSON body）：
+ * · 分页 /page 的旧 queryParam 固定带 name:''/type:''/status:''（类型/内容两个搜索框在旧页面被注释掉，
+ *   参数仍然照发，后端忽略空串），1:1 保留入参形状；
+ * · 新增只有**批量端点** /batch，body 是 `[{content}]` 对象数组（旧弹窗的单条 add 分支已注释、无入口，不迁）；
+ * · 修改 /update（body 带 id，旧页面把整行原样发回去，迁移后只发表单字段，见页面偏差说明）；
+ * · 启停 /status，参数走 **body**（同 word-segment-config，与 question-dic 的 query 不同）。
+ * 列表列只有 id/内容/状态/创建时间/修改时间，type 实体里有字段但页面从不展示、也从不编辑。
+ */
+export interface SysPageConfig extends TemplateRow {
+  /** 类型：旧页面（列与搜索框）全部注释掉，仅实体残留 */
+  type?: string | null
+  /** 内容 */
+  content?: string | null
+}
+
+/** 页面配置批量新增的单行入参（POST /poc/system/page-config/batch 的数组元素，旧页面只取每行逗号前的 content） */
+export interface SysPageConfigBatchItem {
+  content: string
+}
+
 /** 数据字典「编码」下拉的选项（GET /poc/data-index-config/all-code 返回的裸数组元素） */
 export interface DataIndexCodeOption {
   code?: string | null

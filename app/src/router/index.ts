@@ -33,6 +33,9 @@ const routes: RouteRecordRaw[] = [
       // 8 个子模块不再有独立地址，元数据见 router/tabs.ts 的 TEMPLATE_CONFIG_TABS，
       // 页面容器见 views/TemplateConfig/index.vue，权限码由页内 tab 过 canAccess 过滤。
       { path: '/template-config', component: () => import('../views/TemplateConfig/index.vue') },
+      // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：参数设置 + 页面配置两个页内 tab，
+      // 页面代码放在 views/TemplateConfig/SystemConfig/ 下（与模板配置同域），元数据见 router/tabs.ts 的 SYSTEM_CONFIG_TABS。
+      { path: '/system-config', component: () => import('../views/TemplateConfig/SystemConfig/index.vue') },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

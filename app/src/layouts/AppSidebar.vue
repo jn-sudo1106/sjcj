@@ -4,7 +4,7 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer, Setting, Tickets } from '@element-plus/icons-vue'
+import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer, Setting, SetUp, Tickets } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
@@ -57,6 +57,8 @@ const navIcons: Record<string, Component> = {
   // 问数配置 → 模板配置（1015 起侧栏只剩这一个入口，8 个子模块在页内以 tab 呈现）
   // TAB key 带连字符，对象键必须加引号，漏加不报错只出空图标
   'template-config': Tickets,
+  // 问数系统配置（1015 迁入，问数配置组第二个入口，参数设置/页面配置在页内以 tab 呈现）
+  'system-config': SetUp,
   settings: Setting,
 }
 </script>
