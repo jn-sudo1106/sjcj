@@ -483,7 +483,7 @@ defineExpose({ clearSelection, reloadTree })
       append-to-body
       destroy-on-close
     >
-      <el-form label-width="80px" size="small" class="sct-form">
+      <el-form label-width="80px" class="sct-form">
         <el-form-item label="父目录">
           <el-input :model-value="form.parentName" disabled />
         </el-form-item>
@@ -499,8 +499,8 @@ defineExpose({ clearSelection, reloadTree })
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button size="small" @click="formVisible = false">取消</el-button>
-        <el-button size="small" type="primary" :loading="submitting" @click="submitForm">确定</el-button>
+        <el-button @click="formVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="submitForm">确定</el-button>
       </template>
     </el-dialog>
 
