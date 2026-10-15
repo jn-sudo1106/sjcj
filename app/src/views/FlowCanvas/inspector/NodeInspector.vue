@@ -256,14 +256,22 @@ async function onSaveNodeConfig() {
 async function syncSourceCron(node: NodeConfig) {
   const sourceId = flow.sourceCfg?.sourceId
   if (!sourceId) return
+  // 2026-10-15：定时不是必填（旧平台同口径）。只在用户这次手动改过定时策略时才同步；没碰定时的保存不建 / 不改定时，
+  // 也不会在未发布的流程上弹「定时没保存」。原来默认展示的那条「每天 0:00」会被当成要建的定时，每次保存都去建。
+  const nodeId = id.value
+  if (!flow.isScheduleEdited(nodeId)) return
   const next = nodeScheduleCron(node, flow.sourceCfg)
   const current = flow.sourceJob?.schedule ?? ''
-  if (!next || next === current) return
+  if (!next || next === current) {
+    flow.clearScheduleEdited(nodeId)
+    return
+  }
   // 新建定时前先看流程有没有发布版本：后端只给已发布的流程建定时（新建出来的流程只有草稿 v1）。
   // 已有定时（有 jobId）走 updateJob 原地改，不受影响。
   const canvasFlow = canvasFlowIdOf(flow)
   if (!flow.sourceJob?.jobId && canvasFlow && flowVersion.flowId === canvasFlow && flowVersion.enabled && !flowVersion.overview?.publishId) {
     ElMessage({ type: 'warning', message: unpublishedFlowCronHint(canvasFlow, flowVersion.draft?.flowVer), duration: 8000, showClose: true })
+    flow.clearScheduleEdited(nodeId)
     return
   }
   try {
@@ -304,6 +312,7 @@ async function syncSourceCron(node: NodeConfig) {
       }),
       schedule: next,
     })
+    flow.clearScheduleEdited(nodeId)
     ElMessage.success(`定时已保存：${next}`)
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)
