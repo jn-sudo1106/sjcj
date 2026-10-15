@@ -69,6 +69,8 @@ export function isFileLikeNode(cfg: NodeConfig, snapshot?: Step): boolean {
  * 自动保存按「配置未就绪草稿」处理（跳过该节点 + 头部提示），不整批卡死。
  * 0927 P1-2：真实 ROOT 行同步豁免（后端 OUT_ENTRY 不校验 ROOT；写侧与展示侧同一口径，
  * 否则新流程一打开默认选中的入口节点就误报「输出表未选择」）。
+ * 2026-10-15：流程启用版本后写草稿不校验 OUT_ENTRY（186 实测），写侧是否跳过由 useStepWrite 按
+ * flowVersion.allowsEmptyOutput 决定；本函数只回答「缺不缺」，发布 / 发起抓取前的检查仍按它拦。
  */
 export function outputTableMissing(cfg: NodeConfig, snapshot?: Step): boolean {
   if (isFileLikeNode(cfg, snapshot)) return false

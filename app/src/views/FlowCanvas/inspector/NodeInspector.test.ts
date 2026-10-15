@@ -642,6 +642,8 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
     flow.setActiveTab('config')
     // 源上还没有 job：这正是出问题的那个场景
     expect(flow.sourceJob).toBeFalsy()
+    // 10-15 起只有手动改过定时才同步（TaskScheduleSettings 改定时走的就是 patchSchedule）
+    flow.patchSchedule('web-1', { scheduleType: '每天', cron: '0 0 0 * * ?' })
 
     vi.spyOn(configApi, 'addConfig').mockResolvedValue({ ok: true, configId: 'c-1', message: 'ok' })
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: 'c-1', name: 'cfg' } as never)
@@ -679,7 +681,7 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
 // 2026-10-12 开发环境实测：新建的流程只有「草稿 v1」没有发布版，保存定时被后端拒绝
 // 「以下源无法按所选流程调度（未关联或ROOT缺失）」，用户不知道该做什么。
 describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
-  async function saveWithOverview(overview: Awaited<ReturnType<typeof flowVersionApi.overview>>, cronError?: Error) {
+  async function saveWithOverview(overview: Awaited<ReturnType<typeof flowVersionApi.overview>>, cronError?: Error, editCron = true) {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -688,6 +690,7 @@ describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
     flow.main = ['web-1']
     flow.select('web-1')
     flow.setActiveTab('config')
+    if (editCron) flow.patchSchedule('web-1', { scheduleType: '每天', cron: '0 0 0 * * ?' })
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(overview)
     await useFlowVersionStore().load('21000012')
     vi.spyOn(configApi, 'addConfig').mockResolvedValue({ ok: true, configId: 'c-1', message: 'ok' })
@@ -707,6 +710,12 @@ describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
 
   it('流程只有草稿、没有发布版：不发 createJobs，直接说明先发布', async () => {
     const { saveCron } = await saveWithOverview(draftOnly)
+    expect(saveCron).not.toHaveBeenCalled()
+  })
+
+  // 2026-10-15：定时不是必填（旧平台同口径），没手动改过定时的保存不建 / 不改定时，也不弹「定时没保存」
+  it('没改过定时：保存节点不碰定时，未发布的流程也不提示', async () => {
+    const { saveCron } = await saveWithOverview(published, undefined, false)
     expect(saveCron).not.toHaveBeenCalled()
   })
 

@@ -108,6 +108,10 @@ const outputTableWarning = computed(() => {
   if (isMonitorNode(node)) return false
   return outputTableMissing(node, snapshot)
 })
+// 2026-10-15：启用版本的流程缺输出表也能存进草稿，只在发布 / 发起抓取前拦；未启用版本时后端仍拒，自动保存跳过该节点
+const outputTableWarningText = computed(() => (flowVersion.allowsEmptyOutput(canvasFlowIdOf(flow))
+  ? '节点已可保存到草稿，但发布和发起抓取前必须选择输出表，请在「表配置」补上'
+  : '非文件节点保存时后端要求必须声明输出表（OUT_ENTRY）。当前该节点会自动跳过保存，请在「表配置」选择输出表后重试'))
 const configId = computed(() => cfg.value?.configId || '')
 // sourceId 视角下，后端会把源自身的 config 套成 itemConfig=0 的虚拟首节点。
 // 新建采集走 snatchSave(newConfig=1)，这份配置就是随源刚创建的；仅凭“已有 configId”把它
@@ -252,14 +256,22 @@ async function onSaveNodeConfig() {
 async function syncSourceCron(node: NodeConfig) {
   const sourceId = flow.sourceCfg?.sourceId
   if (!sourceId) return
+  // 2026-10-15：定时不是必填（旧平台同口径）。只在用户这次手动改过定时策略时才同步；没碰定时的保存不建 / 不改定时，
+  // 也不会在未发布的流程上弹「定时没保存」。原来默认展示的那条「每天 0:00」会被当成要建的定时，每次保存都去建。
+  const nodeId = id.value
+  if (!flow.isScheduleEdited(nodeId)) return
   const next = nodeScheduleCron(node, flow.sourceCfg)
   const current = flow.sourceJob?.schedule ?? ''
-  if (!next || next === current) return
+  if (!next || next === current) {
+    flow.clearScheduleEdited(nodeId)
+    return
+  }
   // 新建定时前先看流程有没有发布版本：后端只给已发布的流程建定时（新建出来的流程只有草稿 v1）。
   // 已有定时（有 jobId）走 updateJob 原地改，不受影响。
   const canvasFlow = canvasFlowIdOf(flow)
   if (!flow.sourceJob?.jobId && canvasFlow && flowVersion.flowId === canvasFlow && flowVersion.enabled && !flowVersion.overview?.publishId) {
     ElMessage({ type: 'warning', message: unpublishedFlowCronHint(canvasFlow, flowVersion.draft?.flowVer), duration: 8000, showClose: true })
+    flow.clearScheduleEdited(nodeId)
     return
   }
   try {
@@ -300,6 +312,7 @@ async function syncSourceCron(node: NodeConfig) {
       }),
       schedule: next,
     })
+    flow.clearScheduleEdited(nodeId)
     ElMessage.success(`定时已保存：${next}`)
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)
@@ -481,7 +494,7 @@ onMounted(async () => {
       </div>
 
       <div v-if="outputTableWarning" class="ni-output-warn" data-testid="output-table-warn">
-        <el-alert type="warning" :closable="false" show-icon title="输出表未选择" description="非文件节点保存时后端要求必须声明输出表（OUT_ENTRY）。当前该节点会自动跳过保存，请在「表配置」选择输出表后重试" />
+        <el-alert type="warning" :closable="false" show-icon title="输出表未选择" :description="outputTableWarningText" />
       </div>
 
       <!-- 顶层 Tab：节点配置 / 表配置 / 编排配置 / 任务配置；普通画布可按需保留 AI 对话。 -->

@@ -20,6 +20,7 @@ import { ref, watch, type WatchStopHandle } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { firstOutputTableMissingNodeId, firstUnboundDraftNodeId } from '@/utils/flow/stepPersist'
 import { useStepWrite } from './useStepWrite'
 
@@ -69,6 +70,7 @@ function clearRetryTimer() {
 export function useFlowAutosave() {
   const flow = useFlowStore()
   const sourceStore = useSourceStore()
+  const version = useFlowVersionStore()
   const { persistFlowSteps } = useStepWrite()
 
   function schedule() {
@@ -113,8 +115,10 @@ export function useFlowAutosave() {
     clearTimer()
     // 有未绑定配置或输出表未就绪（0927 H1）的节点时：照常保存其它节点，但成功后状态留在
     // pending（头部「请先补全节点配置」依然准确）；不阻断、不假装全部完成。
+    // 2026-10-15：启用版本的流程写草稿不校验输出表，缺输出表的节点照常写进草稿，不算未完成（发布前再拦）
     const hasIncomplete = firstUnboundDraftNodeId(flow.main, flow.configs) !== undefined
-      || firstOutputTableMissingNodeId(flow.main, flow.branchGroups, flow.configs, sourceStore.stepSnapshots) !== undefined
+      || (!version.allowsEmptyOutput(canvasFlowIdOf(flow))
+        && firstOutputTableMissingNodeId(flow.main, flow.branchGroups, flow.configs, sourceStore.stepSnapshots) !== undefined)
     inFlight = true
     status.value = 'saving'
     const rev = flow.flowRev

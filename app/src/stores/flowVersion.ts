@@ -141,6 +141,15 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
   }
   const exitHistory = () => viewHistory(null)
 
+  /**
+   * 2026-10-15 186 实测：流程启用版本后，写步骤走草稿（后端 mutateNode），saveItemConfig / stepModify / enable
+   * 都不校验输出表（OUT_ENTRY）——没选输出表的节点也能存进草稿，发布 / 发起抓取前再由 ensureFlowReady 拦。
+   * 未启用版本（或版本概览还没读到）时后端仍强制校验，前端照旧跳过这类节点。
+   */
+  function allowsEmptyOutput(id: string): boolean {
+    return !!id && !!overviews.value[id]?.enabled
+  }
+
   function reset() {
     flowId.value = ''
     historyVersionId.value = null
@@ -148,6 +157,6 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
 
   return {
     flowId, overview, enabled, published, draft, history, currentVersionId, viewVersionId, readonly,
-    load, refresh, ensureDraftRef, withDraft, publish, abandon, viewHistory, exitHistory, reset,
+    load, refresh, ensureDraftRef, withDraft, allowsEmptyOutput, publish, abandon, viewHistory, exitHistory, reset,
   }
 })

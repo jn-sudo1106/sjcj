@@ -24,7 +24,7 @@ import {
   outputTableMissing,
   validFlowIdOf,
 } from '@/utils/flow/stepPersist'
-import { isRuleLikeNode, isPdfNode, effectiveOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import { isRuleLikeNode, isPdfNode, effectiveOutputTable, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 function assertOk(ack: Ack | null | undefined, fallback: string) {
   if (ack && 'ok' in ack && ack.ok === false) throw new Error(ack.message || fallback)
@@ -140,6 +140,14 @@ export function useStepWrite() {
    * （网站详情页内部代表源另有一层保护：它经过 loadFromSource，flowIdMode 为 false，
    *   不会把"长得像流程 ID 的源 ID"误当成流程 ID 写进步骤。）
    */
+  /**
+   * 输出表没选、且后端会拒（流程未启用版本）时才跳过写入；启用版本的流程写草稿不校验输出表（2026-10-15 实测），
+   * 照常写进去，发布 / 发起抓取前由 ensureFlowReady 拦。
+   */
+  function blockedByMissingOutput(cfg: NodeConfig, snapshot?: Step): boolean {
+    return outputTableMissing(cfg, snapshot) && !version.allowsEmptyOutput(flowIdOf())
+  }
+
   function flowIdOf(): string {
     if (flow.flowIdMode) return validFlowIdOf(flow.flowId)
     const sourceFlow = validFlowIdOf(flow.sourceCfg?.flowId) || validFlowIdOf(flow.sourceCtx?.flowId)
@@ -353,7 +361,7 @@ export function useStepWrite() {
     // 0927 H1：存量行输出表未就绪时任何步骤编辑（含改名整包）都会被后端「节点输出表不能为空」
     // 拒绝；先改画布并提示，等用户在「表配置」补上输出表后由自动保存整批落库，避免误导性报错。
     const snapshot = sourceStore.stepSnapshots[nodeId]
-    if (outputTableMissing(flow.configs[nodeId], snapshot)) {
+    if (blockedByMissingOutput(flow.configs[nodeId], snapshot)) {
       flow.setTitle(nodeId, trimmed)
       ElMessage.warning('已改画布名称，但该节点输出表未选择（非文件节点必填），补上输出表后自动保存才会落库')
       return
@@ -403,7 +411,7 @@ export function useStepWrite() {
       if (!cfg || !cfg.configId) continue
       // 0927 H1：非文件节点输出表未就绪 = 配置未就绪草稿：提交必被后端「节点输出表不能为空」
       // 拒绝，这里同样跳过该节点（画布状态保留，头部提示去补输出表），不整批卡死。
-      if (outputTableMissing(cfg, sourceStore.stepSnapshots[id])) continue
+      if (blockedByMissingOutput(cfg, sourceStore.stepSnapshots[id])) continue
       await createAndLocate(id)
       created += 1
     }
@@ -435,7 +443,7 @@ export function useStepWrite() {
       const snapshot = sourceStore.stepSnapshots[id]
       // 0927 H1：存量行输出表未就绪（编辑必被后端拒）同样按草稿跳过并提示；改动留在画布、
       // markFlowSaved 被 pending 卡住，头部提示补输出表后随下一轮自动保存落库。
-      if (snapshot && outputTableMissing(flow.configs[id], snapshot)) continue
+      if (snapshot && blockedByMissingOutput(flow.configs[id], snapshot)) continue
       if (!snapshot) {
         // 流程工作区：flowConf 里可能带着"只有画布定义、没有步骤行"的历史节点（R2 遗留形态），
         // 没有快照可整包回写，跳过而不是报错——它们本来就不在执行集合里，报了也写不了。
