@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import TaskWizard from './TaskWizard.vue'
 import { syncApi, type SyncCustomer, type SyncTable } from '@/api/dataSync'
@@ -52,8 +52,11 @@ type WizardVm = {
   busy: boolean
   tables: SyncTable[]
   taskList: Array<{ taskName: string; cron: string; fromSql: string; type?: string }>
+  nextTable: () => Promise<void>
   searchTables: (name: string) => Promise<void>
   selectTable: (id: string | number) => void
+  selectTarget: (id: string | number) => void
+  selectFileTarget: (id: string | number) => void
   submit: () => Promise<void>
 }
 const vm = (root: VueWrapper) => root.vm as unknown as WizardVm
@@ -105,6 +108,32 @@ describe('源数据表的动态搜索', () => {
     expect(vm(root).tables.map((item) => item.tableName)).toEqual(['TB_CNEWS'])
   })
 
+  /** el-select 展开下拉、清空关键词都会回调一次 ''，这时候不该再打后台 */
+  it('没有关键词时不发请求，直接回选完客户那一页', async () => {
+    const root = await mountWizard(async (_groupId, name) => (name ? [entry(11, 'TB_CNEWS')] : [entry(1, 'TB_A')]))
+    vm(root).form.customerId = 1
+    await flushPromises()
+    const spy = vi.spyOn(syncApi, 'tables').mockResolvedValue([entry(11, 'TB_CNEWS')])
+    spy.mockClear()
+    await vm(root).searchTables('cnews')
+    await vm(root).searchTables('   ')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(vm(root).tables.map((item) => item.tableName)).toEqual(['TB_A'])
+  })
+
+  it('空关键词作废在途的搜索，慢响应回来也不盖掉那一页', async () => {
+    const root = await mountWizard(async (_groupId, name) => (name ? [] : [entry(1, 'TB_A')]))
+    vm(root).form.customerId = 1
+    await flushPromises()
+    let resolveLate: ((v: SyncTable[]) => void) | undefined
+    vi.spyOn(syncApi, 'tables').mockImplementation(() => new Promise((resolve) => { resolveLate = resolve }))
+    void vm(root).searchTables('late')
+    await vm(root).searchTables('')
+    resolveLate?.([entry(2, 'TB_LATE')])
+    await flushPromises()
+    expect(vm(root).tables.map((item) => item.tableName)).toEqual(['TB_A'])
+  })
+
   it('慢的旧响应后到也不覆盖新关键词的结果', async () => {
     const root = await mountWizard()
     const resolvers: Array<(v: SyncTable[]) => void> = []
@@ -143,6 +172,65 @@ describe('源数据表的动态搜索', () => {
     expect(vm(root).form.sourceTable).toBe('sense_data.tb_cnews')
     expect(vm(root).form.targetTable).toBe('cnews')
     expect(vm(root).tables.map((item) => item.tableName)).toEqual(['sense_data.TB_CNEWS', 'TB_A'])
+  })
+})
+
+describe('第一步的下一步门槛', () => {
+  /** 按真实点选顺序把客户、目标库、源表、文件库都落到 form 上 */
+  async function fillStep0(root: VueWrapper, withFile: boolean) {
+    vi.spyOn(syncApi, 'customerDatabases').mockImplementation(async (_customerId, type) =>
+      (type === 0
+        ? [{ id: 7, name: 'xz_db', sourceCode: 'ck_xz', dbSchema: 'xz_db', databaseType: 1, type: 0, appId: 3 }]
+        : [{ id: 9, name: 'minio_xz', sourceCode: 'minio', dbSchema: '', databaseType: 0, type: 1, appId: 3 }]) as never)
+    vi.spyOn(syncApi, 'tables').mockResolvedValue([entry(3, 'sense_data.TB_CNEWS')])
+    vi.spyOn(syncApi, 'tableColumns').mockResolvedValue([
+      { itemId: 1, columnName: 'id', itemCode: 'id', itemName: '主键', dataType: 'bigint' },
+    ] as never)
+    vm(root).form.customerId = 1
+    await flushPromises()
+    vm(root).form.targetDatabase = 7
+    vm(root).selectTarget(7)
+    vm(root).form.entryTypeId = 3
+    vm(root).selectTable(3)
+    if (withFile) {
+      vm(root).form.fileSyncFlag = true
+      vm(root).form.targetFileDatabase = 9
+      vm(root).selectFileTarget(9)
+    }
+    await flushPromises()
+  }
+
+  it('开着同步文件、各项齐备时能进第二步', async () => {
+    const root = await mountWizard()
+    await fillStep0(root, true)
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({} as never))
+    await vm(root).nextTable()
+    expect(warn).not.toHaveBeenCalled()
+    expect(vm(root).step).toBe(1)
+  })
+
+  /** 整句笼统提示等于没提示：缺哪项就点名哪项 */
+  it('只缺目标文件库时提示里只出现这一项', async () => {
+    const root = await mountWizard()
+    await fillStep0(root, false)
+    vm(root).form.fileSyncFlag = true
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({} as never))
+    await vm(root).nextTable()
+    expect(warn.mock.calls[0]?.[0]).toBe('请完成：目标文件库')
+    expect(vm(root).step).toBe(0)
+  })
+
+  it('非管理员的会话缺客户 ID 时不再要求去选看不见的客户', async () => {
+    setActivePinia(createPinia())
+    useAuthStore().info = { name: 'leo', id: 0, roles: [], groups: [], avatar: '', introduction: '', group: 1 } as never
+    vi.spyOn(syncApi, 'customerDatabases').mockResolvedValue([])
+    vi.spyOn(syncApi, 'tables').mockResolvedValue([])
+    wrapper = mount(TaskWizard, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({} as never))
+    await vm(wrapper).nextTable()
+    expect(String(warn.mock.calls[0]?.[0])).toContain('登录会话里的客户 ID')
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain('客户 / 环境')
   })
 })
 
