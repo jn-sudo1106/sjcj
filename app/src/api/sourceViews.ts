@@ -15,13 +15,15 @@
  * **10-14 目录改走分类接口**（`设计稿/设计方案/1014-我的视图目录版_接口变更核对与疑问_2026-10-14.md`）：
  * 真实接口下视图的目录 = 带 `rootViewId` 的分类（`category/categoryPaged|add|update|delete`，一级 `parentId=-1`），
  * 目录里的源和来源组 = `category/listSources` 读、`category/addSources` / `delSources` 增量写（V3 接口 10-15，入参 `sourceIds` + `sourceGroupIds`）。
- * 不传 `rootViewId` 的就是系统目录。随来源组带入后单独移出的源（排除）后端还没有接口，**暂存在 queryJson**（`{ v: 3, dirs: { 分类ID: { excluded } } }`）。
+ * 不传 `rootViewId` 的就是系统目录。随来源组带入后单独移出的源（排除）：10-15 后端已支持——从目录 `delSources` 掉组成员即排除
+ * （`sourcePaged` 不再带出），`addSources` 加回即恢复；但 `listSources` 不返回排除了哪些，前端显示用的排除名单仍记在
+ * queryJson（`{ v: 3, dirs: { 分类ID: { excluded } } }`）。
  *
  * V3 后端口径（10-15 186 实测，见 1014 文档 §9 / §10）：
  * - `addSources` 带来源组时，除了记一行组绑定，还把组的**当前成员逐个展开成源行**（快照）；`listSources` 的 `sourceIds` 含这些展开行；
  * - `delSources` 带来源组时，删组绑定和**当前组成员**的源行（单独加过、同时也是组成员的源会被一起删）；
  * - `delSources` 同时传源和来源组时只删了一部分（后端问题），所以前端**源和来源组分两次调**；
- * - `sourcePaged` 的 `viewCategoryId` = 目录里生效的源行 ∪ 绑定来源组的**当前**成员（排除不生效）。
+ * - `sourcePaged` 的 `viewCategoryId` = 目录里生效的源行 ∪ 绑定来源组的**当前**成员 − 排除（10-15 后端补上排除）。
  * 前端模型里「单独添加的源」= listSources 的 sourceIds − 绑定来源组的当前成员（成员按组现拉，同页面缓存）。
  * 本机兜底照旧整棵树存本机。
  */
@@ -328,7 +330,8 @@ const viewCategoryApi = {
  * 源和来源组的增减：先删组 → 删源 → 加组 → 加源，每类单独一次请求。
  * 删组时后端会连**当前组成员**的源行一起删（10-15 用户确认可以接受）；要保留的源（单独添加、又是被解绑组的成员）在删组后补加回去。
  */
-async function applyBindDiff(categoryId: string, old: { sources: string[]; groups: string[] }, next: { sources: string[]; groups: string[] }) {
+type Bind = { sources: string[]; groups: string[]; excluded?: string[] }
+async function applyBindDiff(categoryId: string, old: Bind, next: Bind) {
   const minus = (a: string[], b: string[]) => { const set = new Set(b); return a.filter((x) => !set.has(x)) }
   const groupsOut = minus(old.groups, next.groups)
   const sourcesOut = minus(old.sources, next.sources)
@@ -343,6 +346,17 @@ async function applyBindDiff(categoryId: string, old: { sources: string[]; group
   if (sourcesOut.length) await viewCategoryApi.delSources(categoryId, sourcesOut, [])
   if (groupsIn.length) await viewCategoryApi.addSources(categoryId, [], groupsIn)
   if (sourcesIn.length) await viewCategoryApi.addSources(categoryId, sourcesIn, [])
+  // 排除（10-15 后端已支持）：从目录删掉组成员 = 排除，sourcePaged 不再带出它；重新加回 = 恢复。
+  // 只处理仍绑着的组：解绑时一并清掉的排除不能加回去
+  const excludedIn = minus(next.excluded ?? [], old.excluded ?? [])
+  const restored = minus(old.excluded ?? [], next.excluded ?? [])
+  if (excludedIn.length) await viewCategoryApi.delSources(categoryId, excludedIn, [])
+  if (restored.length && next.groups.length) {
+    const members = await loadGroupMembers(next.groups)
+    const bound = new Set(next.groups.flatMap((g) => members[g] ?? []))
+    const back = restored.filter((id) => bound.has(id) && !sourcesIn.includes(id))
+    if (back.length) await viewCategoryApi.addSources(categoryId, back, [])
+  }
 }
 
 /** 一次并发几个请求（目录多时逐个拉 listSources） */
@@ -393,7 +407,7 @@ async function saveRemoteTree(view: SourceView, prev: ViewTree, next: ViewTree):
 
   const removed = prev.dirs.filter((d) => !nextIds.has(d.id)).sort((a, b) => depth(prev, b.id) - depth(prev, a.id))
   for (const d of removed) {
-    await applyBindDiff(d.id, d, { sources: [], groups: [] })
+    await applyBindDiff(d.id, d, { sources: [], groups: [], excluded: [] })
     await viewCategoryApi.remove(d.id)
   }
   const added = next.dirs.filter((d) => !before.has(d.id)).sort((a, b) => depth(next, a.id) - depth(next, b.id))
@@ -408,7 +422,7 @@ async function saveRemoteTree(view: SourceView, prev: ViewTree, next: ViewTree):
     }
     if (Object.keys(patch).length) await viewCategoryApi.update(view.viewId, d.id, patch)
   }
-  for (const d of next.dirs) await applyBindDiff(real(d.id), before.get(d.id) ?? { sources: [], groups: [] }, d)
+  for (const d of next.dirs) await applyBindDiff(real(d.id), before.get(d.id) ?? { sources: [], groups: [], excluded: [] }, d)
 
   const tree: ViewTree = {
     ...next,

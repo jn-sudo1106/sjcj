@@ -239,10 +239,10 @@ describe('真实接口（开发环境联调口径）', () => {
     const reread = await sourceViewApi.loadTree('7', first.view)
     expect(reread.dirs[0]).toMatchObject({ groups: ['3'], sources: ['77'] }) // 展开的成员不算单独添加
 
-    const excluded = { ...first.tree, dirs: first.tree.dirs.map((d) => (d.id === '9000' ? { ...d, excluded: ['t2'] } : d)) }
+    const excluded = { ...first.tree, dirs: first.tree.dirs.map((d) => (d.id === '9000' ? { ...d, excluded: ['502'] } : d)) }
     const saved = await sourceViewApi.saveTree('7', first.view, first.tree, excluded)
     expect(calls('source-view/update')).toEqual([expect.objectContaining({ viewId: '1', revision: 0 })])
-    expect(JSON.parse(String(calls('source-view/update')[0].queryJson))).toEqual({ v: 3, dirs: { 9000: { excluded: ['t2'] } } })
+    expect(JSON.parse(String(calls('source-view/update')[0].queryJson))).toEqual({ v: 3, dirs: { 9000: { excluded: ['502'] } } })
 
     requestMock.mockClear()
     await sourceViewApi.saveTree('7', saved.view, saved.tree, deleteDir(saved.tree, '9000'))
@@ -270,6 +270,31 @@ describe('真实接口（开发环境联调口径）', () => {
       'category/addSources:[[501],[]]',
     ])
     expect([...db.binds.get('9000')!].sort()).toEqual(['501', '77'])
+  })
+
+  // 10-15 后端支持排除：从目录 delSources 掉组成员 = 排除（sourcePaged 不再带出），addSources 加回 = 恢复
+  it('排除 / 恢复同步到后端；解绑来源组时清掉的排除不加回去', async () => {
+    const db = fakeBackend()
+    const [view] = await sourceViewApi.list('7')
+    const a = addDir(emptyTree(), null, '舆情')
+    const first = await sourceViewApi.saveTree('7', view, emptyTree(), bindGroup(a.tree, a.id, '3'))
+    const withEx = (t: ViewTree, ex: string[]) => ({ ...t, dirs: t.dirs.map((d) => ({ ...d, excluded: ex })) })
+
+    requestMock.mockClear()
+    const ex = await sourceViewApi.saveTree('7', first.view, first.tree, withEx(first.tree, ['502']))
+    expect(calls('category/delSources')).toEqual([{ categoryId: 9000, sourceIds: [502], sourceGroupIds: [] }])
+    expect([...db.binds.get('9000')!]).toEqual(['501'])
+
+    requestMock.mockClear()
+    const back = await sourceViewApi.saveTree('7', ex.view, ex.tree, withEx(ex.tree, []))
+    expect(calls('category/addSources')).toEqual([{ categoryId: 9000, sourceIds: [502], sourceGroupIds: [] }])
+
+    requestMock.mockClear()
+    const ex2 = await sourceViewApi.saveTree('7', back.view, back.tree, withEx(back.tree, ['502']))
+    requestMock.mockClear()
+    await sourceViewApi.saveTree('7', ex2.view, ex2.tree, { ...ex2.tree, dirs: ex2.tree.dirs.map((d) => ({ ...d, groups: [], excluded: [] })) })
+    expect(calls('category/delSources')).toEqual([{ categoryId: 9000, sourceIds: [], sourceGroupIds: [3] }])
+    expect(calls('category/addSources')).toEqual([])
   })
 
   it('删视图：先删它的目录和源关系，再删视图', async () => {

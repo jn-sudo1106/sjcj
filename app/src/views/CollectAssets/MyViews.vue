@@ -73,13 +73,13 @@ watch(() => boundGroups(tree.value).join(','), () => void loadMembers())
 
 // ---- 派生 ----
 const scopeIds = computed(() => resolveIds(tree.value, selectedDir.value, members.value))
-/**
- * 真实接口下按目录让后端查（sourcePaged 的 viewCategoryId = 目录里的源 ∪ 来源组当前成员），不再拼源 ID；
- * 但后端不认「排除」，目录里有排除时仍传前端算好的源 ID。本机兜底没有分类 ID，也传源 ID。
- */
 /** 每次保存成功加 1：按 viewCategoryId 查时参数不变，靠它让源列表重查 */
 const scopeVersion = ref(0)
-const viewCategoryScope = computed(() => (backend.value === 'remote' && selectedDir.value && !container.value.excluded.length ? selectedDir.value : undefined))
+/**
+ * 真实接口下按目录让后端查（sourcePaged 的 viewCategoryId = 目录里的源 ∪ 来源组当前成员 − 排除），不再拼源 ID。
+ * 本机兜底没有分类 ID，传前端算好的源 ID。
+ */
+const viewCategoryScope = computed(() => (backend.value === 'remote' && selectedDir.value ? selectedDir.value : undefined))
 const counts = computed(() => {
   const out: Record<string, number> = {}
   for (const d of tree.value.dirs) out[d.id] = resolveIds(tree.value, d.id, members.value).length
@@ -101,8 +101,10 @@ const viaGroup = (sourceId: string) => {
 }
 
 /** 源列表的显示设置（隐藏列 / 排序 / 每页条数）随视图保存；条件栏是临时筛选，不存 */
+// 保存目录后视图对象会换新，但显示设置没变：经字符串中转，内容不变就不给源列表新对象，免得它再重查一次
+const displayKey = computed(() => JSON.stringify(active.value?.display ?? defaultDisplay()))
 const listState = computed<SourceListViewState>(() => {
-  const d = active.value?.display ?? defaultDisplay()
+  const d = JSON.parse(displayKey.value) as ViewDisplay
   return { ...blankSourceListViewState(), hiddenColumns: d.hiddenColumns, sortField: d.sortField, sortDirection: d.sortDirection, pageSize: d.pageSize }
 })
 
@@ -428,6 +430,7 @@ function openSourceGroup(sourceGroupId: string) {
 }
 function refresh() {
   clearGroupMembersCache()
+  scopeVersion.value += 1
   void loadGroupNames()
   void load(activeId.value)
 }
@@ -446,6 +449,7 @@ onMounted(() => {
 let activatedOnce = false
 onActivated(() => {
   if (!activatedOnce) { activatedOnce = true; return }
+  scopeVersion.value += 1
   void loadGroupNames()
   void load(activeId.value)
 })
