@@ -50,7 +50,7 @@ import {
   SwitchButton,
   Scissor,
   Document,
-  EditPen,
+  Edit
 } from '@element-plus/icons-vue'
 import type { MqCheck } from '@/api'
 import {
@@ -365,7 +365,7 @@ onMounted(() => void load())
               <span class="qc-op-icon" @click="openDetail(row)"><el-icon :size="15"><Document /></el-icon></span>
             </el-tooltip>
             <el-tooltip content="编辑" placement="top">
-              <span class="qc-op-icon" @click="openEdit(row)"><el-icon :size="15"><EditPen /></el-icon></span>
+              <span class="qc-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
             </el-tooltip>
           </span>
 
@@ -492,7 +492,7 @@ onMounted(() => void load())
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: var(--rc-primary, #2563eb);
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
 }
@@ -515,6 +515,7 @@ onMounted(() => void load())
 .qc-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 .qc-pager {
@@ -523,3 +524,4 @@ onMounted(() => void load())
   padding: 8px 0 2px;
 }
 </style>
+

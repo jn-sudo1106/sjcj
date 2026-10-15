@@ -65,6 +65,7 @@ export const COMM_JOB_BASE: CommJobColumn[] = [
   {
     title: '操作', dataIndex: 'action', span: 2, width: 150,
     noEdit: true, noAdd: true, noDetail: true, fixed: 'right',
+    align: 'center',
   },
 ]
 

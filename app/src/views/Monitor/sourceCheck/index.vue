@@ -5,7 +5,7 @@ import {
   Search,
   Plus,
   Document,
-  EditPen,
+  Edit,
   View,
   VideoPlay,
   Delete,
@@ -331,14 +331,14 @@ function onSourceChange() {
       <el-table-column label="上次" width="160" prop="lastRun" />
       <el-table-column label="源" width="110" prop="sourceId" class-name="mono-cell" />
       <!-- 操作：日志 / 编辑 / 详情 / 立即运行 / 删除，全部图标化，悬浮 tooltip 说明 -->
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="200" fixed="right" align="center">
         <template #default="{ row }">
           <div class="sc-op-bar">
             <el-tooltip content="日志" placement="top">
               <span class="sc-op-icon" @click="openLogs(row)"><el-icon :size="15"><Document /></el-icon></span>
             </el-tooltip>
             <el-tooltip content="编辑" placement="top">
-              <span class="sc-op-icon" @click="openEditDialog(row)"><el-icon :size="15"><EditPen /></el-icon></span>
+              <span class="sc-op-icon" @click="openEditDialog(row)"><el-icon :size="15"><Edit /></el-icon></span>
             </el-tooltip>
             <el-tooltip content="详情" placement="top">
               <span class="sc-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
@@ -492,6 +492,7 @@ function onSourceChange() {
 .sc-op-bar {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 .sc-op-icon {
@@ -501,7 +502,7 @@ function onSourceChange() {
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: var(--rc-primary, #2563eb);
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
 }

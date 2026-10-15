@@ -110,7 +110,7 @@ import {
   Connection,
   Delete,
   Download,
-  EditPen,
+  Edit,
   Minus,
   Refresh,
   Search,
@@ -984,7 +984,7 @@ watch(
            富余宽度会按各列 min-width 的比例分给数据列，那才是「列自适应页面宽度」。 -->
       <el-table-column v-if="!dynamicCols.length" />
 
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" width="160" fixed="right" align="center">
         <template #default="{ row }">
           <div class="ir-actions">
             <el-tooltip content="详情" placement="top">
@@ -997,7 +997,7 @@ watch(
               <span class="ir-op-icon ir-op-danger" @click="onRowCommand('deleteOne', row)"><el-icon :size="15"><Delete /></el-icon></span>
             </el-tooltip>
             <el-tooltip v-if="tableMeta?.state === 'C'" content="手动修改" placement="top">
-              <span class="ir-op-icon" @click="onRowCommand('edit', row)"><el-icon :size="15"><EditPen /></el-icon></span>
+              <span class="ir-op-icon" @click="onRowCommand('edit', row)"><el-icon :size="15"><Edit /></el-icon></span>
             </el-tooltip>
             <el-tooltip v-if="row.k0" content="重新保存原始JSON" placement="top">
               <span class="ir-op-icon" @click="onRowCommand('reSave', row)"><el-icon :size="15"><Refresh /></el-icon></span>
@@ -1147,6 +1147,7 @@ watch(
 .ir-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 .ir-op-icon {
@@ -1156,7 +1157,7 @@ watch(
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: var(--rc-primary, #2563eb);
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
 }
@@ -1177,3 +1178,4 @@ watch(
   padding: 8px 0 2px;
 }
 </style>
+

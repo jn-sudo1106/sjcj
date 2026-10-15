@@ -54,7 +54,7 @@ export const MQ_CHECK_BASE: QueueColumn[] = [
     title: '消费速率高于', dataIndex: 'maxRate', span: 2, width: 130, align: 'center', sorter: true,
     tips: '如一些网站出异常,导致不正常快速消费完',
   },
-  { title: '操作', dataIndex: 'action', span: 2, width: 96, noEdit: true, noAdd: true, noDetail: true }, // 旧 100
+  { title: '操作', dataIndex: 'action', span: 2, width: 96, noEdit: true, noAdd: true, noDetail: true, align: 'center' }, // 旧 100
 ]
 
 /** `allColumns.MQ_CHECK.other` */
