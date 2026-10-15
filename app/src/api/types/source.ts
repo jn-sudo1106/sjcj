@@ -154,7 +154,7 @@ export interface Source {
 export type WorkflowBindingRole = 'MAIN' | 'BACKFILL' | 'AUX'
 export type WorkflowVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
 
-/** 源（或其 SourceGroup）与流程的有效绑定。inherited=true 表示本行继承自 SourceGroup。 */
+/** 源（或其 SourceGroup）与流程的有效绑定。inherited=true 表示本行来自 SourceGroup，own=true 表示源自己绑定。 */
 export interface WorkflowBinding {
   id: string
   bindType: 'SOURCE_GROUP' | 'SOURCE'
@@ -182,7 +182,12 @@ export interface WorkflowBinding {
   primary: boolean
   priority: number
   status: 'ACTIVE' | 'DISABLED'
+  /** 来源组绑定的流程 */
   inherited: boolean
+  /** 源自己也绑定了这条（与来源组流程重复时 inherited 和 own 同时为 true） */
+  own?: boolean
+  /** 来源组的默认流程。primary 只给真正的运行入口：本源默认优先，没有再用来源组默认 */
+  groupDefault?: boolean
   updatedAt?: string
 }
 
@@ -232,10 +237,15 @@ export interface SourceFlowsView {
   sourceId?: string
   /** 按 sourceId 查时，源已入组则非空——此时 flowIds 是组的统一流程，源不能单独改 */
   sourceGroupId?: string
-  /** 生效（启用中）的流程 ID */
+  /** 生效（启用中）的流程 ID；入组时是来源组的流程，未入组时与 ownFlowIds 相同 */
   flowIds: string[]
   defaultFlowId?: string
   bindings: SourceFlowBind[]
+  /** 源自有的流程（ownFlowIds / ownDefaultFlowId / ownBindings）；入组的源也可以有，bindSourceFlows 只改这一套。
+   *  后端没返回 own* 时（旧版本）：未入组回落到上面三项，入组视为空。 */
+  ownFlowIds: string[]
+  ownDefaultFlowId?: string
+  ownBindings: SourceFlowBind[]
 }
 
 /** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */

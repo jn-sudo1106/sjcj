@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 流程列表（flowMode=list）：数据来自 source-group 绑定；入组的源整体只读，没有任何兼容模式提示。
+// 流程列表（flowMode=list）：数据来自 source-group 绑定；入组的源来源组流程只读、本源流程可改，没有任何兼容模式提示。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -71,13 +71,19 @@ describe('SourceWorkflowList', () => {
     expect(unbind).toHaveBeenCalledWith('100', '12')
   })
 
-  it('入组的源：整个列表只读，说明原因，不出现关联 / 新增 / 设主流程 / 解除', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([row('21', true, true), row('22', false, true)])
+  it('入组的源：来源组流程只能打开，本源流程可设主 / 解除；关联 / 新增照常提供', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([
+      { ...row('21', false, true), groupDefault: true },
+      row('22', false, true),
+      { ...row('31', true), own: true },
+      { ...row('32', false), own: true },
+    ])
     const wrapper = await mountList()
 
-    expect(wrapper.get('[data-testid="workflow-group-locked"]').text()).toContain('退出来源组')
-    expect(wrapper.text()).toContain('来源组统一流程')
-    expect(wrapper.findAll('.swl-op').map((b) => b.text())).toEqual(['打开', '打开'])
-    expect(wrapper.findAll('button').some((b) => b.text() === '关联已有' || b.text().includes('新增流程'))).toBe(false)
+    expect(wrapper.get('[data-testid="workflow-group-locked"]').text()).toContain('来源组的流程在这里只能查看')
+    expect(wrapper.text()).toContain('组默认')
+    expect(wrapper.findAll('.swl-op').map((b) => b.text())).toEqual(['打开', '打开', '打开', '打开', '设为主流程', '解除'])
+    expect(wrapper.findAll('button').some((b) => b.text() === '关联已有')).toBe(true)
+    expect(wrapper.findAll('button').some((b) => b.text().includes('新增流程'))).toBe(true)
   })
 })

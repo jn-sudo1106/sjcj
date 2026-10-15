@@ -191,17 +191,38 @@ describe('SourceWorkflowTabs', () => {
   })
 })
 
-// 来源组接口文档：入组的源统一使用组的流程，不能单独新建 / 关联（后端会拒绝），只读并说明原因。
+// 入组的源（10-15 定）：来源组流程一段（只读）+ 本源流程一段（可新增）；主流程本源默认优先。
 describe('SourceWorkflowTabs · 入组的源', () => {
-  it('只显示来源组的统一流程，不提供新增、编辑新版本、发布；有说明标签，没有兼容模式', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([{ ...MAIN, inherited: true, bindType: 'SOURCE_GROUP', bindId: '3' }])
+  const GROUP_DEFAULT: WorkflowBinding = { ...MAIN, id: 'g-1', workflowId: '31', workflowName: '组主流程', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', primary: false, role: 'AUX', groupDefault: true }
+  const GROUP_AUX: WorkflowBinding = { ...AUX, id: 'g-2', workflowId: '32', workflowName: '组辅助', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', role: 'AUX', own: true }
+
+  it('分「来源组 #3」「本源」两段；组默认标「组默认」，本源默认标「主」；两边都绑的带「本源」标记', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([GROUP_DEFAULT, GROUP_AUX, { ...MAIN, own: true }])
     const { wrapper } = await mountTabs()
-    expect(wrapper.findAll('.swt-tab')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(false)
-    expect(wrapper.find('.swt-version-actions').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="workflow-group-locked"]').text()).toBe('来源组统一流程')
-    expect(wrapper.get('[data-testid="workflow-group-locked"]').attributes('title')).toContain('退出来源组')
+    expect(wrapper.get('[data-testid="workflow-seg-group"]').text()).toBe('来源组 #3')
+    expect(wrapper.get('[data-testid="workflow-seg-own"]').text()).toBe('本源')
+    const tabs = wrapper.findAll('.swt-tab')
+    expect(tabs.map((t) => t.find('.swt-id').text())).toEqual(['#31', '#32', '#11'])
+    expect(tabs[0].find('.swt-group-default').exists()).toBe(true)
+    expect(tabs[0].find('.swt-primary').exists()).toBe(false)
+    expect(tabs[1].find('.swt-own-mark').exists()).toBe(true)
+    expect(tabs[2].find('.swt-primary').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('兼容模式')
-    expect(copyWholeFlow).not.toHaveBeenCalled()
+  })
+
+  it('只有来源组流程：本源段显示「暂无自有流程」，仍可「＋」新增自有流程', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([{ ...GROUP_DEFAULT, primary: true, role: 'MAIN', own: false }])
+    const { wrapper } = await mountTabs()
+    expect(wrapper.find('[data-testid="workflow-seg-own"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('暂无自有流程')
+    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(true)
+    expect(wrapper.find('.swt-version-actions').exists()).toBe(false)
+  })
+
+  it('未入组的源不出分段标签', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN, AUX])
+    const { wrapper } = await mountTabs()
+    expect(wrapper.find('.swt-seg').exists()).toBe(false)
   })
 })

@@ -22,9 +22,10 @@ const adding = ref(false)
 const addMenuOpen = ref(false)
 const copyOpen = ref(false)
 const versionBusy = ref(false)
-// 入组的源统一使用来源组的流程，不能单独改绑（后端会拒绝）：不提供新建 / 关联，只能看，要改先退出来源组
-const inherited = computed(() => rows.value.some(row => row.inherited))
-const writable = computed(() => !inherited.value)
+// 入组的源分两段：来源组的流程（只读，要改去来源组）在前，源自有的流程在后；「＋」只往本源这段加（10-15 后端放行）
+const groupRows = computed(() => rows.value.filter(row => row.inherited))
+const ownRows = computed(() => rows.value.filter(row => !row.inherited))
+const groupId = computed(() => groupRows.value[0]?.bindId ?? '')
 
 const activeFlowId = computed(() => String(route.query.flowId || flow.sourceCtx?.flowId || ''))
 const activeWorkflowId = computed(() => {
@@ -133,7 +134,7 @@ async function createBlank() {
       sourceId: props.sourceId,
       name: result.value.trim(),
       definition: makeBlankTemplateDefinition(),
-      primary: rows.value.length === 0,
+      primary: !rows.value.some(row => !row.inherited || row.own),
     })
     ElMessage.success(`流程「${created.workflowName}」已创建`)
     await finishCreate(created.workflowId)
@@ -172,7 +173,7 @@ async function copyExisting(sourceFlow: FlowRecord) {
       await workflowBindingApi.bind({
         sourceId: props.sourceId,
         workflowId: copied.flowId,
-        primary: rows.value.length === 0,
+        primary: !rows.value.some(row => !row.inherited || row.own),
       })
     } catch (error) {
       throw new Error(`已生成流程 #${copied.flowId}，但关联当前源失败：${(error as Error)?.message ?? String(error)}`)
@@ -204,28 +205,42 @@ onMounted(async () => {
   <div class="swt" data-testid="source-workflow-tabs">
     <span v-if="localFlowTarget" class="swt-compat" :title="localFlowTarget">流程：本地</span>
     <div class="swt-scroll" role="tablist" aria-label="当前源的流程">
-      <button
-        v-for="row in rows"
-        :key="row.workflowId"
-        class="swt-tab"
-        :class="{ active: row.workflowId === activeWorkflowId }"
-        type="button"
-        role="tab"
-        :aria-selected="row.workflowId === activeWorkflowId"
-        :title="`${row.workflowName}（#${row.workflowId}）`"
-        @click="openFlow(row.workflowId)"
-      >
-        <span class="swt-name">{{ row.workflowName }}</span>
-        <span class="swt-id">#{{ row.workflowId }}</span>
-        <span v-if="row.versionManaged" class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
-        <span v-if="row.primary" class="swt-primary">主</span>
-        <span v-else-if="row.role === 'BACKFILL'" class="swt-role">补</span>
-      </button>
+      <template v-for="segment in [{ key: 'group', list: groupRows }, { key: 'own', list: ownRows }]" :key="segment.key">
+        <template v-if="segment.list.length || (segment.key === 'own' && groupRows.length)">
+          <span
+            v-if="groupRows.length"
+            class="swt-seg"
+            :class="segment.key"
+            :data-testid="`workflow-seg-${segment.key}`"
+            :title="segment.key === 'group' ? '来源组绑定的流程，这里只能查看，要改请到来源组里配置' : '当前源自己关联的流程，可新增、设主、解除；运行时本源的主流程优先'"
+          >{{ segment.key === 'group' ? `来源组 #${groupId}` : '本源' }}</span>
+          <span v-if="segment.key === 'own' && groupRows.length && !ownRows.length" class="swt-empty">暂无自有流程</span>
+          <button
+            v-for="row in segment.list"
+            :key="row.workflowId"
+            class="swt-tab"
+            :class="{ active: row.workflowId === activeWorkflowId, group: row.inherited }"
+            type="button"
+            role="tab"
+            :aria-selected="row.workflowId === activeWorkflowId"
+            :title="`${row.workflowName}（#${row.workflowId}）${row.inherited ? (row.own ? '：来源组和本源都关联了' : '：来源组流程') : ''}`"
+            @click="openFlow(row.workflowId)"
+          >
+            <span class="swt-name">{{ row.workflowName }}</span>
+            <span class="swt-id">#{{ row.workflowId }}</span>
+            <span v-if="row.versionManaged" class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
+            <span v-if="row.primary" class="swt-primary">主</span>
+            <span v-else-if="row.groupDefault" class="swt-group-default" title="来源组的默认流程；本源有主流程时以本源为准">组默认</span>
+            <span v-else-if="row.role === 'BACKFILL'" class="swt-role">补</span>
+            <span v-if="row.inherited && row.own" class="swt-own-mark">本源</span>
+          </button>
+        </template>
+      </template>
       <span v-if="loading && !rows.length" class="swt-loading">加载流程…</span>
       <span v-else-if="!loading && !rows.length" class="swt-empty">暂无流程</span>
     </div>
 
-    <div v-if="activeRow?.versionManaged === true && writable" class="swt-version-actions">
+    <div v-if="activeRow?.versionManaged === true && !activeRow.inherited" class="swt-version-actions">
       <button
         v-if="!activeRow.draftVersionId"
         class="swt-version-btn"
@@ -245,7 +260,7 @@ onMounted(async () => {
     <!-- 217 流程版本（2026-10-11）：已发布 vN / 草稿 vN + 放弃 / 发布，紧凑徽标放在这一行，不再单独占一行 -->
     <FlowVersionBar />
 
-    <div v-if="writable" class="swt-add-wrap">
+    <div class="swt-add-wrap">
       <button
         class="swt-add"
         type="button"
@@ -261,7 +276,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <span v-if="inherited" class="swt-locked" data-testid="workflow-group-locked" title="该源已加入来源组，统一使用来源组的流程，不能单独新建或关联；需要单独配置请先退出来源组。">来源组统一流程</span>
     <ReplaceFlowDialog
       v-if="copyOpen"
       v-model="copyOpen"
@@ -297,5 +311,10 @@ onMounted(async () => {
 .swt-add-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-text-2); text-align: left; cursor: pointer; }
 .swt-add-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .swt-compat { align-self: center; margin-left: 7px; color: #92400e; font-size: 10px; white-space: nowrap; }
-.swt-locked { align-self: center; margin-left: 7px; padding: 2px 7px; border-radius: 10px; background: #ede9fe; color: #6d28d9; font-size: 10px; white-space: nowrap; cursor: help; }
+.swt-seg { flex: none; align-self: center; margin: 0 6px 0 2px; padding: 2px 7px; border-radius: 10px; background: #e2e8f0; color: #475569; font-size: 10px; white-space: nowrap; cursor: help; }
+.swt-seg.group { background: #ede9fe; color: #6d28d9; }
+.swt-seg.own { margin-left: 10px; }
+.swt-tab.group .swt-name { color: #6d28d9; }
+.swt-group-default, .swt-own-mark { flex: none; padding: 1px 4px; border-radius: 4px; background: #ede9fe; color: #6d28d9; font-size: 10px; }
+.swt-own-mark { background: #e2e8f0; color: #475569; }
 </style>
