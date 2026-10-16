@@ -28,7 +28,6 @@ const size = ref(20)
 const loading = ref(false)
 const error = ref('')
 const unbinding = ref('')
-const toggling = ref('')
 
 const keyword = ref('')
 const appliedKeyword = ref('')
@@ -124,35 +123,6 @@ async function unbind(source: Source) {
   }
 }
 
-async function toggleEnable(source: Source) {
-  const label = source.name || source.sourceId
-  const enable = !!source.disabled
-  try {
-    await ElMessageBox.confirm(
-      enable
-        ? `确认启用源「${label}」？启用后它会按当前流程的配置继续被抓取任务调度。`
-        : `确认禁用源「${label}」？禁用后它不再被调度，已有数据不受影响。`,
-      enable ? '启用源' : '禁用源',
-      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  toggling.value = source.sourceId
-  try {
-    // 适配层会把 disabled 翻成 enable 的反极性（0 启用 / 1 禁用），这里只传语义值
-    const res = await sourceApi.changeSourceEnableBatch([source.sourceId], !enable)
-    if (!res.ok) throw new Error(res.message || '未知原因')
-    ElMessage.success(res.message || `已${enable ? '启用' : '禁用'}源「${label}」`)
-    emit('changed')
-    await load()
-  } catch (e) {
-    ElMessage.error(`${enable ? '启用' : '禁用'}失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    toggling.value = ''
-  }
-}
-
 /**
  * 「在源视图中查看全部」（0904 I16 / Z7-2）。走查原话：
  * 「如果有 7 个怎么办？你要一个一个点过来嘛，还是点查看全部……你的详情里面点查看全部
@@ -185,6 +155,8 @@ function openAllInSourceView() {
  * 「状态」列只读源自己的 `state`：只有 `E` 是出错，其余（C/L/空/停用）一律「正常」
  * （老平台同口径——源名只在 `state === 'E'` 时标红，L 不单列一态）。
  * 停用由旁边的「启停」列单独表达，不再用 `disabled` 顶掉 `state`（2026-10-16 用户确认）。
+ * 启停只读展示、不在这里切换（1016 评审）：这里切的是整个源，源挂的其它流程也会一起停，
+ * 在「某流程的关联源」里点容易误解成只停本流程；启停统一回源管理列表做。
  */
 function stateText(source: Source) {
   return source.state === 'E' ? '出错' : '正常'
@@ -201,7 +173,8 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
   <el-dialog
     :model-value="!!flow"
     :title="flow ? `流程「${flow.name}」的关联源` : ''"
-    width="1040px"
+    width="980px"
+    style="max-width: calc(100vw - 32px)"
     destroy-on-close
     @close="emit('close')"
   >
@@ -222,30 +195,28 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
         关联源
       </button>
     </div>
-    <div class="fs-head">
-      <span v-if="!error">共 {{ total }} 个源</span>
-      <span v-else class="fs-error">{{ error }}</span>
+    <div v-if="error || total > 1" class="fs-head">
+      <span v-if="error" class="fs-error">{{ error }}</span>
       <button
         v-if="!error && total > 1"
         class="fs-viewall"
         type="button"
         data-testid="flow-sources-view-all"
         @click="openAllInSourceView"
-      >在源视图中查看全部 {{ total }} 个源 →</button>
+      >在源视图中查看全部 →</button>
     </div>
     <div class="fs-table-wrap" v-loading="loading">
       <table class="fs-table">
         <thead>
           <tr>
             <th>源 ID / 名称</th>
-            <th style="width: 76px">状态</th>
-            <th style="width: 70px">告警</th>
-            <th style="width: 96px">数据量</th>
-            <th style="width: 148px">最近抓取</th>
-            <th style="width: 148px">最近成功</th>
-            <th style="width: 70px">步骤数</th>
-            <th style="width: 74px">启停</th>
-            <th style="width: 128px">操作</th>
+            <th style="width: 64px">状态</th>
+            <th style="width: 64px">启停</th>
+            <th style="width: 60px">告警</th>
+            <th style="width: 88px">数据量</th>
+            <th style="width: 150px">最近抓取 / 成功</th>
+            <th style="width: 64px">步骤数</th>
+            <th style="width: 64px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -256,42 +227,32 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
                 <small>{{ s.sourceId }}</small>
               </button>
             </td>
-            <td data-testid="flow-source-state">{{ stateText(s) }}</td>
+            <td data-testid="flow-source-state" :class="{ 'fs-state-err': s.state === 'E' }">{{ stateText(s) }}</td>
+            <td>
+              <span class="fs-enable" :class="{ off: s.disabled }" data-testid="flow-source-enable-tag">{{ s.disabled ? '已停用' : '启用' }}</span>
+            </td>
             <td>
               <span v-if="s.alarm" class="fs-alarm" data-testid="flow-source-alarm">告警</span>
               <span v-else class="fs-muted">—</span>
             </td>
             <td class="fs-muted">{{ s.dataCount == null ? '—' : s.dataCount.toLocaleString() }}</td>
-            <td class="fs-muted" :title="textOf(s.lastTaskAt)">{{ textOf(s.lastTaskAt) }}</td>
-            <td class="fs-muted" :title="textOf(s.lastSuccessAt)">{{ textOf(s.lastSuccessAt) }}</td>
+            <td class="fs-muted fs-times">
+              <span :title="`最近抓取：${textOf(s.lastTaskAt)}`">{{ textOf(s.lastTaskAt) }}</span>
+              <span :title="`最近成功：${textOf(s.lastSuccessAt)}`">{{ textOf(s.lastSuccessAt) }}</span>
+            </td>
             <td class="fs-muted">{{ s.stepCount == null ? '—' : s.stepCount }}</td>
             <td>
-              <span class="fs-enable-tag" :class="{ off: s.disabled }" data-testid="flow-source-enable-tag">{{ s.disabled ? '禁用' : '启用' }}</span>
-            </td>
-            <td>
-              <div class="fs-ops">
-                <button class="fs-op" type="button" data-testid="flow-source-detail" @click="openSource(s)">详情</button>
-                <span class="fs-op-divider" aria-hidden="true">|</span>
-                <button
-                  class="fs-op"
-                  type="button"
-                  data-testid="flow-source-toggle-enable"
-                  :disabled="toggling === s.sourceId"
-                  @click="toggleEnable(s)"
-                >{{ s.disabled ? '启用' : '禁用' }}</button>
-                <span class="fs-op-divider" aria-hidden="true">|</span>
-                <button
-                  class="fs-op danger"
-                  type="button"
-                  data-testid="flow-source-unbind"
-                  :disabled="unbinding === s.sourceId"
-                  @click="unbind(s)"
-                >解绑</button>
-              </div>
+              <button
+                class="fs-op danger"
+                type="button"
+                data-testid="flow-source-unbind"
+                :disabled="unbinding === s.sourceId"
+                @click="unbind(s)"
+              >解绑</button>
             </td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="9" class="fs-empty">{{ error || emptyText }}</td>
+            <td colspan="8" class="fs-empty">{{ error || emptyText }}</td>
           </tr>
         </tbody>
       </table>
@@ -331,21 +292,19 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
 .fs-name b { display: block; overflow: hidden; color: var(--rc-primary); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .fs-name small { display: block; color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .fs-alarm { padding: 2px 8px; border-radius: 999px; background: var(--rc-error-bg, #fef2f2); color: var(--rc-error, #dc2626); font-size: 11px; font-weight: 600; }
-/* 启停标签：外形照项目已有的「带框状态胶囊」写法 —— FileView.vue:493-495 的 .rc-status.ok/.err
-   （同色系 10% 底 + 20% 描边 + 深一档文字），这里套同一配方，禁用换成橙系。
-   尺寸/圆角沿用本表原来的 11px / 18px / --rc-radius-sm */
-.fs-enable-tag { display: inline-block; padding: 0 8px; border: 1px solid rgba(34, 197, 94, 0.2); border-radius: var(--rc-radius-sm, 6px); background: rgba(34, 197, 94, 0.1); color: #16a34a; font-size: 11px; line-height: 18px; }
-.fs-enable-tag.off { border-color: rgba(249, 115, 22, 0.2); background: rgba(249, 115, 22, 0.1); color: #ea580c; }
+/* 启停只读展示：启用走主色、停用走中性灰（AGENTS.md 控件视觉约定），不用彩色胶囊 */
+.fs-enable { color: var(--rc-primary); }
+.fs-enable.off { color: var(--rc-faint); }
+.fs-state-err { color: var(--rc-error); }
+.fs-times span { display: block; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
 .fs-muted { color: var(--rc-faint); white-space: nowrap; }
-.fs-ops { display: flex; align-items: center; gap: 4px; }
 .fs-op { padding: 0; border: 0; background: none; color: var(--rc-primary, #2563eb); font-size: 12px; cursor: pointer; }
 /* 操作列纯文字按钮：hover 不再加下划线（老平台这颗也是纯文字），保持只有手型光标 */
 .fs-op:disabled { color: var(--rc-faint); cursor: default; }
-/* 解绑：比 --rc-error(#dc2626) 浅一档的红（red-500，项目里 KpiPanel/EmptyState/TableEditDialog 已在用）。
+/* 解绑：危险色走 --rc-error 令牌。
    font-weight 必须显式归位——class 里的 danger 会命中全局 tokens.css:452 的 `.danger { font-weight: 700 }`，
    那是给状态文字用的，套在操作按钮上会变粗体 */
-.fs-op.danger { color: #ef4444; font-weight: 400; }
-.fs-op-divider { color: var(--rc-faint, #94a3b8); opacity: .6; }
+.fs-op.danger { color: var(--rc-error); font-weight: 400; }
 .fs-empty { padding: 36px; text-align: center; color: var(--rc-faint); }
 .fs-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 0 0; }
 </style>

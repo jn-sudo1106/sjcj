@@ -173,6 +173,24 @@ describe('流程中心 · 列表', () => {
     w.unmount()
   })
 
+  // 1016 评审：关联源弹窗只做「查看 + 关联 + 解绑」——启停只读展示（切的是整个源，容易误解成只停本流程），
+  // 「详情」与点源名重复，都去掉
+  it('关联源弹窗：操作列只有解绑，启停只读显示「已停用」', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [{ sourceId: 'src-1', name: '关联源', url: '', configId: '', mainTable: '', owner: '', state: 'C', disabled: true }],
+    })
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 12 }])
+    await w.get('[data-testid="flow-source-cnt-link"]').trigger('click')
+    await flushPromises()
+    const row = w.get('[data-testid="flow-source-row"]')
+    expect(row.find('[data-testid="flow-source-unbind"]').exists()).toBe(true)
+    expect(row.find('[data-testid="flow-source-toggle-enable"]').exists()).toBe(false)
+    expect(row.find('[data-testid="flow-source-detail"]').exists()).toBe(false)
+    expect(row.get('[data-testid="flow-source-enable-tag"]').text()).toBe('已停用')
+    w.unmount()
+  })
+
   // 0902：服务端分页，且分页控件与数据中心统一成同一个 el-pagination
   // （DataQueryPanel 的 .dqp-pager 同款 layout / page-sizes / background+small）。
   // 项目没有全局装 Element Plus 插件（vitest.config.ts 无 setupFiles），测试环境里
