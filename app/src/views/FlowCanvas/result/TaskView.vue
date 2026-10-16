@@ -179,7 +179,8 @@ const filterSteps = computed(() => {
   const sourceIds = filters.sourceId ? [filters.sourceId] : siteSources.value.map((source) => source.sourceId)
   return sourceIds.flatMap((id) => (stepsBySource.value[id] ?? []).map((step) => ({ ...step, sourceId: id })))
 })
-const availableQueues = computed(() => {
+/** 当前数据里能看到的队列：节点步骤 / 节点运行统计 / 流程节点配置 / 当前这页任务 */
+const currentQueues = computed(() => {
   const set = new Set<string>()
   for (const step of filterSteps.value) {
     if (step.topic) set.add(step.topic)
@@ -194,11 +195,24 @@ const availableQueues = computed(() => {
       if (cfg.taskCfg?.queue) set.add(cfg.taskCfg.queue)
     }
   }
+  // 与表格「队列」列同一口径（queueName）：任务行没带 topic 时也按节点运行 / 步骤补出队列名
   for (const row of rows.value) {
-    if (row.topic) set.add(row.topic)
+    const queue = queueName(row)
+    if (queue !== '—') set.add(queue)
   }
-  return Array.from(set).filter(Boolean).sort()
+  return Array.from(set).filter(Boolean)
 })
+/**
+ * 队列名下拉的候选（1016）：只增不减——按队列查询后当前页只剩这一个队列，候选不能跟着收缩成一项，
+ * 否则没法直接切到别的队列。换了网站 / 源范围才重新累计（别把别的网站的队列带过来）。
+ */
+const seenQueues = ref<string[]>([])
+watch(siteScopeId, () => { seenQueues.value = [] })
+watch(currentQueues, (queues) => {
+  const merged = new Set([...seenQueues.value, ...queues])
+  if (merged.size !== seenQueues.value.length) seenQueues.value = [...merged]
+}, { immediate: true })
+const availableQueues = computed(() => [...seenQueues.value].sort())
 
 let metadataRequest = 0
 async function loadNodeMetadata() {
@@ -723,17 +737,24 @@ const nextStepHints = computed(() => {
             <option value="L">运行中</option>
             <option value="E">异常</option>
           </select>
-          <input
+          <!-- 1016：原来是 input + datalist，浏览器按框里已有的文字过滤候选，选中一个后下拉只剩它自己。
+               改成可搜索下拉：候选始终列全部队列，可清空，也能手输候选里没有的队列名 -->
+          <el-select
             v-model="form.queue"
-            class="tv-input tv-queue-input"
+            class="tv-queue-select"
             data-testid="task-queue-filter"
             placeholder="队列名筛选"
-            list="task-queue-options"
             aria-label="队列名"
-          />
-          <datalist id="task-queue-options">
-            <option v-for="q in availableQueues" :key="q" :value="q" />
-          </datalist>
+            filterable
+            clearable
+            allow-create
+            default-first-option
+            size="small"
+            :empty-values="['', null, undefined]"
+            :value-on-clear="''"
+          >
+            <el-option v-for="q in availableQueues" :key="q" :label="q" :value="q" />
+          </el-select>
           <!-- 按钮靠右，与源视图一致（2026-09-23 用户要求） -->
           <span class="tv-actions">
             <button class="rc-btn primary" type="button" data-testid="task-query" :disabled="loading" @click="runQuery">查询</button>
@@ -902,7 +923,7 @@ const nextStepHints = computed(() => {
 .tv-next-fields { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
-.tv-queue-input { width: 120px; min-width: 0; }
+.tv-queue-select { width: 180px; flex: none; }
 .tv-search { display: inline-flex; gap: 4px; }
 .tv-search-field { width: 88px; min-width: 0; }
 .tv-search-input { width: 140px; min-width: 0; }

@@ -301,18 +301,23 @@ describe('TaskView', () => {
       ],
     })
 
+    // 队列名是 el-select（1016）：单测没注册 Element Plus，用能 v-model 的替身，选项渲染成可读的 data 属性
+    const SelectStub = { name: 'QueueSelectStub', props: ['modelValue'], emits: ['update:modelValue'], template: '<div><slot /></div>' }
+    const OptionStub = { props: ['value', 'label'], template: '<i class="queue-opt" :data-v="value" />' }
     const wrapper = shallowMount(TaskView, {
-      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true, 'el-select': SelectStub, 'el-option': OptionStub } },
     })
     await new Promise((resolve) => setTimeout(resolve, 150))
     await flushPromises()
 
-    const queueInput = wrapper.find<HTMLInputElement>('[data-testid="task-queue-filter"]')
-    expect(queueInput.exists()).toBe(true)
+    const queueSelect = wrapper.findComponent({ name: 'QueueSelectStub' })
+    expect(queueSelect.exists()).toBe(true)
+    const options = () => wrapper.findAll('.queue-opt').map((o) => o.attributes('data-v'))
+    expect(options()).toEqual(expect.arrayContaining(['queue_download', 'queue_parse']))
 
-    // 输入队列名：不立即查（2026-09-23 起改完点「查询」才生效），提示条件已修改
+    // 选队列名：不立即查（2026-09-23 起改完点「查询」才生效），提示条件已修改
     const callsBefore = paged.mock.calls.length
-    await queueInput.setValue('queue_download')
+    queueSelect.vm.$emit('update:modelValue', 'queue_download')
     await flushPromises()
     expect(paged.mock.calls.length).toBe(callsBefore)
     expect(wrapper.find('[data-testid="task-filters-dirty"]').exists()).toBe(true)
@@ -320,19 +325,34 @@ describe('TaskView', () => {
     await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: 'queue_download', topic: 'queue_download' }))
     expect(wrapper.find('[data-testid="task-filters-dirty"]').exists()).toBe(false)
+    // 1016：查完当前页只剩这个队列的任务，下拉候选不跟着收缩，仍能直接切到别的队列
+    paged.mockResolvedValue({ total: 1, list: [{ taskId: 't1', topic: 'queue_download', state: 'C', typeName: '下载', taskName: '任务1', sourceId: source.sourceId, updatedAt: '2026-09-08 10:00' }] })
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
+    await flushPromises()
+    expect(options()).toEqual(expect.arrayContaining(['queue_download', 'queue_parse']))
+    paged.mockResolvedValue({
+      total: 2,
+      list: [
+        { taskId: 't1', topic: 'queue_download', state: 'C', typeName: '下载', taskName: '任务1', sourceId: source.sourceId, updatedAt: '2026-09-08 10:00' },
+        { taskId: 't2', topic: 'queue_parse', state: 'C', typeName: '解析', taskName: '任务2', sourceId: source.sourceId, updatedAt: '2026-09-08 10:01' },
+      ],
+    })
+    queueSelect.vm.$emit('update:modelValue', '')
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
+    await flushPromises()
 
     // 点击表格中的 queue_parse 单元格快速切换
     const parseCell = wrapper.findAll('.tv-queue-clickable').find((el) => el.text() === 'queue_parse')
     expect(parseCell).toBeDefined()
     await parseCell!.trigger('click')
     await flushPromises()
-    expect(queueInput.element.value).toBe('queue_parse')
+    expect(queueSelect.props('modelValue')).toBe('queue_parse')
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: 'queue_parse', topic: 'queue_parse' }))
 
     // 再次点击同一单元格取消筛选
     await parseCell!.trigger('click')
     await flushPromises()
-    expect(queueInput.element.value).toBe('')
+    expect(queueSelect.props('modelValue')).toBe('')
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: undefined, topic: undefined }))
 
     wrapper.unmount()
@@ -574,15 +594,17 @@ describe('TaskView', () => {
     const source = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
     const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const SelectStub = { name: 'QueueSelectStub', props: ['modelValue'], emits: ['update:modelValue'], template: '<div />' }
     const wrapper = shallowMount(TaskView, {
-      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true, 'el-select': SelectStub } },
     })
     await new Promise((resolve) => setTimeout(resolve, 150))
     await flushPromises()
 
     const n0 = paged.mock.calls.length
     await wrapper.get('[data-testid="task-state-filter"]').setValue('E')
-    await wrapper.get('[data-testid="task-queue-filter"]').setValue('news_cont')
+    // 手输候选里没有的队列名（allow-create）
+    wrapper.findComponent({ name: 'QueueSelectStub' }).vm.$emit('update:modelValue', 'news_cont')
     await flushPromises()
     expect(paged.mock.calls.length).toBe(n0)
 
