@@ -40,7 +40,37 @@ import {
   legacySnatchSavePayloadFromFlow,
   parseNextStepReceipt,
   taskInstFromLegacy,
+  sourceCategoriesFromLegacy,
 } from './legacyAdapters'
+
+// 2026-10-16：分类目录树以前拿不到备注——适配器没映射 remark，导致 CategoryManager 的
+// 「编辑分类」弹窗备注永远是空的（接口明明返回了 remark）。这两条钉住映射本身。
+describe('sourceCategoriesFromLegacy', () => {
+  const ROWS = [
+    { categoryId: 9009388, categoryName: 'lzx-test', parentId: 0, seq: 90, remark: 'note' },
+    { categoryId: 9009386, categoryName: 'SHTEST', parentId: 0, seq: 80, remark: null },
+    { categoryId: 9009005, categoryName: '财经资讯', parentId: 0, seq: 70 },
+  ]
+
+  it('保留 remark；后端给 null / 不给时是 undefined（不当成「填过空值」）', () => {
+    const roots = sourceCategoriesFromLegacy(ROWS)
+
+    expect(roots.map((n) => [n.name, n.remark])).toEqual([
+      ['lzx-test', 'note'],
+      ['SHTEST', undefined],
+      ['财经资讯', undefined],
+    ])
+  })
+
+  it('子节点的 remark 同样保留（按 parentId 组树后不丢）', () => {
+    const roots = sourceCategoriesFromLegacy([
+      { categoryId: 1, categoryName: '父', parentId: 0 },
+      { categoryId: 2, categoryName: '子', parentId: 1, remark: '子备注' },
+    ])
+
+    expect(roots[0]!.children?.[0]).toMatchObject({ name: '子', remark: '子备注' })
+  })
+})
 
 describe('旧平台参数模型适配', () => {
   it('把旧参数类型和值明细转换为新页面模型', () => {

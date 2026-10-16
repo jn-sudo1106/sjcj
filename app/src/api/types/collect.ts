@@ -68,8 +68,14 @@ export interface NodeType {
   params: string
 }
 
-/** 新建时 sourceType 可不填（后端取 max+1）；修改时只传要改的字段（后端增量更新，2026-09-24 实测） */
-export type NodeTypeInput = Partial<Omit<NodeType, 'procType' | 'params'>>
+/**
+ * 新建时 sourceType 可不填（后端取 max+1）；修改时只传要改的字段（后端增量更新，2026-09-24 实测）。
+ *
+ * 2026-10-16：**去掉对 `procType` / `params` 的排除**。旧平台「源类型」的新建/编辑弹窗
+ * （`column.config.js` 的 `SOURCE_TYPE.other`）本来就有「处理类型」与「参数(JSON)」两项，
+ * 新端当时把它们挡在类型外、表单里也没渲染，属于漏迁；现补齐。
+ */
+export type NodeTypeInput = Partial<NodeType>
 
 export interface ConfigParamBinding {
   id: string

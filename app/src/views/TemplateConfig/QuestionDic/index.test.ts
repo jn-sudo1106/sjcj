@@ -4,7 +4,7 @@
 // ① 四个筛选条件都进 body、且只有点「搜索」才生效；② 阶段/类型按码值渲染中文；
 // ③ 启停走 changeStatus(id, 目标 status)；④ 删除必须确认后才有请求，且发的是整行。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { h } from 'vue'
 import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
 import QuestionDicPage from './index.vue'
@@ -68,9 +68,14 @@ function searchButton(wrapper: ReturnType<typeof mountPage>) {
 
 /** 行内操作图标：操作列已图标化，按 el-tooltip 的 content（原按钮文案）定位第 rowIndex 行的图标 */
 function opIcon(wrapper: ReturnType<typeof mountPage>, content: string, rowIndex = 0) {
-  const tip = wrapper
+  // `findAll` 拿到的是 **DOMWrapper**（不是 VueWrapper），而 @vue/test-utils 给
+  // `DOMWrapper.findAllComponents` 的签名就是 `(selector: any) => any`（见 domWrapper.d.ts），
+  // 所以 `.filter/.find` 的回调参数会落成隐式 any（TS7006）。这里显式标注成 VueWrapper，
+  // 顺带让 `tips/tip` 有真实类型（否则整条链一路 any）。
+  const tips = wrapper
     .findAll('.el-table__body-wrapper tbody tr')[rowIndex]!
-    .findAllComponents({ name: 'ElTooltip' })
+    .findAllComponents({ name: 'ElTooltip' }) as VueWrapper[]
+  const tip = tips
     .filter((t) => t.find('.qd-op-icon').exists())
     .find((t) => (t.props() as { content?: string }).content === content)
   if (!tip) throw new Error(`第 ${rowIndex} 行找不到操作：${content}`)

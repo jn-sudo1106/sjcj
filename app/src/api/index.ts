@@ -620,6 +620,9 @@ export const sourceApi = {
         const r = row as Record<string, unknown>
         const count = r.count != null ? Number(r.count) : undefined
         const seq = r.seq != null ? Number(r.seq) : undefined
+        // 2026-10-16 补：这里以前也漏了 remark（同 sourceCategoriesFromLegacy 的毛病）——
+        // 搜索态下点「编辑」同样要看这个字段回填备注。
+        const remark = r.remark == null ? undefined : String(r.remark)
         return {
           id: String(r.categoryId ?? r.id ?? ''),
           name: String(r.categoryName ?? r.name ?? ''),
@@ -627,6 +630,7 @@ export const sourceApi = {
           path: String(r.path ?? ''),
           ...(count != null ? { count } : {}),
           ...(seq != null ? { seq } : {}),
+          ...(remark == null ? {} : { remark }),
         }
       })
       .filter((item) => item.id && item.name)

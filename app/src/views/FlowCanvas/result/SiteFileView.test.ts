@@ -7,7 +7,21 @@ import FileDetailDrawer from './FileDetailDrawer.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import { dataApi, fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 
-const table = { tableId: 'file-resource', tableName: 'sense_data.tb_news_file_resource', name: 'news-文件资源表', rowCount: 40, fields: [] }
+// 动态列现在由表字段定义生成（对齐旧 FileList2 的 columns()），所以这里得给全字段——
+// 旧实现把「文件名-K1 … 文本大小-K10」十列写死在模板里，fields 空着也能渲染。
+const tableFields = [
+  { prop: 'file_name-K1', type: 'string', desc: '文件名', columnName: 'K1', required: false },
+  { prop: 'file_url-K2', type: 'url', desc: '文件链接', columnName: 'K2', required: false },
+  { prop: 'file_path-K3', type: 'string', desc: '文件路径', columnName: 'K3', required: false },
+  { prop: 'file_size-K4', type: 'number', desc: '文件大小', columnName: 'K4', required: false },
+  { prop: 'file_md5-K5', type: 'string', desc: '文件 MD5', columnName: 'K5', required: false },
+  { prop: 'display_name-K6', type: 'string', desc: '展示名', columnName: 'K6', required: false },
+  { prop: 'file_ext-K7', type: 'string', desc: '扩展名', columnName: 'K7', required: false },
+  { prop: 'text_name-K8', type: 'string', desc: '文本文件名', columnName: 'K8', required: false },
+  { prop: 'text_path-K9', type: 'string', desc: '文本文件路径', columnName: 'K9', required: false },
+  { prop: 'text_size-K10', type: 'number', desc: '文本文件大小', columnName: 'K10', required: false },
+] as never[]
+const table = { tableId: 'file-resource', tableName: 'sense_data.tb_news_file_resource', name: 'news-文件资源表', rowCount: 40, fields: tableFields }
 function source(sourceId: string, name: string): Source {
   return { sourceId, name, url: '', configId: '', mainTable: '', owner: '', state: 'C' }
 }
@@ -30,6 +44,27 @@ afterEach(() => localStorage.clear())
 describe('SiteFileView', () => {
   // 0929 起网站文件视图会并入流程节点输出的文件表；老用例不关心这块，统一给空
   beforeEach(() => vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [], noFlowSourceCnt: 0, failedFlowIds: [] }))
+
+  // 2026-10-16：列名与顺序对齐旧平台 `page/inst/FileList2.vue`——
+  // 固定列是「ID / 源 / … / 状态 / 更新 / 生成 / 操作」（不是「所属源 / 更新时间 / 生成时间」），
+  // 中间那批是**按表字段定义动态生成**的列（旧版 `columns()`，标题 `字段名-物理列名`）。
+  it('表格列名与顺序对齐旧平台（ID / 源 / 动态字段列 / 状态 / 更新 / 生成 / 操作）', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('s1', '30', 'two.html')] })
+    const wrapper = shallowMount(SiteFileView, {
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, GlobalSourceSelect: true } },
+    })
+    await flushPromises()
+
+    const heads = wrapper.findAll('.sfv-table thead th').map((th) => th.text())
+    expect(heads).toEqual([
+      'ID', '源',
+      '文件名-K1', '文件链接-K2', '文件路径-K3', '文件大小-K4', '文件 MD5-K5',
+      '展示名-K6', '扩展名-K7', '文本文件名-K8', '文本文件路径-K9', '文本文件大小-K10',
+      '状态', '更新', '生成', '操作',
+    ])
+  })
 
   it('网站多源查询仅在全部成功时记录条件，部分源失败不记录', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
@@ -166,8 +201,9 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('源二')
     expect(wrapper.text()).toContain('two.html')
     expect(wrapper.find('a[target="_blank"]').attributes('href')).toBe('https://files.example.com/two.html')
-    expect(wrapper.text()).toContain('文本大小')
-    expect(wrapper.text()).toContain('更新时间')
+    // 动态列现在按表字段定义出：`desc` 来自字段定义，不是模板里写死的「文本大小」
+    expect(wrapper.text()).toContain('文本文件大小')
+    expect(wrapper.text()).toContain('更新')
     await wrapper.get('[data-testid="site-file-detail"]').trigger('click')
     const drawer = wrapper.findComponent(FileDetailDrawer)
     expect(drawer.props('sourceName')).toBe('源二')
@@ -283,7 +319,7 @@ describe('SiteFileView', () => {
     expect(readSqlConditions(table.tableId)).toEqual(['K1 IS N'])
   })
 
-  it('清空筛选会一并清掉自定义 SQL 并重新查询', async () => {
+  it('清空筛选会一并清掉自定义 SQL 与选中的源，并只重新查询一次', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
     const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('orphan-source', '40', 'task.html')] })
@@ -300,12 +336,23 @@ describe('SiteFileView', () => {
     await flushPromises()
     expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL' }))
 
+    // 收窄到某个源：GlobalSourceSelect 是 v-model 双向绑定，让桩 emit 等同于用户在面板里点选
+    const select = wrapper.findComponent(GlobalSourceSelect)
+    select.vm.$emit('update:modelValue', '429016824')
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: '429016824', sql: 'K1 IS NULL' }))
+    const callsBeforeClear = rows.mock.calls.length
+
     const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
     await clearBtn.trigger('click')
     await flushPromises()
 
     expect((sqlInput.element as HTMLInputElement).value).toBe('')
-    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: undefined }))
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: undefined, sourceId: undefined }))
+    // 2026-10-16 用户反馈：以前清空只清了文本条件，源选择器上还留着选中的源
+    expect(wrapper.findComponent(GlobalSourceSelect).props('modelValue')).toBe('')
+    // 源变更自带一次重查，clearFilters 不能再补一次，否则同一次清空发两遍相同请求
+    expect(rows).toHaveBeenCalledTimes(callsBeforeClear + 1)
   })
 
   it('检测到多张 file_resource 表时给出手动选择的下拉，而不是报错停住', async () => {

@@ -1225,12 +1225,15 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     const row = asRecord(item)
     const count = legacyNumber(row.count ?? row.sourceCnt ?? row.sourceCount)
     const seq = row.seq != null ? Number(row.seq) : undefined
+    // 后端返回 null 的 remark 不要落成 ''，否则「填了空值」与「本来没备注」分不开
+    const remark = row.remark == null ? undefined : String(row.remark)
     return {
       id: String(row.categoryId ?? row.id ?? ''),
       name: String(row.categoryName ?? row.name ?? ''),
       parentId: row.parentId == null || row.parentId === 0 ? '' : String(row.parentId),
       count,
       seq,
+      remark,
     }
   }).filter((node) => node.id && node.name)
   const byId = new Map<string, SourceCategory>()
@@ -1240,6 +1243,9 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     ...(node.count == null ? {} : { count: node.count }),
     ...(node.seq == null ? {} : { seq: node.seq }),
     ...(node.parentId ? { parentId: node.parentId } : {}),
+    // 2026-10-16 补：remark 以前没被映射，导致树节点拿不到备注——
+    // `CategoryManager.openEdit()` 读 `node.remark` 回填编辑表单，于是「备注」永远显示为空。
+    ...(node.remark == null ? {} : { remark: node.remark }),
   }))
   const roots: SourceCategory[] = []
   nodes.forEach((node) => {

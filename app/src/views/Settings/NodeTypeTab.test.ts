@@ -113,6 +113,44 @@ describe('节点类型页面', () => {
     expect(add).not.toHaveBeenCalled()
   })
 
+  // 2026-10-16：旧 `column.config` 的 `SOURCE_TYPE.other` 还有「处理类型」(procType) 与
+  // 「参数(JSON)」(params) 两项，新端表单漏迁，这两条钉住它们已经接回来。
+  // 表单 input 顺序（备注 / 参数是 textarea，不计入 inputs）：0 类型ID、1 类型名称、
+  // 2 配置队列、3 默认消息队列、4 排序、5 处理类型。
+  it('新建：处理类型与参数(JSON) 一并提交', async () => {
+    const add = vi.spyOn(configApi, 'nodeTypeAdd').mockResolvedValue({ ok: true, message: '新增成功' })
+    const { wrapper } = await mountAs(['admin'])
+    await wrapper.get('[data-testid="node-type-create"]').trigger('click')
+    await flushPromises()
+
+    await typeInto(dialogInputs()[1]!, '新类型')
+    await typeInto(dialogInputs()[5]!, '200') // 处理类型
+    const textareas = [...dialogEl().querySelectorAll<HTMLTextAreaElement>('textarea')]
+    expect(textareas).toHaveLength(2) // 备注 + 参数(JSON)
+    textareas[1]!.value = '{"a":1}'
+    textareas[1]!.dispatchEvent(new Event('input'))
+    await flushPromises()
+    await clickSave()
+
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ typeName: '新类型', procType: '200', params: '{"a":1}' }),
+    )
+  })
+
+  it('编辑：回填处理类型 / 参数，只改处理类型时按增量提交', async () => {
+    const update = vi.spyOn(configApi, 'nodeTypeUpdate').mockResolvedValue({ ok: true, message: '更新成功' })
+    const { wrapper } = await mountAs(['admin'])
+
+    await wrapper.findAll('[data-testid="node-type-edit"]')[0]!.trigger('click')
+    await flushPromises()
+
+    expect(dialogInputs()[5]!.value).toBe('200') // ROWS[0].procType 回填
+    await typeInto(dialogInputs()[5]!, '210')
+    await clickSave()
+
+    expect(update).toHaveBeenCalledWith('90', { procType: '210' })
+  })
+
   describe('删除（2026-10-14）', () => {
     it('二次确认文案同旧平台；确认后删除，成功提示并刷新列表和抓取类型字典', async () => {
       const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
