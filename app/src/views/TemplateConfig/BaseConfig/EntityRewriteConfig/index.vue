@@ -23,7 +23,7 @@
 // ⚠️ 同域的选表规则 / 表改写真实行里 status 回的是**数字**，所以开关与筛选一律走 String(row.status)。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { entityRewriteConfigApi } from '@/api/templateConfig'
 import type { EntityRewriteConfig } from '@/api/types/template'
 import { ENTITY_REWRITE_CONFIG_STATUS_OPTIONS, STATUS_ALL_OPTION_LABEL, entityRewriteCleanTypeLabel } from './options'
@@ -192,12 +192,15 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="120" fixed="right" align="center">
+      <el-table-column label="操作" width="90" fixed="right" align="center">
         <template #default="{ row }">
           <div class="erc-row-actions">
-            <span class="erc-op-link" @click="openEdit(row)">编辑</span>
-            <span class="erc-op-divider">|</span>
-            <span class="erc-op-link erc-op-link--danger" @click="handleDelete(row)">删除</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="erc-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <span class="erc-op-icon erc-op-danger" @click="handleDelete(row)"><el-icon :size="15"><Delete /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -248,22 +251,29 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.erc-op-link {
-  color: var(--rc-primary, #2563eb);
+.erc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.erc-op-link:hover {
-  text-decoration: underline;
+.erc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
-/* 旧版「删除」就是红色文字链接，沿用（不改成大号实心按钮，同控件强调约定） */
-.erc-op-link--danger {
+/* 删除保持危险色（不改成大号实心按钮，同控件强调约定） */
+.erc-op-icon.erc-op-danger {
   color: var(--rc-danger, #dc2626);
 }
-.erc-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.erc-op-icon.erc-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .erc-pager {
   display: flex;

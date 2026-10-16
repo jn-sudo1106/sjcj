@@ -529,7 +529,7 @@ onMounted(async () => {
         <span v-if="usageNote && !readonly" class="foot-usage" data-testid="config-usage-note">{{ usageNote }}</span>
         <!-- 只读（发布版 / 锁定草稿）不放保存按钮：禁用态的主按钮看着仍像能点（用户 10-10 反馈） -->
         <button
-          v-if="!readonly"
+          v-if="false"
           class="rc-btn primary"
           type="button"
           data-testid="node-config-save"
@@ -537,6 +537,15 @@ onMounted(async () => {
           :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
         >{{ saving ? '保存中…' : '保存' }}</button>
+        <!-- <button
+          v-if="!readonly"
+          class="rc-btn primary"
+          type="button"
+          data-testid="node-config-save"
+          :disabled="!canSaveNodeConfig || saving"
+          :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
+          @click="onSaveNodeConfig"
+        >{{ saving ? '保存中…' : '保存' }}</button> -->
       </div>
     </template>
 

@@ -548,6 +548,23 @@ export const sourceApi = {
     })
     return result ? sourceFromLegacy(result) : null
   },
+  /**
+   * 编辑源（旧平台 `POST /v1/source/updateSource`，参数同时进 body 与 query）。
+   *
+   * 旧 `config/column.config.js` 的「备注」列就是靠它保存的：
+   * `save: (record) => updateSource({ sourceId, remark, author, tags })`。
+   * ⚠️ 注意 save 回调把 **author / tags 也一起回传**——只发 remark 会把这两个字段清空，
+   * 详情抽屉里改备注时必须照旧带上。
+   * `client.ts` 已把该端点列进写白名单（2026-08-28 拍板放开源重命名），生产环境可直接发。
+   */
+  updateSource: async (payload: Record<string, unknown> & { sourceId: string }): Promise<Ack> => {
+    const result = await request<unknown>('source/updateSource', payload, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: payload,
+    })
+    return ackFromApiResult(result)
+  },
   // 旧分类接口首屏只返回根节点；展开节点时按 parentId 懒加载子级。
   sourceCategories: async (parentId?: string) => {
     const result = await request<unknown>('source/categoryTree', { parentId }, {
@@ -603,6 +620,9 @@ export const sourceApi = {
         const r = row as Record<string, unknown>
         const count = r.count != null ? Number(r.count) : undefined
         const seq = r.seq != null ? Number(r.seq) : undefined
+        // 2026-10-16 补：这里以前也漏了 remark（同 sourceCategoriesFromLegacy 的毛病）——
+        // 搜索态下点「编辑」同样要看这个字段回填备注。
+        const remark = r.remark == null ? undefined : String(r.remark)
         return {
           id: String(r.categoryId ?? r.id ?? ''),
           name: String(r.categoryName ?? r.name ?? ''),
@@ -610,6 +630,7 @@ export const sourceApi = {
           path: String(r.path ?? ''),
           ...(count != null ? { count } : {}),
           ...(seq != null ? { seq } : {}),
+          ...(remark == null ? {} : { remark }),
         }
       })
       .filter((item) => item.id && item.name)

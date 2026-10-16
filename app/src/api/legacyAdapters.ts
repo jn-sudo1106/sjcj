@@ -541,18 +541,18 @@ export function dataRowFromLegacy(input: unknown): DataRow {
   return {
     dataId: String(record.ENTRY_ID ?? record.entryId ?? ''),
     sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
-    configId: str(record.CONFIG_ID),
-    detailId: str(record.DETAIL_ID),
-    parentId: str(record.PARENT_ID),
-    categoryId: str(record.CATEGORY_ID),
-    state: str(record.STATE),
-    nextFlag: str(record.NEXT_FLAG),
+    configId: str(record.CONFIG_ID ?? record.configId),
+    detailId: str(record.DETAIL_ID ?? record.detailId),
+    parentId: str(record.PARENT_ID ?? record.parentId),
+    categoryId: str(record.CATEGORY_ID ?? record.categoryId),
+    state: str(record.STATE ?? record.state),
+    nextFlag: str(record.NEXT_FLAG ?? record.nextFlag),
     createDt: str(rawCreateDt),
     updateDt: str(rawUpdateDt),
-    k0: str(record.K0),
-    seq: str(record.SEQ),
-    times: str(record.TIMES),
-    fileId: str(record.FILE_ID),
+    k0: str(record.K0 ?? record.k0),
+    seq: str(record.SEQ ?? record.seq),
+    times: str(record.TIMES ?? record.times),
+    fileId: str(record.FILE_ID ?? record.fileId),
     // 详情顶部字段（旧平台 ENTRY_DETAIL.base；camelCase 优先，大写兜底，兼容两种契约）
     sourceName: str(record.sourceName ?? record.SOURCE_NAME),
     entryTypeId: str(record.entryTypeId ?? record.ENTRY_TYPE_ID),
@@ -1225,12 +1225,15 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     const row = asRecord(item)
     const count = legacyNumber(row.count ?? row.sourceCnt ?? row.sourceCount)
     const seq = row.seq != null ? Number(row.seq) : undefined
+    // 后端返回 null 的 remark 不要落成 ''，否则「填了空值」与「本来没备注」分不开
+    const remark = row.remark == null ? undefined : String(row.remark)
     return {
       id: String(row.categoryId ?? row.id ?? ''),
       name: String(row.categoryName ?? row.name ?? ''),
       parentId: row.parentId == null || row.parentId === 0 ? '' : String(row.parentId),
       count,
       seq,
+      remark,
     }
   }).filter((node) => node.id && node.name)
   const byId = new Map<string, SourceCategory>()
@@ -1240,6 +1243,9 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     ...(node.count == null ? {} : { count: node.count }),
     ...(node.seq == null ? {} : { seq: node.seq }),
     ...(node.parentId ? { parentId: node.parentId } : {}),
+    // 2026-10-16 补：remark 以前没被映射，导致树节点拿不到备注——
+    // `CategoryManager.openEdit()` 读 `node.remark` 回填编辑表单，于是「备注」永远显示为空。
+    ...(node.remark == null ? {} : { remark: node.remark }),
   }))
   const roots: SourceCategory[] = []
   nodes.forEach((node) => {

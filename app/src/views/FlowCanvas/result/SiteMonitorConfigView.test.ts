@@ -33,8 +33,23 @@ const MonitorConfigEditorStub = defineComponent({
   template: '<div data-testid="monitor-editor-stub" />',
 })
 
+/** 监控弹窗桩（SourceMonitorDialog，旧平台 `MonitorModal.vue` 的迁移版）：
+ *  只暴露 showModal(sourceId)，并把收到的源 ID 渲染出来——入口有没有把当前源带上，一眼可断言 */
+const SourceMonitorDialogStub = defineComponent({
+  name: 'SourceMonitorDialog',
+  data: () => ({ opened: false, sourceId: '' }),
+  methods: {
+    showModal(id?: string) {
+      this.opened = true
+      this.sourceId = id ?? ''
+    },
+  },
+  template: '<div v-if="opened" data-testid="source-monitor-stub">{{ sourceId || "(empty)" }}</div>',
+})
+
 const stubs = {
   MonitorConfigEditor: MonitorConfigEditorStub,
+  SourceMonitorDialog: SourceMonitorDialogStub,
   // el-dialog 不注册 Element Plus 也能裸挂载：只关心"开着时渲染 slot"
   ElDialog: {
     name: 'ElDialog',
@@ -185,5 +200,33 @@ describe('SiteMonitorConfigView · 新增/编辑配置弹窗（2026-09-18 改版
 
     expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(false)
     expect(paged).toHaveBeenCalledTimes(2) // 首屏一次 + 保存后刷新一次
+  })
+})
+
+describe('SiteMonitorConfigView · 「＋ 新增监控」（2026-10-16 迁移旧平台 SourceList 的加监控）', () => {
+  it('点「＋ 新增监控」先开监控弹窗，并把当前源交给它（旧 MonitorModal.showModal(record)）', async () => {
+    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+    const wrapper = mountView({ siteId: 'site-4', sourceId: '430016944' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="source-monitor-stub"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="site-monitor-check-add"]').trigger('click')
+    await flushPromises()
+
+    // 这个源要一路传进弹窗内的列表：列表按它过滤，「加监控」再拿它预填「数据源」。
+    // 少了它，「数据源」就没值可提交给后端。
+    expect(wrapper.get('[data-testid="source-monitor-stub"]').text()).toBe('430016944')
+  })
+
+  it('未带源（网站「全部」形态）也照常打开，源交给用户在弹窗内自行选定', async () => {
+    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+    const wrapper = mountView({ siteId: 'site-4' })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="site-monitor-check-add"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="source-monitor-stub"]').text()).toBe('(empty)')
   })
 })

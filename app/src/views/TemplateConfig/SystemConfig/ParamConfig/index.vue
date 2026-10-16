@@ -15,7 +15,7 @@
 // 3. 旧版请求失败只 console.log + 一句「加载数据失败」，这里把后端 msg 透出来（同其余模板模块）。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { Edit, Refresh, Search } from '@element-plus/icons-vue'
 import { systemConfigApi } from '@/api/templateConfig'
 import type { SystemConfigParam } from '@/api/types/template'
 import ParamConfigEditDialog from './ParamConfigEditDialog.vue'
@@ -131,10 +131,12 @@ onMounted(() => void load())
       <el-table-column prop="configValue" label="参数值" min-width="260" align="center" show-overflow-tooltip>
         <template #default="{ row }">{{ row.configValue ?? '' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="80" fixed="right" align="center">
+      <el-table-column label="操作" width="60" fixed="right" align="center">
         <template #default="{ row }">
           <div class="scp-row-actions">
-            <span class="scp-op-link" @click="openEdit(row)">修改</span>
+            <el-tooltip content="修改" placement="top">
+              <span class="scp-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -179,15 +181,21 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.scp-op-link {
-  color: var(--rc-primary, #2563eb);
+.scp-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.scp-op-link:hover {
-  text-decoration: underline;
+.scp-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .scp-pager {
   display: flex;

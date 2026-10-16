@@ -29,7 +29,7 @@
 // 7. 旧页 handleDetail 引用的 $refs.detail 在模板里不存在（点不到的死代码），不迁。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Download, Plus, Search } from '@element-plus/icons-vue'
+import { Download, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { wordSegmentApi } from '@/api/templateConfig'
 import type { WordSegmentConfig } from '@/api/types/template'
 import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
@@ -214,10 +214,12 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="80" fixed="right" align="center">
+      <el-table-column label="操作" width="60" fixed="right" align="center">
         <template #default="{ row }">
           <div class="ws-row-actions">
-            <span class="ws-op-link" @click="openEdit(row)">编辑</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="ws-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -269,15 +271,21 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.ws-op-link {
-  color: var(--rc-primary, #2563eb);
+.ws-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.ws-op-link:hover {
-  text-decoration: underline;
+.ws-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .ws-pager {
   display: flex;

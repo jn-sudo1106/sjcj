@@ -55,6 +55,18 @@ function mountPage() {
   })
 }
 
+/** 操作列图标：每行只有「编辑」 */
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('.rtc-op-icon')[0]!
+}
+/** 行内图标的文案（已图标化，文案在 el-tooltip 的 content 上） */
+function opIconContents(wrapper: ReturnType<typeof mountPage>) {
+  return wrapper
+    .findAllComponents({ name: 'ElTooltip' })
+    .filter((t) => t.find('.rtc-op-icon').exists())
+    .map((t) => (t.props() as { content?: string }).content)
+}
+
 function lastPageQuery() {
   const calls = vi.mocked(replaceTableConfigApi.page).mock.calls
   return (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>
@@ -164,7 +176,8 @@ describe('ReplaceTableConfigPage', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    expect(wrapper.findAll('.rtc-op-link').map((l) => l.text())).toEqual(['编辑', '编辑'])
+    expect(opIconContents(wrapper)).toEqual(['编辑', '编辑'])
+    expect(wrapper.findAll('.el-table__body-wrapper tbody tr')[0]!.findAll('.rtc-op-icon').length).toBe(1)
   })
 
   it('「新增」开空弹窗，「编辑」把整行交给弹窗', async () => {
@@ -174,7 +187,7 @@ describe('ReplaceTableConfigPage', () => {
     await wrapper.findAll('.rtc-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await wrapper.findAll('.rtc-op-link').find((l) => l.text() === '编辑')!.trigger('click')
+    await editIcon(wrapper).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 13, tableName: 'YJZB_HY_JX', replaceType: 'unionall', replaceTableName: 'YJZB_HY_GHKJ' })
   })
 

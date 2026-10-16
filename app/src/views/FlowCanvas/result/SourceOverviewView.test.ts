@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
+import { KeepAlive, defineComponent, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
@@ -380,6 +381,64 @@ describe('SourceOverviewView · 标签', () => {
     expect(wrapper.get('[data-testid="source-mark-toast"]').text()).toContain('已更新 1 个源')
     await wrapper.get('[data-testid="source-mark-view-batch"]').trigger('click')
     expect((wrapper.get('[data-testid="source-overview-tag"]').element as HTMLSelectElement).value).toBe('正文缺失')
+    wrapper.unmount()
+  })
+
+  // 2026-10-16 用户定：这颗提示条带「查看这一批」动作，**由用户手动关**，不做自动收起
+  // （唯一自动收掉的时机是离开本视图，见下面那条 KeepAlive 用例）。
+  // 假时钟用来证明"不自己走"；只接管 setTimeout/clearTimeout，flushPromises 走 setImmediate 不受影响。
+  it('打标提示条不自动消失，靠 × 手动关闭', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
+      vi.spyOn(sourceApi, 'tagSource').mockResolvedValue({ ok: true, message: 'ok' })
+      const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+      await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+      await wrapper.get('[data-testid="mark-tag-正文缺失"]').trigger('click')
+      await wrapper.get('[data-testid="mark-save"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(true)
+
+      // 放一分钟也不自己消失
+      vi.advanceTimersByTime(60_000)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(true)
+
+      await wrapper.get('.sov-toast-close').trigger('click')
+      expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 2026-10-16 用户报：切换页面后提示仍在。本视图被外层 KeepAlive 缓存（CollectAssets/index、
+  // Settings/index、AppShell），切走只是 deactivated、组件不卸载，所以必须在离场时收掉。
+  it('被 KeepAlive 缓存时，切走页面即收掉提示条', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
+    vi.spyOn(sourceApi, 'tagSource').mockResolvedValue({ ok: true, message: 'ok' })
+    const Host = defineComponent({
+      props: { show: Boolean },
+      setup: (props) => () => h(KeepAlive, null, [props.show ? h(SourceOverviewView, { currentSiteId: 'site-current' }) : null]),
+    })
+    const wrapper = mount(Host, { props: { show: true }, attachTo: document.body })
+    await flushPromises()
+    const view = wrapper.findComponent(SourceOverviewView)
+    await view.get('[data-testid="source-check-src-1"]').setValue(true)
+    await view.get('[data-testid="batch-mark"]').trigger('click')
+    await view.get('[data-testid="mark-tag-正文缺失"]').trigger('click')
+    await view.get('[data-testid="mark-save"]').trigger('click')
+    await flushPromises()
+    expect(view.find('[data-testid="source-mark-toast"]').exists()).toBe(true)
+
+    // 切走（KeepAlive 只停用、不卸载）再切回来：提示条不能还挂着
+    await wrapper.setProps({ show: false })
+    await flushPromises()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(view.find('[data-testid="source-mark-toast"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

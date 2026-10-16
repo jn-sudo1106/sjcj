@@ -66,8 +66,8 @@ function rowsOf(wrapper: ReturnType<typeof mountPage>) {
 function buttonInFilter(wrapper: ReturnType<typeof mountPage>, label: string) {
   return wrapper.findAll('.scp-filter-form button').find((b) => b.text().includes(label))!
 }
-function editLink(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
-  return rowsOf(wrapper)[rowIndex]!.findAll('.scp-op-link')[0]!
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return rowsOf(wrapper)[rowIndex]!.findAll('.scp-op-icon')[0]!
 }
 function inputByPlaceholder(wrapper: ReturnType<typeof mountPage>, placeholder: string) {
   return wrapper.find(`input[placeholder="${placeholder}"]`)
@@ -121,7 +121,7 @@ describe('参数设置列表页', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     await flushPromises()
     expect(vi.mocked(systemConfigApi.detail).mock.calls[0]?.[0]).toBe(1)
     expect(detailOpen).toHaveBeenCalledTimes(1)
@@ -133,7 +133,7 @@ describe('参数设置列表页', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     await flushPromises()
     expect(detailOpen).not.toHaveBeenCalled()
   })
@@ -141,7 +141,7 @@ describe('参数设置列表页', () => {
   it('弹窗保存后回第一页重查（旧 handleRefresh(true)）', async () => {
     const wrapper = mountPage()
     await flushPromises()
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     await flushPromises()
 
     vi.mocked(systemConfigApi.page).mockClear()

@@ -265,7 +265,15 @@ function clearFilters() {
   filters.ext = ''
   filters.state = ''
   filters.sql = ''
-  runQuery()
+  // 2026-10-16 用户反馈：清空只清了文本条件，工具条上的源选择器还留着上次选中的源。
+  // 这里把「源」也一并清掉——GlobalSourceSelect（全部网站）与 SiteSourceSelect（单网站）
+  // 绑的是同一个 selectedSourceId，所以两种形态都跟着回到「全部源」。
+  const sourceWasSet = !!selectedSourceId.value
+  selectedSourceId.value = ''
+  // 选源变更**自带一次重查**（见下面 watch(selectedSourceId)），源本来就空时它不会触发，
+  // 所以只有「源没变」或「表还没就绪（尚未取到 tableId，resetAndLoad 会直接返回）」时才在这里补一次查询，
+  // 否则同一次「清空」会把同样的条件查两遍。
+  if (!sourceWasSet || !table.value) runQuery()
 }
 function valueOf(file: FileResourceRecord, key: string): unknown {
   return file.values[key]
@@ -273,6 +281,30 @@ function valueOf(file: FileResourceRecord, key: string): unknown {
 function textOf(file: FileResourceRecord, key: string): string {
   const value = valueOf(file, key)
   return value == null || value === '' ? '—' : String(value)
+}
+
+/**
+ * 表格的动态列（2026-10-16 对齐旧平台 `FileList2.vue` 的 `columns()`）：
+ * 旧版是**按表字段定义动态出列**的，不是写死 K1..K10 ——
+ * `for (let i = 0; i < items.length; i++) { if (i >= 10) break; if (item.required) push(...) }`，
+ * 标题格式 `itemName + '-' + columnName`（如「文件名-K1」）。
+ * 这里同口径：只取 fields 的**前 10 个**，其中标了 `required` 的才成列，顺序随 fields 走。
+ */
+const fileColumns = computed(() => {
+  const fields = (table.value?.fields ?? []).slice(0, 10)
+  // 旧版口径：只把 `required` 的字段当动态列。但 file_resource 这类表的字段可能**全非必填**
+  // （api/mock/files.ts 里 K1..K15 清一色 required:false），严格照做会让表格只剩
+  // ID / 源 / 状态 / 更新 / 生成 五列、一个业务字段都不显示。所以一个 required 都没有时
+  // 退回「前 10 个字段」——那种情况下旧版同样是空表，这里不回退就是把文件列表做成废页。
+  const required = fields.filter((field) => field.required)
+  return (required.length ? required : fields).map((field) => {
+    const columnName = field.columnName || field.prop
+    return { columnName, title: `${field.desc || field.prop}-${columnName}` }
+  })
+})
+/** 数值列右对齐（旧版大小 / 文本大小两列） */
+function kCellClass(columnName: string): string {
+  return columnName === 'K4' || columnName === 'K10' ? 'num' : ''
 }
 function formatSize(value: unknown): string {
   const bytes = Number(value)
@@ -373,7 +405,10 @@ function openPreview(file: FileResourceRecord) {
       </div>
       <div ref="tableWrapRef" class="sfv-table-wrap">
         <table class="rc-data-table sfv-table" v-loading="loading">
-          <thead><tr><th>所属源</th><th>文件名-K1</th><th>展示名-K6</th><th>扩展名-K7</th><th class="num">大小-K4</th><th>MD5-K5</th><th>文件链接-K2</th><th>文件路径-K3</th><th>文本文件-K8</th><th>文本路径-K9</th><th class="num">文本大小-K10</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
+          <!-- 列名与顺序 1:1 对齐旧平台 FileList2.vue：ID / 源 / [动态 K 列] / 状态 / 更新 / 生成 / 操作。
+               旧版固定列叫「ID」「源」「更新」「生成」（不是「所属源 / 更新时间 / 生成时间」），
+               且 ID 那格点一下也开详情。旧版前面还有一列勾选框，但新端这张表没有批量操作，不摆空勾选框。 -->
+          <thead><tr><th>ID</th><th>源</th><th v-for="col in fileColumns" :key="col.columnName" :class="{ num: col.columnName === 'K4' || col.columnName === 'K10' }">{{ col.title }}</th><th>状态</th><th>更新</th><th>生成</th><th>操作</th></tr></thead>
           <tbody>
             <tr
               v-for="file in rows"
@@ -382,6 +417,10 @@ function openPreview(file: FileResourceRecord) {
               :class="{ active: previewFile?.dataId === file.dataId }"
               @click="openPreview(file)"
             >
+              <!-- 旧版第一列是 ID（ENTRY_ID），点一下同样开详情 -->
+              <td>
+                <button class="sfv-link" type="button" data-testid="site-file-id" @click.stop="openDetail(file)">{{ file.dataId }}</button>
+              </td>
               <!-- 源 ID 不在当前网站的源列表里时，标出来而不是让它看着像个源名：
                    导入的文件数据带的是对方体系的源 ID（会议 15:53），对不上是常态，
                    得让人一眼看出"这不是本站的源"，而不是以为源名显示成了一串数字。 -->
@@ -391,22 +430,25 @@ function openPreview(file: FileResourceRecord) {
                   {{ file.sourceId }}<em>未匹配</em>
                 </span>
               </td>
-              <td class="sfv-name">{{ textOf(file, 'K1') }}</td>
-              <td>{{ textOf(file, 'K6') }}</td>
-              <td>{{ textOf(file, 'K7') }}</td>
-              <td class="num">{{ formatSize(valueOf(file, 'K4')) }}</td>
-              <td class="sfv-md5">{{ textOf(file, 'K5') }}</td>
-              <td><a v-if="safeExternalUrl(valueOf(file, 'K2'))" class="sfv-link" :href="safeExternalUrl(valueOf(file, 'K2'))" target="_blank" rel="noreferrer noopener nofollow">打开</a><span v-else class="soft">{{ textOf(file, 'K2') }}</span></td>
-              <td class="sfv-path">{{ textOf(file, 'K3') }}</td>
-              <td>{{ textOf(file, 'K8') }}</td>
-              <td class="sfv-path">{{ textOf(file, 'K9') }}</td>
-              <td class="num">{{ formatSize(valueOf(file, 'K10')) }}</td>
+              <!-- 动态 K 列。单元格的呈现增强（链接 / 大小 / 路径 / 等宽）按**物理列名**判断，
+                   这样列顺序随表字段走时，K2 仍然是链接、K4/K10 仍然是大小。 -->
+              <td v-for="col in fileColumns" :key="col.columnName" :class="kCellClass(col.columnName)">
+                <template v-if="col.columnName === 'K2'">
+                  <a v-if="safeExternalUrl(valueOf(file, 'K2'))" class="sfv-link" :href="safeExternalUrl(valueOf(file, 'K2'))" target="_blank" rel="noreferrer noopener nofollow">打开</a>
+                  <span v-else class="soft">{{ textOf(file, 'K2') }}</span>
+                </template>
+                <template v-else-if="col.columnName === 'K4' || col.columnName === 'K10'">{{ formatSize(valueOf(file, col.columnName)) }}</template>
+                <template v-else-if="col.columnName === 'K3' || col.columnName === 'K9'"><span class="sfv-path">{{ textOf(file, col.columnName) }}</span></template>
+                <template v-else-if="col.columnName === 'K1'"><span class="sfv-name">{{ textOf(file, col.columnName) }}</span></template>
+                <template v-else-if="col.columnName === 'K5'"><span class="sfv-md5">{{ textOf(file, col.columnName) }}</span></template>
+                <template v-else>{{ textOf(file, col.columnName) }}</template>
+              </td>
               <td>{{ file.state || '—' }}</td>
               <td class="soft">{{ file.updateDt || '—' }}</td>
               <td class="soft">{{ file.createDt || '—' }}</td>
               <td><button class="sfv-link" type="button" data-testid="site-file-detail" @click.stop="openDetail(file)">详情</button></td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td colspan="15" class="sfv-empty-row">没有匹配的文件</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="fileColumns.length + 6" class="sfv-empty-row">没有匹配的文件</td></tr>
           </tbody>
         </table>
         <div

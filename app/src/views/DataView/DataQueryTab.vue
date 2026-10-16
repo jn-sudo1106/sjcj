@@ -13,6 +13,8 @@ import { useWorkspaceStore } from '../../stores/workspace'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import RowEditDialog from './RowEditDialog.vue'
+import DataRowDetail from './DataRowDetail.vue'
+import EntryRecordTable from './EntryRecordTable.vue'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
 import StepDrawer from './StepDrawer.vue'
@@ -28,13 +30,10 @@ import BrowseModeToggle, { type BrowseMode } from '@/components/ResultToolbar/Br
 import RailNodePicker from '@/views/FlowCanvas/result/components/RailNodePicker.vue'
 import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 import { downloadCsv } from '@/utils/format/csvExport'
-import { exportTableFields } from '@/utils/format/exportFields'
 import { resultRowsCsv } from '@/views/FlowCanvas/result/exportRows'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
-import { copyToClipboard } from '@/utils/clipboard'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
-import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 import { currentBackendHost } from '@/api/client'
@@ -560,37 +559,11 @@ const apiSourceLabel = computed(() => {
   return source ? `${source.name}（${source.sourceId}）` : sourceId.value
 })
 
-function copyText(val: string, label?: string) {
-  void copyToClipboard(val, label)
-}
-
-function copyDetailJson() {
-  if (!detail.data) return
-  const payload: Record<string, unknown> = {
-    ENTRY_ID: detail.data.row.dataId,
-    SOURCE_ID: detail.data.row.sourceId,
-    CREATE_DT: detail.data.row.createDt,
-    UPDATE_DT: detail.data.row.updateDt,
-  }
-  for (const item of detail.data.showItems || []) {
-    const key = item.columnName || item.itemName || item.itemId || 'item'
-    payload[key] = item.value
-  }
-  void copyToClipboard(JSON.stringify(payload, null, 2), '全部字段 JSON')
-}
-
-/** 点一行打开的详情抽屉里也能导出字段定义（与「表结构详情」共用同一份逻辑） */
-function onExportDetailFields() {
-  if (!tableMeta.value) {
-    ElMessage.error('请先选择数据表')
-    return
-  }
-  try {
-    exportTableFields(tableMeta.value)
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '导出字段失败')
-  }
-}
+// 详情的两份内容体各管一个入口（刻意不同源，见模板注释）：
+//   · DataRowDetail.vue     —— 抽屉用（点整行 / 操作列「详情」），自带复制 JSON / 导出字段工具栏
+//   · EntryRecordTable.vue  —— ENTRY_ID 弹窗用，复刻旧平台 RecordDetailComm 的「列 / 值」平铺表
+// 需要父组件配合的三件事留在本文件：openTaskInstByDetail（任务实例弹窗）、openRawJson（原始 JSON）、
+// onCellFile（文件预览），由抽屉那份内容体 emit 回来。
 
 function onShowApi() {
   apiOpen.value = true
@@ -854,28 +827,39 @@ function onCellFile(path: string, field?: { prop?: string; columnName?: string; 
   filePreview.ext = extFromName(path) || hintedExt
   filePreview.visible = true
 }
-/** 详情抽屉里的字段：showItems 只有列名，按列名回表结构取字段名 / 描述，再走同一套路径判据 */
-function detailFileField(item: { columnName: string; itemName?: string; value: unknown }) {
-  const value = item.value == null ? '' : String(item.value)
-  if (!value) return null
-  const meta = tableMeta.value?.fields?.find((f) => (f.columnName ?? f.prop) === item.columnName)
-  const field = { prop: meta?.prop ?? item.columnName, columnName: item.columnName, desc: meta?.desc ?? item.itemName ?? '' }
-  return isOssFilePath(field, value) ? field : null
-}
-
-// ---- 数据详情抽屉（只读，行 + showItems + subs；父数据详情复用同一抽屉换参） ----
-const detail = reactive<{ visible: boolean; data: EntryDetail | null }>({ visible: false, data: null })
-async function openDetailFor(forTableId: string, forDataId: string) {
+// ---- 数据详情的两个容器（只读，行 + showItems + subsCnt） ----
+// 两个入口各挂各的容器与内容体：点整行 / 操作列「详情」用抽屉（原有行为），点 ENTRY_ID 链接用居中弹窗。
+// mode 记录本次是哪种，模板里二选一挂载，避免两个容器同时存在、抢同一个 visible。
+const detail = reactive<{ visible: boolean; data: EntryDetail | null; mode: 'drawer' | 'dialog' }>({
+  visible: false, data: null, mode: 'drawer',
+})
+async function openDetailFor(forTableId: string, forDataId: string, mode: 'drawer' | 'dialog' = 'drawer') {
   try {
+    detail.mode = mode
     detail.data = await dataApi.rowDetail(forTableId, forDataId)
     detail.visible = true
   } catch (error) {
     ElMessage.error(`获取数据表详情失败${error instanceof Error ? error.message : String(error)}`)
   }
 }
+/** 抽屉：点整行、操作列「详情」按钮 */
 function openDetail(row: DataRow) { void openDetailFor(tableId.value, row.dataId) }
-// 点一行打开详情（原来要点 ENTRY_ID 那个链接）。点的是单元格里自带动作的东西（源 / 任务 / 父 ID 链接、
-// 按钮、勾选框、下拉、文件路径）时让它自己处理，不叠开详情；选中文字准备复制时也不开
+/** 弹窗：点 ENTRY_ID 链接（复刻旧平台 entry-list-view 的 ENTRY_ID 链接） */
+function openDetailDialog(row: DataRow) { void openDetailFor(tableId.value, row.dataId, 'dialog') }
+// 详情内容可能很长（showItems 动辄数十项），不封顶会把弹窗撑出视口、底部字段看不到。
+// 与 RowEditDialog 同口径：页面根节点带 transform，position:fixed 的基准被劫持，
+// 静态 calc() 猜不出通用公式——弹窗打开后实测内容区离视口顶部的距离，再算还剩下多少高度给它。
+const detailBodyEl = ref<HTMLElement | null>(null)
+const detailBodyMaxHeight = ref(420)
+function recalcDetailHeight() {
+  if (!detailBodyEl.value) return
+  const top = detailBodyEl.value.getBoundingClientRect().top
+  detailBodyMaxHeight.value = Math.max(180, window.innerHeight - top - 72)
+}
+if (typeof window !== 'undefined') window.addEventListener('resize', recalcDetailHeight)
+onUnmounted(() => window.removeEventListener('resize', recalcDetailHeight))
+// 点一行打开详情。点的是单元格里自带动作的东西（ENTRY_ID / 源 / 任务 / 父 ID 链接、按钮、
+// 勾选框、下拉、文件路径）时让它自己处理，不叠开详情；选中文字准备复制时也不开
 function onRowClickDetail(row: DataRow, event: Event) {
   const target = event.target as HTMLElement | null
   if (target?.closest('a, button, input, label, .el-checkbox, .el-dropdown, .el-button, [role="button"]')) return
@@ -1168,8 +1152,19 @@ onUnmounted(() => {
       </template>
 
       <template #columns-before>
+        <!-- ENTRY_ID 可点开详情（复刻旧平台 entry-list-view 的 ENTRY_ID 链接），展示为居中弹窗。
+             不加 @click.stop：行点击 onRowClickDetail 已把 a/button 这类「自带动作」的目标排除掉，
+             与同列的「源」「任务」链接同口径。 -->
         <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
-          <template #default="{ row }">{{ row.dataId }}</template>
+          <template #default="{ row }">
+            <a
+              v-if="row.dataId"
+              class="dv-a"
+              data-testid="row-open-detail"
+              @click="openDetailDialog(row)"
+            >{{ row.dataId }}</a>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
           <template #default="{ row }">
@@ -1261,219 +1256,33 @@ onUnmounted(() => {
       @uploaded="panelRef?.refresh()"
     />
 
-    <!-- 数据详情抽屉（只读） -->
-    <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
-      <template v-if="detail.data">
-        <div class="dv-detail-toolbar">
-          <button class="rc-btn sm" type="button" data-testid="detail-copy-json" @click="copyDetailJson">
-            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-              <path
-                d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-              />
-            </svg>
-            复制全部 JSON
-          </button>
-          <button class="rc-btn sm" type="button" data-testid="detail-export-fields" @click="onExportDetailFields">
-            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-              <path
-                d="M8 1.5v9M4.5 8 8 11.5 11.5 8M2.5 12.5v1h11v-1"
-                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"
-              />
-            </svg>
-            导出字段
-          </button>
-        </div>
-        <dl class="rc-kv">
-          <dt class="dv-detail-dt">
-            <span>ENTRY_ID</span>
-            <button
-              v-if="detail.data.row.dataId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 ENTRY_ID"
-              data-testid="detail-copy-entry-id"
-              @click="copyText(detail.data.row.dataId, 'ENTRY_ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.dataId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>源 ID</span>
-            <button
-              v-if="detail.data.row.sourceId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 源 ID"
-              data-testid="detail-copy-source-id"
-              @click="copyText(detail.data.row.sourceId, '源 ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.sourceId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>源名称</span>
-            <button
-              v-if="detail.data.row.sourceName"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 源名称"
-              data-testid="detail-copy-source-name"
-              @click="copyText(detail.data.row.sourceName, '源名称')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.sourceName || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>文件ID</span>
-            <button
-              v-if="detail.data.row.fileId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 文件ID"
-              data-testid="detail-copy-file-id"
-              @click="copyText(detail.data.row.fileId, '文件ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.fileId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>类型ID</span>
-            <button
-              v-if="detail.data.row.entryTypeId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 类型ID"
-              data-testid="detail-copy-type-id"
-              @click="copyText(detail.data.row.entryTypeId, '类型ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.entryTypeId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>类型名</span>
-            <button
-              v-if="detail.data.row.entryTypeName"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 类型名"
-              data-testid="detail-copy-type-name"
-              @click="copyText(detail.data.row.entryTypeName, '类型名')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.entryTypeName || '—' }}</dd>
-          <dt>父ID</dt>
-          <dd>
-            <span>{{ detail.data.row.parentId || '—' }}</span>
-          </dd>
-          <dt>任务ID</dt>
-          <dd>
-            <a
-              v-if="detail.data.row.detailId"
-              class="dv-a"
-              data-testid="detail-open-task"
-              @click="openTaskInstByDetail(detail.data.row)"
-            >{{ detail.data.row.detailId }}</a>
-            <span v-else>—</span>
-          </dd>
-          <dt>创建时间</dt>
-          <dd>{{ detail.data.row.createDt || '—' }}</dd>
-          <dt>更新时间</dt>
-          <dd>{{ detail.data.row.updateDt || '—' }}</dd>
-          <dt>版本</dt>
-          <dd>{{ detail.data.row.ver || '—' }}</dd>
-          <dt>总次数</dt>
-          <dd>{{ detail.data.row.times || '—' }}</dd>
-          <dt>序号</dt>
-          <dd>{{ detail.data.row.seq || '—' }}</dd>
-          <dt>抓取日期</dt>
-          <dd>{{ detail.data.row.flag1 || '—' }}</dd>
-          <dt>原始</dt>
-          <dd>
-            <a
-              v-if="detail.data.row.k0"
-              class="dv-a"
-              data-testid="detail-open-raw"
-              @click="openRawJson(detail.data.row)"
-            >查看</a>
-            <span v-else>—</span>
-          </dd>
-          <dt>子数据量</dt>
-          <dd>{{ detail.data.subsCnt ?? '—' }}</dd>
-          <template v-for="item in detail.data.showItems" :key="item.itemId ?? item.columnName">
-            <dt class="dv-detail-dt">
-              <span>{{ item.itemName || item.columnName }}</span>
-              <button
-                v-if="item.value !== undefined && item.value !== null && item.value !== ''"
-                type="button"
-                class="dv-copy-btn"
-                :title="`复制 ${item.itemName || item.columnName}`"
-                data-testid="detail-copy-item"
-                @click="copyText(String(item.value), item.itemName || item.columnName)"
-              >
-                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                  <path
-                    d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                    fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                  />
-                </svg>
-              </button>
-            </dt>
-            <dd v-if="detailFileField(item)">
-              <button
-                type="button"
-                class="dv-file"
-                data-testid="detail-file"
-                :title="`预览 ${item.value}`"
-                @click="onCellFile(String(item.value), detailFileField(item) ?? undefined)"
-              >📄 {{ item.value }}</button>
-            </dd>
-            <dd v-else>{{ item.value ?? '—' }}</dd>
-          </template>
-        </dl>
-        <!-- 0904：原来这里只渲染一行 `dataId · sourceId`，子行自带的 24 个字段全丢了，
-             也没有旧平台那个「本页展示子数据 3/6 条」的总数。换成与源画布数据视图同一个面板。 -->
-        <!-- 0904 I06：「下级数据」面板已撤（Z0-1）。detail.data 仍在用（行 + showItems），
-             只是不再罗列子行——下钻改走「带条件跳转 + 可返回」。 -->
-      </template>
+    <!-- 数据详情：两个入口是**两套口径**，各有各的内容体。 -->
+    <!-- · 点整行 / 操作列「详情」→ 右侧抽屉（原有行为，保持不变），内容体 DataRowDetail.vue：
+         中文标签分组 + showItems 中文名 + 复制 JSON / 导出字段工具栏。 -->
+    <el-drawer v-if="detail.mode === 'drawer'" v-model="detail.visible" title="数据表详情" size="480px">
+      <DataRowDetail
+        v-if="detail.data"
+        :data="detail.data"
+        :table-meta="tableMeta"
+        @open-task="openTaskInstByDetail"
+        @open-raw="openRawJson"
+        @preview-file="onCellFile"
+      />
     </el-drawer>
+    <!-- · 点 ENTRY_ID 链接 → 居中弹窗（复刻旧平台 entry-list-view 的 ENTRY_ID 链接），
+         内容体 EntryRecordTable.vue：复刻旧平台 RecordDetailComm —— 整行记录按「列 / 值」原样平铺，
+         没有工具栏、没有中文分组，跟抽屉那份刻意不同源。 -->
+    <el-dialog
+      v-else
+      v-model="detail.visible"
+      title="记录详情"
+      width="640px"
+      @opened="recalcDetailHeight"
+    >
+      <div v-if="detail.data" ref="detailBodyEl" class="dv-detail-body" :style="{ maxHeight: `${detailBodyMaxHeight}px` }">
+        <EntryRecordTable :data="detail.data" />
+      </div>
+    </el-dialog>
 
     <!-- 文件预览：居中 dialog（看一眼就关的操作型短流程），与源数据视图同款 -->
     <el-dialog
@@ -1669,42 +1478,11 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
   font-weight: 700;
   color: var(--rc-text);
 }
-.dv-detail-toolbar {
-  margin-bottom: 12px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.dv-detail-toolbar .rc-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.dv-detail-dt {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.dv-copy-btn {
-  border: 0;
-  background: transparent;
-  color: var(--rc-faint);
-  padding: 1px 3px;
-  border-radius: 3px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.45;
-  transition: opacity .12s, color .12s, background-color .12s;
-}
-.dv-detail-dt:hover .dv-copy-btn {
-  opacity: 1;
-}
-.dv-file { max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font: inherit; text-align: left; cursor: pointer; word-break: break-all; }
-.dv-file:hover { text-decoration: underline; }
-.dv-copy-btn:hover {
-  color: var(--rc-primary);
-  background: var(--rc-primary-bg);
+/* 详情弹窗内容区：高度由 recalcDetailHeight 实测封顶（见 script），这里只负责滚动。
+   抽屉分支不需要它——抽屉 body 本来就滚。
+   详情内部（工具条 / 复制按钮 / 文件按钮）的样式已随内容体迁到 DataRowDetail.vue。 */
+.dv-detail-body {
+  overflow-y: auto;
+  padding-right: 4px;
 }
 </style>
