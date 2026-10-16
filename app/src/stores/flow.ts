@@ -924,6 +924,9 @@ export const useFlowStore = defineStore('flow', () => {
     // 旁路挂靠
     const branchIdx = branches.findIndex((b) => b.id === id)
     if (branchIdx >= 0) branches.splice(branchIdx, 1)
+    // 摘链后按父子关系重建：链被删空的分支随之消失，只剩一路时并回主链（与刷新还原同口径）
+    const { parentOf, order } = canvasParents()
+    rebuildTopology(parentOf, order)
     if (selectedId.value === id) {
       const first = main.value.find((m) => !isTerm(m))
       if (first) select(first)
