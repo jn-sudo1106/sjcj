@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// 源流程配置抽屉（1008-04）：组内源只读 + 查看组配置 / 退出来源组；独立源关联流程整体替换保存 + 绑定状态表。
+// 源流程配置抽屉（1008-04）：组内源分「来源组流程（只读 + 查看组配置 / 退出来源组）」和「本源流程」两段；
+// 本源流程整体替换保存 + 绑定状态表（10-15 起入组源也能维护自有流程）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -17,6 +18,9 @@ const INDEP_VIEW: SourceFlowsView = {
   flowIds: ['14010130'],
   defaultFlowId: '14010130',
   bindings: [{ id: '18844', sourceId: '430024667', flowId: '14010130', isDefault: true, state: 'ACTIVE', revision: 1 } as SourceFlowBind],
+  ownFlowIds: ['14010130'],
+  ownDefaultFlowId: '14010130',
+  ownBindings: [{ id: '18844', sourceId: '430024667', flowId: '14010130', isDefault: true, state: 'ACTIVE', revision: 1 } as SourceFlowBind],
 }
 const GROUP_VIEW: SourceFlowsView = {
   sourceId: '430000930',
@@ -26,6 +30,12 @@ const GROUP_VIEW: SourceFlowsView = {
   bindings: [
     { id: '31', sourceGroupId: '3', flowId: '21000005', isDefault: false, state: 'ACTIVE', revision: 2 } as SourceFlowBind,
     { id: '32', sourceGroupId: '3', flowId: '21000006', isDefault: true, state: 'ACTIVE', revision: 2 } as SourceFlowBind,
+  ],
+  ownFlowIds: ['21000019', '21000022'],
+  ownDefaultFlowId: '21000022',
+  ownBindings: [
+    { id: '41', sourceId: '430000930', flowId: '21000022', isDefault: true, state: 'ACTIVE', revision: 2 } as SourceFlowBind,
+    { id: '42', sourceId: '430000930', flowId: '21000019', isDefault: false, state: 'ACTIVE', revision: 1 } as SourceFlowBind,
   ],
 }
 
@@ -56,13 +66,29 @@ describe('源流程配置抽屉', () => {
     expect(save).toHaveBeenCalledWith('430024667', expect.any(Function))
   })
 
-  it('组内源：只读、显示「统一使用」，可查看组配置 / 退出来源组', async () => {
+  it('组内源：来源组流程只读一段，本源流程一段可保存（只交本源的流程）', async () => {
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(GROUP_VIEW)
+    const save = vi.spyOn(workflowBindingApi, 'save').mockResolvedValue(undefined)
+    const wrapper = mount(SourceFlowConfigDrawer, { props: { source: GROUP_SOURCE, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await settle()
+    expect(dom('[data-testid="sfcd-group-section"]')?.textContent).toContain('组 #3')
+    expect(document.body.textContent).toContain('组默认：流程 21000006')
+    expect(dom('[data-testid="sfcd-own-section"]')).toBeTruthy()
+    // 两张绑定表：组 2 行 + 本源 2 行
+    expect(document.querySelectorAll('[data-testid="sfcd-binding-toggle"]')).toHaveLength(4)
+    ;(dom('[data-testid="sfcd-save"]') as HTMLButtonElement).click()
+    await settle()
+    const change = save.mock.calls[0][1]
+    expect(change(GROUP_VIEW)).toEqual({ flowIds: ['21000019', '21000022'], defaultFlowId: '21000022' })
+    wrapper.unmount()
+  })
+
+  it('组内源：可查看组配置 / 退出来源组', async () => {
     vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(GROUP_VIEW)
     const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
     const wrapper = mount(SourceFlowConfigDrawer, { props: { source: GROUP_SOURCE, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await settle()
-    expect(document.body.textContent).toContain('统一使用来源组流程')
-    expect(dom('[data-testid="sfcd-save"]')).toBeNull()
+    expect(document.body.textContent).toContain('来源组流程')
     const leaveBtn = dom('[data-testid="sfcd-leave-group"]') as HTMLButtonElement
     leaveBtn.click()
     await settle()

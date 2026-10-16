@@ -45,11 +45,11 @@ describe('AppSidebar', () => {
     expect(groupTitles.indexOf('系统设置')).toBe(groupTitles.length - 1)
   })
 
-  it('问数配置组有「模板配置 + 问数系统配置」两个入口，原 8 个模板子项不再出现在侧栏', async () => {
+  it('问数配置组有「基础配置 + 模板配置 + 问数系统配置」三个入口，原 8 个模板子项不再出现在侧栏', async () => {
     const { wrapper } = await mountAt('/template-config')
     const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '问数配置')!
-    // 1015 迁入旧「系统配置」域后，组下第二个入口「问数系统配置」（参数设置/页面配置在页内以 tab 呈现）
-    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['模板配置', '问数系统配置'])
+    // 1015 迁入旧「系统配置」域后组下有「问数系统配置」；同日迁入旧「基础配置」组，「基础配置」排在模板配置之前
+    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['基础配置', '模板配置', '问数系统配置'])
     const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
     expect(active).toHaveLength(1)
     expect(active[0].text()).toContain('模板配置')

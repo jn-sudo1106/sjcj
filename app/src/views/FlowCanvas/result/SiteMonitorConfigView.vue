@@ -86,10 +86,15 @@ watch(() => props.sourceId, () => {
 <template>
   <div class="smc-shell">
     <div class="smv-toolbar">
-      <input v-model="filters.name" class="smv-input" placeholder="名称" aria-label="名称" />
-      <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
-      <button class="rc-btn" type="button" @click="clearFilters">清空</button>
-      <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-config-add" @click="openAdd">＋ 新增配置</button>
+      <div class="smv-action-wrap">
+        <input v-model="filters.name" class="smv-input" placeholder="名称" aria-label="名称" />
+        <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
+        <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+      </div>
+      <div class="smv-action-wrap">
+        <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-config-add" @click="openAdd">＋ 新增配置</button>
+        <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-config-add">＋ 新增监控</button>
+      </div>
     </div>
 
     <div v-if="error" class="smv-empty">{{ error }}</div>
@@ -172,11 +177,15 @@ watch(() => props.sourceId, () => {
 <style scoped>
 .smc-shell { display: flex; flex-direction: column; min-height: 0; flex: 1; background: #fff; }
 /* 列表骨架沿用「监控结果」Tab 的同一套样式语义（smv-toolbar/smv-summary/smv-table/smv-pager） */
-.smv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
+.smv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; justify-content: space-between; }
 .smv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); font-size: 12px; outline: none; min-width: 110px; background: #fff; }
 .smv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .smv-toolbar .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
 .smv-toolbar .rc-btn.primary.smc-add { margin-left: auto; }
+.smv-action-wrap {
+  display: flex;
+  gap: 10px;
+}
 
 .smv-summary { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; font-size: 12px; }
 .smv-count { color: var(--rc-text-2); font-weight: 700; }

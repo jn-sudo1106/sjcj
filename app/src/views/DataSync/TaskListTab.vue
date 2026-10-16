@@ -3,7 +3,12 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { syncApi, type SyncClient, type SyncCustomer, type SyncDatabase, type SyncTask, type SyncTaskConfig } from '@/api/dataSync'
+import {
+  isSinkTarget, parseSinkOptions, sanitizeSinkOptions, sinkOptionsProblem, syncApi,
+  type SyncClient, type SyncCustomer, type SyncDatabase, type SyncSinkDetail, type SyncSinkOptions,
+  type SyncTask, type SyncTaskConfig,
+} from '@/api/dataSync'
+import SinkOptionsPanel from './SinkOptionsPanel.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -25,6 +30,10 @@ const detailEdit = ref(false)
 const detailLoading = ref(false)
 const detailSaving = ref(false)
 const detail = ref<SyncTaskConfig | null>(null)
+const sinkInfo = ref<SyncSinkDetail | null>(null)
+const sinkOptions = ref<SyncSinkOptions | null>(null)
+const sinkType = computed(() => Number(sinkInfo.value?.targetDatabaseType ?? 0))
+const sinkColumns = computed(() => sinkInfo.value?.columnMapList ?? [])
 const runOpen = ref(false)
 const runTargets = ref<SyncTask[]>([])
 const runType = ref<'time' | 'id'>('time')
@@ -77,9 +86,15 @@ async function openDetail(row: SyncTask, editable: boolean) {
   detailOpen.value = true
   detailEdit.value = editable
   detail.value = null
+  sinkInfo.value = null
+  sinkOptions.value = null
   detailLoading.value = true
   try {
-    detail.value = { ...await syncApi.taskDetail(row.id), taskName: row.taskName, syncType: String(row.syncType) }
+    // 回显数据来自服务端真源 extend_config，不是从已有 SQL 反推；老后端没有这个接口时只退掉参数面板，明细照常看
+    const [config, sink] = await Promise.all([syncApi.taskDetail(row.id), syncApi.sinkDetail(row.id).catch(() => null)])
+    detail.value = { ...config, taskName: row.taskName, syncType: String(row.syncType) }
+    sinkInfo.value = sink
+    sinkOptions.value = sink ? parseSinkOptions(sink.sinkOptions, sink.targetDatabaseType, sink.columnMapList ?? []) : null
   } catch (error) { ElMessage.error(String(error)); detailOpen.value = false }
   finally { detailLoading.value = false }
 }
@@ -90,6 +105,12 @@ async function saveDetail() {
       !detail.value.conditionSql || !detail.value.insertSql || !detail.value.updateSql) {
     ElMessage.warning('请填写任务名称、定时策略和全部 SQL')
     return
+  }
+  if (isSinkTarget(sinkType.value)) {
+    const options = sanitizeSinkOptions(sinkOptions.value, sinkType.value)
+    const problem = sinkOptionsProblem(options, sinkColumns.value)
+    if (problem) { ElMessage.warning(problem); return }
+    if (options) detail.value.sinkOptions = options
   }
   detailSaving.value = true
   try { await syncApi.saveTaskDetail(detail.value); ElMessage.success('保存成功'); detailOpen.value = false; await load() }
@@ -238,6 +259,9 @@ async function remove(row: SyncTask) {
             <el-input v-model="detail[field]" type="textarea" :rows="4" :disabled="!detailEdit" />
           </el-form-item>
         </el-form>
+        <SinkOptionsPanel v-if="detail && detailEdit && isSinkTarget(sinkType)" :key="String(sinkInfo?.taskId)"
+          v-model="sinkOptions" :database-type="sinkType" :columns="sinkColumns" table-exists
+          :target-schema="sinkInfo?.targetSchema ?? ''" :target-table="sinkInfo?.targetTable ?? ''" />
       </div>
       <template #footer><el-button @click="detailOpen = false">关闭</el-button><el-button v-if="detailEdit" type="primary" :loading="detailSaving" @click="saveDetail">保存</el-button></template>
     </el-drawer>

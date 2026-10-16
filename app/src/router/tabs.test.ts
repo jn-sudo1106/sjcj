@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { SYSTEM_CONFIG_TABS, TABS, TEMPLATE_CONFIG_TABS } from './tabs'
+import { SYSTEM_CONFIG_TABS, BASE_CONFIG_TABS, TABS, TEMPLATE_CONFIG_TABS } from './tabs'
 import { router } from './index'
 
 describe('Phase 3.1 画布入口退役', () => {
@@ -63,11 +63,15 @@ describe('Phase 3.1 画布入口退役', () => {
   // 8 个子模块不再有独立地址，只通过 ?tab= 访问。
   // 1015（同日）：旧「系统配置」组迁入，问数配置组加第二个入口「问数系统配置」，
   // 参数设置 / 页面配置两个页内 tab（元数据在 SYSTEM_CONFIG_TABS）。
-  it('侧栏只暴露模板配置与问数系统配置两个入口，子模块作为页内 tab', () => {
+  // 1015：旧「基础配置」组迁入，问数配置组加第三个入口「基础配置」，**排在模板配置之前**，
+  // 表字段管理一个页内 tab（元数据在 BASE_CONFIG_TABS）。
+  it('侧栏暴露基础配置 + 模板配置 + 问数系统配置三个入口，子模块作为页内 tab', () => {
     const templateTabs = TABS.filter((t) => t.group === 'template')
-    expect(templateTabs.map((t) => `${t.key}:${t.label}`)).toEqual(['template-config:模板配置', 'system-config:问数系统配置'])
+    expect(templateTabs.map((t) => `${t.key}:${t.label}`)).toEqual(['base-config:基础配置', 'template-config:模板配置', 'system-config:问数系统配置'])
 
     const shell = router.options.routes.find((r) => r.path === '/')
+    const baseRoute = shell?.children?.find((r) => r.path === '/base-config')
+    expect(baseRoute?.component).toBeTruthy()
     const route = shell?.children?.find((r) => r.path === '/template-config')
     expect(route?.component).toBeTruthy()
     const systemRoute = shell?.children?.find((r) => r.path === '/system-config')
@@ -94,6 +98,24 @@ describe('Phase 3.1 画布入口退役', () => {
   it('问数系统配置的页内 tab：参数设置在前（默认），权限码与 key 一致', () => {
     expect(SYSTEM_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual(['param-config:参数设置', 'page-config:页面配置'])
     for (const t of SYSTEM_CONFIG_TABS) {
+      expect(t.permission).toBe(t.key)
+    }
+  })
+
+  // 基础配置（1015 迁入旧「基础配置」组）：页内六个 tab，「表字段管理」是无 ?tab= 时的默认，
+  // 「向量表数据浏览」「选表规则配置」「向量表管理」「表改写管理」「实体改写管理」同日迁入
+  // （旧 /demo/vector-data、/demo/match-table-config-list、/config/vector-list、/demo/replace-table-config-list、/demo/entity-rewrite-config-list）。
+  // 顺序照旧侧栏，不按迁入先后排。
+  it('基础配置的页内 tab：表字段管理 + 向量表数据浏览 + 选表规则配置 + 向量表管理 + 表改写管理 + 实体改写管理，权限码与 key 一致', () => {
+    expect(BASE_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual([
+      'entity-config:表字段管理',
+      'vector-data:向量表数据浏览',
+      'match-table-config:选表规则配置',
+      'vector-config:向量表管理',
+      'replace-table-config:表改写管理',
+      'entity-rewrite-config:实体改写管理',
+    ])
+    for (const t of BASE_CONFIG_TABS) {
       expect(t.permission).toBe(t.key)
     }
   })

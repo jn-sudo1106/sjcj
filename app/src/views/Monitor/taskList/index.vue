@@ -573,6 +573,7 @@ function applyRouteQuery() {
 .tl-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 .tl-op-icon {
@@ -582,7 +583,7 @@ function applyRouteQuery() {
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: var(--rc-primary, #2563eb);
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
 }
@@ -596,3 +597,4 @@ function applyRouteQuery() {
   padding: 8px 0 2px;
 }
 </style>
+

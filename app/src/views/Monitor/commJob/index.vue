@@ -51,9 +51,9 @@ import {
   Lightning,
   SwitchButton,
   Scissor,
-  EditPen,
   DocumentCopy,
   VideoPlay,
+  Edit
 } from '@element-plus/icons-vue'
 import type { CommJob } from '@/api'
 import {
@@ -378,7 +378,7 @@ onMounted(() => void load())
           <!-- 操作：旧 actionSlot —— 编辑 / 复制 / 运行（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="cj-actions">
             <el-tooltip content="编辑" placement="top">
-              <span class="cj-op-icon" @click="openEdit(row)"><el-icon :size="15"><EditPen /></el-icon></span>
+              <span class="cj-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
             </el-tooltip>
             <el-tooltip content="复制" placement="top">
               <span class="cj-op-icon" @click="copyJob(row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
@@ -510,7 +510,7 @@ onMounted(() => void load())
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: var(--rc-primary, #2563eb);
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
 }
@@ -536,6 +536,7 @@ onMounted(() => void load())
 .cj-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 .cj-pager {
@@ -544,3 +545,4 @@ onMounted(() => void load())
   padding: 8px 0 2px;
 }
 </style>
+

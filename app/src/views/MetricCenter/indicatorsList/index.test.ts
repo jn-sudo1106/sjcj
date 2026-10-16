@@ -187,9 +187,18 @@ function batchDropdown(w: VueWrapper) {
   return hit
 }
 
-/** 表格第 rowIndex 行的行内「更多」下拉 */
-function rowDropdown(w: VueWrapper, rowIndex: number) {
-  return w.findAll('.el-table__body tr')[rowIndex].findComponent({ name: 'ElDropdown' })
+/** el-tooltip 的 content（行内图标的原按钮文案） */
+const tipText = (t: VueWrapper) => (t.props() as { content?: string }).content
+
+/** 表格第 rowIndex 行的行内操作：已改成图标（el-tooltip 的 content 是原文案），原「更多」里的项也平铺出来 */
+function rowTips(w: VueWrapper, rowIndex: number) {
+  return w.findAll('.el-table__body tr')[rowIndex].findAllComponents({ name: 'ElTooltip' })
+    .filter((t: VueWrapper) => t.find('.ml-op-icon').exists())
+}
+function rowOp(w: VueWrapper, rowIndex: number, text: string) {
+  const tip = rowTips(w, rowIndex).find((t: VueWrapper) => tipText(t) === text)
+  if (!tip) throw new Error(`第 ${rowIndex} 行找不到操作：${text}`)
+  return tip.find('.ml-op-icon')
 }
 
 /** 最近一次 measurePaged 的入参 */
@@ -427,24 +436,22 @@ describe('indicatorsList · 行内操作', () => {
   it('「详情」打开详情抽屉并带上整行 + 标题「指标详情」', async () => {
     const w = mountPage()
     await flushPromises()
-    await cell(w, 0, 13).findAll('.ml-op-link')[0].trigger('click')
+    await rowOp(w, 0, '详情').trigger('click')
     expect(spies.openDetail).toHaveBeenCalledWith(ROWS[0], '指标详情')
   })
 
   it('「编辑」把整行交给编辑弹窗（旧 handleEdit → $refs.measureEdit.doEdit(record)）', async () => {
     const w = mountPage()
     await flushPromises()
-    await cell(w, 1, 13).findAll('.ml-op-link')[1].trigger('click')
+    await rowOp(w, 1, '编辑').trigger('click')
     expect(spies.openEdit).toHaveBeenCalledWith(ROWS[1])
   })
 
-  it('行内「更多」：普通行只有「指标副本」，历史删除行多一项「删除指标(物理删除)」', async () => {
+  it('行内图标：普通行是「详情 / 编辑 / 指标副本」，历史删除行多一个「删除指标(物理删除)」', async () => {
     const w = mountPage()
     await flushPromises()
-    expect(rowDropdown(w, 0).findAllComponents({ name: 'ElDropdownItem' }).map((i) => i.text()))
-      .toEqual(['指标副本'])
-    expect(rowDropdown(w, 2).findAllComponents({ name: 'ElDropdownItem' }).map((i) => i.text()))
-      .toEqual(['指标副本', '删除指标(物理删除)'])
+    expect(rowTips(w, 0).map(tipText)).toEqual(['详情', '编辑', '指标副本'])
+    expect(rowTips(w, 2).map(tipText)).toEqual(['详情', '编辑', '指标副本', '删除指标(物理删除)'])
   })
 
   it('「指标副本」→ 确认后 copyMeasure(id)，并清空查询条件后重查', async () => {
@@ -455,7 +462,7 @@ describe('indicatorsList · 行内操作', () => {
     await flushPromises()
     expect(lastQuery()).toMatchObject({ measureCode: 'A000' })
 
-    rowDropdown(w, 0).vm.$emit('command', 'copy')
+    await rowOp(w, 0, '指标副本').trigger('click')
     await flushPromises()
     expect(spies.copyMeasure).toHaveBeenCalledWith(7001)
     expect(lastQuery()).toMatchObject({ measureCode: '' })
@@ -464,7 +471,7 @@ describe('indicatorsList · 行内操作', () => {
   it('「删除指标(物理删除)」→ deleteMeasurePhy(id)', async () => {
     const w = mountPage()
     await flushPromises()
-    rowDropdown(w, 2).vm.$emit('command', 'deletePhy')
+    await rowOp(w, 2, '删除指标(物理删除)').trigger('click')
     await flushPromises()
     expect(spies.deleteMeasurePhy).toHaveBeenCalledWith(7003)
     const [title] = vi.mocked(confirmDanger).mock.calls[0]

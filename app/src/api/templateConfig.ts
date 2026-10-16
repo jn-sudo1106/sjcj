@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, EntityRewriteConfig, MatchTableConfig, PocTableEntry, QuestionDic, ReplaceTableConfig, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorConfigPayload, VectorDataQuery, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -230,12 +230,179 @@ export const wordSegmentApi: WordSegmentApi = {
 }
 
 /**
- * 「使用表范围」下拉的数据表选项（旧 tableList → GET /poc/database/entry-list?name=）。
- * 返回的是裸数组：真实信封 {code,data:[...]} 里没有 count，client.ts 的 normalizeHttpPayload
- * 会把 data 数组直接透传出来（见 client.ts:393 的分页判定）。
+ * 真实后端（124.223.180.186:9093 实测）这两个 /poc/database GET 端点的信封固定带 `count: null`，
+ * 而 client.ts 的分页判定是按 key 存在与否（`'count' in envelope`，client.ts:421），不看值，
+ * 所以裸数组会被包成 {list,total}。旧页面读的是 res.data，没有这一层，这里统一还原成数组。
  */
-export function pocTableEntryList(name = ''): Promise<PocTableEntry[]> {
-  return request<PocTableEntry[]>('poc/database/entry-list', { name }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/entry-list` })
+function toRowArray<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload as T[]
+  const list = (payload as { list?: unknown } | null)?.list
+  return Array.isArray(list) ? (list as T[]) : []
+}
+
+/**
+ * 「使用表范围」下拉的数据表选项（旧 tableList → GET /poc/database/entry-list?name=）。
+ * ⚠️ 见 toRowArray：真实响应带 count:null，client.ts 会误判成分页结果，这里还原回数组再返回。
+ */
+export async function pocTableEntryList(name = ''): Promise<PocTableEntry[]> {
+  const payload = await request<PocTableEntry[] | Paged<PocTableEntry>>('poc/database/entry-list', { name }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/entry-list` })
+  return toRowArray<PocTableEntry>(payload)
+}
+
+/**
+ * 表字段管理的字段列表（旧 tableDesc → GET /poc/database/table-info?tableId=，1015 迁入「基础配置 → 表字段管理」）。
+ * tableId 是 entry-list 行的 entryTypeId；同样要过 toRowArray 还原 count:null 信封带来的 {list,total} 包装。
+ */
+export async function pocTableFieldList(tableId: number | string): Promise<EntityConfigField[]> {
+  const payload = await request<EntityConfigField[] | Paged<EntityConfigField>>('poc/database/table-info', { tableId: String(tableId) }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/table-info` })
+  return toRowArray<EntityConfigField>(payload)
+}
+
+/**
+ * 表字段配置保存（旧 saveConfig → POST /poc/database/config）—— body {entityType, entityItems}，**整表覆盖**。
+ * 旧页面按 res.code===0 判成功；client.ts 的 normalizeHttpPayload 对 code!==0 直接抛错并带出后端 msg，
+ * 所以这里返回即成功，失败在调用方 catch（见 views/TemplateConfig/BaseConfig/EntityConfig）。
+ */
+export function pocEntityConfigSave(payload: EntityConfigPayload): Promise<Ack> {
+  return request<Ack>('poc/database/config', { ...payload }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/database/config` })
+}
+
+/**
+ * 向量表选项（旧「基础配置 → 向量表数据浏览」的 vectorConfigList → GET /poc/vector/config/all?name=）。
+ * 与 entry-list 同一个信封（带 count:null），同样要过 toRowArray 还原成裸数组。
+ * ⚠️ ?name= 必须拼在路径上：后端把它声明成必填，参数缺失直接回 code:400
+ * （"Required request parameter 'name' for method parameter type String is not present"，2026-10-15 在 186 实测），
+ * 而 client.ts 的 appendQuery 与 httpParams 都会跳过空串 —— 旧 axios 空关键词时也是发 ?name= 的，这里按旧口径显式拼。
+ */
+export async function pocVectorConfigList(name = ''): Promise<VectorTableOption[]> {
+  const payload = await request<VectorTableOption[] | Paged<VectorTableOption>>(
+    'poc/vector/config/all',
+    { name },
+    { method: 'GET', httpParams: {}, httpEndpoint: `${POC_API_PREFIX}/vector/config/all?name=${encodeURIComponent(name)}` },
+  )
+  return toRowArray<VectorTableOption>(payload)
+}
+
+/**
+ * 向量表数据查询（旧 vectorDataQuery → POST /poc/vector/data，body 是旧 queryParam：input/type/pageSize/pageNo）。
+ * 返回的是后端 data 里的原始载荷，旧页面整份 JSON.stringify 展示，所以这里不做字段加工。
+ * ⚠️ 只有 POC 信封带 count:null 时被 client.ts 误判成分页结果（见上方 toRowArray 注释）、包成了 {list,total}，
+ * 才还原回数组 —— 否则展示出来的 JSON 比旧平台多一层包装。
+ */
+export async function pocVectorDataQuery(query: VectorDataQuery): Promise<unknown> {
+  const payload = await request<unknown>('poc/vector/data', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/data` })
+  if (Array.isArray(payload)) return payload
+  const { list, total } = (payload ?? {}) as { list?: unknown; total?: unknown }
+  return Array.isArray(list) && typeof total === 'number' ? list : payload
+}
+
+/** 向量表管理的接口面：分页 + 保存（{config, items}）+ 列映射明细 + 同步 + 按名称删除 */
+export interface VectorConfigApi {
+  page(query: TemplatePageQuery): Promise<Paged<VectorTableConfig>>
+  /** 新增与修改同一个端点（config.id 有值即更新），但 body 是 {config, items} 包装，不是平铺表单 */
+  save(payload: VectorConfigPayload): Promise<Ack>
+  /** 列映射明细（旧 vectorMappingInfo → GET /poc/vector/mapping/info?configId=） */
+  mappingInfo(configId: number): Promise<VectorMappingItem[]>
+  /** 触发同步；body 是 **id 数组**（旧列表单行「同步」也发 `[row.id]`），同 data-index-sync/sync 口径 */
+  sync(ids: number[]): Promise<Ack>
+  /** 删除（旧 deleteVector → POST /poc/vector/delete）；⚠️ body 是 `{type: 向量表名称}`，按 name 删不按 id */
+  remove(type: string): Promise<Ack>
+}
+
+/**
+ * 向量表管理（1015 迁入「基础配置」，旧「基础配置 → 向量表管理」src/demo/VectorTableList.vue +
+ * modal/VectorMapping.vue，旧接口 src/demoApi/VectorApi.js）。
+ *
+ * 没走 createTemplateCrudApi 工厂：本域 save 的 body 是 `{config, items}` 包装（配置行 + 列映射整份），
+ * 与工厂「平铺表单、带 id 即更新」的形状不符；也没有 status/copy，多出 mapping/info、sync、delete 三个动作端点。
+ * 与已迁的 poc/vector/config/all、poc/vector/data（向量表数据浏览）同一后端域。
+ * ⚠️ 5 个端点都还没在 186 实测（POC 写链路要登录会话），未标 live，联调核对后逐条补（同 question-temp 先例）。
+ */
+export const vectorConfigApi: VectorConfigApi = {
+  // 分页：两个模糊筛选都在 body —— name（向量表名称）/ sourceTable（源表名称），旧 queryParam 原样
+  page: (query: TemplatePageQuery) =>
+    request<Paged<VectorTableConfig>>('poc/vector/config/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/config/page` }),
+  save: (payload: VectorConfigPayload) =>
+    request<Ack>('poc/vector/config', { ...payload }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/config` }),
+  // 与 database 域同信封风险（可能带 count:null 被包成 {list,total}），统一过 toRowArray 还原裸数组
+  mappingInfo: (configId: number) =>
+    request<VectorMappingItem[] | Paged<VectorMappingItem>>(
+      'poc/vector/mapping/info',
+      { configId: String(configId) },
+      { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/vector/mapping/info` },
+    ).then((payload) => toRowArray<VectorMappingItem>(payload)),
+  sync: (ids: number[]) =>
+    request<Ack>('poc/vector/sync', ids as unknown as Record<string, unknown>, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/sync` }),
+  remove: (type: string) =>
+    request<Ack>('poc/vector/delete', { type }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/vector/delete` }),
+}
+
+/** 选表规则的接口面：通用 CRUD 面 + 删除（本域没有复制） */
+export interface MatchTableConfigApi extends TemplateCrudApi<MatchTableConfig> {
+  /** 删除（POST /poc/match-table-config/delete，⚠️ id 走 **query**，旧 deleteConfig 用的是 axios params） */
+  remove(id: number): Promise<Ack>
+}
+
+/**
+ * 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」src/demo/MatchTableConfigList.vue +
+ * modal/MatchTableConfigEditor.vue，旧接口 src/demoApi/MatchTableConfigApi.js:3-8）。
+ *
+ * 走 createTemplateCrudApi 工厂：本域正是工厂默认的四种形态 ——
+ * 新增与修改是**同一个根端点**（POST /poc/match-table-config，body 带 id 即更新，旧 editor 函数一个端点两用）、
+ * 启停 POST /poc/match-table-config/status 且参数走 **query**（旧 changeConfigStatus 用的是 axios params，
+ * 与 chat-flow-step / data-index-config 那几个 body 传参的域不同）。
+ * operations.copy=false —— 旧域没有 /copy。工厂唯一表达不了的是 /delete（旧平台少见的删除端点，
+ * question-dic 也有删除但那里是发整行、这里是按 query 发 id），所以按 questionDicApi 的先例扩一个 remove。
+ * 分页的两个筛选都在 body：name（旧搜索框标签「表名称」，见 types/template.ts 的 MatchTableConfig 注释）/ status。
+ */
+export const matchTableConfigApi: MatchTableConfigApi = {
+  ...createTemplateCrudApi<MatchTableConfig>({ module: 'match-table-config', operations: { copy: false } }),
+  remove: (id: number) =>
+    request<Ack>('poc/match-table-config/delete', { id }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/match-table-config/delete` }),
+}
+
+/**
+ * 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」src/demo/ReplaceTableConfigList.vue +
+ * modal/ReplaceTableConfigEditor.vue，旧接口 src/demoApi/ReplaceTableConfigApi.js:4-6）。
+ *
+ * 走 createTemplateCrudApi 工厂，且是本域最干净的一个模块 —— 旧接口文件只有三个函数
+ * （page / editor / changeConfigStatus），正是工厂去掉 copy 后的形状：
+ * 新增与修改同一个根端点（POST /poc/replace-table-config，body 带 id 即更新）、
+ * 启停 POST /poc/replace-table-config/status 且参数走 **query**（旧 changeConfigStatus 用的是 axios params，
+ * 同选表规则配置，与 chat-flow-step / data-index-config 那几个 body 传参的域不同）。
+ * operations.copy=false —— 旧域没有 /copy；也**没有删除端点**（旧列表操作列只有「编辑」和「启用/禁用」），
+ * 所以不像 matchTableConfigApi 那样扩 remove。
+ * 分页的两个筛选都在 body：name（旧搜索框标签「表名称」，实测按 tableName 模糊筛、大小写敏感）/ status
+ * （⚠️ 与选表规则配置不同，本域后端**认**这个条件，2026-10-15 在 186 实测）。
+ */
+export const replaceTableConfigApi: TemplateCrudApi<ReplaceTableConfig> = createTemplateCrudApi<ReplaceTableConfig>({
+  module: 'replace-table-config',
+  operations: { copy: false },
+})
+
+/** 实体改写配置的接口面：通用 CRUD 面 + 删除（本域没有复制） */
+export interface EntityRewriteConfigApi extends TemplateCrudApi<EntityRewriteConfig> {
+  /** 删除（POST /poc/entity-rewrite-config/delete，⚠️ id 走 **query**，旧 deleteConfig 用的是 axios params） */
+  remove(id: number): Promise<Ack>
+}
+
+/**
+ * 实体改写管理（1015 迁入「基础配置」，旧「基础配置 → 实体改写管理」src/demo/EntityRewriteConfigList.vue +
+ * modal/EntityRewriteConfigEditor.vue，旧接口 src/demoApi/EntityRewriteConfigApi.js:4-7）。
+ *
+ * 走 createTemplateCrudApi 工厂，形状与选表规则配置一字不差：
+ * 新增与修改是**同一个根端点**（POST /poc/entity-rewrite-config，body 带 id 即更新，旧 editor 函数一个端点两用）、
+ * 启停 POST /poc/entity-rewrite-config/status 且参数走 **query**（旧 changeConfigStatus 用的是 axios params，
+ * 与 chat-flow-step / data-index-config 那几个 body 传参的域不同）。
+ * operations.copy=false —— 旧域没有 /copy；删除按 question-dic / 选表规则配置的先例扩一个 remove（旧 deleteConfig 只发 id）。
+ * 分页的两个筛选都在 body：entityName（旧搜索框上送的就是这个参数名，**不像另两个基础配置域改名成 name**）/ status。
+ * ⚠️ 四条端点都还没在 186 实测（这一页在 186 后端上回 500，见 endpoints.ts 的 poc/entity-rewrite-config），
+ * 未标 live，后端打通后逐条复核（同 vector-config 先例）。
+ */
+export const entityRewriteConfigApi: EntityRewriteConfigApi = {
+  ...createTemplateCrudApi<EntityRewriteConfig>({ module: 'entity-rewrite-config', operations: { copy: false } }),
+  remove: (id: number) =>
+    request<Ack>('poc/entity-rewrite-config/delete', { id }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/entity-rewrite-config/delete` }),
 }
 
 /** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */

@@ -78,8 +78,8 @@ import {
   WarningFilled,
   DataAnalysis,
   View,
-  EditPen,
   DocumentCopy,
+  Edit
 } from '@element-plus/icons-vue'
 import {
   changeDatasetEnable,
@@ -609,7 +609,7 @@ onMounted(() => {
               <span class="ids-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
             </el-tooltip>
             <el-tooltip content="编辑" placement="top">
-              <span class="ids-op-icon" @click="openEdit(row)"><el-icon :size="15"><EditPen /></el-icon></span>
+              <span class="ids-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
             </el-tooltip>
             <el-tooltip content="制作副本" placement="top">
               <span class="ids-op-icon" @click="onRowCommand('copy', row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
@@ -734,7 +734,7 @@ onMounted(() => {
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: var(--rc-primary, #2563eb);
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
 }
@@ -766,6 +766,7 @@ onMounted(() => {
 .ids-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 .ids-pager {
@@ -774,3 +775,4 @@ onMounted(() => {
   padding: 8px 0 2px;
 }
 </style>
+

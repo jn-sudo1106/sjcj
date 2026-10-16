@@ -91,6 +91,26 @@ import {
 } from './dataset'
 import {
   mockPocDatabaseEntryList,
+  mockPocDatabaseTableInfo,
+  mockPocDatabaseConfigSave,
+  mockPocVectorConfigList,
+  mockPocVectorDataQuery,
+  mockVectorConfigPaged,
+  mockVectorConfigSave,
+  mockVectorMappingInfo,
+  mockVectorConfigSync,
+  mockVectorConfigDelete,
+  mockMatchTableConfigPaged,
+  mockMatchTableConfigSave,
+  mockMatchTableConfigChangeStatus,
+  mockMatchTableConfigDelete,
+  mockReplaceTableConfigPaged,
+  mockReplaceTableConfigSave,
+  mockReplaceTableConfigChangeStatus,
+  mockEntityRewriteConfigPaged,
+  mockEntityRewriteConfigSave,
+  mockEntityRewriteConfigChangeStatus,
+  mockEntityRewriteConfigDelete,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
@@ -424,6 +444,45 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/question-temp/status': mockTableTemplateChangeStatus,
   // 表模板「使用表范围」下拉的数据表选项
   'poc/database/entry-list': mockPocDatabaseEntryList,
+  // 表字段管理（1015 迁入「基础配置」）：字段列表 + 整表覆盖保存，与 entry-list 同一张内存表
+  'poc/database/table-info': mockPocDatabaseTableInfo,
+  'poc/database/config': mockPocDatabaseConfigSave,
+
+  // 向量表（1015 迁入「基础配置」）：数据浏览两条只读 + 向量表管理五条（分页/保存/列映射/同步/删除），
+  // 浏览下拉与管理列表共用 VECTOR_TABLES 一张内存表（管理页增删改会同步影响浏览页的表名下拉）。
+  // 旧域里剩下的 data-match 是聊天侧 ChatTipsModal 用的，未迁。见 api/templateConfig.ts 的 vectorConfigApi。
+  'poc/vector/config/all': mockPocVectorConfigList,
+  'poc/vector/data': mockPocVectorDataQuery,
+  'poc/vector/config/page': mockVectorConfigPaged,
+  'poc/vector/config': mockVectorConfigSave,
+  'poc/vector/mapping/info': mockVectorMappingInfo,
+  'poc/vector/sync': mockVectorConfigSync,
+  'poc/vector/delete': mockVectorConfigDelete,
+
+  // 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config）：
+  // 与 sql 模板同形态 —— 新增/编辑同一个根端点（带 id 即更新）+ status（**query** 传参）+ delete（**query** 只发 id）；
+  // 没有 copy（旧域没有该端点）。见 api/templateConfig.ts 的 matchTableConfigApi。
+  'poc/match-table-config/page': mockMatchTableConfigPaged,
+  'poc/match-table-config': mockMatchTableConfigSave,
+  'poc/match-table-config/status': mockMatchTableConfigChangeStatus,
+  'poc/match-table-config/delete': mockMatchTableConfigDelete,
+
+  // 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」，端点域 /poc/replace-table-config）：
+  // 比选表规则配置还少一个端点 —— 旧域只有 page / 根（新增与编辑同一个）/ status（**query** 传参），
+  // 没有 copy 也没有删除，所以这里只有三个 handler。见 api/templateConfig.ts 的 replaceTableConfigApi。
+  'poc/replace-table-config/page': mockReplaceTableConfigPaged,
+  'poc/replace-table-config': mockReplaceTableConfigSave,
+  'poc/replace-table-config/status': mockReplaceTableConfigChangeStatus,
+
+  // 实体改写管理（1015 迁入「基础配置」，旧「基础配置 → 实体改写管理」，端点域 /poc/entity-rewrite-config）：
+  // 端点形状与选表规则配置一字不差 —— page / 根（新增与编辑同一个，body 带 id 即更新）/ status（**query**）/ delete（**query** 只发 id），
+  // 没有 copy。差别在查询参数字段名：这一页上送的是 entityName（另两个域叫 name）。
+  // ⚠️ 四条端点在 186 后端上还没打通（分页回通用 500，见 api/endpoints.ts），未标 live，所以现在**只走 mock**；
+  // 这里的种子是按旧页面字段形状构造的示例，不是真实行。见 api/templateConfig.ts 的 entityRewriteConfigApi。
+  'poc/entity-rewrite-config/page': mockEntityRewriteConfigPaged,
+  'poc/entity-rewrite-config': mockEntityRewriteConfigSave,
+  'poc/entity-rewrite-config/status': mockEntityRewriteConfigChangeStatus,
+  'poc/entity-rewrite-config/delete': mockEntityRewriteConfigDelete,
 
   // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
   'poc/dic/page': mockDicTemplatePaged,

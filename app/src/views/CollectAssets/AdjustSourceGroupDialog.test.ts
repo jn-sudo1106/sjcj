@@ -22,9 +22,10 @@ async function settle() {
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 const dom = (sel: string) => document.querySelector(sel) as HTMLElement | null
 
-function mountDialog(overrides: { selectedSources?: Source[]; hasQueryFilter?: boolean; queryText?: string; query?: Record<string, unknown> } = {}) {
+function mountDialog(overrides: { selectedSources?: Source[]; hasQueryFilter?: boolean; queryText?: string; query?: Record<string, unknown>; rangeBlocked?: boolean } = {}) {
   return mount(AdjustSourceGroupDialog, {
     props: {
+      rangeBlocked: overrides.rangeBlocked,
       selectedSources: overrides.selectedSources ?? [],
       query: overrides.query ?? {},
       hasQueryFilter: overrides.hasQueryFilter ?? false,
@@ -128,7 +129,7 @@ describe('调整来源组弹窗', () => {
   })
 
   it('连生产时「按筛选范围」置灰，不勾选也不会走 changeMembersByRange', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     const changeMembersByRange = vi.spyOn(sourceGroupApi, 'changeMembersByRange')
     const wrapper = mountDialog({ hasQueryFilter: true, query: { sourceGroupId: '1' } })
     await settle()
@@ -141,5 +142,19 @@ describe('调整来源组弹窗', () => {
     expect(changeMembersByRange).not.toHaveBeenCalled()
     wrapper.unmount()
     vi.unstubAllEnvs()
+  })
+
+  // 10-15「我的视图」目录按 viewCategoryId 查源：changeMembersByRange 不认这个条件，按范围调整会变成不限（无筛选时还带 confirmAll）
+  it('我的视图目录范围：「按筛选范围」置灰，不会走 changeMembersByRange', async () => {
+    const changeMembersByRange = vi.spyOn(sourceGroupApi, 'changeMembersByRange')
+    const wrapper = mountDialog({ rangeBlocked: true, query: { viewCategoryId: '9009400' } })
+    await settle()
+    const rangeRadio = [...document.querySelectorAll<HTMLInputElement>('.asg-mode input[type="radio"]')].find((i) => i.value === 'range')
+    expect(rangeRadio?.disabled).toBe(true)
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '3')
+    await settle()
+    expect((dom('[data-testid="asg-submit"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(changeMembersByRange).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

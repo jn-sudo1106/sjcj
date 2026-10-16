@@ -26,6 +26,9 @@ export const TABS: TabMeta[] = [
   { key: 'tasks', path: '/tasks', label: '任务中心', desc: '全局任务查询、详情与重发', group: 'tools' },
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
+  // 问数配置 → 基础配置（1015 迁入，旧 ai-chat-view「基础配置」组 /demo/entity-build + /demo/vector-data）：
+  // 侧栏排在「模板配置」之前，子模块（表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理、实体改写管理）在页内以 tab 呈现（见 BASE_CONFIG_TABS 与 views/TemplateConfig/BaseConfig/index.vue）。
+  { key: 'base-config', path: '/base-config', label: '基础配置', desc: '表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理、实体改写管理（旧 ai-chat-view「基础配置」域）', group: 'template' },
   // 问数配置 → 模板配置（1014 起从旧 ai-chat-view「模板配置」域迁入的 8 个子模块，1014 迁完）。
   // 侧栏只放这一个入口，8 个子模块在页内以 tab 呈现（见 TemplateConfigTabMeta 与 views/TemplateConfig/index.vue）。
   { key: 'template-config', path: '/template-config', label: '模板配置', desc: 'SQL / 表 / 自动补全 / 问句改写 / 数据索引 / 数据字典 / 提示词 / 分词 八类问数模板配置', group: 'template' },
@@ -82,5 +85,26 @@ export const TEMPLATE_CONFIG_TABS: TemplateConfigTabMeta[] = [
 export const SYSTEM_CONFIG_TABS: TemplateConfigTabMeta[] = [
   { key: 'param-config', label: '参数设置', desc: '', permission: 'param-config' },
   { key: 'page-config', label: '页面配置', desc: '', permission: 'page-config' },
+]
+
+/**
+ * 基础配置页内的子模块（1015 从旧 ai-chat-view「基础配置」组迁入，落在问数配置组「模板配置」之前）。
+ * 口径同 TEMPLATE_CONFIG_TABS / SYSTEM_CONFIG_TABS：不进 TABS、侧栏只到「基础配置」一个入口，子模块以页内 tab 呈现
+ * （容器见 views/TemplateConfig/BaseConfig/index.vue）。
+ * key 与端点域对应：entity-config → /poc/database/*（旧路由 /demo/entity-build，表头 entityType + 字段 entityItems 整表保存）；
+ * vector-data → /poc/vector/*（旧路由 /demo/vector-data，只读浏览）；
+ * match-table-config → /poc/match-table-config/*（旧路由 /demo/match-table-config-list，一条规则 = 一张表的选表方式）；
+ * vector-config → /poc/vector/config*（旧路由 /config/vector-list，向量表管理：配置 + 列映射 + 同步/删除）；
+ * replace-table-config → /poc/replace-table-config/*（旧路由 /demo/replace-table-config-list，一条 = 一张表整体换成另一张表）；
+ * entity-rewrite-config → /poc/entity-rewrite-config/*（旧路由 /demo/entity-rewrite-config-list，一条 = 一个实体词的改写规则）。
+ * 顺序照旧侧栏（表字段管理 → 向量表数据浏览 → 选表规则配置 → 向量表管理 → 表改写管理 → 实体改写管理），BASE_CONFIG_TABS[0] 是无 ?tab= 时的默认。
+ */
+export const BASE_CONFIG_TABS: TemplateConfigTabMeta[] = [
+  { key: 'entity-config', label: '表字段管理', desc: '', permission: 'entity-config' },
+  { key: 'vector-data', label: '向量表数据浏览', desc: '', permission: 'vector-data' },
+  { key: 'match-table-config', label: '选表规则配置', desc: '', permission: 'match-table-config' },
+  { key: 'vector-config', label: '向量表管理', desc: '', permission: 'vector-config' },
+  { key: 'replace-table-config', label: '表改写管理', desc: '', permission: 'replace-table-config' },
+  { key: 'entity-rewrite-config', label: '实体改写管理', desc: '', permission: 'entity-rewrite-config' },
 ]
 

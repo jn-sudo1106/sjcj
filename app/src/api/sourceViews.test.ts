@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 // 「我的视图」存取：本机兜底实现 + 真实接口（开发环境联调口径）+ 接口不存在时自动退回本机 + 导入本机视图。
-// 2026-10-13 目录版；10-14 真实接口下目录 = 带 rootViewId 的分类、源 = listSources / changeSources（整份覆盖），
-// 来源组 / 排除暂存 queryJson（v3）；本机兜底照旧整棵树存本机，1012 的条件 / 手选清单视图读到时自动转换。
+// 2026-10-13 目录版；10-14 真实接口下目录 = 带 rootViewId 的分类、源和来源组 = listSources 读 + addSources / delSources 增量写（V3），
+// 排除暂存 queryJson（v3）；本机兜底照旧整棵树存本机，1012 的条件 / 手选清单视图读到时自动转换。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const requestMock = vi.hoisted(() => vi.fn())
 vi.mock('./client', () => ({ request: requestMock }))
+/** 来源组的当前成员（假后端展开 / 删组、前端减掉组成员都用这一份） */
+const groupMembers = vi.hoisted(() => ({ 3: ['501', '502'] } as Record<string, string[]>))
+vi.mock('@/views/CollectAssets/groupMembers', () => ({
+  loadGroupMembers: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, groupMembers[id] ?? []])),
+}))
 
 import {
   SOURCE_VIEW_LIMIT,
@@ -90,8 +95,8 @@ describe('本机实现（接口没上线时的兜底，校验口径同后端）'
 })
 
 describe('视图 ↔ 后端两段 JSON', () => {
-  it('真实接口的 queryJson 只放目录上的来源组 / 排除（v3，按分类 ID）；旧的整棵树（测试数据，不迁移）当空', () => {
-    expect(extrasFromJson(JSON.stringify({ v: 3, dirs: { 9: { groups: ['3', '3'], excluded: [] }, 10: { groups: [], excluded: [] } } }))).toEqual({ 9: { groups: ['3'], excluded: [] } })
+  it('真实接口的 queryJson 只放目录上的排除（v3，按分类 ID）；旧的整棵树（测试数据，不迁移）当空', () => {
+    expect(extrasFromJson(JSON.stringify({ v: 3, dirs: { 9: { groups: ['3'], excluded: ['5', '5'] }, 10: { excluded: [] } } }))).toEqual({ 9: { excluded: ['5'] } })
     expect(extrasFromJson(JSON.stringify({ v: 2, root: { sources: ['1'] }, dirs: [] }))).toEqual({})
     expect(extrasFromJson('不是 JSON')).toEqual({})
   })
@@ -111,16 +116,20 @@ const row = (over: Record<string, unknown> = {}) => ({
 })
 
 /**
- * 假后端：分类表（带 rootViewId）+ 分类—源关系表 + 视图表，按 10-14 接口口径应答。
- * category/add 不回 ID（口径未定），前端要按同级同名再查一次。
+ * 假后端：分类表（带 rootViewId）+ 分类—源关系表 + 视图表，按 10-15 V3 实测口径应答：
+ * category/add 不回 ID；addSources 带来源组时把当前成员展开成源行；delSources 带来源组时连当前成员的源行一起删。
  */
 function fakeBackend() {
   const cats: { id: string; name: string; parentId: string; rootViewId: string; seq: number }[] = []
-  const binds = new Map<string, string[]>()
+  const binds = new Map<string, Set<string>>()
+  const groupBinds = new Map<string, Set<string>>()
+  const of = (m: Map<string, Set<string>>, id: unknown) => { const k = String(id); if (!m.has(k)) m.set(k, new Set()); return m.get(k)! }
   let nextId = 9000
   const views = new Map<string, Record<string, unknown>>([['1', row()]])
   requestMock.mockImplementation(async (endpoint: string, _p: unknown, opts: { httpParams?: Record<string, unknown> }) => {
     const q = opts.httpParams ?? {}
+    const sourceIds = ((q.sourceIds ?? []) as number[]).map(String)
+    const groupIds = ((q.sourceGroupIds ?? []) as number[]).map(String)
     switch (endpoint) {
       case 'source-view/list': return [...views.values()]
       case 'source-view/add': { const v = row({ ...q, viewId: String(views.size + 1) }); views.set(String(v.viewId), v); return v }
@@ -130,23 +139,35 @@ function fakeBackend() {
       case 'category/add': cats.push({ id: String(nextId++), name: String(q.categoryName), parentId: String(q.parentId), rootViewId: String(q.rootViewId), seq: Number(q.seq ?? 0) }); return null
       case 'category/update': { const c = cats.find((x) => x.id === String(q.categoryId))!; if (q.categoryName) c.name = String(q.categoryName); if (q.parentId) c.parentId = String(q.parentId); return null }
       case 'category/delete': cats.splice(cats.findIndex((x) => x.id === String(q.id)), 1); return null
-      case 'category/listSources': return (binds.get(String(q.categoryId)) ?? []).map((sourceId, i) => ({ id: i + 1, sourceId: Number(sourceId), categoryId: Number(q.categoryId), state: 'ACTIVE' }))
-      case 'category/changeSources': binds.set(String(q.categoryId), (q.sourceIds as number[]).map(String)); return null
+      case 'category/listSources': return { sourceIds: [...of(binds, q.categoryId)].map(Number), sourceGroupIds: [...of(groupBinds, q.categoryId)].map(Number) }
+      case 'category/addSources': {
+        const rows = of(binds, q.categoryId)
+        const before = rows.size
+        for (const g of groupIds) { of(groupBinds, q.categoryId).add(g); for (const m of groupMembers[g] ?? []) rows.add(m) }
+        for (const id of sourceIds) rows.add(id)
+        return rows.size - before
+      }
+      case 'category/delSources': {
+        const rows = of(binds, q.categoryId)
+        for (const g of groupIds) { of(groupBinds, q.categoryId).delete(g); for (const m of groupMembers[g] ?? []) rows.delete(m) }
+        for (const id of sourceIds) rows.delete(id)
+        return null
+      }
       default: throw new Error(`没预料到的请求 ${endpoint}`)
     }
   })
-  return { cats, binds, views }
+  return { cats, binds, groupBinds, views }
 }
 const calls = (endpoint: string) => requestMock.mock.calls.filter(([e]) => e === endpoint).map(([, , o]) => o.httpParams as Record<string, unknown>)
 
 describe('真实接口（开发环境联调口径）', () => {
-  it('list：第一次调用探测成功后用真实接口；viewId 是字符串，revision 从 0；来源组 / 排除从 queryJson 读', async () => {
-    requestMock.mockResolvedValueOnce([row(), row({ viewId: '3', viewName: 'B', isDefault: 1, revision: 2, queryJson: JSON.stringify({ v: 3, dirs: { 9001: { groups: ['3'], excluded: [] } } }) })])
+  it('list：第一次调用探测成功后用真实接口；viewId 是字符串，revision 从 0；排除从 queryJson 读', async () => {
+    requestMock.mockResolvedValueOnce([row(), row({ viewId: '3', viewName: 'B', isDefault: 1, revision: 2, queryJson: JSON.stringify({ v: 3, dirs: { 9001: { excluded: ['7'] } } }) })])
     const views = await sourceViewApi.list('7')
     expect(sourceViewBackend()).toBe('remote')
     expect(requestMock).toHaveBeenCalledWith('source-view/list', {}, expect.objectContaining({ method: 'GET', httpEndpoint: 'source-view/list', mode: 'http' }))
     expect(views.map((v) => [v.viewId, v.viewName, v.isDefault, v.revision])).toEqual([['1', '联调', false, 0], ['3', 'B', true, 2]])
-    expect(views[1].dirExtras).toEqual({ 9001: { groups: ['3'], excluded: [] } })
+    expect(views[1].dirExtras).toEqual({ 9001: { excluded: ['7'] } })
   })
 
   it('add / update：queryJson、displayJson 传字符串，userId 不传，isDefault 传 0 / 1，update 只带改了的字段', async () => {
@@ -166,7 +187,7 @@ describe('真实接口（开发环境联调口径）', () => {
     expect(requestMock.mock.calls[2][2].httpParams).toEqual({ viewId: '1', revision: 1, isDefault: 1 })
   })
 
-  it('目录：一级 parentId=-1 带 rootViewId 新建（接口不回 ID 时按同级同名查回）；子目录挂到真实分类 ID 下；源用 changeSources 整份覆盖', async () => {
+  it('目录：一级 parentId=-1 带 rootViewId 新建（接口不回 ID 时按同级同名查回）；子目录挂到真实分类 ID 下；源按差量 addSources / delSources', async () => {
     const db = fakeBackend()
     const [view] = await sourceViewApi.list('7')
     const r = addDir(emptyTree(), null, '宏观')
@@ -179,8 +200,9 @@ describe('真实接口（开发环境联调口径）', () => {
       expect.objectContaining({ categoryName: '统计局', parentId: '9000', rootViewId: '1' }),
     ])
     expect(tree.dirs.map((d) => [d.id, d.name, d.parentId])).toEqual([['9000', '宏观', null], ['9001', '统计局', '9000']])
-    expect(calls('category/changeSources')).toEqual([{ categoryId: 9001, sourceIds: [430024679, 430024682] }])
-    expect(calls('source-view/update')).toEqual([]) // 没有来源组 / 排除，不动 queryJson
+    expect(calls('category/addSources')).toEqual([{ categoryId: 9001, sourceIds: [430024679, 430024682], sourceGroupIds: [] }])
+    expect(calls('category/delSources')).toEqual([])
+    expect(calls('source-view/update')).toEqual([]) // 没有排除，不动 queryJson
 
     // 读回来：逐层 categoryPaged（带 rootViewId）+ 每个目录 listSources
     expect(await sourceViewApi.loadTree('7', view)).toEqual({ v: 2, dirs: [
@@ -189,32 +211,90 @@ describe('真实接口（开发环境联调口径）', () => {
     ] })
     expect(calls('category/categoryPaged').every((q) => q.rootViewId === '1')).toBe(true)
 
-    // 改名走 update；移出源整份覆盖（含传空）
+    // 改名走 update；移出一个、加一个：只发差量
     requestMock.mockClear()
     const renamed = renameDir(tree, '9001', '国家统计局')
-    const emptied = { ...renamed, dirs: renamed.dirs.map((d) => (d.id === '9001' ? { ...d, sources: [] } : d)) }
-    await sourceViewApi.saveTree('7', view, tree, emptied)
+    const changed = { ...renamed, dirs: renamed.dirs.map((d) => (d.id === '9001' ? { ...d, sources: ['430024682', '430024683'] } : d)) }
+    await sourceViewApi.saveTree('7', view, tree, changed)
     expect(calls('category/update')).toEqual([{ categoryId: '9001', rootViewId: '1', categoryName: '国家统计局' }])
-    expect(calls('category/changeSources')).toEqual([{ categoryId: 9001, sourceIds: [] }])
-    expect(db.binds.get('9001')).toEqual([])
+    expect(calls('category/delSources')).toEqual([{ categoryId: 9001, sourceIds: [430024679], sourceGroupIds: [] }])
+    expect(calls('category/addSources')).toEqual([{ categoryId: 9001, sourceIds: [430024683], sourceGroupIds: [] }])
+    expect([...db.binds.get('9001')!]).toEqual(['430024682', '430024683'])
   })
 
-  it('删目录：子目录一起删，先清源关系、深的先删；来源组 / 排除写 queryJson（带 revision）', async () => {
+  it('来源组：加组单独一次请求；读回时减掉后端展开的组成员；排除写 queryJson（带 revision）；删目录：子目录一起删，先清关联、深的先删', async () => {
     const db = fakeBackend()
     const [view] = await sourceViewApi.list('7')
     const a = addDir(emptyTree(), null, '宏观')
     const b = addDir(a.tree, a.id, '统计局')
-    const withGroup = bindGroup(addSources(b.tree, b.id, ['1']), a.id, '3')
-    const saved = await sourceViewApi.saveTree('7', view, emptyTree(), withGroup)
+    const withGroup = bindGroup(addSources(addSources(b.tree, b.id, ['1']), a.id, ['77']), a.id, '3')
+    const first = await sourceViewApi.saveTree('7', view, emptyTree(), withGroup)
+    expect(calls('category/addSources')).toEqual([
+      { categoryId: 9000, sourceIds: [], sourceGroupIds: [3] },
+      { categoryId: 9000, sourceIds: [77], sourceGroupIds: [] },
+      { categoryId: 9001, sourceIds: [1], sourceGroupIds: [] },
+    ])
+    expect(calls('source-view/update')).toEqual([])
+    expect([...db.binds.get('9000')!].sort()).toEqual(['501', '502', '77'].sort()) // 后端把组成员展开成了源行
+    const reread = await sourceViewApi.loadTree('7', first.view)
+    expect(reread.dirs[0]).toMatchObject({ groups: ['3'], sources: ['77'] }) // 展开的成员不算单独添加
+
+    const excluded = { ...first.tree, dirs: first.tree.dirs.map((d) => (d.id === '9000' ? { ...d, excluded: ['502'] } : d)) }
+    const saved = await sourceViewApi.saveTree('7', first.view, first.tree, excluded)
     expect(calls('source-view/update')).toEqual([expect.objectContaining({ viewId: '1', revision: 0 })])
-    expect(JSON.parse(String(calls('source-view/update')[0].queryJson))).toEqual({ v: 3, dirs: { 9000: { groups: ['3'], excluded: [] } } })
+    expect(JSON.parse(String(calls('source-view/update')[0].queryJson))).toEqual({ v: 3, dirs: { 9000: { excluded: ['502'] } } })
 
     requestMock.mockClear()
     await sourceViewApi.saveTree('7', saved.view, saved.tree, deleteDir(saved.tree, '9000'))
     const order = requestMock.mock.calls.map(([e, , o]) => `${e}:${o.httpParams.categoryId ?? o.httpParams.id ?? ''}`)
-    expect(order).toEqual(['category/changeSources:9001', 'category/delete:9001', 'category/delete:9000', 'source-view/update:'])
+    // 先删组再删源，各自一次请求（同时传两类时后端只删一部分）
+    expect(order).toEqual(['category/delSources:9001', 'category/delete:9001', 'category/delSources:9000', 'category/delSources:9000', 'category/delete:9000', 'source-view/update:'])
+    expect(calls('category/delSources').slice(1)).toEqual([
+      { categoryId: 9000, sourceIds: [], sourceGroupIds: [3] },
+      { categoryId: 9000, sourceIds: [77], sourceGroupIds: [] },
+    ])
     expect(db.cats).toEqual([])
     expect(JSON.parse(String(calls('source-view/update')[0].queryJson))).toEqual({ v: 3, dirs: {} })
+  })
+
+  it('解绑来源组时后端会连当前成员的源行一起删：要保留的（单独添加、又是组成员）删组后补加回去', async () => {
+    const db = fakeBackend()
+    const [view] = await sourceViewApi.list('7')
+    const a = addDir(emptyTree(), null, '舆情')
+    const first = await sourceViewApi.saveTree('7', view, emptyTree(), bindGroup(addSources(a.tree, a.id, ['77']), a.id, '3'))
+    requestMock.mockClear()
+    const kept = { ...first.tree, dirs: first.tree.dirs.map((d) => ({ ...d, groups: [], sources: ['77', '501'] })) } // 解绑并保留 501
+    await sourceViewApi.saveTree('7', first.view, first.tree, kept)
+    expect(requestMock.mock.calls.map(([e, , o]) => `${e}:${JSON.stringify([o.httpParams.sourceIds, o.httpParams.sourceGroupIds])}`)).toEqual([
+      'category/delSources:[[],[3]]',
+      'category/addSources:[[501],[]]',
+    ])
+    expect([...db.binds.get('9000')!].sort()).toEqual(['501', '77'])
+  })
+
+  // 10-15 后端支持排除：从目录 delSources 掉组成员 = 排除（sourcePaged 不再带出），addSources 加回 = 恢复
+  it('排除 / 恢复同步到后端；解绑来源组时清掉的排除不加回去', async () => {
+    const db = fakeBackend()
+    const [view] = await sourceViewApi.list('7')
+    const a = addDir(emptyTree(), null, '舆情')
+    const first = await sourceViewApi.saveTree('7', view, emptyTree(), bindGroup(a.tree, a.id, '3'))
+    const withEx = (t: ViewTree, ex: string[]) => ({ ...t, dirs: t.dirs.map((d) => ({ ...d, excluded: ex })) })
+
+    requestMock.mockClear()
+    const ex = await sourceViewApi.saveTree('7', first.view, first.tree, withEx(first.tree, ['502']))
+    expect(calls('category/delSources')).toEqual([{ categoryId: 9000, sourceIds: [502], sourceGroupIds: [] }])
+    expect([...db.binds.get('9000')!]).toEqual(['501'])
+
+    requestMock.mockClear()
+    const back = await sourceViewApi.saveTree('7', ex.view, ex.tree, withEx(ex.tree, []))
+    expect(calls('category/addSources')).toEqual([{ categoryId: 9000, sourceIds: [502], sourceGroupIds: [] }])
+
+    requestMock.mockClear()
+    const ex2 = await sourceViewApi.saveTree('7', back.view, back.tree, withEx(back.tree, ['502']))
+    requestMock.mockClear()
+    await sourceViewApi.saveTree('7', ex2.view, ex2.tree, { ...ex2.tree, dirs: ex2.tree.dirs.map((d) => ({ ...d, groups: [], excluded: [] })) })
+    expect(calls('category/delSources')).toEqual([{ categoryId: 9000, sourceIds: [], sourceGroupIds: [3] }])
+    expect(calls('category/addSources')).toEqual([])
   })
 
   it('删视图：先删它的目录和源关系，再删视图', async () => {
@@ -224,7 +304,7 @@ describe('真实接口（开发环境联调口径）', () => {
     requestMock.mockClear()
     await sourceViewApi.remove('7', view as SourceView)
     expect(requestMock.mock.calls.map(([e]) => e).filter((e) => e !== 'category/categoryPaged' && e !== 'category/listSources'))
-      .toEqual(['category/changeSources', 'category/delete', 'source-view/delete'])
+      .toEqual(['category/delSources', 'category/delete', 'source-view/delete'])
     expect(db.cats).toEqual([])
     expect(db.views.size).toBe(0)
   })
@@ -272,7 +352,7 @@ describe('接口上线后导入本机视图', () => {
     expect(result).toEqual({ imported: 2, failed: [] })
     expect(calls('source-view/add').map((b) => b.viewName)).toEqual(['联调（本机）', '失败源'])
     expect(db.cats).toEqual([expect.objectContaining({ name: 'A', parentId: '-1', rootViewId: '2' })])
-    expect(db.binds.get(db.cats[0].id)).toEqual(['1'])
+    expect([...db.binds.get(db.cats[0].id)!]).toEqual(['1'])
     expect(localStorage.getItem(sourceViewStorageKey('7'))).toBeNull()
   })
 

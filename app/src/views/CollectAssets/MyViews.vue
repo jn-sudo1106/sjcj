@@ -5,14 +5,14 @@
  *
  * 一个视图 = 用户自建的一套目录（广发、浦发各一套），只有自己能看到。左边：视图下拉 + 目录树；
  * 右边：选中目录里的源（10-14 定：没有根目录、父目录不汇总子目录），复用源列表 `SourceOverviewView`（`scopeSourceIds` 传算好的源 ID）。
- * 目录里可以放单个源，也可以绑定来源组（组成员现拉，跟着组走）；随组带入的源可单独移出（排除，可恢复）。
+ * 目录里可以放单个源，也可以绑定来源组（组里新加的源自动带进来；移出组的源留在目录里，10-15 确认）；随组带入的源可单独移出（排除，可恢复）。
  * 每次修改立即保存（真实接口：目录走分类接口、源走 changeSources，见 api/sourceViews.ts）。数据模型与操作见 viewDirs.ts。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onActivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Edit, MoreFilled, Plus, Refresh, Setting, Star } from '@element-plus/icons-vue'
-import { sourceGroupApi, type Source } from '@/api'
+import { sourceApi, sourceGroupApi, type Source } from '@/api'
 import { defaultDisplay, sourceViewApi, sourceViewBackend, type SourceView, type SourceViewBackend, type ViewDisplay } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
@@ -73,6 +73,13 @@ watch(() => boundGroups(tree.value).join(','), () => void loadMembers())
 
 // ---- 派生 ----
 const scopeIds = computed(() => resolveIds(tree.value, selectedDir.value, members.value))
+/** 每次保存成功加 1：按 viewCategoryId 查时参数不变，靠它让源列表重查 */
+const scopeVersion = ref(0)
+/**
+ * 真实接口下按目录让后端查（sourcePaged 的 viewCategoryId = 目录里的源 ∪ 来源组当前成员 − 排除），不再拼源 ID。
+ * 本机兜底没有分类 ID，传前端算好的源 ID。
+ */
+const viewCategoryScope = computed(() => (backend.value === 'remote' && selectedDir.value ? selectedDir.value : undefined))
 const counts = computed(() => {
   const out: Record<string, number> = {}
   for (const d of tree.value.dirs) out[d.id] = resolveIds(tree.value, d.id, members.value).length
@@ -94,8 +101,10 @@ const viaGroup = (sourceId: string) => {
 }
 
 /** 源列表的显示设置（隐藏列 / 排序 / 每页条数）随视图保存；条件栏是临时筛选，不存 */
+// 保存目录后视图对象会换新，但显示设置没变：经字符串中转，内容不变就不给源列表新对象，免得它再重查一次
+const displayKey = computed(() => JSON.stringify(active.value?.display ?? defaultDisplay()))
 const listState = computed<SourceListViewState>(() => {
-  const d = active.value?.display ?? defaultDisplay()
+  const d = JSON.parse(displayKey.value) as ViewDisplay
   return { ...blankSourceListViewState(), hiddenColumns: d.hiddenColumns, sortField: d.sortField, sortDirection: d.sortDirection, pageSize: d.pageSize }
 })
 
@@ -134,10 +143,13 @@ async function loadTree() {
   treeError.value = ''
   if (!view) { tree.value = emptyTree(); selectedDir.value = ''; return }
   treeLoading.value = true
+  // 来源组成员可能在「我的分组」里改过：每次读目录都重新拉，不用上次的缓存
+  clearGroupMembersCache()
   try {
     const loaded = await sourceViewApi.loadTree(userId.value, view)
     if (activeId.value !== view.viewId) return
     tree.value = loaded
+    void loadMembers()
   } catch (e) {
     if (activeId.value !== view.viewId) return
     tree.value = emptyTree()
@@ -156,6 +168,7 @@ async function commit(next: ViewTree, done?: string): Promise<ViewTree | null> {
     const saved = await sourceViewApi.saveTree(userId.value, view, tree.value, next)
     views.value = views.value.map((v) => (v.viewId === saved.view.viewId ? saved.view : v))
     tree.value = saved.tree
+    scopeVersion.value += 1
     if (done) ElMessage.success(done)
     return saved.tree
   } catch (e) {
@@ -291,15 +304,54 @@ async function onPick(ids: string[]) {
   if (next) await commit(next, `已添加 ${ids.filter((id) => !before.has(id)).length} 个源到「${targetLabel.value}」`)
 }
 async function onBindGroup(groupId: string) {
-  await commit(bindGroup(tree.value, selectedDir.value, groupId), `已绑定来源组「${groupName(groupId)}」，以后组里加减源这里跟着变`)
+  await commit(bindGroup(tree.value, selectedDir.value, groupId), `已绑定来源组「${groupName(groupId)}」，以后组里新加的源会自动出现在这里`)
 }
-async function unbind(groupId: string) {
+/** 解绑时提示里最多列出这么多个源名 */
+const UNBIND_LIST_MAX = 20
+/** 源 ID → 「名称（ID）」；查不到名称就只显示 ID */
+async function sourceLabels(ids: string[]): Promise<string[]> {
   try {
-    await ElMessageBox.confirm(`解绑来源组「${groupName(groupId)}」？它的源会从「${targetLabel.value}」里移出（单独添加的保留），来源组本身不受影响。`, '解绑来源组', { confirmButtonText: '解绑', cancelButtonText: '取消', type: 'warning' })
+    const { list } = await sourceApi.sourcePaged({ page: 1, size: ids.length, sourceIds: ids.join(',') })
+    const names = new Map(list.map((s) => [s.sourceId, s.name]))
+    return ids.map((id) => (names.get(id) ? `${names.get(id)}（${id}）` : id))
   } catch {
+    return ids
+  }
+}
+/**
+ * 解绑来源组（10-15 定）：组里当前的源会跟着从这个目录移出，先列出来问要不要保留；
+ * 保留的转成「单独添加」，以后不要了让用户自己移出。
+ */
+async function unbind(groupId: string) {
+  const c = container.value
+  const leaving = (members.value[groupId] ?? []).filter((id) => !c.excluded.includes(id) && !c.sources.includes(id))
+  const title = `解绑来源组「${groupName(groupId)}」`
+  if (!leaving.length) {
+    try {
+      await ElMessageBox.confirm(`解绑后来源组本身不受影响，「${targetLabel.value}」里单独添加的源保留。`, title, { confirmButtonText: '解绑', cancelButtonText: '取消', type: 'warning' })
+    } catch {
+      return
+    }
+    await commit(unbindGroup(tree.value, selectedDir.value, groupId, members.value), `已解绑来源组「${groupName(groupId)}」`)
     return
   }
-  await commit(unbindGroup(tree.value, selectedDir.value, groupId, members.value), `已解绑来源组「${groupName(groupId)}」`)
+  const labels = await sourceLabels(leaving.slice(0, UNBIND_LIST_MAX))
+  let keep: boolean
+  try {
+    // 弹窗渲染在组件外，scoped 样式管不到，列表样式写内联
+    await ElMessageBox.confirm(h('div', { 'data-testid': 'mv-unbind-list' }, [
+      h('p', { style: 'margin: 0' }, `解绑后，下面 ${leaving.length} 个随来源组带进来的源会从「${targetLabel.value}」移出（来源组本身不受影响）。要保留它们吗？保留的会转成单独添加，以后不要了可以自己移出。`),
+      h('ul', { style: 'max-height: 240px; overflow-y: auto; margin: 8px 0; padding-left: 18px; font-size: 12px' }, labels.map((l) => h('li', l))),
+      leaving.length > UNBIND_LIST_MAX ? h('p', { style: 'margin: 0; font-size: 12px' }, `…等共 ${leaving.length} 个`) : null,
+    ]), title, { confirmButtonText: '保留这些源', cancelButtonText: '一起移出', distinguishCancelAndClose: true, type: 'warning' })
+    keep = true
+  } catch (action) {
+    if (action !== 'cancel') return // 关掉弹窗 = 不解绑
+    keep = false
+  }
+  const unbound = unbindGroup(tree.value, selectedDir.value, groupId, members.value)
+  const next = tryTree(() => (keep ? addSources(unbound, selectedDir.value, leaving) : unbound))
+  if (next) await commit(next, keep ? `已解绑来源组「${groupName(groupId)}」，${leaving.length} 个源已保留为单独添加` : `已解绑来源组「${groupName(groupId)}」，移出 ${leaving.length} 个源`)
 }
 async function restore() {
   await commit(restoreExcluded(tree.value, selectedDir.value), '已恢复被排除的源')
@@ -378,6 +430,7 @@ function openSourceGroup(sourceGroupId: string) {
 }
 function refresh() {
   clearGroupMembersCache()
+  scopeVersion.value += 1
   void loadGroupNames()
   void load(activeId.value)
 }
@@ -391,6 +444,14 @@ watch(() => route.query.viewId, (id) => {
 onMounted(() => {
   void load()
   void loadGroupNames()
+})
+// 本页被 KeepAlive 缓存：从别的页面（如「我的分组」改了组成员）回来时重读，第一次激活和 onMounted 重复，跳过
+let activatedOnce = false
+onActivated(() => {
+  if (!activatedOnce) { activatedOnce = true; return }
+  scopeVersion.value += 1
+  void loadGroupNames()
+  void load(activeId.value)
 })
 </script>
 
@@ -455,7 +516,7 @@ onMounted(() => {
           <el-alert v-if="membersError" type="error" show-icon :closable="false" class="mv-alert" :title="membersError" />
           <div v-if="container.groups.length || container.excluded.length" class="mv-groups" data-testid="mv-group-bar">
             <span v-if="container.groups.length" class="mv-groups-label">这个目录绑定的来源组：</span>
-            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里的源会自动出现在这里；在「我的分组」里维护成员">
+            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里新加的源会自动出现在这里；移出组的源会留在这个目录里，不要了可以自己移出。在「我的分组」里维护成员">
               来源组 <b>{{ groupName(g) }}</b> · {{ (members[g] ?? []).filter((m) => !container.excluded.includes(m)).length }}/{{ (members[g] ?? []).length }} 个源
               <button type="button" title="解绑这个来源组" :aria-label="`解绑来源组 ${groupName(g)}`" data-testid="mv-unbind" @click="unbind(g)">×</button>
             </span>
@@ -468,7 +529,9 @@ onMounted(() => {
             current-site-id=""
             group-ops
             :view-state="listState"
-            :scope-source-ids="scopeIds"
+            :scope-view-category-id="viewCategoryScope"
+            :scope-version="scopeVersion"
+            :scope-source-ids="viewCategoryScope ? undefined : scopeIds"
             :scope-empty-text="'这个目录里还没有源，点右上「＋」添加'"
             extra-column-label="所在目录"
             @open-source="openSource"

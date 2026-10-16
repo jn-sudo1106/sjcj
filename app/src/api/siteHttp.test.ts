@@ -13,7 +13,7 @@ describe('网站读取 HTTP 契约', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.stubEnv('VITE_API_MODE', 'http')
     vi.stubEnv('VITE_API_BASE', '')
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', 'production')
     vi.resetModules()
   })
@@ -207,7 +207,7 @@ describe('网站读取 HTTP 契约', () => {
   // 而读取端点都已 live，画布必然卡在「正在加载源…」。必须当场拒绝而不是假装成功。
   it('已连生产后端但未开新建闸时，siteCreate 拒绝而不退回夹具', async () => {
     vi.stubEnv('VITE_API_MODE', 'mock')
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
     const { siteApi } = await import('./index')
 
