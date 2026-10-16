@@ -12,6 +12,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
+import { copyFlowErrorText } from '@/utils/flow/flowPublish'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
@@ -491,7 +492,7 @@ async function copyFlow(t: FlowRecord) {
     ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}${reuseConfigs ? '（节点复用原配置）' : ''}`)
     reportDetachResult(detach, '原流程')
   } catch (e) {
-    ElMessage.error(`复制流程失败：${(e as Error)?.message ?? String(e)}`)
+    ElMessage.error(copyFlowErrorText((e as Error)?.message ?? String(e)))
   } finally {
     copyingFlowId.value = ''
   }

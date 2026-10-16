@@ -68,10 +68,11 @@ describe('FlowSourcesDialog', () => {
     expect(states).toEqual(['出错', '正常', '正常', '正常', '正常'])
   })
 
-  it('启停列单独表达启停：停用给「禁用」并带 off 样式，启用给「启用」', async () => {
+  // 1016 评审（f807f18）：启停只读展示，用词与源管理列表一致（已停用）
+  it('启停列单独表达启停：停用给「已停用」并带 off 样式，启用给「启用」', async () => {
     const { wrapper } = await mountDialog([src('1', { disabled: true }), src('2')])
     const tags = wrapper.findAll('[data-testid="flow-source-enable-tag"]')
-    expect(tags[0].text()).toBe('禁用')
+    expect(tags[0].text()).toBe('已停用')
     expect(tags[0].classes()).toContain('off')
     expect(tags[1].text()).toBe('启用')
     expect(tags[1].classes()).not.toContain('off')
@@ -136,31 +137,15 @@ describe('FlowSourcesDialog', () => {
     expect(paged.mock.calls.length).toBe(before)
   })
 
-  // changeSourceEnableBatch 的第二个参数是**目标 disabled 态**（接口里再翻成 enable 的 0/1 反极性），
-  // 所以「停用的源点启用」传 false、「启用的源点点禁用」传 true。
-  it('启停：传目标 disabled 态（停用源点「启用」传 false，启用源点「禁用」传 true），并按新态提示', async () => {
+  // 1016 评审（f807f18）：这里切的是整个源，在流程弹窗里容易误解成只停本流程，启停统一走源管理列表；
+  // 「详情」与点源名重复，也去掉。操作列只剩解绑。
+  it('启停只读、不在这里切换；操作列只有解绑', async () => {
     const { wrapper } = await mountDialog([src('1', { disabled: true }), src('2')])
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    // message 留空 → 走组件自己的兜底文案，正好钉住「按新态提示」
-    const change = vi.spyOn(sourceApi, 'changeSourceEnableBatch').mockResolvedValue({ ok: true, message: '' })
-    const success = vi.spyOn(ElMessage, 'success')
-
-    const toggles = wrapper.findAll('[data-testid="flow-source-toggle-enable"]')
-    expect(toggles[0].text()).toBe('启用')
-    expect(toggles[1].text()).toBe('禁用')
-
-    await toggles[0].trigger('click')
-    await flushPromises()
-    expect(change).toHaveBeenLastCalledWith(['1'], false)
-    expect(success).toHaveBeenLastCalledWith(expect.stringContaining('启用'))
-
-    await toggles[1].trigger('click')
-    await flushPromises()
-    expect(change).toHaveBeenLastCalledWith(['2'], true)
-    expect(success).toHaveBeenLastCalledWith(expect.stringContaining('禁用'))
+    expect(wrapper.find('[data-testid="flow-source-toggle-enable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="flow-source-detail"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="flow-source-unbind"]')).toHaveLength(2)
   })
 
-  // 源视图锁死在单网站内（0812 纠偏），而一个流程的关联源可能跨网站 → 不聚合，降级成提示
   it('「在源视图中查看全部」：同网站带 flowId 跳转，跨网站只提示不跳', async () => {
     const single = await mountDialog([
       src('1', { siteId: 'site-a', flowId: 'flow-1' }),

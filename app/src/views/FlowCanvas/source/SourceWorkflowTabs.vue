@@ -9,6 +9,7 @@ import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
+import { copyFlowErrorText } from '@/utils/flow/flowPublish'
 import FlowVersionBar from '../canvas/FlowVersionBar.vue'
 
 const props = defineProps<{ sourceId: string }>()
@@ -183,7 +184,7 @@ async function copyExisting(sourceFlow: FlowRecord) {
     await finishCreate(copied.flowId)
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
-    ElMessage.error(`复制流程失败：${(error as Error)?.message ?? String(error)}`)
+    ElMessage.error(copyFlowErrorText((error as Error)?.message ?? String(error)))
   } finally {
     adding.value = false
   }

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import ReplaceFlowDialog from './ReplaceFlowDialog.vue'
-import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { flowCenterApi, flowVersionApi, sourceApi, type FlowRecord } from '@/api'
 
 class ResizeObserverStub {
   observe() {}
@@ -17,6 +17,8 @@ const flowOf = (id: string, name: string, extra: Partial<FlowRecord> = {}) =>
   ({ id, name, updatedAt: '', definition: { main: [], branches: [], configs: {}, branchGroups: [] }, ...extra }) as FlowRecord
 
 async function mountDialog(list: FlowRecord[], currentFlowId = 'cur') {
+  // 1016：复制类用途选中即查发布版本；默认都已发布
+  vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: '1', draftId: null } as never)
   const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: list.length, list })
   const wrapper = mount(ReplaceFlowDialog, {
     props: { modelValue: true, currentFlowId },
@@ -106,5 +108,21 @@ describe('ReplaceFlowDialog', () => {
     expect(confirm.disabled).toBe(false)
     confirm.click()
     expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ id: '2' })
+  })
+
+  // 1016：后端复制取发布版本，只有草稿的流程（复制品本身就是）复制必然失败——选中就查，提前拦下
+  it('复制类用途：选中只有草稿的流程，说明原因并禁用确认；关联用途不查', async () => {
+    const { wrapper } = await mountDialog([flowOf('2', '只有草稿')])
+    vi.mocked(flowVersionApi.overview).mockResolvedValue({ publishId: null, draftId: '9' } as never)
+    ;(document.body.querySelectorAll('.el-table__body tr')[0] as HTMLElement).click()
+    await flushPromises()
+    expect(q('[data-testid="replace-flow-unpublished"]').textContent).toContain('还没有发布版本')
+    expect((q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement).disabled).toBe(true)
+
+    await wrapper.setProps({ purpose: 'bind' })
+    vi.mocked(flowVersionApi.overview).mockClear()
+    ;(document.body.querySelectorAll('.el-table__body tr')[0] as HTMLElement).click()
+    await flushPromises()
+    expect(flowVersionApi.overview).not.toHaveBeenCalled()
   })
 })

@@ -888,6 +888,10 @@ describe('流程中心 · 新建流程表单（Z7-5）', () => {
 // 0903 Y8-D 流程模板管理（H24）。模板是流程的一个**属性**（cs_flow.templateFlag），
 // 不是另一类对象——不复活 FlowTemplate 那个死页面，模板和普通流程同一张表用筛选区分。
 describe('流程中心 · 流程模板（Y8-D）', () => {
+  // 1016：复制后去共享会先查草稿（overview）；不桩的话走 mock 120ms 延迟，flushPromises 等不到
+  beforeEach(() => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '1', draftId: null, versions: [] })
+  })
   it('范围下拉走服务端过滤（flowPaged.onlyTemplate），不是本地筛', async () => {
     const w = await mountCenter()
     const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
