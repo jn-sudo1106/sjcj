@@ -55,6 +55,18 @@ function mountPage() {
   })
 }
 
+/** 操作列图标：每行只有「编辑」 */
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('.cfs-op-icon')[0]!
+}
+/** 行内图标的文案（已图标化，文案在 el-tooltip 的 content 上） */
+function opIconContents(wrapper: ReturnType<typeof mountPage>) {
+  return wrapper
+    .findAllComponents({ name: 'ElTooltip' })
+    .filter((t) => t.find('.cfs-op-icon').exists())
+    .map((t) => (t.props() as { content?: string }).content)
+}
+
 function lastPageQuery() {
   const calls = vi.mocked(chatFlowStepApi.page).mock.calls
   return (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>
@@ -129,8 +141,9 @@ describe('ChatFlowStepPage', () => {
     await flushPromises()
 
     const firstRow = wrapper.findAll('.el-table__body-wrapper tbody tr')[0]!
-    const links = firstRow.findAll('.cfs-op-link').map((l) => l.text())
-    expect(links).toEqual(['编辑'])
+    const links = firstRow.findAll('.cfs-op-icon')
+    expect(links.length).toBe(1)
+    expect(opIconContents(wrapper)).toEqual(['编辑', '编辑'])
   })
 
   it('模板定义等长字段直接进列，null 渲染成空而不是 "null"', async () => {
@@ -152,7 +165,7 @@ describe('ChatFlowStepPage', () => {
     await wrapper.findAll('.cfs-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await wrapper.findAll('.cfs-op-link').find((l) => l.text() === '编辑')!.trigger('click')
+    await editIcon(wrapper).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 11, stepCode: 'sql_generate', retryCount: 3 })
   })
 

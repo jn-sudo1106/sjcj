@@ -3,7 +3,7 @@
 // 这一层后面要被 7 个模板模块复用，所以钉的是「每个操作调到了哪条接口、带了什么参数」——
 // 复用的是壳，接口与列由调用方注入，壳一旦接错就会 8 个模块一起错。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { h } from 'vue'
 import ElementPlus from 'element-plus'
 import TemplateListPage from './TemplateListPage.vue'
@@ -45,6 +45,15 @@ function makeApi() {
     changeStatus: vi.fn(async () => ({ ok: true, message: '请求成功' })),
     copy: vi.fn(async () => ({ ok: true, message: '请求成功' })),
   }
+}
+
+/** 行内操作图标：el-tooltip 的 content 就是原按钮文案（与指标/监控模块同一套定位方式） */
+function iconByTooltip(wrapper: VueWrapper, content: string) {
+  const tip = wrapper
+    .findAllComponents({ name: 'ElTooltip' })
+    .find((t: VueWrapper) => (t.props() as { content?: string }).content === content)
+  if (!tip) throw new Error(`找不到操作：${content}`)
+  return tip.find('.tc-op-icon')
 }
 
 function mountPage(api = makeApi()) {
@@ -131,8 +140,8 @@ describe('TemplateListPage', () => {
     await flushPromises()
     api.page.mockClear()
 
-    const copyLink = wrapper.findAll('.tc-op-link').find((l) => l.text() === '复制')!
-    await copyLink.trigger('click')
+    const copyIcon = iconByTooltip(wrapper, '复制')
+    await copyIcon.trigger('click')
     await flushPromises()
 
     expect(api.copy).toHaveBeenCalledWith(36)
@@ -146,8 +155,8 @@ describe('TemplateListPage', () => {
     await wrapper.findAll('.tc-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith(null)
 
-    const editLink = wrapper.findAll('.tc-op-link').find((l) => l.text() === '编辑')!
-    await editLink.trigger('click')
+    const editIcon = iconByTooltip(wrapper, '编辑')
+    await editIcon.trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 36, name: '不校验' })
   })
 
