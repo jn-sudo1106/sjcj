@@ -8,6 +8,7 @@ import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceTab from './SourceTab.vue'
 import { beginSitesFetch, clearCollectAssetsCache, collectAssetsCache, commitSites } from './siteListCache'
 import { useUiStore } from '@/stores/ui'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { sourceApi, siteApi, favoriteApi } from '@/api'
 
 // 收藏以后端为准（B30）。这里用一个集合代替服务端：点星写进去，挂载时 loadFavoriteSites 从它读回来，
@@ -40,13 +41,14 @@ function makeRouter() {
   })
 }
 
-async function mountAt(query?: Record<string, string>, props?: { scope?: 'all' | 'favorite' | 'recent' }) {
+async function mountAt(query?: Record<string, string>, props?: { scope?: 'all' | 'favorite' | 'recent' }, dataHits?: string[]) {
   clearCollectAssetsCache()
   const router = makeRouter()
   await router.push({ path: '/collect', query })
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
+  if (dataHits) useWorkspaceStore().setDataQueryHits(dataHits)
   const wrapper = mount(SourceTab, { props, global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   await flushPromises()
@@ -763,3 +765,28 @@ describe('SourceTab · 删除网站（1014 右键卡片菜单）', () => {
   })
 })
 
+// 1016：数据中心「按条件查源」带过来的命中源
+describe('SourceTab 数据查询命中源', () => {
+  it('带 from=data-query 且 store 有名单：顶部显示命中数，源列表限定在这批源', async () => {
+    const { wrapper } = await mountAt({ tab: 'source', from: 'data-query' }, undefined, ['1', '2', '3'])
+    expect(wrapper.get('[data-testid="data-query-hits"]').text()).toContain('数据查询命中 3 个源')
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    expect(list.props('scopeSourceIds')).toEqual(['1', '2', '3'])
+    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).exists()).toBe(false)
+  })
+
+  it('点清除：清空名单、去掉 from，回到普通源管理', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'source', from: 'data-query' }, undefined, ['1'])
+    await wrapper.get('[data-testid="data-query-hits-clear"]').trigger('click')
+    await flushPromises()
+    expect(useWorkspaceStore().dataQueryHits).toBeNull()
+    expect(router.currentRoute.value.query).toEqual({ tab: 'source' })
+    expect(wrapper.find('[data-testid="data-query-hits"]').exists()).toBe(false)
+  })
+
+  it('刷新后 store 为空：忽略 from 标记，照常显示', async () => {
+    const { wrapper } = await mountAt({ tab: 'source', from: 'data-query' })
+    expect(wrapper.find('[data-testid="data-query-hits"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).exists()).toBe(true)
+  })
+})

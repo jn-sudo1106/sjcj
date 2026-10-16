@@ -9,6 +9,7 @@ import {
   type EntryType, type Source,
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
+import { useWorkspaceStore } from '../../stores/workspace'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import RowEditDialog from './RowEditDialog.vue'
@@ -281,6 +282,7 @@ function buildQuery(): RowQuery {
 }
 
 const router = useRouter()
+const workspace = useWorkspaceStore()
 // 「同步到其他环境」只在和同步服务同库的环境出现：别的环境带过去的表名，在同步服务的库里可能不存在，同名表搬的也是同步服务那边的数据
 const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
 const selectedRowKeys = ref<string[]>([])
@@ -450,12 +452,11 @@ async function onDistinctSource() {
   if (backTracing.value) return
   const f = panelFilter.value as Record<string, unknown>
   const hasCondition = !!(f.sql || f.state || f.dataId || f.parentId)
-  // 无条件 = 全部源（I01：「你不带条件就是查的所有的」），不必发请求。
-  // **落到采集资产而不是源视图**：源视图锁死在单个网站内（0812 纠偏），而数据查看页是
-  // 全平台的、没有网站锚点——`/canvas?view=source` 不带 siteId 会被路由兜底弹回 /collect，
-  // 与其靠这个意外，不如直接写明目的地。采集资产就是"所有源"该去的地方。
+  // 落点是源管理（采集资产源列表）：数据查看页是全平台的、没有网站锚点，源视图锁死在单个网站内。
+  // 命中源走 store 传（1016）：原来拼成 `/canvas?sourceIds=` 会被画布路由守卫弹回 /collect，名单整个丢了。
+  // 无条件 = 全部源（I01：「你不带条件就是查的所有的」）；但选了源就只带这个源，不必发请求。
   if (!hasCondition) {
-    void router.push({ path: '/collect' })
+    openSourceHits(sourceId.value ? [sourceId.value] : null)
     return
   }
   backTracing.value = true
@@ -465,12 +466,17 @@ async function onDistinctSource() {
       ElMessage.info('当前条件没有命中任何源')
       return
     }
-    void router.push({ path: '/canvas', query: { view: 'source', sourceIds: sourceIds.join(',') } })
+    openSourceHits(sourceIds)
   } catch (e) {
     ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
     backTracing.value = false
   }
+}
+
+function openSourceHits(sourceIds: string[] | null) {
+  workspace.setDataQueryHits(sourceIds)
+  void router.push(sourceIds ? { path: '/collect', query: { tab: 'source', from: 'data-query' } } : { path: '/collect' })
 }
 
 function onClearParent() {

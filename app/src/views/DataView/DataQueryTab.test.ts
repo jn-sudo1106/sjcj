@@ -7,6 +7,7 @@ import ElementPlus from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import { useAuthStore } from '../../stores/auth'
+import { useWorkspaceStore } from '../../stores/workspace'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { UserInfo } from '@/api/auth'
 import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
@@ -70,7 +71,10 @@ describe('数据中心 · 数据查询 tab', () => {
   async function mountPage(query: Record<string, string> = {}) {
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/data', component: { template: '<div />' } }],
+      routes: [
+        { path: '/data', component: { template: '<div />' } },
+        { path: '/collect', component: { template: '<div />' } },
+      ],
     })
     await router.push({ path: '/data', query })
     await router.isReady()
@@ -286,6 +290,45 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(btn.text()).toContain('查源')
   })
 
+
+  // 1016：原来跳 `/canvas?sourceIds=` 会被画布路由守卫弹回 /collect，命中源整个丢了；改成走 store 落到源管理
+  it('按条件查源：命中源写进 store，跳源管理并带 from=data-query', async () => {
+    await mountPage()
+    await waitForLoad()
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ CNT: 3, SOURCE_ID: '600519' }, { CNT: 1, SOURCE_ID: 'src-9' }] as never)
+    wrapper.findComponent({ name: 'DataQueryPanel' }).vm.$emit('query-change', { page: 1, size: 20, state: 'C' })
+    await flushPromises()
+    await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
+    await waitForLoad()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519', 'src-9'])
+    const route = (wrapper.vm as unknown as { $route: { path: string; query: Record<string, string> } }).$route
+    expect(route.path).toBe('/collect')
+    expect(route.query).toEqual({ tab: 'source', from: 'data-query' })
+  })
+
+  it('按条件查源：只选了源、没填条件时带上这个源，不发反查请求', async () => {
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    vi.mocked(dataApi.distinctSource).mockClear()
+    await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
+    await waitForLoad()
+    expect(dataApi.distinctSource).not.toHaveBeenCalled()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519'])
+    const route = (wrapper.vm as unknown as { $route: { query: Record<string, string> } }).$route
+    expect(route.query.from).toBe('data-query')
+  })
+
+  it('按条件查源：没选源也没条件时落到源管理全部源，不带命中名单', async () => {
+    await mountPage()
+    await waitForLoad()
+    useWorkspaceStore().setDataQueryHits(['old'])
+    await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
+    await waitForLoad()
+    expect(useWorkspaceStore().dataQueryHits).toBeNull()
+    const route = (wrapper.vm as unknown as { $route: { path: string; query: Record<string, string> } }).$route
+    expect(route.path).toBe('/collect')
+    expect(route.query.from).toBeUndefined()
+  })
 
   it('工具条按新增、导入、导出、更多与删除收敛，不显示夸张的危险操作按钮', async () => {
     const auth = useAuthStore()
