@@ -37,7 +37,8 @@ function itemByLabel(label: string): HTMLElement {
   )!
 }
 function fill(label: string, value: string) {
-  const input = itemByLabel(label).querySelector('input, textarea')!
+  // 泛型必须给：裸 querySelector 返回 Element，`!` 只去掉 null、不带来 `value`
+  const input = itemByLabel(label).querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')!
   input.value = value
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }

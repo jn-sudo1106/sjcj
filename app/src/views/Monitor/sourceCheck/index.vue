@@ -25,7 +25,9 @@ import CheckLogsDrawer from './CheckLogsDrawer.vue'
 
 defineOptions({ name: 'SourceCheck' })
 
-/** 嵌入形态：从源列表弹框打开时，固定 sourceId、隐藏源筛选 */
+/** 嵌入形态：外层弹窗包裹时用——只去掉卡片壳（边框 / 圆角），**筛选表单保持完整**。
+ *  旧平台 MonitorModal 里的 MonitorList 就是完整渲染的（在用 / 告警状态 / 源ID / 名称全在），
+ *  传进来的 sourceId 只是筛选与「加监控」的**初值**，用户仍可在「源ID」里改选。 */
 const props = withDefaults(defineProps<{ embedded?: boolean; sourceId?: string }>(), { embedded: false, sourceId: '' })
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求；与 TaskView 对齐）----
@@ -235,7 +237,7 @@ function onSourceChange() {
     <!-- 筛选表单（对齐旧项目 a-form layout="inline" + a-row 栅格） -->
     <el-form :inline="true" class="sc-filter-form">
       <el-row :gutter="8" class="sc-filter-row">
-        <el-col :md="4" :sm="24" v-if="!embedded">
+        <el-col :md="4" :sm="24">
           <el-form-item label="在用">
             <el-select v-model="form.enable" placeholder="全部" @change="runQuery">
               <el-option label="全部" value="" />
@@ -244,7 +246,7 @@ function onSourceChange() {
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :md="4" :sm="24" v-if="!embedded">
+        <el-col :md="4" :sm="24">
           <el-form-item label="告警状态">
             <el-select v-model="form.state" placeholder="全部" @change="runQuery">
               <el-option label="全部" value="" />
@@ -253,7 +255,7 @@ function onSourceChange() {
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :md="4" :sm="24" v-if="!embedded">
+        <el-col :md="4" :sm="24">
           <el-form-item label="源ID">
             <SourceSelect v-model="form.sourceId" @change="onSourceChange" />
           </el-form-item>
