@@ -13,7 +13,7 @@
 // 3. 「同步」不做二次确认（旧平台点即执行，且行为可重复执行、不破坏配置）；请求结果照旧文案提示。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Edit, Loading, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { dataIndexSyncApi } from '@/api/templateConfig'
 import type { DataIndexSync } from '@/api/types/template'
 import {
@@ -156,17 +156,24 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="120" fixed="right" align="center">
+      <el-table-column label="操作" width="90" fixed="right" align="center">
         <template #default="{ row }">
           <div class="dis-row-actions">
-            <span class="dis-op-link" @click="openEdit(row)">编辑</span>
-            <span class="dis-op-divider">|</span>
-            <span
-              class="dis-op-link"
-              :class="{ 'dis-op-link--pending': syncingIds.has(Number(row.id)) }"
-              @click="handleSync(row)"
-              >{{ syncingIds.has(Number(row.id)) ? '同步中' : '同步' }}</span
-            >
+            <el-tooltip content="编辑" placement="top">
+              <span class="dis-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip :content="syncingIds.has(Number(row.id)) ? '同步中' : '同步'" placement="top">
+              <span
+                class="dis-op-icon"
+                :class="{ 'dis-op-icon--pending': syncingIds.has(Number(row.id)) }"
+                @click="handleSync(row)"
+              >
+                <el-icon :size="15" :class="{ 'is-loading': syncingIds.has(Number(row.id)) }">
+                  <Loading v-if="syncingIds.has(Number(row.id))" />
+                  <Refresh v-else />
+                </el-icon>
+              </span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -212,25 +219,28 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.dis-op-link {
-  color: var(--rc-primary, #2563eb);
+.dis-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.dis-op-link:hover {
-  text-decoration: underline;
+.dis-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 /* 同步请求期间：置灰且不再发第二个请求（旧版连点会重复下发） */
-.dis-op-link--pending,
-.dis-op-link--pending:hover {
+.dis-op-icon--pending,
+.dis-op-icon--pending:hover {
   color: var(--rc-faint, #94a3b8);
+  background: transparent;
   cursor: not-allowed;
-  text-decoration: none;
-}
-.dis-op-divider {
-  color: var(--rc-faint, #94a3b8);
 }
 .dis-pager {
   display: flex;

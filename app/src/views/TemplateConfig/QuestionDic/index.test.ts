@@ -66,6 +66,17 @@ function searchButton(wrapper: ReturnType<typeof mountPage>) {
   return wrapper.findAll('.qd-filter-form button').find((b) => b.text().includes('搜索'))!
 }
 
+/** 行内操作图标：操作列已图标化，按 el-tooltip 的 content（原按钮文案）定位第 rowIndex 行的图标 */
+function opIcon(wrapper: ReturnType<typeof mountPage>, content: string, rowIndex = 0) {
+  const tip = wrapper
+    .findAll('.el-table__body-wrapper tbody tr')[rowIndex]!
+    .findAllComponents({ name: 'ElTooltip' })
+    .filter((t) => t.find('.qd-op-icon').exists())
+    .find((t) => (t.props() as { content?: string }).content === content)
+  if (!tip) throw new Error(`第 ${rowIndex} 行找不到操作：${content}`)
+  return tip.find('.qd-op-icon')
+}
+
 beforeEach(() => {
   dialogOpen.mockReset()
   vi.mocked(questionDicApi.page).mockClear()
@@ -141,7 +152,7 @@ describe('QuestionDicPage', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.mocked(questionDicApi.page).mockClear()
 
-    await wrapper.findAll('.qd-op-link--danger')[0]!.trigger('click')
+    await opIcon(wrapper, '删除').trigger('click')
     await flushPromises()
 
     expect(ElMessageBox.confirm).toHaveBeenCalled()
@@ -161,7 +172,7 @@ describe('QuestionDicPage', () => {
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancelled'))
 
-    await wrapper.findAll('.qd-op-link--danger')[0]!.trigger('click')
+    await opIcon(wrapper, '删除').trigger('click')
     await flushPromises()
 
     expect(questionDicApi.remove).not.toHaveBeenCalled()
@@ -175,7 +186,7 @@ describe('QuestionDicPage', () => {
     await wrapper.findAll('.qd-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await wrapper.findAll('.qd-op-link').find((l) => l.text() === '编辑')!.trigger('click')
+    await opIcon(wrapper, '编辑').trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 11, content: '各个机构', targetContent: '各机构' })
   })
 

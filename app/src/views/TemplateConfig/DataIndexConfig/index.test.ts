@@ -95,8 +95,8 @@ function buttonInFilter(wrapper: ReturnType<typeof mountPage>, label: string) {
 function statusSwitch(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
   return wrapper.findAll('.stub-switch')[rowIndex]!
 }
-function editLink(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
-  return rowsOf(wrapper)[rowIndex]!.findAll('.dic-op-link')[0]!
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return rowsOf(wrapper)[rowIndex]!.findAll('.dic-op-icon')[0]!
 }
 
 beforeEach(() => {
@@ -251,7 +251,7 @@ describe('DataIndexConfigPage', () => {
     await buttonInFilter(wrapper, '新增').trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 41, code: 'BRANCH_NAME', type: 'ORG', content: '城南支行', alias: '城南' })
   })
 

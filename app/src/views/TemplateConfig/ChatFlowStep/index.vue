@@ -17,7 +17,7 @@
 // 3. 旧版列表横向滚动 x:1400、时间列 200 宽，这里按项目表格惯例压到 160 + 省略提示。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Edit, Plus, Search } from '@element-plus/icons-vue'
 import { chatFlowStepApi } from '@/api/templateConfig'
 import type { ChatFlowStep } from '@/api/types/template'
 import { CHAT_FLOW_STEP_STATUS_OPTIONS, STATUS_ALL_OPTION_LABEL } from './options'
@@ -167,10 +167,12 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="80" fixed="right" align="center">
+      <el-table-column label="操作" width="60" fixed="right" align="center">
         <template #default="{ row }">
           <div class="cfs-row-actions">
-            <span class="cfs-op-link" @click="openEdit(row)">编辑</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="cfs-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -220,15 +222,21 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.cfs-op-link {
-  color: var(--rc-primary, #2563eb);
+.cfs-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.cfs-op-link:hover {
-  text-decoration: underline;
+.cfs-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .cfs-pager {
   display: flex;

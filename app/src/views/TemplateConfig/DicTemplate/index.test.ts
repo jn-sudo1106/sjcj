@@ -51,6 +51,18 @@ function mountPage() {
   })
 }
 
+/** 操作列图标：每行只有「编辑」 */
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('.dt-op-icon')[0]!
+}
+/** 行内图标的文案（已图标化，文案在 el-tooltip 的 content 上） */
+function opIconContents(wrapper: ReturnType<typeof mountPage>) {
+  return wrapper
+    .findAllComponents({ name: 'ElTooltip' })
+    .filter((t) => t.find('.dt-op-icon').exists())
+    .map((t) => (t.props() as { content?: string }).content)
+}
+
 function lastPageQuery() {
   const calls = vi.mocked(dicTemplateApi.page).mock.calls
   return (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>
@@ -114,7 +126,7 @@ describe('DicTemplatePage', () => {
 
     expect(downloadXlsx).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('后端拒绝')
-    expect(wrapper.findAll('.dt-op-link').length).toBe(2)
+    expect(wrapper.findAll('.dt-op-icon').length).toBe(2)
     document.body.innerHTML = ''
   })
 
@@ -123,7 +135,7 @@ describe('DicTemplatePage', () => {
     await flushPromises()
 
     expect(wrapper.find('.el-switch').exists()).toBe(false)
-    expect(wrapper.findAll('.dt-op-link').map((l) => l.text())).toEqual(['编辑', '编辑'])
+    expect(opIconContents(wrapper)).toEqual(['编辑', '编辑'])
   })
 
   it('「新增」开空弹窗，「编辑」把整行交给弹窗', async () => {
@@ -133,7 +145,7 @@ describe('DicTemplatePage', () => {
     await wrapper.findAll('.dt-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await wrapper.findAll('.dt-op-link').find((l) => l.text() === '编辑')!.trigger('click')
+    await editIcon(wrapper).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 3, content: '查询某机构某日期的客户指标结果' })
   })
 

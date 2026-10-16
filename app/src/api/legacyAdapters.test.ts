@@ -613,6 +613,32 @@ describe('数据详情 / 统计行适配（E 包 T1c）', () => {
     expect(row.values).toEqual({ K1: '内容' })
   })
 
+  it('dataRowFromLegacy：entryDetail 的系统字段是 camelCase（parentId/detailId/seq 等），必须能读到', () => {
+    // fixture 取自 entry/entryDetail 线上实测响应（2026-10-16）：整行系统字段全为 camelCase，
+    // 早前只读全大写键，导致这三个键既被 systemKeys 移出 values、又没落进 row，界面上直接空掉。
+    const row = dataRowFromLegacy({
+      entryId: 5000017, sourceId: 430024667, configId: 1401120, entryTypeId: 6200038,
+      parentId: 2800001, categoryId: 9009005, fileId: 0, detailId: '68166879',
+      createDt: '2026-10-10 17:42:55', updateDt: '2026-10-14 17:33:25',
+      entryTypeName: '公告数据', sourceName: '江苏金租定期报告', ver: 1, seq: 2007286915, K1: '正文',
+    })
+    expect(row).toMatchObject({
+      dataId: '5000017', sourceId: '430024667', configId: '1401120',
+      parentId: '2800001', categoryId: '9009005', fileId: '0', detailId: '68166879',
+      seq: '2007286915', ver: '1',
+      createDt: '2026-10-10 17:42:55', updateDt: '2026-10-14 17:33:25',
+    })
+    expect(row.values).toEqual({ K1: '正文' })
+  })
+
+  it('dataRowFromLegacy：全大写键优先于 camelCase（列表页口径不受影响）', () => {
+    const row = dataRowFromLegacy({
+      ENTRY_ID: '1', SOURCE_ID: '2', PARENT_ID: '10', DETAIL_ID: '20', SEQ: '30',
+      parentId: '999', detailId: '888', seq: '777',
+    })
+    expect(row).toMatchObject({ dataId: '1', sourceId: '2', parentId: '10', detailId: '20', seq: '30' })
+  })
+
   it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {
     const detail = entryDetailFromLegacy({ ENTRY_ID: '1', showItems: [] })
     expect(detail.subs).toBeUndefined()

@@ -8,9 +8,19 @@
 //
 // 列表数据走 ck_source 分页接口（/api/source/page，2026-09-18 后端新增，
 // /api/source/list 的分页版）；监控结果那张列表是 sourceCheck 的旧监控表，别混。
+//
+// 2026-10-16 新增「＋ 新增监控」入口：迁移旧平台 data-view 的「加监控」——
+// 旧 `page/config/SourceList.vue` 的铃铛 → `MonitorModal.vue`（监控列表弹窗，内嵌 MonitorList）
+// → 弹窗里点「加监控」→ `MonitorList.handleAdd()` 用它拿到的 sourceId 预填 → `CheckAdd.vue`
+// → `POST /v1/source/check/add`。
+// 这套在新平台早已迁好：`api/monitor.ts` + `Monitor/sourceCheck/CheckEditDialog.vue`
+// （1:1 迁 CheckAdd.vue）+ `Monitor/sourceCheck/index.vue`（1:1 迁 MonitorList）。
+// 唯独缺 MonitorModal 那层壳——列表要用它带进来的 sourceId 过滤、并作为「加监控」的数据源；
+// 少了它「数据源」就没值可提交。壳已补在 `Monitor/sourceCheck/SourceMonitorDialog.vue`，这里直接调它。
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ckSourceApi, type CkSourceRecord } from '@/api'
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
+import SourceMonitorDialog from '@/views/Monitor/sourceCheck/SourceMonitorDialog.vue'
 
 // siteId 只在模板里传给弹窗里的编辑器（编辑器要按它列源候选），脚本侧用不到。
 // sourceId 是可选过滤：网站视图（全部）不传、翻整表；画布「监控视图」按当前源进来说，
@@ -72,6 +82,16 @@ function onSaved() {
   void load()
 }
 
+// ---- 「＋ 新增监控」（sourceCheck，与上面的 ck_source 配置弹窗是两码事） ----
+// 对齐旧 `SourceList.vue:523` 的铃铛：`showMonitorModal(scope.row)` → `monitorModal.showModal(row)`
+// → `MonitorModal` 把 `row.sourceId` 交给 MonitorList。这里把当前源的 sourceId 交给弹窗，
+// 弹窗内列表按它过滤，列表里的「加监控」再拿它预填表单的「数据源」——这才是「数据源」值的来源。
+// 没带源时不拦：列表会不带过滤地全量展示，用户在弹窗里选好源再点「加监控」即可。
+const monitorDialogRef = ref<InstanceType<typeof SourceMonitorDialog>>()
+function openAddMonitor() {
+  monitorDialogRef.value?.showModal(props.sourceId)
+}
+
 onMounted(() => {
   void load()
 })
@@ -93,7 +113,10 @@ watch(() => props.sourceId, () => {
       </div>
       <div class="smv-action-wrap">
         <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-config-add" @click="openAdd">＋ 新增配置</button>
-        <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-config-add">＋ 新增监控</button>
+        <!-- 「＋ 新增监控」= 旧平台 SourceList 铃铛那条链路（sourceCheck 告警），与左侧的 ck_source 配置不同源。
+             testid 不能也叫 site-monitor-config-add：测试里那个名字指的是「＋ 新增配置」，
+             两个同名会让 wrapper.get() 直接抛 "found multiple elements"。 -->
+        <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-check-add" @click="openAddMonitor">＋ 新增监控</button>
       </div>
     </div>
 
@@ -171,6 +194,11 @@ watch(() => props.sourceId, () => {
         />
       </div>
     </el-dialog>
+
+    <!-- 新增监控弹窗：复刻旧平台 `MonitorModal.vue`（监控列表弹窗，内嵌 MonitorList）。
+         入口只把当前源的 sourceId 交给它，弹窗内的列表按该源过滤，
+         列表里的「加监控」再拿这个 sourceId 去预填表单的「数据源」——数据源字段就是这么来的。 -->
+    <SourceMonitorDialog ref="monitorDialogRef" />
   </div>
 </template>
 
@@ -181,7 +209,10 @@ watch(() => props.sourceId, () => {
 .smv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); font-size: 12px; outline: none; min-width: 110px; background: #fff; }
 .smv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .smv-toolbar .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
-.smv-toolbar .rc-btn.primary.smc-add { margin-left: auto; }
+/* 右侧操作区整体靠右。这行必须在 wrap 上、不能落在每个 .smc-add 按钮上：
+   两个按钮各带一个 margin-left:auto 时，Flex 会把剩余空间平分给两个 auto，
+   两个按钮之间被凭空撑开一段。 */
+.smv-toolbar .smv-action-wrap:last-child { margin-left: auto; }
 .smv-action-wrap {
   display: flex;
   gap: 10px;

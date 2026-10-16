@@ -53,6 +53,13 @@ function mountPage() {
   })
 }
 
+/** 操作列图标：第 0 个是编辑，第 1 个是复制 */
+function rowIcon(wrapper: ReturnType<typeof mountPage>, rowIndex: number, iconIndex: number) {
+  return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('.tt-op-icon')[iconIndex]!
+}
+const editIcon = (wrapper: ReturnType<typeof mountPage>, rowIndex = 0) => rowIcon(wrapper, rowIndex, 0)
+const copyIcon = (wrapper: ReturnType<typeof mountPage>, rowIndex = 0) => rowIcon(wrapper, rowIndex, 1)
+
 function lastPageQuery() {
   const calls = vi.mocked(tableTemplateApi.page).mock.calls
   return (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>
@@ -110,7 +117,7 @@ describe('TableTemplatePage', () => {
     await flushPromises()
     vi.mocked(tableTemplateApi.page).mockClear()
 
-    await wrapper.findAll('.tt-op-link').find((l) => l.text() === '复制')!.trigger('click')
+    await copyIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(tableTemplateApi.page).toHaveBeenCalledTimes(0)
@@ -125,7 +132,7 @@ describe('TableTemplatePage', () => {
     await wrapper.findAll('.tt-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await wrapper.findAll('.tt-op-link').find((l) => l.text() === '编辑')!.trigger('click')
+    await editIcon(wrapper).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 12, name: '查询某机构某日期的指标值' })
   })
 

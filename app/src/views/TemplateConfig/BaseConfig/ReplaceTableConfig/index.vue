@@ -24,7 +24,7 @@
 // 实测按 tableName 模糊筛且**大小写敏感**（name=JX 回 1 条、name=jx 回 0 条）—— 旧平台同口径，不在前端补归一。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Edit, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { replaceTableConfigApi } from '@/api/templateConfig'
 import type { ReplaceTableConfig } from '@/api/types/template'
 import { REPLACE_TABLE_CONFIG_STATUS_OPTIONS, STATUS_ALL_OPTION_LABEL } from './options'
@@ -177,10 +177,12 @@ onMounted(() => void load())
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
       <!-- 本域没有删除端点（旧接口只有 page / 根 / status），操作列只留编辑 -->
-      <el-table-column label="操作" width="80" fixed="right" align="center">
+      <el-table-column label="操作" width="60" fixed="right" align="center">
         <template #default="{ row }">
           <div class="rtc-row-actions">
-            <span class="rtc-op-link" @click="openEdit(row)">编辑</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="rtc-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -231,15 +233,21 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.rtc-op-link {
-  color: var(--rc-primary, #2563eb);
+.rtc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.rtc-op-link:hover {
-  text-decoration: underline;
+.rtc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .rtc-pager {
   display: flex;
