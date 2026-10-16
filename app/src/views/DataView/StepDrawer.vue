@@ -31,6 +31,8 @@ const flowDef = computed<FlowDef | null>(() => {
     main: seed.main,
     branches: seed.branches,
     configs: seed.configs,
+    // 少了分叉组，分叉之后的节点在布局里整段丢失（1016：上市公司-配置 只剩前两个节点）
+    branchGroups: seed.branchGroups,
   }
 })
 const processLayout = computed(() => {
