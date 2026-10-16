@@ -5,7 +5,7 @@
 // 2. 采集资产的「源列表视图」（0924-06，表格视图改为源列表）：currentSiteId 传空 = 不限网站，
 //    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source } from '@/api'
@@ -893,6 +893,19 @@ const markAnchorRef = ref<HTMLElement | null>(null)
 const markToast = ref('')
 const lastSavedTag = ref('')
 
+/**
+ * 打标提示条**不做自动收起**（2026-10-16 用户确认）：它带「查看这一批」这个动作，
+ * 要给用户留出看完再决定点不点的时间，所以由用户手动点 × 关闭。
+ * 唯一会自动收掉的时机是**离开本视图**——见下面的 onDeactivated / onBeforeUnmount：
+ * 本视图被外层 KeepAlive 缓存，切页/切 tab 不卸载，不带走的话提示条会飘到别的页面上。
+ */
+function showMarkToast(text: string) {
+  markToast.value = text
+}
+function hideMarkToast() {
+  markToast.value = ''
+}
+
 // 标签候选：服务端 source/sourceTags 拿到的是**当前查询条件下真实存在**的标签，
 // 包含程序打进去的那些；本机 readRecentIssueTags() 只记得这台机器上手工打过的。
 // 两者合并，服务端的排前面。拿不到就静默退回本地——候选只是输入辅助，不该因为它挂了就不能打标。
@@ -1003,7 +1016,7 @@ async function saveMarks(payload: { tags: string[] }) {
   localTags.value = rememberIssueTags(payload.tags)
   lastSavedTag.value = payload.tags[0] || ''
   closeMarkPopover()
-  markToast.value = `已更新 ${ids.length} 个源的标签`
+  showMarkToast(`已更新 ${ids.length} 个源的标签`)
 }
 async function clearSelectedTags() {
   const ids = [...selectedIds.value]
@@ -1025,7 +1038,7 @@ async function clearSelectedTags() {
   }
   writeOverlay(ids, { tags: 'clear' })
   closeMarkPopover()
-  markToast.value = `已清除 ${ids.length} 个源的标签`
+  showMarkToast(`已清除 ${ids.length} 个源的标签`)
   lastSavedTag.value = ''
 }
 // 批量设置备注（0901，老平台也没有——这是新功能，不是迁移）：整批覆盖成同一段文字，
@@ -1053,7 +1066,7 @@ async function batchSetRemark(remark: string) {
   }
   writeOverlay(ids, { remark })
   closeMarkPopover()
-  markToast.value = `已设置 ${ids.length} 个源的备注`
+  showMarkToast(`已设置 ${ids.length} 个源的备注`)
 }
 
 // 清空备注：跟「清空标签」对称的入口，同样整批覆盖成空、需要二次确认——备注一旦清空
@@ -1082,12 +1095,12 @@ async function clearSelectedRemark() {
   }
   writeOverlay(ids, { remark: '' })
   closeMarkPopover()
-  markToast.value = `已清空 ${ids.length} 个源的备注`
+  showMarkToast(`已清空 ${ids.length} 个源的备注`)
 }
 
 function viewMarkedBatch() {
   if (lastSavedTag.value) tagFilter.value = lastSavedTag.value
-  markToast.value = ''
+  hideMarkToast()
   selectedIds.value = []
   rows.value = applyMarkOverlay(rows.value).filter(matchesMarkFilters)
   total.value = rows.value.length
@@ -1151,6 +1164,11 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', onMarkPointerDown)
   document.removeEventListener('keydown', onMarkKeydown)
 })
+// 打标提示条不能在别的页面上继续显示：本视图被外层 KeepAlive 缓存（CollectAssets/index、Settings/index、
+// AppShell），切页或切 tab 都不卸载（2026-10-16 用户报：切页后提示仍在）。提示条本身是手动关闭的，
+// 所以这里是它唯一自动收掉的时机——离场即收掉；没走缓存的卸载路径也一并清。
+onDeactivated(hideMarkToast)
+onBeforeUnmount(hideMarkToast)
 watch(() => props.currentSiteId, () => {
   page.value = 1
   void loadSources()
@@ -1530,7 +1548,7 @@ watch(() => ui.sourceListRevision, () => {
     <div v-if="markToast" class="sov-toast" data-testid="source-mark-toast">
       <span>{{ markToast }}</span>
       <button v-if="lastSavedTag" type="button" data-testid="source-mark-view-batch" @click="viewMarkedBatch">查看这一批</button>
-      <button class="sov-toast-close" type="button" aria-label="关闭提示" @click="markToast = ''">×</button>
+      <button class="sov-toast-close" type="button" aria-label="关闭提示" @click="hideMarkToast">×</button>
     </div>
     <EditSourceMarkDialog
       v-if="editTarget"
@@ -1638,7 +1656,11 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter.is-compact .sov-fl-group { flex-basis: 108px; min-width: 94px; }
 .sov-filter.is-compact .sov-fl-state { flex-basis: 92px; min-width: 84px; }
 .sov-filter.is-compact .sov-fl-tag { flex-basis: 96px; min-width: 84px; }
-.sov-filter.is-compact .sov-fl-count { flex-basis: 80px; min-width: 76px; }
+/* 数据量这格是**唯一**靠 placeholder 说明自己的（紧凑态把 label 小标题藏了，其余几格是下拉，选项文字自带含义）。
+   原来 80px：扣掉左右内边距 16 + 边框 2，再被 Chrome 数字框的步进条吃掉约 15px，只剩约 47px 给文字，
+   「数据量 ≤」约 51px 被截成「数据量」（2026-10-16 用户截图反馈）。
+   100px 时文字区约 67px，留出约 16px 余量：字体回退到更宽的 ≤ 也读得全，同时不把这一行挤到换行。 */
+.sov-filter.is-compact .sov-fl-count { flex-basis: 100px; min-width: 100px; }
 .sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
 .sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
