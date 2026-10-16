@@ -101,8 +101,8 @@ function buttonInFilter(wrapper: ReturnType<typeof mountPage>, label: string) {
 function statusSwitch(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
   return wrapper.findAll('.stub-switch')[rowIndex]!
 }
-function editLink(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
-  return rowsOf(wrapper)[rowIndex]!.findAll('.ws-op-link')[0]!
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return rowsOf(wrapper)[rowIndex]!.findAll('.ws-op-icon')[0]!
 }
 
 beforeEach(() => {
@@ -244,7 +244,7 @@ describe('WordSegmentConfigPage', () => {
     // 工具条只有批量新增这一个按钮（旧列表的 showAdd 没绑任何入口，不迁单条新增）
     expect(wrapper.findAll('.ws-operator button').map((b) => b.text())).toEqual(['批量新增'])
 
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     expect(editOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 2669, type: 'ORGANIZATION', content: '新城科技园', token: 'base' })
   })
 

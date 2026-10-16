@@ -25,7 +25,7 @@
 // 6. 旧版查询条件改了就直接带进下一次请求，这里与通用层一致：改了不自动查，点「搜索」才生效。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Download, Plus, Search } from '@element-plus/icons-vue'
+import { Download, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { pageConfigApi } from '@/api/templateConfig'
 import type { SysPageConfig } from '@/api/types/template'
 import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
@@ -194,10 +194,12 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="80" fixed="right" align="center">
+      <el-table-column label="操作" width="60" fixed="right" align="center">
         <template #default="{ row }">
           <div class="scp-row-actions">
-            <span class="scp-op-link" @click="openEdit(row)">编辑</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="scp-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -248,15 +250,21 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.scp-op-link {
-  color: var(--rc-primary, #2563eb);
+.scp-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.scp-op-link:hover {
-  text-decoration: underline;
+.scp-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .scp-pager {
   display: flex;

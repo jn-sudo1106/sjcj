@@ -14,7 +14,7 @@
 // 3. 旧版查询条件改了就直接带进下一次请求，这里与通用层一致：改了不自动查，点「搜索」才生效。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Delete, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { questionDicApi } from '@/api/templateConfig'
 import type { QuestionDic } from '@/api/types/template'
 import {
@@ -198,12 +198,15 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="120" fixed="right" align="center">
+      <el-table-column label="操作" width="90" fixed="right" align="center">
         <template #default="{ row }">
           <div class="qd-row-actions">
-            <span class="qd-op-link" @click="openEdit(row)">编辑</span>
-            <span class="qd-op-divider">|</span>
-            <span class="qd-op-link qd-op-link--danger" @click="handleDelete(row)">删除</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="qd-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <span class="qd-op-icon qd-op-danger" @click="handleDelete(row)"><el-icon :size="15"><Delete /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -254,22 +257,29 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.qd-op-link {
-  color: var(--rc-primary, #2563eb);
+.qd-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.qd-op-link:hover {
-  text-decoration: underline;
+.qd-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
-/* 旧版「删除」就是红色文字链接，沿用（不改成大号实心按钮，同控件强调约定） */
-.qd-op-link--danger {
+/* 删除保持危险色（同控件强调约定：不用大号实心按钮） */
+.qd-op-icon.qd-op-danger {
   color: var(--rc-danger, #dc2626);
 }
-.qd-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.qd-op-icon.qd-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .qd-pager {
   display: flex;

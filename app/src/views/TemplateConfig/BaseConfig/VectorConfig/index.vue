@@ -17,7 +17,7 @@
 // 5. 旧列表横向滚动 x:1400、时间列 200 宽，这里按项目表格惯例压缩并加省略提示（同选表规则配置偏差 4）。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Delete, Edit, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { vectorConfigApi } from '@/api/templateConfig'
 import type { VectorTableConfig } from '@/api/types/template'
 import VectorConfigEditDialog from './VectorConfigEditDialog.vue'
@@ -173,16 +173,25 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="lastSync" label="最近同步时间" width="160" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="160" align="center" />
-      <el-table-column label="操作" width="160" fixed="right" align="center">
+      <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
           <div class="vtc-row-actions">
-            <span class="vtc-op-link" @click="openDetail(row)">详情</span>
-            <span class="vtc-op-divider">|</span>
-            <span class="vtc-op-link" @click="openEdit(row)">编辑</span>
-            <span class="vtc-op-divider">|</span>
-            <span class="vtc-op-link" :class="{ 'vtc-op-link--disabled': syncingIds.has(Number(row.id)) }" @click="handleSync(row)">同步</span>
-            <span class="vtc-op-divider">|</span>
-            <span class="vtc-op-link vtc-op-link--danger" @click="handleDelete(row)">删除</span>
+            <el-tooltip content="详情" placement="top">
+              <span class="vtc-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="编辑" placement="top">
+              <span class="vtc-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="同步" placement="top">
+              <span
+                class="vtc-op-icon"
+                :class="{ 'vtc-op-icon--disabled': syncingIds.has(Number(row.id)) }"
+                @click="handleSync(row)"
+              ><el-icon :size="15"><Refresh /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <span class="vtc-op-icon vtc-op-danger" @click="handleDelete(row)"><el-icon :size="15"><Delete /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -232,26 +241,33 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.vtc-op-link {
-  color: var(--rc-primary, #2563eb);
+.vtc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.vtc-op-link:hover {
-  text-decoration: underline;
+.vtc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
-.vtc-op-link--disabled {
+.vtc-op-icon--disabled {
   color: var(--rc-muted, #94a3b8);
   pointer-events: none;
 }
-/* 旧版「删除」就是红色文字链接，沿用（同控件强调约定） */
-.vtc-op-link--danger {
+/* 删除保持危险色（同控件强调约定） */
+.vtc-op-icon.vtc-op-danger {
   color: var(--rc-danger, #dc2626);
 }
-.vtc-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.vtc-op-icon.vtc-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .vtc-pager {
   display: flex;
