@@ -548,6 +548,23 @@ export const sourceApi = {
     })
     return result ? sourceFromLegacy(result) : null
   },
+  /**
+   * 编辑源（旧平台 `POST /v1/source/updateSource`，参数同时进 body 与 query）。
+   *
+   * 旧 `config/column.config.js` 的「备注」列就是靠它保存的：
+   * `save: (record) => updateSource({ sourceId, remark, author, tags })`。
+   * ⚠️ 注意 save 回调把 **author / tags 也一起回传**——只发 remark 会把这两个字段清空，
+   * 详情抽屉里改备注时必须照旧带上。
+   * `client.ts` 已把该端点列进写白名单（2026-08-28 拍板放开源重命名），生产环境可直接发。
+   */
+  updateSource: async (payload: Record<string, unknown> & { sourceId: string }): Promise<Ack> => {
+    const result = await request<unknown>('source/updateSource', payload, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: payload,
+    })
+    return ackFromApiResult(result)
+  },
   // 旧分类接口首屏只返回根节点；展开节点时按 parentId 懒加载子级。
   sourceCategories: async (parentId?: string) => {
     const result = await request<unknown>('source/categoryTree', { parentId }, {
@@ -603,6 +620,9 @@ export const sourceApi = {
         const r = row as Record<string, unknown>
         const count = r.count != null ? Number(r.count) : undefined
         const seq = r.seq != null ? Number(r.seq) : undefined
+        // 2026-10-16 补：这里以前也漏了 remark（同 sourceCategoriesFromLegacy 的毛病）——
+        // 搜索态下点「编辑」同样要看这个字段回填备注。
+        const remark = r.remark == null ? undefined : String(r.remark)
         return {
           id: String(r.categoryId ?? r.id ?? ''),
           name: String(r.categoryName ?? r.name ?? ''),
@@ -610,6 +630,7 @@ export const sourceApi = {
           path: String(r.path ?? ''),
           ...(count != null ? { count } : {}),
           ...(seq != null ? { seq } : {}),
+          ...(remark == null ? {} : { remark }),
         }
       })
       .filter((item) => item.id && item.name)
@@ -2346,7 +2367,11 @@ function buildLegacyMore(q: RowQuery) {
  * 页面上这时查不到数据，导出也不能因为条件被丢掉而变成整表。
  */
 function buildExportMore(q: RowQuery) {
-  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId)], buildLegacyMore(q))
+  // 带引号写法与 backTraceSources 一致（10-16 186 实测导出认）；空数组不加条件，调用方自己保证非空
+  const sourceClause = q.sourceIds?.length
+    ? `SOURCE_ID in (${q.sourceIds.map((id) => `'${escapeLegacySqlString(id)}'`).join(',')})`
+    : undefined
+  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId), sourceClause], buildLegacyMore(q))
 }
 
 /**
@@ -3550,7 +3575,8 @@ export const workflowBindingApi = {
     })
     return sourceFlowsViewFromApi(result)
   },
-  list: async (sourceId: string): Promise<WorkflowBinding[]> => {
+  /** `withNames: false` 不逐条取流程详情（名字退回「流程 #ID」）：画布加载只用 ID，别让慢的 flowDetail 挡住整页 */
+  list: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<WorkflowBinding[]> => {
     // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
     if (!/^\d+$/.test(sourceId)) return []
     const view = await workflowBindingApi.view(sourceId)
@@ -3570,7 +3596,7 @@ export const workflowBindingApi = {
     ]
     // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
     const names = new Map<string, string>()
-    await Promise.all(ordered.map(async (binding) => {
+    if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
     }))

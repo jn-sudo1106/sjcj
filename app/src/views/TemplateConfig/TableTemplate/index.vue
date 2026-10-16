@@ -15,7 +15,7 @@
 // 3. 旧版列表把「表范围」列注释掉了，编辑弹窗里才能看到这块数据；这里保持 1:1 不展示。
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { DocumentCopy, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { tableTemplateApi } from '@/api/templateConfig'
 import type { TableTemplate } from '@/api/types/template'
 import TableTemplateEditDialog from './TableTemplateEditDialog.vue'
@@ -146,12 +146,15 @@ onMounted(() => void load())
       </el-table-column>
       <el-table-column prop="createTime" label="创建时间" width="150" align="center" />
       <el-table-column prop="updateTime" label="修改时间" width="150" align="center" />
-      <el-table-column label="操作" width="130" fixed="right" align="center">
+      <el-table-column label="操作" width="90" fixed="right" align="center">
         <template #default="{ row }">
           <div class="tt-row-actions">
-            <span class="tt-op-link" @click="openEdit(row)">编辑</span>
-            <span class="tt-op-divider">|</span>
-            <span class="tt-op-link" @click="copyNotImplemented">复制</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="tt-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="复制" placement="top">
+              <span class="tt-op-icon" @click="copyNotImplemented"><el-icon :size="15"><DocumentCopy /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -201,18 +204,21 @@ onMounted(() => void load())
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.tt-op-link {
-  color: var(--rc-primary, #2563eb);
+.tt-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.tt-op-link:hover {
-  text-decoration: underline;
-}
-.tt-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.tt-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .tt-mono {
   font-family: var(--rc-mono, monospace);

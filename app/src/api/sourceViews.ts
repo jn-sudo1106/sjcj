@@ -331,7 +331,7 @@ const viewCategoryApi = {
  * 删组时后端会连**当前组成员**的源行一起删（10-15 用户确认可以接受）；要保留的源（单独添加、又是被解绑组的成员）在删组后补加回去。
  */
 type Bind = { sources: string[]; groups: string[]; excluded?: string[] }
-async function applyBindDiff(categoryId: string, old: Bind, next: Bind) {
+async function applyBindDiff(categoryId: string, old: Bind, next: Bind): Promise<boolean> {
   const minus = (a: string[], b: string[]) => { const set = new Set(b); return a.filter((x) => !set.has(x)) }
   const groupsOut = minus(old.groups, next.groups)
   const sourcesOut = minus(old.sources, next.sources)
@@ -351,12 +351,14 @@ async function applyBindDiff(categoryId: string, old: Bind, next: Bind) {
   const excludedIn = minus(next.excluded ?? [], old.excluded ?? [])
   const restored = minus(old.excluded ?? [], next.excluded ?? [])
   if (excludedIn.length) await viewCategoryApi.delSources(categoryId, excludedIn, [])
+  let back: string[] = []
   if (restored.length && next.groups.length) {
     const members = await loadGroupMembers(next.groups)
     const bound = new Set(next.groups.flatMap((g) => members[g] ?? []))
-    const back = restored.filter((id) => bound.has(id) && !sourcesIn.includes(id))
+    back = restored.filter((id) => bound.has(id) && !sourcesIn.includes(id))
     if (back.length) await viewCategoryApi.addSources(categoryId, back, [])
   }
+  return !!(groupsOut.length || sourcesOut.length || groupsIn.length || sourcesIn.length || excludedIn.length || back.length)
 }
 
 /** 一次并发几个请求（目录多时逐个拉 listSources） */
@@ -387,6 +389,7 @@ async function loadRemoteTree(view: SourceView): Promise<ViewTree> {
     const viaGroup = new Set(bound[i].groups.flatMap((g) => members[g] ?? []))
     d.sources = bound[i].sources.filter((id) => !viaGroup.has(id))
     d.groups = bound[i].groups
+    d.rows = bound[i].sources
   })
   return normalizeTree({ dirs })
 }
@@ -422,11 +425,22 @@ async function saveRemoteTree(view: SourceView, prev: ViewTree, next: ViewTree):
     }
     if (Object.keys(patch).length) await viewCategoryApi.update(view.viewId, d.id, patch)
   }
-  for (const d of next.dirs) await applyBindDiff(real(d.id), before.get(d.id) ?? { sources: [], groups: [], excluded: [] }, d)
+  const changed = new Set<string>()
+  for (const d of next.dirs) {
+    if (await applyBindDiff(real(d.id), before.get(d.id) ?? { sources: [], groups: [], excluded: [] }, d)) changed.add(real(d.id))
+  }
 
   const tree: ViewTree = {
     ...next,
     dirs: next.dirs.map((d) => ({ ...d, id: real(d.id), parentId: d.parentId ? real(d.parentId) : null })),
+  }
+  // 源行变了的目录重读一次（绑组时后端按当时成员展开快照，前端算不准），「未在视图」据此重算
+  const fresh = await inBatches([...changed], 6, async (id) => [id, (await viewCategoryApi.listSources(id)).sources] as const)
+  const rowsOf = new Map(fresh)
+  for (const d of tree.dirs) {
+    const rows = rowsOf.get(d.id)
+    if (rows) d.rows = rows
+    else if (!before.has(d.id)) d.rows = []
   }
   const extras = extrasOf(tree)
   const saved = extrasJson(extras) === extrasJson(view.dirExtras)

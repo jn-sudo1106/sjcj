@@ -88,6 +88,25 @@ describe('CategoryManager 分类目录', () => {
     expect(wrapper.text()).not.toContain('批量导入')
   })
 
+  // 1016：首屏只拉根目录 + 预取一层；展开时再预取下一层，不再一次 BFS 拉全
+  it('按需加载：首屏只拉根和根的子级，展开节点时才预取它子目录的子级', async () => {
+    const tree: Record<string, { id: string; name: string }[]> = {
+      '': [{ id: '101', name: '财经资讯' }, { id: '102', name: '海外社媒' }],
+      '101': [{ id: '201', name: '基金' }],
+      '102': [],
+      '201': [{ id: '301', name: '公募' }],
+    }
+    const spy = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (pid?: string) => tree[pid ?? ''] ?? [])
+    const wrapper = mount(CategoryManager, { global: { stubs } })
+    await flushPromises()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([undefined, '101', '102'])
+    expect(wrapper.text()).toContain('财经资讯')
+
+    wrapper.findComponent({ name: 'ElTree' }).vm.$emit('node-expand', { id: '101', name: '财经资讯' })
+    await flushPromises()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([undefined, '101', '102', '201'])
+  })
+
   // 按钮外面已套 el-tooltip，再带原生 title 会在悬停时同时弹出两个提示
   it('操作按钮不带原生 title，只靠 el-tooltip + aria-label', () => {
     const wrapper = mount(CategoryManager, {

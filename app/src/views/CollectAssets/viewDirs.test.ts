@@ -1,7 +1,7 @@
 // 「我的视图」目录版数据模型（2026-10-13 规则：多级目录、同源进多个目录、可绑来源组、组成员跟组走、随组带入可排除；10-14：没有根目录、父目录不汇总）
 import { describe, expect, it } from 'vitest'
 import {
-  VIEW_SOURCE_LIMIT, addDir, allIds, addSources, bindGroup, boundGroups, deleteDir, emptyTree, moveSources, normalizeTree,
+  VIEW_SOURCE_LIMIT, addDir, allIds, addSources, bindGroup, boundGroups, deleteDir, emptyTree, missingOf, moveSources, normalizeTree,
   onlyViaGroup, pathText, placesOf, removeSources, renameDir, resolveIds, restoreExcluded, treeFromLegacy, unbindGroup, type ViewTree,
 } from './viewDirs'
 
@@ -73,6 +73,40 @@ describe('来源组', () => {
     const un = unbindGroup(ex, yq, 'g3', members)
     expect(resolveIds(un, yq, members)).toEqual(['s4'])
     expect(un.dirs.find((d) => d.id === yq)!.excluded).toEqual([])
+  })
+})
+
+// 1016：真实接口下后端绑定来源组时只展开当时的成员（rows 快照），组里之后新加的不会自动进目录
+describe('来源组快照与「未在视图」', () => {
+  /** 舆情目录在后端的源行：s4 + 绑定 g3 时的 t1、t2（t3 是后来才进组的） */
+  const withRows = () => {
+    const { t, yq } = sample()
+    return { t: { ...t, dirs: t.dirs.map((d) => (d.id === yq ? { ...d, rows: ['s4', 't1', 't2'] } : d)) }, yq }
+  }
+
+  it('组里新加、还没进目录的源：不算在目录里，按来源组列出', () => {
+    const { t, yq } = withRows()
+    expect(resolveIds(t, yq, members)).toEqual(['s4', 't1', 't2'])
+    expect(missingOf(t.dirs.find((d) => d.id === yq)!, members)).toEqual([{ groupId: 'g3', ids: ['t3'] }])
+    expect(onlyViaGroup(t, yq, 't3', members)).toBeNull()
+    expect(placesOf(t, 't3', members, gname)).toEqual([])
+  })
+
+  it('勾选加入后不再算缺；排除过的不算缺；本机兜底（没有 rows）照旧组成员全算', () => {
+    const { t, yq } = withRows()
+    const added = addSources(t, yq, ['t3'])
+    expect(resolveIds(added, yq, members)).toEqual(['s4', 't3', 't1', 't2'])
+    expect(missingOf(added.dirs.find((d) => d.id === yq)!, members)).toEqual([])
+    const ex = removeSources(t, yq, ['t3'], members)
+    expect(missingOf(ex.dirs.find((d) => d.id === yq)!, members)).toEqual([])
+    const { t: local, yq: id } = sample()
+    expect(missingOf(local.dirs.find((d) => d.id === id)!, members)).toEqual([])
+  })
+
+  it('rows 存取时保留，没有时不补', () => {
+    const { t } = withRows()
+    expect(normalizeTree(JSON.parse(JSON.stringify(t))).dirs.find((d) => d.rows)?.rows).toEqual(['s4', 't1', 't2'])
+    expect(normalizeTree({ dirs: [{ id: 'a', name: 'A' }] }).dirs[0]).not.toHaveProperty('rows')
   })
 })
 

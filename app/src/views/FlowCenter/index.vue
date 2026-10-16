@@ -12,6 +12,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
+import { copyFlowErrorText } from '@/utils/flow/flowPublish'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
@@ -135,6 +136,8 @@ async function loadCategoryChildren(
 const activeId = ref('')
 /** 「使用源数」下钻弹窗的目标流程 */
 const sourcesFlow = ref<FlowRecord | null>(null)
+/** 选源弹窗关联成功后 +1，让还开着的下钻清单重查 */
+const sourcesRefresh = ref(0)
 const applyFlow = ref<FlowRecord | null>(null)
 const applySourceIds = ref<string[]>([])
 /** 分批提交进度：「已关联 N / 总数」，只在分多批时展示 */
@@ -489,7 +492,7 @@ async function copyFlow(t: FlowRecord) {
     ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}${reuseConfigs ? '（节点复用原配置）' : ''}`)
     reportDetachResult(detach, '原流程')
   } catch (e) {
-    ElMessage.error(`复制流程失败：${(e as Error)?.message ?? String(e)}`)
+    ElMessage.error(copyFlowErrorText((e as Error)?.message ?? String(e)))
   } finally {
     copyingFlowId.value = ''
   }
@@ -750,6 +753,11 @@ function openApply(flow: FlowRecord) {
   applyProgress.value = ''
 }
 
+/** 下钻弹窗的「+ 关联源」：复用上层那套选源 + 分批 + 作业条，不另起一份提交逻辑 */
+function applyFromSources() {
+  if (sourcesFlow.value) openApply(sourcesFlow.value)
+}
+
 async function confirmApply() {
   const target = applyFlow.value
   if (!target || applying.value) return
@@ -812,12 +820,14 @@ async function confirmApply() {
     if (stopped) {
       // 已关联的不回滚——bindSources 没有反向端点，硬回滚只会把归属改得更乱
       ElMessage.warning(`已停止提交后续批次：${done} 个源已关联到「${target.name}」，其余 ${ids.length - done} 个未提交。已关联的不会撤销。`)
+      sourcesRefresh.value++
       void load()
       return
     }
     applyFlow.value = null
     applySourceIds.value = []
     ElMessage.success(`已把 ${done} 个源关联到流程「${target.name}」`)
+    sourcesRefresh.value++
     void load()
   } catch (error) {
     // 无论是用户取消还是提交失败，都得把作业条收掉——挂着一条永远"进行中"的
@@ -1082,7 +1092,13 @@ async function confirmApply() {
       />
     </div>
 
-    <FlowSourcesDialog :flow="sourcesFlow" @close="sourcesFlow = null" />
+    <FlowSourcesDialog
+      :flow="sourcesFlow"
+      :refresh-tick="sourcesRefresh"
+      @apply="applyFromSources"
+      @changed="load"
+      @close="sourcesFlow = null"
+    />
 
     <FlowDetailDrawer
       :categories="categoryOptions"

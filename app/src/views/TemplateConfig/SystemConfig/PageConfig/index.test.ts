@@ -98,8 +98,8 @@ function buttonInFilter(wrapper: ReturnType<typeof mountPage>, label: string) {
 function statusSwitch(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
   return wrapper.findAll('.stub-switch')[rowIndex]!
 }
-function editLink(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
-  return rowsOf(wrapper)[rowIndex]!.findAll('.scp-op-link')[0]!
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return rowsOf(wrapper)[rowIndex]!.findAll('.scp-op-icon')[0]!
 }
 
 beforeEach(() => {
@@ -179,7 +179,7 @@ describe('页面配置列表页', () => {
     const wrapper = mountPage()
     await flushPromises()
     expect(wrapper.findAll('.scp-operator button').map((b) => b.text())).toEqual(['批量新增'])
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     expect(editOpen).toHaveBeenCalledTimes(1)
     expect(editOpen.mock.calls[0]?.[0]).toMatchObject({ id: 3, content: '问数首页' })
     await buttonInFilter(wrapper, '批量新增').trigger('click')
@@ -189,7 +189,7 @@ describe('页面配置列表页', () => {
   it('两个弹窗保存后都回第一页重查', async () => {
     const wrapper = mountPage()
     await flushPromises()
-    await editLink(wrapper, 0).trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     await flushPromises()
 
     vi.mocked(pageConfigApi.page).mockClear()

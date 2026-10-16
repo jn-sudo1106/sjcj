@@ -82,8 +82,11 @@ function statusSelect(wrapper: ReturnType<typeof mountPage>) {
 function buttonInFilter(wrapper: ReturnType<typeof mountPage>, label: string) {
   return wrapper.findAll('.dis-filter-form button').find((b) => b.text().includes(label))!
 }
-function syncLink(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
-  return rowsOf(wrapper)[rowIndex]!.findAll('.dis-op-link')[1]!
+function syncIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return rowsOf(wrapper)[rowIndex]!.findAll('.dis-op-icon')[1]!
+}
+function editIcon(wrapper: ReturnType<typeof mountPage>, rowIndex = 0) {
+  return rowsOf(wrapper)[rowIndex]!.findAll('.dis-op-icon')[0]!
 }
 
 beforeEach(() => {
@@ -155,7 +158,7 @@ describe('DataIndexSyncPage', () => {
     expect(lastPageQuery()).toMatchObject({ pageNo: 2 })
     vi.mocked(dataIndexSyncApi.page).mockClear()
 
-    await syncLink(wrapper, 0).trigger('click')
+    await syncIcon(wrapper, 0).trigger('click')
     await flushPromises()
 
     expect(dataIndexSyncApi.sync).toHaveBeenCalledTimes(1)
@@ -175,10 +178,10 @@ describe('DataIndexSyncPage', () => {
       }) as never,
     )
 
-    await syncLink(wrapper, 0).trigger('click')
+    await syncIcon(wrapper, 0).trigger('click')
     await flushPromises()
-    expect(rowsOf(wrapper)[0]!.text()).toContain('同步中')
-    await syncLink(wrapper, 0).trigger('click')
+    expect(syncIcon(wrapper, 0).classes()).toContain('dis-op-icon--pending')
+    await syncIcon(wrapper, 0).trigger('click')
     expect(dataIndexSyncApi.sync).toHaveBeenCalledTimes(1)
 
     release({ ok: true })
@@ -187,10 +190,10 @@ describe('DataIndexSyncPage', () => {
 
     // 上一次成功已解除置灰；再点一次走失败分支，失败同样要解除
     vi.mocked(dataIndexSyncApi.sync).mockRejectedValueOnce(new Error('同步配置不存在'))
-    await syncLink(wrapper, 0).trigger('click')
+    await syncIcon(wrapper, 0).trigger('click')
     await flushPromises()
     expect(dataIndexSyncApi.sync).toHaveBeenCalledTimes(2)
-    expect(rowsOf(wrapper)[0]!.findAll('.dis-op-link')[1]!.classes()).not.toContain('dis-op-link--pending')
+    expect(syncIcon(wrapper, 0).classes()).not.toContain('dis-op-icon--pending')
   })
 
   it('「新增」开空弹窗，「编辑」把整行交给弹窗', async () => {
@@ -200,7 +203,7 @@ describe('DataIndexSyncPage', () => {
     await buttonInFilter(wrapper, '新增').trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await rowsOf(wrapper)[0]!.findAll('.dis-op-link')[0]!.trigger('click')
+    await editIcon(wrapper, 0).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 56, comment: '机构指标数据表-机构名称', type: 0 })
   })
 

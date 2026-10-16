@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
 import { favoriteSourceIds, favoriteSourcesLoaded, loadFavoriteSources } from '@/utils/sourceFavorites'
 import { recentRankOf, recentSiteIds, recordSiteVisit } from '@/utils/siteRecents'
@@ -343,6 +344,18 @@ async function refreshAll() {
 // 复用网站详情的「源视图」组件，不限网站，一行一个源。
 const view = computed(() => ui.assetView)
 
+// ---- 数据中心「按条件查源」带来的命中源（1016）----
+// 名单在 store 里（见 workspace.dataQueryHits），URL 只带 `from=data-query` 标记；
+// 刷新后 store 空了就当没带，回到普通源管理。
+const ws = useWorkspaceStore()
+const dataHits = computed(() => (props.scope === 'all' && route.query.from === 'data-query' ? ws.dataQueryHits : null))
+function clearDataHits() {
+  ws.setDataQueryHits(null)
+  const query = { ...route.query }
+  delete query.from
+  void router.replace({ path: route.path, query })
+}
+
 // ---- 源列表视图（0924-06）----
 /** 页签范围：最近打开 = 那几个网站下的源 */
 const sourceScopeSiteIds = computed<string[] | undefined>(() => (recentOnly.value ? recentSiteIds.value : undefined))
@@ -513,7 +526,24 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="ca-page" :class="{ 'is-list': view === 'table' }">
+  <div class="ca-page" :class="{ 'is-list': view === 'table' || !!dataHits }">
+    <template v-if="dataHits">
+      <div class="ca-hits-bar" data-testid="data-query-hits">
+        <span>数据查询命中 <strong>{{ dataHits.length }}</strong> 个源</span>
+        <button class="ca-save-view sm" type="button" data-testid="data-query-hits-clear" @click="clearDataHits">清除</button>
+      </div>
+      <SourceOverviewView
+        :key="dataHits.join(',')"
+        class="ca-source-list"
+        current-site-id=""
+        :scope-source-ids="dataHits"
+        @open-source="openSourceFromList"
+        @open-source-data="openSourceFromList($event, 'data')"
+        @open-site="openSiteFromList"
+        @open-source-group="openSourceGroup"
+      />
+    </template>
+    <template v-else>
     <FilterToolbar
       v-if="view === 'card'"
       v-model:keyword="keyword"
@@ -575,13 +605,14 @@ onUnmounted(() => {
         />
       </template>
     </SourceOverviewView>
+    </template>
     <AddToViewDialog v-model="addToView.open" :source-ids="addToView.ids" @added="onAddedToView" />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。
          原来带 `total > size` 的条件，每页改成 50 之后 25 个网站正好一页装下，
          整条分页就消失了——连「共 N 条」和每页条数选择器一起没了，看着像功能丢了。
          单页时 el-pagination 自己会把页码收成一个，不占额外空间。 -->
-    <div v-if="view === 'card'" class="ca-pager card-mode">
+    <div v-if="view === 'card' && !dataHits" class="ca-pager card-mode">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="size"
@@ -619,6 +650,8 @@ onUnmounted(() => {
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 
 .ca-card-body { min-height: 200px; }
+.ca-hits-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid #bfdbfe; border-radius: 8px; background: var(--rc-primary-bg); color: var(--rc-text-2); font-size: 13px; }
+.ca-hits-bar strong { color: var(--rc-primary-ink); }
 
 .ca-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; }
 /* 0930-01：分页条钉在视口底部。原来跟在卡片后面，翻页时卡片高度一变它就跟着跳，

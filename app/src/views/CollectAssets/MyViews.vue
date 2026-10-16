@@ -24,7 +24,7 @@ import GroupSourcePicker from './GroupSourcePicker.vue'
 import ViewDirTree, { type DirCommand } from './ViewDirTree.vue'
 import { clearGroupMembersCache, loadGroupMembers } from './groupMembers'
 import {
-  addDir, addSources, allIds, bindGroup, boundGroups, childrenOf, deleteDir, descendantIds, dirById, emptyTree, moveSources,
+  addDir, addSources, allIds, bindGroup, boundGroups, childrenOf, deleteDir, descendantIds, dirById, emptyTree, groupIdsIn, missingOf, moveSources,
   onlyViaGroup, pathOf, pathText, placesOf, removeSources, renameDir, resolveIds, restoreExcluded, unbindGroup,
   type GroupMembers, type ViewContainer, type ViewTree,
 } from './viewDirs'
@@ -87,6 +87,11 @@ const counts = computed(() => {
 })
 const totalCount = computed(() => allIds(tree.value, members.value).length)
 const container = computed<ViewContainer>(() => dirById(tree.value, selectedDir.value) ?? { sources: [], groups: [], excluded: [] })
+/** 1016：绑定来源组后组里新加、还没进这个目录的源（后端绑定时只带入当时的成员） */
+const missingHere = computed(() => missingOf(container.value, members.value))
+const missingByGroup = computed(() => Object.fromEntries(missingHere.value.map((m) => [m.groupId, m.ids])))
+/** 来源组在这个目录里实际有几个源（扣掉排除和还没加入的） */
+const groupInCount = (g: string) => groupIdsIn(container.value, g, members.value).filter((m) => !container.value.excluded.includes(m)).length
 const pathLabel = computed(() => pathOf(tree.value, selectedDir.value).map((d) => d.name))
 const targetLabel = computed(() => pathText(tree.value, selectedDir.value))
 /** 移到目录的候选：除了当前目录，全部目录（按路径） */
@@ -270,7 +275,7 @@ async function newDir(parentId: string | null) {
 }
 async function onDirCommand(command: DirCommand, id: string) {
   if (command === 'newChild') return newDir(id)
-  if (command === 'addSources') { selectedDir.value = id; pickerOpen.value = true; return }
+  if (command === 'addSources') { selectedDir.value = id; openPicker(); return }
   if (command === 'rename') {
     const d = dirById(tree.value, id)
     const name = d && await askDirName('重命名目录', d.name)
@@ -298,13 +303,21 @@ watch(tree, () => {
 
 // ---- 添加源 / 绑定来源组 ----
 const pickerOpen = ref(false)
+/** 打开选源弹窗时预选的来源组，以及是否只看「未在视图」的源（从提示条进来时） */
+const pickerGroup = ref('')
+const pickerMissingOnly = ref(false)
+function openPicker(groupId = '', missingOnly = false) {
+  pickerGroup.value = groupId
+  pickerMissingOnly.value = missingOnly
+  pickerOpen.value = true
+}
 async function onPick(ids: string[]) {
   const before = new Set(container.value.sources)
   const next = tryTree(() => addSources(tree.value, selectedDir.value, ids))
   if (next) await commit(next, `已添加 ${ids.filter((id) => !before.has(id)).length} 个源到「${targetLabel.value}」`)
 }
 async function onBindGroup(groupId: string) {
-  await commit(bindGroup(tree.value, selectedDir.value, groupId), `已绑定来源组「${groupName(groupId)}」，以后组里新加的源会自动出现在这里`)
+  await commit(bindGroup(tree.value, selectedDir.value, groupId), `已绑定来源组「${groupName(groupId)}」，组里现有的源已加入；之后组里新加的源会在这里提示，勾选后加入`)
 }
 /** 解绑时提示里最多列出这么多个源名 */
 const UNBIND_LIST_MAX = 20
@@ -507,17 +520,23 @@ onActivated(() => {
             </span>
             <span class="mv-badge">🔒 仅自己可见</span>
             <div class="mv-actions">
-              <button class="mv-icon-btn" type="button" title="添加源 / 绑定来源组" aria-label="添加源" data-testid="mv-add-sources" :disabled="!selectedDir" @click="pickerOpen = true"><el-icon><Plus /></el-icon></button>
+              <button class="mv-icon-btn" type="button" title="添加源 / 绑定来源组" aria-label="添加源" data-testid="mv-add-sources" :disabled="!selectedDir" @click="openPicker()"><el-icon><Plus /></el-icon></button>
               <button class="mv-icon-btn" type="button" title="显示设置" aria-label="显示设置" data-testid="mv-display" @click="openDisplay"><el-icon><Setting /></el-icon></button>
               <button class="mv-icon-btn" type="button" title="刷新（重新拉来源组成员）" aria-label="刷新" @click="refresh"><el-icon><Refresh /></el-icon></button>
             </div>
           </div>
           <el-alert v-if="tree.convertedFromCondition" type="info" show-icon :closable="false" class="mv-alert" data-testid="mv-converted" title="这个视图原来是按条件筛选的，现在视图改成了目录：请新建目录再添加源（10-13 起不再支持条件视图）" />
           <el-alert v-if="membersError" type="error" show-icon :closable="false" class="mv-alert" :title="membersError" />
+          <el-alert v-for="m in missingHere" :key="m.groupId" type="warning" show-icon :closable="false" class="mv-alert" data-testid="mv-missing">
+            <template #title>
+              来源组「{{ groupName(m.groupId) }}」有 {{ m.ids.length }} 个源还没在这个目录里（绑定时只带入组里当时的源，之后新加的需要手动加入）
+              <el-button link type="primary" size="small" data-testid="mv-missing-open" @click="openPicker(m.groupId, true)">查看并加入</el-button>
+            </template>
+          </el-alert>
           <div v-if="container.groups.length || container.excluded.length" class="mv-groups" data-testid="mv-group-bar">
             <span v-if="container.groups.length" class="mv-groups-label">这个目录绑定的来源组：</span>
-            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里新加的源会自动出现在这里；移出组的源会留在这个目录里，不要了可以自己移出。在「我的分组」里维护成员">
-              来源组 <b>{{ groupName(g) }}</b> · {{ (members[g] ?? []).filter((m) => !container.excluded.includes(m)).length }}/{{ (members[g] ?? []).length }} 个源
+            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="绑定时带入组里当时的源；组里之后新加的源不会自动进来，会在上方提示，勾选后加入。移出组的源会留在这个目录里，不要了可以自己移出">
+              来源组 <b>{{ groupName(g) }}</b> · {{ groupInCount(g) }}/{{ (members[g] ?? []).length }} 个源
               <button type="button" title="解绑这个来源组" :aria-label="`解绑来源组 ${groupName(g)}`" data-testid="mv-unbind" @click="unbind(g)">×</button>
             </span>
             <span v-if="container.excluded.length" class="mv-groups-label">已从来源组排除 {{ container.excluded.length }} 个源 <el-button link type="primary" size="small" data-testid="mv-restore" @click="restore">恢复</el-button></span>
@@ -568,6 +587,9 @@ onActivated(() => {
       pick-mode
       group-filter
       :bound-groups="container.groups"
+      :missing-by-group="missingByGroup"
+      :initial-group-id="pickerGroup"
+      :initial-missing-only="pickerMissingOnly"
       :title="`添加源到「${targetLabel}」`"
       confirm-text="添加到目录"
       @pick="onPick"

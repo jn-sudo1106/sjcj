@@ -102,17 +102,18 @@ describe('Phase 3.1 画布入口退役', () => {
     }
   })
 
-  // 基础配置（1015 迁入旧「基础配置」组）：页内五个 tab，「表字段管理」是无 ?tab= 时的默认，
-  // 「向量表数据浏览」「选表规则配置」「向量表管理」「表改写管理」同日迁入
-  // （旧 /demo/vector-data、/demo/match-table-config-list、/config/vector-list、/demo/replace-table-config-list）。
+  // 基础配置（1015 迁入旧「基础配置」组）：页内六个 tab，「表字段管理」是无 ?tab= 时的默认，
+  // 「向量表数据浏览」「选表规则配置」「向量表管理」「表改写管理」「实体改写管理」同日迁入
+  // （旧 /demo/vector-data、/demo/match-table-config-list、/config/vector-list、/demo/replace-table-config-list、/demo/entity-rewrite-config-list）。
   // 顺序照旧侧栏，不按迁入先后排。
-  it('基础配置的页内 tab：表字段管理 + 向量表数据浏览 + 选表规则配置 + 向量表管理 + 表改写管理，权限码与 key 一致', () => {
+  it('基础配置的页内 tab：表字段管理 + 向量表数据浏览 + 选表规则配置 + 向量表管理 + 表改写管理 + 实体改写管理，权限码与 key 一致', () => {
     expect(BASE_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual([
       'entity-config:表字段管理',
       'vector-data:向量表数据浏览',
       'match-table-config:选表规则配置',
       'vector-config:向量表管理',
       'replace-table-config:表改写管理',
+      'entity-rewrite-config:实体改写管理',
     ])
     for (const t of BASE_CONFIG_TABS) {
       expect(t.permission).toBe(t.key)

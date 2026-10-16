@@ -256,6 +256,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/replace-table-config', desc: '表改写新增/编辑 → POST /api/poc/replace-table-config（body 带 id 即更新：tableName/replaceType/replaceTableName/status）', danger: true, impl: true, live: true },
   { path: 'poc/replace-table-config/status', desc: '表改写启停 → POST /api/poc/replace-table-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
 
+  // 实体改写管理（1015 迁入「基础配置」，旧「基础配置 → 实体改写管理」src/demo/EntityRewriteConfigList.vue +
+  // modal/EntityRewriteConfigEditor.vue，旧接口 src/demoApi/EntityRewriteConfigApi.js:4-7）。
+  // 端点形状与选表规则配置完全一致（page body / 根端点新增与编辑两用 body / status query / delete query），
+  // 差别只在字段口径：查询框上送的参数名是 **entityName**（不像另两个域改名叫 name），列字段是 cleanType。
+  // ⚠️ 四条都**没标 live**：2026-10-16 在 186 实测 POST /api/poc/entity-rewrite-config/page 回后端通用 500
+  //（同前缀下不存在的路径 entity-rewrite/page 是 Tomcat 404，说明控制器在、查询时炸，疑 186 库缺该域表）。
+  // 先按旧契约接线走 mock，后端把这一页打通并抓到真实行（含 status 是数字还是字符串、有无 delFlag 等额外列）后再逐条补 live。
+  { path: 'poc/entity-rewrite-config/page', desc: '实体改写分页 → POST /api/poc/entity-rewrite-config/page（body: pageNo/pageSize/entityName/status；186 实测 500，未联调）', impl: true, live: true },
+  { path: 'poc/entity-rewrite-config', desc: '实体改写新增/编辑 → POST /api/poc/entity-rewrite-config（body 带 id 即更新：entityName/cleanType/content/targetContent/status）', danger: true, impl: true, live: true },
+  { path: 'poc/entity-rewrite-config/status', desc: '实体改写启停 → POST /api/poc/entity-rewrite-config/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/entity-rewrite-config/delete', desc: '实体改写删除 → POST /api/poc/entity-rewrite-config/delete?id=（只发 id，走 query）', danger: true, impl: true, live: true },
+
   // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
   { path: 'poc/dic/page', desc: '自动补全分页 → POST /api/poc/dic/page（body: pageNo/pageSize/name，name 模糊匹配「内容」）', impl: true, live: true },

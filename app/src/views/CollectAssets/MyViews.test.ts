@@ -231,6 +231,28 @@ describe('我的视图 · 目录版', () => {
     expect(scopeSeen).toContain('t4')
   })
 
+  // 1016：真实接口下绑定来源组是快照（rows），组里之后新加的源不会自动进来：提示 + 勾选加入
+  it('来源组新加的源不在目录里：提示条列出数量，「查看并加入」打开选源弹窗只看这些，加入后提示消失', async () => {
+    let t = emptyTree()
+    const r = addDir(t, null, '舆情')
+    t = bindGroup(addSources(r.tree, r.id, ['s4']), r.id, 'g3')
+    t = { ...t, dirs: t.dirs.map((d) => ({ ...d, rows: ['s4', 't1', 't2'] })) } // t3 是绑定后才进组的
+    await localSourceViewApi.add('7', { viewName: '广发', tree: t })
+    await mountPage()
+    expect(wrapper.get('[data-testid="mv-missing"]').text()).toContain('来源组「twitter1」有 1 个源还没在这个目录里')
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('2/3')
+    expect(scopeSeen).not.toContain('t3')
+
+    await wrapper.get('[data-testid="mv-missing-open"]').trigger('click')
+    await settle()
+    const picker = wrapper.findComponent(GroupSourcePicker)
+    expect(picker.props()).toMatchObject({ modelValue: true, initialGroupId: 'g3', initialMissingOnly: true, missingByGroup: { g3: ['t3'] } })
+    picker.vm.$emit('pick', ['t3'])
+    await settle()
+    expect(wrapper.find('[data-testid="mv-missing"]').exists()).toBe(false)
+    expect(scopeSeen).toContain('t3')
+  })
+
   it('解绑来源组：直接关掉弹窗 = 不解绑', async () => {
     await seed()
     await mountPage()

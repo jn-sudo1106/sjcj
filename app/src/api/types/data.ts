@@ -172,6 +172,8 @@ export interface RowQuery extends PageQuery {
   sourceId?: string
   /** 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部源；与 sourceId 同传时 sourceId 在此范围内进一步收窄 */
   siteId?: string
+  /** 只给导出用（1016）：导出接口不认 siteId / sourceIds，按网站导出时把源范围折成 `SOURCE_ID in (...)` 并进 more */
+  sourceIds?: string[]
   dataId?: string
   parentId?: string
   /** 多选状态由调用方 join(',') 传入（如 'C,AC'）；空则不随载荷携带该键 */

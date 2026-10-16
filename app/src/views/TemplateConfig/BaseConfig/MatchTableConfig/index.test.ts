@@ -55,6 +55,13 @@ function mountPage() {
   })
 }
 
+/** 操作列图标顺序：编辑 / 删除 */
+function rowIcon(wrapper: ReturnType<typeof mountPage>, rowIndex: number, iconIndex: number) {
+  return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('.mtc-op-icon')[iconIndex]!
+}
+const editIcon = (w: ReturnType<typeof mountPage>, i = 0) => rowIcon(w, i, 0)
+const deleteIcon = (w: ReturnType<typeof mountPage>, i = 0) => rowIcon(w, i, 1)
+
 function lastPageQuery() {
   const calls = vi.mocked(matchTableConfigApi.page).mock.calls
   return (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>
@@ -168,7 +175,7 @@ describe('MatchTableConfigPage', () => {
     await flushPromises()
     vi.mocked(matchTableConfigApi.page).mockClear()
 
-    await wrapper.findAll('.mtc-op-link--danger')[0]!.trigger('click')
+    await deleteIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(ElMessageBox.confirm).toHaveBeenCalled()
@@ -182,7 +189,7 @@ describe('MatchTableConfigPage', () => {
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancelled'))
 
-    await wrapper.findAll('.mtc-op-link--danger')[0]!.trigger('click')
+    await deleteIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(matchTableConfigApi.remove).not.toHaveBeenCalled()
@@ -196,7 +203,7 @@ describe('MatchTableConfigPage', () => {
     await wrapper.findAll('.mtc-operator button').find((b) => b.text().includes('新增'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    await wrapper.findAll('.mtc-op-link').find((l) => l.text() === '编辑')!.trigger('click')
+    await editIcon(wrapper).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 3, tableName: 'KHFA_KHZBJG_JG', selectionType: 'text_selection' })
   })
 

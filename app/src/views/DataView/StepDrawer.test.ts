@@ -36,4 +36,28 @@ describe('StepDrawer', () => {
     await wrapper.get('[data-node-id="src-1-s2"]').trigger('click')
     expect(wrapper.emitted('select-table')?.at(-1)).toEqual(['TB_DETAIL'])
   })
+
+  // 1016：源 430003100（流程 14009350）分叉后节点整段不显示——flowDef 漏传 branchGroups
+  it('流程有分叉时，分叉之后各支的节点都显示', async () => {
+    const branched = (stepId: string, name: string, dependsOn: string[]): Step =>
+      ({ stepId, sourceId: 'src-1', name, dependsOn, inputTable: '900', outputTable: '900', enabled: true }) as Step
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      branched('41756', 'html下载机器', ['0']),
+      branched('41758', 'html解析-A', ['41756']),
+      branched('41760', 'html下载机器_chrome', ['41756']),
+      branched('41767', 'html解析-B', ['41760']),
+      branched('41783', '网页抓取', ['41767']),
+    ])
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+    const wrapper = mount(StepDrawer, {
+      props: { modelValue: true, sourceId: 'src-1' },
+      global: { directives: { loading: {} }, stubs: { ElDrawer: { template: '<section><slot /></section>' } } },
+    })
+    await flushPromises()
+
+    for (const id of ['41756', '41758', '41760', '41767', '41783']) {
+      expect(wrapper.find(`[data-node-id="${id}"]`).exists(), id).toBe(true)
+    }
+  })
 })

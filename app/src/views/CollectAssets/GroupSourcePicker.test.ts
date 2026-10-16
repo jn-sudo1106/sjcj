@@ -106,3 +106,34 @@ it('表头「全选本页」：全选 / 取消只影响当前页，跨页已选�
   expect(done).toBeTruthy()
   wrapper.unmount()
 })
+
+// 1016：视图绑定来源组是快照，组里之后新加的源要提示「未在这里」，可只看这些、一键全选后加入
+it('已绑定的来源组：提示未在这里的源，只看这些按源 ID 查，一键全选后 pick 出去', async () => {
+  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([{ sourceGroupId: '3', sourceGroupName: 'twitter1', state: 'ACTIVE' }] as never)
+  const pageApi = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (query) => ({
+    total: query?.sourceIds ? 2 : 5,
+    list: [{ sourceId: '503', name: '新源A' }, { sourceId: '501', name: '老源' }] as Source[],
+  }))
+  const wrapper = mount(GroupSourcePicker, {
+    props: {
+      modelValue: false, groupId: '', pickMode: true, groupFilter: true, boundGroups: ['3'],
+      missingByGroup: { 3: ['503', '504'] }, initialGroupId: '3', initialMissingOnly: true,
+    },
+    global: { plugins: [ElementPlus] },
+    attachTo: document.body,
+  })
+  await wrapper.setProps({ modelValue: true }); await flushPromises()
+  expect(pageApi).toHaveBeenLastCalledWith(expect.objectContaining({ sourceGroupId: '3', sourceIds: '503,504' }))
+  expect(document.querySelector('[data-testid="picker-missing-hint"]')?.textContent).toContain('2 个源还没在这里')
+  // 行上只给未在这里的标记
+  expect(document.querySelectorAll('[data-testid="picker-missing-tag"]')).toHaveLength(1)
+
+  ;(document.querySelector('[data-testid="picker-missing-only"]') as HTMLButtonElement).click(); await flushPromises()
+  expect(pageApi.mock.lastCall?.[0]).not.toHaveProperty('sourceIds')
+
+  ;(document.querySelector('[data-testid="picker-select-missing"]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.body.textContent).toContain('已选 2 个源')
+  const confirm = [...document.querySelectorAll('.picker-footer button')].at(-1) as HTMLButtonElement
+  confirm.click(); await flushPromises()
+  expect(wrapper.emitted('pick')?.[0]).toEqual([['503', '504']])
+})

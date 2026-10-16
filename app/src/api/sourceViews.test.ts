@@ -26,7 +26,7 @@ import {
   treeFromJson,
   type SourceView,
 } from './sourceViews'
-import { addDir, addSources, bindGroup, deleteDir, emptyTree, renameDir, type ViewTree } from '@/views/CollectAssets/viewDirs'
+import { addDir, addSources, bindGroup, deleteDir, emptyTree, missingOf, renameDir, type ViewTree } from '@/views/CollectAssets/viewDirs'
 
 beforeEach(() => {
   localStorage.clear()
@@ -206,8 +206,8 @@ describe('真实接口（开发环境联调口径）', () => {
 
     // 读回来：逐层 categoryPaged（带 rootViewId）+ 每个目录 listSources
     expect(await sourceViewApi.loadTree('7', view)).toEqual({ v: 2, dirs: [
-      { id: '9000', name: '宏观', parentId: null, sortNo: 0, sources: [], groups: [], excluded: [] },
-      { id: '9001', name: '统计局', parentId: '9000', sortNo: 0, sources: ['430024679', '430024682'], groups: [], excluded: [] },
+      { id: '9000', name: '宏观', parentId: null, sortNo: 0, sources: [], groups: [], excluded: [], rows: [] },
+      { id: '9001', name: '统计局', parentId: '9000', sortNo: 0, sources: ['430024679', '430024682'], groups: [], excluded: [], rows: ['430024679', '430024682'] },
     ] })
     expect(calls('category/categoryPaged').every((q) => q.rootViewId === '1')).toBe(true)
 
@@ -268,8 +268,28 @@ describe('真实接口（开发环境联调口径）', () => {
     expect(requestMock.mock.calls.map(([e, , o]) => `${e}:${JSON.stringify([o.httpParams.sourceIds, o.httpParams.sourceGroupIds])}`)).toEqual([
       'category/delSources:[[],[3]]',
       'category/addSources:[[501],[]]',
+      'category/listSources:[null,null]', // 源行变了的目录重读一次，「未在视图」据此重算
     ])
     expect([...db.binds.get('9000')!].sort()).toEqual(['501', '77'])
+  })
+
+  // 1016：后端绑定来源组时只展开当时的成员；组里之后新加的源读回来是「未在视图」，勾选加入后消失
+  it('绑定来源组是快照：组里新加的源读回来不在 rows 里，算「未在视图」；加入后重读 rows', async () => {
+    fakeBackend()
+    const [view] = await sourceViewApi.list('7')
+    const a = addDir(emptyTree(), null, '舆情')
+    const first = await sourceViewApi.saveTree('7', view, emptyTree(), bindGroup(a.tree, a.id, '3'))
+    expect(first.tree.dirs[0].rows?.sort()).toEqual(['501', '502'])
+    groupMembers[3] = ['501', '502', '503']
+    try {
+      const tree = await sourceViewApi.loadTree('7', first.view)
+      expect(missingOf(tree.dirs[0], { 3: groupMembers[3] })).toEqual([{ groupId: '3', ids: ['503'] }])
+      const saved = await sourceViewApi.saveTree('7', first.view, tree, addSources(tree, tree.dirs[0].id, ['503']))
+      expect(calls('category/addSources').at(-1)).toEqual({ categoryId: 9000, sourceIds: [503], sourceGroupIds: [] })
+      expect(missingOf(saved.tree.dirs[0], { 3: groupMembers[3] })).toEqual([])
+    } finally {
+      groupMembers[3] = ['501', '502']
+    }
   })
 
   // 10-15 后端支持排除：从目录 delSources 掉组成员 = 排除（sourcePaged 不再带出），addSources 加回 = 恢复

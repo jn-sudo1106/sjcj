@@ -52,6 +52,15 @@ function mountPage() {
   })
 }
 
+/** 操作列图标顺序：详情 / 编辑 / 同步 / 删除 */
+function rowIcon(wrapper: ReturnType<typeof mountPage>, rowIndex: number, iconIndex: number) {
+  return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('.vtc-op-icon')[iconIndex]!
+}
+const detailIcon = (w: ReturnType<typeof mountPage>, i = 0) => rowIcon(w, i, 0)
+const editIcon = (w: ReturnType<typeof mountPage>, i = 0) => rowIcon(w, i, 1)
+const syncIcon = (w: ReturnType<typeof mountPage>, i = 0) => rowIcon(w, i, 2)
+const deleteIcon = (w: ReturnType<typeof mountPage>, i = 0) => rowIcon(w, i, 3)
+
 function lastPageQuery() {
   const calls = vi.mocked(vectorConfigApi.page).mock.calls
   return (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>
@@ -127,8 +136,7 @@ describe('VectorConfigPage', () => {
     await flushPromises()
     vi.mocked(vectorConfigApi.page).mockClear()
 
-    const syncLink = wrapper.findAll('.vtc-row-actions')[0]!.findAll('.vtc-op-link').find((l) => l.text() === '同步')!
-    await syncLink.trigger('click')
+    await syncIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(vectorConfigApi.sync).toHaveBeenCalledWith([2])
@@ -141,7 +149,7 @@ describe('VectorConfigPage', () => {
     vi.mocked(vectorConfigApi.sync).mockRejectedValueOnce(new Error('同步链路未启动'))
     vi.mocked(vectorConfigApi.page).mockClear()
 
-    await wrapper.findAll('.vtc-row-actions')[0]!.findAll('.vtc-op-link').find((l) => l.text() === '同步')!.trigger('click')
+    await syncIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(vectorConfigApi.page).not.toHaveBeenCalled()
@@ -155,7 +163,7 @@ describe('VectorConfigPage', () => {
     await flushPromises()
     vi.mocked(vectorConfigApi.page).mockClear()
 
-    await wrapper.findAll('.vtc-op-link--danger')[0]!.trigger('click')
+    await deleteIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(ElMessageBox.confirm).toHaveBeenCalled()
@@ -168,7 +176,7 @@ describe('VectorConfigPage', () => {
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancelled'))
 
-    await wrapper.findAll('.vtc-op-link--danger')[0]!.trigger('click')
+    await deleteIcon(wrapper).trigger('click')
     await flushPromises()
 
     expect(vectorConfigApi.remove).not.toHaveBeenCalled()
@@ -182,11 +190,10 @@ describe('VectorConfigPage', () => {
     await wrapper.findAll('.vtc-operator button').find((b) => b.text().includes('新建'))!.trigger('click')
     expect(dialogOpen).toHaveBeenCalledWith()
 
-    const links0 = wrapper.findAll('.vtc-row-actions')[0]!.findAll('.vtc-op-link')
-    await links0.find((l) => l.text() === '编辑')!.trigger('click')
+    await editIcon(wrapper).trigger('click')
     expect(dialogOpen.mock.calls.at(-1)?.[0]).toMatchObject({ id: 2, name: 'KHFA_ZB_VECTOR' })
 
-    await links0.find((l) => l.text() === '详情')!.trigger('click')
+    await detailIcon(wrapper).trigger('click')
     expect(dialogOpenDetail.mock.calls.at(-1)?.[0]).toMatchObject({ id: 2, name: 'KHFA_ZB_VECTOR' })
   })
 

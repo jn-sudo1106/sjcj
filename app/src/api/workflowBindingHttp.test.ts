@@ -62,6 +62,14 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
     expect(rows[0]).toMatchObject({ bindType: 'SOURCE', bindId: '430024667', publishedFlowId: '100', status: 'ACTIVE' })
   })
 
+  it('withNames: false 不取流程详情，名字退回「流程 #ID」（画布加载不被慢的 flowDetail 挡住）', async () => {
+    fetchMock.mockResolvedValue(ok(ALONE))
+    const { workflowBindingApi, flowCenterApi } = await load()
+    const rows = await workflowBindingApi.list('430024667', { withNames: false })
+    expect(flowCenterApi.detail).not.toHaveBeenCalled()
+    expect(rows.map((r) => [r.workflowId, r.workflowName, r.primary])).toEqual([['100', '流程 #100', true], ['101', '流程 #101', false]])
+  })
+
   /** 186 实测 430024683（10-15）：顶层是来源组 3 的流程，own* 是源自有的流程 */
   const IN_GROUP = {
     sourceId: '430024683', sourceGroupId: '3', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006',

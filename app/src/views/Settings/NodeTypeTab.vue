@@ -92,16 +92,28 @@ async function remove(row: NodeType) {
 const editVisible = ref(false)
 const editing = ref<NodeType | null>(null)
 const saving = ref(false)
-const form = reactive({ sourceType: '', typeName: '', downType: '', topic: '', seq: null as number | null, notes: '' })
+// 字段顺序对齐旧平台：`editCols = [...SOURCE_TYPE.base, ...SOURCE_TYPE.other].filter(!noEdit)`
+// → 类型ID / 类型名称 / 配置队列 / 默认消息队列 / 备注 / 排序 / 处理类型 / 参数(JSON)。
+// 最后两项（procType、params）是 2026-10-16 补的，之前漏迁。
+const form = reactive({
+  sourceType: '', typeName: '', downType: '', topic: '', seq: null as number | null,
+  notes: '', procType: '', params: '',
+})
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, { sourceType: '', typeName: '', downType: 'source-config', topic: '', seq: null, notes: '' })
+  Object.assign(form, {
+    sourceType: '', typeName: '', downType: 'source-config', topic: '', seq: null,
+    notes: '', procType: '', params: '',
+  })
   editVisible.value = true
 }
 function openEdit(row: NodeType) {
   editing.value = row
-  Object.assign(form, { sourceType: row.sourceType, typeName: row.typeName, downType: row.downType, topic: row.topic, seq: row.seq, notes: row.notes })
+  Object.assign(form, {
+    sourceType: row.sourceType, typeName: row.typeName, downType: row.downType, topic: row.topic,
+    seq: row.seq, notes: row.notes, procType: row.procType, params: row.params,
+  })
   editVisible.value = true
 }
 
@@ -113,6 +125,8 @@ function changedFields(before: NodeType): NodeTypeInput {
   if (form.topic.trim() !== before.topic) patch.topic = form.topic.trim()
   if (form.seq !== before.seq) patch.seq = form.seq
   if (form.notes.trim() !== before.notes) patch.notes = form.notes.trim()
+  if (form.procType.trim() !== before.procType) patch.procType = form.procType.trim()
+  if (form.params.trim() !== before.params) patch.params = form.params.trim()
   return patch
 }
 
@@ -144,6 +158,8 @@ async function save() {
         topic: form.topic.trim() || undefined,
         seq: form.seq ?? undefined,
         notes: form.notes.trim() || undefined,
+        procType: form.procType.trim() || undefined,
+        params: form.params.trim() || undefined,
       })
       ElMessage.success(ack?.message || '新增成功')
     }
@@ -230,11 +246,21 @@ async function save() {
         <el-form-item label="默认消息队列">
           <el-input v-model="form.topic" placeholder="可不填" />
         </el-form-item>
+        <!-- 「备注」在「排序」之前 —— 顺序照抄旧 `SOURCE_TYPE.base` 的列序 -->
+        <el-form-item label="备注">
+          <el-input v-model="form.notes" type="textarea" :rows="3" maxlength="200" />
+        </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="form.seq" :controls="false" style="width: 100%" placeholder="可不填" />
         </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="form.notes" type="textarea" :rows="3" maxlength="200" />
+        <!-- 2026-10-16 补齐：旧 `SOURCE_TYPE.other` 的「处理类型」「参数(JSON)」。
+             旧版这两列都是普通文本输入（params 的 type 是 textArea，不是 json），
+             所以这里同样不做 JSON 校验——旧 BaseEdit 只对 type==='json' 的列校验并压缩。 -->
+        <el-form-item label="处理类型">
+          <el-input v-model="form.procType" placeholder="如：200" />
+        </el-form-item>
+        <el-form-item label="参数(JSON)">
+          <el-input v-model="form.params" type="textarea" :rows="4" placeholder="参数 JSON，可不填" />
         </el-form-item>
       </el-form>
       <template #footer>

@@ -1049,10 +1049,11 @@ describe('分支段 store 操作（旧平台语义，1008-BR-06 重写）', () =
     expect(f.configs['3']).toBeUndefined()
   })
 
-  it('remove(branch chain 内节点)：从 chain 摘除 + delete configs', () => {
+  it('remove(branch chain 内节点)：从 chain 摘除 + delete configs，只剩一路时并回主链', () => {
     f.remove('3')
     expect(f.configs['3']).toBeUndefined()
-    expect(f.branchGroups[0].branches.flatMap((b) => b.chain)).not.toContain('3')
+    expect(f.branchGroups).toHaveLength(0)
+    expect(f.main).toEqual(['start', '1', '2', 'end'])
   })
 
   // S6-3（方案 §4.4）：技术指导明确"暂时别删"——本期删节点只收集待清理资源清单，不真的调删除接口。
@@ -2149,6 +2150,27 @@ describe('拓扑编辑：新建分支 / 线上插入 / 分叉前插入（1008-BR
     expect(chains(f, '1')).toEqual([['2', '3'], [n]])
     expect(f.parentOfNode(n)).toBe('1')
     expect(f.selectedId).toBe(n)
+  })
+
+  it('remove：新建分支后删掉它唯一的节点，空分支一并消失、并回直链', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['2'])])
+    const n = f.addSibling('2', 'web')!
+    f.remove(n)
+    expect(f.main).toEqual(['start', '1', '2', '3', 'end'])
+    expect(f.branchGroups).toEqual([])
+  })
+
+  it('remove：三路分叉删掉一路的唯一节点，只剩两路', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])])
+    const n = f.addSibling('2', 'web')!
+    f.remove(n)
+    expect(chains(f, '1')).toEqual([['2'], ['3']])
+  })
+
+  it('remove：删分支链头，链内后继顶上', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1']), mk('4', ['3'])])
+    f.remove('3')
+    expect(chains(f, '1')).toEqual([['2'], ['4']])
   })
 
   it('addSibling：已有分叉时再加一路，排在同级最右', () => {

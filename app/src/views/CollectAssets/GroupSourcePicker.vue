@@ -21,7 +21,15 @@ const props = withDefaults(defineProps<{
   groupFilter?: boolean
   /** 目标里已经绑定的来源组：选中时提示已绑定，不再给绑定按钮 */
   boundGroups?: string[]
-}>(), { backendMode: false, pickMode: false, groupFilter: false, boundGroups: () => [] })
+  /**
+   * 1016：已绑定来源组里「未在视图」的源（来源组 ID → 源 ID）。后端绑定时只带入组里当时的成员，
+   * 之后新加的不会自动进来；选中这样的组时提示数量、行上标「未在视图」，可只看这些并一键全选。
+   */
+  missingByGroup?: Record<string, string[]>
+  /** 打开时预选的来源组 / 是否只看未在视图的源（视图页提示条「查看并加入」进来） */
+  initialGroupId?: string
+  initialMissingOnly?: boolean
+}>(), { backendMode: false, pickMode: false, groupFilter: false, boundGroups: () => [], missingByGroup: () => ({}), initialGroupId: '', initialMissingOnly: false })
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   /** backendMode 保存成功后通知父级重拉（revision 会变） */
@@ -42,6 +50,13 @@ async function loadGroupOptions() {
     groupOptions.value = [] // 拉不到就只能按名称 / ID 选源
   }
 }
+/** 选中的来源组里还没进视图的源 */
+const missingIds = computed(() => (groupId.value ? props.missingByGroup[groupId.value] ?? [] : []))
+const missingSet = computed(() => new Set(missingIds.value))
+const missingOnly = ref(false)
+function setMissingOnly(on: boolean) { missingOnly.value = on; search() }
+function selectAllMissing() { selected.value = [...new Set([...selected.value, ...missingIds.value])] }
+function onGroupChange() { missingOnly.value = false; search() }
 function bindSelectedGroup() {
   if (!groupId.value) return
   emit('bindGroup', groupId.value)
@@ -61,7 +76,21 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await sourceApi.sourcePaged({ page: page.value, size: size.value, [field.value]: keyword.value.trim() || undefined, sourceGroupId: groupId.value || undefined })
+    const kw = keyword.value.trim()
+    let query: Record<string, string | undefined> = { [field.value]: kw || undefined }
+    if (missingOnly.value) {
+      // 只看未在视图的：源 ID 限定为这批；按 ID 查时再跟输入的 ID 取交集
+      const typed = field.value === 'sourceIds' && kw ? new Set(kw.split(/[,，\s]+/).filter(Boolean)) : null
+      const ids = typed ? missingIds.value.filter((id) => typed.has(id)) : missingIds.value
+      if (!ids.length) {
+        if (request !== sequence) return
+        rows.value = []
+        total.value = 0
+        return
+      }
+      query = { ...(field.value === 'name' ? { name: kw || undefined } : {}), sourceIds: ids.join(',') }
+    }
+    const result = await sourceApi.sourcePaged({ page: page.value, size: size.value, ...query, sourceGroupId: groupId.value || undefined })
     if (request !== sequence) return
     rows.value = result.list
     total.value = result.total
@@ -75,7 +104,12 @@ async function load() {
 function search() { page.value = 1; void load() }
 watch(() => props.modelValue, open => {
   ++sequence
-  if (open) { selected.value = []; keyword.value = ''; groupId.value = ''; page.value = 1; void load(); void loadGroupOptions() }
+  if (open) {
+    selected.value = []; keyword.value = ''; page.value = 1
+    groupId.value = props.groupFilter ? props.initialGroupId : ''
+    missingOnly.value = !!groupId.value && props.initialMissingOnly
+    void load(); void loadGroupOptions()
+  }
 })
 function toggle(id: string) {
   selected.value = selected.value.includes(id) ? selected.value.filter(value => value !== id) : [...selected.value, id]
@@ -131,7 +165,7 @@ async function save() {
 <template>
   <el-dialog :model-value="modelValue" :title="title || '选择源加入分组'" width="980px" style="max-width: calc(100vw - 32px)" append-to-body @update:model-value="emit('update:modelValue', $event)">
     <div class="picker-filter">
-      <el-select v-if="groupFilter" v-model="groupId" clearable placeholder="全部来源组" style="width: 160px" aria-label="来源组" data-testid="picker-group" @change="search">
+      <el-select v-if="groupFilter" v-model="groupId" clearable placeholder="全部来源组" style="width: 160px" aria-label="来源组" data-testid="picker-group" @change="onGroupChange">
         <el-option v-for="g in groupOptions" :key="g.id" :label="g.name" :value="g.id" :disabled="g.state !== 'ACTIVE'" />
       </el-select>
       <el-select v-model="field" style="width: 110px" aria-label="查询字段"><el-option label="源名称" value="name" /><el-option label="源 ID" value="sourceIds" /></el-select>
@@ -139,9 +173,18 @@ async function save() {
       <el-button type="primary" @click="search">查询</el-button>
     </div>
     <div v-if="groupFilter && selectedGroup" class="picker-bind" data-testid="picker-bind-bar">
-      <template v-if="boundGroups.includes(selectedGroup.id)">来源组「{{ selectedGroup.name }}」已经绑定在这里了</template>
+      <template v-if="boundGroups.includes(selectedGroup.id)">
+        <span v-if="missingIds.length" data-testid="picker-missing-hint">
+          来源组「{{ selectedGroup.name }}」已绑定在这里，其中 <b>{{ missingIds.length }} 个源还没在这里</b>（绑定时只带入组里当时的源，之后新加的需要勾选加入）。
+        </span>
+        <span v-else>来源组「{{ selectedGroup.name }}」已绑定在这里，组里的源都已在这里。</span>
+        <template v-if="missingIds.length">
+          <el-button size="small" data-testid="picker-missing-only" @click="setMissingOnly(!missingOnly)">{{ missingOnly ? '看组里全部源' : `只看未在这里的 ${missingIds.length} 个源` }}</el-button>
+          <el-button size="small" type="primary" plain data-testid="picker-select-missing" @click="selectAllMissing">全部勾选这 {{ missingIds.length }} 个源</el-button>
+        </template>
+      </template>
       <template v-else>
-        <span>来源组「{{ selectedGroup.name }}」共 {{ total }} 个源。<b>绑定整个来源组</b>：以后组里新加的源会自动出现在这里；或者在下面只勾需要的几个源。</span>
+        <span>来源组「{{ selectedGroup.name }}」共 {{ total }} 个源。<b>绑定整个来源组</b>：带入组里现有的源，之后组里新加的源会在视图里提示，勾选后加入；或者在下面只勾需要的几个源。</span>
         <el-button size="small" data-testid="picker-bind-group" @click="bindSelectedGroup">绑定整个来源组</el-button>
       </template>
     </div>
@@ -151,7 +194,9 @@ async function save() {
         <template #header><el-checkbox :model-value="pageAllSelected" :indeterminate="pageSomeSelected" :disabled="!rows.length" aria-label="全选本页" title="全选本页" data-testid="picker-select-page" @change="togglePage(!!$event)" /></template>
         <template #default="{ row }"><el-checkbox :model-value="selected.includes(row.sourceId)" :aria-label="`选择 ${row.name}`" @change="toggle(row.sourceId)" /></template></el-table-column>
       <el-table-column prop="sourceId" label="源 ID" width="120" />
-      <el-table-column prop="name" label="源名称" min-width="160" show-overflow-tooltip />
+      <el-table-column label="源名称" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.name }}<el-tag v-if="missingSet.has(row.sourceId)" size="small" type="warning" effect="plain" class="picker-missing-tag" data-testid="picker-missing-tag">未在这里</el-tag></template>
+      </el-table-column>
       <el-table-column prop="siteId" label="网站 ID" width="100" />
       <el-table-column prop="url" label="URL" min-width="200" show-overflow-tooltip />
     </el-table>
@@ -163,7 +208,9 @@ async function save() {
 .picker-filter { display: flex; gap: 8px; margin-bottom: 12px; }
 .picker-filter .el-input { flex: 1; }
 .picker-bind { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 12px; }
-.picker-bind span { flex: 1; }
+.picker-bind { flex-wrap: wrap; }
+.picker-bind span { flex: 1 1 320px; }
+.picker-missing-tag { margin-left: 6px; }
 .picker-footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
 .picker-footer span { margin-right: auto; color: var(--rc-muted); }
 .el-pagination { margin-top: 12px; }

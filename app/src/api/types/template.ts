@@ -543,6 +543,33 @@ export interface ReplaceTableConfig extends TemplateRow {
   delFlag?: string
 }
 
+/**
+ * 实体改写配置（旧「基础配置 → 实体改写管理」，1015 迁入，端点域 /poc/entity-rewrite-config）。
+ * 一条 = 问句里的某个实体词在解析时换成另一个写法：按替换类型（正则 / 简单）把「替换内容」换成「目标内容」。
+ *
+ * ⚠️ 字段形状只按旧平台代码（EntityRewriteConfigList.vue:88-124、modal/EntityRewriteConfigEditor.vue:17-44）
+ * 得出，**没取到真实行**：2026-10-16 在 186 上 POST /api/poc/entity-rewrite-config/page 回的是
+ * 后端通用 500（同前缀下 entity-rewrite/page 是 Tomcat 404，说明路由在、执行时炸），
+ * 疑该域在 186 库里缺表；后端侧核对前不标 live，联调打通后按真实响应校正本实体。
+ *
+ * 已知列 id / entityName / cleanType / content / targetContent / createTime / updateTime（旧列表的 7 列）。
+ * ⚠️ 「替换类型」的实体列名是 **cleanType**，旧弹窗 data() 里那份 `replaceType: 'regular_replacement'`
+ * 是与模板 v-model（form.cleanType）不对上的死字段，新增时压根没生效，不迁（见 EntityRewriteConfigEditDialog 偏差说明）。
+ * ⚠️ status 真实回的是数字还是字符串未实测（同域的 match/replace 两个模块都回**数字**），比较一律走 String(row.status)。
+ * ⚠️ 旧平台还有多少列（如 delFlag）未知：旧弹窗编辑时 `this.form = data` 把整行原样 POST 回去，
+ *    这里同口径把表单字段以外的列整行带回，见 EntityRewriteConfigEditDialog 的 passthrough。
+ */
+export interface EntityRewriteConfig extends TemplateRow {
+  /** 实体名称（列展示、查询与保存都用这个字段名；旧搜索框上送的参数名同样是 entityName） */
+  entityName?: string
+  /** 替换类型：'regular_replacement' 正则替换 / 'simple_replacement' 简单替换 */
+  cleanType?: string
+  /** 替换内容（要被换掉的写法；正则替换时这里存的是正则） */
+  content?: string
+  /** 目标内容（换成什么） */
+  targetContent?: string
+}
+
 /** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy） */
 export interface TemplateCrudPaths {
   page?: string

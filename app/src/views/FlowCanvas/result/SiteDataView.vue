@@ -1006,19 +1006,36 @@ async function openBackTraceInSourceView() {
 const summaryOpen = ref(false)
 /**
  * 0930-14B：按当前查询条件导出 Excel（与统计同一套条件），直接打开下载链接，同数据中心。
- * 只在选了具体源时可用：导出接口不认 siteId / siteIds（2026-10-03 实测），「全部源」时导出的会是
- * 整张表、连别的网站的数据一起——按网站导出等 0930-14C（后端加参数）。
+ * 导出接口不认 siteId / sourceIds（10-03、10-16 实测，传了照样导整张表）；「全部源」时把这张表里
+ * 本网站的源（归并用的候选源）折成 `SOURCE_ID in (...)` 并进 more（10-16 实测生效）。
+ * 下载走 GET，源太多会撞 URL 长度上限，超过 SITE_EXPORT_MAX_SOURCES 个就请用户先收窄。
  */
+const SITE_EXPORT_MAX_SOURCES = 300
 const exportDisabledReason = computed(() => {
   if (!effectiveTableId.value) return '请先选择一张表'
-  if (!selectedSourceId.value) return '按网站导出暂不支持，请先在左侧选一个源'
   // 条件改了还没点「查询」：buildSummaryQuery 读的是输入框里的值，导出来会和表格对不上
   if (filtersDirty.value) return '查询条件已修改，先点「查询」再导出'
   return ''
 })
 function onExport() {
   if (exportDisabledReason.value) return
-  window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank')
+  const query = buildSummaryQuery()
+  if (!selectedSourceId.value) {
+    if (loading.value) {
+      ElMessage.info('数据还在加载，稍后再导出')
+      return
+    }
+    if (!candidateSourceIds.length) {
+      ElMessage.info('当前条件下这个网站没有可导出的数据')
+      return
+    }
+    if (candidateSourceIds.length > SITE_EXPORT_MAX_SOURCES) {
+      ElMessage.warning(`涉及 ${candidateSourceIds.length} 个源，超过按网站导出上限 ${SITE_EXPORT_MAX_SOURCES} 个，请加条件收窄或在左侧选一个源`)
+      return
+    }
+    query.sourceIds = [...candidateSourceIds]
+  }
+  window.open(dataApi.exportUrl(query), '_blank')
 }
 // 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
 const tableStructOpen = ref(false)
@@ -1477,6 +1494,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 </template>
 
 <style scoped>
+/* rc-btn 全局没有禁用态：禁用的按钮看着能点、点了没反应（1016 导出 Excel 被当成坏了） */
+.rc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .sdv2-sql { flex: 1; min-width: 200px; }
 .sdv2-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏（参考 ResultView.vue）：fixed 铺满视口逃逸到父级布局之外，父级（SiteDetailView.vue

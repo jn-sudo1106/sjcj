@@ -262,14 +262,18 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     expect(openDialog).toHaveBeenLastCalledWith(null)
   })
 
-  it('内嵌形态固定源、隐藏源筛选，并把该源透给弹窗', async () => {
+  it('内嵌形态：只去掉卡片壳，筛选整套保留，传入的源作为初值透给列表与弹窗', async () => {
     const paged = pagedSpy()
     const wrapper = mountPage({ embedded: true, sourceId: 's-embedded' })
     await flushPromises()
 
+    // 源是初值：查询按它过滤，「加监控」也拿它预填数据源
     expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's-embedded' }))
-    expect(wrapper.find('.stub-source-select').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'CheckEditDialog' }).props('sourceId')).toBe('s-embedded')
+    // 筛选表单不被裁剪——旧平台 MonitorModal 里的 MonitorList 就是完整带筛选的，
+    // 用户在弹窗里仍要能按 在用 / 告警状态 / 源ID 过滤
+    expect(wrapper.find('.stub-source-select').exists()).toBe(true)
+    // 卡片壳仍去掉：外层已经是弹窗
     expect(wrapper.find('.sc-head').exists()).toBe(false)
   })
 
