@@ -93,7 +93,7 @@ describe('表改写管理 · /api/poc HTTP 契约', () => {
   it('不提供复制，也不提供删除（旧接口文件只有 page / 根 / status 三个端点）', async () => {
     const { replaceTableConfigApi } = await import('./templateConfig')
     expect(replaceTableConfigApi.copy).toBeUndefined()
-    expect((replaceTableConfigApi as Record<string, unknown>).remove).toBeUndefined()
+    expect((replaceTableConfigApi as unknown as { remove?: unknown }).remove).toBeUndefined()
   })
 
   it('业务失败（code ≠ 0）抛出后端 msg，不静默成功', async () => {

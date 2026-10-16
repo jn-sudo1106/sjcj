@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, ReplaceTableConfig, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorConfigPayload, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, EntityRewriteConfig, MatchTableConfig, PocTableEntry, QuestionDic, ReplaceTableConfig, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, VectorConfigPayload, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -674,6 +674,118 @@ export function mockReplaceTableConfigChangeStatus(params?: Record<string, unkno
   row.status = String(params?.status ?? row.status)
   row.updateTime = stamp(new Date())
   return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/* ── 实体改写管理（旧「基础配置 → 实体改写管理」，端点域 /poc/entity-rewrite-config，1015 迁入） ── */
+
+/**
+ * 实体改写种子数据。
+ * ⚠️ 按旧列表列（EntityRewriteConfigList.vue:88-124）与旧弹窗下拉（modal/EntityRewriteConfigEditor.vue:24-25）
+ * 的字段形状**构造的示例**，不是真实行 —— 2026-10-16 这一页在 186 后端上回通用 500，一条真实行都没抓到
+ *（同域的选表规则 / 表改写都回得到数据，所以是这一模块本身在后端缺表/缺数据，不是会话问题）。
+ * 后端打通后要按真实响应校正：status 到底是数字还是字符串、除了旧列表那 7 列还有没有别的列（如 delFlag）。
+ * ⚠️ 分页的 status / entityName 筛选在真实后端上生不生效同样未知，这里按旧页面**期望**的语义实现，
+ * 别据此以为后端支持它（同选表规则配置的口径）。
+ */
+const blankEntityRewriteConfig = (over: Partial<EntityRewriteConfig>): EntityRewriteConfig => ({
+  entityName: '',
+  cleanType: 'regular_replacement',
+  content: '',
+  targetContent: '',
+  status: '0',
+  ...over,
+})
+
+const ENTITY_REWRITE_CONFIGS: EntityRewriteConfig[] = [
+  blankEntityRewriteConfig({
+    id: 3,
+    entityName: '管户口径',
+    cleanType: 'simple_replacement',
+    content: '管户口径',
+    targetContent: '个人管户口径',
+    status: '1',
+    createTime: '2025-04-22 10:12:08',
+    updateTime: '2025-06-13 17:58:31',
+  }),
+  blankEntityRewriteConfig({
+    id: 2,
+    entityName: '行员',
+    cleanType: 'regular_replacement',
+    content: '(行员|员工)',
+    targetContent: '行员',
+    status: '0',
+    createTime: '2025-04-22 10:10:44',
+    updateTime: '2025-04-22 10:10:44',
+  }),
+  blankEntityRewriteConfig({
+    id: 1,
+    entityName: '绩效口径',
+    cleanType: 'simple_replacement',
+    content: '业绩口径',
+    targetContent: '绩效口径',
+    createTime: '2025-04-18 18:02:31',
+    updateTime: '2025-04-18 18:02:31',
+  }),
+]
+
+let entityRewriteConfigNextId = 4
+
+/**
+ * 分页：旧页面两个筛选 —— entityName（搜索框上送的就是这个参数名，按实体名称模糊筛）与 status（空串 = 全部）。
+ * 后端默认按 id 倒序回（同选表规则 / 表改写），内存表按同一顺序排。
+ */
+export function mockEntityRewriteConfigPaged(params?: Record<string, unknown>): Paged<EntityRewriteConfig> {
+  const entityName = String(params?.entityName ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = ENTITY_REWRITE_CONFIGS.filter(
+    (row) => (!entityName || String(row.entityName ?? '').includes(entityName)) && (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增 / 编辑同一个端点（POST /poc/entity-rewrite-config）—— 旧 editor：body 带 id 就地更新，不带 id 追加 */
+export function mockEntityRewriteConfigSave(params?: Record<string, unknown>) {
+  const form = params as Partial<EntityRewriteConfig>
+  const id = Number(form.id ?? 0)
+  if (id) {
+    const row = ENTITY_REWRITE_CONFIGS.find((r) => Number(r.id) === id)
+    if (!row) return { ok: false, message: '未找到要保存的实体改写配置' }
+    for (const [key, value] of Object.entries(form)) {
+      if (key === 'id') continue
+      ;(row as Record<string, unknown>)[key] = value
+    }
+    row.updateTime = stamp(new Date())
+    return { ok: true, message: '修改成功（演示）' }
+  }
+  const nextId = entityRewriteConfigNextId++
+  ENTITY_REWRITE_CONFIGS.unshift({
+    ...blankEntityRewriteConfig({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 启停（POST /poc/entity-rewrite-config/status，参数走 **query**）—— 旧 changeConfigStatus */
+export function mockEntityRewriteConfigChangeStatus(params?: Record<string, unknown>) {
+  const row = ENTITY_REWRITE_CONFIGS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的实体改写配置' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/** 删除（POST /poc/entity-rewrite-config/delete，id 走 **query**）—— 旧 deleteConfig */
+export function mockEntityRewriteConfigDelete(params?: Record<string, unknown>) {
+  const id = Number(params?.id)
+  const index = ENTITY_REWRITE_CONFIGS.findIndex((r) => Number(r.id) === id)
+  if (index < 0) return { ok: false, message: '未找到要删除的实体改写配置' }
+  ENTITY_REWRITE_CONFIGS.splice(index, 1)
+  return { ok: true, message: '删除成功（演示）' }
 }
 
 /* ── 自动补全配置（旧「模板配置 → 自动补全配置」，端点域 /poc/dic） ── */
