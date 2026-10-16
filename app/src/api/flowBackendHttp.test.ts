@@ -8,7 +8,7 @@ describe('流程分流实际 HTTP 请求', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.stubEnv('VITE_API_MODE', 'http')
     vi.stubEnv('VITE_API_BASE', '')
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
     window.location.hash = '#/flows'
     vi.resetModules()
@@ -82,7 +82,7 @@ describe('流程分流实际 HTTP 请求', () => {
     const { request } = await import('./client')
     await expect(request('source/updateSourceSimple', { sourceId: 1 })).rejects.toThrow('生产环境写保护')
     expect(fetchMock).not.toHaveBeenCalled()
-    vi.stubEnv('VITE_API_BASE', 'http://118.25.96.217:9999/api/v1/')
+    vi.stubEnv('VITE_API_BASE', 'http://115.227.21.133:9999/api/v1/')
     vi.resetModules()
     const custom = await import('./client')
     await expect(custom.request('config/delete', { id: 1 })).rejects.toThrow('生产环境写保护')

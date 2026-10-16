@@ -80,15 +80,6 @@ const stubs = {
   ElDrawer: { name: 'ElDrawer', props: ['modelValue', 'title'], template: '<div class="stub-drawer"><slot /></div>' },
   ElDescriptions: { name: 'ElDescriptions', template: '<div><slot /></div>' },
   ElDescriptionsItem: { name: 'ElDescriptionsItem', props: ['label'], template: '<div><slot /></div>' },
-  // 「更多」下拉展开后是 teleport 到 body 的浮层，jsdom 里点不到；换成直接把两个插槽铺平的桩，
-  // 只验「点某项 → 调哪个接口」，不验 Element Plus 自己的浮层行为。
-  ElDropdown: { name: 'ElDropdown', template: '<div class="stub-dropdown"><slot /><slot name="dropdown" /></div>' },
-  ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div class="stub-dropdown-menu"><slot /></div>' },
-  ElDropdownItem: {
-    name: 'ElDropdownItem',
-    emits: ['click'],
-    template: '<button class="stub-more-item" @click="$emit(\'click\')"><slot /></button>',
-  },
 }
 
 const ROWS: SourceCheck[] = [
@@ -109,8 +100,10 @@ async function selectRows(wrapper: VueWrapper, ids: string[]) {
 }
 const btn = (wrapper: VueWrapper, text: string) =>
   wrapper.findAll('button').find((b) => b.text().trim() === text)!
+/** 第一行的行内操作：已改成图标（原「更多」里的详情 / 立即运行 / 删除也平铺了），按 tooltip 文案找 */
 const link = (wrapper: VueWrapper, text: string) =>
-  wrapper.findAll('.sc-op-link').find((el) => el.text().trim() === text)!
+  wrapper.findAll('tr.el-table__row')[0].findAllComponents({ name: 'ElTooltip' })
+    .find((t: VueWrapper) => (t.props() as { content?: string }).content === text)!.find('.sc-op-icon')
 
 beforeEach(() => {
   openDialog.mockClear()
@@ -200,12 +193,11 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     const wrapper = mountPage()
     await flushPromises()
 
-    const items = wrapper.findAll('.stub-more-item')
-    await items.find((el) => el.text().trim() === '立即运行')!.trigger('click')
+    await link(wrapper, '立即运行').trigger('click')
     await flushPromises()
     expect(runNow).toHaveBeenLastCalledWith(['ck-1'])
 
-    await items.find((el) => el.text().trim() === '删除')!.trigger('click')
+    await link(wrapper, '删除').trigger('click')
     await flushPromises()
     expect(remove).toHaveBeenLastCalledWith(['ck-1'])
   })
@@ -216,7 +208,7 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElDrawer' }).exists()).toBe(false)
-    await wrapper.findAll('.stub-more-item').find((el) => el.text().trim() === '详情')!.trigger('click')
+    await link(wrapper, '详情').trigger('click')
     await flushPromises()
 
     const drawer = wrapper.findComponent({ name: 'ElDrawer' })

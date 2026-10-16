@@ -128,6 +128,7 @@ describe('旧平台新建源 HTTP 契约', () => {
       tags: [],
     })
     expect(JSON.parse(String(init.body))).not.toHaveProperty('state')
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('viewCategoryId')
     // 单数 siteId 后端不读（source-api.md §1.1），不透传
     expect(JSON.parse(String(init.body))).not.toHaveProperty('siteId')
     expect(result).toEqual({
@@ -150,6 +151,20 @@ describe('旧平台新建源 HTTP 契约', () => {
     })
   })
 
+
+  // 10-15「我的视图」目录：viewCategoryId 只进 sourcePaged，不进 sourceCondParams（changeMembersByRange 等不认）
+  it('sourcePaged 透传 viewCategoryId；changeMembersByRange 不带它', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { sourceApi, sourceGroupApi } = await import('./index')
+    await sourceApi.sourcePaged({ page: 1, size: 20, viewCategoryId: '9009400' })
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toMatchObject({ viewCategoryId: '9009400' })
+    fetchMock.mockClear()
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { total: 0 } }))
+    await sourceGroupApi.changeMembersByRange({ targetSourceGroupId: '3', filter: { viewCategoryId: '9009400', name: 'x' } }).catch(() => undefined)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('viewCategoryId')
+  })
   it('GET /v1/source/sourceDetail：读取 res.data 并保留详情字段映射', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0',

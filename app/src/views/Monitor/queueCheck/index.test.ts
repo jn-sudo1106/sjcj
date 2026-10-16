@@ -62,6 +62,8 @@ const stubs = {
   ElTooltip: {
     name: 'ElTooltip',
     inheritAttrs: false,
+    // 行内操作改成图标后靠 content（原按钮文案）定位，声明成 prop 才拿得到
+    props: ['content'],
     template: '<span class="stub-tooltip"><slot /></span>',
   },
   ElPagination: {
@@ -295,7 +297,8 @@ describe('队列告警 · 表格操作与接口调用（对齐旧 QueueCheck）'
     expect(drawer.props('modelValue')).toBe(true)
     expect((drawer.props('record') as MqCheck).queueId).toBe('mq-1')
 
-    await cell(wrapper, '.qc-op-link').find((el) => el.text().trim() === '编辑')!.trigger('click')
+    await cell(wrapper, '.qc-actions')[0].findAllComponents({ name: 'ElTooltip' })
+      .find((t: VueWrapper) => (t.props() as { content?: string }).content === '编辑')!.find('.qc-op-icon').trigger('click')
     await flushPromises()
     expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ queueId: 'mq-1' }))
   })
