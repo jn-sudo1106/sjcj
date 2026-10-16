@@ -334,7 +334,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 绑定列表读失败时不挡住画布：退回源上的默认流程 ID（Source.flowId 即后端的 defaultFlowId），流程标签栏自己会报错。
   let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
   try {
-    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId)
+    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId, { withNames: false })
   } catch {
     bindings = []
   }

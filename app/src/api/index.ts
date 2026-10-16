@@ -3550,7 +3550,8 @@ export const workflowBindingApi = {
     })
     return sourceFlowsViewFromApi(result)
   },
-  list: async (sourceId: string): Promise<WorkflowBinding[]> => {
+  /** `withNames: false` 不逐条取流程详情（名字退回「流程 #ID」）：画布加载只用 ID，别让慢的 flowDetail 挡住整页 */
+  list: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<WorkflowBinding[]> => {
     // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
     if (!/^\d+$/.test(sourceId)) return []
     const view = await workflowBindingApi.view(sourceId)
@@ -3570,7 +3571,7 @@ export const workflowBindingApi = {
     ]
     // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
     const names = new Map<string, string>()
-    await Promise.all(ordered.map(async (binding) => {
+    if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
     }))
