@@ -107,6 +107,10 @@ import {
   mockReplaceTableConfigPaged,
   mockReplaceTableConfigSave,
   mockReplaceTableConfigChangeStatus,
+  mockEntityRewriteConfigPaged,
+  mockEntityRewriteConfigSave,
+  mockEntityRewriteConfigChangeStatus,
+  mockEntityRewriteConfigDelete,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
@@ -469,6 +473,16 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/replace-table-config/page': mockReplaceTableConfigPaged,
   'poc/replace-table-config': mockReplaceTableConfigSave,
   'poc/replace-table-config/status': mockReplaceTableConfigChangeStatus,
+
+  // 实体改写管理（1015 迁入「基础配置」，旧「基础配置 → 实体改写管理」，端点域 /poc/entity-rewrite-config）：
+  // 端点形状与选表规则配置一字不差 —— page / 根（新增与编辑同一个，body 带 id 即更新）/ status（**query**）/ delete（**query** 只发 id），
+  // 没有 copy。差别在查询参数字段名：这一页上送的是 entityName（另两个域叫 name）。
+  // ⚠️ 四条端点在 186 后端上还没打通（分页回通用 500，见 api/endpoints.ts），未标 live，所以现在**只走 mock**；
+  // 这里的种子是按旧页面字段形状构造的示例，不是真实行。见 api/templateConfig.ts 的 entityRewriteConfigApi。
+  'poc/entity-rewrite-config/page': mockEntityRewriteConfigPaged,
+  'poc/entity-rewrite-config': mockEntityRewriteConfigSave,
+  'poc/entity-rewrite-config/status': mockEntityRewriteConfigChangeStatus,
+  'poc/entity-rewrite-config/delete': mockEntityRewriteConfigDelete,
 
   // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
   'poc/dic/page': mockDicTemplatePaged,

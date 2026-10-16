@@ -15,7 +15,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, MatchTableConfig, PocTableEntry, QuestionDic, ReplaceTableConfig, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorConfigPayload, VectorDataQuery, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
+import type { ChatFlowStep, DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, EntityConfigField, EntityConfigPayload, EntityRewriteConfig, MatchTableConfig, PocTableEntry, QuestionDic, ReplaceTableConfig, SqlTemplate, SysPageConfig, SysPageConfigBatchItem, SystemConfigParam, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow, VectorConfigPayload, VectorDataQuery, VectorMappingItem, VectorTableConfig, VectorTableOption, WordSegmentBatchItem, WordSegmentConfig } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -379,6 +379,31 @@ export const replaceTableConfigApi: TemplateCrudApi<ReplaceTableConfig> = create
   module: 'replace-table-config',
   operations: { copy: false },
 })
+
+/** 实体改写配置的接口面：通用 CRUD 面 + 删除（本域没有复制） */
+export interface EntityRewriteConfigApi extends TemplateCrudApi<EntityRewriteConfig> {
+  /** 删除（POST /poc/entity-rewrite-config/delete，⚠️ id 走 **query**，旧 deleteConfig 用的是 axios params） */
+  remove(id: number): Promise<Ack>
+}
+
+/**
+ * 实体改写管理（1015 迁入「基础配置」，旧「基础配置 → 实体改写管理」src/demo/EntityRewriteConfigList.vue +
+ * modal/EntityRewriteConfigEditor.vue，旧接口 src/demoApi/EntityRewriteConfigApi.js:4-7）。
+ *
+ * 走 createTemplateCrudApi 工厂，形状与选表规则配置一字不差：
+ * 新增与修改是**同一个根端点**（POST /poc/entity-rewrite-config，body 带 id 即更新，旧 editor 函数一个端点两用）、
+ * 启停 POST /poc/entity-rewrite-config/status 且参数走 **query**（旧 changeConfigStatus 用的是 axios params，
+ * 与 chat-flow-step / data-index-config 那几个 body 传参的域不同）。
+ * operations.copy=false —— 旧域没有 /copy；删除按 question-dic / 选表规则配置的先例扩一个 remove（旧 deleteConfig 只发 id）。
+ * 分页的两个筛选都在 body：entityName（旧搜索框上送的就是这个参数名，**不像另两个基础配置域改名成 name**）/ status。
+ * ⚠️ 四条端点都还没在 186 实测（这一页在 186 后端上回 500，见 endpoints.ts 的 poc/entity-rewrite-config），
+ * 未标 live，后端打通后逐条复核（同 vector-config 先例）。
+ */
+export const entityRewriteConfigApi: EntityRewriteConfigApi = {
+  ...createTemplateCrudApi<EntityRewriteConfig>({ module: 'entity-rewrite-config', operations: { copy: false } }),
+  remove: (id: number) =>
+    request<Ack>('poc/entity-rewrite-config/delete', { id }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/entity-rewrite-config/delete` }),
+}
 
 /** 参数设置的接口面：分页 + 详情 + 修改（旧页面没有新增/删除/导出/刷新缓存入口，对应端点不迁，见 types 注释） */
 export interface SystemConfigApi {

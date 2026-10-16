@@ -1,16 +1,24 @@
 <script setup lang="ts">
-// 流程「使用源数」下钻：列出挂在该流程下的源。
+// 流程「使用源数」下钻：列出挂在该流程下的源，操作对齐旧平台「流程源列表」。
 //
 // 走 sourcePaged 的 flowId 过滤——2026-09-02 生产实测确认后端认这个条件（无条件 16929 条，
 // flowId=1400330 得 46 条且与该流程 sourceCnt 一致，传不存在的 flowId 得 0 条），不是静默忽略。
-// 服务端分页：单个流程下最多见过 46 个源，但存量是后端从配置整批灌过来的，不能假设一定小。
-import { ref, watch } from 'vue'
+// 服务端分页：单个流程下最多见过 5439 个源（流程 1400976），不能赌 size 上限。
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { sourceApi, type FlowRecord, type Source } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
 
-const props = defineProps<{ flow: FlowRecord | null }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{
+  flow: FlowRecord | null
+  /** 上层关联完源后 +1，触发本弹窗重查 */
+  refreshTick?: number
+}>()
+const emit = defineEmits<{
+  close: []
+  apply: []
+  changed: []
+}>()
 
 const router = useRouter()
 const rows = ref<Source[]>([])
@@ -19,6 +27,11 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const error = ref('')
+const unbinding = ref('')
+const toggling = ref('')
+
+const keyword = ref('')
+const appliedKeyword = ref('')
 
 async function load() {
   const flow = props.flow
@@ -26,7 +39,14 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await sourceApi.sourcePaged({ flowId: flow.id, page: page.value, size: size.value })
+    const query = appliedKeyword.value.trim()
+    const result = await sourceApi.sourcePaged({
+      flowId: flow.id,
+      page: page.value,
+      size: size.value,
+      // 旧平台的「源名称或ID搜索」：纯数字当源 ID 查，其余按名称查，两个条件同时传后端按「并且」算
+      ...(query ? (/^\d+$/.test(query) ? { sourceId: query } : { name: query }) : {}),
+    })
     rows.value = result.list
     total.value = result.total
   } catch (e) {
@@ -38,25 +58,99 @@ async function load() {
   }
 }
 
-watch(() => props.flow?.id, (id) => {
-  if (!id) return
+function applySearch() {
+  appliedKeyword.value = keyword.value
   page.value = 1
-  rows.value = []
   void load()
-}, { immediate: true })
+}
+
+let lastFlowId = ''
+
+watch(
+  () => [props.flow?.id, props.refreshTick] as const,
+  ([id]) => {
+    if (!id) return
+    if (id !== lastFlowId) {
+      keyword.value = ''
+      appliedKeyword.value = ''
+      lastFlowId = id
+    }
+    page.value = 1
+    rows.value = []
+    void load()
+  },
+  { immediate: true },
+)
 
 function onSizeChange() {
   page.value = 1
   void load()
 }
 
-/** 点行进入该源的工作区——这是「看看这个流程到底挂了些什么源」之后最自然的下一步 */
 function openSource(source: Source) {
   emit('close')
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view: 'data' },
   })
+}
+
+async function unbind(source: Source) {
+  const flow = props.flow
+  if (!flow) return
+  const label = source.name || source.sourceId
+  try {
+    await ElMessageBox.confirm(
+      `将把源「${label}」（${source.sourceId}）从流程「${flow.name}」上解绑。`
+      + '解绑后这个源不再按该流程的配置运行；如果它还关联着别的流程，那些流程不受影响。继续？',
+      '解绑关联',
+      { type: 'warning', confirmButtonText: '确认解绑', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  unbinding.value = source.sourceId
+  try {
+    // flowId 不传（=0）+ currentFlowId 传本流程：只断这一条关联，源关联的其它流程不受影响
+    const ack = await flowCenterApi.bindSources([source.sourceId], undefined, flow.id)
+    if (!ack.ok) throw new Error(ack.message || '未知原因')
+    ElMessage.success(`已把源「${label}」从流程「${flow.name}」上解绑`)
+    emit('changed')
+    await load()
+  } catch (e) {
+    ElMessage.error(`解绑失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    unbinding.value = ''
+  }
+}
+
+async function toggleEnable(source: Source) {
+  const label = source.name || source.sourceId
+  const enable = !!source.disabled
+  try {
+    await ElMessageBox.confirm(
+      enable
+        ? `确认启用源「${label}」？启用后它会按当前流程的配置继续被抓取任务调度。`
+        : `确认禁用源「${label}」？禁用后它不再被调度，已有数据不受影响。`,
+      enable ? '启用源' : '禁用源',
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  toggling.value = source.sourceId
+  try {
+    // 适配层会把 disabled 翻成 enable 的反极性（0 启用 / 1 禁用），这里只传语义值
+    const res = await sourceApi.changeSourceEnableBatch([source.sourceId], !enable)
+    if (!res.ok) throw new Error(res.message || '未知原因')
+    ElMessage.success(res.message || `已${enable ? '启用' : '禁用'}源「${label}」`)
+    emit('changed')
+    await load()
+  } catch (e) {
+    ElMessage.error(`${enable ? '启用' : '禁用'}失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    toggling.value = ''
+  }
 }
 
 /**
@@ -87,20 +181,47 @@ function openAllInSourceView() {
   void router.push({ path: '/canvas', query: { siteId: sites[0], view: 'source', flowId: flow.id } })
 }
 
+/**
+ * 「状态」列只读源自己的 `state`：只有 `E` 是出错，其余（C/L/空/停用）一律「正常」
+ * （老平台同口径——源名只在 `state === 'E'` 时标红，L 不单列一态）。
+ * 停用由旁边的「启停」列单独表达，不再用 `disabled` 顶掉 `state`（2026-10-16 用户确认）。
+ */
 function stateText(source: Source) {
-  if (source.disabled) return '已停用'
-  return source.state === 'E' ? '异常' : source.state === 'L' ? '运行中' : '正常'
+  return source.state === 'E' ? '出错' : '正常'
 }
+
+function textOf(value: unknown) {
+  return value == null || value === '' ? '—' : String(value)
+}
+
+const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的源' : '该流程下没有关联的源'))
 </script>
 
 <template>
   <el-dialog
     :model-value="!!flow"
     :title="flow ? `流程「${flow.name}」的关联源` : ''"
-    width="860px"
+    width="1040px"
     destroy-on-close
     @close="emit('close')"
   >
+    <div class="fs-toolbar">
+      <input
+        v-model="keyword"
+        class="fs-input"
+        data-testid="flow-sources-keyword"
+        placeholder="源名称或ID搜索"
+        aria-label="源名称或ID搜索"
+        @keyup.enter="applySearch"
+      >
+      <button class="rc-btn" type="button" data-testid="flow-sources-search" @click="applySearch">查询</button>
+      <button class="rc-btn primary" type="button" data-testid="flow-sources-apply" @click="emit('apply')">
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+        </svg>
+        关联源
+      </button>
+    </div>
     <div class="fs-head">
       <span v-if="!error">共 {{ total }} 个源</span>
       <span v-else class="fs-error">{{ error }}</span>
@@ -117,35 +238,64 @@ function stateText(source: Source) {
         <thead>
           <tr>
             <th>源 ID / 名称</th>
-            <th style="width: 84px">状态</th>
-            <th style="width: 92px">步骤数</th>
-            <th style="width: 104px">数据量</th>
-            <th style="width: 150px">最近任务</th>
+            <th style="width: 76px">状态</th>
+            <th style="width: 70px">告警</th>
+            <th style="width: 96px">数据量</th>
+            <th style="width: 148px">最近抓取</th>
+            <th style="width: 148px">最近成功</th>
+            <th style="width: 70px">步骤数</th>
+            <th style="width: 74px">启停</th>
+            <th style="width: 128px">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in rows" :key="s.sourceId" data-testid="flow-source-row" @click="openSource(s)">
+          <tr v-for="s in rows" :key="s.sourceId" data-testid="flow-source-row">
             <td>
-              <div class="fs-name">
+              <button class="fs-name" type="button" :title="s.name || s.sourceId" @click="openSource(s)">
                 <b>{{ s.name || s.sourceId }}</b>
                 <small>{{ s.sourceId }}</small>
+              </button>
+            </td>
+            <td data-testid="flow-source-state">{{ stateText(s) }}</td>
+            <td>
+              <span v-if="s.alarm" class="fs-alarm" data-testid="flow-source-alarm">告警</span>
+              <span v-else class="fs-muted">—</span>
+            </td>
+            <td class="fs-muted">{{ s.dataCount == null ? '—' : s.dataCount.toLocaleString() }}</td>
+            <td class="fs-muted" :title="textOf(s.lastTaskAt)">{{ textOf(s.lastTaskAt) }}</td>
+            <td class="fs-muted" :title="textOf(s.lastSuccessAt)">{{ textOf(s.lastSuccessAt) }}</td>
+            <td class="fs-muted">{{ s.stepCount == null ? '—' : s.stepCount }}</td>
+            <td>
+              <span class="fs-enable-tag" :class="{ off: s.disabled }" data-testid="flow-source-enable-tag">{{ s.disabled ? '禁用' : '启用' }}</span>
+            </td>
+            <td>
+              <div class="fs-ops">
+                <button class="fs-op" type="button" data-testid="flow-source-detail" @click="openSource(s)">详情</button>
+                <span class="fs-op-divider" aria-hidden="true">|</span>
+                <button
+                  class="fs-op"
+                  type="button"
+                  data-testid="flow-source-toggle-enable"
+                  :disabled="toggling === s.sourceId"
+                  @click="toggleEnable(s)"
+                >{{ s.disabled ? '启用' : '禁用' }}</button>
+                <span class="fs-op-divider" aria-hidden="true">|</span>
+                <button
+                  class="fs-op danger"
+                  type="button"
+                  data-testid="flow-source-unbind"
+                  :disabled="unbinding === s.sourceId"
+                  @click="unbind(s)"
+                >解绑</button>
               </div>
             </td>
-            <td>{{ stateText(s) }}</td>
-            <!-- 步骤数 = sourcePaged 的 stepCnt（真实子步骤条数，不含 nextConfigPaged 里那条
-                 按当前源现算出来的 itemConfig=0 起点行——那行不是 cs_item_config 的真实记录，
-                 见 endpoints.ts 里 item/next/nextConfigPaged 的注释） -->
-            <td class="fs-muted">{{ s.stepCount == null ? '—' : s.stepCount }}</td>
-            <td class="fs-muted">{{ s.dataCount == null ? '—' : s.dataCount.toLocaleString() }}</td>
-            <td class="fs-muted">{{ s.lastTaskAt || '—' }}</td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="5" class="fs-empty">{{ error || '该流程下没有关联的源' }}</td>
+            <td colspan="9" class="fs-empty">{{ error || emptyText }}</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <!-- 分页与数据中心一致（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
     <div class="fs-pager">
       <el-pagination
         v-model:current-page="page"
@@ -163,19 +313,39 @@ function stateText(source: Source) {
 </template>
 
 <style scoped>
+.fs-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.fs-input { width: 240px; height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
+.fs-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.fs-toolbar .rc-btn { height: 28px; padding: 0 12px; font-size: 12px; }
 .fs-viewall { margin-left: auto; border: 0; background: transparent; color: var(--rc-primary, #2563eb); font-size: 12px; cursor: pointer; }
 .fs-viewall:hover { text-decoration: underline; }
-.fs-head { margin-bottom: 8px; color: var(--rc-muted); font-size: 12px; }
-.fs-error { color: #dc2626; }
+.fs-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--rc-muted); font-size: 12px; }
+.fs-error { color: var(--rc-error, #dc2626); }
 .fs-table-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; }
-.fs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.fs-table th { position: sticky; top: 0; z-index: 1; padding: 9px 12px; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; border-bottom: 1px solid var(--rc-border); }
-.fs-table td { padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); }
-.fs-table tbody tr { cursor: pointer; }
+/* fixed 布局是源名称截断生效的前提：auto 布局下该列会被长名字撑开，text-overflow 也不生效 */
+.fs-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.fs-table th { position: sticky; top: 0; z-index: 1; padding: 9px 12px; background: var(--rc-bg, #f8fafc); color: var(--rc-muted); font-weight: 700; text-align: left; border-bottom: 1px solid var(--rc-border); white-space: nowrap; }
+.fs-table td { padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fs-table tbody tr:hover { background: var(--rc-primary-bg); }
-.fs-name b { display: block; color: var(--rc-primary); font-size: 13px; }
-.fs-name small { color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.fs-muted { color: var(--rc-faint); }
+.fs-name { display: block; width: 100%; padding: 0; border: 0; background: none; overflow: hidden; text-align: left; cursor: pointer; }
+.fs-name b { display: block; overflow: hidden; color: var(--rc-primary); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.fs-name small { display: block; color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.fs-alarm { padding: 2px 8px; border-radius: 999px; background: var(--rc-error-bg, #fef2f2); color: var(--rc-error, #dc2626); font-size: 11px; font-weight: 600; }
+/* 启停标签：外形照项目已有的「带框状态胶囊」写法 —— FileView.vue:493-495 的 .rc-status.ok/.err
+   （同色系 10% 底 + 20% 描边 + 深一档文字），这里套同一配方，禁用换成橙系。
+   尺寸/圆角沿用本表原来的 11px / 18px / --rc-radius-sm */
+.fs-enable-tag { display: inline-block; padding: 0 8px; border: 1px solid rgba(34, 197, 94, 0.2); border-radius: var(--rc-radius-sm, 6px); background: rgba(34, 197, 94, 0.1); color: #16a34a; font-size: 11px; line-height: 18px; }
+.fs-enable-tag.off { border-color: rgba(249, 115, 22, 0.2); background: rgba(249, 115, 22, 0.1); color: #ea580c; }
+.fs-muted { color: var(--rc-faint); white-space: nowrap; }
+.fs-ops { display: flex; align-items: center; gap: 4px; }
+.fs-op { padding: 0; border: 0; background: none; color: var(--rc-primary, #2563eb); font-size: 12px; cursor: pointer; }
+/* 操作列纯文字按钮：hover 不再加下划线（老平台这颗也是纯文字），保持只有手型光标 */
+.fs-op:disabled { color: var(--rc-faint); cursor: default; }
+/* 解绑：比 --rc-error(#dc2626) 浅一档的红（red-500，项目里 KpiPanel/EmptyState/TableEditDialog 已在用）。
+   font-weight 必须显式归位——class 里的 danger 会命中全局 tokens.css:452 的 `.danger { font-weight: 700 }`，
+   那是给状态文字用的，套在操作按钮上会变粗体 */
+.fs-op.danger { color: #ef4444; font-weight: 400; }
+.fs-op-divider { color: var(--rc-faint, #94a3b8); opacity: .6; }
 .fs-empty { padding: 36px; text-align: center; color: var(--rc-faint); }
 .fs-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 0 0; }
 </style>
