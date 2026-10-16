@@ -26,7 +26,11 @@ const expandedKeySet = reactive(new Set<string>())
 const expandedKeys = computed(() => Array.from(expandedKeySet))
 
 function onNodeExpand(data: SourceCategory) {
-  if (data?.id) expandedKeySet.add(String(data.id))
+  if (!data?.id) return
+  expandedKeySet.add(String(data.id))
+  // 展开时预取下一层：子目录自己有没有子级要提前知道，否则箭头显示不准
+  const node = findInTree(fullTreeData.value, String(data.id))
+  if (node?.children?.length) void prefetchChildren(node.children)
 }
 
 function onNodeCollapse(data: SourceCategory) {
@@ -37,36 +41,58 @@ function onNodeCollapse(data: SourceCategory) {
 const rootCategories = ref<SourceCategory[]>([])
 
 /**
- * 全量目录树（1014）：el-tree 懒加载模式下未展开过的节点一律显示展开箭头，
- * 叶子节点（没有子目录）也被当成"可能有子级"，用户看着以为能展开。分类总量实测 159 个、
- * 最深 4 层，前端 BFS 一次性拉全成本可接受（同 expandCategoryIds 的口径），
- * 用**非懒加载** el-tree 渲染——el-tree 按 children 自动判断叶子，无子目录的节点不显示箭头。
+ * 目录树按需加载（1016）：原来 BFS 一次拉全（1014）要等全部层级拉完才出表，首屏慢。
+ * 改为先拉根目录立刻显示，再「预取一层」——显示到哪一层，就提前拉好这一层每个节点的子级。
+ * 仍用非懒加载 el-tree：节点的 children 拉回来才渲染，空数组 = 叶子不显示箭头（1014 的诉求不变）。
  */
 const fullTreeData = ref<SourceCategory[]>([])
+let treeLoadSeq = 0
+
+function findInTree(nodes: SourceCategory[], id: string): SourceCategory | undefined {
+  for (const n of nodes) {
+    if (String(n.id) === id) return n
+    const hit = n.children?.length ? findInTree(n.children, id) : undefined
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/** 给还没拉过子级的节点拉子级（8 路并发），一次性挂回，el-tree 只重建一次 */
+async function prefetchChildren(nodes: SourceCategory[], seq = treeLoadSeq) {
+  const todo = nodes.filter((n) => n.children === undefined)
+  if (!todo.length) return
+  const CONCURRENCY = 8
+  const lists: SourceCategory[][] = []
+  for (let i = 0; i < todo.length; i += CONCURRENCY) {
+    const batch = todo.slice(i, i + CONCURRENCY)
+    lists.push(...await Promise.all(
+      batch.map((parent) => sourceApi.sourceCategories(String(parent.id)).catch(() => [] as SourceCategory[])),
+    ))
+  }
+  if (seq !== treeLoadSeq) return // 期间刷新过，丢弃旧结果
+  todo.forEach((parent, idx) => {
+    parent.children = lists[idx] ?? []
+  })
+}
+
 async function loadFullTree() {
+  const seq = ++treeLoadSeq
   try {
     const roots = await sourceApi.sourceCategories(undefined)
+    if (seq !== treeLoadSeq) return
     rootCategories.value = roots
-    // BFS 逐层拉子级，组装 children（并行度对齐 expandCategoryIds 的 8 路）
-    const CONCURRENCY = 8
-    let frontier = [...roots]
-    for (let depth = 0; frontier.length && depth < 8; depth++) {
-      const next: SourceCategory[] = []
-      for (let i = 0; i < frontier.length; i += CONCURRENCY) {
-        const batch = frontier.slice(i, i + CONCURRENCY)
-        const childrenLists = await Promise.all(
-          batch.map((parent) => sourceApi.sourceCategories(String(parent.id)).catch(() => [] as SourceCategory[])),
-        )
-        batch.forEach((parent, idx) => {
-          parent.children = childrenLists[idx] ?? []
-          next.push(...childrenLists[idx])
-        })
-      }
-      frontier = next
-    }
     fullTreeData.value = roots
+    // 刷新后保持原来展开的节点：逐层把已展开节点的子级（以及再下一层）补齐
+    let frontier = fullTreeData.value
+    for (let depth = 0; frontier.length && depth < 8; depth++) {
+      await prefetchChildren(frontier, seq)
+      if (seq !== treeLoadSeq) return
+      frontier = frontier
+        .filter((n) => expandedKeySet.has(String(n.id)))
+        .flatMap((n) => n.children ?? [])
+    }
   } catch {
-    fullTreeData.value = []
+    if (seq === treeLoadSeq) fullTreeData.value = []
   }
 }
 
