@@ -5,8 +5,13 @@
  * 一个视图 = 一棵多级目录树（10-14 定：**没有根目录**，源只能放在目录里）。每个目录是一个「容器」：
  *   - `sources`：单独添加的源 ID；
  *   - `groups`：绑定的来源组 ID（组成员跟着来源组走，查询时现拉）；
- *   - `excluded`：从本目录绑定的来源组里单独移出的源（来源组本身不变，可恢复）。
+ *   - `excluded`：从本目录绑定的来源组里单独移出的源（来源组本身不变，可恢复）；
+ *   - `rows`（仅真实接口）：后端目录里实际有的源行（`listSources` 的 sourceIds）。
  * 目录看到的源 = sources ∪（groups 的成员 − excluded）。10-14 定：**父目录暂时不汇总子目录**。
+ *
+ * 1016：后端绑定来源组时只把组**当时**的成员展开成源行（快照），组里之后新加的源不会自动进目录。
+ * 所以有 `rows` 时，来源组成员只算已在 rows 里的；不在的就是「未在视图」（missingOf），由用户勾选后加入。
+ * 本机兜底没有 rows，组成员照旧现拉、全部算在视图里。
  * 同一个源可以出现在多个目录里。
  *
  * 全部是纯函数：入参不改，返回新树。存储见 api/sourceViews.ts。
@@ -20,6 +25,8 @@ export interface ViewContainer {
   sources: string[]
   groups: string[]
   excluded: string[]
+  /** 后端目录里实际有的源行（含来源组展开的快照）；本机兜底没有 */
+  rows?: string[]
 }
 export interface ViewDir extends ViewContainer {
   id: string
@@ -51,7 +58,7 @@ export function normalizeTree(raw: unknown): ViewTree {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const container = (value: unknown): ViewContainer => {
     const c = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
-    return { sources: strings(c.sources), groups: strings(c.groups), excluded: strings(c.excluded) }
+    return { sources: strings(c.sources), groups: strings(c.groups), excluded: strings(c.excluded), ...(Array.isArray(c.rows) ? { rows: strings(c.rows) } : {}) }
   }
   const rawDirs = Array.isArray(obj.dirs) ? (obj.dirs as Record<string, unknown>[]) : []
   const dirs: ViewDir[] = rawDirs
@@ -103,10 +110,28 @@ export function pathOf(tree: ViewTree, id: string): ViewDir[] {
 }
 export const pathText = (tree: ViewTree, id: string) => pathOf(tree, id).map((d) => d.name).join(' / ')
 
+/** 来源组成员里真正在这个目录里的：有 rows（真实接口）时只算已展开成源行的，没有时全部算 */
+export function groupIdsIn(c: ViewContainer, groupId: string, members: GroupMembers): string[] {
+  const all = members[groupId] ?? []
+  if (!c.rows) return all
+  const rows = new Set(c.rows)
+  return all.filter((id) => rows.has(id))
+}
 /** 容器自己的源 */
 export function ownIds(c: ViewContainer, members: GroupMembers): string[] {
   const ex = new Set(c.excluded)
-  return uniq([...c.sources, ...c.groups.flatMap((g) => members[g] ?? []).filter((id) => !ex.has(id))])
+  return uniq([...c.sources, ...c.groups.flatMap((g) => groupIdsIn(c, g, members)).filter((id) => !ex.has(id))])
+}
+/**
+ * 绑定来源组里「未在视图」的源（1016）：组的当前成员 − 目录源行 − 单独添加的 − 排除的。
+ * 只有真实接口（有 rows）才有；按来源组分开返回，没有缺的组不返回。
+ */
+export function missingOf(c: ViewContainer, members: GroupMembers): { groupId: string; ids: string[] }[] {
+  if (!c.rows) return []
+  const known = new Set([...c.rows, ...c.sources, ...c.excluded])
+  return c.groups
+    .map((groupId) => ({ groupId, ids: uniq((members[groupId] ?? []).filter((id) => !known.has(id))) }))
+    .filter((m) => m.ids.length)
 }
 /** 选中目录看到的源（10-14 定：不汇总子目录） */
 export function resolveIds(tree: ViewTree, id: string, members: GroupMembers): string[] {
@@ -127,7 +152,7 @@ export function placesOf(tree: ViewTree, srcId: string, members: GroupMembers, g
   const out: string[] = []
   for (const d of tree.dirs) {
     if (d.sources.includes(srcId)) out.push(pathText(tree, d.id))
-    if (!d.excluded.includes(srcId)) for (const g of d.groups) if ((members[g] ?? []).includes(srcId)) out.push(`${pathText(tree, d.id)}（来源组 ${groupName(g)}）`)
+    if (!d.excluded.includes(srcId)) for (const g of d.groups) if (groupIdsIn(d, g, members).includes(srcId)) out.push(`${pathText(tree, d.id)}（来源组 ${groupName(g)}）`)
   }
   return out
 }
@@ -135,7 +160,7 @@ export function placesOf(tree: ViewTree, srcId: string, members: GroupMembers, g
 export function onlyViaGroup(tree: ViewTree, id: string, srcId: string, members: GroupMembers): string | null {
   const d = dirById(tree, id)
   if (!d || d.sources.includes(srcId) || d.excluded.includes(srcId)) return null
-  return d.groups.find((g) => (members[g] ?? []).includes(srcId)) ?? null
+  return d.groups.find((g) => groupIdsIn(d, g, members).includes(srcId)) ?? null
 }
 
 // ---------------------------------------------------------------------------------------------
