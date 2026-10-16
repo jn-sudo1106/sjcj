@@ -46,7 +46,15 @@ const state = reactive<{
   categories: [],
 })
 // 以 13.6 寸屏幕为基准：弹层本身不再纵向滚动，表格承担右侧结果的主滚动。
-const tableHeight = 'clamp(260px, calc(100vh - 360px), 390px)'
+const tableHeight = 'clamp(460px, calc(100vh - 360px), 390px)'
+
+/**
+ * 「全部」的哨兵值。
+ * 不能直接用 `''` 当下拉选项的 value：Element Plus 会把空串判定成「未选中」，
+ * 选完「全部」后输入框里什么都显示不出来（placeholder 装死）。
+ * 所以下拉内部用 -1 表示全部，只在调接口时还原成空串——sourcePaged 口径里空串=不限状态。
+ */
+const ENABLE_ALL = '-1'
 
 function normalizedIds() {
   return state.sourceIds.split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean).join(',')
@@ -65,7 +73,8 @@ async function load() {
       configId: state.configId.trim() || undefined,
       sourceUrl: state.sourceUrl.trim() || undefined,
       entryTypeId: state.entryTypeId.trim() || undefined,
-      enable: state.enable,
+      // 哨兵还原：下拉里的「全部」(-1) 到接口这层要变回空串（不限）
+      enable: state.enable === ENABLE_ALL ? '' : state.enable,
       count: state.count.trim() || undefined,
       dataDate: state.dataDate || undefined,
       category: state.category || undefined,
@@ -119,7 +128,7 @@ function onReset() {
   state.configId = ''
   state.sourceUrl = ''
   state.entryTypeId = ''
-  state.enable = ''
+  state.enable = ENABLE_ALL
   state.count = ''
   state.dataDate = ''
   state.category = ''
@@ -160,7 +169,6 @@ function pick(row: Source) {
   emit('update:modelValue', false)
 }
 
-function formatUrl(value?: string) { return value || '—' }
 function formatCount(value?: number) { return value == null ? '—' : value }
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
@@ -172,7 +180,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
     :model-value="modelValue"
     class="dv-picker-dialog"
     title="源列表选择"
-    width="980px"
+    width="1400px"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <div class="dv-source-layout">
@@ -223,7 +231,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
           <el-select v-model="state.enable" placeholder="状态" @change="onSearch">
             <el-option label="在用" value="0" />
             <el-option label="停用" value="1" />
-            <el-option label="全部" value="" />
+            <el-option label="全部" :value="ENABLE_ALL" />
           </el-select>
           <el-input v-model="state.count" clearable placeholder="数据量" @keyup.enter="onEnterSearch" />
           <el-date-picker v-model="state.dataDate" value-format="YYYY-MM-DD" type="date" placeholder="数据时间" />
@@ -233,7 +241,20 @@ const onEnterSearch = withoutComposition(() => onSearch())
           <el-table-column prop="sourceId" label="源ID" width="120" sortable />
           <el-table-column prop="name" label="名称" min-width="210" sortable />
           <el-table-column label="URL" min-width="235">
-            <template #default="{ row }"><span class="dv-ellipsis" :title="row.url">{{ formatUrl(row.url) }}</span></template>
+            <template #default="{ row }">
+              <!-- 有 URL 时可点击新窗口跳转；@click.stop 阻止冒泡触发行的 pick（选中即关闭弹层），
+                   与 FlowCanvas/result/SourceOverviewView.vue 的源 URL 链接保持同一写法 -->
+              <a
+                v-if="row.url"
+                class="dv-ellipsis dv-url-link"
+                :href="row.url"
+                :title="row.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                @click.stop
+              >{{ row.url }}</a>
+              <span v-else class="dv-ellipsis">—</span>
+            </template>
           </el-table-column>
           <el-table-column prop="configId" label="配置ID" width="100" sortable />
           <el-table-column label="数据" width="95" sortable>
@@ -264,7 +285,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
 <style scoped>
 .dv-picker-dialog :deep(.el-dialog) { max-width: calc(100vw - 48px); margin: 5vh auto; }
 .dv-picker-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 150px); overflow: hidden; }
-.dv-source-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 16px; height: min(520px, calc(100vh - 170px)); }
+.dv-source-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 16px; height: min(620px, calc(100vh - 170px)); }
 .dv-source-categories { display: flex; flex-direction: column; min-height: 0; padding: 4px 12px 4px 0; border-right: 1px solid var(--rc-border-soft); }
 .dv-category-all, .dv-advanced-link { border: 0; background: transparent; color: var(--rc-primary-ink); cursor: pointer; font-size: 13px; }
 .dv-category-all { width: 100%; min-height: 34px; padding: 0 10px; text-align: left; border-radius: 6px; font-weight: 700; }
@@ -278,15 +299,17 @@ const onEnterSearch = withoutComposition(() => onSearch())
 .dv-category-count { flex: none; color: var(--rc-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .dv-category-empty { padding: 10px; color: var(--rc-muted); font-size: 12px; text-align: center; }
 .dv-source-main { min-width: 0; overflow: hidden; }
-.dv-picker-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dv-picker-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .dv-picker-toolbar :deep(.el-textarea__inner) { min-height: 32px !important; padding: 6px 11px; }
 .dv-advanced-link { padding: 8px 4px; }
 .dv-picker-spacer { flex: 1; }
 .dv-picker-refresh { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); cursor: pointer; }
 .dv-picker-refresh:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.dv-source-advanced { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
+.dv-source-advanced { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin: 10px 0; }
 .dv-picker-pagination { display: flex; justify-content: flex-end; margin-top: 14px; }
 .dv-ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-url-link { color: var(--rc-primary-ink); text-decoration: none; }
+.dv-url-link:hover { color: var(--rc-primary); text-decoration: underline; }
 @media (max-width: 900px) {
   .dv-picker-dialog :deep(.el-dialog__body) { overflow: auto; }
   .dv-source-layout { grid-template-columns: 1fr; height: auto; }
