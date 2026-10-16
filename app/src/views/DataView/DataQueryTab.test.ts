@@ -18,7 +18,7 @@ vi.mock('@/utils/format/csvExport', async (importOriginal) => ({
   downloadCsv: vi.fn(),
 }))
 
-// 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情抽屉
+// 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情（抽屉 + ENTRY_ID 弹窗）
 describe('数据中心 · 数据查询 tab', () => {
   let wrapper: VueWrapper
 
@@ -648,6 +648,8 @@ describe('数据中心 · 数据查询 tab', () => {
 
     expect(dataApi.rowDetail).toHaveBeenCalledWith('t1', '88231')
     expect(wrapper.text()).toContain('标题')
+    // 点整行仍走右侧抽屉（不是弹窗）——弹窗只留给 ENTRY_ID 链接
+    expect(wrapper.findAll('.el-drawer').some((d) => d.text().includes('复制全部 JSON'))).toBe(true)
   })
 
   it('点一行开详情：点的是行里自带动作的链接 / 选中了文字时不叠开详情；整张表显示手型', async () => {
@@ -658,8 +660,8 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(wrapper.get('.dqp-table').classes()).toContain('is-row-clickable')
-    // ENTRY_ID 不再是链接，只剩源 / 任务这类各有动作的链接
-    expect(wrapper.findAll('a.dv-a').some((a) => a.text() === '88231')).toBe(false)
+    // ENTRY_ID 也成了链接（点它开详情弹窗），与源 / 任务这类各有动作的链接并列
+    expect(wrapper.findAll('a.dv-a').some((a) => a.text() === '88231')).toBe(true)
 
     // 点源链接：只开源详情，不开行详情
     await wrapper.findAll('a.dv-a').find((a) => a.text() === '600519')!.trigger('click')
@@ -676,6 +678,60 @@ describe('数据中心 · 数据查询 tab', () => {
     await wrapper.find('.el-table__body tr').trigger('click')
     await flushPromises()
     expect(detailSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('ENTRY_ID 列可点开详情弹窗（复刻旧平台 entry-list-view 的 ENTRY_ID 链接）', async () => {
+    const detailSpy = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
+      row: ROW,
+      showItems: [{ itemId: '1', columnName: 'K1', itemName: '标题', value: '关于利润分配的公告' }],
+    })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const entryLink = wrapper.get('[data-testid="row-open-detail"]')
+    expect(entryLink.text()).toBe('88231')
+
+    await entryLink.trigger('click')
+    await flushPromises()
+
+    // 只调一次：行点击把 <a> 排除掉了，不会与单元格点击叠成两次请求
+    expect(detailSpy).toHaveBeenCalledTimes(1)
+    expect(detailSpy).toHaveBeenCalledWith('t1', '88231')
+
+    // 弹窗内容体是 EntryRecordTable：复刻旧平台 RecordDetailComm 的「列 / 值」平铺表——
+    // 列名用物理列名（ENTRY_ID / K1…），不是抽屉那份的中文标签分组。
+    const dialog = wrapper.findAll('.el-dialog').find((d) => d.find('[data-testid="record-columns-table"]').exists())
+    expect(dialog).toBeTruthy()
+    const popupText = dialog!.text()
+    expect(popupText).toContain('ENTRY_ID')
+    expect(popupText).toContain('88231')
+    expect(popupText).toContain('K1')
+    expect(popupText).toContain('关于利润分配的公告')
+    // 两套口径分明：弹窗不带抽屉的工具栏
+    expect(popupText).not.toContain('复制全部 JSON')
+
+    // 走居中弹窗而不是抽屉（dialog 模式下抽屉容器 v-if 为假、不挂载）。
+    // 不能直接断言「页面上没有 .el-drawer」——SummaryDrawer / StepDrawer / SourceDetailDrawer
+    // 也常驻在本页（未打开时靠 v-show 隐藏），按内容判定才不会被它们误伤。
+    expect(wrapper.findAll('.el-drawer').some((d) => d.find('[data-testid="record-columns-table"]').exists())).toBe(false)
+  })
+
+  it('操作列「详情」按钮开的是右侧抽屉，不是弹窗', async () => {
+    const detailSpy = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({ row: ROW, showItems: [] })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const btn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text() === '详情')
+    await btn!.trigger('click')
+    await flushPromises()
+
+    expect(detailSpy).toHaveBeenCalledWith('t1', '88231')
+    expect(wrapper.findAll('.el-drawer').some((d) => d.text().includes('复制全部 JSON'))).toBe(true)
+    expect(wrapper.findAll('.el-dialog').some((d) => d.text().includes('复制全部 JSON'))).toBe(false)
   })
 
   // 2026-09-28：数据中心也能预览 OSS 文件路径（TB_KAIPANLA 详情json 这类 .json），与源数据视图同一个预览器
