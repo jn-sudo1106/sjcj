@@ -618,6 +618,17 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(new URL(url, 'http://x').searchParams.get('more')).toBe('ENTRY_ID is null')
   })
 
+  // 1016：导出接口不认 siteId / sourceIds，按网站导出把源范围折进 more
+  it('exportUrl：源范围折成 SOURCE_ID in (...) 并进 more，与其它条件 AND', async () => {
+    const { dataApi } = await import('./index')
+
+    const url = dataApi.exportUrl({ tableId: '1042', sourceIds: ['430003053', '430003067'], sql: "K1 = 'a' OR K2 = 'b'" })
+    const params = new URL(url, 'http://x').searchParams
+
+    expect(params.get('more')).toBe("SOURCE_ID in ('430003053','430003067') AND (K1 = 'a' OR K2 = 'b')")
+    expect(params.has('sourceIds')).toBe(false)
+  })
+
   it('exportUrl：没有任何条件时不带 more', async () => {
     const { dataApi } = await import('./index')
 

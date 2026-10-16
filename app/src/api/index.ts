@@ -2346,7 +2346,11 @@ function buildLegacyMore(q: RowQuery) {
  * 页面上这时查不到数据，导出也不能因为条件被丢掉而变成整表。
  */
 function buildExportMore(q: RowQuery) {
-  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId)], buildLegacyMore(q))
+  // 带引号写法与 backTraceSources 一致（10-16 186 实测导出认）；空数组不加条件，调用方自己保证非空
+  const sourceClause = q.sourceIds?.length
+    ? `SOURCE_ID in (${q.sourceIds.map((id) => `'${escapeLegacySqlString(id)}'`).join(',')})`
+    : undefined
+  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId), sourceClause], buildLegacyMore(q))
 }
 
 /**
