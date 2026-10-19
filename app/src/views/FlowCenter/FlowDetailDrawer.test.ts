@@ -8,6 +8,7 @@ import FlowDetailDrawer from './FlowDetailDrawer.vue'
 import FlowVersionHistory from './FlowVersionHistory.vue'
 import { flowCenterApi, flowVersionApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useNodeStore } from '@/stores/node'
 import { useUiStore } from '@/stores/ui'
 import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
@@ -321,6 +322,45 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('步骤保存失败'))
     // 头部错误态（flush 失败置 error）一直留着，等用户重试
     expect(useFlowStore().flowDirty).toBe(true)
+  })
+})
+
+// 2026-10-19：「保存流程」不存节点配置，成功后的 markSaved 却会清掉配置脏标记——
+// 有未保存配置时必须拦下，关抽屉时也要确认，否则配置改动会被当成已保存悄悄丢掉。
+describe('流程详情抽屉 · 未保存的节点配置（2026-10-19）', () => {
+  it('有未保存配置时点保存流程：拦下提示，不发 saveFlow，脏标记保留', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOW, version: 2 })
+    const w = mountDrawer()
+    await flushPromises()
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    const flow = useFlowStore()
+    const nodeId = flow.main.find((id) => !['start', 'end'].includes(id))!
+    useNodeStore().touchConfig(nodeId)
+
+    await saveButton(w).trigger('click')
+    await flushPromises()
+
+    expect(save).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('的配置还没保存'))
+    expect(flow.dirtyConfigNodes).toContain(nodeId)
+  })
+
+  it('有未保存配置时点关闭：留在此页不关抽屉；确认「仍然关闭」后放行', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    const flow = useFlowStore()
+    useNodeStore().touchConfig(flow.main.find((id) => !['start', 'end'].includes(id))!)
+
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce(new Error('cancelled'))
+    await w.get('.fd-close').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('的配置还没保存'), '配置未保存', expect.anything())
+    expect(w.emitted('close')).toBeUndefined()
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await w.get('.fd-close').trigger('click')
+    await flushPromises()
+    expect(w.emitted('close')).toBeTruthy()
   })
 })
 

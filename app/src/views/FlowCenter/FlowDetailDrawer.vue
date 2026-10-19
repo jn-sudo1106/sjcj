@@ -81,7 +81,25 @@ onBeforeUnmount(ensureAutosaveUnbound)
  *  0927 P0-1：抽屉内已补保存状态条（含「重试」按钮）；同时给「仍然关闭」显式出口——后端
  *  持续故障（502 / outEntry 校验拒绝）时用户不能被永远困在抽屉里，确认后关闭并明示改动
  *  可能丢失（这正是原实现的行为缺口：error 态 return 后抽屉关不掉，只能刷新页面）。 */
+/** 未保存的节点配置（节点配置区底部「保存」才落库，「保存流程」不存配置）。2026-10-19 */
+function unsavedConfigTitles(): string[] {
+  return canvas.dirtyConfigNodes.map((id) => `「${canvas.configs[id]?.title || id}」`)
+}
+
 async function closeWorkspace() {
+  // 节点配置改了没点「保存」就关抽屉，改动会直接丢掉，先确认
+  if (canvas.configDirty) {
+    try {
+      await ElMessageBox.confirm(
+        `节点${unsavedConfigTitles().join('、')}的配置还没保存。\n仍然关闭将丢失这些改动，确定关闭吗？`,
+        '配置未保存',
+        { confirmButtonText: '仍然关闭', cancelButtonText: '留在此页', type: 'warning' },
+      )
+    } catch {
+      canvas.select(canvas.dirtyConfigNodes[0])
+      return
+    }
+  }
   if (canvas.flowDirty || autosave.status.value === 'saving') {
     await autosave.flush()
     if (autosave.status.value === 'error') {
@@ -383,6 +401,13 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
   const trimmed = name.value.trim()
   if (!trimmed) {
     ElMessage.warning('请输入流程名称')
+    return null
+  }
+  // 「保存流程」只存步骤和流程定义，不存节点配置；而成功后的 markSaved 会清掉配置的脏标记，
+  // 不拦的话配置改动会被当成已保存、悄悄丢掉（2026-10-19）。先让用户在右侧把配置存了。
+  if (canvas.configDirty) {
+    canvas.select(canvas.dirtyConfigNodes[0])
+    ElMessage.warning(`节点${unsavedConfigTitles().join('、')}的配置还没保存，请先点右侧节点配置底部的「保存」，再保存流程`)
     return null
   }
   saving.value = true
