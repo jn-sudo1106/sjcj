@@ -10,9 +10,20 @@ import AppModuleHead from './AppModuleHead.vue'
 import LaunchJobBar from '@/components/LaunchJobBar.vue'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
+import { syncSiteVisit } from '@/utils/siteRecents'
 
 const ui = useUiStore()
 const auth = useAuthStore()
+
+// 通用埋点：进入/离开网站时配对 ENTER/EXIT（EXIT 用于后端回填停留时长）。
+// 只有画布页带 siteId；其它路由统一传 null，表示"不在某个网站上"。
+// 放在布局层是因为它对整个应用生命周期只注册一次，且不依赖任何业务页面是否挂载。
+const router = useRouter()
+router.afterEach((to) => {
+  const siteId = to.path === '/canvas' ? String(to.query.siteId ?? '') || null : null
+  syncSiteVisit(siteId)
+})
 </script>
 
 <template>

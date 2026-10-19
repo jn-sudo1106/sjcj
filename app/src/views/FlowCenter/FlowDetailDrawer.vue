@@ -21,6 +21,7 @@ import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import FlowVersionBar from '@/views/FlowCanvas/canvas/FlowVersionBar.vue'
 import FlowVersionHistory from './FlowVersionHistory.vue'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
+import { trackEdit } from '@/utils/logEvents'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
 const props = withDefaults(defineProps<{ flow: FlowRecord | null; categories?: { id: string; name: string }[] }>(), {
@@ -420,6 +421,14 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
     canvas.markSaved()
     if (!versioned) emit('saved', saved)
     if (showMessage) {
+      // 只在**用户主动点保存**时上报：自动保存 / 发布前置保存都传 showMessage=false，
+      // 否则编辑一分钟就会往明细表里灌几十条 EDIT。
+      trackEdit('FLOW', saved.id, saved.name, {
+        eventCode: 'flow_save',
+        eventName: '保存流程',
+        firstModule: '流程管理',
+        pageName: '流程编辑',
+      })
       ElMessage.success(versioned
         ? `草稿 v${versionState.value?.draftVersionNo ?? saved.version ?? '—'} 已保存`
         : (saved.version == null ? '流程已保存' : `流程已保存为 v${saved.version}`))

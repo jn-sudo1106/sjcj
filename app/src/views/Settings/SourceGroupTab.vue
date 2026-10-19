@@ -24,6 +24,7 @@ import { sourceGroupApi, flowCenterApi, sourceApi, type Source, type SourceGroup
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
@@ -386,6 +387,12 @@ async function moveMembers(): Promise<void> {
  *  同样记一笔「最近打开的网站」——「我的分组」也是源管理的常见入口，不记会漏掉一整条进入路径。 */
 function openSource(source: Source, view: 'overview' | 'data' = 'overview'): void {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '我的分组',
+  })
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },

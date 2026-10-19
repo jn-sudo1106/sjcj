@@ -29,6 +29,7 @@ import { useUiStore } from '@/stores/ui'
 import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
 import { copyToClipboard } from '@/utils/clipboard'
+import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 
 const props = defineProps<{
   siteId: string
@@ -242,6 +243,13 @@ function applyEditedSource(updated: Source) {
     flow.patchSourceCtx({ name: updated.name, url: updated.url })
   }
   ws.renameTab(updated.sourceId, updated.name)
+  // EditSourceDialog 在保存成功后才 emit saved，这里记一笔即可（不需要再判结果）
+  trackEdit('SOURCE', updated.sourceId, updated.name, {
+    eventCode: 'source_update',
+    eventName: '编辑源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
 }
 
 function isErr(s: Source): boolean {
@@ -324,6 +332,12 @@ async function saveRename(s: Source) {
     }
     s.name = name
     cancelRename()
+    trackEdit('SOURCE', s.sourceId, name, {
+      eventCode: 'source_rename',
+      eventName: '重命名源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
     ElMessage.success(res?.message || '源已重命名')
     emit('added', updated)
   } catch (error) {
@@ -425,6 +439,12 @@ async function deleteFromMenu() {
       return
     }
     children.value = children.value.filter((c) => c.sourceId !== s.sourceId)
+    trackDelete('SOURCE', s.sourceId, s.name, {
+      eventCode: 'source_delete',
+      eventName: '删除源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
     ElMessage.success(`源「${s.name}」已删除`)
   } catch (error) {
     ElMessage.error(`删除失败：${error instanceof Error ? error.message : String(error)}`)
@@ -467,6 +487,16 @@ async function openSiteEdit() {
   siteEditDlg.show = true
 }
 function onSiteEditSaved() {
+  // 网站基本信息已保存成功（SiteEditorDialog 保存成功后才 emit）
+  const current = site.value
+  if (current?.siteId) {
+    trackEdit('SITE', current.siteId, current.name, {
+      eventCode: 'site_update',
+      eventName: '编辑网站基本信息',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
+  }
   void load(true)
 }
 
@@ -668,6 +698,12 @@ async function submitParamSource() {
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
+  trackCreate('SOURCE', addedId, added?.name ?? name, {
+    eventCode: 'source_create_param',
+    eventName: '新建参数源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
   if (added) emit('added', added)
 }
 
@@ -778,6 +814,13 @@ async function submitCopy() {
     closeCopyDialog()
     await load(true)
     const added = children.value.find((c) => c.sourceId === newId)
+    trackCreate('SOURCE', newId, added?.name ?? name, {
+      eventCode: 'source_copy',
+      eventName: '复制源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+      pageEntry: `源「${s.name}」`,
+    })
     if (added) emit('added', added)
   } finally {
     copyDlg.saving = false
@@ -834,6 +877,13 @@ async function submitAdd() {
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
+  // 两条建源路径（空白 / 按模板源）在这里汇合，埋点只打一处
+  trackCreate('SOURCE', addedId, added?.name ?? target.name, {
+    eventCode: 'source_create',
+    eventName: '新建源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
   if (added) emit('added', added)
 }
 
