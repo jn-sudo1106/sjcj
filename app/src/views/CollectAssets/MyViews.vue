@@ -17,6 +17,7 @@ import { defaultDisplay, sourceViewApi, sourceViewBackend, type SourceView, type
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import { HIDEABLE_SOURCE_COLUMNS, SOURCE_SORT_FIELDS, blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import SaveViewDialog from './SaveViewDialog.vue'
@@ -432,6 +433,12 @@ async function importLocal() {
 // ---- 打开源 / 网站 ----
 function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '我的视图',
+  })
   void router.push({ path: '/canvas', query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath } })
 }
 function openSite(siteId: string) {

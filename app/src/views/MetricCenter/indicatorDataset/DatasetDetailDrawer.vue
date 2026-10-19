@@ -50,7 +50,6 @@ function display(col: DatasetColumn): string {
   >
     <template #default>
       <div v-if="record" class="dd-body">
-        <!-- <el-button class="dd-close" @click="emit('update:modelValue', false)">关闭本页</el-button> -->
         <el-descriptions border :column="4" class="dd-desc">
           <el-descriptions-item
             v-for="col in columns"

@@ -60,12 +60,16 @@
 //      旧版全部写死 width，容器宽时右侧会留白（el-table 的 flex 分配只对非数字 width 的列生效）。
 //   7. 弹层：`base-edit-modal` → `DatasetEditDialog`、`base-detail-drawer` → `DatasetDetailDrawer`
 //      （按新平台惯例改右侧抽屉）、`prompt` → `PromptDialog`。旧 `handleCopy` 成功后 `queryParam = {}`
-//      （清空查询条件但**不清输入框里的字**）也照抄了——同样是旧版行为。
+//      （清空查询条件但**不清输入框里的字**）**不再照抄**（1019 修正）：制作副本后保留当前筛选条件
+//      与页码、只刷新列表，不再把条件清空。
 //   8. 提示形态：旧 `$message.*` → `ElMessage.*`、旧 `$notification.*({message})` → `ElNotification.*`，
 //      文案原样保留；写操作**失败**时统一走平台默认的 `err.message`，不再拼旧页的「xxx失败 + err」前缀
 //      （confirmDanger 内置的错误上报口径，见 utils/confirmDanger.ts）。
 //   9. 旧页 `filters.changeTime`（返回常量 '11' 的废 filter）与 `options.alert`（旧 s-table 的已选条数
 //      提示条，页面从没传 alert，故从未渲染）——不迁。
+//  10. 状态筛选的「全部」：旧 a-select 用 `value=""` 表示全部，el-select 把空串当「未选中」
+//      （选完输入框只剩 placeholder），故下拉里改用哨兵——全部 = -1、历史删除的 = -2，
+//      调 `datasetPaged` 时由 `toApiEnable()` 还原成 '' / '-1'，后端 enable 口径不变。
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
@@ -108,18 +112,29 @@ defineOptions({ name: 'IndicatorDataset' })
 const route = useRoute()
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求）----
+/**
+ * 「状态」下拉的两个哨兵值。下拉内部**不能**用空串：Element Plus 的 `hasModelValue` 用
+ * `isEmptyValue(modelValue)` 判定，'' 会被当成「没选」，选完「全部」输入框里只剩 placeholder。
+ * 所以下拉里用哨兵，到接口那层（`load()` 的 `toApiEnable`）再还原成后端口径：
+ *   全部(-1)   → ''（datasetPaged 空串 = 不限状态）
+ *   历史删除(-2)→ '-1'（后端 enable 与 isDelete 同向，-1 才是「历史删除的」）
+ * 两个哨兵不能都用 -1，否则两个选项同值，el-select 只会显示第一个「全部」。
+ */
+const ENABLE_ALL = '-1'
+const ENABLE_DELETED = '-2'
+
 const form = reactive({
   datasetId: '', // ID
   sourceId: '', // 源ID
   entryTypeId: '', // 表ID
-  enable: '', // '' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的
+  enable: ENABLE_ALL, // 全部 / '0' 在用 / '1' 停用 / 历史删除的（见上面哨兵说明）
 })
 /** 已「执行」的筛选条件。分页单独管——旧 datasetPaged 只发筛选字段 + page/limit。 */
 const filters = reactive({
   datasetId: '',
   sourceId: '',
   entryTypeId: '',
-  enable: '',
+  enable: ENABLE_ALL,
   /** 旧 `$route.query.entryType` 透传键 */
   entryType: '',
   /** 旧 `$route.query.configId` / watch 透传键 */
@@ -146,6 +161,13 @@ const routeEntryTypeId = ref('')
 
 const showGenDataset = computed(() => !!routeSourceId.value && !!routeEntryTypeId.value)
 
+/** 下拉哨兵 → 接口 enable 口径（'' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的） */
+function toApiEnable(value: string): string {
+  if (value === ENABLE_ALL) return ''
+  if (value === ENABLE_DELETED) return '-1'
+  return value
+}
+
 async function load() {
   loading.value = true
   try {
@@ -153,7 +175,8 @@ async function load() {
       datasetId: filters.datasetId,
       sourceId: filters.sourceId,
       entryTypeId: filters.entryTypeId,
-      enable: filters.enable,
+      // 选「全部」时接口仍按旧口径传空串（不是 -1），历史删除的还原成后端的 -1
+      enable: toApiEnable(filters.enable),
       entryType: filters.entryType,
       configId: filters.configId,
       page: page.value,
@@ -211,18 +234,6 @@ function clearSelection() {
   selected.value = []
   selectedRows.value = []
   tableRef.value?.clearSelection()
-}
-
-/** 旧 `queryParam = {}`（清筛选条件；输入框里的字保留），`reload` 控制是否顺带重查 */
-function resetFilters(reload = true) {
-  filters.datasetId = ''
-  filters.sourceId = ''
-  filters.entryTypeId = ''
-  filters.enable = ''
-  filters.entryType = ''
-  filters.configId = ''
-  page.value = 1
-  if (reload) void load()
 }
 
 const msgOf = (res: unknown): string => String((res as { message?: unknown } | null)?.message ?? '')
@@ -358,8 +369,8 @@ function handleCopy(row: DatasetRow) {
     `是否确认生成该数据集的新副本: [${String(row.datasetName ?? '')} ]?`,
     async () => {
       const res = (await copyDataset(row.datasetId)) as { message?: string }
-      // 旧版复制成功后会 `this.queryParam = {}` —— 清条件但不清输入框（见文件头偏差第 7 条）
-      resetFilters(false)
+      // 1019 修正：复制成功后**保留**当前筛选条件与页码，只刷新列表（旧版这里 `queryParam = {}`，
+      // 清条件 + 翻回第 1 页：刚复制的副本还没看到，条件先没了，用户还得重新填一遍才能继续操作）
       ElNotification.success({ message: '复制成功,请刷新后查询最新ID' })
       void load()
       return res
@@ -498,10 +509,11 @@ onMounted(() => {
         <el-col :md="4" :sm="24">
           <el-form-item label="状态">
             <el-select v-model="form.enable" placeholder="请选择">
-              <el-option label="全部" value="" />
+              <!-- 「全部」用 -1 哨兵：空串会被 el-select 当成「没选」，选完只显示 placeholder（见文件上方哨兵说明） -->
+              <el-option label="全部" :value="ENABLE_ALL" />
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
-              <el-option label="历史删除的" value="-1" />
+              <el-option label="历史删除的" :value="ENABLE_DELETED" />
             </el-select>
           </el-form-item>
         </el-col>

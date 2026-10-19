@@ -8,6 +8,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
 import { favoriteSourceIds, favoriteSourcesLoaded, loadFavoriteSources } from '@/utils/sourceFavorites'
 import { recentLoaded, recentRankOf, recentSiteIds, recordSiteVisit, loadRecentSites } from '@/utils/siteRecents'
+import { trackClick, trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
@@ -380,6 +381,14 @@ const sourceScopeEmptyText = computed(() => {
 /** 打开源：与网站详情「源视图」同一落点（概览视图），带上网站上下文，左侧才加载得出同网站的源 */
 function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview') {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  // 两条埋点，口径不同：SITE/ENTER 归「最近打开的网站」（读 `recent`），
+  // SOURCE/CLICK 归「最近查看的源」（读 `page` 明细）。不能只打一条——前者是网站，后者是源。
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: view === 'data' ? '源数据视图' : '源概览视图',
+  })
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
@@ -449,6 +458,12 @@ async function onDeleteSite(site: Site) {
       ElMessage.error(res.message || '删除网站失败')
       return
     }
+    trackDelete('SITE', site.siteId, site.name, {
+      eventCode: 'site_delete',
+      eventName: '删除网站',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
     ElMessage.success(`已删除网站「${site.name}」`)
     await refreshAll()
   } catch (error) {
@@ -473,12 +488,32 @@ async function onEditorSaved(newSiteId?: string) {
   //
   // 新建成功后**不自动跳进新网站**：建站常常是连着建好几个，跳走反而打断。
   // 回到第一页即可——默认排序是「最近修改」，新网站就在最前面，点卡片就能进去灌源。
+  // 编辑前的 id 先留一份：刷新列表后 `editorSite` 可能已被清掉，埋点还要用它
+  const editedId = editorSite.value?.siteId
   clearCollectAssetsCache()
   if (newSiteId) {
     justCreatedSiteIds.add(newSiteId)
     page.value = 1
   }
   await loadList({ force: true })
+  // 标题用**刷新后**的名字：编辑可能刚改过名，用打开弹窗时的旧名会让明细表和列表对不上
+  const trackId = newSiteId ?? editedId
+  const title = fetchedSites.value.find((s) => s.siteId === trackId)?.name ?? editorSite.value?.name
+  if (newSiteId) {
+    trackCreate('SITE', newSiteId, title, {
+      eventCode: 'site_create',
+      eventName: '新建网站',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+  } else if (editedId) {
+    trackEdit('SITE', editedId, title, {
+      eventCode: 'site_update',
+      eventName: '编辑网站基本信息',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+  }
 }
 
 // 新建采集

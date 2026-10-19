@@ -16,6 +16,7 @@ import { visibleIssueTags } from '@/utils/sourceMark'
 import { Star, StarFilled } from '@element-plus/icons-vue'
 import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
 import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 
 const props = withDefaults(defineProps<{
   sites: Site[]
@@ -124,6 +125,13 @@ watch(() => props.sites, (list) => { void ensureCards(list) })
 function openSource(s: Source) {
   // 点源 chip 进去也算打开了这个网站（0917-17）
   if (s.siteId) recordSiteVisit(s.siteId, s.siteName)
+  // 源本身另记一条 CLICK（与网站 ENTER 是两个口径，不能只打一条）
+  trackClick('SOURCE', s.sourceId, s.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '网站卡片',
+  })
   router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'overview', returnTo: router.currentRoute.value.fullPath } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）

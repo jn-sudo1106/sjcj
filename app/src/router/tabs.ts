@@ -37,7 +37,7 @@ export const TABS: TabMeta[] = [
   { key: 'system-config', path: '/system-config', label: '问数系统配置', desc: '参数设置、页面配置（旧 ai-chat-view「系统配置」域）', group: 'template' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
-  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },
+  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本、数据权限设置', group: 'settings', permission: 'settings' },
 ]
 
 /**

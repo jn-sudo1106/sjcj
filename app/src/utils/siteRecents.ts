@@ -36,6 +36,17 @@ export const recentSiteIds = ref<string[]>([])
 /** 首次后端加载是否已完成：区分「还没拉到」和「确实一条都没有」，避免空态文案闪一下 */
 export const recentLoaded = ref(false)
 
+/** 一次尚未关闭的访问：ENTER 返回的 visitId + 网站 ID，离开时用它发 EXIT */
+interface OpenVisit {
+  visitId: string
+  siteId: string
+}
+
+const openVisits: OpenVisit[] = []
+
+/** 当前实际停留的网站（由路由同步）。null = 不在画布/没指定网站 */
+let currentCanvasSiteId: string | null = null
+
 /**
  * 记一次"打开了这个网站"。
  *
@@ -43,6 +54,8 @@ export const recentLoaded = ref(false)
  * 不记的话最常见的一种进入方式就丢了，下次照样要找半天。
  *
  * 同步返回（不阻塞跳转）：本地先置顶，上报是尽力而为，失败静默——埋点挂了也不能让人点不进去。
+ * ENTER 返回的 `visitId` 会挂在 {@link openVisits} 上，离开画布时由 {@link syncSiteVisit} /
+ * {@link endSiteVisit} 补 EXIT（后端据此回填停留时长，且不会多出一行）。
  *
  * @param siteName 网站名，尽量传：`recent` 列表直接展示 `contentTitle`，不传后端标题会是空的
  */
@@ -63,9 +76,60 @@ export function recordSiteVisit(siteId: string, siteName?: string): void {
       pageName: '网站详情',
       eventCode: 'site_open',
     })
+    .then((res) => {
+      const visitId = res?.success === true ? res.data?.visitId : null
+      if (!visitId) return
+      // 慢请求返回时人可能已经回到列表：直接补一条 EXIT，别留一行"永不退出"的记录
+      if (currentCanvasSiteId && currentCanvasSiteId !== id) {
+        closeVisit({ visitId, siteId: id })
+        return
+      }
+      openVisits.push({ visitId, siteId: id })
+      // 防御：同一会话里来回切站时最多留 5 条，超出的直接关掉
+      while (openVisits.length > 5) {
+        const oldest = openVisits.shift()
+        if (oldest) closeVisit(oldest)
+      }
+    })
     .catch(() => {
       /* 尽力而为：失败不影响跳转，也不弹提示 */
     })
+}
+
+/** 关闭一次访问（EXIT）。用 sendBeacon：页面卸载时普通请求会被浏览器掐断 */
+function closeVisit(visit: OpenVisit): void {
+  logReportApi.beacon({
+    action: 'EXIT',
+    visitId: visit.visitId,
+    contentType: 'SITE',
+    contentId: visit.siteId,
+  })
+}
+
+/**
+ * 路由变化时同步「当前停留的网站」：离开的网站补 EXIT，停留的保持打开。
+ * 由 `layouts/AppShell.vue` 的 `router.afterEach` 调用。
+ *
+ * @param siteId 当前路由的网站 ID；不在画布 / 没有 siteId 时传 null
+ */
+export function syncSiteVisit(siteId: string | null): void {
+  currentCanvasSiteId = siteId
+  for (let i = openVisits.length - 1; i >= 0; i--) {
+    if (openVisits[i].siteId === siteId) continue
+    closeVisit(openVisits[i])
+    openVisits.splice(i, 1)
+  }
+}
+
+/** 关闭所有未结束的访问（页面卸载 / 离开画布） */
+export function endSiteVisit(): void {
+  currentCanvasSiteId = null
+  for (const visit of openVisits.splice(0, openVisits.length)) closeVisit(visit)
+}
+
+// 关标签页 / 刷新：pagehide 是最后一个还能发请求的时机（后端对重复 EXIT 做了幂等）
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', endSiteVisit)
 }
 
 /** 同一时刻只跑一次加载：网站列表 / 收藏 / 最近打开几个 tab 挂载时会同时来要 */

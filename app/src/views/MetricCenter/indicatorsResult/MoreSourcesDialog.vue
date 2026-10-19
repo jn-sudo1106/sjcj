@@ -54,6 +54,12 @@ const selected = ref<Source[]>([])
 const tableRef = ref()
 const categoryTreeRef = ref<InstanceType<typeof SourceCategoryTree> | null>(null)
 
+/** 状态下拉的 UI 哨兵：el-select 里 `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成
+ *  「没选」、选中「全部」后输入框里看不到「全部」二字。到 `load()` 里由 `toApiEnable()` 还原成
+ *  ''（旧口径：不带 enable 条件）。 */
+const ENABLE_ALL = '-1'
+const toApiEnable = (value: string): string => (value === ENABLE_ALL ? '' : value)
+
 /**
  * 旧 SourceList2 的 `queryParam`：输入框直接 v-model 绑在它上面，点「查询」/ 回车时拿它发请求
  * （STable 的老用法 —— 边输边改条件，不点查询不发请求）。
@@ -88,7 +94,7 @@ async function load() {
       configId: query.configId.trim() || undefined,
       sourceUrl: query.sourceUrl.trim() || undefined,
       entryTypeId: query.entryTypeId.trim() || undefined,
-      enable: query.enable,
+      enable: toApiEnable(query.enable),
       count: query.count.trim() || undefined,
       dataDate: query.dataDate || undefined,
       categorys: query.categorys || undefined,
@@ -229,7 +235,7 @@ defineExpose({ open })
                   <el-select v-model="query.enable" placeholder="请选择" class="msd-enable-select" @change="runQuery">
                     <el-option label="在用" value="0" />
                     <el-option label="停用" value="1" />
-                    <el-option label="全部" value="" />
+                    <el-option label="全部" :value="ENABLE_ALL" />
                   </el-select>
                 </el-form-item>
               </el-col>

@@ -269,6 +269,41 @@ describe('indicatorDataset · 搜索', () => {
     await flushPromises()
     expect(spies.datasetPaged).toHaveBeenCalledTimes(1)
   })
+
+  // 状态下拉：'' 会被 el-select 当成「没选」（选完只剩 placeholder），所以下拉里用哨兵，
+  // 接口那层再还原：全部 -1 → ''，历史删除的 -2 → '-1'
+  it('状态「全部」：下拉回显中文「全部」，请求仍按旧口径传空串', async () => {
+    const w = mountPage()
+    await flushPromises()
+    const select = w.findAllComponents({ name: 'ElSelect' })[0]
+    expect(select.vm.$props.modelValue).toBe('-1')
+    expect(select.text()).toBe('全部')
+
+    // 先切走再切回来，避免「初始值恰好对」的假阳性
+    select.vm.$emit('update:modelValue', '0')
+    await flushPromises()
+    expect(select.text()).toBe('在用')
+    select.vm.$emit('update:modelValue', '-1')
+    await flushPromises()
+    expect(select.text()).toBe('全部')
+
+    await btn(w, '查询').trigger('click')
+    await flushPromises()
+    expect(lastQuery()).toMatchObject({ enable: '' })
+  })
+
+  it('状态「历史删除的」：哨兵 -2 在接口这层还原成后端的 -1', async () => {
+    const w = mountPage()
+    await flushPromises()
+    const select = w.findAllComponents({ name: 'ElSelect' })[0]
+    select.vm.$emit('update:modelValue', '-2')
+    await flushPromises()
+    expect(select.text()).toBe('历史删除的')
+
+    await btn(w, '查询').trigger('click')
+    await flushPromises()
+    expect(lastQuery()).toMatchObject({ enable: '-1' })
+  })
 })
 
 describe('indicatorDataset · 批量与执行操作', () => {
@@ -353,10 +388,10 @@ describe('indicatorDataset · 行内操作', () => {
     expect(w.findComponent({ name: 'DatasetDetailDrawer' }).props('modelValue')).toBe(true)
   })
 
-  it('「制作副本」图标 → copyDataset(datasetId)，并按旧版清掉查询条件后重查', async () => {
+  it('「制作副本」图标 → copyDataset(datasetId)，并保留筛选条件只重查列表（1019 修正）', async () => {
     const w = mountPage()
     await flushPromises()
-    // 先设一个筛选条件，验证复制后会被清掉
+    // 先设一个筛选条件，验证复制后**不会**被清掉
     await w.findAll('.ids-filter-form input')[0].setValue('1001')
     await btn(w, '查询').trigger('click')
     await flushPromises()
@@ -368,7 +403,10 @@ describe('indicatorDataset · 行内操作', () => {
     await opLink(w, 0, '制作副本').trigger('click')
     await flushPromises()
     expect(spies.copyDataset).toHaveBeenCalledWith(1001)
-    expect(lastQuery()).toMatchObject({ datasetId: '' })
+    // 复制成功后的重查仍带着原条件（旧版这里会 queryParam = {}，变成全量第 1 页）
+    expect(lastQuery()).toMatchObject({ datasetId: '1001' })
+    // 输入框里的字也不能被清掉
+    expect((w.findAll('.ids-filter-form input')[0].element as HTMLInputElement).value).toBe('1001')
   })
 
   it('「增加指标」/「指标-新」→ 原地打开对应抽屉，入参 (sourceId, 整行, entryTypeId)（旧 doEdit）', async () => {

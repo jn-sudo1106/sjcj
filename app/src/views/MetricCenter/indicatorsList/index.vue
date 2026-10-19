@@ -87,6 +87,13 @@
 //      MeasureAddDialog / MeasureAddNewDialog（与旧版 MeasureAdd / MeasureAddNew 抽屉一致），
 //      跳页签这件事整个没了 → `add` 没有任何生产者，本页随之回到「纯列表页」，
 //      旧 MeasureList 本来也没有任何新增入口（新增只从数据集页发起）。
+//   13. 状态筛选的「全部」：旧 a-select 用 `value=""` 表示全部，el-select 把空串当「未选中」
+//      （选完输入框只剩 placeholder），故下拉里改用哨兵——全部 = -1、历史删除的 = -2，
+//      调 `measurePaged` 时由 `toApiEnable()` 还原成 '' / '-1'，后端 enable 口径不变。
+//   14. 「指标副本」成功后**不再清空查询条件**（1019 修正）：旧版 `queryParam = {}` 把条件全清、
+//      还回第 1 页，而新副本常常不满足原条件，一清条件列表就整屏换掉、找不到刚复制的那条。
+//      现在只 `handleRefresh()` 重查，筛选条件、页码、输入框里的字全部保留
+//      （与 indicatorDataset「制作副本」同一处理）。
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
@@ -143,12 +150,23 @@ const route = useRoute()
 type Ack = { message?: string; msg?: string }
 
 // ---- 查询条件（草稿与请求参数是同一个对象，见文件头偏差第 4 条）----
+/**
+ * 「状态」下拉的两个哨兵值。下拉内部**不能**用空串：Element Plus 的 `hasModelValue` 用
+ * `isEmptyValue(modelValue)` 判定，'' 会被当成「没选」，选完「全部」输入框里只剩 placeholder。
+ * 所以下拉里用哨兵，到接口那层（`load()` 的 `toApiEnable`）再还原成后端口径：
+ *   全部(-1)   → ''（measurePaged 空串 = 不限状态）
+ *   历史删除(-2)→ '-1'（后端 enable 与 isDelete 同向，-1 才是「历史删除的」）
+ * 两个哨兵不能都用 -1，否则两个选项同值，el-select 只会显示第一个「全部」。
+ */
+const ENABLE_ALL = '-1'
+const ENABLE_DELETED = '-2'
+
 const queryParam = reactive({
   datasetId: '' as string | number,
   sourceId: '' as string | number,
   entryTypeId: '' as string | number,
   measureCode: '' as string,
-  enable: '' as string,
+  enable: ENABLE_ALL as string,
   /** 左侧分类树 emit 出来的 categorys（逗号分隔） */
   categorys: '' as string,
   /** 旧 `$route.query.configId` 透传键 */
@@ -161,7 +179,7 @@ function clearParam() {
   queryParam.sourceId = ''
   queryParam.entryTypeId = ''
   queryParam.measureCode = ''
-  queryParam.enable = ''
+  queryParam.enable = ENABLE_ALL
   queryParam.categorys = ''
   queryParam.configId = ''
 }
@@ -180,6 +198,13 @@ const page = ref(1)
 const size = ref(20) // 旧 `:pageSize="20"`
 const tableRef = ref<TableInstance>()
 
+/** 下拉哨兵 → 接口 enable 口径（'' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的） */
+function toApiEnable(value: string): string {
+  if (value === ENABLE_ALL) return ''
+  if (value === ENABLE_DELETED) return '-1'
+  return value
+}
+
 async function load() {
   loading.value = true
   try {
@@ -188,7 +213,8 @@ async function load() {
       sourceId: queryParam.sourceId,
       entryTypeId: queryParam.entryTypeId,
       measureCode: queryParam.measureCode,
-      enable: queryParam.enable,
+      // 选「全部」时接口仍按旧口径传空串（不是 -1），历史删除的还原成后端的 -1
+      enable: toApiEnable(queryParam.enable),
       categorys: queryParam.categorys,
       configId: queryParam.configId,
       page: page.value,
@@ -324,7 +350,7 @@ function openJsonEdit(row: MeasureRow, col: MeasureColumn) {
   target?.open((parsed ?? {}) as Record<string, unknown>, isDim ? 'json编辑-日期类' : 'json编辑-数值类')
 }
 
-/** 旧 handleCopy：$confirm → copyMeasure(record.measureId) → 清空查询条件（页面停留当前页）*/
+/** 旧 handleCopy：$confirm → copyMeasure(record.measureId) → 刷新列表（保留当前筛选与页码）*/
 function handleCopy(row: MeasureRow) {
   void confirmDanger<Ack>(
     '提示',
@@ -332,9 +358,9 @@ function handleCopy(row: MeasureRow) {
     async () => {
       const res = (await copyMeasure(row.measureId)) as Ack
       ElNotification.success({ message: '复制成功,请刷新后查询最新ID' })
-      // 旧版 `this.queryParam = {}` —— 条件清空但**不清输入框里的字**（输入框也绑在 queryParam
-      // 上，所以这里两者一起清，与旧版整对象替换的效果一致）
-      clearParam()
+      // 1019 修正：旧版这里 `queryParam = {}` 把条件全清（还回第 1 页），新副本常常不满足原条件，
+      // 一清条件列表就整屏换掉、找不到刚复制的那条 —— 与数据集页「制作副本」同型，一并改成保留。
+      // `handleRefresh()` 不传参 = 不回第 1 页，只重查。
       handleRefresh()
       return res
     },
@@ -487,10 +513,11 @@ const DETAIL_COLUMNS = detailColumns()
             <el-col :md="3" :sm="24">
               <el-form-item label="状态">
                 <el-select v-model="queryParam.enable" placeholder="请选择">
-                  <el-option label="全部" value="" />
+                  <!-- 「全部」用 -1 哨兵：空串会被 el-select 当成「没选」，选完只显示 placeholder（见文件上方哨兵说明） -->
+                  <el-option label="全部" :value="ENABLE_ALL" />
                   <el-option label="在用" value="0" />
                   <el-option label="停用" value="1" />
-                  <el-option label="历史删除的" value="-1" />
+                  <el-option label="历史删除的" :value="ENABLE_DELETED" />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -678,6 +705,8 @@ const DETAIL_COLUMNS = detailColumns()
   box-sizing: border-box;
   height: 100%;
   min-height: 420px;
+  max-height: 700px;
+  overflow-y: auto;
   padding: 12px 10px 10px;
   background: var(--rc-bg, #f8fafc);
   border: 1px solid var(--rc-border-soft, #eef2f7);

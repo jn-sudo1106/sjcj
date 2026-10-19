@@ -151,14 +151,35 @@ describe('MoreSourcesDialog · 首屏与筛选', () => {
     expect(q('input[placeholder="表ID"]')).not.toBeNull()
     expect(q('input[placeholder="数据量"]')).not.toBeNull()
     // 状态三个选项：在用 / 停用 / 全部（分页器的每页条数选择器也是 ElOption，按值过滤掉）
+    // 「全部」的 UI 值用 '-1' 哨兵（空串会被 el-select 判成「没选」，选中后只剩 placeholder）
     const options = w.findAllComponents({ name: 'ElOption' })
       .map((o) => [o.props('label'), o.props('value')] as [string, string])
-      .filter(([, value]) => ['0', '1', ''].includes(value))
-    expect(options).toEqual([['在用', '0'], ['停用', '1'], ['全部', '']])
+      .filter(([, value]) => ['0', '1', '-1'].includes(value))
+    expect(options).toEqual([['在用', '0'], ['停用', '1'], ['全部', '-1']])
 
     btnByText('收起').click()
     await nextTick()
     expect(q('input[placeholder="URL片断"]')).toBeNull()
+    w.unmount()
+  })
+
+  it('状态「全部」：下拉回显中文「全部」，请求仍按旧口径传空串', async () => {
+    const w = await openDialog()
+    btnByText('展开').click()
+    await nextTick()
+    const select = w.findAllComponents({ name: 'ElSelect' })
+      .find((s) => s.classes('msd-enable-select'))!
+    // 先切到「在用」再切回，避免「初始值恰好命中」的假阳性
+    select.vm.$emit('update:modelValue', '0')
+    await nextTick()
+    expect(select.text()).toBe('在用')
+    select.vm.$emit('update:modelValue', '-1')
+    await nextTick()
+    expect(select.text()).toBe('全部')
+
+    btnByText('查询').click()
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '' }))
     w.unmount()
   })
 
