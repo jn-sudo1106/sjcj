@@ -7,7 +7,8 @@ import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
 import { favoriteSourceIds, favoriteSourcesLoaded, loadFavoriteSources } from '@/utils/sourceFavorites'
-import { recentRankOf, recentSiteIds, recordSiteVisit } from '@/utils/siteRecents'
+import { recentLoaded, recentRankOf, recentSiteIds, recordSiteVisit, loadRecentSites } from '@/utils/siteRecents'
+import { trackClick, trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
@@ -71,7 +72,11 @@ function toggleErrorOnly() {
 /** 收藏 / 最近打开一个都没有时，空态要说清楚怎么才会有；其余情况是筛选没命中 */
 const emptyText = computed(() => {
   if (favOnly.value && !favoriteSiteIds.value.size) return '还没有收藏的网站，在列表里点 ☆ 收藏'
-  if (recentOnly.value && !recentSiteIds.value.length) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
+  if (recentOnly.value) {
+    // 后端还没回来时先别说"没有"，否则每次进 tab 都闪一下空态
+    if (!recentLoaded.value) return '正在加载最近打开…'
+    if (!recentSiteIds.value.length) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个）'
+  }
   return '没有匹配的网站'
 })
 
@@ -366,20 +371,32 @@ const sourceScopeSiteIds = computed<string[] | undefined>(() => (recentOnly.valu
  */
 const sourceScopeSourceIds = computed<string[] | undefined>(() => (favOnly.value ? [...favoriteSourceIds.value] : undefined))
 const sourceScopeEmptyText = computed(() => {
-  if (recentOnly.value) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
+  if (recentOnly.value) {
+    if (!recentLoaded.value) return '正在加载最近打开…'
+    return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个）'
+  }
   if (favOnly.value) return favoriteSourcesLoaded.value ? '还没有收藏的源，在源列表里点 ☆ 收藏' : '正在加载收藏的源…'
   return ''
 })
 /** 打开源：与网站详情「源视图」同一落点（概览视图），带上网站上下文，左侧才加载得出同网站的源 */
 function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview') {
-  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  // 两条埋点，口径不同：SITE/ENTER 归「最近打开的网站」（读 `recent`），
+  // SOURCE/CLICK 归「最近查看的源」（读 `page` 明细）。不能只打一条——前者是网站，后者是源。
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: view === 'data' ? '源数据视图' : '源概览视图',
+  })
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
   })
 }
 function openSiteFromList(siteId: string) {
-  recordSiteVisit(siteId)
+  // 名字就地查：`contentTitle` 建议每次都传，否则后端最近列表的标题会是空的
+  recordSiteVisit(siteId, fetchedSites.value.find((site) => site.siteId === siteId)?.name)
   void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 // 勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录；条件视图与「另存为视图」10-13 起下线
@@ -441,6 +458,12 @@ async function onDeleteSite(site: Site) {
       ElMessage.error(res.message || '删除网站失败')
       return
     }
+    trackDelete('SITE', site.siteId, site.name, {
+      eventCode: 'site_delete',
+      eventName: '删除网站',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
     ElMessage.success(`已删除网站「${site.name}」`)
     await refreshAll()
   } catch (error) {
@@ -465,12 +488,32 @@ async function onEditorSaved(newSiteId?: string) {
   //
   // 新建成功后**不自动跳进新网站**：建站常常是连着建好几个，跳走反而打断。
   // 回到第一页即可——默认排序是「最近修改」，新网站就在最前面，点卡片就能进去灌源。
+  // 编辑前的 id 先留一份：刷新列表后 `editorSite` 可能已被清掉，埋点还要用它
+  const editedId = editorSite.value?.siteId
   clearCollectAssetsCache()
   if (newSiteId) {
     justCreatedSiteIds.add(newSiteId)
     page.value = 1
   }
   await loadList({ force: true })
+  // 标题用**刷新后**的名字：编辑可能刚改过名，用打开弹窗时的旧名会让明细表和列表对不上
+  const trackId = newSiteId ?? editedId
+  const title = fetchedSites.value.find((s) => s.siteId === trackId)?.name ?? editorSite.value?.name
+  if (newSiteId) {
+    trackCreate('SITE', newSiteId, title, {
+      eventCode: 'site_create',
+      eventName: '新建网站',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+  } else if (editedId) {
+    trackEdit('SITE', editedId, title, {
+      eventCode: 'site_update',
+      eventName: '编辑网站基本信息',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+  }
 }
 
 // 新建采集
@@ -499,6 +542,9 @@ onMounted(() => {
   // 收藏以后端为准（B30）；回来后 watch(favoriteSiteIds) 会就地重排，不用等它
   void loadFavoriteSites()
   void loadFavoriteSources()
+  // 最近打开 2026-10-19 起也以后端为准（通用埋点），回来后 watch(recentSiteIds) 会就地重排。
+  // 只有「最近打开」这个实例需要它，别让系统目录 / 收藏 tab 白打一次请求
+  if (recentOnly.value) void loadRecentSites()
   void loadCategories({ revalidate: true })
   void loadTagOptions()
   ui.registerAction('新建采集', openNewFlowCanvas)
@@ -515,6 +561,8 @@ onActivated(() => {
   applyRouteFilters()
   void loadFavoriteSites()
   void loadFavoriteSources()
+  // 最近打开：切回 tab 时静默重拉，别的浏览器/别的设备上报的也能看到
+  if (recentOnly.value) void loadRecentSites()
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
   void loadCategories({ revalidate: true })

@@ -13,6 +13,7 @@ function tileStyle() {
 import { confirmDanger } from '@/utils/confirmDanger'
 import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
 import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 
 const props = defineProps<{
   sites: Site[]
@@ -134,18 +135,25 @@ function statusMeta(s: Source): { type: 'info' | 'success' | 'danger' | 'primary
 
 function openSourceCanvas(s: Source, view?: 'data' | 'task') {
   // 从源进去也算打开了这个网站（0917-17）：不记的话最常见的一种进入方式就丢了
-  if (s.siteId) recordSiteVisit(s.siteId)
+  if (s.siteId) recordSiteVisit(s.siteId, s.siteName)
+  // 源本身另记一条 CLICK：网站的 ENTER 与源的查看是两份不同的口径
+  trackClick('SOURCE', s.sourceId, s.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '源列表',
+  })
   router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, ...(view ? { view } : {}) } })
 }
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
 }
 function openSiteCanvas(site: Site, view?: 'data') {
-  recordSiteVisit(site.siteId)
+  recordSiteVisit(site.siteId, site.name)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: view ?? 'source' } })
 }
 function openSiteData(site: Site) {
-  recordSiteVisit(site.siteId)
+  recordSiteVisit(site.siteId, site.name)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
 
