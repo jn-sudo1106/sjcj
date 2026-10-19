@@ -495,44 +495,12 @@ describe('EntryTab · 表ID列表', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('取消收藏失败'))
   })
 
-  it('1013 表详情数据统计：源数据量求和显示「数据条数」与「源数量」', async () => {
+  it('表详情不展示数据条数 / 源数量统计（cs_source.DATA_CNT 是过期快照，不查源）', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 't1', tableName: 'tb_a', fields: [] })
-    const pagedSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
-      total: 2,
-      list: [
-        { sourceId: 's1', name: 'src1', url: 'http://a', configId: 'c1', mainTable: 'tb_a', owner: 'u', state: '成功', dataCount: 1200 },
-        { sourceId: 's2', name: 'src2', url: 'http://b', configId: 'c2', mainTable: 'tb_a', owner: 'u', state: '成功', dataCount: 800 },
-      ],
-    })
-    await mountTab()
-    await waitForLoad()
-
-    await wrapper.findAll('button').find((b) => b.text() === '详情')!.trigger('click')
-    await flushPromises()
-
-    expect(pagedSpy).toHaveBeenCalledWith(expect.objectContaining({ entryTypeId: 't1', size: 2000 }))
-    // 副标题：2000 条数据（不再是误导性的 0 行）；抽屉 append-to-body，内容在 document.body
-    const body = new DOMWrapper(document.body)
-    expect(body.text()).toContain('表 ID t1 · 2,000 条数据')
-    // 数据统计区块
-    const stats = body.find('[data-testid="entry-detail-stats"]')
-    expect(stats.text()).toContain('数据条数')
-    expect(stats.text()).toContain('2,000')
-    expect(stats.text()).toContain('源数量')
-    expect(stats.text()).toContain('2')
-  })
-
-  it('1013 表详情数据统计：无统计值的表不显示「0 行」，标题行也不写「数据未统计」，卡片里数据条数显示「—」', async () => {
-    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
-    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 't1', tableName: 'tb_a', fields: [] })
-    // 有源但 dataCount 全空（没跑过「重新计算数据量」）
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
-      total: 1,
-      list: [{ sourceId: 's1', name: 'src1', url: 'http://a', configId: 'c1', mainTable: 'tb_a', owner: 'u', state: '成功' }],
-    })
+    const pagedSpy = vi.spyOn(sourceApi, 'sourcePaged')
+    pagedSpy.mockClear()
     await mountTab()
     await waitForLoad()
 
@@ -540,10 +508,8 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
-    expect(body.text()).not.toContain('数据未统计')
-    expect(body.text()).not.toContain('0 行')
     expect(body.find('.et-d-sub').text()).toBe('表 ID t1')
-    const stats = body.find('[data-testid="entry-detail-stats"]')
-    expect(stats.text()).toContain('—')
+    expect(body.find('[data-testid="entry-detail-stats"]').exists()).toBe(false)
+    expect(pagedSpy).not.toHaveBeenCalled()
   })
 })
