@@ -11,7 +11,7 @@ import { useAuthStore } from '@/stores/auth'
 const body = () => new DOMWrapper(document.body)
 
 // el-input 的明文落在 input/textarea 的 value 上，text() 取不到，只能读控件值
-const controlValues = () => body().findAll('input, textarea').map((item) => item.element.value ?? '')
+const controlValues = () => body().findAll('input, textarea').map((item) => (item.element as HTMLInputElement | HTMLTextAreaElement).value ?? '')
 
 /** script setup 的内部状态不对外暴露，测试按用到的那几个入口声明形状 */
 interface TabVm {
