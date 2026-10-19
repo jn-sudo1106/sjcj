@@ -457,6 +457,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
   // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
   // 响应是**行数组**（不是分页信封）：{sourceId, configId, cnt, state?}；带 state 的行说明后端支持多状态聚合。
+  // 全部队列名（任务中心队列名下拉的候选；后端 2026-10-19 提供，217 实测还是 500 → 调用方失败时退回已加载行累计）
+  { path: 'task/taskTopicList', desc: '全部队列名 → GET /v1/task/taskTopicList', impl: true, live: true },
   { path: 'task/stat', desc: '任务统计（按来源/配置分组聚合）', impl: true, live: true },
   // 2026-08-13 测试环境实测放行：E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。
   // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。

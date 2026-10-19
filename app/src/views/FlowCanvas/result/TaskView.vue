@@ -13,6 +13,7 @@ import ProcessNodeRail from './ProcessNodeRail.vue'
 import RailResizeHandle from './RailResizeHandle.vue'
 import RailNodePicker from './components/RailNodePicker.vue'
 import RailCollapseButton from './components/RailCollapseButton.vue'
+import { taskTopicList } from '@/api/taskTopics'
 import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
@@ -212,7 +213,24 @@ watch(currentQueues, (queues) => {
   const merged = new Set([...seenQueues.value, ...queues])
   if (merged.size !== seenQueues.value.length) seenQueues.value = [...merged]
 }, { immediate: true })
-const availableQueues = computed(() => [...seenQueues.value].sort())
+// 后端给的全部队列：已加载行里没出现过的队列（还没查过的）也要能选；接口不可用时只剩上面的累计
+const allTopics = ref<string[]>([])
+let topicRequest = 0
+async function loadAllTopics() {
+  const requestId = ++topicRequest
+  const query = {
+    startTime: filters.startTime, endTime: filters.endTime,
+    sourceId: filters.sourceId, siteId: siteScopeId.value,
+  }
+  // 没有任何范围条件时后端回空，不发
+  if (!query.startTime && !query.endTime && !query.sourceId && !query.siteId) { allTopics.value = []; return }
+  try {
+    const topics = await taskTopicList(query)
+    if (requestId === topicRequest) allTopics.value = topics
+  } catch { /* 接口不可用：只用已加载行累计的候选 */ }
+}
+watch(() => [filters.startTime, filters.endTime, filters.sourceId, siteScopeId.value] as const, loadAllTopics, { immediate: true })
+const availableQueues = computed(() => [...new Set([...allTopics.value, ...seenQueues.value])].sort())
 
 let metadataRequest = 0
 async function loadNodeMetadata() {
