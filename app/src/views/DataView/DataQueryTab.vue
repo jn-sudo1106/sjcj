@@ -73,8 +73,28 @@ const sourceId = ref('')
 const tableSelectRef = ref<{ blur: () => void } | null>(null)
 const sourceSelectRef = ref<{ blur: () => void } | null>(null)
 
+/**
+ * 「加载更多数据表」选中的那条表：模板里 other 分组只渲染 `list3.slice(0, 5)`，
+ * 而 list3 是「全库表 − 主表 − 同类源的表」（见 api/index.ts 里 entryTypesGroup 的口径），
+ * 选中的表几乎一定本来就在 list3 里、只是排在第 6 条之后。
+ * 所以不能只判「已存在就不动」，必须把它摘出来插到最前面，否则下拉框里没有对应的
+ * el-option，el-select 的 getOption() 找不到选项会直接拿值当标签 —— 表现为只显示表 ID。
+ */
+const pickedTable = ref<EntryType | null>(null)
+
+function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
+  const picked = pickedTable.value
+  if (!picked) return source
+  const rest = source.list3.filter((t) => t.tableId !== picked.tableId)
+  // 后端重新分组后它已经落进 list1/list2，就别在 list3 里再塞一份
+  if ([...source.list1, ...source.list2].some((t) => t.tableId === picked.tableId)) return { ...source, list3: rest }
+  return { ...source, list3: [picked, ...rest] }
+}
+
 async function loadGroup() {
-  group.value = await dataApi.entryTypesGroup(sourceId.value || undefined)
+  // 切表时如果当前源不在新表里，会走 loadSources → clearedSource → loadGroup，
+  // 整块覆盖 group，选中的那条就被冲掉了，这里补回来
+  group.value = withPickedTable(await dataApi.entryTypesGroup(sourceId.value || undefined))
   if (!tableId.value) {
     tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || ''
   }
@@ -112,10 +132,10 @@ function openMoreTables() {
   moreTablesOpen.value = true
 }
 async function onTablePicked(entry: EntryType) {
-  if (!group.value.list3.some((t) => t.tableId === entry.tableId)) {
-    group.value = { ...group.value, list3: [entry, ...group.value.list3] }
-  }
+  // 选中的这条塞进 list3 最前面（同 ID 的先摘掉，避免出现两个同值选项）
+  pickedTable.value = entry
   tableId.value = entry.tableId
+  group.value = withPickedTable(group.value)
   await onTableChange()
 }
 const moreSourcesOpen = ref(false)
@@ -989,7 +1009,7 @@ onUnmounted(() => {
           <el-option v-for="t in group.list2" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <el-option-group label="other">
-          <el-option v-for="t in group.list3.slice(0, 5)" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
+          <el-option v-for="t in group.list3" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <template #footer>
           <span class="dv-link" @click.stop="openMoreTables">
