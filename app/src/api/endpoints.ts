@@ -719,6 +719,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/syncFlow', desc: '源流程覆盖同步到同网站所选源（fromSourceId → sourceIds，网站本身无流程）', danger: true, impl: true },
   { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },
   { path: 'site/queueTaskPaged', desc: '队列任务明细分页', impl: true },
+
+  /* ── group-res 组级数据权限（收录 7 / SysGroupResController，系统设置 → 数据权限设置） ──
+     契约来源：接口文档-组数据权限.md（2026-10-19）。只有 list 返回 Paged（code 数字 0/-1），
+     其余 6 条返回 RspResult（code 字符串 "0"/"-1"）。7 条全部要求 admin 角色，非 admin 后端回 403。
+     ⚠️ 7 条均未经真实联调（需 admin 会话），live 按契约文档标上；首次实测后请回写本注释。 */
+  { path: 'group-res/list', desc: '数据权限规则分页（groupId 必填且 >90000；resType/action 可选）', impl: true, live: true },
+  { path: 'group-res/detail', desc: '数据权限规则详情', impl: true, live: true },
+  { path: 'group-res/meta', desc: '配置元数据（resType/action/condType 枚举 + 各 resType 可选列，表单不得硬编码）', impl: true, live: true },
+  { path: 'group-res/preview', desc: '条件试算（保存前预检；试算失败 success 仍为 true，原因在 data.error）', live: true },
+  { path: 'group-res/add', desc: '新增数据权限规则（admin；成功即清该组权限缓存）', danger: true, impl: true, live: true },
+  { path: 'group-res/modify', desc: '修改数据权限规则（admin；body 必须带 id）', danger: true, impl: true, live: true },
+  { path: 'group-res/delete', desc: '删除数据权限规则（admin；ids 在 query，软删 isDelete=1）', danger: true, impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */
