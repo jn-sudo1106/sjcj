@@ -744,11 +744,11 @@ async function confirmRebindDelete(mode: 'replace' | 'unbind') {
     const batches = Math.ceil(rebindDelete.sourceIds.length / BIND_BATCH_SIZE)
     for (let i = 0; i < batches; i++) {
       const chunk = rebindDelete.sourceIds.slice(i * BIND_BATCH_SIZE, (i + 1) * BIND_BATCH_SIZE)
-      // 1008-06：解绑带 currentFlowId 只断这条流程的关联（源关联的其它流程不受影响）；
-      // 更换（replace）不传 currentFlowId——目标流程整体换绑按旧单流程口径走。
+      // 1008-06：解绑 / 更换都带 currentFlowId（= 要删除的这条流程），只把源从这条流程换走，
+      // 源关联的其它流程不受影响（2026-10-19 后端反馈：更换原来没传，后端不知道要从哪条流程移走）。
       const ack = mode === 'unbind'
         ? await flowCenterApi.bindSources(chunk, undefined, flow.id)
-        : await flowCenterApi.bindSources(chunk, rebindDelete.targetFlowId)
+        : await flowCenterApi.bindSources(chunk, rebindDelete.targetFlowId, flow.id)
       if (!ack.ok) throw new Error(`换绑第 ${i + 1}/${batches} 批失败：${ack.message || '未知原因'}`)
     }
     rebindDelete.open = false

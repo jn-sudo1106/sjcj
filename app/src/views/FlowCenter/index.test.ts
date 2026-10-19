@@ -460,7 +460,7 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="rebind-replace-delete"]').trigger('click')
     await flushPromises()
 
-    expect(bind).toHaveBeenCalledWith(['11', '12'], 'flow-2000')
+    expect(bind).toHaveBeenCalledWith(['11', '12'], 'flow-2000', 'flow-10086')
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 
