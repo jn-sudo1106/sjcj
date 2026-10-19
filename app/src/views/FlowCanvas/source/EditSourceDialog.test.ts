@@ -64,4 +64,31 @@ describe('EditSourceDialog', () => {
     }))
     expect(update.mock.calls[0][0].url).toBe('')
   })
+  // 2026-10-19：补旧平台源编辑的「核心参数」（sourceParam）。值从源详情取，取不到就不让改也不提交
+  it('核心参数：打开时从源详情读取，改完随 sourceUpdate 提交', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, coreParam: '{"a":1}' })
+    const update = vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
+    const wrapper = mount(EditSourceDialog, { props: { open: true, source } })
+    await flushPromises()
+
+    const box = wrapper.get<HTMLTextAreaElement>('[data-testid="edit-source-core-param"]')
+    expect(box.element.disabled).toBe(false)
+    expect(box.element.value).toBe('{"a":1}')
+    await box.setValue('  {"a":2}  ')
+    await wrapper.get('[data-testid="edit-source-save"]').trigger('click')
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'source-a', coreParam: '{"a":2}' }))
+  })
+
+  it('核心参数：源详情取不到时禁用输入，保存不改动列表里的原值', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockRejectedValue(new Error('网络错误'))
+    const update = vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
+    const wrapper = mount(EditSourceDialog, { props: { open: true, source: { ...source, coreParam: '原值' } } })
+    await flushPromises()
+
+    expect(wrapper.get<HTMLTextAreaElement>('[data-testid="edit-source-core-param"]').element.disabled).toBe(true)
+    await wrapper.get('[data-testid="edit-source-save"]').trigger('click')
+    await flushPromises()
+    expect(update.mock.calls[0][0].coreParam).toBe('原值')
+  })
 })
