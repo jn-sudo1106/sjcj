@@ -318,16 +318,20 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(route.query.from).toBe('data-query')
   })
 
-  it('按条件查源：没选源也没条件时落到源管理全部源，不带命中名单', async () => {
+  // 2026-10-19：没选源也没条件 = 这张表的所有源，不是全平台全部源（原来落到全部源，表信息丢了）
+  it('按条件查源：没选源也没条件时按当前表反查，带这张表的源跳源管理', async () => {
     await mountPage()
     await waitForLoad()
     useWorkspaceStore().setDataQueryHits(['old'])
+    vi.mocked(dataApi.distinctSource).mockClear()
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ CNT: 5, SOURCE_ID: '600519' }, { CNT: 2, SOURCE_ID: 'src-9' }] as never)
     await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
     await waitForLoad()
-    expect(useWorkspaceStore().dataQueryHits).toBeNull()
+    expect(dataApi.distinctSource).toHaveBeenCalled()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519', 'src-9'])
     const route = (wrapper.vm as unknown as { $route: { path: string; query: Record<string, string> } }).$route
     expect(route.path).toBe('/collect')
-    expect(route.query.from).toBeUndefined()
+    expect(route.query).toEqual({ tab: 'source', from: 'data-query' })
   })
 
   it('工具条按新增、导入、导出、更多与删除收敛，不显示夸张的危险操作按钮', async () => {

@@ -453,9 +453,11 @@ async function onDistinctSource() {
   const hasCondition = !!(f.sql || f.state || f.dataId || f.parentId)
   // 落点是源管理（采集资产源列表）：数据查看页是全平台的、没有网站锚点，源视图锁死在单个网站内。
   // 命中源走 store 传（1016）：原来拼成 `/canvas?sourceIds=` 会被画布路由守卫弹回 /collect，名单整个丢了。
-  // 无条件 = 全部源（I01：「你不带条件就是查的所有的」）；但选了源就只带这个源，不必发请求。
-  if (!hasCondition) {
-    openSourceHits(sourceId.value ? [sourceId.value] : null)
+  // 选了源又没填条件：就是这一个源，不必发请求。
+  // 没选源时一律按表反查（2026-10-19）：「不带条件就是查所有的」指这张表的所有源，
+  // 原来直接落到全平台全部源，表（和时间范围）都丢了，用户反馈「没带入数据查询中的源信息」。
+  if (!hasCondition && sourceId.value) {
+    openSourceHits([sourceId.value])
     return
   }
   backTracing.value = true
