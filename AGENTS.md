@@ -157,3 +157,9 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 > **三次部署（2026-10-12 18:09，合入 CNB 后重新构建）**：`git pull` 合入 `d6da8bd 数据源告警` 功能后重新构建部署，
 > 新 hash `index-D0_TDh3V.js`（数据源告警 Monitor/sourceCheck 在 `Monitor-CmYiMxee.js`）。备份 `/data/app/web.bak-20261012-180928`。
 > 部署后再清残留（122→82），服务器 assets 与本地 dist 完全一致（82 个），页面/资源/API 全通，web 7.9M。
+>
+> **186 构建必须带 `VITE_SITE_CREATE_TARGET=production`（2026-10-19）**：10-16 那次构建漏了这个变量，
+> 「新建网站」退回 mock、报「缺少网站 ID / 名称」，请求根本没到后端（本地正常是因为 `app/.env.local` 里有，
+> 该文件被 gitignore，worktree 和别的机器上没有）。构建命令统一写成：
+> `VITE_API_PROXY_TARGET=http://124.223.180.186:9999 VITE_SITE_CREATE_TARGET=production npm run build`。
+> 10-19 已按此重新部署（`index-DISxfD9a.js`，部署后备份 `/data/app/web.bak-20261019-132731`）。
