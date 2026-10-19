@@ -21,6 +21,12 @@ const emit = defineEmits<{
   selected: [rows: Source[]]
 }>()
 
+/** 状态下拉的 UI 哨兵：el-select 里 `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成
+ *  「没选」、选中「全部」后输入框里看不到「全部」二字。到 `load()` 里由 `toApiEnable()` 还原成
+ *  ''（旧口径：不带 enable 条件）。 */
+const ENABLE_ALL = '-1'
+const toApiEnable = (value: string): string => (value === ENABLE_ALL ? '' : value)
+
 const state = reactive<{
   loading: boolean
   sourceIds: string
@@ -79,7 +85,7 @@ async function load() {
       configId: state.configId.trim() || undefined,
       sourceUrl: state.sourceUrl.trim() || undefined,
       entryTypeId: state.entryTypeId.trim() || undefined,
-      enable: state.enable,
+      enable: toApiEnable(state.enable),
       count: state.count.trim() || undefined,
       dataDate: state.dataDate || undefined,
       // 对齐旧 SourceList2：多选分类以逗号拼接传给 categorys
@@ -238,7 +244,7 @@ function formatCount(value?: number) {
             <el-select v-model="state.enable" placeholder="状态" @change="onSearch">
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
             </el-select>
           </label>
           <label class="sld-field">

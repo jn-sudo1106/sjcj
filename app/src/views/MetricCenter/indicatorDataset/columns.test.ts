@@ -96,9 +96,10 @@ describe('indicatorDataset · 旧全局过滤器', () => {
     expect(stateText(undefined)).toBe('')
   })
 
-  it('enableFilter：1→是[1] / 0→否[0] / 其它原样', () => {
-    expect(enableText(1)).toBe('是[1]')
-    expect(enableText(0)).toBe('否[0]')
+  // isDelete 口径：0 = 启用 / 1 = 停用（列标题「启用」），文案沿用旧 filter 的「是/否」
+  it('enableFilter：0→是[1] / 1→否[0] / 其它原样', () => {
+    expect(enableText(0)).toBe('是[1]')
+    expect(enableText(1)).toBe('否[0]')
     expect(enableText(-1)).toBe('-1')
     expect(enableText(null)).toBe('')
   })

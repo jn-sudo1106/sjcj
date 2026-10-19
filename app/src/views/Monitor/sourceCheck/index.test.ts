@@ -125,6 +125,35 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     expect(wrapper.text()).toContain('日增量监控')
   })
 
+  it('「在用」「告警状态」选中「全部」时回显中文，请求仍按旧口径传空串', async () => {
+    const paged = pagedSpy()
+    const wrapper = mountPage()
+    await flushPromises()
+
+    // 前两个 ElSelect 是「在用」「告警状态」（第三个在 SourceSelect 内部）
+    const [enableSelect, stateSelect] = wrapper.findAllComponents({ name: 'ElSelect' })
+    expect(enableSelect.vm.$props.modelValue).toBe('-1')
+    expect(enableSelect.text()).toBe('全部')
+    expect(stateSelect.text()).toBe('全部')
+
+    // 切走再切回，避免「初始值恰好命中」的假阳性
+    enableSelect.vm.$emit('update:modelValue', '1')
+    stateSelect.vm.$emit('update:modelValue', 'E')
+    await flushPromises()
+    expect(enableSelect.text()).toBe('停用')
+    expect(stateSelect.text()).toBe('告警')
+
+    enableSelect.vm.$emit('update:modelValue', '-1')
+    stateSelect.vm.$emit('update:modelValue', '-1')
+    await flushPromises()
+    expect(enableSelect.text()).toBe('全部')
+    expect(stateSelect.text()).toBe('全部')
+
+    enableSelect.vm.$emit('change', '-1')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '', state: '' }))
+  })
+
   it('查询按钮带上名称条件重新拉取，并回到第 1 页', async () => {
     const paged = pagedSpy()
     const wrapper = mountPage()

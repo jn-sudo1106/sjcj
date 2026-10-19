@@ -71,11 +71,20 @@ import CommJobDetailDrawer from './CommJobDetailDrawer.vue'
 defineOptions({ name: 'CommJobList' })
 
 // ---- 查询条件（草稿 → 执行 两态：文本项变化不自动查，点「查询」/ 回车才发请求）----
+/** 状态下拉的 UI 哨兵。el-select 里 `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成
+ *  「没选」、`selectedLabel` 回退到 placeholder —— 选中「全部」时输入框里看不到「全部」两个字。
+ *  所以 UI 值用 '-1'，到 `load()` 里再还原成旧口径（'全部' → 空串，不带该条件）。
+ *  ⚠️ 后端 enable=-1 本来是「历史删除的」，故它另用 '-2' 占位，接口层还原回 '-1'。 */
+const ENABLE_ALL = '-1'
+const ENABLE_DELETED = '-2'
+const toApiEnable = (value: string): string =>
+  value === ENABLE_ALL ? '' : value === ENABLE_DELETED ? '-1' : value
+
 const form = reactive({
   queue: '',    // 队列名（旧 queryParam.queue → 后端落 jobName）
   queueId: '',  // ID
   name: '',     // 描述（旧 queryParam.name）
-  enable: '0',  // '' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的（⚠️ 初值 '0'，与 queueCheck 不同）
+  enable: '0',  // 全部(ENABLE_ALL) / '0' 在用 / '1' 停用 / ENABLE_DELETED 历史删除的（⚠️ 初值 '0'，与 queueCheck 不同）
 })
 /** 已「执行」的筛选条件。分页单独管——旧 pagedCommJobCheck 只发筛选字段 + page/limit。 */
 const filters = reactive({ queue: '', queueId: '', name: '', enable: '0' })
@@ -100,7 +109,7 @@ async function load() {
       queue: filters.queue,
       queueId: filters.queueId,
       name: filters.name,
-      enable: filters.enable,
+      enable: toApiEnable(filters.enable),
       page: page.value,
       limit: size.value,
     })
@@ -125,13 +134,14 @@ function runQuery() {
 }
 
 /** 旧「重置」按钮：`queryParam = {}` —— 只清条件，不发请求（下一次查询才生效）。
- *  差别：旧版清完 enable 是 undefined（下拉回到空 placeholder），这里回到「全部」（''），
- *  两者在接口上等价——都是不带 enable 条件。 */
+ *  差别：旧版清完 enable 是 undefined（下拉回到空 placeholder），这里回到「全部」（哨兵 ENABLE_ALL，
+ *  选中后能显示「全部」二字；发请求时由 `toApiEnable()` 还原成空串），接口上与旧版等价——
+ *  都是不带 enable 条件。 */
 function resetQuery() {
   form.queue = ''
   form.queueId = ''
   form.name = ''
-  form.enable = ''
+  form.enable = ENABLE_ALL
 }
 
 // ---- 批量操作（旧版：勾选后点「更多..」下拉 → 启用 / 禁用 / 删除）----
@@ -278,10 +288,10 @@ onMounted(() => void load())
           <el-form-item label="状态">
             <!-- 旧版这个 select 带 @change="handleRefresh"：改完立刻查（1:1） -->
             <el-select v-model="form.enable" placeholder="请选择" @change="runQuery">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
-              <el-option label="历史删除的" value="-1" />
+              <el-option label="历史删除的" :value="ENABLE_DELETED" />
             </el-select>
           </el-form-item>
         </el-col>

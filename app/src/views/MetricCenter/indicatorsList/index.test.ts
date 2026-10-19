@@ -332,6 +332,41 @@ describe('indicatorsList · 搜索（改条件不自动查，点「查询」才�
     expect(filterInput(w, 2).element as HTMLInputElement).toHaveProperty('value', '')
   })
 
+  // 状态下拉：'' 会被 el-select 当成「没选」（选完只剩 placeholder），所以下拉里用哨兵，
+  // 接口那层再还原：全部 -1 → ''，历史删除的 -2 → '-1'
+  const statusSelect = (w: VueWrapper) => w.findAll('.ml-filter-form .el-form-item')[3].findComponent({ name: 'ElSelect' })
+
+  it('状态「全部」：下拉回显中文「全部」，请求仍按旧口径传空串', async () => {
+    const w = mountPage()
+    await flushPromises()
+    expect(statusSelect(w).vm.$props.modelValue).toBe('-1')
+    expect(statusSelect(w).text()).toBe('全部')
+
+    // 先切走再切回来，避免「初始值恰好对」的假阳性
+    statusSelect(w).vm.$emit('update:modelValue', '0')
+    await flushPromises()
+    expect(statusSelect(w).text()).toBe('在用')
+    statusSelect(w).vm.$emit('update:modelValue', '-1')
+    await flushPromises()
+    expect(statusSelect(w).text()).toBe('全部')
+
+    await btn(w, '查询').trigger('click')
+    await flushPromises()
+    expect(lastQuery()).toMatchObject({ enable: '' })
+  })
+
+  it('状态「历史删除的」：哨兵 -2 在接口这层还原成后端的 -1', async () => {
+    const w = mountPage()
+    await flushPromises()
+    statusSelect(w).vm.$emit('update:modelValue', '-2')
+    await flushPromises()
+    expect(statusSelect(w).text()).toBe('历史删除的')
+
+    await btn(w, '查询').trigger('click')
+    await flushPromises()
+    expect(lastQuery()).toMatchObject({ enable: '-1' })
+  })
+
   it('表头降序 → sortField/sortOrder（antd 口径 descend），且保持当前页（旧 STable 排序不重置页码）', async () => {
     const w = mountPage()
     await flushPromises()
@@ -454,7 +489,7 @@ describe('indicatorsList · 行内操作', () => {
     expect(rowTips(w, 2).map(tipText)).toEqual(['详情', '编辑', '指标副本', '删除指标(物理删除)'])
   })
 
-  it('「指标副本」→ 确认后 copyMeasure(id)，并清空查询条件后重查', async () => {
+  it('「指标副本」→ 确认后 copyMeasure(id)，并保留筛选条件只重查列表', async () => {
     const w = mountPage()
     await flushPromises()
     await filterInput(w, 2).setValue('A000')
@@ -465,7 +500,9 @@ describe('indicatorsList · 行内操作', () => {
     await rowOp(w, 0, '指标副本').trigger('click')
     await flushPromises()
     expect(spies.copyMeasure).toHaveBeenCalledWith(7001)
-    expect(lastQuery()).toMatchObject({ measureCode: '' })
+    // 1019 修正：不再 `clearParam()` —— 复制后仍按 A000 查，输入框里的字也还在
+    expect(lastQuery()).toMatchObject({ measureCode: 'A000' })
+    expect((filterInput(w, 2).element as HTMLInputElement).value).toBe('A000')
   })
 
   it('「删除指标(物理删除)」→ deleteMeasurePhy(id)', async () => {

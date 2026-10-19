@@ -109,4 +109,33 @@ describe('SourceListDialog · 源列表选择弹窗', () => {
     expect(rows[1].querySelector('a')).toBeNull()
     expect(rows[1].textContent).toContain('—')
   })
+
+  // 状态下拉的「全部」用 -1 哨兵（空串会被 el-select 判成「没选」，「全部」显示不出来），
+  // 到接口层再还原成 ''（旧口径：不带 enable 条件）。
+  it('状态「全部」：UI 用非空哨兵，请求仍按旧口径传空串', async () => {
+    vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([{ id: 'finance', name: '财经资讯' }])
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+
+    wrapper = mount(SourceListDialog, {
+      attachTo: document.body,
+      props: { modelValue: false },
+      global: { plugins: [ElementPlus] },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+
+    // 初值「在用」（旧 SourceList2 queryParam.enable = '0'）
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '0' }))
+
+    // 状态下拉在「展开」后的高级筛选里
+    ;(document.body.querySelector('.sld-advanced-link') as HTMLElement).click()
+    await flushPromises()
+
+    const select = wrapper.findAllComponents({ name: 'ElSelect' })
+      .find((s) => typeof s.props('modelValue') === 'string')!
+    select.vm.$emit('update:modelValue', '-1')
+    select.vm.$emit('change', '-1') // 下拉带 @change="onSearch"，改完立刻重查
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '' }))
+  })
 })

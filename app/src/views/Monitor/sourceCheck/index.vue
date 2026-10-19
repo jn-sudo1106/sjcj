@@ -31,9 +31,17 @@ defineOptions({ name: 'SourceCheck' })
 const props = withDefaults(defineProps<{ embedded?: boolean; sourceId?: string }>(), { embedded: false, sourceId: '' })
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求；与 TaskView 对齐）----
+/** 「在用」「告警状态」两个下拉的「全部」各用一个 UI 哨兵（值相同，分开命名便于阅读）。el-select 里
+ *  `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成「没选」、`selectedLabel` 回退到
+ *  placeholder —— 选中「全部」时输入框里看不到「全部」两个字。到 `load()` 里由 `toApiValue()`
+ *  还原成 ''（旧口径：不带该条件），接口参数不变。 */
+const ENABLE_ALL = '-1'
+const STATE_ALL = '-1'
+const toApiValue = (value: string): string => (value === ENABLE_ALL ? '' : value)
+
 const form = reactive({
-  enable: '',   // '' 全部 / '0' 在用 / '1' 停用
-  state: '',    // '' 全部 / 'E' 告警 / 'C' 正常
+  enable: ENABLE_ALL as string, // 全部 / '0' 在用 / '1' 停用
+  state: STATE_ALL as string,   // 全部 / 'E' 告警 / 'C' 正常
   sourceId: props.sourceId || '',
   name: '',
 })
@@ -45,8 +53,8 @@ const filters = reactive<{
   sourceId: string
   name: string
 }>({
-  enable: '',
-  state: '',
+  enable: ENABLE_ALL,
+  state: STATE_ALL,
   sourceId: props.sourceId || '',
   name: '',
 })
@@ -72,8 +80,8 @@ async function load() {
     // 入参逐字段对齐旧 api/monitor.js 的 pagedSourceCheck（page/limit，不是 pageNo/pageSize/size）
     const res = await pagedSourceCheck({
       sourceId: filters.sourceId,
-      enable: filters.enable,
-      state: filters.state,
+      enable: toApiValue(filters.enable),
+      state: toApiValue(filters.state),
       name: filters.name,
       page: page.value,
       limit: size.value,
@@ -240,7 +248,7 @@ function onSourceChange() {
         <el-col :md="4" :sm="24">
           <el-form-item label="在用">
             <el-select v-model="form.enable" placeholder="全部" @change="runQuery">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
             </el-select>
@@ -249,7 +257,7 @@ function onSourceChange() {
         <el-col :md="4" :sm="24">
           <el-form-item label="告警状态">
             <el-select v-model="form.state" placeholder="全部" @change="runQuery">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="STATE_ALL" />
               <el-option label="告警" value="E" />
               <el-option label="正常" value="C" />
             </el-select>
