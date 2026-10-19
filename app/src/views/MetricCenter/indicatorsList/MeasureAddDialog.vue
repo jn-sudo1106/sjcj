@@ -308,8 +308,8 @@ defineExpose({ open })
       </el-form-item>
 
       <el-form-item>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">Create</el-button>
-        <el-button @click="handleCancel">Cancel</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleSubmit">创建</el-button>
+        <el-button @click="handleCancel">取消</el-button>
       </el-form-item>
     </el-form>
 
