@@ -9,7 +9,8 @@ type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 function call<T>(path: string, method: Method, params?: Record<string, unknown> | object, query?: Record<string, unknown>) {
   return request<T>(`${ROOT}${path}`, params as Record<string, unknown> | undefined, {
     mode: 'http', method, query,
-    paramsIn: method === 'PUT' && query && !params ? 'query' : undefined,
+    // 后端用 @RequestParam 收 ids 的删除/启停接口，参数只能进 query，不能带 JSON body
+    paramsIn: (method === 'PUT' || method === 'DELETE') && query && !params ? 'query' : undefined,
   })
 }
 
@@ -19,15 +20,31 @@ function callList<T>(path: string, params?: Record<string, unknown>) {
 }
 
 export interface SyncPage<T> { list: T[]; total: number }
-export interface SyncCustomer { id: Id; customerName: string }
+export interface SyncCustomer { id: Id; customerName: string; secretKey?: string | null }
 export interface SyncClient {
   id: Id; customerId: Id; clientName: string; timingSync: string; fileSync: string
   realtimeSync: string; topics?: string; extendConfig?: string; createTime?: string; updateTime?: string
 }
 export interface SyncDatabase {
   id: Id; customerId?: Id; name: string; sourceCode: string; targetSourceCode?: string
-  dbSchema: string; databaseType: number; type: number; appId?: Id; createTime?: string; updateTime?: string
+  dbSchema: string; databaseType: number; type: number; appId?: Id; remark?: string
+  createTime?: string; updateTime?: string
 }
+/** 客户新增入参：id 由现场分配（sync_customer.id 非自增），必填 */
+export interface SyncCustomerForm { id: Id | ''; customerName: string }
+/** 客户端新增/编辑入参；密钥由服务端生成，编辑不回填、只在响应里出现一次 */
+export interface SyncClientForm {
+  id?: Id | null; customerId: Id; clientName: string
+  timingSync: 'on' | 'off'; fileSync: 'on' | 'off'; realtimeSync: 'on' | 'off'
+  topics?: string; extendConfig?: string
+}
+/** 客户数据源入参；appId 的语义是归属客户端id，不是应用id */
+export interface SyncDatabaseForm {
+  id?: Id | null; customerId: Id; appId: Id; name: string; sourceCode: string
+  databaseType: number; dbSchema?: string; type: 0 | 1; remark?: string
+}
+/** 新增/重置密钥的返回：secretKey 仅这两次有值 */
+export interface SyncClientSecret { id: Id; clientName: string; secretKey?: string | null }
 export interface SyncTable { entryTypeId: Id; tableName: string; typeName: string }
 export interface SyncTableColumn {
   itemId: Id; columnName: string; itemCode: string; itemName: string; dataType: string
@@ -85,8 +102,16 @@ export interface SyncTableAddInput extends SyncSqlAddInput {
 
 export const syncApi = {
   customers: () => callList<SyncCustomer>('/customer/all'),
+  customerPage: (params: Record<string, unknown>) => call<SyncPage<SyncCustomer>>('/customer/page', 'POST', params),
+  saveCustomer: (form: SyncCustomerForm) => call<unknown>('/customer/info', 'POST', form),
+  removeCustomers: (ids: Id[]) => call<unknown>('/customer/delete', 'DELETE', undefined, { ids: ids.join(',') }),
   clients: (params: Record<string, unknown>) => call<SyncPage<SyncClient>>('/customer/client/page', 'POST', params),
+  saveClient: (form: SyncClientForm) => call<SyncClientSecret>('/customer/client/info', 'POST', form),
+  resetClientSecret: (id: Id) => call<SyncClientSecret>('/customer/client/secret/reset', 'PUT', undefined, { id }),
+  removeClients: (ids: Id[]) => call<unknown>('/customer/client/delete', 'DELETE', undefined, { ids: ids.join(',') }),
   databases: (params: Record<string, unknown>) => call<SyncPage<SyncDatabase>>('/customer/database/page', 'POST', params),
+  saveDatabase: (form: SyncDatabaseForm) => call<unknown>('/customer/database/info', 'POST', form),
+  removeDatabases: (ids: Id[]) => call<unknown>('/customer/database/delete', 'DELETE', undefined, { ids: ids.join(',') }),
   customerDatabases: (customerId: Id, type: 0 | 1) =>
     callList<SyncDatabase>('/customer/database/list', { customerId, type }),
   setClientSwitch: (id: Id, column: 'timingSync' | 'fileSync' | 'realtimeSync', enabled: boolean) =>
