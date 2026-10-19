@@ -9,7 +9,23 @@ import SourceTab from './SourceTab.vue'
 import { beginSitesFetch, clearCollectAssetsCache, collectAssetsCache, commitSites } from './siteListCache'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { sourceApi, siteApi, favoriteApi } from '@/api'
+import { sourceApi, siteApi, favoriteApi, logReportApi } from '@/api'
+
+// 「最近打开」2026-10-19 起以后端通用埋点为准。这里用内存列表代替服务端：
+// 上报记进内存、挂载时 recentRaw 从它读回来——与真实后端行为一致，
+// 否则挂载那次加载会拿空结果把用例里手工设置的最近列表冲掉。
+beforeEach(() => {
+  vi.spyOn(logReportApi, 'report').mockResolvedValue({ success: true, code: '0', msg: '操作成功', data: {} })
+  vi.spyOn(logReportApi, 'recentRaw').mockImplementation(async () => {
+    const rec = await import('@/utils/siteRecents')
+    return {
+      success: true,
+      code: '0',
+      msg: '操作成功',
+      data: rec.recentSiteIds.value.map((id) => ({ contentId: id, contentTitle: null, createDt: '2026-10-19 10:00:00' })),
+    }
+  })
+})
 
 // 收藏以后端为准（B30）。这里用一个集合代替服务端：点星写进去，挂载时 loadFavoriteSites 从它读回来，
 // 与真实后端行为一致（否则挂载那次加载会拿 mock 的空结果把测试里点的星冲掉）。
@@ -306,7 +322,7 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     rec.recentSiteIds.value = []
     const first = await mountList('recent')
     expect(first.list.props('scopeSiteIds')).toEqual([])
-    expect(first.list.props('scopeEmptyText')).toContain('仅本机')
+    expect(first.list.props('scopeEmptyText')).toContain('还没有打开过网站')
 
     rec.recordSiteVisit('s-a')
     rec.recordSiteVisit('s-b')
@@ -531,12 +547,13 @@ describe('SourceTab · 最近打开的网站（0917-17 / 0924-01）', () => {
     expect(shown(wrapper)).toEqual(['s-old', 's-new'])
   })
 
-  it('一个都没打开过时：空列表，空态注明「仅本机」', async () => {
+  it('一个都没打开过时：空列表，空态说明会自动记录', async () => {
     const { wrapper } = await mountWithSites('recent')
     expect(shown(wrapper)).toEqual([])
     const emptyText = wrapper.findComponent({ name: 'SiteCardGrid' }).props('emptyText') as string
     expect(emptyText).toContain('还没有打开过网站')
-    expect(emptyText).toContain('仅本机')
+    // 2026-10-19 起后端存储（通用埋点），换浏览器也在，不再有「仅本机」的说法
+    expect(emptyText).not.toContain('仅本机')
   })
 
   it('最近打开 tab 里收藏不插队：纯按访问顺序', async () => {

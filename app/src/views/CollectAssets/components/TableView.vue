@@ -134,18 +134,18 @@ function statusMeta(s: Source): { type: 'info' | 'success' | 'danger' | 'primary
 
 function openSourceCanvas(s: Source, view?: 'data' | 'task') {
   // 从源进去也算打开了这个网站（0917-17）：不记的话最常见的一种进入方式就丢了
-  if (s.siteId) recordSiteVisit(s.siteId)
+  if (s.siteId) recordSiteVisit(s.siteId, s.siteName)
   router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, ...(view ? { view } : {}) } })
 }
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
 }
 function openSiteCanvas(site: Site, view?: 'data') {
-  recordSiteVisit(site.siteId)
+  recordSiteVisit(site.siteId, site.name)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: view ?? 'source' } })
 }
 function openSiteData(site: Site) {
-  recordSiteVisit(site.siteId)
+  recordSiteVisit(site.siteId, site.name)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
 

@@ -431,7 +431,7 @@ async function importLocal() {
 
 // ---- 打开源 / 网站 ----
 function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
-  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
   void router.push({ path: '/canvas', query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath } })
 }
 function openSite(siteId: string) {

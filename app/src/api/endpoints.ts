@@ -709,6 +709,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 用户收藏（后端 2026-09-23，favorite-api.md；B30）。userId 取自会话，不由前端传。
   // 只用 list / add / remove：网站列表要「收藏置顶 + 只看收藏」，需要全部收藏 ID，按页查的 states 用不上。
   { path: 'favorite/list', desc: '当前用户收藏列表（按 itemType，limit ≤ 500）', live: true },
+  // 1019 通用埋点（LogReportController，接口见 `接口文档-通用埋点.md`）。
+  // ⚠️ 这三条**绝不能标 danger**：client.ts 的生产写守卫只认 DANGER_ENDPOINTS，
+  //    标了 danger 生产环境埋点会被当作高危写直接拦掉，一条都报不上去。
+  //     另：`report`/`recent` 是 RspResult（code 字符串、判 success），`page` 是 Paged（code 数字）。
+  { path: 'log-report/report', desc: '通用埋点上报（ENTER/EXIT/CLICK/EDIT/CREATE/DELETE/SEARCH）→ POST body', impl: true, live: true },
+  { path: 'log-report/recent', desc: '最近列表（按 contentId 去重、时间倒序；action 默认 ENTER，limit ≤ 100）', impl: true, live: true },
+  { path: 'log-report/page', desc: '埋点行为明细分页（Paged：code 数字，参数非法返回 1）', impl: true, live: true },
   { path: 'favorite/add', desc: '收藏（幂等）', live: true },
   { path: 'favorite/remove', desc: '取消收藏（幂等）', live: true },
   { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
