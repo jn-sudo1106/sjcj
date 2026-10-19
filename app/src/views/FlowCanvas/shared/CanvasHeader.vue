@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { flowCenterApi } from '@/api'
+import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
@@ -35,6 +35,64 @@ watch(() => route.query.view, (next) => {
 }, { immediate: true })
 onMounted(() => window.addEventListener('hashchange', syncView))
 onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
+
+/**
+ * 数据 / 文件 / 任务三页的流程切换器（2026-10-19，方案 1019-源视图多流程切换）。
+ *
+ * 一个源可以关联多条流程，这三页取的节点和表都来自「当前已加载的流程」，原来只能回流程页的标签栏切。
+ * 当前流程的唯一来源仍是 URL 的 workflowId / flowId（index.vue 的 loadSourceFlow 解析），这里只改 query。
+ * 流程页有自己的标签栏、概览暂不改，所以只在这三页出现；只有一条流程时不显示。
+ * 放在标题下「当前流程：…」那一行里替换流程名（用户 10-19：放页签右侧太突兀）。
+ * flowId 的取法与 loadSourceFlow 的默认、SourceWorkflowTabs.openFlow 一致：草稿 → 发布版 → workflowId。
+ */
+const FLOW_PICKER_VIEWS: SourceWorkspaceView[] = ['data', 'file', 'task']
+const flowBindings = ref<WorkflowBinding[]>([])
+const showFlowPicker = computed(() => !!src.value && FLOW_PICKER_VIEWS.includes(view.value) && flowBindings.value.length > 1)
+// 显示值以**实际已加载的流程**为准（src.flowId），不认 URL：切换后加载失败时 URL 已经改了、数据还是原来那条，
+// 按 URL 显示就会和下面的数据对不上（10-19 用户截图：下拉显示 707423，当前流程和数据都是 707424）。
+const activeWorkflowId = computed(() => {
+  const fid = String(src.value?.flowId ?? '')
+  return flowBindings.value.find((row) => [row.workflowId, row.draftFlowId, row.publishedFlowId].includes(fid))?.workflowId
+    ?? String(src.value?.activeWorkflowId ?? '')
+})
+function flowOptionLabel(row: WorkflowBinding): string {
+  const role = row.inherited && !row.own ? '来源组' : row.primary ? '主' : '辅助'
+  return `${row.workflowName || '未命名流程'} #${row.workflowId}（${role}）`
+}
+/** 选择后先把下拉弹回实际流程（重建 select），加载成功后整个视图按 flowId 重挂、自然显示新流程；失败也不会显示错 */
+const pickerRev = ref(0)
+let bindingReq = 0
+watch(() => [src.value?.sourceId, FLOW_PICKER_VIEWS.includes(view.value)] as const, async ([sourceId, needed]) => {
+  const id = ++bindingReq
+  if (!sourceId || !needed) {
+    flowBindings.value = []
+    return
+  }
+  try {
+    const rows = await workflowBindingApi.list(sourceId)
+    if (id === bindingReq) flowBindings.value = rows
+  } catch {
+    // 拉不到就不显示切换器，当前流程照旧（标题行「当前流程」仍在）
+    if (id === bindingReq) flowBindings.value = []
+  }
+}, { immediate: true })
+const switchingFlow = ref(false)
+async function onPickFlow(workflowId: string) {
+  const row = flowBindings.value.find((item) => item.workflowId === workflowId)
+  if (!row || workflowId === activeWorkflowId.value || switchingFlow.value) return
+  switchingFlow.value = true
+  try {
+    // 流程页留下的改动先落库，再换流程（换流程会重载画布数据）
+    if (flow.flowDirty || saveStatus.value === 'saving') await retryFlowSave()
+    await router.replace({
+      path: '/canvas',
+      query: { ...route.query, workflowId, flowId: row.draftFlowId ?? row.publishedFlowId ?? row.workflowId },
+    })
+  } finally {
+    switchingFlow.value = false
+    pickerRev.value += 1
+  }
+}
 
 const statusMeta = computed(() => {
   const s = src.value
@@ -257,7 +315,26 @@ function srcSnatch() {
             <span class="ch-sub-sep">·</span>
             <span class="ch-sub-fixed">{{ lastSuccessText }}</span>
           </template>
-          <template v-if="src.flowId">
+          <template v-if="src.flowId && showFlowPicker">
+            <span class="ch-sub-sep">·</span>
+            <label class="ch-flow-picker" data-testid="view-flow-picker">
+              当前流程：
+              <select
+                :key="pickerRev"
+                class="ch-flow-picker-select"
+                aria-label="切换流程"
+                :value="activeWorkflowId"
+                :disabled="switchingFlow"
+                @change="onPickFlow(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="row in flowBindings" :key="row.workflowId" :value="row.workflowId">{{ flowOptionLabel(row) }}</option>
+              </select>
+            </label>
+            <span v-if="!isPrimaryFlow" class="ch-aux-flow">辅助流程，主流程 #{{ src.primaryFlowId }}</span>
+            <!-- 任务列表后端不支持按流程筛（2026-10-19 在 217 实测），流程只影响节点筛选下拉 -->
+            <span v-if="view === 'task'" class="ch-flow-picker-note" data-testid="view-flow-picker-task-note">任务列表含全部流程的任务，流程只影响节点筛选</span>
+          </template>
+          <template v-else-if="src.flowId">
             <span class="ch-sub-sep">·</span>
             <button
               class="ch-flow-link"
@@ -297,6 +374,10 @@ function srcSnatch() {
 .ch-seg.on { background: var(--rc-primary); color: #fff; }
 .ch-seg:hover:not(.on) { color: var(--rc-primary-ink); }
 .ch-seg:disabled { color: var(--rc-faint); cursor: not-allowed; }
+.ch-flow-picker { flex: none; display: inline-flex; align-items: center; white-space: nowrap; color: var(--rc-primary); }
+.ch-flow-picker-select { height: 22px; max-width: 280px; padding: 0 4px; border: 1px solid var(--rc-border-soft); border-radius: 5px; background: #fff; color: var(--rc-primary); font-size: inherit; cursor: pointer; }
+.ch-flow-picker-select:disabled { color: var(--rc-faint); cursor: progress; }
+.ch-flow-picker-note { margin-left: 6px; color: var(--rc-faint); white-space: nowrap; }
 .ch-titlewrap { min-width: 0; }
 .ch-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--rc-text); font-size: 13px; }
 .rc-status.draft { background: #fef3c7; color: #92400e; }

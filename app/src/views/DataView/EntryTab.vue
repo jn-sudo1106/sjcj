@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, CaretBottom, CaretTop, CopyDocument, Delete, Download, Key, Odometer, RefreshRight, Star, StarFilled, SwitchButton } from '@element-plus/icons-vue'
-import { entryApi, sourceApi, type EntryType } from '../../api'
+import { entryApi, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
 import { exportFieldsAsCsv } from '@/utils/format/csvExport'
@@ -29,15 +29,6 @@ const nameFilter = ref('')
 const enableFilter = ref<string | undefined>('0')
 const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
-// 1013-表详情数据统计：后端 CfgEntryType 不返回数据量（详情/列表接口都没有 dataCnt 字段，
-// 实体表 cfg_entry_type 也无存量的列），真实数据量在 cs_source.DATA_CNT（每源数据条数，存储过程
-// calc_this_cnt 算出，只有点过「重新计算数据量」的表才有值）。所以打开详情时用现有 sourceApi 拉
-// 该表所有源，把每源 dataCount 求和，作为「数据条数」；没有统计值的表显示「— 未统计」而非误导性的「0 行」。
-const detailStats = reactive<{ dataCount?: number; sourceCount: number; loaded: boolean }>({
-  dataCount: undefined,
-  sourceCount: 0,
-  loaded: false,
-})
 const editor = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const extractDialog = reactive<{ visible: boolean; text: string; count: number }>({ visible: false, text: '', count: 0 })
 
@@ -178,25 +169,6 @@ async function openDetail(e: EntryType) {
   } catch (error) {
     ElMessage.error(`加载实体表详情失败：${error instanceof Error ? error.message : String(error)}`)
     return
-  }
-  await loadDetailStats(e.tableId)
-}
-/** 数据统计：拉该表所有源，求和每源 dataCount（口径与后端 calc_this_cnt 的 cs_source.DATA_CNT 一致）。
- *  失败不影响详情主体展示，静默降级为「未统计」。 */
-async function loadDetailStats(tableId: string) {
-  detailStats.loaded = false
-  detailStats.dataCount = undefined
-  detailStats.sourceCount = 0
-  try {
-    const page = await sourceApi.sourcePaged({ entryTypeId: tableId, page: 1, size: 2000 })
-    const sources = page.list ?? []
-    detailStats.sourceCount = sources.length
-    const total = sources.reduce((sum, s) => sum + (typeof s.dataCount === 'number' ? s.dataCount : 0), 0)
-    detailStats.dataCount = sources.length > 0 && total > 0 ? total : undefined
-  } catch {
-    // 统计接口失败：保持未统计
-  } finally {
-    detailStats.loaded = true
   }
 }
 async function openEdit(e: EntryType) {
@@ -546,11 +518,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
     <div v-if="drawer.entry" class="et-d">
       <div class="et-d-title">{{ drawer.entry.name || drawer.entry.tableName }}</div>
       <div class="et-d-sub muted">
-        表 ID {{ drawer.entry.tableId }}{{ detailStats.loaded ? (detailStats.dataCount != null ? ` · ${detailStats.dataCount.toLocaleString()} 条数据` : '') : ' · 数据统计中…' }}
-      </div>
-      <div v-if="detailStats.loaded" class="et-d-stats" data-testid="entry-detail-stats">
-        <div class="et-d-stat"><span class="muted">数据条数</span><b>{{ detailStats.dataCount != null ? detailStats.dataCount.toLocaleString() : '—' }}</b></div>
-        <div class="et-d-stat"><span class="muted">源数量</span><b>{{ detailStats.sourceCount }}</b></div>
+        表 ID {{ drawer.entry.tableId }}
       </div>
       <dl class="rc-kv">
         <dt>表ID</dt><dd>{{ drawer.entry.tableId }}</dd>
@@ -619,20 +587,6 @@ const onEnterSearch = withoutComposition(() => onSearch())
 .et-d { display: flex; flex-direction: column; gap: 4px; }
 .et-d-title { font-size: 15px; font-weight: 700; color: var(--rc-text); }
 .et-d-sub { font-size: 12px; margin-bottom: 10px; }
-/* 1013 表详情数据统计：两格卡片（数据条数 / 源数量） */
-.et-d-stats { display: flex; gap: 10px; margin-bottom: 12px; }
-.et-d-stat {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid var(--rc-border-soft);
-  border-radius: var(--rc-radius-sm, 6px);
-  background: #f8fafc;
-}
-.et-d-stat .muted { font-size: 11px; }
-.et-d-stat b { font-size: 15px; color: var(--rc-text); }
 .et-section { margin: 14px 0 8px; font-size: 13px; font-weight: 700; color: var(--rc-text); }
 .et-foot { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rc-border-soft); }
 .et-caret { margin-left: 4px; font-size: 12px; }

@@ -318,16 +318,20 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(route.query.from).toBe('data-query')
   })
 
-  it('按条件查源：没选源也没条件时落到源管理全部源，不带命中名单', async () => {
+  // 2026-10-19：没选源也没条件 = 这张表的所有源，不是全平台全部源（原来落到全部源，表信息丢了）
+  it('按条件查源：没选源也没条件时按当前表反查，带这张表的源跳源管理', async () => {
     await mountPage()
     await waitForLoad()
     useWorkspaceStore().setDataQueryHits(['old'])
+    vi.mocked(dataApi.distinctSource).mockClear()
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ CNT: 5, SOURCE_ID: '600519' }, { CNT: 2, SOURCE_ID: 'src-9' }] as never)
     await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
     await waitForLoad()
-    expect(useWorkspaceStore().dataQueryHits).toBeNull()
+    expect(dataApi.distinctSource).toHaveBeenCalled()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519', 'src-9'])
     const route = (wrapper.vm as unknown as { $route: { path: string; query: Record<string, string> } }).$route
     expect(route.path).toBe('/collect')
-    expect(route.query.from).toBeUndefined()
+    expect(route.query).toEqual({ tab: 'source', from: 'data-query' })
   })
 
   it('工具条按新增、导入、导出、更多与删除收敛，不显示夸张的危险操作按钮', async () => {
@@ -1054,6 +1058,65 @@ describe('数据中心 · 数据查询 tab', () => {
     await flushPromises()
 
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
+  })
+
+  // list3 是「全库表 − 主表 − 同类源的表」，模板只渲染 slice(0, 5)：
+  // 选中的表本来就在 list3、但排在第 6 条之后时，旧实现「已存在就不插」会让下拉里没有对应 option，
+  // el-select 的 getOption() 找不到选项会把值当标签，于是只显示表 ID。
+  const OTHER_TABLES = Array.from({ length: 8 }, (_, i) => ({
+    tableId: `t${i + 20}`, tableName: `sense_data.TB_O${i}`, name: `其它表${i}`, fields: [],
+  }))
+
+  it('加载更多数据表：选中的表已在 list3 但排在 slice(0,5) 之外时也要挪到最前，下拉显示中文名', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1,
+      // t25 正好是 list3 的第 6 条，落在 slice(0, 5) 之外
+      list: [{ tableId: 't25', tableName: 'sense_data.TB_O5', name: '其它表5', fields: [] }],
+    })
+    useAuthStore().roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+    expect(tableSelectOf().text()).not.toContain('其它表5')
+
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
+    await link!.trigger('click')
+    await flushPromises()
+    const row = wrapper.findAll('tr').find((el) => el.text().includes('其它表5'))
+    await row!.trigger('click')
+    await flushPromises()
+
+    expect(tableSelectOf().vm.$props.modelValue).toBe('t25')
+    expect(tableSelectOf().text()).toContain('其它表5')
+    expect(tableSelectOf().text()).not.toContain('t25')
+  })
+
+  it('加载更多数据表：切表后当前源被清掉、分组重拉，选中的表仍留在下拉里', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
+    // 初始表（list3 第一条 t20）带 600519，新表 t25 没有：loadSources 会清掉 sourceId
+    // 并重新 loadGroup，把 group 整块覆盖掉
+    vi.spyOn(dataApi, 'distinctSource').mockImplementation(async (query) => (query.tableId === 't20' ? ['600519'] : ['src-9']))
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ tableId: 't25', tableName: 'sense_data.TB_O5', name: '其它表5', fields: [] }],
+    })
+    useAuthStore().roles = ['admin']
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    const groupCallsBefore = (dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length
+
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
+    await link!.trigger('click')
+    await flushPromises()
+    const row = wrapper.findAll('tr').find((el) => el.text().includes('其它表5'))
+    await row!.trigger('click')
+    await flushPromises()
+    await waitForLoad()
+
+    // 源被清掉 → 分组确实重拉了一次
+    expect((dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(groupCallsBefore)
+    expect(tableSelectOf().text()).toContain('其它表5')
+    expect(tableSelectOf().text()).not.toContain('t25')
   })
 
   it('按源搜索：选中跨表源后切换到该源的默认表', async () => {

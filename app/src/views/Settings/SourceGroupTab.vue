@@ -20,9 +20,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { sourceGroupApi, flowCenterApi, sourceApi, type SourceGroup, type SourceGroupState, type SourceFlowBind, type FlowRecord } from '@/api'
+import { sourceGroupApi, flowCenterApi, sourceApi, type Source, type SourceGroup, type SourceGroupState, type SourceFlowBind, type FlowRecord } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
+import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
@@ -381,12 +383,26 @@ async function moveMembers(): Promise<void> {
   afterMemberChange()
 }
 
-/** 打开源：与网站详情「源视图」同一落点（SourceTab.openSourceFromList 同口径） */
-function openSource(source: { sourceId: string; siteId?: string }, view: 'overview' | 'data' = 'overview'): void {
+/** 打开源：与网站详情「源视图」同一落点（SourceTab.openSourceFromList 同口径）。
+ *  同样记一笔「最近打开的网站」——「我的分组」也是源管理的常见入口，不记会漏掉一整条进入路径。 */
+function openSource(source: Source, view: 'overview' | 'data' = 'overview'): void {
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '我的分组',
+  })
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
   })
+}
+
+/** 打开网站（源列表里的「所属网站」链接）：同样记一笔 */
+function openSite(siteId: string): void {
+  recordSiteVisit(siteId)
+  void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 
 /** 查看流程节点：拉详情后打开 FlowDetailDrawer */
@@ -487,7 +503,7 @@ watch(() => route.query.group, (id) => {
             scope-empty-text="该来源组还没有成员，可在源列表勾选后「调整来源组」，或点「添加源」"
             @open-source="openSource"
             @open-source-data="openSource($event, 'data')"
-            @open-site="router.push({ path: '/canvas', query: { siteId: $event, view: 'source', returnTo: route.fullPath } })"
+            @open-site="openSite"
           >
             <template #selection-actions="{ ids }">
               <el-button size="small" data-testid="sg-remove-members" :disabled="!canWrite || !ids.length" @click="selectedIds = [...ids]; removeMembers()">移出来源组</el-button>

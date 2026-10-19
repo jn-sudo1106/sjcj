@@ -96,6 +96,31 @@ describe('FlowSourcePickerDialog', () => {
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ flowId: 'flow-9' }))
   })
 
+  // 2026-10-19：后端 name 只匹配名称，输 ID 搜不到；纯数字改按源 ID 查，其余仍按名称
+  it('搜索框：纯数字按源 ID 查，其余按名称查', async () => {
+    vi.useFakeTimers()
+    try {
+      const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+      vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+      const w = mountDlg([])
+      await flushPromises()
+
+      await w.get('[data-testid="fsp-keyword"]').setValue(' 301288849 ')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: '301288849' }))
+      expect(paged.mock.lastCall![0]).not.toHaveProperty('name')
+
+      await w.get('[data-testid="fsp-keyword"]').setValue('香港政府新闻网')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ name: '香港政府新闻网' }))
+      expect(paged.mock.lastCall![0]).not.toHaveProperty('sourceId')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('「当前流程」列：本流程标 self、别的流程标 other、无流程标 none', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 3, list: [src('a', { flowId: 'flow-1' }), src('b', { flowId: 'flow-2' }), src('c')],

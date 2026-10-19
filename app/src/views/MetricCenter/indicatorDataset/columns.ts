@@ -115,9 +115,10 @@ export function stateText(value: unknown): string {
   }
 }
 
-/** 旧全局过滤器 `enableFilter`（utils/filter.js）：只认 1/0 */
+/** 旧全局过滤器 `enableFilter`（utils/filter.js）：只认 1/0
+ *  ⚠️ 口径：`isDelete` 字段 **0 = 启用 / 1 = 停用**（列标题「启用」），故 0 → 是、1 → 否。 */
 export function enableText(value: unknown): string {
-  if (value === 1) return '是[1]'
-  if (value === 0) return '否[0]'
+  if (value === 0) return '是[1]'
+  if (value === 1) return '否[0]'
   return value == null ? '' : String(value)
 }

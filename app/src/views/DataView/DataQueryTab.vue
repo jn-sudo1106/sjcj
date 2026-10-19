@@ -73,8 +73,28 @@ const sourceId = ref('')
 const tableSelectRef = ref<{ blur: () => void } | null>(null)
 const sourceSelectRef = ref<{ blur: () => void } | null>(null)
 
+/**
+ * 「加载更多数据表」选中的那条表：模板里 other 分组只渲染 `list3.slice(0, 5)`，
+ * 而 list3 是「全库表 − 主表 − 同类源的表」（见 api/index.ts 里 entryTypesGroup 的口径），
+ * 选中的表几乎一定本来就在 list3 里、只是排在第 6 条之后。
+ * 所以不能只判「已存在就不动」，必须把它摘出来插到最前面，否则下拉框里没有对应的
+ * el-option，el-select 的 getOption() 找不到选项会直接拿值当标签 —— 表现为只显示表 ID。
+ */
+const pickedTable = ref<EntryType | null>(null)
+
+function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
+  const picked = pickedTable.value
+  if (!picked) return source
+  const rest = source.list3.filter((t) => t.tableId !== picked.tableId)
+  // 后端重新分组后它已经落进 list1/list2，就别在 list3 里再塞一份
+  if ([...source.list1, ...source.list2].some((t) => t.tableId === picked.tableId)) return { ...source, list3: rest }
+  return { ...source, list3: [picked, ...rest] }
+}
+
 async function loadGroup() {
-  group.value = await dataApi.entryTypesGroup(sourceId.value || undefined)
+  // 切表时如果当前源不在新表里，会走 loadSources → clearedSource → loadGroup，
+  // 整块覆盖 group，选中的那条就被冲掉了，这里补回来
+  group.value = withPickedTable(await dataApi.entryTypesGroup(sourceId.value || undefined))
   if (!tableId.value) {
     tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || ''
   }
@@ -112,10 +132,10 @@ function openMoreTables() {
   moreTablesOpen.value = true
 }
 async function onTablePicked(entry: EntryType) {
-  if (!group.value.list3.some((t) => t.tableId === entry.tableId)) {
-    group.value = { ...group.value, list3: [entry, ...group.value.list3] }
-  }
+  // 选中的这条塞进 list3 最前面（同 ID 的先摘掉，避免出现两个同值选项）
+  pickedTable.value = entry
   tableId.value = entry.tableId
+  group.value = withPickedTable(group.value)
   await onTableChange()
 }
 const moreSourcesOpen = ref(false)
@@ -453,9 +473,11 @@ async function onDistinctSource() {
   const hasCondition = !!(f.sql || f.state || f.dataId || f.parentId)
   // 落点是源管理（采集资产源列表）：数据查看页是全平台的、没有网站锚点，源视图锁死在单个网站内。
   // 命中源走 store 传（1016）：原来拼成 `/canvas?sourceIds=` 会被画布路由守卫弹回 /collect，名单整个丢了。
-  // 无条件 = 全部源（I01：「你不带条件就是查的所有的」）；但选了源就只带这个源，不必发请求。
-  if (!hasCondition) {
-    openSourceHits(sourceId.value ? [sourceId.value] : null)
+  // 选了源又没填条件：就是这一个源，不必发请求。
+  // 没选源时一律按表反查（2026-10-19）：「不带条件就是查所有的」指这张表的所有源，
+  // 原来直接落到全平台全部源，表（和时间范围）都丢了，用户反馈「没带入数据查询中的源信息」。
+  if (!hasCondition && sourceId.value) {
+    openSourceHits([sourceId.value])
     return
   }
   backTracing.value = true
@@ -989,7 +1011,7 @@ onUnmounted(() => {
           <el-option v-for="t in group.list2" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <el-option-group label="other">
-          <el-option v-for="t in group.list3.slice(0, 5)" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
+          <el-option v-for="t in group.list3" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <template #footer>
           <span class="dv-link" @click.stop="openMoreTables">

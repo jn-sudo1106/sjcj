@@ -107,7 +107,7 @@ async function pickAllMatching() {
     const collected: Source[] = []
     for (let p = 1; collected.length < total.value; p++) {
       const res = await sourceApi.sourcePaged({
-        keyword: keyword.value.trim() || undefined,
+        ...keywordQuery(),
         flowId: flowFilter.value || undefined,
         page: p,
         size: SELECT_ALL_PAGE,
@@ -150,6 +150,16 @@ function stateText(source: Source): string {
   return source.state === 'E' ? '异常' : source.state === 'L' ? '运行中' : '正常'
 }
 
+/**
+ * 搜索框写着「按源名称 / ID 搜索」，但后端 `name` 只匹配名称，输 ID 命中 0 条（2026-10-19 用户反馈
+ * 301288849 按名称能找到、按 ID 找不到）。与 FlowSourcesDialog 同口径：纯数字当源 ID 查，其余按名称查。
+ */
+function keywordQuery(): { sourceId?: string; name?: string } {
+  const q = keyword.value.trim()
+  if (!q) return {}
+  return /^\d+$/.test(q) ? { sourceId: q } : { name: q }
+}
+
 let reqId = 0
 async function load() {
   const id = ++reqId
@@ -157,7 +167,7 @@ async function load() {
   error.value = ''
   try {
     const res = await sourceApi.sourcePaged({
-      keyword: keyword.value.trim() || undefined,
+      ...keywordQuery(),
       flowId: flowFilter.value || undefined,
       page: page.value,
       size: PAGE_SIZE,

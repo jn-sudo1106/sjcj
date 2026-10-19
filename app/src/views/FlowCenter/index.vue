@@ -22,6 +22,7 @@ import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { parseIdList } from '@/utils/flow/flowSearch'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
 import FlowSourcesDialog from './FlowSourcesDialog.vue'
@@ -368,6 +369,12 @@ async function toggleTemplate(t: FlowRecord) {
     if (!full) throw new Error('流程详情读取失败，未做任何修改')
     const saved = await flowCenterApi.save({ id: full.id, name: full.name, definition: full.definition, isTemplate: next })
     replaceFlow(saved)
+    trackEdit('FLOW', saved.id, saved.name, {
+      eventCode: next ? 'flow_template_mark' : 'flow_template_unmark',
+      eventName: next ? '标记流程为模板' : '取消流程模板标记',
+      firstModule: '流程管理',
+      pageName: '流程中心',
+    })
     ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
   } catch (e) {
     ElMessage.error(`${next ? '标记' : '取消标记'}失败：${(e as Error)?.message ?? String(e)}`)
@@ -395,6 +402,12 @@ async function toggleFlowEnable(t: FlowRecord, disable: boolean) {
   try {
     const ack = await flowCenterApi.changeFlowEnable([t.id], disable ? 1 : 0)
     if (!ack.ok) throw new Error(ack.message || `${action}失败`)
+    trackEdit('FLOW', t.id, t.name, {
+      eventCode: disable ? 'flow_disable' : 'flow_enable',
+      eventName: `${action}流程`,
+      firstModule: '流程管理',
+      pageName: '流程中心',
+    })
     ElMessage.success(`流程「${t.name}」已${action}`)
     void load()
   } catch (e) {
@@ -454,6 +467,13 @@ async function createFromTemplate() {
     templateForm.open = false
     if (created) replaceFlow(created)
     else void load()
+    trackCreate('FLOW', created?.id ?? newId, created?.name ?? `${picked.name}_copy`, {
+      eventCode: 'flow_create_from_template',
+      eventName: '从模板新建流程',
+      firstModule: '流程管理',
+      pageName: '流程中心',
+      pageEntry: `模板「${picked.name}」`,
+    })
     ElMessage.success(`已从模板「${picked.name}」新建流程 #${newId}`)
     reportDetachResult(detach)
   } catch (e) {
@@ -489,6 +509,13 @@ async function copyFlow(t: FlowRecord) {
     const created = await flowCenterApi.detail(newId)
     if (created) replaceFlow(created)
     else void load()
+    trackCreate('FLOW', created?.id ?? newId, created?.name ?? `${t.name}_copy`, {
+      eventCode: 'flow_copy',
+      eventName: '复制流程',
+      firstModule: '流程管理',
+      pageName: '流程中心',
+      pageEntry: `流程「${t.name}」`,
+    })
     ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}${reuseConfigs ? '（节点复用原配置）' : ''}`)
     reportDetachResult(detach, '原流程')
   } catch (e) {
@@ -534,6 +561,12 @@ async function createFlow() {
     })
     createForm.open = false
     replaceFlow(created)
+    trackCreate('FLOW', created.id, created.name, {
+      eventCode: 'flow_create',
+      eventName: '新建流程',
+      firstModule: '流程管理',
+      pageName: '流程中心',
+    })
     ElMessage.success('流程已新建')
   } catch (e) {
     ElMessage.error(`新建流程失败：${(e as Error)?.message ?? String(e)}`)
@@ -581,6 +614,12 @@ async function doRemoveFlow(flow: FlowRecord): Promise<boolean> {
     const ack = await flowCenterApi.remove([flow.id])
     if (!ack.ok) throw new Error(ack.message || '删除失败')
     if (activeId.value === flow.id) closeFlow()
+    trackDelete('FLOW', flow.id, flow.name, {
+      eventCode: 'flow_delete',
+      eventName: '删除流程',
+      firstModule: '流程管理',
+      pageName: '流程中心',
+    })
     ElMessage.success(`流程「${flow.name}」已删除`)
     void load()
     return true
@@ -705,11 +744,11 @@ async function confirmRebindDelete(mode: 'replace' | 'unbind') {
     const batches = Math.ceil(rebindDelete.sourceIds.length / BIND_BATCH_SIZE)
     for (let i = 0; i < batches; i++) {
       const chunk = rebindDelete.sourceIds.slice(i * BIND_BATCH_SIZE, (i + 1) * BIND_BATCH_SIZE)
-      // 1008-06：解绑带 currentFlowId 只断这条流程的关联（源关联的其它流程不受影响）；
-      // 更换（replace）不传 currentFlowId——目标流程整体换绑按旧单流程口径走。
+      // 1008-06：解绑 / 更换都带 currentFlowId（= 要删除的这条流程），只把源从这条流程换走，
+      // 源关联的其它流程不受影响（2026-10-19 后端反馈：更换原来没传，后端不知道要从哪条流程移走）。
       const ack = mode === 'unbind'
         ? await flowCenterApi.bindSources(chunk, undefined, flow.id)
-        : await flowCenterApi.bindSources(chunk, rebindDelete.targetFlowId)
+        : await flowCenterApi.bindSources(chunk, rebindDelete.targetFlowId, flow.id)
       if (!ack.ok) throw new Error(`换绑第 ${i + 1}/${batches} 批失败：${ack.message || '未知原因'}`)
     }
     rebindDelete.open = false

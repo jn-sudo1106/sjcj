@@ -457,6 +457,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
   // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
   // 响应是**行数组**（不是分页信封）：{sourceId, configId, cnt, state?}；带 state 的行说明后端支持多状态聚合。
+  // 全部队列名（任务中心队列名下拉的候选；后端 2026-10-19 提供，217 实测还是 500 → 调用方失败时退回已加载行累计）
+  { path: 'task/taskTopicList', desc: '全部队列名 → GET /v1/task/taskTopicList', impl: true, live: true },
   { path: 'task/stat', desc: '任务统计（按来源/配置分组聚合）', impl: true, live: true },
   // 2026-08-13 测试环境实测放行：E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。
   // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。
@@ -709,6 +711,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 用户收藏（后端 2026-09-23，favorite-api.md；B30）。userId 取自会话，不由前端传。
   // 只用 list / add / remove：网站列表要「收藏置顶 + 只看收藏」，需要全部收藏 ID，按页查的 states 用不上。
   { path: 'favorite/list', desc: '当前用户收藏列表（按 itemType，limit ≤ 500）', live: true },
+  // 1019 通用埋点（LogReportController，接口见 `接口文档-通用埋点.md`）。
+  // ⚠️ 这三条**绝不能标 danger**：client.ts 的生产写守卫只认 DANGER_ENDPOINTS，
+  //    标了 danger 生产环境埋点会被当作高危写直接拦掉，一条都报不上去。
+  //     另：`report`/`recent` 是 RspResult（code 字符串、判 success），`page` 是 Paged（code 数字）。
+  { path: 'log-report/report', desc: '通用埋点上报（ENTER/EXIT/CLICK/EDIT/CREATE/DELETE/SEARCH）→ POST body', impl: true, live: true },
+  { path: 'log-report/recent', desc: '最近列表（按 contentId 去重、时间倒序；action 默认 ENTER，limit ≤ 100）', impl: true, live: true },
+  { path: 'log-report/page', desc: '埋点行为明细分页（Paged：code 数字，参数非法返回 1）', impl: true, live: true },
   { path: 'favorite/add', desc: '收藏（幂等）', live: true },
   { path: 'favorite/remove', desc: '取消收藏（幂等）', live: true },
   { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
@@ -719,6 +728,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/syncFlow', desc: '源流程覆盖同步到同网站所选源（fromSourceId → sourceIds，网站本身无流程）', danger: true, impl: true },
   { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },
   { path: 'site/queueTaskPaged', desc: '队列任务明细分页', impl: true },
+
+  /* ── group-res 组级数据权限（收录 7 / SysGroupResController，系统设置 → 数据权限设置） ──
+     契约来源：接口文档-组数据权限.md（2026-10-19）。只有 list 返回 Paged（code 数字 0/-1），
+     其余 6 条返回 RspResult（code 字符串 "0"/"-1"）。7 条全部要求 admin 角色，非 admin 后端回 403。
+     ⚠️ 7 条均未经真实联调（需 admin 会话），live 按契约文档标上；首次实测后请回写本注释。 */
+  { path: 'group-res/list', desc: '数据权限规则分页（groupId 必填且 >90000；resType/action 可选）', impl: true, live: true },
+  { path: 'group-res/detail', desc: '数据权限规则详情', impl: true, live: true },
+  { path: 'group-res/meta', desc: '配置元数据（resType/action/condType 枚举 + 各 resType 可选列，表单不得硬编码）', impl: true, live: true },
+  { path: 'group-res/preview', desc: '条件试算（保存前预检；试算失败 success 仍为 true，原因在 data.error）', live: true },
+  { path: 'group-res/add', desc: '新增数据权限规则（admin；成功即清该组权限缓存）', danger: true, impl: true, live: true },
+  { path: 'group-res/modify', desc: '修改数据权限规则（admin；body 必须带 id）', danger: true, impl: true, live: true },
+  { path: 'group-res/delete', desc: '删除数据权限规则（admin；ids 在 query，软删 isDelete=1）', danger: true, impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

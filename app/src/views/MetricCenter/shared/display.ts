@@ -21,11 +21,13 @@ export function stateText(value: unknown): string {
   return map[key] ?? key
 }
 
-/** 旧全局过滤器 enableFilter：1→是[1] / 0→否[0] / 其余原值（空值给 '—'） */
+/** 旧全局过滤器 enableFilter：0→是[1] / 1→否[0] / 其余原值（空值给 '—'）
+ *  ⚠️ 口径：`isDelete` 字段 **0 = 启用 / 1 = 停用**（本模块只服务列标题为「启用」的列），
+ *  与 `indicatorDataset/columns.ts` 的 `enableText` 保持一致。 */
 export function enableText(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
-  if (Number(value) === 1) return '是[1]'
-  if (Number(value) === 0) return '否[0]'
+  if (Number(value) === 0) return '是[1]'
+  if (Number(value) === 1) return '否[0]'
   return String(value)
 }
 

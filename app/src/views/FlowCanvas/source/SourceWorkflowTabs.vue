@@ -181,6 +181,7 @@ async function copyExisting(sourceFlow: FlowRecord) {
     }
     reportDetachResult(copied.detach, `原流程「${sourceFlow.name}」`)
     ElMessage.success(`已从「${sourceFlow.name}」创建新流程`)
+    copyOpen.value = false
     await finishCreate(copied.flowId)
   } catch (error) {
     if (error === 'cancel' || error === 'close') return

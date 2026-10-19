@@ -2,7 +2,7 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, workflowBindingApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
+import { CHANGE_SITE_CHUNK, flowCenterApi, isProductionCreateEnabled, siteApi, sourceApi, workflowBindingApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
 import SiteTablePanel from './SiteTablePanel.vue'
 import SourceParamModal from './SourceParamModal.vue'
 import { importProgressText } from './importProgress'
@@ -18,6 +18,7 @@ import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { flowHasPublished, isUnpublishedFlowError } from '@/utils/flow/flowPublish'
 import { copyFlowToSource, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { toExternalHref } from '@/utils/url/externalUrl'
+import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -29,6 +30,7 @@ import { useUiStore } from '@/stores/ui'
 import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
 import { copyToClipboard } from '@/utils/clipboard'
+import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 
 const props = defineProps<{
   siteId: string
@@ -242,6 +244,13 @@ function applyEditedSource(updated: Source) {
     flow.patchSourceCtx({ name: updated.name, url: updated.url })
   }
   ws.renameTab(updated.sourceId, updated.name)
+  // EditSourceDialog 在保存成功后才 emit saved，这里记一笔即可（不需要再判结果）
+  trackEdit('SOURCE', updated.sourceId, updated.name, {
+    eventCode: 'source_update',
+    eventName: '编辑源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
 }
 
 function isErr(s: Source): boolean {
@@ -324,6 +333,12 @@ async function saveRename(s: Source) {
     }
     s.name = name
     cancelRename()
+    trackEdit('SOURCE', s.sourceId, name, {
+      eventCode: 'source_rename',
+      eventName: '重命名源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
     ElMessage.success(res?.message || '源已重命名')
     emit('added', updated)
   } catch (error) {
@@ -425,6 +440,12 @@ async function deleteFromMenu() {
       return
     }
     children.value = children.value.filter((c) => c.sourceId !== s.sourceId)
+    trackDelete('SOURCE', s.sourceId, s.name, {
+      eventCode: 'source_delete',
+      eventName: '删除源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
     ElMessage.success(`源「${s.name}」已删除`)
   } catch (error) {
     ElMessage.error(`删除失败：${error instanceof Error ? error.message : String(error)}`)
@@ -467,6 +488,16 @@ async function openSiteEdit() {
   siteEditDlg.show = true
 }
 function onSiteEditSaved() {
+  // 网站基本信息已保存成功（SiteEditorDialog 保存成功后才 emit）
+  const current = site.value
+  if (current?.siteId) {
+    trackEdit('SITE', current.siteId, current.name, {
+      eventCode: 'site_update',
+      eventName: '编辑网站基本信息',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
+  }
   void load(true)
 }
 
@@ -551,7 +582,7 @@ watch(() => addDlg.bindFlowIds.join(','), () => {
 const addHint = computed(() => {
   const template = selectedTemplate.value
   if (addDlg.templateMode === 'search' && !template) return '请先搜索并选择模板源。'
-  if (!template) return '仅创建名称和 URL，流程从空白画布开始。'
+  if (!template) return '创建名称和 URL，并新建一条只有首节点（网页抓取）的空白流程。'
   const head = `将按「${template.name}」复制源到当前网站`
   if (addDlg.flowMode === 'none') return `${head}，不关联流程，之后在流程页编排。`
   if (addDlg.flowMode === 'bind') {
@@ -668,6 +699,12 @@ async function submitParamSource() {
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
+  trackCreate('SOURCE', addedId, added?.name ?? name, {
+    eventCode: 'source_create_param',
+    eventName: '新建参数源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
   if (added) emit('added', added)
 }
 
@@ -778,6 +815,13 @@ async function submitCopy() {
     closeCopyDialog()
     await load(true)
     const added = children.value.find((c) => c.sourceId === newId)
+    trackCreate('SOURCE', newId, added?.name ?? name, {
+      eventCode: 'source_copy',
+      eventName: '复制源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+      pageEntry: `源「${s.name}」`,
+    })
     if (added) emit('added', added)
   } finally {
     copyDlg.saving = false
@@ -829,11 +873,29 @@ async function submitAdd() {
       return
     }
     addedId = res.sourceId || sourceId
-    ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
+    // 2026-10-19：空白画布也默认带一个首节点，和流程标签栏「新建空白流程」同一条路径（createForSource）。
+    // 只在真实新建通道里建：mock 源是前端假 ID，拿去建真实流程必然关联失败。流程失败不回滚源，提示去「＋」补建。
+    if (isProductionCreateEnabled()) {
+      try {
+        await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, definition: makeBlankTemplateDefinition(), primary: true })
+        ElMessage.success(`已添加源「${target.name}」，并新建了带首节点的空白流程`)
+      } catch (error) {
+        ElMessage.warning(`已添加源「${target.name}」，但新建空白流程失败：${(error as Error)?.message ?? String(error)}。可在流程标签栏点「＋」补建`)
+      }
+    } else {
+      ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
+    }
   }
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
+  // 两条建源路径（空白 / 按模板源）在这里汇合，埋点只打一处
+  trackCreate('SOURCE', addedId, added?.name ?? target.name, {
+    eventCode: 'source_create',
+    eventName: '新建源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
   if (added) emit('added', added)
 }
 

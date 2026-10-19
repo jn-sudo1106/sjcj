@@ -50,6 +50,7 @@ import {
 // metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
 import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
+import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview } from './groupRes'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
@@ -263,6 +264,14 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'sourceType/add': mockAck,
   'sourceType/update': mockAck,
   'sourceType/delete': mockAck,
+  // 组级数据权限（系统设置 → 数据权限设置，接口文档-组数据权限.md）：内存表增删改查 + meta + 试算
+  'group-res/list': mockGroupResList,
+  'group-res/detail': mockGroupResDetail,
+  'group-res/meta': mockGroupResMeta,
+  'group-res/add': mockGroupResAdd,
+  'group-res/modify': mockGroupResModify,
+  'group-res/delete': mockGroupResDelete,
+  'group-res/preview': mockGroupResPreview,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。
