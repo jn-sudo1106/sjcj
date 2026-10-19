@@ -115,6 +115,8 @@ const isPublishedFlowView = computed(() => flow.sourceCtx?.workflowVersionManage
 const sourceLoadError = ref('')
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
+// 数据 / 文件 / 任务视图的节点和表都跟着当前流程走：页头切换流程后整块重挂，不残留上一条流程的筛选（2026-10-19）
+const flowScopedKey = computed(() => `${flow.sourceCtx?.sourceId ?? ''}:${flow.sourceCtx?.flowId ?? ''}`)
 const isOverviewView = computed(() => activeView.value === 'overview' && !!flow.sourceCtx)
 const isWorkflowListView = computed(() => activeView.value === 'flow' && route.query.flowMode === 'list' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
@@ -752,8 +754,8 @@ onUnmounted(() => {
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <SourceSummaryView v-else-if="isOverviewView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
-        <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
-        <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
+        <TaskView v-else-if="isTaskView" :key="flowScopedKey" class="rc-flow-result" />
+        <FileView v-else-if="isFileView" :key="flowScopedKey" class="rc-flow-result" />
         <MonitorConfigView v-else-if="isMonitorConfigView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <SourceWorkflowList
           v-else-if="isWorkflowListView"
@@ -777,7 +779,7 @@ onUnmounted(() => {
           :style="{ '--insp-w': inspWidth }"
         >
           <template v-if="!ui.inspectorExpanded">
-            <ResultView v-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-center" />
+            <ResultView v-if="isDataView" :key="flowScopedKey" class="rc-flow-center" />
             <FlowBoard v-else />
           </template>
           <button
