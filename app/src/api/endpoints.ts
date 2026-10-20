@@ -424,6 +424,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 此前节点配置的「定时策略」只认 source/config 上的字段，而那边实测恒为 null
   // （抽查 20 个源全空），真正的 cron 在 job 表里——源 430016942 → `0 0 16 * * ?`。
   { path: 'job/snatchJobPaged', desc: '源的定时任务分页（定时列表）', live: true },
+  // 1020 迁移「调度整体配置」（旧 page/config/ScheduleConfig.vue + 3 个子弹窗）时接上这 4 条：
+  // 旧页面这一屏的统计 / 明细 / 统一改表达式 / 统一定时本来就全部直连后端。
+  // ⚠️ updateScheduleByCron 与 setScheduleByCategory 是 **POST 但参数走 query**（旧代码 method:'post', params），
+  //    照抄，别改成 JSON body；两个批量接口都认 confirmAll（无任何筛选范围时的强确认）。
+  { path: 'job/scheduleSummary', desc: '按 cron 表达式汇总任务数 → GET ?<范围参数>（裸数组）', live: true },
+  { path: 'job/jobsBySchedule', desc: '某表达式下的任务明细 → GET ?cron=&<范围参数>（裸数组）', live: true },
+  { path: 'job/updateScheduleByCron', desc: '范围内统一改表达式/启停 → POST ?oldCron=&newCron=&jobStatus=&confirmAll=（参数在 query）', danger: true, live: true },
+  { path: 'job/setScheduleByCategory', desc: '按范围统一定时（可新建）→ POST ?newCron=&jobStatus=&jobEnable=&createIfMissing=&confirmAll=（参数在 query）', danger: true, live: true },
   { path: 'job/runJob', desc: '运行任务', danger: true },
   // 2026-09-18 接上：节点配置的定时策略那一栏右上角的开关。与源启停（source/changeEnable）
   // 同性质——可逆、不删数据，所以同样放进生产白名单。
@@ -504,10 +512,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'measure/deleteMeasurePhy', desc: '物理删除单条指标 → POST ?id=单个（无法恢复）', danger: true, impl: true, live: true },
 
   /* ── mq 消息队列（目标 9 / 收录 9） ── */
-  { path: 'mq/queuePaged', desc: '队列列表', impl: true },
-  { path: 'mq/queueDetail2', desc: '队列详情' },
-  { path: 'mq/message', desc: '获取消息' },
-  { path: 'mq/purgeQueue', desc: '清空队列', danger: true },
+  // 1020 迁移「MQ 队列」页（旧 page/inst/MqList.vue，路由 /inst/mq-list）时把这 4 条接上真实后端：
+  // 旧页面这一屏本来就全部直连后端（队列列表 / 消费者列表 / 取消息 / 清空队列），从来没有 mock 演示口径，
+  // 只放行分页等于让页面上的「获取多条 / 删除一条 / 清空」三个按钮看着能点、后端一条都收不到。
+  // ⚠️ 队列列表的真实路径是 `mq/queues`（旧 src/api/mq.js:7 的 queuesPaged），不是下面那条逻辑名
+  //    queuePaged——两者都留在清单里：queuePaged 只服务 api/mock 里那套 M4 演示数据，新页面不碰它。
+  { path: 'mq/queues', desc: '队列列表 → GET ?pageNo=1&pageSize=1000&flag=&cond=&state=&page=1&limit=1000（旧 queuesPaged，两组分页参数并存，一页拉满 1000）', live: true },
+  { path: 'mq/queueDetail2', desc: '队列消费者列表 → GET ?queue=（裸数组，不是分页信封）', live: true },
+  { path: 'mq/message', desc: '获取队列消息 → GET ?requeue=&count=&queue=（**裸 JSON 文本**，非 {code,data} 信封）', live: true },
+  { path: 'mq/purgeQueue', desc: '清空队列 → GET ?key=&queue=（key 为当前小时数，不可恢复）', danger: true, live: true },
+  // 以下 queuePaged 是逻辑名（M4 健康卡片的演示数据），真实队列列表见上面的 mq/queues。
+  { path: 'mq/queuePaged', desc: '队列列表（逻辑名，仅 mock 演示数据）', impl: true },
   // 队列告警（队列校验配置）。1013 从旧平台 page/config/QueueCheck.vue 迁入；这一页在旧平台
   // 的分页 / 新增 / 编辑 / 批量启停 / 批量删除**本来就全部直连后端**，所以这 5 条一起标 live：
   // 只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
@@ -606,8 +621,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。
   { path: 'source/genConfig', desc: '旧平台「生成配置」（SourceList.vue 的行操作）；本平台无调用方，仅登记备查' },
 
-  /* ── comm 导出（目标 1 / 收录 1） ── */
+  /* ── comm 导出 / 表达式计算（目标 1 / 收录 2） ── */
   { path: 'comm/export', desc: '导出' },
+  // 1020 迁移「函数工具 / URL生成工具」（旧 page/install/FunctionBuild.vue、UrlBuild.vue）时接上：
+  // 这两屏的计算按钮本来就直连后端，不放行就只能在页面上干看示例、算不出结果。
+  // 入参见 api/exp.ts：env 是**字符串**（JSON.stringify 后的上下文），不是对象。
+  { path: 'comm/exp', desc: '函数表达式计算 → POST body {value,rule,env}（env 为 JSON 字符串）', live: true },
+
+  /* ── 辅助工具：OSS 上传（1 条，非 142 清单） ── */
+  // ⚠️ 这条**不走 client.ts**：body 是文件二进制本体、还带 Authorization 头，
+  //    封装只认 JSON/form。实现在 api/oss.ts，直接 fetch `${BASE_URL}oss-upload`。
+  //    登记在这里是为了让「这个系统会往 OSS 写东西」在契约清单里有一行，别当成未知调用。
+  { path: 'oss-upload', desc: 'OSS 上传 → POST ?fileId=（二进制 body，直连 fetch，见 api/oss.ts）', danger: true },
 
   /* ════ 采集配置中心服务层自有端点（非 Data Center 142，本系统新增） ════ */
   // 规则资产（Data Center SPA 未发现规则路由，规则引擎为本系统纳入范围）

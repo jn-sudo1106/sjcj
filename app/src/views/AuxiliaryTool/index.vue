@@ -1,14 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-const TABS: { key: string; label: string }[] = [
-  { key: 'mqList', label: 'MQ队列' },
-  { key: 'functionBuild', label: '函数工具' },
-  { key: 'urlBuild', label: 'URL生成工具' },
-  { key: 'scheduleConfig', label: '调度整体配置' },
-  { key: 'urlBuildStatic', label: 'URL生成静态[备]' },
-  { key: 'ossUpload', label: 'OSS上传' },
-]
 import MqList from './mqList/index.vue'
 import FunctionBuild from './functionBuild/index.vue'
 import UrlBuild from './urlBuild/index.vue'
@@ -16,29 +8,49 @@ import ScheduleConfig from './scheduleConfig/index.vue'
 import UrlBuildStatic from './urlBuildStatic/index.vue'
 import OssUpload from './ossUpload/index.vue'
 
+// ⚠️ tab 的 key 必须与 comps 的 key **逐字一致**，否则 `comps[activeTab]` 取到 undefined，
+//    `<component :is="undefined">` 不报错、只是什么都不渲染 —— 页面就成了「tab 栏在、内容区空白」
+//    这种最难查的形态。1020 就踩过这一次：TABS 写的是 'mqList'（首字母小写），comps 里写的是
+//    'MqList'（组件名），结果六个 tab 全白。
+//    现在用 TabKey 联合类型 + Record<TabKey, Component> 把这件事交给编译器：键名写错 / 漏写 /
+//    大小写不一致都是 vue-tsc 报错，而不是上线后一块白板。
+const TABS = [
+  { key: 'mqList', label: 'MQ队列' },
+  { key: 'functionBuild', label: '函数工具' },
+  { key: 'urlBuild', label: 'URL生成工具' },
+  { key: 'scheduleConfig', label: '调度整体配置' },
+  { key: 'urlBuildStatic', label: 'URL生成静态[备]' },
+  { key: 'ossUpload', label: 'OSS上传' },
+] as const
+type TabKey = (typeof TABS)[number]['key']
+const DEFAULT_TAB: TabKey = 'mqList'
+
 // key → 组件映射：改用具名组件 + <component :is>，好让内容区像「模板配置」一样带过渡切换
-const comps: Record<string, Component> = {
-  MqList: MqList,
-  FunctionBuild: FunctionBuild,
-  UrlBuild: UrlBuild,
-  ScheduleConfig: ScheduleConfig,
-  UrlBuildStatic: UrlBuildStatic,
-  OssUpload: OssUpload,
+const comps: Record<TabKey, Component> = {
+  mqList: MqList,
+  functionBuild: FunctionBuild,
+  urlBuild: UrlBuild,
+  scheduleConfig: ScheduleConfig,
+  urlBuildStatic: UrlBuildStatic,
+  ossUpload: OssUpload,
 }
 
 const route = useRoute()
 const router = useRouter()
-const activeTab = ref('mqList')
+const activeTab = ref<TabKey>(DEFAULT_TAB)
 watch(
   () => route.query.tab,
   (tab) => {
     const key = String(tab ?? '')
-    activeTab.value = TABS.some((t) => t.key === key) ? key : 'mqList'
+    activeTab.value = isTabKey(key) ? key : DEFAULT_TAB
   },
   { immediate: true },
 )
-function selectTab(key: string) {
-  void router.replace({ path: '/auxiliary-tool', query: key === 'mqList' ? {} : { tab: key } })
+function isTabKey(value: string): value is TabKey {
+  return TABS.some((t) => t.key === value)
+}
+function selectTab(key: TabKey) {
+  void router.replace({ path: '/auxiliary-tool', query: key === DEFAULT_TAB ? {} : { tab: key } })
 }
 </script>
 
