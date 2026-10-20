@@ -35,6 +35,8 @@ tmp/askpass-*
 tmp/known_hosts_*
 # 本地临时查询/排查脚本（数据库验证等，不入库）
 tmp/*.java
+# 测试运行的输出日志（vitest 等，2026-10-20 曾有 *.out 被误提交）
+tmp/*.out
 # 视觉工具运行目录（本地产物）
 .dsh-vision-router/
 # 本地粘贴的截图（不入库）
