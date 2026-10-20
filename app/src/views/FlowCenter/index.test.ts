@@ -440,7 +440,10 @@ describe('流程中心 · 操作列', () => {
     expect(w.text()).not.toContain('新闻采集标准流程（#flow-10086）')
   })
 
-  it('有源流程：更换到目标流程成功后紧接着删除（F1 换绑路径）', async () => {
+  // 2026-10-20：改为后端原子接口 changeFlowAndDelete（一次事务内换绑/解绑 + 删除旧流程），
+  // 不再分 changeFlowBatch + deleteFlow 两次调用——那两条之间没有事务，换绑成功而删除失败会留下
+  // 「源已换走、流程还在」的中间态，界面却只能报「删除失败」。
+  it('有源流程：更换并删除走一次原子接口（sourceIds + currentFlowId + flowId）', async () => {
     const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 2 }])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
@@ -451,7 +454,7 @@ describe('流程中心 · 操作列', () => {
       { ...FLOWS[0] },
       { ...FLOWS[0], id: 'flow-2000', name: '目标流程' },
     ])
-    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    const atomic = vi.spyOn(flowCenterApi, 'changeFlowAndDelete').mockResolvedValue({ ok: true })
     const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
 
     await w.get('[data-testid="flow-delete"]').trigger('click')
@@ -460,16 +463,18 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="rebind-replace-delete"]').trigger('click')
     await flushPromises()
 
-    expect(bind).toHaveBeenCalledWith(['11', '12'], 'flow-2000', 'flow-10086')
-    expect(remove).toHaveBeenCalledWith(['flow-10086'])
+    // currentFlowId = 被删流程本身，flowId = 目标流程（后端要求两者不同）
+    expect(atomic).toHaveBeenCalledWith(['11', '12'], 'flow-10086', 'flow-2000')
+    // 删除已经包含在原子接口里，不能再补发一次 deleteFlow（否则会多打一条注定失败的删除）
+    expect(remove).not.toHaveBeenCalled()
   })
 
-  it('有源流程：「仅解绑并删除」不带目标流程但带 currentFlowId（1008-06：只断本条关联），随后删除（F1 解绑路径）', async () => {
+  it('有源流程：「仅解绑并删除」只带 currentFlowId，不传目标流程（F1 解绑路径）', async () => {
     const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ ...FLOWS[0] }, { ...FLOWS[0], id: 'flow-2000', name: '目标流程' }])
-    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    const atomic = vi.spyOn(flowCenterApi, 'changeFlowAndDelete').mockResolvedValue({ ok: true })
     const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
 
     await w.get('[data-testid="flow-delete"]').trigger('click')
@@ -477,8 +482,32 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="rebind-unbind-delete"]').trigger('click')
     await flushPromises()
 
-    expect(bind).toHaveBeenCalledWith(['11'], undefined, 'flow-10086')
-    expect(remove).toHaveBeenCalledWith(['flow-10086'])
+    expect(atomic).toHaveBeenCalledWith(['11'], 'flow-10086', undefined)
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  // 原子接口失败 = 后端整体回滚（源没被摘走、流程还在）：把真实原因报给用户，对话框保留可重试
+  it('原子接口失败：报后端原因、保留对话框，且不补发删除', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ ...FLOWS[0] }, { ...FLOWS[0], id: 'flow-2000', name: '目标流程' }])
+    const atomic = vi.spyOn(flowCenterApi, 'changeFlowAndDelete').mockRejectedValue(
+      new Error('当前流程为默认流程，请先在来源流程配置中切换默认流程，再取消此关联'),
+    )
+    const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+    const error = vi.spyOn(ElMessage, 'error')
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="rebind-unbind-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(atomic).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('默认流程'))
+    expect(remove).not.toHaveBeenCalled()
+    // 失败不关对话框：源清单还在，用户能直接重试或换目标流程
+    expect(w.text()).toContain('源甲')
   })
 
   it('取消确认时不发删除请求', async () => {
@@ -522,8 +551,8 @@ describe('流程中心 · 操作列', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ ...FLOWS[0] }, { ...FLOWS[0], id: 'flow-2000', name: '目标流程' }])
-    // bindSources 挂起不返回 → saving 持续为 true
-    vi.spyOn(flowCenterApi, 'bindSources').mockReturnValue(new Promise(() => {}) as never)
+    // 原子接口挂起不返回 → saving 持续为 true
+    vi.spyOn(flowCenterApi, 'changeFlowAndDelete').mockReturnValue(new Promise(() => {}) as never)
 
     await w.get('[data-testid="flow-delete"]').trigger('click')
     await flushPromises()
@@ -555,7 +584,7 @@ describe('流程中心 · 操作列', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] } as never)
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
-    const bind = vi.spyOn(flowCenterApi, 'bindSources')
+    const atomic = vi.spyOn(flowCenterApi, 'changeFlowAndDelete')
     const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
 
     await w.get('[data-testid="flow-delete"]').trigger('click')
@@ -569,8 +598,8 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="rebind-direct-delete"]').trigger('click')
     await flushPromises()
 
-    // 不经过 bindSources，直接调 remove
-    expect(bind).not.toHaveBeenCalled()
+    // 没有可换绑的源：不经过原子接口，直接调 remove
+    expect(atomic).not.toHaveBeenCalled()
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 

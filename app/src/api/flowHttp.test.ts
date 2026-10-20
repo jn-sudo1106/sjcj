@@ -195,6 +195,45 @@ describe('flow 流程 HTTP 契约', () => {
       .toEqual({ sourceIds: [1001], flowId: 0 })
   })
 
+  // 2026-10-20：后端新增的原子接口——一次事务完成「解绑/换绑 + 删除旧流程」，
+  // 取代流程中心原来 changeFlowBatch + deleteFlow 的两次调用（两条之间没有事务）。
+  it('POST /v1/flow/changeFlowAndDelete：换绑带 flowId，解绑整个字段不出现', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '更换流程并删除成功，解绑数量:2，删除旧流程:已删除', data: null }))
+    const { flowCenterApi } = await import('./index')
+
+    const ack = await flowCenterApi.changeFlowAndDelete(['1001', '1002'], '2001', '2002')
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/flow/changeFlowAndDelete')
+    expect(init.method).toBe('POST')
+    // currentFlowId 必填（本接口唯一删除的流程），flowId 是可选的目标流程
+    expect(JSON.parse(String(init.body))).toEqual({ sourceIds: [1001, 1002], currentFlowId: 2001, flowId: 2002 })
+    expect(ack.ok).toBe(true)
+
+    // 解绑场景：不传 flowId（后端按空 / <=0 判定「只解绑」），不要落成 0
+    await flowCenterApi.changeFlowAndDelete(['1003'], '2001')
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)))
+      .toEqual({ sourceIds: [1003], currentFlowId: 2001 })
+  })
+
+  it('changeFlowAndDelete 失败：抛 data 里的真实原因，不把固定的「错误信息:运行时异常」甩给用户', async () => {
+    // 后端业务失败仍是 HTTP 200：msg 是固定文案，真原因在 data（接口文档 §4）
+    fetchMock.mockResolvedValue(jsonResponse({
+      success: false, code: '500', msg: '错误信息:运行时异常', data: '流程仍有来源关联，请先解除关联',
+    }))
+    const { flowCenterApi } = await import('./index')
+    await expect(flowCenterApi.changeFlowAndDelete(['1001'], '2001'))
+      .rejects.toThrow('流程仍有来源关联，请先解除关联')
+  })
+
+  it('changeFlowAndDelete 前置校验：flowId 等于 currentFlowId、超过 5000 条都在本地拦下不发请求', async () => {
+    const { flowCenterApi } = await import('./index')
+    expect((await flowCenterApi.changeFlowAndDelete(['1001'], '2001', '2001')).message)
+      .toContain('不能是当前流程本身')
+    expect((await flowCenterApi.changeFlowAndDelete(Array.from({ length: 5001 }, (_, i) => String(i)), '2001')).message)
+      .toContain('5000')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('GET /v1/flow/deleteFlow：ids 逗号串走 query（逻辑删除）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '删除成功，共删除 2 条', data: null }))
     const { flowCenterApi } = await import('./index')
