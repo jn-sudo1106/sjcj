@@ -42,6 +42,10 @@ describe('AppSidebar', () => {
     expect(groupTitles).toContain('问数配置')
     expect(groupTitles.indexOf('运行与监控')).toBeLessThan(groupTitles.indexOf('问数配置'))
     expect(groupTitles.indexOf('问数配置')).toBeLessThan(groupTitles.indexOf('系统设置'))
+    // 辅助工具（1020）独立成组，位置钉在「问数配置」之后、「系统设置」之前；系统设置仍是最后一组
+    expect(groupTitles).toContain('辅助工具')
+    expect(groupTitles.indexOf('问数配置')).toBeLessThan(groupTitles.indexOf('辅助工具'))
+    expect(groupTitles.indexOf('辅助工具')).toBeLessThan(groupTitles.indexOf('系统设置'))
     expect(groupTitles.indexOf('系统设置')).toBe(groupTitles.length - 1)
   })
 
@@ -49,6 +53,7 @@ describe('AppSidebar', () => {
     const { wrapper } = await mountAt('/template-config')
     const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '问数配置')!
     // 1015 迁入旧「系统配置」域后组下有「问数系统配置」；同日迁入旧「基础配置」组，「基础配置」排在模板配置之前
+    // 1020 的「辅助工具」是独立分组，不在这里
     expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['基础配置', '模板配置', '问数系统配置'])
     const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
     expect(active).toHaveLength(1)
@@ -122,5 +127,23 @@ describe('AppSidebar', () => {
     const monitor = wrapper.findAll('.rc-nav-item').find((item) => item.text().includes('监控中心'))
     expect(monitor?.classes('active')).toBe(true)
     expect(wrapper.text()).not.toContain('监控工具')
+  })
+
+  // 辅助工具（1020）：独立成一个分组（组标题「辅助工具」），不是塞在运行与监控/问数配置里。
+  // 高亮靠 useActiveNavKey 用路径段查 TABS，key 与路径段对不上就会静默高亮成采集资产总览。
+  it('辅助工具独立成组，/auxiliary-tool 下高亮自身', async () => {
+    const { wrapper } = await mountAt('/auxiliary-tool')
+    const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '辅助工具')!
+    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['辅助工具'])
+
+    // 不许再出现在这两个组里（挪回去就会让「辅助工具」组变空而从侧栏消失）
+    for (const label of ['运行与监控', '问数配置']) {
+      const other = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === label)!
+      expect(other.findAll('.rc-nav-item').map((i) => i.text())).not.toContain('辅助工具')
+    }
+
+    const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
+    expect(active).toHaveLength(1)
+    expect(active[0].text()).toContain('辅助工具')
   })
 })

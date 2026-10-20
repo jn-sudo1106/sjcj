@@ -4,7 +4,7 @@ export interface TabMeta {
   path: string
   label: string
   desc: string
-  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools' | 'intelligence' | 'template' | 'settings' | 'config'
+  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools' | 'intelligence' | 'template' | 'auxiliary' | 'settings' | 'config'
   /** 菜单权限码（0924-02）。侧栏与路由守卫都经 canAccess() 判断；不声明 = 放行 */
   permission?: string
 }
@@ -26,6 +26,7 @@ export const TABS: TabMeta[] = [
   { key: 'tasks', path: '/tasks', label: '任务中心', desc: '全局任务查询、详情与重发', group: 'tools' },
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
+
   // 问数配置 → 基础配置（1015 迁入，旧 ai-chat-view「基础配置」组 /demo/entity-build + /demo/vector-data）：
   // 侧栏排在「模板配置」之前，子模块（表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理、实体改写管理）在页内以 tab 呈现（见 BASE_CONFIG_TABS 与 views/TemplateConfig/BaseConfig/index.vue）。
   { key: 'base-config', path: '/base-config', label: '基础配置', desc: '表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理、实体改写管理（旧 ai-chat-view「基础配置」域）', group: 'template' },
@@ -35,6 +36,12 @@ export const TABS: TabMeta[] = [
   // 问数系统配置（1015 迁入）：旧 ai-chat-view「系统配置」组（/config 参数设置 + /page-config 页面配置），
   // 旧平台是两个独立路由页，这里与模板配置同口径收成侧栏一个入口 + 页内两个 tab（默认参数设置）。
   { key: 'system-config', path: '/system-config', label: '问数系统配置', desc: '参数设置、页面配置（旧 ai-chat-view「系统配置」域）', group: 'template' },
+  // 辅助工具（1020 新增）：独立成组（group: auxiliary），组内当前只有这一条入口，
+  // 页面见 views/AuxiliaryTool/index.vue。以后新增的零散排障小工具都挂到本组，
+  // 而不是各自去挤「运行与监控」或「问数配置」。
+  // key 必须等于 path 第一段：useActiveNavKey 按段查 TABS，查不到会静默回退 TABS[0]（采集资产总览）。
+  // 同理 navIcons 里漏配 key 不会报错，只会渲染出一个空的图标方块，AppSidebar.test.ts 锁了这条。
+  { key: 'auxiliary-tool', path: '/auxiliary-tool', label: '辅助工具', desc: '零散排障小工具的统一入口（缓存清理、ID 转换、埋点自检等）', group: 'auxiliary' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本、数据权限设置', group: 'settings', permission: 'settings' },

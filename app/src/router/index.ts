@@ -40,6 +40,9 @@ const routes: RouteRecordRaw[] = [
       // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：参数设置 + 页面配置两个页内 tab，
       // 页面代码放在 views/TemplateConfig/SystemConfig/ 下（与模板配置同域），元数据见 router/tabs.ts 的 SYSTEM_CONFIG_TABS。
       { path: '/system-config', component: () => import('../views/TemplateConfig/SystemConfig/index.vue') },
+      // 辅助工具（1020）：独立一级分组（元数据见 router/tabs.ts 的 TABS，group: auxiliary），
+      // 页面本体在 views/AuxiliaryTool/index.vue。不声明 permission，与其余入口一样默认放行。
+      { path: '/auxiliary-tool', component: () => import('../views/AuxiliaryTool/index.vue') },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
