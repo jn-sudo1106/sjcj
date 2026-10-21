@@ -254,6 +254,9 @@ export const ES_DYNAMICS = ['strict', 'true', 'false']
 export const ES_PARTITIONS = ['none', 'day', 'month', 'year']
 export const ES_FIELD_TYPES = ['keyword', 'text', 'date', 'boolean', 'long', 'integer',
   'float', 'double', 'scaled_float']
+export const ES_FILE_MAX_BYTES_DEFAULT = 10 * 1024 * 1024
+export const ES_BULK_MAX_BYTES_DEFAULT = 20 * 1024 * 1024
+export const ES_FILE_BYTES_LIMIT = 100 * 1024 * 1024
 
 export interface SyncCkSinkOptions {
   engine: string
@@ -266,6 +269,19 @@ export interface SyncEsFieldOverride {
   keyword: boolean
   format?: string
 }
+export interface SyncEsFileContentField {
+  /** 存放平台文件 key 的目标列，值形如 /bucket/object */
+  pathColumn: string
+  /** 写入 Base64 字符串的目标列，mapping 固定为 keyword + index:false */
+  contentColumn: string
+}
+export interface SyncEsFileContent {
+  fields: SyncEsFileContentField[]
+  /** 单文件下载上限（字节），超过直接失败 */
+  maxFileBytes: number
+  /** 单次 _bulk 请求体上限（字节），超过按文档切分 */
+  maxBulkBytes: number
+}
 export interface SyncEsSinkOptions {
   index?: string
   shards: number
@@ -275,6 +291,7 @@ export interface SyncEsSinkOptions {
   timeField?: string
   idColumns: string[]
   fieldOverrides: SyncEsFieldOverride[]
+  fileContent?: SyncEsFileContent
 }
 export interface SyncSinkOptions {
   ck?: SyncCkSinkOptions | null
@@ -337,6 +354,10 @@ export function isEsIndexNameValid(name: string): boolean {
   return !!trimmed && trimmed === cleanEsIndexName(trimmed)
 }
 
+function defaultFileContent(): SyncEsFileContent {
+  return { fields: [], maxFileBytes: ES_FILE_MAX_BYTES_DEFAULT, maxBulkBytes: ES_BULK_MAX_BYTES_DEFAULT }
+}
+
 export function renderSinkDefaults(databaseType: unknown, columns: SyncColumnMap[]): SyncSinkOptions | null {
   if (!isSinkTarget(databaseType)) return null
   if (Number(databaseType) === 4) {
@@ -347,6 +368,7 @@ export function renderSinkDefaults(databaseType: unknown, columns: SyncColumnMap
     es: {
       index: '', shards: 1, replicas: 1, dynamic: 'strict', indexPartition: 'none',
       timeField: defaultTimeField(columns), idColumns: [], fieldOverrides: [],
+      fileContent: defaultFileContent(),
     },
   }
 }
@@ -366,6 +388,7 @@ export function parseSinkOptions(raw: unknown, databaseType: unknown, columns: S
     return { ck: { engine: ck?.engine || defaults.ck.engine, versionColumn: ck?.versionColumn || '', orderByColumns: ck?.orderByColumns ?? [] }, es: null }
   }
   const es = saved?.es
+  const savedFile = es?.fileContent
   return {
     ck: null,
     es: {
@@ -373,8 +396,20 @@ export function parseSinkOptions(raw: unknown, databaseType: unknown, columns: S
       dynamic: es?.dynamic || defaults.es!.dynamic, indexPartition: es?.indexPartition || 'none',
       timeField: es?.timeField || defaults.es!.timeField,
       idColumns: es?.idColumns ?? [], fieldOverrides: es?.fieldOverrides ?? [],
+      fileContent: {
+        fields: (savedFile?.fields ?? []).map((i) => ({
+          pathColumn: String(i.pathColumn ?? ''), contentColumn: String(i.contentColumn ?? ''),
+        })),
+        maxFileBytes: positiveOr(savedFile?.maxFileBytes, ES_FILE_MAX_BYTES_DEFAULT),
+        maxBulkBytes: positiveOr(savedFile?.maxBulkBytes, ES_BULK_MAX_BYTES_DEFAULT),
+      },
     },
   }
+}
+
+function positiveOr(value: unknown, fallback: number): number {
+  const num = Number(value)
+  return Number.isFinite(num) && num > 0 ? Math.round(num) : fallback
 }
 
 /** 提交前整理：空白输入按「未配置」处理，未填列名的覆盖行直接丢掉 */
@@ -392,18 +427,25 @@ export function sanitizeSinkOptions(options: SyncSinkOptions | null, databaseTyp
   }
   const es = options.es
   if (!es) return null
-  return {
-    ck: null,
-    es: {
-      ...es,
-      index: String(es.index ?? '').trim(),
-      timeField: String(es.timeField ?? '').trim(),
-      idColumns: (es.idColumns ?? []).map((i) => String(i).trim()).filter(Boolean),
-      fieldOverrides: (es.fieldOverrides ?? [])
-        .filter((i) => String(i.column ?? '').trim())
-        .map((i) => ({ ...i, column: i.column.trim(), type: i.type, format: String(i.format ?? '').trim() })),
-    },
+  const fileFields = (es.fileContent?.fields ?? [])
+    .map((i) => ({ pathColumn: String(i.pathColumn ?? '').trim(), contentColumn: String(i.contentColumn ?? '').trim() }))
+    .filter((i) => i.pathColumn || i.contentColumn)
+  const normalized: SyncEsSinkOptions = {
+    ...es,
+    index: String(es.index ?? '').trim(),
+    timeField: String(es.timeField ?? '').trim(),
+    idColumns: (es.idColumns ?? []).map((i) => String(i).trim()).filter(Boolean),
+    fieldOverrides: (es.fieldOverrides ?? [])
+      .filter((i) => String(i.column ?? '').trim())
+      .map((i) => ({ ...i, column: i.column.trim(), type: i.type, format: String(i.format ?? '').trim() })),
   }
+  // 一项都没填就按未配置处理，老任务的提交体不会平白多出一个空节点
+  normalized.fileContent = fileFields.length ? {
+    fields: fileFields,
+    maxFileBytes: positiveOr(es.fileContent?.maxFileBytes, ES_FILE_MAX_BYTES_DEFAULT),
+    maxBulkBytes: positiveOr(es.fileContent?.maxBulkBytes, ES_BULK_MAX_BYTES_DEFAULT),
+  } : undefined
+  return { ck: null, es: normalized }
 }
 
 /**
@@ -438,6 +480,46 @@ export function sinkOptionsProblem(options: SyncSinkOptions | null, columns: Syn
   if (unknownId) return `ES 的 _id 组成列 ${unknownId} 不在目标列里`
   const badOverride = (es.fieldOverrides ?? []).find((i) => !known(i.column) || !ES_FIELD_TYPES.includes(i.type))
   if (badOverride) return `ES 列覆盖 ${badOverride.column || '（未选列）'} 的列名或 mapping 类型不在可选范围内`
+  return fileContentProblem(es, columns)
+}
+
+/** 文件内容内联的预检：列名、内容列身份冲突、重复配置与上限，判定口径与后端校验器一致 */
+function fileContentProblem(es: SyncEsSinkOptions, columns: SyncColumnMap[]): string {
+  const fileContent = es.fileContent
+  if (!fileContent) return ''
+  if (!(Number(fileContent.maxFileBytes) > 0)) return '单文件下载上限必须大于 0'
+  if (!(Number(fileContent.maxBulkBytes) > 0)) return '单批请求上限必须大于 0'
+  if (fileContent.maxFileBytes > ES_FILE_BYTES_LIMIT) return '单文件下载上限不能超过 100MB'
+  if (fileContent.maxBulkBytes > ES_FILE_BYTES_LIMIT) return '单批请求上限不能超过 100MB'
+  const fields = fileContent.fields ?? []
+  if (!fields.length) return ''
+  const names = sinkColumnChoices(columns).map((item) => item.name.toLowerCase())
+  const known = (name: string) => names.includes(name.toLowerCase())
+  const effectiveTime = String(es.timeField || defaultTimeField(columns)).toLowerCase()
+  const effectiveIds = (es.idColumns?.length ? es.idColumns : dedupColumns(columns)).map((i) => i.toLowerCase())
+  const overrideColumns = (es.fieldOverrides ?? [])
+    .map((i) => String(i.column ?? '').trim().toLowerCase()).filter(Boolean)
+  const contentColumns: string[] = []
+  for (const field of fields) {
+    const pathColumn = String(field.pathColumn ?? '').trim()
+    const contentColumn = String(field.contentColumn ?? '').trim()
+    if (!pathColumn || !contentColumn) return '文件内容内联的文件路径列与内容列都必须选择'
+    if (!known(pathColumn)) return `文件路径列 ${pathColumn} 不在目标列里`
+    if (!known(contentColumn)) return `文件内容列 ${contentColumn} 不在目标列里`
+    const contentKey = contentColumn.toLowerCase()
+    if (contentKey === effectiveTime) return `文件内容列 ${contentColumn} 不能与水位列相同`
+    if (effectiveIds.includes(contentKey)) return `文件内容列 ${contentColumn} 不能是文档 _id 组成列`
+    if (overrideColumns.includes(contentKey)) {
+      return `文件内容列 ${contentColumn} 的 mapping 固定为 keyword(index:false)，不能再配置列覆盖`
+    }
+    if (contentColumns.includes(contentKey)) return `文件内容列 ${contentColumn} 重复配置`
+    contentColumns.push(contentKey)
+  }
+  const overlap = fields.find((field) => {
+    const pathKey = String(field.pathColumn ?? '').trim().toLowerCase()
+    return contentColumns.includes(pathKey) && pathKey !== String(field.contentColumn ?? '').trim().toLowerCase()
+  })
+  if (overlap) return `文件路径列 ${overlap.pathColumn} 同时是另一个文件字段的内容列，取值会被覆盖`
   return ''
 }
 
@@ -461,9 +543,17 @@ export function sinkPreviewLines(options: SyncSinkOptions | null, databaseType: 
   const es = options?.es
   const index = es?.index?.trim() || autoEsIndexName(schema, table)
   const partition = es?.indexPartition || 'none'
-  return [
+  const lines = [
     `索引 ${index}${partition !== 'none' ? `（按 ${partition} 分区，数据写入 ${index}-日期后缀）` : '（单索引，不分区）'}`,
     `分片 ${es?.shards ?? 1} / 副本 ${es?.replicas ?? 1}，dynamic=${es?.dynamic ?? 'strict'}`,
     `水位列 ${es?.timeField || defaultTimeField(columns)}，_id 取 ${(es?.idColumns?.length ? es.idColumns : dedupColumns(columns)).join(' + ') || '—'}`,
   ]
+  const fileContent = es?.fileContent
+  const fileFields = fileContent?.fields ?? []
+  if (fileContent && fileFields.length) {
+    const mb = (bytes: number) => `${Math.round((bytes / 1024 / 1024) * 100) / 100}MB`
+    lines.push(`文件内容 ${fileFields.map((i) => `${i.pathColumn} → ${i.contentColumn}`).join('、')}`
+      + `（Base64 字符串，keyword 不建索引；单文件上限 ${mb(fileContent.maxFileBytes)}，单批上限 ${mb(fileContent.maxBulkBytes)}）`)
+  }
+  return lines
 }

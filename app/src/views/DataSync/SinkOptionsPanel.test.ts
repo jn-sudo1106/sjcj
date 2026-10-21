@@ -163,4 +163,23 @@ describe('SinkOptionsPanel', async () => {
     await flushPromises()
     expect(editing.find('p.sink-warn').text()).toContain('不会改动已建好的表')
   })
+
+  it('文件字段可增删，逐列选择后进提交体与预览', async () => {
+    const wrapper = await mountHost(5)
+    const add = wrapper.findAll('button').filter((item) => item.text().includes('增加文件字段'))[0]
+    await add.trigger('click')
+    await flushPromises()
+    // 刚加的行两侧都没选列，提交时必须丢掉
+    expect(sanitizeSinkOptions(wrapper.vm.options, 5)?.es?.fileContent).toBeUndefined()
+
+    const selects = () => wrapper.findAllComponents({ name: 'ElSelect' })
+    selects().filter((item) => item.props('placeholder') === '选择路径列')[0]
+      .vm.$emit('update:modelValue', 'entry_id')
+    selects().filter((item) => item.props('placeholder') === '选择内容列')[0]
+      .vm.$emit('update:modelValue', 'name')
+    await flushPromises()
+    expect(sanitizeSinkOptions(wrapper.vm.options, 5)?.es?.fileContent?.fields)
+      .toEqual([{ pathColumn: 'entry_id', contentColumn: 'name' }])
+    expect(preview(wrapper)).toContain('entry_id → name')
+  })
 })
