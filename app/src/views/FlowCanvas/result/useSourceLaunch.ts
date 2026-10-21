@@ -30,6 +30,10 @@ export type SourceFilter = {
   defaultFlowId?: string
   /** 「我的视图」目录（10-15）：`sourcePaged` 的 `viewCategoryId`。只有 sourcePaged 认，其它按条件的接口不认 */
   viewCategoryId?: string
+  /** 系统目录（2026-10-21）：`sourcePaged` 的 `categorys`，逗号分隔、只匹配直属，调用方已展开子级 */
+  categorys?: string
+  /** 目录范围的人话，只用于确认弹窗（describeFilters），sourcePaged 不认、不会发给后端 */
+  dirLabel?: string
   name?: string
   /** 按源 URL 子串过滤（2026-09-17）。后端 `sourcePaged` 的 `sourceUrl`，与 `name` 是两个
    *  独立条件、同时给则取交集——实测 name=盛科 4 条、sourceUrl=centec 1 条、两者同给 1 条、
@@ -100,7 +104,12 @@ export function chunkIds(ids: string[], size = LAUNCH_BATCH_SIZE): string[][] {
 /** 筛选条件的人话，给确认弹窗看，不是给后端看。 */
 export function describeFilters(query: SourceFilter): string {
   const parts: string[] = []
-  if (query.sourceIds) parts.push(`源 ID ${query.sourceIds}`)
+  if (query.dirLabel) parts.push(query.dirLabel)
+  // 业务目录范围会把成百上千个源 ID 放进 sourceIds，原样拼进确认弹窗没法看，超过 10 个只写个数
+  if (query.sourceIds) {
+    const ids = query.sourceIds.split(',').filter(Boolean)
+    parts.push(ids.length > 10 ? `源 ID ${ids.length} 个` : `源 ID ${query.sourceIds}`)
+  }
   if (query.flowId) parts.push(`流程 #${query.flowId}`)
   if (query.defaultFlowId) parts.push(`默认流程 #${query.defaultFlowId}`)
   if (query.sourceGroupId) parts.push(`来源组 #${query.sourceGroupId}`)

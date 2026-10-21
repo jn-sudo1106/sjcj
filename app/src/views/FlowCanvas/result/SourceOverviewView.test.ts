@@ -43,6 +43,26 @@ describe('SourceOverviewView', () => {
     vi.restoreAllMocks()
     sessionStorage.clear()
   })
+  // 2026-10-21 源管理「系统目录」页签左侧目录：系统目录按 categorys 筛，范围变了重查，导出 / 发任务同口径
+  it('系统目录范围：列表、导出、按条件发任务都带 categorys；范围变了重查；目录说明不发给后端', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeCategoryIds: ['100', '101'], scopeLabel: '系统目录：财经资讯（含子级）' } })
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ categorys: '100,101', dirLabel: '系统目录：财经资讯（含子级）' }))
+    await wrapper.get('[data-testid="source-export"]').trigger('click')
+    await flushPromises()
+    for (const [query] of page.mock.calls) expect(query?.categorys).toBe('100,101')
+    page.mockClear()
+    await wrapper.setProps({ scopeCategoryIds: ['200'] })
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ categorys: '200' }))
+    await wrapper.setProps({ scopeCategoryIds: undefined, scopeLabel: undefined })
+    await flushPromises()
+    expect(page.mock.lastCall?.[0]).not.toHaveProperty('categorys')
+    wrapper.unmount()
+  })
+
   it('空分组不请求全部源；分组条件与手动源 ID 取交集，清空仍限定分组', async () => {
     const api = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: [] } })
