@@ -748,7 +748,6 @@ onUnmounted(() => {
     >
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
         <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图目录</button>
-        <button class="ca-save-view sm" type="button" data-testid="source-add-to-biz" @click="openBizPicker(ids)">加入业务目录</button>
         <button v-if="bizActive" class="ca-save-view sm" type="button" data-testid="source-remove-from-biz" @click="removeFromBiz(ids)">移出当前业务目录</button>
       </template>
       <template v-if="scope === 'all'" #summary-extra="{ ids }">

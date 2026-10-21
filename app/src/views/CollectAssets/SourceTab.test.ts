@@ -380,7 +380,7 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     }
   })
 
-  it('右侧勾选源后，两种加入入口都带入源和左侧业务目录，不把含子级范围当作目标', async () => {
+  it('右侧勾选源后只保留常驻加入入口，带入源和左侧目录，不把含子级范围当作目标', async () => {
     sourceDirs.resetSourceDirCache()
     const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
     const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
@@ -391,15 +391,15 @@ describe('SourceTab 源列表视图（0924-06）', () => {
       wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', dirIds: ['900', '901'], labels: [{ id: '900', path: '股票数据', hasKids: true }] })
       await flushPromises()
       await wrapper.get('[data-testid="source-check-1"]').setValue(true)
-      for (const entry of ['source-add-to-biz', 'source-pick-for-biz']) {
-        await wrapper.get(`[data-testid="${entry}"]`).trigger('click')
-        await flushPromises()
-        const dialog = wrapper.findComponent({ name: 'BizDirPickerDialog' })
-        expect(dialog.props('initialSourceIds')).toEqual(['1'])
-        expect(dialog.props('initialDirectoryIds')).toEqual(['900'])
-        dialog.vm.$emit('close')
-        await flushPromises()
-      }
+      expect(wrapper.find('[data-testid="source-add-to-biz"]').exists()).toBe(false)
+      expect(wrapper.findAll('[data-testid="source-pick-for-biz"]')).toHaveLength(1)
+      await wrapper.get('[data-testid="source-pick-for-biz"]').trigger('click')
+      await flushPromises()
+      const dialog = wrapper.findComponent({ name: 'BizDirPickerDialog' })
+      expect(dialog.props('initialSourceIds')).toEqual(['1'])
+      expect(dialog.props('initialDirectoryIds')).toEqual(['900'])
+      dialog.vm.$emit('close')
+      await flushPromises()
     } finally {
       wrapper.unmount()
       for (const spy of [categories, membership, scope, page]) spy.mockRestore()
