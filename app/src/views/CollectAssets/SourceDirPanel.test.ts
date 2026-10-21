@@ -59,10 +59,29 @@ describe('SourceDirPanel', () => {
     w.unmount()
   })
 
-  it('业务目录为空时全选仍是空范围，不退回未归类的源', async () => {
-    vi.mocked(sourceApi.sourceCategories).mockResolvedValue([])
+  it('业务目录树为空时默认切到系统目录，收起状态不变；手动切回业务目录不再自动跳转', async () => {
+    vi.mocked(sourceApi.sourceCategories).mockImplementation(async (parentId) => parentId === '-2' ? [] : TREE[parentId ?? 'root'] ?? [])
+    const w = await mountPanel(true, 'biz')
+    expect(lastScope(w)).toMatchObject({ kind: 'sys', all: false, dirIds: [] })
+    expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('系统目录')
+    expect(w.emitted('update:collapsed')).toBeUndefined()
+    await w.setProps({ collapsed: false })
+    expect(w.get('[data-testid="dir-kind-sys"]').attributes('aria-selected')).toBe('true')
+    expect(w.findAll('[data-testid="dir-name"]').map((n) => n.text())).toEqual(['财经资讯', '海外社媒'])
+    await w.get('[data-testid="dir-kind-biz"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="dir-kind-biz"]').attributes('aria-selected')).toBe('true')
+    expect(w.text()).toContain('还没有业务目录')
+    w.unmount()
+  })
+
+  it('业务目录请求失败不视为空目录，不自动切系统目录', async () => {
+    vi.mocked(sourceApi.sourceCategories).mockRejectedValue(new Error('网络错误'))
     const w = await mountPanel(true, 'biz')
     expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: [] })
+    expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录')
+    await w.setProps({ collapsed: false })
+    expect(w.text()).toContain('目录加载失败：网络错误')
     w.unmount()
   })
 

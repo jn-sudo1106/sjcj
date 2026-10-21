@@ -305,18 +305,41 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     sourceDirs.resetSourceDirCache()
   })
 
-  it('业务目录为空时默认列表保持空范围，不请求全库源', async () => {
+  it('业务目录树为空时默认切系统目录，解除业务源 ID 范围并正常查询列表', async () => {
     sourceDirs.resetSourceDirCache()
     const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
     const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const { wrapper, list } = await mountList()
     await flushPromises()
-    expect(list.props('scopeSourceIds')).toEqual([])
-    expect(page).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="dir-panel-rail"]').text()).toContain('系统目录')
+    expect(wrapper.find('.ca-dir-layout.collapsed').exists()).toBe(true)
+    expect(list.props('scopeSourceIds')).toBeUndefined()
+    expect(list.props('scopeCategoryIds')).toBeUndefined()
+    expect(page).toHaveBeenCalled()
+    for (const [query] of page.mock.calls) expect(query?.sourceIds).toBeUndefined()
     wrapper.unmount()
     for (const spy of [categories, membership, page]) spy.mockRestore()
     sourceDirs.resetSourceDirCache()
+  })
+
+  it('已有业务目录但目录内没有源时仍默认业务目录，不退回系统目录或全库源', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue([])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    try {
+      await flushPromises()
+      expect(wrapper.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录全')
+      expect(list.props('scopeSourceIds')).toEqual([])
+      expect(page).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
   })
 
   it('常驻入口在同一弹窗从全库选源和目录，保存后刷新当前范围', async () => {

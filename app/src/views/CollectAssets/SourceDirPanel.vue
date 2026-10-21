@@ -143,11 +143,16 @@ function clear() {
   focus[kind.value] = null
   void emitScope()
 }
-async function selectAll() {
+async function selectAll(fallbackToSystem = false) {
   const k = kind.value
   selectingAll.value = true
   try {
     const roots = await ensureKids(k)
+    if (fallbackToSystem && k === 'biz' && !roots.length && !loadError.value) {
+      allChecked.biz = false
+      await switchKind('sys')
+      return
+    }
     const ids = await expandDirIds(k, roots.map((node) => node.id))
     checked[k].clear()
     ids.forEach((id) => checked[k].add(id))
@@ -193,7 +198,7 @@ watch([keyword, kind], ([kw]) => {
 function parentPathOf(node: DirNode): string {
   return node.parentId ? dirPath(node.parentId).join(' / ') : ''
 }
-void selectAll()
+void selectAll(true)
 </script>
 
 <template>
