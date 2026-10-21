@@ -201,6 +201,25 @@ export async function removeSourcesFromBizDirs(categoryIds: string[], sourceIds:
   }
 }
 
+/**
+ * 把源从一组业务目录移到另一个目录（10-21）。没有移动接口：**先加入目标、再从原目录移出**，
+ * 中途失败最多两边都有，不会两边都没有。`toDirId` 为空 = 仅移出。失败时 error.step 标出卡在哪一步。
+ */
+export async function moveSourcesInBiz(fromDirIds: string[], toDirId: string | null, sourceIds: string[]): Promise<void> {
+  if (toDirId) {
+    try {
+      await addSourcesToBizDir(toDirId, sourceIds)
+    } catch (error) {
+      throw Object.assign(new Error((error as Error)?.message ?? String(error)), { step: 'add' as const })
+    }
+  }
+  try {
+    await removeSourcesFromBizDirs(fromDirIds.filter((id) => id !== toDirId), sourceIds)
+  } catch (error) {
+    throw Object.assign(new Error((error as Error)?.message ?? String(error)), { step: 'remove' as const })
+  }
+}
+
 /** 测试用：清掉模块级缓存 */
 export function resetSourceDirCache() {
   childrenCache.clear()

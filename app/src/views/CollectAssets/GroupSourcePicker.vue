@@ -14,6 +14,8 @@ const props = withDefaults(defineProps<{
   pickMode?: boolean
   title?: string
   confirmText?: string
+  initialSourceIds?: string[]
+  busy?: boolean
   /**
    * 「我的视图」目录版（2026-10-13）：查询条件加「来源组」。选中某个组后列表只列组成员，
    * 上方给出「绑定整个来源组」（emit bindGroup，组里新加的源自动带进视图）；不点就是只勾几个源。
@@ -29,7 +31,7 @@ const props = withDefaults(defineProps<{
   /** 打开时预选的来源组 / 是否只看未在视图的源（视图页提示条「查看并加入」进来） */
   initialGroupId?: string
   initialMissingOnly?: boolean
-}>(), { backendMode: false, pickMode: false, groupFilter: false, boundGroups: () => [], missingByGroup: () => ({}), initialGroupId: '', initialMissingOnly: false })
+}>(), { backendMode: false, pickMode: false, initialSourceIds: () => [], groupFilter: false, boundGroups: () => [], missingByGroup: () => ({}), initialGroupId: '', initialMissingOnly: false })
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   /** backendMode 保存成功后通知父级重拉（revision 会变） */
@@ -105,12 +107,13 @@ function search() { page.value = 1; void load() }
 watch(() => props.modelValue, open => {
   ++sequence
   if (open) {
-    selected.value = []; keyword.value = ''; page.value = 1
+    selected.value = [...new Set(props.initialSourceIds)]; keyword.value = ''; page.value = 1
+    if (selected.value.length) { field.value = 'sourceIds'; keyword.value = selected.value.join(',') }
     groupId.value = props.groupFilter ? props.initialGroupId : ''
     missingOnly.value = !!groupId.value && props.initialMissingOnly
     void load(); void loadGroupOptions()
   }
-})
+}, { immediate: true })
 function toggle(id: string) {
   selected.value = selected.value.includes(id) ? selected.value.filter(value => value !== id) : [...selected.value, id]
 }
@@ -163,7 +166,10 @@ async function save() {
 }
 </script>
 <template>
-  <el-dialog :model-value="modelValue" :title="title || '选择源加入分组'" width="980px" style="max-width: calc(100vw - 32px)" append-to-body @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" :title="title || '选择源加入分组'" width="980px" style="max-width: calc(100vw - 32px)" append-to-body :close-on-click-modal="!busy" :close-on-press-escape="!busy" :show-close="!busy" @update:model-value="emit('update:modelValue', $event)">
+    <div class="picker-layout" :class="{ 'with-aside': $slots.aside }" :inert="busy">
+    <aside v-if="$slots.aside" class="picker-aside"><slot name="aside" /></aside>
+    <div class="picker-main">
     <div class="picker-filter">
       <el-select v-if="groupFilter" v-model="groupId" clearable placeholder="全部来源组" style="width: 160px" aria-label="来源组" data-testid="picker-group" @change="onGroupChange">
         <el-option v-for="g in groupOptions" :key="g.id" :label="g.name" :value="g.id" :disabled="g.state !== 'ACTIVE'" />
@@ -193,18 +199,27 @@ async function save() {
       <el-table-column width="42">
         <template #header><el-checkbox :model-value="pageAllSelected" :indeterminate="pageSomeSelected" :disabled="!rows.length" aria-label="全选本页" title="全选本页" data-testid="picker-select-page" @change="togglePage(!!$event)" /></template>
         <template #default="{ row }"><el-checkbox :model-value="selected.includes(row.sourceId)" :aria-label="`选择 ${row.name}`" @change="toggle(row.sourceId)" /></template></el-table-column>
-      <el-table-column prop="sourceId" label="源 ID" width="120" />
+      <el-table-column prop="sourceId" label="源 ID" :width="$slots.aside ? 100 : 120" />
       <el-table-column label="源名称" min-width="160" show-overflow-tooltip>
         <template #default="{ row }">{{ row.name }}<el-tag v-if="missingSet.has(row.sourceId)" size="small" type="warning" effect="plain" class="picker-missing-tag" data-testid="picker-missing-tag">未在这里</el-tag></template>
       </el-table-column>
       <el-table-column prop="siteId" label="网站 ID" width="100" />
-      <el-table-column prop="url" label="URL" min-width="200" show-overflow-tooltip />
+      <el-table-column prop="url" label="URL" :min-width="$slots.aside ? 140 : 200" show-overflow-tooltip />
     </el-table>
     <el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[20, 40, 100]" layout="total, sizes, prev, pager, next" small @current-change="load" @size-change="search" />
-    <template #footer><div class="picker-footer"><span>已选 {{ selected.length }} 个源（跨页保留）</span><el-button :icon="Refresh" circle size="small" aria-label="刷新源列表" title="刷新源列表" @click="load" /><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :disabled="!selected.length" @click="save">{{ confirmText || '加入分组' }}</el-button></div></template>
+    </div>
+    </div>
+    <template #footer><div class="picker-footer"><span>已选 {{ selected.length }} 个源（跨页保留）</span><el-button :icon="Refresh" circle size="small" :disabled="busy" aria-label="刷新源列表" title="刷新源列表" @click="load" /><el-button :disabled="busy" @click="emit('update:modelValue', false)">取消</el-button><slot name="submit" :ids="selected"><el-button type="primary" :disabled="!selected.length" @click="save">{{ confirmText || '加入分组' }}</el-button></slot></div></template>
   </el-dialog>
 </template>
 <style scoped>
+.picker-layout.with-aside { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; }
+.picker-main { min-width: 0; }
+.picker-aside { min-width: 0; padding-right: 12px; border-right: 1px solid var(--rc-border); }
+@media (max-width: 760px) {
+  .picker-layout.with-aside { grid-template-columns: minmax(0, 1fr); }
+  .picker-aside { padding-right: 0; border-right: 0; }
+}
 .picker-filter { display: flex; gap: 8px; margin-bottom: 12px; }
 .picker-filter .el-input { flex: 1; }
 .picker-bind { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 12px; }

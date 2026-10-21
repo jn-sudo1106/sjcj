@@ -9,7 +9,7 @@ vi.mock('@/api/client', async (importOriginal) => {
 import { sourceApi, type SourceCategory } from './index'
 import {
   addSourcesToBizDir, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren,
-  removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
+  moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
 } from './sourceDirs'
 import { describeFilters } from '@/views/FlowCanvas/result/useSourceLaunch'
 
@@ -107,5 +107,36 @@ describe('describeFilters · 目录范围', () => {
     const ids = Array.from({ length: 12 }, (_, i) => String(i)).join(',')
     expect(describeFilters({ dirLabel: '业务目录：股票数据（含子级）', sourceIds: ids })).toBe('业务目录：股票数据（含子级），源 ID 12 个')
     expect(describeFilters({ sourceIds: '1,2' })).toBe('源 ID 1,2')
+  })
+})
+
+describe('sourceDirs · 移动（10-21）', () => {
+  const calls = () => requestMock.mock.calls.filter(([ep]) => ep !== 'category/listSources').map(([ep, , opt]) => [ep, opt.httpParams.categoryId, opt.httpParams.sourceIds])
+
+  it('先加入目标、再从原目录（只限包含该源的目录）移出', async () => {
+    await moveSourcesInBiz(['9011494', '9011495', '9011496'], '9011515', ['1', '2'])
+    expect(calls()).toEqual([
+      ['category/addSources', 9011515, [1, 2]],
+      ['category/delSources', 9011495, [1]],
+      ['category/delSources', 9011496, [1, 2]],
+    ])
+  })
+
+  it('不选目标 = 仅移出；目标就在原目录里时不从目标移出', async () => {
+    await moveSourcesInBiz(['9011496'], null, ['3'])
+    expect(calls()).toEqual([['category/delSources', 9011496, [3]]])
+    requestMock.mockClear()
+    await moveSourcesInBiz(['9011496', '9011515'], '9011515', ['3'])
+    expect(calls()).toEqual([['category/addSources', 9011515, [3]], ['category/delSources', 9011496, [3]]])
+  })
+
+  it('加入失败就不移出（step=add）；移出失败标 step=remove', async () => {
+    requestMock.mockImplementation(async (ep: string, body: Record<string, unknown>) => {
+      if (ep === 'category/listSources') return { sourceIds: DIR_SOURCES[String(body.categoryId)] ?? [] }
+      throw new Error(ep === 'category/addSources' ? '加入挂了' : '移出挂了')
+    })
+    await expect(moveSourcesInBiz(['9011496'], '9011515', ['1'])).rejects.toMatchObject({ step: 'add', message: '加入挂了' })
+    expect(requestMock.mock.calls.some(([ep]) => ep === 'category/delSources')).toBe(false)
+    await expect(moveSourcesInBiz(['9011496'], null, ['1'])).rejects.toMatchObject({ step: 'remove', message: '移出挂了' })
   })
 })

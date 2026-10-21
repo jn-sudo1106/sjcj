@@ -17,8 +17,9 @@ import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSit
 import AddToViewDialog from './AddToViewDialog.vue'
 import SourceDirPanel, { type DirScope } from './SourceDirPanel.vue'
 import BizDirPickerDialog from './BizDirPickerDialog.vue'
+import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
-import { VIEW_DIR_ROOT_ID, BIZ_DIR_ROOT_ID, addSourcesToBizDir, bizMembership, bizScopeSourceIds, dirNode, removeSourcesFromBizDirs } from '@/api/sourceDirs'
+import { VIEW_DIR_ROOT_ID, BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirNode } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -407,19 +408,14 @@ function openSiteFromList(siteId: string) {
 // ---- 系统目录 / 业务目录（2026-10-21，原型 设计稿/原型设计/源管理_系统目录与业务目录_原型_2026-10-21.html）----
 // 只在「系统目录」页签的源列表视图里有：左侧 SourceDirPanel 选目录，系统目录按 categorys 筛，
 // 业务目录先算出目录（含子级）里的源 ID 再按源 ID 范围筛（后端口径见 api/sourceDirs.ts）。
-const DIR_COLLAPSED_KEY = 'sjcj.sourceDirPanel.collapsed'
-function readDirCollapsed(): boolean {
-  try { return localStorage.getItem(DIR_COLLAPSED_KEY) === '1' } catch { return false }
-}
-const dirCollapsed = ref(readDirCollapsed())
-watch(dirCollapsed, (v) => { try { localStorage.setItem(DIR_COLLAPSED_KEY, v ? '1' : '0') } catch { /* 存不了就只在本次生效 */ } })
+const dirCollapsed = ref(true)
 const showDirPanel = computed(() => props.scope === 'all' && view.value === 'table')
 const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
-const dirScope = ref<DirScope>({ kind: 'sys', dirIds: [], labels: [] })
-const dirActive = computed(() => showDirPanel.value && dirScope.value.dirIds.length > 0)
+const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
+const dirActive = computed(() => showDirPanel.value && (dirScope.value.all || dirScope.value.dirIds.length > 0))
 const bizActive = computed(() => dirActive.value && dirScope.value.kind === 'biz')
 const bizSourceIds = ref<string[]>([])
-const bizLoading = ref(false)
+const bizLoading = ref(true)
 const bizError = ref('')
 const dirScopeVersion = ref(0)
 let bizSeq = 0
@@ -443,6 +439,7 @@ function onDirScope(scope: DirScope) {
 }
 const dirKindLabel = computed(() => (dirScope.value.kind === 'biz' ? '业务目录' : '系统目录'))
 const dirLabelText = computed(() => {
+  if (dirScope.value.all) return '全部目录'
   const labels = dirScope.value.labels
   if (!labels.length) return ''
   return labels.length === 1 ? labels[0].path : `已选 ${labels.length} 个目录`
@@ -450,7 +447,7 @@ const dirLabelText = computed(() => {
 const dirLabelTip = computed(() => dirScope.value.labels.map((l) => l.path).join('\n'))
 const dirWithSub = computed(() => dirScope.value.labels.some((l) => l.hasKids))
 /** 给发任务确认弹窗看的范围描述 */
-const dirScopeLabel = computed(() => (dirActive.value ? `${dirKindLabel.value}：${dirScope.value.labels.map((l) => l.path).join('、')}${dirWithSub.value ? '（含子级）' : ''}` : ''))
+const dirScopeLabel = computed(() => (dirActive.value ? `${dirKindLabel.value}：${dirScope.value.all ? '全部目录' : dirScope.value.labels.map((l) => l.path).join('、')}${dirWithSub.value ? '（含子级）' : ''}` : ''))
 const listScopeCategoryIds = computed(() => (dirActive.value && dirScope.value.kind === 'sys' ? dirScope.value.dirIds : undefined))
 const listScopeSourceIds = computed(() => {
   if (props.scope !== 'all') return sourceScopeSourceIds.value
@@ -459,7 +456,7 @@ const listScopeSourceIds = computed(() => {
 const listScopeEmptyText = computed(() => {
   if (!bizActive.value) return sourceScopeEmptyText.value
   if (bizLoading.value) return '正在读取业务目录里的源…'
-  return bizError.value || '这个业务目录里还没有源'
+  return bizError.value || '这个业务目录里还没有源，请点击「添加源到业务目录」'
 })
 
 // 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
@@ -485,6 +482,7 @@ function onDirCommand(command: 'send' | 'schedule') {
 
 // 选中源加入 / 移出业务目录（一个源可以放进多个业务目录，10-21 定暂不限制）
 const bizPicker = reactive({ open: false, ids: [] as string[] })
+const defaultBizDirIds = computed(() => (bizActive.value && !dirScope.value.all ? dirScope.value.labels.map((label) => label.id) : []))
 function openBizPicker(ids: string[]) {
   bizPicker.ids = [...ids]
   bizPicker.open = true
@@ -494,28 +492,13 @@ async function afterBizChanged() {
   await resolveBizScope()
   dirScopeVersion.value += 1
 }
-async function onBizPicked(categoryId: string, name: string) {
-  const ids = bizPicker.ids
-  bizPicker.open = false
-  try {
-    const added = await addSourcesToBizDir(categoryId, ids)
-    ElMessage.success(added == null ? `已加入业务目录「${name}」` : `已加入业务目录「${name}」：新增 ${added} 个`)
-  } catch (error) {
-    ElMessage.error(`加入业务目录失败：${(error as Error)?.message ?? String(error)}`)
-  }
-  await afterBizChanged()
-}
-async function removeFromBiz(ids: string[]) {
-  try {
-    await ElMessageBox.confirm(`把选中的 ${ids.length} 个源移出「${dirLabelText.value}」${dirWithSub.value ? '（含子级）' : ''}？只解除归类，不删源。`, '移出业务目录', { type: 'warning', confirmButtonText: '移出', cancelButtonText: '取消' })
-  } catch { return }
-  try {
-    await removeSourcesFromBizDirs(dirScope.value.dirIds, ids)
-    ElMessage.success('已移出')
-  } catch (error) {
-    ElMessage.error(`移出失败：${(error as Error)?.message ?? String(error)}`)
-  }
-  await afterBizChanged()
+// 移动到…（10-21）：必须先在左侧点 / 勾一个业务目录，作为「从哪移出」；弹窗里选目标或「仅移出」
+const canMoveBiz = computed(() => bizActive.value && !dirScope.value.all && dirScope.value.labels.length === 1)
+const bizMove = reactive({ open: false, ids: [] as string[] })
+function openBizMove(ids: string[]) {
+  if (!canMoveBiz.value || !ids.length) return
+  bizMove.ids = [...ids]
+  bizMove.open = true
 }
 
 // 勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录；条件视图与「另存为视图」10-13 起下线
@@ -753,6 +736,7 @@ onUnmounted(() => {
       :scope-version="dirScopeVersion"
       :scope-empty-text="listScopeEmptyText"
       :extra-column-label="scope === 'all' ? '业务目录' : undefined"
+      :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
       @open-source="openSourceFromList"
       @open-source-data="openSourceFromList($event, 'data')"
@@ -761,20 +745,30 @@ onUnmounted(() => {
     >
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
         <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图目录</button>
-        <button class="ca-save-view sm" type="button" data-testid="source-add-to-biz" @click="openBizPicker(ids)">加入业务目录</button>
-        <button v-if="bizActive" class="ca-save-view sm" type="button" data-testid="source-remove-from-biz" @click="removeFromBiz(ids)">移出当前业务目录</button>
       </template>
-      <template v-if="dirActive" #summary-extra>
-        <span class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
+      <template v-if="scope === 'all'" #summary-extra>
+        <span v-if="dirActive" class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
           · {{ dirKindLabel }}：<b>{{ dirLabelText }}</b><template v-if="dirWithSub">（含子级）</template>
           <button class="ca-dir-link" type="button" data-testid="dir-scope-clear" @click="dirPanelRef?.clear()">清除</button>
         </span>
-        <el-dropdown trigger="click" data-testid="dir-ops" @command="onDirCommand">
+        <!-- 业务目录下暂不提供按目录发送 / 定时（10-21 用户） -->
+        <el-dropdown v-if="dirActive && dirScope.kind === 'sys'" trigger="click" data-testid="dir-ops" @command="onDirCommand">
           <button class="ca-save-view sm" type="button">按目录 ▾</button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="send" data-testid="dir-ops-send">按目录发送</el-dropdown-item>
               <el-dropdown-item command="schedule" data-testid="dir-ops-schedule">按目录更新定时</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
+      <template v-if="scope === 'all' && showDirPanel && dirScope.kind === 'biz'" #summary-ops="{ ids }">
+        <el-dropdown trigger="click" data-testid="biz-ops" @command="(command: 'add' | 'move') => (command === 'add' ? openBizPicker(ids) : openBizMove(ids))">
+          <button class="ca-save-view sm" type="button">目录归类 ▾</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="add" data-testid="source-pick-for-biz">加入业务目录…</el-dropdown-item>
+              <el-dropdown-item command="move" :disabled="!canMoveBiz || !ids.length" data-testid="source-move-biz">{{ canMoveBiz && ids.length ? `移到其他业务目录…（${ids.length} 个）` : '移到其他业务目录…（先在左侧点一个目录，再勾选源）' }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -803,7 +797,8 @@ onUnmounted(() => {
     </div>
     </template>
     <AddToViewDialog v-model="addToView.open" :source-ids="addToView.ids" @added="onAddedToView" />
-    <BizDirPickerDialog v-if="bizPicker.open" :count="bizPicker.ids.length" @close="bizPicker.open = false" @pick="onBizPicked" />
+    <BizDirPickerDialog v-if="bizPicker.open" :initial-source-ids="bizPicker.ids" :initial-directory-ids="defaultBizDirIds" @close="bizPicker.open = false" @saved="afterBizChanged" />
+    <BizDirMoveDialog v-if="bizMove.open" :source-ids="bizMove.ids" :from-dir-ids="dirScope.dirIds" :from-label="`${dirLabelText}${dirWithSub ? '（含子级）' : ''}`" @close="bizMove.open = false" @saved="afterBizChanged" />
     <CategoryScheduleModal ref="scheduleRef" />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。

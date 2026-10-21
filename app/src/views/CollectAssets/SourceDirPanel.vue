@@ -3,7 +3,9 @@
 //
 // 10-21 定的口径：
 // - 「系统目录 / 业务目录」二选一，各自保留选择；不能同时筛；
-// - 和旧平台 CategoryTree 一致：点名称 = 只看这一个目录（含子级）；勾选父目录 = 子孙全勾，部分勾选时父级半选；
+// - 勾选父目录 = 子孙全勾，部分勾选时父级半选（同旧平台 CategoryTree）；
+//   点名称 = 只看这一个目录本身、不含子级（10-21 用户：要能单独查父级目录；要含子级就勾选）；
+// - 业务目录默认不全选（10-21 用户：全选要把每个目录的源都拉一遍，太慢）；
 // - 目录的新增 / 改名 / 删除 / 移动在系统设置里，这里不给入口；
 // - 面板可折叠，折叠后窄条上显示已选目录数，筛选不变。
 // 目录数据与后端口径见 api/sourceDirs.ts。
@@ -13,7 +15,9 @@ import { dirNode, dirPath, expandDirIds, loadDirChildren, searchDirs, type DirKi
 
 export interface DirScope {
   kind: DirKind
-  /** 筛选用的目录 ID（已含子级）；空 = 不按目录筛 */
+  /** 业务目录全选仍限定在目录树内；空目录树也不能退回全部源。 */
+  all?: boolean
+  /** 筛选用的目录 ID（已含子级）；空且未全选 = 不按目录筛 */
   dirIds: string[]
   /** 汇总行展示：选中的最上层目录（父级全勾时不再列子级） */
   labels: { id: string; path: string; hasKids: boolean }[]
@@ -22,7 +26,7 @@ export interface DirScope {
 const props = defineProps<{ collapsed: boolean }>()
 const emit = defineEmits<{ 'update:collapsed': [boolean]; change: [DirScope] }>()
 
-const kind = ref<DirKind>('sys')
+const kind = ref<DirKind>('biz')
 const kids = reactive(new Map<string, DirNode[]>())
 const leaf = reactive(new Set<string>())
 const open = reactive(new Set<string>())
@@ -30,6 +34,8 @@ const loading = reactive(new Set<string>())
 const loadError = ref('')
 const checked = reactive({ sys: new Set<string>(), biz: new Set<string>() })
 const focus = reactive<{ sys: string | null; biz: string | null }>({ sys: null, biz: null })
+const allChecked = reactive({ sys: false, biz: false })
+const selectingAll = ref(false)
 
 const rootKey = (k: DirKind) => `${k}:root`
 async function ensureKids(k: DirKind, parentId = ''): Promise<DirNode[]> {
@@ -50,7 +56,6 @@ async function ensureKids(k: DirKind, parentId = ''): Promise<DirNode[]> {
     loading.delete(key)
   }
 }
-void ensureKids('sys')
 
 // ---- 树行 ----
 interface Row { node: DirNode; depth: number }
@@ -89,10 +94,14 @@ async function onCheck(node: DirNode, on: boolean) {
     if (on && siblings.length && siblings.every((c) => set.has(c.id))) set.add(p)
     else set.delete(p)
   }
+  const roots = kids.get(rootKey(k)) ?? []
+  allChecked[k] = roots.length > 0 && roots.every((root) => set.has(root.id))
   void emitScope()
 }
 function onFocus(node: DirNode) {
+  if (selectingAll.value) return
   const k = kind.value
+  allChecked[k] = false
   checked[k].clear()
   focus[k] = focus[k] === node.id ? null : node.id
   if (focus[k] && !leaf.has(node.id)) void toggleOpen(node)
@@ -120,19 +129,37 @@ async function emitScope() {
     labelIds = topChecked.value
   } else if (focus[k]) {
     labelIds = [focus[k]!]
-    dirIds = await expandDirIds(k, labelIds)
+    dirIds = [focus[k]!]
   }
   if (seq !== scopeSeq) return
   emit('change', {
     kind: k,
+    all: allChecked[k],
     dirIds,
-    labels: labelIds.map((id) => ({ id, path: dirPath(id).join(' / ') || id, hasKids: !leaf.has(id) && (kids.get(id)?.length ?? 1) > 0 })),
+    // 点名称只看本目录，不算「含子级」
+    labels: labelIds.map((id) => ({ id, path: dirPath(id).join(' / ') || id, hasKids: set.size > 0 && !leaf.has(id) && (kids.get(id)?.length ?? 1) > 0 })),
   })
 }
 function clear() {
+  allChecked[kind.value] = false
   checked[kind.value].clear()
   focus[kind.value] = null
   void emitScope()
+}
+async function selectAll() {
+  const k = kind.value
+  selectingAll.value = true
+  try {
+    const roots = await ensureKids(k)
+    const ids = await expandDirIds(k, roots.map((node) => node.id))
+    checked[k].clear()
+    ids.forEach((id) => checked[k].add(id))
+    focus[k] = null
+    allChecked[k] = true
+    await emitScope()
+  } finally {
+    selectingAll.value = false
+  }
 }
 defineExpose({ clear })
 
@@ -169,20 +196,29 @@ watch([keyword, kind], ([kw]) => {
 function parentPathOf(node: DirNode): string {
   return node.parentId ? dirPath(node.parentId).join(' / ') : ''
 }
+// 进页面：业务目录不选任何目录（= 不按目录筛）；还没有业务目录时退到系统目录
+async function init() {
+  const roots = await ensureKids('biz')
+  if (!roots.length && !loadError.value) await switchKind('sys')
+  else await emitScope()
+}
+void init()
 </script>
 
 <template>
   <section v-if="!props.collapsed" class="sdp" :class="{ biz: kind === 'biz' }" data-testid="source-dir-panel">
     <div class="sdp-head">
       <div class="sdp-kind" role="tablist" aria-label="目录类型">
-        <button type="button" role="tab" :aria-selected="kind === 'sys'" :class="{ on: kind === 'sys' }" data-testid="dir-kind-sys" @click="switchKind('sys')">系统目录</button>
-        <button type="button" role="tab" :aria-selected="kind === 'biz'" :class="{ on: kind === 'biz' }" data-testid="dir-kind-biz" @click="switchKind('biz')">业务目录</button>
+        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="kind === 'sys'" :class="{ on: kind === 'sys' }" data-testid="dir-kind-sys" @click="switchKind('sys')">系统目录</button>
+        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="kind === 'biz'" :class="{ on: kind === 'biz' }" data-testid="dir-kind-biz" @click="switchKind('biz')">业务目录</button>
       </div>
       <button class="sdp-fold" type="button" title="收起目录" aria-label="收起目录" data-testid="dir-panel-fold" @click="emit('update:collapsed', true)">«</button>
     </div>
     <input v-model="keyword" class="sdp-search" placeholder="搜索目录" aria-label="搜索目录" data-testid="dir-search">
     <div class="sdp-sub">
-      <span>{{ topChecked.length ? `已勾选 ${topChecked.length} 个目录` : '点名称看单个目录，勾选可多选' }}</span>
+      <label class="sdp-all"><input type="checkbox" :checked="allChecked[kind]" :indeterminate.prop="!allChecked[kind] && pickedCount > 0" :disabled="selectingAll" data-testid="dir-select-all" @change="($event.target as HTMLInputElement).checked ? selectAll() : clear()">全选</label>
+      <span v-if="selectingAll">加载中…</span>
+      <span v-else-if="pickedCount">已选 {{ topChecked.length || 1 }} 个目录</span>
       <button v-if="pickedCount" class="sdp-link" type="button" data-testid="dir-clear" @click="clear">清空</button>
     </div>
     <div class="sdp-tree" data-testid="dir-tree">
@@ -199,7 +235,7 @@ function parentPathOf(node: DirNode): string {
           data-testid="dir-node"
         >
           <span class="sdp-caret" />
-          <input type="checkbox" :checked="curChecked.has(node.id)" :aria-label="`勾选 ${node.name}`" @change="onCheck(node, ($event.target as HTMLInputElement).checked)">
+          <input type="checkbox" :disabled="selectingAll" :checked="curChecked.has(node.id)" :aria-label="`勾选 ${node.name}`" @change="onCheck(node, ($event.target as HTMLInputElement).checked)">
           <span class="sdp-name" :title="node.name" @click="onFocus(node)">{{ node.name }}<span v-if="parentPathOf(node)" class="sdp-path">{{ parentPathOf(node) }}</span></span>
         </div>
       </template>
@@ -224,6 +260,7 @@ function parentPathOf(node: DirNode): string {
           <span v-else class="sdp-caret" />
           <input
             type="checkbox"
+            :disabled="selectingAll"
             :checked="curChecked.has(row.node.id)"
             :indeterminate.prop="isPartial(row.node.id)"
             :aria-label="`勾选 ${row.node.name}`"
@@ -252,7 +289,7 @@ function parentPathOf(node: DirNode): string {
   >
     <span class="sdp-rail-arrow">»</span>
     <span class="sdp-rail-txt">{{ kind === 'biz' ? '业务目录' : '系统目录' }}</span>
-    <span v-if="pickedCount" class="sdp-rail-dot">{{ pickedCount }}</span>
+    <span v-if="allChecked[kind] || pickedCount" class="sdp-rail-dot">{{ allChecked[kind] ? '全' : pickedCount }}</span>
   </button>
 </template>
 
@@ -268,6 +305,9 @@ function parentPathOf(node: DirNode): string {
 .sdp-search { flex: none; box-sizing: border-box; width: 100%; height: 30px; min-height: 30px; padding: 0 10px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; font-size: 13px; line-height: 28px; outline: none; }
 .sdp-search:focus { border-color: var(--rc-primary); }
 .sdp-sub { flex: none; display: flex; align-items: center; justify-content: space-between; min-height: 20px; margin: 8px 2px 4px; color: var(--rc-faint); font-size: 12px; }
+.sdp-all { display: inline-flex; align-items: center; gap: 4px; color: var(--rc-text-2); cursor: pointer; }
+.sdp-all input { margin: 0; accent-color: var(--rc-primary); }
+.sdp.biz .sdp-all input { accent-color: #7c3aed; }
 .sdp-link { border: 0; background: none; padding: 0; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
 .sdp-tree { flex: 1; min-height: 0; overflow: auto; }
 .sdp-row { flex: none; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 4px; border-radius: 6px; color: var(--rc-text); font-size: 13px; }

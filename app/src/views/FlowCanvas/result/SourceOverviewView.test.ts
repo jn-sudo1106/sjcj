@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { KeepAlive, defineComponent, h } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElPagination } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
@@ -25,6 +25,24 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('快捷编辑入口在源名称旁，打开编辑不跳详情；保存后沿用当前筛选和页码刷新', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 40, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'], quickEdit: true }, global: { components: { ElPagination } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-overview-state"]').setValue('E')
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:current-page', 2)
+    await wrapper.get('[data-testid="source-quick-edit-src-1"]').trigger('click')
+    const editor = wrapper.findComponent({ name: 'EditSourceDialog' })
+    expect(editor.props('source')).toEqual(source)
+    expect(editor.props('quick')).toBe(true)
+    expect(wrapper.emitted('openSource')).toBeUndefined()
+    editor.vm.$emit('saved', { ...source, url: 'https://new.example.com', coreParam: 'a=1' })
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'EditSourceDialog' }).exists()).toBe(false)
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, sourceIds: 'src-1', state: 'E' }))
+    wrapper.unmount()
+  })
+
   it('分组分页、查询范围导出和任务预览均携带固定源 ID', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
     vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})

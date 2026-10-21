@@ -1072,6 +1072,11 @@ export function sourceToLegacyParams(source: Source): Record<string, unknown> {
   }
 }
 
+/** 快捷编辑只映射名称 / URL / 核心参数，避免整条源回写时覆盖其它属性。 */
+export function sourceCoreToLegacyParams(sourceId: string, patch: { name?: string; url?: string; coreParam: string }): Record<string, unknown> {
+  return { sourceId, sourceName: patch.name, sourceUrl: patch.url, sourceParam: patch.coreParam }
+}
+
 /** 旧平台 sourcePaged 的分页结构适配。 */
 export function sourcePageFromLegacy(input: unknown): Paged<Source> {
   const record = asRecord(input)

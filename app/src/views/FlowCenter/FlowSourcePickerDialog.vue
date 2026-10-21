@@ -3,7 +3,7 @@
 // 表格勾选 + 按「源名称 / ID」和「所属流程」服务端筛 + ID 批量检索 + 全选本页。
 // 提交动作仍在 FlowCenter 的 confirmApply（分批 + 作业条 + 二次确认文案），这里只负责选。
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElDialog, ElMessage } from 'element-plus'
 import { flowCenterApi, sourceApi, sourceGroupApi, type FlowRecord, type Source } from '@/api'
 
 const props = defineProps<{
@@ -13,6 +13,8 @@ const props = defineProps<{
   modelValue: string[]
   submitting?: boolean
   progress?: string
+  /** 嵌在「关联到源」弹窗的「添加关联」页签里（2026-10-21）：不渲染自己的弹窗外壳，底部按钮放在内容末尾 */
+  embedded?: boolean
 }>()
 const emit = defineEmits<{
   'update:modelValue': [string[]]
@@ -255,12 +257,9 @@ watch(() => props.flow?.id, (id) => {
 </script>
 
 <template>
-  <el-dialog
-    :model-value="!!flow"
-    :title="flow ? `关联流程到源 · ${flow.name}` : '关联流程到源'"
-    width="920px"
-    top="6vh"
-    destroy-on-close
+  <component
+    :is="embedded ? 'div' : ElDialog"
+    v-bind="embedded ? { class: 'fsp-embedded' } : { modelValue: !!flow, title: flow ? `关联流程到源 · ${flow.name}` : '关联流程到源', width: '920px', top: '6vh', destroyOnClose: true }"
     @close="emit('close')"
   >
     <p class="fsp-note">
@@ -378,7 +377,7 @@ watch(() => props.flow?.id, (id) => {
 
     <p v-if="progress" class="fsp-note" data-testid="flow-apply-progress">{{ progress }}</p>
 
-    <template #footer>
+    <template v-if="!embedded" #footer>
       <button class="fsp-btn" type="button" @click="emit('close')">取消</button>
       <button
         class="fsp-btn primary"
@@ -388,10 +387,21 @@ watch(() => props.flow?.id, (id) => {
         @click="emit('confirm')"
       >{{ submitting ? '关联中…' : `确认关联（${modelValue.length} 个）` }}</button>
     </template>
-  </el-dialog>
+    <div v-if="embedded" class="fsp-embedded-foot">
+      <button class="fsp-btn" type="button" @click="emit('close')">取消</button>
+      <button
+        class="fsp-btn primary"
+        type="button"
+        data-testid="flow-apply-confirm"
+        :disabled="submitting || !modelValue.length"
+        @click="emit('confirm')"
+      >{{ submitting ? '关联中…' : `确认关联（${modelValue.length} 个）` }}</button>
+    </div>
+  </component>
 </template>
 
 <style scoped>
+.fsp-embedded-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .fsp-note { margin: 0 0 10px; color: var(--rc-text-2); font-size: 12px; line-height: 1.6; }
 .fsp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .fsp-input { height: 28px; width: 220px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; }
