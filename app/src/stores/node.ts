@@ -294,6 +294,22 @@ export const useNodeStore = defineStore('node', () => {
     touchFlow()
   }
 
+  /** 任务 URL 来源字段（采集后续步的步骤 itemId）。与 setItemId 不同：清空时不写 -1，保留空串给后端。落在步骤上，走自动保存。 */
+  function setTaskUrlSourceField(id: string, itemId: string) {
+    const c = configs[id]
+    if (!c) return
+    c.itemId = itemId.trim()
+    touchFlow()
+  }
+
+  /** 任务 URL 规则表达式（步骤 url）。空了回到默认 $VAL$，与旧平台展示口径一致。落在步骤上，走自动保存。 */
+  function setStepUrl(id: string, url: string) {
+    const c = configs[id]
+    if (!c) return
+    c.stepUrl = url.trim() || '$VAL$'
+    touchFlow()
+  }
+
   /** 适用源（步骤 sourceId）。-1 = 该配置下所有源。落在步骤上，走自动保存。 */
   function setStepSourceId(id: string, sourceId: string) {
     const c = configs[id]
@@ -406,6 +422,8 @@ export const useNodeStore = defineStore('node', () => {
     setConfigUpdateDt,
     hydrateConfigUrl,
     setItemId,
+    setTaskUrlSourceField,
+    setStepUrl,
     setStepSourceId,
     setEntryCondition,
     setNodeDisabled,

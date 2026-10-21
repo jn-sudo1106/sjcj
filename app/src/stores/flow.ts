@@ -1452,6 +1452,8 @@ export const useFlowStore = defineStore('flow', () => {
     },
     hydrateConfigUrl: (id: string, url: string) => nodeStore.hydrateConfigUrl(id, url),
     setItemId: (id: string, itemId: string) => nodeStore.setItemId(id, itemId),
+    setTaskUrlSourceField: (id: string, itemId: string) => nodeStore.setTaskUrlSourceField(id, itemId),
+    setStepUrl: (id: string, url: string) => nodeStore.setStepUrl(id, url),
     setStepSourceId: (id: string, sourceId: string) => nodeStore.setStepSourceId(id, sourceId),
     setEntryCondition: (id: string, cond: ConditionGroup | undefined) => nodeStore.setEntryCondition(id, cond),
     setNodeDisabled: (id: string, disabled: boolean) => nodeStore.setNodeDisabled(id, disabled),

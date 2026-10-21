@@ -152,6 +152,12 @@ export interface NodeConfig {
    */
   itemId?: string
   /**
+   * 旧步骤 `url`：采集后续步的「任务 URL 规则表达式」，默认 `$VAL$`（取 itemId 指向的字段值），
+   * 也可以是拼接表达式，如 `K2+'#need_upload_xq/xq/'`。首步骤这里是它自己的抓取地址。
+   * 2026-10-19 恢复编辑（旧平台 SourceStepCard 同款）；没改过时为步骤回读原值，写回沿用快照。
+   */
+  stepUrl?: string
+  /**
    * 旧步骤「适用源」（`sourceId`）。`-1` 表示使用该配置的所有源。
    * 与画布当前源（`flow.sourceCfg.sourceId`）不是同一层：步骤可以挂在 -1 上被多源共用。
    */

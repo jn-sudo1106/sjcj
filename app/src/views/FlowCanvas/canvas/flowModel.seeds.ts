@@ -1157,6 +1157,7 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
   if (step.configUpdateDt !== undefined && cfg.configUpdateDt === undefined) cfg.configUpdateDt = step.configUpdateDt
   if (step.runPolicy !== undefined) cfg.runPolicy = step.runPolicy
   if (step.itemId !== undefined) cfg.itemId = step.itemId
+  if (step.url !== undefined) cfg.stepUrl = step.url
   if (step.sourceId !== undefined) cfg.stepSourceId = step.sourceId
   if (cfg.collectCfg) {
     cfg.collectCfg.entryCondition = step.condition
