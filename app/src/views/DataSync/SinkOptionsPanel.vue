@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
 import {
-  CK_DEFAULT_VERSION_COLUMN, CK_ENGINES, ES_DYNAMICS, ES_FIELD_TYPES, ES_PARTITIONS,
+  CK_DEFAULT_VERSION_COLUMN, CK_ENGINES, ES_BULK_MAX_BYTES_DEFAULT, ES_DYNAMICS, ES_FIELD_TYPES,
+  ES_FILE_MAX_BYTES_DEFAULT, ES_PARTITIONS,
   autoEsIndexName, dedupColumns, isEsIndexNameValid, sinkColumnChoices, sinkPreviewLines,
   type SyncColumnMap, type SyncSinkOptions,
 } from '@/api/dataSync'
@@ -50,6 +51,36 @@ const partitionLabels: Record<string, string> = {
 
 function addOverride() {
   es.value?.fieldOverrides.push({ column: '', type: 'keyword', keyword: true, format: '' })
+}
+
+const fileFields = computed(() => es.value?.fileContent?.fields ?? [])
+
+function mbToBytes(value: unknown, fallback: number) {
+  const mb = Number(value)
+  return Number.isFinite(mb) && mb > 0 ? Math.round(mb * 1024 * 1024) : fallback
+}
+
+const fileMaxMb = computed({
+  get: () => Math.round(((es.value?.fileContent?.maxFileBytes ?? ES_FILE_MAX_BYTES_DEFAULT) / 1024 / 1024) * 100) / 100,
+  set: (value: number) => {
+    if (es.value?.fileContent) es.value.fileContent.maxFileBytes = mbToBytes(value, ES_FILE_MAX_BYTES_DEFAULT)
+  },
+})
+const bulkMaxMb = computed({
+  get: () => Math.round(((es.value?.fileContent?.maxBulkBytes ?? ES_BULK_MAX_BYTES_DEFAULT) / 1024 / 1024) * 100) / 100,
+  set: (value: number) => {
+    if (es.value?.fileContent) es.value.fileContent.maxBulkBytes = mbToBytes(value, ES_BULK_MAX_BYTES_DEFAULT)
+  },
+})
+
+function addFileField() {
+  if (!es.value) return
+  if (!es.value.fileContent) {
+    es.value.fileContent = {
+      fields: [], maxFileBytes: ES_FILE_MAX_BYTES_DEFAULT, maxBulkBytes: ES_BULK_MAX_BYTES_DEFAULT,
+    }
+  }
+  es.value.fileContent.fields.push({ pathColumn: '', contentColumn: '' })
 }
 </script>
 
@@ -155,6 +186,31 @@ function addOverride() {
         </el-table>
         <div class="sink-row"><el-button link type="primary" @click="addOverride">增加覆盖项</el-button>
           <span class="sink-tip">只记录与自动映射不一致的列，留空列表即全部按默认映射建 field</span></div>
+      </el-form-item>
+      <el-form-item label="文件内容内联" class="sink-span">
+        <el-table :data="fileFields" border size="small" class="sink-override">
+          <el-table-column label="文件路径列（平台文件 key）" min-width="200"><template #default="{ row }">
+            <el-select v-model="row.pathColumn" filterable placeholder="选择路径列">
+              <el-option v-for="item in choices" :key="item.name" :value="item.name" :label="item.remark" />
+            </el-select></template></el-table-column>
+          <el-table-column label="内容写入列（Base64 字符串）" min-width="200"><template #default="{ row }">
+            <el-select v-model="row.contentColumn" filterable placeholder="选择内容列">
+              <el-option v-for="item in choices" :key="item.name" :value="item.name" :label="item.remark" />
+            </el-select></template></el-table-column>
+          <el-table-column label="操作" width="70"><template #default="{ $index }">
+            <el-button link type="danger" @click="fileFields.splice($index, 1)">删除</el-button>
+          </template></el-table-column>
+        </el-table>
+        <div class="sink-row"><el-button link type="primary" @click="addFileField">增加文件字段</el-button>
+          <span class="sink-tip">路径列存平台文件 key，同步时按同一套文件下载接口取回，内容以 Base64 字符串写入内容列；内容列 mapping 固定为 keyword 且不建索引</span></div>
+      </el-form-item>
+      <el-form-item label="单文件上限（MB）">
+        <el-input-number v-model="fileMaxMb" :min="1" :max="100" :controls="false" />
+        <div class="sink-tip">按下载落盘后的真实大小判断，超限整个任务直接失败</div>
+      </el-form-item>
+      <el-form-item label="单批请求上限（MB）">
+        <el-input-number v-model="bulkMaxMb" :min="1" :max="100" :controls="false" />
+        <div class="sink-tip">超过按文档切成多次 _bulk；单条文档自身超限时只能单独提交</div>
       </el-form-item>
     </el-form>
 

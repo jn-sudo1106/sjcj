@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   autoEsIndexName, isEsIndexNameValid, isSinkTarget, parseSinkOptions, renderSinkDefaults,
   sanitizeSinkOptions, sinkOptionsProblem, sinkPreviewLines,
+  ES_BULK_MAX_BYTES_DEFAULT, ES_FILE_MAX_BYTES_DEFAULT,
   generateSyncSql, mapEntityCopyColumns, mapSyncColumns, submitSyncColumns, syncApi, WATERMARK_COLUMN,
-  type SyncColumnMap, type SyncSinkDetail, type SyncSinkOptions,
+  type SyncColumnMap, type SyncEsSinkOptions, type SyncSinkDetail, type SyncSinkOptions,
 } from './dataSync'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -255,5 +256,51 @@ describe('CK / ES 目标端参数镜像', () => {
     const partial = parseSinkOptions({ ck: null, es: { index: 'gzh_hold' } as never }, 5, mapped)?.es
     expect(partial).toMatchObject({ index: 'gzh_hold', shards: 1, replicas: 1, dynamic: 'strict', indexPartition: 'none' })
     expect(sanitizeSinkOptions({ ck: null, es: partial! }, 5)?.es).toMatchObject({ index: 'gzh_hold', idColumns: [] })
+  })
+
+  it('文件内容默认关闭，提交时丢掉空行并补默认上限', () => {
+    expect(renderSinkDefaults(5, mapped)?.es?.fileContent).toEqual({
+      fields: [], maxFileBytes: ES_FILE_MAX_BYTES_DEFAULT, maxBulkBytes: ES_BULK_MAX_BYTES_DEFAULT,
+    })
+    const options: SyncSinkOptions = { ck: null, es: {
+      ...(renderSinkDefaults(5, mapped) as SyncSinkOptions).es!,
+      fileContent: {
+        fields: [{ pathColumn: ' entry_id ', contentColumn: ' name ' }, { pathColumn: '', contentColumn: '  ' }],
+        maxFileBytes: 0, maxBulkBytes: 0,
+      },
+    } }
+    expect(sanitizeSinkOptions(options, 5)?.es?.fileContent).toEqual({
+      fields: [{ pathColumn: 'entry_id', contentColumn: 'name' }],
+      maxFileBytes: ES_FILE_MAX_BYTES_DEFAULT, maxBulkBytes: ES_BULK_MAX_BYTES_DEFAULT,
+    })
+    options.es!.fileContent = { fields: [{ pathColumn: ' ', contentColumn: '' }], maxFileBytes: 1, maxBulkBytes: 1 }
+    expect(sanitizeSinkOptions(options, 5)?.es?.fileContent).toBeUndefined()
+  })
+
+  it('文件内容预检拦下身份列冲突与重复配置', () => {
+    const columns: SyncColumnMap[] = [...mapped,
+      { key: 5, no: 5, sourceColumn: 'REMARK', targetColumn: 'remark', targetColumnType: 'varchar' }]
+    const fileEs = (fields: Array<{ pathColumn: string; contentColumn: string }>,
+      patch: Partial<SyncEsSinkOptions> = {}): SyncEsSinkOptions => {
+      const es = { ...(renderSinkDefaults(5, columns) as SyncSinkOptions).es!, ...patch }
+      es.fileContent = { fields, maxFileBytes: ES_FILE_MAX_BYTES_DEFAULT, maxBulkBytes: ES_BULK_MAX_BYTES_DEFAULT }
+      return es
+    }
+    const problem = (es: SyncEsSinkOptions) => sinkOptionsProblem({ ck: null, es }, columns)
+    expect(problem(fileEs([{ pathColumn: 'entry_id', contentColumn: 'name' }]))).toBe('')
+    expect(problem(fileEs([{ pathColumn: 'entry_id', contentColumn: 'id' }]))).toContain('_id 组成列')
+    expect(problem(fileEs([{ pathColumn: 'entry_id', contentColumn: 'origin_update_time' }]))).toContain('水位列')
+    expect(problem(fileEs([{ pathColumn: 'entry_id', contentColumn: 'name' },
+      { pathColumn: 'origin_update_time', contentColumn: 'name' }]))).toContain('重复配置')
+    expect(problem(fileEs([{ pathColumn: 'entry_id', contentColumn: 'name' },
+      { pathColumn: 'name', contentColumn: 'remark' }]))).toContain('另一个文件字段的内容列')
+    expect(problem(fileEs([{ pathColumn: 'entry_id', contentColumn: 'name' }],
+      { fieldOverrides: [{ column: 'name', type: 'keyword', keyword: true }] }))).toContain('不能再配置列覆盖')
+    const zero = fileEs([{ pathColumn: 'entry_id', contentColumn: 'name' }])
+    zero.fileContent!.maxFileBytes = 0
+    expect(problem(zero)).toContain('必须大于 0')
+    const huge = fileEs([{ pathColumn: 'entry_id', contentColumn: 'name' }])
+    huge.fileContent!.maxBulkBytes = 101 * 1024 * 1024
+    expect(problem(huge)).toContain('不能超过 100MB')
   })
 })
