@@ -96,6 +96,13 @@ const props = defineProps<{
    * 只有 sourcePaged 认这个条件，所以给了它时「按筛选范围调整来源组」禁用（那个接口会当成不限）。
    */
   scopeViewCategoryId?: string
+  /**
+   * 固定系统目录范围（2026-10-21 源管理「系统目录」页签左侧目录）：走 `sourcePaged` 的 `categorys`。
+   * 后端只匹配直属、不含子级，调用方传已展开子级的目录 ID。`undefined` = 不限。
+   */
+  scopeCategoryIds?: string[]
+  /** 目录范围的人话（如「系统目录：财经资讯（含子级）」），只给发任务确认弹窗看，不发给后端 */
+  scopeLabel?: string
   /** 范围内容变了但范围参数没变（如往视图目录里加了源）时由父级加 1，触发重查 */
   scopeVersion?: number
   /** 范围为空时的空态文案（如最近打开一个都没有） */
@@ -438,6 +445,8 @@ function currentQuery(): SourceFilter {
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
     sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
     ...(props.scopeViewCategoryId ? { viewCategoryId: props.scopeViewCategoryId } : {}),
+    ...(props.scopeCategoryIds?.length ? { categorys: props.scopeCategoryIds.join(',') } : {}),
+    ...(props.scopeLabel ? { dirLabel: props.scopeLabel } : {}),
   }
 }
 
@@ -1180,8 +1189,8 @@ watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () =
   page.value = 1
   void loadSources()
 })
-// 来源组 / 视图目录范围变了：清掉勾选再重查
-watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeVersion ?? 0}`, () => {
+// 来源组 / 视图目录 / 系统目录范围变了：清掉勾选再重查
+watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}`, () => {
   clearSelection()
   page.value = 1
   void loadSources()
@@ -1206,6 +1215,9 @@ watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
 watch(() => ui.sourceListRevision, () => {
   void loadSources()
 })
+
+// 源管理「系统目录」页签的「按目录发送」复用这里的发任务流程（不勾选 = 按当前筛选范围，含目录范围）
+defineExpose({ openLaunch, clearSelection })
 </script>
 
 <template>
@@ -1319,6 +1331,8 @@ watch(() => ui.sourceListRevision, () => {
 
     <div class="sov-summary">
       <span>共 {{ total }} 个源</span>
+      <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
+      <slot name="summary-extra" />
       <span v-if="urlFallback && !loading" class="sov-url-fallback" data-testid="source-overview-url-fallback">
         按名称没查到「{{ urlFallback.keyword }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
       </span>
