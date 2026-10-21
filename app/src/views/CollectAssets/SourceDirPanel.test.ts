@@ -41,21 +41,21 @@ async function expand(w: Awaited<ReturnType<typeof mountPanel>>, id: string) {
 }
 
 describe('SourceDirPanel', () => {
-  it('默认业务目录全选，折叠时保留全部子级的范围，展开后勾选状态一致', async () => {
+  it('默认业务目录不全选（不按目录筛），手动全选后范围含全部子级', async () => {
     const w = await mountPanel(true, 'biz')
-    expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录全')
-    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: ['900', '901'] })
+    expect(w.get('[data-testid="dir-panel-rail"]').text()).not.toContain('全')
+    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: false, dirIds: [] })
+    expect(sourceApi.sourceCategories).not.toHaveBeenCalledWith('900')
     await w.setProps({ collapsed: false })
     expect(w.get('[data-testid="dir-kind-biz"]').attributes('aria-selected')).toBe('true')
-    expect((w.get('[data-testid="dir-select-all"]').element as HTMLInputElement).checked).toBe(true)
-    await expand(w, '900')
-    for (const id of ['900', '901']) expect((row(w, id).get('[data-testid="dir-check"]').element as HTMLInputElement).checked).toBe(true)
-    await row(w, '901').get('[data-testid="dir-check"]').setValue(false)
-    await flushPromises()
-    expect(lastScope(w).all).toBe(false)
+    expect((w.get('[data-testid="dir-select-all"]').element as HTMLInputElement).checked).toBe(false)
     await w.get('[data-testid="dir-select-all"]').setValue(true)
     await flushPromises()
     expect(lastScope(w)).toMatchObject({ all: true, dirIds: ['900', '901'] })
+    await expand(w, '900')
+    await row(w, '901').get('[data-testid="dir-check"]').setValue(false)
+    await flushPromises()
+    expect(lastScope(w).all).toBe(false)
     w.unmount()
   })
 
@@ -78,7 +78,7 @@ describe('SourceDirPanel', () => {
   it('业务目录请求失败不视为空目录，不自动切系统目录', async () => {
     vi.mocked(sourceApi.sourceCategories).mockRejectedValue(new Error('网络错误'))
     const w = await mountPanel(true, 'biz')
-    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: [] })
+    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: false, dirIds: [] })
     expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录')
     await w.setProps({ collapsed: false })
     expect(w.text()).toContain('目录加载失败：网络错误')
@@ -119,13 +119,14 @@ describe('SourceDirPanel', () => {
     expect(lastScope(w).labels.map((l) => l.path)).toEqual(['财经资讯'])
   })
 
-  it('点名称：清掉勾选，只看这一个目录（含子级）；再点一次取消', async () => {
+  it('点名称：清掉勾选，只看这一个目录本身（不含子级，能单独查父级）；再点一次取消', async () => {
     const w = await mountPanel()
     await row(w, '200').get('[data-testid="dir-check"]').setValue(true)
     await flushPromises()
     await row(w, '100').get('[data-testid="dir-name"]').trigger('click')
     await flushPromises()
-    expect(lastScope(w).dirIds.sort()).toEqual(['100', '101', '102', '111'])
+    expect(lastScope(w).dirIds).toEqual(['100'])
+    expect(lastScope(w).labels).toEqual([expect.objectContaining({ id: '100', hasKids: false })])
     expect((row(w, '200').get('[data-testid="dir-check"]').element as HTMLInputElement).checked).toBe(false)
     await row(w, '100').get('[data-testid="dir-name"]').trigger('click')
     await flushPromises()
@@ -138,7 +139,7 @@ describe('SourceDirPanel', () => {
     await flushPromises()
     await w.get('[data-testid="dir-kind-biz"]').trigger('click')
     await flushPromises()
-    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: ['900', '901'] })
+    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: false, dirIds: [] })
     expect(w.findAll('[data-testid="dir-name"]').map((n) => n.text())).toEqual(['股票数据'])
     await w.get('[data-testid="dir-kind-sys"]').trigger('click')
     await flushPromises()

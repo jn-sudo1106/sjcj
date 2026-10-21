@@ -3,7 +3,9 @@
 //
 // 10-21 定的口径：
 // - 「系统目录 / 业务目录」二选一，各自保留选择；不能同时筛；
-// - 和旧平台 CategoryTree 一致：点名称 = 只看这一个目录（含子级）；勾选父目录 = 子孙全勾，部分勾选时父级半选；
+// - 勾选父目录 = 子孙全勾，部分勾选时父级半选（同旧平台 CategoryTree）；
+//   点名称 = 只看这一个目录本身、不含子级（10-21 用户：要能单独查父级目录；要含子级就勾选）；
+// - 业务目录默认不全选（10-21 用户：全选要把每个目录的源都拉一遍，太慢）；
 // - 目录的新增 / 改名 / 删除 / 移动在系统设置里，这里不给入口；
 // - 面板可折叠，折叠后窄条上显示已选目录数，筛选不变。
 // 目录数据与后端口径见 api/sourceDirs.ts。
@@ -32,7 +34,7 @@ const loading = reactive(new Set<string>())
 const loadError = ref('')
 const checked = reactive({ sys: new Set<string>(), biz: new Set<string>() })
 const focus = reactive<{ sys: string | null; biz: string | null }>({ sys: null, biz: null })
-const allChecked = reactive({ sys: false, biz: true })
+const allChecked = reactive({ sys: false, biz: false })
 const selectingAll = ref(false)
 
 const rootKey = (k: DirKind) => `${k}:root`
@@ -127,14 +129,15 @@ async function emitScope() {
     labelIds = topChecked.value
   } else if (focus[k]) {
     labelIds = [focus[k]!]
-    dirIds = await expandDirIds(k, labelIds)
+    dirIds = [focus[k]!]
   }
   if (seq !== scopeSeq) return
   emit('change', {
     kind: k,
     all: allChecked[k],
     dirIds,
-    labels: labelIds.map((id) => ({ id, path: dirPath(id).join(' / ') || id, hasKids: !leaf.has(id) && (kids.get(id)?.length ?? 1) > 0 })),
+    // 点名称只看本目录，不算「含子级」
+    labels: labelIds.map((id) => ({ id, path: dirPath(id).join(' / ') || id, hasKids: set.size > 0 && !leaf.has(id) && (kids.get(id)?.length ?? 1) > 0 })),
   })
 }
 function clear() {
@@ -143,16 +146,11 @@ function clear() {
   focus[kind.value] = null
   void emitScope()
 }
-async function selectAll(fallbackToSystem = false) {
+async function selectAll() {
   const k = kind.value
   selectingAll.value = true
   try {
     const roots = await ensureKids(k)
-    if (fallbackToSystem && k === 'biz' && !roots.length && !loadError.value) {
-      allChecked.biz = false
-      await switchKind('sys')
-      return
-    }
     const ids = await expandDirIds(k, roots.map((node) => node.id))
     checked[k].clear()
     ids.forEach((id) => checked[k].add(id))
@@ -198,7 +196,13 @@ watch([keyword, kind], ([kw]) => {
 function parentPathOf(node: DirNode): string {
   return node.parentId ? dirPath(node.parentId).join(' / ') : ''
 }
-void selectAll(true)
+// 进页面：业务目录不选任何目录（= 不按目录筛）；还没有业务目录时退到系统目录
+async function init() {
+  const roots = await ensureKids('biz')
+  if (!roots.length && !loadError.value) await switchKind('sys')
+  else await emitScope()
+}
+void init()
 </script>
 
 <template>

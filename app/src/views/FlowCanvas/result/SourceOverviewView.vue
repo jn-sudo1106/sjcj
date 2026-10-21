@@ -1368,6 +1368,8 @@ defineExpose({ openLaunch, clearSelection })
       </template>
       <!-- 紧凑样式下筛选栏一行放不下，针对整批结果的两个操作挪到这一行右侧 -->
       <span v-if="crossSite" class="sov-summary-ops">
+        <!-- 源管理「系统目录」页签：业务目录操作（10-21），和「选中来源」放一起 -->
+        <slot name="summary-ops" :ids="selectedIds" />
         <!-- 1008-04 来源组操作：不勾选也能用（调整来源组按当前筛选范围，连生产时除外；另两项需先勾选） -->
         <el-dropdown v-if="groupOps" trigger="click" data-testid="source-group-ops" @command="onGroupOpsCommand">
           <button class="sov-btn" type="button">选中来源 ▾</button>
