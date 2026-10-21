@@ -163,3 +163,112 @@ describe('FlowSourcesDialog', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('跨 2 个网站'))
   })
 })
+
+// 2026-10-21：「关联到源」的「已关联」页签——解绑 / 更换都在这里（删除流程不再处理源）
+describe('FlowSourcesDialog · 批量解绑 / 更换', () => {
+  async function mountEmbedded(list: Source[], total = list.length) {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total, list })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas')
+    const wrapper = mount(FlowSourcesDialog, {
+      props: { flow: FLOW, embedded: true },
+      global: {
+        plugins: [router],
+        directives: { loading: {} },
+        stubs: {
+          'el-dialog': { props: ['modelValue', 'title'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
+          'el-pagination': { template: '<div />' },
+          'el-select': { props: ['modelValue'], emits: ['update:modelValue'], template: '<select data-testid="flow-sources-replace-target" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>' },
+          'el-option': { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
+          'el-button': { template: '<button v-bind="$attrs"><slot /></button>' },
+        },
+      },
+    })
+    await flushPromises()
+    return wrapper
+  }
+  const picks = (w: Awaited<ReturnType<typeof mountEmbedded>>) => w.findAll('[data-testid="flow-source-pick"]')
+
+  it('嵌入模式不渲染自己的弹窗外壳，也不放「关联源」按钮', async () => {
+    const w = await mountEmbedded([src('1')])
+    expect(w.find('.fs-embedded').exists()).toBe(true)
+    expect(w.find('[data-testid="flow-sources-apply"]').exists()).toBe(false)
+  })
+
+  it('来源组带来的关联标「来源组」、不可勾选，也没有行内解绑', async () => {
+    const w = await mountEmbedded([src('1'), src('2', { sourceGroupId: '3' })])
+    const rows = w.findAll('[data-testid="flow-source-row"]')
+    expect(rows[1].find('[data-testid="flow-source-group-tag"]').text()).toBe('来源组')
+    expect((picks(w)[1].element as HTMLInputElement).disabled).toBe(true)
+    expect(rows[1].find('[data-testid="flow-source-unbind"]').exists()).toBe(false)
+    await w.get('[data-testid="flow-sources-pick-page"]').setValue(true)
+    expect(w.get('[data-testid="flow-sources-batch"]').text()).toContain('已选 1')
+  })
+
+  it('勾选后解绑：changeFlowBatch 不带目标流程、带本流程', async () => {
+    const w = await mountEmbedded([src('1'), src('2')])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    await picks(w)[0].setValue(true)
+    await picks(w)[1].setValue(true)
+    await w.get('[data-testid="flow-sources-unbind-selected"]').trigger('click')
+    await flushPromises()
+    expect(bind).toHaveBeenCalledWith(['1', '2'], undefined, 'flow-1')
+    expect(w.emitted('changed')).toBeTruthy()
+  })
+
+  it('勾选后更换到其他流程：选目标流程（排除本流程），changeFlowBatch 带目标和本流程', async () => {
+    const w = await mountEmbedded([src('1')])
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 2, list: [{ id: 'flow-1', name: '自然资源部' }, { id: 'flow-9', name: '目标流程' }] } as never)
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    await picks(w)[0].setValue(true)
+    await w.get('[data-testid="flow-sources-replace-selected"]').trigger('click')
+    await flushPromises()
+    const options = w.get('[data-testid="flow-sources-replace-target"]').findAll('option').map((o) => o.attributes('value'))
+    expect(options).toEqual(['flow-9'])
+    await w.get('[data-testid="flow-sources-replace-target"]').setValue('flow-9')
+    await w.get('[data-testid="flow-sources-replace-ok"]').trigger('click')
+    await flushPromises()
+    expect(bind).toHaveBeenCalledWith(['1'], 'flow-9', 'flow-1')
+  })
+
+  it('全部解绑：分页取完、跳过来源组，按 500 一批；中途失败即停并报已完成数，不回滚', async () => {
+    const all = Array.from({ length: 1001 }, (_, i) => src(String(i + 1), i === 0 ? { sourceGroupId: '3' } : {}))
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q?: { page?: number; size?: number }) => {
+      const size = q?.size ?? 20
+      const page = q?.page ?? 1
+      return { total: all.length, list: all.slice((page - 1) * size, page * size) }
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas')
+    const w = mount(FlowSourcesDialog, { props: { flow: FLOW, embedded: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { 'el-pagination': { template: '<div />' }, 'el-dialog': { template: '<div />' } } } })
+    await flushPromises()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, message: '后端拒绝' })
+    await w.get('[data-testid="flow-sources-unbind-all"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('解绑 1000 个源'), '解绑关联', expect.anything())
+    expect(String(confirm.mock.calls[0][0])).toContain('另有 1 个随来源组关联的源会跳过')
+    expect(bind).toHaveBeenCalledTimes(2)
+    expect(bind.mock.calls[0][0]).toHaveLength(500)
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('前 500 个已完成，不会撤销'))
+  })
+
+  it('源都解绑完、列表空了：提示可以删除流程，点按钮发 delete', async () => {
+    const w = await mountEmbedded([src('1')])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
+    vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    await picks(w)[0].setValue(true)
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 0, list: [] })
+    await w.get('[data-testid="flow-sources-unbind-selected"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="flow-sources-emptied"]').text()).toContain('可以删除流程了')
+    await w.get('[data-testid="flow-sources-delete-flow"]').trigger('click')
+    expect(w.emitted('delete')).toBeTruthy()
+  })
+})

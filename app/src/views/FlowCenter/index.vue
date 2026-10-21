@@ -23,9 +23,8 @@ import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { parseIdList } from '@/utils/flow/flowSearch'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
-import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
+import FlowSourcesManagerDialog, { type ManageTab } from './FlowSourcesManagerDialog.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
-import FlowSourcesDialog from './FlowSourcesDialog.vue'
 
 const ui = useUiStore()
 
@@ -47,8 +46,8 @@ const sortKey = computed({
     sortOrder.value = order
   },
 })
-/** 表头点排序：点新列从倒序开始，再点同一列在倒序/正序之间切换 */
-function toggleSort(field: 'createDt' | 'updateDt') {
+/** 表头点排序：点新列从倒序开始，再点同一列在倒序/正序之间切换（2026-10-21 起「使用源数」也可点） */
+function toggleSort(field: SortField) {
   if (sortField.value === field) sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
   else {
     sortField.value = field
@@ -57,7 +56,7 @@ function toggleSort(field: 'createDt' | 'updateDt') {
   search()
 }
 /** 表头排序态 class，对齐 el-table 的 ascending / descending（当前方向的小三角高亮） */
-function sortClass(field: 'createDt' | 'updateDt') {
+function sortClass(field: SortField) {
   if (sortField.value !== field) return ''
   return sortOrder.value === 'desc' ? 'descending' : 'ascending'
 }
@@ -135,11 +134,11 @@ async function loadCategoryChildren(
   }
 }
 const activeId = ref('')
-/** 「使用源数」下钻弹窗的目标流程 */
-const sourcesFlow = ref<FlowRecord | null>(null)
-/** 选源弹窗关联成功后 +1，让还开着的下钻清单重查 */
+/** 关联成功后 +1，让「已关联」页签重查 */
 const sourcesRefresh = ref(0)
+/** 「关联到源」弹窗（2026-10-21 起解绑 / 更换 / 添加都在这里）的目标流程和当前页签 */
 const applyFlow = ref<FlowRecord | null>(null)
+const manageTab = ref<ManageTab>('add')
 const applySourceIds = ref<string[]>([])
 /** 分批提交进度：「已关联 N / 总数」，只在分多批时展示 */
 const applyProgress = ref('')
@@ -580,24 +579,22 @@ function normalizeTags(raw: string): string {
 }
 
 /**
- * 删除流程。后端是**逻辑删除**（is_delete=-1 + state=D），删完不在列表和有效流程里出现，
- * 且**有源挂载的流程直接拒绝**（bee-top CsFlowService.deleteFlows：countGroupByFlowIds 非空即抛
- * 「有源挂载的流程不能删除，请先解绑源」）。所以两步走：
- *   - 流程没挂源 → 二次确认后直接删（确认里带 sourceCnt=0 的事实）；
- *   - 挂源（sourceCnt>0）→ 不能删：打开「更换/解绑源」前置对话框（F1 修复，2026-09-29），
- *     用户把源换绑到另一条流程（或解绑），换绑成功后**紧接着删除本流程**。
- * 旧文案「删除后这些源将不再归属任何流程」与后端事实相反（后端根本不允许删），已废弃。
+ * 删除流程。后端是**逻辑删除**（is_delete=-1 + state=D），且**有源挂载的流程直接拒绝**
+ * （bee-top CsFlowService.deleteFlows：「有源挂载的流程不能删除，请先解绑源」）。
+ *
+ * 2026-10-21 起「删除就是删除」：有源时只提示先解除关联，并带去「关联到源」的「已关联」页签处理；
+ * 原来删除对话框里的「更换到流程 / 仅解绑并删除 / 更换并删除」（changeFlowAndDelete）全部去掉，
+ * 解绑、更换只在「关联到源」里做。sourceCnt 缺失时（如 186 的 flowPaged 不返回）先照常删，
+ * 被后端以有源拒绝后走同一个提示。
  */
 async function removeFlow(flow: FlowRecord) {
   if ((flow.sourceCnt ?? 0) > 0) {
-    openRebindDelete(flow)
+    await promptUnbindFirst(flow, flow.sourceCnt)
     return
   }
   try {
     await ElMessageBox.confirm(
-      // 不写「该流程没有关联源」这类绝对断言：sourceCnt 缺失时文案会失真（审核 R5，
-      // 2026-09-29）。真有源的流程根本走不到这里（上面已分流到换绑引导），删不掉时
-      // 后端原文会把原因说清楚。
+      // 不写「该流程没有关联源」这类绝对断言：sourceCnt 缺失时文案会失真（审核 R5，2026-09-29）
       `确认删除流程「${flow.name}」（#${flow.id}）？删除后不可恢复。`,
       '删除流程',
       { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
@@ -608,7 +605,21 @@ async function removeFlow(flow: FlowRecord) {
   await doRemoveFlow(flow)
 }
 
-/** 流程已删除后的收尾：关掉正在打开的流程、埋点、刷新列表（直接删除与原子换绑删除共用）。 */
+/** 有源不能删：提示先解除关联，可直接去「关联到源」的「已关联」页签 */
+async function promptUnbindFirst(flow: FlowRecord, count?: number) {
+  try {
+    await ElMessageBox.confirm(
+      `流程「${flow.name}」仍被${count ? ` ${count} 个` : ''}源使用，不能删除。请先在「关联到源」里解除这些源的关联，再删除。`,
+      '不能删除流程',
+      { type: 'warning', confirmButtonText: '去关联到源', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  openApply(flow, 'bound')
+}
+
+/** 流程已删除后的收尾：关掉正在打开的流程、埋点、刷新列表 */
 function afterFlowRemoved(flow: FlowRecord) {
   if (activeId.value === flow.id) closeFlow()
   trackDelete('FLOW', flow.id, flow.name, {
@@ -620,7 +631,9 @@ function afterFlowRemoved(flow: FlowRecord) {
   void load()
 }
 
-/** 删除动作本体（无源时直接走；有源时走 rebindDelete 对话框的原子接口 changeFlowAndDelete）。 */
+/** 有源挂载被后端拒绝时的原文（sourceCnt 缺失时只能靠它认出来） */
+const MOUNTED_REJECT = /有源挂载|请先解绑/
+
 async function doRemoveFlow(flow: FlowRecord): Promise<boolean> {
   try {
     const ack = await flowCenterApi.remove([flow.id])
@@ -629,182 +642,34 @@ async function doRemoveFlow(flow: FlowRecord): Promise<boolean> {
     ElMessage.success(`流程「${flow.name}」已删除`)
     return true
   } catch (error) {
-    ElMessage.error(`删除失败：${(error as Error)?.message ?? String(error)}`)
+    const message = (error as Error)?.message ?? String(error)
+    if (MOUNTED_REJECT.test(message)) {
+      await promptUnbindFirst(flow)
+      return false
+    }
+    ElMessage.error(`删除失败：${message}`)
     return false
   }
 }
 
-// ---------------------------------------------------------------------------
-// F1（2026-09-29）：删除「有源挂载流程」的前置引导——先把源更换到其它流程（或解绑），
-// 再删除。后端 deleteFlows 拒绝挂源删除，这是前端侧唯一合法通路；换绑走 changeFlowBatch
-// （改 cs_source.FLOW_ID，后端顺带重算源根配置/清缓存，existing 契约已确认）。
-// ---------------------------------------------------------------------------
-
-/** 源简况（删除引导对话框里只展示名字与 ID，不拉全量详情） */
-export interface RebindSourceItem {
-  sourceId: string
-  name: string
-}
-
-const rebindDelete = reactive({
-  open: false,
-  flow: null as FlowRecord | null,
-  sourceIds: [] as string[],
-  /** 预览用的前几条源（对话框只展示少量，不拉全量详情） */
-  sourcePreview: [] as RebindSourceItem[],
-  sourceTotal: 0,
-  loadingSources: false,
-  sourcesError: '',
-  targetFlowId: '',
-  saving: false,
-})
-
-/** 候选目标流程：除本流程外的全部（禁用流程不提供换入——避免把源换到停用流程）。 */
-const rebindTargets = ref<FlowRecord[]>([])
-
-/**
- * 空源列表：源拉取成功但一个源都没有（sourceCnt>0 与 sourcePaged 计数不一致，多发生在
- * 计数过期/源已被解绑）。这时换绑无从谈起，旧实现弹「没有可换绑的源」把用户卡死在重试循环里
- * （0929 修复）：改为提供「直接删除」出口，后端若仍拒绝会给出真实原因。
- */
-const rebindSourcesEmpty = computed(() => !rebindDelete.loadingSources && !rebindDelete.sourcesError && rebindDelete.sourceIds.length === 0)
-
-const REBIND_FETCH_PAGE = 1000
-const REBIND_PREVIEW_MAX = 6
-const REBIND_MAX_PAGES = 100
-
-async function openRebindDelete(flow: FlowRecord) {
-  rebindDelete.flow = flow
-  rebindDelete.sourceIds = []
-  rebindDelete.sourcePreview = []
-  rebindDelete.sourceTotal = 0
-  rebindDelete.sourcesError = ''
-  rebindDelete.targetFlowId = ''
-  rebindDelete.open = true
-  // 源 ID 全量拉取（换绑要真实 sourceId；sourcePaged 支持 flowId 过滤，生产实测确认）。
-  // 一次最多见过 5439 个源（FlowSourcesDialog 头注），所以分页循环取完，不赌 size 上限。
-  rebindDelete.loadingSources = true
+/** 「关联到源」里把源都处理完后点「删除流程」 */
+async function deleteFromManager() {
+  const flow = applyFlow.value
+  if (!flow) return
   try {
-    const ids: string[] = []
-    const preview: RebindSourceItem[] = []
-    for (let page = 1; ; page++) {
-      // 0929 兜底：total 与列表不一致/后端一直不给完时不许无限翻页（旧实现会死循环到页面卡死）
-      if (page > REBIND_MAX_PAGES) throw new Error('源列表分页读取异常（超过 100 页仍未取完），无法换绑')
-      const result = await sourceApi.sourcePaged({ flowId: flow.id, page, size: REBIND_FETCH_PAGE })
-      const list = result.list ?? []
-      list.forEach((s) => {
-        ids.push(String(s.sourceId))
-        if (preview.length < REBIND_PREVIEW_MAX) {
-          preview.push({ sourceId: String(s.sourceId), name: s.name || `源 #${s.sourceId}` })
-        }
-      })
-      rebindDelete.sourceTotal = result.total ?? ids.length
-      if (!list.length || ids.length >= (result.total ?? 0)) break
-    }
-    rebindDelete.sourceIds = [...new Set(ids)]
-    rebindDelete.sourcePreview = preview
-  } catch (error) {
-    // 保留原始失败原因（分页兜底等主动抛的异常也走这里），统一加「源列表读取失败：」前缀
-    const reason = (error as Error)?.message || ''
-    rebindDelete.sourcesError = reason
-      ? `源列表读取失败：${reason}`
-      : '源列表读取失败，无法换绑（请先在源侧确认该流程的挂载源）'
-  } finally {
-    rebindDelete.loadingSources = false
-  }
-  // 目标流程候选（列表模式一次 500 条，够用）：排除自己；禁用流程不可选（F6）。
-  rebindTargets.value = (await flowCenterApi.list().catch(() => []))
-    .filter((t) => t.id !== flow.id && !t.disabled)
-}
-
-async function confirmRebindDelete(mode: 'replace' | 'unbind') {
-  const flow = rebindDelete.flow
-  if (!flow || rebindDelete.saving) return
-  if (mode === 'replace' && !rebindDelete.targetFlowId) {
-    ElMessage.warning('请先选择要更换到的目标流程')
-    return
-  }
-  if (!rebindDelete.sourceIds.length) {
-    // 0929 死循环修复：不再弹「没有可换绑的源」把用户卡住——空源列表一律走「直接删除」出口
-    await confirmDirectDelete()
-    return
-  }
-  const target = rebindTargets.value.find((t) => t.id === rebindDelete.targetFlowId)
-  const action = mode === 'replace'
-    ? `把 ${rebindDelete.sourceTotal} 个源更换到流程「${target?.name ?? '#' + rebindDelete.targetFlowId}」`
-    : `从流程「${flow.name}」解绑全部 ${rebindDelete.sourceTotal} 个源（1008-06：只断这条流程的关联，这些源关联的其它流程不受影响）`
-  try {
-    await ElMessageBox.confirm(
-      `流程「${flow.name}」仍有 ${rebindDelete.sourceTotal} 个源挂载，删除前必须先处理这些源。\n`
-      + `将${action}，完成后立即删除本流程。\n继续？`,
-      '删除流程前更换源',
-      { type: 'warning', confirmButtonText: mode === 'replace' ? '更换并删除' : '解绑并删除', cancelButtonText: '取消' },
-    )
+    await ElMessageBox.confirm(`确认删除流程「${flow.name}」（#${flow.id}）？删除后不可恢复。`, '删除流程', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
   } catch {
     return
   }
-  rebindDelete.saving = true
-  try {
-    // 2026-10-20：改走原子接口 changeFlowAndDelete——换绑/解绑与删除旧流程在同一个事务里
-    // （READ_COMMITTED，任一步失败整体回滚）。原来分 changeFlowBatch + deleteFlow 两次调用，
-    // 两条请求之间没有事务：换绑成功而删除失败时，源已经被摘下（或已换到目标流程）、旧流程还在，
-    // 而界面只能报一句「删除失败」，用户根本看不出源已经动过了（细节见 api/index.ts 同名方法）。
-    // 基线 f64d74a 那次「更换也带 currentFlowId」的分批修复已被本接口吸收：原子接口里
-    // currentFlowId 本就是必填，flowId 才是可选的目标流程。
-    const ack = await flowCenterApi.changeFlowAndDelete(
-      rebindDelete.sourceIds,
-      flow.id,
-      mode === 'replace' ? rebindDelete.targetFlowId : undefined,
-    )
-    if (!ack.ok) throw new Error(ack.message || '未知原因')
-    const targetName = target?.name ?? `#${rebindDelete.targetFlowId}`
-    afterFlowRemoved(flow)
-    rebindDelete.open = false
-    ElMessage.success(
-      mode === 'replace'
-        ? `已把 ${rebindDelete.sourceTotal} 个源更换到流程「${targetName}」，并删除流程「${flow.name}」`
-        : `已从流程「${flow.name}」解绑 ${rebindDelete.sourceTotal} 个源，并删除该流程`,
-    )
-  } catch (error) {
-    // 原子接口失败 = 什么都没改（后端整体回滚）：对话框保持原样，用户可直接重试或取消。
-    ElMessage.error(`删除流程失败：${(error as Error)?.message ?? String(error)}`)
-  } finally {
-    rebindDelete.saving = false
-  }
+  if (await doRemoveFlow(flow)) applyFlow.value = null
 }
 
-/**
- * 空源列表时的直接删除出口（0929 死循环修复）：源拉取返回 0 个但 sourceCnt>0 时，换绑
- * 无从谈起；直接尝试删除，后端若仍拒绝（计数来源与源侧不一致）会给出真实原因，
- * 用户可到源侧解绑后重来——不再被困在「重试拉源」循环里。
- */
-async function confirmDirectDelete() {
-  const flow = rebindDelete.flow
-  if (!flow || rebindDelete.saving) return
-  try {
-    await ElMessageBox.confirm(
-      '当前读取到的挂载源为 0 个（计数可能已过期）。\n'
-      + `将直接尝试删除流程「${flow.name}」（#${flow.id}）。\n`
-      + '若后端仍提示该流程存在未处理的挂载源，请先到源侧解绑后重试。',
-      '直接删除流程',
-      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return // 用户取消
-  }
-  rebindDelete.open = false
-  await doRemoveFlow(flow)
-}
-
-function openApply(flow: FlowRecord) {
+/** 打开「关联到源」：不指定页签时，有源先看「已关联」，没源直接「添加关联」 */
+function openApply(flow: FlowRecord, tab?: ManageTab) {
   applyFlow.value = flow
+  manageTab.value = tab ?? ((flow.sourceCnt ?? 0) > 0 ? 'bound' : 'add')
   applySourceIds.value = []
   applyProgress.value = ''
-}
-
-/** 下钻弹窗的「+ 关联源」：复用上层那套选源 + 分批 + 作业条，不另起一份提交逻辑 */
-function applyFromSources() {
-  if (sourcesFlow.value) openApply(sourcesFlow.value)
 }
 
 async function confirmApply() {
@@ -873,7 +738,8 @@ async function confirmApply() {
       void load()
       return
     }
-    applyFlow.value = null
+    // 关联完留在弹窗里，切到「已关联」看结果（2026-10-21）
+    manageTab.value = 'bound'
     applySourceIds.value = []
     ElMessage.success(`已把 ${done} 个源关联到流程「${target.name}」`)
     sourcesRefresh.value++
@@ -921,6 +787,7 @@ async function confirmApply() {
         <option value="updateDt-desc">更新时间倒序</option>
         <option value="updateDt-asc">更新时间正序</option>
         <option value="sourceCnt-desc">使用源数最多</option>
+        <option value="sourceCnt-asc">使用源数最少</option>
       </select>
       <!-- 范围过滤在服务端（flowPaged.templateFlag），不是本地筛 -->
       <select v-model="scope" class="fc-input" aria-label="范围" data-testid="flow-center-scope" @change="search">
@@ -976,7 +843,11 @@ async function confirmApply() {
             <th>流程 ID / 名称</th>
             <th style="width: 170px">分类 / 标签</th>
             <th style="width: 200px">描述</th>
-            <th style="width: 110px">使用源数</th>
+            <th style="width: 110px">
+              <button class="fc-sort-th" :class="sortClass('sourceCnt')" type="button" data-testid="flow-sort-source-cnt" @click="toggleSort('sourceCnt')">
+                使用源数<span class="fc-caret"><i class="fc-caret-up" /><i class="fc-caret-down" /></span>
+              </button>
+            </th>
             <th style="width: 140px">
               <button class="fc-sort-th" :class="sortClass('createDt')" type="button" data-testid="flow-sort-create" @click="toggleSort('createDt')">
                 创建时间<span class="fc-caret"><i class="fc-caret-up" /><i class="fc-caret-down" /></span>
@@ -1032,7 +903,7 @@ async function confirmApply() {
                 type="button"
                 data-testid="flow-source-cnt-link"
                 :title="`查看流程「${t.name}」的关联源`"
-                @click.stop="sourcesFlow = t"
+                @click.stop="openApply(t, 'bound')"
               >{{ t.sourceCnt }} 个</button>
               <!-- 0 个和字段缺失都不给点：点开必然是空表，白让人跑一趟 -->
               <template v-else>{{ t.sourceCnt == null ? '—' : '0 个' }}</template>
@@ -1141,13 +1012,6 @@ async function confirmApply() {
       />
     </div>
 
-    <FlowSourcesDialog
-      :flow="sourcesFlow"
-      :refresh-tick="sourcesRefresh"
-      @apply="applyFromSources"
-      @changed="load"
-      @close="sourcesFlow = null"
-    />
 
     <FlowDetailDrawer
       :categories="categoryOptions"
@@ -1225,96 +1089,17 @@ async function confirmApply() {
       </template>
     </el-dialog>
 
-    <!-- 删除有源流程的前置引导（F1，0929）：后端拒绝删除挂源流程，先换绑/解绑源再删。
-         源列表展示前若干条 + 总数；目标流程下拉排除自身与禁用流程。 -->
-    <el-dialog
-      v-model="rebindDelete.open"
-      :title="`删除流程「${rebindDelete.flow?.name ?? ''}」`"
-      width="560px"
-      destroy-on-close
-    >
-      <div class="fc-form">
-        <p class="fc-form-hint">
-          <template v-if="rebindSourcesEmpty">
-            已读取到 <strong>0</strong> 个挂载源（计数可能已过期）。可直接尝试删除本流程；
-            若后端仍提示有源未处理，请先在源侧解绑后再试。
-          </template>
-          <template v-else-if="rebindDelete.sourcesError">
-            挂载源读取失败，暂无法换绑。可先「重新读取源列表」；仍失败请到源侧确认该流程的挂载源。
-          </template>
-          <template v-else>
-            该流程仍被 <strong>{{ rebindDelete.sourceTotal }}</strong> 个源使用，无法直接删除。
-            请先把这些源更换到其它流程（或解绑），更换成功后立即删除本流程。
-          </template>
-        </p>
-        <div class="fc-rebind-sources" v-if="rebindDelete.loadingSources">正在读取挂载源…</div>
-        <ul v-else-if="rebindDelete.sourcesError" class="fc-rebind-error">{{ rebindDelete.sourcesError }}</ul>
-        <ul v-else class="fc-rebind-sources">
-          <li v-for="s in rebindDelete.sourcePreview" :key="s.sourceId">{{ s.name }} <span class="fc-muted">#{{ s.sourceId }}</span></li>
-          <li v-if="rebindDelete.sourceTotal > rebindDelete.sourcePreview.length" class="fc-muted">
-            另有 {{ rebindDelete.sourceTotal - rebindDelete.sourcePreview.length }} 个源（列表过长，仅展示前 {{ rebindDelete.sourcePreview.length }} 个）
-          </li>
-        </ul>
-        <label class="fc-form-row">
-          <span>更换到流程</span>
-          <select v-model="rebindDelete.targetFlowId" class="fc-input" data-testid="rebind-target-flow">
-            <option value="">— 选择目标流程 —</option>
-            <option v-for="t in rebindTargets" :key="t.id" :value="t.id">
-              {{ t.name }}（#{{ t.id }}）{{ t.isTemplate ? ' · 模板' : '' }}
-            </option>
-          </select>
-        </label>
-      </div>
-      <template #footer>
-        <!-- 取消在换绑/删除进行中（saving）时必须禁用：否则用户点了取消以为安全退出了，
-             实际的换绑+删除仍在后台继续跑完（审核 R14，2026-09-29）。 -->
-        <!-- 空源列表（0929 修复）：换绑无从谈起，只给「取消 + 直接删除」出口，不再死循环 -->
-        <template v-if="rebindSourcesEmpty">
-          <button class="fc-dialog-btn" type="button" :disabled="rebindDelete.saving" @click="rebindDelete.open = false">取消</button>
-          <button
-            class="fc-dialog-btn primary"
-            type="button"
-            :disabled="rebindDelete.saving"
-            data-testid="rebind-direct-delete"
-            @click="confirmDirectDelete"
-          >{{ rebindDelete.saving ? '删除中…' : '直接删除' }}</button>
-        </template>
-        <template v-else>
-          <button class="fc-dialog-btn" type="button" :disabled="rebindDelete.saving" @click="rebindDelete.open = false">取消</button>
-          <!-- sourcesError 时两个删除按钮都不可用（不知道挂载源就不能换绑/解绑）——必须给一条
-               出路而不是把用户关死在对话框里：重试重新拉源（审核 R11，2026-09-29）。 -->
-          <button
-            v-if="rebindDelete.sourcesError"
-            class="fc-dialog-btn primary"
-            type="button"
-            :disabled="rebindDelete.loadingSources"
-            data-testid="rebind-retry-sources"
-            @click="openRebindDelete(rebindDelete.flow!)"
-          >重新读取源列表</button>
-          <button
-            class="fc-dialog-btn"
-            type="button"
-            :disabled="rebindDelete.saving || rebindDelete.loadingSources || !!rebindDelete.sourcesError"
-            data-testid="rebind-unbind-delete"
-            @click="confirmRebindDelete('unbind')"
-          >仅解绑并删除</button>
-          <button
-            class="fc-dialog-btn primary"
-            type="button"
-            :disabled="rebindDelete.saving || rebindDelete.loadingSources || !!rebindDelete.sourcesError"
-            data-testid="rebind-replace-delete"
-            @click="confirmRebindDelete('replace')"
-          >{{ rebindDelete.saving ? '处理中…' : '更换并删除' }}</button>
-        </template>
-      </template>
-    </el-dialog>
 
-    <FlowSourcePickerDialog
+    <FlowSourcesManagerDialog
+      v-model:tab="manageTab"
+      v-model:picked="applySourceIds"
       :flow="applyFlow"
-      v-model="applySourceIds"
       :submitting="applying"
       :progress="applyProgress"
+      :refresh-tick="sourcesRefresh"
       @confirm="confirmApply"
+      @changed="load"
+      @delete="deleteFromManager"
       @close="applyFlow = null"
     />
   </section>
@@ -1325,8 +1110,6 @@ async function confirmApply() {
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
 .fc-form { display: flex; flex-direction: column; gap: 10px; }
 .fc-form-row { display: flex; align-items: center; gap: 10px; }
-.fc-rebind-sources { max-height: 180px; overflow: auto; margin: 0; padding: 8px 12px; border: 1px solid var(--rc-border, #e4e7ec); border-radius: 6px; list-style: none; font-size: 12px; line-height: 22px; }
-.fc-rebind-error { color: var(--rc-danger, #d03050); font-size: 12px; margin: 0; padding: 8px 12px; border: 1px dashed var(--rc-danger, #d03050); border-radius: 6px; }
 .fc-form-row > span { flex: none; width: 68px; color: var(--rc-text-2); font-size: 13px; }
 .fc-form-row > span em { color: var(--rc-error, #d92d20); font-style: normal; }
 .fc-form-row .fc-input { flex: 1; min-width: 0; }
