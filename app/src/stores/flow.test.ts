@@ -1292,9 +1292,9 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
   it('数据处理组只保留字典里独立编号的类型，通用数据处理节点已去除', () => {
     expect(LIB_GROUPS.map((group) => group.title)).toEqual(expect.not.arrayContaining(['解析结构化', '数据清洗', '数据校验']))
     // 2026-09-23 用户明确要求：节点类型「数据处理」去除（纯前端移除 PROC 通用入口），
-    // 组内只保留后端字典里 300/700/710/720/730/800 独立编号的类型。
+    // 组内只保留后端字典里 300/700/710/720/730/800/911 独立编号的类型。
     expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
-      '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手',
+      '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手', 'PDF转MD',
     ])
     expect(LIB_GROUPS.flatMap((g) => g.items).some((it) => it.name === '数据处理' || it.code === 'PROC')).toBe(false)
 

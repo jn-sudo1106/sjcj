@@ -67,6 +67,9 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
     } else if (cfg.configType === '700' && (cfg.template === 'rule' || !cfg.template)) {
       cfg.template = 'video-audio'
       if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[700] 视频提取音频 · 音轨抽取'
+    } else if (cfg.configType === '911' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'pdf-md'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[911] PDF转MD · 文档转 Markdown'
     }
   }
   const target = cfg.collectCfg ?? cfg
@@ -131,6 +134,7 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
   'audio-text': 710,
   'article-summary': 720,
   'article-tag': 730,
+  'pdf-md': 911,
   // 800 现在是「翻译助手」（2026-09-17 核对 cfg_source_type）；09-17 前本前端曾把 800 写成数据校验，
   // 那个编号已经改成 620，所以这里不会与校验撞车。
   translate: 800,
@@ -206,7 +210,7 @@ function promptForConfig(cfg: NodeConfig): string | undefined {
  * （150/700/710/720/730/800）时以 base 为准——那种情况下节点还没被正确识别，
  * 真实类型就在 base 里；其余情况（含 base 为空的历史规则配置）照旧写 600。
  */
-const SCRIPTLESS_CONFIG_TYPES = new Set([150, 700, 710, 720, 730, 800])
+const SCRIPTLESS_CONFIG_TYPES = new Set([150, 700, 710, 720, 730, 800, 911])
 
 function configTypeForSave(cfg: NodeConfig, base: Record<string, unknown>): number | undefined {
   const fromNode = configTypeFrom(cfg)
