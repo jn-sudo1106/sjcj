@@ -50,6 +50,8 @@ type WizardVm = {
   form: Record<string, unknown>
   step: number
   busy: boolean
+  entityCopy: boolean
+  entryConfig: boolean
   tables: SyncTable[]
   taskList: Array<{ taskName: string; cron: string; fromSql: string; type?: string }>
   nextTable: () => Promise<void>
@@ -249,5 +251,34 @@ describe('提交防重', () => {
     void vm(root).submit()
     expect(save).toHaveBeenCalledTimes(1)
     await flushPromises()
+  })
+})
+
+describe('实体配置开关', () => {
+  /** 独立于「同步实体」：默认关闭，勾选后提交要带上 entryConfig，服务端据此决定是否同步两张实体配置表 */
+  async function submitWith(entryConfig: boolean) {
+    const root = await mountWizard()
+    Object.assign(vm(root), {
+      step: 2,
+      entityCopy: false,
+      entryConfig,
+      taskList: [{ taskName: '通用新闻列表同步任务', cron: '0 0 1 * * ?', fromSql: 'select 1' }],
+    })
+    vm(root).form.sourceTable = 'sense_data.tb_cnews'
+    vm(root).form.targetTable = 'cnews'
+    await flushPromises()
+    const save = vi.spyOn(syncApi, 'saveTask').mockResolvedValue({})
+    await vm(root).submit()
+    return save.mock.calls[0]?.[0] as Record<string, unknown>
+  }
+
+  it('默认不勾选，提交时 entryConfig 为 false', async () => {
+    expect((await submitWith(false)).entryConfig).toBe(false)
+  })
+
+  it('勾选后提交带 entryConfig: true，且不连带打开同步实体', async () => {
+    const payload = await submitWith(true)
+    expect(payload.entryConfig).toBe(true)
+    expect(payload.entityCopy).toBe(false)
   })
 })
