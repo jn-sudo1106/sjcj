@@ -7,7 +7,7 @@
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
 import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Star, StarFilled } from '@element-plus/icons-vue'
+import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source } from '@/api'
 import { isProductionBackend } from '@/api/client'
 import { useLaunchJobStore } from '@/stores/launchJob'
@@ -21,6 +21,7 @@ import {
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
+import EditSourceDialog from '@/views/FlowCanvas/source/EditSourceDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
@@ -123,6 +124,7 @@ const props = defineProps<{
    * 内容由父级用 `extra-cell` 槽位按行渲染。不给 = 原样。
    */
   extraColumnLabel?: string
+  quickEdit?: boolean
 }>()
 const emit = defineEmits<{
   openSource: [source: Source]
@@ -144,6 +146,11 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
+const quickEditSource = ref<Source | null>(null)
+function onQuickEdited() {
+  quickEditSource.value = null
+  ui.notifySourceListChanged()
+}
 /**
  * 查询：多条件并行（2026-09-28 产品：「改成和数据搜索一样」，用户定按多条件做）。
  * 每行 = 字段 ＋ 条件 ＋ 值，行与行之间是「并且」；备注也并进来了（原先单独一格的有 / 无备注
@@ -1223,7 +1230,7 @@ defineExpose({ openLaunch, clearSelection })
 <template>
   <section class="sov-shell" data-testid="source-overview">
     <!-- 不限网站（采集资产源列表视图）用紧凑样式：与同页的网站查询工具条同一套外观——
-         一行排开、不要控件上方的小标题（改由首项 / 占位文字说明）、34px 高。网站详情里保持原样。 -->
+         按可用宽度换行、不要控件上方的小标题（改由首项 / 占位文字说明）、34px 高。网站详情里保持原样。 -->
     <div class="sov-filter" :class="{ 'is-compact': crossSite }">
       <!-- 查询：多条件并行（2026-09-28），每行 字段 ＋ 条件 ＋ 值，行与行之间是「并且」。
            备注也在这里（非空 / 为空 = 原来的有备注 / 无备注）。同一字段只能一行。 -->
@@ -1271,6 +1278,7 @@ defineExpose({ openLaunch, clearSelection })
           </div>
         </div>
       </div>
+      <div class="sov-filter-options">
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
       <label v-if="crossSite" class="sov-fl-site"><span class="sov-label-text">网站</span>
         <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
@@ -1327,12 +1335,13 @@ defineExpose({ openLaunch, clearSelection })
         <!-- 采集资产源列表视图把「视图切换 / 刷新」放在这里，与筛选并成一条栏（网站详情不传） -->
         <slot name="filter-extra" />
       </div>
+      </div>
     </div>
 
     <div class="sov-summary">
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
-      <slot name="summary-extra" />
+      <slot name="summary-extra" :ids="selectedIds" />
       <span v-if="urlFallback && !loading" class="sov-url-fallback" data-testid="source-overview-url-fallback">
         按名称没查到「{{ urlFallback.keyword }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
       </span>
@@ -1435,7 +1444,7 @@ defineExpose({ openLaunch, clearSelection })
                  名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
-            <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
+            <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
             <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
             <td v-if="crossSite && showCol('site')" class="sov-site" :title="siteNameOf(source)">
               <button
@@ -1571,6 +1580,7 @@ defineExpose({ openLaunch, clearSelection })
       @saved="onMarkEdited"
       @close="editTarget = null"
     />
+    <EditSourceDialog v-if="quickEditSource" :open="true" :source="quickEditSource" quick @update:open="quickEditSource = null" @saved="onQuickEdited" />
     <LaunchConfirmDialog
       v-if="launchOpen && launchScope"
       :mode="launchScope.mode"
@@ -1623,6 +1633,7 @@ defineExpose({ openLaunch, clearSelection })
 .sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
 .sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
+.sov-filter-options { display: contents; }
 /* 查询那格：一行一个条件（字段 + 条件 + 值 + ×/+），多个条件往下叠 */
 .sov-conds { display: grid; gap: 6px; }
 .sov-search { display: flex; align-items: center; gap: 4px; }
@@ -1640,18 +1651,19 @@ defineExpose({ openLaunch, clearSelection })
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
 .sov-filter.is-compact {
-  /* 一行（用户 2026-10-12 定，不要换行）。1366 宽度下可用 1110px：基准宽度合计约 1050，更窄时各控件按比例压缩，
-     但每个控件都有下限（label 的 min-width: auto 把下限传给里面的下拉 / 输入框），压到下限就不再压，不会重叠 */
-  flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 52px; padding: 8px 12px;
+  /* 目录展开会缩小实际可用宽度：放得下时保持一行，放不下时按完整控件换行，避免操作区溢出。 */
+  flex-wrap: wrap; align-items: flex-start; gap: 8px; min-height: 52px; padding: 8px 12px;
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .sov-filter.is-compact .sov-label-text { display: none; }
+/* 基准宽覆盖全部筛选与操作，避免外层仍同排、内部先换行造成错位。 */
+.sov-filter.is-compact .sov-filter-options { display: flex; flex: 1 1 764px; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 /* 每个筛选项：label 带「基准宽度 + 压缩下限」，里面的下拉 / 输入框跟着 label 走（width: 100%）。
    不能给下拉 / 输入框自己设固定宽度——固定宽度会把 label 的最小尺寸撑死，窄屏下压不动就重叠 */
 .sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
 .sov-filter.is-compact label select, .sov-filter.is-compact label input { width: 100%; }
-/* 查询那格：字段 84 + 条件 64 + 输入框下限 120 + 「+」22 + 间距 12，再留 8 的余量（1280 实测 306 时「+」会碰到右边的网站下拉） */
-.sov-filter.is-compact .sov-field { display: flex; flex: 0 1 342px; min-width: 314px; }
+/* 查询那格：预留字段、条件、输入框和同时显示的删除 / 添加按钮所需宽度，余量留给输入框。 */
+.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 342px; min-width: 340px; }
 /* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
 .sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
@@ -1692,6 +1704,10 @@ defineExpose({ openLaunch, clearSelection })
 .sov-table th, .sov-table td { padding: 9px 10px; border-bottom: 1px solid #edf2f7; text-align: left; white-space: nowrap; color: var(--rc-text-2); }
 .sov-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--rc-muted); font-weight: 700; }
 .sov-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text) !important; font-weight: 600; }
+.sov-name-content { display: flex; align-items: center; gap: 6px; }
+.sov-name-content .sov-source-link { flex: 1; min-width: 0; }
+.sov-quick-edit { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-muted); cursor: pointer; }
+.sov-quick-edit:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
 .sov-extra { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text-2); font-size: 12px; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }

@@ -10,6 +10,7 @@ import { beginSitesFetch, clearCollectAssetsCache, collectAssetsCache, commitSit
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { sourceApi, siteApi, favoriteApi, logReportApi } from '@/api'
+import * as sourceDirs from '@/api/sourceDirs'
 
 // 「最近打开」2026-10-19 起以后端通用埋点为准。这里用内存列表代替服务端：
 // 上报记进内存、挂载时 recentRaw 从它读回来——与真实后端行为一致，
@@ -285,11 +286,110 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     return { ...res, ui, list: res.wrapper.findComponent({ name: 'SourceOverviewView' }) }
   }
 
+  it('默认收起业务目录，全选只查询目录内的源；旧的展开偏好不覆盖默认值', async () => {
+    sourceDirs.resetSourceDirCache()
+    localStorage.setItem('sjcj.sourceDirPanel.collapsed', '0')
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: 'biz-dir', name: '业务目录一' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['biz-source'])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    await vi.waitFor(() => expect(list.props('scopeSourceIds')).toEqual(['biz-source']))
+    expect(wrapper.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录全')
+    expect(wrapper.find('.ca-dir-layout.collapsed').exists()).toBe(true)
+    expect(scope).toHaveBeenCalledWith(['biz-dir'])
+    expect(page).toHaveBeenCalled()
+    for (const [query] of page.mock.calls) expect(query?.sourceIds).toBe('biz-source')
+    wrapper.unmount()
+    for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+    sourceDirs.resetSourceDirCache()
+  })
+
+  it('业务目录为空时默认列表保持空范围，不请求全库源', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    await flushPromises()
+    expect(list.props('scopeSourceIds')).toEqual([])
+    expect(page).not.toHaveBeenCalled()
+    wrapper.unmount()
+    for (const spy of [categories, membership, page]) spy.mockRestore()
+    sourceDirs.resetSourceDirCache()
+  })
+
+  it('常驻入口在同一弹窗从全库选源和目录，保存后刷新当前范围', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['1'])
+    const add = vi.spyOn(sourceDirs, 'addSourcesToBizDir').mockResolvedValue(1)
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    try {
+      expect(wrapper.find('[data-testid="source-add-to-biz"]').exists()).toBe(false)
+      await wrapper.get('[data-testid="source-pick-for-biz"]').trigger('click')
+      await flushPromises()
+      const picker = wrapper.findComponent({ name: 'GroupSourcePicker' })
+      expect(picker.props('modelValue')).toBe(true)
+      expect(picker.props('pickMode')).toBe(true)
+      expect(page.mock.lastCall?.[0]).toMatchObject({ page: 1, size: 20 })
+      expect(page.mock.lastCall?.[0]).not.toHaveProperty('sourceIds')
+      expect(page.mock.lastCall?.[0]).not.toHaveProperty('categorys')
+      expect(add).not.toHaveBeenCalled()
+      const target = wrapper.findComponent({ name: 'BizDirPickerDialog' })
+      expect(target.props('initialSourceIds')).toEqual([])
+      expect(target.props('initialDirectoryIds')).toEqual([])
+      expect(picker.findComponent({ name: 'ElTree' }).exists()).toBe(true)
+      scope.mockResolvedValue(['1', '99'])
+      target.vm.$emit('saved')
+      target.vm.$emit('close')
+      await flushPromises()
+      expect(list.props('scopeSourceIds')).toEqual(['1', '99'])
+      await wrapper.get('[data-testid="dir-scope-clear"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="source-pick-for-biz"]').exists()).toBe(true)
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, add, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
+  it('右侧勾选源后，两种加入入口都带入源和左侧业务目录，不把含子级范围当作目标', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['1'])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '1', name: '测试源', state: 'C' } as never] })
+    const { wrapper } = await mountList()
+    try {
+      wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', dirIds: ['900', '901'], labels: [{ id: '900', path: '股票数据', hasKids: true }] })
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      for (const entry of ['source-add-to-biz', 'source-pick-for-biz']) {
+        await wrapper.get(`[data-testid="${entry}"]`).trigger('click')
+        await flushPromises()
+        const dialog = wrapper.findComponent({ name: 'BizDirPickerDialog' })
+        expect(dialog.props('initialSourceIds')).toEqual(['1'])
+        expect(dialog.props('initialDirectoryIds')).toEqual(['900'])
+        dialog.vm.$emit('close')
+        await flushPromises()
+      }
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
   it('切到源列表视图：挂源视图组件、不限网站；卡片与网站批量条都不在', async () => {
     const { wrapper, ui, list } = await mountList()
     expect(ui.assetView).toBe('table')
     expect(list.exists()).toBe(true)
     expect(list.props('currentSiteId')).toBe('')
+    expect(list.props('quickEdit')).toBe(true)
     expect(list.props('scopeSiteIds')).toBeUndefined()
     expect(wrapper.findComponent({ name: 'SiteCardGrid' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'BatchBar' }).exists()).toBe(false)

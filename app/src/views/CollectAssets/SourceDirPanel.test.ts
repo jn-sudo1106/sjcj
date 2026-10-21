@@ -24,9 +24,13 @@ beforeEach(() => {
 })
 afterEach(() => vi.restoreAllMocks())
 
-async function mountPanel(collapsed = false) {
+async function mountPanel(collapsed = false, kind: 'sys' | 'biz' = 'sys') {
   const wrapper = mount(SourceDirPanel, { props: { collapsed }, global: { plugins: [ElementPlus] } })
   await flushPromises()
+  if (kind === 'sys') {
+    await wrapper.get('[data-testid="dir-kind-sys"]').trigger('click')
+    await flushPromises()
+  }
   return wrapper
 }
 const row = (w: Awaited<ReturnType<typeof mountPanel>>, id: string) => w.get(`[data-testid="dir-node"][data-dir="${id}"]`)
@@ -37,6 +41,31 @@ async function expand(w: Awaited<ReturnType<typeof mountPanel>>, id: string) {
 }
 
 describe('SourceDirPanel', () => {
+  it('默认业务目录全选，折叠时保留全部子级的范围，展开后勾选状态一致', async () => {
+    const w = await mountPanel(true, 'biz')
+    expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录全')
+    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: ['900', '901'] })
+    await w.setProps({ collapsed: false })
+    expect(w.get('[data-testid="dir-kind-biz"]').attributes('aria-selected')).toBe('true')
+    expect((w.get('[data-testid="dir-select-all"]').element as HTMLInputElement).checked).toBe(true)
+    await expand(w, '900')
+    for (const id of ['900', '901']) expect((row(w, id).get('[data-testid="dir-check"]').element as HTMLInputElement).checked).toBe(true)
+    await row(w, '901').get('[data-testid="dir-check"]').setValue(false)
+    await flushPromises()
+    expect(lastScope(w).all).toBe(false)
+    await w.get('[data-testid="dir-select-all"]').setValue(true)
+    await flushPromises()
+    expect(lastScope(w)).toMatchObject({ all: true, dirIds: ['900', '901'] })
+    w.unmount()
+  })
+
+  it('业务目录为空时全选仍是空范围，不退回未归类的源', async () => {
+    vi.mocked(sourceApi.sourceCategories).mockResolvedValue([])
+    const w = await mountPanel(true, 'biz')
+    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: [] })
+    w.unmount()
+  })
+
   it('系统目录根层不出现 -1 / -2', async () => {
     const w = await mountPanel()
     expect(w.findAll('[data-testid="dir-name"]').map((n) => n.text())).toEqual(['财经资讯', '海外社媒'])
@@ -90,7 +119,7 @@ describe('SourceDirPanel', () => {
     await flushPromises()
     await w.get('[data-testid="dir-kind-biz"]').trigger('click')
     await flushPromises()
-    expect(lastScope(w)).toMatchObject({ kind: 'biz', dirIds: [] })
+    expect(lastScope(w)).toMatchObject({ kind: 'biz', all: true, dirIds: ['900', '901'] })
     expect(w.findAll('[data-testid="dir-name"]').map((n) => n.text())).toEqual(['股票数据'])
     await w.get('[data-testid="dir-kind-sys"]').trigger('click')
     await flushPromises()

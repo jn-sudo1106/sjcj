@@ -1,20 +1,33 @@
 <script setup lang="ts">
-// 「加入业务目录」选目录（2026-10-21）。业务目录树懒加载（-2「业务分类」下），单选一个目录。
-// 一个源可以放进多个业务目录（10-21 定暂不限制），已经在里面的后端跳过。
-import { ref } from 'vue'
-import { dirPath, loadDirChildren, type DirNode } from '@/api/sourceDirs'
+// 选源和勾选目标业务目录在同一弹窗完成；父目录只代表自身，不连带写入子级。
+import { computed, ref } from 'vue'
+import { ElMessage, ElTree, type LoadFunction } from 'element-plus'
+import GroupSourcePicker from './GroupSourcePicker.vue'
+import { addSourcesToBizDir, dirNode, dirPath, loadDirChildren } from '@/api/sourceDirs'
 
-defineProps<{ count: number }>()
-const emit = defineEmits<{ close: []; pick: [categoryId: string, name: string] }>()
-
+const props = withDefaults(defineProps<{
+  initialSourceIds?: string[]
+  initialDirectoryIds?: string[]
+}>(), { initialSourceIds: () => [], initialDirectoryIds: () => [] })
+const emit = defineEmits<{ close: []; saved: [] }>()
 const visible = ref(true)
-const chosen = ref<DirNode | null>(null)
+const treeRef = ref<InstanceType<typeof ElTree>>()
+const checkedDirectoryIds = ref([...new Set(props.initialDirectoryIds)])
 const loadError = ref('')
+const saveError = ref('')
+const saving = ref(false)
+const expandedKeys = computed(() => {
+  const ids = new Set<string>()
+  for (const id of props.initialDirectoryIds) {
+    for (let parent = dirNode(id)?.parentId; parent; parent = dirNode(parent)?.parentId) ids.add(parent)
+  }
+  return [...ids]
+})
+const directoryNames = computed(() => checkedDirectoryIds.value.map((id) => dirPath(id).join(' / ') || id))
 
-type TreeNode = { level: number; data: DirNode }
-async function load(node: TreeNode, resolve: (data: DirNode[]) => void) {
+const load: LoadFunction = async (node, resolve) => {
   try {
-    const list = await loadDirChildren('biz', node.level === 0 ? '' : node.data.id)
+    const list = await loadDirChildren('biz', node.level === 0 ? '' : String(node.data.id))
     loadError.value = ''
     resolve(list)
   } catch (error) {
@@ -22,40 +35,81 @@ async function load(node: TreeNode, resolve: (data: DirNode[]) => void) {
     resolve([])
   }
 }
-function close() {
-  visible.value = false
-  emit('close')
+function onCheck() {
+  checkedDirectoryIds.value = (treeRef.value?.getCheckedKeys() ?? []).map(String)
 }
-function confirm() {
-  if (!chosen.value) return
-  emit('pick', chosen.value.id, dirPath(chosen.value.id).join(' / ') || chosen.value.name)
+function onVisibleChange(value: boolean) {
+  visible.value = value
+  if (!value) emit('close')
+}
+async function save(sourceIds: string[]) {
+  if (saving.value || !sourceIds.length || !checkedDirectoryIds.value.length) return
+  saving.value = true
+  saveError.value = ''
+  const ids = [...sourceIds]
+  const targets = [...checkedDirectoryIds.value]
+  let completed = 0
+  try {
+    for (const categoryId of targets) {
+      await addSourcesToBizDir(categoryId, ids)
+      completed++
+    }
+    ElMessage.success(`已将 ${ids.length} 个源加入 ${targets.length} 个业务目录，已存在的关系自动跳过`)
+    emit('saved')
+    onVisibleChange(false)
+  } catch (error) {
+    saveError.value = `${completed ? `已完成 ${completed} 个目录，其余` : ''}加入失败：${(error as Error)?.message ?? String(error)}。可重试，已有关系会自动跳过。`
+    if (completed) emit('saved')
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 
 <template>
-  <el-dialog :model-value="visible" :title="`把 ${count} 个源加入业务目录`" width="460px" append-to-body data-testid="biz-dir-picker" @close="close">
-    <div class="bdp-tree">
-      <el-tree
-        lazy
-        :load="load"
-        node-key="id"
-        :props="{ label: 'name', isLeaf: () => false }"
-        highlight-current
-        :expand-on-click-node="false"
-        @node-click="(data: DirNode) => (chosen = data)"
-      />
-    </div>
-    <div v-if="loadError" class="bdp-err">{{ loadError }}</div>
-    <div class="bdp-hint">{{ chosen ? `加入到「${dirPath(chosen.id).join(' / ') || chosen.name}」` : '选一个业务目录' }}；一个源可以放进多个业务目录，已在里面的会跳过</div>
-    <template #footer>
-      <el-button @click="close">取消</el-button>
-      <el-button type="primary" :disabled="!chosen" data-testid="biz-dir-picker-ok" @click="confirm">确定</el-button>
+  <GroupSourcePicker
+    :model-value="visible"
+    group-id=""
+    pick-mode
+    title="添加源到业务目录"
+    :initial-source-ids="initialSourceIds"
+    :busy="saving"
+    @update:model-value="onVisibleChange"
+  >
+    <template #aside>
+      <div class="bdp-heading">目标业务目录 <span>可多选</span></div>
+      <div class="bdp-tree" data-testid="biz-dir-picker-tree">
+        <el-tree
+          ref="treeRef"
+          lazy
+          show-checkbox
+          check-strictly
+          check-on-click-node
+          :load="load"
+          node-key="id"
+          :props="{ label: 'name', isLeaf: () => false }"
+          :default-checked-keys="initialDirectoryIds"
+          :default-expanded-keys="expandedKeys"
+          :expand-on-click-node="false"
+          @check="onCheck"
+        />
+      </div>
+      <div v-if="loadError" class="bdp-err">{{ loadError }}</div>
+      <div class="bdp-hint" data-testid="biz-dir-picker-targets">{{ directoryNames.length ? `已选 ${directoryNames.length} 个目录：${directoryNames.join('、')}` : '请勾选目标业务目录' }}</div>
+      <div class="bdp-hint">勾选父目录只加入该目录；一个源可加入多个目录，已有关系自动跳过。</div>
+      <div v-if="saveError" class="bdp-err" role="alert" data-testid="biz-dir-picker-error">{{ saveError }}</div>
     </template>
-  </el-dialog>
+    <template #submit="{ ids }">
+      <el-button type="primary" :loading="saving" :disabled="saving || !ids.length || !checkedDirectoryIds.length" data-testid="biz-dir-picker-ok" @click="save(ids)">加入 {{ checkedDirectoryIds.length }} 个目录</el-button>
+    </template>
+  </GroupSourcePicker>
 </template>
 
 <style scoped>
-.bdp-tree { max-height: 320px; overflow: auto; border: 1px solid var(--rc-border); border-radius: 8px; padding: 6px; }
-.bdp-err { margin-top: 6px; color: var(--rc-error); font-size: 12px; }
-.bdp-hint { margin-top: 8px; color: var(--rc-faint); font-size: 12px; }
+.bdp-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; color: var(--rc-text); font-weight: 600; }
+.bdp-heading span { color: var(--rc-muted); font-size: 12px; font-weight: 400; }
+.bdp-tree { max-height: calc(100vh - 340px); overflow: auto; }
+.bdp-err { margin-top: 8px; color: var(--rc-error); font-size: 12px; overflow-wrap: anywhere; }
+.bdp-hint { margin-top: 10px; color: var(--rc-muted); font-size: 12px; line-height: 1.6; }
+@media (max-width: 760px) { .bdp-tree { max-height: 140px; } }
 </style>

@@ -62,6 +62,7 @@ import {
   flowPageFromLegacy,
   flowToLegacy,
   sourceToLegacyParams,
+  sourceCoreToLegacyParams,
   sourceStepsFromLegacy,
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
@@ -1077,6 +1078,14 @@ export const sourceApi = {
       method: 'POST',
       httpEndpoint: 'source/updateSource',
       httpParams: sourceToLegacyParams(source),
+    })
+    return ackFromApiResult(result)
+  },
+  updateSourceCore: async (sourceId: string, patch: { name?: string; url?: string; coreParam: string }): Promise<Ack> => {
+    const result = await request<unknown>('source/updateSource', { source: { sourceId, ...patch } }, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: sourceCoreToLegacyParams(sourceId, patch),
     })
     return ackFromApiResult(result)
   },

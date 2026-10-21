@@ -857,6 +857,20 @@ describe('旧平台新建源 HTTP 契约', () => {
       .toEqual({ sourceId: 'src-2', tags: '#正文缺失', remark: '改备注保标签' })
   })
 
+  it('快捷编辑只发送源 ID、名称、URL 和核心参数，不夹带流程、分类和状态字段；支持清空', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '修改成功' }))
+    const { sourceApi } = await import('./index')
+    await sourceApi.updateSourceCore('src-1', { name: '新名称', url: 'https://example.com/new', coreParam: 'a=1' })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/source/updateSource')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({ sourceId: 'src-1', sourceName: '新名称', sourceUrl: 'https://example.com/new', sourceParam: 'a=1' })
+    await sourceApi.updateSourceCore('src-1', { url: '', coreParam: '' })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toEqual({ sourceId: 'src-1', sourceUrl: '', sourceParam: '' })
+    await sourceApi.updateSourceCore('src-1', { coreParam: '只改参数' })
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ sourceId: 'src-1', sourceParam: '只改参数' })
+  })
+
   it('GET /v1/source/setColor：设颜色带 isClear=0；清除写 flag=0，不带 isClear', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
     const { sourceApi } = await import('./index')
