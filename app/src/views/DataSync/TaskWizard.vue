@@ -30,6 +30,8 @@ const selectedTable = ref<SyncTable>()
 const columns = ref<SyncColumnMap[]>([])
 const originalColumns = ref<SyncColumnMap[]>([])
 const entityCopy = ref(false)
+// 实体配置：独立开关，勾选后额外同步 cfg_entry_type、cfg_entry_item 两张表
+const entryConfig = ref(false)
 const taskList = ref<Array<{ taskName: string; cron: string; fromSql: string; type?: string }>>([])
 // CK / ES 目标端参数：其它目标类型保持 null，提交时不带该字段，服务端走默认渲染分支
 const sinkOptions = ref<SyncSinkOptions | null>(null)
@@ -291,7 +293,7 @@ async function submit() {
   busy.value = true
   try {
     // 旧 Step1→Step2→Step3→SourceBuildForm.commitAll 的最终提交结构。
-    await syncApi.saveTask({ ...form, entityCopy: entityCopy.value,
+    await syncApi.saveTask({ ...form, entityCopy: entityCopy.value, entryConfig: entryConfig.value,
       columnMapList: submitSyncColumns(columns.value), taskList: taskList.value,
       sinkOptions: sanitizeSinkOptions(sinkOptions.value, form.targetDatabaseType),
       params: [] })
@@ -348,7 +350,7 @@ async function submit() {
     </div>
 
     <div v-else-if="step === 1" class="sync-wizard-body">
-      <div class="sync-row"><el-button type="primary" @click="addColumn">增加列</el-button><span>同步实体</span><el-switch v-model="entityCopy" @change="toggleEntityCopy" /></div>
+      <div class="sync-row"><el-button type="primary" @click="addColumn">增加列</el-button><span>同步实体</span><el-switch v-model="entityCopy" @change="toggleEntityCopy" /><span>实体配置</span><el-switch v-model="entryConfig" /></div>
       <el-table :data="columns" border class="sync-map-table">
         <el-table-column type="index" label="#" width="54" />
         <el-table-column label="源列名" min-width="145"><template #default="{ row }"><el-input v-model="row.sourceColumn" /></template></el-table-column>
