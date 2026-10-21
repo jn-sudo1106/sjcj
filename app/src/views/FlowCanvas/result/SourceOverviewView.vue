@@ -1651,19 +1651,20 @@ defineExpose({ openLaunch, clearSelection })
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
 .sov-filter.is-compact {
-  /* 目录展开会缩小实际可用宽度：放得下时保持一行，放不下时按完整控件换行，避免操作区溢出。 */
-  flex-wrap: wrap; align-items: flex-start; gap: 8px; min-height: 52px; padding: 8px 12px;
+  /* 一行排开（10-21 用户：合并成一排）。各控件的 flex-basis 就是读得全的下限，放得下就先一行再按上限放大；
+     目录展开后 13.6 寸约 974px 也能一行，只有更窄、下限都放不下时才按整个控件换行。 */
+  flex-wrap: wrap; align-items: flex-start; gap: 6px; min-height: 52px; padding: 8px 12px;
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .sov-filter.is-compact .sov-label-text { display: none; }
-/* 基准宽覆盖全部筛选与操作，避免外层仍同排、内部先换行造成错位。 */
-.sov-filter.is-compact .sov-filter-options { display: flex; flex: 1 1 764px; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+/* 筛选项直接参与外层这一排（不单独成块，否则整块会先掉到第二行；我的视图 / 我的分组的网格也依赖这一点） */
+.sov-filter.is-compact .sov-filter-options { display: contents; }
 /* 每个筛选项：label 带「基准宽度 + 压缩下限」，里面的下拉 / 输入框跟着 label 走（width: 100%）。
    不能给下拉 / 输入框自己设固定宽度——固定宽度会把 label 的最小尺寸撑死，窄屏下压不动就重叠 */
 .sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
 .sov-filter.is-compact label select, .sov-filter.is-compact label input { width: 100%; }
 /* 查询那格：预留字段、条件、输入框和同时显示的删除 / 添加按钮所需宽度，余量留给输入框。 */
-.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 342px; min-width: 340px; }
+.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 236px; min-width: 236px; max-width: 420px; }
 /* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
 .sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
@@ -1674,19 +1675,19 @@ defineExpose({ openLaunch, clearSelection })
 .sov-filter.is-compact select:hover { border-color: #bfdbfe; }
 /* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
 .sov-filter.is-compact .sov-search { flex-wrap: nowrap; flex: 1 1 auto; }
-.sov-filter.is-compact .sov-search select { width: 84px; flex: none; }
-.sov-filter.is-compact .sov-search select.sov-op { width: 64px; }
-.sov-filter.is-compact .sov-search input { width: 160px; flex: 1 1 160px; min-width: 120px; }
-/* 基准宽 / 下限（下限刚好读全：「全部网站」约 88px） */
-.sov-filter.is-compact .sov-fl-site { flex-basis: 108px; min-width: 88px; }
-.sov-filter.is-compact .sov-fl-group { flex-basis: 108px; min-width: 94px; }
-.sov-filter.is-compact .sov-fl-state { flex-basis: 92px; min-width: 84px; }
-.sov-filter.is-compact .sov-fl-tag { flex-basis: 96px; min-width: 84px; }
+.sov-filter.is-compact .sov-search select { width: 76px; flex: none; }
+.sov-filter.is-compact .sov-search select.sov-op { width: 60px; }
+.sov-filter.is-compact .sov-search input { width: 64px; flex: 1 1 64px; min-width: 64px; }
+/* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
+.sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
+.sov-filter.is-compact .sov-fl-group { flex: 1 1 94px; min-width: 94px; max-width: 120px; }
+.sov-filter.is-compact .sov-fl-state { flex: 1 1 84px; min-width: 84px; max-width: 100px; }
+.sov-filter.is-compact .sov-fl-tag { flex: 1 1 84px; min-width: 84px; max-width: 110px; }
 /* 数据量这格是**唯一**靠 placeholder 说明自己的（紧凑态把 label 小标题藏了，其余几格是下拉，选项文字自带含义）。
    原来 80px：扣掉左右内边距 16 + 边框 2，再被 Chrome 数字框的步进条吃掉约 15px，只剩约 47px 给文字，
    「数据量 ≤」约 51px 被截成「数据量」（2026-10-16 用户截图反馈）。
    100px 时文字区约 67px，留出约 16px 余量：字体回退到更宽的 ≤ 也读得全，同时不把这一行挤到换行。 */
-.sov-filter.is-compact .sov-fl-count { flex-basis: 100px; min-width: 100px; }
+.sov-filter.is-compact .sov-fl-count { flex: 0 0 100px; min-width: 100px; }
 .sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
 .sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
