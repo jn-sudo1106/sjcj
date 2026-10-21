@@ -112,7 +112,6 @@ async function onSave() {
           :disabled="!coreParamLoaded"
           :placeholder="coreParamLoaded ? '可选，原样保存' : '正在读取源详情…'"
         />
-        <div class="rc-help">源上的核心参数（旧平台源编辑同名字段），和节点配置「运行设置」里的核心参数不是同一字段。</div>
       </div>
       <div class="esd-actions">
         <button class="rc-btn" type="button" @click="close">取消</button>

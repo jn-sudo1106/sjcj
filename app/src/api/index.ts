@@ -3915,6 +3915,47 @@ export const flowCenterApi = {
     return ackFromApiResult(result)
   },
   /**
+   * 解绑 / 换绑并删除旧流程（**原子接口**，2026-10-20 后端新增 `flow/changeFlowAndDelete`）。
+   *
+   * 一个事务（READ_COMMITTED）内完成「把源从 currentFlowId 上解绑（可选改挂到 flowId）→ 删除
+   * currentFlowId」，任一步失败整体回滚。流程中心的「解绑并删除 / 更换并删除」改走它——原来分
+   * `changeFlowBatch` + `deleteFlow` 两次调用，中间没有事务：换绑成功而删除失败时，源已经被摘下
+   * （或已经换到目标流程），旧流程却还在，UI 只能报一句「删除失败」，用户以为整体回滚了。
+   *
+   * - 解绑：只传 sourceIds + currentFlowId，**不传 flowId**（后端按空/<=0 判定「只解绑」）
+   * - 换绑：再传 flowId（目标流程），且不得等于 currentFlowId
+   *
+   * 单次上限 5000 条；后端把真正原因放在 `data`、`msg` 固定为「错误信息:运行时异常」，
+   * client 的 normalizeHttpPayload 会拼成「msg：data」再由 ApiError 包一层「请求异常 [端点]:」，
+   * 这里剥掉这两层前缀，调用方拿到的就是可直接给用户看的原因。
+   */
+  changeFlowAndDelete: async (sourceIds: string[], currentFlowId: string, flowId?: string): Promise<Ack> => {
+    if (!sourceIds.length) return { ok: false, message: '请先选择要处理的源' }
+    if (!currentFlowId) return { ok: false, message: '缺少当前流程 ID，无法执行解绑/换绑并删除' }
+    if (sourceIds.length > 5000) return { ok: false, message: `单次最多处理 5000 个源，当前 ${sourceIds.length} 个` }
+    if (flowId && flowId === currentFlowId) return { ok: false, message: '目标流程不能是当前流程本身' }
+    try {
+      const result = await request<unknown>('flow/changeFlowAndDelete', { sourceIds, currentFlowId, flowId }, {
+        method: 'POST',
+        httpEndpoint: 'flow/changeFlowAndDelete',
+        httpParams: {
+          sourceIds: sourceIds.map(Number),
+          currentFlowId: Number(currentFlowId),
+          ...(flowId ? { flowId: Number(flowId) } : {}),
+        },
+      })
+      return ackFromApiResult(result)
+    } catch (error) {
+      const cause = (error as { cause?: unknown } | null)?.cause
+      const raw = (cause as Error)?.message ?? (error as Error)?.message ?? String(error)
+      const reason = raw
+        .replace(/^请求异常\s*\[[^\]]*\]\s*[:：]\s*/, '')
+        .replace(/^错误信息\s*[:：]\s*运行时异常\s*[:：]\s*/, '')
+        .trim()
+      throw new Error(reason || '解绑/换绑并删除失败')
+    }
+  },
+  /**
    * 流程的步骤拓扑（svg+flowId 视图的说明见下方注释块——svg=true 已返回真实根行 isRoot=1，
    * 不再需要 configDetail(flowId) 拼起点；configDetail 那条是 09-02 的旧结论，0927 起
    * FlowDetailDrawer 的 deriveFromFlowConfig 已是**工作区默认展示路径**（有步骤行就按步骤

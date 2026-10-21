@@ -1185,3 +1185,48 @@ describe('useStepWrite.relinkOrphan（0925 孤儿修复）', () => {
     expect(entryDetail).not.toHaveBeenCalled()
   })
 })
+
+// 2026-10-21：任务 URL 来源字段 / 表达式对齐旧平台
+describe('useStepWrite · 任务 URL 来源字段与表达式', () => {
+  function setupChain(upstreamUrl: string) {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const steps: Step[] = [{ ...SNAPSHOT, stepId: '40597', name: '列表', dependsOn: ['0'], url: upstreamUrl, itemId: '52000351' }]
+    flow.loadFromSource(
+      { sourceId: '430016824', name: '明阳科技', url: 'http://x', configId: '1400935', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      steps,
+    )
+    source.rememberSteps(steps, 'replace')
+    flow.insertAfter('40597', 'web')
+    const localId = flow.selectedId
+    flow.configs[localId].configId = '1400999'
+    flow.configs[localId].collectCfg!.outputTable = '6200026'
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      ...steps,
+      { ...SNAPSHOT, stepId: '40700', name: flow.configs[localId].title, configId: '1400999', dependsOn: ['40597'] },
+    ])
+    return { flow, localId }
+  }
+
+  it('新建采集后续步：表达式固定 $VAL$，不照抄上游的拼接表达式；来源字段用节点上选的', async () => {
+    const { flow, localId } = setupChain("K2+'#need_upload_xq/xq/'")
+    flow.configs[localId].itemId = '9001'
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    await useStepWrite().persistFlowSteps()
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][0]).toMatchObject({ url: '$VAL$', itemId: '9001' })
+  })
+
+  // 10-21 定先不强制：没选来源字段照常建，itemId 为空（不再照抄上游）
+  it('采集后续步没选来源字段：照常新建，来源字段为空', async () => {
+    setupChain('$VAL$')
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    await useStepWrite().persistFlowSteps()
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][0].itemId).toBeUndefined()
+    expect(create.mock.calls[0][0].url).toBe('$VAL$')
+  })
+})

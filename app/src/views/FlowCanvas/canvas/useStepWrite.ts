@@ -55,7 +55,12 @@ function createTemplateFromPrev(
   configId: string,
   sourceMainConfig: string | undefined,
   flowId: string,
+  cfg?: NodeConfig,
 ): Pick<Step, 'sourceId' | 'mainConfig' | 'flowId' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
+  // 2026-10-21 对齐旧平台 openCreatePanel：新建的采集类后续步表达式固定 $VAL$、来源字段留空等用户选
+  // （旧平台必填；新平台 10-21 定先不强制，只在节点配置里提示）。原来照抄上游的 url / itemId——上游的拼接表达式（如
+  // K2+'#need_upload_xq/xq/'）会被带进新节点，itemId 指向的还是上游输入表的字段。规则类节点不变。
+  const collectorDownstream = !!prev && !!cfg?.collectCfg && !isRuleLikeNode(cfg)
   return {
     sourceId: prev?.sourceId ?? sourceId,
     mainConfig: prev?.mainConfig ?? sourceMainConfig ?? configId,
@@ -64,8 +69,8 @@ function createTemplateFromPrev(
     flowId: prev?.flowId ?? (flowId || prev?.mainConfig),
     // 下游从上游数据取 URL（$VAL$）。上游是首节点（isRoot）时不能照抄它的固定地址——那样新节点
     // 每条上游数据都去抓同一个首页（0928 与后端对齐：下游采集一律 $VAL$）。
-    url: prev ? (prev.isRoot ? '$VAL$' : (prev.url ?? '$VAL$')) : undefined,
-    itemId: prev?.itemId,
+    url: collectorDownstream ? '$VAL$' : prev ? (prev.isRoot ? '$VAL$' : (prev.url ?? '$VAL$')) : undefined,
+    itemId: collectorDownstream ? undefined : prev?.itemId,
     flowCode: prev?.flowCode,
     nodeType: prev?.nodeType ?? 'entry',
   }
@@ -147,6 +152,7 @@ export function useStepWrite() {
   function blockedByMissingOutput(cfg: NodeConfig, snapshot?: Step): boolean {
     return outputTableMissing(cfg, snapshot) && !version.allowsEmptyOutput(flowIdOf())
   }
+
 
   function flowIdOf(): string {
     if (flow.flowIdMode) return validFlowIdOf(flow.flowId)
@@ -249,7 +255,7 @@ export function useStepWrite() {
       || flow.sourceCtx?.configId
     // 0925：新建步骤必须带画布的 flowId（归属切 flowId）；拿不到时由后端回填 mainConfig。
     const flowId = fid
-    const inherited = createTemplateFromPrev(prev, sid || '-1', cfg.configId, sourceMainConfig, flowId)
+    const inherited = createTemplateFromPrev(prev, sid || '-1', cfg.configId, sourceMainConfig, flowId, cfg)
     const step = mergeStepForWrite({
       snapshot: {
         ...inherited,

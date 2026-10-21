@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { cloneConfig, NODE_CONFIGS, type FlowBranchGroup, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import {
+  taskUrlFieldsApply,
+  taskUrlSourceMissing,
   applyStepSourceDefault,
   assertStepsPersistable,
   condExprOf,
@@ -247,6 +249,15 @@ describe('mergeStepForWrite', () => {
       isDelete: 1,
       enabled: false,
     })
+  })
+
+  it('节点上改过任务 URL 表达式（stepUrl）就写节点的值，没改过沿用快照（2026-10-19）', () => {
+    const cfg = cfgFromSnapshot()
+    cfg.stepUrl = "K2+'#need_upload_xq/xq/'"
+    const merged = mergeStepForWrite({ snapshot: MEASURED_40600, cfg, nodeId: '40600', sourceId: '430016398' })
+    expect(stepToStepModifyPayload(merged)).toMatchObject({ url: "K2+'#need_upload_xq/xq/'" })
+    const untouched = mergeStepForWrite({ snapshot: MEASURED_40600, cfg: { ...cfgFromSnapshot(), stepUrl: undefined }, nodeId: '40600', sourceId: '430016398' })
+    expect(stepToStepModifyPayload(untouched)).toMatchObject({ url: '$VAL$' })
   })
 
   it('自动保存可按画布重写 lastStep，不碰快照里的 url', () => {
@@ -772,5 +783,33 @@ describe('relinkCandidates（0925 孤儿关联 · 0926 准入入口）', () => {
     }
     const ids = relinkCandidates(main, [], configs, {}, '40600').map((t) => t.id)
     expect(ids).toEqual(['0'])
+  })
+})
+
+// 2026-10-21：任务 URL 来源字段 / 表达式的适用范围与必填（对齐旧平台 SourceStepCard）
+describe('taskUrlFieldsApply / taskUrlSourceMissing', () => {
+  function chain(second: NodeConfig) {
+    const list = cloneConfig(NODE_CONFIGS['web-list'])
+    list.collectCfg!.outputTable = '900'
+    return { main: ['start', 'web-1', 'n-2', 'end'], branches: [], configs: { 'web-1': list, 'n-2': second } }
+  }
+
+  it('采集后续步（含 PDF）有输入表时适用；没选或 -1 算缺', () => {
+    const web = cloneConfig(NODE_CONFIGS['web-detail'])
+    const scope = chain(web)
+    expect(taskUrlFieldsApply(scope, 'n-2')).toBe(true)
+    expect(taskUrlSourceMissing(scope, 'n-2')).toBe(true)
+    web.itemId = '-1'
+    expect(taskUrlSourceMissing(scope, 'n-2')).toBe(true)
+    web.itemId = '9002'
+    expect(taskUrlSourceMissing(scope, 'n-2')).toBe(false)
+  })
+
+  it('首个采集节点、规则类节点、真实 ROOT 不适用', () => {
+    const scope = chain(cloneConfig(NODE_CONFIGS['rule']))
+    expect(taskUrlFieldsApply(scope, 'web-1')).toBe(false)
+    expect(taskUrlFieldsApply(scope, 'n-2')).toBe(false)
+    const rooted = chain(cloneConfig(NODE_CONFIGS['web-detail']))
+    expect(taskUrlFieldsApply(rooted, 'n-2', { stepId: '1', sourceId: '-1', name: 'r', isRoot: true } as Step)).toBe(false)
   })
 })

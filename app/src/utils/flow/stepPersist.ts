@@ -7,7 +7,9 @@
 import type { Step } from '@/api'
 import {
   allBranchChainNodes,
+  effectiveInputTable,
   effectiveOutputTable,
+  isFirstMainNode,
   isDataValidationNode,
   isMonitorNode,
   isRuleLikeNode,
@@ -15,6 +17,7 @@ import {
   isPdfNode,
   nodeEntryCondition,
   nodeInputTable,
+  type BranchSeed,
   type FlowBranchGroup,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
@@ -76,6 +79,38 @@ export function outputTableMissing(cfg: NodeConfig, snapshot?: Step): boolean {
   if (isFileLikeNode(cfg, snapshot)) return false
   if (snapshot?.isRoot) return false
   return !effectiveOutputTable(cfg) && !snapshot?.outputTable
+}
+
+/** 判定「任务 URL 来源字段」所需的画布上下文 */
+export interface TaskUrlScope {
+  main: string[]
+  branches: BranchSeed[]
+  configs: Record<string, NodeConfig>
+  branchGroups?: FlowBranchGroup[]
+}
+
+/**
+ * 「任务 URL 来源字段 / 规则表达式」适用的节点（2026-10-21 按旧平台 SourceStepCard 对齐）：
+ * 旧平台非规则步骤、且步骤有输入表时显示这两项（规则步骤的 url 存的是规则配置，不是任务 URL）。
+ * 新平台对应：有 collectCfg 的采集类节点（含 PDF 抓取，它在旧平台就是 entry 步骤）、不是规则类、
+ * 不是主链第一个节点 / 真实 ROOT（首节点的地址由源 URL / 配置 URL 管）、有效输入表非空。
+ */
+export function taskUrlFieldsApply(scope: TaskUrlScope, id: string, snapshot?: Step): boolean {
+  const cfg = scope.configs[id]
+  if (!cfg?.collectCfg || isRuleLikeNode(cfg) || snapshot?.isRoot) return false
+  // 用「主链第一个真实节点」而不是「首个可执行节点」：后者跳过停用节点，首节点停用时第二个节点会被误当入口
+  if (isFirstMainNode(scope.main, scope.configs, id)) return false
+  return !!effectiveInputTable(scope.main, scope.branches, scope.configs, id, scope.branchGroups ?? [])
+}
+
+/**
+ * 适用节点没选任务 URL 来源字段（itemId 空或 `-1`，-1 是旧平台「未选」）。
+ * 旧平台必填、不选拦住保存；新平台 2026-10-21 定**先不强制**：照常保存，只在节点配置里提示。
+ */
+export function taskUrlSourceMissing(scope: TaskUrlScope, id: string, snapshot?: Step): boolean {
+  if (!taskUrlFieldsApply(scope, id, snapshot)) return false
+  const itemId = scope.configs[id]?.itemId
+  return !itemId || itemId === '-1'
 }
 
 /**
@@ -447,7 +482,8 @@ export function mergeStepForWrite(args: {
     flowCode: snapshot?.flowCode,
     itemId: cfg.itemId ?? snapshot?.itemId,
     extName: snapshot?.extName,
-    url: snapshot?.url,
+    // 任务 URL 表达式（2026-10-19 恢复编辑）：节点上改过用节点的，否则沿用快照 / 新建模板的值
+    url: cfg.stepUrl ?? snapshot?.url,
     condition: condExprOf(cfg) ?? undefined,
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,

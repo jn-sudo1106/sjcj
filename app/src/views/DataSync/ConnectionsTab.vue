@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { copyToClipboard } from '@/utils/clipboard'
 import {
   DATABASE_TYPE_LABELS, syncApi,
   type SyncClient, type SyncClientSecret, type SyncCustomer, type SyncDatabase,
@@ -115,8 +116,7 @@ function showSecret(rsp: SyncClientSecret) {
   Object.assign(secret, { visible: true, id: rsp.id, clientName: rsp.clientName, secretKey: rsp.secretKey ?? '' })
 }
 async function copySecret() {
-  try { await navigator.clipboard.writeText(secret.secretKey); ElMessage.success('密钥已复制') }
-  catch { ElMessage.warning('浏览器不允许自动复制，请手动选中复制') }
+  await copyToClipboard(secret.secretKey, '密钥')
 }
 async function resetSecret(row: SyncClient) {
   try {

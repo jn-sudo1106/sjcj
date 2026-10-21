@@ -119,4 +119,20 @@ describe('Phase 3.1 画布入口退役', () => {
       expect(t.permission).toBe(t.key)
     }
   })
+
+  // 辅助工具（1020 新增）：页在 views/AuxiliaryTool/index.vue，**独立成组**（不是塞进运行与监控/问数配置）。
+  // 三条断言对应三个「漏了不报错」的点：TABS 缺项 → 侧栏没入口；
+  // 路由缺项 → 点进去白屏；key 与路径段不一致 → 面包屑与高亮静默回退到「采集资产总览」。
+  it('辅助工具：独立分组、侧栏有入口、路由可达、key 与路径段一致', () => {
+    const tab = TABS.find((t) => t.key === 'auxiliary-tool')
+    expect(tab?.label).toBe('辅助工具')
+    expect(tab?.path).toBe('/auxiliary-tool')
+    expect(tab?.group).toBe('auxiliary')
+    // 该组下只有这一条，且不允许被并入别的组（并回去就会让「辅助工具」组消失）
+    expect(TABS.filter((t) => t.group === 'auxiliary').map((t) => t.key)).toEqual(['auxiliary-tool'])
+
+    const shell = router.options.routes.find((r) => r.path === '/')
+    const route = shell?.children?.find((r) => r.path === '/auxiliary-tool')
+    expect(route?.component).toBeTypeOf('function')
+  })
 })

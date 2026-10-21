@@ -608,20 +608,25 @@ async function removeFlow(flow: FlowRecord) {
   await doRemoveFlow(flow)
 }
 
-/** 删除动作本体（无源时直接走；有源时由 rebindDelete 对话框在换绑/解绑成功后调用）。 */
+/** 流程已删除后的收尾：关掉正在打开的流程、埋点、刷新列表（直接删除与原子换绑删除共用）。 */
+function afterFlowRemoved(flow: FlowRecord) {
+  if (activeId.value === flow.id) closeFlow()
+  trackDelete('FLOW', flow.id, flow.name, {
+    eventCode: 'flow_delete',
+    eventName: '删除流程',
+    firstModule: '流程管理',
+    pageName: '流程中心',
+  })
+  void load()
+}
+
+/** 删除动作本体（无源时直接走；有源时走 rebindDelete 对话框的原子接口 changeFlowAndDelete）。 */
 async function doRemoveFlow(flow: FlowRecord): Promise<boolean> {
   try {
     const ack = await flowCenterApi.remove([flow.id])
     if (!ack.ok) throw new Error(ack.message || '删除失败')
-    if (activeId.value === flow.id) closeFlow()
-    trackDelete('FLOW', flow.id, flow.name, {
-      eventCode: 'flow_delete',
-      eventName: '删除流程',
-      firstModule: '流程管理',
-      pageName: '流程中心',
-    })
+    afterFlowRemoved(flow)
     ElMessage.success(`流程「${flow.name}」已删除`)
-    void load()
     return true
   } catch (error) {
     ElMessage.error(`删除失败：${(error as Error)?.message ?? String(error)}`)
@@ -740,23 +745,28 @@ async function confirmRebindDelete(mode: 'replace' | 'unbind') {
   }
   rebindDelete.saving = true
   try {
-    // 分批串行换绑（与「关联到源」同款分批策略）：任一批失败即停，不继续发。
-    const batches = Math.ceil(rebindDelete.sourceIds.length / BIND_BATCH_SIZE)
-    for (let i = 0; i < batches; i++) {
-      const chunk = rebindDelete.sourceIds.slice(i * BIND_BATCH_SIZE, (i + 1) * BIND_BATCH_SIZE)
-      // 1008-06：解绑 / 更换都带 currentFlowId（= 要删除的这条流程），只把源从这条流程换走，
-      // 源关联的其它流程不受影响（2026-10-19 后端反馈：更换原来没传，后端不知道要从哪条流程移走）。
-      const ack = mode === 'unbind'
-        ? await flowCenterApi.bindSources(chunk, undefined, flow.id)
-        : await flowCenterApi.bindSources(chunk, rebindDelete.targetFlowId, flow.id)
-      if (!ack.ok) throw new Error(`换绑第 ${i + 1}/${batches} 批失败：${ack.message || '未知原因'}`)
-    }
+    // 2026-10-20：改走原子接口 changeFlowAndDelete——换绑/解绑与删除旧流程在同一个事务里
+    // （READ_COMMITTED，任一步失败整体回滚）。原来分 changeFlowBatch + deleteFlow 两次调用，
+    // 两条请求之间没有事务：换绑成功而删除失败时，源已经被摘下（或已换到目标流程）、旧流程还在，
+    // 而界面只能报一句「删除失败」，用户根本看不出源已经动过了（细节见 api/index.ts 同名方法）。
+    // 基线 f64d74a 那次「更换也带 currentFlowId」的分批修复已被本接口吸收：原子接口里
+    // currentFlowId 本就是必填，flowId 才是可选的目标流程。
+    const ack = await flowCenterApi.changeFlowAndDelete(
+      rebindDelete.sourceIds,
+      flow.id,
+      mode === 'replace' ? rebindDelete.targetFlowId : undefined,
+    )
+    if (!ack.ok) throw new Error(ack.message || '未知原因')
+    const targetName = target?.name ?? `#${rebindDelete.targetFlowId}`
+    afterFlowRemoved(flow)
     rebindDelete.open = false
-    if (await doRemoveFlow(flow)) {
-      // doRemoveFlow 已给出成功/失败提示；换绑结果的再确认给一句话。
-      ElMessage.success(`已${mode === 'replace' ? '更换' : '解绑'} ${rebindDelete.sourceTotal} 个源`)
-    }
+    ElMessage.success(
+      mode === 'replace'
+        ? `已把 ${rebindDelete.sourceTotal} 个源更换到流程「${targetName}」，并删除流程「${flow.name}」`
+        : `已从流程「${flow.name}」解绑 ${rebindDelete.sourceTotal} 个源，并删除该流程`,
+    )
   } catch (error) {
+    // 原子接口失败 = 什么都没改（后端整体回滚）：对话框保持原样，用户可直接重试或取消。
     ElMessage.error(`删除流程失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
     rebindDelete.saving = false
