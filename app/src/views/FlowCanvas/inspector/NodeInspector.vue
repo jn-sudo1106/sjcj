@@ -5,7 +5,7 @@
 // 规则资产的懒加载逻辑必须留主壳：NodeInspector 只 mount 一次（index.vue 没给 :key），
 // isRule 会随选中节点变化，不能只在 onMounted 判断一次——否则打开画布时没选中规则节点就永远拉不到规则数据
 // （见 NodeInspector.test.ts「规则数据懒加载」）。
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
@@ -26,6 +26,7 @@ import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfi
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
+import { enqueueConfigSave, registerNodeConfigFlusher } from './nodeConfigAutosave'
 import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import TaskTab from './tabs/TaskTab.vue'
@@ -150,7 +151,9 @@ const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.valu
 const viewingHistory = computed(() => !!flowVersion.history && flowVersion.flowId === canvasFlowIdOf(flow))
 const footNote = computed(() => (viewingHistory.value
   ? '正在查看历史版本，只能查看'
-  : readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+  : readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改'
+    : nodeConfigDirty.value ? (configId.value ? '有未保存修改，切换节点时自动保存' : '有未保存修改（新节点需点保存）')
+      : autoSavedAt.value[id.value] ? `已自动保存 ${autoSavedAt.value[id.value]}` : '无未保存修改'))
 /** 查看历史版本时：节点配置不随版本保存（217 实测），配置在该版本之后改过就提示一句（2026-10-14） */
 const historyConfigNote = computed(() => {
   const row = viewingHistory.value ? flowVersion.history : undefined
@@ -203,11 +206,10 @@ watch([nodeConfigDirty, configId], ([dirty, cid]) => {
   if (dirty && cid) void ensureUsage(cid)
 }, { immediate: true })
 
-function ensureConfigNameFromTitle() {
-  const node = cfg.value
+function ensureConfigNameFromTitle(node = cfg.value, nodeId = id.value) {
   if (!node) return
   const name = node.configName?.trim() || node.title.trim()
-  if (name && name !== node.configName) flow.setConfigName(id.value, name)
+  if (name && name !== node.configName) flow.setConfigName(nodeId, name)
 }
 
 async function onSaveNodeConfig() {
@@ -225,7 +227,7 @@ async function onSaveNodeConfig() {
     }
   }
   ensureConfigNameFromTitle()
-  const saved = configId.value ? await doUpdateExistingConfig() : await doCreateConfig()
+  const saved = configId.value ? await doUpdateExistingConfig(node, id.value) : await doCreateConfig()
   // 数据监控节点在编排配置 Tab 点底部「保存」（2026-09-07 补）：配置保存成功后同步 ck_source
   //（vanv-data-engine /api/source/*，按 sourceId 无则 insert、有则 update）。与 RuleOrchestrationTab
   //「保存脚本」后的同步同一条逻辑（utils/flow/monitorCkSource.ts）；失败不回滚配置保存，单独提示。
@@ -237,7 +239,7 @@ async function onSaveNodeConfig() {
       ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
     }
   }
-  if (saved) await syncSourceCron(node)
+  if (saved) await syncSourceCron(node, id.value)
 }
 
 /**
@@ -253,12 +255,11 @@ async function onSaveNodeConfig() {
  * 只在 cron **真的变了**时才发：保存节点配置是高频动作，没必要每次都往 job 表写一遍；
  * 而且没改却发一次，会把这条定时的下次运行时间重算，白白推迟一轮。
  */
-async function syncSourceCron(node: NodeConfig) {
+async function syncSourceCron(node: NodeConfig, nodeId: string) {
   const sourceId = flow.sourceCfg?.sourceId
   if (!sourceId) return
   // 2026-10-15：定时不是必填（旧平台同口径）。只在用户这次手动改过定时策略时才同步；没碰定时的保存不建 / 不改定时，
   // 也不会在未发布的流程上弹「定时没保存」。原来默认展示的那条「每天 0:00」会被当成要建的定时，每次保存都去建。
-  const nodeId = id.value
   if (!flow.isScheduleEdited(nodeId)) return
   const next = nodeScheduleCron(node, flow.sourceCfg)
   const current = flow.sourceJob?.schedule ?? ''
@@ -282,7 +283,7 @@ async function syncSourceCron(node: NodeConfig) {
     const ack = await sourceApi.saveSourceCron([sourceId], next, {
       jobId: flow.sourceJob?.jobId || undefined,
       enable: true,
-      configId: configId.value || flow.sourceCfg?.configId || '',
+      configId: node.configId || flow.sourceCfg?.configId || '',
     })
     if (!ack.ok) {
       ElMessage.warning(cronSaveErrorHint(ack.message || '') ?? `定时保存失败：${ack.message || '未知原因'}`)
@@ -366,35 +367,101 @@ async function doCreateConfig(): Promise<boolean> {
   }
 }
 
-async function doUpdateExistingConfig(): Promise<boolean> {
-  const node = cfg.value
-  if (!node || saving.value) return false
+/**
+ * 更新已有配置。`auto`（1021-06 自动保存）：共享配置不弹确认、直接跳过（调用方已拦），成功不弹提示；
+ * 同一配置的保存经 enqueueConfigSave 串行（并发校验不原子，186 实测）。
+ */
+async function doUpdateExistingConfig(node: NodeConfig, nodeId: string, opts: { auto?: boolean } = {}): Promise<boolean> {
+  const currentConfigId = node.configId || ''
+  if (!currentConfigId) return false
+  if (!opts.auto && saving.value) return false
   // 0929 F2：复制时未换绑成功的共享配置——保存会改到模板/原流程，必须先知情确认。
   // saving 在确认前就置位：弹窗等待期间双击「保存」不会开第二个确认。
-  saving.value = true
+  if (!opts.auto) saving.value = true
   try {
-    if (!await assertConfigWritable(configId.value, flow.flowId)) return false
-    const base = await baseRecordFor(configId.value)
-    const payload = { ...buildConfigPayload(node, base), configId: configId.value }
-    const ack = await configApi.updateConfig(payload as never)
-    if (ack && 'ok' in ack && !ack.ok) {
-      ElMessage.error(ack.message || '保存配置失败')
-      return false
-    }
-    flow.markNodeConfigSaved(id.value)
-    // 本次保存后 updateDt 已变，不刷新的话下一次保存会被后端当成并发冲突拒掉。
-    // 读的是自己刚写完的版本，和保存前现取 base 来冒充「加载时版本」不是一回事；
-    // 同一配置的其他节点一并刷新。
-    await refreshConfigUpdateDt(configId.value)
-    ElMessage.success(ack?.message || `配置 #${configId.value} 已保存`)
-    return true
+    if (!opts.auto && !await assertConfigWritable(currentConfigId, flow.flowId)) return false
+    return await enqueueConfigSave(currentConfigId, async () => {
+      const base = await baseRecordFor(currentConfigId)
+      const payload = { ...buildConfigPayload(node, base), configId: currentConfigId }
+      const ack = await configApi.updateConfig(payload as never)
+      if (ack && 'ok' in ack && !ack.ok) {
+        ElMessage.error(`${opts.auto ? `节点「${node.title}」自动保存失败：` : ''}${ack.message || '保存配置失败'}`)
+        return false
+      }
+      flow.markNodeConfigSaved(nodeId)
+      // 本次保存后 updateDt 已变，不刷新的话下一次保存会被后端当成并发冲突拒掉。
+      // 读的是自己刚写完的版本，和保存前现取 base 来冒充「加载时版本」不是一回事；
+      // 同一配置的其他节点一并刷新。
+      await refreshConfigUpdateDt(currentConfigId)
+      if (opts.auto) autoSavedAt.value = { ...autoSavedAt.value, [nodeId]: clockNow() }
+      else ElMessage.success(ack?.message || `配置 #${currentConfigId} 已保存`)
+      return true
+    })
   } catch (e) {
-    reportWriteError('保存配置', e)
+    // 过期 updateDt 后端回「当前配置已被修改，请刷新页面后重新操作」——自动保存不重试，原样提示，改动留着
+    reportWriteError(opts.auto ? `节点「${node.title}」自动保存` : '保存配置', e)
     return false
   } finally {
-    saving.value = false
+    if (!opts.auto) saving.value = false
   }
 }
+
+// ---- 节点配置自动保存（1021-06，方案 §4.2 / §4.3）----
+// 只在切换节点、切换节点面板页签、离开画布时保存；没改动不发（每次保存后端都记一条操作日志）。
+// 不自动保存、留给用户点「保存」的：只读 / 看历史版本、还没有配置（第一次保存会新建配置）、
+// 共享配置（要弹确认）、规则节点表绑定没通过。
+const autoSavedAt = ref<Record<string, string>>({})
+function clockNow(): string {
+  const d = new Date()
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+function autoSaveBlocked(node: NodeConfig): boolean {
+  if (readonly.value || viewingHistory.value || !node.configId) return true
+  if (detachFailureFor(node.configId, flow.flowId)) return true
+  if (isRuleNode(node)) {
+    return !!validateTableBinding(
+      node.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] },
+      { requireOutput: !isMonitorNode(node) && !isDataValidationNode(node) },
+    )
+  }
+  return false
+}
+async function autosaveNode(nodeId: string | undefined, atTab: string) {
+  if (!nodeId || !flow.dirtyConfigNodes.includes(nodeId)) return
+  const node = flow.configs[nodeId]
+  if (!node || autoSaveBlocked(node)) return
+  ensureConfigNameFromTitle(node, nodeId)
+  const saved = await doUpdateExistingConfig(node, nodeId, { auto: true })
+  if (!saved) return
+  if (atTab === 'orchestration' && isMonitorNode(node)) {
+    try {
+      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
+    } catch (e) {
+      ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+    }
+  }
+  await syncSourceCron(node, nodeId)
+}
+/** 把所有能自动保存的脏节点存掉（切换编排对象前由画布页调用） */
+async function flushDirtyNodes() {
+  for (const nodeId of [...flow.dirtyConfigNodes]) await autosaveNode(nodeId, nodeId === id.value ? tab.value : '')
+}
+watch(() => flow.selectedId, (_next, prev) => { void autosaveNode(prev, tab.value) })
+watch(() => flow.activeTab, (_next, prev) => { void autosaveNode(id.value, prev) })
+const unregisterFlusher = registerNodeConfigFlusher(flushDirtyNodes)
+// Ctrl / ⌘ + S：立即保存当前节点
+function onSaveKey(event: KeyboardEvent) {
+  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+  event.preventDefault()
+  if (cfg.value && !readonly.value && canSaveNodeConfig.value && !saving.value) void onSaveNodeConfig()
+}
+window.addEventListener('keydown', onSaveKey)
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onSaveKey)
+  unregisterFlusher()
+  // 离开画布：能存的照存（不等结果，失败会弹提示）
+  void flushDirtyNodes()
+})
 
 // 资产联动数据：主壳加载一次并 provide，各 tab 子组件通过 useNodeInspectorAssets 只读消费。
 const assets = provideNodeInspectorAssets()

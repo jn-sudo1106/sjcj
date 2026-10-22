@@ -7,6 +7,7 @@ import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
+import { flushNodeConfigs } from '../inspector/nodeConfigAutosave'
 
 const flow = useFlowStore()
 const ui = useUiStore()
@@ -82,7 +83,8 @@ async function onPickFlow(workflowId: string) {
   if (!row || workflowId === activeWorkflowId.value || switchingFlow.value) return
   switchingFlow.value = true
   try {
-    // 流程页留下的改动先落库，再换流程（换流程会重载画布数据）
+    // 流程页留下的改动先落库，再换流程（换流程会重载画布数据）；节点配置也先自动存一次（1021-06）
+    await flushNodeConfigs()
     if (flow.flowDirty || saveStatus.value === 'saving') await retryFlowSave()
     await router.replace({
       path: '/canvas',

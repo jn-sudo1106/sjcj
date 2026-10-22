@@ -3,7 +3,7 @@
 // 保存业务规则元数据）已整个搬去 TableTab.test.ts，跟非规则节点共用同一个表配置 Tab。
 // 通过挂载整个 NodeInspector 测试（而非孤立挂载 RuleOrchestrationTab），因为 useNodeInspectorAssets()
 // 的 provide/inject 上下文由 NodeInspector 建立，脱离它调用会抛错（见 useNodeInspectorAssets.ts 设计约束）。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus, { ElMessageBox } from 'element-plus'
@@ -16,6 +16,7 @@ import { configApi, entryApi, paramApi, ruleApi, ckSourceApi, sourceApi } from '
 import { translateSampleOf } from '@/api/translate'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
+import { resetNodeConfigAutosave } from '../nodeConfigAutosave'
 
 async function selectFile(input: ReturnType<ReturnType<typeof mount>['find']>, file: File) {
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
@@ -135,6 +136,7 @@ function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tab
   })
 }
 
+beforeEach(() => resetNodeConfigAutosave())
 afterEach(() => {
   vi.restoreAllMocks()
   routerPush.mockClear()
@@ -1221,7 +1223,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       await flushPromises()
       await flushPromises()
 
-      expect(vi.mocked(configApi.updateConfig).mock.calls[0][0]).toMatchObject({
+      // 取最后一次：前面用例卸载时的自动保存（1021-06）也会调 updateConfig
+      expect(vi.mocked(configApi.updateConfig).mock.calls.at(-1)![0]).toMatchObject({
         coreParam: '{"providerCode":"DeepSeek","model":"deepseek-reasoner"}',
       })
       wrapper.unmount()
@@ -3218,7 +3221,7 @@ describe('RuleOrchestrationTab · 打开编排 Tab 的自动回填不算修改�
     await flushPromises()
 
     expect(flow.dirtyConfigNodes).toContain('pdf-1')
-    expect(wrapper.find('.rc-insp-foot .foot-note').text()).toBe('节点配置有未保存修改')
+    expect(wrapper.find('.rc-insp-foot .foot-note').text()).toBe('有未保存修改，切换节点时自动保存')
     wrapper.unmount()
   })
 })
