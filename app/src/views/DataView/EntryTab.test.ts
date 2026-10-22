@@ -557,4 +557,22 @@ describe('EntryTab · 表ID列表', () => {
       vi.unstubAllEnvs()
     }
   })
+
+  it('「同步到 CK」入口：数据源已是 CK 的表置灰，点击不打开弹窗', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    try {
+      await mountTab()
+      await waitForLoad()
+      const btn = wrapper.find('[data-testid="entry-quick-ck"]')
+      expect(btn.exists()).toBe(true)
+      expect(btn.attributes('disabled')).toBe('')
+      await btn.trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent(QuickCkSyncDialog).props('modelValue')).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })

@@ -523,7 +523,10 @@ const onEnterSearch = withoutComposition(() => onSearch())
                 <el-icon :size="13"><component :is="isFavoriteEntry(e.tableId) ? StarFilled : Star" /></el-icon>
               </button>
               <el-button link type="primary" size="small" @click="openDetail(e)">详情</el-button>
-              <el-button v-if="syncSameBackend" link type="primary" size="small" data-testid="entry-quick-ck" @click="openQuickCk(e)">同步到 CK</el-button>
+              <!-- 已是 CK 存储的表无需再同步，按钮置灰 -->
+              <el-button v-if="syncSameBackend" link type="primary" size="small" data-testid="entry-quick-ck"
+                :disabled="(e.dsKind ?? 'MYSQL') === 'CK'" :title="(e.dsKind ?? 'MYSQL') === 'CK' ? '该表已存储在 CK，无需再次同步' : ''"
+                @click="openQuickCk(e)">同步到 CK</el-button>
               <template v-if="canWrite">
                 <el-button link type="primary" size="small" @click="openEdit(e)">编辑</el-button>
                 <el-dropdown trigger="click">
