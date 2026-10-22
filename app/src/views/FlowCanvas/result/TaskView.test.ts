@@ -130,6 +130,26 @@ describe('TaskView', () => {
     vi.useRealTimers()
   })
 
+  it('没关联网站的源（siteId 为空）：照样按 sourceId 查任务（10-22 修：以前直接回空）', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = { ...mockSourceDetail({ sourceId: '391007768' })!, siteId: undefined }
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+    expect(useFlowStore().sourceCtx?.siteId).toBeFalsy()
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+      total: 1,
+      list: [{ taskId: '74111', state: 'C', typeName: '浏览器抓取', taskName: '公众号列表', sourceId: '391007768', updatedAt: '2026-10-22 18:30' }],
+    })
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: '391007768' }))
+    expect(wrapper.text()).not.toContain('没有匹配的任务记录')
+    wrapper.unmount()
+  })
+
   it('admin 每行有「重发」，二次确认后调 dataApi.resendTask 并刷新；read 角色无操作列', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')

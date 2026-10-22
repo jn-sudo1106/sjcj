@@ -497,7 +497,9 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     page: page.value,
     size: size.value,
   }
-  if ((!props.global && !query.siteId) || siteWideBlocked.value || globalNoCondition.value) {
+  // 源态只要有源就能查：没关联网站的源（siteId 为空）以前在这里被直接回空，任务页签永远「没有匹配的任务记录」（10-22 修）
+  const noContext = !props.global && (props.siteWide ? !query.siteId : !query.sourceId)
+  if (noContext || siteWideBlocked.value || globalNoCondition.value) {
     rows.value = []
     total.value = 0
     return
