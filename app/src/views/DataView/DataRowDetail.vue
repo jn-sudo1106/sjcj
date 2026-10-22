@@ -9,16 +9,20 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { exportTableFields } from '@/utils/format/exportFields'
 import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
 import type { DataRow, DataTableMeta, EntryDetail } from '@/api'
+import { upperDataText } from './upperData'
 
 const props = defineProps<{
   data: EntryDetail
   tableMeta?: DataTableMeta | null
+  /** 上层数据所在表的显示名（调用方能确定时才给），有了显示「来自 表名 #ID」并可点 */
+  upperTableName?: string
 }>()
 
 const emit = defineEmits<{
   (e: 'open-task', row: DataRow): void
   (e: 'open-raw', row: DataRow): void
   (e: 'preview-file', path: string, field?: { prop?: string; columnName?: string; desc?: string }): void
+  (e: 'open-upper', row: DataRow): void
 }>()
 
 function copyText(val: string, label?: string) {
@@ -200,7 +204,13 @@ function detailFileField(item: { columnName: string; itemName?: string; value: u
     <dd>{{ data.row.entryTypeName || '—' }}</dd>
     <dt>父ID</dt>
     <dd>
-      <span>{{ data.row.parentId || '—' }}</span>
+      <a
+        v-if="upperTableName && upperDataText(data.row.parentId) !== '—'"
+        class="dv-a"
+        data-testid="detail-upper-link"
+        @click="emit('open-upper', data.row)"
+      >{{ upperDataText(data.row.parentId, upperTableName) }}</a>
+      <span v-else data-testid="detail-upper">{{ upperDataText(data.row.parentId) }}</span>
     </dd>
     <dt>任务ID</dt>
     <dd>
@@ -267,6 +277,16 @@ function detailFileField(item: { columnName: string; itemName?: string; value: u
       <dd v-else>{{ item.value ?? '—' }}</dd>
     </template>
   </dl>
+  <!-- 技术字段（1021-05）：给开发排查用的原始值，默认收起 -->
+  <details class="dv-tech" data-testid="detail-tech-fields">
+    <summary>技术字段</summary>
+    <dl class="rc-kv">
+      <dt>PARENT_ID</dt>
+      <dd data-testid="detail-tech-parent-id">{{ data.row.parentId || '—' }}</dd>
+      <dt>CATEGORY_ID</dt>
+      <dd>{{ data.row.categoryId || '—' }}</dd>
+    </dl>
+  </details>
 </template>
 
 <style scoped>
@@ -315,6 +335,9 @@ function detailFileField(item: { columnName: string; itemName?: string; value: u
   color: var(--rc-primary);
   background: var(--rc-primary-bg);
 }
+.dv-tech { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rc-border-soft); }
+.dv-tech summary { color: var(--rc-muted); font-size: 12px; cursor: pointer; }
+.dv-tech .rc-kv { margin-top: 8px; }
 .dv-file { max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font: inherit; text-align: left; cursor: pointer; word-break: break-all; }
 .dv-file:hover { text-decoration: underline; }
 </style>

@@ -13,6 +13,7 @@
 // 而真正带值的动态列 showItems 已经用 columnName（K1/K2…）给全了。
 import { computed } from 'vue'
 import type { DataRow, EntryDetail } from '@/api'
+import { upperDataText } from './upperData'
 
 const props = defineProps<{ data: EntryDetail }>()
 
@@ -23,6 +24,7 @@ const SYSTEM_COLUMNS: ReadonlyArray<readonly [string, keyof DataRow]> = [
   ['CONFIG_ID', 'configId'],
   ['ENTRY_TYPE_ID', 'entryTypeId'],
   ['DETAIL_ID', 'detailId'],
+  // 1021-05：-1 / -2 等内部值显示「—」，列名仍是 PARENT_ID（10-22 用户定）；原始值在详情抽屉「技术字段」里
   ['PARENT_ID', 'parentId'],
   ['CATEGORY_ID', 'categoryId'],
   ['STATE', 'state'],
@@ -46,7 +48,8 @@ function text(value: unknown): string {
 const entries = computed<Array<{ key: string; label: string; value: string }>>(() => {
   const list: Array<{ key: string; label: string; value: string }> = []
   for (const [label, field] of SYSTEM_COLUMNS) {
-    list.push({ key: label, label, value: text(props.data.row[field]) })
+    const value = field === 'parentId' ? upperDataText(props.data.row.parentId) : text(props.data.row[field])
+    list.push({ key: label, label, value })
   }
   for (const item of props.data.showItems || []) {
     const label = item.columnName || item.itemName || item.itemId || 'item'

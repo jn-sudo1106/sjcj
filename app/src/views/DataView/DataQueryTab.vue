@@ -39,6 +39,7 @@ import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 import { currentBackendHost } from '@/api/client'
 import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
 import { dataStateInfo } from '@/constants/runState'
+import { upperDataId, upperDataText } from './upperData'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -719,6 +720,29 @@ async function onStepScope(scope: 'output' | 'input') {
   stepScope.value = scope
   await onStepSelectTable(stepTableOf(node, scope))
 }
+// ---- 父ID 列（1021-05，设计方案 §5.3）：列名保持「父ID」（10-22 用户定），没有上层显示「—」 ----
+// 上层表后端不直接返回；按步骤看某节点的输出表、且节点输入表不同时，父行就在输入表里，此时可点「来自 表名 #ID」跳过去。
+// 其它情况只显示 ID（CATEGORY_ID 在异表链路下是本行自己的表，不能当上层表，见 ResultView 的 2026-09-04 修复）。
+const upperTable = computed(() => {
+  const node = stepNode.value
+  if (browseMode.value !== 'step' || !node || stepScope.value !== 'output') return undefined
+  if (!node.inputTable || node.inputTable === node.outputTable) return undefined
+  const all = [...group.value.list1, ...group.value.list2, ...group.value.list3]
+  return all.find((t) => t.tableId === node.inputTable || t.tableName === node.inputTable)
+})
+const upperTableName = computed(() => upperTable.value ? (upperTable.value.name || upperTable.value.tableName) : '')
+async function openUpperData(row: DataRow) {
+  const id = upperDataId(row.parentId)
+  const target = upperTable.value
+  if (!id || !target) return
+  detail.visible = false
+  stepScope.value = 'input'
+  tableId.value = target.tableId
+  await loadTableMeta()
+  await loadSources()
+  panelRef.value?.search({ dataId: id })
+}
+
 /** 流程图开合：打开「展示处理步骤」抽屉；收起由抽屉自己关闭 */
 function onStepRailToggle(open: boolean) {
   if (open) openStepDrawer()
@@ -1230,9 +1254,16 @@ onUnmounted(() => {
         <el-table-column prop="nextFlag" label="后续" width="70">
           <template #default="{ row }">{{ row.nextFlag ?? '—' }}</template>
         </el-table-column>
-        <el-table-column label="父ID" width="90">
+        <el-table-column label="父ID" width="130">
           <template #default="{ row }">
-            <span>{{ row.parentId || '—' }}</span>
+            <a
+              v-if="upperTableName && upperDataId(row.parentId)"
+              class="dv-a"
+              data-testid="upper-data-link"
+              :title="`打开上层数据 ${upperDataId(row.parentId)}`"
+              @click.stop="openUpperData(row)"
+            >{{ upperDataText(row.parentId, upperTableName) }}</a>
+            <span v-else data-testid="upper-data">{{ upperDataText(row.parentId) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="原始" width="70">
@@ -1293,6 +1324,8 @@ onUnmounted(() => {
         v-if="detail.data"
         :data="detail.data"
         :table-meta="tableMeta"
+        :upper-table-name="upperTableName"
+        @open-upper="openUpperData"
         @open-task="openTaskInstByDetail"
         @open-raw="openRawJson"
         @preview-file="onCellFile"
