@@ -851,7 +851,8 @@ describe('节点配置自动保存（1021-06）', () => {
     expect(update).toHaveBeenCalledTimes(1)
     expect(update.mock.calls[0][0]).toMatchObject({ configId: '1400774', clearRule: '{"keep":1}' })
     expect(flow.dirtyConfigNodes).not.toContain('a')
-    expect(success).not.toHaveBeenCalled()
+    // 自动保存成功不弹提示（只看本配置：前面用例的保存请求可能晚回来弹别的提示）
+    expect(success.mock.calls.some((c) => String(c[0]).includes('1400774'))).toBe(false)
     flow.select('a')
     await flushPromises()
     expect(w.text()).toMatch(/已自动保存 \d\d:\d\d/)
@@ -896,7 +897,8 @@ describe('节点配置自动保存（1021-06）', () => {
     flow.setActiveTab(before === 'table' ? 'task' : 'table')
     await flushPromises()
     expect(update).toHaveBeenCalledTimes(1)
-    expect(String(error.mock.calls.at(-1)?.[0])).toContain('当前配置已被修改')
+    // 不看「最后一条」：前面用例点保存新建配置的请求可能晚回来，它的报错也会落进这里
+    expect(error.mock.calls.some((c) => String(c[0]).includes('当前配置已被修改'))).toBe(true)
     expect(flow.dirtyConfigNodes).toContain('a')
     w.unmount()
   })

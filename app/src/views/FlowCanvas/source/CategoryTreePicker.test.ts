@@ -24,6 +24,13 @@ describe('CategoryTreePicker', () => {
     expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([{ dirId: 'fund-comment', category: '支付宝评论', categoryPath: 'fund-comment' }])
   })
 
+  it('传了 rootId 只展示该分类下的子树（新建采集只给业务目录）', async () => {
+    const sourceCategories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue(categories)
+    mount(CategoryTreePicker, { props: { modelValue: { category: '', categoryPath: '' }, rootId: '-2' } })
+    await flushPromises()
+    expect(sourceCategories).toHaveBeenCalledWith('-2')
+  })
+
   it('首屏只有根分类时，展开会按 parentId 懒加载子分类', async () => {
     const sourceCategories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => (
       parentId ? [{ id: 'fund-comment', name: '支付宝评论', count: 1 }] : [{ id: 'fund', name: '基金类' }]

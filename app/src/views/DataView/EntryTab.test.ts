@@ -58,7 +58,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    expect(pagedSpy).toHaveBeenCalledWith(expect.objectContaining({ enable: '0', page: 1, size: 2000 }))
+    expect(pagedSpy).toHaveBeenCalledWith(expect.objectContaining({ enable: '0', page: 1, size: 20 }))
 
     await wrapper.find('input[placeholder="表 ID"]').setValue('2001')
     await wrapper.find('input[placeholder="表名称"]').setValue('公告')
@@ -367,107 +367,86 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeRebuild)
   })
 
-  it('1013 全量拉取：一次 2000，总量超上限时翻页补拉，前端排序分页切片', async () => {
-    const list1 = Array.from({ length: 2000 }, (_, i) => ({ tableId: String(2100000 + i), tableName: `tb_${i}`, fields: [] }))
-    const list2 = Array.from({ length: 500 }, (_, i) => ({ tableId: String(2200000 + i), tableName: `tb_x${i}`, fields: [] }))
-    // 按 page 返回，不依赖 mockResolvedValueOnce 的消费顺序（该队列跨测试共享，会污染精确次数断言）
-    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockImplementation(async (p) => {
-      if ((p?.page ?? 1) === 1) return { total: 2500, list: list1 }
-      if ((p?.page ?? 1) === 2) return { total: 2500, list: list2 }
-      return { total: 2500, list: [] }
+  it('1022 按页请求：每页 20 条，默认带表ID倒序排序参数，总数取后端 count', async () => {
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1160,
+      list: [{ tableId: '2102180', tableName: 'tb_test', fields: [] }],
     })
     await mountTab()
     await waitForLoad()
-
-    // 第一页 2000 < total 2500 → 补拉第二页补齐后停止，不再拉第三页
-    expect(pagedSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(pagedSpy.mock.calls.some((c) => c[0]?.page === 2)).toBe(true)
-    expect(pagedSpy.mock.calls.filter((c) => c[0]?.page === 3).length).toBe(0)
-    // 默认表ID倒序：第一行是最大表ID
-    expect(wrapper.text()).toContain('2200499')
-    expect(wrapper.text()).toContain('共 2500 张实体表')
+    expect(pagedSpy.mock.calls[0][0]).toMatchObject({ page: 1, size: 20, field: 'entryTypeId', order: 'desc' })
+    expect(pagedSpy.mock.calls.every((c) => c[0]?.size === 20)).toBe(true)
+    expect(wrapper.text()).toContain('共 1160 张实体表')
   })
 
-  it('1013 列头排序：默认表ID倒序；点「物理表名」升序，再点降序', async () => {
-    const entries: EntryType[] = [
-      { tableId: '3', tableName: 'tb_c', name: '丙', fields: [] },
-      { tableId: '1', tableName: 'tb_a', name: '甲', fields: [] },
-      { tableId: '2', tableName: 'tb_b', name: '乙', fields: [] },
-    ]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: entries })
+  it('1022 列头排序交给后端：换列回第 1 页按该列升序，再点同列降序；表名称传 typeName', async () => {
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: [] })
     await mountTab()
     await waitForLoad()
+    const th = (label: string) => wrapper.findAll('th').find((t) => t.text().includes(label))!
+    const last = () => pagedSpy.mock.calls.at(-1)![0]
 
-    // 默认表ID倒序：3,2,1
-    const rows = () => wrapper.findAll('tbody tr')
-    expect(rows()[0].text()).toContain('3')
-
-    // 点「物理表名」→ 升序：tb_a, tb_b, tb_c
-    const nameTh = wrapper.findAll('th').find((t) => t.text().includes('物理表名'))!
-    await nameTh.trigger('click')
-    await flushPromises()
-    expect(rows()[0].text()).toContain('tb_a')
-    expect(rows()[2].text()).toContain('tb_c')
-
-    // 再点 → 降序：tb_c, tb_b, tb_a
-    await nameTh.trigger('click')
-    await flushPromises()
-    expect(rows()[0].text()).toContain('tb_c')
-    expect(rows()[2].text()).toContain('tb_a')
+    await th('物理表名').trigger('click')
+    await waitForLoad()
+    expect(last()).toMatchObject({ page: 1, field: 'tableName', order: 'asc' })
+    await th('物理表名').trigger('click')
+    await waitForLoad()
+    expect(last()).toMatchObject({ page: 1, field: 'tableName', order: 'desc' })
+    await th('表名称').trigger('click')
+    await waitForLoad()
+    expect(last()).toMatchObject({ field: 'typeName', order: 'asc' })
+    await th('更新时间').trigger('click')
+    await waitForLoad()
+    expect(last()).toMatchObject({ field: 'updateDt', order: 'asc' })
   })
 
-  it('1013 列头排序：中文表名称按拼音序排序（不是 Unicode 码点序）', async () => {
-    // 拼音首字母：政(zheng) > 通(tong) > 附(fu)；码点序会完全不同（附U+9644 < 政U+653F < 通U+901A）
-    const entries: EntryType[] = [
+  it('1022 翻页按页请求，保持当前排序', async () => {
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 100, list: [] })
+    await mountTab()
+    await waitForLoad()
+    await wrapper.findAll('th').find((t) => t.text().includes('状态'))!.trigger('click')
+    await waitForLoad()
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:current-page', 3)
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('current-change', 3)
+    await waitForLoad()
+    expect(pagedSpy.mock.calls.some((c) => c[0]?.page === 3 && c[0]?.field === 'state' && c[0]?.order === 'asc')).toBe(true)
+  })
+
+  // 后端 cond / entryTypeIds 不过滤（10-22，186 实测），收藏的表按 ID 逐个查回来在前端排序
+  it('1022 只看收藏：按收藏的表 ID 逐个查，只显示收藏的表，中文名按拼音排；关闭恢复按页请求', async () => {
+    serverFavorites.add('2').add('3')
+    const all: EntryType[] = [
       { tableId: '1', tableName: 'tb_a', name: '政策文件', fields: [] },
       { tableId: '2', tableName: 'tb_b', name: '通用新闻表', fields: [] },
       { tableId: '3', tableName: 'tb_c', name: '附神资源表', fields: [] },
     ]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: entries })
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockImplementation(async (p) => {
+      const hit = p?.entryTypeId ? all.filter((e) => e.tableId === p.entryTypeId) : all
+      return { total: hit.length, list: hit }
+    })
     await mountTab()
     await waitForLoad()
-
-    const rows = () => wrapper.findAll('tbody tr')
-    // 点「表名称」→ 升序（拼音）：附神资源表, 通用新闻表, 政策文件
-    const nameTh = wrapper.findAll('th').find((t) => t.text().includes('表名称'))!
-    await nameTh.trigger('click')
-    await flushPromises()
-    expect(rows()[0].text()).toContain('附神资源表')
-    expect(rows()[1].text()).toContain('通用新闻表')
-    expect(rows()[2].text()).toContain('政策文件')
-
-    // 再点 → 降序（拼音反序）：政策文件, 通用新闻表, 附神资源表
-    await nameTh.trigger('click')
-    await flushPromises()
-    expect(rows()[0].text()).toContain('政策文件')
-    expect(rows()[2].text()).toContain('附神资源表')
-  })
-
-  it('1013 只看收藏：开启后只显示收藏的表，关闭恢复全量', async () => {
-    serverFavorites.add('t2')
-    const entries: EntryType[] = [
-      { tableId: 't1', tableName: 'tb_a', fields: [] },
-      { tableId: 't2', tableName: 'tb_b', fields: [] },
-    ]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 2, list: entries })
-    await mountTab()
-    await waitForLoad()
-    expect(wrapper.findAll('tbody tr')).toHaveLength(2)
+    expect(wrapper.findAll('tbody tr')).toHaveLength(3)
 
     const sw = wrapper.findComponent({ name: 'ElSwitch' })
+    pagedSpy.mockClear()
     await sw.vm.$emit('update:modelValue', true)
     await sw.vm.$emit('change', true)
-    await flushPromises()
-
-    // 只看收藏：只剩收藏的 t2
-    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
-    expect(wrapper.text()).toContain('tb_b')
+    await waitForLoad()
+    expect(pagedSpy.mock.calls.map((c) => c[0]?.entryTypeId).filter(Boolean).sort()).toEqual(['2', '3'])
+    expect(wrapper.findAll('tbody tr')).toHaveLength(2)
     expect(wrapper.text()).not.toContain('tb_a')
+
+    await wrapper.findAll('th').find((t) => t.text().includes('表名称'))!.trigger('click')
+    await flushPromises()
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].text()).toContain('附神资源表')
+    expect(rows[1].text()).toContain('通用新闻表')
 
     await sw.vm.$emit('update:modelValue', false)
     await sw.vm.$emit('change', false)
-    await flushPromises()
-    expect(wrapper.findAll('tbody tr')).toHaveLength(2)
+    await waitForLoad()
+    expect(wrapper.findAll('tbody tr')).toHaveLength(3)
   })
 
   it('1013 收藏星标：点击收藏变实心（后端已记），取消恢复空心；失败时回滚并提示', async () => {

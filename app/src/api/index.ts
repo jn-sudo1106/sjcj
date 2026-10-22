@@ -81,6 +81,7 @@ export type { UsedTable } from '@/utils/site/usedTables'
 import { issueTagsForWrite, parseIssueTags } from '@/utils/sourceMark'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { aggregateUsedTables, countSourcesWithoutFlow, type UsedTable } from '@/utils/site/usedTables'
+import { snatchAckFrom, type SnatchAck } from '@/utils/snatchResult'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
@@ -809,8 +810,9 @@ export const sourceApi = {
       httpParams: { ids: sourceIds.join(',') },
     }),
   /** 带参发抓取（旧 /v1/source/sendSnatchWithParam）：query 传 ids/all/skip/include/queue，body 仅传 param（{ "configId_paramId": "v1;v2" }）。 */
-  sendSnatchWithParam: (payload: SendSnatchWithParamPayload) =>
-    request<Ack>('source/sendSnatchWithParam', payload.param, {
+  /** 回执经 snatchAckFrom 整理：一个都没发出去时抛错（原因已翻成人话），部分发出时带回 failed（2026-10-22） */
+  sendSnatchWithParam: (payload: SendSnatchWithParamPayload): Promise<SnatchAck> =>
+    request<unknown>('source/sendSnatchWithParam', payload.param, {
       method: 'POST',
       httpEndpoint: 'source/sendSnatchWithParam',
       query: {
@@ -822,7 +824,7 @@ export const sourceApi = {
         // 1008-04「指定流程运行一次」：用这条流程跑这一次，不影响定时与默认流程（旧平台 source.js 同口径）
         ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
-    }),
+    }).then(snatchAckFrom),
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
@@ -3119,6 +3121,9 @@ export const entryApi = {
       enable: p.enable,
       // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
       cond: p.cond,
+      // 1022：排序（白名单 entryTypeId/typeName/tableName/keyField/state/updateDt，order=asc|desc）；不传 = 表 ID 倒序
+      field: p.field,
+      order: p.order,
     }
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
@@ -3606,11 +3611,13 @@ export const workflowBindingApi = {
     const ownIds = new Set(ownActive.map((binding) => binding.flowId))
     const groupIds = new Set(groupActive.map((binding) => binding.flowId))
     const ordered = [...(groupId ? groupActive : ownActive)].sort(byDefault)
-    // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
+    // 流程名 / 是否禁用：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID、按启用处理
     const names = new Map<string, string>()
+    const disabledFlows = new Set<string>()
     if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
+      if (flow?.disabled) disabledFlows.add(binding.flowId)
     }))
     const rows = ordered.map((binding, index): WorkflowBinding => {
       const inherited = groupIds.has(binding.flowId)
@@ -3624,7 +3631,8 @@ export const workflowBindingApi = {
         workflowName: names.get(binding.flowId) ?? `流程 #${binding.flowId}`,
         publishedFlowId: binding.flowId,
         versionStatus: 'PUBLISHED',
-        workflowStatus: 'ACTIVE',
+        // 流程禁用（flow/changeFlowEnable，cs_flow.IS_DELETE=1）：禁用后手动抓取 / 指定流程运行 / 定时都不跑（10-22 后端）
+        workflowStatus: disabledFlows.has(binding.flowId) ? 'DISABLED' : 'ACTIVE',
         versionManaged: false,
         followsCurrentVersion: true,
         role: primary ? 'MAIN' : 'AUX',

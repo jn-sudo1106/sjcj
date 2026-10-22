@@ -1,6 +1,6 @@
 // 同一配置的保存串行（updateConfig 并发校验不原子，186 实测）；不同配置互不等待；前一次失败不挡后一次
 import { afterEach, describe, expect, it } from 'vitest'
-import { enqueueConfigSave, flushNodeConfigs, registerNodeConfigFlusher, resetNodeConfigAutosave } from './nodeConfigAutosave'
+import { enqueueConfigSave, flushNodeConfigs, isActiveNodeConfigFlusher, registerNodeConfigFlusher, resetNodeConfigAutosave } from './nodeConfigAutosave'
 
 afterEach(() => resetNodeConfigAutosave())
 
@@ -31,13 +31,20 @@ describe('nodeConfigAutosave', () => {
     await expect(next).resolves.toBe('ok')
   })
 
-  it('flushNodeConfigs 调登记的 flusher；注销只注销自己', async () => {
+  it('多个检查器：最后挂载的负责 flush 和快捷键，卸载后交还给前一个', async () => {
     const calls: string[] = []
-    const off = registerNodeConfigFlusher(async () => { calls.push('a') })
+    const a = async () => { calls.push('a') }
+    const b = async () => { calls.push('b') }
+    const offA = registerNodeConfigFlusher(a)
+    const offB = registerNodeConfigFlusher(b)
+    expect(isActiveNodeConfigFlusher(b)).toBe(true)
+    expect(isActiveNodeConfigFlusher(a)).toBe(false)
     await flushNodeConfigs()
-    registerNodeConfigFlusher(async () => { calls.push('b') })
-    off()
+    offB()
+    expect(isActiveNodeConfigFlusher(a)).toBe(true)
     await flushNodeConfigs()
-    expect(calls).toEqual(['a', 'b'])
+    offA()
+    await flushNodeConfigs()
+    expect(calls).toEqual(['b', 'a'])
   })
 })
