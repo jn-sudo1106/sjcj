@@ -18,6 +18,7 @@ import AddToViewDialog from './AddToViewDialog.vue'
 import SourceDirPanel, { type DirScope } from './SourceDirPanel.vue'
 import BizDirPickerDialog from './BizDirPickerDialog.vue'
 import BizDirMoveDialog from './BizDirMoveDialog.vue'
+import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
 import { VIEW_DIR_ROOT_ID, BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirNode } from '@/api/sourceDirs'
 
@@ -501,6 +502,15 @@ function openBizMove(ids: string[]) {
   bizMove.open = true
 }
 
+// 按模板批量新增（10-22）：同「移动」一样要先在左侧选定一个业务目录，且只能勾一个源当模板
+const bizTemplate = reactive({ open: false, templateId: '', dirId: '' })
+function openBizTemplate(ids: string[]) {
+  if (!canMoveBiz.value || ids.length !== 1) return
+  bizTemplate.templateId = ids[0]
+  bizTemplate.dirId = dirScope.value.labels[0].id
+  bizTemplate.open = true
+}
+
 // 勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录；条件视图与「另存为视图」10-13 起下线
 const addToView = reactive({ open: false, ids: [] as string[] })
 function openAddToView(ids: string[]) {
@@ -763,12 +773,13 @@ onUnmounted(() => {
         </el-dropdown>
       </template>
       <template v-if="scope === 'all' && showDirPanel && dirScope.kind === 'biz'" #summary-ops="{ ids }">
-        <el-dropdown trigger="click" data-testid="biz-ops" @command="(command: 'add' | 'move') => (command === 'add' ? openBizPicker(ids) : openBizMove(ids))">
+        <el-dropdown trigger="click" data-testid="biz-ops" @command="(command: 'add' | 'move' | 'template') => (command === 'add' ? openBizPicker(ids) : command === 'move' ? openBizMove(ids) : openBizTemplate(ids))">
           <button class="ca-save-view sm" type="button">目录归类 ▾</button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="add" data-testid="source-pick-for-biz">加入业务目录…</el-dropdown-item>
               <el-dropdown-item command="move" :disabled="!canMoveBiz || !ids.length" data-testid="source-move-biz">{{ canMoveBiz && ids.length ? `移到其他业务目录…（${ids.length} 个）` : '移到其他业务目录…（先在左侧点一个目录，再勾选源）' }}</el-dropdown-item>
+              <el-dropdown-item command="template" :disabled="!canMoveBiz || ids.length !== 1" data-testid="source-template-import-biz">{{ !canMoveBiz ? '按模板批量新增…（先在左侧点一个目录）' : ids.length !== 1 ? '按模板批量新增…（请只勾选一个源作为模板）' : '按模板批量新增…' }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -799,6 +810,7 @@ onUnmounted(() => {
     <AddToViewDialog v-model="addToView.open" :source-ids="addToView.ids" @added="onAddedToView" />
     <BizDirPickerDialog v-if="bizPicker.open" :initial-source-ids="bizPicker.ids" :initial-directory-ids="defaultBizDirIds" @close="bizPicker.open = false" @saved="afterBizChanged" />
     <BizDirMoveDialog v-if="bizMove.open" :source-ids="bizMove.ids" :from-dir-ids="dirScope.dirIds" :from-label="`${dirLabelText}${dirWithSub ? '（含子级）' : ''}`" @close="bizMove.open = false" @saved="afterBizChanged" />
+    <BizTemplateImportDialog v-if="bizTemplate.open" :template-id="bizTemplate.templateId" :dir-id="bizTemplate.dirId" :dir-label="dirLabelText" @close="bizTemplate.open = false" @saved="afterBizChanged" />
     <CategoryScheduleModal ref="scheduleRef" />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。

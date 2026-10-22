@@ -11,8 +11,8 @@
 // - `sourcePaged.viewCategoryId` 对业务目录有效，但只认单个目录、也不含子级（传父目录得 0，传两个直接报错）
 //   → 业务目录的范围由前端用 `category/listSources` 逐个取源、取并集，再按源 ID 范围查。
 import { request } from './client'
-import { sourceApi } from './index'
-import type { SourceCategory } from './types'
+import { sourceApi, workflowBindingApi } from './index'
+import type { Source, SourceCategory, SourceFlowsView } from './types'
 
 export type DirKind = 'sys' | 'biz'
 
@@ -218,6 +218,78 @@ export async function moveSourcesInBiz(fromDirIds: string[], toDirId: string | n
   } catch (error) {
     throw Object.assign(new Error((error as Error)?.message ?? String(error)), { step: 'remove' as const })
   }
+}
+
+export interface TemplateImportResult {
+  added: string[]
+  skipped: number
+  /** 这一行连源都没建出来 */
+  failed: string[]
+  /** 源建出来了，但归网站 / 挂流程 / 进目录有一步没成：要手动补 */
+  partial: string[]
+}
+
+/**
+ * 业务目录「按模板批量新增」（10-22）：一行一条「源名称;URL」，每行按模板源复制一个源。
+ * 复用模板源的配置和流程（共用同一条流程，不另复制），归入模板源的网站，最后统一加入业务目录 `dirId`。
+ * 逐行执行，某行失败不影响其他行；源已建出但后续步骤失败的不回滚（回滚等于删源），记进 partial。
+ */
+export async function importFromTemplateToBizDir(template: Source, lines: string, dirId: string): Promise<TemplateImportResult> {
+  const result: TemplateImportResult = { added: [], skipped: 0, failed: [], partial: [] }
+  const tplFlows = await workflowBindingApi.view(template.sourceId)
+  const siteId = template.siteId && template.siteId !== '0' ? template.siteId : ''
+  for (const row of lines.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+    // 只按第一个分号切：URL 里可能自带分号
+    const sep = row.search(/[;；]/)
+    const name = (sep < 0 ? row : row.slice(0, sep)).trim()
+    const url = sep < 0 ? '' : row.slice(sep + 1).trim()
+    if (!name) { result.skipped++; continue }
+    let copied: Awaited<ReturnType<typeof sourceApi.copySourceAndLocate>>
+    try {
+      // flag=0：仅制作源副本，复用模板源的配置；URL 留空时沿用模板源的
+      copied = await sourceApi.copySourceAndLocate({ sourceId: template.sourceId, name, url: url || template.url, flag: 0 })
+    } catch (error) {
+      result.failed.push(`${name}（${(error as Error)?.message ?? String(error)}）`)
+      continue
+    }
+    if (!copied.ok) { result.failed.push(`${name}（${copied.message}）`); continue }
+    const id = copied.sourceId
+    result.added.push(id)
+    // copySource 实测（186，10-22）会连网站、配置、系统目录、流程绑定一起复制；这里只兜底，不一致才补写
+    const misses: string[] = []
+    try {
+      const created = await sourceApi.sourceDetail(id)
+      if (siteId && created?.siteId !== siteId) {
+        const bind = await sourceApi.changeSite([id], siteId)
+        if (!bind.ok) misses.push('归入网站')
+      }
+    } catch {
+      misses.push('归入网站')
+    }
+    try {
+      const view = await workflowBindingApi.view(id)
+      if (!sameFlows(view, tplFlows)) {
+        await workflowBindingApi.save(id, () => ({ flowIds: tplFlows.ownFlowIds, defaultFlowId: tplFlows.ownDefaultFlowId ?? null }))
+      }
+    } catch {
+      misses.push('关联流程')
+    }
+    if (misses.length) result.partial.push(`#${id} ${name}（${misses.join('、')}失败）`)
+  }
+  if (result.added.length) {
+    try {
+      await addSourcesToBizDir(dirId, result.added)
+    } catch (error) {
+      result.partial.push(`${result.added.length} 个新源加入业务目录失败（${(error as Error)?.message ?? String(error)}），新源 ID：${result.added.join(',')}`)
+    }
+  }
+  return result
+}
+
+function sameFlows(a: SourceFlowsView, b: SourceFlowsView) {
+  return (a.ownDefaultFlowId ?? '') === (b.ownDefaultFlowId ?? '')
+    && a.ownFlowIds.length === b.ownFlowIds.length
+    && a.ownFlowIds.every((id) => b.ownFlowIds.includes(id))
 }
 
 /** 测试用：清掉模块级缓存 */

@@ -6,11 +6,12 @@ vi.mock('@/api/client', async (importOriginal) => {
   return { ...actual, request: (...args: unknown[]) => requestMock(...args) }
 })
 
-import { sourceApi, type SourceCategory } from './index'
+import { sourceApi, workflowBindingApi, type SourceCategory } from './index'
 import {
   addSourcesToBizDir, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren,
-  moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
+  importFromTemplateToBizDir, moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
 } from './sourceDirs'
+import type { Source, SourceFlowsView } from './types'
 import { describeFilters } from '@/views/FlowCanvas/result/useSourceLaunch'
 
 const cat = (id: string, name: string, parentId = ''): SourceCategory => ({ id, name, ...(parentId ? { parentId } : {}) })
@@ -138,5 +139,58 @@ describe('sourceDirs · 移动（10-21）', () => {
     await expect(moveSourcesInBiz(['9011496'], '9011515', ['1'])).rejects.toMatchObject({ step: 'add', message: '加入挂了' })
     expect(requestMock.mock.calls.some(([ep]) => ep === 'category/delSources')).toBe(false)
     await expect(moveSourcesInBiz(['9011496'], null, ['1'])).rejects.toMatchObject({ step: 'remove', message: '移出挂了' })
+  })
+})
+
+describe('sourceDirs · 按模板批量新增（10-22）', () => {
+  const tpl = { sourceId: '100', name: '模板', url: 'https://tpl', siteId: '7' } as Source
+  const flows = (own: string[], def?: string): SourceFlowsView => ({ flowIds: own, defaultFlowId: def, bindings: [], ownFlowIds: own, ownDefaultFlowId: def, ownBindings: [] })
+  let nextId = 200
+
+  beforeEach(() => {
+    nextId = 200
+    vi.spyOn(sourceApi, 'copySourceAndLocate').mockImplementation(async (input) => ({ ok: true as const, sourceId: String(nextId++), name: input.name }))
+    vi.spyOn(sourceApi, 'sourceDetail').mockImplementation(async (id: string) => ({ sourceId: id, siteId: '7' }) as Source)
+    vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true })
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(flows(['1', '2'], '1'))
+    vi.spyOn(workflowBindingApi, 'save').mockResolvedValue()
+  })
+
+  it('每行按模板复用配置复制（flag=0），URL 省略沿用模板；空名跳过；新源统一加入目录', async () => {
+    const r = await importFromTemplateToBizDir(tpl, 'A;https://a;x=1\n\n;https://b\nB', '9011515')
+    expect(vi.mocked(sourceApi.copySourceAndLocate).mock.calls.map(([i]) => [i.name, i.url, i.flag])).toEqual([
+      ['A', 'https://a;x=1', 0],
+      ['B', 'https://tpl', 0],
+    ])
+    expect(r).toEqual({ added: ['200', '201'], skipped: 1, failed: [], partial: [] })
+    expect(requestMock.mock.calls.filter(([ep]) => ep === 'category/addSources').map(([, , o]) => o.httpParams)).toEqual([
+      { categoryId: 9011515, sourceIds: [200, 201], sourceGroupIds: [] },
+    ])
+  })
+
+  it('网站和流程已随复制带过来就不再写；不一致才补', async () => {
+    await importFromTemplateToBizDir(tpl, 'A', '9011515')
+    expect(sourceApi.changeSite).not.toHaveBeenCalled()
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+
+    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ sourceId: '201', siteId: '' } as Source)
+    vi.mocked(workflowBindingApi.view).mockImplementation(async (id: string) => (id === '100' ? flows(['1', '2'], '1') : flows(['1'], '1')))
+    await importFromTemplateToBizDir(tpl, 'B', '9011515')
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['201'], '7')
+    const change = vi.mocked(workflowBindingApi.save).mock.calls[0]
+    expect(change[0]).toBe('201')
+    expect(change[1](flows([]))).toEqual({ flowIds: ['1', '2'], defaultFlowId: '1' })
+  })
+
+  it('某行复制失败不影响其他行；建出来但后续失败的记进 partial', async () => {
+    vi.mocked(sourceApi.copySourceAndLocate)
+      .mockResolvedValueOnce({ ok: false as const, message: '名称重复' })
+      .mockResolvedValueOnce({ ok: true as const, sourceId: '300', name: 'B' })
+    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ sourceId: '300', siteId: '9' } as Source)
+    vi.mocked(sourceApi.changeSite).mockResolvedValue({ ok: false, message: 'x' })
+    const r = await importFromTemplateToBizDir(tpl, 'A\nB', '9011515')
+    expect(r.failed).toEqual(['A（名称重复）'])
+    expect(r.added).toEqual(['300'])
+    expect(r.partial).toEqual(['#300 B（归入网站失败）'])
   })
 })
