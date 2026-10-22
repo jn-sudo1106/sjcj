@@ -8,6 +8,7 @@
  *     调同一个 `sendSnatchWithParam`。上限 5000，超了拦下让人收窄条件，不发任何请求。
  */
 import type { Source } from '@/api'
+import { snatchFailureSummary } from '@/utils/snatchResult'
 
 export const LAUNCH_ALL_MAX = 5000
 export const COLLECT_PAGE_SIZE = 500
@@ -225,8 +226,11 @@ export async function sendInBatches(
     if (signal?.aborted) break
     index += 1
     try {
-      await send(batch)
-      sent += batch.length
+      const ack = await send(batch) as { failed?: { sourceId: string; reason: string }[] } | undefined
+      // 部分源没发出去（回执 failedDetails，见 utils/snatchResult）：只把这几个记成失败，重试不会把已发的再发一遍
+      const notSent = ack?.failed ?? []
+      sent += batch.length - notSent.length
+      if (notSent.length) failed.push({ ids: notSent.map((f) => f.sourceId), error: snatchFailureSummary(notSent) })
     } catch (error) {
       failed.push({ ids: batch, error: error instanceof Error ? error.message : String(error) })
     }

@@ -3,12 +3,12 @@
 //
 // 「状态」列口径（2026-10-16 用户确认）：只读源自己的 `state`，只有 `E` 是「出错」，其余（C/L/空/停用）
 // 一律「正常」——旧平台对 state 只判 E，不单列运行中一态；停用由旁边的「启停」列单独表达，不再顶掉 state。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import FlowSourcesDialog from './FlowSourcesDialog.vue'
-import { flowCenterApi, sourceApi, type Source } from '@/api'
+import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi, type Source } from '@/api'
 
 const FLOW = { id: 'flow-1', name: '自然资源部' } as never
 
@@ -35,6 +35,9 @@ async function mountDialog(list: Source[]) {
   return { wrapper, paged, router }
 }
 
+// 解绑前要查每个源还剩几条流程（1021-08）；默认每个源都还关联着别的流程
+const viewWith = (ownFlowIds: string[]) => async (sourceId: string) => ({ sourceId, flowIds: ownFlowIds, bindings: [], ownFlowIds, ownBindings: [] })
+beforeEach(() => { vi.spyOn(workflowBindingApi, 'view').mockImplementation(viewWith(['flow-1', 'flow-2'])) })
 afterEach(() => vi.restoreAllMocks())
 
 describe('FlowSourcesDialog', () => {
@@ -195,14 +198,32 @@ describe('FlowSourcesDialog · 批量解绑 / 更换', () => {
     expect(w.find('[data-testid="flow-sources-apply"]').exists()).toBe(false)
   })
 
-  it('来源组带来的关联标「来源组」、不可勾选，也没有行内解绑', async () => {
+  it('来源组带来的关联在「所属来源组」列显示组名、不可勾选，也没有行内解绑（1021-04）', async () => {
+    vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
+      { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 },
+    ] as never)
     const w = await mountEmbedded([src('1'), src('2', { sourceGroupId: '3' })])
     const rows = w.findAll('[data-testid="flow-source-row"]')
-    expect(rows[1].find('[data-testid="flow-source-group-tag"]').text()).toBe('来源组')
+    expect(rows[0].find('[data-testid="flow-source-group-name"]').exists()).toBe(false)
+    expect(rows[1].get('[data-testid="flow-source-group-name"]').text()).toBe('twitter1')
     expect((picks(w)[1].element as HTMLInputElement).disabled).toBe(true)
     expect(rows[1].find('[data-testid="flow-source-unbind"]').exists()).toBe(false)
+    const push = vi.spyOn(w.vm.$router, 'push').mockResolvedValue(undefined)
+    await rows[1].get('[data-testid="flow-source-group-name"]').trigger('click')
+    expect(push).toHaveBeenCalledWith({ path: '/collect', query: { tab: 'personal', group: '3' } })
     await w.get('[data-testid="flow-sources-pick-page"]').setValue(true)
     expect(w.get('[data-testid="flow-sources-batch"]').text()).toContain('已选 1')
+  })
+
+  it('解绑后只剩本流程的源：确认框点名写明将没有任何流程（1021-08）', async () => {
+    const w = await mountEmbedded([src('1'), src('2')])
+    vi.spyOn(workflowBindingApi, 'view').mockImplementation(async (id) => viewWith(id === '2' ? ['flow-1'] : ['flow-1', 'flow-9'])(id))
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    await picks(w)[0].setValue(true)
+    await picks(w)[1].setValue(true)
+    await w.get('[data-testid="flow-sources-unbind-selected"]').trigger('click')
+    await flushPromises()
+    expect(String(confirm.mock.calls[0][0])).toContain('其中 1 个源只关联了本流程，解绑后将没有任何流程，无法发起任务：2')
   })
 
   it('勾选后解绑：changeFlowBatch 不带目标流程、带本流程', async () => {

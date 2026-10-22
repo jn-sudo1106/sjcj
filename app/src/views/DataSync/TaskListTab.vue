@@ -42,6 +42,11 @@ const copyOpen = ref(false)
 const copyTargets = ref<SyncDatabase[]>([])
 const databaseIds = ref<Array<string | number>>([])
 const copyTableFlag = ref(true)
+const deleteOpen = ref(false)
+const deleteTarget = ref<SyncTask | null>(null)
+// 目标表处理方式：0 不处理 / 1 备份表 / 2 删除表（后端 DeleteTaskDTO.tableOperation）
+const deleteTableOperation = ref<'0' | '1' | '2'>('0')
+const deleteBusy = ref(false)
 
 async function load() {
   loading.value = true
@@ -191,16 +196,24 @@ async function copy() {
   } catch (error) { ElMessage.error(String(error)) }
 }
 
-async function remove(row: SyncTask) {
+function remove(row: SyncTask) {
+  deleteTarget.value = row
+  deleteTableOperation.value = '0'
+  deleteOpen.value = true
+}
+
+async function confirmRemove() {
+  const row = deleteTarget.value
+  if (!row || deleteBusy.value) return
+  deleteBusy.value = true
   try {
-    const result = await ElMessageBox.prompt('目标表处理方式：0 不处理，1 备份表，2 删除表', `删除任务“${row.taskName}”`, {
-      inputValue: '0', inputPattern: /^[012]$/, inputErrorMessage: '请输入 0、1 或 2',
-      confirmButtonText: '确认删除', type: 'warning',
-    })
-    await syncApi.remove(row.id, row.clientId, row.targetTableName, result.value === '0' ? undefined : result.value)
+    await syncApi.remove(row.id, row.clientId, row.targetTableName,
+      deleteTableOperation.value === '0' ? undefined : deleteTableOperation.value)
     ElMessage.success('删除成功')
+    deleteOpen.value = false
     await load()
-  } catch (error) { if (error !== 'cancel') ElMessage.error(String(error)) }
+  } catch (error) { ElMessage.error(String(error)) }
+  finally { deleteBusy.value = false }
 }
 </script>
 
@@ -281,9 +294,26 @@ async function remove(row: SyncTask) {
       </el-select></el-form-item><el-form-item label="创建新表"><el-checkbox v-model="copyTableFlag">在目标数据源创建新表</el-checkbox></el-form-item></el-form>
       <template #footer><el-button @click="copyOpen = false">取消</el-button><el-button type="primary" :disabled="!databaseIds.length" @click="copy">确认复制</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="deleteOpen" :title="`删除任务“${deleteTarget?.taskName ?? ''}”`" width="min(480px, 94vw)">
+      <p class="sync-delete-target">目标表：{{ deleteTarget?.targetTableName || '-' }}</p>
+      <el-form label-position="top">
+        <el-form-item label="目标表处理方式">
+          <el-select v-model="deleteTableOperation" data-testid="delete-table-operation" style="width:100%">
+            <el-option value="0" label="不处理（只删任务，不动目标表）" />
+            <el-option value="1" label="备份表后删除" />
+            <el-option value="2" label="删除目标表" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="deleteOpen = false">取消</el-button>
+        <el-button type="danger" :loading="deleteBusy" data-testid="delete-confirm" @click="confirmRemove">确认删除</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }.sync-delete-target { margin: 0 0 14px; color: #64748b; font-size: 13px; }
 </style>

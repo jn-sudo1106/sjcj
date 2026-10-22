@@ -6,7 +6,7 @@ import ElementPlus from 'element-plus'
 import GroupSourcePicker from './GroupSourcePicker.vue'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { useAuthStore } from '@/stores/auth'
-import { sourceApi, sourceGroupApi, type Source } from '@/api'
+import { sourceApi, sourceGroupApi, workflowBindingApi, type Source } from '@/api'
 import type { UserInfo } from '@/api/auth'
 
 beforeEach(() => {
@@ -52,6 +52,8 @@ it('backend 模式：保存调 changeMembers 加入来源组，选中的源分�
     ],
   }))
   const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+  // 1021-03：入组前查自有流程；独立源 10 没有自有流程 → 不出入组确认；组内源 20 / 30 不查
+  const view = vi.spyOn(workflowBindingApi, 'view').mockImplementation(async (id) => ({ sourceId: id, flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }))
   const wrapper = mount(GroupSourcePicker, { props: { modelValue: false, groupId: '9', backendMode: true }, global: { plugins: [ElementPlus] }, attachTo: document.body })
   await wrapper.setProps({ modelValue: true }); await flushPromises()
   // 勾选全部 3 个源
@@ -60,6 +62,8 @@ it('backend 模式：保存调 changeMembers 加入来源组，选中的源分�
   expect(document.body.textContent).toContain('已选 3 个源')
   const save = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '加入分组')!
   save.click(); await flushPromises()
+  expect(view).toHaveBeenCalledTimes(1)
+  expect(view).toHaveBeenCalledWith('10')
   // 按 expected 分批：null（独立）、3、1
   expect(changeMembers).toHaveBeenCalledTimes(3)
   expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['10'], sourceGroupId: '9', expectedSourceGroupId: null })
@@ -68,6 +72,28 @@ it('backend 模式：保存调 changeMembers 加入来源组，选中的源分�
   // 成功后发 saved 事件并关闭
   expect(wrapper.emitted('saved')).toBeTruthy()
   expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
+  wrapper.unmount()
+})
+
+it('backend 模式：跨页勾选的源也一起加入（1021-03 顺带修：原来只交当前页的勾选）', async () => {
+  vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (query) => ({
+    total: 4,
+    list: query?.page === 2 ? [{ sourceId: '30', name: '丙' } as Source] : [{ sourceId: '10', name: '甲' } as Source],
+  }))
+  vi.spyOn(workflowBindingApi, 'view').mockImplementation(async (id) => ({ sourceId: id, flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }))
+  const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+  const wrapper = mount(GroupSourcePicker, { props: { modelValue: false, groupId: '9', backendMode: true }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+  await wrapper.setProps({ modelValue: true }); await flushPromises()
+  ;(document.querySelector('tbody input[type=checkbox]') as HTMLInputElement).click()
+  await flushPromises()
+  // 翻到第 2 页再勾一个
+  const vm = wrapper.vm as unknown as { page: number; load: () => Promise<void> }
+  vm.page = 2; await vm.load(); await flushPromises()
+  ;(document.querySelector('tbody input[type=checkbox]') as HTMLInputElement).click()
+  await flushPromises()
+  ;(document.querySelector('[data-testid="picker-save"]') as HTMLButtonElement).click()
+  await flushPromises()
+  expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['10', '30'], sourceGroupId: '9', expectedSourceGroupId: null })
   wrapper.unmount()
 })
 

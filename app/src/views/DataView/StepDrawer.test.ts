@@ -35,6 +35,8 @@ describe('StepDrawer', () => {
 
     await wrapper.get('[data-node-id="src-1-s2"]').trigger('click')
     expect(wrapper.emitted('select-table')?.at(-1)).toEqual(['TB_DETAIL'])
+    // 1021-05：选中节点的状态走公共字典
+    expect(wrapper.get('[data-testid="step-state"]').text()).toBe('异常')
   })
 
   // 1016：源 430003100（流程 14009350）分叉后节点整段不显示——flowDef 漏传 branchGroups

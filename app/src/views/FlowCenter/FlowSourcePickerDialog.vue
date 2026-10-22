@@ -4,7 +4,8 @@
 // 提交动作仍在 FlowCenter 的 confirmApply（分批 + 作业条 + 二次确认文案），这里只负责选。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElDialog, ElMessage } from 'element-plus'
-import { flowCenterApi, sourceApi, sourceGroupApi, type FlowRecord, type Source } from '@/api'
+import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
+import { useSourceGroupNames } from './sourceGroupNames'
 
 const props = defineProps<{
   /** 目标流程；非 null 时弹窗打开 */
@@ -30,25 +31,14 @@ const flowOptions = ref<{ id: string; name: string }[]>([])
 const flowOptLoading = ref(false)
 const onlyUnbound = ref(false)
 
-// 1008-06：来源组名映射（组内源禁选，行内标「组统一配置：组名」）。
-// 拉一次 sourceGroupApi.list 建 id→name 索引；失败不阻塞（只显示「组统一配置」）。
-const groupNames = ref(new Map<string, string>())
-async function loadGroupNames() {
-  try {
-    const groups = await sourceGroupApi.list()
-    groupNames.value = new Map(groups.map((g) => [g.sourceGroupId, g.sourceGroupName]))
-  } catch {
-    groupNames.value = new Map()
-  }
-}
+// 1008-06：组内源禁选；1021-04：「所属来源组」单独一列（组名可点跳我的分组），当前流程列标「组统一配置」。
+const { loadGroupNames, groupNameOf, openSourceGroup } = useSourceGroupNames()
 /** 组内源：统一使用组流程，不允许单独关联本流程 */
 function inGroup(source: Source): boolean {
   return !!source.sourceGroupId
 }
 function groupLabel(source: Source): string {
-  const id = source.sourceGroupId
-  if (!id) return ''
-  return `组统一配置：${groupNames.value.get(id) || `组 #${id}`}`
+  return source.sourceGroupId ? `组统一配置：${groupNameOf(source.sourceGroupId)}` : ''
 }
 
 const rows = ref<Source[]>([])
@@ -334,7 +324,7 @@ watch(() => props.flow?.id, (id) => {
         <thead>
           <tr>
             <th class="fsp-check-col" />
-            <th>源 ID</th><th>源名称</th><th>网站</th><th>状态</th><th>当前流程</th>
+            <th>源 ID</th><th>源名称</th><th>网站</th><th>所属来源组</th><th>状态</th><th>当前流程</th>
           </tr>
         </thead>
         <tbody>
@@ -348,16 +338,20 @@ watch(() => props.flow?.id, (id) => {
             <td class="fsp-mono">{{ s.sourceId }}</td>
             <td>{{ s.name }}</td>
             <td>{{ s.siteName || s.siteId || '—' }}</td>
+            <td>
+              <button v-if="s.sourceGroupId" class="fsp-group-link" type="button" :title="`到「我的分组」查看 ${groupNameOf(s.sourceGroupId)}`" data-testid="fsp-group-name" @click.stop="openSourceGroup(s.sourceGroupId)">{{ groupNameOf(s.sourceGroupId) }}</button>
+              <span v-else class="fsp-muted">—</span>
+            </td>
             <td>{{ stateText(s) }}</td>
             <td>
               <template v-if="inGroup(s)">
-                <span class="fsp-flowtag group" :title="groupLabel(s)" data-testid="fsp-group-tag">{{ groupLabel(s) }}</span>
+                <span class="fsp-flowtag group" :title="groupLabel(s)" data-testid="fsp-group-tag">组统一配置</span>
               </template>
               <span v-else class="fsp-flowtag" :class="flowTag(s).cls">{{ flowTag(s).text }}</span>
             </td>
           </tr>
           <tr v-if="!visibleRows.length && !loading">
-            <td colspan="6" class="fsp-empty">{{ error || (onlyUnbound ? '本页没有未关联到本流程的源' : '没有匹配的源') }}</td>
+            <td colspan="7" class="fsp-empty">{{ error || (onlyUnbound ? '本页没有未关联到本流程的源' : '没有匹配的源') }}</td>
           </tr>
         </tbody>
       </table>
@@ -440,6 +434,9 @@ watch(() => props.flow?.id, (id) => {
 .fsp-flowtag.other { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; }
 .fsp-flowtag.none { background: #f1f5f9; color: var(--rc-faint); border: 1px solid var(--rc-border); }
 .fsp-flowtag.group { background: #eef2ff; color: #4f46e5; border: 1px solid #c7d2fe; }
+.fsp-group-link { padding: 0; border: 0; background: none; color: var(--rc-primary-ink); cursor: pointer; text-align: left; }
+.fsp-group-link:hover { text-decoration: underline; }
+.fsp-muted { color: var(--rc-faint); }
 .fsp-table tbody tr.in-group { background: #f8fafc; color: var(--rc-faint); }
 .fsp-table tbody tr.in-group:hover { background: #f1f5f9; }
 .fsp-table tbody tr.in-group td.fsp-check-col input:disabled { cursor: not-allowed; }

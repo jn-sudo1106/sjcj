@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-// 源流程配置抽屉（1008-04）：组内源分「来源组流程（只读 + 查看组配置 / 退出来源组）」和「本源流程」两段；
-// 本源流程整体替换保存 + 绑定状态表（10-15 起入组源也能维护自有流程）。
+// 源流程配置抽屉（1008-04）：组内源只有「来源组流程（查看组配置 / 退出来源组）」，入组前的自有绑定折叠成「历史自有流程（已不生效）」
+//（1021-02：组内源只走组流程）；独立源是「本源流程」整体替换保存 + 绑定状态表。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import SourceFlowConfigDrawer from './SourceFlowConfigDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { sourceGroupApi, workflowBindingApi, flowCenterApi, type Source, type SourceFlowsView, type SourceFlowBind, type FlowRecord } from '@/api'
@@ -66,39 +66,65 @@ describe('源流程配置抽屉', () => {
     expect(save).toHaveBeenCalledWith('430024667', expect.any(Function))
   })
 
-  it('组内源：来源组流程只读一段，本源流程一段可保存（只交本源的流程）', async () => {
+  it('组内源：只有来源组流程，不出本源流程编辑区；入组前的自有绑定折叠成「历史自有流程（已不生效）」（1021-02）', async () => {
     vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(GROUP_VIEW)
     const save = vi.spyOn(workflowBindingApi, 'save').mockResolvedValue(undefined)
     const wrapper = mount(SourceFlowConfigDrawer, { props: { source: GROUP_SOURCE, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await settle()
     expect(dom('[data-testid="sfcd-group-section"]')?.textContent).toContain('组 #3')
     expect(document.body.textContent).toContain('组默认：流程 21000006')
-    expect(dom('[data-testid="sfcd-own-section"]')).toBeTruthy()
-    // 两张绑定表：组 2 行 + 本源 2 行
-    expect(document.querySelectorAll('[data-testid="sfcd-binding-toggle"]')).toHaveLength(4)
-    ;(dom('[data-testid="sfcd-save"]') as HTMLButtonElement).click()
-    await settle()
-    const change = save.mock.calls[0][1]
-    expect(change(GROUP_VIEW)).toEqual({ flowIds: ['21000019', '21000022'], defaultFlowId: '21000022' })
+    expect(dom('[data-testid="sfcd-own-section"]')).toBeNull()
+    expect(dom('[data-testid="sfcd-save"]')).toBeNull()
+    expect(dom('[data-testid="sfcd-flow-ids"]')).toBeNull()
+    // 只剩组绑定表的 2 个开关；历史自有流程只读，没有开关
+    expect(document.querySelectorAll('[data-testid="sfcd-binding-toggle"]')).toHaveLength(2)
+    expect(dom('[data-testid="sfcd-own-history"]')?.textContent).toContain('历史自有流程（已不生效，2 条）')
+    expect(save).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('组内源：可查看组配置 / 退出来源组', async () => {
-    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(GROUP_VIEW)
-    const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+  it('组内源没有历史自有绑定时不出折叠区', async () => {
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue({ ...GROUP_VIEW, ownFlowIds: [], ownDefaultFlowId: undefined, ownBindings: [] })
     const wrapper = mount(SourceFlowConfigDrawer, { props: { source: GROUP_SOURCE, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await settle()
-    expect(document.body.textContent).toContain('来源组流程')
-    const leaveBtn = dom('[data-testid="sfcd-leave-group"]') as HTMLButtonElement
-    leaveBtn.click()
+    expect(dom('[data-testid="sfcd-group-section"]')).toBeTruthy()
+    expect(dom('[data-testid="sfcd-own-history"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  async function leaveWith(afterView: SourceFlowsView) {
+    const view = vi.spyOn(workflowBindingApi, 'view').mockResolvedValueOnce(GROUP_VIEW).mockResolvedValue(afterView)
+    const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+    const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    const wrapper = mount(SourceFlowConfigDrawer, { props: { source: GROUP_SOURCE, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await settle()
-    // 退组旧绑定不恢复 → 先二次确认（测试无 zh-cn locale → 按钮是 OK）
+    ;(dom('[data-testid="sfcd-leave-group"]') as HTMLButtonElement).click()
+    await settle()
+    // 先二次确认（测试无 zh-cn locale → 按钮是 OK）
     expect(changeMembers).not.toHaveBeenCalled()
     const okBtn = [...document.querySelectorAll<HTMLButtonElement>('.el-message-box button')].find((b) => b.textContent?.trim() === 'OK')
     expect(okBtn, '应弹出确认框').toBeTruthy()
     okBtn!.click()
     await settle()
     expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['430000930'], sourceGroupId: null, expectedSourceGroupId: '3' })
+    expect(view).toHaveBeenCalledTimes(2)
+    return { wrapper, success, warning }
+  }
+
+  it('退出来源组：旧的自有流程重新生效时，提示按原有流程运行，抽屉切到本源流程', async () => {
+    const after: SourceFlowsView = { ...GROUP_VIEW, sourceGroupId: undefined, flowIds: GROUP_VIEW.ownFlowIds, defaultFlowId: GROUP_VIEW.ownDefaultFlowId, bindings: GROUP_VIEW.ownBindings }
+    const { wrapper, success } = await leaveWith(after)
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('按本源原有流程运行：流程 21000019、流程 21000022'))
+    expect(dom('[data-testid="sfcd-own-section"]')).toBeTruthy()
+    expect(dom('[data-testid="sfcd-group-section"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('退出来源组：本源没有流程时提示去关联', async () => {
+    const after: SourceFlowsView = { sourceId: '430000930', flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }
+    const { wrapper, warning } = await leaveWith(after)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('本源还没有流程'))
     wrapper.unmount()
   })
 

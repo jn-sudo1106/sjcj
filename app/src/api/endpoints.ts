@@ -581,11 +581,6 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/changeFlowEnable', desc: '批量启停流程（GET ids 逗号串 + enable 0=启用/1=禁用，置 cs_flow.IS_DELETE，排除 state=D）——0929 F6 重新注册，流程中心行内启停', live: true },
   // 绑定源到流程。写的是 **cs_source.FLOW_ID**（存量生产表），不是 cs_flow，单次上限 5000。
   { path: 'flow/changeFlowBatch', desc: '批量关联 / 解绑源到流程（Body 版；flowId=0 为解绑）', danger: true, live: true },
-  // 2026-10-20 后端新增的原子接口：一次事务（READ_COMMITTED）完成「解绑/换绑 + 删除旧流程」，
-  // 任一步失败整体回滚。流程中心的「解绑并删除 / 更换并删除」改走它——原来 changeFlowBatch +
-  // deleteFlow 两次调用之间没有事务，换绑成功而删除失败会留下「源已换走、流程还在」的中间态。
-  // 解绑：只传 sourceIds + currentFlowId；换绑：再传 flowId（不得等于 currentFlowId）。
-  { path: 'flow/changeFlowAndDelete', desc: '解绑/换绑源并删除旧流程（Body：sourceIds + currentFlowId[+flowId]；单事务原子操作，失败整体回滚）', danger: true, live: true },
   // 0903 Y8：后端把"复制"这件重活做掉了，前端不再自己逐个 saveItemConfig 建节点。
   // 2026-09-04 探活确认三条都在（GET 探测答 "Request method 'GET' not supported" = 端点存在但仅 POST；
   // flowTemplateList 走 GET）。0925 REVIEW 核对 bee-top：flowTemplateList 返回 templateFlag=1

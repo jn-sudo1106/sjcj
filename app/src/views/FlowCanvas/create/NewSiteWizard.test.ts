@@ -7,12 +7,19 @@ import ElementPlus from 'element-plus'
 import NewSiteWizard from './NewSiteWizard.vue'
 import { flowCenterApi, siteApi, workflowBindingApi } from '@/api'
 
+const addSourcesToBizDir = vi.fn(async () => 1)
+vi.mock('@/api/sourceDirs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/sourceDirs')>()),
+  addSourcesToBizDir: (...args: unknown[]) => addSourcesToBizDir(...(args as [])),
+}))
+
 describe('NewSiteWizard', () => {
   let wrapper: VueWrapper
 
   afterEach(() => {
     wrapper?.unmount()
     vi.restoreAllMocks()
+    addSourcesToBizDir.mockClear()
   })
 
   async function mountWizard() {
@@ -138,5 +145,21 @@ describe('NewSiteWizard', () => {
     await flushPromises()
     expect(bind).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
+  })
+
+  // 10-22：分类只选业务目录；业务目录走分类—源关系表，源的系统目录留空，建完把源加进所选目录
+  it('分类只展示业务目录；源的系统目录留空，建完加入所选业务目录', async () => {
+    const siteCreate = vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001', '9002'] })
+    vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ id: '1', name: 'x', definition: {} as never, updatedAt: '' })
+    vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue(undefined as never)
+    const { wrapper } = await mountWizard()
+    expect(wrapper.get('.cat-stub').attributes('root-id')).toBe('-2')
+    await wrapper.get('input.rc-input').setValue('向导测试站')
+    await flushPromises()
+    await wrapper.get('.rc-btn.primary').trigger('click')
+    await flushPromises()
+    expect((siteCreate.mock.calls[0][0] as { dirId?: string }).dirId).toBe('7')
+    expect((siteCreate.mock.calls[0][1] as { dirId?: string }[]).map((src) => src.dirId)).toEqual([''])
+    expect(addSourcesToBizDir).toHaveBeenCalledWith('7', ['9001', '9002'])
   })
 })

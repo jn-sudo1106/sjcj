@@ -102,6 +102,8 @@ function reset() {
     keyField: entry?.keyField,
     dedupMode: entry?.dedupMode ?? 'source',
     state: entry?.state ?? 'C',
+    // 数据源类型：MYSQL（默认）/ CK；老记录后端未返回时归一 MYSQL（与 legacyAdapters 归一口径一致）
+    dsKind: entry?.dsKind ?? 'MYSQL',
     // null/undefined → ''：与 el-option value="" "请选择" 对齐，提交时透传空串 = 未配置（避免 String(null)='null'）
     recFlag: entry?.recFlag == null ? '' : String(entry.recFlag),
     checkFlag: entry?.checkFlag == null ? '' : String(entry.checkFlag),
@@ -293,6 +295,13 @@ async function submit() {
         <select v-model="form.dedupMode" class="rc-input" data-testid="entry-dedup-mode">
           <option value="source">源内去重</option>
           <option value="table">表内去重</option>
+        </select>
+      </div>
+      <div class="rc-field"><label>数据源类型</label>
+        <!-- 切换只改 cfg_entry_type.DS_KIND（查询链路标记），不迁数据；写入始终在 MySQL -->
+        <select v-model="form.dsKind" class="rc-input" data-testid="entry-ds-kind">
+          <option value="MYSQL">Mysql</option>
+          <option value="CK">CK</option>
         </select>
       </div>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>

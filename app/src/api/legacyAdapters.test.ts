@@ -494,6 +494,22 @@ describe('旧平台实体表模型适配', () => {
     const legacy = entryTypeToLegacy({ tableId: '', tableName: 'tb_new', fields: [] })
     expect(legacy.entryTypeId).toBeUndefined()
   })
+
+  // DS_KIND（2026-10-22）：老记录缺失归一 MYSQL；后端带 CK 透传；toLegacy 原样带回落库
+  it('dsKind 缺省归一 MYSQL（老记录 / 未切数据源的表），不给 UI 暴露「未知」态', () => {
+    const entry = entryTypeFromLegacy({ entryTypeId: 2102157, tableName: 't', items: [] })
+    expect(entry.dsKind).toBe('MYSQL')
+  })
+
+  it('后端带 dsKind=CK 时透传', () => {
+    const entry = entryTypeFromLegacy({ entryTypeId: 2101020, tableName: 't', dsKind: 'CK', items: [] })
+    expect(entry.dsKind).toBe('CK')
+  })
+
+  it('entryTypeToLegacy 输出含 dsKind（编辑保存落 cfg_entry_type.DS_KIND）', () => {
+    const legacy = entryTypeToLegacy({ tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [] })
+    expect(legacy.dsKind).toBe('CK')
+  })
 })
 
 describe('旧平台实体数据行适配', () => {

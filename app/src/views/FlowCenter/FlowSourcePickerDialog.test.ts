@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
 import { flowCenterApi, sourceApi, sourceGroupApi, type Source } from '@/api'
 
@@ -11,9 +13,11 @@ function src(id: string, extra: Partial<Source> = {}): Source {
 }
 
 function mountDlg(modelValue: string[] = []) {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
   return mount(FlowSourcePickerDialog, {
     props: { flow: FLOW, modelValue },
     global: {
+      plugins: [router],
       directives: { loading: {} },
       stubs: {
         'el-dialog': { props: ['modelValue', 'title'], template: '<div v-if="modelValue"><slot/><slot name="footer"/></div>' },
@@ -37,6 +41,26 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('FlowSourcePickerDialog', () => {
+  it('组内源：「所属来源组」列显示组名可点跳我的分组，当前流程标「组统一配置」，不可勾选（1021-04）', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [src('a'), src('b', { sourceGroupId: '3' })] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+
+    const w = mountDlg([])
+    await flushPromises()
+    const rows = w.findAll('tbody tr')
+    expect(rows[0].find('[data-testid="fsp-group-name"]').exists()).toBe(false)
+    expect(rows[1].get('[data-testid="fsp-group-name"]').text()).toBe('twitter1')
+    expect(rows[1].get('[data-testid="fsp-group-tag"]').text()).toBe('组统一配置')
+    expect((rows[1].get('[data-testid="fsp-row-check"]').element as HTMLInputElement).disabled).toBe(true)
+
+    const push = vi.spyOn(w.vm.$router, 'push').mockResolvedValue(undefined)
+    await rows[1].get('[data-testid="fsp-group-name"]').trigger('click')
+    expect(push).toHaveBeenCalledWith({ path: '/collect', query: { tab: 'personal', group: '3' } })
+    // 点组名不算勾选这一行
+    expect(w.emitted('update:modelValue')).toBeUndefined()
+  })
+
   it('打开即按 sourcePaged 拉源，勾行 → update:modelValue，全选本页把整页加进来', async () => {
     const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 2, list: [src('a'), src('b')],
@@ -184,7 +208,7 @@ describe('FlowSourcePickerDialog', () => {
 })
 
 describe('FlowSourcePickerDialog · 1008-06 来源组', () => {
-  it('组内源禁选并标「组统一配置：组名」；点行/勾选都选不上', async () => {
+  it('组内源禁选并标「组统一配置」；点行/勾选都选不上', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 2, list: [src('g1', { sourceGroupId: '3' }), src('free')],
     })
@@ -193,8 +217,9 @@ describe('FlowSourcePickerDialog · 1008-06 来源组', () => {
     const w = mountDlg([])
     await flushPromises()
 
-    // 组内源行标「组统一配置：twitter1」，勾选框禁用
-    expect(w.text()).toContain('组统一配置：twitter1')
+    // 组内源：当前流程列标「组统一配置」，组名在「所属来源组」列（1021-04），勾选框禁用
+    expect(w.get('[data-testid="fsp-group-tag"]').text()).toBe('组统一配置')
+    expect(w.get('[data-testid="fsp-group-name"]').text()).toBe('twitter1')
     const checks = w.findAll('[data-testid="fsp-row-check"]')
     expect((checks[0].element as HTMLInputElement).disabled).toBe(true)
     expect((checks[1].element as HTMLInputElement).disabled).toBe(false)

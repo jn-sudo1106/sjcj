@@ -15,6 +15,8 @@ const props = defineProps<{
   modelValue: boolean
   /** 本源当前所属流程：列出来但不可选（换成自己没有意义） */
   currentFlowId?: string
+  /** 这些流程列出但不可选，标「已关联」（复用现有流程时排除本源已关联的） */
+  excludeFlowIds?: string[]
   purpose?: 'replace' | 'bind' | 'copy'
 }>()
 const emit = defineEmits<{
@@ -112,7 +114,7 @@ watch(() => props.modelValue, (open) => {
 }, { immediate: true })
 
 function flowSelectable(f: FlowRecord | undefined): f is FlowRecord {
-  return !!f && f.id !== props.currentFlowId && !f.disabled
+  return !!f && f.id !== props.currentFlowId && !props.excludeFlowIds?.includes(f.id) && !f.disabled
 }
 function flowOfSource(s: Source): FlowRecord | undefined {
   const id = validFlowIdOf(s.flowId)
@@ -141,6 +143,7 @@ function sourceRowClass({ row }: { row: Source }) {
 function flowTag(f: FlowRecord | undefined) {
   if (!f) return ''
   if (f.id === props.currentFlowId) return '当前'
+  if (props.excludeFlowIds?.includes(f.id)) return '已关联'
   if (f.disabled) return '已禁用'
   return f.isTemplate ? '模板' : ''
 }

@@ -184,9 +184,9 @@ export interface WorkflowBinding {
   status: 'ACTIVE' | 'DISABLED'
   /** 来源组绑定的流程 */
   inherited: boolean
-  /** 源自己也绑定了这条（与来源组流程重复时 inherited 和 own 同时为 true） */
+  /** 源自己绑定的这条（独立源）。组内源只列来源组流程，own 恒为 false */
   own?: boolean
-  /** 来源组的默认流程。primary 只给真正的运行入口：本源默认优先，没有再用来源组默认 */
+  /** 来源组的默认流程。primary 只给真正的运行入口：组内源 = 组默认，独立源 = 本源默认 */
   groupDefault?: boolean
   updatedAt?: string
 }

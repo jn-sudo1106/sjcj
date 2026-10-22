@@ -247,6 +247,25 @@ describe('数据中心 · 数据查询 tab', () => {
     expect((dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
   })
 
+  it('1021-05：数据查询页去掉「开始时间 / 结束时间」，查询和展示 SQL 都不再带 CREATE_DT 区间', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.find('.dqp-time-range').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="开始时间"]').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="结束时间"]').exists()).toBe(false)
+    const query = (dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.lastCall![0]
+    expect(query.startTime).toBeUndefined()
+    expect(query.endTime).toBeUndefined()
+
+    const body = await openResultMenu('data-more')
+    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查看查询条件/SQL')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('CREATE_DT >=')
+  })
+
   it('导出：调用 dataApi.exportUrl 拼好的 URL 新窗口打开，不经过 rowQueryPaged', async () => {
     const exportSpy = vi.spyOn(dataApi, 'exportUrl').mockReturnValue('/api/v1/entry/entryExportAll?entryType=t1')
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
@@ -530,6 +549,25 @@ describe('数据中心 · 数据查询 tab', () => {
       expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: '600519' }))
     })
 
+    it('1021-05 上层数据：看节点输出表且输入表不同时显示「来自 表名 #ID」，点了切到输入表并按 ID 查', async () => {
+      mockFlow()
+      vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [{ ...ROW, parentId: '5501' }] })
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
+      await pick('s2')
+
+      const link = wrapper.get('[data-testid="upper-data-link"]')
+      expect(link.text()).toBe('来自 公告表 #5501')
+      await link.trigger('click')
+      await waitForLoad()
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
+      expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', dataId: '5501', sourceId: '600519' }))
+      expect(wrapper.get('[data-testid="data-scope-input"]').classes()).toContain('active')
+    })
+
     it('输入表等于输出表合并成「输入·输出」；流程图按钮打开「展示处理步骤」抽屉；切回按表后数据表下拉回来', async () => {
       vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
       vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
@@ -613,6 +651,8 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(apiText).toContain('data.list[].id')
     expect(apiText).toContain('返回字段')
     expect(apiText).toContain('appId=dev&appKey=dev1&type=t1&sourceId=600519&startId=0&size=10')
+    // 1021-05：开始 / 结束时间去掉后，取数 API 说明里也不再有 dataRange
+    expect(apiText).not.toContain('dataRange')
     const closeApiButton = [...document.body.querySelectorAll('button')].find((el) => el.textContent?.trim() === '关闭')
     expect(closeApiButton).toBeDefined()
     closeApiButton!.click()
@@ -642,7 +682,33 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(wrapper.text()).toContain('状态')
-    expect(wrapper.text()).toContain('C')
+    // 1021-05：状态码走中文字典，C 在数据表里是「初始」，悬浮说明保留原码
+    const tag = wrapper.get('[data-testid="data-state"]')
+    expect(tag.text()).toBe('初始')
+    expect(tag.attributes('title')).toContain('（C）')
+  })
+
+  it('1021-05 父ID：列名保持「父ID」，-1 / -2 显示「—」，按表看只显示上层 ID；原始值在详情抽屉技术字段里', async () => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 3,
+      list: [
+        { ...ROW, dataId: 'r1', parentId: '-1' },
+        { ...ROW, dataId: 'r2', parentId: '-2' },
+        { ...ROW, dataId: 'r3', parentId: '5501' },
+      ],
+    })
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.text()).toContain('父ID')
+    expect(wrapper.findAll('[data-testid="upper-data"]').map((c) => c.text())).toEqual(['—', '—', '5501'])
+    expect(wrapper.find('[data-testid="upper-data-link"]').exists()).toBe(false)
+
+    vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({ row: { ...ROW, parentId: '-2' }, showItems: [] })
+    await wrapper.findAll('.el-table__body tr')[1]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="detail-upper"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="detail-tech-parent-id"]').text()).toBe('-2')
   })
 
   it('动态列：表头按 {desc}-{columnName} 渲染数据表字段', async () => {
@@ -1135,8 +1201,9 @@ describe('数据中心 · 数据查询 tab', () => {
 
     expect(sourceSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('更多源示例')
-    expect(wrapper.text()).toContain('配置ID')
-    expect(wrapper.text()).toContain('域')
+    // 1021-05：列对齐源管理，启停与运行状态分两列
+    expect(wrapper.text()).toContain('启停')
+    expect(wrapper.text()).toContain('运行状态')
 
     const row = wrapper.findAll('tr').find((el) => el.text().includes('更多源示例'))
     await row!.trigger('click')

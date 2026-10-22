@@ -29,6 +29,7 @@ import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/c
 import { firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
+import { flushNodeConfigs } from './inspector/nodeConfigAutosave'
 
 const route = useRoute()
 const router = useRouter()
@@ -169,6 +170,8 @@ const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.quer
 // 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
 const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
+  // 1021-06：先把能自动保存的节点配置存掉，剩下存不掉的（新节点、共享配置等）才走下面的提示
+  await flushNodeConfigs()
   // 没落库的草稿节点要单独说（0903）：`flow.dirty` 说的是"有改动"，而这里是**整个节点还不存在于
   // 后端**——切走就永久没了，重进画布连痕迹都没有（buildSourceSeed 只认 sourceSteps 的步骤行）。
   // 两种情况的后果差得远，提示不能共用一句"改动将丢弃"。
@@ -594,7 +597,8 @@ async function onStartCapture() {
           ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
           return
         }
-        ElMessage.success(`已发起抓取 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
+        // runId 是画布本地演示用的编号（stores/runtime），不是后端任务 ID，别展示给用户（10-22：用户拿它去任务列表找不到）
+        ElMessage.success('已发起抓取，任务已下发，可到「任务」页签查看进度')
       },
     })
   } catch {
