@@ -10,7 +10,11 @@ export interface CategorySelection {
   categoryPath: string
 }
 
-const props = defineProps<{ modelValue: CategorySelection }>()
+const props = defineProps<{
+  modelValue: CategorySelection
+  /** 只展示这个分类下的子树（新建采集传 -2「业务分类」，10-22）；不传 = 分类表根层 */
+  rootId?: string
+}>()
 const emit = defineEmits<{ 'update:modelValue': [v: CategorySelection] }>()
 
 const categories = ref<SourceCategory[]>([])
@@ -30,7 +34,7 @@ function collectKnownLoaded(nodes: SourceCategory[], hasNestedNodes: boolean) {
 }
 
 onMounted(async () => {
-  categories.value = await sourceApi.sourceCategories()
+  categories.value = await sourceApi.sourceCategories(props.rootId)
   const hasNestedNodes = categories.value.some((node) => !!node.children?.length)
   collectKnownLoaded(categories.value, hasNestedNodes)
   if (!props.modelValue.categoryPath && categories.value.length) {
