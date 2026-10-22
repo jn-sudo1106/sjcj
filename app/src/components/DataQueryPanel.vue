@@ -87,8 +87,11 @@ const props = withDefaults(
     oneRow?: boolean
     /** 行可点击（调用方监听 row-click 开详情等）：鼠标移上去显示手型 */
     rowClickable?: boolean
+    /** 「开始时间 / 结束时间」条件（CREATE_DT 区间）。数据中心 → 数据查询页 1021-05 去掉（Q6），其他复用方保留 */
+    showTimeRange?: boolean
   }>(),
   {
+    showTimeRange: true,
     defaultSortField: '',
     defaultSortOrder: '',
     oneRow: false,
@@ -333,6 +336,7 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
       <!-- 单行模式下表 / 源放在状态筛选之后（会上：表选项多，放最前面显示不全） -->
       <div v-if="$slots.context && oneRow" class="dqp-context"><slot name="context" /></div>
       <el-date-picker
+        v-if="showTimeRange"
         v-model="timeRange"
         type="datetimerange"
         value-format="YYYY-MM-DD HH:mm:ss"

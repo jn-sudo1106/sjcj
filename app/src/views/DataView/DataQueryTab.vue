@@ -276,8 +276,6 @@ function querySignature() {
     panelFilter.value.dataId ?? '',
     panelFilter.value.parentId ?? '',
     panelFilter.value.state ?? '',
-    panelFilter.value.startTime ?? '',
-    panelFilter.value.endTime ?? '',
     panelFilter.value.sql ?? '',
     panelFilter.value.nextFlag ?? '',
     panelFilter.value.min ?? '',
@@ -340,8 +338,6 @@ const sqlPreview = computed(() => {
   if (panelFilter.value.parentId) s += ` and parent_id in (${panelFilter.value.parentId})`
   if (panelFilter.value.state) s += ` and STATE in (${panelFilter.value.state.split(',').map((item) => `'${item.trim()}'`).join(',')})`
   if (sourceId.value) s += ` and source_id=${sourceId.value}`
-  if (panelFilter.value.startTime) s += ` and CREATE_DT >= '${panelFilter.value.startTime}'`
-  if (panelFilter.value.endTime) s += ` and CREATE_DT <= '${panelFilter.value.endTime}'`
   if (panelFilter.value.sql) s += ` and ${panelFilter.value.sql}`
   return s
 })
@@ -540,10 +536,6 @@ const apiIdFetchUrl = computed(() => {
   if (sourceId.value) params.push(`sourceId=${encodeURIComponent(sourceId.value)}`)
   params.push(`startId=${encodeURIComponent(String(panelFilter.value.min || '0'))}`)
   if (panelFilter.value.max) params.push(`endId=${encodeURIComponent(String(panelFilter.value.max))}`)
-  if (panelFilter.value.startTime || panelFilter.value.endTime) {
-    const dateRange = `${panelFilter.value.startTime || 'EMPTY'} - ${panelFilter.value.endTime || 'EMPTY'}`
-    params.push(`dataRange=${encodeURIComponent(dateRange)}`)
-  }
   params.push('size=10')
   return `${restBase.replace(/\/$/, '')}/api/v1/data/entry?${params.join('&')}`
 })
@@ -556,7 +548,6 @@ const apiParams = [
   { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
   { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数据的起始ID，如从头取，设成0' },
   { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数据的最大ID，与startId配合用来取一段数据' },
-  { name: 'dataRange', type: '字符串', required: '非', limit: '时间范围', description: '时间上下限可单一为空，格式为“开始 - 结束”' },
 ]
 
 const apiReturns = computed(() => [
@@ -1017,6 +1008,7 @@ onUnmounted(() => {
       show-state
       one-row
       row-clickable
+      :show-time-range="false"
       :selectable="canWrite"
       default-sort-field="updateDt"
       default-sort-order="descend"

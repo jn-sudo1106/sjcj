@@ -247,6 +247,25 @@ describe('数据中心 · 数据查询 tab', () => {
     expect((dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
   })
 
+  it('1021-05：数据查询页去掉「开始时间 / 结束时间」，查询和展示 SQL 都不再带 CREATE_DT 区间', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.find('.dqp-time-range').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="开始时间"]').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="结束时间"]').exists()).toBe(false)
+    const query = (dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.lastCall![0]
+    expect(query.startTime).toBeUndefined()
+    expect(query.endTime).toBeUndefined()
+
+    const body = await openResultMenu('data-more')
+    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查看查询条件/SQL')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('CREATE_DT >=')
+  })
+
   it('导出：调用 dataApi.exportUrl 拼好的 URL 新窗口打开，不经过 rowQueryPaged', async () => {
     const exportSpy = vi.spyOn(dataApi, 'exportUrl').mockReturnValue('/api/v1/entry/entryExportAll?entryType=t1')
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
@@ -632,6 +651,8 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(apiText).toContain('data.list[].id')
     expect(apiText).toContain('返回字段')
     expect(apiText).toContain('appId=dev&appKey=dev1&type=t1&sourceId=600519&startId=0&size=10')
+    // 1021-05：开始 / 结束时间去掉后，取数 API 说明里也不再有 dataRange
+    expect(apiText).not.toContain('dataRange')
     const closeApiButton = [...document.body.querySelectorAll('button')].find((el) => el.textContent?.trim() === '关闭')
     expect(closeApiButton).toBeDefined()
     closeApiButton!.click()
