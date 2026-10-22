@@ -1478,7 +1478,8 @@ defineExpose({ openLaunch, clearSelection })
                 :title="`打开流程 ${source.defaultFlowId}`"
                 @click="openFlowNode(source.defaultFlowId)"
               >{{ flowNameOf(source.defaultFlowId) }}</button>
-              <span v-else class="sov-muted">—</span>
+              <span v-else class="sov-no-flow" data-testid="source-overview-no-flow" title="这个源没有任何流程，无法发起任务">无流程</span>
+              <span v-if="source.defaultFlowId && source.sourceGroupId" class="sov-muted" data-testid="source-overview-default-flow-group" title="组内源使用来源组的默认流程"> 来源组</span>
             </td>
             <td v-if="crossSite && groupOps && showCol('flowConfig')" class="sov-flow-config">
               <button
@@ -1718,6 +1719,7 @@ defineExpose({ openLaunch, clearSelection })
 .sov-url a:hover { text-decoration: underline; }
 .sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-muted { color: var(--rc-faint); }
+.sov-no-flow { color: #dc2626; font-size: 12px; }
 .sov-url-fallback { color: var(--rc-muted); }
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }

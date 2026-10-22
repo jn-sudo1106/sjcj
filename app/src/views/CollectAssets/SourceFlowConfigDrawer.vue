@@ -2,10 +2,11 @@
 /**
  * 源流程配置抽屉（1008-04，§3.5）。源列表勾选 1 个源后打开。
  *
- * - 源在组内：上面一段是来源组流程（组 #ID +「查看组配置」「退出来源组」，流程列表只读）。
- * - 本源流程（入组、未入组都有，10-15 起入组源也能维护）：关联流程多选 + 默认流程单选 + 保存
+ * - 源在组内：只有来源组流程（组 #ID +「查看组配置」「退出来源组」）。组内源只走组流程（1021-02），
+ *   不能再维护本源流程（后端 bindSourceFlows 也拒绝，10-21 186 实测）；入组前留下的自有绑定折叠成「历史自有流程（已不生效）」。
+ * - 独立源：关联流程多选 + 默认流程单选 + 保存
  *   （`workflowBindingApi.save`，bindSourceFlows 整体替换带并发快照，只动 own*）+ 绑定状态表（启停开关 `updateBindingState`）。
- * - 运行入口：本源默认优先，没有再用来源组默认（与画布流程标签栏同口径）。
+ * - 运行入口：组内源用来源组默认，独立源用本源默认（与画布流程标签栏同口径）。
  *
  * 与来源组目录页签的「流程配置」抽屉同源（都基于 `source-group/*`），差别在对象：
  * 组抽屉管整个组的绑定（bindFlows），这里是单个源的绑定（bindSourceFlows），
@@ -117,7 +118,7 @@ async function toggleBindingState(row: SourceFlowBind) {
 async function leaveGroup() {
   if (!canWrite.value || !view.value?.sourceGroupId) return
   try {
-    await ElMessageBox.confirm(`确定把「${props.source.name}」移出来源组？移出后不恢复旧绑定，需重新配置独立流程才能运行。`, '确认退出来源组', { type: 'warning' })
+    await ElMessageBox.confirm(`确定把「${props.source.name}」移出来源组？移出后不再使用来源组的流程，按本源自己的流程运行。`, '确认退出来源组', { type: 'warning' })
   } catch {
     return
   }
@@ -127,9 +128,12 @@ async function leaveGroup() {
       sourceGroupId: null,
       expectedSourceGroupId: view.value.sourceGroupId,
     })
-    ElMessage.success('已退出来源组，旧绑定不恢复，需重新配置独立流程才能运行')
     emit('saved')
+    // 退组后抽屉直接切到「本源流程」；入组前留下的自有绑定会重新生效（10-21 186 实测），按退组后的实际结果提示
     await load()
+    const own = view.value?.ownFlowIds ?? []
+    if (own.length) ElMessage.success(`已退出来源组，按本源原有流程运行：${own.map(flowLabel).join('、')}`)
+    else ElMessage.warning('已退出来源组。本源还没有流程，请在下方关联流程后才能运行')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : String(error))
   }
@@ -155,7 +159,7 @@ watch(() => props.source, () => void load(), { immediate: true })
         <template v-if="inGroup">
           <h4 class="sfcd-section" data-testid="sfcd-group-section">来源组流程（组 #{{ view.sourceGroupId }}）</h4>
           <el-alert
-            title="来源组的流程在这里只能查看，要改请到来源组里配置；本源有默认流程时运行以本源为准"
+            title="组内源统一使用来源组的流程。要改流程请到来源组里配置；要单独给这个源配置流程，请先退出来源组"
             type="warning"
             :closable="false"
             show-icon
@@ -178,12 +182,26 @@ watch(() => props.source, () => void load(), { immediate: true })
               </template>
             </el-table-column>
           </el-table>
-          <el-divider />
+          <!-- 入组前留下的自有绑定：后端不生效、也改不了（10-21 186 实测），只折叠展示；退组后会重新生效 -->
+          <el-collapse v-if="view.ownBindings.length" class="sfcd-history" data-testid="sfcd-own-history">
+            <el-collapse-item :title="`历史自有流程（已不生效，${view.ownBindings.length} 条）`" name="own">
+              <p class="sfcd-flow-summary">入组前给这个源单独关联的流程，在组内不会运行；退出来源组后会重新生效。</p>
+              <el-table :data="view.ownBindings" size="small">
+                <el-table-column label="流程">
+                  <template #default="{ row }">{{ flowLabel(row.flowId) }}</template>
+                </el-table-column>
+                <el-table-column label="默认" width="70">
+                  <template #default="{ row }">{{ row.isDefault ? '是' : '否' }}</template>
+                </el-table-column>
+              </el-table>
+            </el-collapse-item>
+          </el-collapse>
         </template>
 
-        <!-- 本源流程：多选 + 默认 + 保存 + 绑定状态表 -->
+        <!-- 独立源：本源流程多选 + 默认 + 保存 + 绑定状态表 -->
+        <template v-else>
         <h4 class="sfcd-section" data-testid="sfcd-own-section">本源流程</h4>
-        <el-alert :title="inGroup ? '这里配置的是本源自己的流程，不影响来源组；本源默认流程优先于组默认' : '这里配置的是本源的独立流程'" type="info" :closable="false" show-icon />
+        <el-alert title="这里配置的是本源的独立流程" type="info" :closable="false" show-icon />
         <div class="sfcd-row">
           <label>关联流程（可选多个）</label>
           <el-select v-model="flowIds" multiple filterable clearable placeholder="选择关联流程" style="width: 100%" :disabled="!canWrite" data-testid="sfcd-flow-ids">
@@ -218,6 +236,7 @@ watch(() => props.source, () => void load(), { immediate: true })
             </template>
           </el-table-column>
         </el-table>
+        </template>
       </template>
     </div>
     <FlowDetailDrawer v-if="detailFlow" :flow="detailFlow" @close="detailFlow = null" />
@@ -228,6 +247,7 @@ watch(() => props.source, () => void load(), { immediate: true })
 .sfcd-body { display: flex; flex-direction: column; gap: 12px; }
 .sfcd-error { color: #dc2626; font-size: 12px; }
 .sfcd-flow-summary { font-size: 12px; color: var(--rc-text-2); margin: 0; }
+.sfcd-history { border-top: 0; }
 .sfcd-actions { display: flex; gap: 8px; }
 .sfcd-row { display: flex; flex-direction: column; gap: 4px; }
 .sfcd-row > label { font-size: 12px; color: var(--rc-text-2); }

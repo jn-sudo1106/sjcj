@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { workflowBindingApi, type FlowRecord, type WorkflowBinding } from '@/api'
@@ -23,10 +23,14 @@ const adding = ref(false)
 const addMenuOpen = ref(false)
 const copyOpen = ref(false)
 const versionBusy = ref(false)
-// 入组的源分两段：来源组的流程（只读，要改去来源组）在前，源自有的流程在后；「＋」只往本源这段加（10-15 后端放行）
+// 入组的源只走来源组的流程（1021-02）：只列组流程、只读，不给「＋」；要单独配置先退出来源组。
+// 组还没绑流程时 rows 是空的，所以组 ID 单独记（workflowBindingApi.load 带回）
+const groupId = ref('')
+const inGroup = computed(() => !!groupId.value)
 const groupRows = computed(() => rows.value.filter(row => row.inherited))
 const ownRows = computed(() => rows.value.filter(row => !row.inherited))
-const groupId = computed(() => groupRows.value[0]?.bindId ?? '')
+/** 本源自己关联的（含「来源组和本源都关联了」）：能设主、解绑 */
+const isOwn = (row: WorkflowBinding) => !row.inherited || !!row.own
 
 const activeFlowId = computed(() => String(route.query.flowId || flow.sourceCtx?.flowId || ''))
 const activeWorkflowId = computed(() => {
@@ -40,7 +44,9 @@ const activeRow = computed(() => rows.value.find(row => row.workflowId === activ
 async function load() {
   loading.value = true
   try {
-    rows.value = await workflowBindingApi.list(props.sourceId)
+    const loaded = await workflowBindingApi.load(props.sourceId)
+    rows.value = loaded.rows
+    groupId.value = loaded.sourceGroupId ?? ''
   } catch (error) {
     ElMessage.error(`流程页签加载失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
@@ -152,6 +158,107 @@ function chooseExisting() {
   copyOpen.value = true
 }
 
+// 复用现有流程（10-21）：直接关联、不复制，和其他源共享同一条流程
+const reuseOpen = ref(false)
+const ownFlowIds = computed(() => rows.value.filter(isOwn).map(row => row.workflowId))
+function chooseReuse() {
+  addMenuOpen.value = false
+  reuseOpen.value = true
+}
+async function reuseExisting(picked: FlowRecord) {
+  if (adding.value) return
+  try {
+    const used = picked.sourceCnt ? `正被 ${picked.sourceCnt} 个源使用。` : ''
+    await ElMessageBox.confirm(
+      `「${picked.name}」${used}复用就是和它们共享同一条流程，修改会影响所有使用它的源；需要独立修改请用「复制现有流程或模板新建」。`,
+      '复用现有流程',
+      { type: 'warning', confirmButtonText: '复用并打开', cancelButtonText: '取消' },
+    )
+    adding.value = true
+    await workflowBindingApi.bind({ sourceId: props.sourceId, workflowId: picked.id, primary: !rows.value.some(isOwn) })
+    ElMessage.success(`已复用流程「${picked.name}」`)
+    reuseOpen.value = false
+    await finishCreate(picked.id)
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(`复用失败：${(error as Error)?.message ?? String(error)}`)
+  } finally {
+    adding.value = false
+  }
+}
+
+// 右键流程标签（10-21）：本源流程「设为主流程」「解绑流程」；来源组流程只读，指去来源组
+const ctxMenu = ref<{ row: WorkflowBinding; x: number; y: number } | null>(null)
+function openMenu(event: MouseEvent, row: WorkflowBinding) {
+  addMenuOpen.value = false
+  ctxMenu.value = { row, x: Math.min(event.clientX, window.innerWidth - 200), y: event.clientY }
+}
+function closeMenu() {
+  ctxMenu.value = null
+}
+function onKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMenu()
+}
+onMounted(() => {
+  window.addEventListener('click', closeMenu)
+  window.addEventListener('scroll', closeMenu, true)
+  window.addEventListener('keydown', onKey)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('click', closeMenu)
+  window.removeEventListener('scroll', closeMenu, true)
+  window.removeEventListener('keydown', onKey)
+})
+function openGroup() {
+  closeMenu()
+  void router.push({ path: '/collect', query: { tab: 'personal', group: groupId.value } })
+}
+
+async function setPrimary(row: WorkflowBinding) {
+  closeMenu()
+  try {
+    await workflowBindingApi.setPrimary(props.sourceId, row.workflowId)
+    ElMessage.success(`已把「${row.workflowName}」设为主流程，新发起的任务默认用它`)
+    await load()
+  } catch (error) {
+    ElMessage.error(`设置主流程失败：${(error as Error)?.message ?? String(error)}`)
+  }
+}
+
+// 解绑：是主流程且还有别的就在同一个确认框里选新的主流程，一次提交；最后一条也允许，写明后果
+const unbindDlg = reactive({ open: false, row: null as WorkflowBinding | null, next: '', busy: false })
+const unbindOthers = computed(() => rows.value.filter(row => isOwn(row) && row.workflowId !== unbindDlg.row?.workflowId))
+function askUnbind(row: WorkflowBinding) {
+  closeMenu()
+  unbindDlg.row = row
+  unbindDlg.next = rows.value.find(item => isOwn(item) && item.workflowId !== row.workflowId)?.workflowId ?? ''
+  unbindDlg.open = true
+}
+async function confirmUnbind() {
+  const row = unbindDlg.row
+  if (!row || unbindDlg.busy) return
+  unbindDlg.busy = true
+  const wasActive = row.workflowId === activeWorkflowId.value
+  try {
+    await workflowBindingApi.unbind(props.sourceId, row.workflowId, row.primary && unbindDlg.next ? unbindDlg.next : undefined)
+    unbindDlg.open = false
+    ElMessage.success(`已解绑「${row.workflowName}」，流程本身没有删除`)
+    await load()
+    if (wasActive) {
+      const target = rows.value.find(item => item.primary) ?? rows.value[0]
+      if (target) await openFlow(target.workflowId)
+      else {
+        const { workflowId: _w, flowId: _f, ...rest } = route.query
+        await router.replace({ path: '/canvas', query: rest })
+      }
+    }
+  } catch (error) {
+    ElMessage.error(`解绑失败：${(error as Error)?.message ?? String(error)}`)
+  } finally {
+    unbindDlg.busy = false
+  }
+}
+
 async function copyExisting(sourceFlow: FlowRecord) {
   if (adding.value) return
   try {
@@ -204,19 +311,20 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="swt" data-testid="source-workflow-tabs">
+  <!-- 右键只出流程菜单，不冒泡到画布（否则弹的是画布的「添加节点」） -->
+  <div class="swt" data-testid="source-workflow-tabs" @contextmenu.prevent.stop>
     <span v-if="localFlowTarget" class="swt-compat" :title="localFlowTarget">流程：本地</span>
     <div class="swt-scroll" role="tablist" aria-label="当前源的流程">
-      <template v-for="segment in [{ key: 'group', list: groupRows }, { key: 'own', list: ownRows }]" :key="segment.key">
-        <template v-if="segment.list.length || (segment.key === 'own' && groupRows.length)">
+      <template v-for="segment in (inGroup ? [{ key: 'group', list: groupRows }] : [{ key: 'own', list: ownRows }])" :key="segment.key">
+        <template v-if="segment.list.length || inGroup">
           <span
-            v-if="groupRows.length"
+            v-if="inGroup"
             class="swt-seg"
             :class="segment.key"
             :data-testid="`workflow-seg-${segment.key}`"
-            :title="segment.key === 'group' ? '来源组绑定的流程，这里只能查看，要改请到来源组里配置' : '当前源自己关联的流程，可新增、设主、解除；运行时本源的主流程优先'"
-          >{{ segment.key === 'group' ? `来源组 #${groupId}` : '本源' }}</span>
-          <span v-if="segment.key === 'own' && groupRows.length && !ownRows.length" class="swt-empty">暂无自有流程</span>
+            title="组内源统一使用来源组的流程，这里只能查看；要改请到来源组里配置，要单独配置请先退出来源组"
+          >来源组 #{{ groupId }}</span>
+          <span v-if="inGroup && !groupRows.length" class="swt-empty" data-testid="workflow-group-empty">来源组还没有配置流程</span>
           <button
             v-for="row in segment.list"
             :key="row.workflowId"
@@ -225,21 +333,21 @@ onMounted(async () => {
             type="button"
             role="tab"
             :aria-selected="row.workflowId === activeWorkflowId"
-            :title="`${row.workflowName}（#${row.workflowId}）${row.inherited ? (row.own ? '：来源组和本源都关联了' : '：来源组流程') : ''}`"
+            :title="`${row.workflowName}（#${row.workflowId}）${row.inherited ? '：来源组流程' : ''} · 右键更多操作`"
+            :data-testid="`workflow-tab-${row.workflowId}`"
             @click="openFlow(row.workflowId)"
+            @contextmenu.prevent.stop="openMenu($event, row)"
           >
             <span class="swt-name">{{ row.workflowName }}</span>
             <span class="swt-id">#{{ row.workflowId }}</span>
             <span v-if="row.versionManaged" class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
             <span v-if="row.primary" class="swt-primary">主</span>
-            <span v-else-if="row.groupDefault" class="swt-group-default" title="来源组的默认流程；本源有主流程时以本源为准">组默认</span>
             <span v-else-if="row.role === 'BACKFILL'" class="swt-role">补</span>
-            <span v-if="row.inherited && row.own" class="swt-own-mark">本源</span>
           </button>
         </template>
       </template>
       <span v-if="loading && !rows.length" class="swt-loading">加载流程…</span>
-      <span v-else-if="!loading && !rows.length" class="swt-empty">暂无流程</span>
+      <span v-else-if="!loading && !rows.length && !inGroup" class="swt-empty">暂无流程</span>
     </div>
 
     <div v-if="activeRow?.versionManaged === true && !activeRow.inherited" class="swt-version-actions">
@@ -262,7 +370,7 @@ onMounted(async () => {
     <!-- 217 流程版本（2026-10-11）：已发布 vN / 草稿 vN + 放弃 / 发布，紧凑徽标放在这一行，不再单独占一行 -->
     <FlowVersionBar />
 
-    <div class="swt-add-wrap">
+    <div v-if="!inGroup" class="swt-add-wrap">
       <button
         class="swt-add"
         type="button"
@@ -274,7 +382,8 @@ onMounted(async () => {
       >{{ adding ? '…' : '＋' }}</button>
       <div v-if="addMenuOpen" class="swt-add-menu" data-testid="workflow-add-menu">
         <button type="button" data-testid="workflow-create-blank" @click="createBlank">新建空白流程</button>
-        <button type="button" data-testid="workflow-copy-existing" @click="chooseExisting">从现有流程或模板新建</button>
+        <button type="button" data-testid="workflow-reuse-existing" @click="chooseReuse">复用现有流程…</button>
+        <button type="button" data-testid="workflow-copy-existing" @click="chooseExisting">复制现有流程或模板新建…</button>
       </div>
     </div>
 
@@ -285,6 +394,54 @@ onMounted(async () => {
       :current-flow-id="activeFlowId"
       @pick="copyExisting"
     />
+    <ReplaceFlowDialog
+      v-if="reuseOpen"
+      v-model="reuseOpen"
+      purpose="bind"
+      :exclude-flow-ids="ownFlowIds"
+      @pick="reuseExisting"
+    />
+
+    <Teleport to="body">
+      <div
+        v-if="ctxMenu"
+        class="swt-ctx"
+        :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
+        role="menu"
+        data-testid="workflow-ctx-menu"
+        @click.stop
+        @contextmenu.prevent
+      >
+        <template v-if="isOwn(ctxMenu.row)">
+          <button v-if="!ctxMenu.row.primary" type="button" role="menuitem" data-testid="workflow-ctx-primary" @click="setPrimary(ctxMenu.row)">设为主流程</button>
+          <button type="button" role="menuitem" class="danger" data-testid="workflow-ctx-unbind" @click="askUnbind(ctxMenu.row)">解绑流程</button>
+        </template>
+        <template v-else>
+          <div class="swt-ctx-note">来源组流程，请到来源组修改</div>
+          <button type="button" role="menuitem" data-testid="workflow-ctx-group" @click="openGroup">查看来源组</button>
+        </template>
+      </div>
+    </Teleport>
+
+    <el-dialog v-model="unbindDlg.open" title="解绑流程" width="460px" append-to-body data-testid="workflow-unbind-dialog">
+      <template v-if="unbindDlg.row">
+        <p class="swt-dlg-p">解除当前源与「{{ unbindDlg.row.workflowName }}」#{{ unbindDlg.row.workflowId }} 的关联。流程本身不删除，其他使用它的源不受影响。</p>
+        <template v-if="unbindDlg.row.primary && unbindOthers.length">
+          <p class="swt-dlg-p">这是主流程，解绑后改用：</p>
+          <label v-for="other in unbindOthers" :key="other.workflowId" class="swt-dlg-radio">
+            <input v-model="unbindDlg.next" type="radio" :value="other.workflowId" data-testid="workflow-unbind-next">
+            {{ other.workflowName }} <span class="swt-id">#{{ other.workflowId }}</span>
+          </label>
+        </template>
+        <p v-if="!unbindOthers.length" class="swt-dlg-warn" data-testid="workflow-unbind-last">
+          这是最后一条流程：解绑后这个源将没有任何流程，无法发起任务。
+        </p>
+      </template>
+      <template #footer>
+        <el-button @click="unbindDlg.open = false">取消</el-button>
+        <el-button type="danger" :loading="unbindDlg.busy" data-testid="workflow-unbind-ok" @click="confirmUnbind">解绑</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -315,8 +472,14 @@ onMounted(async () => {
 .swt-compat { align-self: center; margin-left: 7px; color: #92400e; font-size: 10px; white-space: nowrap; }
 .swt-seg { flex: none; align-self: center; margin: 0 6px 0 2px; padding: 2px 7px; border-radius: 10px; background: #e2e8f0; color: #475569; font-size: 10px; white-space: nowrap; cursor: help; }
 .swt-seg.group { background: #ede9fe; color: #6d28d9; }
-.swt-seg.own { margin-left: 10px; }
 .swt-tab.group .swt-name { color: #6d28d9; }
-.swt-group-default, .swt-own-mark { flex: none; padding: 1px 4px; border-radius: 4px; background: #ede9fe; color: #6d28d9; font-size: 10px; }
-.swt-own-mark { background: #e2e8f0; color: #475569; }
+.swt-ctx { position: fixed; z-index: 3000; min-width: 150px; padding: 5px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 10px 24px rgb(15 23 42 / 14%); }
+.swt-ctx button { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 13px; text-align: left; cursor: pointer; }
+.swt-ctx button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.swt-ctx button.danger { color: var(--rc-error); }
+.swt-ctx button.danger:hover { background: #fef2f2; }
+.swt-ctx-note { padding: 6px 10px; color: var(--rc-faint); font-size: 12px; }
+.swt-dlg-p { margin: 0 0 8px; color: var(--rc-text-2); font-size: 13px; line-height: 1.6; }
+.swt-dlg-radio { display: flex; align-items: center; gap: 6px; margin: 4px 0 4px 4px; font-size: 13px; cursor: pointer; }
+.swt-dlg-warn { margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; background: #fff7ed; color: #9a3412; font-size: 12px; }
 </style>

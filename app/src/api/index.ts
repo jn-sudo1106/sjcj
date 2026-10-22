@@ -3567,7 +3567,7 @@ export const sourceGroupApi = {
 /**
  * 源的多流程绑定（画布流程标签栏 / 流程列表用）。底层是来源组接口文档里的 `source-group/*`
  * （bee-config SourceGroupController，2026-10-08 上线 217）：一个源可关联多条流程，有一条默认流程；
- * 入组的源同时有来源组的流程（只读，改要去来源组）和自己的流程（10-15 起可在这里维护）；运行入口本源默认优先。
+ * 入组的源只走来源组的流程（只读，改要去来源组；1021-02），运行入口是组默认；独立源维护自己的流程，运行入口是本源默认。
  *
  * 保存只有一个端点 `bindSourceFlows`——**整体替换**绑定列表并指定默认，带并发快照。所以每次写都先读一遍
  * 最新绑定（sourceFlows），在它的基础上增 / 改 / 删，再连同读到的快照一起提交；别人刚改过会被后端拒绝
@@ -3586,31 +3586,33 @@ export const workflowBindingApi = {
     return sourceFlowsViewFromApi(result)
   },
   /** `withNames: false` 不逐条取流程详情（名字退回「流程 #ID」）：画布加载只用 ID，别让慢的 flowDetail 挡住整页 */
-  list: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<WorkflowBinding[]> => {
+  list: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<WorkflowBinding[]> =>
+    (await workflowBindingApi.load(sourceId, options)).rows,
+  /**
+   * 绑定行 + 源所在的来源组。来源组还没绑流程时 rows 是空的，标签栏仍要知道源在组里（不给「＋」）。
+   * 入组的源只列来源组的流程，运行入口是组默认（1021-02：组内源只走组流程；186 实测后端也只认组绑定，
+   * 入组前留下的自有绑定不生效、也改不了，这里不列）。
+   */
+  load: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<{ rows: WorkflowBinding[]; sourceGroupId: string | null }> => {
     // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
-    if (!/^\d+$/.test(sourceId)) return []
+    if (!/^\d+$/.test(sourceId)) return { rows: [], sourceGroupId: null }
     const view = await workflowBindingApi.view(sourceId)
     const groupId = view.sourceGroupId
-    // 入组的源：来源组的流程在前（只读），源自有的流程在后（可改）；同一条流程两边都有时只出一行
     const groupActive = groupId ? view.bindings.filter((binding) => binding.state === 'ACTIVE') : []
-    const ownActive = view.ownBindings.filter((binding) => binding.state === 'ACTIVE')
+    const ownActive = groupId ? [] : view.ownBindings.filter((binding) => binding.state === 'ACTIVE')
     const byDefault = (a: SourceFlowBind, b: SourceFlowBind) => Number(b.isDefault) - Number(a.isDefault)
     const groupDefaultId = groupActive.find((binding) => binding.isDefault)?.flowId
-    // 运行入口：本源默认优先，没有再用来源组默认（10-15 定）
-    const mainFlowId = ownActive.find((binding) => binding.isDefault)?.flowId ?? groupDefaultId
+    const mainFlowId = groupId ? groupDefaultId : ownActive.find((binding) => binding.isDefault)?.flowId
     const ownIds = new Set(ownActive.map((binding) => binding.flowId))
     const groupIds = new Set(groupActive.map((binding) => binding.flowId))
-    const ordered = [
-      ...groupActive.slice().sort(byDefault),
-      ...ownActive.filter((binding) => !groupIds.has(binding.flowId)).sort(byDefault),
-    ]
+    const ordered = [...(groupId ? groupActive : ownActive)].sort(byDefault)
     // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
     const names = new Map<string, string>()
     if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
     }))
-    return ordered.map((binding, index): WorkflowBinding => {
+    const rows = ordered.map((binding, index): WorkflowBinding => {
       const inherited = groupIds.has(binding.flowId)
       const primary = binding.flowId === mainFlowId
       return {
@@ -3635,10 +3637,11 @@ export const workflowBindingApi = {
         updatedAt: binding.updatedAt,
       }
     })
+    return { rows, sourceGroupId: groupId ?? null }
   },
   /**
    * 整体保存源自有的流程：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交。
-   * 只动 own* 那一套；入组的源也能维护自有流程（10-15 后端放行），来源组的流程不经这里改。
+   * 只动 own* 那一套，来源组的流程不经这里改。入组的源后端一律拒绝（10-21 186 实测），界面上组内源不给入口。
    */
   save: async (
     sourceId: string,
@@ -3669,9 +3672,11 @@ export const workflowBindingApi = {
       if (!view.ownFlowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
       return { flowIds: view.ownFlowIds, defaultFlowId: workflowId }
     }),
-  unbind: async (sourceId: string, workflowId: string) =>
+  /** `nextPrimaryId`：解绑的是默认流程时，同一次提交把默认换到这条（10-21 画布右键「解绑流程」） */
+  unbind: async (sourceId: string, workflowId: string, nextPrimaryId?: string) =>
     workflowBindingApi.save(sourceId, (view) => {
       const rest = view.ownFlowIds.filter((id) => id !== workflowId)
+      if (nextPrimaryId && rest.includes(nextPrimaryId)) return { flowIds: rest, defaultFlowId: nextPrimaryId }
       // 默认标记只能切换，不能直接删：还有别的流程时，要先把默认切走（与后端对「取消默认关联」的口径一致）
       if (view.ownDefaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
       return { flowIds: rest, defaultFlowId: rest.length ? (view.ownDefaultFlowId ?? null) : null }
@@ -3922,47 +3927,6 @@ export const flowCenterApi = {
       },
     })
     return ackFromApiResult(result)
-  },
-  /**
-   * 解绑 / 换绑并删除旧流程（**原子接口**，2026-10-20 后端新增 `flow/changeFlowAndDelete`）。
-   *
-   * 一个事务（READ_COMMITTED）内完成「把源从 currentFlowId 上解绑（可选改挂到 flowId）→ 删除
-   * currentFlowId」，任一步失败整体回滚。流程中心的「解绑并删除 / 更换并删除」改走它——原来分
-   * `changeFlowBatch` + `deleteFlow` 两次调用，中间没有事务：换绑成功而删除失败时，源已经被摘下
-   * （或已经换到目标流程），旧流程却还在，UI 只能报一句「删除失败」，用户以为整体回滚了。
-   *
-   * - 解绑：只传 sourceIds + currentFlowId，**不传 flowId**（后端按空/<=0 判定「只解绑」）
-   * - 换绑：再传 flowId（目标流程），且不得等于 currentFlowId
-   *
-   * 单次上限 5000 条；后端把真正原因放在 `data`、`msg` 固定为「错误信息:运行时异常」，
-   * client 的 normalizeHttpPayload 会拼成「msg：data」再由 ApiError 包一层「请求异常 [端点]:」，
-   * 这里剥掉这两层前缀，调用方拿到的就是可直接给用户看的原因。
-   */
-  changeFlowAndDelete: async (sourceIds: string[], currentFlowId: string, flowId?: string): Promise<Ack> => {
-    if (!sourceIds.length) return { ok: false, message: '请先选择要处理的源' }
-    if (!currentFlowId) return { ok: false, message: '缺少当前流程 ID，无法执行解绑/换绑并删除' }
-    if (sourceIds.length > 5000) return { ok: false, message: `单次最多处理 5000 个源，当前 ${sourceIds.length} 个` }
-    if (flowId && flowId === currentFlowId) return { ok: false, message: '目标流程不能是当前流程本身' }
-    try {
-      const result = await request<unknown>('flow/changeFlowAndDelete', { sourceIds, currentFlowId, flowId }, {
-        method: 'POST',
-        httpEndpoint: 'flow/changeFlowAndDelete',
-        httpParams: {
-          sourceIds: sourceIds.map(Number),
-          currentFlowId: Number(currentFlowId),
-          ...(flowId ? { flowId: Number(flowId) } : {}),
-        },
-      })
-      return ackFromApiResult(result)
-    } catch (error) {
-      const cause = (error as { cause?: unknown } | null)?.cause
-      const raw = (cause as Error)?.message ?? (error as Error)?.message ?? String(error)
-      const reason = raw
-        .replace(/^请求异常\s*\[[^\]]*\]\s*[:：]\s*/, '')
-        .replace(/^错误信息\s*[:：]\s*运行时异常\s*[:：]\s*/, '')
-        .trim()
-      throw new Error(reason || '解绑/换绑并删除失败')
-    }
   },
   /**
    * 流程的步骤拓扑（svg+flowId 视图的说明见下方注释块——svg=true 已返回真实根行 isRoot=1，

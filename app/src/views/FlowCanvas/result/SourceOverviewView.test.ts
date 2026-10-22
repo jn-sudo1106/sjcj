@@ -1747,6 +1747,15 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     wrapper.unmount()
   })
 
+  it('默认流程列：组内源后缀「来源组」，没有默认流程的源标红「无流程」（1021-02 / 08）', async () => {
+    const { wrapper } = await mountGroupOps([{ ...GROUP_SOURCE, defaultFlowId: '21000006' }, INDEP_SOURCE, { ...INDEP_SOURCE, sourceId: '430024668', defaultFlowId: undefined }])
+    const cells = wrapper.findAll('.sov-default-flow')
+    expect(cells[0].find('[data-testid="source-overview-default-flow-group"]').exists()).toBe(true)
+    expect(cells[1].find('[data-testid="source-overview-default-flow-group"]').exists()).toBe(false)
+    expect(cells[2].get('[data-testid="source-overview-no-flow"]').text()).toBe('无流程')
+    wrapper.unmount()
+  })
+
   it('点主表：拉表结构并打开表详情抽屉；没有主表的源显示 —', async () => {
     const withTable: Source = { ...INDEP_SOURCE, mainTable: '6200039' }
     const { wrapper } = await mountGroupOps([withTable, { ...GROUP_SOURCE, mainTable: '' }])

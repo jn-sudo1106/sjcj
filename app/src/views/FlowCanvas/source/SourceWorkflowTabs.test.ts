@@ -30,6 +30,9 @@ const AUX: WorkflowBinding = {
   followsCurrentVersion: true, role: 'BACKFILL', primary: false, priority: 0, status: 'ACTIVE', inherited: false,
 }
 
+/** workflowBindingApi.load 的返回：组内源带 sourceGroupId（1021-02） */
+const loaded = (rows: WorkflowBinding[], sourceGroupId: string | null = null) => ({ rows, sourceGroupId })
+
 async function mountTabs(stubs: Record<string, object> = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -64,7 +67,7 @@ describe('SourceWorkflowTabs', () => {
       ...managed, draftVersionId: 'v2', draftVersionNo: 2,
       draftFlowId: '21', versionStatus: 'DRAFT' as const,
     }
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([managed]).mockResolvedValueOnce([draft])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([managed])).mockResolvedValueOnce(loaded([draft]))
     const ensure = vi.spyOn(workflowBindingApi, 'ensureDraft').mockResolvedValue(draft)
 
     const { router } = await mountTabs()
@@ -75,7 +78,7 @@ describe('SourceWorkflowTabs', () => {
   })
 
   it('每条流程显示为独立标签，切换标签会切换当前 flowId', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN, AUX])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
     const { wrapper, router } = await mountTabs()
 
     const tabs = wrapper.findAll('[role="tab"]')
@@ -86,8 +89,8 @@ describe('SourceWorkflowTabs', () => {
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })
 
-  it('新增按钮可点击，菜单有「新建空白流程」和「从现有流程或模板新建」；没有任何兼容模式提示', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN])
+  it('新增按钮可点击，菜单有「新建空白流程」「复用现有流程」「复制现有流程或模板新建」；没有任何兼容模式提示', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
     const { wrapper } = await mountTabs()
     expect(wrapper.find('.swt-compat').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('兼容模式')
@@ -96,11 +99,12 @@ describe('SourceWorkflowTabs', () => {
     expect(add.attributes('disabled')).toBeUndefined()
     await add.trigger('click')
     expect(wrapper.find('[data-testid="workflow-add-menu"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="workflow-copy-existing"]').text()).toBe('从现有流程或模板新建')
+    expect(wrapper.get('[data-testid="workflow-reuse-existing"]').text()).toContain('复用现有流程')
+    expect(wrapper.get('[data-testid="workflow-copy-existing"]').text()).toBe('复制现有流程或模板新建…')
   })
 
   it('新建空白流程后直接打开新标签', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([MAIN]).mockResolvedValueOnce([MAIN, AUX])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValueOnce(loaded([MAIN, AUX]))
     vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: '补数据流程' } as never)
     vi.spyOn(workflowBindingApi, 'createForSource').mockResolvedValue(AUX)
     const { wrapper, router } = await mountTabs()
@@ -120,7 +124,7 @@ describe('SourceWorkflowTabs', () => {
       ...AUX, versionManaged: true, publishedVersionNo: undefined, publishedFlowId: undefined,
       draftVersionId: '81', draftVersionNo: 1, draftFlowId: '102', versionStatus: 'DRAFT',
     }
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([MAIN]).mockResolvedValueOnce([MAIN, draft])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValueOnce(loaded([MAIN, draft]))
     vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: '空白草稿' } as never)
     vi.spyOn(workflowBindingApi, 'createForSource').mockResolvedValue(draft)
     const ensure = vi.spyOn(workflowBindingApi, 'ensureDraft')
@@ -137,7 +141,7 @@ describe('SourceWorkflowTabs', () => {
   })
 
   it('可选择现有流程复制成配置独立的新标签', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
     vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: '现有流程副本' } as never)
     vi.mocked(copyWholeFlow).mockResolvedValue({ flowId: '22' })
     vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue({} as never)
@@ -161,7 +165,7 @@ describe('SourceWorkflowTabs', () => {
   it('已发布版本先创建隔离草稿，再切换到草稿工作副本', async () => {
     const managed = { ...MAIN, versionManaged: true }
     const draft = { ...managed, draftVersionId: 'v2', draftVersionNo: 2, draftFlowId: '21', versionStatus: 'DRAFT' as const }
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([{ ...managed, draftFlowId: undefined }]).mockResolvedValueOnce([draft])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([{ ...managed, draftFlowId: undefined }])).mockResolvedValueOnce(loaded([draft]))
     vi.spyOn(workflowBindingApi, 'ensureDraft').mockResolvedValue(draft)
     const { wrapper, router } = await mountTabs()
 
@@ -176,7 +180,7 @@ describe('SourceWorkflowTabs', () => {
   it('发布草稿后切换到新的发布 flowId', async () => {
     const draft = { ...MAIN, versionManaged: true, draftVersionId: 'v2', draftVersionNo: 2, draftFlowId: '21', versionStatus: 'DRAFT' as const }
     const published = { ...MAIN, versionManaged: true, publishedVersionId: 'v2', publishedVersionNo: 2, publishedFlowId: '21' }
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([draft]).mockResolvedValueOnce([published])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([draft])).mockResolvedValueOnce(loaded([published]))
     vi.spyOn(workflowBindingApi, 'publish').mockResolvedValue(published)
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     const { wrapper, router } = await mountTabs()
@@ -191,38 +195,140 @@ describe('SourceWorkflowTabs', () => {
   })
 })
 
-// 入组的源（10-15 定）：来源组流程一段（只读）+ 本源流程一段（可新增）；主流程本源默认优先。
+// 入组的源（1021-02）：只列来源组流程（只读），组默认就是主流程；不给「＋」，要单独配置先退出来源组。
 describe('SourceWorkflowTabs · 入组的源', () => {
-  const GROUP_DEFAULT: WorkflowBinding = { ...MAIN, id: 'g-1', workflowId: '31', workflowName: '组主流程', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', primary: false, role: 'AUX', groupDefault: true }
-  const GROUP_AUX: WorkflowBinding = { ...AUX, id: 'g-2', workflowId: '32', workflowName: '组辅助', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', role: 'AUX', own: true }
+  const GROUP_DEFAULT: WorkflowBinding = { ...MAIN, id: 'g-1', workflowId: '31', workflowName: '组主流程', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', primary: true, role: 'MAIN', groupDefault: true }
+  const GROUP_AUX: WorkflowBinding = { ...AUX, id: 'g-2', workflowId: '32', workflowName: '组辅助', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', role: 'AUX' }
 
-  it('分「来源组 #3」「本源」两段；组默认标「组默认」，本源默认标「主」；两边都绑的带「本源」标记', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([GROUP_DEFAULT, GROUP_AUX, { ...MAIN, own: true }])
+  it('只出「来源组 #3」一段，组默认标「主」；没有「本源」段，也没有「＋」', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([GROUP_DEFAULT, GROUP_AUX], '3'))
     const { wrapper } = await mountTabs()
     expect(wrapper.get('[data-testid="workflow-seg-group"]').text()).toBe('来源组 #3')
-    expect(wrapper.get('[data-testid="workflow-seg-own"]').text()).toBe('本源')
+    expect(wrapper.find('[data-testid="workflow-seg-own"]').exists()).toBe(false)
     const tabs = wrapper.findAll('.swt-tab')
-    expect(tabs.map((t) => t.find('.swt-id').text())).toEqual(['#31', '#32', '#11'])
-    expect(tabs[0].find('.swt-group-default').exists()).toBe(true)
-    expect(tabs[0].find('.swt-primary').exists()).toBe(false)
-    expect(tabs[1].find('.swt-own-mark').exists()).toBe(true)
-    expect(tabs[2].find('.swt-primary').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(true)
+    expect(tabs.map((t) => t.find('.swt-id').text())).toEqual(['#31', '#32'])
+    expect(tabs[0].find('.swt-primary').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('兼容模式')
   })
 
-  it('只有来源组流程：本源段显示「暂无自有流程」，仍可「＋」新增自有流程', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([{ ...GROUP_DEFAULT, primary: true, role: 'MAIN', own: false }])
+  it('来源组还没绑流程：显示「来源组还没有配置流程」，仍不给「＋」', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([], '3'))
     const { wrapper } = await mountTabs()
-    expect(wrapper.find('[data-testid="workflow-seg-own"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('暂无自有流程')
-    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(true)
-    expect(wrapper.find('.swt-version-actions').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="workflow-seg-group"]').text()).toBe('来源组 #3')
+    expect(wrapper.find('[data-testid="workflow-group-empty"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('暂无流程')
+    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(false)
   })
 
-  it('未入组的源不出分段标签', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN, AUX])
+  it('未入组的源不出分段标签，有「＋」', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
     const { wrapper } = await mountTabs()
     expect(wrapper.find('.swt-seg').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(true)
+  })
+})
+
+// 2026-10-21 右键流程标签：设为主流程 / 解绑流程；「＋」补「复用现有流程」
+describe('SourceWorkflowTabs · 右键菜单与复用', () => {
+  const dialogStub = { 'el-dialog': { props: ['modelValue'], template: '<div v-if="modelValue" data-testid="dlg"><slot /><slot name="footer" /></div>' }, 'el-button': { template: '<button v-bind="$attrs"><slot /></button>' } }
+  const q = (id: string) => document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
+  async function rightClick(wrapper: Awaited<ReturnType<typeof mountTabs>>['wrapper'], workflowId: string) {
+    await wrapper.get(`[data-testid="workflow-tab-${workflowId}"]`).trigger('contextmenu', { clientX: 50, clientY: 60 })
+    await flushPromises()
+  }
+  beforeEach(() => { document.body.innerHTML = '' })
+
+  it('右键标签只出流程菜单，不冒泡到画布；主流程不显示「设为主流程」', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
+    const { wrapper } = await mountTabs(dialogStub)
+    const bubbled = vi.fn()
+    wrapper.element.parentElement?.addEventListener('contextmenu', bubbled)
+    await rightClick(wrapper, '11')
+    expect(bubbled).not.toHaveBeenCalled()
+    expect(q('workflow-ctx-menu')).not.toBeNull()
+    expect(q('workflow-ctx-primary')).toBeNull()
+    expect(q('workflow-ctx-unbind')).not.toBeNull()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(q('workflow-ctx-menu')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('设为主流程：一步调用 setPrimary 并刷新', async () => {
+    const load = vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
+    const setPrimary = vi.spyOn(workflowBindingApi, 'setPrimary').mockResolvedValue()
+    const { wrapper } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '12')
+    q('workflow-ctx-primary')!.click()
+    await flushPromises()
+    expect(setPrimary).toHaveBeenCalledWith('100', '12')
+    expect(load).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('解绑主流程：同一确认框选新主流程，一次提交；解绑的是当前标签就切到新主流程', async () => {
+    const NEW_MAIN = { ...AUX, primary: true }
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN, AUX])).mockResolvedValueOnce(loaded([NEW_MAIN]))
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
+    const { wrapper, router } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    const radios = wrapper.findAll('[data-testid="workflow-unbind-next"]')
+    expect(radios).toHaveLength(1)
+    expect((radios[0].element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-testid="workflow-unbind-last"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="workflow-unbind-ok"]').trigger('click')
+    await flushPromises()
+    expect(unbind).toHaveBeenCalledWith('100', '11', '12')
+    expect(router.currentRoute.value.query.workflowId).toBe('12')
+    wrapper.unmount()
+  })
+
+  it('解绑最后一条流程：允许，但写明源将没有任何流程；解绑后离开当前流程', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValueOnce(loaded([]))
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
+    const { wrapper, router } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="workflow-unbind-last"]').text()).toContain('将没有任何流程')
+    await wrapper.get('[data-testid="workflow-unbind-ok"]').trigger('click')
+    await flushPromises()
+    expect(unbind).toHaveBeenCalledWith('100', '11', undefined)
+    expect(router.currentRoute.value.query.flowId).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('来源组流程标签：右键只给说明和「查看来源组」，没有设主 / 解绑', async () => {
+    const GROUP = { ...MAIN, workflowId: '31', workflowName: '组流程', bindType: 'SOURCE_GROUP' as const, bindId: '7', inherited: true, primary: true, groupDefault: true }
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([GROUP], '7'))
+    const { wrapper, router } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '31')
+    expect(q('workflow-ctx-menu')!.textContent).toContain('来源组流程，请到来源组修改')
+    expect(q('workflow-ctx-unbind')).toBeNull()
+    q('workflow-ctx-group')!.click()
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toContain('group=7')
+    wrapper.unmount()
+  })
+
+  it('复用现有流程：选择弹窗排除已关联的；确认后直接 bind、不复制', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValue(loaded([MAIN, AUX]))
+    const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue()
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const { wrapper, router } = await mountTabs({ ...dialogStub, ReplaceFlowDialog: { name: 'ReplaceFlowDialog', props: ['purpose', 'excludeFlowIds', 'modelValue'], template: '<div />' } })
+    await wrapper.get('[data-testid="workflow-add"]').trigger('click')
+    await wrapper.get('[data-testid="workflow-reuse-existing"]').trigger('click')
+    const picker = wrapper.findAllComponents({ name: 'ReplaceFlowDialog' }).find((c) => c.props('purpose') === 'bind')!
+    expect(picker.props('excludeFlowIds')).toEqual(['11'])
+    picker.vm.$emit('pick', { id: '12', name: '补数据流程', sourceCnt: 5 })
+    await flushPromises()
+    expect(vi.mocked(ElMessageBox.confirm).mock.calls.at(-1)?.[0]).toContain('正被 5 个源使用')
+    expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '12', primary: false })
+    expect(copyWholeFlow).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query.workflowId).toBe('12')
+    wrapper.unmount()
   })
 })
