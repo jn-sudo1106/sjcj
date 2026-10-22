@@ -3,6 +3,7 @@ import { reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type TaskInst } from '../../api'
 import { withoutComposition } from '@/utils/enterKey'
+import { runStateInfo } from '@/constants/runState'
 
 const props = defineProps<{
   modelValue: boolean
@@ -18,12 +19,7 @@ const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
 
 const STATE_OPTIONS = [
   { value: '', label: '-不限-' },
-  { value: 'E', label: '出错-E' },
-  { value: 'C', label: '完成-C' },
-  { value: 'L', label: '处理中-L' },
-  { value: 'W1', label: '排队-W1' },
-  { value: 'W', label: '待处理-W' },
-  { value: 'AC', label: '跳过-AC' },
+  ...['E', 'C', 'L', 'W1', 'W', 'AC'].map((value) => ({ value, label: `${runStateInfo(value).label}-${value}` })),
 ]
 
 const filter = reactive({ state: '', taskSpecId: '', sourceId: '', taskId: '', configId: '', parentId: '', fileId: '' })
@@ -113,7 +109,11 @@ const onEnterSearch = withoutComposition(() => onSearch())
     >
       <el-table-column v-if="canWrite" type="selection" width="42" />
       <el-table-column prop="taskId" label="任务ID" width="110" />
-      <el-table-column prop="state" label="状态" width="70" />
+      <el-table-column prop="state" label="状态" width="80">
+        <template #default="{ row }">
+          <span :title="runStateInfo(row.state).hint" :class="{ 'ti-unknown': !runStateInfo(row.state).known }" data-testid="task-state">{{ runStateInfo(row.state).label }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="taskSpecId" label="类型" width="80" />
       <el-table-column prop="typeName" label="类型名" width="110" />
       <el-table-column prop="taskName" label="任务名" />
@@ -149,6 +149,10 @@ const onEnterSearch = withoutComposition(() => onSearch())
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+.ti-unknown {
+  color: var(--rc-muted);
+  text-decoration: underline dotted;
 }
 .ti-batch {
   margin: 12px 0 0;

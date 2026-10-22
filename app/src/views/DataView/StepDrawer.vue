@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { sourceApi, type NodeRunStat, type Source, type Step } from '../../api'
 import ProcessNodeRail from '@/views/FlowCanvas/result/ProcessNodeRail.vue'
 import { buildHorizontalLayout, buildSourceSeed, nodeOutputTable, type FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
+import { runStateInfo } from '@/constants/runState'
 
 const props = defineProps<{
   modelValue: boolean
@@ -58,9 +59,7 @@ function selectNode(nodeId: string) {
   }
   emit('select-table', outputTable)
 }
-function stateText(state?: string) {
-  return state === 'E' ? '异常' : state === 'L' ? '运行中' : state === 'C' ? '完成' : state === 'D' ? '已停用' : '暂无运行记录'
-}
+const selectedState = computed(() => runStateInfo(nodeStates.value[selectedNodeId.value], '暂无运行记录'))
 
 async function load() {
   const sourceId = props.sourceId
@@ -109,7 +108,7 @@ watch(() => [props.modelValue, props.sourceId] as const, ([open]) => {
       </div>
       <div v-if="selectedConfig" class="sp-selected">
         <b>{{ selectedConfig.title }}</b>
-        <span>状态：{{ stateText(nodeStates[selectedNodeId]) }}</span>
+        <span>状态：<span :title="selectedState.hint" data-testid="step-state" :class="{ 'sp-unknown': !selectedState.known }">{{ selectedState.label }}</span></span>
         <span>输出表：{{ selectedOutputTable || '—' }}</span>
         <span v-if="selectedOutputTable === currentTableName" class="sp-current">当前查看表</span>
       </div>
@@ -125,6 +124,7 @@ watch(() => [props.modelValue, props.sourceId] as const, ([open]) => {
 .sp-rail-wrap :deep(.pnr) { margin: 0 12px; }
 .sp-selected { display: grid; gap: 4px; margin-top: 12px; padding: 10px 12px; border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff; color: var(--rc-text-2); font-size: 12px; }
 .sp-selected b { color: var(--rc-text); }
+.sp-unknown { color: var(--rc-muted); text-decoration: underline dotted; }
 .sp-current { color: #2563eb; font-weight: 700; }
 .sp-empty { padding: 34px; color: var(--rc-faint); text-align: center; font-size: 13px; }
 </style>

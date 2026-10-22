@@ -38,6 +38,7 @@ import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 import { currentBackendHost } from '@/api/client'
 import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
+import { dataStateInfo } from '@/constants/runState'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -1209,8 +1210,14 @@ onUnmounted(() => {
       <template #columns-after>
         <el-table-column prop="state" label="状态" width="84">
           <template #default="{ row }">
-            <el-tag size="small" effect="light" :type="row.state === 'AC' ? 'success' : (row.state === 'E' || row.state === 'NF' ? 'danger' : 'info')">
-              {{ row.state || '—' }}
+            <el-tag
+              size="small"
+              effect="light"
+              :type="row.state === 'AC' ? 'success' : (row.state === 'E' || row.state === 'NF' ? 'danger' : 'info')"
+              :title="dataStateInfo(row.state).hint"
+              data-testid="data-state"
+            >
+              {{ dataStateInfo(row.state).label }}
             </el-tag>
           </template>
         </el-table-column>

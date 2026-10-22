@@ -2,6 +2,7 @@
 import { onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { sourceApi, type Source } from '../../api'
+import { sourceRunStateInfo } from '@/constants/runState'
 
 const props = defineProps<{ modelValue: boolean; sourceId?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
@@ -40,13 +41,6 @@ watch([() => props.modelValue, () => props.sourceId], async ([open, sourceId]) =
 // 唯一去重：「大类」(templetCode) 与「类别」(classify) 在旧库是两个字段，而新端 `sourceFromLegacy`
 // 已把它们合并进单个 `category`，这里只保留「大类」一项，不做同值两行。
 
-/** 旧 utils/filter.js 的 stateFilter */
-const STATE_TEXT: Record<string, string> = { C: '正常', E: '出错', L: '处理中', AC: '已审核', W: '待处理' }
-
-function stateText(value?: string): string {
-  if (!value) return '—'
-  return STATE_TEXT[value] ?? value
-}
 /** 空值统一占位（旧版是空白单元格，这里沿用新端的 '—'） */
 function dash(value: unknown): string {
   return value == null || value === '' ? '—' : String(value)
@@ -182,7 +176,7 @@ async function saveRemark() {
         <el-descriptions-item label="禁用" :span="2">{{ enableText(state.source.disabled) }}</el-descriptions-item>
         <el-descriptions-item label="日期" :span="2">{{ dash(state.source.createdAt) }}</el-descriptions-item>
         <el-descriptions-item label="更新时间" :span="2">{{ dash(state.source.updatedAt) }}</el-descriptions-item>
-        <el-descriptions-item label="状态" :span="2">{{ stateText(state.source.state) }}</el-descriptions-item>
+        <el-descriptions-item label="状态" :span="2"><span :title="sourceRunStateInfo(state.source.state).hint">{{ sourceRunStateInfo(state.source.state).label }}</span></el-descriptions-item>
         <el-descriptions-item label="上次任务" :span="2">{{ dash(state.source.lastTaskAt) }}</el-descriptions-item>
         <el-descriptions-item label="上次成功" :span="2">{{ dash(state.source.lastSuccessAt) }}</el-descriptions-item>
       </el-descriptions>

@@ -642,7 +642,10 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(wrapper.text()).toContain('状态')
-    expect(wrapper.text()).toContain('C')
+    // 1021-05：状态码走中文字典，C 在数据表里是「初始」，悬浮说明保留原码
+    const tag = wrapper.get('[data-testid="data-state"]')
+    expect(tag.text()).toBe('初始')
+    expect(tag.attributes('title')).toContain('（C）')
   })
 
   it('动态列：表头按 {desc}-{columnName} 渲染数据表字段', async () => {
