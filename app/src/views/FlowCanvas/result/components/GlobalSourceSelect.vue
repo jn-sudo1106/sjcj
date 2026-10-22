@@ -40,15 +40,32 @@ const pickedLabels = computed(() => pickedIds.value.map((id) => ({
   name: (results.value.find((s) => s.sourceId === id) ?? pickedCache.value.get(id))?.name ?? '',
 })))
 
+/**
+ * 后端 `keyword` 只匹配源名称，输入源 ID 一条都查不到（10-22 186 实测：391008010 → 0 条）。
+ * 输入是纯数字（或逗号 / 空格分隔的一串数字）时，同时按 sourceIds 精确查，ID 命中的排最前、和名称结果合并去重
+ *（名称里恰好带这串数字的源也不丢；表下拉 entryApi.searchTables 同一做法）。
+ */
+async function searchSources(q: string): Promise<Source[]> {
+  const byName = sourceApi.sourcePaged({ keyword: q, size: RESULT_SIZE }).then((r) => r.list)
+  const ids = q.split(/[,，\s]+/).filter(Boolean)
+  if (!ids.length || !ids.every((part) => /^\d+$/.test(part))) return byName
+  const [idHits, nameHits] = await Promise.all([
+    sourceApi.sourcePaged({ sourceIds: ids, size: ids.length }).then((r) => r.list).catch(() => [] as Source[]),
+    byName.catch(() => [] as Source[]),
+  ])
+  const seen = new Set<string>()
+  return [...idHits, ...nameHits].filter((s) => (seen.has(s.sourceId) ? false : (seen.add(s.sourceId), true)))
+}
+
 let searchId = 0
 async function search(q: string) {
   const id = ++searchId
   loading.value = true
   error.value = ''
   try {
-    const result = await sourceApi.sourcePaged({ keyword: q, size: RESULT_SIZE })
+    const list = await searchSources(q)
     if (id !== searchId) return
-    results.value = result.list
+    results.value = list
   } catch (err) {
     if (id !== searchId) return
     results.value = []

@@ -597,7 +597,8 @@ async function onStartCapture() {
           ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
           return
         }
-        ElMessage.success(`已发起抓取 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
+        // runId 是画布本地演示用的编号（stores/runtime），不是后端任务 ID，别展示给用户（10-22：用户拿它去任务列表找不到）
+        ElMessage.success('已发起抓取，任务已下发，可到「任务」页签查看进度')
       },
     })
   } catch {
