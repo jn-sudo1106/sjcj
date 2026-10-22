@@ -1138,8 +1138,9 @@ describe('数据中心 · 数据查询 tab', () => {
 
     expect(sourceSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('更多源示例')
-    expect(wrapper.text()).toContain('配置ID')
-    expect(wrapper.text()).toContain('域')
+    // 1021-05：列对齐源管理，启停与运行状态分两列
+    expect(wrapper.text()).toContain('启停')
+    expect(wrapper.text()).toContain('运行状态')
 
     const row = wrapper.findAll('tr').find((el) => el.text().includes('更多源示例'))
     await row!.trigger('click')
