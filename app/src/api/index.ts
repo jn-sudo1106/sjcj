@@ -3121,6 +3121,9 @@ export const entryApi = {
       enable: p.enable,
       // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
       cond: p.cond,
+      // 1022：排序（白名单 entryTypeId/typeName/tableName/keyField/state/updateDt，order=asc|desc）；不传 = 表 ID 倒序
+      field: p.field,
+      order: p.order,
     }
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
