@@ -656,6 +656,7 @@ watch(() => route.query.group, (id) => {
       v-if="selectedGroup"
       v-model="pickerVisible"
       :group-id="selectedGroup.sourceGroupId"
+      :group-name="selectedGroup.sourceGroupName"
       :backend-mode="true"
       @saved="afterMemberChange"
     />
