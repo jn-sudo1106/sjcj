@@ -81,6 +81,7 @@ export type { UsedTable } from '@/utils/site/usedTables'
 import { issueTagsForWrite, parseIssueTags } from '@/utils/sourceMark'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { aggregateUsedTables, countSourcesWithoutFlow, type UsedTable } from '@/utils/site/usedTables'
+import { snatchAckFrom, type SnatchAck } from '@/utils/snatchResult'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
@@ -809,8 +810,9 @@ export const sourceApi = {
       httpParams: { ids: sourceIds.join(',') },
     }),
   /** 带参发抓取（旧 /v1/source/sendSnatchWithParam）：query 传 ids/all/skip/include/queue，body 仅传 param（{ "configId_paramId": "v1;v2" }）。 */
-  sendSnatchWithParam: (payload: SendSnatchWithParamPayload) =>
-    request<Ack>('source/sendSnatchWithParam', payload.param, {
+  /** 回执经 snatchAckFrom 整理：一个都没发出去时抛错（原因已翻成人话），部分发出时带回 failed（2026-10-22） */
+  sendSnatchWithParam: (payload: SendSnatchWithParamPayload): Promise<SnatchAck> =>
+    request<unknown>('source/sendSnatchWithParam', payload.param, {
       method: 'POST',
       httpEndpoint: 'source/sendSnatchWithParam',
       query: {
@@ -822,7 +824,7 @@ export const sourceApi = {
         // 1008-04「指定流程运行一次」：用这条流程跑这一次，不影响定时与默认流程（旧平台 source.js 同口径）
         ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
-    }),
+    }).then(snatchAckFrom),
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {

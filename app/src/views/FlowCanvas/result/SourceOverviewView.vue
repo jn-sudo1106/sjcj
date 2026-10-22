@@ -59,6 +59,7 @@ import {
   type SourceCondField,
   type SourceCondition,
 } from './sourceSearchField'
+import { snatchFailureSummary } from '@/utils/snatchResult'
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -801,11 +802,17 @@ async function dispatchIds(ids: string[], skip: number) {
   }
   if (result.failed.length) {
     const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
-    ElMessage.warning(`已发 ${result.sent} 个，失败 ${failedCount} 个。任务已下发的无法撤回，可重试失败批次。`)
+    ElMessage({ type: 'warning', message: `已发 ${result.sent} 个，失败 ${failedCount} 个：${failedReasonText(result.failed)}。任务已下发的无法撤回，可重试失败批次。`, duration: 8000, showClose: true })
   } else {
     ElMessage.success(`已对 ${result.sent} 个源发任务`)
     clearSelection()
   }
+}
+
+/** 失败批次的原因（不同原因用「；」连起来，最多两条，其余在「重试失败批次」按钮的悬停提示里） */
+function failedReasonText(failed: { error: string }[]): string {
+  const reasons = [...new Set(failed.map((f) => f.error).filter(Boolean))]
+  return reasons.slice(0, 2).join('；') + (reasons.length > 2 ? ' 等' : '')
 }
 
 async function retryFailedBatches() {
@@ -817,14 +824,16 @@ async function retryFailedBatches() {
     let sent = 0
     for (const batch of pending) {
       try {
-        await sourceApi.sendSnatchWithParam({ ids: batch.ids, param: {}, all: 0, include: [], skip: 0 })
-        sent += batch.ids.length
+        const ack = await sourceApi.sendSnatchWithParam({ ids: batch.ids, param: {}, all: 0, include: [], skip: 0 })
+        const notSent = ack.failed ?? []
+        sent += batch.ids.length - notSent.length
+        if (notSent.length) nextFailed.push({ ids: notSent.map((f) => f.sourceId), error: snatchFailureSummary(notSent) })
       } catch (error) {
         nextFailed.push({ ids: batch.ids, error: error instanceof Error ? error.message : String(error) })
       }
     }
     failedBatches.value = nextFailed
-    if (nextFailed.length) ElMessage.warning(`重试后又发出 ${sent} 个，仍失败 ${nextFailed.reduce((n, i) => n + i.ids.length, 0)} 个`)
+    if (nextFailed.length) ElMessage({ type: 'warning', message: `重试后又发出 ${sent} 个，仍失败 ${nextFailed.reduce((n, i) => n + i.ids.length, 0)} 个：${failedReasonText(nextFailed)}`, duration: 8000, showClose: true })
     else ElMessage.success(`失败批次已全部重试成功，共 ${sent} 个`)
   } finally {
     launchSending.value = false
@@ -1346,7 +1355,7 @@ defineExpose({ openLaunch, clearSelection })
         按名称没查到「{{ urlFallback.keyword }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
       </span>
       <span v-if="collectProgress" class="sov-progress" data-testid="source-collect-progress">{{ collectProgress }}</span>
-      <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
+      <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" :title="[...new Set(failedBatches.map((b) => b.error))].join('\n')" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
         <slot name="selection-actions" :ids="selectedIds" />

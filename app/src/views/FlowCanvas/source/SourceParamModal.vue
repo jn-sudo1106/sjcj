@@ -129,7 +129,11 @@ function onSubmit() {
   props
     .callback(ids, out, all.value ? 1 : 0, include, skip.value, queue.value)
     .then((res) => {
-      if (!props.suppressOwnSuccessToast) {
+      // 部分源没发出去（2026-10-22）：不报「发送成功」，说清哪些没发、为什么
+      const failed = (res as { failed?: unknown[] } | undefined)?.failed
+      if (failed?.length) {
+        ElNotification.warning({ title: '部分源未发送', message: res?.message || `${failed.length} 个源未发送` })
+      } else if (!props.suppressOwnSuccessToast) {
         // 旧写法"发送成功, 本次发送1, 返回值:-处理成功,本次处理1个源ID"把"成功"说了两遍，
         // "返回值:-"更像是给自己看的调试标签——改成一句话说清"发了几个源"，后端原话当补充细节接上。
         const backendMsg = res?.message || (res as { msg?: string }).msg
@@ -144,8 +148,8 @@ function onSubmit() {
       visible.value = false
       emit('refresh')
     })
-    .catch(() => {
-      ElNotification.error({ message: '发送失败' })
+    .catch((error) => {
+      ElNotification.error({ title: '发送失败', message: error instanceof Error ? error.message : '' })
     })
     .finally(() => {
       loading.value = false
