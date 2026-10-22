@@ -26,7 +26,7 @@ import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfi
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
-import { enqueueConfigSave, registerNodeConfigFlusher } from './nodeConfigAutosave'
+import { enqueueConfigSave, isActiveNodeConfigFlusher, registerNodeConfigFlusher } from './nodeConfigAutosave'
 import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import TaskTab from './tabs/TaskTab.vue'
@@ -452,6 +452,7 @@ const unregisterFlusher = registerNodeConfigFlusher(flushDirtyNodes)
 // Ctrl / ⌘ + S：立即保存当前节点
 function onSaveKey(event: KeyboardEvent) {
   if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+  if (!isActiveNodeConfigFlusher(flushDirtyNodes)) return
   event.preventDefault()
   if (cfg.value && !readonly.value && canSaveNodeConfig.value && !saving.value) void onSaveNodeConfig()
 }
