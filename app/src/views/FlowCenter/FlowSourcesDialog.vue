@@ -12,7 +12,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElDialog, ElMessage, ElMessageBox } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
+import { flowCenterApi, sourceApi, workflowBindingApi, type FlowRecord, type Source } from '@/api'
+import { useSourceGroupNames } from './sourceGroupNames'
 
 const props = defineProps<{
   flow: FlowRecord | null
@@ -47,6 +48,9 @@ const unbinding = ref('')
 const selected = ref(new Set<string>())
 /** 来源组带来的关联：源在来源组里，统一用组的流程，单个源上解绑 / 更换不掉 */
 const isGroupRow = (s: Source) => !!s.sourceGroupId
+// 1021-04：「所属来源组」单独一列，组名可点跳我的分组
+const { loadGroupNames, groupNameOf, openSourceGroup } = useSourceGroupNames()
+void loadGroupNames()
 const pickableRows = computed(() => rows.value.filter((r) => !isGroupRow(r)))
 const pageAllPicked = computed(() => pickableRows.value.length > 0 && pickableRows.value.every((r) => selected.value.has(r.sourceId)))
 function togglePick(id: string, on: boolean) {
@@ -132,14 +136,47 @@ function openSource(source: Source) {
   })
 }
 
+/**
+ * 解绑后会一条流程都不剩的源（1021-08：允许解绑到没有流程，但要写明后果）。
+ * 逐个读 sourceFlows，只看源自己的流程正好只剩本流程；超过 ORPHAN_CHECK_MAX 个不查（返回 null），确认框给通用提示。
+ */
+const ORPHAN_CHECK_MAX = 200
+async function orphanedBy(ids: string[], flowId: string): Promise<string[] | null> {
+  if (ids.length > ORPHAN_CHECK_MAX) return null
+  const orphaned = new Set<string>()
+  let next = 0
+  try {
+    await Promise.all(Array.from({ length: Math.min(8, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++]
+        const view = await workflowBindingApi.view(id)
+        if (view.ownFlowIds.length === 1 && view.ownFlowIds[0] === flowId) orphaned.add(id)
+      }
+    }))
+  } catch {
+    return null
+  }
+  return ids.filter((id) => orphaned.has(id))
+}
+const NO_FLOW_NOTE = '只关联了本流程的源解绑后将没有任何流程，无法发起任务。'
+function orphanNote(orphaned: string[] | null): string {
+  if (orphaned === null) return `\n${NO_FLOW_NOTE}`
+  if (!orphaned.length) return ''
+  const head = orphaned.slice(0, 10).join('、')
+  return `\n其中 ${orphaned.length} 个源只关联了本流程，解绑后将没有任何流程，无法发起任务：${head}${orphaned.length > 10 ? ' 等' : ''}`
+}
+
 async function unbind(source: Source) {
   const flow = props.flow
   if (!flow) return
   const label = source.name || source.sourceId
+  const orphaned = await orphanedBy([source.sourceId], flow.id)
   try {
     await ElMessageBox.confirm(
       `将把源「${label}」（${source.sourceId}）从流程「${flow.name}」上解绑。`
-      + '解绑后这个源不再按该流程的配置运行；如果它还关联着别的流程，那些流程不受影响。继续？',
+      + (orphaned?.length
+        ? '这是它唯一的流程：解绑后这个源将没有任何流程，无法发起任务。继续？'
+        : `解绑后这个源不再按该流程的配置运行；${orphaned ? '它关联的其它流程不受影响' : '如果它只关联了本流程，解绑后将没有任何流程'}。继续？`),
       '解绑关联',
       { type: 'warning', confirmButtonText: '确认解绑', cancelButtonText: '取消' },
     )
@@ -251,7 +288,11 @@ async function apply(action: 'unbind' | 'replace', scope: 'selected' | 'all', ta
     const what = action === 'unbind'
       ? `从流程「${flowName.value}」解绑 ${ids.length} 个源。解绑后这些源不再按本流程运行；它们关联的其它流程不受影响。`
       : `把 ${ids.length} 个源从流程「${flowName.value}」更换到流程「${target!.name}」（#${target!.id}）。`
-    const extra = (groupSkipped ? `\n另有 ${groupSkipped} 个随来源组关联的源会跳过。` : '')
+    if (action === 'unbind') progress.value = '正在检查解绑后有没有源会没有流程…'
+    const orphaned = action === 'unbind' ? await orphanedBy(ids, props.flow.id) : []
+    progress.value = ''
+    const extra = (action === 'unbind' ? orphanNote(orphaned) : '')
+      + (groupSkipped ? `\n另有 ${groupSkipped} 个随来源组关联的源会跳过。` : '')
       + (ids.length > BATCH ? `\n将分 ${Math.ceil(ids.length / BATCH)} 批提交，中途失败会停下，已完成的不撤销。` : '')
     try {
       await ElMessageBox.confirm(what + extra, action === 'unbind' ? '解绑关联' : '更换流程', { type: 'warning', confirmButtonText: action === 'unbind' ? '确认解绑' : '确认更换', cancelButtonText: '取消' })
@@ -370,6 +411,7 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
           <tr>
             <th style="width: 36px"><input type="checkbox" :checked="pageAllPicked" :disabled="!pickableRows.length" aria-label="全选本页" data-testid="flow-sources-pick-page" @change="togglePage(($event.target as HTMLInputElement).checked)"></th>
             <th>源 ID / 名称</th>
+            <th style="width: 120px">所属来源组</th>
             <th style="width: 64px">状态</th>
             <th style="width: 64px">启停</th>
             <th style="width: 60px">告警</th>
@@ -395,8 +437,12 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
             <td>
               <button class="fs-name" type="button" :title="s.name || s.sourceId" @click="openSource(s)">
                 <b>{{ s.name || s.sourceId }}</b>
-                <small>{{ s.sourceId }}<span v-if="isGroupRow(s)" class="fs-group" data-testid="flow-source-group-tag">来源组</span></small>
+                <small>{{ s.sourceId }}</small>
               </button>
+            </td>
+            <td class="fs-group-cell">
+              <button v-if="s.sourceGroupId" class="fs-group-link" type="button" :title="`随来源组关联，到「我的分组」查看 ${groupNameOf(s.sourceGroupId)}`" data-testid="flow-source-group-name" @click="openSourceGroup(s.sourceGroupId)">{{ groupNameOf(s.sourceGroupId) }}</button>
+              <span v-else class="fs-muted">—</span>
             </td>
             <td data-testid="flow-source-state" :class="{ 'fs-state-err': s.state === 'E' }">{{ stateText(s) }}</td>
             <td>
@@ -425,7 +471,7 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
             </td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="9" class="fs-empty">
+            <td colspan="10" class="fs-empty">
               {{ error || emptyText }}
               <div v-if="emptiedNow" class="fs-emptied" data-testid="flow-sources-emptied">
                 已经没有关联源，可以删除流程了
@@ -509,7 +555,9 @@ const emptyText = computed(() => (appliedKeyword.value.trim() ? '没有匹配的
 .fs-batch .rc-btn { height: 28px; padding: 0 12px; font-size: 12px; }
 .fs-picked { color: var(--rc-primary); font-size: 12px; font-weight: 600; }
 .fs-progress { color: var(--rc-muted); font-size: 12px; }
-.fs-group { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; }
+.fs-group-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-group-link { max-width: 100%; padding: 0; overflow: hidden; border: 0; background: none; color: var(--rc-primary-ink); cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+.fs-group-link:hover { text-decoration: underline; }
 .fs-table tbody tr.picked { background: var(--rc-primary-bg); }
 .fs-hint { margin: 8px 0 0; color: var(--rc-faint); font-size: 12px; }
 .fs-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 0 0; }
