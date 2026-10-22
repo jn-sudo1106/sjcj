@@ -5,6 +5,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import EntryTab from './EntryTab.vue'
+import QuickCkSyncDialog from './QuickCkSyncDialog.vue'
+import { syncApi } from '@/api/dataSync'
 import { useAuthStore } from '../../stores/auth'
 import { entryApi, favoriteApi, sourceApi, type EntryType } from '../../api'
 import { favoriteEntryIds } from '@/utils/entryFavorites'
@@ -511,5 +513,69 @@ describe('EntryTab · 表ID列表', () => {
     expect(body.find('.et-d-sub').text()).toBe('表 ID t1')
     expect(body.find('[data-testid="entry-detail-stats"]').exists()).toBe(false)
     expect(pagedSpy).not.toHaveBeenCalled()
+  })
+
+  // DS_KIND（2026-10-22）：列表「数据源」列 + 详情抽屉「数据源」行；缺省归一 MYSQL
+  it('列表渲染「数据源」列：CK 显示 CK，缺省归一 MYSQL', async () => {
+    const entries: EntryType[] = [
+      { tableId: '9', tableName: 'tb_ck', dsKind: 'CK', fields: [] },
+      { tableId: '1', tableName: 'tb_mysql', fields: [] },
+    ]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 2, list: entries })
+    await mountTab()
+    await waitForLoad()
+
+    expect(wrapper.findAll('th').some((t) => t.text().includes('数据源'))).toBe(true)
+    // 默认表ID倒序：9 在前、1 在后
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].text()).toContain('CK')
+    expect(rows[1].text()).toContain('MYSQL')
+  })
+
+  it('详情抽屉展示「数据源」行', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [] })
+    await mountTab()
+    await waitForLoad()
+
+    await wrapper.findAll('button').find((b) => b.text() === '详情')!.trigger('click')
+    await flushPromises()
+
+    const body = new DOMWrapper(document.body)
+    const dt = body.findAll('dt').find((d) => d.text() === '数据源')
+    expect(dt).toBeTruthy()
+    expect((dt!.element.nextElementSibling as HTMLElement).textContent).toBe('CK')
+  })
+
+  // 快速同步到 CK 入口（2026-10-22）：仅当后端与同步服务同机时显示；点击打开弹窗并带上当前行
+  it('「同步到 CK」入口：不同机不显示；同机显示且点击把当前行交给弹窗', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    // 弹窗打开会走 loadAll，把它的接口全部挡成空
+    vi.spyOn(syncApi, 'customers').mockResolvedValue([])
+    vi.spyOn(syncApi, 'customerDatabases').mockResolvedValue([])
+    vi.spyOn(syncApi, 'tableColumns').mockResolvedValue([])
+    vi.spyOn(syncApi, 'physicalColumns').mockResolvedValue([])
+    await mountTab()
+    await waitForLoad()
+    // 测试环境没有 VITE_API_PROXY_TARGET → 当前后端不是 133 同步服务，入口不渲染
+    expect(wrapper.find('[data-testid="entry-quick-ck"]').exists()).toBe(false)
+    wrapper.unmount()
+
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    try {
+      await mountTab()
+      await waitForLoad()
+      const btn = wrapper.find('[data-testid="entry-quick-ck"]')
+      expect(btn.exists()).toBe(true)
+      await btn.trigger('click')
+      await flushPromises()
+      const dialog = wrapper.findComponent(QuickCkSyncDialog)
+      expect(dialog.props('modelValue')).toBe(true)
+      expect((dialog.props('entry') as EntryType).tableId).toBe('t1')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

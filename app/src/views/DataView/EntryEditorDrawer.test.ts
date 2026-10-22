@@ -338,4 +338,35 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     await input.setValue('TB_NEW')
     expect((input.element as HTMLInputElement).value).toBe('TB_NEW')
   })
+
+  // DS_KIND（2026-10-22）：编辑抽屉「数据源类型」下拉——编辑回显、新建默认 MYSQL、保存透传
+  it('数据源类型：编辑回显 dsKind=CK，新建默认 MYSQL', async () => {
+    await mountEditor({
+      tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    })
+    const sel = body().find('select[data-testid="entry-ds-kind"]')
+    expect(sel.exists()).toBe(true)
+    expect((sel.element as HTMLSelectElement).value).toBe('CK')
+
+    wrapper.unmount()
+    await mountEditor(null)
+    expect((body().find('select[data-testid="entry-ds-kind"]').element as HTMLSelectElement).value).toBe('MYSQL')
+  })
+
+  it('保存 payload 含 dsKind（切换 CK 随 modifyEntryType 落库）', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    }
+    const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: 't1' })
+    await mountEditor(entry)
+    await body().find('select[data-testid="entry-ds-kind"]').setValue('CK')
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', dsKind: 'CK' }))
+  })
 })

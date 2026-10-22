@@ -413,6 +413,8 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
   return {
     tableId: String(record.entryTypeId ?? ''),
     tableName: String(record.tableName ?? ''),
+    // DS_KIND 老记录可能为 NULL：统一归一 MYSQL（与 DB 默认一致），不向 UI 暴露「未知」态
+    dsKind: record.dsKind == null ? 'MYSQL' : String(record.dsKind) as EntryType['dsKind'],
     name: record.typeName == null ? undefined : String(record.typeName),
     remark: record.remark == null ? undefined : String(record.remark),
     fields: items.map((item, index) => entryFieldFromLegacy(item, index, keySet)),
@@ -436,6 +438,7 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     entryTypeId: input.tableId || undefined,
     typeName: input.name,
     tableName: input.tableName,
+    dsKind: input.dsKind,
     keyField: input.keyField,
     state: input.state,
     remark: input.remark,

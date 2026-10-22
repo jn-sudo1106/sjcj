@@ -8,8 +8,11 @@ import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
 import { exportFieldsAsCsv } from '@/utils/format/csvExport'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
+import QuickCkSyncDialog from './QuickCkSyncDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { copyToClipboard } from '@/utils/clipboard'
+import { currentBackendHost } from '@/api/client'
+import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
 import { favoriteEntryIds, isFavoriteEntry, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
@@ -31,6 +34,10 @@ const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const editor = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const extractDialog = reactive<{ visible: boolean; text: string; count: number }>({ visible: false, text: '', count: 0 })
+// 快速同步到 CK：只在和同步服务同库的环境出现（同 DataQueryTab「同步到其他环境」的门控口径），
+// 别的环境带的表在同步服务库里可能不存在
+const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
+const quickCk = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 
 // ---- 1013：全量拉取 + 前端列头排序 + 只看收藏 ----
 // 后端 entryTypePagedView 不支持排序（Service 硬编码 ENTRY_TYPE_ID DESC，见设计文档 §一），
@@ -185,6 +192,10 @@ function openCreate() {
 }
 async function onEntrySaved() {
   await load()
+}
+function openQuickCk(e: EntryType) {
+  quickCk.entry = e
+  quickCk.visible = true
 }
 
 async function confirmDanger(
@@ -426,6 +437,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
               title="点击按物理表名排序"
               @click="onSort('tableName')"
             >物理表名<span class="et-sort-caret"><el-icon class="et-sort-up" :class="{ active: sortKey === 'tableName' && sortDir === 'asc' }"><CaretTop /></el-icon><el-icon class="et-sort-down" :class="{ active: sortKey === 'tableName' && sortDir === 'desc' }"><CaretBottom /></el-icon></span></th>
+            <th style="width: 84px" title="表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路">数据源</th>
             <th
               class="et-sortable"
               :class="{ 'is-sorted': sortKey === 'keyField' }"
@@ -459,6 +471,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td>{{ e.tableId }}</td>
             <td>{{ e.name || '—' }}</td>
             <td>{{ e.tableName }}</td>
+            <td>{{ e.dsKind ?? 'MYSQL' }}</td>
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
             <td>{{ e.remark || '—' }}</td>
@@ -478,6 +491,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
                 <el-icon :size="13"><component :is="isFavoriteEntry(e.tableId) ? StarFilled : Star" /></el-icon>
               </button>
               <el-button link type="primary" size="small" @click="openDetail(e)">详情</el-button>
+              <el-button v-if="syncSameBackend" link type="primary" size="small" data-testid="entry-quick-ck" @click="openQuickCk(e)">同步到 CK</el-button>
               <template v-if="canWrite">
                 <el-button link type="primary" size="small" @click="openEdit(e)">编辑</el-button>
                 <el-dropdown trigger="click">
@@ -524,6 +538,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
         <dt>表ID</dt><dd>{{ drawer.entry.tableId }}</dd>
         <dt>表名称</dt><dd>{{ drawer.entry.name || '—' }}</dd>
         <dt>物理表名</dt><dd>{{ drawer.entry.tableName }}</dd>
+        <dt>数据源</dt><dd>{{ drawer.entry.dsKind ?? 'MYSQL' }}</dd>
         <dt>去重字段</dt><dd>{{ drawer.entry.keyField || '—' }}</dd>
         <dt>去重方式</dt><dd>{{ drawer.entry.dedupMode === 'table' ? '表内去重' : '源内去重' }}</dd>
         <dt>状态</dt><dd>{{ drawer.entry.state || '—' }}</dd>
@@ -575,6 +590,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
   </el-dialog>
 
   <EntryEditorDrawer v-model="editor.visible" :entry="editor.entry" @saved="onEntrySaved" />
+  <QuickCkSyncDialog v-model="quickCk.visible" :entry="quickCk.entry" @created="load" />
   </div>
 </template>
 

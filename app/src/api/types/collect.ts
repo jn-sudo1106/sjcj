@@ -98,6 +98,8 @@ export interface ConfigActionLog {
 export interface EntryType {
   tableId: string
   tableName: string // 如 sense_data.TB_ZFB_COMMENT（物理表名）
+  /** 表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路，写入始终在 MySQL */
+  dsKind?: 'MYSQL' | 'CK'
   name?: string // 表显示名（业务名）
   remark?: string // 备注
   fields: EntryField[]

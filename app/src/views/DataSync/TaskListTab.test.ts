@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElOption, ElSelect } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import TaskListTab from './TaskListTab.vue'
 import SinkOptionsPanel from './SinkOptionsPanel.vue'
@@ -107,5 +107,67 @@ describe('TaskListTab · 目标端参数编辑', () => {
     await flushPromises()
     await saveButton()
     expect(save).not.toHaveBeenCalled()
+  })
+})
+
+describe('TaskListTab · 删除任务', () => {
+  async function mountForDelete() {
+    setActivePinia(createPinia())
+    useAuthStore().info = { name: 'admin', id: 1, roles: [], groups: [], avatar: '', introduction: '', group: 1 } as never
+    vi.spyOn(syncApi, 'customers').mockResolvedValue([])
+    // 只有暂停态才有「删除」入口
+    vi.spyOn(syncApi, 'tasks').mockResolvedValue({ list: [{ ...row, status: 1 } as SyncTask], total: 1 })
+    const remove = vi.spyOn(syncApi, 'remove').mockResolvedValue({})
+    wrapper = mount(TaskListTab, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return remove
+  }
+
+  async function openDeleteDialog() {
+    // el-table 的 hidden-columns 测量区也会渲染一份插槽（row 为空对象），只取真实行的按钮
+    const del = body().findAll('.el-table__row button').find((b) => b.text() === '删除')
+    if (!del) throw new Error('找不到删除入口')
+    await del.trigger('click')
+    await flushPromises()
+  }
+
+  function deleteSelect() {
+    return wrapper!.findAllComponents(ElSelect)
+      .find((item) => item.attributes('data-testid') === 'delete-table-operation')!
+  }
+
+  it('删除弹窗用下拉框选择目标表处理方式，默认「不处理」', async () => {
+    await mountForDelete()
+    await openDeleteDialog()
+
+    const dialog = body().findAll('.el-dialog').find((item) => item.text().includes('目标表处理方式'))
+    expect(dialog).toBeTruthy()
+    expect(deleteSelect()).toBeTruthy()
+    expect(deleteSelect().findAllComponents(ElOption).map((item) => item.props('label')))
+      .toEqual(['不处理（只删任务，不动目标表）', '备份表后删除', '删除目标表'])
+    expect((wrapper!.vm as any).deleteTableOperation).toBe('0')
+    // 旧实现是 ElMessageBox.prompt 文本输入
+    expect(body().find('.el-message-box').exists()).toBe(false)
+  })
+
+  it('默认「不处理」：确认删除不带 tableOperation', async () => {
+    const remove = await mountForDelete()
+    await openDeleteDialog()
+    await body().find('[data-testid="delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(remove).toHaveBeenCalledWith(7, 3, 'gzh_db.t_holding', undefined)
+    expect(document.querySelector<HTMLElement>('.el-overlay')?.style.display).toBe('none')
+  })
+
+  it('选「备份表」后确认：tableOperation 传 1', async () => {
+    const remove = await mountForDelete()
+    await openDeleteDialog()
+    deleteSelect().vm.$emit('update:modelValue', '1')
+    await flushPromises()
+    await body().find('[data-testid="delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(remove).toHaveBeenCalledWith(7, 3, 'gzh_db.t_holding', '1')
   })
 })
