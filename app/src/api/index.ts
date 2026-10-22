@@ -3608,11 +3608,13 @@ export const workflowBindingApi = {
     const ownIds = new Set(ownActive.map((binding) => binding.flowId))
     const groupIds = new Set(groupActive.map((binding) => binding.flowId))
     const ordered = [...(groupId ? groupActive : ownActive)].sort(byDefault)
-    // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
+    // 流程名 / 是否禁用：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID、按启用处理
     const names = new Map<string, string>()
+    const disabledFlows = new Set<string>()
     if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
+      if (flow?.disabled) disabledFlows.add(binding.flowId)
     }))
     const rows = ordered.map((binding, index): WorkflowBinding => {
       const inherited = groupIds.has(binding.flowId)
@@ -3626,7 +3628,8 @@ export const workflowBindingApi = {
         workflowName: names.get(binding.flowId) ?? `流程 #${binding.flowId}`,
         publishedFlowId: binding.flowId,
         versionStatus: 'PUBLISHED',
-        workflowStatus: 'ACTIVE',
+        // 流程禁用（flow/changeFlowEnable，cs_flow.IS_DELETE=1）：禁用后手动抓取 / 指定流程运行 / 定时都不跑（10-22 后端）
+        workflowStatus: disabledFlows.has(binding.flowId) ? 'DISABLED' : 'ACTIVE',
         versionManaged: false,
         followsCurrentVersion: true,
         role: primary ? 'MAIN' : 'AUX',

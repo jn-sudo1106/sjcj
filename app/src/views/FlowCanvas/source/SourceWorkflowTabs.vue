@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { workflowBindingApi, type FlowRecord, type WorkflowBinding } from '@/api'
+import { flowCenterApi, sourceApi, workflowBindingApi, type FlowRecord, type WorkflowBinding } from '@/api'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
@@ -225,6 +225,37 @@ async function setPrimary(row: WorkflowBinding) {
   }
 }
 
+// 禁用 / 启用流程（10-22）：flow/changeFlowEnable，改的是流程本身（cs_flow.IS_DELETE），不是这个源的关联。
+// 流程是多个源共用的，禁用前说清有几个源在用；禁用后手动抓取、指定流程运行、定时都不再按它跑（后端 10-22 修）。
+const isDisabled = (row: WorkflowBinding) => row.workflowStatus === 'DISABLED'
+async function toggleFlowEnable(row: WorkflowBinding) {
+  closeMenu()
+  const disabling = !isDisabled(row)
+  if (disabling) {
+    const users = await sourceApi.sourcePaged({ flowId: row.workflowId, page: 1, size: 1 }).then((r) => r.total).catch(() => null)
+    const scope = users === null ? '使用这条流程的源' : `使用这条流程的 ${users} 个源`
+    try {
+      await ElMessageBox.confirm(
+        `禁用流程「${row.workflowName}」#${row.workflowId}？禁用后，${scope}都不会再按它运行（手动抓取、指定流程运行、定时都会被拦下）。`
+        + (row.primary ? '\n这是当前源的主流程，禁用后当前源将无法发起任务。' : '')
+        + '\n流程本身和关联关系不变，可以随时启用。',
+        '禁用流程',
+        { type: 'warning', confirmButtonText: '禁用', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
+  try {
+    const ack = await flowCenterApi.changeFlowEnable([row.workflowId], disabling ? 1 : 0)
+    if (!ack.ok) throw new Error(ack.message || '未知原因')
+    ElMessage.success(disabling ? `已禁用流程「${row.workflowName}」` : `已启用流程「${row.workflowName}」`)
+    await load()
+  } catch (error) {
+    ElMessage.error(`${disabling ? '禁用' : '启用'}流程失败：${(error as Error)?.message ?? String(error)}`)
+  }
+}
+
 // 解绑：是主流程且还有别的就在同一个确认框里选新的主流程，一次提交；最后一条也允许，写明后果
 const unbindDlg = reactive({ open: false, row: null as WorkflowBinding | null, next: '', busy: false })
 const unbindOthers = computed(() => rows.value.filter(row => isOwn(row) && row.workflowId !== unbindDlg.row?.workflowId))
@@ -329,11 +360,11 @@ onMounted(async () => {
             v-for="row in segment.list"
             :key="row.workflowId"
             class="swt-tab"
-            :class="{ active: row.workflowId === activeWorkflowId, group: row.inherited }"
+            :class="{ active: row.workflowId === activeWorkflowId, group: row.inherited, disabled: isDisabled(row) }"
             type="button"
             role="tab"
             :aria-selected="row.workflowId === activeWorkflowId"
-            :title="`${row.workflowName}（#${row.workflowId}）${row.inherited ? '：来源组流程' : ''} · 右键更多操作`"
+            :title="`${row.workflowName}（#${row.workflowId}）${row.inherited ? '：来源组流程' : ''}${isDisabled(row) ? '：已禁用，不会运行' : ''} · 右键更多操作`"
             :data-testid="`workflow-tab-${row.workflowId}`"
             @click="openFlow(row.workflowId)"
             @contextmenu.prevent.stop="openMenu($event, row)"
@@ -341,6 +372,7 @@ onMounted(async () => {
             <span class="swt-name">{{ row.workflowName }}</span>
             <span class="swt-id">#{{ row.workflowId }}</span>
             <span v-if="row.versionManaged" class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
+            <span v-if="isDisabled(row)" class="swt-disabled" data-testid="workflow-disabled-tag">已禁用</span>
             <span v-if="row.primary" class="swt-primary">主</span>
             <span v-else-if="row.role === 'BACKFILL'" class="swt-role">补</span>
           </button>
@@ -414,6 +446,7 @@ onMounted(async () => {
       >
         <template v-if="isOwn(ctxMenu.row)">
           <button v-if="!ctxMenu.row.primary" type="button" role="menuitem" data-testid="workflow-ctx-primary" @click="setPrimary(ctxMenu.row)">设为主流程</button>
+          <button type="button" role="menuitem" :data-testid="isDisabled(ctxMenu.row) ? 'workflow-ctx-enable' : 'workflow-ctx-disable'" @click="toggleFlowEnable(ctxMenu.row)">{{ isDisabled(ctxMenu.row) ? '启用流程' : '禁用流程' }}</button>
           <button type="button" role="menuitem" class="danger" data-testid="workflow-ctx-unbind" @click="askUnbind(ctxMenu.row)">解绑流程</button>
         </template>
         <template v-else>
@@ -473,6 +506,8 @@ onMounted(async () => {
 .swt-seg { flex: none; align-self: center; margin: 0 6px 0 2px; padding: 2px 7px; border-radius: 10px; background: #e2e8f0; color: #475569; font-size: 10px; white-space: nowrap; cursor: help; }
 .swt-seg.group { background: #ede9fe; color: #6d28d9; }
 .swt-tab.group .swt-name { color: #6d28d9; }
+.swt-tab.disabled .swt-name, .swt-tab.disabled .swt-id { color: var(--rc-faint); text-decoration: line-through; }
+.swt-disabled { flex: none; padding: 1px 4px; border-radius: 4px; background: #f1f5f9; color: #64748b; font-size: 10px; }
 .swt-ctx { position: fixed; z-index: 3000; min-width: 150px; padding: 5px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 10px 24px rgb(15 23 42 / 14%); }
 .swt-ctx button { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 13px; text-align: left; cursor: pointer; }
 .swt-ctx button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }

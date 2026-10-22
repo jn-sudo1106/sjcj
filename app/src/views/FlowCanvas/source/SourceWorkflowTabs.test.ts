@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import SourceWorkflowTabs from './SourceWorkflowTabs.vue'
-import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
+import { flowCenterApi, sourceApi, workflowBindingApi, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 
@@ -298,6 +298,52 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     await flushPromises()
     expect(unbind).toHaveBeenCalledWith('100', '11', undefined)
     expect(router.currentRoute.value.query.flowId).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('禁用的流程：标签标「已禁用」；右键给「启用流程」，点了直接启用不确认', async () => {
+    vi.mocked(ElMessageBox.confirm).mockClear()
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, { ...AUX, workflowStatus: 'DISABLED' }]))
+    const toggle = vi.spyOn(flowCenterApi, 'changeFlowEnable').mockResolvedValue({ ok: true })
+    const { wrapper } = await mountTabs(dialogStub)
+    expect(wrapper.get('[data-testid="workflow-tab-12"]').find('[data-testid="workflow-disabled-tag"]').text()).toBe('已禁用')
+    expect(wrapper.get('[data-testid="workflow-tab-11"]').find('[data-testid="workflow-disabled-tag"]').exists()).toBe(false)
+    await rightClick(wrapper, '12')
+    expect(q('workflow-ctx-disable')).toBeNull()
+    q('workflow-ctx-enable')!.click()
+    await flushPromises()
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(toggle).toHaveBeenCalledWith(['12'], 0)
+    wrapper.unmount()
+  })
+
+  it('禁用流程：确认框说清有几个源在用、是主流程会让当前源无法运行；确认后 changeFlowEnable(…, 1) 并刷新', async () => {
+    const load = vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [] })
+    const toggle = vi.spyOn(flowCenterApi, 'changeFlowEnable').mockResolvedValue({ ok: true })
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const { wrapper } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-disable')!.click()
+    await flushPromises()
+    const text = String(vi.mocked(ElMessageBox.confirm).mock.calls.at(-1)?.[0])
+    expect(text).toContain('使用这条流程的 3 个源都不会再按它运行')
+    expect(text).toContain('这是当前源的主流程')
+    expect(toggle).toHaveBeenCalledWith(['11'], 1)
+    expect(load).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('禁用流程：确认框点取消不调接口', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [] })
+    const toggle = vi.spyOn(flowCenterApi, 'changeFlowEnable')
+    vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel')
+    const { wrapper } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '12')
+    q('workflow-ctx-disable')!.click()
+    await flushPromises()
+    expect(toggle).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

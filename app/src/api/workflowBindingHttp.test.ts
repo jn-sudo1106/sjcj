@@ -62,6 +62,14 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
     expect(rows[0]).toMatchObject({ bindType: 'SOURCE', bindId: '430024667', publishedFlowId: '100', status: 'ACTIVE' })
   })
 
+  it('流程详情 disabled → 行上 workflowStatus=DISABLED（10-22 标签栏禁用标识）', async () => {
+    fetchMock.mockResolvedValue(ok(ALONE))
+    const { workflowBindingApi, flowCenterApi } = await load()
+    vi.mocked(flowCenterApi.detail).mockImplementation(async (id: string) => ({ id, name: `流程${id}`, disabled: id === '101', definition: { main: [], branches: [], configs: {}, branchGroups: [] }, updatedAt: '' }))
+    const rows = await workflowBindingApi.list('430024667')
+    expect(rows.map((r) => [r.workflowId, r.workflowStatus])).toEqual([['100', 'ACTIVE'], ['101', 'DISABLED']])
+  })
+
   it('withNames: false 不取流程详情，名字退回「流程 #ID」（画布加载不被慢的 flowDetail 挡住）', async () => {
     fetchMock.mockResolvedValue(ok(ALONE))
     const { workflowBindingApi, flowCenterApi } = await load()
