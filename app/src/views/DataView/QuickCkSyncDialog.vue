@@ -42,9 +42,10 @@ const form = reactive({
   cron: '',
 })
 
-const sourceTable = computed(() => (props.entry?.tableName ?? '').toLowerCase())
-// 目标表名固定与源表同名（只去掉 schema 前缀，保留 tb_），不在弹窗里编辑
-const targetTable = computed(() => sourceTable.value.split('.').pop() ?? '')
+// 物理表名按配置原样使用：MySQL 表名区分大小写，转小写后取数会指向不存在的表
+const sourceTable = computed(() => props.entry?.tableName ?? '')
+// 目标表名固定与源表同名（只去掉 schema 前缀，保留 tb_），不在弹窗里编辑；目标侧沿用旧口径小写
+const targetTable = computed(() => (sourceTable.value.split('.').pop() ?? '').toLowerCase())
 
 // 与向导 taskCron 同算法：md5(sourceTable) 取两段十六进制散列
 function taskCron(): string {

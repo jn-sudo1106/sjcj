@@ -160,7 +160,9 @@ describe('源数据表的动态搜索', () => {
     await vm(root).searchTables('b')
     expect(vm(root).tables.map((item) => item.tableName)).toEqual(['TB_A', 'TB_B'])
     expect(vm(root).form.entryTypeId).toBe(1)
-    expect(vm(root).form.sourceTable).toBe('tb_a')
+    // 物理表名按 cfg_entry_type 原样保留，MySQL 区分大小写
+    expect(vm(root).form.sourceTable).toBe('TB_A')
+    expect(vm(root).form.targetTable).toBe('a')
   })
 
   it('深链带的表不在首屏那一页时按表名再捞一次', async () => {
@@ -171,7 +173,7 @@ describe('源数据表的动态搜索', () => {
     vm(root).form.customerId = 1
     await flushPromises()
     expect(vm(root).form.entryTypeId).toBe(11)
-    expect(vm(root).form.sourceTable).toBe('sense_data.tb_cnews')
+    expect(vm(root).form.sourceTable).toBe('sense_data.TB_CNEWS')
     expect(vm(root).form.targetTable).toBe('cnews')
     expect(vm(root).tables.map((item) => item.tableName)).toEqual(['sense_data.TB_CNEWS', 'TB_A'])
   })

@@ -101,4 +101,30 @@ describe('环境配置页的写入表单', () => {
     expect(save).toHaveBeenCalledTimes(2)
     expect(save.mock.calls[1]?.[0]).toMatchObject({ databaseType: 5, dbSchema: '' })
   })
+
+  it('操作列改为图标热区：客户端给「编辑/重置签名密钥/删除」，数据源给「编辑/删除」', async () => {
+    setActivePinia(createPinia())
+    useAuthStore().info = { name: 'admin', id: 1, roles: [], groups: [], avatar: '', introduction: '', group: 1 } as never
+    vi.spyOn(syncApi, 'customers').mockResolvedValue([{ id: 5, customerName: '测试客户' }])
+    vi.spyOn(syncApi, 'clients').mockResolvedValue({
+      list: [{ id: 1200, customerId: 5, clientName: '客户端A', timingSync: 'on', fileSync: 'off', realtimeSync: 'off' } as SyncClient], total: 1,
+    })
+    vi.spyOn(syncApi, 'databases').mockResolvedValue({
+      list: [{ id: 1, customerId: 5, appId: 1200, name: '主库', sourceCode: 'master', databaseType: 1, dbSchema: 'gzh_db', type: 0 } as SyncDatabase], total: 1,
+    })
+    wrapper = mount(ConnectionsTab, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const tips = () => wrapper!.findAll('.el-table__row')[0]
+      .findAllComponents({ name: 'ElTooltip' })
+      .filter((item: VueWrapper) => item.find('.rc-op-icon').exists())
+      .map((item: VueWrapper) => (item.props() as { content?: string }).content)
+    expect(tips()).toEqual(['编辑', '重置签名密钥', '删除'])
+
+    // 切到数据源页签：只剩编辑与删除，且不再残留文字按钮
+    ;(wrapper!.vm as unknown as { active: string }).active = 'databases'
+    await flushPromises()
+    expect(tips()).toEqual(['编辑', '删除'])
+    expect(wrapper!.findAll('.el-table__row')[0].text()).not.toContain('重置密钥')
+  })
 })

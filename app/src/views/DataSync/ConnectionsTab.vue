@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Edit, Key, Refresh } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { copyToClipboard } from '@/utils/clipboard'
 import {
@@ -208,46 +209,60 @@ function removeDatabase(row: SyncDatabase) {
   <div class="sync-panel">
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon class="sync-alert" />
     <div class="sync-filter">
-      <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" style="width:180px"><el-option v-for="item in customerOptions" :key="item.id" :value="String(item.id)" :label="item.customerName" /></el-select>
-      <el-button v-if="admin && active === 'customers'" type="primary" @click="openCustomer()">新增客户</el-button>
-      <el-button v-if="admin && active === 'clients'" type="primary" @click="openClient()">新增客户端</el-button>
-      <el-button v-if="admin && active === 'databases'" type="primary" @click="openDatabase()">新增数据源</el-button>
-      <el-button @click="load">刷新</el-button>
+      <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" class="sync-filter-input"><el-option v-for="item in customerOptions" :key="item.id" :value="String(item.id)" :label="item.customerName" /></el-select>
+      <div class="sync-filter-actions">
+        <el-button class="sync-icon-btn" :icon="Refresh" title="刷新" aria-label="刷新" @click="load" />
+        <el-button v-if="admin && active === 'customers'" type="primary" @click="openCustomer()">新增客户</el-button>
+        <el-button v-if="admin && active === 'clients'" type="primary" @click="openClient()">新增客户端</el-button>
+        <el-button v-if="admin && active === 'databases'" type="primary" @click="openDatabase()">新增数据源</el-button>
+      </div>
     </div>
     <el-tabs v-model="active"><el-tab-pane label="客户配置" name="customers" /><el-tab-pane label="客户端配置" name="clients" /><el-tab-pane label="数据源配置" name="databases" /></el-tabs>
-    <el-table v-if="active === 'customers'" v-loading="loading" :data="customerRows" border>
-      <el-table-column prop="id" label="客户 ID" width="120" /><el-table-column prop="customerName" label="客户名称" min-width="200" />
-      <el-table-column v-if="admin" label="操作" width="140"><template #default="{ row }">
-        <el-button link type="primary" @click="openCustomer(row)">编辑</el-button>
-        <el-button link type="danger" @click="removeCustomer(row)">删除</el-button>
-      </template></el-table-column>
-    </el-table>
-    <el-table v-else-if="active === 'clients'" v-loading="loading" :data="clients" border>
-      <el-table-column prop="id" label="ID" width="80" /><el-table-column prop="customerId" label="客户 ID" width="90" />
-      <el-table-column prop="clientName" label="应用名称" min-width="160" />
-      <el-table-column v-for="item in [{ key: 'timingSync', label: '定时同步' }, { key: 'fileSync', label: '文件同步' }, { key: 'realtimeSync', label: '实时同步' }] as const" :key="item.key" :label="item.label" width="115">
-        <template #default="{ row }"><el-switch :model-value="row[item.key] === 'on'" @change="(val: boolean) => changeSwitch(row, item.key, val)" /><span class="sync-state">{{ row[item.key] === 'on' ? '开启' : '关闭' }}</span></template>
-      </el-table-column>
-      <el-table-column prop="topics" label="消息主题" min-width="160" show-overflow-tooltip /><el-table-column prop="extendConfig" label="扩展参数" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="updateTime" label="更新时间" width="170" />
-      <el-table-column v-if="admin" label="操作" width="210"><template #default="{ row }">
-        <el-button link type="primary" @click="openClient(row)">编辑</el-button>
-        <el-button link type="warning" @click="resetSecret(row)">重置密钥</el-button>
-        <el-button link type="danger" @click="removeClient(row)">删除</el-button>
-      </template></el-table-column>
-    </el-table>
-    <el-table v-else v-loading="loading" :data="databases" border>
-      <el-table-column prop="id" label="ID" width="80" /><el-table-column prop="name" label="名称" min-width="150" /><el-table-column prop="sourceCode" label="数据源名称" min-width="180" />
-      <el-table-column prop="appId" label="归属客户端" width="120" />
-      <el-table-column prop="dbSchema" label="Schema" min-width="150" /><el-table-column label="数据库类型" width="120"><template #default="{ row }">{{ databaseType(row.databaseType) }}</template></el-table-column>
-      <el-table-column label="类型" width="90"><template #default="{ row }">{{ Number(row.type) === 0 ? '数据库' : '文件库' }}</template></el-table-column>
-      <el-table-column prop="updateTime" label="更新时间" width="170" />
-      <el-table-column v-if="admin" label="操作" width="140"><template #default="{ row }">
-        <el-button link type="primary" @click="openDatabase(row)">编辑</el-button>
-        <el-button link type="danger" @click="removeDatabase(row)">删除</el-button>
-      </template></el-table-column>
-    </el-table>
-    <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50, 100]" layout="total, sizes, prev, pager, next" @change="load" />
+    <div v-if="active === 'customers'" class="sync-table-wrap">
+      <el-table v-loading="loading" :data="customerRows">
+        <el-table-column prop="id" label="客户 ID" width="120" /><el-table-column prop="customerName" label="客户名称" min-width="200" />
+        <el-table-column v-if="admin" label="操作" width="80"><template #default="{ row }">
+          <div class="rc-actions">
+            <el-tooltip content="编辑" placement="top"><span class="rc-op-icon" data-testid="conn-customer-edit" aria-label="编辑" @click="openCustomer(row)"><el-icon :size="15"><Edit /></el-icon></span></el-tooltip>
+            <el-tooltip content="删除" placement="top"><span class="rc-op-icon is-danger" data-testid="conn-customer-delete" aria-label="删除" @click="removeCustomer(row)"><el-icon :size="15"><Delete /></el-icon></span></el-tooltip>
+          </div>
+        </template></el-table-column>
+      </el-table>
+    </div>
+    <div v-else-if="active === 'clients'" class="sync-table-wrap">
+      <el-table v-loading="loading" :data="clients">
+        <el-table-column prop="id" label="ID" width="80" /><el-table-column prop="customerId" label="客户 ID" width="90" />
+        <el-table-column prop="clientName" label="应用名称" min-width="160" />
+        <el-table-column v-for="item in [{ key: 'timingSync', label: '定时同步' }, { key: 'fileSync', label: '文件同步' }, { key: 'realtimeSync', label: '实时同步' }] as const" :key="item.key" :label="item.label" width="115">
+          <template #default="{ row }"><el-switch :model-value="row[item.key] === 'on'" @change="(val: boolean) => changeSwitch(row, item.key, val)" /><span class="sync-state">{{ row[item.key] === 'on' ? '开启' : '关闭' }}</span></template>
+        </el-table-column>
+        <el-table-column prop="topics" label="消息主题" min-width="160" show-overflow-tooltip /><el-table-column prop="extendConfig" label="扩展参数" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="updateTime" label="更新时间" width="170" />
+        <el-table-column v-if="admin" label="操作" width="120"><template #default="{ row }">
+          <div class="rc-actions">
+            <el-tooltip content="编辑" placement="top"><span class="rc-op-icon" data-testid="conn-client-edit" aria-label="编辑" @click="openClient(row)"><el-icon :size="15"><Edit /></el-icon></span></el-tooltip>
+            <el-tooltip content="重置签名密钥" placement="top"><span class="rc-op-icon" data-testid="conn-client-reset-secret" aria-label="重置签名密钥" @click="resetSecret(row)"><el-icon :size="15"><Key /></el-icon></span></el-tooltip>
+            <el-tooltip content="删除" placement="top"><span class="rc-op-icon is-danger" data-testid="conn-client-delete" aria-label="删除" @click="removeClient(row)"><el-icon :size="15"><Delete /></el-icon></span></el-tooltip>
+          </div>
+        </template></el-table-column>
+      </el-table>
+    </div>
+    <div v-else class="sync-table-wrap">
+      <el-table v-loading="loading" :data="databases">
+        <el-table-column prop="id" label="ID" width="80" /><el-table-column prop="name" label="名称" min-width="150" /><el-table-column prop="sourceCode" label="数据源名称" min-width="180" />
+        <el-table-column prop="appId" label="归属客户端" width="120" />
+        <el-table-column prop="dbSchema" label="Schema" min-width="150" /><el-table-column label="数据库类型" width="120"><template #default="{ row }">{{ databaseType(row.databaseType) }}</template></el-table-column>
+        <el-table-column label="类型" width="90"><template #default="{ row }">{{ Number(row.type) === 0 ? '数据库' : '文件库' }}</template></el-table-column>
+        <el-table-column prop="updateTime" label="更新时间" width="170" />
+        <el-table-column v-if="admin" label="操作" width="80"><template #default="{ row }">
+          <div class="rc-actions">
+            <el-tooltip content="编辑" placement="top"><span class="rc-op-icon" data-testid="conn-database-edit" aria-label="编辑" @click="openDatabase(row)"><el-icon :size="15"><Edit /></el-icon></span></el-tooltip>
+            <el-tooltip content="删除" placement="top"><span class="rc-op-icon is-danger" data-testid="conn-database-delete" aria-label="删除" @click="removeDatabase(row)"><el-icon :size="15"><Delete /></el-icon></span></el-tooltip>
+          </div>
+        </template></el-table-column>
+      </el-table>
+    </div>
+    <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50, 100]" size="small" background layout="total, sizes, prev, pager, next" @change="load" />
 
     <el-dialog v-model="customerForm.visible" :title="customerForm.editing ? '编辑客户' : '新增客户'" width="420px">
       <el-form label-width="90px">
@@ -324,8 +339,17 @@ function removeDatabase(row: SyncDatabase) {
 </template>
 
 <style scoped>
-.sync-panel { max-width: 1200px; margin: 0 auto; }
-.sync-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }.sync-alert { margin-bottom: 12px; }.sync-state { margin-left: 6px; color: #64748b; font-size: 12px; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }
+/* 页面骨架与配色对齐「建表 SQL」页（SqlTaskTab）：整宽、筛选栏右侧动作组、浅描边圆角表格、小号分页 */
+.sync-panel { min-height: 0; }
+.sync-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.sync-filter-input { width: 180px; }
+.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.sync-icon-btn { width: 32px; padding: 0; }
+.sync-alert { margin-bottom: 12px; }
+.sync-state { margin-left: 6px; color: #64748b; font-size: 12px; }
+.sync-table-wrap { overflow: hidden; border: 1px solid #eef2f7; border-radius: 8px; --el-table-border-color: #eef2f7; --el-table-header-bg-color: #f8fafc; --el-table-header-text-color: #475569; --el-table-row-hover-bg-color: #f8fbff; }
+.sync-table-wrap :deep(.el-table) { font-size: 13px; }
+.sync-pagination { justify-content: flex-end; margin-top: 14px; }
 .sync-tip { margin: 6px 0; color: #64748b; font-size: 12px; line-height: 1.6; }
 .sync-code { display: inline-block; padding: 4px 8px; background: #f1f5f9; border-radius: 4px; font-size: 12px; word-break: break-all; }
 </style>
