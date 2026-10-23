@@ -42,9 +42,10 @@ const form = reactive({
   cron: '',
 })
 
-const sourceTable = computed(() => (props.entry?.tableName ?? '').toLowerCase())
-// 目标表名固定与源表同名（只去掉 schema 前缀，保留 tb_），不在弹窗里编辑
-const targetTable = computed(() => sourceTable.value.split('.').pop() ?? '')
+// 物理表名按配置原样使用：MySQL 表名区分大小写，转小写后取数会指向不存在的表
+const sourceTable = computed(() => props.entry?.tableName ?? '')
+// 目标表名固定与源表同名（只去掉 schema 前缀，保留 tb_），不在弹窗里编辑；目标侧沿用旧口径小写
+const targetTable = computed(() => (sourceTable.value.split('.').pop() ?? '').toLowerCase())
 
 // 与向导 taskCron 同算法：md5(sourceTable) 取两段十六进制散列
 function taskCron(): string {
@@ -244,7 +245,7 @@ async function submit() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="快速同步到 CK" width="560px" append-to-body>
+  <el-dialog v-model="visible" title="快速同步" width="560px" append-to-body>
     <div v-loading="loading" class="qck-body">
       <el-result v-if="done" icon="success" title="同步任务已创建" sub-title="可以在任务列表查看、执行和管理同步任务" />
       <el-form v-else-if="entry" label-position="top" class="qck-form">

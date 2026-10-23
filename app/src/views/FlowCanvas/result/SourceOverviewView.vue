@@ -27,6 +27,7 @@ import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
+import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
 import { scopedSourceIds } from './sourceScope'
 import { HIDEABLE_SOURCE_COLUMNS, viewStateFilter, type SourceListViewState } from './sourceListViewState'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
@@ -195,7 +196,7 @@ function removeCondition(row: ConditionRow) {
   if (wasActive) search()
 }
 function conditionPlaceholder(row: ConditionRow) {
-  if (row.pinned || row.field === 'remark' || row.field === 'flowId') return sourceCondFieldOf(row.field).placeholder
+  if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return sourceCondFieldOf(row.field).placeholder
   return '源 ID / 名称 / URL，自动识别'
 }
 function onConditionInput(row: ConditionRow, value: string) {
@@ -204,7 +205,7 @@ function onConditionInput(row: ConditionRow, value: string) {
     row.pinned = false
     return
   }
-  if (row.pinned || row.field === 'remark' || row.field === 'flowId') return
+  if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return
   // 识别出的字段被别的行占了，退回按名称查（名称是兜底口径）；名称也占了就不动
   const target = ([detectSourceSearchField(value), 'name'] as const).find((f) => f && !fieldTakenByOther(f, row))
   if (target && target !== row.field) {
@@ -288,6 +289,23 @@ async function openFlowNode(flowId: string) {
   } catch (error) {
     ElMessage.error(`加载流程失败：${error instanceof Error ? error.message : String(error)}`)
   }
+}
+/** 主表列名称（1022 会议：只有表 ID 认不出是哪张表）：sourcePaged 不返回表名，拉一次全量表做映射 */
+const tableOptions = ref<DataTableMeta[]>([])
+async function loadTableOptions() {
+  if (tableOptions.value.length) return
+  try {
+    tableOptions.value = await dataApi.tables()
+  } catch {
+    // 只是名称辅助，拉不到就显示 ID
+    tableOptions.value = []
+  }
+}
+const tableNameById = computed(() => new Map(tableOptions.value.map((t) => [t.tableId, t.name || t.tableName])))
+/** 主表列显示：表名 · ID；表列表没拉到时用 ID */
+function tableNameOf(tableId: string): string {
+  const name = tableNameById.value.get(tableId)
+  return name ? `${name} · ${tableId}` : tableId
 }
 /** 点主表：拉表结构后在右侧抽屉展示（旧平台 SourceList 点主表看表信息；复用数据查询的「表结构详情」抽屉） */
 const mainTableOpen = ref(false)
@@ -552,6 +570,7 @@ const flowConfigOpen = ref(false)
 const flowConfigSource = ref<Source | null>(null)
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
+const batchCronOpen = ref(false)
 function openFlowConfigForSelected() {
   if (selectedIds.value.length !== 1) {
     ElMessage.warning('源流程配置一次只看一个源，请只勾选 1 个')
@@ -584,11 +603,20 @@ function openRunOnce() {
   }
   runOnceOpen.value = true
 }
+/** 批量配定时（旧「操作类 → 定时任务变更 → 批量配定时」，2026-10-23） */
+function openBatchCron() {
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先勾选要配定时的来源')
+    return
+  }
+  batchCronOpen.value = true
+}
 function onGroupOpsCommand(command: string) {
   sourceGroupOpsOpen.value = false
   if (command === 'flow-config') openFlowConfigForSelected()
   else if (command === 'adjust-group') openAdjustGroup()
   else if (command === 'run-once') openRunOnce()
+  else if (command === 'batch-cron') openBatchCron()
 }
 /** 来源组批量操作写完后：清勾选、重拉来源组候选、重查列表（组归属 / 默认流程列变了） */
 function onGroupOpsChanged() {
@@ -1183,6 +1211,7 @@ onMounted(() => {
   void loadSiteOptions()
   void loadSourceGroupOptions()
   void loadFlowOptions()
+  void loadTableOptions()
   void loadFavoriteSources()
 })
 onUnmounted(() => {
@@ -1347,7 +1376,7 @@ defineExpose({ openLaunch, clearSelection })
       </div>
     </div>
 
-    <div class="sov-summary">
+    <div class="sov-summary" :class="{ 'one-row': crossSite }">
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
       <slot name="summary-extra" :ids="selectedIds" />
@@ -1387,6 +1416,7 @@ defineExpose({ openLaunch, clearSelection })
               <el-dropdown-item command="flow-config" data-testid="sg-ops-flow-config">源流程配置（勾选 1 个）</el-dropdown-item>
               <el-dropdown-item command="adjust-group" data-testid="sg-ops-adjust-group">{{ rangeAdjustAllowed ? '调整来源组（不勾选 = 按当前筛选范围）' : '调整来源组' }}</el-dropdown-item>
               <el-dropdown-item command="run-once" data-testid="sg-ops-run-once">指定流程运行一次</el-dropdown-item>
+              <el-dropdown-item command="batch-cron" data-testid="sg-ops-batch-cron">批量配定时</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -1510,7 +1540,7 @@ defineExpose({ openLaunch, clearSelection })
                 data-testid="source-overview-main-table"
                 :title="`查看表 ${source.mainTable} 结构`"
                 @click.stop="openMainTable(source.mainTable)"
-              >{{ source.mainTable }}</button>
+              >{{ tableNameOf(source.mainTable) }}</button>
               <template v-else>—</template>
             </td>
             <td v-if="showCol('tags')">
@@ -1633,6 +1663,7 @@ defineExpose({ openLaunch, clearSelection })
       :flows="flowOptions"
       @close="runOnceOpen = false"
     />
+    <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
   </section>
@@ -1710,6 +1741,8 @@ defineExpose({ openLaunch, clearSelection })
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }
 .sov-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--rc-text-2); font-size: 12px; }
 .sov-summary b { color: var(--rc-text); }
+/* 源管理（跨网站）：勾选操作和右侧按钮保持一排，不折行 */
+.sov-summary.one-row { flex-wrap: nowrap; white-space: nowrap; }
 .sov-summary span { color: var(--rc-faint); }
 .sov-table-wrap { min-height: 0; flex: 1; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .sov-table-wrap.loading { opacity: .62; }

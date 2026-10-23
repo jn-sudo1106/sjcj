@@ -91,7 +91,7 @@ type QckVm = {
 }
 const vm = (root: VueWrapper) => root.vm as unknown as QckVm
 
-describe('快速同步到 CK 弹窗', () => {
+describe('快速同步 弹窗', () => {
   it('管理员渲染客户下拉：未选客户时不加载 CK 库、确认禁用；切换客户只重拉 CK 库（列不重拉）', async () => {
     const { customerDatabases, tableColumns } = stubSyncApi()
     const root = await mountDialog()
@@ -152,7 +152,7 @@ describe('快速同步到 CK 弹窗', () => {
     expect(schemaInput.disabled).toBe(true)
     expect(schemaInput.value).toBe('xz_db')
     expect(tableInput.disabled).toBe(true)
-    // 源表 sense_data.tb_cnews → 目标表 tb_cnews，不再剥 tb_ 前缀
+    // 源表 sense_data.TB_CNEWS → 目标表 tb_cnews：目标侧沿用旧口径小写
     expect(tableInput.value).toBe('tb_cnews')
   })
 
@@ -176,7 +176,7 @@ describe('快速同步到 CK 弹窗', () => {
     vm(root).customerId = 1
     await flushPromises()
     expect(el('qck-block').text()).toBe(
-      '源表 sense_data.tb_cnews 既没有 UPDATE_DT 也没有 origin_update_time 列，同步实体无法确定增量水位')
+      '源表 sense_data.TB_CNEWS 既没有 UPDATE_DT 也没有 origin_update_time 列，同步实体无法确定增量水位')
     expect(confirmDisabled()).toBe(true)
     await el('qck-confirm').trigger('click')
     await flushPromises()
@@ -196,7 +196,7 @@ describe('快速同步到 CK 弹窗', () => {
     expect(payload).toMatchObject({
       customerId: 1,
       entryTypeId: 't3',
-      sourceTable: 'sense_data.tb_cnews',
+      sourceTable: 'sense_data.TB_CNEWS',
       sourceTableComment: '通用新闻',
       sourceCode: 'source_mysql_source',
       sourceSchema: 'sense_data',
@@ -230,7 +230,7 @@ describe('快速同步到 CK 弹窗', () => {
     expect(String(taskList[0].fromSql)).toContain('id as startId')
     expect(String(taskList[0].fromSql)).toContain('`title`')
     expect(String(taskList[0].fromSql)).toContain('DATE_FORMAT(UPDATE_DT')
-    expect(String(taskList[0].fromSql)).toContain('from sense_data.tb_cnews')
+    expect(String(taskList[0].fromSql)).toContain('from sense_data.TB_CNEWS')
   })
 
   it('关「同步实体」：列退回配置字段基线，水位拦截解除', async () => {

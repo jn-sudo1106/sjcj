@@ -89,7 +89,7 @@ describe('SourceWorkflowTabs', () => {
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })
 
-  it('新增按钮可点击，菜单有「新建空白流程」「复用现有流程」「复制现有流程或模板新建」；没有任何兼容模式提示', async () => {
+  it('新增按钮可点击，菜单有「新建空白流程」「关联已有流程」「复制流程或模板」；没有任何兼容模式提示', async () => {
     vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
     const { wrapper } = await mountTabs()
     expect(wrapper.find('.swt-compat').exists()).toBe(false)
@@ -99,8 +99,8 @@ describe('SourceWorkflowTabs', () => {
     expect(add.attributes('disabled')).toBeUndefined()
     await add.trigger('click')
     expect(wrapper.find('[data-testid="workflow-add-menu"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="workflow-reuse-existing"]').text()).toContain('复用现有流程')
-    expect(wrapper.get('[data-testid="workflow-copy-existing"]').text()).toBe('复制现有流程或模板新建…')
+    expect(wrapper.get('[data-testid="workflow-reuse-existing"]').text()).toContain('关联已有流程')
+    expect(wrapper.get('[data-testid="workflow-copy-existing"]').text()).toBe('复制流程或模板')
   })
 
   it('新建空白流程后直接打开新标签', async () => {

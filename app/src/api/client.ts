@@ -31,6 +31,11 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** 额外的 URL query 参数；用于 POST 也需要 query 的场景（如旧 /v1 端点把 ids/all/skip/include/queue 放 query、body 仅放 param）。 */
   query?: Record<string, unknown>
+  /**
+   * query 里值为空串也照样带上的键。旧 axios 会保留空串参数，有的后端 `@RequestParam` 必须"在场"
+   * 但可以为空（如 source/createJobs 的 `configId=`，不带直接报 not present）。默认空串一律跳过。
+   */
+  keepEmptyParams?: string[]
 }
 
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
@@ -368,11 +373,12 @@ export class ProductionWriteBlockedError extends Error {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-export function appendQuery(url: string, params?: Record<string, unknown>): string {
+export function appendQuery(url: string, params?: Record<string, unknown>, keepEmpty: string[] = []): string {
   if (!params) return url
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') return
+    if (value === undefined || value === null) return
+    if (value === '' && !keepEmpty.includes(key)) return
     if (Array.isArray(value)) {
       query.set(key, value.join(','))
       return
@@ -505,7 +511,7 @@ export async function request<T>(
     if (token) headers[ACCESS_TOKEN_HEADER] = token
     // 以 `/` 开头的 httpEndpoint 视为站点根相对路径（如 /vrule/...），不再拼 BASE_URL（/api/v1/）。
     // 规则编排 Sprint 4 直连旧 vrule 网关时用这个口径；采集中心同域端点仍走相对 path。
-    const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams) : resolvedPath
+    const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams, options.keepEmptyParams) : resolvedPath
     const requestUrl = options.query ? appendQuery(url, options.query) : url
     const controller = new AbortController()
     const onExternalAbort = () => controller.abort()

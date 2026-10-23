@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { KeepAlive, defineComponent, h } from 'vue'
-import { ElMessage, ElMessageBox, ElPagination } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox, ElPagination } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
@@ -1274,7 +1274,7 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
-  it('同一字段只能一行：别的行占了的字段置灰；六个字段加满后没有「+」', async () => {
+  it('同一字段只能一行：别的行占了的字段置灰；七个字段加满后没有「+」', async () => {
     const { wrapper } = await mountWithSpy()
     await add(wrapper)
     const secondOptions = fields(wrapper)[1]!.findAll('option')
@@ -1284,8 +1284,9 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await add(wrapper)
     await add(wrapper)
     await add(wrapper)
-    // 1008-04 加了「默认流程 ID」条件字段（defaultFlowId），字段数从 5 变 6
-    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'flowId', 'defaultFlowId'])
+    await add(wrapper)
+    // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），字段数 7
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
   })
 
@@ -1298,6 +1299,18 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(lastQ(page)).toEqual(expect.objectContaining({ flowId: '14009350' }))
+    expect(lastQ(page)?.sourceIds).toBeUndefined()
+  })
+
+  // 1022 会议：按表查源
+  it('按主表 ID 查：选「主表 ID」填值后作为 entryTypeId 发出；纯数字不会被自动识别成源 ID', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await fields(wrapper)[0]!.setValue('entryTypeId')
+    await texts(wrapper)[0]!.setValue('6200029')
+    expect((fields(wrapper)[0]!.element as HTMLSelectElement).value).toBe('entryTypeId')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ entryTypeId: '6200029' }))
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
@@ -1721,14 +1734,14 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
   const GROUP_SOURCE: Source = { sourceId: '391000500', name: '组内源', sourceGroupId: '3', state: 'C', siteId: 's1', url: '', configId: '', mainTable: '', owner: '' }
   const INDEP_SOURCE: Source = { sourceId: '430024667', name: '独立源', sourceGroupId: undefined, state: 'C', siteId: 's2', defaultFlowId: '14010130', url: '', configId: '', mainTable: '', owner: '' }
 
-  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE]) {
+  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE], plugins: never[] = []) {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: sourceList.length, list: sourceList })
     vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
       { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006', revision: 2 },
       { sourceGroupId: '1', sourceGroupCode: 'test1', sourceGroupName: '测试组1', state: 'ACTIVE', flowIds: [], revision: 1 },
     ])
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body, global: { plugins } })
     await flushPromises()
     page.mockClear()
     return { wrapper, page }
@@ -1758,6 +1771,7 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
 
   it('点主表：拉表结构并打开表详情抽屉；没有主表的源显示 —', async () => {
     const withTable: Source = { ...INDEP_SOURCE, mainTable: '6200039' }
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
     const { wrapper } = await mountGroupOps([withTable, { ...GROUP_SOURCE, mainTable: '' }])
     const metaSpy = vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
       tableId: '6200039', tableName: 'sense_data.TB_TEST02', name: '测试表2', state: 'C', fields: [],
@@ -1771,6 +1785,14 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
 
     expect(metaSpy).toHaveBeenCalledWith('6200039')
     expect(document.body.textContent).toContain('sense_data.TB_TEST02')
+    wrapper.unmount()
+  })
+
+  it('主表列显示「表名 · ID」；表列表里没有的只显示 ID（1022 会议）', async () => {
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([{ tableId: '6200039', tableName: 'sense_data.TB_TEST02', name: '测试表2', fields: [] }] as never)
+    const { wrapper } = await mountGroupOps([{ ...INDEP_SOURCE, mainTable: '6200039' }, { ...GROUP_SOURCE, mainTable: '6200040' }])
+    const links = wrapper.findAll('[data-testid="source-overview-main-table"]')
+    expect(links.map((l) => l.text())).toEqual(['测试表2 · 6200039', '6200040'])
     wrapper.unmount()
   })
 
@@ -1815,6 +1837,25 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     ;(check.element as HTMLInputElement).click()
     await flushPromises()
     expect(wrapper.find('[data-testid="source-group-ops"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('「选中来源 → 批量配定时」：未勾选提示，勾选后打开批量形态的定时弹窗', async () => {
+    const warn = vi.spyOn(ElMessage, 'warning')
+    const { wrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus as never])
+    const ops = wrapper.findAllComponents({ name: 'ElDropdown' }).find((c) => c.vm.$attrs['data-testid'] === 'source-group-ops')!
+    ops.vm.$emit('command', 'batch-cron')
+    await flushPromises()
+    expect(warn).toHaveBeenCalledWith('请先勾选要配定时的来源')
+    expect(wrapper.findComponent({ name: 'SourceCronDialog' }).exists()).toBe(false)
+
+    ;(wrapper.find('[data-testid="source-check-430024667"]').element as HTMLInputElement).click()
+    await flushPromises()
+    ops.vm.$emit('command', 'batch-cron')
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'SourceCronDialog' })
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['430024667'])
     wrapper.unmount()
   })
 

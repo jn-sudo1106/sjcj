@@ -170,8 +170,8 @@ async function reuseExisting(picked: FlowRecord) {
   try {
     const used = picked.sourceCnt ? `正被 ${picked.sourceCnt} 个源使用。` : ''
     await ElMessageBox.confirm(
-      `「${picked.name}」${used}复用就是和它们共享同一条流程，修改会影响所有使用它的源；需要独立修改请用「复制现有流程或模板新建」。`,
-      '复用现有流程',
+      `「${picked.name}」${used}关联就是和它们共享同一条流程，修改会影响所有使用它的源；需要独立修改请用「复制流程或模板」。`,
+      '关联已有流程',
       { type: 'warning', confirmButtonText: '复用并打开', cancelButtonText: '取消' },
     )
     adding.value = true
@@ -414,8 +414,8 @@ onMounted(async () => {
       >{{ adding ? '…' : '＋' }}</button>
       <div v-if="addMenuOpen" class="swt-add-menu" data-testid="workflow-add-menu">
         <button type="button" data-testid="workflow-create-blank" @click="createBlank">新建空白流程</button>
-        <button type="button" data-testid="workflow-reuse-existing" @click="chooseReuse">复用现有流程…</button>
-        <button type="button" data-testid="workflow-copy-existing" @click="chooseExisting">复制现有流程或模板新建…</button>
+        <button type="button" data-testid="workflow-reuse-existing" @click="chooseReuse">关联已有流程</button>
+        <button type="button" data-testid="workflow-copy-existing" @click="chooseExisting">复制流程或模板</button>
       </div>
     </div>
 

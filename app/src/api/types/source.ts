@@ -426,6 +426,23 @@ export interface SourceJob {
   disabled: boolean
 }
 
+/**
+ * 批量配定时（旧平台源列表「定时任务变更 → 批量配定时」，`SourceCron.vue` 的 `ids !== '-1'` 形态）。
+ * 旧字段映射见 legacyAdapters.createJobsToLegacy。
+ */
+export interface CreateJobsInput {
+  sourceIds: string[]
+  cron: string
+  /** 「提交并启用」= true，「仅提交」= false（建出来 isDelete=1） */
+  enable: boolean
+  /** 加监控 */
+  monitorEnable: boolean
+  /** 加监控 N 分钟后，旧默认 30 */
+  monitorAfter?: number
+  /** 执行流程；空 = 跟随各来源默认流程（旧 flowId=0） */
+  flowId?: string
+}
+
 /** 子步骤 Step（item/next）— 连线详情字段 */
 export interface Step {
   stepId: string

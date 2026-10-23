@@ -172,6 +172,11 @@ describe('describeFilters / 导出行', () => {
     expect(describeFilters({ name: '盛科', sourceUrl: 'centec' })).toBe('名称含「盛科」，URL 含「centec」')
   })
 
+  // 1022：按主表筛选时，按条件发任务的确认弹窗要看得到这条
+  it('主表 ID 条件列进人话描述', () => {
+    expect(describeFilters({ entryTypeId: '6200029' })).toBe('主表 #6200029')
+  })
+
   // `%` / `NULL` 是后端认的空值标记（0920-07），照字面写成「备注含「%」」没人看得懂
   it('备注的空值标记翻译成人话，不照字面写', () => {
     expect(describeFilters({ remark: '%' })).toBe('有备注')

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, CaretBottom, CaretTop, CopyDocument, Delete, Download, Key, Odometer, RefreshRight, Star, StarFilled, SwitchButton } from '@element-plus/icons-vue'
+import { ArrowDown, CaretBottom, CaretTop, Connection, CopyDocument, Delete, Download, Edit, Key, MoreFilled, Odometer, RefreshRight, Star, StarFilled, SwitchButton, View } from '@element-plus/icons-vue'
 import { entryApi, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
@@ -11,8 +11,6 @@ import EntryEditorDrawer from './EntryEditorDrawer.vue'
 import QuickCkSyncDialog from './QuickCkSyncDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { copyToClipboard } from '@/utils/clipboard'
-import { currentBackendHost } from '@/api/client'
-import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
 import { favoriteEntryIds, isFavoriteEntry, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
@@ -34,9 +32,8 @@ const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const editor = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const extractDialog = reactive<{ visible: boolean; text: string; count: number }>({ visible: false, text: '', count: 0 })
-// 快速同步到 CK：只在和同步服务同库的环境出现（同 DataQueryTab「同步到其他环境」的门控口径），
-// 别的环境带的表在同步服务库里可能不存在
-const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
+// 快速同步到 CK：同步服务走同源 /api/sync-platform 代理，任何业务后端环境都能用；
+// 不再按后端主机门控（原 133 门控在 186/217 下恒 false，入口整体消失）
 const quickCk = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 
 // ---- 列头排序 + 只看收藏 ----
@@ -225,7 +222,9 @@ function openCreate() {
 async function onEntrySaved() {
   await load()
 }
+const isCkSink = (e: EntryType) => (e.dsKind ?? 'MYSQL') === 'CK'
 function openQuickCk(e: EntryType) {
+  if (isCkSink(e)) return
   quickCk.entry = e
   quickCk.visible = true
 }
@@ -492,7 +491,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
               title="点击按更新时间排序"
               @click="onSort('updatedAt')"
             >更新时间<span class="et-sort-caret"><el-icon class="et-sort-up" :class="{ active: sortKey === 'updatedAt' && sortDir === 'asc' }"><CaretTop /></el-icon><el-icon class="et-sort-down" :class="{ active: sortKey === 'updatedAt' && sortDir === 'desc' }"><CaretBottom /></el-icon></span></th>
-            <th style="width: 170px">操作</th>
+            <th style="width: 190px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -509,39 +508,45 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td>{{ e.remark || '—' }}</td>
             <td :title="e.updatedAt || ''">{{ formatDateTime(e.updatedAt) }}</td>
             <td>
-              <!-- 1013：收藏星标（空心=未收藏，实心=已收藏；先改本地再发请求，失败回滚见 entryFavorites.ts） -->
-              <button
-                class="et-fav"
-                :class="{ on: isFavoriteEntry(e.tableId) }"
-                type="button"
-                data-testid="entry-fav"
-                :title="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏这张表（开启「只看收藏」可只显示收藏的表）'"
-                :aria-pressed="isFavoriteEntry(e.tableId)"
-                :aria-label="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏'"
-                @click="toggleFavoriteEntry(e.tableId)"
-              >
-                <el-icon :size="13"><component :is="isFavoriteEntry(e.tableId) ? StarFilled : Star" /></el-icon>
-              </button>
-              <el-button link type="primary" size="small" @click="openDetail(e)">详情</el-button>
-              <!-- 已是 CK 存储的表无需再同步，按钮置灰 -->
-              <el-button v-if="syncSameBackend" link type="primary" size="small" data-testid="entry-quick-ck"
-                :disabled="(e.dsKind ?? 'MYSQL') === 'CK'" :title="(e.dsKind ?? 'MYSQL') === 'CK' ? '该表已存储在 CK，无需再次同步' : ''"
-                @click="openQuickCk(e)">同步到 CK</el-button>
-              <template v-if="canWrite">
-                <el-button link type="primary" size="small" @click="openEdit(e)">编辑</el-button>
-                <el-dropdown trigger="click">
-                  <el-button link type="primary" size="small">更多<el-icon class="et-caret"><ArrowDown /></el-icon></el-button>
-                  <template #dropdown><el-dropdown-menu>
-                    <el-dropdown-item :icon="CopyDocument" @click="onCopy(e)">复制新表</el-dropdown-item>
-                    <el-dropdown-item :icon="Download" @click="onExtractFields(e)">提取表字段</el-dropdown-item>
-                    <el-dropdown-item :icon="RefreshRight" divided @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
-                    <el-dropdown-item :icon="Odometer" @click="onCalc(e)">重新计算数据量</el-dropdown-item>
-                    <el-dropdown-item :icon="Key" @click="onRebuildIndex(e)">重建去重索引</el-dropdown-item>
-                    <el-dropdown-item v-if="e.state === 'C'" :icon="SwitchButton" divided style="color: #dc2626" @click="onState(e)">置为正式表</el-dropdown-item>
-                    <el-dropdown-item v-else-if="e.state === 'AC'" :icon="SwitchButton" divided @click="onState(e)">设为测试表</el-dropdown-item>
-                  </el-dropdown-menu></template>
-                </el-dropdown>
-              </template>
+              <div class="et-actions">
+                <!-- 1013：收藏星标（空心=未收藏，实心=已收藏；先改本地再发请求，失败回滚见 entryFavorites.ts） -->
+                <button
+                  class="et-fav"
+                  :class="{ on: isFavoriteEntry(e.tableId) }"
+                  type="button"
+                  data-testid="entry-fav"
+                  :title="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏这张表（开启「只看收藏」可只显示收藏的表）'"
+                  :aria-pressed="isFavoriteEntry(e.tableId)"
+                  :aria-label="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏'"
+                  @click="toggleFavoriteEntry(e.tableId)"
+                >
+                  <el-icon :size="13"><component :is="isFavoriteEntry(e.tableId) ? StarFilled : Star" /></el-icon>
+                </button>
+                <el-tooltip content="详情" placement="top">
+                  <span class="et-op-icon" data-testid="entry-detail" @click="openDetail(e)"><el-icon :size="15"><View /></el-icon></span>
+                </el-tooltip>
+                <!-- 已是 CK 存储的表无需再同步，图标置灰且点击被 openQuickCk 拦下 -->
+                <el-tooltip :content="isCkSink(e) ? '该表已存储在 CK，无需再次同步' : '同步表'" placement="top">
+                  <span class="et-op-icon" :class="{ 'is-disabled': isCkSink(e) }" data-testid="entry-quick-ck" @click="openQuickCk(e)"><el-icon :size="15"><Connection /></el-icon></span>
+                </el-tooltip>
+                <template v-if="canWrite">
+                  <el-tooltip content="编辑" placement="top">
+                    <span class="et-op-icon" data-testid="entry-edit" @click="openEdit(e)"><el-icon :size="15"><Edit /></el-icon></span>
+                  </el-tooltip>
+                  <el-dropdown trigger="click">
+                    <span class="et-op-icon" data-testid="entry-more" title="更多"><el-icon :size="15"><MoreFilled /></el-icon></span>
+                    <template #dropdown><el-dropdown-menu>
+                      <el-dropdown-item :icon="CopyDocument" @click="onCopy(e)">复制新表</el-dropdown-item>
+                      <el-dropdown-item :icon="Download" @click="onExtractFields(e)">提取表字段</el-dropdown-item>
+                      <el-dropdown-item :icon="RefreshRight" divided @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
+                      <el-dropdown-item :icon="Odometer" @click="onCalc(e)">重新计算数据量</el-dropdown-item>
+                      <el-dropdown-item :icon="Key" @click="onRebuildIndex(e)">重建去重索引</el-dropdown-item>
+                      <el-dropdown-item v-if="e.state === 'C'" :icon="SwitchButton" divided style="color: #dc2626" @click="onState(e)">置为正式表</el-dropdown-item>
+                      <el-dropdown-item v-else-if="e.state === 'AC'" :icon="SwitchButton" divided @click="onState(e)">设为测试表</el-dropdown-item>
+                    </el-dropdown-menu></template>
+                  </el-dropdown>
+                </template>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -663,6 +668,22 @@ const onEnterSearch = withoutComposition(() => onSearch())
 /* 1013：只看收藏开关（轻量滑动开关 + 状态文字，AGENTS.md 控件视觉约定） */
 .et-fav-only { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; cursor: pointer; }
 .et-fav-only-text { font-size: 12px; color: var(--rc-text, #1e293b); }
+
+/* 操作列：对齐指标中心的行内图标操作（24px 热区 + hover 底色 + el-tooltip 文案） */
+.et-actions { display: flex; align-items: center; gap: 10px; }
+.et-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.et-op-icon:hover { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.et-op-icon.is-disabled { color: var(--rc-muted, #94a3b8); cursor: not-allowed; }
+.et-op-icon.is-disabled:hover { background: transparent; color: var(--rc-muted, #94a3b8); }
 
 /* 1013：收藏星标按钮 */
 .et-fav {

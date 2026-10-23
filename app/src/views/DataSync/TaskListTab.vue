@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Edit, Promotion, Setting, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   isSinkTarget, parseSinkOptions, sanitizeSinkOptions, sinkOptionsProblem, syncApi,
@@ -252,12 +253,17 @@ async function confirmRemove() {
       <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="Number(row.status) === 0 ? 'success' : 'info'" size="small">{{ Number(row.status) === 0 ? '运行中' : '已暂停' }}</el-tag></template></el-table-column>
       <el-table-column prop="cron" label="同步频率" min-width="140" show-overflow-tooltip />
       <el-table-column prop="lastSyncTime" label="最后同步成功" min-width="165" />
-      <el-table-column label="操作" width="250" fixed="right"><template #default="{ row }">
-        <el-button link type="primary" @click="openDetail(row, true)">编辑</el-button>
-        <el-button v-if="Number(row.status) === 0 && Number(row.syncType) === 1" link type="primary" @click="runNow(row)">执行</el-button>
-        <el-button v-if="Number(row.status) === 0 && Number(row.syncType) === 1" link type="primary" @click="openRun([row])">参数执行</el-button>
-        <el-button v-if="Number(row.status) === 0" link @click="action([row.id], 'stop')">关闭</el-button>
-        <template v-else><el-button link @click="action([row.id], 'start')">开启</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template>
+      <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }">
+        <div class="rc-actions">
+          <el-tooltip content="编辑" placement="top"><span class="rc-op-icon" data-testid="task-edit" aria-label="编辑" @click="openDetail(row, true)"><el-icon :size="15"><Edit /></el-icon></span></el-tooltip>
+          <el-tooltip v-if="Number(row.status) === 0 && Number(row.syncType) === 1" content="立即执行" placement="top"><span class="rc-op-icon" data-testid="task-run" aria-label="立即执行" @click="runNow(row)"><el-icon :size="15"><Promotion /></el-icon></span></el-tooltip>
+          <el-tooltip v-if="Number(row.status) === 0 && Number(row.syncType) === 1" content="参数执行" placement="top"><span class="rc-op-icon" data-testid="task-run-params" aria-label="参数执行" @click="openRun([row])"><el-icon :size="15"><Setting /></el-icon></span></el-tooltip>
+          <el-tooltip v-if="Number(row.status) === 0" content="关闭任务" placement="top"><span class="rc-op-icon" data-testid="task-stop" aria-label="关闭任务" @click="action([row.id], 'stop')"><el-icon :size="15"><VideoPause /></el-icon></span></el-tooltip>
+          <template v-else>
+            <el-tooltip content="开启任务" placement="top"><span class="rc-op-icon" data-testid="task-start" aria-label="开启任务" @click="action([row.id], 'start')"><el-icon :size="15"><VideoPlay /></el-icon></span></el-tooltip>
+            <el-tooltip content="删除任务" placement="top"><span class="rc-op-icon is-danger" data-testid="task-delete" aria-label="删除任务" @click="remove(row)"><el-icon :size="15"><Delete /></el-icon></span></el-tooltip>
+          </template>
+        </div>
       </template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @change="load" />

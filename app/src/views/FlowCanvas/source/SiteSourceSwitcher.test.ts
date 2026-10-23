@@ -220,42 +220,26 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sendSnatchWithParam).toHaveBeenCalledWith(expect.objectContaining({ ids: [source.sourceId] }))
   })
 
-  // 0930 右键「复制源」：迁自旧平台「制作源+配置副本（flag=1）/ 仅制作源副本（flag=0）」
-  it('右键复制源：默认新增一套配置（flag=1），名称默认「原名_copy」，归入本网站并复制一份原流程给新源', async () => {
+  // 0930 右键「复制源」；10-23 起只保留「仅制作源副本」（flag=0），新源沿用原源的流程
+  it('右键复制源：flag=0，名称默认「原名_copy」，归入本网站；不复制 / 关联流程，没有配置二选一', async () => {
     const wrapper = await createWrapper()
-    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
-    const copyFlow = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-own')
-    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const copyFlow = vi.spyOn(flowCenterApi, 'copy')
     await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
     await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
 
     expect((wrapper.get('[data-testid="dup-source-name"]').element as HTMLInputElement).value).toBe('原源_copy')
     expect((wrapper.get('[data-testid="dup-source-url"]').element as HTMLInputElement).value).toBe('https://example.com')
+    expect(wrapper.find('[data-testid="dup-source-mode-new"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dup-source-mode-reuse"]').exists()).toBe(false)
     await wrapper.get('[data-testid="dup-source-submit"]').trigger('click')
     await flushPromises()
 
-    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({ sourceId: 'source-a', name: '原源_copy', url: 'https://example.com', flag: 1 })
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({ sourceId: 'source-a', name: '原源_copy', url: 'https://example.com', flag: 0 })
     expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
-    // 0930：新增配置 = 连流程一起复制（节点配置挂在流程上），新源绑到复制出的流程，不挂原流程
-    expect(copyFlow).toHaveBeenCalledWith('flow-1', '原源_copy-流程')
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-own')
-    expect(flowCenterApi.bindSources).not.toHaveBeenCalledWith(['source-new'], 'flow-1')
-    expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
-  })
-
-  it('右键复制源：选「复用原配置」时 flag=0，新源挂原源的流程、不复制流程', async () => {
-    const wrapper = await createWrapper()
-    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
-    const copyFlow = vi.spyOn(flowCenterApi, 'copy')
-    await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
-    await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
-    await wrapper.get('[data-testid="dup-source-mode-reuse"]').setValue(true)
-    await wrapper.get('[data-testid="dup-source-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'source-a', flag: 0 }))
     expect(copyFlow).not.toHaveBeenCalled()
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-1')
+    expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
   })
 
   it('源行只负责进入详情，发起抓取收进右键菜单', async () => {

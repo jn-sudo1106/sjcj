@@ -29,6 +29,8 @@ export type SourceFilter = {
    *  defaultFlowId=21000006 得 256 条（twitter1 的 255 个成员 + 独立源），只匹配默认流程；
    *  flowId 匹配任一生效关联（含从组继承的），defaultFlowId 只匹配默认，两者独立可同时给。 */
   defaultFlowId?: string
+  /** 按主表过滤（1022 会议）：`sourcePaged` 的 `entryTypeId`，匹配源的主表 */
+  entryTypeId?: string
   /** 「我的视图」目录（10-15）：`sourcePaged` 的 `viewCategoryId`。只有 sourcePaged 认，其它按条件的接口不认 */
   viewCategoryId?: string
   /** 系统目录（2026-10-21）：`sourcePaged` 的 `categorys`，逗号分隔、只匹配直属，调用方已展开子级 */
@@ -113,6 +115,7 @@ export function describeFilters(query: SourceFilter): string {
   }
   if (query.flowId) parts.push(`流程 #${query.flowId}`)
   if (query.defaultFlowId) parts.push(`默认流程 #${query.defaultFlowId}`)
+  if (query.entryTypeId) parts.push(`主表 #${query.entryTypeId}`)
   if (query.sourceGroupId) parts.push(`来源组 #${query.sourceGroupId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
   // NULL / NOT NULL 是后端认的空值标记（2026-09-29），照字面写成「URL 含「NULL」」会看不懂

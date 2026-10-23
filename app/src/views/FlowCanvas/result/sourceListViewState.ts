@@ -92,6 +92,7 @@ export function viewStateFilter(state: SourceListViewState): SourceFilter {
     flowId: cond.flowId,
     sourceGroupId: state.sourceGroup || undefined,
     defaultFlowId: cond.defaultFlowId,
+    entryTypeId: cond.entryTypeId,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
     state: state.status === 'all' || state.status === 'disabled' ? undefined : state.status,

@@ -11,7 +11,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery,
-  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, CreateJobsInput, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
@@ -21,6 +21,7 @@ import type {
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   configFromLegacy,
+  createJobsToLegacy,
   configUrlFromLegacy,
   legacyConfigRecord,
   configLogFromLegacy,
@@ -746,6 +747,27 @@ export const sourceApi = {
     return ackFromApiResult(result)
   },
 
+  /**
+   * 批量配定时（2026-10-23，旧源列表「定时任务变更 → 批量配定时」）。
+   *
+   * `POST source/createJobs`，参数全在 query（旧 `method:'post', params`）。和上面 saveSourceCron
+   * 的新建分支是同一个端点，区别是这里照旧弹窗 1:1 多带 `flowId`，且 `configId` 发空串
+   * （批量没有单个节点配置；186 实测不带 configId 报 not present，`configId=` 正常）。
+   * ⚠️ 只会新建：源上已有定时也会再建一条，旧平台就是这个行为。
+   */
+  createJobs: async (input: CreateJobsInput): Promise<Ack> => {
+    const httpParams = createJobsToLegacy(input)
+    if (!httpParams.ids) return { ok: false, message: '缺少源' }
+    if (!httpParams.cron) return { ok: false, message: '缺少 cron 表达式' }
+    const result = await request<unknown>('source/createJobs', { ids: input.sourceIds, cron: httpParams.cron }, {
+      method: 'POST',
+      httpEndpoint: 'source/createJobs',
+      paramsIn: 'query',
+      keepEmptyParams: ['configId'],
+      httpParams,
+    })
+    return ackFromApiResult(result)
+  },
   /**
    * 启用 / 停用定时任务（2026-09-18）。
    *
