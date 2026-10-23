@@ -244,7 +244,7 @@ async function submit() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="快速同步到 CK" width="560px" append-to-body>
+  <el-dialog v-model="visible" title="快速同步" width="560px" append-to-body>
     <div v-loading="loading" class="qck-body">
       <el-result v-if="done" icon="success" title="同步任务已创建" sub-title="可以在任务列表查看、执行和管理同步任务" />
       <el-form v-else-if="entry" label-position="top" class="qck-form">

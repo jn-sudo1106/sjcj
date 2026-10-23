@@ -91,7 +91,7 @@ type QckVm = {
 }
 const vm = (root: VueWrapper) => root.vm as unknown as QckVm
 
-describe('快速同步到 CK 弹窗', () => {
+describe('快速同步 弹窗', () => {
   it('管理员渲染客户下拉：未选客户时不加载 CK 库、确认禁用；切换客户只重拉 CK 库（列不重拉）', async () => {
     const { customerDatabases, tableColumns } = stubSyncApi()
     const root = await mountDialog()

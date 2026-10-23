@@ -90,7 +90,7 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy).toHaveBeenCalledWith(expect.objectContaining({ entryTypeId: '2102157' }))
   })
 
-  it('admin 角色可见写入口白名单 [新建, 更多]；read 角色隐藏写入口但保留只读的「详情」；无「清除缓存」入口', async () => {
+  it('admin 角色可见写入口 [新建, 编辑/更多图标]；read 角色隐藏写入口但保留只读的「详情」图标；无「清除缓存」入口', async () => {
     // 列表需至少 1 行——空列表时行内「更多」触发按钮本就不会渲染，白名单断言会假通过（见 REVIEW-2026-07-24 复盘）
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
@@ -99,10 +99,10 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    // admin 写入口白名单断言（替代旧的「清除缓存」黑名单，避免「假阳性」）
+    // admin 写入口白名单断言（替代旧的「清除缓存」黑名单，避免「假阳性」）；行内操作已图标化
     expect(wrapper.text(), 'admin 缺写入口: 新建').toContain('新建')
-    expect(wrapper.text(), 'admin 缺写入口: 编辑').toContain('编辑')
-    expect(wrapper.findAll('button').some((b) => b.text().startsWith('更多')), 'admin 缺写入口: 更多').toBe(true)
+    expect(wrapper.find('[data-testid="entry-edit"]').exists(), 'admin 缺写入口: 编辑').toBe(true)
+    expect(wrapper.find('[data-testid="entry-more"]').exists(), 'admin 缺写入口: 更多').toBe(true)
     expect(wrapper.text()).not.toContain('清除缓存')
 
     wrapper.unmount()
@@ -111,10 +111,11 @@ describe('EntryTab · 表ID列表', () => {
     await waitForLoad()
 
     // read 角色隐藏写入口；「详情」是只读操作，read 应该保留（不在黑名单里）
-    const writeEntries = ['新建', '编辑', '批量删除']
-    writeEntries.forEach((entry) => expect(wrapper.text(), `read 不应有写入口: ${entry}`).not.toContain(entry))
-    expect(wrapper.findAll('button').some((b) => b.text().startsWith('更多')), 'read 不应有「更多」入口').toBe(false)
-    expect(wrapper.text(), 'read 应保留只读的「详情」').toContain('详情')
+    expect(wrapper.text(), 'read 不应有新建入口').not.toContain('新建')
+    ;['entry-edit', 'entry-more'].forEach((id) => {
+      expect(wrapper.find(`[data-testid="${id}"]`).exists(), `read 不应有写入口: ${id}`).toBe(false)
+    })
+    expect(wrapper.find('[data-testid="entry-detail"]').exists(), 'read 应保留只读的「详情」').toBe(true)
     // 表头勾选列也对 read 隐藏
     expect(wrapper.find('th input, th .el-checkbox').exists()).toBe(false)
   })
@@ -179,7 +180,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    const moreBtn = wrapper.find('[data-testid="entry-more"]')
     await moreBtn.trigger('click')
     await flushPromises()
     const extractItem = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '提取表字段')!
@@ -229,7 +230,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    const moreBtn = wrapper.find('[data-testid="entry-more"]')
     await moreBtn.trigger('click')
     await flushPromises()
     const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '复制新表')!
@@ -253,7 +254,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    const moreBtn = wrapper.find('[data-testid="entry-more"]')
     await moreBtn.trigger('click')
     await flushPromises()
     const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '同步物理表结构')!
@@ -277,7 +278,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    const moreBtn = wrapper.find('[data-testid="entry-more"]')
     await moreBtn.trigger('click')
     await flushPromises()
     const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '重新计算数据量')!
@@ -299,7 +300,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    const moreBtn = wrapper.find('[data-testid="entry-more"]')
     await moreBtn.trigger('click')
     await flushPromises()
     const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '重建去重索引')!
@@ -322,7 +323,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    const moreBtn = wrapper.find('[data-testid="entry-more"]')
     await moreBtn.trigger('click')
     await flushPromises()
     const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '置为正式表')!
@@ -485,7 +486,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    await wrapper.findAll('button').find((b) => b.text() === '详情')!.trigger('click')
+    await wrapper.find('[data-testid="entry-detail"]').trigger('click')
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
@@ -518,7 +519,7 @@ describe('EntryTab · 表ID列表', () => {
     await mountTab()
     await waitForLoad()
 
-    await wrapper.findAll('button').find((b) => b.text() === '详情')!.trigger('click')
+    await wrapper.find('[data-testid="entry-detail"]').trigger('click')
     await flushPromises()
 
     const body = new DOMWrapper(document.body)
@@ -527,8 +528,8 @@ describe('EntryTab · 表ID列表', () => {
     expect((dt!.element.nextElementSibling as HTMLElement).textContent).toBe('CK')
   })
 
-  // 快速同步到 CK 入口（2026-10-22）：仅当后端与同步服务同机时显示；点击打开弹窗并带上当前行
-  it('「同步到 CK」入口：不同机不显示；同机显示且点击把当前行交给弹窗', async () => {
+  // 快速同步到 CK 入口（2026-10-22）：2026-10-23 去掉后端主机门控，任何环境都显示；点击打开弹窗并带上当前行
+  it('「同步到 CK」入口始终显示，点击把当前行交给弹窗', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     // 弹窗打开会走 loadAll，把它的接口全部挡成空
@@ -538,41 +539,26 @@ describe('EntryTab · 表ID列表', () => {
     vi.spyOn(syncApi, 'physicalColumns').mockResolvedValue([])
     await mountTab()
     await waitForLoad()
-    // 测试环境没有 VITE_API_PROXY_TARGET → 当前后端不是 133 同步服务，入口不渲染
-    expect(wrapper.find('[data-testid="entry-quick-ck"]').exists()).toBe(false)
-    wrapper.unmount()
-
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
-    try {
-      await mountTab()
-      await waitForLoad()
-      const btn = wrapper.find('[data-testid="entry-quick-ck"]')
-      expect(btn.exists()).toBe(true)
-      await btn.trigger('click')
-      await flushPromises()
-      const dialog = wrapper.findComponent(QuickCkSyncDialog)
-      expect(dialog.props('modelValue')).toBe(true)
-      expect((dialog.props('entry') as EntryType).tableId).toBe('t1')
-    } finally {
-      vi.unstubAllEnvs()
-    }
+    const btn = wrapper.find('[data-testid="entry-quick-ck"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.classes()).not.toContain('is-disabled')
+    await btn.trigger('click')
+    await flushPromises()
+    const dialog = wrapper.findComponent(QuickCkSyncDialog)
+    expect(dialog.props('modelValue')).toBe(true)
+    expect((dialog.props('entry') as EntryType).tableId).toBe('t1')
   })
 
   it('「同步到 CK」入口：数据源已是 CK 的表置灰，点击不打开弹窗', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
-    try {
-      await mountTab()
-      await waitForLoad()
-      const btn = wrapper.find('[data-testid="entry-quick-ck"]')
-      expect(btn.exists()).toBe(true)
-      expect(btn.attributes('disabled')).toBe('')
-      await btn.trigger('click')
-      await flushPromises()
-      expect(wrapper.findComponent(QuickCkSyncDialog).props('modelValue')).toBe(false)
-    } finally {
-      vi.unstubAllEnvs()
-    }
+    await mountTab()
+    await waitForLoad()
+    const btn = wrapper.find('[data-testid="entry-quick-ck"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.classes()).toContain('is-disabled')
+    await btn.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(QuickCkSyncDialog).props('modelValue')).toBe(false)
   })
 })

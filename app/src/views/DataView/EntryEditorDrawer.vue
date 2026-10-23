@@ -300,7 +300,7 @@ async function submit() {
       <div class="rc-field"><label>数据源类型</label>
         <!-- 切换只改 cfg_entry_type.DS_KIND（查询链路标记），不迁数据；写入始终在 MySQL -->
         <select v-model="form.dsKind" class="rc-input" data-testid="entry-ds-kind">
-          <option value="MYSQL">Mysql</option>
+          <option value="MYSQL">MYSQL</option>
           <option value="CK">CK</option>
         </select>
       </div>
