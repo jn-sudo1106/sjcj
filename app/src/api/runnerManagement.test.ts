@@ -5,6 +5,13 @@ import { runnerManagementApi, type DirectoryLayout } from './runnerManagement'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Runner 管理接口', () => {
+  it('编排保存按流程节点幂等同步部署配置，携带队列及指定代码版本', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ deploymentId: 'deploy1' }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    const input = { sourceNode: { flowId: '123', flowName: '新闻流程', stepId: '456', nodeName: '抓取列表', configId: '1401081' }, queueName: 'news_list', scriptDigest: 'sha256:code' }
+    await runnerManagementApi.ensureNodeDeployment(input)
+    expect(fetchSpy).toHaveBeenCalledWith('/api/runner-management/deployment-configurations/from-node', expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }))
+  })
   it('便携包下载沿用登录凭据，按 ZIP 二进制读取并携带地址和版本', async () => {
     const blob = new Blob(['zip'])
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200,
@@ -213,7 +220,7 @@ describe('Runner 管理接口', () => {
     await expect(runnerManagementApi.instances()).rejects.toThrow('Runner 管理服务不可达')
   })
 
-  it('分配按稳定 runnerId 提交，不使用 IP 与安装目录作为身份', async () => {
+  it('分配按稳定 runnerId 提交，不使用 IP 与实例目录作为身份', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ assignmentId: 'a-1' }) })
     vi.stubGlobal('fetch', fetchSpy)
     await runnerManagementApi.createAssignment({ runnerId: 'r-1', queue: 'news_snt', processorType: 'newslink', releaseDigest: 'sha256:abc', concurrency: 1, enabled: true, environment: 'test' })

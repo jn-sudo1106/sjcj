@@ -46,9 +46,9 @@ const form = reactive({ runnerId: '', scriptDigest: '', concurrency: 1, environm
 let loaded = false
 let statusTimer: ReturnType<typeof setInterval> | undefined
 
-const sectionTitle = computed(() => ({ runners: '运行机器', assignments: '队列运行', releases: 'Runner 版本' })[props.section])
+const sectionTitle = computed(() => ({ runners: '服务器', assignments: '队列运行', releases: 'Runner 版本' })[props.section])
 const filteredRunners = computed(() => runners.value.filter((row) =>
-  [row.ipAddress, row.installDirectory, row.name, row.runnerId].some((text) => text?.toLowerCase().includes(keyword.value.trim().toLowerCase())),
+  [row.ipAddress, row.installDirectory, row.name, row.runnerId, row.osType, row.osVersion].some((text) => text?.toLowerCase().includes(keyword.value.trim().toLowerCase())),
 ))
 const selectedRunners = computed(() => runners.value.filter(row => selectedRunnerIds.value.includes(row.runnerId)))
 const allVisibleSelected = computed(() => filteredRunners.value.length > 0 && filteredRunners.value.every(row => selectedRunnerIds.value.includes(row.runnerId)))
@@ -292,6 +292,10 @@ function runnerVersion(digest: string | null) {
   return digest.startsWith('sha256:') ? digest.slice(7, 19) : digest
 }
 
+function operatingSystem(row: RunnerInstance) {
+  return row.osType || ({ win32: 'Windows', windows: 'Windows', linux: 'Linux', darwin: 'macOS' } as Record<string, string>)[row.platform] || row.platform || '未上报'
+}
+
 function releaseDate(row: ArtifactRelease) {
   const time = row.publishedAt ? Date.parse(row.publishedAt) : NaN
   return Number.isNaN(time) ? -Infinity : time
@@ -309,7 +313,7 @@ function releaseLabel(row: ArtifactRelease) {
 function detailFieldLabel(key: string) {
   if (key === 'publishedAt') return '发布时间（北京时间）'
   if (props.section !== 'runners') return key
-  return ({ actualDigest: '当前 Runner 版本', desiredDigest: '目标 Runner 版本', workerDigests: '队列处理程序摘要', runnerPid: 'Runner 进程 ID', lastHeartbeat: '最近心跳（北京时间）' } as Record<string, string>)[key] || key
+  return ({ actualDigest: '当前 Runner 版本', desiredDigest: '目标 Runner 版本', workerDigests: '队列处理程序摘要', runnerPid: 'Runner 进程 ID', lastHeartbeat: '最近心跳（北京时间）', osType: '操作系统类型', osVersion: '操作系统版本', installDirectory: '实例目录' } as Record<string, string>)[key] || key
 }
 
 function detailEntries() {
@@ -327,11 +331,11 @@ function detailEntries() {
       <el-button v-if="section === 'runners' && canWrite" type="primary" :loading="saving" :disabled="loading || !!error || !selectedRunners.length || !latestRunnerDigest" :title="`将勾选实例升级到最新 Runner ${runnerVersion(latestRunnerDigest)}，自动重启 Runner 主进程`" data-testid="runner-batch-upgrade" @click="upgradeSelectedRunners">一键升级{{ selectedRunners.length ? `（${selectedRunners.length}）` : '' }}</el-button>
       <el-button v-if="section === 'runners' && batchUpgradeResults.length" link @click="batchUpgradeOpen = true">升级结果</el-button>
       <span class="rm-spacer" />
-      <span v-if="section === 'runners'" class="rm-note">每个 Runner 对应一个安装目录，同一台机器可以部署多个</span>
+      <span v-if="section === 'runners'" class="rm-note">每个 Runner 对应一个实例目录，同一台机器可以部署多个</span>
       <el-button v-if="section === 'runners' && canWrite" type="primary" @click="openPackage">下载 Runner 包</el-button>
       <button v-if="canWrite && section === 'runners'" class="rc-btn primary" type="button" :disabled="saving" @click="createEnrollment">远程接入码</button>
       <button v-if="canWrite && section === 'assignments'" class="rc-btn primary" type="button" :disabled="loading || !!error || assignmentOpen" data-testid="assignment-create" @click="openAssignment">新增队列</button>
-      <span v-if="section === 'releases'" class="rm-code-note">生成 Runner 版本后，到运行机器中设置目标版本并升级</span>
+      <span v-if="section === 'releases'" class="rm-code-note">生成 Runner 版本后，到服务器中设置目标版本并升级</span>
       <template v-if="canWrite && section === 'releases'">
         <button class="rc-btn primary" type="button" :disabled="saving" @click="publishRunner">生成 Runner 版本</button>
       </template>
@@ -339,17 +343,19 @@ function detailEntries() {
     <div v-if="error" class="rm-error" role="alert">{{ sectionTitle }}加载失败：{{ error }}。请确认 Runner 管理服务已部署。</div>
     <div v-loading="loading" class="rc-table-scroll rm-table">
       <table v-if="section === 'runners'" class="rc-data-table rm-runner-table">
-        <colgroup><col v-if="canWrite" style="width:38px"><col style="width:9%"><col style="width:20%"><col style="width:13%"><col style="width:5%"><col style="width:6%"><col style="width:18%"><col style="width:15%"><col style="width:14%"></colgroup>
-        <thead><tr><th v-if="canWrite" class="rm-selection"><el-checkbox :model-value="allVisibleSelected" :indeterminate="someVisibleSelected && !allVisibleSelected" :disabled="loading || saving || !filteredRunners.length" aria-label="选择当前筛选的全部实例" data-testid="runner-select-all" @change="selectVisibleRunners(Boolean($event))" /></th><th>机器 IP</th><th>安装目录</th><th>实例</th><th>状态</th><th>队列数</th><th>Runner 版本</th><th title="北京时间（UTC+8）">最近心跳</th><th>操作</th></tr></thead>
+        <colgroup><col v-if="canWrite" style="width:38px"><col style="width:9%"><col style="width:11%"><col style="width:8%"><col style="width:14%"><col style="width:11%"><col style="width:5%"><col style="width:5%"><col style="width:14%"><col style="width:12%"><col style="width:11%"></colgroup>
+        <thead><tr><th v-if="canWrite" class="rm-selection"><el-checkbox :model-value="allVisibleSelected" :indeterminate="someVisibleSelected && !allVisibleSelected" :disabled="loading || saving || !filteredRunners.length" aria-label="选择当前筛选的全部实例" data-testid="runner-select-all" @change="selectVisibleRunners(Boolean($event))" /></th><th>机器 IP</th><th>实例目录</th><th>实例名称</th><th>实例 ID</th><th>操作系统</th><th>状态</th><th>队列数</th><th>Runner 版本</th><th title="北京时间（UTC+8）">最近心跳</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="row in filteredRunners" :key="row.runnerId">
             <td v-if="canWrite" class="rm-selection"><el-checkbox :model-value="selectedRunnerIds.includes(row.runnerId)" :disabled="saving || loading" :aria-label="`选择实例 ${row.ipAddress} ${row.installDirectory}`" :data-testid="`runner-select-${row.runnerId}`" @change="selectRunner(row.runnerId, Boolean($event))" /></td>
             <td>{{ row.ipAddress }}</td><td class="rm-path" :title="row.installDirectory">{{ row.installDirectory }}</td>
-            <td :title="row.runnerId"><span v-if="row.name">{{ row.name }}</span><small class="rm-instance-id" aria-label="Runner 实例 ID" data-testid="runner-instance-id">{{ row.runnerId }}</small><small class="rm-process-note" :title="`最近心跳上报的 Runner 主进程：${formatRunnerHeartbeat(row.lastHeartbeat)}（北京时间）`" data-testid="runner-pid">PID：{{ row.runnerPid || '未上报' }}</small></td><td>{{ runnerStatus(row.status) }}</td><td>{{ row.assignmentCount }}<small v-if="row.workerProcesses != null" class="rm-process-note" :title="row.workerProcesses.map(item => `${item.queue} · 并发 ${item.slot + 1} · PID ${item.pid}`).join('\n')">{{ row.workerProcesses.length }} 个进程</small></td>
+            <td :title="row.name"><span v-if="row.name">{{ row.name }}</span><small class="rm-process-note" :title="`最近心跳上报的 Runner 主进程：${formatRunnerHeartbeat(row.lastHeartbeat)}（北京时间）`" data-testid="runner-pid">PID：{{ row.runnerPid || '未上报' }}</small></td>
+            <td :title="row.runnerId"><span class="rm-instance-id" aria-label="Runner 实例 ID" data-testid="runner-instance-id">{{ row.runnerId }}</span></td>
+            <td class="rm-os" data-testid="runner-os" :title="`${operatingSystem(row)} · ${row.osVersion || '版本未上报，请升级 Runner'}`"><span>{{ operatingSystem(row) }}</span><small>{{ row.osVersion || '版本未上报' }}</small></td><td>{{ runnerStatus(row.status) }}</td><td>{{ row.assignmentCount }}<small v-if="row.workerProcesses != null" class="rm-process-note" :title="row.workerProcesses.map(item => `${item.queue} · 并发 ${item.slot + 1} · PID ${item.pid}`).join('\n')">{{ row.workerProcesses.length }} 个进程</small></td>
             <td class="rm-runner-version" data-testid="runner-version"><span :title="`Runner 心跳上报版本：${row.actualDigest || '未上报'}\n发布时间：${releaseTime(row.actualDigest)}（北京时间）`">当前：{{ runnerVersion(row.actualDigest) }}{{ row.actualDigest && row.actualDigest === latestRunnerDigest ? '（最新）' : '' }}</span><small v-if="row.actualDigest && runnerReleasesByDigest.has(row.actualDigest)" :title="'发布时间（北京时间）'">{{ releaseTime(row.actualDigest) }}</small><small :title="`Runner 升级目标版本：${row.desiredDigest || '未设置'}\n发布时间：${releaseTime(row.desiredDigest)}（北京时间）`">目标：{{ row.desiredDigest ? runnerVersion(row.desiredDigest) : '未设置' }}</small></td>
             <td :title="`${formatRunnerHeartbeat(row.lastHeartbeat)}（北京时间）`" data-testid="runner-heartbeat">{{ formatRunnerHeartbeat(row.lastHeartbeat) }}</td><td><div class="rm-runner-actions"><el-button link type="primary" @click="showDetail(row)">详情</el-button><el-button v-if="canWrite" link type="primary" @click="openUpgrade(row)">设置 Runner 版本</el-button></div></td>
           </tr>
-          <tr v-if="!loading && !filteredRunners.length"><td :colspan="canWrite ? 9 : 8">{{ error ? '服务不可用' : '暂无运行机器' }}</td></tr>
+          <tr v-if="!loading && !filteredRunners.length"><td :colspan="canWrite ? 11 : 10">{{ error ? '服务不可用' : '暂无服务器实例' }}</td></tr>
         </tbody>
       </table>
       <table v-else-if="section === 'assignments'" class="rc-data-table">
@@ -449,7 +455,9 @@ function detailEntries() {
 .rm-path { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .rm-runner-version { min-width: 175px; }.rm-runner-version span, .rm-runner-version small { display: block; }.rm-runner-version small { margin-top: 5px; color: var(--rc-muted); font-size: 11px; }.rm-upgrade-current { color: var(--rc-muted); font-size: 12px; }
 .rm-process-note { display:block; margin-top:5px; font-size:11px; color:var(--rc-muted); }.rm-process-detail { margin-top:24px; border-top:1px solid var(--el-border-color-lighter); padding-top:12px; }.rm-process-detail h3 { font-size:14px; }.rm-process-detail p { color:var(--rc-muted); font-size:12px; line-height:1.6; }
-.rm-instance-id { display:block; margin-top:4px; color:var(--rc-muted); font:11px/1.5 ui-monospace,monospace; white-space:normal; overflow-wrap:anywhere; user-select:all; }
+.rm-instance-id { display:block; font:12px/1.5 ui-monospace,monospace; white-space:normal; overflow-wrap:anywhere; user-select:all; }
+.rm-os span,.rm-os small { display:block; white-space:normal; overflow-wrap:anywhere; }.rm-os small { margin-top:5px; font-size:11px; color:var(--rc-muted); }
+.rm-runner-table th,.rm-runner-table td { padding-left:8px; padding-right:8px; }.rm-runner-version span { white-space:normal; overflow-wrap:anywhere; }
 .rm-runner-table { table-layout:fixed; min-width:1000px; }.rm-runner-table td { overflow:hidden; text-overflow:ellipsis; }.rm-runner-actions { display:flex; flex-direction:column; align-items:flex-start; gap:5px; }.rm-runner-actions .el-button { margin:0; font-size:12px; }
 .rm-assignment-draft { background: var(--rc-primary-bg); }.rm-node-select { width: 290px; }.rm-runner-select { width: 220px; }.rm-env-select { width: 90px; }.rm-concurrency { width: 80px; }
 .rm-node-code { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }.rm-code-note { display: block; margin-top: 4px; color: var(--rc-muted); font-size: 11px; }

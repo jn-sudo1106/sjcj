@@ -213,6 +213,18 @@ describe('Runner 实例页面', () => {
     expect(rows[1]!.text()).toContain('runner-test')
     wrapper.unmount()
   })
+  it('显示 Runner 上报的系统类型与版本，旧实例保留平台类型并提示版本未上报', async () => {
+    vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, platform: 'win32', osType: 'Windows', osVersion: '11 Professional · 10.0.22631' }, { ...instances[1]!, platform: 'linux' }])
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.findAll('th').map(cell => cell.text())).toContain('操作系统')
+    const cells = wrapper.findAll('[data-testid="runner-os"]')
+    expect(cells[0]!.text()).toContain('Windows'); expect(cells[0]!.text()).toContain('10.0.22631')
+    expect(cells[1]!.text()).toContain('Linux'); expect(cells[1]!.text()).toContain('版本未上报')
+    await wrapper.get('input[placeholder="IP、目录、实例名"]').setValue('22631')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
+    wrapper.unmount()
+  })
 
   it('接口不可用时显示真实错误，不使用演示实例', async () => {
     vi.spyOn(runnerManagementApi, 'instances').mockRejectedValue(new Error('服务未部署'))

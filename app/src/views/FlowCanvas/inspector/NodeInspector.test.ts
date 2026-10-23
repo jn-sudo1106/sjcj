@@ -9,6 +9,8 @@ import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { useFlowVersionStore } from '@/stores/flowVersion'
 import { ElMessage } from 'element-plus'
+import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
+vi.mock('@/utils/flow/nodeDeployment', () => ({ syncNodeDeployment: vi.fn(async () => null) }))
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -22,6 +24,43 @@ function mockAssets() {
 // 但 NodeInspector 只 mount 一次、isRule 只在那一次 onMounted 判断，导致真实问题更严重——
 // 打开画布时若没恰好选中规则节点，规则相关数据会永远加载不出来。这里验证懒加载 + 响应式补拉的修复。
 afterEach(() => vi.restoreAllMocks())
+
+describe('编排保存自动同步部署配置', () => {
+  it('配置保存成功后同步当前节点；失败时保留配置并允许只重试部署', async () => {
+    mockAssets(); setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['123'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1401081', configName: '新闻列表' }
+    flow.select('123'); flow.setActiveTab('orchestration')
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ configId: '1401081' })
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1401081', name: '新闻列表' } as never)
+    vi.mocked(syncNodeDeployment).mockRejectedValueOnce(new Error('服务暂时不可用')).mockResolvedValue(null)
+    const wrapper = mount(NodeInspector); await flushPromises()
+    flow.setDedupMode('123', 'table'); await flushPromises()
+    await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises()
+    expect(syncNodeDeployment).toHaveBeenCalledWith(flow.configs['123'], '123')
+    expect(flow.configDirty).toBe(false)
+    expect(wrapper.text()).toContain('部署配置同步失败，可重试')
+    await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises()
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).not.toContain('部署配置同步失败，可重试')
+    wrapper.unmount()
+  })
+  it('配置保存失败时不生成部署配置', async () => {
+    mockAssets(); setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['123'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1401081' }
+    flow.select('123'); flow.setActiveTab('orchestration')
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
+    vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: false, message: '保存失败' })
+    vi.mocked(syncNodeDeployment).mockClear()
+    const wrapper = mount(NodeInspector); await flushPromises()
+    flow.setDedupMode('123', 'table'); await flushPromises()
+    await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises()
+    expect(syncNodeDeployment).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
 
 // 0927 H1：非文件节点输出表未就绪 → 检查器顶部常驻警告条；文件节点 / 已有输出表不显示。
 // （输出表未就绪 = 显式输出表、默认=输入表、快照输出表三者都没有，后端必填 OUT_ENTRY。）

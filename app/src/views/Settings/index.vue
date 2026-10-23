@@ -23,7 +23,7 @@ import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'runners', label: '运行机器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
+  { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
   { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab, runner: true },
   { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab, runner: true },
   { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
@@ -74,7 +74,7 @@ function editDirectory(configId: string) {
     </div>
     <div class="st-content">
       <KeepAlive>
-        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" @edit-directory="editDirectory" />
+        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" :repository-file-path="typeof route.query.filePath === 'string' ? route.query.filePath : ''" :repository-directory-id="typeof route.query.directoryId === 'string' ? route.query.directoryId : ''" @edit-directory="editDirectory" />
       </KeepAlive>
     </div>
   </div>

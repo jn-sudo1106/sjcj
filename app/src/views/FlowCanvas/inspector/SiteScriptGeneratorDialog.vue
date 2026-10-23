@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { generateSiteScript } from '@/api/siteScript'
+import { RouterLink } from 'vue-router'
+import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript } from '@/api/siteScript'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 
@@ -13,9 +14,11 @@ const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL
 只生成抓取代码，不包含 MQ、数据库、流程调度逻辑；导入模块时不要发起网络请求。`
 
 const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string }>()
+const emit = defineEmits<{ saved: [version: PublishedScript, configId: string, queueName: string] }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
 const prompt = ref('')
+const systemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT)
 const code = ref('')
 const candidate = ref('')
 const showCandidate = ref(false)
@@ -71,11 +74,16 @@ const absoluteStoragePath = computed(() => {
   const separator = root.includes('\\') ? '\\' : '/'
   return root ? `${root.replace(/[\\/]$/, '')}${separator}${storagePath.value.replaceAll('/', separator)}` : storagePath.value
 })
-const draftKey = computed(() => JSON.stringify({ code: code.value, prompt: prompt.value.trim(), url: url.value.trim(),
+const draftKey = computed(() => JSON.stringify({ code: code.value, prompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(),
   repositoryId: repositoryId.value, directoryId: directoryId.value, storagePath: storagePath.value, fileNameMode: fileNameMode.value, fileName: fileName.value, sourceFilePath: sourceFilePath.value, sourceGitCommit: sourceGitCommit.value }))
 const isSaved = computed(() => {
   const saved = published.value || loadedVersion.value
   return !!code.value && savedDraftKey.value === draftKey.value && saved?.repoId === repositoryId.value && saved.storagePath === storagePath.value
+})
+const repositoryFileTarget = computed(() => {
+  const saved = published.value || loadedVersion.value
+  if (!saved?.repoId || !saved.storagePath || saved.repoId !== repositoryId.value || saved.storagePath !== storagePath.value) return null
+  return { path: '/settings', query: { tab: 'code-repos', repoId: saved.repoId, filePath: saved.storagePath, ...(saved.directoryId ? { directoryId: saved.directoryId } : {}) } }
 })
 const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value)
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
@@ -149,6 +157,7 @@ async function initialize() {
     repositoryId.value = ''
     fileNameMode.value = 'website'
     prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
+    systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
   }
   openedFor = context
   url.value = props.initialUrl
@@ -246,7 +255,8 @@ async function loadVersion(version: SiteCodeVersion, restoreDestination = true) 
     if (requestId !== versionRequestId || session !== sessionId || !open.value) return
     if (restoreDestination) restoreVersionDestination(result)
     code.value = result.code
-    prompt.value = result.prompt.trim() || props.initialPrompt.trim() || DEFAULT_PROMPT
+    prompt.value = (result.userPrompt ?? result.prompt).trim() || props.initialPrompt.trim() || DEFAULT_PROMPT
+    systemPrompt.value = result.systemPrompt?.trim() || DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
     loadedVersion.value = result
     selectedVersionDigest.value = result.scriptDigest
     published.value = null
@@ -268,11 +278,14 @@ function selectVersion(digest: string) {
   if (version) void loadVersion(version)
 }
 function restorePrompt() { prompt.value = DEFAULT_PROMPT }
+function restoreSystemPrompt() { systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT }
 function cancelGenerate() { controller?.abort(); controller = null; generating.value = false }
 
 async function generate() {
   if (busy.value) return
-  if (!prompt.value.trim()) { error.value = '请填写抓取提示词'; return }
+  if (!systemPrompt.value.trim()) { error.value = '请填写系统提示词'; return }
+  if (!prompt.value.trim()) { error.value = '请填写用户提示词'; return }
+  if (systemPrompt.value.length > 12000 || prompt.value.length > 12000) { error.value = '每份提示词不能超过 12000 字'; return }
   try {
     const parsed = new URL(url.value.trim())
     if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname.includes('.')) throw new Error()
@@ -284,7 +297,7 @@ async function generate() {
   error.value = ''
   warnings.value = []
   try {
-    const result = await generateSiteScript({ prompt: prompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
+    const result = await generateSiteScript({ prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
     if (active.signal.aborted) return
     if (code.value.trim()) {
       candidate.value = result.code
@@ -374,7 +387,7 @@ async function publish() {
   const submittedKey = draftKey.value
   try {
     const result = await runnerManagementApi.publishScript({
-      configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), url: url.value.trim(),
+      configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(),
       queueName: props.queueName.trim(), fileNameMode: fileNameMode.value, configType: props.configType || undefined,
       codeId: published.value?.codeId || loadedVersion.value?.codeId || undefined,
       repositoryId: repositoryId.value,
@@ -383,6 +396,7 @@ async function publish() {
     })
     if (session !== sessionId || !open.value) return
     published.value = result
+    emit('saved', result, configId, props.queueName.trim())
     savedDraftKey.value = submittedKey
     selectedVersionDigest.value = result.scriptDigest
     try {
@@ -435,7 +449,7 @@ function download() {
     <div class="site-script-naming"><span>文件命名方式</span><el-select v-model="fileNameMode" size="small" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select><code :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code></div>
     <div class="site-script-paths">
       <div v-if="selectedRepository && selectedDirectory"><span>保存关联</span><code :title="`${selectedRepository.name} / ${selectedDirectory.name}`" data-testid="site-script-destination">{{ selectedRepository.name }} / {{ selectedDirectory.name }}</code></div>
-      <div><span>仓库文件</span><code :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ storagePath ? absoluteStoragePath : `${absoluteStoragePath || '请先选择仓库'}${absoluteStoragePath ? ' / 请选择保存目录' : ''}` }}</code></div>
+      <div><span>仓库文件</span><RouterLink v-if="repositoryFileTarget" :to="repositoryFileTarget" target="_blank" rel="noopener" class="site-script-repository-link" title="在新标签页查看仓库代码" data-testid="site-script-open-repository"><code :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ absoluteStoragePath }}</code></RouterLink><code v-else :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ storagePath ? absoluteStoragePath : `${absoluteStoragePath || '请先选择仓库'}${absoluteStoragePath ? ' / 请选择保存目录' : ''}` }}</code></div>
       <div v-if="sourceFilePath"><span>来源文件</span><code :title="sourceFilePath" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</code></div>
     </div>
     <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">AI 生成代码</el-button>
@@ -443,10 +457,14 @@ function download() {
   <el-dialog v-model="open" title="AI 代码工作区" width="min(1160px, 96vw)" top="4vh" append-to-body data-testid="site-script-dialog">
     <div v-loading="loading" class="site-script-workspace">
       <section class="site-script-settings" data-testid="site-script-prompt-panel">
-        <div class="site-script-panel-head"><label for="site-script-prompt"><b>抓取提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-prompt" @click="restorePrompt">恢复默认</el-button></div>
-        <div class="site-script-prompt-field">
-          <textarea id="site-script-prompt" v-model="prompt" :disabled="busy" class="site-script-prompt" data-testid="site-script-prompt" placeholder="说明列表页结构、提取字段及详情页要求" />
-        </div>
+        <section class="site-script-prompt-group">
+          <div class="site-script-panel-head"><label for="site-script-system-prompt"><b>系统提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-system-prompt" @click="restoreSystemPrompt">恢复默认</el-button></div>
+          <div class="site-script-prompt-field"><textarea id="site-script-system-prompt" v-model="systemPrompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-system-prompt" placeholder="定义模型角色、代码规范和输出要求" /></div>
+        </section>
+        <section class="site-script-prompt-group">
+          <div class="site-script-panel-head"><label for="site-script-prompt"><b>用户提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-prompt" @click="restorePrompt">恢复默认</el-button></div>
+          <div class="site-script-prompt-field"><textarea id="site-script-prompt" v-model="prompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-prompt" placeholder="说明本次抓取需求、列表页结构、提取字段及详情页要求" /></div>
+        </section>
         <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || codeLoading || publishing || directoriesLoading" data-testid="site-script-generate" @click="generate">{{ code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating" @click="cancelGenerate">取消生成</el-button><span v-else>生成后可在右侧编辑、保存</span></div>
       </section>
       <section v-loading="codeLoading" class="site-script-editor-panel" data-testid="site-script-code-panel">
@@ -459,6 +477,7 @@ function download() {
         </div>
         <div class="site-script-editor-toolbar">
           <el-button size="small" :disabled="busy || !selectedDirectory || !!directoriesError" data-testid="site-script-choose-repo-file" @click="toggleFileChooser">选择仓库文件</el-button>
+          <RouterLink v-if="repositoryFileTarget" :to="repositoryFileTarget" target="_blank" rel="noopener" class="site-script-repository-link" data-testid="site-script-workspace-repository">查看仓库</RouterLink>
           <span class="site-script-toolbar-spacer" />
           <el-button v-if="code" size="small" :disabled="showCandidate" @click="copyToClipboard(code, 'Python 代码')">复制</el-button>
           <el-button v-if="code" size="small" :disabled="showCandidate" data-testid="site-script-download" @click="download">下载</el-button>
@@ -487,6 +506,9 @@ function download() {
 
 <style scoped>
 .site-script-configuration { display: grid; min-width: 0; gap: 10px; background: var(--rc-card); }
+.site-script-repository-link { min-width: 0; color: var(--rc-primary); font-size: 12px; text-decoration: none; }
+.site-script-repository-link:hover { text-decoration: underline; }
+.site-script-paths .site-script-repository-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-open-button { width: 100%; margin: 0; }
 .site-script-context { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--rc-muted); font-size: 11px; }.site-script-context span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-destination-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 10px; }
@@ -502,6 +524,7 @@ function download() {
 .site-script-input, .site-script-prompt, .site-script-code { box-sizing: border-box; width: 100%; border: 1px solid var(--rc-border); border-radius: 6px; padding: 9px 10px; background: var(--rc-card); color: var(--rc-text); font-size: 12px; outline: none; }
 .site-script-input:focus, .site-script-prompt:focus, .site-script-code:focus { border-color: var(--rc-primary); }
 .site-script-prompt-field { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 6px; }.site-script-prompt { flex: 1; min-height: 100px; line-height: 1.7; resize: none; }
+.site-script-prompt-group { display:flex; flex:1; min-height:0; flex-direction:column; gap:6px; }
 .site-script-generation { display: flex; align-items: center; gap: 10px; }.site-script-generation span { color: var(--rc-muted); font-size: 11px; }
 .site-script-version-select { flex: 1; min-width: 0; margin-left: 12px; }
 .site-script-paths { display: grid; gap: 5px; padding: 10px 12px; border-radius: 6px; background: var(--rc-primary-bg); }.site-script-paths div { display: flex; gap: 8px; min-width: 0; font-size: 11px; }.site-script-paths span { flex: 0 0 56px; color: var(--rc-muted); }.site-script-paths code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }

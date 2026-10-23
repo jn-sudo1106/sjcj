@@ -80,7 +80,7 @@ onUnmounted(() => { active = false; stopPolling(); ++sequence })
       <el-button :icon="Refresh" circle :loading="loading" :disabled="!!busy" aria-label="刷新处理进程" @click="refresh" />
     </div>
     <el-alert v-if="error" :title="`处理进程请求失败：${error}`" type="error" :closable="false" show-icon />
-    <div v-if="unsupported.length" class="pp-upgrade"><span>{{ unsupported.length }} 个实例尚不支持单进程关闭，需要升级 Runner。</span><el-button link type="primary" @click="upgrade">前往运行机器</el-button></div>
+    <div v-if="unsupported.length" class="pp-upgrade"><span>{{ unsupported.length }} 个实例尚不支持单进程关闭，需要升级 Runner。</span><el-button link type="primary" @click="upgrade">前往服务器</el-button></div>
     <div class="pp-summary"><span v-for="row in visibleRunners" :key="row.runnerId" :title="label(row)">{{ row.installDirectory }} · {{ row.workerProcesses == null ? '进程未上报' : `${row.workerProcesses.length} 个进程` }}{{ row.status === 'offline' ? '（离线）' : '' }}</span></div>
     <div v-loading="loading" class="pp-table-scroll">
       <table class="rc-data-table pp-table"><thead><tr><th>Runner 实例</th><th>启动文件 / 运行目录</th><th>队列</th><th>并发序号</th><th>PID</th><th>状态</th><th>操作</th></tr></thead><tbody>

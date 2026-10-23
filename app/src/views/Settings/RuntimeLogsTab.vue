@@ -23,6 +23,11 @@ const loading = ref(false), detailLoading = ref(false), outputLoading = ref(fals
 const error = ref(''), detailError = ref(''), outputError = ref('')
 const outputNotice = ref('')
 const streamId = ref(''), lines = ref<RuntimeLogLine[]>([]), cursor = ref(0), firstCursor = ref(0), hasEarlier = ref(false)
+const streamChosenManually = ref(false)
+const sortedStreams = computed(() => [...(detail.value?.streams || [])].sort((a, b) => {
+  const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity
+  return stamp(b.updatedAt) - stamp(a.updatedAt) || a.streamId.localeCompare(b.streamId)
+}))
 const follow = ref(true), search = ref(''), errorsOnly = ref(false), consoleBox = ref<HTMLElement>()
 const runtimeId = computed(() => typeof route.query.runtimeId === 'string' ? route.query.runtimeId : '')
 const queryText = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : ''
@@ -43,6 +48,15 @@ const problem = (e: unknown) => e instanceof Error ? e.message : String(e)
 const time = (value?: string | null) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
 const statusLabel = (row: RuntimeLogRecord) => row.status === 'success' ? row.kind === 'delivery' ? '下发成功' : row.kind === 'start' ? '启动已确认' : '已停止' : statuses[row.status] || row.status
 const statusType = (status: string) => status === 'failed' || status === 'paused' ? 'danger' : status === 'success' || status === 'running' ? 'success' : 'info'
+function instanceContext(row: RuntimeLogRecord) {
+  const machine = machines.value.find(item => item.runnerId === row.runnerId)
+  // Preserve historical identity after an instance is renamed or removed.
+  return {
+    name: row.snapshot.runnerName || machine?.name || '',
+    ip: row.snapshot.ipAddress || machine?.ipAddress || 'IP 未上报',
+    directory: row.snapshot.installDirectory || machine?.installDirectory || '实例目录未上报',
+  }
+}
 function stopPoll() { clearTimeout(timer); timer = undefined }
 function poll() {
   stopPoll()
@@ -58,7 +72,7 @@ async function load(background = false) {
     if (!active || seq !== listSeq) return
     rows.value = result.items; total.value = result.total; error.value = ''
     const requested = typeof route.query.recordId === 'string' ? route.query.recordId : ''
-    const requestedRecord = processContext.value ? result.items.find(row => row.recordId === requested)?.recordId : requested
+    const requestedRecord = result.items.find(row => row.recordId === requested)?.recordId
     if (!selected.value && (requestedRecord || result.items[0])) await select(requestedRecord || result.items[0]!.recordId)
     else if (selected.value) await loadDetail(selected.value, background)
   } catch (e) { if (active && seq === listSeq) error.value = problem(e) }
@@ -67,7 +81,7 @@ async function load(background = false) {
 async function refresh() { stopPoll(); await load(); poll() }
 function resetSelection() {
   ++detailSeq; ++outputSeq; selected.value = ''; detail.value = null; rows.value = []; total.value = 0
-  detailError.value = ''; outputError.value = ''; outputNotice.value = ''; streamId.value = ''; lines.value = []
+  detailError.value = ''; outputError.value = ''; outputNotice.value = ''; streamId.value = ''; streamChosenManually.value = false; lines.value = []
   detailLoading.value = false; outputLoading.value = false; cursor.value = 0; firstCursor.value = 0; hasEarlier.value = false
 }
 async function query() { filters.page = 1; resetSelection(); await refresh() }
@@ -78,7 +92,7 @@ function applyScope() {
   resetSelection()
 }
 async function select(id: string) {
-  selected.value = id; detail.value = null; streamId.value = ''; lines.value = []; cursor.value = 0; firstCursor.value = 0
+  selected.value = id; detail.value = null; streamId.value = ''; streamChosenManually.value = false; lines.value = []; cursor.value = 0; firstCursor.value = 0
   ++outputSeq; detailError.value = ''; outputError.value = ''; outputNotice.value = ''; hasEarlier.value = false; follow.value = true; tab.value = processContext.value ? 'output' : 'events'; scrollTop.value = 0
   await loadDetail(id)
 }
@@ -89,16 +103,24 @@ async function loadDetail(id: string, background = false) {
     const item = await runnerManagementApi.runtimeLogDetail(id)
     if (!active || seq !== detailSeq || selected.value !== id) return
     detail.value = item; detailError.value = ''
-    if (!streamId.value && item.streams[0]) await switchStream(item.streams[0].streamId)
+    if (!item.streams.some(stream => stream.streamId === streamId.value)) streamChosenManually.value = false
+    const nextStream = streamChosenManually.value ? streamId.value : sortedStreams.value[0]?.streamId || ''
+    if (nextStream !== streamId.value) await switchStream(nextStream)
     else if ((!background || follow.value) && streamId.value) await output()
   } catch (e) { if (active && seq === detailSeq && selected.value === id) detailError.value = problem(e) }
   finally { if (seq === detailSeq) detailLoading.value = false }
 }
 async function switchStream(id: string) {
+  ++outputSeq; outputLoading.value = false; outputError.value = ''; outputNotice.value = ''
   streamId.value = id; lines.value = []; cursor.value = 0; firstCursor.value = 0; hasEarlier.value = false; scrollTop.value = 0
   await output()
 }
-function selectStream(value: unknown) { if (typeof value === 'string') void switchStream(value) }
+function selectStream(value: unknown) {
+  if (typeof value === 'string' && detail.value?.streams.some(stream => stream.streamId === value)) {
+    streamChosenManually.value = true
+    void switchStream(value)
+  }
+}
 async function output(earlier = false) {
   if (!streamId.value) return
   const id = streamId.value, seq = ++outputSeq
@@ -139,6 +161,14 @@ async function download() {
   finally { downloading.value = false }
 }
 function clearBinding() { void router.replace({ path: '/settings', query: { tab: 'runtime-logs' } }) }
+async function changeInstance(value: unknown) {
+  if (runtimeId.value || processContext.value || queryText('recordId') || queryText('assignmentId')) {
+    // Switching Runner leaves the previous process/binding scope entirely.
+    await router.replace({ path: '/settings', query: { tab: 'runtime-logs', ...(typeof value === 'string' && value ? { runnerId: value } : {}) } })
+  } else {
+    await query()
+  }
+}
 async function openSettings() {
   settingsOpen.value = true; settingsLoading.value = true; settingsError.value = ''
   try { settings.value = await runnerManagementApi.runtimeLogPolicy() } catch (e) { settingsError.value = problem(e) }
@@ -167,14 +197,18 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
   <section class="rl-page" data-testid="settings-runtime-logs">
     <div class="rl-filters">
       <el-input v-model="filters.keyword" clearable :prefix-icon="Search" placeholder="部署名称、流程节点、配置 ID 或 MQ" aria-label="搜索运行日志" @keyup.enter="query" />
-      <el-select v-model="filters.runnerId" :disabled="processContext" filterable clearable placeholder="全部机器" aria-label="日志机器" @change="query"><el-option v-for="machine in machines" :key="machine.runnerId" :value="machine.runnerId" :label="`${machine.name} · ${machine.ipAddress} · ${machine.installDirectory}`" /></el-select>
+      <el-select v-model="filters.runnerId" filterable clearable placeholder="全部实例" aria-label="日志实例" @change="changeInstance">
+        <el-option v-for="machine in machines" :key="machine.runnerId" :value="machine.runnerId" :label="`${machine.ipAddress} · ${machine.installDirectory} · ${machine.runnerId} · ${machine.name}`" class="rl-instance-option">
+          <strong>{{ machine.ipAddress }} · {{ machine.name }}</strong><small>{{ machine.installDirectory }}</small><small>实例 ID：{{ machine.runnerId }}</small>
+        </el-option>
+      </el-select>
       <el-select v-model="filters.kind" :disabled="processContext" placeholder="全部类型" aria-label="日志类型" @change="query"><el-option label="全部类型" value="" /><el-option v-for="(label, key) in kinds" :key="key" :value="key" :label="label" /></el-select>
       <el-select v-model="filters.status" placeholder="全部结果" aria-label="日志结果" @change="query"><el-option label="全部结果" value="" /><el-option v-for="(label, key) in statuses" :key="key" :value="key" :label="label" /></el-select>
       <el-select v-model="filters.period" aria-label="日志时间范围" @change="query"><el-option label="最近 24 小时" value="24" /><el-option label="最近 7 天" value="168" /><el-option label="全部时间" value="all" /></el-select>
       <el-button :icon="Search" aria-label="查询运行日志" @click="query" /><el-button :icon="Refresh" circle :loading="loading" aria-label="刷新运行日志" @click="refresh" />
       <el-button v-if="auth.role === 'admin'" link @click="openSettings">日志设置</el-button>
     </div>
-    <div v-if="processContext" class="rl-context" data-testid="process-log-context">当前进程：PID {{ queryText('processPid') }} · 并发 {{ Number(queryText('processSlot')) + 1 }} · {{ machines.find(row => row.runnerId === queryText('runnerId'))?.installDirectory || queryText('runnerId') }}<el-button link @click="clearBinding">查看全部日志</el-button></div>
+    <div v-if="processContext" class="rl-context" data-testid="process-log-context">当前进程：PID {{ queryText('processPid') }} · 并发 {{ Number(queryText('processSlot')) + 1 }} · 实例 ID：{{ queryText('runnerId') }}<el-button link @click="changeInstance(queryText('runnerId'))">查看实例日志</el-button><el-button link @click="clearBinding">查看全部日志</el-button></div>
     <div v-else-if="runtimeId" class="rl-context">当前绑定：{{ detail?.snapshot.name || runtimeId }}<el-button link @click="clearBinding">查看全部绑定</el-button></div>
     <el-alert v-if="error" :title="`日志查询失败：${error}`" type="error" :closable="false" show-icon />
     <div class="rl-workspace">
@@ -183,7 +217,10 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
         <div class="rl-record-list">
           <button v-for="row in rows" :key="row.recordId" class="rl-record" :class="{ active: selected === row.recordId }" type="button" data-testid="log-record" @click="select(row.recordId)">
             <span class="rl-record-top"><b>{{ kinds[row.kind] }}</b><el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row) }}</el-tag></span>
-            <strong>{{ row.snapshot.name || '未关联部署配置' }}</strong><small>{{ row.snapshot.runnerName }} · {{ row.snapshot.ipAddress }}</small>
+            <strong>{{ row.snapshot.name || '未关联部署配置' }}</strong>
+            <small>{{ instanceContext(row).ip }}<template v-if="instanceContext(row).name"> · {{ instanceContext(row).name }}</template></small>
+            <small class="rl-record-directory" data-testid="log-record-directory" :title="instanceContext(row).directory">{{ instanceContext(row).directory }}</small>
+            <small class="rl-instance-id" data-testid="log-record-instance-id">实例 ID：{{ row.runnerId || '未上报' }}</small>
             <small>{{ row.snapshot.sourceNode?.nodeName || row.snapshot.entryPoint || row.snapshot.directoryTemplate }}</small><small>{{ time(row.requestedAt) }}</small>
             <span v-if="row.error" class="rl-error-summary" :title="row.error">{{ row.error }}</span>
           </button>
@@ -194,7 +231,7 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
       <div class="rl-detail" v-loading="detailLoading">
         <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" /><el-empty v-else-if="!detail" description="选择一条记录查看日志" />
         <template v-if="detail">
-          <header class="rl-detail-header"><div><strong>{{ kinds[detail.kind] }} · {{ detail.snapshot.name || '运行详情' }}</strong><small>{{ detail.snapshot.ipAddress }} · {{ detail.snapshot.installDirectory }}</small></div><el-tag :type="statusType(detail.status)">{{ statusLabel(detail) }}</el-tag></header>
+          <header class="rl-detail-header"><div><strong>{{ kinds[detail.kind] }} · {{ detail.snapshot.name || '运行详情' }}</strong><small>{{ instanceContext(detail).ip }} · {{ instanceContext(detail).directory }}</small><small class="rl-instance-id" data-testid="log-detail-instance-id">Runner 实例 ID：{{ detail.runnerId || '未上报' }}<template v-if="detail.run?.pid"> · PID：{{ detail.run.pid }} · 并发：{{ detail.run.slot + 1 }}</template></small></div><el-tag :type="statusType(detail.status)">{{ statusLabel(detail) }}</el-tag></header>
           <el-alert v-if="detail.error" :title="detail.error" type="error" :closable="false" />
           <el-alert v-if="programError" :title="`程序错误：${programError}`" type="error" :closable="false" show-icon data-testid="program-error"><el-button link type="danger" @click="tab = 'output'">查看完整程序输出</el-button></el-alert>
           <el-alert v-if="detail.status === 'unknown'" :title="`运行状态未确认，最后心跳：${formatRunnerHeartbeat(detail.lastHeartbeat)}（北京时间）`" type="warning" :closable="false" />
@@ -206,7 +243,7 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
           </div>
           <div v-else-if="tab === 'output'" class="rl-output" role="tabpanel" aria-labelledby="log-tab-output">
             <div class="rl-output-tools"><el-input v-model="search" clearable placeholder="搜索已加载日志" aria-label="搜索程序输出" /><el-checkbox v-model="errorsOnly">错误关键词</el-checkbox><el-checkbox v-model="follow" @change="follow && output()">跟随最新</el-checkbox><el-button link :disabled="!streamId || outputLoading" @click="output()">刷新</el-button><el-button link :disabled="!lines.length" @click="copy">复制</el-button><el-button :icon="Download" link :disabled="!streamId" :loading="downloading" @click="download">下载</el-button></div>
-            <el-select v-if="detail.streams.length > 1" :model-value="streamId" aria-label="选择日志流" @update:model-value="selectStream"><el-option v-for="stream in detail.streams" :key="stream.streamId" :value="stream.streamId" :label="stream.streamId" /></el-select>
+            <el-select v-if="detail.streams.length > 1" :model-value="streamId" aria-label="选择日志流" @update:model-value="selectStream"><el-option v-for="(stream, index) in sortedStreams" :key="stream.streamId" :value="stream.streamId" :label="`${stream.streamId} · ${time(stream.updatedAt)}${index === 0 ? ' · 最新' : ''}`" /></el-select>
             <el-alert v-if="outputError" :title="outputError" type="error" :closable="false" />
             <div class="rl-output-note"><span>{{ outputNotice || `显示已加载的 ${lines.length} 行；检索范围为当前窗口，错误关键词不代表执行结果。` }}</span><el-button v-if="hasEarlier" link :disabled="outputLoading" @click="follow = false; output(true)">加载更早日志</el-button></div>
             <div v-if="streamId" ref="consoleBox" class="rl-console" data-testid="log-console" @scroll="scrolled"><div :style="{ height: `${visibleLines.length * 24}px`, position: 'relative' }"><div class="rl-console-window" :style="{ transform: `translateY(${windowStart * 24}px)` }"><div v-for="line in renderedLines" :key="`${line.seq}:${line.index}`" class="rl-line" :title="line.text"><time>{{ time(line.time) }}</time><code>{{ line.text }}</code></div></div></div></div>
@@ -229,6 +266,13 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
 
 <style scoped>
 .rl-page { display:flex; flex:1; min-height:0; flex-direction:column; gap:12px; }
+.rl-instance-option { height:auto; line-height:1.5; padding-top:8px; padding-bottom:8px; }
+.rl-instance-option strong,.rl-instance-option small { display:block; font-size:12px; }
+.rl-instance-option small { color:var(--el-text-color-secondary); }
+.rl-record small.rl-instance-id,.rl-record small.rl-record-directory { white-space:normal; overflow-wrap:anywhere; }
+.rl-instance-id { font-family:var(--el-font-family); user-select:all; }
+.rl-detail-header > div { min-width:0; }
+.rl-detail-header > .el-tag { flex-shrink:0; }
 .rl-filters { display:flex; gap:8px; align-items:center; padding:12px; border:1px solid var(--el-border-color-light); border-radius:10px; background:var(--el-bg-color); }
 .rl-filters > .el-input { flex:1; min-width:170px; }.rl-filters > .el-select { width:130px; flex-shrink:0; }.rl-filters > .el-select:first-of-type { width:180px; }.rl-filters .el-button { margin-left:0; }
 .rl-context { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--el-text-color-secondary); }

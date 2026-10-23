@@ -49,6 +49,8 @@ import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import { siteScriptAiAvailable } from '@/constants/deployGates'
+import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
+import type { PublishedScript } from '@/api/runnerManagement'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
 // 编辑对象来自节点编辑上下文（0917）：画布右侧配置区 = 全局 flow store，
@@ -1347,6 +1349,16 @@ async function onGenerateScript(
 
 const workbenchOpen = ref(false)
 const siteScriptOpen = ref(false)
+async function onSiteScriptSaved(version: PublishedScript, configId: string, queueName: string) {
+  const node = cfg.value, nodeId = id.value
+  if (!node || node.configId !== configId) return
+  try {
+    const deployment = await syncNodeDeployment(node, nodeId, version.scriptDigest, queueName)
+    if (deployment) ElMessage.success('代码已关联到对应流程节点的部署配置')
+  } catch (e) {
+    ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存编排配置重试`)
+  }
+}
 // 部署环境还没有站点脚本生成服务，入口先隐藏（见 siteScriptAiAvailable）
 const siteScriptAvailable = siteScriptAiAvailable()
 const hasSiteScriptMode = computed(() => !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value && siteScriptAvailable)
@@ -2240,6 +2252,7 @@ function onTestScript() {
       :config-id="cfg?.configId"
       :queue-name="siteScriptQueue"
       :config-type="siteScriptConfigType"
+      @saved="onSiteScriptSaved"
     />
   </div>
   <RuleWorkbenchDialog

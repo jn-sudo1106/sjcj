@@ -16,6 +16,9 @@ export interface RunnerInstance {
   ipAddress: string
   installDirectory: string
   platform: string
+  /** Runner 上报的实际操作系统；旧实例尚未上报时为空。 */
+  osType?: string | null
+  osVersion?: string | null
   capabilities: string[]
   status: 'online' | 'offline' | 'upgrading' | 'error'
   lastHeartbeat: string | null
@@ -123,9 +126,6 @@ export interface PublishedScript {
   storagePath?: string
   deliveryPath?: string
   repoPath?: string | null
-  /** 站点代码版本 ID / 站点主机：SiteScriptGeneratorDialog 发布后续发与测试数据在用，补上类型（2026-10-12，构建被 vue-tsc 挡住） */
-  codeId?: string
-  siteHost?: string
 }
 
 export interface SiteCodeVersion extends PublishedScript {
@@ -137,6 +137,8 @@ export interface SiteCodeVersion extends PublishedScript {
   deliveryPath: string
   publishedAt: string
   prompt: string
+  systemPrompt?: string
+  userPrompt?: string
   url: string
   /** 节点抓取类型（configType）；生成代码时筛选可选仓库。 */
   configType?: string
@@ -479,6 +481,7 @@ export const runnerManagementApi = {
   deploymentConfigurations: (keyword = '') => list<DeploymentConfiguration>(`/deployment-configurations?keyword=${encodeURIComponent(keyword)}`),
   deploymentConfiguration: (id: string) => request<DeploymentConfiguration>(`/deployment-configurations/${encodeURIComponent(id)}`),
   saveDeploymentConfiguration: (layout: DeploymentConfiguration) => request<DeploymentConfiguration>(layout.deploymentId ? `/deployment-configurations/${encodeURIComponent(layout.deploymentId)}` : '/deployment-configurations', 'POST', layout),
+  ensureNodeDeployment: (input: { sourceNode: DeploymentSourceNode; queueName: string; scriptDigest?: string }) => request<DeploymentConfiguration>('/deployment-configurations/from-node', 'POST', input),
   runtimeConfigurations: () => list<RuntimeConfiguration>('/runtime-configurations'),
   saveRuntimeConfiguration: (input: RuntimeConfigurationInput) => request<RuntimeConfiguration>('/runtime-configurations', 'POST', input),
   startRuntimeProgram: (id: string, revision: string) => request<RuntimeConfiguration>(`/runtime-configurations/${encodeURIComponent(id)}/start`, 'POST', { revision }),
@@ -554,7 +557,7 @@ export const runnerManagementApi = {
   },
   setDesiredRunner: (runnerId: string, digest: string) => request<{ runnerId: string; digest: string }>(`/runners/${encodeURIComponent(runnerId)}/desired-runner`, 'POST', { digest }),
   scriptBinding: (configId: string) => request<ScriptBinding | null>(`/configs/${encodeURIComponent(configId)}/script-release`),
-  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
+  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
   adoptScript: (configId: string, scriptDigest: string) => request<ScriptBinding>(`/configs/${encodeURIComponent(configId)}/script-release`, 'POST', { scriptDigest }),
   siteCodeVersions: (configId: string, queueName: string) => list<SiteCodeVersion>(`/site-scripts/versions?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}`),
   siteCodeCatalog: () => list<SiteCodeVersion & { environments: ('test' | 'prd')[] }>('/site-scripts/catalog'),

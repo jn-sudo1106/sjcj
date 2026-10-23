@@ -20,6 +20,7 @@ import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
@@ -138,8 +139,8 @@ const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // （0824-00 §5.3）；脏标只影响文案和按钮可用性。
 // 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
-const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
-const footNote = computed(() => (readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || !!deploymentError.value)
+const footNote = computed(() => (readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : deploymentError.value ? '配置已保存，部署配置同步失败，可重试' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）。
 //
@@ -148,6 +149,22 @@ const footNote = computed(() => (readonly.value ? '当前版本只读（草稿�
 //   - 保存前的影响范围确认删除 → 直接落库，只在按钮旁留一行「N 个源在用」灰字；
 //   - 换配置的入口在配置条上的「更换」（NodeConfigSelect.vue）。
 const saving = ref(false)
+const savingDeployment = ref(false)
+const deploymentError = ref('')
+watch(id, () => { deploymentError.value = '' })
+
+async function updateDeployment(node: NodeConfig, nodeId: string) {
+  savingDeployment.value = true
+  deploymentError.value = ''
+  try {
+    const deployment = await syncNodeDeployment(node, nodeId)
+    if (deployment) ElMessage.success('对应流程节点的部署配置已生成或更新')
+  } catch (e) {
+    const detail = (e as Error)?.message ?? String(e)
+    if (cfg.value === node) deploymentError.value = detail
+    ElMessage.warning(`节点配置已保存，但部署配置同步失败：${detail}；可再次点击保存重试`)
+  } finally { savingDeployment.value = false }
+}
 
 function reportWriteError(action: string, e: unknown) {
   const message = (e as Error)?.message ?? String(e)
@@ -193,7 +210,9 @@ function ensureConfigNameFromTitle() {
 
 async function onSaveNodeConfig() {
   const node = cfg.value
-  if (!node || saving.value) return
+  if (!node || saving.value || savingDeployment.value) return
+  const savedNodeId = id.value, savedTab = tab.value
+  if (deploymentError.value && !nodeConfigDirty.value) { await updateDeployment(node, savedNodeId); return }
   if (isRuleNode(node)) {
     const bindingError = validateTableBinding(
       node.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] },
@@ -219,6 +238,7 @@ async function onSaveNodeConfig() {
     }
   }
   if (saved) await syncSourceCron(node)
+  if (saved && savedTab === 'orchestration') await updateDeployment(node, savedNodeId)
 }
 
 /**
@@ -504,10 +524,10 @@ onMounted(async () => {
           class="rc-btn primary"
           type="button"
           data-testid="node-config-save"
-          :disabled="!canSaveNodeConfig || saving"
+          :disabled="!canSaveNodeConfig || saving || savingDeployment"
           :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
-        >{{ saving ? '保存中…' : '保存' }}</button>
+        >{{ saving || savingDeployment ? '保存中…' : '保存' }}</button>
       </div>
     </template>
 

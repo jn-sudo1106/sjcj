@@ -7,7 +7,7 @@ import { useDictStore } from '@/stores/dict'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type CodeRepositoryInput, type CodeRepositoryVerification } from '@/api/runnerManagement'
 import RepositoryDirectoriesPanel from './RepositoryDirectoriesPanel.vue'
 
-const props = defineProps<{ repositoryId?: string }>()
+const props = defineProps<{ repositoryId?: string; repositoryFilePath?: string; repositoryDirectoryId?: string }>()
 
 const canWrite = computed(() => useAuthStore().role === 'admin')
 const dict = useDictStore()
@@ -31,6 +31,8 @@ const selectedRepoId = ref('')
 const filesRepo = computed(() => repos.value.find((repo) => repo.repoId === selectedRepoId.value) ?? null)
 const selectedDirectory = ref<CodeRepositoryDirectory | null>(null)
 const repositoryDirectories = ref<CodeRepositoryDirectory[]>([])
+let directoriesReady = false
+let linkedTargetKey = ''
 const fileRows = ref<CodeRepositoryFile[]>([])
 const fileView = ref<'directory' | 'paths'>('directory')
 const folderPath = ref('')
@@ -79,6 +81,7 @@ async function load() {
   for (const repoId of Object.keys(verification)) delete verification[repoId]
   try {
     repos.value = await runnerManagementApi.codeRepositories()
+    if (props.repositoryId && !repos.value.some(repo => repo.repoId === props.repositoryId)) throw new Error('指定的代码仓库不存在或已删除')
     if (props.repositoryId && repos.value.some(repo => repo.repoId === props.repositoryId) && props.repositoryId !== selectedRepoId.value) await selectRepo(props.repositoryId)
     if (!visible.value.some((repo) => repo.repoId === selectedRepoId.value)) await selectRepo(visible.value[0]?.repoId ?? '')
     else if (selectedRepoId.value) await loadFiles(1)
@@ -238,6 +241,8 @@ async function selectRepo(repoId: string) {
   selectedRepoId.value = repoId
   selectedDirectory.value = null
   repositoryDirectories.value = []
+  directoriesReady = false
+  linkedTargetKey = ''
   folderPath.value = ''
   fileRows.value = []
   fileKeyword.value = ''
@@ -272,6 +277,8 @@ function openFolder(path: string) {
 }
 function directoriesLoaded(rows: CodeRepositoryDirectory[]) {
   repositoryDirectories.value = rows
+  directoriesReady = true
+  if (props.repositoryFilePath && selectedRepoId.value === props.repositoryId) { void openLinkedFile(); return }
   if (!selectedDirectory.value && folderPath.value) {
     const configured = rows.find(directory => directory.path === folderPath.value)
     if (configured) selectDirectory(configured)
@@ -282,8 +289,31 @@ function openFileRow(row: CodeRepositoryFile) {
   const prefix = selectedDirectory.value ? selectedDirectory.value.path + '/' : ''
   openFolder(row.path.slice(prefix.length))
 }
-watch(() => props.repositoryId, value => { if (value && repos.value.some(repo => repo.repoId === value)) { filter.value = ''; void selectRepo(value) } })
-async function previewFile(row: CodeRepositoryFile) {
+async function openLinkedFile() {
+  const repoId = props.repositoryId, path = props.repositoryFilePath?.trim().replaceAll('\\', '/')
+  if (!repoId || !path || selectedRepoId.value !== repoId || !directoriesReady) return
+  const key = JSON.stringify([repoId, path, props.repositoryDirectoryId])
+  if (linkedTargetKey === key) return
+  linkedTargetKey = key
+  const candidates = repositoryDirectories.value.filter(row => path.startsWith(row.path + '/'))
+  selectedDirectory.value = candidates.find(row => row.directoryId === props.repositoryDirectoryId)
+    || candidates.sort((a, b) => b.path.length - a.path.length)[0] || null
+  const relative = selectedDirectory.value ? path.slice(selectedDirectory.value.path.length + 1) : path
+  folderPath.value = relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : ''
+  fileView.value = 'directory'
+  fileKeyword.value = ''
+  await Promise.allSettled([loadFiles(1), previewFile({ path })])
+}
+watch(() => [props.repositoryId, props.repositoryFilePath, props.repositoryDirectoryId], async () => {
+  const value = props.repositoryId
+  linkedTargetKey = ''
+  if (value && repos.value.some(repo => repo.repoId === value)) {
+    filter.value = ''
+    await selectRepo(value)
+    await openLinkedFile()
+  }
+})
+async function previewFile(row: Pick<CodeRepositoryFile, 'path'>) {
   const repo = filesRepo.value
   if (!repo) return
   previewPath.value = row.path
