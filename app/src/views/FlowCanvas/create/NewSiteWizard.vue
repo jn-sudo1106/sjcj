@@ -10,6 +10,7 @@ import { useUiStore } from '@/stores/ui'
 import { firstSourceId } from '@/utils/url/workspaceRoute'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import CategoryTreePicker, { type CategorySelection } from '@/views/FlowCanvas/source/CategoryTreePicker.vue'
+import { BIZ_DIR_ROOT_ID, addSourcesToBizDir } from '@/api/sourceDirs'
 
 const router = useRouter()
 const ui = useUiStore()
@@ -93,6 +94,17 @@ async function createSharedFlow(name: string, sourceIds: string[]): Promise<stri
     : ''
 }
 
+/** 新建的源加入所选业务目录；失败不回滚，返回说明（成功返回空串） */
+async function addToBizDir(site: Site, sourceIds: string[]): Promise<string> {
+  if (!site.dirId || !sourceIds.length) return ''
+  try {
+    await addSourcesToBizDir(site.dirId, sourceIds)
+    return ''
+  } catch (error) {
+    return `源已创建，但加入业务目录「${site.category}」失败：${(error as Error)?.message ?? String(error)}。可在源管理「目录归类 → 加入业务目录」补上（源 ID：${sourceIds.join(',')}）`
+  }
+}
+
 async function onCreateAndEnter() {
   if (creating.value) return
   const site = gateSite.value
@@ -115,7 +127,8 @@ async function onCreateAndEnter() {
     mainTable: '',
     owner: site.owner || 'admin',
     state: 'C',
-    dirId: site.dirId,
+    // 分类只选业务目录（10-22）：业务目录走分类—源关系表，源的系统目录 categoryId 不指向它，留空
+    dirId: '',
   }))
   const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: 0 }
   creating.value = true
@@ -127,7 +140,8 @@ async function onCreateAndEnter() {
     }
     const sourceId = res.sourceId || firstSourceId(sources)
     const flowNote = await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [])
-    if (flowNote) ElMessage.warning(flowNote)
+    const dirNote = await addToBizDir(site, res.sourceIds ?? [])
+    if (flowNote || dirNote) ElMessage.warning([flowNote, dirNote].filter(Boolean).join('；'))
     else ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，共用流程「${siteForCreate.name.trim()}」），已进入首个源的流程视图`)
     await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
   } catch (error) {
@@ -153,7 +167,7 @@ onMounted(() => {
       </div>
       <div class="rc-field">
         <label>分类</label>
-        <CategoryTreePicker v-model="gateCategory" />
+        <CategoryTreePicker v-model="gateCategory" :root-id="BIZ_DIR_ROOT_ID" />
       </div>
 
       <div class="rc-gate-rows-title">源清单（至少一个，语言 / 变体，创建后可继续增删）</div>

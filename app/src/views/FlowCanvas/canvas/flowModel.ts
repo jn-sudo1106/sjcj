@@ -152,6 +152,12 @@ export interface NodeConfig {
    */
   itemId?: string
   /**
+   * 旧步骤 `url`：采集后续步的「任务 URL 规则表达式」，默认 `$VAL$`（取 itemId 指向的字段值），
+   * 也可以是拼接表达式，如 `K2+'#need_upload_xq/xq/'`。首步骤这里是它自己的抓取地址。
+   * 2026-10-19 恢复编辑（旧平台 SourceStepCard 同款）；没改过时为步骤回读原值，写回沿用快照。
+   */
+  stepUrl?: string
+  /**
    * 旧步骤「适用源」（`sourceId`）。`-1` 表示使用该配置的所有源。
    * 与画布当前源（`flow.sourceCfg.sourceId`）不是同一层：步骤可以挂在 -1 上被多源共用。
    */
@@ -630,6 +636,12 @@ export function isAudioTextNode(cfg?: NodeConfig): boolean {
     || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_audiototext'
 }
 
+/** PDF转MD节点（通用处理节点，无脚本）。 */
+export function isPdfMdNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
+  return hasNodeTypeCode(cfg, 'pdf-md', '911')
+}
+
 /** 文章生成摘要节点（编排配置 Tab 用它决定要不要给「上传文字生成摘要」区）。 */
 export function isArticleSummaryNode(cfg?: NodeConfig): boolean {
   if (!cfg) return false
@@ -668,6 +680,7 @@ export function isRuleLikeNode(cfg?: NodeConfig): boolean {
     || isArticleSummaryNode(cfg)
     || isAudioTextNode(cfg)
     || isVideoAudioNode(cfg)
+    || isPdfMdNode(cfg)
 }
 
 /**
@@ -678,8 +691,8 @@ export function isRuleLikeNode(cfg?: NodeConfig): boolean {
  * 工作区（描述 / 系统提示词 / 脚本正文 / 生成 / 保存）整个入口收掉，只留本类型自己的字段。
  * 想把某类加进来 / 拿出去，只改这两张表即可。
  */
-const SCRIPTLESS_TEMPLATES = new Set(['ocr', 'video-audio', 'audio-text', 'article-summary', 'article-tag', 'translate'])
-const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720', '730', '800']
+const SCRIPTLESS_TEMPLATES = new Set(['ocr', 'video-audio', 'audio-text', 'article-summary', 'article-tag', 'translate', 'pdf-md'])
+const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720', '730', '800', '911']
 
 export function isScriptlessNode(cfg?: NodeConfig): boolean {
   if (!cfg) return false

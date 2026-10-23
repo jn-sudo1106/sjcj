@@ -67,6 +67,23 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
     expect(url).toContain('typeId=2102157')
   })
 
+  // DS_KIND（2026-10-22）：列表/详情把后端 DS_KIND 带出为 dsKind；老记录缺失时归一 MYSQL
+  it('列表把 DS_KIND 带出为 dsKind，缺失时归一 MYSQL', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', count: 2,
+      data: [
+        { entryTypeId: 2101020, tableName: 't_ck', dsKind: 'CK', items: [] },
+        { entryTypeId: 2102157, tableName: 't_mysql', items: [] },
+      ],
+    }))
+    const { entryApi } = await import('./index')
+
+    const result = await entryApi.entryPaged({ page: 1, size: 20 })
+
+    expect(result.list[0].dsKind).toBe('CK')
+    expect(result.list[1].dsKind).toBe('MYSQL')
+  })
+
   it('新建（无 tableId）走 entryTypeAddAll，POST JSON 且不带 entryTypeId', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '表已创建', data: null }))
     const { entryApi } = await import('./index')

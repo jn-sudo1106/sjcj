@@ -2,10 +2,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { useUiStore } from '@/stores/ui'
 import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
-import { flowCenterApi, siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
+import { flowCenterApi, flowVersionApi, siteApi, sourceApi, paramApi, workflowBindingApi, type Source, type Param } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -44,7 +45,11 @@ function mockApis() {
   vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
   vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: 'ok' })
   vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
-  vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...templateSource })
+  // 模板源有默认流程（复制流程的前提，1016）
+  vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...templateSource, flowId: 'flow-100' })
+  vi.spyOn(workflowBindingApi, 'save').mockResolvedValue()
+  // 1016：复制前查发布版本 / 去共享读草稿步骤；默认已发布、没有草稿
+  vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: '1', draftId: null } as never)
   vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true, message: '已关联' })
   vi.spyOn(flowCenterApi, 'list').mockResolvedValue([
     { id: 'flow-100', name: '微博流程', state: 'A' },
@@ -55,6 +60,14 @@ function mockApis() {
   vi.spyOn(paramApi, 'genValues').mockImplementation(async (id) => paramSample[id] ?? [])
 }
 
+/** el-select 在单测里没注册 Element Plus：给个能 v-model 的替身，测试里 $emit('update:modelValue') 驱动 */
+const elSelectStub = {
+  name: 'ElSelectStub',
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  template: '<div class="el-select-stub"><slot /></div>',
+}
+
 async function createWrapper() {
   sessionStorage.clear()
   setActivePinia(createPinia())
@@ -62,7 +75,7 @@ async function createWrapper() {
   const wrapper = mount(SiteSourceSwitcher, {
     props: { siteId: 'site-a', activeKey: source.sourceId },
     global: {
-      stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } },
+      stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' }, 'el-select': elSelectStub, 'el-option': true },
       directives: { loading: {} },
     },
   })
@@ -112,6 +125,24 @@ describe('SiteSourceSwitcher', () => {
     })
     expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
     expect(siteApi.sourceAdd).not.toHaveBeenCalled()
+  })
+
+  // 1016：模板源搜索框紧跟模板源（原来排在绑定流程后面，像是绑定流程的必填项）；提示写明会复制哪条默认流程
+  it('搜索模板源：搜索框在流程选项上面，没选时提示先选；选后提示复制它的默认流程', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="source-template-mode"]').setValue('search')
+    const html = wrapper.html()
+    expect(html.indexOf('data-testid="source-template-search"')).toBeLessThan(html.indexOf('data-testid="source-flow-mode"'))
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toBe('请先搜索并选择模板源。')
+
+    await wrapper.get('[data-testid="source-template-search"]').setValue('跨网站')
+    await flushPromises()
+    await wrapper.get('[data-testid="source-template-option"]').trigger('click')
+    await flushPromises()
+    expect(sourceApi.sourceDetail).toHaveBeenCalledWith(templateSource.sourceId)
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('将按「跨网站模板源」复制源到当前网站，并把它的默认流程「微博流程（#flow-100）」')
   })
 
   it('选择空白模板时明确传 inherit=false', async () => {
@@ -189,42 +220,26 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sendSnatchWithParam).toHaveBeenCalledWith(expect.objectContaining({ ids: [source.sourceId] }))
   })
 
-  // 0930 右键「复制源」：迁自旧平台「制作源+配置副本（flag=1）/ 仅制作源副本（flag=0）」
-  it('右键复制源：默认新增一套配置（flag=1），名称默认「原名_copy」，归入本网站并复制一份原流程给新源', async () => {
+  // 0930 右键「复制源」；10-23 起只保留「仅制作源副本」（flag=0），新源沿用原源的流程
+  it('右键复制源：flag=0，名称默认「原名_copy」，归入本网站；不复制 / 关联流程，没有配置二选一', async () => {
     const wrapper = await createWrapper()
-    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
-    const copyFlow = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-own')
-    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const copyFlow = vi.spyOn(flowCenterApi, 'copy')
     await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
     await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
 
     expect((wrapper.get('[data-testid="dup-source-name"]').element as HTMLInputElement).value).toBe('原源_copy')
     expect((wrapper.get('[data-testid="dup-source-url"]').element as HTMLInputElement).value).toBe('https://example.com')
+    expect(wrapper.find('[data-testid="dup-source-mode-new"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dup-source-mode-reuse"]').exists()).toBe(false)
     await wrapper.get('[data-testid="dup-source-submit"]').trigger('click')
     await flushPromises()
 
-    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({ sourceId: 'source-a', name: '原源_copy', url: 'https://example.com', flag: 1 })
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({ sourceId: 'source-a', name: '原源_copy', url: 'https://example.com', flag: 0 })
     expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
-    // 0930：新增配置 = 连流程一起复制（节点配置挂在流程上），新源绑到复制出的流程，不挂原流程
-    expect(copyFlow).toHaveBeenCalledWith('flow-1', '原源_copy-流程')
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-own')
-    expect(flowCenterApi.bindSources).not.toHaveBeenCalledWith(['source-new'], 'flow-1')
-    expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
-  })
-
-  it('右键复制源：选「复用原配置」时 flag=0，新源挂原源的流程、不复制流程', async () => {
-    const wrapper = await createWrapper()
-    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
-    const copyFlow = vi.spyOn(flowCenterApi, 'copy')
-    await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
-    await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
-    await wrapper.get('[data-testid="dup-source-mode-reuse"]').setValue(true)
-    await wrapper.get('[data-testid="dup-source-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'source-a', flag: 0 }))
     expect(copyFlow).not.toHaveBeenCalled()
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-1')
+    expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
   })
 
   it('源行只负责进入详情，发起抓取收进右键菜单', async () => {
@@ -489,6 +504,19 @@ describe('SiteSourceSwitcher · 批量导入（新增源 tab）', () => {
     expect(importSources).toHaveBeenCalledWith('site-a', '测试源;https://example.com')
   })
 
+  it('导入成功后通知主区源列表刷新（不只刷新侧栏）', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(siteApi, 'siteImportSources').mockResolvedValue({ ok: true, message: '已导入 1 个源' })
+    const before = useUiStore().sourceListRevision
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('.ssw-import-textarea').setValue('测试源;https://example.com')
+    await wrapper.get('[data-testid="batch-import-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(useUiStore().sourceListRevision).toBe(before + 1)
+  })
+
   it('点"导入已有源" tab 切换过去，再点回"新增源"，两边状态不互相污染', async () => {
     const wrapper = await createWrapper()
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
@@ -677,52 +705,109 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
 // 0903 Y8-A：复制源之后补第三步——把新源关联到**被复制源所属的流程**。
 // 前两步（copySource?flag=1 + changeSite）复制的是源与配置，不会把新源挂到流程上；
 // 而 0903 H01 之后配置挂在流程上、执行按 FLOW_ID 反查，不补这步新源就是没有流程的孤儿。
-describe('SiteSourceSwitcher · 复制源后关联到流程（Y8-A）', () => {
-  async function copyWithTemplate(wrapper: Awaited<ReturnType<typeof createWrapper>>) {
+// 1016 方案 §五：按模板源新建时流程三选一（设计稿/设计方案/1016-添加源按模板源_流程关联问题与方案_2026-10-16.md）
+describe('SiteSourceSwitcher · 按模板源新建：流程三选一（1016）', () => {
+  async function openWithName(wrapper: Awaited<ReturnType<typeof createWrapper>>) {
     await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
     const inputs = wrapper.findAll('.ssw-add-input')
     await inputs[0].setValue('复制源')
     await inputs[1].setValue('https://copied.example.com')
+  }
+  const submit = async (wrapper: Awaited<ReturnType<typeof createWrapper>>) => {
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
     await flushPromises()
   }
 
-  it('复制成功后调 bindSources，flowId 取自被复制源', async () => {
+  it('默认「复制模板源的默认流程」：flag=1，后端复制流程；不再额外关联模板源的流程', async () => {
     const wrapper = await createWrapper()
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: 'flow-777' })
-    await copyWithTemplate(wrapper)
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-777')
-  })
-
-  it('列表上没带 flowId 时回查 sourceDetail，不据此判定"没有流程"', async () => {
-    const wrapper = await createWrapper()
-    const detail = vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: 'flow-888' })
-    await copyWithTemplate(wrapper)
-    expect(detail).toHaveBeenCalledWith(source.sourceId)
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-888')
-  })
-
-  it('第三步失败不影响前两步的结果，只提示可去流程中心手动关联', async () => {
-    const wrapper = await createWrapper()
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: 'flow-777' })
-    vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: false, message: '流程不存在' })
-    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
-    await copyWithTemplate(wrapper)
-
-    // 前两步照常发生，没有回滚（源已经建出来了，回滚等于删源）
-    expect(sourceApi.copySourceAndLocate).toHaveBeenCalled()
+    await openWithName(wrapper)
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('把它的默认流程「微博流程（#flow-100）」复制成新源独立的一份')
+    await submit(wrapper)
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ name: '复制源', flag: 1 }))
     expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('可在流程中心手动关联'))
+    expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
   })
 
-  it('被复制源本来就没有流程时不报错，只说明新源也未关联', async () => {
+  it('模板源没有默认流程：不能复制流程，提前拦下', async () => {
     const wrapper = await createWrapper()
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: undefined })
-    const ok = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
-    await copyWithTemplate(wrapper)
+    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: undefined })
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await openWithName(wrapper)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('模板源没有默认流程')
+    await submit(wrapper)
+    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('模板源没有默认流程'))
+  })
 
+  it('模板源的默认流程只有草稿：提示里提前说明并拦下，不发复制请求', async () => {
+    const wrapper = await createWrapper()
+    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: '21000047' })
+    vi.mocked(flowVersionApi.overview).mockResolvedValue({ publishId: null, draftId: '9' } as never)
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await openWithName(wrapper)
+    await flushPromises()
+    expect(flowVersionApi.overview).toHaveBeenCalledWith('21000047')
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('还没有发布版本（只有草稿），不能复制')
+    await submit(wrapper)
+    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('还没有发布版本'))
+  })
+
+  it('默认流程只有草稿时后端拒绝复制：提示先发布或改选关联已有流程', async () => {
+    const wrapper = await createWrapper()
+    vi.mocked(sourceApi.copySourceAndLocate).mockResolvedValueOnce({ ok: false, message: '请先进入流程草稿编辑并重新加载版本信息' })
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await openWithName(wrapper)
+    await submit(wrapper)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('模板源的默认流程还没有发布版本'))
+    expect(sourceApi.changeSite).not.toHaveBeenCalled()
+  })
+
+  it('「关联已有流程」：flag=0，再用 bindSourceFlows 换成所选流程（主流程在前），停用流程不在候选', async () => {
+    const wrapper = await createWrapper()
+    await openWithName(wrapper)
+    await wrapper.get('[data-testid="source-flow-bind"]').setValue(true)
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toBe('请选择要关联的流程。')
+    const select = wrapper.findComponent({ name: 'ElSelectStub' })
+    select.vm.$emit('update:modelValue', ['flow-100', 'flow-300'])
+    await flushPromises()
+    await wrapper.get('[data-testid="source-main-flow"]').setValue('flow-300')
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('新源关联 2 条流程：#flow-300（主）、微博流程（#flow-100）')
+    await submit(wrapper)
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ flag: 0 }))
+    const change = vi.mocked(workflowBindingApi.save).mock.calls[0]
+    expect(change[0]).toBe('source-new')
+    expect(change[1]({ flowIds: [], bindings: [], ownFlowIds: ['flow-100'], ownBindings: [], ownDefaultFlowId: 'flow-100' }))
+      .toEqual({ flowIds: ['flow-300', 'flow-100'], defaultFlowId: 'flow-300' })
     expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
-    expect(ok).toHaveBeenCalledWith(expect.stringContaining('未关联流程'))
+  })
+
+  it('「关联已有流程」没选流程：拦下，不建源', async () => {
+    const wrapper = await createWrapper()
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await openWithName(wrapper)
+    await wrapper.get('[data-testid="source-flow-bind"]').setValue(true)
+    await submit(wrapper)
+    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('请选择要关联的流程'))
+  })
+
+  it('「不关联流程」：flag=0，再清空流程；清空失败只提示，源照样建好', async () => {
+    const wrapper = await createWrapper()
+    vi.mocked(workflowBindingApi.save).mockRejectedValueOnce(new Error('并发冲突'))
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await openWithName(wrapper)
+    await wrapper.get('[data-testid="source-flow-none"]').setValue(true)
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('不关联流程')
+    await submit(wrapper)
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ flag: 0 }))
+    expect(vi.mocked(workflowBindingApi.save).mock.calls[0][1]({ flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }))
+      .toEqual({ flowIds: [], defaultFlowId: null })
+    expect(sourceApi.changeSite).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('它现在挂着模板源的默认流程'))
   })
 })
 
@@ -1062,29 +1147,7 @@ describe('SiteSourceSwitcher · 数据表模式', () => {
 })
 
 
-describe('SiteSourceSwitcher · 1008-06 新建绑定流程', () => {
-  it('按模板源新建 + 选择绑定流程：复制源后关联所选流程，不关联模板源的流程', async () => {
-    const wrapper = await createWrapper()
-    await wrapper.get('[title="添加源"]').trigger('click')
-    await flushPromises()
-    const inputs = wrapper.findAll('.ssw-add-input')
-    await inputs[0].setValue('带流程源')
-    await inputs[1].setValue('https://bind.example.com')
-    // 绑定流程下拉出现在默认（模板源）模式下，停用流程不在候选
-    const bindSelect = wrapper.get('[data-testid="source-bind-flow"]')
-    const options = bindSelect.findAll('option').map((o) => o.attributes('value'))
-    expect(options).toContain('flow-100')
-    expect(options).not.toContain('flow-200')
-    await bindSelect.setValue('flow-100')
-    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ name: '带流程源', flag: 1 }))
-    expect(flowCenterApi.bindSources).toHaveBeenCalledTimes(1)
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-100')
-    expect(siteApi.sourceAdd).not.toHaveBeenCalled()
-  })
-
+describe('SiteSourceSwitcher · 空白模板不提供流程选项', () => {
   it('空白模板没有真实建源接口，不提供绑定流程，也不发绑定请求', async () => {
     const wrapper = await createWrapper()
     await wrapper.get('[title="添加源"]').trigger('click')
@@ -1093,7 +1156,7 @@ describe('SiteSourceSwitcher · 1008-06 新建绑定流程', () => {
     await inputs[0].setValue('纯空白源')
     await wrapper.get('[data-testid="source-template-mode"]').setValue('blank')
     await flushPromises()
-    expect(wrapper.find('[data-testid="source-bind-flow"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="source-flow-mode"]').exists()).toBe(false)
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
     await flushPromises()
 

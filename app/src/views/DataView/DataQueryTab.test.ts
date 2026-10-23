@@ -7,6 +7,7 @@ import ElementPlus from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import { useAuthStore } from '../../stores/auth'
+import { useWorkspaceStore } from '../../stores/workspace'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { UserInfo } from '@/api/auth'
 import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
@@ -18,7 +19,7 @@ vi.mock('@/utils/format/csvExport', async (importOriginal) => ({
   downloadCsv: vi.fn(),
 }))
 
-// 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情抽屉
+// 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情（抽屉 + ENTRY_ID 弹窗）
 describe('数据中心 · 数据查询 tab', () => {
   let wrapper: VueWrapper
 
@@ -70,7 +71,10 @@ describe('数据中心 · 数据查询 tab', () => {
   async function mountPage(query: Record<string, string> = {}) {
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/data', component: { template: '<div />' } }],
+      routes: [
+        { path: '/data', component: { template: '<div />' } },
+        { path: '/collect', component: { template: '<div />' } },
+      ],
     })
     await router.push({ path: '/data', query })
     await router.isReady()
@@ -243,6 +247,25 @@ describe('数据中心 · 数据查询 tab', () => {
     expect((dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
   })
 
+  it('1021-05：数据查询页去掉「开始时间 / 结束时间」，查询和展示 SQL 都不再带 CREATE_DT 区间', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.find('.dqp-time-range').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="开始时间"]').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="结束时间"]').exists()).toBe(false)
+    const query = (dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.lastCall![0]
+    expect(query.startTime).toBeUndefined()
+    expect(query.endTime).toBeUndefined()
+
+    const body = await openResultMenu('data-more')
+    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查看查询条件/SQL')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('CREATE_DT >=')
+  })
+
   it('导出：调用 dataApi.exportUrl 拼好的 URL 新窗口打开，不经过 rowQueryPaged', async () => {
     const exportSpy = vi.spyOn(dataApi, 'exportUrl').mockReturnValue('/api/v1/entry/entryExportAll?entryType=t1')
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
@@ -286,6 +309,49 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(btn.text()).toContain('查源')
   })
 
+
+  // 1016：原来跳 `/canvas?sourceIds=` 会被画布路由守卫弹回 /collect，命中源整个丢了；改成走 store 落到源管理
+  it('按条件查源：命中源写进 store，跳源管理并带 from=data-query', async () => {
+    await mountPage()
+    await waitForLoad()
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ CNT: 3, SOURCE_ID: '600519' }, { CNT: 1, SOURCE_ID: 'src-9' }] as never)
+    wrapper.findComponent({ name: 'DataQueryPanel' }).vm.$emit('query-change', { page: 1, size: 20, state: 'C' })
+    await flushPromises()
+    await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
+    await waitForLoad()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519', 'src-9'])
+    const route = (wrapper.vm as unknown as { $route: { path: string; query: Record<string, string> } }).$route
+    expect(route.path).toBe('/collect')
+    expect(route.query).toEqual({ tab: 'source', from: 'data-query' })
+  })
+
+  it('按条件查源：只选了源、没填条件时带上这个源，不发反查请求', async () => {
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    vi.mocked(dataApi.distinctSource).mockClear()
+    await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
+    await waitForLoad()
+    expect(dataApi.distinctSource).not.toHaveBeenCalled()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519'])
+    const route = (wrapper.vm as unknown as { $route: { query: Record<string, string> } }).$route
+    expect(route.query.from).toBe('data-query')
+  })
+
+  // 2026-10-19：没选源也没条件 = 这张表的所有源，不是全平台全部源（原来落到全部源，表信息丢了）
+  it('按条件查源：没选源也没条件时按当前表反查，带这张表的源跳源管理', async () => {
+    await mountPage()
+    await waitForLoad()
+    useWorkspaceStore().setDataQueryHits(['old'])
+    vi.mocked(dataApi.distinctSource).mockClear()
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ CNT: 5, SOURCE_ID: '600519' }, { CNT: 2, SOURCE_ID: 'src-9' }] as never)
+    await wrapper.get('[data-testid="data-back-trace"]').trigger('click')
+    await waitForLoad()
+    expect(dataApi.distinctSource).toHaveBeenCalled()
+    expect(useWorkspaceStore().dataQueryHits).toEqual(['600519', 'src-9'])
+    const route = (wrapper.vm as unknown as { $route: { path: string; query: Record<string, string> } }).$route
+    expect(route.path).toBe('/collect')
+    expect(route.query).toEqual({ tab: 'source', from: 'data-query' })
+  })
 
   it('工具条按新增、导入、导出、更多与删除收敛，不显示夸张的危险操作按钮', async () => {
     const auth = useAuthStore()
@@ -483,6 +549,25 @@ describe('数据中心 · 数据查询 tab', () => {
       expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: '600519' }))
     })
 
+    it('1021-05 上层数据：看节点输出表且输入表不同时显示「来自 表名 #ID」，点了切到输入表并按 ID 查', async () => {
+      mockFlow()
+      vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [{ ...ROW, parentId: '5501' }] })
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
+      await pick('s2')
+
+      const link = wrapper.get('[data-testid="upper-data-link"]')
+      expect(link.text()).toBe('来自 公告表 #5501')
+      await link.trigger('click')
+      await waitForLoad()
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
+      expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', dataId: '5501', sourceId: '600519' }))
+      expect(wrapper.get('[data-testid="data-scope-input"]').classes()).toContain('active')
+    })
+
     it('输入表等于输出表合并成「输入·输出」；流程图按钮打开「展示处理步骤」抽屉；切回按表后数据表下拉回来', async () => {
       vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
       vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
@@ -566,6 +651,8 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(apiText).toContain('data.list[].id')
     expect(apiText).toContain('返回字段')
     expect(apiText).toContain('appId=dev&appKey=dev1&type=t1&sourceId=600519&startId=0&size=10')
+    // 1021-05：开始 / 结束时间去掉后，取数 API 说明里也不再有 dataRange
+    expect(apiText).not.toContain('dataRange')
     const closeApiButton = [...document.body.querySelectorAll('button')].find((el) => el.textContent?.trim() === '关闭')
     expect(closeApiButton).toBeDefined()
     closeApiButton!.click()
@@ -595,7 +682,33 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(wrapper.text()).toContain('状态')
-    expect(wrapper.text()).toContain('C')
+    // 1021-05：状态码走中文字典，C 在数据表里是「初始」，悬浮说明保留原码
+    const tag = wrapper.get('[data-testid="data-state"]')
+    expect(tag.text()).toBe('初始')
+    expect(tag.attributes('title')).toContain('（C）')
+  })
+
+  it('1021-05 父ID：列名保持「父ID」，-1 / -2 显示「—」，按表看只显示上层 ID；原始值在详情抽屉技术字段里', async () => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 3,
+      list: [
+        { ...ROW, dataId: 'r1', parentId: '-1' },
+        { ...ROW, dataId: 'r2', parentId: '-2' },
+        { ...ROW, dataId: 'r3', parentId: '5501' },
+      ],
+    })
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.text()).toContain('父ID')
+    expect(wrapper.findAll('[data-testid="upper-data"]').map((c) => c.text())).toEqual(['—', '—', '5501'])
+    expect(wrapper.find('[data-testid="upper-data-link"]').exists()).toBe(false)
+
+    vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({ row: { ...ROW, parentId: '-2' }, showItems: [] })
+    await wrapper.findAll('.el-table__body tr')[1]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="detail-upper"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="detail-tech-parent-id"]').text()).toBe('-2')
   })
 
   it('动态列：表头按 {desc}-{columnName} 渲染数据表字段', async () => {
@@ -648,6 +761,8 @@ describe('数据中心 · 数据查询 tab', () => {
 
     expect(dataApi.rowDetail).toHaveBeenCalledWith('t1', '88231')
     expect(wrapper.text()).toContain('标题')
+    // 点整行仍走右侧抽屉（不是弹窗）——弹窗只留给 ENTRY_ID 链接
+    expect(wrapper.findAll('.el-drawer').some((d) => d.text().includes('复制全部 JSON'))).toBe(true)
   })
 
   it('点一行开详情：点的是行里自带动作的链接 / 选中了文字时不叠开详情；整张表显示手型', async () => {
@@ -658,8 +773,8 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(wrapper.get('.dqp-table').classes()).toContain('is-row-clickable')
-    // ENTRY_ID 不再是链接，只剩源 / 任务这类各有动作的链接
-    expect(wrapper.findAll('a.dv-a').some((a) => a.text() === '88231')).toBe(false)
+    // ENTRY_ID 也成了链接（点它开详情弹窗），与源 / 任务这类各有动作的链接并列
+    expect(wrapper.findAll('a.dv-a').some((a) => a.text() === '88231')).toBe(true)
 
     // 点源链接：只开源详情，不开行详情
     await wrapper.findAll('a.dv-a').find((a) => a.text() === '600519')!.trigger('click')
@@ -676,6 +791,60 @@ describe('数据中心 · 数据查询 tab', () => {
     await wrapper.find('.el-table__body tr').trigger('click')
     await flushPromises()
     expect(detailSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('ENTRY_ID 列可点开详情弹窗（复刻旧平台 entry-list-view 的 ENTRY_ID 链接）', async () => {
+    const detailSpy = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
+      row: ROW,
+      showItems: [{ itemId: '1', columnName: 'K1', itemName: '标题', value: '关于利润分配的公告' }],
+    })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const entryLink = wrapper.get('[data-testid="row-open-detail"]')
+    expect(entryLink.text()).toBe('88231')
+
+    await entryLink.trigger('click')
+    await flushPromises()
+
+    // 只调一次：行点击把 <a> 排除掉了，不会与单元格点击叠成两次请求
+    expect(detailSpy).toHaveBeenCalledTimes(1)
+    expect(detailSpy).toHaveBeenCalledWith('t1', '88231')
+
+    // 弹窗内容体是 EntryRecordTable：复刻旧平台 RecordDetailComm 的「列 / 值」平铺表——
+    // 列名用物理列名（ENTRY_ID / K1…），不是抽屉那份的中文标签分组。
+    const dialog = wrapper.findAll('.el-dialog').find((d) => d.find('[data-testid="record-columns-table"]').exists())
+    expect(dialog).toBeTruthy()
+    const popupText = dialog!.text()
+    expect(popupText).toContain('ENTRY_ID')
+    expect(popupText).toContain('88231')
+    expect(popupText).toContain('K1')
+    expect(popupText).toContain('关于利润分配的公告')
+    // 两套口径分明：弹窗不带抽屉的工具栏
+    expect(popupText).not.toContain('复制全部 JSON')
+
+    // 走居中弹窗而不是抽屉（dialog 模式下抽屉容器 v-if 为假、不挂载）。
+    // 不能直接断言「页面上没有 .el-drawer」——SummaryDrawer / StepDrawer / SourceDetailDrawer
+    // 也常驻在本页（未打开时靠 v-show 隐藏），按内容判定才不会被它们误伤。
+    expect(wrapper.findAll('.el-drawer').some((d) => d.find('[data-testid="record-columns-table"]').exists())).toBe(false)
+  })
+
+  it('操作列「详情」按钮开的是右侧抽屉，不是弹窗', async () => {
+    const detailSpy = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({ row: ROW, showItems: [] })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const btn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text() === '详情')
+    await btn!.trigger('click')
+    await flushPromises()
+
+    expect(detailSpy).toHaveBeenCalledWith('t1', '88231')
+    expect(wrapper.findAll('.el-drawer').some((d) => d.text().includes('复制全部 JSON'))).toBe(true)
+    expect(wrapper.findAll('.el-dialog').some((d) => d.text().includes('复制全部 JSON'))).toBe(false)
   })
 
   // 2026-09-28：数据中心也能预览 OSS 文件路径（TB_KAIPANLA 详情json 这类 .json），与源数据视图同一个预览器
@@ -957,6 +1126,65 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
   })
 
+  // list3 是「全库表 − 主表 − 同类源的表」，模板只渲染 slice(0, 5)：
+  // 选中的表本来就在 list3、但排在第 6 条之后时，旧实现「已存在就不插」会让下拉里没有对应 option，
+  // el-select 的 getOption() 找不到选项会把值当标签，于是只显示表 ID。
+  const OTHER_TABLES = Array.from({ length: 8 }, (_, i) => ({
+    tableId: `t${i + 20}`, tableName: `sense_data.TB_O${i}`, name: `其它表${i}`, fields: [],
+  }))
+
+  it('加载更多数据表：选中的表已在 list3 但排在 slice(0,5) 之外时也要挪到最前，下拉显示中文名', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1,
+      // t25 正好是 list3 的第 6 条，落在 slice(0, 5) 之外
+      list: [{ tableId: 't25', tableName: 'sense_data.TB_O5', name: '其它表5', fields: [] }],
+    })
+    useAuthStore().roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+    expect(tableSelectOf().text()).not.toContain('其它表5')
+
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
+    await link!.trigger('click')
+    await flushPromises()
+    const row = wrapper.findAll('tr').find((el) => el.text().includes('其它表5'))
+    await row!.trigger('click')
+    await flushPromises()
+
+    expect(tableSelectOf().vm.$props.modelValue).toBe('t25')
+    expect(tableSelectOf().text()).toContain('其它表5')
+    expect(tableSelectOf().text()).not.toContain('t25')
+  })
+
+  it('加载更多数据表：切表后当前源被清掉、分组重拉，选中的表仍留在下拉里', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
+    // 初始表（list3 第一条 t20）带 600519，新表 t25 没有：loadSources 会清掉 sourceId
+    // 并重新 loadGroup，把 group 整块覆盖掉
+    vi.spyOn(dataApi, 'distinctSource').mockImplementation(async (query) => (query.tableId === 't20' ? ['600519'] : ['src-9']))
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ tableId: 't25', tableName: 'sense_data.TB_O5', name: '其它表5', fields: [] }],
+    })
+    useAuthStore().roles = ['admin']
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    const groupCallsBefore = (dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length
+
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
+    await link!.trigger('click')
+    await flushPromises()
+    const row = wrapper.findAll('tr').find((el) => el.text().includes('其它表5'))
+    await row!.trigger('click')
+    await flushPromises()
+    await waitForLoad()
+
+    // 源被清掉 → 分组确实重拉了一次
+    expect((dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(groupCallsBefore)
+    expect(tableSelectOf().text()).toContain('其它表5')
+    expect(tableSelectOf().text()).not.toContain('t25')
+  })
+
   it('按源搜索：选中跨表源后切换到该源的默认表', async () => {
     const sourceSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 1,
@@ -973,8 +1201,9 @@ describe('数据中心 · 数据查询 tab', () => {
 
     expect(sourceSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('更多源示例')
-    expect(wrapper.text()).toContain('配置ID')
-    expect(wrapper.text()).toContain('域')
+    // 1021-05：列对齐源管理，启停与运行状态分两列
+    expect(wrapper.text()).toContain('启停')
+    expect(wrapper.text()).toContain('运行状态')
 
     const row = wrapper.findAll('tr').find((el) => el.text().includes('更多源示例'))
     await row!.trigger('click')

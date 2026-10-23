@@ -90,7 +90,7 @@ onBeforeUnmount(() => { sequence += 1 })
         <dl>
           <div><dt>源名称</dt><dd>{{ source.name }}</dd></div><div><dt>源 ID</dt><dd>{{ source.sourceId }}</dd></div>
           <div><dt>所属平台</dt><dd>{{ source.siteName || source.siteId || '未关联平台' }}</dd></div>
-          <div><dt>我的分组</dt><dd>{{ source.sourceGroupId ? groupName || '…' : '未加入分组' }}<small>全平台共用的分组（来源组），在系统设置维护</small></dd></div>
+          <div><dt>我的分组</dt><dd>{{ source.sourceGroupId ? groupName || '…' : '未加入分组' }}<small>全平台共用的分组（来源组），在源管理「我的分组」维护</small></dd></div>
           <div><dt>当前流程 ID</dt><dd>{{ source.flowId || '未绑定流程' }}</dd></div><div><dt>负责人</dt><dd>{{ source.owner || '—' }}</dd></div>
           <div class="wide"><dt>采集入口</dt><dd>{{ source.url || '—' }}</dd></div>
           <div><dt>最近任务</dt><dd>{{ source.lastTaskAt || '—' }}</dd></div><div><dt>最近成功</dt><dd>{{ source.lastSuccessAt || '—' }}</dd></div>

@@ -14,7 +14,7 @@
 // `config/copyAll` 复制一份独立配置并换绑（步骤行 CONFIG_ID → 新配置），之后各改各的。
 // 换绑失败仍共享的步骤登记到 localStorage：用户在复制品里编辑该配置前必须知情确认
 // （确认 = 该修改会影响模板/原流程，责任移交用户）。
-import { configApi, flowCenterApi, itemApi, versionArgs } from '@/api'
+import { configApi, flowCenterApi, flowVersionApi, itemApi, versionArgs } from '@/api'
 import type { Step } from '@/api/types/source'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
 import { useFlowVersionStore } from '@/stores/flowVersion'
@@ -140,8 +140,12 @@ export async function detachCopiedConfigs(
   opts: DetachOptions = {},
 ): Promise<DetachResult> {
   const sourceFlowRef = opts.sourceFlowRef || `流程 #${targetFlowId} 的来源`
+  // 1016：复制出来的流程只有草稿、没有发布版（186 实测 copyFlow / copySource 产物全是 state=W），
+  // 不带 versionId 读步骤后端只认发布版，报「请先进入流程草稿编辑并重新加载版本信息」。
+  // 有草稿就读草稿——换绑本来也写在草稿里（withDraft），读写同一个版本。
+  const draftId = await flowVersionApi.overview(targetFlowId).then((o) => o.draftId).catch(() => null)
   const steps = await flowCenterApi
-    .steps(targetFlowId, { withConfigDetails: true })
+    .steps(targetFlowId, { withConfigDetails: true, ...(draftId ? { versionId: draftId } : {}) })
     .catch(() => null)
   if (!steps) {
     return { ok: false, message: '读取步骤失败：未能复制配置，复制出的节点仍与来源共享配置', copied: 0, remainShared: 0 }

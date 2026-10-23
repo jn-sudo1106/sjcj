@@ -154,7 +154,7 @@ export interface Source {
 export type WorkflowBindingRole = 'MAIN' | 'BACKFILL' | 'AUX'
 export type WorkflowVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
 
-/** 源（或其 SourceGroup）与流程的有效绑定。inherited=true 表示本行继承自 SourceGroup。 */
+/** 源（或其 SourceGroup）与流程的有效绑定。inherited=true 表示本行来自 SourceGroup，own=true 表示源自己绑定。 */
 export interface WorkflowBinding {
   id: string
   bindType: 'SOURCE_GROUP' | 'SOURCE'
@@ -182,7 +182,12 @@ export interface WorkflowBinding {
   primary: boolean
   priority: number
   status: 'ACTIVE' | 'DISABLED'
+  /** 来源组绑定的流程 */
   inherited: boolean
+  /** 源自己绑定的这条（独立源）。组内源只列来源组流程，own 恒为 false */
+  own?: boolean
+  /** 来源组的默认流程。primary 只给真正的运行入口：组内源 = 组默认，独立源 = 本源默认 */
+  groupDefault?: boolean
   updatedAt?: string
 }
 
@@ -232,10 +237,15 @@ export interface SourceFlowsView {
   sourceId?: string
   /** 按 sourceId 查时，源已入组则非空——此时 flowIds 是组的统一流程，源不能单独改 */
   sourceGroupId?: string
-  /** 生效（启用中）的流程 ID */
+  /** 生效（启用中）的流程 ID；入组时是来源组的流程，未入组时与 ownFlowIds 相同 */
   flowIds: string[]
   defaultFlowId?: string
   bindings: SourceFlowBind[]
+  /** 源自有的流程（ownFlowIds / ownDefaultFlowId / ownBindings）；入组的源也可以有，bindSourceFlows 只改这一套。
+   *  后端没返回 own* 时（旧版本）：未入组回落到上面三项，入组视为空。 */
+  ownFlowIds: string[]
+  ownDefaultFlowId?: string
+  ownBindings: SourceFlowBind[]
 }
 
 /** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */
@@ -414,6 +424,23 @@ export interface SourceJob {
   runCount: number
   successCount: number
   disabled: boolean
+}
+
+/**
+ * 批量配定时（旧平台源列表「定时任务变更 → 批量配定时」，`SourceCron.vue` 的 `ids !== '-1'` 形态）。
+ * 旧字段映射见 legacyAdapters.createJobsToLegacy。
+ */
+export interface CreateJobsInput {
+  sourceIds: string[]
+  cron: string
+  /** 「提交并启用」= true，「仅提交」= false（建出来 isDelete=1） */
+  enable: boolean
+  /** 加监控 */
+  monitorEnable: boolean
+  /** 加监控 N 分钟后，旧默认 30 */
+  monitorAfter?: number
+  /** 执行流程；空 = 跟随各来源默认流程（旧 flowId=0） */
+  flowId?: string
 }
 
 /** 子步骤 Step（item/next）— 连线详情字段 */

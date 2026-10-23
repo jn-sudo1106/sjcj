@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { cloneConfig, NODE_CONFIGS, type FlowBranchGroup, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import {
+  taskUrlFieldsApply,
+  taskUrlSourceMissing,
   applyStepSourceDefault,
   assertStepsPersistable,
   condExprOf,
@@ -10,6 +12,8 @@ import {
   isFileLikeNode,
   outputTableMissing,
   firstOutputTableMissingNodeId,
+  collectFlowIssues,
+  collectTableMismatches,
   relinkCandidates,
   ruleStepContext,
   isWritableStepId,
@@ -94,6 +98,45 @@ describe('firstOutputTableMissingNodeId（0927 H1）', () => {
     const main = ['start', '40598', 'end']
     const configs = { '40598': { title: 'b', kind: 'node', configId: '1400918' } } as unknown as Record<string, NodeConfig>
     expect(firstOutputTableMissingNodeId(main, [], configs, { '40598': snap })).toBe('40598')
+  })
+})
+
+describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () => {
+  it('逐个列出未保存的新节点和缺输出表的节点；根节点、文件节点、完整节点不计', () => {
+    const main = ['start', '41797', 'draft-1', '40598', 'file-1', 'end']
+    const configs = {
+      '41797': { title: '入口', kind: 'node', configId: '1401081' },
+      'draft-1': { title: '新节点', kind: 'node', configId: '' },
+      '40598': { title: '规则', kind: 'node', configId: '1400918' },
+      'file-1': { title: '下载', kind: 'node', configId: '1400920', template: 'file' },
+    } as unknown as Record<string, NodeConfig>
+    const snapshots = { '41797': { stepId: '41797', name: '入口', isRoot: true } as Step }
+    expect(collectFlowIssues(main, [], configs, snapshots).map((i) => [i.nodeId, i.reason])).toEqual([
+      ['draft-1', 'unsaved'],
+      ['40598', 'outputTableMissing'],
+    ])
+  })
+
+  it('分支链上的节点同样检查', () => {
+    const main = ['start', '40597', 'end']
+    const branchGroups = [{ ownerId: '40597', branches: [{ chain: ['40599'] }] }] as unknown as FlowBranchGroup[]
+    const configs = {
+      '40597': { title: 'a', kind: 'node', configId: '1400917', outputTable: '6200026' },
+      '40599': { title: '分支', kind: 'node', configId: '1400919' },
+    } as unknown as Record<string, NodeConfig>
+    expect(collectFlowIssues(main, branchGroups, configs).map((i) => i.nodeId)).toEqual(['40599'])
+  })
+})
+
+describe('collectTableMismatches（1014 只提示）', () => {
+  it('输入表与上游有效输出表不一致的已落库节点列出来；任一侧没表不比较', () => {
+    const main = ['start', '40597', '40598', '40599', 'end']
+    const configs = {
+      '40597': { title: 'a', kind: 'node', configId: '1', outputTable: '6200026' },
+      '40598': { title: 'b', kind: 'node', configId: '2', inputTable: '6200040', outputTable: '6200027' },
+      '40599': { title: 'c', kind: 'node', configId: '3' },
+    } as unknown as Record<string, NodeConfig>
+    expect(collectTableMismatches(main, [], configs).map((i) => [i.nodeId, i.reason])).toEqual([['40598', 'tableMismatch']])
   })
 })
 
@@ -206,6 +249,15 @@ describe('mergeStepForWrite', () => {
       isDelete: 1,
       enabled: false,
     })
+  })
+
+  it('节点上改过任务 URL 表达式（stepUrl）就写节点的值，没改过沿用快照（2026-10-19）', () => {
+    const cfg = cfgFromSnapshot()
+    cfg.stepUrl = "K2+'#need_upload_xq/xq/'"
+    const merged = mergeStepForWrite({ snapshot: MEASURED_40600, cfg, nodeId: '40600', sourceId: '430016398' })
+    expect(stepToStepModifyPayload(merged)).toMatchObject({ url: "K2+'#need_upload_xq/xq/'" })
+    const untouched = mergeStepForWrite({ snapshot: MEASURED_40600, cfg: { ...cfgFromSnapshot(), stepUrl: undefined }, nodeId: '40600', sourceId: '430016398' })
+    expect(stepToStepModifyPayload(untouched)).toMatchObject({ url: '$VAL$' })
   })
 
   it('自动保存可按画布重写 lastStep，不碰快照里的 url', () => {
@@ -731,5 +783,33 @@ describe('relinkCandidates（0925 孤儿关联 · 0926 准入入口）', () => {
     }
     const ids = relinkCandidates(main, [], configs, {}, '40600').map((t) => t.id)
     expect(ids).toEqual(['0'])
+  })
+})
+
+// 2026-10-21：任务 URL 来源字段 / 表达式的适用范围与必填（对齐旧平台 SourceStepCard）
+describe('taskUrlFieldsApply / taskUrlSourceMissing', () => {
+  function chain(second: NodeConfig) {
+    const list = cloneConfig(NODE_CONFIGS['web-list'])
+    list.collectCfg!.outputTable = '900'
+    return { main: ['start', 'web-1', 'n-2', 'end'], branches: [], configs: { 'web-1': list, 'n-2': second } }
+  }
+
+  it('采集后续步（含 PDF）有输入表时适用；没选或 -1 算缺', () => {
+    const web = cloneConfig(NODE_CONFIGS['web-detail'])
+    const scope = chain(web)
+    expect(taskUrlFieldsApply(scope, 'n-2')).toBe(true)
+    expect(taskUrlSourceMissing(scope, 'n-2')).toBe(true)
+    web.itemId = '-1'
+    expect(taskUrlSourceMissing(scope, 'n-2')).toBe(true)
+    web.itemId = '9002'
+    expect(taskUrlSourceMissing(scope, 'n-2')).toBe(false)
+  })
+
+  it('首个采集节点、规则类节点、真实 ROOT 不适用', () => {
+    const scope = chain(cloneConfig(NODE_CONFIGS['rule']))
+    expect(taskUrlFieldsApply(scope, 'web-1')).toBe(false)
+    expect(taskUrlFieldsApply(scope, 'n-2')).toBe(false)
+    const rooted = chain(cloneConfig(NODE_CONFIGS['web-detail']))
+    expect(taskUrlFieldsApply(rooted, 'n-2', { stepId: '1', sourceId: '-1', name: 'r', isRoot: true } as Step)).toBe(false)
   })
 })

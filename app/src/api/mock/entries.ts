@@ -2,7 +2,7 @@ import type { Paged, EntryType } from '../types'
 
 const ENTRIES: EntryType[] = [
   {
-    tableId: '2102157', tableName: 'sense_data.TB_ZFB_COMMENT', rowCount: 4501, sourceId: '391007768',
+    tableId: '2102157', tableName: 'sense_data.TB_ZFB_COMMENT', dsKind: 'MYSQL', rowCount: 4501, sourceId: '391007768',
     owner: 'dev_zhonghe', updatedAt: '2026-06-18 17:42', keyField: 'K1', state: 'AC',
     fields: [
       { prop: 'feed_id-K1', desc: '评论 ID', type: 'string', required: true, width: 160, dedup: true, columnName: 'K1' },
@@ -13,7 +13,7 @@ const ENTRIES: EntryType[] = [
     ],
   },
   {
-    tableId: '2101001', tableName: 'sense_data.TB_STOCK_NOTICE', rowCount: 2210, sourceId: '600519',
+    tableId: '2101001', tableName: 'sense_data.TB_STOCK_NOTICE', dsKind: 'MYSQL', rowCount: 2210, sourceId: '600519',
     owner: 'dev_zhonghe', updatedAt: '2026-06-19 07:01', keyField: 'K1', state: 'AC',
     fields: [
       { prop: 'notice_id-K1', desc: '公告 ID', type: 'string', required: true, width: 160, dedup: true, columnName: 'K1' },
@@ -23,7 +23,7 @@ const ENTRIES: EntryType[] = [
     ],
   },
   {
-    tableId: '2101020', tableName: 'sense_data.TB_STOCK_QUOTE', rowCount: 88212, sourceId: '600036',
+    tableId: '2101020', tableName: 'sense_data.TB_STOCK_QUOTE', dsKind: 'CK', rowCount: 88212, sourceId: '600036',
     owner: 'ops_chen', updatedAt: '2026-06-19 08:05', keyField: 'K1,K4', state: 'AC',
     fields: [
       { prop: 'code-K1', desc: '股票代码', type: 'string', required: true, width: 100, dedup: true, columnName: 'K1' },
@@ -33,7 +33,7 @@ const ENTRIES: EntryType[] = [
     ],
   },
   {
-    tableId: '2103300', tableName: 'sense_data.TB_WEIBO_FEED', rowCount: 152300, sourceId: 'WB100231',
+    tableId: '2103300', tableName: 'sense_data.TB_WEIBO_FEED', dsKind: 'MYSQL', rowCount: 152300, sourceId: 'WB100231',
     owner: 'data_wang', updatedAt: '2026-06-19 08:00', keyField: 'K1', state: 'C',
     fields: [
       { prop: 'mid-K1', desc: '微博 ID', type: 'string', required: true, width: 160, dedup: true, columnName: 'K1' },

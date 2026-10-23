@@ -31,6 +31,11 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** 额外的 URL query 参数；用于 POST 也需要 query 的场景（如旧 /v1 端点把 ids/all/skip/include/queue 放 query、body 仅放 param）。 */
   query?: Record<string, unknown>
+  /**
+   * query 里值为空串也照样带上的键。旧 axios 会保留空串参数，有的后端 `@RequestParam` 必须"在场"
+   * 但可以为空（如 source/createJobs 的 `configId=`，不带直接报 not present）。默认空串一律跳过。
+   */
+  keepEmptyParams?: string[]
 }
 
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
@@ -130,6 +135,9 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'source-view/update',
   'source-view/delete',
   'source-view/sort',
+  // 2026-10-15 我的视图目录里的源 / 来源组（V3 增量）：只改自己视图目录的绑定关系，不碰源本身
+  'category/addSources',
+  'category/delSources',
   'source-group/changeMembers',
   'source-group/bindFlows',
   'source-group/updateBindingState',
@@ -189,6 +197,32 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'comm-job/changeEnable',
   'comm-job/copy',
   'comm-job/run',
+  // 1013：指标数据集（旧 page/config/DatasetList.vue）的六个写端点。与 mq/check / comm-job 同性质——
+  // 旧页面本来就是直连后端在改真实数据集：编辑保存、批量启停、由源快速生成、制作副本、立即执行指标。
+  // 迁到新平台后这些端点已在 endpoints.ts 标 live；若不加进本清单，日常代理默认指向生产（118.25.96.217）
+  // 时会被写保护在发请求前拦下——用户点了「删除」只看到一条写保护报错，后端一条都没收到。
+  // ⚠️ 破坏性：delete 是**永久删数据集**（UI 侧已加 confirmDanger）；copy / genFromSource 会多出一条数据集；
+  // runNow 会**真的把指标推给后端执行**（旧版没有任何二次确认，这里保持 1:1 不确认——需要的话可以补）。
+  // 与 source/check 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'dataset/updateDataSet',
+  'dataset/delete',
+  'dataset/changeEnable',
+  'dataset/copy',
+  'dataset/genFromSource',
+  'dataset/runNow',
+  // 1014：指标定义（旧 page/config/MeasureList.vue）的七个写端点，与 dataset 那六个同一性质——
+  // 旧页面本来就直连后端在改真实指标：新增、修改、复制、批量启停、批量删除、物理删除、由源生成。
+  // 已在 endpoints.ts 标 live；不加进本清单则日常代理指向生产时会被写保护拦下（按钮点了后端收不到）。
+  // ⚠️ 破坏性：deleteMeasurePhy 是**从物理表删除该指标记录**（无法恢复，旧页文案「警告，是否从表中删除该记录」，
+  // 只对 isDelete === -1 的历史删除记录开放入口）；delete 是批量删除；copy / add / genMeasureFromSource 会多出记录。
+  // 与 source/check、dataset 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'measure/add',
+  'measure/update',
+  'measure/copy',
+  'measure/delete',
+  'measure/changeEnable',
+  'measure/deleteMeasurePhy',
+  'measure/genMeasureFromSource',
   // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',
@@ -339,11 +373,12 @@ export class ProductionWriteBlockedError extends Error {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-export function appendQuery(url: string, params?: Record<string, unknown>): string {
+export function appendQuery(url: string, params?: Record<string, unknown>, keepEmpty: string[] = []): string {
   if (!params) return url
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') return
+    if (value === undefined || value === null) return
+    if (value === '' && !keepEmpty.includes(key)) return
     if (Array.isArray(value)) {
       query.set(key, value.join(','))
       return
@@ -476,7 +511,7 @@ export async function request<T>(
     if (token) headers[ACCESS_TOKEN_HEADER] = token
     // 以 `/` 开头的 httpEndpoint 视为站点根相对路径（如 /vrule/...），不再拼 BASE_URL（/api/v1/）。
     // 规则编排 Sprint 4 直连旧 vrule 网关时用这个口径；采集中心同域端点仍走相对 path。
-    const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams) : resolvedPath
+    const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams, options.keepEmptyParams) : resolvedPath
     const requestUrl = options.query ? appendQuery(url, options.query) : url
     const controller = new AbortController()
     const onExternalAbort = () => controller.abort()

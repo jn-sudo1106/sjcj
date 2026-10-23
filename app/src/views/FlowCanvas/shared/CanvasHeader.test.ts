@@ -6,7 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import CanvasHeader from './CanvasHeader.vue'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
-import { flowCenterApi } from '@/api'
+import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
 import { cloneConfig, isMonitorNode, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 vi.mock('element-plus', async (importOriginal) => {
@@ -367,4 +367,88 @@ it('源工作区显示六个视图，概览入口写入 URL', async () => {
   expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('overview')
   expect(tabs[0]!.classes()).toContain('on')
   wrapper.unmount()
+})
+
+// 2026-10-19：源多流程时，数据 / 文件 / 任务三页在页头切换流程（流程页有标签栏、概览暂不改）
+describe('CanvasHeader · 数据/文件/任务页的流程切换器', () => {
+  function binding(workflowId: string, extra: Partial<WorkflowBinding> = {}): WorkflowBinding {
+    return {
+      id: `b-${workflowId}`, bindType: 'SOURCE', bindId: 'source-a', workflowId, workflowCode: '', workflowName: `流程${workflowId}`,
+      versionStatus: 'PUBLISHED', workflowStatus: 'ACTIVE', followsCurrentVersion: true, role: 'MAIN', primary: false,
+      priority: 0, status: 'ACTIVE', inherited: false, ...extra,
+    } as WorkflowBinding
+  }
+  async function mountAt(view: string, rows: WorkflowBinding[]) {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue(rows)
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/canvas', query: { sourceId: 'source-a', view, workflowId: '701' } })
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(CanvasHeader, { global: { plugins: [pinia, router] } })
+    useFlowStore().loadFromSource(
+      { sourceId: 'source-a', name: '测试源', url: '', configId: '', mainTable: '', owner: '', state: 'C', flowId: '701', activeWorkflowId: '701' },
+      [],
+    )
+    await flushPromises()
+    return { wrapper, router }
+  }
+
+  it('多条流程：数据 / 文件 / 任务页显示切换器，选中当前流程，标出主 / 辅助 / 来源组', async () => {
+    const rows = [binding('701', { primary: true }), binding('702'), binding('703', { inherited: true })]
+    for (const view of ['data', 'file', 'task']) {
+      const { wrapper } = await mountAt(view, rows)
+      const select = wrapper.get<HTMLSelectElement>('[data-testid="view-flow-picker"] select')
+      expect(select.element.value).toBe('701')
+      expect(select.findAll('option').map((o) => o.text())).toEqual(['流程701 #701（主）', '流程702 #702（辅助）', '流程703 #703（来源组）'])
+      expect(wrapper.find('[data-testid="view-flow-picker-task-note"]').exists()).toBe(view === 'task')
+      wrapper.unmount()
+    }
+  })
+
+  it('流程页、概览、监控不显示；只有一条流程时也不显示', async () => {
+    const rows = [binding('701', { primary: true }), binding('702')]
+    for (const view of ['flow', 'overview', 'monitor-config']) {
+      const { wrapper } = await mountAt(view, rows)
+      expect(wrapper.find('[data-testid="view-flow-picker"]').exists()).toBe(false)
+      wrapper.unmount()
+    }
+    const { wrapper } = await mountAt('data', [binding('701', { primary: true })])
+    expect(wrapper.find('[data-testid="view-flow-picker"]').exists()).toBe(false)
+  })
+
+  it('切换器在标题下「当前流程」那一行里，替换原来的流程名链接', async () => {
+    const { wrapper } = await mountAt('data', [binding('701', { primary: true }), binding('702')])
+    expect(wrapper.find('.ch-sub [data-testid="view-flow-picker"]').exists()).toBe(true)
+    expect(wrapper.find('.ch-switcher + [data-testid="view-flow-picker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="owning-flow"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="view-flow-picker"]').text()).toContain('当前流程：')
+  })
+
+  // 10-19 用户截图：URL 已改成 707423、实际加载的还是 707424，下拉按 URL 显示就和数据对不上
+  it('显示值以实际已加载的流程为准，不认 URL 上的 workflowId', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([binding('701', { primary: true }), binding('702')])
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/canvas', query: { sourceId: 'source-a', view: 'data', workflowId: '702', flowId: '702' } })
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(CanvasHeader, { global: { plugins: [pinia, router] } })
+    useFlowStore().loadFromSource(
+      { sourceId: 'source-a', name: '测试源', url: '', configId: '', mainTable: '', owner: '', state: 'C', flowId: '701' },
+      [],
+    )
+    await flushPromises()
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="view-flow-picker"] select').element.value).toBe('701')
+  })
+
+  it('切换流程只改 query 的 workflowId / flowId（草稿优先），视图保持不变', async () => {
+    const rows = [binding('701', { primary: true }), binding('702', { draftFlowId: '7020', publishedFlowId: '7021' })]
+    const { wrapper, router } = await mountAt('data', rows)
+    await wrapper.get('[data-testid="view-flow-picker"] select').setValue('702')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ sourceId: 'source-a', view: 'data', workflowId: '702', flowId: '7020' })
+  })
 })

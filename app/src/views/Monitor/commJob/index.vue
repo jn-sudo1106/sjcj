@@ -42,7 +42,19 @@
 //      如果要加确认框，说一声即可。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type TableInstance } from 'element-plus'
-import { Search, Plus, Refresh, Setting, ArrowDown, Lightning, SwitchButton, Scissor } from '@element-plus/icons-vue'
+import {
+  Search,
+  Plus,
+  Refresh,
+  Setting,
+  ArrowDown,
+  Lightning,
+  SwitchButton,
+  Scissor,
+  DocumentCopy,
+  VideoPlay,
+  Edit
+} from '@element-plus/icons-vue'
 import type { CommJob } from '@/api'
 import {
   pagedCommJobCheck,
@@ -59,11 +71,20 @@ import CommJobDetailDrawer from './CommJobDetailDrawer.vue'
 defineOptions({ name: 'CommJobList' })
 
 // ---- 查询条件（草稿 → 执行 两态：文本项变化不自动查，点「查询」/ 回车才发请求）----
+/** 状态下拉的 UI 哨兵。el-select 里 `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成
+ *  「没选」、`selectedLabel` 回退到 placeholder —— 选中「全部」时输入框里看不到「全部」两个字。
+ *  所以 UI 值用 '-1'，到 `load()` 里再还原成旧口径（'全部' → 空串，不带该条件）。
+ *  ⚠️ 后端 enable=-1 本来是「历史删除的」，故它另用 '-2' 占位，接口层还原回 '-1'。 */
+const ENABLE_ALL = '-1'
+const ENABLE_DELETED = '-2'
+const toApiEnable = (value: string): string =>
+  value === ENABLE_ALL ? '' : value === ENABLE_DELETED ? '-1' : value
+
 const form = reactive({
   queue: '',    // 队列名（旧 queryParam.queue → 后端落 jobName）
   queueId: '',  // ID
   name: '',     // 描述（旧 queryParam.name）
-  enable: '0',  // '' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的（⚠️ 初值 '0'，与 queueCheck 不同）
+  enable: '0',  // 全部(ENABLE_ALL) / '0' 在用 / '1' 停用 / ENABLE_DELETED 历史删除的（⚠️ 初值 '0'，与 queueCheck 不同）
 })
 /** 已「执行」的筛选条件。分页单独管——旧 pagedCommJobCheck 只发筛选字段 + page/limit。 */
 const filters = reactive({ queue: '', queueId: '', name: '', enable: '0' })
@@ -88,7 +109,7 @@ async function load() {
       queue: filters.queue,
       queueId: filters.queueId,
       name: filters.name,
-      enable: filters.enable,
+      enable: toApiEnable(filters.enable),
       page: page.value,
       limit: size.value,
     })
@@ -113,13 +134,14 @@ function runQuery() {
 }
 
 /** 旧「重置」按钮：`queryParam = {}` —— 只清条件，不发请求（下一次查询才生效）。
- *  差别：旧版清完 enable 是 undefined（下拉回到空 placeholder），这里回到「全部」（''），
- *  两者在接口上等价——都是不带 enable 条件。 */
+ *  差别：旧版清完 enable 是 undefined（下拉回到空 placeholder），这里回到「全部」（哨兵 ENABLE_ALL，
+ *  选中后能显示「全部」二字；发请求时由 `toApiEnable()` 还原成空串），接口上与旧版等价——
+ *  都是不带 enable 条件。 */
 function resetQuery() {
   form.queue = ''
   form.queueId = ''
   form.name = ''
-  form.enable = ''
+  form.enable = ENABLE_ALL
 }
 
 // ---- 批量操作（旧版：勾选后点「更多..」下拉 → 启用 / 禁用 / 删除）----
@@ -239,13 +261,13 @@ onMounted(() => void load())
 
 <template>
   <div class="cj-shell" v-loading="loading">
-    <div class="cj-head">
+    <!-- <div class="cj-head">
       <div class="cj-title">自定义告警</div>
       <div class="cj-sub">通用定时任务（SQL-告警 / 定时 Job）的配置列表，支持批量启停、复制与运行。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；文本项不自动查，状态项 @change 即查） -->
-    <el-form :inline="true" class="cj-filter-form" size="small">
+    <el-form :inline="true" class="cj-filter-form">
       <el-row :gutter="8" class="cj-filter-row">
         <el-col :md="4" :sm="24">
           <el-form-item label="队列名">
@@ -266,10 +288,10 @@ onMounted(() => void load())
           <el-form-item label="状态">
             <!-- 旧版这个 select 带 @change="handleRefresh"：改完立刻查（1:1） -->
             <el-select v-model="form.enable" placeholder="请选择" @change="runQuery">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
-              <el-option label="历史删除的" value="-1" />
+              <el-option label="历史删除的" :value="ENABLE_DELETED" />
             </el-select>
           </el-form-item>
         </el-col>
@@ -363,13 +385,17 @@ onMounted(() => void load())
             <span class="cj-time">{{ timeText(row[col.dataIndex as 'nextRun' | 'lastRun']) }}</span>
           </el-tooltip>
 
-          <!-- 操作：旧 actionSlot —— 编辑 | 复制 | 运行（没有详情，详情走定时ID/定时名） -->
+          <!-- 操作：旧 actionSlot —— 编辑 / 复制 / 运行（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="cj-actions">
-            <span class="cj-op-link" @click="openEdit(row)">编辑</span>
-            <span class="cj-op-divider">|</span>
-            <span class="cj-op-link" @click="copyJob(row)">复制</span>
-            <span class="cj-op-divider">|</span>
-            <span class="cj-op-link" @click="runJob(row)">运行</span>
+            <el-tooltip content="编辑" placement="top">
+              <span class="cj-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="复制" placement="top">
+              <span class="cj-op-icon" @click="copyJob(row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="运行" placement="top">
+              <span class="cj-op-icon" @click="runJob(row)"><el-icon :size="15"><VideoPlay /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列（含禁用列以外的短列）：直接显示字段值；长文本走列上的 show-overflow-tooltip -->
@@ -399,6 +425,10 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.cj-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .cj-shell {
   display: flex;
   flex-direction: column;
@@ -475,15 +505,28 @@ onMounted(() => void load())
   text-overflow: ellipsis;
   word-break: break-all;
 }
-.cj-link,
-.cj-op-link {
+.cj-link {
   color: var(--rc-primary, #2563eb);
   cursor: pointer;
   font-size: 12px;
 }
-.cj-link:hover,
-.cj-op-link:hover {
+.cj-link:hover {
   text-decoration: underline;
+}
+.cj-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.cj-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .cj-tag {
   cursor: pointer;
@@ -503,10 +546,8 @@ onMounted(() => void load())
 .cj-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.cj-op-divider {
-  color: var(--rc-faint, #94a3b8);
+  justify-content: center;
+  gap: 10px;
 }
 .cj-pager {
   display: flex;
@@ -514,3 +555,4 @@ onMounted(() => void load())
   padding: 8px 0 2px;
 }
 </style>
+

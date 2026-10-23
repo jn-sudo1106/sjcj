@@ -102,6 +102,8 @@ function reset() {
     keyField: entry?.keyField,
     dedupMode: entry?.dedupMode ?? 'source',
     state: entry?.state ?? 'C',
+    // 数据源类型：MYSQL（默认）/ CK；老记录后端未返回时归一 MYSQL（与 legacyAdapters 归一口径一致）
+    dsKind: entry?.dsKind ?? 'MYSQL',
     // null/undefined → ''：与 el-option value="" "请选择" 对齐，提交时透传空串 = 未配置（避免 String(null)='null'）
     recFlag: entry?.recFlag == null ? '' : String(entry.recFlag),
     checkFlag: entry?.checkFlag == null ? '' : String(entry.checkFlag),
@@ -287,12 +289,19 @@ async function submit() {
     <div class="ete-grid">
       <div v-if="isEdit" class="rc-field"><label>表ID</label><input class="rc-input" :value="form.tableId" disabled /></div>
       <div class="rc-field"><label>名称</label><input v-model="form.name" class="rc-input" @input="onNameInput" /></div>
-      <div class="rc-field"><label>物理表</label><input v-model="form.tableName" class="rc-input" placeholder="例如 tb_entry_news" @input="onTableNameInput" /></div>
+      <div class="rc-field"><label>物理表</label><input v-model="form.tableName" class="rc-input" :disabled="isEdit" :title="isEdit ? '物理表名已落库，不允许修改（改错会让表配置指向不存在的物理表）' : ''" placeholder="例如 tb_entry_news" data-testid="entry-table-name" @input="onTableNameInput" /></div>
       <div class="rc-field"><label>去重列</label><input class="rc-input" :value="form.keyField || '—'" disabled /></div>
       <div class="rc-field"><label>去重方式</label>
         <select v-model="form.dedupMode" class="rc-input" data-testid="entry-dedup-mode">
           <option value="source">源内去重</option>
           <option value="table">表内去重</option>
+        </select>
+      </div>
+      <div class="rc-field"><label>数据源类型</label>
+        <!-- 切换只改 cfg_entry_type.DS_KIND（查询链路标记），不迁数据；写入始终在 MySQL -->
+        <select v-model="form.dsKind" class="rc-input" data-testid="entry-ds-kind">
+          <option value="MYSQL">MYSQL</option>
+          <option value="CK">CK</option>
         </select>
       </div>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>

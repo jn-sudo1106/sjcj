@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
- * 源管理「来源组」目录页签（1008-03，10-09 改定方案；10-13 用户定：放系统设置）。
+ * 源管理「来源组」目录页签（1008-03，10-09 改定方案）。
  *
- * 放哪：`Settings/index.vue` 页内 tab「来源组」（10-13 从采集资产页签条移到这里）。
+ * 放哪：源管理（`CollectAssets/index.vue`）的「我的分组」页签。10-13 曾移到系统设置、源管理只读；
+ * 同日 leo 定：「先把功能上上去，管理员也是在源管理里面改」，迁回源管理并可编辑，系统设置不再有这一页（权限后面再管）。
  * 界面复用「我的分组」（`PersonalSources.vue`）的布局：左边组列表（带成员数），右边成员源列表；
  * 来源组独有的东西（流程配置、组资料）放右侧抽屉。数据不合并——「我的分组」是本机个人目录，
  * 来源组是后端 `source-group/*` 配置（决定组内源跑哪条流程，只有管理员能改）。
@@ -19,20 +20,21 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { sourceGroupApi, flowCenterApi, sourceApi, type SourceGroup, type SourceGroupState, type SourceFlowBind, type FlowRecord } from '@/api'
+import { sourceGroupApi, flowCenterApi, sourceApi, type Source, type SourceGroup, type SourceGroupState, type SourceFlowBind, type FlowRecord } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
+import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
 
 const auth = useAuthStore()
-// 2026-10-12：源管理「我的分组」改为只读展示来源组（全平台共用），复用本页，readonly 时隐藏一切修改入口
-const props = defineProps<{ readonly?: boolean }>()
+// 2026-10-13：本页挂在源管理「我的分组」（从系统设置迁回，管理员也在这里改），不再有只读模式
 const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
-const canWrite = computed(() => !props.readonly && auth.role === 'admin')
+const canWrite = computed(() => auth.role === 'admin')
 
 // ---- 左侧组列表 ----
 const groups = ref<SourceGroup[]>([])
@@ -381,12 +383,26 @@ async function moveMembers(): Promise<void> {
   afterMemberChange()
 }
 
-/** 打开源：与网站详情「源视图」同一落点（SourceTab.openSourceFromList 同口径） */
-function openSource(source: { sourceId: string; siteId?: string }, view: 'overview' | 'data' = 'overview'): void {
+/** 打开源：与网站详情「源视图」同一落点（SourceTab.openSourceFromList 同口径）。
+ *  同样记一笔「最近打开的网站」——「我的分组」也是源管理的常见入口，不记会漏掉一整条进入路径。 */
+function openSource(source: Source, view: 'overview' | 'data' = 'overview'): void {
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '我的分组',
+  })
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
   })
+}
+
+/** 打开网站（源列表里的「所属网站」链接）：同样记一笔 */
+function openSite(siteId: string): void {
+  recordSiteVisit(siteId)
+  void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 
 /** 查看流程节点：拉详情后打开 FlowDetailDrawer */
@@ -413,7 +429,7 @@ watch(selectedGroup, () => {
 onMounted(() => {
   void loadFlows()
   void reloadGroups()
-  // 1008-04：从源列表点来源组名跳过来（/settings?tab=source-group&group=<id>）时，选中该组
+  // 1008-04：从源列表点来源组名跳过来（/collect?tab=personal&group=<id>）时，选中该组
   const fromQuery = String(route.query.group ?? '')
   if (fromQuery && /^\d+$/.test(fromQuery)) {
     selectedGroupId.value = fromQuery
@@ -428,7 +444,7 @@ watch(() => route.query.group, (id) => {
 <template>
   <div class="sg-tab">
     <el-alert
-      v-if="!canWrite && !readonly"
+      v-if="!canWrite"
       title="当前账号仅可查看，修改需要管理员权限"
       type="info"
       :closable="false"
@@ -438,7 +454,7 @@ watch(() => route.query.group, (id) => {
       <aside class="sg-nav">
         <div class="sg-heading">
           <strong>来源组</strong>
-          <el-button v-if="!readonly" size="small" type="primary" :disabled="!canWrite" data-testid="sg-new" @click="creating = true">新建</el-button>
+          <el-button size="small" type="primary" :disabled="!canWrite" data-testid="sg-new" @click="creating = true">新建</el-button>
         </div>
         <div class="sg-list">
           <button
@@ -454,8 +470,7 @@ watch(() => route.query.group, (id) => {
           </button>
           <div v-if="!groups.length" class="sg-empty">{{ loading ? '加载中…' : '暂无来源组' }}</div>
         </div>
-        <p v-if="readonly" class="sg-note" data-testid="sg-readonly-note">全平台共用的分组，这里只能查看；由管理员在「系统设置 → 来源组」维护。</p>
-        <p v-else class="sg-note">来源组决定组内源跑哪条流程，修改影响全部成员；只有管理员能修改。</p>
+        <p class="sg-note">来源组决定组内源跑哪条流程，修改影响全部成员；只有管理员能修改。</p>
       </aside>
       <section class="sg-content">
         <template v-if="selectedGroup">
@@ -470,7 +485,6 @@ watch(() => route.query.group, (id) => {
             </span>
             <div class="sg-actions">
               <el-button
-                v-if="!readonly"
                 size="small"
                 :disabled="!canWrite || selectedGroup.state !== 'ACTIVE'"
                 :title="selectedGroup.state !== 'ACTIVE' ? '组已停用，不能加入新成员' : ''"
@@ -489,9 +503,9 @@ watch(() => route.query.group, (id) => {
             scope-empty-text="该来源组还没有成员，可在源列表勾选后「调整来源组」，或点「添加源」"
             @open-source="openSource"
             @open-source-data="openSource($event, 'data')"
-            @open-site="router.push({ path: '/canvas', query: { siteId: $event, view: 'source', returnTo: route.fullPath } })"
+            @open-site="openSite"
           >
-            <template v-if="!readonly" #selection-actions="{ ids }">
+            <template #selection-actions="{ ids }">
               <el-button size="small" data-testid="sg-remove-members" :disabled="!canWrite || !ids.length" @click="selectedIds = [...ids]; removeMembers()">移出来源组</el-button>
               <el-select
                 v-model="moveTarget"
@@ -642,6 +656,7 @@ watch(() => route.query.group, (id) => {
       v-if="selectedGroup"
       v-model="pickerVisible"
       :group-id="selectedGroup.sourceGroupId"
+      :group-name="selectedGroup.sourceGroupName"
       :backend-mode="true"
       @saved="afterMemberChange"
     />

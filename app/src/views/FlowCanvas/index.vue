@@ -3,11 +3,11 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { useSourceStore } from '../../stores/source'
 import { useUiStore } from '../../stores/ui'
 import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
+import { useFlowReadiness } from '@/views/FlowCanvas/canvas/useFlowReadiness'
 import { useRuntimeStore } from '../../stores/runtime'
 import { useFlowVersionStore } from '../../stores/flowVersion'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -26,18 +26,19 @@ import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
-import { firstOutputTableMissingNodeId, firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
+import { firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
+import { flushNodeConfigs } from './inspector/nodeConfigAutosave'
 
 const route = useRoute()
 const router = useRouter()
 const flow = useFlowStore()
 const autosave = useFlowAutosave()
+const { ensureFlowReady } = useFlowReadiness()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const runtime = useRuntimeStore()
-const sourceStore = useSourceStore()
 // 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
@@ -115,6 +116,8 @@ const isPublishedFlowView = computed(() => flow.sourceCtx?.workflowVersionManage
 const sourceLoadError = ref('')
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
+// 数据 / 文件 / 任务视图的节点和表都跟着当前流程走：页头切换流程后整块重挂，不残留上一条流程的筛选（2026-10-19）
+const flowScopedKey = computed(() => `${flow.sourceCtx?.sourceId ?? ''}:${flow.sourceCtx?.flowId ?? ''}`)
 const isOverviewView = computed(() => activeView.value === 'overview' && !!flow.sourceCtx)
 const isWorkflowListView = computed(() => activeView.value === 'flow' && route.query.flowMode === 'list' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
@@ -167,6 +170,8 @@ const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.quer
 // 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
 const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
+  // 1021-06：先把能自动保存的节点配置存掉，剩下存不掉的（新节点、共享配置等）才走下面的提示
+  await flushNodeConfigs()
   // 没落库的草稿节点要单独说（0903）：`flow.dirty` 说的是"有改动"，而这里是**整个节点还不存在于
   // 后端**——切走就永久没了，重进画布连痕迹都没有（buildSourceSeed 只认 sourceSteps 的步骤行）。
   // 两种情况的后果差得远，提示不能共用一句"改动将丢弃"。
@@ -334,7 +339,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 绑定列表读失败时不挡住画布：退回源上的默认流程 ID（Source.flowId 即后端的 defaultFlowId），流程标签栏自己会报错。
   let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
   try {
-    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId)
+    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId, { withNames: false })
   } catch {
     bindings = []
   }
@@ -566,34 +571,7 @@ const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
 async function onStartCapture() {
   const s = flow.sourceCtx
   if (!s) return
-  if (flow.flowDirty || autosave.status.value === 'saving' || autosave.status.value === 'error') {
-    await autosave.flush()
-  }
-  if (autosave.status.value === 'pending') {
-    // 0927 P1-3：pending 现在是两个成因（未绑配置 / 输出表未就绪，useFlowAutosave 同口径），
-    // 这里分别定位节点并给出对应的引导文案——原来只查「未绑配置」：输出表未就绪时不选中
-    // 节点、文案还指去「保存节点配置」，方向全错。
-    const missingOutput = firstOutputTableMissingNodeId(flow.main, flow.branchGroups, flow.configs, sourceStore.stepSnapshots)
-    if (missingOutput) {
-      flow.select(missingOutput)
-      ElMessage.warning(`节点「${flow.configs[missingOutput]?.title || missingOutput}」输出表未选择，请先在右侧「表配置」补全后重试`)
-      return
-    }
-    const pendingNode = firstUnboundDraftNodeId(flow.main, flow.configs)
-    if (pendingNode) flow.select(pendingNode)
-    ElMessage.warning(`节点「${flow.configs[pendingNode || '']?.title || pendingNode || '新节点'}」尚未保存，请先在右侧保存节点配置`)
-    return
-  }
-  if (flow.flowDirty || autosave.status.value === 'error') {
-    ElMessage.warning('流程尚未保存，请点击头部「保存失败，点击重试」或稍候再发起抓取')
-    return
-  }
-  if (flow.configDirty) {
-    const pending = flow.dirtyConfigNodes[0]
-    flow.select(pending)
-    ElMessage.warning(`节点「${flow.configs[pending]?.title || pending}」的配置尚未保存，请先在右侧保存节点配置`)
-    return
-  }
+  if (!await ensureFlowReady('发起抓取')) return
   if (runtime.running || capturing.value) {
     ElMessage.warning('已有发起抓取正在进行，请稍候')
     return
@@ -619,7 +597,8 @@ async function onStartCapture() {
           ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
           return
         }
-        ElMessage.success(`已发起抓取 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
+        // runId 是画布本地演示用的编号（stores/runtime），不是后端任务 ID，别展示给用户（10-22：用户拿它去任务列表找不到）
+        ElMessage.success('已发起抓取，任务已下发，可到「任务」页签查看进度')
       },
     })
   } catch {
@@ -779,8 +758,8 @@ onUnmounted(() => {
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <SourceSummaryView v-else-if="isOverviewView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
-        <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
-        <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
+        <TaskView v-else-if="isTaskView" :key="flowScopedKey" class="rc-flow-result" />
+        <FileView v-else-if="isFileView" :key="flowScopedKey" class="rc-flow-result" />
         <MonitorConfigView v-else-if="isMonitorConfigView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <SourceWorkflowList
           v-else-if="isWorkflowListView"
@@ -804,7 +783,7 @@ onUnmounted(() => {
           :style="{ '--insp-w': inspWidth }"
         >
           <template v-if="!ui.inspectorExpanded">
-            <ResultView v-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-center" />
+            <ResultView v-if="isDataView" :key="flowScopedKey" class="rc-flow-center" />
             <FlowBoard v-else />
           </template>
           <button

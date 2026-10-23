@@ -8,7 +8,25 @@ import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceTab from './SourceTab.vue'
 import { beginSitesFetch, clearCollectAssetsCache, collectAssetsCache, commitSites } from './siteListCache'
 import { useUiStore } from '@/stores/ui'
-import { sourceApi, siteApi, favoriteApi } from '@/api'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { sourceApi, siteApi, favoriteApi, logReportApi } from '@/api'
+import * as sourceDirs from '@/api/sourceDirs'
+
+// 「最近打开」2026-10-19 起以后端通用埋点为准。这里用内存列表代替服务端：
+// 上报记进内存、挂载时 recentRaw 从它读回来——与真实后端行为一致，
+// 否则挂载那次加载会拿空结果把用例里手工设置的最近列表冲掉。
+beforeEach(() => {
+  vi.spyOn(logReportApi, 'report').mockResolvedValue({ success: true, code: '0', msg: '操作成功', data: {} })
+  vi.spyOn(logReportApi, 'recentRaw').mockImplementation(async () => {
+    const rec = await import('@/utils/siteRecents')
+    return {
+      success: true,
+      code: '0',
+      msg: '操作成功',
+      data: rec.recentSiteIds.value.map((id) => ({ contentId: id, contentTitle: null, createDt: '2026-10-19 10:00:00' })),
+    }
+  })
+})
 
 // 收藏以后端为准（B30）。这里用一个集合代替服务端：点星写进去，挂载时 loadFavoriteSites 从它读回来，
 // 与真实后端行为一致（否则挂载那次加载会拿 mock 的空结果把测试里点的星冲掉）。
@@ -40,13 +58,14 @@ function makeRouter() {
   })
 }
 
-async function mountAt(query?: Record<string, string>, props?: { scope?: 'all' | 'favorite' | 'recent' }) {
+async function mountAt(query?: Record<string, string>, props?: { scope?: 'all' | 'favorite' | 'recent' }, dataHits?: string[]) {
   clearCollectAssetsCache()
   const router = makeRouter()
   await router.push({ path: '/collect', query })
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
+  if (dataHits) useWorkspaceStore().setDataQueryHits(dataHits)
   const wrapper = mount(SourceTab, { props, global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   await flushPromises()
@@ -267,11 +286,170 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     return { ...res, ui, list: res.wrapper.findComponent({ name: 'SourceOverviewView' }) }
   }
 
+  async function bizOps(wrapper: Awaited<ReturnType<typeof mountList>>['wrapper']) {
+    const dropdown = wrapper.findAllComponents({ name: 'ElDropdown' }).find((d) => d.attributes('data-testid') === 'biz-ops')!
+    await dropdown.get('button').trigger('click')
+    await flushPromises()
+    return { dropdown, run: async (command: 'add' | 'move') => { dropdown.vm.$emit('command', command); await flushPromises() } }
+  }
+
+  it('默认收起业务目录、不选任何目录：不拉目录内的源，按全库查询；旧的展开偏好不覆盖默认值', async () => {
+    sourceDirs.resetSourceDirCache()
+    localStorage.setItem('sjcj.sourceDirPanel.collapsed', '0')
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: 'biz-dir', name: '业务目录一' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['biz-source'])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="dir-panel-rail"]').text()).toContain('业务目录')
+    expect(wrapper.get('[data-testid="dir-panel-rail"]').text()).not.toContain('全')
+    expect(wrapper.find('.ca-dir-layout.collapsed').exists()).toBe(true)
+    expect(scope).not.toHaveBeenCalled()
+    expect(list.props('scopeSourceIds')).toBeUndefined()
+    expect(page).toHaveBeenCalled()
+    for (const [query] of page.mock.calls) expect(query?.sourceIds).toBeUndefined()
+    wrapper.unmount()
+    for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+    sourceDirs.resetSourceDirCache()
+  })
+
+  it('业务目录树为空时默认切系统目录，解除业务源 ID 范围并正常查询列表', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="dir-panel-rail"]').text()).toContain('系统目录')
+    expect(wrapper.find('.ca-dir-layout.collapsed').exists()).toBe(true)
+    expect(list.props('scopeSourceIds')).toBeUndefined()
+    expect(list.props('scopeCategoryIds')).toBeUndefined()
+    expect(page).toHaveBeenCalled()
+    for (const [query] of page.mock.calls) expect(query?.sourceIds).toBeUndefined()
+    wrapper.unmount()
+    for (const spy of [categories, membership, page]) spy.mockRestore()
+    sourceDirs.resetSourceDirCache()
+  })
+
+  it('点选的业务目录里没有源时范围为空，不退回全库源', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue([])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    try {
+      await flushPromises()
+      const before = page.mock.calls.length
+      wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', dirIds: ['900'], labels: [{ id: '900', path: '股票数据', hasKids: false }] })
+      await flushPromises()
+      expect(scope).toHaveBeenCalledWith(['900'])
+      expect(list.props('scopeSourceIds')).toEqual([])
+      expect(page.mock.calls.length).toBe(before)
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
+  it('常驻入口在同一弹窗从全库选源和目录，保存后刷新当前范围', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['1'])
+    const add = vi.spyOn(sourceDirs, 'addSourcesToBizDir').mockResolvedValue(1)
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const { wrapper, list } = await mountList()
+    try {
+      expect(wrapper.find('[data-testid="source-add-to-biz"]').exists()).toBe(false)
+      await (await bizOps(wrapper)).run('add')
+      const picker = wrapper.findComponent({ name: 'GroupSourcePicker' })
+      expect(picker.props('modelValue')).toBe(true)
+      expect(picker.props('pickMode')).toBe(true)
+      expect(page.mock.lastCall?.[0]).toMatchObject({ page: 1, size: 20 })
+      expect(page.mock.lastCall?.[0]).not.toHaveProperty('sourceIds')
+      expect(page.mock.lastCall?.[0]).not.toHaveProperty('categorys')
+      expect(add).not.toHaveBeenCalled()
+      const target = wrapper.findComponent({ name: 'BizDirPickerDialog' })
+      expect(target.props('initialSourceIds')).toEqual([])
+      expect(target.props('initialDirectoryIds')).toEqual([])
+      expect(picker.findComponent({ name: 'ElTree' }).exists()).toBe(true)
+      const loads = membership.mock.calls.length
+      target.vm.$emit('saved')
+      target.vm.$emit('close')
+      await flushPromises()
+      expect(membership.mock.calls.length).toBeGreaterThan(loads)
+      expect(list.props('scopeSourceIds')).toBeUndefined()
+      expect(wrapper.findAllComponents({ name: 'ElDropdown' }).some((d) => d.attributes('data-testid') === 'biz-ops')).toBe(true)
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, add, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
+  it('勾选源后从「业务目录 ▾」添加：带入源和左侧目录，不把含子级范围当作目标', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['1'])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '1', name: '测试源', state: 'C' } as never] })
+    const { wrapper } = await mountList()
+    try {
+      wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', dirIds: ['900', '901'], labels: [{ id: '900', path: '股票数据', hasKids: true }] })
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      expect(wrapper.find('[data-testid="source-add-to-biz"]').exists()).toBe(false)
+      await (await bizOps(wrapper)).run('add')
+      const dialog = wrapper.findComponent({ name: 'BizDirPickerDialog' })
+      expect(dialog.props('initialSourceIds')).toEqual(['1'])
+      expect(dialog.props('initialDirectoryIds')).toEqual(['900'])
+      dialog.vm.$emit('close')
+      await flushPromises()
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
+  it('移动到…：没点业务目录时不可用；点了一个目录后带上勾选的源和「从」目录打开弹窗；业务目录下不给「按目录」', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue(['1'])
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '1', name: '测试源', state: 'C' } as never] })
+    const { wrapper } = await mountList()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      await (await bizOps(wrapper)).run('move')
+      expect(wrapper.findComponent({ name: 'BizDirMoveDialog' }).exists()).toBe(false)
+      wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', dirIds: ['900', '901'], labels: [{ id: '900', path: '股票数据', hasKids: true }] })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="dir-ops"]').exists()).toBe(false)
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      await (await bizOps(wrapper)).run('move')
+      const dialog = wrapper.findComponent({ name: 'BizDirMoveDialog' })
+      expect(dialog.props()).toMatchObject({ sourceIds: ['1'], fromDirIds: ['900', '901'], fromLabel: '股票数据（含子级）' })
+      dialog.vm.$emit('close')
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'BizDirMoveDialog' }).exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, scope, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
   it('切到源列表视图：挂源视图组件、不限网站；卡片与网站批量条都不在', async () => {
     const { wrapper, ui, list } = await mountList()
     expect(ui.assetView).toBe('table')
     expect(list.exists()).toBe(true)
     expect(list.props('currentSiteId')).toBe('')
+    expect(list.props('quickEdit')).toBe(true)
     expect(list.props('scopeSiteIds')).toBeUndefined()
     expect(wrapper.findComponent({ name: 'SiteCardGrid' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'BatchBar' }).exists()).toBe(false)
@@ -304,7 +482,7 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     rec.recentSiteIds.value = []
     const first = await mountList('recent')
     expect(first.list.props('scopeSiteIds')).toEqual([])
-    expect(first.list.props('scopeEmptyText')).toContain('仅本机')
+    expect(first.list.props('scopeEmptyText')).toContain('还没有打开过网站')
 
     rec.recordSiteVisit('s-a')
     rec.recordSiteVisit('s-b')
@@ -529,12 +707,13 @@ describe('SourceTab · 最近打开的网站（0917-17 / 0924-01）', () => {
     expect(shown(wrapper)).toEqual(['s-old', 's-new'])
   })
 
-  it('一个都没打开过时：空列表，空态注明「仅本机」', async () => {
+  it('一个都没打开过时：空列表，空态说明会自动记录', async () => {
     const { wrapper } = await mountWithSites('recent')
     expect(shown(wrapper)).toEqual([])
     const emptyText = wrapper.findComponent({ name: 'SiteCardGrid' }).props('emptyText') as string
     expect(emptyText).toContain('还没有打开过网站')
-    expect(emptyText).toContain('仅本机')
+    // 2026-10-19 起后端存储（通用埋点），换浏览器也在，不再有「仅本机」的说法
+    expect(emptyText).not.toContain('仅本机')
   })
 
   it('最近打开 tab 里收藏不插队：纯按访问顺序', async () => {
@@ -709,3 +888,82 @@ describe('SourceTab 分类缓存重拉（0924-03）', () => {
   })
 })
 
+describe('SourceTab · 删除网站（1014 右键卡片菜单）', () => {
+  beforeEach(() => {
+    vi.mocked(ElMessage.warning).mockClear()
+    vi.mocked(ElMessage.success).mockClear()
+    vi.mocked(ElMessageBox.confirm).mockReset()
+  })
+
+  it('点删除：先弹二次确认，取消则不调 siteDelete', async () => {
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+    const sitePagedSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 1,
+      list: [{ siteId: 's1', name: '网站一', sourceCount: 0, errorCount: 0, updatedAt: '2026-10-14 10:00:00', tags: [], category: '', owner: '' }],
+    })
+    const deleteSpy = vi.spyOn(siteApi, 'siteDelete').mockResolvedValue({ ok: true, message: '' })
+    const { wrapper } = await mountAt()
+    await flushPromises()
+
+    const grid = wrapper.findComponent({ name: 'SiteCardGrid' })
+    await grid.vm.$emit('delete-site', { siteId: 's1', name: '网站一' })
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+    wrapper.unmount()
+    sitePagedSpy.mockRestore()
+    deleteSpy.mockRestore()
+  })
+
+  it('确认后调 siteDelete 并整体刷新；成功提示已删除', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValueOnce('confirm' as never)
+    const sitePagedSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 1,
+      list: [{ siteId: 's1', name: '网站一', sourceCount: 0, errorCount: 0, updatedAt: '2026-10-14 10:00:00', tags: [], category: '', owner: '' }],
+    })
+    const deleteSpy = vi.spyOn(siteApi, 'siteDelete').mockResolvedValue({ ok: true, message: '' })
+    const { wrapper } = await mountAt()
+    await flushPromises()
+    const callsBefore = sitePagedSpy.mock.calls.length
+
+    const grid = wrapper.findComponent({ name: 'SiteCardGrid' })
+    await grid.vm.$emit('delete-site', { siteId: 's1', name: '网站一' })
+    await flushPromises()
+    await flushPromises()
+
+    expect(deleteSpy).toHaveBeenCalledWith('s1')
+    expect(ElMessage.success).toHaveBeenCalledWith('已删除网站「网站一」')
+    // 删除后整体刷新（refreshAll → 重新拉列表）
+    expect(sitePagedSpy.mock.calls.length).toBeGreaterThan(callsBefore)
+    wrapper.unmount()
+    sitePagedSpy.mockRestore()
+    deleteSpy.mockRestore()
+  })
+})
+
+// 1016：数据中心「按条件查源」带过来的命中源
+describe('SourceTab 数据查询命中源', () => {
+  it('带 from=data-query 且 store 有名单：顶部显示命中数，源列表限定在这批源', async () => {
+    const { wrapper } = await mountAt({ tab: 'source', from: 'data-query' }, undefined, ['1', '2', '3'])
+    expect(wrapper.get('[data-testid="data-query-hits"]').text()).toContain('数据查询命中 3 个源')
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    expect(list.props('scopeSourceIds')).toEqual(['1', '2', '3'])
+    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).exists()).toBe(false)
+  })
+
+  it('点清除：清空名单、去掉 from，回到普通源管理', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'source', from: 'data-query' }, undefined, ['1'])
+    await wrapper.get('[data-testid="data-query-hits-clear"]').trigger('click')
+    await flushPromises()
+    expect(useWorkspaceStore().dataQueryHits).toBeNull()
+    expect(router.currentRoute.value.query).toEqual({ tab: 'source' })
+    expect(wrapper.find('[data-testid="data-query-hits"]').exists()).toBe(false)
+  })
+
+  it('刷新后 store 为空：忽略 from 标记，照常显示', async () => {
+    const { wrapper } = await mountAt({ tab: 'source', from: 'data-query' })
+    expect(wrapper.find('[data-testid="data-query-hits"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).exists()).toBe(true)
+  })
+})

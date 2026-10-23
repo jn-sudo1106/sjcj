@@ -3,7 +3,7 @@
 // 内容：有效输入表摘要 → 进入条件 → 队列名称 → 参数绑定与出参列 → 任务参数取值 → 上下文来源。
 // 进入条件留在本 Tab（2026-08-28 确认）；入口文案按 0828 D20 改成「添加条件」，
 // 落库仍在流程的步骤上（Step.condition，0824-11 §1.1）。
-// 「任务 URL 来源字段/规则」已删除（0804 拍板：当时保留是为了传参，现在在参数位置拼接即可，见开发方案 §2.3）。
+// 「任务 URL 来源字段/规则」0804 从本 Tab 删除；2026-10-19 按旧平台在「节点配置」Tab 恢复（步骤 itemId / url），见 ConfigTab。
 // 行为与原 NodeInspector 内联实现 1:1，仅物理搬迁；共享资产 tables/params 经 useNodeInspectorAssets 注入。
 import { computed, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'

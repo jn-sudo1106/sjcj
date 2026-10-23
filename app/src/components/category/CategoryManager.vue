@@ -3,7 +3,7 @@
 // 原来是采集资产「全部分类」下拉底部唤起的抽屉（CategoryManageDrawer，2026-09-21），
 // 0924 会上认为"放在查询页面有点奇怪"，迁到「系统设置 → 分类目录」整页展示，逻辑原样搬过来。
 // 改完分类后采集资产那边的分类树缓存由 clearCategoryCache 清掉，切回去时静默重拉即可看到。
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Top, Bottom } from '@element-plus/icons-vue'
 import { sourceApi, categoryApi, clearCategoryCache, type SourceCategory } from '@/api'
@@ -26,7 +26,11 @@ const expandedKeySet = reactive(new Set<string>())
 const expandedKeys = computed(() => Array.from(expandedKeySet))
 
 function onNodeExpand(data: SourceCategory) {
-  if (data?.id) expandedKeySet.add(String(data.id))
+  if (!data?.id) return
+  expandedKeySet.add(String(data.id))
+  // 展开时预取下一层：子目录自己有没有子级要提前知道，否则箭头显示不准
+  const node = findInTree(fullTreeData.value, String(data.id))
+  if (node?.children?.length) void prefetchChildren(node.children)
 }
 
 function onNodeCollapse(data: SourceCategory) {
@@ -35,6 +39,62 @@ function onNodeCollapse(data: SourceCategory) {
 
 // 缓存根分类列表以便快速计算新增权重及搜索兜底
 const rootCategories = ref<SourceCategory[]>([])
+
+/**
+ * 目录树按需加载（1016）：原来 BFS 一次拉全（1014）要等全部层级拉完才出表，首屏慢。
+ * 改为先拉根目录立刻显示，再「预取一层」——显示到哪一层，就提前拉好这一层每个节点的子级。
+ * 仍用非懒加载 el-tree：节点的 children 拉回来才渲染，空数组 = 叶子不显示箭头（1014 的诉求不变）。
+ */
+const fullTreeData = ref<SourceCategory[]>([])
+let treeLoadSeq = 0
+
+function findInTree(nodes: SourceCategory[], id: string): SourceCategory | undefined {
+  for (const n of nodes) {
+    if (String(n.id) === id) return n
+    const hit = n.children?.length ? findInTree(n.children, id) : undefined
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/** 给还没拉过子级的节点拉子级（8 路并发），一次性挂回，el-tree 只重建一次 */
+async function prefetchChildren(nodes: SourceCategory[], seq = treeLoadSeq) {
+  const todo = nodes.filter((n) => n.children === undefined)
+  if (!todo.length) return
+  const CONCURRENCY = 8
+  const lists: SourceCategory[][] = []
+  for (let i = 0; i < todo.length; i += CONCURRENCY) {
+    const batch = todo.slice(i, i + CONCURRENCY)
+    lists.push(...await Promise.all(
+      batch.map((parent) => sourceApi.sourceCategories(String(parent.id)).catch(() => [] as SourceCategory[])),
+    ))
+  }
+  if (seq !== treeLoadSeq) return // 期间刷新过，丢弃旧结果
+  todo.forEach((parent, idx) => {
+    parent.children = lists[idx] ?? []
+  })
+}
+
+async function loadFullTree() {
+  const seq = ++treeLoadSeq
+  try {
+    const roots = await sourceApi.sourceCategories(undefined)
+    if (seq !== treeLoadSeq) return
+    rootCategories.value = roots
+    fullTreeData.value = roots
+    // 刷新后保持原来展开的节点：逐层把已展开节点的子级（以及再下一层）补齐
+    let frontier = fullTreeData.value
+    for (let depth = 0; frontier.length && depth < 8; depth++) {
+      await prefetchChildren(frontier, seq)
+      if (seq !== treeLoadSeq) return
+      frontier = frontier
+        .filter((n) => expandedKeySet.has(String(n.id)))
+        .flatMap((n) => n.children ?? [])
+    }
+  } catch {
+    if (seq === treeLoadSeq) fullTreeData.value = []
+  }
+}
 
 function buildSearchTree(hits: SourceCategory[]): SourceCategory[] {
   if (!hits.length) return []
@@ -98,28 +158,21 @@ async function doSearch() {
   }
 }
 
-// 树节点懒加载
-async function loadTreeNodes(node: any, resolve: (data: SourceCategory[]) => void) {
-  try {
-    const parentId = node.level === 0 ? undefined : String(node.data.id ?? '')
-    const list = await sourceApi.sourceCategories(parentId)
-    if (node.level === 0) {
-      rootCategories.value = list
-    }
-    resolve(list)
-  } catch {
-    resolve([])
-  }
-}
-
 // 重新加载树
 function reloadTree() {
   clearCategoryCache()
   treeKey.value++
   if (isSearching.value) {
     void doSearch()
+  } else {
+    // 非懒加载后刷新要重拉全量树（原懒加载树靠 el-tree 内部重挂载触发）
+    void loadFullTree()
   }
 }
+
+onMounted(() => {
+  void loadFullTree()
+})
 
 // ---- 上移 / 下移排序逻辑 ----
 function getNodeSiblings(node: any): any[] {
@@ -466,13 +519,12 @@ async function handleDelete(node: { id: string; name: string }) {
         </template>
       </el-tree>
 
-      <!-- 常规懒加载目录树 -->
+      <!-- 常规目录树（1014 改非懒加载：全量预加载，el-tree 按 children 判叶子，无子目录不显示展开箭头） -->
       <el-tree
         v-else
         :key="treeKey"
-        lazy
-        :load="loadTreeNodes"
-        :props="{ label: 'name', children: 'children', isLeaf: 'isLeaf' }"
+        :data="fullTreeData"
+        :props="{ label: 'name', children: 'children' }"
         node-key="id"
         :default-expanded-keys="expandedKeys"
         class="ca-category-tree"

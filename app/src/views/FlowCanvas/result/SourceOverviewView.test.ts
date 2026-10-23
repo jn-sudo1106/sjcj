@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { KeepAlive, defineComponent, h } from 'vue'
+import ElementPlus, { ElMessage, ElMessageBox, ElPagination } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
@@ -24,6 +25,24 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('快捷编辑入口在源名称旁，打开编辑不跳详情；保存后沿用当前筛选和页码刷新', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 40, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'], quickEdit: true }, global: { components: { ElPagination } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-overview-state"]').setValue('E')
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:current-page', 2)
+    await wrapper.get('[data-testid="source-quick-edit-src-1"]').trigger('click')
+    const editor = wrapper.findComponent({ name: 'EditSourceDialog' })
+    expect(editor.props('source')).toEqual(source)
+    expect(editor.props('quick')).toBe(true)
+    expect(wrapper.emitted('openSource')).toBeUndefined()
+    editor.vm.$emit('saved', { ...source, url: 'https://new.example.com', coreParam: 'a=1' })
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'EditSourceDialog' }).exists()).toBe(false)
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, sourceIds: 'src-1', state: 'E' }))
+    wrapper.unmount()
+  })
+
   it('分组分页、查询范围导出和任务预览均携带固定源 ID', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
     vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
@@ -42,6 +61,26 @@ describe('SourceOverviewView', () => {
     vi.restoreAllMocks()
     sessionStorage.clear()
   })
+  // 2026-10-21 源管理「系统目录」页签左侧目录：系统目录按 categorys 筛，范围变了重查，导出 / 发任务同口径
+  it('系统目录范围：列表、导出、按条件发任务都带 categorys；范围变了重查；目录说明不发给后端', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeCategoryIds: ['100', '101'], scopeLabel: '系统目录：财经资讯（含子级）' } })
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ categorys: '100,101', dirLabel: '系统目录：财经资讯（含子级）' }))
+    await wrapper.get('[data-testid="source-export"]').trigger('click')
+    await flushPromises()
+    for (const [query] of page.mock.calls) expect(query?.categorys).toBe('100,101')
+    page.mockClear()
+    await wrapper.setProps({ scopeCategoryIds: ['200'] })
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ categorys: '200' }))
+    await wrapper.setProps({ scopeCategoryIds: undefined, scopeLabel: undefined })
+    await flushPromises()
+    expect(page.mock.lastCall?.[0]).not.toHaveProperty('categorys')
+    wrapper.unmount()
+  })
+
   it('空分组不请求全部源；分组条件与手动源 ID 取交集，清空仍限定分组', async () => {
     const api = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: [] } })
@@ -380,6 +419,64 @@ describe('SourceOverviewView · 标签', () => {
     expect(wrapper.get('[data-testid="source-mark-toast"]').text()).toContain('已更新 1 个源')
     await wrapper.get('[data-testid="source-mark-view-batch"]').trigger('click')
     expect((wrapper.get('[data-testid="source-overview-tag"]').element as HTMLSelectElement).value).toBe('正文缺失')
+    wrapper.unmount()
+  })
+
+  // 2026-10-16 用户定：这颗提示条带「查看这一批」动作，**由用户手动关**，不做自动收起
+  // （唯一自动收掉的时机是离开本视图，见下面那条 KeepAlive 用例）。
+  // 假时钟用来证明"不自己走"；只接管 setTimeout/clearTimeout，flushPromises 走 setImmediate 不受影响。
+  it('打标提示条不自动消失，靠 × 手动关闭', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
+      vi.spyOn(sourceApi, 'tagSource').mockResolvedValue({ ok: true, message: 'ok' })
+      const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+      await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+      await wrapper.get('[data-testid="mark-tag-正文缺失"]').trigger('click')
+      await wrapper.get('[data-testid="mark-save"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(true)
+
+      // 放一分钟也不自己消失
+      vi.advanceTimersByTime(60_000)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(true)
+
+      await wrapper.get('.sov-toast-close').trigger('click')
+      expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 2026-10-16 用户报：切换页面后提示仍在。本视图被外层 KeepAlive 缓存（CollectAssets/index、
+  // Settings/index、AppShell），切走只是 deactivated、组件不卸载，所以必须在离场时收掉。
+  it('被 KeepAlive 缓存时，切走页面即收掉提示条', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
+    vi.spyOn(sourceApi, 'tagSource').mockResolvedValue({ ok: true, message: 'ok' })
+    const Host = defineComponent({
+      props: { show: Boolean },
+      setup: (props) => () => h(KeepAlive, null, [props.show ? h(SourceOverviewView, { currentSiteId: 'site-current' }) : null]),
+    })
+    const wrapper = mount(Host, { props: { show: true }, attachTo: document.body })
+    await flushPromises()
+    const view = wrapper.findComponent(SourceOverviewView)
+    await view.get('[data-testid="source-check-src-1"]').setValue(true)
+    await view.get('[data-testid="batch-mark"]').trigger('click')
+    await view.get('[data-testid="mark-tag-正文缺失"]').trigger('click')
+    await view.get('[data-testid="mark-save"]').trigger('click')
+    await flushPromises()
+    expect(view.find('[data-testid="source-mark-toast"]').exists()).toBe(true)
+
+    // 切走（KeepAlive 只停用、不卸载）再切回来：提示条不能还挂着
+    await wrapper.setProps({ show: false })
+    await flushPromises()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(view.find('[data-testid="source-mark-toast"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -1177,7 +1274,7 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
-  it('同一字段只能一行：别的行占了的字段置灰；六个字段加满后没有「+」', async () => {
+  it('同一字段只能一行：别的行占了的字段置灰；七个字段加满后没有「+」', async () => {
     const { wrapper } = await mountWithSpy()
     await add(wrapper)
     const secondOptions = fields(wrapper)[1]!.findAll('option')
@@ -1187,8 +1284,9 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await add(wrapper)
     await add(wrapper)
     await add(wrapper)
-    // 1008-04 加了「默认流程 ID」条件字段（defaultFlowId），字段数从 5 变 6
-    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'flowId', 'defaultFlowId'])
+    await add(wrapper)
+    // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），字段数 7
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
   })
 
@@ -1201,6 +1299,18 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(lastQ(page)).toEqual(expect.objectContaining({ flowId: '14009350' }))
+    expect(lastQ(page)?.sourceIds).toBeUndefined()
+  })
+
+  // 1022 会议：按表查源
+  it('按主表 ID 查：选「主表 ID」填值后作为 entryTypeId 发出；纯数字不会被自动识别成源 ID', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await fields(wrapper)[0]!.setValue('entryTypeId')
+    await texts(wrapper)[0]!.setValue('6200029')
+    expect((fields(wrapper)[0]!.element as HTMLSelectElement).value).toBe('entryTypeId')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ entryTypeId: '6200029' }))
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
@@ -1624,14 +1734,14 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
   const GROUP_SOURCE: Source = { sourceId: '391000500', name: '组内源', sourceGroupId: '3', state: 'C', siteId: 's1', url: '', configId: '', mainTable: '', owner: '' }
   const INDEP_SOURCE: Source = { sourceId: '430024667', name: '独立源', sourceGroupId: undefined, state: 'C', siteId: 's2', defaultFlowId: '14010130', url: '', configId: '', mainTable: '', owner: '' }
 
-  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE]) {
+  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE], plugins: never[] = []) {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: sourceList.length, list: sourceList })
     vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
       { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006', revision: 2 },
       { sourceGroupId: '1', sourceGroupCode: 'test1', sourceGroupName: '测试组1', state: 'ACTIVE', flowIds: [], revision: 1 },
     ])
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body, global: { plugins } })
     await flushPromises()
     page.mockClear()
     return { wrapper, page }
@@ -1650,8 +1760,18 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     wrapper.unmount()
   })
 
+  it('默认流程列：组内源后缀「来源组」，没有默认流程的源标红「无流程」（1021-02 / 08）', async () => {
+    const { wrapper } = await mountGroupOps([{ ...GROUP_SOURCE, defaultFlowId: '21000006' }, INDEP_SOURCE, { ...INDEP_SOURCE, sourceId: '430024668', defaultFlowId: undefined }])
+    const cells = wrapper.findAll('.sov-default-flow')
+    expect(cells[0].find('[data-testid="source-overview-default-flow-group"]').exists()).toBe(true)
+    expect(cells[1].find('[data-testid="source-overview-default-flow-group"]').exists()).toBe(false)
+    expect(cells[2].get('[data-testid="source-overview-no-flow"]').text()).toBe('无流程')
+    wrapper.unmount()
+  })
+
   it('点主表：拉表结构并打开表详情抽屉；没有主表的源显示 —', async () => {
     const withTable: Source = { ...INDEP_SOURCE, mainTable: '6200039' }
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
     const { wrapper } = await mountGroupOps([withTable, { ...GROUP_SOURCE, mainTable: '' }])
     const metaSpy = vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
       tableId: '6200039', tableName: 'sense_data.TB_TEST02', name: '测试表2', state: 'C', fields: [],
@@ -1665,6 +1785,14 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
 
     expect(metaSpy).toHaveBeenCalledWith('6200039')
     expect(document.body.textContent).toContain('sense_data.TB_TEST02')
+    wrapper.unmount()
+  })
+
+  it('主表列显示「表名 · ID」；表列表里没有的只显示 ID（1022 会议）', async () => {
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([{ tableId: '6200039', tableName: 'sense_data.TB_TEST02', name: '测试表2', fields: [] }] as never)
+    const { wrapper } = await mountGroupOps([{ ...INDEP_SOURCE, mainTable: '6200039' }, { ...GROUP_SOURCE, mainTable: '6200040' }])
+    const links = wrapper.findAll('[data-testid="source-overview-main-table"]')
+    expect(links.map((l) => l.text())).toEqual(['测试表2 · 6200039', '6200040'])
     wrapper.unmount()
   })
 
@@ -1712,6 +1840,25 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     wrapper.unmount()
   })
 
+  it('「选中来源 → 批量配定时」：未勾选提示，勾选后打开批量形态的定时弹窗', async () => {
+    const warn = vi.spyOn(ElMessage, 'warning')
+    const { wrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus as never])
+    const ops = wrapper.findAllComponents({ name: 'ElDropdown' }).find((c) => c.vm.$attrs['data-testid'] === 'source-group-ops')!
+    ops.vm.$emit('command', 'batch-cron')
+    await flushPromises()
+    expect(warn).toHaveBeenCalledWith('请先勾选要配定时的来源')
+    expect(wrapper.findComponent({ name: 'SourceCronDialog' }).exists()).toBe(false)
+
+    ;(wrapper.find('[data-testid="source-check-430024667"]').element as HTMLInputElement).click()
+    await flushPromises()
+    ops.vm.$emit('command', 'batch-cron')
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'SourceCronDialog' })
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['430024667'])
+    wrapper.unmount()
+  })
+
   it('默认流程 ID 条件：选「默认流程 ID」填值后作为 defaultFlowId 发出', async () => {
     const { wrapper, page } = await mountGroupOps()
     await wrapper.get('[data-testid="source-overview-search-field"]').setValue('defaultFlowId')
@@ -1723,7 +1870,7 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
   })
 })
 
-// 2026-10-12「我的视图」：外部给定视图状态 → 套用并重查；当前状态往外报；隐藏列
+// 2026-10-12「我的视图」：外部给定视图状态 → 套用并重查；隐藏列
 describe('SourceOverviewView · 视图状态', () => {
   afterEach(() => vi.restoreAllMocks())
   const viewState = {
@@ -1746,14 +1893,10 @@ describe('SourceOverviewView · 视图状态', () => {
     wrapper.unmount()
   })
 
-  it('改条件后报出新状态；父级换成新的视图状态对象时重新套用并重查', async () => {
+  it('父级换成新的视图状态对象时重新套用并重查', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', viewState } })
     await flushPromises()
-    await wrapper.get('[data-testid="source-overview-state"]').setValue('C')
-    await flushPromises()
-    const reported = wrapper.emitted('stateChange')!.at(-1)![0] as typeof viewState
-    expect(reported).toMatchObject({ status: 'C', countMax: '5', pageSize: 50, hiddenColumns: ['url', 'tags'] })
     await wrapper.setProps({ viewState: { ...viewState, status: 'disabled', hiddenColumns: [] } })
     await flushPromises()
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '1', state: undefined }))

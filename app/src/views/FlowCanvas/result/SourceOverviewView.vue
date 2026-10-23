@@ -5,9 +5,9 @@
 // 2. 采集资产的「源列表视图」（0924-06，表格视图改为源列表）：currentSiteId 传空 = 不限网站，
 //    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Star, StarFilled } from '@element-plus/icons-vue'
+import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source } from '@/api'
 import { isProductionBackend } from '@/api/client'
 import { useLaunchJobStore } from '@/stores/launchJob'
@@ -21,11 +21,13 @@ import {
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
+import EditSourceDialog from '@/views/FlowCanvas/source/EditSourceDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
+import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
 import { scopedSourceIds } from './sourceScope'
 import { HIDEABLE_SOURCE_COLUMNS, viewStateFilter, type SourceListViewState } from './sourceListViewState'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
@@ -58,6 +60,7 @@ import {
   type SourceCondField,
   type SourceCondition,
 } from './sourceSearchField'
+import { snatchFailureSummary } from '@/utils/snatchResult'
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -91,6 +94,20 @@ const props = defineProps<{
    * 与其它筛选条件（名称 / 状态等）取交集，清空查询条件也不解除此范围。
    */
   scopeSourceGroupId?: string
+  /**
+   * 固定「我的视图」目录范围（10-15）：走 `sourcePaged` 的 `viewCategoryId`，后端算目录里的源 ∪ 绑定来源组的当前成员。
+   * 只有 sourcePaged 认这个条件，所以给了它时「按筛选范围调整来源组」禁用（那个接口会当成不限）。
+   */
+  scopeViewCategoryId?: string
+  /**
+   * 固定系统目录范围（2026-10-21 源管理「系统目录」页签左侧目录）：走 `sourcePaged` 的 `categorys`。
+   * 后端只匹配直属、不含子级，调用方传已展开子级的目录 ID。`undefined` = 不限。
+   */
+  scopeCategoryIds?: string[]
+  /** 目录范围的人话（如「系统目录：财经资讯（含子级）」），只给发任务确认弹窗看，不发给后端 */
+  scopeLabel?: string
+  /** 范围内容变了但范围参数没变（如往视图目录里加了源）时由父级加 1，触发重查 */
+  scopeVersion?: number
   /** 范围为空时的空态文案（如最近打开一个都没有） */
   scopeEmptyText?: string
   /**
@@ -102,9 +119,14 @@ const props = defineProps<{
   /**
    * 「我的视图」（2026-10-12）：外部给定一套视图状态（条件 / 排序 / 每页条数 / 隐藏列），
    * 挂载时和每次换成新对象时套用并重查。不传 = 原来的默认条件、全部列。
-   * 当前状态的变化通过 `stateChange` 往外报，父级据此判断「有未保存的修改」、做另存为。
    */
   viewState?: SourceListViewState
+  /**
+   * 额外一列（2026-10-13「我的视图」目录版的「所在目录」）：给了表头文字就在「源名称」后面多一列，
+   * 内容由父级用 `extra-cell` 槽位按行渲染。不给 = 原样。
+   */
+  extraColumnLabel?: string
+  quickEdit?: boolean
 }>()
 const emit = defineEmits<{
   openSource: [source: Source]
@@ -114,8 +136,6 @@ const emit = defineEmits<{
   openSourceData: [source: Source]
   /** 点来源组名（1008-04）：跳到「来源组」目录页签并选中该组 */
   openSourceGroup: [sourceGroupId: string]
-  /** 当前视图状态（条件、排序、每页条数、隐藏列）变化时 */
-  stateChange: [state: SourceListViewState]
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -128,6 +148,11 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
+const quickEditSource = ref<Source | null>(null)
+function onQuickEdited() {
+  quickEditSource.value = null
+  ui.notifySourceListChanged()
+}
 /**
  * 查询：多条件并行（2026-09-28 产品：「改成和数据搜索一样」，用户定按多条件做）。
  * 每行 = 字段 ＋ 条件 ＋ 值，行与行之间是「并且」；备注也并进来了（原先单独一格的有 / 无备注
@@ -171,7 +196,7 @@ function removeCondition(row: ConditionRow) {
   if (wasActive) search()
 }
 function conditionPlaceholder(row: ConditionRow) {
-  if (row.pinned || row.field === 'remark' || row.field === 'flowId') return sourceCondFieldOf(row.field).placeholder
+  if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return sourceCondFieldOf(row.field).placeholder
   return '源 ID / 名称 / URL，自动识别'
 }
 function onConditionInput(row: ConditionRow, value: string) {
@@ -180,7 +205,7 @@ function onConditionInput(row: ConditionRow, value: string) {
     row.pinned = false
     return
   }
-  if (row.pinned || row.field === 'remark' || row.field === 'flowId') return
+  if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return
   // 识别出的字段被别的行占了，退回按名称查（名称是兜底口径）；名称也占了就不动
   const target = ([detectSourceSearchField(value), 'name'] as const).find((f) => f && !fieldTakenByOther(f, row))
   if (target && target !== row.field) {
@@ -264,6 +289,23 @@ async function openFlowNode(flowId: string) {
   } catch (error) {
     ElMessage.error(`加载流程失败：${error instanceof Error ? error.message : String(error)}`)
   }
+}
+/** 主表列名称（1022 会议：只有表 ID 认不出是哪张表）：sourcePaged 不返回表名，拉一次全量表做映射 */
+const tableOptions = ref<DataTableMeta[]>([])
+async function loadTableOptions() {
+  if (tableOptions.value.length) return
+  try {
+    tableOptions.value = await dataApi.tables()
+  } catch {
+    // 只是名称辅助，拉不到就显示 ID
+    tableOptions.value = []
+  }
+}
+const tableNameById = computed(() => new Map(tableOptions.value.map((t) => [t.tableId, t.name || t.tableName])))
+/** 主表列显示：表名 · ID；表列表没拉到时用 ID */
+function tableNameOf(tableId: string): string {
+  const name = tableNameById.value.get(tableId)
+  return name ? `${name} · ${tableId}` : tableId
 }
 /** 点主表：拉表结构后在右侧抽屉展示（旧平台 SourceList 点主表看表信息；复用数据查询的「表结构详情」抽屉） */
 const mainTableOpen = ref(false)
@@ -379,7 +421,7 @@ const showCol = (key: string) => !hiddenColumns.value.includes(key)
 const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
   && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
 
-/** 当前视图状态：查询条件 + 排序 + 每页条数 + 隐藏列（「我的视图」保存的就是它） */
+/** 当前视图状态：查询条件 + 排序 + 每页条数 + 隐藏列 */
 const currentViewState = computed<SourceListViewState>(() => ({
   v: 1,
   conditions: conditions.value.map((c) => ({ field: c.field, op: c.op, value: c.value })),
@@ -393,7 +435,6 @@ const currentViewState = computed<SourceListViewState>(() => ({
   pageSize: size.value,
   hiddenColumns: [...hiddenColumns.value],
 }))
-watch(currentViewState, (state) => emit('stateChange', state), { deep: true })
 
 /** 套用一套视图状态（不发请求，调用方决定何时查） */
 function applyViewState(state: SourceListViewState) {
@@ -429,6 +470,9 @@ function currentQuery(): SourceFilter {
     sourceIds: scopedSourceIds(props.scopeSourceIds, cond.sourceIds),
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
     sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
+    ...(props.scopeViewCategoryId ? { viewCategoryId: props.scopeViewCategoryId } : {}),
+    ...(props.scopeCategoryIds?.length ? { categorys: props.scopeCategoryIds.join(',') } : {}),
+    ...(props.scopeLabel ? { dirLabel: props.scopeLabel } : {}),
   }
 }
 
@@ -526,6 +570,7 @@ const flowConfigOpen = ref(false)
 const flowConfigSource = ref<Source | null>(null)
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
+const batchCronOpen = ref(false)
 function openFlowConfigForSelected() {
   if (selectedIds.value.length !== 1) {
     ElMessage.warning('源流程配置一次只看一个源，请只勾选 1 个')
@@ -558,11 +603,20 @@ function openRunOnce() {
   }
   runOnceOpen.value = true
 }
+/** 批量配定时（旧「操作类 → 定时任务变更 → 批量配定时」，2026-10-23） */
+function openBatchCron() {
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先勾选要配定时的来源')
+    return
+  }
+  batchCronOpen.value = true
+}
 function onGroupOpsCommand(command: string) {
   sourceGroupOpsOpen.value = false
   if (command === 'flow-config') openFlowConfigForSelected()
   else if (command === 'adjust-group') openAdjustGroup()
   else if (command === 'run-once') openRunOnce()
+  else if (command === 'batch-cron') openBatchCron()
 }
 /** 来源组批量操作写完后：清勾选、重拉来源组候选、重查列表（组归属 / 默认流程列变了） */
 function onGroupOpsChanged() {
@@ -776,11 +830,17 @@ async function dispatchIds(ids: string[], skip: number) {
   }
   if (result.failed.length) {
     const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
-    ElMessage.warning(`已发 ${result.sent} 个，失败 ${failedCount} 个。任务已下发的无法撤回，可重试失败批次。`)
+    ElMessage({ type: 'warning', message: `已发 ${result.sent} 个，失败 ${failedCount} 个：${failedReasonText(result.failed)}。任务已下发的无法撤回，可重试失败批次。`, duration: 8000, showClose: true })
   } else {
     ElMessage.success(`已对 ${result.sent} 个源发任务`)
     clearSelection()
   }
+}
+
+/** 失败批次的原因（不同原因用「；」连起来，最多两条，其余在「重试失败批次」按钮的悬停提示里） */
+function failedReasonText(failed: { error: string }[]): string {
+  const reasons = [...new Set(failed.map((f) => f.error).filter(Boolean))]
+  return reasons.slice(0, 2).join('；') + (reasons.length > 2 ? ' 等' : '')
 }
 
 async function retryFailedBatches() {
@@ -792,14 +852,16 @@ async function retryFailedBatches() {
     let sent = 0
     for (const batch of pending) {
       try {
-        await sourceApi.sendSnatchWithParam({ ids: batch.ids, param: {}, all: 0, include: [], skip: 0 })
-        sent += batch.ids.length
+        const ack = await sourceApi.sendSnatchWithParam({ ids: batch.ids, param: {}, all: 0, include: [], skip: 0 })
+        const notSent = ack.failed ?? []
+        sent += batch.ids.length - notSent.length
+        if (notSent.length) nextFailed.push({ ids: notSent.map((f) => f.sourceId), error: snatchFailureSummary(notSent) })
       } catch (error) {
         nextFailed.push({ ids: batch.ids, error: error instanceof Error ? error.message : String(error) })
       }
     }
     failedBatches.value = nextFailed
-    if (nextFailed.length) ElMessage.warning(`重试后又发出 ${sent} 个，仍失败 ${nextFailed.reduce((n, i) => n + i.ids.length, 0)} 个`)
+    if (nextFailed.length) ElMessage({ type: 'warning', message: `重试后又发出 ${sent} 个，仍失败 ${nextFailed.reduce((n, i) => n + i.ids.length, 0)} 个：${failedReasonText(nextFailed)}`, duration: 8000, showClose: true })
     else ElMessage.success(`失败批次已全部重试成功，共 ${sent} 个`)
   } finally {
     launchSending.value = false
@@ -883,6 +945,19 @@ const markOpen = ref(false)
 const markAnchorRef = ref<HTMLElement | null>(null)
 const markToast = ref('')
 const lastSavedTag = ref('')
+
+/**
+ * 打标提示条**不做自动收起**（2026-10-16 用户确认）：它带「查看这一批」这个动作，
+ * 要给用户留出看完再决定点不点的时间，所以由用户手动点 × 关闭。
+ * 唯一会自动收掉的时机是**离开本视图**——见下面的 onDeactivated / onBeforeUnmount：
+ * 本视图被外层 KeepAlive 缓存，切页/切 tab 不卸载，不带走的话提示条会飘到别的页面上。
+ */
+function showMarkToast(text: string) {
+  markToast.value = text
+}
+function hideMarkToast() {
+  markToast.value = ''
+}
 
 // 标签候选：服务端 source/sourceTags 拿到的是**当前查询条件下真实存在**的标签，
 // 包含程序打进去的那些；本机 readRecentIssueTags() 只记得这台机器上手工打过的。
@@ -994,7 +1069,7 @@ async function saveMarks(payload: { tags: string[] }) {
   localTags.value = rememberIssueTags(payload.tags)
   lastSavedTag.value = payload.tags[0] || ''
   closeMarkPopover()
-  markToast.value = `已更新 ${ids.length} 个源的标签`
+  showMarkToast(`已更新 ${ids.length} 个源的标签`)
 }
 async function clearSelectedTags() {
   const ids = [...selectedIds.value]
@@ -1016,7 +1091,7 @@ async function clearSelectedTags() {
   }
   writeOverlay(ids, { tags: 'clear' })
   closeMarkPopover()
-  markToast.value = `已清除 ${ids.length} 个源的标签`
+  showMarkToast(`已清除 ${ids.length} 个源的标签`)
   lastSavedTag.value = ''
 }
 // 批量设置备注（0901，老平台也没有——这是新功能，不是迁移）：整批覆盖成同一段文字，
@@ -1044,7 +1119,7 @@ async function batchSetRemark(remark: string) {
   }
   writeOverlay(ids, { remark })
   closeMarkPopover()
-  markToast.value = `已设置 ${ids.length} 个源的备注`
+  showMarkToast(`已设置 ${ids.length} 个源的备注`)
 }
 
 // 清空备注：跟「清空标签」对称的入口，同样整批覆盖成空、需要二次确认——备注一旦清空
@@ -1073,12 +1148,12 @@ async function clearSelectedRemark() {
   }
   writeOverlay(ids, { remark: '' })
   closeMarkPopover()
-  markToast.value = `已清空 ${ids.length} 个源的备注`
+  showMarkToast(`已清空 ${ids.length} 个源的备注`)
 }
 
 function viewMarkedBatch() {
   if (lastSavedTag.value) tagFilter.value = lastSavedTag.value
-  markToast.value = ''
+  hideMarkToast()
   selectedIds.value = []
   rows.value = applyMarkOverlay(rows.value).filter(matchesMarkFilters)
   total.value = rows.value.length
@@ -1136,12 +1211,18 @@ onMounted(() => {
   void loadSiteOptions()
   void loadSourceGroupOptions()
   void loadFlowOptions()
+  void loadTableOptions()
   void loadFavoriteSources()
 })
 onUnmounted(() => {
   document.removeEventListener('mousedown', onMarkPointerDown)
   document.removeEventListener('keydown', onMarkKeydown)
 })
+// 打标提示条不能在别的页面上继续显示：本视图被外层 KeepAlive 缓存（CollectAssets/index、Settings/index、
+// AppShell），切页或切 tab 都不卸载（2026-10-16 用户报：切页后提示仍在）。提示条本身是手动关闭的，
+// 所以这里是它唯一自动收掉的时机——离场即收掉；没走缓存的卸载路径也一并清。
+onDeactivated(hideMarkToast)
+onBeforeUnmount(hideMarkToast)
 watch(() => props.currentSiteId, () => {
   page.value = 1
   void loadSources()
@@ -1153,8 +1234,8 @@ watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () =
   page.value = 1
   void loadSources()
 })
-// 来源组范围变了（来源组目录页签切组）：清掉勾选再重查
-watch(() => props.scopeSourceGroupId ?? null, () => {
+// 来源组 / 视图目录 / 系统目录范围变了：清掉勾选再重查
+watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}`, () => {
   clearSelection()
   page.value = 1
   void loadSources()
@@ -1179,12 +1260,15 @@ watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
 watch(() => ui.sourceListRevision, () => {
   void loadSources()
 })
+
+// 源管理「系统目录」页签的「按目录发送」复用这里的发任务流程（不勾选 = 按当前筛选范围，含目录范围）
+defineExpose({ openLaunch, clearSelection })
 </script>
 
 <template>
   <section class="sov-shell" data-testid="source-overview">
     <!-- 不限网站（采集资产源列表视图）用紧凑样式：与同页的网站查询工具条同一套外观——
-         一行排开、不要控件上方的小标题（改由首项 / 占位文字说明）、34px 高。网站详情里保持原样。 -->
+         按可用宽度换行、不要控件上方的小标题（改由首项 / 占位文字说明）、34px 高。网站详情里保持原样。 -->
     <div class="sov-filter" :class="{ 'is-compact': crossSite }">
       <!-- 查询：多条件并行（2026-09-28），每行 字段 ＋ 条件 ＋ 值，行与行之间是「并且」。
            备注也在这里（非空 / 为空 = 原来的有备注 / 无备注）。同一字段只能一行。 -->
@@ -1232,6 +1316,7 @@ watch(() => ui.sourceListRevision, () => {
           </div>
         </div>
       </div>
+      <div class="sov-filter-options">
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
       <label v-if="crossSite" class="sov-fl-site"><span class="sov-label-text">网站</span>
         <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
@@ -1288,15 +1373,18 @@ watch(() => ui.sourceListRevision, () => {
         <!-- 采集资产源列表视图把「视图切换 / 刷新」放在这里，与筛选并成一条栏（网站详情不传） -->
         <slot name="filter-extra" />
       </div>
+      </div>
     </div>
 
-    <div class="sov-summary">
+    <div class="sov-summary" :class="{ 'one-row': crossSite }">
       <span>共 {{ total }} 个源</span>
+      <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
+      <slot name="summary-extra" :ids="selectedIds" />
       <span v-if="urlFallback && !loading" class="sov-url-fallback" data-testid="source-overview-url-fallback">
         按名称没查到「{{ urlFallback.keyword }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
       </span>
       <span v-if="collectProgress" class="sov-progress" data-testid="source-collect-progress">{{ collectProgress }}</span>
-      <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
+      <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" :title="[...new Set(failedBatches.map((b) => b.error))].join('\n')" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
         <slot name="selection-actions" :ids="selectedIds" />
@@ -1318,8 +1406,8 @@ watch(() => ui.sourceListRevision, () => {
       </template>
       <!-- 紧凑样式下筛选栏一行放不下，针对整批结果的两个操作挪到这一行右侧 -->
       <span v-if="crossSite" class="sov-summary-ops">
-        <!-- 父级往这一行右侧塞的图标按钮（采集资产「另存为视图」）：查询栏一行已经满了，放这里不挤它 -->
-        <slot name="summary-extra" />
+        <!-- 源管理「系统目录」页签：业务目录操作（10-21），和「选中来源」放一起 -->
+        <slot name="summary-ops" :ids="selectedIds" />
         <!-- 1008-04 来源组操作：不勾选也能用（调整来源组按当前筛选范围，连生产时除外；另两项需先勾选） -->
         <el-dropdown v-if="groupOps" trigger="click" data-testid="source-group-ops" @command="onGroupOpsCommand">
           <button class="sov-btn" type="button">选中来源 ▾</button>
@@ -1328,6 +1416,7 @@ watch(() => ui.sourceListRevision, () => {
               <el-dropdown-item command="flow-config" data-testid="sg-ops-flow-config">源流程配置（勾选 1 个）</el-dropdown-item>
               <el-dropdown-item command="adjust-group" data-testid="sg-ops-adjust-group">{{ rangeAdjustAllowed ? '调整来源组（不勾选 = 按当前筛选范围）' : '调整来源组' }}</el-dropdown-item>
               <el-dropdown-item command="run-once" data-testid="sg-ops-run-once">指定流程运行一次</el-dropdown-item>
+              <el-dropdown-item command="batch-cron" data-testid="sg-ops-batch-cron">批量配定时</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -1352,6 +1441,7 @@ watch(() => ui.sourceListRevision, () => {
             <th class="sov-fav-col" title="收藏"></th>
             <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>源名称</th>
+            <th v-if="extraColumnLabel" data-testid="source-overview-extra-head">{{ extraColumnLabel }}</th>
             <th v-if="crossSite && showCol('site')">所属网站</th>
             <!-- 1008-04 来源组三列：只在源列表视图（groupOps）出现 -->
             <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
@@ -1395,7 +1485,8 @@ watch(() => ui.sourceListRevision, () => {
                  名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
-            <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
+            <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
+            <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
             <td v-if="crossSite && showCol('site')" class="sov-site" :title="siteNameOf(source)">
               <button
                 v-if="source.siteId && source.siteId !== '0'"
@@ -1426,7 +1517,8 @@ watch(() => ui.sourceListRevision, () => {
                 :title="`打开流程 ${source.defaultFlowId}`"
                 @click="openFlowNode(source.defaultFlowId)"
               >{{ flowNameOf(source.defaultFlowId) }}</button>
-              <span v-else class="sov-muted">—</span>
+              <span v-else class="sov-no-flow" data-testid="source-overview-no-flow" title="这个源没有任何流程，无法发起任务">无流程</span>
+              <span v-if="source.defaultFlowId && source.sourceGroupId" class="sov-muted" data-testid="source-overview-default-flow-group" title="组内源使用来源组的默认流程"> 来源组</span>
             </td>
             <td v-if="crossSite && groupOps && showCol('flowConfig')" class="sov-flow-config">
               <button
@@ -1448,7 +1540,7 @@ watch(() => ui.sourceListRevision, () => {
                 data-testid="source-overview-main-table"
                 :title="`查看表 ${source.mainTable} 结构`"
                 @click.stop="openMainTable(source.mainTable)"
-              >{{ source.mainTable }}</button>
+              >{{ tableNameOf(source.mainTable) }}</button>
               <template v-else>—</template>
             </td>
             <td v-if="showCol('tags')">
@@ -1498,7 +1590,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0) - hiddenColumnCount" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1521,7 +1613,7 @@ watch(() => ui.sourceListRevision, () => {
     <div v-if="markToast" class="sov-toast" data-testid="source-mark-toast">
       <span>{{ markToast }}</span>
       <button v-if="lastSavedTag" type="button" data-testid="source-mark-view-batch" @click="viewMarkedBatch">查看这一批</button>
-      <button class="sov-toast-close" type="button" aria-label="关闭提示" @click="markToast = ''">×</button>
+      <button class="sov-toast-close" type="button" aria-label="关闭提示" @click="hideMarkToast">×</button>
     </div>
     <EditSourceMarkDialog
       v-if="editTarget"
@@ -1530,6 +1622,7 @@ watch(() => ui.sourceListRevision, () => {
       @saved="onMarkEdited"
       @close="editTarget = null"
     />
+    <EditSourceDialog v-if="quickEditSource" :open="true" :source="quickEditSource" quick @update:open="quickEditSource = null" @saved="onQuickEdited" />
     <LaunchConfirmDialog
       v-if="launchOpen && launchScope"
       :mode="launchScope.mode"
@@ -1558,6 +1651,7 @@ watch(() => ui.sourceListRevision, () => {
       :selected-sources="selectedSources"
       :query="currentQuery()"
       :has-query-filter="hasQueryFilter"
+      :range-blocked="!!scopeViewCategoryId"
       :query-text="describeFilters(currentQuery())"
       :groups="sourceGroupOptions"
       @close="adjustGroupOpen = false"
@@ -1569,6 +1663,7 @@ watch(() => ui.sourceListRevision, () => {
       :flows="flowOptions"
       @close="runOnceOpen = false"
     />
+    <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
   </section>
@@ -1581,6 +1676,7 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
 .sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
+.sov-filter-options { display: contents; }
 /* 查询那格：一行一个条件（字段 + 条件 + 值 + ×/+），多个条件往下叠 */
 .sov-conds { display: grid; gap: 6px; }
 .sov-search { display: flex; align-items: center; gap: 4px; }
@@ -1598,18 +1694,20 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
 .sov-filter.is-compact {
-  /* 一行（用户 2026-10-12 定，不要换行）。1366 宽度下可用 1110px：基准宽度合计约 1050，更窄时各控件按比例压缩，
-     但每个控件都有下限（label 的 min-width: auto 把下限传给里面的下拉 / 输入框），压到下限就不再压，不会重叠 */
-  flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 52px; padding: 8px 12px;
+  /* 一行排开（10-21 用户：合并成一排）。各控件的 flex-basis 就是读得全的下限，放得下就先一行再按上限放大；
+     目录展开后 13.6 寸约 974px 也能一行，只有更窄、下限都放不下时才按整个控件换行。 */
+  flex-wrap: wrap; align-items: flex-start; gap: 6px; min-height: 52px; padding: 8px 12px;
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .sov-filter.is-compact .sov-label-text { display: none; }
+/* 筛选项直接参与外层这一排（不单独成块，否则整块会先掉到第二行；我的视图 / 我的分组的网格也依赖这一点） */
+.sov-filter.is-compact .sov-filter-options { display: contents; }
 /* 每个筛选项：label 带「基准宽度 + 压缩下限」，里面的下拉 / 输入框跟着 label 走（width: 100%）。
    不能给下拉 / 输入框自己设固定宽度——固定宽度会把 label 的最小尺寸撑死，窄屏下压不动就重叠 */
 .sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
 .sov-filter.is-compact label select, .sov-filter.is-compact label input { width: 100%; }
-/* 查询那格：字段 84 + 条件 64 + 输入框下限 120 + 「+」22 + 间距 12，再留 8 的余量（1280 实测 306 时「+」会碰到右边的网站下拉） */
-.sov-filter.is-compact .sov-field { display: flex; flex: 0 1 342px; min-width: 314px; }
+/* 查询那格：预留字段、条件、输入框和同时显示的删除 / 添加按钮所需宽度，余量留给输入框。 */
+.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 236px; min-width: 236px; max-width: 420px; }
 /* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
 .sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
@@ -1620,15 +1718,19 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter.is-compact select:hover { border-color: #bfdbfe; }
 /* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
 .sov-filter.is-compact .sov-search { flex-wrap: nowrap; flex: 1 1 auto; }
-.sov-filter.is-compact .sov-search select { width: 84px; flex: none; }
-.sov-filter.is-compact .sov-search select.sov-op { width: 64px; }
-.sov-filter.is-compact .sov-search input { width: 160px; flex: 1 1 160px; min-width: 120px; }
-/* 基准宽 / 下限（下限刚好读全：「全部网站」约 88px） */
-.sov-filter.is-compact .sov-fl-site { flex-basis: 108px; min-width: 88px; }
-.sov-filter.is-compact .sov-fl-group { flex-basis: 108px; min-width: 94px; }
-.sov-filter.is-compact .sov-fl-state { flex-basis: 92px; min-width: 84px; }
-.sov-filter.is-compact .sov-fl-tag { flex-basis: 96px; min-width: 84px; }
-.sov-filter.is-compact .sov-fl-count { flex-basis: 80px; min-width: 76px; }
+.sov-filter.is-compact .sov-search select { width: 76px; flex: none; }
+.sov-filter.is-compact .sov-search select.sov-op { width: 60px; }
+.sov-filter.is-compact .sov-search input { width: 64px; flex: 1 1 64px; min-width: 64px; }
+/* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
+.sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
+.sov-filter.is-compact .sov-fl-group { flex: 1 1 94px; min-width: 94px; max-width: 120px; }
+.sov-filter.is-compact .sov-fl-state { flex: 1 1 84px; min-width: 84px; max-width: 100px; }
+.sov-filter.is-compact .sov-fl-tag { flex: 1 1 84px; min-width: 84px; max-width: 110px; }
+/* 数据量这格是**唯一**靠 placeholder 说明自己的（紧凑态把 label 小标题藏了，其余几格是下拉，选项文字自带含义）。
+   原来 80px：扣掉左右内边距 16 + 边框 2，再被 Chrome 数字框的步进条吃掉约 15px，只剩约 47px 给文字，
+   「数据量 ≤」约 51px 被截成「数据量」（2026-10-16 用户截图反馈）。
+   100px 时文字区约 67px，留出约 16px 余量：字体回退到更宽的 ≤ 也读得全，同时不把这一行挤到换行。 */
+.sov-filter.is-compact .sov-fl-count { flex: 0 0 100px; min-width: 100px; }
 .sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
 .sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
@@ -1639,6 +1741,8 @@ watch(() => ui.sourceListRevision, () => {
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }
 .sov-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--rc-text-2); font-size: 12px; }
 .sov-summary b { color: var(--rc-text); }
+/* 源管理（跨网站）：勾选操作和右侧按钮保持一排，不折行 */
+.sov-summary.one-row { flex-wrap: nowrap; white-space: nowrap; }
 .sov-summary span { color: var(--rc-faint); }
 .sov-table-wrap { min-height: 0; flex: 1; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .sov-table-wrap.loading { opacity: .62; }
@@ -1646,12 +1750,18 @@ watch(() => ui.sourceListRevision, () => {
 .sov-table th, .sov-table td { padding: 9px 10px; border-bottom: 1px solid #edf2f7; text-align: left; white-space: nowrap; color: var(--rc-text-2); }
 .sov-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--rc-muted); font-weight: 700; }
 .sov-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text) !important; font-weight: 600; }
+.sov-name-content { display: flex; align-items: center; gap: 6px; }
+.sov-name-content .sov-source-link { flex: 1; min-width: 0; }
+.sov-quick-edit { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-muted); cursor: pointer; }
+.sov-quick-edit:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.sov-extra { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text-2); font-size: 12px; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
 .sov-url a { color: inherit; text-decoration: none; }
 .sov-url a:hover { text-decoration: underline; }
 .sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-muted { color: var(--rc-faint); }
+.sov-no-flow { color: #dc2626; font-size: 12px; }
 .sov-url-fallback { color: var(--rc-muted); }
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }

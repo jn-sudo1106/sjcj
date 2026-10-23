@@ -39,8 +39,8 @@ export const COLLECTOR_CAPABILITIES: Record<CollectorKind, CollectorCapability> 
     queueMode: 'fixed', fixedQueue: 'browser_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
   },
   wechat_official_html: {
-    kind: 'wechat_official_html', label: '公众号抓取', artifactType: 'html', outputMode: 'fixed', fixedOutputTable: 'raw_html_wechat_official',
-    queueMode: 'fixed', fixedQueue: 'wechat_official_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
+    kind: 'wechat_official_html', label: '公众号抓取', artifactType: 'html', outputMode: 'selectable', fixedOutputTable: 'raw_html_wechat_official',
+    queueMode: 'editable', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
   },
   app: { kind: 'app', label: 'APP 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: true, supportsUrlParams: false },
   file_download: { kind: 'file_download', label: '文件下载', artifactType: 'file', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: true, supportsLogin: false, supportsUrlParams: false },
@@ -417,7 +417,7 @@ const NODE_CONFIG_SEEDS = {
   // 0711 R8：公众号抓取——同构于浏览器抓取，仅固定表/队列取另一组能力键
   'wechat-html-collect': {
     title: '公众号抓取', sub: '[WECHAT] 公众号抓取 · 源配置', status: '待配置', planned: false, collect: true,
-    base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
+    base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件'], ['定时策略', '30 8 * * 1-5']],
     fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '']],
     inmap: [],
     params: [],
@@ -429,7 +429,7 @@ const NODE_CONFIG_SEEDS = {
       isDetail: false,
       collectorKind: 'wechat_official_html',
     },
-    taskCfg: { queue: COLLECTOR_CAPABILITIES.wechat_official_html.fixedQueue ?? '', urlRule: '' },
+    taskCfg: { queue: '', urlRule: '' },
   },
   // 网页登录：无输入表；登录配置清单维护多条完整登录数据配置，发起任务时可临时切换默认配置。
   'login-collect': {
@@ -545,6 +545,15 @@ const NODE_CONFIG_SEEDS = {
     params: [['audio_format', 'enum', 'mp3/wav'], ['sample_rate', 'string', '16k']],
     output: [['audio_file', 'file', '音频文件'], ['duration', 'number', '时长（秒）']],
     taskCfg: { queue: 'dev_web_videotoaudio', urlRule: '' },
+  },
+  'pdf-md': {
+    title: 'PDF转MD', sub: '[911] PDF转MD · 文档转 Markdown', status: '待配置', planned: false,
+    base: [['文件来源', '← 上游节点产物'], ['输出格式', 'Markdown'], ['失败策略', '记录并跳过']],
+    fields: [['保留表格', '是'], ['保留图片', '否'], ['能力状态', '通用处理节点']],
+    inmap: [['pdf_file', '← 上游节点.pdf_file', 'PDF 文件']],
+    params: [],
+    output: [['markdown', 'longtext', 'Markdown 正文']],
+    taskCfg: { queue: 'source-config', urlRule: '' },
   },
   'audio-text': {
     title: '音频提取文字', sub: '[710] 音频提取文字 · 语音转写', status: '待配置', planned: false,
@@ -709,7 +718,7 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   // 2026-09-17 补齐后端字典里其余类型：抓取类各给一份采集种子，媒体/摘要类给处理型种子
   excel: 'excel-collect', doc: 'doc-collect', pdf: 'pdf-collect', 'mail-collect': 'mail-collect',
   news: 'news-collect', 'video-audio': 'video-audio', 'audio-text': 'audio-text', 'article-summary': 'article-summary',
-  translate: 'translate', 'article-tag': 'article-tag',
+  translate: 'translate', 'article-tag': 'article-tag', 'pdf-md': 'pdf-md',
 }
 
 /**
@@ -757,6 +766,7 @@ export const SNATCH_TYPES = [
   '[720] - 文章生成摘要',
   '[730] - 文章打标签',
   '[800] - 翻译助手',
+  '[911] - PDF转MD',
 ]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
@@ -869,22 +879,7 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'article-summary': '[720] - 文章生成摘要',
   translate: '[800] - 翻译助手',
   'article-tag': '[730] - 文章打标签',
-}
-
-/**
- * 规则处理 / 媒体 / 文本 / OCR / PDF 抓取等节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列；
- * 2026-10-08 PDF 抓取补 dev_web_snatch_pdf）。
- * 在节点新增（insertAfter / addNodeToBranch）与任务配置时赋默认队列名。
- */
-export const DEFAULT_TASK_QUEUES: Record<string, string> = {
-  rule: 'dev_web_rulehandle',
-  ocr: 'dev_web_snatch_ocr',
-  pdf: 'dev_web_snatch_pdf',
-  translate: 'dev_web_translate',
-  'article-summary': 'dev_web_llm_generate',
-  'article-tag': 'dev_web_llm_generate',
-  'audio-text': 'dev_web_audiototext',
-  'video-audio': 'dev_web_videotoaudio',
+  'pdf-md': '[911] - PDF转MD',
 }
 
 // 左侧节点库分组
@@ -906,7 +901,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'file', code: '90', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
       // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
       { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
-      { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，固定表/队列', pill: 'p1' as Pill },
+      { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，HTML 文件', pill: 'p1' as Pill },
       // S4-1（方案 §6.1）：登录从采集节点的运行设置勾选项拆成独立节点，无输入表、有输出表（会话/凭据）
       { template: 'login', code: 'LOGIN', name: '网页登录', desc: '登录页 URL、账号、凭据，登录后交给后续抓取节点', pill: 'p1' as Pill },
     ]
@@ -927,6 +922,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
       { template: 'article-tag', code: '730', name: '文章打标签', desc: '舆情多维标注：主题 / 情感 / 风险 / 意图等', pill: 'p1' as Pill },
       { template: 'translate', code: '800', name: '翻译助手', desc: '把文本/文件内容翻译成目标语言', pill: 'p1' as Pill },
+      { template: 'pdf-md', code: '911', name: 'PDF转MD', desc: 'PDF 文件转 Markdown 文本', pill: 'p1' as Pill },
     ]
   },
   {
@@ -1033,6 +1029,7 @@ function templateKeyForStep(step: Step, index: number): string {
     '720': 'article-summary',
     '730': 'article-tag',
     '800': 'translate',
+    '911': 'pdf-md',
   }
   const routed = step.configType ? byConfigType[step.configType] : undefined
   if (routed && NODE_CONFIGS[routed]) return routed
@@ -1160,6 +1157,7 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
   if (step.configUpdateDt !== undefined && cfg.configUpdateDt === undefined) cfg.configUpdateDt = step.configUpdateDt
   if (step.runPolicy !== undefined) cfg.runPolicy = step.runPolicy
   if (step.itemId !== undefined) cfg.itemId = step.itemId
+  if (step.url !== undefined) cfg.stepUrl = step.url
   if (step.sourceId !== undefined) cfg.stepSourceId = step.sourceId
   if (cfg.collectCfg) {
     cfg.collectCfg.entryCondition = step.condition
@@ -1281,6 +1279,7 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   else if (step.configType === '720') cfg.template = 'article-summary'
   else if (step.configType === '710') cfg.template = 'audio-text'
   else if (step.configType === '700') cfg.template = 'video-audio'
+  else if (step.configType === '911') cfg.template = 'pdf-md'
   else if (step.configType === '150') cfg.template = 'ocr'
   // ⚠️ 不按节点名称猜类型（2026-09-24 review 撤掉）：首屏快速路径还没有 configType，
   // 叫「新闻摘要页」「视频列表」的网页采集节点会被设成摘要 / 视频模板；configDetail 回来后
@@ -1327,7 +1326,7 @@ export function applyStepDetails(
      * AI / 媒体处理类（150 OCR / 700 视频转音频 / 710 语音转文字 / 720 文章摘要 / 730 文章打标签 / 800 翻译）
      * 同样要整节点重建，不能只补字段（2026-09-18）。
      */
-    const shouldBeProcessing = ['150', '700', '710', '720', '730', '800'].includes(String(step.configType ?? ''))
+    const shouldBeProcessing = ['150', '700', '710', '720', '730', '800', '911'].includes(String(step.configType ?? ''))
     const isProcessing = current.template === 'ocr' || current.template === 'translate' || (!current.collectCfg && !current.ruleCfg)
     if (
       (shouldBeLogin && !isLogin)

@@ -7,7 +7,7 @@
 // 更多，不是具体源单独一套总数/上一页下一页）、同一套筛选行位置，只是可编辑字段不同。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -128,8 +128,8 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(wrapper.text()).toContain('已加载 2 条')
   })
 
-  // 导出接口不认 siteId / siteIds（2026-10-03 实测）：「全部源」时导出会是整张表、连别的网站一起
-  it('0930-14B：全部源时「导出 Excel」置灰并说明原因；选了具体源后按当前条件导出', async () => {
+  // 导出接口不认 siteId / sourceIds（10-03、10-16 实测）：「全部源」时把本网站在这张表里的源折进 more（1016）
+  it('0930-14B / 1016：全部源时按本网站的源导出；选了具体源后按该源导出', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
     await router.push('/canvas?siteId=site-a&view=data')
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
@@ -142,16 +142,36 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     await pickTable(wrapper)
 
     const btn = () => wrapper.get('[data-testid="site-data-export-btn"]')
-    expect(btn().attributes('disabled')).toBeDefined()
-    expect(btn().attributes('title')).toBe('按网站导出暂不支持，请先在左侧选一个源')
+    expect(btn().attributes('disabled')).toBeUndefined()
+    await btn().trigger('click')
+    const siteParams = new URL(String(open.mock.calls[0]?.[0]), 'http://x').searchParams
+    expect(siteParams.get('more')).toBe("SOURCE_ID in ('a')")
+    expect(siteParams.has('sourceId')).toBe(false)
 
     await pickSource(wrapper, '391007768')
     expect(btn().attributes('disabled')).toBeUndefined()
     await btn().trigger('click')
-    const url = String(open.mock.calls[0]?.[0])
+    const url = String(open.mock.calls[1]?.[0])
     expect(url).toContain('/entry/entryExportAll?')
     expect(new URL(url, 'http://x').searchParams.get('sourceId')).toBe('391007768')
-    expect(open.mock.calls[0]?.[1]).toBe('_blank')
+    expect(new URL(url, 'http://x').searchParams.has('more')).toBe(false)
+    expect(open.mock.calls[1]?.[1]).toBe('_blank')
+  })
+
+  it('1016：全部源时源数超过上限不导出，提示先收窄（下载走 GET，名单太长会撞 URL 长度上限）', async () => {
+    const many = Array.from({ length: 301 }, (_, i) => source(String(400000000 + i)))
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(many)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation((() => undefined) as never)
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('[data-testid="site-data-export-btn"]').trigger('click')
+
+    expect(open).not.toHaveBeenCalled()
+    expect(String(warning.mock.calls[0]?.[0])).toContain('涉及 301 个源，超过按网站导出上限 300 个')
   })
 
   it('0930-04：选表后点表名打开当前表的字段结构抽屉', async () => {

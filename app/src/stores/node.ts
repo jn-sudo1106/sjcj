@@ -28,6 +28,8 @@ export const useNodeStore = defineStore('node', () => {
   // 节点增删/移动/连线/换配置/流程名/进入条件 → flowDirty，由步骤自动保存清。
   // dirty 保留为两者并集：发起抓取门槛、模板页恢复等老调用点语义不变。
   const dirtyConfigNodes = ref<string[]>([])
+  /** 用户手动改过定时策略的节点（只有 patchSchedule 会加）。保存节点时只给这些节点同步定时（2026-10-15） */
+  const scheduleEditedNodes = ref<string[]>([])
   const flowDirty = ref(false)
   /** 每次 touchFlow 自增。自动保存要靠它重开防抖：flowDirty 已经是 true 时再改不会触发 watch。 */
   const flowRev = ref(0)
@@ -38,6 +40,7 @@ export const useNodeStore = defineStore('node', () => {
       if (v) flowDirty.value = true
       else {
         dirtyConfigNodes.value = []
+        scheduleEditedNodes.value = []
         flowDirty.value = false
       }
     },
@@ -56,8 +59,12 @@ export const useNodeStore = defineStore('node', () => {
   function markConfigSaved(id: string) {
     dirtyConfigNodes.value = dirtyConfigNodes.value.filter((nodeId) => nodeId !== id)
   }
+  function clearScheduleEdited(id: string) {
+    scheduleEditedNodes.value = scheduleEditedNodes.value.filter((nodeId) => nodeId !== id)
+  }
   function markSaved() {
     dirtyConfigNodes.value = []
+    scheduleEditedNodes.value = []
     flowDirty.value = false
   }
   function markFlowSaved() {
@@ -172,6 +179,7 @@ export const useNodeStore = defineStore('node', () => {
     const c = configs[id]
     if (!c) return
     c.schedule = { ...c.schedule, ...patch }
+    if (!scheduleEditedNodes.value.includes(id)) scheduleEditedNodes.value.push(id)
     touchConfig(id)
   }
 
@@ -286,6 +294,22 @@ export const useNodeStore = defineStore('node', () => {
     touchFlow()
   }
 
+  /** 任务 URL 来源字段（采集后续步的步骤 itemId）。与 setItemId 不同：清空时不写 -1，保留空串给后端。落在步骤上，走自动保存。 */
+  function setTaskUrlSourceField(id: string, itemId: string) {
+    const c = configs[id]
+    if (!c) return
+    c.itemId = itemId.trim()
+    touchFlow()
+  }
+
+  /** 任务 URL 规则表达式（步骤 url）。空了回到默认 $VAL$，与旧平台展示口径一致。落在步骤上，走自动保存。 */
+  function setStepUrl(id: string, url: string) {
+    const c = configs[id]
+    if (!c) return
+    c.stepUrl = url.trim() || '$VAL$'
+    touchFlow()
+  }
+
   /** 适用源（步骤 sourceId）。-1 = 该配置下所有源。落在步骤上，走自动保存。 */
   function setStepSourceId(id: string, sourceId: string) {
     const c = configs[id]
@@ -321,19 +345,23 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
-  function patchRuleConfig(id: string, patch: Partial<RuleOrchestration>) {
+  /**
+   * silent：界面自动回填（打开编排 Tab 时补模型默认值 / 提示词模板 / 配置详情），不是用户改的，
+   * 值照常写进节点但不标「未保存」——否则只是点到编排配置就出现「节点配置有未保存修改」。
+   */
+  function patchRuleConfig(id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) {
     const c = configs[id]
     if (!c) return
     c.ruleCfg = { ...makeDefaultRuleOrchestration(), ...c.ruleCfg, ...patch }
-    touchConfig(id)
+    if (!opts?.silent) touchConfig(id)
   }
 
   /** 非规则节点的编排配置（0804 S3-3）：与 patchRuleConfig 同款，写 execCfg 而不是 ruleCfg */
-  function patchExecConfig(id: string, patch: Partial<RuleOrchestration>) {
+  function patchExecConfig(id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) {
     const c = configs[id]
     if (!c) return
     c.execCfg = { ...makeDefaultExecConfig(), ...c.execCfg, ...patch }
-    touchConfig(id)
+    if (!opts?.silent) touchConfig(id)
   }
 
   /** 数据监控节点「监控方法」多选值（2026-09-01）：落在节点上，走配置脏标记（后续随节点配置写入通路持久化）。 */
@@ -361,11 +389,13 @@ export const useNodeStore = defineStore('node', () => {
     flowDirty,
     flowRev,
     dirtyConfigNodes,
+    scheduleEditedNodes,
     // 操作
     touch,
     touchConfig,
     touchFlow,
     markConfigSaved,
+    clearScheduleEdited,
     markSaved,
     markFlowSaved,
     setTripleCell,
@@ -392,6 +422,8 @@ export const useNodeStore = defineStore('node', () => {
     setConfigUpdateDt,
     hydrateConfigUrl,
     setItemId,
+    setTaskUrlSourceField,
+    setStepUrl,
     setStepSourceId,
     setEntryCondition,
     setNodeDisabled,

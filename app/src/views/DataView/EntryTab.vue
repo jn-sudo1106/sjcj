@@ -2,12 +2,13 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, CaretBottom, CaretTop, CopyDocument, Delete, Download, Key, Odometer, RefreshRight, Star, StarFilled, SwitchButton } from '@element-plus/icons-vue'
-import { entryApi, sourceApi, type EntryType } from '../../api'
+import { ArrowDown, CaretBottom, CaretTop, Connection, CopyDocument, Delete, Download, Edit, Key, MoreFilled, Odometer, RefreshRight, Star, StarFilled, SwitchButton, View } from '@element-plus/icons-vue'
+import { entryApi, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
 import { exportFieldsAsCsv } from '@/utils/format/csvExport'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
+import QuickCkSyncDialog from './QuickCkSyncDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { copyToClipboard } from '@/utils/clipboard'
 import { favoriteEntryIds, isFavoriteEntry, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
@@ -29,31 +30,35 @@ const nameFilter = ref('')
 const enableFilter = ref<string | undefined>('0')
 const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
-// 1013-表详情数据统计：后端 CfgEntryType 不返回数据量（详情/列表接口都没有 dataCnt 字段，
-// 实体表 cfg_entry_type 也无存量的列），真实数据量在 cs_source.DATA_CNT（每源数据条数，存储过程
-// calc_this_cnt 算出，只有点过「重新计算数据量」的表才有值）。所以打开详情时用现有 sourceApi 拉
-// 该表所有源，把每源 dataCount 求和，作为「数据条数」；没有统计值的表显示「— 未统计」而非误导性的「0 行」。
-const detailStats = reactive<{ dataCount?: number; sourceCount: number; loaded: boolean }>({
-  dataCount: undefined,
-  sourceCount: 0,
-  loaded: false,
-})
 const editor = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const extractDialog = reactive<{ visible: boolean; text: string; count: number }>({ visible: false, text: '', count: 0 })
+// 快速同步到 CK：同步服务走同源 /api/sync-platform 代理，任何业务后端环境都能用；
+// 不再按后端主机门控（原 133 门控在 186/217 下恒 false，入口整体消失）
+const quickCk = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 
-// ---- 1013：全量拉取 + 前端列头排序 + 只看收藏 ----
-// 后端 entryTypePagedView 不支持排序（Service 硬编码 ENTRY_TYPE_ID DESC，见设计文档 §一），
-// 实体表量级小（186 库未删除 90 张），一次拉全量再前端排序分页，跨页顺序稳定（网站列表同套路）。
-const LIST_FETCH_SIZE = 2000
-/** 这一轮请求拉回来的全量（已按 ID/名称过滤，**未**按收藏过滤、未排序、未切片） */
-const fetchedEntries = ref<EntryType[]>([])
-/** 只看收藏开关 */
-const favOnly = ref(false)
-/** 当前排序列与方向；默认表ID倒序（与后端现状一致） */
+// ---- 列头排序 + 只看收藏 ----
+// 1022 起后端 entryTypePagedView 支持 field / order 排序（186 实测，白名单见 1022-表ID列表_后端排序接口需求），
+// 改回按页请求；不再一次拉全量（10-13 的 limit=2000）到前端排序。
+// 「只看收藏」：后端 cond / entryTypeIds 实测都不过滤（10-22，186），收藏的表按 ID 逐个查回来，在前端排序分页。
+/** 当前排序列与方向；默认表ID倒序（与后端默认一致） */
 const sortKey = ref<'tableId' | 'name' | 'tableName' | 'keyField' | 'state' | 'updatedAt'>('tableId')
 const sortDir = ref<'asc' | 'desc'>('desc')
+/** 列 → 后端排序字段（返回字段名） */
+const SORT_FIELD: Record<typeof sortKey.value, string> = {
+  tableId: 'entryTypeId',
+  name: 'typeName',
+  tableName: 'tableName',
+  keyField: 'keyField',
+  state: 'state',
+  updatedAt: 'updateDt',
+}
+/** 只看收藏开关 */
+const favOnly = ref(false)
+/** 只看收藏时查回来的收藏表（已按 ID/名称/状态过滤，未排序、未切片） */
+const favEntries = ref<EntryType[]>([])
+const FAV_FETCH_CONCURRENCY = 6
 
-/** 排序列取值：表ID/数字按数字比，其余按字符串（updatedAt 是定长 'YYYY-MM-DD HH:mm:ss'，字符串序即时间序） */
+/** 收藏表的排序取值：表ID按数字比，其余按字符串（updatedAt 是定长 'YYYY-MM-DD HH:mm:ss'，字符串序即时间序） */
 function sortValue(e: EntryType, key: typeof sortKey.value): string | number {
   switch (key) {
     case 'tableId': return Number(e.tableId) || 0
@@ -66,54 +71,77 @@ function sortValue(e: EntryType, key: typeof sortKey.value): string | number {
   }
 }
 
-/** 从 fetchedEntries 重算展示：只看收藏 → 排序 → 切片。不发请求。 */
-function applyView() {
-  let base = fetchedEntries.value
-  if (favOnly.value) base = base.filter((e) => favoriteEntryIds.value.has(e.tableId))
+/** 只看收藏：从 favEntries 重算展示（排序 → 切片），不发请求 */
+function applyFavView() {
   const dir = sortDir.value === 'asc' ? 1 : -1
-  const sorted = [...base].sort((a, b) => {
-    const av = sortValue(a, sortKey.value)
-    const bv = sortValue(b, sortKey.value)
-    if (av === bv) return 0
-    // 表ID按数值比；其余字符串列（表名称/物理表名/去重字段/状态/更新时间）用 localeCompare，
-    // 中文按拼音/字典序（码点序对中文不直观，用户实测「表名称」正倒序不对）。
-    const cmp = typeof av === 'number' && typeof bv === 'number'
-      ? (av < bv ? -1 : 1)
-      : String(av).localeCompare(String(bv), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
-    return dir * cmp
-  })
+  const sorted = favEntries.value
+    .filter((e) => favoriteEntryIds.value.has(e.tableId))
+    .sort((a, b) => {
+      const av = sortValue(a, sortKey.value)
+      const bv = sortValue(b, sortKey.value)
+      if (av === bv) return 0
+      // 中文按拼音（与后端 typeName 排序口径一致）
+      const cmp = typeof av === 'number' && typeof bv === 'number'
+        ? (av < bv ? -1 : 1)
+        : String(av).localeCompare(String(bv), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+      return dir * cmp
+    })
   total.value = sorted.length
   const start = (page.value - 1) * size.value
   list.value = sorted.slice(start, start + size.value)
 }
 
-/** 收藏 / 只看收藏变了（本页点的）就地重排/重过滤，不重新请求 */
-watch(favoriteEntryIds, applyView)
+/** 本页点了取消收藏：只看收藏时就地去掉，不重新请求 */
+watch(favoriteEntryIds, () => { if (favOnly.value) applyFavView() })
+
+function currentFilters() {
+  return {
+    entryTypeId: entryTypeIdFilter.value.trim() || undefined,
+    name: nameFilter.value.trim() || undefined,
+    enable: enableFilter.value,
+  }
+}
+
+async function loadFavorites() {
+  await loadFavoriteEntries()
+  const filters = currentFilters()
+  const ids = [...favoriteEntryIds.value].filter((id) => !filters.entryTypeId || id === filters.entryTypeId)
+  const found: EntryType[] = []
+  for (let i = 0; i < ids.length; i += FAV_FETCH_CONCURRENCY) {
+    const pages = await Promise.all(ids.slice(i, i + FAV_FETCH_CONCURRENCY)
+      .map((id) => entryApi.entryPaged({ ...filters, entryTypeId: id, page: 1, size: 5 })))
+    pages.forEach((r) => found.push(...r.list))
+  }
+  favEntries.value = found
+  applyFavView()
+}
 
 async function load() {
   loading.value = true
   try {
-    // 全量拉取：一次 2000 覆盖当前量级；万一总量超过单页上限则翻页补拉（上限保护）
-    const filters = {
-      entryTypeId: entryTypeIdFilter.value.trim() || undefined,
-      name: nameFilter.value.trim() || undefined,
-      enable: enableFilter.value,
+    if (favOnly.value) {
+      await loadFavorites()
+      return
     }
-    const first = await entryApi.entryPaged({ ...filters, page: 1, size: LIST_FETCH_SIZE })
-    const all: EntryType[] = [...first.list]
-    let p = 1
-    while (first.total > all.length && p < 20) {
-      p++
-      const r = await entryApi.entryPaged({ ...filters, page: p, size: LIST_FETCH_SIZE })
-      all.push(...r.list)
-    }
-    fetchedEntries.value = all
-    applyView()
+    const r = await entryApi.entryPaged({
+      ...currentFilters(),
+      page: page.value,
+      size: size.value,
+      field: SORT_FIELD[sortKey.value],
+      order: sortDir.value,
+    })
+    list.value = r.list
+    total.value = r.total
   } catch (error) {
     ElMessage.error(`加载实体表失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     loading.value = false
   }
+}
+/** 翻页：只看收藏在前端切片，其余按页请求 */
+function onPage() {
+  if (favOnly.value) applyFavView()
+  else void load()
 }
 function onSearch() { page.value = 1; void load() }
 // §1.3-1：重置把查询条件清成 {}，之后查询不再携带 enable。
@@ -124,7 +152,7 @@ function onReset() {
   page.value = 1
   void load()
 }
-function onSize() { page.value = 1; applyView() }
+function onSize() { page.value = 1; onPage() }
 
 /** 列头点击排序：同列切换方向，换列时表ID默认倒序、其余默认升序 */
 function onSort(key: typeof sortKey.value) {
@@ -135,15 +163,14 @@ function onSort(key: typeof sortKey.value) {
     sortDir.value = key === 'tableId' ? 'desc' : 'asc'
   }
   page.value = 1
-  applyView()
+  onPage()
 }
 
 /** 只看收藏开关：开启时确保收藏已从后端拉取（幂等），回到第一页重过滤 */
 function onFavOnlyChange(value: string | number | boolean) {
   favOnly.value = Boolean(value)
-  if (favOnly.value) void loadFavoriteEntries()
   page.value = 1
-  applyView()
+  void load()
 }
 
 // §1.3-7：深链接 ?entryTypeId= 进入自动带入检索，并 watch 路由参数变化即时刷新。
@@ -179,25 +206,6 @@ async function openDetail(e: EntryType) {
     ElMessage.error(`加载实体表详情失败：${error instanceof Error ? error.message : String(error)}`)
     return
   }
-  await loadDetailStats(e.tableId)
-}
-/** 数据统计：拉该表所有源，求和每源 dataCount（口径与后端 calc_this_cnt 的 cs_source.DATA_CNT 一致）。
- *  失败不影响详情主体展示，静默降级为「未统计」。 */
-async function loadDetailStats(tableId: string) {
-  detailStats.loaded = false
-  detailStats.dataCount = undefined
-  detailStats.sourceCount = 0
-  try {
-    const page = await sourceApi.sourcePaged({ entryTypeId: tableId, page: 1, size: 2000 })
-    const sources = page.list ?? []
-    detailStats.sourceCount = sources.length
-    const total = sources.reduce((sum, s) => sum + (typeof s.dataCount === 'number' ? s.dataCount : 0), 0)
-    detailStats.dataCount = sources.length > 0 && total > 0 ? total : undefined
-  } catch {
-    // 统计接口失败：保持未统计
-  } finally {
-    detailStats.loaded = true
-  }
 }
 async function openEdit(e: EntryType) {
   try {
@@ -213,6 +221,12 @@ function openCreate() {
 }
 async function onEntrySaved() {
   await load()
+}
+const isCkSink = (e: EntryType) => (e.dsKind ?? 'MYSQL') === 'CK'
+function openQuickCk(e: EntryType) {
+  if (isCkSink(e)) return
+  quickCk.entry = e
+  quickCk.visible = true
 }
 
 async function confirmDanger(
@@ -454,6 +468,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
               title="点击按物理表名排序"
               @click="onSort('tableName')"
             >物理表名<span class="et-sort-caret"><el-icon class="et-sort-up" :class="{ active: sortKey === 'tableName' && sortDir === 'asc' }"><CaretTop /></el-icon><el-icon class="et-sort-down" :class="{ active: sortKey === 'tableName' && sortDir === 'desc' }"><CaretBottom /></el-icon></span></th>
+            <th style="width: 84px" title="表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路">数据源</th>
             <th
               class="et-sortable"
               :class="{ 'is-sorted': sortKey === 'keyField' }"
@@ -476,7 +491,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
               title="点击按更新时间排序"
               @click="onSort('updatedAt')"
             >更新时间<span class="et-sort-caret"><el-icon class="et-sort-up" :class="{ active: sortKey === 'updatedAt' && sortDir === 'asc' }"><CaretTop /></el-icon><el-icon class="et-sort-down" :class="{ active: sortKey === 'updatedAt' && sortDir === 'desc' }"><CaretBottom /></el-icon></span></th>
-            <th style="width: 170px">操作</th>
+            <th style="width: 190px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -487,40 +502,51 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td>{{ e.tableId }}</td>
             <td>{{ e.name || '—' }}</td>
             <td>{{ e.tableName }}</td>
+            <td>{{ e.dsKind ?? 'MYSQL' }}</td>
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
             <td>{{ e.remark || '—' }}</td>
             <td :title="e.updatedAt || ''">{{ formatDateTime(e.updatedAt) }}</td>
             <td>
-              <!-- 1013：收藏星标（空心=未收藏，实心=已收藏；先改本地再发请求，失败回滚见 entryFavorites.ts） -->
-              <button
-                class="et-fav"
-                :class="{ on: isFavoriteEntry(e.tableId) }"
-                type="button"
-                data-testid="entry-fav"
-                :title="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏这张表（开启「只看收藏」可只显示收藏的表）'"
-                :aria-pressed="isFavoriteEntry(e.tableId)"
-                :aria-label="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏'"
-                @click="toggleFavoriteEntry(e.tableId)"
-              >
-                <el-icon :size="13"><component :is="isFavoriteEntry(e.tableId) ? StarFilled : Star" /></el-icon>
-              </button>
-              <el-button link type="primary" size="small" @click="openDetail(e)">详情</el-button>
-              <template v-if="canWrite">
-                <el-button link type="primary" size="small" @click="openEdit(e)">编辑</el-button>
-                <el-dropdown trigger="click">
-                  <el-button link type="primary" size="small">更多<el-icon class="et-caret"><ArrowDown /></el-icon></el-button>
-                  <template #dropdown><el-dropdown-menu>
-                    <el-dropdown-item :icon="CopyDocument" @click="onCopy(e)">复制新表</el-dropdown-item>
-                    <el-dropdown-item :icon="Download" @click="onExtractFields(e)">提取表字段</el-dropdown-item>
-                    <el-dropdown-item :icon="RefreshRight" divided @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
-                    <el-dropdown-item :icon="Odometer" @click="onCalc(e)">重新计算数据量</el-dropdown-item>
-                    <el-dropdown-item :icon="Key" @click="onRebuildIndex(e)">重建去重索引</el-dropdown-item>
-                    <el-dropdown-item v-if="e.state === 'C'" :icon="SwitchButton" divided style="color: #dc2626" @click="onState(e)">置为正式表</el-dropdown-item>
-                    <el-dropdown-item v-else-if="e.state === 'AC'" :icon="SwitchButton" divided @click="onState(e)">设为测试表</el-dropdown-item>
-                  </el-dropdown-menu></template>
-                </el-dropdown>
-              </template>
+              <div class="et-actions">
+                <!-- 1013：收藏星标（空心=未收藏，实心=已收藏；先改本地再发请求，失败回滚见 entryFavorites.ts） -->
+                <button
+                  class="et-fav"
+                  :class="{ on: isFavoriteEntry(e.tableId) }"
+                  type="button"
+                  data-testid="entry-fav"
+                  :title="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏这张表（开启「只看收藏」可只显示收藏的表）'"
+                  :aria-pressed="isFavoriteEntry(e.tableId)"
+                  :aria-label="isFavoriteEntry(e.tableId) ? '取消收藏' : '收藏'"
+                  @click="toggleFavoriteEntry(e.tableId)"
+                >
+                  <el-icon :size="13"><component :is="isFavoriteEntry(e.tableId) ? StarFilled : Star" /></el-icon>
+                </button>
+                <el-tooltip content="详情" placement="top">
+                  <span class="et-op-icon" data-testid="entry-detail" @click="openDetail(e)"><el-icon :size="15"><View /></el-icon></span>
+                </el-tooltip>
+                <!-- 已是 CK 存储的表无需再同步，图标置灰且点击被 openQuickCk 拦下 -->
+                <el-tooltip :content="isCkSink(e) ? '该表已存储在 CK，无需再次同步' : '同步表'" placement="top">
+                  <span class="et-op-icon" :class="{ 'is-disabled': isCkSink(e) }" data-testid="entry-quick-ck" @click="openQuickCk(e)"><el-icon :size="15"><Connection /></el-icon></span>
+                </el-tooltip>
+                <template v-if="canWrite">
+                  <el-tooltip content="编辑" placement="top">
+                    <span class="et-op-icon" data-testid="entry-edit" @click="openEdit(e)"><el-icon :size="15"><Edit /></el-icon></span>
+                  </el-tooltip>
+                  <el-dropdown trigger="click">
+                    <span class="et-op-icon" data-testid="entry-more" title="更多"><el-icon :size="15"><MoreFilled /></el-icon></span>
+                    <template #dropdown><el-dropdown-menu>
+                      <el-dropdown-item :icon="CopyDocument" @click="onCopy(e)">复制新表</el-dropdown-item>
+                      <el-dropdown-item :icon="Download" @click="onExtractFields(e)">提取表字段</el-dropdown-item>
+                      <el-dropdown-item :icon="RefreshRight" divided @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
+                      <el-dropdown-item :icon="Odometer" @click="onCalc(e)">重新计算数据量</el-dropdown-item>
+                      <el-dropdown-item :icon="Key" @click="onRebuildIndex(e)">重建去重索引</el-dropdown-item>
+                      <el-dropdown-item v-if="e.state === 'C'" :icon="SwitchButton" divided style="color: #dc2626" @click="onState(e)">置为正式表</el-dropdown-item>
+                      <el-dropdown-item v-else-if="e.state === 'AC'" :icon="SwitchButton" divided @click="onState(e)">设为测试表</el-dropdown-item>
+                    </el-dropdown-menu></template>
+                  </el-dropdown>
+                </template>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -537,7 +563,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
         layout="total, sizes, prev, pager, next, jumper"
         background
         small
-        @current-change="applyView"
+        @current-change="onPage"
         @size-change="onSize"
       />
     </div>
@@ -546,21 +572,13 @@ const onEnterSearch = withoutComposition(() => onSearch())
     <div v-if="drawer.entry" class="et-d">
       <div class="et-d-title">{{ drawer.entry.name || drawer.entry.tableName }}</div>
       <div class="et-d-sub muted">
-        表 ID {{ drawer.entry.tableId }} ·
-        <template v-if="detailStats.loaded">
-          <template v-if="detailStats.dataCount != null">{{ detailStats.dataCount.toLocaleString() }} 条数据</template>
-          <template v-else>数据未统计</template>
-        </template>
-        <template v-else>数据统计中…</template>
-      </div>
-      <div v-if="detailStats.loaded" class="et-d-stats" data-testid="entry-detail-stats">
-        <div class="et-d-stat"><span class="muted">数据条数</span><b>{{ detailStats.dataCount != null ? detailStats.dataCount.toLocaleString() : '—' }}</b></div>
-        <div class="et-d-stat"><span class="muted">源数量</span><b>{{ detailStats.sourceCount }}</b></div>
+        表 ID {{ drawer.entry.tableId }}
       </div>
       <dl class="rc-kv">
         <dt>表ID</dt><dd>{{ drawer.entry.tableId }}</dd>
         <dt>表名称</dt><dd>{{ drawer.entry.name || '—' }}</dd>
         <dt>物理表名</dt><dd>{{ drawer.entry.tableName }}</dd>
+        <dt>数据源</dt><dd>{{ drawer.entry.dsKind ?? 'MYSQL' }}</dd>
         <dt>去重字段</dt><dd>{{ drawer.entry.keyField || '—' }}</dd>
         <dt>去重方式</dt><dd>{{ drawer.entry.dedupMode === 'table' ? '表内去重' : '源内去重' }}</dd>
         <dt>状态</dt><dd>{{ drawer.entry.state || '—' }}</dd>
@@ -612,6 +630,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
   </el-dialog>
 
   <EntryEditorDrawer v-model="editor.visible" :entry="editor.entry" @saved="onEntrySaved" />
+  <QuickCkSyncDialog v-model="quickCk.visible" :entry="quickCk.entry" @created="load" />
   </div>
 </template>
 
@@ -624,20 +643,6 @@ const onEnterSearch = withoutComposition(() => onSearch())
 .et-d { display: flex; flex-direction: column; gap: 4px; }
 .et-d-title { font-size: 15px; font-weight: 700; color: var(--rc-text); }
 .et-d-sub { font-size: 12px; margin-bottom: 10px; }
-/* 1013 表详情数据统计：两格卡片（数据条数 / 源数量） */
-.et-d-stats { display: flex; gap: 10px; margin-bottom: 12px; }
-.et-d-stat {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid var(--rc-border-soft);
-  border-radius: var(--rc-radius-sm, 6px);
-  background: #f8fafc;
-}
-.et-d-stat .muted { font-size: 11px; }
-.et-d-stat b { font-size: 15px; color: var(--rc-text); }
 .et-section { margin: 14px 0 8px; font-size: 13px; font-weight: 700; color: var(--rc-text); }
 .et-foot { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rc-border-soft); }
 .et-caret { margin-left: 4px; font-size: 12px; }
@@ -663,6 +668,22 @@ const onEnterSearch = withoutComposition(() => onSearch())
 /* 1013：只看收藏开关（轻量滑动开关 + 状态文字，AGENTS.md 控件视觉约定） */
 .et-fav-only { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; cursor: pointer; }
 .et-fav-only-text { font-size: 12px; color: var(--rc-text, #1e293b); }
+
+/* 操作列：对齐指标中心的行内图标操作（24px 热区 + hover 底色 + el-tooltip 文案） */
+.et-actions { display: flex; align-items: center; gap: 10px; }
+.et-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.et-op-icon:hover { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.et-op-icon.is-disabled { color: var(--rc-muted, #94a3b8); cursor: not-allowed; }
+.et-op-icon.is-disabled:hover { background: transparent; color: var(--rc-muted, #94a3b8); }
 
 /* 1013：收藏星标按钮 */
 .et-fav {

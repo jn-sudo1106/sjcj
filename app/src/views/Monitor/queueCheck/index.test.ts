@@ -62,6 +62,8 @@ const stubs = {
   ElTooltip: {
     name: 'ElTooltip',
     inheritAttrs: false,
+    // 行内操作改成图标后靠 content（原按钮文案）定位，声明成 prop 才拿得到
+    props: ['content'],
     template: '<span class="stub-tooltip"><slot /></span>',
   },
   ElPagination: {
@@ -157,6 +159,34 @@ describe('队列告警 · 表格操作与接口调用（对齐旧 QueueCheck）'
 
     expect(paged).toHaveBeenCalledTimes(1)
     expect((wrapper.get('input[placeholder="队列名"]').element as HTMLInputElement).value).toBe('')
+  })
+
+  // 状态下拉的「全部 / 历史删除的」用 -1 / -2 两个 UI 哨兵（空串会被 el-select 判成「没选」，
+  // 「全部」就显示不出来），到接口层再还原：-1 → ''、-2 → 后端本来那个 -1。
+  // 注：本文件 stub 了 ElTooltip，下拉内容不渲染，所以这里只验 UI 值与请求参数；
+  // 「非空值能显示中文」由 indicatorDataset / indicatorsList 里同机制的用例覆盖。
+  it('状态「全部」「历史删除的」：UI 用非空哨兵，请求按哨兵还原成旧口径', async () => {
+    const paged = pagedSpy()
+    const wrapper = mountPage()
+    await flushPromises()
+
+    // 分页器的每页条数选择器也是 ElSelect，但它的 modelValue 是数字
+    const select = wrapper.findAllComponents({ name: 'ElSelect' })
+      .find((s) => typeof s.props('modelValue') === 'string')!
+    expect(select.vm.$props.modelValue).toBe('-1')
+
+    select.vm.$emit('update:modelValue', '-2')
+    await flushPromises()
+    expect(select.vm.$props.modelValue).toBe('-2')
+    await btn(wrapper, '查询').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '-1' }))
+
+    select.vm.$emit('update:modelValue', '-1')
+    await flushPromises()
+    await btn(wrapper, '查询').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '' }))
   })
 
   it('「更多..」常显：未勾选置灰，勾选后可点；启用/禁用/删除各自打到对应接口（ids 用勾选的 queueId）', async () => {
@@ -295,7 +325,8 @@ describe('队列告警 · 表格操作与接口调用（对齐旧 QueueCheck）'
     expect(drawer.props('modelValue')).toBe(true)
     expect((drawer.props('record') as MqCheck).queueId).toBe('mq-1')
 
-    await cell(wrapper, '.qc-op-link').find((el) => el.text().trim() === '编辑')!.trigger('click')
+    await cell(wrapper, '.qc-actions')[0].findAllComponents({ name: 'ElTooltip' })
+      .find((t: VueWrapper) => (t.props() as { content?: string }).content === '编辑')!.find('.qc-op-icon').trigger('click')
     await flushPromises()
     expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ queueId: 'mq-1' }))
   })

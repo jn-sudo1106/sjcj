@@ -27,6 +27,12 @@ vi.mock('@/utils/confirmDanger', () => ({
   confirmOrRun: vi.fn((_need: boolean, _t: string, _b: string, run: () => unknown) => run()),
 }))
 
+// 组件从 $route.query 接钻取参数（旧页走 props）；测试里没有真实 router，给个空 query 即可
+// （真实应用里 app.use(router) 会在应用级 provide routeLocationKey，任意组件都能 useRoute()）
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+}))
+
 const openConfig = vi.fn()
 
 function row(over: Partial<TaskRow> = {}): TaskRow {
@@ -59,6 +65,8 @@ const stubs = {
   ElTooltip: {
     name: 'ElTooltip',
     inheritAttrs: false,
+    // 行内操作改成图标后靠 content（原按钮文案）定位，声明成 prop 才拿得到
+    props: ['content'],
     template: '<span class="stub-tooltip"><slot /></span>',
   },
   ElPagination: {
@@ -272,8 +280,8 @@ describe('任务实例 · 重发', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    await cell(wrapper, '.tl-actions')[0].findAll('.tl-op-link')
-      .find((el) => el.text().trim() === '重发')!.trigger('click')
+    await cell(wrapper, '.tl-actions')[0].findAllComponents({ name: 'ElTooltip' })
+      .find((t: VueWrapper) => (t.props() as { content?: string }).content === '重发')!.find('.tl-op-icon').trigger('click')
     await flushPromises()
 
     expect(resend).toHaveBeenLastCalledWith(['8348509120'])
@@ -314,8 +322,8 @@ describe('任务实例 · 展示接线', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    await cell(wrapper, '.tl-actions')[0].findAll('.tl-op-link')
-      .find((el) => el.text().trim() === '详情')!.trigger('click')
+    await cell(wrapper, '.tl-actions')[0].findAllComponents({ name: 'ElTooltip' })
+      .find((t: VueWrapper) => (t.props() as { content?: string }).content === '详情')!.find('.tl-op-icon').trigger('click')
     await flushPromises()
     const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
     expect(drawer.props('modelValue')).toBe(true)

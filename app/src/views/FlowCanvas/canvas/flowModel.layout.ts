@@ -26,7 +26,7 @@ import type {
   TripleField,
 } from './flowModel'
 import {
-  isDataNode, isOcrNode, isAudioTextNode, isVideoAudioNode, isArticleSummaryNode,
+  isDataNode, isOcrNode, isAudioTextNode, isVideoAudioNode, isPdfMdNode, isArticleSummaryNode,
   isArticleTagNode, isTranslateNode, isMonitorNode, isDataValidationNode,
   nodeInputTable, nodeOutputTable, branchGroupOf,
 } from './flowModel'
@@ -212,6 +212,7 @@ export const SOURCE_TYPE_NAME_BY_ID: Record<string, string> = {
   '720': '文章生成摘要',
   '730': '文章打标签',
   '800': '翻译助手',
+  '911': 'PDF转MD',
 }
 
 /** 节点模板 → 类型名称 */
@@ -221,6 +222,7 @@ export const TEMPLATE_TO_TYPE_NAME: Record<string, string> = {
   'web-detail': '网页抓取',
   ocr: 'OCR抓取',
   translate: '翻译助手',
+  'pdf-md': 'PDF转MD',
   'article-tag': '文章打标签',
   'article-summary': '文章生成摘要',
   'audio-text': '音频提取文字',
@@ -259,6 +261,7 @@ export function nodeTypeLabel(cfg: NodeConfig): string {
   // 2. 结构特征与专门判定（优先精准匹配 OCR/AI/处理类节点）
   if (isOcrNode(cfg) || cfg.template === 'ocr') return 'OCR抓取'
   if (isTranslateNode(cfg) || cfg.template === 'translate') return '翻译助手'
+  if (isPdfMdNode(cfg) || cfg.template === 'pdf-md') return 'PDF转MD'
   if (isArticleTagNode(cfg) || cfg.template === 'article-tag') return '文章打标签'
   if (isArticleSummaryNode(cfg) || cfg.template === 'article-summary') return '文章生成摘要'
   if (isVideoAudioNode(cfg) || cfg.template === 'video-audio') return '视频提取音频'

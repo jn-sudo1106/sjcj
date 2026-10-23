@@ -45,8 +45,12 @@ import {
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
 } from './rules'
-import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
+// mockMeasures（M4 演示形状）已不再注册：1014 迁移「指标列表」页时，measure/measurePaged
+// 改成真实契约的分页端点（live），handler 换成 mock/measure.ts 的 mockMeasurePaged（旧平台字段名）。
+// metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
+import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
+import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview } from './groupRes'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
@@ -66,11 +70,87 @@ import {
   mockCommJobRun,
 } from './commJob'
 import { mockTaskListPaged } from './taskList'
+import { mockTaskStat } from './taskStat'
 import {
+  mockMeasurePaged,
+  mockMeasureAdd,
+  mockMeasureUpdate,
+  mockMeasureDelete,
+  mockMeasureDeletePhy,
+  mockMeasureChangeEnable,
+  mockMeasureCopy,
+  mockMeasureGenFromSource,
+} from './measure'
+import {
+  mockDatasetPaged,
+  mockDatasetUpdate,
+  mockDatasetDelete,
+  mockDatasetChangeEnable,
+  mockDatasetCopy,
+  mockDatasetGenFromSource,
+  mockDatasetRunNow,
+} from './dataset'
+import {
+  mockPocDatabaseEntryList,
+  mockPocDatabaseTableInfo,
+  mockPocDatabaseConfigSave,
+  mockPocVectorConfigList,
+  mockPocVectorDataQuery,
+  mockVectorConfigPaged,
+  mockVectorConfigSave,
+  mockVectorMappingInfo,
+  mockVectorConfigSync,
+  mockVectorConfigDelete,
+  mockMatchTableConfigPaged,
+  mockMatchTableConfigSave,
+  mockMatchTableConfigChangeStatus,
+  mockMatchTableConfigDelete,
+  mockReplaceTableConfigPaged,
+  mockReplaceTableConfigSave,
+  mockReplaceTableConfigChangeStatus,
+  mockEntityRewriteConfigPaged,
+  mockEntityRewriteConfigSave,
+  mockEntityRewriteConfigChangeStatus,
+  mockEntityRewriteConfigDelete,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
   mockSqlTemplateCopy,
+  mockTableTemplatePaged,
+  mockTableTemplateSave,
+  mockTableTemplateChangeStatus,
+  mockDicTemplatePaged,
+  mockDicTemplateAdd,
+  mockDicTemplateUpdate,
+  mockQuestionDicPaged,
+  mockQuestionDicAdd,
+  mockQuestionDicUpdate,
+  mockQuestionDicChangeStatus,
+  mockQuestionDicDelete,
+  mockDataIndexSyncPaged,
+  mockDataIndexSyncAdd,
+  mockDataIndexSyncUpdate,
+  mockDataIndexSyncRun,
+  mockDataIndexConfigPaged,
+  mockDataIndexConfigAllCode,
+  mockDataIndexConfigAdd,
+  mockDataIndexConfigUpdate,
+  mockDataIndexConfigChangeStatus,
+  mockChatFlowStepPaged,
+  mockChatFlowStepAdd,
+  mockChatFlowStepUpdate,
+  mockChatFlowStepChangeStatus,
+  mockWordSegmentPaged,
+  mockWordSegmentUpdate,
+  mockWordSegmentChangeStatus,
+  mockWordSegmentBatchAdd,
+  mockSystemConfigPaged,
+  mockSystemConfigDetail,
+  mockSystemConfigSave,
+  mockPageConfigPaged,
+  mockPageConfigBatchAdd,
+  mockPageConfigUpdate,
+  mockPageConfigChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -128,6 +208,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/deleteSource': mockAck,
   // 采集资产 · 源（M5 补充）
   'task/taskListPaged': mockTaskListPaged,
+  'task/stat': mockTaskStat,
   'source/logPaged': mockSourceLogs,
   'task/topTaskPaged': mockSourceTasks,
   'source/sourceTaskPaged': mockSourceTaskPaged,
@@ -182,6 +263,15 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'sourceType/detail': (params?: Record<string, unknown>) => ({ sourceType: Number(params?.sourceType), typeName: '网页抓取', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null }),
   'sourceType/add': mockAck,
   'sourceType/update': mockAck,
+  'sourceType/delete': mockAck,
+  // 组级数据权限（系统设置 → 数据权限设置，接口文档-组数据权限.md）：内存表增删改查 + meta + 试算
+  'group-res/list': mockGroupResList,
+  'group-res/detail': mockGroupResDetail,
+  'group-res/meta': mockGroupResMeta,
+  'group-res/add': mockGroupResAdd,
+  'group-res/modify': mockGroupResModify,
+  'group-res/delete': mockGroupResDelete,
+  'group-res/preview': mockGroupResPreview,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。
@@ -245,8 +335,32 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
 
   // 指标中心（M4）
   'dataset/datasetPaged': mockDatasets,
-  'measure/measurePaged': mockMeasures,
   'measure/stats': mockMetricStats,
+  // 指标中心（M4）
+  // dataset/datasetPaged = 逆向清单的逻辑名，只服务 api/index.ts 的 M4 演示服务（metricApi.datasets）。
+  // 真实路径是 dataset/dataSetPaged（大写 S），1013 迁移「指标数据集」页（旧 page/config/DatasetList.vue）
+  // 时新增，7 个写端点一起接上——旧页面这些操作本来就全部直连后端。
+  'dataset/dataSetPaged': mockDatasetPaged,
+  'dataset/updateDataSet': mockDatasetUpdate,
+  'dataset/delete': mockDatasetDelete,
+  'dataset/changeEnable': mockDatasetChangeEnable,
+  'dataset/copy': mockDatasetCopy,
+  'dataset/genFromSource': mockDatasetGenFromSource,
+  'dataset/runNow': mockDatasetRunNow,
+
+  // 指标定义（1014 迁移「指标列表」页，旧 page/config/MeasureList.vue）。
+  // 这一页在旧平台的分页 / 新增 / 修改 / 批量启停 / 批量删除 / 物理删除 / 复制**本来就全部直连后端**，
+  // 所以这 8 条一起标 live：只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
+  // 注意 `measure/measurePaged` 这条的**逻辑名与真实路径同名**（旧 URL 就是 /v1/measure/measurePaged），
+  // 不存在 dataset 那种大小写别名问题；原来注册在这里的 mockMeasures（M4 演示形状）已随之下线。
+  'measure/measurePaged': mockMeasurePaged,
+  'measure/add': mockMeasureAdd,
+  'measure/update': mockMeasureUpdate,
+  'measure/delete': mockMeasureDelete,
+  'measure/deleteMeasurePhy': mockMeasureDeletePhy,
+  'measure/changeEnable': mockMeasureChangeEnable,
+  'measure/copy': mockMeasureCopy,
+  'measure/genMeasureFromSource': mockMeasureGenFromSource,
 
   // 数据查看（M4）
   'data/entryTypesGroup': mockEntryTypesGroup,
@@ -331,4 +445,102 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/sql-temp': mockSqlTemplateSave,
   'poc/sql-temp/status': mockSqlTemplateChangeStatus,
   'poc/sql-temp/copy': mockSqlTemplateCopy,
+
+  // 表模板配置（1013 迁入）：端点域是旧 question-temp，菜单标题才叫「表模板」。
+  // 没有 poc/question-temp/copy —— 旧平台不提供表模板复制（见 api/templateConfig.ts 的 tableTemplateApi）。
+  'poc/question-temp/page': mockTableTemplatePaged,
+  'poc/question-temp': mockTableTemplateSave,
+  'poc/question-temp/status': mockTableTemplateChangeStatus,
+  // 表模板「使用表范围」下拉的数据表选项
+  'poc/database/entry-list': mockPocDatabaseEntryList,
+  // 表字段管理（1015 迁入「基础配置」）：字段列表 + 整表覆盖保存，与 entry-list 同一张内存表
+  'poc/database/table-info': mockPocDatabaseTableInfo,
+  'poc/database/config': mockPocDatabaseConfigSave,
+
+  // 向量表（1015 迁入「基础配置」）：数据浏览两条只读 + 向量表管理五条（分页/保存/列映射/同步/删除），
+  // 浏览下拉与管理列表共用 VECTOR_TABLES 一张内存表（管理页增删改会同步影响浏览页的表名下拉）。
+  // 旧域里剩下的 data-match 是聊天侧 ChatTipsModal 用的，未迁。见 api/templateConfig.ts 的 vectorConfigApi。
+  'poc/vector/config/all': mockPocVectorConfigList,
+  'poc/vector/data': mockPocVectorDataQuery,
+  'poc/vector/config/page': mockVectorConfigPaged,
+  'poc/vector/config': mockVectorConfigSave,
+  'poc/vector/mapping/info': mockVectorMappingInfo,
+  'poc/vector/sync': mockVectorConfigSync,
+  'poc/vector/delete': mockVectorConfigDelete,
+
+  // 选表规则配置（1015 迁入「基础配置」，旧「基础配置 → 选表规则配置」，端点域 /poc/match-table-config）：
+  // 与 sql 模板同形态 —— 新增/编辑同一个根端点（带 id 即更新）+ status（**query** 传参）+ delete（**query** 只发 id）；
+  // 没有 copy（旧域没有该端点）。见 api/templateConfig.ts 的 matchTableConfigApi。
+  'poc/match-table-config/page': mockMatchTableConfigPaged,
+  'poc/match-table-config': mockMatchTableConfigSave,
+  'poc/match-table-config/status': mockMatchTableConfigChangeStatus,
+  'poc/match-table-config/delete': mockMatchTableConfigDelete,
+
+  // 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」，端点域 /poc/replace-table-config）：
+  // 比选表规则配置还少一个端点 —— 旧域只有 page / 根（新增与编辑同一个）/ status（**query** 传参），
+  // 没有 copy 也没有删除，所以这里只有三个 handler。见 api/templateConfig.ts 的 replaceTableConfigApi。
+  'poc/replace-table-config/page': mockReplaceTableConfigPaged,
+  'poc/replace-table-config': mockReplaceTableConfigSave,
+  'poc/replace-table-config/status': mockReplaceTableConfigChangeStatus,
+
+  // 实体改写管理（1015 迁入「基础配置」，旧「基础配置 → 实体改写管理」，端点域 /poc/entity-rewrite-config）：
+  // 端点形状与选表规则配置一字不差 —— page / 根（新增与编辑同一个，body 带 id 即更新）/ status（**query**）/ delete（**query** 只发 id），
+  // 没有 copy。差别在查询参数字段名：这一页上送的是 entityName（另两个域叫 name）。
+  // ⚠️ 四条端点在 186 后端上还没打通（分页回通用 500，见 api/endpoints.ts），未标 live，所以现在**只走 mock**；
+  // 这里的种子是按旧页面字段形状构造的示例，不是真实行。见 api/templateConfig.ts 的 entityRewriteConfigApi。
+  'poc/entity-rewrite-config/page': mockEntityRewriteConfigPaged,
+  'poc/entity-rewrite-config': mockEntityRewriteConfigSave,
+  'poc/entity-rewrite-config/status': mockEntityRewriteConfigChangeStatus,
+  'poc/entity-rewrite-config/delete': mockEntityRewriteConfigDelete,
+
+  // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
+  'poc/dic/page': mockDicTemplatePaged,
+  'poc/dic': mockDicTemplateAdd,
+  'poc/dic/update': mockDicTemplateUpdate,
+
+  // 问句改写配置（1013 迁入）：新增/修改两个端点 + status（query）+ deleteQuestionDic（模板域唯一的删除）。
+  'poc/question-dic/page': mockQuestionDicPaged,
+  'poc/question-dic': mockQuestionDicAdd,
+  'poc/question-dic/update': mockQuestionDicUpdate,
+  'poc/question-dic/status': mockQuestionDicChangeStatus,
+  'poc/question-dic/deleteQuestionDic': mockQuestionDicDelete,
+
+  // 数据索引同步（1013 迁入）：新增/修改两个端点，没有 status/copy；sync 的 body 是 id 数组。
+  'poc/data-index-sync/page': mockDataIndexSyncPaged,
+  'poc/data-index-sync': mockDataIndexSyncAdd,
+  'poc/data-index-sync/update': mockDataIndexSyncUpdate,
+  'poc/data-index-sync/sync': mockDataIndexSyncRun,
+
+  // 数据字典配置（1014 迁入）：新增/修改两个端点 + status（**body** 传参，与 question-dic 的 query 不同），没有 copy；
+  // all-code 是「编码」筛选下拉的只读数据源，返回 {code,type} 裸数组。
+  'poc/data-index-config/page': mockDataIndexConfigPaged,
+  'poc/data-index-config/all-code': mockDataIndexConfigAllCode,
+  'poc/data-index-config': mockDataIndexConfigAdd,
+  'poc/data-index-config/update': mockDataIndexConfigUpdate,
+  'poc/data-index-config/status': mockDataIndexConfigChangeStatus,
+
+  // 提示词配置（1014 迁入，旧菜单「模板配置 → 提示词配置」，端点域 /poc/chat-flow-step）：
+  // 新增/修改两个端点 + status（**body** 传参，与 question-dic 的 query 不同）；没有 copy、没有删除。
+  'poc/chat-flow-step/page': mockChatFlowStepPaged,
+  'poc/chat-flow-step': mockChatFlowStepAdd,
+  'poc/chat-flow-step/update': mockChatFlowStepUpdate,
+  'poc/chat-flow-step/status': mockChatFlowStepChangeStatus,
+
+  // 分词配置（1014 迁入，模板域最后一个子模块）：修改 + status（**body** 传参）+ batch（body 是对象数组）；
+  // 没有单条新增与 copy —— 旧列表的 showAdd 没绑任何按钮，新增一律走 batch（见 api/templateConfig.ts 的 wordSegmentApi）。
+  'poc/word-segment-config/page': mockWordSegmentPaged,
+  'poc/word-segment-config/update': mockWordSegmentUpdate,
+  'poc/word-segment-config/status': mockWordSegmentChangeStatus,
+  'poc/word-segment-config/batch': mockWordSegmentBatchAdd,
+
+  // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：
+  // 参数设置 分页/详情/修改（没有新增/删除/导出/刷新缓存入口，见 api/templateConfig.ts 的 systemConfigApi）；
+  // 页面配置 分页/batch（对象数组）/update/status（**body** 传参），没有单条新增与 copy。
+  'poc/system/config/page': mockSystemConfigPaged,
+  'poc/system/config/detail': mockSystemConfigDetail,
+  'poc/system/config': mockSystemConfigSave,
+  'poc/system/page-config/page': mockPageConfigPaged,
+  'poc/system/page-config/batch': mockPageConfigBatchAdd,
+  'poc/system/page-config/update': mockPageConfigUpdate,
+  'poc/system/page-config/status': mockPageConfigChangeStatus,
 }

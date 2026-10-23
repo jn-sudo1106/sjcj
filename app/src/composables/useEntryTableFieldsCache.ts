@@ -28,5 +28,9 @@ export function useEntryTableFieldsCache(tables: Ref<EntryType[]>) {
  *  用这个合并：清单只用来补新表/基础信息，已经查过详情（fields 非空）的表保留原样。 */
 export function mergeEntryTypesPreservingFields(current: EntryType[], incoming: EntryType[]): EntryType[] {
   const detailed = new Map(current.filter((t) => t.fields.length).map((t) => [t.tableId, t]))
-  return incoming.map((t) => detailed.get(t.tableId) ?? t)
+  const merged = incoming.map((t) => detailed.get(t.tableId) ?? t)
+  // 清单只拉前 N 张（节点配置区 size=100），查过详情却不在清单里的表也要留着，
+  // 否则节点输入表排在 100 名开外时字段会被清单冲掉（2026-10-19 任务 URL 来源字段下拉为空）
+  const listed = new Set(incoming.map((t) => t.tableId))
+  return [...merged, ...[...detailed.values()].filter((t) => !listed.has(t.tableId))]
 }

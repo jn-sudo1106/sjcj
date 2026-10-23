@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, directPredecessorIds, firstRunnableNodeId, hasDirectSuccessor, iconFor, isFirstRunnableNode, isRuleNode,
+  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, directPredecessorIds, firstRunnableNodeId, hasDirectSuccessor, iconFor, isFirstRunnableNode, isPdfMdNode, isRuleLikeNode, isRuleNode, isScriptlessNode,
   makeDefaultExecConfig, NODE_CONFIGS, normalizeNodeConfig, type FlowBranchGroup, type NodeConfig,
 } from './flowModel'
 import type { Source } from '@/api'
@@ -287,5 +287,25 @@ describe('makeDefaultExecConfig（0804 S3-3）', () => {
     expect(cfg.format).toBe('xml')
     expect(cfg.describe).toBe('')
     expect(cfg.systemPrompt).toBeTruthy()
+  })
+})
+
+describe('PDF转MD（911）通用处理节点', () => {
+  it('种子：处理型无脚本节点，队列 source-config，输出 markdown', () => {
+    const seed = NODE_CONFIGS['pdf-md']
+    expect(seed.title).toBe('PDF转MD')
+    expect(seed.sub).toContain('[911]')
+    expect(seed.collectCfg).toBeUndefined()
+    expect(seed.taskCfg?.queue).toBe('source-config')
+    expect(seed.output.map((field) => field.name)).toEqual(['markdown'])
+    expect(isPdfMdNode(seed)).toBe(true)
+    expect(isRuleLikeNode(seed)).toBe(true)
+    expect(isScriptlessNode(seed)).toBe(true)
+  })
+
+  it('按类型号 911 也能识别（回读时只有 sub / configType）', () => {
+    expect(isPdfMdNode(cfg({ sub: '[911] PDF转MD · 文档转 Markdown' }))).toBe(true)
+    expect(isScriptlessNode(cfg({ sub: '[911] PDF转MD' }))).toBe(true)
+    expect(isPdfMdNode(cfg({ sub: '[130] PDF抓取' }))).toBe(false)
   })
 })

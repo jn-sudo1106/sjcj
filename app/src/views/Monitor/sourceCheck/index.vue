@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Plus } from '@element-plus/icons-vue'
+import {
+  Search,
+  Plus,
+  Document,
+  Edit,
+  View,
+  VideoPlay,
+  Delete,
+} from '@element-plus/icons-vue'
 import { type SourceCheck } from '@/api'
 import {
   pagedSourceCheck,
@@ -17,13 +25,23 @@ import CheckLogsDrawer from './CheckLogsDrawer.vue'
 
 defineOptions({ name: 'SourceCheck' })
 
-/** 嵌入形态：从源列表弹框打开时，固定 sourceId、隐藏源筛选 */
+/** 嵌入形态：外层弹窗包裹时用——只去掉卡片壳（边框 / 圆角），**筛选表单保持完整**。
+ *  旧平台 MonitorModal 里的 MonitorList 就是完整渲染的（在用 / 告警状态 / 源ID / 名称全在），
+ *  传进来的 sourceId 只是筛选与「加监控」的**初值**，用户仍可在「源ID」里改选。 */
 const props = withDefaults(defineProps<{ embedded?: boolean; sourceId?: string }>(), { embedded: false, sourceId: '' })
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求；与 TaskView 对齐）----
+/** 「在用」「告警状态」两个下拉的「全部」各用一个 UI 哨兵（值相同，分开命名便于阅读）。el-select 里
+ *  `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成「没选」、`selectedLabel` 回退到
+ *  placeholder —— 选中「全部」时输入框里看不到「全部」两个字。到 `load()` 里由 `toApiValue()`
+ *  还原成 ''（旧口径：不带该条件），接口参数不变。 */
+const ENABLE_ALL = '-1'
+const STATE_ALL = '-1'
+const toApiValue = (value: string): string => (value === ENABLE_ALL ? '' : value)
+
 const form = reactive({
-  enable: '',   // '' 全部 / '0' 在用 / '1' 停用
-  state: '',    // '' 全部 / 'E' 告警 / 'C' 正常
+  enable: ENABLE_ALL as string, // 全部 / '0' 在用 / '1' 停用
+  state: STATE_ALL as string,   // 全部 / 'E' 告警 / 'C' 正常
   sourceId: props.sourceId || '',
   name: '',
 })
@@ -35,8 +53,8 @@ const filters = reactive<{
   sourceId: string
   name: string
 }>({
-  enable: '',
-  state: '',
+  enable: ENABLE_ALL,
+  state: STATE_ALL,
   sourceId: props.sourceId || '',
   name: '',
 })
@@ -62,8 +80,8 @@ async function load() {
     // 入参逐字段对齐旧 api/monitor.js 的 pagedSourceCheck（page/limit，不是 pageNo/pageSize/size）
     const res = await pagedSourceCheck({
       sourceId: filters.sourceId,
-      enable: filters.enable,
-      state: filters.state,
+      enable: toApiValue(filters.enable),
+      state: toApiValue(filters.state),
       name: filters.name,
       page: page.value,
       limit: size.value,
@@ -219,33 +237,33 @@ function onSourceChange() {
 <template>
   <div class="sc-shell" :class="{ 'sc-embedded': embedded }" v-loading="loading">
     <!-- 嵌入形态：外层由父组件弹窗包裹，这里直接渲染内容；独立形态：自己做卡片壳 -->
-    <div class="sc-head" v-if="!embedded">
+    <!-- <div class="sc-head" v-if="!embedded">
       <div class="sc-title">数据源告警</div>
       <div class="sc-sub">查看和管理各源的数据校验监控，可按源、状态、在用筛选。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧项目 a-form layout="inline" + a-row 栅格） -->
-    <el-form :inline="true" class="sc-filter-form" size="small">
+    <el-form :inline="true" class="sc-filter-form">
       <el-row :gutter="8" class="sc-filter-row">
-        <el-col :md="4" :sm="24" v-if="!embedded">
+        <el-col :md="4" :sm="24">
           <el-form-item label="在用">
             <el-select v-model="form.enable" placeholder="全部" @change="runQuery">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :md="4" :sm="24" v-if="!embedded">
+        <el-col :md="4" :sm="24">
           <el-form-item label="告警状态">
             <el-select v-model="form.state" placeholder="全部" @change="runQuery">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="STATE_ALL" />
               <el-option label="告警" value="E" />
               <el-option label="正常" value="C" />
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :md="4" :sm="24" v-if="!embedded">
+        <el-col :md="4" :sm="24">
           <el-form-item label="源ID">
             <SourceSelect v-model="form.sourceId" @change="onSourceChange" />
           </el-form-item>
@@ -313,7 +331,7 @@ function onSourceChange() {
       <!-- 执行结果：剥时间戳前缀，超长省略 -->
       <el-table-column label="执行结果" min-width="200" prop="lastMsg" show-overflow-tooltip>
         <template #default="{ row }">
-          <span :title="row.lastMsg">{{ stripTimestamp(row.lastMsg) }}</span>
+          <span>{{ stripTimestamp(row.lastMsg) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="名称" width="150" prop="name" show-overflow-tooltip />
@@ -322,24 +340,25 @@ function onSourceChange() {
       <el-table-column label="下次" width="160" prop="nextRun" />
       <el-table-column label="上次" width="160" prop="lastRun" />
       <el-table-column label="源" width="110" prop="sourceId" class-name="mono-cell" />
-      <!-- 操作：日志 / 编辑（行内）+ 更多（详情 / 立即运行 / 删除） -->
-      <el-table-column label="操作" width="200" fixed="right">
+      <!-- 操作：日志 / 编辑 / 详情 / 立即运行 / 删除，全部图标化，悬浮 tooltip 说明 -->
+      <el-table-column label="操作" width="200" fixed="right" align="center">
         <template #default="{ row }">
-          <div style="display: flex; align-items: center; gap: 4px;">
-            <span class="sc-op-link" @click="openLogs(row)">日志</span>
-            <span class="sc-op-divider">|</span>
-            <span class="sc-op-link" @click="openEditDialog(row)">编辑</span>
-            <span class="sc-op-divider">|</span>
-            <el-dropdown trigger="click">
-              <span class="sc-more-link">更多 ▾</span>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="openDetail(row)">详情</el-dropdown-item>
-                  <el-dropdown-item @click="rowRunNow(row)">立即运行</el-dropdown-item>
-                  <el-dropdown-item divided @click="rowDelete(row)">删除</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+          <div class="sc-op-bar">
+            <el-tooltip content="日志" placement="top">
+              <span class="sc-op-icon" @click="openLogs(row)"><el-icon :size="15"><Document /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="编辑" placement="top">
+              <span class="sc-op-icon" @click="openEditDialog(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="详情" placement="top">
+              <span class="sc-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="立即运行" placement="top">
+              <span class="sc-op-icon" @click="rowRunNow(row)"><el-icon :size="15"><VideoPlay /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <span class="sc-op-icon sc-op-danger" @click="rowDelete(row)"><el-icon :size="15"><Delete /></el-icon></span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -402,6 +421,10 @@ function onSourceChange() {
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.sc-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 /* 项目共享令牌缺失时回退值（与 TaskView 同口径） */
 .sc-shell {
   display: flex;
@@ -476,25 +499,33 @@ function onSourceChange() {
 .sc-batch-bar b {
   font-size: 14px;
 }
-.sc-more-link {
-  color: var(--rc-primary, #2563eb);
+.sc-op-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.sc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.sc-more-link:hover {
-  text-decoration: underline;
-}
-.sc-op-link {
+.sc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
   color: var(--rc-primary, #2563eb);
-  cursor: pointer;
-  font-size: 12px;
 }
-.sc-op-link:hover {
-  text-decoration: underline;
+.sc-op-icon.sc-op-danger {
+  color: var(--rc-danger, #dc2626);
 }
-.sc-op-divider {
-  margin: 0 4px;
-  color: var(--rc-faint, #94a3b8);
+.sc-op-icon.sc-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .sc-pager {
   display: flex;

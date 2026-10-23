@@ -4,6 +4,7 @@ import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { copyToClipboard } from '@/utils/clipboard'
 import { formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
 import { runnerManagementApi, type RunnerInstance, type RuntimeLogRecord, type RuntimeLogDetail, type RuntimeLogLine, type RuntimeLogPolicy } from '@/api/runnerManagement'
 
@@ -146,9 +147,9 @@ function scrolled(e: Event) {
   scrollTop.value = element.scrollTop
   if (element.scrollHeight - element.scrollTop - element.clientHeight > 60) follow.value = false
 }
+// 复制统一走 utils/clipboard：部署站是 http，navigator.clipboard 不可用，要靠它的同步兜底
 async function copy() {
-  try { await navigator.clipboard.writeText(visibleLines.value.map(line => `${time(line.time)} ${line.text}`).join('\n')); ElMessage.success('已复制当前日志') }
-  catch (e) { outputError.value = problem(e) }
+  await copyToClipboard(visibleLines.value.map(line => `${time(line.time)} ${line.text}`).join('\n'), '当前日志')
 }
 async function download() {
   if (!streamId.value || downloading.value) return

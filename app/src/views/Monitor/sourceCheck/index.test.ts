@@ -80,15 +80,6 @@ const stubs = {
   ElDrawer: { name: 'ElDrawer', props: ['modelValue', 'title'], template: '<div class="stub-drawer"><slot /></div>' },
   ElDescriptions: { name: 'ElDescriptions', template: '<div><slot /></div>' },
   ElDescriptionsItem: { name: 'ElDescriptionsItem', props: ['label'], template: '<div><slot /></div>' },
-  // 「更多」下拉展开后是 teleport 到 body 的浮层，jsdom 里点不到；换成直接把两个插槽铺平的桩，
-  // 只验「点某项 → 调哪个接口」，不验 Element Plus 自己的浮层行为。
-  ElDropdown: { name: 'ElDropdown', template: '<div class="stub-dropdown"><slot /><slot name="dropdown" /></div>' },
-  ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div class="stub-dropdown-menu"><slot /></div>' },
-  ElDropdownItem: {
-    name: 'ElDropdownItem',
-    emits: ['click'],
-    template: '<button class="stub-more-item" @click="$emit(\'click\')"><slot /></button>',
-  },
 }
 
 const ROWS: SourceCheck[] = [
@@ -109,8 +100,10 @@ async function selectRows(wrapper: VueWrapper, ids: string[]) {
 }
 const btn = (wrapper: VueWrapper, text: string) =>
   wrapper.findAll('button').find((b) => b.text().trim() === text)!
+/** 第一行的行内操作：已改成图标（原「更多」里的详情 / 立即运行 / 删除也平铺了），按 tooltip 文案找 */
 const link = (wrapper: VueWrapper, text: string) =>
-  wrapper.findAll('.sc-op-link').find((el) => el.text().trim() === text)!
+  wrapper.findAll('tr.el-table__row')[0].findAllComponents({ name: 'ElTooltip' })
+    .find((t: VueWrapper) => (t.props() as { content?: string }).content === text)!.find('.sc-op-icon')
 
 beforeEach(() => {
   openDialog.mockClear()
@@ -130,6 +123,35 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     expect(paged).toHaveBeenCalledTimes(1)
     expect(paged).toHaveBeenCalledWith({ sourceId: '', enable: '', state: '', name: '', page: 1, limit: 10 })
     expect(wrapper.text()).toContain('日增量监控')
+  })
+
+  it('「在用」「告警状态」选中「全部」时回显中文，请求仍按旧口径传空串', async () => {
+    const paged = pagedSpy()
+    const wrapper = mountPage()
+    await flushPromises()
+
+    // 前两个 ElSelect 是「在用」「告警状态」（第三个在 SourceSelect 内部）
+    const [enableSelect, stateSelect] = wrapper.findAllComponents({ name: 'ElSelect' })
+    expect(enableSelect.vm.$props.modelValue).toBe('-1')
+    expect(enableSelect.text()).toBe('全部')
+    expect(stateSelect.text()).toBe('全部')
+
+    // 切走再切回，避免「初始值恰好命中」的假阳性
+    enableSelect.vm.$emit('update:modelValue', '1')
+    stateSelect.vm.$emit('update:modelValue', 'E')
+    await flushPromises()
+    expect(enableSelect.text()).toBe('停用')
+    expect(stateSelect.text()).toBe('告警')
+
+    enableSelect.vm.$emit('update:modelValue', '-1')
+    stateSelect.vm.$emit('update:modelValue', '-1')
+    await flushPromises()
+    expect(enableSelect.text()).toBe('全部')
+    expect(stateSelect.text()).toBe('全部')
+
+    enableSelect.vm.$emit('change', '-1')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '', state: '' }))
   })
 
   it('查询按钮带上名称条件重新拉取，并回到第 1 页', async () => {
@@ -200,12 +222,11 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     const wrapper = mountPage()
     await flushPromises()
 
-    const items = wrapper.findAll('.stub-more-item')
-    await items.find((el) => el.text().trim() === '立即运行')!.trigger('click')
+    await link(wrapper, '立即运行').trigger('click')
     await flushPromises()
     expect(runNow).toHaveBeenLastCalledWith(['ck-1'])
 
-    await items.find((el) => el.text().trim() === '删除')!.trigger('click')
+    await link(wrapper, '删除').trigger('click')
     await flushPromises()
     expect(remove).toHaveBeenLastCalledWith(['ck-1'])
   })
@@ -216,7 +237,7 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElDrawer' }).exists()).toBe(false)
-    await wrapper.findAll('.stub-more-item').find((el) => el.text().trim() === '详情')!.trigger('click')
+    await link(wrapper, '详情').trigger('click')
     await flushPromises()
 
     const drawer = wrapper.findComponent({ name: 'ElDrawer' })
@@ -270,14 +291,18 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     expect(openDialog).toHaveBeenLastCalledWith(null)
   })
 
-  it('内嵌形态固定源、隐藏源筛选，并把该源透给弹窗', async () => {
+  it('内嵌形态：只去掉卡片壳，筛选整套保留，传入的源作为初值透给列表与弹窗', async () => {
     const paged = pagedSpy()
     const wrapper = mountPage({ embedded: true, sourceId: 's-embedded' })
     await flushPromises()
 
+    // 源是初值：查询按它过滤，「加监控」也拿它预填数据源
     expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's-embedded' }))
-    expect(wrapper.find('.stub-source-select').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'CheckEditDialog' }).props('sourceId')).toBe('s-embedded')
+    // 筛选表单不被裁剪——旧平台 MonitorModal 里的 MonitorList 就是完整带筛选的，
+    // 用户在弹窗里仍要能按 在用 / 告警状态 / 源ID 过滤
+    expect(wrapper.find('.stub-source-select').exists()).toBe(true)
+    // 卡片壳仍去掉：外层已经是弹窗
     expect(wrapper.find('.sc-head').exists()).toBe(false)
   })
 

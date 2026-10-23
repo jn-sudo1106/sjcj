@@ -131,6 +131,11 @@ describe('DataQueryPanel · 独立挂载', () => {
     }))
   })
 
+  it('showTimeRange=false：不渲染开始 / 结束时间，其它复用方默认仍有（1021-05）', () => {
+    expect(mountPanel().find('.dqp-time-range').exists()).toBe(true)
+    expect(mountPanel({ showTimeRange: false }).find('.dqp-time-range').exists()).toBe(false)
+  })
+
   it('清空：清除所有筛选条件并回到第一页查询', async () => {
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = mountPanel()

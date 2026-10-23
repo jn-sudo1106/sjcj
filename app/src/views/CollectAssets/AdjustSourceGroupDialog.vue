@@ -10,12 +10,17 @@
  *    没有任何筛选条件时红色警告「将对全部可见来源调整归属」，二次确认后才带 `confirmAll=true`。
  *
  * 结果提示优先用后端 msg（例如「范围内共 120 个来源：加入 100、换组 15、已符合 5」）。
+ *
+ * 1021-03：勾选入组时先查源自己的流程，有的话进第二步「入组确认」（GroupJoinConfirmDialog），确认后先解绑再入组
+ *（groupJoin.ts）；按范围入组不解绑，只提示带自有流程的源请改用勾选。
  */
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceGroupApi, type Source } from '@/api'
 import { isProductionBackend } from '@/api/client'
 import type { SourceFilter } from '@/views/FlowCanvas/result/useSourceLaunch'
+import GroupJoinConfirmDialog from './GroupJoinConfirmDialog.vue'
+import { JOIN_CHECK_MAX, findOwnFlows, joinGroup, joinResultText, type OwnFlowRow } from './groupJoin'
 
 const props = defineProps<{
   /** 勾选的源（空 = 没勾选，走「按当前筛选范围」） */
@@ -26,6 +31,8 @@ const props = defineProps<{
   hasQueryFilter: boolean
   /** 条件摘要文案（describeFilters 的产物；无筛选条件时传空） */
   queryText: string
+  /** 按范围调整不可用（「我的视图」目录范围：changeMembersByRange 不认 viewCategoryId，会变成不限） */
+  rangeBlocked?: boolean
   /** 来源组候选（含停用组，停用的不可选为目标） */
   groups: { sourceGroupId: string; name: string; state: string }[]
 }>()
@@ -35,7 +42,10 @@ const mode = ref<'selected' | 'range'>('selected')
 const target = ref('')
 const saving = ref(false)
 /** 生产写保护没放开 changeMembersByRange（一次能改上万个源，2026-10-10 定），连生产时只能按勾选调整 */
-const rangeAllowed = !isProductionBackend()
+/** 按主表 ID 筛选（1022）：changeMembersByRange 认不认 entryTypeId 未核实，不认就会变成不限，先只允许按勾选 */
+const rangeBlockedText = props.rangeBlocked ? '「我的视图」目录里只能按勾选调整'
+  : props.query.entryTypeId ? '按主表 ID 筛选时只能按勾选调整' : ''
+const rangeAllowed = !isProductionBackend() && !rangeBlockedText
 /** 退出来源组：两个接口口径不同——changeMembers 传 null，changeMembersByRange 传 -1 */
 const LEAVE = '__none__'
 
@@ -64,10 +74,14 @@ async function submit() {
     ElMessage.warning('请选择目标组（或「退出来源组」）')
     return
   }
+  if (mode.value === 'selected' && target.value !== LEAVE) {
+    await prepareJoin()
+    return
+  }
   saving.value = true
   try {
     if (mode.value === 'selected') {
-      // 勾选的源：按当前归属 changeMembers（expected 只接受一个，分属不同组时前端已禁止）
+      // 退出来源组：按当前归属 changeMembers（expected 只接受一个，分属不同组时前端已禁止）
       const group = selectedGroups.value[0]
       await sourceGroupApi.changeMembers({
         sourceIds: props.selectedSources.map((s) => s.sourceId),
@@ -105,13 +119,52 @@ async function submit() {
     saving.value = false
   }
 }
+
+// ---- 勾选入组（1021-03）：先查自有流程 → 有就确认 → 先解绑再入组 ----
+const targetName = computed(() => props.groups.find((g) => g.sourceGroupId === target.value)?.name ?? `组 #${target.value}`)
+const ownRows = ref<OwnFlowRow[] | null>(null)
+async function prepareJoin() {
+  if (props.selectedSources.length > JOIN_CHECK_MAX) {
+    ElMessage.warning(`一次最多加入 ${JOIN_CHECK_MAX} 个源（要逐个检查源自己的流程），请分批勾选`)
+    return
+  }
+  saving.value = true
+  try {
+    const rows = await findOwnFlows(props.selectedSources)
+    if (rows.length) ownRows.value = rows
+    else await runJoin([])
+  } catch (error) {
+    ElMessage.error(`检查源的流程失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    saving.value = false
+  }
+}
+async function runJoin(excludeIds: string[]) {
+  saving.value = true
+  try {
+    const skip = new Set(excludeIds)
+    const result = await joinGroup({
+      groupId: target.value,
+      sources: props.selectedSources.filter((s) => !skip.has(s.sourceId)),
+      unbindIds: (ownRows.value ?? []).map((r) => r.sourceId).filter((id) => !skip.has(id)),
+    })
+    if (result.failures.length) ElMessage.error(joinResultText(result))
+    else ElMessage.success(`${joinResultText(result)}${skip.size ? `，${skip.size} 个源未加入` : ''}`)
+    ownRows.value = null
+    // 解绑 / 入组有一部分已经生效，失败了父级也要重拉
+    if (result.joined || result.failures.some((f) => f.step === 'join')) emit('saved')
+    if (!result.failures.length) emit('close')
+  } finally {
+    saving.value = false
+  }
+}
 </script>
 
 <template>
   <el-dialog :model-value="true" title="调整来源组" width="520px" style="max-width: calc(100vw - 32px)" append-to-body @close="emit('close')">
     <el-radio-group v-model="mode" class="asg-mode">
       <el-radio :value="'selected'" :disabled="!selectedSources.length">勾选的源（{{ selectedSources.length }}）</el-radio>
-      <el-radio :value="'range'" :disabled="!rangeAllowed" :title="rangeAllowed ? '' : '生产环境暂不支持按筛选范围批量调整'">按当前筛选范围</el-radio>
+      <el-radio :value="'range'" :disabled="!rangeAllowed" :title="rangeAllowed ? '' : rangeBlockedText || '生产环境暂不支持按筛选范围批量调整'">按当前筛选范围</el-radio>
     </el-radio-group>
 
     <!-- 勾选的源 -->
@@ -140,11 +193,30 @@ async function submit() {
       </el-select>
     </div>
 
+    <el-alert
+      v-if="mode === 'range' && target && target !== LEAVE"
+      title="按范围加入时不会解除源自己的流程；入组后这些流程不生效、也改不了。带自有流程的源请改用勾选加入。"
+      type="warning"
+      :closable="false"
+      data-testid="asg-range-own-flow-note"
+    />
+
     <template #footer>
       <el-button @click="emit('close')">取消</el-button>
       <el-button type="primary" :disabled="mode === 'selected' ? !canSubmitSelected : !canSubmitRange" :loading="saving" data-testid="asg-submit" @click="submit">确定</el-button>
     </template>
   </el-dialog>
+  <GroupJoinConfirmDialog
+    v-if="ownRows"
+    :group-id="target"
+    :group-name="targetName"
+    :rows="ownRows"
+    :direct-count="selectedSources.length - ownRows.length"
+    :busy="saving"
+    @back="ownRows = null"
+    @close="ownRows = null"
+    @confirm="runJoin"
+  />
 </template>
 
 <style scoped>

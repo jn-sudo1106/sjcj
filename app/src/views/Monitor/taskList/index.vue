@@ -32,10 +32,11 @@
 //      所以 checkbox 列照常，等价于「只关 alert 条」）；`sendNext` / `configCron` / `deleteBatch` /
 //      `sendBatch` / `handleChange` / `resetSearchForm` / `handleSearch` / `handleReset` /
 //      `handleCloseCurrentTab` / `handleOpenTab`（未接线或依赖 $multiTab）。
-//   2. 旧页有 taskId / sourceId / configId / parentId / fileId 五个 props，并在 created 里从
-//      `$route.query`（siteId / taskTopic / sourceIds / taskUrl / groupId / startTime / endTime /
-//      taskId / all / parentId / configId / sourceId / fileId / state）预置筛选。本页在新平台是
-//      Monitor 的一个 tab，既没有 props 也没有这些路由参数，故不迁（与 commJob / queueCheck 一致）。
+//   2. 旧页有 taskId / sourceId / configId / parentId / fileId 五个 props，新平台是 Monitor 的一个 tab，
+//      没有这套 props（不迁）。但旧页 created 里从 `$route.query` 预置筛选的那批键**已接通**：
+//      siteId / taskTopic / sourceIds / taskUrl / groupId / startTime / endTime / taskId / all /
+//      parentId / configId / sourceId / fileId / state —— 监控中心的任务统计页「任务明细 / 错误明细」
+//      正是靠 `?tab=taskList&sourceId=&configId=&state=` 钻取过来的（旧页 $multiTab.open 的等价物）。
 //   3. 表格顶部的 alert 条（旧 options.alert 被 tableOption 关掉）不迁；勾选框列照常保留。
 //   4. 「重发」加了二次确认（confirmDanger）：task/resetTaskInsts 在契约里是 danger 端点，平台对它的
 //      约定就是「UI 侧保留二次确认」（见 client.ts 该端点的注释，画布任务视图行内「重发」同样有确认）。
@@ -44,8 +45,16 @@
 //   6. 详情抽屉标题从旧版的默认「详情」改成「任务实例 - 详情」（与 Monitor 里 commJob 的抽屉标题口径一致）。
 //   7. 「配置模板」详情不迁旧的 vkbeautify.xml 美化，`抓取配置` 等长文本按原样展示（省掉一个只为缩进 XML 的依赖）。
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, type TableInstance } from 'element-plus'
-import { Search, Refresh, Warning, Calendar } from '@element-plus/icons-vue'
+import {
+  Search,
+  Refresh,
+  Warning,
+  Calendar,
+  View,
+  RefreshRight,
+} from '@element-plus/icons-vue'
 import { taskInstPaged, resendTask, type TaskRow } from '@/api/taskList'
 import { confirmDanger } from '@/utils/confirmDanger'
 import { listColumns, STATE_OPTIONS, taskDotTone, timeAgoText } from './columns'
@@ -53,6 +62,9 @@ import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import ConfigTemplateDrawer from './ConfigTemplateDrawer.vue'
 
 defineOptions({ name: 'TaskList' })
+
+/** 监控中心用 `?tab=taskList&…` 切页签，钻取参数也走 query（旧页的 $multiTab.open 等价物） */
+const route = useRoute()
 
 // ---- 查询条件（草稿 → 执行 两态：文本项变化不自动查，点「查询」/ 回车才发请求）----
 const form = reactive({
@@ -231,20 +243,49 @@ function cellText(row: TaskRow, key: string): string {
   return v == null ? '' : String(v)
 }
 
-onMounted(() => void load())
+onMounted(() => {
+  applyRouteQuery()
+  void load()
+})
+
+/**
+ * 路由预置筛选（旧页 created 里那段 `if (this.$route.query.xxx)`）。
+ * 用 `replace` 导航（监控中心切页签）后组件重新挂载，所以只在 mount 时读一次即可。
+ * 文本项写进 form 并同步到 filters，保证首屏请求就带上条件（而不是先查全量再补查）。
+ */
+function applyRouteQuery() {
+  const q = route.query
+  const pick = (key: string) => {
+    const v = q[key]
+    const s = Array.isArray(v) ? String(v[0] ?? '') : String(v ?? '')
+    return s.trim()
+  }
+  const keys = [
+    'siteId', 'taskTopic', 'sourceIds', 'taskUrl', 'groupId', 'startTime', 'endTime',
+    'taskId', 'all', 'parentId', 'configId', 'sourceId', 'fileId', 'state',
+  ] as const
+  keys.forEach((key) => {
+    const v = pick(key)
+    if (!v) return
+    ;(form as Record<string, string>)[key] = v
+  })
+  // 创建时间范围：两端都带时同步到日期选择器（旧页 taskDateRange = [startTime, endTime]）
+  if (form.startTime && form.endTime) dateRange.value = [form.startTime, form.endTime]
+  Object.assign(filters, form)
+}
 </script>
 
 <template>
   <div class="tl-shell" v-loading="loading">
-    <div class="tl-head">
+    <!-- <div class="tl-head">
       <div class="tl-title">任务实例</div>
       <div class="tl-sub">采集任务的运行记录（事实源），支持按状态 / 源 / 时间等条件检索与重发。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格：多数 md=3；「展示类」md=2、时间 md=7，
          一行为 8×3=24 栅格，「日期区间 + 当天按钮」不换行）。
          文本项不自动查（回车 / 点查询），**状态下拉改完立刻查**（旧 @change="handleRefresh"）。 -->
-    <el-form :inline="true" class="tl-filter-form" size="small">
+    <el-form :inline="true" class="tl-filter-form">
       <el-row :gutter="8" class="tl-filter-row">
         <el-col :md="3" :sm="24">
           <el-form-item>
@@ -331,7 +372,7 @@ onMounted(() => void load())
               class="tl-date"
               @change="(v: [string, string] | null) => onDateChange(v)"
             />
-            <el-button size="small" class="tl-today" :icon="Calendar" @click="selectToday">当天</el-button>
+            <el-button class="tl-today" :icon="Calendar" @click="selectToday">当天</el-button>
           </el-form-item>
         </el-col>
         <el-col :md="3" :sm="24">
@@ -356,6 +397,7 @@ onMounted(() => void load())
       :data="rows"
       border
       size="small"
+      max-height="500"
       :row-key="(r: TaskRow) => r.taskId"
       @selection-change="onSelectionChange"
     >
@@ -392,11 +434,14 @@ onMounted(() => void load())
             <span class="tl-time">{{ timeText(row.updateDt) }}</span>
           </el-tooltip>
 
-          <!-- 操作：旧 actionSlot —— 详情 | 重发（没有编辑） -->
+          <!-- 操作：旧 actionSlot —— 详情 / 重发（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="tl-actions">
-            <span class="tl-op-link" @click="openDetail(row)">详情</span>
-            <span class="tl-op-divider">|</span>
-            <span class="tl-op-link" @click="resendOne(row)">重发</span>
+            <el-tooltip content="详情" placement="top">
+              <span class="tl-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="重发" placement="top">
+              <span class="tl-op-icon" @click="resendOne(row)"><el-icon :size="15"><RefreshRight /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列：直接显示字段值；长文本走列上的 show-overflow-tooltip -->
@@ -426,6 +471,10 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.tl-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .tl-shell {
   display: flex;
   flex-direction: column;
@@ -524,18 +573,23 @@ onMounted(() => void load())
 .tl-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 10px;
 }
-.tl-op-link {
-  color: var(--rc-primary, #2563eb);
+.tl-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.tl-op-link:hover {
-  text-decoration: underline;
-}
-.tl-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.tl-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .tl-pager {
   display: flex;
@@ -543,3 +597,4 @@ onMounted(() => void load())
   padding: 8px 0 2px;
 }
 </style>
+

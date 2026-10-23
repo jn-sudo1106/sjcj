@@ -350,6 +350,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
    * 抹掉，紧接着新实例挂载时 URL 上已经没有 `cond*` 了，筛选框就是空的。
    * 表现为「点第一个源好使，再点别的源条件就没了」。放 store 里没有这个先后问题。
    */
+  /**
+   * 数据中心「按条件查源」命中的源（1016）：跳源管理时走 store 不走 URL——命中成百上千个源时
+   * 拼进 query 会撞 431/414。源管理页凭 `?from=data-query` 认领，清除时置空。
+   */
+  const dataQueryHits = ref<string[] | null>(null)
+  function setDataQueryHits(sourceIds: string[] | null) {
+    dataQueryHits.value = sourceIds
+  }
   const pendingSourceCondition = ref<BackTraceCondition | null>(null)
   function setPendingSourceCondition(cond: BackTraceCondition | null) {
     pendingSourceCondition.value = cond
@@ -503,5 +511,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, closeMany, evictOldestTab, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
+  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, closeMany, evictOldestTab, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition, dataQueryHits, setDataQueryHits }
 })

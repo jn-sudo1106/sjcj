@@ -1,24 +1,26 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { DocumentAdd } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
 import { favoriteSourceIds, favoriteSourcesLoaded, loadFavoriteSources } from '@/utils/sourceFavorites'
-import { recentRankOf, recentSiteIds, recordSiteVisit } from '@/utils/siteRecents'
+import { recentLoaded, recentRankOf, recentSiteIds, recordSiteVisit, loadRecentSites } from '@/utils/siteRecents'
+import { trackClick, trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
 import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
-import SaveViewDialog from './SaveViewDialog.vue'
 import AddToViewDialog from './AddToViewDialog.vue'
-import { sourceViewApi } from '@/api/sourceViews'
-import { useAuthStore } from '@/stores/auth'
-import { useSourceGroupsStore } from '@/stores/sourceGroups'
-import { describeViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import SourceDirPanel, { type DirScope } from './SourceDirPanel.vue'
+import BizDirPickerDialog from './BizDirPickerDialog.vue'
+import BizDirMoveDialog from './BizDirMoveDialog.vue'
+import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
+import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
+import { VIEW_DIR_ROOT_ID, BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirNode } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -76,7 +78,11 @@ function toggleErrorOnly() {
 /** 收藏 / 最近打开一个都没有时，空态要说清楚怎么才会有；其余情况是筛选没命中 */
 const emptyText = computed(() => {
   if (favOnly.value && !favoriteSiteIds.value.size) return '还没有收藏的网站，在列表里点 ☆ 收藏'
-  if (recentOnly.value && !recentSiteIds.value.length) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
+  if (recentOnly.value) {
+    // 后端还没回来时先别说"没有"，否则每次进 tab 都闪一下空态
+    if (!recentLoaded.value) return '正在加载最近打开…'
+    if (!recentSiteIds.value.length) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个）'
+  }
   return '没有匹配的网站'
 })
 
@@ -285,7 +291,8 @@ async function loadCategories(options: { revalidate?: boolean } = {}) {
   try {
     // 首屏只拉根分类（1个请求），子级由 FilterToolbar 的 el-tree-select 展开时按需懒加载；
     // 不再首屏扇出十几个请求把网络打满
-    const roots = await sourceApi.sourceCategories()
+    // 2026-10-21：-1「视图目录」、-2「业务分类」是另外两套目录的根，不是系统分类，不进卡片视图的分类下拉
+    const roots = (await sourceApi.sourceCategories()).filter((c) => c.id !== VIEW_DIR_ROOT_ID && c.id !== BIZ_DIR_ROOT_ID)
     collectAssetsCache.categories = roots
     categories.value = roots
   } catch {
@@ -349,6 +356,18 @@ async function refreshAll() {
 // 复用网站详情的「源视图」组件，不限网站，一行一个源。
 const view = computed(() => ui.assetView)
 
+// ---- 数据中心「按条件查源」带来的命中源（1016）----
+// 名单在 store 里（见 workspace.dataQueryHits），URL 只带 `from=data-query` 标记；
+// 刷新后 store 空了就当没带，回到普通源管理。
+const ws = useWorkspaceStore()
+const dataHits = computed(() => (props.scope === 'all' && route.query.from === 'data-query' ? ws.dataQueryHits : null))
+function clearDataHits() {
+  ws.setDataQueryHits(null)
+  const query = { ...route.query }
+  delete query.from
+  void router.replace({ path: route.path, query })
+}
+
 // ---- 源列表视图（0924-06）----
 /** 页签范围：最近打开 = 那几个网站下的源 */
 const sourceScopeSiteIds = computed<string[] | undefined>(() => (recentOnly.value ? recentSiteIds.value : undefined))
@@ -359,67 +378,151 @@ const sourceScopeSiteIds = computed<string[] | undefined>(() => (recentOnly.valu
  */
 const sourceScopeSourceIds = computed<string[] | undefined>(() => (favOnly.value ? [...favoriteSourceIds.value] : undefined))
 const sourceScopeEmptyText = computed(() => {
-  if (recentOnly.value) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
+  if (recentOnly.value) {
+    if (!recentLoaded.value) return '正在加载最近打开…'
+    return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个）'
+  }
   if (favOnly.value) return favoriteSourcesLoaded.value ? '还没有收藏的源，在源列表里点 ☆ 收藏' : '正在加载收藏的源…'
   return ''
 })
 /** 打开源：与网站详情「源视图」同一落点（概览视图），带上网站上下文，左侧才加载得出同网站的源 */
 function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview') {
-  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  // 两条埋点，口径不同：SITE/ENTER 归「最近打开的网站」（读 `recent`），
+  // SOURCE/CLICK 归「最近查看的源」（读 `page` 明细）。不能只打一条——前者是网站，后者是源。
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: view === 'data' ? '源数据视图' : '源概览视图',
+  })
   void router.push({
     path: '/canvas',
     query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
   })
 }
 function openSiteFromList(siteId: string) {
-  recordSiteVisit(siteId)
+  // 名字就地查：`contentTitle` 建议每次都传，否则后端最近列表的标题会是空的
+  recordSiteVisit(siteId, fetchedSites.value.find((site) => site.siteId === siteId)?.name)
   void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
-/** 点来源组名（1008-04）：跳到系统设置「来源组」tab 并选中该组（10-13 来源组移到系统设置） */
-// 「另存为视图」（2026-10-12「我的视图」）：把源列表当前的条件 / 排序 / 每页条数存成自己的视图，存完跳到该视图
-const auth = useAuthStore()
-const directories = useSourceGroupsStore()
-const listState = ref<SourceListViewState | null>(null)
-const saveViewOpen = ref(false)
-const saveViewBusy = ref(false)
-const saveViewError = ref('')
-const saveViewSummary = computed(() => (listState.value
-  ? `保存的条件：${describeViewState(listState.value).join('；') || '全部源（没有条件）'}`
-  : ''))
-// 勾选源后「加入视图」：加到某个手选视图
+// ---- 系统目录 / 业务目录（2026-10-21，原型 设计稿/原型设计/源管理_系统目录与业务目录_原型_2026-10-21.html）----
+// 只在「系统目录」页签的源列表视图里有：左侧 SourceDirPanel 选目录，系统目录按 categorys 筛，
+// 业务目录先算出目录（含子级）里的源 ID 再按源 ID 范围筛（后端口径见 api/sourceDirs.ts）。
+const dirCollapsed = ref(true)
+const showDirPanel = computed(() => props.scope === 'all' && view.value === 'table')
+const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
+const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
+const dirActive = computed(() => showDirPanel.value && (dirScope.value.all || dirScope.value.dirIds.length > 0))
+const bizActive = computed(() => dirActive.value && dirScope.value.kind === 'biz')
+const bizSourceIds = ref<string[]>([])
+const bizLoading = ref(true)
+const bizError = ref('')
+const dirScopeVersion = ref(0)
+let bizSeq = 0
+async function resolveBizScope() {
+  const seq = ++bizSeq
+  if (!bizActive.value) { bizSourceIds.value = []; bizLoading.value = false; return }
+  bizLoading.value = true
+  bizError.value = ''
+  try {
+    const ids = await bizScopeSourceIds(dirScope.value.dirIds)
+    if (seq === bizSeq) bizSourceIds.value = ids
+  } catch (error) {
+    if (seq === bizSeq) { bizSourceIds.value = []; bizError.value = `读取业务目录里的源失败：${(error as Error)?.message ?? String(error)}` }
+  } finally {
+    if (seq === bizSeq) bizLoading.value = false
+  }
+}
+function onDirScope(scope: DirScope) {
+  dirScope.value = scope
+  void resolveBizScope()
+}
+const dirKindLabel = computed(() => (dirScope.value.kind === 'biz' ? '业务目录' : '系统目录'))
+const dirLabelText = computed(() => {
+  if (dirScope.value.all) return '全部目录'
+  const labels = dirScope.value.labels
+  if (!labels.length) return ''
+  return labels.length === 1 ? labels[0].path : `已选 ${labels.length} 个目录`
+})
+const dirLabelTip = computed(() => dirScope.value.labels.map((l) => l.path).join('\n'))
+const dirWithSub = computed(() => dirScope.value.labels.some((l) => l.hasKids))
+/** 给发任务确认弹窗看的范围描述 */
+const dirScopeLabel = computed(() => (dirActive.value ? `${dirKindLabel.value}：${dirScope.value.all ? '全部目录' : dirScope.value.labels.map((l) => l.path).join('、')}${dirWithSub.value ? '（含子级）' : ''}` : ''))
+const listScopeCategoryIds = computed(() => (dirActive.value && dirScope.value.kind === 'sys' ? dirScope.value.dirIds : undefined))
+const listScopeSourceIds = computed(() => {
+  if (props.scope !== 'all') return sourceScopeSourceIds.value
+  return bizActive.value ? (bizLoading.value ? [] : bizSourceIds.value) : undefined
+})
+const listScopeEmptyText = computed(() => {
+  if (!bizActive.value) return sourceScopeEmptyText.value
+  if (bizLoading.value) return '正在读取业务目录里的源…'
+  return bizError.value || '这个业务目录里还没有源，请点击「添加源到业务目录」'
+})
+
+// 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
+const bizOf = ref(new Map<string, string[]>())
+async function loadBizMembership() {
+  try { bizOf.value = await bizMembership() } catch { /* 列显示「—」，不打断列表 */ }
+}
+const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirNode(id)?.name ?? `#${id}`)
+
+// 按目录：发送 = 复用源列表的「发任务」（不勾选 = 按当前筛选范围，已含目录范围）；定时 = 按范围统一定时弹窗
+const overviewRef = ref<InstanceType<typeof SourceOverviewView>>()
+const scheduleRef = ref<InstanceType<typeof CategoryScheduleModal>>()
+function onDirCommand(command: 'send' | 'schedule') {
+  if (command === 'send') {
+    overviewRef.value?.clearSelection()
+    void overviewRef.value?.openLaunch()
+    return
+  }
+  if (dirScope.value.kind === 'sys') scheduleRef.value?.show({ categoryIds: dirScope.value.dirIds.join(',') })
+  else if (!bizSourceIds.value.length) ElMessage.warning('这个业务目录里还没有源')
+  else scheduleRef.value?.show({ ids: bizSourceIds.value.join(',') })
+}
+
+// 选中源加入 / 移出业务目录（一个源可以放进多个业务目录，10-21 定暂不限制）
+const bizPicker = reactive({ open: false, ids: [] as string[] })
+const defaultBizDirIds = computed(() => (bizActive.value && !dirScope.value.all ? dirScope.value.labels.map((label) => label.id) : []))
+function openBizPicker(ids: string[]) {
+  bizPicker.ids = [...ids]
+  bizPicker.open = true
+}
+async function afterBizChanged() {
+  await loadBizMembership()
+  await resolveBizScope()
+  dirScopeVersion.value += 1
+}
+// 移动到…（10-21）：必须先在左侧点 / 勾一个业务目录，作为「从哪移出」；弹窗里选目标或「仅移出」
+const canMoveBiz = computed(() => bizActive.value && !dirScope.value.all && dirScope.value.labels.length === 1)
+const bizMove = reactive({ open: false, ids: [] as string[] })
+function openBizMove(ids: string[]) {
+  if (!canMoveBiz.value || !ids.length) return
+  bizMove.ids = [...ids]
+  bizMove.open = true
+}
+
+// 按模板批量新增（10-22）：同「移动」一样要先在左侧选定一个业务目录，且只能勾一个源当模板
+const bizTemplate = reactive({ open: false, templateId: '', dirId: '' })
+function openBizTemplate(ids: string[]) {
+  if (!canMoveBiz.value || ids.length !== 1) return
+  bizTemplate.templateId = ids[0]
+  bizTemplate.dirId = dirScope.value.labels[0].id
+  bizTemplate.open = true
+}
+
+// 勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录；条件视图与「另存为视图」10-13 起下线
 const addToView = reactive({ open: false, ids: [] as string[] })
 function openAddToView(ids: string[]) {
   addToView.ids = [...ids]
   addToView.open = true
 }
-function onAddedToView(viewName: string, count: number) {
-  ElMessage.success(`已加入视图「${viewName}」（${count} 个源）`)
+function onAddedToView(viewName: string, place: string, count: number) {
+  ElMessage.success(`已加入视图「${viewName}」的「${place}」（新增 ${count} 个源）`)
 }
-function openSaveView() {
-  saveViewError.value = ''
-  saveViewOpen.value = true
-}
-async function submitSaveView({ name, isDefault }: { name: string; isDefault: boolean }) {
-  if (!listState.value) return
-  saveViewBusy.value = true
-  saveViewError.value = ''
-  try {
-    const userId = auth.info?.id != null ? String(auth.info.id) : ''
-    const created = await sourceViewApi.add(userId, { viewName: name, state: listState.value, isDefault })
-    if (isDefault) {
-      try { directories.setPreference('view') } catch { /* 偏好写失败不影响视图本身 */ }
-    }
-    saveViewOpen.value = false
-    ElMessage.success(`已存为视图「${created.viewName}」`)
-    void router.push({ path: '/collect', query: { tab: 'views', viewId: created.viewId } })
-  } catch (e) {
-    saveViewError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    saveViewBusy.value = false
-  }
-}
+/** 点来源组名（1008-04）：跳到「我的分组」并选中该组 */
 function openSourceGroup(sourceGroupId: string) {
-  void router.push({ path: '/settings', query: { tab: 'source-group', group: sourceGroupId } })
+  void router.push({ path: '/collect', query: { tab: 'personal', group: sourceGroupId } })
 }
 function onToolbarRefresh() {
   if (view.value === 'table') ui.notifySourceListChanged()
@@ -445,6 +548,42 @@ function openSiteEditor(site: Site) {
 }
 
 /**
+ * 删除网站（1014 右键卡片菜单）。高危操作：
+ * 1) 弹窗二次确认；2) 确认后调 site/delete；3) 成功后整体刷新。
+ * 后端语义（反编译 SiteController.delete 确认）：**只删除网站本身（逻辑删除 is_delete=1），不会删源**——
+ * 网站下还有源时后端会直接拒绝（「该网站下还有 N 个源，请先解除关联后再删除」），必须先解除源关联才能删。
+ * 删除当前工作区正在编辑的网站时，其缓存（源/表引用）由 clearCollectAssetsCache 一并清掉。
+ */
+async function onDeleteSite(site: Site) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除网站「${site.name}」吗？该操作不可恢复。删除只移除网站本身、不影响网站下的源（网站下还有源时需先解除关联后才能删除）。`,
+      '删除网站',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const res = await siteApi.siteDelete(site.siteId)
+    if (!res.ok) {
+      ElMessage.error(res.message || '删除网站失败')
+      return
+    }
+    trackDelete('SITE', site.siteId, site.name, {
+      eventCode: 'site_delete',
+      eventName: '删除网站',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+    ElMessage.success(`已删除网站「${site.name}」`)
+    await refreshAll()
+  } catch (error) {
+    ElMessage.error(`删除失败: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/**
  * 新建网站（2026-09-18）。落点是列表工具条而不是顶栏：顶栏那个「新建采集」是总览页也挂着的
  * 全局入口（建网站 + 首批源一步到位），而这里是网站列表自己的对象级操作——只开一个空网站，
  * 源随后用侧栏的批量导入灌进去。旧平台也是这么分的（SiteList 操作栏：＋新增网站 / 批量导入 / 导出）。
@@ -461,12 +600,32 @@ async function onEditorSaved(newSiteId?: string) {
   //
   // 新建成功后**不自动跳进新网站**：建站常常是连着建好几个，跳走反而打断。
   // 回到第一页即可——默认排序是「最近修改」，新网站就在最前面，点卡片就能进去灌源。
+  // 编辑前的 id 先留一份：刷新列表后 `editorSite` 可能已被清掉，埋点还要用它
+  const editedId = editorSite.value?.siteId
   clearCollectAssetsCache()
   if (newSiteId) {
     justCreatedSiteIds.add(newSiteId)
     page.value = 1
   }
   await loadList({ force: true })
+  // 标题用**刷新后**的名字：编辑可能刚改过名，用打开弹窗时的旧名会让明细表和列表对不上
+  const trackId = newSiteId ?? editedId
+  const title = fetchedSites.value.find((s) => s.siteId === trackId)?.name ?? editorSite.value?.name
+  if (newSiteId) {
+    trackCreate('SITE', newSiteId, title, {
+      eventCode: 'site_create',
+      eventName: '新建网站',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+  } else if (editedId) {
+    trackEdit('SITE', editedId, title, {
+      eventCode: 'site_update',
+      eventName: '编辑网站基本信息',
+      firstModule: '采集资产',
+      pageName: '网站列表',
+    })
+  }
 }
 
 // 新建采集
@@ -495,8 +654,12 @@ onMounted(() => {
   // 收藏以后端为准（B30）；回来后 watch(favoriteSiteIds) 会就地重排，不用等它
   void loadFavoriteSites()
   void loadFavoriteSources()
+  // 最近打开 2026-10-19 起也以后端为准（通用埋点），回来后 watch(recentSiteIds) 会就地重排。
+  // 只有「最近打开」这个实例需要它，别让系统目录 / 收藏 tab 白打一次请求
+  if (recentOnly.value) void loadRecentSites()
   void loadCategories({ revalidate: true })
   void loadTagOptions()
+  if (props.scope === 'all') void loadBizMembership()
   ui.registerAction('新建采集', openNewFlowCanvas)
 })
 // 外层 CollectAssets 套了 KeepAlive：tab 之间切换不重新挂载，onMounted 不再跑。
@@ -511,6 +674,8 @@ onActivated(() => {
   applyRouteFilters()
   void loadFavoriteSites()
   void loadFavoriteSources()
+  // 最近打开：切回 tab 时静默重拉，别的浏览器/别的设备上报的也能看到
+  if (recentOnly.value) void loadRecentSites()
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
   void loadCategories({ revalidate: true })
@@ -522,7 +687,24 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="ca-page" :class="{ 'is-list': view === 'table' }">
+  <div class="ca-page" :class="{ 'is-list': view === 'table' || !!dataHits }">
+    <template v-if="dataHits">
+      <div class="ca-hits-bar" data-testid="data-query-hits">
+        <span>数据查询命中 <strong>{{ dataHits.length }}</strong> 个源</span>
+        <button class="ca-save-view sm" type="button" data-testid="data-query-hits-clear" @click="clearDataHits">清除</button>
+      </div>
+      <SourceOverviewView
+        :key="dataHits.join(',')"
+        class="ca-source-list"
+        current-site-id=""
+        :scope-source-ids="dataHits"
+        @open-source="openSourceFromList"
+        @open-source-data="openSourceFromList($event, 'data')"
+        @open-site="openSiteFromList"
+        @open-source-group="openSourceGroup"
+      />
+    </template>
+    <template v-else>
     <FilterToolbar
       v-if="view === 'card'"
       v-model:keyword="keyword"
@@ -547,37 +729,64 @@ onUnmounted(() => {
 
     <!-- 卡片视图 -->
     <div v-if="view === 'card'" v-loading="loading && !!sites.length" class="ca-card-body">
-      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" />
+      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" @delete-site="onDeleteSite" />
     </div>
 
     <!-- 源列表视图（0924-06）：一行一个源，复用网站详情的「源视图」，不限网站 -->
+    <div v-else class="ca-dir-layout" :class="{ 'with-dir': showDirPanel, collapsed: dirCollapsed }">
+    <SourceDirPanel v-if="showDirPanel" ref="dirPanelRef" v-model:collapsed="dirCollapsed" class="ca-dir-panel" @change="onDirScope" />
     <SourceOverviewView
-      v-else
+      ref="overviewRef"
       class="ca-source-list"
       current-site-id=""
       :scope-site-ids="sourceScopeSiteIds"
-      :scope-source-ids="sourceScopeSourceIds"
-      :scope-empty-text="sourceScopeEmptyText"
+      :scope-source-ids="listScopeSourceIds"
+      :scope-category-ids="listScopeCategoryIds"
+      :scope-label="dirScopeLabel || undefined"
+      :scope-version="dirScopeVersion"
+      :scope-empty-text="listScopeEmptyText"
+      :extra-column-label="scope === 'all' ? '业务目录' : undefined"
+      :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
       @open-source="openSourceFromList"
       @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
       @open-source-group="openSourceGroup"
-      @state-change="listState = $event"
     >
-      <!-- 「另存为视图」放在「共 N 个源」那一行右侧（和选中来源 / 发任务 / 导出一起）：查询栏一行已经满了，放那里会挤坏 -->
-      <template v-if="scope === 'all'" #summary-extra>
-        <button
-          class="ca-save-view-icon"
-          type="button"
-          data-testid="source-save-as-view"
-          title="另存为视图：把当前的筛选条件、排序存成自己的视图，在「我的视图」里一点就打开"
-          aria-label="另存为视图"
-          @click="openSaveView"
-        ><el-icon :size="14"><DocumentAdd /></el-icon></button>
-      </template>
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
-        <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图</button>
+        <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图目录</button>
+      </template>
+      <template v-if="scope === 'all'" #summary-extra>
+        <span v-if="dirActive" class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
+          · {{ dirKindLabel }}：<b>{{ dirLabelText }}</b><template v-if="dirWithSub">（含子级）</template>
+          <button class="ca-dir-clear" type="button" data-testid="dir-scope-clear" title="清除目录范围" aria-label="清除目录范围" @click="dirPanelRef?.clear()">×</button>
+        </span>
+        <!-- 业务目录下暂不提供按目录发送 / 定时（10-21 用户） -->
+        <el-dropdown v-if="dirActive && dirScope.kind === 'sys'" trigger="click" data-testid="dir-ops" @command="onDirCommand">
+          <button class="ca-save-view sm" type="button">按目录 ▾</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="send" data-testid="dir-ops-send">按目录发送</el-dropdown-item>
+              <el-dropdown-item command="schedule" data-testid="dir-ops-schedule">按目录更新定时</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
+      <template v-if="scope === 'all' && showDirPanel && dirScope.kind === 'biz'" #summary-ops="{ ids }">
+        <el-dropdown trigger="click" data-testid="biz-ops" @command="(command: 'add' | 'move' | 'template') => (command === 'add' ? openBizPicker(ids) : command === 'move' ? openBizMove(ids) : openBizTemplate(ids))">
+          <button class="ca-save-view sm" type="button">目录归类 ▾</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="add" data-testid="source-pick-for-biz">加入业务目录…</el-dropdown-item>
+              <el-dropdown-item command="move" :disabled="!canMoveBiz || !ids.length" data-testid="source-move-biz">{{ canMoveBiz && ids.length ? `移到其他业务目录…（${ids.length} 个）` : '移到其他业务目录…（先在左侧点一个目录，再勾选源）' }}</el-dropdown-item>
+              <el-dropdown-item command="template" :disabled="!canMoveBiz || ids.length !== 1" data-testid="source-template-import-biz">{{ !canMoveBiz ? '按模板批量新增…（先在左侧点一个目录）' : ids.length !== 1 ? '按模板批量新增…（请只勾选一个源作为模板）' : '按模板批量新增…' }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
+      <template v-if="scope === 'all'" #extra-cell="{ source }">
+        <span v-for="name in bizNames(source.sourceId)" :key="name" class="ca-biz-tag">{{ name }}</span>
+        <span v-if="!bizNames(source.sourceId).length" class="ca-muted">—</span>
       </template>
       <template #filter-extra>
 
@@ -596,22 +805,19 @@ onUnmounted(() => {
         />
       </template>
     </SourceOverviewView>
+    </div>
+    </template>
     <AddToViewDialog v-model="addToView.open" :source-ids="addToView.ids" @added="onAddedToView" />
-    <SaveViewDialog
-      v-model="saveViewOpen"
-      title="另存为视图"
-      show-default
-      :summary="saveViewSummary"
-      :busy="saveViewBusy"
-      :error="saveViewError"
-      @submit="submitSaveView"
-    />
+    <BizDirPickerDialog v-if="bizPicker.open" :initial-source-ids="bizPicker.ids" :initial-directory-ids="defaultBizDirIds" @close="bizPicker.open = false" @saved="afterBizChanged" />
+    <BizDirMoveDialog v-if="bizMove.open" :source-ids="bizMove.ids" :from-dir-ids="dirScope.dirIds" :from-label="`${dirLabelText}${dirWithSub ? '（含子级）' : ''}`" @close="bizMove.open = false" @saved="afterBizChanged" />
+    <BizTemplateImportDialog v-if="bizTemplate.open" :template-id="bizTemplate.templateId" :dir-id="bizTemplate.dirId" :dir-label="dirLabelText" @close="bizTemplate.open = false" @saved="afterBizChanged" />
+    <CategoryScheduleModal ref="scheduleRef" />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。
          原来带 `total > size` 的条件，每页改成 50 之后 25 个网站正好一页装下，
          整条分页就消失了——连「共 N 条」和每页条数选择器一起没了，看着像功能丢了。
          单页时 el-pagination 自己会把页码收成一个，不占额外空间。 -->
-    <div v-if="view === 'card'" class="ca-pager card-mode">
+    <div v-if="view === 'card' && !dataHits" class="ca-pager card-mode">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="size"
@@ -644,13 +850,30 @@ onUnmounted(() => {
 .ca-page.is-list { flex: 1; min-height: 0; }
 /* 源视图组件自带灰底内边距（在网站详情里是整块主区），放进采集资产去掉，和工具条对齐 */
 .ca-source-list { padding: 0; background: transparent; }
-.ca-save-view-icon { flex: none; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-muted); cursor: pointer; }
-.ca-save-view-icon:hover { border-color: #bfdbfe; color: var(--rc-primary); }
 .ca-save-view { height: 34px; padding: 0 12px; border: 1px solid #d5e2f2; border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .ca-save-view.sm { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 
+/* 系统目录页签：左侧目录面板 + 源列表（2026-10-21） */
+.ca-dir-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ca-dir-layout.with-dir { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.ca-dir-layout.with-dir.collapsed { grid-template-columns: 36px minmax(0, 1fr); }
+.ca-dir-panel { min-height: 0; max-height: 100%; align-self: start; }
+.ca-dir-layout > .ca-source-list { min-width: 0; min-height: 0; }
+.ca-dir-scope { display: inline-flex; align-items: center; min-width: 0; color: var(--rc-text-2); font-size: 13px; }
+/* 摘要行一排放不下时先缩目录名（悬停看全称） */
+.ca-dir-scope b { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary); font-weight: 600; }
+.ca-dir-scope.biz b { color: #7c3aed; }
+.ca-dir-clear { flex: none; width: 18px; height: 18px; margin-left: 4px; border: 0; border-radius: 50%; background: none; padding: 0; color: var(--rc-faint); font-size: 15px; line-height: 18px; cursor: pointer; }
+.ca-dir-clear:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.ca-biz-tag { display: inline-block; margin-right: 4px; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
+.ca-muted { color: var(--rc-faint); }
+@media (max-width: 900px) {
+  .ca-dir-layout.with-dir, .ca-dir-layout.with-dir.collapsed { grid-template-columns: 1fr; }
+}
 .ca-card-body { min-height: 200px; }
+.ca-hits-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid #bfdbfe; border-radius: 8px; background: var(--rc-primary-bg); color: var(--rc-text-2); font-size: 13px; }
+.ca-hits-bar strong { color: var(--rc-primary-ink); }
 
 .ca-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; }
 /* 0930-01：分页条钉在视口底部。原来跟在卡片后面，翻页时卡片高度一变它就跟着跳，

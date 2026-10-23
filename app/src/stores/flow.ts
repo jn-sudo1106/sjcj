@@ -3,6 +3,7 @@
 // 组合 source.ts 和 node.ts 保持 API 不变
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { useDictStore } from '@/stores/dict'
 import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
 import { applyStepSourceDefault, hasRealBranches } from '@/utils/flow/stepPersist'
 import { inheritInputTable, nodeTablesSnapshot, tableForDownstream, propagateOutputChange, retargetFollowers, writeNodeOutputTable, type TableTopology } from '@/utils/flow/tableSync'
@@ -11,7 +12,6 @@ import {
   TEMPLATE_TO_NODE,
   TEMPLATE_TO_NAME,
   TEMPLATE_TO_SNATCH,
-  DEFAULT_TASK_QUEUES,
   cloneConfig,
   isDataNode,
   isRuleNode,
@@ -180,6 +180,8 @@ export const useFlowStore = defineStore('flow', () => {
   const flowDirty = computed(() => nodeStore.flowDirty)
   const flowRev = computed(() => nodeStore.flowRev)
   const dirtyConfigNodes = computed(() => nodeStore.dirtyConfigNodes)
+  /** 节点的定时策略是否被用户手动改过（还没同步到 job 表） */
+  const isScheduleEdited = (id: string) => nodeStore.scheduleEditedNodes.includes(id)
 
   // ---- 流程核心状态 ----
   const configs = reactive<Record<string, NodeConfig>>({})
@@ -606,11 +608,13 @@ export const useFlowStore = defineStore('flow', () => {
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
       cfg.outputTable = upstreamTable
     }
-    const defaultQueue = DEFAULT_TASK_QUEUES[template]
-    if (defaultQueue) {
+    // 默认队列取系统设置 → 节点类型的「默认消息队列」（topic），按节点类型编号查；没配就留空，用户可在任务配置里改。
+    // 浏览器/公众号/登录/文件下载都按 90 落库，跟 90 用同一个默认值。固定队列的节点（浏览器抓取）保留种子里的固定值。
+    if (collectorCapabilityOf(cfg)?.queueMode !== 'fixed') {
+      const code = /^\[(\d+)\]/.exec(TEMPLATE_TO_SNATCH[template] ?? '')?.[1]
       cfg.taskCfg = {
         ...(cfg.taskCfg ?? { urlRule: '' }),
-        queue: defaultQueue,
+        queue: (code && useDictStore().nodeTypeTopics[code]) || '',
       }
     }
     return { srcKey, cfg }
@@ -920,6 +924,9 @@ export const useFlowStore = defineStore('flow', () => {
     // 旁路挂靠
     const branchIdx = branches.findIndex((b) => b.id === id)
     if (branchIdx >= 0) branches.splice(branchIdx, 1)
+    // 摘链后按父子关系重建：链被删空的分支随之消失，只剩一路时并回主链（与刷新还原同口径）
+    const { parentOf, order } = canvasParents()
+    rebuildTopology(parentOf, order)
     if (selectedId.value === id) {
       const first = main.value.find((m) => !isTerm(m))
       if (first) select(first)
@@ -1420,8 +1427,10 @@ export const useFlowStore = defineStore('flow', () => {
       : nodeStore.patchCollect(id, patch)),
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
     patchSchedule: (id: string, patch: Partial<import('@/views/FlowCanvas/canvas/flowModel').CollectorSchedule>) => nodeStore.patchSchedule(id, patch),
-    patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
-    patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
+    isScheduleEdited,
+    clearScheduleEdited: (id: string) => nodeStore.clearScheduleEdited(id),
+    patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) => nodeStore.patchRuleConfig(id, patch, opts),
+    patchExecConfig: (id: string, patch: Partial<RuleOrchestration>, opts?: { silent?: boolean }) => nodeStore.patchExecConfig(id, patch, opts),
     setMonitorMethods: (id: string, methods: string[]) => nodeStore.setMonitorMethods(id, methods),
     setMonitorAlertConfig: (id: string, config: import('@/views/FlowCanvas/canvas/flowModel').MonitorAlertConfig) => nodeStore.setMonitorAlertConfig(id, config),
     setOutputTable: (id: string, tableId: string) => withTableSync(id, () => nodeStore.setOutputTable(id, tableId)),
@@ -1443,6 +1452,8 @@ export const useFlowStore = defineStore('flow', () => {
     },
     hydrateConfigUrl: (id: string, url: string) => nodeStore.hydrateConfigUrl(id, url),
     setItemId: (id: string, itemId: string) => nodeStore.setItemId(id, itemId),
+    setTaskUrlSourceField: (id: string, itemId: string) => nodeStore.setTaskUrlSourceField(id, itemId),
+    setStepUrl: (id: string, url: string) => nodeStore.setStepUrl(id, url),
     setStepSourceId: (id: string, sourceId: string) => nodeStore.setStepSourceId(id, sourceId),
     setEntryCondition: (id: string, cond: ConditionGroup | undefined) => nodeStore.setEntryCondition(id, cond),
     setNodeDisabled: (id: string, disabled: boolean) => nodeStore.setNodeDisabled(id, disabled),

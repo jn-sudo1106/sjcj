@@ -13,6 +13,7 @@
 //   - 数据源编码候选项来自「环境配置 → 数据源配置」该客户端（appId）的数据源，可手动输入
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { syncApi, type SyncClient, type SyncCustomer, type SyncSqlStatus, type SyncSqlTask, type SyncTableTask } from '@/api/dataSync'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -266,7 +267,9 @@ void loadClients()
             </td>
             <td v-if="!isTable"><div class="stt-ellipsis">{{ r.remark || '—' }}</div></td>
             <td>{{ (isTable ? r.updateTime : r.createTime) || '—' }}</td>
-            <td><button class="stt-link" type="button" data-testid="stt-detail" @click="openDetail(r)">详情</button></td>
+            <td>
+              <el-tooltip content="详情" placement="top"><span class="rc-op-icon" data-testid="stt-detail" aria-label="详情" @click="openDetail(r)"><el-icon :size="15"><View /></el-icon></span></el-tooltip>
+            </td>
           </tr>
           <tr v-if="!loading && !rows.length">
             <td colspan="9" class="stt-empty">{{ error || '没有数据' }}</td>

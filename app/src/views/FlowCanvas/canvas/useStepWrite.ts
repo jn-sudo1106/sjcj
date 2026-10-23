@@ -24,7 +24,7 @@ import {
   outputTableMissing,
   validFlowIdOf,
 } from '@/utils/flow/stepPersist'
-import { isRuleLikeNode, isPdfNode, effectiveOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import { isRuleLikeNode, isPdfNode, effectiveOutputTable, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 function assertOk(ack: Ack | null | undefined, fallback: string) {
   if (ack && 'ok' in ack && ack.ok === false) throw new Error(ack.message || fallback)
@@ -55,7 +55,12 @@ function createTemplateFromPrev(
   configId: string,
   sourceMainConfig: string | undefined,
   flowId: string,
+  cfg?: NodeConfig,
 ): Pick<Step, 'sourceId' | 'mainConfig' | 'flowId' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
+  // 2026-10-21 对齐旧平台 openCreatePanel：新建的采集类后续步表达式固定 $VAL$、来源字段留空等用户选
+  // （旧平台必填；新平台 10-21 定先不强制，只在节点配置里提示）。原来照抄上游的 url / itemId——上游的拼接表达式（如
+  // K2+'#need_upload_xq/xq/'）会被带进新节点，itemId 指向的还是上游输入表的字段。规则类节点不变。
+  const collectorDownstream = !!prev && !!cfg?.collectCfg && !isRuleLikeNode(cfg)
   return {
     sourceId: prev?.sourceId ?? sourceId,
     mainConfig: prev?.mainConfig ?? sourceMainConfig ?? configId,
@@ -64,8 +69,8 @@ function createTemplateFromPrev(
     flowId: prev?.flowId ?? (flowId || prev?.mainConfig),
     // 下游从上游数据取 URL（$VAL$）。上游是首节点（isRoot）时不能照抄它的固定地址——那样新节点
     // 每条上游数据都去抓同一个首页（0928 与后端对齐：下游采集一律 $VAL$）。
-    url: prev ? (prev.isRoot ? '$VAL$' : (prev.url ?? '$VAL$')) : undefined,
-    itemId: prev?.itemId,
+    url: collectorDownstream ? '$VAL$' : prev ? (prev.isRoot ? '$VAL$' : (prev.url ?? '$VAL$')) : undefined,
+    itemId: collectorDownstream ? undefined : prev?.itemId,
     flowCode: prev?.flowCode,
     nodeType: prev?.nodeType ?? 'entry',
   }
@@ -140,6 +145,15 @@ export function useStepWrite() {
    * （网站详情页内部代表源另有一层保护：它经过 loadFromSource，flowIdMode 为 false，
    *   不会把"长得像流程 ID 的源 ID"误当成流程 ID 写进步骤。）
    */
+  /**
+   * 输出表没选、且后端会拒（流程未启用版本）时才跳过写入；启用版本的流程写草稿不校验输出表（2026-10-15 实测），
+   * 照常写进去，发布 / 发起抓取前由 ensureFlowReady 拦。
+   */
+  function blockedByMissingOutput(cfg: NodeConfig, snapshot?: Step): boolean {
+    return outputTableMissing(cfg, snapshot) && !version.allowsEmptyOutput(flowIdOf())
+  }
+
+
   function flowIdOf(): string {
     if (flow.flowIdMode) return validFlowIdOf(flow.flowId)
     const sourceFlow = validFlowIdOf(flow.sourceCfg?.flowId) || validFlowIdOf(flow.sourceCtx?.flowId)
@@ -241,7 +255,7 @@ export function useStepWrite() {
       || flow.sourceCtx?.configId
     // 0925：新建步骤必须带画布的 flowId（归属切 flowId）；拿不到时由后端回填 mainConfig。
     const flowId = fid
-    const inherited = createTemplateFromPrev(prev, sid || '-1', cfg.configId, sourceMainConfig, flowId)
+    const inherited = createTemplateFromPrev(prev, sid || '-1', cfg.configId, sourceMainConfig, flowId, cfg)
     const step = mergeStepForWrite({
       snapshot: {
         ...inherited,
@@ -353,7 +367,7 @@ export function useStepWrite() {
     // 0927 H1：存量行输出表未就绪时任何步骤编辑（含改名整包）都会被后端「节点输出表不能为空」
     // 拒绝；先改画布并提示，等用户在「表配置」补上输出表后由自动保存整批落库，避免误导性报错。
     const snapshot = sourceStore.stepSnapshots[nodeId]
-    if (outputTableMissing(flow.configs[nodeId], snapshot)) {
+    if (blockedByMissingOutput(flow.configs[nodeId], snapshot)) {
       flow.setTitle(nodeId, trimmed)
       ElMessage.warning('已改画布名称，但该节点输出表未选择（非文件节点必填），补上输出表后自动保存才会落库')
       return
@@ -403,7 +417,7 @@ export function useStepWrite() {
       if (!cfg || !cfg.configId) continue
       // 0927 H1：非文件节点输出表未就绪 = 配置未就绪草稿：提交必被后端「节点输出表不能为空」
       // 拒绝，这里同样跳过该节点（画布状态保留，头部提示去补输出表），不整批卡死。
-      if (outputTableMissing(cfg, sourceStore.stepSnapshots[id])) continue
+      if (blockedByMissingOutput(cfg, sourceStore.stepSnapshots[id])) continue
       await createAndLocate(id)
       created += 1
     }
@@ -435,7 +449,7 @@ export function useStepWrite() {
       const snapshot = sourceStore.stepSnapshots[id]
       // 0927 H1：存量行输出表未就绪（编辑必被后端拒）同样按草稿跳过并提示；改动留在画布、
       // markFlowSaved 被 pending 卡住，头部提示补输出表后随下一轮自动保存落库。
-      if (snapshot && outputTableMissing(flow.configs[id], snapshot)) continue
+      if (snapshot && blockedByMissingOutput(flow.configs[id], snapshot)) continue
       if (!snapshot) {
         // 流程工作区：flowConf 里可能带着"只有画布定义、没有步骤行"的历史节点（R2 遗留形态），
         // 没有快照可整包回写，跳过而不是报错——它们本来就不在执行集合里，报了也写不了。
@@ -455,6 +469,25 @@ export function useStepWrite() {
     }
 
     return { created, updated, skipped }
+  }
+
+  /**
+   * 删除前先把直接下游改挂（2026-10-14）：后端 item/next/delete 拒绝删除仍被下游 lastStep 引用的
+   * 步骤（「请先重新连接引用该节点的后续节点」）。画布本地删除时 flow.remove 本来就把下游接到被删
+   * 节点的上游，这里把同一拓扑先落库再删：下游只挂在被删节点上 → 改挂它的上游；还有别的上游 →
+   * 只去掉被删节点。
+   */
+  async function relinkSuccessorsBeforeDelete(nodeId: string) {
+    const parents = (sourceStore.stepSnapshots[nodeId]?.dependsOn ?? []).filter((id) => id && id !== nodeId)
+    for (const child of Object.values(sourceStore.stepSnapshots)) {
+      if (!child?.dependsOn?.includes(nodeId)) continue
+      const others = child.dependsOn.filter((id) => id !== nodeId)
+      const dependsOn = others.length ? others : (parents.length ? parents : ['0'])
+      const step: Step = { ...child, dependsOn, flowId: flowIdOf() || child.flowId }
+      const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.stepModify(step, ...versionArgs(ref)))
+      assertOk(ack, `下游节点「${child.name}」改挂失败`)
+      sourceStore.rememberSteps([step], 'merge')
+    }
   }
 
   async function deleteCanvasNode(nodeId: string, opts?: { confirmed?: boolean }): Promise<boolean> {
@@ -480,6 +513,7 @@ export function useStepWrite() {
     }
     try {
       if (isWritableStepId(nodeId)) {
+        await relinkSuccessorsBeforeDelete(nodeId)
         const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.deleteStep(nodeId, ...versionArgs(ref)))
         assertOk(ack, '删除步骤失败')
         sourceStore.forgetStep(nodeId)

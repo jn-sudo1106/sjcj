@@ -9,10 +9,12 @@ import { useFlowStore } from '@/stores/flow'
 import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
 import { useFlowAutosave } from './useFlowAutosave'
+import { useFlowReadiness } from './useFlowReadiness'
 
 const flow = useFlowStore()
 const version = useFlowVersionStore()
-const { flush, status } = useFlowAutosave()
+const { flush } = useFlowAutosave()
+const { ensureFlowReady } = useFlowReadiness()
 const busy = ref(false)
 
 const canvasFlowId = computed(() => canvasFlowIdOf(flow))
@@ -34,19 +36,10 @@ async function reloadCanvas() {
   if (!ok) ElMessage.warning('画布重新加载失败，请刷新页面查看')
 }
 
-/** 发布 / 放弃前先把画布上还没写完的改动落进草稿，否则发布出去的不是用户看到的样子 */
-async function settle(): Promise<boolean> {
-  await flush()
-  if (flow.dirty || status.value === 'error' || status.value === 'pending') {
-    ElMessage.warning('画布还有未保存成功的改动，请先处理头部的保存提示，再发布或放弃')
-    return false
-  }
-  return true
-}
-
 async function onPublish() {
   const d = version.draft
-  if (!d || busy.value || !await settle()) return
+  // 发布前先把画布改动落进草稿，再查节点完整性（2026-10-14 统一走 ensureFlowReady）
+  if (!d || busy.value || !await ensureFlowReady('发布')) return
   const changedBase = d.baseId !== version.overview?.publishId
   try {
     await ElMessageBox.confirm(
@@ -103,7 +96,8 @@ async function onAbandon() {
       <span v-else class="fvs-tag" data-testid="flow-version-published">已发布 v{{ version.overview?.curVer ?? '—' }}</span>
     </el-tooltip>
     <span v-if="version.draft?.isLock === 1" class="fvs-tag locked" data-testid="flow-version-locked">已锁定</span>
-    <template v-if="version.draft">
+    <!-- 查看历史版本时不给放弃 / 发布（2026-10-14），避免对着历史版本点发布 -->
+    <template v-if="version.draft && !version.history">
       <button class="fvs-btn" type="button" :disabled="busy" data-testid="flow-version-abandon" @click="onAbandon">放弃</button>
       <button class="fvs-btn publish" type="button" :disabled="busy" data-testid="flow-version-publish" @click="onPublish">发布 v{{ version.draft.flowVer }}</button>
     </template>

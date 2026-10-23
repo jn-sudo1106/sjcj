@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildXlsx, colLetter, xmlEscape } from './xlsxExport'
+import { buildXlsx, colLetter, exportDateTag, xmlEscape } from './xlsxExport'
 
 function asText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes)
@@ -34,5 +34,20 @@ describe('buildXlsx', () => {
     const text = asText(buildXlsx([['a<b&c>"d']]))
     expect(text).toContain('a&lt;b&amp;c&gt;&quot;d')
     expect(text).not.toContain('<c r="A1" t="inlineStr"><is><t xml:space="preserve">a<b')
+  })
+
+  it('number 写成数值单元格（id 列在 Excel 里是数字，不标「数字存为文本」），string 仍是文本', () => {
+    const text = asText(buildXlsx([['id', '内容'], [2669, '新城科技园'], ['12a', '']]))
+    expect(text).toContain('<c r="A2"><v>2669</v></c>')
+    // 文本形态的 '12a' 与空串不能被当成数值写出去
+    expect(text).toContain('<c r="A3" t="inlineStr">')
+    expect(text).toContain('<c r="B2" t="inlineStr">')
+  })
+})
+
+describe('exportDateTag', () => {
+  it('导出文件名的日期后缀是 yyyyMMdd（旧平台 toLocaleDateString(en-CA) 去分隔符的口径）', () => {
+    expect(exportDateTag(new Date(2026, 9, 14))).toBe('20261014')
+    expect(exportDateTag(new Date(2026, 0, 2))).toBe('20260102')
   })
 })

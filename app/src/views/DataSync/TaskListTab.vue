@@ -2,8 +2,14 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Edit, Promotion, Setting, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import { syncApi, type SyncClient, type SyncCustomer, type SyncDatabase, type SyncTask, type SyncTaskConfig } from '@/api/dataSync'
+import {
+  isSinkTarget, parseSinkOptions, sanitizeSinkOptions, sinkOptionsProblem, syncApi,
+  type SyncClient, type SyncCustomer, type SyncDatabase, type SyncSinkDetail, type SyncSinkOptions,
+  type SyncTask, type SyncTaskConfig,
+} from '@/api/dataSync'
+import SinkOptionsPanel from './SinkOptionsPanel.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -25,6 +31,10 @@ const detailEdit = ref(false)
 const detailLoading = ref(false)
 const detailSaving = ref(false)
 const detail = ref<SyncTaskConfig | null>(null)
+const sinkInfo = ref<SyncSinkDetail | null>(null)
+const sinkOptions = ref<SyncSinkOptions | null>(null)
+const sinkType = computed(() => Number(sinkInfo.value?.targetDatabaseType ?? 0))
+const sinkColumns = computed(() => sinkInfo.value?.columnMapList ?? [])
 const runOpen = ref(false)
 const runTargets = ref<SyncTask[]>([])
 const runType = ref<'time' | 'id'>('time')
@@ -33,6 +43,11 @@ const copyOpen = ref(false)
 const copyTargets = ref<SyncDatabase[]>([])
 const databaseIds = ref<Array<string | number>>([])
 const copyTableFlag = ref(true)
+const deleteOpen = ref(false)
+const deleteTarget = ref<SyncTask | null>(null)
+// 目标表处理方式：0 不处理 / 1 备份表 / 2 删除表（后端 DeleteTaskDTO.tableOperation）
+const deleteTableOperation = ref<'0' | '1' | '2'>('0')
+const deleteBusy = ref(false)
 
 async function load() {
   loading.value = true
@@ -77,9 +92,15 @@ async function openDetail(row: SyncTask, editable: boolean) {
   detailOpen.value = true
   detailEdit.value = editable
   detail.value = null
+  sinkInfo.value = null
+  sinkOptions.value = null
   detailLoading.value = true
   try {
-    detail.value = { ...await syncApi.taskDetail(row.id), taskName: row.taskName, syncType: String(row.syncType) }
+    // 回显数据来自服务端真源 extend_config，不是从已有 SQL 反推；老后端没有这个接口时只退掉参数面板，明细照常看
+    const [config, sink] = await Promise.all([syncApi.taskDetail(row.id), syncApi.sinkDetail(row.id).catch(() => null)])
+    detail.value = { ...config, taskName: row.taskName, syncType: String(row.syncType) }
+    sinkInfo.value = sink
+    sinkOptions.value = sink ? parseSinkOptions(sink.sinkOptions, sink.targetDatabaseType, sink.columnMapList ?? []) : null
   } catch (error) { ElMessage.error(String(error)); detailOpen.value = false }
   finally { detailLoading.value = false }
 }
@@ -90,6 +111,12 @@ async function saveDetail() {
       !detail.value.conditionSql || !detail.value.insertSql || !detail.value.updateSql) {
     ElMessage.warning('请填写任务名称、定时策略和全部 SQL')
     return
+  }
+  if (isSinkTarget(sinkType.value)) {
+    const options = sanitizeSinkOptions(sinkOptions.value, sinkType.value)
+    const problem = sinkOptionsProblem(options, sinkColumns.value)
+    if (problem) { ElMessage.warning(problem); return }
+    if (options) detail.value.sinkOptions = options
   }
   detailSaving.value = true
   try { await syncApi.saveTaskDetail(detail.value); ElMessage.success('保存成功'); detailOpen.value = false; await load() }
@@ -170,16 +197,24 @@ async function copy() {
   } catch (error) { ElMessage.error(String(error)) }
 }
 
-async function remove(row: SyncTask) {
+function remove(row: SyncTask) {
+  deleteTarget.value = row
+  deleteTableOperation.value = '0'
+  deleteOpen.value = true
+}
+
+async function confirmRemove() {
+  const row = deleteTarget.value
+  if (!row || deleteBusy.value) return
+  deleteBusy.value = true
   try {
-    const result = await ElMessageBox.prompt('目标表处理方式：0 不处理，1 备份表，2 删除表', `删除任务“${row.taskName}”`, {
-      inputValue: '0', inputPattern: /^[012]$/, inputErrorMessage: '请输入 0、1 或 2',
-      confirmButtonText: '确认删除', type: 'warning',
-    })
-    await syncApi.remove(row.id, row.clientId, row.targetTableName, result.value === '0' ? undefined : result.value)
+    await syncApi.remove(row.id, row.clientId, row.targetTableName,
+      deleteTableOperation.value === '0' ? undefined : deleteTableOperation.value)
     ElMessage.success('删除成功')
+    deleteOpen.value = false
     await load()
-  } catch (error) { if (error !== 'cancel') ElMessage.error(String(error)) }
+  } catch (error) { ElMessage.error(String(error)) }
+  finally { deleteBusy.value = false }
 }
 </script>
 
@@ -218,12 +253,17 @@ async function remove(row: SyncTask) {
       <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="Number(row.status) === 0 ? 'success' : 'info'" size="small">{{ Number(row.status) === 0 ? '运行中' : '已暂停' }}</el-tag></template></el-table-column>
       <el-table-column prop="cron" label="同步频率" min-width="140" show-overflow-tooltip />
       <el-table-column prop="lastSyncTime" label="最后同步成功" min-width="165" />
-      <el-table-column label="操作" width="250" fixed="right"><template #default="{ row }">
-        <el-button link type="primary" @click="openDetail(row, true)">编辑</el-button>
-        <el-button v-if="Number(row.status) === 0 && Number(row.syncType) === 1" link type="primary" @click="runNow(row)">执行</el-button>
-        <el-button v-if="Number(row.status) === 0 && Number(row.syncType) === 1" link type="primary" @click="openRun([row])">参数执行</el-button>
-        <el-button v-if="Number(row.status) === 0" link @click="action([row.id], 'stop')">关闭</el-button>
-        <template v-else><el-button link @click="action([row.id], 'start')">开启</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template>
+      <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }">
+        <div class="rc-actions">
+          <el-tooltip content="编辑" placement="top"><span class="rc-op-icon" data-testid="task-edit" aria-label="编辑" @click="openDetail(row, true)"><el-icon :size="15"><Edit /></el-icon></span></el-tooltip>
+          <el-tooltip v-if="Number(row.status) === 0 && Number(row.syncType) === 1" content="立即执行" placement="top"><span class="rc-op-icon" data-testid="task-run" aria-label="立即执行" @click="runNow(row)"><el-icon :size="15"><Promotion /></el-icon></span></el-tooltip>
+          <el-tooltip v-if="Number(row.status) === 0 && Number(row.syncType) === 1" content="参数执行" placement="top"><span class="rc-op-icon" data-testid="task-run-params" aria-label="参数执行" @click="openRun([row])"><el-icon :size="15"><Setting /></el-icon></span></el-tooltip>
+          <el-tooltip v-if="Number(row.status) === 0" content="关闭任务" placement="top"><span class="rc-op-icon" data-testid="task-stop" aria-label="关闭任务" @click="action([row.id], 'stop')"><el-icon :size="15"><VideoPause /></el-icon></span></el-tooltip>
+          <template v-else>
+            <el-tooltip content="开启任务" placement="top"><span class="rc-op-icon" data-testid="task-start" aria-label="开启任务" @click="action([row.id], 'start')"><el-icon :size="15"><VideoPlay /></el-icon></span></el-tooltip>
+            <el-tooltip content="删除任务" placement="top"><span class="rc-op-icon is-danger" data-testid="task-delete" aria-label="删除任务" @click="remove(row)"><el-icon :size="15"><Delete /></el-icon></span></el-tooltip>
+          </template>
+        </div>
       </template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @change="load" />
@@ -238,6 +278,9 @@ async function remove(row: SyncTask) {
             <el-input v-model="detail[field]" type="textarea" :rows="4" :disabled="!detailEdit" />
           </el-form-item>
         </el-form>
+        <SinkOptionsPanel v-if="detail && detailEdit && isSinkTarget(sinkType)" :key="String(sinkInfo?.taskId)"
+          v-model="sinkOptions" :database-type="sinkType" :columns="sinkColumns" table-exists
+          :target-schema="sinkInfo?.targetSchema ?? ''" :target-table="sinkInfo?.targetTable ?? ''" />
       </div>
       <template #footer><el-button @click="detailOpen = false">关闭</el-button><el-button v-if="detailEdit" type="primary" :loading="detailSaving" @click="saveDetail">保存</el-button></template>
     </el-drawer>
@@ -257,9 +300,26 @@ async function remove(row: SyncTask) {
       </el-select></el-form-item><el-form-item label="创建新表"><el-checkbox v-model="copyTableFlag">在目标数据源创建新表</el-checkbox></el-form-item></el-form>
       <template #footer><el-button @click="copyOpen = false">取消</el-button><el-button type="primary" :disabled="!databaseIds.length" @click="copy">确认复制</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="deleteOpen" :title="`删除任务“${deleteTarget?.taskName ?? ''}”`" width="min(480px, 94vw)">
+      <p class="sync-delete-target">目标表：{{ deleteTarget?.targetTableName || '-' }}</p>
+      <el-form label-position="top">
+        <el-form-item label="目标表处理方式">
+          <el-select v-model="deleteTableOperation" data-testid="delete-table-operation" style="width:100%">
+            <el-option value="0" label="不处理（只删任务，不动目标表）" />
+            <el-option value="1" label="备份表后删除" />
+            <el-option value="2" label="删除目标表" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="deleteOpen = false">取消</el-button>
+        <el-button type="danger" :loading="deleteBusy" data-testid="delete-confirm" @click="confirmRemove">确认删除</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }.sync-delete-target { margin: 0 0 14px; color: #64748b; font-size: 13px; }
 </style>

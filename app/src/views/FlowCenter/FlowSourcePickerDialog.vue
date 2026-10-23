@@ -3,8 +3,9 @@
 // 表格勾选 + 按「源名称 / ID」和「所属流程」服务端筛 + ID 批量检索 + 全选本页。
 // 提交动作仍在 FlowCenter 的 confirmApply（分批 + 作业条 + 二次确认文案），这里只负责选。
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { flowCenterApi, sourceApi, sourceGroupApi, type FlowRecord, type Source } from '@/api'
+import { ElDialog, ElMessage } from 'element-plus'
+import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
+import { useSourceGroupNames } from './sourceGroupNames'
 
 const props = defineProps<{
   /** 目标流程；非 null 时弹窗打开 */
@@ -13,6 +14,8 @@ const props = defineProps<{
   modelValue: string[]
   submitting?: boolean
   progress?: string
+  /** 嵌在「关联到源」弹窗的「添加关联」页签里（2026-10-21）：不渲染自己的弹窗外壳，底部按钮放在内容末尾 */
+  embedded?: boolean
 }>()
 const emit = defineEmits<{
   'update:modelValue': [string[]]
@@ -28,25 +31,14 @@ const flowOptions = ref<{ id: string; name: string }[]>([])
 const flowOptLoading = ref(false)
 const onlyUnbound = ref(false)
 
-// 1008-06：来源组名映射（组内源禁选，行内标「组统一配置：组名」）。
-// 拉一次 sourceGroupApi.list 建 id→name 索引；失败不阻塞（只显示「组统一配置」）。
-const groupNames = ref(new Map<string, string>())
-async function loadGroupNames() {
-  try {
-    const groups = await sourceGroupApi.list()
-    groupNames.value = new Map(groups.map((g) => [g.sourceGroupId, g.sourceGroupName]))
-  } catch {
-    groupNames.value = new Map()
-  }
-}
+// 1008-06：组内源禁选；1021-04：「所属来源组」单独一列（组名可点跳我的分组），当前流程列标「组统一配置」。
+const { loadGroupNames, groupNameOf, openSourceGroup } = useSourceGroupNames()
 /** 组内源：统一使用组流程，不允许单独关联本流程 */
 function inGroup(source: Source): boolean {
   return !!source.sourceGroupId
 }
 function groupLabel(source: Source): string {
-  const id = source.sourceGroupId
-  if (!id) return ''
-  return `组统一配置：${groupNames.value.get(id) || `组 #${id}`}`
+  return source.sourceGroupId ? `组统一配置：${groupNameOf(source.sourceGroupId)}` : ''
 }
 
 const rows = ref<Source[]>([])
@@ -107,7 +99,7 @@ async function pickAllMatching() {
     const collected: Source[] = []
     for (let p = 1; collected.length < total.value; p++) {
       const res = await sourceApi.sourcePaged({
-        keyword: keyword.value.trim() || undefined,
+        ...keywordQuery(),
         flowId: flowFilter.value || undefined,
         page: p,
         size: SELECT_ALL_PAGE,
@@ -150,6 +142,16 @@ function stateText(source: Source): string {
   return source.state === 'E' ? '异常' : source.state === 'L' ? '运行中' : '正常'
 }
 
+/**
+ * 搜索框写着「按源名称 / ID 搜索」，但后端 `name` 只匹配名称，输 ID 命中 0 条（2026-10-19 用户反馈
+ * 301288849 按名称能找到、按 ID 找不到）。与 FlowSourcesDialog 同口径：纯数字当源 ID 查，其余按名称查。
+ */
+function keywordQuery(): { sourceId?: string; name?: string } {
+  const q = keyword.value.trim()
+  if (!q) return {}
+  return /^\d+$/.test(q) ? { sourceId: q } : { name: q }
+}
+
 let reqId = 0
 async function load() {
   const id = ++reqId
@@ -157,7 +159,7 @@ async function load() {
   error.value = ''
   try {
     const res = await sourceApi.sourcePaged({
-      keyword: keyword.value.trim() || undefined,
+      ...keywordQuery(),
       flowId: flowFilter.value || undefined,
       page: page.value,
       size: PAGE_SIZE,
@@ -245,12 +247,9 @@ watch(() => props.flow?.id, (id) => {
 </script>
 
 <template>
-  <el-dialog
-    :model-value="!!flow"
-    :title="flow ? `关联流程到源 · ${flow.name}` : '关联流程到源'"
-    width="920px"
-    top="6vh"
-    destroy-on-close
+  <component
+    :is="embedded ? 'div' : ElDialog"
+    v-bind="embedded ? { class: 'fsp-embedded' } : { modelValue: !!flow, title: flow ? `关联流程到源 · ${flow.name}` : '关联流程到源', width: '920px', top: '6vh', destroyOnClose: true }"
     @close="emit('close')"
   >
     <p class="fsp-note">
@@ -325,7 +324,7 @@ watch(() => props.flow?.id, (id) => {
         <thead>
           <tr>
             <th class="fsp-check-col" />
-            <th>源 ID</th><th>源名称</th><th>网站</th><th>状态</th><th>当前流程</th>
+            <th>源 ID</th><th>源名称</th><th>网站</th><th>所属来源组</th><th>状态</th><th>当前流程</th>
           </tr>
         </thead>
         <tbody>
@@ -339,16 +338,20 @@ watch(() => props.flow?.id, (id) => {
             <td class="fsp-mono">{{ s.sourceId }}</td>
             <td>{{ s.name }}</td>
             <td>{{ s.siteName || s.siteId || '—' }}</td>
+            <td>
+              <button v-if="s.sourceGroupId" class="fsp-group-link" type="button" :title="`到「我的分组」查看 ${groupNameOf(s.sourceGroupId)}`" data-testid="fsp-group-name" @click.stop="openSourceGroup(s.sourceGroupId)">{{ groupNameOf(s.sourceGroupId) }}</button>
+              <span v-else class="fsp-muted">—</span>
+            </td>
             <td>{{ stateText(s) }}</td>
             <td>
               <template v-if="inGroup(s)">
-                <span class="fsp-flowtag group" :title="groupLabel(s)" data-testid="fsp-group-tag">{{ groupLabel(s) }}</span>
+                <span class="fsp-flowtag group" :title="groupLabel(s)" data-testid="fsp-group-tag">组统一配置</span>
               </template>
               <span v-else class="fsp-flowtag" :class="flowTag(s).cls">{{ flowTag(s).text }}</span>
             </td>
           </tr>
           <tr v-if="!visibleRows.length && !loading">
-            <td colspan="6" class="fsp-empty">{{ error || (onlyUnbound ? '本页没有未关联到本流程的源' : '没有匹配的源') }}</td>
+            <td colspan="7" class="fsp-empty">{{ error || (onlyUnbound ? '本页没有未关联到本流程的源' : '没有匹配的源') }}</td>
           </tr>
         </tbody>
       </table>
@@ -368,7 +371,7 @@ watch(() => props.flow?.id, (id) => {
 
     <p v-if="progress" class="fsp-note" data-testid="flow-apply-progress">{{ progress }}</p>
 
-    <template #footer>
+    <template v-if="!embedded" #footer>
       <button class="fsp-btn" type="button" @click="emit('close')">取消</button>
       <button
         class="fsp-btn primary"
@@ -378,10 +381,21 @@ watch(() => props.flow?.id, (id) => {
         @click="emit('confirm')"
       >{{ submitting ? '关联中…' : `确认关联（${modelValue.length} 个）` }}</button>
     </template>
-  </el-dialog>
+    <div v-if="embedded" class="fsp-embedded-foot">
+      <button class="fsp-btn" type="button" @click="emit('close')">取消</button>
+      <button
+        class="fsp-btn primary"
+        type="button"
+        data-testid="flow-apply-confirm"
+        :disabled="submitting || !modelValue.length"
+        @click="emit('confirm')"
+      >{{ submitting ? '关联中…' : `确认关联（${modelValue.length} 个）` }}</button>
+    </div>
+  </component>
 </template>
 
 <style scoped>
+.fsp-embedded-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .fsp-note { margin: 0 0 10px; color: var(--rc-text-2); font-size: 12px; line-height: 1.6; }
 .fsp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .fsp-input { height: 28px; width: 220px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; }
@@ -420,6 +434,9 @@ watch(() => props.flow?.id, (id) => {
 .fsp-flowtag.other { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; }
 .fsp-flowtag.none { background: #f1f5f9; color: var(--rc-faint); border: 1px solid var(--rc-border); }
 .fsp-flowtag.group { background: #eef2ff; color: #4f46e5; border: 1px solid #c7d2fe; }
+.fsp-group-link { padding: 0; border: 0; background: none; color: var(--rc-primary-ink); cursor: pointer; text-align: left; }
+.fsp-group-link:hover { text-decoration: underline; }
+.fsp-muted { color: var(--rc-faint); }
 .fsp-table tbody tr.in-group { background: #f8fafc; color: var(--rc-faint); }
 .fsp-table tbody tr.in-group:hover { background: #f1f5f9; }
 .fsp-table tbody tr.in-group td.fsp-check-col input:disabled { cursor: not-allowed; }

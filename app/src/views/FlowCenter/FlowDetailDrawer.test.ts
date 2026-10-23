@@ -5,8 +5,10 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
+import FlowVersionHistory from './FlowVersionHistory.vue'
 import { flowCenterApi, flowVersionApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useNodeStore } from '@/stores/node'
 import { useUiStore } from '@/stores/ui'
 import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
@@ -323,6 +325,45 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
   })
 })
 
+// 2026-10-19：「保存流程」不存节点配置，成功后的 markSaved 却会清掉配置脏标记——
+// 有未保存配置时必须拦下，关抽屉时也要确认，否则配置改动会被当成已保存悄悄丢掉。
+describe('流程详情抽屉 · 未保存的节点配置（2026-10-19）', () => {
+  it('有未保存配置时点保存流程：拦下提示，不发 saveFlow，脏标记保留', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOW, version: 2 })
+    const w = mountDrawer()
+    await flushPromises()
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    const flow = useFlowStore()
+    const nodeId = flow.main.find((id) => !['start', 'end'].includes(id))!
+    useNodeStore().touchConfig(nodeId)
+
+    await saveButton(w).trigger('click')
+    await flushPromises()
+
+    expect(save).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('的配置还没保存'))
+    expect(flow.dirtyConfigNodes).toContain(nodeId)
+  })
+
+  it('有未保存配置时点关闭：留在此页不关抽屉；确认「仍然关闭」后放行', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    const flow = useFlowStore()
+    useNodeStore().touchConfig(flow.main.find((id) => !['start', 'end'].includes(id))!)
+
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce(new Error('cancelled'))
+    await w.get('.fd-close').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('的配置还没保存'), '配置未保存', expect.anything())
+    expect(w.emitted('close')).toBeUndefined()
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await w.get('.fd-close').trigger('click')
+    await flushPromises()
+    expect(w.emitted('close')).toBeTruthy()
+  })
+})
+
 // 0927 修复（用户反馈「流程工作区未按接口返回的展示」）：工作区展示以**接口步骤**
 // （nextConfigPaged?flowId&svg=true，执行拓扑的唯一事实源）为准——flowConf 是历史快照，
 // 与步骤是两本账（0926 REVIEW），源画布/重载早已按步骤还原，只有抽屉还认 flowConf，
@@ -438,5 +479,45 @@ describe('流程详情抽屉 · 登录口令不进 flowConf（F3）', () => {
     const memCollect = canvas.configs['web-list']?.collectCfg as unknown as { password?: string; loginConfigs?: { loginPwd?: string }[] } | undefined
     expect(memCollect?.password).toBe('p@ss0rd')
     expect(memCollect?.loginConfigs?.[0]?.loginPwd).toBe('')
+  })
+})
+
+describe('流程详情抽屉 · 查看历史版本（2026-10-14）', () => {
+  const OVERVIEW = {
+    enabled: true, curVer: 2, nextVer: 3, publishId: '900', draftId: null,
+    versions: [
+      { versionId: '900', flowVer: 2, ver: 1, state: 'C', isLock: 0, isDelete: 0, baseId: '748', publishDt: '2026-10-11 01:51:01' },
+      { versionId: '748', flowVer: 1, ver: 1, state: 'C', isLock: 0, isDelete: 0, baseId: null, publishDt: '2026-10-10 13:10:00' },
+    ],
+  }
+
+  it('选历史版本：按该版本重读步骤，出只读提示条、保存等按钮禁用；返回当前版本后恢复', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(OVERVIEW)
+    const w = mountDrawer()
+    await flushPromises()
+    const steps = vi.mocked(flowCenterApi.steps)
+    expect(steps).toHaveBeenLastCalledWith('flow-1')
+    expect(w.find('[data-testid="flow-history-banner"]').exists()).toBe(false)
+
+    w.findComponent(FlowVersionHistory).vm.$emit('select', '748')
+    await flushPromises()
+    expect(steps).toHaveBeenLastCalledWith('flow-1', { versionId: '748' })
+    expect(w.get('[data-testid="flow-history-banner"]').text()).toContain('v1（已发布）')
+    expect(w.get('[data-testid="flow-history-banner"]').text()).toContain('节点配置不随版本保存')
+    expect(saveButton(w).attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="flow-apply-to-source"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[aria-label="流程名称"]').attributes('disabled')).toBeDefined()
+
+    await w.get('[data-testid="flow-history-exit"]').trigger('click')
+    await flushPromises()
+    expect(steps).toHaveBeenLastCalledWith('flow-1')
+    expect(w.find('[data-testid="flow-history-banner"]').exists()).toBe(false)
+    expect(saveButton(w).attributes('disabled')).toBeUndefined()
+  })
+
+  it('版本未启用的流程不显示历史版本入口', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    expect(w.findComponent(FlowVersionHistory).exists()).toBe(false)
   })
 })

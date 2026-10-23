@@ -9,6 +9,8 @@ import type { Source } from '@/api'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import GroupSourcePicker from './GroupSourcePicker.vue'
 import GroupAssignmentDialog from './GroupAssignmentDialog.vue'
+import { recordSiteVisit } from '@/utils/siteRecents'
+import { trackClick } from '@/utils/logEvents'
 const groups = useSourceGroupsStore()
 const ui = useUiStore()
 const route = useRoute()
@@ -56,6 +58,14 @@ async function remove(ids: string[]) {
 }
 function move(ids: string[]) { movingIds.value = [...ids]; moving.value = true }
 function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
+  // 与 SourceGroupTab 同口径：从源进去也算打开了这个网站，并给源记一条 CLICK
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
+  trackClick('SOURCE', source.sourceId, source.name, {
+    eventCode: 'source_open',
+    eventName: '打开源',
+    firstModule: '采集资产',
+    pageName: '我的分组',
+  })
   void router.push({ path: '/canvas', query: { sourceId: source.sourceId, ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), view, returnTo: route.fullPath } })
 }
 </script>

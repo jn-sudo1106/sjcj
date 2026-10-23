@@ -316,4 +316,57 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     const drawer2 = wrapper.findComponent({ name: 'ElDrawer' })
     expect(drawer2.props('size')).toBe('980px')
   })
+
+  // 1013：编辑已有表时物理表名不允许修改（后端 modifyEntryType 会把 tableName 原样选择性更新，
+  // 改错会让表配置指向不存在的物理表）；新建时可编辑/自动生成。
+  it('编辑态：物理表名输入框 disabled，且带原因提示', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'code', desc: '编码', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    }
+    await mountEditor(entry)
+    const input = body().find('input[data-testid="entry-table-name"]')
+    expect((input.element as HTMLInputElement).disabled).toBe(true)
+    expect(input.attributes('title')).toContain('不允许修改')
+  })
+
+  it('新建态：物理表名输入框可编辑', async () => {
+    await mountEditor(null)
+    const input = body().find('input[data-testid="entry-table-name"]')
+    expect((input.element as HTMLInputElement).disabled).toBe(false)
+    await input.setValue('TB_NEW')
+    expect((input.element as HTMLInputElement).value).toBe('TB_NEW')
+  })
+
+  // DS_KIND（2026-10-22）：编辑抽屉「数据源类型」下拉——编辑回显、新建默认 MYSQL、保存透传
+  it('数据源类型：编辑回显 dsKind=CK，新建默认 MYSQL', async () => {
+    await mountEditor({
+      tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    })
+    const sel = body().find('select[data-testid="entry-ds-kind"]')
+    expect(sel.exists()).toBe(true)
+    expect((sel.element as HTMLSelectElement).value).toBe('CK')
+
+    wrapper.unmount()
+    await mountEditor(null)
+    expect((body().find('select[data-testid="entry-ds-kind"]').element as HTMLSelectElement).value).toBe('MYSQL')
+  })
+
+  it('保存 payload 含 dsKind（切换 CK 随 modifyEntryType 落库）', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    }
+    const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: 't1' })
+    await mountEditor(entry)
+    await body().find('select[data-testid="entry-ds-kind"]').setValue('CK')
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', dsKind: 'CK' }))
+  })
 })

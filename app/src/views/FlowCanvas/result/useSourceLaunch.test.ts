@@ -60,6 +60,15 @@ describe('chunkIds / sendInBatches', () => {
     expect(result.failed).toEqual([{ ids: ['2', '3'], error: '限流' }])
   })
 
+  it('一批里部分源没发出去（回执 failed）：只把这几个记成失败，其余算已发（2026-10-22）', async () => {
+    const send = vi.fn(async (ids: string[]) => (ids[0] === '0'
+      ? { ok: true, failed: [{ sourceId: '1', reason: 'Incorrect result size: expected 1, actual 0' }] }
+      : { ok: true }))
+    const result = await sendInBatches(['0', '1', '2', '3'], send, { batchSize: 2 })
+    expect(result.sent).toBe(3)
+    expect(result.failed).toEqual([{ ids: ['1'], error: '源 1：没有可用的流程（关联的流程可能已禁用，或还没有关联流程）' }])
+  })
+
   // Y4-1：signal 三态。**能拦住的只有"还没提交的批次"**——已提交的不回滚，
   // 服务端一侧没有 stop/cancel 端点（服务端级停止是 H3，未答复）。
   it('中止：剩余批次不发，未提交的 ID 单独报出来', async () => {
@@ -161,6 +170,11 @@ describe('describeFilters / 导出行', () => {
   // 否则用户以为只按名称筛，实际发出去的范围是两者取交集
   it('名称与 URL 是两个条件，都列进人话描述', () => {
     expect(describeFilters({ name: '盛科', sourceUrl: 'centec' })).toBe('名称含「盛科」，URL 含「centec」')
+  })
+
+  // 1022：按主表筛选时，按条件发任务的确认弹窗要看得到这条
+  it('主表 ID 条件列进人话描述', () => {
+    expect(describeFilters({ entryTypeId: '6200029' })).toBe('主表 #6200029')
   })
 
   // `%` / `NULL` 是后端认的空值标记（0920-07），照字面写成「备注含「%」」没人看得懂

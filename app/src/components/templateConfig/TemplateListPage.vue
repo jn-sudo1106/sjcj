@@ -11,7 +11,7 @@
 // 2. 旧版 s-table 在删除最后一条时会「自动翻页到上一页」，这里的分页由页码状态自己管。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { DocumentCopy, Edit, Plus, Search } from '@element-plus/icons-vue'
 import type { TemplateRow } from '@/api/types/template'
 import TemplateFormDialog from './TemplateFormDialog.vue'
 import type { TemplateColumn, TemplateField, TemplateListApi } from './types'
@@ -137,8 +137,8 @@ function onSaved() {
   refresh(true)
 }
 
-/** 操作列宽：有复制才留两条链接的位 */
-const actionWidth = computed(() => (props.api.copy ? 130 : 80))
+/** 操作列宽：图标 24px + 间距 10px，有复制多留一个图标的位 */
+const actionWidth = computed(() => (props.api.copy ? 90 : 60))
 /** 行内长文本：null 显示成空（旧平台就是空白单元格），不显示 null/undefined */
 function cellText(row: TemplateRow, col: TemplateColumn): string {
   const value = row[col.prop]
@@ -205,11 +205,12 @@ defineExpose({ refresh })
       <el-table-column label="操作" :width="actionWidth" fixed="right" align="center">
         <template #default="{ row }">
           <div class="tc-row-actions">
-            <span class="tc-op-link" @click="openEdit(row)">编辑</span>
-            <template v-if="api.copy">
-              <span class="tc-op-divider">|</span>
-              <span class="tc-op-link" @click="copyRow(row)">复制</span>
-            </template>
+            <el-tooltip content="编辑" placement="top">
+              <span class="tc-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip v-if="api.copy" content="复制" placement="top">
+              <span class="tc-op-icon" @click="copyRow(row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
+            </el-tooltip>
             <slot name="row-actions" :row="row" :refresh="refresh" />
           </div>
         </template>
@@ -268,18 +269,21 @@ defineExpose({ refresh })
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 10px;
 }
-.tc-op-link {
-  color: var(--rc-primary, #2563eb);
+.tc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  transition: background-color 0.2s, color 0.2s;
 }
-.tc-op-link:hover {
-  text-decoration: underline;
-}
-.tc-op-divider {
-  color: var(--rc-faint, #94a3b8);
+.tc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .tc-mono {
   font-family: var(--rc-mono, monospace);

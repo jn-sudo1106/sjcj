@@ -31,7 +31,7 @@ import type {
   SummaryRow,
   TaskInst,
 } from './types'
-import type { FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
+import type { CreateJobsInput, FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
@@ -413,6 +413,8 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
   return {
     tableId: String(record.entryTypeId ?? ''),
     tableName: String(record.tableName ?? ''),
+    // DS_KIND 老记录可能为 NULL：统一归一 MYSQL（与 DB 默认一致），不向 UI 暴露「未知」态
+    dsKind: record.dsKind == null ? 'MYSQL' : String(record.dsKind) as EntryType['dsKind'],
     name: record.typeName == null ? undefined : String(record.typeName),
     remark: record.remark == null ? undefined : String(record.remark),
     fields: items.map((item, index) => entryFieldFromLegacy(item, index, keySet)),
@@ -436,6 +438,7 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     entryTypeId: input.tableId || undefined,
     typeName: input.name,
     tableName: input.tableName,
+    dsKind: input.dsKind,
     keyField: input.keyField,
     state: input.state,
     remark: input.remark,
@@ -541,18 +544,18 @@ export function dataRowFromLegacy(input: unknown): DataRow {
   return {
     dataId: String(record.ENTRY_ID ?? record.entryId ?? ''),
     sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
-    configId: str(record.CONFIG_ID),
-    detailId: str(record.DETAIL_ID),
-    parentId: str(record.PARENT_ID),
-    categoryId: str(record.CATEGORY_ID),
-    state: str(record.STATE),
-    nextFlag: str(record.NEXT_FLAG),
+    configId: str(record.CONFIG_ID ?? record.configId),
+    detailId: str(record.DETAIL_ID ?? record.detailId),
+    parentId: str(record.PARENT_ID ?? record.parentId),
+    categoryId: str(record.CATEGORY_ID ?? record.categoryId),
+    state: str(record.STATE ?? record.state),
+    nextFlag: str(record.NEXT_FLAG ?? record.nextFlag),
     createDt: str(rawCreateDt),
     updateDt: str(rawUpdateDt),
-    k0: str(record.K0),
-    seq: str(record.SEQ),
-    times: str(record.TIMES),
-    fileId: str(record.FILE_ID),
+    k0: str(record.K0 ?? record.k0),
+    seq: str(record.SEQ ?? record.seq),
+    times: str(record.TIMES ?? record.times),
+    fileId: str(record.FILE_ID ?? record.fileId),
     // 详情顶部字段（旧平台 ENTRY_DETAIL.base；camelCase 优先，大写兜底，兼容两种契约）
     sourceName: str(record.sourceName ?? record.SOURCE_NAME),
     entryTypeId: str(record.entryTypeId ?? record.ENTRY_TYPE_ID),
@@ -1072,6 +1075,29 @@ export function sourceToLegacyParams(source: Source): Record<string, unknown> {
   }
 }
 
+/**
+ * 批量配定时 → 旧 `POST /v1/source/createJobs` 的 query 参数（旧 SourceCron.vue + api/source-job.js saveSourceCron）。
+ * - `configId` 必须在场、可为空串（旧 api 层强制 `''`）；请求时要配合 `keepEmptyParams: ['configId']`。
+ * - `flowId` 0 = 跟随各来源默认流程；正数时后端校验每个源都关联了该流程，否则整批不建。
+ * - `indexKey` 旧批量入口不传，这里也不带。
+ */
+export function createJobsToLegacy(input: CreateJobsInput): LegacyRecord {
+  return {
+    ids: input.sourceIds.filter(Boolean).join(','),
+    cron: input.cron.trim(),
+    enable: input.enable,
+    monitorEnable: input.monitorEnable,
+    monitorAfter: input.monitorAfter ?? 30,
+    flowId: input.flowId ? Number(input.flowId) : 0,
+    configId: '',
+  }
+}
+
+/** 快捷编辑只映射名称 / URL / 核心参数，避免整条源回写时覆盖其它属性。 */
+export function sourceCoreToLegacyParams(sourceId: string, patch: { name?: string; url?: string; coreParam: string }): Record<string, unknown> {
+  return { sourceId, sourceName: patch.name, sourceUrl: patch.url, sourceParam: patch.coreParam }
+}
+
 /** 旧平台 sourcePaged 的分页结构适配。 */
 export function sourcePageFromLegacy(input: unknown): Paged<Source> {
   const record = asRecord(input)
@@ -1225,12 +1251,15 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     const row = asRecord(item)
     const count = legacyNumber(row.count ?? row.sourceCnt ?? row.sourceCount)
     const seq = row.seq != null ? Number(row.seq) : undefined
+    // 后端返回 null 的 remark 不要落成 ''，否则「填了空值」与「本来没备注」分不开
+    const remark = row.remark == null ? undefined : String(row.remark)
     return {
       id: String(row.categoryId ?? row.id ?? ''),
       name: String(row.categoryName ?? row.name ?? ''),
       parentId: row.parentId == null || row.parentId === 0 ? '' : String(row.parentId),
       count,
       seq,
+      remark,
     }
   }).filter((node) => node.id && node.name)
   const byId = new Map<string, SourceCategory>()
@@ -1240,6 +1269,9 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     ...(node.count == null ? {} : { count: node.count }),
     ...(node.seq == null ? {} : { seq: node.seq }),
     ...(node.parentId ? { parentId: node.parentId } : {}),
+    // 2026-10-16 补：remark 以前没被映射，导致树节点拿不到备注——
+    // `CategoryManager.openEdit()` 读 `node.remark` 回填编辑表单，于是「备注」永远显示为空。
+    ...(node.remark == null ? {} : { remark: node.remark }),
   }))
   const roots: SourceCategory[] = []
   nodes.forEach((node) => {

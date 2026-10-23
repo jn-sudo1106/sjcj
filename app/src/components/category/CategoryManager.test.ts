@@ -27,10 +27,17 @@ const stubs = {
     name: 'ElTree',
     props: ['load', 'lazy', 'props', 'data'],
     setup(props: any, { slots }: any) {
-      if (props.data) {
+      if (props.data && props.data.length) {
+        // 非懒加载（1014）：data 里的根节点各包一层 node（带 parent.childNodes，让 isFirstSibling/上移可用）
+        const nodes = props.data.map((d: any) => ({
+          data: d,
+          expanded: true,
+          parent: { level: 0, childNodes: [] as any[] },
+        }))
+        nodes.forEach((n: any) => { n.parent.childNodes = nodes })
         return () => (
-          h('div', { class: 'el-tree-mock' }, props.data.map((d: any) =>
-            slots.default?.({ node: { expanded: true }, data: d }),
+          h('div', { class: 'el-tree-mock' }, nodes.map((n: any) =>
+            slots.default?.({ node: n, data: n.data }),
           ))
         )
       }
@@ -79,6 +86,25 @@ describe('CategoryManager 分类目录', () => {
     expect(wrapper.find('.ca-table-head').text()).toContain('分类名称')
     expect(wrapper.find('button[aria-label="关闭"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('批量导入')
+  })
+
+  // 1016：首屏只拉根目录 + 预取一层；展开时再预取下一层，不再一次 BFS 拉全
+  it('按需加载：首屏只拉根和根的子级，展开节点时才预取它子目录的子级', async () => {
+    const tree: Record<string, { id: string; name: string }[]> = {
+      '': [{ id: '101', name: '财经资讯' }, { id: '102', name: '海外社媒' }],
+      '101': [{ id: '201', name: '基金' }],
+      '102': [],
+      '201': [{ id: '301', name: '公募' }],
+    }
+    const spy = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (pid?: string) => tree[pid ?? ''] ?? [])
+    const wrapper = mount(CategoryManager, { global: { stubs } })
+    await flushPromises()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([undefined, '101', '102'])
+    expect(wrapper.text()).toContain('财经资讯')
+
+    wrapper.findComponent({ name: 'ElTree' }).vm.$emit('node-expand', { id: '101', name: '财经资讯' })
+    await flushPromises()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([undefined, '101', '102', '201'])
   })
 
   // 按钮外面已套 el-tooltip，再带原生 title 会在悬停时同时弹出两个提示

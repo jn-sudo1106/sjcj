@@ -68,6 +68,8 @@ const stubs = {
   ElTooltip: {
     name: 'ElTooltip',
     inheritAttrs: false,
+    // 行内操作改成图标后靠 content（原按钮文案）定位，声明成 prop 才拿得到
+    props: ['content'],
     template: '<span class="stub-tooltip"><slot /></span>',
   },
   ElPagination: {
@@ -111,10 +113,10 @@ async function moreCmd(wrapper: VueWrapper, cmd: string) {
 }
 /** 行内元素只在真实数据行里找（ElTable 会额外渲染一份 hidden-columns 量宽树） */
 const cell = (wrapper: VueWrapper, selector: string) => wrapper.findAll(`tr.el-table__row ${selector}`)
-/** 点某一行行内操作（编辑 / 复制 / 运行） */
+/** 点某一行行内操作（编辑 / 复制 / 运行）：已改成图标，按 tooltip 文案找 */
 async function clickOp(wrapper: VueWrapper, rowIndex: number, text: string) {
-  const ops = cell(wrapper, '.cj-actions')[rowIndex].findAll('.cj-op-link')
-  await ops.find((el) => el.text().trim() === text)!.trigger('click')
+  const tip = cell(wrapper, '.cj-actions')[rowIndex].findAllComponents({ name: 'ElTooltip' }).find((t: VueWrapper) => (t.props() as { content?: string }).content === text)!
+  await tip.find('.cj-op-icon').trigger('click')
   await flushPromises()
 }
 
@@ -168,7 +170,36 @@ describe('自定义告警 · 表格操作与接口调用（对齐旧 CommJobList
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '1', page: 1 }))
   })
 
-  it('「重置」只清空条件、不发请求（旧版 `queryParam = {}`，下一次查询才生效）', async () => {
+  // 状态下拉的「全部 / 历史删除的」用 -1 / -2 两个 UI 哨兵（el-select 把空串判成「没选」，
+  // 「全部」就显示不出来）；到接口层再还原：-1 → ''、-2 → 后端本来那个 -1。
+  // 注：本文件 stub 了 ElTooltip，下拉内容不渲染，所以这里只验 UI 值与请求参数；
+  // 「非空值能显示中文」由 indicatorDataset / indicatorsList 里同机制的用例覆盖。
+  it('状态「全部」「历史删除的」：UI 用非空哨兵，请求按哨兵还原成旧口径', async () => {
+    const paged = pagedSpy()
+    const wrapper = mountPage()
+    await flushPromises()
+
+    const select = wrapper.findAllComponents({ name: 'ElSelect' })
+      .find((s) => typeof s.props('modelValue') === 'string')!
+    // 初值「在用」（旧版 queryParam.enable = '0'）
+    expect(select.vm.$props.modelValue).toBe('0')
+
+    select.vm.$emit('update:modelValue', '-1')
+    await flushPromises()
+    expect(select.vm.$props.modelValue).toBe('-1')
+    select.vm.$emit('change', '-1') // 本页状态框带 @change，改完立刻查
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '' }))
+
+    select.vm.$emit('update:modelValue', '-2')
+    await flushPromises()
+    expect(select.vm.$props.modelValue).toBe('-2')
+    select.vm.$emit('change', '-2')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '-1' }))
+  })
+
+  it('「重置」只清空条件、不发请求，且状态下拉回到「全部」', async () => {
     const paged = pagedSpy()
     const wrapper = mountPage()
     await flushPromises()
@@ -179,6 +210,10 @@ describe('自定义告警 · 表格操作与接口调用（对齐旧 CommJobList
 
     expect(paged).toHaveBeenCalledTimes(1)
     expect((wrapper.get('input[placeholder="队列名"]').element as HTMLInputElement).value).toBe('')
+    // 重置后状态框回到「全部」（哨兵 -1，非空 → el-select 能显示「全部」；旧版是空 placeholder）
+    const select = wrapper.findAllComponents({ name: 'ElSelect' })
+      .find((s) => typeof s.props('modelValue') === 'string')!
+    expect(select.vm.$props.modelValue).toBe('-1')
   })
 
   it('「更多..」常显：未勾选置灰，勾选后可点；启用/禁用/删除各自打到对应接口（ids 用勾选的 jobId）', async () => {

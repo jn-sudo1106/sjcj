@@ -11,7 +11,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery,
-  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, CreateJobsInput, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
@@ -21,6 +21,7 @@ import type {
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   configFromLegacy,
+  createJobsToLegacy,
   configUrlFromLegacy,
   legacyConfigRecord,
   configLogFromLegacy,
@@ -62,6 +63,7 @@ import {
   flowPageFromLegacy,
   flowToLegacy,
   sourceToLegacyParams,
+  sourceCoreToLegacyParams,
   sourceStepsFromLegacy,
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
@@ -78,10 +80,13 @@ export { fetchPromptList } from './prompt'
 export type { PromptTemplateItem } from './prompt'
 export type { UsedTable } from '@/utils/site/usedTables'
 import { issueTagsForWrite, parseIssueTags } from '@/utils/sourceMark'
+import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { aggregateUsedTables, countSourcesWithoutFlow, type UsedTable } from '@/utils/site/usedTables'
+import { snatchAckFrom, type SnatchAck } from '@/utils/snatchResult'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
+export * from './logReport'
 export { parseNextStepReceipt, type NextStepReceipt, type NextStepReceiptEntry } from './legacyAdapters'
 
 // 对方后端尚未提供对应实现的资产能力强制走 Mock；网站读取链路已在 siteApi 单独切真实。
@@ -328,6 +333,22 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
   }
 }
 
+const CREATE_DISABLED_MESSAGE = '当前环境未开启新建通道（VITE_SITE_CREATE_TARGET=production），无法新增源'
+
+/** 在已有网站下建一个空白流程的源：snatchSave → bindSite（真实写，调用方先过 isProductionCreateEnabled）。 */
+async function createSourceInSite(site: Site, source: Source): Promise<{ ok: boolean; message?: string; sourceId?: string }> {
+  const liveWrite = { mode: 'http' as const }
+  try {
+    const saved = await legacySnatchSaveRequest(legacySnatchSavePayloadFromSource(site, source), liveWrite)
+    if (!saved.ok || !saved.sourceId) return { ok: false, message: saved.message || '保存失败' }
+    const bound = await sourceApi.bindSite(saved.sourceId, site.siteId, liveWrite)
+    if (!bound.ok) return { ok: false, sourceId: saved.sourceId, message: `源 ${saved.sourceId} 已建，关联网站失败：${bound.message || '未知错误'}` }
+    return { ok: true, sourceId: saved.sourceId }
+  } catch (error) {
+    return { ok: false, message: (error as Error).message ?? '请求失败' }
+  }
+}
+
 // item/next/nextConfigPaged 本身不带 topic（旧 config.topic，真实队列）和登录语义；2026-08-26
 // 生产实测（源 430016821/430016822/430016516）确认每个 configId 的 topic 各不相同、且有真实业务
 // 含义，此前画布只能回退到节点模板的硬编码默认队列，显示的是假值而非缺值；同批实测另发现登录类
@@ -515,6 +536,10 @@ export const sourceApi = {
         tags: p?.tags ?? [],
         field: p?.field,
         type: p?.type,
+        // 10-15「我的视图」目录：后端按视图目录取源（目录里的源 ∪ 绑定来源组的当前成员）。
+        // **只放在 sourcePaged 里，不进 sourceCondParams**：changeMembersByRange 等其它按条件的接口不认它，
+        // 混进去会变成「不限」（按范围调整来源组甚至会带 confirmAll 改全平台）。
+        viewCategoryId: p?.viewCategoryId,
       },
     })
     return sourcePageFromLegacy(result)
@@ -526,6 +551,23 @@ export const sourceApi = {
       httpParams: { sourceId },
     })
     return result ? sourceFromLegacy(result) : null
+  },
+  /**
+   * 编辑源（旧平台 `POST /v1/source/updateSource`，参数同时进 body 与 query）。
+   *
+   * 旧 `config/column.config.js` 的「备注」列就是靠它保存的：
+   * `save: (record) => updateSource({ sourceId, remark, author, tags })`。
+   * ⚠️ 注意 save 回调把 **author / tags 也一起回传**——只发 remark 会把这两个字段清空，
+   * 详情抽屉里改备注时必须照旧带上。
+   * `client.ts` 已把该端点列进写白名单（2026-08-28 拍板放开源重命名），生产环境可直接发。
+   */
+  updateSource: async (payload: Record<string, unknown> & { sourceId: string }): Promise<Ack> => {
+    const result = await request<unknown>('source/updateSource', payload, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: payload,
+    })
+    return ackFromApiResult(result)
   },
   // 旧分类接口首屏只返回根节点；展开节点时按 parentId 懒加载子级。
   sourceCategories: async (parentId?: string) => {
@@ -582,6 +624,9 @@ export const sourceApi = {
         const r = row as Record<string, unknown>
         const count = r.count != null ? Number(r.count) : undefined
         const seq = r.seq != null ? Number(r.seq) : undefined
+        // 2026-10-16 补：这里以前也漏了 remark（同 sourceCategoriesFromLegacy 的毛病）——
+        // 搜索态下点「编辑」同样要看这个字段回填备注。
+        const remark = r.remark == null ? undefined : String(r.remark)
         return {
           id: String(r.categoryId ?? r.id ?? ''),
           name: String(r.categoryName ?? r.name ?? ''),
@@ -589,6 +634,7 @@ export const sourceApi = {
           path: String(r.path ?? ''),
           ...(count != null ? { count } : {}),
           ...(seq != null ? { seq } : {}),
+          ...(remark == null ? {} : { remark }),
         }
       })
       .filter((item) => item.id && item.name)
@@ -702,6 +748,27 @@ export const sourceApi = {
   },
 
   /**
+   * 批量配定时（2026-10-23，旧源列表「定时任务变更 → 批量配定时」）。
+   *
+   * `POST source/createJobs`，参数全在 query（旧 `method:'post', params`）。和上面 saveSourceCron
+   * 的新建分支是同一个端点，区别是这里照旧弹窗 1:1 多带 `flowId`，且 `configId` 发空串
+   * （批量没有单个节点配置；186 实测不带 configId 报 not present，`configId=` 正常）。
+   * ⚠️ 只会新建：源上已有定时也会再建一条，旧平台就是这个行为。
+   */
+  createJobs: async (input: CreateJobsInput): Promise<Ack> => {
+    const httpParams = createJobsToLegacy(input)
+    if (!httpParams.ids) return { ok: false, message: '缺少源' }
+    if (!httpParams.cron) return { ok: false, message: '缺少 cron 表达式' }
+    const result = await request<unknown>('source/createJobs', { ids: input.sourceIds, cron: httpParams.cron }, {
+      method: 'POST',
+      httpEndpoint: 'source/createJobs',
+      paramsIn: 'query',
+      keepEmptyParams: ['configId'],
+      httpParams,
+    })
+    return ackFromApiResult(result)
+  },
+  /**
    * 启用 / 停用定时任务（2026-09-18）。
    *
    * 旧平台 `changeJobState`：启用打 `job/enableJob`、停用打 `job/disableJob`，
@@ -765,8 +832,9 @@ export const sourceApi = {
       httpParams: { ids: sourceIds.join(',') },
     }),
   /** 带参发抓取（旧 /v1/source/sendSnatchWithParam）：query 传 ids/all/skip/include/queue，body 仅传 param（{ "configId_paramId": "v1;v2" }）。 */
-  sendSnatchWithParam: (payload: SendSnatchWithParamPayload) =>
-    request<Ack>('source/sendSnatchWithParam', payload.param, {
+  /** 回执经 snatchAckFrom 整理：一个都没发出去时抛错（原因已翻成人话），部分发出时带回 failed（2026-10-22） */
+  sendSnatchWithParam: (payload: SendSnatchWithParamPayload): Promise<SnatchAck> =>
+    request<unknown>('source/sendSnatchWithParam', payload.param, {
       method: 'POST',
       httpEndpoint: 'source/sendSnatchWithParam',
       query: {
@@ -778,7 +846,7 @@ export const sourceApi = {
         // 1008-04「指定流程运行一次」：用这条流程跑这一次，不影响定时与默认流程（旧平台 source.js 同口径）
         ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
-    }),
+    }).then(snatchAckFrom),
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
@@ -1034,6 +1102,14 @@ export const sourceApi = {
       method: 'POST',
       httpEndpoint: 'source/updateSource',
       httpParams: sourceToLegacyParams(source),
+    })
+    return ackFromApiResult(result)
+  },
+  updateSourceCore: async (sourceId: string, patch: { name?: string; url?: string; coreParam: string }): Promise<Ack> => {
+    const result = await request<unknown>('source/updateSource', { source: { sourceId, ...patch } }, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: sourceCoreToLegacyParams(sourceId, patch),
     })
     return ackFromApiResult(result)
   },
@@ -1412,6 +1488,19 @@ export const siteApi = {
     })
     return ackFromApiResult(result)
   },
+  /**
+   * 删除网站（旧平台 SiteList 同款，真实路径 GET /v1/site/delete）。逻辑删除（is_delete=1），
+   * 后端会校验网站下的源数量；调用方需先二次确认再调。单个删除走 siteId。
+   */
+  siteDelete: async (siteId: string): Promise<Ack> => {
+    if (!siteId?.trim()) return { ok: false, message: '缺少网站' }
+    const result = await request<unknown>('site/siteDelete', {}, {
+      method: 'GET',
+      httpEndpoint: 'site/delete',
+      httpParams: { siteId },
+    })
+    return ackFromApiResult(result)
+  },
   siteSources: (siteId: string, options: { force?: boolean } = {}): Promise<Source[]> => {
     const cached = siteSourcesCache.get(siteId)
     // 进行中的完整请求无论耗时多久都必须复用；TTL 只约束已经完成的值，否则一个 36s 请求
@@ -1450,16 +1539,65 @@ export const siteApi = {
   refreshSiteSources: (siteId: string) => {
     siteSourcesCache.delete(siteId)
   },
-  // 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
-  sourceAdd: (siteId: string, source: Source, inherit = false) =>
-    assetMockRequest<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
+  /**
+   * 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景（只在 mock 有效）。
+   * site/addSource 是自造的 mock 名；真实路径同 siteCreate：snatchSave → bindSite，开关也同 siteCreate。
+   */
+  sourceAdd: async (siteId: string, source: Source, inherit = false): Promise<{ ok: boolean; message?: string; sourceId?: string }> => {
+    if (!isProductionCreateEnabled()) {
+      if (isMockMode() && !isProductionBackend()) {
+        return assetMockRequest('site/addSource', { siteId, source, inherit })
+      }
+      return { ok: false, message: CREATE_DISABLED_MESSAGE }
+    }
+    // 参数源的 baseUrl/urlTemplate/paramRefs 在 snatchSave 里没有对应字段，硬建会丢参数
+    if (source.kind === 'param') return { ok: false, message: '参数源暂未接入真实后端，请先用普通源 + $PARAM$ 占位符' }
+    const site = await siteApi.siteDetail(siteId)
+    if (!site) return { ok: false, message: `网站「${siteId}」不存在` }
+    return createSourceInSite(site, source)
+  },
   cloneSource: (requestBody: SourceCloneRequest) =>
     // 侧栏「按模板源添加」已改走 source/copySource；本方法是自造 BFF，保留给旧测试与 mock。
     assetMockRequest<SourceCloneResult>('site/cloneSource', requestBody as unknown as Record<string, unknown>),
   sourceRemove: (siteId: string, sourceId: string) => assetMockRequest<Ack>('site/removeSource', { siteId, sourceId }),
-  // 按网站批量导入源：一行一条「名称;URL」，导入后从空白流程开始。
-  siteImportSources: (siteId: string, lines: string) =>
-    assetMockRequest<{ ok: boolean; message?: string; added?: number; skipped?: number }>('site/importSources', { siteId, lines }),
+  /**
+   * 按网站批量导入源：一行一条「名称;URL」，导入后从空白流程开始。
+   * 后端没有批量导入端点（site/importSources 是自造的 mock 名），真实路径逐行走 siteCreate 同一套
+   * snatchSave → bindSite；开关同 siteCreate。之前只接了 mock，真实网站在夹具里查不到，报「网站「126」不存在」。
+   */
+  siteImportSources: async (siteId: string, lines: string): Promise<{ ok: boolean; message?: string; added?: number; skipped?: number }> => {
+    if (!isProductionCreateEnabled()) {
+      if (isMockMode() && !isProductionBackend()) {
+        return assetMockRequest('site/importSources', { siteId, lines })
+      }
+      return { ok: false, message: CREATE_DISABLED_MESSAGE }
+    }
+    const rows = lines.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    const site = await siteApi.siteDetail(siteId)
+    if (!site) return { ok: false, message: `网站「${siteId}」不存在` }
+    let added = 0
+    let skipped = 0
+    const failures: string[] = []
+    for (const row of rows) {
+      // 只按第一个分号切：URL 里可能自带分号
+      const sep = row.search(/[;；]/)
+      const name = (sep < 0 ? row : row.slice(0, sep)).trim()
+      const url = sep < 0 ? '' : row.slice(sep + 1).trim()
+      if (!name) {
+        skipped++
+        continue
+      }
+      const source: Source = { sourceId: '', name, url: urlOrPlaceholder(url), configId: '', mainTable: '', owner: site.owner || 'admin', state: 'C' }
+      const res = await createSourceInSite(site, source)
+      if (res.ok) added++
+      else failures.push(`${name}（${res.message}）`)
+    }
+    if (!added && !failures.length) return { ok: false, message: '没有可导入的行，请检查「名称;URL」格式' }
+    const parts = [`已导入 ${added} 条源`]
+    if (skipped) parts.push(`跳过 ${skipped} 条`)
+    if (failures.length) parts.push(`失败 ${failures.length} 条：${failures.join('；')}`)
+    return { ok: added > 0, added, skipped: skipped + failures.length, message: parts.join('，') }
+  },
   // 危险端点：把源头已保存的流程整条覆盖到同网站所选源，UI 走多选列表 + 危险确认
   siteSyncFlow: (siteId: string, fromSourceId: string, sourceIds: string[]) =>
     assetMockRequest<Ack>('site/syncFlow', { siteId, fromSourceId, sourceIds }),
@@ -2263,7 +2401,11 @@ function buildLegacyMore(q: RowQuery) {
  * 页面上这时查不到数据，导出也不能因为条件被丢掉而变成整表。
  */
 function buildExportMore(q: RowQuery) {
-  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId)], buildLegacyMore(q))
+  // 带引号写法与 backTraceSources 一致（10-16 186 实测导出认）；空数组不加条件，调用方自己保证非空
+  const sourceClause = q.sourceIds?.length
+    ? `SOURCE_ID in (${q.sourceIds.map((id) => `'${escapeLegacySqlString(id)}'`).join(',')})`
+    : undefined
+  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId), sourceClause], buildLegacyMore(q))
 }
 
 /**
@@ -2934,7 +3076,8 @@ export const configApi = {
    * - list **不分页**，`typeName` 模糊匹配；读接口成功时 `code` 是 null（client 只把非空非 '0' 的 code 当失败，正好兼容）；
    * - add / update 走 **JSON body**；add 可不传 sourceType（后端取 max+1），返回 data = 新类型 ID；
    * - update 是**增量更新**：只传改动字段，其余不动——所以调用方只发变更字段，别把表单空值整份发过去；
-   * - delete 不接：被引用时后端会不会拒删无法无损验证（0924 方案 §4.2 / B-3），新平台不提供删除。
+   * - delete：GET `sourceType/delete?sourceType=`。2026-10-14 在 186 实测：类型被配置引用时后端拒绝
+   *   （success:false，msg「该源类型已被配置引用，无法删除」），**软删除的配置也算引用**；没被引用才删得掉。
    */
   nodeTypeList: async (typeName?: string): Promise<NodeType[]> => {
     const result = await request<unknown>('sourceType/list', { typeName }, {
@@ -2955,6 +3098,9 @@ export const configApi = {
     const body = nodeTypeBody(input)
     return request<Ack>('sourceType/add', body, { method: 'POST', httpParams: body })
   },
+  /** 删除节点类型（旧 deleteSourceType：GET，被配置 / 有效源引用时后端拒绝并回 msg） */
+  nodeTypeDelete: async (sourceType: string): Promise<Ack> =>
+    request<Ack>('sourceType/delete', { sourceType }, { method: 'GET', httpParams: { sourceType } }),
   /** `patch` 只放改动的字段；sourceType 是主键，必带 */
   nodeTypeUpdate: async (sourceType: string, patch: NodeTypeInput): Promise<Ack> => {
     const body = { ...nodeTypeBody(patch), sourceType: Number(sourceType) }
@@ -2997,6 +3143,9 @@ export const entryApi = {
       enable: p.enable,
       // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
       cond: p.cond,
+      // 1022：排序（白名单 entryTypeId/typeName/tableName/keyField/state/updateDt，order=asc|desc）；不传 = 表 ID 倒序
+      field: p.field,
+      order: p.order,
     }
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
@@ -3216,7 +3365,7 @@ function isFlowNotFound(e: unknown): boolean {
 function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
   const view = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   const text = (v: unknown) => (v == null || v === '' ? undefined : String(v))
-  const bindings = (Array.isArray(view.bindings) ? view.bindings : []).map((item): SourceFlowBind => {
+  const bindRows = (list: unknown) => (Array.isArray(list) ? list : []).map((item): SourceFlowBind => {
     const row = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
     return {
       id: String(row.id ?? ''),
@@ -3229,16 +3378,24 @@ function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
       updatedAt: text(row.updateDt ?? row.updatedAt),
     }
   })
+  const sourceGroupId = text(view.sourceGroupId)
+  const flowIds = (Array.isArray(view.flowIds) ? view.flowIds : []).map(String)
+  const defaultFlowId = text(view.defaultFlowId)
+  const bindings = bindRows(view.bindings)
+  // 2026-10-15 起后端多返回 own*（源自有流程）。未入组时 own* 与顶层三项相同；
+  // 旧后端没有 own*：未入组回落到顶层，入组视为没有自有流程。
+  const hasOwn = 'ownFlowIds' in view || 'ownBindings' in view
   return {
     sourceId: text(view.sourceId),
-    sourceGroupId: text(view.sourceGroupId),
-    flowIds: (Array.isArray(view.flowIds) ? view.flowIds : []).map(String),
-    defaultFlowId: text(view.defaultFlowId),
+    sourceGroupId,
+    flowIds,
+    defaultFlowId,
     bindings,
+    ownFlowIds: hasOwn ? (Array.isArray(view.ownFlowIds) ? view.ownFlowIds : []).map(String) : (sourceGroupId ? [] : flowIds),
+    ownDefaultFlowId: hasOwn ? text(view.ownDefaultFlowId) : (sourceGroupId ? undefined : defaultFlowId),
+    ownBindings: hasOwn ? bindRows(view.ownBindings) : (sourceGroupId ? [] : bindings),
   }
 }
-
-const GROUP_FLOW_LOCKED = '来源使用组统一流程，请先退出来源组再设置独立流程'
 
 /** source-group/* 返回的成员行 → 前端口径（ID 一律字符串） */
 function sourceGroupMemberFromApi(value: unknown): { sourceId: string; sourceName: string; [key: string]: unknown } {
@@ -3437,7 +3594,7 @@ export const sourceGroupApi = {
 /**
  * 源的多流程绑定（画布流程标签栏 / 流程列表用）。底层是来源组接口文档里的 `source-group/*`
  * （bee-config SourceGroupController，2026-10-08 上线 217）：一个源可关联多条流程，有一条默认流程；
- * 入组的源统一使用来源组的流程，不能单独改绑。
+ * 入组的源只走来源组的流程（只读，改要去来源组；1021-02），运行入口是组默认；独立源维护自己的流程，运行入口是本源默认。
  *
  * 保存只有一个端点 `bindSourceFlows`——**整体替换**绑定列表并指定默认，带并发快照。所以每次写都先读一遍
  * 最新绑定（sourceFlows），在它的基础上增 / 改 / 删，再连同读到的快照一起提交；别人刚改过会被后端拒绝
@@ -3455,54 +3612,78 @@ export const workflowBindingApi = {
     })
     return sourceFlowsViewFromApi(result)
   },
-  list: async (sourceId: string): Promise<WorkflowBinding[]> => {
+  /** `withNames: false` 不逐条取流程详情（名字退回「流程 #ID」）：画布加载只用 ID，别让慢的 flowDetail 挡住整页 */
+  list: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<WorkflowBinding[]> =>
+    (await workflowBindingApi.load(sourceId, options)).rows,
+  /**
+   * 绑定行 + 源所在的来源组。来源组还没绑流程时 rows 是空的，标签栏仍要知道源在组里（不给「＋」）。
+   * 入组的源只列来源组的流程，运行入口是组默认（1021-02：组内源只走组流程；186 实测后端也只认组绑定，
+   * 入组前留下的自有绑定不生效、也改不了，这里不列）。
+   */
+  load: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<{ rows: WorkflowBinding[]; sourceGroupId: string | null }> => {
     // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
-    if (!/^\d+$/.test(sourceId)) return []
+    if (!/^\d+$/.test(sourceId)) return { rows: [], sourceGroupId: null }
     const view = await workflowBindingApi.view(sourceId)
-    const active = view.bindings.filter((binding) => binding.state === 'ACTIVE')
-    // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
+    const groupId = view.sourceGroupId
+    const groupActive = groupId ? view.bindings.filter((binding) => binding.state === 'ACTIVE') : []
+    const ownActive = groupId ? [] : view.ownBindings.filter((binding) => binding.state === 'ACTIVE')
+    const byDefault = (a: SourceFlowBind, b: SourceFlowBind) => Number(b.isDefault) - Number(a.isDefault)
+    const groupDefaultId = groupActive.find((binding) => binding.isDefault)?.flowId
+    const mainFlowId = groupId ? groupDefaultId : ownActive.find((binding) => binding.isDefault)?.flowId
+    const ownIds = new Set(ownActive.map((binding) => binding.flowId))
+    const groupIds = new Set(groupActive.map((binding) => binding.flowId))
+    const ordered = [...(groupId ? groupActive : ownActive)].sort(byDefault)
+    // 流程名 / 是否禁用：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID、按启用处理
     const names = new Map<string, string>()
-    await Promise.all(active.map(async (binding) => {
+    const disabledFlows = new Set<string>()
+    if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
       const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
+      if (flow?.disabled) disabledFlows.add(binding.flowId)
     }))
-    const inherited = !!view.sourceGroupId
-    return active
-      .slice()
-      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
-      .map((binding, index): WorkflowBinding => ({
+    const rows = ordered.map((binding, index): WorkflowBinding => {
+      const inherited = groupIds.has(binding.flowId)
+      const primary = binding.flowId === mainFlowId
+      return {
         id: binding.id,
         bindType: inherited ? 'SOURCE_GROUP' : 'SOURCE',
-        bindId: inherited ? String(view.sourceGroupId) : sourceId,
+        bindId: inherited ? String(groupId) : sourceId,
         workflowId: binding.flowId,
         workflowCode: `FLOW-${binding.flowId}`,
         workflowName: names.get(binding.flowId) ?? `流程 #${binding.flowId}`,
         publishedFlowId: binding.flowId,
         versionStatus: 'PUBLISHED',
-        workflowStatus: 'ACTIVE',
+        // 流程禁用（flow/changeFlowEnable，cs_flow.IS_DELETE=1）：禁用后手动抓取 / 指定流程运行 / 定时都不跑（10-22 后端）
+        workflowStatus: disabledFlows.has(binding.flowId) ? 'DISABLED' : 'ACTIVE',
         versionManaged: false,
         followsCurrentVersion: true,
-        role: binding.isDefault ? 'MAIN' : 'AUX',
-        primary: binding.isDefault,
+        role: primary ? 'MAIN' : 'AUX',
+        primary,
         priority: index,
         status: 'ACTIVE',
         inherited,
+        own: ownIds.has(binding.flowId),
+        groupDefault: inherited && binding.flowId === groupDefaultId,
         updatedAt: binding.updatedAt,
-      }))
+      }
+    })
+    return { rows, sourceGroupId: groupId ?? null }
   },
-  /** 整体保存：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交 */
+  /**
+   * 整体保存源自有的流程：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交。
+   * 只动 own* 那一套，来源组的流程不经这里改。入组的源后端一律拒绝（10-21 186 实测），界面上组内源不给入口。
+   */
   save: async (
     sourceId: string,
     change: (view: SourceFlowsView) => { flowIds: string[]; defaultFlowId: string | null },
   ): Promise<void> => {
     const view = await workflowBindingApi.view(sourceId)
-    if (view.sourceGroupId) throw new Error(GROUP_FLOW_LOCKED)
     const next = change(view)
     const body = {
       sourceId,
-      expectedFlowIds: view.flowIds,
+      expectedFlowIds: view.ownFlowIds,
       // 停用后也要提交读到的原值；没有默认就是 null
-      expectedDefaultFlowId: view.defaultFlowId ?? null,
+      expectedDefaultFlowId: view.ownDefaultFlowId ?? null,
       flowIds: next.flowIds,
       defaultFlowId: next.defaultFlowId,
     }
@@ -3513,20 +3694,22 @@ export const workflowBindingApi = {
   /** 关联一条已有流程；源上还没有默认流程、或明确要求 primary 时，把它设为默认 */
   bind: async (input: { sourceId: string; workflowId: string; primary?: boolean }) =>
     workflowBindingApi.save(input.sourceId, (view) => ({
-      flowIds: view.flowIds.includes(input.workflowId) ? view.flowIds : [...view.flowIds, input.workflowId],
-      defaultFlowId: input.primary || !view.defaultFlowId ? input.workflowId : view.defaultFlowId,
+      flowIds: view.ownFlowIds.includes(input.workflowId) ? view.ownFlowIds : [...view.ownFlowIds, input.workflowId],
+      defaultFlowId: input.primary || !view.ownDefaultFlowId ? input.workflowId : view.ownDefaultFlowId,
     })),
   setPrimary: async (sourceId: string, workflowId: string) =>
     workflowBindingApi.save(sourceId, (view) => {
-      if (!view.flowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
-      return { flowIds: view.flowIds, defaultFlowId: workflowId }
+      if (!view.ownFlowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
+      return { flowIds: view.ownFlowIds, defaultFlowId: workflowId }
     }),
-  unbind: async (sourceId: string, workflowId: string) =>
+  /** `nextPrimaryId`：解绑的是默认流程时，同一次提交把默认换到这条（10-21 画布右键「解绑流程」） */
+  unbind: async (sourceId: string, workflowId: string, nextPrimaryId?: string) =>
     workflowBindingApi.save(sourceId, (view) => {
-      const rest = view.flowIds.filter((id) => id !== workflowId)
+      const rest = view.ownFlowIds.filter((id) => id !== workflowId)
+      if (nextPrimaryId && rest.includes(nextPrimaryId)) return { flowIds: rest, defaultFlowId: nextPrimaryId }
       // 默认标记只能切换，不能直接删：还有别的流程时，要先把默认切走（与后端对「取消默认关联」的口径一致）
-      if (view.defaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
-      return { flowIds: rest, defaultFlowId: rest.length ? (view.defaultFlowId ?? null) : null }
+      if (view.ownDefaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
+      return { flowIds: rest, defaultFlowId: rest.length ? (view.ownDefaultFlowId ?? null) : null }
     }),
   /** 新建一条空白流程并关联到源：两步（先建流程、再关联），第二步失败时说明流程已建出来，别留下谁也不知道的孤儿 */
   createForSource: async (input: { sourceId: string; name: string; definition: FlowDefinition; primary?: boolean }): Promise<WorkflowBinding> => {
@@ -3842,6 +4025,15 @@ export interface FlowVersionRow {
   /** 0 正常；-1 已放弃 / 归档 */
   isDelete: number
   baseId: string | null
+  /** 2026-10-14 历史版本列表用（217 实测 overview 都有返回）：创建 / 发布 / 放弃或归档的时间和人 */
+  createDt?: string | null
+  createBy?: string | null
+  publishDt?: string | null
+  publishBy?: string | null
+  deleteDt?: string | null
+  deleteBy?: string | null
+  /** 版本内容指纹：放弃的草稿与基线相同 = 草稿里什么都没改 */
+  contentHash?: string | null
 }
 
 export interface FlowVersionOverview {
@@ -3878,6 +4070,13 @@ export const flowVersionApi = {
         isLock: Number(v.isLock ?? 0),
         isDelete: Number(v.isDelete ?? 0),
         baseId: str(v.baseId),
+        createDt: str(v.createDt),
+        createBy: str(v.createBy),
+        publishDt: str(v.publishDt),
+        publishBy: str(v.publishBy),
+        deleteDt: str(v.deleteDt),
+        deleteBy: str(v.deleteBy),
+        contentHash: str(v.contentHash),
       })),
     }
   },

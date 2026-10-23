@@ -221,9 +221,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(resultView).not.toContain('templateLayout')
   })
 
-  it('新建采集分类使用可搜索的目录树', () => {
+  it('新建采集分类使用可搜索的目录树（10-22 起只选业务目录）', () => {
     expect(newSiteWizard).toContain('CategoryTreePicker')
-    expect(newSiteWizard).toContain('<CategoryTreePicker v-model="gateCategory" />')
+    expect(newSiteWizard).toContain('<CategoryTreePicker v-model="gateCategory" :root-id="BIZ_DIR_ROOT_ID" />')
     expect(newSiteWizard).not.toContain('GATE_CATEGORY_OPTIONS')
     expect(newSiteWizard).not.toContain('<select class="rc-select" v-model="gateSite.category"')
     expect(flowCanvas).not.toContain('GATE_CATEGORY_OPTIONS')

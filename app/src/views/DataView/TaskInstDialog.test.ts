@@ -33,4 +33,25 @@ describe('TaskInstDialog · 旧任务实例字段迁移', () => {
 
     expect(taskPaged).toHaveBeenLastCalledWith(expect.objectContaining({ fileId: 'file-02' }))
   })
+
+  it('1021-05：任务状态码显示中文，未知码原样并提示「未知状态」', async () => {
+    vi.spyOn(dataApi, 'taskInstPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { taskId: 't1', state: 'L' },
+        { taskId: 't2', state: 'Q9' },
+      ] as never,
+    })
+    wrapper = mount(TaskInstDialog, {
+      attachTo: document.body,
+      props: { modelValue: false },
+      global: { plugins: [ElementPlus] },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+
+    const cells = wrapper.findAll('[data-testid="task-state"]')
+    expect(cells.map((c) => c.text())).toEqual(['运行中', 'Q9'])
+    expect(cells[1].attributes('title')).toBe('未知状态：Q9')
+  })
 })

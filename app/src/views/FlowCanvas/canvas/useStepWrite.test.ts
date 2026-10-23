@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { entryApi, flowCenterApi, itemApi, sourceApi } from '@/api'
+import { entryApi, flowCenterApi, flowVersionApi, itemApi, sourceApi } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { useFlowVersionStore } from '@/stores/flowVersion'
+import { outputTableMissing } from '@/utils/flow/stepPersist'
 import { useStepWrite } from './useStepWrite'
 import { cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 import type { Step } from '@/api'
@@ -259,6 +261,43 @@ describe('useStepWrite.persistFlowSteps', () => {
     ])
     const again = await persistFlowSteps()
     expect(again.created).toBe(1)
+  })
+
+  // 2026-10-15：186 实测启用版本的流程写草稿不校验 OUT_ENTRY——缺输出表的新节点照常建进草稿
+  it('流程启用版本：缺输出表的新节点照常 saveItemConfig 建进草稿（不带 outEntry）', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [SNAPSHOT],
+    )
+    source.rememberSteps([SNAPSHOT], 'replace')
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({
+      enabled: true, curVer: null, nextVer: 2, publishId: null, draftId: '1043',
+      versions: [{ versionId: '1043', flowVer: 1, ver: 4, state: 'W', isLock: 0, isDelete: 0, baseId: null }],
+    } as never)
+    await useFlowVersionStore().load('1400935')
+    const localId = flow.insertAfter('40600', 'excel-collect')!
+    flow.configs[localId].configId = '1401215'
+    flow.configs[localId].title = '缺输出表'
+    if (flow.configs[localId].collectCfg) flow.configs[localId].collectCfg!.outputTable = ''
+    expect(outputTableMissing(flow.configs[localId], undefined)).toBe(true)
+
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '41876', name: '缺输出表', configId: '1401215', outputTable: undefined, enabled: false, flowId: '1400935' },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    const result = await persistFlowSteps()
+
+    expect(result.created).toBe(1)
+    expect(create.mock.calls[0][0].outputTable ?? null).toBeNull()
+    expect(create.mock.calls[0][1]).toMatchObject({ flowId: '1400935', versionId: '1043', ver: 4 })
   })
 
   it('缺输出表的存量行（规则节点，输入表也为空）改名：先改画布并提示，不调 stepModify（0927 H1）', async () => {
@@ -928,6 +967,39 @@ describe('useStepWrite.deleteCanvasNode', () => {
     expect(flow.configs['40600']).toBeUndefined()
     expect(source.stepSnapshots['40600']).toBeUndefined()
   })
+
+  it('有下游时先把下游 lastStep 改挂到被删节点的上游再删（后端拒删仍被引用的步骤）', async () => {
+    setActivePinia(createPinia())
+    const { source } = loadTestSource()
+    const child: Step = { ...SNAPSHOT, stepId: '40601', name: '下游', dependsOn: ['40600'] }
+    const merged: Step = { ...SNAPSHOT, stepId: '40602', name: '合并', dependsOn: ['40600', '40599'] }
+    source.rememberSteps([child, merged], 'merge')
+    const order: string[] = []
+    const modify = vi.spyOn(itemApi, 'stepModify').mockImplementation(async (s) => { order.push(`modify:${s.stepId}`); return { ok: true, message: 'ok' } })
+    vi.spyOn(itemApi, 'deleteStep').mockImplementation(async (id) => { order.push(`delete:${id}`); return { ok: true, message: 'ok' } })
+
+    const { deleteCanvasNode } = useStepWrite()
+    await expect(deleteCanvasNode('40600', { confirmed: true })).resolves.toBe(true)
+
+    expect(order).toEqual(['modify:40601', 'modify:40602', 'delete:40600'])
+    expect(modify.mock.calls[0][0].dependsOn).toEqual(['0'])
+    expect(modify.mock.calls[1][0].dependsOn).toEqual(['40599'])
+    expect(source.stepSnapshots['40601'].dependsOn).toEqual(['0'])
+  })
+
+  it('下游改挂失败时不删除', async () => {
+    setActivePinia(createPinia())
+    const { flow, source } = loadTestSource()
+    source.rememberSteps([{ ...SNAPSHOT, stepId: '40601', name: '下游', dependsOn: ['40600'] }], 'merge')
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: false, message: '内容已变更' })
+    const del = vi.spyOn(itemApi, 'deleteStep').mockResolvedValue({ ok: true, message: 'ok' })
+
+    const { deleteCanvasNode } = useStepWrite()
+    await expect(deleteCanvasNode('40600', { confirmed: true })).resolves.toBe(false)
+
+    expect(del).not.toHaveBeenCalled()
+    expect(flow.configs['40600']).toBeDefined()
+  })
 })
 
 // 2026-09-04：新建网站 / 新建源之后一进画布，自动保存把**画布合成的虚拟起点**
@@ -1111,5 +1183,50 @@ describe('useStepWrite.relinkOrphan（0925 孤儿修复）', () => {
     expect(sent.outColumns).toEqual(['COL_C'])
     // 不触发列名映射的额外网络往返
     expect(entryDetail).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-10-21：任务 URL 来源字段 / 表达式对齐旧平台
+describe('useStepWrite · 任务 URL 来源字段与表达式', () => {
+  function setupChain(upstreamUrl: string) {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const steps: Step[] = [{ ...SNAPSHOT, stepId: '40597', name: '列表', dependsOn: ['0'], url: upstreamUrl, itemId: '52000351' }]
+    flow.loadFromSource(
+      { sourceId: '430016824', name: '明阳科技', url: 'http://x', configId: '1400935', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      steps,
+    )
+    source.rememberSteps(steps, 'replace')
+    flow.insertAfter('40597', 'web')
+    const localId = flow.selectedId
+    flow.configs[localId].configId = '1400999'
+    flow.configs[localId].collectCfg!.outputTable = '6200026'
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      ...steps,
+      { ...SNAPSHOT, stepId: '40700', name: flow.configs[localId].title, configId: '1400999', dependsOn: ['40597'] },
+    ])
+    return { flow, localId }
+  }
+
+  it('新建采集后续步：表达式固定 $VAL$，不照抄上游的拼接表达式；来源字段用节点上选的', async () => {
+    const { flow, localId } = setupChain("K2+'#need_upload_xq/xq/'")
+    flow.configs[localId].itemId = '9001'
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    await useStepWrite().persistFlowSteps()
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][0]).toMatchObject({ url: '$VAL$', itemId: '9001' })
+  })
+
+  // 10-21 定先不强制：没选来源字段照常建，itemId 为空（不再照抄上游）
+  it('采集后续步没选来源字段：照常新建，来源字段为空', async () => {
+    setupChain('$VAL$')
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    await useStepWrite().persistFlowSteps()
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][0].itemId).toBeUndefined()
+    expect(create.mock.calls[0][0].url).toBe('$VAL$')
   })
 })

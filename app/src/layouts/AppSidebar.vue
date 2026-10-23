@@ -4,7 +4,7 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer, Setting, Tickets } from '@element-plus/icons-vue'
+import { Box, Clock, Connection, DataAnalysis, Document, Files, Grid, Histogram, Monitor, Odometer, Setting, SetUp, Tickets, Tools } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
@@ -24,7 +24,11 @@ const groupLabels = {
   config: '流程与规则',
   tools: '运行与监控',
   intelligence: '智能能力',
-  template: '模板配置',
+  // 问数配置（1015）：原「模板配置」组改名，组下只剩一个入口，8 个子模块进到页内 tab
+  template: '问数配置',
+  // 辅助工具（1020）：独立成组。Object.entries 的顺序就是侧栏顺序，所以本组落在
+  // 「问数配置」之后、「系统设置」之前；要挪位置改这里一行的位置即可。
+  auxiliary: '辅助工具',
   settings: '系统设置',
 } as const
 
@@ -53,8 +57,15 @@ const navIcons: Record<string, Component> = {
   tasks: Clock,
   sync: Connection,
   monitor: Monitor,
-  // 模板配置（1013 起逐个迁入）：TAB key 带连字符，对象键必须加引号，漏加不报错只出空图标
-  'sql-template': Tickets,
+  // 问数配置 → 基础配置（1015 迁入，问数配置组第一个入口，表字段管理在页内以 tab 呈现）
+  'base-config': Grid,
+  // 问数配置 → 模板配置（1015 起 8 个子模块收成这一个入口，在页内以 tab 呈现；与基础配置、问数系统配置并列）
+  // TAB key 带连字符，对象键必须加引号，漏加不报错只出空图标
+  'template-config': Tickets,
+  // 问数系统配置（1015 迁入，问数配置组第二个入口，参数设置/页面配置在页内以 tab 呈现）
+  'system-config': SetUp,
+  // 辅助工具（1020）：独立分组，组内唯一入口
+  'auxiliary-tool': Tools,
   settings: Setting,
 }
 </script>

@@ -40,7 +40,37 @@ import {
   legacySnatchSavePayloadFromFlow,
   parseNextStepReceipt,
   taskInstFromLegacy,
+  sourceCategoriesFromLegacy,
 } from './legacyAdapters'
+
+// 2026-10-16：分类目录树以前拿不到备注——适配器没映射 remark，导致 CategoryManager 的
+// 「编辑分类」弹窗备注永远是空的（接口明明返回了 remark）。这两条钉住映射本身。
+describe('sourceCategoriesFromLegacy', () => {
+  const ROWS = [
+    { categoryId: 9009388, categoryName: 'lzx-test', parentId: 0, seq: 90, remark: 'note' },
+    { categoryId: 9009386, categoryName: 'SHTEST', parentId: 0, seq: 80, remark: null },
+    { categoryId: 9009005, categoryName: '财经资讯', parentId: 0, seq: 70 },
+  ]
+
+  it('保留 remark；后端给 null / 不给时是 undefined（不当成「填过空值」）', () => {
+    const roots = sourceCategoriesFromLegacy(ROWS)
+
+    expect(roots.map((n) => [n.name, n.remark])).toEqual([
+      ['lzx-test', 'note'],
+      ['SHTEST', undefined],
+      ['财经资讯', undefined],
+    ])
+  })
+
+  it('子节点的 remark 同样保留（按 parentId 组树后不丢）', () => {
+    const roots = sourceCategoriesFromLegacy([
+      { categoryId: 1, categoryName: '父', parentId: 0 },
+      { categoryId: 2, categoryName: '子', parentId: 1, remark: '子备注' },
+    ])
+
+    expect(roots[0]!.children?.[0]).toMatchObject({ name: '子', remark: '子备注' })
+  })
+})
 
 describe('旧平台参数模型适配', () => {
   it('把旧参数类型和值明细转换为新页面模型', () => {
@@ -464,6 +494,22 @@ describe('旧平台实体表模型适配', () => {
     const legacy = entryTypeToLegacy({ tableId: '', tableName: 'tb_new', fields: [] })
     expect(legacy.entryTypeId).toBeUndefined()
   })
+
+  // DS_KIND（2026-10-22）：老记录缺失归一 MYSQL；后端带 CK 透传；toLegacy 原样带回落库
+  it('dsKind 缺省归一 MYSQL（老记录 / 未切数据源的表），不给 UI 暴露「未知」态', () => {
+    const entry = entryTypeFromLegacy({ entryTypeId: 2102157, tableName: 't', items: [] })
+    expect(entry.dsKind).toBe('MYSQL')
+  })
+
+  it('后端带 dsKind=CK 时透传', () => {
+    const entry = entryTypeFromLegacy({ entryTypeId: 2101020, tableName: 't', dsKind: 'CK', items: [] })
+    expect(entry.dsKind).toBe('CK')
+  })
+
+  it('entryTypeToLegacy 输出含 dsKind（编辑保存落 cfg_entry_type.DS_KIND）', () => {
+    const legacy = entryTypeToLegacy({ tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [] })
+    expect(legacy.dsKind).toBe('CK')
+  })
 })
 
 describe('旧平台实体数据行适配', () => {
@@ -611,6 +657,32 @@ describe('数据详情 / 统计行适配（E 包 T1c）', () => {
       sourceName: 'twitter1', entryTypeId: '6200029', entryTypeName: '推特抓取', ver: '2', flag1: '2026-10-07',
     })
     expect(row.values).toEqual({ K1: '内容' })
+  })
+
+  it('dataRowFromLegacy：entryDetail 的系统字段是 camelCase（parentId/detailId/seq 等），必须能读到', () => {
+    // fixture 取自 entry/entryDetail 线上实测响应（2026-10-16）：整行系统字段全为 camelCase，
+    // 早前只读全大写键，导致这三个键既被 systemKeys 移出 values、又没落进 row，界面上直接空掉。
+    const row = dataRowFromLegacy({
+      entryId: 5000017, sourceId: 430024667, configId: 1401120, entryTypeId: 6200038,
+      parentId: 2800001, categoryId: 9009005, fileId: 0, detailId: '68166879',
+      createDt: '2026-10-10 17:42:55', updateDt: '2026-10-14 17:33:25',
+      entryTypeName: '公告数据', sourceName: '江苏金租定期报告', ver: 1, seq: 2007286915, K1: '正文',
+    })
+    expect(row).toMatchObject({
+      dataId: '5000017', sourceId: '430024667', configId: '1401120',
+      parentId: '2800001', categoryId: '9009005', fileId: '0', detailId: '68166879',
+      seq: '2007286915', ver: '1',
+      createDt: '2026-10-10 17:42:55', updateDt: '2026-10-14 17:33:25',
+    })
+    expect(row.values).toEqual({ K1: '正文' })
+  })
+
+  it('dataRowFromLegacy：全大写键优先于 camelCase（列表页口径不受影响）', () => {
+    const row = dataRowFromLegacy({
+      ENTRY_ID: '1', SOURCE_ID: '2', PARENT_ID: '10', DETAIL_ID: '20', SEQ: '30',
+      parentId: '999', detailId: '888', seq: '777',
+    })
+    expect(row).toMatchObject({ dataId: '1', sourceId: '2', parentId: '10', detailId: '20', seq: '30' })
   })
 
   it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {

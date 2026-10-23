@@ -7,6 +7,7 @@ const mockCopyAndLocate = vi.fn()
 const mockStepModify = vi.fn()
 const mockRootConfigUpdate = vi.fn()
 const mockConfirm = vi.fn()
+const mockOverview = vi.fn(async () => ({ enabled: false, versions: [], draftId: null as string | null }))
 
 vi.mock('@/api', () => ({
   flowCenterApi: { steps: (...args: unknown[]) => mockSteps(...args) },
@@ -16,7 +17,7 @@ vi.mock('@/api', () => ({
     rootConfigUpdate: (...args: unknown[]) => mockRootConfigUpdate(...args),
   },
   // 流程版本（2026-10-10）：按未启用处理，换绑照旧不带版本信息
-  flowVersionApi: { overview: async () => ({ enabled: false, versions: [] }), action: vi.fn() },
+  flowVersionApi: { overview: (...args: unknown[]) => mockOverview(...(args as [])), action: vi.fn() },
   versionArgs: (ref: unknown) => (ref ? [ref] : []),
 }))
 
@@ -186,6 +187,15 @@ describe('detachCopiedConfigs（复制流程后配置去共享）', () => {
     mockStepModify.mockResolvedValue({ ok: true })
     await detachCopiedConfigs('1100')
     expect(mockSteps).toHaveBeenCalledWith('1100', { withConfigDetails: true })
+  })
+})
+
+describe('detachCopiedConfigs · 只有草稿的复制品（1016）', () => {
+  it('复制出的流程有草稿时按草稿读步骤（不带版本读只认发布版，草稿流程会报错）', async () => {
+    mockOverview.mockResolvedValueOnce({ enabled: true, versions: [], draftId: '1081' })
+    mockSteps.mockResolvedValue([])
+    await detachCopiedConfigs('21000047')
+    expect(mockSteps).toHaveBeenLastCalledWith('21000047', { withConfigDetails: true, versionId: '1081' })
   })
 })
 

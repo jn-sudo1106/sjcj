@@ -44,6 +44,36 @@ describe('GlobalSourceSelect（对齐旧平台 FileList2.vue 的"源ID"选择器
     expect(search).toHaveBeenCalledWith({ keyword: '链家', size: 30 })
   })
 
+  it('输入源 ID：同时按 sourceIds 精确查，ID 命中排最前、和名称结果去重合并（10-22：keyword 只认名称）', async () => {
+    vi.useFakeTimers()
+    const search = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => (q?.sourceIds
+      ? { total: 1, list: [source('391008010', '马士基-运力指标-2M_运力_copy')] }
+      : { total: 2, list: [source('5', '名字里带391008010的源'), source('391008010', '马士基-运力指标-2M_运力_copy')] }))
+    const wrapper = mount(GlobalSourceSelect, { props: { modelValue: '' } })
+    const input = wrapper.get('[data-testid="global-source-select-input"]')
+    await input.trigger('focus')
+    await input.setValue('391008010')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(search).toHaveBeenCalledWith({ sourceIds: ['391008010'], size: 1 })
+    expect(search).toHaveBeenCalledWith({ keyword: '391008010', size: 30 })
+    const options = wrapper.findAll('[data-testid="global-source-select-option"]')
+    expect(options.map((o) => o.text())).toEqual([expect.stringContaining('马士基'), expect.stringContaining('名字里带')])
+  })
+
+  it('输入名称（非纯数字）只按名称查', async () => {
+    vi.useFakeTimers()
+    const search = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(GlobalSourceSelect, { props: { modelValue: '' } })
+    const input = wrapper.get('[data-testid="global-source-select-input"]')
+    await input.trigger('focus')
+    await input.setValue('马士基2M')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(search).toHaveBeenCalledTimes(1)
+    expect(search).toHaveBeenCalledWith({ keyword: '马士基2M', size: 30 })
+  })
+
   it('搜到结果后展示 [源 ID] 源名称，点击触发 update:modelValue', async () => {
     vi.useFakeTimers()
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source('430002781', '链家-南京')] })

@@ -9,9 +9,12 @@ import {
   type EntryType, type Source,
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
+import { useWorkspaceStore } from '../../stores/workspace'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import RowEditDialog from './RowEditDialog.vue'
+import DataRowDetail from './DataRowDetail.vue'
+import EntryRecordTable from './EntryRecordTable.vue'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
 import StepDrawer from './StepDrawer.vue'
@@ -27,17 +30,16 @@ import BrowseModeToggle, { type BrowseMode } from '@/components/ResultToolbar/Br
 import RailNodePicker from '@/views/FlowCanvas/result/components/RailNodePicker.vue'
 import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 import { downloadCsv } from '@/utils/format/csvExport'
-import { exportTableFields } from '@/utils/format/exportFields'
 import { resultRowsCsv } from '@/views/FlowCanvas/result/exportRows'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
-import { copyToClipboard } from '@/utils/clipboard'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
-import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 import { currentBackendHost } from '@/api/client'
 import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
+import { dataStateInfo } from '@/constants/runState'
+import { upperDataId, upperDataText } from './upperData'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -73,8 +75,28 @@ const sourceId = ref('')
 const tableSelectRef = ref<{ blur: () => void } | null>(null)
 const sourceSelectRef = ref<{ blur: () => void } | null>(null)
 
+/**
+ * 「加载更多数据表」选中的那条表：模板里 other 分组只渲染 `list3.slice(0, 5)`，
+ * 而 list3 是「全库表 − 主表 − 同类源的表」（见 api/index.ts 里 entryTypesGroup 的口径），
+ * 选中的表几乎一定本来就在 list3 里、只是排在第 6 条之后。
+ * 所以不能只判「已存在就不动」，必须把它摘出来插到最前面，否则下拉框里没有对应的
+ * el-option，el-select 的 getOption() 找不到选项会直接拿值当标签 —— 表现为只显示表 ID。
+ */
+const pickedTable = ref<EntryType | null>(null)
+
+function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
+  const picked = pickedTable.value
+  if (!picked) return source
+  const rest = source.list3.filter((t) => t.tableId !== picked.tableId)
+  // 后端重新分组后它已经落进 list1/list2，就别在 list3 里再塞一份
+  if ([...source.list1, ...source.list2].some((t) => t.tableId === picked.tableId)) return { ...source, list3: rest }
+  return { ...source, list3: [picked, ...rest] }
+}
+
 async function loadGroup() {
-  group.value = await dataApi.entryTypesGroup(sourceId.value || undefined)
+  // 切表时如果当前源不在新表里，会走 loadSources → clearedSource → loadGroup，
+  // 整块覆盖 group，选中的那条就被冲掉了，这里补回来
+  group.value = withPickedTable(await dataApi.entryTypesGroup(sourceId.value || undefined))
   if (!tableId.value) {
     tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || ''
   }
@@ -112,10 +134,10 @@ function openMoreTables() {
   moreTablesOpen.value = true
 }
 async function onTablePicked(entry: EntryType) {
-  if (!group.value.list3.some((t) => t.tableId === entry.tableId)) {
-    group.value = { ...group.value, list3: [entry, ...group.value.list3] }
-  }
+  // 选中的这条塞进 list3 最前面（同 ID 的先摘掉，避免出现两个同值选项）
+  pickedTable.value = entry
   tableId.value = entry.tableId
+  group.value = withPickedTable(group.value)
   await onTableChange()
 }
 const moreSourcesOpen = ref(false)
@@ -254,8 +276,6 @@ function querySignature() {
     panelFilter.value.dataId ?? '',
     panelFilter.value.parentId ?? '',
     panelFilter.value.state ?? '',
-    panelFilter.value.startTime ?? '',
-    panelFilter.value.endTime ?? '',
     panelFilter.value.sql ?? '',
     panelFilter.value.nextFlag ?? '',
     panelFilter.value.min ?? '',
@@ -281,6 +301,7 @@ function buildQuery(): RowQuery {
 }
 
 const router = useRouter()
+const workspace = useWorkspaceStore()
 // 「同步到其他环境」只在和同步服务同库的环境出现：别的环境带过去的表名，在同步服务的库里可能不存在，同名表搬的也是同步服务那边的数据
 const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
 const selectedRowKeys = ref<string[]>([])
@@ -317,8 +338,6 @@ const sqlPreview = computed(() => {
   if (panelFilter.value.parentId) s += ` and parent_id in (${panelFilter.value.parentId})`
   if (panelFilter.value.state) s += ` and STATE in (${panelFilter.value.state.split(',').map((item) => `'${item.trim()}'`).join(',')})`
   if (sourceId.value) s += ` and source_id=${sourceId.value}`
-  if (panelFilter.value.startTime) s += ` and CREATE_DT >= '${panelFilter.value.startTime}'`
-  if (panelFilter.value.endTime) s += ` and CREATE_DT <= '${panelFilter.value.endTime}'`
   if (panelFilter.value.sql) s += ` and ${panelFilter.value.sql}`
   return s
 })
@@ -450,12 +469,13 @@ async function onDistinctSource() {
   if (backTracing.value) return
   const f = panelFilter.value as Record<string, unknown>
   const hasCondition = !!(f.sql || f.state || f.dataId || f.parentId)
-  // 无条件 = 全部源（I01：「你不带条件就是查的所有的」），不必发请求。
-  // **落到采集资产而不是源视图**：源视图锁死在单个网站内（0812 纠偏），而数据查看页是
-  // 全平台的、没有网站锚点——`/canvas?view=source` 不带 siteId 会被路由兜底弹回 /collect，
-  // 与其靠这个意外，不如直接写明目的地。采集资产就是"所有源"该去的地方。
-  if (!hasCondition) {
-    void router.push({ path: '/collect' })
+  // 落点是源管理（采集资产源列表）：数据查看页是全平台的、没有网站锚点，源视图锁死在单个网站内。
+  // 命中源走 store 传（1016）：原来拼成 `/canvas?sourceIds=` 会被画布路由守卫弹回 /collect，名单整个丢了。
+  // 选了源又没填条件：就是这一个源，不必发请求。
+  // 没选源时一律按表反查（2026-10-19）：「不带条件就是查所有的」指这张表的所有源，
+  // 原来直接落到全平台全部源，表（和时间范围）都丢了，用户反馈「没带入数据查询中的源信息」。
+  if (!hasCondition && sourceId.value) {
+    openSourceHits([sourceId.value])
     return
   }
   backTracing.value = true
@@ -465,12 +485,17 @@ async function onDistinctSource() {
       ElMessage.info('当前条件没有命中任何源')
       return
     }
-    void router.push({ path: '/canvas', query: { view: 'source', sourceIds: sourceIds.join(',') } })
+    openSourceHits(sourceIds)
   } catch (e) {
     ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
     backTracing.value = false
   }
+}
+
+function openSourceHits(sourceIds: string[] | null) {
+  workspace.setDataQueryHits(sourceIds)
+  void router.push(sourceIds ? { path: '/collect', query: { tab: 'source', from: 'data-query' } } : { path: '/collect' })
 }
 
 function onClearParent() {
@@ -511,10 +536,6 @@ const apiIdFetchUrl = computed(() => {
   if (sourceId.value) params.push(`sourceId=${encodeURIComponent(sourceId.value)}`)
   params.push(`startId=${encodeURIComponent(String(panelFilter.value.min || '0'))}`)
   if (panelFilter.value.max) params.push(`endId=${encodeURIComponent(String(panelFilter.value.max))}`)
-  if (panelFilter.value.startTime || panelFilter.value.endTime) {
-    const dateRange = `${panelFilter.value.startTime || 'EMPTY'} - ${panelFilter.value.endTime || 'EMPTY'}`
-    params.push(`dataRange=${encodeURIComponent(dateRange)}`)
-  }
   params.push('size=10')
   return `${restBase.replace(/\/$/, '')}/api/v1/data/entry?${params.join('&')}`
 })
@@ -527,7 +548,6 @@ const apiParams = [
   { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
   { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数据的起始ID，如从头取，设成0' },
   { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数据的最大ID，与startId配合用来取一段数据' },
-  { name: 'dataRange', type: '字符串', required: '非', limit: '时间范围', description: '时间上下限可单一为空，格式为“开始 - 结束”' },
 ]
 
 const apiReturns = computed(() => [
@@ -554,37 +574,11 @@ const apiSourceLabel = computed(() => {
   return source ? `${source.name}（${source.sourceId}）` : sourceId.value
 })
 
-function copyText(val: string, label?: string) {
-  void copyToClipboard(val, label)
-}
-
-function copyDetailJson() {
-  if (!detail.data) return
-  const payload: Record<string, unknown> = {
-    ENTRY_ID: detail.data.row.dataId,
-    SOURCE_ID: detail.data.row.sourceId,
-    CREATE_DT: detail.data.row.createDt,
-    UPDATE_DT: detail.data.row.updateDt,
-  }
-  for (const item of detail.data.showItems || []) {
-    const key = item.columnName || item.itemName || item.itemId || 'item'
-    payload[key] = item.value
-  }
-  void copyToClipboard(JSON.stringify(payload, null, 2), '全部字段 JSON')
-}
-
-/** 点一行打开的详情抽屉里也能导出字段定义（与「表结构详情」共用同一份逻辑） */
-function onExportDetailFields() {
-  if (!tableMeta.value) {
-    ElMessage.error('请先选择数据表')
-    return
-  }
-  try {
-    exportTableFields(tableMeta.value)
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '导出字段失败')
-  }
-}
+// 详情的两份内容体各管一个入口（刻意不同源，见模板注释）：
+//   · DataRowDetail.vue     —— 抽屉用（点整行 / 操作列「详情」），自带复制 JSON / 导出字段工具栏
+//   · EntryRecordTable.vue  —— ENTRY_ID 弹窗用，复刻旧平台 RecordDetailComm 的「列 / 值」平铺表
+// 需要父组件配合的三件事留在本文件：openTaskInstByDetail（任务实例弹窗）、openRawJson（原始 JSON）、
+// onCellFile（文件预览），由抽屉那份内容体 emit 回来。
 
 function onShowApi() {
   apiOpen.value = true
@@ -717,6 +711,29 @@ async function onStepScope(scope: 'output' | 'input') {
   stepScope.value = scope
   await onStepSelectTable(stepTableOf(node, scope))
 }
+// ---- 父ID 列（1021-05，设计方案 §5.3）：列名保持「父ID」（10-22 用户定），没有上层显示「—」 ----
+// 上层表后端不直接返回；按步骤看某节点的输出表、且节点输入表不同时，父行就在输入表里，此时可点「来自 表名 #ID」跳过去。
+// 其它情况只显示 ID（CATEGORY_ID 在异表链路下是本行自己的表，不能当上层表，见 ResultView 的 2026-09-04 修复）。
+const upperTable = computed(() => {
+  const node = stepNode.value
+  if (browseMode.value !== 'step' || !node || stepScope.value !== 'output') return undefined
+  if (!node.inputTable || node.inputTable === node.outputTable) return undefined
+  const all = [...group.value.list1, ...group.value.list2, ...group.value.list3]
+  return all.find((t) => t.tableId === node.inputTable || t.tableName === node.inputTable)
+})
+const upperTableName = computed(() => upperTable.value ? (upperTable.value.name || upperTable.value.tableName) : '')
+async function openUpperData(row: DataRow) {
+  const id = upperDataId(row.parentId)
+  const target = upperTable.value
+  if (!id || !target) return
+  detail.visible = false
+  stepScope.value = 'input'
+  tableId.value = target.tableId
+  await loadTableMeta()
+  await loadSources()
+  panelRef.value?.search({ dataId: id })
+}
+
 /** 流程图开合：打开「展示处理步骤」抽屉；收起由抽屉自己关闭 */
 function onStepRailToggle(open: boolean) {
   if (open) openStepDrawer()
@@ -848,36 +865,44 @@ function onCellFile(path: string, field?: { prop?: string; columnName?: string; 
   filePreview.ext = extFromName(path) || hintedExt
   filePreview.visible = true
 }
-/** 详情抽屉里的字段：showItems 只有列名，按列名回表结构取字段名 / 描述，再走同一套路径判据 */
-function detailFileField(item: { columnName: string; itemName?: string; value: unknown }) {
-  const value = item.value == null ? '' : String(item.value)
-  if (!value) return null
-  const meta = tableMeta.value?.fields?.find((f) => (f.columnName ?? f.prop) === item.columnName)
-  const field = { prop: meta?.prop ?? item.columnName, columnName: item.columnName, desc: meta?.desc ?? item.itemName ?? '' }
-  return isOssFilePath(field, value) ? field : null
-}
-
-// ---- 数据详情抽屉（只读，行 + showItems + subs；父数据详情复用同一抽屉换参） ----
-const detail = reactive<{ visible: boolean; data: EntryDetail | null }>({ visible: false, data: null })
-async function openDetailFor(forTableId: string, forDataId: string) {
+// ---- 数据详情的两个容器（只读，行 + showItems + subsCnt） ----
+// 两个入口各挂各的容器与内容体：点整行 / 操作列「详情」用抽屉（原有行为），点 ENTRY_ID 链接用居中弹窗。
+// mode 记录本次是哪种，模板里二选一挂载，避免两个容器同时存在、抢同一个 visible。
+const detail = reactive<{ visible: boolean; data: EntryDetail | null; mode: 'drawer' | 'dialog' }>({
+  visible: false, data: null, mode: 'drawer',
+})
+async function openDetailFor(forTableId: string, forDataId: string, mode: 'drawer' | 'dialog' = 'drawer') {
   try {
+    detail.mode = mode
     detail.data = await dataApi.rowDetail(forTableId, forDataId)
     detail.visible = true
   } catch (error) {
     ElMessage.error(`获取数据表详情失败${error instanceof Error ? error.message : String(error)}`)
   }
 }
+/** 抽屉：点整行、操作列「详情」按钮 */
 function openDetail(row: DataRow) { void openDetailFor(tableId.value, row.dataId) }
-// 点一行打开详情（原来要点 ENTRY_ID 那个链接）。点的是单元格里自带动作的东西（源 / 任务 / 父 ID 链接、
-// 按钮、勾选框、下拉、文件路径）时让它自己处理，不叠开详情；选中文字准备复制时也不开
+/** 弹窗：点 ENTRY_ID 链接（复刻旧平台 entry-list-view 的 ENTRY_ID 链接） */
+function openDetailDialog(row: DataRow) { void openDetailFor(tableId.value, row.dataId, 'dialog') }
+// 详情内容可能很长（showItems 动辄数十项），不封顶会把弹窗撑出视口、底部字段看不到。
+// 与 RowEditDialog 同口径：页面根节点带 transform，position:fixed 的基准被劫持，
+// 静态 calc() 猜不出通用公式——弹窗打开后实测内容区离视口顶部的距离，再算还剩下多少高度给它。
+const detailBodyEl = ref<HTMLElement | null>(null)
+const detailBodyMaxHeight = ref(420)
+function recalcDetailHeight() {
+  if (!detailBodyEl.value) return
+  const top = detailBodyEl.value.getBoundingClientRect().top
+  detailBodyMaxHeight.value = Math.max(180, window.innerHeight - top - 72)
+}
+if (typeof window !== 'undefined') window.addEventListener('resize', recalcDetailHeight)
+onUnmounted(() => window.removeEventListener('resize', recalcDetailHeight))
+// 点一行打开详情。点的是单元格里自带动作的东西（ENTRY_ID / 源 / 任务 / 父 ID 链接、按钮、
+// 勾选框、下拉、文件路径）时让它自己处理，不叠开详情；选中文字准备复制时也不开
 function onRowClickDetail(row: DataRow, event: Event) {
   const target = event.target as HTMLElement | null
   if (target?.closest('a, button, input, label, .el-checkbox, .el-dropdown, .el-button, [role="button"]')) return
   if (window.getSelection()?.toString()) return
   openDetail(row)
-}
-function openParentDetail(row: DataRow) {
-  if (row.categoryId && row.parentId && row.parentId !== '0') void openDetailFor(row.categoryId, row.parentId)
 }
 
 // ---- 手动添加 / 手动修改（方案 §1.6-2/3，不自动刷新，原样保留） ----
@@ -983,6 +1008,7 @@ onUnmounted(() => {
       show-state
       one-row
       row-clickable
+      :show-time-range="false"
       :selectable="canWrite"
       default-sort-field="updateDt"
       default-sort-order="descend"
@@ -1002,7 +1028,7 @@ onUnmounted(() => {
           <el-option v-for="t in group.list2" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <el-option-group label="other">
-          <el-option v-for="t in group.list3.slice(0, 5)" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
+          <el-option v-for="t in group.list3" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <template #footer>
           <span class="dv-link" @click.stop="openMoreTables">
@@ -1165,8 +1191,19 @@ onUnmounted(() => {
       </template>
 
       <template #columns-before>
+        <!-- ENTRY_ID 可点开详情（复刻旧平台 entry-list-view 的 ENTRY_ID 链接），展示为居中弹窗。
+             不加 @click.stop：行点击 onRowClickDetail 已把 a/button 这类「自带动作」的目标排除掉，
+             与同列的「源」「任务」链接同口径。 -->
         <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
-          <template #default="{ row }">{{ row.dataId }}</template>
+          <template #default="{ row }">
+            <a
+              v-if="row.dataId"
+              class="dv-a"
+              data-testid="row-open-detail"
+              @click="openDetailDialog(row)"
+            >{{ row.dataId }}</a>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
           <template #default="{ row }">
@@ -1189,8 +1226,14 @@ onUnmounted(() => {
       <template #columns-after>
         <el-table-column prop="state" label="状态" width="84">
           <template #default="{ row }">
-            <el-tag size="small" effect="light" :type="row.state === 'AC' ? 'success' : (row.state === 'E' || row.state === 'NF' ? 'danger' : 'info')">
-              {{ row.state || '—' }}
+            <el-tag
+              size="small"
+              effect="light"
+              :type="row.state === 'AC' ? 'success' : (row.state === 'E' || row.state === 'NF' ? 'danger' : 'info')"
+              :title="dataStateInfo(row.state).hint"
+              data-testid="data-state"
+            >
+              {{ dataStateInfo(row.state).label }}
             </el-tag>
           </template>
         </el-table-column>
@@ -1203,10 +1246,16 @@ onUnmounted(() => {
         <el-table-column prop="nextFlag" label="后续" width="70">
           <template #default="{ row }">{{ row.nextFlag ?? '—' }}</template>
         </el-table-column>
-        <el-table-column label="父ID" width="90">
+        <el-table-column label="父ID" width="130">
           <template #default="{ row }">
-            <a v-if="row.categoryId && row.parentId && row.parentId !== '0'" class="dv-a" @click="openParentDetail(row)">{{ row.parentId }}</a>
-            <span v-else>{{ row.parentId || '—' }}</span>
+            <a
+              v-if="upperTableName && upperDataId(row.parentId)"
+              class="dv-a"
+              data-testid="upper-data-link"
+              :title="`打开上层数据 ${upperDataId(row.parentId)}`"
+              @click.stop="openUpperData(row)"
+            >{{ upperDataText(row.parentId, upperTableName) }}</a>
+            <span v-else data-testid="upper-data">{{ upperDataText(row.parentId) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="原始" width="70">
@@ -1259,225 +1308,35 @@ onUnmounted(() => {
       @uploaded="panelRef?.refresh()"
     />
 
-    <!-- 数据详情抽屉（只读） -->
-    <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
-      <template v-if="detail.data">
-        <div class="dv-detail-toolbar">
-          <button class="rc-btn sm" type="button" data-testid="detail-copy-json" @click="copyDetailJson">
-            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-              <path
-                d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-              />
-            </svg>
-            复制全部 JSON
-          </button>
-          <button class="rc-btn sm" type="button" data-testid="detail-export-fields" @click="onExportDetailFields">
-            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-              <path
-                d="M8 1.5v9M4.5 8 8 11.5 11.5 8M2.5 12.5v1h11v-1"
-                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"
-              />
-            </svg>
-            导出字段
-          </button>
-        </div>
-        <dl class="rc-kv">
-          <dt class="dv-detail-dt">
-            <span>ENTRY_ID</span>
-            <button
-              v-if="detail.data.row.dataId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 ENTRY_ID"
-              data-testid="detail-copy-entry-id"
-              @click="copyText(detail.data.row.dataId, 'ENTRY_ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.dataId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>源 ID</span>
-            <button
-              v-if="detail.data.row.sourceId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 源 ID"
-              data-testid="detail-copy-source-id"
-              @click="copyText(detail.data.row.sourceId, '源 ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.sourceId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>源名称</span>
-            <button
-              v-if="detail.data.row.sourceName"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 源名称"
-              data-testid="detail-copy-source-name"
-              @click="copyText(detail.data.row.sourceName, '源名称')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.sourceName || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>文件ID</span>
-            <button
-              v-if="detail.data.row.fileId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 文件ID"
-              data-testid="detail-copy-file-id"
-              @click="copyText(detail.data.row.fileId, '文件ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.fileId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>类型ID</span>
-            <button
-              v-if="detail.data.row.entryTypeId"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 类型ID"
-              data-testid="detail-copy-type-id"
-              @click="copyText(detail.data.row.entryTypeId, '类型ID')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.entryTypeId || '—' }}</dd>
-          <dt class="dv-detail-dt">
-            <span>类型名</span>
-            <button
-              v-if="detail.data.row.entryTypeName"
-              type="button"
-              class="dv-copy-btn"
-              title="复制 类型名"
-              data-testid="detail-copy-type-name"
-              @click="copyText(detail.data.row.entryTypeName, '类型名')"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-          </dt>
-          <dd>{{ detail.data.row.entryTypeName || '—' }}</dd>
-          <dt>父ID</dt>
-          <dd>
-            <a
-              v-if="detail.data.row.categoryId && detail.data.row.parentId && detail.data.row.parentId !== '0'"
-              class="dv-a"
-              data-testid="detail-open-parent"
-              @click="openParentDetail(detail.data.row)"
-            >{{ detail.data.row.parentId }}</a>
-            <span v-else>{{ detail.data.row.parentId || '—' }}</span>
-          </dd>
-          <dt>任务ID</dt>
-          <dd>
-            <a
-              v-if="detail.data.row.detailId"
-              class="dv-a"
-              data-testid="detail-open-task"
-              @click="openTaskInstByDetail(detail.data.row)"
-            >{{ detail.data.row.detailId }}</a>
-            <span v-else>—</span>
-          </dd>
-          <dt>创建时间</dt>
-          <dd>{{ detail.data.row.createDt || '—' }}</dd>
-          <dt>更新时间</dt>
-          <dd>{{ detail.data.row.updateDt || '—' }}</dd>
-          <dt>版本</dt>
-          <dd>{{ detail.data.row.ver || '—' }}</dd>
-          <dt>总次数</dt>
-          <dd>{{ detail.data.row.times || '—' }}</dd>
-          <dt>序号</dt>
-          <dd>{{ detail.data.row.seq || '—' }}</dd>
-          <dt>抓取日期</dt>
-          <dd>{{ detail.data.row.flag1 || '—' }}</dd>
-          <dt>原始</dt>
-          <dd>
-            <a
-              v-if="detail.data.row.k0"
-              class="dv-a"
-              data-testid="detail-open-raw"
-              @click="openRawJson(detail.data.row)"
-            >查看</a>
-            <span v-else>—</span>
-          </dd>
-          <dt>子数据量</dt>
-          <dd>{{ detail.data.subsCnt ?? '—' }}</dd>
-          <template v-for="item in detail.data.showItems" :key="item.itemId ?? item.columnName">
-            <dt class="dv-detail-dt">
-              <span>{{ item.itemName || item.columnName }}</span>
-              <button
-                v-if="item.value !== undefined && item.value !== null && item.value !== ''"
-                type="button"
-                class="dv-copy-btn"
-                :title="`复制 ${item.itemName || item.columnName}`"
-                data-testid="detail-copy-item"
-                @click="copyText(String(item.value), item.itemName || item.columnName)"
-              >
-                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                  <path
-                    d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
-                    fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
-                  />
-                </svg>
-              </button>
-            </dt>
-            <dd v-if="detailFileField(item)">
-              <button
-                type="button"
-                class="dv-file"
-                data-testid="detail-file"
-                :title="`预览 ${item.value}`"
-                @click="onCellFile(String(item.value), detailFileField(item) ?? undefined)"
-              >📄 {{ item.value }}</button>
-            </dd>
-            <dd v-else>{{ item.value ?? '—' }}</dd>
-          </template>
-        </dl>
-        <!-- 0904：原来这里只渲染一行 `dataId · sourceId`，子行自带的 24 个字段全丢了，
-             也没有旧平台那个「本页展示子数据 3/6 条」的总数。换成与源画布数据视图同一个面板。 -->
-        <!-- 0904 I06：「下级数据」面板已撤（Z0-1）。detail.data 仍在用（行 + showItems），
-             只是不再罗列子行——下钻改走「带条件跳转 + 可返回」。 -->
-      </template>
+    <!-- 数据详情：两个入口是**两套口径**，各有各的内容体。 -->
+    <!-- · 点整行 / 操作列「详情」→ 右侧抽屉（原有行为，保持不变），内容体 DataRowDetail.vue：
+         中文标签分组 + showItems 中文名 + 复制 JSON / 导出字段工具栏。 -->
+    <el-drawer v-if="detail.mode === 'drawer'" v-model="detail.visible" title="数据表详情" size="480px">
+      <DataRowDetail
+        v-if="detail.data"
+        :data="detail.data"
+        :table-meta="tableMeta"
+        :upper-table-name="upperTableName"
+        @open-upper="openUpperData"
+        @open-task="openTaskInstByDetail"
+        @open-raw="openRawJson"
+        @preview-file="onCellFile"
+      />
     </el-drawer>
+    <!-- · 点 ENTRY_ID 链接 → 居中弹窗（复刻旧平台 entry-list-view 的 ENTRY_ID 链接），
+         内容体 EntryRecordTable.vue：复刻旧平台 RecordDetailComm —— 整行记录按「列 / 值」原样平铺，
+         没有工具栏、没有中文分组，跟抽屉那份刻意不同源。 -->
+    <el-dialog
+      v-else
+      v-model="detail.visible"
+      title="记录详情"
+      width="640px"
+      @opened="recalcDetailHeight"
+    >
+      <div v-if="detail.data" ref="detailBodyEl" class="dv-detail-body" :style="{ maxHeight: `${detailBodyMaxHeight}px` }">
+        <EntryRecordTable :data="detail.data" />
+      </div>
+    </el-dialog>
 
     <!-- 文件预览：居中 dialog（看一眼就关的操作型短流程），与源数据视图同款 -->
     <el-dialog
@@ -1673,42 +1532,11 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
   font-weight: 700;
   color: var(--rc-text);
 }
-.dv-detail-toolbar {
-  margin-bottom: 12px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.dv-detail-toolbar .rc-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.dv-detail-dt {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.dv-copy-btn {
-  border: 0;
-  background: transparent;
-  color: var(--rc-faint);
-  padding: 1px 3px;
-  border-radius: 3px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.45;
-  transition: opacity .12s, color .12s, background-color .12s;
-}
-.dv-detail-dt:hover .dv-copy-btn {
-  opacity: 1;
-}
-.dv-file { max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font: inherit; text-align: left; cursor: pointer; word-break: break-all; }
-.dv-file:hover { text-decoration: underline; }
-.dv-copy-btn:hover {
-  color: var(--rc-primary);
-  background: var(--rc-primary-bg);
+/* 详情弹窗内容区：高度由 recalcDetailHeight 实测封顶（见 script），这里只负责滚动。
+   抽屉分支不需要它——抽屉 body 本来就滚。
+   详情内部（工具条 / 复制按钮 / 文件按钮）的样式已随内容体迁到 DataRowDetail.vue。 */
+.dv-detail-body {
+  overflow-y: auto;
+  padding-right: 4px;
 }
 </style>

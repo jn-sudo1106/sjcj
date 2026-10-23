@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import SqlTaskTab from './SqlTaskTab.vue'
 import { syncApi, type SyncSqlTask, type SyncTableTask } from '@/api/dataSync'
@@ -60,7 +61,8 @@ async function mountTab(page: 'sql' | 'table' = 'sql') {
   const w = mount(SqlTaskTab, {
     props: { page },
     global: {
-      directives: { loading: {} },
+      // 行内操作改图标后需要真实的 el-tooltip / el-icon（v-loading 也随插件注册）；其余控件仍走下面的 stubs
+      plugins: [ElementPlus],
       stubs: {
         'el-drawer': { props: ['modelValue', 'title'], template: '<div v-if="modelValue" data-testid="stt-drawer" :title="title"><slot/></div>' },
         'el-dialog': { props: ['modelValue', 'title'], template: '<div v-if="modelValue" data-testid="stt-dialog" :title="title"><slot/><slot name="footer"/></div>' },

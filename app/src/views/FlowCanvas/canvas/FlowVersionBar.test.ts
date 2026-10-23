@@ -70,6 +70,18 @@ describe('FlowVersionBar · 发布版直接改、首次保存自动生成草稿�
     wrapper.unmount()
   })
 
+  it('发布前统一检查（1014 ensureFlowReady）：有未保存的新节点就不发布，并选中该节点', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(drafted)
+    const action = vi.spyOn(flowVersionApi, 'action').mockResolvedValue(undefined as never)
+    const { flow, wrapper } = await mountBoard()
+    const localId = flow.insertAfter('3', 'rule')!
+    await wrapper.get('[data-testid="flow-version-publish"]').trigger('click')
+    await flushPromises()
+    expect(action).not.toHaveBeenCalled()
+    expect(flow.selectedId).toBe(localId)
+    wrapper.unmount()
+  })
+
   it('草稿已锁定：只读但能看——不出「+」/ 删除 ✕ / 节点库，点节点照常选中', async () => {
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ ...drafted, versions: [row('1033', { flowVer: 2, state: 'W', baseId: '748', isLock: 1 }), row('748')] })
     const { flow, wrapper } = await mountBoard()

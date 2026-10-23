@@ -7,7 +7,9 @@
 import type { Step } from '@/api'
 import {
   allBranchChainNodes,
+  effectiveInputTable,
   effectiveOutputTable,
+  isFirstMainNode,
   isDataValidationNode,
   isMonitorNode,
   isRuleLikeNode,
@@ -15,6 +17,7 @@ import {
   isPdfNode,
   nodeEntryCondition,
   nodeInputTable,
+  type BranchSeed,
   type FlowBranchGroup,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
@@ -69,11 +72,45 @@ export function isFileLikeNode(cfg: NodeConfig, snapshot?: Step): boolean {
  * 自动保存按「配置未就绪草稿」处理（跳过该节点 + 头部提示），不整批卡死。
  * 0927 P1-2：真实 ROOT 行同步豁免（后端 OUT_ENTRY 不校验 ROOT；写侧与展示侧同一口径，
  * 否则新流程一打开默认选中的入口节点就误报「输出表未选择」）。
+ * 2026-10-15：流程启用版本后写草稿不校验 OUT_ENTRY（186 实测），写侧是否跳过由 useStepWrite 按
+ * flowVersion.allowsEmptyOutput 决定；本函数只回答「缺不缺」，发布 / 发起抓取前的检查仍按它拦。
  */
 export function outputTableMissing(cfg: NodeConfig, snapshot?: Step): boolean {
   if (isFileLikeNode(cfg, snapshot)) return false
   if (snapshot?.isRoot) return false
   return !effectiveOutputTable(cfg) && !snapshot?.outputTable
+}
+
+/** 判定「任务 URL 来源字段」所需的画布上下文 */
+export interface TaskUrlScope {
+  main: string[]
+  branches: BranchSeed[]
+  configs: Record<string, NodeConfig>
+  branchGroups?: FlowBranchGroup[]
+}
+
+/**
+ * 「任务 URL 来源字段 / 规则表达式」适用的节点（2026-10-21 按旧平台 SourceStepCard 对齐）：
+ * 旧平台非规则步骤、且步骤有输入表时显示这两项（规则步骤的 url 存的是规则配置，不是任务 URL）。
+ * 新平台对应：有 collectCfg 的采集类节点（含 PDF 抓取，它在旧平台就是 entry 步骤）、不是规则类、
+ * 不是主链第一个节点 / 真实 ROOT（首节点的地址由源 URL / 配置 URL 管）、有效输入表非空。
+ */
+export function taskUrlFieldsApply(scope: TaskUrlScope, id: string, snapshot?: Step): boolean {
+  const cfg = scope.configs[id]
+  if (!cfg?.collectCfg || isRuleLikeNode(cfg) || snapshot?.isRoot) return false
+  // 用「主链第一个真实节点」而不是「首个可执行节点」：后者跳过停用节点，首节点停用时第二个节点会被误当入口
+  if (isFirstMainNode(scope.main, scope.configs, id)) return false
+  return !!effectiveInputTable(scope.main, scope.branches, scope.configs, id, scope.branchGroups ?? [])
+}
+
+/**
+ * 适用节点没选任务 URL 来源字段（itemId 空或 `-1`，-1 是旧平台「未选」）。
+ * 旧平台必填、不选拦住保存；新平台 2026-10-21 定**先不强制**：照常保存，只在节点配置里提示。
+ */
+export function taskUrlSourceMissing(scope: TaskUrlScope, id: string, snapshot?: Step): boolean {
+  if (!taskUrlFieldsApply(scope, id, snapshot)) return false
+  const itemId = scope.configs[id]?.itemId
+  return !itemId || itemId === '-1'
 }
 
 /**
@@ -106,6 +143,73 @@ export function firstOutputTableMissingNodeId(
     if (outputTableMissing(cfg, snapshot)) return id
   }
   return undefined
+}
+
+/** 流程发布 / 发起抓取前检查出的节点问题（2026-10-14）。 */
+export interface FlowNodeIssue {
+  nodeId: string
+  title: string
+  /** unsaved：新节点还没保存过节点配置（没有配置、也没进草稿）；outputTableMissing：非文件节点输出表未选；
+   *  tableMismatch：输入表与上游输出表不一致（只提示） */
+  reason: 'unsaved' | 'outputTableMissing' | 'tableMismatch'
+  message: string
+}
+
+/**
+ * 2026-10-14：发布 / 发起抓取（以后手工运行草稿）前的节点完整性检查，逐个节点列出问题。
+ * 两条口径分别与 firstUnboundDraftNodeId、firstOutputTableMissingNodeId 一致，但覆盖分支链上的节点。
+ */
+export function collectFlowIssues(
+  main: string[],
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+  snapshots: Record<string, Step> = {},
+): FlowNodeIssue[] {
+  const issues: FlowNodeIssue[] = []
+  for (const id of persistableNodeIds(main, branchGroups)) {
+    if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id)) continue
+    const cfg = configs[id]
+    if (!cfg) continue
+    const title = cfg.title || id
+    if (!isWritableStepId(id) && !cfg.configId) {
+      issues.push({ nodeId: id, title, reason: 'unsaved', message: '尚未保存，请在右侧保存节点配置' })
+      continue
+    }
+    if (snapshots[id]?.isRoot) continue
+    if (outputTableMissing(cfg, snapshots[id])) {
+      issues.push({ nodeId: id, title, reason: 'outputTableMissing', message: '输出表未选择，请在右侧「表配置」补全' })
+    }
+  }
+  return issues
+}
+
+/**
+ * 2026-10-14：输入表与上游节点输出表不一致的节点（后端发布时会校验「输入表与上一个节点的输出表不一致」）。
+ * 前端只作提示、不拦截；两边任一没有表时不比较。
+ */
+export function collectTableMismatches(
+  main: string[],
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+): FlowNodeIssue[] {
+  const issues: FlowNodeIssue[] = []
+  for (const id of persistableNodeIds(main, branchGroups)) {
+    if (!isWritableStepId(id) || !configs[id]) continue
+    const parentId = lastStepIdsFromCanvas(main, id, branchGroups)[0]
+    const parent = parentId ? configs[parentId] : undefined
+    if (!parent) continue
+    const input = nodeInputTable(configs[id])
+    const upstream = effectiveOutputTable(parent)
+    if (input && upstream && input !== upstream) {
+      issues.push({
+        nodeId: id,
+        title: configs[id].title || id,
+        reason: 'tableMismatch',
+        message: `输入表（${input}）与上一个节点「${parent.title || parentId}」的输出表（${upstream}）不一致`,
+      })
+    }
+  }
+  return issues
 }
 
 /**
@@ -378,7 +482,8 @@ export function mergeStepForWrite(args: {
     flowCode: snapshot?.flowCode,
     itemId: cfg.itemId ?? snapshot?.itemId,
     extName: snapshot?.extName,
-    url: snapshot?.url,
+    // 任务 URL 表达式（2026-10-19 恢复编辑）：节点上改过用节点的，否则沿用快照 / 新建模板的值
+    url: cfg.stepUrl ?? snapshot?.url,
     condition: condExprOf(cfg) ?? undefined,
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,

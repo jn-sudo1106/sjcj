@@ -62,15 +62,77 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
     expect(rows[0]).toMatchObject({ bindType: 'SOURCE', bindId: '430024667', publishedFlowId: '100', status: 'ACTIVE' })
   })
 
-  it('入组的源：读到的是来源组的统一流程，标记为继承', async () => {
-    fetchMock.mockResolvedValue(ok({
-      sourceId: '430000930', sourceGroupId: '3', flowIds: ['21000006'], defaultFlowId: '21000006',
-      bindings: [{ id: '9', sourceId: null, sourceGroupId: '3', flowId: '21000006', isDefault: 1, state: 'ACTIVE', revision: 2 }],
-    }))
+  it('流程详情 disabled → 行上 workflowStatus=DISABLED（10-22 标签栏禁用标识）', async () => {
+    fetchMock.mockResolvedValue(ok(ALONE))
+    const { workflowBindingApi, flowCenterApi } = await load()
+    vi.mocked(flowCenterApi.detail).mockImplementation(async (id: string) => ({ id, name: `流程${id}`, disabled: id === '101', definition: { main: [], branches: [], configs: {}, branchGroups: [] }, updatedAt: '' }))
+    const rows = await workflowBindingApi.list('430024667')
+    expect(rows.map((r) => [r.workflowId, r.workflowStatus])).toEqual([['100', 'ACTIVE'], ['101', 'DISABLED']])
+  })
+
+  it('withNames: false 不取流程详情，名字退回「流程 #ID」（画布加载不被慢的 flowDetail 挡住）', async () => {
+    fetchMock.mockResolvedValue(ok(ALONE))
+    const { workflowBindingApi, flowCenterApi } = await load()
+    const rows = await workflowBindingApi.list('430024667', { withNames: false })
+    expect(flowCenterApi.detail).not.toHaveBeenCalled()
+    expect(rows.map((r) => [r.workflowId, r.workflowName, r.primary])).toEqual([['100', '流程 #100', true], ['101', '流程 #101', false]])
+  })
+
+  /** 186 实测 430024683（10-15）：顶层是来源组 3 的流程，own* 是源自有的流程 */
+  const IN_GROUP = {
+    sourceId: '430024683', sourceGroupId: '3', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006',
+    bindings: [
+      { id: '32769', sourceId: null, sourceGroupId: '3', flowId: '21000006', isDefault: 1, state: 'ACTIVE', revision: 0 },
+      { id: '32768', sourceId: null, sourceGroupId: '3', flowId: '21000005', isDefault: 0, state: 'ACTIVE', revision: 0 },
+    ],
+    ownFlowIds: ['21000019', '21000022'], ownDefaultFlowId: '21000022',
+    ownBindings: [
+      { id: '32838', sourceId: '430024683', sourceGroupId: null, flowId: '21000022', isDefault: 1, state: 'ACTIVE', revision: 2 },
+      { id: '32839', sourceId: '430024683', sourceGroupId: null, flowId: '21000019', isDefault: 0, state: 'ACTIVE', revision: 1 },
+      { id: '32840', sourceId: '430024683', sourceGroupId: null, flowId: '21000030', isDefault: 0, state: 'DISABLED', revision: 1 },
+    ],
+  }
+
+  it('入组的源只列来源组流程，主流程是组默认；入组前留下的自有绑定不列（1021-02）', async () => {
+    fetchMock.mockResolvedValue(ok(IN_GROUP))
     const { workflowBindingApi } = await load()
-    const rows = await workflowBindingApi.list('430000930')
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ workflowId: '21000006', inherited: true, bindType: 'SOURCE_GROUP', bindId: '3', primary: true })
+    const loaded = await workflowBindingApi.load('430024683')
+    expect(loaded.sourceGroupId).toBe('3')
+    expect(loaded.rows.map((r) => [r.workflowId, r.inherited, r.own, r.primary, r.groupDefault, r.bindType, r.bindId])).toEqual([
+      ['21000006', true, false, true, true, 'SOURCE_GROUP', '3'],
+      ['21000005', true, false, false, false, 'SOURCE_GROUP', '3'],
+    ])
+  })
+
+  it('入组的源、组还没绑流程：rows 为空，仍带回 sourceGroupId（标签栏据此不给「＋」）', async () => {
+    fetchMock.mockResolvedValue(ok({ ...IN_GROUP, flowIds: [], defaultFlowId: null, bindings: [] }))
+    const { workflowBindingApi } = await load()
+    expect(await workflowBindingApi.load('430024683')).toEqual({ rows: [], sourceGroupId: '3' })
+  })
+
+  it('入组的源没有自有默认流程：主流程回落到来源组默认', async () => {
+    fetchMock.mockResolvedValue(ok({ ...IN_GROUP, ownFlowIds: [], ownDefaultFlowId: null, ownBindings: [] }))
+    const { workflowBindingApi } = await load()
+    const rows = await workflowBindingApi.list('430024683')
+    expect(rows.map((r) => [r.workflowId, r.primary, r.role])).toEqual([['21000006', true, 'MAIN'], ['21000005', false, 'AUX']])
+  })
+
+  it('未入组的源：顶层和 own* 是同一套，不重复出行', async () => {
+    fetchMock.mockResolvedValue(ok({ ...ALONE, ownFlowIds: ALONE.flowIds, ownDefaultFlowId: ALONE.defaultFlowId, ownBindings: ALONE.bindings }))
+    const { workflowBindingApi } = await load()
+    const rows = await workflowBindingApi.list('430024667')
+    expect(rows.map((r) => [r.workflowId, r.inherited, r.own, r.primary])).toEqual([['100', false, true, true], ['101', false, true, false]])
+  })
+
+  it('旧后端没有 own*：未入组回落到顶层字段，入组视为没有自有流程', async () => {
+    fetchMock.mockResolvedValueOnce(ok(ALONE))
+    const { workflowBindingApi } = await load()
+    expect(await workflowBindingApi.view('430024667')).toMatchObject({ ownFlowIds: ['100', '101'], ownDefaultFlowId: '100' })
+    const { ownFlowIds: _a, ownDefaultFlowId: _b, ownBindings: _c, ...legacyGroup } = IN_GROUP
+    fetchMock.mockResolvedValueOnce(ok(legacyGroup))
+    const view = await workflowBindingApi.view('430024683')
+    expect(view).toMatchObject({ flowIds: ['21000005', '21000006'], ownFlowIds: [], ownBindings: [] })
+    expect(view.ownDefaultFlowId).toBeUndefined()
   })
 
   it('本地演示源（字母 ID）不发请求', async () => {
@@ -138,12 +200,39 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
     expect(JSON.parse(String(bindCalls()[0].init.body))).toMatchObject({ flowIds: [], defaultFlowId: null })
   })
 
-  it('入组的源不能单独改绑：不发保存请求，提示先退出来源组', async () => {
-    fetchMock.mockResolvedValue(ok({ sourceId: '430000930', sourceGroupId: '3', flowIds: ['21000006'], defaultFlowId: '21000006', bindings: [] }))
+  it('解除默认流程时同一次提交换主（10-21 画布右键解绑）', async () => {
+    fetchMock.mockResolvedValueOnce(ok(ALONE)).mockResolvedValueOnce(ok(null))
     const { workflowBindingApi } = await load()
-    await expect(workflowBindingApi.bind({ sourceId: '430000930', workflowId: '5' })).rejects.toThrow('来源使用组统一流程，请先退出来源组')
-    await expect(workflowBindingApi.setPrimary('430000930', '21000006')).rejects.toThrow('退出来源组')
+    await workflowBindingApi.unbind('430024667', '100', '101')
+    expect(bindCalls()).toHaveLength(1)
+    expect(JSON.parse(String(bindCalls()[0].init.body))).toMatchObject({ flowIds: ['101'], defaultFlowId: '101' })
+  })
+
+  it('入组的源维护自有流程：快照和提交都只用 own*，不带来源组的流程', async () => {
+    fetchMock.mockResolvedValueOnce(ok(IN_GROUP)).mockResolvedValueOnce(ok(null))
+    const { workflowBindingApi } = await load()
+    await workflowBindingApi.bind({ sourceId: '430024683', workflowId: '21000040' })
+    expect(JSON.parse(String(bindCalls()[0].init.body))).toEqual({
+      sourceId: '430024683',
+      expectedFlowIds: ['21000019', '21000022'],
+      expectedDefaultFlowId: '21000022',
+      flowIds: ['21000019', '21000022', '21000040'],
+      defaultFlowId: '21000022',
+    })
+
+    // 来源组的流程不在本源列表里：不能在这里设主
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValueOnce(ok(IN_GROUP))
+    await expect(workflowBindingApi.setPrimary('430024683', '21000006')).rejects.toThrow('没有关联到本源')
     expect(bindCalls()).toHaveLength(0)
+
+    // 入组源第一次加自有流程：成为本源默认
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValueOnce(ok({ ...IN_GROUP, ownFlowIds: [], ownDefaultFlowId: null, ownBindings: [] })).mockResolvedValueOnce(ok(null))
+    await workflowBindingApi.bind({ sourceId: '430024683', workflowId: '21000040' })
+    expect(JSON.parse(String(bindCalls()[0].init.body))).toEqual({
+      sourceId: '430024683', expectedFlowIds: [], expectedDefaultFlowId: null, flowIds: ['21000040'], defaultFlowId: '21000040',
+    })
   })
 
   it('后端拒绝时（并发快照不一致等）保留后端原文', async () => {

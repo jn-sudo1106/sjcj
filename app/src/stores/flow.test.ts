@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { useDictStore } from '@/stores/dict'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
 import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, isDataValidationNode, iconFor, nodeClassFor, nodeTypeLabel } from '@/views/FlowCanvas/canvas/flowModel'
@@ -259,13 +260,15 @@ describe('两个独立采集节点 + 能力模型（0711 R7/R8）', () => {
     const browserCap = collectorCapabilityOf(f.configs[browserId])!
     const wechatCap = collectorCapabilityOf(f.configs[wechatId])!
     expect(browserCap.outputMode).toBe('fixed')
-    expect(wechatCap.outputMode).toBe('fixed')
+    // 公众号抓取输出表可选、队列可改（只给默认队列），浏览器抓取仍固定
+    expect(wechatCap.outputMode).toBe('selectable')
+    expect(wechatCap.queueMode).toBe('editable')
     // 固定输出表/队列必须不同（两个独立节点，各自的能力键不同）
     expect(browserCap.fixedOutputTable).not.toBe(wechatCap.fixedOutputTable)
-    expect(browserCap.fixedQueue).not.toBe(wechatCap.fixedQueue)
+    expect(wechatCap.fixedQueue).toBeUndefined()
     // 种子配置里 outputTable/queue 已按能力预置好
     expect(f.configs[browserId].collectCfg?.outputTable).toBe(browserCap.fixedOutputTable)
-    expect(f.configs[wechatId].taskCfg?.queue).toBe(wechatCap.fixedQueue)
+    expect(f.configs[browserId].taskCfg?.queue).toBe(browserCap.fixedQueue)
   })
 
   it('inferCollectorKind：旧节点（无 collectorKind 字段）按 snatchType 正确推导', () => {
@@ -299,10 +302,27 @@ describe('两个独立采集节点 + 能力模型（0711 R7/R8）', () => {
   })
 
   it('固定产物节点：patchTaskConfig/setTaskQueue 无法覆盖队列（0711 T5）', () => {
+    const browserId = f.insertAfter('web-list', 'browser-html')
+    const cap = collectorCapabilityOf(f.configs[browserId])!
+    f.setTaskQueue(browserId, 'attacker_queue')
+    expect(f.configs[browserId].taskCfg?.queue).toBe(cap.fixedQueue)
+  })
+
+  it('新建节点默认队列取节点类型的默认消息队列（topic），没配就留空', () => {
+    useDictStore().nodeTypeTopics = { '150': 'dev_web_snatch_ocr' }
+    expect(f.configs[f.insertAfter('web-list', 'ocr')].taskCfg?.queue).toBe('dev_web_snatch_ocr')
+    // 140 没配 topic：不再沿用种子里的 app.collect，留空
+    expect(f.configs[f.insertAfter('web-list', 'app')].taskCfg?.queue).toBe('')
+  })
+
+  it('公众号抓取：默认队列跟 90 一样，可改，输出表可选', () => {
+    useDictStore().nodeTypeTopics = { '90': 'web_default_queue' }
     const wechatId = f.insertAfter('web-list', 'wechat-html')
-    const cap = collectorCapabilityOf(f.configs[wechatId])!
-    f.setTaskQueue(wechatId, 'attacker_queue')
-    expect(f.configs[wechatId].taskCfg?.queue).toBe(cap.fixedQueue)
+    expect(f.configs[wechatId].taskCfg?.queue).toBe('web_default_queue')
+    f.setTaskQueue(wechatId, 'news_wechat')
+    expect(f.configs[wechatId].taskCfg?.queue).toBe('news_wechat')
+    f.patchCollect(wechatId, { outputTable: 'custom_table_1' })
+    expect(f.configs[wechatId].collectCfg?.outputTable).toBe('custom_table_1')
   })
 
   it('普通网页抓取节点（queueMode: editable）：队列/输出表可正常编辑，不受固定防线影响', () => {
@@ -1029,10 +1049,11 @@ describe('分支段 store 操作（旧平台语义，1008-BR-06 重写）', () =
     expect(f.configs['3']).toBeUndefined()
   })
 
-  it('remove(branch chain 内节点)：从 chain 摘除 + delete configs', () => {
+  it('remove(branch chain 内节点)：从 chain 摘除 + delete configs，只剩一路时并回主链', () => {
     f.remove('3')
     expect(f.configs['3']).toBeUndefined()
-    expect(f.branchGroups[0].branches.flatMap((b) => b.chain)).not.toContain('3')
+    expect(f.branchGroups).toHaveLength(0)
+    expect(f.main).toEqual(['start', '1', '2', 'end'])
   })
 
   // S6-3（方案 §4.4）：技术指导明确"暂时别删"——本期删节点只收集待清理资源清单，不真的调删除接口。
@@ -1271,9 +1292,9 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
   it('数据处理组只保留字典里独立编号的类型，通用数据处理节点已去除', () => {
     expect(LIB_GROUPS.map((group) => group.title)).toEqual(expect.not.arrayContaining(['解析结构化', '数据清洗', '数据校验']))
     // 2026-09-23 用户明确要求：节点类型「数据处理」去除（纯前端移除 PROC 通用入口），
-    // 组内只保留后端字典里 300/700/710/720/730/800 独立编号的类型。
+    // 组内只保留后端字典里 300/700/710/720/730/800/911 独立编号的类型。
     expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
-      '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手',
+      '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手', 'PDF转MD',
     ])
     expect(LIB_GROUPS.flatMap((g) => g.items).some((it) => it.name === '数据处理' || it.code === 'PROC')).toBe(false)
 
@@ -1371,8 +1392,11 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
     expect(iconFor(f.configs[excelId])).toBe('130')
   })
 
-  // 2026-09-23 用户明确要求：OCR / 翻译 / 摘要 / 标签 / 语音 / 视频 新增时任务配置默认给队列名
-  // 2026-10-08 用户明确要求：PDF 抓取默认 dev_web_snatch_pdf
+  // 2026-10-14 起默认队列不再前端写死，取节点类型的默认消息队列（topic）；这里按原先写死的值喂字典
+  const NODE_TYPE_TOPICS = {
+    '600': 'dev_web_rulehandle', '150': 'dev_web_snatch_ocr', '130': 'dev_web_snatch_pdf', '800': 'dev_web_translate',
+    '720': 'dev_web_llm_generate', '730': 'dev_web_llm_generate', '710': 'dev_web_audiototext', '700': 'dev_web_videotoaudio',
+  }
   it.each([
     ['rule', 'dev_web_rulehandle'],
     ['ocr', 'dev_web_snatch_ocr'],
@@ -1383,6 +1407,7 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
     ['audio-text', 'dev_web_audiototext'],
     ['video-audio', 'dev_web_videotoaudio'],
   ])('主链新增节点 %s：默认任务队列为 %s', (template, expectedQueue) => {
+    useDictStore().nodeTypeTopics = NODE_TYPE_TOPICS
     const id = f.insertAfter('start', template)
     expect(f.configs[id].taskCfg?.queue).toBe(expectedQueue)
   })
@@ -1397,6 +1422,7 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
     ['audio-text', 'dev_web_audiototext'],
     ['video-audio', 'dev_web_videotoaudio'],
   ])('分支内新增节点 %s：默认任务队列为 %s', (template, expectedQueue) => {
+    useDictStore().nodeTypeTopics = NODE_TYPE_TOPICS
     const ownerId = f.insertAfter('start', 'web')
     f.addSibling(f.insertAfter(ownerId, 'web'), 'web')
     const branchId = f.branchGroups[0].branches[0].id
@@ -2124,6 +2150,27 @@ describe('拓扑编辑：新建分支 / 线上插入 / 分叉前插入（1008-BR
     expect(chains(f, '1')).toEqual([['2', '3'], [n]])
     expect(f.parentOfNode(n)).toBe('1')
     expect(f.selectedId).toBe(n)
+  })
+
+  it('remove：新建分支后删掉它唯一的节点，空分支一并消失、并回直链', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['2'])])
+    const n = f.addSibling('2', 'web')!
+    f.remove(n)
+    expect(f.main).toEqual(['start', '1', '2', '3', 'end'])
+    expect(f.branchGroups).toEqual([])
+  })
+
+  it('remove：三路分叉删掉一路的唯一节点，只剩两路', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])])
+    const n = f.addSibling('2', 'web')!
+    f.remove(n)
+    expect(chains(f, '1')).toEqual([['2'], ['3']])
+  })
+
+  it('remove：删分支链头，链内后继顶上', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1']), mk('4', ['3'])])
+    f.remove('3')
+    expect(chains(f, '1')).toEqual([['2'], ['4']])
   })
 
   it('addSibling：已有分叉时再加一路，排在同级最右', () => {

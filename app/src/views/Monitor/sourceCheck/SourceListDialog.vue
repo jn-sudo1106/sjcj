@@ -11,6 +11,7 @@
 // 上层（SourceSelect）只取 rows[0] 作为当前源——与旧 DSourceSelect.handleSelected 相同。
 import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { CaretBottom, CaretTop } from '@element-plus/icons-vue'
 import { sourceApi, type Source } from '@/api'
 import SourceCategoryTree from './SourceCategoryTree.vue'
 
@@ -19,6 +20,12 @@ const emit = defineEmits<{
   'update:modelValue': [boolean]
   selected: [rows: Source[]]
 }>()
+
+/** 状态下拉的 UI 哨兵：el-select 里 `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成
+ *  「没选」、选中「全部」后输入框里看不到「全部」二字。到 `load()` 里由 `toApiEnable()` 还原成
+ *  ''（旧口径：不带 enable 条件）。 */
+const ENABLE_ALL = '-1'
+const toApiEnable = (value: string): string => (value === ENABLE_ALL ? '' : value)
 
 const state = reactive<{
   loading: boolean
@@ -78,7 +85,7 @@ async function load() {
       configId: state.configId.trim() || undefined,
       sourceUrl: state.sourceUrl.trim() || undefined,
       entryTypeId: state.entryTypeId.trim() || undefined,
-      enable: state.enable,
+      enable: toApiEnable(state.enable),
       count: state.count.trim() || undefined,
       dataDate: state.dataDate || undefined,
       // 对齐旧 SourceList2：多选分类以逗号拼接传给 categorys
@@ -215,7 +222,10 @@ function formatCount(value?: number) {
             <el-button @click="onReset">重置</el-button>
             <button class="sld-advanced-link" type="button" @click="state.advanced = !state.advanced">
               {{ state.advanced ? '收起' : '展开' }}
-              <span>{{ state.advanced ? '⌃' : '⌄' }}</span>
+              <el-icon class="sld-advanced-caret">
+                <CaretTop v-if="state.advanced" />
+                <CaretBottom v-else />
+              </el-icon>
             </button>
           </div>
         </div>
@@ -234,7 +244,7 @@ function formatCount(value?: number) {
             <el-select v-model="state.enable" placeholder="状态" @change="onSearch">
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
             </el-select>
           </label>
           <label class="sld-field">
@@ -261,7 +271,20 @@ function formatCount(value?: number) {
             <el-table-column prop="sourceId" label="源ID" width="120" sortable />
             <el-table-column prop="name" label="名称" min-width="200" sortable />
             <el-table-column label="URL" min-width="220">
-              <template #default="{ row }"><span class="sld-ellipsis" :title="row.url">{{ formatUrl(row.url) }}</span></template>
+              <!-- 旧页 urlSlot：<a :href="text" target="_blank" :title="text">，外层限宽 + 省略号，点链接开新窗口 -->
+              <template #default="{ row }">
+                <a
+                  v-if="row.url"
+                  class="sld-ellipsis sld-url"
+                  :href="row.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :title="row.url"
+                >
+                  {{ formatUrl(row.url) }}
+                </a>
+                <span v-else class="sld-ellipsis" title="无 URL">{{ formatUrl(row.url) }}</span>
+              </template>
             </el-table-column>
             <el-table-column prop="configId" label="配置ID" width="100" sortable />
             <el-table-column label="数据" width="95" sortable>
@@ -317,11 +340,19 @@ function formatCount(value?: number) {
   border-right: 1px solid var(--rc-border-soft, #e2e8f0);
 }
 .sld-advanced-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
   border: 0;
   background: transparent;
   color: var(--rc-primary-ink, #1d4ed8);
   cursor: pointer;
   font-size: 13px;
+}
+/* 展开/收起图标：跟文字同色，整体垂直居中（原来是文本符号 ⌃ / ⌄） */
+.sld-advanced-caret {
+  font-size: 12px;
 }
 /* 右侧主区：flex 纵向 —— 筛选固定、表格吃剩余高度、分页固定底部（不再被裁切） */
 .sld-main {
@@ -368,9 +399,6 @@ function formatCount(value?: number) {
   min-height: 32px !important;
   padding: 6px 11px;
 }
-.sld-advanced-link {
-  padding: 8px 4px;
-}
 .sld-spacer {
   flex: 1;
 }
@@ -413,6 +441,14 @@ function formatCount(value?: number) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* URL 列外链：与 SourceDetailDrawer 的 .sd-a 同色，悬停下划线；长 URL 仍走 .sld-ellipsis 截断 + title 看全 */
+.sld-url {
+  color: var(--rc-primary-ink, #1d4ed8);
+  text-decoration: none;
+}
+.sld-url:hover {
+  text-decoration: underline;
 }
 @media (max-width: 900px) {
   .sld-dialog :deep(.el-dialog__body) {

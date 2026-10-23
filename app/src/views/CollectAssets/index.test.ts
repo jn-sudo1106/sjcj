@@ -16,9 +16,9 @@ vi.mock('./SourceTab.vue', () => ({
 vi.mock('./ConfigTab.vue', () => ({
   default: { name: 'ConfigTab', template: '<div data-testid="stub-config">配置列表内容</div>' },
 }))
-// 2026-10-12：「我的分组」改为只读展示来源组（复用系统设置的 SourceGroupTab，readonly）
+// 「我的分组」就是来源组页（SourceGroupTab，10-13 起可编辑，不再传 readonly）
 vi.mock('./MyViews.vue', () => ({ default: { name: 'MyViews', template: '<div>我的视图内容</div>' } }))
-vi.mock('@/views/Settings/SourceGroupTab.vue', () => ({ default: { name: 'SourceGroupTab', props: ['readonly'], template: '<div>来源组内容 readonly={{ readonly }}</div>' } }))
+vi.mock('@/views/Settings/SourceGroupTab.vue', () => ({ default: { name: 'SourceGroupTab', template: '<div>来源组内容</div>' } }))
 
 async function mountAssets(query: Record<string, string> = {}, preference: 'system' | 'personal' | 'view' | 'last' = 'system') {
   const router = createRouter({
@@ -107,7 +107,7 @@ describe('采集资产 · tab 壳', () => {
   })
   it('个人默认生效，显式系统目录链接优先，临时切换不改默认', async () => {
     const { wrapper, router } = await mountAssets({}, 'personal')
-    expect(wrapper.text()).toContain('来源组内容 readonly=true')
+    expect(wrapper.text()).toContain('来源组内容')
     await wrapper.findAll('.ca-tab-link')[0]!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query.tab).toBe('source')

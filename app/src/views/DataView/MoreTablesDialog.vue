@@ -98,12 +98,20 @@ function formatDate(value?: string) { return value ? value.slice(0, 16) : '—' 
 async function openDetail(row: EntryType) {
   try {
     const entry = await entryApi.entryDetail(row.tableId)
+    // 表详情抽屉要展示的表级字段都得带上（原来只抄了 5 个，表名称 / 更新时间 / 备注 / 记录变更等显示成「—」）
     detailTable.value = {
       tableId: entry.tableId,
       tableName: entry.tableName,
+      name: entry.name,
       rowCount: entry.rowCount,
       state: entry.state,
       keyField: entry.keyField,
+      remark: entry.remark,
+      updatedAt: entry.updatedAt,
+      recFlag: entry.recFlag,
+      checkFlag: entry.checkFlag,
+      checkRule: entry.checkRule,
+      coreParam: entry.coreParam,
       fields: entry.fields,
     }
     detailOpen.value = true

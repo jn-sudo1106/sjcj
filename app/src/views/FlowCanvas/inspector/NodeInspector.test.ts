@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import NodeInspector from './NodeInspector.vue'
@@ -10,6 +10,8 @@ import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } fro
 import { useFlowVersionStore } from '@/stores/flowVersion'
 import { ElMessage } from 'element-plus'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
+import { resetNodeConfigAutosave } from './nodeConfigAutosave'
+
 vi.mock('@/utils/flow/nodeDeployment', () => ({ syncNodeDeployment: vi.fn(async () => null) }))
 
 function mockAssets() {
@@ -23,6 +25,7 @@ function mockAssets() {
 // review 0723 #9 修正：文档原描述（onMounted 无条件加载 6 个 API）已经不成立，当前代码已有 isRule 判断；
 // 但 NodeInspector 只 mount 一次、isRule 只在那一次 onMounted 判断，导致真实问题更严重——
 // 打开画布时若没恰好选中规则节点，规则相关数据会永远加载不出来。这里验证懒加载 + 响应式补拉的修复。
+beforeEach(() => resetNodeConfigAutosave())
 afterEach(() => vi.restoreAllMocks())
 
 describe('编排保存自动同步部署配置', () => {
@@ -305,11 +308,11 @@ describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', ()
     // （defineModel 双向绑定的契约：用 .value = 改，外部 v-model 同步生效）
     const dialog = wrapper.findComponent(EditParamSourceDialog)
     expect(dialog.exists()).toBe(true)
-    ;(dialog.vm as any).draft = {
-      baseUrl: 'http://new-base',
-      urlTemplate: 'http://new-base-$PARAM$_913',
-      refs: [{ paramId: '913', group: null }],
-    }
+      ; (dialog.vm as any).draft = {
+        baseUrl: 'http://new-base',
+        urlTemplate: 'http://new-base-$PARAM$_913',
+        refs: [{ paramId: '913', group: null }],
+      }
     await flushPromises()
 
     // 点保存
@@ -428,7 +431,7 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
 
     flow.setDedupMode('web-1', 'table')
     await flushPromises()
-    expect(w.text()).toContain('节点配置有未保存修改')
+    expect(w.text()).toContain('有未保存修改（新节点需点保存）')
 
     // 没有 configId 的节点点保存：不发任何写请求。
     // updateConfig 不带 configId 并不会创建配置（2026-08-28 实测），copyAll 又需要可复制的源配置，
@@ -599,7 +602,7 @@ describe('保存已有配置：直接落库 + 使用范围灰字（0828 §6.2）
 describe('规则节点保存前校验', () => {
   it('出参字段为空时提示勾选，并停留在表配置且不发保存请求', async () => {
     mockAssets()
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }))
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => { } }))
     const create = vi.spyOn(configApi, 'addConfig')
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -681,6 +684,8 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
     flow.setActiveTab('config')
     // 源上还没有 job：这正是出问题的那个场景
     expect(flow.sourceJob).toBeFalsy()
+    // 10-15 起只有手动改过定时才同步（TaskScheduleSettings 改定时走的就是 patchSchedule）
+    flow.patchSchedule('web-1', { scheduleType: '每天', cron: '0 0 0 * * ?' })
 
     vi.spyOn(configApi, 'addConfig').mockResolvedValue({ ok: true, configId: 'c-1', message: 'ok' })
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: 'c-1', name: 'cfg' } as never)
@@ -718,7 +723,7 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
 // 2026-10-12 开发环境实测：新建的流程只有「草稿 v1」没有发布版，保存定时被后端拒绝
 // 「以下源无法按所选流程调度（未关联或ROOT缺失）」，用户不知道该做什么。
 describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
-  async function saveWithOverview(overview: Awaited<ReturnType<typeof flowVersionApi.overview>>, cronError?: Error) {
+  async function saveWithOverview(overview: Awaited<ReturnType<typeof flowVersionApi.overview>>, cronError?: Error, editCron = true) {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -727,6 +732,7 @@ describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
     flow.main = ['web-1']
     flow.select('web-1')
     flow.setActiveTab('config')
+    if (editCron) flow.patchSchedule('web-1', { scheduleType: '每天', cron: '0 0 0 * * ?' })
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(overview)
     await useFlowVersionStore().load('21000012')
     vi.spyOn(configApi, 'addConfig').mockResolvedValue({ ok: true, configId: 'c-1', message: 'ok' })
@@ -749,13 +755,19 @@ describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
     expect(saveCron).not.toHaveBeenCalled()
   })
 
+  // 2026-10-15：定时不是必填（旧平台同口径），没手动改过定时的保存不建 / 不改定时，也不弹「定时没保存」
+  it('没改过定时：保存节点不碰定时，未发布的流程也不提示', async () => {
+    const { saveCron } = await saveWithOverview(published, undefined, false)
+    expect(saveCron).not.toHaveBeenCalled()
+  })
+
   it('流程已发布：照常发 createJobs', async () => {
     const { saveCron } = await saveWithOverview(published)
     expect(saveCron).toHaveBeenCalled()
   })
 
   it('后端回「ROOT缺失」：提示翻成人话，不是「请求异常 [source/createJobs]…」', async () => {
-    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => {} }))
+    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => { } }))
     await saveWithOverview(published, new Error('请求异常 [source/createJobs]: 请求失败 500: 错误信息:运行时异常：以下源无法按所选流程调度（未关联或ROOT缺失），未创建任何调度：430024674'))
     expect(error).not.toHaveBeenCalledWith(expect.stringContaining('请求异常'))
   })
@@ -848,5 +860,103 @@ describe('NodeInspector 版本只读', () => {
     expect(w.find('.foot-dot').exists()).toBe(false)
     expect(w.text()).toContain('当前版本只读')
     w.unmount()
+  })
+})
+
+// 1021-06：节点配置在切换节点 / 切换页签 / 离开画布时自动保存（方案 §4.2 / §4.3，186 实测约束）
+describe('节点配置自动保存（1021-06）', () => {
+  function setup(extra: Partial<Record<'a' | 'b', object>> = {}) {
+    mockAssets()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [] })
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ clearRule: '{"keep":1}' })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue(null)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['a'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400774', configName: '列表', ...extra.a }
+    flow.configs['b'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400775', configName: '详情', ...extra.b }
+    flow.select('a')
+    return flow
+  }
+
+  it('改了配置再点别的节点：自动保存上一个节点，清脏标，底部显示「已自动保存」', async () => {
+    const flow = setup()
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+    const success = vi.spyOn(ElMessage, 'success')
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('a', 'table')
+    await flushPromises()
+    flow.select('b')
+    await flushPromises()
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update.mock.calls[0][0]).toMatchObject({ configId: '1400774', clearRule: '{"keep":1}' })
+    expect(flow.dirtyConfigNodes).not.toContain('a')
+    // 自动保存成功不弹提示（只看本配置：前面用例的保存请求可能晚回来弹别的提示）
+    expect(success.mock.calls.some((c) => String(c[0]).includes('1400774'))).toBe(false)
+    flow.select('a')
+    await flushPromises()
+    expect(w.text()).toMatch(/已自动保存 \d\d:\d\d/)
+    w.unmount()
+  })
+
+  it('没改动切换节点 / 页签：不发请求（每次保存后端都记一条操作日志）', async () => {
+    const flow = setup()
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.select('b')
+    flow.setActiveTab('table')
+    await flushPromises()
+    w.unmount()
+    await flushPromises()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('还没有配置的节点不自动保存（第一次保存会新建配置，留给用户点）', async () => {
+    const flow = setup({ a: { configId: '' } })
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('a', 'table')
+    flow.select('b')
+    await flushPromises()
+    expect(update).not.toHaveBeenCalled()
+    expect(flow.dirtyConfigNodes).toContain('a')
+    w.unmount()
+  })
+
+  it('切换页签也保存；保存失败（配置被别人改过）提示原因、不重试、脏标保留', async () => {
+    const flow = setup()
+    const update = vi.spyOn(configApi, 'updateConfig').mockRejectedValue(new Error('当前配置已被修改，请刷新页面后重新操作。'))
+    const error = vi.spyOn(ElMessage, 'error')
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('a', 'table')
+    await flushPromises()
+    const before = flow.activeTab
+    flow.setActiveTab(before === 'table' ? 'task' : 'table')
+    await flushPromises()
+    expect(update).toHaveBeenCalledTimes(1)
+    // 不看「最后一条」：前面用例点保存新建配置的请求可能晚回来，它的报错也会落进这里
+    expect(error.mock.calls.some((c) => String(c[0]).includes('当前配置已被修改'))).toBe(true)
+    expect(flow.dirtyConfigNodes).toContain('a')
+    w.unmount()
+  })
+
+  it('离开画布（卸载）时把脏节点存掉；Ctrl+S 立即保存当前节点', async () => {
+    const flow = setup()
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('a', 'table')
+    await flushPromises()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true }))
+    await flushPromises()
+    expect(update).toHaveBeenCalledTimes(1)
+    flow.setDedupMode('a', 'source')
+    await flushPromises()
+    w.unmount()
+    await flushPromises()
+    expect(update).toHaveBeenCalledTimes(2)
   })
 })

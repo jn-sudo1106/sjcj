@@ -36,11 +36,24 @@
 //   5. 筛选框变化**不自动查询**（旧页面也是要点「查询」才发请求）；「重置」只清空条件，不回查（同旧版）。
 //      细节差异：「重置」后状态框停在「全部」而不是旧版那种空 placeholder（旧版 `queryParam = {}`
 //      会把 enable 变成 undefined），两者在接口上等价——都是不带 enable 条件。
+//      状态下拉的「全部 / 历史删除的」用 '-1' / '-2' 两个 UI 哨兵（el-select 把空串判成「没选」，
+//      「全部」会显示不出来），`load()` 里 `toApiEnable()` 再还原成 '' / '-1'，接口口径与旧版一致。
 //   6. 状态列色调按 stateFilter 的语义细分（E→出错红 / C→正常 / L→处理中 / 其它→灰），
 //      旧版是「E 红、其余一律蓝」；文案仍走同一个 stateFilter，只是颜色更细。
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type TableInstance } from 'element-plus'
-import { Search, Plus, Refresh, Setting, ArrowDown, Lightning, SwitchButton, Scissor } from '@element-plus/icons-vue'
+import {
+  Search,
+  Plus,
+  Refresh,
+  Setting,
+  ArrowDown,
+  Lightning,
+  SwitchButton,
+  Scissor,
+  Document,
+  Edit
+} from '@element-plus/icons-vue'
 import type { MqCheck } from '@/api'
 import {
   pagedQueueCheck,
@@ -56,14 +69,23 @@ import QueueDetailDrawer from './QueueDetailDrawer.vue'
 defineOptions({ name: 'QueueCheck' })
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求）----
+/** 状态下拉的 UI 哨兵。el-select 里 `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成
+ *  「没选」、`selectedLabel` 回退到 placeholder —— 选中「全部」时输入框里看不到「全部」两个字。
+ *  所以 UI 值用 '-1'，到 `load()` 里再还原成旧口径（'全部' → 空串，不带该条件）。
+ *  ⚠️ 后端 enable=-1 本来是「历史删除的」，故它另用 '-2' 占位，接口层还原回 '-1'。 */
+const ENABLE_ALL = '-1'
+const ENABLE_DELETED = '-2'
+const toApiEnable = (value: string): string =>
+  value === ENABLE_ALL ? '' : value === ENABLE_DELETED ? '-1' : value
+
 const form = reactive({
   queue: '',    // 队列名
   queueId: '',  // ID
   name: '',     // 描述
-  enable: '',   // '' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的
+  enable: ENABLE_ALL as string, // 全部 / '0' 在用 / '1' 停用 / ENABLE_DELETED 历史删除的
 })
 /** 已「执行」的筛选条件。分页单独管——旧 pagedQueueCheck 只发筛选字段 + page/limit。 */
-const filters = reactive({ queue: '', queueId: '', name: '', enable: '' })
+const filters = reactive({ queue: '', queueId: '', name: '', enable: ENABLE_ALL as string })
 
 /** 表头排序（服务端口径，与旧 s-table 一致：field = 列 dataIndex，order = 'ascend' | 'descend'）。
  *  空字符串表示「未排序」——两个键都不会出现在请求参数里（旧版无排序时正是如此）。 */
@@ -85,7 +107,7 @@ async function load() {
       queue: filters.queue,
       queueId: filters.queueId,
       name: filters.name,
-      enable: filters.enable,
+      enable: toApiEnable(filters.enable),
       page: page.value,
       limit: size.value,
       // 表头有排序时才带上这两个键（旧 s-table 无排序时参数里根本没有 sortField/sortOrder）
@@ -116,7 +138,7 @@ function resetQuery() {
   form.queue = ''
   form.queueId = ''
   form.name = ''
-  form.enable = ''
+  form.enable = ENABLE_ALL
 }
 
 // ---- 批量操作（旧版：勾选后点「更多..」下拉 → 启用 / 禁用 / 删除）----
@@ -235,13 +257,13 @@ onMounted(() => void load())
 
 <template>
   <div class="qc-shell" v-loading="loading">
-    <div class="qc-head">
+    <!-- <div class="qc-head">
       <div class="qc-title">队列告警</div>
       <div class="qc-sub">按队列名、ID、描述与状态筛选队列校验配置，支持批量启停与删除。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；改条件不自动查，点「查询」才发请求） -->
-    <el-form :inline="true" class="qc-filter-form" size="small">
+    <el-form :inline="true" class="qc-filter-form">
       <el-row :gutter="8" class="qc-filter-row">
         <el-col :md="4" :sm="24">
           <el-form-item label="队列名">
@@ -261,10 +283,10 @@ onMounted(() => void load())
         <el-col :md="4" :sm="24">
           <el-form-item label="状态">
             <el-select v-model="form.enable" placeholder="请选择">
-              <el-option label="全部" value="" />
+              <el-option label="全部" :value="ENABLE_ALL" />
               <el-option label="在用" value="0" />
               <el-option label="停用" value="1" />
-              <el-option label="历史删除的" value="-1" />
+              <el-option label="历史删除的" :value="ENABLE_DELETED" />
             </el-select>
           </el-form-item>
         </el-col>
@@ -348,11 +370,14 @@ onMounted(() => void load())
             :tone="stateTone(row.state)"
           />
 
-          <!-- 操作：旧 actionSlot —— 详情 | 编辑 -->
+          <!-- 操作：旧 actionSlot —— 详情 / 编辑（图标化） -->
           <span v-else-if="col.dataIndex === 'action'" class="qc-actions">
-            <span class="qc-op-link" @click="openDetail(row)">详情</span>
-            <span class="qc-op-divider">|</span>
-            <span class="qc-op-link" @click="openEdit(row)">编辑</span>
+            <el-tooltip content="详情" placement="top">
+              <span class="qc-op-icon" @click="openDetail(row)"><el-icon :size="15"><Document /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip content="编辑" placement="top">
+              <span class="qc-op-icon" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+            </el-tooltip>
           </span>
 
           <!-- 其余列（含执行结果 lastMsg）：直接显示字段值；长文本的「单行省略 + 悬停看全文」
@@ -384,6 +409,10 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+/* 表头文字颜色统一 */
+.qc-shell :deep(.el-table__header th) {
+  color: var(--rc-text-2);
+}
 .qc-shell {
   display: flex;
   flex-direction: column;
@@ -459,15 +488,28 @@ onMounted(() => void load())
   text-overflow: ellipsis;
   word-break: break-all;
 }
-.qc-link,
-.qc-op-link {
+.qc-link {
   color: var(--rc-primary, #2563eb);
   cursor: pointer;
   font-size: 12px;
 }
-.qc-link:hover,
-.qc-op-link:hover {
+.qc-link:hover {
   text-decoration: underline;
+}
+.qc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  /* color: var(--rc-primary, #2563eb); */
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+.qc-op-icon:hover {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
 }
 .qc-tag {
   cursor: pointer;
@@ -484,10 +526,8 @@ onMounted(() => void load())
 .qc-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.qc-op-divider {
-  color: var(--rc-faint, #94a3b8);
+  justify-content: center;
+  gap: 10px;
 }
 .qc-pager {
   display: flex;
@@ -495,3 +535,4 @@ onMounted(() => void load())
   padding: 8px 0 2px;
 }
 </style>
+

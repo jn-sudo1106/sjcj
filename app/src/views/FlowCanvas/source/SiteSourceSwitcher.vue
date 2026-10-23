@@ -2,21 +2,16 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
+import { CHANGE_SITE_CHUNK, flowCenterApi, isProductionCreateEnabled, siteApi, sourceApi, workflowBindingApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
 import SiteTablePanel from './SiteTablePanel.vue'
 import SourceParamModal from './SourceParamModal.vue'
 import { importProgressText } from './importProgress'
 
-/**
- * 0903 Y8-9：只控制**新增的第三步**（复制完把新源关联到被复制源的流程）。
- * 已经在跑的复制功能（copySource?flag=1 + changeSite）不受它影响——关掉开关，复制照样可用，
- * 只是不自动关联流程。实测通过后可以删掉这个常量。
- */
-const ENABLE_SOURCE_COPY_BIND_FLOW = true
 import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
-import { copyFlowToSource, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { flowHasPublished, isUnpublishedFlowError } from '@/utils/flow/flowPublish'
 import { toExternalHref } from '@/utils/url/externalUrl'
+import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -28,6 +23,7 @@ import { useUiStore } from '@/stores/ui'
 import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
 import { copyToClipboard } from '@/utils/clipboard'
+import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 
 const props = defineProps<{
   siteId: string
@@ -241,6 +237,13 @@ function applyEditedSource(updated: Source) {
     flow.patchSourceCtx({ name: updated.name, url: updated.url })
   }
   ws.renameTab(updated.sourceId, updated.name)
+  // EditSourceDialog 在保存成功后才 emit saved，这里记一笔即可（不需要再判结果）
+  trackEdit('SOURCE', updated.sourceId, updated.name, {
+    eventCode: 'source_update',
+    eventName: '编辑源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
 }
 
 function isErr(s: Source): boolean {
@@ -323,6 +326,12 @@ async function saveRename(s: Source) {
     }
     s.name = name
     cancelRename()
+    trackEdit('SOURCE', s.sourceId, name, {
+      eventCode: 'source_rename',
+      eventName: '重命名源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
     ElMessage.success(res?.message || '源已重命名')
     emit('added', updated)
   } catch (error) {
@@ -424,6 +433,12 @@ async function deleteFromMenu() {
       return
     }
     children.value = children.value.filter((c) => c.sourceId !== s.sourceId)
+    trackDelete('SOURCE', s.sourceId, s.name, {
+      eventCode: 'source_delete',
+      eventName: '删除源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
     ElMessage.success(`源「${s.name}」已删除`)
   } catch (error) {
     ElMessage.error(`删除失败：${error instanceof Error ? error.message : String(error)}`)
@@ -466,6 +481,16 @@ async function openSiteEdit() {
   siteEditDlg.show = true
 }
 function onSiteEditSaved() {
+  // 网站基本信息已保存成功（SiteEditorDialog 保存成功后才 emit）
+  const current = site.value
+  if (current?.siteId) {
+    trackEdit('SITE', current.siteId, current.name, {
+      eventCode: 'site_update',
+      eventName: '编辑网站基本信息',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+    })
+  }
   void load(true)
 }
 
@@ -473,6 +498,15 @@ function onSiteEditSaved() {
 // 按源 ID/名称导入现有源的能力放到 M4 的"导入源"，接旧平台真实批量归属契约） ----
 type TemplateMode = 'default' | 'search' | 'blank'
 type SourceKind = 'normal' | 'param'
+/**
+ * 按模板源新建时新源的流程（1016 方案 `设计稿/设计方案/1016-添加源按模板源_流程关联问题与方案_2026-10-16.md` §五）：
+ * - copy：copySource flag=1，后端把模板源的默认流程复制成新源独立的一份（含配置）；
+ * - bind：copySource flag=0，再用 bindSourceFlows 换成用户选的已有流程（可多条，指定主流程）；
+ * - none：copySource flag=0，再清空流程。
+ * flag=0 时后端会自动把新源挂到模板源的默认流程上，bind / none 都要覆盖掉。
+ * 源上不能单独换配置（186 实测后端拒绝「配置替换已下放流程节点」），新源用的就是所挂流程的配置。
+ */
+type FlowMode = 'copy' | 'bind' | 'none'
 const addDlg = reactive({
   show: false,
   name: '',
@@ -481,11 +515,13 @@ const addDlg = reactive({
   templateSourceId: '',
   kind: 'normal' as SourceKind,
   /**
-   * 1008-06：按模板源新建时可改绑一条已有流程（作为默认流程）；空 = 跟随模板源的流程。
    * 只挂在「默认 / 搜索模板源」上：那两项走真实的 source/copySource；空白模板的 site/addSource
    * 后端没有这个接口、只在本地模拟（2026-10-10 在 217 实测：建源请求没发出，绑流程却真发了、更新 0 条）。
    */
-  bindFlowId: '',
+  flowMode: 'copy' as FlowMode,
+  /** flowMode=bind：要关联的已有流程和其中的主流程 */
+  bindFlowIds: [] as string[],
+  mainFlowId: '',
 })
 const bindFlowOptions = ref<FlowRecord[]>([])
 const bindFlowLoading = ref(false)
@@ -505,6 +541,54 @@ const selectedTemplate = computed(() => {
   if (addDlg.templateMode === 'default') return defaultTemplate.value
   if (addDlg.templateMode === 'search') return templateSearch.results.find((source) => source.sourceId === addDlg.templateSourceId) ?? null
   return null
+})
+/**
+ * 模板源的默认流程（flowMode=copy 时复制的就是它）：后端按源上的 DEFAULT_FLOW_ID 复制，
+ * 入组的源这是来源组的默认流程，不一定是源自有的默认流程。列表行不保证带 flowId，读一次详情。
+ */
+const templateDefault = reactive({ sourceId: '', loading: false, flowId: '', published: null as boolean | null })
+watch(() => (addDlg.show ? selectedTemplate.value : null), async (template) => {
+  const id = template?.sourceId ?? ''
+  templateDefault.sourceId = id
+  templateDefault.flowId = template?.flowId ?? ''
+  templateDefault.published = null
+  templateDefault.loading = !!template
+  if (!template) return
+  let flowId = template.flowId ?? ''
+  if (!flowId) flowId = (await sourceApi.sourceDetail(id).catch(() => null))?.flowId ?? ''
+  // 复制取的是发布版本：只有草稿时提前说明并拦下（1016）；查不到（null）不拦
+  const published = flowId ? await flowHasPublished(flowId) : null
+  if (templateDefault.sourceId !== id) return
+  templateDefault.flowId = flowId
+  templateDefault.published = published
+  templateDefault.loading = false
+})
+/** 「流程名（#ID）」，主流程标在括号里；流程列表还没拉到时只显示 ID */
+const flowLabel = (id: string, main = false) => {
+  const name = bindFlowOptions.value.find((f) => f.id === id)?.name
+  return name ? `${name}（#${id}${main ? '，主' : ''}）` : `#${id}${main ? '（主）' : ''}`
+}
+/** 选了要关联的流程后，主流程跟着收敛：不在已选里就取第一条 */
+watch(() => addDlg.bindFlowIds.join(','), () => {
+  if (!addDlg.bindFlowIds.includes(addDlg.mainFlowId)) addDlg.mainFlowId = addDlg.bindFlowIds[0] ?? ''
+})
+const addHint = computed(() => {
+  const template = selectedTemplate.value
+  if (addDlg.templateMode === 'search' && !template) return '请先搜索并选择模板源。'
+  if (!template) return '创建名称和 URL，并新建一条只有首节点（网页抓取）的空白流程。'
+  const head = `将按「${template.name}」复制源到当前网站`
+  if (addDlg.flowMode === 'none') return `${head}，不关联流程，之后在流程页编排。`
+  if (addDlg.flowMode === 'bind') {
+    if (!addDlg.bindFlowIds.length) return '请选择要关联的流程。'
+    const ordered = [addDlg.mainFlowId, ...addDlg.bindFlowIds.filter((id) => id !== addDlg.mainFlowId)]
+    return `${head}，不新建流程，新源关联 ${ordered.length} 条流程：${ordered.map((id) => flowLabel(id, id === addDlg.mainFlowId)).join('、')}。`
+      + '新源用这些流程的配置，改这些流程会影响挂在上面的其它源。'
+  }
+  if (templateDefault.loading) return `${head}，正在读取它的默认流程…`
+  if (!templateDefault.flowId) return '模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「不关联流程」。'
+  if (templateDefault.published === false) return `模板源的默认流程「${flowLabel(templateDefault.flowId)}」还没有发布版本（只有草稿），不能复制。请先发布这条流程，或改选「关联已有流程」。`
+  return `${head}，并把它的默认流程「${flowLabel(templateDefault.flowId)}」复制成新源独立的一份（含配置），改它不影响模板源。`
+    + '模板源的其它流程不会带过来；不复制表数据与运行记录。'
 })
 function onTemplateModeChange() {
   addDlg.templateSourceId = ''
@@ -538,7 +622,9 @@ function openAdd(ev: MouseEvent) {
   addDlg.kind = 'normal'
   addDlg.templateMode = defaultTemplate.value ? 'default' : 'blank'
   addDlg.templateSourceId = ''
-  addDlg.bindFlowId = ''
+  addDlg.flowMode = 'copy'
+  addDlg.bindFlowIds = []
+  addDlg.mainFlowId = ''
   templateSearch.keyword = ''
   templateSearch.results = []
   templateSearch.open = false
@@ -606,36 +692,29 @@ async function submitParamSource() {
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
+  trackCreate('SOURCE', addedId, added?.name ?? name, {
+    eventCode: 'source_create_param',
+    eventName: '新建参数源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
   if (added) emit('added', added)
 }
 
 /**
- * 复制源并放进本网站、挂到原源的流程（添加源「按模板源」与右键「复制源」共用，0930 抽出）。
+ * 复制源并放进本网站（右键「复制源」用；1016 起「添加源 → 按模板源」改走 addFromTemplate）。
  *
- * 旧平台 `copySource`（flag=1「制作源+配置副本」/ flag=0「仅制作源副本」即复用原配置）
- * 只复制源和配置，**不归网站、不挂流程**，所以后面补两步：
- *   ② changeSite 归入当前网站；
- *   ③（0903 Y8-6）关联到**被复制源所属的流程**——0903 H01 之后配置挂在流程上、执行按 FLOW_ID 反查
- *      （H1 答复），不补这一步新源就是没有流程的孤儿。
- * **三步递进，任一步失败都不回滚前面的**（Y8-7）：源已经建出来了，回滚等于删源，
- * 风险比留着一个待手工关联的源高得多。所以失败只提示、不抛错。成功返回新源 ID，失败返回 null。
- *
- * `ownFlow`（0930，右键复制源选「新增一套配置」时为 true）：第③步不挂原流程，而是把原流程复制一份
- * 给新源（copyFlowToSource：复制 → 换绑 → 节点配置去共享）。实测（0930）flag=1 只复制源自身那一个
- * 配置，节点配置挂在流程上、按 FLOW_ID 执行，不连流程一起复制的话节点配置仍与原源共用。
- * 「添加源 → 按模板源」不走这条：按模板加的源本意就是共用模板流程，每源一条流程会让流程数成倍增长。
+ * 10-23 起固定走 `copySource` flag=0（旧平台「仅制作源副本」）：新源沿用原源关联的流程、共用配置，
+ * 不再提供「新增一套配置」（flag=1 复制出的流程只有草稿，复制品再复制必然失败；之前前端还多调一次
+ * copyFlowToSource，会多出流程）。流程关联由后端一并复制，前端只补 changeSite 归入当前网站。
+ * 归网站失败不回滚（Y8-7）：源已经建出来了，回滚等于删源。所以失败只提示、不抛错。成功返回新源 ID，失败返回 null。
  */
 async function copySourceIntoSite(
   from: Source,
   target: { name: string; url: string },
-  flag: 0 | 1,
-  ownFlow = false,
-  /** 1008-06：指定时新源关联到这条流程，而不是模板源的流程 */
-  bindFlowId = '',
 ): Promise<string | null> {
-  const what = flag === 1 ? '及配置' : '（复用原配置）'
   try {
-    const copied = await sourceApi.copySourceAndLocate({ sourceId: from.sourceId, name: target.name, url: target.url, flag })
+    const copied = await sourceApi.copySourceAndLocate({ sourceId: from.sourceId, name: target.name, url: target.url, flag: 0 })
     if (!copied.ok) {
       ElMessage.warning(copied.message)
       return null
@@ -645,45 +724,7 @@ async function copySourceIntoSite(
       ElMessage.warning(bind.message || `源已复制（#${copied.sourceId}），但未能关联到当前网站，请用「导入已有源」`)
       return null
     }
-    // 被复制源的 flowId：列表接口（site/sources、sourcePaged）**不保证**带这个字段，
-    // 但 sourceDetail 一定带（2026-09-04 实测 430016824 → flowId 1400935）。所以列表上
-    // 拿不到就回查一次详情，而不是据此判定"这个源没有流程"——那会让第三步静默跳过。
-    let fromFlowId = from.flowId
-    if (ENABLE_SOURCE_COPY_BIND_FLOW && !fromFlowId) {
-      fromFlowId = (await sourceApi.sourceDetail(from.sourceId).catch(() => null))?.flowId
-    }
-    if (bindFlowId) {
-      const bound = await flowCenterApi.bindSources([copied.sourceId], bindFlowId)
-      if (bound.ok) ElMessage.success(`已复制源「${target.name}」${what}，并关联到所选流程 #${bindFlowId}`)
-      else ElMessage.warning(`源已复制并归入本网站（#${copied.sourceId}），但未能关联到流程 #${bindFlowId}（${bound.message || '原因未知'}），可在流程中心手动关联`)
-    } else if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
-      ElMessage.success(`已复制源「${target.name}」${what}`)
-    } else if (fromFlowId && ownFlow) {
-      try {
-        const copied2 = await copyFlowToSource(fromFlowId, copied.sourceId, target.name, { sourceFlowRef: `源「${from.name}」的流程` })
-        ElMessage.success(`已复制源「${target.name}」及配置，并为它复制了独立流程 #${copied2.flowId}`)
-        reportDetachResult(copied2.detach, '原流程')
-      } catch (error) {
-        ElMessage.warning(
-          `源已复制并归入本网站（#${copied.sourceId}），但复制流程失败`
-          + `（${error instanceof Error ? error.message : String(error)}），可在新源画布里点「复制当前流程」补上`,
-        )
-      }
-    } else if (!fromFlowId) {
-      // sourceDetail/sourcePaged 都已返回 flowId（2026-09-04 实测），缺失只可能是这个源
-      // 本来就没关联流程——那就没有可关联的目标，不是错误。
-      ElMessage.success(`已复制源「${target.name}」${what}（被复制源未关联流程，新源也未关联）`)
-    } else {
-      const bound = await flowCenterApi.bindSources([copied.sourceId], fromFlowId)
-      if (bound.ok) {
-        ElMessage.success(`已复制源「${target.name}」${what}，并关联到流程 #${fromFlowId}`)
-      } else {
-        ElMessage.warning(
-          `源已复制并归入本网站（#${copied.sourceId}），但**未能关联到流程 #${fromFlowId}**`
-          + `（${bound.message || '原因未知'}），可在流程中心手动关联`,
-        )
-      }
-    }
+    ElMessage.success(`已复制源「${target.name}」，与原源共用流程`)
     return copied.sourceId
   } catch (error) {
     ElMessage.error(`复制源失败：${error instanceof Error ? error.message : String(error)}`)
@@ -692,14 +733,13 @@ async function copySourceIntoSite(
 }
 
 // ---- 源右键：复制源（0930，迁自旧平台 SourceList「变更 → 制作源+配置副本 / 仅制作源副本」）----
-// 旧平台两个菜单项合成一个，弹框里二选一，用词与复制流程一致（新增一套配置 / 复用原配置）。
-const copyDlg = reactive({ show: false, source: null as Source | null, name: '', url: '', mode: 'new' as 'new' | 'reuse', saving: false })
+// 10-23 只保留「仅制作源副本」：新源沿用原源的流程，不单独建一套。
+const copyDlg = reactive({ show: false, source: null as Source | null, name: '', url: '', saving: false })
 function openCopyDialog(s: Source) {
   closeRowMenu()
   copyDlg.source = s
   copyDlg.name = `${s.name}_copy`
   copyDlg.url = s.url ?? ''
-  copyDlg.mode = 'new'
   copyDlg.show = true
 }
 function closeCopyDialog() {
@@ -718,11 +758,18 @@ async function submitCopy() {
   try {
     // URL 留空与添加源同口径补占位（后端 copySource 同样有必填校验）
     const url = urlOrPlaceholder(copyDlg.url, `${props.siteId}-${Date.now().toString(36)}`)
-    const newId = await copySourceIntoSite(s, { name, url }, copyDlg.mode === 'new' ? 1 : 0, copyDlg.mode === 'new')
+    const newId = await copySourceIntoSite(s, { name, url })
     if (!newId) return
     closeCopyDialog()
     await load(true)
     const added = children.value.find((c) => c.sourceId === newId)
+    trackCreate('SOURCE', newId, added?.name ?? name, {
+      eventCode: 'source_copy',
+      eventName: '复制源',
+      firstModule: '采集资产',
+      pageName: '网站详情',
+      pageEntry: `源「${s.name}」`,
+    })
     if (added) emit('added', added)
   } finally {
     copyDlg.saving = false
@@ -744,11 +791,23 @@ async function submitAdd() {
   const target = { name: addDlg.name.trim(), url: urlOrPlaceholder(addDlg.url, sourceId) }
   let addedId = sourceId
   if (addDlg.templateMode === 'search' && !selectedTemplate.value) {
-    ElMessage.warning('请先选择模板源，或切换为空白模板')
+    ElMessage.warning('请先搜索并选择模板源，或改选「不用模板源」')
+    return
+  }
+  if (selectedTemplate.value && addDlg.flowMode === 'bind' && !addDlg.bindFlowIds.length) {
+    ElMessage.warning('请选择要关联的流程，或改选其它流程方式')
+    return
+  }
+  if (selectedTemplate.value && addDlg.flowMode === 'copy' && !templateDefault.loading && !templateDefault.flowId) {
+    ElMessage.warning('模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「不关联流程」')
+    return
+  }
+  if (selectedTemplate.value && addDlg.flowMode === 'copy' && templateDefault.published === false) {
+    ElMessage.warning('模板源的默认流程还没有发布版本，不能复制；请先发布，或改选「关联已有流程」')
     return
   }
   if (selectedTemplate.value) {
-    const copiedId = await copySourceIntoSite(selectedTemplate.value, target, 1, false, addDlg.bindFlowId)
+    const copiedId = await addFromTemplate(selectedTemplate.value, target)
     if (!copiedId) return
     addedId = copiedId
   } else {
@@ -757,14 +816,78 @@ async function submitAdd() {
       { sourceId, ...target, configId: '', mainTable: '', owner: site.value?.owner || 'admin', state: 'C' },
       false,
     )
-    if (!res.ok) return
+    if (!res.ok) {
+      ElMessage.warning(res.message || '添加失败，请重试')
+      return
+    }
     addedId = res.sourceId || sourceId
-    ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
+    // 2026-10-19：空白画布也默认带一个首节点，和流程标签栏「新建空白流程」同一条路径（createForSource）。
+    // 只在真实新建通道里建：mock 源是前端假 ID，拿去建真实流程必然关联失败。流程失败不回滚源，提示去「＋」补建。
+    if (isProductionCreateEnabled()) {
+      try {
+        await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, definition: makeBlankTemplateDefinition(), primary: true })
+        ElMessage.success(`已添加源「${target.name}」，并新建了带首节点的空白流程`)
+      } catch (error) {
+        ElMessage.warning(`已添加源「${target.name}」，但新建空白流程失败：${(error as Error)?.message ?? String(error)}。可在流程标签栏点「＋」补建`)
+      }
+    } else {
+      ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
+    }
   }
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
+  // 两条建源路径（空白 / 按模板源）在这里汇合，埋点只打一处
+  trackCreate('SOURCE', addedId, added?.name ?? target.name, {
+    eventCode: 'source_create',
+    eventName: '新建源',
+    firstModule: '采集资产',
+    pageName: '网站详情',
+  })
   if (added) emit('added', added)
+}
+
+/**
+ * 按模板源新建（1016 方案 §五）：copySource（copy 用 flag=1，其余 flag=0）→ changeSite 归入本网站 →
+ * bind / none 再用 bindSourceFlows 覆盖掉 flag=0 自动挂上的模板源默认流程。
+ * 与 copySourceIntoSite 同样：源建出来后的步骤失败只提示、不回滚（回滚等于删源）。成功返回新源 ID。
+ */
+async function addFromTemplate(from: Source, target: { name: string; url: string }): Promise<string | null> {
+  const mode = addDlg.flowMode
+  try {
+    const copied = await sourceApi.copySourceAndLocate({ sourceId: from.sourceId, name: target.name, url: target.url, flag: mode === 'copy' ? 1 : 0 })
+    if (!copied.ok) {
+      // 后端复制流程取的是已发布版本，只有草稿时报这句（10-16 后端口径）
+      const unpublished = isUnpublishedFlowError(copied.message)
+      ElMessage.warning(unpublished
+        ? '模板源的默认流程还没有发布版本，不能复制。请先发布这条流程，或改选「关联已有流程」。'
+        : copied.message)
+      return null
+    }
+    const bind = await sourceApi.changeSite([copied.sourceId], props.siteId)
+    if (!bind.ok) {
+      ElMessage.warning(bind.message || `源已复制（#${copied.sourceId}），但未能关联到当前网站，请用「导入已有源」`)
+      return null
+    }
+    if (mode === 'copy') {
+      ElMessage.success(`已添加源「${target.name}」，并复制了模板源的默认流程`)
+      return copied.sourceId
+    }
+    const flowIds = mode === 'bind' ? [addDlg.mainFlowId, ...addDlg.bindFlowIds.filter((id) => id !== addDlg.mainFlowId)] : []
+    try {
+      await workflowBindingApi.save(copied.sourceId, () => ({ flowIds, defaultFlowId: mode === 'bind' ? addDlg.mainFlowId : null }))
+      ElMessage.success(mode === 'bind'
+        ? `已添加源「${target.name}」，关联了 ${flowIds.length} 条流程`
+        : `已添加源「${target.name}」，未关联流程`)
+    } catch (error) {
+      ElMessage.warning(`源已添加（#${copied.sourceId}），但${mode === 'bind' ? '关联流程' : '清空流程'}失败`
+        + `（${error instanceof Error ? error.message : String(error)}），它现在挂着模板源的默认流程，可在流程页调整`)
+    }
+    return copied.sourceId
+  } catch (error) {
+    ElMessage.error(`添加源失败：${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
 }
 
 function pickSource(s: Source) {
@@ -1034,6 +1157,7 @@ async function submitImport() {
   ElMessage.success(res?.message || '批量导入已提交（演示）')
   closeBatch()
   await load(true)
+  ui.notifySourceListChanged()
 }
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
@@ -1364,7 +1488,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
     </div>
   </div>
 
-  <!-- 复制源（0930）：新名称 / URL / 配置方式；新源归入本网站并挂到原源的流程 -->
+  <!-- 复制源（0930）：新名称 / URL；新源归入本网站，沿用原源的流程（10-23） -->
   <div v-if="copyDlg.show" class="ssw-add-backdrop" @click.self="closeCopyDialog">
     <div class="ssw-add-card" data-testid="dup-source-dialog" @click.stop>
       <div class="ssw-add-header"><b>复制源</b></div>
@@ -1374,18 +1498,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <input v-model="copyDlg.name" class="ssw-add-input" data-testid="dup-source-name" placeholder="请输入新源名称" />
         <label class="ssw-field-label">新源 URL</label>
         <input v-model="copyDlg.url" class="ssw-add-input" data-testid="dup-source-url" placeholder="请输入新源 URL" />
-        <label class="ssw-field-label">配置</label>
-        <div class="ssw-copy-modes">
-          <label class="ssw-copy-mode" :class="{ active: copyDlg.mode === 'new' }">
-            <input v-model="copyDlg.mode" type="radio" value="new" data-testid="dup-source-mode-new" />
-            <span><b>新增一套配置</b><small>源配置和流程都复制一份（节点配置各自独立），修改新源不影响原源（推荐）</small></span>
-          </label>
-          <label class="ssw-copy-mode" :class="{ active: copyDlg.mode === 'reuse' }">
-            <input v-model="copyDlg.mode" type="radio" value="reuse" data-testid="dup-source-mode-reuse" />
-            <span><b>复用原配置</b><small>只复制源，新源与原源共用配置和流程，修改任一边两边会一起变</small></span>
-          </label>
-        </div>
-        <p class="ssw-move-warn">新源会放进当前网站，{{ copyDlg.mode === 'new' ? '并使用复制出的独立流程「新源名-流程」' : '并关联到原源所属的流程' }}。</p>
+        <p class="ssw-move-warn">新源会放进当前网站，并关联原源已关联的流程，与原源共用流程和配置，修改流程两边会一起变。</p>
       </div>
       <div class="ssw-add-actions">
         <button class="rc-btn" type="button" @click="closeCopyDialog">取消</button>
@@ -1423,26 +1536,19 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <input v-model="addDlg.name" class="ssw-add-input" placeholder="请输入源名称" />
         <label class="ssw-field-label">源 URL <span>（可选）</span></label>
         <input v-model="addDlg.url" class="ssw-add-input" placeholder="请输入源 URL" />
-        <label class="ssw-field-label">复制流程</label>
+        <label class="ssw-field-label">模板源 <em v-if="addDlg.templateMode === 'search'">*</em></label>
         <select v-model="addDlg.templateMode" class="ssw-add-input" data-testid="source-template-mode" @change="onTemplateModeChange">
-          <option v-if="defaultTemplate" value="default">默认：本网站第一个源的流程（{{ defaultTemplate.name }}）</option>
-          <option value="search">搜索并选择全部源</option>
-          <option value="blank">空白模板</option>
+          <option v-if="defaultTemplate" value="default">默认：本网站第一个源（{{ defaultTemplate.name }}）</option>
+          <option value="search">搜索选择其他源</option>
+          <option value="blank">不用模板源（空白画布）</option>
         </select>
-        <!-- 1008-06：按模板源新建时可改绑一条已有流程（作为默认流程）；空白模板没有真实建源接口，不提供 -->
-        <template v-if="addDlg.templateMode !== 'blank'">
-          <label class="ssw-field-label">绑定流程 <span>（可选）</span></label>
-          <select v-model="addDlg.bindFlowId" class="ssw-add-input" data-testid="source-bind-flow" :disabled="bindFlowLoading">
-            <option value="">跟随模板源的流程</option>
-            <option v-for="f in bindFlowOptions" :key="f.id" :value="f.id">{{ f.name }}（{{ f.id }}）</option>
-          </select>
-        </template>
+        <!-- 1016：模板源搜索框紧跟在模板源下面（原来排在绑定流程后面，看着像绑定流程的必填项） -->
         <div v-if="addDlg.templateMode === 'search'" class="ssw-template-combobox" @click.stop>
           <input
             v-model="templateSearch.keyword"
             class="ssw-add-input"
             data-testid="source-template-search"
-            placeholder="搜索并选择全部源（名称或 ID）"
+            placeholder="搜索并选择模板源（名称或 ID）"
             @focus="templateSearch.open = !!templateSearch.keyword.trim()"
             @input="searchTemplateSources"
           />
@@ -1464,14 +1570,42 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             </button>
           </div>
         </div>
+        <!-- 1016：流程三选一（复制默认流程 / 关联已有流程 / 不关联）；空白模板没有真实建源接口，不提供 -->
+        <template v-if="addDlg.templateMode !== 'blank'">
+          <label class="ssw-field-label">流程</label>
+          <div class="ssw-flow-mode" role="radiogroup" aria-label="流程" data-testid="source-flow-mode">
+            <label><input v-model="addDlg.flowMode" type="radio" value="copy" data-testid="source-flow-copy" /> 复制模板源的默认流程</label>
+            <label><input v-model="addDlg.flowMode" type="radio" value="bind" data-testid="source-flow-bind" /> 关联已有流程</label>
+            <label><input v-model="addDlg.flowMode" type="radio" value="none" data-testid="source-flow-none" /> 不关联流程</label>
+          </div>
+          <template v-if="addDlg.flowMode === 'bind'">
+            <el-select
+              v-model="addDlg.bindFlowIds"
+              class="ssw-flow-select"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              :max-collapse-tags="3"
+              :loading="bindFlowLoading"
+              placeholder="搜索并选择要关联的流程（可多选）"
+              data-testid="source-bind-flows"
+              :teleported="false"
+            >
+              <el-option v-for="f in bindFlowOptions" :key="f.id" :label="`${f.name}（${f.id}）`" :value="f.id" />
+            </el-select>
+            <template v-if="addDlg.bindFlowIds.length > 1">
+              <label class="ssw-field-label">主流程</label>
+              <select v-model="addDlg.mainFlowId" class="ssw-add-input" data-testid="source-main-flow">
+                <option v-for="id in addDlg.bindFlowIds" :key="id" :value="id">{{ flowLabel(id) }}</option>
+              </select>
+            </template>
+          </template>
+        </template>
         <div class="ssw-add-hint">
           <!-- 界面上不出现旧平台的按钮名（「制作源+配置副本」）：用户看的是这个平台。
                实现上走的确实是旧平台那条 copySource?flag=1，记在 submitAdd 的注释里。 -->
-          {{ selectedTemplate
-            ? addDlg.bindFlowId
-              ? `将按「${selectedTemplate.name}」复制源（含其配置）到当前网站，新源关联所选流程（#${addDlg.bindFlowId}）作为默认流程；不复制表数据与运行记录。`
-              : `将复制「${selectedTemplate.name}」的流程（含其配置）到当前网站，并把新源关联到该流程；不复制表数据与运行记录。`
-            : '仅创建名称和 URL，流程从空白画布开始。' }}
+          <span data-testid="source-add-hint">{{ addHint }}</span>
         </div>
       </template>
 
@@ -1820,12 +1954,6 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-row-menu button.danger:hover:not(:disabled) { background: var(--rc-error-bg); color: #b91c1c; }
 
 /* 复制源弹窗的配置二选一：与流程复制确认框（tokens.css .copy-flow-options）同一套外观 */
-.ssw-copy-modes { display: flex; flex-direction: column; gap: 8px; }
-.ssw-copy-mode { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--rc-border); border-radius: 6px; cursor: pointer; }
-.ssw-copy-mode.active { border-color: #bfdbfe; background: var(--rc-primary-bg); }
-.ssw-copy-mode input { margin-top: 3px; }
-.ssw-copy-mode span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.5; }
-.ssw-copy-mode small { font-size: 12px; color: var(--rc-muted); }
 /* 更换网站弹窗：内容很短，不用 ssw-add-card 那套大表单排版 */
 .ssw-move-body { display: grid; gap: 8px; margin-bottom: 20px; }
 .ssw-move-src { margin: 0; color: var(--rc-text); font-size: 14px; font-weight: 600; }
@@ -1873,6 +2001,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 /* 参数源（0721 会议）：加源弹窗内新增分支；面板本体样式随 ParamSourceEditor.vue 迁走 */
 .ssw-add-card.wide { width: min(780px, calc(100vw - 32px)); transition: width 0.18s ease; }
 .ssw-kind-seg { display: flex; gap: 16px; margin: 0 0 24px; }
+.ssw-flow-mode { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0 0 12px; font-size: 14px; color: var(--rc-text-2); }
+.ssw-flow-mode label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ssw-flow-select { width: 100%; margin-bottom: 12px; }
 .ssw-kind-seg button { flex: 1; min-height: 82px; padding: 14px 18px; border: 1px solid #d5e2f2; border-radius: 12px; background: #fff; color: var(--rc-text-2); font-size: 16px; font-weight: 700; cursor: pointer; text-align: left; font-family: inherit; }
 .ssw-kind-seg button.active { border-color: var(--rc-primary); background: #eff6ff; color: var(--rc-primary-ink); box-shadow: inset 0 0 0 1px var(--rc-primary); }
 .ssw-kind-seg button strong { display: block; }

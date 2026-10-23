@@ -9,11 +9,14 @@ import { Refresh } from '@element-plus/icons-vue'
 import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
 import { parseIdList } from '@/utils/flow/flowSearch'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
+import { flowHasPublished, UNPUBLISHED_COPY_HINT } from '@/utils/flow/flowPublish'
 
 const props = defineProps<{
   modelValue: boolean
   /** 本源当前所属流程：列出来但不可选（换成自己没有意义） */
   currentFlowId?: string
+  /** 这些流程列出但不可选，标「已关联」（复用现有流程时排除本源已关联的） */
+  excludeFlowIds?: string[]
   purpose?: 'replace' | 'bind' | 'copy'
 }>()
 const emit = defineEmits<{
@@ -111,7 +114,7 @@ watch(() => props.modelValue, (open) => {
 }, { immediate: true })
 
 function flowSelectable(f: FlowRecord | undefined): f is FlowRecord {
-  return !!f && f.id !== props.currentFlowId && !f.disabled
+  return !!f && f.id !== props.currentFlowId && !props.excludeFlowIds?.includes(f.id) && !f.disabled
 }
 function flowOfSource(s: Source): FlowRecord | undefined {
   const id = validFlowIdOf(s.flowId)
@@ -140,6 +143,7 @@ function sourceRowClass({ row }: { row: Source }) {
 function flowTag(f: FlowRecord | undefined) {
   if (!f) return ''
   if (f.id === props.currentFlowId) return '当前'
+  if (props.excludeFlowIds?.includes(f.id)) return '已关联'
   if (f.disabled) return '已禁用'
   return f.isTemplate ? '模板' : ''
 }
@@ -160,11 +164,30 @@ const confirmText = computed(() => props.purpose === 'bind'
   ? '关联此流程'
   : props.purpose === 'copy' ? '以此新建' : '更换为此流程')
 
+/**
+ * 复制类用途（copy 新建 / replace 更换都会整条复制）要求选中的流程有发布版本（1016）：
+ * 后端复制取发布版，只有草稿时整个复制失败。选中就查，只有草稿时说明并禁用确认；查不到不拦。
+ * 关联（bind）不复制，不查。
+ */
+const publishCheck = reactive({ flowId: '', loading: false, published: null as boolean | null })
+watch(() => state.picked?.id ?? '', async (flowId) => {
+  publishCheck.flowId = flowId
+  publishCheck.published = null
+  publishCheck.loading = false
+  if (!flowId || props.purpose === 'bind') return
+  publishCheck.loading = true
+  const published = await flowHasPublished(flowId)
+  if (publishCheck.flowId !== flowId) return
+  publishCheck.published = published
+  publishCheck.loading = false
+})
+const pickBlocked = computed(() => publishCheck.loading || publishCheck.published === false)
+
 function close() {
   emit('update:modelValue', false)
 }
 function confirm() {
-  if (state.picked) emit('pick', state.picked)
+  if (state.picked && !pickBlocked.value) emit('pick', state.picked)
 }
 </script>
 
@@ -289,13 +312,17 @@ function confirm() {
     </div>
 
     <template #footer>
-      <span v-if="state.picked" class="rfd-picked">已选：{{ state.picked.name }}（#{{ state.picked.id }}）</span>
+      <span v-if="state.picked" class="rfd-picked">
+        已选：{{ state.picked.name }}（#{{ state.picked.id }}）
+        <span v-if="publishCheck.loading" class="rfd-muted">· 检查发布版本…</span>
+        <span v-else-if="publishCheck.published === false" class="rfd-unpublished" data-testid="replace-flow-unpublished">{{ UNPUBLISHED_COPY_HINT }}</span>
+      </span>
       <button class="rc-btn" type="button" @click="close">取消</button>
       <button
         class="rc-btn primary rfd-confirm"
         type="button"
         data-testid="replace-flow-confirm"
-        :disabled="!state.picked"
+        :disabled="!state.picked || pickBlocked"
         @click="confirm"
       >{{ confirmText }}</button>
     </template>
@@ -322,6 +349,7 @@ function confirm() {
 .rfd-muted { color: var(--rc-muted); }
 .rfd-pager { display: flex; justify-content: flex-end; margin-top: 10px; }
 .rfd-picked { margin-right: auto; font-size: 12px; color: var(--rc-text-2); }
+.rfd-unpublished { display: block; margin-top: 2px; color: var(--rc-warn); }
 /* rc-btn 全局没有禁用态：没选流程时确认按钮要看得出不可点 */
 .rfd-confirm:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 </style>

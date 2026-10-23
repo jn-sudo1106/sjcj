@@ -155,6 +155,21 @@ describe('SiteCardGrid 卡片操作菜单', () => {
     wrapper.unmount()
   })
 
+  it('菜单含「删除网站」项，点它向父组件抛出该网站（父组件负责二次确认）', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+    const { wrapper } = await mountGrid()
+
+    await wrapper.get('[data-testid="site-card-more"]').trigger('click')
+    const delBtn = wrapper.get('[data-testid="site-card-menu-delete"]')
+    expect(delBtn.text()).toContain('删除网站')
+    await delBtn.trigger('click')
+
+    expect(wrapper.emitted('delete-site')?.[0]).toEqual([site])
+    // 选完即关
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('点「⋯」不会冒泡到卡片跳转（否则点编辑会先跳进网站）', async () => {
     vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
     const { wrapper, router } = await mountGrid()

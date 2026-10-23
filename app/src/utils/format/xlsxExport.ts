@@ -2,8 +2,9 @@
  * 前端生成一份单表 xlsx（不引入 exceljs / xlsx 依赖）。
  *
  * 旧平台源列表本身没有后端导出端点，导出走浏览器；0831 源视图要的是
- * 按查询条件全量下载。这里只覆盖「二维字符串 → 一个工作表」，单元格用
- * inlineStr，避免再维护 sharedStrings。
+ * 按查询条件全量下载。这里只覆盖「二维数组 → 一个工作表」，文本单元格用
+ * inlineStr，避免再维护 sharedStrings；传 number 则写成数值单元格
+ * （旧 xlsx-style 导出的 id / 数量列就是数值，写成文本会被 Excel 标「数字存为文本」）。
  */
 
 const CRC_TABLE = (() => {
@@ -116,14 +117,21 @@ function safeSheetName(name: string): string {
   return cleaned || 'Sheet1'
 }
 
-function sheetXml(rows: string[][]): string {
+/** 一个单元格：文本走 inlineStr，有限数值走 `<v>`（Excel 里就是真正的数字） */
+export type XlsxCell = string | number
+
+function cellXml(ref: string, value: XlsxCell): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `<c r="${ref}"><v>${value}</v></c>`
+  }
+  const text = xmlEscape(value == null ? '' : String(value))
+  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${text}</t></is></c>`
+}
+
+function sheetXml(rows: XlsxCell[][]): string {
   const body = rows.map((row, rowIndex) => {
     const r = rowIndex + 1
-    const cells = row.map((cell, colIndex) => {
-      const ref = `${colLetter(colIndex)}${r}`
-      const text = xmlEscape(cell == null ? '' : String(cell))
-      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${text}</t></is></c>`
-    }).join('')
+    const cells = row.map((cell, colIndex) => cellXml(`${colLetter(colIndex)}${r}`, cell)).join('')
     return `<row r="${r}">${cells}</row>`
   }).join('')
   return (
@@ -166,7 +174,7 @@ const WORKBOOK_RELS = (
   '</Relationships>'
 )
 
-export function buildXlsx(rows: string[][], sheetName = 'Sheet1'): Uint8Array {
+export function buildXlsx(rows: XlsxCell[][], sheetName = 'Sheet1'): Uint8Array {
   const name = safeSheetName(sheetName)
   return zipStore([
     { name: '[Content_Types].xml', data: utf8(CONTENT_TYPES) },
@@ -179,7 +187,7 @@ export function buildXlsx(rows: string[][], sheetName = 'Sheet1'): Uint8Array {
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
-export function downloadXlsx(filename: string, rows: string[][], sheetName = 'Sheet1'): void {
+export function downloadXlsx(filename: string, rows: XlsxCell[][], sheetName = 'Sheet1'): void {
   if (typeof document === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) {
     throw new Error('downloadXlsx 只能在浏览器环境调用')
   }
@@ -192,4 +200,10 @@ export function downloadXlsx(filename: string, rows: string[][], sheetName = 'Sh
   a.download = filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** `20261014` 这样的日期后缀，拼在导出文件名里（旧平台 toLocaleDateString('en-CA') 去分隔符的口径） */
+export function exportDateTag(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
 }

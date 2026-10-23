@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { TABS } from './tabs'
+import { SYSTEM_CONFIG_TABS, BASE_CONFIG_TABS, TABS, TEMPLATE_CONFIG_TABS } from './tabs'
 import { router } from './index'
 
 describe('Phase 3.1 画布入口退役', () => {
@@ -57,22 +57,82 @@ describe('Phase 3.1 画布入口退役', () => {
     expect(redirect({ query: { state: 'E' } })).toEqual({ path: '/monitor', query: { state: 'E' } })
   })
 
-  // 1013：旧 ai-chat-view「模板配置 → sql模板配置」迁到 front-ce，独立成「模板配置」组。
-  // 这一组会随迁移逐个长出来（表模板 / 自动补全 / 问句改写 / 数据索引…），所以按组做通用断言：
-  // TABS 里每个 template 入口都要有路由落点，且 meta.permission 与 TABS 的 permission 同值
-  // ——侧栏读 TABS、路由守卫读 meta，两边不同值就会出现「菜单看得见、地址进不去」。
-  it('模板配置组每个入口都有路由，且 permission 两侧同值', () => {
-    const tab = TABS.find((t) => t.key === 'sql-template')
-    expect(tab?.label).toBe('SQL模板配置')
-    expect(tab?.group).toBe('template')
-
+  // 1013：旧 ai-chat-view「模板配置 → sql模板配置」迁到 front-ce，独立成一个菜单组。
+  // 1015：组改名「问数配置」，组下只留「模板配置」一个入口，8 个子模块收进页内 tab
+  // （元数据在 TEMPLATE_CONFIG_TABS，容器见 views/TemplateConfig/index.vue）。
+  // 8 个子模块不再有独立地址，只通过 ?tab= 访问。
+  // 1015（同日）：旧「系统配置」组迁入，问数配置组加第二个入口「问数系统配置」，
+  // 参数设置 / 页面配置两个页内 tab（元数据在 SYSTEM_CONFIG_TABS）。
+  // 1015：旧「基础配置」组迁入，问数配置组加第三个入口「基础配置」，**排在模板配置之前**，
+  // 表字段管理一个页内 tab（元数据在 BASE_CONFIG_TABS）。
+  it('侧栏暴露基础配置 + 模板配置 + 问数系统配置三个入口，子模块作为页内 tab', () => {
     const templateTabs = TABS.filter((t) => t.group === 'template')
-    expect(templateTabs.length).toBeGreaterThan(0)
+    expect(templateTabs.map((t) => `${t.key}:${t.label}`)).toEqual(['base-config:基础配置', 'template-config:模板配置', 'system-config:问数系统配置'])
+
     const shell = router.options.routes.find((r) => r.path === '/')
-    for (const t of templateTabs) {
-      const route = shell?.children?.find((r) => r.path === t.path)
-      expect(route, `路由缺 ${t.path}`).toBeTruthy()
-      expect(route?.meta?.permission).toBe(t.permission)
+    const baseRoute = shell?.children?.find((r) => r.path === '/base-config')
+    expect(baseRoute?.component).toBeTruthy()
+    const route = shell?.children?.find((r) => r.path === '/template-config')
+    expect(route?.component).toBeTruthy()
+    const systemRoute = shell?.children?.find((r) => r.path === '/system-config')
+    expect(systemRoute?.component).toBeTruthy()
+
+    expect(TEMPLATE_CONFIG_TABS.map((t) => t.key)).toEqual([
+      'sql-template',
+      'table-template',
+      'dic-template',
+      'question-dic',
+      'data-index-sync',
+      'data-index-config',
+      'chat-flow-step',
+      'word-segment-config',
+    ])
+    // 页内 tab 的权限码与原侧栏子项一一对应，接入菜单权限后 canAccess 直接按它过滤
+    for (const t of TEMPLATE_CONFIG_TABS) {
+      expect(t.permission).toBe(t.key)
     }
+  })
+
+  // 问数系统配置（1015 迁入旧「系统配置」组）：参数设置必须排第一 —— 无 ?tab= 时容器落 tabs[0]，
+  // 需求明确「默认进来展示参数设置」。
+  it('问数系统配置的页内 tab：参数设置在前（默认），权限码与 key 一致', () => {
+    expect(SYSTEM_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual(['param-config:参数设置', 'page-config:页面配置'])
+    for (const t of SYSTEM_CONFIG_TABS) {
+      expect(t.permission).toBe(t.key)
+    }
+  })
+
+  // 基础配置（1015 迁入旧「基础配置」组）：页内六个 tab，「表字段管理」是无 ?tab= 时的默认，
+  // 「向量表数据浏览」「选表规则配置」「向量表管理」「表改写管理」「实体改写管理」同日迁入
+  // （旧 /demo/vector-data、/demo/match-table-config-list、/config/vector-list、/demo/replace-table-config-list、/demo/entity-rewrite-config-list）。
+  // 顺序照旧侧栏，不按迁入先后排。
+  it('基础配置的页内 tab：表字段管理 + 向量表数据浏览 + 选表规则配置 + 向量表管理 + 表改写管理 + 实体改写管理，权限码与 key 一致', () => {
+    expect(BASE_CONFIG_TABS.map((t) => `${t.key}:${t.label}`)).toEqual([
+      'entity-config:表字段管理',
+      'vector-data:向量表数据浏览',
+      'match-table-config:选表规则配置',
+      'vector-config:向量表管理',
+      'replace-table-config:表改写管理',
+      'entity-rewrite-config:实体改写管理',
+    ])
+    for (const t of BASE_CONFIG_TABS) {
+      expect(t.permission).toBe(t.key)
+    }
+  })
+
+  // 辅助工具（1020 新增）：页在 views/AuxiliaryTool/index.vue，**独立成组**（不是塞进运行与监控/问数配置）。
+  // 三条断言对应三个「漏了不报错」的点：TABS 缺项 → 侧栏没入口；
+  // 路由缺项 → 点进去白屏；key 与路径段不一致 → 面包屑与高亮静默回退到「采集资产总览」。
+  it('辅助工具：独立分组、侧栏有入口、路由可达、key 与路径段一致', () => {
+    const tab = TABS.find((t) => t.key === 'auxiliary-tool')
+    expect(tab?.label).toBe('辅助工具')
+    expect(tab?.path).toBe('/auxiliary-tool')
+    expect(tab?.group).toBe('auxiliary')
+    // 该组下只有这一条，且不允许被并入别的组（并回去就会让「辅助工具」组消失）
+    expect(TABS.filter((t) => t.group === 'auxiliary').map((t) => t.key)).toEqual(['auxiliary-tool'])
+
+    const shell = router.options.routes.find((r) => r.path === '/')
+    const route = shell?.children?.find((r) => r.path === '/auxiliary-tool')
+    expect(route?.component).toBeTypeOf('function')
   })
 })
