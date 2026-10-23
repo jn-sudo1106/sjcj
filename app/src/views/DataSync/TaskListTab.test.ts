@@ -50,7 +50,7 @@ async function mountTab(detail: SyncSinkDetail) {
   const save = vi.spyOn(syncApi, 'saveTaskDetail').mockResolvedValue({})
   wrapper = mount(TaskListTab, { attachTo: document.body, global: { plugins: [ElementPlus] } })
   await flushPromises()
-  const edit = body().findAll('button').find((item) => item.text() === '编辑')
+  const edit = body().findAll('.el-table__row [data-testid="task-edit"]')[0]
   if (!edit) throw new Error('找不到编辑入口')
   await edit.trigger('click')
   await flushPromises()
@@ -124,8 +124,8 @@ describe('TaskListTab · 删除任务', () => {
   }
 
   async function openDeleteDialog() {
-    // el-table 的 hidden-columns 测量区也会渲染一份插槽（row 为空对象），只取真实行的按钮
-    const del = body().findAll('.el-table__row button').find((b) => b.text() === '删除')
+    // el-table 的 hidden-columns 测量区也会渲染一份插槽（row 为空对象），只取真实行的图标
+    const del = body().findAll('.el-table__row [data-testid="task-delete"]')[0]
     if (!del) throw new Error('找不到删除入口')
     await del.trigger('click')
     await flushPromises()
@@ -169,5 +169,30 @@ describe('TaskListTab · 删除任务', () => {
     await flushPromises()
 
     expect(remove).toHaveBeenCalledWith(7, 3, 'gzh_db.t_holding', '1')
+  })
+})
+
+describe('TaskListTab · 操作列图标', () => {
+  it('文字操作换成图标热区，按状态只留当下面得中的动作（悬浮文案沿用原文案）', async () => {
+    setActivePinia(createPinia())
+    useAuthStore().info = { name: 'admin', id: 1, roles: [], groups: [], avatar: '', introduction: '', group: 1 } as never
+    vi.spyOn(syncApi, 'customers').mockResolvedValue([])
+    vi.spyOn(syncApi, 'tasks').mockResolvedValue({
+      list: [row, { ...row, id: 8, taskName: '暂停的 CDC 任务', syncType: 0, status: 1 } as SyncTask],
+      total: 2,
+    })
+    wrapper = mount(TaskListTab, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const tips = (index: number) => wrapper!.findAll('.el-table__row')[index]
+      .findAllComponents({ name: 'ElTooltip' })
+      .filter((item: VueWrapper) => item.find('.rc-op-icon').exists())
+      .map((item: VueWrapper) => (item.props() as { content?: string }).content)
+    // 运行中的 SQL 任务：执行 / 参数执行 / 关闭
+    expect(tips(0)).toEqual(['编辑', '立即执行', '参数执行', '关闭任务'])
+    // 暂停态：开启 + 删除（删除不再有文字入口，只有红色图标）
+    expect(tips(1)).toEqual(['编辑', '开启任务', '删除任务'])
+    // 图标化后单元格里不再有中文按钮文字
+    expect(wrapper!.findAll('.el-table__row')[0].text()).not.toContain('参数执行')
   })
 })

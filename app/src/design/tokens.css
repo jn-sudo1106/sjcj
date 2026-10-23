@@ -281,6 +281,44 @@ textarea {
   overflow: auto;
 }
 
+/* ---------- 行内操作（图标热区，指标中心 / 数据同步各列表页统一） ---------- */
+.rc-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rc-op-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.rc-op-icon:hover {
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary);
+}
+
+.rc-op-icon.is-danger:hover {
+  background: var(--rc-error-bg);
+  color: var(--rc-error);
+}
+
+.rc-op-icon.is-disabled {
+  color: var(--rc-faint);
+  cursor: not-allowed;
+}
+
+.rc-op-icon.is-disabled:hover {
+  background: transparent;
+  color: var(--rc-faint);
+}
+
 /* ---------- 状态徽标（运行状态 vs 能力状态） ---------- */
 .rc-status {
   display: inline-flex;

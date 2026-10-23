@@ -122,10 +122,18 @@ function selectTable(id: string | number) {
   const table = tables.value.find((item) => String(item.entryTypeId) === String(id))
   if (!table) return
   selectedTable.value = table
-  form.sourceTable = table.tableName.toLowerCase()
+  // 物理表名按配置原样使用：MySQL 在 Linux 上区分大小写，cfg_entry_type 里存的是 sense_data.TB_XXX，
+  // 转小写后 SHOW CREATE TABLE 和同步取数都会报「表不存在」
+  form.sourceTable = table.tableName
   form.sourceTableComment = table.typeName
-  form.targetTable = form.sourceTable.replace(`${String(form.sourceSchema).toLowerCase()}.`, '').replaceAll('tb_', '')
+  form.targetTable = targetTableOf(form.sourceTable)
   columns.value = []
+}
+
+/** 目标表名沿用旧口径：去掉源 schema 与 tb_ 前缀后转小写 */
+function targetTableOf(sourceTable: string): string {
+  const schemaPrefix = new RegExp(`^${String(form.sourceSchema)}\\.`, 'i')
+  return sourceTable.replace(schemaPrefix, '').replace(/tb_/gi, '').toLowerCase()
 }
 
 /** 远程搜索会整页换掉选项，已选那张得留在首位，否则标签退化成裸 entryTypeId、中文名丢失 */

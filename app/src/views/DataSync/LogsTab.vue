@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { syncApi, type SyncClient, type SyncCustomer, type SyncLog, type SyncStatistic, type SyncTask } from '@/api/dataSync'
 
@@ -117,7 +118,7 @@ function statusLabel(row: SyncLog) {
       <el-table-column prop="id" label="ID" width="80" /><el-table-column prop="taskId" label="任务 ID" width="100" />
       <el-table-column prop="taskName" label="任务名称" min-width="190" /><el-table-column prop="sourceNum" label="源表数量" width="110" /><el-table-column prop="targetNum" label="目标表数量" width="110" />
       <el-table-column prop="sourceSql" label="源表统计 SQL" min-width="220" show-overflow-tooltip /><el-table-column prop="targetSql" label="目标表统计 SQL" min-width="220" show-overflow-tooltip />
-      <el-table-column prop="createTime" label="创建时间" width="170" /><el-table-column label="操作" width="80"><template #default="{ row }"><el-button link type="primary" @click="detail = row; detailOpen = true">详情</el-button></template></el-table-column>
+      <el-table-column prop="createTime" label="创建时间" width="170" /><el-table-column label="操作" width="60"><template #default="{ row }"><el-tooltip content="详情" placement="top"><span class="rc-op-icon" data-testid="log-detail" aria-label="详情" @click="detail = row; detailOpen = true"><el-icon :size="15"><View /></el-icon></span></el-tooltip></template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @change="load" />
     <el-drawer v-model="detailOpen" title="统计日志详情" size="min(650px, 94vw)"><el-descriptions v-if="detail" :column="1" border>
