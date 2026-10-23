@@ -42,7 +42,10 @@ const mode = ref<'selected' | 'range'>('selected')
 const target = ref('')
 const saving = ref(false)
 /** 生产写保护没放开 changeMembersByRange（一次能改上万个源，2026-10-10 定），连生产时只能按勾选调整 */
-const rangeAllowed = !isProductionBackend() && !props.rangeBlocked
+/** 按主表 ID 筛选（1022）：changeMembersByRange 认不认 entryTypeId 未核实，不认就会变成不限，先只允许按勾选 */
+const rangeBlockedText = props.rangeBlocked ? '「我的视图」目录里只能按勾选调整'
+  : props.query.entryTypeId ? '按主表 ID 筛选时只能按勾选调整' : ''
+const rangeAllowed = !isProductionBackend() && !rangeBlockedText
 /** 退出来源组：两个接口口径不同——changeMembers 传 null，changeMembersByRange 传 -1 */
 const LEAVE = '__none__'
 
@@ -161,7 +164,7 @@ async function runJoin(excludeIds: string[]) {
   <el-dialog :model-value="true" title="调整来源组" width="520px" style="max-width: calc(100vw - 32px)" append-to-body @close="emit('close')">
     <el-radio-group v-model="mode" class="asg-mode">
       <el-radio :value="'selected'" :disabled="!selectedSources.length">勾选的源（{{ selectedSources.length }}）</el-radio>
-      <el-radio :value="'range'" :disabled="!rangeAllowed" :title="rangeAllowed ? '' : rangeBlocked ? '「我的视图」目录里只能按勾选调整' : '生产环境暂不支持按筛选范围批量调整'">按当前筛选范围</el-radio>
+      <el-radio :value="'range'" :disabled="!rangeAllowed" :title="rangeAllowed ? '' : rangeBlockedText || '生产环境暂不支持按筛选范围批量调整'">按当前筛选范围</el-radio>
     </el-radio-group>
 
     <!-- 勾选的源 -->

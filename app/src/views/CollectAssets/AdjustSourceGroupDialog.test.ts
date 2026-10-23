@@ -231,4 +231,15 @@ describe('调整来源组弹窗', () => {
     expect(changeMembersByRange).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  // 1022 按主表 ID 查源：changeMembersByRange 认不认 entryTypeId 未核实，先只允许按勾选
+  it('按主表 ID 筛选时：「按筛选范围」置灰，不会走 changeMembersByRange', async () => {
+    const changeMembersByRange = vi.spyOn(sourceGroupApi, 'changeMembersByRange')
+    const wrapper = mountDialog({ query: { entryTypeId: '6200029' } })
+    await settle()
+    const rangeRadio = [...document.querySelectorAll<HTMLInputElement>('.asg-mode input[type="radio"]')].find((i) => i.value === 'range')
+    expect(rangeRadio?.disabled).toBe(true)
+    expect(changeMembersByRange).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })
