@@ -31,7 +31,7 @@ import type {
   SummaryRow,
   TaskInst,
 } from './types'
-import type { FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
+import type { CreateJobsInput, FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
@@ -1072,6 +1072,24 @@ export function sourceToLegacyParams(source: Source): Record<string, unknown> {
     domain: source.domain,
     sourceParam: source.coreParam,
     authConfig: source.authConfig,
+  }
+}
+
+/**
+ * 批量配定时 → 旧 `POST /v1/source/createJobs` 的 query 参数（旧 SourceCron.vue + api/source-job.js saveSourceCron）。
+ * - `configId` 必须在场、可为空串（旧 api 层强制 `''`）；请求时要配合 `keepEmptyParams: ['configId']`。
+ * - `flowId` 0 = 跟随各来源默认流程；正数时后端校验每个源都关联了该流程，否则整批不建。
+ * - `indexKey` 旧批量入口不传，这里也不带。
+ */
+export function createJobsToLegacy(input: CreateJobsInput): LegacyRecord {
+  return {
+    ids: input.sourceIds.filter(Boolean).join(','),
+    cron: input.cron.trim(),
+    enable: input.enable,
+    monitorEnable: input.monitorEnable,
+    monitorAfter: input.monitorAfter ?? 30,
+    flowId: input.flowId ? Number(input.flowId) : 0,
+    configId: '',
   }
 }
 

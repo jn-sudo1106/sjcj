@@ -27,6 +27,7 @@ import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
+import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
 import { scopedSourceIds } from './sourceScope'
 import { HIDEABLE_SOURCE_COLUMNS, viewStateFilter, type SourceListViewState } from './sourceListViewState'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
@@ -569,6 +570,7 @@ const flowConfigOpen = ref(false)
 const flowConfigSource = ref<Source | null>(null)
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
+const batchCronOpen = ref(false)
 function openFlowConfigForSelected() {
   if (selectedIds.value.length !== 1) {
     ElMessage.warning('源流程配置一次只看一个源，请只勾选 1 个')
@@ -601,11 +603,20 @@ function openRunOnce() {
   }
   runOnceOpen.value = true
 }
+/** 批量配定时（旧「操作类 → 定时任务变更 → 批量配定时」，2026-10-23） */
+function openBatchCron() {
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先勾选要配定时的来源')
+    return
+  }
+  batchCronOpen.value = true
+}
 function onGroupOpsCommand(command: string) {
   sourceGroupOpsOpen.value = false
   if (command === 'flow-config') openFlowConfigForSelected()
   else if (command === 'adjust-group') openAdjustGroup()
   else if (command === 'run-once') openRunOnce()
+  else if (command === 'batch-cron') openBatchCron()
 }
 /** 来源组批量操作写完后：清勾选、重拉来源组候选、重查列表（组归属 / 默认流程列变了） */
 function onGroupOpsChanged() {
@@ -1365,7 +1376,7 @@ defineExpose({ openLaunch, clearSelection })
       </div>
     </div>
 
-    <div class="sov-summary">
+    <div class="sov-summary" :class="{ 'one-row': crossSite }">
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
       <slot name="summary-extra" :ids="selectedIds" />
@@ -1405,6 +1416,7 @@ defineExpose({ openLaunch, clearSelection })
               <el-dropdown-item command="flow-config" data-testid="sg-ops-flow-config">源流程配置（勾选 1 个）</el-dropdown-item>
               <el-dropdown-item command="adjust-group" data-testid="sg-ops-adjust-group">{{ rangeAdjustAllowed ? '调整来源组（不勾选 = 按当前筛选范围）' : '调整来源组' }}</el-dropdown-item>
               <el-dropdown-item command="run-once" data-testid="sg-ops-run-once">指定流程运行一次</el-dropdown-item>
+              <el-dropdown-item command="batch-cron" data-testid="sg-ops-batch-cron">批量配定时</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -1651,6 +1663,7 @@ defineExpose({ openLaunch, clearSelection })
       :flows="flowOptions"
       @close="runOnceOpen = false"
     />
+    <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
   </section>
@@ -1728,6 +1741,8 @@ defineExpose({ openLaunch, clearSelection })
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }
 .sov-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--rc-text-2); font-size: 12px; }
 .sov-summary b { color: var(--rc-text); }
+/* 源管理（跨网站）：勾选操作和右侧按钮保持一排，不折行 */
+.sov-summary.one-row { flex-wrap: nowrap; white-space: nowrap; }
 .sov-summary span { color: var(--rc-faint); }
 .sov-table-wrap { min-height: 0; flex: 1; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .sov-table-wrap.loading { opacity: .62; }

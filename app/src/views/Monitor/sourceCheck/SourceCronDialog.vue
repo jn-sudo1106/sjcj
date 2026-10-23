@@ -4,23 +4,31 @@
 // 旧版 `show(ids, cron, indexKey)` 有两套形态：`ids !== '-1'` 时是「给一批源配定时任务」
 // （多出 源ID / 加监控 / 执行流程 三个字段 + 「提交并启用」按钮）；CheckAdd 走的是
 // `show('-1', '')`——只有 定时表达式 + 常用定时 + 测试 + cron 编辑器 + 最近运行时间。
-// 这里只迁后一套（本页用得到的），并把手写输入 + 编辑器双向联动按旧版 watch 口径还原：
+// 不传 `sourceIds` 是后一套（emit submit 交给调用方）；传了 `sourceIds` 是前一套——源列表
+// 「批量配定时」（2026-10-23），弹窗自己调 `sourceApi.createJobs` 提交，成功 emit saved。
+// 手写输入 + 编辑器双向联动按旧版 watch 口径还原：
 //   常用定时 / 编辑器改动 → 输入框跟随 + 刷新「最近运行时间」
 //   手改输入框 → 不联动（要按「测试」才生效），与旧版 v-decorator 单向绑定一致
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { checkCron } from '@/api/monitor'
+import { sourceApi, type FlowRecord } from '@/api'
 import CronBuilder from './CronBuilder.vue'
 
 const props = defineProps<{
   modelValue: boolean
   /** 打开时的初始表达式（不是 cron 形态时按空处理，交给编辑器自己补默认值） */
   cron?: string
+  /** 批量配定时的源（旧 `ids !== '-1'` 形态）；不传 = 只编辑表达式 */
+  sourceIds?: string[]
+  /** 执行流程候选（批量形态用） */
+  flows?: FlowRecord[]
 }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'submit', cron: string): void
+  (e: 'saved'): void
 }>()
 
 /** 旧 crons 数组按 key 取值的顺序（key 与旧版 a-menu-item 一致，只是顺序不同） */
@@ -39,6 +47,14 @@ const open = computed({
   get: () => props.modelValue,
   set: (v: boolean) => emit('update:modelValue', v),
 })
+
+const batch = computed(() => props.sourceIds !== undefined)
+const idsText = computed(() => (props.sourceIds ?? []).join(','))
+const monitorEnable = ref(false)
+const monitorAfter = ref(30)
+/** 执行流程；空 = 使用来源默认流程（旧 flowId=0） */
+const flowId = ref('')
+const submitting = ref(false)
 
 const inputCron = ref('')
 const builderCron = ref('')
@@ -106,6 +122,38 @@ function onSubmit() {
   open.value = false
 }
 
+/** 批量形态：「提交并启用」enable=true /「仅提交」enable=false（旧 handleOk(enable)） */
+async function onBatchSubmit(enable: boolean) {
+  const cron = inputCron.value.trim()
+  if (!idsText.value || !cron) {
+    ElMessage.error('请输入!')
+    return
+  }
+  submitting.value = true
+  try {
+    const ack = await sourceApi.createJobs({
+      sourceIds: props.sourceIds ?? [],
+      cron,
+      enable,
+      monitorEnable: monitorEnable.value,
+      monitorAfter: monitorAfter.value,
+      flowId: flowId.value,
+    })
+    if (!ack.ok) throw new Error(ack.message || '')
+    // 旧文案是 `'提交定时任务成功，' + enable ? '已启用' : '[未启用]'`，优先级 bug 让它永远是「已启用」，按原意修正
+    ElMessage.success('提交定时任务成功，' + (enable ? '已启用' : '[未启用]'))
+    open.value = false
+    emit('saved')
+  } catch (error) {
+    // 旧版只提示「提交定时任务失败」；后端会说明哪些源没关联所选流程，带上原因
+    const cause = (error as { cause?: unknown })?.cause
+    const reason = cause instanceof Error ? cause.message : error instanceof Error ? error.message : ''
+    ElMessage.error(reason ? `提交定时任务失败：${reason}` : '提交定时任务失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
 watch(
   () => props.modelValue,
   (v) => {
@@ -115,6 +163,9 @@ watch(
     builderCron.value = initial
     runs.value = []
     runsError.value = ''
+    monitorEnable.value = false
+    monitorAfter.value = 30
+    flowId.value = ''
     void loadRuns(initial)
   },
   { immediate: true },
@@ -124,13 +175,17 @@ watch(
 <template>
   <el-dialog
     v-model="open"
-    title="定时"
+    :title="batch ? '批量配定时' : '定时'"
     width="920px"
     destroy-on-close
     :close-on-click-modal="false"
     class="scd-dialog"
   >
-    <div class="scd-row">
+    <div v-if="batch" class="scd-row">
+      <span class="scd-label">源ID</span>
+      <el-input :model-value="idsText" readonly class="scd-ids" placeholder="请输入源" data-testid="scd-ids" />
+    </div>
+    <div class="scd-row" :class="{ 'scd-row-gap': batch }">
       <span class="scd-label">定时</span>
       <el-input v-model="inputCron" class="scd-cron" placeholder="请配置cron表达式" @keyup.enter="onTest" />
       <el-dropdown trigger="click" @command="onPreset">
@@ -146,6 +201,22 @@ watch(
       </el-dropdown>
       <el-button class="scd-preset-btn" @click="onTest">测试</el-button>
     </div>
+    <template v-if="batch">
+      <div class="scd-row scd-row-gap">
+        <span class="scd-label">监控</span>
+        <el-switch v-model="monitorEnable" data-testid="scd-monitor" />
+        <span class="scd-text">加监控</span>
+        <el-input-number v-model="monitorAfter" :min="1" :step="5" controls-position="right" class="scd-after" data-testid="scd-monitor-after" />
+        <span class="scd-text">分钟后</span>
+      </div>
+      <div class="scd-row scd-row-gap">
+        <span class="scd-label">流程</span>
+        <el-select v-model="flowId" clearable filterable placeholder="使用来源默认流程" class="scd-flow" data-testid="scd-flow">
+          <el-option v-for="f in flows ?? []" :key="f.id" :label="`${f.name} · ${f.id}`" :value="f.id" />
+        </el-select>
+        <span class="scd-hint">留空使用来源默认流程；所选流程须与每个来源关联。</span>
+      </div>
+    </template>
 
     <div class="scd-body">
       <div class="scd-builder">
@@ -163,12 +234,25 @@ watch(
 
     <template #footer>
       <el-button @click="open = false">取消</el-button>
-      <el-button type="primary" @click="onSubmit">仅提交</el-button>
+      <template v-if="batch">
+        <el-button :loading="submitting" data-testid="scd-submit" @click="onBatchSubmit(false)">仅提交</el-button>
+        <el-button type="primary" :loading="submitting" data-testid="scd-submit-enable" @click="onBatchSubmit(true)">提交并启用</el-button>
+      </template>
+      <el-button v-else type="primary" @click="onSubmit">仅提交</el-button>
     </template>
   </el-dialog>
 </template>
 
 <style scoped>
+/* 13.6 寸屏：宽度按视口留边，正文超高时只在弹窗正文里滚 */
+:global(.scd-dialog) {
+  max-width: calc(100vw - 32px);
+  margin-top: 6vh;
+}
+:global(.scd-dialog .el-dialog__body) {
+  max-height: calc(88vh - 120px);
+  overflow: auto;
+}
 .scd-row {
   display: flex;
   align-items: center;
@@ -181,9 +265,32 @@ watch(
   font-size: 14px;
   text-align: right;
 }
-.scd-cron {
+.scd-cron,
+.scd-ids {
   flex: 1;
   min-width: 0;
+}
+.scd-row-gap {
+  margin-top: 12px;
+}
+.scd-text,
+.scd-hint {
+  flex: none;
+  color: var(--rc-text-2, #334155);
+  font-size: 13px;
+}
+.scd-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--rc-faint, #94a3b8);
+  font-size: 12px;
+}
+.scd-after {
+  width: 120px;
+}
+.scd-flow {
+  width: 360px;
+  flex: none;
 }
 /* 旧版这两个按钮是描边蓝（#00A0E9），这里沿项目主色 */
 .scd-preset-btn {

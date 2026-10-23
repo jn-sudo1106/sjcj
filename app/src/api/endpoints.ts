@@ -50,6 +50,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
   // 2026-09-18 接上：节点配置里改完定时策略、点保存时写回 job 表（旧平台 saveSourceCron）。
   // ⚠️ POST 但参数走 **query**，不是 body——旧 api/source-job.js 用的就是 `method:'post', params`。
+  // 2026-10-23 源列表「选中来源 → 批量配定时」也走这条（sourceApi.createJobs，多带 flowId、configId 发空串）。
+  // 186 实测：不带 configId 报 not present、`configId=` 正常；flowId 未关联的源整批拒绝不建。
   { path: 'source/createJobs', desc: '给源新建定时（**只新建**，改已有的要用 job/updateJob）', danger: true, live: true },
   { path: 'source/clear', desc: '清源缓存', danger: true },
   { path: 'source/queryStepDetail', desc: '查询子步骤详情' },

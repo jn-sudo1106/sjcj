@@ -759,7 +759,7 @@ onUnmounted(() => {
       <template v-if="scope === 'all'" #summary-extra>
         <span v-if="dirActive" class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
           · {{ dirKindLabel }}：<b>{{ dirLabelText }}</b><template v-if="dirWithSub">（含子级）</template>
-          <button class="ca-dir-link" type="button" data-testid="dir-scope-clear" @click="dirPanelRef?.clear()">清除</button>
+          <button class="ca-dir-clear" type="button" data-testid="dir-scope-clear" title="清除目录范围" aria-label="清除目录范围" @click="dirPanelRef?.clear()">×</button>
         </span>
         <!-- 业务目录下暂不提供按目录发送 / 定时（10-21 用户） -->
         <el-dropdown v-if="dirActive && dirScope.kind === 'sys'" trigger="click" data-testid="dir-ops" @command="onDirCommand">
@@ -860,10 +860,12 @@ onUnmounted(() => {
 .ca-dir-layout.with-dir.collapsed { grid-template-columns: 36px minmax(0, 1fr); }
 .ca-dir-panel { min-height: 0; max-height: 100%; align-self: start; }
 .ca-dir-layout > .ca-source-list { min-width: 0; min-height: 0; }
-.ca-dir-scope { color: var(--rc-text-2); font-size: 13px; }
-.ca-dir-scope b { color: var(--rc-primary); font-weight: 600; }
+.ca-dir-scope { display: inline-flex; align-items: center; min-width: 0; color: var(--rc-text-2); font-size: 13px; }
+/* 摘要行一排放不下时先缩目录名（悬停看全称） */
+.ca-dir-scope b { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary); font-weight: 600; }
 .ca-dir-scope.biz b { color: #7c3aed; }
-.ca-dir-link { margin-left: 6px; border: 0; background: none; padding: 0; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
+.ca-dir-clear { flex: none; width: 18px; height: 18px; margin-left: 4px; border: 0; border-radius: 50%; background: none; padding: 0; color: var(--rc-faint); font-size: 15px; line-height: 18px; cursor: pointer; }
+.ca-dir-clear:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
 .ca-biz-tag { display: inline-block; margin-right: 4px; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
 .ca-muted { color: var(--rc-faint); }
 @media (max-width: 900px) {

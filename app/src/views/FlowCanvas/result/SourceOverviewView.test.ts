@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { KeepAlive, defineComponent, h } from 'vue'
-import { ElMessage, ElMessageBox, ElPagination } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox, ElPagination } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
@@ -1734,14 +1734,14 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
   const GROUP_SOURCE: Source = { sourceId: '391000500', name: '组内源', sourceGroupId: '3', state: 'C', siteId: 's1', url: '', configId: '', mainTable: '', owner: '' }
   const INDEP_SOURCE: Source = { sourceId: '430024667', name: '独立源', sourceGroupId: undefined, state: 'C', siteId: 's2', defaultFlowId: '14010130', url: '', configId: '', mainTable: '', owner: '' }
 
-  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE]) {
+  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE], plugins: never[] = []) {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: sourceList.length, list: sourceList })
     vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
       { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006', revision: 2 },
       { sourceGroupId: '1', sourceGroupCode: 'test1', sourceGroupName: '测试组1', state: 'ACTIVE', flowIds: [], revision: 1 },
     ])
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body, global: { plugins } })
     await flushPromises()
     page.mockClear()
     return { wrapper, page }
@@ -1837,6 +1837,25 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     ;(check.element as HTMLInputElement).click()
     await flushPromises()
     expect(wrapper.find('[data-testid="source-group-ops"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('「选中来源 → 批量配定时」：未勾选提示，勾选后打开批量形态的定时弹窗', async () => {
+    const warn = vi.spyOn(ElMessage, 'warning')
+    const { wrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus as never])
+    const ops = wrapper.findAllComponents({ name: 'ElDropdown' }).find((c) => c.vm.$attrs['data-testid'] === 'source-group-ops')!
+    ops.vm.$emit('command', 'batch-cron')
+    await flushPromises()
+    expect(warn).toHaveBeenCalledWith('请先勾选要配定时的来源')
+    expect(wrapper.findComponent({ name: 'SourceCronDialog' }).exists()).toBe(false)
+
+    ;(wrapper.find('[data-testid="source-check-430024667"]').element as HTMLInputElement).click()
+    await flushPromises()
+    ops.vm.$emit('command', 'batch-cron')
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'SourceCronDialog' })
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['430024667'])
     wrapper.unmount()
   })
 
