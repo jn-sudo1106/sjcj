@@ -240,6 +240,8 @@ export interface DeploymentConfiguration extends DirectoryLayout {
   name: string
   pathStyle: DirectoryBindingType
   sourceNode?: DeploymentSourceNode
+  /** 按配置 ID 反查的流程节点；不替代已保存的来源绑定。 */
+  relatedSourceNodes?: (DeploymentSourceNode & { isDraft?: boolean })[]
   updatedAt?: string
   legacyType?: DirectoryBindingType
   legacyOwner?: string

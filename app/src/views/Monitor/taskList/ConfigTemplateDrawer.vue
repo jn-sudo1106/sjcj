@@ -18,9 +18,10 @@
 //   3. 参数列表里的「参考值」列：旧 BaseDetail 的 defaultSlot 会把 http 链接、fileId/地址类路径渲染成
 //      可点链接（依赖 apiport 9102 拼 oss 下载地址）。本页只保留 http(s) 链接可点，路径类不再拼
 //      oss 地址（那串 hostname:9102 是旧平台部署参数，新平台没有）。
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { configApi } from '@/api'
+import type { BackendScope } from '@/api/flowBackend'
 import { configDetailColumns, CONFIG_PARAM_COLUMNS, type TaskColumn } from './columns'
 
 defineOptions({ name: 'ConfigTemplateDrawer' })
@@ -29,6 +30,9 @@ const open = ref(false)
 const loading = ref(false)
 const configId = ref('')
 const record = ref<Record<string, unknown> | null>(null)
+const loadError = ref('')
+let requestId = 0
+watch(open, value => { if (!value) requestId++ })
 
 const columns = (): TaskColumn[] => configDetailColumns()
 const paramColumns = CONFIG_PARAM_COLUMNS
@@ -46,18 +50,25 @@ function display(col: TaskColumn): string {
   return String(value)
 }
 
-async function openDrawer(id: string) {
+async function openDrawer(id: string, options?: { backendScope: BackendScope }) {
   if (!id) return
+  const request = ++requestId
   configId.value = id
   open.value = true
   loading.value = true
   record.value = null
+  loadError.value = ''
   try {
-    record.value = await configApi.configDetailRaw(id)
+    const result = options ? await configApi.configDetailRaw(id, options) : await configApi.configDetailRaw(id)
+    if (request !== requestId) return
+    record.value = result
+    if (!result) loadError.value = '该配置不存在或已删除'
   } catch (err) {
-    ElMessage.error('获取配置详情失败: ' + (err instanceof Error ? err.message : String(err)))
+    if (request !== requestId) return
+    loadError.value = '获取配置详情失败: ' + (err instanceof Error ? err.message : String(err))
+    ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (request === requestId) loading.value = false
   }
 }
 
@@ -77,7 +88,9 @@ defineExpose({ open: openDrawer })
     size="clamp(500px, 58vw, 850px)"
     class-name="rc-drawer"
   >
+    <slot name="context" />
     <div v-loading="loading" class="ctd-body">
+      <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon />
       <el-descriptions v-if="record" border :column="4" class="ctd-desc">
         <el-descriptions-item
           v-for="col in columns()"

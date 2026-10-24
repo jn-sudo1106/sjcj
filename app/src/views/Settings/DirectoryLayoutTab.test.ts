@@ -11,7 +11,7 @@ import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 import DeploymentNodePicker from './DeploymentNodePicker.vue'
 import DeploymentConfigurationList from './DeploymentConfigurationList.vue'
 
-vi.mock('@/api', () => ({ configApi: { configDetail: vi.fn() }, flowCenterApi: { paged: vi.fn(), steps: vi.fn() } }))
+vi.mock('@/api', () => ({ configApi: { configDetail: vi.fn(), configDetailRaw: vi.fn() }, sourceApi: { sourcePaged: vi.fn() }, flowCenterApi: { paged: vi.fn(), steps: vi.fn() } }))
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { siteCodeCatalog: vi.fn(), codeRepositories: vi.fn(), deploymentConfigurations: vi.fn(), deploymentConfiguration: vi.fn(), saveDeploymentConfiguration: vi.fn(), codeRepositoryTree: vi.fn(), codeRepositoryFileMetadata: vi.fn(), directoryLayout: vi.fn(), runtimeConfigurations: vi.fn() } }))
 const origin = { flowId: 'flow1', flowName: '新闻流程', stepId: 'step1', nodeName: '列表抓取', configId: '123' }
 const base: DeploymentConfiguration = { deploymentId: 'a'.repeat(32), name: '新闻生产配置', pathStyle: 'config', legacyType: 'config', legacyOwner: '123', codeId: 'code1', configId: '123', queueName: 'news_list', siteHost: '', revision: 'v1', directoryTemplate: '{configId}/prod', entryPoint: 'main.py', nodes: [{ id: 'main', parentId: '', name: 'main.py', kind: 'file', repoId: 'repo1', sourcePath: 'src/main.py', sourceType: 'file', gitCommit: 'a'.repeat(40) }] }

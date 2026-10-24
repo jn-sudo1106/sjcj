@@ -8,9 +8,11 @@ import { configApi } from '@/api'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryFileMetadata, type DirectoryBindingType, type DeploymentConfiguration, type DeploymentSourceNode, type DirectoryMappingNode, type RepositoryTree, type RuntimeConfiguration, type SiteCodeVersion } from '@/api/runnerManagement'
 import DeploymentNodePicker from './DeploymentNodePicker.vue'
 import DeploymentConfigurationList from './DeploymentConfigurationList.vue'
+import DeploymentConfigDrawer from './DeploymentConfigDrawer.vue'
 import { descendants, directoryBindingOptions, directoryTemplatePresets, queueDirectoryTemplatePresets, websiteDirectoryTemplatePresets, directoryTypeOf, moveTarget, sourceTree, targetPath, targetTree, withDirectoryType, type DirectoryType, type SourceTreeNode } from './directoryLayout'
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
+const configDetails = ref<InstanceType<typeof DeploymentConfigDrawer>>()
 const canWrite = computed(() => auth.role === 'admin')
 const catalog = ref<SiteCodeVersion[]>([]), repositories = ref<CodeRepository[]>([]), configurations = ref<DeploymentConfiguration[]>([])
 const repoId = ref(''), layout = ref<DeploymentConfiguration | null>(null)
@@ -286,13 +288,15 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
     </div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <el-alert v-if="bindingError && !layout" :title="bindingError" type="warning" :closable="false" show-icon />
-    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" />
+    <DeploymentConfigDrawer ref="configDetails" />
+    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" @open-config="item => configDetails?.open(item)" />
     <section v-if="layout" class="dl-configuration" aria-label="部署配置设置" data-testid="layout-settings">
       <div class="dl-identity-fields">
         <label>配置名称<el-input v-model="layout.name" :readonly="!canWrite || preview" :disabled="busy || loading" placeholder="如：新闻列表抓取生产配置" aria-label="配置名称" data-testid="deployment-name" /></label>
         <div class="dl-config-id"><span>部署配置 ID</span><code>{{ layout.deploymentId || '保存后生成' }}</code></div>
       </div>
-      <div v-if="layout.sourceNode" class="dl-origin" data-testid="deployment-origin"><span>来源节点</span><strong>{{ layout.sourceNode.flowName }} / {{ layout.sourceNode.nodeName }}</strong><code>configId: {{ layout.sourceNode.configId }}</code><span>任务队列：{{ layout.queueName || '未设置' }}</span></div>
+      <div v-if="layout.sourceNode" class="dl-origin" data-testid="deployment-origin"><span>来源节点</span><strong>{{ layout.sourceNode.flowName }} / {{ layout.sourceNode.nodeName }}</strong><el-button link type="primary" data-testid="deployment-editor-config" @click="configDetails?.open(layout)">configId: {{ layout.sourceNode.configId }}</el-button><span>任务队列：{{ layout.queueName || '未设置' }}</span></div>
+      <div v-else-if="layout.configId" class="dl-origin"><span>节点配置</span><el-button link type="primary" data-testid="deployment-editor-config" @click="configDetails?.open(layout)">{{ layout.configId }} · 查看配置与关联源</el-button></div>
       <div class="dl-path-fields">
         <div class="dl-preset-field"><span>快捷格式</span><el-radio-group :model-value="layout.pathStyle" :disabled="!canWrite || preview || busy || loading" class="dl-preset-tags" aria-label="路径快捷格式" data-testid="deployment-style" @update:model-value="chooseStyle"><el-radio-button v-for="item in directoryBindingOptions" :key="item.value" :value="item.value">{{ item.value === 'config' ? '按配置' : item.value === 'queue' ? '按队列' : item.value === 'website' ? '按网站' : '自定义' }}</el-radio-button></el-radio-group></div>
         <label class="dl-type-field">目录类型<el-select v-model="directoryType" :disabled="!canWrite || preview || busy || loading" aria-label="目录类型" data-testid="layout-environment"><el-option label="默认" value="default" /><el-option label="生产" value="prd" /><el-option label="测试" value="test" /></el-select></label>

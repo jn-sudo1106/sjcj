@@ -225,7 +225,7 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
             <small>{{ row.snapshot.sourceNode?.nodeName || row.snapshot.entryPoint || row.snapshot.directoryTemplate }}</small><small>{{ time(row.requestedAt) }}</small>
             <span v-if="row.error" class="rl-error-summary" :title="row.error">{{ row.error }}</span>
           </button>
-          <el-empty v-if="!loading && !rows.length" :image-size="50" :description="processContext ? '当前进程暂无符合条件的日志，请检查筛选条件或等待 Runner 上报' : '暂无符合条件的记录；新的下发和启动会生成日志'" />
+          <el-empty v-if="!loading && !rows.length" :image-size="50" :description="filters.period !== 'all' ? '当前时间范围内暂无记录，可切换「全部时间」查看历史日志' : processContext ? '当前进程暂无符合条件的日志，请检查筛选条件或等待 Runner 上报' : '暂无符合条件的记录；新的下发和启动会生成日志'" />
         </div>
         <el-pagination v-model:current-page="filters.page" size="small" layout="prev, pager, next" :total="total" :page-size="20" @current-change="refresh" />
       </aside>
