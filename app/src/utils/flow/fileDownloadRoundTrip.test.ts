@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { Source } from '@/api'
-import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
+import { stepFromLegacy, stepToSaveItemConfigPayload, stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { useFlowStore } from '@/stores/flow'
 import {
   buildSourceSeed, cloneConfig, collectorCapabilityOf, inferCollectorKind, NODE_CONFIGS,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { defaultPromptCategoryForNode } from '@/views/FlowCanvas/inspector/promptCategory'
 import { applyConfigToNode, buildConfigPayload, configTypeFrom } from './nodeConfigPayload'
-import { isFileLikeNode, mergeStepForWrite } from './stepPersist'
+import { isFileLikeNode, mergeStepForWrite, outputTableMissing } from './stepPersist'
 
 const source: Source = {
   sourceId: '1', name: '测试源', url: 'https://example.com/list',
@@ -53,7 +53,7 @@ describe('文件下载类型的创建与保存回读', () => {
     const loaded = buildSourceSeed(source, [read]).configs['42']
 
     expect(configPayload.configType).toBe(95)
-    expect(stepPayload).toMatchObject({ stepType: 95, type: nodeType })
+    expect(stepPayload).toMatchObject({ stepType: 95, type: 'entry' })
     expect(loaded.template).toBe('file')
     expect(loaded.title).toBe('归档 A')
     expect(loaded.collectCfg?.snatchType).toBe('[95] - 文件下载')
@@ -61,6 +61,42 @@ describe('文件下载类型的创建与保存回读', () => {
     expect(isFileLikeNode(loaded, read)).toBe(true)
     expect(buildConfigPayload(loaded, { configType: 95 }).configType).toBe(95)
     expect(mergeStepForWrite({ cfg: loaded, snapshot: read, nodeId: '42', sourceId: '1' }).stepType).toBe(95)
+  })
+
+  it('新文件下载不豁免输出表，补表后的请求使用 type=entry、stepType=95', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['file-download'])
+    cfg.configId = '1001'
+    expect(outputTableMissing(cfg)).toBe(true)
+    cfg.collectCfg!.outputTable = '2102'
+    const step = mergeStepForWrite({ cfg, nodeId: 'file-local', sourceId: '-1' })
+    expect(stepToSaveItemConfigPayload(step)).toMatchObject({ type: 'entry', stepType: 95, outEntry: 2102 })
+  })
+
+  it('历史 type=file 可回读，但写回必须归一为 entry 且要求输出表', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['file-download'])
+    const snapshot = stepFromLegacy({ itemConfig: 42, type: 'file', configId: 1001 }, '1')
+    expect(snapshot.nodeType).toBe('file')
+    expect(outputTableMissing(cfg, snapshot)).toBe(true)
+    cfg.collectCfg!.outputTable = '2102'
+    const step = mergeStepForWrite({ cfg, snapshot, nodeId: '42', sourceId: '1' })
+    expect(stepToStepModifyPayload(step)).toMatchObject({ type: 'entry', stepType: 95, outEntry: 2102 })
+  })
+
+  it('已有 type=rule 不受文件类型归一影响，普通规则仍为 rule/600', () => {
+    const snapshot = stepFromLegacy({ itemConfig: 42, type: 'rule', configId: 1001 }, '1')
+    const fileCfg = cloneConfig(NODE_CONFIGS['file-download'])
+    expect(mergeStepForWrite({ cfg: fileCfg, snapshot, nodeId: '42', sourceId: '1' }).nodeType).toBe('rule')
+    const ruleCfg = cloneConfig(NODE_CONFIGS.rule)
+    ruleCfg.template = 'rule'
+    const step = mergeStepForWrite({ cfg: ruleCfg, snapshot, nodeId: '42', sourceId: '1' })
+    expect(stepToStepModifyPayload(step)).toMatchObject({ type: 'rule', stepType: 600 })
+  })
+
+  it('ROOT 绑定文件配置时仍使用 entry 身份，不按普通文件步骤改写', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['file-download'])
+    const snapshot = stepFromLegacy({ itemConfig: 42, isRoot: 1, type: 'entry', configId: 1001 }, '1')
+    const step = mergeStepForWrite({ cfg, snapshot, nodeId: '42', sourceId: '1' })
+    expect(step.nodeType).toBe('entry')
   })
 
   it.each(['entry', 'rule'])('首屏 type=%s 时尚无配置类型，异步回填 95 后恢复文件下载', (nodeType) => {

@@ -61,16 +61,15 @@ export function firstUnboundDraftNodeId(main: string[], configs: Record<string, 
 }
 
 /**
- * 0927 H1：文件下载节点判定。后端 OUT_ENTRY（输出入口/输出表）必填只豁免 `type='file'`
- * （ItemConfigService saveItemConfig / stepModify 两处）；对应前端：模板插入节点看
- * `template === 'file'`（文件下载模板），历史回读节点看快照 `nodeType === 'file'`。
+ * 文件下载的前端语义判定；不表示豁免输出表。
+ * 文件下载的后端契约是 type=entry、stepType=95；历史 type=file 仅用于回读识别。
  */
 export function isFileLikeNode(cfg: NodeConfig, snapshot?: Step): boolean {
   return cfg?.template === 'file' || snapshot?.nodeType === 'file'
 }
 
 /**
- * 0927 H1：非文件节点输出表是否「未就绪」——显式输出表、编辑框承诺的「默认 = 输入表」、
+ * 输出表是否「未就绪」——显式输出表、编辑框承诺的「默认 = 输入表」、
  * 快照里既有的输出表三者都没有。这类节点提交必被后端以「节点输出表不能为空」拒绝，
  * 自动保存按「配置未就绪草稿」处理（跳过该节点 + 头部提示），不整批卡死。
  * 0927 P1-2：真实 ROOT 行同步豁免（后端 OUT_ENTRY 不校验 ROOT；写侧与展示侧同一口径，
@@ -79,7 +78,6 @@ export function isFileLikeNode(cfg: NodeConfig, snapshot?: Step): boolean {
  * flowVersion.allowsEmptyOutput 决定；本函数只回答「缺不缺」，发布 / 发起抓取前的检查仍按它拦。
  */
 export function outputTableMissing(cfg: NodeConfig, snapshot?: Step): boolean {
-  if (isFileLikeNode(cfg, snapshot)) return false
   if (snapshot?.isRoot) return false
   return !effectiveOutputTable(cfg) && !snapshot?.outputTable
 }
@@ -128,7 +126,7 @@ export function validFlowIdOf(value: unknown): string {
 
 /**
  * 0927 H1：第一个「输出表未就绪」节点（含已落库的存量行——它们编辑时同样会被后端拒绝）。
- * 排除文件节点与真实 ROOT（ROOT 由流程生命周期管，OUT_ENTRY 不做必填校验）。供自动保存
+ * 排除真实 ROOT（ROOT 由流程生命周期管，OUT_ENTRY 不做必填校验）。供自动保存
  * 的 pending 判定与头部提示使用。
  */
 export function firstOutputTableMissingNodeId(
@@ -152,7 +150,7 @@ export function firstOutputTableMissingNodeId(
 export interface FlowNodeIssue {
   nodeId: string
   title: string
-  /** unsaved：新节点还没保存过节点配置（没有配置、也没进草稿）；outputTableMissing：非文件节点输出表未选；
+  /** unsaved：新节点还没保存过节点配置（没有配置、也没进草稿）；outputTableMissing：需要输出表的步骤尚未选表；
    *  tableMismatch：输入表与上游输出表不一致（只提示） */
   reason: 'unsaved' | 'outputTableMissing' | 'tableMismatch'
   message: string
@@ -471,7 +469,10 @@ export function mergeStepForWrite(args: {
     // 恒写 'rule' 会让 monitor 类型信息不落库，回读后只能靠标题正则兜底——节点一改名
     // （如"库存监控"）template 就恢复不出来，isMonitorNode=false，数据监控节点专属逻辑
     // （表配置监控方法回填、保存时同步 ck_source 等）全部静默失效。
-    nodeType: isMonitorNode(cfg) ? 'monitor' : isDataValidationNode(cfg) ? 'data-validation' : isRuleLikeNode(cfg) ? 'rule' : snapshot?.nodeType,
+    // 文件下载以 stepType=95 区分，执行身份为 entry；废弃的 file 不再写出。
+    // 保持原有规则类分支及已有 type=rule 身份，不将规则步骤改为采集步骤。
+    nodeType: isMonitorNode(cfg) ? 'monitor' : isDataValidationNode(cfg) ? 'data-validation' : isRuleLikeNode(cfg) ? 'rule'
+      : snapshot?.nodeType === 'rule' ? 'rule' : cfg.template === 'file' || snapshot?.nodeType === 'file' ? 'entry' : snapshot?.nodeType,
     inputTable: nodeInputTable(cfg) || snapshot?.inputTable,
     // 0901：显式未落表时按「默认 = 输入表」取本节点自己的输入表，而不是把这个新建节点还
     // 没配置过的空 outputTable 直接提交上去（旧写法遇到规则节点只填了输入表就会把 outputTable
@@ -499,7 +500,7 @@ export function mergeStepForWrite(args: {
       : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
     // 步骤级类型（2026-10-25 用户要求）：后端 cs_item_config.step_type 此前恒 null——前端从不写它。
-    // 现在保存步骤时补写：取值与配置保存同源（configTypeFrom），步骤行与配置行类型永远一致；
+    // 实际保存步骤时补写：与节点配置共用 configTypeFrom；单独补齐不触发自动写入。
     // 后端 bean 不认识该键的版本按契约静默忽略，无害。
     stepType: configTypeFrom(cfg) ?? snapshot?.stepType,
   }

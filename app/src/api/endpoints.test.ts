@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { ENDPOINTS, ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { mockRegistry } from './mock'
+import { SNATCH_TYPES } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('端点契约一致性', () => {
+  it('抓取类型 mock 覆盖完整数字字典，含 APP、文件下载和 PDF转MD', async () => {
+    const rows = await mockRegistry['config/sourceTypes']() as { sourceType: string; typeName: string }[]
+    expect(rows.map((r) => `[${r.sourceType}] - ${r.typeName}`)).toEqual(SNATCH_TYPES)
+  })
   it('契约清单无重复 path', () => {
     expect(ENDPOINT_PATHS.size).toBe(ENDPOINTS.length)
   })

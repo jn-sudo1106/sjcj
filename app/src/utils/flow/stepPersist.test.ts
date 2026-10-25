@@ -63,13 +63,13 @@ describe('outputTableMissing / isFileLikeNode（0927 H1）', () => {
     expect(outputTableMissing(cfgWith({ inputTable: '6200026' }), undefined)).toBe(false)
   })
 
-  it('file 节点豁免；快照里 nodeType=file 的历史节点也豁免', () => {
+  it('新旧文件下载均要求输出表，历史 nodeType=file 不再豁免', () => {
     const cfg = cfgWith({ template: 'file' })
     expect(isFileLikeNode(cfg, undefined)).toBe(true)
-    expect(outputTableMissing(cfg, undefined)).toBe(false)
+    expect(outputTableMissing(cfg, undefined)).toBe(true)
     const historical = cfgWith()
     expect(isFileLikeNode(historical, { nodeType: 'file' } as Step)).toBe(true)
-    expect(outputTableMissing(historical, { nodeType: 'file' } as Step)).toBe(false)
+    expect(outputTableMissing(historical, { nodeType: 'file' } as Step)).toBe(true)
   })
 })
 
@@ -102,7 +102,7 @@ describe('firstOutputTableMissingNodeId（0927 H1）', () => {
 })
 
 describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () => {
-  it('逐个列出未保存的新节点和缺输出表的节点；根节点、文件节点、完整节点不计', () => {
+  it('逐个列出未保存和缺输出表的节点，包括新文件下载；根节点不计', () => {
     const main = ['start', '41797', 'draft-1', '40598', 'file-1', 'end']
     const configs = {
       '41797': { title: '入口', kind: 'node', configId: '1401081' },
@@ -114,6 +114,7 @@ describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () 
     expect(collectFlowIssues(main, [], configs, snapshots).map((i) => [i.nodeId, i.reason])).toEqual([
       ['draft-1', 'unsaved'],
       ['40598', 'outputTableMissing'],
+      ['file-1', 'outputTableMissing'],
     ])
   })
 

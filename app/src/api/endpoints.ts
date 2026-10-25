@@ -143,7 +143,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 抓取类型字典（= 节点类型 = 配置的 configType，2026-08-28 确认）。旧平台 `api/source-type.js` 的
   // allSourceTypes，供旧「配置编辑」弹窗的「抓取类型」下拉用。取值形如 { sourceType: 90, typeName: '网页抓取' }。
   // 前端 SNATCH_TYPES / TEMPLATE_TO_SNATCH 作为静态兜底/测试对照，节点库展示与新建节点
-  // 已优先使用本字典；[BROWSER]/[WECHAT]/[LOGIN] 只是前端伪类型，不以字典为准（0824-11 §1.2d）。
+  // 已优先使用本字典；[BROWSER]/[WECHAT]/[LOGIN] 仅为前端入口/显示标识，
+  // 不是后端类型，禁止作为 configType/sourceType 写入；模板映射必须取数字字典值（0824-11 §1.2d）。
   { path: 'config/sourceTypes', desc: '抓取类型字典（节点类型 / configType 的权威取值）', impl: true, live: true },
   // 节点类型维护（0924-04，系统设置 → 节点类型；旧平台「配置 → 源类型」）。2026-09-24 生产逐个实测：
   // 读接口不分页；add/update 是 JSON body，update 为增量更新；临时类型 99901 新增→修改→删除闭环已清理。

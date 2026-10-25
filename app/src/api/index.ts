@@ -3061,7 +3061,8 @@ export const configApi = {
    * 旧 `column.config.js:661` dataIndex=configType，type=SOURCE_TYPE）。
    * 它是**后端字典**，不是前端枚举——`SNATCH_TYPES` / `TEMPLATE_TO_SNATCH` 目前作为
    * 静态兜底/测试对照，节点库展示与新建节点已优先使用本接口返回的字典；
-   * `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 只是前端伪类型，不以字典为准（0824-11 §1.2d）。
+   * `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 仅为前端入口/显示标识，禁止作为后端
+   * configType/sourceType 写入；模板映射必须取数字字典值（0824-11 §1.2d）。
    */
   sourceTypes: async (): Promise<SourceTypeDict[]> => {
     const result = await request<{ list?: unknown[] } | unknown[]>('config/sourceTypes', {}, { method: 'GET' })

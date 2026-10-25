@@ -586,16 +586,9 @@ export const useFlowStore = defineStore('flow', () => {
 
   /** 优先用后端 sourceType 字典里的展示串；找不到时回退到静态 TEMPLATE_TO_SNATCH。 */
   function sourceTypeDisplayForTemplate(template: string, fallback: string): string {
-    const name = TEMPLATE_TO_NAME[template]
-    if (name) {
-      const dict = useDictStore()
-      const found = dict.snatchTypes.find((display) => {
-        const m = /^\[(\d+)\]\s*-\s*(.+)$/.exec(display)
-        return m?.[2]?.trim() === name
-      })
-      if (found) return found
-    }
-    return fallback
+    const code = /^\[(\d+)\]/.exec(TEMPLATE_TO_SNATCH[template] ?? '')?.[1]
+    if (!code) return fallback
+    return useDictStore().snatchTypes.find((display) => /^\[(\d+)\]/.exec(display)?.[1] === code) ?? fallback
   }
 
   // ---- 编辑动作 ----
@@ -619,10 +612,8 @@ export const useFlowStore = defineStore('flow', () => {
       const cap = collectorCapabilityOf(cfg)
       cfg.collectCfg.outputTable = cap?.outputMode === 'fixed' ? (cap.fixedOutputTable ?? '') : ''
       // 2026-10-25 用户拍板：新建节点必须按类型生成默认值，不许克隆种子里的演示默认——
-      // 输入表同输出表一样清掉（web-detail 种子遗留 inputTable='2101001'，曾把 95 文件下载
-      // 节点污染成"输入表自动 2101001"）；默认 = 上游节点的输出表（upstreamTable 由调用方按
-      // 画布父节点算出的真实表），没有真实上游就留空，由用户选定。
-      cfg.collectCfg.inputTable = upstreamTable || ''
+      // 先清掉种子的演示输入表；挂入拓扑后由 inheritInputTable 统一继承上游有效表。
+      cfg.collectCfg.inputTable = ''
       cfg.collectCfg.inputParams = []
       // sub 按类型对齐：种子 sub 开头编号与模板类型编号不一致时（file 复用了 web-detail 种子的
       // '[90] 网页抓取 · 子步骤产物'）重写为 '[95] 文件下载'；非数字伪代码（[BROWSER]/[WECHAT]/

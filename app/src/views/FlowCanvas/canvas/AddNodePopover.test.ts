@@ -2,11 +2,19 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { useDictStore } from '@/stores/dict'
 import AddNodePopover from './AddNodePopover.vue'
 
 describe('AddNodePopover', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+  })
+
+  it('字典按编号更新名称，不受 APP/Python 名称空格或大小写影响，特殊入口保留原名', () => {
+    useDictStore().snatchTypes = ['[90] - 网页抓取新版', '[140] - App抓取新版', '[170] - Python抓取新版']
+    const wrapper = mount(AddNodePopover, { props: { x: 100, y: 100 } })
+    const names = wrapper.findAll('.anp-item-text b').map((item) => item.text())
+    expect(names).toEqual(expect.arrayContaining(['网页抓取新版', 'App抓取新版', 'Python抓取新版', '浏览器抓取', '公众号抓取', '网页登录']))
   })
   it('英文节点类型码在徽标中显示为数字序号', () => {
     const wrapper = mount(AddNodePopover, {

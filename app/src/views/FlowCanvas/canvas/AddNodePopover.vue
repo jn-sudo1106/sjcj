@@ -2,7 +2,7 @@
 // 添加节点浮层（0707 优化·Phase1）：参照 Dify——点「＋」原地锚定弹层，搜索 + 分组列表，点选即插入，无确认步骤。
 // 替代原居中模态弹窗；右键菜单的插入入口合一为本浮层。（「逻辑」分组的决策 / 分头已于 1008-BR-06 去掉）
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { LIB_GROUPS, TEMPLATE_TO_NAME, type LibGroup, type LibItem } from './flowModel'
+import { LIB_GROUPS, type LibGroup, type LibItem } from './flowModel'
 import { useDictStore } from '@/stores/dict'
 
 const props = defineProps<{ x: number; y: number; compact?: boolean }>()
@@ -24,18 +24,18 @@ const orderByCode = computed(() => {
   return order
 })
 const groups = computed<LibGroup[]>(() => {
-  const sourceByName = new Map<string, { code: string; name: string }>()
+  const sourceByCode = new Map<string, { code: string; name: string }>()
   for (const display of dict.snatchTypes) {
     const m = /^\[(\d+)\]\s*-\s*(.+)$/.exec(display)
-    if (m) sourceByName.set(m[2].trim(), { code: m[1], name: m[2].trim() })
+    if (m) sourceByCode.set(m[1], { code: m[1], name: m[2].trim() })
   }
   const orderOf = (code: string): number => orderByCode.value.get(code) ?? Number.MAX_SAFE_INTEGER
   return LIB_GROUPS.map((group) => ({
     ...group,
     items: group.items
       .map((item) => {
-        const name = TEMPLATE_TO_NAME[item.template]
-        const source = name ? sourceByName.get(name) : undefined
+        // 字典的稳定身份是编号；BROWSER/WECHAT/LOGIN 等独立前端入口保留原名。
+        const source = sourceByCode.get(item.code)
         if (source) return { ...item, code: source.code, name: source.name, badge: item.badge ?? source.code }
         return item
       })

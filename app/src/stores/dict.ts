@@ -18,7 +18,7 @@
 //
 // 节点库 LIB_GROUPS 仍是前端入口（包含 decision/parallel 等非字典类型），但展示与
 // 落库已改为优先读本 store 的 snatchTypes：AddNodePopover 用字典刷新「采集类」条目的
-// 编号/名称（如 95=文件下载），newNodeConfig 也按模板名从字典取展示串，找不到才回退
+// 编号/名称（如 95=文件下载），newNodeConfig 也按模板编号从字典取展示串，找不到才回退
 // TEMPLATE_TO_SNATCH 静态快照。消费者包括漂移检测、模板映射校验、节点库/新建节点。
 //
 // 分层：stores → views 是不推荐的依赖方向，但 stores/flow.ts 已从

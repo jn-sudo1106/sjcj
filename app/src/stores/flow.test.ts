@@ -15,6 +15,18 @@ describe('flow store 编辑动作', () => {
     f.newFlow('standard') // 载入标准链路（= 公告规则采集 Demo）作为编辑基线
   })
 
+  it('新建 APP/Python 按字典编号读取改名后的类型和默认队列', () => {
+    const dict = useDictStore()
+    dict.snatchTypes = ['[140] - App抓取新版', '[170] - Python抓取新版']
+    dict.nodeTypeTopics = { '140': 'app.queue', '170': 'python.queue' }
+    const appId = f.insertAfter(f.main[1], 'app')!
+    const pythonId = f.insertAfter(f.main[1], 'python')!
+    expect(f.configs[appId].collectCfg?.snatchType).toBe('[140] - App抓取新版')
+    expect(f.configs[pythonId].collectCfg?.snatchType).toBe('[170] - Python抓取新版')
+    expect(f.configs[appId].taskCfg?.queue).toBe('app.queue')
+    expect(f.configs[pythonId].taskCfg?.queue).toBe('python.queue')
+  })
+
   it('insertAfter 在主链插入节点', () => {
     const before = f.main.length
     f.insertAfter('web-list', 'web')
