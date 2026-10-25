@@ -210,7 +210,7 @@ export type NodeConfigSeed = Omit<NodeConfig, 'inmap' | 'params' | 'output'> & {
 
 // 节点库分组类型（seeds 用，外部通过 flowModel 也能访问）
 export type Pill = 'p1' | 'p2' | 'plan'
-export interface LibItem { template: string; code: string; badge?: string; name: string; desc: string; pill: Pill; planned?: boolean }
+export interface LibItem { template: string; code: string; badge?: string; name: string; desc: string; pill: Pill; planned?: boolean; snatchType?: string }
 export interface LibGroup { title: string; items: LibItem[] }
 
 /** 条件操作符（0701 问题十·方案B「节点进入条件」） */
@@ -582,9 +582,17 @@ export function isDataValidationNode(cfg?: NodeConfig): boolean {
  * 所以再兜底一条：节点种子副标题里的类型编号，如 ocr 种子的 `[150] OCR抓取 · 图片文字识别`
  *（与 iconFor() / nodeTypeLabel() 认类型的方式一致）。
  */
-function hasNodeTypeCode(cfg: NodeConfig | NodeConfigSeed | undefined, template: string, code: string): boolean {
+function hasNodeTypeCode(
+  cfg: NodeConfig | NodeConfigSeed | undefined,
+  template: string,
+  code: string | string[],
+): boolean {
   if (!cfg) return false
-  return cfg.template === template || (cfg as NodeConfig).configType === code || (cfg.sub ?? '').includes(`[${code}]`)
+  if (cfg.template === template) return true
+  const codes = Array.isArray(code) ? code : [code]
+  const configType = (cfg as NodeConfig).configType
+  const sub = cfg.sub ?? ''
+  return codes.some((c) => configType === c || sub.includes(`[${c}]`))
 }
 
 /** OCR 抓取节点（已并入规则式处理节点：表配置走 execCfg 绑定，编排配置是空白页）。 */
@@ -636,10 +644,15 @@ export function isAudioTextNode(cfg?: NodeConfig): boolean {
     || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_audiototext'
 }
 
-/** PDF转MD节点（通用处理节点，无脚本）。 */
+/**
+ * PDF转MD节点（通用处理节点，无脚本）。
+ *
+ * 2026-10-25：后端字典值是 **802**；`911` 是本前端此前写错的值，保留在判定里只为让
+ * 已按 911 落库的存量配置仍能显示成 PDF转MD（保存时会自愈为 802）。
+ */
 export function isPdfMdNode(cfg?: NodeConfig): boolean {
   if (!cfg) return false
-  return hasNodeTypeCode(cfg, 'pdf-md', '911')
+  return hasNodeTypeCode(cfg, 'pdf-md', ['802', '911'])
 }
 
 /** 文章生成摘要节点（编排配置 Tab 用它决定要不要给「上传文字生成摘要」区）。 */
@@ -692,7 +705,8 @@ export function isRuleLikeNode(cfg?: NodeConfig): boolean {
  * 想把某类加进来 / 拿出去，只改这两张表即可。
  */
 const SCRIPTLESS_TEMPLATES = new Set(['ocr', 'video-audio', 'audio-text', 'article-summary', 'article-tag', 'translate', 'pdf-md'])
-const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720', '730', '800', '911']
+// 802 为 PDF转MD 的后端字典值，911 为此前写错值（存量兼容）。
+const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720', '730', '800', '802', '911']
 
 export function isScriptlessNode(cfg?: NodeConfig): boolean {
   if (!cfg) return false

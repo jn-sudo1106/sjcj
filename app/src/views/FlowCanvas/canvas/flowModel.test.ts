@@ -290,11 +290,11 @@ describe('makeDefaultExecConfig（0804 S3-3）', () => {
   })
 })
 
-describe('PDF转MD（911）通用处理节点', () => {
+describe('PDF转MD（802）通用处理节点', () => {
   it('种子：处理型无脚本节点，队列 source-config，输出 markdown', () => {
     const seed = NODE_CONFIGS['pdf-md']
     expect(seed.title).toBe('PDF转MD')
-    expect(seed.sub).toContain('[911]')
+    expect(seed.sub).toContain('[802]')
     expect(seed.collectCfg).toBeUndefined()
     expect(seed.taskCfg?.queue).toBe('source-config')
     expect(seed.output.map((field) => field.name)).toEqual(['markdown'])
@@ -303,9 +303,16 @@ describe('PDF转MD（911）通用处理节点', () => {
     expect(isScriptlessNode(seed)).toBe(true)
   })
 
-  it('按类型号 911 也能识别（回读时只有 sub / configType）', () => {
+  it('按类型号 802 识别（回读时只有 sub / configType）', () => {
+    expect(isPdfMdNode(cfg({ configType: '802' }))).toBe(true)
+    expect(isPdfMdNode(cfg({ sub: '[802] PDF转MD · 文档转 Markdown' }))).toBe(true)
+    expect(isScriptlessNode(cfg({ sub: '[802] PDF转MD' }))).toBe(true)
+    expect(isPdfMdNode(cfg({ sub: '[130] PDF抓取' }))).toBe(false)
+  })
+
+  it('存量 911（此前写错的值）仍识别为 PDF转MD', () => {
+    expect(isPdfMdNode(cfg({ configType: '911' }))).toBe(true)
     expect(isPdfMdNode(cfg({ sub: '[911] PDF转MD · 文档转 Markdown' }))).toBe(true)
     expect(isScriptlessNode(cfg({ sub: '[911] PDF转MD' }))).toBe(true)
-    expect(isPdfMdNode(cfg({ sub: '[130] PDF抓取' }))).toBe(false)
   })
 })

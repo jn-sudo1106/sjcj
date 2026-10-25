@@ -22,6 +22,9 @@ import {
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { conditionsToExpr } from '@/utils/flow/conditionExpr'
+// 2026-10-25：步骤保存补写 stepType（cs_item_config.step_type）= 配置 configType 同源值，
+// 文件下载 95 / 网页抓取 90 / 规则 600……见 mergeStepForWrite 的 stepType 字段注释。
+import { configTypeFrom } from '@/utils/flow/nodeConfigPayload'
 
 /** 真实步骤 id：纯数字且不是 svg=true 时后端塞进来的虚拟起点 itemConfig=0。 */
 export function isWritableStepId(id: string | undefined): boolean {
@@ -495,6 +498,10 @@ export function mergeStepForWrite(args: {
       ? ruleStepContext(tableOrch.outputFields, args.outColumnByItemCode ?? args.columnByItemCode) ?? snapshot?.outColumns
       : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
+    // 步骤级类型（2026-10-25 用户要求）：后端 cs_item_config.step_type 此前恒 null——前端从不写它。
+    // 现在保存步骤时补写：取值与配置保存同源（configTypeFrom），步骤行与配置行类型永远一致；
+    // 后端 bean 不认识该键的版本按契约静默忽略，无害。
+    stepType: configTypeFrom(cfg) ?? snapshot?.stepType,
   }
 }
 

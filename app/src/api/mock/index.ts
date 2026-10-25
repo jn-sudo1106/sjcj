@@ -243,11 +243,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 真实取值以 live 请求为准（0824-11 §1.2d）。
   'config/sourceTypes': () => [
     { sourceType: '90', typeName: '网页抓取' },
-    { sourceType: '95', typeName: 'APP 抓取' },
-    { sourceType: '150', typeName: 'OCR 识别' },
-    { sourceType: '155', typeName: 'AI 提取' },
+    { sourceType: '95', typeName: '文件下载' },
+    { sourceType: '150', typeName: 'OCR抓取' },
     { sourceType: '170', typeName: 'Python 抓取' },
-    { sourceType: '800', typeName: '数据校验' },
+    { sourceType: '800', typeName: '翻译助手' },
   ],
   // 节点类型维护（0924-04）：mock 只给只读数据，写操作走通用 ack
   'sourceType/list': (params?: Record<string, unknown>) => {

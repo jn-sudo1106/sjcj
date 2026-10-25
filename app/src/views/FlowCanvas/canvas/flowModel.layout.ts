@@ -194,6 +194,7 @@ export function cloneConfig(cfg: NodeConfig): NodeConfig {
  */
 export const SOURCE_TYPE_NAME_BY_ID: Record<string, string> = {
   '90': '网页抓取',
+  '95': '文件下载',
   '110': 'EXCEL抓取',
   '120': 'DOC抓取',
   '130': 'PDF抓取',
@@ -212,6 +213,10 @@ export const SOURCE_TYPE_NAME_BY_ID: Record<string, string> = {
   '720': '文章生成摘要',
   '730': '文章打标签',
   '800': '翻译助手',
+  // 2026-10-25 按后端 source_type 全量对齐：PDF转MD 是 802；801 网页抓取CS 只登记名字。
+  '801': '网页抓取CS',
+  '802': 'PDF转MD',
+  // 911 是此前本前端写错的值，保留只为存量配置能显示成正确类型（保存会自愈为 802）。
   '911': 'PDF转MD',
 }
 
@@ -247,7 +252,7 @@ export const TEMPLATE_TO_TYPE_NAME: Record<string, string> = {
   check: '校验类',
   login: '网页抓取',
   'login-collect': '网页抓取',
-  file: '网页抓取',
+  file: '文件下载',
   'browser-html': '网页抓取',
   'wechat-html': '网页抓取',
 }

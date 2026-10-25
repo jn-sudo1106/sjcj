@@ -584,6 +584,20 @@ export const useFlowStore = defineStore('flow', () => {
     if (propagateOutputChange(tableTopology(), id, before.effectiveOutput).length) nodeStore.touchFlow()
   }
 
+  /** 优先用后端 sourceType 字典里的展示串；找不到时回退到静态 TEMPLATE_TO_SNATCH。 */
+  function sourceTypeDisplayForTemplate(template: string, fallback: string): string {
+    const name = TEMPLATE_TO_NAME[template]
+    if (name) {
+      const dict = useDictStore()
+      const found = dict.snatchTypes.find((display) => {
+        const m = /^\[(\d+)\]\s*-\s*(.+)$/.exec(display)
+        return m?.[2]?.trim() === name
+      })
+      if (found) return found
+    }
+    return fallback
+  }
+
   // ---- 编辑动作 ----
   /** 按模板新建一份节点配置（新建态：无 configId，配置名 = 节点名）。prevId / upstreamTable 只用于规则 / 数据节点默认值。 */
   function newNodeConfig(template: string, prevId: string, upstreamTable: string): { srcKey: string; cfg: NodeConfig } {
@@ -599,19 +613,33 @@ export const useFlowStore = defineStore('flow', () => {
     applyStepSourceDefault(cfg)
     if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamTable, typeName)
     if (cfg.collectCfg) {
-      cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
+      const snatchType = sourceTypeDisplayForTemplate(template, TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType)
+      cfg.collectCfg.snatchType = snatchType
       cfg.collectCfg.url = ''
       const cap = collectorCapabilityOf(cfg)
       cfg.collectCfg.outputTable = cap?.outputMode === 'fixed' ? (cap.fixedOutputTable ?? '') : ''
+      // 2026-10-25 用户拍板：新建节点必须按类型生成默认值，不许克隆种子里的演示默认——
+      // 输入表同输出表一样清掉（web-detail 种子遗留 inputTable='2101001'，曾把 95 文件下载
+      // 节点污染成"输入表自动 2101001"）；默认 = 上游节点的输出表（upstreamTable 由调用方按
+      // 画布父节点算出的真实表），没有真实上游就留空，由用户选定。
+      cfg.collectCfg.inputTable = upstreamTable || ''
       cfg.collectCfg.inputParams = []
+      // sub 按类型对齐：种子 sub 开头编号与模板类型编号不一致时（file 复用了 web-detail 种子的
+      // '[90] 网页抓取 · 子步骤产物'）重写为 '[95] 文件下载'；非数字伪代码（[BROWSER]/[WECHAT]/
+      // [LOGIN]）解析不出编号、编号一致的类型（excel 的 [110] 等）都保留种子文案不动。
+      const canonicalCode = /^\[(\d+)\]/.exec(snatchType)?.[1]
+      const seedCode = cfg.sub?.match(/^\[(\d+)\]/)?.[1]
+      if (canonicalCode && seedCode && seedCode !== canonicalCode && typeName) {
+        cfg.sub = `[${canonicalCode}] ${typeName}`
+      }
     }
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
       cfg.outputTable = upstreamTable
     }
     // 默认队列取系统设置 → 节点类型的「默认消息队列」（topic），按节点类型编号查；没配就留空，用户可在任务配置里改。
-    // 浏览器/公众号/登录/文件下载都按 90 落库，跟 90 用同一个默认值。固定队列的节点（浏览器抓取）保留种子里的固定值。
+    // 浏览器/公众号/登录仍按 90 落库；文件下载优先取字典里的 95。固定队列的节点（浏览器抓取）保留种子里的固定值。
     if (collectorCapabilityOf(cfg)?.queueMode !== 'fixed') {
-      const code = /^\[(\d+)\]/.exec(TEMPLATE_TO_SNATCH[template] ?? '')?.[1]
+      const code = /^\[(\d+)\]/.exec(sourceTypeDisplayForTemplate(template, TEMPLATE_TO_SNATCH[template] ?? ''))?.[1]
       cfg.taskCfg = {
         ...(cfg.taskCfg ?? { urlRule: '' }),
         queue: (code && useDictStore().nodeTypeTopics[code]) || '',

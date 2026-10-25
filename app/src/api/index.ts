@@ -3059,9 +3059,9 @@ export const configApi = {
    *
    * 2026-08-28 确认：**节点类型就是抓取类型**，落在配置的 `configType` 上（旧「配置编辑」弹窗那一项，
    * 旧 `column.config.js:661` dataIndex=configType，type=SOURCE_TYPE）。
-   * 它是**后端字典**，不是前端枚举——`SNATCH_TYPES` / `TEMPLATE_TO_SNATCH` 目前硬编码，
-   * 且含 `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 三个自造值，要以本接口为准校正
-   * （0824-11 §1.2d：枚举一律照抄后端，不许自造）。
+   * 它是**后端字典**，不是前端枚举——`SNATCH_TYPES` / `TEMPLATE_TO_SNATCH` 目前作为
+   * 静态兜底/测试对照，节点库展示与新建节点已优先使用本接口返回的字典；
+   * `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 只是前端伪类型，不以字典为准（0824-11 §1.2d）。
    */
   sourceTypes: async (): Promise<SourceTypeDict[]> => {
     const result = await request<{ list?: unknown[] } | unknown[]>('config/sourceTypes', {}, { method: 'GET' })

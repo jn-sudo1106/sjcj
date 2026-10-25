@@ -2,10 +2,47 @@
 // 添加节点浮层（0707 优化·Phase1）：参照 Dify——点「＋」原地锚定弹层，搜索 + 分组列表，点选即插入，无确认步骤。
 // 替代原居中模态弹窗；右键菜单的插入入口合一为本浮层。（「逻辑」分组的决策 / 分头已于 1008-BR-06 去掉）
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { LIB_GROUPS, type LibItem } from './flowModel'
+import { LIB_GROUPS, TEMPLATE_TO_NAME, type LibGroup, type LibItem } from './flowModel'
+import { useDictStore } from '@/stores/dict'
 
 const props = defineProps<{ x: number; y: number; compact?: boolean }>()
 const emit = defineEmits<{ pick: [template: string]; close: []; dragstart: [event: DragEvent, template: string] }>()
+
+const dict = useDictStore()
+/**
+ * 面板条目顺序（2026-10-25 用户反馈）：此前按 LIB_GROUPS 手排顺序，文件下载被排在资讯抓取
+ * 后面；字典（config/sourceTypes）与静态 SNATCH_TYPES 都是编号升序（90 网页抓取 → 95 文件下载
+ * → 110…）。这里统一按**编号数字**排序：90 < 95 立刻生效，字典加载前后顺序稳定（后端 SEQ 可能
+ * 把后补的 95 排在最后，按字典顺序排会出现"刷新一下条目跳位"）。
+ */
+const orderByCode = computed(() => {
+  const order = new Map<string, number>()
+  for (const item of LIB_GROUPS.flatMap((g) => g.items)) {
+    const m = /^(\d+)/.exec(item.code)
+    if (m && !order.has(item.code)) order.set(item.code, Number(m[1]))
+  }
+  return order
+})
+const groups = computed<LibGroup[]>(() => {
+  const sourceByName = new Map<string, { code: string; name: string }>()
+  for (const display of dict.snatchTypes) {
+    const m = /^\[(\d+)\]\s*-\s*(.+)$/.exec(display)
+    if (m) sourceByName.set(m[2].trim(), { code: m[1], name: m[2].trim() })
+  }
+  const orderOf = (code: string): number => orderByCode.value.get(code) ?? Number.MAX_SAFE_INTEGER
+  return LIB_GROUPS.map((group) => ({
+    ...group,
+    items: group.items
+      .map((item) => {
+        const name = TEMPLATE_TO_NAME[item.template]
+        const source = name ? sourceByName.get(name) : undefined
+        if (source) return { ...item, code: source.code, name: source.name, badge: item.badge ?? source.code }
+        return item
+      })
+      // 字典没收录的（浏览器/公众号/登录/指标等）保持原相对顺序、排在组尾。
+      .sort((a, b) => orderOf(a.code) - orderOf(b.code)),
+  }))
+})
 
 const keyword = ref('')
 const searchEl = ref<HTMLInputElement | null>(null)
@@ -13,8 +50,8 @@ const popEl = ref<HTMLElement | null>(null)
 
 const filteredGroups = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  if (!kw) return LIB_GROUPS
-  return LIB_GROUPS
+  if (!kw) return groups.value
+  return groups.value
     .map((g) => ({ ...g, items: g.items.filter((it) => it.name.toLowerCase().includes(kw) || it.desc.toLowerCase().includes(kw)) }))
     .filter((g) => g.items.length)
 })
@@ -23,9 +60,13 @@ const activeIndex = ref(0)
 watch(flatItems, () => { activeIndex.value = 0 })
 
 function pick(it: LibItem) {
+  // ⚠️ emit 载荷必须是模板字符串（it.template）：FlowBoard 的 onPickNode / pickNodeFromPalette 按
+  // 字符串接收并传给 flow.insertAfter。曾改为发出整个条目对象，导致 TEMPLATE_TO_NODE[对象] 查不到、
+  // 所有新增节点一律回落 web-list 种子（标题变成「公告列表抓取」、类型回到 90 网页抓取）。
   emit('pick', it.template)
 }
 function onDragStart(event: DragEvent, it: LibItem) {
+  // 同上：拖拽载荷也是模板字符串，画布 onDrop 从 text/plain 读它再 insertAfter。
   emit('dragstart', event, it.template)
 }
 function onKeydown(e: KeyboardEvent) {

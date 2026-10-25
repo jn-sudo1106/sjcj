@@ -1133,6 +1133,9 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
       ? undefined
       : String(record.nodeType ?? record.nodeKind ?? record.type ?? record.template),
     configType: record.configType == null ? undefined : String(record.configType),
+    // 步骤级类型副本（cs_item_config.step_type 的 JSON 键，未存时为 null）。前端不展示它，
+    // 但保存报文要写（2026-10-25：步随配置类型补写），回读对齐后才不会每轮都被判成脏。
+    stepType: record.stepType == null ? undefined : Number(record.stepType),
     inputTable: record.inputTable == null && record.entryTypeId == null
       ? undefined
       : String(record.inputTable ?? record.entryTypeId),
@@ -1201,6 +1204,8 @@ function stepWritePayloadBase(step: Step): Record<string, unknown> {
     itemId: step.itemId == null ? null : Number(step.itemId),
     type: step.nodeType ?? 'entry',
     flowCode: step.flowCode ?? 'WEB_SNATCH',
+    // 2026-10-25：步骤级类型副本随保存补写（文件下载=95）。无值不占键（选择性更新，null=不修改）。
+    ...(step.stepType != null ? { stepType: step.stepType } : {}),
     context: step.contextMap?.length ? step.contextMap.join(',') : null,
     bizType: null,
     enabled: step.enabled,

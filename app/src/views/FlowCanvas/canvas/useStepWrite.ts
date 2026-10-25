@@ -225,7 +225,14 @@ export function useStepWrite() {
     })
     // 2026-10-10：提交内容与快照完全一致就不写。自动保存每轮都会走到所有已有步骤，原来无改动也整包
     // 回写；流程进版本模式后，这种空写会在**只是打开流程**时就自动建出草稿（217 实测 21000003）。
-    if (JSON.stringify(stepToStepModifyPayload(step)) === JSON.stringify(stepToStepModifyPayload(snapshot))) return
+    // 2026-10-25：stepType 是派生副本（mergeStepForWrite 从配置 configType 算出），判脏时剔除——
+    // 未改动步骤每轮都会比快照多出这一键，不剔除会把所有步骤都判成脏、每轮整包回写。
+    // 有真实改动时照常整包（含 stepType）回写，顺手把 step_type 补进库。
+    const withoutStepType = (p: Record<string, unknown>) => {
+      const { stepType: _ignored, ...rest } = p
+      return rest
+    }
+    if (JSON.stringify(withoutStepType(stepToStepModifyPayload(step))) === JSON.stringify(withoutStepType(stepToStepModifyPayload(snapshot)))) return
     const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.stepModify(step, ...versionArgs(ref)))
     assertOk(ack, '修改步骤失败')
     sourceStore.rememberSteps([step], 'merge')
