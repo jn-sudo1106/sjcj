@@ -944,6 +944,7 @@ watch(
     sourceTableName.value,
     promptSourceId.value,
     promptCategory.value,
+    orchCfg.value.promptTemplateId,
     promptListCategory.value,
     orchCfg.value.inputFields?.join(',') ?? '',
     orchCfg.value.outputFields?.join(',') ?? '',
@@ -970,6 +971,7 @@ watch(
       const applied = await loadPromptTemplateForNode({
         promptListCategory: promptListCategory.value,
         promptCategory: promptCategory.value,
+        promptTemplateId: orchCfg.value.promptTemplateId,
         inputTableName: sourceTableName.value,
         outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
         sourceId: isMonitor.value ? promptSourceId.value : '',
@@ -1012,6 +1014,7 @@ function onDescribeChange(e: Event) {
 function onPromptSaved() {
   promptTouched.value = true
 }
+function onPromptTemplateIdChange(value: number | undefined) { patch({ promptTemplateId: value }) }
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
 }
@@ -1247,7 +1250,7 @@ async function ensureLegacyComposeRuleId(): Promise<string | undefined> {
   }
 }
 async function onGenerateScript(
-  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
+  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'promptTemplateId' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
 ) {
   if (!orchCfg.value.describe.trim()) {
     ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isDataValidation.value ? '请先填写数据校验描述' : isPdf.value ? '请先填写 PDF 抽取描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
@@ -1397,6 +1400,16 @@ const siteScriptConfigType = computed(() => {
   if (!cfg.value) return ''
   return cfg.value.configType || String(configTypeFrom(cfg.value) ?? '')
 })
+const siteScriptPromptVariables = computed(() => ({
+  source_table: sourceTableName.value, input_table: sourceTableName.value,
+  output_table: orchCfg.value.outputTable?.trim() || sourceTableName.value,
+  input_fields: (orchCfg.value.inputFields?.length ? orchCfg.value.inputFields : inputFieldOptions.value.map(f => f.itemCode)).join(','),
+  output_fields: (orchCfg.value.outputFields?.length ? orchCfg.value.outputFields : outputFieldOptions.value.map(f => f.itemCode)).join(','),
+  input_pair: inputFieldOptions.value.filter(f => !orchCfg.value.inputFields?.length || orchCfg.value.inputFields.includes(f.itemCode)).map(f => `${f.itemName}:${f.itemCode}`).join(','),
+  output_pair: outputFieldOptions.value.filter(f => !orchCfg.value.outputFields?.length || orchCfg.value.outputFields.includes(f.itemCode)).map(f => `${f.itemName}:${f.itemCode}`).join(','),
+  source_id: promptSourceId.value || '', source_cron: sourceCron.value || '',
+  provider_code: orchCfg.value.modelProviderCode || '', model: orchCfg.value.modelCode || '',
+}))
 
 // ---- PDF 抓取「解析内容」（1005）----
 // 与「生成脚本」同一条流式链路，但只读：后端抽 PDF 正文 + 按当前提示词输出，
@@ -2259,6 +2272,7 @@ function onTestScript() {
       :config-id="cfg?.configId"
       :queue-name="siteScriptQueue"
       :config-type="siteScriptConfigType"
+      :template-variables="siteScriptPromptVariables"
       @saved="onSiteScriptSaved"
     />
   </div>
@@ -2269,6 +2283,9 @@ function onTestScript() {
     :prompt-preview-only="promptPreviewOpen"
     :script-label="scriptLabel"
     :system-prompt="orchCfg.systemPrompt ?? ''"
+    :preserve-prompt="promptTouched"
+    :prompt-template-id="orchCfg.promptTemplateId"
+    :config-id="cfg?.configId"
     :prompt-category="promptCategory"
     :prompt-list-category="promptListCategory"
     :prompt-category-groups="promptCategoryGroups"
@@ -2299,6 +2316,7 @@ function onTestScript() {
     :hide-prompt-by-default="isRule"
     @prompt-saved="onPromptSaved"
     @update:system-prompt="onSystemPromptChange"
+    @update:prompt-template-id="onPromptTemplateIdChange"
     @update:prompt-category="onPromptCategoryChange"
     @update:model-provider-code="onModelProviderChange"
     @update:model-code="onModelChange"

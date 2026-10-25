@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { RouterLink } from 'vue-router'
 import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript } from '@/api/siteScript'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
+import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
+import PromptTemplatePicker from './PromptTemplatePicker.vue'
 
 const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL 编写完整的 Python 新闻抓取代码。
 提供 scrape(url) 函数，返回新闻字典列表，字段包含 title、date、url、summary、content。
@@ -13,12 +15,31 @@ const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL
 保持样例的函数接口和返回结构，根据目标网站调整页面选择器，不照搬样例站点的域名。
 只生成抓取代码，不包含 MQ、数据库、流程调度逻辑；导入模块时不要发起网络请求。`
 
-const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string }>()
+const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string> }>()
 const emit = defineEmits<{ saved: [version: PublishedScript, configId: string, queueName: string] }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
 const prompt = ref('')
 const systemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT)
+const defaultSystemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT), defaultUserPrompt = ref(DEFAULT_PROMPT)
+const templateError = ref('')
+const promptTemplates = ref<NodePromptTemplate[]>([]), selectedPromptId = ref(0), promptSnapshot = ref('')
+const modelInterfaces = ref<ModelInterface[]>([]), modelInterfaceId = ref(''), modelError = ref(''), modelsLoading = ref(false)
+let modelsRequest = 0
+const selectedModel = computed(() => modelInterfaces.value.find(row => row.id === modelInterfaceId.value && row.enabled))
+async function loadModels() {
+  const request = ++modelsRequest
+  modelsLoading.value = true; modelError.value = ''
+  try {
+    const result = await runnerManagementApi.modelInterfaces()
+    if (request !== modelsRequest) return
+    modelInterfaces.value = result.items.filter(row => row.enabled)
+    if (!modelInterfaceId.value) modelInterfaceId.value = (modelInterfaces.value.find(row => row.isDefault) || modelInterfaces.value[0])?.id || ''
+    if (!selectedModel.value) modelError.value = '所选模型接口已停用或不可用，请选择可用接口'
+  } catch (e) { if (request === modelsRequest) modelError.value = `模型接口加载失败：${e instanceof Error ? e.message : String(e)}` }
+  finally { if (request === modelsRequest) modelsLoading.value = false }
+}
+const promptTextKey = () => JSON.stringify([systemPrompt.value, prompt.value])
 const code = ref('')
 const candidate = ref('')
 const showCandidate = ref(false)
@@ -75,6 +96,7 @@ const absoluteStoragePath = computed(() => {
   return root ? `${root.replace(/[\\/]$/, '')}${separator}${storagePath.value.replaceAll('/', separator)}` : storagePath.value
 })
 const draftKey = computed(() => JSON.stringify({ code: code.value, prompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(),
+  promptTemplateId: selectedPromptId.value,
   repositoryId: repositoryId.value, directoryId: directoryId.value, storagePath: storagePath.value, fileNameMode: fileNameMode.value, fileName: fileName.value, sourceFilePath: sourceFilePath.value, sourceGitCommit: sourceGitCommit.value }))
 const isSaved = computed(() => {
   const saved = published.value || loadedVersion.value
@@ -133,6 +155,8 @@ async function loadDirectories() {
 }
 
 function clearDraft() {
+  selectedPromptId.value = 0
+  promptTemplates.value = []
   versionRequestId++
   codeLoading.value = false
   code.value = ''
@@ -149,26 +173,51 @@ function clearDraft() {
   warnings.value = []
 }
 
+function syncPromptDefaults(template?: NodePromptTemplate) {
+  const variables = { ...props.templateVariables, url: props.initialUrl, describe: props.initialPrompt, config_id: props.configId || '', queue_name: props.queueName || '' }
+  defaultSystemPrompt.value = template ? fillNodePrompt(template.systemPrompt, variables) : DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
+  defaultUserPrompt.value = template ? fillNodePrompt(template.userPromptTemplate || DEFAULT_PROMPT, variables) : DEFAULT_PROMPT
+}
+
 async function initialize() {
   const session = ++sessionId
   const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
-  if (openedFor !== context) {
+  const newContext = openedFor !== context
+  if (newContext) {
     clearDraft()
     repositoryId.value = ''
     fileNameMode.value = 'website'
     prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
     systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
+    defaultSystemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
+    defaultUserPrompt.value = DEFAULT_PROMPT
   }
   openedFor = context
   url.value = props.initialUrl
   loading.value = true
   repositoriesError.value = ''
   versionsError.value = ''
-  const [repoResult, versionResult] = await Promise.allSettled([
+  templateError.value = ''
+  const [repoResult, versionResult, templateResult] = await Promise.allSettled([
     runnerManagementApi.codeRepositories(),
     props.configId && props.queueName ? runnerManagementApi.siteCodeVersions(props.configId, props.queueName) : Promise.resolve([] as SiteCodeVersion[]),
+    props.configType ? nodePromptApi.list({ sourceType: props.configType, templateUse: 'script' }) : Promise.resolve([]),
+    loadModels(),
   ])
   if (session !== sessionId) return
+  if (templateResult.status === 'fulfilled') {
+    promptTemplates.value = templateResult.value.filter(item => item.isActive === 1)
+    const template = defaultNodePrompt(templateResult.value, true)
+    if (template) {
+      syncPromptDefaults(template)
+      if (newContext) {
+        selectedPromptId.value = template.promptId
+        systemPrompt.value = defaultSystemPrompt.value
+        prompt.value = defaultUserPrompt.value
+      }
+    }
+  } else templateError.value = `公共提示词模板加载失败，当前使用已有提示词或内置默认：${message(templateResult.reason)}`
+  promptSnapshot.value = promptTextKey()
   if (repoResult.status === 'fulfilled') {
     repositories.value = repoResult.value
     await loadDirectories()
@@ -254,9 +303,12 @@ async function loadVersion(version: SiteCodeVersion, restoreDestination = true) 
     const result = await runnerManagementApi.siteCodeContent(version.scriptDigest)
     if (requestId !== versionRequestId || session !== sessionId || !open.value) return
     if (restoreDestination) restoreVersionDestination(result)
+    selectedPromptId.value = result.promptTemplateId || 0
+    syncPromptDefaults(promptTemplates.value.find(item => item.promptId === selectedPromptId.value))
     code.value = result.code
-    prompt.value = (result.userPrompt ?? result.prompt).trim() || props.initialPrompt.trim() || DEFAULT_PROMPT
-    systemPrompt.value = result.systemPrompt?.trim() || DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
+    prompt.value = (result.userPrompt ?? result.prompt).trim() || props.initialPrompt.trim() || defaultUserPrompt.value
+    systemPrompt.value = result.systemPrompt?.trim() || defaultSystemPrompt.value
+    promptSnapshot.value = promptTextKey()
     loadedVersion.value = result
     selectedVersionDigest.value = result.scriptDigest
     published.value = null
@@ -277,12 +329,27 @@ function selectVersion(digest: string) {
   const version = versions.value.find((item) => item.scriptDigest === digest)
   if (version) void loadVersion(version)
 }
-function restorePrompt() { prompt.value = DEFAULT_PROMPT }
-function restoreSystemPrompt() { systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT }
+function restorePrompt() { prompt.value = defaultUserPrompt.value }
+function restoreSystemPrompt() { systemPrompt.value = defaultSystemPrompt.value }
+async function selectPromptTemplate(id: number) {
+  if (id === selectedPromptId.value || busy.value) return
+  if (id && promptSnapshot.value && promptTextKey() !== promptSnapshot.value) {
+    try { await ElMessageBox.confirm('切换提示词将替换当前系统和用户提示词，是否继续？', '切换提示词', { confirmButtonText: '切换', cancelButtonText: '保留当前内容', type: 'warning' }) } catch { return }
+  }
+  const selected = promptTemplates.value.find(item => item.promptId === id)
+  if (id && !selected) return
+  selectedPromptId.value = id
+  syncPromptDefaults(selected)
+  if (selected) {
+    systemPrompt.value = defaultSystemPrompt.value; prompt.value = defaultUserPrompt.value
+  }
+  promptSnapshot.value = promptTextKey()
+}
 function cancelGenerate() { controller?.abort(); controller = null; generating.value = false }
 
 async function generate() {
   if (busy.value) return
+  if (modelsLoading.value || modelError.value || !selectedModel.value) { error.value = '请先选择可用的大模型接口'; return }
   if (!systemPrompt.value.trim()) { error.value = '请填写系统提示词'; return }
   if (!prompt.value.trim()) { error.value = '请填写用户提示词'; return }
   if (systemPrompt.value.length > 12000 || prompt.value.length > 12000) { error.value = '每份提示词不能超过 12000 字'; return }
@@ -297,7 +364,7 @@ async function generate() {
   error.value = ''
   warnings.value = []
   try {
-    const result = await generateSiteScript({ prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
+    const result = await generateSiteScript({ interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
     if (active.signal.aborted) return
     if (code.value.trim()) {
       candidate.value = result.code
@@ -387,7 +454,7 @@ async function publish() {
   const submittedKey = draftKey.value
   try {
     const result = await runnerManagementApi.publishScript({
-      configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(),
+      configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), promptTemplateId: selectedPromptId.value, url: url.value.trim(),
       queueName: props.queueName.trim(), fileNameMode: fileNameMode.value, configType: props.configType || undefined,
       codeId: published.value?.codeId || loadedVersion.value?.codeId || undefined,
       repositoryId: repositoryId.value,
@@ -446,6 +513,7 @@ function download() {
     <p v-if="loadedVersion?.repoId && !selectedRepository" class="site-script-error" role="alert">原仓库已停用或与节点类型不匹配，请重新选择保存位置。</p>
     <p v-if="directoriesError" class="site-script-error" role="alert">目录加载失败：{{ directoriesError }}</p>
     <p v-if="repositoriesError" class="site-script-error" role="alert">仓库加载失败：{{ repositoriesError }}</p>
+    <p v-if="templateError" class="site-script-error" role="alert">{{ templateError }}</p>
     <div class="site-script-naming"><span>文件命名方式</span><el-select v-model="fileNameMode" size="small" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select><code :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code></div>
     <div class="site-script-paths">
       <div v-if="selectedRepository && selectedDirectory"><span>保存关联</span><code :title="`${selectedRepository.name} / ${selectedDirectory.name}`" data-testid="site-script-destination">{{ selectedRepository.name }} / {{ selectedDirectory.name }}</code></div>
@@ -457,6 +525,9 @@ function download() {
   <el-dialog v-model="open" title="AI 代码工作区" width="min(1160px, 96vw)" top="4vh" append-to-body data-testid="site-script-dialog">
     <div v-loading="loading" class="site-script-workspace">
       <section class="site-script-settings" data-testid="site-script-prompt-panel">
+        <PromptTemplatePicker :items="promptTemplates" :model-value="selectedPromptId" :disabled="busy" test-id="script-prompt-template" @select="selectPromptTemplate" />
+        <div class="site-script-model"><label>大模型</label><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading" placeholder="选择大模型接口" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink to="/settings?tab=model-interfaces" target="_blank" rel="noopener">配置</RouterLink></div>
+        <p v-if="modelError" class="site-script-error" role="alert">{{ modelError }}</p>
         <section class="site-script-prompt-group">
           <div class="site-script-panel-head"><label for="site-script-system-prompt"><b>系统提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-system-prompt" @click="restoreSystemPrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-system-prompt" v-model="systemPrompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-system-prompt" placeholder="定义模型角色、代码规范和输出要求" /></div>
@@ -465,7 +536,7 @@ function download() {
           <div class="site-script-panel-head"><label for="site-script-prompt"><b>用户提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-prompt" @click="restorePrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-prompt" v-model="prompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-prompt" placeholder="说明本次抓取需求、列表页结构、提取字段及详情页要求" /></div>
         </section>
-        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || codeLoading || publishing || directoriesLoading" data-testid="site-script-generate" @click="generate">{{ code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating" @click="cancelGenerate">取消生成</el-button><span v-else>生成后可在右侧编辑、保存</span></div>
+        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || codeLoading || publishing || directoriesLoading || modelsLoading || !!modelError || !selectedModel" data-testid="site-script-generate" @click="generate">{{ code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating" @click="cancelGenerate">取消生成</el-button><span v-else>生成后可在右侧编辑、保存</span></div>
       </section>
       <section v-loading="codeLoading" class="site-script-editor-panel" data-testid="site-script-code-panel">
         <div class="site-script-panel-head">
@@ -505,6 +576,10 @@ function download() {
 </template>
 
 <style scoped>
+.site-script-model { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.site-script-model > label { flex: 0 0 42px; }
+.site-script-model :deep(.el-select) { flex: 1; min-width: 0; }
+.site-script-model > a { color: var(--el-color-primary); text-decoration: none; }
 .site-script-configuration { display: grid; min-width: 0; gap: 10px; background: var(--rc-card); }
 .site-script-repository-link { min-width: 0; color: var(--rc-primary); font-size: 12px; text-decoration: none; }
 .site-script-repository-link:hover { text-decoration: underline; }

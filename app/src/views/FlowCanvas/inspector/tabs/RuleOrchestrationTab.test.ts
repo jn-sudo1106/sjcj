@@ -18,6 +18,11 @@ import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
 import { runnerManagementApi } from '@/api/runnerManagement'
 import { resetNodeConfigAutosave } from '../nodeConfigAutosave'
+vi.mock('@/api/nodePrompts', async original => {
+  const actual = await original<typeof import('@/api/nodePrompts')>()
+  return { ...actual, nodePromptApi: { ...actual.nodePromptApi,
+    selection: async () => ({ promptTemplateId: 0 }), select: async (_id: string, promptTemplateId: number) => ({ promptTemplateId }) } }
+})
 
 async function selectFile(input: ReturnType<ReturnType<typeof mount>['find']>, file: File) {
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })

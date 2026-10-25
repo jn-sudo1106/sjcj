@@ -91,7 +91,7 @@ describe('flowXml', () => {
           schedule: { scheduleType: 'daily', scheduleTime: '08:00', weekdays: [1, 3, 5], cron: '' },
           monitorMethods: ['row_count', 'null_rate'],
           ruleCfg: {
-            mode: 'ref', ruleId: 'rule-9', name: '规则处理', describe: '清洗标题',
+            mode: 'ref', ruleId: 'rule-9', name: '规则处理', describe: '清洗标题', promptTemplateId: 23,
             script: 'print("hello & <world>")', enabled: true, format: 'python',
           },
         },
@@ -110,6 +110,8 @@ describe('flowXml', () => {
 
     const xml = flowToXml(def)
 
+    expect(xml).toContain('promptTemplateId="23"')
+
     expect(xml).toContain('configName="已有配置名"')
     expect(xml).toContain('configUrl="https://example.com/config"')
     expect(xml).toContain('<legacy itemId="item-1" stepSourceId="-1" runPolicy="每日 08:00" />')
@@ -121,7 +123,7 @@ describe('flowXml', () => {
     expect(xml).toContain('<schedule scheduleType="daily" scheduleTime="08:00" cron="" weekdays="1,3,5" />')
     expect(xml).toContain('<monitorMethod id="row_count" />')
     expect(xml).toContain('<monitorMethod id="null_rate" />')
-    expect(xml).toContain('<rule mode="ref" name="规则处理" format="python" enabled="true">')
+    expect(xml).toContain('<rule mode="ref" name="规则处理" format="python" enabled="true" promptTemplateId="23">')
     expect(xml).not.toContain('ruleId=')
     expect(xml).toContain('<describe>清洗标题</describe>')
     expect(xml).toContain('<script>print(&quot;hello &amp; &lt;world&gt;&quot;)</script>')

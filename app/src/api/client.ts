@@ -514,12 +514,18 @@ export async function request<T>(
     const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams, options.keepEmptyParams) : resolvedPath
     const requestUrl = options.query ? appendQuery(url, options.query) : url
     const controller = new AbortController()
+    let timeoutExpired = false
     const onExternalAbort = () => controller.abort()
     if (options.signal) {
       if (options.signal.aborted) controller.abort()
       else options.signal.addEventListener('abort', onExternalAbort, { once: true })
     }
-    const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
+    const timeoutMs = options.timeoutMs ?? 20_000
+    const timeout = window.setTimeout(() => {
+      if (controller.signal.aborted) return
+      timeoutExpired = true
+      controller.abort()
+    }, timeoutMs)
     if (paramsIn === 'body') headers['Content-Type'] = 'application/json'
     if (paramsIn === 'form') headers['Content-Type'] = 'application/x-www-form-urlencoded'
     let res: Response
@@ -533,6 +539,10 @@ export async function request<T>(
           : paramsIn === 'form' ? formEncode(httpParams) : undefined,
         signal: controller.signal,
       })
+    } catch (error) {
+      if (timeoutExpired) throw new Error(`请求超时（${timeoutMs / 1000} 秒），后端未及时响应，请稍后重试`)
+      if (options.signal?.aborted && controller.signal.aborted) throw new Error('请求已取消')
+      throw error
     } finally {
       window.clearTimeout(timeout)
       options.signal?.removeEventListener('abort', onExternalAbort)

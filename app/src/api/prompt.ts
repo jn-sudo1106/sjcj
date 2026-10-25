@@ -1,5 +1,8 @@
+import { nodePromptApi } from './nodePrompts'
+
 export interface PromptTemplateItem {
   promptId: number
+  promptName?: string
   nodeType: string
   nodeTypeName: string
   category: string
@@ -49,6 +52,7 @@ function normalizePrompt(item: unknown): PromptTemplateItem | null {
   const promptId = Number(record.promptId ?? record.id ?? 0)
   return {
     promptId: Number.isFinite(promptId) ? promptId : 0,
+    promptName: toString(record.promptName).trim() || undefined,
     nodeType: toString(record.nodeType).trim(),
     nodeTypeName,
     category,
@@ -81,6 +85,10 @@ async function fetchJson(path: string): Promise<unknown> {
 }
 
 export async function fetchPromptList(category: string, nodeTypeName: string): Promise<PromptTemplateItem[]> {
+  if (import.meta.env.VITE_FLOW_PROXY_TARGET) {
+    const rows = await nodePromptApi.list({ category, nodeTypeName, templateUse: 'config' })
+    return rows.filter(row => row.isActive === 1).sort((a, b) => (b.isDefault ?? 0) - (a.isDefault ?? 0))
+  }
   const params = new URLSearchParams()
   if (category.trim()) params.set('category', category.trim())
   if (nodeTypeName.trim()) params.set('node_type_name', nodeTypeName.trim())

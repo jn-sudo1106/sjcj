@@ -5,6 +5,11 @@ import { generateSiteScript } from './siteScript'
 afterEach(() => vi.restoreAllMocks())
 
 describe('generateSiteScript', () => {
+  it('routes a selected model through the server adapter without exposing its address in generation input', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ fileName: 'example.com.py', code: 'def scrape(url): return []', warnings: [] })))
+    await generateSiteScript({ interfaceId: 'chat-hy3', prompt: '需求', url: 'https://example.com', sampleId: 'www.realcan.cn.py' })
+    expect(spy).toHaveBeenCalledWith('/api/runner-management/model-interfaces/generate', expect.objectContaining({ body: expect.stringContaining('"interfaceId":"chat-hy3"') }))
+  })
   it('sends prompt, URL and fixed sample id to the isolated generation service', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       fileName: 'www.realcan.cn.py',

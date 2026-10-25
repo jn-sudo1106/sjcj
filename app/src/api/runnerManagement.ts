@@ -1,4 +1,5 @@
 import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './auth'
+import { streamModelInterfaceTest } from './modelInterfaceStream'
 
 export interface RunnerWorkerProcess {
   assignmentId: string
@@ -111,6 +112,7 @@ export interface ScriptBinding {
 }
 
 export interface PublishedScript {
+  promptTemplateId?: number
   /** 节点代码发布返回稳定代码 ID 和网站信息；旧发布接口不返回。 */
   codeId?: string
   siteHost?: string
@@ -470,7 +472,39 @@ function list<T>(path: string): Promise<T[]> {
   })
 }
 
+export interface ModelInterface {
+  id: string
+  name: string
+  kind: 'agent' | 'gemini-agent' | 'gemini-chat' | 'chat' | 'site-script'
+  title?: string
+  endpoint: string
+  model: string
+  enabled: boolean
+  isDefault: boolean
+  timeoutSeconds: number
+  inputFileDir: string
+  prjDir?: string
+  testSystemPrompt?: string
+  testUserPrompt?: string
+  codeDir: string
+  outputFileDir: string
+  stream: boolean
+}
+export interface ModelInterfaceSettings { items: ModelInterface[]; revision: number }
+export interface ModelInterfaceTestInput {
+  interfaceId: string; prompt: string; model?: string; stream?: boolean
+  title?: string; prjDir?: string; inputFileDir?: string; codeDir?: string; outputFileDir?: string; url?: string; systemPrompt?: string
+}
+export interface ModelInterfaceTestResult {
+  ok: boolean; status: number; contentType: string; responseText: string; durationMs: number
+}
+
 export const runnerManagementApi = {
+  streamModelInterfaceTest,
+  modelInterfaces: () => request<ModelInterfaceSettings>('/settings/model-interfaces'),
+  saveModelInterfaces: (input: ModelInterfaceSettings) => request<ModelInterfaceSettings>('/settings/model-interfaces', 'POST', input),
+  saveModelTestPrompts: (input: { interfaceId: string; systemPrompt: string; userPrompt: string; revision: number }) => request<ModelInterfaceSettings>('/settings/model-interfaces/test-prompts', 'POST', input),
+  testModelInterface: (input: ModelInterfaceTestInput) => request<ModelInterfaceTestResult>('/model-interfaces/test', 'POST', input),
   processorProcesses: () => request<{ runners: RunnerInstance[]; items: ProcessorProcess[] }>('/processes'),
   stopProcessorProcess: (process: Pick<ProcessorProcess, 'runnerId' | 'assignmentId' | 'slot' | 'pid' | 'generation'>) =>
     request<ProcessStopRequest>(`/runners/${encodeURIComponent(process.runnerId)}/processes/stop`, 'POST', { assignmentId: process.assignmentId, slot: process.slot, pid: process.pid, generation: process.generation }),
@@ -559,7 +593,7 @@ export const runnerManagementApi = {
   },
   setDesiredRunner: (runnerId: string, digest: string) => request<{ runnerId: string; digest: string }>(`/runners/${encodeURIComponent(runnerId)}/desired-runner`, 'POST', { digest }),
   scriptBinding: (configId: string) => request<ScriptBinding | null>(`/configs/${encodeURIComponent(configId)}/script-release`),
-  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
+  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; promptTemplateId?: number; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
   adoptScript: (configId: string, scriptDigest: string) => request<ScriptBinding>(`/configs/${encodeURIComponent(configId)}/script-release`, 'POST', { scriptDigest }),
   siteCodeVersions: (configId: string, queueName: string) => list<SiteCodeVersion>(`/site-scripts/versions?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}`),
   siteCodeCatalog: () => list<SiteCodeVersion & { environments: ('test' | 'prd')[] }>('/site-scripts/catalog'),

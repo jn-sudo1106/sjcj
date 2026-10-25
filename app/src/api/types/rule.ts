@@ -135,6 +135,8 @@ export interface RuleOrchestration {
   systemPrompt?: string
   /** 提示词分类（前端草稿字段）；按当前节点类型自动预填，随编排配置一起保存。 */
   promptCategory?: PromptCategory
+  /** Selected named prompt; prompt text remains a node-local snapshot. */
+  promptTemplateId?: number
   /** 模型供应商（前端草稿字段）；由 /api/model/providers 提供。 */
   modelProviderCode?: string
   /** 模型（前端草稿字段）；由 /api/model/default-models 提供。 */

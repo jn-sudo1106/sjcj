@@ -11,6 +11,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, type NodeType, type NodeTypeInput } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useDictStore } from '@/stores/dict'
+import NodePromptTemplates from './NodePromptTemplates.vue'
 
 const auth = useAuthStore()
 const dict = useDictStore()
@@ -45,10 +46,15 @@ onMounted(load)
 // ---- 详情 ----
 const detailVisible = ref(false)
 const detail = ref<NodeType | null>(null)
-function openDetail(row: NodeType) {
+const detailTab = ref('base')
+const promptTemplates = ref<InstanceType<typeof NodePromptTemplates>>()
+function openDetail(row: NodeType, tab = 'base') {
   detail.value = row
+  detailTab.value = tab
   detailVisible.value = true
 }
+async function closeDetail(done: () => void) { if (!promptTemplates.value || await promptTemplates.value.confirmLeave()) done() }
+async function changeDetailTab(tab: string | number) { return tab === detailTab.value || !promptTemplates.value || await promptTemplates.value.confirmLeave() }
 const DETAIL_FIELDS: { key: keyof NodeType; label: string }[] = [
   { key: 'sourceType', label: '类型 ID' },
   { key: 'typeName', label: '类型名称' },
@@ -129,6 +135,14 @@ function changedFields(before: NodeType): NodeTypeInput {
   if (form.params.trim() !== before.params) patch.params = form.params.trim()
   return patch
 }
+async function openEditorPrompts() {
+  if (!editing.value) return
+  if (Object.keys(changedFields(editing.value)).length) {
+    try { await ElMessageBox.confirm('节点类型信息尚未保存，是否放弃修改并打开提示词模板？', '未保存的修改', { confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning' }) } catch { return }
+  }
+  editVisible.value = false
+  openDetail(editing.value, 'prompts')
+}
 
 async function save() {
   const typeName = form.typeName.trim()
@@ -197,7 +211,7 @@ async function save() {
             <th style="width: 160px">默认消息队列</th>
             <th style="width: 70px">排序</th>
             <th>备注</th>
-            <th style="width: 150px">操作</th>
+            <th style="width: 220px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -210,6 +224,7 @@ async function save() {
             <td class="nt-ellipsis" :title="t.notes">{{ t.notes || '—' }}</td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(t)">详情</el-button>
+              <el-button link type="primary" size="small" data-testid="node-type-prompts" @click="openDetail(t, 'prompts')">提示词模板</el-button>
               <el-button v-if="canWrite" link type="primary" size="small" data-testid="node-type-edit" @click="openEdit(t)">编辑</el-button>
               <el-button v-if="canWrite" link type="danger" size="small" :loading="deleting === t.sourceType" data-testid="node-type-delete" @click="remove(t)">删除</el-button>
             </td>
@@ -222,13 +237,18 @@ async function save() {
     </div>
 
     <!-- 详情：实体详情统一右侧抽屉（AGENTS.md 详情弹层约定） -->
-    <el-drawer v-model="detailVisible" :title="detail ? `节点类型 · ${detail.typeName}` : '节点类型'" size="420px">
+    <el-drawer v-model="detailVisible" :title="detail ? `节点类型 · ${detail.typeName}` : '节点类型'" size="min(1080px, calc(100vw - 32px))" :before-close="closeDetail" destroy-on-close>
+      <el-tabs v-model="detailTab" :before-leave="changeDetailTab">
+      <el-tab-pane label="基本信息" name="base">
       <dl v-if="detail" class="nt-detail">
         <template v-for="f in DETAIL_FIELDS" :key="f.key">
           <dt>{{ f.label }}</dt>
           <dd>{{ detail[f.key] === '' || detail[f.key] == null ? '—' : detail[f.key] }}</dd>
         </template>
       </dl>
+      </el-tab-pane>
+      <el-tab-pane label="提示词模板" name="prompts"><NodePromptTemplates v-if="detail && detailTab === 'prompts'" ref="promptTemplates" :node="detail" :can-write="canWrite" /></el-tab-pane>
+      </el-tabs>
     </el-drawer>
 
     <!-- 新建 / 编辑：短表单，居中弹窗 -->
@@ -264,6 +284,7 @@ async function save() {
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button v-if="editing" @click="openEditorPrompts">提示词模板</el-button>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" data-testid="node-type-save" @click="save">保存</el-button>
       </template>
