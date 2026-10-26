@@ -17,12 +17,14 @@ import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 import DataPermissionTab from './DataPermissionTab.vue'
 import ModelInterfacesTab from './ModelInterfacesTab.vue'
+import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
 // runner：依赖 Runner 管理服务的 tab，部署环境（2806 / 2807）网关还没有转发这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户确认隐藏）。
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab, runner: true },
+  { key: 'code-servers', label: '代码生成服务器', permission: 'settings:nodeType', comp: CodeGenerationServersTab, runner: true },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
   { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
   { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab, runner: true },

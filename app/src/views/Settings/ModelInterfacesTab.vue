@@ -2,14 +2,21 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { runnerManagementApi, type ModelInterface, type ModelInterfaceSettings } from '@/api/runnerManagement'
+import { runnerManagementApi, type ModelInterface, type ModelInterfaceSettings, type CodeGenerationServer } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT } from '@/api/siteScript'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
 import MarkdownOutput from '@/components/MarkdownOutput.vue'
+import { createGenerationTaskId, generationWorkspace } from '@/utils/generationWorkspace'
 
 const auth = useAuthStore(), canWrite = computed(() => auth.role === 'admin')
 const settings = ref<ModelInterfaceSettings>({ items: [], revision: 0 })
+const generationServers = ref<CodeGenerationServer[]>([])
+const serverLoadError = ref('')
+async function loadServers() {
+  try { generationServers.value = (await runnerManagementApi.codeGenerationServers()).items; serverLoadError.value = '' }
+  catch { serverLoadError.value = '代码生成服务器列表加载失败，可点击刷新重试' }
+}
 const loading = ref(false), saving = ref(false), error = ref(''), keyword = ref(''), drawer = ref(false)
 const statusSavingId = ref('')
 async function toggleEnabled(row: ModelInterface): Promise<boolean> {
@@ -29,10 +36,14 @@ const kinds = { agent: 'Agent 代码生成', 'gemini-agent': 'Gemini Agent', 'ge
 const isAgent = (kind: ModelInterface['kind']) => kind === 'agent' || kind === 'gemini-agent'
 const needsModel = (kind: ModelInterface['kind']) => kind === 'agent' || kind === 'chat' || kind === 'gemini-chat'
 const empty = (): ModelInterface => ({ id: '', name: '', kind: 'chat', endpoint: 'http://192.168.1.171:6000/workbuudy/chat',
-  model: 'hy3', enabled: true, isDefault: false, timeoutSeconds: 300, prjDir: 'D:\\aicode', inputFileDir: '',
+  model: 'hy3', enabled: true, isDefault: false, timeoutSeconds: 300, prjDir: 'D:\\aicode', cdpPort: 9223, inputFileDir: '',
   codeDir: 'D:\\aicode\\code', outputFileDir: 'D:\\aicode\\output', stream: true,
-  title: '', testSystemPrompt: undefined, testUserPrompt: undefined })
+  title: '', generationServerId: '', testSystemPrompt: undefined, testUserPrompt: undefined })
 const form = reactive<ModelInterface>(empty()), testForm = reactive<ModelInterface>(empty())
+const testTaskId = ref(createGenerationTaskId())
+let testTaskUsed = false
+const formDirectories = computed(() => generationWorkspace(form, '{任务ID}'))
+const testDirectories = computed(() => generationWorkspace(testForm, testTaskId.value))
 const testOpen = ref(false), testing = ref(false), testError = ref('')
 const promptSaving = ref(false)
 const testResult = ref<Awaited<ReturnType<typeof runnerManagementApi.testModelInterface>> | null>(null)
@@ -63,7 +74,7 @@ async function closeTest(done?: () => void) {
 function defaultSamplePrompt(kind: ModelInterface['kind']) {
   return kind === 'chat' || kind === 'gemini-chat' ? '南京到上海的距离' : `帮我采集这个网站的新闻的代码，不要写翻页的代码，网址是${sampleUrl}。请返回完整 Python 代码。`
 }
-function buildSampleRequest(config: ModelInterface, prompt: string, url = sampleUrl, systemPrompt = config.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : '') {
+function buildSampleRequest(config: ModelInterface, prompt: string, url = sampleUrl, systemPrompt = config.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : '', taskId = testTaskId.value) {
   try {
     const target = new URL(config.endpoint.trim())
     if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.search || target.hash || !prompt.trim()) return ''
@@ -79,10 +90,12 @@ function buildSampleRequest(config: ModelInterface, prompt: string, url = sample
       return `POST ${target.href}\nContent-Type: application/json\n\n${JSON.stringify({ prompt: combinedPrompt, model: config.model.trim() }, null, 2)}`
     }
     if (isAgent(config.kind)) {
+      const paths = generationWorkspace(config, taskId)
       return `POST ${target.href}\nContent-Type: application/json; charset=utf-8\n\n${JSON.stringify({
-        prj_dir: config.prjDir?.trim() || '', input_file_dir: config.inputFileDir.trim(),
+        prj_dir: paths.prjDir, input_file_dir: paths.inputFileDir,
         ...(config.kind === 'gemini-agent' ? { title: config.title?.trim() || '' } : { model: config.model.trim() }),
-        prompt: combinedPrompt, code_dir: config.codeDir.trim(), output_file_dir: config.outputFileDir.trim(),
+        prompt: combinedPrompt, code_dir: paths.codeDir, output_file_dir: paths.outputFileDir,
+        ...(config.kind === 'agent' ? { cdp_port: config.cdpPort ?? 9223 } : {}),
       }, null, 2)}`
     }
     target.searchParams.set('model', config.model.trim())
@@ -99,9 +112,10 @@ function buildSampleRequest(config: ModelInterface, prompt: string, url = sample
 const sampleRequest = computed(() => buildSampleRequest(testForm, samplePrompt.value, testUrl.value, testSystemPrompt.value))
 function copySample(row: ModelInterface) {
   void copyToClipboard(buildSampleRequest({ ...row, prjDir: row.prjDir ?? 'D:\\aicode' }, row.testUserPrompt ?? defaultSamplePrompt(row.kind), sampleUrl,
-    row.testSystemPrompt ?? (row.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : '')), row.kind === 'chat' ? '请求地址' : 'HTTP 请求')
+    row.testSystemPrompt ?? (row.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : ''), createGenerationTaskId()), row.kind === 'chat' ? '请求地址' : 'HTTP 请求')
 }
 function openTest(row: ModelInterface) {
+  testTaskId.value = createGenerationTaskId(); testTaskUsed = false
   Object.assign(testForm, empty(), row, { prjDir: row.prjDir ?? 'D:\\aicode' }); samplePrompt.value = row.testUserPrompt ?? defaultSamplePrompt(row.kind)
   testUrl.value = sampleUrl; testSystemPrompt.value = row.testSystemPrompt ?? (row.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : '')
   promptBaseline.value = promptKey()
@@ -133,6 +147,8 @@ async function saveTestPrompts(): Promise<boolean> {
 async function runTest() {
   if (testing.value || !sampleRequest.value) return
   if (!await saveTestPrompts() || testing.value) return
+  if (testTaskUsed) testTaskId.value = createGenerationTaskId()
+  testTaskUsed = true
   testing.value = true; testResult.value = null; testError.value = ''
   const active = new AbortController(), started = Date.now()
   testController = active
@@ -142,8 +158,13 @@ async function runTest() {
   void nextTick(() => { if (testBody.value) testBody.value.scrollTop = testBody.value.scrollHeight })
   try {
     await runnerManagementApi.streamModelInterfaceTest({ interfaceId: testForm.id,
+      ...(isAgent(testForm.kind) ? { taskId: testTaskId.value } : {}),
       prompt: samplePrompt.value.trim(), model: testForm.model.trim(), stream: testForm.stream,
-      title: testForm.title?.trim(), prjDir: testForm.prjDir?.trim(), inputFileDir: testForm.inputFileDir.trim(), codeDir: testForm.codeDir.trim(), outputFileDir: testForm.outputFileDir.trim(),
+      title: testForm.title?.trim(), prjDir: testForm.prjDir?.trim(),
+      inputFileDir: isAgent(testForm.kind) ? testDirectories.value.inputFileDir : testForm.inputFileDir.trim(),
+      codeDir: isAgent(testForm.kind) ? testDirectories.value.codeDir : testForm.codeDir.trim(),
+      outputFileDir: isAgent(testForm.kind) ? testDirectories.value.outputFileDir : testForm.outputFileDir.trim(),
+      ...(testForm.kind === 'agent' ? { cdpPort: testForm.cdpPort ?? 9223 } : {}),
       url: testUrl.value.trim(), systemPrompt: testSystemPrompt.value.trim() }, event => {
       if (active.signal.aborted || !testResult.value) return
       const follow = !testBody.value || testBody.value.scrollHeight - testBody.value.scrollTop - testBody.value.clientHeight < 60
@@ -168,11 +189,22 @@ const rows = computed(() => settings.value.items.filter(row => [row.name, row.mo
 async function load() {
   if (statusSavingId.value) return
   loading.value = true; error.value = ''
+  void loadServers()
   try { settings.value = await runnerManagementApi.modelInterfaces() }
   catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { loading.value = false }
 }
 function edit(row?: ModelInterface) { if (statusSavingId.value) return; Object.assign(form, empty(), row ? { ...row, prjDir: row.prjDir ?? 'D:\\aicode' } : {}); error.value = ''; drawer.value = true }
+function duplicate(row: ModelInterface) {
+  if (!canWrite.value || statusSavingId.value || saving.value) return
+  const names = new Set(settings.value.items.map(item => item.name))
+  let index = 1, name = ''
+  do {
+    const suffix = index === 1 ? ' - 副本' : ` - 副本${index}`
+    name = row.name.slice(0, 100 - suffix.length) + suffix; index++
+  } while (names.has(name))
+  edit({ ...row, id: '', name, isDefault: false })
+}
 function changeKind() {
   if (form.kind === 'gemini-chat') {
     form.endpoint = 'http://127.0.0.1:6000/gemini/chat'; form.model = 'gemini-3.5-flash-lite'
@@ -214,24 +246,27 @@ onMounted(load)
       <el-table-column label="名称" min-width="160"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">{{ row.name }}</el-button><el-tag v-if="row.isDefault" size="small">默认</el-tag></template></el-table-column>
       <el-table-column label="类型" width="150"><template #default="{ row }">{{ kinds[row.kind as keyof typeof kinds] }}</template></el-table-column>
       <el-table-column prop="model" label="模型" width="110"><template #default="{ row }">{{ row.model || '服务端配置' }}</template></el-table-column>
-      <el-table-column prop="endpoint" label="接口地址" min-width="260" show-overflow-tooltip />
+      <el-table-column prop="endpoint" label="接口地址" min-width="240" show-overflow-tooltip />
       <el-table-column label="状态" width="125"><template #default="{ row }"><div class="mi-status"><el-switch :model-value="row.enabled" :loading="statusSavingId === row.id" :disabled="!canWrite || loading || !!statusSavingId || saving || promptSaving || testing" :before-change="() => toggleEnabled(row)" :aria-label="`${row.name}启用状态`" :data-testid="`model-toggle-${row.id}`" /><span>{{ row.enabled ? '启用' : '停用' }}</span></div></template></el-table-column>
-      <el-table-column label="操作" width="220"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ row.kind === 'chat' ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button></div></template></el-table-column>
+      <el-table-column label="操作" width="280"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ row.kind === 'chat' ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button></div></template></el-table-column>
     </el-table>
     <el-drawer v-model="drawer" :title="form.id ? '模型接口配置' : '新增模型接口'" size="min(620px, 94vw)" :close-on-click-modal="false">
       <el-form label-position="top" :disabled="saving || !canWrite" class="mi-form">
         <el-form-item label="接口名称" required><el-input v-model="form.name" maxlength="100" data-testid="model-name" /></el-form-item>
+        <el-form-item label="代码生成服务器"><el-select v-model="form.generationServerId" data-testid="model-generation-server"><el-option value="" label="直接连接模型接口" /><el-option v-for="server in generationServers" :key="server.serverId" :value="server.serverId" :label="`${server.name} · ${server.ipAddress} · ${server.status === 'online' ? '在线' : '离线'}`" /></el-select><span v-if="serverLoadError" class="mi-error">{{ serverLoadError }}</span></el-form-item>
         <div class="mi-pair"><el-form-item label="接口类型"><el-select v-model="form.kind" @change="changeKind"><el-option v-for="(label, key) in kinds" :key="key" :value="key" :label="label" /></el-select></el-form-item><el-form-item label="模型标识" :required="needsModel(form.kind)"><el-input v-model="form.model" :disabled="!needsModel(form.kind)" :placeholder="needsModel(form.kind) ? '例如 hy3' : '由服务端配置'" /></el-form-item></div>
         <el-form-item label="接口地址" required><el-input v-model="form.endpoint" placeholder="http://主机:端口/workbuudy/chat" /></el-form-item>
         <el-form-item v-if="form.kind === 'gemini-agent'" label="任务标题（title）"><el-input v-model="form.title" maxlength="200" placeholder="代码优化测试" /></el-form-item>
         <template v-if="isAgent(form.kind)">
           <p class="mi-note">以下路径均为大模型服务所在机器的目录。</p>
           <el-form-item label="工作空间（prj_dir）" required><el-input v-model="form.prjDir" placeholder="D:\aicode" data-testid="model-prj-dir" /></el-form-item>
-          <el-form-item label="输入文件或目录（input_file_dir）"><el-input v-model="form.inputFileDir" placeholder="可留空，也可填写单个文件路径" /></el-form-item>
-          <el-form-item label="代码目录（code_dir）" required><el-input v-model="form.codeDir" /></el-form-item>
-          <el-form-item label="输出目录（output_file_dir）" required><el-input v-model="form.outputFileDir" /></el-form-item>
+          <el-form-item label="输入目录（自动生成）"><el-input :model-value="formDirectories.inputFileDir" readonly /></el-form-item>
+          <el-form-item label="代码目录（自动生成）"><el-input :model-value="formDirectories.codeDir" readonly /></el-form-item>
+          <el-form-item label="输出目录（自动生成）"><el-input :model-value="formDirectories.outputFileDir" readonly /></el-form-item>
+          <p class="mi-note">按实例 ID / 任务 ID 隔离目录。选择代码生成服务器时使用其实例 ID，直接连接时使用本接口 ID。</p>
         </template>
         <el-form-item label="超时（秒）"><el-input-number v-model="form.timeoutSeconds" :min="10" :max="1800" :step="10" /></el-form-item>
+        <el-form-item v-if="form.kind === 'agent'" label="浏览器调试端口（cdp_port）"><el-input-number v-model="form.cdpPort" :min="1" :max="65535" :precision="0" controls-position="right" data-testid="model-cdp-port" /></el-form-item>
         <div class="mi-switches"><el-switch v-model="form.enabled" active-text="启用" inactive-text="停用" /><el-switch v-model="form.isDefault" active-text="默认接口" /><el-switch v-if="form.kind === 'chat'" v-model="form.stream" active-text="流式响应" /></div>
       </el-form>
       <p v-if="error" class="mi-error" role="alert">{{ error }}</p>
@@ -242,15 +277,17 @@ onMounted(load)
         <div class="mi-test-params">
         <el-form label-position="top" :disabled="testing" class="mi-form">
           <el-form-item label="接口地址"><el-input :model-value="testForm.endpoint" readonly /></el-form-item>
+          <el-form-item v-if="testForm.generationServerId" label="代码生成服务器"><span>{{ generationServers.find(server => server.serverId === testForm.generationServerId)?.name || testForm.generationServerId }}</span></el-form-item>
           <div class="mi-pair"><el-form-item label="模型标识"><el-input v-model="testForm.model" :disabled="!needsModel(testForm.kind)" :placeholder="needsModel(testForm.kind) ? '例如 hy3' : '由服务端配置'" data-testid="model-test-model" /></el-form-item><el-form-item label="超时"><span>{{ testForm.timeoutSeconds }} 秒</span></el-form-item></div>
           <el-form-item v-if="testForm.kind === 'gemini-agent'" label="任务标题（title）"><el-input v-model="testForm.title" maxlength="200" data-testid="model-test-title" /></el-form-item>
           <template v-if="isAgent(testForm.kind)">
             <el-form-item label="工作空间（prj_dir）" required><el-input v-model="testForm.prjDir" data-testid="model-test-prj-dir" /></el-form-item>
-            <el-form-item label="输入文件或目录（input_file_dir）"><el-input v-model="testForm.inputFileDir" placeholder="可留空，也可填写单个文件路径" /></el-form-item>
-            <div class="mi-pair"><el-form-item label="代码目录（code_dir）"><el-input v-model="testForm.codeDir" /></el-form-item><el-form-item label="输出目录（output_file_dir）"><el-input v-model="testForm.outputFileDir" /></el-form-item></div>
+            <el-form-item label="输入目录（自动生成）"><el-input :model-value="testDirectories.inputFileDir" readonly /></el-form-item>
+            <div class="mi-pair"><el-form-item label="代码目录（自动生成）"><el-input :model-value="testDirectories.codeDir" readonly /></el-form-item><el-form-item label="输出目录（自动生成）"><el-input :model-value="testDirectories.outputFileDir" readonly /></el-form-item></div>
             <p class="mi-note">目录位于模型服务器；发送测试可能在这些目录生成文件。</p>
           </template>
           <el-form-item v-if="testForm.kind === 'chat'" label="响应方式"><el-switch v-model="testForm.stream" active-text="流式响应" /></el-form-item>
+          <el-form-item v-if="testForm.kind === 'agent'" label="浏览器调试端口（cdp_port）"><el-input-number v-model="testForm.cdpPort" :min="1" :max="65535" :precision="0" controls-position="right" data-testid="model-test-cdp-port" /></el-form-item>
           <el-form-item v-if="testForm.kind === 'site-script'" label="目标网站 URL"><el-input v-model="testUrl" /></el-form-item>
           <div class="mi-prompt-toolbar"><b>提示词</b><span class="mi-prompt-state" :class="{ dirty: promptsDirty }" data-testid="model-prompt-save-state">{{ promptSaveError ? '保存失败' : promptSaving ? '保存中…' : promptsDirty && canWrite ? '等待自动保存…' : testForm.testUserPrompt !== undefined ? '已保存' : '默认内容' }}</span></div>
           <p v-if="promptSaveError" class="mi-error" role="alert">自动保存失败：{{ promptSaveError }}。内容已保留，请继续编辑后重试。</p>

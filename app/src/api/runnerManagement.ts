@@ -473,6 +473,7 @@ function list<T>(path: string): Promise<T[]> {
 }
 
 export interface ModelInterface {
+  generationServerId?: string
   id: string
   name: string
   kind: 'agent' | 'gemini-agent' | 'gemini-chat' | 'chat' | 'site-script'
@@ -484,6 +485,7 @@ export interface ModelInterface {
   timeoutSeconds: number
   inputFileDir: string
   prjDir?: string
+  cdpPort?: number
   testSystemPrompt?: string
   testUserPrompt?: string
   codeDir: string
@@ -491,7 +493,18 @@ export interface ModelInterface {
   stream: boolean
 }
 export interface ModelInterfaceSettings { items: ModelInterface[]; revision: number }
+export interface CodeGenerationServer {
+  serverId: string; name: string; endpoint: string; workspace: string; installDirectory: string
+  ipAddress: string; osType: string; osVersion: string; version: string; pid?: number
+  lastHeartbeat: string; status: 'online' | 'offline'
+}
+export interface RemoteCodeFile {
+  name: string; path: string; isDirectory: boolean; size: number; modifiedAt: string; sha256?: string | null
+  content?: string; data?: string
+}
 export interface ModelInterfaceTestInput {
+  taskId?: string
+  cdpPort?: number
   interfaceId: string; prompt: string; model?: string; stream?: boolean
   title?: string; prjDir?: string; inputFileDir?: string; codeDir?: string; outputFileDir?: string; url?: string; systemPrompt?: string
 }
@@ -500,6 +513,19 @@ export interface ModelInterfaceTestResult {
 }
 
 export const runnerManagementApi = {
+  codeGenerationServers: () => request<{ items: CodeGenerationServer[] }>('/code-servers'),
+  codeServerEnrollmentCode: () => request<{ code: string; expiresAt: string }>('/code-servers/enrollment-code', 'POST', {}),
+  codeServerPackageInfo: () => request<{ platform: string }>('/code-servers/package'),
+  remoteCodeFiles: <T = { items: RemoteCodeFile[]; path: string }>(serverId: string, input: Record<string, unknown>) => request<T>(`/code-servers/${encodeURIComponent(serverId)}/files`, 'POST', input),
+  importRemoteCode: (serverId: string, input: { repositoryId: string; directoryId: string; paths: string[]; overwrite: boolean }) => request<CodeRepositoryUploadResult>(`/code-servers/${encodeURIComponent(serverId)}/import`, 'POST', input),
+  downloadCodeServerPackage: async (platform: string) => {
+    const token = readStoredToken()
+    const response = await fetch('/api/runner-management/code-servers/package', { method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform }) })
+    if (response.status === 401) triggerSessionExpired()
+    if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '服务包下载失败') }
+    return response.blob()
+  },
   streamModelInterfaceTest,
   modelInterfaces: () => request<ModelInterfaceSettings>('/settings/model-interfaces'),
   saveModelInterfaces: (input: ModelInterfaceSettings) => request<ModelInterfaceSettings>('/settings/model-interfaces', 'POST', input),

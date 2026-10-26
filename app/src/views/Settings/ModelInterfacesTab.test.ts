@@ -14,6 +14,7 @@ const fixture: ModelInterfaceSettings = { revision: 3, items: [{ id: 'legacy', n
   inputFileDir: '', codeDir: '', outputFileDir: '' }] }
 const wrappers: ReturnType<typeof mount>[] = []
 beforeEach(() => {
+  vi.spyOn(runnerManagementApi, 'codeGenerationServers').mockResolvedValue({ items: [] })
   vi.spyOn(runnerManagementApi, 'modelInterfaces').mockResolvedValue(structuredClone(fixture))
   vi.spyOn(runnerManagementApi, 'saveModelInterfaces').mockImplementation(async input => ({ ...input, revision: input.revision + 1 }))
   vi.spyOn(runnerManagementApi, 'saveModelTestPrompts').mockImplementation(async input => ({
@@ -38,6 +39,25 @@ it('新建接口保留已有配置并带乐观锁保存', async () => {
   input.value = '新 Chat 接口'; input.dispatchEvent(new Event('input')); await flushPromises()
   document.querySelector<HTMLButtonElement>('[data-testid="model-save"]')!.click(); await flushPromises()
   expect(runnerManagementApi.saveModelInterfaces).toHaveBeenCalledWith({ revision: 3, items: [fixture.items[0], expect.objectContaining({ name: '新 Chat 接口', kind: 'chat', model: 'hy3', isDefault: false })] })
+})
+it('复制配置生成新接口草稿，保留目录和提示词且不继承默认项', async () => {
+  const source = { ...fixture.items[0]!, prjDir: 'D:\\workspace', title: '任务标题',
+    testSystemPrompt: '已保存系统提示词', testUserPrompt: '已保存用户提示词' }
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items: [source,
+    { ...fixture.items[0]!, id: 'copy-existing', name: '默认模型 - 副本', isDefault: false }] })
+  const w = await setup()
+  await w.get('[data-testid="model-duplicate-legacy"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+  const input = document.querySelector<HTMLInputElement>('input[data-testid="model-name"], [data-testid="model-name"] input')!
+  expect(input.value).toBe('默认模型 - 副本2')
+  document.querySelector<HTMLButtonElement>('[data-testid="model-save"]')!.click(); await flushPromises()
+  const request = vi.mocked(runnerManagementApi.saveModelInterfaces).mock.calls[0]![0]
+  expect(request.items[0]).toEqual(source)
+  expect(request.items.at(-1)).toMatchObject({ id: '', name: '默认模型 - 副本2', isDefault: false,
+    endpoint: source.endpoint, model: source.model, prjDir: source.prjDir,
+    testSystemPrompt: source.testSystemPrompt, testUserPrompt: source.testUserPrompt })
+  const read = await setup('read')
+  expect(read.find('[data-testid="model-duplicate-legacy"]').exists()).toBe(false)
 })
 it('只读用户不能新增；加载失败显示真实错误并可刷新', async () => {
   const read = await setup('read')
@@ -64,10 +84,14 @@ it('Agent 复制和测试使用 POST JSON，保留工作空间、文件路径与
   expect(requestText()).not.toContain('%E5')
   let body = JSON.parse(requestText().split('\n\n')[1]!)
   expect(body.prj_dir).toBe(agent.prjDir)
-  expect(body.code_dir).toBe(agent.codeDir)
-  expect(body.output_file_dir).toBe(agent.outputFileDir)
-  expect(body.input_file_dir).toBe(agent.inputFileDir)
+  expect(body.code_dir).toMatch(/^D:\\aicode\\legacy\\[a-f0-9-]+\\code$/)
+  expect(body.output_file_dir).toBe(body.code_dir.replace(/code$/, 'output'))
+  expect(body.input_file_dir).toBe(body.code_dir.replace(/code$/, 'input'))
   expect(body.model).toBe('hy3')
+  expect(body.cdp_port).toBe(9223)
+  const port = document.querySelector<HTMLInputElement>('[data-testid="model-test-cdp-port"] input')!
+  port.value = '9333'; port.dispatchEvent(new Event('input')); port.dispatchEvent(new Event('change')); await flushPromises()
+  expect(JSON.parse(requestText().split('\n\n')[1]!).cdp_port).toBe(9333)
   const system = document.querySelector<HTMLTextAreaElement>('textarea[data-testid="model-test-system-prompt"], [data-testid="model-test-system-prompt"] textarea')!
   system.value = '只提取标题和时间'; system.dispatchEvent(new Event('input')); await flushPromises()
   const prompt = document.querySelector<HTMLTextAreaElement>('textarea[data-testid="model-sample-prompt"], [data-testid="model-sample-prompt"] textarea')!
@@ -77,6 +101,28 @@ it('Agent 复制和测试使用 POST JSON，保留工作空间、文件路径与
   document.querySelector<HTMLButtonElement>('[data-testid="model-copy-request"]')!.click(); await flushPromises()
   expect(copyToClipboard).toHaveBeenCalledWith(requestText(), 'HTTP 请求')
   expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+})
+it('WB Agent 端口随编辑保存，测试可临时覆盖', async () => {
+  const agent = { ...fixture.items[0]!, kind: 'agent' as const, cdpPort: 9333,
+    prjDir: 'D:\\aicode', codeDir: 'D:\\aicode\\code', outputFileDir: 'D:\\aicode\\output' }
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items: [agent] })
+  const w = await setup()
+  await w.findAll('button').find(button => button.text() === '编辑')!.trigger('click'); await flushPromises()
+  const input = document.querySelector<HTMLInputElement>('[data-testid="model-cdp-port"] input')!
+  input.value = '9444'; input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('change')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-save"]')!.click(); await flushPromises()
+  expect(vi.mocked(runnerManagementApi.saveModelInterfaces).mock.calls[0]![0].items[0]!.cdpPort).toBe(9444)
+  await w.findAll('button').find(button => button.text() === '测试')!.trigger('click'); await flushPromises()
+  const port = document.querySelector<HTMLInputElement>('[data-testid="model-test-cdp-port"] input')!
+  port.value = '9555'; port.dispatchEvent(new Event('input')); port.dispatchEvent(new Event('change')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
+  expect(runnerManagementApi.streamModelInterfaceTest).toHaveBeenCalledWith(expect.objectContaining({ cdpPort: 9555 }), expect.any(Function), expect.any(AbortSignal))
+  const first = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
+  expect(first.codeDir).toBe(`D:\\aicode\\legacy\\${first.taskId}\\code`)
+  document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
+  const second = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
+  expect(second.taskId).not.toBe(first.taskId)
+  expect(second.codeDir).toBe(`D:\\aicode\\legacy\\${second.taskId}\\code`)
 })
 it('编辑移除样例；测试弹窗使用独立参数发送并展示结果，不修改接口配置', async () => {
   const w = await setup()

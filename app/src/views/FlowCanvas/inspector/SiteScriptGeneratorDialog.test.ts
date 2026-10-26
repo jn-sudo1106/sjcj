@@ -426,7 +426,8 @@ it('首次生成直接进入编辑区，重新生成可切换预览且保留手�
   await wrapper.get('[data-testid="site-script-candidate-tab"]').trigger('click')
   await wrapper.get('[data-testid="site-script-adopt"]').trigger('click')
   expect((wrapper.get('[aria-label="可编辑 Python 代码"]').element as HTMLTextAreaElement).value).toContain('return [1]')
-  expect(generateSiteScript).toHaveBeenCalledWith({ interfaceId: 'legacy', prompt: '抓取新闻列表', userPrompt: '抓取新闻列表', systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, url: 'https://www.realcan.cn/newscenter', sampleId: 'www.realcan.cn.py' }, expect.any(AbortSignal))
+  expect(generateSiteScript).toHaveBeenCalledWith({ taskId: expect.any(String), interfaceId: 'legacy', prompt: '抓取新闻列表', userPrompt: '抓取新闻列表', systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, url: 'https://www.realcan.cn/newscenter', sampleId: 'www.realcan.cn.py' }, expect.any(AbortSignal))
+  expect(vi.mocked(generateSiteScript).mock.calls[0]![0].taskId).not.toBe(vi.mocked(generateSiteScript).mock.calls[1]![0].taskId)
   wrapper.unmount()
 })
 

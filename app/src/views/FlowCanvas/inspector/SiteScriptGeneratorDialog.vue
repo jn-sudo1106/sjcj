@@ -7,6 +7,7 @@ import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory,
 import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
+import { createGenerationTaskId } from '@/utils/generationWorkspace'
 
 const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL 编写完整的 Python 新闻抓取代码。
 提供 scrape(url) 函数，返回新闻字典列表，字段包含 title、date、url、summary、content。
@@ -364,7 +365,7 @@ async function generate() {
   error.value = ''
   warnings.value = []
   try {
-    const result = await generateSiteScript({ interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
+    const result = await generateSiteScript({ taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
     if (active.signal.aborted) return
     if (code.value.trim()) {
       candidate.value = result.code
