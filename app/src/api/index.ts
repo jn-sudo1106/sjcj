@@ -3215,6 +3215,17 @@ export const entryApi = {
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId, state },
     }),
+  /**
+   * 单独改数据源标识（DS_KIND），1026 快速同步到 CK 建完任务后回写用。
+   * 刻意不走 entrySave：那条路径是整对象更新，后端会按传入 items 做字段 diff，
+   * 而调用方手里可能只有列表行（列表不返回 items），回写等于把字段配置清空。
+   */
+  setEntryDsKind: (tableId: string, dsKind: 'MYSQL' | 'CK') =>
+    request<Ack>('config/entry-type-ds-kind', { tableId, dsKind }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId, dsKind },
+    }),
 }
 
 // 参数列表（M5 采集资产）

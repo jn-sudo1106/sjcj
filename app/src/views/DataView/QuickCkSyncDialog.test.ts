@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import QuickCkSyncDialog from './QuickCkSyncDialog.vue'
 import {
@@ -9,7 +9,7 @@ import {
   type SyncSinkOptions, type SyncTableColumn,
 } from '@/api/dataSync'
 import { useAuthStore } from '@/stores/auth'
-import type { EntryType } from '@/api'
+import { entryApi, type EntryType } from '@/api'
 
 // 设计文档 1021-快速同步到CK §七 契约测试：弹窗是 append-to-body 的 teleport，
 // 用 attachTo: document.body + document 查询（同 WordSegmentConfigEditDialog.test.ts），不要 stub teleport。
@@ -49,7 +49,9 @@ function stubSyncApi() {
   const tableColumns = vi.spyOn(syncApi, 'tableColumns').mockResolvedValue(CONFIGURED)
   const physicalColumns = vi.spyOn(syncApi, 'physicalColumns').mockResolvedValue(PHYSICAL)
   const saveTask = vi.spyOn(syncApi, 'saveTask').mockResolvedValue({})
-  return { customers, customerDatabases, tableColumns, physicalColumns, saveTask }
+  // 默认勾选「置 CK」，每个提交用例都会走到；挡成成功以免既有断言被 mock 数据（无 t3 这张表）干扰
+  const setEntryDsKind = vi.spyOn(entryApi, 'setEntryDsKind').mockResolvedValue({ ok: true, message: '数据源已更新为 CK，id:t3' })
+  return { customers, customerDatabases, tableColumns, physicalColumns, saveTask, setEntryDsKind }
 }
 
 async function mountDialog(asAdmin = true) {
@@ -86,6 +88,7 @@ type QckVm = {
   baselineColumns: SyncColumnMap[]
   entityCopy: boolean
   entryConfig: boolean
+  markCk: boolean
   form: Record<string, unknown>
   submit: () => Promise<void>
 }
@@ -275,5 +278,58 @@ describe('快速同步 弹窗', () => {
     await flushPromises()
     expect(routerPush).toHaveBeenCalledWith('/sync')
     expect(root.emitted('update:modelValue')?.at(-1)).toEqual([false])
+  })
+
+  // 置 CK 标记回写（2026-10-26）：任务建好后顺手把这张表的 DS_KIND 改成 CK
+  describe('建完任务回写数据源标记', () => {
+    const subtitle = () => body().find('.el-result__subtitle').text()
+
+    it('默认勾选：saveTask 成功后调 setEntryDsKind(t3, CK)，成功态写明已置 CK', async () => {
+      const { saveTask, setEntryDsKind } = stubSyncApi()
+      const root = await mountDialog()
+      vm(root).customerId = 1
+      await flushPromises()
+
+      expect(vm(root).markCk).toBe(true)
+      await el('qck-confirm').trigger('click')
+      await flushPromises()
+
+      expect(saveTask).toHaveBeenCalledTimes(1)
+      expect(setEntryDsKind).toHaveBeenCalledWith('t3', 'CK')
+      expect(subtitle()).toContain('数据源已置为 CK')
+    })
+
+    it('取消勾选：不碰数据源标记，成功态说明仍是 MYSQL', async () => {
+      const { saveTask, setEntryDsKind } = stubSyncApi()
+      const root = await mountDialog()
+      vm(root).customerId = 1
+      await flushPromises()
+
+      await el('qck-mark-ck').trigger('click')
+      expect(vm(root).markCk).toBe(false)
+      await el('qck-confirm').trigger('click')
+      await flushPromises()
+
+      expect(saveTask).toHaveBeenCalledTimes(1)
+      expect(setEntryDsKind).not.toHaveBeenCalled()
+      expect(subtitle()).toContain('仍是 MYSQL')
+    })
+
+    it('标记写失败：任务已建好，留在成功态 + warning 文案，不再退回表单（避免重复建任务）', async () => {
+      const { setEntryDsKind } = stubSyncApi()
+      setEntryDsKind.mockRejectedValue(new Error('请求失败 404'))
+      const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
+      const root = await mountDialog()
+      vm(root).customerId = 1
+      await flushPromises()
+
+      await el('qck-confirm').trigger('click')
+      await flushPromises()
+
+      expect(body().find('.el-result').exists()).toBe(true)
+      expect(subtitle()).toContain('数据源标记没改成 CK')
+      expect(warning).toHaveBeenCalled()
+      expect(root.emitted('created')).toHaveLength(1)
+    })
   })
 })

@@ -338,6 +338,13 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'config/entryTypeAddAll',
   'config/modifyEntryType',
   /**
+   * 2026-10-26 放开：单独更新实体表数据源 DS_KIND（表 ID 列表 → 快速同步到 CK 的回写）。
+   * 不新增权限面——同一个字段的修改，2026-09-22 已随 `modifyEntryType` 整对象保存在生产放开
+   * （编辑抽屉「数据源类型」下拉走的就是它）；本接口只是把同一动作从「整对象 + 字段 diff」
+   * 收窄成「只 UPDATE 一列」，破坏面严格小于 modifyEntryType。二次确认在弹窗的「创建任务」上。
+   */
+  'config/entry-type-ds-kind',
+  /**
    * 2026-09-24 放开（0924-04）：节点类型的新增与修改（系统设置 → 节点类型）。
    * 0924 会议定的迁移项，旧平台「配置 → 源类型」同样即时写库。add 是纯新增；update 是后端**增量更新**
    * （只改传过去的字段），临时类型 99901 在生产闭环实测过。**删除不放**：被引用时是否拒删未验证，
