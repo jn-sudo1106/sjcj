@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
@@ -16,7 +16,13 @@ import { configApi, entryApi, paramApi, ruleApi, ckSourceApi, sourceApi } from '
 import { translateSampleOf } from '@/api/translate'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
+import { runnerManagementApi } from '@/api/runnerManagement'
 import { resetNodeConfigAutosave } from '../nodeConfigAutosave'
+vi.mock('@/api/nodePrompts', async original => {
+  const actual = await original<typeof import('@/api/nodePrompts')>()
+  return { ...actual, nodePromptApi: { ...actual.nodePromptApi,
+    selection: async () => ({ promptTemplateId: 0 }), select: async (_id: string, promptTemplateId: number) => ({ promptTemplateId }) } }
+})
 
 async function selectFile(input: ReturnType<ReturnType<typeof mount>['find']>, file: File) {
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
@@ -27,6 +33,7 @@ async function selectFile(input: ReturnType<ReturnType<typeof mount>['find']>, f
 const routerPush = vi.fn()
 const routerReplace = vi.fn()
 vi.mock('vue-router', () => ({
+  RouterLink: { props: ['to'], template: '<a><slot /></a>' },
   useRouter: () => ({ push: routerPush, replace: routerReplace }),
   useRoute: () => ({ query: { sourceId: 's-1', siteId: 'site-9' } }),
 }))
@@ -79,6 +86,8 @@ let pdfPromptTemplateEnabled = false
 
 function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tableId, tableName = INPUT_TABLE.tableName) {
   pdfPromptTemplateEnabled = false
+  vi.spyOn(runnerManagementApi, 'codeRepositories').mockResolvedValue([])
+  vi.spyOn(runnerManagementApi, 'siteCodeVersions').mockResolvedValue([])
   const table = { ...INPUT_TABLE, tableId, tableName, name: inputTableName }
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
   // 真实后端的表列表不带字段定义，选中表后另拉一次详情（entryApi.entryDetail）才有 fields——
@@ -2631,7 +2640,7 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
 
 // 0804 S3-3：非规则节点（采集）复用同一个 Tab，内容换成抓取配置 XML，走 execCfg 而不是 ruleCfg。
 describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => {
-  function mountOnCollectorNode() {
+  function mountOnCollectorNode(setup?: () => void) {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
@@ -2639,6 +2648,7 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     flow.setActiveTab('orchestration')
     mockAssets()
     vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({ total: 0, list: [] })
+    setup?.()
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     return { flow, wrapper }
   }
@@ -2650,21 +2660,29 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     flow.configs['web-1'].taskCfg = { queue: 'news_list', urlRule: '' }
     await flushPromises()
     expect(wrapper.find('[data-testid="main-generate-script"]').text()).toBe('生成配置')
+    expect(wrapper.get('[data-testid="orchestration-ai-tab"]').attributes('aria-selected')).toBe('true')
+    expect((wrapper.get('[data-testid="orchestration-config-panel"]').element as HTMLElement).style.display).toBe('none')
+    expect((wrapper.get('[data-testid="orchestration-ai-panel"]').element as HTMLElement).style.display).not.toBe('none')
     const button = wrapper.find('[data-testid="open-site-script-generator"]')
     expect(button.exists()).toBe(true)
+    expect(wrapper.get('[data-testid="site-script-configuration"]').find('[data-testid="site-script-repository"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="site-script-configuration"]').find('[data-testid="open-site-script-generator"]').exists()).toBe(true)
     await button.trigger('click')
     const dialog = wrapper.findComponent(SiteScriptGeneratorDialog)
     expect(dialog.props('open')).toBe(true)
     expect(dialog.props('initialUrl')).toBe('https://www.realcan.cn/newscenter')
     expect(dialog.props('queueName')).toBe('news_list')
+    expect(dialog.find('[data-testid="site-script-dialog"] [data-testid="site-script-repository"]').exists()).toBe(false)
   })
 
-  it('部署构建没有站点脚本生成服务：不显示「AI 生成 Python 脚本」', async () => {
+  it('部署构建没有站点脚本生成服务：只展示生成配置，不显示切换 Tab', async () => {
     vi.stubEnv('DEV', false)
     try {
       const { wrapper } = mountOnCollectorNode()
       await flushPromises()
       expect(wrapper.find('[data-testid="open-site-script-generator"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="main-generate-script"]').isVisible()).toBe(true)
     } finally {
       vi.unstubAllEnvs()
     }
@@ -2675,8 +2693,62 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     useSourceStore().sourceCfg = { sourceId: 's-1', name: '测试源', url: 'https://www.realcan.cn/list', configId: 'c-1', mainTable: '', owner: '', state: 'C' }
     flow.configs['web-1'].taskCfg = { queue: '', urlRule: '' }
     await flushPromises()
+    await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('click')
     await wrapper.get('[data-testid="open-site-script-generator"]').trigger('click')
     expect(wrapper.findComponent(SiteScriptGeneratorDialog).props('queueName')).toBe('s-1_main')
+  })
+
+  it('切换生成方式保留描述与仓库路径，切换节点后默认进入 AI 生成脚本', async () => {
+    const repo = { repoId: 'repo-default', name: '默认仓库', path: 'E:/ce/scripts',
+      remoteUrl: '', branch: 'main', configType: '', configTypeName: '', uploadDirectory: 'default',
+      isDefault: true, status: 'ACTIVE' as const, codeCount: 0, createdAt: '', updatedAt: '' }
+    const { flow, wrapper } = mountOnCollectorNode(() => {
+      vi.mocked(runnerManagementApi.codeRepositories).mockResolvedValue([repo, { ...repo, repoId: 'repo-other', name: '另一个仓库', path: 'E:/ce/other', isDefault: false }])
+      vi.spyOn(runnerManagementApi, 'codeRepositoryDirectories').mockImplementation(async repoId => [{
+        repoId, directoryId: 'default', name: '默认目录', path: 'default', configType: '',
+        configTypeName: '', isDefault: true, status: 'ACTIVE' as const, revision: 'v1',
+      }])
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('click')
+    await wrapper.get('textarea[placeholder*="描述抓取需求"]').setValue('保留配置描述')
+    await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('click')
+    flow.configs['web-1'].collectCfg!.url = 'https://chosen.example.com/list'
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect).find(select => select.attributes('data-testid') === 'site-script-repository')!.vm.$emit('update:modelValue', 'repo-other')
+    await flushPromises()
+    const preview = wrapper.get('[data-testid="site-script-storage-path"]').text()
+    expect(preview).toBe('E:/ce/other/default/chosen.example.com.py')
+    const catalogCalls = vi.mocked(runnerManagementApi.codeRepositories).mock.calls.length
+
+    await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('click')
+    expect((wrapper.get('textarea[placeholder*="描述抓取需求"]').element as HTMLTextAreaElement).value).toBe('保留配置描述')
+    await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('click')
+    expect(wrapper.get('[data-testid="site-script-storage-path"]').text()).toBe(preview)
+    expect(vi.mocked(runnerManagementApi.codeRepositories).mock.calls.length).toBe(catalogCalls)
+    await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('click')
+
+    flow.configs['web-2'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.select('web-2')
+    await flushPromises()
+    flow.setActiveTab('orchestration')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="orchestration-ai-tab"]').attributes('aria-selected')).toBe('true')
+    expect((wrapper.get('[data-testid="orchestration-ai-panel"]').element as HTMLElement).style.display).not.toBe('none')
+    expect(wrapper.findComponent(SiteScriptGeneratorDialog).props('initialUrl')).not.toBe('https://chosen.example.com/list')
+  })
+
+  it('生成方式 Tab 支持键盘切换，规则节点不显示此切换', async () => {
+    const { wrapper } = mountOnCollectorNode()
+    await flushPromises()
+    await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('keydown', { key: 'Home' })
+    await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('keydown', { key: 'ArrowRight' })
+    expect(wrapper.get('[data-testid="orchestration-ai-tab"]').attributes('aria-selected')).toBe('true')
+    await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('keydown', { key: 'Home' })
+    expect(wrapper.get('[data-testid="orchestration-config-tab"]').attributes('aria-selected')).toBe('true')
+    const { wrapper: ruleWrapper } = mountOnRuleNode()
+    await flushPromises()
+    expect(ruleWrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(false)
   })
 
   it('文案换成抓取配置措辞，不出现「测试脚本」按钮（本期不做，方案 §3.1 修正 D）', async () => {
@@ -2695,7 +2767,7 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     const genSpy = vi.spyOn(ruleApi, 'orchestrationGenerate')
     const metaSpy = vi.spyOn(ruleApi, 'orchestrationSaveMeta')
 
-    const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成配置'))!
+    const genBtn = wrapper.get('[data-testid="main-generate-script"]')
     await genBtn.trigger('click')
     await flushPromises()
     expect(genSpy).not.toHaveBeenCalled()

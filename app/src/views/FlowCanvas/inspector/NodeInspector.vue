@@ -21,6 +21,7 @@ import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
@@ -153,13 +154,14 @@ const otherNodesPending = computed(() => persistableNodeIds(flow.main, flow.bran
   if (!node) return false
   return node.configId ? flow.dirtyConfigNodes.includes(nodeId) : !isWritableStepId(nodeId)
 }))
-const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || otherNodesPending.value)
+const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || otherNodesPending.value || !!deploymentError.value)
 const viewingHistory = computed(() => !!flowVersion.history && flowVersion.flowId === canvasFlowIdOf(flow))
 const footNote = computed(() => (viewingHistory.value
   ? '正在查看历史版本，只能查看'
   : readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改'
-    : nodeConfigDirty.value ? (configId.value ? '有未保存修改，切换节点时自动保存' : '有未保存修改（新节点需点保存）')
-      : autoSavedAt.value[id.value] ? `已自动保存 ${autoSavedAt.value[id.value]}` : '无未保存修改'))
+    : deploymentError.value ? '配置已保存，部署配置同步失败，可重试'
+      : nodeConfigDirty.value ? (configId.value ? '有未保存修改，切换节点时自动保存' : '有未保存修改（新节点需点保存）')
+        : autoSavedAt.value[id.value] ? `已自动保存 ${autoSavedAt.value[id.value]}` : '无未保存修改'))
 /** 查看历史版本时：节点配置不随版本保存（217 实测），配置在该版本之后改过就提示一句（2026-10-14） */
 const historyConfigNote = computed(() => {
   const row = viewingHistory.value ? flowVersion.history : undefined
@@ -176,6 +178,22 @@ const historyConfigNote = computed(() => {
 //   - 保存前的影响范围确认删除 → 直接落库，只在按钮旁留一行「N 个源在用」灰字；
 //   - 换配置的入口在配置条上的「更换」（NodeConfigSelect.vue）。
 const saving = ref(false)
+const savingDeployment = ref(false)
+const deploymentError = ref('')
+watch(id, () => { deploymentError.value = '' })
+
+async function updateDeployment(node: NodeConfig, nodeId: string) {
+  savingDeployment.value = true
+  deploymentError.value = ''
+  try {
+    const deployment = await syncNodeDeployment(node, nodeId)
+    if (deployment) ElMessage.success('对应流程节点的部署配置已生成或更新')
+  } catch (e) {
+    const detail = (e as Error)?.message ?? String(e)
+    if (cfg.value === node) deploymentError.value = detail
+    ElMessage.warning(`节点配置已保存，但部署配置同步失败：${detail}；可再次点击保存重试`)
+  } finally { savingDeployment.value = false }
+}
 
 function reportWriteError(action: string, e: unknown) {
   const message = (e as Error)?.message ?? String(e)
@@ -220,7 +238,13 @@ function ensureConfigNameFromTitle(node = cfg.value, nodeId = id.value) {
 
 async function onSaveNodeConfig() {
   const node = cfg.value
-  if (!node || saving.value) return
+  if (!node || saving.value || savingDeployment.value) return
+  const savedNodeId = id.value, savedTab = tab.value
+  if (deploymentError.value && !nodeConfigDirty.value) {
+    await updateDeployment(node, savedNodeId)
+    await saveOtherNodes(savedNodeId)
+    return
+  }
   if (isRuleNode(node)) {
     const bindingError = validateTableBinding(
       node.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] },
@@ -246,7 +270,8 @@ async function onSaveNodeConfig() {
     }
   }
   if (saved) await syncSourceCron(node, id.value)
-  await saveOtherNodes(id.value)
+  if (saved && savedTab === 'orchestration') await updateDeployment(node, savedNodeId)
+  await saveOtherNodes(savedNodeId)
 }
 
 /**
@@ -663,10 +688,10 @@ onMounted(async () => {
           class="rc-btn primary"
           type="button"
           data-testid="node-config-save"
-          :disabled="!canSaveNodeConfig || saving"
+          :disabled="!canSaveNodeConfig || saving || savingDeployment"
           :title="configId ? (canSaveNodeConfig ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
-        >{{ saving ? '保存中…' : '保存' }}</button>
+        >{{ saving || savingDeployment ? '保存中…' : '保存' }}</button>
       </div>
     </template>
 

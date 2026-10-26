@@ -93,27 +93,24 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 - 设计方案、开发计划等文档文件名统一将日期前缀放在最前面，便于按创建/会议日期检索。
 - 命名示例：`0810-数据查看与源视图_开发计划_2026-08-11.md`。
 
-### Git 远程仓库（2026-08-31，2026-10-09 改为分仓协作）
+### Git 远程仓库（2026-10-26 起统一 master）
 
 外网主仓在 CNB，内网 GitLab 由 leo 维护：
 
-- **origin**：`https://cnb.cool/vanvdev/bee-soft/front-ce`（组 `vanvdev/bee-soft`，采集平台；私有仓），拉和推都只走 CNB
-- **ce（内网）**：`http://47.120.11.60:50105/root/ce`，拉内网 master，推内网线（2026-10-12 起直接推内网 master，见下）
+- **origin**：`https://cnb.cool/vanvdev/bee-soft/front-ce`（组 `vanvdev/bee-soft`，采集平台；私有仓），本地 `master` 默认跟踪 `origin/master`
+- **ce（内网）**：`http://47.120.11.60:50105/root/ce`，内网协作以 `ce/master` 为准；远程旧 `merge/ce-leo-1008` 分支已停更，不再作为拉取目标
 - CNB Git 认证：用户名固定 `cnb`，密码为访问令牌；push 必须勾选「Git 客户端凭据」（`repo-code:rw`）。只读令牌不能推送。
 - **禁止**把令牌、账号密码写进 remote URL 或提交进仓库；认证走本机 credential helper / 环境变量。
 
-**分仓协作（2026-10-09 起，原「一次 push 双写两边」作废）**
+**统一主线（2026-10-26 用户明确要求「直接拉到 master，不要分仓」；替代此前分仓约定）**
 
-- 分工：姜楠在本地改；leo 只改内网 master；zhonghe 只改 CNB master。本地仓库是唯一同时连着两边的地方。
-- **CNB 提交作者（2026-10-14 核对）**：外网线 master 上「迁移模板配置」系列（分词/提示词/数据字典/索引、指标、路由调整等）的**实际提交作者是 haigang（haigang <17610063690@163.com>）**，经 CNB 推上来。涉及这些模块的代码问题/Review 找 haigang（不是 zhonghe）。判断归属以 `git blame`/`git log --author` 为准。
-- 本地两条线：
-  - 外网线 `master`：跟 CNB master，放自己的功能和 zhonghe 的改动，`git push` 推 CNB；
-  - 内网线（分支名记在 `git config sjcj.intranetBranch`，当前 `merge/ce-leo-1008`，worktree 在 `../wt-merge-ce-leo`）：外网线全部 + leo 的代码 + 只能改在 leo 代码上的东西。
-- **2026-10-12 起内网不再经 leo 审核**：内网线直接推内网 master（`git push ce <内网线>:master`），由姜楠本地负责合并，leo 的提交也先 `git fetch ce` 合进内网线再推。
-- 每天：`git pull` → 在 master 上开发并推 CNB → 内网线 `git fetch ce && git merge ce/master && git merge master` → `git push ce <内网线>:master`（应为快进，被拒绝说明 leo 又推了新提交，先合再推）。
-- 内网线必须和 CNB 主线是**同一条提交历史**：不要 cherry-pick，不要把 leo 的页面「抄」到外网线，也不要压缩合并，否则每次合并都会重复冲突。leo 的功能要上生产时，把 `ce/master` 整个合进外网线。
-- 只改 leo 独有文件的改动（例如流程标签栏、改版后的数据视图）放内网线，进不了 CNB 主线，也就不会上生产。
-- 推送后的 hook（`.claude/hooks/check-push-sync.sh`）检查内网 master 是否已包含 CNB 最新 master，没包含会提示补推。
+- 所有功能直接汇总到本地 `master`，包括 leo 的内网功能；不再维护内外网两条功能线。
+- 拉取最新代码时检查两个远程：`git fetch origin`、`git fetch ce`，在 `master` 上依次合并 `origin/master` 和 `ce/master`。普通 `git pull` 只拉 CNB，不能据此认定已经拿到内网最新代码。
+- 必须正常 merge 保留双方提交历史，不 cherry-pick、不抄文件、不 squash；冲突保留双方有效行为并验证。
+- 后续开发、运行和构建统一使用当前主仓 `JN-sjcj`；旧 `../wt-merge-ce-leo` 工作区只作历史保留，不再作为日常开发入口，不自动删除。
+- 发布 / 推送时以同一个本地 `master` 为来源：CNB 为 `git push origin master`，内网为 `git push ce master:master`。按用户本次授权执行推送，不配置隐式双写；遇到远程新提交先拉取合并，不强推。
+- 推送后的 hook（`.claude/hooks/check-push-sync.sh`）核对两端 master 是否一致，不一致提示在统一 master 上处理，不再要求切内网线。
+- **CNB 提交作者（2026-10-14 核对）**：「迁移模板配置」系列（分词/提示词/数据字典/索引、指标、路由调整等）的**实际提交作者是 haigang（haigang <17610063690@163.com>）**，经 CNB 推上来。涉及这些模块的代码问题/Review 找 haigang（不是 zhonghe）。判断归属以 `git blame`/`git log --author` 为准。
 
 ---
 

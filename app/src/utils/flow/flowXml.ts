@@ -54,6 +54,7 @@ function ruleOrchestrationXml(tag: string, ro: RuleOrchestration, depth: number)
     modelProviderCode: ro.modelProviderCode,
     modelCode: ro.modelCode,
     promptCategory: ro.promptCategory,
+    promptTemplateId: ro.promptTemplateId,
     userCode: ro.userCode,
     scriptPath: ro.scriptPath,
   })}>`)]

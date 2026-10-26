@@ -102,7 +102,7 @@ onActivated(() => { if (loaded && !loading.value && !Object.keys(drafts).length)
               <small v-else class="rcv-current">{{ adopted(row, env) ? '当前采用' : '未采用' }}</small>
               <p v-if="errors[selectionKey(row, env)]" class="rcv-inline-error" role="alert">{{ errors[selectionKey(row, env)] }}</p>
             </td>
-            <td class="rcv-actions"><el-button link type="primary" :disabled="!row.latest.repoId" @click="openRepository(row)">查看仓库</el-button><el-button link type="primary" @click="openDirectory(row)">部署目录</el-button></td>
+            <td class="rcv-actions"><el-button link type="primary" :disabled="!row.latest.repoId" @click="openRepository(row)">查看仓库</el-button><el-button link type="primary" @click="openDirectory(row)">部署配置</el-button></td>
           </tr>
           <tr v-if="!loading && !filtered.length"><td colspan="5">{{ error ? '服务不可用' : keyword || repoFilter ? '没有匹配的运行代码' : '暂无运行代码，请先在流程节点中生成或关联仓库代码' }}</td></tr>
         </tbody>

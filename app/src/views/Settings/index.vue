@@ -13,17 +13,23 @@ import RunnerManagementTab from './RunnerManagementTab.vue'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
+import RuntimeLogsTab from './RuntimeLogsTab.vue'
+import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 import DataPermissionTab from './DataPermissionTab.vue'
+import ModelInterfacesTab from './ModelInterfacesTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
 // runner：依赖 Runner 管理服务的 tab，部署环境（2806 / 2807）网关还没有转发这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户确认隐藏）。
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
+  { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab, runner: true },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'runners', label: '运行机器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
+  { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
+  { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab, runner: true },
   { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab, runner: true },
-  { key: 'directory-layout', label: '部署目录', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
+  { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
   { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab, runner: true },
+  { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab, runner: true },
   { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab, runner: true },
   { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission', comp: DataPermissionTab },
 ]
@@ -75,7 +81,7 @@ function editDirectory(configId: string) {
     </div>
     <div class="st-content">
       <KeepAlive>
-        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" @edit-directory="editDirectory" />
+        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" :repository-file-path="typeof route.query.filePath === 'string' ? route.query.filePath : ''" :repository-directory-id="typeof route.query.directoryId === 'string' ? route.query.directoryId : ''" @edit-directory="editDirectory" />
       </KeepAlive>
     </div>
   </div>

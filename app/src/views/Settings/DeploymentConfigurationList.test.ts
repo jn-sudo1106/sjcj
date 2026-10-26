@@ -7,6 +7,19 @@ import type { DeploymentConfiguration, RuntimeConfiguration } from '@/api/runner
 
 const base: DeploymentConfiguration = { deploymentId: 'deploy1', name: '新闻抓取', pathStyle: 'config', configId: '123', queueName: 'news_list', siteHost: '', codeId: '', directoryTemplate: '{configId}', entryPoint: '', nodes: [], revision: 'v1', sourceNode: { flowId: 'flow1', flowName: '新闻流程', stepId: 'step1', nodeName: '列表节点', configId: '123' } }
 const items = Array.from({ length: 25 }, (_, i) => ({ ...base, deploymentId: `deploy${i}`, name: `新闻抓取${i}` }))
+it('历史部署反查来源流程和节点，复用配置展示各流程并可按流程 ID 查询', async () => {
+  const relatedSourceNodes = [{ ...base.sourceNode!, flowId: '10', stepId: '100' }, { ...base.sourceNode!, flowId: '11', stepId: '101', flowName: '草稿流程', isDraft: true }]
+  const wrapper = mount(DeploymentConfigurationList, { props: { items: [{ ...base, sourceNode: undefined, relatedSourceNodes }], runtimes: [], loading: false, canWrite: true, failed: false }, global: { plugins: [ElementPlus] } })
+  await flushPromises()
+  expect(wrapper.text()).toContain('草稿流程（草稿）')
+  expect(wrapper.text()).toContain('流程 10')
+  expect(wrapper.text()).toContain('节点 101')
+  expect(wrapper.get('a[href="#/flows?q=11"]').attributes('target')).toBe('_blank')
+  await wrapper.get('input[aria-label="查询来源流程"]').setValue('11')
+  await wrapper.get('form').trigger('submit')
+  expect(wrapper.getComponent({ name: 'ElTable' }).props('data')).toHaveLength(1)
+  wrapper.unmount()
+})
 it('查询条件组合过滤，重置恢复全部，刷新保留当前页', async () => {
   const wrapper = mount(DeploymentConfigurationList, { props: { items, runtimes: [], loading: false, canWrite: true, failed: false }, global: { plugins: [ElementPlus] } })
   const table = wrapper.getComponent({ name: 'ElTable' })
@@ -39,5 +52,14 @@ it('机器数按实例去重，缺失更新时间不伪造，只读用户仅能�
   expect(wrapper.find('[data-testid="deployment-new"]').exists()).toBe(false)
   await wrapper.get('[data-testid="deployment-open-deploy1"]').trigger('click')
   expect(wrapper.emitted('open')).toEqual([['deploy1']])
+  wrapper.unmount()
+})
+it('配置 ID 可查看关联源和配置，不触发部署编辑，公共目录不显示无效链接', async () => {
+  const wrapper = mount(DeploymentConfigurationList, { props: { items: [base, { ...base, deploymentId: 'shared', configId: '', sourceNode: undefined }], runtimes: [], loading: false, canWrite: false, failed: false }, global: { plugins: [ElementPlus] } })
+  await flushPromises()
+  await wrapper.get('[data-testid="deployment-config-deploy1"]').trigger('click')
+  expect(wrapper.emitted('openConfig')).toEqual([[base]])
+  expect(wrapper.emitted('open')).toBeUndefined()
+  expect(wrapper.find('[data-testid="deployment-config-shared"]').exists()).toBe(false)
   wrapper.unmount()
 })

@@ -75,7 +75,7 @@ it('应用失败保留选择和旧采用值，取消草稿恢复当前版本', a
   expect(test.find('[role="alert"]').exists()).toBe(false)
   wrapper.unmount()
 })
-it('按仓库筛选运行配置，查看代码跳转到指定仓库，部署目录保留配置 ID', async () => {
+it('按仓库筛选运行配置，查看代码跳转到指定仓库，部署配置保留配置 ID', async () => {
   const second = { ...latest, codeId: 'code-2', configId: 'c-2', scriptDigest: 'sha256:second', repoId: 'repo-other', repoName: '其他仓库' }
   vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([latest, old, second])
   const { wrapper, router } = await setup()
@@ -83,7 +83,7 @@ it('按仓库筛选运行配置，查看代码跳转到指定仓库，部署目�
   expect(wrapper.findAll('[data-testid="runtime-code-row"]')).toHaveLength(1)
   await wrapper.findAll('button').find(button => button.text() === '查看仓库')!.trigger('click'); await flushPromises()
   expect(router.currentRoute.value.query).toEqual({ tab: 'code-repos', repoId: 'repo-web' })
-  await wrapper.findAll('button').find(button => button.text() === '部署目录')!.trigger('click'); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '部署配置')!.trigger('click'); await flushPromises()
   expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', configId: 'c-1' })
   wrapper.unmount()
 })

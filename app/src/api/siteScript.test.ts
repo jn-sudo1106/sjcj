@@ -5,6 +5,11 @@ import { generateSiteScript } from './siteScript'
 afterEach(() => vi.restoreAllMocks())
 
 describe('generateSiteScript', () => {
+  it('routes a selected model through the server adapter without exposing its address in generation input', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ fileName: 'example.com.py', code: 'def scrape(url): return []', warnings: [] })))
+    await generateSiteScript({ interfaceId: 'chat-hy3', prompt: '需求', url: 'https://example.com', sampleId: 'www.realcan.cn.py' })
+    expect(spy).toHaveBeenCalledWith('/api/runner-management/model-interfaces/generate', expect.objectContaining({ body: expect.stringContaining('"interfaceId":"chat-hy3"') }))
+  })
   it('sends prompt, URL and fixed sample id to the isolated generation service', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       fileName: 'www.realcan.cn.py',
@@ -31,5 +36,11 @@ describe('generateSiteScript', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ message: '生成的 Python 语法错误' }), { status: 422 }))
     await expect(generateSiteScript({ prompt: 'x', url: 'https://www.realcan.cn', sampleId: 'www.realcan.cn.py' }))
       .rejects.toThrow('生成的 Python 语法错误')
+  })
+  it('passes the edited system and user prompts separately without combining roles', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ fileName: 'example.com.py', code: 'def scrape(url):\n    return []\n', warnings: [] }), { status: 200 }))
+    const input = { prompt: '用户抓取要求', userPrompt: '用户抓取要求', systemPrompt: '系统代码规范', url: 'https://example.com/list', sampleId: 'www.realcan.cn.py' as const }
+    await generateSiteScript(input)
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string)).toEqual(input)
   })
 })

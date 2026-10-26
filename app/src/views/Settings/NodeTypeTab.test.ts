@@ -8,6 +8,7 @@ import NodeTypeTab from './NodeTypeTab.vue'
 import { configApi, type NodeType } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useDictStore } from '@/stores/dict'
+import { nodePromptApi } from '@/api/nodePrompts'
 
 const ROWS: NodeType[] = [
   { sourceType: '90', typeName: '网页抓取', downType: 'source-config', topic: '', seq: 0, notes: '', procType: '200', params: '' },
@@ -49,6 +50,25 @@ describe('节点类型页面', () => {
     document.body.innerHTML = ''
     vi.restoreAllMocks()
     vi.spyOn(configApi, 'nodeTypeList').mockResolvedValue(ROWS.map((r) => ({ ...r })))
+  })
+  it('提示词模板入口在节点类型抽屉中按当前类型加载', async () => {
+    vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
+    const list = vi.spyOn(nodePromptApi, 'list').mockResolvedValue([])
+    const { wrapper } = await mountAs(['admin'])
+    await wrapper.findAll('[data-testid="node-type-prompts"]')[0]!.trigger('click'); await flushPromises()
+    expect(list).toHaveBeenCalledWith({ sourceType: '90', templateUse: 'config' })
+    expect(wrapper.findComponent({ name: 'NodePromptTemplates' }).text()).toContain('生成 Python 代码')
+    wrapper.unmount()
+    vi.unstubAllEnvs()
+  })
+  it('业务后端环境（无节点提示词接口）不显示提示词模板入口', async () => {
+    vi.stubEnv('VITE_FLOW_PROXY_TARGET', '')
+    const list = vi.spyOn(nodePromptApi, 'list').mockResolvedValue([])
+    const { wrapper } = await mountAs(['admin'])
+    expect(wrapper.findAll('[data-testid="node-type-prompts"]')).toHaveLength(0)
+    expect(list).not.toHaveBeenCalled()
+    wrapper.unmount()
+    vi.unstubAllEnvs()
   })
 
   it('列出节点类型；管理员每行有详情 / 编辑 / 删除', async () => {

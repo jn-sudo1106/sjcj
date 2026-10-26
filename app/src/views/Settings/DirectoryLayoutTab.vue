@@ -1,26 +1,29 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, Document, Plus, Refresh, ArrowLeft, Link, Delete } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { configApi } from '@/api'
-import { runnerManagementApi, type CodeRepository, type DirectoryBindingType, type DeploymentConfiguration, type DeploymentSourceNode, type DirectoryMappingNode, type RepositoryTree, type RuntimeConfiguration, type SiteCodeVersion } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryFileMetadata, type DirectoryBindingType, type DeploymentConfiguration, type DeploymentSourceNode, type DirectoryMappingNode, type RepositoryTree, type RuntimeConfiguration, type SiteCodeVersion } from '@/api/runnerManagement'
 import DeploymentNodePicker from './DeploymentNodePicker.vue'
 import DeploymentConfigurationList from './DeploymentConfigurationList.vue'
+import DeploymentConfigDrawer from './DeploymentConfigDrawer.vue'
 import { descendants, directoryBindingOptions, directoryTemplatePresets, queueDirectoryTemplatePresets, websiteDirectoryTemplatePresets, directoryTypeOf, moveTarget, sourceTree, targetPath, targetTree, withDirectoryType, type DirectoryType, type SourceTreeNode } from './directoryLayout'
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
+const configDetails = ref<InstanceType<typeof DeploymentConfigDrawer>>()
 const canWrite = computed(() => auth.role === 'admin')
 const catalog = ref<SiteCodeVersion[]>([]), repositories = ref<CodeRepository[]>([]), configurations = ref<DeploymentConfiguration[]>([])
 const repoId = ref(''), layout = ref<DeploymentConfiguration | null>(null)
 const saved = ref(''), selectedId = ref(''), source = ref<SourceTreeNode | null>(null), repository = ref<RepositoryTree | null>(null)
 const keyword = ref(''), loading = ref(false), treeLoading = ref(false), busy = ref(false), error = ref(''), treeError = ref('')
+const fileMetadata = ref<CodeRepositoryFileMetadata | null>(null), fileMetadataLoading = ref(false), fileMetadataError = ref('')
 const targetTreeRef = ref<{ $el: HTMLElement; setCurrentKey: (key: string | null) => void }>()
 const environment = ref<'test' | 'prd'>('test'), preview = ref(false)
 const nodePickerOpen = ref(false), nodePickerError = ref('')
 const runtimes = ref<RuntimeConfiguration[] | null>(null), bindingError = ref(''), listFailed = ref(false)
-let loadId = 0, treeId = 0, initialized = false
+let loadId = 0, treeId = 0, fileMetadataId = 0, initialized = false
 const codes = computed(() => [...new Map(catalog.value.map(row => [row.codeId, row])).values()])
 const configs = computed(() => [...new Set(codes.value.map(row => row.configId))])
 const queues = computed(() => [...new Set(codes.value.map(row => row.queueName))])
@@ -52,6 +55,24 @@ const suggestTemplates = (_query: string, callback: (items: { value: string }[])
 const renderedRoot = computed(() => layout.value?.directoryTemplate.replaceAll('{configId}', layout.value.configId).replaceAll('{queue}', layout.value.queueName).replaceAll('{website}', layout.value.siteHost).replaceAll('{environment}', environment.value) || '')
 const repoName = (id?: string) => repositories.value.find(repo => repo.repoId === id)?.name || id || ''
 const problem = (e: unknown) => e instanceof Error ? e.message : String(e)
+const fileTime = (value?: string) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replaceAll('/', '-')
+}
+async function loadFileMetadata() {
+  const requestId = ++fileMetadataId, node = source.value, repo = repository.value
+  fileMetadata.value = null; fileMetadataError.value = ''; fileMetadataLoading.value = false
+  if (!layout.value || !node?.selectable || node.kind !== 'file' || !repo) return
+  fileMetadataLoading.value = true
+  try {
+    const result = await runnerManagementApi.codeRepositoryFileMetadata(repo.repoId, node.path, repo.gitCommit)
+    if (requestId === fileMetadataId) fileMetadata.value = result
+  } catch (e) { if (requestId === fileMetadataId) fileMetadataError.value = problem(e) }
+  finally { if (requestId === fileMetadataId) fileMetadataLoading.value = false }
+}
+watch([() => source.value?.path, () => source.value?.kind, repoId, () => repository.value?.gitCommit, () => !!layout.value], () => { void loadFileMetadata() })
+onBeforeUnmount(() => { ++fileMetadataId })
 watch([selectedId, targetNodes], async () => {
   await nextTick()
   const element = [...(targetTreeRef.value?.$el.querySelectorAll<HTMLElement>('.el-tree-node') || [])].find(item => item.dataset.key === selectedId.value)
@@ -237,8 +258,10 @@ async function expandMapping() {
 async function remove() {
   if (!layout.value || !selected.value) return
   const ids = descendants(layout.value.nodes, selectedId.value)
+  const removedPath = selectedPath.value
   try { await ElMessageBox.confirm(`移除“${selected.value.name}”及其下级映射？仓库中的代码会保留。`, '移除目标', { confirmButtonText: '移除', cancelButtonText: '取消', type: 'warning' }) }
   catch { return }
+  if (layout.value.entryPoint === removedPath || layout.value.entryPoint.startsWith(removedPath + '/')) layout.value.entryPoint = ''
   layout.value.nodes = layout.value.nodes.filter((node) => !ids.has(node.id)); selectedId.value = ''
 }
 async function save() {
@@ -265,13 +288,15 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
     </div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <el-alert v-if="bindingError && !layout" :title="bindingError" type="warning" :closable="false" show-icon />
-    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" />
+    <DeploymentConfigDrawer ref="configDetails" />
+    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" @open-config="item => configDetails?.open(item)" />
     <section v-if="layout" class="dl-configuration" aria-label="部署配置设置" data-testid="layout-settings">
       <div class="dl-identity-fields">
         <label>配置名称<el-input v-model="layout.name" :readonly="!canWrite || preview" :disabled="busy || loading" placeholder="如：新闻列表抓取生产配置" aria-label="配置名称" data-testid="deployment-name" /></label>
         <div class="dl-config-id"><span>部署配置 ID</span><code>{{ layout.deploymentId || '保存后生成' }}</code></div>
       </div>
-      <div v-if="layout.sourceNode" class="dl-origin" data-testid="deployment-origin"><span>来源节点</span><strong>{{ layout.sourceNode.flowName }} / {{ layout.sourceNode.nodeName }}</strong><code>configId: {{ layout.sourceNode.configId }}</code><span>任务队列：{{ layout.queueName || '未设置' }}</span></div>
+      <div v-if="layout.sourceNode" class="dl-origin" data-testid="deployment-origin"><span>来源节点</span><strong>{{ layout.sourceNode.flowName }} / {{ layout.sourceNode.nodeName }}</strong><el-button link type="primary" data-testid="deployment-editor-config" @click="configDetails?.open(layout)">configId: {{ layout.sourceNode.configId }}</el-button><span>任务队列：{{ layout.queueName || '未设置' }}</span></div>
+      <div v-else-if="layout.configId" class="dl-origin"><span>节点配置</span><el-button link type="primary" data-testid="deployment-editor-config" @click="configDetails?.open(layout)">{{ layout.configId }} · 查看配置与关联源</el-button></div>
       <div class="dl-path-fields">
         <div class="dl-preset-field"><span>快捷格式</span><el-radio-group :model-value="layout.pathStyle" :disabled="!canWrite || preview || busy || loading" class="dl-preset-tags" aria-label="路径快捷格式" data-testid="deployment-style" @update:model-value="chooseStyle"><el-radio-button v-for="item in directoryBindingOptions" :key="item.value" :value="item.value">{{ item.value === 'config' ? '按配置' : item.value === 'queue' ? '按队列' : item.value === 'website' ? '按网站' : '自定义' }}</el-radio-button></el-radio-group></div>
         <label class="dl-type-field">目录类型<el-select v-model="directoryType" :disabled="!canWrite || preview || busy || loading" aria-label="目录类型" data-testid="layout-environment"><el-option label="默认" value="default" /><el-option label="生产" value="prd" /><el-option label="测试" value="test" /></el-select></label>
@@ -303,7 +328,7 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
           <div class="dl-node-actions"><el-button v-if="canWrite && selected.kind === 'file' && selected.name.endsWith('.py') && layout.entryPoint !== selectedPath" link type="primary" :disabled="busy" @click="layout.entryPoint = selectedPath">设为执行入口</el-button><el-button v-if="canWrite && selected.sourceType === 'directory'" link type="primary" :disabled="busy" data-testid="layout-expand-mapping" @click="expandMapping">展开为独立文件</el-button></div>
         </div>
         <footer class="dl-target-actions">
-          <span class="dl-status">{{ dirty ? '有未保存修改' : layout.deploymentId ? '已保存' : '新部署配置' }}</span>
+          <div class="dl-save-state"><span class="dl-status">{{ dirty ? '有未保存修改' : layout.deploymentId ? '已保存' : '新部署配置' }}</span><span class="dl-current-entry" :title="layout.entryPoint || '未设置启动文件'" data-testid="layout-current-entry">启动文件：{{ layout.entryPoint || '未设置' }}</span></div>
           <div class="dl-action-buttons">
             <el-button :disabled="busy || loading" @click="preview = !preview">{{ preview ? '返回编辑' : '预览映射' }}</el-button>
             <el-button v-if="canWrite" type="primary" :loading="busy" :disabled="!needsSave || loading || busy" data-testid="layout-save" @click="save">保存配置</el-button>
@@ -319,6 +344,11 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
             <template #default="{ data }"><span class="dl-tree-row" :title="data.path"><el-icon :class="data.kind === 'directory' ? 'folder-icon' : ''"><Folder v-if="data.kind === 'directory'" /><Document v-else /></el-icon><span class="dl-tree-name">{{ data.name }}</span><small v-if="!data.selectable">不可下发</small></span></template>
           </el-tree>
         </div>
+        <div v-if="source?.kind === 'file' && source.selectable" class="dl-file-metadata" aria-live="polite" data-testid="layout-file-metadata">
+          <span v-if="fileMetadataLoading">正在读取文件版本…</span>
+          <template v-else-if="fileMetadataError"><span class="dl-file-metadata-error" role="alert">文件信息加载失败：{{ fileMetadataError }}</span><el-button link type="primary" size="small" data-testid="layout-file-metadata-retry" @click="loadFileMetadata">重试</el-button></template>
+          <template v-else-if="fileMetadata"><span title="文件首次提交到 Git 的时间">创建时间 <time :datetime="fileMetadata.createdAt" data-testid="layout-file-created-at">{{ fileTime(fileMetadata.createdAt) }}</time></span><span>版本 <code :title="`该文件最近一次变更的 Git 提交：${fileMetadata.fileCommit}`" data-testid="layout-file-version">{{ fileMetadata.fileCommit.slice(0, 12) }}</code></span></template>
+        </div>
         <footer class="dl-add"><div class="dl-add-context"><strong :title="source?.path">{{ source?.name || '选择仓库文件或文件夹' }}</strong><small :title="destinationPath" data-testid="layout-add-destination">添加到：{{ destinationPath || '根目录' }}</small></div><div class="dl-add-actions"><el-button v-if="canWrite" :icon="ArrowLeft" type="primary" :disabled="!source?.selectable || busy" data-testid="layout-add-source" @click="addSource">关联到目录</el-button><el-button v-if="canWrite && selected" link type="primary" :disabled="!source?.selectable || busy" @click="replaceSource">替换关联</el-button></div></footer>
       </section>
       <section v-else class="dl-panel dl-preview"><header><div><strong>下发映射预览</strong><span>已关联各仓库的固定 Git 提交</span></div></header><div class="dl-tree-scroll"><div class="dl-mapping"><strong>version.json</strong><p>系统维护当前版本、历史版本和各仓库提交</p></div><div v-for="item in mappings" :key="item.id" class="dl-mapping"><strong>{{ item.target }}{{ item.sourceType === 'directory' ? '/' : '' }}</strong><p>{{ repoName(item.repoId) }} / {{ item.sourcePath }}</p><code>{{ item.gitCommit }}</code></div><div v-if="!mappings.length" class="dl-empty">尚未关联仓库代码</div></div><footer><small>实际路径：Runner / {{ renderedRoot }} / 目标路径。版本信息记录在 version.json；执行中的任务使用临时副本。</small></footer></section>
@@ -331,6 +361,7 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
 .dl-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex-shrink:0; }
 .dl-editor-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }
 .dl-config-select { width:340px; }.dl-config-option { float:right; margin-left:20px; font-size:11px; color:var(--rc-muted,#64748b); }.dl-status { font-size:12px; color:var(--rc-muted,#64748b); }
+.dl-save-state { display:flex; flex-direction:column; gap:4px; min-width:0; }.dl-current-entry { font-size:12px; color:var(--el-text-color-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dl-configuration { padding:12px 16px 10px; border:1px solid var(--border-color,#e2e8f0); background:var(--surface,#fff); border-radius:12px; flex-shrink:0; }
 .dl-identity-fields { display:grid; grid-template-columns:minmax(200px,420px) minmax(0,1fr); align-items:end; gap:16px; }
 .dl-origin { display:flex; align-items:center; gap:12px; min-width:0; padding:8px 10px; border-radius:6px; background:var(--el-fill-color-light); font-size:12px; color:var(--el-text-color-secondary); }
@@ -352,6 +383,8 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
 .dl-selected { padding:10px 16px; border-top:1px solid var(--border-color,#e2e8f0); background:var(--el-fill-color-lighter,#f8fafc); flex-shrink:0; }.dl-selection-title { display:flex; gap:12px; align-items:center; font-size:12px; margin-bottom:8px; }.dl-selection-title strong { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }.dl-selection-title .el-button { flex-shrink:0; height:auto; padding:0; }.dl-selection-title .dl-entry { flex-shrink:0; }.dl-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }.dl-fields label { font-size:11px; color:var(--rc-muted,#64748b); display:flex; flex-direction:column; gap:5px; min-width:0; }
 .dl-source-ref { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--rc-muted,#64748b); margin:8px 0 0; min-width:0; }.dl-source-ref>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.dl-source-ref code { margin-left:auto; font-size:10px; flex-shrink:0; }.dl-node-actions { display:flex; gap:10px; margin-top:5px; }.dl-node-actions:empty { display:none; }
 .dl-repository { padding:10px 16px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }.dl-repository-controls { display:grid; grid-template-columns:minmax(120px,0.9fr) minmax(0,1fr); gap:8px; }
+.dl-file-metadata { display:flex; align-items:center; flex-wrap:wrap; gap:6px 16px; padding:8px 16px; border-top:1px solid var(--border-color,#e2e8f0); background:var(--el-fill-color-lighter,#f8fafc); flex-shrink:0; color:var(--rc-muted,#64748b); font-size:11px; }
+.dl-file-metadata > span { display:flex; align-items:center; gap:6px; }.dl-file-metadata time,.dl-file-metadata code { color:var(--rc-text,#334155); white-space:nowrap; }.dl-file-metadata-error { min-width:0; overflow-wrap:anywhere; color:var(--el-color-danger); }
 .dl-panel footer { border-top:1px solid var(--border-color,#e2e8f0); padding:10px 16px; flex-shrink:0; }.dl-add { display:flex; align-items:center; gap:10px; min-height:70px; }.dl-add-context { flex:1; min-width:0; }.dl-add-context strong { display:block; font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.dl-add-context small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.dl-add-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-shrink:0; }.dl-add-actions .el-button { margin:0; }
 .dl-target-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }.dl-action-buttons { display:flex; align-items:center; gap:8px; flex-shrink:0; }.dl-action-buttons .el-button { margin:0; }
 .dl-panel :deep(.el-tree-node__content) { height:32px; }.dl-panel :deep(.el-tree) { background:transparent; }.dl-panel :deep(.el-tree-node__content.is-current) { background:var(--el-color-primary-light-9); }

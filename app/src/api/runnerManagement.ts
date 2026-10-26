@@ -1,4 +1,5 @@
 import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './auth'
+import { streamModelInterfaceTest } from './modelInterfaceStream'
 
 export interface RunnerWorkerProcess {
   assignmentId: string
@@ -16,6 +17,9 @@ export interface RunnerInstance {
   ipAddress: string
   installDirectory: string
   platform: string
+  /** Runner 上报的实际操作系统；旧实例尚未上报时为空。 */
+  osType?: string | null
+  osVersion?: string | null
   capabilities: string[]
   status: 'online' | 'offline' | 'upgrading' | 'error'
   lastHeartbeat: string | null
@@ -29,6 +33,22 @@ export interface RunnerInstance {
   runnerPid?: number | null
   /** 最近心跳仍存活的任务进程；空数组为无进程，null 为尚未上报。 */
   workerProcesses?: RunnerWorkerProcess[] | null
+}
+export interface ProcessorProcess extends RunnerWorkerProcess {
+  /** 与当前 Runner、分配、并发序号和 PID 匹配的运行日志。 */
+  runId?: string
+  runnerId: string
+  runtimeId: string
+  generation: string
+  stopStatus: '' | 'pending' | 'applied' | 'failed'
+  stopError: string
+}
+export interface ProcessStopRequest {
+  requestId: string
+  status: 'pending' | 'applied' | 'failed'
+  pid: number
+  slot: number
+  error: string
 }
 
 export interface QueueAssignment {
@@ -73,6 +93,14 @@ export interface EnrollmentCode {
   code: string
   expiresAt: string
 }
+export interface RunnerPackageInfo {
+  server: string
+  platform: 'windows-x64'
+  pythonVersion: string
+  releases: ArtifactRelease[]
+  enrollmentMinutes: number
+  ready: boolean
+}
 
 export interface ScriptBinding {
   configId: string
@@ -84,6 +112,10 @@ export interface ScriptBinding {
 }
 
 export interface PublishedScript {
+  promptTemplateId?: number
+  /** 节点代码发布返回稳定代码 ID 和网站信息；旧发布接口不返回。 */
+  codeId?: string
+  siteHost?: string
   /** 仓库内按节点类型管理的保存目录，旧代码为空。 */
   directoryId?: string
   gitUrl: string
@@ -96,9 +128,6 @@ export interface PublishedScript {
   storagePath?: string
   deliveryPath?: string
   repoPath?: string | null
-  /** 站点代码版本 ID / 站点主机：SiteScriptGeneratorDialog 发布后续发与测试数据在用，补上类型（2026-10-12，构建被 vue-tsc 挡住） */
-  codeId?: string
-  siteHost?: string
 }
 
 export interface SiteCodeVersion extends PublishedScript {
@@ -110,6 +139,8 @@ export interface SiteCodeVersion extends PublishedScript {
   deliveryPath: string
   publishedAt: string
   prompt: string
+  systemPrompt?: string
+  userPrompt?: string
   url: string
   /** 节点抓取类型（configType）；生成代码时筛选可选仓库。 */
   configType?: string
@@ -134,6 +165,9 @@ export interface DirectoryMappingNode {
 export type DirectoryBindingType = 'config' | 'queue' | 'website' | 'custom'
 export interface DirectoryLayoutOwner { bindingType: 'website' | 'custom'; ownerId: string }
 export interface DirectoryDelivery {
+  unchanged?: boolean
+  transferredFileCount?: number
+  unchangedFileCount?: number
   deliveryId: string
   bindingType: DirectoryBindingType | 'deployment'
   ownerId: string
@@ -164,6 +198,8 @@ export interface DirectoryDeliveryItem {
   kind: 'file' | 'folder'
   size: number
   status: 'added' | 'modified' | 'unchanged'
+  sha256?: string
+  previousSha256?: string | null
 }
 export interface DirectoryDeliveryPreview {
   revision: string
@@ -206,11 +242,21 @@ export interface DeploymentConfiguration extends DirectoryLayout {
   name: string
   pathStyle: DirectoryBindingType
   sourceNode?: DeploymentSourceNode
+  /** 按配置 ID 反查的流程节点；不替代已保存的来源绑定。 */
+  relatedSourceNodes?: (DeploymentSourceNode & { isDraft?: boolean })[]
   updatedAt?: string
   legacyType?: DirectoryBindingType
   legacyOwner?: string
 }
+export interface RunnerRetryPolicy {
+  enabled: boolean
+  maxAttempts: number
+  windowSeconds: number
+  delaysSeconds: number[]
+}
 export interface RuntimeConfiguration {
+  /** 已确认手工关闭的并发序号，成功手动启动后清空。 */
+  stoppedProcessSlots?: number[]
   runtimeId: string
   deploymentId: string
   name: string
@@ -218,11 +264,14 @@ export interface RuntimeConfiguration {
   assignmentId: string
   appliedRevision: string
   layoutRevision: string
+  deliveredCodeMatches?: boolean
+  latestCodeMatchesDelivery?: boolean
   revision: string
   directoryTemplate: string
   entryPoint: string
   binding: DirectoryRunnerBinding | null
   assignment: QueueAssignment | null
+  retryPolicy?: RunnerRetryPolicy
 }
 export interface RuntimeConfigurationInput {
   runtimeId?: string
@@ -233,7 +282,47 @@ export interface RuntimeConfigurationInput {
   codeId?: string
   environment: 'test' | 'production'
   concurrency: number
+  retryPolicy?: RunnerRetryPolicy
 }
+
+export interface RuntimeLogRecord {
+  recordId: string
+  runnerId: string
+  runtimeId: string
+  deploymentId: string
+  assignmentId: string
+  parentId: string
+  kind: 'delivery' | 'start' | 'stop' | 'run' | 'runner'
+  status: string
+  requestedAt: string
+  updatedAt: string
+  finishedAt: string | null
+  error: string
+  lastHeartbeat?: string | null
+  snapshot: {
+    name?: string; runnerName?: string; ipAddress?: string; installDirectory?: string
+    configId?: string; queue?: string; entryPoint?: string; directoryTemplate?: string
+    revision?: string; releaseDigest?: string; runnerVersion?: string
+    sourceNode?: { flowName?: string; nodeName?: string }; scope?: string; selectedPaths?: string[]
+    sources?: { repoId?: string; sourcePath?: string; gitCommit?: string; name?: string; targetPath?: string }[]
+  }
+}
+export interface RuntimeLogDetail extends RuntimeLogRecord {
+  events: { eventId: string; time: string; stage: string; level: string; message: string; detail: string }[]
+  streams: { streamId: string; lastSeq: number; byteCount: number; updatedAt: string }[]
+  runs: RuntimeLogRecord[]
+  run: { slot: number; pid: number | null; entry: string; working_directory: string; interpreter: string
+    started_at: string | null; ended_at: string | null; exit_code: number | null; reason: string } | null
+  logAvailable?: boolean
+}
+export interface RuntimeLogFilters {
+  assignmentId?: string; processPid?: number; processSlot?: number
+  runnerId?: string; runtimeId?: string; keyword?: string; kind?: string; status?: string
+  since?: string; until?: string; page?: number; pageSize?: number
+}
+export interface RuntimeLogLine { seq: number; index: number; text: string; time: string; source: string }
+export interface RuntimeLogEntries { entries: RuntimeLogLine[]; cursor: number; firstCursor: number; lastSeq: number; hasEarlier: boolean; earliestSeq?: number; expired?: boolean }
+export interface RuntimeLogPolicy { directory: string; retentionDays: number; quotaMb: number; hasLogs: boolean }
 
 export interface RepositoryTree {
   repoId: string
@@ -296,6 +385,7 @@ export type CodeRepositoryDirectoryInput = Pick<CodeRepositoryDirectory, 'name' 
 
 export interface CodeRepositoryFile {
   path: string
+  kind?: 'file' | 'directory'
   size: number | null
   managed: boolean
   canDelete: boolean
@@ -317,6 +407,18 @@ export interface CodeRepositoryFileContent {
   size: number
   content: string
   gitCommit: string
+}
+
+export interface CodeRepositoryFileMetadata {
+  repoId: string
+  path: string
+  /** 查看目录时的仓库快照，关联到部署配置时继续使用此提交。 */
+  gitCommit: string
+  /** 该快照中最后一次修改此文件的提交。 */
+  fileCommit: string
+  /** 跟随重命名后的首次 Git 提交时间。 */
+  createdAt: string
+  updatedAt: string
 }
 
 export interface CodeRepositoryVerification {
@@ -370,10 +472,52 @@ function list<T>(path: string): Promise<T[]> {
   })
 }
 
+export interface ModelInterface {
+  id: string
+  name: string
+  kind: 'agent' | 'gemini-agent' | 'gemini-chat' | 'chat' | 'site-script'
+  title?: string
+  endpoint: string
+  model: string
+  enabled: boolean
+  isDefault: boolean
+  timeoutSeconds: number
+  inputFileDir: string
+  prjDir?: string
+  testSystemPrompt?: string
+  testUserPrompt?: string
+  codeDir: string
+  outputFileDir: string
+  stream: boolean
+}
+export interface ModelInterfaceSettings { items: ModelInterface[]; revision: number }
+export interface ModelInterfaceTestInput {
+  interfaceId: string; prompt: string; model?: string; stream?: boolean
+  title?: string; prjDir?: string; inputFileDir?: string; codeDir?: string; outputFileDir?: string; url?: string; systemPrompt?: string
+}
+export interface ModelInterfaceTestResult {
+  ok: boolean; status: number; contentType: string; responseText: string; durationMs: number
+}
+
 export const runnerManagementApi = {
+  streamModelInterfaceTest,
+  modelInterfaces: () => request<ModelInterfaceSettings>('/settings/model-interfaces'),
+  saveModelInterfaces: (input: ModelInterfaceSettings) => request<ModelInterfaceSettings>('/settings/model-interfaces', 'POST', input),
+  saveModelTestPrompts: (input: { interfaceId: string; systemPrompt: string; userPrompt: string; revision: number }) => request<ModelInterfaceSettings>('/settings/model-interfaces/test-prompts', 'POST', input),
+  testModelInterface: (input: ModelInterfaceTestInput) => request<ModelInterfaceTestResult>('/model-interfaces/test', 'POST', input),
+  processorProcesses: () => request<{ runners: RunnerInstance[]; items: ProcessorProcess[] }>('/processes'),
+  stopProcessorProcess: (process: Pick<ProcessorProcess, 'runnerId' | 'assignmentId' | 'slot' | 'pid' | 'generation'>) =>
+    request<ProcessStopRequest>(`/runners/${encodeURIComponent(process.runnerId)}/processes/stop`, 'POST', { assignmentId: process.assignmentId, slot: process.slot, pid: process.pid, generation: process.generation }),
+  runtimeLogPolicy: () => request<RuntimeLogPolicy>('/log-settings'),
+  saveRuntimeLogPolicy: (input: RuntimeLogPolicy) => request<RuntimeLogPolicy>('/log-settings', 'POST', input),
+  runtimeLogs: (filters: RuntimeLogFilters = {}) => request<{ items: RuntimeLogRecord[]; total: number; page: number; pageSize: number }>(`/runtime-operations?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))}`),
+  runtimeLogDetail: (id: string) => request<RuntimeLogDetail>(`/runtime-operations/${encodeURIComponent(id)}`),
+  runtimeLogEntries: (id: string, cursor = 0, before = 0) => request<RuntimeLogEntries>(`/log-streams/${encodeURIComponent(id)}/entries?cursor=${cursor}&before=${before}`),
+  downloadRuntimeLog: (id: string) => request<{ name: string; content: string }>(`/log-streams/${encodeURIComponent(id)}/download`),
   deploymentConfigurations: (keyword = '') => list<DeploymentConfiguration>(`/deployment-configurations?keyword=${encodeURIComponent(keyword)}`),
   deploymentConfiguration: (id: string) => request<DeploymentConfiguration>(`/deployment-configurations/${encodeURIComponent(id)}`),
   saveDeploymentConfiguration: (layout: DeploymentConfiguration) => request<DeploymentConfiguration>(layout.deploymentId ? `/deployment-configurations/${encodeURIComponent(layout.deploymentId)}` : '/deployment-configurations', 'POST', layout),
+  ensureNodeDeployment: (input: { sourceNode: DeploymentSourceNode; queueName: string; scriptDigest?: string }) => request<DeploymentConfiguration>('/deployment-configurations/from-node', 'POST', input),
   runtimeConfigurations: () => list<RuntimeConfiguration>('/runtime-configurations'),
   saveRuntimeConfiguration: (input: RuntimeConfigurationInput) => request<RuntimeConfiguration>('/runtime-configurations', 'POST', input),
   startRuntimeProgram: (id: string, revision: string) => request<RuntimeConfiguration>(`/runtime-configurations/${encodeURIComponent(id)}/start`, 'POST', { revision }),
@@ -410,12 +554,14 @@ export const runnerManagementApi = {
   codeRepositoryDirectories: (repoId: string) => list<CodeRepositoryDirectory>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories`),
   saveCodeRepositoryDirectory: (repoId: string, input: CodeRepositoryDirectoryInput, directoryId?: string) => request<CodeRepositoryDirectory>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories${directoryId ? '/' + encodeURIComponent(directoryId) : ''}`, 'POST', input),
   removeCodeRepositoryDirectory: (repoId: string, directoryId: string, revision: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}?revision=${encodeURIComponent(revision)}`, 'DELETE'),
-  uploadCodeRepositoryFiles: (repoId: string, input: { overwrite: boolean; directoryId?: string; files: { name: string; data: string }[] }) =>
+  uploadCodeRepositoryFiles: (repoId: string, input: { overwrite: boolean; directoryId?: string; uploadType?: 'files' | 'folder'; files: { name: string; data: string; relativePath?: string }[] }) =>
     request<CodeRepositoryUploadResult>(`/settings/code-repos/${encodeURIComponent(repoId)}/files`, 'POST', input),
-  codeRepositoryFiles: (repoId: string, keyword = '', page = 1, directoryId?: string) =>
-    request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}`),
+  codeRepositoryFiles: (repoId: string, keyword = '', page = 1, directoryId?: string, folder?: string) =>
+    request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}${folder !== undefined ? '&view=directory&folder=' + encodeURIComponent(folder) : ''}`),
   codeRepositoryFileContent: (repoId: string, path: string) =>
     request<CodeRepositoryFileContent>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/content?path=${encodeURIComponent(path)}`),
+  codeRepositoryFileMetadata: (repoId: string, path: string, commit?: string) =>
+    request<CodeRepositoryFileMetadata>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/metadata?path=${encodeURIComponent(path)}${commit ? '&commit=' + encodeURIComponent(commit) : ''}`),
   deleteCodeRepositoryFile: (repoId: string, path: string) =>
     request<{ repoId: string; path: string; gitCommit: string; pushed: boolean }>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?path=${encodeURIComponent(path)}`, 'DELETE'),
   codeRepoRules: () => list<CodeRepoRule>('/settings/code-repo-rules'),
@@ -428,9 +574,26 @@ export const runnerManagementApi = {
   releases: () => list<ArtifactRelease>('/releases'),
   publishProcessor: (processorType: 'probe' | 'newslink_nourl') => request<{ digest: string }>('/releases/processors', 'POST', { processorType }),
   publishRunner: () => request<{ digest: string; created: boolean }>('/releases/runners', 'POST', {}),
+  runnerPackageInfo: () => request<RunnerPackageInfo>('/runner-package'),
+  downloadRunnerPackage: async (input: { server: string; digest: string }) => {
+    const token = readStoredToken()
+    let response: Response
+    try {
+      response = await fetch('/api/runner-management/runner-package', { method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify(input) })
+    } catch { throw new Error('Runner 管理服务不可达') }
+    if (response.status === 401) triggerSessionExpired()
+    if (!response.ok) {
+      const error = await response.json().catch(() => null) as { message?: string } | null
+      throw new Error(error?.message || `Runner 包下载失败（HTTP ${response.status}）`)
+    }
+    if (!response.headers.get('Content-Type')?.includes('application/zip')) throw new Error('Runner 包格式不正确，请重试')
+    const name = response.headers.get('Content-Disposition')?.match(/filename="(Runner-[A-Za-z0-9-]+\.zip)"/)?.[1] || 'Runner-windows-x64.zip'
+    return { name, blob: await response.blob() }
+  },
   setDesiredRunner: (runnerId: string, digest: string) => request<{ runnerId: string; digest: string }>(`/runners/${encodeURIComponent(runnerId)}/desired-runner`, 'POST', { digest }),
   scriptBinding: (configId: string) => request<ScriptBinding | null>(`/configs/${encodeURIComponent(configId)}/script-release`),
-  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
+  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; promptTemplateId?: number; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
   adoptScript: (configId: string, scriptDigest: string) => request<ScriptBinding>(`/configs/${encodeURIComponent(configId)}/script-release`, 'POST', { scriptDigest }),
   siteCodeVersions: (configId: string, queueName: string) => list<SiteCodeVersion>(`/site-scripts/versions?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}`),
   siteCodeCatalog: () => list<SiteCodeVersion & { environments: ('test' | 'prd')[] }>('/site-scripts/catalog'),

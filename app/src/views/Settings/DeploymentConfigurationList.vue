@@ -4,13 +4,16 @@ import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import type { DeploymentConfiguration, RuntimeConfiguration } from '@/api/runnerManagement'
 
 const props = defineProps<{ items: DeploymentConfiguration[]; runtimes: RuntimeConfiguration[] | null; loading: boolean; canWrite: boolean; failed: boolean }>()
-const emit = defineEmits<{ open: [id: string]; create: []; refresh: [] }>()
+const emit = defineEmits<{ open: [id: string]; create: []; refresh: []; openConfig: [item: DeploymentConfiguration] }>()
 const query = reactive({ name: '', flow: '', configId: '', queue: '' })
 const applied = ref({ ...query }), page = ref(1), size = ref(20)
 const includes = (value: string | undefined, search: string) => (value || '').toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())
+function origins(item: DeploymentConfiguration) {
+  return item.sourceNode ? [item.sourceNode] : item.relatedSourceNodes || []
+}
 const filtered = computed(() => props.items.filter(item =>
   (includes(item.name, applied.value.name) || includes(item.deploymentId, applied.value.name)) &&
-  includes([item.sourceNode?.flowName, item.sourceNode?.flowId, item.sourceNode?.nodeName].filter(Boolean).join(' '), applied.value.flow) &&
+  includes(origins(item).flatMap(node => [node.flowName, node.flowId, node.nodeName, node.stepId]).join(' '), applied.value.flow) &&
   includes(item.configId, applied.value.configId) && includes(item.queueName, applied.value.queue)))
 const visible = computed(() => filtered.value.slice((page.value - 1) * size.value, page.value * size.value))
 const machineCounts = computed(() => {
@@ -45,8 +48,8 @@ function time(value?: string) {
       <div v-loading="loading" class="deployment-table-scroll">
         <el-table :data="visible" height="100%" row-key="deploymentId" :empty-text="failed ? '列表加载失败，请刷新重试' : items.length ? '没有符合查询条件的部署配置' : '暂无部署配置，点击新建部署，从流程节点创建'" data-testid="deployment-table">
           <el-table-column label="部署名称" min-width="200"><template #default="{ row }"><button type="button" class="deployment-name-link" :title="row.name" :disabled="loading" :data-testid="`deployment-open-${row.deploymentId}`" @click="emit('open', row.deploymentId)">{{ row.name }}</button><small class="deployment-secondary" :title="row.deploymentId">{{ row.deploymentId }}</small></template></el-table-column>
-          <el-table-column label="来源流程 / 节点" min-width="200"><template #default="{ row }"><template v-if="row.sourceNode"><span class="deployment-cell-text" :title="row.sourceNode.flowName">{{ row.sourceNode.flowName }}</span><small class="deployment-secondary" :title="row.sourceNode.nodeName">{{ row.sourceNode.nodeName }}</small></template><span v-else class="deployment-muted">历史配置 · 未记录来源节点</span></template></el-table-column>
-          <el-table-column prop="configId" label="配置 ID" width="105" show-overflow-tooltip><template #default="{ row }">{{ row.configId || '—' }}</template></el-table-column>
+          <el-table-column label="来源流程 / 节点" min-width="240"><template #default="{ row }"><template v-if="origins(row).length"><div v-for="node in origins(row)" :key="`${node.flowId}:${node.stepId}`" class="deployment-origin"><a class="deployment-name-link" :href="`#/flows?q=${encodeURIComponent(node.flowId)}`" target="_blank" rel="noopener" :title="`查看流程 ${node.flowId}`">{{ node.flowName }}{{ 'isDraft' in node && node.isDraft ? '（草稿）' : '' }}</a><small class="deployment-secondary" :title="node.nodeName">{{ node.nodeName }} · 节点 {{ node.stepId }}</small><small class="deployment-secondary">流程 {{ node.flowId }}</small></div></template><span v-else class="deployment-muted">{{ !row.configId ? '公共部署 · 无关联节点' : row.relatedSourceNodes ? '未找到关联流程节点' : '来源流程暂不可查询' }}</span></template></el-table-column>
+          <el-table-column prop="configId" label="配置 ID" width="105" show-overflow-tooltip><template #default="{ row }"><button v-if="row.configId" type="button" class="deployment-name-link" :disabled="loading" :data-testid="`deployment-config-${row.deploymentId}`" title="查看配置详情和关联源" @click.stop="emit('openConfig', row)">{{ row.configId }}</button><span v-else>—</span></template></el-table-column>
           <el-table-column prop="queueName" label="任务队列" min-width="155" show-overflow-tooltip><template #default="{ row }">{{ row.queueName || '—' }}</template></el-table-column>
           <el-table-column label="绑定机器" width="88" align="center"><template #default="{ row }"><span :title="runtimes === null ? '绑定信息加载失败，请刷新重试' : '按 Runner 实例去重统计'">{{ runtimes === null ? '—' : machineCounts.get(row.deploymentId)?.size || 0 }}</span></template></el-table-column>
           <el-table-column label="更新时间" min-width="150"><template #default="{ row }"><span class="deployment-time" :title="row.updatedAt ? time(row.updatedAt) : '历史配置未记录更新时间'">{{ time(row.updatedAt) }}</span></template></el-table-column>
@@ -73,6 +76,7 @@ function time(value?: string) {
 .deployment-name-link:hover { text-decoration:underline; }
 .deployment-secondary { display:block; margin-top:3px; color:var(--el-text-color-secondary); font-size:11px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .deployment-cell-text { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.deployment-origin + .deployment-origin { margin-top:8px; padding-top:8px; border-top:1px solid var(--el-border-color-lighter); }
 .deployment-time { color:var(--el-text-color-regular); font-size:12px; }
 .deployment-list-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-top:1px solid var(--el-border-color-lighter); }
 .deployment-list-footer > span { font-size:12px; color:var(--el-text-color-secondary); }

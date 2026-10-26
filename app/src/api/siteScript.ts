@@ -1,5 +1,10 @@
+export const DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT = '你是 Python 网站采集脚本开发者。参考给定样例的接口和代码风格，为目标列表页编写完整、可独立保存的 Python 代码。只返回代码，不要 Markdown 围栏或解释。必须提供 scrape(url) 函数并返回 list[dict]；每条尽量包含 title/date/url/summary/content。不要生成 MQ、数据库、文件上传或流程调度代码。导入模块时不能发起网站请求。不要照搬样例站点的域名、页面选择器和专用解析逻辑。'
+
 export interface SiteScriptGenerateInput {
+  interfaceId?: string
   prompt: string
+  systemPrompt?: string
+  userPrompt?: string
   url: string
   sampleId: 'www.realcan.cn.py'
 }
@@ -15,7 +20,7 @@ export async function generateSiteScript(input: SiteScriptGenerateInput, signal?
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const token = readStoredToken()
   if (token) headers[ACCESS_TOKEN_HEADER] = token
-  const response = await fetch('/api/ai/site-script/generate', {
+  const response = await fetch(input.interfaceId ? '/api/runner-management/model-interfaces/generate' : '/api/ai/site-script/generate', {
     method: 'POST',
     credentials: 'include',
     headers,

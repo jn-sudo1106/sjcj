@@ -49,6 +49,8 @@ import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import { siteScriptAiAvailable } from '@/constants/deployGates'
+import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
+import type { PublishedScript } from '@/api/runnerManagement'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
 // 编辑对象来自节点编辑上下文（0917）：画布右侧配置区 = 全局 flow store，
@@ -519,6 +521,7 @@ const isArticleTag = computed(() => isArticleTagNode(cfg.value))
 watch(id, () => {
   clearVideoFile()
   siteScriptOpen.value = false
+  orchestrationMode.value = 'ai'
   promptPreviewOpen.value = false
   articlePromptMissing.value = false
   clearTranslate()
@@ -941,6 +944,7 @@ watch(
     sourceTableName.value,
     promptSourceId.value,
     promptCategory.value,
+    orchCfg.value.promptTemplateId,
     promptListCategory.value,
     orchCfg.value.inputFields?.join(',') ?? '',
     orchCfg.value.outputFields?.join(',') ?? '',
@@ -967,6 +971,7 @@ watch(
       const applied = await loadPromptTemplateForNode({
         promptListCategory: promptListCategory.value,
         promptCategory: promptCategory.value,
+        promptTemplateId: orchCfg.value.promptTemplateId,
         inputTableName: sourceTableName.value,
         outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
         sourceId: isMonitor.value ? promptSourceId.value : '',
@@ -1009,6 +1014,7 @@ function onDescribeChange(e: Event) {
 function onPromptSaved() {
   promptTouched.value = true
 }
+function onPromptTemplateIdChange(value: number | undefined) { patch({ promptTemplateId: value }) }
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
 }
@@ -1244,7 +1250,7 @@ async function ensureLegacyComposeRuleId(): Promise<string | undefined> {
   }
 }
 async function onGenerateScript(
-  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
+  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'promptTemplateId' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
 ) {
   if (!orchCfg.value.describe.trim()) {
     ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isDataValidation.value ? '请先填写数据校验描述' : isPdf.value ? '请先填写 PDF 抽取描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
@@ -1353,8 +1359,28 @@ async function onGenerateScript(
 
 const workbenchOpen = ref(false)
 const siteScriptOpen = ref(false)
+async function onSiteScriptSaved(version: PublishedScript, configId: string, queueName: string) {
+  const node = cfg.value, nodeId = id.value
+  if (!node || node.configId !== configId) return
+  try {
+    const deployment = await syncNodeDeployment(node, nodeId, version.scriptDigest, queueName)
+    if (deployment) ElMessage.success('代码已关联到对应流程节点的部署配置')
+  } catch (e) {
+    ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存编排配置重试`)
+  }
+}
 // 部署环境还没有站点脚本生成服务，入口先隐藏（见 siteScriptAiAvailable）
 const siteScriptAvailable = siteScriptAiAvailable()
+const hasSiteScriptMode = computed(() => !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value && siteScriptAvailable)
+const orchestrationMode = ref<'config' | 'ai'>('ai')
+function onOrchestrationTabKeydown(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  orchestrationMode.value = event.key === 'Home' ? 'config'
+    : event.key === 'End' ? 'ai' : orchestrationMode.value === 'config' ? 'ai' : 'config'
+  const tabList = (event.currentTarget as HTMLElement).parentElement
+  tabList?.querySelector<HTMLButtonElement>(`[data-mode="${orchestrationMode.value}"]`)?.focus()
+}
 // AI 抓列表使用当前源实际入口；configUrl 是可被多个源复用的配置 URL，可能不是本源列表页。
 const siteScriptUrl = computed(() => {
   const source = useFlowStore().sourceCfg ?? useFlowStore().sourceCtx
@@ -1374,6 +1400,16 @@ const siteScriptConfigType = computed(() => {
   if (!cfg.value) return ''
   return cfg.value.configType || String(configTypeFrom(cfg.value) ?? '')
 })
+const siteScriptPromptVariables = computed(() => ({
+  source_table: sourceTableName.value, input_table: sourceTableName.value,
+  output_table: orchCfg.value.outputTable?.trim() || sourceTableName.value,
+  input_fields: (orchCfg.value.inputFields?.length ? orchCfg.value.inputFields : inputFieldOptions.value.map(f => f.itemCode)).join(','),
+  output_fields: (orchCfg.value.outputFields?.length ? orchCfg.value.outputFields : outputFieldOptions.value.map(f => f.itemCode)).join(','),
+  input_pair: inputFieldOptions.value.filter(f => !orchCfg.value.inputFields?.length || orchCfg.value.inputFields.includes(f.itemCode)).map(f => `${f.itemName}:${f.itemCode}`).join(','),
+  output_pair: outputFieldOptions.value.filter(f => !orchCfg.value.outputFields?.length || orchCfg.value.outputFields.includes(f.itemCode)).map(f => `${f.itemName}:${f.itemCode}`).join(','),
+  source_id: promptSourceId.value || '', source_cron: sourceCron.value || '',
+  provider_code: orchCfg.value.modelProviderCode || '', model: orchCfg.value.modelCode || '',
+}))
 
 // ---- PDF 抓取「解析内容」（1005）----
 // 与「生成脚本」同一条流式链路，但只读：后端抽 PDF 正文 + 按当前提示词输出，
@@ -1685,6 +1721,11 @@ function onTestScript() {
 </script>
 
 <template>
+  <div v-if="hasSiteScriptMode" class="rc-orchestration-tabs" role="tablist" aria-label="生成方式" data-testid="orchestration-mode-tabs">
+    <button id="orchestration-config-tab" type="button" role="tab" data-mode="config" data-testid="orchestration-config-tab" :class="{ active: orchestrationMode === 'config' }" :aria-selected="orchestrationMode === 'config'" :tabindex="orchestrationMode === 'config' ? 0 : -1" aria-controls="orchestration-config-panel" @click="orchestrationMode = 'config'" @keydown="onOrchestrationTabKeydown">生成配置</button>
+    <button id="orchestration-ai-tab" type="button" role="tab" data-mode="ai" data-testid="orchestration-ai-tab" :class="{ active: orchestrationMode === 'ai' }" :aria-selected="orchestrationMode === 'ai'" :tabindex="orchestrationMode === 'ai' ? 0 : -1" aria-controls="orchestration-ai-panel" @click="orchestrationMode = 'ai'" @keydown="onOrchestrationTabKeydown">AI 生成脚本</button>
+  </div>
+  <div id="orchestration-config-panel" v-show="!hasSiteScriptMode || orchestrationMode === 'config'" :role="hasSiteScriptMode ? 'tabpanel' : undefined" :aria-labelledby="hasSiteScriptMode ? 'orchestration-config-tab' : undefined" data-testid="orchestration-config-panel">
   <div v-if="isMonitor" class="rc-field rc-monitor-methods-field" data-testid="monitor-methods-field">
     <label>监控方法</label>
     <el-select
@@ -2110,13 +2151,6 @@ function onTestScript() {
       <template v-else>{{ generateLabel }}</template>
     </button>
     <button
-      v-if="!isRule && cfg?.collectCfg && !isScriptless && siteScriptAvailable"
-      class="rc-btn"
-      type="button"
-      data-testid="open-site-script-generator"
-      @click="siteScriptOpen = true"
-    >AI 生成 Python 脚本</button>
-    <button
       v-if="isRule"
       class="rc-btn"
       type="button"
@@ -2228,6 +2262,20 @@ function onTestScript() {
   <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
        面板内直接能生成/保存，不用退出去。 -->
+  </div>
+  <div v-if="hasSiteScriptMode" id="orchestration-ai-panel" v-show="orchestrationMode === 'ai'" role="tabpanel" aria-labelledby="orchestration-ai-tab" data-testid="orchestration-ai-panel">
+    <SiteScriptGeneratorDialog
+      :key="id"
+      v-model:open="siteScriptOpen"
+      :initial-url="siteScriptUrl"
+      :initial-prompt="orchCfg.describe"
+      :config-id="cfg?.configId"
+      :queue-name="siteScriptQueue"
+      :config-type="siteScriptConfigType"
+      :template-variables="siteScriptPromptVariables"
+      @saved="onSiteScriptSaved"
+    />
+  </div>
   <RuleWorkbenchDialog
     v-if="!isOcr && !isAudioText && !isVideoAudio"
     v-model:open="workbenchDialogOpen"
@@ -2235,6 +2283,9 @@ function onTestScript() {
     :prompt-preview-only="promptPreviewOpen"
     :script-label="scriptLabel"
     :system-prompt="orchCfg.systemPrompt ?? ''"
+    :preserve-prompt="promptTouched"
+    :prompt-template-id="orchCfg.promptTemplateId"
+    :config-id="cfg?.configId"
     :prompt-category="promptCategory"
     :prompt-list-category="promptListCategory"
     :prompt-category-groups="promptCategoryGroups"
@@ -2265,6 +2316,7 @@ function onTestScript() {
     :hide-prompt-by-default="isRule"
     @prompt-saved="onPromptSaved"
     @update:system-prompt="onSystemPromptChange"
+    @update:prompt-template-id="onPromptTemplateIdChange"
     @update:prompt-category="onPromptCategoryChange"
     @update:model-provider-code="onModelProviderChange"
     @update:model-code="onModelChange"
@@ -2275,19 +2327,13 @@ function onTestScript() {
     @save="onSaveScript"
     @test="onTestScript"
   />
-  <SiteScriptGeneratorDialog
-    v-if="!isRule && cfg?.collectCfg && !isScriptless"
-    :key="id"
-    v-model:open="siteScriptOpen"
-    :initial-url="siteScriptUrl"
-    :initial-prompt="orchCfg.describe"
-    :config-id="cfg?.configId"
-    :queue-name="siteScriptQueue"
-    :config-type="siteScriptConfigType"
-  />
 </template>
 
 <style scoped>
+.rc-orchestration-tabs { display: flex; gap: 4px; margin-bottom: 12px; padding: 3px; border-radius: 7px; background: var(--rc-primary-bg); }
+.rc-orchestration-tabs button { flex: 1; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted); font-size: 12px; cursor: pointer; }
+.rc-orchestration-tabs button.active { background: var(--rc-card); color: var(--rc-primary); font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / 6%); }
+.rc-orchestration-tabs button:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; }

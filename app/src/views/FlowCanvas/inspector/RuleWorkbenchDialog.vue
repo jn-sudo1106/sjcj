@@ -12,10 +12,14 @@
 //     S6-1 才第一次开放编辑，没有"取消"包袱要延续，直接绑定跟本应用其余文本框风格一致，更简单。
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 fileUploadScript 接口 + 二次确认，逻辑留在父组件不重复）。
 import { computed, nextTick, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
 import type { PromptCategoryGroup } from './promptCategory'
-import { loadPromptTemplateForNode } from './promptTemplateLoader'
+import { renderPromptTemplateForNode } from './promptTemplateLoader'
+import { fetchPromptList, type PromptTemplateItem } from '@/api/prompt'
+import PromptTemplatePicker from './PromptTemplatePicker.vue'
+import { nodePromptApi } from '@/api/nodePrompts'
+import { nodePromptsAvailable } from '@/constants/deployGates'
 
 const props = defineProps<{
   open: boolean
@@ -49,6 +53,10 @@ const props = defineProps<{
   // 文章摘要/打标签节点查看并编辑系统提示词时，复用工作台弹窗外壳但隐藏脚本编辑能力。
   promptPreviewOnly?: boolean
   promptPreviewSaving?: boolean
+  /** Saved/manual node prompts stay independent when reopening the work area. */
+  preservePrompt?: boolean
+  promptTemplateId?: number
+  configId?: string
   // 测试脚本是否可点（脚本非空且已绑输入表）
   canTest: boolean
   // 预览表第一行数据，作为脚本测试入参（key=字段名，value=值）
@@ -62,13 +70,14 @@ const emit = defineEmits<{
   'update:open': [boolean]
   'update:systemPrompt': [string]
   'update:promptCategory': [PromptCategory]
+  'update:promptTemplateId': [number | undefined]
   'update:modelProviderCode': [string]
   'update:modelCode': [string]
   'update:script': [string]
   'save-prompt-preview': [string]
   /** 用户点了左栏「保存」（区别于 loadPromptTemplate 自动回写：那条不算用户编辑） */
   'prompt-saved': []
-  generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>]
+  generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'promptTemplateId' | 'modelProviderCode' | 'modelCode'>>]
   'cancel-generate': []
   save: []
   test: []
@@ -80,6 +89,11 @@ function close() {
 
 // 系统提示词草稿：只在打开时从 props 重置，取消/关闭不回写
 const promptDraft = ref(props.systemPrompt)
+const promptChoices = ref<PromptTemplateItem[]>([]), selectedPromptId = ref(props.promptTemplateId ?? 0)
+const promptSnapshot = ref(props.systemPrompt)
+const bindingSaving = ref(false)
+// 没有节点提示词接口的环境（业务后端）不读写选择，否则保存 / 生成会被接口失败拦住（2026-10-26）。
+const persistedConfigId = computed(() => nodePromptsAvailable() && /^\d{1,18}$/.test(props.configId || '') ? props.configId! : '')
 const promptCategoryDraft = ref<PromptCategory>(props.promptCategory)
 const modelProviderDraft = ref(props.modelProviderCode || '')
 const modelDraft = ref(props.modelCode || '')
@@ -135,12 +149,26 @@ async function loadProviderModelOptions() {
     providerLoading.value = false
   }
 }
-async function loadPromptTemplate() {
+async function loadPromptTemplate(apply = true, restoreSelection = false) {
   const seq = ++promptRequestSeq
   promptLoading.value = true
   promptError.value = ''
   try {
-    const applied = await loadPromptTemplateForNode({
+    const [choices, selection] = await Promise.all([
+      fetchPromptList(props.promptListCategory, promptCategoryDraft.value),
+      restoreSelection && persistedConfigId.value && !props.promptTemplateId ? nodePromptApi.selection(persistedConfigId.value).catch(() => null) : Promise.resolve(null),
+    ])
+    if (seq !== promptRequestSeq) return
+    promptChoices.value = choices.filter(item => item.isActive !== 0)
+    if (selection?.promptTemplateId || selection?.hasSelection) {
+      selectedPromptId.value = selection.promptTemplateId
+      emit('update:promptTemplateId', selection.promptTemplateId || undefined)
+      if (!selection.promptTemplateId) return
+    }
+    if (!apply) return
+    const chosen = selectedPromptId.value ? promptChoices.value.find(item => item.promptId === selectedPromptId.value) : promptChoices.value[0]
+    if (!chosen) { promptError.value = selectedPromptId.value ? '所选提示词已停用或不可用，保留当前内容，请重新选择' : '当前类型未配置启用的提示词'; return }
+    const applied = renderPromptTemplateForNode(chosen, {
       promptListCategory: props.promptListCategory,
       promptCategory: promptCategoryDraft.value,
       inputTableName: props.inputTableName?.trim() || '',
@@ -165,6 +193,9 @@ async function loadPromptTemplate() {
     // 确保即使用户没在工作台点「保存」，生成脚本时也能拿到拼接后的完整提示词而非种子默认值或未替换占位符的模板。
     // 手动编辑的「取消不污染」仍由 savePrompt 显式 emit 保障——此处自动回写不算用户编辑。
     promptDraft.value = applied
+    promptSnapshot.value = applied
+    selectedPromptId.value = chosen.promptId
+    emit('update:promptTemplateId', chosen.promptId)
     emit('update:systemPrompt', applied)
   } catch (e) {
     if (seq !== promptRequestSeq) return
@@ -175,6 +206,8 @@ async function loadPromptTemplate() {
 }
 function syncLocalDrafts() {
   promptDraft.value = props.systemPrompt
+  promptSnapshot.value = props.systemPrompt
+  selectedPromptId.value = props.promptTemplateId ?? 0
   promptCategoryDraft.value = props.promptCategory || firstPromptCategory.value
   modelProviderDraft.value = props.modelProviderCode || ''
   modelDraft.value = props.modelCode || ''
@@ -186,8 +219,8 @@ watch(() => props.open, (v) => {
     if (!props.promptPreviewOnly) {
       // 先解析供应商/模型（props 没带模型时 loadModels 会自动落到第一个），再拼模板：
       // 并行的话 `{{model}}` 会按空值替换一次，展示/保存的提示词就少一个模型名。
-      void loadProviderModelOptions().then(() => loadPromptTemplate())
-    }
+      void loadProviderModelOptions().then(() => loadPromptTemplate(!props.preservePrompt, true))
+    } else void loadPromptTemplate(false, true)
   }
 })
 watch(() => props.promptCategory, (v) => {
@@ -199,20 +232,45 @@ watch(() => props.modelProviderCode, (v) => {
 watch(() => props.modelCode, (v) => {
   if (props.open) modelDraft.value = v || firstModelCode()
 })
-function savePrompt() {
+async function persistPromptChoice(id = selectedPromptId.value) {
+  if (!persistedConfigId.value) return true
+  if (bindingSaving.value) return false
+  bindingSaving.value = true
+  try { await nodePromptApi.select(persistedConfigId.value, id); promptError.value = ''; return true }
+  catch (error) { promptError.value = `保存提示词选择失败：${error instanceof Error ? error.message : String(error)}`; return false }
+  finally { bindingSaving.value = false }
+}
+watch(persistedConfigId, (id, previous) => { if (id && !previous && selectedPromptId.value) void persistPromptChoice() })
+async function savePrompt() {
+  if (!await persistPromptChoice()) return
   // 先置位「用户手改」再回写：编排配置的自动拼接 watcher 据此不再把手改值覆盖回模板
   // （loadPromptTemplate 的自动 emit 不走这里，所以自动回写不算用户编辑）
   emit('prompt-saved')
   emit('update:systemPrompt', promptDraft.value)
   emit('update:promptCategory', promptCategoryDraft.value)
+  emit('update:promptTemplateId', selectedPromptId.value || undefined)
   emit('update:modelProviderCode', modelProviderDraft.value)
   emit('update:modelCode', modelDraft.value)
   ElMessage.success('系统提示词已保存')
 }
+async function savePromptPreview() { if (await persistPromptChoice()) emit('save-prompt-preview', promptDraft.value) }
 
 async function onPromptCategoryChange(value: PromptCategory) {
   promptCategoryDraft.value = value
+  selectedPromptId.value = 0
+  emit('update:promptTemplateId', undefined)
   await loadPromptTemplate()
+}
+async function onPromptChoice(value: unknown) {
+  if (typeof value !== 'number' || value === selectedPromptId.value) return
+  if (value && promptDraft.value !== promptSnapshot.value) {
+    try { await ElMessageBox.confirm('切换提示词将替换当前编辑内容，是否继续？', '切换提示词', { confirmButtonText: '切换', cancelButtonText: '保留当前内容', type: 'warning' }) } catch { return }
+  }
+  if (!await persistPromptChoice(value)) return
+  selectedPromptId.value = value
+  emit('prompt-saved')
+  emit('update:promptTemplateId', value || undefined)
+  if (value) await loadPromptTemplate()
 }
 
 async function onProviderChange(value: string) {
@@ -230,10 +288,12 @@ async function onModelChange() {
 function onScriptInput(e: Event) {
   emit('update:script', (e.target as HTMLTextAreaElement).value)
 }
-function onGenerate() {
+async function onGenerate() {
+  if (!await persistPromptChoice()) return
   emit('generate', {
     systemPrompt: promptDraft.value,
     promptCategory: promptCategoryDraft.value,
+    promptTemplateId: selectedPromptId.value || undefined,
     modelProviderCode: modelProviderDraft.value,
     modelCode: modelDraft.value,
   })
@@ -324,6 +384,7 @@ watch(
     @update:model-value="close"
   >
     <div v-if="promptPreviewOnly" class="wb-preview">
+      <PromptTemplatePicker :items="promptChoices" :model-value="selectedPromptId" :loading="promptLoading" :disabled="promptPreviewSaving || bindingSaving" test-id="config-prompt-template" @select="onPromptChoice" />
       <div class="wb-preview-head">
         <b>系统提示词</b>
         <div class="wb-preview-actions">
@@ -333,7 +394,7 @@ watch(
             type="button"
             data-testid="prompt-preview-save"
             :disabled="promptPreviewSaving"
-            @click="emit('save-prompt-preview', promptDraft)"
+            @click="savePromptPreview"
           >
             {{ promptPreviewSaving ? '保存中...' : '保存' }}
           </button>
@@ -393,7 +454,8 @@ watch(
           </el-select>
           <button class="rc-btn primary" type="button" :disabled="promptLoading || providerLoading || modelLoading" @click="savePrompt">保存</button>
         </div>
-        <div v-if="providerError || modelError || (!showDescribeInLeft && (promptLoading || promptError))" class="wb-help">
+        <PromptTemplatePicker :items="promptChoices" :model-value="selectedPromptId" :loading="promptLoading" :disabled="generating || saving || bindingSaving" test-id="config-prompt-template" @select="onPromptChoice" />
+        <div v-if="providerError || modelError || promptError || (!showDescribeInLeft && promptLoading)" class="wb-help">
           {{ !showDescribeInLeft && promptLoading ? '提示词模板加载中…' : (promptError || providerError || modelError) }}
         </div>
         <textarea

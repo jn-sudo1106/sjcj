@@ -50,6 +50,36 @@ describe('业务 API 真实请求鉴权', () => {
     expect((init.headers as Record<string, string>)[ACCESS_TOKEN_HEADER]).toBe('tok-business')
   })
 
+  it.each([undefined, 5000])('请求超时显示实际超时时长，不透出无原因 aborted（%s）', async timeoutMs => {
+    const { request } = await import('./client')
+    vi.useFakeTimers()
+    try {
+      fetchMock.mockImplementation((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(new DOMException('signal is aborted without reason', 'AbortError')))
+      }))
+      const result = request('item/next/nextConfigPaged', {}, { timeoutMs })
+      const assertion = expect(result).rejects.toThrow(`请求超时（${(timeoutMs ?? 20000) / 1000} 秒）`)
+      await vi.advanceTimersByTimeAsync(timeoutMs ?? 20000)
+      await assertion
+    } finally { vi.useRealTimers() }
+  })
+
+  it('主动取消不显示为超时，其他网络错误保持原原因', async () => {
+    const { request } = await import('./client')
+    const external = new AbortController()
+    fetchMock.mockImplementation((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+    }))
+    const result = request('item/next/nextConfigPaged', {}, { signal: external.signal })
+    const assertion = expect(result).rejects.toThrow('请求已取消')
+    external.abort()
+    await assertion
+    // 取消仍以 AbortError 透出（ApiError.cause），调用方据此静默处理
+    await expect(result).rejects.toMatchObject({ cause: { name: 'AbortError' } })
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    await expect(request('item/next/nextConfigPaged')).rejects.toThrow('Failed to fetch')
+  })
+
   // 实测撞见：vrule AI 编辑网关有时 2xx 但响应体为空，res.json() 直接解析空字符串会抛
   // "Unexpected end of JSON input"（S6-1 联调时报出，client.ts 修 res.text()+按需 JSON.parse 兜底）
   // 2026-09-24 生产整体 502（nginx 在、后端没起来）：原提示「请求异常 [x]: 请求失败 502」用户看不懂

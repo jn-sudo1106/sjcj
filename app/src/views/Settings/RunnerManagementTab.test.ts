@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
@@ -16,12 +16,161 @@ beforeEach(() => {
   vi.restoreAllMocks()
   setActivePinia(createPinia())
 })
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 function render() {
   return mount(RunnerManagementTab, { props: { section: 'runners' }, global: { plugins: [ElementPlus] } })
 }
 
 describe('Runner 实例页面', () => {
+  async function renderBatchUpgrade() {
+    useAuthStore().roles = ['admin']
+    const latest: ArtifactRelease = { digest: 'sha256:batch-latest', kind: 'runner', name: 'Runner', platform: 'any', gitCommit: 'local', status: 'published', publishedAt: '2026-10-12T17:31:49Z', signature: '', usedBy: 0 }
+    vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue(instances)
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([
+      { ...latest, digest: 'sha256:older', publishedAt: '2026-10-12T16:00:00Z' }, latest,
+      { ...latest, digest: 'sha256:draft', status: 'candidate', publishedAt: '2026-10-13T01:00:00Z' },
+    ])
+    const wrapper = mount(RunnerManagementTab, { props: { section: 'runners' }, global: { plugins: [ElementPlus],
+      stubs: { ElDialog: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' } } } })
+    await flushPromises()
+    return { wrapper, latest }
+  }
+  it('勾选按实例 ID 区分同 IP 目录，全选只覆盖当前筛选且筛选后清空选择', async () => {
+    const { wrapper } = await renderBatchUpgrade()
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="runner-select-all"] input').setValue(true)
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').text()).toContain('（2）')
+    await wrapper.get('input[placeholder="IP、目录、实例名"]').setValue('runner-prod')
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="runner-select-r-2"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="runner-select-all"] input').setValue(true)
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').text()).toContain('（1）')
+    vi.mocked(runnerManagementApi.instances).mockResolvedValue([])
+    await wrapper.findAll('button').find(button => button.text() === '刷新')!.trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+  it('一键给所有勾选实例下发最新已发布版本，分别显示失败并仅重试失败实例', async () => {
+    const { wrapper, latest } = await renderBatchUpgrade()
+    const send = vi.spyOn(runnerManagementApi, 'setDesiredRunner').mockImplementation(async (id, digest) => {
+      if (id === 'r-2') throw new Error('实例升级接口暂时不可用')
+      return { runnerId: id, digest }
+    })
+    await wrapper.get('[data-testid="runner-select-all"] input').setValue(true)
+    await wrapper.get('[data-testid="runner-batch-upgrade"]').trigger('click'); await flushPromises()
+    expect(send.mock.calls).toEqual([['r-1', latest.digest], ['r-2', latest.digest]])
+    const result = wrapper.get('[data-testid="runner-batch-results"]')
+    expect(result.text()).toContain('已下发 · 等待升级')
+    expect(result.text()).toContain('下发失败')
+    expect(result.text()).toContain('实例升级接口暂时不可用')
+    expect((wrapper.get('[data-testid="runner-select-r-1"] input').element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.get('[data-testid="runner-select-r-2"] input').element as HTMLInputElement).checked).toBe(true)
+    send.mockResolvedValue({ runnerId: 'r-2', digest: latest.digest })
+    await wrapper.get('[data-testid="runner-batch-upgrade"]').trigger('click'); await flushPromises()
+    expect(send).toHaveBeenCalledTimes(3)
+    expect(send).toHaveBeenLastCalledWith('r-2', latest.digest)
+    expect(wrapper.get('[data-testid="runner-batch-results"]').text()).toContain('已下发 · 等待上线')
+    vi.mocked(runnerManagementApi.instances).mockResolvedValue(instances.map(row => ({ ...row, actualDigest: latest.digest })))
+    await wrapper.findAll('button').find(button => button.text() === '刷新')!.trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-testid="runner-batch-results"]').text()).toContain('已升级')
+    wrapper.unmount()
+  })
+  it('批量请求处理中禁用重复提交，非管理员不显示升级勾选入口', async () => {
+    const { wrapper, latest } = await renderBatchUpgrade()
+    let complete!: (value: { runnerId: string; digest: string }) => void
+    const send = vi.spyOn(runnerManagementApi, 'setDesiredRunner').mockImplementation(() => new Promise(resolve => { complete = resolve }))
+    await wrapper.get('[data-testid="runner-select-r-1"] input').setValue(true)
+    await wrapper.get('[data-testid="runner-batch-upgrade"]').trigger('click')
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="runner-batch-results"]').text()).toContain('正在下发')
+    await wrapper.get('[data-testid="runner-batch-upgrade"]').trigger('click')
+    expect(send).toHaveBeenCalledTimes(1)
+    complete({ runnerId: 'r-1', digest: latest.digest }); await flushPromises()
+    useAuthStore().roles = []; await flushPromises()
+    expect(wrapper.find('[data-testid="runner-batch-upgrade"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="runner-select-all"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('下载包默认采用推荐地址和最新版本，错误保留配置后可重试下载', async () => {
+    useAuthStore().roles = ['admin']
+    const release: ArtifactRelease = { digest: 'sha256:latest', kind: 'runner', name: 'native-runner', platform: 'win32', gitCommit: 'local', status: 'published', publishedAt: '2026-10-12T16:27:02Z', signature: '', usedBy: 0 }
+    vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue(instances)
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([release])
+    vi.spyOn(runnerManagementApi, 'runnerPackageInfo').mockResolvedValue({ ready: true, server: 'http://10.0.0.8:8092', platform: 'windows-x64', pythonVersion: '3.12.9', releases: [release], enrollmentMinutes: 15 })
+    const download = vi.spyOn(runnerManagementApi, 'downloadRunnerPackage').mockRejectedValueOnce(new Error('运行环境缺少文件'))
+    const wrapper = mount(RunnerManagementTab, { props: { section: 'runners' }, global: { plugins: [ElementPlus],
+      stubs: { ElDialog: { name: 'ElDialog', props: ['modelValue', 'title'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' } } } }); await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '下载 Runner 包')!.trigger('click'); await flushPromises()
+    const dialog = wrapper.findAllComponents({ name: 'ElDialog' }).find(component => component.props('title') === '下载 Runner 包')!
+    expect(dialog.text()).toContain('Windows 64 位便携包')
+    expect(dialog.text()).toContain('15 分钟')
+    expect(dialog.text()).toContain('同一包可复制到多个目录')
+    expect(dialog.text()).toContain('已登记实例重启不受影响')
+    expect(dialog.findComponent({ name: 'ElInput' }).props('modelValue')).toBe('http://10.0.0.8:8092')
+    expect(dialog.findComponent({ name: 'ElSelect' }).props('modelValue')).toBe(release.digest)
+    await dialog.findAll('button').find(button => button.text() === '下载 ZIP 包')!.trigger('click'); await flushPromises()
+    expect(dialog.text()).toContain('运行环境缺少文件')
+    const create = vi.fn().mockReturnValue('blob:package'), revoke = vi.fn()
+    const BaseURL = URL
+    vi.stubGlobal('URL', class extends BaseURL { static createObjectURL = create; static revokeObjectURL = revoke })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    download.mockResolvedValueOnce({ name: 'Runner-windows-x64-latest.zip', blob: new Blob(['zip']) })
+    await dialog.findAll('button').find(button => button.text() === '下载 ZIP 包')!.trigger('click'); await flushPromises()
+    expect(download).toHaveBeenLastCalledWith({ server: 'http://10.0.0.8:8092', digest: release.digest })
+    expect(create).toHaveBeenCalledOnce(); expect(click).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+  it('Runner 版本按发布时间倒序，显示北京时间并只标记最新已发布版本', async () => {
+    const base: ArtifactRelease = { digest: 'sha256:older', kind: 'runner', name: '旧版本', platform: 'any', gitCommit: 'local', status: 'published', publishedAt: '2026-10-12T15:08:29Z', signature: '', usedBy: 0 }
+    const items = [base, { ...base, digest: 'sha256:latest', name: '最新稳定版本', publishedAt: '2026-10-12T16:27:02Z' },
+      { ...base, digest: 'sha256:undated', name: '旧未记录日期版本', publishedAt: null }]
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue(items)
+    const wrapper = mount(RunnerManagementTab, { props: { section: 'releases' }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0]!.text()).toContain('最新稳定版本')
+    expect(rows[0]!.text()).toContain('最新发布')
+    expect(rows[0]!.get('[data-testid="runner-published-at"]').text()).toBe('2026-10-13 00:27:02')
+    expect(rows[1]!.text()).toContain('2026-10-12 23:08:29')
+    expect(rows[2]!.text()).toContain('时间未记录')
+    expect(rows[2]!.text()).not.toContain('最新发布')
+    expect(items[0]!.digest).toBe('sha256:older')
+    wrapper.unmount()
+  })
+  it('机器显示当前版本发布时间，版本选项按时间排序且保留原升级目标', async () => {
+    useAuthStore().roles = ['admin']
+    const old: ArtifactRelease = { digest: 'sha256:old', kind: 'runner', name: '旧 Runner', platform: 'any', gitCommit: 'local', status: 'published', publishedAt: '2026-10-12T15:08:29Z', signature: '', usedBy: 0 }
+    const latest = { ...old, digest: 'sha256:new', name: '新 Runner', publishedAt: '2026-10-12T16:27:02Z' }
+    vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, actualDigest: old.digest, desiredDigest: old.digest }])
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([old, latest])
+    const wrapper = mount(RunnerManagementTab, { props: { section: 'runners' }, global: { stubs: assignmentStubs, directives: { loading: {} } } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="runner-version"]').text()).toContain('2026-10-12 23:08:29')
+    await wrapper.findAll('button').find(item => item.text() === '设置 Runner 版本')!.trigger('click')
+    const select = wrapper.get('[data-testid="runner-upgrade-version"]')
+    const choices = select.findAll('option').filter(item => item.attributes('value'))
+    expect(choices[0]!.attributes('value')).toBe(latest.digest)
+    expect(choices[0]!.text()).toContain('2026-10-13 00:27:02')
+    expect(choices[0]!.text()).toContain('最新发布')
+    expect((select.element as HTMLSelectElement).value).toBe(old.digest)
+    wrapper.unmount()
+  })
+  it('心跳列表、提示和详情将 UTC 转换为补零的北京时间', async () => {
+    vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, lastHeartbeat: '2026-10-12T16:36:50+00:00' }, instances[1]!])
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
+    const wrapper = render(); await flushPromises()
+    const cells = wrapper.findAll('[data-testid="runner-heartbeat"]')
+    expect(cells[0]!.text()).toBe('2026-10-13 00:36:50')
+    expect(cells[0]!.attributes('title')).toContain('北京时间')
+    expect(cells[1]!.text()).toBe('未收到心跳')
+    await wrapper.findAll('tbody tr')[0]!.findAll('button').find(button => button.text() === '详情')!.trigger('click'); await flushPromises()
+    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
+    expect(drawer.text()).toContain('最近心跳（北京时间）')
+    expect(drawer.text()).toContain('2026-10-13 00:36:50')
+    expect(drawer.text()).not.toContain('2026-10-12T16:36:50+00:00')
+    wrapper.unmount()
+  })
   it('Runner 版本页面只显示 Runner 自身版本，隐藏处理程序及业务代码', async () => {
     const common = { digest: 'sha256:runner', kind: 'runner' as const, name: 'Runner 程序', platform: 'any',
       gitCommit: 'local', status: 'published' as const, publishedAt: '', signature: '', usedBy: 0 }
@@ -62,6 +211,18 @@ describe('Runner 实例页面', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]!.text()).toContain('runner-prod')
     expect(rows[1]!.text()).toContain('runner-test')
+    wrapper.unmount()
+  })
+  it('显示 Runner 上报的系统类型与版本，旧实例保留平台类型并提示版本未上报', async () => {
+    vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, platform: 'win32', osType: 'Windows', osVersion: '11 Professional · 10.0.22631' }, { ...instances[1]!, platform: 'linux' }])
+    vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.findAll('th').map(cell => cell.text())).toContain('操作系统')
+    const cells = wrapper.findAll('[data-testid="runner-os"]')
+    expect(cells[0]!.text()).toContain('Windows'); expect(cells[0]!.text()).toContain('10.0.22631')
+    expect(cells[1]!.text()).toContain('Linux'); expect(cells[1]!.text()).toContain('版本未上报')
+    await wrapper.get('input[placeholder="IP、目录、实例名"]').setValue('22631')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
     wrapper.unmount()
   })
 
