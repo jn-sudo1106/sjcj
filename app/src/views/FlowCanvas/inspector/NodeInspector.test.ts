@@ -932,3 +932,92 @@ describe('节点配置自动保存（1021-06）', () => {
     expect(update).toHaveBeenCalledTimes(2)
   })
 })
+
+// 2026-10-26 会上反馈：连加几个节点只点一次「保存」，只存进了当前选中的那个。
+describe('NodeInspector 保存 = 整张画布一起保存（2026-10-26）', () => {
+  function setup(ids: string[]) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    for (const nodeId of ids) {
+      const c = cloneConfig(NODE_CONFIGS['web-list'])
+      delete c.configId
+      c.configName = nodeId
+      flow.configs[nodeId] = c
+    }
+    flow.main = ['start', ...ids, 'end']
+    flow.select(ids[0])
+    flow.setActiveTab('config')
+    let seq = 0
+    const add = vi.spyOn(configApi, 'addConfig').mockImplementation(async () => ({ ok: true, configId: `c-${++seq}`, message: 'ok' }))
+    vi.spyOn(configApi, 'configDetail').mockImplementation(async (cid: string) => ({ configId: cid, name: `cfg-${cid}` }) as never)
+    return { flow, add }
+  }
+
+  it('三个未绑定节点：点一次保存，三个都建配置并绑定', async () => {
+    const { flow, add } = setup(['web-1', 'web-2', 'web-3'])
+    const w = mount(NodeInspector)
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(3)
+    for (const nodeId of ['web-1', 'web-2', 'web-3']) expect(flow.configs[nodeId].configId).toBeTruthy()
+    w.unmount()
+  })
+
+  it('当前节点已保存、其余节点还没有配置：保存按钮仍可点，并把其余节点存掉', async () => {
+    const { flow, add } = setup(['web-1', 'web-2'])
+    flow.configs['web-1'].configId = '1400900'
+    const w = mount(NodeInspector)
+    await flushPromises()
+    const btn = w.get('[data-testid="node-config-save"]')
+    expect((btn.element as HTMLButtonElement).disabled).toBe(false)
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({} as never)
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' } as never)
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(add).toHaveBeenCalledTimes(1)
+    expect(flow.configs['web-2'].configId).toBeTruthy()
+    w.unmount()
+  })
+
+  it('其中一个建配置失败：不阻断其他节点，并提示失败的节点名', async () => {
+    const { flow, add } = setup(['web-1', 'web-2', 'web-3'])
+    add.mockReset()
+    add.mockResolvedValueOnce({ ok: true, configId: 'c-1', message: 'ok' })
+      .mockResolvedValueOnce({ ok: false, message: '后端拒绝' } as never)
+      .mockResolvedValueOnce({ ok: true, configId: 'c-3', message: 'ok' })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }))
+    vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => {} }))
+    const w = mount(NodeInspector)
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(3)
+    expect(flow.configs['web-1'].configId).toBeTruthy()
+    expect(flow.configs['web-2'].configId).toBeFalsy()
+    expect(flow.configs['web-3'].configId).toBeTruthy()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(flow.configs['web-2'].title))
+    w.unmount()
+  })
+
+  it('已有步骤但没配置的节点（如空白流程入口）：不新建配置，提示并定位到该节点', async () => {
+    const { flow, add } = setup(['41520', 'web-2'])
+    flow.select('web-2')
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }))
+    const w = mount(NodeInspector)
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(1)
+    expect(flow.configs['41520'].configId).toBeFalsy()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('尚未配置'))
+    expect(flow.selectedId).toBe('41520')
+    w.unmount()
+  })
+})
