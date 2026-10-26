@@ -154,7 +154,7 @@ const otherNodesPending = computed(() => persistableNodeIds(flow.main, flow.bran
   if (!node) return false
   return node.configId ? flow.dirtyConfigNodes.includes(nodeId) : !isWritableStepId(nodeId)
 }))
-const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || otherNodesPending.value || !!deploymentError.value)
+const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || !!deploymentError.value || otherNodesPending.value)
 const viewingHistory = computed(() => !!flowVersion.history && flowVersion.flowId === canvasFlowIdOf(flow))
 const footNote = computed(() => (viewingHistory.value
   ? '正在查看历史版本，只能查看'
