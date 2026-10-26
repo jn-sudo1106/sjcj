@@ -171,6 +171,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },
   { path: 'config/deleteEntryType', desc: '删除实体表', danger: true, impl: true, live: true },
   { path: 'config/entry-type-clear', desc: '清除实体表缓存（前端已下线，列表改刷新重查）', danger: true, impl: true, live: true },
+  // 1026 新增（本项目自造路径，非 142 逆向清单原有项）：只更新 DS_KIND 的窄接口，bee-config 源码已实现。
+  // 标 live 是刻意的——新接口未联调前若走 mock 会「提示成功、库里没变」，宁可让它 404 报错可见。
+  // 部署批：与 entryTypePagedView 的 dsKind 查询条件同批发 bee-config jar。
+  { path: 'config/entry-type-ds-kind', desc: '单独更新实体表数据源 DS_KIND → POST /v1/config/entry-type-ds-kind?entryTypeId=&dsKind=', danger: true, impl: true, live: true },
   // 旧 EntryDataImport.vue：前端解析 Excel 生成 items（覆盖字段定义）+ 表头之后的行作为 data，整体 POST。
   { path: 'config/entryTypeCopy', desc: '复制实体表', danger: true, impl: true, live: true },
   { path: 'config/checkTable', desc: '检查物理表结构', impl: true, live: true },

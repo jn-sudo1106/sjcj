@@ -9,7 +9,7 @@ import {
   sanitizeSinkOptions, sinkOptionsProblem, submitSyncColumns, syncApi,
   type SyncColumnMap, type SyncCustomer, type SyncDatabase,
 } from '@/api/dataSync'
-import type { EntryType } from '@/api'
+import { entryApi, type EntryType } from '@/api'
 
 const props = defineProps<{ modelValue: boolean; entry: EntryType | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; created: [] }>()
@@ -35,6 +35,11 @@ const baselineColumns = ref<SyncColumnMap[]>([])
 const physical = ref<SyncColumnMap[]>([])
 const entityCopy = ref(true)
 const entryConfig = ref(false)
+// 建完任务顺手把这张表的 DS_KIND 置成 CK（查询链路标记）。默认勾上：
+// 勾掉它就只有任务、标记仍留在 MYSQL，需要事后去编辑抽屉手动切。
+const markCk = ref(true)
+// 任务建好但标记没写成功时的说明，成功态里如实展示，不假装两件事都成了
+const markError = ref('')
 const form = reactive({
   targetDatabase: '' as number | string,
   targetSchema: '',
@@ -119,6 +124,8 @@ async function loadAll() {
   done.value = false
   entityCopy.value = true
   entryConfig.value = false
+  markCk.value = true
+  markError.value = ''
   columns.value = []
   baselineColumns.value = []
   physical.value = []
@@ -164,6 +171,12 @@ const blockedReason = computed(() => {
 })
 
 const confirmDisabled = computed(() => loading.value || busy.value || !!blockedReason.value)
+
+// 成功态文案跟着实际结果走：没勾「置 CK」就说清标记没动，写失败就用 markError 的原文
+const doneSubtitle = computed(() => markError.value
+  || (markCk.value
+    ? '数据源已置为 CK，可以在任务列表查看、执行和管理同步任务'
+    : '同步任务已建好；数据源标记未改，仍是 MYSQL（需要时在表 ID 列表的编辑抽屉里切）'))
 
 function gotoList() {
   visible.value = false
@@ -234,6 +247,16 @@ async function submit() {
       }],
       params: [],
     })
+    // 任务已建好，回写查询链路标记。失败不退回表单态（再点一次会重复建任务），
+    // 留在成功态并把没做成的那半句说清楚。
+    if (markCk.value) {
+      try {
+        await entryApi.setEntryDsKind(entry.tableId, 'CK')
+      } catch (error) {
+        markError.value = `同步任务已创建，但数据源标记没改成 CK：${error instanceof Error ? error.message : String(error)}。可在表 ID 列表的编辑抽屉里手动切换。`
+        ElMessage.warning(markError.value)
+      }
+    }
     done.value = true
     emit('created')
   } catch (error) {
@@ -247,7 +270,7 @@ async function submit() {
 <template>
   <el-dialog v-model="visible" title="快速同步" width="560px" append-to-body>
     <div v-loading="loading" class="qck-body">
-      <el-result v-if="done" icon="success" title="同步任务已创建" sub-title="可以在任务列表查看、执行和管理同步任务" />
+      <el-result v-if="done" :icon="markError ? 'warning' : 'success'" title="同步任务已创建" :sub-title="doneSubtitle" />
       <el-form v-else-if="entry" label-position="top" class="qck-form">
         <el-form-item v-if="admin" label="客户">
           <el-select v-model="customerId" filterable placeholder="选择客户" data-testid="qck-customer">
@@ -269,6 +292,12 @@ async function submit() {
           <el-switch v-model="entryConfig" data-testid="qck-entry-config" />
           <span>实体配置</span>
         </div>
+        <!-- 建完任务顺手置 CK 标记（DS_KIND），单独一行：它改的是这张表在 bee 侧的配置，不是同步任务本身 -->
+        <div class="qck-switches">
+          <el-switch v-model="markCk" data-testid="qck-mark-ck" />
+          <span>建完任务把该表数据源置为 CK</span>
+        </div>
+        <div v-if="markCk" class="qck-hint muted">只改查询链路标记（DS_KIND），不迁数据；CK 侧要等任务跑过、数据到位才查得到结果。</div>
         <div v-if="blockedReason" class="qck-block" data-testid="qck-block">{{ blockedReason }}</div>
         <div class="qck-columns muted">列映射 {{ columns.length }} 列{{ entityCopy ? '（同步实体：物理列全集）' : '（配置字段）' }}</div>
       </el-form>
@@ -293,4 +322,5 @@ async function submit() {
 .qck-switches span { font-size: 12px; color: var(--rc-muted, #64748b); margin-right: 10px; }
 .qck-block { margin: 6px 0 10px; padding: 8px 12px; border-radius: 6px; background: #fef3f2; border: 1px solid #fbc4c4; color: #c0392b; font-size: 12px; }
 .qck-columns { font-size: 12px; }
+.qck-hint { margin: -6px 0 10px; font-size: 12px; }
 </style>

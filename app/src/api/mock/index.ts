@@ -171,7 +171,7 @@ import {
   mockQueueTaskPaged,
 } from './sites'
 import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs, mockSameConfigs } from './configs'
-import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
+import { mockEntryPaged, mockEntryDetail, mockEntrySetDsKind, mockSaveEntryType } from './entries'
 import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
 import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows } from './files'
 
@@ -307,6 +307,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/syncTable': mockAck,
   'config/calcEntrySum': mockAck,
   'config/markEntryType': mockAck,
+  // 1026：单独改数据源 DS_KIND（快速同步到 CK 的回写），mock 里真改 ENTRIES 那一条
+  'config/entry-type-ds-kind': mockEntrySetDsKind,
 
   // 采集资产 · 参数（M5）
   'config/paramPaged': mockParamPaged,
