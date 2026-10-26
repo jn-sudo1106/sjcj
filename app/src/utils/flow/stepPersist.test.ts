@@ -63,13 +63,13 @@ describe('outputTableMissing / isFileLikeNode（0927 H1）', () => {
     expect(outputTableMissing(cfgWith({ inputTable: '6200026' }), undefined)).toBe(false)
   })
 
-  it('file 节点豁免；快照里 nodeType=file 的历史节点也豁免', () => {
+  it('新旧文件下载均要求输出表，历史 nodeType=file 不再豁免', () => {
     const cfg = cfgWith({ template: 'file' })
     expect(isFileLikeNode(cfg, undefined)).toBe(true)
-    expect(outputTableMissing(cfg, undefined)).toBe(false)
+    expect(outputTableMissing(cfg, undefined)).toBe(true)
     const historical = cfgWith()
     expect(isFileLikeNode(historical, { nodeType: 'file' } as Step)).toBe(true)
-    expect(outputTableMissing(historical, { nodeType: 'file' } as Step)).toBe(false)
+    expect(outputTableMissing(historical, { nodeType: 'file' } as Step)).toBe(true)
   })
 })
 
@@ -102,7 +102,7 @@ describe('firstOutputTableMissingNodeId（0927 H1）', () => {
 })
 
 describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () => {
-  it('逐个列出未保存的新节点和缺输出表的节点；根节点、文件节点、完整节点不计', () => {
+  it('逐个列出未保存和缺输出表的节点，包括新文件下载；根节点不计', () => {
     const main = ['start', '41797', 'draft-1', '40598', 'file-1', 'end']
     const configs = {
       '41797': { title: '入口', kind: 'node', configId: '1401081' },
@@ -114,6 +114,7 @@ describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () 
     expect(collectFlowIssues(main, [], configs, snapshots).map((i) => [i.nodeId, i.reason])).toEqual([
       ['draft-1', 'unsaved'],
       ['40598', 'outputTableMissing'],
+      ['file-1', 'outputTableMissing'],
     ])
   })
 
@@ -271,6 +272,27 @@ describe('mergeStepForWrite', () => {
     })
     expect(merged.dependsOn).toEqual(['40597'])
     expect(merged.url).toBe('$VAL$')
+  })
+
+  // 2026-10-25 用户要求：步骤保存补写 stepType（后端 cs_item_config.step_type），
+  // 取值与配置 configType 同源——文件下载=95、网页抓取=90、规则=600；无值不占键。
+  it('步骤保存补写 stepType：文件下载=95、网页抓取=90、规则=600，随报文携带', () => {
+    const fileCfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    fileCfg.template = 'file'
+    fileCfg.collectCfg!.snatchType = '[95] - 文件下载'
+    const fileMerged = mergeStepForWrite({ snapshot: MEASURED_40600, cfg: fileCfg, nodeId: '40600', sourceId: '430016398' })
+    expect(fileMerged.stepType).toBe(95)
+    expect(stepToStepModifyPayload(fileMerged)).toMatchObject({ stepType: 95 })
+
+    const webCfg = cloneConfig(NODE_CONFIGS['web-list'])
+    webCfg.template = 'web'
+    const webMerged = mergeStepForWrite({ snapshot: MEASURED_40600, cfg: webCfg, nodeId: '40600', sourceId: '430016398' })
+    expect(stepToStepModifyPayload(webMerged)).toMatchObject({ stepType: 90 })
+
+    const ruleCfg = cloneConfig(NODE_CONFIGS.rule)
+    ruleCfg.template = 'rule'
+    const ruleMerged = mergeStepForWrite({ snapshot: MEASURED_40600, cfg: ruleCfg, nodeId: '40600', sourceId: '430016398' })
+    expect(stepToStepModifyPayload(ruleMerged)).toMatchObject({ stepType: 600 })
   })
 
   it('规则处理节点：画布上的规则 ID / 适用源写回步骤，不沿用快照里的旧值', () => {

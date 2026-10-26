@@ -142,8 +142,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/loadParams', desc: '读取源配置的可选参数（发抓取参数弹窗）', impl: true, live: true },
   // 抓取类型字典（= 节点类型 = 配置的 configType，2026-08-28 确认）。旧平台 `api/source-type.js` 的
   // allSourceTypes，供旧「配置编辑」弹窗的「抓取类型」下拉用。取值形如 { sourceType: 90, typeName: '网页抓取' }。
-  // 前端 SNATCH_TYPES / TEMPLATE_TO_SNATCH 目前是硬编码，且含 [BROWSER]/[WECHAT]/[LOGIN] 三个自造值，
-  // 要以这个字典为准校正（0824-11 §1.2d：枚举一律照抄后端，不许自造）。
+  // 前端 SNATCH_TYPES / TEMPLATE_TO_SNATCH 作为静态兜底/测试对照，节点库展示与新建节点
+  // 已优先使用本字典；[BROWSER]/[WECHAT]/[LOGIN] 仅为前端入口/显示标识，
+  // 不是后端类型，禁止作为 configType/sourceType 写入；模板映射必须取数字字典值（0824-11 §1.2d）。
   { path: 'config/sourceTypes', desc: '抓取类型字典（节点类型 / configType 的权威取值）', impl: true, live: true },
   // 节点类型维护（0924-04，系统设置 → 节点类型；旧平台「配置 → 源类型」）。2026-09-24 生产逐个实测：
   // 读接口不分页；add/update 是 JSON body，update 为增量更新；临时类型 99901 新增→修改→删除闭环已清理。
@@ -170,6 +171,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },
   { path: 'config/deleteEntryType', desc: '删除实体表', danger: true, impl: true, live: true },
   { path: 'config/entry-type-clear', desc: '清除实体表缓存（前端已下线，列表改刷新重查）', danger: true, impl: true, live: true },
+  // 1026 新增（本项目自造路径，非 142 逆向清单原有项）：只更新 DS_KIND 的窄接口，bee-config 源码已实现。
+  // 标 live 是刻意的——新接口未联调前若走 mock 会「提示成功、库里没变」，宁可让它 404 报错可见。
+  // 部署批：与 entryTypePagedView 的 dsKind 查询条件同批发 bee-config jar。
+  { path: 'config/entry-type-ds-kind', desc: '单独更新实体表数据源 DS_KIND → POST /v1/config/entry-type-ds-kind?entryTypeId=&dsKind=', danger: true, impl: true, live: true },
   // 旧 EntryDataImport.vue：前端解析 Excel 生成 items（覆盖字段定义）+ 表头之后的行作为 data，整体 POST。
   { path: 'config/entryTypeCopy', desc: '复制实体表', danger: true, impl: true, live: true },
   { path: 'config/checkTable', desc: '检查物理表结构', impl: true, live: true },

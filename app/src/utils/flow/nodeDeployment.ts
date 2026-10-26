@@ -1,7 +1,6 @@
 import { watch } from 'vue'
 import { flowCenterApi } from '@/api'
 import { runnerManagementApi } from '@/api/runnerManagement'
-import { runnerManagementAvailable } from '@/constants/deployGates'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { canvasFlowIdOf } from '@/stores/flowVersion'
@@ -9,7 +8,6 @@ import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 /** Capture the saved node, so an asynchronous request cannot attach to a newly selected node. */
 export async function syncNodeDeployment(node: NodeConfig, nodeId: string, scriptDigest?: string, queueOverride?: string) {
-  if (!runnerManagementAvailable()) return null
   const flow = useFlowStore(), source = useSourceStore()
   const flowId = canvasFlowIdOf(flow), configId = node.configId
   if (!flowId || !configId) return null

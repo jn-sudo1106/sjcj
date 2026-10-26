@@ -6,7 +6,6 @@
 import { computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
-import { runnerManagementAvailable } from '@/constants/deployGates'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
@@ -20,22 +19,22 @@ import ModelInterfacesTab from './ModelInterfacesTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
-// runner：依赖 Runner 管理服务的 tab，部署环境（2806 / 2807）网关还没有转发这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户确认隐藏）。
-const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
+// 各环境展示同一套入口，菜单可见性统一由账号权限决定（2026-10-26）。
+const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab, runner: true },
   { key: 'code-servers', label: '代码生成服务器', permission: 'settings:nodeType', comp: CodeGenerationServersTab, runner: true },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
-  { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab, runner: true },
-  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab, runner: true },
-  { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
-  { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab, runner: true },
-  { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab, runner: true },
-  { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab, runner: true },
+  { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab },
+  { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
+  { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab },
+  { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab },
+  { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab },
+  { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab },
   { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission', comp: DataPermissionTab },
 ]
-const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission) && (!t.runner || runnerManagementAvailable())))
+const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
 
 const route = useRoute()
 const router = useRouter()

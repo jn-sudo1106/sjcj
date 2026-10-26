@@ -46,13 +46,14 @@ const mountDialog = (props: Partial<InstanceType<typeof SiteScriptGeneratorDialo
 })
 
 beforeEach(() => {
+  vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
   vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 0, items: [{ id: 'legacy', name: '现有服务', kind: 'site-script', model: '', endpoint: 'http://127.0.0.1:8091/api/ai/site-script/generate', enabled: true, isDefault: true, timeoutSeconds: 120, inputFileDir: '', codeDir: '', outputFileDir: '', stream: true }] })
   vi.mocked(nodePromptApi.list).mockResolvedValue([])
   vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockImplementation(async repoId => [defaultDirectory(repoId)])
   vi.mocked(runnerManagementApi.codeRepositories).mockResolvedValue([webRepo, defaultRepo])
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([])
 })
-afterEach(() => vi.resetAllMocks())
+afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs() })
 it('选择大模型后按所选接口生成，停用的模型不出现在选项中', async () => {
   const legacy = (await runnerManagementApi.modelInterfaces()).items[0]!
   vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 1, items: [legacy,

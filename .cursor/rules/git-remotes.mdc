@@ -1,13 +1,14 @@
 ---
-description: Git remotes — CNB origin and intranet GitLab backup
+description: Git remotes — unified master with CNB and intranet GitLab
 alwaysApply: true
 ---
 
 # Git 远程仓库
 
-- `origin` fetch：外网 CNB `https://cnb.cool/vanvdev/bee-soft/front-ce`
-- `origin` push 双写：CNB + 内网 GitLab `http://47.120.11.60:50105/root/ce`
-- `ce`：只操作内网 GitLab 时用
+- 2026-10-26 起统一在本地 `master` 开发，不再分内外网功能线，以 `AGENTS.md` 的统一主线规则为准。
+- `origin`：外网 CNB `https://cnb.cool/vanvdev/bee-soft/front-ce`，`master` 默认跟踪 `origin/master`
+- `ce`：内网 GitLab `http://47.120.11.60:50105/root/ce`，拉取目标为 `ce/master`，不是停更的远程 `merge/ce-leo-1008`
 - CNB HTTPS 用户名固定 `cnb`，密码为访问令牌；push 需「Git 客户端凭据」（`repo-code:rw`）
 - 不要把令牌或账号密码写入 remote URL，也不要提交进仓库
-- `git pull` 只从 CNB 拉；`git push` 两边都推（一边失败需再补推）
+- 更新代码先 `git fetch origin` 和 `git fetch ce`，在本地 `master` 正常合并双方 master，保留提交历史。
+- 推送按用户本次授权执行：`git push origin master` / `git push ce master:master`；不配置隐式双写，不强推。

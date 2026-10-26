@@ -1133,6 +1133,9 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
       ? undefined
       : String(record.nodeType ?? record.nodeKind ?? record.type ?? record.template),
     configType: record.configType == null ? undefined : String(record.configType),
+    // 步骤级类型副本（cs_item_config.step_type 的 JSON 键，未存时为 null）。前端不展示它，
+    // 只回读有效数字；实际步骤修改时随报文补写，首次补齐不单独触发脏判断。
+    stepType: legacyNumber(record.stepType),
     inputTable: record.inputTable == null && record.entryTypeId == null
       ? undefined
       : String(record.inputTable ?? record.entryTypeId),
@@ -1199,8 +1202,11 @@ function stepWritePayloadBase(step: Step): Record<string, unknown> {
     outEntry: step.outputTable == null ? null : Number(step.outputTable),
     outContext: step.outColumns?.length ? step.outColumns.join(',') : null,
     itemId: step.itemId == null ? null : Number(step.itemId),
-    type: step.nodeType ?? 'entry',
+    // file 已废弃，仅回读保留；任何新建/修改请求都归一为 entry，rule 等其它身份原样发送。
+    type: step.nodeType === 'file' ? 'entry' : step.nodeType ?? 'entry',
     flowCode: step.flowCode ?? 'WEB_SNATCH',
+    // 2026-10-25：步骤级类型副本随保存补写（文件下载=95）。无值不占键（选择性更新，null=不修改）。
+    ...(Number.isFinite(step.stepType) ? { stepType: step.stepType } : {}),
     context: step.contextMap?.length ? step.contextMap.join(',') : null,
     bizType: null,
     enabled: step.enabled,

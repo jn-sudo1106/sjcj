@@ -15,10 +15,65 @@ describe('flow store 编辑动作', () => {
     f.newFlow('standard') // 载入标准链路（= 公告规则采集 Demo）作为编辑基线
   })
 
+  it('新建 APP/Python 按字典编号读取改名后的类型和默认队列', () => {
+    const dict = useDictStore()
+    dict.snatchTypes = ['[140] - App抓取新版', '[170] - Python抓取新版']
+    dict.nodeTypeTopics = { '140': 'app.queue', '170': 'python.queue' }
+    const appId = f.insertAfter(f.main[1], 'app')!
+    const pythonId = f.insertAfter(f.main[1], 'python')!
+    expect(f.configs[appId].collectCfg?.snatchType).toBe('[140] - App抓取新版')
+    expect(f.configs[pythonId].collectCfg?.snatchType).toBe('[170] - Python抓取新版')
+    expect(f.configs[appId].taskCfg?.queue).toBe('app.queue')
+    expect(f.configs[pythonId].taskCfg?.queue).toBe('python.queue')
+  })
+
   it('insertAfter 在主链插入节点', () => {
     const before = f.main.length
     f.insertAfter('web-list', 'web')
     expect(f.main.length).toBe(before + 1)
+  })
+
+  // 2026-10-25 回归：添加节点必须按模板落正确标题/类型。曾因 AddNodePopover 把 pick 载荷从模板
+  // 字符串改成条目对象，TEMPLATE_TO_NODE[对象] 查不到、所有新节点回落 web-list 种子——
+  // 「文件下载」加出来变成「公告列表抓取」（90 网页抓取），用户当场反馈。
+  it('insertAfter 文件下载：标题为「文件下载」、snatchType 取字典 95（不为公告列表抓取/90）', () => {
+    const id = f.insertAfter(f.main[1], 'file')!
+    const cfg = f.configs[id]
+    expect(cfg.title).toBe('文件下载')
+    expect(cfg.collectCfg?.snatchType).toBe('[95] - 文件下载')
+    expect(cfg.sub).not.toContain('公告列表抓取')
+  })
+
+  // 2026-10-25 用户拍板：新生成节点按类型生成默认——不许克隆种子演示默认。
+  // web-detail 种子曾带 inputTable='2101001'、sub='[90] 网页抓取 · 子步骤产物'，
+  // 95 文件下载节点被污染成「输入表自动 2101001」。
+  it('insertAfter 文件下载：sub 按类型重写为 [95] 文件下载、输出表不克隆种子演示默认', () => {
+    const id = f.insertAfter(f.main[1], 'file')!
+    const cfg = f.configs[id]
+    expect(cfg.sub).toBe('[95] 文件下载')
+    expect(cfg.collectCfg?.outputTable).toBe('')
+    // 输入表 = 上游节点的输出表（继承真实表；标准演示基线父节点输出就是 2101001，属合法继承，
+    // 不再是文件下载节点自己种子的演示默认——后者由下面空白流程用例验证）
+    expect(cfg.collectCfg?.inputTable).toBe(f.configs[f.main[1]].collectCfg?.outputTable ?? '')
+  })
+
+  it('空白流程加文件下载：无真实上游时输入表留空，不再出现种子的 2101001', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'file')!
+    expect(f.configs[id].collectCfg?.inputTable).toBe('')
+    expect(f.configs[id].collectCfg?.outputTable).toBe('')
+  })
+
+  it('编号一致的类型（EXCEL）与伪代码类型（浏览器抓取）sub 保留种子文案', () => {
+    const excelId = f.insertAfter(f.main[1], 'excel')!
+    expect(f.configs[excelId].sub).toBe('[110] EXCEL抓取 · 表格文件')
+    const browserId = f.insertAfter(f.main[1], 'browser-html')!
+    expect(f.configs[browserId].sub).toBe('[BROWSER] 浏览器抓取 · 源配置')
+  })
+
+  it('insertAfter 网页抓取：标题为「网页抓取」而非种子默认「公告列表抓取」', () => {
+    const id = f.insertAfter(f.main[1], 'web')!
+    expect(f.configs[id].title).toBe('网页抓取')
   })
 
   // 2026-09-04 会上提出：新建规则处理 / 数据监控节点时「适用源」默认 -1（= 该配置下所有源）。
@@ -1254,9 +1309,10 @@ describe('flow/recommend 意图匹配（M5.5）', () => {
   it('按 intent 直选「文件下载解析」', () => {
     const r = mockFlowRecommend({ intent: 'file-parse' })
     expect(r.flow.name).toContain('文件下载解析')
-    const fileNodeId = r.flow.main.find((id) => id.includes('web-detail'))
+    const fileNodeId = r.flow.main.find((id) => r.flow.configs[id]?.template === 'file')
     expect(fileNodeId).toBeTruthy()
     expect(r.flow.configs[fileNodeId!].collectCfg?.webKind).toBe('attachment')
+    expect(collectorCapabilityOf(r.flow.configs[fileNodeId!])?.kind).toBe('file_download')
   })
 
   it('未命中 → 空白流程兜底', () => {
@@ -1292,7 +1348,7 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
   it('数据处理组只保留字典里独立编号的类型，通用数据处理节点已去除', () => {
     expect(LIB_GROUPS.map((group) => group.title)).toEqual(expect.not.arrayContaining(['解析结构化', '数据清洗', '数据校验']))
     // 2026-09-23 用户明确要求：节点类型「数据处理」去除（纯前端移除 PROC 通用入口），
-    // 组内只保留后端字典里 300/700/710/720/730/800/911 独立编号的类型。
+    // 组内只保留后端字典里 300/700/710/720/730/800/802 独立编号的类型。
     expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
       '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手', 'PDF转MD',
     ])
@@ -1304,10 +1360,12 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
   })
 
   // 2026-09-17：节点库必须与后端字典逐条对齐（用户口径：17 条类型都能看见、都能选）
-  it('节点库覆盖后端字典全部 19 条抓取类型', () => {
+  // 2026-10-25：PDF转MD 的字典值订正为 802（此前误写 911）；801 网页抓取CS 尚无节点定义，
+  // 只登记在 SNATCH_TYPES / 类型名表里，等产品定义能力后再补节点，故这里不要求 801。
+  it('节点库覆盖后端字典里的抓取类型（801 除外：尚未定义节点）', () => {
     const items = LIB_GROUPS.flatMap((g) => g.items)
     const numeric = new Set(items.map((it) => Number(it.badge ?? it.code)).filter((n) => Number.isInteger(n)))
-    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720, 730, 800]) {
+    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720, 730, 800, 802]) {
       expect(numeric.has(code), `节点库缺少类型 ${code}`).toBe(true)
     }
     // 每个条目都得能落到一个存在的节点种子上，否则点了没反应

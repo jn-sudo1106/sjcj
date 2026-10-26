@@ -16,10 +16,10 @@
 // 否则 configTypeFrom() 会写后端不识别的 configType（见 legacyAdapters.
 // sourceTypeFromSnatchType 注释，0824-11 §1.2d 事故的同类风险）。
 //
-// 用户可见行为不变：节点库 LIB_GROUPS 是前端概念（包含 decision/parallel 等非字典
-// 类型），用户从未在前端选过抓取类型——类型通过 TEMPLATE_TO_SNATCH 在插入节点时
-// 设定。所以本 store 当前唯一的消费方是漂移检测 + 模板映射校验；将来加「按字典
-// 过滤节点」「类型选择器」等能力时可直接读 snatchTypes。
+// 节点库 LIB_GROUPS 仍是前端入口（包含 decision/parallel 等非字典类型），但展示与
+// 落库已改为优先读本 store 的 snatchTypes：AddNodePopover 用字典刷新「采集类」条目的
+// 编号/名称（如 95=文件下载），newNodeConfig 也按模板编号从字典取展示串，找不到才回退
+// TEMPLATE_TO_SNATCH 静态快照。消费者包括漂移检测、模板映射校验、节点库/新建节点。
 //
 // 分层：stores → views 是不推荐的依赖方向，但 stores/flow.ts 已从
 // @/views/FlowCanvas/canvas/flowModel 导入 TEMPLATE_TO_SNATCH，本 store 沿用同惯例。

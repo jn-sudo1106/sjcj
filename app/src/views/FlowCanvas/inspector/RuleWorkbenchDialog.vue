@@ -19,6 +19,7 @@ import { renderPromptTemplateForNode } from './promptTemplateLoader'
 import { fetchPromptList, type PromptTemplateItem } from '@/api/prompt'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
 import { nodePromptApi } from '@/api/nodePrompts'
+import { nodePromptsAvailable } from '@/constants/deployGates'
 
 const props = defineProps<{
   open: boolean
@@ -91,7 +92,8 @@ const promptDraft = ref(props.systemPrompt)
 const promptChoices = ref<PromptTemplateItem[]>([]), selectedPromptId = ref(props.promptTemplateId ?? 0)
 const promptSnapshot = ref(props.systemPrompt)
 const bindingSaving = ref(false)
-const persistedConfigId = computed(() => /^\d{1,18}$/.test(props.configId || '') ? props.configId! : '')
+// 没有节点提示词接口的环境（业务后端）不读写选择，否则保存 / 生成会被接口失败拦住（2026-10-26）。
+const persistedConfigId = computed(() => nodePromptsAvailable() && /^\d{1,18}$/.test(props.configId || '') ? props.configId! : '')
 const promptCategoryDraft = ref<PromptCategory>(props.promptCategory)
 const modelProviderDraft = ref(props.modelProviderCode || '')
 const modelDraft = ref(props.modelCode || '')
@@ -154,7 +156,7 @@ async function loadPromptTemplate(apply = true, restoreSelection = false) {
   try {
     const [choices, selection] = await Promise.all([
       fetchPromptList(props.promptListCategory, promptCategoryDraft.value),
-      restoreSelection && persistedConfigId.value && !props.promptTemplateId ? nodePromptApi.selection(persistedConfigId.value) : Promise.resolve(null),
+      restoreSelection && persistedConfigId.value && !props.promptTemplateId ? nodePromptApi.selection(persistedConfigId.value).catch(() => null) : Promise.resolve(null),
     ])
     if (seq !== promptRequestSeq) return
     promptChoices.value = choices.filter(item => item.isActive !== 0)

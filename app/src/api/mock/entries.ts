@@ -46,6 +46,7 @@ const ENTRIES: EntryType[] = [
 // 旧 EntryTypeList 检索是 entryTypeId/name 两个独立框，无 enable 下拉（mock 未建模删除态，enable 透传不参与过滤）。
 function matches(e: EntryType, p?: Record<string, unknown>): boolean {
   if (!p) return true
+  if (p.dsKind && (e.dsKind ?? 'MYSQL') !== p.dsKind) return false
   const entryTypeId = String(p.entryTypeId ?? '').trim()
   if (entryTypeId && !e.tableId.includes(entryTypeId)) return false
   const name = String(p.name ?? '').trim().toLowerCase()
@@ -69,6 +70,16 @@ export function mockEntryPaged(params?: Record<string, unknown>): Paged<EntryTyp
 
 export function mockEntryDetail(params?: Record<string, unknown>): EntryType {
   return ENTRIES.find((e) => e.tableId === String(params?.tableId)) ?? ENTRIES[0]
+}
+
+// 1026：窄接口 mock——只改 dsKind 一列，与后端 entry-type-ds-kind 同语义（不碰字段配置）。
+// mock handler 收到的是 request 的 params（{ tableId, dsKind }），不是 httpParams 的旧字段名。
+export function mockEntrySetDsKind(params?: Record<string, unknown>): { ok: boolean; message: string } {
+  const id = String(params?.tableId ?? params?.entryTypeId ?? '')
+  const target = ENTRIES.find((e) => e.tableId === id)
+  if (!target) return { ok: false, message: `实体不存在，未更新:${id}` }
+  target.dsKind = params?.dsKind === 'CK' ? 'CK' : 'MYSQL'
+  return { ok: true, message: `数据源已更新为 ${target.dsKind}，id:${target.tableId}` }
 }
 
 // 新建 / 编辑表：按 tableId upsert，无 tableId 视为新建（内存 session 持久化）

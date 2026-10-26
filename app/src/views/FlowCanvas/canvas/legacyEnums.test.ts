@@ -36,11 +36,14 @@ describe('旧平台枚举必须逐字一致', () => {
 // 校验节点会写一个字典里不存在的 800，所以编号一起订正了（见 nodeConfigPayload.configTypeFrom）。
 // 2026-09-17 再订正一次：800 归「翻译助手」（读 sense_db.cfg_source_type 核对），
 // 数据校验是 620 不变。
-// 之前这里的硬编码含 95 / 155 / [BROWSER] / [WECHAT] / [LOGIN] 五个后端不存在的值，
+// 之前这里的硬编码含 95 / 155 / [BROWSER] / [WECHAT] / [LOGIN] 等后端不存在的值，
 // 其中 95 会被 sourceTypeFromSnatchType 解析后写进新建源请求体——不是显示问题。
+// 后来字典已新增 `95 = 文件下载`，所以 95 现在是真实值；155 / [BROWSER] / [WECHAT] / [LOGIN] 仍不是。
+// **2026-10-25 用户给出后端全量 22 条**：PDF转MD 的真值是 802（911 不存在），另新增 801 网页抓取CS。
+// 之后又新增 95=文件下载，当前快照按 22 条维护。
 describe('抓取类型与后端字典一致（config/sourceTypes 实测）', () => {
   const REAL_SOURCE_TYPES = new Map<string, string>([
-    ['90', '网页抓取'], ['110', 'EXCEL抓取'], ['120', 'DOC抓取'], ['130', 'PDF抓取'],
+    ['90', '网页抓取'], ['95', '文件下载'], ['110', 'EXCEL抓取'], ['120', 'DOC抓取'], ['130', 'PDF抓取'],
     ['140', 'App抓取'], ['150', 'OCR抓取'], ['160', 'Mail抓取'], ['170', 'Python抓取'],
     ['300', '校验类'], ['400', '提取数据发邮件'], ['500', '资讯抓取'],
     ['600', '规则处理'], ['610', '数据监控'], ['620', '数据校验'],
@@ -48,7 +51,10 @@ describe('抓取类型与后端字典一致（config/sourceTypes 实测）', () 
     // 2026-09-17 用户在 cfg_source_type 里新增：800=翻译助手（此前 800 曾被本前端当作数据校验写出去，
     // 那个编号已经改成 620；回读时按节点名区分两者，见 buildNodeForStep）
     ['800', '翻译助手'],
-    ['911', 'PDF转MD'], // 2026-10-21 系统设置里新增的节点类型（队列 source-config）
+    // 2026-10-25 用户给出后端 source_type 全量 22 条：新增 801 网页抓取CS；
+    // PDF转MD 是 **802**，此前这里记的 911 后端根本不存在（写进 configType 就是脏数据）。
+    ['801', '网页抓取CS'],
+    ['802', 'PDF转MD'],
   ])
 
   it('SNATCH_TYPES 与字典逐条一致（编号 + 名称）', () => {
@@ -63,10 +69,11 @@ describe('抓取类型与后端字典一致（config/sourceTypes 实测）', () 
     })
   })
 
-  it('不含任何臆造值：95 / 155 / [BROWSER] / [WECHAT] / [LOGIN] 都不许再出现', () => {
+  it('不含任何臆造值：155 / 911 / [BROWSER] / [WECHAT] / [LOGIN] 都不许再出现', () => {
     const all = [...SNATCH_TYPES, ...Object.values(TEMPLATE_TO_SNATCH)].join('|')
-    expect(all).not.toContain('[95]')
     expect(all).not.toContain('[155]')
+    // 911 是 PDF转MD 曾经的错误编号（真值 802）；字典与模板映射里都不许再有它。
+    expect(all).not.toContain('[911]')
     expect(all).not.toContain('[BROWSER]')
     expect(all).not.toContain('[WECHAT]')
     expect(all).not.toContain('[LOGIN]')

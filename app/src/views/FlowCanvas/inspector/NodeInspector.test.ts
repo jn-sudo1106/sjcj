@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import NodeInspector from './NodeInspector.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { useFlowVersionStore } from '@/stores/flowVersion'
@@ -38,7 +39,7 @@ describe('编排保存自动同步部署配置', () => {
     const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true })
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1401081', name: '新闻列表' } as never)
     vi.mocked(syncNodeDeployment).mockRejectedValueOnce(new Error('服务暂时不可用')).mockResolvedValue(null)
-    const wrapper = mount(NodeInspector); await flushPromises()
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } }); await flushPromises()
     flow.setDedupMode('123', 'table'); await flushPromises()
     await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises()
     expect(syncNodeDeployment).toHaveBeenCalledWith(flow.configs['123'], '123')
@@ -57,7 +58,7 @@ describe('编排保存自动同步部署配置', () => {
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: false, message: '保存失败' })
     vi.mocked(syncNodeDeployment).mockClear()
-    const wrapper = mount(NodeInspector); await flushPromises()
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } }); await flushPromises()
     flow.setDedupMode('123', 'table'); await flushPromises()
     await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises()
     expect(syncNodeDeployment).not.toHaveBeenCalled()
@@ -65,7 +66,7 @@ describe('编排保存自动同步部署配置', () => {
   })
 })
 
-// 0927 H1：非文件节点输出表未就绪 → 检查器顶部常驻警告条；文件节点 / 已有输出表不显示。
+// 新旧文件下载均按 entry 校验；已有输出表不显示缺表提示。
 // （输出表未就绪 = 显式输出表、默认=输入表、快照输出表三者都没有，后端必填 OUT_ENTRY。）
 describe('NodeInspector 输出表未就绪警告条（0927 H1）', () => {
   it('规则节点未选输出表：显示警告条', async () => {
@@ -94,17 +95,28 @@ describe('NodeInspector 输出表未就绪警告条（0927 H1）', () => {
     expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(false)
   })
 
-  it('文件下载节点不校验输出表：不显示警告条', async () => {
+  it('新文件下载缺输出表：显示警告条', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
-    const cfg = cloneConfig(NODE_CONFIGS['rule'])
-    cfg.template = 'file'
+    const cfg = cloneConfig(NODE_CONFIGS['file-download'])
     flow.configs['file-1'] = cfg
     flow.select('file-1')
     const wrapper = mount(NodeInspector)
     await flushPromises()
-    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(true)
+  })
+
+  it('历史 type=file 缺输出表：同样显示警告条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['40600'] = cloneConfig(NODE_CONFIGS['file-download'])
+    useSourceStore().rememberSteps([{ stepId: '40600', sourceId: '-1', name: '旧文件步骤', enabled: true, nodeType: 'file' }], 'replace')
+    flow.select('40600')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(true)
   })
 })
 
@@ -958,5 +970,124 @@ describe('节点配置自动保存（1021-06）', () => {
     w.unmount()
     await flushPromises()
     expect(update).toHaveBeenCalledTimes(2)
+  })
+})
+
+// 2026-10-26 会上反馈：连加几个节点只点一次「保存」，只存进了当前选中的那个。
+describe('NodeInspector 保存 = 整张画布一起保存（2026-10-26）', () => {
+  function setup(ids: string[]) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    for (const nodeId of ids) {
+      const c = cloneConfig(NODE_CONFIGS['web-list'])
+      delete c.configId
+      c.configName = nodeId
+      flow.configs[nodeId] = c
+    }
+    flow.main = ['start', ...ids, 'end']
+    flow.select(ids[0])
+    flow.setActiveTab('config')
+    let seq = 0
+    const add = vi.spyOn(configApi, 'addConfig').mockImplementation(async () => ({ ok: true, configId: `c-${++seq}`, message: 'ok' }))
+    vi.spyOn(configApi, 'configDetail').mockImplementation(async (cid: string) => ({ configId: cid, name: `cfg-${cid}` }) as never)
+    return { flow, add }
+  }
+
+  it('三个未绑定节点：点一次保存，三个都建配置并绑定', async () => {
+    const { flow, add } = setup(['web-1', 'web-2', 'web-3'])
+    const w = mount(NodeInspector)
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(3)
+    for (const nodeId of ['web-1', 'web-2', 'web-3']) expect(flow.configs[nodeId].configId).toBeTruthy()
+    w.unmount()
+  })
+
+  it('编排保存兼顾整张画布；部署失败后重试也保存其他新节点，不重复创建当前配置', async () => {
+    const { flow, add } = setup(['web-1', 'web-2'])
+    flow.setActiveTab('orchestration')
+    const sync = vi.mocked(syncNodeDeployment).mockReset()
+      .mockRejectedValueOnce(new Error('服务暂时不可用')).mockResolvedValue(null)
+    const w = mount(NodeInspector, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(2)
+    expect(flow.configs['web-2'].configId).toBeTruthy()
+    expect(sync).toHaveBeenCalledTimes(1)
+    expect(w.text()).toContain('部署配置同步失败，可重试')
+
+    const third = cloneConfig(NODE_CONFIGS['web-list'])
+    delete third.configId
+    flow.configs['web-3'] = third
+    flow.main = ['start', 'web-1', 'web-2', 'web-3', 'end']
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(sync).toHaveBeenCalledTimes(2)
+    expect(add).toHaveBeenCalledTimes(3)
+    expect(flow.configs['web-3'].configId).toBeTruthy()
+    expect(w.text()).not.toContain('部署配置同步失败，可重试')
+    w.unmount()
+  })
+
+  it('当前节点已保存、其余节点还没有配置：保存按钮仍可点，并把其余节点存掉', async () => {
+    const { flow, add } = setup(['web-1', 'web-2'])
+    flow.configs['web-1'].configId = '1400900'
+    const w = mount(NodeInspector)
+    await flushPromises()
+    const btn = w.get('[data-testid="node-config-save"]')
+    expect((btn.element as HTMLButtonElement).disabled).toBe(false)
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({} as never)
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' } as never)
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(add).toHaveBeenCalledTimes(1)
+    expect(flow.configs['web-2'].configId).toBeTruthy()
+    w.unmount()
+  })
+
+  it('其中一个建配置失败：不阻断其他节点，并提示失败的节点名', async () => {
+    const { flow, add } = setup(['web-1', 'web-2', 'web-3'])
+    add.mockReset()
+    add.mockResolvedValueOnce({ ok: true, configId: 'c-1', message: 'ok' })
+      .mockResolvedValueOnce({ ok: false, message: '后端拒绝' } as never)
+      .mockResolvedValueOnce({ ok: true, configId: 'c-3', message: 'ok' })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }))
+    vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => {} }))
+    const w = mount(NodeInspector)
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(3)
+    expect(flow.configs['web-1'].configId).toBeTruthy()
+    expect(flow.configs['web-2'].configId).toBeFalsy()
+    expect(flow.configs['web-3'].configId).toBeTruthy()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(flow.configs['web-2'].title))
+    w.unmount()
+  })
+
+  it('已有步骤但没配置的节点（如空白流程入口）：不新建配置，提示并定位到该节点', async () => {
+    const { flow, add } = setup(['41520', 'web-2'])
+    flow.select('web-2')
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }))
+    const w = mount(NodeInspector)
+    await flushPromises()
+    await w.get('[data-testid="node-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(add).toHaveBeenCalledTimes(1)
+    expect(flow.configs['41520'].configId).toBeFalsy()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('尚未配置'))
+    expect(flow.selectedId).toBe('41520')
+    w.unmount()
   })
 })

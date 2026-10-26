@@ -12,6 +12,7 @@
 import type { Config } from '@/api'
 import { engineCodeOf } from '@/api/translate'
 import {
+  applyFileDownloadType,
   defaultMultiMode,
   isArticleSummaryNode,
   isArticleTagNode,
@@ -49,6 +50,7 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.runPolicy = config.runPolicy
   if (config.configType) {
     cfg.configType = String(config.configType)
+    if (cfg.configType === '95') applyFileDownloadType(cfg)
     if (cfg.configType === '150' && (cfg.template === 'rule' || !cfg.template)) {
       cfg.template = 'ocr'
       if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[150] OCR抓取 · 图片文字识别'
@@ -67,9 +69,10 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
     } else if (cfg.configType === '700' && (cfg.template === 'rule' || !cfg.template)) {
       cfg.template = 'video-audio'
       if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[700] 视频提取音频 · 音轨抽取'
-    } else if (cfg.configType === '911' && (cfg.template === 'rule' || !cfg.template)) {
+    } else if ((cfg.configType === '802' || cfg.configType === '911') && (cfg.template === 'rule' || !cfg.template)) {
+      // 2026-10-25：802 是后端字典值；911 是本前端此前写错的值，回读兼容，sub 统一显示 802。
       cfg.template = 'pdf-md'
-      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[911] PDF转MD · 文档转 Markdown'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[802] PDF转MD · 文档转 Markdown'
     }
   }
   const target = cfg.collectCfg ?? cfg
@@ -127,6 +130,7 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
  * 再退回 `ruleCfg → 600`，最后按 snatchType 取编号。
  */
 const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
+  file: 95,
   rule: 600,
   monitor: 610,
   'data-validation': 620,
@@ -134,7 +138,8 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
   'audio-text': 710,
   'article-summary': 720,
   'article-tag': 730,
-  'pdf-md': 911,
+  // 2026-10-25 订正：PDF转MD 的后端 source_type 是 802；911 后端不存在（写进去就是脏 configType）。见变更说明 1025。
+  'pdf-md': 802,
   // 800 现在是「翻译助手」（2026-09-17 核对 cfg_source_type）；09-17 前本前端曾把 800 写成数据校验，
   // 那个编号已经改成 620，所以这里不会与校验撞车。
   translate: 800,
@@ -150,6 +155,8 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
 export function configTypeFrom(cfg: NodeConfig): number | undefined {
   const byTemplate = cfg.template ? TEMPLATE_CONFIG_TYPE[cfg.template] : undefined
   if (byTemplate) return byTemplate
+  // 已确认的文件下载不能被首屏或旧快照中的网页展示串覆盖。
+  if (cfg.configType === '95') return 95
   // 后端已是 130 的节点（后台直接改的类型、或经「更换」带进来的）没有 template，
   // 内存里的 snatchType 还是 `[90]`——不在这里拦，保存就把 130 写回 90（实测配置 1401083）。
   if (cfg.configType === '130') return 130
@@ -210,7 +217,8 @@ function promptForConfig(cfg: NodeConfig): string | undefined {
  * （150/700/710/720/730/800）时以 base 为准——那种情况下节点还没被正确识别，
  * 真实类型就在 base 里；其余情况（含 base 为空的历史规则配置）照旧写 600。
  */
-const SCRIPTLESS_CONFIG_TYPES = new Set([150, 700, 710, 720, 730, 800, 911])
+// 802 = PDF转MD 后端字典值，911 为此前写错值（存量兼容，保存时会被改写为 802）。
+const SCRIPTLESS_CONFIG_TYPES = new Set([150, 700, 710, 720, 730, 800, 802, 911])
 
 function configTypeForSave(cfg: NodeConfig, base: Record<string, unknown>): number | undefined {
   const fromNode = configTypeFrom(cfg)

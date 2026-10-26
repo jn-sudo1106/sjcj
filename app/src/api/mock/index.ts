@@ -171,7 +171,7 @@ import {
   mockQueueTaskPaged,
 } from './sites'
 import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs, mockSameConfigs } from './configs'
-import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
+import { mockEntryPaged, mockEntryDetail, mockEntrySetDsKind, mockSaveEntryType } from './entries'
 import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
 import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows } from './files'
 
@@ -239,15 +239,30 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/configParamAdd': mockAck,
   'config/configParamDel': mockAck,
   'config/loadParams': mockLoadParams,
-  // 抓取类型字典 mock：只放旧平台下拉里确定见过的数值型取值，不含前端自造的 [BROWSER]/[WECHAT]/[LOGIN]，
-  // 真实取值以 live 请求为准（0824-11 §1.2d）。
+  // 抓取类型 mock 与当前数字字典快照对齐；真实环境仍以 config/sourceTypes 返回值为准。
   'config/sourceTypes': () => [
     { sourceType: '90', typeName: '网页抓取' },
-    { sourceType: '95', typeName: 'APP 抓取' },
-    { sourceType: '150', typeName: 'OCR 识别' },
-    { sourceType: '155', typeName: 'AI 提取' },
-    { sourceType: '170', typeName: 'Python 抓取' },
-    { sourceType: '800', typeName: '数据校验' },
+    { sourceType: '95', typeName: '文件下载' },
+    { sourceType: '110', typeName: 'EXCEL抓取' },
+    { sourceType: '120', typeName: 'DOC抓取' },
+    { sourceType: '130', typeName: 'PDF抓取' },
+    { sourceType: '140', typeName: 'App抓取' },
+    { sourceType: '150', typeName: 'OCR抓取' },
+    { sourceType: '160', typeName: 'Mail抓取' },
+    { sourceType: '170', typeName: 'Python抓取' },
+    { sourceType: '300', typeName: '校验类' },
+    { sourceType: '400', typeName: '提取数据发邮件' },
+    { sourceType: '500', typeName: '资讯抓取' },
+    { sourceType: '600', typeName: '规则处理' },
+    { sourceType: '610', typeName: '数据监控' },
+    { sourceType: '620', typeName: '数据校验' },
+    { sourceType: '700', typeName: '视频提取音频' },
+    { sourceType: '710', typeName: '音频提取文字' },
+    { sourceType: '720', typeName: '文章生成摘要' },
+    { sourceType: '730', typeName: '文章打标签' },
+    { sourceType: '800', typeName: '翻译助手' },
+    { sourceType: '801', typeName: '网页抓取CS' },
+    { sourceType: '802', typeName: 'PDF转MD' },
   ],
   // 节点类型维护（0924-04）：mock 只给只读数据，写操作走通用 ack
   'sourceType/list': (params?: Record<string, unknown>) => {
@@ -292,6 +307,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/syncTable': mockAck,
   'config/calcEntrySum': mockAck,
   'config/markEntryType': mockAck,
+  // 1026：单独改数据源 DS_KIND（快速同步到 CK 的回写），mock 里真改 ENTRIES 那一条
+  'config/entry-type-ds-kind': mockEntrySetDsKind,
 
   // 采集资产 · 参数（M5）
   'config/paramPaged': mockParamPaged,

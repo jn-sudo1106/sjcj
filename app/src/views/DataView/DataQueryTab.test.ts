@@ -1099,90 +1099,77 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.text()).toContain('贵州茅台')
   })
 
-  it('加载更多数据表：下拉底部入口调 entryApi.entryPaged，选中后切表', async () => {
-    const entrySpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
-      total: 1,
-      list: [{ tableId: 't9', tableName: 'sense_data.TB_MORE', name: '更多表', fields: [] }],
-    })
-    const auth = useAuthStore()
-    auth.roles = ['admin']
-    await mountPage()
-    await waitForLoad()
-
-    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
-    await link!.trigger('click')
-    await flushPromises()
-
-    expect(entrySpy).toHaveBeenCalled()
-    expect(wrapper.text()).toContain('更多表')
-    expect(wrapper.text()).toContain('去重字段')
-    expect(wrapper.text()).toContain('更新时间')
-    expect(wrapper.findAll('button[aria-label="刷新"]').length).toBeGreaterThan(1)
-
-    const row = wrapper.findAll('tr').find((el) => el.text().includes('更多表'))
-    await row!.trigger('click')
-    await flushPromises()
-
-    expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
-  })
-
-  // list3 是「全库表 − 主表 − 同类源的表」，模板只渲染 slice(0, 5)：
-  // 选中的表本来就在 list3、但排在第 6 条之后时，旧实现「已存在就不插」会让下拉里没有对应 option，
-  // el-select 的 getOption() 找不到选项会把值当标签，于是只显示表 ID。
-  const OTHER_TABLES = Array.from({ length: 8 }, (_, i) => ({
-    tableId: `t${i + 20}`, tableName: `sense_data.TB_O${i}`, name: `其它表${i}`, fields: [],
-  }))
-
-  it('加载更多数据表：选中的表已在 list3 但排在 slice(0,5) 之外时也要挪到最前，下拉显示中文名', async () => {
-    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
-      total: 1,
-      // t25 正好是 list3 的第 6 条，落在 slice(0, 5) 之外
-      list: [{ tableId: 't25', tableName: 'sense_data.TB_O5', name: '其它表5', fields: [] }],
+  it('选表下拉直接搜索并切表，不弹出额外查询窗口', async () => {
+    const paged = vi.spyOn(entryApi, 'entryPaged')
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, main: 't1',
+      list3: [{ tableId: 't9', tableName: 'sense_data.TB_MORE', name: '更多表', fields: [] }],
     })
     useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
-    expect(tableSelectOf().text()).not.toContain('其它表5')
-
-    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
-    await link!.trigger('click')
+    tableSelectOf().props('filterMethod')('更多表')
     await flushPromises()
-    const row = wrapper.findAll('tr').find((el) => el.text().includes('其它表5'))
-    await row!.trigger('click')
+    expect(paged).not.toHaveBeenCalled()
+    expect(document.querySelector('.dv-picker-dialog')).toBeNull()
+    tableSelectOf().vm.$emit('update:modelValue', 't9')
+    tableSelectOf().vm.$emit('change', 't9')
     await flushPromises()
-
-    expect(tableSelectOf().vm.$props.modelValue).toBe('t25')
-    expect(tableSelectOf().text()).toContain('其它表5')
-    expect(tableSelectOf().text()).not.toContain('t25')
+    expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
   })
 
-  it('加载更多数据表：切表后当前源被清掉、分组重拉，选中的表仍留在下拉里', async () => {
+  // 搜索选中的表不在下拉首批 20 条里时，也要保留名称和后续分组回读。
+  const OTHER_TABLES = Array.from({ length: 30 }, (_, i) => ({
+    tableId: `t${i + 20}`, tableName: `sense_data.TB_O${i}`, name: `其它表${i}`, fields: [],
+  }))
+
+  it('搜索表：选中的表已在 list3 但排在首批 20 条之外时也要挪到最前，下拉显示中文名', async () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
-    // 初始表（list3 第一条 t20）带 600519，新表 t25 没有：loadSources 会清掉 sourceId
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1,
+      // t45 正好是 list3 的第 26 条，落在首批 20 条之外
+      list: [{ tableId: 't45', tableName: 'sense_data.TB_O25', name: '其它表25', fields: [] }],
+    })
+    useAuthStore().roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+    expect(tableSelectOf().text()).not.toContain('其它表25')
+
+    tableSelectOf().props('filterMethod')('其它表25')
+    await flushPromises()
+    tableSelectOf().vm.$emit('update:modelValue', 't45')
+    tableSelectOf().vm.$emit('change', 't45')
+    await flushPromises()
+
+    expect(tableSelectOf().vm.$props.modelValue).toBe('t45')
+    expect(tableSelectOf().text()).toContain('其它表25')
+    expect(tableSelectOf().text()).not.toContain('t45')
+  })
+
+  it('搜索表：切表后当前源被清掉、分组重拉，选中的表仍留在下拉里', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
+    // 初始表（list3 第一条 t20）带 600519，新表 t45 没有：loadSources 会清掉 sourceId
     // 并重新 loadGroup，把 group 整块覆盖掉
     vi.spyOn(dataApi, 'distinctSource').mockImplementation(async (query) => (query.tableId === 't20' ? ['600519'] : ['src-9']))
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
       total: 1,
-      list: [{ tableId: 't25', tableName: 'sense_data.TB_O5', name: '其它表5', fields: [] }],
+      list: [{ tableId: 't45', tableName: 'sense_data.TB_O25', name: '其它表25', fields: [] }],
     })
     useAuthStore().roles = ['admin']
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
     const groupCallsBefore = (dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length
 
-    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
-    await link!.trigger('click')
+    tableSelectOf().props('filterMethod')('其它表25')
     await flushPromises()
-    const row = wrapper.findAll('tr').find((el) => el.text().includes('其它表5'))
-    await row!.trigger('click')
+    tableSelectOf().vm.$emit('update:modelValue', 't45')
+    tableSelectOf().vm.$emit('change', 't45')
     await flushPromises()
     await waitForLoad()
 
     // 源被清掉 → 分组确实重拉了一次
     expect((dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(groupCallsBefore)
-    expect(tableSelectOf().text()).toContain('其它表5')
-    expect(tableSelectOf().text()).not.toContain('t25')
+    expect(tableSelectOf().text()).toContain('其它表25')
+    expect(tableSelectOf().text()).not.toContain('t45')
   })
 
   it('按源搜索：选中跨表源后切换到该源的默认表', async () => {

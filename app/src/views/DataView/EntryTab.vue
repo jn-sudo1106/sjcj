@@ -24,9 +24,11 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
+let loadRequest = 0
 // §1.3-1：ID/名称两个独立框；enable 初始 '0'，重置后不带，不新增状态筛选下拉。
 const entryTypeIdFilter = ref('')
 const nameFilter = ref('')
+const dsKindFilter = ref<EntryType['dsKind'] | ''>('')
 const enableFilter = ref<string | undefined>('0')
 const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
@@ -99,10 +101,11 @@ function currentFilters() {
     entryTypeId: entryTypeIdFilter.value.trim() || undefined,
     name: nameFilter.value.trim() || undefined,
     enable: enableFilter.value,
+    dsKind: dsKindFilter.value || undefined,
   }
 }
 
-async function loadFavorites() {
+async function loadFavorites(requestId: number) {
   await loadFavoriteEntries()
   const filters = currentFilters()
   const ids = [...favoriteEntryIds.value].filter((id) => !filters.entryTypeId || id === filters.entryTypeId)
@@ -112,15 +115,17 @@ async function loadFavorites() {
       .map((id) => entryApi.entryPaged({ ...filters, entryTypeId: id, page: 1, size: 5 })))
     pages.forEach((r) => found.push(...r.list))
   }
+  if (requestId !== loadRequest) return
   favEntries.value = found
   applyFavView()
 }
 
 async function load() {
+  const requestId = ++loadRequest
   loading.value = true
   try {
     if (favOnly.value) {
-      await loadFavorites()
+      await loadFavorites(requestId)
       return
     }
     const r = await entryApi.entryPaged({
@@ -130,12 +135,14 @@ async function load() {
       field: SORT_FIELD[sortKey.value],
       order: sortDir.value,
     })
+    if (requestId !== loadRequest) return
     list.value = r.list
     total.value = r.total
   } catch (error) {
+    if (requestId !== loadRequest) return
     ElMessage.error(`加载实体表失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
-    loading.value = false
+    if (requestId === loadRequest) loading.value = false
   }
 }
 /** 翻页：只看收藏在前端切片，其余按页请求 */
@@ -144,10 +151,16 @@ function onPage() {
   else void load()
 }
 function onSearch() { page.value = 1; void load() }
+function onDsKindChange() {
+  selected.value = []
+  onSearch()
+}
 // §1.3-1：重置把查询条件清成 {}，之后查询不再携带 enable。
 function onReset() {
   entryTypeIdFilter.value = ''
   nameFilter.value = ''
+  dsKindFilter.value = ''
+  selected.value = []
   enableFilter.value = undefined
   page.value = 1
   void load()
@@ -417,6 +430,12 @@ const onEnterSearch = withoutComposition(() => onSearch())
 <template>
   <div class="rc-card et-main">
     <div class="rc-toolbar wrap">
+      <el-select v-model="dsKindFilter" aria-label="库类型" data-testid="entry-ds-kind-filter" style="width: 125px" @change="onDsKindChange">
+        <template #prefix><span>库</span></template>
+        <el-option label="全部" value="" />
+        <el-option label="CK" value="CK" />
+        <el-option label="MYSQL" value="MYSQL" />
+      </el-select>
       <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" style="width: 150px" @keyup.enter="onEnterSearch" />
       <el-input v-model="nameFilter" clearable placeholder="表名称" style="width: 190px" @keyup.enter="onEnterSearch" />
       <button class="rc-btn" type="button" @click="onSearch">查询</button>

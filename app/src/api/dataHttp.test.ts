@@ -280,6 +280,16 @@ describe('选表分组 / 动态表结构 API 旧平台 HTTP 契约（E 包 T1b�
     expect(url).toContain('sourceId=430016502%2C430016501%2C430016398')
   })
 
+  it.each(['CK', 'MYSQL'] as const)('选表分组携带 dsKind=%s，保留源范围', async (dsKind) => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { list1: [], list2: [], list3: [] } }))
+    const { dataApi } = await import('./index')
+    await dataApi.entryTypesGroup('430016502', dsKind)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url, 'http://localhost').searchParams
+    expect(params.get('sourceId')).toBe('430016502')
+    expect(params.get('dsKind')).toBe(dsKind)
+  })
+
   it('tables() 摊平 list1/list2/list3 为扁平列表；main 是默认选中的标量 ID，不参与摊平', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0', msg: null,

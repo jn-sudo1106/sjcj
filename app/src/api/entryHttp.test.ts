@@ -42,7 +42,7 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
     expect(result.list[0]).toMatchObject({ tableId: '2102157', tableName: 't' })
   })
 
-  it('列表默认分页 limit=20（旧 s-table pageSize 口径）', async () => {
+    it('列表默认分页 limit=20（旧 s-table pageSize 口径）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
     const { entryApi } = await import('./index')
 
@@ -53,6 +53,31 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
     expect(url).not.toContain('entryTypeId=')
     expect(url).not.toContain('name=')
     expect(url).not.toContain('enable=')
+  })
+
+  it.each(['CK', 'MYSQL'] as const)('列表透传库类型 dsKind=%s，由后端统一筛选并计数分页', async (dsKind) => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { entryApi } = await import('./index')
+    await entryApi.entryPaged({ dsKind, page: 2, size: 30 })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url, 'http://localhost').searchParams
+    expect(params.get('dsKind')).toBe(dsKind)
+    expect(params.get('page')).toBe('2')
+    expect(params.get('limit')).toBe('30')
+  })
+
+  // 窄接口（2026-10-26）：只改 DS_KIND，POST 查询参数，不走整对象 modifyEntryType
+  it('单独置数据源使用 POST 查询参数 entryTypeId + dsKind', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '数据源已更新为 CK，id:2101020' }))
+    const { entryApi } = await import('./index')
+
+    await entryApi.setEntryDsKind('2101020', 'CK')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.method).toBe('POST')
+    expect(url).toContain('/api/v1/config/entry-type-ds-kind?')
+    expect(url).toContain('entryTypeId=2101020')
+    expect(url).toContain('dsKind=CK')
   })
 
   it('详情使用 GET 和旧字段名 typeId（非 tableId/entryTypeId）', async () => {

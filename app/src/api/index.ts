@@ -2590,11 +2590,11 @@ async function importEntryData(input: EntryDataImportInput): Promise<EntryDataIm
 
 export const dataApi = {
   // 选表分组（旧 EntryTypeSelectMulti 分组下拉的数据源）；sourceId 可空
-  entryTypesGroup: async (sourceId?: string) => {
-    const result = await request<unknown>('data/entryTypesGroup', { sourceId }, {
+  entryTypesGroup: async (sourceId?: string, dsKind?: EntryType['dsKind']) => {
+    const result = await request<unknown>('data/entryTypesGroup', { sourceId, dsKind }, {
       method: 'GET',
       httpEndpoint: 'config/queryEntryTypesGroup',
-      httpParams: sourceId ? { sourceId } : {},
+      httpParams: { sourceId, dsKind },
     })
     return entryTypeGroupFromLegacy(result)
   },
@@ -3059,9 +3059,10 @@ export const configApi = {
    *
    * 2026-08-28 确认：**节点类型就是抓取类型**，落在配置的 `configType` 上（旧「配置编辑」弹窗那一项，
    * 旧 `column.config.js:661` dataIndex=configType，type=SOURCE_TYPE）。
-   * 它是**后端字典**，不是前端枚举——`SNATCH_TYPES` / `TEMPLATE_TO_SNATCH` 目前硬编码，
-   * 且含 `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 三个自造值，要以本接口为准校正
-   * （0824-11 §1.2d：枚举一律照抄后端，不许自造）。
+   * 它是**后端字典**，不是前端枚举——`SNATCH_TYPES` / `TEMPLATE_TO_SNATCH` 目前作为
+   * 静态兜底/测试对照，节点库展示与新建节点已优先使用本接口返回的字典；
+   * `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 仅为前端入口/显示标识，禁止作为后端
+   * configType/sourceType 写入；模板映射必须取数字字典值（0824-11 §1.2d）。
    */
   sourceTypes: async (): Promise<SourceTypeDict[]> => {
     const result = await request<{ list?: unknown[] } | unknown[]>('config/sourceTypes', {}, { method: 'GET' })
@@ -3141,6 +3142,7 @@ export const entryApi = {
       entryTypeId: p.entryTypeId,
       name: p.name,
       enable: p.enable,
+      dsKind: p.dsKind || undefined,
       // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
       cond: p.cond,
       // 1022：排序（白名单 entryTypeId/typeName/tableName/keyField/state/updateDt，order=asc|desc）；不传 = 表 ID 倒序
@@ -3212,6 +3214,17 @@ export const entryApi = {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId, state },
+    }),
+  /**
+   * 单独改数据源标识（DS_KIND），1026 快速同步到 CK 建完任务后回写用。
+   * 刻意不走 entrySave：那条路径是整对象更新，后端会按传入 items 做字段 diff，
+   * 而调用方手里可能只有列表行（列表不返回 items），回写等于把字段配置清空。
+   */
+  setEntryDsKind: (tableId: string, dsKind: 'MYSQL' | 'CK') =>
+    request<Ack>('config/entry-type-ds-kind', { tableId, dsKind }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId, dsKind },
     }),
 }
 

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { entryApi, flowCenterApi, flowVersionApi, itemApi, sourceApi } from '@/api'
+import { stepToSaveItemConfigPayload } from '@/api/legacyAdapters'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useFlowVersionStore } from '@/stores/flowVersion'
@@ -87,6 +88,51 @@ describe('useStepWrite.persistNodeName', () => {
 })
 
 describe('useStepWrite.persistFlowSteps', () => {
+  it('新文件下载缺输出表时跳过，补表后以 entry/95 保存', async () => {
+    setActivePinia(createPinia())
+    const { flow } = loadTestSource()
+    const localId = flow.insertAfter('40600', 'file')!
+    flow.configs[localId].configId = '1400999'
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '40601', name: '文件下载', configId: '1400999', nodeType: 'entry', configType: '95', outputTable: '6200027', dependsOn: ['40600'] },
+    ])
+
+    const writer = useStepWrite()
+    await writer.persistFlowSteps()
+    expect(create).not.toHaveBeenCalled()
+    flow.configs[localId].collectCfg!.outputTable = '6200027'
+    const result = await writer.persistFlowSteps()
+
+    expect(result.created).toBe(1)
+    expect(stepToSaveItemConfigPayload(create.mock.calls[0][0])).toMatchObject({ type: 'entry', stepType: 95, outEntry: 6200027 })
+    expect(flow.main).toContain('40601')
+  })
+
+  it.each(['entry', 'file'])('打开旧 %s/95 步骤不为补齐建草稿，真实编辑时使用 entry/95', async (nodeType) => {
+    setActivePinia(createPinia())
+    const { flow, source } = loadTestSource()
+    const snapshot = { ...SNAPSHOT, configType: '95', nodeType }
+    flow.loadFromSource(flow.sourceCfg!, [snapshot])
+    source.rememberSteps([snapshot], 'replace')
+    const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const withDraft = vi.spyOn(useFlowVersionStore(), 'withDraft')
+    const writer = useStepWrite()
+
+    await writer.persistFlowSteps()
+    expect(modify).not.toHaveBeenCalled()
+    expect(withDraft).not.toHaveBeenCalled()
+
+    await writer.persistNodeName('40600', '已改名的文件步骤')
+    expect(modify).toHaveBeenCalledTimes(1)
+    expect(modify.mock.calls[0][0]).toMatchObject({ nodeType: 'entry', stepType: 95, name: '已改名的文件步骤' })
+    await writer.persistFlowSteps()
+    expect(modify).toHaveBeenCalledTimes(1)
+  })
+
   it('把进入条件写进 cond，并按画布重算 lastStep', async () => {
     setActivePinia(createPinia())
     const { flow } = loadTestSource()
@@ -264,7 +310,7 @@ describe('useStepWrite.persistFlowSteps', () => {
   })
 
   // 2026-10-15：186 实测启用版本的流程写草稿不校验 OUT_ENTRY——缺输出表的新节点照常建进草稿
-  it('流程启用版本：缺输出表的新节点照常 saveItemConfig 建进草稿（不带 outEntry）', async () => {
+  it.each(['excel', 'file'])('流程启用版本：缺输出表的 %s 新节点照常建进草稿（不带 outEntry）', async (template) => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     const source = useSourceStore()
@@ -278,7 +324,7 @@ describe('useStepWrite.persistFlowSteps', () => {
       versions: [{ versionId: '1043', flowVer: 1, ver: 4, state: 'W', isLock: 0, isDelete: 0, baseId: null }],
     } as never)
     await useFlowVersionStore().load('1400935')
-    const localId = flow.insertAfter('40600', 'excel-collect')!
+    const localId = flow.insertAfter('40600', template)!
     flow.configs[localId].configId = '1401215'
     flow.configs[localId].title = '缺输出表'
     if (flow.configs[localId].collectCfg) flow.configs[localId].collectCfg!.outputTable = ''
@@ -297,6 +343,8 @@ describe('useStepWrite.persistFlowSteps', () => {
 
     expect(result.created).toBe(1)
     expect(create.mock.calls[0][0].outputTable ?? null).toBeNull()
+    expect(create.mock.calls[0][0].nodeType).toBe('entry')
+    expect(create.mock.calls[0][0].stepType).toBe(template === 'file' ? 95 : 110)
     expect(create.mock.calls[0][1]).toMatchObject({ flowId: '1400935', versionId: '1043', ver: 4 })
   })
 
