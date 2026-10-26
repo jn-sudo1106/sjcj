@@ -2675,13 +2675,14 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     expect(dialog.find('[data-testid="site-script-dialog"] [data-testid="site-script-repository"]').exists()).toBe(false)
   })
 
-  it('部署构建没有站点脚本生成服务：只展示生成配置，不显示切换 Tab', async () => {
+  it('部署构建同样展示 AI 生成脚本与生成配置切换入口', async () => {
     vi.stubEnv('DEV', false)
     try {
       const { wrapper } = mountOnCollectorNode()
       await flushPromises()
-      expect(wrapper.find('[data-testid="open-site-script-generator"]').exists()).toBe(false)
-      expect(wrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="open-site-script-generator"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(true)
+      await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('click')
       expect(wrapper.get('[data-testid="main-generate-script"]').isVisible()).toBe(true)
     } finally {
       vi.unstubAllEnvs()

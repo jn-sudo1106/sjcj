@@ -47,14 +47,13 @@ it('未落库节点超时保留可重试错误，不创建临时部署', async (
   await vi.advanceTimersByTimeAsync(15_000); await rejected
   expect(runnerManagementApi.ensureNodeDeployment).not.toHaveBeenCalled()
 })
-it('虚拟源首节点按步骤 0 关联，未部署服务和无流程场景不调用接口', async () => {
+it('部署构建中虚拟源首节点按步骤 0 关联，无流程时不调用接口', async () => {
+  vi.stubEnv('DEV', false)
   const { flow, node } = fixture('source:1401081')
   await syncNodeDeployment(node, 'source:1401081')
   expect(runnerManagementApi.ensureNodeDeployment).toHaveBeenCalledWith(expect.objectContaining({ sourceNode: expect.objectContaining({ stepId: '0' }) }))
   vi.mocked(runnerManagementApi.ensureNodeDeployment).mockClear()
   flow.flowId = 'flow-default'
-  expect(await syncNodeDeployment(node, 'source:1401081')).toBeNull()
-  vi.stubEnv('DEV', false)
   expect(await syncNodeDeployment(node, 'source:1401081')).toBeNull()
   expect(runnerManagementApi.ensureNodeDeployment).not.toHaveBeenCalled()
 })

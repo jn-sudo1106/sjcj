@@ -61,12 +61,15 @@ describe('节点类型页面', () => {
     wrapper.unmount()
     vi.unstubAllEnvs()
   })
-  it('业务后端环境（无节点提示词接口）不显示提示词模板入口', async () => {
+  it('部署构建未配置独立流程后端也显示提示词模板入口，按需加载', async () => {
+    vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_FLOW_PROXY_TARGET', '')
     const list = vi.spyOn(nodePromptApi, 'list').mockResolvedValue([])
     const { wrapper } = await mountAs(['admin'])
-    expect(wrapper.findAll('[data-testid="node-type-prompts"]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-testid="node-type-prompts"]')).toHaveLength(2)
     expect(list).not.toHaveBeenCalled()
+    await wrapper.findAll('[data-testid="node-type-prompts"]')[0]!.trigger('click'); await flushPromises()
+    expect(list).toHaveBeenCalledWith({ sourceType: '90', templateUse: 'config' })
     wrapper.unmount()
     vi.unstubAllEnvs()
   })

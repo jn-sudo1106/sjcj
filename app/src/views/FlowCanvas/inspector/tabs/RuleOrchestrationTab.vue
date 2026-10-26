@@ -48,7 +48,6 @@ import { useFlowStore } from '@/stores/flow'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
-import { siteScriptAiAvailable } from '@/constants/deployGates'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import type { PublishedScript } from '@/api/runnerManagement'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
@@ -1369,9 +1368,7 @@ async function onSiteScriptSaved(version: PublishedScript, configId: string, que
     ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存编排配置重试`)
   }
 }
-// 部署环境还没有站点脚本生成服务，入口先隐藏（见 siteScriptAiAvailable）
-const siteScriptAvailable = siteScriptAiAvailable()
-const hasSiteScriptMode = computed(() => !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value && siteScriptAvailable)
+const hasSiteScriptMode = computed(() => !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value)
 const orchestrationMode = ref<'config' | 'ai'>('ai')
 function onOrchestrationTabKeydown(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
