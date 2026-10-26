@@ -14,11 +14,12 @@ const choices = [
   { promptId: 2, promptName: '公告抓取', nodeType: '90', nodeTypeName: '网页抓取', category: 'collect', systemPrompt: '公告 {{describe}}', userPromptTemplate: '字段 {{output_fields}}', isActive: 1, isDefault: 0 },
 ]
 beforeEach(() => {
+  vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
   vi.mocked(fetchPromptList).mockResolvedValue(choices)
   vi.mocked(nodePromptApi.selection).mockResolvedValue({ promptTemplateId: 2 })
   vi.mocked(nodePromptApi.select).mockImplementation(async (_id, promptTemplateId) => ({ promptTemplateId }))
 })
-afterEach(() => { vi.clearAllMocks(); vi.restoreAllMocks() })
+afterEach(() => { vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 function setup(preservePrompt = true, promptTemplateId = 2) {
   return mount(RuleWorkbenchDialog, { props: { open: false, title: '生成配置', scriptLabel: '配置', systemPrompt: '节点专属提示词', preservePrompt, promptTemplateId,
     promptCategory: '网页抓取', promptListCategory: 'collect', promptCategoryGroups: [], inputFields: [], outputFields: ['title'], inputFieldOptions: [], outputFieldOptions: [{ itemCode: 'title', itemName: '标题' }],
@@ -69,6 +70,25 @@ it('从节点配置恢复选择，并在切换时持久化；保存失败不改�
   w.getComponent(PromptTemplatePicker).vm.$emit('select', 2); await flushPromises()
   expect(w.getComponent(PromptTemplatePicker).props('modelValue')).toBe(1)
   expect(w.text()).toContain('保存提示词选择失败')
+  w.unmount()
+})
+it('读取选择失败时仍加载提示词模板', async () => {
+  vi.mocked(nodePromptApi.selection).mockRejectedValue(new Error('请求失败 500'))
+  const w = setup(false, 0); await w.setProps({ configId: '1401081', open: true }); await flushPromises()
+  expect(w.emitted('update:systemPrompt')?.at(-1)).toEqual(['新闻 当前需求'])
+  expect(w.text()).not.toContain('提示词模板加载失败')
+  w.unmount()
+})
+it('业务后端环境（无节点提示词接口）不读写选择，保存和生成不被拦住', async () => {
+  vi.stubEnv('VITE_FLOW_PROXY_TARGET', '')
+  const w = setup(false, 0); await w.setProps({ configId: '1401081', open: true }); await flushPromises()
+  expect(w.emitted('update:systemPrompt')?.at(-1)).toEqual(['新闻 当前需求'])
+  await w.findAll('button').find(b => b.text() === '保存')!.trigger('click'); await flushPromises()
+  await w.findAll('button').find(b => b.text() === '生成')!.trigger('click'); await flushPromises()
+  expect(nodePromptApi.selection).not.toHaveBeenCalled()
+  expect(nodePromptApi.select).not.toHaveBeenCalled()
+  expect(w.emitted('prompt-saved')).toBeTruthy()
+  expect(w.emitted('generate')).toBeTruthy()
   w.unmount()
 })
 it('配置已明确选择自定义时，不会重新套用默认提示词', async () => {

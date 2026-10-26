@@ -1,4 +1,5 @@
 import { nodePromptApi } from './nodePrompts'
+import { nodePromptsAvailable } from '@/constants/deployGates'
 
 export interface PromptTemplateItem {
   promptId: number
@@ -85,7 +86,7 @@ async function fetchJson(path: string): Promise<unknown> {
 }
 
 export async function fetchPromptList(category: string, nodeTypeName: string): Promise<PromptTemplateItem[]> {
-  if (import.meta.env.VITE_FLOW_PROXY_TARGET) {
+  if (nodePromptsAvailable()) {
     const rows = await nodePromptApi.list({ category, nodeTypeName, templateUse: 'config' })
     return rows.filter(row => row.isActive === 1).sort((a, b) => (b.isDefault ?? 0) - (a.isDefault ?? 0))
   }

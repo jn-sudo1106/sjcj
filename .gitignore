@@ -45,3 +45,5 @@ Pasted image *.png
 site-scripts/
 # Runner 运行日志及上传分片
 runner-logs/
+# 本地服务运行日志（2026-10-26 曾有 logs/info/*.log.gz 被误提交）
+logs/

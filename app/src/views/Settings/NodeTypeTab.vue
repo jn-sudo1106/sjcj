@@ -12,8 +12,11 @@ import { configApi, type NodeType, type NodeTypeInput } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useDictStore } from '@/stores/dict'
 import NodePromptTemplates from './NodePromptTemplates.vue'
+import { nodePromptsAvailable } from '@/constants/deployGates'
 
 const auth = useAuthStore()
+// 提示词模板接口只在独立流程后端上有，业务后端环境隐藏入口（见 nodePromptsAvailable）
+const promptsAvailable = nodePromptsAvailable()
 const dict = useDictStore()
 const canWrite = computed(() => auth.role === 'admin')
 
@@ -224,7 +227,7 @@ async function save() {
             <td class="nt-ellipsis" :title="t.notes">{{ t.notes || '—' }}</td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(t)">详情</el-button>
-              <el-button link type="primary" size="small" data-testid="node-type-prompts" @click="openDetail(t, 'prompts')">提示词模板</el-button>
+              <el-button v-if="promptsAvailable" link type="primary" size="small" data-testid="node-type-prompts" @click="openDetail(t, 'prompts')">提示词模板</el-button>
               <el-button v-if="canWrite" link type="primary" size="small" data-testid="node-type-edit" @click="openEdit(t)">编辑</el-button>
               <el-button v-if="canWrite" link type="danger" size="small" :loading="deleting === t.sourceType" data-testid="node-type-delete" @click="remove(t)">删除</el-button>
             </td>
@@ -247,7 +250,7 @@ async function save() {
         </template>
       </dl>
       </el-tab-pane>
-      <el-tab-pane label="提示词模板" name="prompts"><NodePromptTemplates v-if="detail && detailTab === 'prompts'" ref="promptTemplates" :node="detail" :can-write="canWrite" /></el-tab-pane>
+      <el-tab-pane v-if="promptsAvailable" label="提示词模板" name="prompts"><NodePromptTemplates v-if="detail && detailTab === 'prompts'" ref="promptTemplates" :node="detail" :can-write="canWrite" /></el-tab-pane>
       </el-tabs>
     </el-drawer>
 
@@ -284,7 +287,7 @@ async function save() {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button v-if="editing" @click="openEditorPrompts">提示词模板</el-button>
+        <el-button v-if="editing && promptsAvailable" @click="openEditorPrompts">提示词模板</el-button>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" data-testid="node-type-save" @click="save">保存</el-button>
       </template>

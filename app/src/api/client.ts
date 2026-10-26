@@ -541,7 +541,8 @@ export async function request<T>(
       })
     } catch (error) {
       if (timeoutExpired) throw new Error(`请求超时（${timeoutMs / 1000} 秒），后端未及时响应，请稍后重试`)
-      if (options.signal?.aborted && controller.signal.aborted) throw new Error('请求已取消')
+      // 保留 AbortError 名称：调用方（如 taskStat 的 isAbort）靠 ApiError.cause.name 区分「取消」与真实错误。
+      if (options.signal?.aborted && controller.signal.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' })
       throw error
     } finally {
       window.clearTimeout(timeout)

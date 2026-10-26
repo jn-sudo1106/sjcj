@@ -6,6 +6,7 @@ import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript } from '@/api/sit
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
+import { nodePromptsAvailable } from '@/constants/deployGates'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
 
 const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL 编写完整的 Python 新闻抓取代码。
@@ -201,7 +202,7 @@ async function initialize() {
   const [repoResult, versionResult, templateResult] = await Promise.allSettled([
     runnerManagementApi.codeRepositories(),
     props.configId && props.queueName ? runnerManagementApi.siteCodeVersions(props.configId, props.queueName) : Promise.resolve([] as SiteCodeVersion[]),
-    props.configType ? nodePromptApi.list({ sourceType: props.configType, templateUse: 'script' }) : Promise.resolve([]),
+    props.configType && nodePromptsAvailable() ? nodePromptApi.list({ sourceType: props.configType, templateUse: 'script' }) : Promise.resolve([]),
     loadModels(),
   ])
   if (session !== sessionId) return

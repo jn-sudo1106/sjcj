@@ -74,6 +74,8 @@ describe('业务 API 真实请求鉴权', () => {
     const assertion = expect(result).rejects.toThrow('请求已取消')
     external.abort()
     await assertion
+    // 取消仍以 AbortError 透出（ApiError.cause），调用方据此静默处理
+    await expect(result).rejects.toMatchObject({ cause: { name: 'AbortError' } })
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     await expect(request('item/next/nextConfigPaged')).rejects.toThrow('Failed to fetch')
   })
