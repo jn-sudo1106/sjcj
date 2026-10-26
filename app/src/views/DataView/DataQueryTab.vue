@@ -20,7 +20,6 @@ import TaskInstDialog from './TaskInstDialog.vue'
 import StepDrawer from './StepDrawer.vue'
 import TableDetailDialog from './TableDetailDialog.vue'
 import SourceDetailDrawer from './SourceDetailDrawer.vue'
-import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import AddDataMenu from '@/components/ResultToolbar/AddDataMenu.vue'
@@ -44,7 +43,7 @@ import { upperDataId, upperDataText } from './upperData'
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
 // 步骤展示（简化列表，无 DAG 图，见方案 §4.1 偏离决定）/任务实例弹窗/
-// 表结构详情·源详情（? 按钮）/加载更多数据表·更多源（方案 §1.3 补齐）。
+// 表结构详情·源详情（? 按钮）/下拉搜索表·更多源。
 // S5-1（0805 拍板，方案 §5.2）：筛选表单（数据ID/父ID/时间/后续标识/ID区间/条件表达式）+ 结果表格本体
 // （动态列渲染/排序/分页/可选勾选列）已抽到 @/components/DataQueryPanel.vue，跟 RuleTestDialog（S5-2）
 // 共用；本文件只保留选表/选源/快捷查询/结果工具条/批量操作业务逻辑/各弹窗，通过 query-change/loaded 事件
@@ -67,38 +66,80 @@ const COMMON_QUERIES: CommonQuery[] = [
 // ---- 选表 / 选源 ----
 const group = ref<EntryTypeGroup>({ list1: [], list2: [], list3: [] })
 const tableId = ref('')
+const dsKind = ref<EntryType['dsKind'] | ''>('')
+const panelKey = ref(0)
 const tableMeta = ref<DataTableMeta | null>(null)
 const sourceOptions = ref<SourceOption[]>([])
 const tableSourceIds = ref<string[]>([])
 const sourceLoading = ref(false)
 const sourceId = ref('')
-const tableSelectRef = ref<{ blur: () => void } | null>(null)
 const sourceSelectRef = ref<{ blur: () => void } | null>(null)
 
-/**
- * 「加载更多数据表」选中的那条表：模板里 other 分组只渲染 `list3.slice(0, 5)`，
- * 而 list3 是「全库表 − 主表 − 同类源的表」（见 api/index.ts 里 entryTypesGroup 的口径），
- * 选中的表几乎一定本来就在 list3 里、只是排在第 6 条之后。
- * 所以不能只判「已存在就不动」，必须把它摘出来插到最前面，否则下拉框里没有对应的
- * el-option，el-select 的 getOption() 找不到选项会直接拿值当标签 —— 表现为只显示表 ID。
- */
+// 搜索选中的表可能不在下拉首屏里，缓存后带入后续分组回读，保留名称与类型。
 const pickedTable = ref<EntryType | null>(null)
 
 function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
   const picked = pickedTable.value
-  if (!picked) return source
+  if (!picked || !matchesDsKind(picked)) return source
   const rest = source.list3.filter((t) => t.tableId !== picked.tableId)
   // 后端重新分组后它已经落进 list1/list2，就别在 list3 里再塞一份
   if ([...source.list1, ...source.list2].some((t) => t.tableId === picked.tableId)) return { ...source, list3: rest }
   return { ...source, list3: [picked, ...rest] }
 }
 
-async function loadGroup() {
+function matchesDsKind(table: EntryType) {
+  return !dsKind.value || (table.dsKind ?? 'MYSQL') === dsKind.value
+}
+let groupRequest = 0
+async function loadGroup(selectDefault = true) {
   // 切表时如果当前源不在新表里，会走 loadSources → clearedSource → loadGroup，
   // 整块覆盖 group，选中的那条就被冲掉了，这里补回来
-  group.value = withPickedTable(await dataApi.entryTypesGroup(sourceId.value || undefined))
-  if (!tableId.value) {
-    tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || ''
+  const requestId = ++groupRequest
+  const result = dsKind.value
+    ? await dataApi.entryTypesGroup(sourceId.value || undefined, dsKind.value)
+    : await dataApi.entryTypesGroup(sourceId.value || undefined)
+  if (requestId !== groupRequest) return
+  const loaded = withPickedTable(result)
+  group.value = {
+    ...loaded,
+    list1: loaded.list1.filter(matchesDsKind),
+    list2: loaded.list2.filter(matchesDsKind),
+    list3: loaded.list3.filter(matchesDsKind),
+  }
+  const tables = [...group.value.list1, ...group.value.list2, ...group.value.list3]
+  if (!tables.some((table) => table.tableId === group.value.main)) group.value.main = undefined
+  if (!tableId.value && selectDefault) {
+    tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || group.value.list2[0]?.tableId || ''
+  }
+}
+
+function clearTableSelection() {
+  tableId.value = ''
+  tableMeta.value = null
+  sourceId.value = ''
+  sourceOptions.value = []
+  tableSourceIds.value = []
+  ++sourceScopeRequest
+  ++sourceSearchRequest
+  sourceLoading.value = false
+  pickedTable.value = null
+  selectedRowKeys.value = []
+  panelRows.value = []
+  panelTotal.value = 0
+  panelFilter.value = { page: 1, size: 20 }
+  panelKey.value += 1
+}
+async function onDsKindChange() {
+  const selected = pickedTable.value?.tableId === tableId.value
+    ? pickedTable.value
+    : [...group.value.list1, ...group.value.list2, ...group.value.list3].find((table) => table.tableId === tableId.value)
+  if (tableId.value && (!selected || !matchesDsKind(selected))) clearTableSelection()
+  tableKeyword.value = ''
+  group.value = { list1: [], list2: [], list3: [] }
+  try {
+    await loadGroup(false)
+  } catch (error) {
+    ElMessage.error(`加载数据表失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -127,18 +168,26 @@ function openSourceDetailForRow(sid: string) {
   sourceDetailOpen.value = true
 }
 
-// ---- 加载更多数据表 / 更多源（方案 §1.3-1/§1.3-2） ----
-const moreTablesOpen = ref(false)
-function openMoreTables() {
-  tableSelectRef.value?.blur()
-  moreTablesOpen.value = true
-}
-async function onTablePicked(entry: EntryType) {
-  // 选中的这条塞进 list3 最前面（同 ID 的先摘掉，避免出现两个同值选项）
-  pickedTable.value = entry
-  tableId.value = entry.tableId
-  group.value = withPickedTable(group.value)
-  await onTableChange()
+// ---- 下拉内搜索表 / 更多源 ----
+const TABLE_OPTION_LIMIT = 20
+const tableKeyword = ref('')
+const tableChoices = computed(() => {
+  const known = [...group.value.list1, ...group.value.list2, ...group.value.list3]
+  const keyword = tableKeyword.value.toLowerCase()
+  const candidates = known.filter(table => !keyword || [table.tableId, table.name ?? '', table.tableName]
+    .some(value => value.toLowerCase().includes(keyword)))
+  const selected = pickedTable.value?.tableId === tableId.value
+    ? pickedTable.value : known.find(table => table.tableId === tableId.value)
+  const seen = new Set<string>()
+  return [...(!tableKeyword.value && selected ? [selected] : []), ...candidates]
+    .filter(table => {
+      if (!matchesDsKind(table) || seen.has(table.tableId)) return false
+      seen.add(table.tableId)
+      return true
+    }).slice(0, TABLE_OPTION_LIMIT)
+})
+function onTableSearch(keyword: string) {
+  tableKeyword.value = keyword.trim()
 }
 const moreSourcesOpen = ref(false)
 function openMoreSources() {
@@ -149,7 +198,15 @@ async function onSourcePicked(source: Source) {
   // “更多源”是跨表按源搜索入口：选中源后切到该源的默认数据表。
   sourceId.value = source.sourceId
   await loadGroup()
-  tableId.value = group.value.main || source.mainTable || group.value.list1[0]?.tableId || group.value.list3[0]?.tableId || ''
+  const tables = [...group.value.list1, ...group.value.list2, ...group.value.list3]
+  tableId.value = [group.value.main, source.mainTable, ...tables.map((table) => table.tableId)]
+    .find((id) => tables.some((table) => table.tableId === id)) || ''
+  if (!tableId.value) {
+    clearTableSelection()
+    await loadGroup(false)
+    ElMessage.warning('该源在当前库类型下没有可选数据表')
+    return
+  }
   await loadTableMeta()
   await loadSources()
   if (source.mainTable === tableId.value && !tableSourceIds.value.includes(source.sourceId)) {
@@ -256,7 +313,9 @@ function onSourceSearch(keyword: string) {
   sourceSearchTimer = setTimeout(() => void searchSources(keyword), 300)
 }
 async function loadTableMeta() {
-  tableMeta.value = tableId.value ? await dataApi.tableMeta(tableId.value) : null
+  const selectedTable = tableId.value
+  const meta = selectedTable ? await dataApi.tableMeta(selectedTable) : null
+  if (selectedTable === tableId.value) tableMeta.value = meta
 }
 
 // ---- 查询面板桥接（S5-1）：面板自己管筛选字段/结果/分页，这里只镜像它的输出，
@@ -307,8 +366,13 @@ const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
 const selectedRowKeys = ref<string[]>([])
 
 async function onTableChange() {
+  const selectedTable = tableId.value
+  const selected = tableChoices.value.find(table => table.tableId === selectedTable)
+  if (selected) pickedTable.value = selected
   await loadTableMeta()
+  if (selectedTable !== tableId.value) return
   await loadSources()
+  if (selectedTable !== tableId.value) return
   panelRef.value?.search()
 }
 async function onSourceChange() {
@@ -1001,6 +1065,7 @@ onUnmounted(() => {
     <!-- 表与源作为查询上下文放在筛选主行，减少割裂的独立工具栏。 -->
     <!-- 查询条件与结果表格：基础条件常显，高级条件默认收起，见 DataQueryPanel.vue -->
     <DataQueryPanel
+      :key="panelKey"
       ref="panelRef"
       :table-id="tableId"
       :source-id="sourceId"
@@ -1020,21 +1085,14 @@ onUnmounted(() => {
     >
       <template #context>
       <BrowseModeToggle v-model="browseMode" />
-      <el-select v-if="browseMode === 'table'" ref="tableSelectRef" v-model="tableId" filterable placeholder="选择数据表" style="width: 160px" @change="onTableChange">
-        <el-option-group label="main">
-          <el-option v-for="t in group.list1" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
-        </el-option-group>
-        <el-option-group label="subs">
-          <el-option v-for="t in group.list2" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
-        </el-option-group>
-        <el-option-group label="other">
-          <el-option v-for="t in group.list3" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
-        </el-option-group>
-        <template #footer>
-          <span class="dv-link" @click.stop="openMoreTables">
-            <el-icon><Plus /></el-icon>加载更多数据表...
-          </span>
-        </template>
+      <el-select v-if="browseMode === 'table'" v-model="dsKind" aria-label="库类型" data-testid="data-ds-kind-filter" style="width: 125px" @change="onDsKindChange">
+        <template #prefix><span>库</span></template>
+        <el-option label="全部" value="" />
+        <el-option label="CK" value="CK" />
+        <el-option label="MYSQL" value="MYSQL" />
+      </el-select>
+      <el-select v-if="browseMode === 'table'" v-model="tableId" filterable :filter-method="onTableSearch" placeholder="选择数据表" no-match-text="没有匹配的数据表" style="width: 200px" @change="onTableChange">
+        <el-option v-for="t in tableChoices" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName} · ${t.dsKind ?? 'MYSQL'}`" />
       </el-select>
       <button v-if="browseMode === 'table'" class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
         <el-icon><QuestionFilled /></el-icon>
@@ -1391,8 +1449,7 @@ onUnmounted(() => {
     <TableDetailDialog v-model="tableDetailOpen" :table-meta="tableMeta" />
     <SourceDetailDrawer v-model="sourceDetailOpen" :source-id="sourceDetailTargetId" />
 
-    <!-- 加载更多数据表 / 更多源（方案 §1.3-1/§1.3-2） -->
-    <MoreTablesDialog v-model="moreTablesOpen" @picked="onTablePicked" />
+    <!-- 更多源（跨表搜索） -->
     <MoreSourcesDialog v-model="moreSourcesOpen" @picked="onSourcePicked" />
   </div>
 </template>

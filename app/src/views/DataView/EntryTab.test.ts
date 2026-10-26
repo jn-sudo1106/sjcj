@@ -82,6 +82,32 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy).toHaveBeenLastCalledWith(expect.objectContaining({ entryTypeId: undefined, name: undefined, enable: undefined }))
   })
 
+  it('库类型默认全部；切 CK 保留名称条件，翻页与排序继续带类型，重置恢复全部', async () => {
+    const paged = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 60, list: [] })
+    await mountTab()
+    await waitForLoad()
+    const select = wrapper.findAllComponents({ name: 'ElSelect' }).find((c) => c.attributes('data-testid') === 'entry-ds-kind-filter')!
+    expect(select.props('modelValue')).toBe('')
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ dsKind: undefined }))
+    await wrapper.find('input[placeholder="表名称"]').setValue('行情')
+    select.vm.$emit('update:modelValue', 'CK')
+    select.vm.$emit('change', 'CK')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ dsKind: 'CK', name: '行情', page: 1 }))
+    const pagination = wrapper.findComponent({ name: 'ElPagination' })
+    pagination.vm.$emit('update:currentPage', 2)
+    pagination.vm.$emit('current-change', 2)
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ dsKind: 'CK', page: 2 }))
+    await wrapper.findAll('th').find((th) => th.text().includes('表名称'))!.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ dsKind: 'CK', field: 'typeName', page: 1 }))
+    await wrapper.findAll('button').find((b) => b.text() === '重置')!.trigger('click')
+    await flushPromises()
+    expect(select.props('modelValue')).toBe('')
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ dsKind: undefined, page: 1 }))
+  })
+
   it('深链接 ?entryTypeId= 自动带入检索', async () => {
     const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
     await mountTab({ entryTypeId: '2102157' })

@@ -2590,11 +2590,11 @@ async function importEntryData(input: EntryDataImportInput): Promise<EntryDataIm
 
 export const dataApi = {
   // 选表分组（旧 EntryTypeSelectMulti 分组下拉的数据源）；sourceId 可空
-  entryTypesGroup: async (sourceId?: string) => {
-    const result = await request<unknown>('data/entryTypesGroup', { sourceId }, {
+  entryTypesGroup: async (sourceId?: string, dsKind?: EntryType['dsKind']) => {
+    const result = await request<unknown>('data/entryTypesGroup', { sourceId, dsKind }, {
       method: 'GET',
       httpEndpoint: 'config/queryEntryTypesGroup',
-      httpParams: sourceId ? { sourceId } : {},
+      httpParams: { sourceId, dsKind },
     })
     return entryTypeGroupFromLegacy(result)
   },
@@ -3142,6 +3142,7 @@ export const entryApi = {
       entryTypeId: p.entryTypeId,
       name: p.name,
       enable: p.enable,
+      dsKind: p.dsKind || undefined,
       // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
       cond: p.cond,
       // 1022：排序（白名单 entryTypeId/typeName/tableName/keyField/state/updateDt，order=asc|desc）；不传 = 表 ID 倒序

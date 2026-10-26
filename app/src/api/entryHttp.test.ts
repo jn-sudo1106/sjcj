@@ -55,6 +55,17 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
     expect(url).not.toContain('enable=')
   })
 
+  it.each(['CK', 'MYSQL'] as const)('列表透传库类型 dsKind=%s，由后端统一筛选并计数分页', async (dsKind) => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { entryApi } = await import('./index')
+    await entryApi.entryPaged({ dsKind, page: 2, size: 30 })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url, 'http://localhost').searchParams
+    expect(params.get('dsKind')).toBe(dsKind)
+    expect(params.get('page')).toBe('2')
+    expect(params.get('limit')).toBe('30')
+  })
+
   it('详情使用 GET 和旧字段名 typeId（非 tableId/entryTypeId）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { entryTypeId: '2102157', tableName: 't', items: [] } }))
     const { entryApi } = await import('./index')

@@ -46,6 +46,7 @@ const ENTRIES: EntryType[] = [
 // 旧 EntryTypeList 检索是 entryTypeId/name 两个独立框，无 enable 下拉（mock 未建模删除态，enable 透传不参与过滤）。
 function matches(e: EntryType, p?: Record<string, unknown>): boolean {
   if (!p) return true
+  if (p.dsKind && (e.dsKind ?? 'MYSQL') !== p.dsKind) return false
   const entryTypeId = String(p.entryTypeId ?? '').trim()
   if (entryTypeId && !e.tableId.includes(entryTypeId)) return false
   const name = String(p.name ?? '').trim().toLowerCase()
