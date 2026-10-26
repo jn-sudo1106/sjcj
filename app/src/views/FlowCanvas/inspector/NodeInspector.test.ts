@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import NodeInspector from './NodeInspector.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { useFlowVersionStore } from '@/stores/flowVersion'
@@ -65,7 +66,7 @@ describe('编排保存自动同步部署配置', () => {
   })
 })
 
-// 0927 H1：非文件节点输出表未就绪 → 检查器顶部常驻警告条；文件节点 / 已有输出表不显示。
+// 新旧文件下载均按 entry 校验；已有输出表不显示缺表提示。
 // （输出表未就绪 = 显式输出表、默认=输入表、快照输出表三者都没有，后端必填 OUT_ENTRY。）
 describe('NodeInspector 输出表未就绪警告条（0927 H1）', () => {
   it('规则节点未选输出表：显示警告条', async () => {
@@ -94,17 +95,28 @@ describe('NodeInspector 输出表未就绪警告条（0927 H1）', () => {
     expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(false)
   })
 
-  it('文件下载节点不校验输出表：不显示警告条', async () => {
+  it('新文件下载缺输出表：显示警告条', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
-    const cfg = cloneConfig(NODE_CONFIGS['rule'])
-    cfg.template = 'file'
+    const cfg = cloneConfig(NODE_CONFIGS['file-download'])
     flow.configs['file-1'] = cfg
     flow.select('file-1')
     const wrapper = mount(NodeInspector)
     await flushPromises()
-    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(true)
+  })
+
+  it('历史 type=file 缺输出表：同样显示警告条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['40600'] = cloneConfig(NODE_CONFIGS['file-download'])
+    useSourceStore().rememberSteps([{ stepId: '40600', sourceId: '-1', name: '旧文件步骤', enabled: true, nodeType: 'file' }], 'replace')
+    flow.select('40600')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(true)
   })
 })
 

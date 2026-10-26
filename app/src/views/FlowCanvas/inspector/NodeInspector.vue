@@ -13,7 +13,7 @@ import { useUiStore } from '@/stores/ui'
 import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { cronSaveErrorHint, unpublishedFlowCronHint } from '@/utils/flow/cronSaveHint'
 import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
+import { outputTableMissing } from '@/utils/flow/stepPersist'
 import { nodeStatusOf } from '@/views/FlowCanvas/canvas/nodeStatus'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
@@ -91,7 +91,7 @@ watch(() => flow.selectedId, () => {
 // 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
 // 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），
 // 配置名称/使用节点数/状态要等 config/configDetail 与使用范围接口（0824-07 §5），拿不到就不渲染，不填占位 0。
-// 0927 H1：当前节点输出表未就绪（非文件节点：显式输出表 / 默认=输入表 / 快照输出表都没有）。
+// 当前节点输出表未就绪；文件下载同样按 entry 校验，废弃 type=file 不再提供豁免。
 // 自动保存会跳过该节点并置头部 pending「请先补全节点配置」；这里常驻提示引导去「表配置」。
 // 0927（H1 修订）：数据监控节点「不落表/不出参」——它的表在编排配置 tab 的监控方法里绑，
 // 输出表恒等于输入表（后端监控步骤行 outputTable=inputTable），表配置里没有「输出表」
@@ -106,14 +106,13 @@ const outputTableWarning = computed(() => {
   const node = cfg.value
   if (!node) return false
   const snapshot = sourceStore.stepSnapshots[id.value]
-  if (isFileLikeNode(node, snapshot)) return false
   if (isMonitorNode(node)) return false
   return outputTableMissing(node, snapshot)
 })
 // 2026-10-15：启用版本的流程缺输出表也能存进草稿，只在发布 / 发起抓取前拦；未启用版本时后端仍拒，自动保存跳过该节点
 const outputTableWarningText = computed(() => (flowVersion.allowsEmptyOutput(canvasFlowIdOf(flow))
   ? '节点已可保存到草稿，但发布和发起抓取前必须选择输出表，请在「表配置」补上'
-  : '非文件节点保存时后端要求必须声明输出表（OUT_ENTRY）。当前该节点会自动跳过保存，请在「表配置」选择输出表后重试'))
+  : '当前步骤保存时必须声明输出表（OUT_ENTRY）。该节点会自动跳过保存，请在「表配置」选择输出表后重试'))
 const configId = computed(() => cfg.value?.configId || '')
 // sourceId 视角下，后端会把源自身的 config 套成 itemConfig=0 的虚拟首节点。
 // 新建采集走 snatchSave(newConfig=1)，这份配置就是随源刚创建的；仅凭“已有 configId”把它
@@ -577,7 +576,7 @@ onMounted(async () => {
         />
       </div>
 
-      <!-- 0927 H1：输出表未就绪的常驻提示（覆盖规则/监控/采集等所有非文件节点）。 -->
+      <!-- 输出表未就绪的常驻提示；entry/95 文件下载同样需要选表。 -->
       <div v-if="inputMismatch" class="ni-output-warn" data-testid="input-table-mismatch">
         <el-alert type="info" :closable="false" show-icon title="输入表与上游输出表不一致" :description="`本节点输入表 ${inputMismatch.own}，上游输出表 ${inputMismatch.upstream}。上游插入、删除节点或改表时，本节点输入表不会自动跟随`" />
       </div>

@@ -225,7 +225,16 @@ export function useStepWrite() {
     })
     // 2026-10-10：提交内容与快照完全一致就不写。自动保存每轮都会走到所有已有步骤，原来无改动也整包
     // 回写；流程进版本模式后，这种空写会在**只是打开流程**时就自动建出草稿（217 实测 21000003）。
-    if (JSON.stringify(stepToStepModifyPayload(step)) === JSON.stringify(stepToStepModifyPayload(snapshot))) return
+    // 2026-10-25：stepType 是派生副本（mergeStepForWrite 从配置 configType 算出），判脏时剔除——
+    // 未改动步骤每轮都会比快照多出这一键，不剔除会把所有步骤都判成脏、每轮整包回写。
+    // 文件下载的旧 list/detail 身份也只在有其它改动时随整包归一为 entry。
+    // 不为类型副本的首次补齐单独创建草稿；实际新增/修改请求始终携带正确的 type / stepType。
+    const comparablePayload = (p: Record<string, unknown>) => {
+      const rest = { ...p }
+      delete rest.stepType
+      return !snapshot.isRoot && cfg.template === 'file' && snapshot.nodeType !== 'rule' ? { ...rest, type: 'entry' } : rest
+    }
+    if (JSON.stringify(comparablePayload(stepToStepModifyPayload(step))) === JSON.stringify(comparablePayload(stepToStepModifyPayload(snapshot)))) return
     const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.stepModify(step, ...versionArgs(ref)))
     assertOk(ack, '修改步骤失败')
     sourceStore.rememberSteps([step], 'merge')
@@ -369,7 +378,7 @@ export function useStepWrite() {
     const snapshot = sourceStore.stepSnapshots[nodeId]
     if (blockedByMissingOutput(flow.configs[nodeId], snapshot)) {
       flow.setTitle(nodeId, trimmed)
-      ElMessage.warning('已改画布名称，但该节点输出表未选择（非文件节点必填），补上输出表后自动保存才会落库')
+      ElMessage.warning('已改画布名称，但该节点输出表未选择，补上输出表后自动保存才会落库')
       return
     }
     const prev = flow.configs[nodeId]?.title ?? ''
@@ -415,8 +424,8 @@ export function useStepWrite() {
       const cfg = flow.configs[id]
       // 未绑定配置的草稿节点留在画布上（等右侧绑定），不阻断其它节点的自动保存（0926）。
       if (!cfg || !cfg.configId) continue
-      // 0927 H1：非文件节点输出表未就绪 = 配置未就绪草稿：提交必被后端「节点输出表不能为空」
-      // 拒绝，这里同样跳过该节点（画布状态保留，头部提示去补输出表），不整批卡死。
+      // 需要输出表的步骤（含 entry/95 文件下载）尚未选表 = 配置未就绪草稿：提交会被后端拒绝。
+      // 此处跳过该节点（画布状态保留，头部提示去补输出表），不整批卡死。
       if (blockedByMissingOutput(cfg, sourceStore.stepSnapshots[id])) continue
       await createAndLocate(id)
       created += 1

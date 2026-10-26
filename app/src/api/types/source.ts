@@ -458,6 +458,11 @@ export interface Step {
   nodeType?: string
   /** 配置详情中的 configType；用于回读没有明确 nodeType 的规则型节点。 */
   configType?: string
+  /** 步骤级类型（后端 cs_item_config.step_type 的 JSON 键；回读时由后端行原样带出，可为 null）。
+   *  2026-10-25 起前端保存步骤时补写：与配置 configType 同源（mergeStepForWrite 用
+   *  configTypeFrom(cfg) 取值），文件下载=95、网页抓取=90、规则=600……保持步骤行与配置行
+   *  的类型副本一致；后端选择性更新不认识该键的版本会静默忽略（实测契约，见 0925 核对）。 */
+  stepType?: number
   inputTable?: string // 步骤输入表
   // 步骤输出表（outEntry）。0929 放宽到 null：适配层对「库中 outEntry 为空」的存量行
   // 原样回读 null（legacyAdapters:1089），与「未提交」的 undefined 语义不同——ROOT 行

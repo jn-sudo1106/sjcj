@@ -279,6 +279,34 @@ describe('旧平台配置模型适配', () => {
 })
 
 describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 430016821 修复 lastStep/context 混淆）', () => {
+  it.each(['entry', 'rule', 'file'])('步骤类型 %s：写入边界只将废弃 file 归一为 entry', (nodeType) => {
+    const step = stepFromLegacy({ itemConfig: 42, type: nodeType, stepType: 95 }, '1')
+    expect(step.nodeType).toBe(nodeType)
+    const expected = nodeType === 'file' ? 'entry' : nodeType
+    expect(stepToSaveItemConfigPayload(step)).toMatchObject({ type: expected, stepType: 95 })
+    expect(stepToStepModifyPayload(step)).toMatchObject({ type: expected, stepType: 95 })
+  })
+
+  it.each([undefined, null, '', 'file', 'NaN', 'Infinity', NaN, Infinity, -Infinity])('无效 stepType %s 不进入步骤写入体', (stepType) => {
+    const step = stepFromLegacy({ itemConfig: 42, stepType }, '1')
+    expect(step.stepType).toBeUndefined()
+    const payload = stepToStepModifyPayload(step)
+    expect(payload).not.toHaveProperty('stepType')
+    expect(JSON.stringify(payload)).not.toContain('"stepType"')
+  })
+
+  it.each([NaN, Infinity, -Infinity])('内存中的非有限 stepType %s 也不进入请求', (stepType) => {
+    const step = { ...stepFromLegacy({ itemConfig: 42 }, '1'), stepType }
+    expect(stepToSaveItemConfigPayload(step)).not.toHaveProperty('stepType')
+  })
+
+  it('数字字符串 stepType 可回读并随新建和修改请求保存', () => {
+    const step = stepFromLegacy({ itemConfig: 42, stepType: '95' }, '1')
+    expect(step.stepType).toBe(95)
+    expect(stepToSaveItemConfigPayload(step)).toMatchObject({ stepType: 95 })
+    expect(stepToStepModifyPayload(step)).toMatchObject({ stepType: 95 })
+  })
+
   it('lastStep 只作为依赖排序用的 dependsOn，不再冒充上下文来源；上下文来源来自真实的 context 字段', () => {
     // 取自生产 118.25.96.217 实测响应（源 430016821，第 3 步 itemConfig=40598）：
     // lastStep="40597" 是前一步骤 ID，context="K2,K17" 才是 cond 表达式里引用的字段代号。

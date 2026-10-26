@@ -58,6 +58,8 @@ export function inferCollectorKind(cc?: CollectConfig): CollectorKind {
   if (/BROWSER/.test(st)) return 'browser_html'
   if (/WECHAT/.test(st)) return 'wechat_official_html'
   if (/\[170\]/.test(st)) return 'python'
+  // 新建和配置详情确认为 95 的文件下载显式带 collectorKind；无明确身份的旧 95 仍兼容 APP。
+  if (/\[140\]/.test(st)) return 'app'
   if (/\[95\]/.test(st)) return cc?.webKind === 'attachment' ? 'file_download' : 'app'
   return 'web'
 }
@@ -382,15 +384,25 @@ const NODE_CONFIG_SEEDS = {
     },
     taskCfg: { queue: '', urlSourceField: 'file_url-K4', urlRule: '$VAL$' },
   },
+  'file-download': {
+    title: '文件下载', sub: '[95] 文件下载', status: '待配置', planned: false, collect: true, template: 'file',
+    base: [], fields: [], inmap: [], params: [], output: [],
+    collectCfg: {
+      snatchType: '[95] - 文件下载', collectorKind: 'file_download', url: '',
+      webKind: 'detail', isDetail: true,
+      outputTable: '', inputTable: '', inputParams: [],
+    },
+    taskCfg: { queue: '', urlRule: '$VAL$' },
+  },
   'app-collect': {
-    title: 'APP 抓取', sub: '[95] APP 抓取 · 移动端接口', status: '待配置', planned: false, collect: true,
+    title: 'APP 抓取', sub: '[140] APP 抓取 · 移动端接口', status: '待配置', planned: false, collect: true,
     base: [['包名', 'com.example.app'], ['接口地址', 'https://m.example.com/api/list?page=${page}'], ['采集方式', 'APP 接口抓取'], ['鉴权方式', '接口 token / 设备参数']],
     fields: [['登录态', '按接口鉴权'], ['设备参数', '二期接入'], ['源标签', 'APP、接口']],
     inmap: [['page', '序列参数', '1..20'], ['token', '常量 / 登录态', '按接口鉴权']],
     params: [['page', 'sequence', '1..20'], ['token', 'credential', '接口鉴权参数']],
     output: [['payload', 'json', '接口返回'], ['content', 'longtext', '正文'], ['source_url', 'url', '来源链接']],
     collectCfg: {
-      snatchType: '[95] - APP 抓取', url: 'https://m.example.com/api/list?page=${page}',
+      snatchType: '[140] - App抓取', url: 'https://m.example.com/api/list?page=${page}',
       webKind: 'list',
       outputTable: '', inputTable: '', inputParams: [],
       isDetail: false,
@@ -547,7 +559,8 @@ const NODE_CONFIG_SEEDS = {
     taskCfg: { queue: 'dev_web_videotoaudio', urlRule: '' },
   },
   'pdf-md': {
-    title: 'PDF转MD', sub: '[911] PDF转MD · 文档转 Markdown', status: '待配置', planned: false,
+    // 2026-10-25 编号订正：后端 source_type 是 802（此前按 911 写，后端不存在该值）。
+    title: 'PDF转MD', sub: '[802] PDF转MD · 文档转 Markdown', status: '待配置', planned: false,
     base: [['文件来源', '← 上游节点产物'], ['输出格式', 'Markdown'], ['失败策略', '记录并跳过']],
     fields: [['保留表格', '是'], ['保留图片', '否'], ['能力状态', '通用处理节点']],
     inmap: [['pdf_file', '← 上游节点.pdf_file', 'PDF 文件']],
@@ -707,7 +720,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = normalizeNodeConfigs(NOD
 // ---------- 模板映射 ----------
 // 模板 → 节点配置 key
 export const TEMPLATE_TO_NODE: Record<string, string> = {
-  web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
+  web: 'web-list', app: 'app-collect', file: 'file-download', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
   ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
   rule: 'rule', 'rule-trace': 'rule', monitor: 'rule', 'data-validation': 'rule', metric: 'metric', mail: 'mail',
   alert: 'alert', custom: 'custom',
@@ -727,15 +740,16 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
  * 取值**照抄后端字典** `GET /v1/config/sourceTypes`（旧 `api/source-type.js` 的 allSourceTypes）。
  *
  * 此前这里是硬编码的臆造值，实测查出三处错（0824-11 §1.2d 同类问题）：
- *   - `[95] - APP 抓取` / `[95] - 文件下载`：**后端没有 95**。真实 App 抓取是 **140**；
- *   - `[155] - AI 提取`：**后端没有 155**；
+ *   - `[95] - APP 抓取` / `[95] - 文件下载`：当时后端没有 95，真实 App 抓取是 **140**；
+ *     后来字典已新增 `95 = 文件下载`，所以现有文件下载节点使用 95，App 抓取仍用 140。
+ *   - `[155] - AI 提取`：后端没有 155；
  *   - `[150]` 的名字是「OCR抓取」不是「OCR 识别」。
- * 95/155 不是无害的显示问题——`legacyAdapters.sourceTypeFromSnatchType()` 会把 `[95]` 解析成
- * sourceType=95 写进新建源的请求体。
+ * 155 不是无害的显示问题——`legacyAdapters.sourceTypeFromSnatchType()` 会把 `[155]` 解析成
+ * sourceType=155 写进新建源的请求体。95 现在是字典值；若存在历史 APP 抓取误写 95，只做存量兼容。
  *
- * 生产分布实测（2026-08-28，1050 条配置抽样 600 条）：**全部是 90**，
- * 连「通用浏览器下载」（#1400232）也是 90——浏览器/公众号/文件下载/登录都不是独立类型，
- * 区分在别的字段上（登录是 `templetCode='login'`，见 §1.2d）。
+ * 生产分布实测（2026-08-28，1050 条配置抽样 600 条）：**当时全部是 90**，
+ * 连「通用浏览器下载」（#1400232）也是 90——浏览器/公众号/登录当时都不是独立类型，
+ * 区分在别的字段上（登录是 `templetCode='login'`，见 §1.2d）。后续字典已补 95=文件下载。
  *
  * **2026-09-17 与后端表重新对齐（用户提供 source_type/type_name 全量）**：
  *   - 补上原先没有的 110/120/130/150/160/500 与 700/710/720，凑齐 17 条；
@@ -745,9 +759,19 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
  *   - **800 现在归「翻译助手」**（2026-09-17 直接读 sense_db.cfg_source_type 核对）。
  *     注意 800 在 09-07～09-17 之间被本前端当作「数据校验」写过，所以回读时**按节点名**区分：
  *     名字指向校验的按校验认，其余的 800 才是翻译助手。
+ *
+ * **2026-10-25 再次与后端全量（22 条）对齐**：
+ *   - **PDF转MD 是 `802`，不是 `911`**。911 后端不存在，是本前端 10-21 按错误编号写死的值，
+ *     `configTypeFrom()` 会把它写进 `cs_config.configType`——保存即脏数据，按 802 查也查不到。
+ *     现在写值统一 802；回读侧（byConfigType / buildNodeForStep / nodeConfigPayload / isPdfMdNode /
+ *     SOURCE_TYPE_NAME_BY_ID）对 911 保留兼容，让已写脏的存量配置仍能显示成 PDF转MD。
+ *   - 新增 `[801] - 网页抓取CS`：只进本字典与类型名表，**节点库暂不建条目**——它的能力
+ *     （是否等同 90、输出表/队列是否固定）需要产品先定义，避免再自造一套节点语义。
+ *   - 用户后续在字典新增 `95 = 文件下载`，本快照同步为 22 条。
  */
 export const SNATCH_TYPES = [
   '[90] - 网页抓取',
+  '[95] - 文件下载',
   '[110] - EXCEL抓取',
   '[120] - DOC抓取',
   '[130] - PDF抓取',
@@ -766,7 +790,9 @@ export const SNATCH_TYPES = [
   '[720] - 文章生成摘要',
   '[730] - 文章打标签',
   '[800] - 翻译助手',
-  '[911] - PDF转MD',
+  // 2026-10-25 按后端 source_type 全量（22 条）补齐：801 网页抓取CS、PDF转MD 是 802 不是 911；后续新增 95=文件下载。
+  '[801] - 网页抓取CS',
+  '[802] - PDF转MD',
 ]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
@@ -845,9 +871,10 @@ export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
 /**
  * 模板 → 默认抓取类型。取值必须出自 SNATCH_TYPES，见其注释。
  *
- * 浏览器抓取 / 公众号抓取 / 文件下载 / 网页登录**都归 90 网页抓取**——2026-08-28 生产实测：
+ * 浏览器抓取 / 公众号抓取 / 网页登录**仍归 90 网页抓取**——2026-08-28 生产实测：
  * 后端字典里没有它们各自的类型，「通用浏览器下载」#1400232 的 configType 就是 90，
- * 抽样 600 条配置也全是 90。它们的差异体现在别的字段上（登录是 `templetCode='login'`），
+ * 抽样 600 条配置也全是 90。文件下载现已使用字典里的 `95 = 文件下载`。
+ * 它们的差异体现在别的字段上（登录是 `templetCode='login'`），
  * 不是靠 configType 区分。**不要再为它们臆造 `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 这类伪代码。**
  *
  * 2026-09-17 补齐其余类型（110/120/130/160/500/700/710/720），并把 `data-validation` 从
@@ -864,8 +891,8 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   pdf: '[130] - PDF抓取',
   'mail-collect': '[160] - Mail抓取',
   news: '[500] - 资讯抓取',
-  // 以下四类后端没有独立 configType，统一按网页抓取落库
-  file: '[90] - 网页抓取',
+  // 文件下载：source_type 字典已有 95=文件下载，直接使用字典值；浏览器/公众号/登录仍无独立类型，按网页抓取落库
+  file: '[95] - 文件下载',
   'browser-html': '[90] - 网页抓取',
   'wechat-html': '[90] - 网页抓取',
   login: '[90] - 网页抓取',
@@ -879,7 +906,7 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'article-summary': '[720] - 文章生成摘要',
   translate: '[800] - 翻译助手',
   'article-tag': '[730] - 文章打标签',
-  'pdf-md': '[911] - PDF转MD',
+  'pdf-md': '[802] - PDF转MD',
 }
 
 // 左侧节点库分组
@@ -898,7 +925,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'mail-collect', code: '160', name: 'Mail抓取', desc: '邮件正文与附件采集', pill: 'p1' as Pill },
       { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' as Pill },
       { template: 'news', code: '500', name: '资讯抓取', desc: '资讯站点列表 + 详情采集', pill: 'p1' as Pill },
-      { template: 'file', code: '90', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
+      { template: 'file', code: '95', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
       // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
       { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
       { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，HTML 文件', pill: 'p1' as Pill },
@@ -922,7 +949,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
       { template: 'article-tag', code: '730', name: '文章打标签', desc: '舆情多维标注：主题 / 情感 / 风险 / 意图等', pill: 'p1' as Pill },
       { template: 'translate', code: '800', name: '翻译助手', desc: '把文本/文件内容翻译成目标语言', pill: 'p1' as Pill },
-      { template: 'pdf-md', code: '911', name: 'PDF转MD', desc: 'PDF 文件转 Markdown 文本', pill: 'p1' as Pill },
+      { template: 'pdf-md', code: '802', name: 'PDF转MD', desc: 'PDF 文件转 Markdown 文本', pill: 'p1' as Pill },
     ]
   },
   {
@@ -998,6 +1025,8 @@ export const MONITOR_METHODS: readonly string[] = [
  * 只把没有独立节点类型的历史字段转换成现有节点模板；这样流程视图不会再依赖页面自己生成的随机节点 ID。
  */
 function templateKeyForStep(step: Step, index: number): string {
+  // 配置类型已经明确时不再按步骤名或继承的 entry/list/detail 身份猜测。
+  if (step.configType === '95') return 'file-download'
   const name = step.name || ''
   // 数据监控节点（0901 新增，monitor 复用 rule 种子）从后端回读时，Step 没有独立的 nodeType 标识
   // （新建时 nodeType 继承前置步骤，可能是 entry/list/detail），只能靠节点名识别，且必须优先于下方
@@ -1029,6 +1058,8 @@ function templateKeyForStep(step: Step, index: number): string {
     '720': 'article-summary',
     '730': 'article-tag',
     '800': 'translate',
+    // PDF转MD（2026-10-25）：后端是 802；911 是此前写错的值，保留下只为回读存量脏配置。
+    '802': 'pdf-md',
     '911': 'pdf-md',
   }
   const routed = step.configType ? byConfigType[step.configType] : undefined
@@ -1147,11 +1178,21 @@ function applyRuleStepTables(cfg: NodeConfig, step: Step) {
   }
 }
 
+/** 配置详情确认 95 后同步文件下载身份；保留名称、源 URL、表和用户编排内容。 */
+export function applyFileDownloadType(cfg: NodeConfig): void {
+  if (!cfg.collectCfg) return
+  cfg.template = 'file'
+  cfg.sub = NODE_CONFIGS['file-download'].sub
+  cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH.file
+  cfg.collectCfg.collectorKind = 'file_download'
+}
+
 function applyStepMetadata(cfg: NodeConfig, step: Step) {
   cfg.disabled = !step.enabled
   if (step.configId) cfg.configId = step.configId
   if (step.configName) cfg.configName = step.configName
   if (step.configType) cfg.configType = String(step.configType)
+  if (step.configType === '95') applyFileDownloadType(cfg)
   if (step.configUrl !== undefined) cfg.configUrl = step.configUrl
   // 只在还没有时记：它是「页面加载时」的版本，后续补充回填不能把它刷成更新的值，否则并发校验被绕过。
   if (step.configUpdateDt !== undefined && cfg.configUpdateDt === undefined) cfg.configUpdateDt = step.configUpdateDt
@@ -1279,7 +1320,8 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   else if (step.configType === '720') cfg.template = 'article-summary'
   else if (step.configType === '710') cfg.template = 'audio-text'
   else if (step.configType === '700') cfg.template = 'video-audio'
-  else if (step.configType === '911') cfg.template = 'pdf-md'
+  // PDF转MD：802 为后端字典值；911 是 2026-10-25 之前本前端写错的值，回读仍认。
+  else if (step.configType === '802' || step.configType === '911') cfg.template = 'pdf-md'
   else if (step.configType === '150') cfg.template = 'ocr'
   // ⚠️ 不按节点名称猜类型（2026-09-24 review 撤掉）：首屏快速路径还没有 configType，
   // 叫「新闻摘要页」「视频列表」的网页采集节点会被设成摘要 / 视频模板；configDetail 回来后
@@ -1326,10 +1368,13 @@ export function applyStepDetails(
      * AI / 媒体处理类（150 OCR / 700 视频转音频 / 710 语音转文字 / 720 文章摘要 / 730 文章打标签 / 800 翻译）
      * 同样要整节点重建，不能只补字段（2026-09-18）。
      */
-    const shouldBeProcessing = ['150', '700', '710', '720', '730', '800', '911'].includes(String(step.configType ?? ''))
+    // 2026-10-25：补 802（PDF转MD 的后端字典值），911 保留兼容存量。
+    const shouldBeProcessing = ['150', '700', '710', '720', '730', '800', '802', '911'].includes(String(step.configType ?? ''))
     const isProcessing = current.template === 'ocr' || current.template === 'translate' || (!current.collectCfg && !current.ruleCfg)
     if (
-      (shouldBeLogin && !isLogin)
+      // 普通采集节点可原位补齐文件身份；误按规则节点画出的需要重建 collectCfg。
+      (step.configType === '95' && !current.collectCfg)
+      || (shouldBeLogin && !isLogin)
       || (shouldBeDataValidation && !isDataValidation)
       || (shouldBeProcessing && !isProcessing)
     ) {
@@ -1590,7 +1635,7 @@ export const PRESET_INTENTS: PresetIntent[] = [
     rationale: '识别为「文件下载解析」：下载文件后交由数据处理节点完成解析、字段抽取等配置；每个节点的结果自动落表。',
     build: () =>
       buildFlow('文件下载解析链路', [
-        { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[90] - 网页抓取' } },
+        { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[95] - 文件下载' } },
         { template: 'process', name: '数据处理' },
       ]),
   },
