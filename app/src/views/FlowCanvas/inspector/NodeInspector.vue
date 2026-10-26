@@ -13,7 +13,7 @@ import { useUiStore } from '@/stores/ui'
 import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { cronSaveErrorHint, unpublishedFlowCronHint } from '@/utils/flow/cronSaveHint'
 import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { outputTableMissing } from '@/utils/flow/stepPersist'
+import { isSyntheticRootId, isWritableStepId, outputTableMissing, persistableNodeIds } from '@/utils/flow/stepPersist'
 import { nodeStatusOf } from '@/views/FlowCanvas/canvas/nodeStatus'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
@@ -147,7 +147,14 @@ const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // （0824-00 §5.3）；脏标只影响文案和按钮可用性。
 // 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
-const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || !!deploymentError.value)
+// 其余节点还有没存的（新节点没配置 / 配置有改动）时，当前节点干净也要能点保存——保存是整张画布一起存。
+const otherNodesPending = computed(() => persistableNodeIds(flow.main, flow.branchGroups).some((nodeId) => {
+  if (nodeId === id.value || nodeId === 'start' || nodeId === 'end' || nodeId === '0' || isSyntheticRootId(nodeId)) return false
+  const node = flow.configs[nodeId]
+  if (!node) return false
+  return node.configId ? flow.dirtyConfigNodes.includes(nodeId) : !isWritableStepId(nodeId)
+}))
+const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value || !!deploymentError.value || otherNodesPending.value)
 const viewingHistory = computed(() => !!flowVersion.history && flowVersion.flowId === canvasFlowIdOf(flow))
 const footNote = computed(() => (viewingHistory.value
   ? '正在查看历史版本，只能查看'
@@ -260,6 +267,57 @@ async function onSaveNodeConfig() {
   }
   if (saved) await syncSourceCron(node, id.value)
   if (saved && savedTab === 'orchestration') await updateDeployment(node, savedNodeId)
+  await saveOtherNodes(savedNodeId)
+}
+
+/**
+ * 「保存」= 整张画布一起保存（0826 会上反馈：连加几个节点只点一次保存，只存进当前这个）。
+ * 当前节点存完后，把画布上其余节点也处理掉：没有配置的新节点逐个建配置并绑定，已有配置但有改动的静默更新。
+ * 存不了的（只读 / 规则节点表绑定未通过 / 共享配置未换绑等）不阻断其他节点，最后合并成一条提示。
+ */
+async function saveOtherNodes(currentId: string) {
+  if (readonly.value || viewingHistory.value) return
+  const skipped: string[] = []
+  const unconfigured: { nodeId: string; title: string }[] = []
+  let created = 0
+  saving.value = true
+  try {
+    for (const nodeId of persistableNodeIds(flow.main, flow.branchGroups)) {
+      if (nodeId === currentId || nodeId === 'start' || nodeId === 'end' || nodeId === '0' || isSyntheticRootId(nodeId)) continue
+      const node = flow.configs[nodeId]
+      if (!node) continue
+      if (!node.configId) {
+        // 已有步骤却没有配置（如新建空白流程的入口节点）：不替用户新建——旧平台要求先选配置才能提交，
+        // 也无法判断是真没配置还是回读失败，新建会盖掉真配置。这里只提示并定位。
+        if (isWritableStepId(nodeId)) {
+          unconfigured.push({ nodeId, title: node.title })
+          continue
+        }
+        if (isRuleNode(node) && validateTableBinding(
+          node.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] },
+          { requireOutput: !isMonitorNode(node) && !isDataValidationNode(node) },
+        )) {
+          skipped.push(node.title)
+          continue
+        }
+        ensureConfigNameFromTitle(node, nodeId)
+        if (await doCreateConfig(node, nodeId, { quiet: true })) created += 1
+        else skipped.push(node.title)
+      } else if (flow.dirtyConfigNodes.includes(nodeId)) {
+        const before = autoSavedAt.value[nodeId]
+        await autosaveNode(nodeId, '')
+        if (flow.dirtyConfigNodes.includes(nodeId) && autoSavedAt.value[nodeId] === before) skipped.push(node.title)
+      }
+    }
+  } finally {
+    saving.value = false
+  }
+  if (created) ElMessage.success(`另有 ${created} 个新节点已一并建立配置并保存`)
+  if (skipped.length) ElMessage.warning(`以下节点未能保存，请逐个检查：${skipped.join('、')}`)
+  if (unconfigured.length) {
+    ElMessage.warning(`以下节点尚未配置，请选择配置后保存：${unconfigured.map((n) => n.title).join('、')}`)
+    flow.select(unconfigured[0].nodeId)
+  }
 }
 
 /**
@@ -353,15 +411,20 @@ async function syncSourceCron(node: NodeConfig, nodeId: string) {
  * 与「更换」的区别要分清：更换是**绑到一份已有配置**，多个节点共用、改一处影响所有引用方；
  * 这里是新建一份只属于本节点的。
  */
-async function doCreateConfig(): Promise<boolean> {
-  const node = cfg.value
-  if (!node || saving.value) return false
-  saving.value = true
+async function doCreateConfig(
+  node: NodeConfig | undefined = cfg.value,
+  nodeId: string = id.value,
+  opts: { quiet?: boolean } = {},
+): Promise<boolean> {
+  if (!node) return false
+  // quiet（批量保存其余节点）：saving 已由调用方持有，成功提示由调用方汇总
+  if (!opts.quiet && saving.value) return false
+  if (!opts.quiet) saving.value = true
   try {
     const payload = buildConfigPayload(node)
     const created = await configApi.addConfig(payload)
     if (!created.ok || !created.configId) {
-      ElMessage.error(created.message || '新增配置失败')
+      ElMessage.error(`${opts.quiet ? `节点「${node.title}」：` : ''}${created.message || '新增配置失败'}`)
       return false
     }
     // 回查一次再绑：add 的回执只有 msg，拿不到落库后的完整记录（后端还会补 state/topic 等）。
@@ -372,18 +435,18 @@ async function doCreateConfig(): Promise<boolean> {
       ElMessage.warning(`配置 #${created.configId} 已新建，但回查详情失败、未能绑定到本节点，请用配置条上的「更换」选中它`)
       return false
     }
-    flow.bindExistingConfig(id.value, saved)
-    flow.markNodeConfigSaved(id.value)
+    flow.bindExistingConfig(nodeId, saved)
+    flow.markNodeConfigSaved(nodeId)
     // 文案不能承诺没做到的事（0903）：这一步只落了**配置**，节点本身（item/next 步骤）由画布
     // 自动保存另外落库。步骤没落成的话，重进画布这个节点就不存在了——而用户已经看到"成功"。
     // 所以这里只说配置这一半，把"节点还在保存中"一并讲清楚，别让人以为万事大吉就走了。
-    ElMessage.success(`配置 #${created.configId} 已新建并绑定；节点正在保存，请留意顶部保存状态`)
+    if (!opts.quiet) ElMessage.success(`配置 #${created.configId} 已新建并绑定；节点正在保存，请留意顶部保存状态`)
     return true
   } catch (e) {
-    reportWriteError('新增配置', e)
+    reportWriteError(opts.quiet ? `节点「${node.title}」新增配置` : '新增配置', e)
     return false
   } finally {
-    saving.value = false
+    if (!opts.quiet) saving.value = false
   }
 }
 
@@ -622,7 +685,7 @@ onMounted(async () => {
           type="button"
           data-testid="node-config-save"
           :disabled="!canSaveNodeConfig || saving || savingDeployment"
-          :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
+          :title="configId ? (canSaveNodeConfig ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
         >{{ saving || savingDeployment ? '保存中…' : '保存' }}</button>
       </div>

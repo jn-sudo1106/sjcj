@@ -20,7 +20,7 @@ import BizDirPickerDialog from './BizDirPickerDialog.vue'
 import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
-import { VIEW_DIR_ROOT_ID, BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirNode } from '@/api/sourceDirs'
+import { BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirNode } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -291,8 +291,10 @@ async function loadCategories(options: { revalidate?: boolean } = {}) {
   try {
     // 首屏只拉根分类（1个请求），子级由 FilterToolbar 的 el-tree-select 展开时按需懒加载；
     // 不再首屏扇出十几个请求把网络打满
-    // 2026-10-21：-1「视图目录」、-2「业务分类」是另外两套目录的根，不是系统分类，不进卡片视图的分类下拉
-    const roots = (await sourceApi.sourceCategories()).filter((c) => c.id !== VIEW_DIR_ROOT_ID && c.id !== BIZ_DIR_ROOT_ID)
+    // 2026-10-26：卡片视图的分类下拉展示**业务目录**（-2「业务分类」的子级），不再是系统分类
+    // （10-22 起网站的 categoryId 就是业务目录；系统目录是老的，后续可能关闭）。
+    // 子级仍由 FilterToolbar 展开时按 parentId 懒加载，筛选值同样是目录 ID，expandCategoryIds 照用。
+    const roots = await sourceApi.sourceCategories(BIZ_DIR_ROOT_ID)
     collectAssetsCache.categories = roots
     categories.value = roots
   } catch {
