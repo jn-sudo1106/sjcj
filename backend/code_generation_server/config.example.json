@@ -1,0 +1,9 @@
+{
+  "platform": "http://192.168.1.36:8092",
+  "enrollCode": "从平台下载的包会自动填写",
+  "host": "0.0.0.0",
+  "port": 8093,
+  "advertiseUrl": "",
+  "workspace": "D:\\aicode",
+  "allowedModelOrigins": ["http://127.0.0.1:6000", "http://localhost:6000"]
+}

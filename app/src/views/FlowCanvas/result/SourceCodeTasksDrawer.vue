@@ -57,7 +57,7 @@ const time = (value: string) => value ? new Date(value).toLocaleString('zh-CN', 
 <template>
   <el-drawer v-model="open" title="代码生成任务" size="min(1000px, 96vw)" append-to-body destroy-on-close>
     <div class="generation-toolbar"><span>已选择 {{ sources.length }} 个源</span><el-button type="primary" :loading="creating" :disabled="!sources.length || sources.length > 200" @click="create">为选中源创建任务</el-button><el-button :loading="loading" @click="refresh">刷新</el-button></div>
-    <p class="generation-note">按生效的默认流程检查首个配置节点。需先启用代码生成，并在相应节点 AI 工作区保存生成配置。任务提交后在后台执行。</p>
+    <p class="generation-note">按生效的默认流程检查首个配置节点。需先启用代码生成，并在相应节点 AI 工作区完成配置（自动保存）。任务提交后在后台执行。</p>
     <p v-if="sources.length > 200" role="alert">每次最多选择 200 个源。</p>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <details v-if="skipped.length" open><summary>跳过或读取失败 {{ skipped.length }} 项</summary><p v-for="(item, index) in skipped" :key="index">{{ item.name }}（{{ item.sourceId }}）：{{ item.reason }}</p></details>

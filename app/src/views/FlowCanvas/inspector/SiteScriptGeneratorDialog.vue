@@ -32,19 +32,25 @@ const selectedModel = computed(() => modelInterfaces.value.find(row => row.id ==
 const remoteGeneration = computed(() => !!selectedModel.value?.generationServerId && ['agent', 'gemini-agent'].includes(selectedModel.value.kind))
 const autoCommit = ref(true), preferenceSaving = ref(false), archiveError = ref('')
 const taskConfigError = ref(''), savingTaskConfig = ref(false)
-async function saveTaskConfig() {
-  if (!props.configId || busy.value || savingTaskConfig.value) return
-  const session = sessionId
-  savingTaskConfig.value = true; taskConfigError.value = ''
-  try {
-    await runnerManagementApi.saveNodeGenerationSettings({ configId: props.configId, generation: {
-      interfaceId: modelInterfaceId.value, repositoryId: repositoryId.value, directoryId: directoryId.value,
-      configType: props.configType || '', queueName: props.queueName || '', systemPrompt: systemPrompt.value,
-      userPrompt: prompt.value, url: url.value, fileNameMode: fileNameMode.value,
-    } })
-    if (session === sessionId) ElMessage.success('生成配置已保存，可从源列表创建代码生成任务')
-  } catch (e) { if (session === sessionId) taskConfigError.value = message(e) }
-  finally { savingTaskConfig.value = false }
+const taskConfigStatus = ref('修改后自动保存')
+let taskConfigReady = false, taskConfigContext = '', taskConfigTimer: ReturnType<typeof setTimeout> | undefined
+let taskConfigWrites = Promise.resolve()
+type TaskConfigWrite = Parameters<typeof runnerManagementApi.saveNodeGenerationSettings>[0]
+let pendingTaskConfig: { body: TaskConfigWrite; session: number } | null = null
+function flushTaskConfig() {
+  if (taskConfigTimer) clearTimeout(taskConfigTimer)
+  const pending = pendingTaskConfig
+  pendingTaskConfig = null
+  if (!pending) return
+  taskConfigWrites = taskConfigWrites.then(async () => {
+    if (pending.session === sessionId) { savingTaskConfig.value = true; taskConfigStatus.value = '正在自动保存…' }
+    try {
+      await runnerManagementApi.saveNodeGenerationSettings(pending.body)
+      if (pending.session === sessionId) { taskConfigError.value = ''; taskConfigStatus.value = pendingTaskConfig ? '等待自动保存…' : '生成配置已自动保存' }
+    } catch (e) {
+      if (pending.session === sessionId) { taskConfigError.value = `自动保存失败：${message(e)}；修改后会重新保存`; taskConfigStatus.value = '' }
+    } finally { if (pending.session === sessionId) savingTaskConfig.value = false }
+  })
 }
 const archive = ref<GeneratedCodeArchive | null>(null), archivePreview = ref(''), archivePreviewPath = ref(''), archiveSavedKey = ref('')
 const archiveTarget = computed(() => {
@@ -159,7 +165,7 @@ const repositoryFileTarget = computed(() => {
   if (!saved?.repoId || !saved.storagePath || saved.repoId !== repositoryId.value || saved.storagePath !== storagePath.value) return null
   return { path: '/settings', query: { tab: 'code-repos', repoId: saved.repoId, filePath: saved.storagePath, ...(saved.directoryId ? { directoryId: saved.directoryId } : {}) } }
 })
-const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value || preferenceSaving.value || savingTaskConfig.value)
+const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value || preferenceSaving.value)
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
 let controller: AbortController | null = null
 let openedFor = ''
@@ -232,6 +238,9 @@ function syncPromptDefaults(template?: NodePromptTemplate) {
 }
 
 async function initialize() {
+  flushTaskConfig()
+  taskConfigReady = false
+  savingTaskConfig.value = false
   const session = ++sessionId
   const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
   const newContext = openedFor !== context
@@ -318,6 +327,9 @@ async function initialize() {
   if (session === sessionId) {
     taskConfigError.value = taskConfigResult.status === 'rejected' ? `生成配置读取失败：${message(taskConfigResult.reason)}` : ''
     loading.value = false
+    taskConfigContext = context
+    taskConfigStatus.value = taskConfigResult.status === 'fulfilled' && taskConfigResult.value?.generation ? '生成配置已自动保存' : '修改后自动保存'
+    taskConfigReady = taskConfigResult.status === 'fulfilled'
   }
 }
 
@@ -328,6 +340,7 @@ watch(() => [props.configId, props.queueName, props.initialUrl, props.configType
 watch(open, visible => {
   cancelGenerate()
   if (!visible) {
+    flushTaskConfig()
     versionRequestId++
     fileRequestId++
     codeLoading.value = false
@@ -359,7 +372,24 @@ watch(directoryId, () => {
   repositoryFileError.value = ''
   if (fileChooserOpen.value && selectedDirectory.value && !directoriesLoading.value) void loadRepositoryFiles(1)
 }, { flush: 'sync' })
-onBeforeUnmount(() => { controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++ })
+watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId.value, directoryId.value, props.configType, props.queueName, systemPrompt.value, prompt.value, url.value, fileNameMode.value]), () => {
+  const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
+  if (!taskConfigReady || loading.value || taskConfigContext !== context) return
+  if (taskConfigTimer) clearTimeout(taskConfigTimer)
+  pendingTaskConfig = null
+  if (!props.configId || !selectedModel.value || !selectedRepository.value || !selectedDirectory.value || directoriesLoading.value || directoriesError.value || !systemPrompt.value.trim() || !prompt.value.trim()) {
+    taskConfigStatus.value = '请完善生成配置后自动保存'
+    return
+  }
+  pendingTaskConfig = { session: sessionId, body: { configId: props.configId, generation: {
+    interfaceId: modelInterfaceId.value, repositoryId: repositoryId.value, directoryId: directoryId.value,
+    configType: props.configType || '', queueName: props.queueName || '', systemPrompt: systemPrompt.value,
+    userPrompt: prompt.value, url: url.value, fileNameMode: fileNameMode.value,
+  } } }
+  taskConfigStatus.value = '等待自动保存…'
+  taskConfigTimer = setTimeout(flushTaskConfig, 700)
+}, { flush: 'sync' })
+onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++ })
 
 function restoreVersionDestination(version: SiteCodeVersion) {
   // 已有代码始终恢复原仓库；原仓库不可用时由用户明确选择新位置。
@@ -575,7 +605,7 @@ function download() {
 
 <template>
   <section v-loading="loading" class="site-script-configuration" data-testid="site-script-configuration">
-    <div class="site-script-task-config"><el-button size="small" :loading="savingTaskConfig" :disabled="busy || !configId || !selectedModel || !selectedDirectory" data-testid="save-generation-config" @click="saveTaskConfig">保存生成配置</el-button><span>供源列表批量生成代码任务使用</span></div>
+    <div class="site-script-task-config" role="status" data-testid="generation-config-status">{{ taskConfigStatus }}</div>
     <p v-if="taskConfigError" class="site-script-error" role="alert">{{ taskConfigError }}</p>
     <div class="site-script-context"><span v-if="configType" data-testid="site-script-node-type">节点类型 [{{ configType }}] {{ nodeTypeName }}</span><span :title="queueName">队列 {{ queueName || '未配置' }}</span></div>
     <div class="site-script-destination-fields">
