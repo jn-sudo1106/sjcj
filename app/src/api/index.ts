@@ -3188,7 +3188,7 @@ export const entryApi = {
   },
   rebuildTable: (tableIds: string[] | string) => {
     const ids = Array.isArray(tableIds) ? tableIds : [tableIds]
-    return request<Ack>('config/rebuildTable', { tableIds: ids }, { method: 'GET', httpParams: { ids } })
+    return request<Ack & { exists?: string[]; rebuilds?: string[] }>('config/rebuildTable', { tableIds: ids }, { method: 'GET', httpParams: { ids } })
   },
   rebuildIndex: (tableId: string) =>
     request<Ack>('config/rebuildIndex', { tableId }, { method: 'GET', httpParams: { entryTypeId: tableId } }),
