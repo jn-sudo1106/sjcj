@@ -4,18 +4,23 @@
 // 0711 R12：批量导入/批量操作已迁进网站详情源侧栏，顶部只留"新建采集"
 //   （AppShell 顶部按钮按路由硬编码，与页面是否 ui.registerAction 无关）
 // 规则资产的「新建规则组/导入规则/发布校验」是规则 tab 专属（0721 会议 §六-1 参数迁入后新增的参数 tab 不需要）
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Files, Upload } from '@element-plus/icons-vue'
+import { Back, Close, Files, Upload } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { sourceApi } from '@/api'
 import { TABS } from '@/router/tabs'
 import { useUiStore } from '@/stores/ui'
 import { useFlowStore } from '@/stores/flow'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
+import { useSourceReturnStore } from '@/stores/sourceReturn'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const flow = useFlowStore()
+const sourceReturn = useSourceReturnStore()
+const returning = ref(false)
 
 const activeKey = useActiveNavKey()
 
@@ -23,6 +28,30 @@ const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TA
 
 // 源详情 / 新建采集画布的标题与面包屑
 const isSourceCanvas = computed(() => route.path.startsWith('/canvas'))
+const returnPoint = computed(() => !isSourceCanvas.value ? sourceReturn.point : null)
+
+async function returnToSource() {
+  const target = returnPoint.value
+  if (!target || returning.value) return
+  returning.value = true
+  try {
+    const source = await sourceApi.sourceDetail(target.sourceId)
+    if (sourceReturn.point !== target) return // 等待期间退出或切换账号，不打开旧账号的源
+    if (!source) {
+      sourceReturn.clear(target.sourceId)
+      ElMessage.warning('源不存在或已被删除，已清除返回记录')
+      return
+    }
+    await router.push({ path: '/canvas', query: { ...target.query, ...(source.siteId ? { siteId: source.siteId } : {}) } })
+  } catch (error) {
+    if (sourceReturn.point !== target) return
+    const status = (error as { cause?: { status?: number } }).cause?.status
+    if (status === 403 || status === 404) sourceReturn.clear(target.sourceId)
+    ElMessage.error(status === 403 ? '当前账号无权访问该源，已清除返回记录' : `返回源失败：${(error as Error).message}`)
+  } finally {
+    returning.value = false
+  }
+}
 // 网站详情页态下 sourceCtx/siteCtx 会同时非空（见 flow.ts setSiteDisplayCtx）
 //   siteCtx 才是用户实际看到的对象，优先展示
 const sourceCrumb = computed(() =>
@@ -109,6 +138,31 @@ function firePageAction(action: string) {
       <h1 v-else aria-current="page">{{ current.label }}</h1>
     </nav>
     <div class="rc-module-actions">
+      <div v-if="returnPoint" class="rc-return-group">
+        <el-tooltip :content="`返回源：${returnPoint.name}`" placement="bottom">
+          <button
+            type="button"
+            class="rc-action-btn rc-return-source"
+            data-testid="return-to-source"
+            :disabled="returning"
+            :aria-label="`返回源：${returnPoint.name}`"
+            @click="returnToSource"
+          >
+            <el-icon><Back /></el-icon>
+            <span class="rc-return-prefix">{{ returning ? '正在返回…' : '返回源：' }}</span>
+            <span class="rc-return-name">{{ returnPoint.name }}</span>
+          </button>
+        </el-tooltip>
+        <button
+          type="button"
+          class="rc-return-close"
+          aria-label="关闭返回源入口"
+          title="关闭返回源入口"
+          @click="sourceReturn.clear()"
+        >
+          <el-icon><Close /></el-icon>
+        </button>
+      </div>
       <button
         v-for="action in activeActions"
         :key="action"
@@ -132,6 +186,7 @@ function firePageAction(action: string) {
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
 .rc-bc {
@@ -213,5 +268,49 @@ function firePageAction(action: string) {
   background: var(--rc-primary);
   color: #fff;
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.16);
+}
+
+.rc-return-group {
+  display: inline-flex;
+  align-items: stretch;
+  max-width: min(300px, 100%);
+  border: 1px solid #d5e2f2;
+  border-radius: var(--rc-radius-sm);
+  background: #fff;
+}
+
+.rc-return-source {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  height: 32px;
+  padding-right: 6px;
+  color: var(--rc-primary);
+  font-weight: 500;
+}
+
+.rc-return-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  border: 0;
+  border-radius: var(--rc-radius-sm);
+  background: transparent;
+  color: var(--rc-muted);
+  cursor: pointer;
+}
+
+.rc-return-close:hover { color: var(--rc-primary); background: var(--rc-primary-soft, #eff6ff); }
+.rc-return-close:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 2px; }
+.rc-return-source:hover { background: var(--rc-primary-soft, #eff6ff); }
+.rc-return-source:disabled { opacity: 0.65; cursor: wait; }
+.rc-return-source:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 2px; }
+.rc-return-prefix { flex: none; white-space: nowrap; }
+.rc-return-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .rc-module-actions { max-width: 100%; margin-left: auto; }
 }
 </style>

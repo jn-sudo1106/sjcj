@@ -51,7 +51,6 @@ export const HIDEABLE_SOURCE_COLUMNS: { key: string; label: string; groupOps?: t
   { key: 'site', label: '所属网站' },
   { key: 'sourceGroup', label: '来源组', groupOps: true },
   { key: 'defaultFlow', label: '默认流程', groupOps: true },
-  { key: 'flowConfig', label: '流程配置', groupOps: true },
   { key: 'url', label: 'URL' },
   { key: 'mainTable', label: '主表' },
   { key: 'tags', label: '标签' },

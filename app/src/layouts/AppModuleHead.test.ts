@@ -1,6 +1,6 @@
 // AppModuleHead 单元测试（补 P2-2 AppShell 拆分遗留的测试缺口 · 之前完全零覆盖）
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -8,6 +8,9 @@ import ElementPlus from 'element-plus'
 import AppModuleHead from './AppModuleHead.vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
+import { useSourceReturnStore } from '@/stores/sourceReturn'
+import { sourceApi } from '@/api'
 
 function makeRouter() {
   return createRouter({
@@ -17,6 +20,7 @@ function makeRouter() {
       { path: '/collect', component: { template: '<div />' } },
       { path: '/rules', component: { template: '<div />' } },
       { path: '/canvas', component: { template: '<div />' } },
+      { path: '/settings', component: { template: '<div />' } },
     ],
   })
 }
@@ -157,5 +161,74 @@ describe('AppModuleHead 顶部动作按钮', () => {
     const btn = wrapper.findAll('.rc-action-btn').find((b) => b.text().trim() === '刷新')!
     await btn.trigger('click')
     expect(fired).toEqual(['刷新'])
+  })
+})
+
+describe('跨模块返回源入口', () => {
+  beforeEach(() => sessionStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
+
+  function remember() {
+    const auth = useAuthStore()
+    auth.token = 'test-session'
+    auth.info = { id: 1, name: 'admin', roles: ['admin'], groups: [], avatar: '', introduction: '', group: 1 }
+    const store = useSourceReturnStore()
+    store.remember('source-a', '贝壳二手房成交信息（新增详情字段）', { siteId: '8', view: 'flow', flowId: '201', workflowId: '200', nodeId: 'n2', tab: 'orchestration' })
+    return store
+  }
+
+  it('设置页面包屑右侧显示源名，返回保留具体流程和节点，并采用最新网站归属', async () => {
+    const { wrapper, router } = await mountAt('/settings')
+    expect(wrapper.find('[data-testid="return-to-source"]').exists()).toBe(false)
+    remember()
+    await flushPromises()
+    const detail = vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ sourceId: 'source-a', siteId: '9' } as never)
+    const button = wrapper.find('[data-testid="return-to-source"]')
+    expect(button.text()).toContain('贝壳二手房成交信息')
+    await button.trigger('click')
+    await flushPromises()
+    expect(detail).toHaveBeenCalledWith('source-a')
+    expect(router.currentRoute.value.query).toEqual({ sourceId: 'source-a', siteId: '9', view: 'flow', flowId: '201', workflowId: '200', nodeId: 'n2', tab: 'orchestration' })
+    expect(wrapper.find('[data-testid="return-to-source"]').exists()).toBe(false)
+  })
+
+  it('网络失败保留记录以便重试，源已删除则清除', async () => {
+    const { wrapper, router } = await mountAt('/settings')
+    const store = remember()
+    await flushPromises()
+    const detail = vi.spyOn(sourceApi, 'sourceDetail').mockRejectedValueOnce(new Error('网络异常')).mockResolvedValueOnce(null)
+    await wrapper.find('[data-testid="return-to-source"]').trigger('click')
+    await flushPromises()
+    expect(store.point?.sourceId).toBe('source-a')
+    expect(router.currentRoute.value.path).toBe('/settings')
+    await wrapper.find('[data-testid="return-to-source"]').trigger('click')
+    await flushPromises()
+    expect(detail).toHaveBeenCalledTimes(2)
+    expect(store.point).toBeNull()
+    expect(wrapper.find('[data-testid="return-to-source"]').exists()).toBe(false)
+  })
+
+  it('服务端拒绝访问时清除失效记录，不导航到源', async () => {
+    const { wrapper, router } = await mountAt('/settings')
+    const store = remember()
+    await flushPromises()
+    vi.spyOn(sourceApi, 'sourceDetail').mockRejectedValue(Object.assign(new Error('无权限'), { cause: { status: 403 } }))
+    await wrapper.find('[data-testid="return-to-source"]').trigger('click')
+    await flushPromises()
+    expect(store.point).toBeNull()
+    expect(router.currentRoute.value.path).toBe('/settings')
+  })
+
+  it('请求未返回时退出账号，不跟随旧请求打开源', async () => {
+    const { wrapper, router } = await mountAt('/settings')
+    remember()
+    await flushPromises()
+    let resolve!: (source: never) => void
+    vi.spyOn(sourceApi, 'sourceDetail').mockReturnValue(new Promise(done => { resolve = done }))
+    await wrapper.find('[data-testid="return-to-source"]').trigger('click')
+    useAuthStore().clear()
+    resolve({ sourceId: 'source-a' } as never)
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/settings')
   })
 })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
@@ -30,6 +30,7 @@ import { firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist
 import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
 import { flushNodeConfigs } from './inspector/nodeConfigAutosave'
+import { useSourceReturnStore } from '@/stores/sourceReturn'
 
 const route = useRoute()
 const router = useRouter()
@@ -38,6 +39,8 @@ const autosave = useFlowAutosave()
 const { ensureFlowReady } = useFlowReadiness()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
+const sourceReturn = useSourceReturnStore()
+const sourceReady = ref(false)
 const runtime = useRuntimeStore()
 // 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
@@ -76,27 +79,27 @@ watch(
   [() => route.query.nodeId, () => route.query.tab],
   () => {
     const id = String(route.query.nodeId ?? '')
-    if (!id) return
     pendingNodeId.value = id
     pendingTab.value = String(route.query.tab ?? '')
-    pendingUntil.value = Date.now() + PENDING_WINDOW_MS
+    pendingUntil.value = id ? Date.now() + PENDING_WINDOW_MS : 0
   },
   { immediate: true },
 )
+function restoreRequestedInspector() {
+  const id = pendingNodeId.value
+  if (!id || Date.now() > pendingUntil.value) return
+  if (!flow.configs[id]) return
+  if (flow.selectedId !== id) flow.selectedId = id
+  // tab 未必适用于该节点（不同类型节点的页签不同），落不到就退到该节点
+  // 的第一个页签——保持上一次的 activeTab 会让 inspector 停在一个对当前节点不存在的
+  // 页签上，看起来像空白。
+  const tabs = nodeInspectorTabs(flow.configs[id])
+  const wanted = pendingTab.value
+  if (tabs.length) flow.activeTab = tabs.some(([key, , disabled]) => key === wanted && !disabled) ? wanted : tabs[0][0]
+}
 watch(
   [pendingNodeId, () => flow.selectedId, () => Object.keys(flow.configs).length],
-  () => {
-    const id = pendingNodeId.value
-    if (!id || Date.now() > pendingUntil.value) return
-    if (!flow.configs[id] || flow.selectedId === id) return
-    flow.selectedId = id
-    // tab 未必适用于该节点（不同类型节点的页签不同），落不到就退到该节点
-    // 的第一个页签——保持上一次的 activeTab 会让 inspector 停在一个对当前节点不存在的
-    // 页签上，看起来像空白。
-    const tabs = nodeInspectorTabs(flow.configs[id])
-    const wanted = pendingTab.value
-    if (tabs.length) flow.activeTab = tabs.some(([key]) => key === wanted) ? wanted : tabs[0][0]
-  },
+  restoreRequestedInspector,
   { immediate: true, flush: 'post' },
 )
 
@@ -114,6 +117,27 @@ const isPublishedFlowView = computed(() => flow.sourceCtx?.workflowVersionManage
 // 标志位保持初值，占位就永远停在「正在加载源…」——真实故障和加载中看起来一模一样。
 // 改成一个文案 ref：空串=加载中，非空=终态原因。
 const sourceLoadError = ref('')
+
+function rememberSourceReturn() {
+  const source = flow.sourceCtx
+  if (!sourceReady.value || !source || String(route.query.sourceId ?? '') !== source.sourceId) return
+  const view = normalizeSourceView(route.query.view)
+  sourceReturn.remember(source.sourceId, source.name, {
+    ...route.query,
+    view,
+    siteId: source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId,
+    flowId: validFlowIdOf(source.flowId),
+    workflowId: source.activeWorkflowId || route.query.workflowId,
+    tableId: view === 'data' ? ws.snapshotOf(source.sourceId)?.dataTableId ?? route.query.tableId : route.query.tableId,
+    nodeId: view === 'flow' ? flow.selectedId : undefined,
+    tab: view === 'flow' ? flow.activeTab : undefined,
+  })
+}
+watch(
+  [sourceReady, () => route.fullPath, () => flow.selectedId, () => flow.activeTab],
+  rememberSourceReturn,
+  { flush: 'post' },
+)
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 // 数据 / 文件 / 任务视图的节点和表都跟着当前流程走：页头切换流程后整块重挂，不残留上一条流程的筛选（2026-10-19）
@@ -169,6 +193,7 @@ watch(
 const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.query.siteId ?? ''))
 // 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
 const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
+const sidebarSourceGroupId = computed(() => String(route.query.sourceGroupId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
   // 1021-06：先把能自动保存的节点配置存掉，剩下存不掉的（新节点、共享配置等）才走下面的提示
   await flushNodeConfigs()
@@ -216,6 +241,7 @@ async function onSwitchTarget(target: Source) {
     path: '/canvas',
     query: {
       ...(siteId ? { siteId } : {}),
+      ...(sidebarSourceGroupId.value ? { sourceGroupId: sidebarSourceGroupId.value } : {}),
       sourceId: target.sourceId,
       view: cond ? 'data' : normalizeSourceView(route.query.view),
     },
@@ -262,6 +288,22 @@ async function onSwitchToSite() {
   const view = normalizeSiteView(route.query.view)
   void router.replace({ path: '/canvas', query: { siteId: sidebarSiteId.value, view } })
 }
+async function onPickSourceGroup(sourceGroupId: string) {
+  const siteId = sidebarSiteId.value
+  const from = route.fullPath
+  try {
+    if (flow.sourceCtx && !(await confirmDiscardIfDirty())) return
+    if (route.fullPath !== from) return
+    ws.deactivate()
+    await router.replace({ path: '/canvas', query: {
+      siteId,
+      view: 'source',
+      ...(sourceGroupId ? { sourceGroupId } : {}),
+    } })
+  } catch (error) {
+    ElMessage.error(`切换来源组失败：${(error as Error).message}`)
+  }
+}
 // 侧栏 ⇔（0710 会议 B4）：左栏=当前源，右栏=所选源（任意网站，按 id 直接加载）
 function onSidebarCompare(rightId: string) {
   const left = flow.sourceCtx?.sourceId
@@ -302,6 +344,7 @@ function onSplitStart(e: MouseEvent) {
 }
 
 async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
+  sourceReady.value = false
   const runtimeView = !!import.meta.env.VITE_FLOW_PROXY_TARGET && normalizeSourceView(route.query.view) !== 'flow'
   // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
@@ -327,6 +370,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     return
   }
   if (!source) {
+    sourceReturn.clear(sourceId)
     sourceLoadError.value = '源不存在或已被删除'
     ElMessage.error('源不存在')
     return
@@ -399,6 +443,11 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     draftFlowId: selectedBinding?.draftFlowId,
   }, steps, null)
   restoreFlowInspector(sourceId, flowId)
+  // 回到源可能需要等待后端数秒：加载完成后再恢复，不受早期深链的 1.5 秒窗口限制。
+  await nextTick()
+  pendingUntil.value = Date.now() + PENDING_WINDOW_MS
+  restoreRequestedInspector()
+  pendingUntil.value = 0
   if (!ws.open(source.sourceId, source.name)) {
     onTabQuotaFull(fromOutside, () => ws.open(source.sourceId, source.name), '当前源')
   }
@@ -406,6 +455,8 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
   const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId || ''
   if (ownerSiteId) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId })
+  sourceReady.value = true
+  rememberSourceReturn()
   // 0915-02：源态下「全部」页签同样常驻——0915-03 的钻取闭环要靠它回到网站数据视图
   if (ownerSiteId) void ensureSiteTabNamed(ownerSiteId)
   else void resolveOwnerSite(source.sourceId)
@@ -660,6 +711,7 @@ async function enterFromRoute(opts: { fromOutside?: boolean } = {}) {
   const siteId = String(route.query.siteId ?? '')
   const sourceId = String(route.query.sourceId ?? '')
   if (siteId && !sourceId) {
+    sourceReady.value = false
     // 0915-05（2026-09-16）：这里原本把网站态的 view=task 重定向到一级任务中心 /tasks
     // （0812 计划 M1-3「网站汇总态任务页签已删除」）。该结论已被 0915 会议推翻——
     // 任务中心不区分网站，产品要的是"本网站、不分源"的任务视图，页签已恢复，故删除重定向。
@@ -716,6 +768,19 @@ watch(
 watch(isGate, (v) => {
   if (v) ui.clearActions()
 })
+onBeforeRouteLeave(async (to) => {
+  if (isGate.value || !sourceReady.value || to.path === '/user/login') return true
+  try {
+    await flushNodeConfigs()
+    if (flow.flowDirty) await autosave.flush()
+    if (flow.dirty && !(await confirmDiscardIfDirty())) return false
+    rememberSourceReturn()
+    return true
+  } catch (error) {
+    ElMessage.error(`离开前保存失败：${(error as Error).message}`)
+    return false
+  }
+})
 onUnmounted(() => {
   resolveLoginConfigSelection?.()
   resolveLoginConfigSelection = null
@@ -741,6 +806,7 @@ onUnmounted(() => {
         v-if="sidebarSiteId"
         :site-id="sidebarSiteId"
         :active-key="sidebarActiveKey"
+        :source-group-id="sidebarSourceGroupId"
         :allow-table-mode="sidebarAllowTableMode"
         :active-table-id="sidebarActiveTableId"
         :preferred-table-id="sidebarPreferredTableId"
@@ -749,6 +815,7 @@ onUnmounted(() => {
         @added="onSwitchAdded"
         @compare="onSidebarCompare"
         @pick-site="onSwitchToSite"
+        @pick-group="onPickSourceGroup"
       />
       <div class="rc-canvas-main">
         <!-- key 用加载完成后的 ctx，避免切换时读到旧源数据。 -->

@@ -11,6 +11,25 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
 describe('SiteDetailView', () => {
+  it('网站来源组范围传给分页列表，清除后恢复全部；打开源保留该筛选', async () => {
+    setActivePinia(createPinia())
+    await router.push({ path: '/canvas', query: { siteId: 'site-a', view: 'source', sourceGroupId: '3' } })
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-a' },
+      global: { plugins: [router], stubs: { SourceOverviewView: true } },
+    })
+    await flushPromises()
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    expect(list.props('scopeSourceGroupId')).toBe('3')
+    list.vm.$emit('open-source', { sourceId: 'source-a', name: '源 A' })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-a', sourceId: 'source-a', sourceGroupId: '3' })
+    await router.replace({ path: '/canvas', query: { siteId: 'site-a', view: 'source' } })
+    await flushPromises()
+    expect(list.props('scopeSourceGroupId')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('网站详情提供源视图页签，并通过站点路由展示', async () => {
     setActivePinia(createPinia())
     await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'data' } })
