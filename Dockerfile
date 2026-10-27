@@ -39,6 +39,10 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 ARG BACKEND_TARGET
 RUN sed -i -e "s#http://118.25.96.217:9999#${BACKEND_TARGET}#g" \
            -e "s#http://118.25.96.217:9102#${BACKEND_TARGET%:*}:9102#g" /etc/nginx/conf.d/default.conf
+# Runner 管理服务只认 217 的登录，非 prod 目标去掉这条路由（否则 401 会把用户踢回登录页）
+RUN if [ "${BACKEND_TARGET}" != "http://118.25.96.217:9999" ]; then \
+      sed -i '/# BEGIN runner-management/,/# END runner-management/d' /etc/nginx/conf.d/default.conf; \
+    fi
 
 # 构建产物落到 nginx 默认站点下的 sjcj/ 子目录
 COPY --from=builder /build/app/dist /usr/share/nginx/html/sjcj
