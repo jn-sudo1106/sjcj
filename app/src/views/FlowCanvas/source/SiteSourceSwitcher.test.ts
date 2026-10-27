@@ -6,7 +6,7 @@ import { useUiStore } from '@/stores/ui'
 import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
-import { flowCenterApi, flowVersionApi, siteApi, sourceApi, paramApi, workflowBindingApi, type Source, type Param } from '@/api'
+import { flowCenterApi, flowVersionApi, siteApi, sourceApi, sourceGroupApi, paramApi, workflowBindingApi, type Source, type Param } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -31,6 +31,7 @@ const paramSample: Record<string, string[]> = {
 }
 
 function mockApis() {
+  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([])
   vi.spyOn(siteApi, 'siteDetail').mockResolvedValue({
     siteId: 'site-a', name: '网站 A', category: '', owner: 'admin', sourceCount: 1, errorCount: 0,
   })
@@ -43,6 +44,7 @@ function mockApis() {
   })
   vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
   vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+  vi.spyOn(sourceApi, 'codeConfigOptions').mockResolvedValue([{ configId: '900', name: '代码生成', topic: 'code-default', entryTypeId: 13 }])
   vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: 'ok' })
   vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
   // 模板源有默认流程（复制流程的前提，1016）
@@ -68,10 +70,11 @@ const elSelectStub = {
   template: '<div class="el-select-stub"><slot /></div>',
 }
 
-async function createWrapper() {
+async function createWrapper(setup?: () => void) {
   sessionStorage.clear()
   setActivePinia(createPinia())
   mockApis()
+  setup?.()
   const wrapper = mount(SiteSourceSwitcher, {
     props: { siteId: 'site-a', activeKey: source.sourceId },
     global: {
@@ -86,6 +89,57 @@ async function createWrapper() {
 afterEach(() => vi.restoreAllMocks())
 
 describe('SiteSourceSwitcher', () => {
+  it('只列本站具体来源组、标注未分组，筛选由父级确认并可清除', async () => {
+    const rows = [
+      { ...source, sourceGroupId: '3' },
+      { ...source, sourceId: 'source-b', name: '另一个源', sourceGroupId: '3' },
+      { ...source, sourceId: 'source-c', sourceGroupId: '4' },
+      { ...source, sourceId: 'source-d' },
+    ]
+    const wrapper = await createWrapper(() => {
+      vi.mocked(siteApi.siteDetail).mockResolvedValue({ siteId: 'site-a', sourceCount: 4 } as never)
+      vi.mocked(siteApi.siteSourcePreview).mockResolvedValue(rows)
+      vi.mocked(sourceGroupApi.list).mockResolvedValue([
+        { sourceGroupId: '3', sourceGroupName: '门店信息采集' },
+        { sourceGroupId: '4', sourceGroupName: '商品采集' },
+        { sourceGroupId: '99', sourceGroupName: '其他网站的组' },
+      ] as never)
+    })
+    const select = wrapper.get('[data-testid="sidebar-source-group"]')
+    expect(select.findAll('option').map((option) => option.text()).sort()).toEqual(['选择来源组', '门店信息采集（2）', '商品采集（1）'].sort())
+    expect(wrapper.findAll('[data-testid="sidebar-source-group-tag"]').at(-1)?.text()).toBe('未分组')
+    await select.setValue('3')
+    expect(wrapper.emitted('pickGroup')?.at(-1)).toEqual(['3'])
+    expect((select.element as HTMLSelectElement).value).toBe('') // 父级取消切换时不出现假选中
+    await wrapper.setProps({ sourceGroupId: '3' })
+    expect(wrapper.findAll('.ssw-row-main')).toHaveLength(2)
+    expect(wrapper.get('.ssw-section-title').text()).toContain('2 / 4')
+    await wrapper.get('.ssw-search').setValue('门店信息')
+    expect(wrapper.findAll('.ssw-row-main')).toHaveLength(2)
+    await wrapper.get('[data-testid="sidebar-source-group-clear"]').trigger('click')
+    expect(wrapper.emitted('pickGroup')?.at(-1)).toEqual([''])
+    await wrapper.setProps({ sourceGroupId: undefined })
+    await wrapper.get('.ssw-search').setValue('')
+    expect(wrapper.findAll('.ssw-row-main')).toHaveLength(4)
+    wrapper.unmount()
+  })
+
+  it('首批数据不冒充组内总数，完整列表到达后再显示准确数量', async () => {
+    let complete!: (rows: Source[]) => void
+    const wrapper = await createWrapper(() => {
+      vi.mocked(siteApi.siteDetail).mockResolvedValue({ siteId: 'site-a', sourceCount: 3 } as never)
+      vi.mocked(siteApi.siteSourcePreview).mockResolvedValue([{ ...source, sourceGroupId: '3' }])
+      vi.mocked(siteApi.siteSources).mockReturnValue(new Promise(resolve => { complete = resolve }))
+      vi.mocked(sourceGroupApi.list).mockResolvedValue([{ sourceGroupId: '3', sourceGroupName: '价格采集' }] as never)
+    })
+    expect(wrapper.get('[data-testid="sidebar-source-group"]').text()).toContain('价格采集（已加载 1）')
+    complete([{ ...source, sourceGroupId: '3' }, { ...source, sourceId: 'b', sourceGroupId: '3' }, { ...source, sourceId: 'c' }])
+    await flushPromises()
+    expect(wrapper.get('[data-testid="sidebar-source-group"]').text()).toContain('价格采集（2）')
+    expect(wrapper.get('[data-testid="sidebar-source-group"]').text()).not.toContain('已加载')
+    wrapper.unmount()
+  })
+
   it('默认复制本网站第一个源', async () => {
     const wrapper = await createWrapper()
     await wrapper.get('[title="添加源"]').trigger('click')
@@ -256,8 +310,10 @@ describe('SiteSourceSwitcher', () => {
     expect(wrapper.emitted('pickSite')).toBeTruthy()
   })
 
-  it('支持折叠源列表，并在线下方面板完整展示选中源的名称、源 ID 与源 URL', async () => {
+  it('源详情默认收起，展开后完整展示名称、ID 与 URL；源列表可独立收起', async () => {
     const wrapper = await createWrapper()
+    expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(false)
+    await wrapper.get('.ssw-detail-header').trigger('click')
     expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe(source.name)
     expect(wrapper.get('[data-testid="active-source-full-id"]').text()).toBe(source.sourceId)
@@ -272,6 +328,7 @@ describe('SiteSourceSwitcher', () => {
   // 2026-09-17：地址要能直接点开去原站核对，不用先复制再贴地址栏
   it('源 URL 是可点开的外链，新窗口打开且带 noopener', async () => {
     const wrapper = await createWrapper()
+    await wrapper.get('.ssw-detail-header').trigger('click')
     const link = wrapper.get('[data-testid="active-source-url"]')
     expect(link.element.tagName).toBe('A')
     expect(link.attributes('href')).toBe(source.url + '/')
@@ -296,6 +353,7 @@ describe('SiteSourceSwitcher', () => {
     })
     await flushPromises()
 
+    await wrapper.get('.ssw-detail-header').trigger('click')
     const el = wrapper.get('[data-testid="active-source-url"]')
     expect(el.element.tagName).toBe('SPAN')
     expect(el.text()).toBe('javascript:alert(1)')
@@ -305,6 +363,7 @@ describe('SiteSourceSwitcher', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const wrapper = await createWrapper()
+    await wrapper.get('.ssw-detail-header').trigger('click')
     await wrapper.get('[data-testid="copy-source-url"]').trigger('click')
     expect(writeText).toHaveBeenCalledWith(source.url)
 
@@ -321,6 +380,7 @@ describe('SiteSourceSwitcher', () => {
       },
     })
     await flushPromises()
+    await empty.get('.ssw-detail-header').trigger('click')
     expect(empty.get('[data-testid="active-source-url"]').text()).toBe('—')
     expect((empty.get('[data-testid="copy-source-url"]').element as HTMLButtonElement).disabled).toBe(true)
   })
@@ -343,6 +403,7 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sourceUpdate).toHaveBeenCalledWith(expect.objectContaining({
       sourceId: source.sourceId, name: '改名后', url: 'https://new.example.com/list',
     }))
+    await wrapper.get('.ssw-detail-header').trigger('click')
     expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe('改名后')
     expect(wrapper.get('[data-testid="active-source-url"]').text()).toBe('https://new.example.com/list')
     expect(flow.sourceCtx?.name).toBe('改名后')
@@ -925,7 +986,7 @@ describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
     await flushPromises()
     expect(ws.backTraceHitsOf('site-a')).toEqual([])
     // 恢复全部源，「全部（不根据源 ID 过滤）」那一行也随之回来——命中态下它是藏起来的
-    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部源', '源一', '源二', '源三'])
   })
 
   // 导出的是**眼前这份列表**（含搜索过滤），与标题上的数字一致，所见即所得
@@ -974,14 +1035,14 @@ describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
   it('命中态属于另一个网站时不生效，侧栏照常显示全部源', async () => {
     const { wrapper } = await mountWithHits([{ sourceId: 's1', count: 40 }], 'site-other')
     expect(wrapper.find('[data-testid="sidebar-backtrace-bar"]').exists()).toBe(false)
-    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部源', '源一', '源二', '源三'])
   })
 
   it('没有命中态时一切照旧（不显示提示条、不显示条数、保留「全部」行）', async () => {
     const { wrapper } = await mountWithHits([])
     expect(wrapper.find('[data-testid="sidebar-backtrace-bar"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="sidebar-hit-count"]').exists()).toBe(false)
-    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部源', '源一', '源二', '源三'])
   })
 })
 
@@ -1163,4 +1224,16 @@ describe('SiteSourceSwitcher · 空白模板不提供流程选项', () => {
     expect(siteApi.sourceAdd).toHaveBeenCalled()
     expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
   })
+})
+
+it('右键发采集代码打开独立表单，关闭源菜单后点击表单仍保留且不会发采集任务', async () => {
+  const wrapper = await createWrapper()
+  await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
+  await wrapper.get('[data-testid="source-menu-code"]').trigger('click'); await flushPromises()
+  expect(wrapper.find('[data-testid="source-menu-code"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="201 派发配置 ID"]').exists()).toBe(true)
+  window.dispatchEvent(new MouseEvent('click')); await flushPromises()
+  expect(wrapper.find('[aria-label="201 派发配置 ID"]').exists()).toBe(true)
+  expect(sourceApi.sendSnatchWithParam).not.toHaveBeenCalled()
+  wrapper.unmount()
 })

@@ -455,12 +455,19 @@ function onSourceChange() {
   color: var(--rc-muted, #64748b);
   font-size: 12px;
 }
-/* 筛选表单：对齐旧项目 a-form layout="inline" 的栅格宽度比例 */
+/* 筛选列随可用宽度换行，避免固定栅格容不下控件和操作按钮。 */
 .sc-filter-form {
   margin-bottom: 4px;
 }
 .sc-filter-row {
   width: 100%;
+}
+.sc-filter-row > .el-col {
+  flex: 1 1 200px;
+  max-width: none;
+}
+.sc-filter-row > .el-col:last-child {
+  flex: 0 0 auto;
 }
 /* el-col gutter 让列间距统一为 8px，但内部 form-item 默认 margin-right 会叠加，清零 */
 .sc-filter-form :deep(.el-form-item) {
@@ -468,22 +475,33 @@ function onSourceChange() {
   margin-right: 0;
   width: 100%;
 }
-/* 所有输入/下拉控件统一宽度，消除默认尺寸差异 */
+.sc-filter-form :deep(.el-form-item__content) {
+  min-width: 0;
+}
+/* 控件宽度跟随所在列，源选择器内给详情按钮保留空间。 */
 .sc-filter-form :deep(.el-select),
 .sc-filter-form :deep(.el-input),
-.sc-filter-form :deep(.el-input-number) {
-  width: 248px;
-}
-/* 源选择器 SourceSelect（.ss-wrap，非 el-input/el-select 直系）单独给宽 */
+.sc-filter-form :deep(.el-input-number),
 .sc-filter-form :deep(.ss-wrap) {
-  width: 248px;
+  width: 100%;
+}
+.sc-filter-form :deep(.ss-wrap > .el-select) {
+  flex: 1;
+  min-width: 0;
 }
 .sc-filter-form :deep(.el-form-item__label) {
   font-size: 12px;
 }
-/* 按钮组单独一行左对齐，不撑满 col */
+/* 两个按钮始终同行，空间不足时由整列换行。 */
 .sc-filter-form .el-col:last-child :deep(.el-form-item) {
   width: auto;
+}
+.sc-filter-form .el-col:last-child :deep(.el-form-item__content) {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.sc-filter-form .el-col:last-child :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 .sc-batch-bar {
   display: flex;

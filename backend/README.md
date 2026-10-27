@@ -10,6 +10,8 @@ python -m backend.runner_management.server
 
 `RUNNER_DEV_MODE` 只用于本机联调。共享环境应设置 `RUNNER_AUTH_URL`（旧平台用户信息接口）或 `RUNNER_ADMIN_TOKEN`，并通过 HTTPS 反向代理公开服务。服务默认监听 `127.0.0.1:8092`；远程机器上的 Runner 必须使用可达的服务地址。签名私钥、令牌和本地 Git 仓库存放在被 Git 忽略的 `backend/.runtime/`，部署时需持久化和备份此目录。不能把私钥复制到 Runner 机器。
 
+`RUNNER_AUTH_URL` 必须填写真实的 JSON 身份接口，例如 `http://118.25.96.217:9999/api/user-info.htm`；不可漏掉 `/api`，否则可能取得 HTML 页面。认证服务连接或响应格式异常返回 502；只有确认会话无效才返回 401，避免误清除用户登录状态。
+
 默认使用本地 SQLite。需要临时 MySQL 时，先设置 `RUNNER_DB_HOST`、`RUNNER_DB_NAME`、`RUNNER_DB_USER`、`RUNNER_DB_PASSWORD` 环境变量再启动服务；MySQL 端口默认是 **8102**，如需更改可设置 `RUNNER_DB_PORT`。程序会创建六张 `ce_runner_` 前缀的表。不要把密码写进代码或仓库。
 
 本机已恢复原 MySQL 连接，并保存于被 Git 忽略的 `backend/.runtime/runner-management.local.json`。后续仍在 `E:\ce` 执行 `python -m backend.runner_management.server`：未显式设置 MySQL 环境变量时，会自动读取该文件。密码使用 Windows DPAPI 加密，仅原 Windows 用户可解密；复制到其他机器需要重新配置连接或使用环境变量。配置损坏或无法解密时停止启动，不会悄悄改连空 SQLite。完整的 MySQL 环境变量优先于本机配置。

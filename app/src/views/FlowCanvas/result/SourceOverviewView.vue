@@ -30,6 +30,7 @@ import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
 import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
 import { scopedSourceIds } from './sourceScope'
 import { HIDEABLE_SOURCE_COLUMNS, viewStateFilter, type SourceListViewState } from './sourceListViewState'
+import { loadDirPath } from '@/api/sourceDirs'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
 import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
@@ -62,6 +63,7 @@ import {
 } from './sourceSearchField'
 import { snatchFailureSummary } from '@/utils/snatchResult'
 import SourceCodeTasksDrawer from './SourceCodeTasksDrawer.vue'
+import CodeConfigButton from './CodeConfigButton.vue'
 const codeTasksOpen = ref(false)
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
@@ -114,7 +116,7 @@ const props = defineProps<{
   scopeEmptyText?: string
   /**
    * 源列表「来源组」能力开关（1008-04）：只在源管理源列表视图（`CollectAssets/SourceTab.vue`）开。
-   * 开时多出三列（来源组 / 默认流程 / 流程配置）、来源组筛选下拉、勾选后的「选中来源」批量操作
+   * 开时多出两列（来源组 / 默认流程）、来源组筛选下拉、勾选后的「选中来源」批量操作
    * （源流程配置 / 调整来源组 / 指定流程运行一次）。
    */
   groupOps?: boolean
@@ -128,6 +130,7 @@ const props = defineProps<{
    * 内容由父级用 `extra-cell` 槽位按行渲染。不给 = 原样。
    */
   extraColumnLabel?: string
+  showOriginalDirectory?: boolean
   quickEdit?: boolean
 }>()
 const emit = defineEmits<{
@@ -145,6 +148,19 @@ const emit = defineEmits<{
 type StatusFilter = 'all' | 'C' | 'L' | 'E' | 'disabled'
 
 const rows = ref<Source[]>([])
+const originalPaths = ref(new Map<string, string>())
+function originalDirectoryOf(source: Source): string {
+  return (source.dirId ? originalPaths.value.get(source.dirId) : '')
+    || source.categoryPath?.split('/').map((part) => part.trim()).filter(Boolean).join(' / ')
+    || (source.dirId ? `系统目录 #${source.dirId}` : '—')
+}
+watch([rows, () => props.showOriginalDirectory], ([sources, show]) => {
+  if (!show) return
+  for (const id of new Set(sources.map((source) => source.dirId).filter((id): id is string => !!id))) {
+    if (originalPaths.value.has(id)) continue
+    void loadDirPath(id).then((path) => originalPaths.value.set(id, path.join(' / '))).catch(() => { /* 保留接口原路径或目录 ID，刷新可重试 */ })
+  }
+}, { immediate: true })
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
@@ -263,7 +279,7 @@ async function loadSourceGroupOptions() {
 const sourceGroupNameById = computed(() => new Map(sourceGroupOptions.value.map((g) => [g.sourceGroupId, g.name])))
 /** 来源组列显示：组名；组列表没拉到（候选加载失败）时用「组 #ID」兜底 */
 function sourceGroupNameOf(source: Source): string {
-  if (!source.sourceGroupId) return '—'
+  if (!source.sourceGroupId) return '未分组'
   return sourceGroupNameById.value.get(source.sourceGroupId) ?? `组 #${source.sourceGroupId}`
 }
 /** 流程候选（默认流程列名称、指定流程运行一次的选项），排除停用 */
@@ -419,7 +435,7 @@ let sourceRequestSeq = 0
 /** 隐藏的列（「我的视图」显示设置）；不在视图里时恒为空 = 全部显示 */
 const hiddenColumns = ref<string[]>([])
 const showCol = (key: string) => !hiddenColumns.value.includes(key)
-/** 实际隐藏掉的列数（空态行 colspan 用）：只算当前列表本来就有的列——网站列只在不限网站时有，来源组三列只在 groupOps 时有 */
+/** 实际隐藏掉的列数（空态行 colspan 用）：网站列只在不限网站时有，来源组两列只在 groupOps 时有 */
 const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
   && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
 
@@ -580,11 +596,6 @@ function openFlowConfigForSelected() {
   }
   const source = rows.value.find((r) => r.sourceId === selectedIds.value[0])
   if (!source) return
-  flowConfigSource.value = source
-  flowConfigOpen.value = true
-}
-/** 「流程配置」列点击：直接打开该源的配置抽屉 */
-function openFlowConfigForSource(source: Source) {
   flowConfigSource.value = source
   flowConfigOpen.value = true
 }
@@ -1370,6 +1381,7 @@ defineExpose({ openLaunch, clearSelection })
         <button class="sov-btn" type="button" @click="clearFilters">清空</button>
         <template v-if="!crossSite">
           <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <CodeConfigButton class="sov-btn" data-testid="source-code-launch" :sources="selectedSources" :disabled="!selectedSources.length" label="代码生成" />
           <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
         </template>
         <!-- 采集资产源列表视图把「视图切换 / 刷新」放在这里，与筛选并成一条栏（网站详情不传） -->
@@ -1379,7 +1391,7 @@ defineExpose({ openLaunch, clearSelection })
     </div>
 
     <div class="sov-summary" :class="{ 'one-row': crossSite }">
-      <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">生成代码任务</button>
+      <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">代码生成</button>
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
       <slot name="summary-extra" :ids="selectedIds" />
@@ -1424,6 +1436,7 @@ defineExpose({ openLaunch, clearSelection })
           </template>
         </el-dropdown>
         <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <CodeConfigButton class="sov-btn" data-testid="source-code-launch" :sources="selectedSources" :disabled="!selectedSources.length" label="代码生成" />
         <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
       </span>
     </div>
@@ -1445,11 +1458,11 @@ defineExpose({ openLaunch, clearSelection })
             <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>源名称</th>
             <th v-if="extraColumnLabel" data-testid="source-overview-extra-head">{{ extraColumnLabel }}</th>
+            <th v-if="showOriginalDirectory">原始目录</th>
             <th v-if="crossSite && showCol('site')">所属网站</th>
-            <!-- 1008-04 来源组三列：只在源列表视图（groupOps）出现 -->
+            <!-- 来源组与默认流程：配置入口统一放在「选中来源」操作中 -->
             <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
             <th v-if="crossSite && groupOps && showCol('defaultFlow')">默认流程</th>
-            <th v-if="crossSite && groupOps && showCol('flowConfig')">流程配置</th>
             <th v-if="showCol('url')">URL</th><th v-if="showCol('mainTable')">主表</th>
             <th v-if="showCol('tags')">标签</th>
             <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
@@ -1490,6 +1503,9 @@ defineExpose({ openLaunch, clearSelection })
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
             <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
             <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
+            <td v-if="showOriginalDirectory" class="sov-original-dir" :title="originalDirectoryOf(source)" data-testid="source-overview-original-directory">
+              {{ originalDirectoryOf(source) }}
+            </td>
             <td v-if="crossSite && showCol('site')" class="sov-site" :title="siteNameOf(source)">
               <button
                 v-if="source.siteId && source.siteId !== '0'"
@@ -1500,7 +1516,7 @@ defineExpose({ openLaunch, clearSelection })
               >{{ siteNameOf(source) }}</button>
               <span v-else class="sov-muted">未关联</span>
             </td>
-            <!-- 1008-04 来源组三列：来源组（点组名跳来源组页签）/ 默认流程（点开流程节点）/ 流程配置（组统一 / 单源，点开源流程配置抽屉） -->
+            <!-- 来源组（点组名跳来源组页签）/ 默认流程（点开流程节点） -->
             <td v-if="crossSite && groupOps && showCol('sourceGroup')" class="sov-group" :title="sourceGroupNameOf(source)">
               <button
                 v-if="source.sourceGroupId"
@@ -1509,7 +1525,7 @@ defineExpose({ openLaunch, clearSelection })
                 data-testid="source-overview-group-link"
                 @click="emit('openSourceGroup', source.sourceGroupId)"
               >{{ sourceGroupNameOf(source) }}</button>
-              <span v-else class="sov-muted">—</span>
+              <span v-else class="sov-muted">未分组</span>
             </td>
             <td v-if="crossSite && groupOps && showCol('defaultFlow')" class="sov-default-flow">
               <button
@@ -1517,19 +1533,11 @@ defineExpose({ openLaunch, clearSelection })
                 class="sov-link"
                 type="button"
                 data-testid="source-overview-default-flow"
-                :title="`打开流程 ${source.defaultFlowId}`"
+                :title="`打开流程 ${flowNameOf(source.defaultFlowId)}`"
                 @click="openFlowNode(source.defaultFlowId)"
               >{{ flowNameOf(source.defaultFlowId) }}</button>
-              <span v-else class="sov-no-flow" data-testid="source-overview-no-flow" title="这个源没有任何流程，无法发起任务">无流程</span>
+              <span v-else class="sov-no-flow" data-testid="source-overview-no-flow" title="未设置可用的默认流程，请在源流程配置中核对绑定">未设置默认流程</span>
               <span v-if="source.defaultFlowId && source.sourceGroupId" class="sov-muted" data-testid="source-overview-default-flow-group" title="组内源使用来源组的默认流程"> 来源组</span>
-            </td>
-            <td v-if="crossSite && groupOps && showCol('flowConfig')" class="sov-flow-config">
-              <button
-                class="sov-link"
-                type="button"
-                data-testid="source-overview-flow-config"
-                @click="openFlowConfigForSource(source)"
-              >{{ source.sourceGroupId ? '组统一' : '单源' }}</button>
             </td>
             <td v-if="showCol('url')" class="sov-url" :title="source.url">
               <!-- 没有 URL 就留空，不画「—」（2026-09-28 用户定，与旧平台一致） -->
@@ -1593,7 +1601,7 @@ defineExpose({ openLaunch, clearSelection })
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1759,6 +1767,9 @@ defineExpose({ openLaunch, clearSelection })
 .sov-quick-edit { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-muted); cursor: pointer; }
 .sov-quick-edit:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
 .sov-extra { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text-2); font-size: 12px; }
+.sov-original-dir { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.sov-default-flow .sov-link { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; text-align: left; }
+.sov-group .sov-link { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
 .sov-url a { color: inherit; text-decoration: none; }

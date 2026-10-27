@@ -51,6 +51,7 @@ import {
 import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview } from './groupRes'
+import { mockSysUserList, mockSysUserDetail, mockSysUserAdd, mockSysUserUpdate, mockSysUserStatus, mockSysUserPassword } from './sysUser'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
@@ -265,15 +266,17 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
     { sourceType: '802', typeName: 'PDF转MD' },
   ],
   // 节点类型维护（0924-04）：mock 只给只读数据，写操作走通用 ack
+  'sourceType/typeGroups': () => ['采集类', '规则类'],
   'sourceType/list': (params?: Record<string, unknown>) => {
     const rows = [
-      { sourceType: 90, typeName: '网页抓取', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null },
-      { sourceType: 160, typeName: 'Mail抓取', downType: 'source-config-mail', topic: null, seq: -1, notes: null, procType: '700', params: null },
-      { sourceType: 500, typeName: '资讯抓取', downType: 'source-config', topic: null, seq: 19, notes: '单独的资讯抓取逻辑', procType: null, params: null },
-      { sourceType: 800, typeName: '翻译助手', downType: 'source-config', topic: null, seq: 800, notes: null, procType: null, params: null },
+      { sourceType: 90, typeName: '网页抓取', typeGroup: '采集类', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null },
+      { sourceType: 160, typeName: 'Mail抓取', typeGroup: '采集类', downType: 'source-config-mail', topic: null, seq: -1, notes: null, procType: '700', params: null },
+      { sourceType: 500, typeName: '资讯抓取', typeGroup: null, downType: 'source-config', topic: null, seq: 19, notes: '单独的资讯抓取逻辑', procType: null, params: null },
+      { sourceType: 800, typeName: '翻译助手', typeGroup: '规则类', downType: 'source-config', topic: null, seq: 800, notes: null, procType: null, params: null },
     ]
     const kw = String(params?.typeName ?? '').trim()
-    return kw ? rows.filter((r) => r.typeName.includes(kw)) : rows
+    const group = String(params?.typeGroup ?? '').trim()
+    return rows.filter((r) => (!kw || r.typeName.includes(kw)) && (!group || r.typeGroup === group))
   },
   'sourceType/detail': (params?: Record<string, unknown>) => ({ sourceType: Number(params?.sourceType), typeName: '网页抓取', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null }),
   'sourceType/add': mockAck,
@@ -287,6 +290,13 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'group-res/modify': mockGroupResModify,
   'group-res/delete': mockGroupResDelete,
   'group-res/preview': mockGroupResPreview,
+  // 用户管理（系统设置 → 用户管理，SysUserAdminController）：内存表 SYS_USER + 角色绑定
+  'sys-user/list': mockSysUserList,
+  'sys-user/detail': mockSysUserDetail,
+  'sys-user/add': mockSysUserAdd,
+  'sys-user/update': mockSysUserUpdate,
+  'sys-user/update-status': mockSysUserStatus,
+  'sys-user/change-password': mockSysUserPassword,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。

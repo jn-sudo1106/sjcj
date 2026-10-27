@@ -1065,10 +1065,18 @@ class Application:
             try:
                 with urlopen(Request(auth_url, headers=forwarded), timeout=5) as response:
                     payload = json.load(response)
-            except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-                raise ApiError("登录状态验证失败", 401) from exc
+            except HTTPError as exc:
+                if exc.code in (401, 403):
+                    raise ApiError("登录状态验证失败", 401) from exc
+                raise ApiError("认证服务请求失败，请检查管理服务的登录校验配置", 502) from exc
+            except (URLError, TimeoutError, OSError, ValueError) as exc:
+                raise ApiError("认证服务不可用或返回格式错误，请检查登录校验地址", 502) from exc
+            if not isinstance(payload, dict):
+                raise ApiError("认证服务返回格式错误，请检查登录校验地址", 502)
             if str(payload.get("code")) != "0" or not payload.get("data"):
                 raise ApiError("请先登录", 401)
+            if not isinstance(payload["data"], dict):
+                raise ApiError("认证服务返回的用户信息格式错误", 502)
             roles = payload["data"].get("roles", [])
             if write and "admin" not in roles:
                 raise ApiError("需要管理员权限", 403)

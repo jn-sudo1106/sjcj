@@ -33,6 +33,63 @@ afterEach(() => {
 })
 
 describe('DataQueryPanel · 独立挂载', () => {
+  it('工作区空结果显示已执行的条件，修改草稿不会误改说明；清空包含源并恢复查询', async () => {
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mountPanel({ workspaceLayout: true, sourceId: 's1', 'onClear-context': () => { void wrapper.setProps({ sourceId: '' }) } })
+    wrapper.vm.search({ sql: 'UPDATE_DT > CURDATE()' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).toContain('没有符合筛选条件的数据')
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).toContain('源：s1')
+    await wrapper.get('button[aria-controls="data-query-advanced"]').trigger('click')
+    await wrapper.get('input[placeholder="条件表达式，如 CREATE_DT > CURDATE()"]').setValue('K1 IS NULL')
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).toContain('UPDATE_DT > CURDATE()')
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).not.toContain('K1 IS NULL')
+    await wrapper.get('[data-testid="data-query-empty"] button').trigger('click')
+    await flushPromises()
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', sourceId: undefined, sql: undefined, page: 1 }))
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).toContain('这张表暂无数据')
+    expect(wrapper.get('[data-testid="data-query-empty"]').find('button').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('工作区查询失败单独显示错误与重试，不能误报表暂无数据', async () => {
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockRejectedValueOnce(new Error('服务暂不可用')).mockResolvedValue({ total: 1, list: [ROW] })
+    const wrapper = mountPanel({ workspaceLayout: true })
+    wrapper.vm.search()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).toContain('查询失败，请重试')
+    expect(wrapper.get('[data-testid="data-query-empty"]').text()).toContain('服务暂不可用')
+    expect(wrapper.text()).not.toContain('这张表暂无数据')
+    await wrapper.get('[data-testid="data-query-empty"] button').trigger('click')
+    await flushPromises()
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('标题A')
+    wrapper.unmount()
+  })
+
+  it('切表立即清空旧结果，同表来回切换后迟到的旧请求也不能覆盖新结果', async () => {
+    let resolveOld!: (result: { list: DataRow[]; total: number }) => void
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValueOnce({ total: 1, list: [ROW] })
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+      .mockResolvedValue({ total: 1, list: [{ ...ROW, values: { K1: '最新数据' } }] })
+    const wrapper = mountPanel({ workspaceLayout: true })
+    wrapper.vm.search()
+    await flushPromises()
+    expect(wrapper.text()).toContain('标题A')
+    wrapper.vm.search({ sql: 'K1 IS NOT NULL' })
+    await wrapper.setProps({ tableId: 't2' })
+    expect(wrapper.text()).not.toContain('标题A')
+    await wrapper.setProps({ tableId: 't1' })
+    wrapper.vm.search()
+    await flushPromises()
+    resolveOld({ total: 1, list: [{ ...ROW, values: { K1: '迟到的旧数据' } }] })
+    await flushPromises()
+    expect(query).toHaveBeenCalledTimes(3)
+    expect(wrapper.text()).toContain('最新数据')
+    expect(wrapper.text()).not.toContain('迟到的旧数据')
+    wrapper.unmount()
+  })
+
   it('历史只记录成功请求的快照：等待时改条件或切表不串历史，失败不记录，零行成功也记录', async () => {
     let resolve!: (result: { list: DataRow[]; total: number }) => void
     const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementationOnce(() => new Promise((done) => { resolve = done }))

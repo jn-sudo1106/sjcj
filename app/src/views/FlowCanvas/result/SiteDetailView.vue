@@ -140,6 +140,7 @@ onUnmounted(() => {
 
 const ui = useUiStore()
 const view = computed(() => normalizeSiteView(route.query.view))
+const sourceGroupId = computed(() => String(route.query.sourceGroupId ?? '') || undefined)
 /** 左栏数据表模式选中的表（0924-10）：模式在 ui store，表在地址栏 tableId */
 const lockedTableId = computed(() => (ui.siteDataSideMode === 'table' ? String(route.query.tableId ?? '') : ''))
 /** 数据表模式选的是「全部」（地址栏没带表）：中间显示各表汇总，不挂数据视图 */
@@ -184,11 +185,11 @@ function switchMonitorTab(tab: SiteMonitorTab) {
 }
 function openSource(source: Source) {
   // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
-  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'overview' } })
+  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'overview', ...(sourceGroupId.value ? { sourceGroupId: sourceGroupId.value } : {}) } })
 }
 /** 点源列表的「数据量」数字（0903 Y1-15）：直接落到数据视图，不用先进流程再切一次 */
 function openSourceData(source: Source) {
-  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'data' } })
+  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'data', ...(sourceGroupId.value ? { sourceGroupId: sourceGroupId.value } : {}) } })
 }
 </script>
 
@@ -202,7 +203,6 @@ function openSourceData(source: Source) {
             网站信息加载失败<button type="button" class="sdv-retry" data-testid="site-detail-retry" @click="load">重试</button>
           </span>
         </div>
-        <div class="sdv-sub">{{ site?.categoryPath || site?.category || '' }}</div>
       </div>
       <div class="sdv-switcher">
         <button class="sdv-seg" :class="{ on: view === 'source' }" type="button" data-testid="site-source-view" @click="switchView('source')">源</button>
@@ -214,7 +214,7 @@ function openSourceData(source: Source) {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
+      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :scope-source-group-id="sourceGroupId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
       <SiteTablesOverview v-else-if="view === 'data' && showTablesOverview" :site-id="siteId" class="sdv-body" @pick="openTableFromOverview" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" :locked-table-id="lockedTableId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
@@ -232,7 +232,6 @@ function openSourceData(source: Source) {
 .sdv-detail-failed { font-weight: 400; font-size: 11px; color: var(--rc-danger, #dc2626); }
 .sdv-retry { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; cursor: pointer; }
 .sdv-retry:hover { text-decoration: underline; }
-.sdv-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .sdv-switcher { display: inline-flex; padding: 2px; background: #f1f5f9; border: 1px solid var(--rc-border); border-radius: 7px; margin-left: auto; }
 .sdv-seg { height: 26px; padding: 0 12px; border: 0; background: transparent; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 5px; }
 .sdv-seg.on { background: var(--rc-primary); color: #fff; }

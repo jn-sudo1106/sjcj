@@ -2,6 +2,25 @@
 
 数据采集平台的独立重构前端系统。本仓库包含前端工程与设计文档两部分。当前默认入口为一级首页「采集资产总览」，再下钻到 7 个业务模块。
 
+## 系统概况
+
+**在工作区中的位置**：`D:\workspace\cl` 分两条线——ChatBI 问数链（`ai_chat_chain`、`chat-bi-backend`、`bee-top-dev/bee-query`）与采集/数据同步链（本工程、`sync-platform`、`data-sync`）。本工程是**采集链唯一的用户界面**，问数链的界面不在这个仓。
+
+**技术栈**：Vue 3 + Vite + TypeScript + Element Plus + Pinia + vue-router（`app/package.json`）。流程画布是自绘 SVG，不引第三方画布库。
+
+**数据层是这个仓最需要先懂的一层**：所有请求收在 `app/src/api/`，业务方法统一走 `request()`，旧平台字段名到本项目类型的转换集中在 `app/src/api/legacyAdapters.ts`。端点契约清单是 `app/src/api/endpoints.ts`——每条记录带 `impl`（有没有专属 mock handler）与 `live`（是否已按真实后端联调、该端点自动切真实）两个标记，因此**默认 mock、逐端点上线**，不靠全局开关一刀切。写类端点另有一张生产写保护白名单（`app/src/api/client.ts`），不在名单里的写在发请求前就被拦下。
+
+**对接的后端**：
+
+- 业务后端 bee-config（`D:\workspace\cl\bee-top-dev`）——`config/*` 系列接口，例如实体表分页 `config/entryTypePagedView`
+- 同步平台 sync-platform——走**同源 `/api/sync-platform` 代理**，与业务后端主机无关，所以同步类功能在任何后端环境下入口都在
+- 模板配置域 `/api/poc`——独立进程，由 vite/nginx 直接转发，不经过业务后端
+
+**运行与校验命令**（在 `app/` 下）：`npm run dev`、`npm run build`（先 `vue-tsc` 类型检查再打包）、`npm run test`（Vitest）、`npm run lint`、`npm run deploy` / `deploy:head`（隔离部署）。环境地址与部署惯例记在根目录 `AGENTS.md`，本地 dev 固定连 186。
+
+**边界**：页面能点通不代表后端契约已验证——`live` 标记只说明该端点已切真实接口。新增页面动作若后端没有对应参数，前端不会自己变出过滤能力（这类缺口要在后端补）。
+
+
 ## 目录
 
 | 目录 | 说明 |

@@ -151,6 +151,13 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
     expect(url).toContain('ids=2102157%2C2101001')
   })
 
+  it('检查并建表保留后端 exists / rebuilds 明细，供页面区分跳过与新建', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已存在:1, 新建:1', data: { exists: ['sense_data.tb_existing'], rebuilds: ['sense_data.tb_missing'] } }))
+    const { entryApi } = await import('./index')
+    const result = await entryApi.rebuildTable(['2102148', '2102149'])
+    expect(result).toEqual({ exists: ['sense_data.tb_existing'], rebuilds: ['sense_data.tb_missing'] })
+  })
+
   it('重建去重索引使用 GET 和旧字段名 entryTypeId（单表）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '重建去重索引成功', data: null }))
     const { entryApi } = await import('./index')

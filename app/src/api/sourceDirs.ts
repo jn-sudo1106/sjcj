@@ -71,6 +71,27 @@ export function dirPath(id: string): string[] {
   return names
 }
 
+// 列表只带系统目录 ID 时，复用精确分类查询补齐祖先；同一目录 / 父级不重复请求。
+const pathTasks = new Map<string, Promise<string[]>>()
+export function loadDirPath(id: string): Promise<string[]> {
+  const cached = pathTasks.get(id)
+  if (cached) return cached
+  const task = (async () => {
+    let node = nodeIndex.get(id)
+    if (!node) {
+      const category = await sourceApi.categoryById(id)
+      if (!category) throw new Error(`系统目录 #${id} 不存在`)
+      node = toNode(category, category.parentId && category.parentId !== '0' ? category.parentId : '')
+    }
+    return [...(node.parentId ? await loadDirPath(node.parentId) : []), node.name]
+  })().catch((error: unknown) => {
+    pathTasks.delete(id)
+    throw error
+  })
+  pathTasks.set(id, task)
+  return task
+}
+
 /** 目录及其全部子孙 ID（逐层拉子级，带缓存；单个子级拉失败只少那一支） */
 export async function expandDirIds(kind: DirKind, ids: string[]): Promise<string[]> {
   const collected = new Set(ids)
@@ -155,7 +176,7 @@ export function bizMembership(): Promise<Map<string, string[]>> {
     const map = new Map<string, string[]>()
     for (let i = 0; i < all.length; i += CONCURRENCY) {
       const ids = all.slice(i, i + CONCURRENCY)
-      const lists = await Promise.all(ids.map((id) => bizDirSourceIds(id).catch(() => [] as string[])))
+      const lists = await Promise.all(ids.map(bizDirSourceIds))
       lists.forEach((sources, k) => sources.forEach((sid) => map.set(sid, [...(map.get(sid) ?? []), ids[k]])))
     }
     return map
@@ -298,4 +319,5 @@ export function resetSourceDirCache() {
   nodeIndex.clear()
   dirSourcesCache.clear()
   membershipTask = null
+  pathTasks.clear()
 }

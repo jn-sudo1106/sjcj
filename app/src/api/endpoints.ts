@@ -47,6 +47,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeEnable', desc: '启用 / 停用源（真实路径，见上方 source/changeSourceEnable 的说明）', danger: true, live: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true, live: true },
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
+  // 与本仓配套后端 sendCodeConfig JSON 契约一致，保留真实后端错误；调用方强制 mode:'http'，
+  // 无 mock handler（MQ 派发不在 mock 模式伪造），所以不标 impl。
+  { path: 'source/codeConfigOptions', desc: '代码生成派发配置候选（201）', live: true },
+  { path: 'source/sendCodeConfig', desc: '派发 MQ 代码任务', danger: true, live: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
   // 2026-09-18 接上：节点配置里改完定时策略、点保存时写回 job 表（旧平台 saveSourceCron）。
   // ⚠️ POST 但参数走 **query**，不是 body——旧 api/source-job.js 用的就是 `method:'post', params`。
@@ -149,7 +153,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 节点类型维护（0924-04，系统设置 → 节点类型；旧平台「配置 → 源类型」）。2026-09-24 生产逐个实测：
   // 读接口不分页；add/update 是 JSON body，update 为增量更新；临时类型 99901 新增→修改→删除闭环已清理。
   // sourceType/delete：2026-10-14 在 186 实测被配置引用时后端拒绝（连软删除的配置也算），可安全接入。
-  { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊，不分页）', impl: true, live: true },
+  { path: 'sourceType/typeGroups', desc: '节点类型分组可选项（sys_config.source_type_group）', impl: true, live: false },
+  { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊、typeGroup 精确，不分页）', impl: true, live: true },
   { path: 'sourceType/detail', desc: '节点类型详情', impl: true, live: true },
   { path: 'sourceType/add', desc: '新增节点类型（sourceType 可不填，后端取 max+1）', danger: true, impl: true, live: true },
   { path: 'sourceType/update', desc: '修改节点类型（增量更新）', danger: true, impl: true, live: true },
@@ -776,6 +781,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'group-res/add', desc: '新增数据权限规则（admin；成功即清该组权限缓存）', danger: true, impl: true, live: true },
   { path: 'group-res/modify', desc: '修改数据权限规则（admin；body 必须带 id）', danger: true, impl: true, live: true },
   { path: 'group-res/delete', desc: '删除数据权限规则（admin；ids 在 query，软删 isDelete=1）', danger: true, impl: true, live: true },
+
+  /* ── sys-user 用户管理（收录 6 / SysUserAdminController，系统设置 → 用户管理） ──
+     表 SYS_USER（10 列，本仓无它的 DDL，口径取自 SysUserMapper.xml 的 resultMap）+ SYS_USER_2_ROLE + SYS_ROLE。
+     6 条全部走 ShiroConfiguration 里 "/api/v1/sys-user/** → roles[admin]"：admin 是唯一系统超管，只有他能管用户。
+     只有 list 返回 Paged（code 数字 0），其余返回 RspResult（code 字符串 "0"/"-1"）；出参永不含口令。
+     角色不在本页维护：建号时服务端自动绑一条 read（只读），要 admin 权限由管理员直接改后台数据库。
+     ⚠️ 6 条均未经真实联调（后端 2026-10-27 刚落地，只过了本地 mvn compile），live 沿用 group-res 域的
+     标注惯例：标上后本地 5180 直连 186 才能打到真接口。首次实测后请回写本注释。 */
+  { path: 'sys-user/list', desc: '用户分页（登录名/用户名模糊，组 ID 与状态精确；留空即不过滤）', impl: true, live: true },
+  { path: 'sys-user/detail', desc: '用户详情（含已绑定角色的 ID 与名称回显，不含口令）', impl: true, live: true },
+  { path: 'sys-user/add', desc: '新增用户（admin；初始密码必填，服务端按 {p}+md5(登录名+明文) 落库；组 ID 留空沿用创建人所在组；自动绑 read 角色）', danger: true, impl: true, live: true },
+  { path: 'sys-user/update', desc: '修改用户（admin；只能改用户名与所属组，登录名不可改）', danger: true, impl: true, live: true },
+  { path: 'sys-user/update-status', desc: '启用/停用（admin；停用连带解除该用户全部角色绑定，启用要求该用户已有角色）', danger: true, impl: true, live: true },
+  { path: 'sys-user/change-password', desc: '重置密码（admin；明文入参，内置 admin 账号拒绝）', danger: true, impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

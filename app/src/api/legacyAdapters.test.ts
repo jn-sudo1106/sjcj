@@ -73,6 +73,21 @@ describe('sourceCategoriesFromLegacy', () => {
 })
 
 describe('旧平台参数模型适配', () => {
+  it('返回创建和更新时间，历史空值保持为空；提交参数时不回传审计字段', () => {
+    const param = paramFromLegacy({ paramId: 1, paramName: '参数', paramType: 'list',
+      createDt: '2026-10-26 10:00:00', updateDt: '2026-10-26 11:00:00' })
+    expect(param.createdAt).toBe('2026-10-26 10:00:00')
+    expect(param.updatedAt).toBe('2026-10-26 11:00:00')
+    const historical = paramFromLegacy({ paramId: 2, paramName: '旧参数', paramType: 'list', createDt: null, updateDt: null })
+    expect(historical.createdAt).toBeUndefined()
+    expect(historical.updatedAt).toBeUndefined()
+    const body = paramToLegacy(param)
+    expect(body).not.toHaveProperty('createDt')
+    expect(body).not.toHaveProperty('updateDt')
+    expect(body).not.toHaveProperty('createdAt')
+    expect(body).not.toHaveProperty('updatedAt')
+  })
+
   it('把旧参数类型和值明细转换为新页面模型', () => {
     const param = paramFromLegacy({
       paramId: 1035,

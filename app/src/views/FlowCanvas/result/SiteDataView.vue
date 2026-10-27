@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CodeConfigButton from './CodeConfigButton.vue'
+import { codeTargetsForRows } from '@/utils/flow/codeConfigTargets'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 网站数据视图（0812 计划 M2-4/M2-5A + M2-3 交互纠偏，2026-08-14 第三次修正）。
@@ -1302,6 +1304,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
             :title="launchDisabledReason"
             @click="onSendNextStep"
           >发后续任务</button>
+          <CodeConfigButton v-if="canPickRows" data-testid="site-data-code-btn" :build-targets="() => codeTargetsForRows(rows, selectedRowIds, effectiveTableId, selectedSourceId)" :disabled="!selectedRowIds.length" label="代码生成" />
         </template>
         <template #head-right>
           <button

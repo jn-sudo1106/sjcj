@@ -132,7 +132,7 @@ it('编辑移除样例；测试弹窗使用独立参数发送并展示结果，�
   closes[0]!.click(); await flushPromises()
   await w.findAll('button').find(button => button.text() === '测试')!.trigger('click'); await flushPromises()
   const requestText = () => document.querySelector('[data-testid="model-sample-request"]')!.textContent!
-  let url = new URL(requestText())
+  const url = new URL(requestText())
   expect(url.searchParams.get('prompt')).toBe('南京到上海的距离')
   expect(url.searchParams.get('stream')).toBe('1')
   const model = document.querySelector<HTMLInputElement>('input[data-testid="model-test-model"], [data-testid="model-test-model"] input')!

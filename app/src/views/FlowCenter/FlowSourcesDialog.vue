@@ -55,7 +55,8 @@ const pickableRows = computed(() => rows.value.filter((r) => !isGroupRow(r)))
 const pageAllPicked = computed(() => pickableRows.value.length > 0 && pickableRows.value.every((r) => selected.value.has(r.sourceId)))
 function togglePick(id: string, on: boolean) {
   const next = new Set(selected.value)
-  on ? next.add(id) : next.delete(id)
+  if (on) next.add(id)
+  else next.delete(id)
   selected.value = next
 }
 function togglePage(on: boolean) {

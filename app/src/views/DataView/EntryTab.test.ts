@@ -394,6 +394,67 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeRebuild)
   })
 
+  it('未勾选时批量入口仍可发现，菜单禁用；单表入口可直接补建并区分处理结果', async () => {
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [{ tableId: '2102149', name: 'kalishi_trades', tableName: 'sense_data.TB_KALISHI_TRADES', fields: [] }] })
+    const rebuild = vi.spyOn(entryApi, 'rebuildTable').mockResolvedValue({ ok: true, exists: [], rebuilds: ['sense_data.TB_KALISHI_TRADES'] }).mockClear()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never).mockClear()
+    const success = vi.spyOn(ElMessage, 'success')
+    useAuthStore().roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+    await wrapper.get('[data-testid="entry-batch-more"]').trigger('click')
+    await flushPromises()
+    expect(new DOMWrapper(document.body).get('[data-testid="entry-batch-rebuild"]').classes()).toContain('is-disabled')
+    await wrapper.get('[data-testid="entry-more"]').trigger('click')
+    await flushPromises()
+    await new DOMWrapper(document.body).get('[data-testid="entry-rebuild"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('ids:2102149'), '检查表结构提示', expect.anything())
+    expect(confirm.mock.calls[0]![0]).toContain('已存在的表跳过，不恢复历史数据')
+    expect(rebuild).toHaveBeenCalledWith(['2102149'])
+    expect(success).toHaveBeenCalledWith('检查完成：新建 1 张物理表，已存在 0 张（已跳过）')
+  })
+
+  it('检查并建表取消时不执行接口，可以重新打开操作', async () => {
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [{ tableId: 't1', tableName: 'tb_a', fields: [] }] })
+    const rebuild = vi.spyOn(entryApi, 'rebuildTable').mockClear()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    useAuthStore().roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+    await wrapper.get('[data-testid="entry-more"]').trigger('click')
+    await flushPromises()
+    await new DOMWrapper(document.body).get('[data-testid="entry-rebuild"]').trigger('click')
+    await flushPromises()
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="entry-batch-more"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('确认期间勾选变化不扩大本次建表范围，失败保留选择并允许重试', async () => {
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 2, list: [{ tableId: 't1', tableName: 'tb_a', fields: [] }, { tableId: 't2', tableName: 'tb_b', fields: [] }] })
+    const rebuild = vi.spyOn(entryApi, 'rebuildTable').mockRejectedValue(new Error('建表失败')).mockClear()
+    const error = vi.spyOn(ElMessage, 'error')
+    let finish!: () => void
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => new Promise(resolve => { finish = () => resolve('confirm' as never) }))
+    useAuthStore().roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+    const checkbox = (id: string) => wrapper.findAllComponents({ name: 'ElCheckbox' }).find(c => c.props('ariaLabel') === `选择表 ${id}`)!
+    checkbox('t1').vm.$emit('change', true)
+    await wrapper.get('[data-testid="entry-batch-more"]').trigger('click')
+    await flushPromises()
+    await new DOMWrapper(document.body).get('[data-testid="entry-batch-rebuild"]').trigger('click')
+    checkbox('t2').vm.$emit('change', true)
+    finish()
+    await flushPromises()
+    expect(rebuild).toHaveBeenCalledTimes(1)
+    expect(rebuild).toHaveBeenCalledWith(['t1'])
+    expect(error).toHaveBeenCalledWith('处理失败：建表失败')
+    expect(checkbox('t1').props('modelValue')).toBe(true)
+    expect(checkbox('t2').props('modelValue')).toBe(true)
+    expect(wrapper.get('[data-testid="entry-batch-more"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('1022 按页请求：每页 20 条，默认带表ID倒序排序参数，总数取后端 count', async () => {
     const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
       total: 1160,

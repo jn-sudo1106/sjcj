@@ -373,27 +373,41 @@ function togglePage(checked: boolean) {
     : selected.value.filter((id) => !pageIds.includes(id))
 }
 
-// §1.3-8：批量重建
-async function onBatchRebuild() {
-  if (!selected.value.length) return
-  const ids = selected.value.join(',')
+// 旧 rebuildTable 只补建不存在的表，已有表跳过；单表和批量入口共用。
+const rebuilding = ref(false)
+async function onRebuildTables(tableIds: string[]) {
+  if (!canWrite.value || rebuilding.value || !tableIds.length) return
+  // 确认弹窗打开后即固定本次范围，避免等待确认时勾选变化带入未确认的表。
+  const confirmedIds = [...new Set(tableIds)]
+  const ids = confirmedIds.join(',')
+  rebuilding.value = true
   try {
     await ElMessageBox.confirm(
-      `是否确定检查并重建物理表，数量:${selected.value.length}?, ids:${ids}`,
+      `是否确定检查并重建物理表，数量:${confirmedIds.length}?, ids:${ids}\n物理表不存在时按表配置新建，已存在的表跳过，不恢复历史数据。`,
       '检查表结构提示',
       { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
     )
   } catch {
+    rebuilding.value = false
     return
   }
   try {
-    const result = await entryApi.rebuildTable(selected.value)
-    ElMessage.success(`处理成功:${result?.message ?? ''}`)
-    selected.value = []
+    const result = await entryApi.rebuildTable(confirmedIds)
+    if (Array.isArray(result?.exists) && Array.isArray(result?.rebuilds)) {
+      ElMessage.success(`检查完成：新建 ${result.rebuilds.length} 张物理表，已存在 ${result.exists.length} 张（已跳过）`)
+    } else {
+      ElMessage.success(`处理成功:${result?.message ?? ''}`)
+    }
+    selected.value = selected.value.filter(id => !confirmedIds.includes(id))
     await load()
   } catch (error) {
     ElMessage.error(`处理失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    rebuilding.value = false
   }
+}
+function onBatchRebuild() {
+  void onRebuildTables(selected.value)
 }
 // §1.3-8：批量删除
 async function onBatchDelete() {
@@ -448,12 +462,12 @@ const onEnterSearch = withoutComposition(() => onSearch())
       </label>
       <span class="muted">共 {{ total }} 张实体表</span>
       <template v-if="canWrite">
-        <el-dropdown v-if="selected.length" trigger="click">
-          <button class="rc-btn" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+        <el-dropdown trigger="click">
+          <button class="rc-btn" type="button" data-testid="entry-batch-more" :disabled="rebuilding">{{ rebuilding ? '检查中…' : '更多' }}<el-icon class="et-caret"><ArrowDown /></el-icon></button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item :icon="RefreshRight" @click="onBatchRebuild">检查并重建物理表<span style="margin-left: 4px; color: var(--rc-muted); font-size: 12px">（表不存在时自动新建）</span></el-dropdown-item>
-              <el-dropdown-item :icon="Delete" divided style="color: #dc2626" @click="onBatchDelete">批量删除</el-dropdown-item>
+              <el-dropdown-item :icon="RefreshRight" :disabled="!selected.length || rebuilding" data-testid="entry-batch-rebuild" @click="onBatchRebuild">检查并重建物理表<span style="margin-left: 4px; color: var(--rc-muted); font-size: 12px">（表不存在时自动新建）</span></el-dropdown-item>
+              <el-dropdown-item :icon="Delete" :disabled="!selected.length || rebuilding" divided style="color: #dc2626" @click="onBatchDelete">批量删除</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -557,7 +571,8 @@ const onEnterSearch = withoutComposition(() => onSearch())
                     <template #dropdown><el-dropdown-menu>
                       <el-dropdown-item :icon="CopyDocument" @click="onCopy(e)">复制新表</el-dropdown-item>
                       <el-dropdown-item :icon="Download" @click="onExtractFields(e)">提取表字段</el-dropdown-item>
-                      <el-dropdown-item :icon="RefreshRight" divided @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
+                      <el-dropdown-item :icon="RefreshRight" divided :disabled="rebuilding" data-testid="entry-rebuild" @click="onRebuildTables([e.tableId])">检查并重建物理表（不存在时新建）</el-dropdown-item>
+                      <el-dropdown-item :icon="RefreshRight" @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
                       <el-dropdown-item :icon="Odometer" @click="onCalc(e)">重新计算数据量</el-dropdown-item>
                       <el-dropdown-item :icon="Key" @click="onRebuildIndex(e)">重建去重索引</el-dropdown-item>
                       <el-dropdown-item v-if="e.state === 'C'" :icon="SwitchButton" divided style="color: #dc2626" @click="onState(e)">置为正式表</el-dropdown-item>

@@ -820,3 +820,37 @@ export interface SendSnatchWithParamPayload {
   /** 指定用哪条流程跑这一次（1008-04「指定流程运行一次」，旧平台 source.js 同口径，放 query） */
   flowId?: string
 }
+
+/** 独立 MQ 代码生成请求；ID 使用字符串，避免 Long 精度丢失。 */
+export interface SendCodeConfigPayload {
+  sourceId: string
+  flowId: string
+  stepId?: string
+  /** 201 类型派发配置 ID；不是目标步骤的抓取配置 ID。 */
+  configId?: string
+  entryTypeId?: number
+  entryIds?: string[]
+  queue?: string
+  params?: Record<string, unknown>
+  url?: string
+  ver?: string
+}
+export interface SendCodeConfigResult {
+  sourceId: string | number
+  configId: string | number
+  stepConfigId?: string | number
+  queue: string
+  requestCnt: number
+  sendCnt: number
+  failCnt: number
+  taskIds: string[]
+  tasks: { stepId: string | number; entryId?: string | number; taskIds: string[]; errors: string[] }[]
+}
+
+/** 启用的 201 派发配置下拉候选，按 configId 升序排列。 */
+export interface CodeConfigOption {
+  configId: string
+  name: string | null
+  topic: string | null
+  entryTypeId: number | null
+}

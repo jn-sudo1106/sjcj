@@ -5,12 +5,13 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
+import DataTableSidebar from './DataTableSidebar.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { UserInfo } from '@/api/auth'
-import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
+import { dataApi, sourceApi, entryApi, favoriteApi, logReportApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
 import { downloadCsv } from '@/utils/format/csvExport'
 
 // 当前页 CSV 导出会触发浏览器下载，jsdom 里换成桩，只断言传给它的文件名和内容
@@ -49,6 +50,9 @@ describe('数据中心 · 数据查询 tab', () => {
 
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.spyOn(favoriteApi, 'listIds').mockResolvedValue([])
+    vi.spyOn(logReportApi, 'recentRaw').mockResolvedValue({ success: true, code: '0', msg: '', data: [] })
+    vi.spyOn(logReportApi, 'report').mockResolvedValue({ success: true, code: '0', msg: '', data: {} })
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(GROUP)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(META)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
@@ -93,9 +97,15 @@ describe('数据中心 · 数据查询 tab', () => {
     await flushPromises()
     return new DOMWrapper(document.body)
   }
-  /** 单行模式下状态筛选在前、表选择在后，不能再按 ElSelect 的下标取 */
-  function tableSelectOf() {
-    return wrapper.findAllComponents({ name: 'ElSelect' }).find((s) => s.props('placeholder') === '选择数据表')!
+  function sidebar() { return wrapper.findComponent(DataTableSidebar) }
+  async function chooseTable(id: string) {
+    const table = sidebar().props('tables').find(table => table.tableId === id)!
+    sidebar().vm.$emit('select', table)
+    await flushPromises()
+  }
+  async function searchTables(keyword: string) {
+    await wrapper.get('input[data-testid="data-table-search"]').setValue(keyword)
+    await flushPromises()
   }
   async function clickMenuItem(body: DOMWrapper<HTMLElement>, label: string) {
     await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === label)!.trigger('click')
@@ -140,9 +150,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    const tableSelect = tableSelectOf()
-    await tableSelect.vm.$emit('update:modelValue', 't2')
-    await tableSelect.vm.$emit('change', 't2')
+    await chooseTable('t2')
     await waitForLoad()
 
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
@@ -380,26 +388,18 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.find('[data-testid="data-add"]').exists()).toBe(true)
   })
 
-  it('1008-07 单行工具条：筛选与操作按钮同在一行，表 / 源排在状态筛选之后，不再有第二行工具条', async () => {
-    const auth = useAuthStore()
-    auth.roles = ['admin']
+  it('工作区分层：表导航独立，结果操作换行，保留按表 / 按步骤切换', async () => {
+    useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
-
     const row = wrapper.get('[data-testid="data-query-primary"]')
-    expect(row.classes()).toContain('is-one-row')
+    expect(row.classes()).not.toContain('is-one-row')
+    const toolbar = wrapper.get('[data-testid="data-result-toolbar"]')
     for (const id of ['data-refresh', 'data-add', 'data-export', 'data-export-menu', 'data-more', 'data-fullscreen-toggle', 'column-picker-btn']) {
-      expect(row.find(`[data-testid="${id}"]`).exists(), id).toBe(true)
+      expect(toolbar.find(`[data-testid="${id}"]`).exists(), id).toBe(true)
+      expect(row.find(`[data-testid="${id}"]`).exists(), id).toBe(false)
     }
-    expect(wrapper.find('[data-testid="data-result-toolbar"]').exists()).toBe(false)
-    const order = Array.from(row.element.children).map((el) => el.className.toString())
-    const stateAt = order.findIndex((c) => c.includes('dqp-state'))
-    const contextAt = order.findIndex((c) => c.includes('dqp-context'))
-    const queryAt = order.findIndex((c) => c.includes('dqp-query-actions'))
-    expect(stateAt).toBeGreaterThanOrEqual(0)
-    expect(contextAt).toBeGreaterThan(stateAt)
-    expect(queryAt).toBeGreaterThan(contextAt)
-    // 表选择在查询范围内：切到按步骤之前先有「按表 / 按步骤」切换
+    expect(sidebar().exists()).toBe(true)
     expect(wrapper.findAll('.browse-mode-toggle button')).toHaveLength(2)
   })
 
@@ -409,7 +409,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    let body = await openResultMenu('data-add')
+    const body = await openResultMenu('data-add')
     expect(body.text()).toContain('手工录入')
     expect(body.text()).toContain('Excel 导入')
     await clickMenuItem(body, 'Excel 导入')
@@ -501,7 +501,7 @@ describe('数据中心 · 数据查询 tab', () => {
 
       expect(wrapper.find('[data-testid="data-step-need-source"]').text()).toBe('先选择源')
       expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
-      expect(tableSelectOf()).toBeUndefined()
+      expect(sidebar().exists()).toBe(true)
       expect(sourceApi.sourceSteps).not.toHaveBeenCalled()
     })
 
@@ -588,7 +588,7 @@ describe('数据中心 · 数据查询 tab', () => {
 
       await wrapper.findAll('.browse-mode-toggle button')[0]!.trigger('click')
       await flushPromises()
-      expect(tableSelectOf()).toBeDefined()
+      expect(sidebar().exists()).toBe(true)
       expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
     })
   })
@@ -1099,7 +1099,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.text()).toContain('贵州茅台')
   })
 
-  it('选表下拉直接搜索并切表，不弹出额外查询窗口', async () => {
+  it('左侧导航直接搜索并切表，不弹出额外查询窗口', async () => {
     const paged = vi.spyOn(entryApi, 'entryPaged')
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, main: 't1',
       list3: [{ tableId: 't9', tableName: 'sense_data.TB_MORE', name: '更多表', fields: [] }],
@@ -1107,12 +1107,11 @@ describe('数据中心 · 数据查询 tab', () => {
     useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
-    tableSelectOf().props('filterMethod')('更多表')
+    await searchTables('更多表')
     await flushPromises()
     expect(paged).not.toHaveBeenCalled()
     expect(document.querySelector('.dv-picker-dialog')).toBeNull()
-    tableSelectOf().vm.$emit('update:modelValue', 't9')
-    tableSelectOf().vm.$emit('change', 't9')
+    await chooseTable('t9')
     await flushPromises()
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
   })
@@ -1122,7 +1121,7 @@ describe('数据中心 · 数据查询 tab', () => {
     tableId: `t${i + 20}`, tableName: `sense_data.TB_O${i}`, name: `其它表${i}`, fields: [],
   }))
 
-  it('搜索表：选中的表已在 list3 但排在首批 20 条之外时也要挪到最前，下拉显示中文名', async () => {
+  it('左侧完整目录可搜索原下拉首屏外的表，切换后表头显示中文名', async () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
       total: 1,
@@ -1132,20 +1131,19 @@ describe('数据中心 · 数据查询 tab', () => {
     useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
-    expect(tableSelectOf().text()).not.toContain('其它表25')
+    expect(sidebar().text()).toContain('其它表25')
 
-    tableSelectOf().props('filterMethod')('其它表25')
+    await searchTables('其它表25')
     await flushPromises()
-    tableSelectOf().vm.$emit('update:modelValue', 't45')
-    tableSelectOf().vm.$emit('change', 't45')
+    await chooseTable('t45')
     await flushPromises()
 
-    expect(tableSelectOf().vm.$props.modelValue).toBe('t45')
-    expect(tableSelectOf().text()).toContain('其它表25')
-    expect(tableSelectOf().text()).not.toContain('t45')
+    expect(sidebar().props('selectedId')).toBe('t45')
+    expect(wrapper.get('.dv-table-context').text()).toContain('其它表25')
+    expect(sidebar().find('[data-table-id="t45"]').attributes('aria-current')).toBe('true')
   })
 
-  it('搜索表：切表后当前源被清掉、分组重拉，选中的表仍留在下拉里', async () => {
+  it('左侧切表后当前源被清掉、分组重拉，选中的表仍留在导航里', async () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ ...GROUP, list3: OTHER_TABLES })
     // 初始表（list3 第一条 t20）带 600519，新表 t45 没有：loadSources 会清掉 sourceId
     // 并重新 loadGroup，把 group 整块覆盖掉
@@ -1159,17 +1157,16 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
     const groupCallsBefore = (dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length
 
-    tableSelectOf().props('filterMethod')('其它表25')
+    await searchTables('其它表25')
     await flushPromises()
-    tableSelectOf().vm.$emit('update:modelValue', 't45')
-    tableSelectOf().vm.$emit('change', 't45')
+    await chooseTable('t45')
     await flushPromises()
     await waitForLoad()
 
     // 源被清掉 → 分组确实重拉了一次
     expect((dataApi.entryTypesGroup as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(groupCallsBefore)
-    expect(tableSelectOf().text()).toContain('其它表25')
-    expect(tableSelectOf().text()).not.toContain('t45')
+    expect(wrapper.get('.dv-table-context').text()).toContain('其它表25')
+    expect(sidebar().find('[data-table-id="t45"]').attributes('aria-current')).toBe('true')
   })
 
   it('按源搜索：选中跨表源后切换到该源的默认表', async () => {

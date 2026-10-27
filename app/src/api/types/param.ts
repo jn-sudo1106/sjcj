@@ -26,6 +26,7 @@ export interface Param {
   valueItems?: ParamValue[]
   usedBy?: number // 被多少配置引用（旧平台口径，与下面的参数源绑定是两回事，不要混用）
   owner?: string
+  createdAt?: string
   updatedAt?: string
   /** 参数源绑定关系（0721 会议 T6）：这个参数被哪些参数源引用，mock 从 Source.paramRefs 实时派生，不单独持久化避免脏读 */
   paramSourceRefs?: { sourceId: string; sourceName: string }[]
@@ -37,4 +38,4 @@ export interface ParamValue {
   value: string
 }
 
-export type ParamInput = Omit<Param, 'paramId' | 'usedBy' | 'updatedAt'> & { paramId?: string }
+export type ParamInput = Omit<Param, 'paramId' | 'usedBy' | 'createdAt' | 'updatedAt'> & { paramId?: string }

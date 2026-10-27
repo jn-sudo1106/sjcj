@@ -8,7 +8,7 @@ vi.mock('@/api/client', async (importOriginal) => {
 
 import { sourceApi, workflowBindingApi, type SourceCategory } from './index'
 import {
-  addSourcesToBizDir, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren,
+  addSourcesToBizDir, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
   importFromTemplateToBizDir, moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
 } from './sourceDirs'
 import type { Source, SourceFlowsView } from './types'
@@ -38,6 +38,20 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('sourceDirs · 目录树', () => {
+  it('按系统目录 ID 补齐完整路径，同一父目录查询复用，失败允许重试', async () => {
+    const byId = vi.spyOn(sourceApi, 'categoryById').mockImplementation(async id => ({
+      '10': cat('10', '旧系统'), '11': cat('11', '财经', '10'), '12': cat('12', '商品', '11'), '13': cat('13', '新闻', '11'),
+    }[id] ?? null))
+    const [one, two] = await Promise.all([loadDirPath('12'), loadDirPath('13')])
+    expect(one).toEqual(['旧系统', '财经', '商品'])
+    expect(two).toEqual(['旧系统', '财经', '新闻'])
+    expect(byId.mock.calls.filter(([id]) => id === '11')).toHaveLength(1)
+    byId.mockRejectedValueOnce(new Error('网络异常'))
+    await expect(loadDirPath('14')).rejects.toThrow('网络异常')
+    byId.mockResolvedValueOnce(cat('14', '其他', '10'))
+    expect(await loadDirPath('14')).toEqual(['旧系统', '其他'])
+  })
+
   it('系统目录根层排除 -1「视图目录」和 -2「业务分类」', async () => {
     expect((await loadDirChildren('sys')).map((n) => n.id)).toEqual(['9008953', '9009005'])
   })
@@ -81,6 +95,13 @@ describe('sourceDirs · 业务目录里的源', () => {
     const map = await bizMembership()
     expect(map.get('1')?.sort()).toEqual(['9011495', '9011496'])
     expect(map.get('4')).toEqual(['9011515'])
+  })
+
+  it('目录成员请求失败不能伪装成未归类，失败后允许重试', async () => {
+    requestMock.mockRejectedValueOnce(new Error('网络异常'))
+    await expect(bizMembership()).rejects.toThrow('网络异常')
+    const map = await bizMembership()
+    expect(map.get('1')).toContain('9011495')
   })
 
   it('加入：POST 数字 ID，返回新增数，并让该目录的源缓存失效', async () => {

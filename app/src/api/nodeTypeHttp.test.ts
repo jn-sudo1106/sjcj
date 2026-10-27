@@ -37,7 +37,7 @@ describe('节点类型 API 旧平台 HTTP 契约', () => {
     expect(url).not.toMatch(/page=|limit=/)
     expect(init.method).toBe('GET')
     expect(list).toEqual([{
-      sourceType: '160', typeName: 'Mail抓取', downType: 'source-config-mail', topic: '', seq: -1, notes: '', procType: '700', params: '',
+      sourceType: '160', typeName: 'Mail抓取', typeGroup: '', downType: 'source-config-mail', topic: '', seq: -1, notes: '', procType: '700', params: '',
     }])
   })
 
@@ -47,6 +47,42 @@ describe('节点类型 API 旧平台 HTTP 契约', () => {
     await configApi.nodeTypeList()
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).not.toContain('typeName')
+    expect(url).not.toContain('typeGroup')
+  })
+
+  it('读取分组选项：GET独立只读接口，不读取管理员配置列表', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: null, data: ['采集类', '规则类'] }))
+    const { configApi } = await import('./index')
+    expect(await configApi.nodeTypeGroups()).toEqual(['采集类', '规则类'])
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toMatch(/\/api\/v1\/sourceType\/typeGroups$/)
+    expect(init.method).toBe('GET')
+  })
+
+  it('分组配置未维护时返回空列表，格式错误时明确失败', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, code: null, data: [] }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, code: null, data: [1] }))
+    const { configApi } = await import('./index')
+    expect(await configApi.nodeTypeGroups()).toEqual([])
+    await expect(configApi.nodeTypeGroups()).rejects.toThrow('分组类型配置格式错误')
+  })
+
+  it('分组精确筛选与响应分组字段透传', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: null, data: [{ ...ROW, typeGroup: '采集类' }] }))
+    const { configApi } = await import('./index')
+    const rows = await configApi.nodeTypeList('抓取', ' 采集类 ')
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://localhost').searchParams.get('typeGroup')).toBe('采集类')
+    expect(rows[0]?.typeGroup).toBe('采集类')
+  })
+
+  it('修改分组只传该字段，清除分组保留显式空串', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '更新成功' }))
+    const { configApi } = await import('./index')
+    await configApi.nodeTypeUpdate('160', { typeGroup: '采集类' })
+    await configApi.nodeTypeUpdate('160', { typeGroup: '' })
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({ sourceType: 160, typeGroup: '采集类' })
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body))).toEqual({ sourceType: 160, typeGroup: '' })
   })
 
   it('详情：GET ?sourceType=；不存在时（code:"-1"）抛出后端原文', async () => {

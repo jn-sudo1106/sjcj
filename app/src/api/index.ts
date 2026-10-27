@@ -3,7 +3,7 @@ import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, 
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
 import type {
-  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
+  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload, SendCodeConfigPayload, SendCodeConfigResult, CodeConfigOption,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   CkSourcePayload, CkSourceRecord, CkSourcePage,
@@ -847,6 +847,23 @@ export const sourceApi = {
         ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
     }).then(snatchAckFrom),
+  /** 只读查询启用的 201 派发配置，和发送接口使用同一后端。 */
+  codeConfigOptions: (): Promise<CodeConfigOption[]> =>
+    request<CodeConfigOption[]>('source/codeConfigOptions', undefined, { method: 'GET', mode: 'http' }),
+  /** 独立 MQ 代码生成；configId 为 201 派发配置，queue 省略时使用该配置的 TOPIC。 */
+  sendCodeConfig: async (payload: SendCodeConfigPayload): Promise<SendCodeConfigResult> => {
+    try {
+      return await request<SendCodeConfigResult>('source/sendCodeConfig', { ...payload }, {
+        method: 'POST', httpEndpoint: 'source/sendCodeConfig', mode: 'http',
+      })
+    } catch (error) {
+      // 后端部分失败仍携带真实任务回执，让界面保留已派发的任务 ID 和逐项错误。
+      const cause = error instanceof ApiError ? error.cause as { payload?: { data?: SendCodeConfigResult } } | undefined : undefined
+      const receipt = cause?.payload?.data
+      if (receipt && receipt.failCnt > 0 && Array.isArray(receipt.tasks) && Array.isArray(receipt.taskIds)) return receipt
+      throw error
+    }
+  },
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
@@ -3080,10 +3097,17 @@ export const configApi = {
    * - delete：GET `sourceType/delete?sourceType=`。2026-10-14 在 186 实测：类型被配置引用时后端拒绝
    *   （success:false，msg「该源类型已被配置引用，无法删除」），**软删除的配置也算引用**；没被引用才删得掉。
    */
-  nodeTypeList: async (typeName?: string): Promise<NodeType[]> => {
-    const result = await request<unknown>('sourceType/list', { typeName }, {
+  nodeTypeGroups: async (): Promise<string[]> => {
+    const result = await request<unknown>('sourceType/typeGroups', undefined, { method: 'GET' })
+    if (!Array.isArray(result) || result.some((value) => typeof value !== 'string' || !value.trim())) {
+      throw new Error('分组类型配置格式错误')
+    }
+    return [...new Set((result as string[]).map((value) => value.trim()))]
+  },
+  nodeTypeList: async (typeName?: string, typeGroup?: string): Promise<NodeType[]> => {
+    const result = await request<unknown>('sourceType/list', { typeName, typeGroup }, {
       method: 'GET',
-      httpParams: { typeName: typeName?.trim() || undefined },
+      httpParams: { typeName: typeName?.trim() || undefined, typeGroup: typeGroup?.trim() || undefined },
     })
     const rows = Array.isArray(result) ? result : ((result as { list?: unknown[] } | null)?.list ?? [])
     return rows.map(nodeTypeFromLegacy).filter((t) => t.sourceType)
@@ -3188,7 +3212,7 @@ export const entryApi = {
   },
   rebuildTable: (tableIds: string[] | string) => {
     const ids = Array.isArray(tableIds) ? tableIds : [tableIds]
-    return request<Ack>('config/rebuildTable', { tableIds: ids }, { method: 'GET', httpParams: { ids } })
+    return request<Ack & { exists?: string[]; rebuilds?: string[] }>('config/rebuildTable', { tableIds: ids }, { method: 'GET', httpParams: { ids } })
   },
   rebuildIndex: (tableId: string) =>
     request<Ack>('config/rebuildIndex', { tableId }, { method: 'GET', httpParams: { entryTypeId: tableId } }),

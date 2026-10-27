@@ -17,7 +17,7 @@
 //     detachCopiedConfigs 立即把复制进来的步骤逐条复制配置并换绑（config/copyAll + stepModify），
 //     之后各改各的（实现见 utils/flow/copiedConfigs.ts，0929 F2 落地）。
 //   - 「追加不是替换」不变：copyTemplateSteps 只往目标流程里加步骤，不删现有的。
-import { configApi, flowCenterApi, sourceApi, type Source } from '@/api'
+import { configApi, flowCenterApi, sourceApi, type Source, type Step } from '@/api'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
 import { useFlowVersionStore } from '@/stores/flowVersion'
 import { detachCopiedConfigs, type CopiedFlow, type DetachResult } from '@/utils/flow/copiedConfigs'
@@ -85,8 +85,33 @@ export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean>
     ? await flowCenterApi.steps(flowId, { withConfigDetails: false, ...(versionId ? { versionId } : {}) })
     : (await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })) ?? []
   const { useFlowStore } = await import('@/stores/flow')
-  useFlowStore().loadFromSource(detail, steps, null)
+  const flow = useFlowStore()
+  const sameSource = String(flow.sourceCtx?.sourceId ?? '') === String(sourceId)
+  flow.loadFromSource(detail, steps, null)
+  // 定时 cron 在 job 表、sourceDetail 里恒为 null（见 index.vue backfillSourceSchedule）。loadFromSource
+  // 重建了源上下文，进入画布时补的 cron 随之丢失，节点定时退回「每天」兜底显示（2026-10-27 发布 v3 后实测）。
+  // sourceJob 不随重载清空，同一个源直接重新套回即可，不置脏。
+  if (sameSource && flow.sourceJob?.schedule) flow.applySourceSchedule(flow.sourceJob.schedule)
+  await backfillReloadedStepDetails(flow, steps)
   return true
+}
+
+/**
+ * 重载后补 configDetail（2026-10-27）：上面按 withConfigDetails=false 读步骤，configType 要靠这一轮补。
+ * 进入画布时 index.vue 的 backfillStepDetails 会补，重载路径此前漏了——730 打标签 / 800 翻译这类
+ * 步骤写的是 type='rule'，拿不到 configType 就被画成规则节点，选中后规则面板自动补字段把节点标脏，
+ * 发起抓取被拦、点保存还会把共享配置覆盖成规则脚本（217 流程 14007240 发布后实测）。
+ * 补充失败不影响已画出的流程，与 index.vue 同口径吞掉。
+ */
+async function backfillReloadedStepDetails(flow: { applyStepDetails: (steps: Step[]) => string[], selectedId: string, select: (id: string) => void }, steps: Step[]) {
+  if (!steps.length) return
+  try {
+    const enriched = await sourceApi.stepConfigDetails(steps)
+    const rebuilt = flow.applyStepDetails(enriched)
+    if (rebuilt.includes(flow.selectedId)) flow.select(flow.selectedId)
+  } catch {
+    /* 节点仍可用，只是配置名 / 类型回落到模板默认值 */
+  }
 }
 
 /**
@@ -125,6 +150,8 @@ export async function reloadFlowIntoCanvas(flowId: string): Promise<boolean> {
   // 0926：流程工作区形态——重载后节点写 / 自动保存按 flowId 锚定（与 FlowDetailDrawer 同口径）
   flow.setFlowIdMode(true)
   flow.setFlowName(config?.name || `流程 #${flowId}`)
+  // 补 configType 要用 stub 源上下文，必须在 clearSourceCtxKeepSteps 之前
+  await backfillReloadedStepDetails(flow, steps)
   // 与 FlowDetailDrawer.deriveFromFlowConfig 同一收尾：清掉 stub 源上下文但**保留步骤快照**
   // （连续修多个孤儿 / 改名仍需快照整包回写）。
   flow.clearSourceCtxKeepSteps()

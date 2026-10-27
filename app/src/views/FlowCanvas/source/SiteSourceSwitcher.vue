@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import CodeConfigButton from '../result/CodeConfigButton.vue'
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { CHANGE_SITE_CHUNK, flowCenterApi, isProductionCreateEnabled, siteApi, sourceApi, workflowBindingApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
+import { CHANGE_SITE_CHUNK, flowCenterApi, isProductionCreateEnabled, siteApi, sourceApi, sourceGroupApi, workflowBindingApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
 import SiteTablePanel from './SiteTablePanel.vue'
 import SourceParamModal from './SourceParamModal.vue'
 import { importProgressText } from './importProgress'
@@ -28,6 +29,7 @@ import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 const props = defineProps<{
   siteId: string
   activeKey: string
+  sourceGroupId?: string
   /** 网站态 + 数据视图时为 true（0924-10，Q4）：顶部出现「源 / 数据表」切换；其他视图恒为源列表 */
   allowTableMode?: boolean
   /** 数据表模式下选中的表（地址栏 tableId） */
@@ -40,6 +42,7 @@ const emit = defineEmits<{
   added: [Source]
   compare: [rightId: string]
   pickSite: []
+  pickGroup: [sourceGroupId: string]
   /** 数据表模式下点了一张表；null = 「全部」 */
   pickTable: [table: UsedTable | null]
 }>()
@@ -53,6 +56,35 @@ const tableMode = computed(() => !!props.allowTableMode && ui.siteDataSideMode =
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
 const childrenHydrating = ref(false)
+const childrenComplete = ref(false)
+const childrenLoadFailed = ref(false)
+const groupNames = ref(new Map<string, string>())
+const groupNamesFailed = ref(false)
+async function loadGroupNames() {
+  try {
+    const groups = await sourceGroupApi.list()
+    groupNames.value = new Map(groups.map((group) => [group.sourceGroupId, group.sourceGroupName]))
+    groupNamesFailed.value = false
+  } catch {
+    groupNamesFailed.value = true
+  }
+}
+const groupName = (id: string) => groupNames.value.get(id) || `组 #${id}`
+const sourceGroupOptions = computed(() => {
+  const counts = new Map<string, number>()
+  for (const source of children.value) {
+    if (source.sourceGroupId) counts.set(source.sourceGroupId, (counts.get(source.sourceGroupId) || 0) + 1)
+  }
+  if (props.sourceGroupId && !counts.has(props.sourceGroupId)) counts.set(props.sourceGroupId, 0)
+  return [...counts].map(([id, count]) => ({ id, count, name: groupName(id) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+})
+function selectGroup(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const id = select.value
+  select.value = props.sourceGroupId || '' // 切换可能被未保存确认取消，选中态由路由决定
+  emit('pickGroup', id)
+}
 /** 源列表（首批）没拉下来。跟「这个网站确实没有源」必须分开显示，见下方 load 的说明 */
 const listLoadFailed = ref(false)
 let loadSeq = 0
@@ -67,6 +99,8 @@ let loadSeq = 0
 async function load(force = false) {
   const id = ++loadSeq
   listLoadFailed.value = false
+  childrenComplete.value = false
+  childrenLoadFailed.value = false
   // 左侧首屏最多渲染 120 行，不必先等单站 6496 条完整响应。先取同等大小的预览让网站页
   // 立即可用，再后台补齐完整列表；右侧源视图自己的 sourcePaged(20) 可同时快速返回。
   // 强刷（外部新建源、改配置后）要最新数据，直接拿完整列表、绕过 siteSources 的短缓存。
@@ -88,18 +122,26 @@ async function load(force = false) {
   children.value = listRes.value
   if (force) {
     childrenHydrating.value = false
+    childrenComplete.value = site.value?.sourceCount == null || children.value.length >= site.value.sourceCount
     return
   }
   // 详情没拿到就不知道总数：预览拉满一页就当作可能还有，照样后台补齐，别只停在前 120 个
   const expected = site.value?.sourceCount
   childrenHydrating.value = expected != null ? listRes.value.length < expected : listRes.value.length >= LIST_PAGE
-  if (!childrenHydrating.value) return
+  if (!childrenHydrating.value) {
+    childrenComplete.value = true
+    return
+  }
   void siteApi.siteSources(props.siteId).then((all) => {
     if (id !== loadSeq) return
     children.value = all
     childrenHydrating.value = false
+    childrenComplete.value = expected == null || all.length >= expected
   }).catch(() => {
-    if (id === loadSeq) childrenHydrating.value = false
+    if (id === loadSeq) {
+      childrenHydrating.value = false
+      childrenLoadFailed.value = true
+    }
   })
 }
 /**
@@ -111,13 +153,19 @@ function nameSiteTab(siteId: string, name: string) {
   if (ws.siteTabs.some((t) => t.siteId === siteId)) ws.ensureSiteTab(siteId, name)
 }
 onMounted(() => load())
-watch(() => props.siteId, () => load())
+onMounted(() => void loadGroupNames())
+watch(() => props.siteId, () => {
+  children.value = []
+  site.value = null
+  kw.value = ''
+  void load()
+})
 // 外部（新建源、改配置等）触发的刷新要拿最新数据，绕过 siteSources 的短缓存
 defineExpose({ reload: () => load(true) })
 
 const collapsed = ref(false)
 const listExpanded = ref(true)
-const detailExpanded = ref(true)
+const detailExpanded = ref(false)
 const kw = ref('')
 /**
  * 按数据条件反查出的命中源（2026-09-09）。数据视图点「按条件查源」后写进 store，
@@ -138,8 +186,10 @@ const hitFiltered = computed(() => {
 })
 const filtered = computed(() => {
   const q = kw.value.trim().toLowerCase()
-  if (!q) return hitFiltered.value
-  return hitFiltered.value.filter((s) => s.name.toLowerCase().includes(q) || s.sourceId.toLowerCase().includes(q))
+  const rows = props.sourceGroupId ? hitFiltered.value.filter((s) => s.sourceGroupId === props.sourceGroupId) : hitFiltered.value
+  if (!q) return rows
+  return rows.filter((s) => s.name.toLowerCase().includes(q) || s.sourceId.toLowerCase().includes(q)
+    || (s.sourceGroupId && groupName(s.sourceGroupId).toLowerCase().includes(q)))
 })
 // 分页渲染：源多的网站（实测 6496 个）一次性铺 6496 行会把 #app DOM 顶到 29 万节点，
 // 首屏渲染和之后每次响应式刷新都被拖慢。只渲染前 shownCount 行，滚到底再追加一页。
@@ -171,7 +221,7 @@ function exportHits() {
   downloadCsv(`${site.value?.name || '网站'}_条件命中源_${csvDateTag()}`, csv)
 }
 
-const listNarrowed = computed(() => !!hits.value.length || !!kw.value.trim())
+const listNarrowed = computed(() => !!hits.value.length || !!kw.value.trim() || !!props.sourceGroupId)
 const listCountLabel = computed(() => {
   // 收窄时分母取 children 而不是 sourceCount：**分子分母必须同源**。分子是从 children
   // 一路过滤下来的，而 sourceCount 来自 siteDetail 接口，两者在加载中或接口不同步时会
@@ -181,7 +231,7 @@ const listCountLabel = computed(() => {
   if (listLoadFailed.value && site.value?.sourceCount == null) return '—'
   return String(site.value?.sourceCount ?? children.value.length)
 })
-watch([kw, children, hitFiltered], () => { shownCount.value = LIST_PAGE })
+watch([kw, children, hitFiltered, () => props.sourceGroupId], () => { shownCount.value = LIST_PAGE })
 function onListScroll(e: Event) {
   const el = e.target as HTMLElement
   if (
@@ -339,6 +389,16 @@ async function saveRename(s: Source) {
   }
 }
 
+const menuCodeSources = ref<Source[]>([])
+const menuCodeLauncher = ref<InstanceType<typeof CodeConfigButton>>()
+async function launchCodeFromMenu() {
+  const source = rowMenu.source
+  if (!source) return
+  menuCodeSources.value = [source]
+  closeRowMenu()
+  await nextTick()
+  menuCodeLauncher.value?.show()
+}
 const rowMenu = reactive({ show: false, x: 0, y: 0, source: null as Source | null })
 function openRowMenu(event: MouseEvent, s: Source) {
   rowMenu.show = true
@@ -1240,9 +1300,20 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             @click="ws.clearBackTraceHits()"
           ><el-icon><Close /></el-icon></button>
         </div>
-        <input v-model="kw" class="ssw-search" :placeholder="hits.length ? '在命中的源里搜索' : '搜索源'" />
+        <input v-model="kw" class="ssw-search" :placeholder="hits.length ? '在命中的源里搜索' : '搜索源 / 来源组'" />
+        <div class="ssw-group-filter">
+          <label for="site-source-group">来源组</label>
+          <div class="ssw-group-control">
+            <select id="site-source-group" :value="sourceGroupId || ''" :disabled="!sourceGroupOptions.length" aria-label="选择来源组" data-testid="sidebar-source-group" @change="selectGroup">
+              <option value="" disabled hidden>{{ childrenComplete && !sourceGroupOptions.length ? '本站暂无来源组' : '选择来源组' }}</option>
+              <option v-for="group in sourceGroupOptions" :key="group.id" :value="group.id">{{ group.name }}（{{ childrenComplete ? group.count : `已加载 ${group.count}` }}）</option>
+            </select>
+            <button v-if="sourceGroupId" type="button" class="ssw-icon-btn" aria-label="清除来源组筛选" title="清除来源组筛选" data-testid="sidebar-source-group-clear" @click="emit('pickGroup', '')"><el-icon><Close /></el-icon></button>
+          </div>
+          <span v-if="groupNamesFailed" class="ssw-group-error">组名加载失败<button type="button" class="ssw-retry" @click="loadGroupNames">重试</button></span>
+        </div>
         <div class="ssw-list" @scroll.passive="onListScroll">
-          <div v-if="!kw && !hits.length" class="ssw-row" :class="{ active: !activeKey }">
+          <div v-if="!kw && !hits.length" class="ssw-row" :class="{ active: !activeKey && !sourceGroupId }">
             <button
               class="ssw-row-all-btn"
               type="button"
@@ -1252,9 +1323,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
               <span class="ssw-dot all" />
               <div class="ssw-row-text">
                 <div class="ssw-row-head">
-                  <span class="ssw-row-name">全部</span>
+                  <span class="ssw-row-name">全部源</span>
                 </div>
-                <div class="ssw-row-id">不根据源 ID 过滤</div>
+                <div class="ssw-row-id">{{ sourceGroupId ? '清除来源组筛选' : '不根据源 ID 过滤' }}</div>
               </div>
             </button>
           </div>
@@ -1286,7 +1357,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
                   <span class="ssw-row-name">{{ c.name }}</span>
                   <span v-if="c.kind === 'param'" class="ssw-kind-tag" title="参数源：发任务时展开为多个 URL">参数源</span>
                 </div>
-                <div class="ssw-row-id">{{ c.sourceId }}</div>
+                <div class="ssw-row-meta"><span class="ssw-row-id">{{ c.sourceId }}</span><span class="ssw-group-tag" :class="{ ungrouped: !c.sourceGroupId }" :title="c.sourceGroupId ? groupName(c.sourceGroupId) : '未分组'" data-testid="sidebar-source-group-tag">{{ c.sourceGroupId ? groupName(c.sourceGroupId) : '未分组' }}</span></div>
               </div>
               <span
                 v-if="hitCountBy.get(c.sourceId)"
@@ -1306,11 +1377,12 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           <div v-if="listLoadFailed" class="ssw-empty ssw-load-failed" data-testid="ssw-load-failed">
             源列表加载失败<button type="button" class="ssw-retry" data-testid="ssw-retry" @click="load()">重试</button>
           </div>
-          <div v-else-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : (hits.length ? '命中的源不在当前列表里' : '该网站暂无源') }}</div>
+          <div v-else-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : sourceGroupId ? (!childrenComplete ? '来源组的源尚未加载完整' : '当前网站没有该组的源') : (hits.length ? '命中的源不在当前列表里' : '该网站暂无源') }}</div>
           <div v-else-if="visibleRows.length < filtered.length" class="ssw-more-hint">
             已显示 {{ visibleRows.length }} / {{ filtered.length }}，向下滚动加载更多
           </div>
           <div v-else-if="childrenHydrating" class="ssw-more-hint">已显示首批 {{ children.length }} 个源，正在后台加载完整列表…</div>
+          <div v-if="childrenLoadFailed" class="ssw-more-hint">完整源列表加载失败<button type="button" class="ssw-retry" @click="load(true)">重试</button></div>
         </div>
       </template>
 
@@ -1424,11 +1496,14 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       :disabled="rowMenu.source.disabled"
       @click="launchFromMenu"
     >发起抓取</button>
+    <button type="button" data-testid="source-menu-code" @click="launchCodeFromMenu">代码生成</button>
     <button type="button" data-testid="source-menu-snatch-queue" @click="sendSnatchTestFromMenu">发指定队列</button>
     <button type="button" data-testid="source-menu-copy" @click="openCopyDialog(rowMenu.source!)">复制源…</button>
     <button type="button" data-testid="source-menu-move" @click="openMoveDialog(rowMenu.source!)">更换网站…</button>
     <button type="button" class="danger" data-testid="source-menu-delete" @click="deleteFromMenu">删除源</button>
   </div>
+
+  <CodeConfigButton ref="menuCodeLauncher" :sources="menuCodeSources" hide-trigger />
 
   <!-- 网站右键菜单：重命名 -->
   <div
@@ -1739,7 +1814,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 <style scoped>
 .ssw-side {
   flex: none;
-  width: 200px;
+  width: 260px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1806,10 +1881,20 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-search:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 
 .ssw-list { flex: 1; overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; }
+.ssw-group-filter { flex: none; margin: 2px 8px 8px; }
+.ssw-group-filter label { display: block; margin-bottom: 4px; font-size: 11px; color: var(--rc-muted); }
+.ssw-group-control { display: flex; align-items: center; gap: 4px; }
+.ssw-group-control select { flex: 1; min-width: 0; height: 34px; border: 1px solid var(--rc-border); border-radius: 7px; padding: 0 8px; color: var(--rc-text-2); background: #fff; font: inherit; font-size: 12px; }
+.ssw-group-error { font-size: 11px; color: var(--rc-muted); }
+.ssw-row-meta { display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: 3px; }
+.ssw-row-meta .ssw-row-id { flex: none; margin-top: 0; }
+.ssw-group-tag { min-width: 0; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 4px; border-radius: 3px; color: var(--rc-primary-ink); background: var(--rc-primary-bg); font-size: 11px; }
+.ssw-group-tag.ungrouped { color: var(--rc-muted); background: var(--rc-border-soft); }
+.ssw-row.active .ssw-group-tag { color: var(--rc-primary-ink); }
 .ssw-row { display: flex; align-items: center; border-radius: 7px; }
 
 .ssw-row:hover { background: var(--rc-primary-bg); }
-.ssw-row.active { background: var(--rc-primary); }
+.ssw-row.active { background: var(--rc-primary-bg); }
 .ssw-row-main,
 .ssw-row-all-btn {
   flex: 1;
@@ -1841,14 +1926,14 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-row:hover .ssw-row-main,
 .ssw-row:hover .ssw-row-all-btn { color: var(--rc-primary-ink); }
 .ssw-row.active .ssw-row-main,
-.ssw-row.active .ssw-row-all-btn { color: #fff; font-weight: 700; }
+.ssw-row.active .ssw-row-all-btn { color: var(--rc-primary-ink); font-weight: 700; }
 .ssw-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ssw-row-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.ssw-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
+.ssw-row-name { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
 .ssw-row-id { font-size: 11px; opacity: 0.6; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; margin-top: 1px; }
 .ssw-row.active .ssw-row-id { opacity: 0.85; }
 .ssw-kind-tag { flex: none; font-size: 9px; font-weight: 700; color: var(--rc-primary-ink); background: var(--rc-primary-bg); border: 1px solid #bfdbfe; border-radius: 3px; padding: 0 4px; line-height: 14px; }
-.ssw-row.active .ssw-kind-tag { color: #fff; background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.4); }
+.ssw-row.active .ssw-kind-tag { color: var(--rc-primary-ink); background: var(--rc-primary-bg); border-color: var(--rc-border); }
 .ssw-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--rc-ok); }
 .ssw-dot.all { background: #3b82f6; }
 .ssw-dot.err { background: var(--rc-error); }

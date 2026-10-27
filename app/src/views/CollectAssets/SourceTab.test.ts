@@ -293,6 +293,29 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     return { dropdown, run: async (command: 'add' | 'move') => { dropdown.vm.$emit('command', command); await flushPromises() } }
   }
 
+  it('业务目录显示多个完整路径，加载中不标未归类；原始目录独立取系统目录', async () => {
+    let resolve!: (map: Map<string, string[]>) => void
+    vi.spyOn(sourceDirs, 'bizMembership').mockReturnValue(new Promise(done => { resolve = done }))
+    vi.spyOn(sourceDirs, 'dirPath').mockImplementation(id => id === 'd1' ? ['股票数据', '基本资料'] : ['债券数据', '基本资料'])
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源', categoryPath: '原系统/测试目录' } as never] })
+    const { wrapper, list } = await mountList()
+    expect(list.props('showOriginalDirectory')).toBe(true)
+    expect(wrapper.get('.sov-extra').text()).toBe('加载中…')
+    resolve(new Map([['s1', ['d1', 'd2']]]))
+    await flushPromises()
+    expect(wrapper.findAll('.ca-biz-tag').map(tag => tag.attributes('title'))).toEqual(['股票数据 / 基本资料', '债券数据 / 基本资料'])
+    expect(wrapper.get('[data-testid="source-overview-original-directory"]').text()).toBe('原系统 / 测试目录')
+    wrapper.unmount()
+  })
+
+  it('业务目录关系加载失败不标成未归类', async () => {
+    vi.spyOn(sourceDirs, 'bizMembership').mockRejectedValue(new Error('网络异常'))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源' } as never] })
+    const { wrapper } = await mountList()
+    expect(wrapper.get('.sov-extra').text()).toBe('加载失败')
+    wrapper.unmount()
+  })
+
   it('默认收起业务目录、不选任何目录：不拉目录内的源，按全库查询；旧的展开偏好不覆盖默认值', async () => {
     sourceDirs.resetSourceDirCache()
     localStorage.setItem('sjcj.sourceDirPanel.collapsed', '0')

@@ -33,4 +33,8 @@ async function change() {
     <small v-else>{{ configId ? '自动保存。源列表生成任务时，按首节点开关检查，再执行已保存 AI 生成配置的节点。' : '请先保存节点配置。' }}</small>
   </div>
 </template>
-<style scoped>.generation-status { margin-left: 8px; font-size: 12px; } small { color: var(--rc-muted); line-height: 1.5; }</style>
+<style scoped>
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; }
+.generation-status { margin-left: 8px; font-size: 12px; }
+small { color: var(--rc-muted); line-height: 1.5; }
+</style>

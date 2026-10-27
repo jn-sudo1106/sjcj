@@ -2649,3 +2649,20 @@ describe('源数据导出入口', () => {
     wrapper.unmount()
   })
 })
+
+it('发后续旁的发代码携带当前数据与真实后继步骤，不发送当前节点或抓取配置 ID', async () => {
+  setActivePinia(createPinia())
+  const flow = useFlowStore()
+  flow.loadFromSource({ sourceId: '7', flowId: '50', name: '测试源', url: 'https://example.com', configId: '10', mainTable: '11', owner: '', state: 'C' }, [
+    { stepId: '1', sourceId: '-1', name: '采集', configId: '10', enabled: true, isRoot: true, outputTable: '11' },
+    { stepId: '2', sourceId: '-1', name: '解析', configId: '20', enabled: true, inputTable: '11', outputTable: '12', dependsOn: ['1'] },
+  ])
+  vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, tableId: '11' })
+  vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [{ dataId: '901', sourceId: '7', title: '', summary: '', acceptState: 'pending' }] })
+  const wrapper = mountResultView(); await flushPromises(); await selectNode(wrapper, '1')
+  await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['901']); await flushPromises()
+  const button = wrapper.findComponent({ name: 'CodeConfigButton' })
+  expect(button.props('label')).toBe('代码生成')
+  expect(button.props('buildTargets')()).toEqual([{ sourceId: '7', flowId: '50', stepId: '2', entryTypeId: 11, entryIds: ['901'] }])
+  wrapper.unmount(); vi.restoreAllMocks()
+})
