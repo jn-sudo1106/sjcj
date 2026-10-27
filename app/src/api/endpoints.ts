@@ -47,8 +47,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeEnable', desc: '启用 / 停用源（真实路径，见上方 source/changeSourceEnable 的说明）', danger: true, live: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true, live: true },
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
-  // 与本仓配套后端 sendCodeConfig JSON 契约一致，保留真实后端错误。
-  { path: 'source/sendCodeConfig', desc: '派发 MQ 代码任务', danger: true, impl: true, live: true },
+  // 与本仓配套后端 sendCodeConfig JSON 契约一致，保留真实后端错误；调用方强制 mode:'http'，
+  // 无 mock handler（MQ 派发不在 mock 模式伪造），所以不标 impl。
+  { path: 'source/sendCodeConfig', desc: '派发 MQ 代码任务', danger: true, live: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
   // 2026-09-18 接上：节点配置里改完定时策略、点保存时写回 job 表（旧平台 saveSourceCron）。
   // ⚠️ POST 但参数走 **query**，不是 body——旧 api/source-job.js 用的就是 `method:'post', params`。
