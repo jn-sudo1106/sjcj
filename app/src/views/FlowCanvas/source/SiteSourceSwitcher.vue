@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import CodeConfigButton from '../result/CodeConfigButton.vue'
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { CHANGE_SITE_CHUNK, flowCenterApi, isProductionCreateEnabled, siteApi, sourceApi, sourceGroupApi, workflowBindingApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
 import SiteTablePanel from './SiteTablePanel.vue'
@@ -388,6 +389,16 @@ async function saveRename(s: Source) {
   }
 }
 
+const menuCodeSources = ref<Source[]>([])
+const menuCodeLauncher = ref<InstanceType<typeof CodeConfigButton>>()
+async function launchCodeFromMenu() {
+  const source = rowMenu.source
+  if (!source) return
+  menuCodeSources.value = [source]
+  closeRowMenu()
+  await nextTick()
+  menuCodeLauncher.value?.show()
+}
 const rowMenu = reactive({ show: false, x: 0, y: 0, source: null as Source | null })
 function openRowMenu(event: MouseEvent, s: Source) {
   rowMenu.show = true
@@ -1485,11 +1496,14 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       :disabled="rowMenu.source.disabled"
       @click="launchFromMenu"
     >发起抓取</button>
+    <button type="button" data-testid="source-menu-code" @click="launchCodeFromMenu">代码生成</button>
     <button type="button" data-testid="source-menu-snatch-queue" @click="sendSnatchTestFromMenu">发指定队列</button>
     <button type="button" data-testid="source-menu-copy" @click="openCopyDialog(rowMenu.source!)">复制源…</button>
     <button type="button" data-testid="source-menu-move" @click="openMoveDialog(rowMenu.source!)">更换网站…</button>
     <button type="button" class="danger" data-testid="source-menu-delete" @click="deleteFromMenu">删除源</button>
   </div>
+
+  <CodeConfigButton ref="menuCodeLauncher" :sources="menuCodeSources" hide-trigger />
 
   <!-- 网站右键菜单：重命名 -->
   <div

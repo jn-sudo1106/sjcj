@@ -57,6 +57,8 @@ export interface SourceTypeDict {
 export interface NodeType {
   sourceType: string
   typeName: string
+  /** 分组名称，如采集类、规则类；旧记录为空，分类不影响执行协议。 */
+  typeGroup?: string
   /** 配置队列（旧列名「配置队列」），如 source-config / source-config-mail */
   downType: string
   /** 默认消息队列 */

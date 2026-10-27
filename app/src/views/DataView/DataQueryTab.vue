@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CodeConfigButton from '@/views/FlowCanvas/result/CodeConfigButton.vue'
+import { codeTargetsForRows } from '@/utils/flow/codeConfigTargets'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -1243,6 +1245,7 @@ onUnmounted(() => {
         <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
           <span class="dv-batch-count">已选择 <b>{{ selectedRowKeys.length }}</b> 项</span>
           <button class="rc-btn primary" type="button" @click="onNextStepSelected">发后续任务</button>
+          <CodeConfigButton data-testid="data-query-code-btn" :build-targets="() => codeTargetsForRows(panelRows, selectedRowKeys, tableId, sourceId)" label="代码生成" />
           <el-dropdown trigger="click">
             <span class="dv-link">更多批量操作<el-icon class="et-caret"><ArrowDown /></el-icon></span>
             <template #dropdown>

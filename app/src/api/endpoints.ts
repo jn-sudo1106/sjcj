@@ -47,6 +47,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeEnable', desc: '启用 / 停用源（真实路径，见上方 source/changeSourceEnable 的说明）', danger: true, live: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true, live: true },
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
+  // 与本仓配套后端 sendCodeConfig JSON 契约一致，保留真实后端错误；调用方强制 mode:'http'，
+  // 无 mock handler（MQ 派发不在 mock 模式伪造），所以不标 impl。
+  { path: 'source/codeConfigOptions', desc: '代码生成派发配置候选（201）', live: true },
+  { path: 'source/sendCodeConfig', desc: '派发 MQ 代码任务', danger: true, live: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
   // 2026-09-18 接上：节点配置里改完定时策略、点保存时写回 job 表（旧平台 saveSourceCron）。
   // ⚠️ POST 但参数走 **query**，不是 body——旧 api/source-job.js 用的就是 `method:'post', params`。
@@ -149,7 +153,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 节点类型维护（0924-04，系统设置 → 节点类型；旧平台「配置 → 源类型」）。2026-09-24 生产逐个实测：
   // 读接口不分页；add/update 是 JSON body，update 为增量更新；临时类型 99901 新增→修改→删除闭环已清理。
   // sourceType/delete：2026-10-14 在 186 实测被配置引用时后端拒绝（连软删除的配置也算），可安全接入。
-  { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊，不分页）', impl: true, live: true },
+  { path: 'sourceType/typeGroups', desc: '节点类型分组可选项（sys_config.source_type_group）', impl: true, live: false },
+  { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊、typeGroup 精确，不分页）', impl: true, live: true },
   { path: 'sourceType/detail', desc: '节点类型详情', impl: true, live: true },
   { path: 'sourceType/add', desc: '新增节点类型（sourceType 可不填，后端取 max+1）', danger: true, impl: true, live: true },
   { path: 'sourceType/update', desc: '修改节点类型（增量更新）', danger: true, impl: true, live: true },

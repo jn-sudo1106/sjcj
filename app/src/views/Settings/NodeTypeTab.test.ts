@@ -1,9 +1,9 @@
 // 系统设置 → 节点类型（0924-05）
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox, ElSelect, ElOption } from 'element-plus'
 import NodeTypeTab from './NodeTypeTab.vue'
 import { configApi, type NodeType } from '@/api'
 import { useAuthStore } from '@/stores/auth'
@@ -11,7 +11,7 @@ import { useDictStore } from '@/stores/dict'
 import { nodePromptApi } from '@/api/nodePrompts'
 
 const ROWS: NodeType[] = [
-  { sourceType: '90', typeName: '网页抓取', downType: 'source-config', topic: '', seq: 0, notes: '', procType: '200', params: '' },
+  { sourceType: '90', typeName: '网页抓取', typeGroup: '采集类', downType: 'source-config', topic: '', seq: 0, notes: '', procType: '200', params: '' },
   { sourceType: '160', typeName: 'Mail抓取', downType: 'source-config-mail', topic: '', seq: -1, notes: '', procType: '700', params: '' },
 ]
 
@@ -34,6 +34,17 @@ async function clickSave() {
   await flushPromises()
 }
 
+function groupSelect(wrapper: VueWrapper, testId: string) {
+  const select = wrapper.findAllComponents(ElSelect).find((s) => s.attributes('data-testid') === testId)
+  if (!select) throw new Error(`select not found: ${testId}`)
+  return select
+}
+
+async function chooseGroup(wrapper: VueWrapper, testId: string, value: string) {
+  groupSelect(wrapper, testId).vm.$emit('update:modelValue', value)
+  await flushPromises()
+}
+
 async function mountAs(roles: string[]) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -50,6 +61,7 @@ describe('节点类型页面', () => {
     document.body.innerHTML = ''
     vi.restoreAllMocks()
     vi.spyOn(configApi, 'nodeTypeList').mockResolvedValue(ROWS.map((r) => ({ ...r })))
+    vi.spyOn(configApi, 'nodeTypeGroups').mockResolvedValue(['采集类', '规则类'])
   })
   it('提示词模板入口在节点类型抽屉中按当前类型加载', async () => {
     vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
@@ -78,6 +90,8 @@ describe('节点类型页面', () => {
     const { wrapper } = await mountAs(['admin'])
     expect(wrapper.findAll('[data-testid="node-type-row"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('共 2 个节点类型')
+    expect(wrapper.text()).toContain('采集类')
+    expect(wrapper.text()).toContain('未分组')
     expect(wrapper.findAll('[data-testid="node-type-delete"]')).toHaveLength(2)
   })
 
@@ -86,7 +100,19 @@ describe('节点类型页面', () => {
     await wrapper.get('input[data-testid="node-type-keyword"]').setValue('抓取')
     await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
-    expect(configApi.nodeTypeList).toHaveBeenLastCalledWith('抓取')
+    expect(configApi.nodeTypeList).toHaveBeenLastCalledWith('抓取', '')
+  })
+
+  it('名称和分组同时查询，重置清空两个条件', async () => {
+    const { wrapper } = await mountAs(['admin'])
+    await wrapper.get('input[data-testid="node-type-keyword"]').setValue('抓取')
+    await chooseGroup(wrapper, 'node-type-group-filter', '采集类')
+    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(configApi.nodeTypeList).toHaveBeenLastCalledWith('抓取', '采集类')
+    await wrapper.findAll('button').find((b) => b.text() === '重置')!.trigger('click')
+    await flushPromises()
+    expect(configApi.nodeTypeList).toHaveBeenLastCalledWith('', '')
   })
 
   it('只读角色看不到新建 / 编辑 / 删除', async () => {
@@ -103,9 +129,10 @@ describe('节点类型页面', () => {
     await flushPromises()
 
     await typeInto(dialogInputs()[1]!, '新类型') // 类型名称
+    await chooseGroup(wrapper, 'node-type-group-edit', '规则类')
     await clickSave()
 
-    expect(add).toHaveBeenCalledWith(expect.objectContaining({ typeName: '新类型', sourceType: undefined, downType: 'source-config' }))
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ typeName: '新类型', typeGroup: '规则类', sourceType: undefined, downType: 'source-config' }))
     expect(configApi.nodeTypeList).toHaveBeenCalledTimes(2)
     expect(reload).toHaveBeenCalled()
   })
@@ -139,7 +166,7 @@ describe('节点类型页面', () => {
   // 2026-10-16：旧 `column.config` 的 `SOURCE_TYPE.other` 还有「处理类型」(procType) 与
   // 「参数(JSON)」(params) 两项，新端表单漏迁，这两条钉住它们已经接回来。
   // 表单 input 顺序（备注 / 参数是 textarea，不计入 inputs）：0 类型ID、1 类型名称、
-  // 2 配置队列、3 默认消息队列、4 排序、5 处理类型。
+  // 2 分组类型、3 配置队列、4 默认消息队列、5 排序、6 处理类型。
   it('新建：处理类型与参数(JSON) 一并提交', async () => {
     const add = vi.spyOn(configApi, 'nodeTypeAdd').mockResolvedValue({ ok: true, message: '新增成功' })
     const { wrapper } = await mountAs(['admin'])
@@ -147,7 +174,7 @@ describe('节点类型页面', () => {
     await flushPromises()
 
     await typeInto(dialogInputs()[1]!, '新类型')
-    await typeInto(dialogInputs()[5]!, '200') // 处理类型
+    await typeInto(dialogEl().querySelector<HTMLInputElement>('input[data-testid="node-type-proc-edit"]')!, '200')
     const textareas = [...dialogEl().querySelectorAll<HTMLTextAreaElement>('textarea')]
     expect(textareas).toHaveLength(2) // 备注 + 参数(JSON)
     textareas[1]!.value = '{"a":1}'
@@ -167,11 +194,66 @@ describe('节点类型页面', () => {
     await wrapper.findAll('[data-testid="node-type-edit"]')[0]!.trigger('click')
     await flushPromises()
 
-    expect(dialogInputs()[5]!.value).toBe('200') // ROWS[0].procType 回填
-    await typeInto(dialogInputs()[5]!, '210')
+    const proc = dialogEl().querySelector<HTMLInputElement>('input[data-testid="node-type-proc-edit"]')!
+    expect(proc.value).toBe('200') // ROWS[0].procType 回填
+    await typeInto(proc, '210')
     await clickSave()
 
     expect(update).toHaveBeenCalledWith('90', { procType: '210' })
+  })
+
+  it('回显分组；清除只提交显式空串，不覆盖其他字段', async () => {
+    const update = vi.spyOn(configApi, 'nodeTypeUpdate').mockResolvedValue({ ok: true })
+    const { wrapper } = await mountAs(['admin'])
+    await wrapper.findAll('[data-testid="node-type-edit"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(groupSelect(wrapper, 'node-type-group-edit').props('modelValue')).toBe('采集类')
+    await chooseGroup(wrapper, 'node-type-group-edit', '')
+    await clickSave()
+    expect(update).toHaveBeenCalledWith('90', { typeGroup: '' })
+  })
+
+  it('从配置刷新选项，新增和筛选共用选项且不能自由创建分组', async () => {
+    const add = vi.spyOn(configApi, 'nodeTypeAdd').mockResolvedValue({ ok: true })
+    const { wrapper } = await mountAs(['admin'])
+    vi.mocked(configApi.nodeTypeGroups).mockResolvedValue(['处理类'])
+    await wrapper.get('[data-testid="node-type-create"]').trigger('click')
+    await flushPromises()
+    const editor = groupSelect(wrapper, 'node-type-group-edit')
+    const filter = groupSelect(wrapper, 'node-type-group-filter')
+    expect(editor.props('allowCreate')).toBe(false)
+    expect(editor.findAllComponents(ElOption).map((o) => o.props('value'))).toEqual(['处理类'])
+    expect(filter.findAllComponents(ElOption).map((o) => o.props('value'))).toEqual(['处理类'])
+    await typeInto(dialogInputs()[1]!, '新类型')
+    await chooseGroup(wrapper, 'node-type-group-edit', '处理类')
+    await clickSave()
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ typeGroup: '处理类' }))
+  })
+
+  it('移出选项的旧分组保留显示，修改其他字段不覆盖分类', async () => {
+    vi.mocked(configApi.nodeTypeGroups).mockResolvedValue(['规则类'])
+    const update = vi.spyOn(configApi, 'nodeTypeUpdate').mockResolvedValue({ ok: true })
+    const { wrapper } = await mountAs(['admin'])
+    await wrapper.findAll('[data-testid="node-type-edit"]')[0]!.trigger('click')
+    await flushPromises()
+    const old = groupSelect(wrapper, 'node-type-group-edit').findAllComponents(ElOption).find((o) => o.props('value') === '采集类')!
+    expect(old.props('disabled')).toBe(true)
+    await typeInto(dialogInputs()[1]!, '网页采集')
+    await clickSave()
+    expect(update).toHaveBeenCalledWith('90', { typeName: '网页采集' })
+  })
+
+  it('选项加载失败不丢列表或原分组，其他字段仍能保存', async () => {
+    vi.mocked(configApi.nodeTypeGroups).mockRejectedValue(new Error('配置格式错误'))
+    const update = vi.spyOn(configApi, 'nodeTypeUpdate').mockResolvedValue({ ok: true })
+    const { wrapper } = await mountAs(['admin'])
+    expect(wrapper.findAll('[data-testid="node-type-row"]')).toHaveLength(2)
+    await wrapper.findAll('[data-testid="node-type-edit"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(groupSelect(wrapper, 'node-type-group-edit').props('disabled')).toBe(true)
+    await typeInto(dialogInputs()[1]!, '网页采集')
+    await clickSave()
+    expect(update).toHaveBeenCalledWith('90', { typeName: '网页采集' })
   })
 
   describe('删除（2026-10-14）', () => {

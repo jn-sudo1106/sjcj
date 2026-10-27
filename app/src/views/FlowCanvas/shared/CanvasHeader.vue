@@ -8,9 +8,18 @@ import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } fro
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { flushNodeConfigs } from '../inspector/nodeConfigAutosave'
+import CodeConfigButton from '../result/CodeConfigButton.vue'
+import { codeTargetForNode } from '@/utils/flow/codeConfigTargets'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 
 const flow = useFlowStore()
 const ui = useUiStore()
+const flowVersion = useFlowVersionStore()
+function captureCodeTargets() {
+  const flowId = canvasFlowIdOf(flow)
+  const ver = flowVersion.flowId === flowId ? flowVersion.viewVersionId : null
+  return [codeTargetForNode(src.value?.sourceId || '', flowId, flow.selectedId || undefined, ver)]
+}
 const { status: saveStatus, savedClock, lastError: saveError, flush: retryFlowSave } = useFlowAutosave()
 const route = useRoute()
 const router = useRouter()
@@ -281,6 +290,7 @@ function srcSnatch() {
           >保存失败，点击重试</button>
         </span>
         <button class="rc-btn primary" type="button" :disabled="!canStartPublishedFlow" :title="!isPrimaryFlow ? '辅助/补数据流程不能从正常抓取入口启动' : src?.workflowVersionStatus === 'DRAFT' ? '草稿发布后才能作为新的运行版本发起抓取' : ''" @click="srcSnatch">发起抓取</button>
+        <CodeConfigButton data-testid="source-capture-code" :build-targets="captureCodeTargets" label="代码生成" />
       </div>
     </div>
 

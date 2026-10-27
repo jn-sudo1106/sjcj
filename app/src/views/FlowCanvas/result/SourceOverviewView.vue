@@ -63,6 +63,7 @@ import {
 } from './sourceSearchField'
 import { snatchFailureSummary } from '@/utils/snatchResult'
 import SourceCodeTasksDrawer from './SourceCodeTasksDrawer.vue'
+import CodeConfigButton from './CodeConfigButton.vue'
 const codeTasksOpen = ref(false)
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
@@ -1380,6 +1381,7 @@ defineExpose({ openLaunch, clearSelection })
         <button class="sov-btn" type="button" @click="clearFilters">清空</button>
         <template v-if="!crossSite">
           <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <CodeConfigButton class="sov-btn" data-testid="source-code-launch" :sources="selectedSources" :disabled="!selectedSources.length" label="代码生成" />
           <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
         </template>
         <!-- 采集资产源列表视图把「视图切换 / 刷新」放在这里，与筛选并成一条栏（网站详情不传） -->
@@ -1389,7 +1391,7 @@ defineExpose({ openLaunch, clearSelection })
     </div>
 
     <div class="sov-summary" :class="{ 'one-row': crossSite }">
-      <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">生成代码任务</button>
+      <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">代码生成</button>
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
       <slot name="summary-extra" :ids="selectedIds" />
@@ -1434,6 +1436,7 @@ defineExpose({ openLaunch, clearSelection })
           </template>
         </el-dropdown>
         <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <CodeConfigButton class="sov-btn" data-testid="source-code-launch" :sources="selectedSources" :disabled="!selectedSources.length" label="代码生成" />
         <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
       </span>
     </div>
