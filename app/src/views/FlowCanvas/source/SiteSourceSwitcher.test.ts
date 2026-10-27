@@ -44,6 +44,7 @@ function mockApis() {
   })
   vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
   vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+  vi.spyOn(sourceApi, 'codeConfigOptions').mockResolvedValue([{ configId: '900', name: '代码生成', topic: 'code-default', entryTypeId: 13 }])
   vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: 'ok' })
   vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
   // 模板源有默认流程（复制流程的前提，1016）

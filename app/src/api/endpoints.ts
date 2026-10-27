@@ -49,6 +49,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
   // 与本仓配套后端 sendCodeConfig JSON 契约一致，保留真实后端错误；调用方强制 mode:'http'，
   // 无 mock handler（MQ 派发不在 mock 模式伪造），所以不标 impl。
+  { path: 'source/codeConfigOptions', desc: '代码生成派发配置候选（201）', live: true },
   { path: 'source/sendCodeConfig', desc: '派发 MQ 代码任务', danger: true, live: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
   // 2026-09-18 接上：节点配置里改完定时策略、点保存时写回 job 表（旧平台 saveSourceCron）。

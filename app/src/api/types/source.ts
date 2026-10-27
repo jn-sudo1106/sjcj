@@ -846,3 +846,11 @@ export interface SendCodeConfigResult {
   taskIds: string[]
   tasks: { stepId: string | number; entryId?: string | number; taskIds: string[]; errors: string[] }[]
 }
+
+/** 启用的 201 派发配置下拉候选，按 configId 升序排列。 */
+export interface CodeConfigOption {
+  configId: string
+  name: string | null
+  topic: string | null
+  entryTypeId: number | null
+}

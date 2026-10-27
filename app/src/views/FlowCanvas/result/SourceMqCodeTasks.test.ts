@@ -4,16 +4,20 @@ import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import SourceMqCodeTasks from './SourceMqCodeTasks.vue'
 import { sourceApi, flowCenterApi, type Source } from '@/api'
-vi.mock('@/api', () => ({ sourceApi: { sourceDetail: vi.fn(), sendCodeConfig: vi.fn() }, flowCenterApi: { steps: vi.fn() } }))
+vi.mock('@/api', () => ({ sourceApi: { sourceDetail: vi.fn(), codeConfigOptions: vi.fn(), sendCodeConfig: vi.fn() }, flowCenterApi: { steps: vi.fn() } }))
 const source = { sourceId: '123', name: '网站新闻', flowId: '55', url: 'https://example.net' } as Source
 beforeEach(() => {
+  vi.mocked(sourceApi.codeConfigOptions).mockResolvedValue([
+    { configId: '900', name: '默认代码生成', topic: 'code-default', entryTypeId: 13 },
+    { configId: '9223372036854775806', name: '专用代码生成', topic: 'code-extra', entryTypeId: 14 },
+  ])
   vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, defaultFlowId: '66' })
   vi.mocked(flowCenterApi.steps).mockResolvedValue([{ stepId: '1', name: '首步', sourceId: '', configId: '101', enabled: true, isRoot: true }])
   vi.mocked(sourceApi.sendCodeConfig).mockResolvedValue({ sourceId: '123', configId: '900', queue: 'code-default', requestCnt: 1, sendCnt: 1, failCnt: 0, taskIds: ['9223372036854775806'], tasks: [] })
 })
 afterEach(() => vi.resetAllMocks())
 const mountPanel = (sources = [source]) => mount(SourceMqCodeTasks, { props: { sources }, global: { plugins: [ElementPlus] } })
-const submit = async (w: ReturnType<typeof mountPanel>) => { await w.find('button').trigger('click'); await flushPromises() }
+const submit = async (w: ReturnType<typeof mountPanel>) => { await flushPromises(); await w.find('[aria-label="开始代码生成"]').trigger('click'); await flushPromises() }
 it('默认不传 configId 和 queue；以节点 stepId 生成，不能把节点 configId 当派发配置', async () => {
   const w = mountPanel(); await submit(w)
   expect(flowCenterApi.steps).toHaveBeenCalledWith('66', { withConfigDetails: false })
@@ -23,7 +27,8 @@ it('默认不传 configId 和 queue；以节点 stepId 生成，不能把节点 
 })
 it('指定 201 配置和队列通过 JSON 发送，ID 保持字符串精度', async () => {
   const w = mountPanel()
-  await w.find('[aria-label="201 派发配置 ID"]').setValue(' 9223372036854775806 ')
+  await flushPromises()
+  await w.find('[aria-label="201 派发配置 ID"]').setValue('9223372036854775806')
   await w.find('[aria-label="派发队列"]').setValue('custom')
   await w.find('[aria-label="队列名称"]').setValue('  code-manual  ')
   await submit(w)
@@ -57,6 +62,7 @@ it('没有有效默认流程或 ROOT 节点时不发送', async () => {
 })
 it('指定步骤沿用页面流程与版本，派发配置仍由表单独立填写', async () => {
   const w = mount(SourceMqCodeTasks, { props: { targets: [{ sourceId: '123', flowId: '77', stepId: '2', ver: '99' }] }, global: { plugins: [ElementPlus] } })
+  await flushPromises()
   await w.find('[aria-label="201 派发配置 ID"]').setValue('900')
   await submit(w)
   expect(sourceApi.sendCodeConfig).toHaveBeenCalledWith({ sourceId: '123', flowId: '77', stepId: '2', ver: '99', configId: '900' })
@@ -77,5 +83,55 @@ it('生成指定节点的数据脚本时携带 stepId，保留数据上下文', 
   const w = mount(SourceMqCodeTasks, { props: { targets: [{ sourceId: '123', flowId: '77', stepId: '2', entryTypeId: 11, entryIds: ['901'] }] }, global: { plugins: [ElementPlus] } })
   await submit(w)
   expect(sourceApi.sendCodeConfig).toHaveBeenCalledWith({ sourceId: '123', flowId: '77', stepId: '2', entryTypeId: 11, entryIds: ['901'] })
+  w.unmount()
+})
+it('打开表单即加载 201 下拉候选，展示默认配置名称、ID、队列与保存表', async () => {
+  const w = mountPanel(); await flushPromises()
+  expect(sourceApi.codeConfigOptions).toHaveBeenCalledOnce()
+  expect(w.find('[aria-label="201 派发配置 ID"]').element.tagName).toBe('SELECT')
+  expect(w.text()).toContain('默认代码生成 · #900 · code-default')
+  expect(w.get('[data-testid="generation-config-summary"]').text()).toContain('保存表：13')
+  await w.find('[aria-label="201 派发配置 ID"]').setValue('9223372036854775806')
+  expect(w.get('[data-testid="generation-config-summary"]').text()).toContain('专用代码生成')
+  expect(w.get('[data-testid="generation-config-summary"]').text()).toContain('保存表：14')
+  expect(w.find('[aria-label="派发队列"]').text()).toContain('默认队列（code-extra）')
+  await submit(w)
+  expect(sourceApi.sendCodeConfig).toHaveBeenCalledWith({ sourceId: '123', flowId: '66', stepId: '1', configId: '9223372036854775806' })
+  w.unmount()
+})
+it('没有 201 配置时明确提示并禁止发送，刷新配置后可以继续', async () => {
+  vi.mocked(sourceApi.codeConfigOptions).mockResolvedValueOnce([]).mockResolvedValueOnce([{ configId: '900', name: '代码生成', topic: 'code-default', entryTypeId: 13 }])
+  const w = mountPanel(); await flushPromises()
+  expect(w.text()).toContain('没有启用的 config_type=201 配置')
+  expect(w.get('[aria-label="开始代码生成"]').attributes('disabled')).toBeDefined()
+  expect(sourceApi.sendCodeConfig).not.toHaveBeenCalled()
+  await w.findAll('button').find(button => button.text().includes('刷新配置'))!.trigger('click'); await flushPromises()
+  expect(w.get('[aria-label="开始代码生成"]').attributes('disabled')).toBeUndefined()
+  await submit(w); expect(sourceApi.sendCodeConfig).toHaveBeenCalledOnce()
+  w.unmount()
+})
+it('查询失败有真实错误和重试入口，未加载完成时不能发送', async () => {
+  let finish: ((value: []) => void) | undefined
+  vi.mocked(sourceApi.codeConfigOptions).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const w = mountPanel(); await flushPromises()
+  expect(w.get('[aria-label="开始代码生成"]').attributes('disabled')).toBeDefined()
+  finish!([]); await flushPromises()
+  vi.mocked(sourceApi.codeConfigOptions).mockRejectedValueOnce(new Error('后端 503'))
+  await w.findAll('button').find(button => button.text().includes('刷新配置'))!.trigger('click'); await flushPromises()
+  expect(w.text()).toContain('获取派发配置失败：后端 503')
+  expect(w.get('[aria-label="开始代码生成"]').attributes('disabled')).toBeDefined()
+  expect(sourceApi.sendCodeConfig).not.toHaveBeenCalled()
+  w.unmount()
+})
+it('默认队列未配置时引导指定队列，指定后仍使用所选 201 配置', async () => {
+  vi.mocked(sourceApi.codeConfigOptions).mockResolvedValue([{ configId: '900', name: '代码生成', topic: null, entryTypeId: 13 }])
+  const w = mountPanel(); await submit(w)
+  expect(w.text()).toContain('所选配置没有默认队列，请指定队列')
+  expect(sourceApi.sendCodeConfig).not.toHaveBeenCalled()
+  await w.find('[aria-label="201 派发配置 ID"]').setValue('900')
+  await w.find('[aria-label="派发队列"]').setValue('custom')
+  await w.find('[aria-label="队列名称"]').setValue('manual-code')
+  await submit(w)
+  expect(sourceApi.sendCodeConfig).toHaveBeenCalledWith({ sourceId: '123', flowId: '66', stepId: '1', configId: '900', queue: 'manual-code' })
   w.unmount()
 })

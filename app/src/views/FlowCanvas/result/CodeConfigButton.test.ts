@@ -4,9 +4,10 @@ import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { sourceApi } from '@/api'
 import CodeConfigButton from './CodeConfigButton.vue'
-vi.mock('@/api', () => ({ sourceApi: { sendCodeConfig: vi.fn() }, flowCenterApi: { steps: vi.fn() } }))
+vi.mock('@/api', () => ({ sourceApi: { sendCodeConfig: vi.fn(), codeConfigOptions: vi.fn() }, flowCenterApi: { steps: vi.fn() } }))
 afterEach(() => vi.resetAllMocks())
 it('点击原操作旁的发代码只打开 MQ 表单，确认后才派发并保留点击时的目标', async () => {
+  vi.mocked(sourceApi.codeConfigOptions).mockResolvedValue([{ configId: '900', name: '代码生成', topic: 'code-default', entryTypeId: 13 }])
   vi.mocked(sourceApi.sendCodeConfig).mockResolvedValue({ sourceId: '7', configId: '900', queue: 'manual', requestCnt: 1, sendCnt: 1, failCnt: 0, taskIds: ['1001'], tasks: [] })
   const ids = ['901']
   const w = mount(CodeConfigButton, { props: { buildTargets: () => [{ sourceId: '7', flowId: '50', entryTypeId: 11, entryIds: ids }] }, global: { plugins: [ElementPlus], stubs: { ElDrawer: { template: '<div><slot /></div>' } } } })

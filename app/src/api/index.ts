@@ -3,7 +3,7 @@ import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, 
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
 import type {
-  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload, SendCodeConfigPayload, SendCodeConfigResult,
+  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload, SendCodeConfigPayload, SendCodeConfigResult, CodeConfigOption,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   CkSourcePayload, CkSourceRecord, CkSourcePage,
@@ -847,6 +847,9 @@ export const sourceApi = {
         ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
     }).then(snatchAckFrom),
+  /** 只读查询启用的 201 派发配置，和发送接口使用同一后端。 */
+  codeConfigOptions: (): Promise<CodeConfigOption[]> =>
+    request<CodeConfigOption[]>('source/codeConfigOptions', undefined, { method: 'GET', mode: 'http' }),
   /** 独立 MQ 代码生成；configId 为 201 派发配置，queue 省略时使用该配置的 TOPIC。 */
   sendCodeConfig: async (payload: SendCodeConfigPayload): Promise<SendCodeConfigResult> => {
     try {
