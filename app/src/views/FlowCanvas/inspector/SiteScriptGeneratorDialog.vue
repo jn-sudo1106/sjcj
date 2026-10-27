@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RouterLink } from 'vue-router'
 import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript } from '@/api/siteScript'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface, type GeneratedCodeArchive } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
 import { nodePromptsAvailable } from '@/constants/deployGates'
@@ -29,6 +29,55 @@ const promptTemplates = ref<NodePromptTemplate[]>([]), selectedPromptId = ref(0)
 const modelInterfaces = ref<ModelInterface[]>([]), modelInterfaceId = ref(''), modelError = ref(''), modelsLoading = ref(false)
 let modelsRequest = 0
 const selectedModel = computed(() => modelInterfaces.value.find(row => row.id === modelInterfaceId.value && row.enabled))
+const remoteGeneration = computed(() => !!selectedModel.value?.generationServerId && ['agent', 'gemini-agent'].includes(selectedModel.value.kind))
+const autoCommit = ref(true), preferenceSaving = ref(false), archiveError = ref('')
+const taskConfigError = ref(''), savingTaskConfig = ref(false)
+async function saveTaskConfig() {
+  if (!props.configId || busy.value || savingTaskConfig.value) return
+  const session = sessionId
+  savingTaskConfig.value = true; taskConfigError.value = ''
+  try {
+    await runnerManagementApi.saveNodeGenerationSettings({ configId: props.configId, generation: {
+      interfaceId: modelInterfaceId.value, repositoryId: repositoryId.value, directoryId: directoryId.value,
+      configType: props.configType || '', queueName: props.queueName || '', systemPrompt: systemPrompt.value,
+      userPrompt: prompt.value, url: url.value, fileNameMode: fileNameMode.value,
+    } })
+    if (session === sessionId) ElMessage.success('生成配置已保存，可从源列表创建代码生成任务')
+  } catch (e) { if (session === sessionId) taskConfigError.value = message(e) }
+  finally { savingTaskConfig.value = false }
+}
+const archive = ref<GeneratedCodeArchive | null>(null), archivePreview = ref(''), archivePreviewPath = ref(''), archiveSavedKey = ref('')
+const archiveTarget = computed(() => {
+  const saved = archive.value, file = saved?.files.find(item => item.relativePath.endsWith('.py')) || saved?.files[0]
+  return saved && file ? { path: '/settings', query: { tab: 'code-repos', repoId: saved.repoId, directoryId: saved.directoryId, filePath: file.path } } : null
+})
+async function toggleAutoCommit(): Promise<boolean> {
+  if (!props.configId || preferenceSaving.value) return false
+  const configId = props.configId
+  preferenceSaving.value = true
+  try { const result = await runnerManagementApi.saveGenerationPreference(configId, !autoCommit.value); if (configId === props.configId) { autoCommit.value = result.autoCommit; archiveError.value = '' } }
+  catch (e) { if (configId === props.configId) archiveError.value = message(e) }
+  finally { preferenceSaving.value = false }
+  return false
+}
+async function commitArchive() {
+  if (!archive.value || publishing.value || archive.value.status === 'committed') return
+  const id = archive.value.archiveId, session = sessionId
+  publishing.value = true
+  try {
+    const result = await runnerManagementApi.commitGeneratedCode(id)
+    if (session !== sessionId || archive.value?.archiveId !== id) return
+    archive.value = result
+    if (result.status === 'committed') {
+      if (code.value === archivePreview.value && !showCandidate.value) {
+        sourceFilePath.value = archivePreviewPath.value; sourceGitCommit.value = result.gitCommit
+        archiveSavedKey.value = draftKey.value
+      }
+      ElMessage.success(result.pushed ? '生成文件已提交并推送到 Git' : '生成文件已提交到本地仓库，仓库未配置远程地址')
+    }
+  } catch (e) { if (session === sessionId) error.value = `生成文件提交失败：${message(e)}` }
+  finally { publishing.value = false }
+}
 async function loadModels() {
   const request = ++modelsRequest
   modelsLoading.value = true; modelError.value = ''
@@ -101,6 +150,7 @@ const draftKey = computed(() => JSON.stringify({ code: code.value, prompt: promp
   promptTemplateId: selectedPromptId.value,
   repositoryId: repositoryId.value, directoryId: directoryId.value, storagePath: storagePath.value, fileNameMode: fileNameMode.value, fileName: fileName.value, sourceFilePath: sourceFilePath.value, sourceGitCommit: sourceGitCommit.value }))
 const isSaved = computed(() => {
+  if (archive.value?.status === 'committed' && archiveSavedKey.value === draftKey.value && archive.value.repoId === repositoryId.value && archive.value.directoryId === directoryId.value) return true
   const saved = published.value || loadedVersion.value
   return !!code.value && savedDraftKey.value === draftKey.value && saved?.repoId === repositoryId.value && saved.storagePath === storagePath.value
 })
@@ -109,7 +159,7 @@ const repositoryFileTarget = computed(() => {
   if (!saved?.repoId || !saved.storagePath || saved.repoId !== repositoryId.value || saved.storagePath !== storagePath.value) return null
   return { path: '/settings', query: { tab: 'code-repos', repoId: saved.repoId, filePath: saved.storagePath, ...(saved.directoryId ? { directoryId: saved.directoryId } : {}) } }
 })
-const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value)
+const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value || preferenceSaving.value || savingTaskConfig.value)
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
 let controller: AbortController | null = null
 let openedFor = ''
@@ -187,6 +237,7 @@ async function initialize() {
   const newContext = openedFor !== context
   if (newContext) {
     clearDraft()
+    archive.value = null; archivePreview.value = ''; archivePreviewPath.value = ''; archiveSavedKey.value = ''; archiveError.value = ''
     repositoryId.value = ''
     fileNameMode.value = 'website'
     prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
@@ -200,13 +251,17 @@ async function initialize() {
   repositoriesError.value = ''
   versionsError.value = ''
   templateError.value = ''
-  const [repoResult, versionResult, templateResult] = await Promise.allSettled([
+  const [repoResult, versionResult, templateResult, , archiveResult, taskConfigResult] = await Promise.allSettled([
     runnerManagementApi.codeRepositories(),
     props.configId && props.queueName ? runnerManagementApi.siteCodeVersions(props.configId, props.queueName) : Promise.resolve([] as SiteCodeVersion[]),
     props.configType && nodePromptsAvailable() ? nodePromptApi.list({ sourceType: props.configType, templateUse: 'script' }) : Promise.resolve([]),
     loadModels(),
+    props.configId ? runnerManagementApi.generatedCodeState(props.configId) : Promise.resolve({ autoCommit: true, archive: null }),
+    props.configId ? runnerManagementApi.nodeGenerationSettings(props.configId) : Promise.resolve(null),
   ])
   if (session !== sessionId) return
+  if (archiveResult.status === 'fulfilled') { autoCommit.value = archiveResult.value.autoCommit; archive.value = archiveResult.value.archive; archiveError.value = '' }
+  else archiveError.value = `生成归档配置加载失败：${message(archiveResult.reason)}`
   if (templateResult.status === 'fulfilled') {
     promptTemplates.value = templateResult.value.filter(item => item.isActive === 1)
     const template = defaultNodePrompt(templateResult.value, true)
@@ -245,7 +300,25 @@ async function initialize() {
     versions.value = []
     versionsError.value = message(versionResult.reason)
   }
-  if (session === sessionId) loading.value = false
+  if (session === sessionId && newContext && archive.value && availableRepositories.value.some(repo => repo.repoId === archive.value!.repoId)) {
+    repositoryId.value = archive.value.repoId
+    if (availableDirectories.value.some(directory => directory.directoryId === archive.value!.directoryId)) directoryId.value = archive.value.directoryId
+  }
+  if (session === sessionId && newContext && taskConfigResult.status === 'fulfilled' && taskConfigResult.value?.generation) {
+    const saved = taskConfigResult.value.generation
+    modelInterfaceId.value = saved.interfaceId
+    repositoryId.value = saved.repositoryId
+    directoryId.value = saved.directoryId
+    fileNameMode.value = saved.fileNameMode
+    systemPrompt.value = saved.systemPrompt
+    prompt.value = saved.userPrompt
+    if (saved.url && saved.url !== url.value) { systemPrompt.value = systemPrompt.value.replaceAll(saved.url, url.value); prompt.value = prompt.value.replaceAll(saved.url, url.value) }
+    promptSnapshot.value = promptTextKey()
+  }
+  if (session === sessionId) {
+    taskConfigError.value = taskConfigResult.status === 'rejected' ? `生成配置读取失败：${message(taskConfigResult.reason)}` : ''
+    loading.value = false
+  }
 }
 
 watch(() => [props.configId, props.queueName, props.initialUrl, props.configType] as const, () => {
@@ -352,6 +425,7 @@ function cancelGenerate() { controller?.abort(); controller = null; generating.v
 async function generate() {
   if (busy.value) return
   if (modelsLoading.value || modelError.value || !selectedModel.value) { error.value = '请先选择可用的大模型接口'; return }
+  if (remoteGeneration.value && (!props.configId || !selectedRepository.value || !selectedDirectory.value || directoriesError.value || archiveError.value)) { error.value = archiveError.value || '请先保存节点并选择有效的仓库和配置目录'; return }
   if (!systemPrompt.value.trim()) { error.value = '请填写系统提示词'; return }
   if (!prompt.value.trim()) { error.value = '请填写用户提示词'; return }
   if (systemPrompt.value.length > 12000 || prompt.value.length > 12000) { error.value = '每份提示词不能超过 12000 字'; return }
@@ -366,17 +440,23 @@ async function generate() {
   error.value = ''
   warnings.value = []
   try {
-    const result = await generateSiteScript({ taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py' }, active.signal)
+    const result = await generateSiteScript({ taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py',
+      ...(remoteGeneration.value ? { configId: props.configId, configType: props.configType || '', queueName: props.queueName || '', repositoryId: repositoryId.value,
+        directoryId: directoryId.value, autoCommit: autoCommit.value, deferCommit: true, fileName: fileName.value } : {}) }, active.signal)
     if (active.signal.aborted) return
-    if (code.value.trim()) {
+    if (code.value.trim() && result.code.trim()) {
       candidate.value = result.code
       showCandidate.value = true
-    } else {
+    } else if (result.code.trim()) {
       code.value = result.code
       sourceFilePath.value = ''
       sourceGitCommit.value = ''
     }
     warnings.value = result.warnings
+    if (result.archive) {
+      archive.value = result.archive; archivePreview.value = result.code; archivePreviewPath.value = result.previewPath || ''; archiveSavedKey.value = ''; archiveError.value = ''
+      if (autoCommit.value && result.archive.status !== 'committed') await commitArchive()
+    }
   } catch (e) { if (!active.signal.aborted) error.value = message(e) || '生成失败' }
   finally { if (controller === active) { generating.value = false; controller = null } }
 }
@@ -495,6 +575,8 @@ function download() {
 
 <template>
   <section v-loading="loading" class="site-script-configuration" data-testid="site-script-configuration">
+    <div class="site-script-task-config"><el-button size="small" :loading="savingTaskConfig" :disabled="busy || !configId || !selectedModel || !selectedDirectory" data-testid="save-generation-config" @click="saveTaskConfig">保存生成配置</el-button><span>供源列表批量生成代码任务使用</span></div>
+    <p v-if="taskConfigError" class="site-script-error" role="alert">{{ taskConfigError }}</p>
     <div class="site-script-context"><span v-if="configType" data-testid="site-script-node-type">节点类型 [{{ configType }}] {{ nodeTypeName }}</span><span :title="queueName">队列 {{ queueName || '未配置' }}</span></div>
     <div class="site-script-destination-fields">
       <label class="site-script-field">保存仓库
@@ -514,6 +596,7 @@ function download() {
     </div>
     <p v-if="loadedVersion?.repoId && !selectedRepository" class="site-script-error" role="alert">原仓库已停用或与节点类型不匹配，请重新选择保存位置。</p>
     <p v-if="directoriesError" class="site-script-error" role="alert">目录加载失败：{{ directoriesError }}</p>
+    <p v-if="archiveError" class="site-script-error" role="alert">{{ archiveError }}</p>
     <p v-if="repositoriesError" class="site-script-error" role="alert">仓库加载失败：{{ repositoriesError }}</p>
     <p v-if="templateError" class="site-script-error" role="alert">{{ templateError }}</p>
     <div class="site-script-naming"><span>文件命名方式</span><el-select v-model="fileNameMode" size="small" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select><code :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code></div>
@@ -530,6 +613,7 @@ function download() {
         <PromptTemplatePicker :items="promptTemplates" :model-value="selectedPromptId" :disabled="busy" test-id="script-prompt-template" @select="selectPromptTemplate" />
         <div class="site-script-model"><label>大模型</label><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading" placeholder="选择大模型接口" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink to="/settings?tab=model-interfaces" target="_blank" rel="noopener">配置</RouterLink></div>
         <p v-if="modelError" class="site-script-error" role="alert">{{ modelError }}</p>
+        <div v-if="remoteGeneration" class="site-script-auto-commit"><el-switch :model-value="autoCommit" :loading="preferenceSaving" :disabled="busy || !configId" :before-change="toggleAutoCommit" active-text="生成成功后自动提交" data-testid="site-script-auto-commit" /><small>保存到节点已选择的仓库目录，仅归档 code/ 内的文件。</small></div>
         <section class="site-script-prompt-group">
           <div class="site-script-panel-head"><label for="site-script-system-prompt"><b>系统提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-system-prompt" @click="restoreSystemPrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-system-prompt" v-model="systemPrompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-system-prompt" placeholder="定义模型角色、代码规范和输出要求" /></div>
@@ -538,7 +622,7 @@ function download() {
           <div class="site-script-panel-head"><label for="site-script-prompt"><b>用户提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-prompt" @click="restorePrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-prompt" v-model="prompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-prompt" placeholder="说明本次抓取需求、列表页结构、提取字段及详情页要求" /></div>
         </section>
-        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || codeLoading || publishing || directoriesLoading || modelsLoading || !!modelError || !selectedModel" data-testid="site-script-generate" @click="generate">{{ code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating" @click="cancelGenerate">取消生成</el-button><span v-else>生成后可在右侧编辑、保存</span></div>
+        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || codeLoading || publishing || directoriesLoading || preferenceSaving || modelsLoading || !!modelError || !selectedModel" data-testid="site-script-generate" @click="generate">{{ code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating && !publishing" @click="cancelGenerate">取消生成</el-button><span v-else>{{ publishing ? '正在提交 Git…' : '生成后可在右侧编辑、保存' }}</span></div>
       </section>
       <section v-loading="codeLoading" class="site-script-editor-panel" data-testid="site-script-code-panel">
         <div class="site-script-panel-head">
@@ -559,6 +643,7 @@ function download() {
         <p v-if="versionsError" class="site-script-error" role="alert">版本列表加载失败：{{ versionsError }}</p>
         <p v-if="error" class="site-script-error" data-testid="site-script-error" role="alert">{{ error }}</p>
         <p v-for="warning in warnings" :key="warning" class="site-script-warning">{{ warning }}</p>
+        <section v-if="archive" class="site-script-archive" data-testid="site-script-archive"><b>{{ archive.status === 'committed' ? archive.pushed ? '生成文件已提交并推送 Git' : '生成文件已提交本地 Git（未配置远程地址）' : archive.status === 'failed' ? '生成结果已保留，归档失败' : '生成结果已保留，待提交' }}</b><span>{{ archive.files.length }} 个文件 · {{ archive.directoryPath }}/ <template v-if="archive.gitCommit"> · Git {{ archive.gitCommit.slice(0, 12) }}</template></span><small v-if="archive.message" class="site-script-error">{{ archive.message }}</small><div><RouterLink v-if="archive.status === 'committed' && archiveTarget" :to="archiveTarget" target="_blank" rel="noopener" data-testid="site-script-archive-link">查看归档文件</RouterLink><el-button v-if="archive.status !== 'committed'" link type="primary" :disabled="busy" :loading="publishing" data-testid="site-script-retry-archive" @click="commitArchive">{{ archive.status === 'failed' ? '重试提交原生成文件' : '提交本次生成文件' }}</el-button></div></section>
         <div v-if="candidate" class="site-script-result-tabs"><button type="button" :class="{ active: !showCandidate }" data-testid="site-script-current-tab" @click="showCandidate = false">当前代码</button><button type="button" :class="{ active: showCandidate }" data-testid="site-script-candidate-tab" @click="showCandidate = true">新生成结果</button><el-button v-if="showCandidate" link type="primary" data-testid="site-script-adopt" @click="adopt">采用新结果</el-button></div>
         <div v-if="showCandidate && candidate" class="site-script-editor" data-testid="site-script-candidate"><textarea :value="candidate" class="site-script-code" readonly aria-label="生成结果预览" spellcheck="false" /></div>
         <div v-else-if="code" class="site-script-editor" data-testid="site-script-editor"><textarea v-model="code" :disabled="loading || codeLoading || publishing" class="site-script-code" aria-label="可编辑 Python 代码" spellcheck="false" /></div>
@@ -578,6 +663,7 @@ function download() {
 </template>
 
 <style scoped>
+.site-script-task-config { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--rc-muted); }
 .site-script-model { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .site-script-model > label { flex: 0 0 42px; }
 .site-script-model :deep(.el-select) { flex: 1; min-width: 0; }
@@ -592,6 +678,7 @@ function download() {
 .site-script-select-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-naming { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--rc-muted); }.site-script-naming > span { flex: 0 0 auto; white-space: nowrap; }.site-script-naming code { min-width: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
 .site-script-workspace { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.85fr); gap: 16px; height: min(650px, calc(100dvh - 180px)); min-height: 360px; }
+.site-script-auto-commit,.site-script-archive { display:flex; flex-direction:column; gap:6px; font-size:12px; }.site-script-auto-commit small { color:var(--el-text-color-secondary); }.site-script-archive { padding:10px; border:1px solid var(--el-border-color); border-radius:6px; overflow-wrap:anywhere; }.site-script-archive a { color:var(--el-color-primary); }
 .site-script-settings, .site-script-editor-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 12px; padding: 16px; border: 1px solid var(--rc-border); border-radius: 10px; }
 .site-script-settings { background: var(--rc-primary-bg); }.site-script-editor-panel { background: var(--rc-card); }
 .site-script-panel-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }.site-script-panel-head b { flex-shrink: 0; font-size: 13px; }.site-script-panel-head > span { margin-left: auto; color: var(--rc-muted); font-size: 11px; }.site-script-panel-head > .el-button { margin-left: auto; }

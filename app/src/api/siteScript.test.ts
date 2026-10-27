@@ -5,6 +5,16 @@ import { generateSiteScript } from './siteScript'
 afterEach(() => vi.restoreAllMocks())
 
 describe('generateSiteScript', () => {
+  it('允许多文件归档没有 Python 预览，但拒绝无效归档记录', async () => {
+    const archive = { archiveId: 'a'.repeat(32), status: 'pending', files: [] }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ fileName: 'newslink.py', code: '', archive, warnings: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fileName: 'newslink.py', code: '', archive: {}, warnings: [] })))
+    const input = { interfaceId: 'remote', configId: '101', repositoryId: 'repo', directoryId: 'default', autoCommit: true,
+      prompt: '生成代码', url: 'https://example.com', sampleId: 'www.realcan.cn.py' as const }
+    expect((await generateSiteScript(input)).archive?.archiveId).toBe(archive.archiveId)
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string).repositoryId).toBe('repo')
+    await expect(generateSiteScript(input)).rejects.toThrow('代码归档服务返回的数据无效')
+  })
   it('routes a selected model through the server adapter without exposing its address in generation input', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ fileName: 'example.com.py', code: 'def scrape(url): return []', warnings: [] })))
     await generateSiteScript({ interfaceId: 'chat-hy3', prompt: '需求', url: 'https://example.com', sampleId: 'www.realcan.cn.py' })

@@ -22,8 +22,8 @@ import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 // 各环境展示同一套入口，菜单可见性统一由账号权限决定（2026-10-26）。
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
-  { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab, runner: true },
-  { key: 'code-servers', label: '代码生成服务器', permission: 'settings:nodeType', comp: CodeGenerationServersTab, runner: true },
+  { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab },
+  { key: 'code-servers', label: '代码生成服务器', permission: 'settings:nodeType', comp: CodeGenerationServersTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
   { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab },
   { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab },

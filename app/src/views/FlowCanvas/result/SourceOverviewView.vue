@@ -61,6 +61,8 @@ import {
   type SourceCondition,
 } from './sourceSearchField'
 import { snatchFailureSummary } from '@/utils/snatchResult'
+import SourceCodeTasksDrawer from './SourceCodeTasksDrawer.vue'
+const codeTasksOpen = ref(false)
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -1377,6 +1379,7 @@ defineExpose({ openLaunch, clearSelection })
     </div>
 
     <div class="sov-summary" :class="{ 'one-row': crossSite }">
+      <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">生成代码任务</button>
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
       <slot name="summary-extra" :ids="selectedIds" />
@@ -1637,6 +1640,7 @@ defineExpose({ openLaunch, clearSelection })
       @close="closeLaunch"
     />
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
+    <SourceCodeTasksDrawer v-if="codeTasksOpen" v-model="codeTasksOpen" :sources="rows.filter(row => selectedIds.includes(row.sourceId))" />
     <!-- 1008-04 来源组批量操作弹窗 / 抽屉 -->
     <SourceFlowConfigDrawer
       v-if="flowConfigOpen && flowConfigSource"

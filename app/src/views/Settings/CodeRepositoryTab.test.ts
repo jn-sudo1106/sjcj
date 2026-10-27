@@ -12,6 +12,7 @@ vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   moveCodeRepository: vi.fn(), setDefaultCodeRepository: vi.fn(), verifyCodeRepository: vi.fn(), uploadCodeRepositoryFiles: vi.fn(),
   codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(), deleteCodeRepositoryFile: vi.fn(),
   codeRepositoryDirectories: vi.fn(), saveCodeRepositoryDirectory: vi.fn(), removeCodeRepositoryDirectory: vi.fn(),
+  codeRepositoryFileReferences: vi.fn(),
 } }))
 const generic: CodeRepository = {
   repoId: 'repo-default', name: '默认仓库', configType: '', configTypeName: '', uploadDirectory: 'default', path: 'E:\\ce\\site-scripts',
@@ -22,6 +23,7 @@ const web: CodeRepository = {
   remoteUrl: 'https://git.example.com/code-web.git', isDefault: false, codeCount: 1,
 }
 const stubs = {
+  RouterLink: { props: ['to'], template: '<a><slot /></a>' },
   ElButton: { props: ['disabled'], template: '<button type="button" :disabled="disabled"><slot /></button>' },
   ElDropdown: { template: '<div><slot /><slot name="dropdown" /></div>' },
   ElDropdownMenu: { template: '<div><slot /></div>' },
@@ -47,6 +49,18 @@ async function mountTab() {
   await flushPromises()
   return wrapper
 }
+it('受保护文件可以查看引用，操作不会误触文件预览', async () => {
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default',
+    total: 1, page: 1, pageSize: 50, items: [{ path: 'download/client.py', kind: 'file', size: 10, managed: true, canDelete: false, gitUrl: '' }] })
+  vi.mocked(runnerManagementApi.codeRepositoryFileReferences).mockResolvedValue({ repoId: generic.repoId, repoName: generic.name,
+    path: 'download/client.py', protectionReasons: ['代码版本引用'], items: [] })
+  const wrapper = await mountTab()
+  await wrapper.get('[data-testid="code-repo-references-download/client.py"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFileReferences).toHaveBeenCalledWith(generic.repoId, 'download/client.py')
+  expect(runnerManagementApi.codeRepositoryFileContent).not.toHaveBeenCalled()
+  expect(wrapper.text()).toContain('代码版本引用')
+  wrapper.unmount()
+})
 it('从运行版本跳转时直接选择指定仓库，并可再次切换目标仓库', async () => {
   const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: 'repo-web' }, global: { stubs, directives: { loading: {} } } })
   await flushPromises()

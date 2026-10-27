@@ -1,6 +1,20 @@
 import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './auth'
 import { streamModelInterfaceTest } from './modelInterfaceStream'
 
+export interface NodeGenerationSettings {
+  configId: string
+  enabled: boolean
+  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue' }
+}
+export interface SourceCodeTask {
+  taskId: string; sourceId: string; sourceName: string; flowId: string; configId: string; nodeName: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'; createdAt: string; startedAt: string; finishedAt: string; message: string; archiveId: string; gitCommit: string
+}
+export interface SourceGenerationSnapshot {
+  sourceId: string; name: string; url: string; flowId: string
+  nodes: { configId?: string; name: string; isRoot?: boolean; enabled: boolean }[]
+}
+
 export interface RunnerWorkerProcess {
   assignmentId: string
   queue: string
@@ -492,6 +506,22 @@ export interface ModelInterface {
   outputFileDir: string
   stream: boolean
 }
+export interface RepositoryFileReference {
+  kind: 'node' | 'version' | 'deployment' | 'generation'; scope: 'current' | 'history'
+  configId: string; codeId?: string; queueName: string; deploymentId?: string; name?: string
+  gitCommit?: string; digest?: string; publishedAt?: string; isLatest?: boolean; environments?: string[]; machineBindingCount?: number
+  targetPaths?: string[]; sourceNodes: DeploymentSourceNode[]
+  archiveId?: string; archiveStatus?: 'pending' | 'failed' | 'committed'
+}
+export interface GeneratedCodeArchive {
+  archiveId: string; status: 'pending' | 'failed' | 'committed'; message: string
+  configId: string; repoId: string; directoryId: string; directoryPath: string; taskId: string; serverId: string
+  createdAt: string; gitCommit: string; pushed: boolean
+  files: { path: string; relativePath: string; sha256: string; size: number }[]
+}
+export interface RepositoryFileReferences {
+  repoId: string; repoName: string; path: string; protectionReasons: string[]; items: RepositoryFileReference[]
+}
 export interface ModelInterfaceSettings { items: ModelInterface[]; revision: number }
 export interface CodeGenerationServer {
   serverId: string; name: string; endpoint: string; workspace: string; installDirectory: string
@@ -513,6 +543,13 @@ export interface ModelInterfaceTestResult {
 }
 
 export const runnerManagementApi = {
+  generatedCodeState: (configId: string) => request<{ autoCommit: boolean; archive: GeneratedCodeArchive | null }>(`/site-scripts/generation-state?configId=${encodeURIComponent(configId)}`),
+  nodeGenerationSettings: (configId: string) => request<NodeGenerationSettings>(`/site-scripts/task-config?configId=${encodeURIComponent(configId)}`),
+  saveNodeGenerationSettings: (body: Pick<NodeGenerationSettings, 'configId'> & Partial<Omit<NodeGenerationSettings, 'configId'>>) => request<NodeGenerationSettings>('/site-scripts/task-config', 'POST', body),
+  sourceCodeTasks: () => request<SourceCodeTask[]>('/source-code-tasks'),
+  createSourceCodeTasks: (sources: SourceGenerationSnapshot[]) => request<{ created: SourceCodeTask[]; skipped: { sourceId: string; name: string; reason: string }[] }>('/source-code-tasks', 'POST', { sources }),
+  saveGenerationPreference: (configId: string, autoCommit: boolean) => request<{ autoCommit: boolean }>('/site-scripts/generation-settings', 'POST', { configId, autoCommit }),
+  commitGeneratedCode: (archiveId: string) => request<GeneratedCodeArchive>(`/site-scripts/generated-results/${encodeURIComponent(archiveId)}/commit`, 'POST', {}),
   codeGenerationServers: () => request<{ items: CodeGenerationServer[] }>('/code-servers'),
   codeServerEnrollmentCode: () => request<{ code: string; expiresAt: string }>('/code-servers/enrollment-code', 'POST', {}),
   codeServerPackageInfo: () => request<{ platform: string }>('/code-servers/package'),
@@ -586,6 +623,7 @@ export const runnerManagementApi = {
     request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}${folder !== undefined ? '&view=directory&folder=' + encodeURIComponent(folder) : ''}`),
   codeRepositoryFileContent: (repoId: string, path: string) =>
     request<CodeRepositoryFileContent>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/content?path=${encodeURIComponent(path)}`),
+  codeRepositoryFileReferences: (repoId: string, path: string) => request<RepositoryFileReferences>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/references?path=${encodeURIComponent(path)}`),
   codeRepositoryFileMetadata: (repoId: string, path: string, commit?: string) =>
     request<CodeRepositoryFileMetadata>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/metadata?path=${encodeURIComponent(path)}${commit ? '&commit=' + encodeURIComponent(commit) : ''}`),
   deleteCodeRepositoryFile: (repoId: string, path: string) =>

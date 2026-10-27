@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useDictStore } from '@/stores/dict'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type CodeRepositoryInput, type CodeRepositoryVerification } from '@/api/runnerManagement'
 import RepositoryDirectoriesPanel from './RepositoryDirectoriesPanel.vue'
+import RepositoryFileReferencesDrawer from './RepositoryFileReferencesDrawer.vue'
 
 const props = defineProps<{ repositoryId?: string; repositoryFilePath?: string; repositoryDirectoryId?: string }>()
 
@@ -47,6 +48,7 @@ const deletingPath = ref('')
 const previewPath = ref('')
 const previewContent = ref('')
 const previewOpen = ref(false)
+const referencesDrawer = ref<InstanceType<typeof RepositoryFileReferencesDrawer>>()
 const previewLoading = ref(false)
 const previewError = ref('')
 let previewRequestId = 0
@@ -447,7 +449,7 @@ onMounted(() => { void load() })
                   <td class="crp-file-path" :title="row.path"><button type="button" class="crp-file-link" :data-testid="`code-repo-preview-${row.path}`" @click.stop="openFileRow(row)"><el-icon v-if="fileView === 'directory'" :class="{ 'crp-folder-icon': row.kind === 'directory' }"><Folder v-if="row.kind === 'directory'" /><Document v-else /></el-icon>{{ fileView === 'directory' ? row.path.split('/').at(-1) : row.path }}</button></td>
                   <td>{{ row.size === null ? '—' : `${row.size} B` }}</td>
                   <td>{{ row.kind === 'directory' ? '文件夹' : row.managed ? '流程代码' : '普通文件' }}</td>
-                  <td><el-button v-if="row.kind === 'directory'" link type="primary" @click.stop="openFileRow(row)">打开</el-button><el-button v-else-if="canWrite && row.canDelete" link type="danger" :loading="deletingPath === row.path" :data-testid="`code-repo-delete-${row.path}`" @click.stop="deleteFile(row)">删除</el-button><span v-else class="crp-muted">{{ row.managed ? '受保护' : '不可删除' }}</span></td>
+                  <td><el-button v-if="row.kind === 'directory'" link type="primary" @click.stop="openFileRow(row)">打开</el-button><template v-else><el-button link type="primary" :data-testid="`code-repo-references-${row.path}`" @click.stop="referencesDrawer?.open(filesRepo!.repoId, row.path)">查看引用</el-button><el-button v-if="canWrite && row.canDelete" link type="danger" :loading="deletingPath === row.path" :data-testid="`code-repo-delete-${row.path}`" @click.stop="deleteFile(row)">删除</el-button><span v-else class="crp-muted">{{ row.managed ? '受保护' : '不可删除' }}</span></template></td>
                 </tr>
                 <tr v-if="!fileLoading && !fileRows.length"><td colspan="4">暂无匹配文件</td></tr>
               </tbody>
@@ -479,6 +481,7 @@ onMounted(() => { void load() })
         <pre v-else class="crp-preview-code">{{ previewContent }}</pre>
       </div>
     </el-drawer>
+    <RepositoryFileReferencesDrawer ref="referencesDrawer" />
   </div>
 </template>
 

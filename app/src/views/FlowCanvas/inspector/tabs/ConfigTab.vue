@@ -22,6 +22,7 @@ import EditNodeSourceDialog from '../EditNodeSourceDialog.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { taskUrlFieldsApply, taskUrlSourceMissing, type TaskUrlScope } from '@/utils/flow/stepPersist'
 import { useSourceStore } from '@/stores/source'
+import CodeGenerationSwitch from '../CodeGenerationSwitch.vue'
 
 // 参数源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
 // 该弹窗保存走 sourceApi.sourceUpdate 落库，再 patchSource/patchSourceCtx 写回，
@@ -350,6 +351,7 @@ watch(
 </script>
 
 <template>
+  <CodeGenerationSwitch v-if="flow.isFirstMainNodeId(id)" :key="cfg?.configId" :config-id="cfg?.configId" />
   <!-- 节点配置：单屏纵向分组，无步进器 / 无子 Tab（0706 调整4） -->
   <!-- 节点名称不属于配置，底部「保存配置」不管它（0824-11 §1.2b）。
        采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
