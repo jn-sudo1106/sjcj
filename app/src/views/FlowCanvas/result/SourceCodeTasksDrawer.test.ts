@@ -39,3 +39,15 @@ it('未选择源仍可查看后台任务，但不能创建', async () => {
   expect(runnerManagementApi.sourceCodeTasks).toHaveBeenCalledOnce()
   w.unmount()
 })
+
+it('可以切换至独立 MQ 入口，原 AI 创建按钮不混入 MQ 表单', async () => {
+  const w = mountDrawer(); await flushPromises()
+  await w.find('[aria-label="任务方式"]').setValue('mq'); await flushPromises()
+  expect(w.text()).toContain('默认队列（201 配置 TOPIC）')
+  expect(w.text()).toContain('201 派发配置 ID')
+  expect(w.findAll('button').some(button => button.text().includes('为选中源'))).toBe(false)
+  expect(runnerManagementApi.createSourceCodeTasks).not.toHaveBeenCalled()
+  await w.find('[aria-label="任务方式"]').setValue('ai'); await flushPromises()
+  expect(w.findAll('button').some(button => button.text().includes('为选中源'))).toBe(true)
+  w.unmount()
+})

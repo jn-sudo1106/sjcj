@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
+import SourceMqCodeTasks from './SourceMqCodeTasks.vue'
 import { ElMessage } from 'element-plus'
 import { sourceApi, flowCenterApi, type Source } from '@/api'
 import { runnerManagementApi, type SourceCodeTask, type SourceGenerationSnapshot } from '@/api/runnerManagement'
 const open = defineModel<boolean>({ required: true })
+const mode = ref('ai')
 const props = defineProps<{ sources: Source[] }>()
 const rows = ref<SourceCodeTask[]>([]), error = ref(''), creating = ref(false), loading = ref(false)
 const skipped = ref<{ sourceId: string; name: string; reason: string }[]>([])
@@ -18,7 +20,7 @@ async function refresh() {
     if (seq === request) {
       loading.value = false
       if (timer) clearTimeout(timer)
-      if (open.value) timer = setTimeout(() => void refresh(), 4000)
+      if (open.value && mode.value === 'ai') timer = setTimeout(() => void refresh(), 4000)
     }
   }
 }
@@ -50,12 +52,17 @@ async function create() {
   } catch (e) { error.value = e instanceof Error ? e.message : String(e); skipped.value = failures }
   finally { creating.value = false }
 }
-watch(open, value => { if (timer) clearTimeout(timer); if (value) void refresh(); else { request++; loading.value = false } }, { immediate: true })
+watch([open, mode], ([value, kind]) => { if (timer) clearTimeout(timer); request++; loading.value = false; if (value && kind === 'ai') void refresh() }, { immediate: true })
 onBeforeUnmount(() => { request++; if (timer) clearTimeout(timer) })
 const time = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
 </script>
 <template>
   <el-drawer v-model="open" title="代码生成任务" size="min(1000px, 96vw)" append-to-body destroy-on-close>
+    <label class="generation-mode">任务方式
+      <select v-model="mode" aria-label="任务方式" :disabled="creating"><option value="ai">AI 生成任务</option><option value="mq">MQ 代码任务</option></select>
+    </label>
+    <SourceMqCodeTasks v-if="mode === 'mq'" :sources="sources" />
+    <template v-else>
     <div class="generation-toolbar"><span>已选择 {{ sources.length }} 个源</span><el-button type="primary" :loading="creating" :disabled="!sources.length || sources.length > 200" @click="create">为选中源创建任务</el-button><el-button :loading="loading" @click="refresh">刷新</el-button></div>
     <p class="generation-note">按生效的默认流程检查首个配置节点。需先启用代码生成，并在相应节点 AI 工作区保存生成配置。任务提交后在后台执行。</p>
     <p v-if="sources.length > 200" role="alert">每次最多选择 200 个源。</p>
@@ -69,6 +76,7 @@ const time = (value: string) => value ? new Date(value).toLocaleString('zh-CN', 
       <el-table-column label="结果" min-width="180"><template #default="{ row }"><span>{{ row.message || '等待执行' }}</span><div v-if="row.gitCommit">Git {{ row.gitCommit.slice(0, 12) }}</div><small :title="row.taskId">任务 {{ row.taskId.slice(0, 12) }}</small></template></el-table-column>
     </el-table>
     <p class="generation-note">展示最近 200 条任务；相同源、流程和配置的待处理任务不会重复创建。</p>
+    </template>
   </el-drawer>
 </template>
-<style scoped>.generation-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; } .generation-note, small { color: var(--rc-muted); font-size: 12px; line-height: 1.6; } details { margin: 12px 0; font-size: 12px; } details p { margin: 5px 0; } strong { font-weight: 500; }</style>
+<style scoped>.generation-mode { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; } select { padding: 6px 10px; color: var(--el-text-color-primary); background: var(--el-bg-color); border: 1px solid var(--el-border-color); border-radius: 4px; } .generation-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; } .generation-note, small { color: var(--rc-muted); font-size: 12px; line-height: 1.6; } details { margin: 12px 0; font-size: 12px; } details p { margin: 5px 0; } strong { font-weight: 500; }</style>

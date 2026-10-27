@@ -3,7 +3,7 @@ import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, 
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
 import type {
-  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
+  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload, SendCodeConfigPayload, SendCodeConfigResult,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   CkSourcePayload, CkSourceRecord, CkSourcePage,
@@ -847,6 +847,20 @@ export const sourceApi = {
         ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
     }).then(snatchAckFrom),
+  /** 独立 MQ 代码生成；configId 为 201 派发配置，queue 省略时使用该配置的 TOPIC。 */
+  sendCodeConfig: async (payload: SendCodeConfigPayload): Promise<SendCodeConfigResult> => {
+    try {
+      return await request<SendCodeConfigResult>('source/sendCodeConfig', { ...payload }, {
+        method: 'POST', httpEndpoint: 'source/sendCodeConfig', mode: 'http',
+      })
+    } catch (error) {
+      // 后端部分失败仍携带真实任务回执，让界面保留已派发的任务 ID 和逐项错误。
+      const cause = error instanceof ApiError ? error.cause as { payload?: { data?: SendCodeConfigResult } } | undefined : undefined
+      const receipt = cause?.payload?.data
+      if (receipt && receipt.failCnt > 0 && Array.isArray(receipt.tasks) && Array.isArray(receipt.taskIds)) return receipt
+      throw error
+    }
+  },
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
