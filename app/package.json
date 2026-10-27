@@ -22,7 +22,7 @@
     "dompurify": "^3.4.17",
     "element-plus": "^2.14.2",
     "front-ce": "file:..",
-    "marked": "^18.1.1",
+    "marked": "^18.1.2",
     "md5": "^2.3.0",
     "pinia": "^3.0.4",
     "pinyin-pro": "^3.28.2",
