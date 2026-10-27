@@ -63,11 +63,11 @@ function nodeCodeTargets(nodeId = selectedNodeId.value) {
 function dataCodeTargets() {
   if (execMode.value === 'fetch') return nodeCodeTargets()
   const flowId = canvasFlowIdOf(flow)
-  const stepIds = isCurrentNodeAction.value ? [selectedNodeId.value] : successorIds.value
-  if (!stepIds.length) throw new Error('当前节点没有可生成代码的后续步骤')
-  return stepIds.flatMap(stepId => codeTargetsForRows(rows.value, selectedRowIds.value, selectedTable.value, sourceId.value, {
-    flowId, ver: flowVersion.flowId === flowId && !flowVersion.published ? flowVersion.viewVersionId : null, stepId,
-  }))
+  if (!stepIdOfNode(selectedNodeId.value)) throw new Error('请先保存当前步骤，再选择后续步骤生成代码')
+  return codeTargetsForRows(rows.value, selectedRowIds.value, selectedTable.value, sourceId.value, {
+    flowId, ver: flowVersion.flowId === flowId && !flowVersion.published ? flowVersion.viewVersionId : null,
+    ...(isCurrentNodeAction.value ? { stepId: stepIdOfNode(selectedNodeId.value) } : {}),
+  }).map(target => ({ ...target, ...(!isCurrentNodeAction.value ? { fromStepId: stepIdOfNode(selectedNodeId.value) } : {}) }))
 }
 
 const source = computed(() => flow.sourceCtx)
@@ -1811,7 +1811,7 @@ async function onTestScript() {
               :title="execDisabledReason"
               @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
             >{{ actionBtnText }}</button>
-            <CodeConfigButton v-if="execMode !== 'upstream'" data-testid="data-code-btn" :build-targets="dataCodeTargets" :disabled="execMode !== 'fetch' && !selectedRowIds.length" label="代码生成" />
+            <CodeConfigButton v-if="execMode !== 'upstream'" data-testid="data-code-btn" :build-targets="dataCodeTargets" :select-step="execMode !== 'fetch' && !isCurrentNodeAction" :node-configs="flow.configs" :disabled="execMode !== 'fetch' && !selectedRowIds.length" label="代码生成" />
             <el-dropdown
               v-if="execMode === 'input' && canPickRows"
               trigger="click"
@@ -2122,7 +2122,7 @@ async function onTestScript() {
         data-testid="rail-menu-send-fetch"
         @click="sendFetchForNode(nodeMenu.nodeId)"
       >发起抓取</button>
-      <CodeConfigButton data-testid="rail-menu-code" :build-targets="() => nodeCodeTargets(nodeMenu.nodeId)" label="代码生成" />
+      <CodeConfigButton data-testid="rail-menu-code" :build-targets="() => nodeCodeTargets(nodeMenu.nodeId)" :node-configs="flow.configs" label="代码生成" />
       <button
         type="button"
         data-testid="rail-menu-toggle-skip"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { withNodeOrchestration } from '@/utils/flow/codeConfigSteps'
 import type { CodeConfigTarget } from '@/utils/flow/codeConfigTargets'
 import { sourceApi, flowCenterApi, type Source, type CodeConfigOption } from '@/api'
 const props = withDefaults(defineProps<{ sources?: Source[]; targets?: CodeConfigTarget[] }>(), { sources: () => [], targets: () => [] })
@@ -34,6 +35,7 @@ async function send() {
   const batch = targets.value.map(target => ({ ...target, ...(target.entryIds ? { entryIds: [...target.entryIds] } : {}) }))
   sending.value = true; emit('busy', true); receipts.value = []
   const flows = new Map<string, Awaited<ReturnType<typeof flowCenterApi.steps>>>()
+  const definitions = new Map<string, Awaited<ReturnType<typeof flowCenterApi.detail>>>()
   try {
     for (const selected of batch) {
       try {
@@ -51,7 +53,13 @@ async function send() {
           stepId = root.stepId
         }
         if (selected.entryIds?.length && (!selected.entryTypeId || selected.entryTypeId <= 0)) throw new Error('数据代码生成必须指定有效的入参表')
-        const target = { ...selected }; delete target.name
+        if (selected.entryIds?.length && !stepId) throw new Error('请选择一个目标后续步骤再生成代码')
+        const target = { ...selected }; delete target.name; delete target.fromStepId
+        if (target.orchestration === undefined && stepId) {
+          if (!definitions.has(flowId)) definitions.set(flowId, await flowCenterApi.detail(flowId, { backendScope: 'default' }))
+          const resolved = withNodeOrchestration({ ...target, stepId }, definitions.get(flowId)?.definition.configs)
+          if (resolved.orchestration !== undefined) target.orchestration = resolved.orchestration
+        }
         const result = await sourceApi.sendCodeConfig({ ...target, sourceId: source.sourceId, flowId, ...(stepId ? { stepId } : {}), ...options })
         const errors = result.tasks.flatMap(task => task.errors).filter(Boolean)
         receipts.value.push({ sourceId: source.sourceId, name: source.name || selected.name || source.sourceId, failed: result.failCnt > 0,
@@ -66,7 +74,7 @@ async function send() {
 <template>
   <div class="mq-code-tasks">
     <p v-if="!props.targets.length" class="note">为选中源生效默认流程的 ROOT 步骤派发 MQ 代码生成任务。</p>
-    <p v-else class="note">将为以下目标生成代码；带数据时，未指定步骤的目标由后端按入参表选择匹配的后续步骤。</p>
+    <p v-else class="note">将为以下目标生成代码；数据级生成只使用已选择的目标步骤和勾选数据。</p>
     <ul v-if="props.targets.length" aria-label="代码生成目标"><li v-for="(target, index) in targets" :key="index">源 {{ target.sourceId }} · {{ target.flowId ? `流程 ${target.flowId}` : '生效默认流程' }} · {{ target.stepId ? `步骤 ${target.stepId}` : target.entryIds?.length ? '匹配的后续步骤' : 'ROOT 步骤' }}<span v-if="target.entryIds?.length"> · 表 {{ target.entryTypeId }} · {{ target.entryIds.length }} 条数据</span><span v-if="target.ver"> · 版本 {{ target.ver }}</span></li></ul>
     <fieldset :disabled="sending || configsLoading">
       <label>派发配置（201）<select v-model="configId" aria-label="201 派发配置 ID">

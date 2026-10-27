@@ -290,7 +290,7 @@ function srcSnatch() {
           >保存失败，点击重试</button>
         </span>
         <button class="rc-btn primary" type="button" :disabled="!canStartPublishedFlow" :title="!isPrimaryFlow ? '辅助/补数据流程不能从正常抓取入口启动' : src?.workflowVersionStatus === 'DRAFT' ? '草稿发布后才能作为新的运行版本发起抓取' : ''" @click="srcSnatch">发起抓取</button>
-        <CodeConfigButton data-testid="source-capture-code" :build-targets="captureCodeTargets" label="代码生成" />
+        <CodeConfigButton data-testid="source-capture-code" :build-targets="captureCodeTargets" :node-configs="flow.configs" label="代码生成" />
       </div>
     </div>
 

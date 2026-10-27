@@ -5,10 +5,11 @@ import ElementPlus from 'element-plus'
 import SourceCodeTasksDrawer from './SourceCodeTasksDrawer.vue'
 import { sourceApi, flowCenterApi, type Source } from '@/api'
 import { runnerManagementApi } from '@/api/runnerManagement'
-vi.mock('@/api', () => ({ sourceApi: { sourceDetail: vi.fn(), codeConfigOptions: vi.fn() }, flowCenterApi: { steps: vi.fn() } }))
+vi.mock('@/api', () => ({ sourceApi: { sourceDetail: vi.fn(), codeConfigOptions: vi.fn() }, flowCenterApi: { steps: vi.fn(), detail: vi.fn() } }))
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { sourceCodeTasks: vi.fn(), createSourceCodeTasks: vi.fn() } }))
 const source = { sourceId: '123', name: '网站新闻', flowId: '55', url: 'https://example.net' } as Source
 beforeEach(() => {
+  vi.mocked(flowCenterApi.detail).mockResolvedValue(null)
   vi.mocked(sourceApi.codeConfigOptions).mockResolvedValue([
     { configId: '900', name: '默认代码生成', topic: 'code-default', entryTypeId: 13 },
     { configId: '9223372036854775806', name: '专用代码生成', topic: 'code-extra', entryTypeId: 14 },
