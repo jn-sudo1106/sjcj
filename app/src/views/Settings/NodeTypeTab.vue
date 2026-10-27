@@ -19,15 +19,40 @@ const canWrite = computed(() => auth.role === 'admin')
 
 // ---- 列表 ----
 const keyword = ref('')
+const groupFilter = ref('')
+const groupOptions = ref<string[]>([])
+const groupsLoading = ref(false)
+const groupsFailed = ref(false)
+let groupsSeq = 0
+
+async function loadGroups() {
+  const id = ++groupsSeq
+  groupsLoading.value = true
+  try {
+    const options = await configApi.nodeTypeGroups()
+    if (id === groupsSeq) {
+      groupOptions.value = options
+      groupsFailed.value = false
+    }
+  } catch (e) {
+    if (id !== groupsSeq) return
+    groupOptions.value = []
+    groupsFailed.value = true
+    ElMessage.error(`加载分组类型失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    if (id === groupsSeq) groupsLoading.value = false
+  }
+}
 const list = ref<NodeType[]>([])
 const loading = ref(false)
 let seq = 0
 
 async function load() {
+  void loadGroups()
   const id = ++seq
   loading.value = true
   try {
-    const rows = await configApi.nodeTypeList(keyword.value)
+    const rows = await configApi.nodeTypeList(keyword.value, groupFilter.value)
     if (id === seq) list.value = rows
   } catch (e) {
     if (id !== seq) return
@@ -39,6 +64,7 @@ async function load() {
 }
 function onReset() {
   keyword.value = ''
+  groupFilter.value = ''
   void load()
 }
 onMounted(load)
@@ -58,6 +84,7 @@ async function changeDetailTab(tab: string | number) { return tab === detailTab.
 const DETAIL_FIELDS: { key: keyof NodeType; label: string }[] = [
   { key: 'sourceType', label: '类型 ID' },
   { key: 'typeName', label: '类型名称' },
+  { key: 'typeGroup', label: '分组类型' },
   { key: 'downType', label: '配置队列' },
   { key: 'topic', label: '默认消息队列' },
   { key: 'seq', label: '排序' },
@@ -102,22 +129,25 @@ const saving = ref(false)
 // → 类型ID / 类型名称 / 配置队列 / 默认消息队列 / 备注 / 排序 / 处理类型 / 参数(JSON)。
 // 最后两项（procType、params）是 2026-10-16 补的，之前漏迁。
 const form = reactive({
-  sourceType: '', typeName: '', downType: '', topic: '', seq: null as number | null,
+  sourceType: '', typeName: '', typeGroup: '', downType: '', topic: '', seq: null as number | null,
   notes: '', procType: '', params: '',
 })
 
 function openCreate() {
+  void loadGroups()
   editing.value = null
   Object.assign(form, {
-    sourceType: '', typeName: '', downType: 'source-config', topic: '', seq: null,
+    sourceType: '', typeName: '', typeGroup: '', downType: 'source-config', topic: '', seq: null,
     notes: '', procType: '', params: '',
   })
   editVisible.value = true
 }
 function openEdit(row: NodeType) {
+  void loadGroups()
   editing.value = row
   Object.assign(form, {
     sourceType: row.sourceType, typeName: row.typeName, downType: row.downType, topic: row.topic,
+    typeGroup: row.typeGroup ?? '',
     seq: row.seq, notes: row.notes, procType: row.procType, params: row.params,
   })
   editVisible.value = true
@@ -127,6 +157,7 @@ function openEdit(row: NodeType) {
 function changedFields(before: NodeType): NodeTypeInput {
   const patch: NodeTypeInput = {}
   if (form.typeName.trim() !== before.typeName) patch.typeName = form.typeName.trim()
+  if (form.typeGroup.trim() !== (before.typeGroup ?? '')) patch.typeGroup = form.typeGroup.trim()
   if (form.downType.trim() !== before.downType) patch.downType = form.downType.trim()
   if (form.topic.trim() !== before.topic) patch.topic = form.topic.trim()
   if (form.seq !== before.seq) patch.seq = form.seq
@@ -154,6 +185,11 @@ async function save() {
     ElMessage.warning('类型 ID 只能是数字，不填由系统自动分配')
     return
   }
+  const typeGroup = form.typeGroup.trim()
+  if (typeGroup && typeGroup !== (editing.value?.typeGroup ?? '') && !groupOptions.value.includes(typeGroup)) {
+    ElMessage.warning('请选择已配置的分组类型')
+    return
+  }
   saving.value = true
   try {
     if (editing.value) {
@@ -168,6 +204,7 @@ async function save() {
       const ack = await configApi.nodeTypeAdd({
         sourceType: form.sourceType.trim() || undefined,
         typeName,
+        typeGroup: form.typeGroup.trim() || undefined,
         downType: form.downType.trim() || undefined,
         topic: form.topic.trim() || undefined,
         seq: form.seq ?? undefined,
@@ -194,6 +231,9 @@ async function save() {
   <div class="rc-card nt-main" data-testid="settings-node-type">
     <div class="rc-toolbar wrap">
       <el-input v-model="keyword" clearable placeholder="类型名称" style="width: 220px" data-testid="node-type-keyword" @keyup.enter="load" @clear="load" />
+      <el-select v-model="groupFilter" clearable filterable :value-on-clear="''" :loading="groupsLoading" :disabled="groupsFailed" placeholder="分组类型" style="width: 200px" data-testid="node-type-group-filter" @change="load">
+        <el-option v-for="group in groupOptions" :key="group" :label="group" :value="group" />
+      </el-select>
       <button class="rc-btn" type="button" @click="load">查询</button>
       <button class="rc-btn" type="button" @click="onReset">重置</button>
       <span class="nt-spacer" />
@@ -207,6 +247,7 @@ async function save() {
           <tr>
             <th style="width: 90px">类型 ID</th>
             <th style="width: 160px">类型名称</th>
+            <th style="width: 110px">分组类型</th>
             <th style="width: 180px">配置队列</th>
             <th style="width: 160px">默认消息队列</th>
             <th style="width: 70px">排序</th>
@@ -218,6 +259,7 @@ async function save() {
           <tr v-for="t in list" :key="t.sourceType" data-testid="node-type-row">
             <td>{{ t.sourceType }}</td>
             <td>{{ t.typeName || '—' }}</td>
+            <td>{{ t.typeGroup || '未分组' }}</td>
             <td>{{ t.downType || '—' }}</td>
             <td>{{ t.topic || '—' }}</td>
             <td>{{ t.seq ?? '—' }}</td>
@@ -230,7 +272,7 @@ async function save() {
             </td>
           </tr>
           <tr v-if="!loading && !list.length">
-            <td colspan="7" class="nt-empty">{{ keyword.trim() ? '没有匹配的节点类型' : '暂无节点类型' }}</td>
+            <td colspan="8" class="nt-empty">{{ keyword.trim() || groupFilter.trim() ? '没有匹配的节点类型' : '暂无节点类型' }}</td>
           </tr>
         </tbody>
       </table>
@@ -260,6 +302,12 @@ async function save() {
         <el-form-item label="类型名称" required>
           <el-input v-model="form.typeName" maxlength="50" placeholder="如：网页抓取" />
         </el-form-item>
+        <el-form-item label="分组类型">
+          <el-select v-model="form.typeGroup" clearable filterable :value-on-clear="''" :loading="groupsLoading" :disabled="groupsLoading || groupsFailed" placeholder="请选择分组，可留空" style="width: 100%" data-testid="node-type-group-edit">
+            <el-option v-if="form.typeGroup && !groupOptions.includes(form.typeGroup)" :label="`${form.typeGroup}（已移出可选项）`" :value="form.typeGroup" disabled />
+            <el-option v-for="group in groupOptions" :key="group" :label="group" :value="group" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="配置队列">
           <el-input v-model="form.downType" placeholder="如：source-config" />
         </el-form-item>
@@ -277,7 +325,7 @@ async function save() {
              旧版这两列都是普通文本输入（params 的 type 是 textArea，不是 json），
              所以这里同样不做 JSON 校验——旧 BaseEdit 只对 type==='json' 的列校验并压缩。 -->
         <el-form-item label="处理类型">
-          <el-input v-model="form.procType" placeholder="如：200" />
+          <el-input v-model="form.procType" placeholder="如：200" data-testid="node-type-proc-edit" />
         </el-form-item>
         <el-form-item label="参数(JSON)">
           <el-input v-model="form.params" type="textarea" :rows="4" placeholder="参数 JSON，可不填" />

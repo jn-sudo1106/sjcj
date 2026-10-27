@@ -152,7 +152,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 节点类型维护（0924-04，系统设置 → 节点类型；旧平台「配置 → 源类型」）。2026-09-24 生产逐个实测：
   // 读接口不分页；add/update 是 JSON body，update 为增量更新；临时类型 99901 新增→修改→删除闭环已清理。
   // sourceType/delete：2026-10-14 在 186 实测被配置引用时后端拒绝（连软删除的配置也算），可安全接入。
-  { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊，不分页）', impl: true, live: true },
+  { path: 'sourceType/typeGroups', desc: '节点类型分组可选项（sys_config.source_type_group）', impl: true, live: false },
+  { path: 'sourceType/list', desc: '节点类型列表（typeName 模糊、typeGroup 精确，不分页）', impl: true, live: true },
   { path: 'sourceType/detail', desc: '节点类型详情', impl: true, live: true },
   { path: 'sourceType/add', desc: '新增节点类型（sourceType 可不填，后端取 max+1）', danger: true, impl: true, live: true },
   { path: 'sourceType/update', desc: '修改节点类型（增量更新）', danger: true, impl: true, live: true },

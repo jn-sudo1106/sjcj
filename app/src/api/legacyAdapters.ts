@@ -1313,6 +1313,7 @@ export function nodeTypeFromLegacy(input: unknown): NodeType {
   return {
     sourceType: str(r.sourceType),
     typeName: str(r.typeName),
+    typeGroup: str(r.typeGroup),
     downType: str(r.downType),
     topic: str(r.topic),
     seq: Number.isFinite(seq) ? seq : null,
