@@ -120,6 +120,24 @@ describe('ParamTab 角色权限', () => {
     expect(document.body.textContent).toContain('基金源')
   })
 
+  it.each([false, true])('详情展示创建/更新时间，历史空值显示横线（历史=%s）', async (historical) => {
+    const param: Param = { paramId: 'timestamp-param', name: '时间参数', kind: 'list', values: [],
+      createdAt: historical ? undefined : '2026-10-26 10:00:00', updatedAt: historical ? undefined : '2026-10-26 11:00:00' }
+    const paged = vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 1, list: [param] })
+    const detail = vi.spyOn(paramApi, 'paramDetail').mockResolvedValue(param)
+    try {
+      mountTab()
+      await flushPromises()
+      await wrapper.get('.pt-name').trigger('click')
+      await flushPromises()
+      const fields = new DOMWrapper(document.body).find('.pt-d .rc-kv')
+      expect(fields.text()).toContain('创建时间')
+      expect(fields.text()).toContain('更新时间')
+      expect(fields.findAll('dd').slice(-2).map((dd) => dd.text())).toEqual(historical
+        ? ['—', '—'] : ['2026-10-26 10:00:00', '2026-10-26 11:00:00'])
+    } finally {paged.mockRestore();detail.mockRestore()}
+  })
+
   it('新建参数（onParamSaved）：保存后刷新列表，不再清缓存', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']

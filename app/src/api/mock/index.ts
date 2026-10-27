@@ -266,15 +266,17 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
     { sourceType: '802', typeName: 'PDF转MD' },
   ],
   // 节点类型维护（0924-04）：mock 只给只读数据，写操作走通用 ack
+  'sourceType/typeGroups': () => ['采集类', '规则类'],
   'sourceType/list': (params?: Record<string, unknown>) => {
     const rows = [
-      { sourceType: 90, typeName: '网页抓取', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null },
-      { sourceType: 160, typeName: 'Mail抓取', downType: 'source-config-mail', topic: null, seq: -1, notes: null, procType: '700', params: null },
-      { sourceType: 500, typeName: '资讯抓取', downType: 'source-config', topic: null, seq: 19, notes: '单独的资讯抓取逻辑', procType: null, params: null },
-      { sourceType: 800, typeName: '翻译助手', downType: 'source-config', topic: null, seq: 800, notes: null, procType: null, params: null },
+      { sourceType: 90, typeName: '网页抓取', typeGroup: '采集类', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null },
+      { sourceType: 160, typeName: 'Mail抓取', typeGroup: '采集类', downType: 'source-config-mail', topic: null, seq: -1, notes: null, procType: '700', params: null },
+      { sourceType: 500, typeName: '资讯抓取', typeGroup: null, downType: 'source-config', topic: null, seq: 19, notes: '单独的资讯抓取逻辑', procType: null, params: null },
+      { sourceType: 800, typeName: '翻译助手', typeGroup: '规则类', downType: 'source-config', topic: null, seq: 800, notes: null, procType: null, params: null },
     ]
     const kw = String(params?.typeName ?? '').trim()
-    return kw ? rows.filter((r) => r.typeName.includes(kw)) : rows
+    const group = String(params?.typeGroup ?? '').trim()
+    return rows.filter((r) => (!kw || r.typeName.includes(kw)) && (!group || r.typeGroup === group))
   },
   'sourceType/detail': (params?: Record<string, unknown>) => ({ sourceType: Number(params?.sourceType), typeName: '网页抓取', downType: 'source-config', topic: null, seq: 0, notes: null, procType: '200', params: null }),
   'sourceType/add': mockAck,

@@ -3094,10 +3094,17 @@ export const configApi = {
    * - delete：GET `sourceType/delete?sourceType=`。2026-10-14 在 186 实测：类型被配置引用时后端拒绝
    *   （success:false，msg「该源类型已被配置引用，无法删除」），**软删除的配置也算引用**；没被引用才删得掉。
    */
-  nodeTypeList: async (typeName?: string): Promise<NodeType[]> => {
-    const result = await request<unknown>('sourceType/list', { typeName }, {
+  nodeTypeGroups: async (): Promise<string[]> => {
+    const result = await request<unknown>('sourceType/typeGroups', undefined, { method: 'GET' })
+    if (!Array.isArray(result) || result.some((value) => typeof value !== 'string' || !value.trim())) {
+      throw new Error('分组类型配置格式错误')
+    }
+    return [...new Set((result as string[]).map((value) => value.trim()))]
+  },
+  nodeTypeList: async (typeName?: string, typeGroup?: string): Promise<NodeType[]> => {
+    const result = await request<unknown>('sourceType/list', { typeName, typeGroup }, {
       method: 'GET',
-      httpParams: { typeName: typeName?.trim() || undefined },
+      httpParams: { typeName: typeName?.trim() || undefined, typeGroup: typeGroup?.trim() || undefined },
     })
     const rows = Array.isArray(result) ? result : ((result as { list?: unknown[] } | null)?.list ?? [])
     return rows.map(nodeTypeFromLegacy).filter((t) => t.sourceType)

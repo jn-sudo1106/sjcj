@@ -28,7 +28,8 @@ describe('参数 API 旧平台 HTTP 契约', () => {
       code: 0,
       msg: null,
       count: 1,
-      data: [{ paramId: 8, paramName: '页码', paramType: 'seq', valueDef: '{"start":1,"end":3,"step":1}' }],
+      data: [{ paramId: 8, paramName: '页码', paramType: 'seq', valueDef: '{"start":1,"end":3,"step":1}',
+        createDt: '2026-10-26 10:00:00', updateDt: '2026-10-26 11:00:00' }],
       exts: null,
     }))
     const { paramApi } = await import('./index')
@@ -47,7 +48,7 @@ describe('参数 API 旧平台 HTTP 契约', () => {
     expect(init.method).toBe('GET')
     expect(result).toEqual({
       total: 1,
-      list: [expect.objectContaining({ paramId: '8', name: '页码', kind: 'sequence' })],
+      list: [expect.objectContaining({ paramId: '8', name: '页码', kind: 'sequence', createdAt: '2026-10-26 10:00:00', updatedAt: '2026-10-26 11:00:00' })],
     })
   })
 

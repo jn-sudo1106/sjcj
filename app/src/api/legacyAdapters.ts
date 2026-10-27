@@ -256,6 +256,7 @@ export function paramFromLegacy(input: unknown): Param {
     tableName: record.tableName == null ? undefined : String(record.tableName),
     colName: record.colName == null ? undefined : String(record.colName),
     valueItems: items,
+    createdAt: record.createDt == null ? undefined : String(record.createDt),
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
   }
 }
@@ -1312,6 +1313,7 @@ export function nodeTypeFromLegacy(input: unknown): NodeType {
   return {
     sourceType: str(r.sourceType),
     typeName: str(r.typeName),
+    typeGroup: str(r.typeGroup),
     downType: str(r.downType),
     topic: str(r.topic),
     seq: Number.isFinite(seq) ? seq : null,
