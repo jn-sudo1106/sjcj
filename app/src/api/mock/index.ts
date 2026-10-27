@@ -51,6 +51,7 @@ import {
 import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview } from './groupRes'
+import { mockSysUserList, mockSysUserDetail, mockSysUserAdd, mockSysUserUpdate, mockSysUserStatus, mockSysUserPassword } from './sysUser'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
@@ -287,6 +288,13 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'group-res/modify': mockGroupResModify,
   'group-res/delete': mockGroupResDelete,
   'group-res/preview': mockGroupResPreview,
+  // 用户管理（系统设置 → 用户管理，SysUserAdminController）：内存表 SYS_USER + 角色绑定
+  'sys-user/list': mockSysUserList,
+  'sys-user/detail': mockSysUserDetail,
+  'sys-user/add': mockSysUserAdd,
+  'sys-user/update': mockSysUserUpdate,
+  'sys-user/update-status': mockSysUserStatus,
+  'sys-user/change-password': mockSysUserPassword,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。

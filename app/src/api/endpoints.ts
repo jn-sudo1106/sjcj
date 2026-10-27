@@ -776,6 +776,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'group-res/add', desc: '新增数据权限规则（admin；成功即清该组权限缓存）', danger: true, impl: true, live: true },
   { path: 'group-res/modify', desc: '修改数据权限规则（admin；body 必须带 id）', danger: true, impl: true, live: true },
   { path: 'group-res/delete', desc: '删除数据权限规则（admin；ids 在 query，软删 isDelete=1）', danger: true, impl: true, live: true },
+
+  /* ── sys-user 用户管理（收录 6 / SysUserAdminController，系统设置 → 用户管理） ──
+     表 SYS_USER（10 列，本仓无它的 DDL，口径取自 SysUserMapper.xml 的 resultMap）+ SYS_USER_2_ROLE + SYS_ROLE。
+     6 条全部走 ShiroConfiguration 里 "/api/v1/sys-user/** → roles[admin]"：admin 是唯一系统超管，只有他能管用户。
+     只有 list 返回 Paged（code 数字 0），其余返回 RspResult（code 字符串 "0"/"-1"）；出参永不含口令。
+     角色不在本页维护：建号时服务端自动绑一条 read（只读），要 admin 权限由管理员直接改后台数据库。
+     ⚠️ 6 条均未经真实联调（后端 2026-10-27 刚落地，只过了本地 mvn compile），live 沿用 group-res 域的
+     标注惯例：标上后本地 5180 直连 186 才能打到真接口。首次实测后请回写本注释。 */
+  { path: 'sys-user/list', desc: '用户分页（登录名/用户名模糊，组 ID 与状态精确；留空即不过滤）', impl: true, live: true },
+  { path: 'sys-user/detail', desc: '用户详情（含已绑定角色的 ID 与名称回显，不含口令）', impl: true, live: true },
+  { path: 'sys-user/add', desc: '新增用户（admin；初始密码必填，服务端按 {p}+md5(登录名+明文) 落库；组 ID 留空沿用创建人所在组；自动绑 read 角色）', danger: true, impl: true, live: true },
+  { path: 'sys-user/update', desc: '修改用户（admin；只能改用户名与所属组，登录名不可改）', danger: true, impl: true, live: true },
+  { path: 'sys-user/update-status', desc: '启用/停用（admin；停用连带解除该用户全部角色绑定，启用要求该用户已有角色）', danger: true, impl: true, live: true },
+  { path: 'sys-user/change-password', desc: '重置密码（admin；明文入参，内置 admin 账号拒绝）', danger: true, impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */
