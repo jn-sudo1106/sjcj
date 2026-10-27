@@ -20,7 +20,7 @@ import BizDirPickerDialog from './BizDirPickerDialog.vue'
 import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
-import { BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirNode } from '@/api/sourceDirs'
+import { BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirPath } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -464,10 +464,17 @@ const listScopeEmptyText = computed(() => {
 
 // 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
 const bizOf = ref(new Map<string, string[]>())
+const bizMembershipState = ref<'loading' | 'ready' | 'error'>('loading')
 async function loadBizMembership() {
-  try { bizOf.value = await bizMembership() } catch { /* 列显示「—」，不打断列表 */ }
+  bizMembershipState.value = 'loading'
+  try {
+    bizOf.value = await bizMembership()
+    bizMembershipState.value = 'ready'
+  } catch {
+    bizMembershipState.value = 'error'
+  }
 }
-const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirNode(id)?.name ?? `#${id}`)
+const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
 
 // 按目录：发送 = 复用源列表的「发任务」（不勾选 = 按当前筛选范围，已含目录范围）；定时 = 按范围统一定时弹窗
 const overviewRef = ref<InstanceType<typeof SourceOverviewView>>()
@@ -527,8 +534,10 @@ function openSourceGroup(sourceGroupId: string) {
   void router.push({ path: '/collect', query: { tab: 'personal', group: sourceGroupId } })
 }
 function onToolbarRefresh() {
-  if (view.value === 'table') ui.notifySourceListChanged()
-  else void refreshAll()
+  if (view.value === 'table') {
+    if (props.scope === 'all') void loadBizMembership()
+    ui.notifySourceListChanged()
+  } else void refreshAll()
 }
 function setView(v: 'card' | 'table') {
   ui.setAssetView(v)
@@ -748,6 +757,7 @@ onUnmounted(() => {
       :scope-version="dirScopeVersion"
       :scope-empty-text="listScopeEmptyText"
       :extra-column-label="scope === 'all' ? '业务目录' : undefined"
+      :show-original-directory="scope === 'all'"
       :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
       @open-source="openSourceFromList"
@@ -787,8 +797,12 @@ onUnmounted(() => {
         </el-dropdown>
       </template>
       <template v-if="scope === 'all'" #extra-cell="{ source }">
-        <span v-for="name in bizNames(source.sourceId)" :key="name" class="ca-biz-tag">{{ name }}</span>
-        <span v-if="!bizNames(source.sourceId).length" class="ca-muted">—</span>
+        <span v-if="bizMembershipState === 'loading'" class="ca-muted">加载中…</span>
+        <span v-else-if="bizMembershipState === 'error'" class="ca-muted">加载失败</span>
+        <template v-else>
+          <span v-for="name in bizNames(source.sourceId)" :key="name" class="ca-biz-tag" :title="name">{{ name }}</span>
+          <span v-if="!bizNames(source.sourceId).length" class="ca-muted">未归类</span>
+        </template>
       </template>
       <template #filter-extra>
 
@@ -868,7 +882,7 @@ onUnmounted(() => {
 .ca-dir-scope.biz b { color: #7c3aed; }
 .ca-dir-clear { flex: none; width: 18px; height: 18px; margin-left: 4px; border: 0; border-radius: 50%; background: none; padding: 0; color: var(--rc-faint); font-size: 15px; line-height: 18px; cursor: pointer; }
 .ca-dir-clear:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
-.ca-biz-tag { display: inline-block; margin-right: 4px; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
+.ca-biz-tag { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 4px 2px 0; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
 .ca-muted { color: var(--rc-faint); }
 @media (max-width: 900px) {
   .ca-dir-layout.with-dir, .ca-dir-layout.with-dir.collapsed { grid-template-columns: 1fr; }

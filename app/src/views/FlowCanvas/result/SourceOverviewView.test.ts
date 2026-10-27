@@ -25,6 +25,36 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('网站与来源组按服务端组合筛选，切组重置分页 / 勾选；清空查询不解除组范围', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 60, list: [source] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current', scopeSourceGroupId: '3' }, global: { components: { ElPagination } } })
+    await flushPromises()
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:current-page', 2)
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.setProps({ scopeSourceGroupId: '4' })
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ siteIds: 'site-current', sourceGroupId: '4', page: 1 }))
+    expect((wrapper.get('[data-testid="source-check-src-1"]').element as HTMLInputElement).checked).toBe(false)
+    await wrapper.findAll('button').find(button => button.text() === '清空')!.trigger('click')
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ sourceGroupId: '4' }))
+    wrapper.unmount()
+  })
+
+  it('原始目录独立展示系统目录路径，不用业务目录覆盖；缺失时保留目录 ID', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [
+      { ...source, categoryPath: '财经 / 行业 / 原材料', dirId: '100' },
+      { ...source, sourceId: 'b', categoryPath: '', dirId: '101' },
+      { ...source, sourceId: 'c', categoryPath: '', dirId: undefined },
+    ] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', showOriginalDirectory: true, extraColumnLabel: '业务目录' } })
+    await flushPromises()
+    const labels = wrapper.findAll('th').map(th => th.text())
+    expect(labels.indexOf('原始目录')).toBe(labels.indexOf('业务目录') + 1)
+    expect(wrapper.findAll('[data-testid="source-overview-original-directory"]').map(cell => cell.text())).toEqual(['财经 / 行业 / 原材料', '系统目录 #101', '—'])
+    wrapper.unmount()
+  })
+
   it('快捷编辑入口在源名称旁，打开编辑不跳详情；保存后沿用当前筛选和页码刷新', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 40, list: [source] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'], quickEdit: true }, global: { components: { ElPagination } } })
@@ -1747,25 +1777,26 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     return { wrapper, page }
   }
 
-  it('groupOps 时显示来源组 / 默认流程 / 流程配置三列', async () => {
+  it('groupOps 时保留来源组 / 默认流程两列，移除重复的流程配置列', async () => {
     const { wrapper } = await mountGroupOps()
     expect(wrapper.find('[data-testid="source-overview-group-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="source-overview-default-flow"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="source-overview-flow-config"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="source-overview-flow-config"]').exists()).toBe(false)
+    expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('流程配置')
     // 独立源默认流程显示 ID
     expect(wrapper.text()).toContain('14010130')
-    // 未归组显示 —
+    // 未归组有明确标注
     const groupText = wrapper.findAll('.sov-group').map((n) => n.text())
-    expect(groupText.some((t) => t.includes('—'))).toBe(true)
+    expect(groupText.some((t) => t.includes('未分组'))).toBe(true)
     wrapper.unmount()
   })
 
-  it('默认流程列：组内源后缀「来源组」，没有默认流程的源标红「无流程」（1021-02 / 08）', async () => {
+  it('没有默认流程只提示未设置默认流程，不推断为完全没有流程绑定', async () => {
     const { wrapper } = await mountGroupOps([{ ...GROUP_SOURCE, defaultFlowId: '21000006' }, INDEP_SOURCE, { ...INDEP_SOURCE, sourceId: '430024668', defaultFlowId: undefined }])
     const cells = wrapper.findAll('.sov-default-flow')
     expect(cells[0].find('[data-testid="source-overview-default-flow-group"]').exists()).toBe(true)
     expect(cells[1].find('[data-testid="source-overview-default-flow-group"]').exists()).toBe(false)
-    expect(cells[2].get('[data-testid="source-overview-no-flow"]').text()).toBe('无流程')
+    expect(cells[2].get('[data-testid="source-overview-no-flow"]').text()).toBe('未设置默认流程')
     wrapper.unmount()
   })
 
