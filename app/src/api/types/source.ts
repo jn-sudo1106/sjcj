@@ -830,6 +830,8 @@ export interface SendCodeConfigPayload {
   configId?: string
   entryTypeId?: number
   entryIds?: string[]
+  /** 目标节点编排页填写的参数快照，只用于代码生成。 */
+  orchestration?: Record<string, unknown>
   queue?: string
   params?: Record<string, unknown>
   url?: string

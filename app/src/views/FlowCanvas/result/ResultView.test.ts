@@ -2663,6 +2663,7 @@ it('发后续旁的发代码携带当前数据与真实后继步骤，不发送�
   await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['901']); await flushPromises()
   const button = wrapper.findComponent({ name: 'CodeConfigButton' })
   expect(button.props('label')).toBe('代码生成')
-  expect(button.props('buildTargets')()).toEqual([{ sourceId: '7', flowId: '50', stepId: '2', entryTypeId: 11, entryIds: ['901'] }])
+  expect(button.props('selectStep')).toBe(true)
+  expect(button.props('buildTargets')()).toEqual([{ sourceId: '7', flowId: '50', fromStepId: '1', entryTypeId: 11, entryIds: ['901'] }])
   wrapper.unmount(); vi.restoreAllMocks()
 })

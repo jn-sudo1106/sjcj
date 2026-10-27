@@ -4,9 +4,10 @@ import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import SourceMqCodeTasks from './SourceMqCodeTasks.vue'
 import { sourceApi, flowCenterApi, type Source } from '@/api'
-vi.mock('@/api', () => ({ sourceApi: { sourceDetail: vi.fn(), codeConfigOptions: vi.fn(), sendCodeConfig: vi.fn() }, flowCenterApi: { steps: vi.fn() } }))
+vi.mock('@/api', () => ({ sourceApi: { sourceDetail: vi.fn(), codeConfigOptions: vi.fn(), sendCodeConfig: vi.fn() }, flowCenterApi: { steps: vi.fn(), detail: vi.fn() } }))
 const source = { sourceId: '123', name: '网站新闻', flowId: '55', url: 'https://example.net' } as Source
 beforeEach(() => {
+  vi.mocked(flowCenterApi.detail).mockResolvedValue(null)
   vi.mocked(sourceApi.codeConfigOptions).mockResolvedValue([
     { configId: '900', name: '默认代码生成', topic: 'code-default', entryTypeId: 13 },
     { configId: '9223372036854775806', name: '专用代码生成', topic: 'code-extra', entryTypeId: 14 },
@@ -71,10 +72,10 @@ it('指定步骤沿用页面流程与版本，派发配置仍由表单独立填�
 })
 it('跨源数据分别用各源的默认流程与入参表发后续代码，不误发 ROOT', async () => {
   vi.mocked(sourceApi.sourceDetail).mockImplementation(async id => ({ ...source, sourceId: id, defaultFlowId: id === '123' ? '66' : '77' }))
-  const w = mount(SourceMqCodeTasks, { props: { targets: [{ sourceId: '123', entryTypeId: 11, entryIds: ['901'] }, { sourceId: '124', entryTypeId: 11, entryIds: ['902'] }] }, global: { plugins: [ElementPlus] } })
+  const w = mount(SourceMqCodeTasks, { props: { targets: [{ sourceId: '123', stepId: '2', entryTypeId: 11, entryIds: ['901'] }, { sourceId: '124', stepId: '3', entryTypeId: 11, entryIds: ['902'] }] }, global: { plugins: [ElementPlus] } })
   await submit(w)
-  expect(sourceApi.sendCodeConfig).toHaveBeenNthCalledWith(1, { sourceId: '123', flowId: '66', entryTypeId: 11, entryIds: ['901'] })
-  expect(sourceApi.sendCodeConfig).toHaveBeenNthCalledWith(2, { sourceId: '124', flowId: '77', entryTypeId: 11, entryIds: ['902'] })
+  expect(sourceApi.sendCodeConfig).toHaveBeenNthCalledWith(1, { sourceId: '123', flowId: '66', stepId: '2', entryTypeId: 11, entryIds: ['901'] })
+  expect(sourceApi.sendCodeConfig).toHaveBeenNthCalledWith(2, { sourceId: '124', flowId: '77', stepId: '3', entryTypeId: 11, entryIds: ['902'] })
   expect(flowCenterApi.steps).not.toHaveBeenCalled()
   expect(w.emitted('busy')).toEqual([[true], [false]])
   w.unmount()
@@ -133,5 +134,21 @@ it('默认队列未配置时引导指定队列，指定后仍使用所选 201 �
   await w.find('[aria-label="队列名称"]').setValue('manual-code')
   await submit(w)
   expect(sourceApi.sendCodeConfig).toHaveBeenCalledWith({ sourceId: '123', flowId: '66', stepId: '1', configId: '900', queue: 'manual-code' })
+  w.unmount()
+})
+it('没有选择数据目标步骤时不再自动派发所有匹配步骤', async () => {
+  const w = mount(SourceMqCodeTasks, { props: { targets: [{ sourceId: '123', flowId: '77', entryTypeId: 11, entryIds: ['901'] }] }, global: { plugins: [ElementPlus] } })
+  await submit(w)
+  expect(w.text()).toContain('请选择一个目标后续步骤')
+  expect(sourceApi.sendCodeConfig).not.toHaveBeenCalled()
+  w.unmount()
+})
+it('从目标节点读取全部编排参数，去掉仅供步骤选择使用的元数据', async () => {
+  const orchestration = { mode: 'new' as const, describe: '需求', systemPrompt: '系统提示', modelProviderCode: 'vendor', modelCode: 'model', promptTemplateId: 12, structuredConfig: '{"limit":0}', contentRules: '正文规则', scriptPath: '/code/a.py', inputFields: ['html'], outputFields: ['title'], enabled: false }
+  vi.mocked(flowCenterApi.detail).mockResolvedValue({ definition: { configs: { '2': { execCfg: orchestration } } } } as never)
+  const w = mount(SourceMqCodeTasks, { props: { targets: [{ sourceId: '123', flowId: '77', stepId: '2', fromStepId: '1', entryTypeId: 11, entryIds: ['901'] }] }, global: { plugins: [ElementPlus] } })
+  await submit(w)
+  expect(sourceApi.sendCodeConfig).toHaveBeenCalledWith({ sourceId: '123', flowId: '77', stepId: '2', entryTypeId: 11, entryIds: ['901'], orchestration })
+  expect(flowCenterApi.detail).toHaveBeenCalledWith('77', { backendScope: 'default' })
   w.unmount()
 })

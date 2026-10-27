@@ -1304,7 +1304,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
             :title="launchDisabledReason"
             @click="onSendNextStep"
           >发后续任务</button>
-          <CodeConfigButton v-if="canPickRows" data-testid="site-data-code-btn" :build-targets="() => codeTargetsForRows(rows, selectedRowIds, effectiveTableId, selectedSourceId)" :disabled="!selectedRowIds.length" label="代码生成" />
+          <CodeConfigButton v-if="canPickRows" data-testid="site-data-code-btn" select-step :build-targets="() => codeTargetsForRows(rows, selectedRowIds, effectiveTableId, selectedSourceId).map(target => ({ ...target, ...(selectedSourceId && selectedNodeId ? { fromStepId: selectedNodeId } : {}) }))" :disabled="!selectedRowIds.length" label="代码生成" />
         </template>
         <template #head-right>
           <button

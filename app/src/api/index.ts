@@ -3928,7 +3928,7 @@ export const flowCenterApi = {
    * 判据依赖后端那句文案，不够硬。后端哪天给个稳定的 code（或干脆 data:null + success:true），
    * 这段可以整个删掉。
    */
-  detail: async (id: string): Promise<FlowRecord | null> => {
+  detail: async (id: string, options: Pick<RequestOptions, 'backendScope'> = {}): Promise<FlowRecord | null> => {
     if (!id) return null
     let result: unknown
     try {
@@ -3936,6 +3936,7 @@ export const flowCenterApi = {
         method: 'GET',
         httpEndpoint: 'flow/flowDetail',
         httpParams: { flowId: id },
+        ...options,
       })
     } catch (e) {
       if (isFlowNotFound(e)) return null

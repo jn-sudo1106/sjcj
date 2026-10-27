@@ -1,7 +1,7 @@
 import type { DataRow, SendCodeConfigPayload } from '@/api'
 
 /** 不允许目标步骤配置混入 201 派发 configId；派发配置与队列只由发送表单填写。 */
-export type CodeConfigTarget = Pick<SendCodeConfigPayload, 'sourceId' | 'stepId' | 'entryTypeId' | 'entryIds' | 'ver'> & { flowId?: string; name?: string }
+export type CodeConfigTarget = Pick<SendCodeConfigPayload, 'sourceId' | 'stepId' | 'entryTypeId' | 'entryIds' | 'ver' | 'orchestration'> & { flowId?: string; name?: string; fromStepId?: string }
 
 export function codeTargetForNode(sourceId: string, flowId: string | undefined, stepId?: string, ver?: string | null): CodeConfigTarget {
   if (!/^[1-9]\d*$/.test(sourceId) || !flowId || !/^[1-9]\d*$/.test(flowId)) throw new Error('请先加载已保存的源和流程')
