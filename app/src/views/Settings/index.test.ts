@@ -33,7 +33,7 @@ describe('系统设置 · tab 壳', () => {
   it('系统设置保留节点类型、分类目录、数据权限设置，并增加 Runner 管理入口（来源组已迁回源管理）', async () => {
     const { wrapper } = await mountAt()
 
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '大模型接口', '分类目录', '服务器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本', '数据权限设置'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '大模型接口', '代码生成服务器', '分类目录', '服务器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本', '数据权限设置'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })
@@ -48,7 +48,7 @@ describe('系统设置 · tab 壳', () => {
   it('部署构建同样展示全部设置入口，直达服务器页签不回落', async () => {
     vi.stubEnv('DEV', false)
     const { wrapper, router } = await mountAt({ tab: 'runners' })
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '大模型接口', '分类目录', '服务器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本', '数据权限设置'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '大模型接口', '代码生成服务器', '分类目录', '服务器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本', '数据权限设置'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
     expect(router.currentRoute.value.query).toEqual({ tab: 'runners' })
   })
