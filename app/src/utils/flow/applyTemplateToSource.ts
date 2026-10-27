@@ -86,7 +86,12 @@ export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean>
     : (await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })) ?? []
   const { useFlowStore } = await import('@/stores/flow')
   const flow = useFlowStore()
+  const sameSource = String(flow.sourceCtx?.sourceId ?? '') === String(sourceId)
   flow.loadFromSource(detail, steps, null)
+  // 定时 cron 在 job 表、sourceDetail 里恒为 null（见 index.vue backfillSourceSchedule）。loadFromSource
+  // 重建了源上下文，进入画布时补的 cron 随之丢失，节点定时退回「每天」兜底显示（2026-10-27 发布 v3 后实测）。
+  // sourceJob 不随重载清空，同一个源直接重新套回即可，不置脏。
+  if (sameSource && flow.sourceJob?.schedule) flow.applySourceSchedule(flow.sourceJob.schedule)
   await backfillReloadedStepDetails(flow, steps)
   return true
 }

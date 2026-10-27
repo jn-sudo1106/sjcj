@@ -64,6 +64,21 @@ describe('画布重载补 configDetail', () => {
     expect(cfg.ruleCfg).toBeUndefined()
   })
 
+  it('源画布重载后保留 job 表回填的定时 cron，且不置脏', async () => {
+    mockSourceDetail.mockResolvedValue({ sourceId: 's1', name: '源', url: 'http://x', mainTable: '900', flowId: '14007240' })
+    mockSteps.mockResolvedValue(bareSteps())
+    expect(await reloadSourceIntoCanvas('s1')).toBe(true)
+    const flow = useFlowStore()
+    flow.setSourceJob({ jobId: 'j1', schedule: '0 0 * * * ?' } as never)
+    flow.markSaved()
+
+    // 发布 / 放弃草稿后的重载：sourceDetail 不带 cron
+    expect(await reloadSourceIntoCanvas('s1')).toBe(true)
+
+    expect(flow.sourceCtx?.cron).toBe('0 0 * * * ?')
+    expect(flow.dirtyConfigNodes).toEqual([])
+  })
+
   it('补充失败不影响重载结果', async () => {
     mockSourceDetail.mockResolvedValue({ sourceId: 's1', name: '源', url: 'http://x', mainTable: '900', flowId: '14007240' })
     mockSteps.mockResolvedValue(bareSteps())
