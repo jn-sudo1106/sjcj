@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import {
   mockAddParamValues,
   mockDeleteParamValue,
@@ -102,6 +102,25 @@ describe('参数绑定关系（0721 会议 T6：参数源反查绑定它的参�
 describe('参数 mock（新建/编辑/复制/删除）', () => {
   beforeEach(() => {
     localStorage.clear()
+  })
+
+  it('新增生成两个时间，编辑保留创建时间，复制生成新时间', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-10-26T00:00:00Z'))
+      const created = mockParamCreate({ param: { paramId: '9999', name: '时间参数', kind: 'list', values: [] } }).param!
+      expect(created.createdAt).toBe('2026-10-26T00:00:00.000Z')
+      expect(created.updatedAt).toBe(created.createdAt)
+      vi.setSystemTime(new Date('2026-10-26T01:00:00Z'))
+      const updated = mockParamUpdate({ param: { ...created, name: '修改参数', createdAt: '1970-01-01' } }).param!
+      expect(updated.createdAt).toBe(created.createdAt)
+      expect(updated.updatedAt).toBe('2026-10-26T01:00:00.000Z')
+      vi.setSystemTime(new Date('2026-10-26T02:00:00Z'))
+      expect(mockParamCopy({ paramId: created.paramId }).ok).toBe(true)
+      const copy = mockParamPaged({ size: 100 }).list.find((p) => p.name === '修改参数_副本')!
+      expect(copy.createdAt).toBe('2026-10-26T02:00:00.000Z')
+      expect(copy.updatedAt).toBe(copy.createdAt)
+    } finally {vi.useRealTimers()}
   })
 
   it('paramCreate：成功创建后 paramDetail/paramPaged 都能查到；重复 id 报错', () => {

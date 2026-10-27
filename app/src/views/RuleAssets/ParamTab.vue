@@ -334,6 +334,7 @@ async function batchDelete() {
       <dl class="rc-kv">
         <dt>分组</dt><dd>{{ drawer.param.group || '—' }}</dd>
         <dt>默认值</dt><dd>{{ drawer.param.defaultValue || '—' }}</dd>
+        <dt>创建时间</dt><dd>{{ drawer.param.createdAt || '—' }}</dd>
         <dt>更新时间</dt><dd>{{ drawer.param.updatedAt || '—' }}</dd>
       </dl>
 

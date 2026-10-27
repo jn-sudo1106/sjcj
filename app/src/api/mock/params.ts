@@ -125,7 +125,8 @@ export function mockParamCreate(params?: Record<string, unknown>): { ok: boolean
   if (allParams().some((p) => p.paramId === paramId)) {
     return { ok: false, message: `参数 ID「${paramId}」已存在，请更换` }
   }
-  const param: Param = { ...input, paramId, name: input.name.trim(), usedBy: 0, updatedAt: new Date().toISOString().slice(0, 10) }
+  const now = new Date().toISOString()
+  const param: Param = { ...input, paramId, name: input.name.trim(), usedBy: 0, createdAt: now, updatedAt: now }
   persistCreatedParams([param, ...readCreatedParams()])
   return { ok: true, message: '参数已创建（本地演示）', param }
 }
@@ -136,7 +137,7 @@ export function mockParamUpdate(params?: Record<string, unknown>): { ok: boolean
   const previous = allParams().find((param) => param.paramId === input.paramId)
   if (!previous) return { ok: false, message: `参数 ID「${input.paramId}」不存在` }
 
-  const param: Param = { ...previous, ...input, paramId: previous.paramId, name: input.name.trim(), updatedAt: new Date().toISOString().slice(0, 10) }
+  const param: Param = { ...previous, ...input, paramId: previous.paramId, name: input.name.trim(), createdAt: previous.createdAt, updatedAt: new Date().toISOString() }
   persistUpdatedParams({ ...readUpdatedParams(), [param.paramId]: param })
   return { ok: true, message: '参数已更新（本地演示）', param }
 }
@@ -171,7 +172,8 @@ export function mockParamCopy(params?: Record<string, unknown>) {
   const source = allParams().find((param) => param.paramId === String(params?.paramId ?? ''))
   if (!source) return { ok: false, message: '参数不存在' }
   const paramId = nextParamId()
-  const copy: Param = { ...source, paramId, name: `${source.name}_副本`, valueItems: source.valueItems?.map((item, index) => ({ ...item, valueId: `${paramId}-${index + 1}` })) }
+  const now = new Date().toISOString()
+  const copy: Param = { ...source, paramId, name: `${source.name}_副本`, createdAt: now, updatedAt: now, valueItems: source.valueItems?.map((item, index) => ({ ...item, valueId: `${paramId}-${index + 1}` })) }
   persistCreatedParams([copy, ...readCreatedParams()])
   return { ok: true, message: '复制成功，请查询最新 ID' }
 }

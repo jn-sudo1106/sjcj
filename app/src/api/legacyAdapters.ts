@@ -256,6 +256,7 @@ export function paramFromLegacy(input: unknown): Param {
     tableName: record.tableName == null ? undefined : String(record.tableName),
     colName: record.colName == null ? undefined : String(record.colName),
     valueItems: items,
+    createdAt: record.createDt == null ? undefined : String(record.createDt),
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
   }
 }
