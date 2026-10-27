@@ -13,8 +13,9 @@
 //
 // 查询节奏：本组件不监听 tableId/sourceId 变化自动重查（避免跟调用方自己的时序产生重复请求/竞态），
 // 调用方在恰当时机（挂载完成/切表/切源/路由深链）显式调用 expose 出去的 search()/refresh()。
-import { computed, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Coin, Filter, Warning } from '@element-plus/icons-vue'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { readSqlConditions, rememberSqlCondition } from '@/utils/sqlConditionHistory'
@@ -85,6 +86,9 @@ const props = withDefaults(
      * 操作按钮走 #actions 插槽；#toolbar 只留给批量条、SQL 提示这类整行内容。默认关，其他复用方不受影响。
      */
     oneRow?: boolean
+    /** 数据中心工作区：上下文在前，低频条件与结果操作分行。 */
+    workspaceLayout?: boolean
+    contextError?: string
     /** 行可点击（调用方监听 row-click 开详情等）：鼠标移上去显示手型 */
     rowClickable?: boolean
     /** 「开始时间 / 结束时间」条件（CREATE_DT 区间）。数据中心 → 数据查询页 1021-05 去掉（Q6），其他复用方保留 */
@@ -95,6 +99,8 @@ const props = withDefaults(
     defaultSortField: '',
     defaultSortOrder: '',
     oneRow: false,
+    workspaceLayout: false,
+    contextError: '',
     rowClickable: false,
   },
 )
@@ -104,6 +110,8 @@ const emit = defineEmits<{
   'update:selectedKeys': [string[]]
   'query-change': [DataQueryFilter]
   loaded: [{ rows: DataRow[]; total: number }]
+  'clear-context': []
+  'retry-context': []
   /** 点了文件路径格（OSS 上的 .json / .txt / 图片等）：交给调用方开预览，形状与 DataGrid 的同名事件一致 */
   'file-click': [path: string, field: { prop: string; columnName: string; desc: string }]
 }>()
@@ -138,6 +146,45 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(props.pageSize ?? 20)
 const loading = ref(false)
+const queryError = ref('')
+const hasQueried = ref(false)
+const appliedFilter = ref<DataQueryFilter | null>(null)
+const appliedSource = ref('')
+let rowRequest = 0
+watch([() => props.tableId, () => props.sourceId], () => {
+  ++rowRequest
+  rows.value = []
+  total.value = 0
+  loading.value = false
+  hasQueried.value = false
+  queryError.value = ''
+  appliedFilter.value = null
+  appliedSource.value = ''
+  emit('update:selectedKeys', [])
+  emit('loaded', { rows: [], total: 0 })
+})
+onUnmounted(() => { ++rowRequest })
+const appliedConditions = computed(() => {
+  const filter = appliedFilter.value
+  if (!filter) return []
+  const conditions: string[] = []
+  if (appliedSource.value) conditions.push(`源：${appliedSource.value}`)
+  if (filter.dataId) conditions.push(`数据 ID：${filter.dataId}`)
+  if (filter.parentId) conditions.push(`父 ID：${filter.parentId}`)
+  if (filter.state) conditions.push(`状态：${filter.state}`)
+  if (filter.sql) conditions.push(`条件表达式：${filter.sql}`)
+  if (filter.nextFlag) conditions.push(`后续标识：${filter.nextFlag}`)
+  if (filter.min || filter.max) conditions.push(`ID 区间：${filter.min || '不限'}－${filter.max || '不限'}`)
+  if (filter.startTime || filter.endTime) conditions.push(`时间：${filter.startTime || '不限'} 至 ${filter.endTime || '不限'}`)
+  return conditions
+})
+const emptyTitle = computed(() => {
+  if (props.contextError) return '数据表暂不可用'
+  if (!props.tableId) return '请从左侧选择数据表'
+  if (queryError.value) return '查询失败，请重试'
+  if (!hasQueried.value) return '选择条件后点击查询'
+  return appliedConditions.value.length ? '没有符合筛选条件的数据' : '这张表暂无数据'
+})
 // 动态列排序仅当 total ≤ 500000 时开放（方案 §1.5-5，跟 DataView 原逻辑一致）
 const allSort = computed(() => total.value <= 500000)
 
@@ -179,25 +226,38 @@ function currentFilter(): Omit<DataQueryFilter, 'page' | 'size'> {
 }
 
 async function loadRows(preserveSelection = false) {
-  if (!props.tableId) return
+  if (!props.tableId || props.contextError) return
+  const requestId = ++rowRequest
   loading.value = true
+  queryError.value = ''
   try {
     const filter = currentFilter()
-    emit('query-change', { ...filter, page: page.value, size: size.value })
-    const query: RowQuery = { tableId: props.tableId, sourceId: props.sourceId || undefined, ...filter, page: page.value, size: size.value }
+    const submitted = { ...filter, page: page.value, size: size.value }
+    emit('query-change', submitted)
+    const query: RowQuery = { tableId: props.tableId, sourceId: props.sourceId || undefined, ...submitted }
     const result = await dataApi.rowQueryPaged(query)
     rememberSqlCondition(query.tableId, query.sql)
+    if (requestId !== rowRequest) return
     rows.value = result.list
     total.value = result.total
+    hasQueried.value = true
+    appliedFilter.value = submitted
+    appliedSource.value = query.sourceId ?? ''
     const nextSelection = preserveSelection
       ? (props.selectedKeys ?? []).filter((key) => result.list.some((row) => row.dataId === key))
       : []
     emit('update:selectedKeys', nextSelection)
     emit('loaded', { rows: result.list, total: result.total })
   } catch (error) {
-    ElMessage.error(`查询失败:${String(error instanceof Error ? error.message : error).slice(0, 100)}`)
+    if (requestId !== rowRequest) return
+    queryError.value = String(error instanceof Error ? error.message : error).slice(0, 100)
+    rows.value = []
+    total.value = 0
+    emit('update:selectedKeys', [])
+    emit('loaded', { rows: [], total: 0 })
+    ElMessage.error(`查询失败:${queryError.value}`)
   } finally {
-    loading.value = false
+    if (requestId === rowRequest) loading.value = false
   }
 }
 
@@ -220,8 +280,8 @@ function search(patch?: DataQueryFilterPatch) {
   page.value = 1
   void loadRows()
 }
-/** 清空全部筛选条件并回到第一页；表/源由调用方保留。 */
-function clearFilters() {
+/** 清空筛选并回到第一页；工作区通知调用方同步清空源范围，始终保留当前表。 */
+async function clearFilters() {
   dataId.value = ''
   parentId.value = ''
   states.value = []
@@ -232,6 +292,10 @@ function clearFilters() {
   maxId.value = ''
   sortField.value = props.defaultSortField
   sortOrder.value = props.defaultSortOrder
+  if (props.workspaceLayout) {
+    emit('clear-context')
+    await nextTick()
+  }
   search()
 }
 /** 不改筛选条件/页码，原样重查一次（如外部数据变了但筛选条件没变） */
@@ -314,13 +378,13 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
 </script>
 
 <template>
-  <div class="dqp">
+  <div class="dqp" :class="{ 'is-workspace': workspaceLayout }">
     <div class="rc-toolbar wrap dqp-primary-row" :class="{ 'is-one-row': oneRow }" data-testid="data-query-primary">
       <div v-if="$slots.context && !oneRow" class="dqp-context"><slot name="context" /></div>
       <el-input v-model="dataId" class="dqp-data-id" clearable placeholder="请输入数据 ID" style="width: 160px" />
-      <el-input v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" />
+      <el-input v-if="!workspaceLayout" v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" />
       <el-select
-        v-if="showState"
+        v-if="showState && !workspaceLayout"
         v-model="states"
         multiple
         collapse-tags
@@ -379,6 +443,8 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
     </div>
 
     <div v-if="advancedOpen" id="data-query-advanced" class="rc-toolbar wrap dqp-query-row" data-testid="data-query-filters">
+      <el-input v-if="workspaceLayout" v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" />
+      <el-select v-if="workspaceLayout && showState" v-model="states" multiple collapse-tags collapse-tags-tooltip clearable class="dqp-state" placeholder="状态（全部）" style="width: 180px" data-testid="data-query-state"><el-option v-for="option in STATE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" /></el-select>
       <el-input v-model="nextFlag" clearable placeholder="后续标识（如 -1）" style="width: 150px" />
       <span class="dqp-range">
         <el-input v-model="minId" placeholder="起始 ID" style="width: 100px" />
@@ -396,8 +462,10 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
       </SqlConditionEditor>
     </div>
 
-    <div class="dqp-table-tools">
-      <div class="dqp-table-tools-main"><slot name="toolbar" :total="total" :rows="rows" /></div>
+    <div v-if="workspaceLayout" class="dqp-result-heading" aria-live="polite"><strong>查询结果</strong><span>{{ loading ? '查询中…' : `共 ${total} 条` }}</span></div>
+    <div class="dqp-table-tools" :data-testid="workspaceLayout ? 'data-result-toolbar' : undefined">
+      <div v-if="workspaceLayout" class="dqp-result-actions"><slot name="actions" :total="total" :rows="rows" /></div>
+      <div v-else class="dqp-table-tools-main"><slot name="toolbar" :total="total" :rows="rows" /></div>
       <button
         v-if="showColPicker && !oneRow"
         class="rc-btn dqp-col-btn"
@@ -407,6 +475,8 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
         @click="colPickerOpen = true"
       >列 {{ colVisibleCount }}/{{ columns.length }}</button>
     </div>
+
+    <div v-if="workspaceLayout"><slot name="toolbar" :total="total" :rows="rows" /></div>
 
     <div v-loading="loading" class="rc-table-scroll dqp-table" :class="{ 'is-row-clickable': rowClickable }">
       <el-table
@@ -419,6 +489,17 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
         @sort-change="onSortChange"
         @row-click="onRowClick"
       >
+        <template v-if="workspaceLayout" #empty>
+          <div class="dqp-empty" data-testid="data-query-empty">
+            <el-icon :size="30"><Warning v-if="queryError || contextError" /><Filter v-else-if="appliedConditions.length" /><Coin v-else /></el-icon>
+            <strong>{{ emptyTitle }}</strong>
+            <span v-if="queryError">{{ queryError }}</span>
+            <span v-else-if="!contextError && appliedConditions.length" class="dqp-empty-conditions">当前条件：{{ appliedConditions.join('；') }}</span>
+            <button v-if="contextError" class="rc-btn" type="button" @click="emit('retry-context')">重新加载数据表</button>
+            <button v-else-if="queryError" class="rc-btn" type="button" @click="search()">重新查询</button>
+            <button v-else-if="appliedConditions.length" class="rc-btn" type="button" @click="clearFilters">清空筛选</button>
+          </div>
+        </template>
         <el-table-column v-if="selectable" width="42" fixed="left">
           <template #header>
             <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" aria-label="选择本页" @change="togglePage" @click.stop />
@@ -559,4 +640,25 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
   .dqp-primary-row :deep(.dqp-time-range) { width: 240px !important; min-width: 240px; }
   .dqp-primary-row .rc-btn { padding: 0 9px; }
 }
+</style>
+
+<style scoped>
+.dqp.is-workspace { min-width: 0; }
+.is-workspace .dqp-primary-row.rc-toolbar.wrap { flex-wrap: wrap; overflow: visible; gap: 10px; align-items: center; }
+.is-workspace .dqp-context { display: flex; flex-wrap: wrap; flex: 0 1 auto; gap: 8px; min-width: 0; max-width: 100%; border: 0; padding: 0; margin: 0; }
+.is-workspace .dqp-query-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.is-workspace .dqp-spacer { display: none; }
+.is-workspace .dqp-quick-slot { margin-left: auto; }
+.is-workspace .dqp-data-id { width: 160px !important; max-width: 100%; }
+.is-workspace .dqp-query-row { padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.dqp-result-heading { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0; font-size: 12px; }
+.dqp-result-heading span { color: var(--rc-muted); }
+.is-workspace .dqp-table-tools { flex-wrap: wrap; padding: 10px 12px; }
+.dqp-result-actions { display: flex; align-items: center; gap: 6px; flex: 1; flex-wrap: wrap; min-width: 0; }
+.dqp-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 260px; padding: 28px 20px; line-height: 1.5; }
+.dqp-empty strong { color: var(--rc-text); font-size: 14px; }
+.dqp-empty-conditions { max-width: 600px; overflow-wrap: anywhere; white-space: normal; color: var(--rc-muted); }
+.is-workspace .dqp-table :deep(.el-table__empty-text) { width: 100%; line-height: 1.5; }
+.is-workspace .dqp-pager { flex-wrap: wrap; padding: 10px 12px; }
+.is-workspace .dqp-pager :deep(.el-pagination) { flex-wrap: wrap; justify-content: flex-end; row-gap: 8px; }
 </style>

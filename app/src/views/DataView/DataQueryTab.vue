@@ -4,14 +4,16 @@ import { codeTargetsForRows } from '@/utils/flow/codeConfigTargets'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
+import { ArrowDown, QuestionFilled, Plus, Refresh, DArrowRight, Tickets, Star, StarFilled } from '@element-plus/icons-vue'
 import {
-  dataApi, sourceApi, entryApi,
+  dataApi, sourceApi, entryApi, logReportApi,
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
   type EntryType, type Source,
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
+import DataTableSidebar from './DataTableSidebar.vue'
+import { favoriteEntryIds, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import RowEditDialog from './RowEditDialog.vue'
@@ -68,7 +70,6 @@ const COMMON_QUERIES: CommonQuery[] = [
 // ---- 选表 / 选源 ----
 const group = ref<EntryTypeGroup>({ list1: [], list2: [], list3: [] })
 const tableId = ref('')
-const dsKind = ref<EntryType['dsKind'] | ''>('')
 const panelKey = ref(0)
 const tableMeta = ref<DataTableMeta | null>(null)
 const sourceOptions = ref<SourceOption[]>([])
@@ -77,42 +78,82 @@ const sourceLoading = ref(false)
 const sourceId = ref('')
 const sourceSelectRef = ref<{ blur: () => void } | null>(null)
 
-// 搜索选中的表可能不在下拉首屏里，缓存后带入后续分组回读，保留名称与类型。
+// 缓存当前表，源范围重新分组后仍保留导航中的名称与类型。
 const pickedTable = ref<EntryType | null>(null)
 
 function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
   const picked = pickedTable.value
-  if (!picked || !matchesDsKind(picked)) return source
+  if (!picked) return source
   const rest = source.list3.filter((t) => t.tableId !== picked.tableId)
   // 后端重新分组后它已经落进 list1/list2，就别在 list3 里再塞一份
   if ([...source.list1, ...source.list2].some((t) => t.tableId === picked.tableId)) return { ...source, list3: rest }
   return { ...source, list3: [picked, ...rest] }
 }
 
-function matchesDsKind(table: EntryType) {
-  return !dsKind.value || (table.dsKind ?? 'MYSQL') === dsKind.value
-}
+const navigationLoading = ref(false)
+const navigationError = ref('')
+const sidebarCollapsed = ref(false)
+const recentTableIds = ref<string[]>([])
+const visitedTableIds: string[] = []
+const favoriteIds = computed(() => [...favoriteEntryIds.value])
+const availableTables = computed(() => {
+  const seen = new Set<string>()
+  return [...group.value.list1, ...group.value.list2, ...group.value.list3, ...(pickedTable.value ? [pickedTable.value] : [])]
+    .filter(table => {
+      if (seen.has(table.tableId)) return false
+      seen.add(table.tableId)
+      return true
+    })
+})
+const currentTable = computed(() => availableTables.value.find(table => table.tableId === tableId.value))
+const currentTableName = computed(() => currentTable.value?.name || tableMeta.value?.name || currentTable.value?.tableName || tableMeta.value?.tableName || '请选择数据表')
+let disposed = false
 let groupRequest = 0
 async function loadGroup(selectDefault = true) {
-  // 切表时如果当前源不在新表里，会走 loadSources → clearedSource → loadGroup，
-  // 整块覆盖 group，选中的那条就被冲掉了，这里补回来
   const requestId = ++groupRequest
-  const result = dsKind.value
-    ? await dataApi.entryTypesGroup(sourceId.value || undefined, dsKind.value)
-    : await dataApi.entryTypesGroup(sourceId.value || undefined)
-  if (requestId !== groupRequest) return
-  const loaded = withPickedTable(result)
-  group.value = {
-    ...loaded,
-    list1: loaded.list1.filter(matchesDsKind),
-    list2: loaded.list2.filter(matchesDsKind),
-    list3: loaded.list3.filter(matchesDsKind),
+  navigationLoading.value = true
+  navigationError.value = ''
+  try {
+    // 三个分组的并集是全库表，源只影响分组；导航按 MYSQL / CK 展示同一份完整目录。
+    const result = await dataApi.entryTypesGroup(sourceId.value || undefined)
+    if (disposed || requestId !== groupRequest) return false
+    group.value = withPickedTable(result)
+    if (!availableTables.value.some(table => table.tableId === group.value.main)) group.value.main = undefined
+    if (!tableId.value && selectDefault) {
+      tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || group.value.list2[0]?.tableId || ''
+    }
+    return true
+  } catch (error) {
+    if (!disposed && requestId === groupRequest) navigationError.value = `加载数据表失败：${error instanceof Error ? error.message : String(error)}`
+    return false
+  } finally {
+    if (requestId === groupRequest) navigationLoading.value = false
   }
-  const tables = [...group.value.list1, ...group.value.list2, ...group.value.list3]
-  if (!tables.some((table) => table.tableId === group.value.main)) group.value.main = undefined
-  if (!tableId.value && selectDefault) {
-    tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || group.value.list2[0]?.tableId || ''
-  }
+}
+async function loadRecentTables() {
+  try {
+    const result = await logReportApi.recentRaw({ contentType: 'ENTRY_TYPE', action: 'CLICK', limit: 10 })
+    if (disposed || result?.success !== true) return
+    const ids = (result.data ?? []).map(item => String(item.contentId)).filter(Boolean)
+    recentTableIds.value = [...new Set([...visitedTableIds, ...ids])].slice(0, 10)
+  } catch { /* 最近查看失败不阻断表查询。 */ }
+}
+function recordCurrentTable() {
+  const id = tableId.value
+  if (!id || recentTableIds.value[0] === id) return
+  visitedTableIds.splice(0, visitedTableIds.length, ...[id, ...visitedTableIds.filter(value => value !== id)].slice(0, 10))
+  recentTableIds.value = [id, ...recentTableIds.value.filter(value => value !== id)].slice(0, 10)
+  void logReportApi.report({ action: 'CLICK', contentType: 'ENTRY_TYPE', contentId: id, contentTitle: currentTableName.value, firstModule: '全局数据', pageName: '数据中心', eventCode: 'entry_table_open' }).catch(() => {})
+}
+async function selectSidebarTable(table: EntryType) {
+  browseMode.value = 'table'
+  if (tableId.value === table.tableId) return
+  pickedTable.value = table
+  tableId.value = table.tableId
+  await onTableChange()
+}
+async function reloadNavigation() {
+  if (await loadGroup() && tableId.value && !tableMeta.value) await onTableChange()
 }
 
 function clearTableSelection() {
@@ -131,20 +172,6 @@ function clearTableSelection() {
   panelFilter.value = { page: 1, size: 20 }
   panelKey.value += 1
 }
-async function onDsKindChange() {
-  const selected = pickedTable.value?.tableId === tableId.value
-    ? pickedTable.value
-    : [...group.value.list1, ...group.value.list2, ...group.value.list3].find((table) => table.tableId === tableId.value)
-  if (tableId.value && (!selected || !matchesDsKind(selected))) clearTableSelection()
-  tableKeyword.value = ''
-  group.value = { list1: [], list2: [], list3: [] }
-  try {
-    await loadGroup(false)
-  } catch (error) {
-    ElMessage.error(`加载数据表失败：${error instanceof Error ? error.message : String(error)}`)
-  }
-}
-
 // ---- 表结构详情 / 源详情（? 按钮，方案 §1.3-1/§1.3-2） ----
 const tableDetailOpen = ref(false)
 function openTableDetail() {
@@ -171,26 +198,6 @@ function openSourceDetailForRow(sid: string) {
 }
 
 // ---- 下拉内搜索表 / 更多源 ----
-const TABLE_OPTION_LIMIT = 20
-const tableKeyword = ref('')
-const tableChoices = computed(() => {
-  const known = [...group.value.list1, ...group.value.list2, ...group.value.list3]
-  const keyword = tableKeyword.value.toLowerCase()
-  const candidates = known.filter(table => !keyword || [table.tableId, table.name ?? '', table.tableName]
-    .some(value => value.toLowerCase().includes(keyword)))
-  const selected = pickedTable.value?.tableId === tableId.value
-    ? pickedTable.value : known.find(table => table.tableId === tableId.value)
-  const seen = new Set<string>()
-  return [...(!tableKeyword.value && selected ? [selected] : []), ...candidates]
-    .filter(table => {
-      if (!matchesDsKind(table) || seen.has(table.tableId)) return false
-      seen.add(table.tableId)
-      return true
-    }).slice(0, TABLE_OPTION_LIMIT)
-})
-function onTableSearch(keyword: string) {
-  tableKeyword.value = keyword.trim()
-}
 const moreSourcesOpen = ref(false)
 function openMoreSources() {
   sourceSelectRef.value?.blur()
@@ -199,14 +206,14 @@ function openMoreSources() {
 async function onSourcePicked(source: Source) {
   // “更多源”是跨表按源搜索入口：选中源后切到该源的默认数据表。
   sourceId.value = source.sourceId
-  await loadGroup()
+  if (!await loadGroup()) return
   const tables = [...group.value.list1, ...group.value.list2, ...group.value.list3]
   tableId.value = [group.value.main, source.mainTable, ...tables.map((table) => table.tableId)]
     .find((id) => tables.some((table) => table.tableId === id)) || ''
   if (!tableId.value) {
     clearTableSelection()
     await loadGroup(false)
-    ElMessage.warning('该源在当前库类型下没有可选数据表')
+    ElMessage.warning('该源没有可选数据表')
     return
   }
   await loadTableMeta()
@@ -314,10 +321,15 @@ function onSourceSearch(keyword: string) {
   if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
   sourceSearchTimer = setTimeout(() => void searchSources(keyword), 300)
 }
+let metaRequest = 0
 async function loadTableMeta() {
+  const requestId = ++metaRequest
   const selectedTable = tableId.value
   const meta = selectedTable ? await dataApi.tableMeta(selectedTable) : null
-  if (selectedTable === tableId.value) tableMeta.value = meta
+  if (!disposed && requestId === metaRequest && selectedTable === tableId.value) {
+    tableMeta.value = meta
+    if (meta) recordCurrentTable()
+  }
 }
 
 // ---- 查询面板桥接（S5-1）：面板自己管筛选字段/结果/分页，这里只镜像它的输出，
@@ -367,16 +379,27 @@ const workspace = useWorkspaceStore()
 const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
 const selectedRowKeys = ref<string[]>([])
 
+let tableChangeRequest = 0
 async function onTableChange() {
+  const requestId = ++tableChangeRequest
   const selectedTable = tableId.value
-  const selected = tableChoices.value.find(table => table.tableId === selectedTable)
+  const selected = availableTables.value.find(table => table.tableId === selectedTable)
   if (selected) pickedTable.value = selected
-  await loadTableMeta()
-  if (selectedTable !== tableId.value) return
-  await loadSources()
-  if (selectedTable !== tableId.value) return
-  panelRef.value?.search()
+  tableMeta.value = null
+  selectedRowKeys.value = []
+  tableLoadError.value = ''
+  try {
+    await loadTableMeta()
+    if (disposed || requestId !== tableChangeRequest || selectedTable !== tableId.value) return
+    if (!tableMeta.value) throw new Error('数据表不存在或已无访问权限')
+    await loadSources()
+    if (disposed || requestId !== tableChangeRequest || selectedTable !== tableId.value) return
+    panelRef.value?.search()
+  } catch (error) {
+    if (requestId === tableChangeRequest) tableLoadError.value = `加载表结构失败：${error instanceof Error ? error.message : String(error)}`
+  }
 }
+const tableLoadError = ref('')
 async function onSourceChange() {
   await loadGroup()
   panelRef.value?.search()
@@ -1046,17 +1069,23 @@ watch(() => route.query.sourceId, (v) => {
 })
 
 onMounted(async () => {
+  window.addEventListener('keydown', onFullscreenKey)
+  void loadFavoriteEntries()
+  void loadRecentTables()
   const etQuery = route.query.entryType
   const sidQuery = route.query.sourceId
   if (typeof sidQuery === 'string') sourceId.value = sidQuery
-  await loadGroup()
+  if (!await loadGroup()) return
   if (typeof etQuery === 'string' && etQuery) tableId.value = etQuery
-  await loadTableMeta()
-  await loadSources()
-  panelRef.value?.search()
-  window.addEventListener('keydown', onFullscreenKey)
+  await onTableChange()
 })
 onUnmounted(() => {
+  disposed = true
+  ++groupRequest
+  ++metaRequest
+  ++tableChangeRequest
+  ++sourceScopeRequest
+  ++sourceSearchRequest
   if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
   window.removeEventListener('keydown', onFullscreenKey)
 })
@@ -1064,8 +1093,21 @@ onUnmounted(() => {
 
 <template>
   <div class="rc-card dv-page" :class="{ 'is-fullscreen': fullscreen }">
-    <!-- 表与源作为查询上下文放在筛选主行，减少割裂的独立工具栏。 -->
-    <!-- 查询条件与结果表格：基础条件常显，高级条件默认收起，见 DataQueryPanel.vue -->
+    <div class="dv-data-workspace" :class="{ 'is-collapsed': sidebarCollapsed }">
+      <DataTableSidebar v-show="!sidebarCollapsed" :tables="availableTables" :selected-id="tableId" :favorite-ids="favoriteIds" :recent-ids="recentTableIds" :loading="navigationLoading" :error="navigationError" @select="selectSidebarTable" @collapse="sidebarCollapsed = true" @retry="reloadNavigation" />
+      <section class="dv-query-workspace" aria-label="表数据查询">
+        <header class="dv-table-header">
+          <div class="dv-table-context">
+            <button v-if="sidebarCollapsed" class="dv-nav-expand" type="button" title="展开数据表导航" aria-label="展开数据表导航" @click="sidebarCollapsed = false"><el-icon><DArrowRight /></el-icon></button>
+            <BrowseModeToggle v-model="browseMode" />
+            <strong :title="currentTableName">{{ currentTableName }}</strong>
+            <el-tag v-if="currentTable" class="dv-engine-tag" size="small" effect="plain">{{ currentTable.dsKind ?? 'MYSQL' }}</el-tag>
+            <span v-if="tableId" class="dv-table-id">表 ID：{{ tableId }}</span>
+            <button v-if="tableId" class="dv-favorite" type="button" :aria-label="favoriteEntryIds.has(tableId) ? '取消收藏当前表' : '收藏当前表'" :aria-pressed="favoriteEntryIds.has(tableId)" :disabled="!tableMeta" @click="toggleFavoriteEntry(tableId)"><el-icon><StarFilled v-if="favoriteEntryIds.has(tableId)" /><Star v-else /></el-icon></button>
+          </div>
+          <button class="rc-btn dv-structure-btn" type="button" title="表结构详情" :disabled="!tableMeta" @click="openTableDetail"><el-icon><Tickets /></el-icon>表结构</button>
+        </header>
+        <div v-if="tableLoadError" class="dv-table-error" role="alert">{{ tableLoadError }}<button class="rc-btn" type="button" @click="onTableChange">重试</button></div>
     <DataQueryPanel
       :key="panelKey"
       ref="panelRef"
@@ -1073,7 +1115,10 @@ onUnmounted(() => {
       :source-id="sourceId"
       :columns="panelColumns"
       show-state
-      one-row
+      workspace-layout
+      :context-error="tableLoadError"
+      @retry-context="onTableChange"
+      @clear-context="sourceId = ''"
       row-clickable
       :show-time-range="false"
       :selectable="canWrite"
@@ -1086,20 +1131,7 @@ onUnmounted(() => {
       @row-click="onRowClickDetail"
     >
       <template #context>
-      <BrowseModeToggle v-model="browseMode" />
-      <el-select v-if="browseMode === 'table'" v-model="dsKind" aria-label="库类型" data-testid="data-ds-kind-filter" style="width: 125px" @change="onDsKindChange">
-        <template #prefix><span>库</span></template>
-        <el-option label="全部" value="" />
-        <el-option label="CK" value="CK" />
-        <el-option label="MYSQL" value="MYSQL" />
-      </el-select>
-      <el-select v-if="browseMode === 'table'" v-model="tableId" filterable :filter-method="onTableSearch" placeholder="选择数据表" no-match-text="没有匹配的数据表" style="width: 200px" @change="onTableChange">
-        <el-option v-for="t in tableChoices" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName} · ${t.dsKind ?? 'MYSQL'}`" />
-      </el-select>
-      <button v-if="browseMode === 'table'" class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
-        <el-icon><QuestionFilled /></el-icon>
-      </button>
-      <el-select ref="sourceSelectRef" v-model="sourceId" filterable remote clearable :remote-method="onSourceSearch" :loading="sourceLoading" placeholder="选择源（ID或名称）" style="width: 150px" @change="onSourceChange">
+      <el-select ref="sourceSelectRef" v-model="sourceId" filterable remote clearable :remote-method="onSourceSearch" :loading="sourceLoading" placeholder="选择源（ID或名称）" class="dv-source-select" style="width: 220px" @change="onSourceChange">
         <el-option v-for="s in sourceOptions" :key="s.sourceId" :value="s.sourceId" :label="`${s.sourceId} ${s.name}`" />
         <template #footer>
           <span class="dv-link" @click.stop="openMoreSources">
@@ -1133,9 +1165,6 @@ onUnmounted(() => {
             <span v-else-if="stepNode.outputTable" class="dv-scope-piece"><span class="k">输出</span><span class="v">{{ stepNode.outputTable }}</span></span>
           </template>
         </span>
-        <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
-          <el-icon><QuestionFilled /></el-icon>
-        </button>
       </template>
       </template>
       <template #quick>
@@ -1150,7 +1179,7 @@ onUnmounted(() => {
           </template>
         </el-dropdown>
       </template>
-      <!-- 操作按钮并入筛选行（1008-07，一行放不下横向滚动）。顺序与源数据视图一致：刷新、新增 ▾、导出、删除、更多、全屏。 -->
+      <!-- 结果操作独立成行，查询条件可换行，保留全部既有操作。 -->
       <template #actions>
         <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
           <el-icon><Refresh /></el-icon>
@@ -1210,7 +1239,7 @@ onUnmounted(() => {
         <FullscreenToggle v-model="fullscreen" />
       </template>
       <template #toolbar>
-        <!-- 整行内容（SQL 提示 / 批量条 / 发大量后续面板）；按钮在上面的 #actions 里，已并入筛选行 -->
+        <!-- SQL 提示 / 批量条 / 发大量后续面板保留整行展示。 -->
         <div v-if="showSql" class="dv-sql-tip">{{ sqlPreview }}</div>
         <!-- 选中批量条 -->
         <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
@@ -1350,6 +1379,8 @@ onUnmounted(() => {
         </el-table-column>
       </template>
     </DataQueryPanel>
+      </section>
+    </div>
 
     <DataFetchApiDialog
       v-model="apiOpen"
@@ -1464,6 +1495,28 @@ onUnmounted(() => {
   min-height: 0;
   flex-direction: column;
 }
+.dv-data-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.dv-data-workspace.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+.dv-query-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.dv-table-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.dv-table-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 1; }
+.dv-table-context strong { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.dv-table-id { color: var(--rc-muted); font-size: 12px; }
+.dv-engine-tag { border-color: var(--rc-border-soft); background: var(--rc-bg); color: var(--rc-muted); font-size: 11px; }
+.dv-nav-expand, .dv-favorite { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--rc-radius-sm); background: transparent; color: var(--rc-muted); cursor: pointer; }
+.dv-nav-expand:hover, .dv-favorite:not(:disabled):hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.dv-nav-expand:focus-visible, .dv-favorite:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
+.dv-favorite[aria-pressed="true"] { color: var(--rc-primary-ink); }
+.dv-structure-btn.rc-btn { flex: none; gap: 5px; height: 32px; padding: 0 10px; border-color: transparent; background: transparent; color: var(--rc-text-2); font-size: 12px; font-weight: 500; }
+.dv-structure-btn:not(:disabled):hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.dv-structure-btn:disabled, .dv-favorite:disabled { color: var(--rc-faint); cursor: not-allowed; }
+.dv-help-btn.rc-btn { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; color: var(--rc-muted); }
+.dv-help-btn:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn) { height: 32px; padding: 0 10px; font-size: 12px; }
+.dv-table-error { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: var(--rc-danger, #dc2626); font-size: 12px; }
+.dv-source-select { max-width: 100%; }
+@media (max-width: 1100px) { .dv-data-workspace { grid-template-columns: 208px minmax(0, 1fr); } }
+@media (max-width: 760px) { .dv-data-workspace { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .dv-data-workspace :deep(.dt-sidebar) { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--rc-border-soft); } .dv-query-workspace { min-height: 440px; } }
 /* 全屏（1008-07）：同一份 DOM 铺满视口，不复制模板也不套弹层；z-index 与源数据视图的全屏同值（60） */
 .dv-page.is-fullscreen {
   position: fixed;
