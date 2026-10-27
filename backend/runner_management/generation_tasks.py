@@ -53,6 +53,7 @@ def save_config(app, body):
                 fields = ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName',
                           'systemPrompt', 'userPrompt', 'url', 'fileNameMode')
                 data = {name: incoming.get(name, '') for name in fields}
+                data.update(workspaceMode=incoming.get('workspaceMode', 'config'), workspacePath=incoming.get('workspacePath', ''))
                 if any(not isinstance(value, str) for value in data.values()):
                     raise ApiError('AI 生成配置字段无效')
                 if not data['interfaceId'] or not data['userPrompt'].strip() or not data['systemPrompt'].strip():
@@ -63,6 +64,8 @@ def save_config(app, body):
                     raise ApiError('AI 生成配置字段过长')
                 if data['fileNameMode'] not in ('website', 'queue'):
                     raise ApiError('文件命名方式无效')
+                from .generation_workspaces import directory
+                directory({**data, 'configId': owner})
                 from .generated_archives import destination
                 destination(app, {**data, 'configId': owner})
                 from .model_interfaces import listing

@@ -182,7 +182,7 @@ class CodeServerTest(unittest.TestCase):
             self.assertEqual(response.read1(4096).decode(), '第一段')
             release.set(); self.assertEqual(response.read().decode(), '第二段')
         self.assertEqual(calls[0]['cdp_port'], 9333)
-        base = service.workspace.root / identity['serverId'] / 'task-100'
+        base = service.workspace.root / identity['serverId']
         self.assertEqual(calls[0]['code_dir'], str(base / 'code'))
         self.assertEqual(calls[0]['input_file_dir'], str(base / 'input'))
         self.assertEqual(calls[0]['output_file_dir'], str(base / 'output'))

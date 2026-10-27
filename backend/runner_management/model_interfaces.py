@@ -213,9 +213,10 @@ def agent_directories(selected, task_id=None):
     if any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value) for value in (instance_id, task_id)):
         raise ApiError('实例 ID 或任务 ID 无效')
     path_type = PureWindowsPath if '\\' in root or re.match(r'^[A-Za-z]:', root) else PurePosixPath
-    base = path_type(root) / instance_id / task_id
-    return {'instanceId': instance_id, 'taskId': task_id, 'prjDir': root,
-            'inputFileDir': str(base / 'input'), 'codeDir': str(base / 'code'), 'outputFileDir': str(base / 'output')}
+    base = path_type(root) / selected.get('_workspaceDirectory', instance_id)
+    return {'instanceId': instance_id, 'taskId': task_id, 'prjDir': str(base),
+            'inputFileDir': str(base / 'input'), 'codeDir': str(base / 'code'), 'outputFileDir': str(base / 'output'),
+            'taskRecordPath': str(base / 'tasks' / (task_id + '.json'))}
 
 
 def workbuddy_request(selected, prompt, task_id=None):
@@ -379,6 +380,51 @@ def generate(app, body):
     selected = next((row for row in listing(app)['items'] if row['id'] == body.get('interfaceId')), None)
     if not selected or not selected['enabled']:
         raise ApiError('所选模型接口不存在或已停用')
+    selected = dict(selected)
+    remote = selected.get('generationServerId') and selected['kind'] in ('agent', 'gemini-agent')
+    if not remote:
+        return _generate(app, body, selected)
+    from . import generation_workspaces as workspaces
+    from .code_servers import read
+    if body.get('configId'):
+        selected['prjDir'] = read(app, selected['generationServerId'])['workspace']
+        selected['_workspaceDirectory'] = workspaces.directory(body)
+    workspace = agent_directories(selected, body.get('taskId'))
+    body = {**body, 'taskId': workspace['taskId']}
+    # Node generation always archives to its configured repository before releasing
+    # the shared directory. A browser disconnect cannot skip the Git submission.
+    if body.get('configId'):
+        body.update(autoCommit=True, deferCommit=False)
+    with workspaces.serialized(selected['generationServerId'], workspace['prjDir'], selected['timeoutSeconds']):
+        started = workspaces.stamp()
+        selected['_generationStartedAt'] = started
+        common = {'configId': body.get('configId', ''), 'queueName': body.get('queueName', ''), 'startedAt': started}
+        workspaces.receipt(app, selected['generationServerId'], workspace, **common, status='running')
+        try:
+            from .code_servers import operation
+            from .generated_archives import relative_workspace_path
+            code_path = relative_workspace_path(app, selected['generationServerId'], workspace['codeDir'])
+            operation(app, selected['generationServerId'], {'action': 'mkdir', 'path': code_path})
+            selected['_beforeCodeFiles'] = {item['path']: item['sha256'] for item in operation(
+                app, selected['generationServerId'], {'action': 'export', 'paths': [code_path]})['files']}
+            result = _generate(app, body, selected)
+            archive = result.get('archive', {})
+            workspaces.receipt(app, selected['generationServerId'], workspace, **common,
+                               status='failed' if archive.get('status') == 'failed' else 'succeeded', finishedAt=workspaces.stamp(),
+                               files=archive.get('files', []), gitCommit=archive.get('gitCommit', ''), pushed=archive.get('pushed', False),
+                               message=archive.get('message', ''))
+            return result
+        except Exception as error:
+            try:
+                workspaces.receipt(app, selected['generationServerId'], workspace, **common,
+                                   status='failed', finishedAt=workspaces.stamp(), message=str(error)[:1500])
+            except Exception:
+                pass
+            raise
+
+
+def _generate(app, body, selected):
+    from .server import ApiError
     service = script_service()
     remote_target = None
     if selected.get('generationServerId') and selected['kind'] in ('agent', 'gemini-agent') and body.get('configId'):

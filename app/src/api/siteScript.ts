@@ -3,6 +3,8 @@ export const DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT = '你是 Python 网站采集脚�
 export interface SiteScriptGenerateInput {
   configId?: string; configType?: string; queueName?: string; repositoryId?: string; directoryId?: string; autoCommit?: boolean; fileName?: string; deferCommit?: boolean
   taskId?: string
+  workspaceMode?: 'config' | 'queue' | 'custom'
+  workspacePath?: string
   interfaceId?: string
   prompt: string
   systemPrompt?: string

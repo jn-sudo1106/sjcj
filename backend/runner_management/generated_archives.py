@@ -97,6 +97,8 @@ def relative_workspace_path(app, server_id, path):
 def create(app, selected, workspace, target):
     record = {**target, 'archiveId': uuid.uuid4().hex, 'serverId': selected['generationServerId'],
               'taskId': workspace['taskId'], 'codeDirectory': relative_workspace_path(app, selected['generationServerId'], workspace['codeDir']),
+              'workspace': workspace, 'startedAt': selected.get('_generationStartedAt', ''),
+              'beforeCodeFiles': selected.get('_beforeCodeFiles'),
               'createdAt': datetime.now(timezone.utc).isoformat(timespec='microseconds'), 'status': 'pending',
               'message': '', 'files': [], 'gitCommit': '', 'pushed': False}
     with LOCK:
@@ -146,8 +148,13 @@ def fallback_code(app, record, text, filename, service):
         return
     existing = operation(app, record['serverId'], {'action': 'list', 'path': record['codeDirectory']})
     if existing['items']:
-        return
-    operation(app, record['serverId'], {'action': 'upload', 'overwrite': False, 'files': [{
+        if record.get('beforeCodeFiles') is None:
+            return
+        current = {item['path']: item['sha256'] for item in operation(
+            app, record['serverId'], {'action': 'export', 'paths': [record['codeDirectory']]})['files']}
+        if current != record['beforeCodeFiles']:
+            return
+    operation(app, record['serverId'], {'action': 'upload', 'overwrite': True, 'files': [{
         'path': record['codeDirectory'] + '/' + filename, 'data': base64.b64encode(code.encode('utf8')).decode('ascii')}]})
 
 
@@ -188,6 +195,14 @@ def commit(app, archive_id):
                 kept = set(error.uploaded_paths)
                 record['files'] = [item for item in record['files'] if item['path'] in kept]
         store(app, record)
+        if record.get('workspace', {}).get('taskRecordPath'):
+            from .generation_workspaces import receipt, stamp
+            try:
+                receipt(app, record['serverId'], record['workspace'], configId=record['configId'], queueName=record['queueName'], startedAt=record.get('startedAt', ''),
+                        status='succeeded' if record['status'] == 'committed' else 'failed',
+                        finishedAt=stamp(), files=record['files'], gitCommit=record['gitCommit'], pushed=record['pushed'], message=record['message'])
+            except Exception:
+                pass  # A receipt failure must not repeat a completed Git commit.
         return public(record)
 
 

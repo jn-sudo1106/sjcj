@@ -59,7 +59,11 @@ class GenerationTasksTest(unittest.TestCase):
         self.assertTrue(result['gitCommit'])
         self.assertTrue(result['archiveId'])
         self.assertEqual(len(calls), 1)
-        self.assertIn(record['taskId'], calls[0]['code_dir'])
+        self.assertNotIn(record['taskId'], calls[0]['code_dir'])
+        from pathlib import Path
+        import json
+        receipt = Path(calls[0]['prj_dir']) / 'tasks' / (record['taskId'] + '.json')
+        self.assertEqual(json.loads(receipt.read_text('utf8'))['gitCommit'], result['gitCommit'])
         self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = 1')
 
     def test_restart_marks_interrupted_without_repeating_model_calls(self):

@@ -21,12 +21,13 @@ class ModelInterfacesTest(unittest.TestCase):
         from backend.runner_management.server import ApiError
         selected = {'id': 'interface-1', 'generationServerId': 'server-1', 'prjDir': r'D:\aicode'}
         paths = models.agent_directories(selected, 'task-1')
-        self.assertEqual(paths['codeDir'], r'D:\aicode\server-1\task-1\code')
-        self.assertEqual(paths['inputFileDir'], r'D:\aicode\server-1\task-1\input')
-        self.assertEqual(paths['outputFileDir'], r'D:\aicode\server-1\task-1\output')
-        self.assertEqual(paths['prjDir'], selected['prjDir'])
+        self.assertEqual(paths['codeDir'], r'D:\aicode\server-1\code')
+        self.assertEqual(paths['inputFileDir'], r'D:\aicode\server-1\input')
+        self.assertEqual(paths['outputFileDir'], r'D:\aicode\server-1\output')
+        self.assertEqual(paths['prjDir'], r'D:\aicode\server-1')
+        self.assertEqual(paths['taskRecordPath'], r'D:\aicode\server-1\tasks\task-1.json')
         self.assertNotEqual(models.agent_directories(selected)['taskId'], models.agent_directories(selected)['taskId'])
-        self.assertEqual(models.agent_directories({**selected, 'prjDir': '/data/aicode'}, 123)['codeDir'], '/data/aicode/server-1/123/code')
+        self.assertEqual(models.agent_directories({**selected, 'prjDir': '/data/aicode'}, 123)['codeDir'], '/data/aicode/server-1/code')
         self.assertEqual(models.agent_directories({**selected, 'generationServerId': ''}, 'task-1')['instanceId'], 'interface-1')
         for bad in ('../escape', 'a/b', '', True, 'a\\b'):
             with self.subTest(taskId=bad), self.assertRaises(ApiError):
@@ -91,8 +92,8 @@ class ModelInterfacesTest(unittest.TestCase):
             self.assertNotIn('model', body)
             self.assertNotIn('cdp_port', body)
             self.assertEqual(body['title'], '临时标题')
-            self.assertRegex(body['input_file_dir'], r'^D:\\aicode\\gemini-agent\\[a-f0-9]{32}\\input$')
-            self.assertEqual(body['prj_dir'], r'D:\aicode')
+            self.assertEqual(body['input_file_dir'], r'D:\aicode\gemini-agent\input')
+            self.assertEqual(body['prj_dir'], r'D:\aicode\gemini-agent')
             models.generate(self.app, {'interfaceId': 'gemini-agent', 'prompt': '抓取新闻', 'url': 'https://example.com', 'sampleId': 'www.realcan.cn.py'})
             generated = json.loads(upstream.call_args.args[0].data)
             self.assertEqual(generated['title'], gemini['title'])
@@ -218,9 +219,9 @@ class ModelInterfacesTest(unittest.TestCase):
             self.assertEqual(failed['responseText'], '暂时繁忙')
             self.request('/api/runner-management/model-interfaces/test', {**payload, 'interfaceId': 'workbuddy-agent-hy3',
                          'taskId': 'test-task-1', 'prjDir': r'D:\test', 'inputFileDir': r'G:\pythonProject\frida\client.py', 'codeDir': r'D:\test\code', 'outputFileDir': r'D:\test\out', 'systemPrompt': '角色要求'})
-            self.assertEqual(calls[-1]['code_dir'], [r'D:\test\workbuddy-agent-hy3\test-task-1\code'])
-            self.assertEqual(calls[-1]['prj_dir'], [r'D:\test'])
-            self.assertEqual(calls[-1]['input_file_dir'], [r'D:\test\workbuddy-agent-hy3\test-task-1\input'])
+            self.assertEqual(calls[-1]['code_dir'], [r'D:\test\workbuddy-agent-hy3\code'])
+            self.assertEqual(calls[-1]['prj_dir'], [r'D:\test\workbuddy-agent-hy3'])
+            self.assertEqual(calls[-1]['input_file_dir'], [r'D:\test\workbuddy-agent-hy3\input'])
             self.assertEqual(calls[-1]['prompt'], ['系统要求：\n角色要求\n\n用户要求：\n南京 & 上海'])
             self.assertEqual(models.listing(self.app), original)
             for change in ({'prompt': ''}, {'model': ''}, {'stream': '1'}, {'interfaceId': 'missing'}, {'systemPrompt': []}, {'systemPrompt': 'x' * 12001}):
@@ -289,8 +290,8 @@ class ModelInterfacesTest(unittest.TestCase):
             agent = calls[1][1]
             self.assertEqual(calls[1][0], '/agent')
             self.assertEqual(agent['model'], 'hy3')
-            self.assertEqual(agent['prj_dir'], r'D:\aicode')
-            self.assertRegex(agent['input_file_dir'], r'^D:\\aicode\\workbuddy-agent-hy3\\[a-f0-9]{32}\\input$')
+            self.assertEqual(agent['prj_dir'], r'D:\aicode\workbuddy-agent-hy3')
+            self.assertEqual(agent['input_file_dir'], r'D:\aicode\workbuddy-agent-hy3\input')
             self.assertEqual(agent['code_dir'], agent['input_file_dir'].removesuffix('input') + 'code')
             self.assertIn('application/json', calls[1][2]['Content-Type'])
             self.assertIn(payload['prompt'], agent['prompt'])

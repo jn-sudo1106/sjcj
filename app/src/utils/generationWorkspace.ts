@@ -9,7 +9,7 @@ export function generationWorkspace(config: ModelInterface, taskId: string) {
   const root = config.prjDir?.trim() || ''
   const separator = root.includes('\\') || /^[A-Za-z]:/.test(root) ? '\\' : '/'
   const instanceId = config.generationServerId || config.id || '{实例ID}'
-  const base = [root.replace(/[\\/]+$/, ''), instanceId, taskId].join(separator)
-  return { instanceId, taskId, prjDir: root, inputFileDir: `${base}${separator}input`,
-    codeDir: `${base}${separator}code`, outputFileDir: `${base}${separator}output` }
+  const base = [root.replace(/[\\/]+$/, ''), instanceId].join(separator)
+  return { instanceId, taskId, prjDir: base, inputFileDir: `${base}${separator}input`,
+    codeDir: `${base}${separator}code`, outputFileDir: `${base}${separator}output`, taskRecordPath: `${base}${separator}tasks${separator}${taskId}.json` }
 }

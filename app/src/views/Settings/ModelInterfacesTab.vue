@@ -263,7 +263,7 @@ onMounted(load)
           <el-form-item label="输入目录（自动生成）"><el-input :model-value="formDirectories.inputFileDir" readonly /></el-form-item>
           <el-form-item label="代码目录（自动生成）"><el-input :model-value="formDirectories.codeDir" readonly /></el-form-item>
           <el-form-item label="输出目录（自动生成）"><el-input :model-value="formDirectories.outputFileDir" readonly /></el-form-item>
-          <p class="mi-note">按实例 ID / 任务 ID 隔离目录。选择代码生成服务器时使用其实例 ID，直接连接时使用本接口 ID。</p>
+          <p class="mi-note">接口测试固定复用实例工作目录；流程节点可按配置 ID、MQ 名称或自定义路径设置生成目录，任务 ID 仅用于记录文件名。</p>
         </template>
         <el-form-item label="超时（秒）"><el-input-number v-model="form.timeoutSeconds" :min="10" :max="1800" :step="10" /></el-form-item>
         <el-form-item v-if="form.kind === 'agent'" label="浏览器调试端口（cdp_port）"><el-input-number v-model="form.cdpPort" :min="1" :max="65535" :precision="0" controls-position="right" data-testid="model-cdp-port" /></el-form-item>
