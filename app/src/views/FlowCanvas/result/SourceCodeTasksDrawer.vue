@@ -57,13 +57,13 @@ onBeforeUnmount(() => { request++; if (timer) clearTimeout(timer) })
 const time = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
 </script>
 <template>
-  <el-drawer v-model="open" title="代码生成任务" size="min(1000px, 96vw)" append-to-body destroy-on-close>
+  <el-drawer v-model="open" title="代码生成" size="min(1000px, 96vw)" append-to-body destroy-on-close>
     <label class="generation-mode">任务方式
-      <select v-model="mode" aria-label="任务方式" :disabled="creating"><option value="ai">AI 生成任务</option><option value="mq">MQ 代码任务</option></select>
+      <select v-model="mode" aria-label="任务方式" :disabled="creating"><option value="ai">AI 代码生成</option><option value="mq">MQ 代码生成</option></select>
     </label>
     <SourceMqCodeTasks v-if="mode === 'mq'" :sources="sources" />
     <template v-else>
-    <div class="generation-toolbar"><span>已选择 {{ sources.length }} 个源</span><el-button type="primary" :loading="creating" :disabled="!sources.length || sources.length > 200" @click="create">为选中源创建任务</el-button><el-button :loading="loading" @click="refresh">刷新</el-button></div>
+    <div class="generation-toolbar"><span>已选择 {{ sources.length }} 个源</span><el-button type="primary" :loading="creating" :disabled="!sources.length || sources.length > 200" @click="create">代码生成</el-button><el-button :loading="loading" @click="refresh">刷新</el-button></div>
     <p class="generation-note">按生效的默认流程检查首个配置节点。需先启用代码生成，并在相应节点 AI 工作区保存生成配置。任务提交后在后台执行。</p>
     <p v-if="sources.length > 200" role="alert">每次最多选择 200 个源。</p>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />

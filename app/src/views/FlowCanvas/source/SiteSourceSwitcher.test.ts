@@ -1224,3 +1224,15 @@ describe('SiteSourceSwitcher · 空白模板不提供流程选项', () => {
     expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
   })
 })
+
+it('右键发采集代码打开独立表单，关闭源菜单后点击表单仍保留且不会发采集任务', async () => {
+  const wrapper = await createWrapper()
+  await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
+  await wrapper.get('[data-testid="source-menu-code"]').trigger('click'); await flushPromises()
+  expect(wrapper.find('[data-testid="source-menu-code"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="201 派发配置 ID"]').exists()).toBe(true)
+  window.dispatchEvent(new MouseEvent('click')); await flushPromises()
+  expect(wrapper.find('[aria-label="201 派发配置 ID"]').exists()).toBe(true)
+  expect(sourceApi.sendSnatchWithParam).not.toHaveBeenCalled()
+  wrapper.unmount()
+})

@@ -35,6 +35,9 @@ import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import RowEditDialog from '@/views/DataView/RowEditDialog.vue'
 import DataImportDialog from '@/views/DataView/DataImportDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
+import CodeConfigButton from './CodeConfigButton.vue'
+import { codeTargetForNode, codeTargetsForRows } from '@/utils/flow/codeConfigTargets'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
@@ -52,6 +55,20 @@ function copyText(val: string, label?: string) {
 const flow = useFlowStore()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
+const flowVersion = useFlowVersionStore()
+function nodeCodeTargets(nodeId = selectedNodeId.value) {
+  const flowId = canvasFlowIdOf(flow)
+  return [codeTargetForNode(sourceId.value, flowId, nodeId, flowVersion.flowId === flowId && !flowVersion.published ? flowVersion.viewVersionId : null)]
+}
+function dataCodeTargets() {
+  if (execMode.value === 'fetch') return nodeCodeTargets()
+  const flowId = canvasFlowIdOf(flow)
+  const stepIds = isCurrentNodeAction.value ? [selectedNodeId.value] : successorIds.value
+  if (!stepIds.length) throw new Error('当前节点没有可生成代码的后续步骤')
+  return stepIds.flatMap(stepId => codeTargetsForRows(rows.value, selectedRowIds.value, selectedTable.value, sourceId.value, {
+    flowId, ver: flowVersion.flowId === flowId && !flowVersion.published ? flowVersion.viewVersionId : null, stepId,
+  }))
+}
 
 const source = computed(() => flow.sourceCtx)
 const route = useRoute()
@@ -1794,6 +1811,7 @@ async function onTestScript() {
               :title="execDisabledReason"
               @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
             >{{ actionBtnText }}</button>
+            <CodeConfigButton v-if="execMode !== 'upstream'" data-testid="data-code-btn" :build-targets="dataCodeTargets" :disabled="execMode !== 'fetch' && !selectedRowIds.length" label="代码生成" />
             <el-dropdown
               v-if="execMode === 'input' && canPickRows"
               trigger="click"
@@ -2104,6 +2122,7 @@ async function onTestScript() {
         data-testid="rail-menu-send-fetch"
         @click="sendFetchForNode(nodeMenu.nodeId)"
       >发起抓取</button>
+      <CodeConfigButton data-testid="rail-menu-code" :build-targets="() => nodeCodeTargets(nodeMenu.nodeId)" label="代码生成" />
       <button
         type="button"
         data-testid="rail-menu-toggle-skip"

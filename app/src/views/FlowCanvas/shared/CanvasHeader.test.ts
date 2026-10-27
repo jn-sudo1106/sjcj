@@ -44,7 +44,7 @@ describe('CanvasHeader · 流程二级导航', () => {
     const row = wrapper.get('[data-testid="flow-mode-row"]')
 
     expect(row.get('[aria-label="流程展示方式"]').text()).toBe('流程图流程列表')
-    expect(row.get('[aria-label="源运行操作"]').text()).toBe('发起抓取')
+    expect(row.get('[aria-label="源运行操作"]').text()).toBe('发起抓取代码生成')
     expect(wrapper.findAll('.rc-canvas-head > .ch-switcher')).toHaveLength(1)
     expect(wrapper.findAll('.ch-flow-mode-row > .ch-switcher')).toHaveLength(1)
     expect(wrapper.find('.ch-canvas-actions').exists()).toBe(false)
@@ -451,4 +451,17 @@ describe('CanvasHeader · 数据/文件/任务页的流程切换器', () => {
     await flushPromises()
     expect(router.currentRoute.value.query).toMatchObject({ sourceId: 'source-a', view: 'data', workflowId: '702', flowId: '7020' })
   })
+})
+
+it('发采集旁的发代码使用当前流程和步骤，不能把抓取 configId 当派发 configId', async () => {
+  const wrapper = await mountHeader()
+  const flow = useFlowStore()
+  flow.loadFromSource({ sourceId: '7', flowId: '50', name: '测试源', url: '', configId: '10', mainTable: '11', owner: '', state: 'C' }, [
+    { stepId: '2', sourceId: '-1', name: '采集', configId: '20', enabled: true, isRoot: true, outputTable: '11' },
+  ])
+  flow.selectedId = '2'
+  await flushPromises()
+  const button = wrapper.findComponent({ name: 'CodeConfigButton' })
+  expect(button.props('buildTargets')()).toEqual([{ sourceId: '7', flowId: '50', stepId: '2' }])
+  wrapper.unmount()
 })
