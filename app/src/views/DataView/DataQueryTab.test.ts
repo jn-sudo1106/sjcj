@@ -1131,6 +1131,7 @@ describe('数据中心 · 数据查询 tab', () => {
     useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
+    await sidebar().get('[data-tab="db"]').trigger('click')
     expect(sidebar().text()).toContain('其它表25')
 
     await searchTables('其它表25')

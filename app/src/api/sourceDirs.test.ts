@@ -6,9 +6,9 @@ vi.mock('@/api/client', async (importOriginal) => {
   return { ...actual, request: (...args: unknown[]) => requestMock(...args) }
 })
 
-import { sourceApi, workflowBindingApi, type SourceCategory } from './index'
+import { flowCenterApi, sourceApi, workflowBindingApi, type SourceCategory } from './index'
 import {
-  addSourcesToBizDir, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
+  addSourcesToBizDir, bizDirTables, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
   importFromTemplateToBizDir, moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
 } from './sourceDirs'
 import type { Source, SourceFlowsView } from './types'
@@ -121,6 +121,40 @@ describe('sourceDirs · 业务目录里的源', () => {
       { categoryId: 9011496, sourceIds: [2], sourceGroupIds: [] },
       { categoryId: 9011515, sourceIds: [4], sourceGroupIds: [] },
     ])
+  })
+})
+
+describe('sourceDirs · 业务目录里的表（10-28）', () => {
+  it('目录直属源的主表 ∪ 所用流程各节点的输出表；流程去重、跨目录复用；空 / 0 不算表', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (p) => ({
+      total: 0,
+      list: (p?.sourceIds as string[]).map((id) => ({ id, mainTable: id === '3' ? '0' : `main-${id}`, flowId: id === '4' ? '' : 'f1' }) as unknown as Source),
+    }))
+    const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([
+      { outputTable: 'out-1', inputTable: 'in-only' }, { outputTable: null }, { outputTable: 'out-1' },
+    ] as never)
+    expect((await bizDirTables('9011496')).tableIds.sort()).toEqual(['main-1', 'main-2', 'out-1'])
+    expect(paged).toHaveBeenCalledWith({ sourceIds: ['1', '2', '3'], page: 1, size: 3 })
+    expect((await bizDirTables('9011515')).tableIds.sort()).toEqual(['main-4', 'out-1'])
+    expect(steps).toHaveBeenCalledTimes(1)
+  })
+
+  it('单个流程查节点失败不拖垮整个目录：记进 failedFlowIds，其余照常统计', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [
+      { id: '3', mainTable: 'main-3', flowId: 'bad' }, { id: '4', mainTable: 'main-4', flowId: 'ok' },
+    ] as unknown as Source[] })
+    vi.spyOn(flowCenterApi, 'steps').mockImplementation(async (flowId) => {
+      if (flowId === 'bad') throw new Error('请先进入流程草稿编辑并重新加载版本信息')
+      return [{ outputTable: 'out-ok' }] as never
+    })
+    expect(await bizDirTables('9011515')).toEqual({ tableIds: ['main-3', 'main-4', 'out-ok'], failedFlowIds: ['bad'] })
+  })
+
+  it('取不到源或流程时报错，不缓存失败，重试能拿到', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockRejectedValueOnce(new Error('服务器异常'))
+      .mockResolvedValue({ total: 1, list: [{ id: '3', mainTable: 'main-3' } as unknown as Source] })
+    await expect(bizDirTables('9011515')).rejects.toThrow('服务器异常')
+    expect((await bizDirTables('9011515')).tableIds).toEqual(['main-3'])
   })
 })
 

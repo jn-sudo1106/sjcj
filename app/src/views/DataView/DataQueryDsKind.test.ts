@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { dataApi, entryApi, favoriteApi, logReportApi, type EntryTypeGroup, type DataTableMeta } from '@/api'
+import * as sourceDirs from '@/api/sourceDirs'
 import { useAuthStore } from '@/stores/auth'
 import { favoriteEntryIds } from '@/utils/entryFavorites'
 import DataQueryTab from './DataQueryTab.vue'
@@ -37,6 +38,7 @@ describe('数据查询左侧库与表导航', () => {
     expect(wrapper.get('.dv-table-context').text()).toContain('MYSQL')
     expect(wrapper.text()).toContain('m1 数据')
     vi.mocked(dataApi.rowQueryPaged).mockClear()
+    await wrapper.get('[data-tab="db"]').trigger('click')
     await wrapper.get('[data-group="CK"]').trigger('click')
     expect(dataApi.rowQueryPaged).not.toHaveBeenCalled()
     expect(wrapper.get('[data-table-id="c1"]').attributes('title')).toContain('CK')
@@ -80,12 +82,45 @@ describe('数据查询左侧库与表导航', () => {
     await mountPage()
     let finishCk!: (meta: DataTableMeta) => void
     vi.mocked(dataApi.tableMeta).mockImplementation(async tableId => tableId === 'c1' ? new Promise(resolve => { finishCk = resolve }) : ({ tableId, tableName: 'tb_mysql', fields: [{ prop: 'K1', columnName: 'K1', desc: '内容', type: 'string', required: true }] }))
+    await wrapper.get('[data-tab="db"]').trigger('click')
     await wrapper.get('[data-group="CK"]').trigger('click'); await choose('c1')
     expect(wrapper.text()).not.toContain('m1 数据')
     await choose('m1'); vi.mocked(dataApi.rowQueryPaged).mockClear()
     finishCk({ tableId: 'c1', tableName: 'tb_ck', fields: [] }); await flushPromises()
     expect(wrapper.get('.dv-table-context').text()).toContain('MYSQL'); expect(wrapper.text()).toContain('m1 数据')
     expect(dataApi.rowQueryPaged).not.toHaveBeenCalled()
+  })
+  it('全部表默认按业务目录：逐级展开才查目录下的表，只列可选的表，点表切到它的数据', async () => {
+    vi.spyOn(sourceDirs, 'loadDirChildren').mockImplementation(async (_kind, parentId = '') => ({
+      '': [{ id: 'd1', name: '宏观数据', parentId: '' }],
+      d1: [{ id: 'd2', name: '统计局', parentId: 'd1' }],
+      d2: [],
+    } as Record<string, sourceDirs.DirNode[]>)[parentId] ?? [])
+    const tablesOf = vi.spyOn(sourceDirs, 'bizDirTables').mockImplementation(async id => ({ tableIds: id === 'd2' ? ['c1', 'gone'] : [], failedFlowIds: id === 'd2' ? ['f9'] : [] }))
+    await mountPage()
+    expect(wrapper.get('[data-tab="biz"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('[data-group="MYSQL"]').exists()).toBe(false)
+    expect(tablesOf).not.toHaveBeenCalled()
+    await wrapper.get('[data-dir-id="d1"]').trigger('click'); await flushPromises()
+    await wrapper.get('[data-dir-id="d2"]').trigger('click'); await flushPromises()
+    expect(tablesOf).toHaveBeenCalledWith('d2')
+    expect(wrapper.get('[data-dir-id="d2"] .dt-section-count').text()).toBe('1')
+    expect(wrapper.find('[data-dir-id="d1"] .dt-section-count').exists()).toBe(false)
+    expect(wrapper.find('[data-table-id="gone"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('1 个流程的节点没读到（流程 f9），这些源只统计了主表')
+    await choose('c1')
+    expect(wrapper.text()).toContain('c1 数据')
+  })
+  it('业务目录取表失败显示错误和重试，数据库页签照常可用', async () => {
+    vi.spyOn(sourceDirs, 'loadDirChildren').mockImplementation(async (_kind, parentId = '') => (parentId ? [] : [{ id: 'd1', name: '宏观数据', parentId: '' }]))
+    vi.spyOn(sourceDirs, 'bizDirTables').mockRejectedValueOnce(new Error('服务器异常')).mockResolvedValue({ tableIds: ['m1'], failedFlowIds: [] })
+    await mountPage()
+    await wrapper.get('[data-dir-id="d1"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('读取目录下的表失败：服务器异常')
+    await wrapper.get('[data-testid="data-table-biz-tree"] .rc-btn').trigger('click'); await flushPromises()
+    expect(wrapper.find('[data-testid="data-table-biz-tree"] [data-table-id="m1"]').exists()).toBe(true)
+    await wrapper.get('[data-tab="db"]').trigger('click')
+    expect(wrapper.find('[data-group="MYSQL"]').exists()).toBe(true)
   })
   it('目录加载失败提供重试，恢复后加载默认表与数据', async () => {
     vi.mocked(dataApi.entryTypesGroup).mockRejectedValueOnce(new Error('网络中断'))
