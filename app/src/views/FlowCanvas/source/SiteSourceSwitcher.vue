@@ -423,6 +423,9 @@ async function launchFromMenu() {
 // 一个源只属于一个网站（0824-00 §1.1 变更），所以这是「搬移」不是「多加一个关联」：
 // 换绑成功后本网站不再包含该源，必须在确认文案里说清楚，否则用户会以为只是加了个关系。
 const moveDlg = reactive({ show: false, source: null as Source | null, targetSiteId: '', saving: false })
+// 「不绑定网站」（10-28）：changeSite(ids, 0) 就是旧平台 SiteList.vue「取消关联」那条，源本身不动、可逆。
+// 注意后端落库写 0 不写 NULL，解绑后的源在「仅展示未关联」里筛不出来，只能按源 ID 找回，所以提示里带上 ID。
+const UNBIND_SITE_ID = '0'
 const siteOptions = ref<Site[]>([])
 async function openMoveDialog(s: Source) {
   closeRowMenu()
@@ -452,6 +455,7 @@ async function submitMove() {
   const s = moveDlg.source
   const target = moveDlg.targetSiteId
   if (!s || !target || moveDlg.saving) return
+  const unbind = target === UNBIND_SITE_ID
   const targetName = moveTargets.value.find((x) => String(x.siteId) === target)?.name || target
   moveDlg.saving = true
   try {
@@ -463,7 +467,9 @@ async function submitMove() {
     // 换绑成功：本网站列表里移除该源（源已经搬走，不是还在这儿）
     children.value = children.value.filter((c) => c.sourceId !== s.sourceId)
     closeMoveDialog()
-    ElMessage.success(`源「${s.name}」已移至网站「${targetName}」`)
+    ElMessage.success(unbind
+      ? `源「${s.name}」（ID ${s.sourceId}）已解除网站绑定`
+      : `源「${s.name}」已移至网站「${targetName}」`)
   } catch (error) {
     ElMessage.error(`更换网站失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
@@ -1541,6 +1547,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           data-testid="move-site-select"
           style="width: 100%"
         >
+          <el-option label="不绑定网站（解除当前网站关联）" :value="UNBIND_SITE_ID" />
           <el-option
             v-for="s in moveTargets"
             :key="s.siteId"
@@ -1548,7 +1555,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             :value="String(s.siteId)"
           />
         </el-select>
-        <p class="ssw-move-warn">一个源只能属于一个网站：移动后本网站将不再包含该源。</p>
+        <p v-if="moveDlg.targetSiteId === UNBIND_SITE_ID" class="ssw-move-warn" data-testid="move-unbind-warn">
+          解除后该源不属于任何网站，本网站将不再包含该源；源本身不受影响，之后可在「导入已有源」里按源 ID（{{ moveDlg.source?.sourceId }}）找回。
+        </p>
+        <p v-else class="ssw-move-warn">一个源只能属于一个网站：移动后本网站将不再包含该源。</p>
       </div>
       <div class="ssw-add-actions">
         <button class="rc-btn" type="button" @click="closeMoveDialog">取消</button>

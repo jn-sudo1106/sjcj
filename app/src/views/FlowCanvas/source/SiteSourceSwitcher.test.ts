@@ -296,6 +296,27 @@ describe('SiteSourceSwitcher', () => {
     expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
   })
 
+  // 10-28：更换网站也能选「不绑定网站」，走 changeSite(ids, 0)（旧平台「取消关联」同一条）
+  it('右键更换网站：选「不绑定网站」→ changeSite(源ID, 0)，提示改成解绑口径，源从本站列表移除', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 1, list: [{ siteId: 'site-a', name: '网站 A' }] } as never)
+    const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+    await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
+    await wrapper.get('[data-testid="source-menu-move"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="move-unbind-warn"]').exists()).toBe(false)
+    wrapper.getComponent({ name: 'ElSelectStub' }).vm.$emit('update:modelValue', '0')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="move-unbind-warn"]').text()).toContain('不属于任何网站')
+    await wrapper.get('[data-testid="move-site-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-a'], '0')
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('已解除网站绑定'))
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).not.toContain('原源')
+  })
+
   it('源行只负责进入详情，发起抓取收进右键菜单', async () => {
     const wrapper = await createWrapper()
 
