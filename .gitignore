@@ -19,6 +19,7 @@ app/dist/
 .superpowers/
 # 0927 P2-7：pnpm 锁文件不与 npm 双轨跟踪（仓库以 app/package-lock.json 为准，pnpm 安装产物不入库）
 app/pnpm-lock.yaml
+app/pnpm-workspace.yaml
 
 # 本地设计资料（仅本地保留，不入库 / 不推送）
 设计稿/
