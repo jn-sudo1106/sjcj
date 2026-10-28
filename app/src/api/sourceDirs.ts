@@ -308,9 +308,11 @@ export async function importFromTemplateToBizDir(template: Source, lines: string
 }
 
 // ---------------- 业务目录里的表（数据查询左栏「业务目录」页签，10-28） ----------------
-// 口径（10-28 孙总确认）：目录下的表 = 目录直属源涉及的输出表 = 源的主表 ∪ 源所用流程各节点的输出表（outEntry）。
+// 口径（10-28 孙总确认）：目录下的表 = 目录直属源涉及的输出表 = 源默认流程各节点的输出表（outEntry）。
+// **不并源的主表**（源上的 entryTypeId）：它是旧平台「源所用配置的输出表」，有了流程后源实际跑默认流程，
+// 根节点可能是另一套配置，主表常常过时或悬空（186 宝都国际：主表 6200033 不存在，流程写的是 2101918 等）。
 // 后端没有「目录 → 表」接口，表上也没有目录字段（entryTypePagedView 只有 groupId，不是目录），只能这样拼：
-// listSources → sourcePaged 按源 ID 取 flowId / 主表（POST body，不怕 ID 多）→ 按流程去重查节点。
+// listSources → sourcePaged 按源 ID 取默认流程（POST body，不怕 ID 多）→ 按流程去重查节点。
 // 流程通常被大量源共用（公众号 6028 个源共 1 个流程），按流程缓存后跨目录复用。
 
 const SOURCE_BATCH = 500
@@ -319,7 +321,7 @@ const dirTablesCache = new Map<string, Promise<BizDirTables>>()
 
 export interface BizDirTables {
   tableIds: string[]
-  /** 节点没查回来的流程（186 上有流程报「请先进入流程草稿编辑」）：用这些流程的源只统计了主表 */
+  /** 节点没查回来的流程（186 上有流程报「请先进入流程草稿编辑」）：用这些流程的源没统计到表 */
   failedFlowIds: string[]
 }
 const flowOutputCache = new Map<string, Promise<string[]>>()
@@ -355,9 +357,7 @@ export function bizDirTables(categoryId: string): Promise<BizDirTables> {
       const ids = sourceIds.slice(i, i + SOURCE_BATCH)
       const page = await sourceApi.sourcePaged({ sourceIds: ids, page: 1, size: ids.length })
       for (const source of page.list) {
-        const main = realId(source.mainTable)
         const flowId = realId(source.flowId)
-        if (main) tables.add(main)
         if (flowId) flowIds.add(flowId)
       }
     }

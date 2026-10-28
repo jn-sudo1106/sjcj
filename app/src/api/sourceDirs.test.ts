@@ -125,17 +125,17 @@ describe('sourceDirs · 业务目录里的源', () => {
 })
 
 describe('sourceDirs · 业务目录里的表（10-28）', () => {
-  it('目录直属源的主表 ∪ 所用流程各节点的输出表；流程去重、跨目录复用；空 / 0 不算表', async () => {
+  it('只算默认流程各节点的输出表，不并源的主表；流程去重、跨目录复用；空 / 0 不算', async () => {
     const paged = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (p) => ({
       total: 0,
-      list: (p?.sourceIds as string[]).map((id) => ({ id, mainTable: id === '3' ? '0' : `main-${id}`, flowId: id === '4' ? '' : 'f1' }) as unknown as Source),
+      list: (p?.sourceIds as string[]).map((id) => ({ id, mainTable: `main-${id}`, flowId: id === '4' ? '0' : 'f1' }) as unknown as Source),
     }))
     const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([
-      { outputTable: 'out-1', inputTable: 'in-only' }, { outputTable: null }, { outputTable: 'out-1' },
+      { outputTable: 'out-1', inputTable: 'in-only' }, { outputTable: null }, { outputTable: 'out-2' }, { outputTable: 'out-1' },
     ] as never)
-    expect((await bizDirTables('9011496')).tableIds.sort()).toEqual(['main-1', 'main-2', 'out-1'])
+    expect((await bizDirTables('9011496')).tableIds.sort()).toEqual(['out-1', 'out-2'])
     expect(paged).toHaveBeenCalledWith({ sourceIds: ['1', '2', '3'], page: 1, size: 3 })
-    expect((await bizDirTables('9011515')).tableIds.sort()).toEqual(['main-4', 'out-1'])
+    expect((await bizDirTables('9011515')).tableIds.sort()).toEqual(['out-1', 'out-2'])
     expect(steps).toHaveBeenCalledTimes(1)
   })
 
@@ -147,14 +147,15 @@ describe('sourceDirs · 业务目录里的表（10-28）', () => {
       if (flowId === 'bad') throw new Error('请先进入流程草稿编辑并重新加载版本信息')
       return [{ outputTable: 'out-ok' }] as never
     })
-    expect(await bizDirTables('9011515')).toEqual({ tableIds: ['main-3', 'main-4', 'out-ok'], failedFlowIds: ['bad'] })
+    expect(await bizDirTables('9011515')).toEqual({ tableIds: ['out-ok'], failedFlowIds: ['bad'] })
   })
 
-  it('取不到源或流程时报错，不缓存失败，重试能拿到', async () => {
+  it('取不到源时报错，不缓存失败，重试能拿到', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockRejectedValueOnce(new Error('服务器异常'))
-      .mockResolvedValue({ total: 1, list: [{ id: '3', mainTable: 'main-3' } as unknown as Source] })
+      .mockResolvedValue({ total: 1, list: [{ id: '3', mainTable: 'main-3', flowId: 'f1' } as unknown as Source] })
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{ outputTable: 'out-1' }] as never)
     await expect(bizDirTables('9011515')).rejects.toThrow('服务器异常')
-    expect((await bizDirTables('9011515')).tableIds).toEqual(['main-3'])
+    expect((await bizDirTables('9011515')).tableIds).toEqual(['out-1'])
   })
 })
 

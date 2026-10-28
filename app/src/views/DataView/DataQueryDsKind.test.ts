@@ -107,7 +107,7 @@ describe('数据查询左侧库与表导航', () => {
     expect(wrapper.get('[data-dir-id="d2"] .dt-section-count').text()).toBe('1')
     expect(wrapper.find('[data-dir-id="d1"] .dt-section-count').exists()).toBe(false)
     expect(wrapper.find('[data-table-id="gone"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('1 个流程的节点没读到（流程 f9），这些源只统计了主表')
+    expect(wrapper.text()).toContain('1 个流程的节点没读到（流程 f9），用这些流程的源没统计到表')
     await choose('c1')
     expect(wrapper.text()).toContain('c1 数据')
   })

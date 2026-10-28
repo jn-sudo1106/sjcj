@@ -112,7 +112,7 @@ const dirRows = computed(() => {
         walk(node.id, depth + 1)
         tables.forEach(table => rows.push({ kind: 'table', key: `t${node.id}-${table.tableId}`, depth: depth + 1, table }))
         const failed = dirTables.value.get(node.id)?.failedFlowIds ?? []
-        if (failed.length) rows.push({ kind: 'msg', key: `f${node.id}`, depth: depth + 1, text: `${failed.length} 个流程的节点没读到（流程 ${failed.join('、')}），这些源只统计了主表` })
+        if (failed.length) rows.push({ kind: 'msg', key: `f${node.id}`, depth: depth + 1, text: `${failed.length} 个流程的节点没读到（流程 ${failed.join('、')}），用这些流程的源没统计到表` })
         if (!tables.length && !(dirChildren.value.get(node.id) ?? []).length) rows.push({ kind: 'msg', key: `n${node.id}`, depth: depth + 1, text: '这个目录下的源还没有输出表' })
       }
     }
