@@ -526,7 +526,7 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(wrapper.findComponent({ name: 'SourceDirPanel' }).exists()).toBe(true)
     expect(wrapper.find('[data-testid="source-launch"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'SiteCardGrid' }).text()).toContain('8 / 24 个源')
-    expect(fetch).toHaveBeenCalledWith(expect.objectContaining({ name: '金融', state: 'E', enable: '0', count: 0, sourceIds: 's1,s2,s3,s4,s5,s6,s7,s8', size: 500 }))
+    expect(fetch).toHaveBeenCalledWith(expect.objectContaining({ name: '金融', state: 'E', enable: '0', count: 0, sourceIds: 's1,s2,s3,s4,s5,s6,s7,s8', size: 5000 }))
     await wrapper.get('[aria-label="源列表视图"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$.uid).toBe(instance)

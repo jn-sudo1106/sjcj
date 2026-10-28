@@ -95,21 +95,30 @@ export function loadDirPath(id: string): Promise<string[]> {
 /** 目录及其全部子孙 ID（逐层拉子级，带缓存；单个子级拉失败只少那一支） */
 export async function expandDirIds(kind: DirKind, ids: string[]): Promise<string[]> {
   const collected = new Set(ids)
-  let frontier = [...ids]
-  for (let depth = 0; frontier.length && depth < 8; depth++) {
-    const next: string[] = []
-    for (let i = 0; i < frontier.length; i += CONCURRENCY) {
-      const batch = frontier.slice(i, i + CONCURRENCY).map((id) => loadDirChildren(kind, id).catch(() => [] as DirNode[]))
-      for (const children of await Promise.all(batch)) {
-        for (const child of children) {
-          if (collected.has(child.id)) continue
-          collected.add(child.id)
-          next.push(child.id)
-        }
+  const queue = [...ids]
+  // 连续保持 CONCURRENCY 个请求在途，子级一回来就入队，不按层、按批等最慢的那个。
+  // 10-28 在 186 实测全选系统目录（2053 个目录，绝大多数是叶子）：逐层分批 27s → 连续并发 17s。
+  // 父子成环由 collected 去重拦住。
+  await new Promise<void>((resolve) => {
+    let active = 0
+    const pump = () => {
+      while (active < CONCURRENCY && queue.length) {
+        const id = queue.shift()!
+        active++
+        void loadDirChildren(kind, id).catch(() => [] as DirNode[]).then((children) => {
+          for (const child of children) {
+            if (collected.has(child.id)) continue
+            collected.add(child.id)
+            queue.push(child.id)
+          }
+          active--
+          pump()
+        })
       }
+      if (!active && !queue.length) resolve()
     }
-    frontier = next
-  }
+    pump()
+  })
   return [...collected]
 }
 

@@ -22,7 +22,7 @@ describe('网站视图按命中源批量汇总', () => {
     const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: rows.length, list: rows })
     const query = { categorys: '900,901', name: '金融', tags: ['告警'], sourceGroupId: '8', count: 0, state: 'E', enable: '0' }
     const result = await querySiteCards(query, { ...options(), catalog })
-    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ...query, page: 1, size: 500, field: 'SOURCE_ID', sorted: -1 }))
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ...query, page: 1, size: 5000, field: 'SOURCE_ID', sorted: -1 }))
     expect(fetch.mock.calls[0]?.[0]?.siteIds).toBeUndefined()
     expect(result.sites.map(s => s.siteId)).toEqual(['a', 'b'])
     expect(result.sourceScope?.matches.a?.total).toBe(210)
@@ -32,20 +32,20 @@ describe('网站视图按命中源批量汇总', () => {
   })
 
   it('命中源超过一页时完整分页汇总，后续页面的网站不会遗漏', async () => {
-    const rows = Array.from({ length: 1003 }, (_, i) => source(String(i), i < 1000 ? 'a' : 'late'))
-    const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async p => ({ total: rows.length, list: rows.slice(((p?.page ?? 1) - 1) * (p?.size ?? 500), (p?.page ?? 1) * (p?.size ?? 500)) }))
+    const rows = Array.from({ length: 10003 }, (_, i) => source(String(i), i < 10000 ? 'a' : 'late'))
+    const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async p => ({ total: rows.length, list: rows.slice(((p?.page ?? 1) - 1) * (p?.size ?? 5000), (p?.page ?? 1) * (p?.size ?? 5000)) }))
     const opts = { ...options(), catalog: [site('a'), site('late')] }
     const result = await querySiteCards({ name: '公告' }, opts)
     expect(fetch).toHaveBeenCalledTimes(3)
-    expect(result.sourceScope?.matches.a?.total).toBe(1000)
+    expect(result.sourceScope?.matches.a?.total).toBe(10000)
     expect(result.sourceScope?.matches.late?.total).toBe(3)
-    expect(opts.onProgress).toHaveBeenLastCalledWith(1003, 1003)
+    expect(opts.onProgress).toHaveBeenLastCalledWith(10003, 10003)
   })
 
   it('后端限制每页大小时按实际页大小续查，不跳过中间源', async () => {
     const rows = Array.from({ length: 205 }, (_, i) => source(String(i)))
     const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async p => {
-      const size = Math.min(p?.size ?? 500, 100)
+      const size = Math.min(p?.size ?? 5000, 100)
       return { total: rows.length, list: rows.slice(((p?.page ?? 1) - 1) * size, (p?.page ?? 1) * size) }
     })
     const result = await querySiteCards({ name: '公告' }, { ...options(), catalog: [site('a')] })
@@ -57,7 +57,7 @@ describe('网站视图按命中源批量汇总', () => {
     const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source('b1', 'b')] })
     const result = await querySiteCards({ siteIds: 'b', sourceIds: 'b1', name: '公告', count: 0 }, { ...options(), catalog: [site('a'), site('b')] })
     expect(result.sites.map(s => s.siteId)).toEqual(['b'])
-    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ siteIds: 'b', sourceIds: 'b1', name: '公告', count: 0, page: 1, size: 500 }))
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ siteIds: 'b', sourceIds: 'b1', name: '公告', count: 0, page: 1, size: 5000 }))
   })
 
   it('同条件短时间重开复用汇总结果，显式刷新后重新请求', async () => {

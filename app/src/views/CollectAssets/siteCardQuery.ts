@@ -11,6 +11,10 @@ export interface SiteCardResult {
   unbound: number
 }
 
+// 命中源每页条数。10-28 在 186 实测（18 万源、2053 个系统目录）：500 条/页约 0.3–0.9s、5000 条/页约 0.6–0.8s，
+// 单页耗时基本不随条数涨，瓶颈在请求次数；全选系统目录从 364 页降到 37 页。
+const SCOPE_PAGE_SIZE = 5000
+
 // 只保留最近一次完整汇总，避免来回切换视图重复查询；刷新和源变更时主动失效。
 let scopeCache: { key: string; expiresAt: number; matches: SiteCardSourceScope['matches']; unbound: number } | undefined
 let cacheVersion = 0
@@ -88,13 +92,13 @@ export async function querySiteCards(
       }
     }
     // 按命中源分页读取，一批最多 4 页；只累计数量及每站前 5 条，不保留整份源列表。
-    const first = await sourceApi.sourcePaged({ ...scopeQuery, page: 1, size: 500 })
+    const first = await sourceApi.sourcePaged({ ...scopeQuery, page: 1, size: SCOPE_PAGE_SIZE })
     checkCurrent()
     if (first.total && !first.list.length) throw new Error('源列表分页不完整，请刷新后重试')
     consume(first.list)
     options.onProgress(seen.size, first.total)
     // 兼容后端限制单页条数：后续按首批实际条数续查，避免跳页漏掉记录。
-    const pageSize = Math.min(500, first.list.length) || 500
+    const pageSize = Math.min(SCOPE_PAGE_SIZE, first.list.length) || SCOPE_PAGE_SIZE
     const pages = Math.ceil(first.total / pageSize)
     for (let start = 2; start <= pages; start += 4) {
       checkCurrent()
