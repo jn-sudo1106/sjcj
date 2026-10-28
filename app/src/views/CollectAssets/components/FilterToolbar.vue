@@ -181,15 +181,14 @@ async function loadCategoryChildren(
       <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag" :title="filtered ? '当前筛选命中的网站里，有告警源的网站数' : '有告警源的网站数'">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
     <span v-if="!sourceMode" class="ca-spacer" />
-    <!-- 视图切换同样只留图标（2026-09-18 走查）：带文字要 136px，是这一行里仅次于搜索框和
-         统计区的第三大件，而"卡片/表格"两个图标本身已经说明了区别。 -->
+    <!-- 沿用紧凑图标切换，提示文字区分网站与源两个对象维度。 -->
     <div class="ca-view-toggle">
-      <el-tooltip content="卡片视图" placement="bottom" :show-after="120">
-        <button class="ca-view-btn" :class="{ active: view === 'card' }" type="button" aria-label="卡片视图" @click="emit('setView', 'card')"><el-icon :size="15"><Grid /></el-icon></button>
+      <el-tooltip content="网站视图" placement="bottom" :show-after="120">
+        <button class="ca-view-btn" :class="{ active: view === 'card' }" type="button" aria-label="网站视图" :aria-pressed="view === 'card'" @click="emit('setView', 'card')"><el-icon :size="15"><Grid /></el-icon></button>
       </el-tooltip>
       <!-- 0924-06：原「表格视图」（按网站展开源）改为源列表视图，一行一个源 -->
       <el-tooltip content="源列表视图" placement="bottom" :show-after="120">
-        <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" aria-label="源列表视图" @click="emit('setView', 'table')"><el-icon :size="15"><List /></el-icon></button>
+        <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" aria-label="源列表视图" :aria-pressed="view === 'table'" @click="emit('setView', 'table')"><el-icon :size="15"><List /></el-icon></button>
       </el-tooltip>
     </div>
     <button class="ca-refresh" type="button" title="刷新" @click="emit('refresh')"><el-icon :size="14"><Refresh /></el-icon></button>

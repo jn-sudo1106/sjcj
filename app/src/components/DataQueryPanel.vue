@@ -15,7 +15,7 @@
 // 调用方在恰当时机（挂载完成/切表/切源/路由深链）显式调用 expose 出去的 search()/refresh()。
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Coin, Filter, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Coin, Filter, Warning } from '@element-plus/icons-vue'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { readSqlConditions, rememberSqlCondition } from '@/utils/sqlConditionHistory'
@@ -420,7 +420,7 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
           aria-controls="data-query-advanced"
           @click="advancedOpen = !advancedOpen"
         >
-          高级筛选 <span aria-hidden="true">{{ advancedOpen ? '⌃' : '⌄' }}</span>
+          高级筛选 <el-icon aria-hidden="true"><ArrowUp v-if="advancedOpen" /><ArrowDown v-else /></el-icon>
         </button>
       </span>
       <span class="dqp-spacer" />

@@ -69,6 +69,73 @@ function mountDrawer(flow: FlowRecord = FLOW) {
 const saveButton = (w: ReturnType<typeof mountDrawer>) =>
   w.get('[data-testid="flow-save"]')
 
+describe('流程工作区 · 左边缘拖拽宽度', () => {
+  const widthKey = 'rc.flowCenter.drawerWidth'
+  beforeEach(() => {
+    localStorage.removeItem(widthKey)
+    vi.stubGlobal('innerWidth', 1440)
+  })
+  afterEach(() => {
+    localStorage.removeItem(widthKey)
+    vi.unstubAllGlobals()
+  })
+
+  async function startDrag(w: ReturnType<typeof mountDrawer>) {
+    await flushPromises()
+    vi.spyOn(w.get('.fd-drawer').element, 'getBoundingClientRect').mockReturnValue({ width: 980 } as DOMRect)
+    w.get('[data-testid="flow-drawer-resize"]').element.dispatchEvent(
+      new MouseEvent('pointerdown', { button: 0, clientX: 460, bubbles: true }),
+    )
+  }
+
+  it('向左拖动拉宽，松手记住宽度，重开工作区沿用', async () => {
+    const w = mountDrawer()
+    await startDrag(w)
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 240 }))
+    await flushPromises()
+    expect(w.get('.fd-drawer').attributes('style')).toContain('--fd-drawer-width: 1200px')
+    expect(w.get('.fd-drawer').classes()).toContain('is-resizing')
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    await flushPromises()
+    expect(localStorage.getItem(widthKey)).toBe('1200')
+    expect(w.get('.fd-drawer').classes()).not.toContain('is-resizing')
+    w.unmount()
+
+    const reopened = mountDrawer()
+    await flushPromises()
+    expect(reopened.get('.fd-drawer').attributes('style')).toContain('--fd-drawer-width: 1200px')
+  })
+
+  it('拖拽宽度限制在双栏最小宽度和视口之间', async () => {
+    const w = mountDrawer()
+    await startDrag(w)
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 2000 }))
+    await flushPromises()
+    expect(w.get('.fd-drawer').attributes('style')).toContain('--fd-drawer-width: 800px')
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: -1000 }))
+    await flushPromises()
+    expect(w.get('.fd-drawer').attributes('style')).toContain('--fd-drawer-width: 1440px')
+    window.dispatchEvent(new MouseEvent('pointerup'))
+  })
+
+  it('拖动中关闭或卸载工作区会清理监听，不再修改宽度偏好', async () => {
+    const w = mountDrawer()
+    await startDrag(w)
+    await w.setProps({ flow: null })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 240 }))
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    expect(localStorage.getItem(widthKey)).toBeNull()
+    w.unmount()
+
+    const reopened = mountDrawer()
+    await startDrag(reopened)
+    reopened.unmount()
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 240 }))
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    expect(localStorage.getItem(widthKey)).toBeNull()
+  })
+})
+
 // 0927 P1-5：步骤快照拉取失败时打开不阻断（画布照常渲染），但常驻警示条把「为什么改不动」
 // 说清楚——flowIdMode 下无快照节点跳过回写、autosave 留在 pending，不制造「已保存」假象。
 describe('流程详情抽屉 · 快照失败警示（0927 P1-5）', () => {

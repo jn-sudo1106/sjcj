@@ -16,7 +16,7 @@ const global = { stubs: { ElDropdown, ElDropdownMenu, ElDropdownItem } }
 describe('AddDataMenu', () => {
   it('手工录入 / Excel 导入各发一个事件', async () => {
     const wrapper = mount(AddDataMenu, { global })
-    expect(wrapper.get('[data-testid="data-add"]').text()).toBe('新增 ▾')
+    expect(wrapper.get('[data-testid="data-add"]').text()).toBe('新增')
     await wrapper.get('[data-testid="data-add-manual"]').trigger('click')
     await wrapper.get('[data-testid="data-add-import"]').trigger('click')
     expect(wrapper.emitted('manual')).toHaveLength(1)
@@ -32,7 +32,7 @@ describe('AddDataMenu', () => {
 describe('ExportMenu', () => {
   it('默认三项：当前页 CSV / 当前源 Excel / 取数 API，各发对应事件', async () => {
     const wrapper = mount(ExportMenu, { global })
-    expect(wrapper.get('[data-testid="data-export"]').text()).toBe('导出 ▾')
+    expect(wrapper.get('[data-testid="data-export"]').text()).toBe('导出')
     expect(wrapper.get('[data-testid="data-export-excel"]').text()).toBe('导出当前源 Excel')
     await wrapper.get('[data-testid="data-export-page"]').trigger('click')
     await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
@@ -65,12 +65,12 @@ describe('ExportMenu', () => {
 describe('FullscreenToggle', () => {
   it('v-model：点一下取反，文案和 title 跟着变', async () => {
     const wrapper = mount(FullscreenToggle, { props: { modelValue: false } })
-    expect(wrapper.text()).toBe('⤢ 全屏')
+    expect(wrapper.text()).toBe('全屏')
     expect(wrapper.attributes('title')).toBe('全屏查看数据')
     await wrapper.trigger('click')
     expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([true])
     await wrapper.setProps({ modelValue: true })
-    expect(wrapper.text()).toBe('⤡ 退出全屏')
+    expect(wrapper.text()).toBe('退出全屏')
     expect(wrapper.attributes('title')).toBe('退出全屏（Esc）')
     await wrapper.trigger('click')
     expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])

@@ -4,7 +4,9 @@
 // 源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
 import { onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { siteApi, type Site, type Source } from '../../api'
+import { siteApi, sourceApi, type Site, type Source } from '../../api'
+import { collectAllUnderQuery } from '@/views/FlowCanvas/result/useSourceLaunch'
+import type { SiteCardSourceScope } from './siteCardQuery'
 import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
 
 /** 瓦片配色 → 内联 style（全站统一，见 siteTone） */
@@ -23,6 +25,8 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   /** 列表为空时的提示。收藏 / 最近打开 tab 一个都没有时要说清楚怎么才会有（0924-01） */
   emptyText?: string
+  /** 目录/源筛选下的命中源，卡片外观与网站全量模式共用。 */
+  sourceScope?: SiteCardSourceScope
 }>(), {
   loading: false,
   emptyText: '没有匹配的网站',
@@ -42,10 +46,17 @@ const CHIP_LIMIT = 5
 const childrenCache = reactive<Record<string, Source[]>>({})
 const childrenComplete = reactive<Record<string, boolean>>({})
 const childrenLoading = reactive<Record<string, boolean>>({})
+const childrenErrors = reactive<Record<string, string>>({})
 const aggregating = new Set<string>()
 
 async function ensurePreview(site: Site) {
   if (childrenCache[site.siteId]) return
+  const match = props.sourceScope?.matches[site.siteId]
+  if (match) {
+    childrenCache[site.siteId] = match.list
+    childrenComplete[site.siteId] = match.total <= match.list.length
+    return
+  }
   try {
     childrenCache[site.siteId] = await siteApi.siteSourcePreview(site.siteId, CHIP_LIMIT)
   } catch {
@@ -58,9 +69,14 @@ async function ensurePreview(site: Site) {
 async function ensureAllChildren(siteId: string) {
   if (childrenComplete[siteId] || childrenLoading[siteId]) return
   childrenLoading[siteId] = true
+  delete childrenErrors[siteId]
   try {
-    childrenCache[siteId] = await siteApi.siteSources(siteId)
+    childrenCache[siteId] = props.sourceScope
+      ? await collectAllUnderQuery({ ...props.sourceScope.query, siteIds: siteId }, { fetchPage: sourceApi.sourcePaged, max: Infinity })
+      : await siteApi.siteSources(siteId)
     childrenComplete[siteId] = true
+  } catch (error) {
+    childrenErrors[siteId] = `加载源失败：${error instanceof Error ? error.message : String(error)}`
   } finally {
     childrenLoading[siteId] = false
   }
@@ -75,6 +91,7 @@ function trustedSiteDataCount(site: Site): number | undefined {
   return site.dataCount
 }
 async function ensureDataCount(site: Site) {
+  if (props.sourceScope) return
   if (trustedSiteDataCount(site) != null || childrenComplete[site.siteId] || aggregating.has(site.siteId)) return
   aggregating.add(site.siteId)
   try {
@@ -116,7 +133,7 @@ async function ensureCards(list: Site[]) {
   for (let i = 0; i < list.length; i += PREVIEW_CONCURRENCY) {
     await Promise.all(list.slice(i, i + PREVIEW_CONCURRENCY).map(ensurePreview))
   }
-  await queueDataCounts(list)
+  if (!props.sourceScope) await queueDataCounts(list)
 }
 onMounted(() => { void ensureCards(props.sites) })
 watch(() => props.sites, (list) => { void ensureCards(list) })
@@ -155,6 +172,7 @@ function isErr(s: Source): boolean {
 function siteDataCount(site: Site): number | undefined {
   // 列表接口给出的站级汇总优先，避免预览/完整源列表的加载时机让数字跳变。
   const trusted = trustedSiteDataCount(site)
+  if (props.sourceScope) return trusted
   if (trusted != null) return trusted
   const children = childrenCache[site.siteId]
   if (!childrenComplete[site.siteId] || !children) return undefined
@@ -168,6 +186,9 @@ function siteDataCount(site: Site): number | undefined {
 function formatSiteDataCount(site: Site): string {
   const count = siteDataCount(site)
   return count == null ? '数据 —' : `数据 ${count.toLocaleString()} 条`
+}
+function visibleSourceCount(site: Site): number {
+  return props.sourceScope?.matches[site.siteId]?.total ?? site.sourceCount
 }
 
 const overflowKw = reactive<Record<string, string>>({})
@@ -292,7 +313,7 @@ onUnmounted(() => {
           @click.stop="openSource(c)"
         >{{ c.name }}</button>
         <el-popover
-          v-if="site.sourceCount > CHIP_LIMIT"
+          v-if="visibleSourceCount(site) > CHIP_LIMIT"
           placement="bottom"
           trigger="click"
           width="240"
@@ -301,15 +322,16 @@ onUnmounted(() => {
         >
           <template #reference>
             <button type="button" class="scg-chip more" @click.stop>
-              +{{ site.sourceCount - CHIP_LIMIT }}
+              +{{ visibleSourceCount(site) - CHIP_LIMIT }}
             </button>
           </template>
           <div class="scg-popover-content">
             <input v-model="overflowKw[site.siteId]" class="scg-overflow-search" placeholder="搜索源" />
             <div class="scg-overflow-list">
               <div v-if="childrenLoading[site.siteId]" class="scg-overflow-empty">正在加载源列表…</div>
+              <div v-else-if="childrenErrors[site.siteId]" class="scg-overflow-empty" role="alert">{{ childrenErrors[site.siteId] }}<button type="button" @click.stop="ensureAllChildren(site.siteId)">重试</button></div>
               <button
-                v-if="!childrenLoading[site.siteId] && !overflowKw[site.siteId]"
+                v-if="!childrenLoading[site.siteId] && !childrenErrors[site.siteId] && !overflowKw[site.siteId]"
                 type="button"
                 class="scg-overflow-item"
                 @click="openSite(site)"
@@ -321,7 +343,7 @@ onUnmounted(() => {
                 </div>
               </button>
               <button
-                v-for="c in childrenLoading[site.siteId] ? [] : filteredChildren(site.siteId)"
+                v-for="c in childrenLoading[site.siteId] || childrenErrors[site.siteId] ? [] : filteredChildren(site.siteId)"
                 :key="c.sourceId"
                 type="button"
                 class="scg-overflow-item"
@@ -333,7 +355,7 @@ onUnmounted(() => {
                   <div class="scg-overflow-id">{{ c.sourceId }}</div>
                 </div>
               </button>
-              <div v-if="!childrenLoading[site.siteId] && !filteredChildren(site.siteId).length" class="scg-overflow-empty">没有匹配的源</div>
+              <div v-if="!childrenLoading[site.siteId] && !childrenErrors[site.siteId] && !filteredChildren(site.siteId).length" class="scg-overflow-empty">没有匹配的源</div>
             </div>
           </div>
         </el-popover>
@@ -349,7 +371,7 @@ onUnmounted(() => {
 
       <!-- 底部行：数据量点进数据视图。 -->
       <div class="scg-foot">
-        <span class="scg-foot-count">{{ site.sourceCount }} 个源</span>
+        <span class="scg-foot-count" :title="sourceScope ? '当前筛选命中源数 / 网站全部源数' : undefined"><template v-if="sourceScope">{{ visibleSourceCount(site) }} / </template>{{ site.sourceCount }} 个源</span>
         <span class="scg-foot-sep" />
         <button class="scg-foot-link" type="button" title="查看该网站数据视图" @click.stop="openSiteData(site)">
           {{ formatSiteDataCount(site) }}

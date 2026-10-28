@@ -395,7 +395,7 @@ describe('DataQueryPanel · 单行模式（1008-07）', () => {
     expect(at('dqp-time-range')).toBeGreaterThan(at('dqp-context'))
     expect(at('dqp-query-actions')).toBeGreaterThan(at('dqp-time-range'))
     const group = wrapper.get('.dqp-query-actions')
-    expect(group.findAll('button').map((b) => b.text().replace(/\s+/g, ''))).toEqual(['查询', '清空', '高级筛选⌄'])
+    expect(group.findAll('button').map((b) => b.text().replace(/\s+/g, ''))).toEqual(['查询', '清空', '高级筛选'])
     expect(row.find('[data-testid="act"]').exists()).toBe(true)
     expect(row.find('[data-testid="quick"]').exists()).toBe(true)
     expect(row.find('[data-testid="column-picker-btn"]').exists()).toBe(true)

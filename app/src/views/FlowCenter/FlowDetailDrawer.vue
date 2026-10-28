@@ -33,6 +33,51 @@ const emit = defineEmits<{
   apply: [flow: FlowRecord]
 }>()
 
+const DRAWER_WIDTH_KEY = 'rc.flowCenter.drawerWidth'
+const DRAWER_WIDTH_MIN = 800
+const drawerRef = ref<HTMLElement>()
+const drawerWidth = ref<number>()
+try {
+  const width = Number(window.localStorage.getItem(DRAWER_WIDTH_KEY))
+  if (Number.isFinite(width) && width >= DRAWER_WIDTH_MIN) drawerWidth.value = width
+} catch { /* 本地偏好不可用时沿用默认宽度 */ }
+const resizing = ref(false)
+let stopResizing: (() => void) | undefined
+
+function startResize(event: PointerEvent) {
+  if (event.button !== 0 || !drawerRef.value) return
+  event.preventDefault()
+  stopResizing?.()
+  const startX = event.clientX
+  const startWidth = drawerRef.value.getBoundingClientRect().width
+  resizing.value = true
+  const onMove = (ev: PointerEvent) => {
+    drawerWidth.value = Math.round(Math.min(window.innerWidth, Math.max(
+      DRAWER_WIDTH_MIN, startWidth + startX - ev.clientX,
+    )))
+  }
+  const onEnd = () => {
+    stopResizing?.()
+    if (drawerWidth.value !== undefined) {
+      try {
+        window.localStorage.setItem(DRAWER_WIDTH_KEY, String(drawerWidth.value))
+      } catch { /* 保存失败不影响本次拖拽 */ }
+    }
+  }
+  stopResizing = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onEnd)
+    window.removeEventListener('pointercancel', onEnd)
+    resizing.value = false
+    stopResizing = undefined
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onEnd)
+  window.addEventListener('pointercancel', onEnd)
+}
+onBeforeUnmount(() => stopResizing?.())
+watch(() => props.flow, (flow) => { if (!flow) stopResizing?.() })
+
 const canvas = useFlowStore()
 const sourceStore = useSourceStore()
 const ui = useUiStore()
@@ -537,7 +582,15 @@ async function publishVersion() {
 </script>
 
 <template>
-  <aside v-if="flow" class="fd-drawer" aria-label="流程工作区">
+  <aside
+    v-if="flow"
+    ref="drawerRef"
+    class="fd-drawer"
+    :class="{ 'is-resizing': resizing }"
+    :style="drawerWidth === undefined ? undefined : { '--fd-drawer-width': `${drawerWidth}px` }"
+    aria-label="流程工作区"
+  >
+    <div class="fd-resize" data-testid="flow-drawer-resize" title="拖动调整流程工作区宽度" @pointerdown="startResize" />
     <header class="fd-head">
       <div class="fd-title">
         <span class="fd-kicker">流程工作区</span>
@@ -691,7 +744,10 @@ async function publishVersion() {
 .fd-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fd-badge.draft { background: #fff7ed; color: #c2410c; }
 .fd-badge.ghost { background: transparent; color: var(--rc-faint); border: 1px solid var(--rc-border-soft); }
-.fd-drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(980px, calc(100vw - 256px)); max-width: 100vw; z-index: 40; display: flex; flex-direction: column; background: #fff; border-left: 1px solid var(--rc-border); box-shadow: -12px 0 32px -24px rgba(15, 23, 42, 0.48); }
+.fd-drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: var(--fd-drawer-width, min(980px, calc(100vw - 256px))); min-width: min(800px, 100vw); max-width: 100vw; box-sizing: border-box; z-index: 40; display: flex; flex-direction: column; background: #fff; border-left: 1px solid var(--rc-border); box-shadow: -12px 0 32px -24px rgba(15, 23, 42, 0.48); }
+.fd-resize { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; z-index: 1; cursor: ew-resize; touch-action: none; }
+.fd-resize:hover, .is-resizing > .fd-resize { background: var(--rc-primary-soft); }
+.fd-drawer.is-resizing { user-select: none; cursor: ew-resize; }
 .fd-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--rc-border-soft); }
 .fd-title { min-width: 0; }
 .fd-kicker { display: block; color: var(--rc-muted); font-size: 11px; }
@@ -722,7 +778,7 @@ async function publishVersion() {
 .fd-secondary { border: 1px solid #bfdbfe; background: #fff; color: var(--rc-primary-ink); }
 .fd-primary:disabled, .fd-secondary:disabled { opacity: .55; cursor: not-allowed; }
 @media (max-width: 980px) {
-  .fd-drawer { width: 100vw; }
+  .fd-drawer { width: var(--fd-drawer-width, 100vw); }
   .fd-workspace:not(.expanded):not(.insp-collapsed) { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
   .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
   .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }

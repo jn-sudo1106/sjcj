@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // 「新增 ▾」：手工录入 / Excel 导入。源数据视图与数据中心共用同一个入口（1008-07），
 // 菜单项与 data-testid 以源数据视图为准，避免两边的新增入口再分叉。
+import { ArrowDown } from '@element-plus/icons-vue'
 defineProps<{ compact?: boolean }>()
 const emit = defineEmits<{ manual: []; import: [] }>()
 </script>
 
 <template>
   <el-dropdown trigger="click">
-    <button class="rc-btn" :class="{ 'is-compact': compact }" type="button" data-testid="data-add">新增 ▾</button>
+    <button class="rc-btn" :class="{ 'is-compact': compact }" type="button" data-testid="data-add">新增<el-icon><ArrowDown /></el-icon></button>
     <template #dropdown>
       <el-dropdown-menu>
         <el-dropdown-item data-testid="data-add-manual" @click="emit('manual')">手工录入</el-dropdown-item>

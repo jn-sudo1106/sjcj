@@ -8,7 +8,9 @@
 import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
-import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source } from '@/api'
+import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
+import SourceWebsiteCards from '@/views/CollectAssets/SourceWebsiteCards.vue'
+import { clearSiteCardQueryCache } from '@/views/CollectAssets/siteCardQuery'
 import { isProductionBackend } from '@/api/client'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
@@ -132,6 +134,12 @@ const props = defineProps<{
   extraColumnLabel?: string
   showOriginalDirectory?: boolean
   quickEdit?: boolean
+  /** 采集资产系统目录的两种展示，共用本组件的查询条件与目录范围。 */
+  websiteCards?: boolean
+  websiteCatalog?: Site[]
+  websiteCatalogLoading?: boolean
+  websiteCatalogError?: string
+  includeEmptySiteIds?: string[]
 }>()
 const emit = defineEmits<{
   openSource: [source: Source]
@@ -141,6 +149,9 @@ const emit = defineEmits<{
   openSourceData: [source: Source]
   /** 点来源组名（1008-04）：跳到「来源组」目录页签并选中该组 */
   openSourceGroup: [sourceGroupId: string]
+  editSite: [site: Site]
+  deleteSite: [site: Site]
+  refreshSites: []
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -166,6 +177,8 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
+const cardQuery = ref<SourceFilter | null>(null)
+const cardScopeEmpty = ref(false)
 const quickEditSource = ref<Source | null>(null)
 function onQuickEdited() {
   quickEditSource.value = null
@@ -501,6 +514,12 @@ async function fetchSourcePage(query: SourceFilter & { page: number; size: numbe
 
 async function loadSources() {
   const requestId = ++sourceRequestSeq
+  if (props.websiteCards) {
+    loading.value = false
+    cardScopeEmpty.value = noScopeMatch.value
+    cardQuery.value = currentQuery()
+    return
+  }
   if (noScopeMatch.value) {
     rows.value = []
     total.value = 0
@@ -538,6 +557,10 @@ function search() {
   page.value = 1
   void loadSources()
 }
+watch(() => props.websiteCards, () => {
+  clearSelection()
+  void loadSources()
+})
 function clearFilters() {
   conditions.value = [newCondition('sourceIds')]
   statusFilter.value = 'all'
@@ -1271,11 +1294,16 @@ watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
  * **不动页码和筛选条件**——用户的查询上下文是他自己设的，重查即可，别把他弹回第一页。
  */
 watch(() => ui.sourceListRevision, () => {
+  clearSiteCardQueryCache()
   void loadSources()
 })
 
+function refresh() {
+  clearSiteCardQueryCache()
+  return loadSources()
+}
 // 源管理「系统目录」页签的「按目录发送」复用这里的发任务流程（不勾选 = 按当前筛选范围，含目录范围）
-defineExpose({ openLaunch, clearSelection })
+defineExpose({ openLaunch, clearSelection, refresh })
 </script>
 
 <template>
@@ -1390,7 +1418,23 @@ defineExpose({ openLaunch, clearSelection })
       </div>
     </div>
 
-    <div class="sov-summary" :class="{ 'one-row': crossSite }">
+    <SourceWebsiteCards
+      v-if="websiteCards && cardQuery"
+      :query="cardQuery"
+      :catalog="websiteCatalog"
+      :catalog-loading="websiteCatalogLoading"
+      :catalog-error="websiteCatalogError"
+      :scope-empty="cardScopeEmpty"
+      :empty-text="scopeEmptyText"
+      :include-empty-site-ids="includeEmptySiteIds"
+      @edit-site="emit('editSite', $event)"
+      @delete-site="emit('deleteSite', $event)"
+      @show-sources="ui.setAssetView('table')"
+      @retry-catalog="emit('refreshSites')"
+    >
+      <template #summary-extra><slot name="summary-extra" :ids="[]" /></template>
+    </SourceWebsiteCards>
+    <div v-if="!websiteCards" class="sov-summary" :class="{ 'one-row': crossSite }">
       <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">代码生成</button>
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
@@ -1440,7 +1484,7 @@ defineExpose({ openLaunch, clearSelection })
         <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
       </span>
     </div>
-    <div class="sov-table-wrap" :class="{ loading }">
+    <div v-if="!websiteCards" class="sov-table-wrap" :class="{ loading }">
       <table class="sov-table">
         <thead>
           <tr>
@@ -1607,7 +1651,7 @@ defineExpose({ openLaunch, clearSelection })
     </div>
     <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）；
          全站列表都用这一个组件，别换回手写的上一页/下一页按钮。 -->
-    <div class="sov-pager">
+    <div v-if="!websiteCards" class="sov-pager">
       <el-pagination
         data-testid="source-pagination"
         v-model:current-page="page"
