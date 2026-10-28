@@ -1622,14 +1622,16 @@ describe('源视图 · 不限网站（采集资产源列表视图，0924-06）',
   it('「网站」筛选：候选由组件自己拉；选中后按该网站查，「未关联网站」传 -1，清空还原', async () => {
     const { wrapper, page, sites } = await mountCross()
     expect(sites).toHaveBeenCalledTimes(1)
-    const select = wrapper.get('[data-testid="source-overview-site"]')
-    expect(select.findAll('option').map((o) => o.text())).toEqual(['全部网站', '未关联网站', '公众号采集-测试', '上市公司', '主流媒体'])
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    expect(select.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))).toEqual(['全部网站', '未关联网站', '公众号采集-测试', '上市公司', '主流媒体'])
 
-    await select.setValue('12')
+    select.vm.$emit('update:modelValue', '12')
+    select.vm.$emit('change', '12')
     await flushPromises()
     expect(lastQuery(page)?.siteIds).toBe('12')
 
-    await select.setValue('-1')
+    select.vm.$emit('update:modelValue', '-1')
+    select.vm.$emit('change', '-1')
     await flushPromises()
     expect(lastQuery(page)?.siteIds).toBe('-1')
 
@@ -1641,8 +1643,25 @@ describe('源视图 · 不限网站（采集资产源列表视图，0924-06）',
   it('页签范围 scopeSiteIds：按逗号拼成 siteIds；网站候选只列范围内的，不给「未关联网站」', async () => {
     const { wrapper, page } = await mountCross({ scopeSiteIds: ['89', '12'] })
     expect(lastQuery(page)?.siteIds).toBe('89,12')
-    const options = wrapper.get('[data-testid="source-overview-site"]').findAll('option').map((o) => o.text())
+    const options = wrapper.getComponent({ name: 'ElSelect' }).findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))
     expect(options).toEqual(['全部网站', '上市公司', '主流媒体'])
+  })
+
+  it('网站下拉输入名称本地匹配，选中候选后才按网站 ID 查询', async () => {
+    const { wrapper, page } = await mountCross()
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    const calls = page.mock.calls.length
+    await select.get('.el-select__wrapper').trigger('click')
+    await select.get('input').setValue('上市')
+    await vi.waitFor(() => {
+      const visible = select.findAllComponents({ name: 'ElOption' }).filter(option => option.isVisible())
+      expect(visible.map(option => option.text())).toEqual(['上市公司'])
+    })
+    expect(page).toHaveBeenCalledTimes(calls)
+    await select.findAllComponents({ name: 'ElOption' }).find(option => option.props('value') === '12')!.trigger('click')
+    await flushPromises()
+    expect(lastQuery(page)?.siteIds).toBe('12')
+    wrapper.unmount()
   })
 
   it('范围为空数组：不发请求，显示调用方给的空态文案', async () => {

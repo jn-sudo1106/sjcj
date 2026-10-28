@@ -2,6 +2,7 @@
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -839,7 +840,9 @@ onUnmounted(() => {
         </template>
       </template>
       <template #filter-extra>
-        <button v-if="scope === 'all' && view === 'card'" class="ca-save-view sm" type="button" data-testid="site-create" @click="openSiteCreator">新增网站</button>
+        <el-tooltip v-if="scope === 'all' && view === 'card'" content="新增网站" placement="bottom" :show-after="120">
+          <button class="ca-save-view sm ca-create-site" type="button" data-testid="site-create" aria-label="新增网站" @click="openSiteCreator"><el-icon :size="14"><Plus /></el-icon></button>
+        </el-tooltip>
 
         <FilterToolbar
           v-model:keyword="keyword"
@@ -911,6 +914,7 @@ onUnmounted(() => {
 .ca-source-list { padding: 0; background: transparent; }
 .ca-save-view { height: 34px; padding: 0 12px; border: 1px solid #d5e2f2; border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .ca-save-view.sm { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+.ca-save-view.ca-create-site { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 30px; padding: 0; color: var(--rc-primary); }
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 
 /* 系统目录页签：左侧目录面板 + 源列表（2026-10-21） */
