@@ -5,6 +5,21 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const app = path.resolve(__dirname, '../app');
+// --backend <name> 是本项目自己的开关（npm run test 用它连 test 环境），不能透给 Vite；
+// vite.config.ts 读 VITE_BACKEND_ENV 决定各代理默认目标。显式 VITE_API_PROXY_TARGET 仍优先。
+const argv = process.argv.slice(2);
+const backendEnv = (() => {
+  const index = argv.findIndex(arg => arg === '--backend' || arg.startsWith('--backend='));
+  if (index < 0) return '';
+  const arg = argv[index];
+  const value = arg.includes('=') ? arg.split('=')[1] : argv[index + 1];
+  if (!value) {
+    console.error('--backend 需要跟环境名：local（默认，本机 9999）或 test（test 环境 186）');
+    process.exit(1);
+  }
+  argv.splice(index, arg.includes('=') ? 1 : 2);
+  return value;
+})();
 const supported = version => {
   const [major, minor] = version.replace(/^v/, '').trim().split('.').map(Number);
   return (major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22;
@@ -27,6 +42,7 @@ if (!node) {
   process.exit(1);
 }
 const env = { ...process.env, PATH: path.dirname(node) + path.delimiter + process.env.PATH };
+if (backendEnv) env.VITE_BACKEND_ENV = backendEnv;
 const vite = path.join(app, 'node_modules/vite/bin/vite.js');
 if (!fs.existsSync(vite)) {
   const npm = process.env.npm_execpath;
@@ -39,7 +55,7 @@ if (!fs.existsSync(vite)) {
   if (install.status !== 0) process.exit(install.status || 1);
 }
 if (node !== process.execPath) console.log(`当前 Node ${process.version} 不满足要求，使用 ${node}`);
-const child = spawn(node, [vite, ...process.argv.slice(2)], { cwd: app, env, stdio: 'inherit', windowsHide: true });
+const child = spawn(node, [vite, ...argv], { cwd: app, env, stdio: 'inherit', windowsHide: true });
 child.on('error', error => { console.error(error.message); process.exitCode = 1; });
 child.on('exit', code => { process.exitCode = code || 0; });
 process.on('SIGINT', () => child.kill('SIGINT'));
