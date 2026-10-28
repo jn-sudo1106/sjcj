@@ -83,8 +83,8 @@ it('Agent 复制和测试使用 POST JSON，保留工作空间、文件路径与
   expect(requestText()).toContain('帮我采集')
   expect(requestText()).not.toContain('%E5')
   let body = JSON.parse(requestText().split('\n\n')[1]!)
-  expect(body.prj_dir).toBe(agent.prjDir)
-  expect(body.code_dir).toMatch(/^D:\\aicode\\legacy\\[a-f0-9-]+\\code$/)
+  expect(body.prj_dir).toBe(`${agent.prjDir}\\legacy`)
+  expect(body.code_dir).toBe('D:\\aicode\\legacy\\code')
   expect(body.output_file_dir).toBe(body.code_dir.replace(/code$/, 'output'))
   expect(body.input_file_dir).toBe(body.code_dir.replace(/code$/, 'input'))
   expect(body.model).toBe('hy3')
@@ -118,11 +118,11 @@ it('WB Agent 端口随编辑保存，测试可临时覆盖', async () => {
   document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
   expect(runnerManagementApi.streamModelInterfaceTest).toHaveBeenCalledWith(expect.objectContaining({ cdpPort: 9555 }), expect.any(Function), expect.any(AbortSignal))
   const first = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
-  expect(first.codeDir).toBe(`D:\\aicode\\legacy\\${first.taskId}\\code`)
+  expect(first.codeDir).toBe('D:\\aicode\\legacy\\code')
   document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
   const second = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
   expect(second.taskId).not.toBe(first.taskId)
-  expect(second.codeDir).toBe(`D:\\aicode\\legacy\\${second.taskId}\\code`)
+  expect(second.codeDir).toBe(first.codeDir)
 })
 it('编辑移除样例；测试弹窗使用独立参数发送并展示结果，不修改接口配置', async () => {
   const w = await setup()
@@ -132,7 +132,7 @@ it('编辑移除样例；测试弹窗使用独立参数发送并展示结果，�
   closes[0]!.click(); await flushPromises()
   await w.findAll('button').find(button => button.text() === '测试')!.trigger('click'); await flushPromises()
   const requestText = () => document.querySelector('[data-testid="model-sample-request"]')!.textContent!
-  let url = new URL(requestText())
+  const url = new URL(requestText())
   expect(url.searchParams.get('prompt')).toBe('南京到上海的距离')
   expect(url.searchParams.get('stream')).toBe('1')
   const model = document.querySelector<HTMLInputElement>('input[data-testid="model-test-model"], [data-testid="model-test-model"] input')!

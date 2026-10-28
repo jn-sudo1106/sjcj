@@ -409,7 +409,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    let body = await openResultMenu('data-add')
+    const body = await openResultMenu('data-add')
     expect(body.text()).toContain('手工录入')
     expect(body.text()).toContain('Excel 导入')
     await clickMenuItem(body, 'Excel 导入')

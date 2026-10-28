@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { authGuard, isChunkLoadError } from './index'
+import { router, authGuard, isChunkLoadError } from './index'
 import { useAuthStore } from '../stores/auth'
-import { ACCESS_TOKEN_KEY } from '../api/auth'
+import { ACCESS_TOKEN_KEY, triggerSessionExpired } from '../api/auth'
+import { ElMessageBox } from 'element-plus'
 
 function jsonResponse(body: unknown, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
@@ -43,6 +44,22 @@ describe('authGuard（迁移旧 permission.js）', () => {
 
   it('未登录访问公开登录页放行', async () => {
     expect(await authGuard(to('/user/login', '/user/login', { public: true }))).toBe(true)
+  })
+  it('已有嵌套登录地址自动修正为一层业务跳转', async () => {
+    expect(await authGuard(to('/user/login', '/user/login?redirect=/user/login?redirect=/settings?tab=model-interfaces', { public: true })))
+      .toEqual({ path: '/user/login', query: { redirect: '/settings?tab=model-interfaces' } })
+  })
+  it('登录页收到迟到的 401 不再弹窗或重复包装 redirect', async () => {
+    await router.push('/user/login?redirect=/settings?tab=model-interfaces')
+    const original = router.currentRoute.value.fullPath
+    const auth = loginAs(['admin'])
+    const alert = vi.spyOn(ElMessageBox, 'alert').mockImplementation(() => new Promise<never>(() => {}))
+    triggerSessionExpired()
+    await Promise.resolve()
+    expect(alert).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.fullPath).toBe(original)
+    expect(auth.token).toBe('tok')
+    alert.mockRestore()
   })
 
   it('已登录访问 /user/login → /overview', async () => {

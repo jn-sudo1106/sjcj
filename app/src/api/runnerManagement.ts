@@ -4,7 +4,7 @@ import { streamModelInterfaceTest } from './modelInterfaceStream'
 export interface NodeGenerationSettings {
   configId: string
   enabled: boolean
-  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue' }
+  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; workspaceMode?: 'config' | 'queue' | 'custom'; workspacePath?: string }
 }
 export interface SourceCodeTask {
   taskId: string; sourceId: string; sourceName: string; flowId: string; configId: string; nodeName: string

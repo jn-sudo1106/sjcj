@@ -64,22 +64,39 @@ afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs() })
 const generatedArchive = { archiveId: 'a'.repeat(32), status: 'pending' as const, message: '', configId: 'c-1', repoId: webRepo.repoId,
   directoryId: 'default', directoryPath: 'default', taskId: 'task', serverId: 'server', createdAt: '', gitCommit: '', pushed: false,
   files: [{ path: 'default/www.realcan.cn.py', relativePath: 'www.realcan.cn.py', sha256: 'hash', size: 10 }] }
-it('保存批量生成配置只记录模型、提示词和仓库，不触发模型或代码发布', async () => {
+it('修改生成配置后自动保存，关闭工作区立即提交待保存内容，不调用模型或发布代码', async () => {
   const w = mountDialog(); await flushPromises()
-  await w.get('[data-testid="save-generation-config"]').trigger('click'); await flushPromises()
+  expect(w.find('[data-testid="save-generation-config"]').exists()).toBe(false)
+  expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
+  await w.get('[data-testid="site-script-prompt"]').setValue('新的抓取提示词')
+  expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
+  w.unmount(); await flushPromises()
   expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', generation: expect.objectContaining({ interfaceId: 'legacy', userPrompt: expect.any(String), systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, repositoryId: defaultRepo.repoId, directoryId: 'default' }) }))
   expect(generateSiteScript).not.toHaveBeenCalled()
   expect(runnerManagementApi.publishScript).not.toHaveBeenCalled()
-  w.unmount()
 })
 it('重新进入 AI 工作区恢复节点保存的模型和提示词', async () => {
   vi.mocked(runnerManagementApi.nodeGenerationSettings).mockResolvedValue({ configId: 'c-1', enabled: true, generation: {
     interfaceId: 'legacy', repositoryId: defaultRepo.repoId, directoryId: 'default', configType: '90', queueName: 'news_list',
-    systemPrompt: '批量系统提示词', userPrompt: '采集 https://old.example.com/news', url: 'https://old.example.com/news', fileNameMode: 'queue',
+    systemPrompt: '批量系统提示词', userPrompt: '采集 https://old.example.com/news', url: 'https://old.example.com/news', fileNameMode: 'queue', workspaceMode: 'custom', workspacePath: 'news/cninfo',
   } })
   const w = mountDialog(); await flushPromises()
-  await w.get('[data-testid="save-generation-config"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ repositoryId: defaultRepo.repoId, systemPrompt: '批量系统提示词', userPrompt: '采集 https://www.realcan.cn/newscenter', fileNameMode: 'queue' }) }))
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe('采集 https://www.realcan.cn/newscenter')
+  expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
+  await w.get('[data-testid="site-script-system-prompt"]').setValue('更新后的系统提示词')
+  w.unmount(); await flushPromises()
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ repositoryId: defaultRepo.repoId, systemPrompt: '更新后的系统提示词', userPrompt: '采集 https://www.realcan.cn/newscenter', fileNameMode: 'queue', workspaceMode: 'custom', workspacePath: 'news/cninfo' }) }))
+})
+it('连续编辑提示词合并为一次自动保存，保存失败明确显示', async () => {
+  vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mockRejectedValue(new Error('网络断开'))
+  const w = mountDialog(); await flushPromises()
+  await w.get('[data-testid="site-script-prompt"]').setValue('第一次修改')
+  await w.get('[data-testid="site-script-prompt"]').setValue('最终修改')
+  await new Promise(resolve => setTimeout(resolve, 750)); await flushPromises()
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledOnce()
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ userPrompt: '最终修改' }) }))
+  expect(w.text()).toContain('自动保存失败：网络断开')
+  expect(w.get('[data-testid="site-script-prompt"]').attributes('disabled')).toBeUndefined()
   w.unmount()
 })
 async function remoteModel() {
@@ -88,29 +105,29 @@ async function remoteModel() {
 }
 it('远程生成沿用节点目标目录，成功后自动提交全部生成文件', async () => {
   await remoteModel()
-  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [], previewPath: generatedArchive.files[0]!.path, archive: generatedArchive })
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [], previewPath: generatedArchive.files[0]!.path, archive: { ...generatedArchive, status: 'committed', gitCommit: 'c'.repeat(40), pushed: true } })
   vi.mocked(runnerManagementApi.commitGeneratedCode).mockResolvedValue({ ...generatedArchive, status: 'committed', gitCommit: 'c'.repeat(40), pushed: true })
   const w = mountDialog(); await flushPromises()
   const repoId = (w.get('[data-testid="site-script-repository"]').element as HTMLSelectElement).value
   const directoryId = (w.get('[data-testid="site-script-directory"]').element as HTMLSelectElement).value
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [], previewPath: generatedArchive.files[0]!.path,
+    archive: { ...generatedArchive, repoId, directoryId, status: 'committed', gitCommit: 'c'.repeat(40), pushed: true } })
   await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', repositoryId: repoId, directoryId, autoCommit: true, deferCommit: true }), expect.any(AbortSignal))
-  expect(runnerManagementApi.commitGeneratedCode).toHaveBeenCalledWith(generatedArchive.archiveId)
+  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', repositoryId: repoId, directoryId, autoCommit: true, deferCommit: false, workspaceMode: 'config', workspacePath: '' }), expect.any(AbortSignal))
+  expect(runnerManagementApi.commitGeneratedCode).not.toHaveBeenCalled()
   expect(w.get('[data-testid="site-script-archive"]').text()).toContain('已提交并推送 Git')
+  expect(w.get('[data-testid="site-script-publish"]').attributes('disabled')).toBeDefined()
   expect(w.get('[data-testid="site-script-archive-link"]').attributes('href')).toContain('filePath=default')
   w.unmount()
 })
-it('关闭自动提交保留结果，失败后重试提交不会再次调用模型', async () => {
+it('生成由后端自动提交，失败后重试不会再次调用模型', async () => {
   await remoteModel()
   vi.mocked(runnerManagementApi.generatedCodeState).mockResolvedValue({ autoCommit: false, archive: null })
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [], archive: generatedArchive })
   vi.mocked(runnerManagementApi.commitGeneratedCode).mockResolvedValueOnce({ ...generatedArchive, status: 'failed', message: '推送失败' })
     .mockResolvedValueOnce({ ...generatedArchive, status: 'committed', gitCommit: 'c'.repeat(40), pushed: true })
   const w = mountDialog(); await flushPromises()
-  await w.get('[data-testid="site-script-auto-commit"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.saveGenerationPreference).toHaveBeenCalledWith('c-1', true)
-  await w.get('[data-testid="site-script-auto-commit"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.saveGenerationPreference).toHaveBeenCalledWith('c-1', false)
+  expect(w.find('[data-testid="site-script-auto-commit"]').exists()).toBe(false)
   await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   expect(runnerManagementApi.commitGeneratedCode).not.toHaveBeenCalled()
   await w.get('[data-testid="site-script-retry-archive"]').trigger('click'); await flushPromises()

@@ -46,9 +46,9 @@ const emit = defineEmits<{
 }>()
 const groups = useSourceGroupsStore()
 const field = ref<'name' | 'sourceIds'>('name')
-const groupId = ref('')
+const filterGroupId = ref('')
 const groupOptions = ref<{ id: string; name: string; state: string }[]>([])
-const selectedGroup = computed(() => groupOptions.value.find((g) => g.id === groupId.value))
+const selectedGroup = computed(() => groupOptions.value.find((g) => g.id === filterGroupId.value))
 async function loadGroupOptions() {
   if (!props.groupFilter || groupOptions.value.length) return
   try {
@@ -58,15 +58,15 @@ async function loadGroupOptions() {
   }
 }
 /** 选中的来源组里还没进视图的源 */
-const missingIds = computed(() => (groupId.value ? props.missingByGroup[groupId.value] ?? [] : []))
+const missingIds = computed(() => (filterGroupId.value ? props.missingByGroup[filterGroupId.value] ?? [] : []))
 const missingSet = computed(() => new Set(missingIds.value))
 const missingOnly = ref(false)
 function setMissingOnly(on: boolean) { missingOnly.value = on; search() }
 function selectAllMissing() { selected.value = [...new Set([...selected.value, ...missingIds.value])] }
 function onGroupChange() { missingOnly.value = false; search() }
 function bindSelectedGroup() {
-  if (!groupId.value) return
-  emit('bindGroup', groupId.value)
+  if (!filterGroupId.value) return
+  emit('bindGroup', filterGroupId.value)
   emit('update:modelValue', false)
 }
 const keyword = ref('')
@@ -97,7 +97,7 @@ async function load() {
       }
       query = { ...(field.value === 'name' ? { name: kw || undefined } : {}), sourceIds: ids.join(',') }
     }
-    const result = await sourceApi.sourcePaged({ page: page.value, size: size.value, ...query, sourceGroupId: groupId.value || undefined })
+    const result = await sourceApi.sourcePaged({ page: page.value, size: size.value, ...query, sourceGroupId: filterGroupId.value || undefined })
     if (request !== sequence) return
     rows.value = result.list
     total.value = result.total
@@ -115,8 +115,8 @@ watch(() => props.modelValue, open => {
   if (open) {
     selected.value = [...new Set(props.initialSourceIds)]; keyword.value = ''; page.value = 1
     if (selected.value.length) { field.value = 'sourceIds'; keyword.value = selected.value.join(',') }
-    groupId.value = props.groupFilter ? props.initialGroupId : ''
-    missingOnly.value = !!groupId.value && props.initialMissingOnly
+    filterGroupId.value = props.groupFilter ? props.initialGroupId : ''
+    missingOnly.value = !!filterGroupId.value && props.initialMissingOnly
     void load(); void loadGroupOptions()
   }
 }, { immediate: true })
@@ -207,7 +207,7 @@ async function runJoin(excludeIds: string[]) {
     <aside v-if="$slots.aside" class="picker-aside"><slot name="aside" /></aside>
     <div class="picker-main">
     <div class="picker-filter">
-      <el-select v-if="groupFilter" v-model="groupId" clearable placeholder="全部来源组" style="width: 160px" aria-label="来源组" data-testid="picker-group" @change="onGroupChange">
+      <el-select v-if="groupFilter" v-model="filterGroupId" clearable placeholder="全部来源组" style="width: 160px" aria-label="来源组" data-testid="picker-group" @change="onGroupChange">
         <el-option v-for="g in groupOptions" :key="g.id" :label="g.name" :value="g.id" :disabled="g.state !== 'ACTIVE'" />
       </el-select>
       <el-select v-model="field" style="width: 110px" aria-label="查询字段"><el-option label="源名称" value="name" /><el-option label="源 ID" value="sourceIds" /></el-select>

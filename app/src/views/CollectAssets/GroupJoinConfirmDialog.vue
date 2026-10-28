@@ -28,7 +28,8 @@ const picked = ref(new Set(props.rows.map((r) => r.sourceId)))
 watch(() => props.rows, (rows) => { picked.value = new Set(rows.map((r) => r.sourceId)) })
 function toggle(id: string, on: boolean) {
   const next = new Set(picked.value)
-  on ? next.add(id) : next.delete(id)
+  if (on) next.add(id)
+  else next.delete(id)
   picked.value = next
 }
 const joinCount = computed(() => picked.value.size + props.directCount)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { loginRedirect } from '@/router/loginRedirect'
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CircleCheck, Hide, Lock, User, View } from '@element-plus/icons-vue'
@@ -55,8 +56,7 @@ async function handleSubmit() {
   try {
     await auth.login(params)
     errorMsg.value = ''
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
-    await router.push(redirect || '/overview')
+    await router.push(loginRedirect(route.query.redirect))
   } catch (e) {
     errorMsg.value = (e as Error).message || '登录异常,请稍后再说'
     clearTimeout(refreshTimer)

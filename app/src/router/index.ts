@@ -3,6 +3,7 @@ import { ElMessageBox } from 'element-plus'
 import { readStoredToken, setUnauthorizedHandler } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 import { canAccess } from '../composables/usePermission'
+import { loginRedirect } from './loginRedirect'
 
 const routes: RouteRecordRaw[] = [
   // 登录页无 AppShell，路径沿用旧系统 /user/login
@@ -72,6 +73,10 @@ export const authGuard = async (to: { meta: Record<string, unknown>; path: strin
   if (auth.token && !readStoredToken()) auth.clear()
   if (to.meta.public) {
     if (auth.isLoggedIn && to.path === '/user/login') return '/overview'
+    if (to.path === '/user/login') {
+      const redirect = new URLSearchParams(to.fullPath.split('?').slice(1).join('?')).get('redirect')
+      if (redirect && loginRedirect(redirect) !== redirect) return { path: '/user/login', query: { redirect: loginRedirect(redirect) } }
+    }
     return true
   }
   if (!auth.isLoggedIn) {
@@ -121,9 +126,10 @@ router.onError((err, to) => {
 // 新 SPA 在弹窗流程结束后复位。弹窗无关闭/ESC 出口：会话已死，留在当前页没有意义。
 let sessionExpiredShown = false
 setUnauthorizedHandler(() => {
+  if (router.currentRoute.value.path === '/user/login') return
   if (sessionExpiredShown) return
   sessionExpiredShown = true
-  const redirect = router.currentRoute.value.fullPath
+  const redirect = loginRedirect(router.currentRoute.value.fullPath)
   void ElMessageBox.alert('登录失效,请重新登录', '提示', {
     type: 'warning',
     confirmButtonText: '重新登录',
