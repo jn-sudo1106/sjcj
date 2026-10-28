@@ -72,6 +72,15 @@ describe('组级数据权限 API HTTP 契约', () => {
     expect(init.method).toBe('GET')
   })
 
+  it('组 ID 候选：GET /groups，RspResult 的 data 是数字数组（组名不在接口里，前端自维护）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功', data: [90001, 100001, 100002] }))
+    const { listGroupIds } = await import('./groupRes')
+    expect(await listGroupIds()).toEqual([90001, 100001, 100002])
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toMatch(/\/api\/v1\/group-res\/groups$/)
+    expect(init.method).toBe('GET')
+  })
+
   it('新增：POST JSON body；data 是标量新 ID 时回 { ok, message, data }', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '新增成功', data: 15 }))
     const { addGroupRes } = await import('./groupRes')

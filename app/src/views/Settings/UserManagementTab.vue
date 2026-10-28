@@ -6,10 +6,12 @@
 // 角色，要给谁 admin 权限，由管理员直接改后台数据库的 SYS_USER_2_ROLE。本页只回显角色。
 //
 // 状态开关就是「启用/停用」入口，沿用项目的轻量滑动开关 + 旁置状态文字。
-// 停用会连带清空该账号的角色，重新启用会被后端挡住直到数据库补回角色绑定——
-// 空角色账号一登录就会被 ShiroDbRealm 兜底成 admin，所以确认框与失败提示都要把这条讲出来。
+// 停用只改状态、不动角色绑定（2026-10-28 改判）；确认框与提示都只讲状态本身。
+// 唯一会被后端拒绝的方向：启用一个没有任何角色绑定的账号（空角色一登录就会被
+// ShiroDbRealm 兜底成 admin），届时按后端文案透出，先补绑定再启用。
 //
-// 内置 admin 账号照常出现在列表里，但写操作全部禁用（决策 ③B），后端同样会拒绝。
+// 内置 admin 账号照常出现在列表里，但操作列只渲染「详情」（决策 ③B：不参与本页写操作），
+// 状态开关置灰；后端对同一批操作也会再拒一次。
 //
 // 列表与分页样式照同目录「数据权限设置」（带 label 的行内查询表单 + 独立操作区 + 图标操作列）。
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -168,7 +170,7 @@ async function resetPassword(row: SysUserRow) {
   }
 }
 
-// ---- 启用 / 停用（开关走 before-change：失败不翻转，成功后重查列表拿准确的角色绑定） ----
+// ---- 启用 / 停用（开关走 before-change：失败不翻转，成功后重查列表拿准确的状态） ----
 const statusSavingId = ref(0)
 async function toggleStatus(row: SysUserRow): Promise<boolean> {
   if (lockWrite(row)) return false
@@ -177,7 +179,7 @@ async function toggleStatus(row: SysUserRow): Promise<boolean> {
   if (disabling) {
     try {
       await ElMessageBox.confirm(
-        `停用 ${row.userLoginName} 会同时解除它的全部角色绑定；之后要重新启用，必须先在后台数据库把角色绑定补回来（空角色账号一登录就会被当成管理员）。仍要停用吗？`,
+        `停用后 ${row.userLoginName} 将无法登录；角色绑定保持不变，重新启用即可恢复。仍要停用吗？`,
         '提示',
         { confirmButtonText: '停用', cancelButtonText: '取消', type: 'warning' },
       )
@@ -237,7 +239,7 @@ function lockWrite(row: SysUserRow): boolean {
 
     <div class="su-operator">
       <el-button v-if="canWrite" type="primary" :icon="Plus" data-testid="sys-user-create" @click="openCreate">新建用户</el-button>
-      <span class="su-operator-hint">账号的增删改只影响登录与角色归属；数据可见范围仍由「数据权限设置」按用户组配置</span>
+      <!-- <span class="su-operator-hint">账号的增删改只影响登录与角色归属；数据可见范围仍由「数据权限设置」按用户组配置</span> -->
     </div>
 
     <div class="su-table">
@@ -269,7 +271,6 @@ function lockWrite(row: SysUserRow): boolean {
                 :aria-label="`${row.userLoginName}启用状态`"
                 :data-testid="`sys-user-status-${row.userId}`"
               />
-              <span>{{ statusText(row.userStatus) }}</span>
             </div>
           </template>
         </el-table-column>
@@ -282,20 +283,16 @@ function lockWrite(row: SysUserRow): boolean {
               <el-tooltip content="详情" placement="top">
                 <span class="su-op-icon" data-testid="sys-user-detail" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
               </el-tooltip>
-              <el-tooltip v-if="canWrite" content="编辑" placement="top">
-                <span class="su-op-icon" :class="{ 'su-op-icon--muted': row.protectedAccount }" data-testid="sys-user-edit" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
-              </el-tooltip>
-              <el-tooltip v-if="canWrite" content="重置密码" placement="top">
-                <span
-                  class="su-op-icon"
-                  :class="{ 'su-op-icon--muted': row.protectedAccount }"
-                  data-testid="sys-user-password"
-                  @click="resetPassword(row)"
-                ><el-icon :size="15"><Key /></el-icon></span>
-              </el-tooltip>
-              <el-tooltip v-if="canWrite && row.protectedAccount" content="内置账号不可修改" placement="top">
-                <span class="su-op-icon su-op-icon--muted"><el-icon :size="15"><Delete /></el-icon></span>
-              </el-tooltip>
+              <!-- 内置 admin 不参与本页任何写操作（③B）：整行只留「详情」一个图标。
+                   置灰展示编辑/重置密码会多占两个槽位，把这行挤得跟其他行不对齐，且点了也只得到一句拒绝。 -->
+              <template v-if="canWrite && !row.protectedAccount">
+                <el-tooltip content="编辑" placement="top">
+                  <span class="su-op-icon" data-testid="sys-user-edit" @click="openEdit(row)"><el-icon :size="15"><Edit /></el-icon></span>
+                </el-tooltip>
+                <el-tooltip content="重置密码" placement="top">
+                  <span class="su-op-icon" data-testid="sys-user-password" @click="resetPassword(row)"><el-icon :size="15"><Key /></el-icon></span>
+                </el-tooltip>
+              </template>
             </div>
           </template>
         </el-table-column>
@@ -379,14 +376,6 @@ function lockWrite(row: SysUserRow): boolean {
 .su-op-icon:hover {
   background: var(--rc-primary-bg, #eff6ff);
   color: var(--rc-primary, #2563eb);
-}
-/* 内置 admin 行：图标置灰，点击仍给原因（不静默吞掉操作） */
-.su-op-icon--muted {
-  color: var(--rc-muted, #94a3b8);
-}
-.su-op-icon--muted:hover {
-  background: #f1f5f9;
-  color: var(--rc-muted, #94a3b8);
 }
 .su-warn {
   color: var(--rc-danger, #dc2626);

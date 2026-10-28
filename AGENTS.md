@@ -139,6 +139,11 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 > **本地 dev（5180）固定连 186**（2026-10-12）：`.claude/launch.json` 的 `sjcj-dev`（5180）已加
 > `VITE_API_PROXY_TARGET=http://124.223.180.186:9999`，作为后续主要开发环境；不要再指向 217。
 >
+> **dev/test 命令分流（2026-10-28）**：`npm run dev` 默认连本机 `127.0.0.1:9999`（业务后端、sync-platform 同机，
+> `/oss` 随之取 9102）；`npm run test` 才是连 186 这套（原 dev 默认），由 `scripts/dev.cjs --backend test` 注入
+> `VITE_BACKEND_ENV=test`，地址常量在 `app/src/constants/backend.ts`，`app/.env.local` 里显式的 `VITE_API_PROXY_TARGET`
+> 仍然优先（所以上面 5180 那条 launch 配置行为不变）。单元测试改名 `npm run test:unit`，CI 已同步。
+>
 > **186 部署方式（2026-10-12 只读查看，未动）**：传统脚本部署，非本项目 Docker 网关。
 > `start_all.sh` 依次起 redis → saver(9102) → drepeat(9101) → process(9529) → backend(9100) → flow(9111)，
 > `check_all.sh` 自检 10 个端口（含 nginx 9999）；前端产物放到 `/data/app/web`（nginx root）。

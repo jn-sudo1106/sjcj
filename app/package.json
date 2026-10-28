@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "node ../scripts/dev.cjs",
+    "test": "node ../scripts/dev.cjs --backend test",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "node scripts/deploy-static.cjs",
     "deploy:head": "node scripts/deploy-from-head.cjs",
-    "test": "vitest run",
+    "test:unit": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,vue}\""

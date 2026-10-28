@@ -10,10 +10,11 @@ Vue 3 + Vite + TypeScript + Element Plus + Pinia + vue-router。流程画布为*
 
 ```bash
 npm install
-npm run dev       # 开发服务器
+npm run dev       # 开发服务器（后端连本机 127.0.0.1:9999）
 npm run build     # 类型检查(vue-tsc) + 生产构建
 npm run preview   # 预览构建产物
-npm run test      # 单元测试(Vitest)
+npm run test      # 开发服务器（后端连 test 环境 186）
+npm run test:unit # 单元测试(Vitest)
 npm run lint      # ESLint 检查（lint:fix 自动修复）
 npm run format    # Prettier 格式化
 npm run deploy    # 隔离部署（见下「部署」）
