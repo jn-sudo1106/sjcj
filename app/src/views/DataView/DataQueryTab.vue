@@ -1181,62 +1181,68 @@ onUnmounted(() => {
       </template>
       <!-- 结果操作独立成行，查询条件可换行，保留全部既有操作。 -->
       <template #actions>
-        <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
-          <el-icon><Refresh /></el-icon>
-        </button>
-        <AddDataMenu v-if="canWrite" @manual="openAdd" @import="openImport" />
-        <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
-             「导出 ▾」里放当前页 CSV 和取数 API（1008-07：取数 API 从「更多」挪到这里） -->
-        <button
-          class="rc-btn"
-          data-testid="data-export"
-          type="button"
-          title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
-          :disabled="!tableId"
-          @click="onExport"
-        >导出 Excel</button>
-        <ExportMenu :show-excel="false" :page-disabled="pageExportDisabled" :api-disabled="!tableId" trigger-testid="data-export-menu" @export-page="onExportPage" @show-api="onShowApi" />
-        <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
-        <el-dropdown v-if="canWrite && isTestTable" trigger="click">
-          <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-              <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
-              <el-dropdown-item divided disabled>表操作</el-dropdown-item>
-              <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
-             它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
-        <button
-          class="rc-btn"
-          type="button"
-          data-testid="data-back-trace"
-          :disabled="backTracing || !tableId"
-          title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
-          @click="onDistinctSource"
-        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
-        <el-dropdown trigger="click">
-          <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
-              <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
-              <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
-              <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
-                清除父表后续标识
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <FullscreenToggle v-model="fullscreen" />
+        <div class="dv-action-group" role="group" aria-label="数据录入与刷新">
+          <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
+            <el-icon><Refresh /></el-icon>
+          </button>
+          <AddDataMenu v-if="canWrite" @manual="openAdd" @import="openImport" />
+        </div>
+        <div class="dv-action-group" role="group" aria-label="数据导出">
+          <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
+               「导出 ▾」里放当前页 CSV 和取数 API（1008-07：取数 API 从「更多」挪到这里） -->
+          <button
+            class="rc-btn"
+            data-testid="data-export"
+            type="button"
+            title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
+            :disabled="!tableId"
+            @click="onExport"
+          >导出 Excel</button>
+          <ExportMenu :show-excel="false" :page-disabled="pageExportDisabled" :api-disabled="!tableId" trigger-testid="data-export-menu" @export-page="onExportPage" @show-api="onShowApi" />
+        </div>
+        <div class="dv-action-group" role="group" aria-label="数据管理与查源">
+          <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
+          <el-dropdown v-if="canWrite && isTestTable" trigger="click">
+            <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+                <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
+                <el-dropdown-item divided disabled>表操作</el-dropdown-item>
+                <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
+               它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
+          <button
+            class="rc-btn"
+            type="button"
+            data-testid="data-back-trace"
+            :disabled="backTracing || !tableId"
+            title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
+            @click="onDistinctSource"
+          >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
+                <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
+                <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
+                <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
+                  清除父表后续标识
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+        <FullscreenToggle v-model="fullscreen" class="dv-fullscreen-btn" />
       </template>
       <template #toolbar>
         <!-- SQL 提示 / 批量条 / 发大量后续面板保留整行展示。 -->
@@ -1512,7 +1518,19 @@ onUnmounted(() => {
 .dv-structure-btn:disabled, .dv-favorite:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .dv-help-btn.rc-btn { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; color: var(--rc-muted); }
 .dv-help-btn:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.dv-query-workspace :deep(.dqp-result-actions .rc-btn) { height: 32px; padding: 0 10px; font-size: 12px; }
+.dv-query-workspace :deep(.dqp-result-actions) { gap: 8px; row-gap: 6px; }
+.dv-action-group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.dv-action-group + .dv-action-group { padding-left: 8px; border-left: 1px solid var(--rc-border-soft); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn) { height: 30px; padding: 0 8px; border-color: transparent; border-radius: 5px; background: transparent; font-size: 12px; font-weight: 400; white-space: nowrap; }
+.dv-query-workspace :deep(.dqp-result-actions [data-testid="data-add"]), .dv-query-workspace :deep(.dqp-result-actions [data-testid="data-export"]) { border-color: var(--rc-border); background: var(--rc-surface, #fff); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn:not(:disabled):hover) { border-color: transparent; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn:disabled) { color: var(--rc-faint); cursor: not-allowed; }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn:focus-visible), .rc-icon-btn:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
+.dv-query-workspace :deep(.dqp-query-actions .rc-btn), .dv-query-workspace :deep(.dqp-quick-slot .rc-btn), .dv-query-workspace :deep(.dqp-col-btn) { font-weight: 400; border-radius: 5px; }
+.dv-query-workspace :deep(.dqp-query-actions .rc-btn:not(.primary)) { border-color: transparent; background: transparent; }
+.dv-query-workspace :deep(.dqp-query-actions .rc-btn.primary) { box-shadow: none; transform: none; }
+.dv-query-workspace :deep(.dqp-col-btn) { height: 30px; border-color: transparent; background: transparent; color: var(--rc-muted); }
+.dv-fullscreen-btn { margin-left: auto; }
 .dv-table-error { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: var(--rc-danger, #dc2626); font-size: 12px; }
 .dv-source-select { max-width: 100%; }
 @media (max-width: 1100px) { .dv-data-workspace { grid-template-columns: 208px minmax(0, 1fr); } }
@@ -1541,12 +1559,12 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border: 1px solid #d5e2f2;
-  border-radius: 7px;
-  background: #fff;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
   color: var(--rc-text-2);
   cursor: pointer;
 }

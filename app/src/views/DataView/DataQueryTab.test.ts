@@ -461,7 +461,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(page.classes()).not.toContain('is-fullscreen')
     await wrapper.get('[data-testid="data-fullscreen-toggle"]').trigger('click')
     expect(page.classes()).toContain('is-fullscreen')
-    expect(wrapper.get('[data-testid="data-fullscreen-toggle"]').text()).toBe('⤡ 退出全屏')
+    expect(wrapper.get('[data-testid="data-fullscreen-toggle"]').text()).toBe('退出全屏')
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await flushPromises()
     expect(page.classes()).not.toContain('is-fullscreen')
@@ -1131,6 +1131,7 @@ describe('数据中心 · 数据查询 tab', () => {
     useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
+    await sidebar().get('[data-tab="db"]').trigger('click')
     expect(sidebar().text()).toContain('其它表25')
 
     await searchTables('其它表25')

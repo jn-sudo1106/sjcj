@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteCardGrid from './SiteCardGrid.vue'
-import { siteApi, type Site, type Source } from '@/api'
+import { siteApi, sourceApi, type Site, type Source } from '@/api'
+import { ElPopover } from 'element-plus'
+import type { SiteCardSourceScope } from './siteCardQuery'
 
 const site: Site = {
   siteId: 'site-1', name: '测试网站', category: '新闻', owner: 'tester', sourceCount: 2, errorCount: 0,
@@ -13,13 +15,13 @@ function source(sourceId: string, dataCount: number | undefined): Source {
   return { sourceId, name: `源-${sourceId}`, url: 'https://example.com', configId: '', mainTable: '', owner: 'tester', state: 'C', dataCount, siteId: site.siteId }
 }
 
-async function mountGrid(sites: Site[] = [site]) {
+async function mountGrid(sites: Site[] = [site], sourceScope?: SiteCardSourceScope) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
   await router.push('/canvas')
   await router.isReady()
   const wrapper = shallowMount(SiteCardGrid, {
-    props: { sites },
-    global: { plugins: [router] },
+    props: { sites, sourceScope },
+    global: { plugins: [router], components: { ElPopover } },
   })
   await flushPromises()
   return { wrapper, router }
@@ -27,6 +29,26 @@ async function mountGrid(sites: Site[] = [site]) {
 
 describe('SiteCardGrid 大源量加载', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('目录卡片使用命中预览和总数，更多源继续携带原筛选，不串入全站源或改写全站数据量', async () => {
+    const preview = vi.spyOn(siteApi, 'siteSourcePreview')
+    const all = vi.spyOn(siteApi, 'siteSources')
+    const matched = Array.from({ length: 8 }, (_, i) => source(`s${i}`, 1))
+    const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 8, list: matched })
+    const { wrapper } = await mountGrid([{ ...site, sourceCount: 24, dataCount: 999 }], {
+      query: { sourceIds: 's0,s1,s2,s3,s4,s5,s6,s7', name: '公告', state: 'E' },
+      matches: { 'site-1': { total: 8, list: matched.slice(0, 5) } },
+    })
+    expect(preview).not.toHaveBeenCalled()
+    expect(all).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('8 / 24 个源')
+    expect(wrapper.text()).toContain('数据 999 条')
+    wrapper.findComponent(ElPopover).vm.$emit('show')
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sourceIds: 's0,s1,s2,s3,s4,s5,s6,s7', name: '公告', state: 'E', siteIds: 'site-1', page: 1, size: 500 }))
+    expect(all).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 
   it('首屏只请求卡片需要的 5 个源，不拉完整源列表', async () => {
     const preview = vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', 12), source('s2', 30)])

@@ -2,6 +2,7 @@
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -113,7 +114,7 @@ function toggleEmptyOnly() {
 const justCreatedSiteIds = new Set<string>()
 const isEmptySite = (site: Site) => (site.sourceCount || 0) <= 0
 /** 当前筛选（关键词 / 分类 / 标签）下没有源的网站数，「空网站」标签上的数字 */
-const emptyCount = ref(0)
+const emptyCount = computed(() => fetchedSites.value.filter(isEmptySite).length)
 
 // ---- 网站列表 / 分页 ----
 const sites = ref<Site[]>([])
@@ -128,6 +129,7 @@ const page = ref(1)
  */
 const size = ref(20)
 const loading = ref(false)
+const listError = ref('')
 
 // ---- 表格视图 ref ----
 const editorVisible = ref(false)
@@ -183,18 +185,21 @@ const listStats = ref<{ total: number; error: number; notify: number } | null>(n
 const toolbarStats = computed(() => ({ ...(listStats.value ?? stats), siteTotal: stats.siteTotal }))
 
 /** 从 fetchedSites 重算展示：只看收藏 → 排序（收藏置顶）→ 切片。不发请求。 */
-function applyView() {
+const cardCatalog = computed(() => {
   let base = fetchedSites.value
   // 0930-01：网站列表不显示一个源都没有的网站（预建的空目录站，会上看着是一片「暂无源」）。
   // 点「空网站」只看它们；按网站名搜索、本次新建的照样显示；收藏 / 最近打开是用户自己点过的，也不藏。
   if (props.scope === 'all') {
-    emptyCount.value = base.filter(isEmptySite).length
     if (emptyOnly.value) base = base.filter(isEmptySite)
     else if (!keyword.value.trim()) base = base.filter((site) => !isEmptySite(site) || justCreatedSiteIds.has(site.siteId))
   }
   if (stateFilter.value === 'error') base = base.filter((site) => (site.errorCount || 0) > 0)
   if (favOnly.value) base = base.filter((site) => favoriteSiteIds.value.has(site.siteId))
   else if (recentOnly.value) base = base.filter((site) => recentSiteIds.value.includes(site.siteId))
+  return base
+})
+function applyView() {
+  const base = cardCatalog.value
   listStats.value = {
     total: base.reduce((sum, site) => sum + (site.sourceCount || 0), 0),
     error: base.reduce((sum, site) => sum + (site.errorCount || 0), 0),
@@ -222,6 +227,7 @@ let listRequestSeq = 0
  */
 async function loadList(options: { force?: boolean; revalidate?: boolean } = {}) {
   const seq = ++listRequestSeq
+  listError.value = ''
   const search = keyword.value.trim()
   const isDefaultQuery = !search && !categoryFilter.value.length && !tagFilter.value
 
@@ -251,7 +257,13 @@ async function loadList(options: { force?: boolean; revalidate?: boolean } = {})
       siteApi.sitePaged({ ...filters, page: 1, size: LIST_FETCH_SIZE }),
       search ? sourceApi.sourcePaged({ name: search, page: 1, size: LIST_FETCH_SIZE }) : undefined,
     ])
-    let list = sitePage.list
+    let list = [...sitePage.list]
+    for (let nextPage = 2; nextPage <= Math.ceil(sitePage.total / LIST_FETCH_SIZE); nextPage++) {
+      if (seq !== listRequestSeq) return
+      const next = await siteApi.sitePaged({ ...filters, page: nextPage, size: LIST_FETCH_SIZE })
+      if (!next.list.length) throw new Error('网站列表分页不完整')
+      list.push(...next.list)
+    }
     if (search) {
       const kw = search.toLowerCase()
       const siteIdsBySource = new Set(
@@ -263,10 +275,11 @@ async function loadList(options: { force?: boolean; revalidate?: boolean } = {})
     if (isDefaultQuery) commitSites(ticket, list)
     fetchedSites.value = list
     applyView()
-  } catch {
+  } catch (error) {
     if (seq !== listRequestSeq) return
     // 静默重拉失败就留着缓存那份，不清空、不打扰
     if (silent) return
+    listError.value = `加载网站列表失败：${error instanceof Error ? error.message : String(error)}`
     ElMessage.warning('加载网站列表失败')
     fetchedSites.value = []
     sites.value = []
@@ -372,7 +385,12 @@ function clearDataHits() {
 
 // ---- 源列表视图（0924-06）----
 /** 页签范围：最近打开 = 那几个网站下的源 */
-const sourceScopeSiteIds = computed<string[] | undefined>(() => (recentOnly.value ? recentSiteIds.value : undefined))
+const sourceScopeSiteIds = computed<string[] | undefined>(() => {
+  if (recentOnly.value) return recentSiteIds.value
+  // 保留总览按分类/异常下钻等既有网站范围，切成源列表也不能丢失。
+  if (props.scope === 'all' && hasFilter.value) return cardCatalog.value.map(site => site.siteId)
+  return undefined
+})
 /**
  * 我的收藏 = 收藏的源（0924-08）。卡片视图下同一个页签仍是收藏的网站——两种视图一行是什么，收藏就是什么。
  * 收藏没拉回来之前范围是空集（不能传 undefined，那等于不限、会查出全部源），空态文案显示加载中；
@@ -412,7 +430,7 @@ function openSiteFromList(siteId: string) {
 // 只在「系统目录」页签的源列表视图里有：左侧 SourceDirPanel 选目录，系统目录按 categorys 筛，
 // 业务目录先算出目录（含子级）里的源 ID 再按源 ID 范围筛（后端口径见 api/sourceDirs.ts）。
 const dirCollapsed = ref(true)
-const showDirPanel = computed(() => props.scope === 'all' && view.value === 'table')
+const showDirPanel = computed(() => props.scope === 'all')
 const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
 const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
 const dirActive = computed(() => showDirPanel.value && (dirScope.value.all || dirScope.value.dirIds.length > 0))
@@ -465,6 +483,9 @@ const listScopeEmptyText = computed(() => {
 // 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
 const bizOf = ref(new Map<string, string[]>())
 const bizMembershipState = ref<'loading' | 'ready' | 'error'>('loading')
+watch(view, (next) => {
+  if (props.scope === 'all' && next === 'table' && bizMembershipState.value !== 'ready') void loadBizMembership()
+})
 async function loadBizMembership() {
   bizMembershipState.value = 'loading'
   try {
@@ -534,8 +555,12 @@ function openSourceGroup(sourceGroupId: string) {
   void router.push({ path: '/collect', query: { tab: 'personal', group: sourceGroupId } })
 }
 function onToolbarRefresh() {
-  if (view.value === 'table') {
-    if (props.scope === 'all') void loadBizMembership()
+  if (props.scope === 'all') {
+    if (view.value === 'table') void loadBizMembership()
+    if (bizActive.value) void resolveBizScope()
+    if (view.value === 'card') void loadList({ force: true })
+    void overviewRef.value?.refresh()
+  } else if (view.value === 'table') {
     ui.notifySourceListChanged()
   } else void refreshAll()
 }
@@ -589,6 +614,7 @@ async function onDeleteSite(site: Site) {
     })
     ElMessage.success(`已删除网站「${site.name}」`)
     await refreshAll()
+    if (props.scope === 'all') void overviewRef.value?.refresh()
   } catch (error) {
     ElMessage.error(`删除失败: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -619,6 +645,7 @@ async function onEditorSaved(newSiteId?: string) {
     page.value = 1
   }
   await loadList({ force: true })
+  if (props.scope === 'all') void overviewRef.value?.refresh()
   // 标题用**刷新后**的名字：编辑可能刚改过名，用打开弹窗时的旧名会让明细表和列表对不上
   const trackId = newSiteId ?? editedId
   const title = fetchedSites.value.find((s) => s.siteId === trackId)?.name ?? editorSite.value?.name
@@ -670,7 +697,7 @@ onMounted(() => {
   if (recentOnly.value) void loadRecentSites()
   void loadCategories({ revalidate: true })
   void loadTagOptions()
-  if (props.scope === 'all') void loadBizMembership()
+  if (props.scope === 'all' && view.value === 'table') void loadBizMembership()
   ui.registerAction('新建采集', openNewFlowCanvas)
 })
 // 外层 CollectAssets 套了 KeepAlive：tab 之间切换不重新挂载，onMounted 不再跑。
@@ -698,7 +725,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="ca-page" :class="{ 'is-list': view === 'table' || !!dataHits }">
+  <div class="ca-page" :class="{ 'is-list': scope === 'all' || view === 'table' || !!dataHits }">
     <template v-if="dataHits">
       <div class="ca-hits-bar" data-testid="data-query-hits">
         <span>数据查询命中 <strong>{{ dataHits.length }}</strong> 个源</span>
@@ -717,12 +744,12 @@ onUnmounted(() => {
     </template>
     <template v-else>
     <FilterToolbar
-      v-if="view === 'card'"
+      v-if="view === 'card' && scope !== 'all'"
       v-model:keyword="keyword"
       v-model:category-filter="categoryFilter"
       v-model:tag-filter="tagFilter"
       :error-only="stateFilter === 'error'"
-      :empty-count="scope === 'all' ? emptyCount : 0"
+      :empty-count="0"
       :empty-only="emptyOnly"
       :filtered="hasFilter"
       :categories="categories"
@@ -739,7 +766,7 @@ onUnmounted(() => {
     />
 
     <!-- 卡片视图 -->
-    <div v-if="view === 'card'" v-loading="loading && !!sites.length" class="ca-card-body">
+    <div v-if="view === 'card' && scope !== 'all'" v-loading="loading && !!sites.length" class="ca-card-body">
       <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" @delete-site="onDeleteSite" />
     </div>
 
@@ -760,6 +787,14 @@ onUnmounted(() => {
       :show-original-directory="scope === 'all'"
       :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
+      :website-cards="scope === 'all' && view === 'card'"
+      :website-catalog="fetchedSites"
+      :website-catalog-loading="loading"
+      :website-catalog-error="listError"
+      :include-empty-site-ids="[...justCreatedSiteIds]"
+      @edit-site="openSiteEditor"
+      @delete-site="onDeleteSite"
+      @refresh-sites="refreshAll"
       @open-source="openSourceFromList"
       @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
@@ -774,7 +809,7 @@ onUnmounted(() => {
           <button class="ca-dir-clear" type="button" data-testid="dir-scope-clear" title="清除目录范围" aria-label="清除目录范围" @click="dirPanelRef?.clear()">×</button>
         </span>
         <!-- 业务目录下暂不提供按目录发送 / 定时（10-21 用户） -->
-        <el-dropdown v-if="dirActive && dirScope.kind === 'sys'" trigger="click" data-testid="dir-ops" @command="onDirCommand">
+        <el-dropdown v-if="view === 'table' && dirActive && dirScope.kind === 'sys'" trigger="click" data-testid="dir-ops" @command="onDirCommand">
           <button class="ca-save-view sm" type="button">按目录 ▾</button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -805,17 +840,28 @@ onUnmounted(() => {
         </template>
       </template>
       <template #filter-extra>
+        <el-tooltip v-if="scope === 'all' && view === 'card'" content="新增网站" placement="bottom" :show-after="120">
+          <button class="ca-save-view sm ca-create-site" type="button" data-testid="site-create" aria-label="新增网站" @click="openSiteCreator"><el-icon :size="14"><Plus /></el-icon></button>
+        </el-tooltip>
 
         <FilterToolbar
-          keyword=""
-          :category-filter="[]"
-          tag-filter=""
-          :categories="[]"
-          :all-tags="[]"
-          :total="0"
+          v-model:keyword="keyword"
+          v-model:category-filter="categoryFilter"
+          v-model:tag-filter="tagFilter"
+          :categories="categories"
+          :all-tags="allTags"
+          :total="total"
           :stats="toolbarStats"
+          :filtered="hasFilter"
+          :error-only="stateFilter === 'error'"
+          :empty-count="emptyCount"
+          :empty-only="emptyOnly"
           :view="view"
           source-mode
+          @filter-change="resetAndLoad"
+          @toggle-error-only="toggleErrorOnly"
+          @toggle-empty-only="toggleEmptyOnly"
+          @create-site="openSiteCreator"
           @set-view="setView"
           @refresh="onToolbarRefresh"
         />
@@ -833,7 +879,7 @@ onUnmounted(() => {
          原来带 `total > size` 的条件，每页改成 50 之后 25 个网站正好一页装下，
          整条分页就消失了——连「共 N 条」和每页条数选择器一起没了，看着像功能丢了。
          单页时 el-pagination 自己会把页码收成一个，不占额外空间。 -->
-    <div v-if="view === 'card' && !dataHits" class="ca-pager card-mode">
+    <div v-if="view === 'card' && scope !== 'all' && !dataHits" class="ca-pager card-mode">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="size"
@@ -868,6 +914,7 @@ onUnmounted(() => {
 .ca-source-list { padding: 0; background: transparent; }
 .ca-save-view { height: 34px; padding: 0 12px; border: 1px solid #d5e2f2; border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .ca-save-view.sm { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+.ca-save-view.ca-create-site { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 30px; padding: 0; color: var(--rc-primary); }
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 
 /* 系统目录页签：左侧目录面板 + 源列表（2026-10-21） */

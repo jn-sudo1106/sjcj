@@ -1,4 +1,4 @@
-import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './auth'
+import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken } from './auth'
 import { streamModelInterfaceTest } from './modelInterfaceStream'
 
 export interface NodeGenerationSettings {
@@ -452,6 +452,13 @@ export interface CodeRepositoryUploadResult {
 
 type Method = 'GET' | 'POST' | 'DELETE'
 
+async function checkBusinessSession(response: Response): Promise<void> {
+  if (response.status !== 401) return
+  // Runner 独立部署，认证目标可能与当前业务环境不同；仅业务身份接口确认失效才全局登出。
+  // getInfo 沿用原有的 401 / 登录重定向处理；其他异常保留当前登录，随后报告 Runner 的错误。
+  await getInfo().catch(() => {})
+}
+
 async function request<T>(path: string, method: Method = 'GET', body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
   const token = readStoredToken()
@@ -468,13 +475,13 @@ async function request<T>(path: string, method: Method = 'GET', body?: unknown):
   } catch {
     throw new Error('Runner 管理服务不可达')
   }
-  if (response.status === 401) triggerSessionExpired()
+  await checkBusinessSession(response)
   const payload = await response.json().catch(() => null) as unknown
   if (!response.ok) {
     const message = payload && typeof payload === 'object' && 'message' in payload
       ? String(payload.message)
       : `Runner 管理服务请求失败（HTTP ${response.status}）`
-    throw new Error(message)
+    throw new Error(response.status === 401 ? `Runner 管理服务认证失败：${message}` : message)
   }
   return payload as T
 }
@@ -559,7 +566,7 @@ export const runnerManagementApi = {
     const token = readStoredToken()
     const response = await fetch('/api/runner-management/code-servers/package', { method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform }) })
-    if (response.status === 401) triggerSessionExpired()
+    await checkBusinessSession(response)
     if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '服务包下载失败') }
     return response.blob()
   },
@@ -646,7 +653,7 @@ export const runnerManagementApi = {
       response = await fetch('/api/runner-management/runner-package', { method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify(input) })
     } catch { throw new Error('Runner 管理服务不可达') }
-    if (response.status === 401) triggerSessionExpired()
+    await checkBusinessSession(response)
     if (!response.ok) {
       const error = await response.json().catch(() => null) as { message?: string } | null
       throw new Error(error?.message || `Runner 包下载失败（HTTP ${response.status}）`)

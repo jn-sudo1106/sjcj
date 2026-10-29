@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 「导出 ▾」：当前页 CSV / Excel / 取数 API。源数据视图与数据中心共用（1008-07）。
 // 数据中心的「导出 Excel」在一级按钮上（0930-14D 定的），菜单里不再放，传 :show-excel="false"。
+import { ArrowDown } from '@element-plus/icons-vue'
 withDefaults(defineProps<{
   compact?: boolean
   pageDisabled?: boolean
@@ -25,7 +26,7 @@ const emit = defineEmits<{ 'export-page': []; 'export-excel': []; 'show-api': []
 
 <template>
   <el-dropdown trigger="click">
-    <button class="rc-btn" :class="{ 'is-compact': compact }" type="button" :data-testid="triggerTestid">导出 ▾</button>
+    <button class="rc-btn" :class="{ 'is-compact': compact }" type="button" :data-testid="triggerTestid">导出<el-icon><ArrowDown /></el-icon></button>
     <template #dropdown>
       <el-dropdown-menu>
         <el-dropdown-item data-testid="data-export-page" :disabled="pageDisabled" title="导出已查询的当前页全部字段" @click="emit('export-page')">导出当前页 CSV</el-dropdown-item>

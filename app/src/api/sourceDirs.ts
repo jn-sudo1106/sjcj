@@ -11,7 +11,7 @@
 // - `sourcePaged.viewCategoryId` 对业务目录有效，但只认单个目录、也不含子级（传父目录得 0，传两个直接报错）
 //   → 业务目录的范围由前端用 `category/listSources` 逐个取源、取并集，再按源 ID 范围查。
 import { request } from './client'
-import { sourceApi, workflowBindingApi } from './index'
+import { flowCenterApi, sourceApi, workflowBindingApi } from './index'
 import type { Source, SourceCategory, SourceFlowsView } from './types'
 
 export type DirKind = 'sys' | 'biz'
@@ -95,21 +95,30 @@ export function loadDirPath(id: string): Promise<string[]> {
 /** 目录及其全部子孙 ID（逐层拉子级，带缓存；单个子级拉失败只少那一支） */
 export async function expandDirIds(kind: DirKind, ids: string[]): Promise<string[]> {
   const collected = new Set(ids)
-  let frontier = [...ids]
-  for (let depth = 0; frontier.length && depth < 8; depth++) {
-    const next: string[] = []
-    for (let i = 0; i < frontier.length; i += CONCURRENCY) {
-      const batch = frontier.slice(i, i + CONCURRENCY).map((id) => loadDirChildren(kind, id).catch(() => [] as DirNode[]))
-      for (const children of await Promise.all(batch)) {
-        for (const child of children) {
-          if (collected.has(child.id)) continue
-          collected.add(child.id)
-          next.push(child.id)
-        }
+  const queue = [...ids]
+  // 连续保持 CONCURRENCY 个请求在途，子级一回来就入队，不按层、按批等最慢的那个。
+  // 10-28 在 186 实测全选系统目录（2053 个目录，绝大多数是叶子）：逐层分批 27s → 连续并发 17s。
+  // 父子成环由 collected 去重拦住。
+  await new Promise<void>((resolve) => {
+    let active = 0
+    const pump = () => {
+      while (active < CONCURRENCY && queue.length) {
+        const id = queue.shift()!
+        active++
+        void loadDirChildren(kind, id).catch(() => [] as DirNode[]).then((children) => {
+          for (const child of children) {
+            if (collected.has(child.id)) continue
+            collected.add(child.id)
+            queue.push(child.id)
+          }
+          active--
+          pump()
+        })
       }
+      if (!active && !queue.length) resolve()
     }
-    frontier = next
-  }
+    pump()
+  })
   return [...collected]
 }
 
@@ -307,6 +316,79 @@ export async function importFromTemplateToBizDir(template: Source, lines: string
   return result
 }
 
+// ---------------- 业务目录里的表（数据查询左栏「业务目录」页签，10-28） ----------------
+// 口径（10-28 孙总确认）：目录下的表 = 目录直属源涉及的输出表 = 源默认流程各节点的输出表（outEntry）。
+// **不并源的主表**（源上的 entryTypeId）：它是旧平台「源所用配置的输出表」，有了流程后源实际跑默认流程，
+// 根节点可能是另一套配置，主表常常过时或悬空（186 宝都国际：主表 6200033 不存在，流程写的是 2101918 等）。
+// 后端没有「目录 → 表」接口，表上也没有目录字段（entryTypePagedView 只有 groupId，不是目录），只能这样拼：
+// listSources → sourcePaged 按源 ID 取默认流程（POST body，不怕 ID 多）→ 按流程去重查节点。
+// 流程通常被大量源共用（公众号 6028 个源共 1 个流程），按流程缓存后跨目录复用。
+
+const SOURCE_BATCH = 500
+const FLOW_CONCURRENCY = 4
+const dirTablesCache = new Map<string, Promise<BizDirTables>>()
+
+export interface BizDirTables {
+  tableIds: string[]
+  /** 节点没查回来的流程（186 上有流程报「请先进入流程草稿编辑」）：用这些流程的源没统计到表 */
+  failedFlowIds: string[]
+}
+const flowOutputCache = new Map<string, Promise<string[]>>()
+
+/** 空 / '0' 都不是真实的表或流程（后端对"没设"有时给 0） */
+function realId(id: unknown): string {
+  const value = String(id ?? '').trim()
+  return value && value !== '0' ? value : ''
+}
+
+function flowOutputTables(flowId: string): Promise<string[]> {
+  const hit = flowOutputCache.get(flowId)
+  if (hit) return hit
+  const task = flowCenterApi.steps(flowId, { withConfigDetails: false })
+    .then((steps) => [...new Set(steps.map((s) => realId(s.outputTable)).filter(Boolean))])
+    .catch((error: unknown) => {
+      flowOutputCache.delete(flowId)
+      throw error
+    })
+  flowOutputCache.set(flowId, task)
+  return task
+}
+
+/** 一个业务目录直属源涉及的输出表 ID（不含子目录）。按目录缓存；取源失败整体报错不缓存，单个流程失败只记下来 */
+export function bizDirTables(categoryId: string): Promise<BizDirTables> {
+  const hit = dirTablesCache.get(categoryId)
+  if (hit) return hit
+  const task = (async () => {
+    const sourceIds = await bizDirSourceIds(categoryId)
+    const tables = new Set<string>()
+    const flowIds = new Set<string>()
+    for (let i = 0; i < sourceIds.length; i += SOURCE_BATCH) {
+      const ids = sourceIds.slice(i, i + SOURCE_BATCH)
+      const page = await sourceApi.sourcePaged({ sourceIds: ids, page: 1, size: ids.length })
+      for (const source of page.list) {
+        const flowId = realId(source.flowId)
+        if (flowId) flowIds.add(flowId)
+      }
+    }
+    const flows = [...flowIds]
+    const failedFlowIds: string[] = []
+    for (let i = 0; i < flows.length; i += FLOW_CONCURRENCY) {
+      const batch = flows.slice(i, i + FLOW_CONCURRENCY)
+      const results = await Promise.allSettled(batch.map(flowOutputTables))
+      results.forEach((result, idx) => {
+        if (result.status === 'fulfilled') result.value.forEach((id) => tables.add(id))
+        else failedFlowIds.push(batch[idx]!)
+      })
+    }
+    return { tableIds: [...tables], failedFlowIds }
+  })().catch((error: unknown) => {
+    dirTablesCache.delete(categoryId)
+    throw error
+  })
+  dirTablesCache.set(categoryId, task)
+  return task
+}
+
 function sameFlows(a: SourceFlowsView, b: SourceFlowsView) {
   return (a.ownDefaultFlowId ?? '') === (b.ownDefaultFlowId ?? '')
     && a.ownFlowIds.length === b.ownFlowIds.length
@@ -320,4 +402,6 @@ export function resetSourceDirCache() {
   dirSourcesCache.clear()
   membershipTask = null
   pathTasks.clear()
+  dirTablesCache.clear()
+  flowOutputCache.clear()
 }
