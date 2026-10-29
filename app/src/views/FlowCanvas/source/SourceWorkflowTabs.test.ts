@@ -360,10 +360,10 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     wrapper.unmount()
   })
 
-  it('复用现有流程：选择弹窗排除已关联的；确认后直接 bind、不复制', async () => {
+  it('复用现有流程：选择弹窗排除已关联的；选中直接 bind 并打开，不弹确认、不复制', async () => {
     vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValue(loaded([MAIN, AUX]))
     const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue()
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    vi.mocked(ElMessageBox.confirm).mockClear()
     const { wrapper, router } = await mountTabs({ ...dialogStub, ReplaceFlowDialog: { name: 'ReplaceFlowDialog', props: ['purpose', 'excludeFlowIds', 'modelValue'], template: '<div />' } })
     await wrapper.get('[data-testid="workflow-add"]').trigger('click')
     await wrapper.get('[data-testid="workflow-reuse-existing"]').trigger('click')
@@ -371,7 +371,7 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     expect(picker.props('excludeFlowIds')).toEqual(['11'])
     picker.vm.$emit('pick', { id: '12', name: '补数据流程', sourceCnt: 5 })
     await flushPromises()
-    expect(vi.mocked(ElMessageBox.confirm).mock.calls.at(-1)?.[0]).toContain('正被 5 个源使用')
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
     expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '12', primary: false })
     expect(copyWholeFlow).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.workflowId).toBe('12')

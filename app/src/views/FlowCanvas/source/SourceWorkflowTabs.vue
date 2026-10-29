@@ -167,21 +167,15 @@ function chooseReuse() {
 }
 async function reuseExisting(picked: FlowRecord) {
   if (adding.value) return
+  // 10-29：选中即关联并打开，不再弹「复用并打开」确认
   try {
-    const used = picked.sourceCnt ? `正被 ${picked.sourceCnt} 个源使用。` : ''
-    await ElMessageBox.confirm(
-      `「${picked.name}」${used}关联就是和它们共享同一条流程，修改会影响所有使用它的源；需要独立修改请用「复制流程或模板」。`,
-      '关联已有流程',
-      { type: 'warning', confirmButtonText: '复用并打开', cancelButtonText: '取消' },
-    )
     adding.value = true
     await workflowBindingApi.bind({ sourceId: props.sourceId, workflowId: picked.id, primary: !rows.value.some(isOwn) })
-    ElMessage.success(`已复用流程「${picked.name}」`)
+    ElMessage.success(`已关联流程「${picked.name}」`)
     reuseOpen.value = false
     await finishCreate(picked.id)
   } catch (error) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(`复用失败：${(error as Error)?.message ?? String(error)}`)
+    ElMessage.error(`关联失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
     adding.value = false
   }
@@ -424,7 +418,6 @@ onMounted(async () => {
       v-if="copyOpen"
       v-model="copyOpen"
       purpose="copy"
-      :current-flow-id="activeFlowId"
       @pick="copyExisting"
     />
     <ReplaceFlowDialog

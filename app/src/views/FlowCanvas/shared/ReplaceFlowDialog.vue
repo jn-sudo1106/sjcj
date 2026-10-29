@@ -40,6 +40,8 @@ const state = reactive({
   picked: null as FlowRecord | null,
   /** 按源时记下选的是哪一行源（多个源可能同属一条流程，高亮只标点中的那行） */
   pickedSourceId: '',
+  /** 本页流程有没有发布版（流程 ID → true 有 / false 只有草稿 / null 查不到），只在复制类用途查 */
+  published: {} as Record<string, boolean | null>,
 })
 
 let seq = 0
@@ -57,6 +59,7 @@ async function loadFlows(reqId: number) {
   if (reqId !== seq) return
   state.flows = result.list
   state.total = result.total
+  void checkPublished(reqId, result.list.map((f) => f.id))
 }
 
 async function loadSources(reqId: number) {
@@ -76,6 +79,20 @@ async function loadSources(reqId: number) {
   state.sources = result.list
   state.total = result.total
   state.flowById = Object.fromEntries(flows.map((f) => [f.id, f]))
+  void checkPublished(reqId, flowIds)
+}
+
+/**
+ * 复制类用途（copy / replace）逐条查本页流程有没有发布版，只有草稿的置灰、标「仅草稿」（10-29）。
+ * flowPaged 不返回发布状态也不支持按它筛（1016 后端需求），只能每页并发查 overview；
+ * 后端支持只查已发布后改成传参过滤。关联（bind）不复制，不查。
+ */
+async function checkPublished(reqId: number, flowIds: string[]) {
+  if (props.purpose === 'bind') return
+  const todo = flowIds.filter((id) => !(id in state.published))
+  const results = await Promise.all(todo.map(async (id) => [id, await flowHasPublished(id)] as const))
+  if (reqId !== seq) return
+  for (const [id, published] of results) state.published[id] = published
 }
 
 async function load() {
@@ -108,6 +125,7 @@ function switchMode() {
 
 watch(() => props.modelValue, (open) => {
   if (!open) return
+  state.published = {}
   state.mode = 'flow'
   state.keyword = ''
   search()
@@ -115,6 +133,7 @@ watch(() => props.modelValue, (open) => {
 
 function flowSelectable(f: FlowRecord | undefined): f is FlowRecord {
   return !!f && f.id !== props.currentFlowId && !props.excludeFlowIds?.includes(f.id) && !f.disabled
+    && state.published[f.id] !== false
 }
 function flowOfSource(s: Source): FlowRecord | undefined {
   const id = validFlowIdOf(s.flowId)
@@ -139,12 +158,13 @@ function sourceRowClass({ row }: { row: Source }) {
   if (!flowSelectable(flowOfSource(row))) return 'rfd-row-off'
   return state.pickedSourceId === row.sourceId ? 'rfd-row-picked' : ''
 }
-/** 所属流程列的附注：当前 / 已禁用 / 模板 */
+/** 所属流程列的附注：当前 / 已关联 / 已禁用 / 仅草稿 / 模板 */
 function flowTag(f: FlowRecord | undefined) {
   if (!f) return ''
   if (f.id === props.currentFlowId) return '当前'
   if (props.excludeFlowIds?.includes(f.id)) return '已关联'
   if (f.disabled) return '已禁用'
+  if (state.published[f.id] === false) return '仅草稿'
   return f.isTemplate ? '模板' : ''
 }
 
@@ -166,7 +186,8 @@ const confirmText = computed(() => props.purpose === 'bind'
 
 /**
  * 复制类用途（copy 新建 / replace 更换都会整条复制）要求选中的流程有发布版本（1016）：
- * 后端复制取发布版，只有草稿时整个复制失败。选中就查，只有草稿时说明并禁用确认；查不到不拦。
+ * 后端复制取发布版，只有草稿时整个复制失败。列表已按页置灰仅草稿的流程；这里兜住本页还没查完就选中的情况，
+ * 已查过的直接用结果，只有草稿时说明并禁用确认；查不到不拦。
  * 关联（bind）不复制，不查。
  */
 const publishCheck = reactive({ flowId: '', loading: false, published: null as boolean | null })
@@ -176,7 +197,7 @@ watch(() => state.picked?.id ?? '', async (flowId) => {
   publishCheck.loading = false
   if (!flowId || props.purpose === 'bind') return
   publishCheck.loading = true
-  const published = await flowHasPublished(flowId)
+  const published = flowId in state.published ? state.published[flowId]! : await flowHasPublished(flowId)
   if (publishCheck.flowId !== flowId) return
   publishCheck.published = published
   publishCheck.loading = false

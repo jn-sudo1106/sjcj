@@ -110,19 +110,35 @@ describe('ReplaceFlowDialog', () => {
     expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ id: '2' })
   })
 
-  // 1016：后端复制取发布版本，只有草稿的流程（复制品本身就是）复制必然失败——选中就查，提前拦下
-  it('复制类用途：选中只有草稿的流程，说明原因并禁用确认；关联用途不查', async () => {
-    const { wrapper } = await mountDialog([flowOf('2', '只有草稿')])
-    vi.mocked(flowVersionApi.overview).mockResolvedValue({ publishId: null, draftId: '9' } as never)
-    ;(document.body.querySelectorAll('.el-table__body tr')[0] as HTMLElement).click()
+  // 10-29：复制类用途按页逐条查发布版，只有草稿的置灰标「仅草稿」、点不中；关联用途不查
+  it('复制类用途：本页只有草稿的流程置灰标「仅草稿」不可选，已发布的可选', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockImplementation(async (id: string) =>
+      ({ publishId: id === '2' ? null : '1', draftId: '9' }) as never)
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 2, list: [flowOf('2', '只有草稿'), flowOf('3', '已发布')] })
+    mount(ReplaceFlowDialog, { props: { modelValue: true, purpose: 'copy' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await flushPromises()
-    expect(q('[data-testid="replace-flow-unpublished"]').textContent).toContain('还没有发布版本')
-    expect((q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement).disabled).toBe(true)
+    const rows = document.body.querySelectorAll('.el-table__body tr')
+    expect(rows[0]!.className).toContain('rfd-row-off')
+    expect(rows[0]!.textContent).toContain('仅草稿')
+    expect(rows[1]!.textContent).not.toContain('仅草稿')
+    const confirm = q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement
+    ;(rows[0] as HTMLElement).click()
+    await flushPromises()
+    expect(confirm.disabled).toBe(true)
+    ;(rows[1] as HTMLElement).click()
+    await flushPromises()
+    expect(confirm.disabled).toBe(false)
+    expect(flowVersionApi.overview).toHaveBeenCalledTimes(2)
+  })
 
-    await wrapper.setProps({ purpose: 'bind' })
-    vi.mocked(flowVersionApi.overview).mockClear()
+  it('关联用途不查发布版，只有草稿的流程照样可选', async () => {
+    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: null, draftId: '9' } as never)
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 1, list: [flowOf('2', '只有草稿')] })
+    mount(ReplaceFlowDialog, { props: { modelValue: true, purpose: 'bind' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await flushPromises()
     ;(document.body.querySelectorAll('.el-table__body tr')[0] as HTMLElement).click()
     await flushPromises()
-    expect(flowVersionApi.overview).not.toHaveBeenCalled()
+    expect(overview).not.toHaveBeenCalled()
+    expect((q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement).disabled).toBe(false)
   })
 })
