@@ -47,15 +47,25 @@ async function loadRoots() {
   expanded.clear()
   Object.keys(srcShown).forEach((k) => delete srcShown[k])
   loading.value = true
+  let roots: DirNode[] = []
   try {
-    const roots = await sourceApi.sourceCategories(undefined)
-    roots.forEach((c) => rootDirs.push(toNode(c, null)))
-    // 预取一层的子级，保证根上展开箭头/叶子判定正确
-    for (const d of [...rootDirs]) await loadKids(d)
+    const raw = await sourceApi.sourceCategories(undefined)
+    roots = raw.map((c) => toNode(c, null))
+    roots.forEach((d) => rootDirs.push(d))
   } catch (e) {
     ElMessage.error(`加载目录失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
+    // 根目录一到就撤 loading、先渲染。不再串行 await 每个根的子级——那是打开慢的主因（顶层几十个目录=几十次串行请求）。
     loading.value = false
+  }
+  // 后台并行预取一层的子级（8 路并发），让展开箭头/叶子判定尽快补齐，但不挡打开
+  void prefetchRootKids(roots)
+}
+
+async function prefetchRootKids(dirs: DirNode[]) {
+  const CONCURRENCY = 8
+  for (let i = 0; i < dirs.length; i += CONCURRENCY) {
+    await Promise.all(dirs.slice(i, i + CONCURRENCY).map((d) => loadKids(d)))
   }
 }
 
@@ -183,14 +193,14 @@ async function resolveSourceNames() {
 }
 async function resolveDirNames() {
   const missing = [...selDirs].filter((id) => !dirNames[id] && !findDirName(rootDirs, id))
-  for (const id of missing) {
+  await Promise.all(missing.map(async (id) => {
     try {
       const c = await sourceApi.categoryById(id)
       if (c) dirNames[id] = c.name
     } catch {
-      // 忽略
+      // 忽略：解析不到就显示裸 ID
     }
-  }
+  }))
 }
 
 // 打开时按 initial 回填 + 拉根目录 + 解析回显项名称

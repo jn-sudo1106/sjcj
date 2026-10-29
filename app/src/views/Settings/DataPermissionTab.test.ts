@@ -89,7 +89,7 @@ async function clickSave() {
   await flushPromises()
 }
 
-async function mountAs(roles: string[], query = '100001') {
+async function mountAs(roles: string[], groupId = '100001') {
   const pinia = createPinia()
   setActivePinia(pinia)
   useAuthStore().roles = roles
@@ -97,7 +97,11 @@ async function mountAs(roles: string[], query = '100001') {
   vi.spyOn(groupResApi, 'pagedGroupRes').mockResolvedValue({ total: ROWS.length, list: ROWS.map((r) => ({ ...r })) })
   const wrapper = mount(DataPermissionTab, { global: { plugins: [pinia, ElementPlus] } })
   await flushPromises()
-  if (query) await wrapper.get('[data-testid="group-res-group-id"]').setValue(query)
+  // 明细与左侧联动：选中组靠点左侧用户组行（触发 onSelectGroup → 按该组重查明细），不再有独立组 ID 输入框
+  if (groupId) {
+    wrapper.findAllComponents({ name: 'ElTable' })[0]!.vm.$emit('row-click', { groupId: Number(groupId) })
+    await flushPromises()
+  }
   return wrapper
 }
 
@@ -107,37 +111,34 @@ describe('数据权限设置页面', () => {
     vi.restoreAllMocks()
   })
 
-  it('进入页面就加载 meta 并查第一页列表（组 ID 留空 = 请求不带 groupId）', async () => {
+  it('进入页面按默认选中组加载规则第一页（明细与左侧联动）', async () => {
     await mountAs(['admin'], '')
     const warning = vi.spyOn(ElMessage, 'warning')
 
     expect(groupResApi.groupResMeta).toHaveBeenCalledTimes(1)
-    // 挂载时 /group-res/list 被查两次：右侧规则列表第一页（不带 groupId）+ 左侧选中组的源数据权限读取。
+    // 挂载即按当前选中组（默认 90001）查明细第一页，不再是“不带 groupId 查全部”
     const listCalls = vi.mocked(groupResApi.pagedGroupRes).mock.calls.map((c) => c[0])
-    expect(listCalls).toContainEqual({ resType: '', action: '', page: 1, limit: 20 })
+    expect(listCalls).toContainEqual({ groupId: 90001, resType: '', action: '', page: 1, limit: 20 })
     expect(warning).not.toHaveBeenCalled()
   })
 
-  it('点查询按输入框里的组 ID 重查：请求带上 groupId', async () => {
-    const wrapper = await mountAs(['admin'], '')
-    await wrapper.get('[data-testid="group-res-group-id"]').setValue('100002')
-    await wrapper.get('[data-testid="group-res-query"]').trigger('click')
+  it('切换左侧用户组：明细按新选中组重查', async () => {
+    const wrapper = await mountAs(['admin'], '100001')
+    wrapper.findAllComponents({ name: 'ElTable' })[0]!.vm.$emit('row-click', { groupId: 100002 })
     await flushPromises()
 
-    expect(groupResApi.pagedGroupRes).toHaveBeenLastCalledWith({ groupId: 100002, resType: '', action: '', page: 1, limit: 20 })
+    // 选中组变化会同时触发：明细重查(limit 20) + 该组源数据权限读取(limit 200)；这里钉明细那次
+    const calls = vi.mocked(groupResApi.pagedGroupRes).mock.calls.map((c) => c[0])
+    expect(calls).toContainEqual({ groupId: 100002, resType: '', action: '', page: 1, limit: 20 })
   })
 
-  it('组 ID 填了 90000 也原样发给后端：前端不拦，报错用后端那条文案', async () => {
-    const wrapper = await mountAs(['admin'], '')
-    const warning = vi.spyOn(ElMessage, 'warning')
+  it('明细查询报错：用后端那条文案提示（前端不拦组 ID）', async () => {
+    const wrapper = await mountAs(['admin'], '100001')
     const error = vi.spyOn(ElMessage, 'error')
     vi.mocked(groupResApi.pagedGroupRes).mockRejectedValueOnce(new Error('groupId 必须大于 90000'))
-    await wrapper.get('[data-testid="group-res-group-id"]').setValue('90000')
     await wrapper.get('[data-testid="group-res-query"]').trigger('click')
     await flushPromises()
 
-    expect(groupResApi.pagedGroupRes).toHaveBeenLastCalledWith({ groupId: 90000, resType: '', action: '', page: 1, limit: 20 })
-    expect(warning).not.toHaveBeenCalled()
     expect(error).toHaveBeenCalledWith('加载数据权限规则失败：groupId 必须大于 90000')
   })
 
@@ -188,9 +189,8 @@ describe('数据权限设置页面', () => {
     expect(wrapper.text()).toContain('详情覆盖')
   })
 
-  it('重置：清空三个条件、每页条数回默认 20，并回第一页重查', async () => {
-    const wrapper = await mountAs(['admin'])
-    await wrapper.get('[data-testid="group-res-group-id"]').setValue('100001')
+  it('重置：清空内容类型/行为、每页条数回默认 20，并按当前选中组回第一页重查', async () => {
+    const wrapper = await mountAs(['admin'], '100001')
     await wrapper.get('[data-testid="group-res-query"]').trigger('click')
     await flushPromises()
 
@@ -203,8 +203,7 @@ describe('数据权限设置页面', () => {
     await wrapper.get('[data-testid="group-res-reset"]').trigger('click')
     await flushPromises()
 
-    expect(vi.mocked(groupResApi.pagedGroupRes).mock.lastCall?.[0]).toEqual({ resType: '', action: '', page: 1, limit: 20 })
-    expect((wrapper.get('[data-testid="group-res-group-id"]').element as HTMLInputElement).value).toBe('')
+    expect(groupResApi.pagedGroupRes).toHaveBeenLastCalledWith({ groupId: 100001, resType: '', action: '', page: 1, limit: 20 })
   })
 
   it('没查询过也能直接新建：弹窗打开，用户组 ID 留空由用户填', async () => {
@@ -264,8 +263,8 @@ describe('数据权限设置页面', () => {
       expect(preview).toHaveBeenCalledWith({ resType: 'SOURCE', condType: 'ID', resCond: '430001300,430001301' })
       expect(add).toHaveBeenCalledWith({ groupId: 100002, action: 'ACCEPT', resType: 'SOURCE', condType: 'ID', resCond: '430001300,430001301', remarks: undefined })
       expect(vi.mocked(groupResApi.pagedGroupRes).mock.calls.length).toBe(listCallsBefore + 1)
-      // 查询区的组 ID 一个字没动，重查仍按已生效的 100001
-      expect((wrapper.get('[data-testid="group-res-group-id"]').element as HTMLInputElement).value).toBe('100001')
+      // 查询区跟着左侧选中组，新建弹窗改的是别的组（100002），联动区仍停在 100001，重查也按 100001
+      expect(wrapper.get('[data-testid="group-res-current-group"]').text()).toContain('100001')
       expect(vi.mocked(groupResApi.pagedGroupRes).mock.lastCall?.[0]).toMatchObject({ groupId: 100001, page: 1 })
     })
 
