@@ -93,6 +93,7 @@ function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
 const navigationLoading = ref(false)
 const navigationError = ref('')
 const sidebarCollapsed = ref(false)
+const tableScope = ref<'all' | 'favorites' | 'recent'>('all')
 const recentTableIds = ref<string[]>([])
 const visitedTableIds: string[] = []
 const favoriteIds = computed(() => [...favoriteEntryIds.value])
@@ -105,6 +106,17 @@ const availableTables = computed(() => {
       return true
     })
 })
+const scopedTables = computed(() => {
+  if (tableScope.value === 'all') return availableTables.value
+  const byId = new Map(availableTables.value.map(table => [table.tableId, table]))
+  const ids = tableScope.value === 'favorites' ? favoriteIds.value : recentTableIds.value
+  return ids.flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
+})
+const tableScopes = computed(() => [
+  { key: 'all' as const, label: '全部表', count: availableTables.value.length },
+  { key: 'favorites' as const, label: '我的收藏', count: availableTables.value.filter(table => favoriteIds.value.includes(table.tableId)).length },
+  { key: 'recent' as const, label: '最近查看', count: availableTables.value.filter(table => recentTableIds.value.includes(table.tableId)).length },
+])
 const currentTable = computed(() => availableTables.value.find(table => table.tableId === tableId.value))
 const currentTableName = computed(() => currentTable.value?.name || tableMeta.value?.name || currentTable.value?.tableName || tableMeta.value?.tableName || '请选择数据表')
 let disposed = false
@@ -484,12 +496,10 @@ function onDeleteSelected() {
     },
   )
 }
-async function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
-  // scope='source' 仅删当前源数据；scope='all' 清空整表（不带 sourceId 过滤）
-  const sid = scope === 'source' ? (sourceId.value || undefined) : undefined
-  const scopeLabel = scope === 'source' ? (sourceId.value || '不限') : '全部源'
-  const scopeText = scope === 'source' ? '删除该源' : '清空表数据'
-  if (all === 1 && scope === 'all') {
+async function onDeleteByRange(all: 0 | 1) {
+  const scopeLabel = '全部源'
+  const scopeText = '清空表数据'
+  if (all === 1) {
     try {
       const result = await ElMessageBox.prompt(
         `这是不可恢复的全量清空操作。请输入当前表名“${tableId.value}”继续。`,
@@ -510,7 +520,7 @@ async function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
       ? `确认${scopeText}【所有】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`
       : `确认${scopeText}【当天】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`,
     async () => {
-      const r = await dataApi.rowDelete(tableId.value, { sourceId: sid, all })
+      const r = await dataApi.rowDelete(tableId.value, { all })
       if (!r.success) ElMessage.warning('未能改变数据, 可能原因:\n【数据超过14天或未找到对应ID】')
       return { message: `${scopeText}[${all === 1 ? '所有' : '当日'}]成功，清除条数:${r.success ?? 0}` }
     },
@@ -1092,10 +1102,15 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="rc-card dv-page" :class="{ 'is-fullscreen': fullscreen }">
+  <div class="dv-page" :class="{ 'is-fullscreen': fullscreen }">
+    <nav class="dv-table-scopes" aria-label="数据表范围">
+      <button v-for="scope in tableScopes" :key="scope.key" class="rc-btn" :class="{ active: tableScope === scope.key }" type="button" :data-testid="`table-scope-${scope.key}`" :aria-pressed="tableScope === scope.key" @click="tableScope = scope.key">
+        {{ scope.label }} <span>{{ scope.count }}</span>
+      </button>
+    </nav>
     <div class="dv-data-workspace" :class="{ 'is-collapsed': sidebarCollapsed }">
-      <DataTableSidebar v-show="!sidebarCollapsed" :tables="availableTables" :selected-id="tableId" :favorite-ids="favoriteIds" :recent-ids="recentTableIds" :loading="navigationLoading" :error="navigationError" @select="selectSidebarTable" @collapse="sidebarCollapsed = true" @retry="reloadNavigation" />
-      <section class="dv-query-workspace" aria-label="表数据查询">
+      <DataTableSidebar v-show="!sidebarCollapsed" :tables="scopedTables" :selected-id="tableId" :scope="tableScope" :loading="navigationLoading" :error="navigationError" @select="selectSidebarTable" @collapse="sidebarCollapsed = true" @retry="reloadNavigation" />
+      <section class="rc-card dv-query-workspace" aria-label="表数据查询">
         <header class="dv-table-header">
           <div class="dv-table-context">
             <button v-if="sidebarCollapsed" class="dv-nav-expand" type="button" title="展开数据表导航" aria-label="展开数据表导航" @click="sidebarCollapsed = false"><el-icon><DArrowRight /></el-icon></button>
@@ -1206,15 +1221,13 @@ onUnmounted(() => {
             <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item disabled>按行删除</el-dropdown-item>
                 <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-                <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
                 <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
                 <el-dropdown-item divided disabled>表操作</el-dropdown-item>
                 <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(0)">清空表数据【当日】</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1)">清空表数据【全量】</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -1228,19 +1241,9 @@ onUnmounted(() => {
             title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
             @click="onDistinctSource"
           >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
-          <el-dropdown trigger="click">
-            <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
-                <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
-                <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
-                  清除父表后续标识
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <button class="rc-btn" data-testid="data-summary" type="button" :disabled="!tableId" @click="onMoreCommand('summary')">统计</button>
+          <button class="rc-btn" data-testid="data-sql" type="button" :aria-expanded="showSql" :disabled="!tableId" @click="onMoreCommand('sql')">{{ showSql ? '隐藏 SQL' : '查看 SQL' }}</button>
+          <button class="rc-btn" data-testid="data-steps" type="button" :disabled="!tableId" @click="onMoreCommand('steps')">处理步骤</button>
         </div>
         <FullscreenToggle v-model="fullscreen" class="dv-fullscreen-btn" />
       </template>
@@ -1251,6 +1254,7 @@ onUnmounted(() => {
         <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
           <span class="dv-batch-count">已选择 <b>{{ selectedRowKeys.length }}</b> 项</span>
           <button class="rc-btn primary" type="button" @click="onNextStepSelected">发后续任务</button>
+          <button class="rc-btn" data-testid="data-clear-parent" type="button" :disabled="!sourceId" @click="onClearParent">清除父表后续标识</button>
           <CodeConfigButton data-testid="data-query-code-btn" select-step :build-targets="() => codeTargetsForRows(panelRows, selectedRowKeys, tableId, sourceId)" label="代码生成" />
           <el-dropdown trigger="click">
             <span class="dv-link">更多批量操作<el-icon class="et-caret"><ArrowDown /></el-icon></span>
@@ -1495,13 +1499,18 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.dv-table-scopes { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; align-self: flex-start; padding: 4px; margin-bottom: 12px; border-radius: 10px; background: #f1f5f9; }
+.dv-table-scopes .rc-btn { height: 32px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: var(--rc-muted); font-size: 13px; }
+.dv-table-scopes .rc-btn.active { color: var(--rc-primary); background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
+.dv-table-scopes span { margin-left: 5px; color: var(--rc-faint); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+
 .dv-page {
   display: flex;
   height: 100%;
   min-height: 0;
   flex-direction: column;
 }
-.dv-data-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.dv-data-workspace { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 12px; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .dv-data-workspace.is-collapsed { grid-template-columns: minmax(0, 1fr); }
 .dv-query-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .dv-table-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
@@ -1534,7 +1543,7 @@ onUnmounted(() => {
 .dv-table-error { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: var(--rc-danger, #dc2626); font-size: 12px; }
 .dv-source-select { max-width: 100%; }
 @media (max-width: 1100px) { .dv-data-workspace { grid-template-columns: 208px minmax(0, 1fr); } }
-@media (max-width: 760px) { .dv-data-workspace { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .dv-data-workspace :deep(.dt-sidebar) { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--rc-border-soft); } .dv-query-workspace { min-height: 440px; } }
+@media (max-width: 760px) { .dv-data-workspace { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .dv-data-workspace :deep(.dt-sidebar) { max-height: 240px; } .dv-query-workspace { min-height: 440px; } }
 /* 全屏（1008-07）：同一份 DOM 铺满视口，不复制模板也不套弹层；z-index 与源数据视图的全屏同值（60） */
 .dv-page.is-fullscreen {
   position: fixed;
@@ -1607,11 +1616,13 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
 .dv-batch {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
   background: var(--rc-primary-bg);
   border-bottom: 1px solid #bfdbfe;
 }
+.dv-batch .rc-btn { height: 30px; padding: 0 10px; border-radius: 5px; font-size: 12px; font-weight: 400; }
 .dv-batch-count {
   font-size: 13px;
   color: var(--rc-text-2);

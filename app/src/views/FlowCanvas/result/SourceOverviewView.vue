@@ -11,7 +11,9 @@ import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
 import SourceWebsiteCards from '@/views/CollectAssets/SourceWebsiteCards.vue'
 import { clearSiteCardQueryCache } from '@/views/CollectAssets/siteCardQuery'
-import { isProductionBackend } from '@/api/client'
+import { currentBackendHost, isProductionBackend } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
+import SourceDataCleanupDialog from '@/views/CollectAssets/SourceDataCleanupDialog.vue'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -612,6 +614,9 @@ const flowConfigSource = ref<Source | null>(null)
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
 const batchCronOpen = ref(false)
+const cleanupOpen = ref(false)
+const auth = useAuthStore()
+const cleanupAllowed = computed(() => auth.role === 'admin' && !isProductionBackend() && currentBackendHost() !== '118.25.96.217')
 function openFlowConfigForSelected() {
   if (selectedIds.value.length !== 1) {
     ElMessage.warning('源流程配置一次只看一个源，请只勾选 1 个')
@@ -653,6 +658,7 @@ function onGroupOpsCommand(command: string) {
   else if (command === 'adjust-group') openAdjustGroup()
   else if (command === 'run-once') openRunOnce()
   else if (command === 'batch-cron') openBatchCron()
+  else if (command === 'cleanup-data' && cleanupAllowed.value) cleanupOpen.value = true
 }
 /** 来源组批量操作写完后：清勾选、重拉来源组候选、重查列表（组归属 / 默认流程列变了） */
 function onGroupOpsChanged() {
@@ -1476,6 +1482,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
               <el-dropdown-item command="adjust-group" data-testid="sg-ops-adjust-group">{{ rangeAdjustAllowed ? '调整来源组（不勾选 = 按当前筛选范围）' : '调整来源组' }}</el-dropdown-item>
               <el-dropdown-item command="run-once" data-testid="sg-ops-run-once">指定流程运行一次</el-dropdown-item>
               <el-dropdown-item command="batch-cron" data-testid="sg-ops-batch-cron">批量配定时</el-dropdown-item>
+              <el-dropdown-item v-if="cleanupAllowed" divided command="cleanup-data" data-testid="sg-ops-cleanup-data">清理源数据</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -1719,6 +1726,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       :flows="flowOptions"
       @close="runOnceOpen = false"
     />
+    <SourceDataCleanupDialog v-if="cleanupOpen" v-model="cleanupOpen" :source-ids="selectedIds" @cleaned="loadSources" />
     <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />

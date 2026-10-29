@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
 import DataTableSidebar from './DataTableSidebar.vue'
 import DataImportDialog from './DataImportDialog.vue'
@@ -92,7 +92,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await flushPromises()
   }
 
-  async function openResultMenu(testId: 'data-delete' | 'data-more' | 'data-add' | 'data-export-menu') {
+  async function openResultMenu(testId: 'data-delete' | 'data-add' | 'data-export-menu') {
     await wrapper.get(`[data-testid="${testId}"]`).trigger('click')
     await flushPromises()
     return new DOMWrapper(document.body)
@@ -247,8 +247,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     const before = (dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.calls.length
-    const body = await openResultMenu('data-more')
-    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查看查询条件/SQL')!.trigger('click')
+    await wrapper.get('[data-testid="data-sql"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('select * from sense_data.TB_STOCK_NOTICE')
@@ -268,8 +267,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(query.startTime).toBeUndefined()
     expect(query.endTime).toBeUndefined()
 
-    const body = await openResultMenu('data-more')
-    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查看查询条件/SQL')!.trigger('click')
+    await wrapper.get('[data-testid="data-sql"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).not.toContain('CREATE_DT >=')
   })
@@ -289,23 +287,35 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(openSpy).toHaveBeenCalledWith('/api/v1/entry/entryExportAll?entryType=t1', '_blank')
   })
 
-  it('更多菜单保留查看能力和已命名的清除父表操作，不再显示数据维护', async () => {
-    const auth = useAuthStore()
-    auth.roles = ['admin']
+  it('统计、SQL、步骤平铺，清除父表标识只在选中数据后显示', async () => {
+    useAuthStore().roles = ['admin']
     await mountPage()
     await waitForLoad()
-
-    const body = await openResultMenu('data-more')
-    expect(body.text()).toContain('查看统计')
-    expect(body.text()).toContain('查看查询条件/SQL')
-    expect(body.text()).toContain('展示处理步骤')
-    // 0904 I02（Z1-4）：反查源**从「更多」里放出来了**，工具栏直接有按钮
-    // （原话「我到时候把放出来」）——它是数据视图通往源视图的唯一通路，
-    // 藏在二级菜单里没人找得到。所以这里断言它**不在**下拉里。
-    expect(body.text()).not.toContain('按此条件反查源')
-    expect(body.text()).not.toContain('查看去重源 ID')
-    expect(body.text()).toContain('清除父表后续标识')
-    expect(body.text()).not.toContain('数据维护')
+    for (const id of ['data-summary', 'data-sql', 'data-steps', 'data-back-trace']) {
+      expect(wrapper.find(`[data-testid="${id}"]`).exists()).toBe(true)
+    }
+    expect(wrapper.find('[data-testid="data-more"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-clear-parent"]').exists()).toBe(false)
+  })
+  it('批量清除父表标识保留确认与源范围；未选源时禁用', async () => {
+    useAuthStore().roles = ['admin']
+    const clear = vi.spyOn(dataApi, 'clearParent').mockResolvedValue({ message: '设置成功' })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    await wrapper.get('tbody input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="data-clear-parent"]').trigger('click')
+    await flushPromises()
+    expect(clear).not.toHaveBeenCalled()
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await wrapper.get('[data-testid="data-clear-parent"]').trigger('click')
+    await flushPromises()
+    expect(clear).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', sourceId: '600519' }), ['88231'])
+    wrapper.unmount()
+    await mountPage()
+    await waitForLoad()
+    await wrapper.get('tbody input[type="checkbox"]').setValue(true)
+    expect(wrapper.get('[data-testid="data-clear-parent"]').attributes('disabled')).toBeDefined()
   })
   // 0904 I01/I02（Z1）：反查源从「弹窗中转」改成「一键直达源视图」。
   // 会上原话「那你还不如把这个东西直接放到那个源列表」「你直接反向你不是直接跑两步？」
@@ -395,7 +405,7 @@ describe('数据中心 · 数据查询 tab', () => {
     const row = wrapper.get('[data-testid="data-query-primary"]')
     expect(row.classes()).not.toContain('is-one-row')
     const toolbar = wrapper.get('[data-testid="data-result-toolbar"]')
-    for (const id of ['data-refresh', 'data-add', 'data-export', 'data-export-menu', 'data-more', 'data-fullscreen-toggle', 'column-picker-btn']) {
+    for (const id of ['data-refresh', 'data-add', 'data-export', 'data-export-menu', 'data-summary', 'data-sql', 'data-steps', 'data-fullscreen-toggle', 'column-picker-btn']) {
       expect(toolbar.find(`[data-testid="${id}"]`).exists(), id).toBe(true)
       expect(row.find(`[data-testid="${id}"]`).exists(), id).toBe(false)
     }
@@ -593,15 +603,16 @@ describe('数据中心 · 数据查询 tab', () => {
     })
   })
 
-  it('删除数据：按时间删除和表操作按旧系统分组，表操作只保留三项', async () => {
+  it('删除数据：分为按行删除和表操作，按源清理移出数据中心', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage()
     await waitForLoad()
 
     const body = await openResultMenu('data-delete')
-    expect(body.text()).toContain('删除该源-当日数据')
-    expect(body.text()).toContain('删除该源-所有数据')
+    expect(body.text()).not.toContain('删除该源-当日数据')
+    expect(body.text()).toContain('按行删除')
+    expect(body.text()).not.toContain('删除该源-所有数据')
     expect(body.text()).toContain('填入 IDs-删除')
     expect(body.text()).toContain('设为正式表')
     expect(body.text()).toContain('清空表数据【当日】')
@@ -625,7 +636,7 @@ describe('数据中心 · 数据查询 tab', () => {
     vi.unstubAllEnvs()
   })
 
-  it('取数 API 在「导出 ▾」、清除父表标识在更多（0930-14D；1008-07 取数 API 挪到导出）', async () => {
+  it('取数 API 在「导出 ▾」、清除父表标识在批量条（0930-14D；1008-07 取数 API 挪到导出）', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage({ sourceId: '600519' })
@@ -658,8 +669,9 @@ describe('数据中心 · 数据查询 tab', () => {
     closeApiButton!.click()
     await flushPromises()
 
-    const moreMenu = await openResultMenu('data-more')
-    expect(moreMenu.text()).toContain('清除父表后续标识')
+    await wrapper.get('tbody input[type="checkbox"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="data-clear-parent"]').attributes('disabled')).toBeUndefined()
   })
 
   it('导入数据：管理员可打开旧接口字段口径的导入弹窗', async () => {
@@ -944,7 +956,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.find('th .el-checkbox, th input[type="checkbox"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-refresh"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="data-export"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="data-more"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-summary"]').exists()).toBe(true)
   })
 
   it('任务实例：read 角色可查看但重发（危险操作）按钮/勾选列/批量重发对 read 隐藏', async () => {
@@ -981,8 +993,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    const body = await openResultMenu('data-more')
-    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查看统计')!.trigger('click')
+    await wrapper.get('[data-testid="data-summary"]').trigger('click')
     await flushPromises()
 
     const bodyWithDrawer = new DOMWrapper(document.body)
@@ -990,7 +1001,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await bodyWithDrawer.findAll('.el-select-dropdown__item').find((el) => el.text() === '发布日期(K2)')!.trigger('click')
     await flushPromises()
     await new Promise((r) => setTimeout(r, 50))
-    await wrapper.findAll('button').find((b) => b.text() === '统计')!.trigger('click')
+    await wrapper.findComponent({ name: 'SummaryDrawer' }).findAll('button').find((b) => b.text() === '统计')!.trigger('click')
     await flushPromises()
 
     expect(summarySpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1' }), ['K2'])
@@ -1005,9 +1016,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    let body = await openResultMenu('data-more')
-    let item = body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示处理步骤')
-    await item!.trigger('click')
+    await wrapper.get('[data-testid="data-steps"]').trigger('click')
     await flushPromises()
     expect(stepsSpyNoSource).not.toHaveBeenCalled()
 
@@ -1017,9 +1026,7 @@ describe('数据中心 · 数据查询 tab', () => {
     ])
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
-    body = await openResultMenu('data-more')
-    item = body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示处理步骤')
-    await item!.trigger('click')
+    await wrapper.get('[data-testid="data-steps"]').trigger('click')
     await flushPromises()
 
     expect(stepsSpy).toHaveBeenCalledWith('600519')

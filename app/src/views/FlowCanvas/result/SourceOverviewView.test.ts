@@ -9,6 +9,7 @@ import { favoriteSourceIds } from '@/utils/sourceFavorites'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
 
 // 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
 // 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
@@ -1795,6 +1796,26 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     page.mockClear()
     return { wrapper, page }
   }
+
+  it('清理源数据入口仅管理员可用，弹窗带入勾选的源', async () => {
+    useAuthStore().roles = ['admin']
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ list1: [], list2: [], list3: [] })
+    const { wrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus] as never[])
+    await wrapper.get('[data-testid="source-check-391000500"]').setValue(true)
+    const menu = wrapper.findAllComponents({ name: 'ElDropdown' }).find(component => component.attributes('data-testid') === 'source-group-ops')!
+    menu.vm.$emit('command', 'cleanup-data')
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'SourceDataCleanupDialog' })
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['391000500'])
+    wrapper.unmount()
+    useAuthStore().roles = ['read']
+    const { wrapper: readWrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus] as never[])
+    readWrapper.findAllComponents({ name: 'ElDropdown' }).find(component => component.attributes('data-testid') === 'source-group-ops')!.vm.$emit('command', 'cleanup-data')
+    await flushPromises()
+    expect(readWrapper.findComponent({ name: 'SourceDataCleanupDialog' }).exists()).toBe(false)
+    readWrapper.unmount()
+  })
 
   it('groupOps 时保留来源组 / 默认流程两列，移除重复的流程配置列', async () => {
     const { wrapper } = await mountGroupOps()
