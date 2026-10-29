@@ -50,6 +50,26 @@ describe('SiteCardGrid 大源量加载', () => {
     wrapper.unmount()
   })
 
+  it('聚合卡片零补查、可信 0/未知数据分开，更多源仅加载一页且保留原始目录', async () => {
+    const preview = vi.spyOn(siteApi, 'siteSourcePreview')
+    const all = vi.spyOn(siteApi, 'siteSources')
+    const fetch = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 80, list: Array.from({ length: 50 }, (_, i) => source(String(100-i), 0)) })
+    const directory = { kind: 'biz' as const, mode: 'selected' as const, selections: [{ id: '900', includeDescendants: true }] }
+    const { wrapper } = await mountGrid([{ ...site, sourceCount: 90, dataCount: 0 }], {
+      serverPaged: true, query: { directory, count: 0, name: '公告' }, matches: { 'site-1': { total: 80, list: [source('100',0)] } },
+    })
+    expect(preview).not.toHaveBeenCalled(); expect(all).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('数据 0 条');
+    wrapper.findComponent(ElPopover).vm.$emit('show'); await flushPromises()
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ directory, count: 0, name: '公告', siteIds: 'site-1', page: 1, size: 50 }))
+    expect(all).not.toHaveBeenCalled()
+    wrapper.unmount()
+    const unknown = await mountGrid([{ ...site, dataCount: undefined }], { serverPaged: true, query: {}, matches: { 'site-1': { total: 1, list: [source('1',5)] } } })
+    expect(unknown.wrapper.text()).toContain('数据 —')
+    expect(all).not.toHaveBeenCalled()
+    unknown.wrapper.unmount()
+  })
+
   it('首屏只请求卡片需要的 5 个源，不拉完整源列表', async () => {
     const preview = vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', 12), source('s2', 30)])
     const all = vi.spyOn(siteApi, 'siteSources')

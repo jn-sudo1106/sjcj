@@ -1,5 +1,5 @@
 import type { Paged, Source, Site, SiteSummary, Ack, QueueStat, TaskInst, SourceCloneRequest, SourceCloneResult } from '../types'
-import { SOURCES, mockSourceCreate, setSourceDetached, mockSourceSteps, mockSourceNodeRuns } from './sources'
+import { SOURCES, mockSourcePaged, mockSourceCreate, setSourceDetached, mockSourceSteps, mockSourceNodeRuns } from './sources'
 import { mockFlowLoad, mockFlowSave } from './flows'
 import { cloneEntryStructure } from './entries'
 import { buildSourceSeed, type FlowDef, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
@@ -412,4 +412,35 @@ export function mockQueueTaskPaged(params?: Record<string, unknown>): Paged<Task
   const size = Math.max(1, Number(params?.size ?? 20))
   const start = (page - 1) * size
   return { total: filtered.length, list: filtered.slice(start, start + size) }
+}
+
+/** Demo read model. Business memberships require the real backend; no fake directory matches. */
+export function mockSiteSourceScopePaged(params?: Record<string, unknown>) {
+  const filter = (params?.sourceFilter ?? {}) as Record<string, unknown>
+  const directory = params?.directory as { kind: string; mode: string; selections: { id: string }[] } | undefined
+  let sources = mockSourcePaged({ ...filter, page: 1, size: SOURCES.length + 1 }).list
+  if (filter.sourceIds === '') sources = []
+  if (directory && directory.mode !== 'none') {
+    sources = directory.kind === 'biz' ? [] : sources.filter(source => directory.mode === 'all' ? !!source.dirId : directory.selections.some(selection => selection.id === source.dirId))
+  }
+  const matched = new Map<string, Source[]>()
+  const websites = allSites().map(withAggregate)
+  const known = new Set(websites.map(site => site.siteId))
+  let unbound = 0
+  sources.forEach(source => {
+    if (!source.siteId || !known.has(source.siteId)) { unbound++; return }
+    const list = matched.get(source.siteId) ?? []
+    list.push(source); matched.set(source.siteId, list)
+  })
+  const included = new Set(params?.includeEmptySiteIds as string[] ?? [])
+  const list = websites.filter(site => matched.has(site.siteId) || included.has(site.siteId)).map(site => {
+    const own = sourcesOfSite(site.siteId)
+    return { ...site, siteSourceCount: own.length, siteDataCount: own.some(source => source.dataCount == null) ? null : own.reduce((sum, source) => sum + (source.dataCount ?? 0), 0),
+      favorited: false, matchedSourceCount: matched.get(site.siteId)?.length ?? 0,
+      sourcePreview: [...(matched.get(site.siteId) ?? [])].sort((a,b) => b.sourceId.localeCompare(a.sourceId, undefined, { numeric: true })).slice(0,5) }
+  })
+  const sort = params?.sort
+  list.sort((a,b) => (sort === 'sourceCountAsc' ? a.matchedSourceCount-b.matchedSourceCount : sort === 'sourceCountDesc' ? b.matchedSourceCount-a.matchedSourceCount : sort === 'siteIdDesc' ? b.siteId.localeCompare(a.siteId) : sort === 'siteIdAsc' ? a.siteId.localeCompare(b.siteId) : (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')) || a.siteId.localeCompare(b.siteId))
+  const start = (Number(params?.page ?? 1)-1)*Number(params?.limit ?? 20)
+  return { total: list.length, matchedSourceTotal: sources.length-unbound, unboundSourceTotal: unbound, list: list.slice(start,start+Number(params?.limit ?? 20)) }
 }

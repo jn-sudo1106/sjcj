@@ -51,7 +51,8 @@ describe('SourceDirPanel', () => {
     expect((w.get('[data-testid="dir-select-all"]').element as HTMLInputElement).checked).toBe(false)
     await w.get('[data-testid="dir-select-all"]').setValue(true)
     await flushPromises()
-    expect(lastScope(w)).toMatchObject({ all: true, dirIds: ['900', '901'] })
+    expect(lastScope(w).directory).toEqual({ kind: 'biz', mode: 'all', selections: [] })
+    expect(sourceApi.sourceCategories).not.toHaveBeenCalledWith('900')
     await expand(w, '900')
     await row(w, '901').get('[data-testid="dir-check"]').setValue(false)
     await flushPromises()
@@ -95,7 +96,8 @@ describe('SourceDirPanel', () => {
     await expand(w, '100')
     await row(w, '100').get('[data-testid="dir-check"]').setValue(true)
     await flushPromises()
-    expect(lastScope(w).dirIds.sort()).toEqual(['100', '101', '102', '111'])
+    expect(lastScope(w).directory).toEqual({ kind: 'sys', mode: 'selected', selections: [{ id: '100', includeDescendants: true }] })
+    expect(sourceApi.sourceCategories).not.toHaveBeenCalledWith('101')
     expect(lastScope(w).labels.map((l) => l.path)).toEqual(['财经资讯'])
     expect((row(w, '102').get('[data-testid="dir-check"]').element as HTMLInputElement).checked).toBe(true)
 
@@ -104,7 +106,7 @@ describe('SourceDirPanel', () => {
     const parent = row(w, '100').get('[data-testid="dir-check"]').element as HTMLInputElement
     expect(parent.checked).toBe(false)
     expect(parent.indeterminate).toBe(true)
-    expect(lastScope(w).dirIds.sort()).toEqual(['101', '111'])
+    expect(lastScope(w).directory).toEqual({ kind: 'sys', mode: 'selected', selections: [{ id: '101', includeDescendants: true }] })
     expect(lastScope(w).labels.map((l) => l.path)).toEqual(['财经资讯 / 证券之星'])
   })
 

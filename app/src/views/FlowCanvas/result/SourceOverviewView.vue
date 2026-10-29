@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, 
 import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
+import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
 import SourceWebsiteCards from '@/views/CollectAssets/SourceWebsiteCards.vue'
 import { clearSiteCardQueryCache } from '@/views/CollectAssets/siteCardQuery'
 import { isProductionBackend } from '@/api/client'
@@ -110,6 +111,7 @@ const props = defineProps<{
    * 后端只匹配直属、不含子级，调用方传已展开子级的目录 ID。`undefined` = 不限。
    */
   scopeCategoryIds?: string[]
+  scopeDirectory?: SourceDirectoryScope
   /** 目录范围的人话（如「系统目录：财经资讯（含子级）」），只给发任务确认弹窗看，不发给后端 */
   scopeLabel?: string
   /** 范围内容变了但范围参数没变（如往视图目录里加了源）时由父级加 1，触发重查 */
@@ -136,9 +138,6 @@ const props = defineProps<{
   quickEdit?: boolean
   /** 采集资产系统目录的两种展示，共用本组件的查询条件与目录范围。 */
   websiteCards?: boolean
-  websiteCatalog?: Site[]
-  websiteCatalogLoading?: boolean
-  websiteCatalogError?: string
   includeEmptySiteIds?: string[]
 }>()
 const emit = defineEmits<{
@@ -179,6 +178,7 @@ const loading = ref(false)
 const loadError = ref('')
 const cardQuery = ref<SourceFilter | null>(null)
 const cardScopeEmpty = ref(false)
+const cardRevision = ref(0)
 const quickEditSource = ref<Source | null>(null)
 function onQuickEdited() {
   quickEditSource.value = null
@@ -355,15 +355,18 @@ async function openMainTable(tableId: string) {
   }
 }
 /**
- * 不限网站时自己拉一次全量网站（当前约 98 个，一个请求），两处用：「网站」筛选的候选，
- * 以及「所属网站」列的名称——**sourcePaged 列表不返回 siteName**，只有 siteId
- * （2026-09-24 生产实测；source-api.md 字段对照表里的 siteName 在分页列表里并不出现）。
+ * 新目录范围在用户展开网站筛选时按名称查询最多 50 个候选，首屏不下载网站目录。
+ * 新 sourcePaged.directory 会批量补当前源页的网站名称，无需全目录。
+ * 其余旧调用保留原有候选加载，用于筛选与补全没有 siteName 的旧分页响应。
  */
 const siteOptions = ref<{ siteId: string; name: string }[]>([])
-async function loadSiteOptions() {
-  if (!crossSite.value || siteOptions.value.length) return
+let siteOptionsSequence = 0
+async function loadSiteOptions(keyword = '') {
+  if (!crossSite.value || !props.scopeDirectory && siteOptions.value.length) return
+  const sequence = ++siteOptionsSequence
   try {
-    const result = await siteApi.sitePaged({ page: 1, size: 2000 })
+    const result = await siteApi.sitePaged({ page: 1, size: props.scopeDirectory ? 50 : 2000, ...(keyword ? { name: keyword } : {}) })
+    if (sequence !== siteOptionsSequence) return
     siteOptions.value = result.list.map((s) => ({ siteId: s.siteId, name: s.name }))
   } catch {
     // 候选只是筛选辅助，拉不到就只剩「未关联网站」，不打断列表
@@ -502,7 +505,7 @@ function currentQuery(): SourceFilter {
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
     sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
     ...(props.scopeViewCategoryId ? { viewCategoryId: props.scopeViewCategoryId } : {}),
-    ...(props.scopeCategoryIds?.length ? { categorys: props.scopeCategoryIds.join(',') } : {}),
+    ...(props.scopeDirectory ? { directory: props.scopeDirectory } : props.scopeCategoryIds?.length ? { categorys: props.scopeCategoryIds.join(',') } : {}),
     ...(props.scopeLabel ? { dirLabel: props.scopeLabel } : {}),
   }
 }
@@ -517,7 +520,9 @@ async function loadSources() {
   if (props.websiteCards) {
     loading.value = false
     cardScopeEmpty.value = noScopeMatch.value
-    cardQuery.value = currentQuery()
+    const nextQuery = currentQuery()
+    if (JSON.stringify(cardQuery.value) !== JSON.stringify(nextQuery)) cardQuery.value = nextQuery
+    else cardRevision.value++
     return
   }
   if (noScopeMatch.value) {
@@ -671,6 +676,7 @@ const hasQueryFilter = computed(() => {
     || !!dataCountMax.value
     || !!siteFilter.value
     || !!sourceGroupFilter.value
+    || !!props.scopeDirectory && props.scopeDirectory.mode !== 'none'
 })
 const selectedSet = computed(() => new Set(selectedIds.value))
 const selectMode = computed(() => selectedIds.value.length > 0)
@@ -1244,7 +1250,7 @@ onMounted(() => {
   document.addEventListener('keydown', onMarkKeydown)
   void loadSources()
   void loadTagCandidates()
-  void loadSiteOptions()
+  if (!props.scopeDirectory) void loadSiteOptions()
   void loadSourceGroupOptions()
   void loadFlowOptions()
   void loadTableOptions()
@@ -1271,7 +1277,7 @@ watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () =
   void loadSources()
 })
 // 来源组 / 视图目录 / 系统目录范围变了：清掉勾选再重查
-watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}`, () => {
+watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}|${JSON.stringify(props.scopeDirectory)}`, () => {
   clearSelection()
   page.value = 1
   void loadSources()
@@ -1360,7 +1366,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <div class="sov-filter-options">
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
       <label v-if="crossSite" class="sov-fl-site"><span class="sov-label-text">网站</span>
-        <ElSelect v-model="siteFilter" class="sov-site-select" data-testid="source-overview-site" aria-label="网站" filterable placeholder="全部网站" no-match-text="没有匹配的网站" @change="search">
+        <ElSelect v-model="siteFilter" class="sov-site-select" data-testid="source-overview-site" aria-label="网站" filterable :remote="!!scopeDirectory" :remote-method="loadSiteOptions" @visible-change="(open: boolean) => { if (open && scopeDirectory) void loadSiteOptions() }" placeholder="全部网站" no-match-text="没有匹配的网站" @change="search">
           <ElOption label="全部网站" value="" />
           <ElOption v-if="!scopeSiteIds" label="未关联网站" :value="UNBOUND_SITE" />
           <ElOption v-for="s in siteFilterOptions" :key="s.siteId" :label="s.name" :value="s.siteId" />
@@ -1419,18 +1425,17 @@ defineExpose({ openLaunch, clearSelection, refresh })
     </div>
 
     <SourceWebsiteCards
-      v-if="websiteCards && cardQuery"
+      v-if="cardQuery"
+      v-show="websiteCards"
+      :active="!!websiteCards"
+      :refresh-version="cardRevision"
       :query="cardQuery"
-      :catalog="websiteCatalog"
-      :catalog-loading="websiteCatalogLoading"
-      :catalog-error="websiteCatalogError"
       :scope-empty="cardScopeEmpty"
       :empty-text="scopeEmptyText"
       :include-empty-site-ids="includeEmptySiteIds"
       @edit-site="emit('editSite', $event)"
       @delete-site="emit('deleteSite', $event)"
       @show-sources="ui.setAssetView('table')"
-      @retry-catalog="emit('refreshSites')"
     >
       <template #summary-extra><slot name="summary-extra" :ids="[]" /></template>
     </SourceWebsiteCards>
