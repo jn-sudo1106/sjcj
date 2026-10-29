@@ -298,7 +298,9 @@ async function searchSources(keyword: string) {
   if (!keyword.trim()) {
     sourceLoading.value = true
     try {
-      const options = await sourceOptionsForIds(ids.slice(0, SOURCE_PREVIEW_SIZE))
+      const previewIds = ids.slice(0, SOURCE_PREVIEW_SIZE)
+      if (sourceId.value && !previewIds.includes(sourceId.value)) previewIds.push(sourceId.value)
+      const options = await sourceOptionsForIds(previewIds)
       if (requestId === sourceSearchRequest) sourceOptions.value = options
     } finally {
       if (requestId === sourceSearchRequest) sourceLoading.value = false
@@ -312,7 +314,7 @@ async function searchSources(keyword: string) {
     const idMatches = ids.filter((id) => id.includes(query))
     if (idMatches.length) {
       options = await sourceOptionsForIds(idMatches.slice(0, SOURCE_PREVIEW_SIZE))
-    } else {
+    } else if (!/^\d+$/.test(query)) {
       // 名称检索由后端在表的源 ID 分块内执行，避免先全局分页再取交集漏掉本表的源。
       for (let i = 0; i < ids.length && options.length < SOURCE_PREVIEW_SIZE; i += SOURCE_LOOKUP_CHUNK * 4) {
         const batch = Array.from({ length: 4 }, (_, n) => ids.slice(i + n * SOURCE_LOOKUP_CHUNK, i + (n + 1) * SOURCE_LOOKUP_CHUNK)).filter((part) => part.length)
@@ -321,9 +323,18 @@ async function searchSources(keyword: string) {
         options = [...options, ...found.flat()].slice(0, SOURCE_PREVIEW_SIZE)
       }
     }
+    // 新表尚无 SOURCE_ID；允许显式搜索其他源，为当前表录入首条数据，不切到源的默认表。
+    if (!options.length && requestId === sourceSearchRequest) {
+      if (/^\d+$/.test(query)) {
+        options = (await sourceOptionsForIds([query])).filter(source => source.sourceId === query)
+      } else {
+        const result = await sourceApi.sourcePaged({ name: query, page: 1, size: SOURCE_PREVIEW_SIZE })
+        options = result.list.map(source => ({ sourceId: source.sourceId, name: source.name }))
+      }
+    }
     if (requestId === sourceSearchRequest) sourceOptions.value = options
   } catch (error) {
-    if (requestId === sourceSearchRequest) ElMessage.warning(`搜索当前表的源失败：${error instanceof Error ? error.message : String(error)}`)
+    if (requestId === sourceSearchRequest) ElMessage.warning(`搜索源失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     if (requestId === sourceSearchRequest) sourceLoading.value = false
   }
@@ -687,7 +698,7 @@ function onShowApi() {
 // 旧页未选源时从当前结果首行回填 SOURCE_ID / CONFIG_ID；沿用该口径，避免导入目标与当前查询脱节。
 const importOpen = ref(false)
 const importSourceId = computed(() => sourceId.value || panelRows.value[0]?.sourceId || '')
-const importConfigId = computed(() => panelRows.value[0]?.configId ?? '')
+const importConfigId = computed(() => panelRows.value.find(row => row.sourceId === importSourceId.value)?.configId ?? '')
 function openImport() {
   if (!tableId.value) {
     ElMessage.error('请先选择数据表')
@@ -1466,7 +1477,8 @@ onUnmounted(() => {
       :table-meta="tableMeta"
       :mode="editor.mode"
       :row="editor.row"
-      :first-row="panelRows[0] ?? null"
+      :first-row="panelRows.find(row => !sourceId || row.sourceId === sourceId) ?? null"
+      :initial-source-id="sourceId || undefined"
     />
 
     <!-- 统计（方案 §1.6-4） -->

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 源管理「来源组」目录页签（1008-03，10-09 改定方案：复用「我的分组」界面，不新增独立工作区）。
-// 左侧组列表（带成员数，sourcePaged 按 sourceGroupId 筛的 count）+ 右侧成员源列表
+// 左侧组列表（可按组名 / 编码 / ID 搜索，不显示成员数）+ 右侧成员源列表
 // （SourceOverviewView + scopeSourceGroupId）；「流程配置」「组资料」右侧抽屉；新建来源组小弹窗。
 // 写操作仅 admin；非 admin 全部写按钮禁用。写操作后重拉 list 刷新 revision（旧平台 act() 口径）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -87,17 +87,32 @@ async function mountTab(overrides?: {
 const dom = (sel: string) => document.querySelector(sel) as HTMLElement | null
 
 describe('来源组页签 · 列表与选中', () => {
-  it('左侧列出组与成员数（sourcePaged count），点选后右侧加载', async () => {
+  it('左侧列出组（不逐组查成员数），点选后右侧加载', async () => {
     const { wrapper } = await mountTab()
     const items = wrapper.findAll('.sg-item')
     expect(items.length).toBe(2)
-    const text = items.map((i) => i.text())
-    expect(text.some((t) => t.includes('twitter1') && t.includes('255'))).toBe(true)
-    expect(text.some((t) => t.includes('测试组1') && t.includes('22'))).toBe(true)
+    expect(items.map((i) => i.text())).toEqual(['twitter1', '测试组1'])
+    expect(sourceApi.sourcePaged).not.toHaveBeenCalled()
     await items[0]!.trigger('click')
     await settle()
     expect(wrapper.find('.sg-toolbar').text()).toContain('twitter1')
     expect(sourceGroupApi.bindings).toHaveBeenCalledWith({ sourceGroupId: '3' })
+  })
+
+  it('搜索框按组名 / 编码 / ID 过滤左侧列表，无匹配时提示', async () => {
+    const { wrapper } = await mountTab()
+    const search = wrapper.find('input[data-testid="sg-search"]')
+    await search.setValue('测试')
+    expect(wrapper.findAll('.sg-item').map((i) => i.text()).join()).toContain('测试组1')
+    expect(wrapper.findAll('.sg-item').length).toBe(1)
+    await search.setValue('TWITTER1')
+    expect(wrapper.findAll('.sg-item').map((i) => i.text()).join()).toContain('twitter1')
+    expect(wrapper.findAll('.sg-item').length).toBe(1)
+    await search.setValue('3')
+    expect(wrapper.findAll('.sg-item').length).toBe(1)
+    await search.setValue('不存在')
+    expect(wrapper.findAll('.sg-item').length).toBe(0)
+    expect(wrapper.find('.sg-empty').text()).toBe('没有匹配的来源组')
   })
 
   it('停用组灰显并标「停用」', async () => {
@@ -186,7 +201,7 @@ describe('来源组页签 · 组资料抽屉', () => {
     removeBtn.click()
     await settle()
     expect(remove).not.toHaveBeenCalled()
-    // 数量取左侧成员数（members 只取 1 条判断有没有）
+    // 数量另用 sourcePaged 按组筛的 count（members 只取 1 条判断有没有）
     expect(document.body.textContent).toContain('还有 255 个成员，请先移出全部成员')
   })
 })

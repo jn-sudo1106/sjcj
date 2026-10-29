@@ -7,6 +7,7 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
 import DataTableSidebar from './DataTableSidebar.vue'
 import DataImportDialog from './DataImportDialog.vue'
+import RowEditDialog from './RowEditDialog.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
@@ -157,6 +158,91 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(distinctSpy).toHaveBeenLastCalledWith({ tableId: 't2', size: 20000 })
     expect(sourceSpy).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: ['src-9'] }))
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: undefined, page: 1 }))
+  })
+
+  it('空表可按 ID 选中尚无数据的源，保留当前表并带入手工录入', async () => {
+    useAuthStore().roles = ['admin']
+    vi.mocked(dataApi.distinctSource).mockResolvedValue([])
+    vi.mocked(dataApi.rowQueryPaged).mockResolvedValue({ total: 0, list: [] })
+    const source = { sourceId: '391008025', name: '企业客户类型标签', url: '', configId: 'c1', mainTable: 't2', owner: 'dev', state: 'C' }
+    const sources = vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [source] })
+    const add = vi.spyOn(dataApi, 'rowAdd').mockResolvedValue({ message: '新增成功' })
+    await mountPage()
+    await waitForLoad()
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    select.props('remoteMethod')('391008025')
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await flushPromises()
+    expect(sources).toHaveBeenLastCalledWith({ sourceIds: ['391008025'], page: 1, size: 1 })
+    expect(select.findAllComponents({ name: 'ElOption' }).map(option => option.props('value'))).toContain('391008025')
+    select.vm.$emit('update:modelValue', '391008025')
+    select.vm.$emit('change', '391008025')
+    await flushPromises()
+    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', sourceId: '391008025' }))
+    const menu = await openResultMenu('data-add')
+    await clickMenuItem(menu, '手工录入')
+    const editor = wrapper.findComponent(RowEditDialog)
+    expect(editor.props('initialSourceId')).toBe('391008025')
+    expect(editor.findComponent({ name: 'ElInput' }).props('modelValue')).toBe('391008025')
+    await editor.findAll('button').find(button => button.text() === '保存')!.trigger('click')
+    await flushPromises()
+    expect(add).toHaveBeenCalledWith('t1', expect.objectContaining({ SOURCE_ID: '391008025' }))
+  })
+
+  it('空表选源后可 Excel 导入，读取该源配置并上传到当前表', async () => {
+    useAuthStore().roles = ['admin']
+    vi.mocked(dataApi.distinctSource).mockResolvedValue([])
+    vi.mocked(dataApi.rowQueryPaged).mockResolvedValue({ total: 0, list: [] })
+    const source = { sourceId: '391008025', name: '企业客户类型标签', configId: '81952', mainTable: 't2', url: '', owner: 'admin', state: 'C' }
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [source] })
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    const imported = vi.spyOn(dataApi, 'importData').mockResolvedValue({ success: true })
+    await mountPage()
+    await waitForLoad()
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    select.props('remoteMethod')('391008025')
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await flushPromises()
+    select.vm.$emit('update:modelValue', '391008025')
+    select.vm.$emit('change', '391008025')
+    await flushPromises()
+    const menu = await openResultMenu('data-add')
+    await clickMenuItem(menu, 'Excel 导入')
+    const dialog = wrapper.findComponent(DataImportDialog)
+    expect(dialog.props()).toMatchObject({ modelValue: true, tableId: 't1', sourceId: '391008025' })
+    expect(dialog.findAllComponents({ name: 'ElInput' })[2]!.props('modelValue')).toBe('81952')
+    const file = new File(['Excel test fixture'], '企业类型标签.xlsx')
+    const input = dialog.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await dialog.findAll('button').find(button => button.text() === '开始上传')!.trigger('click')
+    await flushPromises()
+    expect(imported).toHaveBeenCalledWith({ file, tableId: 't1', sourceId: '391008025', configId: '81952' })
+  })
+
+  it('空表也可按源名称搜索，清空搜索仍保留已选源，不把无匹配输入当成新源', async () => {
+    vi.mocked(dataApi.distinctSource).mockResolvedValue([])
+    const source = { sourceId: '391008025', name: '企业客户类型标签', url: '', configId: 'c1', mainTable: 't2', owner: 'dev', state: 'C' }
+    const sources = vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [source] })
+    await mountPage()
+    await waitForLoad()
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    select.props('remoteMethod')('企业客户')
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await flushPromises()
+    expect(sources).toHaveBeenLastCalledWith({ name: '企业客户', page: 1, size: 50 })
+    select.vm.$emit('update:modelValue', '391008025')
+    select.vm.$emit('change', '391008025')
+    await flushPromises()
+    select.props('remoteMethod')('')
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await flushPromises()
+    expect(select.findAllComponents({ name: 'ElOption' }).map(option => option.props('value'))).toContain('391008025')
+    sources.mockResolvedValue({ total: 0, list: [] })
+    select.props('remoteMethod')('999999999')
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await flushPromises()
+    expect(select.findAllComponents({ name: 'ElOption' })).toHaveLength(0)
   })
 
   it('查询：输入数据 ID 点查询，rowQueryPaged 带上 dataId 且页码归 1', async () => {
