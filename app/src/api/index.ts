@@ -2988,15 +2988,19 @@ export const configApi = {
    * **为什么按 ID 差集定位而不是猜名字**：copyAll 生成的名字是 `原名_copy`，但那个名字可能**早就被占用**
    * （生产上就有一条历史遗留的 `test2_copy`），按名字回查会认错。改成复制前后各查一次同名前缀，
    * 取新增的 ID——不依赖任何命名规则。
+   *
+   * **前缀要去掉 `_copyN`**（10-29 在 186 实测）：原名已带后缀时 copyAll 会递增，`X_copy1` 复制出 `X_copy2`，
+   * 拿 `X_copy1` 模糊查匹配不到新配置，复制品再复制时改绑全部失败。改用去掉后缀的 `X` 查。
    */
   copyConfigAndLocate: async (sourceConfigId: string, sourceName: string) => {
-    const before = new Set((await configsByNameLike(sourceName)).map((item) => item.configId))
+    const prefix = sourceName.replace(/_copy\d*$/, '') || sourceName
+    const before = new Set((await configsByNameLike(prefix)).map((item) => item.configId))
     const ack = await request<Ack>('config/copyAll', { configId: sourceConfigId }, {
       method: 'GET',
       httpParams: { id: sourceConfigId },
     })
     if (ack && 'ok' in ack && !ack.ok) return { ok: false as const, message: ack.message }
-    const added = (await configsByNameLike(sourceName)).filter((item) => !before.has(item.configId))
+    const added = (await configsByNameLike(prefix)).filter((item) => !before.has(item.configId))
     if (added.length !== 1) {
       // 0 条 = 没复制成功；多条 = 同时有别人在复制，认不准。两种都不绑定，交给用户确认。
       return { ok: false as const, message: `复制后无法唯一定位新配置（匹配到 ${added.length} 条），请刷新确认` }

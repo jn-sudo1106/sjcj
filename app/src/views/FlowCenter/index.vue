@@ -12,7 +12,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
-import { copyFlowErrorText } from '@/utils/flow/flowPublish'
+import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
@@ -460,7 +460,7 @@ async function createFromTemplate() {
   try {
     // 0929 F2：复制后立即逐步骤复制配置并换绑——大流程串行执行可能耗时，给用户一个非阻断反馈。
     const detaching = ElMessage({ message: '正在复制流程并为节点复制独立配置…', duration: 0 })
-    const { flowId: newId, detach } = await copyWholeFlow(picked.id, `${picked.name}_copy`, { sourceFlowRef: `模板「${picked.name}」` })
+    const { flowId: newId, detach, publishError } = await copyWholeFlow(picked.id, `${picked.name}_copy`, { sourceFlowRef: `模板「${picked.name}」` })
       .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     templateForm.open = false
@@ -475,6 +475,7 @@ async function createFromTemplate() {
     })
     ElMessage.success(`已从模板「${picked.name}」新建流程 #${newId}`)
     reportDetachResult(detach)
+    if (publishError) ElMessage.warning(copiedPublishWarning(newId, publishError))
   } catch (e) {
     if (e === 'cancel' || e === 'close') return
     ElMessage.error(`从模板新建失败：${(e as Error)?.message ?? String(e)}`)
@@ -503,7 +504,7 @@ async function copyFlow(t: FlowRecord) {
   copyingFlowId.value = t.id
   try {
     const detaching = ElMessage({ message: reuseConfigs ? '正在复制流程…' : '正在复制流程并为节点复制独立配置…', duration: 0 })
-    const { flowId: newId, detach } = await copyWholeFlow(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」`, reuseConfigs })
+    const { flowId: newId, detach, publishError } = await copyWholeFlow(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」`, reuseConfigs })
       .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     if (created) replaceFlow(created)
@@ -517,6 +518,7 @@ async function copyFlow(t: FlowRecord) {
     })
     ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}${reuseConfigs ? '（节点复用原配置）' : ''}`)
     reportDetachResult(detach, '原流程')
+    if (publishError) ElMessage.warning(copiedPublishWarning(newId, publishError))
   } catch (e) {
     ElMessage.error(copyFlowErrorText((e as Error)?.message ?? String(e)))
   } finally {

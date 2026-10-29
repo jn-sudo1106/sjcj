@@ -9,7 +9,7 @@ import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
-import { copyFlowErrorText } from '@/utils/flow/flowPublish'
+import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 import FlowVersionBar from '../canvas/FlowVersionBar.vue'
 
 const props = defineProps<{ sourceId: string }>()
@@ -318,6 +318,7 @@ async function copyExisting(sourceFlow: FlowRecord) {
       throw new Error(`已生成流程 #${copied.flowId}，但关联当前源失败：${(error as Error)?.message ?? String(error)}`)
     }
     reportDetachResult(copied.detach, `原流程「${sourceFlow.name}」`)
+    if (copied.publishError) ElMessage.warning(copiedPublishWarning(copied.flowId, copied.publishError))
     ElMessage.success(`已从「${sourceFlow.name}」创建新流程`)
     copyOpen.value = false
     await finishCreate(copied.flowId)

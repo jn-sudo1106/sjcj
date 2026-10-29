@@ -7,17 +7,19 @@ const mockCopyAndLocate = vi.fn()
 const mockStepModify = vi.fn()
 const mockRootConfigUpdate = vi.fn()
 const mockConfirm = vi.fn()
-const mockOverview = vi.fn(async () => ({ enabled: false, versions: [], draftId: null as string | null }))
+const mockOverview = vi.fn(async (): Promise<Record<string, unknown>> => ({ enabled: false, versions: [], draftId: null as string | null }))
+const mockCopy = vi.fn()
+const mockAction = vi.fn()
 
 vi.mock('@/api', () => ({
-  flowCenterApi: { steps: (...args: unknown[]) => mockSteps(...args) },
+  flowCenterApi: { steps: (...args: unknown[]) => mockSteps(...args), copy: (...args: unknown[]) => mockCopy(...args) },
   configApi: { copyConfigAndLocate: (...args: unknown[]) => mockCopyAndLocate(...args) },
   itemApi: {
     stepModify: (...args: unknown[]) => mockStepModify(...args),
     rootConfigUpdate: (...args: unknown[]) => mockRootConfigUpdate(...args),
   },
   // 流程版本（2026-10-10）：按未启用处理，换绑照旧不带版本信息
-  flowVersionApi: { overview: (...args: unknown[]) => mockOverview(...(args as [])), action: vi.fn() },
+  flowVersionApi: { overview: (...args: unknown[]) => mockOverview(...(args as [])), action: (...args: unknown[]) => mockAction(...args) },
   versionArgs: (ref: unknown) => (ref ? [ref] : []),
 }))
 
@@ -29,6 +31,7 @@ vi.mock('element-plus', async () => {
 import {
   assertConfigWritable,
   clearDetachFailure,
+  copyWholeFlow,
   detachConfigsInPlace,
   detachCopiedConfigs,
   detachFailureFor,
@@ -296,5 +299,46 @@ describe('detachConfigsInPlace（本地拼装路径去共享，0929 补漏）', 
     const result = await detachConfigsInPlace({ 'x-1': { configId: '' }, 'x-2': { configId: undefined } })
     expect(result).toEqual({ ok: true, copied: 0, remainShared: 0 })
     expect(mockCopyAndLocate).not.toHaveBeenCalled()
+  })
+})
+
+describe('copyWholeFlow 复制后自动发布（10-29）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockCopy.mockReset().mockResolvedValue('500')
+    mockAction.mockReset().mockResolvedValue({ versionId: '71' })
+    mockSteps.mockReset().mockResolvedValue([])
+    mockOverview.mockReset()
+  })
+  const draftOnly = { enabled: true, publishId: null, draftId: '71', versions: [{ versionId: '71', flowVer: 1, ver: 4, state: 'W', isLock: 0, isDelete: 0 }] }
+
+  it('改绑之后发布 system 草稿，用改绑后的 ver', async () => {
+    mockOverview.mockResolvedValue(draftOnly)
+    const copied = await copyWholeFlow('100', '副本')
+    expect(mockAction).toHaveBeenCalledWith('publish', { flowId: '500', versionId: '71', ver: 4, expectedPublishId: null })
+    expect(mockSteps.mock.invocationCallOrder[0]).toBeLessThan(mockAction.mock.invocationCallOrder[0])
+    expect(copied.publishError).toBeUndefined()
+  })
+
+  it('复用原配置也发布', async () => {
+    mockOverview.mockResolvedValue(draftOnly)
+    const copied = await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    expect(copied).toEqual({ flowId: '500' })
+    expect(mockAction).toHaveBeenCalledOnce()
+  })
+
+  it('已有发布版或未启用版本时不发布', async () => {
+    mockOverview.mockResolvedValue({ ...draftOnly, publishId: '70' })
+    await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    mockOverview.mockResolvedValue({ enabled: false, versions: [], draftId: null })
+    await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    expect(mockAction).not.toHaveBeenCalled()
+  })
+
+  it('发布失败不抛，带回原因', async () => {
+    mockOverview.mockResolvedValue(draftOnly)
+    mockAction.mockRejectedValue(new Error('内容已变更'))
+    const copied = await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    expect(copied).toEqual({ flowId: '500', publishError: '内容已变更' })
   })
 })

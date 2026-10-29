@@ -25,3 +25,8 @@ export function isUnpublishedFlowError(message: string | undefined): boolean {
 export function copyFlowErrorText(message: string | undefined): string {
   return isUnpublishedFlowError(message) ? UNPUBLISHED_COPY_HINT : `复制流程失败：${message || '未知原因'}`
 }
+
+/** 复制品自动发布失败的提示：只有草稿时采集跑不了、也不能再被复制 */
+export function copiedPublishWarning(flowId: string, reason: string): string {
+  return `新流程 #${flowId} 自动发布失败（${reason}），现在只有草稿：定时和手动采集都跑不了，也不能再被复制。请打开这条流程手动发布。`
+}
