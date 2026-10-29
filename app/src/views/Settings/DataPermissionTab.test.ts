@@ -9,7 +9,16 @@ import { createPinia, setActivePinia } from 'pinia'
 // 弹窗里的 CondValueInput 会拉起 @/api 聚合桶与目录搜索；本测试只关心规则 CRUD 接线，部分 mock 隔离
 vi.mock('@/api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
-  return { ...actual, sourceApi: {}, siteApi: {}, configApi: {}, entryApi: {} }
+  return { ...actual, sourceApi: {
+      // 单层返回、children 留空：贴合真实 categoryPaged 契约（一次只给一层，判叶靠 children===undefined）
+      sourceCategories: vi.fn(async (parentId?: string) => {
+        if (!parentId) return [{ id: '9009001', name: '企信平台', count: 5 }, { id: '9009003', name: '系统设置', count: 2 }]
+        if (parentId === '9009001') return [{ id: '9009002', name: '微信平台', count: 3 }]
+        return []
+      }),
+      categoryById: vi.fn(async (id: string) => ({ id, name: `目录${id}`, parentId: '', count: 0 })),
+      sourcePaged: vi.fn(async () => ({ total: 0, list: [] })),
+    }, siteApi: {}, configApi: {}, entryApi: {} }
 })
 vi.mock('@/api/sourceDirs', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -25,6 +34,8 @@ import GroupResEditDialog from './GroupResEditDialog.vue'
 import StructCondEditor from './groupRes/StructCondEditor.vue'
 import CondValueInput from './groupRes/CondValueInput.vue'
 import * as groupResApi from '@/api/groupRes'
+import * as groupSourceScope from '@/api/groupSourceScope'
+import { pagedSysUser } from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
 import type { GroupResMeta, GroupResRule } from '@/api/groupRes'
 
@@ -101,8 +112,9 @@ describe('数据权限设置页面', () => {
     const warning = vi.spyOn(ElMessage, 'warning')
 
     expect(groupResApi.groupResMeta).toHaveBeenCalledTimes(1)
-    expect(groupResApi.pagedGroupRes).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(groupResApi.pagedGroupRes).mock.lastCall?.[0]).toEqual({ resType: '', action: '', page: 1, limit: 20 })
+    // 挂载时 /group-res/list 被查两次：右侧规则列表第一页（不带 groupId）+ 左侧选中组的源数据权限读取。
+    const listCalls = vi.mocked(groupResApi.pagedGroupRes).mock.calls.map((c) => c[0])
+    expect(listCalls).toContainEqual({ resType: '', action: '', page: 1, limit: 20 })
     expect(warning).not.toHaveBeenCalled()
   })
 
@@ -478,6 +490,85 @@ describe('数据权限设置页面', () => {
       await flushPromises()
 
       expect(del).not.toHaveBeenCalled()
+    })
+  })
+  describe('左右分栏交互：左侧用户组分页与右侧源信息树', () => {
+    it('左侧渲染用户组表格，展示名称与编码，有分页范围文本', async () => {
+      const wrapper = await mountAs(['admin'], '')
+      const tableText = wrapper.find('.dp-left-table-wrap').text()
+      expect(tableText).toContain('超级管理员')
+      expect(tableText).toContain('90001')
+      expect(wrapper.find('.dp-left-pager-custom').exists()).toBe(true)
+      expect(wrapper.find('.dp-pager-range').text()).toContain('总计')
+    })
+
+    it('左侧搜索框按名称或编码过滤用户组', async () => {
+      const wrapper = await mountAs(['admin'], '')
+      const searchInput = wrapper.find('.dp-group-search-input input')
+      expect(searchInput.exists()).toBe(true)
+      await searchInput.setValue('分析师')
+      await flushPromises()
+      const tableText = wrapper.find('.dp-left-table-wrap').text()
+      expect(tableText).toContain('分析师')
+      expect(tableText).not.toContain('超级管理员')
+    })
+
+    it('左侧用户组来自用户表：组名取该组第一个非空 user_name，distinct GROUP_ID 进列表（仅排除 null）', async () => {
+      const user = (userId: number, userName: string, groupId: number | null) => ({
+        userId, userLoginName: `u${userId}`, userName, userStatus: 0, groupId,
+        roleIds: null, roleNames: null, creator: null, createTime: null, modifier: null, updateTime: null, protectedAccount: false,
+      })
+      // 90004 两人 → 取第一个非空「张三」；1 是小 ID 也要进；null 不进
+      vi.mocked(pagedSysUser).mockResolvedValueOnce({ total: 5, list: [
+        user(1, '张三', 90004), user(2, '李四', 90004), user(3, '王五', 90006), user(4, '小名', 1), user(5, '无组', null),
+      ] })
+      const wrapper = await mountAs(['admin'], '')
+      const tableText = wrapper.find('.dp-left-table-wrap').text()
+      expect(tableText).toContain('张三')     // 90004 组名 = 第一个成员 user_name
+      expect(tableText).toContain('王五')
+      expect(tableText).toContain('小名')     // 小 ID 1 也显示（不再被 >90000 过滤）
+      expect(tableText).not.toContain('李四') // 同组第二个不覆盖
+      expect(tableText).not.toContain('无组') // null 组不进
+    })
+
+    it('选中用户组会读取其源数据权限（getGroupSourceScope）', async () => {
+      const getScope = vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
+        accept: { dirIds: [], sourceIds: [] }, reject: { dirIds: [], sourceIds: [] },
+      })
+      await mountAs(['admin'], '')
+      expect(getScope).toHaveBeenCalledWith(90001)
+    })
+
+    it('保存权限：确认摘要后走 saveGroupSourceScope 落库', async () => {
+      vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
+        accept: { dirIds: ['9009001'], sourceIds: ['501'] }, reject: { dirIds: [], sourceIds: [] },
+      })
+      const saveScope = vi.spyOn(groupSourceScope, 'saveGroupSourceScope').mockResolvedValue(undefined)
+      vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+      const success = vi.spyOn(ElMessage, 'success')
+
+      const wrapper = await mountAs(['admin'], '')
+      await flushPromises()
+      await wrapper.find('[data-testid="group-res-save"]').trigger('click')
+      await flushPromises()
+
+      expect(saveScope).toHaveBeenCalledWith(90001, expect.objectContaining({
+        accept: { dirIds: ['9009001'], sourceIds: ['501'] },
+      }))
+      expect(success).toHaveBeenCalledWith(expect.stringContaining('保存成功'))
+    })
+
+    it('取消确认摘要：不落库', async () => {
+      vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
+        accept: { dirIds: [], sourceIds: [] }, reject: { dirIds: [], sourceIds: [] },
+      })
+      const saveScope = vi.spyOn(groupSourceScope, 'saveGroupSourceScope')
+      vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+
+      const wrapper = await mountAs(['admin'], '')
+      await wrapper.find('[data-testid="group-res-save"]').trigger('click')
+      await flushPromises()
+      expect(saveScope).not.toHaveBeenCalled()
     })
   })
 })

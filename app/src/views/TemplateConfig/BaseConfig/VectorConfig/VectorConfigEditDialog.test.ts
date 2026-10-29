@@ -2,10 +2,12 @@
 // 向量表配置弹窗（1:1 对齐旧 ai-chat-view src/demo/modal/VectorMapping.vue）。
 // 钉的是这个模块最容易被"顺手重构"掉的五条口径：
 // ① 保存 body 是 {config, items} 包装（不是平铺表单），新建不带 id、编辑带 id；
-// ② 选源表自动回填：备注=typeName、源表名剥 'sense_data.' 前缀、向量表表名=`源表名_VECTOR`，并按 entryTypeId 拉源表字段；
+// ② 选源表自动回填：备注=typeName、源表名剥库前缀（sense_data/sense_out/sense_test 都剥）、向量表表名=`源表名_VECTOR`，并按 entryTypeId 拉源表字段；
 // ③ 新建预置三行空映射（type '1'/'2'/'3' = 编码/内容/别名），编辑/详情的映射来自 mapping/info；
 // ④ 列映射明细取回失败**不开弹窗**（旧版异步回填不兜底，空 items 直接保存会清掉已有映射）；
 // ⑤ 编辑整行带回除编辑字段与 createTime/updateTime 外的所有键（lastSync 也在带回之列，同 passthrough 先例）。
+// ⑥ 「源表」下拉是后端模糊搜索（remote-method 把关键词交给 entry-list）：后端 SQL 带 limit 10、
+//    sense_db 有效实体 1160 行，本地过滤只能覆盖最新 10 张，关键词必须发出去才选得到其余的表。
 // 挂载方式同 MatchTableConfigEditDialog.test.ts：el-dialog 是 append-to-body 的 teleport，
 // 用 attachTo: document.body + document 查询，不要 stub teleport。
 // ⚠️ 慢用例显式 30s 超时：弹窗 + el-table 首编译很重，单跑「新建」就要 8s，
@@ -50,11 +52,15 @@ function fill(label: string, value: string) {
   input.value = value
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
-/** 源表下拉：v-model 写值 + change 触发旧 selectTableChange 的自动回填（绕开 teleported popper） */
-async function pickSourceTable(wrapper: ReturnType<typeof mountDialog>, entryTypeId: number) {
-  const select = wrapper
+/** 源表下拉组件本身（remote-method 与 change 都挂在它上面） */
+function sourceTableSelect(wrapper: ReturnType<typeof mountDialog>) {
+  return wrapper
     .findAllComponents(ElSelect)
     .find((c) => c.element === itemByLabel('源表').querySelector('.el-select'))!
+}
+/** 源表下拉：v-model 写值 + change 触发旧 selectTableChange 的自动回填（绕开 teleported popper） */
+async function pickSourceTable(wrapper: ReturnType<typeof mountDialog>, entryTypeId: number) {
+  const select = sourceTableSelect(wrapper)
   select.vm.$emit('update:modelValue', entryTypeId)
   select.vm.$emit('change', entryTypeId)
   await flushPromises()
@@ -133,6 +139,35 @@ describe('VectorConfigEditDialog', () => {
     expect(itemByLabel('向量表备注').querySelector('input')!.value).toBe('机构向量表-类型名')
     expect(itemByLabel('向量表表名').querySelector('input')!.value).toBe('DIM_JG_VECTOR')
     expect(pocTableFieldList).toHaveBeenCalledWith(3)
+  }, 30_000)
+
+  it('源表下拉把关键词交给后端 entry-list：不做本地过滤（后端 limit 10，本地最多只能挑最新 10 张）', async () => {
+    const wrapper = mountDialog()
+    ;(wrapper.vm as unknown as Vm).open()
+    await flushPromises()
+    vi.mocked(pocTableEntryList).mockClear()
+
+    const remote = sourceTableSelect(wrapper).props('remoteMethod') as (name: string) => unknown
+    await remote('KHFA_KH')
+    await flushPromises()
+
+    expect(pocTableEntryList).toHaveBeenCalledWith('KHFA_KH')
+  }, 30_000)
+
+  it('源表名剥库前缀不限 sense_data：sense_out./sense_test. 同样落成裸名（source_table 的约定是裸表名）', async () => {
+    vi.mocked(pocTableEntryList).mockResolvedValue([
+      { entryTypeId: 7, tableName: 'sense_out.TB_CNEWS', typeName: '新闻外发' },
+      { entryTypeId: 8, tableName: 'sense_test.TB_FILE', typeName: '文件测试' },
+    ])
+    const wrapper = mountDialog()
+    ;(wrapper.vm as unknown as Vm).open()
+    await flushPromises()
+
+    await pickSourceTable(wrapper, 7)
+    expect(itemByLabel('向量表表名').querySelector('input')!.value).toBe('TB_CNEWS_VECTOR')
+
+    await pickSourceTable(wrapper, 8)
+    expect(itemByLabel('向量表表名').querySelector('input')!.value).toBe('TB_FILE_VECTOR')
   }, 30_000)
 
   it('必填拦截（文案照旧 rules）：缺源表/表名/备注/字典表类型都不发请求', async () => {

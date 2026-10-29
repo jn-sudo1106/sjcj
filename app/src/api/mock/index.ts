@@ -50,7 +50,7 @@ import {
 // metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
 import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
-import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview } from './groupRes'
+import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview, mockGroupIds } from './groupRes'
 import { mockSysUserList, mockSysUserDetail, mockSysUserAdd, mockSysUserUpdate, mockSysUserStatus, mockSysUserPassword } from './sysUser'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
@@ -290,6 +290,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'group-res/modify': mockGroupResModify,
   'group-res/delete': mockGroupResDelete,
   'group-res/preview': mockGroupResPreview,
+  'group-res/groups': mockGroupIds,
   // 用户管理（系统设置 → 用户管理，SysUserAdminController）：内存表 SYS_USER + 角色绑定
   'sys-user/list': mockSysUserList,
   'sys-user/detail': mockSysUserDetail,

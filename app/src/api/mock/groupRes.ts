@@ -129,6 +129,17 @@ export function mockGroupResDelete(params?: Record<string, unknown>): { ok: bool
   return { ok: true, message: `删除数量:${hit}`, data: hit }
 }
 
+export function mockGroupIds(): number[] {
+  const ids = new Set<number>()
+  for (const r of ROWS) {
+    if (r.isDelete === 0 && r.groupId > GROUP_ID_FLOOR) ids.add(r.groupId)
+  }
+  ids.add(90001)
+  ids.add(100001)
+  ids.add(100002)
+  return Array.from(ids).sort((a, b) => a - b)
+}
+
 /** 试算：mock 不连业务表，ID 条件按填入的 ID 如实回命中数，SQL 条件只做黑名单预检（命中数恒 0）。 */
 export function mockGroupResPreview(params?: Record<string, unknown>): GroupResPreview {
   const condType = String(params?.condType ?? 'ID')
