@@ -158,6 +158,7 @@ import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
 import {
   mockSitePaged,
+  mockSiteSourceScopePaged,
   mockSiteSummary,
   mockSiteDetail,
   mockSiteCreate,
@@ -453,6 +454,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
 
   // 网站—源父子模型（0707 优化·Phase2）
   'site/sitePaged': mockSitePaged,
+  'site/sourceScopePaged': mockSiteSourceScopePaged,
   'site/summary': mockSiteSummary,
   'site/siteDetail': mockSiteDetail,
   'site/createSite': mockSiteCreate,

@@ -157,7 +157,6 @@ async function fetchGroups() {
 function onSelectGroup(row: GroupRow | null) {
   if (!row) return
   currentGroupId.value = row.groupId
-  draft.groupId = String(row.groupId)
   runQuery()
   void loadScope(row.groupId)
 }
@@ -289,8 +288,8 @@ async function onSaveScope() {
 // --------------------------------------------------------------------------
 // 规则列表明细（原有的明细管理与弹窗）
 // --------------------------------------------------------------------------
-const draft = reactive({ groupId: '', resType: '', action: '' })
-const applied = reactive({ groupId: '', resType: '', action: '' })
+const draft = reactive({ resType: '', action: '' })
+const applied = reactive({ resType: '', action: '' })
 const rows = ref<GroupResRule[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -299,14 +298,13 @@ const DEFAULT_SIZE = 20
 const size = ref(DEFAULT_SIZE)
 let seq = 0
 
-const groupIdParam = computed(() => (/^\d+$/.test(applied.groupId) ? Number(applied.groupId) : undefined))
-
+// 明细查询由左侧选中组驱动（联动）：不再独立输入组 ID，切换左侧用户组即重查该组规则。
 async function load() {
   const id = ++seq
   loading.value = true
   try {
     const res = await pagedGroupRes({
-      groupId: groupIdParam.value,
+      groupId: currentGroupId.value ?? undefined,
       resType: applied.resType,
       action: applied.action,
       page: page.value,
@@ -332,7 +330,6 @@ async function load() {
 }
 
 function runQuery() {
-  applied.groupId = draft.groupId.trim()
   applied.resType = draft.resType
   applied.action = draft.action
   page.value = 1
@@ -340,7 +337,6 @@ function runQuery() {
 }
 
 function onReset() {
-  draft.groupId = ''
   draft.resType = ''
   draft.action = ''
   size.value = DEFAULT_SIZE
@@ -553,14 +549,10 @@ onMounted(() => {
         <!-- Tab 3：原有规则明细表格 -->
         <div v-show="activeRightTab === 'ruleList'" class="dp-rule-list-pane" v-loading="loading">
           <el-form :inline="true" class="dp-filter-form" size="small" @submit.prevent>
-            <el-form-item label="用户组 ID">
-              <el-input
-                v-model="draft.groupId"
-                clearable
-                placeholder="用户组 ID"
-                data-testid="group-res-group-id"
-                @keyup.enter="runQuery"
-              />
+            <el-form-item label="用户组">
+              <span class="dp-cur-group" data-testid="group-res-current-group">
+                {{ currentGroup ? `${currentGroup.name} (${currentGroup.groupId})` : '未选择' }}
+              </span>
             </el-form-item>
             <el-form-item label="内容类型">
               <el-select v-model="draft.resType" placeholder="全部" data-testid="group-res-filter-type">
@@ -951,6 +943,12 @@ onMounted(() => {
 .dp-filter-form :deep(.el-input),
 .dp-filter-form :deep(.el-select) {
   width: 150px;
+}
+.dp-cur-group {
+  display: inline-block;
+  min-width: 120px;
+  font-weight: 600;
+  color: #1e293b;
 }
 .dp-operator {
   display: flex;

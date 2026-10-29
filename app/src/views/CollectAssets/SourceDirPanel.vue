@@ -5,19 +5,21 @@
 // - 「系统目录 / 业务目录」二选一，各自保留选择；不能同时筛；
 // - 勾选父目录 = 子孙全勾，部分勾选时父级半选（同旧平台 CategoryTree）；
 //   点名称 = 只看这一个目录本身、不含子级（10-21 用户：要能单独查父级目录；要含子级就勾选）；
-// - 业务目录默认不全选（10-21 用户：全选要把每个目录的源都拉一遍，太慢）；
+// - 业务目录默认不全选；全选通过服务端 all 范围表达，不展开树或枚举成员；
 // - 目录的新增 / 改名 / 删除 / 移动在系统设置里，这里不给入口；
 // - 面板可折叠，折叠后窄条上显示已选目录数，筛选不变。
 // 目录数据与后端口径见 api/sourceDirs.ts。
 import { computed, reactive, ref, watch } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
-import { dirNode, dirPath, expandDirIds, loadDirChildren, searchDirs, type DirKind, type DirNode } from '@/api/sourceDirs'
+import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
+import { dirNode, dirPath, loadDirPath, loadDirChildren, searchDirs, type DirKind, type DirNode } from '@/api/sourceDirs'
 
 export interface DirScope {
   kind: DirKind
+  directory?: SourceDirectoryScope
   /** 业务目录全选仍限定在目录树内；空目录树也不能退回全部源。 */
   all?: boolean
-  /** 筛选用的目录 ID（已含子级）；空且未全选 = 不按目录筛 */
+  /** 已压缩的选择根 ID；是否包含子级由 directory 承载，查询前不展开子树 */
   dirIds: string[]
   /** 汇总行展示：选中的最上层目录（父级全勾时不再列子级） */
   labels: { id: string; path: string; hasKids: boolean }[]
@@ -78,25 +80,63 @@ async function toggle(node: DirNode) {
 
 // ---- 勾选（父子联动） ----
 const curChecked = computed(() => checked[kind.value])
-function hasCheckedDescendant(id: string): boolean {
-  return (kids.get(id) ?? []).some((c) => curChecked.value.has(c.id) || hasCheckedDescendant(c.id))
+const parentOf = (id: string) => { const p = dirNode(id)?.parentId; return p === '-2' || p === '-1' ? '' : p || '' }
+function isBelow(id: string, ancestor: string): boolean {
+  const seen = new Set<string>()
+  for (let p = parentOf(id); p && !seen.has(p); p = parentOf(p)) { if (p === ancestor) return true; seen.add(p) }
+  return false
 }
-const isPartial = (id: string) => !curChecked.value.has(id) && hasCheckedDescendant(id)
+function covered(id: string, set = curChecked.value): boolean {
+  return set.has(id) || [...set].some(root => isBelow(id, root))
+}
+function isChecked(id: string): boolean { return allChecked[kind.value] || covered(id) }
+const isPartial = (id: string) => !isChecked(id) && [...curChecked.value].some(child => isBelow(child, id))
 async function onCheck(node: DirNode, on: boolean) {
+  if (selectingAll.value) return
+  selectingAll.value = true
   const k = kind.value
-  const set = checked[k]
-  focus[k] = null
-  const ids = await expandDirIds(k, [node.id])
-  ids.forEach((id) => (on ? set.add(id) : set.delete(id)))
-  // 往上修父级：勾上时子级全勾才勾父级；取消时祖先一律取消
-  for (let p = node.parentId; p; p = dirNode(p)?.parentId ?? '') {
-    const siblings = kids.get(p) ?? []
-    if (on && siblings.length && siblings.every((c) => set.has(c.id))) set.add(p)
-    else set.delete(p)
-  }
-  const roots = kids.get(rootKey(k)) ?? []
-  allChecked[k] = roots.length > 0 && roots.every((root) => set.has(root.id))
-  void emitScope()
+  try {
+    // Search can expose a deep node whose ancestors have not been rendered yet.
+    if (node.parentId && !dirNode(node.parentId)) await loadDirPath(node.id)
+    const set = new Set(checked[k])
+    if (allChecked[k]) (kids.get(rootKey(k)) ?? []).forEach(root => set.add(root.id))
+    if (on) {
+      if (!covered(node.id, set)) {
+        for (const id of set) if (isBelow(id, node.id)) set.delete(id)
+        set.add(node.id)
+      }
+      // Promote only known complete sibling sets, preserving the existing checkbox semantics.
+      for (let p = parentOf(node.id); p; p = parentOf(p)) {
+        const siblings = kids.get(p)
+        if (!siblings?.length || !siblings.every(child => covered(child.id, set))) break
+        for (const id of set) if (isBelow(id, p)) set.delete(id)
+        set.add(p)
+      }
+    } else {
+      const ancestor = [...set].find(id => isBelow(node.id, id))
+      if (ancestor) {
+        set.delete(ancestor)
+        const path = [node.id]
+        for (let p = parentOf(node.id); p && p !== ancestor; p = parentOf(p)) path.unshift(p)
+        let parent = ancestor
+        // Split only siblings along the visible path. No descendant tree/member enumeration.
+        for (const excluded of path) {
+          const siblings = kids.get(parent) ?? await ensureKids(k, parent)
+          if (!kids.has(parent)) throw new Error(loadError.value)
+          siblings.filter(child => child.id !== excluded).forEach(child => set.add(child.id))
+          parent = excluded
+        }
+      }
+      for (const id of set) if (id === node.id || isBelow(id, node.id)) set.delete(id)
+    }
+    checked[k] = set
+    focus[k] = null
+    const roots = kids.get(rootKey(k)) ?? []
+    allChecked[k] = roots.length > 0 && roots.every(root => covered(root.id, set))
+    await emitScope()
+  } catch (error) {
+    loadError.value = `目录选择失败：${error instanceof Error ? error.message : String(error)}`
+  } finally { selectingAll.value = false }
 }
 function onFocus(node: DirNode) {
   if (selectingAll.value) return
@@ -116,7 +156,7 @@ const topChecked = computed(() => [...curChecked.value].filter((id) => {
   const parent = dirNode(id)?.parentId
   return !(parent && curChecked.value.has(parent))
 }))
-const pickedCount = computed(() => topChecked.value.length || (focus[kind.value] ? 1 : 0))
+const pickedCount = computed(() => allChecked[kind.value] ? Math.max(1, (kids.get(rootKey(kind.value)) ?? []).length) : topChecked.value.length || (focus[kind.value] ? 1 : 0))
 let scopeSeq = 0
 async function emitScope() {
   const seq = ++scopeSeq
@@ -134,6 +174,7 @@ async function emitScope() {
   if (seq !== scopeSeq) return
   emit('change', {
     kind: k,
+    directory: { kind: k, mode: allChecked[k] ? 'all' : dirIds.length ? 'selected' : 'none', selections: allChecked[k] ? [] : dirIds.map(id => ({ id, includeDescendants: set.size > 0 })) },
     all: allChecked[k],
     dirIds,
     // 点名称只看本目录，不算「含子级」
@@ -148,18 +189,11 @@ function clear() {
 }
 async function selectAll() {
   const k = kind.value
-  selectingAll.value = true
-  try {
-    const roots = await ensureKids(k)
-    const ids = await expandDirIds(k, roots.map((node) => node.id))
-    checked[k].clear()
-    ids.forEach((id) => checked[k].add(id))
-    focus[k] = null
-    allChecked[k] = true
-    await emitScope()
-  } finally {
-    selectingAll.value = false
-  }
+  // All visible classified sources is a server-side mode, including an empty tree.
+  checked[k].clear()
+  focus[k] = null
+  allChecked[k] = true
+  await emitScope()
 }
 defineExpose({ clear })
 
@@ -218,7 +252,7 @@ void init()
     <div class="sdp-sub">
       <label class="sdp-all"><input type="checkbox" :checked="allChecked[kind]" :indeterminate.prop="!allChecked[kind] && pickedCount > 0" :disabled="selectingAll" data-testid="dir-select-all" @change="($event.target as HTMLInputElement).checked ? selectAll() : clear()">全选</label>
       <span v-if="selectingAll">加载中…</span>
-      <span v-else-if="pickedCount">已选 {{ topChecked.length || 1 }} 个目录</span>
+      <span v-else-if="pickedCount">已选 {{ pickedCount }} 个目录</span>
       <button v-if="pickedCount" class="sdp-link" type="button" data-testid="dir-clear" @click="clear">清空</button>
     </div>
     <div class="sdp-tree" data-testid="dir-tree">
@@ -235,7 +269,7 @@ void init()
           data-testid="dir-node"
         >
           <span class="sdp-caret" />
-          <input type="checkbox" :disabled="selectingAll" :checked="curChecked.has(node.id)" :aria-label="`勾选 ${node.name}`" @change="onCheck(node, ($event.target as HTMLInputElement).checked)">
+          <input type="checkbox" :disabled="selectingAll" :checked="isChecked(node.id)" :aria-label="`勾选 ${node.name}`" @change="onCheck(node, ($event.target as HTMLInputElement).checked)">
           <span class="sdp-name" :title="node.name" @click="onFocus(node)">{{ node.name }}<span v-if="parentPathOf(node)" class="sdp-path">{{ parentPathOf(node) }}</span></span>
         </div>
       </template>
@@ -261,7 +295,7 @@ void init()
           <input
             type="checkbox"
             :disabled="selectingAll"
-            :checked="curChecked.has(row.node.id)"
+            :checked="isChecked(row.node.id)"
             :indeterminate.prop="isPartial(row.node.id)"
             :aria-label="`勾选 ${row.node.name}`"
             data-testid="dir-check"

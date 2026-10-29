@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
+import { blankSourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -21,7 +23,7 @@ import BizDirPickerDialog from './BizDirPickerDialog.vue'
 import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
-import { BIZ_DIR_ROOT_ID, bizMembership, bizScopeSourceIds, dirPath } from '@/api/sourceDirs'
+import { BIZ_DIR_ROOT_ID, bizMembership, expandDirIds, loadDirChildren, dirPath } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -111,7 +113,8 @@ function toggleEmptyOnly() {
   applyView()
 }
 /** 本次在这里新建的网站：刚建好还没有源，但要照常显示、方便马上点进去加源，不然看着像没建成功 */
-const justCreatedSiteIds = new Set<string>()
+const justCreatedSiteIds = reactive(new Set<string>())
+const includedEmptySiteIds = computed(() => [...justCreatedSiteIds])
 const isEmptySite = (site: Site) => (site.sourceCount || 0) <= 0
 /** 当前筛选（关键词 / 分类 / 标签）下没有源的网站数，「空网站」标签上的数字 */
 const emptyCount = computed(() => fetchedSites.value.filter(isEmptySite).length)
@@ -138,7 +141,8 @@ const editorSite = ref<Site | null>(null)
 const editorMode = ref<'create' | 'edit'>('edit')
 
 // ---- 加载 ----
-// 网站列表一次全量拉回来，排序和分页都在前端做。两个原因：
+// 收藏 / 最近打开卡片保留既有全量列表路径；全部网站使用 SourceWebsiteCards 的服务端分页。
+// 以下旧列表排序和分页仍在前端做，历史原因：
 // 1. 真实后端**不支持排序**——`field`/`sorted`、`orderBy`、`sort`/`order` 五种参数名
 //    2026-09-16 生产实测全部无效，恒按 siteId 升序返回。「最近修改 / 名称」只能前端排。
 // 2. 后端分页 + 前端排序 = 只能把当前页那 10 条重排一遍，跨页顺序还是乱的。
@@ -227,6 +231,7 @@ let listRequestSeq = 0
  */
 async function loadList(options: { force?: boolean; revalidate?: boolean } = {}) {
   const seq = ++listRequestSeq
+  if (props.scope === 'all') { loading.value = false; return }
   listError.value = ''
   const search = keyword.value.trim()
   const isDefaultQuery = !search && !categoryFilter.value.length && !tagFilter.value
@@ -387,8 +392,7 @@ function clearDataHits() {
 /** 页签范围：最近打开 = 那几个网站下的源 */
 const sourceScopeSiteIds = computed<string[] | undefined>(() => {
   if (recentOnly.value) return recentSiteIds.value
-  // 保留总览按分类/异常下钻等既有网站范围，切成源列表也不能丢失。
-  if (props.scope === 'all' && hasFilter.value) return cardCatalog.value.map(site => site.siteId)
+  // 全部网站的总览下钻通过 directory / viewState 保留，不先枚举网站 ID。
   return undefined
 })
 /**
@@ -427,36 +431,33 @@ function openSiteFromList(siteId: string) {
   void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 // ---- 系统目录 / 业务目录（2026-10-21，原型 设计稿/原型设计/源管理_系统目录与业务目录_原型_2026-10-21.html）----
-// 只在「系统目录」页签的源列表视图里有：左侧 SourceDirPanel 选目录，系统目录按 categorys 筛，
-// 业务目录先算出目录（含子级）里的源 ID 再按源 ID 范围筛（后端口径见 api/sourceDirs.ts）。
+// 左侧传原始目录选择，网站和源列表都由业务后端解析；查询前不展开树、不枚举成员。
 const dirCollapsed = ref(true)
 const showDirPanel = computed(() => props.scope === 'all')
 const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
 const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
-const dirActive = computed(() => showDirPanel.value && (dirScope.value.all || dirScope.value.dirIds.length > 0))
+const dirActive = computed(() => showDirPanel.value && (dirScope.value.directory ? dirScope.value.directory.mode !== 'none' : dirScope.value.all || dirScope.value.dirIds.length > 0))
 const bizActive = computed(() => dirActive.value && dirScope.value.kind === 'biz')
-const bizSourceIds = ref<string[]>([])
-const bizLoading = ref(true)
-const bizError = ref('')
+function onDirScope(scope: DirScope) { dirScope.value = scope }
 const dirScopeVersion = ref(0)
-let bizSeq = 0
-async function resolveBizScope() {
-  const seq = ++bizSeq
-  if (!bizActive.value) { bizSourceIds.value = []; bizLoading.value = false; return }
-  bizLoading.value = true
-  bizError.value = ''
-  try {
-    const ids = await bizScopeSourceIds(dirScope.value.dirIds)
-    if (seq === bizSeq) bizSourceIds.value = ids
-  } catch (error) {
-    if (seq === bizSeq) { bizSourceIds.value = []; bizError.value = `读取业务目录里的源失败：${(error as Error)?.message ?? String(error)}` }
-  } finally {
-    if (seq === bizSeq) bizLoading.value = false
-  }
-}
-function onDirScope(scope: DirScope) {
-  dirScope.value = scope
-  void resolveBizScope()
+const listDirectory = computed<SourceDirectoryScope | undefined>(() => {
+  if (!showDirPanel.value) return undefined
+  if (!dirActive.value && categoryFilter.value.length) return { kind: 'biz', mode: 'selected', selections: categoryFilter.value.map(id => ({ id, includeDescendants: true })) }
+  if (!dirActive.value) return { kind: 'biz', mode: 'none', selections: [] }
+  const scope = dirScope.value
+  return scope.directory ?? { kind: scope.kind, mode: scope.all ? 'all' : scope.dirIds.length ? 'selected' : 'none', selections: scope.all ? [] : scope.dirIds.map(id => ({ id, includeDescendants: scope.labels.find(label => label.id === id)?.hasKids ?? false })) }
+})
+const routeSourceViewState = computed(() => {
+  if (props.scope !== 'all' || stateFilter.value !== 'error') return undefined
+  return { ...blankSourceListViewState(), status: 'E' as const }
+})
+// Legacy bulk operations resolve IDs only when explicitly invoked, never before displaying cards.
+async function operationDirIds(): Promise<string[]> {
+  const directory = listDirectory.value
+  if (!directory || directory.mode === 'none') return []
+  if (directory.mode === 'all') return expandDirIds(directory.kind, (await loadDirChildren(directory.kind)).map(node => node.id))
+  const ranges = await Promise.all(directory.selections.map(selection => selection.includeDescendants ? expandDirIds(directory.kind, [selection.id]) : [selection.id]))
+  return [...new Set(ranges.flat())]
 }
 const dirKindLabel = computed(() => (dirScope.value.kind === 'biz' ? '业务目录' : '系统目录'))
 const dirLabelText = computed(() => {
@@ -469,16 +470,8 @@ const dirLabelTip = computed(() => dirScope.value.labels.map((l) => l.path).join
 const dirWithSub = computed(() => dirScope.value.labels.some((l) => l.hasKids))
 /** 给发任务确认弹窗看的范围描述 */
 const dirScopeLabel = computed(() => (dirActive.value ? `${dirKindLabel.value}：${dirScope.value.all ? '全部目录' : dirScope.value.labels.map((l) => l.path).join('、')}${dirWithSub.value ? '（含子级）' : ''}` : ''))
-const listScopeCategoryIds = computed(() => (dirActive.value && dirScope.value.kind === 'sys' ? dirScope.value.dirIds : undefined))
-const listScopeSourceIds = computed(() => {
-  if (props.scope !== 'all') return sourceScopeSourceIds.value
-  return bizActive.value ? (bizLoading.value ? [] : bizSourceIds.value) : undefined
-})
-const listScopeEmptyText = computed(() => {
-  if (!bizActive.value) return sourceScopeEmptyText.value
-  if (bizLoading.value) return '正在读取业务目录里的源…'
-  return bizError.value || '这个业务目录里还没有源，请点击「添加源到业务目录」'
-})
+const listScopeSourceIds = computed(() => props.scope === 'all' ? undefined : sourceScopeSourceIds.value)
+const listScopeEmptyText = computed(() => bizActive.value ? '这个业务目录里还没有源，请点击「添加源到业务目录」' : sourceScopeEmptyText.value)
 
 // 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
 const bizOf = ref(new Map<string, string[]>())
@@ -500,15 +493,18 @@ const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id
 // 按目录：发送 = 复用源列表的「发任务」（不勾选 = 按当前筛选范围，已含目录范围）；定时 = 按范围统一定时弹窗
 const overviewRef = ref<InstanceType<typeof SourceOverviewView>>()
 const scheduleRef = ref<InstanceType<typeof CategoryScheduleModal>>()
-function onDirCommand(command: 'send' | 'schedule') {
+async function onDirCommand(command: 'send' | 'schedule') {
   if (command === 'send') {
     overviewRef.value?.clearSelection()
     void overviewRef.value?.openLaunch()
     return
   }
-  if (dirScope.value.kind === 'sys') scheduleRef.value?.show({ categoryIds: dirScope.value.dirIds.join(',') })
-  else if (!bizSourceIds.value.length) ElMessage.warning('这个业务目录里还没有源')
-  else scheduleRef.value?.show({ ids: bizSourceIds.value.join(',') })
+  try {
+    const ids = await operationDirIds()
+    if (!ids.length) { ElMessage.warning('这个目录范围内没有可用目录'); return }
+    scheduleRef.value?.show({ categoryIds: ids.join(',') })
+  }
+  catch (error) { ElMessage.error(`目录范围读取失败：${error instanceof Error ? error.message : String(error)}`) }
 }
 
 // 选中源加入 / 移出业务目录（一个源可以放进多个业务目录，10-21 定暂不限制）
@@ -519,15 +515,16 @@ function openBizPicker(ids: string[]) {
   bizPicker.open = true
 }
 async function afterBizChanged() {
-  await loadBizMembership()
-  await resolveBizScope()
+  if (view.value === 'table') await loadBizMembership()
   dirScopeVersion.value += 1
 }
 // 移动到…（10-21）：必须先在左侧点 / 勾一个业务目录，作为「从哪移出」；弹窗里选目标或「仅移出」
 const canMoveBiz = computed(() => bizActive.value && !dirScope.value.all && dirScope.value.labels.length === 1)
-const bizMove = reactive({ open: false, ids: [] as string[] })
-function openBizMove(ids: string[]) {
+const bizMove = reactive({ open: false, ids: [] as string[], fromDirIds: [] as string[] })
+async function openBizMove(ids: string[]) {
   if (!canMoveBiz.value || !ids.length) return
+  try { bizMove.fromDirIds = await operationDirIds() }
+  catch (error) { ElMessage.error(`目录范围读取失败：${error instanceof Error ? error.message : String(error)}`); return }
   bizMove.ids = [...ids]
   bizMove.open = true
 }
@@ -557,8 +554,6 @@ function openSourceGroup(sourceGroupId: string) {
 function onToolbarRefresh() {
   if (props.scope === 'all') {
     if (view.value === 'table') void loadBizMembership()
-    if (bizActive.value) void resolveBizScope()
-    if (view.value === 'card') void loadList({ force: true })
     void overviewRef.value?.refresh()
   } else if (view.value === 'table') {
     ui.notifySourceListChanged()
@@ -684,10 +679,11 @@ function applyRouteFilters() {
   const qc = String(route.query.category ?? '')
   if (qc) categoryFilter.value = qc.split(',').map((s) => s.trim()).filter(Boolean)
 }
+applyRouteFilters()
 onMounted(() => {
   applyRouteFilters()
   // 并发优化：优先发起核心列表与统计请求；分类与标签后置并发，不再产生扇出请求风暴
-  void loadStats({ revalidate: true })
+  if (props.scope !== 'all') void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
   // 收藏以后端为准（B30）；回来后 watch(favoriteSiteIds) 会就地重排，不用等它
   void loadFavoriteSites()
@@ -695,8 +691,8 @@ onMounted(() => {
   // 最近打开 2026-10-19 起也以后端为准（通用埋点），回来后 watch(recentSiteIds) 会就地重排。
   // 只有「最近打开」这个实例需要它，别让系统目录 / 收藏 tab 白打一次请求
   if (recentOnly.value) void loadRecentSites()
-  void loadCategories({ revalidate: true })
-  void loadTagOptions()
+  if (props.scope !== 'all') void loadCategories({ revalidate: true })
+  if (props.scope !== 'all') void loadTagOptions()
   if (props.scope === 'all' && view.value === 'table') void loadBizMembership()
   ui.registerAction('新建采集', openNewFlowCanvas)
 })
@@ -714,9 +710,9 @@ onActivated(() => {
   void loadFavoriteSources()
   // 最近打开：切回 tab 时静默重拉，别的浏览器/别的设备上报的也能看到
   if (recentOnly.value) void loadRecentSites()
-  void loadStats({ revalidate: true })
+  if (props.scope !== 'all') void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
-  void loadCategories({ revalidate: true })
+  if (props.scope !== 'all') void loadCategories({ revalidate: true })
 })
 onUnmounted(() => {
   ui.clearActions()
@@ -779,7 +775,8 @@ onUnmounted(() => {
       current-site-id=""
       :scope-site-ids="sourceScopeSiteIds"
       :scope-source-ids="listScopeSourceIds"
-      :scope-category-ids="listScopeCategoryIds"
+      :scope-directory="listDirectory"
+      :view-state="routeSourceViewState"
       :scope-label="dirScopeLabel || undefined"
       :scope-version="dirScopeVersion"
       :scope-empty-text="listScopeEmptyText"
@@ -788,10 +785,7 @@ onUnmounted(() => {
       :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
       :website-cards="scope === 'all' && view === 'card'"
-      :website-catalog="fetchedSites"
-      :website-catalog-loading="loading"
-      :website-catalog-error="listError"
-      :include-empty-site-ids="[...justCreatedSiteIds]"
+      :include-empty-site-ids="includedEmptySiteIds"
       @edit-site="openSiteEditor"
       @delete-site="onDeleteSite"
       @refresh-sites="refreshAll"
@@ -871,7 +865,7 @@ onUnmounted(() => {
     </template>
     <AddToViewDialog v-model="addToView.open" :source-ids="addToView.ids" @added="onAddedToView" />
     <BizDirPickerDialog v-if="bizPicker.open" :initial-source-ids="bizPicker.ids" :initial-directory-ids="defaultBizDirIds" @close="bizPicker.open = false" @saved="afterBizChanged" />
-    <BizDirMoveDialog v-if="bizMove.open" :source-ids="bizMove.ids" :from-dir-ids="dirScope.dirIds" :from-label="`${dirLabelText}${dirWithSub ? '（含子级）' : ''}`" @close="bizMove.open = false" @saved="afterBizChanged" />
+    <BizDirMoveDialog v-if="bizMove.open" :source-ids="bizMove.ids" :from-dir-ids="bizMove.fromDirIds" :from-label="`${dirLabelText}${dirWithSub ? '（含子级）' : ''}`" @close="bizMove.open = false" @saved="afterBizChanged" />
     <BizTemplateImportDialog v-if="bizTemplate.open" :template-id="bizTemplate.templateId" :dir-id="bizTemplate.dirId" :dir-label="dirLabelText" @close="bizTemplate.open = false" @saved="afterBizChanged" />
     <CategoryScheduleModal ref="scheduleRef" />
 

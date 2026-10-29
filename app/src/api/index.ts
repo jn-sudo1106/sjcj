@@ -1,3 +1,5 @@
+import { directoryQueryParams } from './sourceDirectoryScope'
+import { sourceScopePaged } from './siteSourceScope'
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionBackend, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
@@ -540,6 +542,7 @@ export const sourceApi = {
         // **只放在 sourcePaged 里，不进 sourceCondParams**：changeMembersByRange 等其它按条件的接口不认它，
         // 混进去会变成「不限」（按范围调整来源组甚至会带 confirmAll 改全平台）。
         viewCategoryId: p?.viewCategoryId,
+        directory: p?.directory,
       },
     })
     return sourcePageFromLegacy(result)
@@ -1286,6 +1289,7 @@ async function loadSiteUsedTables(siteId: string): Promise<SiteUsedTablesResult>
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
 export const siteApi = {
+  sourceScopePaged,
   /** 网站源实际用到的表（主表 ∪ 流程节点的输入/输出表），带每张表的源名单（0924-09） */
   siteUsedTables: (siteId: string, options: { force?: boolean } = {}): Promise<SiteUsedTablesResult> => {
     const hit = siteUsedTablesCache.get(siteId)
@@ -3550,6 +3554,7 @@ export const sourceGroupApi = {
       .filter(([, value]) => !(Array.isArray(value) && !value.filter(Boolean).length)))
     const httpParams = {
       ...cond,
+      ...directoryQueryParams(input.filter.directory),
       targetSourceGroupId: input.targetSourceGroupId,
       ...(input.confirmAll ? { confirmAll: true } : {}),
     }

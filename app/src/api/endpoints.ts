@@ -720,6 +720,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 网站—源父子模型：0810 对接 data-view 的网站读取接口；写类仅按明确流程逐步联调。
   // 0812 已在 W1 测试环境完成只读联调。建站三条（site/add、snatchSave、bindSite）不标默认 live，
   // 避免测试代理误写入；生产新建由 siteCreate 在 isProductionCreateEnabled 时单次强制 http。
+  { path: 'site/sourceScopePaged', desc: '源范围内网站聚合分页（含目录解析、统计和5条预览）', impl: true, live: true },
   { path: 'site/sitePaged', desc: '网站分页列表（真实 cfg_site，含 sourceCnt / errorCnt 汇总）', impl: true, live: true },
   { path: 'site/summary', desc: '网站统计摘要（网站/源/告警网站/出错源）', live: true },
   { path: 'site/detail', desc: '网站详情（真实路径）', live: true },
@@ -774,6 +775,7 @@ export const ENDPOINTS: EndpointSpec[] = [
      契约来源：接口文档-组数据权限.md（2026-10-19）。只有 list 返回 Paged（code 数字 0/-1），
      其余 6 条返回 RspResult（code 字符串 "0"/"-1"）。7 条全部要求 admin 角色，非 admin 后端回 403。
      ⚠️ 7 条均未经真实联调（需 admin 会话），live 按契约文档标上；首次实测后请回写本注释。 */
+  { path: 'group-res/groups', desc: '已授权数据权限组候选（既有 mock 入口）', impl: true },
   { path: 'group-res/list', desc: '数据权限规则分页（groupId 必填且 >90000；resType/action 可选）', impl: true, live: true },
   { path: 'group-res/detail', desc: '数据权限规则详情', impl: true, live: true },
   { path: 'group-res/meta', desc: '配置元数据（resType/action/condType 枚举 + 各 resType 可选列，表单不得硬编码）', impl: true, live: true },
