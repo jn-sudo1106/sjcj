@@ -3,12 +3,11 @@
 // 会上原话「新增一级目录系统设置：包括节点类型（旧平台为源类型）和分类目录（现在放在查询页面有点奇怪），
 // 留个口子，后续做人员菜单权限控制」——所以每个 tab 也带权限码，过一遍 canAccess。
 // tab 条样式与采集资产（CollectAssets/index.vue）同一套。
-// 用户管理（1027）只对 admin 可见：admin 是唯一的系统超管，账号维护不能开放给普通只读账号
-// （后端 /api/v1/sys-user/** 同样只认 roles[admin]）。可见性还没进 canAccess，先在本页按角色过滤。
+// 数据权限设置、用户管理（1030）已整体迁到侧栏同组的「用户权限设置」页，本页只剩机器 / 部署 / 目录类 tab；
+// 旧 /settings?tab=data-permission|users 书签在下面的 watch 里跳过去。
 import { computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
-import { useAuthStore } from '@/stores/auth'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
@@ -17,14 +16,12 @@ import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
-import DataPermissionTab from './DataPermissionTab.vue'
 import ModelInterfacesTab from './ModelInterfacesTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
-import UserManagementTab from './UserManagementTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
 // 各环境展示同一套入口，菜单可见性统一由账号权限决定（2026-10-26）。
-const ALL_TABS: { key: string; label: string; permission: string; comp: Component; adminOnly?: true }[] = [
+const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
   { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab },
@@ -36,11 +33,8 @@ const ALL_TABS: { key: string; label: string; permission: string; comp: Componen
   { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab },
   { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab },
   { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab },
-  { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission', comp: DataPermissionTab },
-  { key: 'users', label: '用户管理', permission: 'settings:users', comp: UserManagementTab, adminOnly: true },
 ]
-const auth = useAuthStore()
-const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission) && (!t.adminOnly || auth.role === 'admin')))
+const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
 
 const route = useRoute()
 const router = useRouter()
@@ -55,6 +49,12 @@ watch(() => route.query.tab, (tab) => {
   if (route.path !== '/settings') return
   if (tab === 'source-group') {
     void router.replace({ path: '/collect', query: { tab: 'personal', ...(route.query.group ? { group: route.query.group } : {}) } })
+    return
+  }
+  // 数据权限设置 / 用户管理已迁到「用户权限设置」页（1030）：旧书签照旧可用，落到新菜单对应 tab。
+  // 两项都显式带 ?tab=，不在这页猜新页的默认是哪个（新页会把默认项自己归一成干净地址）。
+  if (tab === 'data-permission' || tab === 'users') {
+    void router.replace({ path: '/user-permission', query: { tab } })
     return
   }
   if (tab != null && active.value && tab !== active.value.key && tab !== '') {

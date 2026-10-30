@@ -146,4 +146,17 @@ describe('AppSidebar', () => {
     expect(active).toHaveLength(1)
     expect(active[0].text()).toContain('辅助工具')
   })
+
+  // 用户权限设置（1030）：系统设置组下的第二个二级入口（原系统设置页内两个 tab 迁出）。
+  // /user-permission 的导航是平铺路径、侧栏才分组，所以按路径段查 TABS 必须命中自己，
+  // 否则会静默回退高亮成「采集资产总览」。
+  it('系统设置组有「系统设置 + 用户权限设置」两个入口，/user-permission 下高亮后者', async () => {
+    const { wrapper } = await mountAt('/user-permission')
+    const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '系统设置')!
+    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['系统设置', '用户权限设置'])
+
+    const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
+    expect(active).toHaveLength(1)
+    expect(active[0].text()).toContain('用户权限设置')
+  })
 })
