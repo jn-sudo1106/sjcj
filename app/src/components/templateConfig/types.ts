@@ -6,6 +6,7 @@
 // 接口面见 api/templateConfig.ts 的 createTemplateCrudApi。
 
 import type { TemplateCrudApi, TemplateRow } from '@/api/types/template'
+import type { Ack } from '@/api/types/common'
 
 /** 列渲染方式：默认按文本；status 渲染成启用/禁用滑动开关；mono 用等宽字体（SQL / 表达式列） */
 export type TemplateColumnType = 'text' | 'status' | 'mono'
@@ -38,5 +39,14 @@ export interface TemplateField {
   tip?: string
 }
 
-/** 列表页需要的接口面：分页 + 保存必需，启停/复制按模块能力缺省 */
-export type TemplateListApi = TemplateCrudApi<TemplateRow>
+/**
+ * 列表页需要的接口面：分页 + 保存必需，启停/复制按模块能力缺省。
+ *
+ * remove 是通用列表页认识的**行删除**能力（按 id 发 POST {module}/delete，与选表规则 / 实体改写 /
+ * sql 模板的后端形态一致），所以只在这里声明、不进 api/types/template.ts 的 TemplateCrudApi
+ * ——那边已有模块的删除签名不统一（question-dic 是 remove(row)），基接口放不下。
+ * 后端没有 /delete 的模块不给 api 加 remove，列表页也就不画删除按钮。
+ */
+export type TemplateListApi = TemplateCrudApi<TemplateRow> & {
+  remove?(id: number): Promise<Ack>
+}

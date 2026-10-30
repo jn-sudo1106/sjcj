@@ -2,10 +2,10 @@
 // 模板配置通用列表页接线回归（1013 迁入 SQL 模板配置时抽出）。
 // 这一层后面要被 7 个模板模块复用，所以钉的是「每个操作调到了哪条接口、带了什么参数」——
 // 复用的是壳，接口与列由调用方注入，壳一旦接错就会 8 个模块一起错。
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { h } from 'vue'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import TemplateListPage from './TemplateListPage.vue'
 import type { TemplateColumn, TemplateField } from './types'
 
@@ -27,6 +27,8 @@ const rows = [
   { id: 36, name: '不校验', status: '1', createTime: '2025-04-11 11:34:39' },
   { id: 9, name: '根据日期查询指标信息', status: '0', createTime: '2025-01-02 11:02:43' },
 ]
+/** 种子快照：个别用例会把 rows 改短（测「删掉当前页最后一条」），每条用例前还原 */
+const seedRows = rows.map((row) => ({ ...row }))
 
 const dialogOpen = vi.fn()
 
@@ -47,6 +49,11 @@ function makeApi() {
   }
 }
 
+/** 声明了删除能力的模块（后端有 /delete）才有 remove；通用层据此决定画不画删除按钮 */
+function makeApiWithRemove() {
+  return { ...makeApi(), remove: vi.fn(async (_id: number) => ({ ok: true, message: '删除成功' })) }
+}
+
 /** 行内操作图标：el-tooltip 的 content 就是原按钮文案（与指标/监控模块同一套定位方式） */
 function iconByTooltip(wrapper: VueWrapper, content: string) {
   const tip = wrapper
@@ -54,6 +61,13 @@ function iconByTooltip(wrapper: VueWrapper, content: string) {
     .find((t: VueWrapper) => (t.props() as { content?: string }).content === content)
   if (!tip) throw new Error(`找不到操作：${content}`)
   return tip.find('.tc-op-icon')
+}
+
+/** 某个行内操作画没画（删除只在 api.remove 存在时出现） */
+function hasAction(wrapper: VueWrapper, content: string): boolean {
+  return wrapper
+    .findAllComponents({ name: 'ElTooltip' })
+    .some((t: VueWrapper) => (t.props() as { content?: string }).content === content)
 }
 
 function mountPage(api = makeApi()) {
@@ -84,7 +98,13 @@ function mountPage(api = makeApi()) {
           emits: ['change'],
           template: '<button class="stub-switch" @click="$emit(\'change\', !modelValue)" />',
         },
-        ElPagination: { name: 'ElPagination', props: ['currentPage', 'pageSize', 'total'], template: '<div class="stub-pager" />' },
+        ElPagination: {
+          name: 'ElPagination',
+          props: ['currentPage', 'pageSize', 'total'],
+          emits: ['current-change'],
+          // 给「翻到第 2 页」留一个可点击的按钮，用来测删掉尾页最后一条时的页码回退
+          template: '<div class="stub-pager"><button class="stub-page-2" @click="$emit(\'current-change\', 2)" /></div>',
+        },
       },
     },
   })
@@ -95,6 +115,12 @@ describe('TemplateListPage', () => {
   beforeEach(() => {
     dialogOpen.mockReset()
     vi.resetModules()
+    rows.length = 0
+    rows.push(...seedRows.map((row) => ({ ...row })))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('挂载即按旧平台分页口径 pageNo/pageSize 拉第一页', async () => {
@@ -169,5 +195,80 @@ describe('TemplateListPage', () => {
     await flushPromises()
 
     expect(pageQuery(api)).toMatchObject({ pageNo: 1 })
+  })
+
+  it('只有声明了 remove 的模块才画「删除」（后端没有 /delete 就不给入口）', async () => {
+    const plain = mountPage()
+    await flushPromises()
+    expect(hasAction(plain.wrapper, '删除')).toBe(false)
+
+    const withRemove = mountPage(makeApiWithRemove())
+    await flushPromises()
+    expect(hasAction(withRemove.wrapper, '删除')).toBe(true)
+  })
+
+  it('「删除」先弹确认，确认后按 id 调 remove、删完留在当前页重查', async () => {
+    const api = makeApiWithRemove()
+    const { wrapper } = mountPage(api)
+    await flushPromises()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    api.page.mockClear()
+    api.remove.mockClear()
+
+    await iconByTooltip(wrapper, '删除').trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1)
+    // 只发 id：与选表规则 / 实体改写 / sql 模板后端的 POST {module}/delete?id= 同形态
+    expect(api.remove).toHaveBeenCalledWith(36)
+    expect(api.page).toHaveBeenCalledTimes(1)
+    expect(pageQuery(api, -1)).toMatchObject({ pageNo: 1 })
+  })
+
+  it('确认框取消时不删也不重查', async () => {
+    const api = makeApiWithRemove()
+    const { wrapper } = mountPage(api)
+    await flushPromises()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
+    api.page.mockClear()
+
+    await iconByTooltip(wrapper, '删除').trigger('click')
+    await flushPromises()
+
+    expect(api.remove).not.toHaveBeenCalled()
+    expect(api.page).not.toHaveBeenCalled()
+  })
+
+  it('删除请求失败时不重查（列表没变，不能让行凭空消失）', async () => {
+    const api = makeApiWithRemove()
+    api.remove.mockRejectedValueOnce(new Error('模板不存在'))
+    const { wrapper } = mountPage(api)
+    await flushPromises()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    api.page.mockClear()
+
+    await iconByTooltip(wrapper, '删除').trigger('click')
+    await flushPromises()
+
+    expect(api.remove).toHaveBeenCalledTimes(1)
+    expect(api.page).not.toHaveBeenCalled()
+  })
+
+  it('删掉当前页最后一条时页码退回上一页（旧 s-table 行为）', async () => {
+    const api = makeApiWithRemove()
+    const { wrapper } = mountPage(api)
+    await flushPromises()
+
+    // 第 2 页只剩一条：先改数据再翻页，组件里的当前页才是这一条
+    rows.length = 1
+    await wrapper.find('.stub-page-2').trigger('click')
+    await flushPromises()
+    expect(pageQuery(api, -1)).toMatchObject({ pageNo: 2 })
+
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    await iconByTooltip(wrapper, '删除').trigger('click')
+    await flushPromises()
+
+    expect(pageQuery(api, -1)).toMatchObject({ pageNo: 1 })
   })
 })

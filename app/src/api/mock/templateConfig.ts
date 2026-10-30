@@ -99,8 +99,12 @@ export function mockSqlTemplatePaged(params?: Record<string, unknown>): Paged<Sq
   const ids = Array.isArray(rawIds) ? rawIds.map(Number) : []
   const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
   const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  // delFlag 过滤对齐后端 `/page` 的 `del_flag = 0`：删过的行不再出现在列表与表模板的反查里
   const matched = SQL_TEMPLATES.filter(
-    (row) => (!ids.length || ids.includes(Number(row.id))) && (!name || String(row.name ?? '').includes(name)),
+    (row) =>
+      String(row.delFlag ?? '0') !== '1' &&
+      (!ids.length || ids.includes(Number(row.id))) &&
+      (!name || String(row.name ?? '').includes(name)),
   )
   return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
 }
@@ -147,6 +151,19 @@ export function mockSqlTemplateCopy(params?: Record<string, unknown>) {
     updateTime: stamp(new Date()),
   })
   return { ok: true, data: nextId, message: '复制成功（演示）' }
+}
+
+/**
+ * 删除：软删（DEL_FLAG=1），对齐后端 POST /api/poc/sql-temp/delete——行不真删，
+ * 只是从此不被 mockSqlTemplatePaged 查出（后端 `/page` 同样按 `del_flag = 0` 过滤）。
+ */
+export function mockSqlTemplateDelete(params?: Record<string, unknown>) {
+  const row = SQL_TEMPLATES.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '模板不存在' }
+  if (String(row.delFlag ?? '0') === '1') return { ok: false, message: '模板已删除' }
+  row.delFlag = '1'
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '删除成功（演示）' }
 }
 
 /* ── 表模板配置（旧「模板配置 → 表模板配置」，端点域 /poc/question-temp） ── */
