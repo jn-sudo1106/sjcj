@@ -41,12 +41,12 @@ describe('AppSidebar', () => {
     // 排在运行与监控之后、系统设置之前；组下只剩「模板配置」一个入口，8 个子模块在页内以 tab 呈现
     expect(groupTitles).toContain('问数配置')
     expect(groupTitles.indexOf('运行与监控')).toBeLessThan(groupTitles.indexOf('问数配置'))
-    expect(groupTitles.indexOf('问数配置')).toBeLessThan(groupTitles.indexOf('系统设置'))
+    expect(groupTitles.indexOf('问数配置')).toBeLessThan(groupTitles.indexOf('系统管理'))
     // 辅助工具（1020）独立成组，位置钉在「问数配置」之后、「系统设置」之前；系统设置仍是最后一组
     expect(groupTitles).toContain('辅助工具')
     expect(groupTitles.indexOf('问数配置')).toBeLessThan(groupTitles.indexOf('辅助工具'))
-    expect(groupTitles.indexOf('辅助工具')).toBeLessThan(groupTitles.indexOf('系统设置'))
-    expect(groupTitles.indexOf('系统设置')).toBe(groupTitles.length - 1)
+    expect(groupTitles.indexOf('辅助工具')).toBeLessThan(groupTitles.indexOf('系统管理'))
+    expect(groupTitles.indexOf('系统管理')).toBe(groupTitles.length - 1)
   })
 
   it('问数配置组有「基础配置 + 模板配置 + 问数系统配置」三个入口，原 8 个模板子项不再出现在侧栏', async () => {
@@ -150,9 +150,9 @@ describe('AppSidebar', () => {
   // 用户权限设置（1030）：系统设置组下的第二个二级入口（原系统设置页内两个 tab 迁出）。
   // /user-permission 的导航是平铺路径、侧栏才分组，所以按路径段查 TABS 必须命中自己，
   // 否则会静默回退高亮成「采集资产总览」。
-  it('系统设置组有「系统设置 + 用户权限设置」两个入口，/user-permission 下高亮后者', async () => {
+  it('系统管理组有「系统设置 + 用户权限设置」两个入口，/user-permission 下高亮后者', async () => {
     const { wrapper } = await mountAt('/user-permission')
-    const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '系统设置')!
+    const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '系统管理')!
     expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['系统设置', '用户权限设置'])
 
     const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
