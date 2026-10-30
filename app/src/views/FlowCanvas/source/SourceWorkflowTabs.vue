@@ -46,10 +46,14 @@ const activeRow = computed(() => rows.value.find(row => row.workflowId === activ
 
 async function load() {
   loading.value = true
+  const sourceId = props.sourceId
   try {
-    const loaded = await workflowBindingApi.load(props.sourceId)
+    const loaded = await workflowBindingApi.load(sourceId)
     rows.value = loaded.rows
     groupId.value = loaded.sourceGroupId ?? ''
+    if (flow.sourceCtx?.sourceId === sourceId) {
+      flow.patchSourceCtx({ primaryFlowId: loaded.rows.find(row => row.primary)?.workflowId })
+    }
     void loadUserCounts()
   } catch (error) {
     ElMessage.error(`流程页签加载失败：${(error as Error)?.message ?? String(error)}`)
@@ -392,15 +396,17 @@ async function askShared(action: SharedFlowAction, carry?: CarryConfigs): Promis
 /**
  * 复制为本源专用：整条复制（每个节点一份独立配置，复制品自动发布）→ 关联到当前源（主流程身份跟过去）
  * → 解绑原流程 → 带上没保存的节点配置 → 打开新流程。其他源照旧用原流程。
- * 后端 copyFlow 只复制发布版：草稿里的结构改动带不过来，要在新流程上重做；发布时选复制，
- * 原流程的草稿随即放弃，免得别人把只想改本源的改动发布出去。
+ * 复制前先把画布结构落进草稿，再带 useDraft=1 复制当前草稿（10-30 后端已支持），结构改动随新流程走；
+ * 发布时选复制，原流程的草稿随即放弃，免得别人把只想改本源的改动发布出去。
  */
 async function copyForThisSource(row: WorkflowBinding, action: SharedFlowAction, carry?: CarryConfigs) {
   if (adding.value) return
   adding.value = true
   try {
+    await flush()
     const copied = await copyWholeFlow(row.workflowId, `${row.workflowName}_副本`, {
       sourceFlowRef: `流程「${row.workflowName}」#${row.workflowId}`,
+      useDraft: true,
     })
     try {
       await workflowBindingApi.bind({ sourceId: props.sourceId, workflowId: copied.flowId, primary: row.primary })
@@ -423,9 +429,8 @@ async function copyForThisSource(row: WorkflowBinding, action: SharedFlowAction,
     if (action === 'publish' && version.draft) {
       const draftNo = version.draft.flowVer
       try {
-        await flush()
         await version.abandon()
-        lostDraft = `原流程的草稿 v${draftNo} 已放弃，草稿里的修改请在新流程上重做`
+        lostDraft = `原流程的草稿 v${draftNo} 已放弃，草稿里的修改已带到新流程`
       } catch (error) {
         ElMessage.warning(`原流程的草稿 v${draftNo} 放弃失败：${(error as Error)?.message ?? String(error)}。请回原流程手动放弃，避免被别人发布`)
       }
@@ -597,8 +602,8 @@ onMounted(async () => {
         </div>
         <div class="swt-dlg-opt">
           <b>复制为本源专用</b>：复制一份新流程给当前源，其他源不受影响。
-          <template v-if="sharedDlg.action === 'publish'">草稿{{ sharedDraftNo ? ` v${sharedDraftNo} ` : '' }}里的修改带不过去，需要在新流程上重做，原流程的草稿会放弃。</template>
-          <template v-else>没保存的节点配置会带过去；画布结构的改动（增删节点、连线）带不过去，需要在新流程上重做。</template>
+          <template v-if="sharedDlg.action === 'publish'">草稿{{ sharedDraftNo ? ` v${sharedDraftNo} ` : '' }}里的修改会带到新流程，原流程的草稿会放弃。</template>
+          <template v-else>画布上的改动和没保存的节点配置都会带过去。</template>
         </div>
       </template>
       <template #footer>

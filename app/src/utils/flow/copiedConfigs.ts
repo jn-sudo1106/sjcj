@@ -207,6 +207,8 @@ export interface CopiedFlow {
 export interface CopyFlowOptions extends Omit<DetachOptions, 'onlyStepIds'> {
   /** true = 复用原配置（用户在确认框里显式选择，0930）：只复制步骤，不做配置去共享 */
   reuseConfigs?: boolean
+  /** true = 复制当前草稿（编辑中「复制为本源专用」，10-30）；默认先发布版、没有再草稿 */
+  useDraft?: boolean
 }
 
 /**
@@ -220,7 +222,9 @@ export async function copyWholeFlow(
   newName: string,
   opts: CopyFlowOptions = {},
 ): Promise<CopiedFlow> {
-  const flowId = await flowCenterApi.copy(fromFlowId, newName)
+  const flowId = opts.useDraft
+    ? await flowCenterApi.copy(fromFlowId, newName, { useDraft: true })
+    : await flowCenterApi.copy(fromFlowId, newName)
   const copied: CopiedFlow = { flowId }
   if (!opts.reuseConfigs) copied.detach = await detachCopiedConfigs(flowId, opts)
   const publishError = await publishCopiedDraft(flowId)

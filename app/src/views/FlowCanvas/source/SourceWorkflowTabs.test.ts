@@ -159,6 +159,8 @@ describe('SourceWorkflowTabs', () => {
     await flushPromises()
 
     expect(copyWholeFlow).toHaveBeenCalledWith('20', '现有流程副本', expect.objectContaining({ sourceFlowRef: expect.any(String) }))
+    // 直接复制别的流程：不带 useDraft，后端先发布版、没有再草稿
+    expect(vi.mocked(copyWholeFlow).mock.calls[0]![2]).not.toHaveProperty('useDraft')
     expect(workflowBindingApi.bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '22', primary: false })
     expect(router.currentRoute.value.query.flowId).toBe('22')
   })
@@ -256,8 +258,10 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     wrapper.unmount()
   })
 
-  it('设为主流程：一步调用 setPrimary 并刷新', async () => {
-    const load = vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
+  it('设为主流程：刷新页签和源上下文，保留当前打开的流程', async () => {
+    const load = vi.spyOn(workflowBindingApi, 'load')
+      .mockResolvedValueOnce(loaded([MAIN, AUX]))
+      .mockResolvedValueOnce(loaded([{ ...MAIN, primary: false }, { ...AUX, primary: true }]))
     const setPrimary = vi.spyOn(workflowBindingApi, 'setPrimary').mockResolvedValue()
     const { wrapper } = await mountTabs(dialogStub)
     await rightClick(wrapper, '12')
@@ -265,6 +269,8 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     await flushPromises()
     expect(setPrimary).toHaveBeenCalledWith('100', '12')
     expect(load).toHaveBeenCalledTimes(2)
+    expect(useFlowStore().sourceCtx?.primaryFlowId).toBe('12')
+    expect(useFlowStore().sourceCtx?.flowId).toBe('11')
     wrapper.unmount()
   })
 
@@ -440,11 +446,14 @@ describe('SourceWorkflowTabs · 共用流程保存提示（10-29）', () => {
 
     const asked = confirmSharedFlowWrite('save', carry)
     await flushPromises()
+    expect(document.body.textContent).toContain('画布上的改动和没保存的节点配置都会带过去')
+    expect(document.body.textContent).not.toContain('重做')
     sharedBtn('shared-flow-copy')!.click()
     expect(await asked).toBe(false)
     await flushPromises()
 
-    expect(copyWholeFlow).toHaveBeenCalledWith('11', '主采集流程_副本', expect.anything())
+    // 10-30：编辑中复制带 useDraft，复制当前草稿（画布结构改动跟着走）
+    expect(copyWholeFlow).toHaveBeenCalledWith('11', '主采集流程_副本', expect.objectContaining({ useDraft: true }))
     expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '31', primary: true })
     expect(unbind).toHaveBeenCalledWith('100', '11')
     expect(carry).toHaveBeenCalledWith({ 700: '701' })

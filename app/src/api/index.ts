@@ -3843,10 +3843,12 @@ export const flowCenterApi = {
    * 自己已有一条 `isRoot=1`，子步骤的 `lastStep='0'` 会自然落到它身上（2026-09-04 已核）。
    * 新 ID 与 saveFlow 同款：回执 data 为 null，从 msg 里解析。
    */
-  copy: async (flowId: string, flowName?: string): Promise<string> => {
+  copy: async (flowId: string, flowName?: string, opts: { useDraft?: boolean } = {}): Promise<string> => {
     if (!flowId) throw new Error('请先选择要复制的流程')
     const payload: Record<string, unknown> = { flowId }
     if (flowName?.trim()) payload.flowName = flowName.trim()
+    // 10-30（186 已上）：useDraft=1 有草稿复制草稿；不传 = 先发布版、没有再草稿
+    if (opts.useDraft) payload.useDraft = 1
     // ⚠️ `paramsIn: 'query'`：后端这两条复制端点是 `@RequestParam`，POST 但参数走 query string，
     // 不是 JSON body（2026-09-05 实测：发 body 报 "Required request parameter 'flowId' ...
     // is not present"）。跟 item/next/saveItemConfig 同一种写法。
