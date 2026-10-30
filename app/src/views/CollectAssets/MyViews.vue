@@ -439,7 +439,7 @@ function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
     firstModule: '采集资产',
     pageName: '我的视图',
   })
-  void router.push({ path: '/canvas', query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath } })
+  void router.push({ path: '/canvas', query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath } })
 }
 function openSite(siteId: string) {
   recordSiteVisit(siteId)

@@ -379,6 +379,13 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data', returnTo: '/collect' })
   })
 
+  it('查看源数据时带主表 tableId，数据页直接按主表打开', async () => {
+    const { list, router } = await mountList()
+    await list.vm.$emit('openSourceData', { sourceId: 'src-9', siteId: '105', name: '源', mainTable: '2102087' })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data', tableId: '2102087', returnTo: '/collect' })
+  })
+
   it('未关联网站的源（siteId 为 0）只带 sourceId', async () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSource', { sourceId: 'src-0', siteId: '0', name: '源' })

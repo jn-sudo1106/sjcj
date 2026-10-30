@@ -2596,6 +2596,23 @@ describe('数据表与步骤查看方式', () => {
     expect(wrapper.find('[data-testid="data-step-overview"]').exists()).toBe(false)
     wrapper.unmount()
   })
+  it('带 tableId=主表进来：源晚于页面加载、主表不在流程输出表里，也落在主表上', async () => {
+    railDefault.open = false
+    localStorage.setItem('rc.dataview.result.browseMode', 'step')
+    mockRouteQuery.tableId = 'MAIN_9'
+    setActivePinia(createPinia())
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const wrapper = mountResultView()
+    await flushPromises()
+    const current = { ...mockSourceDetail({ sourceId: '391007768' })!, mainTable: 'MAIN_9' }
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    await flushPromises()
+    expect((wrapper.get('[data-testid="data-table-select"]').element as HTMLSelectElement).value).toBe('MAIN_9')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: current.sourceId, tableId: 'MAIN_9' }))
+    delete mockRouteQuery.tableId
+    wrapper.unmount()
+  })
   it('旧快照记着“全部数据表”时回落首张表，切换方式保留对应项', async () => {
     railDefault.open = false
     localStorage.setItem('rc.dataview.result.browseMode', 'table')

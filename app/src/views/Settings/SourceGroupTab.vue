@@ -385,7 +385,7 @@ function openSource(source: Source, view: 'overview' | 'data' = 'overview'): voi
   })
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath },
   })
 }
 

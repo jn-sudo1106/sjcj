@@ -143,7 +143,7 @@ function openSourceCanvas(s: Source, view?: 'data' | 'task') {
     firstModule: '采集资产',
     pageName: '源列表',
   })
-  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, ...(view ? { view } : {}) } })
+  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, ...(view ? { view } : {}), ...(view === 'data' && s.mainTable ? { tableId: s.mainTable } : {}) } })
 }
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
