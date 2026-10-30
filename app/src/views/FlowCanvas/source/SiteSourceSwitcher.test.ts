@@ -824,18 +824,17 @@ describe('SiteSourceSwitcher · 按模板源新建：流程三选一（1016）',
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('模板源没有默认流程'))
   })
 
-  it('模板源的默认流程只有草稿：提示里提前说明并拦下，不发复制请求', async () => {
+  // 10-30：186 后端复制时没有发布版就取草稿（1016 第三节 0），前端不再提前查发布版拦下
+  it('模板源的默认流程只有草稿：不提前拦，照常发复制请求', async () => {
     const wrapper = await createWrapper()
     vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: '21000047' })
     vi.mocked(flowVersionApi.overview).mockResolvedValue({ publishId: null, draftId: '9' } as never)
-    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
     await openWithName(wrapper)
     await flushPromises()
-    expect(flowVersionApi.overview).toHaveBeenCalledWith('21000047')
-    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('还没有发布版本（只有草稿），不能复制')
+    expect(flowVersionApi.overview).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).not.toContain('还没有发布版本')
     await submit(wrapper)
-    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('还没有发布版本'))
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ flag: 1 }))
   })
 
   it('默认流程只有草稿时后端拒绝复制：提示先发布或改选关联已有流程', async () => {

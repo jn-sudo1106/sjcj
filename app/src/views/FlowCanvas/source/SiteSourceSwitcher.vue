@@ -10,7 +10,7 @@ import { importProgressText } from './importProgress'
 
 import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
-import { flowHasPublished, isUnpublishedFlowError } from '@/utils/flow/flowPublish'
+import { isUnpublishedFlowError } from '@/utils/flow/flowPublish'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
@@ -612,21 +612,17 @@ const selectedTemplate = computed(() => {
  * 模板源的默认流程（flowMode=copy 时复制的就是它）：后端按源上的 DEFAULT_FLOW_ID 复制，
  * 入组的源这是来源组的默认流程，不一定是源自有的默认流程。列表行不保证带 flowId，读一次详情。
  */
-const templateDefault = reactive({ sourceId: '', loading: false, flowId: '', published: null as boolean | null })
+const templateDefault = reactive({ sourceId: '', loading: false, flowId: '' })
 watch(() => (addDlg.show ? selectedTemplate.value : null), async (template) => {
   const id = template?.sourceId ?? ''
   templateDefault.sourceId = id
   templateDefault.flowId = template?.flowId ?? ''
-  templateDefault.published = null
   templateDefault.loading = !!template
   if (!template) return
   let flowId = template.flowId ?? ''
   if (!flowId) flowId = (await sourceApi.sourceDetail(id).catch(() => null))?.flowId ?? ''
-  // 复制取的是发布版本：只有草稿时提前说明并拦下（1016）；查不到（null）不拦
-  const published = flowId ? await flowHasPublished(flowId) : null
   if (templateDefault.sourceId !== id) return
   templateDefault.flowId = flowId
-  templateDefault.published = published
   templateDefault.loading = false
 })
 /** 「流程名（#ID）」，主流程标在括号里；流程列表还没拉到时只显示 ID */
@@ -652,7 +648,6 @@ const addHint = computed(() => {
   }
   if (templateDefault.loading) return `${head}，正在读取它的默认流程…`
   if (!templateDefault.flowId) return '模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「不关联流程」。'
-  if (templateDefault.published === false) return `模板源的默认流程「${flowLabel(templateDefault.flowId)}」还没有发布版本（只有草稿），不能复制。请先发布这条流程，或改选「关联已有流程」。`
   return `${head}，并把它的默认流程「${flowLabel(templateDefault.flowId)}」复制成新源独立的一份（含配置），改它不影响模板源。`
     + '模板源的其它流程不会带过来；不复制表数据与运行记录。'
 })
@@ -868,10 +863,6 @@ async function submitAdd() {
     ElMessage.warning('模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「不关联流程」')
     return
   }
-  if (selectedTemplate.value && addDlg.flowMode === 'copy' && templateDefault.published === false) {
-    ElMessage.warning('模板源的默认流程还没有发布版本，不能复制；请先发布，或改选「关联已有流程」')
-    return
-  }
   if (selectedTemplate.value) {
     const copiedId = await addFromTemplate(selectedTemplate.value, target)
     if (!copiedId) return
@@ -923,7 +914,7 @@ async function addFromTemplate(from: Source, target: { name: string; url: string
   try {
     const copied = await sourceApi.copySourceAndLocate({ sourceId: from.sourceId, name: target.name, url: target.url, flag: mode === 'copy' ? 1 : 0 })
     if (!copied.ok) {
-      // 后端复制流程取的是已发布版本，只有草稿时报这句（10-16 后端口径）
+      // 旧后端复制流程只认发布版，只有草稿时报这句（10-16 口径）；186 10-29 起没有发布版会取草稿，217 未确认前保留
       const unpublished = isUnpublishedFlowError(copied.message)
       ElMessage.warning(unpublished
         ? '模板源的默认流程还没有发布版本，不能复制。请先发布这条流程，或改选「关联已有流程」。'

@@ -11,6 +11,9 @@ import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
 import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 import FlowVersionBar from '../canvas/FlowVersionBar.vue'
+import { useFlowAutosave } from '../canvas/useFlowAutosave'
+import { useFlowVersionStore } from '@/stores/flowVersion'
+import { confirmedSharedFlows, registerSharedFlowGuard, type CarryConfigs, type SharedFlowAction } from '@/utils/flow/sharedFlowGuard'
 
 const props = defineProps<{ sourceId: string }>()
 const route = useRoute()
@@ -47,6 +50,7 @@ async function load() {
     const loaded = await workflowBindingApi.load(props.sourceId)
     rows.value = loaded.rows
     groupId.value = loaded.sourceGroupId ?? ''
+    void loadUserCounts()
   } catch (error) {
     ElMessage.error(`流程页签加载失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
@@ -324,6 +328,125 @@ async function copyExisting(sourceFlow: FlowRecord) {
   }
 }
 
+// ---- 共用流程保存提示（10-29，设计稿/设计方案/1029-共用流程保存提示_开发设计方案）----
+// 本源自己的流程查一下有几个源在用：标签上标「N 源共用」，保存节点配置 / 发布前据此决定要不要问。
+// 来源组的流程只读，不查。null = 没查到（查询中或失败），按共用处理：宁可多问一次。
+const userCounts = ref<Record<string, number | null>>({})
+async function loadUserCounts() {
+  const ids = rows.value.filter(row => !row.inherited).map(row => row.workflowId)
+  await Promise.all(ids.map(async (id) => {
+    const total = await sourceApi.sourcePaged({ flowId: id, page: 1, size: 1 }).then(r => r.total).catch(() => null)
+    userCounts.value = { ...userCounts.value, [id]: total }
+  }))
+}
+const sharedCount = (row: WorkflowBinding) => {
+  const n = userCounts.value[row.workflowId]
+  return typeof n === 'number' && n > 1 ? n : 0
+}
+const sharedKey = (row: WorkflowBinding) => `${props.sourceId}:${row.workflowId}`
+function sharedPending(): boolean {
+  const row = activeRow.value
+  if (!row || row.inherited || flow.flowIdMode || confirmedSharedFlows.has(sharedKey(row))) return false
+  const n = userCounts.value[row.workflowId]
+  return n === undefined || n === null || n > 1
+}
+
+const version = useFlowVersionStore()
+const { flush } = useFlowAutosave()
+const sharedDlg = reactive({
+  open: false,
+  action: 'save' as SharedFlowAction,
+  row: null as WorkflowBinding | null,
+  users: null as number | null,
+  resolve: null as ((choice: 'cancel' | 'copy' | 'save') => void) | null,
+})
+const sharedDraftNo = computed(() => version.draft?.flowVer)
+function closeShared(choice: 'cancel' | 'copy' | 'save') {
+  const resolve = sharedDlg.resolve
+  sharedDlg.resolve = null
+  sharedDlg.open = false
+  resolve?.(choice)
+}
+
+async function askShared(action: SharedFlowAction, carry?: CarryConfigs): Promise<boolean> {
+  const row = activeRow.value
+  if (!row) return true
+  // 页签刚加载时可能还没查到源数：先补查一次，独占的流程不弹窗
+  if (userCounts.value[row.workflowId] == null) await loadUserCounts()
+  const users = userCounts.value[row.workflowId] ?? null
+  if (users !== null && users <= 1) return true
+  if (sharedDlg.resolve) return false
+  sharedDlg.action = action
+  sharedDlg.row = row
+  sharedDlg.users = users
+  sharedDlg.open = true
+  const choice = await new Promise<'cancel' | 'copy' | 'save'>((resolve) => { sharedDlg.resolve = resolve })
+  if (choice === 'save') {
+    confirmedSharedFlows.add(sharedKey(row))
+    return true
+  }
+  if (choice === 'copy') await copyForThisSource(row, action, carry)
+  return false
+}
+
+/**
+ * 复制为本源专用：整条复制（每个节点一份独立配置，复制品自动发布）→ 关联到当前源（主流程身份跟过去）
+ * → 解绑原流程 → 带上没保存的节点配置 → 打开新流程。其他源照旧用原流程。
+ * 后端 copyFlow 只复制发布版：草稿里的结构改动带不过来，要在新流程上重做；发布时选复制，
+ * 原流程的草稿随即放弃，免得别人把只想改本源的改动发布出去。
+ */
+async function copyForThisSource(row: WorkflowBinding, action: SharedFlowAction, carry?: CarryConfigs) {
+  if (adding.value) return
+  adding.value = true
+  try {
+    const copied = await copyWholeFlow(row.workflowId, `${row.workflowName}_副本`, {
+      sourceFlowRef: `流程「${row.workflowName}」#${row.workflowId}`,
+    })
+    try {
+      await workflowBindingApi.bind({ sourceId: props.sourceId, workflowId: copied.flowId, primary: row.primary })
+    } catch (error) {
+      throw new Error(`已生成流程 #${copied.flowId}，但关联当前源失败：${(error as Error)?.message ?? String(error)}`)
+    }
+    try {
+      await workflowBindingApi.unbind(props.sourceId, row.workflowId)
+    } catch (error) {
+      ElMessage.warning(`新流程已关联，但原流程「${row.workflowName}」解绑失败：${(error as Error)?.message ?? String(error)}。可右键原流程标签手动解绑`)
+    }
+    if (carry && copied.detach?.configMap) {
+      try {
+        await carry(copied.detach.configMap)
+      } catch (error) {
+        ElMessage.warning(`没保存的节点配置未能带到新流程：${(error as Error)?.message ?? String(error)}，请在新流程上重新修改`)
+      }
+    }
+    let lostDraft = ''
+    if (action === 'publish' && version.draft) {
+      const draftNo = version.draft.flowVer
+      try {
+        await flush()
+        await version.abandon()
+        lostDraft = `原流程的草稿 v${draftNo} 已放弃，草稿里的修改请在新流程上重做`
+      } catch (error) {
+        ElMessage.warning(`原流程的草稿 v${draftNo} 放弃失败：${(error as Error)?.message ?? String(error)}。请回原流程手动放弃，避免被别人发布`)
+      }
+    }
+    reportDetachResult(copied.detach, `原流程「${row.workflowName}」`)
+    if (copied.publishError) ElMessage.warning(copiedPublishWarning(copied.flowId, copied.publishError))
+    ElMessage.success(`已复制为本源专用流程「${row.workflowName}_副本」#${copied.flowId}，其他源照旧使用原流程${lostDraft ? `；${lostDraft}` : ''}`)
+    await finishCreate(copied.flowId)
+  } catch (error) {
+    ElMessage.error(copyFlowErrorText((error as Error)?.message ?? String(error)))
+  } finally {
+    adding.value = false
+  }
+}
+
+const unregisterShared = registerSharedFlowGuard({ pending: sharedPending, ask: askShared })
+onBeforeUnmount(() => {
+  unregisterShared()
+  if (sharedDlg.resolve) closeShared('cancel')
+})
+
 watch(() => props.sourceId, async () => {
   await load()
   const row = activeRow.value
@@ -368,6 +491,12 @@ onMounted(async () => {
             <span class="swt-id">#{{ row.workflowId }}</span>
             <span v-if="row.versionManaged" class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
             <span v-if="isDisabled(row)" class="swt-disabled" data-testid="workflow-disabled-tag">已禁用</span>
+            <span
+              v-if="!row.inherited && sharedCount(row)"
+              class="swt-shared"
+              :title="`${sharedCount(row)} 个源在用这条流程：保存节点配置、发布会影响全部这些源`"
+              data-testid="workflow-shared-tag"
+            >{{ sharedCount(row) }} 源共用</span>
             <span v-if="row.primary" class="swt-primary">主</span>
             <span v-else-if="row.role === 'BACKFILL'" class="swt-role">补</span>
           </button>
@@ -450,6 +579,35 @@ onMounted(async () => {
       </div>
     </Teleport>
 
+    <el-dialog
+      :model-value="sharedDlg.open"
+      :title="sharedDlg.users ? `这个流程有 ${sharedDlg.users} 个源在用` : '这个流程可能有多个源在用'"
+      width="480px"
+      append-to-body
+      data-testid="shared-flow-dialog"
+      @update:model-value="(v: boolean) => { if (!v) closeShared('cancel') }"
+    >
+      <template v-if="sharedDlg.row">
+        <p class="swt-dlg-p">
+          流程「{{ sharedDlg.row.workflowName }}」#{{ sharedDlg.row.workflowId }}
+          {{ sharedDlg.users ? `被 ${sharedDlg.users} 个源共用` : '在用的源数没查到，可能被多个源共用' }}，这次{{ sharedDlg.action === 'publish' ? '发布' : '保存' }}要影响哪些源？只问这一次。
+        </p>
+        <div class="swt-dlg-opt">
+          <b>{{ sharedDlg.action === 'publish' ? '发布' : '保存' }}到共用流程</b>：{{ sharedDlg.users ? `${sharedDlg.users} 个源` : '所有用这条流程的源' }}都按修改后的流程运行
+        </div>
+        <div class="swt-dlg-opt">
+          <b>复制为本源专用</b>：复制一份新流程给当前源，其他源不受影响。
+          <template v-if="sharedDlg.action === 'publish'">草稿{{ sharedDraftNo ? ` v${sharedDraftNo} ` : '' }}里的修改带不过去，需要在新流程上重做，原流程的草稿会放弃。</template>
+          <template v-else>没保存的节点配置会带过去；画布结构的改动（增删节点、连线）带不过去，需要在新流程上重做。</template>
+        </div>
+      </template>
+      <template #footer>
+        <el-button @click="closeShared('cancel')">取消</el-button>
+        <el-button data-testid="shared-flow-copy" @click="closeShared('copy')">复制为本源专用</el-button>
+        <el-button type="primary" data-testid="shared-flow-save" @click="closeShared('save')">{{ sharedDlg.action === 'publish' ? '发布' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="unbindDlg.open" title="解绑流程" width="460px" append-to-body data-testid="workflow-unbind-dialog">
       <template v-if="unbindDlg.row">
         <p class="swt-dlg-p">解除当前源与「{{ unbindDlg.row.workflowName }}」#{{ unbindDlg.row.workflowId }} 的关联。流程本身不删除，其他使用它的源不受影响。</p>
@@ -501,6 +659,8 @@ onMounted(async () => {
 .swt-seg.group { background: #ede9fe; color: #6d28d9; }
 .swt-tab.group .swt-name { color: #6d28d9; }
 .swt-tab.disabled .swt-name, .swt-tab.disabled .swt-id { color: var(--rc-faint); text-decoration: line-through; }
+.swt-shared { flex: none; padding: 1px 4px; border-radius: 4px; background: #fef3c7; color: #92400e; font-size: 10px; }
+.swt-dlg-opt { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 13px; line-height: 1.6; }
 .swt-disabled { flex: none; padding: 1px 4px; border-radius: 4px; background: #f1f5f9; color: #64748b; font-size: 10px; }
 .swt-ctx { position: fixed; z-index: 3000; min-width: 150px; padding: 5px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 10px 24px rgb(15 23 42 / 14%); }
 .swt-ctx button { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 13px; text-align: left; cursor: pointer; }

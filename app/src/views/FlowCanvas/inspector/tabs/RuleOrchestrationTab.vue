@@ -39,6 +39,7 @@ import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload, buildDocumentExtractPayload } from '@/utils/flow/dataProcess'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
+import { confirmSharedFlowWrite } from '@/utils/flow/sharedFlowGuard'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { configTypeFrom } from '@/utils/flow/nodeConfigPayload'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
@@ -1026,6 +1027,8 @@ async function onSavePromptPreview(prompt: string) {
   // 0929 F2：复制时未换绑成功的共享配置，写入前必须知情确认（与 NodeInspector 保存同一口径）。
   // flowId 精确匹配：网站汇总态复用本 Tab 时无流程语境，登记也必然不命中，无副作用。
   if (!await assertConfigWritable(configId, useFlowStore().flowId)) return
+  // 10-29：流程被多个源共用时先问一次（保存 / 复制为本源专用）
+  if (!await confirmSharedFlowWrite('save')) return
   savingPromptPreview.value = true
   try {
     // 带上加载时的 updateDt，后端并发编辑校验才起作用；节点没记录时不带，保持原行为。

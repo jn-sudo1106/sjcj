@@ -17,8 +17,6 @@ const flowOf = (id: string, name: string, extra: Partial<FlowRecord> = {}) =>
   ({ id, name, updatedAt: '', definition: { main: [], branches: [], configs: {}, branchGroups: [] }, ...extra }) as FlowRecord
 
 async function mountDialog(list: FlowRecord[], currentFlowId = 'cur') {
-  // 1016：复制类用途选中即查发布版本；默认都已发布
-  vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: '1', draftId: null } as never)
   const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: list.length, list })
   const wrapper = mount(ReplaceFlowDialog, {
     props: { modelValue: true, currentFlowId },
@@ -110,25 +108,22 @@ describe('ReplaceFlowDialog', () => {
     expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ id: '2' })
   })
 
-  // 10-29：复制类用途按页逐条查发布版，只有草稿的置灰标「仅草稿」、点不中；关联用途不查
-  it('复制类用途：本页只有草稿的流程置灰标「仅草稿」不可选，已发布的可选', async () => {
-    vi.spyOn(flowVersionApi, 'overview').mockImplementation(async (id: string) =>
-      ({ publishId: id === '2' ? null : '1', draftId: '9' }) as never)
-    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 2, list: [flowOf('2', '只有草稿'), flowOf('3', '已发布')] })
-    mount(ReplaceFlowDialog, { props: { modelValue: true, purpose: 'copy' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+  // 10-30：186 后端复制时没有发布版就取草稿（1016 第三节 0），复制类用途不再查发布版、不再置灰只有草稿的流程
+  it('复制类用途不查发布版，只有草稿的流程照样可选', async () => {
+    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: null, draftId: '9' } as never)
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 1, list: [flowOf('2', '只有草稿')] })
+    const wrapper = mount(ReplaceFlowDialog, { props: { modelValue: true, purpose: 'copy' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await flushPromises()
-    const rows = document.body.querySelectorAll('.el-table__body tr')
-    expect(rows[0]!.className).toContain('rfd-row-off')
-    expect(rows[0]!.textContent).toContain('仅草稿')
-    expect(rows[1]!.textContent).not.toContain('仅草稿')
+    const row = document.body.querySelectorAll('.el-table__body tr')[0] as HTMLElement
+    expect(row.className).not.toContain('rfd-row-off')
+    expect(row.textContent).not.toContain('仅草稿')
+    row.click()
+    await flushPromises()
     const confirm = q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement
-    ;(rows[0] as HTMLElement).click()
-    await flushPromises()
-    expect(confirm.disabled).toBe(true)
-    ;(rows[1] as HTMLElement).click()
-    await flushPromises()
     expect(confirm.disabled).toBe(false)
-    expect(flowVersionApi.overview).toHaveBeenCalledTimes(2)
+    confirm.click()
+    expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ id: '2' })
+    expect(overview).not.toHaveBeenCalled()
   })
 
   it('关联用途不查发布版，只有草稿的流程照样可选', async () => {

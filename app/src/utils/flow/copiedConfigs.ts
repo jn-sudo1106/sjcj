@@ -103,6 +103,8 @@ export interface DetachResult {
   copied: number
   /** 换绑失败、仍与来源共享的步骤数（已登记知情确认） */
   remainShared: number
+  /** 原 configId → 复制出的新 configId（10-29：复制为本源专用时把没保存的节点配置带到新配置上） */
+  configMap?: Record<string, string>
 }
 
 export interface DetachOptions {
@@ -188,7 +190,7 @@ export async function detachCopiedConfigs(
     copied++
   }
   opts.onProgress?.(candidates.length, candidates.length)
-  return { ok: true, copied, remainShared }
+  return { ok: true, copied, remainShared, configMap: Object.fromEntries(clonedBySource) }
 }
 
 // ---------------------------------------------------------------- 整条复制
