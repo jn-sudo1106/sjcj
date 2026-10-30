@@ -81,6 +81,26 @@ describe('SQL 模板配置 · /api/poc HTTP 契约', () => {
     expect(url).toBe('/api/poc/sql-temp/copy?id=36')
   })
 
+  it('remove：POST /api/poc/sql-temp/delete?id=，id 在 query、无 body（与 status/copy 同形态）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(ENVELOPE_ACK))
+    const { sqlTemplateApi } = await import('./templateConfig')
+
+    await sqlTemplateApi.remove(36)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/poc/sql-temp/delete?id=36')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+  })
+
+  it('没补删除端点的模块不给 remove（表模板后端没有 /delete，按钮也就不会出现）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(ENVELOPE_ACK))
+    const { tableTemplateApi, replaceTableConfigApi } = await import('./templateConfig')
+
+    expect('remove' in tableTemplateApi).toBe(false)
+    expect('remove' in replaceTableConfigApi).toBe(false)
+  })
+
   it('业务失败（code ≠ 0）抛出后端 msg，不静默成功', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: 500, msg: '模板名称已存在' }))
     const { sqlTemplateApi } = await import('./templateConfig')
@@ -126,5 +146,19 @@ describe('SQL 模板配置 · mock 内存表（演示 / 单测口径）', () => 
     await sqlTemplateApi.copy?.(Number(target.id))
     const afterCopy = await sqlTemplateApi.page({ pageNo: 1, pageSize: 20 })
     expect(afterCopy.total).toBe(before + 1)
+  })
+
+  it('删除是软删口径：行从分页里消失，别的行不受影响', async () => {
+    const { sqlTemplateApi } = await import('./templateConfig')
+
+    const before = await sqlTemplateApi.page({ pageNo: 1, pageSize: 20 })
+    const victim = before.list[0]
+    await sqlTemplateApi.remove(Number(victim.id))
+
+    const after = await sqlTemplateApi.page({ pageNo: 1, pageSize: 20 })
+    expect(after.total).toBe(before.total - 1)
+    expect(after.list.some((row) => Number(row.id) === Number(victim.id))).toBe(false)
+    // 其余行还在（不是把整张表清了）
+    expect(after.list.map((row) => Number(row.id))).toEqual(before.list.slice(1).map((row) => Number(row.id)))
   })
 })

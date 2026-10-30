@@ -46,6 +46,9 @@ const routes: RouteRecordRaw[] = [
       { path: '/auxiliary-tool', component: () => import('../views/AuxiliaryTool/index.vue') },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
+      // 用户权限设置（1030）：系统设置组下的第二个入口，页内两个 tab（数据权限设置 / 用户管理，后者仅 admin）。
+      // 元数据见 router/tabs.ts 的 TABS + USER_PERMISSION_TABS，容器见 views/Settings/UserPermission/index.vue。
+      { path: '/user-permission', component: () => import('../views/Settings/UserPermission/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
       { path: '/tools', redirect: (to) => ({ path: '/monitor', query: to.query }) },
       // 「运行记录」改名「任务中心」（0819 N4-2 / 0812 M3-11），路径随之从 /runs 改到

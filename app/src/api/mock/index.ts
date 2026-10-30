@@ -117,6 +117,7 @@ import {
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
   mockSqlTemplateCopy,
+  mockSqlTemplateDelete,
   mockTableTemplatePaged,
   mockTableTemplateSave,
   mockTableTemplateChangeStatus,
@@ -475,6 +476,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/sql-temp': mockSqlTemplateSave,
   'poc/sql-temp/status': mockSqlTemplateChangeStatus,
   'poc/sql-temp/copy': mockSqlTemplateCopy,
+  'poc/sql-temp/delete': mockSqlTemplateDelete,
 
   // 表模板配置（1013 迁入）：端点域是旧 question-temp，菜单标题才叫「表模板」。
   // 没有 poc/question-temp/copy —— 旧平台不提供表模板复制（见 api/templateConfig.ts 的 tableTemplateApi）。

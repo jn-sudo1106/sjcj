@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { SYSTEM_CONFIG_TABS, BASE_CONFIG_TABS, TABS, TEMPLATE_CONFIG_TABS } from './tabs'
+import { SYSTEM_CONFIG_TABS, BASE_CONFIG_TABS, TABS, TEMPLATE_CONFIG_TABS, USER_PERMISSION_TABS } from './tabs'
 import { router } from './index'
 
 describe('Phase 3.1 画布入口退役', () => {
@@ -134,5 +134,26 @@ describe('Phase 3.1 画布入口退役', () => {
     const shell = router.options.routes.find((r) => r.path === '/')
     const route = shell?.children?.find((r) => r.path === '/auxiliary-tool')
     expect(route?.component).toBeTypeOf('function')
+  })
+
+  // 用户权限设置（1030）：原系统设置页内的「数据权限设置」「用户管理」两个 tab 整体迁出，
+  // 与「系统设置」并列挂在侧栏同一个组下（组标题就是系统设置），页内 tab 元数据在 USER_PERMISSION_TABS。
+  // 三条断言各钉一个「漏了不报错」的点：TABS 缺项 → 侧栏没入口；路由缺项 → 点进去白屏；
+  // key 与路径段不一致 → 高亮与面包屑静默回退到「采集资产总览」。
+  it('系统设置组有「系统设置 + 用户权限设置」两个入口，数据权限/用户管理收成页内 tab', () => {
+    expect(TABS.filter((t) => t.group === 'settings').map((t) => `${t.key}:${t.label}`)).toEqual(['settings:系统设置', 'user-permission:用户权限设置'])
+
+    const shell = router.options.routes.find((r) => r.path === '/')
+    const route = shell?.children?.find((r) => r.path === '/user-permission')
+    expect(route?.component).toBeTypeOf('function')
+    expect(route?.meta?.permission).toBe('settings')
+
+    // 权限码沿用迁出前那两个页内 tab 的码，不新造；users 仍是 adminOnly（后端只认 roles[admin]）
+    // 顺序即默认：第一项「用户管理」是无 ?tab= 时落地的那个（1030 定档），它也正是唯一 adminOnly 的一项
+    expect(USER_PERMISSION_TABS.map((t) => `${t.key}:${t.label}:${t.permission}`)).toEqual([
+      'users:用户管理:settings:users',
+      'data-permission:数据权限设置:settings:dataPermission',
+    ])
+    expect(USER_PERMISSION_TABS[0]?.adminOnly).toBe(true)
   })
 })

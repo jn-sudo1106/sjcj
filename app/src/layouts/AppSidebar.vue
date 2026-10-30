@@ -4,7 +4,7 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, Connection, DataAnalysis, Document, Files, Grid, Histogram, Monitor, Odometer, Setting, SetUp, Tickets, Tools } from '@element-plus/icons-vue'
+import { Box, Clock, Connection, DataAnalysis, Document, Files, Grid, Histogram, Monitor, Odometer, Setting, SetUp, Tickets, Tools, UserFilled } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
@@ -29,7 +29,7 @@ const groupLabels = {
   // 辅助工具（1020）：独立成组。Object.entries 的顺序就是侧栏顺序，所以本组落在
   // 「问数配置」之后、「系统设置」之前；要挪位置改这里一行的位置即可。
   auxiliary: '辅助工具',
-  settings: '系统设置',
+  settings: '系统管理',
 } as const
 
 const navGroups = computed(() =>
@@ -67,6 +67,8 @@ const navIcons: Record<string, Component> = {
   // 辅助工具（1020）：独立分组，组内唯一入口
   'auxiliary-tool': Tools,
   settings: Setting,
+  // 用户权限设置（1030）：与「系统设置」并列在同一个组下，页内两个 tab
+  'user-permission': UserFilled,
 }
 </script>
 

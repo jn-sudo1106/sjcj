@@ -204,11 +204,12 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   /* ── poc 模板配置（旧 ai-chat-view「模板配置」域，1013 迁入 sql 模板配置） ──
      POC 服务是独立进程（dev 代理 /api/poc → 186:9093，见 vite.config.ts），不在 9999 业务后端上；
-     四个端点的调用形态见 api/templateConfig.ts 顶部注释。 */
+     五个端点的调用形态见 api/templateConfig.ts 顶部注释（delete 是 1029 新补的软删，不在旧平台契约里）。 */
   { path: 'poc/sql-temp/page', desc: 'sql 模板分页 → POST /api/poc/sql-temp/page（body: pageNo/pageSize/name）', impl: true, live: true },
   { path: 'poc/sql-temp', desc: 'sql 模板新增/编辑 → POST /api/poc/sql-temp（body 带 id 即更新）', danger: true, impl: true, live: true },
   { path: 'poc/sql-temp/status', desc: 'sql 模板启停 → POST /api/poc/sql-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/sql-temp/copy', desc: 'sql 模板复制 → POST /api/poc/sql-temp/copy?id=', danger: true, impl: true, live: true },
+  { path: 'poc/sql-temp/delete', desc: 'sql 模板删除 → POST /api/poc/sql-temp/delete?id=（软删 DEL_FLAG=1，并刷内存模板缓存）', danger: true, impl: true, live: true },
 
   // 表模板配置（1013 迁入）。⚠️ 未标 live：本轮沙箱访问不到 186 POC 服务，question-temp 的真实响应
   // 还没实测核对过（旧平台契约来自 src/demoApi/EntityApi.js:323-345）。联调验证后逐条补 live。

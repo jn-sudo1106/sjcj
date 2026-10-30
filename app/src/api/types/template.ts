@@ -344,6 +344,8 @@ export interface PocTableEntry extends EntityConfigType {
 /** 表字段管理的字段行（旧 entityItems，GET /poc/database/table-info 返回、保存时整表回传） */
 export interface EntityConfigField {
   itemId?: number | string
+  /** 物理列名（sense_db.cfg_entry_item.COLUMN_NAME，实测形如 K1…Kn）——要拼进 SQL 的列名取这个 */
+  columnName?: string | null
   /** 字段英文名 */
   itemCode?: string | null
   /** 字段中文名 */
@@ -469,9 +471,9 @@ export interface VectorMappingItem {
   configId?: number | string
   /** 列类型：'1' 编码 / '2' 内容 / '3' 别名 */
   type?: string
-  /** 源列名（下拉源为源表字段列表，值=itemCode） */
+  /** 源列名（下拉源为源表字段列表，值=**columnName 物理列名**；同步侧要把它拼进 SELECT，不能用业务名） */
   sourceColumn?: string | null
-  /** 改写后列名 */
+  /** 改写后列名（选源列时默认带出该字段的 itemCode） */
   targetColumn?: string | null
   /** 取值列 */
   valueColumn?: string | null
@@ -570,7 +572,9 @@ export interface EntityRewriteConfig extends TemplateRow {
   targetContent?: string
 }
 
-/** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy） */
+/** CRUD 工厂的四个端点后缀（旧平台约定：分页 /page、新增与修改同一个根路径、启停 /status、复制 /copy。
+ *  删除不在工厂里：旧平台只有 4 个域有 /delete，形态还各不相同——sql 模板 / 选表规则 / 实体改写按 query 发 id，
+ *  问句改写发整行。所以由各自的 api 对象显式扩 remove，见 api/templateConfig.ts） */
 export interface TemplateCrudPaths {
   page?: string
   save?: string
@@ -578,7 +582,12 @@ export interface TemplateCrudPaths {
   copy?: string
 }
 
-/** 一个模板模块的接口面；changeStatus / copy 在不提供该操作的模块里可以缺省 */
+/**
+ * 一个模板模块的接口面；changeStatus / copy 在不提供该操作的模块里可以缺省。
+ * ⚠️ 这里**不放** remove：已有模块的删除签名不统一（match-table-config / entity-rewrite-config 是
+ * `remove(id: number)`，question-dic 是 `remove(row)`），塞进这个基接口会让两边接口互相不兼容。
+ * 通用列表页认识的删除口径见 components/templateConfig/types.ts 的 TemplateListApi。
+ */
 export interface TemplateCrudApi<T extends TemplateRow> {
   page(query: TemplatePageQuery): Promise<Paged<T>>
   save(form: Partial<T>): Promise<Ack>

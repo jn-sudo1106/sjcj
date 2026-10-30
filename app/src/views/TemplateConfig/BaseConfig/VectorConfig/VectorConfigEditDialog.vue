@@ -23,6 +23,11 @@
 // 7. 表名剥前缀不再写死 'sense_data.'：sense_db 的 TABLE_NAME 实测有三种库前缀
 //    （sense_data.* 1227、sense_out.* 5、sense_test.* 3，见元数据执行计划 F6），只剥一种会把库名带进
 //    vector_config.source_table，而该列约定是裸表名（同计划 A5），同步拼表名就错。
+// 8. 「源列名」的值改为**物理列名 COLUMN_NAME**（旧版存的是 ITEM_CODE）：这一列最终要拼进同步侧的
+//    SELECT（sync-platform 的 GenerateSqlUtils 就是 `sourceColumn as ...`），而 sense 侧的物理列实测是
+//    K1…Kn，ITEM_CODE 是业务名，拿 ITEM_CODE 去读表就读不到。展示同步改成 `columnName[itemName]`，
+//    选中时把「改写后列名」默认填成该字段的 ITEM_CODE（物理名 → 业务名的改写方向）。
+//    ⚠️ 旧记录里存的 sourceColumn 是 ITEM_CODE，重新打开时下拉会对不上、退化成裸字符串，需要重选一次再保存。
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
@@ -80,6 +85,7 @@ function resetForm() {
   form.dataClearRule = ''
   passthrough = {}
   sourceFields.value = []
+  autoTargetColumn.clear()
 }
 
 function fillFromRecord(record: VectorTableConfig) {
@@ -115,6 +121,27 @@ function bareTableName(tableName?: string | null): string {
 /** 选项文案沿用旧版 `表名[类型名]`，表名取剥前缀后的裸名 */
 function sourceLabel(entry: PocTableEntry): string {
   return `${bareTableName(entry.tableName)}[${entry.typeName ?? ''}]`
+}
+
+/** 「源列名」选项文案：物理列名[中文字段名]（值仍是物理列名，见文件头偏差 8） */
+function columnLabel(field: EntityConfigField): string {
+  return `${field.columnName ?? ''}[${field.itemName ?? ''}]`
+}
+
+/**
+ * 每行「改写后列名」最近一次由源列自动带出的值。
+ * 换源列时只替换自动带出的值，用户手改过的不动——否则手写的改写名会被下一次选列清掉。
+ */
+const autoTargetColumn = new Map<VectorMappingItem, string>()
+
+/** 选中源列（物理列名）后，把「改写后列名」默认填成该字段的业务名 ITEM_CODE */
+function onSourceColumnChange(row: VectorMappingItem, columnName: string | undefined) {
+  const field = sourceFields.value.find((item) => String(item.columnName ?? '') === String(columnName ?? ''))
+  if (!field) return
+  const current = (row.targetColumn ?? '').trim()
+  if (current && current !== autoTargetColumn.get(row)) return
+  row.targetColumn = field.itemCode ?? ''
+  autoTargetColumn.set(row, row.targetColumn)
 }
 
 /** 远程搜索结果与已选项合并：已选那张不在本次结果里时用缓存补回，标签不会退化成裸 entryTypeId */
@@ -331,12 +358,20 @@ defineExpose({ open, openDetail, close })
           </el-table-column>
           <el-table-column label="源列名" min-width="200" align="center">
             <template #default="{ row }">
-              <el-select v-if="!readonly" v-model="row.sourceColumn" filterable placeholder="请选择" size="small" class="vce-cell-field">
+              <el-select
+                v-if="!readonly"
+                v-model="row.sourceColumn"
+                filterable
+                placeholder="请选择"
+                size="small"
+                class="vce-cell-field"
+                @change="(val: string) => onSourceColumnChange(row, val)"
+              >
                 <el-option
                   v-for="field in sourceFields"
-                  :key="String(field.itemCode)"
-                  :value="field.itemCode ?? ''"
-                  :label="String(field.itemCode ?? '') + '[' + String(field.itemName ?? '') + ']'"
+                  :key="String(field.columnName)"
+                  :value="field.columnName ?? ''"
+                  :label="columnLabel(field)"
                 />
               </el-select>
               <span v-else>{{ row.sourceColumn ?? '' }}</span>
