@@ -6,7 +6,7 @@ vi.mock('@/api/client', async (importOriginal) => {
   return { ...actual, request: (...args: unknown[]) => requestMock(...args) }
 })
 
-import { flowCenterApi, sourceApi, workflowBindingApi, type SourceCategory } from './index'
+import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi, type SourceCategory } from './index'
 import {
   addSourcesToBizDir, bizDirTables, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
   importFromTemplateToBizDir, moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
@@ -210,6 +210,7 @@ describe('sourceDirs · 按模板批量新增（10-22）', () => {
     vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true })
     vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(flows(['1', '2'], '1'))
     vi.spyOn(workflowBindingApi, 'save').mockResolvedValue()
+    vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true })
   })
 
   it('每行按模板复用配置复制（flag=0），URL 省略沿用模板；空名跳过；新源统一加入目录', async () => {
@@ -236,6 +237,55 @@ describe('sourceDirs · 按模板批量新增（10-22）', () => {
     const change = vi.mocked(workflowBindingApi.save).mock.calls[0]
     expect(change[0]).toBe('201')
     expect(change[1](flows([]))).toEqual({ flowIds: ['1', '2'], defaultFlowId: '1' })
+    expect(sourceGroupApi.changeMembers).not.toHaveBeenCalled()
+  })
+
+  it('组内模板：新源保留自有绑定直接入组，不写入模板的历史自有流程', async () => {
+    const group = { ...flows(['old'], 'old'), sourceGroupId: '9', flowIds: ['group-flow'], defaultFlowId: 'group-flow' }
+    vi.mocked(workflowBindingApi.view).mockImplementation(async (id) => id === '100' ? group : flows(['copied'], 'copied'))
+    const result = await importFromTemplateToBizDir(tpl, 'A', '9011515')
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+    expect(sourceGroupApi.changeMembers).toHaveBeenCalledWith({ sourceIds: ['200'], sourceGroupId: '9', expectedSourceGroupId: null })
+    expect(result).toEqual({ added: ['200'], skipped: 0, failed: [], partial: [] })
+  })
+
+  it('组内模板：没有自有流程的新源直接入组；已在同组的不重复写', async () => {
+    const group = { ...flows([]), sourceGroupId: '9', flowIds: ['group-flow'], defaultFlowId: 'group-flow' }
+    vi.mocked(workflowBindingApi.view).mockImplementation(async (id) => id === '200' ? flows([]) : group)
+    await importFromTemplateToBizDir(tpl, 'A\nB', '9011515')
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+    expect(sourceGroupApi.changeMembers).toHaveBeenCalledTimes(1)
+    expect(sourceGroupApi.changeMembers).toHaveBeenCalledWith({ sourceIds: ['200'], sourceGroupId: '9', expectedSourceGroupId: null })
+  })
+
+  it('组内模板：入组失败保留新源和自有绑定，继续下一行和目录归属', async () => {
+    const group = { ...flows(['old'], 'old'), sourceGroupId: '9', flowIds: ['group-flow'] }
+    vi.mocked(workflowBindingApi.view).mockImplementation(async (id) => id === '100' ? group : flows(['copied'], 'copied'))
+    vi.mocked(sourceGroupApi.changeMembers).mockRejectedValueOnce(new Error('来源组归属已变化'))
+    const result = await importFromTemplateToBizDir(tpl, 'A\nB', '9011515')
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+    expect(sourceGroupApi.changeMembers).toHaveBeenCalledTimes(2)
+    expect(sourceGroupApi.changeMembers).toHaveBeenCalledWith({ sourceIds: ['201'], sourceGroupId: '9', expectedSourceGroupId: null })
+    expect(result.added).toEqual(['200', '201'])
+    expect(result.partial).toEqual(['#200 A（加入来源组失败：来源组归属已变化）'])
+    expect(requestMock.mock.calls.find(([ep]) => ep === 'category/addSources')?.[2].httpParams.sourceIds).toEqual([200, 201])
+  })
+
+  it('组内模板：入组返回失败时保留真实原因，不把新源当作全部成功', async () => {
+    vi.mocked(workflowBindingApi.view).mockImplementation(async (id) => id === '100' ? { ...flows([]), sourceGroupId: '9' } : flows([]))
+    vi.mocked(sourceGroupApi.changeMembers).mockResolvedValue({ ok: false, message: '来源组已停用' })
+    const result = await importFromTemplateToBizDir(tpl, 'A', '9011515')
+    expect(result.failed).toEqual([])
+    expect(result.added).toEqual(['200'])
+    expect(result.partial).toEqual(['#200 A（加入来源组失败：来源组已停用）'])
+  })
+
+  it('组内模板：归属读取失败不尝试解绑或入组', async () => {
+    vi.mocked(workflowBindingApi.view).mockResolvedValueOnce({ ...flows([]), sourceGroupId: '9' }).mockRejectedValueOnce(new Error('查询超时'))
+    const result = await importFromTemplateToBizDir(tpl, 'A', '9011515')
+    expect(workflowBindingApi.save).not.toHaveBeenCalled()
+    expect(sourceGroupApi.changeMembers).not.toHaveBeenCalled()
+    expect(result.partial).toEqual(['#200 A（读取流程归属失败：查询超时）'])
   })
 
   it('某行复制失败不影响其他行；建出来但后续失败的记进 partial', async () => {

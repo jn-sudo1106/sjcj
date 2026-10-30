@@ -33,7 +33,7 @@ const tip = computed(() => {
 
 async function reloadCanvas() {
   const sourceId = flow.sourceCtx?.sourceId
-  const ok = sourceId ? await reloadSourceIntoCanvas(sourceId) : await reloadFlowIntoCanvas(canvasFlowId.value)
+  const ok = sourceId ? await reloadSourceIntoCanvas(sourceId, canvasFlowId.value) : await reloadFlowIntoCanvas(canvasFlowId.value)
   if (!ok) ElMessage.warning('画布重新加载失败，请刷新页面查看')
 }
 

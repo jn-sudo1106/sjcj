@@ -401,11 +401,6 @@ async function removeMembers(): Promise<void> {
   const group = selectedGroup.value
   if (!canWrite.value || !group || !selectedIds.value.length) return
   try {
-    await ElMessageBox.confirm(`确定把这 ${selectedIds.value.length} 个来源移出「${group.sourceGroupName}」？移出后不恢复旧绑定，需重新配置独立流程才能运行。`, '确认移出来源组', { type: 'warning' })
-  } catch {
-    return
-  }
-  try {
     await sourceGroupApi.changeMembers({ sourceIds: selectedIds.value, sourceGroupId: null, expectedSourceGroupId: group.sourceGroupId })
     ElMessage.success(`已移出 ${selectedIds.value.length} 个来源`)
   } catch (error) {

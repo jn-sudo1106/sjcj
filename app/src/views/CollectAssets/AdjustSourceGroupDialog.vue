@@ -11,16 +11,14 @@
  *
  * 结果提示优先用后端 msg（例如「范围内共 120 个来源：加入 100、换组 15、已符合 5」）。
  *
- * 1021-03：勾选入组时先查源自己的流程，有的话进第二步「入组确认」（GroupJoinConfirmDialog），确认后先解绑再入组
- *（groupJoin.ts）；按范围入组不解绑，只提示带自有流程的源请改用勾选。
+ * 入组保留源自己的流程，组内使用组流程，退组后恢复自有流程。
  */
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceGroupApi, type Source } from '@/api'
 import { isProductionBackend } from '@/api/client'
 import type { SourceFilter } from '@/views/FlowCanvas/result/useSourceLaunch'
-import GroupJoinConfirmDialog from './GroupJoinConfirmDialog.vue'
-import { JOIN_CHECK_MAX, findOwnFlows, joinGroup, joinResultText, type OwnFlowRow } from './groupJoin'
+import { JOIN_CHECK_MAX, joinGroup, joinResultText } from './groupJoin'
 
 const props = defineProps<{
   /** 勾选的源（空 = 没勾选，走「按当前筛选范围」） */
@@ -75,7 +73,7 @@ async function submit() {
     return
   }
   if (mode.value === 'selected' && target.value !== LEAVE) {
-    await prepareJoin()
+    await runJoin()
     return
   }
   saving.value = true
@@ -120,38 +118,18 @@ async function submit() {
   }
 }
 
-// ---- 勾选入组（1021-03）：先查自有流程 → 有就确认 → 先解绑再入组 ----
-const targetName = computed(() => props.groups.find((g) => g.sourceGroupId === target.value)?.name ?? `组 #${target.value}`)
-const ownRows = ref<OwnFlowRow[] | null>(null)
-async function prepareJoin() {
+// 勾选入组：保留自有绑定，按当前归属提交。
+async function runJoin() {
   if (props.selectedSources.length > JOIN_CHECK_MAX) {
-    ElMessage.warning(`一次最多加入 ${JOIN_CHECK_MAX} 个源（要逐个检查源自己的流程），请分批勾选`)
+    ElMessage.warning(`一次最多加入 ${JOIN_CHECK_MAX} 个源，请分批勾选`)
     return
   }
   saving.value = true
   try {
-    const rows = await findOwnFlows(props.selectedSources)
-    if (rows.length) ownRows.value = rows
-    else await runJoin([])
-  } catch (error) {
-    ElMessage.error(`检查源的流程失败：${error instanceof Error ? error.message : String(error)}`)
-  } finally {
-    saving.value = false
-  }
-}
-async function runJoin(excludeIds: string[]) {
-  saving.value = true
-  try {
-    const skip = new Set(excludeIds)
-    const result = await joinGroup({
-      groupId: target.value,
-      sources: props.selectedSources.filter((s) => !skip.has(s.sourceId)),
-      unbindIds: (ownRows.value ?? []).map((r) => r.sourceId).filter((id) => !skip.has(id)),
-    })
+    const result = await joinGroup({ groupId: target.value, sources: props.selectedSources })
     if (result.failures.length) ElMessage.error(joinResultText(result))
-    else ElMessage.success(`${joinResultText(result)}${skip.size ? `，${skip.size} 个源未加入` : ''}`)
-    ownRows.value = null
-    // 解绑 / 入组有一部分已经生效，失败了父级也要重拉
+    else ElMessage.success(joinResultText(result))
+    // 部分批次可能已经生效，失败时父级也要重拉。
     if (result.joined || result.failures.some((f) => f.step === 'join')) emit('saved')
     if (!result.failures.length) emit('close')
   } finally {
@@ -195,7 +173,7 @@ async function runJoin(excludeIds: string[]) {
 
     <el-alert
       v-if="mode === 'range' && target && target !== LEAVE"
-      title="按范围加入时不会解除源自己的流程；入组后这些流程不生效、也改不了。带自有流程的源请改用勾选加入。"
+      title="入组保留自有流程，组内使用组流程，退组后恢复自有流程。"
       type="warning"
       :closable="false"
       data-testid="asg-range-own-flow-note"
@@ -206,17 +184,6 @@ async function runJoin(excludeIds: string[]) {
       <el-button type="primary" :disabled="mode === 'selected' ? !canSubmitSelected : !canSubmitRange" :loading="saving" data-testid="asg-submit" @click="submit">确定</el-button>
     </template>
   </el-dialog>
-  <GroupJoinConfirmDialog
-    v-if="ownRows"
-    :group-id="target"
-    :group-name="targetName"
-    :rows="ownRows"
-    :direct-count="selectedSources.length - ownRows.length"
-    :busy="saving"
-    @back="ownRows = null"
-    @close="ownRows = null"
-    @confirm="runJoin"
-  />
 </template>
 
 <style scoped>

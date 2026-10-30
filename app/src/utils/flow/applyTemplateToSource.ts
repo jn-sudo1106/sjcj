@@ -69,14 +69,14 @@ export async function copyFlowToSource(
  * 自动保存会把同一批步骤再建一遍（`FlowBoard.vue` 的老注释踩过这个坑）。
  * 沿用源视图进入画布时的同一条路径。
  */
-export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean> {
+export async function reloadSourceIntoCanvas(sourceId: string, preferredFlowId?: string): Promise<boolean> {
   const detail = await sourceApi.sourceDetail(sourceId)
   if (!detail) return false
   // 0925 整体切 flowId：与 index.vue loadSourceFlow 同一口径——源已绑流程（flowId 为有效数字且非
   // '0' 哨兵）时按流程查（svg=true 自带真实根节点行，lastStep 已改写为根 ID），重载后与进入画布时
   // 同形状（孤儿「关联」修复与流程模板套用都走这里；否则源视角查询缺根行，重载会把挂根步骤误判成孤儿）。
   // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（四处共用）。
-  const flowId = validFlowIdOf(detail.flowId)
+  const flowId = validFlowIdOf(preferredFlowId ?? detail.flowId)
   // 流程版本（2026-10-10）：重载发生在编辑场景（关联 / 套模板 / 发布、放弃草稿后），有草稿读草稿
   const flowVersion = useFlowVersionStore()
   if (flowId) await flowVersion.load(flowId)
@@ -87,7 +87,9 @@ export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean>
   const { useFlowStore } = await import('@/stores/flow')
   const flow = useFlowStore()
   const sameSource = String(flow.sourceCtx?.sourceId ?? '') === String(sourceId)
-  flow.loadFromSource(detail, steps, null)
+  flow.loadFromSource(preferredFlowId
+    ? { ...detail, flowId, primaryFlowId: validFlowIdOf(detail.flowId) || undefined }
+    : detail, steps, null)
   // 定时 cron 在 job 表、sourceDetail 里恒为 null（见 index.vue backfillSourceSchedule）。loadFromSource
   // 重建了源上下文，进入画布时补的 cron 随之丢失，节点定时退回「每天」兜底显示（2026-10-27 发布 v3 后实测）。
   // sourceJob 不随重载清空，同一个源直接重新套回即可，不置脏。

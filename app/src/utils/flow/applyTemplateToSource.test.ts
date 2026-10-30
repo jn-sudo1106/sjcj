@@ -79,6 +79,17 @@ describe('画布重载补 configDetail', () => {
     expect(flow.dirtyConfigNodes).toEqual([])
   })
 
+  it('发布或放弃辅助流程后重载指定流程，不回到源的默认流程', async () => {
+    mockSourceDetail.mockResolvedValue({ sourceId: 's1', name: '源', url: 'http://x', mainTable: '900', flowId: '11' })
+    mockSteps.mockResolvedValue(bareSteps())
+
+    expect(await reloadSourceIntoCanvas('s1', '12')).toBe(true)
+
+    expect(mockSteps).toHaveBeenCalledWith('12', { withConfigDetails: false })
+    expect(useFlowStore().sourceCtx?.flowId).toBe('12')
+    expect(useFlowStore().sourceCtx?.primaryFlowId).toBe('11')
+  })
+
   it('补充失败不影响重载结果', async () => {
     mockSourceDetail.mockResolvedValue({ sourceId: 's1', name: '源', url: 'http://x', mainTable: '900', flowId: '14007240' })
     mockSteps.mockResolvedValue(bareSteps())

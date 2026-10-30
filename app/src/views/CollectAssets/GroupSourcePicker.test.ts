@@ -52,8 +52,9 @@ it('backend 模式：保存调 changeMembers 加入来源组，选中的源分�
     ],
   }))
   const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
-  // 1021-03：入组前查自有流程；独立源 10 没有自有流程 → 不出入组确认；组内源 20 / 30 不查
-  const view = vi.spyOn(workflowBindingApi, 'view').mockImplementation(async (id) => ({ sourceId: id, flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }))
+  // 无论是否已有自有流程，入组都只调整归属。
+  const view = vi.spyOn(workflowBindingApi, 'view').mockRejectedValue(new Error('不应查询自有流程'))
+  const saveBindings = vi.spyOn(workflowBindingApi, 'save')
   const wrapper = mount(GroupSourcePicker, { props: { modelValue: false, groupId: '9', backendMode: true }, global: { plugins: [ElementPlus] }, attachTo: document.body })
   await wrapper.setProps({ modelValue: true }); await flushPromises()
   // 勾选全部 3 个源
@@ -62,8 +63,9 @@ it('backend 模式：保存调 changeMembers 加入来源组，选中的源分�
   expect(document.body.textContent).toContain('已选 3 个源')
   const save = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '加入分组')!
   save.click(); await flushPromises()
-  expect(view).toHaveBeenCalledTimes(1)
-  expect(view).toHaveBeenCalledWith('10')
+  expect(view).not.toHaveBeenCalled()
+  expect(saveBindings).not.toHaveBeenCalled()
+  expect(document.querySelector('[data-testid="gjc-confirm"]')).toBeNull()
   // 按 expected 分批：null（独立）、3、1
   expect(changeMembers).toHaveBeenCalledTimes(3)
   expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['10'], sourceGroupId: '9', expectedSourceGroupId: null })

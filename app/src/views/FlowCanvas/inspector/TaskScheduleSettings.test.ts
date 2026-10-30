@@ -71,6 +71,13 @@ describe('TaskScheduleSettings', () => {
     expect(lastPatch(wrapper)).not.toHaveProperty('cron')
   })
 
+  it('旧定时只有 cron 字段时，直接编辑仍保持自定义策略和输入值', async () => {
+    const wrapper = mountSchedule({ cron: '0 30 5 1 1 ?' })
+    expect(wrapper.get('select').element.value).toBe('自定义 cron')
+    await wrapper.get('input.cron').setValue('0 29 16 30 10 ?')
+    expect(lastPatch(wrapper)).toMatchObject({ scheduleType: '自定义 cron', cron: '0 29 16 30 10 ?' })
+  })
+
   // 2026-09-22 用户报「定时为什么关不上」：首次保存定时时源上还没有 job，
   // NodeInspector 本地造了个 jobId 为空的壳，界面显示「已启用」但那条定时没有 ID，
   // 一点就是 setJobEnabled([''])、必然回「没有可操作的定时任务」。

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 // 调整来源组弹窗（1008-04，§3.5）：勾选的源按当前归属 changeMembers；按筛选范围 changeMembersByRange
-// （无筛选条件时红色警告 + 二次确认 confirmAll）。1021-03：勾选入组前先查源自己的流程，有就进「入组确认」，先解绑再入组。
+// （无筛选条件时红色警告 + 二次确认 confirmAll）。入组保留自有流程，退组后恢复。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AdjustSourceGroupDialog from './AdjustSourceGroupDialog.vue'
-import { flowCenterApi, sourceGroupApi, workflowBindingApi, type Source, type SourceFlowsView } from '@/api'
+import { sourceGroupApi, workflowBindingApi, type Source, type SourceFlowsView } from '@/api'
 
 const GROUPS = [
   { sourceGroupId: '3', name: 'twitter1', state: 'ACTIVE' },
@@ -93,62 +93,36 @@ describe('调整来源组弹窗', () => {
     return wrapper
   }
 
-  it('有自有流程：先出入组确认（默认全勾），确认后先清空自有流程、再入组（1021-03）', async () => {
-    vi.spyOn(workflowBindingApi, 'view').mockImplementation(async (id) => viewOf(id, id === '20010739' ? ['402330'] : []))
-    vi.spyOn(sourceGroupApi, 'detail').mockResolvedValue({ sourceGroupId: '3', sourceGroupCode: 't', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: ['701350'], defaultFlowId: '701350', revision: 1 })
-    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
-    const order: string[] = []
-    const save = vi.spyOn(workflowBindingApi, 'save').mockImplementation(async (id, change) => { order.push(`unbind:${id}`); expect(change(viewOf(id, ['402330']))).toEqual({ flowIds: [], defaultFlowId: null }) })
-    const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockImplementation(async (input) => { order.push(`join:${input.sourceIds.join(',')}`); return { ok: true, message: '操作成功' } })
+  it('有自有流程：直接入组，保留绑定，不再弹解除确认或查询自有流程', async () => {
+    const view = vi.spyOn(workflowBindingApi, 'view').mockRejectedValue(new Error('不应查询自有流程'))
+    const save = vi.spyOn(workflowBindingApi, 'save')
+    const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
     const wrapper = await submitJoin([SRC_OWN, SRC_INDEP])
-    expect(changeMembers).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('以下 1 个源已经关联了自己的流程')
-    expect(document.body.textContent).toContain('自有流程：流程 · 402330（默认）')
-    expect(dom('[data-testid="gjc-direct"]')?.textContent).toContain('其余 1 个源')
-    expect((dom('[data-testid="gjc-pick"]') as HTMLInputElement).checked).toBe(true)
-    expect(dom('[data-testid="gjc-confirm"]')?.textContent).toContain('解除并加入（2 个源）')
-    ;(dom('[data-testid="gjc-confirm"]') as HTMLButtonElement).click()
-    await settle()
-    expect(save).toHaveBeenCalledTimes(1)
-    expect(order).toEqual(['unbind:20010739', 'join:20010739,430024667'])
+    expect(view).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+    expect(dom('[data-testid="gjc-confirm"]')).toBeNull()
+    expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['20010739', '430024667'], sourceGroupId: '3', expectedSourceGroupId: null })
     expect(wrapper.emitted('saved')).toBeTruthy()
     expect(wrapper.emitted('close')).toBeTruthy()
     wrapper.unmount()
   })
 
-  it('入组确认里取消勾选：这个源不解绑、不加入；组没有流程时黄色提示', async () => {
-    vi.spyOn(workflowBindingApi, 'view').mockImplementation(async (id) => viewOf(id, id === '20010739' ? ['402330'] : []))
-    vi.spyOn(sourceGroupApi, 'detail').mockResolvedValue({ sourceGroupId: '3', sourceGroupCode: 't', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 })
-    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
-    const save = vi.spyOn(workflowBindingApi, 'save').mockResolvedValue(undefined)
-    const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
-    const wrapper = await submitJoin([SRC_OWN, SRC_INDEP])
-    expect(dom('[data-testid="gjc-group-no-flow"]')).toBeTruthy()
-    ;(dom('[data-testid="gjc-pick"]') as HTMLInputElement).click()
-    await settle()
-    expect(dom('[data-testid="gjc-confirm"]')?.textContent).toContain('加入（1 个源）')
-    ;(dom('[data-testid="gjc-confirm"]') as HTMLButtonElement).click()
-    await settle()
-    expect(save).not.toHaveBeenCalled()
-    expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['430024667'], sourceGroupId: '3', expectedSourceGroupId: null })
-    wrapper.unmount()
-  })
-
-  it('查自有流程失败：报错，不入组', async () => {
-    vi.spyOn(workflowBindingApi, 'view').mockRejectedValue(new Error('网络异常'))
-    const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers')
+  it('入组失败：保留自有绑定与弹窗', async () => {
+    const save = vi.spyOn(workflowBindingApi, 'save')
+    vi.spyOn(sourceGroupApi, 'changeMembers').mockRejectedValue(new Error('并发冲突'))
     const wrapper = await submitJoin([SRC_OWN])
-    expect(changeMembers).not.toHaveBeenCalled()
-    expect(dom('[data-testid="gjc-list"]')).toBeNull()
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.emitted('close')).toBeFalsy()
+    expect(document.body.textContent).toContain('并发冲突')
     wrapper.unmount()
   })
 
-  it('按范围加入目标组：提示不会解除源自己的流程', async () => {
+  it('按范围加入目标组：说明入组保留、退组恢复自有流程', async () => {
     const wrapper = mountDialog({ hasQueryFilter: true })
     await settle()
     wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '3')
     await settle()
-    expect(dom('[data-testid="asg-range-own-flow-note"]')).toBeTruthy()
+    expect(dom('[data-testid="asg-range-own-flow-note"]')?.textContent).toContain('退组后恢复自有流程')
     wrapper.unmount()
   })
 

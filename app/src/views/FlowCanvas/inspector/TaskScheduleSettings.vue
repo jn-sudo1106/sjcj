@@ -57,7 +57,7 @@ function patchWithCron(value: Partial<CollectorSchedule>) {
   patch(next.scheduleType === '自定义 cron' ? normalized : { ...normalized, cron: cronForSchedule(next) })
 }
 function onInput(key: 'scheduleType' | 'scheduleTime' | 'cron', e: Event) {
-  patchWithCron({ [key]: (e.target as HTMLInputElement).value })
+  patchWithCron({ ...(key === 'cron' ? { scheduleType: '自定义 cron' } : {}), [key]: (e.target as HTMLInputElement).value })
 }
 function toggleWeekday(day: number) {
   const weekdays = props.modelValue.weekdays ?? []

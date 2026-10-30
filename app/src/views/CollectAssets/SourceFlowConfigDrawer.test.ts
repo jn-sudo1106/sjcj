@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceFlowConfigDrawer from './SourceFlowConfigDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { sourceGroupApi, workflowBindingApi, flowCenterApi, type Source, type SourceFlowsView, type SourceFlowBind, type FlowRecord } from '@/api'
@@ -97,34 +97,32 @@ describe('源流程配置抽屉', () => {
     const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
     const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
     const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
     const wrapper = mount(SourceFlowConfigDrawer, { props: { source: GROUP_SOURCE, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await settle()
     ;(dom('[data-testid="sfcd-leave-group"]') as HTMLButtonElement).click()
     await settle()
-    // 先二次确认（测试无 zh-cn locale → 按钮是 OK）
-    expect(changeMembers).not.toHaveBeenCalled()
-    const okBtn = [...document.querySelectorAll<HTMLButtonElement>('.el-message-box button')].find((b) => b.textContent?.trim() === 'OK')
-    expect(okBtn, '应弹出确认框').toBeTruthy()
-    okBtn!.click()
-    await settle()
+    expect(confirm).not.toHaveBeenCalled()
     expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['430000930'], sourceGroupId: null, expectedSourceGroupId: '3' })
     expect(view).toHaveBeenCalledTimes(2)
     return { wrapper, success, warning }
   }
 
-  it('退出来源组：旧的自有流程重新生效时，提示按原有流程运行，抽屉切到本源流程', async () => {
+  it('退出来源组直接执行，刷新并展示恢复的自有流程', async () => {
     const after: SourceFlowsView = { ...GROUP_VIEW, sourceGroupId: undefined, flowIds: GROUP_VIEW.ownFlowIds, defaultFlowId: GROUP_VIEW.ownDefaultFlowId, bindings: GROUP_VIEW.ownBindings }
     const { wrapper, success } = await leaveWith(after)
-    expect(success).toHaveBeenCalledWith(expect.stringContaining('按本源原有流程运行：流程 21000019、流程 21000022'))
+    expect(success).toHaveBeenCalledWith('已退出来源组')
     expect(dom('[data-testid="sfcd-own-section"]')).toBeTruthy()
     expect(dom('[data-testid="sfcd-group-section"]')).toBeNull()
     wrapper.unmount()
   })
 
-  it('退出来源组：本源没有流程时提示去关联', async () => {
+  it('退出来源组不额外警告重新配置流程，按实际结果显示本源流程区', async () => {
     const after: SourceFlowsView = { sourceId: '430000930', flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }
-    const { wrapper, warning } = await leaveWith(after)
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining('本源还没有流程'))
+    const { wrapper, warning, success } = await leaveWith(after)
+    expect(warning).not.toHaveBeenCalled()
+    expect(success).toHaveBeenCalledWith('已退出来源组')
+    expect(dom('[data-testid="sfcd-own-section"]')).toBeTruthy()
     wrapper.unmount()
   })
 

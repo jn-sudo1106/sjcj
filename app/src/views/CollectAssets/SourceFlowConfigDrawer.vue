@@ -13,7 +13,7 @@
  * sourceFlows 顶层字段是组的绑定（入组时），own* 是源自有的绑定。
  */
 import { computed, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { flowCenterApi, sourceGroupApi, workflowBindingApi, type FlowRecord, type Source, type SourceFlowBind, type SourceFlowsView } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
@@ -118,22 +118,15 @@ async function toggleBindingState(row: SourceFlowBind) {
 async function leaveGroup() {
   if (!canWrite.value || !view.value?.sourceGroupId) return
   try {
-    await ElMessageBox.confirm(`确定把「${props.source.name}」移出来源组？移出后不再使用来源组的流程，按本源自己的流程运行。`, '确认退出来源组', { type: 'warning' })
-  } catch {
-    return
-  }
-  try {
     await sourceGroupApi.changeMembers({
       sourceIds: [props.source.sourceId],
       sourceGroupId: null,
       expectedSourceGroupId: view.value.sourceGroupId,
     })
     emit('saved')
-    // 退组后抽屉直接切到「本源流程」；入组前留下的自有绑定会重新生效（10-21 186 实测），按退组后的实际结果提示
+    // 退组后恢复自有流程，重查并切到「本源流程」。
     await load()
-    const own = view.value?.ownFlowIds ?? []
-    if (own.length) ElMessage.success(`已退出来源组，按本源原有流程运行：${own.map(flowLabel).join('、')}`)
-    else ElMessage.warning('已退出来源组。本源还没有流程，请在下方关联流程后才能运行')
+    ElMessage.success('已退出来源组')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : String(error))
   }

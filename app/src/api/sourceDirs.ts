@@ -11,7 +11,7 @@
 // - `sourcePaged.viewCategoryId` 对业务目录有效，但只认单个目录、也不含子级（传父目录得 0，传两个直接报错）
 //   → 业务目录的范围由前端用 `category/listSources` 逐个取源、取并集，再按源 ID 范围查。
 import { request } from './client'
-import { flowCenterApi, sourceApi, workflowBindingApi } from './index'
+import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi } from './index'
 import type { Source, SourceCategory, SourceFlowsView } from './types'
 
 export type DirKind = 'sys' | 'biz'
@@ -255,13 +255,14 @@ export interface TemplateImportResult {
   skipped: number
   /** 这一行连源都没建出来 */
   failed: string[]
-  /** 源建出来了，但归网站 / 挂流程 / 进目录有一步没成：要手动补 */
+  /** 源建出来了，但归网站 / 挂流程或入组 / 进目录有一步没成：要手动补 */
   partial: string[]
 }
 
 /**
  * 业务目录「按模板批量新增」（10-22）：一行一条「源名称;URL」，每行按模板源复制一个源。
  * 复用模板源的配置和流程（共用同一条流程，不另复制），归入模板源的网站，最后统一加入业务目录 `dirId`。
+ * 模板源在来源组内时，新源直接加入同组，保留自有绑定；组内使用组流程，退组后自有流程恢复。
  * 逐行执行，某行失败不影响其他行；源已建出但后续步骤失败的不回滚（回滚等于删源），记进 partial。
  */
 export async function importFromTemplateToBizDir(template: Source, lines: string, dirId: string): Promise<TemplateImportResult> {
@@ -291,20 +292,27 @@ export async function importFromTemplateToBizDir(template: Source, lines: string
       const created = await sourceApi.sourceDetail(id)
       if (siteId && created?.siteId !== siteId) {
         const bind = await sourceApi.changeSite([id], siteId)
-        if (!bind.ok) misses.push('归入网站')
+        if (!bind.ok) misses.push('归入网站失败')
       }
     } catch {
-      misses.push('归入网站')
+      misses.push('归入网站失败')
     }
+    let flowStep = '读取流程归属'
     try {
       const view = await workflowBindingApi.view(id)
-      if (!sameFlows(view, tplFlows)) {
+      if (tplFlows.sourceGroupId) {
+        if (view.sourceGroupId !== tplFlows.sourceGroupId) {
+          flowStep = '加入来源组'
+          const joined = await sourceGroupApi.changeMembers({ sourceIds: [id], sourceGroupId: tplFlows.sourceGroupId, expectedSourceGroupId: view.sourceGroupId ?? null })
+          if (!joined.ok) throw new Error(joined.message || '加入来源组失败')
+        }
+      } else if (!sameFlows(view, tplFlows)) {
         await workflowBindingApi.save(id, () => ({ flowIds: tplFlows.ownFlowIds, defaultFlowId: tplFlows.ownDefaultFlowId ?? null }))
       }
-    } catch {
-      misses.push('关联流程')
+    } catch (error) {
+      misses.push(tplFlows.sourceGroupId ? `${flowStep}失败：${(error as Error)?.message ?? String(error)}` : '关联流程失败')
     }
-    if (misses.length) result.partial.push(`#${id} ${name}（${misses.join('、')}失败）`)
+    if (misses.length) result.partial.push(`#${id} ${name}（${misses.join('、')}）`)
   }
   if (result.added.length) {
     try {

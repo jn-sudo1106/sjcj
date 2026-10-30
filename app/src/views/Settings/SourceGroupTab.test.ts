@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import SourceGroupTab from './SourceGroupTab.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -318,23 +318,20 @@ describe('来源组页签 · 新建来源组', () => {
 })
 
 describe('来源组页签 · 成员操作', () => {
-  it('移出选中成员调 changeMembers（target=null，expected=本组）', async () => {
+  it('移出选中成员直接调 changeMembers 并刷新，不再弹退组确认', async () => {
     const { wrapper } = await mountTab()
     // 先设勾选再选组：SOV stub 首次渲染 selection-actions 槽时 ids 即有值
     selectIds.value = ['391000500']
     await wrapper.findAll('.sg-item')[0]!.trigger('click')
     await settle()
     const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
     const removeBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('移出来源组'))
     expect(removeBtn, '应有「移出来源组」按钮').toBeTruthy()
     expect(removeBtn!.disabled).toBe(false)
     removeBtn!.click()
     await settle()
-    // ElMessageBox 确认（测试无 zh-cn locale → 按钮是 OK）
-    const okBtn = [...document.querySelectorAll<HTMLButtonElement>('.el-message-box button')].find((b) => b.textContent?.trim() === 'OK')
-    expect(okBtn, '应弹出确认框').toBeTruthy()
-    okBtn!.click()
-    await settle()
+    expect(confirm).not.toHaveBeenCalled()
     expect(changeMembers).toHaveBeenCalledWith({
       sourceIds: ['391000500'],
       sourceGroupId: null,
