@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { runnerManagementApi, type ModelInterface, type ModelInterfaceSettings, type CodeGenerationServer } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -9,6 +9,10 @@ import { formatModelTestOutput } from '@/api/modelInterfaceStream'
 import MarkdownOutput from '@/components/MarkdownOutput.vue'
 import { createGenerationTaskId, generationWorkspace } from '@/utils/generationWorkspace'
 
+const props = defineProps<{ server?: CodeGenerationServer; embedded?: boolean }>()
+const emit = defineEmits<{ changed: [] }>()
+const scope = ref<'server' | 'all' | 'unassigned'>(props.server ? 'server' : 'all')
+watch(() => props.server?.serverId, id => { scope.value = id ? 'server' : 'all' })
 const auth = useAuthStore(), canWrite = computed(() => auth.role === 'admin')
 const settings = ref<ModelInterfaceSettings>({ items: [], revision: 0 })
 const generationServers = ref<CodeGenerationServer[]>([])
@@ -26,6 +30,7 @@ async function toggleEnabled(row: ModelInterface): Promise<boolean> {
   try {
     const items = settings.value.items.map(item => item.id === row.id ? { ...item, enabled: !item.enabled } : { ...item })
     settings.value = await runnerManagementApi.saveModelInterfaces({ items, revision: settings.value.revision })
+    emit('changed')
     ElMessage.success(row.enabled ? '接口已停用' : '接口已启用')
   } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { statusSavingId.value = '' }
@@ -40,6 +45,30 @@ const empty = (): ModelInterface => ({ id: '', name: '', kind: 'chat', endpoint:
   codeDir: 'D:\\aicode\\code', outputFileDir: 'D:\\aicode\\output', stream: true,
   title: '', generationServerId: '', testSystemPrompt: undefined, testUserPrompt: undefined })
 const form = reactive<ModelInterface>(empty()), testForm = reactive<ModelInterface>(empty())
+const formBaseline = ref('')
+const formServer = computed(() => (props.server?.serverId === form.generationServerId ? props.server : undefined)
+  || generationServers.value.find(server => server.serverId === form.generationServerId))
+const serverWorkspace = (server: CodeGenerationServer) => server.generationRoot || server.workspace
+function modelWorkspace(row: ModelInterface) {
+  const server = (props.server?.serverId === row.generationServerId ? props.server : undefined)
+    || generationServers.value.find(server => server.serverId === row.generationServerId)
+  return props.embedded && server ? serverWorkspace(server) : row.prjDir ?? 'D:\\aicode'
+}
+watch(() => form.generationServerId, () => {
+  if (props.embedded && formServer.value) form.prjDir = serverWorkspace(formServer.value)
+})
+const generationServerChoice = computed({
+  get: () => (form.generationServerMode || (form.generationServerId ? 'manual' : 'auto')) === 'manual' ? form.generationServerId || '' : `@${form.generationServerMode || 'auto'}`,
+  set: (value: string) => {
+    form.generationServerMode = value === '@auto' ? 'auto' : value === '@direct' ? 'direct' : 'manual'
+    form.generationServerId = form.generationServerMode === 'manual' ? value : ''
+  },
+})
+function generationServerText(row: ModelInterface) {
+  const name = generationServers.value.find(server => server.serverId === row.generationServerId)?.name || row.generationServerId
+  if (name) return `${row.generationServerMode === 'auto' ? '地址匹配' : '手工关联'}：${name}`
+  return ({ ambiguous: '同一地址有多个实例，请手工选择', local: '本机地址需手工关联远程实例', unmatched: '等待匹配地址的生成服务器上线', direct: '直接连接模型接口' } as Record<string, string>)[row.generationServerMatch || ''] || '按接口地址自动匹配'
+}
 const testTaskId = ref(createGenerationTaskId())
 let testTaskUsed = false
 const formDirectories = computed(() => generationWorkspace(form, '{任务ID}'))
@@ -111,12 +140,12 @@ function buildSampleRequest(config: ModelInterface, prompt: string, url = sample
 }
 const sampleRequest = computed(() => buildSampleRequest(testForm, samplePrompt.value, testUrl.value, testSystemPrompt.value))
 function copySample(row: ModelInterface) {
-  void copyToClipboard(buildSampleRequest({ ...row, prjDir: row.prjDir ?? 'D:\\aicode' }, row.testUserPrompt ?? defaultSamplePrompt(row.kind), sampleUrl,
+  void copyToClipboard(buildSampleRequest({ ...row, prjDir: modelWorkspace(row) }, row.testUserPrompt ?? defaultSamplePrompt(row.kind), sampleUrl,
     row.testSystemPrompt ?? (row.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : ''), createGenerationTaskId()), row.kind === 'chat' ? '请求地址' : 'HTTP 请求')
 }
 function openTest(row: ModelInterface) {
   testTaskId.value = createGenerationTaskId(); testTaskUsed = false
-  Object.assign(testForm, empty(), row, { prjDir: row.prjDir ?? 'D:\\aicode' }); samplePrompt.value = row.testUserPrompt ?? defaultSamplePrompt(row.kind)
+  Object.assign(testForm, empty(), row, { prjDir: modelWorkspace(row) }); samplePrompt.value = row.testUserPrompt ?? defaultSamplePrompt(row.kind)
   testUrl.value = sampleUrl; testSystemPrompt.value = row.testSystemPrompt ?? (row.kind === 'site-script' ? DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT : '')
   promptBaseline.value = promptKey()
   promptSaveError.value = ''
@@ -185,7 +214,10 @@ async function runTest() {
     testing.value = false; testController = null
   }
 }
-const rows = computed(() => settings.value.items.filter(row => [row.name, row.model, row.endpoint, kinds[row.kind]].join(' ').toLowerCase().includes(keyword.value.trim().toLowerCase())))
+const rows = computed(() => settings.value.items.filter(row =>
+  (!props.embedded || scope.value === 'all' || (scope.value === 'server' ? row.generationServerId === props.server?.serverId
+    : !row.generationServerId || !generationServers.value.some(server => server.serverId === row.generationServerId)))
+  && [row.name, row.model, row.endpoint, kinds[row.kind]].join(' ').toLowerCase().includes(keyword.value.trim().toLowerCase())))
 async function load() {
   if (statusSavingId.value) return
   loading.value = true; error.value = ''
@@ -194,7 +226,18 @@ async function load() {
   catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { loading.value = false }
 }
-function edit(row?: ModelInterface) { if (statusSavingId.value) return; Object.assign(form, empty(), row ? { ...row, prjDir: row.prjDir ?? 'D:\\aicode' } : {}); error.value = ''; drawer.value = true }
+function edit(row?: ModelInterface) {
+  if (statusSavingId.value) return
+  Object.assign(form, empty(), row ? { ...row, prjDir: modelWorkspace(row) } : {})
+  if (props.embedded && props.server && !row?.id) {
+    form.generationServerMode = 'manual'; form.generationServerId = props.server.serverId
+    form.prjDir = serverWorkspace(props.server)
+    if (!row) {
+      try { const address = new URL(form.endpoint); address.hostname = props.server.ipAddress; form.endpoint = address.toString() } catch { /* 地址可在表单中手工配置。 */ }
+    }
+  }
+  formBaseline.value = JSON.stringify(form); error.value = ''; drawer.value = true
+}
 function duplicate(row: ModelInterface) {
   if (!canWrite.value || statusSavingId.value || saving.value) return
   const names = new Set(settings.value.items.map(item => item.name))
@@ -217,6 +260,9 @@ function changeKind() {
     form.endpoint = 'http://127.0.0.1:8091/api/ai/site-script/generate'
     form.model = ''
   }
+  if (props.embedded && formServer.value?.ipAddress) {
+    try { const address = new URL(form.endpoint); address.hostname = formServer.value.ipAddress; form.endpoint = address.toString() } catch { /* 保留表单校验。 */ }
+  }
 }
 async function save() {
   if (!form.name.trim() || !form.endpoint.trim() || (needsModel(form.kind) && !form.model.trim())) {
@@ -231,39 +277,52 @@ async function save() {
   if (index < 0) items.push(item); else items[index] = item
   try {
     settings.value = await runnerManagementApi.saveModelInterfaces({ items, revision: settings.value.revision })
+    emit('changed')
     drawer.value = false; ElMessage.success('大模型接口已保存')
   } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { saving.value = false }
 }
 onMounted(load)
+async function beforeLeave(): Promise<boolean> {
+  if (saving.value || statusSavingId.value || testing.value || promptSaving.value) { ElMessage.warning('请先完成接口保存或停止测试，再切换服务器'); return false }
+  if (testOpen.value && !await saveTestPrompts()) return false
+  if (drawer.value && canWrite.value && JSON.stringify(form) !== formBaseline.value) {
+    try { await ElMessageBox.confirm('模型接口有未保存的修改，放弃修改并切换？', '未保存的接口配置', { type: 'warning', confirmButtonText: '放弃修改', cancelButtonText: '继续编辑' }) }
+    catch { return false }
+  }
+  drawer.value = false; testOpen.value = false
+  return true
+}
+defineExpose({ beforeLeave })
 </script>
 
 <template>
-  <section class="mi-page" v-loading="loading">
-    <div class="mi-toolbar"><el-input v-model="keyword" placeholder="搜索名称、模型或接口地址" clearable class="mi-search" /><el-button v-if="canWrite" type="primary" :disabled="loading" data-testid="model-add" @click="edit()">新增接口</el-button><el-button :disabled="loading" @click="load">刷新</el-button></div>
+  <section class="mi-page" :class="{ 'mi-embedded': embedded }" v-loading="loading">
+    <div v-if="embedded" class="mi-server-context"><b>{{ server ? `${server.name} · ${server.ipAddress}` : '大模型接口' }}</b><span v-if="server" :title="serverWorkspace(server)">工作空间：{{ serverWorkspace(server) }}</span></div>
+    <div class="mi-toolbar"><el-select v-if="embedded" v-model="scope" aria-label="模型接口范围" class="mi-scope" data-testid="model-scope"><el-option v-if="server" value="server" label="当前服务器" /><el-option value="all" label="全部接口" /><el-option value="unassigned" label="未关联接口" /></el-select><el-input v-model="keyword" placeholder="搜索名称、模型或接口地址" clearable class="mi-search" /><el-button v-if="canWrite" type="primary" :disabled="loading" data-testid="model-add" @click="edit()">新增接口</el-button><el-button :disabled="loading" @click="load">刷新</el-button></div>
     <p v-if="error && !drawer" class="mi-error" role="alert">{{ error }}</p>
     <el-table :data="rows" class="mi-table" empty-text="暂无匹配的模型接口">
-      <el-table-column label="名称" min-width="160"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">{{ row.name }}</el-button><el-tag v-if="row.isDefault" size="small">默认</el-tag></template></el-table-column>
-      <el-table-column label="类型" width="150"><template #default="{ row }">{{ kinds[row.kind as keyof typeof kinds] }}</template></el-table-column>
-      <el-table-column prop="model" label="模型" width="110"><template #default="{ row }">{{ row.model || '服务端配置' }}</template></el-table-column>
-      <el-table-column prop="endpoint" label="接口地址" min-width="240" show-overflow-tooltip />
-      <el-table-column label="状态" width="125"><template #default="{ row }"><div class="mi-status"><el-switch :model-value="row.enabled" :loading="statusSavingId === row.id" :disabled="!canWrite || loading || !!statusSavingId || saving || promptSaving || testing" :before-change="() => toggleEnabled(row)" :aria-label="`${row.name}启用状态`" :data-testid="`model-toggle-${row.id}`" /><span>{{ row.enabled ? '启用' : '停用' }}</span></div></template></el-table-column>
-      <el-table-column label="操作" width="280"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ row.kind === 'chat' ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button></div></template></el-table-column>
+      <el-table-column label="名称" :min-width="embedded ? 130 : 160"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">{{ row.name }}</el-button><el-tag v-if="row.isDefault" size="small">默认</el-tag><small v-if="embedded" class="mi-row-model">{{ kinds[row.kind as keyof typeof kinds] }} · {{ row.model || '服务端配置' }}</small></template></el-table-column>
+      <el-table-column v-if="!embedded" label="类型" width="150"><template #default="{ row }">{{ kinds[row.kind as keyof typeof kinds] }}</template></el-table-column>
+      <el-table-column v-if="!embedded" prop="model" label="模型" width="110"><template #default="{ row }">{{ row.model || '服务端配置' }}</template></el-table-column>
+      <el-table-column label="接口地址 / 生成机器" :min-width="embedded ? 170 : 240"><template #default="{row}"><div class="mi-endpoint" :title="row.endpoint">{{ row.endpoint }}</div><small>{{ generationServerText(row) }}</small></template></el-table-column>
+      <el-table-column label="状态" :width="embedded ? 95 : 125"><template #default="{ row }"><div class="mi-status"><el-switch :model-value="row.enabled" :loading="statusSavingId === row.id" :disabled="!canWrite || loading || !!statusSavingId || saving || promptSaving || testing" :before-change="() => toggleEnabled(row)" :aria-label="`${row.name}启用状态`" :data-testid="`model-toggle-${row.id}`" /><span>{{ row.enabled ? '启用' : '停用' }}</span></div></template></el-table-column>
+      <el-table-column label="操作" :width="embedded ? 180 : 280"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ row.kind === 'chat' ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button></div></template></el-table-column>
     </el-table>
     <el-drawer v-model="drawer" :title="form.id ? '模型接口配置' : '新增模型接口'" size="min(620px, 94vw)" :close-on-click-modal="false">
       <el-form label-position="top" :disabled="saving || !canWrite" class="mi-form">
         <el-form-item label="接口名称" required><el-input v-model="form.name" maxlength="100" data-testid="model-name" /></el-form-item>
-        <el-form-item label="代码生成服务器"><el-select v-model="form.generationServerId" data-testid="model-generation-server"><el-option value="" label="直接连接模型接口" /><el-option v-for="server in generationServers" :key="server.serverId" :value="server.serverId" :label="`${server.name} · ${server.ipAddress} · ${server.status === 'online' ? '在线' : '离线'}`" /></el-select><span v-if="serverLoadError" class="mi-error">{{ serverLoadError }}</span></el-form-item>
+        <el-form-item label="代码生成服务器"><el-select v-model="generationServerChoice" data-testid="model-generation-server"><el-option value="@auto" label="按接口地址自动匹配" /><el-option value="@direct" label="直接连接模型接口" /><el-option v-for="server in generationServers" :key="server.serverId" :value="server.serverId" :label="`${server.name} · ${server.ipAddress} · ${server.status === 'online' ? '在线' : '离线'}`" /></el-select><span v-if="serverLoadError" class="mi-error">{{ serverLoadError }}</span></el-form-item>
         <div class="mi-pair"><el-form-item label="接口类型"><el-select v-model="form.kind" @change="changeKind"><el-option v-for="(label, key) in kinds" :key="key" :value="key" :label="label" /></el-select></el-form-item><el-form-item label="模型标识" :required="needsModel(form.kind)"><el-input v-model="form.model" :disabled="!needsModel(form.kind)" :placeholder="needsModel(form.kind) ? '例如 hy3' : '由服务端配置'" /></el-form-item></div>
         <el-form-item label="接口地址" required><el-input v-model="form.endpoint" placeholder="http://主机:端口/workbuudy/chat" /></el-form-item>
         <el-form-item v-if="form.kind === 'gemini-agent'" label="任务标题（title）"><el-input v-model="form.title" maxlength="200" placeholder="代码优化测试" /></el-form-item>
         <template v-if="isAgent(form.kind)">
           <p class="mi-note">以下路径均为大模型服务所在机器的目录。</p>
-          <el-form-item label="工作空间（prj_dir）" required><el-input v-model="form.prjDir" placeholder="D:\aicode" data-testid="model-prj-dir" /></el-form-item>
+          <el-form-item :label="embedded && formServer ? '工作空间（来自服务器）' : '工作空间（prj_dir）'" required><el-input v-model="form.prjDir" :readonly="embedded && !!formServer" placeholder="D:\aicode" data-testid="model-prj-dir" /></el-form-item>
           <el-form-item label="输入目录（自动生成）"><el-input :model-value="formDirectories.inputFileDir" readonly /></el-form-item>
           <el-form-item label="代码目录（自动生成）"><el-input :model-value="formDirectories.codeDir" readonly /></el-form-item>
           <el-form-item label="输出目录（自动生成）"><el-input :model-value="formDirectories.outputFileDir" readonly /></el-form-item>
-          <p class="mi-note">接口测试固定复用实例工作目录；流程节点可按配置 ID、MQ 名称或自定义路径设置生成目录，任务 ID 仅用于记录文件名。</p>
+          <p class="mi-note">接口测试的输入、代码和输出目录位于工作空间下。节点生成的工作目录由代码生成服务器设置统一管理。</p>
         </template>
         <el-form-item label="超时（秒）"><el-input-number v-model="form.timeoutSeconds" :min="10" :max="1800" :step="10" /></el-form-item>
         <el-form-item v-if="form.kind === 'agent'" label="浏览器调试端口（cdp_port）"><el-input-number v-model="form.cdpPort" :min="1" :max="65535" :precision="0" controls-position="right" data-testid="model-cdp-port" /></el-form-item>
@@ -314,8 +373,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.mi-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mi-page { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .mi-toolbar { display: flex; align-items: center; gap: 10px; }.mi-search { max-width: 340px; }
+.mi-scope { width:130px; flex-shrink:0; }.mi-embedded .mi-toolbar { flex-wrap:wrap; gap:8px; }.mi-embedded .mi-search { flex:1; min-width:150px; max-width:none; }.mi-embedded .mi-actions { flex-wrap:wrap; gap:4px 10px; white-space:normal; }.mi-server-context { display:flex; gap:8px 16px; align-items:center; flex-wrap:wrap; font-size:13px; }.mi-server-context span,.mi-row-model { font-size:11px; color:var(--el-text-color-secondary); overflow-wrap:anywhere; }.mi-row-model { display:block; }.mi-embedded { min-width:0; }
 .mi-error { color: var(--el-color-danger); margin: 0; }.mi-note { color: var(--el-text-color-secondary); font-size: 12px; }
 .mi-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }.mi-switches { display: flex; flex-wrap: wrap; gap: 20px; }
 .mi-form :deep(.el-select) { width: 100%; }.mi-table :deep(.el-tag) { margin-left: 8px; }

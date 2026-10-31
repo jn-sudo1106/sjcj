@@ -11,15 +11,14 @@ import { canAccess } from '@/composables/usePermission'
 import { useAuthStore } from '@/stores/auth'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
-import RunnerManagementTab from './RunnerManagementTab.vue'
-import RunnerBindingTab from './RunnerBindingTab.vue'
+import ServerConfigurationsTab from './ServerConfigurationsTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 import DataPermissionTab from './DataPermissionTab.vue'
-import ModelInterfacesTab from './ModelInterfacesTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
+import ProgramVersionsTab from './ProgramVersionsTab.vue'
 import UserManagementTab from './UserManagementTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
@@ -27,15 +26,13 @@ import UserManagementTab from './UserManagementTab.vue'
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component; adminOnly?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'model-interfaces', label: '大模型接口', permission: 'settings:nodeType', comp: ModelInterfacesTab },
   { key: 'code-servers', label: '代码生成服务器', permission: 'settings:nodeType', comp: CodeGenerationServersTab },
-  { key: 'runners', label: '服务器', permission: 'settings:runners', comp: RunnerManagementTab },
+  { key: 'runners', label: '服务器', permission: 'settings:runners', comp: ServerConfigurationsTab },
   { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab },
   { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
   { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab },
-  { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab },
   { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab },
-  { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab },
+  { key: 'releases', label: '程序版本', permission: 'settings:releases', comp: ProgramVersionsTab },
   { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission', comp: DataPermissionTab },
   { key: 'users', label: '用户管理', permission: 'settings:users', comp: UserManagementTab, adminOnly: true },
 ]
@@ -46,20 +43,24 @@ const route = useRoute()
 const router = useRouter()
 const active = computed(() => {
   const key = String(route.query.tab ?? '')
-  return tabs.value.find((t) => t.key === (key === 'site-code' ? 'assignments' : key)) ?? tabs.value[0]
+  return tabs.value.find((t) => t.key === (key === 'model-interfaces' ? 'code-servers' : ['site-code', 'assignments'].includes(key) ? 'runners' : key)) ?? tabs.value[0]
 })
 
 // 非法 / 无权限的 tab 值：把地址归一到实际显示的那个，免得书签里留着一个打不开的 tab
 watch(() => route.query.tab, (tab) => {
   // 已经离开本页（跳去源管理、或页面被缓存）时不再归一，否则会把别的页面的 tab 改回 /settings
   if (route.path !== '/settings') return
+  if (tab === 'model-interfaces') {
+    void router.replace({ path: '/settings', query: { ...route.query, tab: 'code-servers', view: 'models' } })
+    return
+  }
   if (tab === 'source-group') {
     void router.replace({ path: '/collect', query: { tab: 'personal', ...(route.query.group ? { group: route.query.group } : {}) } })
     return
   }
   if (tab != null && active.value && tab !== active.value.key && tab !== '') {
-    void router.replace({ path: '/settings', query: tab === 'site-code' && active.value.key === 'assignments'
-      ? { ...route.query, tab: 'assignments', mode: undefined }
+    void router.replace({ path: '/settings', query: ['site-code', 'assignments'].includes(String(tab)) && active.value.key === 'runners'
+      ? { ...route.query, tab: 'runners', mode: undefined }
       : active.value.key === tabs.value[0]?.key ? {} : { tab: active.value.key } })
   }
 }, { immediate: true })
@@ -88,7 +89,7 @@ function editDirectory(configId: string) {
     </div>
     <div class="st-content">
       <KeepAlive>
-        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" :repository-file-path="typeof route.query.filePath === 'string' ? route.query.filePath : ''" :repository-directory-id="typeof route.query.directoryId === 'string' ? route.query.directoryId : ''" @edit-directory="editDirectory" />
+        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" :repository-file-path="typeof route.query.filePath === 'string' ? route.query.filePath : ''" :repository-folder-path="typeof route.query.folderPath === 'string' ? route.query.folderPath : undefined" :repository-directory-id="typeof route.query.directoryId === 'string' ? route.query.directoryId : ''" @edit-directory="editDirectory" />
       </KeepAlive>
     </div>
   </div>

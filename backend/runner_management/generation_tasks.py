@@ -1,14 +1,13 @@
 """Platform-owned, persistent source code-generation jobs.
 
 The browser submits a snapshot of the published flow topology, using its existing
-flow routing. Model requests run here, never in the remote code file service.
+flow routing. CodeServer claims persisted tasks through the platform API.
 """
 import copy
 import hashlib
 import json
 import re
 import threading
-import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -29,7 +28,12 @@ def key(owner):
 def read_config(app, owner):
     with app.store.connect() as db:
         row = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key(owner),)).fetchone()
-    return json.loads(row['setting_value']) if row else {'configId': owner, 'enabled': False, 'generation': None}
+    record = json.loads(row['setting_value']) if row else {'configId': owner, 'enabled': False, 'generation': None}
+    generation = record.get('generation')
+    if generation:
+        from .generation_workspaces import node_defaults
+        record['generation'] = node_defaults(generation)
+    return record
 
 
 def save_config(app, body):
@@ -53,7 +57,10 @@ def save_config(app, body):
                 fields = ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName',
                           'systemPrompt', 'userPrompt', 'url', 'fileNameMode')
                 data = {name: incoming.get(name, '') for name in fields}
-                data.update(workspaceMode=incoming.get('workspaceMode', 'config'), workspacePath=incoming.get('workspacePath', ''))
+                from .generation_workspaces import node_defaults
+                data = node_defaults(data)
+                from .generation_destinations import mode
+                data['destinationMode'] = mode(incoming)
                 if any(not isinstance(value, str) for value in data.values()):
                     raise ApiError('AI 生成配置字段无效')
                 if not data['interfaceId'] or not data['userPrompt'].strip() or not data['systemPrompt'].strip():
@@ -79,13 +86,19 @@ def save_config(app, body):
 
 
 def records(app):
+    from .database_generation import read
     with app.store.connect() as db:
-        rows = db.execute('SELECT setting_value FROM settings WHERE setting_key LIKE ?', (TASK_PREFIX + '%',)).fetchall()
-    return [json.loads(row['setting_value']) for row in rows]
+        rows = db.execute("SELECT task_id FROM generation_jobs WHERE status<>'deleted'").fetchall()
+    return [read(app, row['task_id']) for row in rows]
 
 
 def public(record):
-    return {name: value for name, value in record.items() if name != 'input'}
+    from .database_generation import public as view
+    result = view(record)
+    archive = (record.get('result') or {}).get('archive') or {}
+    result.update(archiveId=archive.get('archiveId', record.get('archiveId', '')),
+                  gitCommit=archive.get('gitCommit', record.get('gitCommit', '')))
+    return result
 
 
 def listing(app):
@@ -93,9 +106,8 @@ def listing(app):
 
 
 def put(app, record):
-    from .directory_layout import store_layout
-    with app.store.connect() as db:
-        store_layout(db, TASK_PREFIX + record['taskId'], record)
+    from .database_generation import put as persist
+    persist(app, record)
 
 
 def submit(app, body):
@@ -171,66 +183,30 @@ def submit(app, body):
                 if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*\.py', data['fileName']):
                     skipped.append({'sourceId': source_id, 'name': name, 'reason': '文件命名所需的队列或域名无效'})
                     continue
-                task_id = uuid.uuid4().hex
-                data['taskId'] = task_id
-                record = {'taskId': task_id, 'sourceId': source_id, 'sourceName': name, 'flowId': flow_id,
-                          'configId': owner, 'nodeName': str(node.get('name', owner))[:200],
-                          'status': 'queued', 'createdAt': stamp(), 'startedAt': '', 'finishedAt': '',
-                          'message': '', 'archiveId': '', 'gitCommit': '', 'input': data}
-                put(app, record)
+                from .database_generation import create, read
+                if not node.get('stepId'):
+                    skipped.append({'sourceId': source_id, 'name': name, 'reason': f'配置 {owner} 缺少流程步骤 ID，请刷新流程后重试'})
+                    continue
+                try:
+                    receipt = create(app, {'sourceId': source_id, 'sourceName': name, 'flowId': flow_id,
+                                          'configId': owner, 'stepId': node['stepId'], 'nodeName': node.get('name', owner),
+                                          'generation': {key: value for key, value in data.items() if isinstance(value, str)}})
+                except ApiError as error:
+                    skipped.append({'sourceId': source_id, 'name': name, 'reason': f'配置 {owner}：{error}'})
+                    continue
+                record = read(app, receipt['job']['taskId'])
                 active.add(identity)
                 created.append(public(record))
             if not count:
                 skipped.append({'sourceId': source_id, 'name': name, 'reason': '没有保存 AI 生成配置的启用节点'})
-    ensure_worker(app)
     return {'created': created, 'skipped': skipped}
 
 
-def run_one(app, record):
-    record.update(status='running', startedAt=stamp())
-    put(app, record)
-    try:
-        from .model_interfaces import generate
-        data = record['input']
-        result = generate(app, data)
-        archive = result.get('archive')
-        if archive:
-            record.update(archiveId=archive['archiveId'], gitCommit=archive.get('gitCommit', ''))
-            if archive['status'] == 'failed':
-                raise RuntimeError(archive.get('message') or '生成文件归档失败')
-            record['message'] = '已生成并提交 Git' if archive['status'] == 'committed' else '已生成，等待手工提交 Git'
-        else:
-            published = app.publish_site_code({**data, 'code': result['code'], 'codeType': 'site'})
-            record.update(gitCommit=published.get('gitCommit', ''), message='已生成并保存到代码仓库')
-        record['status'] = 'succeeded'
-    except Exception as exc:
-        record.update(status='failed', message=str(exc)[:1500])
-    record['finishedAt'] = stamp()
-    put(app, record)
-
-
 def ensure_worker(app):
-    with LOCK:
-        if getattr(app, '_generation_worker', None) and app._generation_worker.is_alive():
-            return
-        def work():
-            while True:
-                with LOCK:
-                    queued = sorted((row for row in records(app) if row['status'] == 'queued'), key=lambda row: row['createdAt'])
-                    if not queued:
-                        app._generation_worker = None
-                        return
-                    row = queued[0]
-                run_one(app, row)
-        app._generation_worker = threading.Thread(target=work, name='source-code-generation', daemon=True)
-        app._generation_worker.start()
+    """Retained for source compatibility; CodeServer now claims tasks by API."""
+    return
 
 
 def recover(app):
-    # Never repeat a possibly completed model/Git call after an unclean restart.
-    with LOCK:
-        for record in records(app):
-            if record['status'] == 'running':
-                record.update(status='failed', finishedAt=stamp(), message='管理服务重启，生成结果待核对；请检查仓库后重新创建任务')
-                put(app, record)
-    ensure_worker(app)
+    from .database_generation import recover as recover_database
+    recover_database(app)

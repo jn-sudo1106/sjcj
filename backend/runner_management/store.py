@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS runners (
     install_directory TEXT NOT NULL, platform TEXT NOT NULL, capabilities TEXT NOT NULL,
     token_hash TEXT NOT NULL, status TEXT NOT NULL, last_heartbeat TEXT,
     desired_digest TEXT, actual_digest TEXT, last_error TEXT, worker_digests TEXT,
-    runner_pid INTEGER, worker_processes TEXT, os_type TEXT, os_version TEXT
+    runner_pid INTEGER, worker_processes TEXT, os_type TEXT, os_version TEXT, launcher_version TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS runners_location ON runners(ip_address, install_directory);
 CREATE TABLE IF NOT EXISTS config_runner_bindings (
@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS runner_upgrades (
 CREATE TABLE IF NOT EXISTS settings (
     setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS generation_jobs (
+    task_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, flow_id TEXT NOT NULL,
+    config_id TEXT NOT NULL, interface_id TEXT NOT NULL, status TEXT NOT NULL, server_id TEXT NOT NULL,
+    created_at TEXT NOT NULL, lease_until REAL NOT NULL DEFAULT 0, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS generation_jobs_pending ON generation_jobs(status,interface_id,created_at);
+CREATE INDEX IF NOT EXISTS generation_jobs_source ON generation_jobs(source_id,created_at);
 CREATE TABLE IF NOT EXISTS code_repositories (
     repo_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, local_path TEXT NOT NULL UNIQUE,
     remote_url TEXT NOT NULL, branch TEXT NOT NULL, is_default INTEGER NOT NULL,
@@ -106,7 +113,7 @@ class Store:
             columns = {row[1] for row in db.execute("PRAGMA table_info(runners)")}
             if "worker_digests" not in columns:
                 db.execute("ALTER TABLE runners ADD COLUMN worker_digests TEXT")
-            for name, definition in (("runner_pid", "INTEGER"), ("worker_processes", "TEXT"), ("os_type", "TEXT"), ("os_version", "TEXT")):
+            for name, definition in (("runner_pid", "INTEGER"), ("worker_processes", "TEXT"), ("os_type", "TEXT"), ("os_version", "TEXT"), ("launcher_version", "TEXT")):
                 if name not in columns:
                     db.execute(f"ALTER TABLE runners ADD COLUMN {name} {definition}")
             assignment_columns = {row[1] for row in db.execute("PRAGMA table_info(assignments)")}
@@ -157,7 +164,7 @@ class Store:
 
 
 MYSQL_TABLES = ("runners", "enrollment_codes", "releases", "assignments", "script_bindings", "runner_upgrades",
-                "code_assets", "code_versions", "code_runtime_bindings", "settings",
+                "code_assets", "code_versions", "code_runtime_bindings", "settings", "generation_jobs",
                 "code_repositories", "code_repo_rules", "config_runner_bindings", "queue_runner_bindings", "directory_runner_bindings", "directory_deliveries") + LOG_TABLES
 MYSQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ce_runner_runners (
@@ -167,7 +174,7 @@ CREATE TABLE IF NOT EXISTS ce_runner_runners (
     token_hash CHAR(64) NOT NULL, status VARCHAR(20) NOT NULL,
     last_heartbeat VARCHAR(50), desired_digest VARCHAR(100), actual_digest VARCHAR(100),
     last_error VARCHAR(500), worker_digests TEXT, runner_pid BIGINT, worker_processes LONGTEXT,
-    os_type VARCHAR(64), os_version VARCHAR(255),
+    os_type VARCHAR(64), os_version VARCHAR(255), launcher_version VARCHAR(80),
     UNIQUE KEY runner_location (ip_address, install_directory),
     UNIQUE KEY runner_token (token_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -248,6 +255,12 @@ CREATE TABLE IF NOT EXISTS ce_runner_code_runtime_bindings (
 CREATE TABLE IF NOT EXISTS ce_runner_settings (
     setting_key VARCHAR(100) PRIMARY KEY, setting_value LONGTEXT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ce_runner_generation_jobs (
+    task_id VARCHAR(80) PRIMARY KEY, source_id VARCHAR(80) NOT NULL, flow_id VARCHAR(80) NOT NULL,
+    config_id VARCHAR(80) NOT NULL, interface_id VARCHAR(80) NOT NULL, status VARCHAR(20) NOT NULL, server_id VARCHAR(80) NOT NULL,
+    created_at VARCHAR(50) NOT NULL, lease_until DOUBLE NOT NULL DEFAULT 0, payload LONGTEXT NOT NULL,
+    INDEX generation_jobs_pending (status,interface_id,created_at), INDEX generation_jobs_source (source_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_code_repositories (
     repo_id VARCHAR(80) PRIMARY KEY, name VARCHAR(60) NOT NULL,
     local_path VARCHAR(512) NOT NULL, remote_url VARCHAR(1000) NOT NULL,
@@ -301,7 +314,7 @@ class MySqlStore:
                 for statement in (MYSQL_SCHEMA + MYSQL_LOG_SCHEMA).split(";"):
                     if statement.strip():
                         cursor.execute(statement)
-                for name, definition in (("runner_pid", "BIGINT NULL"), ("worker_processes", "LONGTEXT NULL"), ("os_type", "VARCHAR(64) NULL"), ("os_version", "VARCHAR(255) NULL")):
+                for name, definition in (("runner_pid", "BIGINT NULL"), ("worker_processes", "LONGTEXT NULL"), ("os_type", "VARCHAR(64) NULL"), ("os_version", "VARCHAR(255) NULL"), ("launcher_version", "VARCHAR(80) NULL")):
                     cursor.execute("SHOW COLUMNS FROM ce_runner_runners LIKE %s", (name,))
                     if not cursor.fetchone():
                         cursor.execute(f"ALTER TABLE ce_runner_runners ADD COLUMN {name} {definition}")

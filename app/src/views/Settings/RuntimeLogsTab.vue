@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { copyToClipboard } from '@/utils/clipboard'
 import { formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
+import CodeServerLogsPanel from './CodeServerLogsPanel.vue'
 import { runnerManagementApi, type RunnerInstance, type RuntimeLogRecord, type RuntimeLogDetail, type RuntimeLogLine, type RuntimeLogPolicy } from '@/api/runnerManagement'
 
 const route = useRoute(), router = useRouter()
@@ -13,6 +14,7 @@ const auth = useAuthStore()
 const settingsOpen = ref(false), settingsLoading = ref(false), settingsError = ref(''), settingsSaving = ref(false)
 const settings = ref<RuntimeLogPolicy>({ directory: '', retentionDays: 30, quotaMb: 1024, hasLogs: false })
 const filters = reactive({ keyword: '', runnerId: '', kind: '', status: '', period: '24', page: 1 })
+const codeServerMode = computed(() => filters.kind === 'code-server')
 const kinds: Record<string, string> = { delivery: '代码下发', start: '请求启动', stop: '请求停止', run: '程序运行', runner: 'Runner 日志' }
 const statuses: Record<string, string> = { pending: '等待处理', checking: '启动检查中', running: '运行中', success: '已完成', partial: '部分实例失败', failed: '失败', stopped: '已停止', exited: '已退出', paused: '反复失败已暂停', unknown: '结果待确认' }
 const tabs = [{ key: 'events', label: '执行过程' }, { key: 'output', label: '程序输出' }, { key: 'results', label: '任务结果' }, { key: 'info', label: '运行信息' }]
@@ -33,7 +35,7 @@ const follow = ref(true), search = ref(''), errorsOnly = ref(false), consoleBox 
 const runtimeId = computed(() => typeof route.query.runtimeId === 'string' ? route.query.runtimeId : '')
 const queryText = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : ''
 const processContext = computed(() => !!queryText('processPid'))
-const scopeKey = computed(() => JSON.stringify(['runtimeId', 'recordId', 'runnerId', 'assignmentId', 'processPid', 'processSlot'].map(queryText)))
+const scopeKey = computed(() => JSON.stringify(['runtimeId', 'recordId', 'runnerId', 'assignmentId', 'processPid', 'processSlot', 'kind', 'serverId'].map(queryText)))
 let loadedScope = ''
 const programError = computed(() => {
   if (!detail.value || !(detail.value.status === 'failed' || detail.value.status === 'paused' || (detail.value.run?.exit_code ?? 0) !== 0)) return ''
@@ -65,6 +67,7 @@ function poll() {
 }
 async function load(background = false) {
   const seq = ++listSeq
+  if (codeServerMode.value) { loading.value = false; return }
   if (!background) { loading.value = true; error.value = '' }
   try {
     const since = filters.period && filters.period !== 'all' ? new Date(Date.now() - Number(filters.period) * 3600000).toISOString() : ''
@@ -89,7 +92,7 @@ async function query() { filters.page = 1; resetSelection(); await refresh() }
 function applyScope() {
   loadedScope = scopeKey.value
   search.value = ''; errorsOnly.value = false; follow.value = true
-  Object.assign(filters, { keyword: '', runnerId: queryText('runnerId'), kind: processContext.value ? 'run' : '', status: '', period: processContext.value ? 'all' : '24', page: 1 })
+  Object.assign(filters, { keyword: '', runnerId: queryText('runnerId'), kind: queryText('kind') === 'code-server' ? 'code-server' : processContext.value ? 'run' : '', status: '', period: processContext.value ? 'all' : '24', page: 1 })
   resetSelection()
 }
 async function select(id: string) {
@@ -197,22 +200,23 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
 <template>
   <section class="rl-page" data-testid="settings-runtime-logs">
     <div class="rl-filters">
-      <el-input v-model="filters.keyword" clearable :prefix-icon="Search" placeholder="部署名称、流程节点、配置 ID 或 MQ" aria-label="搜索运行日志" @keyup.enter="query" />
-      <el-select v-model="filters.runnerId" filterable clearable placeholder="全部实例" aria-label="日志实例" @change="changeInstance">
+      <el-input v-if="!codeServerMode" v-model="filters.keyword" clearable :prefix-icon="Search" placeholder="部署名称、流程节点、配置 ID 或 MQ" aria-label="搜索运行日志" @keyup.enter="query" />
+      <el-select v-if="!codeServerMode" v-model="filters.runnerId" filterable clearable placeholder="全部实例" aria-label="日志实例" @change="changeInstance">
         <el-option v-for="machine in machines" :key="machine.runnerId" :value="machine.runnerId" :label="`${machine.ipAddress} · ${machine.installDirectory} · ${machine.runnerId} · ${machine.name}`" class="rl-instance-option">
           <strong>{{ machine.ipAddress }} · {{ machine.name }}</strong><small>{{ machine.installDirectory }}</small><small>实例 ID：{{ machine.runnerId }}</small>
         </el-option>
       </el-select>
-      <el-select v-model="filters.kind" :disabled="processContext" placeholder="全部类型" aria-label="日志类型" @change="query"><el-option label="全部类型" value="" /><el-option v-for="(label, key) in kinds" :key="key" :value="key" :label="label" /></el-select>
-      <el-select v-model="filters.status" placeholder="全部结果" aria-label="日志结果" @change="query"><el-option label="全部结果" value="" /><el-option v-for="(label, key) in statuses" :key="key" :value="key" :label="label" /></el-select>
-      <el-select v-model="filters.period" aria-label="日志时间范围" @change="query"><el-option label="最近 24 小时" value="24" /><el-option label="最近 7 天" value="168" /><el-option label="全部时间" value="all" /></el-select>
-      <el-button :icon="Search" aria-label="查询运行日志" @click="query" /><el-button :icon="Refresh" circle :loading="loading" aria-label="刷新运行日志" @click="refresh" />
-      <el-button v-if="auth.role === 'admin'" link @click="openSettings">日志设置</el-button>
+      <el-select v-model="filters.kind" :disabled="processContext" placeholder="全部类型" aria-label="日志类型" @change="query"><el-option label="全部类型" value="" /><el-option v-for="(label, key) in kinds" :key="key" :value="key" :label="label" /><el-option label="代码生成服务" value="code-server" /></el-select>
+      <el-select v-if="!codeServerMode" v-model="filters.status" placeholder="全部结果" aria-label="日志结果" @change="query"><el-option label="全部结果" value="" /><el-option v-for="(label, key) in statuses" :key="key" :value="key" :label="label" /></el-select>
+      <el-select v-if="!codeServerMode" v-model="filters.period" aria-label="日志时间范围" @change="query"><el-option label="最近 24 小时" value="24" /><el-option label="最近 7 天" value="168" /><el-option label="全部时间" value="all" /></el-select>
+      <template v-if="!codeServerMode"><el-button :icon="Search" aria-label="查询运行日志" @click="query" /><el-button :icon="Refresh" circle :loading="loading" aria-label="刷新运行日志" @click="refresh" /></template>
+      <el-button v-if="!codeServerMode && auth.role === 'admin'" link @click="openSettings">日志设置</el-button>
     </div>
     <div v-if="processContext" class="rl-context" data-testid="process-log-context">当前进程：PID {{ queryText('processPid') }} · 并发 {{ Number(queryText('processSlot')) + 1 }} · 实例 ID：{{ queryText('runnerId') }}<el-button link @click="changeInstance(queryText('runnerId'))">查看实例日志</el-button><el-button link @click="clearBinding">查看全部日志</el-button></div>
     <div v-else-if="runtimeId" class="rl-context">当前绑定：{{ detail?.snapshot.name || runtimeId }}<el-button link @click="clearBinding">查看全部绑定</el-button></div>
     <el-alert v-if="error" :title="`日志查询失败：${error}`" type="error" :closable="false" show-icon />
-    <div class="rl-workspace">
+    <CodeServerLogsPanel v-if="codeServerMode" />
+    <div v-else class="rl-workspace">
       <aside class="rl-records" v-loading="loading">
         <header><strong>{{ processContext ? '当前进程运行记录' : '下发与运行记录' }}</strong><span>{{ total }} 条</span></header>
         <div class="rl-record-list">

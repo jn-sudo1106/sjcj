@@ -17,6 +17,18 @@ const router = createRouter({
 describe('全局任务中心', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('支持从链接进入代码生成页签，并能切回采集任务', async () => {
+    await router.push('/tasks?tab=code-generation')
+    const wrapper = mount(RunRecords, { global: { plugins: [router], stubs: { TaskView: true, CodeGenerationTasks: true } } })
+    expect(wrapper.findComponent({ name: 'CodeGenerationTasks' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'TaskView' }).exists()).toBe(false)
+    await wrapper.get('nav button').trigger('click')
+    await flushPromises()
+    expect(routeTab()).toBeUndefined()
+    expect(wrapper.findComponent({ name: 'TaskView' }).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('直接查询全部源任务，并沿用源任务页的状态与源筛选', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -58,3 +70,5 @@ describe('全局任务中心', () => {
     wrapper.unmount()
   })
 })
+
+function routeTab() { return router.currentRoute.value.query.tab }

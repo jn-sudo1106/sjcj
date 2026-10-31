@@ -1,4 +1,6 @@
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
+import { DEFAULT_API_PROXY_TARGET } from '@/constants/backend'
+import { flowSourcesEndpoint } from './flowBackend'
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionBackend, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
@@ -523,7 +525,8 @@ export const sourceApi = {
   sourcePaged: async (p?: PageQuery) => {
     const result = await request<unknown>('source/sourcePaged', p, {
       method: 'POST',
-      httpEndpoint: import.meta.env.VITE_FLOW_PROXY_TARGET && p?.flowId ? 'flow/flowSources' : 'source/sourcePaged',
+      httpEndpoint: flowSourcesEndpoint(p?.flowId, import.meta.env.VITE_FLOW_PROXY_TARGET,
+        import.meta.env.VITE_API_PROXY_TARGET || import.meta.env.VITE_AUTH_PROXY_TARGET || DEFAULT_API_PROXY_TARGET),
       httpParams: {
         pageNo: p?.page ?? 1,
         pageSize: p?.size ?? 20,
@@ -850,19 +853,10 @@ export const sourceApi = {
   /** 只读查询启用的 201 派发配置，和发送接口使用同一后端。 */
   codeConfigOptions: (): Promise<CodeConfigOption[]> =>
     request<CodeConfigOption[]>('source/codeConfigOptions', undefined, { method: 'GET', mode: 'http' }),
-  /** 独立 MQ 代码生成；configId 为 201 派发配置，queue 省略时使用该配置的 TOPIC。 */
+  /** 代码生成任务保存到管理数据库，通过 CodeServer 接口领取。 */
   sendCodeConfig: async (payload: SendCodeConfigPayload): Promise<SendCodeConfigResult> => {
-    try {
-      return await request<SendCodeConfigResult>('source/sendCodeConfig', { ...payload }, {
-        method: 'POST', httpEndpoint: 'source/sendCodeConfig', mode: 'http',
-      })
-    } catch (error) {
-      // 后端部分失败仍携带真实任务回执，让界面保留已派发的任务 ID 和逐项错误。
-      const cause = error instanceof ApiError ? error.cause as { payload?: { data?: SendCodeConfigResult } } | undefined : undefined
-      const receipt = cause?.payload?.data
-      if (receipt && receipt.failCnt > 0 && Array.isArray(receipt.tasks) && Array.isArray(receipt.taskIds)) return receipt
-      throw error
-    }
+    const { submitDatabaseCodeTasks } = await import('./databaseCodeTasks')
+    return submitDatabaseCodeTasks(payload)
   },
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {

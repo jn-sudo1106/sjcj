@@ -60,6 +60,41 @@ class RepositoryTypeCatalogTest(unittest.TestCase):
             self.save()
         self.assertEqual(caught.exception.code, 502)
 
+    def test_reclassify_referenced_directory_preserves_node_code_and_versions(self):
+        self.upstream({'code': None, 'data': {'list': [
+            {'sourceType': 90, 'typeName': '网页抓取'},
+            {'sourceType': 95, 'typeName': '文件下载'}]}})
+        directory = self.save('90', 'dongws', 'dongws')
+        route = '/api/runner-management'
+        payload = {'configId': '1401081', 'queueName': 'web', 'configType': '90',
+                   'repositoryId': directory['repoId'], 'directoryId': directory['directoryId'],
+                   'codeType': 'default', 'code': 'def scrape(url):\n    return []\n'}
+        code = self.request(route + '/site-scripts/publish', payload)
+        with self.app.store.connect() as db:
+            asset_before = dict(db.execute('SELECT * FROM code_assets WHERE code_id=?', (code['codeId'],)).fetchone())
+            versions_before = [dict(row) for row in db.execute('SELECT * FROM code_versions WHERE code_id=?', (code['codeId'],)).fetchall()]
+        from backend.runner_management.repository_directories import save_directory, get_directory
+        update = Request(self.url + route + '/settings/code-repos/' + directory['repoId'] + '/directories/' + directory['directoryId'],
+            data=json.dumps({**directory, 'configType': '95'}).encode(),
+            headers={'Content-Type': 'application/json', 'Cookie': 'test-session=only-for-mock'})
+        with urlopen(update, timeout=5) as response:
+            changed = json.load(response)
+        self.assertEqual(changed['configTypeName'], '文件下载')
+        self.assertEqual(changed['path'], 'dongws')
+        self.assertEqual(changed['directoryId'], directory['directoryId'])
+        with self.app.store.connect() as db:
+            self.assertEqual(dict(db.execute('SELECT * FROM code_assets WHERE code_id=?', (code['codeId'],)).fetchone()), asset_before)
+            self.assertEqual([dict(row) for row in db.execute('SELECT * FROM code_versions WHERE code_id=?', (code['codeId'],)).fetchall()], versions_before)
+            get_directory(self.app, db, directory['repoId'], directory['directoryId'], '95')
+            from backend.runner_management.server import ApiError
+            with self.assertRaises(ApiError):
+                get_directory(self.app, db, directory['repoId'], directory['directoryId'], '90')
+        from pathlib import Path
+        repo = self.request(route + '/settings/code-repos')[0]
+        self.assertEqual((Path(repo['path']) / code['storagePath']).read_text(encoding='utf8'), payload['code'])
+        with self.assertRaises(ApiError):
+            save_directory(self.app, directory['repoId'], directory, directory['directoryId'])
+
     def test_expired_catalog_session_reports_login_error(self):
         self.upstream({}, 302)
         with self.assertRaises(HTTPError) as caught:

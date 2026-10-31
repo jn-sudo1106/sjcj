@@ -7,8 +7,9 @@ import { useDictStore } from '@/stores/dict'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type CodeRepositoryInput, type CodeRepositoryVerification } from '@/api/runnerManagement'
 import RepositoryDirectoriesPanel from './RepositoryDirectoriesPanel.vue'
 import RepositoryFileReferencesDrawer from './RepositoryFileReferencesDrawer.vue'
+import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
 
-const props = defineProps<{ repositoryId?: string; repositoryFilePath?: string; repositoryDirectoryId?: string }>()
+const props = defineProps<{ repositoryId?: string; repositoryFilePath?: string; repositoryFolderPath?: string; repositoryDirectoryId?: string }>()
 
 const canWrite = computed(() => useAuthStore().role === 'admin')
 const dict = useDictStore()
@@ -280,7 +281,7 @@ function openFolder(path: string) {
 function directoriesLoaded(rows: CodeRepositoryDirectory[]) {
   repositoryDirectories.value = rows
   directoriesReady = true
-  if (props.repositoryFilePath && selectedRepoId.value === props.repositoryId) { void openLinkedFile(); return }
+  if ((props.repositoryFilePath || props.repositoryFolderPath !== undefined || props.repositoryDirectoryId) && selectedRepoId.value === props.repositoryId) { void openLinkedTarget(); return }
   if (!selectedDirectory.value && folderPath.value) {
     const configured = rows.find(directory => directory.path === folderPath.value)
     if (configured) selectDirectory(configured)
@@ -291,28 +292,31 @@ function openFileRow(row: CodeRepositoryFile) {
   const prefix = selectedDirectory.value ? selectedDirectory.value.path + '/' : ''
   openFolder(row.path.slice(prefix.length))
 }
-async function openLinkedFile() {
-  const repoId = props.repositoryId, path = props.repositoryFilePath?.trim().replaceAll('\\', '/')
-  if (!repoId || !path || selectedRepoId.value !== repoId || !directoriesReady) return
-  const key = JSON.stringify([repoId, path, props.repositoryDirectoryId])
+async function openLinkedTarget() {
+  const repoId = props.repositoryId, file = props.repositoryFilePath?.trim().replaceAll('\\', '/')
+  const directory = repositoryDirectories.value.find(row => row.directoryId === props.repositoryDirectoryId)
+  const path = file || props.repositoryFolderPath?.trim().replaceAll('\\', '/').replace(/\/$/, '') || (props.repositoryFolderPath === undefined ? directory?.path : '') || ''
+  if (!repoId || (!file && props.repositoryFolderPath === undefined && !directory) || selectedRepoId.value !== repoId || !directoriesReady) return
+  const key = JSON.stringify([repoId, file, path, props.repositoryDirectoryId])
   if (linkedTargetKey === key) return
   linkedTargetKey = key
-  const candidates = repositoryDirectories.value.filter(row => path.startsWith(row.path + '/'))
+  const candidates = repositoryDirectories.value.filter(row => (!file && path === row.path) || path.startsWith(row.path + '/'))
   selectedDirectory.value = candidates.find(row => row.directoryId === props.repositoryDirectoryId)
     || candidates.sort((a, b) => b.path.length - a.path.length)[0] || null
   const relative = selectedDirectory.value ? path.slice(selectedDirectory.value.path.length + 1) : path
-  folderPath.value = relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : ''
+  folderPath.value = file ? relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : '' : relative
   fileView.value = 'directory'
   fileKeyword.value = ''
-  await Promise.allSettled([loadFiles(1), previewFile({ path })])
+  if (file) await Promise.allSettled([loadFiles(1), previewFile({ path })])
+  else { previewRequestId++; previewOpen.value = false; await loadFiles(1) }
 }
-watch(() => [props.repositoryId, props.repositoryFilePath, props.repositoryDirectoryId], async () => {
+watch(() => [props.repositoryId, props.repositoryFilePath, props.repositoryFolderPath, props.repositoryDirectoryId], async () => {
   const value = props.repositoryId
   linkedTargetKey = ''
   if (value && repos.value.some(repo => repo.repoId === value)) {
     filter.value = ''
     await selectRepo(value)
-    await openLinkedFile()
+    await openLinkedTarget()
   }
 })
 async function previewFile(row: Pick<CodeRepositoryFile, 'path'>) {
@@ -443,15 +447,16 @@ onMounted(() => { void load() })
           <p v-if="fileError" class="crp-error" role="alert">{{ fileError }}</p>
           <div class="crp-file-scroll">
             <table class="rc-data-table crp-files-table">
-              <thead><tr><th>{{ fileView === 'directory' ? '名称' : '文件路径' }}</th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
+              <thead><tr><th>{{ fileView === 'directory' ? '名称' : '文件路径' }}</th><th class="crp-file-time" title="最后一次 Git 提交时间，按北京时间展示">更新时间</th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="row in fileRows" :key="row.path" class="crp-file-row" :class="{ 'crp-file-selected': previewPath === row.path }" :data-testid="`code-repo-file-${row.path}`" @click="openFileRow(row)">
                   <td class="crp-file-path" :title="row.path"><button type="button" class="crp-file-link" :data-testid="`code-repo-preview-${row.path}`" @click.stop="openFileRow(row)"><el-icon v-if="fileView === 'directory'" :class="{ 'crp-folder-icon': row.kind === 'directory' }"><Folder v-if="row.kind === 'directory'" /><Document v-else /></el-icon>{{ fileView === 'directory' ? row.path.split('/').at(-1) : row.path }}</button></td>
+                  <td class="crp-file-time" :title="row.updatedAt ? `最后提交：${formatRunnerDateTime(row.updatedAt)}` : '暂无 Git 提交时间'">{{ formatRunnerDateTime(row.updatedAt, '—') }}</td>
                   <td>{{ row.size === null ? '—' : `${row.size} B` }}</td>
                   <td>{{ row.kind === 'directory' ? '文件夹' : row.managed ? '流程代码' : '普通文件' }}</td>
-                  <td><el-button v-if="row.kind === 'directory'" link type="primary" @click.stop="openFileRow(row)">打开</el-button><template v-else><el-button link type="primary" :data-testid="`code-repo-references-${row.path}`" @click.stop="referencesDrawer?.open(filesRepo!.repoId, row.path)">查看引用</el-button><el-button v-if="canWrite && row.canDelete" link type="danger" :loading="deletingPath === row.path" :data-testid="`code-repo-delete-${row.path}`" @click.stop="deleteFile(row)">删除</el-button><span v-else class="crp-muted">{{ row.managed ? '受保护' : '不可删除' }}</span></template></td>
+                  <td><el-button v-if="row.kind === 'directory'" link type="primary" @click.stop="openFileRow(row)">打开</el-button><template v-else><el-button link type="primary" :data-testid="`code-repo-references-${row.path}`" @click.stop="referencesDrawer?.open(filesRepo!.repoId, row.path)">查看引用</el-button><el-button v-if="canWrite && row.canDelete" link type="danger" :loading="deletingPath === row.path" :data-testid="`code-repo-delete-${row.path}`" @click.stop="deleteFile(row)">删除</el-button><span v-else class="crp-muted" :title="row.deleteReason">{{ row.deleteReason ? '仍有关联' : row.managed ? '受保护' : '不可删除' }}</span></template></td>
                 </tr>
-                <tr v-if="!fileLoading && !fileRows.length"><td colspan="4">暂无匹配文件</td></tr>
+                <tr v-if="!fileLoading && !fileRows.length"><td colspan="5">暂无匹配文件</td></tr>
               </tbody>
             </table>
           </div>
@@ -481,7 +486,7 @@ onMounted(() => { void load() })
         <pre v-else class="crp-preview-code">{{ previewContent }}</pre>
       </div>
     </el-drawer>
-    <RepositoryFileReferencesDrawer ref="referencesDrawer" />
+    <RepositoryFileReferencesDrawer ref="referencesDrawer" :can-write="canWrite" @changed="loadFiles()" />
   </div>
 </template>
 
@@ -506,6 +511,7 @@ onMounted(() => { void load() })
 .crp-breadcrumb { display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:12px; color:var(--rc-muted); }.crp-breadcrumb button { border:0; background:transparent; color:var(--rc-primary); cursor:pointer; padding:2px; }.crp-file-link { display:inline-flex; align-items:center; gap:6px; }.crp-folder-icon { color:var(--el-color-warning); }
 .crp-file-search { width: min(230px, 45%); }.crp-file-link { padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; }
 .crp-files-table td { padding-top:7px; padding-bottom:7px; }
+.crp-files-table .crp-file-time { width:158px; white-space:nowrap; font-size:12px; font-variant-numeric:tabular-nums; }
 .crp-file-link:hover { text-decoration: underline; }.crp-file-row { cursor: pointer; }.crp-file-row:hover, .crp-file-selected { background: var(--rc-primary-bg); }
 .crp-preview-detail { height: 100%; overflow: auto; }.crp-preview-code { margin: 0; padding: 12px; overflow: auto; font-size: 12px; line-height: 1.6; white-space: pre; }.crp-preview-empty { margin: auto; color: var(--rc-muted); font-size: 12px; }
 .crp-scroll { max-height: 34vh; min-height: 0; overflow: auto; }.crp-table td { white-space: nowrap; }.crp-table tbody tr:not(.crp-verification) { cursor: pointer; }.crp-repo-selected { background: var(--rc-primary-bg); }

@@ -41,7 +41,7 @@ MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024
 MAX_UPLOAD_TOTAL_BYTES = 10 * 1024 * 1024
 RUNNER_OFFLINE_AFTER_SECONDS = 15
 RUNNER_SWEEP_INTERVAL_SECONDS = 5
-GIT_LOCK = threading.Lock()
+GIT_LOCK = threading.RLock()
 RESPONSE_SENT = object()
 
 
@@ -72,7 +72,7 @@ def as_runner(row, assignment_count=0) -> dict:
         "desiredDigest": row["desired_digest"], "actualDigest": row["actual_digest"],
         "assignmentCount": assignment_count, "lastError": row["last_error"],
         "workerDigests": row["worker_digests"],
-        "runnerPid": row['runner_pid'],
+        "runnerPid": row['runner_pid'], "launcherVersion": row['launcher_version'],
         "workerProcesses": json.loads(row['worker_processes']) if row['worker_processes'] is not None else None,
     }
 
@@ -619,6 +619,8 @@ class Application:
             from .repository_directories import get_directory, managed_paths
             prefix = get_directory(self, db, repo_id, directory_id, active=False)['path'] + '/' if directory_id else ''
             protected_paths = managed_paths(db, repo_id)
+            from .repository_delete_policy import policy, reason as deletion_reason
+            deletion_rules = policy(self, db, repo_id)
         repo = Path(row["local_path"])
         if not repo.is_dir() or not (repo / ".git").exists():
             raise ApiError("服务器仓库目录不存在或不是 Git 仓库", 409)
@@ -648,12 +650,15 @@ class Application:
         commit = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=repo,
                                 capture_output=True, text=True, timeout=10, check=False)
         head = commit.stdout.strip() if commit.returncode == 0 else ""
+        from .repository_metadata import file_times
+        visible_names = names[(page - 1) * 50:page * 50]
+        updated = file_times(repo, head, visible_names)
         items = []
-        for name in names[(page - 1) * 50:page * 50]:
+        for name in visible_names:
             relative = Path(name)
             if name in folders:
                 items.append({'path': name, 'kind': 'directory', 'size': None,
-                              'managed': False, 'canDelete': False, 'gitUrl': ''})
+                              'managed': False, 'canDelete': False, 'gitUrl': '', 'updatedAt': updated.get(name)})
                 continue
             target = repo / relative
             managed = relative.parts[0].lower() == "code" or relative.as_posix() in protected_paths
@@ -661,9 +666,12 @@ class Application:
                     and not any((repo / Path(*relative.parts[:index])).is_symlink()
                                 for index in range(1, len(relative.parts))))
             exists = safe and target.is_file()
+            delete_reason = deletion_reason(deletion_rules, name)
             items.append({"path": relative.as_posix(), "size": target.stat().st_size if exists else None,
-                          "managed": managed, "canDelete": exists and not managed,
+                          "managed": managed, "canDelete": exists and not delete_reason and row['status'] == 'ACTIVE',
+                          "deleteReason": delete_reason,
                           "kind": "file",
+                          "updatedAt": updated.get(name),
                           "gitUrl": self.git_url_for(row, head, relative) if head else ""})
         return {"repoId": repo_id, "uploadDirectory": upload_directory, "total": total,
                 "page": page, "pageSize": 50, "items": items}
@@ -708,18 +716,19 @@ class Application:
         return {"repoId": repo_id, "path": relative.as_posix(), "size": len(data), "content": content,
                 "gitCommit": commit}
 
-    def delete_repository_file(self, repo_id: str, raw_path: str) -> dict:
+    def delete_repository_file(self, repo_id: str, raw_path: str, *, association: bool = False) -> dict:
         if not isinstance(raw_path, str) or not raw_path or len(raw_path) > 500:
             raise ApiError("文件路径无效")
         normalized = raw_path.replace("\\", "/")
-        directory, _, name = normalized.rpartition("/")
-        relative = self.upload_path(directory, name)
+        from .directory_layout import safe_path
+        relative = Path(safe_path(normalized))
         with GIT_LOCK:
             with self.store.connect() as db:
                 row = self.repository(db, repo_id)
-                from .repository_directories import managed_paths
-                if relative.as_posix() in managed_paths(db, repo_id):
-                    raise ApiError('文件已有流程代码或历史版本引用，不能直接删除', 409)
+                from .repository_delete_policy import policy, reason as deletion_reason
+                blocked = deletion_reason(policy(self, db, repo_id), relative.as_posix()) if not association else ''
+                if blocked:
+                    raise ApiError(blocked, 409)
             if row["status"] != "ACTIVE":
                 raise ApiError("已停用的仓库不能删除文件", 409)
             repo = Path(row["local_path"])
@@ -730,7 +739,7 @@ class Application:
                     or any((repo / Path(*relative.parts[:index])).is_symlink()
                            for index in range(1, len(relative.parts)))):
                 raise ApiError("文件路径不能指向仓库外部", 400)
-            tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", str(relative)],
+            tracked = subprocess.run(["git", '--literal-pathspecs', "ls-files", "--error-unmatch", "--", str(relative)],
                                      cwd=repo, capture_output=True, timeout=10, check=False)
             if tracked.returncode or not target.is_file():
                 raise ApiError("仓库文件不存在", 404)
@@ -738,13 +747,28 @@ class Application:
                                     capture_output=True, timeout=10, check=False)
             if staged.returncode:
                 raise ApiError("仓库已有暂存文件，请先处理后再删除", 409)
-            changed = subprocess.run(["git", "status", "--porcelain", "--", str(relative)], cwd=repo,
+            changed = subprocess.run(["git", '--literal-pathspecs', "status", "--porcelain", "--", str(relative)], cwd=repo,
                                      capture_output=True, timeout=10, check=False)
-            if changed.returncode or changed.stdout:
-                raise ApiError("文件有未提交的本地修改，请先处理后再删除", 409)
-            self.git(repo, "rm", "--", str(relative))
-            self.git(repo, "-c", "user.name=Runner Builder", "-c", "user.email=runner@localhost",
-                     "commit", "-m", f"Delete {relative.as_posix()}")
+            format_only = False
+            if changed.returncode:
+                raise ApiError('无法检查文件本地修改，请刷新后重试', 409)
+            if changed.stdout:
+                original = subprocess.run(['git', 'show', f'HEAD:{relative.as_posix()}'], cwd=repo,
+                                          capture_output=True, timeout=15, check=False)
+                data = target.read_bytes()
+                if original.returncode or data.replace(b'\r\n', b'\n') != original.stdout.replace(b'\r\n', b'\n'):
+                    raise ApiError("文件有未提交的内容修改，请先处理后再删除", 409)
+                # Windows repositories copied to Linux may only differ in CRLF.
+                # Keep the exact working bytes before removing that tracked file.
+                backup = self.data_dir / 'repository-delete-backups' / uuid.uuid4().hex
+                backup.mkdir(parents=True, mode=0o700)
+                saved = backup / 'file'; saved.write_bytes(data); saved.chmod(0o600)
+                (backup / 'receipt.json').write_text(json.dumps({'repoId': repo_id, 'path': relative.as_posix(),
+                    'commit': self.git(repo, 'rev-parse', 'HEAD').strip(), 'sha256': hashlib.sha256(data).hexdigest()}))
+                format_only = True
+            self.git(repo, '--literal-pathspecs', "rm", *(('-f',) if format_only else ()), "--", str(relative))
+            self.git(repo, '--literal-pathspecs', "-c", "user.name=Runner Builder", "-c", "user.email=runner@localhost",
+                     "commit", "-m", f"Delete {relative.as_posix()}", '--only', '--', str(relative))
             commit = self.git(repo, "rev-parse", "HEAD").strip()
             if row["remote_url"]:
                 self.set_git_origin(repo, row["remote_url"])
@@ -996,25 +1020,46 @@ class Application:
     def move_repository(self, repo_id: str, payload: dict) -> dict:
         raw = required_text(payload, "path", 1000)
         with self.store.connect() as db:
-            current = Path(self.repository(db, repo_id)["local_path"])
+            current = Path(self.repository(db, repo_id)["local_path"]).resolve()
             requested = Path(raw).expanduser()
             if requested.is_absolute() and requested.resolve() == current:
                 return self.as_repository(db, self.repository(db, repo_id))
             target = self.valid_repo_path(db, raw)
         with GIT_LOCK:
-            if target.exists():
-                raise ApiError("目标路径已存在；请选择一个尚未使用的新目录", 409)
+            existing_empty = target.exists()
+            if existing_empty:
+                if not target.is_dir():
+                    raise ApiError("目标路径已经是文件，请选择空目录或新的目录", 409)
+                if any(target.iterdir()):
+                    raise ApiError("目标目录已有文件或 Git 仓库，不能直接迁移覆盖；请选择空目录或新的目录", 409)
             moved = False
+            moved_into_existing = False
+            moved_entries = []
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if current.exists():
-                    shutil.move(str(current), str(target))
-                    moved = True
+                    if existing_empty:
+                        moved_into_existing = True
+                        for entry in list(current.iterdir()):
+                            destination = target / entry.name
+                            shutil.move(str(entry), str(destination))
+                            moved_entries.append((entry, destination))
+                        current.rmdir()
+                    else:
+                        shutil.move(str(current), str(target))
+                        moved = True
                 with self.store.connect() as db:
                     self.rewrite_repo_urls(db, current.as_uri() + "#", target.as_uri() + "#")
                     db.execute("UPDATE code_repositories SET local_path=?, updated_at=? WHERE repo_id=?",
                                (str(target), now(), repo_id))
             except Exception as exc:
+                if moved_into_existing:
+                    try:
+                        current.mkdir(exist_ok=True)
+                        for entry, destination in reversed(moved_entries):
+                            shutil.move(str(destination), str(entry))
+                    except OSError as rollback_error:
+                        raise ApiError(f"迁移失败，回退文件也失败；请检查 {current} 和 {target}：{rollback_error}", 500) from exc
                 if moved:
                     try:
                         shutil.move(str(target), str(current))
@@ -1293,16 +1338,29 @@ class Application:
                 if requested_directory_id or name_mode:
                     requested_directory_id = requested_directory_id or (asset['directory_id'] if asset and asset['repo_id'] == repo_row['repo_id'] else '') or 'default'
                     directory = get_directory(self, db, repo_row['repo_id'], requested_directory_id, config_type)
-                    # Repository folders store reusable files. Config/queue
-                    # directories belong exclusively to deployment layouts.
-                    relative = Path(directory['path']) / Path(delivery_path).name
-                elif asset and asset['repo_id'] == repo_row['repo_id']:
+                    include_config_id = payload.get('includeConfigId', False)
+                    if type(include_config_id) is not bool:
+                        raise ApiError('配置 ID 目录选项无效')
+                    prefix = config_id if include_config_id and Path(directory['path']).name != config_id else ''
+                    relative = Path(directory['path']) / prefix / Path(delivery_path).name
+                elif asset and asset['repo_id'] == repo_row['repo_id'] and asset['directory_id']:
                     relative = Path(asset['storage_path'])
                     requested_directory_id = asset['directory_id'] or ''
                     if requested_directory_id:
                         get_directory(self, db, repo_row['repo_id'], requested_directory_id, config_type)
                 else:
-                    relative = Path("code") / config_id / f"{code_id}.py"
+                    # Older callers omit directory metadata. Resolve the managed
+                    # save directory instead of inventing a second code/ layer.
+                    from .generation_destinations import automatic
+                    selected = automatic(self, {'configId': config_id, 'queueName': queue, 'configType': config_type})
+                    config_type = selected['configType']
+                    if not requested_repo_id:
+                        repo_row = self.repository(db, selected['repositoryId'])
+                        repo = Path(repo_row['local_path'])
+                    requested_directory_id = selected['directoryId'] if selected['repositoryId'] == repo_row['repo_id'] else 'default'
+                    directory = get_directory(self, db, repo_row['repo_id'], requested_directory_id, config_type)
+                    prefix = config_id if Path(directory['path']).name != config_id else ''
+                    relative = Path(directory['path']) / prefix / f"{code_id}.py"
                 if (name_mode or requested_directory_id) and db.execute(
                         'SELECT 1 FROM code_assets WHERE repo_id=? AND storage_path=? AND code_id<>? '
                         'UNION ALL SELECT 1 FROM code_versions v JOIN code_assets a ON a.code_id=v.code_id '
@@ -1311,8 +1369,7 @@ class Application:
                         (repo_row['repo_id'], relative.as_posix(), code_id, repo_row['repo_id'], relative.as_posix(), code_id)).fetchone():
                     raise ApiError('该保存路径已被其他节点代码引用，请更换文件名或配置目录', 409)
                 # All destination components must remain within the repository.
-                if relative.parts[0] != 'code':
-                    safe_directory(self, repo_row, relative.parent.as_posix())
+                safe_directory(self, repo_row, relative.parent.as_posix())
                 target = repo / relative
                 if target.is_symlink() or not target.resolve().is_relative_to(repo.resolve()):
                     raise ApiError('代码保存路径不能指向仓库外部')
@@ -1378,6 +1435,8 @@ class Application:
                     digest, code_id, commit, git_url, delivery_path, prompt, source_url, published_at, repo_row["repo_id"],
                     source_repo_path, source_git_commit, requested_directory_id or '', relative.as_posix(), system_prompt, prompt_template_id,
                 ))
+                from .script_file_links import PREFIX as FILE_LINK_PREFIX
+                db.execute('DELETE FROM settings WHERE setting_key=?', (FILE_LINK_PREFIX + code_id,))
                 row = db.execute(
                     CODE_VERSION_SELECT + "WHERE v.digest=?",
                     (digest,),
@@ -1539,6 +1598,9 @@ class Handler(BaseHTTPRequestHandler):
         if method == 'POST' and path == '/api/code-servers/me/heartbeat':
             from .code_servers import heartbeat
             return heartbeat(app, self.headers, body)
+        if path.startswith('/api/code-servers/me/'):
+            from .code_server_upgrades import personal
+            return personal(self,app,method,path,body)
         if method == "POST" and path == "/api/runners/enroll":
             local_auto = (os.getenv("RUNNER_DEV_MODE") == "1"
                           and self.client_address[0] in ("127.0.0.1", "::1")
@@ -1591,6 +1653,9 @@ class Handler(BaseHTTPRequestHandler):
                 runner_pid, worker_processes = heartbeat_processes(body)
                 os_type, os_version = reported_os(body)
                 with app.store.connect() as db:
+                    launcher_version = body.get('launcherVersion')
+                    if isinstance(launcher_version, str) and 0 < len(launcher_version) <= 80:
+                        db.execute('UPDATE runners SET launcher_version=? WHERE runner_id=?', (launcher_version, runner['runner_id']))
                     capabilities = json.loads(runner['capabilities'])
                     capabilities = [value for value in capabilities if value != 'deployment-entry']
                     if body.get('executionSchema') == 2:
@@ -1717,6 +1782,63 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/code-servers' and method == 'GET':
             from .code_servers import listing
             return listing(app)
+        generation_directory = re.fullmatch(r'/code-servers/([0-9a-f-]{36})/generation-directory', sub)
+        if generation_directory and method == 'POST':
+            from .code_servers import save_generation_directory
+            return save_generation_directory(app, generation_directory.group(1), body)
+        generation_git = re.fullmatch(r'/code-servers/([0-9a-f-]{36})/generation-git-binding', sub)
+        if generation_git and method == 'POST':
+            from .generation_git_bindings import save
+            return save(app, generation_git.group(1), body)
+        mq_binding = re.fullmatch(r'/code-servers/([0-9a-f-]{36})/mq-binding',sub)
+        if mq_binding and method=='POST':
+            from .mq_generation import save_binding
+            return {'binding':save_binding(app,mq_binding.group(1),body,self.headers)}
+        if sub == '/code-generation/tasks' and method in ('GET', 'POST'):
+            from .database_generation import paged, create
+            return paged(app, {key: values[0] for key, values in query.items()}) if method == 'GET' else create(app, body)
+        if sub in ('/code-generation/tasks/delete', '/code-generation/tasks/delete-batch') and method == 'POST':
+            from .database_generation import remove
+            return remove(app, body)
+        if sub == '/code-generation/tasks/detail' and method == 'GET':
+            from .database_generation import read, public
+            return {'job': public(read(app, (query.get('taskId') or [''])[0]))}
+        if sub == '/code-generation/tasks/summaries' and method == 'GET':
+            from .database_generation import summaries
+            ids = (query.get('taskIds') or [''])[0].split(',')
+            return summaries(app, ids)
+        if sub == '/mq-code-jobs/tasks' and method == 'GET':
+            from .mq_task_management import paged
+            return paged(app, {key: values[0] for key, values in query.items()}, self.headers)
+        if sub == '/mq-code-jobs/delete' and method == 'POST':
+            from .mq_task_management import remove
+            return remove(app, body, self.headers)
+        if sub=='/mq-code-jobs/summaries' and method=='GET':
+            from .mq_generation import summaries
+            return summaries(app, (query.get('taskIds') or [''])[0].split(','))
+        if sub=='/mq-code-jobs' and method=='GET':
+            from .mq_generation import read
+            task_id=(query.get('taskId') or [''])[0]
+            if not re.fullmatch(r'[A-Za-z0-9{}_-]{1,100}',task_id):raise ApiError('TaskID 无效')
+            try:job=read(app,task_id)
+            except ApiError as error:
+                if error.status!=404:raise
+                job=None
+            return {'job':{k:v for k,v in job.items() if k not in ('task','params')} if job else None}
+        if sub=='/code-servers/releases' and method in ('GET','POST'):
+            from .code_server_upgrades import releases,publish
+            return {'items':releases(app)} if method=='GET' else publish(app)
+        if sub=='/code-servers/upgrades' and method=='POST':
+            from .code_server_upgrades import schedule
+            return schedule(app,body)
+        if sub=='/code-servers/migration-package' and method=='POST':
+            from .code_servers import package
+            data=package(app,body.get('platform'),existing=True)
+            self.send_response(200)
+            self.send_header('Content-Type','application/zip')
+            self.send_header('Content-Length',str(len(data)))
+            self.end_headers();self.wfile.write(data)
+            return RESPONSE_SENT
         if sub == '/code-servers/enrollment-code' and method == 'POST':
             from .code_servers import enrollment_code
             return enrollment_code(app)
@@ -1726,7 +1848,7 @@ class Handler(BaseHTTPRequestHandler):
             return {'platform': f'http://{address}:{self.server.server_port}'}
         if sub == '/code-servers/package' and method == 'POST':
             from .code_servers import package
-            data = package(app, required_text(body, 'platform', 2000))
+            data = package(app, required_text(body, 'platform', 2000), digest=body.get('digest', ''))
             self.send_response(200)
             self.send_header('Content-Type', 'application/zip')
             self.send_header('Content-Disposition', 'attachment; filename="code-generation-server.zip"')
@@ -1747,11 +1869,14 @@ class Handler(BaseHTTPRequestHandler):
             from .model_interfaces import save_test_prompts
             return save_test_prompts(app, body)
         if sub == '/model-interfaces/generate' and method == 'POST':
-            from .model_interfaces import generate
-            return generate(app, body)
+            from .model_interfaces import generate, stream_generate
+            return stream_generate(self,app,body) if body.get('responseStream') is True else generate(app, body)
         if sub == '/source-code-tasks' and method in ('GET', 'POST'):
             from .generation_tasks import listing, submit
             return listing(app) if method == 'GET' else submit(app, body)
+        if sub == '/site-scripts/generation-destination' and method == 'GET':
+            from .generation_destinations import automatic
+            return automatic(app, {key: (query.get(key) or [''])[0] for key in ('configId', 'queueName', 'configType')})
         if sub == '/site-scripts/task-config' and method in ('GET', 'POST'):
             from .generation_tasks import read_config, save_config
             return read_config(app, (query.get('configId') or [''])[0]) if method == 'GET' else save_config(app, body)
@@ -1907,6 +2032,10 @@ class Handler(BaseHTTPRequestHandler):
                 return app.list_repositories()
             if method == "POST":
                 return app.create_repository(body, self.headers)
+        generation_default = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/directories/([0-9a-f]{32}|default)/generation-default', sub)
+        if generation_default and method == 'POST':
+            from .generation_destinations import set_default
+            return set_default(app, *generation_default.groups())
         repo_directories = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/directories(?:/([0-9a-f]{32}|default))?', sub)
         if repo_directories:
             from .repository_directories import list_directories, save_directory, remove_directory
@@ -1918,6 +2047,12 @@ class Handler(BaseHTTPRequestHandler):
                 return save_directory(app, repo_id, body, directory_id, headers=self.headers)
             if method == 'DELETE' and directory_id:
                 return remove_directory(app, repo_id, directory_id, (query.get('revision') or [''])[0])
+        if sub == '/site-scripts/file-association/preview' and method == 'GET':
+            from .script_file_links import preview
+            return preview(app, (query.get('digest') or [''])[0], (query.get('target') or [''])[0])
+        if sub == '/site-scripts/file-association' and method == 'POST':
+            from .script_file_links import change
+            return change(app, body)
         repo_files = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files", sub)
         repo_metadata = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files/metadata", sub)
         repo_references = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/files/references', sub)
@@ -2007,15 +2142,17 @@ class Handler(BaseHTTPRequestHandler):
                     "WHERE a.config_id=? AND a.queue_name=? ORDER BY v.published_at DESC",
                     (config_id, valid_queue(queue)),
                 ).fetchall()
-                return [as_code_version(row) for row in rows]
+                from .script_file_links import present, state
+                return [present(db, row) for row in rows if not state(db, row['code_id']).get('detached')]
             if method == "GET" and sub == "/site-scripts/catalog":
                 rows = db.execute(
                     CODE_VERSION_SELECT +
                     "ORDER BY v.published_at DESC"
                 ).fetchall()
-                return [dict(as_code_version(row), environments=[binding["environment"] for binding in db.execute(
+                from .script_file_links import present, state
+                return [dict(present(db, row), environments=[binding["environment"] for binding in db.execute(
                     "SELECT environment FROM code_runtime_bindings WHERE digest=? ORDER BY environment", (row["digest"],)
-                ).fetchall()]) for row in rows]
+                ).fetchall()]) for row in rows if not state(db, row['code_id']).get('detached')]
             if method == "GET" and sub == "/site-scripts/code":
                 digest = (query.get("digest") or [""])[0]
                 row = db.execute(
@@ -2026,7 +2163,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError("代码版本不存在", 404)
                 with zipfile.ZipFile(io.BytesIO(app.artifacts.read(digest))) as archive:
                     code = archive.read(row["delivery_path"]).decode("utf-8")
-                return dict(as_code_version(row), code=code)
+                from .script_file_links import present
+                return dict(present(db, row), code=code)
             if method == "GET" and sub == "/site-scripts/bindings":
                 config_id = (query.get("configId") or [""])[0]
                 queue = (query.get("queueName") or [""])[0]

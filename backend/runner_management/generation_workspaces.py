@@ -4,6 +4,7 @@ import contextlib
 import json
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import PurePosixPath, PureWindowsPath
 
@@ -11,10 +12,23 @@ _GUARD = threading.Lock()
 _LOCKS = {}
 
 
+def node_defaults(body):
+    """Node workspaces are owned by CodeServer, never by node form overrides."""
+    return {**body, 'workspaceMode': 'config', 'workspacePath': '', 'codeDirectory': ''}
+
+
+def server_busy(server_id):
+    with _GUARD:
+        return any(key[0] == server_id and entry[1] for key, entry in _LOCKS.items())
+
+
 def directory(body):
     from .directory_layout import safe_path
     from .server import ApiError
     mode = body.get('workspaceMode', 'config')
+    # Normalize requests saved during the brief combined-path implementation.
+    if mode == 'config-queue':
+        mode = 'config'
     custom = body.get('workspacePath', '')
     if not isinstance(custom, str) or len(custom) > 500:
         raise ApiError('自定义工作目录无效')
@@ -33,6 +47,34 @@ def directory(body):
            or ':' in part or part.endswith((' ', '.')) for part in value.split('/')):
         raise ApiError('工作目录包含无效名称')
     return value
+
+
+def validate_code_directory(value):
+    from .server import ApiError
+    if not isinstance(value, str) or len(value) > 2000 or any(ord(char) < 32 for char in value):
+        raise ApiError('代码目录无效')
+    value = value.strip()
+    if value:
+        from .directory_layout import safe_path
+        kind = PureWindowsPath if '\\' in value or PureWindowsPath(value).drive else PurePosixPath
+        path = kind(value)
+        parts = path.parts[1:] if path.anchor else path.parts
+        if not parts or path.drive and not path.is_absolute():
+            raise ApiError('代码目录无效')
+        safe_path('/'.join(parts))
+    return value
+
+
+@contextlib.contextmanager
+def serialized_paths(server_id, paths, timeout):
+    """Protect both shared project inputs and an independently overridden code directory."""
+    normalized = {str(PureWindowsPath(path)).casefold() if PureWindowsPath(path).drive or '\\' in path
+                  else str(PurePosixPath(path)) for path in paths}
+    deadline = time.monotonic() + timeout
+    with contextlib.ExitStack() as stack:
+        for path in sorted(normalized):
+            stack.enter_context(serialized(server_id, path, max(0, deadline - time.monotonic())))
+        yield
 
 
 @contextlib.contextmanager

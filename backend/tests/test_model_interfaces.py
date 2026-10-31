@@ -17,17 +17,130 @@ class ModelInterfacesTest(unittest.TestCase):
     tearDown = baseline.ManagementIntegrationTest.tearDown
     request = baseline.ManagementIntegrationTest.request
 
+    def test_server_enrollment_resolves_model_addresses_and_lists_supported_models_without_probing(self):
+        from backend.runner_management import code_servers
+        config = models.listing(self.app)
+        self.assertEqual(config['items'][1]['generationServerMatch'], 'unmatched')
+        config = models.save(self.app, config)
+        code = code_servers.enrollment_code(self.app)['code']
+        identity = code_servers.enroll(self.app, {'code':code,'name':'home171','ipAddress':'192.168.1.171',
+            'endpoint':'http://192.168.1.171:8093','installDirectory':'D:/codeserver','workspace':'D:/codeserver/workspace',
+            'osType':'Windows','osVersion':'Windows 11','version':'source-local'})
+        with patch.object(models, 'urlopen', side_effect=AssertionError('No model probe allowed')):
+            loaded = models.listing(self.app)
+            for item in loaded['items'][1:]:
+                self.assertEqual(item['generationServerId'],identity['serverId'])
+                self.assertEqual(item['generationServerMatch'],'matched')
+            server = code_servers.listing(self.app)['items'][0]
+        self.assertEqual({item['id'] for item in server['supportedModels']},{'workbuddy-agent-hy3','workbuddy-chat-hy3'})
+        saved = models.save(self.app, loaded)
+        self.assertEqual(saved['revision'],config['revision']+1)
+        with self.app.store.connect() as db:
+            stored = json.loads(db.execute('SELECT setting_value FROM settings WHERE setting_key=?',(models.KEY,)).fetchone()['setting_value'])
+        self.assertEqual(stored['items'][1]['generationServerId'],'')
+        self.assertEqual(stored['items'][1]['generationServerMode'],'auto')
+        # Re-saving a decorated auto result must not pin it to an instance.
+        saved['items'][1]['endpoint']='http://192.168.1.172:6000/wb/agent'
+        changed=models.save(self.app,saved)['items'][1]
+        self.assertEqual(changed['generationServerId'],'')
+        self.assertEqual(changed['generationServerMatch'],'unmatched')
+
+    def test_address_matching_ambiguity_manual_direct_loopback_and_offline(self):
+        servers=[{'serverId':'one','ipAddress':'192.168.1.171','endpoint':'http://CODE.HOST:8093','status':'online'}]
+        cases=[
+            ({'endpoint':'http://192.168.1.171:6000/wb/agent'},servers,'one','matched'),
+            ({'endpoint':'http://code.host.:6000/gemini/chat'},servers,'one','matched'),
+            ({'endpoint':'http://localhost:6000/wb/agent'},servers,'','local'),
+            ({'endpoint':'http://127.0.0.2:6000/wb/agent'},servers,'','local'),
+            ({'endpoint':'http://[::1]:6000/wb/agent'},servers,'','local'),
+            ({'endpoint':'http://192.168.1.171:6000/wb/agent'},[{**servers[0],'status':'offline'}],'one','offline'),
+            ({'endpoint':'http://192.168.1.171:6000/wb/agent'},[servers[0],{**servers[0],'serverId':'two'}],'','ambiguous'),
+            ({'endpoint':'http://192.168.1.171:6000/wb/agent'},[servers[0],{**servers[0],'serverId':'two','status':'offline'}],'one','matched'),
+            ({'endpoint':'http://other:6000/agent','generationServerId':'one'},servers,'one','manual'),
+            ({'endpoint':'http://other:6000/agent','generationServerId':'deleted'},servers,'deleted','missing'),
+            ({'endpoint':'http://192.168.1.171:6000/wb/agent','generationServerMode':'direct'},servers,'','direct'),
+        ]
+        for item,registry,expected,state in cases:
+            with self.subTest(endpoint=item['endpoint'],state=state):
+                models.resolve_servers([item],registry)
+                self.assertEqual(item['generationServerId'],expected)
+                self.assertEqual(item['generationServerMatch'],state)
+
+    def test_generation_request_snapshot_has_actual_agent_body_without_auth_headers(self):
+        config=models.listing(self.app)['items'][1]
+        config.update(prjDir=r'D:\aicode',endpoint='http://192.168.1.171:6000/wb/agent',cdpPort=9223)
+        request=models.workbuddy_request(config,'系统要求：\n角色\n\n用户要求：\n生成教学页面','trace-task')
+        request.add_header('Authorization','Bearer private-token')
+        request.add_header('Access-Token','private-token')
+        details=models.generation_request_details(request)
+        self.assertEqual(details['method'],'POST')
+        self.assertEqual(details['url'],config['endpoint'])
+        self.assertEqual(details['body'],json.loads(request.data))
+        self.assertEqual(details['body']['prj_dir'],r'D:\aicode')
+        self.assertEqual(details['body']['cdp_port'],9223)
+        self.assertEqual(details['headers']['Content-Type'],'application/json; charset=utf-8')
+        self.assertNotIn('private-token',json.dumps(details))
+
+    def test_generation_stream_emits_before_completion_and_preserves_utf8(self):
+        release=threading.Event()
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                self.send_response(200);self.send_header('Content-Type','text/plain; charset=utf-8');self.end_headers()
+                word='你好'.encode('utf8')
+                self.wfile.write(b'# first '+word[:2]);self.wfile.flush()
+                release.wait(5)
+                self.wfile.write(word[2:]+b'\ndef scrape(url):\n    return []\n');self.wfile.flush()
+        upstream=ThreadingHTTPServer(('127.0.0.1',0),Upstream)
+        thread=threading.Thread(target=upstream.serve_forever,daemon=True);thread.start()
+        try:
+            config=models.listing(self.app)
+            config['items'][2]['endpoint']=f'http://127.0.0.1:{upstream.server_port}/chat'
+            models.save(self.app,config)
+            payload={'interfaceId':'workbuddy-chat-hy3','prompt':'生成代码','url':'https://example.com','sampleId':'www.realcan.cn.py','responseStream':True}
+            request=Request(self.url+'/api/runner-management/model-interfaces/generate',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'})
+            with urlopen(request,timeout=4) as response:
+                self.assertIn('application/x-ndjson',response.headers['Content-Type'])
+                events=[]
+                while True:
+                    event=json.loads(response.readline());events.append(event)
+                    if event['type']=='chunk':break
+                self.assertIn('first',events[-1]['text']);self.assertFalse(release.is_set())
+                release.set()
+                events.extend(json.loads(line) for line in response if line.strip())
+            self.assertIn('你好',''.join(e['text'] for e in events if e['type']=='chunk'))
+            self.assertEqual(events[-1]['type'],'result')
+            self.assertIn('def scrape(url)',events[-1]['result']['code'])
+            trace=next(e['request'] for e in events if e['type']=='request')
+            self.assertTrue(trace['url'].startswith(f'http://127.0.0.1:{upstream.server_port}/chat?'))
+            self.assertEqual(trace['method'],'GET')
+        finally:
+            release.set();upstream.shutdown();upstream.server_close();thread.join(timeout=5)
+
+    def test_generation_disconnect_does_not_abort_server_side_completion(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        completed=[]
+        def generate(app,body,emit):
+            emit('chunk',text='first');completed.append('archive completed')
+            return {'fileName':'example.com.py','code':'def scrape(url): return []','warnings':[]}
+        handler=Mock();handler.wfile=SimpleNamespace(write=Mock(side_effect=BrokenPipeError()),flush=Mock())
+        with patch.object(models,'generate',side_effect=generate):
+            models.stream_generate(handler,self.app,{})
+        self.assertEqual(completed,['archive completed'])
+        self.assertEqual(handler.wfile.write.call_count,1)
+
     def test_agent_directories_use_instance_task_and_cross_platform_roots(self):
         from backend.runner_management.server import ApiError
         selected = {'id': 'interface-1', 'generationServerId': 'server-1', 'prjDir': r'D:\aicode'}
         paths = models.agent_directories(selected, 'task-1')
-        self.assertEqual(paths['codeDir'], r'D:\aicode\server-1\code')
-        self.assertEqual(paths['inputFileDir'], r'D:\aicode\server-1\input')
-        self.assertEqual(paths['outputFileDir'], r'D:\aicode\server-1\output')
-        self.assertEqual(paths['prjDir'], r'D:\aicode\server-1')
-        self.assertEqual(paths['taskRecordPath'], r'D:\aicode\server-1\tasks\task-1.json')
+        self.assertEqual(paths['codeDir'], r'D:\aicode\code')
+        self.assertEqual(paths['inputFileDir'], r'D:\aicode\input')
+        self.assertEqual(paths['outputFileDir'], r'D:\aicode\output')
+        self.assertEqual(paths['prjDir'], r'D:\aicode')
+        self.assertEqual(paths['taskRecordPath'], r'D:\aicode\tasks\task-1.json')
         self.assertNotEqual(models.agent_directories(selected)['taskId'], models.agent_directories(selected)['taskId'])
-        self.assertEqual(models.agent_directories({**selected, 'prjDir': '/data/aicode'}, 123)['codeDir'], '/data/aicode/server-1/code')
+        self.assertEqual(models.agent_directories({**selected, 'prjDir': '/data/aicode'}, 123)['codeDir'], '/data/aicode/code')
         self.assertEqual(models.agent_directories({**selected, 'generationServerId': ''}, 'task-1')['instanceId'], 'interface-1')
         for bad in ('../escape', 'a/b', '', True, 'a\\b'):
             with self.subTest(taskId=bad), self.assertRaises(ApiError):
@@ -92,8 +205,8 @@ class ModelInterfacesTest(unittest.TestCase):
             self.assertNotIn('model', body)
             self.assertNotIn('cdp_port', body)
             self.assertEqual(body['title'], '临时标题')
-            self.assertEqual(body['input_file_dir'], r'D:\aicode\gemini-agent\input')
-            self.assertEqual(body['prj_dir'], r'D:\aicode\gemini-agent')
+            self.assertEqual(body['input_file_dir'], r'D:\aicode\input')
+            self.assertEqual(body['prj_dir'], r'D:\aicode')
             models.generate(self.app, {'interfaceId': 'gemini-agent', 'prompt': '抓取新闻', 'url': 'https://example.com', 'sampleId': 'www.realcan.cn.py'})
             generated = json.loads(upstream.call_args.args[0].data)
             self.assertEqual(generated['title'], gemini['title'])
@@ -219,9 +332,9 @@ class ModelInterfacesTest(unittest.TestCase):
             self.assertEqual(failed['responseText'], '暂时繁忙')
             self.request('/api/runner-management/model-interfaces/test', {**payload, 'interfaceId': 'workbuddy-agent-hy3',
                          'taskId': 'test-task-1', 'prjDir': r'D:\test', 'inputFileDir': r'G:\pythonProject\frida\client.py', 'codeDir': r'D:\test\code', 'outputFileDir': r'D:\test\out', 'systemPrompt': '角色要求'})
-            self.assertEqual(calls[-1]['code_dir'], [r'D:\test\workbuddy-agent-hy3\code'])
-            self.assertEqual(calls[-1]['prj_dir'], [r'D:\test\workbuddy-agent-hy3'])
-            self.assertEqual(calls[-1]['input_file_dir'], [r'D:\test\workbuddy-agent-hy3\input'])
+            self.assertEqual(calls[-1]['code_dir'], [r'D:\test\code'])
+            self.assertEqual(calls[-1]['prj_dir'], [r'D:\test'])
+            self.assertEqual(calls[-1]['input_file_dir'], [r'D:\test\input'])
             self.assertEqual(calls[-1]['prompt'], ['系统要求：\n角色要求\n\n用户要求：\n南京 & 上海'])
             self.assertEqual(models.listing(self.app), original)
             for change in ({'prompt': ''}, {'model': ''}, {'stream': '1'}, {'interfaceId': 'missing'}, {'systemPrompt': []}, {'systemPrompt': 'x' * 12001}):
@@ -290,8 +403,8 @@ class ModelInterfacesTest(unittest.TestCase):
             agent = calls[1][1]
             self.assertEqual(calls[1][0], '/agent')
             self.assertEqual(agent['model'], 'hy3')
-            self.assertEqual(agent['prj_dir'], r'D:\aicode\workbuddy-agent-hy3')
-            self.assertEqual(agent['input_file_dir'], r'D:\aicode\workbuddy-agent-hy3\input')
+            self.assertEqual(agent['prj_dir'], r'D:\aicode')
+            self.assertEqual(agent['input_file_dir'], r'D:\aicode\input')
             self.assertEqual(agent['code_dir'], agent['input_file_dir'].removesuffix('input') + 'code')
             self.assertIn('application/json', calls[1][2]['Content-Type'])
             self.assertIn(payload['prompt'], agent['prompt'])

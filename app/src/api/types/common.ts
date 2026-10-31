@@ -15,8 +15,8 @@ export interface PageQuery {
   [key: string]: unknown
 }
 
-/** 任务/节点运行状态：L 处理中 / C 完成 / E 出错 */
-export type RunState = 'L' | 'C' | 'E'
+/** 任务/节点运行状态，含已入队但尚未被处理机领取的等待态。 */
+export type RunState = 'L' | 'C' | 'E' | 'W' | 'W1' | 'D' | 'AC'
 
 /** 写类操作通用回执（mock：仅 ack，不落库） */
 export interface Ack {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { runnerManagementApi as api, type RepositoryFileReferences } from '@/api/runnerManagement'
 import RepositoryFileReferencesDrawer from './RepositoryFileReferencesDrawer.vue'
@@ -38,4 +38,16 @@ it('查询失败保留文件信息并支持刷新', async () => {
   refresh.click(); await flushPromises()
   expect(document.body.textContent).not.toContain('查询不可用')
   expect(document.body.textContent).toContain('下载部署')
+})
+it('按文件对应的代码与队列取消关联，刷新后成为历史记录并通知仓库列表', async () => {
+  const item = { kind: 'node' as const, scope: 'current' as const, configId: '1400654', codeId: '8d1c', queueName: 'dev_web_snatch_5891_sourcecode', digest: 'sha256:current', sourceNodes: [] }
+  vi.mocked(api.codeRepositoryFileReferences).mockResolvedValueOnce({ ...response, items: [item] }).mockResolvedValue({ ...response, protectionReasons: [], items: [{ ...item, scope: 'history' }] })
+  const change = vi.spyOn(api, 'changeScriptFileAssociation').mockResolvedValue({ ok: true, message: '已取消关联' })
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  const w = await setup(); await w.setProps({ canWrite: true })
+  document.querySelector<HTMLButtonElement>('[data-testid="reference-unlink-node"]')!.click(); await flushPromises()
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('dev_web_snatch_5891_sourcecode'), '取消对应代码关联', expect.anything())
+  expect(change).toHaveBeenCalledWith({ digest: item.digest, configId: item.configId, queueName: item.queueName, target: 'saved', action: 'unlink' })
+  expect(w.emitted('changed')).toHaveLength(1)
+  expect(document.querySelector('[data-testid="reference-unlink-node"]')).toBeNull()
 })

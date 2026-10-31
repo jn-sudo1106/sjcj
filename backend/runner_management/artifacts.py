@@ -106,9 +106,16 @@ def extract_verified(data: bytes, target: Path) -> dict:
     return json.loads((target / "manifest.json").read_text(encoding="utf-8"))
 
 
-def verify_extracted(data: bytes, target: Path) -> dict:
+def verify_extracted(data: bytes, target: Path, *, strict: bool = False) -> dict:
     """Reject a local cache whose extracted code differs from the signed ZIP."""
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        if strict:
+            expected = {info.filename for info in archive.infolist() if not info.is_dir()}
+            for file in target.rglob('*'):
+                if file.is_symlink() or (hasattr(file, 'is_junction') and file.is_junction()):
+                    raise ValueError('已解压的制品目录被修改')
+                if file.is_file() and file.relative_to(target).as_posix() not in expected:
+                    raise ValueError('已解压的制品目录包含未签名文件，缓存被修改')
         for info in archive.infolist():
             name = info.filename
             destination = (target / name).resolve()

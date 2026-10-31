@@ -64,6 +64,10 @@ def destination(app, body):
     from .server import ApiError, required_text
     from .repository_directories import get_directory
     owner = config_id(body.get('configId'))
+    from .generation_destinations import automatic, mode, node_type as resolve_node_type
+    include_id = bool(body.get('destinationMode')) or mode(body) == 'type'
+    if mode(body) == 'type':
+        body = {**body, **automatic(app, body)}
     repo_id = required_text(body, 'repositoryId', 80)
     directory_id = required_text(body, 'directoryId', 80)
     node_type = app.valid_config_type(body.get('configType', ''))
@@ -72,11 +76,13 @@ def destination(app, body):
     if type(body.get('deferCommit', False)) is not bool:
         raise ApiError('提交方式无效')
     with app.store.connect() as db:
+        node_type = resolve_node_type(app, db, body)
         repo = app.repository(db, repo_id)
         if repo['status'] != 'ACTIVE':
             raise ApiError('代码仓库已停用', 409)
         directory = get_directory(app, db, repo_id, directory_id, config_type=node_type)
     return {'configId': owner, 'repoId': repo_id, 'directoryId': directory_id, 'directoryPath': directory['path'],
+            'repositoryPrefix': owner if include_id and directory['path'].split('/')[-1] != owner else '',
             'configType': node_type, 'queueName': str(body.get('queueName', ''))[:120], 'autoCommit': body.get('autoCommit', False), 'deferCommit': body.get('deferCommit', False)}
 
 
@@ -107,8 +113,30 @@ def create(app, selected, workspace, target):
 
 
 def public(record):
-    return {key: record.get(key) for key in ('archiveId', 'status', 'message', 'configId', 'repoId', 'directoryId',
+    result = {key: record.get(key) for key in ('archiveId', 'status', 'message', 'configId', 'repoId', 'directoryId',
             'directoryPath', 'taskId', 'serverId', 'createdAt', 'files', 'gitCommit', 'pushed')}
+    code_dir = (record.get('workspace') or {}).get('codeDir')
+    if code_dir:
+        from .directory_layout import safe_path
+        from .server import ApiError
+        result['serverCodeDirectory'] = code_dir
+        kind = PureWindowsPath if '\\' in code_dir or PureWindowsPath(code_dir).drive else PurePosixPath
+        files = []
+        prefix = (record.get('repositoryPrefix') or '').strip('/')
+        for item in record.get('files', []):
+            file = dict(item)
+            relative = item.get('relativePath') or ''
+            if prefix and relative.startswith(prefix + '/'):
+                relative = relative[len(prefix) + 1:]
+            try:
+                safe_path(relative)
+            except ApiError:
+                relative = ''
+            if relative:
+                file['serverPath'] = str(kind(code_dir) / relative)
+            files.append(file)
+        result['files'] = files
+    return result
 
 
 def collect(app, record):
@@ -127,8 +155,9 @@ def collect(app, record):
         digest = hashlib.sha256(data).hexdigest()
         if item.get('sha256') != digest:
             raise ApiError('生成文件哈希校验失败，请重试读取', 502)
-        files.append({'relativePath': relative, 'data': item['data'], 'sha256': digest,
-                      'size': len(data), 'path': record['directoryPath'] + '/' + relative})
+        destination = (record['repositoryPrefix'] + '/' if record.get('repositoryPrefix') else '') + relative
+        files.append({'relativePath': destination, 'sourceRelativePath': relative, 'data': item['data'], 'sha256': digest,
+                      'size': len(data), 'path': record['directoryPath'] + '/' + destination})
     if not files:
         raise ApiError('本次 code 目录没有生成文件，请检查生成服务输出')
     return sorted(files, key=lambda item: item['relativePath'])
@@ -219,7 +248,7 @@ def finish(app, selected, target, text, filename, service):
         store(app, record)
         candidates = [item for item in files if item['relativePath'].endswith('.py') and item['size'] <= 200_000]
         if candidates:
-            candidate = next((item for item in candidates if item['relativePath'] == filename), candidates[0])
+            candidate = next((item for item in candidates if item.get('sourceRelativePath') == filename), candidates[0])
             preview = base64.b64decode(candidate['data']).decode('utf-8-sig', errors='replace')
             preview_path = candidate['path']
         else:

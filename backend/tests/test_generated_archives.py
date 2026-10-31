@@ -12,6 +12,15 @@ from backend.runner_management.server import ApiError
 
 
 class GeneratedArchivesTest(unittest.TestCase):
+    def test_public_paths_keep_repository_prefix_out_of_source_machine_path(self):
+        from backend.runner_management.generated_archives import public
+        record = {'workspace': {'codeDir': r'D:\codeserver\workspace\1401218\code'}, 'repositoryPrefix': '1401218',
+                  'files': [{'path': 'links/1401218/lib/helper.py', 'relativePath': '1401218/lib/helper.py', 'size': 12, 'sha256': 'hash'}]}
+        result = public(record)
+        self.assertEqual(result['files'][0]['serverPath'], r'D:\codeserver\workspace\1401218\code\lib\helper.py')
+        self.assertEqual(result['serverCodeDirectory'], record['workspace']['codeDir'])
+        self.assertNotIn('serverPath', record['files'][0])
+
     setUp = code_server_tests.CodeServerTest.setUp
     tearDown = code_server_tests.CodeServerTest.tearDown
     request = code_server_tests.CodeServerTest.request
@@ -44,7 +53,7 @@ class GeneratedArchivesTest(unittest.TestCase):
         service.config['allowedModelOrigins'] = [origin_url]
         models = model_interfaces.listing(self.app)
         agent = models['items'][1]
-        agent.update(endpoint=origin_url + '/wb/agent', generationServerId=identity['serverId'], prjDir='.')
+        agent.update(endpoint=origin_url + '/wb/agent', generationServerId=identity['serverId'], generationServerMode='manual', prjDir='.')
         model_interfaces.save(self.app, models)
         repo = self.request('/api/runner-management/settings/code-repos')[0]
         root = Path(repo['path']); root.mkdir(parents=True, exist_ok=True)
@@ -70,7 +79,8 @@ class GeneratedArchivesTest(unittest.TestCase):
         self.assertEqual(second['archive']['status'], 'committed')
         self.assertNotEqual(second['archive']['gitCommit'], archive['gitCommit'])
         self.assertEqual(calls[0]['code_dir'], calls[1]['code_dir'])
-        self.assertEqual(Path(calls[0]['prj_dir']).name, '101')
+        self.assertEqual(Path(calls[0]['prj_dir']), service.workspace.root / '101')
+        self.assertEqual(Path(calls[0]['code_dir']), service.workspace.root / '101' / 'code')
         for task, commit in (('task-1', archive['gitCommit']), ('task-2', second['archive']['gitCommit'])):
             receipt = json.loads((Path(calls[0]['prj_dir']) / 'tasks' / (task + '.json')).read_text('utf8'))
             self.assertEqual(receipt['status'], 'succeeded')
@@ -133,12 +143,12 @@ class GeneratedArchivesTest(unittest.TestCase):
         self.assertEqual(target.read_text('utf8'), 'MANUAL = True')
         self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = 1')
 
-    def test_queue_custom_paths_and_registered_server_root_override_model_root(self):
+    def test_node_ignores_workspace_overrides_and_uses_registered_server_root(self):
         service, repo, origin, payload, calls = self.fixture()
         models = model_interfaces.listing(self.app)
         models['items'][1]['prjDir'] = r'D:\old-model-setting'
         model_interfaces.save(self.app, models)
-        for mode, path, expected in (('queue', '', 'download'), ('custom', 'news/cninfo', 'news/cninfo')):
+        for mode, path, expected in (('queue', '', '101'), ('custom', '../old-path', '101')):
             result = self.request('/api/runner-management/model-interfaces/generate', {
                 **payload, 'workspaceMode': mode, 'workspacePath': path, 'taskId': mode + '-task'})
             self.assertEqual(result['archive']['status'], 'committed', result['archive']['message'])
@@ -147,9 +157,72 @@ class GeneratedArchivesTest(unittest.TestCase):
             self.assertEqual(Path(calls[-1]['prj_dir']), root)
             record = json.loads((root / 'tasks' / (mode + '-task.json')).read_text('utf8'))
             self.assertEqual(record['gitCommit'], result['archive']['gitCommit'])
-        for path in ('../escape', r'D:\outside'):
-            with self.assertRaises(Exception):
-                self.request('/api/runner-management/model-interfaces/generate', {**payload, 'workspaceMode': 'custom', 'workspacePath': path})
+        self.assertFalse((service.workspace.root / 'download').exists())
+
+    def test_per_server_generation_directory_reaches_agent_and_git_for_all_workspace_modes(self):
+        service, repo, origin, payload, calls = self.fixture()
+        server_id = model_interfaces.listing(self.app)['items'][1]['generationServerId']
+        root = service.workspace.root / 'agent-projects'
+        self.request('/api/runner-management/code-servers/' + server_id + '/generation-directory', {'generationRoot': str(root)})
+        for mode, path, owner in (('config-queue', '', '101'), ('config', '', '101'), ('queue', '', '101'), ('custom', 'news/custom', '101')):
+            task = mode + '-custom-root'
+            result = self.request('/api/runner-management/model-interfaces/generate', {
+                **payload, 'workspaceMode': mode, 'workspacePath': path, 'taskId': task})
+            self.assertEqual(result['archive']['status'], 'committed', result['archive']['message'])
+            base = root / owner
+            self.assertEqual(Path(calls[-1]['prj_dir']), base)
+            self.assertEqual(Path(calls[-1]['code_dir']), base / 'code')
+            self.assertEqual(Path(calls[-1]['input_file_dir']), base / 'input')
+            self.assertEqual(Path(calls[-1]['output_file_dir']), base / 'output')
+            self.assertTrue((base / 'tasks' / (task + '.json')).is_file())
+            self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = ' + str(len(calls)))
+
+    def test_node_code_directory_overrides_are_ignored_for_execution_and_archiving(self):
+        service, repo, origin, payload, calls = self.fixture()
+        root = service.workspace.root
+        for index, value in enumerate((str(root / 'manual' / 'code'), 'other/code', '../outside', str(root.parent / 'outside' / 'code'))):
+            task = 'manual-code-' + str(index)
+            result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': task, 'codeDirectory': value})
+            self.assertEqual(result['archive']['status'], 'committed', result['archive']['message'])
+            expected = root / '101' / 'code'
+            self.assertEqual(Path(calls[-1]['code_dir']), expected)
+            self.assertEqual(Path(calls[-1]['input_file_dir']), root / '101' / 'input')
+            self.assertTrue((root / '101' / 'tasks' / (task + '.json')).is_file())
+            self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = ' + str(len(calls)))
+        self.assertFalse((root / 'manual').exists())
+        self.assertFalse((root / 'other').exists())
+
+    def test_directory_git_binding_overrides_node_destination_and_invalid_target_does_not_fall_back(self):
+        from backend.runner_management import code_servers
+        service, repo, origin, payload, calls = self.fixture()
+        server_id = service.identity['serverId']
+        remote = Path(self.tmp.name) / 'bound-origin'; remote.mkdir()
+        self.app.git(remote, 'init', '--bare')
+        bound = self.app.create_repository({'name': '目录绑定仓库', 'path': str(Path(self.tmp.name) / 'bound-repo'),
+                                            'remoteUrl': remote.as_uri(), 'branch': 'main'})
+        route = '/api/runner-management/code-servers/' + server_id + '/generation-git-binding'
+        self.request(route, {'path': '', 'repositoryId': repo['repoId'], 'directoryId': 'default'})
+        saved = self.request(route, {'path': '101/code', 'repositoryId': bound['repoId'], 'directoryId': 'default'})
+        self.assertEqual(saved['items'][1]['remoteUrl'], remote.as_uri())
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'bound-task'})
+        self.assertEqual(result['archive']['repoId'], bound['repoId'])
+        self.assertTrue(result['archive']['pushed'])
+        self.assertEqual(self.app.git(remote, 'show', 'main:default/101/newslink.py').strip(), 'VALUE = 1')
+        self.assertFalse((Path(repo['path']) / 'default/newslink.py').exists())
+        # Heartbeat preserves platform-managed bindings.
+        row = code_servers.read(self.app, server_id)
+        self.request('/api/code-servers/me/heartbeat', {**service.report(), 'serverId': server_id, 'endpoint': row['endpoint']}, service.identity['token'])
+        self.assertEqual(len(code_servers.read(self.app, server_id)['generationGitBindings']), 2)
+        self.app.update_repository(bound['repoId'], {'status': 'DISABLED'})
+        with self.assertRaises(HTTPError):
+            self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'invalid-binding'})
+        self.assertEqual(len(calls), 1)
+        listed = self.request('/api/runner-management/code-servers')['items'][0]['generationGitBindings']
+        self.assertIn('停用', listed[1]['error'])
+        self.request(route, {'path': '101/code', 'repositoryId': ''})
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'parent-binding'})
+        self.assertEqual(result['archive']['repoId'], repo['repoId'])
+        self.assertEqual(self.app.git(origin, 'show', 'main:default/101/newslink.py').strip(), 'VALUE = 2')
 
     def test_text_only_agent_updates_existing_code_in_reused_directory(self):
         service, repo, origin, payload, calls = self.fixture(text_only=True)

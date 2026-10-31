@@ -71,6 +71,13 @@ async function remove(row: CodeRepositoryDirectory) {
   } catch (e) { if (e !== 'cancel' && e !== 'close') error.value = problem(e) }
   finally { saving.value = false }
 }
+async function setGenerationDefault(row: CodeRepositoryDirectory) {
+  if (!props.canWrite || saving.value) return
+  saving.value = true; error.value = ''
+  try { await runnerManagementApi.setGenerationTypeDefault(row.repoId, row.directoryId); await load() }
+  catch (e) { error.value = problem(e) }
+  finally { saving.value = false }
+}
 </script>
 
 <template>
@@ -90,6 +97,7 @@ async function remove(row: CodeRepositoryDirectory) {
         <button type="button" class="rd-title" :aria-pressed="selectedId === row.directoryId" @click="emit('select', row)"><span class="rd-title-heading"><b>{{ row.name }}</b><span v-if="selectedId === row.directoryId" class="rd-selected-mark"><el-icon><Check /></el-icon>已选</span></span><span :title="row.path">{{ row.path }}/</span><small>{{ row.configTypeName || '通用' }}{{ row.codeCount != null ? ` · ${row.codeCount} 项节点代码` : '' }}</small></button>
         <div v-if="!row.isDefault && canWrite" class="rd-actions"><el-switch size="small" :model-value="row.status === 'ACTIVE'" :disabled="saving || repo.status !== 'ACTIVE'" @change="(value: string | number | boolean) => status(row, Boolean(value))" /><span>{{ row.status === 'ACTIVE' ? '启用' : '停用' }}</span><el-button link type="primary" :disabled="saving" @click="edit(row)">编辑</el-button><el-button link type="danger" :disabled="saving || !!row.codeCount" @click="remove(row)">移除</el-button></div>
         <small v-else-if="row.isDefault" class="rd-default">沿用仓库默认目录</small>
+        <div v-if="row.configType" class="rd-actions"><small v-if="row.generationDefault">该类型生成默认目录</small><el-button v-else-if="canWrite" link type="primary" :disabled="saving || row.status !== 'ACTIVE' || repo.status !== 'ACTIVE'" :data-testid="`generation-default-${row.directoryId}`" @click="setGenerationDefault(row)">设为生成默认</el-button></div>
       </div>
     </div>
   </aside>
