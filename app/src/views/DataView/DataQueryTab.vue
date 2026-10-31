@@ -93,6 +93,7 @@ function withPickedTable(source: EntryTypeGroup): EntryTypeGroup {
 const navigationLoading = ref(false)
 const navigationError = ref('')
 const sidebarCollapsed = ref(false)
+const tableScope = ref<'all' | 'favorites' | 'recent'>('all')
 const recentTableIds = ref<string[]>([])
 const visitedTableIds: string[] = []
 const favoriteIds = computed(() => [...favoriteEntryIds.value])
@@ -105,6 +106,17 @@ const availableTables = computed(() => {
       return true
     })
 })
+const scopedTables = computed(() => {
+  if (tableScope.value === 'all') return availableTables.value
+  const byId = new Map(availableTables.value.map(table => [table.tableId, table]))
+  const ids = tableScope.value === 'favorites' ? favoriteIds.value : recentTableIds.value
+  return ids.flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
+})
+const tableScopes = computed(() => [
+  { key: 'all' as const, label: '全部表', count: availableTables.value.length },
+  { key: 'favorites' as const, label: '我的收藏', count: availableTables.value.filter(table => favoriteIds.value.includes(table.tableId)).length },
+  { key: 'recent' as const, label: '最近查看', count: availableTables.value.filter(table => recentTableIds.value.includes(table.tableId)).length },
+])
 const currentTable = computed(() => availableTables.value.find(table => table.tableId === tableId.value))
 const currentTableName = computed(() => currentTable.value?.name || tableMeta.value?.name || currentTable.value?.tableName || tableMeta.value?.tableName || '请选择数据表')
 let disposed = false
@@ -286,7 +298,9 @@ async function searchSources(keyword: string) {
   if (!keyword.trim()) {
     sourceLoading.value = true
     try {
-      const options = await sourceOptionsForIds(ids.slice(0, SOURCE_PREVIEW_SIZE))
+      const previewIds = ids.slice(0, SOURCE_PREVIEW_SIZE)
+      if (sourceId.value && !previewIds.includes(sourceId.value)) previewIds.push(sourceId.value)
+      const options = await sourceOptionsForIds(previewIds)
       if (requestId === sourceSearchRequest) sourceOptions.value = options
     } finally {
       if (requestId === sourceSearchRequest) sourceLoading.value = false
@@ -300,7 +314,7 @@ async function searchSources(keyword: string) {
     const idMatches = ids.filter((id) => id.includes(query))
     if (idMatches.length) {
       options = await sourceOptionsForIds(idMatches.slice(0, SOURCE_PREVIEW_SIZE))
-    } else {
+    } else if (!/^\d+$/.test(query)) {
       // 名称检索由后端在表的源 ID 分块内执行，避免先全局分页再取交集漏掉本表的源。
       for (let i = 0; i < ids.length && options.length < SOURCE_PREVIEW_SIZE; i += SOURCE_LOOKUP_CHUNK * 4) {
         const batch = Array.from({ length: 4 }, (_, n) => ids.slice(i + n * SOURCE_LOOKUP_CHUNK, i + (n + 1) * SOURCE_LOOKUP_CHUNK)).filter((part) => part.length)
@@ -309,9 +323,18 @@ async function searchSources(keyword: string) {
         options = [...options, ...found.flat()].slice(0, SOURCE_PREVIEW_SIZE)
       }
     }
+    // 新表尚无 SOURCE_ID；允许显式搜索其他源，为当前表录入首条数据，不切到源的默认表。
+    if (!options.length && requestId === sourceSearchRequest) {
+      if (/^\d+$/.test(query)) {
+        options = (await sourceOptionsForIds([query])).filter(source => source.sourceId === query)
+      } else {
+        const result = await sourceApi.sourcePaged({ name: query, page: 1, size: SOURCE_PREVIEW_SIZE })
+        options = result.list.map(source => ({ sourceId: source.sourceId, name: source.name }))
+      }
+    }
     if (requestId === sourceSearchRequest) sourceOptions.value = options
   } catch (error) {
-    if (requestId === sourceSearchRequest) ElMessage.warning(`搜索当前表的源失败：${error instanceof Error ? error.message : String(error)}`)
+    if (requestId === sourceSearchRequest) ElMessage.warning(`搜索源失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     if (requestId === sourceSearchRequest) sourceLoading.value = false
   }
@@ -484,12 +507,10 @@ function onDeleteSelected() {
     },
   )
 }
-async function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
-  // scope='source' 仅删当前源数据；scope='all' 清空整表（不带 sourceId 过滤）
-  const sid = scope === 'source' ? (sourceId.value || undefined) : undefined
-  const scopeLabel = scope === 'source' ? (sourceId.value || '不限') : '全部源'
-  const scopeText = scope === 'source' ? '删除该源' : '清空表数据'
-  if (all === 1 && scope === 'all') {
+async function onDeleteByRange(all: 0 | 1) {
+  const scopeLabel = '全部源'
+  const scopeText = '清空表数据'
+  if (all === 1) {
     try {
       const result = await ElMessageBox.prompt(
         `这是不可恢复的全量清空操作。请输入当前表名“${tableId.value}”继续。`,
@@ -510,7 +531,7 @@ async function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
       ? `确认${scopeText}【所有】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`
       : `确认${scopeText}【当天】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`,
     async () => {
-      const r = await dataApi.rowDelete(tableId.value, { sourceId: sid, all })
+      const r = await dataApi.rowDelete(tableId.value, { all })
       if (!r.success) ElMessage.warning('未能改变数据, 可能原因:\n【数据超过14天或未找到对应ID】')
       return { message: `${scopeText}[${all === 1 ? '所有' : '当日'}]成功，清除条数:${r.success ?? 0}` }
     },
@@ -677,7 +698,7 @@ function onShowApi() {
 // 旧页未选源时从当前结果首行回填 SOURCE_ID / CONFIG_ID；沿用该口径，避免导入目标与当前查询脱节。
 const importOpen = ref(false)
 const importSourceId = computed(() => sourceId.value || panelRows.value[0]?.sourceId || '')
-const importConfigId = computed(() => panelRows.value[0]?.configId ?? '')
+const importConfigId = computed(() => panelRows.value.find(row => row.sourceId === importSourceId.value)?.configId ?? '')
 function openImport() {
   if (!tableId.value) {
     ElMessage.error('请先选择数据表')
@@ -1092,10 +1113,15 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="rc-card dv-page" :class="{ 'is-fullscreen': fullscreen }">
+  <div class="dv-page" :class="{ 'is-fullscreen': fullscreen }">
+    <nav class="dv-table-scopes" aria-label="数据表范围">
+      <button v-for="scope in tableScopes" :key="scope.key" class="rc-btn" :class="{ active: tableScope === scope.key }" type="button" :data-testid="`table-scope-${scope.key}`" :aria-pressed="tableScope === scope.key" @click="tableScope = scope.key">
+        {{ scope.label }} <span>{{ scope.count }}</span>
+      </button>
+    </nav>
     <div class="dv-data-workspace" :class="{ 'is-collapsed': sidebarCollapsed }">
-      <DataTableSidebar v-show="!sidebarCollapsed" :tables="availableTables" :selected-id="tableId" :favorite-ids="favoriteIds" :recent-ids="recentTableIds" :loading="navigationLoading" :error="navigationError" @select="selectSidebarTable" @collapse="sidebarCollapsed = true" @retry="reloadNavigation" />
-      <section class="dv-query-workspace" aria-label="表数据查询">
+      <DataTableSidebar v-show="!sidebarCollapsed" :tables="scopedTables" :selected-id="tableId" :scope="tableScope" :loading="navigationLoading" :error="navigationError" @select="selectSidebarTable" @collapse="sidebarCollapsed = true" @retry="reloadNavigation" />
+      <section class="rc-card dv-query-workspace" aria-label="表数据查询">
         <header class="dv-table-header">
           <div class="dv-table-context">
             <button v-if="sidebarCollapsed" class="dv-nav-expand" type="button" title="展开数据表导航" aria-label="展开数据表导航" @click="sidebarCollapsed = false"><el-icon><DArrowRight /></el-icon></button>
@@ -1181,62 +1207,56 @@ onUnmounted(() => {
       </template>
       <!-- 结果操作独立成行，查询条件可换行，保留全部既有操作。 -->
       <template #actions>
-        <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
-          <el-icon><Refresh /></el-icon>
-        </button>
-        <AddDataMenu v-if="canWrite" @manual="openAdd" @import="openImport" />
-        <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
-             「导出 ▾」里放当前页 CSV 和取数 API（1008-07：取数 API 从「更多」挪到这里） -->
-        <button
-          class="rc-btn"
-          data-testid="data-export"
-          type="button"
-          title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
-          :disabled="!tableId"
-          @click="onExport"
-        >导出 Excel</button>
-        <ExportMenu :show-excel="false" :page-disabled="pageExportDisabled" :api-disabled="!tableId" trigger-testid="data-export-menu" @export-page="onExportPage" @show-api="onShowApi" />
-        <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
-        <el-dropdown v-if="canWrite && isTestTable" trigger="click">
-          <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-              <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
-              <el-dropdown-item divided disabled>表操作</el-dropdown-item>
-              <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
-             它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
-        <button
-          class="rc-btn"
-          type="button"
-          data-testid="data-back-trace"
-          :disabled="backTracing || !tableId"
-          title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
-          @click="onDistinctSource"
-        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
-        <el-dropdown trigger="click">
-          <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
-              <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
-              <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
-              <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
-                清除父表后续标识
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <FullscreenToggle v-model="fullscreen" />
+        <div class="dv-action-group" role="group" aria-label="数据录入与刷新">
+          <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
+            <el-icon><Refresh /></el-icon>
+          </button>
+          <AddDataMenu v-if="canWrite" @manual="openAdd" @import="openImport" />
+        </div>
+        <div class="dv-action-group" role="group" aria-label="数据导出">
+          <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
+               「导出 ▾」里放当前页 CSV 和取数 API（1008-07：取数 API 从「更多」挪到这里） -->
+          <button
+            class="rc-btn"
+            data-testid="data-export"
+            type="button"
+            title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
+            :disabled="!tableId"
+            @click="onExport"
+          >导出 Excel</button>
+          <ExportMenu :show-excel="false" :page-disabled="pageExportDisabled" :api-disabled="!tableId" trigger-testid="data-export-menu" @export-page="onExportPage" @show-api="onShowApi" />
+        </div>
+        <div class="dv-action-group" role="group" aria-label="数据管理与查源">
+          <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
+          <el-dropdown v-if="canWrite && isTestTable" trigger="click">
+            <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled>按行删除</el-dropdown-item>
+                <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
+                <el-dropdown-item divided disabled>表操作</el-dropdown-item>
+                <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(0)">清空表数据【当日】</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1)">清空表数据【全量】</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
+               它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
+          <button
+            class="rc-btn"
+            type="button"
+            data-testid="data-back-trace"
+            :disabled="backTracing || !tableId"
+            title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
+            @click="onDistinctSource"
+          >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
+          <button class="rc-btn" data-testid="data-summary" type="button" :disabled="!tableId" @click="onMoreCommand('summary')">统计</button>
+          <button class="rc-btn" data-testid="data-sql" type="button" :aria-expanded="showSql" :disabled="!tableId" @click="onMoreCommand('sql')">{{ showSql ? '隐藏 SQL' : '查看 SQL' }}</button>
+          <button class="rc-btn" data-testid="data-steps" type="button" :disabled="!tableId" @click="onMoreCommand('steps')">处理步骤</button>
+        </div>
+        <FullscreenToggle v-model="fullscreen" class="dv-fullscreen-btn" />
       </template>
       <template #toolbar>
         <!-- SQL 提示 / 批量条 / 发大量后续面板保留整行展示。 -->
@@ -1245,6 +1265,7 @@ onUnmounted(() => {
         <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
           <span class="dv-batch-count">已选择 <b>{{ selectedRowKeys.length }}</b> 项</span>
           <button class="rc-btn primary" type="button" @click="onNextStepSelected">发后续任务</button>
+          <button class="rc-btn" data-testid="data-clear-parent" type="button" :disabled="!sourceId" @click="onClearParent">清除父表后续标识</button>
           <CodeConfigButton data-testid="data-query-code-btn" select-step :build-targets="() => codeTargetsForRows(panelRows, selectedRowKeys, tableId, sourceId)" label="代码生成" />
           <el-dropdown trigger="click">
             <span class="dv-link">更多批量操作<el-icon class="et-caret"><ArrowDown /></el-icon></span>
@@ -1456,7 +1477,8 @@ onUnmounted(() => {
       :table-meta="tableMeta"
       :mode="editor.mode"
       :row="editor.row"
-      :first-row="panelRows[0] ?? null"
+      :first-row="panelRows.find(row => !sourceId || row.sourceId === sourceId) ?? null"
+      :initial-source-id="sourceId || undefined"
     />
 
     <!-- 统计（方案 §1.6-4） -->
@@ -1489,13 +1511,18 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.dv-table-scopes { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; align-self: flex-start; padding: 4px; margin-bottom: 12px; border-radius: 10px; background: #f1f5f9; }
+.dv-table-scopes .rc-btn { height: 32px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: var(--rc-muted); font-size: 13px; }
+.dv-table-scopes .rc-btn.active { color: var(--rc-primary); background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
+.dv-table-scopes span { margin-left: 5px; color: var(--rc-faint); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+
 .dv-page {
   display: flex;
   height: 100%;
   min-height: 0;
   flex-direction: column;
 }
-.dv-data-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.dv-data-workspace { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 12px; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .dv-data-workspace.is-collapsed { grid-template-columns: minmax(0, 1fr); }
 .dv-query-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .dv-table-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
@@ -1512,11 +1539,23 @@ onUnmounted(() => {
 .dv-structure-btn:disabled, .dv-favorite:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .dv-help-btn.rc-btn { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; color: var(--rc-muted); }
 .dv-help-btn:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.dv-query-workspace :deep(.dqp-result-actions .rc-btn) { height: 32px; padding: 0 10px; font-size: 12px; }
+.dv-query-workspace :deep(.dqp-result-actions) { gap: 8px; row-gap: 6px; }
+.dv-action-group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.dv-action-group + .dv-action-group { padding-left: 8px; border-left: 1px solid var(--rc-border-soft); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn) { height: 30px; padding: 0 8px; border-color: transparent; border-radius: 5px; background: transparent; font-size: 12px; font-weight: 400; white-space: nowrap; }
+.dv-query-workspace :deep(.dqp-result-actions [data-testid="data-add"]), .dv-query-workspace :deep(.dqp-result-actions [data-testid="data-export"]) { border-color: var(--rc-border); background: var(--rc-surface, #fff); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn:not(:disabled):hover) { border-color: transparent; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn:disabled) { color: var(--rc-faint); cursor: not-allowed; }
+.dv-query-workspace :deep(.dqp-result-actions .rc-btn:focus-visible), .rc-icon-btn:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
+.dv-query-workspace :deep(.dqp-query-actions .rc-btn), .dv-query-workspace :deep(.dqp-quick-slot .rc-btn), .dv-query-workspace :deep(.dqp-col-btn) { font-weight: 400; border-radius: 5px; }
+.dv-query-workspace :deep(.dqp-query-actions .rc-btn:not(.primary)) { border-color: transparent; background: transparent; }
+.dv-query-workspace :deep(.dqp-query-actions .rc-btn.primary) { box-shadow: none; transform: none; }
+.dv-query-workspace :deep(.dqp-col-btn) { height: 30px; border-color: transparent; background: transparent; color: var(--rc-muted); }
+.dv-fullscreen-btn { margin-left: auto; }
 .dv-table-error { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: var(--rc-danger, #dc2626); font-size: 12px; }
 .dv-source-select { max-width: 100%; }
 @media (max-width: 1100px) { .dv-data-workspace { grid-template-columns: 208px minmax(0, 1fr); } }
-@media (max-width: 760px) { .dv-data-workspace { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .dv-data-workspace :deep(.dt-sidebar) { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--rc-border-soft); } .dv-query-workspace { min-height: 440px; } }
+@media (max-width: 760px) { .dv-data-workspace { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .dv-data-workspace :deep(.dt-sidebar) { max-height: 240px; } .dv-query-workspace { min-height: 440px; } }
 /* 全屏（1008-07）：同一份 DOM 铺满视口，不复制模板也不套弹层；z-index 与源数据视图的全屏同值（60） */
 .dv-page.is-fullscreen {
   position: fixed;
@@ -1541,12 +1580,12 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border: 1px solid #d5e2f2;
-  border-radius: 7px;
-  background: #fff;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
   color: var(--rc-text-2);
   cursor: pointer;
 }
@@ -1589,11 +1628,13 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
 .dv-batch {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
   background: var(--rc-primary-bg);
   border-bottom: 1px solid #bfdbfe;
 }
+.dv-batch .rc-btn { height: 30px; padding: 0 10px; border-radius: 5px; font-size: 12px; font-weight: 400; }
 .dv-batch-count {
   font-size: 13px;
   color: var(--rc-text-2);

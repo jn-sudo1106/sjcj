@@ -8,6 +8,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
+import { confirmSharedFlowWrite, sharedFlowPending } from '@/utils/flow/sharedFlowGuard'
 import { useFlowAutosave } from './useFlowAutosave'
 import { useFlowReadiness } from './useFlowReadiness'
 
@@ -32,7 +33,7 @@ const tip = computed(() => {
 
 async function reloadCanvas() {
   const sourceId = flow.sourceCtx?.sourceId
-  const ok = sourceId ? await reloadSourceIntoCanvas(sourceId) : await reloadFlowIntoCanvas(canvasFlowId.value)
+  const ok = sourceId ? await reloadSourceIntoCanvas(sourceId, canvasFlowId.value) : await reloadFlowIntoCanvas(canvasFlowId.value)
   if (!ok) ElMessage.warning('画布重新加载失败，请刷新页面查看')
 }
 
@@ -41,14 +42,20 @@ async function onPublish() {
   // 发布前先把画布改动落进草稿，再查节点完整性（2026-10-14 统一走 ensureFlowReady）
   if (!d || busy.value || !await ensureFlowReady('发布')) return
   const changedBase = d.baseId !== version.overview?.publishId
-  try {
-    await ElMessageBox.confirm(
-      changedBase ? '当前发布版本已与草稿基线不同，发布会覆盖当前定义。' : '发布后，新任务使用此版本，已启动任务继续使用原版本。',
-      `发布草稿 v${d.flowVer}？`,
-      { confirmButtonText: '发布', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
+  // 10-29：流程被多个源共用、本页还没确认过时，发布确认换成共用提示（发布 / 复制为本源专用）；
+  // 草稿基线变了的覆盖提醒仍要单独确认
+  const shared = sharedFlowPending()
+  if (shared && !await confirmSharedFlowWrite('publish')) return
+  if (!shared || changedBase) {
+    try {
+      await ElMessageBox.confirm(
+        changedBase ? '当前发布版本已与草稿基线不同，发布会覆盖当前定义。' : '发布后，新任务使用此版本，已启动任务继续使用原版本。',
+        `发布草稿 v${d.flowVer}？`,
+        { confirmButtonText: '发布', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
   }
   busy.value = true
   try {

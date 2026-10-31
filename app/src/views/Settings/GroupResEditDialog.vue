@@ -4,49 +4,58 @@
 // 用户组 ID 是规则的归属：新建时留空由用户自己填（不必先在列表查询组），编辑时跟着原规则走且不可改。
 //
 // 枚举全部来自 /group-res/meta（文档 §6：前端不要硬编码 resType / action / condType，也不要自拼列名）。
-// condType 只放 ID 与 SQL：STRUCT 需要前端拼 condJson，文档未给 condJson 的字段结构，接了会瞎猜
-// （后端还允许不填 resCond，猜错就直接落错条件），等后端补契约再接。
+// condType 只放 ID 与 STRUCT（2026-10-28 定档 D2②：SQL 档下线）——存量 SQL 规则只能在详情里查看，
+// 要改就新建 ID/STRUCT 规则替代；STRUCT 契约见接口文档 §2.2，提交只传 condJson，resCond 由后端编译。
 //
 // 保存前强制调 /group-res/preview 试算（文档 §7 的建议）：试算失败时 success 仍是 true，
 // 错误在 data.error；命中 0 条时二次确认——配错最常见就是条件把数据全放开或完全不生效。
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { FolderOpened } from '@element-plus/icons-vue'
 import {
   addGroupRes,
+  condItemsError,
   GROUP_ID_FLOOR,
   idCondError,
   modifyGroupRes,
+  parseCondJson,
   previewGroupRes,
-  sqlCondError,
+  stringifyCondJson,
+  type GroupResCondItem,
   type GroupResMeta,
   type GroupResRule,
 } from '@/api/groupRes'
+import StructCondEditor from './groupRes/StructCondEditor.vue'
+import CondValueInput from './groupRes/CondValueInput.vue'
 
 const props = defineProps<{ meta: GroupResMeta | null }>()
 const emit = defineEmits<{ saved: [] }>()
 
-const SUPPORTED_COND_TYPES = new Set(['ID', 'SQL'])
+const SUPPORTED_COND_TYPES = new Set(['ID', 'STRUCT'])
 
 const visible = ref(false)
 const saving = ref(false)
 const editing = ref<GroupResRule | null>(null)
 const form = reactive({ groupId: '', action: '', resType: '', condType: 'ID', resCond: '', remarks: '' })
+/** STRUCT 模式的条件行（condJson 的编辑态）；其他模式不用 */
+const condItems = ref<GroupResCondItem[]>([])
 
 const condTypes = computed(() => (props.meta?.condTypes ?? []).filter((o) => SUPPORTED_COND_TYPES.has(o.key)))
 const currentType = computed(() => props.meta?.resTypes.find((t) => t.key === form.resType) ?? null)
+/** 当前 resType 的字段白名单（STRUCT 编辑器与校验共用） */
+const currentFields = computed(() => currentType.value?.fields ?? [])
 /** ID 模式下 resCond 填的就是这一列的值，提示出来省得配错列 */
 const hint = computed(() => {
   if (!currentType.value) return '选择内容类型后可填写条件'
   if (form.condType === 'ID') return `命中列 ${currentType.value.idColumn}：填逗号分隔的 ID，如 430001300,430001301`
-  return `命中列 ${currentType.value.idColumn}：填 where 之后的条件片段，如 ${currentType.value.idColumn} > 430001300（原样落库，不做转换）`
+  return `条件行之间是 AND 关系；保存时由后端编译成 where 片段（试算结果里可以看到编译产物）`
 })
 
 /** 外部调用：传 rule = 编辑（组 ID 跟着规则走，不可改），不传 = 新建（组 ID 留空由用户填） */
 function open(rule?: GroupResRule) {
-  // STRUCT 规则的条件由 condJson 编译，本轮前端不接（见文件头）：打开编辑会把 condType 改成 ID/SQL，
-  // 保存就会覆盖掉后端编译出来的条件，所以直接拒绝，只能在详情抽屉里查看。
+  // SQL 档已下线（存量规则的条件是手写 where 片段，没有结构化编辑态）：拒绝编辑，只能详情查看后新建替代。
   if (rule && !SUPPORTED_COND_TYPES.has(rule.condType)) {
-    ElMessage.warning(`条件类型为 ${rule.condType} 的规则暂不支持在此编辑，只能在详情中查看`)
+    ElMessage.warning(`条件类型为 ${rule.condType} 的规则已停止编辑，请在详情中查看后新建 ID / 结构化条件规则替代`)
     return
   }
   editing.value = rule ?? null
@@ -59,13 +68,15 @@ function open(rule?: GroupResRule) {
     resCond: rule?.resCond ?? '',
     remarks: rule?.remarks ?? '',
   })
+  // STRUCT 回显走 condJson；解析失败（历史脏数据）回空数组，由用户重配而不是带着坏值提交
+  condItems.value = rule?.condType === 'STRUCT' ? parseCondJson(rule.condJson) : []
   visible.value = true
 }
 defineExpose({ open })
 
-/** 提交用的条件内容：ID 模式去掉空格，SQL 模式去首尾空白 */
+/** 提交用的条件内容：ID 模式去掉空格（STRUCT 不用 resCond，由后端编译） */
 function normalizedCond(): string {
-  return form.condType === 'ID' ? form.resCond.replace(/\s+/g, '') : form.resCond.trim()
+  return form.resCond.replace(/\s+/g, '')
 }
 
 /** 规则归属的用户组：纯数字且大于 90000（与后端同口径），非法时返回 0 */
@@ -76,12 +87,32 @@ const parsedGroupId = computed(() => {
   return value > GROUP_ID_FLOOR ? value : 0
 })
 
+// ---- ID 模式的辅助选择器（D3②：默认手输，选择器只是辅助入口）----
+/** idColumn 对应的字段 meta；PARAM 的 PARAM_ID 等不在白名单里的类型没有 picker，按钮隐藏 */
+const idFieldMeta = computed(() => currentFields.value.find((f) => f.field === currentType.value?.idColumn) ?? null)
+
+const idPickerVisible = ref(false)
+const idPickerValues = ref<string[]>([])
+
+function openIdPicker() {
+  // 每次打开都从当前 resCond 拆出已填 ID 回显（逗号串按空白/空项容错拆分）
+  idPickerValues.value = form.resCond.split(/[,\s]+/).filter((part) => /^\d+$/.test(part))
+  idPickerVisible.value = true
+}
+
+/** 确认：选择结果与已手输的 ID 合并去重（追加语义，不覆盖用户已填内容） */
+function applyIdPicker() {
+  const existing = form.resCond.split(/[,\s]+/).filter((part) => /^\d+$/.test(part))
+  form.resCond = [...new Set([...existing, ...idPickerValues.value])].join(',')
+  idPickerVisible.value = false
+}
+
 function validate(): string | null {
   if (!parsedGroupId.value) return `请输入用户组 ID（必须大于 ${GROUP_ID_FLOOR}）`
   if (!form.action) return '请选择行为（入选 / 排除）'
   if (!form.resType) return '请选择内容类型'
   if (!form.condType) return '请选择条件类型'
-  return form.condType === 'ID' ? idCondError(form.resCond) : sqlCondError(form.resCond)
+  return form.condType === 'ID' ? idCondError(form.resCond) : condItemsError(condItems.value, currentFields.value)
 }
 
 async function save() {
@@ -90,11 +121,13 @@ async function save() {
     ElMessage.warning(invalid)
     return
   }
-  const resCond = normalizedCond()
+  const isStruct = form.condType === 'STRUCT'
+  const resCond = isStruct ? '' : normalizedCond()
+  const condJson = isStruct ? stringifyCondJson(condItems.value) : undefined
   saving.value = true
   try {
     // 试算：success=true 也不代表通过，data.error 才是结论
-    const check = await previewGroupRes({ resType: form.resType, condType: form.condType, resCond })
+    const check = await previewGroupRes({ resType: form.resType, condType: form.condType, resCond, condJson })
     if (check.error) {
       ElMessage.error(`条件试算未通过：${check.error}`)
       return
@@ -115,7 +148,8 @@ async function save() {
       action: form.action,
       resType: form.resType,
       condType: form.condType,
-      resCond,
+      // STRUCT 的 resCond 传空串由后端编译覆盖；condJson 仅 STRUCT 时携带
+      ...(isStruct ? { resCond, condJson } : { resCond }),
       remarks: form.remarks.trim() || undefined,
     }
     const isEdit = !!editing.value
@@ -133,7 +167,7 @@ async function save() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" :title="editing ? `编辑数据权限规则 · ${editing.id}` : '新建数据权限规则'" width="520px" append-to-body destroy-on-close>
+  <el-dialog v-model="visible" :title="editing ? `编辑数据权限规则 · ${editing.id}` : '新建数据权限规则'" width="680px" append-to-body destroy-on-close>
     <el-form label-width="96px" size="default" @submit.prevent>
       <el-form-item label="用户组 ID" required>
         <el-input
@@ -160,13 +194,26 @@ async function save() {
         </el-radio-group>
       </el-form-item>
       <el-form-item label="条件内容" required>
-        <el-input
-          v-model="form.resCond"
-          :type="form.condType === 'SQL' ? 'textarea' : 'input'"
-          :rows="3"
-          data-testid="group-res-rescond"
-          :placeholder="form.condType === 'ID' ? '430001300,430001301' : 'CATEGORY_ID IN (9009387,9009388)'"
-        />
+        <div v-if="form.condType === 'ID'" class="gr-id-row">
+          <el-input
+            v-model="form.resCond"
+            data-testid="group-res-rescond"
+            placeholder="430001300,430001301"
+          />
+          <el-popover v-if="idFieldMeta" :visible="idPickerVisible" placement="bottom-end" :width="420" trigger="click">
+            <template #reference>
+              <el-button :icon="FolderOpened" data-testid="group-res-id-pick" @click="openIdPicker">选择</el-button>
+            </template>
+            <div class="gr-id-picker">
+              <CondValueInput v-model="idPickerValues" :field="idFieldMeta" multiple />
+              <div class="gr-id-picker-actions">
+                <el-button size="small" @click="idPickerVisible = false">取消</el-button>
+                <el-button size="small" type="primary" data-testid="group-res-id-pick-confirm" @click="applyIdPicker">填入 ID</el-button>
+              </div>
+            </div>
+          </el-popover>
+        </div>
+        <StructCondEditor v-else v-model="condItems" :fields="currentFields" />
         <div class="gr-hint">{{ hint }}</div>
       </el-form-item>
       <el-form-item label="备注">
@@ -182,4 +229,6 @@ async function save() {
 
 <style scoped>
 .gr-hint { font-size: 12px; color: var(--rc-muted); line-height: 1.6; }
+.gr-id-row { display: flex; gap: 6px; width: 100%; }
+.gr-id-picker-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 </style>

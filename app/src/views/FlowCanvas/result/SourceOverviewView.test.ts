@@ -9,6 +9,7 @@ import { favoriteSourceIds } from '@/utils/sourceFavorites'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
 
 // 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
 // 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
@@ -1622,14 +1623,16 @@ describe('源视图 · 不限网站（采集资产源列表视图，0924-06）',
   it('「网站」筛选：候选由组件自己拉；选中后按该网站查，「未关联网站」传 -1，清空还原', async () => {
     const { wrapper, page, sites } = await mountCross()
     expect(sites).toHaveBeenCalledTimes(1)
-    const select = wrapper.get('[data-testid="source-overview-site"]')
-    expect(select.findAll('option').map((o) => o.text())).toEqual(['全部网站', '未关联网站', '公众号采集-测试', '上市公司', '主流媒体'])
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    expect(select.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))).toEqual(['全部网站', '未关联网站', '公众号采集-测试', '上市公司', '主流媒体'])
 
-    await select.setValue('12')
+    select.vm.$emit('update:modelValue', '12')
+    select.vm.$emit('change', '12')
     await flushPromises()
     expect(lastQuery(page)?.siteIds).toBe('12')
 
-    await select.setValue('-1')
+    select.vm.$emit('update:modelValue', '-1')
+    select.vm.$emit('change', '-1')
     await flushPromises()
     expect(lastQuery(page)?.siteIds).toBe('-1')
 
@@ -1641,8 +1644,25 @@ describe('源视图 · 不限网站（采集资产源列表视图，0924-06）',
   it('页签范围 scopeSiteIds：按逗号拼成 siteIds；网站候选只列范围内的，不给「未关联网站」', async () => {
     const { wrapper, page } = await mountCross({ scopeSiteIds: ['89', '12'] })
     expect(lastQuery(page)?.siteIds).toBe('89,12')
-    const options = wrapper.get('[data-testid="source-overview-site"]').findAll('option').map((o) => o.text())
+    const options = wrapper.getComponent({ name: 'ElSelect' }).findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))
     expect(options).toEqual(['全部网站', '上市公司', '主流媒体'])
+  })
+
+  it('网站下拉输入名称本地匹配，选中候选后才按网站 ID 查询', async () => {
+    const { wrapper, page } = await mountCross()
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    const calls = page.mock.calls.length
+    await select.get('.el-select__wrapper').trigger('click')
+    await select.get('input').setValue('上市')
+    await vi.waitFor(() => {
+      const visible = select.findAllComponents({ name: 'ElOption' }).filter(option => option.isVisible())
+      expect(visible.map(option => option.text())).toEqual(['上市公司'])
+    })
+    expect(page).toHaveBeenCalledTimes(calls)
+    await select.findAllComponents({ name: 'ElOption' }).find(option => option.props('value') === '12')!.trigger('click')
+    await flushPromises()
+    expect(lastQuery(page)?.siteIds).toBe('12')
+    wrapper.unmount()
   })
 
   it('范围为空数组：不发请求，显示调用方给的空态文案', async () => {
@@ -1776,6 +1796,26 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     page.mockClear()
     return { wrapper, page }
   }
+
+  it('清理源数据入口仅管理员可用，弹窗带入勾选的源', async () => {
+    useAuthStore().roles = ['admin']
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ list1: [], list2: [], list3: [] })
+    const { wrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus] as never[])
+    await wrapper.get('[data-testid="source-check-391000500"]').setValue(true)
+    const menu = wrapper.findAllComponents({ name: 'ElDropdown' }).find(component => component.attributes('data-testid') === 'source-group-ops')!
+    menu.vm.$emit('command', 'cleanup-data')
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'SourceDataCleanupDialog' })
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['391000500'])
+    wrapper.unmount()
+    useAuthStore().roles = ['read']
+    const { wrapper: readWrapper } = await mountGroupOps([GROUP_SOURCE, INDEP_SOURCE], [ElementPlus] as never[])
+    readWrapper.findAllComponents({ name: 'ElDropdown' }).find(component => component.attributes('data-testid') === 'source-group-ops')!.vm.$emit('command', 'cleanup-data')
+    await flushPromises()
+    expect(readWrapper.findComponent({ name: 'SourceDataCleanupDialog' }).exists()).toBe(false)
+    readWrapper.unmount()
+  })
 
   it('groupOps 时保留来源组 / 默认流程两列，移除重复的流程配置列', async () => {
     const { wrapper } = await mountGroupOps()

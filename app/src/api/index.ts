@@ -1,3 +1,5 @@
+import { directoryQueryParams } from './sourceDirectoryScope'
+import { sourceScopePaged } from './siteSourceScope'
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { DEFAULT_API_PROXY_TARGET } from '@/constants/backend'
 import { flowSourcesEndpoint } from './flowBackend'
@@ -543,6 +545,7 @@ export const sourceApi = {
         // **只放在 sourcePaged 里，不进 sourceCondParams**：changeMembersByRange 等其它按条件的接口不认它，
         // 混进去会变成「不限」（按范围调整来源组甚至会带 confirmAll 改全平台）。
         viewCategoryId: p?.viewCategoryId,
+        directory: p?.directory,
       },
     })
     return sourcePageFromLegacy(result)
@@ -1280,6 +1283,7 @@ async function loadSiteUsedTables(siteId: string): Promise<SiteUsedTablesResult>
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
 export const siteApi = {
+  sourceScopePaged,
   /** 网站源实际用到的表（主表 ∪ 流程节点的输入/输出表），带每张表的源名单（0924-09） */
   siteUsedTables: (siteId: string, options: { force?: boolean } = {}): Promise<SiteUsedTablesResult> => {
     const hit = siteUsedTablesCache.get(siteId)
@@ -2982,15 +2986,19 @@ export const configApi = {
    * **为什么按 ID 差集定位而不是猜名字**：copyAll 生成的名字是 `原名_copy`，但那个名字可能**早就被占用**
    * （生产上就有一条历史遗留的 `test2_copy`），按名字回查会认错。改成复制前后各查一次同名前缀，
    * 取新增的 ID——不依赖任何命名规则。
+   *
+   * **前缀要去掉 `_copyN`**（10-29 在 186 实测）：原名已带后缀时 copyAll 会递增，`X_copy1` 复制出 `X_copy2`，
+   * 拿 `X_copy1` 模糊查匹配不到新配置，复制品再复制时改绑全部失败。改用去掉后缀的 `X` 查。
    */
   copyConfigAndLocate: async (sourceConfigId: string, sourceName: string) => {
-    const before = new Set((await configsByNameLike(sourceName)).map((item) => item.configId))
+    const prefix = sourceName.replace(/_copy\d*$/, '') || sourceName
+    const before = new Set((await configsByNameLike(prefix)).map((item) => item.configId))
     const ack = await request<Ack>('config/copyAll', { configId: sourceConfigId }, {
       method: 'GET',
       httpParams: { id: sourceConfigId },
     })
     if (ack && 'ok' in ack && !ack.ok) return { ok: false as const, message: ack.message }
-    const added = (await configsByNameLike(sourceName)).filter((item) => !before.has(item.configId))
+    const added = (await configsByNameLike(prefix)).filter((item) => !before.has(item.configId))
     if (added.length !== 1) {
       // 0 条 = 没复制成功；多条 = 同时有别人在复制，认不准。两种都不绑定，交给用户确认。
       return { ok: false as const, message: `复制后无法唯一定位新配置（匹配到 ${added.length} 条），请刷新确认` }
@@ -3540,6 +3548,7 @@ export const sourceGroupApi = {
       .filter(([, value]) => !(Array.isArray(value) && !value.filter(Boolean).length)))
     const httpParams = {
       ...cond,
+      ...directoryQueryParams(input.filter.directory),
       targetSourceGroupId: input.targetSourceGroupId,
       ...(input.confirmAll ? { confirmAll: true } : {}),
     }
@@ -3828,10 +3837,12 @@ export const flowCenterApi = {
    * 自己已有一条 `isRoot=1`，子步骤的 `lastStep='0'` 会自然落到它身上（2026-09-04 已核）。
    * 新 ID 与 saveFlow 同款：回执 data 为 null，从 msg 里解析。
    */
-  copy: async (flowId: string, flowName?: string): Promise<string> => {
+  copy: async (flowId: string, flowName?: string, opts: { useDraft?: boolean } = {}): Promise<string> => {
     if (!flowId) throw new Error('请先选择要复制的流程')
     const payload: Record<string, unknown> = { flowId }
     if (flowName?.trim()) payload.flowName = flowName.trim()
+    // 10-30（186 已上）：useDraft=1 有草稿复制草稿；不传 = 先发布版、没有再草稿
+    if (opts.useDraft) payload.useDraft = 1
     // ⚠️ `paramsIn: 'query'`：后端这两条复制端点是 `@RequestParam`，POST 但参数走 query string，
     // 不是 JSON body（2026-09-05 实测：发 body 报 "Required request parameter 'flowId' ...
     // is not present"）。跟 item/next/saveItemConfig 同一种写法。

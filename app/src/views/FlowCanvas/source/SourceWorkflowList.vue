@@ -14,8 +14,10 @@ const router = useRouter()
 const loading = ref(false)
 const rows = ref<WorkflowBinding[]>([])
 const bindOpen = ref(false)
-// 入组的源：来源组的流程只读（要改去来源组），源自有的流程照常关联 / 设主 / 解除（10-15 后端放行）
-const hasInherited = computed(() => rows.value.some(row => row.inherited))
+// 入组的源只走来源组的流程（1021-02）：只列组流程、只读，不给关联 / 新增；要单独配置先退出来源组。
+// 组还没绑流程时 rows 是空的，所以组 ID 单独记（workflowBindingApi.load 带回）
+const groupId = ref('')
+const inGroup = computed(() => !!groupId.value)
 /** 本源自己绑定的行（来源组段里也可能有本源同时绑的） */
 const isOwn = (row: WorkflowBinding) => !row.inherited || !!row.own
 
@@ -28,7 +30,9 @@ const roleText: Record<WorkflowBindingRole, string> = {
 async function load() {
   loading.value = true
   try {
-    rows.value = await workflowBindingApi.list(props.sourceId)
+    const loaded = await workflowBindingApi.load(props.sourceId)
+    rows.value = loaded.rows
+    groupId.value = loaded.sourceGroupId ?? ''
   } catch (error) {
     ElMessage.error(`流程列表加载失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
@@ -133,17 +137,19 @@ onMounted(load)
           <p>一个源可关联多条流程；其中一条是默认（主）流程，正常运行时从它启动。</p>
         </div>
         <div class="swl-actions">
-          <button class="rc-btn" type="button" @click="bindOpen = true">关联已有</button>
-          <button class="rc-btn primary" type="button" @click="createFlow"><el-icon><Plus /></el-icon> 新增流程</button>
+          <template v-if="!inGroup">
+            <button class="rc-btn" type="button" @click="bindOpen = true">关联已有</button>
+            <button class="rc-btn primary" type="button" @click="createFlow"><el-icon><Plus /></el-icon> 新增流程</button>
+          </template>
           <button class="swl-refresh" type="button" title="刷新" aria-label="刷新" @click="load"><el-icon><Refresh /></el-icon></button>
         </div>
       </div>
 
-      <div v-if="hasInherited" class="swl-inherit" data-testid="workflow-group-locked">
-        当前源已加入来源组：来源组的流程在这里只能查看，要改请到来源组里配置；源自己的流程可以照常关联、设主、解除。运行时本源的主流程优先，没有再用来源组的默认流程。
+      <div v-if="inGroup" class="swl-inherit" data-testid="workflow-group-locked">
+        当前源已加入来源组 #{{ groupId }}：组内源统一使用来源组的流程，这里只能查看；要改请到来源组里配置，要单独配置请先退出来源组。
       </div>
 
-      <el-table v-loading="loading" :data="rows" empty-text="当前源尚未关联流程" class="swl-table">
+      <el-table v-loading="loading" :data="rows" :empty-text="inGroup ? '来源组还没有配置流程' : '当前源尚未关联流程'" class="swl-table">
         <el-table-column label="流程" min-width="260">
           <template #default="{ row }">
             <button class="swl-link" type="button" @click="openFlow(row)">{{ row.workflowName }}</button>

@@ -74,7 +74,7 @@ async function submit() {
       data-testid="biz-template-import-text"
       placeholder="一行一条，格式：源名称;URL（URL 可省略，省略时沿用模板源的 URL）&#10;波兰语公告;https://example.com/notice?lang=pl&#10;瑞典语公告;https://example.com/notice?lang=sv"
     />
-    <div class="bti-hint">新源复用模板源的配置和流程（与模板源共用同一条流程，改流程会一起生效），归入模板源的网站；空行跳过</div>
+    <div class="bti-hint">新源复用模板源的配置，归入模板源的网站；模板源属于来源组时，新源加入同组并使用组流程，否则共用模板源的流程。修改共用流程会一起生效；空行跳过</div>
     <div v-if="!createEnabled" class="bti-err">{{ CREATE_DISABLED_MESSAGE }}</div>
     <div v-if="result" class="bti-result" role="alert" data-testid="biz-template-import-result">
       <div>已新增 {{ result.added.length }} 条<template v-if="result.skipped">，跳过 {{ result.skipped }} 条</template>，失败 {{ result.failed.length }} 条</div>

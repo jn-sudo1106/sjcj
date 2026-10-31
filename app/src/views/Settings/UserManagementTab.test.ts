@@ -69,10 +69,6 @@ async function mountAs(roles: string[], creatorGroup?: number) {
 }
 
 /** 列表按 ROWS 顺序渲染，操作列里的图标按同一顺序排列 */
-const ROW_ORDER = ROWS.map((row) => row.userId)
-function editIcon(wrapper: ReturnType<typeof mount>, userId: number) {
-  return wrapper.findAll('[data-testid="sys-user-edit"]')[ROW_ORDER.indexOf(userId)]!
-}
 function statusSwitch(wrapper: ReturnType<typeof mount>, userId: number) {
   return wrapper.find(`[data-testid="sys-user-status-${userId}"]`)
 }
@@ -94,18 +90,22 @@ describe('用户管理页面', () => {
     expect(text).toContain('失效')
   })
 
-  it('内置 admin 行：状态开关禁用，点编辑只给原因、不发请求（③B）', async () => {
+  it('内置 admin 行：操作列只渲染「详情」，状态开关禁用（③B）', async () => {
     const wrapper = await mountAs(['admin'])
-    const warning = vi.spyOn(ElMessage, 'warning')
-    const update = vi.spyOn(sysUserApi, 'updateSysUser').mockResolvedValue({ ok: true })
 
+    // 三行都有详情；编辑 / 重置密码只出现在两个普通账号行——
+    // 给内置行渲染置灰图标（甚至解析失败的占位）会让该行比别的多占槽位，图标就歪了
+    expect(wrapper.findAll('[data-testid="sys-user-detail"]')).toHaveLength(3)
+    expect(wrapper.findAll('[data-testid="sys-user-edit"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="sys-user-password"]')).toHaveLength(2)
     expect(statusSwitch(wrapper, 1).find('input').attributes('disabled')).toBeDefined()
-    await editIcon(wrapper, 1).trigger('click')
-    await flushPromises()
+  })
 
-    expect(warning).toHaveBeenCalledWith('内置 admin 账号不允许在此修改')
-    expect(update).not.toHaveBeenCalled()
-    expect(document.querySelector('.el-dialog')).toBeNull()
+  it('整页没有解析失败的组件（图标漏 import 会渲染成空占位，正是操作列错位的成因）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await mountAs(['admin'])
+    const logged = warn.mock.calls.flat().map(String).join(' | ')
+    expect(logged).not.toContain('Failed to resolve component')
   })
 
   it('新建用户：所属组默认填当前登录管理员自己的组（⑤补充口径）', async () => {
@@ -133,18 +133,18 @@ describe('用户管理页面', () => {
     expect(add).not.toHaveBeenCalled()
   })
 
-  it('点状态开关停用要二次确认，确认后按 status=1 调接口并重查列表（②C）', async () => {
+  it('点状态开关停用要二次确认，确认后按 status=1 调接口并重查列表（只改状态，不解绑角色）', async () => {
     const wrapper = await mountAs(['admin'])
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    const change = vi.spyOn(sysUserApi, 'changeSysUserStatus').mockResolvedValue({ ok: true, message: '已失效，并解除 1 条角色绑定' })
+    const change = vi.spyOn(sysUserApi, 'changeSysUserStatus').mockResolvedValue({ ok: true, message: '已失效（角色绑定保持不变）' })
 
     await statusSwitch(wrapper, 12).trigger('click')
     await flushPromises()
 
     expect(confirm).toHaveBeenCalled()
-    expect(confirm.mock.calls[0]![0]).toContain('必须先在后台数据库把角色绑定补回来')
+    expect(confirm.mock.calls[0]![0]).toContain('角色绑定保持不变')
     expect(change).toHaveBeenCalledWith(12, 1)
-    // 停用后重新拉一次列表，才能拿到已被清空的角色绑定
+    // 停用后重新拉一次列表，状态与展示保持准确
     expect(vi.mocked(sysUserApi.pagedSysUser)).toHaveBeenCalledTimes(2)
   })
 
@@ -159,15 +159,15 @@ describe('用户管理页面', () => {
     expect(change).not.toHaveBeenCalled()
   })
 
-  it('启用没有角色的账号：后端拒绝的文案原样透出，开关不翻转（启用闸门）', async () => {
+  it('启用没有角色的账号：后端拒绝的文案原样透出，开关不翻转（空角色启用守卫）', async () => {
     const wrapper = await mountAs(['admin'])
     const error = vi.spyOn(ElMessage, 'error')
-    vi.spyOn(sysUserApi, 'changeSysUserStatus').mockRejectedValue(new Error('该用户已没有角色，直接启用会拿到管理员权限'))
+    vi.spyOn(sysUserApi, 'changeSysUserStatus').mockRejectedValue(new Error('该用户没有任何角色绑定，直接启用会被当成管理员'))
 
     await statusSwitch(wrapper, 14).trigger('click')
     await flushPromises()
 
-    expect(error).toHaveBeenCalledWith('状态更新失败：该用户已没有角色，直接启用会拿到管理员权限')
+    expect(error).toHaveBeenCalledWith('状态更新失败：该用户没有任何角色绑定，直接启用会被当成管理员')
   })
 
   it('普通 read 账号：新建按钮不渲染，状态开关全部禁用', async () => {

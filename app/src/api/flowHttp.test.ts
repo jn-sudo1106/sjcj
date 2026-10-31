@@ -241,6 +241,16 @@ describe('flow 流程 HTTP 契约', () => {
     expect(id).toBe('728')
   })
 
+  it('POST /v1/flow/copyFlow：useDraft 走 query，值为 1；不传就不带（10-30）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: 728, msg: '复制成功，新流程ID:728' }))
+    const { flowCenterApi } = await import('./index')
+    await flowCenterApi.copy('1001', '副本', { useDraft: true })
+    await flowCenterApi.copy('1001', '副本')
+    const [withDraft, plain] = fetchMock.mock.calls.map(([url]) => new URL(url as string, 'http://local.test').searchParams)
+    expect(withDraft!.get('useDraft')).toBe('1')
+    expect(plain!.has('useDraft')).toBe(false)
+  })
+
   it('POST /v1/flow/copyFlow：小写「id:」msg 与 saveFlow 同款也能命中（兼容旧后端）', async () => {
     // 0927 P2-3：data 与 msg 故意给**不同值**（data=707、msg 解析 939）——若哪天
     // normalizeHttpPayload 不再丢标量、copy 转从 data 取 ID，此断言立刻失败暴露。

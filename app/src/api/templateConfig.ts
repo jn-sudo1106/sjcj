@@ -59,8 +59,23 @@ export function createTemplateCrudApi<T extends TemplateRow>(config: TemplateCru
   return api
 }
 
-/** sql 模板配置（旧「模板配置 → sql模板配置」） */
-export const sqlTemplateApi = createTemplateCrudApi<SqlTemplate>({ module: 'sql-temp' })
+/** sql 模板的接口面：通用 CRUD 面 + 删除 */
+export interface SqlTemplateApi extends TemplateCrudApi<SqlTemplate> {
+  /** 删除（POST /api/poc/sql-temp/delete，id 走 **query**，与选表规则 / 实体改写同形态） */
+  remove(id: number): Promise<Ack>
+}
+
+/**
+ * sql 模板配置（旧「模板配置 → sql模板配置」）。
+ * remove 不在工厂里（见 TemplateCrudApi 的注释）：/api/poc/sql-temp/delete 是 1029 在 SqlTempController
+ * 补的软删端点（DEL_FLAG=1 + 重刷 Constant.SQL_TEMP_CONFIG 内存缓存），旧平台没有这个端点。
+ * 本域其余模板模块后端没有删除端点（replace-table-config / dic / data-index-sync 都没有），不要跟着加。
+ */
+export const sqlTemplateApi: SqlTemplateApi = {
+  ...createTemplateCrudApi<SqlTemplate>({ module: 'sql-temp' }),
+  remove: (id: number) =>
+    request<Ack>('poc/sql-temp/delete', { id }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/sql-temp/delete` }),
+}
 
 /**
  * 表模板配置（旧「模板配置 → 表模板配置」）。

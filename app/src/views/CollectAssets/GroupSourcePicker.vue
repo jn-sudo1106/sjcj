@@ -4,16 +4,15 @@ import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { sourceApi, sourceGroupApi, type Source } from '@/api'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
-import GroupJoinConfirmDialog from './GroupJoinConfirmDialog.vue'
-import { JOIN_CHECK_MAX, findOwnFlows, joinGroup, joinResultText, type JoinCandidate, type OwnFlowRow } from './groupJoin'
+import { JOIN_CHECK_MAX, joinGroup, joinResultText, type JoinCandidate } from './groupJoin'
 const props = withDefaults(defineProps<{
   modelValue: boolean
   groupId: string
   /** 1008-03 来源组「添加源」：true 时保存走 `source-group/changeMembers` 加入后端来源组，
    *  而不是本机分组 store。选中的源分属不同组时分批提交（changeMembers 一次只接受一个 expected）。
-   *  1021-03：先查源自己的流程，有的话弹「入组确认」，确认后先解绑再入组（groupJoin.ts）。 */
+   *  入组保留源自己的流程，退组后恢复（groupJoin.ts）。 */
   backendMode?: boolean
-  /** backend 模式的来源组名（入组确认弹窗标题用；不传显示「组 #ID」） */
+  /** backend 模式的来源组名 */
   groupName?: string
   /** 「我的视图」添加源（2026-10-12）：不写任何东西，只把选中的源 ID 通过 pick 事件交给父级 */
   pickMode?: boolean
@@ -161,45 +160,25 @@ async function save() {
     } catch (e) { ElMessage.error(e instanceof Error ? e.message : '本机保存失败') }
     return
   }
-  // backend 模式：先查自有流程 → 有就弹入组确认 → 先解绑再入组（1021-03）
   if (selected.value.length > JOIN_CHECK_MAX) {
-    ElMessage.warning(`一次最多加入 ${JOIN_CHECK_MAX} 个源（要逐个检查源自己的流程），请分批勾选`)
+    ElMessage.warning(`一次最多加入 ${JOIN_CHECK_MAX} 个源，请分批勾选`)
     return
   }
   joining.value = true
   try {
-    joinSources.value = (await selectedSources()).filter((s) => s.sourceGroupId !== props.groupId)
-    const own = await findOwnFlows(joinSources.value)
-    if (own.length) ownRows.value = own
-    else await runJoin([])
-  } catch (e) {
-    ElMessage.error(`检查源的流程失败：${e instanceof Error ? e.message : String(e)}`)
+    const sources = (await selectedSources()).filter((s) => s.sourceGroupId !== props.groupId)
+    const result = await joinGroup({ groupId: props.groupId, sources })
+    if (result.failures.length) ElMessage.error(joinResultText(result))
+    else ElMessage.success(joinResultText(result))
+    if (result.joined) emit('saved')
+    if (!result.failures.length) emit('update:modelValue', false)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error))
   } finally {
     joining.value = false
   }
 }
 const joining = ref(false)
-const joinSources = ref<JoinCandidate[]>([])
-const ownRows = ref<OwnFlowRow[] | null>(null)
-async function runJoin(excludeIds: string[]) {
-  joining.value = true
-  try {
-    const skip = new Set(excludeIds)
-    const result = await joinGroup({
-      groupId: props.groupId,
-      sources: joinSources.value.filter((s) => !skip.has(s.sourceId)),
-      unbindIds: (ownRows.value ?? []).map((r) => r.sourceId).filter((id) => !skip.has(id)),
-    })
-    ownRows.value = null
-    if (result.failures.length) ElMessage.error(joinResultText(result))
-    else ElMessage.success(`${joinResultText(result)}${skip.size ? `，${skip.size} 个源未加入` : ''}`)
-    // 前面几批已经生效，失败了父级照样要重拉
-    if (result.joined) emit('saved')
-    if (!result.failures.length) emit('update:modelValue', false)
-  } finally {
-    joining.value = false
-  }
-}
 </script>
 <template>
   <el-dialog :model-value="modelValue" :title="title || '选择源加入分组'" width="980px" style="max-width: calc(100vw - 32px)" append-to-body :close-on-click-modal="!busy" :close-on-press-escape="!busy" :show-close="!busy" @update:model-value="emit('update:modelValue', $event)">
@@ -247,17 +226,6 @@ async function runJoin(excludeIds: string[]) {
     </div>
     <template #footer><div class="picker-footer"><span>已选 {{ selected.length }} 个源（跨页保留）</span><el-button :icon="Refresh" circle size="small" :disabled="busy" aria-label="刷新源列表" title="刷新源列表" @click="load" /><el-button :disabled="busy" @click="emit('update:modelValue', false)">取消</el-button><slot name="submit" :ids="selected"><el-button type="primary" :disabled="!selected.length" :loading="joining" data-testid="picker-save" @click="save">{{ confirmText || '加入分组' }}</el-button></slot></div></template>
   </el-dialog>
-  <GroupJoinConfirmDialog
-    v-if="ownRows"
-    :group-id="props.groupId"
-    :group-name="groupName || `组 #${props.groupId}`"
-    :rows="ownRows"
-    :direct-count="joinSources.length - ownRows.length"
-    :busy="joining"
-    @back="ownRows = null"
-    @close="ownRows = null"
-    @confirm="runJoin"
-  />
 </template>
 <style scoped>
 .picker-layout.with-aside { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; }

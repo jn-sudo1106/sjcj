@@ -10,8 +10,9 @@
 //
 // 必须留在服务端的四条规则（前端只做同口径预检，省一次往返，不是安全边界）：
 //   1. 口令不落明文：新增与重置密码都传明文，服务端写 {p} + md5(登录名 + 明文)；出参永不含口令。
-//   2. 停用 = 失效 + 解除该用户全部角色绑定；再启用前必须先补回角色，
-//      因为 ShiroDbRealm 取不到角色时会兜底成 admin（空角色 = 超级管理员）。
+//   2. 停用只改状态，不动角色绑定（2026-10-28 改判）；失效账号被登录查询的 user_status=0 挡住，
+//      重新启用无需补角色。唯一守卫：没有任何绑定的账号不许直接启用——ShiroDbRealm 取不到角色
+//      时会兜底成 admin（空角色 = 超级管理员），先补绑定再来。
 //   3. 登录名创建后不可改：它参与口令哈希，改了等于把密码一起作废。
 //   4. 新建账号由服务端自动绑一条 read（只读）角色，本页不提供任何角色维护入口——
 //      要 admin 权限的账号由管理员直接改后台数据库的 SYS_USER_2_ROLE。
@@ -110,7 +111,7 @@ export function updateSysUser(input: SysUserInput & { userId: number }): Promise
   return request<SysUserAck>(EP.update, input, { method: 'POST' })
 }
 
-/** 启用 / 停用：停用会连带解除该用户全部角色绑定 */
+/** 启用 / 停用：只改状态，角色绑定保持不变（空角色账号的启用会被后端拒绝） */
 export function changeSysUserStatus(userId: number, status: number): Promise<SysUserAck> {
   return request<SysUserAck>(EP.status, { userId, status }, { method: 'POST' })
 }

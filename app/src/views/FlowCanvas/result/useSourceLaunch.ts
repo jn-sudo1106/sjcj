@@ -15,6 +15,7 @@ export const COLLECT_PAGE_SIZE = 500
 export const LAUNCH_BATCH_SIZE = 500
 
 export type SourceFilter = {
+  directory?: import('@/api/sourceDirectoryScope').SourceDirectoryScope
   siteIds?: string
   sourceIds?: string
   /** 按流程过滤（0904 I16 / Z7-2）。`sourcePaged` 服务端认这个条件——2026-09-02 实测

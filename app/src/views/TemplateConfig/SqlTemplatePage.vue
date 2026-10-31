@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // SQL 模板配置（旧 ai-chat-view「模板配置 → sql模板配置」，src/demo/SqlTempConfig.vue）。
 // 页面只提供三份声明：列 / 表单字段 / 接口，列表结构与交互由 components/templateConfig 的通用层承担。
+// 行删除也是通用层给的：sqlTemplateApi 带 remove（POST /api/poc/sql-temp/delete，后端软删 DEL_FLAG=1
+// 并重刷内存里的模板缓存），所以操作列多出「删除」图标 + 确认框；旧平台这一页没有删除入口，是后补的能力。
 // 列标题与表单项标题都按旧页面原文（同一字段在列表叫「通过条件」、在编辑弹窗叫「接受条件」，
 // 是旧平台自身的用词不一致，迁移期不合并口径，等旧平台下线后统一）。
 import { sqlTemplateApi } from '@/api/templateConfig'

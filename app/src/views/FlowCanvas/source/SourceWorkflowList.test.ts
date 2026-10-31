@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 流程列表（flowMode=list）：数据来自 source-group 绑定；入组的源来源组流程只读、本源流程可改，没有任何兼容模式提示。
+// 流程列表（flowMode=list）：数据来自 source-group 绑定；入组的源只列来源组流程、只读（1021-02），没有任何兼容模式提示。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -40,7 +40,7 @@ beforeEach(() => {
 
 describe('SourceWorkflowList', () => {
   it('独立源：列出关联流程；非默认流程可设为主流程、可解除；没有版本列、没有用途选择、没有兼容提示', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([row('11', true), row('12', false)])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue({ rows: [row('11', true), row('12', false)], sourceGroupId: null })
     const wrapper = await mountList()
 
     expect(wrapper.text()).toContain('流程11')
@@ -55,7 +55,7 @@ describe('SourceWorkflowList', () => {
   })
 
   it('设为主流程：确认后调 setPrimary 并刷新；解除同理', async () => {
-    const list = vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([row('11', true), row('12', false)])
+    const list = vi.spyOn(workflowBindingApi, 'load').mockResolvedValue({ rows: [row('11', true), row('12', false)], sourceGroupId: null })
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     const setPrimary = vi.spyOn(workflowBindingApi, 'setPrimary').mockResolvedValue(undefined)
     const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue(undefined)
@@ -71,19 +71,29 @@ describe('SourceWorkflowList', () => {
     expect(unbind).toHaveBeenCalledWith('100', '12')
   })
 
-  it('入组的源：来源组流程只能打开，本源流程可设主 / 解除；关联 / 新增照常提供', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([
-      { ...row('21', false, true), groupDefault: true },
-      row('22', false, true),
-      { ...row('31', true), own: true },
-      { ...row('32', false), own: true },
-    ])
+  it('入组的源：只列来源组流程、只能打开；不给关联 / 新增，提示要单独配置先退组', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue({
+      rows: [{ ...row('21', true, true), groupDefault: true }, row('22', false, true)],
+      sourceGroupId: '9',
+    })
     const wrapper = await mountList()
 
-    expect(wrapper.get('[data-testid="workflow-group-locked"]').text()).toContain('来源组的流程在这里只能查看')
+    const banner = wrapper.get('[data-testid="workflow-group-locked"]').text()
+    expect(banner).toContain('来源组 #9')
+    expect(banner).toContain('先退出来源组')
+    expect(banner).not.toContain('本源的主流程优先')
     expect(wrapper.text()).toContain('组默认')
-    expect(wrapper.findAll('.swl-op').map((b) => b.text())).toEqual(['打开', '打开', '打开', '打开', '设为主流程', '解除'])
-    expect(wrapper.findAll('button').some((b) => b.text() === '关联已有')).toBe(true)
-    expect(wrapper.findAll('button').some((b) => b.text().includes('新增流程'))).toBe(true)
+    expect(wrapper.findAll('.swl-op').map((b) => b.text())).toEqual(['打开', '打开'])
+    expect(wrapper.findAll('button').some((b) => b.text() === '关联已有')).toBe(false)
+    expect(wrapper.findAll('button').some((b) => b.text().includes('新增流程'))).toBe(false)
+  })
+
+  it('入组但来源组还没绑流程：仍按组内源处理，空态提示组未配置', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue({ rows: [], sourceGroupId: '9' })
+    const wrapper = await mountList()
+
+    expect(wrapper.find('[data-testid="workflow-group-locked"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('来源组还没有配置流程')
+    expect(wrapper.findAll('button').some((b) => b.text() === '关联已有')).toBe(false)
   })
 })

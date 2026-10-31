@@ -13,10 +13,10 @@
 **对接的后端**：
 
 - 业务后端 bee-config（`D:\workspace\cl\bee-top-dev`）——`config/*` 系列接口，例如实体表分页 `config/entryTypePagedView`
-- 同步平台 sync-platform——走**同源 `/api/sync-platform` 代理**，与业务后端主机无关，所以同步类功能在任何后端环境下入口都在
+- 同步平台 sync-platform——走**同源 `/api/sync-platform` 代理**：`npm run dev` 与本机业务后端同机，`npm run test` 指向 133 公网 Nginx
 - 模板配置域 `/api/poc`——独立进程，由 vite/nginx 直接转发，不经过业务后端
 
-**运行与校验命令**（在 `app/` 下）：`npm run dev`、`npm run build`（先 `vue-tsc` 类型检查再打包）、`npm run test`（Vitest）、`npm run lint`、`npm run deploy` / `deploy:head`（隔离部署）。环境地址与部署惯例记在根目录 `AGENTS.md`，本地 dev 固定连 186。
+**运行与校验命令**（在 `app/` 下或仓库根目录）：`npm run dev`、`npm run build`（先 `vue-tsc` 类型检查再打包）、`npm run test:unit`（Vitest）、`npm run lint`、`npm run deploy` / `deploy:head`（隔离部署）。环境地址与部署惯例记在根目录 `AGENTS.md`：`npm run dev` 连本机 `127.0.0.1:9999`，`npm run test` 连 186 开发环境（原 dev 默认）。
 
 **边界**：页面能点通不代表后端契约已验证——`live` 标记只说明该端点已切真实接口。新增页面动作若后端没有对应参数，前端不会自己变出过滤能力（这类缺口要在后端补）。
 

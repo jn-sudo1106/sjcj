@@ -1,14 +1,26 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import EditSourceDialog from './EditSourceDialog.vue'
-import { sourceApi, type Source } from '@/api'
+import { siteApi, sourceApi, type Source } from '@/api'
 
 const source: Source = {
   sourceId: 'source-a', siteId: 'site-a', name: '原源', url: 'https://example.com',
   configId: '', mainTable: '', owner: 'admin', state: 'C',
 }
 
+/** el-select 在单测里没注册 Element Plus：给个能 v-model 的替身，测试里 $emit('update:modelValue') 驱动 */
+const elSelectStub = {
+  name: 'ElSelectStub',
+  props: ['modelValue', 'disabled'],
+  emits: ['update:modelValue'],
+  template: '<div class="el-select-stub" :data-value="modelValue"><slot /></div>',
+}
+const quickStubs = { global: { stubs: { 'el-select': elSelectStub, 'el-option': true } } }
+
+beforeEach(() => {
+  vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 2, list: [{ siteId: 'site-a', name: '网站 A' }, { siteId: 'site-b', name: '网站 B' }] } as never)
+})
 afterEach(() => vi.restoreAllMocks())
 
 describe('EditSourceDialog', () => {
@@ -29,6 +41,40 @@ describe('EditSourceDialog', () => {
     expect(update).toHaveBeenCalledWith('source-a', { name: '改名后', url: 'https://new.example.com', coreParam: '普通文本参数' })
     expect(fullUpdate).not.toHaveBeenCalled()
     expect(wrapper.emitted('saved')?.[0]).toEqual([expect.objectContaining({ name: '改名后', url: 'https://new.example.com', coreParam: '普通文本参数' })])
+    wrapper.unmount()
+  })
+
+  // 10-28：快捷编辑加「所属网站」，updateSource 不认 siteId，换站另走 changeSite
+  it('快捷编辑：所属网站预填当前网站；改成其他网站或不绑定时，先存基本信息再 changeSite', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, coreParam: '' })
+    const update = vi.spyOn(sourceApi, 'updateSourceCore').mockResolvedValue({ ok: true })
+    const change = vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true })
+    const wrapper = mount(EditSourceDialog, { props: { open: true, source, quick: true }, ...quickStubs })
+    await flushPromises()
+    const select = wrapper.getComponent({ name: 'ElSelectStub' })
+    expect(select.props('modelValue')).toBe('site-a')
+
+    select.vm.$emit('update:modelValue', '0')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="edit-source-site-hint"]').text()).toContain('不属于任何网站')
+    await wrapper.get('[data-testid="edit-source-save"]').trigger('click')
+    await flushPromises()
+    expect(update).toHaveBeenCalled()
+    expect(change).toHaveBeenCalledWith(['source-a'], '0')
+    expect(wrapper.emitted('saved')?.[0]).toEqual([expect.objectContaining({ siteId: '0' })])
+    wrapper.unmount()
+  })
+
+  it('快捷编辑：所属网站没改时不调 changeSite', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, coreParam: '' })
+    vi.spyOn(sourceApi, 'updateSourceCore').mockResolvedValue({ ok: true })
+    const change = vi.spyOn(sourceApi, 'changeSite')
+    const wrapper = mount(EditSourceDialog, { props: { open: true, source, quick: true }, ...quickStubs })
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-source-save"]').trigger('click')
+    await flushPromises()
+    expect(change).not.toHaveBeenCalled()
+    expect(wrapper.emitted('saved')).toHaveLength(1)
     wrapper.unmount()
   })
 

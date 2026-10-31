@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { dataApi } from '../../api'
+import { dataApi, sourceApi } from '../../api'
 
 const props = defineProps<{
   modelValue: boolean
@@ -19,14 +19,31 @@ const configId = ref('')
 const selectedFile = ref<File | null>(null)
 const inputRef = ref<HTMLInputElement>()
 const loading = ref(false)
+const configLoading = ref(false)
 const result = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 
-watch(() => props.modelValue, (open) => {
+watch([() => props.modelValue, () => props.tableId, () => props.sourceId], async ([open], _previous, onCleanup) => {
+  let active = true
+  onCleanup(() => { active = false })
+  configLoading.value = false
   if (!open) return
   configId.value = props.initialConfigId ?? ''
   selectedFile.value = null
   result.value = null
   if (inputRef.value) inputRef.value.value = ''
+  // 空表没有首行 CONFIG_ID，按已选源读取实际配置，避免 Excel 导入缺少必填参数。
+  if (!configId.value && /^\d+$/.test(props.sourceId)) {
+    configLoading.value = true
+    try {
+      const source = await sourceApi.sourceDetail(props.sourceId)
+      if (!source) throw new Error('未找到所选源，请重新选择')
+      if (active && source.configId && !['0', '-1'].includes(source.configId)) configId.value = source.configId
+    } catch (error) {
+      if (active) result.value = { type: 'error', text: `读取源配置失败：${error instanceof Error ? error.message : String(error)}，可手动填写配置 ID` }
+    } finally {
+      if (active) configLoading.value = false
+    }
+  }
 })
 
 function onFileChange(event: Event) {
@@ -47,6 +64,7 @@ function openFilePicker() {
 }
 
 async function onUpload() {
+  if (loading.value || configLoading.value) return
   if (!selectedFile.value) {
     ElMessage.error('请选择要导入的 Excel 文件')
     return
@@ -83,7 +101,7 @@ async function onUpload() {
     <el-form label-position="left" label-width="104px">
       <el-form-item label="表 ID"><el-input :model-value="tableId" readonly /></el-form-item>
       <el-form-item label="源 ID"><el-input :model-value="sourceId" readonly /></el-form-item>
-      <el-form-item label="使用配置 ID" required><el-input v-model="configId" placeholder="请输入配置 ID" /></el-form-item>
+      <el-form-item label="使用配置 ID" required><el-input v-model="configId" :disabled="configLoading || loading" :placeholder="configLoading ? '正在读取源配置…' : '请输入配置 ID'" /></el-form-item>
       <el-form-item label="Excel 文件" required>
         <div class="did-file">
           <input ref="inputRef" class="did-file-input" type="file" accept=".xls,.xlsx" @change="onFileChange">
@@ -98,7 +116,7 @@ async function onUpload() {
     <el-alert v-if="result" class="did-result" :type="result.type" :closable="false" :title="result.text" show-icon />
     <template #footer>
       <button class="rc-btn" type="button" @click="visible = false">取消</button>
-      <button class="rc-btn primary" type="button" :disabled="loading || !selectedFile" @click="onUpload">
+      <button class="rc-btn primary" type="button" :disabled="loading || configLoading || !selectedFile" @click="onUpload">
         {{ loading ? '处理中…' : '开始上传' }}
       </button>
     </template>

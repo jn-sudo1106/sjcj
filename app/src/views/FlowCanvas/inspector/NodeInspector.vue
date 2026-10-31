@@ -28,6 +28,7 @@ import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import { enqueueConfigSave, isActiveNodeConfigFlusher, registerNodeConfigFlusher } from './nodeConfigAutosave'
+import { confirmSharedFlowWrite, sharedFlowPending } from '@/utils/flow/sharedFlowGuard'
 import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import TaskTab from './tabs/TaskTab.vue'
@@ -160,7 +161,8 @@ const footNote = computed(() => (viewingHistory.value
   ? '正在查看历史版本，只能查看'
   : readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改'
     : deploymentError.value ? '配置已保存，部署配置同步失败，可重试'
-      : nodeConfigDirty.value ? (configId.value ? '有未保存修改，切换节点时自动保存' : '有未保存修改（新节点需点保存）')
+      : nodeConfigDirty.value ? (!configId.value ? '有未保存修改（新节点需点保存）'
+        : sharedFlowPending() ? '有未保存修改，流程多个源共用，点保存时选择影响范围' : '有未保存修改，切换节点时自动保存')
         : autoSavedAt.value[id.value] ? `已自动保存 ${autoSavedAt.value[id.value]}` : '无未保存修改'))
 /** 查看历史版本时：节点配置不随版本保存（217 实测），配置在该版本之后改过就提示一句（2026-10-14） */
 const historyConfigNote = computed(() => {
@@ -256,6 +258,8 @@ async function onSaveNodeConfig() {
       return
     }
   }
+  // 10-29：节点配置不进版本，一保存就影响所有用这条流程的源；被多个源共用时先问一次（保存 / 复制为本源专用）
+  if (!await confirmSharedFlowWrite('save', carryDirtyConfigs)) return
   ensureConfigNameFromTitle()
   const saved = configId.value ? await doUpdateExistingConfig(node, id.value) : await doCreateConfig()
   // 数据监控节点在编排配置 Tab 点底部「保存」（2026-09-07 补）：配置保存成功后同步 ck_source
@@ -272,6 +276,26 @@ async function onSaveNodeConfig() {
   if (saved) await syncSourceCron(node, id.value)
   if (saved && savedTab === 'orchestration') await updateDeployment(node, savedNodeId)
   await saveOtherNodes(savedNodeId)
+}
+
+/**
+ * 复制为本源专用后（10-29）：把画布上没保存的节点配置写到复制出的新配置上，用户不用重填。
+ * 配置名用复制品自己的（X_copyN），并发校验用新配置刚读的 updateDt，不能带原配置加载时的。
+ */
+async function carryDirtyConfigs(configMap: Record<string, string>) {
+  for (const nodeId of [...flow.dirtyConfigNodes]) {
+    const node = flow.configs[nodeId]
+    const newId = node?.configId ? configMap[node.configId] : undefined
+    if (!node || !newId) continue
+    const base = await baseRecordFor(newId)
+    const payload = {
+      ...buildConfigPayload({ ...node, configUpdateDt: undefined }, base),
+      configId: newId,
+      configName: base.configName ?? node.configName,
+    }
+    const ack = await configApi.updateConfig(payload as never)
+    if (ack && 'ok' in ack && !ack.ok) throw new Error(`节点「${node.title}」${ack.message || '保存配置失败'}`)
+  }
 }
 
 /**
@@ -517,6 +541,8 @@ async function autosaveNode(nodeId: string | undefined, atTab: string) {
   if (!nodeId || !flow.dirtyConfigNodes.includes(nodeId)) return
   const node = flow.configs[nodeId]
   if (!node || autoSaveBlocked(node)) return
+  // 共用流程还没确认过：不自动保存，留着未保存标记等用户点「保存」时再问（10-29）
+  if (sharedFlowPending()) return
   ensureConfigNameFromTitle(node, nodeId)
   const saved = await doUpdateExistingConfig(node, nodeId, { auto: true })
   if (!saved) return

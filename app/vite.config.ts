@@ -1,21 +1,39 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { DEFAULT_API_PROXY_TARGET, DEFAULT_POC_PROXY_TARGET } from './src/constants/backend'
+import {
+  DEFAULT_API_PROXY_TARGET,
+  DEFAULT_POC_PROXY_TARGET,
+  DEFAULT_SYNC_PLATFORM_PROXY_TARGET,
+  TEST_API_PROXY_TARGET,
+  TEST_SYNC_PLATFORM_PROXY_TARGET,
+} from './src/constants/backend'
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   // Vite 在 evaluate 本配置文件时并不会把 .env 注入 process.env（配置先于 .env 加载），
   // 直接读 process.env.VITE_* 只会命中硬编码兜底，导致 app/.env 里的代理目标永不生效。
   // 必须用 loadEnv 在当前目录（app/）显式读取。
   const env = loadEnv(mode, process.cwd(), '')
+  // npm run test → dev.cjs 注入 VITE_BACKEND_ENV=test，主后端与 sync-platform 一起切 test 环境；
+  // 显式的 VITE_API_PROXY_TARGET / VITE_SYNC_PLATFORM_PROXY_TARGET 仍然优先（.env.local 单点覆盖用）。
+  const useTestBackend = env.VITE_BACKEND_ENV === 'test'
   const proxyTarget =
-    env.VITE_API_PROXY_TARGET || env.VITE_AUTH_PROXY_TARGET || DEFAULT_API_PROXY_TARGET
+    env.VITE_API_PROXY_TARGET ||
+    env.VITE_AUTH_PROXY_TARGET ||
+    (useTestBackend ? TEST_API_PROXY_TARGET : DEFAULT_API_PROXY_TARGET)
+  const syncPlatformProxyTarget =
+    env.VITE_SYNC_PLATFORM_PROXY_TARGET || (useTestBackend ? TEST_SYNC_PLATFORM_PROXY_TARGET : DEFAULT_SYNC_PLATFORM_PROXY_TARGET)
   const pocProxyTarget = env.VITE_POC_PROXY_TARGET || DEFAULT_POC_PROXY_TARGET
   // 没有 .env 时，前端 isProductionBackend 也要读到同一地址，不能只改了 proxy 而守卫仍当「未连生产」。
   if (!env.VITE_API_PROXY_TARGET) process.env.VITE_API_PROXY_TARGET = proxyTarget
   // /api/poc 的目的地同样要透给前端：client.ts 按它判定生产写守卫（POC 服务不是 217，不该被拦）。
   if (!env.VITE_POC_PROXY_TARGET) process.env.VITE_POC_PROXY_TARGET = pocProxyTarget
+  if (command === 'serve') {
+    console.log(
+      `[dev] 后端环境 ${useTestBackend ? 'test' : 'local'}：业务 ${proxyTarget} · sync-platform ${syncPlatformProxyTarget} · poc ${pocProxyTarget}`,
+    )
+  }
   return {
     base: env.VITE_BASE || '/',
     plugins: [vue()],
@@ -47,9 +65,9 @@ export default defineConfig(({ mode }) => {
             },
           },
         } : {}),
-        // 公网 Nginx 在 9999 端口转发 /api/sync-platform；9011 端口从本机无法取得 HTTP 响应。
+        // sync-platform：dev 与本机业务后端同机，test 环境走公网 Nginx 9999（9011 端口本机取不到响应）。
         '/api/sync-platform': {
-          target: env.VITE_SYNC_PLATFORM_PROXY_TARGET || 'http://115.227.21.133:9999',
+          target: syncPlatformProxyTarget,
           changeOrigin: true,
           autoRewrite: true,
         },

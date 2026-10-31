@@ -66,7 +66,7 @@ function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
     firstModule: '采集资产',
     pageName: '我的分组',
   })
-  void router.push({ path: '/canvas', query: { sourceId: source.sourceId, ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), view, returnTo: route.fullPath } })
+  void router.push({ path: '/canvas', query: { sourceId: source.sourceId, ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath } })
 }
 </script>
 <template>

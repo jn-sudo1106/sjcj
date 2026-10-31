@@ -19,6 +19,13 @@ const LEGACY_KEY = 'rc.site.favorites'
 /** 收藏的网站 ID。三处共用这一份。 */
 export const favoriteSiteIds = ref<Set<string>>(new Set())
 
+/** Merge only returned cards; never replace favorites outside the current page. */
+export function applySiteFavoriteStates(states: { siteId: string; favorited: boolean }[]): void {
+  const next = new Set(favoriteSiteIds.value)
+  states.forEach(state => { if (state.favorited) next.add(state.siteId); else next.delete(state.siteId) })
+  if (next.size !== favoriteSiteIds.value.size || [...next].some(id => !favoriteSiteIds.value.has(id))) favoriteSiteIds.value = next
+}
+
 export function isFavoriteSite(siteId: string): boolean {
   return favoriteSiteIds.value.has(siteId)
 }

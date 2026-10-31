@@ -115,6 +115,19 @@ describe('配置写入 HTTP 契约', () => {
     expect(res).toMatchObject({ ok: true, configId: '1400999' })
   })
 
+  it('原名带 _copyN 时按去掉后缀的名字定位（copyAll 会把 X_copy1 复制成 X_copy2）', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 2, data: [{ configId: 81181, configName: '国家统计局-列表' }, { configId: 81973, configName: '国家统计局-列表_copy1' }] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 3, data: [{ configId: 1401017, configName: '国家统计局-列表_copy2' }, { configId: 81181, configName: '国家统计局-列表' }, { configId: 81973, configName: '国家统计局-列表_copy1' }] }))
+    const { configApi } = await import('./index')
+
+    const res = await configApi.copyConfigAndLocate('81973', '国家统计局-列表_copy1')
+
+    expect(new URL(String(fetchMock.mock.calls[0][0]), 'http://x').searchParams.get('name')).toBe('国家统计局-列表')
+    expect(res).toMatchObject({ ok: true, configId: '1401017' })
+  })
+
   it('定位不到唯一新配置时不返回 ID（宁可不绑，也不能绑错）', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ code: 0, count: 1, data: [{ configId: 1400917, configName: 'test2' }] }))

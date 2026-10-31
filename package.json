@@ -6,9 +6,10 @@
   },
   "scripts": {
     "dev": "node scripts/dev.cjs",
+    "test": "node scripts/dev.cjs --backend test",
     "build": "npm --prefix app run build",
     "preview": "npm --prefix app run preview",
-    "test": "npm --prefix app run test",
+    "test:unit": "npm --prefix app run test:unit",
     "lint": "npm --prefix app run lint",
     "lint:fix": "npm --prefix app run lint:fix",
     "format": "npm --prefix app run format",

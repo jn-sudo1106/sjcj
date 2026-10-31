@@ -4,14 +4,16 @@
 //
 // 迁「模板配置」下其余 7 个模块时，只需换 columns / fields / api 三份声明，不再复制表格代码；
 // 需要额外按钮或额外行操作时用 toolbar / row-actions 两个具名插槽，不要另开一份列表页。
+// 例外：行内「删除」是通用能力（api.remove 存在就画按钮），因为它的交互与确认框在 8 个模块里必然同形；
+// 后端没有 /delete 端点的模块不要给 api 加 remove——没端点就没按钮。
 //
 // 与旧版的有意偏差：
 // 1. 旧版「启用/禁用」是操作列里的文字链接，这里改成状态列的滑动开关（AGENTS.md 控件强调约定），
 //    点击后仍然只发一次 /status，行为等价、可逆。
 // 2. 旧版 s-table 在删除最后一条时会「自动翻页到上一页」，这里的分页由页码状态自己管。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { DocumentCopy, Edit, Plus, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, DocumentCopy, Edit, Plus, Search } from '@element-plus/icons-vue'
 import type { TemplateRow } from '@/api/types/template'
 import TemplateFormDialog from './TemplateFormDialog.vue'
 import type { TemplateColumn, TemplateField, TemplateListApi } from './types'
@@ -125,6 +127,26 @@ async function copyRow(row: TemplateRow) {
   }
 }
 
+// ---- 删除（模块声明了 remove 才有这个入口：后端有 /delete 才给按钮，点了先确认）----
+async function deleteRow(row: TemplateRow) {
+  if (!props.api.remove) return
+  try {
+    await ElMessageBox.confirm('确定要删除吗？', '提示', { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' })
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await props.api.remove(Number(row.id))
+    ElMessage.success('删除成功')
+    // 删掉当前页最后一条时退回上一页（旧 s-table 就是这个行为，本页由页码状态自己管）
+    if (rows.value.length <= 1 && pageNo.value > 1) pageNo.value -= 1
+    // 留在当前页重查（同问句改写：只有新增/编辑保存才回第一页）
+    refresh(false)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '删除失败')
+  }
+}
+
 // ---- 编辑弹窗 ----
 const dialogRef = ref<InstanceType<typeof TemplateFormDialog>>()
 function openAdd() {
@@ -137,8 +159,8 @@ function onSaved() {
   refresh(true)
 }
 
-/** 操作列宽：图标 24px + 间距 10px，有复制多留一个图标的位 */
-const actionWidth = computed(() => (props.api.copy ? 90 : 60))
+/** 操作列宽：编辑图标 + 每个可选操作（复制 / 删除）多留一个图标的位（图标 24px + 间距 10px） */
+const actionWidth = computed(() => 60 + (props.api.copy ? 30 : 0) + (props.api.remove ? 30 : 0))
 /** 行内长文本：null 显示成空（旧平台就是空白单元格），不显示 null/undefined */
 function cellText(row: TemplateRow, col: TemplateColumn): string {
   const value = row[col.prop]
@@ -210,6 +232,9 @@ defineExpose({ refresh })
             </el-tooltip>
             <el-tooltip v-if="api.copy" content="复制" placement="top">
               <span class="tc-op-icon" @click="copyRow(row)"><el-icon :size="15"><DocumentCopy /></el-icon></span>
+            </el-tooltip>
+            <el-tooltip v-if="api.remove" content="删除" placement="top">
+              <span class="tc-op-icon tc-op-danger" @click="deleteRow(row)"><el-icon :size="15"><Delete /></el-icon></span>
             </el-tooltip>
             <slot name="row-actions" :row="row" :refresh="refresh" />
           </div>
@@ -284,6 +309,14 @@ defineExpose({ refresh })
 .tc-op-icon:hover {
   background: var(--rc-primary-bg, #eff6ff);
   color: var(--rc-primary, #2563eb);
+}
+/* 删除保持危险色（同问句改写与控件强调约定：不用大号实心按钮） */
+.tc-op-icon.tc-op-danger {
+  color: var(--rc-danger, #dc2626);
+}
+.tc-op-icon.tc-op-danger:hover {
+  background: var(--rc-danger-bg, #fef2f2);
+  color: var(--rc-danger, #dc2626);
 }
 .tc-mono {
   font-family: var(--rc-mono, monospace);

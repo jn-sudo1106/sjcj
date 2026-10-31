@@ -50,7 +50,7 @@ import {
 // metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
 import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
-import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview } from './groupRes'
+import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview, mockGroupIds } from './groupRes'
 import { mockSysUserList, mockSysUserDetail, mockSysUserAdd, mockSysUserUpdate, mockSysUserStatus, mockSysUserPassword } from './sysUser'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
@@ -117,6 +117,7 @@ import {
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
   mockSqlTemplateCopy,
+  mockSqlTemplateDelete,
   mockTableTemplatePaged,
   mockTableTemplateSave,
   mockTableTemplateChangeStatus,
@@ -158,6 +159,7 @@ import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
 import {
   mockSitePaged,
+  mockSiteSourceScopePaged,
   mockSiteSummary,
   mockSiteDetail,
   mockSiteCreate,
@@ -290,6 +292,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'group-res/modify': mockGroupResModify,
   'group-res/delete': mockGroupResDelete,
   'group-res/preview': mockGroupResPreview,
+  'group-res/groups': mockGroupIds,
   // 用户管理（系统设置 → 用户管理，SysUserAdminController）：内存表 SYS_USER + 角色绑定
   'sys-user/list': mockSysUserList,
   'sys-user/detail': mockSysUserDetail,
@@ -452,6 +455,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
 
   // 网站—源父子模型（0707 优化·Phase2）
   'site/sitePaged': mockSitePaged,
+  'site/sourceScopePaged': mockSiteSourceScopePaged,
   'site/summary': mockSiteSummary,
   'site/siteDetail': mockSiteDetail,
   'site/createSite': mockSiteCreate,
@@ -472,6 +476,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/sql-temp': mockSqlTemplateSave,
   'poc/sql-temp/status': mockSqlTemplateChangeStatus,
   'poc/sql-temp/copy': mockSqlTemplateCopy,
+  'poc/sql-temp/delete': mockSqlTemplateDelete,
 
   // 表模板配置（1013 迁入）：端点域是旧 question-temp，菜单标题才叫「表模板」。
   // 没有 poc/question-temp/copy —— 旧平台不提供表模板复制（见 api/templateConfig.ts 的 tableTemplateApi）。

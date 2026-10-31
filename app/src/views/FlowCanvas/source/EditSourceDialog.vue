@@ -4,9 +4,11 @@
 // 源 ID 不可改。参数源的地址是 URL 模板，这里不让改，避免把 $PARAM$ 占位符改坏。
 // 2026-10-19 补「核心参数」：旧平台源编辑（SourceList.vue 的 base-edit-modal）里的 sourceParam，
 // 普通文本框、不做 JSON 校验，随 updateSource 整条提交。新平台此前只读展示、没有编辑入口。
+// 2026-10-28 快捷编辑补「所属网站」：updateSource 不认 siteId，改了网站另走 changeSite（0 = 不绑定网站，
+// 与侧栏「更换网站」同口径）。侧栏源详情本身就在某个网站里，换站走右键「更换网站」，这里只给快捷编辑。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { sourceApi, type Source } from '@/api'
+import { siteApi, sourceApi, type Source } from '@/api'
 
 const props = defineProps<{ open: boolean; source: Source | null; quick?: boolean }>()
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [Source] }>()
@@ -20,6 +22,31 @@ const loadError = ref('')
 const saving = ref(false)
 const isParam = computed(() => props.source?.kind === 'param')
 
+const UNBIND_SITE_ID = '0'
+const siteId = ref(UNBIND_SITE_ID)
+/** 打开时的所属网站，保存时只有变了才调 changeSite */
+const originalSiteId = ref(UNBIND_SITE_ID)
+const siteOptions = ref<{ siteId: string; name: string }[]>([])
+const siteLoadError = ref('')
+/** 当前网站不在列表里（如已软删）时也要能显示出来，不然下拉里只剩一串 ID */
+const siteSelectOptions = computed(() => {
+  const list = siteOptions.value
+  if (originalSiteId.value === UNBIND_SITE_ID || list.some((s) => s.siteId === originalSiteId.value)) return list
+  return [{ siteId: originalSiteId.value, name: props.source?.siteName || `网站 ${originalSiteId.value}` }, ...list]
+})
+function normalizeSiteId(value: unknown): string {
+  const id = value == null ? '' : String(value)
+  return id && id !== '-1' ? id : UNBIND_SITE_ID
+}
+async function loadSites() {
+  siteLoadError.value = ''
+  try {
+    siteOptions.value = (await siteApi.sitePaged({ page: 1, size: 2000 })).list.map((s) => ({ siteId: String(s.siteId), name: s.name }))
+  } catch {
+    siteLoadError.value = '网站列表加载失败，本次保存不改所属网站'
+  }
+}
+
 watch(() => props.open, (open) => {
   if (!open || !props.source) return
   name.value = props.source.name
@@ -28,7 +55,9 @@ watch(() => props.open, (open) => {
     : (props.source.url || '')
   coreParam.value = props.source.coreParam ?? ''
   coreParamLoaded.value = false
+  siteId.value = originalSiteId.value = normalizeSiteId(props.source.siteId)
   void loadCoreParam(props.source.sourceId)
+  if (props.quick) void loadSites()
 }, { immediate: true })
 
 async function loadCoreParam(sourceId: string) {
@@ -41,6 +70,7 @@ async function loadCoreParam(sourceId: string) {
     if (props.quick) {
       name.value = detail.name
       if (!isParam.value) url.value = detail.url
+      siteId.value = originalSiteId.value = normalizeSiteId(detail.siteId)
     }
     coreParamLoaded.value = true
   } catch {
@@ -74,6 +104,23 @@ async function onSave() {
       : await sourceApi.sourceUpdate(updated)
     if (!res?.ok) {
       ElMessage.warning(res?.message || '保存失败，请重试')
+      return
+    }
+    const nextSiteId = siteId.value
+    if (props.quick && !siteLoadError.value && nextSiteId !== originalSiteId.value) {
+      const moved = await sourceApi.changeSite([current.sourceId], nextSiteId).catch((error: unknown) => ({
+        ok: false, message: error instanceof Error ? error.message : String(error),
+      }))
+      if (!moved?.ok) {
+        // 名称等已经写进去了：照常回传、关窗，只提示网站没换成
+        emit('saved', updated)
+        ElMessage.warning(`源信息已保存，但更换所属网站失败：${moved?.message || '请重试'}`)
+        close()
+        return
+      }
+      emit('saved', { ...updated, siteId: nextSiteId })
+      ElMessage.success(nextSiteId === UNBIND_SITE_ID ? '源信息已保存，已解除网站绑定' : '源信息已保存，所属网站已更换')
+      close()
       return
     }
     emit('saved', updated)
@@ -112,6 +159,26 @@ async function onSave() {
             : '源 URL 属于这条源，和节点配置里那份配置 URL 不是同一字段。' }}
         </div>
       </div>
+      <div v-if="quick" class="rc-field">
+        <label>所属网站</label>
+        <el-select
+          v-model="siteId"
+          filterable
+          aria-label="所属网站"
+          data-testid="edit-source-site"
+          style="width: 100%"
+          :disabled="!coreParamLoaded || !!siteLoadError"
+        >
+          <el-option label="不绑定网站" :value="UNBIND_SITE_ID" />
+          <el-option v-for="s in siteSelectOptions" :key="s.siteId" :label="`${s.name}（ID ${s.siteId}）`" :value="s.siteId" />
+        </el-select>
+        <div v-if="siteLoadError" class="rc-help esd-site-error">{{ siteLoadError }}</div>
+        <div v-else-if="siteId !== originalSiteId" class="rc-help" data-testid="edit-source-site-hint">
+          {{ siteId === UNBIND_SITE_ID
+            ? `保存后该源不属于任何网站，只能按源 ID（${source?.sourceId}）找回。`
+            : '一个源只能属于一个网站：保存后原网站将不再包含该源。' }}
+        </div>
+      </div>
       <div class="rc-field">
         <label>核心参数</label>
         <textarea
@@ -148,5 +215,6 @@ async function onSave() {
 .esd-textarea { resize: vertical; min-height: 64px; font-family: inherit; line-height: 1.5; }
 .rc-input:disabled { background: #f8fafc; color: var(--rc-muted); }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
+.esd-site-error { color: var(--rc-error); }
 .rc-field:last-of-type { margin-bottom: 12px; }
 </style>

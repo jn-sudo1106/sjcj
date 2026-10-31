@@ -1,4 +1,4 @@
-import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './auth'
+import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken } from './auth'
 import { streamModelInterfaceTest } from './modelInterfaceStream'
 import { taskInstFromLegacy } from './legacyAdapters'
 
@@ -359,8 +359,10 @@ export interface RuntimeLogDetail extends RuntimeLogRecord {
   events: { eventId: string; time: string; stage: string; level: string; message: string; detail: string }[]
   streams: { streamId: string; lastSeq: number; byteCount: number; updatedAt: string }[]
   runs: RuntimeLogRecord[]
-  run: { slot: number; pid: number | null; entry: string; working_directory: string; interpreter: string
-    started_at: string | null; ended_at: string | null; exit_code: number | null; reason: string } | null
+  run: {
+    slot: number; pid: number | null; entry: string; working_directory: string; interpreter: string
+    started_at: string | null; ended_at: string | null; exit_code: number | null; reason: string
+  } | null
   logAvailable?: boolean
 }
 export interface RuntimeLogFilters {
@@ -490,6 +492,13 @@ export interface CodeRepositoryUploadResult {
 
 type Method = 'GET' | 'POST' | 'DELETE'
 
+async function checkBusinessSession(response: Response): Promise<void> {
+  if (response.status !== 401) return
+  // Runner 独立部署，认证目标可能与当前业务环境不同；仅业务身份接口确认失效才全局登出。
+  // getInfo 沿用原有的 401 / 登录重定向处理；其他异常保留当前登录，随后报告 Runner 的错误。
+  await getInfo().catch(() => { })
+}
+
 async function request<T>(path: string, method: Method = 'GET', body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
   const token = readStoredToken()
@@ -506,13 +515,13 @@ async function request<T>(path: string, method: Method = 'GET', body?: unknown):
   } catch {
     throw new Error('Runner 管理服务不可达')
   }
-  if (response.status === 401) triggerSessionExpired()
+  await checkBusinessSession(response)
   const payload = await response.json().catch(() => null) as unknown
   if (!response.ok) {
     const message = payload && typeof payload === 'object' && 'message' in payload
       ? String(payload.message)
       : `Runner 管理服务请求失败（HTTP ${response.status}）`
-    throw new Error(message)
+    throw new Error(response.status === 401 ? `Runner 管理服务认证失败：${message}` : message)
   }
   return payload as T
 }
@@ -625,8 +634,10 @@ export const runnerManagementApi = {
   upgradeCodeServers: (serverIds: string[], digest: string) => request<{ items: NonNullable<CodeGenerationServer['upgrade']>[] }>('/code-servers/upgrades', 'POST', { serverIds, digest }),
   downloadCodeServerMigrationPackage: async (platform: string) => {
     const token = readStoredToken()
-    const response = await fetch('/api/runner-management/code-servers/migration-package', { method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform }) })
+    const response = await fetch('/api/runner-management/code-servers/migration-package', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform })
+    })
     if (response.status === 401) triggerSessionExpired()
     if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '升级接入包下载失败') }
     return response.blob()
@@ -637,8 +648,10 @@ export const runnerManagementApi = {
   importRemoteCode: (serverId: string, input: { repositoryId: string; directoryId: string; paths: string[]; overwrite: boolean }) => request<CodeRepositoryUploadResult>(`/code-servers/${encodeURIComponent(serverId)}/import`, 'POST', input),
   downloadCodeServerPackage: async (platform: string, digest?: string) => {
     const token = readStoredToken()
-    const response = await fetch('/api/runner-management/code-servers/package', { method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform, digest }) })
+    const response = await fetch('/api/runner-management/code-servers/package', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform, digest })
+    })
     if (response.status === 401) triggerSessionExpired()
     if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '服务包下载失败') }
     return response.blob()
@@ -682,8 +695,8 @@ export const runnerManagementApi = {
   saveDirectoryLayout: (layout: DirectoryLayout) => request<DirectoryLayout>(layout.bindingType === 'website' || layout.bindingType === 'custom'
     ? `/directory-layouts/${layout.bindingType}?owner=${encodeURIComponent(layout.ownerId || '')}`
     : layout.bindingType === 'queue'
-    ? `/directory-layouts/queues/${encodeURIComponent(layout.queueName)}`
-    : `/directory-layouts/configs/${encodeURIComponent(layout.configId)}`, 'POST', layout),
+      ? `/directory-layouts/queues/${encodeURIComponent(layout.queueName)}`
+      : `/directory-layouts/configs/${encodeURIComponent(layout.configId)}`, 'POST', layout),
   codeRepositoryTree: (repoId: string, commit?: string) => request<RepositoryTree>(`/settings/code-repos/${encodeURIComponent(repoId)}/tree${commit ? '?commit=' + encodeURIComponent(commit) : ''}`),
   siteCodeRepository: () => request<SiteCodeRepositorySetting>('/settings/site-code-repo'),
   updateSiteCodeRepository: (path: string) => request<SiteCodeRepositorySetting>('/settings/site-code-repo', 'POST', { path }),
@@ -723,10 +736,12 @@ export const runnerManagementApi = {
     const token = readStoredToken()
     let response: Response
     try {
-      response = await fetch('/api/runner-management/runner-package', { method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify(input) })
+      response = await fetch('/api/runner-management/runner-package', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify(input)
+      })
     } catch { throw new Error('Runner 管理服务不可达') }
-    if (response.status === 401) triggerSessionExpired()
+    await checkBusinessSession(response)
     if (!response.ok) {
       const error = await response.json().catch(() => null) as { message?: string } | null
       throw new Error(error?.message || `Runner 包下载失败（HTTP ${response.status}）`)

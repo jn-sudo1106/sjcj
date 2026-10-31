@@ -44,7 +44,10 @@ export const TABS: TabMeta[] = [
   { key: 'auxiliary-tool', path: '/auxiliary-tool', label: '辅助工具', desc: '零散排障小工具的统一入口（缓存清理、ID 转换、埋点自检等）', group: 'auxiliary' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
-  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、处理机、代码仓库、部署配置、机器配置、运行日志、Runner 版本、数据权限设置、用户管理（仅 admin）', group: 'settings', permission: 'settings' },
+  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、处理机、代码仓库、部署配置、机器配置、运行日志、Runner 版本', group: 'settings', permission: 'settings' },
+  // 用户权限设置（1030）：原系统设置页内的「数据权限设置」「用户管理」两个 tab 整体迁到这里，
+  // 与「系统设置」并列挂在侧栏同一个组下（组标题就是系统设置）。页内 tab 元数据见 USER_PERMISSION_TABS。
+  { key: 'user-permission', path: '/user-permission', label: '用户权限设置', desc: '数据权限设置、用户管理（仅 admin）', group: 'settings', permission: 'settings' },
 ]
 
 /**
@@ -113,5 +116,27 @@ export const BASE_CONFIG_TABS: TemplateConfigTabMeta[] = [
   { key: 'vector-config', label: '向量表管理', desc: '', permission: 'vector-config' },
   { key: 'replace-table-config', label: '表改写管理', desc: '', permission: 'replace-table-config' },
   { key: 'entity-rewrite-config', label: '实体改写管理', desc: '', permission: 'entity-rewrite-config' },
+]
+
+/**
+ * 用户权限设置页内的 2 个子模块（1030 从系统设置页内 tab 整体迁出）。
+ * 口径同 SYSTEM_CONFIG_TABS：不进 TABS、侧栏只到「用户权限设置」一个入口，子模块以页内 tab 呈现
+ * （容器见 views/Settings/UserPermission/index.vue）。
+ * ⚠️ 顺序即默认：第一项「用户管理」是无 ?tab= 时落地的那个（1030 用户定档：进这一页先看账号）。
+ * read 账号看不到用户管理，容器按可见列表取第一项，落地的是「数据权限设置」。
+ * permission 沿用迁出前那两个页内 tab 的权限码（settings:dataPermission / settings:users），不新造码——
+ * canAccess 接上人员菜单权限后，旧链接与新菜单的可见性口径完全一致。
+ * adminOnly 是权限码之外的第二道闸（1027 决策）：账号维护只对 admin 展示，后端 /api/v1/sys-user/** 同样只认 roles[admin]。
+ */
+export interface UserPermissionTabMeta {
+  key: string
+  label: string
+  permission: string
+  adminOnly?: boolean
+}
+
+export const USER_PERMISSION_TABS: UserPermissionTabMeta[] = [
+  { key: 'users', label: '用户管理', permission: 'settings:users', adminOnly: true },
+  { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission' },
 ]
 

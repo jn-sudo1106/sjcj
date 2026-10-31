@@ -1,7 +1,19 @@
-/** 本地未配置 VITE_API_PROXY_TARGET 时的默认后端。原 115.227.21.133 测试机已废弃。 */
-export const DEFAULT_API_PROXY_TARGET = 'http://124.223.180.186:9999'
+/**
+ * npm run dev（默认）连的后端：本机业务后端，未配置 VITE_API_PROXY_TARGET 时的兜底。
+ * 2026-10-28：原先默认打 186，现改成本机，186 移到 npm run test（见 TEST_API_PROXY_TARGET）。
+ */
+export const DEFAULT_API_PROXY_TARGET = 'http://127.0.0.1:9999'
 
-/** 写保护 / 顶栏「生产环境」徽标按主机名判定；当前默认代理就是这台。 */
+/** npm run test（VITE_BACKEND_ENV=test）连的 test 环境业务后端，即原 dev 默认。 */
+export const TEST_API_PROXY_TARGET = 'http://124.223.180.186:9999'
+
+/** dev：sync-platform 与本机业务后端同机。 */
+export const DEFAULT_SYNC_PLATFORM_PROXY_TARGET = 'http://127.0.0.1:9999'
+
+/** test：公网 Nginx 在 9999 端口转发 /api/sync-platform；9011 端口从本机无法取得 HTTP 响应。 */
+export const TEST_SYNC_PLATFORM_PROXY_TARGET = 'http://115.227.21.133:9999'
+
+/** 写保护 / 顶栏「生产环境」徽标按主机名判定；dev 与 test 默认目标都不在这台，不触发守卫。 */
 export const PRODUCTION_BACKEND_HOSTS = ['115.227.21.133']
 
 /**

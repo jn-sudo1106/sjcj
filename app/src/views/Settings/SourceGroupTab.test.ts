@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 // 源管理「来源组」目录页签（1008-03，10-09 改定方案：复用「我的分组」界面，不新增独立工作区）。
-// 左侧组列表（带成员数，sourcePaged 按 sourceGroupId 筛的 count）+ 右侧成员源列表
+// 左侧组列表（可搜索，可见组限流加载成员数）+ 右侧成员源列表
 // （SourceOverviewView + scopeSourceGroupId）；「流程配置」「组资料」右侧抽屉；新建来源组小弹窗。
 // 写操作仅 admin；非 admin 全部写按钮禁用。写操作后重拉 list 刷新 revision（旧平台 act() 口径）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import SourceGroupTab from './SourceGroupTab.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -50,12 +50,34 @@ const BINDINGS_3: SourceFlowBind[] = [
 ]
 const FLOW_21000006 = { id: '21000006', name: 'twitter主流程', state: 'A', definition: { main: [], branches: [], configs: {}, branchGroups: [] }, updatedAt: '' } as unknown as FlowRecord
 
+const mountedTabs: VueWrapper[] = []
+let visibilityCallback: IntersectionObserverCallback
+const observed = new Set<Element>()
+function showGroups(wrapper: VueWrapper, ids: string[], isIntersecting = true) {
+  visibilityCallback(ids.map((id) => ({
+    target: wrapper.get(`[data-group-id="${id}"]`).element,
+    isIntersecting,
+  } as IntersectionObserverEntry)), {} as IntersectionObserver)
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   useAuthStore().roles = ['admin']
   selectIds.value = []
+  observed.clear()
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(callback: IntersectionObserverCallback) { visibilityCallback = callback }
+    observe(el: Element) { observed.add(el) }
+    unobserve(el: Element) { observed.delete(el) }
+    disconnect() { observed.clear() }
+  })
 })
-afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
+afterEach(() => {
+  mountedTabs.splice(0).forEach((wrapper) => wrapper.unmount())
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  document.body.innerHTML = ''
+})
 
 /** el-input / el-select / el-drawer 等 Element Plus 组件渲染到可交互态需要宏任务 */
 async function settle() {
@@ -80,6 +102,7 @@ async function mountTab(overrides?: {
   vi.spyOn(flowCenterApi, 'list').mockResolvedValue([FLOW_21000006])
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
   const wrapper = mount(SourceGroupTab, { global: { plugins: [ElementPlus, router] }, attachTo: document.body })
+  mountedTabs.push(wrapper)
   await settle()
   return { wrapper, router }
 }
@@ -87,17 +110,92 @@ async function mountTab(overrides?: {
 const dom = (sel: string) => document.querySelector(sel) as HTMLElement | null
 
 describe('来源组页签 · 列表与选中', () => {
-  it('左侧列出组与成员数（sourcePaged count），点选后右侧加载', async () => {
+  it('只对进入视口的组查成员数，点选后右侧加载', async () => {
     const { wrapper } = await mountTab()
     const items = wrapper.findAll('.sg-item')
     expect(items.length).toBe(2)
-    const text = items.map((i) => i.text())
-    expect(text.some((t) => t.includes('twitter1') && t.includes('255'))).toBe(true)
-    expect(text.some((t) => t.includes('测试组1') && t.includes('22'))).toBe(true)
+    expect(items.map((i) => i.text())).toEqual(['twitter1…', '测试组1…'])
+    expect(sourceApi.sourcePaged).not.toHaveBeenCalled()
+    expect(observed.size).toBe(2)
+    showGroups(wrapper, ['3', '1'])
+    await flushPromises()
+    expect(items.map((i) => i.text())).toEqual(['twitter1255', '测试组122'])
     await items[0]!.trigger('click')
     await settle()
     expect(wrapper.find('.sg-toolbar').text()).toContain('twitter1')
     expect(sourceGroupApi.bindings).toHaveBeenCalledWith({ sourceGroupId: '3' })
+  })
+
+  it('上千组仍最多并发 3 个计数请求，跳过滚出视口的排队组并复用缓存', async () => {
+    const groups = Array.from({ length: 1000 }, (_, i) => ({ ...GROUP_1, sourceGroupId: String(i + 1) }))
+    const { wrapper } = await mountTab({ groups })
+    const resolveCounts = new Map<string, () => void>()
+    vi.mocked(sourceApi.sourcePaged).mockImplementation((query) => new Promise((resolve) => {
+      const id = String(query!.sourceGroupId)
+      resolveCounts.set(id, () => resolve({ total: Number(id), list: [] }))
+    }))
+    expect(sourceApi.sourcePaged).not.toHaveBeenCalled()
+    showGroups(wrapper, ['1', '2', '3', '4', '5', '6'])
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(3)
+    expect(sourceApi.sourcePaged).toHaveBeenCalledWith({ page: 1, size: 1, sourceGroupId: '1' })
+    showGroups(wrapper, ['4', '5'], false)
+    resolveCounts.get('1')!()
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    expect(sourceApi.sourcePaged).toHaveBeenLastCalledWith({ page: 1, size: 1, sourceGroupId: '6' })
+    showGroups(wrapper, ['1'], false)
+    showGroups(wrapper, ['1'])
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    wrapper.unmount()
+    resolveCounts.forEach((resolve) => resolve())
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    expect(observed.size).toBe(0)
+  })
+
+  it('加载失败显示未知，真实零成员显示 0', async () => {
+    const { wrapper } = await mountTab()
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValueOnce({ total: 0, list: [] }).mockRejectedValueOnce(new Error('请求失败'))
+    showGroups(wrapper, ['3', '1'])
+    await flushPromises()
+    expect(wrapper.get('[data-group-id="3"] .sg-count').text()).toBe('0')
+    const failed = wrapper.get('[data-group-id="1"] .sg-count')
+    expect(failed.text()).toBe('—')
+    expect(failed.attributes('title')).toContain('加载失败')
+  })
+
+  it('成员变更使缓存失效，变更前的在途计数不覆盖新数量', async () => {
+    const { wrapper } = await mountTab()
+    let resolveOld!: (page: { total: number; list: [] }) => void
+    vi.mocked(sourceApi.sourcePaged).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+    showGroups(wrapper, ['3'])
+    useUiStore().notifySourceListChanged()
+    await flushPromises()
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 254, list: [] })
+    resolveOld({ total: 255, list: [] })
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-group-id="3"] .sg-count').text()).toBe('254')
+    useUiStore().notifySourceListChanged()
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(3)
+  })
+
+  it('搜索框按组名 / 编码 / ID 过滤左侧列表，无匹配时提示', async () => {
+    const { wrapper } = await mountTab()
+    const search = wrapper.find('input[data-testid="sg-search"]')
+    await search.setValue('测试')
+    expect(wrapper.findAll('.sg-item').map((i) => i.text()).join()).toContain('测试组1')
+    expect(wrapper.findAll('.sg-item').length).toBe(1)
+    await search.setValue('TWITTER1')
+    expect(wrapper.findAll('.sg-item').map((i) => i.text()).join()).toContain('twitter1')
+    expect(wrapper.findAll('.sg-item').length).toBe(1)
+    await search.setValue('3')
+    expect(wrapper.findAll('.sg-item').length).toBe(1)
+    await search.setValue('不存在')
+    expect(wrapper.findAll('.sg-item').length).toBe(0)
+    expect(wrapper.find('.sg-empty').text()).toBe('没有匹配的来源组')
   })
 
   it('停用组灰显并标「停用」', async () => {
@@ -186,7 +284,7 @@ describe('来源组页签 · 组资料抽屉', () => {
     removeBtn.click()
     await settle()
     expect(remove).not.toHaveBeenCalled()
-    // 数量取左侧成员数（members 只取 1 条判断有没有）
+    // 数量另用 sourcePaged 按组筛的 count（members 只取 1 条判断有没有）
     expect(document.body.textContent).toContain('还有 255 个成员，请先移出全部成员')
   })
 })
@@ -220,23 +318,20 @@ describe('来源组页签 · 新建来源组', () => {
 })
 
 describe('来源组页签 · 成员操作', () => {
-  it('移出选中成员调 changeMembers（target=null，expected=本组）', async () => {
+  it('移出选中成员直接调 changeMembers 并刷新，不再弹退组确认', async () => {
     const { wrapper } = await mountTab()
     // 先设勾选再选组：SOV stub 首次渲染 selection-actions 槽时 ids 即有值
     selectIds.value = ['391000500']
     await wrapper.findAll('.sg-item')[0]!.trigger('click')
     await settle()
     const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
     const removeBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('移出来源组'))
     expect(removeBtn, '应有「移出来源组」按钮').toBeTruthy()
     expect(removeBtn!.disabled).toBe(false)
     removeBtn!.click()
     await settle()
-    // ElMessageBox 确认（测试无 zh-cn locale → 按钮是 OK）
-    const okBtn = [...document.querySelectorAll<HTMLButtonElement>('.el-message-box button')].find((b) => b.textContent?.trim() === 'OK')
-    expect(okBtn, '应弹出确认框').toBeTruthy()
-    okBtn!.click()
-    await settle()
+    expect(confirm).not.toHaveBeenCalled()
     expect(changeMembers).toHaveBeenCalledWith({
       sourceIds: ['391000500'],
       sourceGroupId: null,

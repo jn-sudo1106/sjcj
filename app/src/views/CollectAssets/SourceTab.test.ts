@@ -1,7 +1,7 @@
 // SourceTab 单元测试（867→321 行 P2-2 拆分产物，之前从未有过测试，此前全项目零覆盖）
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
@@ -11,6 +11,10 @@ import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { sourceApi, siteApi, favoriteApi, logReportApi } from '@/api'
 import * as sourceDirs from '@/api/sourceDirs'
+import { clearSiteCardQueryCache } from './siteCardQuery'
+
+enableAutoUnmount(afterEach)
+afterEach(() => { vi.restoreAllMocks(); clearSiteCardQueryCache() })
 
 // 「最近打开」2026-10-19 起以后端通用埋点为准。这里用内存列表代替服务端：
 // 上报记进内存、挂载时 recentRaw 从它读回来——与真实后端行为一致，
@@ -33,6 +37,8 @@ beforeEach(() => {
 const serverFavorites = new Set<string>()
 beforeEach(() => {
   clearCollectAssetsCache()
+  vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+  vi.spyOn(siteApi, 'sourceScopePaged').mockResolvedValue({ total: 0, matchedSourceTotal: 0, unboundSourceTotal: 0, list: [] })
   serverFavorites.clear()
   vi.spyOn(favoriteApi, 'listIds').mockImplementation(async () => [...serverFavorites])
   vi.spyOn(favoriteApi, 'add').mockImplementation(async (_type, id) => { serverFavorites.add(id); return { ok: true, message: '' } })
@@ -100,176 +106,21 @@ describe('SourceTab 加载与初始筛选', () => {
   })
 
   // 后端 site/sitePaged?state=ERROR 实测恒返回 0 条，所以异常过滤在前端按 errorCount 做，不发 state
-  it('点「出错源」只看有异常源的网站（前端按 errorCount 筛、不重新请求），再点一次恢复全部', async () => {
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
-      total: 3,
-      list: [
-        { siteId: 's-err', name: '有错', sourceCount: 5, errorCount: 2, updatedAt: '2026-09-20 10:00:00', tags: [] },
-        { siteId: 's-ok', name: '正常', sourceCount: 3, errorCount: 0, updatedAt: '2026-09-21 10:00:00', tags: [] },
-        { siteId: 's-err2', name: '也有错', sourceCount: 4, errorCount: 1, updatedAt: '2026-09-19 10:00:00', tags: [] },
-      ] as never,
-    })
-    const { wrapper } = await mountAt()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
-    expect(spy.mock.calls.every(([arg]) => !(arg as Record<string, unknown>).state)).toBe(true)
-    spy.mockClear()
 
-    toolbar.vm.$emit('toggleErrorOnly')
-    await flushPromises()
-    expect(toolbar.props('errorOnly')).toBe(true)
-    expect(shown()).toEqual(['s-err', 's-err2'])
-    expect(toolbar.props('stats')).toMatchObject({ total: 9, error: 3 })
-    expect(spy).not.toHaveBeenCalled()
-
-    toolbar.vm.$emit('toggleErrorOnly')
-    await flushPromises()
-    expect(toolbar.props('errorOnly')).toBe(false)
-    expect(shown()).toEqual(['s-ok', 's-err', 's-err2'])
-    spy.mockRestore()
-  })
 
   // 0930-01：预建的空网站（一个源都没有）会上看着是一片「暂无源」，网站列表默认不显示；
   // 按网站名搜索时要能找到（刚新建、还没挂源的网站）
-  it('默认不显示没有源的网站；按网站名搜索时照样显示', async () => {
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
-      total: 2,
-      list: [
-        { siteId: 's-has', name: '有源', sourceCount: 3, errorCount: 0, updatedAt: '2026-09-20 10:00:00', tags: [] },
-        { siteId: 's-empty', name: '空站', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-21 10:00:00', tags: [] },
-      ] as never,
-    })
-    const srcSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] } as never)
-    const { wrapper } = await mountAt()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
-    expect(shown()).toEqual(['s-has'])
-    expect(toolbar.props('total')).toBe(1)
-
-    toolbar.vm.$emit('update:keyword', '空站')
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(shown()).toEqual(['s-empty'])
-    spy.mockRestore()
-    srcSpy.mockRestore()
-  })
-
-  it('点「空网站」只看没有源的网站，再点恢复；与「出错源」互斥', async () => {
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
-      total: 3,
-      list: [
-        { siteId: 's-has', name: '有源', sourceCount: 3, errorCount: 1, updatedAt: '2026-09-20 10:00:00', tags: [] },
-        { siteId: 's-empty', name: '空站', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-21 10:00:00', tags: [] },
-        { siteId: 's-empty2', name: '空站2', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-19 10:00:00', tags: [] },
-      ] as never,
-    })
-    const { wrapper } = await mountAt()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
-    expect(toolbar.props('emptyCount')).toBe(2)
-    expect(toolbar.props('emptyOnly')).toBe(false)
-
-    toolbar.vm.$emit('toggleEmptyOnly')
-    await flushPromises()
-    expect(toolbar.props('emptyOnly')).toBe(true)
-    expect(shown()).toEqual(['s-empty', 's-empty2'])
-    expect(toolbar.props('filtered')).toBe(true)
-
-    // 开「出错源」会关掉「空网站」，两个一起开必然是空列表
-    toolbar.vm.$emit('toggleErrorOnly')
-    await flushPromises()
-    expect(toolbar.props('emptyOnly')).toBe(false)
-    expect(shown()).toEqual(['s-has'])
-
-    toolbar.vm.$emit('toggleEmptyOnly')
-    await flushPromises()
-    expect(toolbar.props('errorOnly')).toBe(false)
-    toolbar.vm.$emit('toggleEmptyOnly')
-    await flushPromises()
-    expect(shown()).toEqual(['s-has'])
-    spy.mockRestore()
-  })
-
-  it('本次新建的网站还没有源也照常显示，方便马上点进去加源', async () => {
-    const list = [{ siteId: 's-has', name: '有源', sourceCount: 3, errorCount: 0, updatedAt: '2026-09-20 10:00:00', tags: [] }]
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockImplementation(async () => ({ total: list.length, list: [...list] }) as never)
-    const { wrapper } = await mountAt()
-    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
-
-    list.push({ siteId: 's-new', name: '新站', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-30 10:00:00', tags: [] })
-    wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('createSite')
-    await flushPromises()
-    wrapper.findComponent({ name: 'SiteEditorDialog' }).vm.$emit('saved', 's-new')
-    await flushPromises()
-    expect(shown()).toEqual(['s-new', 's-has'])
-    spy.mockRestore()
-  })
 
 })
 
 describe('SourceTab 筛选状态', () => {
-  it('源名搜索返回所属网站，不会只按网站名查询后得到空列表', async () => {
-    const { wrapper } = await mountAt()
-
-    await wrapper.get('.ca-search input').setValue('多语种公告监控 - 法文')
-    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('keyword')).toBe('多语种公告监控 - 法文')
-    await vi.waitFor(() => {
-      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-      expect(sites.map((site) => site.siteId)).toEqual(['site-lang-demo'])
-    })
-  })
-
-  it('分类多选回传 id 数组，查询时拼成旧契约 categoryIds 的逗号串', async () => {
-    const { wrapper } = await mountAt()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    await toolbar.vm.$emit('update:categoryFilter', ['/基金类', '/舆情类'])
-    await toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(toolbar.props('categoryFilter')).toEqual(['/基金类', '/舆情类'])
-    // mock 按逗号多值过滤：基金类 + 舆情类的并集站点都回来了
-    await vi.waitFor(() => {
-      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-      const ids = sites.map((site) => site.siteId)
-      expect(ids).toContain('site-zfb')
-      expect(ids).toContain('site-weibo')
-    })
-  })
-
-  it('源名搜索不透传 sourceName 给 sitePaged（真实后端不生效会带出无关网站），改用 sourcePaged 的 siteId 交集', async () => {
-    const siteSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
-      total: 2,
-      list: [
-        { siteId: 'site-a', name: '新浪财经', category: '', categoryPath: '', owner: 'x', sourceCount: 2, errorCount: 0, updatedAt: '2026-09-01' },
-        { siteId: 'site-b', name: '某某网站', category: '', categoryPath: '', owner: 'x', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-02' },
-      ],
-    } as never)
-    const srcSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
-      total: 1,
-      list: [{ sourceId: 's1', name: '明阳科技公告', url: '', configId: '', mainTable: '', owner: '', state: 'C', siteId: 'site-b' }],
-    } as never)
-
-    const { wrapper } = await mountAt()
-    await wrapper.get('.ca-search input').setValue('明阳科技')
-
-    await vi.waitFor(() => {
-      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-      expect(sites.map((site) => site.siteId)).toEqual(['site-b'])
-    })
-    // sitePaged 从不带 sourceName；源名匹配走 sourcePaged?name=
-    expect(siteSpy.mock.calls.every(([arg]) => !(arg as Record<string, unknown> | undefined)?.sourceName)).toBe(true)
-    expect(srcSpy).toHaveBeenCalledWith(expect.objectContaining({ name: '明阳科技' }))
-
-    siteSpy.mockRestore()
-    srcSpy.mockRestore()
-  })
-
-  it('总览按分类下钻（?category=）预置进多选筛选', async () => {
-    const { wrapper } = await mountAt({ category: '/基金类' })
-    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('categoryFilter')).toEqual(['/基金类'])
-    await vi.waitFor(() => {
-      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-      expect(sites.map((site) => site.siteId)).toContain('site-zfb')
-    })
+  it('源名称直接交给聚合接口，不从网站目录和全量源做客户端交集', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue({total:1,matchedSourceTotal:1,unboundSourceTotal:0,list:[{site:{siteId:'42',name:'多语种公告监控',sourceCount:24,errorCount:0} as never,matchedSourceCount:1,sourcePreview:[],favorited:false}]})
+    const {wrapper}=await mountAt()
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('法文')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click');await flushPromises()
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({sourceFilter:expect.objectContaining({name:'法文'})}),expect.any(AbortSignal))
+    expect(wrapper.findComponent({name:'SiteCardGrid'}).props('sites')[0].name).toBe('多语种公告监控')
   })
 
 })
@@ -353,28 +204,6 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     wrapper.unmount()
     for (const spy of [categories, membership, page]) spy.mockRestore()
     sourceDirs.resetSourceDirCache()
-  })
-
-  it('点选的业务目录里没有源时范围为空，不退回全库源', async () => {
-    sourceDirs.resetSourceDirCache()
-    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId) => parentId === '-2' ? [{ id: '900', name: '股票数据' }] : [])
-    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
-    const scope = vi.spyOn(sourceDirs, 'bizScopeSourceIds').mockResolvedValue([])
-    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
-    const { wrapper, list } = await mountList()
-    try {
-      await flushPromises()
-      const before = page.mock.calls.length
-      wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', dirIds: ['900'], labels: [{ id: '900', path: '股票数据', hasKids: false }] })
-      await flushPromises()
-      expect(scope).toHaveBeenCalledWith(['900'])
-      expect(list.props('scopeSourceIds')).toEqual([])
-      expect(page.mock.calls.length).toBe(before)
-    } finally {
-      wrapper.unmount()
-      for (const spy of [categories, membership, scope, page]) spy.mockRestore()
-      sourceDirs.resetSourceDirCache()
-    }
   })
 
   it('常驻入口在同一弹窗从全库选源和目录，保存后刷新当前范围', async () => {
@@ -467,17 +296,6 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     }
   })
 
-  it('切到源列表视图：挂源视图组件、不限网站；卡片与网站批量条都不在', async () => {
-    const { wrapper, ui, list } = await mountList()
-    expect(ui.assetView).toBe('table')
-    expect(list.exists()).toBe(true)
-    expect(list.props('currentSiteId')).toBe('')
-    expect(list.props('quickEdit')).toBe(true)
-    expect(list.props('scopeSiteIds')).toBeUndefined()
-    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).exists()).toBe(false)
-    expect(wrapper.findComponent({ name: 'BatchBar' }).exists()).toBe(false)
-  })
-
   // 顶上那条网站工具栏整条不出现，视图切换 / 刷新嵌进源列表筛选栏的操作区，两条栏并成一条
   it('只剩一条栏：工具条以源模式嵌在源列表筛选栏里，没有新增网站、搜索、分类、标签、统计', async () => {
     const { wrapper } = await mountList()
@@ -490,14 +308,18 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(wrapper.find('.ca-stats').exists()).toBe(false)
   })
 
-  it('从源列表切回卡片：网站工具栏回来', async () => {
+  it('从源列表切回卡片：保留同一筛选栏、目录和源视图实例', async () => {
     const { wrapper } = await mountList()
     await wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('set-view', 'card')
     await flushPromises()
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbar.props('sourceMode')).toBeFalsy()
-    expect(wrapper.find('[data-testid="site-create"]').exists()).toBe(true)
-    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).exists()).toBe(false)
+    expect(toolbar.props('sourceMode')).toBe(true)
+    const create = wrapper.get('[data-testid="site-create"]')
+    expect(create.attributes('aria-label')).toBe('新增网站')
+    expect(create.text()).toBe('')
+    expect(create.find('svg').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).props('websiteCards')).toBe(true)
+    expect(wrapper.findComponent({ name: 'SourceDirPanel' }).exists()).toBe(true)
   })
 
   it('最近打开页签：范围是最近打开的网站；一个都没有时给空数组和说明文案', async () => {
@@ -557,6 +379,13 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data', returnTo: '/collect' })
   })
 
+  it('查看源数据时带主表 tableId，数据页直接按主表打开', async () => {
+    const { list, router } = await mountList()
+    await list.vm.$emit('openSourceData', { sourceId: 'src-9', siteId: '105', name: '源', mainTable: '2102087' })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data', tableId: '2102087', returnTo: '/collect' })
+  })
+
   it('未关联网站的源（siteId 为 0）只带 sourceId', async () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSource', { sourceId: 'src-0', siteId: '0', name: '源' })
@@ -571,12 +400,13 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(router.currentRoute.value.query).toEqual({ siteId: '12', view: 'source', returnTo: '/collect' })
   })
 
-  it('源模式下点刷新：通知源列表重查', async () => {
-    const { wrapper, ui } = await mountList()
-    const before = ui.sourceListRevision
+  it('源模式下点刷新：保留筛选并刷新当前查询', async () => {
+    const { wrapper } = await mountList()
+    const fetch = vi.mocked(sourceApi.sourcePaged)
+    fetch.mockClear()
     await wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('refresh')
     await flushPromises()
-    expect(ui.sourceListRevision).toBe(before + 1)
+    expect(fetch).toHaveBeenCalled()
   })
 })
 
@@ -595,27 +425,7 @@ describe('新建采集', () => {
 // 2026-09-16 生产实测全部无效，恒按 siteId 升序返回。「最近修改」只能前端排——所以这里
 // 让接口回一份乱序数据，锁住"前端确实排过"，不能靠 mock 层自己排好而假阳性。
 // 「名称」排序 0924-01 随排序下拉一起去掉（Q1），只剩这一种顺序。
-describe('SourceTab 排序', () => {
-  // ui store 的 assetView 持久化在 localStorage，前面「切换卡片/表格视图」那个用例会把它留成
-  // table，导致这里挂出来的是 TableView、找不到 SiteCardGrid。清掉，回到默认卡片视图。
-  beforeEach(() => localStorage.clear())
 
-  const unordered = [
-    { siteId: 's-old', name: '旧站', sourceCount: 1, errorCount: 0, updatedAt: '2026-07-20 16:57:32', tags: [] },
-    { siteId: 's-new', name: '新站', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-16 14:09:24', tags: [] },
-    { siteId: 's-mid', name: '中站', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-03 15:54:37', tags: [] },
-  ]
-
-  it('默认「最近修改」：即使接口返回乱序，也按编辑时间倒序渲染', async () => {
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...unordered] as never })
-    const { wrapper } = await mountAt()
-
-    const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-    expect(sites.map((s) => s.siteId)).toEqual(['s-new', 's-mid', 's-old'])
-    spy.mockRestore()
-  })
-
-})
 
 // 0917-17「我收藏的网站」：产品会上催了两次，痛点是"找半天"。
 // 收藏存后端（utils/siteFavorites → favoriteApi，2026-09-23 前是本地），收藏的**恒排最前**。
@@ -639,14 +449,6 @@ describe('SourceTab · 我的收藏（0917-17 / 0924-01）', () => {
   }
   const shown = (w: Awaited<ReturnType<typeof mountAt>>['wrapper']) =>
     (w.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
-
-  it('收藏的排最前，组内按最近修改', async () => {
-    const fav = await import('@/utils/siteFavorites')
-    await fav.toggleFavoriteSite('s-old') // 时间最旧，本来排最后
-    const { wrapper } = await mountWithSites()
-
-    expect(shown(wrapper)).toEqual(['s-old', 's-new', 's-mid'])
-  })
 
   it('「我的收藏」tab 只列收藏的，total 跟着变（列表是前端分页，别只改展示）', async () => {
     const fav = await import('@/utils/siteFavorites')
@@ -672,18 +474,7 @@ describe('SourceTab · 我的收藏（0917-17 / 0924-01）', () => {
     expect(wrapper.findComponent({ name: 'SiteCardGrid' }).props('emptyText')).toBe('没有匹配的网站')
   })
 
-  it('卡片上的 ☆ 点一下就收藏，列表随即把它顶到最前', async () => {
-    const { wrapper } = await mountWithSites()
-    expect(shown(wrapper)).toEqual(['s-new', 's-mid', 's-old'])
 
-    // 第三张卡（s-old）的星
-    const stars = wrapper.findAll('[data-testid="site-card-fav"]')
-    expect(stars.length).toBe(3)
-    await stars[2].trigger('click')
-    await flushPromises()
-
-    expect(shown(wrapper)).toEqual(['s-old', 's-new', 's-mid'])
-  })
 })
 
 // 0917-17 后半条：最近打开。它补的是收藏解决不了的那一半——"找半天"那次根本没先收藏过。
@@ -749,16 +540,7 @@ describe('SourceTab · 最近打开的网站（0917-17 / 0924-01）', () => {
     expect(shown(wrapper)).toEqual(['s-mid', 's-old'])
   })
 
-  it('点卡片进网站会记一笔，回来就能在「最近打开」里看到', async () => {
-    const { wrapper } = await mountWithSites()
-    const grid = wrapper.findComponent({ name: 'SiteCardGrid' })
-    // 卡片主体点击 = 进网站源视图
-    await grid.findAll('.scg-card')[2].trigger('click')
-    await flushPromises()
 
-    const rec = await import('@/utils/siteRecents')
-    expect(rec.recentSiteIds.value[0]).toBe('s-old')
-  })
 })
 
 // 2026-09-21 用户报「根据条件查询完后，条数没有更新」。实情：命中数是更新了的
@@ -780,27 +562,6 @@ describe('SourceTab · 统计区的口径（2026-09-21）', () => {
 
   // 2026-09-23 起：后端补齐了每个网站的聚合列（B31），源 / 出错源 / 告警网站改为对命中列表求和，
   // 跟筛选走；全站网站数仍从 site/summary 的 total 取（「命中 / 全站」的分母）。
-  it('源 / 出错源 / 告警网站对命中列表求和，全站网站数取 summary.total', async () => {
-    const { wrapper } = await mountWith(83)
-    const stats = wrapper.findComponent({ name: 'FilterToolbar' }).props('stats') as Record<string, number>
-    expect(stats.siteTotal).toBe(83)
-    expect(stats.total).toBe(15)   // 10 + 5
-    expect(stats.error).toBe(4)    // 3 + 1
-    expect(stats.notify).toBe(1)   // 按网站计：只有 s1 有告警源
-  })
-
-  it('筛选后统计跟着变（搜索按网站名命中一个站）', async () => {
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
-    const { wrapper } = await mountWith(83)
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    toolbar.vm.$emit('update:keyword', '二')
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-
-    const stats = toolbar.props('stats') as Record<string, number>
-    expect(toolbar.props('total')).toBe(1)
-    expect(stats).toMatchObject({ total: 5, error: 1, notify: 0, siteTotal: 83 })
-  })
 
   it('没有筛选条件时 filtered=false（「网站 N」不写成 N / M）', async () => {
     const { wrapper } = await mountWith(83)
@@ -849,27 +610,6 @@ describe('SourceTab 网站列表缓存', () => {
 
   const site = (siteId: string, name: string) => ({ siteId, name, sourceCount: 1, errorCount: 0, updatedAt: '2026-09-20 10:00:00', tags: [] })
 
-  it('命中缓存时先显示缓存，再后台重拉，用新结果覆盖', async () => {
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 2, list: [site('s-old', '旧站'), site('s-created', '别处新建的站')] as never })
-    const router = makeRouter()
-    await router.push('/collect')
-    await router.isReady()
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    // 模拟上一次进页面留下的缓存（只有一个站）
-    commitSites(beginSitesFetch(), [site('s-old', '旧站')] as never)
-
-    const wrapper = mount(SourceTab, { global: { plugins: [pinia, router, ElementPlus] } })
-    await flushPromises()
-    await flushPromises()
-
-    expect(spy).toHaveBeenCalled()
-    const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-    expect(sites.map((s) => s.siteId).sort()).toEqual(['s-created', 's-old'])
-    spy.mockRestore()
-    wrapper.unmount()
-  })
-
   it('清缓存之前发出的请求晚回来，不能把旧数据写回缓存', () => {
     clearCollectAssetsCache()
     const stale = beginSitesFetch()
@@ -883,33 +623,7 @@ describe('SourceTab 网站列表缓存', () => {
 
 // 0924-03：分类改在「系统设置 → 分类目录」维护。从那边改完回来，采集资产是重新挂载的，
 // 但分类树读的是模块级缓存——必须先画缓存、再静默重拉，否则新建的分类看不到。
-describe('SourceTab 分类缓存重拉（0924-03）', () => {
-  beforeEach(() => localStorage.clear())
 
-  it('进页面先用缓存里的分类，再后台重拉覆盖', async () => {
-    const spy = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([
-      { id: 'c1', name: '旧分类' },
-      { id: 'c2', name: '设置页刚建的分类' },
-    ])
-    const router = makeRouter()
-    await router.push('/collect')
-    await router.isReady()
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    clearCollectAssetsCache()
-    collectAssetsCache.categories = [{ id: 'c1', name: '旧分类' }]
-
-    const wrapper = mount(SourceTab, { global: { plugins: [pinia, router, ElementPlus] } })
-    await flushPromises()
-    await flushPromises()
-
-    expect(spy).toHaveBeenCalled()
-    const cats = wrapper.findComponent({ name: 'FilterToolbar' }).props('categories') as { id: string }[]
-    expect(cats.map((c) => c.id)).toEqual(['c1', 'c2'])
-    spy.mockRestore()
-    wrapper.unmount()
-  })
-})
 
 describe('SourceTab · 删除网站（1014 右键卡片菜单）', () => {
   beforeEach(() => {
@@ -939,30 +653,7 @@ describe('SourceTab · 删除网站（1014 右键卡片菜单）', () => {
     deleteSpy.mockRestore()
   })
 
-  it('确认后调 siteDelete 并整体刷新；成功提示已删除', async () => {
-    vi.mocked(ElMessageBox.confirm).mockResolvedValueOnce('confirm' as never)
-    const sitePagedSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
-      total: 1,
-      list: [{ siteId: 's1', name: '网站一', sourceCount: 0, errorCount: 0, updatedAt: '2026-10-14 10:00:00', tags: [], category: '', owner: '' }],
-    })
-    const deleteSpy = vi.spyOn(siteApi, 'siteDelete').mockResolvedValue({ ok: true, message: '' })
-    const { wrapper } = await mountAt()
-    await flushPromises()
-    const callsBefore = sitePagedSpy.mock.calls.length
 
-    const grid = wrapper.findComponent({ name: 'SiteCardGrid' })
-    await grid.vm.$emit('delete-site', { siteId: 's1', name: '网站一' })
-    await flushPromises()
-    await flushPromises()
-
-    expect(deleteSpy).toHaveBeenCalledWith('s1')
-    expect(ElMessage.success).toHaveBeenCalledWith('已删除网站「网站一」')
-    // 删除后整体刷新（refreshAll → 重新拉列表）
-    expect(sitePagedSpy.mock.calls.length).toBeGreaterThan(callsBefore)
-    wrapper.unmount()
-    sitePagedSpy.mockRestore()
-    deleteSpy.mockRestore()
-  })
 })
 
 // 1016：数据中心「按条件查源」带过来的命中源
@@ -988,5 +679,101 @@ describe('SourceTab 数据查询命中源', () => {
     const { wrapper } = await mountAt({ tab: 'source', from: 'data-query' })
     expect(wrapper.find('[data-testid="data-query-hits"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'FilterToolbar' }).exists()).toBe(true)
+  })
+})
+
+
+// The all-sources tab now uses the backend read model; legacy favorite/recent card paths above remain covered.
+describe('SourceTab 聚合网站与目录接入', () => {
+  const response = (names = ['金融站']) => ({ total: 1884, matchedSourceTotal: 180000, unboundSourceTotal: 12,
+    list: names.map((name,i) => ({ site: { siteId: String(42+i), name, sourceCount: 24, errorCount: 0, dataCount: 0 } as import('@/api').Site,
+      matchedSourceCount: 8, sourcePreview: [], favorited: false })) })
+  function selectDirectory(wrapper: Awaited<ReturnType<typeof mountAt>>['wrapper'], mode: 'selected' | 'all' = 'selected') {
+    const directory = { kind: 'biz', mode, selections: mode === 'all' ? [] : [{ id: '900', includeDescendants: true }] }
+    wrapper.findComponent({ name: 'SourceDirPanel' }).vm.$emit('change', { kind: 'biz', all: mode === 'all', dirIds: ['900'], labels: [{ id: '900', path: '宏观数据', hasKids: true }], directory })
+    return directory
+  }
+  it('首屏只取一次聚合页，不取全网站目录或逐站源；完整统计直接展示', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const oldSites=vi.spyOn(siteApi,'sitePaged');const oldPreview=vi.spyOn(siteApi,'siteSourcePreview');const oldAll=vi.spyOn(siteApi,'siteSources')
+    const { wrapper }=await mountAt()
+    expect(aggregate).toHaveBeenCalledTimes(1)
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, limit: 20, sort: 'editedDesc' }),expect.any(AbortSignal))
+    expect(oldSites).not.toHaveBeenCalled();expect(oldPreview).not.toHaveBeenCalled();expect(oldAll).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('1884 个网站');expect(wrapper.text()).toContain('180000 个源')
+    expect(wrapper.text()).toContain('数据 0 条')
+  })
+  it('业务目录含子孙直传，不等待 expandDirIds 或 listSources 成员枚举', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const expand=vi.spyOn(sourceDirs,'expandDirIds');const members=vi.spyOn(sourceDirs,'bizScopeSourceIds');const membership=vi.spyOn(sourceDirs,'bizMembership')
+    const { wrapper }=await mountAt();aggregate.mockClear()
+    const directory=selectDirectory(wrapper);await flushPromises()
+    expect(aggregate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ directory }),expect.any(AbortSignal))
+    expect(aggregate.mock.calls[0]![0].sourceFilter.sourceIds).toBeUndefined()
+    expect(expand).not.toHaveBeenCalled();expect(members).not.toHaveBeenCalled();expect(membership).not.toHaveBeenCalled()
+  })
+  it('显式 selected 空范围不转换成 none 或全库查询', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const {wrapper}=await mountAt()
+    const directory={kind:'biz',mode:'selected',selections:[]}
+    wrapper.findComponent({name:'SourceDirPanel'}).vm.$emit('change',{kind:'biz',dirIds:[],labels:[],directory})
+    await flushPromises()
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({directory}),expect.any(AbortSignal))
+  })
+  it('全选业务树只传 all；新条件失败显示真实错误并支持重试', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const { wrapper }=await mountAt();aggregate.mockRejectedValueOnce(new Error('目录无权限'))
+    const directory=selectDirectory(wrapper,'all');await flushPromises()
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({ directory }),expect.any(AbortSignal))
+    expect(wrapper.get('[role="alert"]').text()).toContain('目录无权限')
+    await wrapper.get('[role="alert"] button').trigger('click');await flushPromises()
+    expect(wrapper.text()).toContain('金融站')
+  })
+  it('列表切换保留实例、名称/状态/count=0/目录，并直接用 sourcePaged.directory', async () => {
+    vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    vi.spyOn(sourceDirs,'bizMembership').mockResolvedValue(new Map())
+    const { wrapper }=await mountAt();const overview=wrapper.findComponent({ name: 'SourceOverviewView' });const instance=overview.vm.$.uid
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('金融')
+    await wrapper.get('[data-testid="source-overview-state"]').setValue('E')
+    await wrapper.get('[data-testid="source-overview-count"]').setValue('0')
+    const directory=selectDirectory(wrapper);await flushPromises()
+    expect(siteApi.sourceScopePaged).toHaveBeenLastCalledWith(expect.objectContaining({ directory, sourceFilter: expect.objectContaining({ name: '金融', state: 'E', enable: '0', count: 0 }) }),expect.any(AbortSignal))
+    await wrapper.get('[aria-label="源列表视图"]').trigger('click');await flushPromises()
+    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$.uid).toBe(instance)
+    expect(sourceApi.sourcePaged).toHaveBeenLastCalledWith(expect.objectContaining({ directory, name: '金融', state: 'E', count: 0, size: 20 }))
+    expect((wrapper.get('[data-testid="source-overview-search-text"]').element as HTMLInputElement).value).toBe('金融')
+    await wrapper.get('[aria-label="网站视图"]').trigger('click');await flushPromises()
+    expect(siteApi.sourceScopePaged).toHaveBeenLastCalledWith(expect.objectContaining({ directory, sourceFilter: expect.objectContaining({ name: '金融', count: 0 }) }),expect.any(AbortSignal))
+  })
+  it('服务端顺序直接展示；改网站排序不更改源列表的排序状态', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response(['服务端第一站','服务端第二站']))
+    const { wrapper }=await mountAt()
+    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites').map((site: import('@/api').Site)=>site.name)).toEqual(['服务端第一站','服务端第二站'])
+    await wrapper.get('[data-testid="website-sort"]').setValue('sourceCountDesc');await flushPromises()
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({ sort:'sourceCountDesc' }),expect.any(AbortSignal))
+    expect(aggregate.mock.calls.at(-1)![0].sourceFilter).not.toHaveProperty('sorted')
+  })
+  it('刷新重新请求当前聚合页；新建空网站通过 includeEmptySiteIds 交给服务端合并', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const { wrapper }=await mountAt();const before=aggregate.mock.calls.length
+    wrapper.findComponent({ name:'FilterToolbar' }).vm.$emit('refresh');await flushPromises()
+    expect(aggregate).toHaveBeenCalledTimes(before+1)
+    await wrapper.get('[data-testid="site-create"]').trigger('click');await flushPromises()
+    wrapper.findComponent({ name:'SiteEditorDialog' }).vm.$emit('saved','12345');await flushPromises()
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({ includeEmptySiteIds:['12345'] }),expect.any(AbortSignal))
+  })
+  it('总览下钻异常状态和业务分类直接转成源/目录范围，不枚举全网站', async () => {
+    const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const { wrapper }=await mountAt({ state:'error',category:'900' });await flushPromises()
+    expect(aggregate).toHaveBeenLastCalledWith(expect.objectContaining({ directory: {kind:'biz',mode:'selected',selections:[{id:'900',includeDescendants:true}]},sourceFilter:expect.objectContaining({state:'E',enable:'0'}) }),expect.any(AbortSignal))
+    expect(wrapper.findComponent({name:'FilterToolbar'}).props('errorOnly')).toBe(true)
+  })
+  it('网站筛选仅在用户展开时请求50个候选，输入名称走后端搜索', async () => {
+    vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
+    const websites=vi.spyOn(siteApi,'sitePaged').mockResolvedValue({total:1884,list:[]})
+    const { wrapper }=await mountAt();expect(websites).not.toHaveBeenCalled()
+    const select=wrapper.findComponent({name:'SourceOverviewView'}).findComponent({name:'ElSelect'})
+    select.vm.$emit('visible-change',true);await flushPromises()
+    expect(websites).toHaveBeenLastCalledWith({page:1,size:50})
   })
 })

@@ -6,10 +6,15 @@
 //    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
 import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
-import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source } from '@/api'
-import { isProductionBackend } from '@/api/client'
+import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
+import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
+import SourceWebsiteCards from '@/views/CollectAssets/SourceWebsiteCards.vue'
+import { clearSiteCardQueryCache } from '@/views/CollectAssets/siteCardQuery'
+import { currentBackendHost, isProductionBackend } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
+import SourceDataCleanupDialog from '@/views/CollectAssets/SourceDataCleanupDialog.vue'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -108,6 +113,7 @@ const props = defineProps<{
    * 后端只匹配直属、不含子级，调用方传已展开子级的目录 ID。`undefined` = 不限。
    */
   scopeCategoryIds?: string[]
+  scopeDirectory?: SourceDirectoryScope
   /** 目录范围的人话（如「系统目录：财经资讯（含子级）」），只给发任务确认弹窗看，不发给后端 */
   scopeLabel?: string
   /** 范围内容变了但范围参数没变（如往视图目录里加了源）时由父级加 1，触发重查 */
@@ -132,6 +138,9 @@ const props = defineProps<{
   extraColumnLabel?: string
   showOriginalDirectory?: boolean
   quickEdit?: boolean
+  /** 采集资产系统目录的两种展示，共用本组件的查询条件与目录范围。 */
+  websiteCards?: boolean
+  includeEmptySiteIds?: string[]
 }>()
 const emit = defineEmits<{
   openSource: [source: Source]
@@ -141,6 +150,9 @@ const emit = defineEmits<{
   openSourceData: [source: Source]
   /** 点来源组名（1008-04）：跳到「来源组」目录页签并选中该组 */
   openSourceGroup: [sourceGroupId: string]
+  editSite: [site: Site]
+  deleteSite: [site: Site]
+  refreshSites: []
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -166,6 +178,9 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
+const cardQuery = ref<SourceFilter | null>(null)
+const cardScopeEmpty = ref(false)
+const cardRevision = ref(0)
 const quickEditSource = ref<Source | null>(null)
 function onQuickEdited() {
   quickEditSource.value = null
@@ -342,15 +357,18 @@ async function openMainTable(tableId: string) {
   }
 }
 /**
- * 不限网站时自己拉一次全量网站（当前约 98 个，一个请求），两处用：「网站」筛选的候选，
- * 以及「所属网站」列的名称——**sourcePaged 列表不返回 siteName**，只有 siteId
- * （2026-09-24 生产实测；source-api.md 字段对照表里的 siteName 在分页列表里并不出现）。
+ * 新目录范围在用户展开网站筛选时按名称查询最多 50 个候选，首屏不下载网站目录。
+ * 新 sourcePaged.directory 会批量补当前源页的网站名称，无需全目录。
+ * 其余旧调用保留原有候选加载，用于筛选与补全没有 siteName 的旧分页响应。
  */
 const siteOptions = ref<{ siteId: string; name: string }[]>([])
-async function loadSiteOptions() {
-  if (!crossSite.value || siteOptions.value.length) return
+let siteOptionsSequence = 0
+async function loadSiteOptions(keyword = '') {
+  if (!crossSite.value || !props.scopeDirectory && siteOptions.value.length) return
+  const sequence = ++siteOptionsSequence
   try {
-    const result = await siteApi.sitePaged({ page: 1, size: 2000 })
+    const result = await siteApi.sitePaged({ page: 1, size: props.scopeDirectory ? 50 : 2000, ...(keyword ? { name: keyword } : {}) })
+    if (sequence !== siteOptionsSequence) return
     siteOptions.value = result.list.map((s) => ({ siteId: s.siteId, name: s.name }))
   } catch {
     // 候选只是筛选辅助，拉不到就只剩「未关联网站」，不打断列表
@@ -489,7 +507,7 @@ function currentQuery(): SourceFilter {
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
     sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
     ...(props.scopeViewCategoryId ? { viewCategoryId: props.scopeViewCategoryId } : {}),
-    ...(props.scopeCategoryIds?.length ? { categorys: props.scopeCategoryIds.join(',') } : {}),
+    ...(props.scopeDirectory ? { directory: props.scopeDirectory } : props.scopeCategoryIds?.length ? { categorys: props.scopeCategoryIds.join(',') } : {}),
     ...(props.scopeLabel ? { dirLabel: props.scopeLabel } : {}),
   }
 }
@@ -501,6 +519,14 @@ async function fetchSourcePage(query: SourceFilter & { page: number; size: numbe
 
 async function loadSources() {
   const requestId = ++sourceRequestSeq
+  if (props.websiteCards) {
+    loading.value = false
+    cardScopeEmpty.value = noScopeMatch.value
+    const nextQuery = currentQuery()
+    if (JSON.stringify(cardQuery.value) !== JSON.stringify(nextQuery)) cardQuery.value = nextQuery
+    else cardRevision.value++
+    return
+  }
   if (noScopeMatch.value) {
     rows.value = []
     total.value = 0
@@ -538,6 +564,10 @@ function search() {
   page.value = 1
   void loadSources()
 }
+watch(() => props.websiteCards, () => {
+  clearSelection()
+  void loadSources()
+})
 function clearFilters() {
   conditions.value = [newCondition('sourceIds')]
   statusFilter.value = 'all'
@@ -589,6 +619,9 @@ const flowConfigSource = ref<Source | null>(null)
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
 const batchCronOpen = ref(false)
+const cleanupOpen = ref(false)
+const auth = useAuthStore()
+const cleanupAllowed = computed(() => auth.role === 'admin' && !isProductionBackend() && currentBackendHost() !== '118.25.96.217')
 function openFlowConfigForSelected() {
   if (selectedIds.value.length !== 1) {
     ElMessage.warning('源流程配置一次只看一个源，请只勾选 1 个')
@@ -630,6 +663,7 @@ function onGroupOpsCommand(command: string) {
   else if (command === 'adjust-group') openAdjustGroup()
   else if (command === 'run-once') openRunOnce()
   else if (command === 'batch-cron') openBatchCron()
+  else if (command === 'cleanup-data' && cleanupAllowed.value) cleanupOpen.value = true
 }
 /** 来源组批量操作写完后：清勾选、重拉来源组候选、重查列表（组归属 / 默认流程列变了） */
 function onGroupOpsChanged() {
@@ -648,6 +682,7 @@ const hasQueryFilter = computed(() => {
     || !!dataCountMax.value
     || !!siteFilter.value
     || !!sourceGroupFilter.value
+    || !!props.scopeDirectory && props.scopeDirectory.mode !== 'none'
 })
 const selectedSet = computed(() => new Set(selectedIds.value))
 const selectMode = computed(() => selectedIds.value.length > 0)
@@ -1221,7 +1256,7 @@ onMounted(() => {
   document.addEventListener('keydown', onMarkKeydown)
   void loadSources()
   void loadTagCandidates()
-  void loadSiteOptions()
+  if (!props.scopeDirectory) void loadSiteOptions()
   void loadSourceGroupOptions()
   void loadFlowOptions()
   void loadTableOptions()
@@ -1248,7 +1283,7 @@ watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () =
   void loadSources()
 })
 // 来源组 / 视图目录 / 系统目录范围变了：清掉勾选再重查
-watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}`, () => {
+watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}|${JSON.stringify(props.scopeDirectory)}`, () => {
   clearSelection()
   page.value = 1
   void loadSources()
@@ -1271,11 +1306,16 @@ watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
  * **不动页码和筛选条件**——用户的查询上下文是他自己设的，重查即可，别把他弹回第一页。
  */
 watch(() => ui.sourceListRevision, () => {
+  clearSiteCardQueryCache()
   void loadSources()
 })
 
+function refresh() {
+  clearSiteCardQueryCache()
+  return loadSources()
+}
 // 源管理「系统目录」页签的「按目录发送」复用这里的发任务流程（不勾选 = 按当前筛选范围，含目录范围）
-defineExpose({ openLaunch, clearSelection })
+defineExpose({ openLaunch, clearSelection, refresh })
 </script>
 
 <template>
@@ -1332,11 +1372,11 @@ defineExpose({ openLaunch, clearSelection })
       <div class="sov-filter-options">
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
       <label v-if="crossSite" class="sov-fl-site"><span class="sov-label-text">网站</span>
-        <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
-          <option value="">全部网站</option>
-          <option v-if="!scopeSiteIds" :value="UNBOUND_SITE">未关联网站</option>
-          <option v-for="s in siteFilterOptions" :key="s.siteId" :value="s.siteId">{{ s.name }}</option>
-        </select>
+        <ElSelect v-model="siteFilter" class="sov-site-select" data-testid="source-overview-site" aria-label="网站" filterable :remote="!!scopeDirectory" :remote-method="loadSiteOptions" @visible-change="(open: boolean) => { if (open && scopeDirectory) void loadSiteOptions() }" placeholder="全部网站" no-match-text="没有匹配的网站" @change="search">
+          <ElOption label="全部网站" value="" />
+          <ElOption v-if="!scopeSiteIds" label="未关联网站" :value="UNBOUND_SITE" />
+          <ElOption v-for="s in siteFilterOptions" :key="s.siteId" :label="s.name" :value="s.siteId" />
+        </ElSelect>
       </label>
       <!-- 来源组筛选（1008-04）：只在源列表视图（groupOps）出现；不含「未归组」 -->
       <label v-if="crossSite && groupOps" class="sov-fl-group"><span class="sov-label-text">来源组</span>
@@ -1390,7 +1430,22 @@ defineExpose({ openLaunch, clearSelection })
       </div>
     </div>
 
-    <div class="sov-summary" :class="{ 'one-row': crossSite }">
+    <SourceWebsiteCards
+      v-if="cardQuery"
+      v-show="websiteCards"
+      :active="!!websiteCards"
+      :refresh-version="cardRevision"
+      :query="cardQuery"
+      :scope-empty="cardScopeEmpty"
+      :empty-text="scopeEmptyText"
+      :include-empty-site-ids="includeEmptySiteIds"
+      @edit-site="emit('editSite', $event)"
+      @delete-site="emit('deleteSite', $event)"
+      @show-sources="ui.setAssetView('table')"
+    >
+      <template #summary-extra><slot name="summary-extra" :ids="[]" /></template>
+    </SourceWebsiteCards>
+    <div v-if="!websiteCards" class="sov-summary" :class="{ 'one-row': crossSite }">
       <button class="sov-btn" type="button" data-testid="source-code-tasks" @click="codeTasksOpen = true">代码生成</button>
       <span>共 {{ total }} 个源</span>
       <!-- 源管理「系统目录」页签：当前目录范围 + 按目录操作（2026-10-21） -->
@@ -1432,6 +1487,7 @@ defineExpose({ openLaunch, clearSelection })
               <el-dropdown-item command="adjust-group" data-testid="sg-ops-adjust-group">{{ rangeAdjustAllowed ? '调整来源组（不勾选 = 按当前筛选范围）' : '调整来源组' }}</el-dropdown-item>
               <el-dropdown-item command="run-once" data-testid="sg-ops-run-once">指定流程运行一次</el-dropdown-item>
               <el-dropdown-item command="batch-cron" data-testid="sg-ops-batch-cron">批量配定时</el-dropdown-item>
+              <el-dropdown-item v-if="cleanupAllowed" divided command="cleanup-data" data-testid="sg-ops-cleanup-data">清理源数据</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -1440,7 +1496,7 @@ defineExpose({ openLaunch, clearSelection })
         <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
       </span>
     </div>
-    <div class="sov-table-wrap" :class="{ loading }">
+    <div v-if="!websiteCards" class="sov-table-wrap" :class="{ loading }">
       <table class="sov-table">
         <thead>
           <tr>
@@ -1607,7 +1663,7 @@ defineExpose({ openLaunch, clearSelection })
     </div>
     <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）；
          全站列表都用这一个组件，别换回手写的上一页/下一页按钮。 -->
-    <div class="sov-pager">
+    <div v-if="!websiteCards" class="sov-pager">
       <el-pagination
         data-testid="source-pagination"
         v-model:current-page="page"
@@ -1675,6 +1731,7 @@ defineExpose({ openLaunch, clearSelection })
       :flows="flowOptions"
       @close="runOnceOpen = false"
     />
+    <SourceDataCleanupDialog v-if="cleanupOpen" v-model="cleanupOpen" :source-ids="selectedIds" @cleaned="loadSources" />
     <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
@@ -1689,6 +1746,10 @@ defineExpose({ openLaunch, clearSelection })
 .sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
 .sov-filter-options { display: contents; }
+.sov-site-select { width: 116px; }
+.sov-site-select :deep(.el-select__wrapper) { min-height: 30px; padding: 0 8px; border-radius: 6px; box-shadow: 0 0 0 1px #dbe3ee inset; font-size: 12px; }
+.sov-site-select :deep(.el-select__wrapper:hover) { box-shadow: 0 0 0 1px #bfdbfe inset; }
+.sov-site-select :deep(.el-select__wrapper.is-focused) { box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 2px #dbeafe; }
 /* 查询那格：一行一个条件（字段 + 条件 + 值 + ×/+），多个条件往下叠 */
 .sov-conds { display: grid; gap: 6px; }
 .sov-search { display: flex; align-items: center; gap: 4px; }
@@ -1735,6 +1796,8 @@ defineExpose({ openLaunch, clearSelection })
 .sov-filter.is-compact .sov-search input { width: 64px; flex: 1 1 64px; min-width: 64px; }
 /* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
 .sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
+.sov-filter.is-compact .sov-site-select { width: 100%; min-width: 0; }
+.sov-filter.is-compact .sov-site-select :deep(.el-select__wrapper) { min-height: 34px; font-size: 13px; }
 .sov-filter.is-compact .sov-fl-group { flex: 1 1 94px; min-width: 94px; max-width: 120px; }
 .sov-filter.is-compact .sov-fl-state { flex: 1 1 84px; min-width: 84px; max-width: 100px; }
 .sov-filter.is-compact .sov-fl-tag { flex: 1 1 84px; min-width: 84px; max-width: 110px; }

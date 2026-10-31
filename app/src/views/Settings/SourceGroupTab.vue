@@ -4,7 +4,7 @@
  *
  * 放哪：源管理（`CollectAssets/index.vue`）的「我的分组」页签。10-13 曾移到系统设置、源管理只读；
  * 同日 leo 定：「先把功能上上去，管理员也是在源管理里面改」，迁回源管理并可编辑，系统设置不再有这一页（权限后面再管）。
- * 界面复用「我的分组」（`PersonalSources.vue`）的布局：左边组列表（带成员数），右边成员源列表；
+ * 界面复用「我的分组」（`PersonalSources.vue`）的布局：左边组列表（可搜索，成员数按可见行限流加载），右边成员源列表；
  * 来源组独有的东西（流程配置、组资料）放右侧抽屉。数据不合并——「我的分组」是本机个人目录，
  * 来源组是后端 `source-group/*` 配置（决定组内源跑哪条流程，只有管理员能改）。
  *
@@ -16,10 +16,10 @@
  * - 成员源列表复用 `SourceOverviewView`，用 `scopeSourceGroupId` 走 `sourcePaged` 服务端筛选
  *   （2026-10-09 实测支持），255 个成员的组天然翻页。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { sourceGroupApi, flowCenterApi, sourceApi, type Source, type SourceGroup, type SourceGroupState, type SourceFlowBind, type FlowRecord } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -38,11 +38,86 @@ const canWrite = computed(() => auth.role === 'admin')
 
 // ---- 左侧组列表 ----
 const groups = ref<SourceGroup[]>([])
-/** 组 → 成员数（用 sourcePaged 按 sourceGroupId 筛的 count；members 接口没有 total） */
-const memberCounts = ref<Record<string, number>>({})
 const loading = ref(false)
 const selectedGroupId = ref<string>('')
 const selectedGroup = computed(() => groups.value.find((g) => g.sourceGroupId === selectedGroupId.value) ?? null)
+/** 左侧列表按组名 / 编码 / ID 筛（前端过滤，list 接口一次返回全部组） */
+const groupKeyword = ref('')
+const visibleGroups = computed(() => {
+  const keyword = groupKeyword.value.trim().toLowerCase()
+  if (!keyword) return groups.value
+  return groups.value.filter((g) => [g.sourceGroupName, g.sourceGroupCode, g.sourceGroupId].some((v) => v?.toLowerCase().includes(keyword)))
+})
+
+/** 只查视口内的组，最多 3 个请求；离开视口的未开始请求不排队。 */
+const groupList = ref<HTMLElement>()
+const memberCounts = ref<Record<string, number | null>>({})
+const visibleCountIds = new Set<string>()
+const pendingCountIds = new Set<string>()
+let countObserver: IntersectionObserver | undefined
+let countsActive = false
+let countRequests = 0
+let countVersion = 0
+
+function loadVisibleCounts(): void {
+  if (!countsActive) return
+  for (const id of visibleCountIds) {
+    if (countRequests >= 3) break
+    if (id in memberCounts.value || pendingCountIds.has(id)) continue
+    const version = countVersion
+    countRequests++
+    pendingCountIds.add(id)
+    void sourceApi.sourcePaged({ page: 1, size: 1, sourceGroupId: id }).then((page) => {
+      if (version === countVersion) memberCounts.value[id] = page.total
+    }).catch(() => {
+      if (version === countVersion) memberCounts.value[id] = null
+    }).finally(() => {
+      countRequests--
+      pendingCountIds.delete(id)
+      loadVisibleCounts()
+    })
+  }
+}
+
+function resetMemberCounts(): void {
+  countVersion++
+  memberCounts.value = {}
+  loadVisibleCounts()
+}
+
+function observeMemberCounts(): void {
+  countsActive = true
+  if (typeof IntersectionObserver === 'undefined') return
+  countObserver ??= new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const id = (entry.target as HTMLElement).dataset.groupId!
+      if (entry.isIntersecting) visibleCountIds.add(id)
+      else visibleCountIds.delete(id)
+    }
+    loadVisibleCounts()
+  }, { root: groupList.value })
+  groupList.value?.querySelectorAll<HTMLElement>('[data-group-id]').forEach((el) => countObserver!.observe(el))
+}
+
+const vMemberCount = {
+  mounted(el: HTMLElement) { countObserver?.observe(el) },
+  beforeUnmount(el: HTMLElement) {
+    countObserver?.unobserve(el)
+    visibleCountIds.delete(el.dataset.groupId!)
+  },
+}
+
+function stopMemberCounts(): void {
+  countsActive = false
+  countObserver?.disconnect()
+  visibleCountIds.clear()
+}
+
+watch(() => ui.sourceListRevision, resetMemberCounts)
+onMounted(observeMemberCounts)
+onActivated(observeMemberCounts)
+onDeactivated(stopMemberCounts)
+onUnmounted(() => { stopMemberCounts(); countVersion++ })
 
 /** 所有流程候选（排除 state=D）；选项显示「名称 · ID」 */
 const flows = ref<FlowRecord[]>([])
@@ -97,6 +172,7 @@ async function reloadGroups(): Promise<void> {
     const rows = await sourceGroupApi.list()
     if (request !== listRequest) return
     groups.value = rows
+    resetMemberCounts()
     // 选中组被删 / 刷新后不存在 → 清空选中
     if (selectedGroupId.value && !rows.some((g) => g.sourceGroupId === selectedGroupId.value)) {
       selectedGroupId.value = ''
@@ -104,26 +180,11 @@ async function reloadGroups(): Promise<void> {
     if (selectedGroupId.value) {
       await loadGroupDetail(selectedGroupId.value)
     }
-    void loadMemberCounts(rows, request)
   } catch (error) {
     if (request === listRequest) ElMessage.error((error as Error)?.message ?? String(error))
   } finally {
     if (request === listRequest) loading.value = false
   }
-}
-
-/** 每个组的成员数：sourcePaged 按 sourceGroupId 筛一次拿 count（members 接口没有 total） */
-async function loadMemberCounts(rows: SourceGroup[], request: number): Promise<void> {
-  const counts: Record<string, number> = {}
-  await Promise.all(rows.map(async (g) => {
-    try {
-      const result = await sourceApi.sourcePaged({ page: 1, size: 1, sourceGroupId: g.sourceGroupId })
-      counts[g.sourceGroupId] = result.total
-    } catch {
-      counts[g.sourceGroupId] = 0
-    }
-  }))
-  if (request === listRequest) memberCounts.value = counts
 }
 
 async function loadFlows(): Promise<void> {
@@ -272,8 +333,8 @@ async function removeGroup(): Promise<void> {
   try {
     const page = await sourceGroupApi.members(group.sourceGroupId, 0, 1)
     if (page.rows.length > 0) {
-      // members 只取了 1 条用来判断有没有成员；数量用左侧的成员数（sourcePaged 的 count）
-      const count = memberCounts.value[group.sourceGroupId]
+      // members 只取了 1 条用来判断有没有成员、没有 total；数量另用 sourcePaged 按组筛的 count，取不到就不报数
+      const count = await sourceApi.sourcePaged({ page: 1, size: 1, sourceGroupId: group.sourceGroupId }).then((r) => r.total).catch(() => 0)
       ElMessage.warning(`「${group.sourceGroupName}」还有${count ? ` ${count} 个` : ''}成员，请先移出全部成员再删除`)
       return
     }
@@ -340,11 +401,6 @@ async function removeMembers(): Promise<void> {
   const group = selectedGroup.value
   if (!canWrite.value || !group || !selectedIds.value.length) return
   try {
-    await ElMessageBox.confirm(`确定把这 ${selectedIds.value.length} 个来源移出「${group.sourceGroupName}」？移出后不恢复旧绑定，需重新配置独立流程才能运行。`, '确认移出来源组', { type: 'warning' })
-  } catch {
-    return
-  }
-  try {
     await sourceGroupApi.changeMembers({ sourceIds: selectedIds.value, sourceGroupId: null, expectedSourceGroupId: group.sourceGroupId })
     ElMessage.success(`已移出 ${selectedIds.value.length} 个来源`)
   } catch (error) {
@@ -395,7 +451,7 @@ function openSource(source: Source, view: 'overview' | 'data' = 'overview'): voi
   })
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath },
   })
 }
 
@@ -456,19 +512,34 @@ watch(() => route.query.group, (id) => {
           <strong>来源组</strong>
           <el-button size="small" type="primary" :disabled="!canWrite" data-testid="sg-new" @click="creating = true">新建</el-button>
         </div>
-        <div class="sg-list">
+        <el-input
+          v-model="groupKeyword"
+          class="sg-search"
+          size="small"
+          :prefix-icon="Search"
+          clearable
+          placeholder="搜索组名 / 编码 / ID"
+          data-testid="sg-search"
+        />
+        <div ref="groupList" class="sg-list">
           <button
-            v-for="g in groups"
+            v-for="g in visibleGroups"
+            v-member-count
             :key="g.sourceGroupId"
+            :data-group-id="g.sourceGroupId"
             type="button"
             class="sg-item"
             :class="{ active: g.sourceGroupId === selectedGroupId, disabled: g.state !== 'ACTIVE' }"
             @click="selectGroup(g.sourceGroupId)"
           >
             <span>{{ g.sourceGroupName }}<i v-if="g.state !== 'ACTIVE'" class="sg-off">停用</i></span>
-            <small>{{ memberCounts[g.sourceGroupId] ?? '…' }}</small>
+            <small
+              class="sg-count"
+              :title="memberCounts[g.sourceGroupId] === null ? '成员数加载失败，刷新后重试' : memberCounts[g.sourceGroupId] === undefined ? '成员数加载中' : `${memberCounts[g.sourceGroupId]} 个成员`"
+            >{{ memberCounts[g.sourceGroupId] === null ? '—' : memberCounts[g.sourceGroupId] ?? '…' }}</small>
           </button>
           <div v-if="!groups.length" class="sg-empty">{{ loading ? '加载中…' : '暂无来源组' }}</div>
+          <div v-else-if="!visibleGroups.length" class="sg-empty">没有匹配的来源组</div>
         </div>
         <p class="sg-note">来源组决定组内源跑哪条流程，修改影响全部成员；只有管理员能修改。</p>
       </aside>
@@ -680,7 +751,8 @@ watch(() => route.query.group, (id) => {
   background: #fff;
 }
 .sg-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
-.sg-list { flex: 1; min-height: 0; overflow-y: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 2px; }
+.sg-search { margin-top: 10px; }
+.sg-list { flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sg-item {
   display: flex;
   justify-content: space-between;
@@ -696,7 +768,7 @@ watch(() => route.query.group, (id) => {
   text-align: left;
 }
 .sg-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
-.sg-item small { color: var(--rc-faint); font-size: 11px; }
+.sg-count { flex-shrink: 0; color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .sg-item:hover { background: #f1f5f9; }
 .sg-item.active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .sg-item.disabled { color: var(--rc-faint); }

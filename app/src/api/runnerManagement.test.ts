@@ -1,10 +1,52 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runnerManagementApi, type DirectoryLayout } from './runnerManagement'
+import { setUnauthorizedHandler } from './auth'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  setUnauthorizedHandler(() => {})
+})
 
 describe('Runner 管理接口', () => {
+  it('AI 开关服务拒绝认证但业务登录有效时，保留登录并报告独立服务错误', async () => {
+    const expired = vi.fn()
+    setUnauthorizedHandler(expired)
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({ message: '请先登录' }) })
+      .mockResolvedValueOnce({ status: 200, ok: true, json: async () => ({ code: '0', data: { roles: ['admin'] } }) })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await expect(runnerManagementApi.nodeGenerationSettings('1401014')).rejects.toThrow('请先登录')
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/user-info.htm', expect.objectContaining({ credentials: 'include' }))
+    expect(expired).not.toHaveBeenCalled()
+  })
+
+  it.each(['401', 'redirect'])('业务会话确认失效（%s）时仍提示重新登录', async (kind) => {
+    const expired = vi.fn()
+    setUnauthorizedHandler(expired)
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({ message: '请先登录' }) })
+      .mockResolvedValueOnce(kind === '401'
+        ? { status: 401, ok: false, json: async () => ({}) }
+        : { status: 200, ok: true, redirected: true, url: 'http://localhost:5180/api/logout.htm' })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await expect(runnerManagementApi.nodeGenerationSettings('1401014')).rejects.toThrow('请先登录')
+    expect(expired).toHaveBeenCalledOnce()
+  })
+
+  it('业务认证服务网络异常时不把独立服务的 401 判作整个平台登出', async () => {
+    const expired = vi.fn()
+    setUnauthorizedHandler(expired)
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({ message: '请先登录' }) })
+      .mockRejectedValueOnce(new Error('offline')))
+
+    await expect(runnerManagementApi.nodeGenerationSettings('1401014')).rejects.toThrow('请先登录')
+    expect(expired).not.toHaveBeenCalled()
+  })
+
   it('编排保存按流程节点幂等同步部署配置，携带队列及指定代码版本', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ deploymentId: 'deploy1' }) })
     vi.stubGlobal('fetch', fetchSpy)

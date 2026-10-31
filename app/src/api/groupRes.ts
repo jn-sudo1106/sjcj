@@ -23,6 +23,7 @@ const EP = {
   delete: 'group-res/delete',
   meta: 'group-res/meta',
   preview: 'group-res/preview',
+  groups: 'group-res/groups',
 } as const
 
 /** 只有大于这个值的用户组才走 sys_group_res 映射（≤90000 是系统内置组） */
@@ -128,6 +129,14 @@ export function groupResMeta(): Promise<GroupResMeta> {
   return request<GroupResMeta>(EP.meta, undefined, { method: 'GET' })
 }
 
+/**
+ * 组 ID 候选（只读，admin）：现有用户的组 ∪ 已配过规则的组，后端已滤掉 ≤90000 的内置组，升序。
+ * 组没有名称数据（全库无 GROUP_NAME 列），展示名由前端自维护（utils/groupNames.ts）。
+ */
+export function listGroupIds(): Promise<number[]> {
+  return request<number[]>(EP.groups, undefined, { method: 'GET' })
+}
+
 /** 新增规则，data 为新记录 id */
 export function addGroupRes(input: GroupResInput): Promise<GroupResAck> {
   return request<GroupResAck>(EP.add, input, { method: 'POST' })
@@ -175,5 +184,75 @@ export function sqlCondError(resCond: string): string | null {
   const lower = text.toLowerCase()
   const hitWord = SQL_FORBIDDEN_WORDS.find((word) => new RegExp(`\\b${word.replace(' ', '\\s+')}\\b`).test(lower))
   if (hitWord) return `SQL 条件包含非法关键字：${hitWord}`
+  return null
+}
+
+// ---- STRUCT（结构化条件）----
+// 契约见《接口文档-biz_type与组数据权限.md》§2.2：condJson = [{ field, op, values }]，元素间 AND；
+// 提交时 resCond 留空，由后端 GroupResFieldMeta.compile 编译。以下校验逐条对齐后端 compile/literal
+// 的报错口径（含"第 N 项"序号），前端先拦一次省往返。
+
+/** condJson 数组的一个条件行 */
+export interface GroupResCondItem {
+  field: string
+  op: string
+  values: string[]
+}
+
+/** 解析 condJson；空串 / null / 非法 JSON / 非数组一律回 []（详情回显容错，不抛） */
+export function parseCondJson(condJson: string | null | undefined): GroupResCondItem[] {
+  if (!condJson || !condJson.trim()) return []
+  try {
+    const raw: unknown = JSON.parse(condJson)
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      .map((item) => ({
+        field: typeof item.field === 'string' ? item.field : '',
+        op: typeof item.op === 'string' ? item.op : '',
+        values: Array.isArray(item.values)
+          ? item.values.filter((v): v is string | number => v !== null && v !== undefined).map(String)
+          : [],
+      }))
+  } catch {
+    return []
+  }
+}
+
+/** 序列化成提交用的 condJson；空白值先剔除（与后端 compileItem 的 trim+skip 同口径） */
+export function stringifyCondJson(items: GroupResCondItem[]): string {
+  const cleaned = items.map((item) => ({
+    field: item.field.trim(),
+    op: item.op.trim(),
+    values: item.values.map((v) => v.trim()).filter(Boolean),
+  }))
+  return JSON.stringify(cleaned)
+}
+
+/**
+ * STRUCT 条件行预检，对齐后端 §2.10 / GroupResFieldMeta.compileItem：
+ * field 在白名单、op 在该字段 ops、values 非空、num 字段值必须纯数字、非 IN 只允许 1 个值。
+ * 返回错误文案，通过返回 null。
+ */
+export function condItemsError(items: GroupResCondItem[], fields: GroupResField[] | undefined): string | null {
+  if (!items.length) return '请至少添加一个条件'
+  for (let i = 0; i < items.length; i++) {
+    const seq = `第 ${i + 1} 项`
+    const item = items[i]
+    const field = item.field.trim()
+    const op = item.op.trim()
+    if (!field) return `${seq}缺少字段`
+    if (!op) return `${seq}缺少操作符`
+    const metaField = fields?.find((f) => f.field === field)
+    if (!metaField) return `${seq}的字段 ${field} 不在可选列中`
+    if (!metaField.ops.includes(op)) return `${seq}的字段 ${field} 不支持操作符 ${op}`
+    const values = item.values.map((v) => v.trim()).filter(Boolean)
+    if (!values.length) return `${seq}的字段 ${field} 的值不能为空`
+    if (op !== 'IN' && values.length !== 1) return `${seq}的字段 ${field} 在操作符 ${op} 下只能有一个值`
+    if (metaField.type === 'num') {
+      const bad = values.find((v) => !/^-?\d+$/.test(v))
+      if (bad !== undefined) return `${seq}的字段 ${field} 需要一个数字值，实际为: ${bad}`
+    }
+  }
   return null
 }

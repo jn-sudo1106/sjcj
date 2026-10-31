@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "node ../scripts/dev.cjs",
+    "test": "node ../scripts/dev.cjs --backend test",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "node scripts/deploy-static.cjs",
     "deploy:head": "node scripts/deploy-from-head.cjs",
-    "test": "vitest run",
+    "test:unit": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,vue}\""
@@ -22,7 +23,7 @@
     "dompurify": "^3.4.17",
     "element-plus": "^2.14.2",
     "front-ce": "file:..",
-    "marked": "^18.1.1",
+    "marked": "^18.1.2",
     "md5": "^2.3.0",
     "pinia": "^3.0.4",
     "pinyin-pro": "^3.28.2",

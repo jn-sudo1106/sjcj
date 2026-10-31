@@ -103,6 +103,8 @@ export interface DetachResult {
   copied: number
   /** 换绑失败、仍与来源共享的步骤数（已登记知情确认） */
   remainShared: number
+  /** 原 configId → 复制出的新 configId（10-29：复制为本源专用时把没保存的节点配置带到新配置上） */
+  configMap?: Record<string, string>
 }
 
 export interface DetachOptions {
@@ -188,7 +190,7 @@ export async function detachCopiedConfigs(
     copied++
   }
   opts.onProgress?.(candidates.length, candidates.length)
-  return { ok: true, copied, remainShared }
+  return { ok: true, copied, remainShared, configMap: Object.fromEntries(clonedBySource) }
 }
 
 // ---------------------------------------------------------------- 整条复制
@@ -198,15 +200,19 @@ export interface CopiedFlow {
   flowId: string
   /** 配置去共享结果；选了「复用原配置」时不做去共享，为 undefined */
   detach?: DetachResult
+  /** 自动发布失败的原因；发布成功或流程未启用版本时没有这个字段 */
+  publishError?: string
 }
 
 export interface CopyFlowOptions extends Omit<DetachOptions, 'onlyStepIds'> {
   /** true = 复用原配置（用户在确认框里显式选择，0930）：只复制步骤，不做配置去共享 */
   reuseConfigs?: boolean
+  /** true = 复制当前草稿（编辑中「复制为本源专用」，10-30）；默认先发布版、没有再草稿 */
+  useDraft?: boolean
 }
 
 /**
- * 整条复制一个流程（copyFlow），默认随即配置去共享（detachCopiedConfigs）。
+ * 整条复制一个流程（copyFlow），默认随即配置去共享（detachCopiedConfigs），最后自动发布（publishCopiedDraft）。
  * 流程中心「复制流程」「从模板新建」共用；要绑到源的场景（画布「更换流程」「复制当前流程」、
  * 套用模板源无流程）走 applyTemplateToSource.copyFlowToSource（复制 → 换绑 → 去共享）。
  * 默认守住 F2 红线（复制品的改动不影响原流程）；`reuseConfigs` 是用户显式选择的例外。
@@ -216,10 +222,34 @@ export async function copyWholeFlow(
   newName: string,
   opts: CopyFlowOptions = {},
 ): Promise<CopiedFlow> {
-  const flowId = await flowCenterApi.copy(fromFlowId, newName)
-  if (opts.reuseConfigs) return { flowId }
-  const detach = await detachCopiedConfigs(flowId, opts)
-  return { flowId, detach }
+  const flowId = opts.useDraft
+    ? await flowCenterApi.copy(fromFlowId, newName, { useDraft: true })
+    : await flowCenterApi.copy(fromFlowId, newName)
+  const copied: CopiedFlow = { flowId }
+  if (!opts.reuseConfigs) copied.detach = await detachCopiedConfigs(flowId, opts)
+  const publishError = await publishCopiedDraft(flowId)
+  if (publishError) copied.publishError = publishError
+  return copied
+}
+
+/**
+ * 复制品改绑完自动发布（10-29）：后端复制只给新流程建 system 草稿、不发布，而定时 / 手动采集都只认发布版
+ * （没有就报「没有有效发布版本」），复制品再被复制也要发布版。改绑写在草稿里，所以放在改绑之后发布。
+ * 已有发布版或未启用版本时不动；失败不抛（流程已经建出来了），返回原因交调用方提示。
+ */
+async function publishCopiedDraft(flowId: string): Promise<string> {
+  try {
+    const ov = await flowVersionApi.overview(flowId)
+    if (!ov.enabled || ov.publishId) return ''
+    const draft = ov.versions.find((v) => v.versionId === ov.draftId)
+    if (!draft) return '没有找到可发布的草稿'
+    await flowVersionApi.action('publish', { flowId, versionId: draft.versionId, ver: draft.ver, expectedPublishId: null })
+    // 改绑时 store 缓存了这条流程「有草稿」的概览，不刷新的话之后写入会拿已发布的版本当草稿用
+    await useFlowVersionStore().refresh(flowId).catch(() => undefined)
+    return ''
+  } catch (error) {
+    return (error as Error)?.message || String(error)
+  }
 }
 
 // ---------------------------------------------------------------- 本地拼装路径去共享

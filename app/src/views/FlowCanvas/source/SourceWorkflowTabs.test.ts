@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -8,6 +8,7 @@ import SourceWorkflowTabs from './SourceWorkflowTabs.vue'
 import { flowCenterApi, sourceApi, workflowBindingApi, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
+import { confirmSharedFlowWrite, confirmedSharedFlows, sharedFlowPending } from '@/utils/flow/sharedFlowGuard'
 
 vi.mock('@/utils/flow/copiedConfigs', () => ({ copyWholeFlow: vi.fn() }))
 vi.mock('element-plus', async (importOriginal) => {
@@ -158,6 +159,8 @@ describe('SourceWorkflowTabs', () => {
     await flushPromises()
 
     expect(copyWholeFlow).toHaveBeenCalledWith('20', '现有流程副本', expect.objectContaining({ sourceFlowRef: expect.any(String) }))
+    // 直接复制别的流程：不带 useDraft，后端先发布版、没有再草稿
+    expect(vi.mocked(copyWholeFlow).mock.calls[0]![2]).not.toHaveProperty('useDraft')
     expect(workflowBindingApi.bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '22', primary: false })
     expect(router.currentRoute.value.query.flowId).toBe('22')
   })
@@ -255,8 +258,10 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     wrapper.unmount()
   })
 
-  it('设为主流程：一步调用 setPrimary 并刷新', async () => {
-    const load = vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN, AUX]))
+  it('设为主流程：刷新页签和源上下文，保留当前打开的流程', async () => {
+    const load = vi.spyOn(workflowBindingApi, 'load')
+      .mockResolvedValueOnce(loaded([MAIN, AUX]))
+      .mockResolvedValueOnce(loaded([{ ...MAIN, primary: false }, { ...AUX, primary: true }]))
     const setPrimary = vi.spyOn(workflowBindingApi, 'setPrimary').mockResolvedValue()
     const { wrapper } = await mountTabs(dialogStub)
     await rightClick(wrapper, '12')
@@ -264,6 +269,8 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     await flushPromises()
     expect(setPrimary).toHaveBeenCalledWith('100', '12')
     expect(load).toHaveBeenCalledTimes(2)
+    expect(useFlowStore().sourceCtx?.primaryFlowId).toBe('12')
+    expect(useFlowStore().sourceCtx?.flowId).toBe('11')
     wrapper.unmount()
   })
 
@@ -360,10 +367,10 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     wrapper.unmount()
   })
 
-  it('复用现有流程：选择弹窗排除已关联的；确认后直接 bind、不复制', async () => {
+  it('复用现有流程：选择弹窗排除已关联的；选中直接 bind 并打开，不弹确认、不复制', async () => {
     vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValue(loaded([MAIN, AUX]))
     const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue()
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    vi.mocked(ElMessageBox.confirm).mockClear()
     const { wrapper, router } = await mountTabs({ ...dialogStub, ReplaceFlowDialog: { name: 'ReplaceFlowDialog', props: ['purpose', 'excludeFlowIds', 'modelValue'], template: '<div />' } })
     await wrapper.get('[data-testid="workflow-add"]').trigger('click')
     await wrapper.get('[data-testid="workflow-reuse-existing"]').trigger('click')
@@ -371,10 +378,100 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     expect(picker.props('excludeFlowIds')).toEqual(['11'])
     picker.vm.$emit('pick', { id: '12', name: '补数据流程', sourceCnt: 5 })
     await flushPromises()
-    expect(vi.mocked(ElMessageBox.confirm).mock.calls.at(-1)?.[0]).toContain('正被 5 个源使用')
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
     expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '12', primary: false })
     expect(copyWholeFlow).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.workflowId).toBe('12')
     wrapper.unmount()
+  })
+})
+
+describe('SourceWorkflowTabs · 共用流程保存提示（10-29）', () => {
+  const dialogStub = {
+    'el-dialog': { props: ['modelValue', 'title'], template: '<div v-if="modelValue" data-testid="dlg">{{ title }}<slot /><slot name="footer" /></div>' },
+    'el-button': { template: '<button v-bind="$attrs"><slot /></button>' },
+  }
+  const mounted: { unmount: () => void }[] = []
+  const sharedBtn = (id: string) => document.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)
+
+  afterEach(() => {
+    // 卸载才会注销守卫，免得下一个用例问到上一个页签
+    for (const w of mounted.splice(0)) w.unmount()
+  })
+  beforeEach(() => {
+    confirmedSharedFlows.clear()
+    document.body.innerHTML = ''
+  })
+
+  it('只有本源在用：不标共用，保存直接放行不弹窗', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 1 } as never)
+    const { wrapper } = await mountTabs(dialogStub)
+    mounted.push(wrapper)
+
+    expect(wrapper.find('[data-testid="workflow-shared-tag"]').exists()).toBe(false)
+    expect(sharedFlowPending()).toBe(false)
+    expect(await confirmSharedFlowWrite('save')).toBe(true)
+    expect(sharedBtn('shared-flow-save')).toBeNull()
+  })
+
+  it('多个源在用：标签标「3 源共用」；点保存弹窗，选「保存」后放行，同一页不再问', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 3 } as never)
+    const { wrapper } = await mountTabs(dialogStub)
+    mounted.push(wrapper)
+    document.body.appendChild(wrapper.element)
+
+    expect(wrapper.get('[data-testid="workflow-shared-tag"]').text()).toBe('3 源共用')
+    expect(sharedFlowPending()).toBe(true)
+    const asked = confirmSharedFlowWrite('save')
+    await flushPromises()
+    expect(document.body.textContent).toContain('这个流程有 3 个源在用')
+    sharedBtn('shared-flow-save')!.click()
+    expect(await asked).toBe(true)
+    expect(sharedFlowPending()).toBe(false)
+    expect(await confirmSharedFlowWrite('publish')).toBe(true)
+  })
+
+  it('选「复制为本源专用」：复制 → 关联为主流程 → 解绑原流程 → 带上没保存的配置 → 打开新流程；本次不写原流程', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 3 } as never)
+    vi.mocked(copyWholeFlow).mockResolvedValue({ flowId: '31', detach: { ok: true, copied: 1, remainShared: 0, configMap: { 700: '701' } } })
+    const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue(undefined as never)
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue(undefined as never)
+    const carry = vi.fn().mockResolvedValue(undefined)
+    const { wrapper, router } = await mountTabs(dialogStub)
+    mounted.push(wrapper)
+    document.body.appendChild(wrapper.element)
+
+    const asked = confirmSharedFlowWrite('save', carry)
+    await flushPromises()
+    expect(document.body.textContent).toContain('画布上的改动和没保存的节点配置都会带过去')
+    expect(document.body.textContent).not.toContain('重做')
+    sharedBtn('shared-flow-copy')!.click()
+    expect(await asked).toBe(false)
+    await flushPromises()
+
+    // 10-30：编辑中复制带 useDraft，复制当前草稿（画布结构改动跟着走）
+    expect(copyWholeFlow).toHaveBeenCalledWith('11', '主采集流程_副本', expect.objectContaining({ useDraft: true }))
+    expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '31', primary: true })
+    expect(unbind).toHaveBeenCalledWith('100', '11')
+    expect(carry).toHaveBeenCalledWith({ 700: '701' })
+    expect(router.currentRoute.value.query.flowId).toBe('31')
+  })
+
+  it('取消：不写、不复制，下次保存还会问', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 2 } as never)
+    const { wrapper } = await mountTabs(dialogStub)
+    mounted.push(wrapper)
+    document.body.appendChild(wrapper.element)
+
+    const asked = confirmSharedFlowWrite('save')
+    await flushPromises()
+    document.querySelectorAll<HTMLButtonElement>('[data-testid="shared-flow-dialog"] button')[0]!.click()
+    expect(await asked).toBe(false)
+    expect(copyWholeFlow).not.toHaveBeenCalled()
+    expect(sharedFlowPending()).toBe(true)
   })
 })
