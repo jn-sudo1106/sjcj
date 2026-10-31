@@ -40,7 +40,7 @@ import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 import { currentBackendHost } from '@/api/client'
-import { SYNC_PLATFORM_BACKEND_HOST, SYNC_PLATFORM_BACKEND_HOSTS } from '@/constants/backend'
+import { SYNC_PLATFORM_BACKEND_HOSTS } from '@/constants/backend'
 import { dataStateInfo } from '@/constants/runState'
 import { upperDataId, upperDataText } from './upperData'
 

@@ -230,9 +230,18 @@ describe('环境配置页的客户端开关与客户密钥', () => {
     await flushPromises()
   }
 
-  function switchTo(tab: 'clients' | 'customers') {
-    ;(wrapper!.vm as unknown as { active: string }).active = tab
-    return flushPromises()
+  /**
+   * 默认页签就是客户配置：同值赋值不会触发 watch(active) 重载，用例里「先 mount 再改 mock 再切页签」
+   * 会拿不到重 mock 后的数据。所以已经在目标页签时先落到另一页再切回来，强制走一次重载。
+   */
+  async function switchTo(tab: 'clients' | 'customers') {
+    const vm = wrapper!.vm as unknown as { active: string }
+    if (vm.active === tab) {
+      vm.active = tab === 'customers' ? 'clients' : 'customers'
+      await flushPromises()
+    }
+    vm.active = tab
+    await flushPromises()
   }
 
   it('进页面默认落在客户配置页签', async () => {
