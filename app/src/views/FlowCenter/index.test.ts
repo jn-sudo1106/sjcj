@@ -146,6 +146,60 @@ describe('流程中心 · 列表', () => {
     expect(cells[1].text()).toBe('—')
   })
 
+  // 1030 会议议题 2：节点数按流程逐条读步骤计数（svg 视图），失败显示 —
+  it('节点数列：按流程读步骤计数，读取失败显示 —', async () => {
+    vi.spyOn(flowCenterApi, 'steps').mockImplementation(async (flowId: string) => {
+      if (flowId === FLOWS[1].id) throw new Error('超时')
+      return [{}, {}, {}] as never
+    })
+    const w = await mountCenter()
+    await flushPromises()
+    const cells = w.findAll('[data-testid="flow-node-cnt"]')
+    expect(cells[0].text()).toBe('3')
+    expect(cells[1].text()).toBe('—')
+    expect(cells[1].attributes('title')).toContain('读取失败')
+  })
+
+  // 1030 会议议题 8：节点配置 ID 反查流程，再按流程 ID 查列表；查不到给出说明
+  it('按节点配置 ID 筛选：反查到的流程 ID 交给 flowPaged；没有命中时不查列表并提示', async () => {
+    const byConfig = vi.spyOn(flowCenterApi, 'flowIdsByConfig').mockResolvedValueOnce([FLOWS[0].id]).mockResolvedValueOnce([])
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    await w.get('[data-testid="flow-center-config"]').setValue('1401069')
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(byConfig).toHaveBeenCalledWith('1401069')
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ flowIds: [FLOWS[0].id] }))
+
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-config"]').setValue('999')
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(paged).not.toHaveBeenCalled()
+    expect(w.text()).toContain('没有已发布的流程用到配置 999')
+  })
+
+  // flowPaged 收到空 flowIds 会退回不限：交集为空必须直接给空表
+  it('配置反查结果与搜索框流程 ID 没有交集时不查列表', async () => {
+    const byConfig = vi.spyOn(flowCenterApi, 'flowIdsByConfig').mockResolvedValue(['10086'])
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-config"]').setValue('1401069')
+    await w.get('input[placeholder^="流程 ID"]').setValue('10012')
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(paged).not.toHaveBeenCalled()
+    expect(w.findAll('[data-testid="flow-node-cnt"]')).toHaveLength(0)
+
+    await w.get('input[placeholder^="流程 ID"]').setValue('')
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ flowIds: ['10086'] }))
+    // 点查询会重新反查（流程可能刚发布）
+    expect(byConfig).toHaveBeenCalledTimes(2)
+  })
+
   // 0 个 / 字段缺失都不做成可点：点开必然是空表
   it('只有源数大于 0 才可点下钻', async () => {
     const w = await mountCenter([

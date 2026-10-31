@@ -453,6 +453,8 @@ let sourceRequestSeq = 0
 /** 隐藏的列（「我的视图」显示设置）；不在视图里时恒为空 = 全部显示 */
 const hiddenColumns = ref<string[]>([])
 const showCol = (key: string) => !hiddenColumns.value.includes(key)
+/** 配置 ID 列只在来源组成员表里显示（1030 会议议题 6：看组内源配置是否一致）；普通源列表 0812 起不显示 */
+const showConfigCol = computed(() => !!props.scopeSourceGroupId)
 /** 实际隐藏掉的列数（空态行 colspan 用）：网站列只在不限网站时有，来源组两列只在 groupOps 时有 */
 const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
   && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
@@ -1519,7 +1521,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <!-- 来源组与默认流程：配置入口统一放在「选中来源」操作中 -->
             <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
             <th v-if="crossSite && groupOps && showCol('defaultFlow')">默认流程</th>
-            <th v-if="showCol('url')">URL</th><th v-if="showCol('mainTable')">主表</th>
+            <th v-if="showCol('url')">URL</th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol">配置 ID</th>
             <th v-if="showCol('tags')">标签</th>
             <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>
@@ -1610,6 +1612,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
               >{{ tableNameOf(source.mainTable) }}</button>
               <template v-else>—</template>
             </td>
+            <td v-if="showConfigCol" data-testid="source-overview-config">{{ source.configId || '—' }}</td>
             <td v-if="showCol('tags')">
               <!-- 标签列与备注列都点开同一个弹窗：想删掉某一个标签只有这条路（批量条只能追加/清空） -->
               <button
@@ -1657,7 +1660,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>

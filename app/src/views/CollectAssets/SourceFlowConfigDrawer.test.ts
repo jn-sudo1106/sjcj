@@ -7,7 +7,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceFlowConfigDrawer from './SourceFlowConfigDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
-import { sourceGroupApi, workflowBindingApi, flowCenterApi, type Source, type SourceFlowsView, type SourceFlowBind, type FlowRecord } from '@/api'
+import { siteApi, sourceGroupApi, workflowBindingApi, flowCenterApi, type Source, type SourceFlowsView, type SourceFlowBind, type FlowRecord } from '@/api'
 
 const INDEP_SOURCE = { sourceId: '430024667', name: '独立源', sourceGroupId: undefined } as Source
 const GROUP_SOURCE = { sourceId: '430000930', name: '组内源', sourceGroupId: '3' } as Source
@@ -160,6 +160,88 @@ describe('源流程配置抽屉', () => {
     nodeBtn?.click()
     await settle()
     expect(detail).toHaveBeenCalledWith('14010130')
+    wrapper.unmount()
+  })
+
+  // 1030 会议议题 3、4：显示源 ID；推荐同网站其他源在用的流程（按默认流程计数，排除自己和已关联的）
+  it('独立源：显示源 ID，推荐同网站其他源在用的流程，点「加入」进关联列表', async () => {
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(INDEP_VIEW)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+      { sourceId: '430024667', flowId: '99' },
+      { sourceId: '1', flowId: '14010130' },
+      { sourceId: '2', flowId: '21000005' },
+      { sourceId: '3', flowId: '21000005' },
+      { sourceId: '4' },
+    ] as Source[])
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 1, list: [{ id: '21000005', name: '详情页流程' } as FlowRecord] })
+    const wrapper = mount(SourceFlowConfigDrawer, { props: { source: { ...INDEP_SOURCE, siteId: '12' }, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await settle()
+    expect(dom('[data-testid="sfcd-source-id"]')?.textContent).toContain('430024667')
+    // 14010130 已经关联、99 是自己的默认流程，都不推荐
+    const recs = [...document.querySelectorAll('[data-testid="sfcd-recommend-row"]')]
+    expect(recs).toHaveLength(1)
+    expect(recs[0].textContent).toContain('详情页流程 · 21000005')
+    expect(recs[0].textContent).toContain('本网站 2 个源在用')
+    ;(recs[0].querySelector('[data-testid="sfcd-recommend-add"]') as HTMLButtonElement).click()
+    await settle()
+    expect(dom('[data-testid="sfcd-flow-ids"]')?.textContent).toContain('详情页流程 · 21000005')
+    expect(dom('[data-testid="sfcd-recommend"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('推荐剔除停用 / 已删除的流程，顶上来的流程也补名称', async () => {
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(INDEP_VIEW)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+      ...['1', '2', '3'].map((sourceId) => ({ sourceId, flowId: '501' })),
+      ...['4', '5'].map((sourceId) => ({ sourceId, flowId: '502' })),
+      { sourceId: '6', flowId: '503' },
+      { sourceId: '7', flowId: '504' },
+    ] as Source[])
+    const flowsById: Record<string, FlowRecord> = {
+      501: { id: '501', name: '停用流程', disabled: true } as FlowRecord,
+      503: { id: '503', name: '列表页流程' } as FlowRecord,
+      504: { id: '504', name: '详情页流程' } as FlowRecord,
+    }
+    vi.spyOn(flowCenterApi, 'paged').mockImplementation(async (cond) => {
+      const list = (cond?.flowIds ?? []).map((id) => flowsById[id]).filter(Boolean)
+      return { total: list.length, list }
+    })
+    const wrapper = mount(SourceFlowConfigDrawer, { props: { source: { ...INDEP_SOURCE, siteId: '12' }, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await settle()
+    await settle()
+    // 501 停用、502 查不到（已删除），都不推荐；504 是剔除后顶上来的，也有名称
+    const texts = [...document.querySelectorAll('[data-testid="sfcd-recommend-row"]')].map((r) => r.textContent)
+    expect(texts).toHaveLength(2)
+    expect(texts[0]).toContain('列表页流程 · 503')
+    expect(texts[1]).toContain('详情页流程 · 504')
+    wrapper.unmount()
+  })
+
+  it('组内源不拉整站源；退组变成独立源后才拉，保存后重查不重复拉', async () => {
+    const after: SourceFlowsView = { ...GROUP_VIEW, sourceGroupId: undefined, flowIds: GROUP_VIEW.ownFlowIds, defaultFlowId: GROUP_VIEW.ownDefaultFlowId, bindings: GROUP_VIEW.ownBindings }
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValueOnce(GROUP_VIEW).mockResolvedValue(after)
+    vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '' } as never)
+    vi.spyOn(workflowBindingApi, 'save').mockResolvedValue(undefined)
+    const sites = vi.spyOn(siteApi, 'siteSources').mockResolvedValue([])
+    const wrapper = mount(SourceFlowConfigDrawer, { props: { source: { ...INDEP_SOURCE, siteId: '12' }, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await settle()
+    expect(sites).not.toHaveBeenCalled()
+    dom('[data-testid="sfcd-leave-group"]')?.click()
+    await settle()
+    expect(sites).toHaveBeenCalledTimes(1)
+    dom('[data-testid="sfcd-save"]')?.click()
+    await settle()
+    expect(sites).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('没有网站或网站源读取失败时不显示推荐', async () => {
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(INDEP_VIEW)
+    vi.spyOn(siteApi, 'siteSources').mockRejectedValue(new Error('超时'))
+    const wrapper = mount(SourceFlowConfigDrawer, { props: { source: { ...INDEP_SOURCE, siteId: '12' }, flows: [FLOW] }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await settle()
+    expect(dom('[data-testid="sfcd-recommend"]')).toBeNull()
+    expect(dom('[data-testid="sfcd-pick-flows"]')).not.toBeNull()
     wrapper.unmount()
   })
 })

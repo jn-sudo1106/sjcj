@@ -4045,6 +4045,22 @@ export const flowCenterApi = {
     // 只要表 ID 的调用方（siteUsedTables）跳过逐配置补查，与 sourceApi.sourceSteps 同一个开关
     return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps, options.backendScope ?? 'flow')
   },
+  /**
+   * 按节点配置 ID 反查用到它的流程（1030 会议议题 8）。bee-top 没有专门的反查接口，
+   * nextConfigPaged 不带 svg 时支持 `configId` 等值过滤，返回的步骤行带 flowId。
+   * ⚠️ 这条读的是 cs_item_config：只覆盖**已发布**的版本，只有草稿的流程查不到（10-30 186 实测）。
+   */
+  flowIdsByConfig: async (configId: string): Promise<string[]> => {
+    const result = await request<unknown>('item/next/nextConfigPaged', { configId }, {
+      method: 'GET',
+      httpEndpoint: 'item/next/nextConfigPaged',
+      httpParams: { configId: Number(configId), page: 1, limit: 1000 },
+    })
+    // request 已把分页信封归一成 { list }；兼容直接回 data 数组的旧形状
+    const page = result as { list?: { flowId?: unknown }[]; data?: { flowId?: unknown }[] } | null
+    const rows = page?.list ?? page?.data ?? []
+    return [...new Set(rows.map((r) => (r.flowId == null ? '' : String(r.flowId))).filter(Boolean))]
+  },
 }
 
 /**

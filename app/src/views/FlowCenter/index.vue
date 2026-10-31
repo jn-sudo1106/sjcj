@@ -21,6 +21,7 @@ import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { parseIdList } from '@/utils/flow/flowSearch'
+import { nodeCountText, nodeCountTitle, useFlowNodeCounts } from '@/utils/flow/flowNodeCounts'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import FlowSourcesManagerDialog, { type ManageTab } from './FlowSourcesManagerDialog.vue'
@@ -158,29 +159,59 @@ let loadSeq = 0
  * 搜索框纯数字（单个或逗号/空格分隔多个）按流程 ID 精确查，否则走 keywords 模糊查。
  * 口径照旧平台 FlowList.buildQueryParams：单 ID → flowId，多 ID → ids。
  */
-function searchCond(): { keywords?: string; flowIds?: string[] } {
+function searchCond(configFlowIds?: string[]): { keywords?: string; flowIds?: string[] } {
   const raw = query.value.trim()
-  if (!raw) return {}
-  const ids = parseIdList(raw)
-  return ids ? { flowIds: ids } : { keywords: raw }
+  const ids = raw ? parseIdList(raw) : null
+  const cond: { keywords?: string; flowIds?: string[] } = ids ? { flowIds: ids } : raw ? { keywords: raw } : {}
+  // 按节点配置反查到的流程与搜索框里的流程 ID 取交集；交集为空时调用方直接给空表（paged 收到空数组会退回不限）
+  if (configFlowIds) cond.flowIds = cond.flowIds ? cond.flowIds.filter((id) => configFlowIds.includes(id)) : configFlowIds
+  return cond
 }
+
+/**
+ * 按节点配置 ID 查流程（1030 会议议题 8）：nextConfigPaged?configId 反查 flowId，再按 ID 查流程列表。
+ * 只覆盖已发布版本（见 flowCenterApi.flowIdsByConfig）。翻页 / 排序沿用上次反查结果，点查询才重查。
+ */
+const filterConfigId = ref('')
+const configEmptyHint = ref('')
+let configLookup: { configId: string; flowIds: string[] } | null = null
+/** undefined = 没有按节点筛选；hint 是筛不出流程时的原因 */
+async function resolveConfigFilter(): Promise<{ flowIds?: string[]; hint: string }> {
+  const configId = filterConfigId.value.trim()
+  if (!configId) return { hint: '' }
+  if (!/^\d+$/.test(configId)) return { flowIds: [], hint: '节点配置 ID 只能是数字' }
+  if (configLookup?.configId !== configId) configLookup = { configId, flowIds: await flowCenterApi.flowIdsByConfig(configId) }
+  const flowIds = configLookup.flowIds
+  return { flowIds, hint: flowIds.length ? '' : `没有已发布的流程用到配置 ${configId}（只有草稿的流程查不到）` }
+}
+
+const { counts: nodeCounts, load: loadNodeCounts } = useFlowNodeCounts()
 async function load() {
   const reqId = ++loadSeq
   loading.value = true
   loadError.value = ''
   try {
+    const configFilter = await resolveConfigFilter()
+    if (loadSeq !== reqId) return
+    configEmptyHint.value = configFilter.hint
+    const cond = searchCond(configFilter.flowIds)
+    if (cond.flowIds && !cond.flowIds.length) {
+      flows.value = []
+      total.value = 0
+      return
+    }
     // 分类多选（≥2 个）走前端合并：flowPaged 的 categoryId 是**单值 Integer 精确匹配**
     // （flow_api.md 实测归档；旧平台流程列表自己也是树多选、筛选只取第一个分类），
     // 后端没有多分类过滤契约。流程量小（列表不含 flowConf 大字段，~740 条），
     // 拉全量后本地筛 + 本地排序 + 本地分页。单选/不选仍走服务端单值契约，零损耗。
     if (filterCategoryIds.value.length >= 2) {
-      await loadWithMultiCategory(reqId)
+      await loadWithMultiCategory(reqId, cond)
       return
     }
     const result = await flowCenterApi.paged({
       page: page.value,
       size: size.value,
-      ...searchCond(),
+      ...cond,
       field: sortField.value,
       order: sortOrder.value,
       onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
@@ -190,6 +221,7 @@ async function load() {
     if (loadSeq !== reqId) return
     flows.value = result.list
     total.value = result.total
+    void loadNodeCounts(result.list)
     // 末页记录被删光时后端会回空列表，此时退回上一页，不要把用户晾在一张空表上
     if (!result.list.length && page.value > 1 && result.total > 0) {
       page.value = Math.min(page.value - 1, Math.max(1, Math.ceil(result.total / size.value)))
@@ -211,14 +243,14 @@ async function load() {
  */
 const MULTI_FETCH_SIZE = 100
 const MULTI_MAX_PAGES = 100
-async function loadWithMultiCategory(reqId: number) {
+async function loadWithMultiCategory(reqId: number, cond: ReturnType<typeof searchCond>) {
   const idSet = new Set(filterCategoryIds.value)
   const all: FlowRecord[] = []
   for (let p = 1; p <= MULTI_MAX_PAGES; p++) {
     const result = await flowCenterApi.paged({
       page: p,
       size: MULTI_FETCH_SIZE,
-      ...searchCond(),
+      ...cond,
       field: sortField.value,
       order: sortOrder.value,
       onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
@@ -241,10 +273,12 @@ async function loadWithMultiCategory(reqId: number) {
   if (page.value > maxPage) page.value = maxPage
   const start = (page.value - 1) * size.value
   flows.value = filtered.slice(start, start + size.value)
+  void loadNodeCounts(flows.value)
 }
 /** 搜索/换页大小都要回到第 1 页，否则会停在一个新结果集里不存在的页码上 */
 function search() {
   page.value = 1
+  configLookup = null
   void load()
 }
 /** 分类树勾选/清空回传（多选，id 数组；空数组 = 全部） */
@@ -256,6 +290,7 @@ function onFilterCategoryChange(value: unknown) {
 function resetQuery() {
   filterCategoryIds.value = []
   filterTag.value = ''
+  filterConfigId.value = ''
   query.value = ''
   sortField.value = 'createDt'
   sortOrder.value = 'desc'
@@ -310,9 +345,8 @@ onUnmounted(() => ui.clearActions())
  * 搜索、排序、翻页**全在服务端**（flowPaged 的 keywords / field+order / page+limit）。
  * 本地不再做任何过滤或重排——分页之后本地排序只能排当前这一页，跨页看到的顺序是错的。
  *
- * 0828 §2.11 规则④的「按配置 ID 反查流程」**已经删掉**：那条依赖 definition.configs，而列表
- * 接口根本不返回 flowConf，本地永远筛不出结果，只会稳定地报「配置 #x 没有被任何流程引用」——
- * 一句必然为假的话比没有这个功能糟得多。要恢复得后端在 flowPaged 上支持按 configId 过滤。
+ * 0828 §2.11 规则④的本地「按配置 ID 反查流程」已删（列表不返回 flowConf，本地筛不出）；
+ * 1030 改由服务端 nextConfigPaged?configId 反查，见 resolveConfigFilter。
  */
 const rows = computed(() => flows.value)
 
@@ -829,6 +863,15 @@ async function confirmApply() {
         data-testid="flow-center-tag"
         @keyup.enter="search"
       />
+      <input
+        v-model="filterConfigId"
+        class="fc-input"
+        placeholder="节点配置 ID"
+        title="查哪些流程用到了这个节点配置（只查已发布版本）"
+        aria-label="按节点配置 ID 筛选"
+        data-testid="flow-center-config"
+        @keyup.enter="search"
+      />
       <button class="rc-btn primary" type="button" data-testid="flow-center-query" @click="search">查询</button>
       <button class="rc-btn" type="button" data-testid="flow-center-reset" @click="resetQuery">清空</button>
       <div class="fc-metrics">
@@ -850,6 +893,7 @@ async function confirmApply() {
                 使用源数<span class="fc-caret"><i class="fc-caret-up" /><i class="fc-caret-down" /></span>
               </button>
             </th>
+            <th style="width: 70px">节点数</th>
             <th style="width: 140px">
               <button class="fc-sort-th" :class="sortClass('createDt')" type="button" data-testid="flow-sort-create" @click="toggleSort('createDt')">
                 创建时间<span class="fc-caret"><i class="fc-caret-up" /><i class="fc-caret-down" /></span>
@@ -910,6 +954,7 @@ async function confirmApply() {
               <!-- 0 个和字段缺失都不给点：点开必然是空表，白让人跑一趟 -->
               <template v-else>{{ t.sourceCnt == null ? '—' : '0 个' }}</template>
             </td>
+            <td :class="{ 'fc-muted': !nodeCounts[t.id] }" :title="nodeCountTitle(nodeCounts, t.id)" data-testid="flow-node-cnt">{{ nodeCountText(nodeCounts, t.id) }}</td>
             <td class="fc-muted">{{ t.createdAt || '—' }}</td>
             <td class="fc-muted">{{ t.updatedAt || '—' }}</td>
             <td>
@@ -987,8 +1032,8 @@ async function confirmApply() {
             </td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="7" class="fc-empty">
-              {{ loadError || (query ? `没有找到匹配「${query}」的流程` : '暂无流程') }}
+            <td colspan="8" class="fc-empty">
+              {{ loadError || configEmptyHint || (query ? `没有找到匹配「${query}」的流程` : '暂无流程') }}
             </td>
           </tr>
         </tbody>

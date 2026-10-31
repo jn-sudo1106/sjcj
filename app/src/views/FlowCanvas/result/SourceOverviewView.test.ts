@@ -152,6 +152,14 @@ describe('SourceOverviewView', () => {
     expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('配置 ID')
   })
 
+  it('来源组成员表显示配置 ID 列（1030 会议议题 6）', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, configId: '1401003' }] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceGroupId: '3' } })
+    await flushPromises()
+    expect(wrapper.findAll('th').map((th) => th.text())).toContain('配置 ID')
+    expect(wrapper.get('[data-testid="source-overview-config"]').text()).toBe('1401003')
+  })
+
   it('状态筛选按拆分字段发送：停用走 enable，不向旧接口发 state=disabled（0812 纠偏）', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
