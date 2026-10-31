@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import FlowPickerDialog from './FlowPickerDialog.vue'
-import { flowCenterApi, type FlowRecord } from '@/api'
+import { configApi, entryApi, flowCenterApi, type FlowRecord } from '@/api'
 
 const FLOWS = [
   { id: '11', name: '列表流程', sourceCnt: 5 },
@@ -16,6 +16,9 @@ afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 async function mountPicker(siteFlowCounts: Record<string, number> = {}, selected: string[] = []) {
   const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: FLOWS.length, list: FLOWS })
   vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{}, {}] as never)
+  // 预览：没有根行时按流程配置合成起点；画布按表 ID 查表名
+  vi.spyOn(configApi, 'configDetail').mockResolvedValue(null as never)
+  vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(null as never)
   const wrapper = mount(FlowPickerDialog, {
     props: { selected, siteFlowCounts },
     global: { plugins: [ElementPlus], directives: { loading: {} }, },
@@ -30,7 +33,10 @@ describe('关联流程选择器', () => {
   it('本网站有在用流程时默认只看这些流程，并显示在用源数和节点数', async () => {
     const { wrapper, paged } = await mountPicker({ '11': 3 })
     expect(paged).toHaveBeenCalledWith(expect.objectContaining({ flowIds: ['11'], field: 'sourceCnt' }))
-    expect(rows()[0].textContent).toContain('3 个源')
+    // 列表变窄后「本网站」列只显示数字，完整说明在悬停提示里
+    const siteCell = rows()[0].querySelector('td[title^="本网站"]') as HTMLElement
+    expect(siteCell.textContent).toBe('3')
+    expect(siteCell.title).toBe('本网站 3 个源在用')
     expect(rows()[0].textContent).toContain('2')
     wrapper.unmount()
   })
@@ -52,23 +58,59 @@ describe('关联流程选择器', () => {
     wrapper.unmount()
   })
 
-  it('预览在行下展开只读节点列表，再点收起', async () => {
-    const { wrapper } = await mountPicker()
-    vi.mocked(flowCenterApi.steps).mockResolvedValue([{ stepId: 's1', name: '列表页', nodeType: '网页抓取', configId: '1401069', outputTable: '6200029' }] as never)
-    ;(document.querySelector('[data-testid="flow-picker-preview"]') as HTMLButtonElement).click()
+  // 10-31：预览改成左右两栏，右侧是与流程工作区同样式的只读画布
+  it('打开时默认预览第一条：只读画布画出节点，右侧只读配置区看配置 / 输出表 / URL；点另一行切换预览', async () => {
+    const STEPS = [
+      { stepId: '41623', sourceId: '', name: '列表页', isRoot: true, nodeType: '网页抓取', configId: '1401069', outputTable: '6200029', url: 'http://example.com/list', dependsOn: [] },
+      { stepId: '41628', sourceId: '', name: '详情页', nodeType: '网页抓取', configId: '1401070', outputTable: '6200030', dependsOn: ['41623'] },
+    ]
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(STEPS as never)
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: FLOWS.length, list: FLOWS })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue(null as never)
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(null as never)
+    const wrapper = mount(FlowPickerDialog, {
+      props: { selected: [], siteFlowCounts: {} },
+      global: { plugins: [ElementPlus], directives: { loading: {} } },
+      attachTo: document.body,
+    })
     await flushPromises()
-    expect(document.querySelector('[data-testid="flow-picker-steps"]')?.textContent).toContain('列表页配置 1401069 · 输出表 6200029')
-    ;(document.querySelector('[data-testid="flow-picker-preview"]') as HTMLButtonElement).click()
+    expect(flowCenterApi.steps).toHaveBeenCalledWith('11')
+    expect(rows()[0].classList).toContain('previewing')
+    const nodes = [...document.querySelectorAll('[data-testid="flow-readonly-node"]')] as HTMLElement[]
+    expect(nodes.map((n) => n.textContent)).toEqual([expect.stringContaining('列表页'), expect.stringContaining('详情页')])
+    // 只读：没有插入 / 删除这些编辑入口
+    expect(document.querySelector('[data-testid="flow-readonly-canvas"] button')).toBeNull()
+
+    // 右侧只读配置区（对照工作区配置区）：默认选中第一个节点，配置条 + 节点配置页签
+    const panel = () => document.querySelector('[data-testid="flow-node-panel"]') as HTMLElement
+    expect(nodes[0].classList).toContain('active')
+    expect(panel().textContent).toContain('#1401069')
+    expect(panel().textContent).toContain('http://example.com/list')
+    expect(panel().querySelector('input, select, textarea')).toBeNull()
+    ;(panel().querySelector('[data-testid="flow-node-tab-table"]') as HTMLButtonElement).click()
     await flushPromises()
-    expect(document.querySelector('[data-testid="flow-picker-steps"]')).toBeNull()
+    expect(panel().textContent).toContain('6200029')
+    nodes[1].click()
+    await flushPromises()
+    expect(panel().textContent).toContain('详情页')
+    expect(panel().textContent).toContain('#1401070')
+
+    rows()[1].click()
+    await flushPromises()
+    expect(flowCenterApi.steps).toHaveBeenLastCalledWith('12')
+    expect(rows()[1].classList).toContain('previewing')
+    // 点行只是预览，不会勾选
+    expect(document.body.textContent).toContain('已选 0 个')
     wrapper.unmount()
   })
 
-  it('点行勾选 / 取消，确定时回传勾选的流程（含打开前已选的）', async () => {
+  it('勾选框选择 / 取消，确定时回传勾选的流程（含打开前已选的）', async () => {
     const { wrapper } = await mountPicker({}, ['99'])
-    rows()[0].click()
-    rows()[1].click()
-    rows()[1].click()
+    const checks = () => [...document.querySelectorAll('[data-testid="flow-picker-check"] input')] as HTMLInputElement[]
+    checks()[0].click()
+    checks()[1].click()
+    await flushPromises()
+    checks()[1].click()
     await flushPromises()
     ;(document.querySelector('[data-testid="flow-picker-confirm"]') as HTMLButtonElement).click()
     const picked = wrapper.emitted('confirm')?.[0]?.[0] as FlowRecord[]

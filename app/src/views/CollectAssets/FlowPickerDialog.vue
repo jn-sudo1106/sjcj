@@ -2,20 +2,26 @@
 /**
  * 关联流程选择器（1030 会议议题 3、4）。替换源流程配置抽屉里原来的多选下拉：
  * 列表列口径与流程中心一致（名称 / ID / 节点数 / 使用源数），服务端分页 + 名称 / ID 搜索；
- * 「只看本网站在用」按同网站各源的默认流程筛，并显示本网站有几个源在用；点「预览」在行下展开只读的节点列表
- *（FlowDetailDrawer 是可编辑工作区，选流程时打开容易误改，这里不用）。
+ * 「只看本网站在用」按同网站各源的默认流程筛，并显示本网站有几个源在用。
+ * 10-31 用户：预览要像流程工作区那样看到具体流程——左边列表、右边只读画布（FlowReadonlyCanvas，样式同工作区），
+ * 点行预览、勾选框才是选择；点画布节点在右侧看节点配置（FlowNodeReadonlyPanel，对照工作区配置区，只读）。FlowDetailDrawer 是可编辑工作区且读写全局 flow store，这里不用。
  * 只负责挑选，确定后把勾选结果回给抽屉，保存仍在抽屉里做。
  */
 import { computed, ref, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
-import { flowCenterApi, type FlowRecord, type Step } from '@/api'
+import { configApi, flowCenterApi, type FlowRecord, type Source, type Step } from '@/api'
 import { parseIdList } from '@/utils/flow/flowSearch'
 import { nodeCountText, nodeCountTitle, useFlowNodeCounts } from '@/utils/flow/flowNodeCounts'
+import { buildSourceSeed, effectiveInputTable, rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
+import FlowReadonlyCanvas, { type ReadonlyFlowDef } from '@/views/FlowCanvas/canvas/FlowReadonlyCanvas.vue'
+import FlowNodeReadonlyPanel from '@/views/FlowCanvas/canvas/FlowNodeReadonlyPanel.vue'
 
 const props = defineProps<{
   selected: string[]
   /** 同网站其他源在用的流程：flowId → 源数 */
   siteFlowCounts: Record<string, number>
+  /** 不是从源打开（如来源组流程配置）：不显示「本网站在用」筛选和列 */
+  hideSiteUsage?: boolean
 }>()
 const emit = defineEmits<{ close: []; confirm: [flows: FlowRecord[]] }>()
 
@@ -30,23 +36,60 @@ const rows = ref<FlowRecord[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const picked = ref<Map<string, FlowRecord | null>>(new Map(props.selected.map((id) => [id, null])))
-const previewId = ref('')
-const previewSteps = ref<Step[] | null>(null)
+// ---- 右侧预览：按流程工作区同一条还原路径（步骤 → 画布定义，见 FlowDetailDrawer.deriveFromFlowConfig）----
+const previewFlow = ref<FlowRecord | null>(null)
+const previewDef = ref<ReadonlyFlowDef | null>(null)
+const previewSteps = ref<Step[]>([])
+const previewLoading = ref(false)
 const previewError = ref('')
-async function togglePreview(flow: FlowRecord) {
-  if (previewId.value === flow.id) {
-    previewId.value = ''
-    return
-  }
-  previewId.value = flow.id
-  previewSteps.value = null
+const previewNodeId = ref('')
+async function preview(flow: FlowRecord) {
+  if (previewFlow.value?.id === flow.id && (previewDef.value || previewLoading.value)) return
+  previewFlow.value = flow
+  previewDef.value = null
+  previewSteps.value = []
+  previewNodeId.value = ''
   previewError.value = ''
+  previewLoading.value = true
   try {
-    const steps = await flowCenterApi.steps(flow.id, { withConfigDetails: false })
-    if (previewId.value === flow.id) previewSteps.value = steps
+    const steps = await flowCenterApi.steps(flow.id)
+    // 后端没给真实根行（旧数据）时按流程自己的配置合成起点，同工作区
+    const hasRoot = steps.some((step) => step.isRoot)
+    const config = hasRoot ? null : await configApi.configDetail(flow.id).catch(() => null)
+    const stub: Source = {
+      sourceId: '', name: config?.name || flow.name, url: config?.url || '', configId: flow.id,
+      mainTable: config?.entryTypeId || '', owner: '', state: 'C',
+    }
+    const root = hasRoot ? null : rootStepForSource(stub)
+    const seed = buildSourceSeed(stub, root ? [root, ...steps] : steps)
+    if (previewFlow.value?.id !== flow.id) return
+    previewSteps.value = steps
+    previewDef.value = { main: seed.main, branches: seed.branches, configs: seed.configs, branchGroups: seed.branchGroups }
+    // 同工作区：打开流程默认选中第一个真实节点，右侧配置区直接有内容
+    previewNodeId.value = seed.main.find((id) => id !== 'start' && id !== 'end' && seed.configs[id]) ?? ''
   } catch (error) {
-    if (previewId.value === flow.id) previewError.value = `节点读取失败：${error instanceof Error ? error.message : String(error)}`
+    if (previewFlow.value?.id === flow.id) previewError.value = `流程读取失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    if (previewFlow.value?.id === flow.id) previewLoading.value = false
   }
+}
+const previewEmpty = computed(() => !!previewDef.value && !previewDef.value.main.some((id) => id !== 'start' && id !== 'end'))
+/** 画布上选中的节点：右侧只读配置区的数据（配置、步骤行、继承后的输入表） */
+const previewNode = computed(() => {
+  const def = previewDef.value
+  const id = previewNodeId.value
+  const cfg = id ? def?.configs[id] : undefined
+  if (!def || !cfg) return null
+  return {
+    id,
+    cfg,
+    step: previewSteps.value.find((s) => s.stepId === id),
+    inputTable: effectiveInputTable(def.main, def.branches, def.configs, id, def.branchGroups),
+  }
+})
+/** 在流程中心按 ID 搜出这条流程（新标签页，完整工作区在那里打开） */
+function flowCenterHref(id: string): string {
+  return `${window.location.pathname}${window.location.search}#/flows?q=${encodeURIComponent(id)}`
 }
 const { counts: nodeCounts, load: loadNodeCounts } = useFlowNodeCounts()
 const siteFlowIds = computed(() => Object.keys(props.siteFlowCounts))
@@ -80,6 +123,8 @@ async function load() {
     rows.value = result.list
     total.value = result.total
     void loadNodeCounts(result.list)
+    // 打开时默认预览第一条，不用先点一下才看到画布
+    if (!previewFlow.value && result.list.length) void preview(result.list[0]!)
   } catch (error) {
     if (reqId !== seq) return
     // 清掉上一页的行，错误才会出现在空表行里；不然分页器已跳到新页、表里还是旧页的流程
@@ -121,7 +166,8 @@ void load()
   <el-dialog
     :model-value="true"
     title="选择关联流程"
-    width="min(1000px, calc(100vw - 32px))"
+    width="min(1440px, calc(100vw - 32px))"
+    class="fp-dialog"
     append-to-body
     data-testid="flow-picker"
     @close="emit('close')"
@@ -129,7 +175,7 @@ void load()
     <div class="fp-toolbar">
       <input v-model="keyword" class="fp-input" placeholder="流程 ID / 名称" aria-label="搜索流程" data-testid="flow-picker-search" @keyup.enter="search" />
       <button class="rc-btn primary" type="button" data-testid="flow-picker-query" @click="search">查询</button>
-      <el-checkbox v-model="onlySite" :disabled="!siteFlowIds.length" data-testid="flow-picker-only-site">
+      <el-checkbox v-if="!hideSiteUsage" v-model="onlySite" :disabled="!siteFlowIds.length" data-testid="flow-picker-only-site">
         只看本网站在用（{{ siteFlowIds.length }}）
       </el-checkbox>
       <span class="fp-spacer" />
@@ -137,52 +183,77 @@ void load()
       <!-- 按当前已提交的条件、当前页重查（AGENTS.md 选择弹窗约定：刷新放操作区右侧，紧凑图标按钮） -->
       <button class="fp-refresh" type="button" title="刷新" aria-label="刷新" data-testid="flow-picker-refresh" :disabled="loading" @click="load"><el-icon><Refresh /></el-icon></button>
     </div>
+    <div class="fp-body">
+    <!-- 左：流程列表。点行 = 预览，勾选框 = 选择 -->
     <div class="fp-table-wrap" v-loading="loading">
       <table class="fp-table">
         <thead>
           <tr>
-            <th style="width: 40px" />
+            <th style="width: 32px" />
             <th>流程名称 / ID</th>
-            <th style="width: 70px">节点数</th>
-            <th style="width: 90px">使用源数</th>
-            <th style="width: 110px">本网站在用</th>
-            <th style="width: 70px">操作</th>
+            <th style="width: 44px" title="节点数">节点</th>
+            <th style="width: 52px" title="使用源数">使用源</th>
+            <th v-if="!hideSiteUsage" style="width: 56px" title="本网站有几个源在用">本网站</th>
           </tr>
         </thead>
         <tbody>
-          <template v-for="f in rows" :key="f.id">
-          <tr :class="{ disabled: f.disabled }" data-testid="flow-picker-row" @click="!f.disabled && toggle(f)">
-            <td><el-checkbox :model-value="picked.has(f.id)" :disabled="f.disabled" @click.stop @change="toggle(f)" /></td>
-            <td>
-              <b>{{ f.name }}</b>
+          <tr
+            v-for="f in rows"
+            :key="f.id"
+            :class="{ disabled: f.disabled, previewing: previewFlow?.id === f.id }"
+            data-testid="flow-picker-row"
+            @click="preview(f)"
+          >
+            <td><el-checkbox :model-value="picked.has(f.id)" :disabled="f.disabled" :aria-label="`选择 ${f.name}`" data-testid="flow-picker-check" @click.stop @change="toggle(f)" /></td>
+            <td class="fp-name">
+              <b :title="f.name">{{ f.name }}</b>
               <span v-if="f.disabled" class="fp-badge">已禁用</span>
               <small class="fp-muted">{{ f.id }}</small>
             </td>
             <td :title="nodeCountTitle(nodeCounts, f.id)">{{ nodeCountText(nodeCounts, f.id) }}</td>
             <td>{{ f.sourceCnt ?? '—' }}</td>
-            <td>{{ siteFlowCounts[f.id] ? `${siteFlowCounts[f.id]} 个源` : '—' }}</td>
-            <td><el-button link type="primary" size="small" data-testid="flow-picker-preview" @click.stop="togglePreview(f)">{{ previewId === f.id ? '收起' : '预览' }}</el-button></td>
+            <td v-if="!hideSiteUsage" :title="siteFlowCounts[f.id] ? `本网站 ${siteFlowCounts[f.id]} 个源在用` : ''">{{ siteFlowCounts[f.id] ?? '—' }}</td>
           </tr>
-          <tr v-if="previewId === f.id" class="fp-preview-row">
-            <td />
-            <td colspan="5" data-testid="flow-picker-steps">
-              <span v-if="previewError" class="fp-error">{{ previewError }}</span>
-              <span v-else-if="!previewSteps" class="fp-muted">读取节点中…</span>
-              <span v-else-if="!previewSteps.length" class="fp-muted">这个流程还没有节点</span>
-              <ol v-else class="fp-steps">
-                <li v-for="step in previewSteps" :key="step.stepId">
-                  <b>{{ step.name || '未命名节点' }}</b>
-                  <span class="fp-muted">{{ [step.configId ? `配置 ${step.configId}` : '', step.outputTable ? `输出表 ${step.outputTable}` : ''].filter(Boolean).join(' · ') }}</span>
-                </li>
-              </ol>
-            </td>
-          </tr>
-          </template>
           <tr v-if="!rows.length && !loading">
-            <td colspan="6" class="fp-empty" data-testid="flow-picker-empty">{{ emptyText }}</td>
+            <td :colspan="hideSiteUsage ? 4 : 5" class="fp-empty" data-testid="flow-picker-empty">{{ emptyText }}</td>
           </tr>
         </tbody>
       </table>
+    </div>
+    <!-- 右：只读流程画布（样式同流程工作区）+ 右侧选中节点的只读配置区 -->
+    <section class="fp-preview" data-testid="flow-picker-preview">
+      <template v-if="previewFlow">
+        <div class="fp-preview-head">
+          <b :title="previewFlow.name">{{ previewFlow.name }}</b>
+          <span class="fp-muted">{{ previewFlow.id }} · {{ nodeCountText(nodeCounts, previewFlow.id) }} 个节点 · {{ previewFlow.sourceCnt ?? 0 }} 个源在用</span>
+          <span class="fp-spacer" />
+          <el-checkbox
+            :model-value="picked.has(previewFlow.id)"
+            :disabled="previewFlow.disabled"
+            data-testid="flow-picker-preview-check"
+            @change="toggle(previewFlow)"
+          >选择这个流程</el-checkbox>
+          <a class="fp-link" :href="flowCenterHref(previewFlow.id)" target="_blank" rel="noopener" title="新标签页打开流程中心，在那里进入完整的流程工作区">在流程中心查看 ↗</a>
+        </div>
+        <div class="fp-work">
+          <div class="fp-canvas" v-loading="previewLoading">
+            <p v-if="previewError" class="fp-state fp-error">{{ previewError }}</p>
+            <p v-else-if="previewEmpty" class="fp-state">这个流程还没有节点</p>
+            <FlowReadonlyCanvas v-else-if="previewDef" :def="previewDef" :selected="previewNodeId" @select="previewNodeId = $event" />
+          </div>
+          <FlowNodeReadonlyPanel
+            v-if="previewNode"
+            class="fp-node"
+            :node-id="previewNode.id"
+            :cfg="previewNode.cfg"
+            :step="previewNode.step"
+            :input-table="previewNode.inputTable"
+          />
+          <p v-else-if="previewDef && !previewEmpty" class="fp-node fp-node-hint">点画布上的节点，查看它的配置</p>
+        </div>
+      </template>
+      <p v-else class="fp-state">点左侧流程，在这里预览流程图</p>
+    </section>
     </div>
     <template #footer>
       <div class="fp-footer">
@@ -197,24 +268,38 @@ void load()
 
 <style scoped>
 .fp-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-.fp-input { height: 28px; width: 260px; max-width: 100%; padding: 0 8px; border: 1px solid var(--rc-line); border-radius: 6px; font-size: 12px; }
+/* 原来用的 --rc-line 项目里没有定义，边框整个丢了（10-31 截图里搜索框看不出是输入框）；改成与目录搜索框同一套边框 */
+.fp-input { box-sizing: border-box; height: 30px; width: 300px; max-width: 100%; padding: 0 10px; border: 1px solid #dbe3ee; border-radius: 7px; font-size: 13px; outline: none; }
+.fp-input:focus { border-color: var(--rc-primary); }
 .fp-spacer { flex: 1; }
 .fp-refresh { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; }
 .fp-refresh:hover:not(:disabled) { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .fp-refresh:disabled { opacity: .5; cursor: not-allowed; }
 .fp-muted { color: var(--rc-text-2); font-size: 12px; }
-.fp-table-wrap { max-height: calc(100vh - 320px); overflow: auto; }
-.fp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.fp-table th, .fp-table td { padding: 8px; border-bottom: 1px solid var(--rc-line); text-align: left; }
-.fp-table th { color: var(--rc-text-2); font-weight: 600; position: sticky; top: 0; background: var(--rc-panel, #fff); }
+/* 左右两栏，按 13.6 寸屏留边：高度随视口，列表和画布各自滚动 */
+.fp-body { display: grid; grid-template-columns: minmax(320px, 360px) minmax(0, 1fr); gap: 12px; height: min(640px, calc(100vh - 280px)); min-height: 360px; }
+.fp-table-wrap { min-height: 0; overflow: auto; border: 1px solid var(--rc-border); border-radius: 8px; }
+.fp-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.fp-table th, .fp-table td { padding: 8px 6px; border-bottom: 1px solid var(--rc-border-soft); text-align: left; }
+.fp-table th { color: var(--rc-text-2); font-weight: 600; position: sticky; top: 0; z-index: 1; background: #f8fafc; }
 .fp-table tbody tr { cursor: pointer; }
-.fp-table tbody tr.disabled { cursor: not-allowed; opacity: 0.55; }
+.fp-table tbody tr:hover { background: #f8fafc; }
+.fp-table tbody tr.previewing { background: var(--rc-primary-bg); box-shadow: inset 3px 0 0 var(--rc-primary); }
+.fp-table tbody tr.disabled { opacity: 0.55; }
+.fp-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .fp-table td small { display: block; margin-top: 2px; }
 .fp-badge { margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; color: #b45309; background: #fef3c7; }
 .fp-empty { padding: 32px; text-align: center; color: var(--rc-faint); }
-.fp-preview-row td { background: var(--rc-bg-soft, #f8fafc); cursor: default; }
-.fp-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
-.fp-steps b { margin-right: 6px; font-weight: 600; }
+.fp-preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--rc-border); border-radius: 8px; overflow: hidden; }
+.fp-preview-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--rc-border-soft); font-size: 13px; }
+.fp-preview-head > b { min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-link { flex: none; color: var(--rc-primary); font-size: 12px; text-decoration: none; }
+.fp-link:hover { text-decoration: underline; }
+.fp-work { flex: 1; min-height: 0; display: flex; }
+.fp-canvas { position: relative; flex: 1; min-width: 0; min-height: 0; }
+.fp-state { margin: 0; padding: 48px 16px; text-align: center; color: var(--rc-faint); font-size: 12px; }
+.fp-node { flex: none; width: 300px; }
+.fp-node-hint { margin: 0; padding: 48px 16px; border-left: 1px solid var(--rc-border-soft); color: var(--rc-faint); font-size: 12px; text-align: center; }
 .fp-error { color: #dc2626; }
 .fp-footer { display: flex; align-items: center; gap: 8px; }
 </style>

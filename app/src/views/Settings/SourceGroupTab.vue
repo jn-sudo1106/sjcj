@@ -19,7 +19,7 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowDown, FolderOpened, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { sourceGroupApi, flowCenterApi, sourceApi, type Source, type SourceGroup, type SourceGroupState, type SourceFlowBind, type FlowRecord } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -28,6 +28,9 @@ import { trackClick } from '@/utils/logEvents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
+import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
+import BizDirTreePanel, { type PickedBizDir } from '@/views/CollectAssets/BizDirTreePanel.vue'
+import { bizDirGroupIds, resetBizDirGroupCache } from '@/api/sourceDirs'
 
 const auth = useAuthStore()
 // 2026-10-13：本页挂在源管理「我的分组」（从系统设置迁回，管理员也在这里改），不再有只读模式
@@ -45,9 +48,72 @@ const selectedGroup = computed(() => groups.value.find((g) => g.sourceGroupId ==
 const groupKeyword = ref('')
 const visibleGroups = computed(() => {
   const keyword = groupKeyword.value.trim().toLowerCase()
-  if (!keyword) return groups.value
-  return groups.value.filter((g) => [g.sourceGroupName, g.sourceGroupCode, g.sourceGroupId].some((v) => v?.toLowerCase().includes(keyword)))
+  const inDir = dirGroupIds.value
+  return groups.value.filter((g) => (!inDir || inDir.has(g.sourceGroupId))
+    && (!keyword || [g.sourceGroupName, g.sourceGroupCode, g.sourceGroupId].some((v) => v?.toLowerCase().includes(keyword))))
 })
+
+/**
+ * 按业务目录筛组（1030 会议议题 5，10-31 定按成员推导、只读）：组内有源在所选目录（含子目录）里就算。
+ * 来源组本身不挂目录，所以没有「未分类」；大目录要翻十几页，显示进度。
+ * 10-31：目录从下拉框改为业务目录树（BizDirTreePanel，样式同系统目录面板）；单独一栏太占宽度，
+ * 收进来源组这一栏：点「按业务目录筛选」时目录树在原地替换组列表，点「完成」收起。
+ * 10-31 用户：可选多个目录，取并集——组内有源在任一所选目录（含子级）里就显示（同系统目录多选口径）。
+ */
+const bizDirs = ref<PickedBizDir[]>([])
+const bizDirIds = computed(() => bizDirs.value.map((d) => d.id))
+/** 范围条文案：两个以内全列，再多只列前两个 + 总数（全名在悬停提示里） */
+const bizDirLabel = computed(() => {
+  const names = bizDirs.value.map((d) => d.path)
+  return names.length <= 2 ? names.join('、') : `${names.slice(0, 2).join('、')} 等 ${names.length} 个目录`
+})
+const dirOpen = ref(false)
+const dirGroupIds = ref<Set<string> | null>(null)
+const dirLoading = ref(false)
+const dirProgress = ref('')
+const dirError = ref('')
+/** 目录里的组数（不受搜索框影响；visibleGroups 还叠了关键字） */
+const dirGroupCount = computed(() => {
+  const inDir = dirGroupIds.value
+  return inDir ? groups.value.filter((g) => inDir.has(g.sourceGroupId)).length : 0
+})
+let dirSeq = 0
+async function onBizDirChange(dirs: PickedBizDir[]) {
+  bizDirs.value = dirs
+  const reqId = ++dirSeq
+  dirError.value = ''
+  dirProgress.value = ''
+  if (!dirs.length) {
+    dirGroupIds.value = null
+    dirLoading.value = false
+    return
+  }
+  dirLoading.value = true
+  try {
+    // 逐个目录统计再取并集（每个目录内部已并发翻页、有缓存，多目录不再叠加并发）
+    const union = new Set<string>()
+    for (const [i, dir] of dirs.entries()) {
+      const ids = await bizDirGroupIds(dir.id, (done, total) => {
+        if (reqId === dirSeq && (total > 1 || dirs.length > 1)) {
+          dirProgress.value = dirs.length > 1 ? `统计中 第 ${i + 1}/${dirs.length} 个目录 ${done}/${total}` : `统计中 ${done}/${total}`
+        }
+      })
+      if (reqId !== dirSeq) return
+      ids.forEach((id) => union.add(id))
+    }
+    dirGroupIds.value = union
+  } catch (error) {
+    if (reqId === dirSeq) {
+      dirGroupIds.value = null
+      dirError.value = `业务目录筛选失败：${error instanceof Error ? error.message : String(error)}`
+    }
+  } finally {
+    if (reqId === dirSeq) {
+      dirLoading.value = false
+      dirProgress.value = ''
+    }
+  }
+}
 
 /** 只查视口内的组，最多 3 个请求；离开视口的未开始请求不排队。 */
 const groupList = ref<HTMLElement>()
@@ -113,7 +179,12 @@ function stopMemberCounts(): void {
   visibleCountIds.clear()
 }
 
-watch(() => ui.sourceListRevision, resetMemberCounts)
+/** 成员变了（本页或其他页面改了来源组成员）：成员数重查，目录推导结果作废，已选目录重新统计 */
+watch(() => ui.sourceListRevision, () => {
+  resetMemberCounts()
+  resetBizDirGroupCache()
+  if (bizDirs.value.length) void onBizDirChange(bizDirs.value)
+})
 onMounted(observeMemberCounts)
 onActivated(observeMemberCounts)
 onDeactivated(stopMemberCounts)
@@ -143,6 +214,20 @@ const savingFlows = ref(false)
 function defaultFromBindings(rows: SourceFlowBind[]): string {
   const row = rows.find((r) => r.isDefault)
   return row ? row.flowId : ''
+}
+/** 关联流程用流程选择弹窗挑（与源流程配置同一个，1030 议题 3），回填到 flowIds */
+const flowPickerOpen = ref(false)
+function onFlowsPicked(picked: FlowRecord[]): void {
+  for (const flow of picked) {
+    if (flow.name && !flows.value.some((f) => f.id === flow.id)) flows.value = [...flows.value, flow]
+  }
+  flowIds.value = picked.map((f) => f.id)
+  if (!flowIds.value.includes(defaultFlowId.value)) defaultFlowId.value = flowIds.value.length === 1 ? flowIds.value[0]! : ''
+  flowPickerOpen.value = false
+}
+function removeFlowId(id: string): void {
+  flowIds.value = flowIds.value.filter((x) => x !== id)
+  if (defaultFlowId.value === id) defaultFlowId.value = ''
 }
 
 // ---- 组资料抽屉 ----
@@ -510,7 +595,7 @@ watch(() => route.query.group, (id) => {
       <aside class="sg-nav">
         <div class="sg-heading">
           <strong>来源组</strong>
-          <el-button size="small" type="primary" :disabled="!canWrite" data-testid="sg-new" @click="creating = true">新建</el-button>
+          <button class="sg-icon-btn bordered" type="button" title="新建来源组" aria-label="新建来源组" :disabled="!canWrite" data-testid="sg-new" @click="creating = true"><el-icon><Plus /></el-icon></button>
         </div>
         <el-input
           v-model="groupKeyword"
@@ -521,7 +606,28 @@ watch(() => route.query.group, (id) => {
           placeholder="搜索组名 / 编码 / ID"
           data-testid="sg-search"
         />
-        <div ref="groupList" class="sg-list">
+        <!-- 选了业务目录：显示范围和统计结果，× 清除（同系统目录汇总行的目录范围） -->
+        <button
+          v-if="!bizDirs.length"
+          class="sg-dir-trigger"
+          :class="{ open: dirOpen }"
+          type="button"
+          :aria-expanded="dirOpen"
+          data-testid="sg-biz-dir-open"
+          @click="dirOpen = !dirOpen"
+        >
+          <el-icon><FolderOpened /></el-icon><span>按业务目录筛选</span><el-icon class="sg-dir-arrow"><ArrowDown /></el-icon>
+        </button>
+        <div v-else class="sg-dir-scope" :class="{ error: dirError }" data-testid="sg-biz-dir-hint">
+          <div class="sg-dir-line">
+            <button class="sg-dir-name" type="button" :title="`${bizDirs.map((d) => d.path).join('\n')}\n（点击更换目录）`" :aria-expanded="dirOpen" data-testid="sg-biz-dir-change" @click="dirOpen = !dirOpen">业务目录：<b>{{ bizDirLabel }}</b>（含子级）</button>
+            <button class="sg-dir-clear" type="button" title="清除目录范围" aria-label="清除目录范围" data-testid="sg-biz-dir-clear" @click="onBizDirChange([])">×</button>
+          </div>
+          <small>{{ dirError || (dirLoading ? (dirProgress || '统计中…') : `${bizDirs.length > 1 ? `所选 ${bizDirs.length} 个目录` : '该目录'}下 ${dirGroupCount} 个组（按成员推导）`) }}</small>
+        </div>
+        <!-- v-show：收起后保留展开状态，再打开还在原位置 -->
+        <BizDirTreePanel v-show="dirOpen" class="sg-dir-tree" :selected="bizDirIds" @select="onBizDirChange" @close="dirOpen = false" />
+        <div v-show="!dirOpen" ref="groupList" class="sg-list">
           <button
             v-for="g in visibleGroups"
             v-member-count
@@ -533,10 +639,12 @@ watch(() => route.query.group, (id) => {
             @click="selectGroup(g.sourceGroupId)"
           >
             <span>{{ g.sourceGroupName }}<i v-if="g.state !== 'ACTIVE'" class="sg-off">停用</i></span>
+            <!-- 1030 议题 5：加载中骨架、失败「!」、加载完显示数字（与网站卡片源数同风格） -->
             <small
               class="sg-count"
+              :class="{ loading: memberCounts[g.sourceGroupId] === undefined, failed: memberCounts[g.sourceGroupId] === null }"
               :title="memberCounts[g.sourceGroupId] === null ? '成员数加载失败，刷新后重试' : memberCounts[g.sourceGroupId] === undefined ? '成员数加载中' : `${memberCounts[g.sourceGroupId]} 个成员`"
-            >{{ memberCounts[g.sourceGroupId] === null ? '—' : memberCounts[g.sourceGroupId] ?? '…' }}</small>
+            >{{ memberCounts[g.sourceGroupId] === null ? '!' : memberCounts[g.sourceGroupId] ?? '' }}</small>
           </button>
           <div v-if="!groups.length" class="sg-empty">{{ loading ? '加载中…' : '暂无来源组' }}</div>
           <div v-else-if="!visibleGroups.length" class="sg-empty">没有匹配的来源组</div>
@@ -555,16 +663,9 @@ watch(() => route.query.group, (id) => {
               <span v-else class="sg-faint">未配置 / 暂不可用</span>
             </span>
             <div class="sg-actions">
-              <el-button
-                size="small"
-                :disabled="!canWrite || selectedGroup.state !== 'ACTIVE'"
-                :title="selectedGroup.state !== 'ACTIVE' ? '组已停用，不能加入新成员' : ''"
-                data-testid="sg-add-source"
-                @click="pickerVisible = true"
-              >添加源</el-button>
-              <el-button size="small" data-testid="sg-flow-btn" @click="openFlowDrawer">流程配置</el-button>
-              <el-button size="small" data-testid="sg-detail-btn" @click="openDetailDrawer">组资料</el-button>
-              <el-button :icon="Refresh" size="small" circle title="刷新" aria-label="刷新" :disabled="loading" @click="reloadGroups" />
+              <button class="sg-btn" type="button" data-testid="sg-flow-btn" @click="openFlowDrawer">流程配置</button>
+              <button class="sg-btn" type="button" data-testid="sg-detail-btn" @click="openDetailDrawer">组资料</button>
+              <button class="sg-icon-btn" type="button" title="刷新" aria-label="刷新" :disabled="loading" @click="reloadGroups"><el-icon><Refresh /></el-icon></button>
             </div>
           </div>
           <SourceOverviewView
@@ -576,6 +677,17 @@ watch(() => route.query.group, (id) => {
             @open-source-data="openSource($event, 'data')"
             @open-site="openSite"
           >
+            <!-- 1030 议题 5：「添加源」放成员表操作区右侧，与系统目录「新增网站」同一位置 -->
+            <template #filter-extra>
+              <button
+                class="sg-btn"
+                type="button"
+                :disabled="!canWrite || selectedGroup.state !== 'ACTIVE'"
+                :title="selectedGroup.state !== 'ACTIVE' ? '组已停用，不能加入新成员' : '把源加入本组'"
+                data-testid="sg-add-source"
+                @click="pickerVisible = true"
+              ><el-icon><Plus /></el-icon>添加源</button>
+            </template>
             <template #selection-actions="{ ids }">
               <el-button size="small" data-testid="sg-remove-members" :disabled="!canWrite || !ids.length" @click="selectedIds = [...ids]; removeMembers()">移出来源组</el-button>
               <el-select
@@ -602,27 +714,32 @@ watch(() => route.query.group, (id) => {
       </section>
     </div>
 
-    <!-- 流程配置抽屉 -->
-    <el-drawer v-model="flowDrawer" title="流程配置" size="480px" append-to-body>
+    <!-- 流程配置抽屉：结构与源流程配置抽屉（SourceFlowConfigDrawer）一致，关联流程用同一个流程选择弹窗 -->
+    <el-drawer v-model="flowDrawer" :title="selectedGroup ? `流程配置 · ${selectedGroup.sourceGroupName}` : '流程配置'" size="480px" append-to-body>
       <div v-if="selectedGroup" class="sg-drawer-body">
+        <p class="sg-drawer-meta">组 ID：{{ selectedGroup.sourceGroupId }} · 编码：{{ selectedGroup.sourceGroupCode }}</p>
         <el-alert title="组内来源统一使用以下流程，修改影响全部成员；需要单独配置的源请先退组" type="info" :closable="false" show-icon />
-        <p class="sg-flow-summary">
-          配置默认：{{ flowLabel(defaultFlowId) }} · 当前可用默认：{{ flowLabel(selectedGroup.defaultFlowId) }}
+        <el-alert v-if="selectedGroup.state !== 'ACTIVE'" title="组已停用，请先在「组资料」中启用后修改流程列表" type="warning" :closable="false" show-icon />
+        <p v-if="groupBindingsLoaded && defaultFlowId !== (selectedGroup.defaultFlowId ?? '')" class="sg-flow-summary warn" data-testid="sg-default-mismatch">
+          配置的默认流程「{{ flowLabel(defaultFlowId) }}」当前不可用，组内任务暂用：{{ flowLabel(selectedGroup.defaultFlowId) }}
         </p>
+        <h4 class="sg-section">组流程</h4>
         <div class="sg-form-row">
           <label>关联流程（可选多个）</label>
-          <el-select
-            v-model="flowIds"
-            multiple
-            filterable
-            clearable
-            placeholder="选择关联流程"
-            style="width: 100%"
-            :disabled="!canWrite || selectedGroup.state !== 'ACTIVE'"
-            data-testid="sg-flow-ids"
-          >
-            <el-option v-for="f in flows" :key="f.id" :value="f.id" :label="`${f.name} · ${f.id}`" />
-          </el-select>
+          <div class="sg-flow-tags" data-testid="sg-flow-ids">
+            <el-tag
+              v-for="id in flowIds"
+              :key="id"
+              :closable="canWrite && selectedGroup.state === 'ACTIVE'"
+              disable-transitions
+              :title="flowLabel(id)"
+              @close="removeFlowId(id)"
+            >{{ flowLabel(id) }}</el-tag>
+            <span v-if="!flowIds.length" class="sg-hint">还没有关联流程</span>
+          </div>
+          <div>
+            <el-button size="small" :disabled="!canWrite || selectedGroup.state !== 'ACTIVE'" data-testid="sg-pick-flows" @click="flowPickerOpen = true">选择流程</el-button>
+          </div>
         </div>
         <div class="sg-form-row">
           <label>默认流程（未指定流程的任务使用此项）</label>
@@ -644,62 +761,77 @@ watch(() => route.query.group, (id) => {
             data-testid="sg-save-flows"
             @click="saveFlows"
           >保存组流程</el-button>
-          <span v-if="selectedGroup.state !== 'ACTIVE'" class="sg-hint">组已停用，请先在「组资料」中启用后修改流程列表。</span>
         </div>
         <el-divider />
+        <h4 class="sg-section">绑定状态</h4>
         <el-table :data="groupBindings" size="small" :empty-text="groupBindingsLoaded ? '暂无绑定' : '加载中…'" data-testid="sg-binding-table">
-          <el-table-column label="流程">
-            <template #default="{ row }">{{ flowLabel(row.flowId) }}</template>
-          </el-table-column>
-          <el-table-column label="默认" width="70">
-            <template #default="{ row }">{{ row.isDefault ? '是' : '否' }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
+          <el-table-column label="流程" min-width="160" show-overflow-tooltip>
             <template #default="{ row }">
-              <el-switch
-                :model-value="row.state === 'ACTIVE'"
-                :disabled="!canWrite"
-                :aria-label="`切换 ${flowLabel(row.flowId)} 的绑定状态`"
-                data-testid="sg-binding-toggle"
-                @change="toggleBindingState(row)"
-              />
+              {{ flowLabel(row.flowId) }}
+              <el-tag v-if="row.isDefault" size="small" type="primary" disable-transitions class="sg-default-tag">默认</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="120">
+          <el-table-column label="状态" width="96">
             <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="openFlowDetail(row.flowId)">查看流程节点</el-button>
+              <span class="sg-switch">
+                <el-switch
+                  :model-value="row.state === 'ACTIVE'"
+                  size="small"
+                  :disabled="!canWrite"
+                  :aria-label="`切换 ${flowLabel(row.flowId)} 的绑定状态`"
+                  data-testid="sg-binding-toggle"
+                  @change="toggleBindingState(row)"
+                />
+                <span :class="{ off: row.state !== 'ACTIVE' }">{{ row.state === 'ACTIVE' ? '启用' : '停用' }}</span>
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="76">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" title="查看流程节点" @click="openFlowDetail(row.flowId)">查看节点</el-button>
             </template>
           </el-table-column>
         </el-table>
       </div>
     </el-drawer>
 
-    <!-- 组资料抽屉 -->
-    <el-drawer v-model="detailDrawer" title="组资料" size="420px" append-to-body>
+    <!-- 组资料抽屉：只读信息 + 表单，保存 / 删除放底部（删除靠左，与保存分开） -->
+    <el-drawer v-model="detailDrawer" :title="editingGroup ? `组资料 · ${selectedGroup?.sourceGroupName ?? editingGroup.sourceGroupName}` : '组资料'" size="420px" append-to-body>
       <div v-if="editingGroup" class="sg-drawer-body">
+        <dl class="sg-info">
+          <dt>组 ID</dt><dd>{{ editingGroup.sourceGroupId }}</dd>
+          <dt>成员数</dt><dd>{{ memberCounts[editingGroup.sourceGroupId] ?? '—' }}</dd>
+          <dt>默认流程</dt><dd :title="flowLabel(selectedGroup?.defaultFlowId)">{{ flowLabel(selectedGroup?.defaultFlowId) }}</dd>
+        </dl>
         <div class="sg-form-row">
-          <label>组编码</label>
+          <label class="required">组编码</label>
           <el-input v-model="editingGroup.sourceGroupCode" :maxlength="64" :disabled="!canWrite" placeholder="字母 / 数字开头，可含 _ -，最长 64 位" data-testid="sg-code" />
         </div>
         <div class="sg-form-row">
-          <label>组名称</label>
+          <label class="required">组名称</label>
           <el-input v-model="editingGroup.sourceGroupName" :maxlength="128" :disabled="!canWrite" data-testid="sg-name" />
         </div>
         <div class="sg-form-row">
           <label>描述</label>
-          <el-input v-model="editingGroup.description" :maxlength="500" type="textarea" :rows="2" :disabled="!canWrite" />
+          <el-input v-model="editingGroup.description" :maxlength="500" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" :disabled="!canWrite" />
         </div>
         <div class="sg-form-row">
           <label>状态</label>
-          <el-switch v-model="editingGroup.state" active-value="ACTIVE" inactive-value="DISABLED" :disabled="!canWrite" />
-          <span class="sg-item-state" :class="editingGroup.state === 'ACTIVE' ? 'on' : ''">{{ editingGroup.state === 'ACTIVE' ? '启用' : '停用' }}</span>
-        </div>
-        <p class="sg-hint">停用组后，全部成员不能启动新任务。删除组前须先移出全部成员。</p>
-        <div class="sg-form-row">
-          <el-button type="primary" :disabled="!canWrite || savingGroup" :loading="savingGroup" data-testid="sg-save-detail" @click="saveGroupDetail">保存组资料</el-button>
-          <el-button type="danger" plain :disabled="!canWrite" data-testid="sg-remove" @click="removeGroup">删除来源组</el-button>
+          <span class="sg-switch">
+            <el-switch v-model="editingGroup.state" active-value="ACTIVE" inactive-value="DISABLED" :disabled="!canWrite" aria-label="组状态" />
+            <span :class="{ off: editingGroup.state !== 'ACTIVE' }">{{ editingGroup.state === 'ACTIVE' ? '启用' : '停用' }}</span>
+          </span>
+          <p class="sg-hint">停用组后，全部成员不能启动新任务。</p>
         </div>
       </div>
+      <template #footer>
+        <div class="sg-drawer-foot">
+          <el-button type="danger" plain :disabled="!canWrite" title="删除前须先移出全部成员" data-testid="sg-remove" @click="removeGroup">删除来源组</el-button>
+          <span class="sg-spacer" />
+          <el-button @click="detailDrawer = false">取消</el-button>
+          <el-button type="primary" :disabled="!canWrite || savingGroup" :loading="savingGroup" data-testid="sg-save-detail" @click="saveGroupDetail">保存组资料</el-button>
+        </div>
+      </template>
     </el-drawer>
 
     <!-- 新建来源组 -->
@@ -733,6 +865,7 @@ watch(() => route.query.group, (id) => {
     />
 
     <FlowDetailDrawer v-if="detailFlow" :flow="detailFlow" @close="detailFlow = null" />
+    <FlowPickerDialog v-if="flowPickerOpen" :selected="flowIds" :site-flow-counts="{}" hide-site-usage @close="flowPickerOpen = false" @confirm="onFlowsPicked" />
   </div>
 </template>
 
@@ -740,18 +873,35 @@ watch(() => route.query.group, (id) => {
 .sg-tab { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
 .sg-perm-alert { flex-shrink: 0; }
 .sg-body { display: flex; gap: 12px; flex: 1; min-height: 0; }
+/* 左栏与系统目录的目录面板（SourceDirPanel）同宽、同边框圆角 */
 .sg-nav {
-  width: 210px;
+  width: 252px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   padding: 12px;
-  border: 1px solid var(--rc-border-soft);
-  border-radius: 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: 12px;
   background: #fff;
 }
 .sg-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
 .sg-search { margin-top: 10px; }
+/* 业务目录树：展开时与系统目录面板同宽，折叠成 36px 竖条 */
+/* 业务目录入口：与搜索框同高，紫色是业务目录主题色（同 SourceDirPanel 业务目录） */
+.sg-dir-trigger { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; margin-top: 8px; padding: 0 10px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-faint); font-size: 12px; cursor: pointer; }
+.sg-dir-trigger > span { flex: 1; text-align: left; }
+.sg-dir-trigger:hover, .sg-dir-trigger.open { border-color: #c4b5fd; color: #7c3aed; }
+.sg-dir-arrow { transition: transform .15s; }
+.sg-dir-trigger.open .sg-dir-arrow { transform: rotate(180deg); }
+.sg-dir-tree { flex: 1; min-height: 0; margin-top: 8px; }
+.sg-dir-scope { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: #f5f3ff; font-size: 12px; color: var(--rc-text-2); }
+.sg-dir-scope small { font-size: 12px; color: var(--rc-faint); }
+.sg-dir-scope.error small { color: var(--rc-error); }
+.sg-dir-line { display: flex; align-items: center; gap: 4px; }
+.sg-dir-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; background: none; color: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.sg-dir-name b { color: #7c3aed; font-weight: 600; }
+.sg-dir-clear { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: #7c3aed; cursor: pointer; line-height: 18px; }
+.sg-dir-clear:hover { background: #ede9fe; }
 .sg-list { flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sg-item {
   display: flex;
@@ -759,16 +909,22 @@ watch(() => route.query.group, (id) => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 9px 10px;
+  flex: none;
+  height: 30px;
+  padding: 0 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--rc-text);
+  font-size: 13px;
   cursor: pointer;
   text-align: left;
 }
 .sg-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
-.sg-count { flex-shrink: 0; color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.sg-count { flex-shrink: 0; color: var(--rc-muted); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sg-count.loading { width: 18px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, #eef2f7 25%, #e2e8f0 50%, #eef2f7 75%); background-size: 200% 100%; animation: sg-shimmer 1.2s linear infinite; }
+.sg-count.failed { color: var(--rc-error, #dc2626); }
+@keyframes sg-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .sg-item:hover { background: #f1f5f9; }
 .sg-item.active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .sg-item.disabled { color: var(--rc-faint); }
@@ -803,14 +959,47 @@ watch(() => route.query.group, (id) => {
 .sg-flow { font-size: 12px; color: var(--rc-text-2); }
 .sg-flow a { color: var(--el-color-primary); }
 .sg-faint { color: var(--rc-faint); }
-.sg-actions { display: flex; margin-left: auto; gap: 8px; }
+.sg-actions { display: flex; align-items: center; margin-left: auto; gap: 8px; }
+/* 按钮沿用源管理的紧凑描边按钮（SourceTab .ca-save-view.sm）和图标按钮（MyViews .mv-icon-btn） */
+.sg-btn { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.sg-btn:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary); }
+.sg-btn:disabled { opacity: .5; cursor: not-allowed; }
+.sg-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-muted); font-size: 16px; cursor: pointer; flex: none; }
+.sg-icon-btn.bordered { border: 1px solid var(--rc-border); background: #fff; }
+.sg-icon-btn:hover:not(:disabled) { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary); }
+.sg-icon-btn:disabled { opacity: .5; cursor: not-allowed; }
 .sg-drawer-body { display: flex; flex-direction: column; gap: 12px; }
 .sg-flow-summary { font-size: 12px; color: var(--rc-text-2); margin: 0; }
 .sg-form-row { display: flex; flex-direction: column; gap: 4px; }
 .sg-form-row > label { font-size: 12px; color: var(--rc-text-2); }
 .sg-hint { font-size: 12px; color: var(--rc-faint); margin: 0; }
-.sg-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; }
-.sg-content :deep(.sov-filter.is-compact label),
-.sg-content :deep(.sov-filter.is-compact .sov-field) { flex: 0 0 auto; }
+.sg-flow-summary.warn { color: #b45309; }
+.sg-drawer-meta { margin: 0; font-size: 12px; color: var(--rc-text-2); }
+.sg-section { margin: 0; color: var(--rc-text); font-size: 13px; font-weight: 650; }
+.sg-flow-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.sg-flow-tags .el-tag { max-width: 100%; }
+.sg-flow-tags :deep(.el-tag__content) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-default-tag { margin-left: 4px; }
+.sg-drawer-body :deep(.el-divider) { margin: 4px 0; }
+/* 开关旁写明状态（AGENTS 控件约定），停用态中性灰 */
+.sg-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rc-text-2); }
+.sg-switch .off { color: var(--rc-faint); }
+.sg-form-row .sg-switch { align-self: flex-start; }
+.sg-form-row > label.required::before { content: '*'; margin-right: 2px; color: var(--rc-error); }
+.sg-info { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px 8px; margin: 0; padding: 10px 12px; border-radius: 8px; background: #f8fafc; font-size: 12px; }
+.sg-info dt { color: var(--rc-faint); }
+.sg-info dd { margin: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-drawer-foot { display: flex; align-items: center; gap: 8px; }
+.sg-spacer { flex: 1; }
+/* 查询栏两行，与「我的视图」（MyViews.vue）一致：条件按比例铺满一行，按钮行靠右。
+   组内范围已限定，没有「来源组」筛选，比我的视图少一列 */
+.sg-content :deep(.sov-filter.is-compact) {
+  display: grid; align-items: center; gap: 8px;
+  grid-template-columns: minmax(270px, 3fr) minmax(72px, 1.1fr) minmax(64px, 1fr) minmax(64px, 1fr) minmax(56px, .9fr);
+}
+.sg-content :deep(.sov-filter.is-compact .sov-field),
+.sg-content :deep(.sov-filter.is-compact label) { min-width: 0; }
+.sg-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 0; }
+.sg-content :deep(.sov-filter.is-compact .sov-filter-actions) { grid-column: 1 / -1; justify-self: end; margin-left: 0; }
 @media (max-width: 1100px) { .sg-nav { width: 170px; } }
 </style>

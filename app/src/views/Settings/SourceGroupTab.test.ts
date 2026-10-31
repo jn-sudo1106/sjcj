@@ -21,8 +21,18 @@ vi.mock('@/views/FlowCanvas/result/SourceOverviewView.vue', () => ({
     name: 'SourceOverviewView',
     props: { currentSiteId: String, scopeSourceGroupId: String, scopeEmptyText: String },
     emits: ['open-source', 'open-source-data', 'open-site'],
-    template: '<div class="sov-stub" data-testid="sov-stub"><slot name="selection-actions" :ids="ids()" /></div>',
+    template: '<div class="sov-stub" data-testid="sov-stub"><slot name="filter-extra" /><slot name="selection-actions" :ids="ids()" /></div>',
     setup: () => ({ ids: () => selectIds.value }),
+  },
+}))
+
+// stub 业务目录树：真组件挂载就去拉目录，这里只验证选目录后的组筛选
+vi.mock('@/views/CollectAssets/BizDirTreePanel.vue', () => ({
+  default: {
+    name: 'BizDirTreePanel',
+    props: { selected: Array },
+    emits: ['close', 'select'],
+    template: '<div class="biz-dir-stub" />',
   },
 }))
 
@@ -114,7 +124,8 @@ describe('来源组页签 · 列表与选中', () => {
     const { wrapper } = await mountTab()
     const items = wrapper.findAll('.sg-item')
     expect(items.length).toBe(2)
-    expect(items.map((i) => i.text())).toEqual(['twitter1…', '测试组1…'])
+    expect(items.map((i) => i.text())).toEqual(['twitter1', '测试组1'])
+    expect(wrapper.findAll('.sg-count.loading').length).toBe(2)
     expect(sourceApi.sourcePaged).not.toHaveBeenCalled()
     expect(observed.size).toBe(2)
     showGroups(wrapper, ['3', '1'])
@@ -161,7 +172,8 @@ describe('来源组页签 · 列表与选中', () => {
     await flushPromises()
     expect(wrapper.get('[data-group-id="3"] .sg-count').text()).toBe('0')
     const failed = wrapper.get('[data-group-id="1"] .sg-count')
-    expect(failed.text()).toBe('—')
+    expect(failed.text()).toBe('!')
+    expect(failed.classes()).toContain('failed')
     expect(failed.attributes('title')).toContain('加载失败')
   })
 
@@ -196,6 +208,71 @@ describe('来源组页签 · 列表与选中', () => {
     await search.setValue('不存在')
     expect(wrapper.findAll('.sg-item').length).toBe(0)
     expect(wrapper.find('.sg-empty').text()).toBe('没有匹配的来源组')
+  })
+
+  // 1030 会议议题 5：按业务目录筛组（按成员推导，只读）
+  it('选业务目录后左侧只留目录里有成员的组，并提示组数；清空恢复全部', async () => {
+    const dirs = await import('@/api/sourceDirs')
+    const byDir = vi.spyOn(dirs, 'bizDirGroupIds').mockResolvedValue(['3'])
+    const { wrapper } = await mountTab()
+    const before = wrapper.findAll('.sg-item').length
+    expect(before).toBeGreaterThan(1)
+    const tree = wrapper.getComponent({ name: 'BizDirTreePanel' })
+    const list = wrapper.get('.sg-list')
+    // 默认收起，只露出入口；点开后目录树在原地替换组列表
+    expect(tree.isVisible()).toBe(false)
+    await wrapper.get('[data-testid="sg-biz-dir-open"]').trigger('click')
+    expect(tree.isVisible()).toBe(true)
+    expect(list.isVisible()).toBe(false)
+    tree.vm.$emit('select', [{ id: '9011494', path: '行业 / 能源' }])
+    await settle()
+    // 多选：勾一个不收起，点「完成」才回到筛选后的组列表
+    expect(tree.isVisible()).toBe(true)
+    expect(tree.props('selected')).toEqual(['9011494'])
+    tree.vm.$emit('close')
+    await settle()
+    expect(tree.isVisible()).toBe(false)
+    expect(list.isVisible()).toBe(true)
+    expect(byDir).toHaveBeenCalledWith('9011494', expect.any(Function))
+    expect(wrapper.findAll('.sg-item').map((i) => i.text()).join()).toContain('twitter1')
+    expect(wrapper.findAll('.sg-item')).toHaveLength(1)
+    const hint = wrapper.get('[data-testid="sg-biz-dir-hint"]').text()
+    expect(hint).toContain('行业 / 能源')
+    expect(hint).toContain('该目录下 1 个组')
+    await wrapper.get('[data-testid="sg-biz-dir-clear"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="sg-biz-dir-hint"]').exists()).toBe(false)
+    expect(wrapper.findAll('.sg-item')).toHaveLength(before)
+  })
+
+  // 10-31 用户：业务目录多选，取并集
+  it('勾多个业务目录时取并集：组内有源在任一目录里就显示', async () => {
+    const dirs = await import('@/api/sourceDirs')
+    const byDir = vi.spyOn(dirs, 'bizDirGroupIds').mockImplementation(async (id) => (id === 'a' ? ['3'] : ['1']))
+    const { wrapper } = await mountTab()
+    wrapper.getComponent({ name: 'BizDirTreePanel' }).vm.$emit('select', [{ id: 'a', path: '行业' }, { id: 'b', path: '宏观' }])
+    await settle()
+    expect(byDir).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('.sg-item').map((i) => i.get('span').text())).toEqual(['twitter1', '测试组1'])
+    const hint = wrapper.get('[data-testid="sg-biz-dir-hint"]').text()
+    expect(hint).toContain('行业、宏观')
+    expect(hint).toContain('所选 2 个目录下 2 个组')
+  })
+
+  it('目录组数不受搜索框影响；成员变更后已选目录重新统计', async () => {
+    const dirs = await import('@/api/sourceDirs')
+    const byDir = vi.spyOn(dirs, 'bizDirGroupIds').mockResolvedValueOnce(['3', '1']).mockResolvedValueOnce(['3'])
+    const { wrapper } = await mountTab()
+    wrapper.getComponent({ name: 'BizDirTreePanel' }).vm.$emit('select', [{ id: '9011494', path: '行业' }])
+    await settle()
+    await wrapper.get('input[data-testid="sg-search"]').setValue('twitter')
+    expect(wrapper.findAll('.sg-item')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="sg-biz-dir-hint"]').text()).toContain('该目录下 2 个组')
+
+    useUiStore().notifySourceListChanged()
+    await settle()
+    expect(byDir).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="sg-biz-dir-hint"]').text()).toContain('该目录下 1 个组')
   })
 
   it('停用组灰显并标「停用」', async () => {
@@ -243,6 +320,28 @@ describe('来源组页签 · 流程配置抽屉', () => {
       flowIds: ['21000005', '21000006'],
       defaultFlowId: '21000006',
     })
+  })
+
+  it('关联流程用流程选择弹窗挑选，回填标签并按新列表保存', async () => {
+    const bindFlows = vi.spyOn(sourceGroupApi, 'bindFlows').mockResolvedValue({ ok: true, message: '操作成功' })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ list: [], total: 0 } as unknown as Awaited<ReturnType<typeof flowCenterApi.paged>>)
+    const { wrapper } = await mountTab()
+    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await settle()
+    await wrapper.find('[data-testid="sg-flow-btn"]').trigger('click')
+    await settle()
+    ;(dom('[data-testid="sg-pick-flows"]') as HTMLButtonElement).click()
+    await settle()
+    const picker = wrapper.findComponent({ name: 'FlowPickerDialog' })
+    expect(picker.props('selected')).toEqual(['21000005', '21000006'])
+    expect(picker.props('hideSiteUsage')).toBe(true)
+    picker.vm.$emit('confirm', [{ ...FLOW_21000006 }, { id: '21000009', name: '新挑的流程' }])
+    await settle()
+    expect(wrapper.findComponent({ name: 'FlowPickerDialog' }).exists()).toBe(false)
+    expect(dom('[data-testid="sg-flow-ids"]')?.textContent).toContain('新挑的流程 · 21000009')
+    ;(dom('[data-testid="sg-save-flows"]') as HTMLButtonElement).click()
+    await settle()
+    expect(bindFlows).toHaveBeenCalledWith(expect.objectContaining({ flowIds: ['21000006', '21000009'], defaultFlowId: '21000006' }))
   })
 
   it('组停用时「保存组流程」禁用并提示', async () => {
@@ -341,7 +440,7 @@ describe('来源组页签 · 成员操作', () => {
     expect(useUiStore().sourceListRevision).toBe(1)
   })
 
-  it('工具条有「添加源」，点开选源弹窗（backend 模式）；停用组不能添加', async () => {
+  it('成员表操作区有「添加源」，点开选源弹窗（backend 模式）；停用组不能添加', async () => {
     const { wrapper } = await mountTab({ groups: [GROUP_3, { ...GROUP_1, state: 'DISABLED' }] })
     await wrapper.findAll('.sg-item')[0]!.trigger('click')
     await settle()
@@ -367,7 +466,7 @@ describe('来源组页签 · 权限', () => {
     await wrapper.findAll('.sg-item')[0]!.trigger('click')
     await settle()
     expect(wrapper.text()).toContain('当前账号仅可查看，修改需要管理员权限')
-    const newBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('新建'))
-    expect(newBtn?.disabled).toBe(true)
+    expect((wrapper.get('[data-testid="sg-new"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.get('[data-testid="sg-add-source"]').element as HTMLButtonElement).disabled).toBe(true)
   })
 })
