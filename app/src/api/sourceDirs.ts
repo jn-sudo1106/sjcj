@@ -13,6 +13,7 @@
 import { request } from './client'
 import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi } from './index'
 import type { Source, SourceCategory, SourceFlowsView } from './types'
+import { drainQueue } from '@/utils/concurrency'
 
 export type DirKind = 'sys' | 'biz'
 
@@ -243,18 +244,12 @@ function startDirGroupTask(categoryId: string): DirGroupTask {
     entry.done = 1
     report()
     const queue = Array.from({ length: entry.total - 1 }, (_, i) => i + 2)
-    await Promise.all(Array.from({ length: Math.min(DIR_GROUP_CONCURRENCY, queue.length) }, async () => {
-      for (let page = queue.shift(); page; page = queue.shift()) {
-        try {
-          collect((await sourceApi.sourcePaged({ page, size: DIR_GROUP_PAGE_SIZE, directory })).list)
-        } catch (error) {
-          queue.length = 0
-          throw error
-        }
-        entry.done++
-        report()
-      }
-    }))
+    // 某页失败时 drainQueue 清空队列，剩下的页不再发
+    await drainQueue(queue, DIR_GROUP_CONCURRENCY, async (page) => {
+      collect((await sourceApi.sourcePaged({ page, size: DIR_GROUP_PAGE_SIZE, directory })).list)
+      entry.done++
+      report()
+    })
     return [...groups]
   })().catch((error: unknown) => {
     // 统计期间缓存可能已被作废并换成新任务，只删自己

@@ -77,6 +77,18 @@ describe('关联流程选择器', () => {
     wrapper.unmount()
   })
 
+  it('刷新按当前已提交的条件重查', async () => {
+    const { wrapper, paged } = await mountPicker({ '11': 3 })
+    const input = document.querySelector('[data-testid="flow-picker-search"]') as HTMLInputElement
+    input.value = '详情'
+    input.dispatchEvent(new Event('input'))
+    ;(document.querySelector('[data-testid="flow-picker-refresh"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(paged).toHaveBeenCalledTimes(2)
+    expect(paged.mock.calls[1][0]).toEqual(paged.mock.calls[0][0])
+    wrapper.unmount()
+  })
+
   // review：翻页失败要看得到错误；只改输入框不点查询，翻页仍按上次条件；空表说明区分「没在用」和「没命中」
   it('翻页失败清掉旧行并显示错误；未提交的搜索词不参与翻页；空表说明区分搜索没命中', async () => {
     const { wrapper, paged } = await mountPicker({ '11': 3 })

@@ -160,6 +160,31 @@ describe('流程中心 · 列表', () => {
     expect(cells[1].attributes('title')).toContain('读取失败')
   })
 
+  it('有 IntersectionObserver 时节点数只读进入视口的行', async () => {
+    let callback!: IntersectionObserverCallback
+    const observed: Element[] = []
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(cb: IntersectionObserverCallback) { callback = cb }
+      observe(el: Element) { observed.push(el) }
+      unobserve() {}
+      disconnect() {}
+    })
+    try {
+      const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{}, {}] as never)
+      const w = await mountCenter()
+      await flushPromises()
+      expect(steps).not.toHaveBeenCalled()
+      callback([{ target: observed[1], isIntersecting: true }] as never, {} as IntersectionObserver)
+      await flushPromises()
+      expect(steps.mock.calls.map((c) => c[0])).toEqual([FLOWS[1].id])
+      const cells = w.findAll('[data-testid="flow-node-cnt"]')
+      expect(cells[0].text()).toBe('…')
+      expect(cells[1].text()).toBe('2')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   // 1030 会议议题 8：节点配置 ID 反查流程，再按流程 ID 查列表；查不到给出说明
   it('按节点配置 ID 筛选：反查到的流程 ID 交给 flowPaged；没有命中时不查列表并提示', async () => {
     const byConfig = vi.spyOn(flowCenterApi, 'flowIdsByConfig').mockResolvedValueOnce([FLOWS[0].id]).mockResolvedValueOnce([])
@@ -198,6 +223,19 @@ describe('流程中心 · 列表', () => {
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ flowIds: ['10086'] }))
     // 点查询会重新反查（流程可能刚发布）
     expect(byConfig).toHaveBeenCalledTimes(2)
+  })
+
+  it('配置 ID 只改输入框不点查询时，翻页仍按上次条件，不反查', async () => {
+    const byConfig = vi.spyOn(flowCenterApi, 'flowIdsByConfig').mockResolvedValue(['10086'])
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-config"]').setValue('1401069')
+    // 测试里 el-pagination 没注册成组件，@current-change 落在元素的原生事件上
+    await w.get('[data-testid="flow-center-pagination"]').trigger('current-change')
+    await flushPromises()
+    expect(byConfig).not.toHaveBeenCalled()
+    expect(paged).toHaveBeenLastCalledWith(expect.not.objectContaining({ flowIds: expect.anything() }))
   })
 
   // 0 个 / 字段缺失都不做成可点：点开必然是空表

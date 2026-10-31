@@ -173,11 +173,13 @@ function searchCond(configFlowIds?: string[]): { keywords?: string; flowIds?: st
  * 只覆盖已发布版本（见 flowCenterApi.flowIdsByConfig）。翻页 / 排序沿用上次反查结果，点查询才重查。
  */
 const filterConfigId = ref('')
+/** 点查询时才生效的配置 ID：只改输入框不查询时，翻页 / 排序仍按上次的条件 */
+let appliedConfigId = ''
 const configEmptyHint = ref('')
 let configLookup: { configId: string; flowIds: string[] } | null = null
 /** undefined = 没有按节点筛选；hint 是筛不出流程时的原因 */
 async function resolveConfigFilter(): Promise<{ flowIds?: string[]; hint: string }> {
-  const configId = filterConfigId.value.trim()
+  const configId = appliedConfigId
   if (!configId) return { hint: '' }
   if (!/^\d+$/.test(configId)) return { flowIds: [], hint: '节点配置 ID 只能是数字' }
   if (configLookup?.configId !== configId) configLookup = { configId, flowIds: await flowCenterApi.flowIdsByConfig(configId) }
@@ -186,6 +188,30 @@ async function resolveConfigFilter(): Promise<{ flowIds?: string[]; hint: string
 }
 
 const { counts: nodeCounts, load: loadNodeCounts } = useFlowNodeCounts()
+/**
+ * 节点数只读视口内（上下各多留 200px）的行：每页最多 200 条，整页读就是 200 次步骤请求。
+ * 行滚进视口才排队，滚出去的还没开始的会被下一次 load 作废；没有 IntersectionObserver（测试环境）时整页读。
+ */
+const visibleFlowIds = new Set<string>()
+const nodeCountObserver = typeof IntersectionObserver === 'undefined' ? undefined : new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    const id = (entry.target as HTMLElement).dataset.flowId!
+    if (entry.isIntersecting) visibleFlowIds.add(id)
+    else visibleFlowIds.delete(id)
+  }
+  loadVisibleNodeCounts()
+}, { rootMargin: '200px 0px' })
+function loadVisibleNodeCounts() {
+  void loadNodeCounts(nodeCountObserver ? flows.value.filter((f) => visibleFlowIds.has(f.id)) : flows.value)
+}
+const vNodeCount = {
+  mounted(el: HTMLElement) { nodeCountObserver?.observe(el) },
+  beforeUnmount(el: HTMLElement) {
+    nodeCountObserver?.unobserve(el)
+    visibleFlowIds.delete(el.dataset.flowId!)
+  },
+}
+onUnmounted(() => nodeCountObserver?.disconnect())
 async function load() {
   const reqId = ++loadSeq
   loading.value = true
@@ -221,7 +247,8 @@ async function load() {
     if (loadSeq !== reqId) return
     flows.value = result.list
     total.value = result.total
-    void loadNodeCounts(result.list)
+    // 行复用（同一流程刚保存过、updatedAt 变了）不会再触发进出视口，列表到了先按当前可见行补读一次
+    loadVisibleNodeCounts()
     // 末页记录被删光时后端会回空列表，此时退回上一页，不要把用户晾在一张空表上
     if (!result.list.length && page.value > 1 && result.total > 0) {
       page.value = Math.min(page.value - 1, Math.max(1, Math.ceil(result.total / size.value)))
@@ -273,11 +300,12 @@ async function loadWithMultiCategory(reqId: number, cond: ReturnType<typeof sear
   if (page.value > maxPage) page.value = maxPage
   const start = (page.value - 1) * size.value
   flows.value = filtered.slice(start, start + size.value)
-  void loadNodeCounts(flows.value)
+  loadVisibleNodeCounts()
 }
 /** 搜索/换页大小都要回到第 1 页，否则会停在一个新结果集里不存在的页码上 */
 function search() {
   page.value = 1
+  appliedConfigId = filterConfigId.value.trim()
   configLookup = null
   void load()
 }
@@ -291,6 +319,7 @@ function resetQuery() {
   filterCategoryIds.value = []
   filterTag.value = ''
   filterConfigId.value = ''
+  appliedConfigId = ''
   query.value = ''
   sortField.value = 'createDt'
   sortOrder.value = 'desc'
@@ -954,7 +983,7 @@ async function confirmApply() {
               <!-- 0 个和字段缺失都不给点：点开必然是空表，白让人跑一趟 -->
               <template v-else>{{ t.sourceCnt == null ? '—' : '0 个' }}</template>
             </td>
-            <td :class="{ 'fc-muted': !nodeCounts[t.id] }" :title="nodeCountTitle(nodeCounts, t.id)" data-testid="flow-node-cnt">{{ nodeCountText(nodeCounts, t.id) }}</td>
+            <td v-node-count :data-flow-id="t.id" :class="{ 'fc-muted': !nodeCounts[t.id] }" :title="nodeCountTitle(nodeCounts, t.id)" data-testid="flow-node-cnt">{{ nodeCountText(nodeCounts, t.id) }}</td>
             <td class="fc-muted">{{ t.createdAt || '—' }}</td>
             <td class="fc-muted">{{ t.updatedAt || '—' }}</td>
             <td>

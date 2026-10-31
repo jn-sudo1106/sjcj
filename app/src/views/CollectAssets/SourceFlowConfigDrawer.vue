@@ -351,7 +351,7 @@ watch(() => props.source, () => void load(), { immediate: true })
 .sfcd-bindings { margin-top: 4px; }
 .sfcd-source-id { margin: 0; font-size: 12px; color: var(--rc-text-2); }
 .sfcd-flow-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.sfcd-recommend { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px dashed var(--rc-line); border-radius: 6px; }
+.sfcd-recommend { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px dashed var(--rc-border); border-radius: 6px; }
 .sfcd-recommend > label { font-size: 12px; color: var(--rc-text-2); }
 .sfcd-recommend-row { display: flex; align-items: center; gap: 8px; }
 .sfcd-recommend-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

@@ -7,6 +7,7 @@
  * 只负责挑选，确定后把勾选结果回给抽屉，保存仍在抽屉里做。
  */
 import { computed, ref, watch } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { flowCenterApi, type FlowRecord, type Step } from '@/api'
 import { parseIdList } from '@/utils/flow/flowSearch'
 import { nodeCountText, nodeCountTitle, useFlowNodeCounts } from '@/utils/flow/flowNodeCounts'
@@ -133,6 +134,8 @@ void load()
       </el-checkbox>
       <span class="fp-spacer" />
       <span class="fp-muted">已选 {{ picked.size }} 个</span>
+      <!-- 按当前已提交的条件、当前页重查（AGENTS.md 选择弹窗约定：刷新放操作区右侧，紧凑图标按钮） -->
+      <button class="fp-refresh" type="button" title="刷新" aria-label="刷新" data-testid="flow-picker-refresh" :disabled="loading" @click="load"><el-icon><Refresh /></el-icon></button>
     </div>
     <div class="fp-table-wrap" v-loading="loading">
       <table class="fp-table">
@@ -196,6 +199,9 @@ void load()
 .fp-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .fp-input { height: 28px; width: 260px; max-width: 100%; padding: 0 8px; border: 1px solid var(--rc-line); border-radius: 6px; font-size: 12px; }
 .fp-spacer { flex: 1; }
+.fp-refresh { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; }
+.fp-refresh:hover:not(:disabled) { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.fp-refresh:disabled { opacity: .5; cursor: not-allowed; }
 .fp-muted { color: var(--rc-text-2); font-size: 12px; }
 .fp-table-wrap { max-height: calc(100vh - 320px); overflow: auto; }
 .fp-table { width: 100%; border-collapse: collapse; font-size: 12px; }

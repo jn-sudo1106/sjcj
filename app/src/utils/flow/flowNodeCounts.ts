@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { flowCenterApi, type FlowRecord } from '@/api'
+import { drainQueue } from '@/utils/concurrency'
 
 /**
  * 流程节点数（1030 会议议题 2）。流程列表接口不返回步骤，只能逐条读步骤计数：
@@ -27,16 +28,14 @@ export function useFlowNodeCounts() {
     }
     const queue = [...todo]
     pending = queue
-    await Promise.all(Array.from({ length: Math.min(NODE_COUNT_CONCURRENCY, queue.length) }, async () => {
-      for (let f = queue.shift(); f; f = queue.shift()) {
-        try {
-          counts[f.id] = (await flowCenterApi.steps(f.id, { withConfigDetails: false })).length
-        } catch {
-          counts[f.id] = null
-          delete keys[f.id]
-        }
+    await drainQueue(queue, NODE_COUNT_CONCURRENCY, async (f) => {
+      try {
+        counts[f.id] = (await flowCenterApi.steps(f.id, { withConfigDetails: false })).length
+      } catch {
+        counts[f.id] = null
+        delete keys[f.id]
       }
-    }))
+    })
   }
 
   return { counts, load }

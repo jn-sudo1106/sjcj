@@ -316,4 +316,21 @@ describe('flow 流程 HTTP 契约', () => {
     await expect(flowCenterApi.save({ id: '1001', name: '被删的流程', definition: { main: [], branches: [], configs: {} } }))
       .rejects.toThrow('已被删除')
   })
+  // 1030 会议议题 8：按节点配置反查流程。分页信封经 request 归一成 { list }；当初读 .data 在 186 上恒为空数组
+  it('GET item/next/nextConfigPaged?configId：返回步骤行里的 flowId，去重、丢掉空值', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: 0,
+      count: 4,
+      data: [{ flowId: 819535, configId: 1401069 }, { flowId: 819535, configId: 1401069 }, { flowId: 819543 }, { flowId: null }],
+    }))
+    const { flowCenterApi } = await import('./index')
+    expect(await flowCenterApi.flowIdsByConfig('1401069')).toEqual(['819535', '819543'])
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url, 'http://local.test')
+    expect(parsed.pathname).toBe('/api/v1/item/next/nextConfigPaged')
+    expect(init.method ?? 'GET').toBe('GET')
+    expect(parsed.searchParams.get('configId')).toBe('1401069')
+    expect(parsed.searchParams.get('svg')).toBeNull()
+  })
 })
