@@ -20,23 +20,31 @@ function callList<T>(path: string, params?: Record<string, unknown>) {
 }
 
 export interface SyncPage<T> { list: T[]; total: number }
-export interface SyncCustomer { id: Id; customerName: string; secretKey?: string | null }
+export interface SyncCustomer {
+  id: Id; customerName: string; secretKey?: string | null
+  createTime?: string; updateTime?: string
+}
+/** 客户密钥的新增/重置出参：secretKey 只在这一次响应里明文出现，列表与详情一律打码 */
+export interface SyncCustomerSecret { id: Id; customerName: string; secretKey?: string | null }
 export interface SyncClient {
   id: Id; customerId: Id; clientName: string; timingSync: string; fileSync: string
-  realtimeSync: string; topics?: string; extendConfig?: string; createTime?: string; updateTime?: string
+  extendConfig?: string; createTime?: string; updateTime?: string
 }
 export interface SyncDatabase {
   id: Id; customerId?: Id; name: string; sourceCode: string; targetSourceCode?: string
   dbSchema: string; databaseType: number; type: number; appId?: Id; remark?: string
   createTime?: string; updateTime?: string
 }
-/** 客户新增入参：id 由现场分配（sync_customer.id 非自增），必填 */
-export interface SyncCustomerForm { id: Id | ''; customerName: string }
-/** 客户端新增/编辑入参；密钥由服务端生成，编辑不回填、只在响应里出现一次 */
+/** 客户新增入参：id 由现场分配（sync_customer.id 非自增），必填；secretKey 留空＝不改动现值 */
+export interface SyncCustomerForm { id: Id | ''; customerName: string; secretKey?: string }
+/**
+ * 客户端新增/编辑入参；密钥由服务端生成，编辑不回填、只在响应里出现一次。
+ * 页面上的「数据同步」开关仍是后端的 timingSync（列名沿用 timing_sync，只改了文案）；
+ * 实时同步开关与消息主题已去掉，两侧都没有消费方。
+ */
 export interface SyncClientForm {
   id?: Id | null; customerId: Id; clientName: string
-  timingSync: 'on' | 'off'; fileSync: 'on' | 'off'; realtimeSync: 'on' | 'off'
-  topics?: string; extendConfig?: string
+  timingSync: 'on' | 'off'; fileSync: 'on' | 'off'; extendConfig?: string
 }
 /** 客户数据源入参；appId 的语义是归属客户端id，不是应用id */
 export interface SyncDatabaseForm {
@@ -63,6 +71,8 @@ export interface SyncTask {
 export interface SyncTaskConfig extends Record<string, unknown> {
   id?: Id; taskName: string; syncType: string; cron: string; startSql: string; fromSql: string
   conditionSql: string; insertSql: string; updateSql: string
+  /** 前后置 SQL 与源/目标数据源编码：/task-config/detail 一直返回、EditTaskDetailReq 一直收，此前只是页面没渲染 */
+  beforeSql: string; afterSql: string; sourceCode: string; targetSourceCode: string
 }
 export interface SyncLog {
   id: Id; taskId: Id; taskName: string; type?: string; status?: number; totalNumber?: number
@@ -105,6 +115,9 @@ export const syncApi = {
   customerPage: (params: Record<string, unknown>) => call<SyncPage<SyncCustomer>>('/customer/page', 'POST', params),
   saveCustomer: (form: SyncCustomerForm) => call<unknown>('/customer/info', 'POST', form),
   removeCustomers: (ids: Id[]) => call<unknown>('/customer/delete', 'DELETE', undefined, { ids: ids.join(',') }),
+  // 客户密钥：列表只下发掩码，明文按行取（一次一个，服务端留审计日志）；重置换一份新的，明文只在本次响应出现
+  customerSecret: (id: Id) => call<SyncCustomerSecret>('/customer/secret', 'GET', { id }),
+  resetCustomerSecret: (id: Id) => call<SyncCustomerSecret>('/customer/secret/reset', 'PUT', undefined, { id }),
   clients: (params: Record<string, unknown>) => call<SyncPage<SyncClient>>('/customer/client/page', 'POST', params),
   saveClient: (form: SyncClientForm) => call<SyncClientSecret>('/customer/client/info', 'POST', form),
   resetClientSecret: (id: Id) => call<SyncClientSecret>('/customer/client/secret/reset', 'PUT', undefined, { id }),
@@ -114,7 +127,7 @@ export const syncApi = {
   removeDatabases: (ids: Id[]) => call<unknown>('/customer/database/delete', 'DELETE', undefined, { ids: ids.join(',') }),
   customerDatabases: (customerId: Id, type: 0 | 1) =>
     callList<SyncDatabase>('/customer/database/list', { customerId, type }),
-  setClientSwitch: (id: Id, column: 'timingSync' | 'fileSync' | 'realtimeSync', enabled: boolean) =>
+  setClientSwitch: (id: Id, column: 'timingSync' | 'fileSync', enabled: boolean) =>
     call<unknown>('/customer/client/switch', 'PUT', { id, column, switchValue: enabled ? 'on' : 'off' }),
   tables: (groupId: Id, name = '') => callList<SyncTable>('/database/entry-list', { groupId, name }),
   tableColumns: (tableId: Id) => callList<SyncTableColumn>('/database/table-info', { tableId }),

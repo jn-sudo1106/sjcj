@@ -58,6 +58,7 @@ describe('旧数据同步契约', () => {
       .mockResolvedValueOnce(response(null))
       .mockResolvedValueOnce(response({ id: 1201, clientName: 'sense-data', secretKey: 'KEY-ONCE' }))
       .mockResolvedValueOnce(response(null))
+      .mockResolvedValueOnce(response({ id: 1201, customerName: '万微', secretKey: 'KEY-ONCE' }))
     vi.stubGlobal('fetch', fetchSpy)
     await syncApi.removeCustomers([3, 4])
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/sync-platform/customer/delete?ids=3%2C4')
@@ -66,10 +67,15 @@ describe('旧数据同步契约', () => {
     expect(fetchSpy.mock.calls[0]?.[1].body).toBeUndefined()
     await syncApi.removeDatabases([9])
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/sync-platform/customer/database/delete?ids=9')
-    expect(await syncApi.saveClient({ customerId: 5, clientName: 'sense-data', timingSync: 'on', fileSync: 'off', realtimeSync: 'off' }))
+    expect(await syncApi.saveClient({ customerId: 5, clientName: 'sense-data', timingSync: 'on', fileSync: 'off' }))
       .toMatchObject({ id: 1201, secretKey: 'KEY-ONCE' })
     await syncApi.saveDatabase({ customerId: 5, appId: 1201, name: 'ES 目标', sourceCode: 'es_target', databaseType: 5, dbSchema: '', type: 0 })
     expect(JSON.parse(fetchSpy.mock.calls[3]?.[1].body)).toMatchObject({ appId: 1201, sourceCode: 'es_target', databaseType: 5 })
+    // 客户密钥与客户端密钥同一口径：id 只进 query，明文只在这次响应里出现
+    expect(await syncApi.resetCustomerSecret(5)).toMatchObject({ id: 1201, secretKey: 'KEY-ONCE' })
+    expect(fetchSpy.mock.calls[4]?.[0]).toBe('/api/sync-platform/customer/secret/reset?id=5')
+    expect(fetchSpy.mock.calls[4]?.[1].method).toBe('PUT')
+    expect(fetchSpy.mock.calls[4]?.[1].body).toBeUndefined()
   })
 
   it('源表字段映射保留旧字段与 SQL 模板口径', () => {

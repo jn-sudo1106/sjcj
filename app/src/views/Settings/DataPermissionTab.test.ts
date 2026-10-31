@@ -24,9 +24,21 @@ vi.mock('@/api/sourceDirs', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return { ...actual, searchDirs: vi.fn(async () => []) }
 })
-vi.mock('@/api/sysUser', async (importOriginal) => {
+// 内嵌的范围编辑器挂载就会拉目录树/源，选中组也会读源范围；本页测试只关心规则 CRUD，先桩成空数据
+// （具体用例里再用 vi.spyOn 覆盖 getGroupSourceScope / saveGroupSourceScope）
+vi.mock('@/api/groupSourceScope', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
-  return { ...actual, pagedSysUser: vi.fn(async () => ({ total: 0, list: [] })) }
+  return {
+    ...actual,
+    listScopeCategories: vi.fn(async () => []),
+    listCategorySources: vi.fn(async () => ({ total: 0, list: [] })),
+    getGroupSourceScope: vi.fn(async () => ({ accept: { dirIds: [], sourceIds: [] }, reject: { dirIds: [], sourceIds: [] } })),
+    saveGroupSourceScope: vi.fn(async () => ({
+      groupId: 0,
+      accept: { dirIds: 0, expandedCategoryIds: 0, sourceIds: 0 },
+      reject: { dirIds: 0, expandedCategoryIds: 0, sourceIds: 0 },
+    })),
+  }
 })
 
 import DataPermissionTab from './DataPermissionTab.vue'
@@ -35,8 +47,8 @@ import StructCondEditor from './groupRes/StructCondEditor.vue'
 import CondValueInput from './groupRes/CondValueInput.vue'
 import * as groupResApi from '@/api/groupRes'
 import * as groupSourceScope from '@/api/groupSourceScope'
-import { pagedSysUser } from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
+import { clearGroupNames, setGroupName } from '@/utils/groupNames'
 import type { GroupResMeta, GroupResRule } from '@/api/groupRes'
 
 // el-table 在 jsdom 里要量宽
@@ -89,13 +101,19 @@ async function clickSave() {
   await flushPromises()
 }
 
+// 上一个用例的组件实例不会自己销毁，它迟到的 await 链会串进下一个用例的 spy（保存权限踩过这个坑）
+let alive: { unmount(): void } | null = null
+
 async function mountAs(roles: string[], groupId = '100001') {
   const pinia = createPinia()
   setActivePinia(pinia)
   useAuthStore().roles = roles
   vi.spyOn(groupResApi, 'groupResMeta').mockResolvedValue(META)
   vi.spyOn(groupResApi, 'pagedGroupRes').mockResolvedValue({ total: ROWS.length, list: ROWS.map((r) => ({ ...r })) })
+  vi.spyOn(groupResApi, 'listGroupIds').mockResolvedValue([90001, 90002, 100001, 100002, 90099])
+  alive?.unmount()
   const wrapper = mount(DataPermissionTab, { global: { plugins: [pinia, ElementPlus] } })
+  alive = wrapper
   await flushPromises()
   // 明细与左侧联动：选中组靠点左侧用户组行（触发 onSelectGroup → 按该组重查明细），不再有独立组 ID 输入框
   if (groupId) {
@@ -107,7 +125,10 @@ async function mountAs(roles: string[], groupId = '100001') {
 
 describe('数据权限设置页面', () => {
   beforeEach(() => {
+    alive?.unmount()
+    alive = null
     document.body.innerHTML = ''
+    clearGroupNames()
     vi.restoreAllMocks()
   })
 
@@ -493,6 +514,7 @@ describe('数据权限设置页面', () => {
   })
   describe('左右分栏交互：左侧用户组分页与右侧源信息树', () => {
     it('左侧渲染用户组表格，展示名称与编码，有分页范围文本', async () => {
+      setGroupName(90001, '超级管理员')
       const wrapper = await mountAs(['admin'], '')
       const tableText = wrapper.find('.dp-left-table-wrap').text()
       expect(tableText).toContain('超级管理员')
@@ -502,6 +524,8 @@ describe('数据权限设置页面', () => {
     })
 
     it('左侧搜索框按名称或编码过滤用户组', async () => {
+      setGroupName(90001, '超级管理员')
+      setGroupName(100001, '分析师')
       const wrapper = await mountAs(['admin'], '')
       const searchInput = wrapper.find('.dp-group-search-input input')
       expect(searchInput.exists()).toBe(true)
@@ -512,22 +536,13 @@ describe('数据权限设置页面', () => {
       expect(tableText).not.toContain('超级管理员')
     })
 
-    it('左侧用户组来自用户表：组名取该组第一个非空 user_name，distinct GROUP_ID 进列表（仅排除 null）', async () => {
-      const user = (userId: number, userName: string, groupId: number | null) => ({
-        userId, userLoginName: `u${userId}`, userName, userStatus: 0, groupId,
-        roleIds: null, roleNames: null, creator: null, createTime: null, modifier: null, updateTime: null, protectedAccount: false,
-      })
-      // 90004 两人 → 取第一个非空「张三」；1 是小 ID 也要进；null 不进
-      vi.mocked(pagedSysUser).mockResolvedValueOnce({ total: 5, list: [
-        user(1, '张三', 90004), user(2, '李四', 90004), user(3, '王五', 90006), user(4, '小名', 1), user(5, '无组', null),
-      ] })
+    it('左侧用户组调用 listGroupIds 接口：获取组 ID 列表并展示', async () => {
+      vi.spyOn(groupResApi, 'listGroupIds').mockResolvedValueOnce([90001, 90004, 90006])
       const wrapper = await mountAs(['admin'], '')
       const tableText = wrapper.find('.dp-left-table-wrap').text()
-      expect(tableText).toContain('张三')     // 90004 组名 = 第一个成员 user_name
-      expect(tableText).toContain('王五')
-      expect(tableText).toContain('小名')     // 小 ID 1 也显示（不再被 >90000 过滤）
-      expect(tableText).not.toContain('李四') // 同组第二个不覆盖
-      expect(tableText).not.toContain('无组') // null 组不进
+      expect(tableText).toContain('90001')
+      expect(tableText).toContain('90004')
+      expect(tableText).toContain('90006')
     })
 
     it('选中用户组会读取其源数据权限（getGroupSourceScope）', async () => {
@@ -538,11 +553,15 @@ describe('数据权限设置页面', () => {
       expect(getScope).toHaveBeenCalledWith(90001)
     })
 
-    it('保存权限：确认摘要后走 saveGroupSourceScope 落库', async () => {
+    it('保存权限：确认摘要后走 saveGroupSourceScope 落库，成功提示带上后端展开出来的目录数', async () => {
       vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
         accept: { dirIds: ['9009001'], sourceIds: ['501'] }, reject: { dirIds: [], sourceIds: [] },
       })
-      const saveScope = vi.spyOn(groupSourceScope, 'saveGroupSourceScope').mockResolvedValue(undefined)
+      const saveScope = vi.spyOn(groupSourceScope, 'saveGroupSourceScope').mockResolvedValue({
+        groupId: 90001,
+        accept: { dirIds: 1, expandedCategoryIds: 7, sourceIds: 1 },
+        reject: { dirIds: 0, expandedCategoryIds: 0, sourceIds: 0 },
+      })
       vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
       const success = vi.spyOn(ElMessage, 'success')
 
@@ -554,7 +573,79 @@ describe('数据权限设置页面', () => {
       expect(saveScope).toHaveBeenCalledWith(90001, expect.objectContaining({
         accept: { dirIds: ['9009001'], sourceIds: ['501'] },
       }))
+      // 一次请求即可（不再逐槽 preview/add/modify），并把后端展开结果回给用户
+      expect(saveScope).toHaveBeenCalledTimes(1)
       expect(success).toHaveBeenCalledWith(expect.stringContaining('保存成功'))
+      expect(success).toHaveBeenCalledWith(expect.stringContaining('展开 7 个目录'))
+      // 不 unmount 的话这个实例会一直活着，后续用例的 spyOn 会收到它的迟到调用
+      wrapper.unmount()
+    })
+
+    it('保存权限：可见与排除有冲突时二次确认标出冲突', async () => {
+      vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
+        accept: { dirIds: ['9009001'], sourceIds: ['501', '502'] },
+        reject: { dirIds: ['9009001'], sourceIds: ['502'] },
+      })
+      const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+      vi.spyOn(groupSourceScope, 'saveGroupSourceScope').mockResolvedValue({
+        groupId: 90001,
+        accept: { dirIds: 1, expandedCategoryIds: 1, sourceIds: 2 },
+        reject: { dirIds: 1, expandedCategoryIds: 1, sourceIds: 1 },
+      })
+      const wrapper = await mountAs(['admin'], '')
+      await flushPromises()
+      await wrapper.find('[data-testid="group-res-save"]').trigger('click')
+      await flushPromises()
+      expect(confirmSpy).toHaveBeenCalledWith(
+        expect.stringContaining('目录冲突：目录 [9009001]'),
+        '确认保存数据权限',
+        expect.objectContaining({ type: 'warning' }),
+      )
+    })
+
+    it('保存权限：可见范围为空时二次确认弹窗展示高危警告', async () => {
+      vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
+        accept: { dirIds: [], sourceIds: [] },
+        reject: { dirIds: ['9009001'], sourceIds: [] },
+      })
+      const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+      vi.spyOn(groupSourceScope, 'saveGroupSourceScope').mockResolvedValue({
+        groupId: 90001,
+        accept: { dirIds: 0, expandedCategoryIds: 0, sourceIds: 0 },
+        reject: { dirIds: 1, expandedCategoryIds: 1, sourceIds: 0 },
+      })
+      const wrapper = await mountAs(['admin'], '')
+      await flushPromises()
+      await wrapper.find('[data-testid="group-res-save"]').trigger('click')
+      await flushPromises()
+      expect(confirmSpy).toHaveBeenCalledWith(
+        expect.stringContaining('⚠️ 警告：当前未配置任何可见范围'),
+        '确认保存数据权限',
+        expect.objectContaining({ type: 'warning' }),
+      )
+    })
+
+    it('未保存更改切换用户组时：触发离开确认弹窗', async () => {
+      vi.spyOn(groupSourceScope, 'getGroupSourceScope').mockResolvedValue({
+        accept: { dirIds: [], sourceIds: [] },
+        reject: { dirIds: [], sourceIds: [] },
+      })
+      const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+      const wrapper = await mountAs(['admin'], '')
+      await flushPromises()
+      const editor = wrapper.findComponent({ name: 'SourceScopeEditor' })
+      editor.vm.$emit('update:grant', { dirIds: ['9009001'], sourceIds: [] })
+      await flushPromises()
+
+      const rows = wrapper.findAllComponents({ name: 'ElTable' })[0]!
+      rows.vm.$emit('row-click', { groupId: 100001 })
+      await flushPromises()
+
+      expect(confirmSpy).toHaveBeenCalledWith(
+        expect.stringContaining('当前用户组有未保存的权限配置修改'),
+        '未保存提醒',
+        expect.objectContaining({ type: 'warning' }),
+      )
     })
 
     it('取消确认摘要：不落库', async () => {
@@ -565,9 +656,11 @@ describe('数据权限设置页面', () => {
       vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
 
       const wrapper = await mountAs(['admin'], '')
+      // 用增量而不是绝对次数：上一个用例的实例可能有迟到的调用混进同一个 mock
+      const callsBefore = saveScope.mock.calls.length
       await wrapper.find('[data-testid="group-res-save"]').trigger('click')
       await flushPromises()
-      expect(saveScope).not.toHaveBeenCalled()
+      expect(saveScope.mock.calls.length).toBe(callsBefore)
     })
   })
 })
