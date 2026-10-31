@@ -19,7 +19,7 @@ const revealed = ref<Record<string, string>>({})
 const clients = ref<SyncClient[]>([])
 const databases = ref<SyncDatabase[]>([])
 type TabKey = 'customers' | 'clients' | 'databases'
-const active = ref<TabKey>('clients')
+const active = ref<TabKey>('customers')
 const total = ref(0)
 const pageNo = ref(1)
 const pageSize = ref(10)
@@ -345,8 +345,9 @@ function removeDatabase(row: SyncDatabase) {
     <el-tabs v-model="active"><el-tab-pane label="客户配置" name="customers" /><el-tab-pane label="客户端配置" name="clients" /><el-tab-pane label="数据源配置" name="databases" /></el-tabs>
     <div v-if="active === 'customers'" class="sync-table-wrap">
       <el-table v-loading="loading" :data="customerRows">
-        <el-table-column prop="id" label="客户 ID" width="120" /><el-table-column prop="customerName" label="客户名称" min-width="200" />
-        <el-table-column label="密钥 (sk)" min-width="250">
+        <el-table-column prop="id" label="客户 ID" width="110" />
+        <el-table-column prop="customerName" label="客户名称" width="220" show-overflow-tooltip />
+        <el-table-column label="密钥 (sk)" min-width="260">
           <template #default="{ row }">
             <div class="conn-secret">
               <span v-if="!row.secretKey" class="conn-secret-none">未设置</span>
@@ -501,7 +502,8 @@ function removeDatabase(row: SyncDatabase) {
 /* 客户密钥单元格：默认显示服务端下发的掩码，展开明文后换成可读配色；图标沿用 rc-op-icon 的热区尺寸 */
 .conn-secret { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .conn-secret-none { color: #94a3b8; font-size: 12px; }
-.conn-secret-value { max-width: 158px; padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #f1f5f9; border-radius: 4px; color: #475569; font-family: ui-monospace, Consolas, monospace; font-size: 12px; letter-spacing: .2px; }
+.conn-secret-value { max-width: 110px; padding: 2px 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #f1f5f9; border-radius: 4px; color: #475569; font-family: ui-monospace, Consolas, monospace; font-size: 12px; letter-spacing: .2px; }
+.conn-secret .rc-op-icon { flex: none; width: 20px; height: 20px; }
 .conn-secret-value.is-plain { background: #ecfeff; color: #0f172a; }
 .conn-secret-warn { flex: none; padding: 1px 5px; border: 1px solid #fde68a; border-radius: 3px; background: #fffbeb; color: #b45309; font-size: 11px; cursor: default; }
 </style>

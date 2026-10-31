@@ -10,8 +10,8 @@ export const TEST_API_PROXY_TARGET = 'http://124.223.180.186:9999'
 /** dev：sync-platform 与本机业务后端同机。 */
 export const DEFAULT_SYNC_PLATFORM_PROXY_TARGET = 'http://127.0.0.1:9999'
 
-/** test：公网 Nginx 在 9999 端口转发 /api/sync-platform；9011 端口从本机无法取得 HTTP 响应。 */
-export const TEST_SYNC_PLATFORM_PROXY_TARGET = 'http://115.227.21.133:9999'
+/** test：连 186 测试环境的 Nginx 9999 端口转发 /api/sync-platform。 */
+export const TEST_SYNC_PLATFORM_PROXY_TARGET = 'http://124.223.180.186:9999'
 
 /** 写保护 / 顶栏「生产环境」徽标按主机名判定；dev 与 test 默认目标都不在这台，不触发守卫。 */
 export const PRODUCTION_BACKEND_HOSTS = ['115.227.21.133']
@@ -26,10 +26,11 @@ export const CREATE_ALLOWED_BACKEND_HOSTS = ['118.25.96.217', '124.223.180.186',
 
 /**
  * 数据同步服务（sync-platform）所在环境的后端主机。同步服务按它自己连的库列源表，
- * 前端连的后端不是这台时（如 2806 连 217），数据中心的表和同步服务对不上（2026-10-09 核对：217 的 88 张表有 34 张在 133 同步服务里没有）。
+ * 前端连的后端不是这台时（如 2806 连 217），数据中心的表和同步服务对不上。
+ * 2026-10-31：npm run test 下同步服务切至 186 环境，同时保留 133 兼容。
  */
-export const SYNC_PLATFORM_BACKEND_HOST = '115.227.21.133'
-
+export const SYNC_PLATFORM_BACKEND_HOST = '124.223.180.186'
+export const SYNC_PLATFORM_BACKEND_HOSTS = ['124.223.180.186', '115.227.21.133']
 /**
  * 旧 ai-chat-view（大模型问答 POC）的模板配置服务前缀（1013 迁入 SQL 模板配置）。
  * 它**不在 9999 业务后端上**，是独立进程，真实路径形如 /api/poc/sql-temp/page，

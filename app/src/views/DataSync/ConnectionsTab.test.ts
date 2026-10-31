@@ -108,6 +108,7 @@ describe('环境配置页的写入表单', () => {
     setActivePinia(createPinia())
     useAuthStore().info = { name: 'admin', id: 1, roles: [], groups: [], avatar: '', introduction: '', group: 1 } as never
     vi.spyOn(syncApi, 'customers').mockResolvedValue([{ id: 5, customerName: '测试客户' }])
+    vi.spyOn(syncApi, 'customerPage').mockResolvedValue({ list: [{ id: 5, customerName: '测试客户' }], total: 1 })
     vi.spyOn(syncApi, 'clients').mockResolvedValue({
       list: [{ id: 1200, customerId: 5, clientName: '客户端A', timingSync: 'on', fileSync: 'off' } as SyncClient], total: 1,
     })
@@ -117,6 +118,9 @@ describe('环境配置页的写入表单', () => {
     wrapper = mount(ConnectionsTab, { attachTo: document.body, global: { plugins: [ElementPlus] } })
     await flushPromises()
 
+    // 默认落在客户配置，看客户端要先切页签
+    ;(wrapper!.vm as unknown as { active: string }).active = 'clients'
+    await flushPromises()
     const tips = () => wrapper!.findAll('.el-table__row')[0]
       .findAllComponents({ name: 'ElTooltip' })
       .filter((item: VueWrapper) => item.find('.rc-op-icon').exists())
@@ -231,8 +235,15 @@ describe('环境配置页的客户端开关与客户密钥', () => {
     return flushPromises()
   }
 
+  it('进页面默认落在客户配置页签', async () => {
+    await mountTab()
+    expect(wrapper!.find('.el-tabs__item.is-active').text()).toBe('客户配置')
+    expect(wrapper!.find('.el-table__header').text()).toContain('客户名称')
+  })
+
   it('客户端表格只剩「数据同步 / 文件同步」两个开关，实时同步与消息主题已去掉', async () => {
     await mountTab()
+    await switchTo('clients')
     const header = wrapper!.find('.el-table__header').text()
     expect(header).toContain('数据同步')
     expect(header).toContain('文件同步')

@@ -10,6 +10,7 @@
     "build": "npm --prefix app run build",
     "preview": "npm --prefix app run preview",
     "test:unit": "npm --prefix app run test:unit",
+    "test:unit:watch": "npm --prefix app run test:unit:watch",
     "lint": "npm --prefix app run lint",
     "lint:fix": "npm --prefix app run lint:fix",
     "format": "npm --prefix app run format",
