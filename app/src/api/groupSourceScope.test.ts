@@ -1,104 +1,106 @@
-// 组级源数据权限落库编排的单测：钉住「按规则写 sys_group_res」的形状，防止回退。
-// 只测编排（get/save 的规则映射、展开、diff、试算拦截），不碰后端鉴权核心。
+// 组级源数据权限读写适配层的单测：钉住「前端只传点选结果、展开与落库交给后端」的契约形状。
+// 后端口径见 SysGroupResService.saveSourceScope（SOURCE/STRUCT 整目录 + SOURCE/ID 单源，一个事务）。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// expandCategoryIds 来自 api/index 大桶，这里桩掉：选中目录 → 追加一个假后代，验证“展开后代”被调用
-vi.mock('./index', () => ({
-  expandCategoryIds: vi.fn(async (ids: string[]) => ids.flatMap((i) => [i, `${i}_child`])),
-}))
+vi.mock('./client', () => ({ request: vi.fn() }))
 
-import * as groupRes from './groupRes'
-import { expandCategoryIds } from './index'
-import { getGroupSourceScope, saveGroupSourceScope, type GroupSourceScope } from './groupSourceScope'
+import { request } from './client'
+import {
+  getGroupSourceScope,
+  listCategorySources,
+  listScopeCategories,
+  minimizeDirIds,
+  saveGroupSourceScope,
+  type GroupSourceScope,
+} from './groupSourceScope'
 
-function rule(over: Partial<groupRes.GroupResRule>): groupRes.GroupResRule {
-  return {
-    id: 1, groupId: 90001, action: 'ACCEPT', resType: 'SOURCE', condType: 'ID',
-    resCond: '', condJson: null, remarks: null, isDelete: 0, ...over,
-  }
-}
-const okPreview = { compiledCond: '', condType: '', count: 0, sample: [], error: null }
+const called = () => vi.mocked(request).mock.calls
 const scope = (over: Partial<GroupSourceScope> = {}): GroupSourceScope => ({
   accept: { dirIds: [], sourceIds: [] }, reject: { dirIds: [], sourceIds: [] }, ...over,
 })
 
 beforeEach(() => {
-  vi.restoreAllMocks()
-  vi.mocked(expandCategoryIds).mockImplementation(async (ids: string[]) => ids.flatMap((i) => [i, `${i}_child`]))
+  vi.mocked(request).mockReset()
 })
 
 describe('getGroupSourceScope', () => {
-  it('归并 SOURCE 规则到 accept/reject × dirIds/sourceIds，STRUCT 优先用 remarks.roots 还原最小目录', async () => {
-    vi.spyOn(groupRes, 'pagedGroupRes').mockResolvedValue({ total: 3, list: [
-      rule({ id: 1, condType: 'STRUCT', condJson: '[{"field":"CATEGORY_ID","op":"IN","values":["d1","d1_child"]}]', remarks: '{"roots":["d1"]}' }),
-      rule({ id: 2, condType: 'ID', resCond: '501,502' }),
-      rule({ id: 3, action: 'REJECT', condType: 'ID', resCond: '900' }),
-    ] })
-    const s = await getGroupSourceScope(90001)
-    expect(s.accept.dirIds).toEqual(['d1'])
-    expect(s.accept.sourceIds).toEqual(['501', '502'])
-    expect(s.reject.sourceIds).toEqual(['900'])
+  it('按 groupId 读 source-scope，并把后端可能缺失的 accept/reject 归一成两个 Grant', async () => {
+    vi.mocked(request).mockResolvedValue({
+      accept: { dirIds: ['9009250', '9009250'], sourceIds: ['430001300', ''] },
+    })
+    const s = await getGroupSourceScope(100001)
+    expect(called()[0]).toEqual(['group-res/source-scope', { groupId: 100001 }, { method: 'GET' }])
+    expect(s.accept).toEqual({ dirIds: ['9009250'], sourceIds: ['430001300'] })
+    expect(s.reject).toEqual({ dirIds: [], sourceIds: [] })
   })
 
-  it('STRUCT 无 remarks.roots（存量/手工规则）时回退 condJson values', async () => {
-    vi.spyOn(groupRes, 'pagedGroupRes').mockResolvedValue({ total: 1, list: [
-      rule({ id: 1, condType: 'STRUCT', condJson: '[{"field":"CATEGORY_ID","op":"IN","values":["d1","d1a"]}]', remarks: null }),
-    ] })
-    const s = await getGroupSourceScope(90001)
-    expect(s.accept.dirIds).toEqual(['d1', 'd1a'])
-  })
-
-  it('忽略非 SOURCE 与已软删规则', async () => {
-    vi.spyOn(groupRes, 'pagedGroupRes').mockResolvedValue({ total: 2, list: [
-      rule({ id: 1, resType: 'CONFIG', condType: 'ID', resCond: '7' }),
-      rule({ id: 2, condType: 'ID', resCond: '8', isDelete: 1 }),
-    ] })
-    const s = await getGroupSourceScope(90001)
-    expect(s.accept.sourceIds).toEqual([])
+  it('后端整体为空时回两个空 Grant，不让调用方判空', async () => {
+    vi.mocked(request).mockResolvedValue(null)
+    const s = await getGroupSourceScope(100001)
+    expect(s).toEqual({ accept: { dirIds: [], sourceIds: [] }, reject: { dirIds: [], sourceIds: [] } })
   })
 })
 
 describe('saveGroupSourceScope', () => {
-  it('无存量：整目录 add STRUCT（展开后代 + remarks roots），单源 add ID；保存前逐条 preview', async () => {
-    vi.spyOn(groupRes, 'pagedGroupRes').mockResolvedValue({ total: 0, list: [] })
-    const add = vi.spyOn(groupRes, 'addGroupRes').mockResolvedValue({ ok: true, message: '', data: 9 })
-    const preview = vi.spyOn(groupRes, 'previewGroupRes').mockResolvedValue(okPreview)
+  it('一次 modify-source-scope：前端只传点选结果，不再自己展开目录或逐条 add/modify', async () => {
+    vi.mocked(request).mockResolvedValue({ groupId: 100001 })
+    await saveGroupSourceScope(100001, scope({
+      accept: { dirIds: ['d1'], sourceIds: ['501', '501', '502'] },
+      reject: { dirIds: [], sourceIds: ['900'] },
+    }))
+    expect(called()).toHaveLength(1)
+    expect(called()[0]).toEqual([
+      'group-res/modify-source-scope',
+      { groupId: 100001, accept: { dirIds: ['d1'], sourceIds: ['501', '502'] }, reject: { dirIds: [], sourceIds: ['900'] } },
+      { method: 'POST' },
+    ])
+  })
+})
 
-    await saveGroupSourceScope(90001, scope({ accept: { dirIds: ['d1'], sourceIds: ['501'] } }))
+describe('listScopeCategories', () => {
+  it('把后端扁平节点归一成字符串 ID，parentId 为 0/空都当根', async () => {
+    vi.mocked(request).mockResolvedValue([
+      { id: 9009005, name: '财经', parentId: 0, level: 1, directCount: 3, subtreeCount: 10, hasChildren: true },
+      { id: 9009253, name: '公司', parentId: 9009005, level: 2, directCount: 7, subtreeCount: 7 },
+    ])
+    const rows = await listScopeCategories()
+    expect(called()[0]).toEqual(['category/scopeTree', undefined, { method: 'GET' }])
+    expect(rows[0]).toMatchObject({ id: '9009005', parentId: null, directCount: 3, subtreeCount: 10, hasChildren: true })
+    expect(rows[1]).toMatchObject({ id: '9009253', parentId: '9009005', hasChildren: false })
+  })
+})
 
-    expect(expandCategoryIds).toHaveBeenCalledWith(['d1'])
-    const structCall = add.mock.calls.find((c) => c[0].condType === 'STRUCT')
-    expect(structCall?.[0]).toMatchObject({ resType: 'SOURCE', action: 'ACCEPT', condType: 'STRUCT', resCond: '', remarks: '{"roots":["d1"]}' })
-    expect(JSON.parse(String(structCall?.[0].condJson))[0]).toMatchObject({ field: 'CATEGORY_ID', op: 'IN', values: ['d1', 'd1_child'] })
-    const idCall = add.mock.calls.find((c) => c[0].condType === 'ID')
-    expect(idCall?.[0]).toMatchObject({ resType: 'SOURCE', action: 'ACCEPT', condType: 'ID', resCond: '501' })
-    expect(preview).toHaveBeenCalledTimes(2)
+describe('listCategorySources', () => {
+  it('按目录取源：透传 allSub/keyword/limit，并把 sourceId/sourceName 归一成 {id,name}', async () => {
+    vi.mocked(request).mockResolvedValue({
+      total: 2,
+      list: [{ sourceId: 430001300, sourceName: '中国网财经' }, { sourceId: 430001301, sourceName: '新浪财经' }],
+    })
+    const res = await listCategorySources('9009253', { allSub: true, keyword: ' 财经 ', limit: 500 })
+    expect(called()[0]).toEqual([
+      'source/categorySources',
+      { categoryId: '9009253', allSub: true, keyword: '财经', limit: 500 },
+      { method: 'GET' },
+    ])
+    expect(res.list).toEqual([{ id: '430001300', name: '中国网财经' }, { id: '430001301', name: '新浪财经' }])
+    expect(res.total).toBe(2)
   })
 
-  it('有存量：改第一条、多余同槽规则删除；本槽清空则全删', async () => {
-    vi.spyOn(groupRes, 'pagedGroupRes').mockResolvedValue({ total: 3, list: [
-      rule({ id: 10, condType: 'ID', resCond: '1' }),
-      rule({ id: 11, condType: 'ID', resCond: '2' }),          // 同槽多余
-      rule({ id: 12, action: 'REJECT', condType: 'ID', resCond: '3' }), // 本次 REJECT 空 → 删
-    ] })
-    const modify = vi.spyOn(groupRes, 'modifyGroupRes').mockResolvedValue(rule({ id: 10 }))
-    const del = vi.spyOn(groupRes, 'deleteGroupRes').mockResolvedValue({ ok: true, message: '', data: 0 })
-    vi.spyOn(groupRes, 'previewGroupRes').mockResolvedValue(okPreview)
+  it('空 keyword 不发参数；后端没返回 list 时回空数组而不是抛错', async () => {
+    vi.mocked(request).mockResolvedValue({ total: 0 })
+    const res = await listCategorySources('9009253', { keyword: '   ' })
+    expect(called()[0]?.[1]).toMatchObject({ keyword: undefined, allSub: false, limit: 500 })
+    expect(res).toEqual({ total: 0, list: [] })
+  })
+})
 
-    await saveGroupSourceScope(90001, scope({ accept: { dirIds: [], sourceIds: ['7'] } }))
-
-    expect(modify).toHaveBeenCalledWith(expect.objectContaining({ id: 10, condType: 'ID', resCond: '7' }))
-    const deleted = del.mock.calls.flatMap((c) => c[0])
-    expect(deleted).toContain(11)
-    expect(deleted).toContain(12)
+describe('minimizeDirIds', () => {
+  it('祖先也在集合里时丢掉子目录，只留用户点选的层级', () => {
+    const parentOf: Record<string, string | null> = { d1: null, d1a: 'd1', d1a1: 'd1a', d2: null }
+    expect(minimizeDirIds(['d1', 'd1a', 'd1a1', 'd2'], parentOf)).toEqual(['d1', 'd2'])
   })
 
-  it('preview 报错：抛出且不写库', async () => {
-    vi.spyOn(groupRes, 'pagedGroupRes').mockResolvedValue({ total: 0, list: [] })
-    vi.spyOn(groupRes, 'previewGroupRes').mockResolvedValue({ ...okPreview, error: 'ids 只能是逗号分隔的数字' })
-    const add = vi.spyOn(groupRes, 'addGroupRes')
-    await expect(saveGroupSourceScope(90001, scope({ accept: { dirIds: [], sourceIds: ['x'] } })))
-      .rejects.toThrow('源条件试算失败')
-    expect(add).not.toHaveBeenCalled()
+  it('父链不在树里（目录权限过滤掉了）时保留自身，不会把已选目录吞掉', () => {
+    expect(minimizeDirIds(['d1a1'], { d1a1: 'd1a' })).toEqual(['d1a1'])
   })
 })

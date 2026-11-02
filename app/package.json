@@ -11,6 +11,7 @@
     "deploy": "node scripts/deploy-static.cjs",
     "deploy:head": "node scripts/deploy-from-head.cjs",
     "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,vue}\""

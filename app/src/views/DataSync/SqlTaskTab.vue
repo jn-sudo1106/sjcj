@@ -212,12 +212,13 @@ void loadClients()
       <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" class="stt-ctl stt-w-cust" data-testid="stt-customer">
         <el-option v-for="item in customers" :key="item.id" :value="String(item.id)" :label="`${item.customerName} · #${item.id}`" />
       </el-select>
-      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="stt-ctl stt-w-client" data-testid="stt-client">
+      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="stt-ctl stt-w-client" data-testid="stt-client" @clear="pageNo = 1; load()">
         <el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="`${item.clientName} · #${item.id}`" />
       </el-select>
-      <input v-model="filter.sourceCode" class="stt-input stt-w-code" placeholder="数据源编码（模糊）" data-testid="stt-source" @keyup.enter="pageNo = 1; load()" />
-      <input v-if="isTable" v-model="filter.taskId" class="stt-input stt-w-task" placeholder="任务 ID" data-testid="stt-taskid" @keyup.enter="pageNo = 1; load()" />
-      <el-select v-model="filter.status" clearable placeholder="全部状态" class="stt-ctl stt-w-status" data-testid="stt-status">
+      <!-- type=search 让 Chromium 内核在框内给出清除叉；这页沿用原型里的原生控件，不换 el-input -->
+      <input v-model="filter.sourceCode" type="search" class="stt-input stt-w-code" placeholder="数据源编码（模糊）" data-testid="stt-source" @keyup.enter="pageNo = 1; load()" @search="pageNo = 1; load()" />
+      <input v-if="isTable" v-model="filter.taskId" type="search" class="stt-input stt-w-task" placeholder="任务 ID" data-testid="stt-taskid" @keyup.enter="pageNo = 1; load()" @search="pageNo = 1; load()" />
+      <el-select v-model="filter.status" clearable placeholder="全部状态" class="stt-ctl stt-w-status" data-testid="stt-status" @clear="pageNo = 1; load()">
         <el-option v-for="o in STATUS_OPTIONS" :key="o.value" :value="o.value" :label="o.label" />
       </el-select>
       <button class="stt-btn primary" type="button" data-testid="stt-query" @click="pageNo = 1; load()">查询</button>

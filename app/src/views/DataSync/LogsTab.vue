@@ -15,6 +15,8 @@ const stats = ref<SyncStatistic[]>([])
 const total = ref(0)
 const pageNo = ref(1)
 const pageSize = ref(10)
+// 客户端候选与名称映射一次取全的量（日志分页只 10 条，候选反而需要更大的范围）
+const CLIENT_MAP_SIZE = 500
 const active = ref<'logs' | 'stats'>('logs')
 const loading = ref(false)
 const loadError = ref('')
@@ -48,8 +50,12 @@ async function load() {
 
 async function loadClients() {
   clients.value = []; filter.clientId = ''
-  if (!filter.customerId) return
-  try { clients.value = (await syncApi.clients({ customerId: filter.customerId, pageNo: 1, pageSize: 100 })).list ?? [] }
+  // 不选客户 = 全部客户，客户端候选也要跟着给全量，否则清掉客户筛选后这个下拉直接空了
+  try {
+    clients.value = (await syncApi.clients(filter.customerId
+      ? { customerId: filter.customerId, pageNo: 1, pageSize: CLIENT_MAP_SIZE }
+      : { pageNo: 1, pageSize: CLIENT_MAP_SIZE })).list ?? []
+  }
   catch (error) { ElMessage.error(String(error)) }
 }
 async function searchTasks(name: string) {
@@ -89,11 +95,11 @@ function statusLabel(row: SyncLog) {
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon class="sync-alert" />
     <div class="sync-filter">
       <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" class="sync-input"><el-option v-for="item in customers" :key="item.id" :value="String(item.id)" :label="item.customerName" /></el-select>
-      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="sync-input"><el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="item.clientName" /></el-select>
-      <el-input v-model="filter.schemaName" placeholder="DB 名称" class="sync-input" @keyup.enter="search" />
-      <el-select v-model="filter.taskIdSet" multiple filterable remote :remote-method="searchTasks" placeholder="任务名称" class="sync-input wide"><el-option v-for="item in taskChoices" :key="item.id" :value="item.id" :label="item.taskName" /></el-select>
-      <el-select v-model="filter.status" placeholder="任务状态" class="sync-input"><el-option value="" label="全部状态" /><el-option value="2" label="运行中" /><el-option value="3" label="运行完成" /><el-option value="5" label="运行异常" /></el-select>
-      <el-select v-model="filter.type" placeholder="任务类型" class="sync-input"><el-option value="" label="全部类型" /><el-option value="1" label="定时同步" /><el-option value="2" label="手动同步" /></el-select>
+      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="sync-input" @clear="search"><el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="item.clientName" /></el-select>
+      <el-input v-model="filter.schemaName" clearable placeholder="DB 名称" class="sync-input" @keyup.enter="search" @clear="search" />
+      <el-select v-model="filter.taskIdSet" multiple filterable remote clearable :remote-method="searchTasks" placeholder="任务名称" class="sync-input wide" @clear="search"><el-option v-for="item in taskChoices" :key="item.id" :value="item.id" :label="item.taskName" /></el-select>
+      <el-select v-model="filter.status" clearable placeholder="全部状态" class="sync-input" @clear="search"><el-option value="2" label="运行中" /><el-option value="3" label="运行完成" /><el-option value="5" label="运行异常" /></el-select>
+      <el-select v-model="filter.type" clearable placeholder="全部类型" class="sync-input" @clear="search"><el-option value="1" label="定时同步" /><el-option value="2" label="手动同步" /></el-select>
       <el-date-picker v-model="filter.startTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="开始时间" class="sync-time" />
       <el-date-picker v-model="filter.endTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="结束时间" class="sync-time" />
       <div class="sync-filter-actions">
