@@ -290,6 +290,7 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 是比端点表本身更容易被忽略的隐患：万一以后哪天真的接了、却没顺手核对这里，
   // 反而是"看起来已经放行"，实际请求发出去才会被 ProductionWriteBlockedError 拦下。
   'flow/saveFlow',
+  'flow/assignTemplate',
   'flow/deleteFlow',
   // ⚠️ 唯一一条写**存量生产表**的：changeFlowBatch 改的是 cs_source.FLOW_ID，不是 cs_flow，
   // 且单次上限 5000 条。**这个字段有消费方**——执行器按 FLOW_ID 反查配置后执行（2026-09-03

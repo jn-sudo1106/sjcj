@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
+  pickFlowTemplate: vi.fn(async () => 'template-1'),
+  createFlowFromTemplate: vi.fn(async (_id: string, name: string) => { const { flowCenterApi } = await import('@/api'); return flowCenterApi.save({ name, definition: { main: ['start', 'end'], branches: [], configs: {} }, fromTemplateId: 'template-1' }) }),
+}))
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'

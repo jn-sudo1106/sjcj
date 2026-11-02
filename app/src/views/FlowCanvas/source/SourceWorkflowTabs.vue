@@ -7,7 +7,7 @@ const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
-import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
 import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 import FlowVersionBar from '../canvas/FlowVersionBar.vue'
@@ -137,7 +137,7 @@ async function createBlank() {
   addMenuOpen.value = false
   if (adding.value) return
   try {
-    const result = await ElMessageBox.prompt('创建后会新增一个流程标签，可直接在画布和右侧配置区继续编辑。', '新建空白流程', {
+    const result = await ElMessageBox.prompt('创建后会新增一个流程标签，可直接在画布和右侧配置区继续编辑。', '新建流程', {
       inputValue: `新流程-${new Date().toISOString().slice(0, 10)}`,
       inputPlaceholder: '流程名称',
       inputValidator: value => value.trim() ? true : '请输入流程名称',
@@ -145,10 +145,11 @@ async function createBlank() {
       cancelButtonText: '取消',
     })
     adding.value = true
+    const templateId = await pickFlowTemplate()
     const created = await workflowBindingApi.createForSource({
+      templateId,
       sourceId: props.sourceId,
       name: result.value.trim(),
-      definition: makeBlankTemplateDefinition(),
       primary: !rows.value.some(row => !row.inherited || row.own),
     })
     ElMessage.success(`流程「${created.workflowName}」已创建`)
@@ -542,7 +543,7 @@ onMounted(async () => {
         @click.stop="addMenuOpen = !addMenuOpen"
       >{{ adding ? '…' : '＋' }}</button>
       <div v-if="addMenuOpen" class="swt-add-menu" data-testid="workflow-add-menu">
-        <button type="button" data-testid="workflow-create-blank" @click="createBlank">新建空白流程</button>
+        <button type="button" data-testid="workflow-create-blank" @click="createBlank">新建流程</button>
         <button type="button" data-testid="workflow-reuse-existing" @click="chooseReuse">关联已有流程</button>
         <button type="button" data-testid="workflow-copy-existing" @click="chooseExisting">复制流程或模板</button>
       </div>

@@ -244,18 +244,18 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
   it('新建空白流程：先建流程、再关联；关联失败时说明流程已建出（带 ID），不留孤儿', async () => {
     const definition = { main: [], branches: [], configs: {}, branchGroups: [] }
     fetchMock.mockResolvedValue(ok(ALONE))
-    const { workflowBindingApi, flowCenterApi } = await load()
-    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ id: '103', name: '新流程', definition, updatedAt: '' })
+    const { workflowBindingApi } = await load()
+    const create = vi.spyOn(await import('@/utils/flow/createFromTemplate'), 'createFlowFromTemplate').mockResolvedValue({ id: '103', name: '新流程', definition, updatedAt: '' })
     fetchMock.mockReset()
     fetchMock.mockResolvedValueOnce(ok(ALONE)).mockResolvedValueOnce(ok(null))
       .mockResolvedValueOnce(ok({ ...ALONE, flowIds: ['100', '101', '103'], bindings: [...ALONE.bindings, { id: '24', sourceId: '430024667', sourceGroupId: null, flowId: '103', isDefault: 0, state: 'ACTIVE', revision: 1 }] }))
-    const created = await workflowBindingApi.createForSource({ sourceId: '430024667', name: '新流程', definition })
-    expect(save).toHaveBeenCalledWith({ name: '新流程', definition })
+    const created = await workflowBindingApi.createForSource({ sourceId: '430024667', name: '新流程', templateId: 'template-1' })
+    expect(create).toHaveBeenCalledWith('template-1', '新流程')
     expect(created).toMatchObject({ workflowId: '103', primary: false })
 
     fetchMock.mockReset()
     fetchMock.mockResolvedValueOnce(ok(ALONE)).mockResolvedValueOnce(fail('目标流程不存在或已删除：flowId=103'))
-    await expect(workflowBindingApi.createForSource({ sourceId: '430024667', name: '新流程', definition })).rejects.toThrow(/已新建流程 #103，但关联到本源失败：.*目标流程不存在或已删除/)
+    await expect(workflowBindingApi.createForSource({ sourceId: '430024667', name: '新流程', templateId: 'template-1' })).rejects.toThrow(/已新建流程 #103，但关联到本源失败：.*目标流程不存在或已删除/)
   })
 
   it('expected 快照取默认行：默认流程即使已停用也要回传 expectedDefaultFlowId（1008-02 验收）', async () => {

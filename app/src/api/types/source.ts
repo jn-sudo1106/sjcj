@@ -288,6 +288,8 @@ export interface FlowNodeBinding {
 
 /** 流程结构：稳定节点 ID、完整节点默认配置、顺序与连线。 */
 export interface FlowDefinition {
+  /** 只定义节点骨架的模板，不包含可执行配置。 */
+  structureOnly?: boolean
   main: string[]
   branches: BranchSeed[]
   configs: Record<string, NodeConfig>
@@ -303,7 +305,18 @@ export interface FlowDefinition {
  * 假的 1 顶上；本地 mock 模板仍带版本，两边共用同一个类型，所以设成可选。
  * 展示处一律 `version ? 'v' + version : ''`，不要输出 `vundefined`。
  */
+export interface FlowTemplateGroup {
+  /** 显示顺序；未归类无排序号，固定最后。 */
+  seq?: number
+  id: string
+  name: string
+  flowCount: number
+  structure: string
+  disabled: boolean
+}
+
 export interface FlowRecord {
+  seq?: number
   id: string
   name: string
   version?: number
@@ -315,8 +328,7 @@ export interface FlowRecord {
    *  模板与普通流程在同一个列表里，用 `flowPaged.templateFlag` 服务端过滤区分（0903 H24 / H7 答复）。
    *  2026-09-04 实测：传 1 得 0 条、传 0 得 738 条，服务端过滤确实生效。 */
   isTemplate?: boolean
-  /** 由哪个模板复制而来（旧 `refFlowId`）。`copyFlow` / `copyTemplateSteps` 会自动回指，
-   *  用于反查"谁用了这个模板"（此前只能看 sourceCnt，看不出来源）。 */
+  /** 所属流程模板（旧 refFlowId）。新建/复制时记录，也可手动归集；具体节点可独立调整。 */
   fromTemplateId?: string
 
   // ---- 0929 F6：启停状态（后端 cs_flow.STATE / IS_DELETE）----
@@ -349,6 +361,10 @@ export interface FlowRecord {
 }
 
 export interface FlowSaveInput {
+  /** 非负整数显示顺序，省略时保留旧值；新增默认0。 */
+  seq?: number
+  /** 所属流程模板；只在显式传入时更新。 */
+  fromTemplateId?: string
   id?: string
   name: string
   definition: FlowDefinition

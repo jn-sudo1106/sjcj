@@ -334,3 +334,66 @@ describe('flow 流程 HTTP 契约', () => {
     expect(parsed.searchParams.get('svg')).toBeNull()
   })
 })
+
+describe('流程模板归属 HTTP 契约', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks() })
+  async function api(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchMock); vi.stubEnv('VITE_API_MODE', 'http'); vi.stubEnv('VITE_API_BASE', ''); vi.resetModules()
+    return (await import('./index')).flowCenterApi
+  }
+  it('读取模板分组，未归类归一为独立分组且保留全局数量', async () => {
+    const fetchMock=vi.fn().mockResolvedValue(jsonResponse({success:true,code:'0',data:[
+      {templateId:12,name:'列表详情',flowCount:205,structure:'列表采集 → 详情采集',disabled:false},
+      {templateId:null,name:'未归类',flowCount:17,structure:'尚未选择流程模板',disabled:false},
+    ]}))
+    const flow=await api(fetchMock)
+    const groups=await flow.templateGroups()
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/v1/flow/flowTemplateGroups')
+    expect(groups[0]).toMatchObject({id:'12',flowCount:205,structure:'列表采集 → 详情采集'})
+    expect(groups[1]).toMatchObject({id:'unassigned',flowCount:17})
+  })
+  it('SEQ在保存、详情、分组和服务端排序之间保持同一口径', async () => {
+    const definition={main:['start','end'],branches:[],configs:{}}
+    const fetchMock=vi.fn().mockResolvedValueOnce(jsonResponse({success:true,code:'0',msg:'保存成功，id:2'}))
+      .mockResolvedValueOnce(jsonResponse({success:true,code:'0',data:{flowId:2,flowName:'template',seq:0,templateFlag:1,flowConf:JSON.stringify(definition)}}))
+      .mockResolvedValueOnce(jsonResponse({success:true,code:'0',data:[{templateId:2,name:'template',seq:0,flowCount:0,structure:'采集',disabled:false}]}))
+      .mockResolvedValueOnce(jsonResponse({code:0,count:0,data:[]}))
+    const flow=await api(fetchMock)
+    const saved=await flow.save({name:'template',definition,isTemplate:true,seq:0})
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body)).seq).toBe(0)
+    expect(saved.seq).toBe(0)
+    expect((await flow.templateGroups())[0]?.seq).toBe(0)
+    await flow.paged({field:'seq',order:'asc'})
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1].body))).toMatchObject({field:'seq',order:'asc'})
+  })
+  it.each([-1,1.5,2147483648])('无效SEQ %s 在发请求前拦截', async (seq) => {
+    const fetchMock=vi.fn()
+    const flow=await api(fetchMock)
+    await expect(flow.save({name:'template',seq,definition:{main:[],branches:[],configs:{}}})).rejects.toThrow('SEQ必须')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it('筛选模板ID和待归集条件进入分页请求体', async () => {
+    const fetchMock=vi.fn().mockResolvedValue(jsonResponse({ code: 0, count: 0, data: [] }))
+    const flow=await api(fetchMock)
+    await flow.paged({ templateId: '123', onlyTemplate: false })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({ refFlowId: '123', templateFlag: 0 })
+    await flow.paged({ unassignedTemplate: true })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toMatchObject({ unassignedTemplate: true })
+  })
+  it('批量归集仅发送JSON归属信息', async () => {
+    const fetchMock=vi.fn().mockResolvedValue(jsonResponse({ success: true, msg: '归集成功' }))
+    const flow=await api(fetchMock)
+    expect(await flow.assignTemplate(['2','3'],'1')).toMatchObject({ ok: true })
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/v1/flow/assignTemplate')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({ flowIds: ['2','3'], templateFlowId: '1' })
+  })
+  it('结构模板标识往返保留，新建普通流程持久化模板归属', async () => {
+    const definition={ structureOnly: true, main: ['start','node-1','end'], branches: [], configs: { 'node-1': { title: '采集', configType: '90' } } }
+    const fetchMock=vi.fn().mockResolvedValueOnce(jsonResponse({ success:true,code:'0',msg:'保存成功，id:2' })).mockResolvedValueOnce(jsonResponse({ success:true,code:'0',data:{ flowId:2,flowName:'new',refFlowId:1,flowConf:JSON.stringify(definition) } }))
+    const flow=await api(fetchMock)
+    const saved=await flow.save({ name:'new',definition: definition as never,fromTemplateId:'1' })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body)).refFlowId).toBe('1')
+    expect(saved.definition.structureOnly).toBe(true)
+    expect(saved.fromTemplateId).toBe('1')
+  })
+})

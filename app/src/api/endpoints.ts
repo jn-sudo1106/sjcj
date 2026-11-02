@@ -601,6 +601,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/node-prompts/selection', desc: '读取节点配置选用的提示词', live: true },
   { path: 'flow/node-prompts/selection/save', desc: '保存节点配置选用的提示词', live: true, danger: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
+  { path: 'flow/flowTemplateGroups', desc: '模板分组、节点顺序与全局流程数量，包含未归类', live: true },
+  { path: 'flow/assignTemplate', desc: '批量归集流程到模板，仅修改归属', live: true, danger: true },
   { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）；update 分支不校验 state=D，前端保存后回查详情兜底（0929 F8）', danger: true, live: true },
   { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D；有源挂载即拒绝，前端先换绑/解绑再删，0929 F1）', danger: true, live: true },
   { path: 'flow/changeFlowEnable', desc: '批量启停流程（GET ids 逗号串 + enable 0=启用/1=禁用，置 cs_flow.IS_DELETE，排除 state=D）——0929 F6 重新注册，流程中心行内启停', live: true },

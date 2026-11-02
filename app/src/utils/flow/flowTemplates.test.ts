@@ -5,6 +5,8 @@ import {
   composeTemplateFlow,
   extractTemplateNodeBindings,
   makePresetFlowTemplates,
+  makeStructureTemplate,
+  instantiateStructureTemplate,
   sanitizeTemplateDefinition,
 } from './flowTemplates'
 import { NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
@@ -80,5 +82,23 @@ describe('流程模板与源绑定组合', () => {
     }
 
     expect(compatibleTemplateBindings(bindings, upgraded.definition)).toEqual({ [fileId]: bindings[fileId] })
+  })
+})
+
+describe('流程结构模板', () => {
+  it('模板只带节点类型和顺序，实例之间不共享业务配置或身份', () => {
+    const template=makeStructureTemplate(['web-list','file-download'])
+    expect(template.structureOnly).toBe(true)
+    expect(template.configs['node-1']?.configType).toBe('90')
+    expect(template.configs['node-2']?.configType).toBe('95')
+    expect(template.configs['node-2']?.collectCfg?.collectorKind).toBe('file_download')
+    const first=instantiateStructureTemplate(template)
+    const second=instantiateStructureTemplate(template)
+    first.configs['node-1']!.collectCfg!.url='https://one.example'
+    expect(second.configs['node-1']!.collectCfg!.url).toBe('')
+    expect(template.configs['node-1']!.collectCfg!.url).toBe('')
+    expect(first.structureOnly).toBeUndefined()
+    expect(first.configs['node-1']!.configId).toBeUndefined()
+    expect(first.configs['node-1']!.collectCfg!.outputTable).toBe('')
   })
 })

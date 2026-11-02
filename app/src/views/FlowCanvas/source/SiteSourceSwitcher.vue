@@ -14,7 +14,7 @@ import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { isUnpublishedFlowError } from '@/utils/flow/flowPublish'
 import { toExternalHref } from '@/utils/url/externalUrl'
-import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -883,6 +883,14 @@ async function submitAdd() {
     if (!copiedId) return
     addedId = copiedId
   } else {
+    let templateId = ''
+    if (isProductionCreateEnabled()) {
+      try { templateId = await pickFlowTemplate() }
+      catch (error) {
+        if (error !== 'cancel' && error !== 'close') ElMessage.error((error as Error).message)
+        return
+      }
+    }
     const res = await siteApi.sourceAdd(
       props.siteId,
       { sourceId, ...target, configId: '', mainTable: '', owner: site.value?.owner || 'admin', state: 'C' },
@@ -897,8 +905,8 @@ async function submitAdd() {
     // 只在真实新建通道里建：mock 源是前端假 ID，拿去建真实流程必然关联失败。流程失败不回滚源，提示去「＋」补建。
     if (isProductionCreateEnabled()) {
       try {
-        await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, definition: makeBlankTemplateDefinition(), primary: true })
-        ElMessage.success(`已添加源「${target.name}」，并新建了带首节点的空白流程`)
+        await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, templateId, primary: true })
+        ElMessage.success(`已添加源「${target.name}」，并按模板新建了流程`)
       } catch (error) {
         ElMessage.warning(`已添加源「${target.name}」，但新建空白流程失败：${(error as Error)?.message ?? String(error)}。可在流程标签栏点「＋」补建`)
       }
