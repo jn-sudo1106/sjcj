@@ -26,6 +26,7 @@ import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import FlowSourcesManagerDialog, { type ManageTab } from './FlowSourcesManagerDialog.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
+import FlowReadonlyPreview from '@/views/FlowCanvas/shared/FlowReadonlyPreview.vue'
 
 const ui = useUiStore()
 
@@ -555,6 +556,12 @@ async function createFromTemplate() {
  * （即旧平台的行为），由用户显式决定。
  */
 const copyingFlowId = ref('')
+const copyPreviewFlow = ref<FlowRecord | null>(null)
+function continueCopy() {
+  const flow = copyPreviewFlow.value
+  copyPreviewFlow.value = null
+  if (flow) void copyFlow(flow)
+}
 async function copyFlow(t: FlowRecord) {
   if (copyingFlowId.value) return
   const mode = await confirmCopyFlow({
@@ -1008,7 +1015,7 @@ async function confirmApply() {
                     title="复制流程"
                     aria-label="复制流程"
                     :disabled="!!copyingFlowId"
-                    @click.stop="copyFlow(t)"
+                    @click.stop="copyPreviewFlow = t"
                   >
                     <CopyDocument />
                   </button>
@@ -1166,6 +1173,12 @@ async function confirmApply() {
     </el-dialog>
 
 
+    <el-dialog :model-value="!!copyPreviewFlow" title="复制流程：查看流程及配置" width="min(1100px, calc(100vw - 32px))" append-to-body @close="copyPreviewFlow = null">
+      <p class="fc-copy-hint">复制优先使用已发布版本；没有发布版时使用草稿。下一步可选择复制独立配置或复用原配置。</p>
+      <FlowReadonlyPreview v-if="copyPreviewFlow" :flow="copyPreviewFlow" class="fc-copy-preview" />
+      <template #footer><el-button @click="copyPreviewFlow = null">取消</el-button><el-button type="primary" data-testid="flow-copy-continue" @click="continueCopy">下一步</el-button></template>
+    </el-dialog>
+
     <FlowSourcesManagerDialog
       v-model:tab="manageTab"
       v-model:picked="applySourceIds"
@@ -1182,6 +1195,8 @@ async function confirmApply() {
 </template>
 
 <style scoped>
+.fc-copy-preview { height:min(560px, calc(100vh - 260px)); }
+.fc-copy-hint { color:var(--rc-text-2); font-size:12px; }
 .fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
 .fc-form { display: flex; flex-direction: column; gap: 10px; }

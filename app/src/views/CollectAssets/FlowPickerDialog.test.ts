@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import FlowPickerDialog from './FlowPickerDialog.vue'
-import { configApi, entryApi, flowCenterApi, type FlowRecord } from '@/api'
+import { configApi, entryApi, flowCenterApi, flowVersionApi, type FlowRecord } from '@/api'
 
 const FLOWS = [
   { id: '11', name: '列表流程', sourceCnt: 5 },
@@ -14,6 +14,7 @@ const FLOWS = [
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 
 async function mountPicker(siteFlowCounts: Record<string, number> = {}, selected: string[] = []) {
+  vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, publishId: null, draftId: null, versions: [] } as never)
   const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: FLOWS.length, list: FLOWS })
   vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{}, {}] as never)
   // 预览：没有根行时按流程配置合成起点；画布按表 ID 查表名
@@ -60,6 +61,7 @@ describe('关联流程选择器', () => {
 
   // 10-31：预览改成左右两栏，右侧是与流程工作区同样式的只读画布
   it('打开时默认预览第一条：只读画布画出节点，右侧只读配置区看配置 / 输出表 / URL；点另一行切换预览', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, publishId: null, draftId: null, versions: [] } as never)
     const STEPS = [
       { stepId: '41623', sourceId: '', name: '列表页', isRoot: true, nodeType: '网页抓取', configId: '1401069', outputTable: '6200029', url: 'http://example.com/list', dependsOn: [] },
       { stepId: '41628', sourceId: '', name: '详情页', nodeType: '网页抓取', configId: '1401070', outputTable: '6200030', dependsOn: ['41623'] },
@@ -74,7 +76,7 @@ describe('关联流程选择器', () => {
       attachTo: document.body,
     })
     await flushPromises()
-    expect(flowCenterApi.steps).toHaveBeenCalledWith('11')
+    expect(flowCenterApi.steps).toHaveBeenCalledWith('11', {})
     expect(rows()[0].classList).toContain('previewing')
     const nodes = [...document.querySelectorAll('[data-testid="flow-readonly-node"]')] as HTMLElement[]
     expect(nodes.map((n) => n.textContent)).toEqual([expect.stringContaining('列表页'), expect.stringContaining('详情页')])
@@ -97,7 +99,7 @@ describe('关联流程选择器', () => {
 
     rows()[1].click()
     await flushPromises()
-    expect(flowCenterApi.steps).toHaveBeenLastCalledWith('12')
+    expect(flowCenterApi.steps).toHaveBeenLastCalledWith('12', {})
     expect(rows()[1].classList).toContain('previewing')
     // 点行只是预览，不会勾选
     expect(document.body.textContent).toContain('已选 0 个')

@@ -30,6 +30,7 @@ import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
 import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
 import BizDirTreePanel, { type PickedBizDir } from '@/views/CollectAssets/BizDirTreePanel.vue'
+import SourceGroupFlowDiffDrawer from './SourceGroupFlowDiffDrawer.vue'
 import { bizDirGroupIds, resetBizDirGroupCache } from '@/api/sourceDirs'
 
 const auth = useAuthStore()
@@ -44,6 +45,13 @@ const groups = ref<SourceGroup[]>([])
 const loading = ref(false)
 const selectedGroupId = ref<string>('')
 const selectedGroup = computed(() => groups.value.find((g) => g.sourceGroupId === selectedGroupId.value) ?? null)
+const diffGroup = ref<SourceGroup | null>(null)
+const diffDefaultFlowLabel = ref('')
+function openFlowDiff() {
+  if (!selectedGroup.value) return
+  diffGroup.value = { ...selectedGroup.value }
+  diffDefaultFlowLabel.value = flowLabel(selectedGroup.value.defaultFlowId)
+}
 /** 左侧列表按组名 / 编码 / ID 筛（前端过滤，list 接口一次返回全部组） */
 const groupKeyword = ref('')
 const visibleGroups = computed(() => {
@@ -663,6 +671,7 @@ watch(() => route.query.group, (id) => {
               <span v-else class="sg-faint">未配置 / 暂不可用</span>
             </span>
             <div class="sg-actions">
+              <button class="sg-btn" type="button" data-testid="sg-flow-diff-btn" @click="openFlowDiff">查看流程差异</button>
               <button class="sg-btn" type="button" data-testid="sg-flow-btn" @click="openFlowDrawer">流程配置</button>
               <button class="sg-btn" type="button" data-testid="sg-detail-btn" @click="openDetailDrawer">组资料</button>
               <button class="sg-icon-btn" type="button" title="刷新" aria-label="刷新" :disabled="loading" @click="reloadGroups"><el-icon><Refresh /></el-icon></button>
@@ -865,6 +874,7 @@ watch(() => route.query.group, (id) => {
     />
 
     <FlowDetailDrawer v-if="detailFlow" :flow="detailFlow" @close="detailFlow = null" />
+    <SourceGroupFlowDiffDrawer v-if="diffGroup" :group="diffGroup" :default-flow-label="diffDefaultFlowLabel" @close="diffGroup = null" />
     <FlowPickerDialog v-if="flowPickerOpen" :selected="flowIds" :site-flow-counts="{}" hide-site-usage @close="flowPickerOpen = false" @confirm="onFlowsPicked" />
   </div>
 </template>

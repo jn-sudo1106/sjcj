@@ -3433,6 +3433,7 @@ function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
     ownFlowIds: hasOwn ? (Array.isArray(view.ownFlowIds) ? view.ownFlowIds : []).map(String) : (sourceGroupId ? [] : flowIds),
     ownDefaultFlowId: hasOwn ? text(view.ownDefaultFlowId) : (sourceGroupId ? undefined : defaultFlowId),
     ownBindings: hasOwn ? bindRows(view.ownBindings) : (sourceGroupId ? [] : bindings),
+    ownDataAvailable: hasOwn || !sourceGroupId,
   }
 }
 

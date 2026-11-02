@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import CodeConfigButton from '../result/CodeConfigButton.vue'
+import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
+import FlowReadonlyPreview from '../shared/FlowReadonlyPreview.vue'
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, nextTick, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
@@ -589,6 +591,19 @@ const addDlg = reactive({
   bindFlowIds: [] as string[],
   mainFlowId: '',
 })
+const bindPickerOpen = ref(false)
+const templatePreview = ref<FlowRecord | null>(null)
+function onBindFlowsPicked(flows: FlowRecord[]) {
+  bindFlowOptions.value = [...bindFlowOptions.value.filter(f => !flows.some(selected => selected.id === f.id)), ...flows]
+  addDlg.bindFlowIds = flows.map(f => f.id)
+  if (!addDlg.bindFlowIds.includes(addDlg.mainFlowId)) addDlg.mainFlowId = addDlg.bindFlowIds[0] || ''
+  bindPickerOpen.value = false
+}
+async function previewTemplateFlow() {
+  if (!templateDefault.flowId) return
+  try { templatePreview.value = await flowCenterApi.detail(templateDefault.flowId) }
+  catch (error) { ElMessage.error(`流程读取失败：${error instanceof Error ? error.message : String(error)}`) }
+}
 const bindFlowOptions = ref<FlowRecord[]>([])
 const bindFlowLoading = ref(false)
 async function loadBindFlowOptions() {
@@ -1654,7 +1669,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             <label><input v-model="addDlg.flowMode" type="radio" value="bind" data-testid="source-flow-bind" /> 关联已有流程</label>
             <label><input v-model="addDlg.flowMode" type="radio" value="none" data-testid="source-flow-none" /> 不关联流程</label>
           </div>
+          <button v-if="addDlg.flowMode === 'copy'" type="button" class="rc-btn" :disabled="!templateDefault.flowId || templateDefault.loading" data-testid="preview-template-flow" @click="previewTemplateFlow">预览模板默认流程及配置</button>
           <template v-if="addDlg.flowMode === 'bind'">
+            <button type="button" class="rc-btn" data-testid="preview-bind-flows" @click="bindPickerOpen = true">预览并选择流程</button>
             <el-select
               v-model="addDlg.bindFlowIds"
               class="ssw-flow-select"
@@ -1810,6 +1827,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       </template>
     </div>
   </div>
+  <FlowPickerDialog v-if="bindPickerOpen" :selected="addDlg.bindFlowIds" :site-flow-counts="{}" hide-site-usage @close="bindPickerOpen = false" @confirm="onBindFlowsPicked" />
+  <el-dialog :model-value="!!templatePreview" title="模板默认流程预览" width="min(1100px, calc(100vw - 32px))" append-to-body @close="templatePreview = null">
+    <FlowReadonlyPreview v-if="templatePreview" :flow="templatePreview" style="height: min(600px, calc(100vh - 210px))" />
+  </el-dialog>
 </template>
 
 <style scoped>

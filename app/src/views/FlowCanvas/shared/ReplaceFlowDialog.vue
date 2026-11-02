@@ -6,8 +6,11 @@
 // 只负责选择；复制新建、关联或更换由调用方完成。
 import { computed, reactive, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
+import FlowReadonlyPreview from './FlowReadonlyPreview.vue'
+import ResizableFlowSplit from './ResizableFlowSplit.vue'
 import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
 import { parseIdList } from '@/utils/flow/flowSearch'
+import { nodeCountText, nodeCountTitle, useFlowNodeCounts } from '@/utils/flow/flowNodeCounts'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
 
 const props = defineProps<{
@@ -41,6 +44,7 @@ const state = reactive({
   pickedSourceId: '',
 })
 
+const { counts: nodeCounts, load: loadNodeCounts } = useFlowNodeCounts()
 let seq = 0
 
 async function loadFlows(reqId: number) {
@@ -55,6 +59,7 @@ async function loadFlows(reqId: number) {
   })
   if (reqId !== seq) return
   state.flows = result.list
+  void loadNodeCounts(result.list)
   state.total = result.total
 }
 
@@ -155,9 +160,9 @@ const dialogTitle = computed(() => props.purpose === 'bind'
   ? '关联已有流程'
   : props.purpose === 'copy' ? '从流程或模板新建' : '更换流程')
 const dialogHint = computed(() => props.purpose === 'bind'
-  ? '选择一条已有流程关联到当前源。关联后可以在流程列表中设置为主流程。'
+  ? '关联后与其他源共用同一流程，修改流程可能影响其他源；关联后可在流程列表中设置主流程。'
   : props.purpose === 'copy'
-    ? '选择一条现有流程或流程模板作为基础，将复制流程结构和节点配置，生成互不影响的新流程。'
+    ? '复制优先使用已发布版本；没有发布版时使用草稿。节点配置复制为独立一份，修改副本不影响原流程。'
     : '选中的流程会整条复制一份作为本源的新流程，原流程不动；确认时可选择新增一套配置或复用原配置。')
 const confirmText = computed(() => props.purpose === 'bind'
   ? '关联此流程'
@@ -176,7 +181,7 @@ function confirm() {
     :model-value="modelValue"
     class="rfd-dialog"
     :title="dialogTitle"
-    width="860px"
+    width="min(1440px, calc(100vw - 32px))"
     append-to-body
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
@@ -201,6 +206,9 @@ function confirm() {
       </button>
     </div>
 
+    <ResizableFlowSplit class="rfd-content" :initial-width="390">
+    <template #left>
+    <div class="rfd-list">
     <el-table
       v-if="state.mode === 'flow'"
       v-loading="state.loading"
@@ -208,29 +216,27 @@ function confirm() {
       :data="state.flows"
       :empty-text="emptyText"
       :row-class-name="flowRowClass"
-      height="min(400px, calc(100vh - 330px))"
+      height="100%"
       data-testid="replace-flow-table"
       @row-click="onFlowRowClick"
     >
-      <el-table-column width="52" align="center">
+      <el-table-column width="34" align="center">
         <template #default="{ row }">
           <input type="radio" name="replace-flow" :checked="state.picked?.id === row.id" :disabled="!flowSelectable(row)" :aria-label="`选择流程 ${row.name}`" />
         </template>
       </el-table-column>
-      <el-table-column label="流程 ID" width="110">
-        <template #default="{ row }"><span class="rfd-mono">{{ row.id }}</span></template>
-      </el-table-column>
-      <el-table-column label="名称" min-width="260">
+      <el-table-column label="流程名称 / ID" min-width="100">
         <template #default="{ row }">
-          <span class="rfd-name" :title="row.name">{{ row.name }}</span>
+          <span class="rfd-name">{{ row.name }}</span>
           <span v-if="flowTag(row)" class="rfd-tag" :class="{ tpl: flowTag(row) === '模板' }">{{ flowTag(row) }}</span>
+          <small class="rfd-id rfd-muted">{{ row.id }}</small>
         </template>
       </el-table-column>
-      <el-table-column label="使用源数" width="90" align="right">
-        <template #default="{ row }">{{ row.sourceCnt ?? '—' }}</template>
+      <el-table-column label="节点" width="48" align="right">
+        <template #default="{ row }"><span :title="nodeCountTitle(nodeCounts, row.id)">{{ nodeCountText(nodeCounts, row.id) }}</span></template>
       </el-table-column>
-      <el-table-column label="更新时间" width="170">
-        <template #default="{ row }"><span class="rfd-muted">{{ row.updatedAt || '—' }}</span></template>
+      <el-table-column label="源数" width="52" align="right">
+        <template #default="{ row }">{{ row.sourceCnt ?? '—' }}</template>
       </el-table-column>
     </el-table>
 
@@ -241,11 +247,11 @@ function confirm() {
       :data="state.sources"
       :empty-text="emptyText"
       :row-class-name="sourceRowClass"
-      height="min(400px, calc(100vh - 330px))"
+      height="100%"
       data-testid="replace-flow-table"
       @row-click="onSourceRowClick"
     >
-      <el-table-column width="52" align="center">
+      <el-table-column width="34" align="center">
         <template #default="{ row }">
           <input
             type="radio"
@@ -256,24 +262,18 @@ function confirm() {
           />
         </template>
       </el-table-column>
-      <el-table-column label="源 ID" width="110">
-        <template #default="{ row }"><span class="rfd-mono">{{ row.sourceId }}</span></template>
+      <el-table-column label="源名称 / 源 ID" min-width="100">
+        <template #default="{ row }"><span class="rfd-name">{{ row.name }}</span><small class="rfd-id rfd-muted">{{ row.sourceId }}</small></template>
       </el-table-column>
-      <el-table-column label="源名称" min-width="220">
-        <template #default="{ row }"><span class="rfd-ellipsis" :title="row.name">{{ row.name }}</span></template>
-      </el-table-column>
-      <el-table-column label="所属流程" min-width="260">
+      <el-table-column label="所属流程" min-width="100">
         <template #default="{ row }">
           <template v-if="flowOfSource(row)">
             <span class="rfd-name" :title="flowOfSource(row)!.name">{{ flowOfSource(row)!.name }}</span>
-            <span class="rfd-muted rfd-mono"> #{{ flowOfSource(row)!.id }}</span>
+            <small class="rfd-id rfd-muted">{{ flowOfSource(row)!.id }}</small>
             <span v-if="flowTag(flowOfSource(row))" class="rfd-tag" :class="{ tpl: flowTag(flowOfSource(row)) === '模板' }">{{ flowTag(flowOfSource(row)) }}</span>
           </template>
           <span v-else class="rfd-muted">无所属流程</span>
         </template>
-      </el-table-column>
-      <el-table-column label="流程使用源数" width="110" align="right">
-        <template #default="{ row }">{{ flowOfSource(row)?.sourceCnt ?? '—' }}</template>
       </el-table-column>
     </el-table>
 
@@ -283,13 +283,18 @@ function confirm() {
         v-model:page-size="state.size"
         :total="state.total"
         :page-sizes="[20, 40, 100]"
-        layout="total, sizes, prev, pager, next"
+        layout="prev, pager, next"
         background
         small
         @current-change="load"
         @size-change="search"
       />
     </div>
+
+    </div>
+    </template>
+    <template #right><FlowReadonlyPreview class="rfd-preview" :flow="state.picked" /></template>
+    </ResizableFlowSplit>
 
     <template #footer>
       <span v-if="state.picked" class="rfd-picked">
@@ -308,11 +313,15 @@ function confirm() {
 </template>
 
 <style scoped>
+.rfd-content { height:min(610px, calc(100vh - 270px)); min-height:300px; }
+.rfd-list { display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; }
+.rfd-table { flex:1; min-height:0; font-size:12px; }
+.rfd-preview { min-width:0; }
 .rfd-hint { margin: 0 0 10px; font-size: 12px; color: var(--rc-muted); }
 .rfd-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .rfd-input { height: 28px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 13px; color: var(--rc-text); }
 .rfd-mode { width: 88px; }
-.rfd-keyword { width: 300px; }
+.rfd-keyword { width: 300px; max-width: 45%; }
 .rfd-spacer { flex: 1; }
 .rfd-refresh { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); cursor: pointer; }
 .rfd-refresh:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
@@ -320,7 +329,9 @@ function confirm() {
 .rfd-table :deep(.rfd-row-off) { cursor: default; color: var(--rc-faint); }
 .rfd-table :deep(.rfd-row-picked > td) { background: var(--rc-primary-bg) !important; }
 .rfd-mono { font-variant-numeric: tabular-nums; }
-.rfd-name { font-weight: 600; }
+.rfd-name { font-weight: 600; overflow-wrap:anywhere; white-space:normal; }
+.rfd-id { display:block; overflow-wrap:anywhere; font-size:12px; line-height:1.4; }
+.rfd-table :deep(.cell) { padding-left:4px; padding-right:4px; white-space:normal; overflow-wrap:anywhere; line-height:1.45; }
 .rfd-tag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--rc-border); border-radius: 4px; font-size: 11px; color: var(--rc-muted); }
 .rfd-tag.tpl { border-color: #bfdbfe; color: var(--rc-primary-ink); }
 .rfd-ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -333,6 +344,6 @@ function confirm() {
 
 <style>
 /* append-to-body 后弹窗外框不在本组件作用域内，外框样式只能不带 scoped（类名已加前缀防冲突） */
-.el-dialog.rfd-dialog { max-width: calc(100vw - 48px); margin: 5vh auto; }
+.el-dialog.rfd-dialog { max-width: calc(100vw - 32px); margin: 3vh auto; }
 .rfd-dialog .el-dialog__footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 </style>

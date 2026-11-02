@@ -108,9 +108,9 @@ describe('ReplaceFlowDialog', () => {
     expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ id: '2' })
   })
 
-  // 10-30：186 后端复制时没有发布版就取草稿（1016 第三节 0），复制类用途不再查发布版、不再置灰只有草稿的流程
-  it('复制类用途不查发布版，只有草稿的流程照样可选', async () => {
-    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: null, draftId: '9' } as never)
+  // 10-30：186 后端复制时没有发布版就取草稿（1016 第三节 0），复制类用途不因只有草稿而置灰
+  it('复制类用途预览版本，只有草稿的流程照样可选', async () => {
+    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, publishId: null, draftId: '9', versions: [] } as never)
     vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 1, list: [flowOf('2', '只有草稿')] })
     const wrapper = mount(ReplaceFlowDialog, { props: { modelValue: true, purpose: 'copy' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await flushPromises()
@@ -123,17 +123,17 @@ describe('ReplaceFlowDialog', () => {
     expect(confirm.disabled).toBe(false)
     confirm.click()
     expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ id: '2' })
-    expect(overview).not.toHaveBeenCalled()
+    expect(overview).toHaveBeenCalledWith('2')
   })
 
-  it('关联用途不查发布版，只有草稿的流程照样可选', async () => {
-    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ publishId: null, draftId: '9' } as never)
+  it('关联用途预览版本，只有草稿的流程照样可选', async () => {
+    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, publishId: null, draftId: '9', versions: [] } as never)
     vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 1, list: [flowOf('2', '只有草稿')] })
     mount(ReplaceFlowDialog, { props: { modelValue: true, purpose: 'bind' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
     await flushPromises()
     ;(document.body.querySelectorAll('.el-table__body tr')[0] as HTMLElement).click()
     await flushPromises()
-    expect(overview).not.toHaveBeenCalled()
+    expect(overview).toHaveBeenCalledWith('2')
     expect((q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement).disabled).toBe(false)
   })
 })

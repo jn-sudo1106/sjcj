@@ -131,7 +131,7 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
     const { ownFlowIds: _a, ownDefaultFlowId: _b, ownBindings: _c, ...legacyGroup } = IN_GROUP
     fetchMock.mockResolvedValueOnce(ok(legacyGroup))
     const view = await workflowBindingApi.view('430024683')
-    expect(view).toMatchObject({ flowIds: ['21000005', '21000006'], ownFlowIds: [], ownBindings: [] })
+    expect(view).toMatchObject({ flowIds: ['21000005', '21000006'], ownFlowIds: [], ownBindings: [], ownDataAvailable: false })
     expect(view.ownDefaultFlowId).toBeUndefined()
   })
 

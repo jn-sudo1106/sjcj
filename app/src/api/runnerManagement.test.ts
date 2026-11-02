@@ -9,6 +9,23 @@ afterEach(() => {
 })
 
 describe('Runner 管理接口', () => {
+  it.each([
+    ['服务包', () => runnerManagementApi.downloadCodeServerPackage('linux')],
+    ['升级接入包', () => runnerManagementApi.downloadCodeServerMigrationPackage('linux')],
+  ])('%s 下载收到 401 时确认业务会话，再决定是否登出', async (_label, download) => {
+    const expired = vi.fn()
+    setUnauthorizedHandler(expired)
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({ message: '服务认证失败' }) })
+      .mockResolvedValueOnce({ status: 200, ok: true, json: async () => ({ code: '0', data: { roles: ['admin'] } }) })
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({ message: '服务认证失败' }) })
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchSpy)
+    await expect(download()).rejects.toThrow('服务认证失败')
+    expect(expired).not.toHaveBeenCalled()
+    await expect(download()).rejects.toThrow('服务认证失败')
+    expect(expired).toHaveBeenCalledOnce()
+  })
   it('AI 开关服务拒绝认证但业务登录有效时，保留登录并报告独立服务错误', async () => {
     const expired = vi.fn()
     setUnauthorizedHandler(expired)

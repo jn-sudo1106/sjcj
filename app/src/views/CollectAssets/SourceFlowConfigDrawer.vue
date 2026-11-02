@@ -19,7 +19,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { flowCenterApi, siteApi, sourceGroupApi, workflowBindingApi, type FlowRecord, type Source, type SourceFlowBind, type SourceFlowsView } from '@/api'
 import { useAuthStore } from '@/stores/auth'
-import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
+import FlowReadonlyPreview from '@/views/FlowCanvas/shared/FlowReadonlyPreview.vue'
 import FlowPickerDialog from './FlowPickerDialog.vue'
 
 const props = defineProps<{
@@ -260,6 +260,9 @@ watch(() => props.source, () => void load(), { immediate: true })
             <el-table-column label="默认" width="70">
               <template #default="{ row }">{{ row.isDefault ? '是' : '否' }}</template>
             </el-table-column>
+            <el-table-column label="操作" width="80">
+              <template #default="{ row }"><el-button link type="primary" @click="openFlowNode(row.flowId)">查看</el-button></template>
+            </el-table-column>
             <el-table-column label="状态" width="90">
               <template #default="{ row }">
                 <el-switch :model-value="row.state === 'ACTIVE'" :disabled="!canWrite" :aria-label="`切换 ${flowLabel(row.flowId)}`" data-testid="sfcd-binding-toggle" @change="toggleBindingState(row)" />
@@ -335,12 +338,15 @@ watch(() => props.source, () => void load(), { immediate: true })
         </template>
       </template>
     </div>
-    <FlowDetailDrawer v-if="detailFlow" :flow="detailFlow" @close="detailFlow = null" />
+    <el-dialog :model-value="!!detailFlow" title="流程预览" width="min(1100px, calc(100vw - 32px))" append-to-body @close="detailFlow = null">
+      <FlowReadonlyPreview v-if="detailFlow" :flow="detailFlow" class="sfcd-preview" />
+    </el-dialog>
     <FlowPickerDialog v-if="pickerOpen" :selected="flowIds" :site-flow-counts="siteFlowCounts" @close="pickerOpen = false" @confirm="onPicked" />
   </el-drawer>
 </template>
 
 <style scoped>
+.sfcd-preview { height:min(600px, calc(100vh - 210px)); }
 .sfcd-body { display: flex; flex-direction: column; gap: 12px; }
 .sfcd-error { color: #dc2626; font-size: 12px; }
 .sfcd-flow-summary { font-size: 12px; color: var(--rc-text-2); margin: 0; }

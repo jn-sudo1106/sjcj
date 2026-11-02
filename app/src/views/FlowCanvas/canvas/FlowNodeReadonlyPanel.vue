@@ -128,6 +128,12 @@ const rows = computed<[string, string][]>(() => {
       <span v-if="cfg.configId" class="fnp-config-id">#{{ cfg.configId }}</span>
       <span v-if="!cfg.configName && !cfg.configId" class="fnp-empty">未绑定配置</span>
     </div>
+    <dl class="fnp-summary" data-testid="flow-node-summary">
+      <div><dt>配置 ID</dt><dd>{{ cfg.configId || step?.configId || '—' }}</dd></div>
+      <div><dt>输入表</dt><dd>{{ tableText(inputTable) || '—' }}</dd></div>
+      <div><dt>输出表</dt><dd>{{ tableText(nodeOutputTable(cfg) || step?.outputTable) || '—' }}</dd></div>
+      <div><dt>任务队列</dt><dd>{{ nodeTaskQueue(cfg) || '—' }}</dd></div>
+    </dl>
     <div class="fnp-tabs" role="tablist">
       <button
         v-for="[key, label] in tabs"
@@ -165,6 +171,10 @@ const rows = computed<[string, string][]>(() => {
 .fnp-config-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-text); font-weight: 600; }
 .fnp-config-id { flex: none; color: var(--rc-primary-ink); font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .fnp-empty { color: var(--rc-faint); }
+.fnp-summary { flex:none; margin:8px 14px 0; font-size:11px; }
+.fnp-summary > div { display:flex; gap:8px; padding:2px 0; }
+.fnp-summary dt { color:var(--rc-faint); flex:0 0 52px; }
+.fnp-summary dd { margin:0; color:var(--rc-text); overflow-wrap:anywhere; min-width:0; }
 .fnp-tabs { flex: none; display: flex; gap: 2px; margin: 10px 14px 0; border-bottom: 1px solid var(--rc-border-soft); }
 .fnp-tab { padding: 6px 10px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--rc-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
 .fnp-tab.active { border-bottom-color: var(--rc-primary); color: var(--rc-primary); }

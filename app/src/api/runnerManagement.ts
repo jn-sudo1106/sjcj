@@ -638,7 +638,7 @@ export const runnerManagementApi = {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform })
     })
-    if (response.status === 401) triggerSessionExpired()
+    await checkBusinessSession(response)
     if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '升级接入包下载失败') }
     return response.blob()
   },
@@ -652,7 +652,7 @@ export const runnerManagementApi = {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform, digest })
     })
-    if (response.status === 401) triggerSessionExpired()
+    await checkBusinessSession(response)
     if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '服务包下载失败') }
     return response.blob()
   },

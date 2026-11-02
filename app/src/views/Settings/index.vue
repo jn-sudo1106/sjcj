@@ -15,10 +15,8 @@ import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
-import DataPermissionTab from './DataPermissionTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 import ProgramVersionsTab from './ProgramVersionsTab.vue'
-import UserManagementTab from './UserManagementTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
 // 各环境展示同一套入口，菜单可见性统一由账号权限决定（2026-10-26）。
@@ -32,8 +30,6 @@ const ALL_TABS: { key: string; label: string; permission: string; comp: Componen
   { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab },
   { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab },
   { key: 'releases', label: '程序版本', permission: 'settings:releases', comp: ProgramVersionsTab },
-  { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission', comp: DataPermissionTab },
-  { key: 'users', label: '用户管理', permission: 'settings:users', comp: UserManagementTab, adminOnly: true },
 ]
 const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
 

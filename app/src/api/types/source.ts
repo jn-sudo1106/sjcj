@@ -246,6 +246,8 @@ export interface SourceFlowsView {
   ownFlowIds: string[]
   ownDefaultFlowId?: string
   ownBindings: SourceFlowBind[]
+  /** 后端是否返回源自有流程字段；旧接口对组内源无法判断历史绑定。 */
+  ownDataAvailable?: boolean
 }
 
 /** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */

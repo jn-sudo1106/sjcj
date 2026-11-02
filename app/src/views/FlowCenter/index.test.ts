@@ -973,6 +973,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99', name: '新闻采集标准流程_copy' })
 
     await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
+    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
     await flushPromises()
 
     expect(copy).toHaveBeenCalledWith('flow-10086', '新闻采集标准流程_copy')
@@ -1003,6 +1004,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     steps.mockClear()
 
     await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
+    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
     await flushPromises()
 
     expect(copy).toHaveBeenCalledWith('flow-10086', '新闻采集标准流程_copy')
@@ -1016,6 +1018,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     const copy = vi.spyOn(flowCenterApi, 'copy')
 
     await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
+    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
     await flushPromises()
 
     expect(copy).not.toHaveBeenCalled()
