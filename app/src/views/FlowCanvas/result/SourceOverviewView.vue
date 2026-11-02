@@ -230,7 +230,7 @@ function removeCondition(row: ConditionRow) {
 }
 function conditionPlaceholder(row: ConditionRow) {
   if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return sourceCondFieldOf(row.field).placeholder
-  return '源 ID / 名称 / URL，自动识别'
+  return '源 ID / 名称 / URL'
 }
 function onConditionInput(row: ConditionRow, value: string) {
   row.value = value
@@ -245,6 +245,11 @@ function onConditionInput(row: ConditionRow, value: string) {
     row.field = target
     row.op = defaultSourceCondOp(target)
   }
+}
+function onConditionKeydown(row: ConditionRow, event: KeyboardEvent) {
+  if (event.isComposing || (row.field === 'sourceIds' && !event.ctrlKey && !event.metaKey)) return
+  event.preventDefault()
+  search()
 }
 function onFieldPicked(row: ConditionRow) {
   row.pinned = true
@@ -1342,14 +1347,16 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 :title="o.unsupported"
               >{{ o.unsupported ? `${o.label}（暂不支持）` : o.label }}</option>
             </select>
-            <input
+            <textarea
               :value="sourceCondNeedsValue(row.op) ? row.value : ''"
+              :class="{ 'sov-multiline-ids': row.field === 'sourceIds' && row.value.includes('\n') }"
+              rows="1"
               data-testid="source-overview-search-text"
               :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
               :disabled="!sourceCondNeedsValue(row.op)"
-              @input="onConditionInput(row, ($event.target as HTMLInputElement).value)"
-              @keyup.enter="search"
-            />
+              @input="onConditionInput(row, ($event.target as HTMLTextAreaElement).value)"
+              @keydown.enter="onConditionKeydown(row, $event)"
+            ></textarea>
             <button
               v-if="conditions.length > 1 || sourceCondActive(row)"
               type="button"
@@ -1745,9 +1752,9 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-shell { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 12px; background: #f8fafc; gap: 10px; }
 .sov-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .sov-filter label, .sov-filter .sov-field { display: grid; gap: 4px; color: var(--rc-muted); font-size: 11px; }
-.sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
-.sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
-.sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
+.sov-filter input, .sov-filter select, .sov-filter textarea { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
+.sov-filter input:focus, .sov-filter select:focus, .sov-filter textarea:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
+.sov-filter input:disabled, .sov-filter textarea:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
 .sov-filter-options { display: contents; }
 .sov-site-select { width: 116px; }
 .sov-site-select :deep(.el-select__wrapper) { min-height: 30px; padding: 0 8px; border-radius: 6px; box-shadow: 0 0 0 1px #dbe3ee inset; font-size: 12px; }
@@ -1758,7 +1765,8 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-search { display: flex; align-items: center; gap: 4px; }
 .sov-filter .sov-search select { min-width: 88px; }
 .sov-filter .sov-search select.sov-op { min-width: 0; width: 72px; }
-.sov-filter .sov-search input { min-width: 190px; }
+.sov-filter .sov-search textarea { min-width: 190px; padding: 6px 8px; resize: none; overflow: hidden; white-space: nowrap; font-family: inherit; line-height: 16px; }
+.sov-filter .sov-search textarea.sov-multiline-ids:focus { height: 72px; overflow: auto; white-space: pre-wrap; }
 .sov-cond-btn {
   flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 22px; cursor: pointer;
@@ -1787,16 +1795,18 @@ defineExpose({ openLaunch, clearSelection, refresh })
 /* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
 .sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
-.sov-filter.is-compact select {
+.sov-filter.is-compact select,
+.sov-filter.is-compact textarea {
   height: 34px; min-width: 0; border-color: var(--rc-border); border-radius: 6px; font-size: 13px;
 }
 .sov-filter.is-compact input:hover,
-.sov-filter.is-compact select:hover { border-color: #bfdbfe; }
+.sov-filter.is-compact select:hover,
+.sov-filter.is-compact textarea:hover { border-color: #bfdbfe; }
 /* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
 .sov-filter.is-compact .sov-search { flex-wrap: nowrap; flex: 1 1 auto; }
 .sov-filter.is-compact .sov-search select { width: 76px; flex: none; }
 .sov-filter.is-compact .sov-search select.sov-op { width: 60px; }
-.sov-filter.is-compact .sov-search input { width: 64px; flex: 1 1 64px; min-width: 64px; }
+.sov-filter.is-compact .sov-search textarea { width: 64px; flex: 1 1 64px; min-width: 64px; }
 /* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
 .sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
 .sov-filter.is-compact .sov-site-select { width: 100%; min-width: 0; }

@@ -65,7 +65,7 @@ export interface SourceCondOpOption {
 }
 
 export const SOURCE_COND_FIELDS: { value: SourceCondField; label: string; placeholder: string; ops: SourceCondOpOption[] }[] = [
-  { value: 'sourceIds', label: '源 ID', placeholder: '多个 ID 用逗号分隔', ops: [{ value: 'eq', label: '等于' }] },
+  { value: 'sourceIds', label: '源 ID', placeholder: '多个 ID 用换行或逗号分隔', ops: [{ value: 'eq', label: '等于' }] },
   { value: 'name', label: '源名称', placeholder: '源名称关键字', ops: [{ value: 'like', label: '包含' }] },
   {
     value: 'sourceUrl',
@@ -125,7 +125,8 @@ export function sourceConditionParams(conds: SourceCondition[]): Partial<Record<
     if (!sourceCondActive(cond)) continue
     params[cond.field] = cond.op === 'notEmpty' ? (NOT_EMPTY_VALUE[cond.field] ?? '%')
       : cond.op === 'empty' ? 'NULL'
-        : cond.value.trim()
+        : cond.field === 'sourceIds' ? cond.value.trim().split(/[，,\s]+/).filter(Boolean).join(',')
+          : cond.value.trim()
   }
   return params
 }

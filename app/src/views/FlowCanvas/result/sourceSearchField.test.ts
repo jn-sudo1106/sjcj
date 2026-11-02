@@ -11,6 +11,7 @@ describe('detectSourceSearchField', () => {
   it.each([
     ['430016214', 'sourceIds'],
     ['430016214,430016215', 'sourceIds'],
+    ['430016214\r\n430016215', 'sourceIds'],
     ['430016214， 430016215 430016216', 'sourceIds'],
     ['https://www.sanyoumed.com/zh/news', 'sourceUrl'],
     ['http://mp.weixin.qq.com/s?__biz=x', 'sourceUrl'],
@@ -46,7 +47,11 @@ describe('sourceConditionParams（多条件，2026-09-28）', () => {
       { field: 'sourceUrl', op: 'like', value: 'centec' },
       { field: 'sourceIds', op: 'eq', value: '1, 2' },
       { field: 'remark', op: 'like', value: '超时' },
-    ])).toEqual({ name: '盛科', sourceUrl: 'centec', sourceIds: '1, 2', remark: '超时' })
+    ])).toEqual({ name: '盛科', sourceUrl: 'centec', sourceIds: '1,2', remark: '超时' })
+  })
+
+  it('源 ID 支持换行及逗号混合分隔，发送逗号串', () => {
+    expect(sourceConditionParams([{ field: 'sourceIds', op: 'eq', value: ' 1\r\n2， 3\n\n4 ' }])).toEqual({ sourceIds: '1,2,3,4' })
   })
 
   it('备注非空 = %、为空 = NULL，与后端既有约定一致；此时忽略框里残留的值', () => {
