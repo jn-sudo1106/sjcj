@@ -246,9 +246,7 @@ const outputTableFields = computed(() => nodeTableId.value
   ? fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output)
   : [])
 const selectedOutputFieldProps = computed<string[]>(() => {
-  const all = outputTableFields.value.map((f) => f.prop)
   const saved = cfg.value?.taskCfg?.outColumns ?? []
-  if (!saved.length) return all
   const propByToken = new Map<string, string>()
   for (const f of outputTableFields.value) {
     propByToken.set(f.prop, f.prop)
@@ -272,6 +270,9 @@ function toggleOutputField(prop: string) {
 }
 function selectAllOutputFields() {
   writeOutputFields(outputTableFields.value.map((f) => f.prop))
+}
+function clearOutputFields() {
+  writeOutputFields([])
 }
 
 function selectPresetTable(tableId: string) {
@@ -424,13 +425,13 @@ async function onTableSaved(tableId: string) {
         </button>
       </div>
     </div>
-    <!-- 输出字段选择（2026-10-10 恢复）= 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。
-         没有「清空」：按旧平台口径空就是全部，清空等于全选。 -->
+    <!-- 输出字段选择 = 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。 -->
     <div v-if="outputTableFields.length" class="rc-field">
       <div class="rc-field-header">
         <label>输出字段选择（已选中 {{ selectedOutputFieldProps.length }} / {{ outputTableFields.length }} 个字段，不选默认全部字段）</label>
         <div class="rc-field-actions">
           <button type="button" class="rc-text-btn" data-testid="select-all-fields" @click="selectAllOutputFields">全选</button>
+          <button type="button" class="rc-text-btn" data-testid="clear-all-fields" @click="clearOutputFields">清空</button>
         </div>
       </div>
       <div class="rc-tag-row" data-testid="output-fields-list">
