@@ -2,6 +2,7 @@
 import functools
 import codecs
 import importlib.util
+import ipaddress
 import json
 import re
 import threading
@@ -37,7 +38,46 @@ def defaults():
     ]
 
 
-def listing(app):
+def host(value):
+    value = str(value or '').lower().rstrip('.')
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return value
+
+
+def resolve_servers(items, servers):
+    """Resolve configured model addresses without issuing inference/probe requests."""
+    for item in items:
+        mode = item.get('generationServerMode') or ('manual' if item.get('generationServerId') else 'auto')
+        item['generationServerMode'] = mode
+        item['generationServerMatch'] = 'direct'
+        if mode == 'manual':
+            item['generationServerMatch'] = 'manual' if any(server['serverId'] == item.get('generationServerId') for server in servers) else 'missing'
+            continue
+        item['generationServerId'] = ''
+        if mode == 'direct':
+            continue
+        address = host(urlsplit(item['endpoint']).hostname)
+        try:
+            local = ipaddress.ip_address(address).is_loopback or ipaddress.ip_address(address).is_unspecified
+        except ValueError:
+            local = address == 'localhost'
+        if local:
+            item['generationServerMatch'] = 'local'
+            continue
+        candidates = [server for server in servers if address and address in
+                      (host(server.get('ipAddress')), host(urlsplit(server.get('endpoint', '')).hostname))]
+        online = [server for server in candidates if server['status'] == 'online']
+        candidates = online or candidates
+        if len(candidates) == 1:
+            item['generationServerId'] = candidates[0]['serverId']
+            item['generationServerMatch'] = 'matched' if online else 'offline'
+        else:
+            item['generationServerMatch'] = 'ambiguous' if candidates else 'unmatched'
+
+
+def listing(app, servers=None):
     with app.store.connect() as db:
         row = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (KEY,)).fetchone()
     result = json.loads(row['setting_value']) if row else {'items': defaults(), 'revision': 0}
@@ -47,6 +87,10 @@ def listing(app):
         item.setdefault('generationServerId', '')
         if item['kind'] == 'agent':
             item.setdefault('cdpPort', 9223)
+    if servers is None:
+        from .code_servers import registry
+        servers = registry(app)
+    resolve_servers(result['items'], servers)
     return result
 
 
@@ -73,6 +117,13 @@ def save(app, body, update_test_prompts=False):
             raise ApiError('模型接口名称不能为空或重复')
         ids.add(row['id']); names.add(row['name'])
         row['kind'] = raw.get('kind')
+        row['generationServerMode'] = raw.get('generationServerMode') or ('manual' if row['generationServerId'] else 'auto')
+        if row['generationServerMode'] not in ('auto', 'manual', 'direct'):
+            raise ApiError('代码生成服务器关联方式无效')
+        if row['generationServerMode'] != 'manual':
+            row['generationServerId'] = ''
+        elif not row['generationServerId']:
+            raise ApiError('请选择手工关联的代码生成服务器')
         if row['generationServerId']:
             from .code_servers import read
             read(app, row['generationServerId'])
@@ -124,7 +175,7 @@ def save(app, body, update_test_prompts=False):
             db.execute('DELETE FROM settings WHERE setting_key=?', (KEY,))
             db.execute('INSERT INTO settings (setting_key,setting_value) VALUES (?,?)',
                        (KEY, json.dumps(result, ensure_ascii=False)))
-    return result
+    return listing(app)
 
 
 def save_test_prompts(app, body):
@@ -213,9 +264,9 @@ def agent_directories(selected, task_id=None):
     if any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value) for value in (instance_id, task_id)):
         raise ApiError('实例 ID 或任务 ID 无效')
     path_type = PureWindowsPath if '\\' in root or re.match(r'^[A-Za-z]:', root) else PurePosixPath
-    base = path_type(root) / selected.get('_workspaceDirectory', instance_id)
+    base = path_type(root) / selected.get('_workspaceDirectory', '')
     return {'instanceId': instance_id, 'taskId': task_id, 'prjDir': str(base),
-            'inputFileDir': str(base / 'input'), 'codeDir': str(base / 'code'), 'outputFileDir': str(base / 'output'),
+            'inputFileDir': str(base / 'input'), 'codeDir': selected.get('_codeDirectory') or str(base / 'code'), 'outputFileDir': str(base / 'output'),
             'taskRecordPath': str(base / 'tasks' / (task_id + '.json'))}
 
 
@@ -243,6 +294,17 @@ def workbuddy_request(selected, prompt, task_id=None):
     parsed = urlsplit(selected['endpoint'])
     return Request(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(params), '')),
                    headers={'Accept': 'text/plain, application/json, text/event-stream'})
+
+
+def generation_request_details(request):
+    """Expose the resolved model request, excluding transport credentials."""
+    parsed = urlsplit(request.full_url)
+    query = [(key, '***' if re.search(r'(?i)token|password|secret|api[_-]?key|authorization|access[_-]?key',key) else value)
+             for key,value in parse_qsl(parsed.query,keep_blank_values=True)]
+    url = urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
+    headers = {key.title():value for key,value in request.header_items() if key.lower() in ('content-type','accept')}
+    return {'method':request.get_method(),'url':url,'headers':headers,
+            'body':json.loads(request.data.decode('utf8')) if request.data else None}
 
 
 def prepare_test(app, body):
@@ -375,27 +437,66 @@ def stream_test(handler, app, body):
     return RESPONSE_SENT
 
 
-def generate(app, body):
+def stream_generate(handler, app, body):
+    """Stream actual model output and stages; disconnects never skip Git archival."""
+    from .server import RESPONSE_SENT, ApiError
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
+    handler.send_header('Cache-Control', 'no-store, no-transform')
+    handler.send_header('X-Accel-Buffering', 'no')
+    handler.send_header('Connection', 'close')
+    handler.end_headers(); handler.close_connection = True
+    connected = True
+    started = time.monotonic()
+    def emit(kind, **fields):
+        nonlocal connected
+        if not connected:
+            return
+        try:
+            handler.wfile.write((json.dumps({'type':kind,'durationMs':round((time.monotonic()-started)*1000),**fields},ensure_ascii=False)+'\n').encode('utf8'))
+            handler.wfile.flush()
+        except OSError:
+            connected = False
+    try:
+        emit('progress',message='正在检查生成配置…')
+        result = generate(app, body, emit)
+        emit('result',result=result)
+    except Exception as error:
+        emit('error',message=str(error) if isinstance(error,ApiError) else '代码生成失败，请检查生成服务日志')
+    return RESPONSE_SENT
+
+
+def generate(app, body, emit=None):
     from .server import ApiError
     selected = next((row for row in listing(app)['items'] if row['id'] == body.get('interfaceId')), None)
     if not selected or not selected['enabled']:
         raise ApiError('所选模型接口不存在或已停用')
     selected = dict(selected)
+    if emit:
+        selected['_emit'] = emit
     remote = selected.get('generationServerId') and selected['kind'] in ('agent', 'gemini-agent')
     if not remote:
         return _generate(app, body, selected)
     from . import generation_workspaces as workspaces
-    from .code_servers import read
+    from .code_servers import read, generation_root
     if body.get('configId'):
-        selected['prjDir'] = read(app, selected['generationServerId'])['workspace']
+        body = workspaces.node_defaults(body)
+        server = read(app, selected['generationServerId'])
+        selected['prjDir'] = generation_root(server)
         selected['_workspaceDirectory'] = workspaces.directory(body)
     workspace = agent_directories(selected, body.get('taskId'))
     body = {**body, 'taskId': workspace['taskId']}
+    if body.get('configId'):
+        from .generation_git_bindings import match
+        binding = match(server, workspace['codeDir'])
+        if binding and body.get('destinationMode') != 'custom':
+            body.update(repositoryId=binding['repositoryId'], directoryId=binding['directoryId'], destinationMode='custom')
     # Node generation always archives to its configured repository before releasing
     # the shared directory. A browser disconnect cannot skip the Git submission.
     if body.get('configId'):
         body.update(autoCommit=True, deferCommit=False)
-    with workspaces.serialized(selected['generationServerId'], workspace['prjDir'], selected['timeoutSeconds']):
+    with workspaces.serialized_paths(selected['generationServerId'], [workspace['prjDir'], workspace['codeDir']], selected['timeoutSeconds']):
+        if emit: emit('progress',message='正在准备代码生成工作空间…')
         started = workspaces.stamp()
         selected['_generationStartedAt'] = started
         common = {'configId': body.get('configId', ''), 'queueName': body.get('queueName', ''), 'startedAt': started}
@@ -460,16 +561,37 @@ def _generate(app, body, selected):
         request = workbuddy_request(selected, prompt, body.get('taskId'))
     from .code_servers import model_request
     selected['_workspace'] = getattr(request, 'generation_workspace', None)
+    emit = selected.get('_emit')
+    if emit:
+        emit('request',request=generation_request_details(request))
     request = model_request(app, selected, request)
     try:
+        if emit: emit('progress',message='正在连接模型服务，等待过程输出…')
         with urlopen(request, timeout=selected['timeoutSeconds']) as response:
-            raw = response.read(MAX_RESPONSE + 1)
+            if emit:
+                decoder = codecs.getincrementaldecoder('utf-8-sig')(errors='replace')
+                parts, size = [], 0
+                while True:
+                    chunk = getattr(response,'read1',response.read)(4096)
+                    if not chunk: break
+                    parts.append(chunk); size += len(chunk)
+                    if size > MAX_RESPONSE:
+                        raise ApiError('模型响应超过 2 MB，请精简生成内容',502)
+                    text_chunk = decoder.decode(chunk,final=False)
+                    if text_chunk: emit('chunk',text=text_chunk)
+                tail = decoder.decode(b'',final=True)
+                if tail: emit('chunk',text=tail)
+                raw = b''.join(parts)
+            else:
+                raw = response.read(MAX_RESPONSE + 1)
             if len(raw) > MAX_RESPONSE:
                 raise ApiError('模型响应超过 2 MB，请精简生成内容', 502)
             text = decode_response(raw, response.headers.get('Content-Type', ''))
         if remote_target:
+            if emit: emit('progress',message='模型生成完成，正在收集文件并提交 Git…')
             from .generated_archives import finish
             return finish(app, selected, remote_target, text, file_name, service)
+        if emit: emit('progress',message='正在检查生成代码…')
         code = service.validate_code(service.normalize_code(text))
     except service.GenerationError as exc:
         raise ApiError(f'{selected["name"]}：{exc}', exc.status) from exc

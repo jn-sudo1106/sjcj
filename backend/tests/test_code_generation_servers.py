@@ -1,5 +1,6 @@
 """Real HTTP checks for code-server enrollment, workspace relay and model streams."""
 import base64
+import errno
 import io
 import json
 import tempfile
@@ -15,6 +16,7 @@ from unittest.mock import patch
 
 from backend.tests import test_runner_management as baseline
 from backend.runner_management import code_servers, model_interfaces
+from backend.code_generation_server import service as service_module, start as starter
 from backend.runner_management.server import ApiError
 from backend.code_generation_server.start import Service, Handler, Workspace, ServiceError
 
@@ -57,8 +59,144 @@ class WorkspaceTest(unittest.TestCase):
         with self.assertRaises(ServiceError):
             self.workspace.operation({'action': 'delete', 'path': 'existing'})
 
+    def test_inaccessible_residual_file_remains_visible_and_prevents_empty_delete(self):
+        folder = self.root / '1401218/tasks'; folder.mkdir(parents=True)
+        leftover = folder / 'task.json'; leftover.write_text('{}', encoding='utf8')
+        original = self.workspace.info
+        def denied(item, include_data=False):
+            if item == leftover: raise PermissionError(errno.EACCES, 'denied', str(leftover))
+            return original(item, include_data)
+        with patch.object(self.workspace, 'info', side_effect=denied):
+            result = self.workspace.operation({'action': 'list', 'path': '1401218/tasks'})
+        self.assertEqual(result['items'][0]['path'], '1401218/tasks/task.json')
+        self.assertIn('系统拒绝访问', result['items'][0]['accessError'])
+        with self.assertRaises(ServiceError) as failure:
+            self.workspace.operation({'action': 'delete', 'path': '1401218/tasks'})
+        self.assertEqual(failure.exception.status, 409)
+        self.assertIn('task.json', str(failure.exception))
+        self.assertTrue(leftover.exists())
+        leftover.unlink()
+        self.workspace.operation({'action': 'delete', 'path': '1401218/tasks'})
+        self.assertFalse(folder.exists())
+
+    def test_hidden_protected_entry_explains_nonempty_directory_without_deleting_it(self):
+        folder = self.root / 'tasks'; (folder / '__pycache__').mkdir(parents=True)
+        self.assertEqual(self.workspace.operation({'action': 'list', 'path': 'tasks'})['items'], [])
+        with self.assertRaises(ServiceError) as failure:
+            self.workspace.operation({'action': 'delete', 'path': 'tasks'})
+        self.assertIn('__pycache__', str(failure.exception))
+        self.assertIn('受保护', str(failure.exception))
+        self.assertTrue((folder / '__pycache__').exists())
+
+    def test_directory_permission_failure_reports_relative_path_and_system_error(self):
+        folder = self.root / 'tasks'; folder.mkdir()
+        for method, action in (('iterdir', 'list'), ('rmdir', 'delete')):
+            with patch.object(Path, method, side_effect=PermissionError(errno.EACCES, 'denied', str(folder))):
+                with self.assertRaises(ServiceError) as failure:
+                    self.workspace.operation({'action': action, 'path': 'tasks'})
+                self.assertEqual(failure.exception.status, 403)
+                self.assertIn('tasks', str(failure.exception))
+                self.assertIn('系统拒绝访问', str(failure.exception))
+                self.assertNotIn(str(self.root), str(failure.exception))
+
+    def test_empty_directory_delete_does_not_require_listing_permission(self):
+        folder = self.root / 'tasks'; folder.mkdir()
+        with patch.object(Path, 'iterdir', side_effect=PermissionError(errno.EACCES, 'denied', str(folder))):
+            self.assertEqual(self.workspace.operation({'action': 'delete', 'path': 'tasks'}), {'ok': True})
+        self.assertFalse(folder.exists())
+
+
+class CodeServerAccountTest(unittest.TestCase):
+    def test_builtin_service_accounts_are_rejected_before_creating_any_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            instance = Path(temporary) / 'instance'
+            workspace = Path(temporary) / 'workspace'
+            for sid in ('S-1-5-18', 'S-1-5-19', 'S-1-5-20'):
+                with self.subTest(sid=sid), patch.object(service_module, 'current_account', return_value={'name': 'service-account', 'sid': sid}):
+                    with self.assertRaisesRegex(ServiceError, '普通用户'):
+                        Service(instance, {'workspace': str(workspace)})
+                self.assertFalse(instance.exists())
+                self.assertFalse(workspace.exists())
+
+    def test_regular_user_is_accepted_without_changing_accounts(self):
+        with patch.object(service_module, 'current_account', return_value={'name': r'home171\leo', 'sid': 'S-1-5-21-1-2-3-1001'}):
+            self.assertEqual(service_module.require_user_account(), r'home171\leo')
+
+    def test_launcher_checks_account_before_preparing_config_or_dependencies(self):
+        with patch.object(starter, 'require_user_account', side_effect=ServiceError('请以普通用户运行')), patch.object(starter, 'ensure_verifier') as prepare:
+            with self.assertRaisesRegex(SystemExit, '普通用户'):
+                starter.main()
+            prepare.assert_not_called()
+
 
 class CodeServerTest(unittest.TestCase):
+    def test_running_user_is_reported_and_legacy_heartbeat_does_not_leave_stale_identity(self):
+        service, endpoint, identity, payload = self.start_remote()
+        self.assertTrue(payload['runUser'])
+        self.assertEqual(service.control('status')['runUser'], payload['runUser'])
+        saved = self.request('/api/runner-management/code-servers')['items'][0]
+        self.assertEqual(saved['runUser'], payload['runUser'])
+        legacy = {key: value for key, value in payload.items() if key != 'runUser'}
+        self.request('/api/code-servers/me/heartbeat', {**legacy, 'serverId': identity['serverId'], 'pid': 1234}, identity['token'])
+        self.assertEqual(code_servers.read(self.app, identity['serverId'])['runUser'], '')
+
+    def test_directory_git_binding_validates_target_path_and_write_permission(self):
+        service, endpoint, identity, payload = self.start_remote()
+        route = '/api/runner-management/code-servers/' + identity['serverId'] + '/generation-git-binding'
+        repo = self.request('/api/runner-management/settings/code-repos')[0]
+        for body in ({'path': '../outside', 'repositoryId': repo['repoId'], 'directoryId': 'default'},
+                     {'path': 'news', 'repositoryId': 'missing', 'directoryId': 'default'},
+                     {'path': 'news', 'repositoryId': repo['repoId'], 'directoryId': 'missing'}):
+            with self.assertRaises(HTTPError): self.request(route, body)
+        self.assertFalse(code_servers.read(self.app, identity['serverId']).get('generationGitBindings'))
+        with patch.object(self.app, 'authenticate_admin', side_effect=ApiError('无写入权限', 403)) as authorize:
+            with self.assertRaises(HTTPError) as error:
+                self.request(route, {'path': '', 'repositoryId': ''})
+            self.assertEqual(error.exception.code, 403)
+            self.assertTrue(authorize.call_args.kwargs['write'])
+
+    def test_generation_directory_is_per_instance_persists_heartbeat_and_can_reset(self):
+        service, endpoint, identity, payload = self.start_remote()
+        base = '/api/runner-management/code-servers/' + identity['serverId'] + '/generation-directory'
+        root = str(service.workspace.root / 'agent-projects')
+        saved = self.request(base, {'generationRoot': root})
+        self.assertEqual(saved['generationRoot'], root)
+        self.assertNotIn('tokenHash', saved)
+        self.request('/api/code-servers/me/heartbeat', {**payload, 'serverId': identity['serverId'], 'pid': 1234,
+                     'generationRoot': 'not-a-heartbeat-setting'}, identity['token'])
+        self.assertEqual(self.request('/api/runner-management/code-servers')['items'][0]['generationRoot'], root)
+        code = self.request('/api/runner-management/code-servers/enrollment-code', {})['code']
+        second = self.request('/api/code-servers/enroll', {**payload, 'code': code, 'installDirectory': 'other-instance'})
+        self.assertNotIn('generationRoot', code_servers.read(self.app, second['serverId']))
+        reset = self.request(base, {'generationRoot': ''})
+        self.assertEqual(reset['generationRoot'], '')
+        self.assertEqual(code_servers.generation_root(reset), str(service.workspace.root))
+
+    def test_generation_directory_rejects_invalid_paths_and_requires_write_authorization(self):
+        service, endpoint, identity, payload = self.start_remote()
+        base = '/api/runner-management/code-servers/' + identity['serverId'] + '/generation-directory'
+        for value in (None, 3, '../outside', str(service.workspace.root.parent / 'outside'),
+                      str(service.workspace.root / '..' / 'outside'), str(service.workspace.root / '.git'),
+                      str(service.workspace.root / 'node_modules')):
+            with self.subTest(value=value), self.assertRaises(HTTPError) as error:
+                self.request(base, {'generationRoot': value})
+            self.assertEqual(error.exception.code, 400)
+        with patch.object(self.app, 'authenticate_admin', side_effect=ApiError('无写入权限', 403)) as authorize:
+            with self.assertRaises(HTTPError) as error:
+                self.request(base, {'generationRoot': str(service.workspace.root)})
+            self.assertEqual(error.exception.code, 403)
+            self.assertTrue(authorize.call_args.kwargs['write'])
+        windows = {'workspace': r'D:\codeserver\workspace'}
+        self.assertEqual(code_servers.generation_root(windows, r'D:\codeserver\workspace\projects'), r'D:\codeserver\workspace\projects')
+        with self.assertRaises(ApiError):
+            code_servers.generation_root(windows, r'D:\codeserver\other')
+
+    def test_supervisor_logs_are_authenticated_and_restricted_to_known_types(self):
+        service,endpoint,identity,payload=self.start_remote()
+        (service.directory/'logs/launcher.log').write_text('upgrade fixture',encoding='utf8')
+        route='/api/runner-management/code-servers/'+identity['serverId']+'/files'
+        self.assertEqual(self.request(route,{'action':'logs','kind':'launcher'})['content'],'upgrade fixture')
+        with self.assertRaises(HTTPError):self.request(route,{'action':'logs','kind':'../identity'})
     setUp = baseline.ManagementIntegrationTest.setUp
     request = baseline.ManagementIntegrationTest.request
 
@@ -154,6 +292,7 @@ class CodeServerTest(unittest.TestCase):
             config = json.loads(archive.read('config.json'))
             self.assertEqual(config['platform'], self.url)
             self.assertTrue(config['enrollCode'])
+            self.assertNotIn('allowedModelOrigins', config)
 
     def test_remote_model_stream_and_workspace_boundaries(self):
         service, endpoint, identity, payload = self.start_remote()
@@ -173,7 +312,7 @@ class CodeServerTest(unittest.TestCase):
         service.config['allowedModelOrigins'] = [origin]
         config = model_interfaces.listing(self.app)
         agent = config['items'][1]
-        agent.update(endpoint=origin + '/wb/agent', generationServerId=identity['serverId'], prjDir='.', codeDir='code', outputFileDir='output', cdpPort=9333)
+        agent.update(endpoint=origin + '/wb/agent', generationServerId=identity['serverId'], generationServerMode='manual', prjDir='.', codeDir='code', outputFileDir='output', cdpPort=9333)
         model_interfaces.save(self.app, config)
         _, request = model_interfaces.prepare_test(self.app, {'interfaceId': agent['id'], 'prompt': '测试', 'taskId': 'task-100'})
         self.assertEqual(request.full_url, endpoint + '/api/model')
@@ -182,12 +321,17 @@ class CodeServerTest(unittest.TestCase):
             self.assertEqual(response.read1(4096).decode(), '第一段')
             release.set(); self.assertEqual(response.read().decode(), '第二段')
         self.assertEqual(calls[0]['cdp_port'], 9333)
-        base = service.workspace.root / identity['serverId']
+        base = service.workspace.root
         self.assertEqual(calls[0]['code_dir'], str(base / 'code'))
         self.assertEqual(calls[0]['input_file_dir'], str(base / 'input'))
         self.assertEqual(calls[0]['output_file_dir'], str(base / 'output'))
         self.assertTrue(all((base / name).is_dir() for name in ('code', 'input', 'output')))
-        with self.assertRaises(ServiceError):
-            service.model({'url': 'http://unconfigured.invalid/wb/agent', 'method': 'POST', 'body': {}})
+        # An empty or stale allowlist no longer blocks configured HTTP model services.
+        service.config['allowedModelOrigins'] = []
+        with service.model({'url': origin + '/wb/agent', 'method': 'POST', 'body': {}}) as response:
+            self.assertEqual(response.status, 200)
+        for address in ('file:///etc/passwd', 'ftp://example.com/a', 'http://user:password@example.com/a', 'http://', 'http://example.com:bad/a'):
+            with self.subTest(address=address), self.assertRaises(ServiceError):
+                service.model({'url': address, 'method': 'POST', 'body': {}})
         with self.assertRaises(ServiceError):
             service.model({'url': origin + '/wb/agent', 'method': 'POST', 'body': {'code_dir': '../escape'}})

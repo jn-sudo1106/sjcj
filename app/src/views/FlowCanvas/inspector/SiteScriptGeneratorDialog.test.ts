@@ -1,21 +1,26 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import SiteScriptGeneratorDialog from './SiteScriptGeneratorDialog.vue'
-import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript } from '@/api/siteScript'
+import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript, submitSiteScriptTask } from '@/api/siteScript'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type SiteCodeVersion } from '@/api/runnerManagement'
 import { nodePromptApi } from '@/api/nodePrompts'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
+import { sourceApi } from '@/api'
 vi.mock('@/api/nodePrompts', async importOriginal => ({ ...await importOriginal<typeof import('@/api/nodePrompts')>(), nodePromptApi: { list: vi.fn() } }))
 
-vi.mock('@/api/siteScript', async importOriginal => ({ ...await importOriginal<typeof import('@/api/siteScript')>(), generateSiteScript: vi.fn() }))
+vi.mock('@/api/siteScript', async importOriginal => ({ ...await importOriginal<typeof import('@/api/siteScript')>(), generateSiteScript: vi.fn(), submitSiteScriptTask: vi.fn() }))
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   publishScript: vi.fn(), siteCodeVersions: vi.fn(), siteCodeContent: vi.fn(), bindSiteCode: vi.fn(),
+  previewScriptFile: vi.fn(), changeScriptFileAssociation: vi.fn(),
   codeRepositories: vi.fn(), codeRepositoryDirectories: vi.fn(), codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(),
   modelInterfaces: vi.fn(),
   generatedCodeState: vi.fn(), saveGenerationPreference: vi.fn(), commitGeneratedCode: vi.fn(),
   nodeGenerationSettings: vi.fn(), saveNodeGenerationSettings: vi.fn(),
+  codeGenerationServers: vi.fn(),
+  resolveGenerationDestination: vi.fn(),
 } }))
 
 const defaultRepo: CodeRepository = { repoId: 'repo-default', name: '默认仓库', configType: '', configTypeName: '',
@@ -35,8 +40,12 @@ const defaultDirectory = (repoId: string): CodeRepositoryDirectory => ({ directo
 const webDirectory: CodeRepositoryDirectory = { ...defaultDirectory(webRepo.repoId), directoryId: 'web-dir',
   name: '网页列表代码', configType: '90', configTypeName: '网页抓取', path: '网页/列表', isDefault: false }
 const stubs = {
+  ElRadioGroup: { props: ['modelValue', 'disabled'], emits: ['update:modelValue'], template: '<div><slot /></div>' },
+  ElRadioButton: { props: ['value'], template: '<span><slot /></span>' },
+  ElInput: { props: ['modelValue', 'disabled'], emits: ['update:modelValue'], template: '<input :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
   ElSwitch: { props: ['modelValue', 'disabled', 'beforeChange'], template: '<button type="button" :disabled="disabled" @click="beforeChange()">{{ modelValue ? "开启" : "关闭" }}</button>' },
   ElDialog: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
+  ElDrawer: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   ElButton: { props: ['disabled'], template: '<button type="button" :disabled="disabled"><slot /></button>' },
   ElSelect: { props: ['modelValue', 'disabled'], emits: ['update:modelValue', 'change'],
     template: '<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\', $event.target.value)"><option value="" /><slot /></select>' },
@@ -49,6 +58,10 @@ const mountDialog = (props: Partial<InstanceType<typeof SiteScriptGeneratorDialo
 })
 
 beforeEach(() => {
+  vi.mocked(runnerManagementApi.resolveGenerationDestination).mockResolvedValue({ repositoryId: defaultRepo.repoId, directoryId: 'default', directoryPath: 'default', repoName: defaultRepo.name, remoteUrl: '', branch: 'main', configType: '90', matchedBy: 'default' })
+  vi.mocked(submitSiteScriptTask).mockResolvedValue({ taskId: '501', queue: 'code_mq' })
+  vi.spyOn(sourceApi, 'codeConfigOptions').mockResolvedValue([{ configId: '201001', name: '代码生成', topic: 'code_mq', entryTypeId: null }])
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [] })
   vi.mocked(runnerManagementApi.nodeGenerationSettings).mockResolvedValue({ configId: 'c-1', enabled: false, generation: null })
   vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mockImplementation(async body => ({ configId: body.configId, enabled: false, generation: body.generation || null }))
   vi.mocked(runnerManagementApi.generatedCodeState).mockResolvedValue({ autoCommit: true, archive: null })
@@ -60,7 +73,169 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.codeRepositories).mockResolvedValue([webRepo, defaultRepo])
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([])
 })
-afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs() })
+afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllEnvs() })
+
+it('模型配置入口跳转到合并后的服务器模型页并携带关联实例', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 1, items: [{
+    id: 'agent-home', name: 'home171 模型', kind: 'agent', model: 'hy3', endpoint: 'http://192.168.1.171:6000/wb/agent',
+    enabled: true, isDefault: true, timeoutSeconds: 300, inputFileDir: '', codeDir: '', outputFileDir: '', stream: true,
+    generationServerId: 'home171-instance', generationServerMode: 'manual',
+  }] })
+  const wrapper = mountDialog()
+  await flushPromises()
+  const link = wrapper.findAllComponents({ name: 'RouterLink' }).find(item => item.text() === '配置')!
+  expect(link.props('to')).toEqual({ path: '/settings', query: { tab: 'code-servers', view: 'models', serverId: 'home171-instance' } })
+  wrapper.unmount()
+})
+
+it('默认任务方式只提交任务，扩大提示词区域且隐藏代码编辑和过程', async () => {
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' })
+  await flushPromises()
+  expect(wrapper.get('[data-testid="generation-machine"]').text()).toContain('等待匹配的机器上线')
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ taskContext: { sourceId: '1', flowId: '2', stepId: '3' } }), expect.any(AbortSignal))
+  expect(generateSiteScript).not.toHaveBeenCalled()
+  expect(wrapper.get('[data-testid="generation-task-status"]').text()).toContain('501 · 已保存到数据库')
+  expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="site-script-publish"]').exists()).toBe(false)
+  expect(wrapper.find('.site-script-workspace.is-task').exists()).toBe(true)
+  expect(wrapper.get('[data-testid="site-script-prompt"]').attributes('disabled')).toBeUndefined()
+  expect(wrapper.get('[data-testid="generation-mode-task"]').text()).toBe('任务方式')
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ configId: '1401081' }))
+  wrapper.unmount(); await flushPromises()
+})
+
+it('切换调用接口时展示代码编辑区且不发送任务上下文', async () => {
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3' }); await flushPromises()
+  await wrapper.get('[data-testid="generation-mode-direct"]').trigger('click')
+  expect(wrapper.get('[data-testid="generation-mode-direct"]').text()).toBe('调用接口')
+  expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(true)
+  expect(wrapper.find('[data-testid="generation-dispatch-config"]').exists()).toBe(false)
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(vi.mocked(generateSiteScript).mock.calls[0]?.[0].taskContext).toBeUndefined()
+  expect(submitSiteScriptTask).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('任务提交携带所选模型配置快照，接口查询凭据不进入任务参数', async () => {
+  const settings = await runnerManagementApi.modelInterfaces()
+  const chosen = settings.items[0]!
+  chosen.endpoint = 'http://model.example/wb/agent?api_key=secret-test-value'
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ ...settings, items: [chosen] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  const snapshot = vi.mocked(submitSiteScriptTask).mock.calls[0]![0].modelCall
+  expect(snapshot).toMatchObject({ interfaceId: chosen.id, name: chosen.name, model: chosen.model, endpoint: 'http://model.example/wb/agent', timeoutSeconds: chosen.timeoutSeconds })
+  expect(JSON.stringify(snapshot)).not.toContain('secret-test-value')
+  wrapper.unmount()
+})
+
+it('切换方式保留提示词和已有代码，重新打开默认任务方式', async () => {
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  await wrapper.get('[data-testid="site-script-prompt"]').setValue('保留这份用户提示词')
+  await wrapper.get('[data-testid="generation-mode-direct"]').trigger('click')
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[aria-label="可编辑 Python 代码"]').element).toHaveProperty('value', sampleCode)
+  await wrapper.get('[data-testid="generation-mode-task"]').trigger('click')
+  expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
+  await wrapper.get('[data-testid="generation-mode-direct"]').trigger('click')
+  expect(wrapper.get('[aria-label="可编辑 Python 代码"]').element).toHaveProperty('value', sampleCode)
+  expect(wrapper.get('[data-testid="site-script-prompt"]').element).toHaveProperty('value', '保留这份用户提示词')
+  await wrapper.setProps({ open: false }); await wrapper.setProps({ open: true }); await flushPromises()
+  expect(wrapper.get('[data-testid="generation-mode-task"]').classes()).toContain('active')
+  expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+
+it('任务提交失败时在提示词区域展示错误，不需要打开生成过程', async () => {
+  vi.mocked(submitSiteScriptTask).mockRejectedValue(new Error('任务接口暂不可用'))
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="site-script-error"]').text()).toBe('任务接口暂不可用')
+  expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="generation-task-status"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+
+it('模型机器不存在时仍允许创建等待任务', async () => {
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'other-server', name: '其他机器', ipAddress: '192.168.1.172', status: 'online', endpoint: '', workspace: '', installDirectory: '', osType: '', osVersion: '', version: '', lastHeartbeat: '', mqCapable: true, mqGeneration: { configId: '201001', queue: 'code_mq', name: '代码生成' } }] })
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ taskContext: expect.objectContaining({ sourceId: '1', flowId: '2', stepId: '3' }) }), expect.any(AbortSignal))
+  expect(wrapper.text()).not.toContain('该派发队列属于其他模型')
+  wrapper.unmount()
+})
+
+it('机器列表暂时读取失败也不阻止任务创建', async () => {
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockRejectedValue(new Error('HTTP 502'))
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  expect(wrapper.get('[data-testid="generation-machine"]').text()).toContain('任务仍可提交')
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenCalled()
+  wrapper.unmount()
+})
+
+it('所选模型关联离线机器时不阻止任务提交', async () => {
+  const model = (await runnerManagementApi.modelInterfaces()).items[0]!
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 0, items: [{ ...model, kind: 'agent', generationServerId: 'server-1' }] })
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'server-1', name: 'home171', ipAddress: '192.168.1.171', status: 'offline', endpoint: '', workspace: '', installDirectory: '', osType: '', osVersion: '', version: '', lastHeartbeat: '', mqCapable: true, mqGeneration: { configId: '201001', queue: 'code_mq', name: '代码生成' } }] })
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  expect(wrapper.get('[data-testid="generation-machine"]').text()).toContain('home171 · 192.168.1.171 · 离线')
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ taskContext: expect.objectContaining({ sourceId: '1', flowId: '2', stepId: '3' }) }), expect.any(AbortSignal))
+  wrapper.unmount()
+})
+
+it('切换模型后任务快照采用所选模型', async () => {
+  const model = (await runnerManagementApi.modelInterfaces()).items[0]!
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 0, items: [
+    { ...model, id: 'agent-1', kind: 'agent', generationServerId: 'server-1' },
+    { ...model, id: 'agent-2', kind: 'agent', generationServerId: 'server-2', isDefault: false },
+  ] })
+  vi.mocked(sourceApi.codeConfigOptions).mockResolvedValue([
+    { configId: '201001', name: '机器一', topic: 'code_mq_1', entryTypeId: null },
+    { configId: '201002', name: '机器二', topic: 'code_mq_2', entryTypeId: null },
+  ])
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [1, 2].map(index => ({
+    serverId: `server-${index}`, name: `生成机器${index}`, ipAddress: `192.168.1.${index}`, status: 'online', endpoint: '', workspace: '', installDirectory: '', osType: '', osVersion: '', version: '', lastHeartbeat: '', mqCapable: true,
+    mqGeneration: { configId: `20100${index}`, queue: `code_mq_${index}`, name: `机器${index}` },
+  })) })
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
+  await wrapper.get('[data-testid="site-script-model"]').setValue('agent-2'); await flushPromises()
+  expect(wrapper.get('[data-testid="generation-machine"]').text()).toContain('生成机器2')
+  await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ interfaceId: 'agent-2', taskContext: expect.objectContaining({ sourceId: '1', flowId: '2', stepId: '3' }) }), expect.any(AbortSignal))
+  wrapper.unmount()
+})
+it('生成时展示实际过程，失败后保留输出且按文本显示', async () => {
+  let reject!: (error: Error) => void
+  vi.mocked(generateSiteScript).mockImplementation((_input, _signal, onEvent) => {
+    onEvent?.({ type: 'request', request: { method: 'POST', url: 'http://192.168.1.171:6000/wb/agent', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: { prj_dir: 'D:\\aicode', prompt: '最终系统要求与用户要求', cdp_port: 9223 } } })
+    onEvent?.({ type: 'progress', message: '正在连接模型' })
+    onEvent?.({ type: 'chunk', text: 'event: output\ndata: ' + JSON.stringify({ message: '正在分析网页 <script>literal</script>' }) + '\n\n' })
+    return new Promise((_resolve, failure) => { reject = failure })
+  })
+  const w = mountDialog(); await flushPromises()
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(w.get('[data-testid="site-script-process"]').text()).toContain('正在连接模型')
+  expect(w.get('[data-testid="site-script-process-output"]').text()).toContain('<script>literal</script>')
+  expect(w.get('[data-testid="site-script-process-output"]').text()).not.toContain('data:')
+  expect(w.find('[data-testid="site-script-process-output"] script').exists()).toBe(false)
+  await w.get('[data-testid="site-script-request-tab"]').trigger('click')
+  expect(w.get('[data-testid="site-script-model-request"]').text()).toContain('POST http://192.168.1.171:6000/wb/agent')
+  expect(w.get('[data-testid="site-script-model-request"]').text()).toContain('最终系统要求与用户要求')
+  expect(w.get('[data-testid="site-script-model-request"]').text()).toContain('"cdp_port": 9223')
+  await w.findAll('button').find(button => button.text() === '过程输出')!.trigger('click')
+  reject(new Error('模型失败')); await flushPromises()
+  expect(w.get('[data-testid="site-script-process"]').text()).toContain('模型失败')
+  expect(w.get('[data-testid="site-script-process-output"]').text()).toContain('正在分析网页')
+  w.unmount()
+})
 const generatedArchive = { archiveId: 'a'.repeat(32), status: 'pending' as const, message: '', configId: 'c-1', repoId: webRepo.repoId,
   directoryId: 'default', directoryPath: 'default', taskId: 'task', serverId: 'server', createdAt: '', gitCommit: '', pushed: false,
   files: [{ path: 'default/www.realcan.cn.py', relativePath: 'www.realcan.cn.py', sha256: 'hash', size: 10 }] }
@@ -78,14 +253,16 @@ it('修改生成配置后自动保存，关闭工作区立即提交待保存内�
 it('重新进入 AI 工作区恢复节点保存的模型和提示词', async () => {
   vi.mocked(runnerManagementApi.nodeGenerationSettings).mockResolvedValue({ configId: 'c-1', enabled: true, generation: {
     interfaceId: 'legacy', repositoryId: defaultRepo.repoId, directoryId: 'default', configType: '90', queueName: 'news_list',
-    systemPrompt: '批量系统提示词', userPrompt: '采集 https://old.example.com/news', url: 'https://old.example.com/news', fileNameMode: 'queue', workspaceMode: 'custom', workspacePath: 'news/cninfo',
+    systemPrompt: '批量系统提示词', userPrompt: '采集 https://old.example.com/news', url: 'https://old.example.com/news', fileNameMode: 'queue', workspaceMode: 'custom', workspacePath: 'news/cninfo', codeDirectory: 'manual/code',
   } })
   const w = mountDialog(); await flushPromises()
   expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe('采集 https://www.realcan.cn/newscenter')
   expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
   await w.get('[data-testid="site-script-system-prompt"]').setValue('更新后的系统提示词')
   w.unmount(); await flushPromises()
-  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ repositoryId: defaultRepo.repoId, systemPrompt: '更新后的系统提示词', userPrompt: '采集 https://www.realcan.cn/newscenter', fileNameMode: 'queue', workspaceMode: 'custom', workspacePath: 'news/cninfo' }) }))
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ repositoryId: defaultRepo.repoId, systemPrompt: '更新后的系统提示词', userPrompt: '采集 https://www.realcan.cn/newscenter', fileNameMode: 'queue' }) }))
+  const saved = vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mock.calls.at(-1)![0].generation!
+  expect(saved).not.toHaveProperty('workspaceMode'); expect(saved).not.toHaveProperty('workspacePath'); expect(saved).not.toHaveProperty('codeDirectory')
 })
 it('连续编辑提示词合并为一次自动保存，保存失败明确显示', async () => {
   vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mockRejectedValue(new Error('网络断开'))
@@ -103,6 +280,60 @@ async function remoteModel() {
   const legacy = (await runnerManagementApi.modelInterfaces()).items[0]!
   vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 1, items: [{ ...legacy, kind: 'agent', generationServerId: 'server', model: 'hy3' }] })
 }
+it('按配置类型默认提交links，可切到自定义且任务请求保存选中的提交方式', async () => {
+  await remoteModel()
+  vi.mocked(runnerManagementApi.resolveGenerationDestination).mockResolvedValue({ repositoryId: webRepo.repoId, directoryId: webDirectory.directoryId,
+    directoryPath: 'links', repoName: webRepo.name, remoteUrl: webRepo.remoteUrl, branch: 'main', configType: '90', matchedBy: 'type' })
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockImplementation(async repoId => repoId === webRepo.repoId ? [{ ...webDirectory, path: 'links' }] : [defaultDirectory(repoId)])
+  const w = mountDialog({ sourceId: '1', flowId: '2', stepId: '3' }); await flushPromises()
+  expect(w.get('[data-testid="generation-destination-mode"]').text()).toContain('按配置类型')
+  expect((w.get('[data-testid="site-script-repository"]').element as HTMLSelectElement).value).toBe(webRepo.repoId)
+  expect(w.get('[data-testid="site-script-storage-path"]').text()).toContain('links/c-1/')
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenLastCalledWith(expect.objectContaining({ destinationMode: 'type', repositoryId: webRepo.repoId, directoryId: webDirectory.directoryId }), expect.any(AbortSignal))
+  const modeControl = w.getComponent('[data-testid="generation-destination-mode"]') as VueWrapper
+  modeControl.vm.$emit('update:modelValue', 'custom'); await flushPromises()
+  await w.get('[data-testid="site-script-repository"]').setValue(defaultRepo.repoId); await flushPromises()
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenLastCalledWith(expect.objectContaining({ destinationMode: 'custom', repositoryId: defaultRepo.repoId, directoryId: 'default' }), expect.any(AbortSignal))
+  w.unmount(); await flushPromises()
+})
+it('生成目录绑定Git时同步实际仓库与路径并锁定选择，改到未绑定目录后可自由选择', async () => {
+  await remoteModel()
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockImplementation(async repoId => repoId === webRepo.repoId ? [webDirectory] : [defaultDirectory(repoId)])
+  const historical = { ...oldVersion, repoId: defaultRepo.repoId, directoryId: 'default', code: sampleCode }
+  const older = { ...historical, scriptDigest: 'sha256:older' }
+  vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([historical, older])
+  vi.mocked(runnerManagementApi.siteCodeContent).mockImplementation(async digest => ({ ...historical, scriptDigest: digest }))
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'server', name: '生成机',
+    workspace: 'D:\\workspace', generationGitBindings: [{ path: 'c-1/code', repositoryId: webRepo.repoId, directoryId: webDirectory.directoryId,
+      repoName: webRepo.name, remoteUrl: webRepo.remoteUrl, branch: 'main', directoryPath: webDirectory.path }],
+  } as never] })
+  const w = mountDialog(); await flushPromises()
+  expect(w.get('[data-testid="generation-directory-git-target"]').text()).toContain(webRepo.remoteUrl)
+  expect((w.get('[data-testid="site-script-repository"]').element as HTMLSelectElement).value).toBe(webRepo.repoId)
+  expect((w.get('[data-testid="site-script-directory"]').element as HTMLSelectElement).value).toBe(webDirectory.directoryId)
+  expect(w.get('[data-testid="site-script-repository"]').attributes('disabled')).toBeDefined()
+  await w.get('[data-testid="site-code-versions"]').setValue(older.scriptDigest); await flushPromises()
+  expect((w.get('[data-testid="site-script-repository"]').element as HTMLSelectElement).value).toBe(webRepo.repoId)
+  expect((w.get('[data-testid="site-script-directory"]').element as HTMLSelectElement).value).toBe(webDirectory.directoryId)
+  const modeControl = w.getComponent('[data-testid="generation-destination-mode"]') as VueWrapper
+  modeControl.vm.$emit('update:modelValue', 'custom'); await flushPromises()
+  expect(w.find('[data-testid="generation-directory-git-target"]').exists()).toBe(false)
+  expect(w.get('[data-testid="site-script-repository"]').attributes('disabled')).toBeUndefined()
+  w.unmount()
+})
+it('节点只配置仓库目录，不展示或提交服务器工作路径覆盖', async () => {
+  await remoteModel()
+  const w = mountDialog(); await flushPromises()
+  expect(w.find('[data-testid="generation-workspace-settings"]').exists()).toBe(false)
+  expect(w.find('[data-testid="generation-code-directory"]').exists()).toBe(false)
+  expect(w.find('[aria-label="仓库目录"]').exists()).toBe(true)
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  const input = vi.mocked(generateSiteScript).mock.calls[0]![0]
+  expect(input).not.toHaveProperty('workspaceMode'); expect(input).not.toHaveProperty('workspacePath'); expect(input).not.toHaveProperty('codeDirectory')
+  w.unmount(); await flushPromises()
+})
 it('远程生成沿用节点目标目录，成功后自动提交全部生成文件', async () => {
   await remoteModel()
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [], previewPath: generatedArchive.files[0]!.path, archive: { ...generatedArchive, status: 'committed', gitCommit: 'c'.repeat(40), pushed: true } })
@@ -113,7 +344,7 @@ it('远程生成沿用节点目标目录，成功后自动提交全部生成文�
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [], previewPath: generatedArchive.files[0]!.path,
     archive: { ...generatedArchive, repoId, directoryId, status: 'committed', gitCommit: 'c'.repeat(40), pushed: true } })
   await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', repositoryId: repoId, directoryId, autoCommit: true, deferCommit: false, workspaceMode: 'config', workspacePath: '' }), expect.any(AbortSignal))
+  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', repositoryId: repoId, directoryId, autoCommit: true, deferCommit: false }), expect.any(AbortSignal), expect.any(Function))
   expect(runnerManagementApi.commitGeneratedCode).not.toHaveBeenCalled()
   expect(w.get('[data-testid="site-script-archive"]').text()).toContain('已提交并推送 Git')
   expect(w.get('[data-testid="site-script-publish"]').attributes('disabled')).toBeDefined()
@@ -158,7 +389,7 @@ it('选择大模型后按所选接口生成，停用的模型不出现在选项�
   expect(w.get('[data-testid="site-script-model"]').text()).not.toContain('停用接口')
   await w.get('[data-testid="site-script-model"]').setValue('chat-hy3')
   await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ interfaceId: 'chat-hy3' }), expect.any(AbortSignal))
+  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ interfaceId: 'chat-hy3' }), expect.any(AbortSignal), expect.any(Function))
   w.unmount()
 })
 it('模型配置查询失败时保留编辑区并阻止调用其他默认服务', async () => {
@@ -478,7 +709,7 @@ it('系统和用户提示词独立编辑，生成及保存均提交两份内容�
   await wrapper.get('[data-testid="site-script-system-prompt"]').setValue('系统：保留指定函数接口')
   await wrapper.get('[data-testid="site-script-prompt"]').setValue('用户：抓取标题和发布日期')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: '用户：抓取标题和发布日期', prompt: '用户：抓取标题和发布日期' }), expect.any(AbortSignal))
+  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: '用户：抓取标题和发布日期', prompt: '用户：抓取标题和发布日期' }), expect.any(AbortSignal), expect.any(Function))
   await wrapper.get('[data-testid="site-script-publish"]').trigger('click'); await flushPromises()
   expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: '用户：抓取标题和发布日期' }))
   await wrapper.get('[data-testid="site-script-reset-system-prompt"]').trigger('click')
@@ -521,7 +752,7 @@ it('首次生成直接进入编辑区，重新生成可切换预览且保留手�
   await wrapper.get('[data-testid="site-script-candidate-tab"]').trigger('click')
   await wrapper.get('[data-testid="site-script-adopt"]').trigger('click')
   expect((wrapper.get('[aria-label="可编辑 Python 代码"]').element as HTMLTextAreaElement).value).toContain('return [1]')
-  expect(generateSiteScript).toHaveBeenCalledWith({ taskId: expect.any(String), interfaceId: 'legacy', prompt: '抓取新闻列表', userPrompt: '抓取新闻列表', systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, url: 'https://www.realcan.cn/newscenter', sampleId: 'www.realcan.cn.py' }, expect.any(AbortSignal))
+  expect(generateSiteScript).toHaveBeenCalledWith({ taskId: expect.any(String), interfaceId: 'legacy', prompt: '抓取新闻列表', userPrompt: '抓取新闻列表', systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, url: 'https://www.realcan.cn/newscenter', sampleId: 'www.realcan.cn.py' }, expect.any(AbortSignal), expect.any(Function))
   expect(vi.mocked(generateSiteScript).mock.calls[0]![0].taskId).not.toBe(vi.mocked(generateSiteScript).mock.calls[1]![0].taskId)
   wrapper.unmount()
 })
@@ -561,6 +792,56 @@ it('自动载入按队列命名的代码，可切换历史版本', async () => {
   wrapper.unmount()
 })
 
+it('来源文件按记录的提交在右侧查看，取消关联立即保存且保留未保存代码', async () => {
+  const linked = { ...oldVersion, sourceRepoPath: 'code/c-1/source.py', sourceGitCommit: 'c'.repeat(40) }
+  vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([linked])
+  vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...linked, code: sampleCode })
+  vi.mocked(runnerManagementApi.previewScriptFile).mockResolvedValue({ repoId: webRepo.repoId, path: linked.sourceRepoPath, gitCommit: linked.sourceGitCommit, content: '# historical source', size: 19 })
+  vi.mocked(runnerManagementApi.changeScriptFileAssociation).mockResolvedValue({ ok: true, message: '已取消关联，仓库文件保留' })
+  vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  const wrapper = mountDialog(); await flushPromises()
+  await wrapper.get('[data-testid="site-script-source-file"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.previewScriptFile).toHaveBeenCalledWith(linked.scriptDigest, 'source')
+  expect(wrapper.get('[data-testid="site-script-file-preview"]').text()).toContain('# historical source')
+  await wrapper.get('[aria-label="可编辑 Python 代码"]').setValue(sampleCode + '# unsaved')
+  await wrapper.get('[data-testid="site-script-preview-unlink"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.changeScriptFileAssociation).toHaveBeenCalledWith({ digest: linked.scriptDigest, configId: 'c-1', queueName: 'news_list', target: 'source', action: 'unlink' })
+  expect(wrapper.find('[data-testid="site-script-source-file"]').exists()).toBe(false)
+  expect((wrapper.get('[aria-label="可编辑 Python 代码"]').element as HTMLTextAreaElement).value).toContain('# unsaved')
+  expect(wrapper.get('.site-script-code-status').text()).toContain('有修改待保存')
+  expect(runnerManagementApi.publishScript).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('已关联文件和生成目标分开展示，取消代码关联后不再显示旧关联', async () => {
+  vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([oldVersion])
+  vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...oldVersion, code: sampleCode })
+  vi.mocked(runnerManagementApi.changeScriptFileAssociation).mockResolvedValue({ ok: true, message: '已取消关联' })
+  vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  const wrapper = mountDialog({ sourceId: '1', flowId: '2', stepId: '3' }); await flushPromises()
+  expect(wrapper.get('[data-testid="site-script-associated-file"]').text()).toContain('code/c-1/code-1.py')
+  expect(wrapper.get('[data-testid="site-script-storage-path"]').text()).not.toContain('code/c-1')
+  await wrapper.get('[data-testid="site-script-unlink-saved"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.changeScriptFileAssociation).toHaveBeenCalledWith(expect.objectContaining({ target: 'saved', action: 'unlink' }))
+  expect(wrapper.find('[data-testid="site-script-associated-file"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="site-script-unlink-saved"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+it('删除文件需要确认，接口失败保留关联并显示真实错误', async () => {
+  const linked = { ...oldVersion, sourceRepoPath: 'default/source.py', sourceGitCommit: 'c'.repeat(40) }
+  vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([linked])
+  vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...linked, code: sampleCode })
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm' as never)
+  vi.mocked(runnerManagementApi.changeScriptFileAssociation).mockRejectedValue(new Error('当前仓库文件与关联快照不同'))
+  const wrapper = mountDialog(); await flushPromises()
+  await wrapper.get('[data-testid="site-script-delete-source"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.changeScriptFileAssociation).not.toHaveBeenCalled()
+  await wrapper.get('[data-testid="site-script-delete-source"]').trigger('click'); await flushPromises()
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('历史提交及已下发的代码包保留'), '删除仓库文件', expect.anything())
+  expect(runnerManagementApi.changeScriptFileAssociation).toHaveBeenCalledWith(expect.objectContaining({ action: 'delete', target: 'source' }))
+  expect(wrapper.get('[data-testid="site-script-source-file"]').text()).toContain(linked.sourceRepoPath)
+  expect(wrapper.text()).toContain('当前仓库文件与关联快照不同')
+  wrapper.unmount()
+})
 it('编辑已有代码时继续保存到原仓库，并保留来源文件关联', async () => {
   const linked = { ...oldVersion, sourceRepoPath: '网页抓取/scraper.py', sourceGitCommit: 'c'.repeat(40) }
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([linked])
@@ -640,7 +921,7 @@ it('源 URL 改变后清除旧代码，生成自动使用最新地址', async ()
   await flushPromises()
   expect(wrapper.get('[data-testid="site-script-file-name"]').text()).toBe('latest.example.com.py')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://latest.example.com/list' }), expect.any(AbortSignal))
+  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://latest.example.com/list' }), expect.any(AbortSignal), expect.any(Function))
   wrapper.unmount()
 })
 

@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RouterLink } from 'vue-router'
-import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript } from '@/api/siteScript'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface, type GeneratedCodeArchive } from '@/api/runnerManagement'
+import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript, submitSiteScriptTask, type SiteScriptGenerateInput, type SiteScriptModelRequest } from '@/api/siteScript'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface, type GeneratedCodeArchive, type CodeGenerationServer, type GenerationDestination } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
 import { nodePromptsAvailable } from '@/constants/deployGates'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
-import { createGenerationTaskId } from '@/utils/generationWorkspace'
+import { createGenerationTaskId, matchingGenerationGitBinding, nodeGenerationCodeDirectory } from '@/utils/generationWorkspace'
+import { formatModelTestOutput } from '@/api/modelInterfaceStream'
 
 const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL 编写完整的 Python 新闻抓取代码。
 提供 scrape(url) 函数，返回新闻字典列表，字段包含 title、date、url、summary、content。
@@ -17,7 +18,7 @@ const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL
 保持样例的函数接口和返回结构，根据目标网站调整页面选择器，不照搬样例站点的域名。
 只生成抓取代码，不包含 MQ、数据库、流程调度逻辑；导入模块时不要发起网络请求。`
 
-const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string> }>()
+const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string>; sourceId?: string; flowId?: string; stepId?: string }>()
 const emit = defineEmits<{ saved: [version: PublishedScript, configId: string, queueName: string] }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
@@ -30,9 +31,37 @@ const modelInterfaces = ref<ModelInterface[]>([]), modelInterfaceId = ref(''), m
 let modelsRequest = 0
 const selectedModel = computed(() => modelInterfaces.value.find(row => row.id === modelInterfaceId.value && row.enabled))
 const remoteGeneration = computed(() => !!selectedModel.value?.generationServerId && ['agent', 'gemini-agent'].includes(selectedModel.value.kind))
+const taskContextAvailable = computed(() => !!props.sourceId && !!props.flowId && !!props.stepId)
+const generationMode = ref<'task' | 'direct'>('task')
+const submittedTask = ref<{ taskId: string; queue: string; status: 'waiting' | 'running' | 'succeeded' | 'failed' } | null>(null)
+const taskGeneration = computed(() => taskContextAvailable.value && generationMode.value === 'task')
+const archiveGeneration = computed(() => remoteGeneration.value || taskGeneration.value)
+const generationServers = ref<CodeGenerationServer[]>([])
+const machineLookupError = ref('')
+const generationMachine = computed(() => generationServers.value.find(row => row.serverId === selectedModel.value?.generationServerId))
+const machineMessage = computed(() => {
+  if (machineLookupError.value) return `生成机器信息暂时无法读取（${machineLookupError.value}），任务仍可提交并等待匹配机器。`
+  const worker = generationMachine.value
+  if (!worker && selectedModel.value?.generationServerMatch === 'ambiguous') return '接口地址匹配多个生成实例，请在大模型接口中选择具体机器；任务等待正确绑定后执行。'
+  if (!worker) return taskGeneration.value ? '模型尚无可用的生成机器，任务可以先提交，等待匹配的机器上线。' : '未关联生成机器，将按模型接口配置直接调用。'
+  return `${worker.name} · ${worker.ipAddress} · ${worker.status === 'online' ? '在线' : '离线'}${taskGeneration.value && worker.status !== 'online' ? '，任务等待机器恢复' : ''}${taskGeneration.value && !worker.mqCapable ? '，等待升级支持任务消费' : ''}`
+})
+let machineRequest = 0
+async function loadGenerationMachines() {
+  const sequence = ++machineRequest
+  const [servers] = await Promise.allSettled([runnerManagementApi.codeGenerationServers()])
+  if (sequence !== machineRequest) return
+  generationServers.value = servers.status === 'fulfilled' ? servers.value.items : []
+  machineLookupError.value = servers.status === 'rejected' ? message(servers.reason) : ''
+}
+watch(() => selectedModel.value?.generationServerId, () => { void loadGenerationMachines() })
 const archiveError = ref('')
-const workspaceMode = ref<'config' | 'queue' | 'custom'>('config'), workspacePath = ref('')
-const workspacePreview = computed(() => `生成服务器工作空间 / ${workspaceMode.value === 'config' ? props.configId || '配置ID' : workspaceMode.value === 'queue' ? props.queueName || '请先配置队列' : workspacePath.value || '请输入相对目录'}`)
+const destinationMode = ref<'type' | 'custom'>('type')
+const automaticDestination = ref<GenerationDestination | null>(null), destinationLookupError = ref('')
+const generationConfigType = computed(() => props.configType || automaticDestination.value?.configType || '')
+const workspacePreview = computed(() => nodeGenerationCodeDirectory(generationMachine.value?.generationRoot || generationMachine.value?.workspace || '生成服务器工作空间', props.configId || '配置ID', props.queueName || '请先配置队列'))
+const directoryGitBinding = computed(() => destinationMode.value === 'custom' ? undefined : matchingGenerationGitBinding(generationMachine.value, workspacePreview.value))
+const automaticTarget = computed(() => directoryGitBinding.value || automaticDestination.value)
 const taskConfigError = ref(''), savingTaskConfig = ref(false)
 const taskConfigStatus = ref('修改后自动保存')
 let taskConfigReady = false, taskConfigContext = '', taskConfigTimer: ReturnType<typeof setTimeout> | undefined
@@ -99,6 +128,29 @@ const showCandidate = ref(false)
 const error = ref('')
 const warnings = ref<string[]>([])
 const generating = ref(false)
+const workspaceTab = ref<'code' | 'process'>('code')
+const generationOutput = ref(''), generationStages = ref<string[]>([]), followProcess = ref(true)
+const generationRequest = ref<SiteScriptModelRequest | null>(null), processView = ref<'output' | 'request'>('output')
+const generationRequestText = computed(() => {
+  const request = generationRequest.value
+  if (!request) return ''
+  return `${request.method} ${request.url}\n${Object.entries(request.headers).map(([key,value]) => `${key}: ${value}`).join('\n')}\n\n${request.body === null ? '' : JSON.stringify(request.body,null,2)}`
+})
+const processBox = ref<HTMLElement>()
+const displayedGenerationOutput = computed(() => {
+  const raw = generationOutput.value
+  if (/^(?:data:|event:)/.test(raw.trimStart())) {
+    return raw.replace(/\r\n/g, '\n').split('\n\n').map(frame => {
+      const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n')
+      return !data || data.trim() === '[DONE]' ? '' : formatModelTestOutput(data, generating.value)
+    }).filter(Boolean).join('\n')
+  }
+  return formatModelTestOutput(raw, generating.value)
+})
+watch(generationOutput, async () => {
+  await nextTick()
+  if (followProcess.value && processBox.value) processBox.value.scrollTop = processBox.value.scrollHeight
+})
 const publishing = ref(false)
 const loading = ref(false)
 const codeLoading = ref(false)
@@ -118,7 +170,7 @@ const repositoryDirectoryErrors = ref<Record<string, string>>({})
 const directoryId = ref(''), directoriesLoading = ref(false)
 const directories = computed(() => repositoryDirectories.value[repositoryId.value] || [])
 const directoriesError = computed(() => repositoryDirectoryErrors.value[repositoryId.value] || '')
-const availableDirectories = computed(() => directories.value.filter(row => row.status === 'ACTIVE' && (!row.configType || row.configType === (props.configType || ''))))
+const availableDirectories = computed(() => directories.value.filter(row => row.status === 'ACTIVE' && (!row.configType || row.configType === generationConfigType.value)))
 const selectedDirectory = computed(() => availableDirectories.value.find(row => row.directoryId === directoryId.value))
 const fileChooserOpen = ref(false)
 const repositoryFiles = ref<CodeRepositoryFile[]>([])
@@ -131,8 +183,17 @@ const sourceFilePath = ref('')
 const sourceGitCommit = ref('')
 const selectableFiles = computed(() => repositoryFiles.value.filter((file) => file.path.toLowerCase().endsWith('.py')))
 const availableRepositories = computed(() => repositories.value.filter((repo) =>
-  repo.status === 'ACTIVE' && (!repo.configType || repo.configType === (props.configType || ''))))
+  repo.status === 'ACTIVE' && (!repo.configType || repo.configType === generationConfigType.value)))
 const selectedRepository = computed(() => availableRepositories.value.find((repo) => repo.repoId === repositoryId.value))
+const directoryBindingError = computed(() => {
+  const binding = directoryGitBinding.value
+  if (!binding) return ''
+  if (binding.error) return binding.error
+  if (loading.value || directoriesLoading.value) return ''
+  if (!availableRepositories.value.some(repo => repo.repoId === binding.repositoryId)) return '目录绑定的仓库已停用或不适用于当前节点类型，请修改目录 Git 绑定'
+  if (!(repositoryDirectories.value[binding.repositoryId] || []).some(directory => directory.directoryId === binding.directoryId && directory.status === 'ACTIVE' && (!directory.configType || directory.configType === generationConfigType.value))) return '目录绑定的仓库路径已停用、加载失败或不适用于当前节点类型，请检查目录 Git 绑定'
+  return ''
+})
 const nodeTypeName = computed(() => Object.values(repositoryDirectories.value).flat().find(row =>
   row.configType === props.configType && row.configTypeName)?.configTypeName
   || availableRepositories.value.find(repo => repo.configType === props.configType)?.configTypeName || '')
@@ -141,7 +202,12 @@ const fileName = computed(() => savedFileName.value || (fileNameMode.value === '
 const contextVersions = computed(() => versions.value)
 const latestVersion = computed(() => contextVersions.value.find(version => version.siteHost === hostname.value)
   || contextVersions.value.find(version => !version.siteHost) || contextVersions.value[0])
-const storagePath = computed(() => selectedDirectory.value ? `${selectedDirectory.value.path}/${fileName.value}` : '')
+const storagePath = computed(() => {
+  const directory = selectedDirectory.value?.path
+  if (!directory) return ''
+  const prefix = archiveGeneration.value && props.configId && directory.split('/').pop() !== props.configId ? `${props.configId}/` : ''
+  return `${directory}/${prefix}${fileName.value}`
+})
 const absoluteStoragePath = computed(() => {
   const root = selectedRepository.value?.path || loadedVersion.value?.repoPath || ''
   if (!storagePath.value) return root
@@ -161,7 +227,19 @@ const repositoryFileTarget = computed(() => {
   if (!saved?.repoId || !saved.storagePath || saved.repoId !== repositoryId.value || saved.storagePath !== storagePath.value) return null
   return { path: '/settings', query: { tab: 'code-repos', repoId: saved.repoId, filePath: saved.storagePath, ...(saved.directoryId ? { directoryId: saved.directoryId } : {}) } }
 })
-const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value)
+const associatedVersion = computed(() => published.value || loadedVersion.value)
+const savedSourceAssociation = computed(() => !!loadedVersion.value?.sourceRepoPath && sourceFilePath.value === loadedVersion.value.sourceRepoPath && sourceGitCommit.value === loadedVersion.value.sourceGitCommit)
+const associatedStoragePath = computed(() => {
+  const version = associatedVersion.value
+  if (!version?.repoId || !version.storagePath) return ''
+  const root = repositories.value.find(repo => repo.repoId === version.repoId)?.path || version.repoPath || ''
+  return root ? `${root.replace(/[\\/]$/, '')}/${version.storagePath}` : version.storagePath
+})
+const filePreviewOpen = ref(false), filePreviewLoading = ref(false), filePreviewError = ref(''), fileActionBusy = ref(false)
+const filePreviewTarget = ref<'saved' | 'source'>('saved')
+const filePreview = ref<{ path: string; gitCommit: string; content: string } | null>(null)
+let filePreviewSequence = 0
+const busy = computed(() => loading.value || (!taskGeneration.value && codeLoading.value) || generating.value || publishing.value || directoriesLoading.value || fileActionBusy.value)
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
 let controller: AbortController | null = null
 let openedFor = ''
@@ -171,8 +249,8 @@ let fileRequestId = 0
 let directoryRequestId = 0
 
 function matchingDirectory(repoId: string) {
-  if (!props.configType) return undefined
-  const matching = (repositoryDirectories.value[repoId] || []).filter(row => row.status === 'ACTIVE' && row.configType === props.configType)
+  if (!generationConfigType.value) return undefined
+  const matching = (repositoryDirectories.value[repoId] || []).filter(row => row.status === 'ACTIVE' && row.configType === generationConfigType.value)
   return matching.find(row => !row.isDefault) || matching[0]
 }
 function selectDefaultDirectory() {
@@ -209,6 +287,7 @@ async function loadDirectories() {
 }
 
 function clearDraft() {
+  filePreviewSequence++; filePreviewOpen.value = false; filePreview.value = null; filePreviewError.value = ''
   selectedPromptId.value = 0
   promptTemplates.value = []
   versionRequestId++
@@ -234,6 +313,7 @@ function syncPromptDefaults(template?: NodePromptTemplate) {
 }
 
 async function initialize() {
+  void loadGenerationMachines()
   flushTaskConfig()
   taskConfigReady = false
   savingTaskConfig.value = false
@@ -241,11 +321,12 @@ async function initialize() {
   const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
   const newContext = openedFor !== context
   if (newContext) {
+    generationOutput.value = ''; generationStages.value = []; generationRequest.value = null; workspaceTab.value = 'code'; submittedTask.value = null; generationMode.value = 'task'
     clearDraft()
     archive.value = null; archivePreview.value = ''; archivePreviewPath.value = ''; archiveSavedKey.value = ''; archiveError.value = ''
     repositoryId.value = ''
     fileNameMode.value = 'website'
-    workspaceMode.value = 'config'; workspacePath.value = ''
+    destinationMode.value = 'type'; automaticDestination.value = null; destinationLookupError.value = ''
     prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
     systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
     defaultSystemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
@@ -257,15 +338,18 @@ async function initialize() {
   repositoriesError.value = ''
   versionsError.value = ''
   templateError.value = ''
-  const [repoResult, versionResult, templateResult, , archiveResult, taskConfigResult] = await Promise.allSettled([
+  const [repoResult, versionResult, templateResult, , archiveResult, taskConfigResult, destinationResult] = await Promise.allSettled([
     runnerManagementApi.codeRepositories(),
     props.configId && props.queueName ? runnerManagementApi.siteCodeVersions(props.configId, props.queueName) : Promise.resolve([] as SiteCodeVersion[]),
     props.configType && nodePromptsAvailable() ? nodePromptApi.list({ sourceType: props.configType, templateUse: 'script' }) : Promise.resolve([]),
     loadModels(),
     props.configId ? runnerManagementApi.generatedCodeState(props.configId) : Promise.resolve({ autoCommit: true, archive: null }),
     props.configId ? runnerManagementApi.nodeGenerationSettings(props.configId) : Promise.resolve(null),
+    props.configId ? runnerManagementApi.resolveGenerationDestination({ configId: props.configId, queueName: props.queueName, configType: props.configType }) : Promise.resolve(null),
   ])
   if (session !== sessionId) return
+  automaticDestination.value = destinationResult.status === 'fulfilled' ? destinationResult.value : null
+  destinationLookupError.value = destinationResult.status === 'rejected' ? message(destinationResult.reason) : ''
   if (archiveResult.status === 'fulfilled') { archive.value = archiveResult.value.archive; archiveError.value = '' }
   else archiveError.value = `生成归档配置加载失败：${message(archiveResult.reason)}`
   if (templateResult.status === 'fulfilled') {
@@ -316,7 +400,7 @@ async function initialize() {
     repositoryId.value = saved.repositoryId
     directoryId.value = saved.directoryId
     fileNameMode.value = saved.fileNameMode
-    workspaceMode.value = saved.workspaceMode || 'config'; workspacePath.value = saved.workspacePath || ''
+    destinationMode.value = saved.destinationMode || 'custom'
     systemPrompt.value = saved.systemPrompt
     prompt.value = saved.userPrompt
     if (saved.url && saved.url !== url.value) { systemPrompt.value = systemPrompt.value.replaceAll(saved.url, url.value); prompt.value = prompt.value.replaceAll(saved.url, url.value) }
@@ -345,6 +429,7 @@ watch(open, visible => {
     fileChooserOpen.value = false
     return
   }
+  generationMode.value = 'task'
   if (!loading.value && !code.value && !candidate.value && latestVersion.value) void loadVersion(latestVersion.value, false)
 }, { immediate: true })
 
@@ -363,6 +448,11 @@ watch(repositoryId, () => {
   directoryId.value = ''
   selectDefaultDirectory()
 }, { flush: 'sync' })
+watch([automaticTarget, loading, directoriesLoading, repositoryId, directoryId, destinationMode, archiveGeneration], ([binding, isLoading, isDirectoriesLoading]) => {
+  if (!archiveGeneration.value || destinationMode.value !== 'type' || !binding || ('error' in binding && binding.error) || isLoading || isDirectoriesLoading || generating.value || publishing.value) return
+  repositoryId.value = binding.repositoryId
+  directoryId.value = binding.directoryId
+})
 watch(directoryId, () => {
   fileRequestId++
   repositoryFiles.value = []
@@ -370,7 +460,7 @@ watch(directoryId, () => {
   repositoryFileError.value = ''
   if (fileChooserOpen.value && selectedDirectory.value && !directoriesLoading.value) void loadRepositoryFiles(1)
 }, { flush: 'sync' })
-watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId.value, directoryId.value, props.configType, props.queueName, systemPrompt.value, prompt.value, url.value, fileNameMode.value, workspaceMode.value, workspacePath.value]), () => {
+watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId.value, directoryId.value, generationConfigType.value, props.queueName, systemPrompt.value, prompt.value, url.value, fileNameMode.value, destinationMode.value]), () => {
   const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
   if (!taskConfigReady || loading.value || taskConfigContext !== context) return
   if (taskConfigTimer) clearTimeout(taskConfigTimer)
@@ -381,14 +471,62 @@ watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId
   }
   pendingTaskConfig = { session: sessionId, body: { configId: props.configId, generation: {
     interfaceId: modelInterfaceId.value, repositoryId: repositoryId.value, directoryId: directoryId.value,
-    configType: props.configType || '', queueName: props.queueName || '', systemPrompt: systemPrompt.value,
+    configType: generationConfigType.value, queueName: props.queueName || '', systemPrompt: systemPrompt.value,
     userPrompt: prompt.value, url: url.value, fileNameMode: fileNameMode.value,
-    workspaceMode: workspaceMode.value, workspacePath: workspacePath.value,
+    destinationMode: destinationMode.value,
   } } }
   taskConfigStatus.value = '等待自动保存…'
   taskConfigTimer = setTimeout(flushTaskConfig, 700)
 }, { flush: 'sync' })
-onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++ })
+onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++; filePreviewSequence++ })
+
+async function previewAssociatedFile(target: 'saved' | 'source') {
+  const version = associatedVersion.value
+  if (!version || busy.value || (target === 'source' && !savedSourceAssociation.value)) return
+  const sequence = ++filePreviewSequence, session = sessionId
+  filePreviewTarget.value = target
+  filePreviewOpen.value = true; filePreviewLoading.value = true; filePreviewError.value = ''; filePreview.value = null
+  try {
+    const result = await runnerManagementApi.previewScriptFile(version.scriptDigest, target)
+    if (sequence === filePreviewSequence && session === sessionId) filePreview.value = result
+  } catch (e) { if (sequence === filePreviewSequence && session === sessionId) filePreviewError.value = message(e) }
+  finally { if (sequence === filePreviewSequence && session === sessionId) filePreviewLoading.value = false }
+}
+
+async function changeAssociatedFile(target: 'saved' | 'source', action: 'unlink' | 'delete') {
+  const version = associatedVersion.value, session = sessionId
+  if (busy.value || !props.configId || !props.queueName) return
+  if (target === 'source' && !savedSourceAssociation.value) {
+    if (action === 'unlink') { sourceFilePath.value = ''; sourceGitCommit.value = '' }
+    return
+  }
+  if (!version) return
+  const wasSaved = isSaved.value
+  const path = target === 'source' ? sourceFilePath.value : version.storagePath
+  const text = action === 'delete'
+    ? `删除仓库当前分支中的文件「${path}」并取消关联？删除会提交到 Git；历史提交及已下发的代码包保留。`
+    : `取消当前节点与${target === 'source' ? '来源文件' : '代码文件'}「${path}」的关联？仓库文件、历史版本及已下发的代码包保留。`
+  fileActionBusy.value = true
+  try {
+    try { await ElMessageBox.confirm(text, action === 'delete' ? '删除仓库文件' : '取消文件关联', { type: 'warning', confirmButtonText: action === 'delete' ? '删除文件' : '取消关联', cancelButtonText: '返回' }) }
+    catch { return }
+    if (session !== sessionId) return
+    const result = await runnerManagementApi.changeScriptFileAssociation({ digest: version.scriptDigest, configId: props.configId, queueName: props.queueName, target, action })
+    if (session !== sessionId) return
+    if (target === 'source') {
+      sourceFilePath.value = ''; sourceGitCommit.value = ''
+      if (loadedVersion.value) loadedVersion.value = { ...loadedVersion.value, sourceRepoPath: '', sourceGitCommit: '' }
+      if (wasSaved) savedDraftKey.value = draftKey.value
+    } else {
+      versions.value = versions.value.filter(item => item.codeId !== version.codeId)
+      loadedVersion.value = null; published.value = null; selectedVersionDigest.value = ''; savedDraftKey.value = ''; savedFileName.value = ''
+      sourceFilePath.value = ''; sourceGitCommit.value = ''
+    }
+    filePreviewSequence++; filePreviewOpen.value = false; filePreview.value = null; error.value = ''
+    ElMessage.success(result.message)
+  } catch (e) { if (session === sessionId) { error.value = message(e); if (filePreviewOpen.value) filePreviewError.value = message(e) } }
+  finally { fileActionBusy.value = false }
+}
 
 function restoreVersionDestination(version: SiteCodeVersion) {
   // 已有代码始终恢复原仓库；原仓库不可用时由用户明确选择新位置。
@@ -449,12 +587,17 @@ async function selectPromptTemplate(id: number) {
   }
   promptSnapshot.value = promptTextKey()
 }
-function cancelGenerate() { controller?.abort(); controller = null; generating.value = false }
+function cancelGenerate() {
+  if (generating.value) generationStages.value.push(submittedTask.value ? '已停止查看；已提交的任务仍保留在数据库中，可在任务中心查看。' : '已取消接收过程输出；远程已开始的生成及归档可能继续执行。')
+  controller?.abort(); controller = null; generating.value = false
+}
 
 async function generate() {
   if (busy.value) return
+  if (archiveGeneration.value && destinationMode.value === 'type' && !directoryGitBinding.value && destinationLookupError.value) { error.value = `自动提交位置查询失败：${destinationLookupError.value}`; return }
+  if (directoryBindingError.value) { error.value = `目录 Git 绑定不可用：${directoryBindingError.value}`; return }
   if (modelsLoading.value || modelError.value || !selectedModel.value) { error.value = '请先选择可用的大模型接口'; return }
-  if (remoteGeneration.value && (!props.configId || !selectedRepository.value || !selectedDirectory.value || directoriesError.value || archiveError.value)) { error.value = archiveError.value || '请先保存节点并选择有效的仓库和配置目录'; return }
+  if (archiveGeneration.value && (!props.configId || !selectedRepository.value || !selectedDirectory.value || directoriesError.value || archiveError.value)) { error.value = archiveError.value || '请先保存节点并选择有效的仓库和配置目录'; return }
   if (!systemPrompt.value.trim()) { error.value = '请填写系统提示词'; return }
   if (!prompt.value.trim()) { error.value = '请填写用户提示词'; return }
   if (systemPrompt.value.length > 12000 || prompt.value.length > 12000) { error.value = '每份提示词不能超过 12000 字'; return }
@@ -466,13 +609,41 @@ async function generate() {
   const active = new AbortController()
   controller = active
   generating.value = true
+  generationOutput.value = ''; generationStages.value = ['正在发起代码生成请求…']; workspaceTab.value = 'process'; followProcess.value = true
+  generationRequest.value = null; processView.value = 'output'
   error.value = ''
   warnings.value = []
+  submittedTask.value = null
   try {
-    const result = await generateSiteScript({ taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py',
-      ...(remoteGeneration.value ? { configId: props.configId, configType: props.configType || '', queueName: props.queueName || '', repositoryId: repositoryId.value,
-        directoryId: directoryId.value, autoCommit: true, deferCommit: false, fileName: fileName.value,
-        workspaceMode: workspaceMode.value, workspacePath: workspacePath.value } : {}) }, active.signal)
+    if(archiveGeneration.value && props.sourceId && props.flowId && props.stepId && props.configId) {
+      await runnerManagementApi.saveNodeGenerationSettings({configId:props.configId,generation:{interfaceId:modelInterfaceId.value,repositoryId:repositoryId.value,directoryId:directoryId.value,configType:generationConfigType.value,queueName:props.queueName || '',systemPrompt:systemPrompt.value,userPrompt:prompt.value,url:url.value,fileNameMode:fileNameMode.value,destinationMode:destinationMode.value}})
+    }
+    if (active.signal.aborted) return
+    const selectedInterface = selectedModel.value
+    const interfaceUrl = selectedInterface ? new URL(selectedInterface.endpoint) : undefined
+    const input: SiteScriptGenerateInput = { taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py',
+      ...(taskGeneration.value && selectedInterface && interfaceUrl ? { modelCall: {
+        interfaceId: selectedInterface.id, name: selectedInterface.name, kind: selectedInterface.kind, model: selectedInterface.model,
+        endpoint: `${interfaceUrl.protocol}//${interfaceUrl.host}${interfaceUrl.pathname}`,
+        method: selectedInterface.kind === 'chat' ? 'GET' : 'POST', timeoutSeconds: selectedInterface.timeoutSeconds,
+        serverId: selectedInterface.generationServerId || '', serverName: generationMachine.value?.name || '',
+        serverAddress: generationMachine.value?.ipAddress || '', capturedAt: new Date().toISOString(),
+      } } : {}),
+      ...(taskGeneration.value && props.sourceId && props.flowId && props.stepId ? {taskContext:{sourceId:props.sourceId,flowId:props.flowId,stepId:props.stepId}} : {}),
+      ...(archiveGeneration.value ? { configId: props.configId, configType: generationConfigType.value, queueName: props.queueName || '', repositoryId: repositoryId.value, destinationMode: destinationMode.value,
+        directoryId: directoryId.value, autoCommit: true, deferCommit: false, fileName: fileName.value } : {}) }
+    if (taskGeneration.value) {
+      const receipt = await submitSiteScriptTask(input, active.signal)
+      if (!active.signal.aborted) submittedTask.value = { ...receipt, status: 'waiting' }
+      return
+    }
+    const result = await generateSiteScript(input, active.signal, event => {
+      if (controller !== active || active.signal.aborted) return
+      if (event.type === 'chunk') generationOutput.value += event.text
+      else if (event.type === 'request') generationRequest.value = event.request
+      else if (event.type === 'task') submittedTask.value = event
+      else generationStages.value.push(event.message)
+    })
     if (active.signal.aborted) return
     if (code.value.trim() && result.code.trim()) {
       candidate.value = result.code
@@ -487,6 +658,8 @@ async function generate() {
       archive.value = result.archive; archivePreview.value = result.code; archivePreviewPath.value = result.previewPath || ''; archiveSavedKey.value = ''; archiveError.value = ''
       markArchiveSaved()
     }
+    generationStages.value.push(result.archive?.status === 'failed' ? '生成完成，Git 归档失败，请重试提交。' : '代码生成完成')
+    workspaceTab.value = 'code'
   } catch (e) { if (!active.signal.aborted) error.value = message(e) || '生成失败' }
   finally { if (controller === active) { generating.value = false; controller = null } }
 }
@@ -571,6 +744,7 @@ async function publish() {
       queueName: props.queueName.trim(), fileNameMode: fileNameMode.value, configType: props.configType || undefined,
       codeId: published.value?.codeId || loadedVersion.value?.codeId || undefined,
       repositoryId: repositoryId.value,
+      ...(archiveGeneration.value ? { includeConfigId: true } : {}),
       directoryId: directoryId.value || undefined,
       sourceFilePath: sourceFilePath.value || undefined, sourceGitCommit: sourceGitCommit.value || undefined,
     })
@@ -609,16 +783,18 @@ function download() {
     <div class="site-script-task-config" role="status" data-testid="generation-config-status">{{ taskConfigStatus }}</div>
     <p v-if="taskConfigError" class="site-script-error" role="alert">{{ taskConfigError }}</p>
     <div class="site-script-context"><span v-if="configType" data-testid="site-script-node-type">节点类型 [{{ configType }}] {{ nodeTypeName }}</span><span :title="queueName">队列 {{ queueName || '未配置' }}</span></div>
+    <div v-if="archiveGeneration" class="site-script-naming"><span>提交位置</span><el-radio-group v-model="destinationMode" :disabled="busy" size="small" data-testid="generation-destination-mode"><el-radio-button value="type">按配置类型</el-radio-button><el-radio-button value="custom">自定义仓库目录</el-radio-button></el-radio-group><span v-if="destinationMode === 'type' && automaticDestination && !directoryGitBinding">{{ automaticDestination.repoName }} / {{ automaticDestination.directoryPath }}/</span></div>
+    <p v-if="archiveGeneration && destinationMode === 'type' && !directoryGitBinding && destinationLookupError" class="site-script-error">自动提交位置查询失败：{{ destinationLookupError }}</p>
     <div class="site-script-destination-fields">
       <label class="site-script-field">保存仓库
-        <el-select v-model="repositoryId" size="small" :disabled="busy" data-testid="site-script-repository" placeholder="请选择仓库">
+        <el-select v-model="repositoryId" size="small" :disabled="busy || (archiveGeneration && destinationMode === 'type')" data-testid="site-script-repository" placeholder="请选择仓库">
           <template #label="{ label }"><span class="site-script-select-label" :title="label">{{ selectedRepository?.name || label }}</span></template>
           <el-option v-if="loadedVersion?.repoId && !availableRepositories.some(repo => repo.repoId === loadedVersion?.repoId)" :value="loadedVersion.repoId" :label="`${loadedVersion.repoName || '原仓库'}（已停用或类型不匹配，请重新选择）`" disabled />
           <el-option v-for="repo in availableRepositories" :key="repo.repoId" :label="repositoryLabel(repo)" :value="repo.repoId" />
         </el-select>
       </label>
-      <div class="site-script-field"><div class="site-script-directory-label"><span>节点类型目录</span><el-button link type="primary" :disabled="busy" data-testid="site-script-refresh-directories" @click="loadDirectories">刷新</el-button></div>
-        <el-select v-model="directoryId" size="small" :disabled="busy" data-testid="site-script-directory" aria-label="节点类型目录" placeholder="选择仓库目录">
+      <div class="site-script-field"><div class="site-script-directory-label"><span>仓库目录</span><el-button link type="primary" :disabled="busy" data-testid="site-script-refresh-directories" @click="loadDirectories">刷新</el-button></div>
+        <el-select v-model="directoryId" size="small" :disabled="busy || (archiveGeneration && destinationMode === 'type')" data-testid="site-script-directory" aria-label="仓库目录" placeholder="选择仓库目录">
           <template #label="{ label }"><span class="site-script-select-label" :title="label">{{ selectedDirectory?.name || label }}</span></template>
           <el-option v-if="loadedVersion?.directoryId && loadedVersion.repoId === repositoryId && !availableDirectories.some(row => row.directoryId === loadedVersion?.directoryId)" :value="loadedVersion.directoryId" label="原目录已停用或不可用，请重新选择" disabled />
           <el-option v-for="directory in availableDirectories" :key="directory.directoryId" :value="directory.directoryId" :label="`${directory.name} · ${directory.configTypeName || '通用'} · ${directory.path}/`" />
@@ -631,28 +807,28 @@ function download() {
     <p v-if="repositoriesError" class="site-script-error" role="alert">仓库加载失败：{{ repositoriesError }}</p>
     <p v-if="templateError" class="site-script-error" role="alert">{{ templateError }}</p>
     <div class="site-script-naming"><span>文件命名方式</span><el-select v-model="fileNameMode" size="small" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select><code :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code></div>
-    <div v-if="remoteGeneration" class="site-script-naming" data-testid="generation-workspace-settings">
-      <span>生成工作目录</span>
-      <el-radio-group v-model="workspaceMode" size="small" :disabled="busy" data-testid="generation-workspace-mode">
-        <el-radio-button value="config">按配置 ID</el-radio-button><el-radio-button value="queue">按 MQ 名称</el-radio-button><el-radio-button value="custom">自定义</el-radio-button>
-      </el-radio-group>
-      <el-input v-if="workspaceMode === 'custom'" v-model="workspacePath" size="small" maxlength="500" :disabled="busy" placeholder="相对目录，如 news/cninfo" data-testid="generation-workspace-path" style="width:220px" />
-      <code :title="workspacePreview" data-testid="generation-workspace-preview">{{ workspacePreview }}</code>
-    </div>
+    <p v-if="directoryGitBinding" :class="directoryBindingError ? 'site-script-error' : 'site-script-hint'" data-testid="generation-directory-git-target">目录 Git 绑定：{{ directoryGitBinding.repoName || directoryGitBinding.repositoryId }} / {{ directoryGitBinding.directoryPath || directoryGitBinding.directoryId }} · {{ directoryGitBinding.remoteUrl || '仅本地提交' }} · {{ directoryGitBinding.branch }}{{ directoryBindingError ? ` · ${directoryBindingError}` : '' }}</p>
     <div class="site-script-paths">
       <div v-if="selectedRepository && selectedDirectory"><span>保存关联</span><code :title="`${selectedRepository.name} / ${selectedDirectory.name}`" data-testid="site-script-destination">{{ selectedRepository.name }} / {{ selectedDirectory.name }}</code></div>
-      <div><span>仓库文件</span><RouterLink v-if="repositoryFileTarget" :to="repositoryFileTarget" target="_blank" rel="noopener" class="site-script-repository-link" title="在新标签页查看仓库代码" data-testid="site-script-open-repository"><code :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ absoluteStoragePath }}</code></RouterLink><code v-else :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ storagePath ? absoluteStoragePath : `${absoluteStoragePath || '请先选择仓库'}${absoluteStoragePath ? ' / 请选择保存目录' : ''}` }}</code></div>
-      <div v-if="sourceFilePath"><span>来源文件</span><code :title="sourceFilePath" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</code></div>
+      <div><span>{{ repositoryFileTarget ? '仓库文件' : '仓库位置' }}</span><RouterLink v-if="repositoryFileTarget" :to="repositoryFileTarget" target="_blank" rel="noopener" class="site-script-repository-link" title="在新标签页查看仓库代码" data-testid="site-script-open-repository"><code :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ absoluteStoragePath }}</code></RouterLink><code v-else :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ storagePath ? absoluteStoragePath : `${absoluteStoragePath || '请先选择仓库'}${absoluteStoragePath ? ' / 请选择保存目录' : ''}` }}</code></div>
+      <div v-if="associatedStoragePath"><span>{{ repositoryFileTarget ? '文件操作' : '已关联文件' }}</span><button v-if="!repositoryFileTarget" type="button" class="site-script-file-link" :disabled="busy" :title="associatedStoragePath" @click="previewAssociatedFile('saved')" data-testid="site-script-associated-file">{{ associatedStoragePath }}</button><el-button v-else link :disabled="busy" data-testid="site-script-preview-saved" @click="previewAssociatedFile('saved')">查看代码</el-button><el-button link :disabled="busy" data-testid="site-script-unlink-saved" @click="changeAssociatedFile('saved', 'unlink')">取消关联</el-button><el-button link type="danger" :disabled="busy" data-testid="site-script-delete-saved" @click="changeAssociatedFile('saved', 'delete')">删除文件</el-button></div>
+      <div v-if="sourceFilePath"><span>来源文件</span><button type="button" class="site-script-file-link" :disabled="busy || !savedSourceAssociation" :title="savedSourceAssociation ? sourceFilePath : '保存后可查看关联版本'" @click="previewAssociatedFile('source')" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</button><el-button link :disabled="busy" data-testid="site-script-unlink-source" @click="changeAssociatedFile('source', 'unlink')">取消关联</el-button><el-button v-if="savedSourceAssociation" link type="danger" :disabled="busy" data-testid="site-script-delete-source" @click="changeAssociatedFile('source', 'delete')">删除文件</el-button></div>
     </div>
+    <p v-if="error && !open" class="site-script-error" role="alert">{{ error }}</p>
     <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">AI 生成代码</el-button>
   </section>
-  <el-dialog v-model="open" title="AI 代码工作区" width="min(1160px, 96vw)" top="4vh" append-to-body data-testid="site-script-dialog">
-    <div v-loading="loading" class="site-script-workspace">
+  <el-dialog v-model="open" title="AI 代码工作区" width="min(1360px, 96vw)" top="3vh" append-to-body data-testid="site-script-dialog">
+    <div v-loading="loading" class="site-script-workspace" :class="{ 'is-task': taskGeneration }">
       <section class="site-script-settings" data-testid="site-script-prompt-panel">
+        <nav v-if="taskContextAvailable" class="site-script-output-tabs" aria-label="生成方式"><button type="button" data-testid="generation-mode-task" :disabled="busy" :class="{active:generationMode==='task'}" @click="generationMode='task'">任务方式</button><button type="button" data-testid="generation-mode-direct" :disabled="busy" :class="{active:generationMode==='direct'}" @click="generationMode='direct'">调用接口</button></nav>
+        <div class="site-script-controls">
         <PromptTemplatePicker :items="promptTemplates" :model-value="selectedPromptId" :disabled="busy" test-id="script-prompt-template" @select="selectPromptTemplate" />
-        <div class="site-script-model"><label>大模型</label><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading" placeholder="选择大模型接口" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink to="/settings?tab=model-interfaces" target="_blank" rel="noopener">配置</RouterLink></div>
+        <div class="site-script-model"><label>大模型</label><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading" placeholder="选择大模型接口" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink :to="{ path: '/settings', query: { tab: 'code-servers', view: 'models', ...(selectedModel?.generationServerId ? { serverId: selectedModel.generationServerId } : {}) } }" target="_blank" rel="noopener">配置</RouterLink></div>
         <p v-if="modelError" class="site-script-error" role="alert">{{ modelError }}</p>
-        <div v-if="remoteGeneration" class="site-script-auto-commit"><small>生成完成后自动提交到节点选择的 Git 目录；input、code、output 目录固定复用，任务记录保存在 tasks/任务ID.json。</small></div>
+        <p v-if="taskContextAvailable" class="site-script-machine" data-testid="generation-machine">{{ machineMessage }}</p>
+        <div v-if="remoteGeneration && !taskGeneration" class="site-script-auto-commit"><small>生成完成后自动提交到节点选择的 Git 目录；input、code、output 目录固定复用，任务记录保存在 tasks/任务ID.json。</small></div>
+        </div>
+        <div class="site-script-prompts">
         <section class="site-script-prompt-group">
           <div class="site-script-panel-head"><label for="site-script-system-prompt"><b>系统提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-system-prompt" @click="restoreSystemPrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-system-prompt" v-model="systemPrompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-system-prompt" placeholder="定义模型角色、代码规范和输出要求" /></div>
@@ -661,16 +837,28 @@ function download() {
           <div class="site-script-panel-head"><label for="site-script-prompt"><b>用户提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-prompt" @click="restorePrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-prompt" v-model="prompt" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-prompt" placeholder="说明本次抓取需求、列表页结构、提取字段及详情页要求" /></div>
         </section>
-        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || codeLoading || publishing || directoriesLoading || modelsLoading || !!modelError || !selectedModel" data-testid="site-script-generate" @click="generate">{{ code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating && !publishing" @click="cancelGenerate">取消生成</el-button><span v-else>{{ publishing ? '正在提交 Git…' : remoteGeneration ? '生成完成后自动提交 Git' : '生成后可在右侧编辑、保存' }}</span></div>
+        </div>
+        <p v-if="taskGeneration && error" class="site-script-error" role="alert" data-testid="site-script-error">{{ error }}</p>
+        <p v-if="taskGeneration && submittedTask" class="site-script-task-receipt" role="status" data-testid="generation-task-status">任务 {{ submittedTask.taskId }} · 已保存到数据库，等待机器领取 <RouterLink :to="{path:'/tasks',query:{tab:'code-generation',codeTaskId:submittedTask.taskId}}" target="_blank">到任务中心查看</RouterLink></p>
+        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || (!taskGeneration && codeLoading) || publishing || directoriesLoading || modelsLoading || !!modelError || !selectedModel" data-testid="site-script-generate" @click="generate">{{ taskGeneration ? '提交生成任务' : code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating && !publishing && !taskGeneration" @click="cancelGenerate">取消生成</el-button><span v-else>{{ taskGeneration ? '提交后在任务中心查看执行情况' : publishing ? '正在提交 Git…' : remoteGeneration ? '生成完成后自动提交 Git' : '生成后可在右侧编辑、保存' }}</span></div>
       </section>
-      <section v-loading="codeLoading" class="site-script-editor-panel" data-testid="site-script-code-panel">
+      <section v-if="!taskGeneration" v-loading="codeLoading" class="site-script-editor-panel" data-testid="site-script-code-panel">
         <div class="site-script-panel-head">
-          <b>代码编辑</b>
+          <nav class="site-script-output-tabs" aria-label="代码工作区"><button type="button" :class="{active:workspaceTab==='code'}" @click="workspaceTab='code'">代码编辑</button><button type="button" :class="{active:workspaceTab==='process'}" data-testid="site-script-process-tab" @click="workspaceTab='process'">生成过程</button></nav>
           <el-select v-if="contextVersions.length" v-model="selectedVersionDigest" :disabled="busy" class="site-script-version-select" data-testid="site-code-versions" placeholder="历史版本" @change="selectVersion">
             <el-option v-for="version in contextVersions" :key="version.scriptDigest" :value="version.scriptDigest" :label="`${version.deliveryPath.split('/').pop()} · ${version.gitCommit.slice(0, 10)}`" />
           </el-select>
           <span v-else>Python · scrape(url)</span>
         </div>
+        <section v-if="workspaceTab==='process'" class="site-script-process" data-testid="site-script-process">
+          <p v-if="submittedTask" data-testid="generation-task-status">任务 {{ submittedTask.taskId }} · {{ { waiting: '等待处理', running: '生成中', succeeded: '生成完成', failed: '生成失败' }[submittedTask.status] }} <RouterLink :to="{path:'/tasks',query:{tab:'code-generation',codeTaskId:submittedTask.taskId}}" target="_blank">任务中心</RouterLink></p>
+          <div class="site-script-process-tools"><nav class="site-script-output-tabs" aria-label="生成详情"><button type="button" :class="{active:processView==='output'}" @click="processView='output'">过程输出</button><button type="button" :class="{active:processView==='request'}" data-testid="site-script-request-tab" @click="processView='request'">请求详情</button></nav><el-checkbox v-if="processView==='output'" v-model="followProcess">跟随输出</el-checkbox><el-button v-if="processView==='output'" link :disabled="!generationOutput" @click="copyToClipboard(displayedGenerationOutput, '生成过程')">复制输出</el-button><el-button v-else link :disabled="!generationRequest" data-testid="site-script-copy-request" @click="copyToClipboard(generationRequestText, '模型请求')">复制请求</el-button></div>
+          <ol class="site-script-process-stages"><li v-for="(stage,index) in generationStages" :key="index">{{ stage }}</li></ol>
+          <p v-if="error" class="site-script-error" data-testid="site-script-error" role="alert">{{ error }}</p>
+          <pre v-if="processView==='request'" class="site-script-process-console" data-testid="site-script-model-request">{{ generationRequestText || '尚未构造模型请求；发起生成后展示本次最终请求。' }}</pre>
+          <pre v-else ref="processBox" class="site-script-process-console" data-testid="site-script-process-output">{{ displayedGenerationOutput || (generating ? '等待生成服务返回实际过程输出…' : '暂无过程输出') }}</pre>
+        </section>
+        <template v-else>
         <div class="site-script-editor-toolbar">
           <el-button size="small" :disabled="busy || !selectedDirectory || !!directoriesError" data-testid="site-script-choose-repo-file" @click="toggleFileChooser">选择仓库文件</el-button>
           <RouterLink v-if="repositoryFileTarget" :to="repositoryFileTarget" target="_blank" rel="noopener" class="site-script-repository-link" data-testid="site-script-workspace-repository">查看仓库</RouterLink>
@@ -688,10 +876,15 @@ function download() {
         <div v-else-if="code" class="site-script-editor" data-testid="site-script-editor"><textarea v-model="code" :disabled="loading || codeLoading || publishing" class="site-script-code" aria-label="可编辑 Python 代码" spellcheck="false" /></div>
         <div v-else class="site-script-empty"><b>{{ loading || codeLoading ? '正在读取已有代码…' : '当前节点还没有代码' }}</b><p>在左侧调整提示词并生成，或选择仓库中的 Python 文件。</p><el-button :disabled="busy" data-testid="site-script-manual" @click="editManually">手动编写</el-button></div>
         <div v-if="code" class="site-script-code-status"><span :class="{ 'site-script-saved': isSaved }">{{ isSaved ? '已保存并提交 Git' : '有修改待保存' }}</span><span v-if="published" :title="published.scriptDigest" data-testid="site-script-saved">Git {{ published.gitCommit.slice(0, 10) }} · {{ published.scriptDigest.slice(0, 20) }}</span><span v-else-if="loadedVersion" :title="loadedVersion.scriptDigest">Git {{ loadedVersion.gitCommit.slice(0, 10) }}</span></div>
+        </template>
       </section>
     </div>
-    <template #footer><div class="site-script-footer"><el-button :disabled="publishing" @click="open = false">关闭</el-button><el-button type="primary" :loading="publishing" :disabled="busy || !code.trim() || showCandidate || isSaved || !configId || !repositoryId || !!directoriesError || !selectedDirectory || !!loadedVersion?.directoryLayout" data-testid="site-script-publish" @click="publish">保存并提交</el-button></div></template>
+    <template #footer><div class="site-script-footer"><el-button :disabled="publishing" @click="open = false">关闭</el-button><el-button v-if="!taskGeneration" type="primary" :loading="publishing" :disabled="busy || !code.trim() || showCandidate || isSaved || !configId || !repositoryId || !!directoriesError || !selectedDirectory || !!loadedVersion?.directoryLayout" data-testid="site-script-publish" @click="publish">保存并提交</el-button></div></template>
   </el-dialog>
+  <el-drawer v-model="filePreviewOpen" title="关联代码文件" size="min(860px, 94vw)" append-to-body data-testid="site-script-file-preview">
+    <div v-loading="filePreviewLoading" class="site-script-file-preview"><p v-if="filePreviewError" class="site-script-error" role="alert">{{ filePreviewError }}</p><template v-if="filePreview"><b>{{ filePreview.path }}</b><p>Git {{ filePreview.gitCommit.slice(0, 12) }} · 关联时的文件快照</p><pre>{{ filePreview.content }}</pre></template></div>
+    <template #footer><div class="site-script-footer"><el-button :disabled="fileActionBusy" @click="filePreviewOpen = false">关闭</el-button><el-button :disabled="busy || filePreviewLoading" data-testid="site-script-preview-unlink" @click="changeAssociatedFile(filePreviewTarget, 'unlink')">取消关联</el-button><el-button type="danger" plain :disabled="busy || filePreviewLoading" data-testid="site-script-preview-delete" @click="changeAssociatedFile(filePreviewTarget, 'delete')">删除文件</el-button></div></template>
+  </el-drawer>
   <el-dialog v-model="fileChooserOpen" title="选择仓库 Python 文件" width="min(760px, 94vw)" append-to-body data-testid="site-script-file-browser">
     <p class="site-script-hint">{{ selectedRepository?.name }} / {{ selectedDirectory?.name }} · {{ selectedDirectory?.path }}/</p>
     <div class="site-script-file-search"><input v-model="repositoryFileKeyword" class="site-script-input" placeholder="按路径搜索仓库文件" data-testid="site-script-file-keyword" @keyup.enter="loadRepositoryFiles(1)" /><el-button :loading="repositoryFilesLoading" @click="loadRepositoryFiles(1)">查询</el-button></div>
@@ -702,6 +895,8 @@ function download() {
 </template>
 
 <style scoped>
+.site-script-output-tabs{display:flex;gap:6px}.site-script-output-tabs button{padding:6px 10px;border:0;background:transparent;cursor:pointer;color:var(--el-text-color-secondary)}.site-script-output-tabs button.active{color:var(--el-color-primary);box-shadow:inset 0 -2px var(--el-color-primary)}
+.site-script-process{display:flex;flex:1;min-height:0;flex-direction:column;gap:10px}.site-script-process-tools{display:flex;gap:12px;align-items:center;font-size:12px}.site-script-process-stages{margin:0;padding-left:20px;font-size:12px;line-height:1.7;color:var(--el-text-color-secondary)}.site-script-process-console{flex:1;min-height:100px;overflow:auto;margin:0;padding:12px;border-radius:6px;background:var(--el-fill-color-light);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7}
 .site-script-task-config { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--rc-muted); }
 .site-script-model { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .site-script-model > label { flex: 0 0 42px; }
@@ -716,22 +911,35 @@ function download() {
 .site-script-destination-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 10px; }
 .site-script-select-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-naming { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--rc-muted); }.site-script-naming > span { flex: 0 0 auto; white-space: nowrap; }.site-script-naming code { min-width: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
-.site-script-workspace { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.85fr); gap: 16px; height: min(650px, calc(100dvh - 180px)); min-height: 360px; }
+.site-script-workspace { display: grid; grid-template-columns: minmax(360px, 1.15fr) minmax(0, 1.4fr); gap: 16px; height: min(760px, calc(100dvh - 160px)); min-height: 0; }
+.site-script-workspace.is-task { grid-template-columns: minmax(0, 1fr); }
+.site-script-controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.is-task .site-script-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; align-items: center; }
+.is-task .site-script-controls > .site-script-error { grid-column: 1 / -1; }
+.site-script-machine { margin: 0; font-size: 12px; line-height: 1.6; color: var(--rc-muted); }
+.site-script-model-select { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.site-script-model-select > span { flex-shrink: 0; }
+.site-script-model-select :deep(.el-select) { flex: 1; min-width: 0; }
+.site-script-prompts { display: grid; grid-template-rows: repeat(2, minmax(150px, 1fr)); gap: 16px; flex: 1; min-height: 320px; }
+.is-task .site-script-prompts { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(240px, 1fr); min-height: 240px; }
+.site-script-task-receipt { margin: 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.site-script-task-receipt a { margin-left: 12px; color: var(--rc-primary); }
 .site-script-auto-commit,.site-script-archive { display:flex; flex-direction:column; gap:6px; font-size:12px; }.site-script-auto-commit small { color:var(--el-text-color-secondary); }.site-script-archive { padding:10px; border:1px solid var(--el-border-color); border-radius:6px; overflow-wrap:anywhere; }.site-script-archive a { color:var(--el-color-primary); }
 .site-script-settings, .site-script-editor-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 12px; padding: 16px; border: 1px solid var(--rc-border); border-radius: 10px; }
-.site-script-settings { background: var(--rc-primary-bg); }.site-script-editor-panel { background: var(--rc-card); }
+.site-script-settings { background: var(--rc-primary-bg); overflow-y: auto; }.site-script-settings > :not(.site-script-prompts) { flex-shrink: 0; }.site-script-editor-panel { background: var(--rc-card); }
 .site-script-panel-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }.site-script-panel-head b { flex-shrink: 0; font-size: 13px; }.site-script-panel-head > span { margin-left: auto; color: var(--rc-muted); font-size: 11px; }.site-script-panel-head > .el-button { margin-left: auto; }
 .site-script-field { display: grid; gap: 6px; color: var(--rc-text); font-size: 12px; font-weight: 600; }
 .site-script-directory-label { display: flex; align-items: center; justify-content: space-between; }.site-script-directory-label :deep(.el-button) { padding: 0; font-size: 11px; }
 .site-script-hint { margin: 0; color: var(--rc-muted); font-size: 11px; line-height: 1.5; }
 .site-script-input, .site-script-prompt, .site-script-code { box-sizing: border-box; width: 100%; border: 1px solid var(--rc-border); border-radius: 6px; padding: 9px 10px; background: var(--rc-card); color: var(--rc-text); font-size: 12px; outline: none; }
 .site-script-input:focus, .site-script-prompt:focus, .site-script-code:focus { border-color: var(--rc-primary); }
-.site-script-prompt-field { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 6px; }.site-script-prompt { flex: 1; min-height: 100px; line-height: 1.7; resize: none; }
+.site-script-prompt-field { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 6px; }.site-script-prompt { flex: 1; min-height: 120px; line-height: 1.7; resize: none; font-size: 13px; }
 .site-script-prompt-group { display:flex; flex:1; min-height:0; flex-direction:column; gap:6px; }
 .site-script-generation { display: flex; align-items: center; gap: 10px; }.site-script-generation span { color: var(--rc-muted); font-size: 11px; }
 .site-script-version-select { flex: 1; min-width: 0; margin-left: 12px; }
 .site-script-paths { display: grid; gap: 5px; padding: 10px 12px; border-radius: 6px; background: var(--rc-primary-bg); }.site-script-paths div { display: flex; gap: 8px; min-width: 0; font-size: 11px; }.site-script-paths span { flex: 0 0 56px; color: var(--rc-muted); }.site-script-paths code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
 .site-script-editor-toolbar { display: flex; align-items: center; gap: 8px; }.site-script-type-select { flex: 0 0 125px; }.site-script-toolbar-spacer { flex: 1; }.site-script-editor-toolbar :deep(.el-button + .el-button) { margin-left: 0; }
+.site-script-file-link { border:0; padding:0; background:none; color:var(--rc-primary); cursor:pointer; font:inherit; text-align:left; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.site-script-file-link:disabled { cursor:default; opacity:.6; }.site-script-paths :deep(.el-button) { padding:0; font-size:11px; flex-shrink:0; margin-left:0; }.site-script-file-preview { font-size:12px; overflow-wrap:anywhere; }.site-script-file-preview pre { white-space:pre-wrap; overflow-wrap:anywhere; background:var(--rc-card); padding:12px; border-radius:6px; }
 .site-script-result-tabs { display: flex; align-items: center; gap: 8px; }.site-script-result-tabs button:not(.el-button) { border: 0; padding: 5px 9px; border-radius: 5px; background: transparent; color: var(--rc-muted); cursor: pointer; font-size: 12px; }.site-script-result-tabs button.active { background: var(--rc-primary-bg); color: var(--rc-primary); }.site-script-result-tabs .el-button { margin-left: auto; }
 .site-script-editor { flex: 1; min-height: 0; display: flex; }.site-script-code { height: 100%; resize: none; tab-size: 4; white-space: pre; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .site-script-empty { display: flex; flex: 1; min-height: 0; flex-direction: column; align-items: center; justify-content: center; gap: 12px; border: 1px dashed var(--rc-border); border-radius: 6px; padding: 16px; color: var(--rc-muted); text-align: center; }.site-script-empty b { font-size: 13px; color: var(--rc-text); }.site-script-empty p { margin: 0; font-size: 12px; line-height: 1.6; }
@@ -739,5 +947,5 @@ function download() {
 .site-script-error { margin: 0; color: var(--rc-error); font-size: 12px; line-height: 1.5; }.site-script-warning { margin: 0; color: #b45309; font-size: 12px; }
 .site-script-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }.site-script-footer :deep(.el-button + .el-button) { margin-left: 0; }
 .site-script-file-search, .site-script-file-pager { display: flex; align-items: center; gap: 8px; }.site-script-file-search input { flex: 1; }.site-script-file-pager span { flex: 1; color: var(--rc-muted); font-size: 12px; }.site-script-file-list { display: grid; gap: 6px; max-height: 48vh; overflow: auto; margin-top: 12px; }.site-script-file-option { display: flex; justify-content: space-between; gap: 10px; padding: 10px; border: 0; border-radius: 5px; background: var(--rc-primary-bg); color: var(--rc-primary); text-align: left; overflow-wrap: anywhere; cursor: pointer; }.site-script-file-option:hover { filter: brightness(.97); }.site-script-file-option small { flex-shrink: 0; color: var(--rc-muted); }
-@media (max-width: 760px) { .site-script-workspace { grid-template-columns: 1fr; height: auto; max-height: calc(100dvh - 180px); overflow: auto; min-height: 0; }.site-script-settings { min-height: 400px; }.site-script-editor-panel { min-height: 440px; }.site-script-editor-toolbar { flex-wrap: wrap; } }
+@media (max-width: 760px) { .site-script-workspace { grid-template-columns: 1fr; height: auto; max-height: calc(100dvh - 180px); overflow: auto; min-height: 0; }.site-script-settings { min-height: 400px; overflow: visible; }.is-task .site-script-controls { grid-template-columns: 1fr; }.is-task .site-script-prompts { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(220px, 1fr)); min-height: 456px; }.site-script-editor-panel { min-height: 440px; }.site-script-editor-toolbar { flex-wrap: wrap; } }
 </style>

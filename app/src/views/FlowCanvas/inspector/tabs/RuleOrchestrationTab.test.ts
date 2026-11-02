@@ -2653,6 +2653,31 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     return { flow, wrapper }
   }
 
+  it('源画布生成任务使用选中流程ID，不能把源ID当作流程ID', async () => {
+    const { flow, wrapper } = mountOnCollectorNode(() => {
+      useSourceStore().flowId = '430024910'
+      useSourceStore().sourceCfg = { sourceId: '430024910', flowId: '21000040', name: '华大海天', url: 'https://cn.chinahdht.com/news/company-news/', configId: '1400935', mainTable: '', owner: '', state: 'C' }
+    })
+    flow.flowIdMode = false
+    await flushPromises()
+    const dialog = wrapper.findComponent(SiteScriptGeneratorDialog)
+    expect(dialog.props('sourceId')).toBe('430024910')
+    expect(dialog.props('flowId')).toBe('21000040')
+    expect(dialog.props('flowId')).not.toBe(flow.flowId)
+    wrapper.unmount()
+  })
+
+  it('流程工作区生成任务沿用当前流程，不回退到源的默认流程', async () => {
+    const { flow, wrapper } = mountOnCollectorNode(() => {
+      useSourceStore().flowId = '21000040'
+      useSourceStore().sourceCfg = { sourceId: '430024910', flowId: '14009350', name: '华大海天', url: 'https://cn.chinahdht.com/news/company-news/', configId: '1400935', mainTable: '', owner: '', state: 'C' }
+    })
+    flow.flowIdMode = true
+    await flushPromises()
+    expect(wrapper.findComponent(SiteScriptGeneratorDialog).props('flowId')).toBe('21000040')
+    wrapper.unmount()
+  })
+
   it('采集节点的 Python 生成入口使用当前源列表 URL 和任务队列', async () => {
     const { flow, wrapper } = mountOnCollectorNode()
     useSourceStore().sourceCfg = { sourceId: 's-1', name: '测试源', url: 'https://www.realcan.cn/newscenter', configId: 'c-1', mainTable: '', owner: '', state: 'C' }

@@ -9,7 +9,7 @@ import { useAuthStore } from '@/stores/auth'
 import { runnerManagementApi, type RunnerInstance, type RuntimeLogDetail, type RuntimeLogRecord } from '@/api/runnerManagement'
 import RuntimeLogsTab from './RuntimeLogsTab.vue'
 
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { runtimeLogs: vi.fn(), runtimeLogDetail: vi.fn(), runtimeLogEntries: vi.fn(), downloadRuntimeLog: vi.fn(), instances: vi.fn(), runtimeLogPolicy: vi.fn(), saveRuntimeLogPolicy: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { runtimeLogs: vi.fn(), runtimeLogDetail: vi.fn(), runtimeLogEntries: vi.fn(), downloadRuntimeLog: vi.fn(), instances: vi.fn(), runtimeLogPolicy: vi.fn(), saveRuntimeLogPolicy: vi.fn(), codeGenerationServers: vi.fn(), remoteCodeFiles: vi.fn() } }))
 const record: RuntimeLogRecord = { recordId: 'a'.repeat(32), runnerId: 'r1', runtimeId: 'binding1', deploymentId: 'd1', assignmentId: 'q1', parentId: '', kind: 'run', status: 'failed', requestedAt: '2026-10-12T00:00:00Z', updatedAt: '2026-10-12T00:00:01Z', finishedAt: '2026-10-12T00:00:01Z', error: '缺少公共模块 helper', snapshot: { name: '网页列表抓取', ipAddress: '10.0.0.8', installDirectory: 'E:\\runner', entryPoint: 'main.py', releaseDigest: 'sha256:adopted', revision: 'v1' } }
 const details: RuntimeLogDetail = { ...record, events: [{ eventId: 'e1', time: record.requestedAt, stage: 'failed', level: 'error', message: '模块不存在', detail: 'Traceback\nModuleNotFoundError: helper' }], streams: [{ streamId: 'b'.repeat(32), lastSeq: 1, byteCount: 100, updatedAt: record.updatedAt }], runs: [], run: { slot: 0, pid: 1234, entry: 'E:\\runner\\main.py', working_directory: 'E:\\runner', interpreter: 'python.exe', exit_code: 1, started_at: record.requestedAt, ended_at: record.finishedAt, reason: '启动失败' } }
 beforeEach(() => {
@@ -29,6 +29,47 @@ async function setup(query: Record<string, string> = { tab: 'runtime-logs', runt
   const wrapper = mount(component, { global: { plugins: [router, pinia, ElementPlus] } }); await flushPromises()
   return { wrapper, router, visible }
 }
+it('运行日志新增代码生成服务类型，按路由实例读取升级日志且不查询 Runner 记录', async () => {
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'home171', name: '代码机器', ipAddress: '192.168.1.171', installDirectory: 'D:/codeserver', status: 'online' }] } as never)
+  vi.mocked(runnerManagementApi.remoteCodeFiles).mockResolvedValue({ content: '升级成功 <script>literal</script>' })
+  const { wrapper } = await setup({ tab: 'runtime-logs', kind: 'code-server', serverId: 'home171' })
+  expect(runnerManagementApi.runtimeLogs).not.toHaveBeenCalled()
+  expect(runnerManagementApi.remoteCodeFiles).toHaveBeenCalledWith('home171', { action: 'logs', kind: 'launcher' })
+  expect(wrapper.get('[data-testid="code-server-log-content"]').text()).toContain('升级成功 <script>literal</script>')
+  expect(wrapper.find('[data-testid="code-server-log-content"] script').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="日志时间范围"]').exists()).toBe(false)
+  const selector = wrapper.findAllComponents({ name: 'ElSelect' }).find(c => c.props('ariaLabel') === '代码服务日志类型')!
+  selector.vm.$emit('update:modelValue', 'worker'); await flushPromises()
+  expect(runnerManagementApi.remoteCodeFiles).toHaveBeenLastCalledWith('home171', { action: 'logs', kind: 'worker' })
+  const type = wrapper.findAllComponents({ name: 'ElSelect' }).find(c => c.props('ariaLabel') === '日志类型')!
+  type.vm.$emit('update:modelValue', ''); type.vm.$emit('change', ''); await flushPromises()
+  expect(runnerManagementApi.runtimeLogs).toHaveBeenCalled()
+  expect(wrapper.find('[data-testid="code-server-runtime-logs"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+it('代码服务日志查询失败显示真实错误，离线实例说明日志需恢复连接后读取', async () => {
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'offline', name: '离线机器', status: 'offline' }] } as never)
+  vi.mocked(runnerManagementApi.remoteCodeFiles).mockRejectedValue(new Error('代码生成服务器连接超时'))
+  const { wrapper } = await setup({ tab: 'runtime-logs', kind: 'code-server', serverId: 'offline' })
+  expect(wrapper.text()).toContain('代码生成服务器连接超时')
+  expect(wrapper.text()).toContain('服务离线，无法远程读取本机日志')
+  expect(wrapper.text()).not.toContain('暂无此类型日志')
+  wrapper.unmount()
+})
+it('切换代码服务实例后，迟到的旧实例日志不能覆盖新实例内容', async () => {
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [
+    { serverId: 'a', name: '机器A', status: 'online' }, { serverId: 'b', name: '机器B', status: 'online' },
+  ] } as never)
+  let resolveOld!: (value: { content: string }) => void
+  vi.mocked(runnerManagementApi.remoteCodeFiles)
+    .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+    .mockResolvedValue({ content: '机器B的升级日志' })
+  const { wrapper } = await setup({ tab: 'runtime-logs', kind: 'code-server', serverId: 'a' })
+  await wrapper.findAll('.cg-log-server')[1]!.trigger('click'); await flushPromises()
+  resolveOld({ content: '旧机器A的日志' }); await flushPromises()
+  expect(wrapper.get('[data-testid="code-server-log-content"]').text()).toBe('机器B的升级日志')
+  wrapper.unmount()
+})
 it('同机同名实例按完整 ID 和实例目录区分，切换日志同步更新详情身份', async () => {
   const first = { ...record, runnerId: 'b6ce36d2-ba4c-40fe-b666-5af478c6e0cb', snapshot: { ...record.snapshot, runnerName: '同一机器', installDirectory: 'D:\\Runner1\\instance' } }
   const second = { ...first, recordId: 'c'.repeat(32), runnerId: '68c6a8a7-0e56-48e5-813f-712e34c3d86b', snapshot: { ...first.snapshot, installDirectory: 'D:\\Runner2\\instance' } }

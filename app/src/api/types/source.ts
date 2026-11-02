@@ -826,7 +826,7 @@ export interface SendCodeConfigPayload {
   sourceId: string
   flowId: string
   stepId?: string
-  /** 201 类型派发配置 ID；不是目标步骤的抓取配置 ID。 */
+  /** @deprecated 旧 MQ 派发配置，仅为兼容历史参数保留，数据库任务不使用。 */
   configId?: string
   entryTypeId?: number
   entryIds?: string[]

@@ -1,6 +1,6 @@
 import type { DataRow, SendCodeConfigPayload } from '@/api'
 
-/** 不允许目标步骤配置混入 201 派发 configId；派发配置与队列只由发送表单填写。 */
+/** 目标节点与数据上下文；实际节点配置 ID 由流程步骤解析，不再选择 MQ 派发配置。 */
 export type CodeConfigTarget = Pick<SendCodeConfigPayload, 'sourceId' | 'stepId' | 'entryTypeId' | 'entryIds' | 'ver' | 'orchestration'> & { flowId?: string; name?: string; fromStepId?: string }
 
 export function codeTargetForNode(sourceId: string, flowId: string | undefined, stepId?: string, ver?: string | null): CodeConfigTarget {

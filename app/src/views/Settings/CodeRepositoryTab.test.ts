@@ -13,6 +13,7 @@ vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(), deleteCodeRepositoryFile: vi.fn(),
   codeRepositoryDirectories: vi.fn(), saveCodeRepositoryDirectory: vi.fn(), removeCodeRepositoryDirectory: vi.fn(),
   codeRepositoryFileReferences: vi.fn(),
+  setGenerationTypeDefault: vi.fn(),
 } }))
 const generic: CodeRepository = {
   repoId: 'repo-default', name: '默认仓库', configType: '', configTypeName: '', uploadDirectory: 'default', path: 'E:\\ce\\site-scripts',
@@ -49,6 +50,21 @@ async function mountTab() {
   await flushPromises()
   return wrapper
 }
+it('仓库目录和路径列表都显示北京时间的 Git 更新时间，缺失时间显示占位', async () => {
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default', total: 3, page: 1, pageSize: 50, items: [
+    { path: 'links', kind: 'directory', size: null, managed: false, canDelete: false, gitUrl: '', updatedAt: '2026-10-30T01:02:03+00:00' },
+    { path: 'default/news.py', size: 20, managed: false, canDelete: true, gitUrl: '', updatedAt: '2026-10-31T08:30:00+00:00' },
+    { path: 'default/old.py', size: 10, managed: false, canDelete: true, gitUrl: '', updatedAt: null },
+  ] })
+  const wrapper = await mountTab()
+  expect(wrapper.get('[data-testid="code-repo-file-links"]').text()).toContain('2026-10-30 09:02:03')
+  expect(wrapper.get('[data-testid="code-repo-file-default/news.py"]').text()).toContain('2026-10-31 16:30:00')
+  expect(wrapper.get('[data-testid="code-repo-file-default/old.py"] .crp-file-time').text()).toBe('—')
+  await wrapper.get('[data-testid="code-repo-paths-view"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-file-default/news.py"]').text()).toContain('2026-10-31 16:30:00')
+  expect(wrapper.text()).not.toContain('Invalid Date')
+  wrapper.unmount()
+})
 it('受保护文件可以查看引用，操作不会误触文件预览', async () => {
   vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default',
     total: 1, page: 1, pageSize: 50, items: [{ path: 'download/client.py', kind: 'file', size: 10, managed: true, canDelete: false, gitUrl: '' }] })
@@ -83,6 +99,21 @@ it('从编排配置跳转到仓库文件时自动选择配置目录、展开子�
   await wrapper.setProps({ repositoryFilePath: '网页抓取/second.py' }); await flushPromises()
   expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '')
   expect(wrapper.get('[data-testid="code-repo-preview"]').text()).toContain('# 网页抓取/second.py')
+  wrapper.unmount()
+})
+it('多文件任务跳转到配置子目录，切换任务或仓库根目录不保留旧文件预览', async () => {
+  const directory = { directoryId: 'dir-web', repoId: web.repoId, name: '网页抓取代码', configType: '90', configTypeName: '网页抓取', path: 'links', status: 'ACTIVE' as const, isDefault: false, revision: 'v1' }
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
+  const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: web.repoId, repositoryDirectoryId: directory.directoryId, repositoryFolderPath: 'links/1401218' }, global: { stubs, directives: { loading: {} } } })
+  await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '1401218')
+  expect(wrapper.get('.rd-row.selected').text()).toContain('网页抓取代码')
+  expect(runnerManagementApi.codeRepositoryFileContent).not.toHaveBeenCalled()
+  await wrapper.setProps({ repositoryFolderPath: 'links/1401219/sub' }); await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '1401219/sub')
+  await wrapper.setProps({ repositoryFolderPath: '' }); await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, undefined, '')
+  expect(wrapper.find('[data-testid="code-repo-preview"]').exists()).toBe(false)
   wrapper.unmount()
 })
 it('文件已删除或仓库不存在时显示错误，不打开其他仓库的同名文件', async () => {
@@ -161,6 +192,17 @@ it('目录查询按节点类型过滤，停用后禁止上传，目录加载失�
   vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockRejectedValue(new Error('目录服务失败'))
   await wrapper.get('[aria-label="刷新配置目录"]').trigger('click'); await flushPromises()
   expect(wrapper.text()).toContain('目录服务失败')
+  wrapper.unmount()
+})
+it('同类型有多个目录时可明确设置生成默认目录', async () => {
+  const directory = { directoryId: 'links-dir', repoId: generic.repoId, name: '网页抓取', configType: '90', configTypeName: '网页抓取', path: 'links', status: 'ACTIVE' as const, isDefault: false, revision: 'v1' }
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
+  vi.mocked(runnerManagementApi.setGenerationTypeDefault).mockResolvedValue({ ok: true })
+  const wrapper = await mountTab()
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([{ ...directory, generationDefault: true }])
+  await wrapper.get('[data-testid="generation-default-links-dir"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.setGenerationTypeDefault).toHaveBeenCalledWith(generic.repoId, directory.directoryId)
+  expect(wrapper.text()).toContain('该类型生成默认目录')
   wrapper.unmount()
 })
 it('编辑仓库按字段提交，路径单独走迁移接口', async () => {

@@ -20,7 +20,12 @@ def list_directories(app, db, repo_id):
     for row in rows:
         row['codeCount'] = db.execute('SELECT COUNT(*) AS count FROM code_assets WHERE directory_id=?',
                                      (row['directoryId'],)).fetchone()['count']
-    return [default, *sorted(rows, key=lambda row: (row['configType'], row['name']))]
+    result = [default, *sorted(rows, key=lambda row: (row['configType'], row['name']))]
+    for item in result:
+        selected = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', ('generation-type-default:' + item['configType'],)).fetchone() if item['configType'] else None
+        choice = json.loads(selected['setting_value']) if selected else {}
+        item['generationDefault'] = choice.get('repositoryId') == repo_id and choice.get('directoryId') == item['directoryId']
+    return result
 
 
 def get_directory(app, db, repo_id, directory_id, config_type=None, active=True):
@@ -72,9 +77,9 @@ def save_directory(app, repo_id, payload, directory_id=None, headers=None):
         path = relative.as_posix()
         if old and path != old['path']:
             raise ApiError('已有目录路径不能直接修改，请新建目录后在节点中切换保存位置', 409)
-        if old and config_type != old['configType'] and db.execute(
-                'SELECT 1 FROM code_assets WHERE directory_id=?', (directory_id,)).fetchone():
-            raise ApiError('已有节点代码引用此目录，不能修改节点类型', 409)
+        # Directory type classifies future save destinations. Existing assets
+        # retain their actual node type and immutable version/file references.
+        # Reclassifying a folder must not rewrite those business identities.
         for other in list_directories(app, db, repo_id):
             if other['directoryId'] == directory_id:
                 continue

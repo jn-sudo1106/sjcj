@@ -23,6 +23,73 @@ function render() {
 }
 
 describe('Runner 实例页面', () => {
+  it('左栏机器详情挂载到body，中文字段及长值不受服务器卡片裁剪', async () => {
+    const { wrapper } = await renderBatchUpgrade()
+    await wrapper.setProps({ compact: true, selectable: true, selectedRunnerId: 'r-1' })
+    expect(wrapper.get('.rm-server-card').text()).not.toContain('PID')
+    expect(wrapper.get('.rm-server-card').text()).not.toContain('Runner')
+    expect(wrapper.get('.rm-server-card').text()).not.toContain('详情')
+    wrapper.vm.openInstanceDetails('r-1'); await flushPromises()
+    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
+    expect(drawer.props('appendToBody')).toBe(true)
+    expect(drawer.props('size')).toBe('min(760px, 94vw)')
+    const panel = document.querySelector('[data-testid="runner-instance-detail"]')!
+    expect(panel).not.toBeNull()
+    expect(panel.closest('.rm-main')).toBeNull()
+    expect(panel.textContent).toContain('实例 ID')
+    expect(panel.textContent).toContain('r-1')
+    expect(panel.textContent).toContain('机器 IP')
+    expect(panel.textContent).toContain('在线')
+    expect(panel.textContent).toContain('D:\\runner-prod')
+    wrapper.unmount()
+  })
+  it('统一页面从服务器列表按实例ID进入对应配置', async () => {
+    const { wrapper } = await renderBatchUpgrade()
+    await wrapper.setProps({ selectable: true, compact: true, selectedRunnerId: 'r-1' })
+    expect(wrapper.find('.rm-server-card.selected [data-testid="runner-card-r-1"]').exists()).toBe(true)
+    expect(wrapper.find('.rm-runner-table').exists()).toBe(false)
+    await wrapper.get('[data-testid="runner-card-r-2"]').trigger('click')
+    expect(wrapper.emitted('selectRunner')).toEqual([['r-2']])
+    expect(wrapper.emitted('instancesChange')?.[0]).toEqual([instances])
+    await wrapper.setProps({ selectionDisabled: true })
+    expect(wrapper.get('[data-testid="runner-card-r-2"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+  it('左侧机器筛选将匹配实例及筛选状态通知配置面板', async () => {
+    const { wrapper } = await renderBatchUpgrade()
+    await wrapper.setProps({ compact: true, selectable: true })
+    await wrapper.get('input[aria-label="搜索服务器"]').setValue('runner-test')
+    expect(wrapper.emitted('visibleInstancesChange')?.at(-1)).toEqual([[instances[1]], true])
+    expect(wrapper.find('[data-testid="runner-card-r-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="runner-card-r-2"]').exists()).toBe(true)
+    await wrapper.get('input[aria-label="搜索服务器"]').setValue('')
+    expect(wrapper.emitted('visibleInstancesChange')?.at(-1)).toEqual([instances, false])
+    wrapper.unmount()
+  })
+  it('IP和状态可组合筛选，同IP多个实例均保留且改变筛选清空升级选择', async () => {
+    const { wrapper } = await renderBatchUpgrade()
+    vi.mocked(runnerManagementApi.instances).mockResolvedValue([...instances, { ...instances[0]!, runnerId: 'r-3', ipAddress: '10.0.0.9', name: '另一台服务器' }])
+    await wrapper.findAll('button').find(button => button.text() === '刷新')!.trigger('click'); await flushPromises()
+    const ip = wrapper.findAllComponents({ name: 'ElSelect' }).find(select => select.attributes('data-testid') === 'runner-ip-filter')!
+    const status = wrapper.findAllComponents({ name: 'ElSelect' }).find(select => select.attributes('data-testid') === 'runner-status-filter')!
+    await wrapper.get('[data-testid="runner-select-all"] input').setValue(true)
+    ip.vm.$emit('update:modelValue', '10.0.0.8'); await flushPromises()
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="runner-select-r-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="runner-select-r-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="runner-select-r-3"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="runner-select-all"] input').setValue(true)
+    status.vm.$emit('update:modelValue', 'offline'); await flushPromises()
+    expect(wrapper.get('[data-testid="runner-batch-upgrade"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="runner-select-r-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="runner-select-r-2"]').exists()).toBe(true)
+    await wrapper.get('input[placeholder="IP、目录、实例名"]').setValue('runner-prod')
+    expect(wrapper.text()).toContain('暂无符合筛选条件的服务器实例')
+    await wrapper.get('input[placeholder="IP、目录、实例名"]').setValue('')
+    ip.vm.$emit('update:modelValue', ''); status.vm.$emit('update:modelValue', ''); await flushPromises()
+    expect(wrapper.find('[data-testid="runner-select-r-3"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
   async function renderBatchUpgrade() {
     useAuthStore().roles = ['admin']
     const latest: ArtifactRelease = { digest: 'sha256:batch-latest', kind: 'runner', name: 'Runner', platform: 'any', gitCommit: 'local', status: 'published', publishedAt: '2026-10-12T17:31:49Z', signature: '', usedBy: 0 }
@@ -165,10 +232,10 @@ describe('Runner 实例页面', () => {
     expect(cells[0]!.attributes('title')).toContain('北京时间')
     expect(cells[1]!.text()).toBe('未收到心跳')
     await wrapper.findAll('tbody tr')[0]!.findAll('button').find(button => button.text() === '详情')!.trigger('click'); await flushPromises()
-    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
-    expect(drawer.text()).toContain('最近心跳（北京时间）')
-    expect(drawer.text()).toContain('2026-10-13 00:36:50')
-    expect(drawer.text()).not.toContain('2026-10-12T16:36:50+00:00')
+    const detail = document.querySelector('[data-testid="runner-instance-detail"]')!
+    expect(detail.textContent).toContain('最近心跳（北京时间）')
+    expect(detail.textContent).toContain('2026-10-13 00:36:50')
+    expect(detail.textContent).not.toContain('2026-10-12T16:36:50+00:00')
     wrapper.unmount()
   })
   it('Runner 版本页面只显示 Runner 自身版本，隐藏处理程序及业务代码', async () => {

@@ -3,34 +3,24 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const fetchMock = vi.fn()
 const jsonResponse = (body: unknown) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) }) as Response
 beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); vi.stubEnv('VITE_API_MODE', 'http'); vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9100'); vi.resetModules() })
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
-it('发送 JSON body，保持 201 派发 configId、stepId 与队列独立，Long ID 不丢精度', async () => {
-  const receipt = { requestCnt: 1, sendCnt: 1, failCnt: 0, configId: '900', queue: 'manual', taskIds: ['1001'], tasks: [] }
-  fetchMock.mockResolvedValue(jsonResponse({ code: '0', success: true, data: receipt }))
-  const { sourceApi } = await import('./index')
-  const payload = { sourceId: '7', flowId: '50', stepId: '2', configId: '9223372036854775806', queue: 'manual', entryIds: ['901'], params: { '20_172': 'value' } }
-  expect(await sourceApi.sendCodeConfig(payload)).toEqual(receipt)
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+it('代码任务使用节点配置写入管理数据库，不发送业务MQ请求', async () => {
+  const { sourceApi, flowCenterApi } = await import('./index')
+  vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ sourceId: '7', name: '测试源', url: 'https://example.com' } as never)
+  vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{ stepId: '2', configId: '9223372036854775806', name: '抓取', sourceId: '-1', enabled: true }] as never)
+  fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ job: { taskId: 'a'.repeat(32) } }) })
+  const result = await sourceApi.sendCodeConfig({ sourceId: '7', flowId: '50', stepId: '2', orchestration: { aiGeneration: { interfaceId: 'agent' } } })
+  expect(result.taskIds).toEqual(['a'.repeat(32)])
   const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-  expect(url).toBe('/api/v1/source/sendCodeConfig'); expect(init.method).toBe('POST'); expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' }); expect(JSON.parse(String(init.body))).toEqual(payload)
+  expect(url).toBe('/api/runner-management/code-generation/tasks')
+  expect(JSON.parse(String(init.body))).toMatchObject({ sourceId: '7', flowId: '50', stepId: '2', configId: '9223372036854775806', generation: { interfaceId: 'agent' } })
+  expect(fetchMock).toHaveBeenCalledOnce()
 })
-it('默认配置和默认队列由后端选择；即使 mock 默认模式也不伪造 MQ 发送成功', async () => {
-  vi.stubEnv('VITE_API_MODE', 'mock')
-  fetchMock.mockResolvedValue(jsonResponse({ code: '0', success: true, data: { configId: '900', queue: 'config-topic', sendCnt: 1, failCnt: 0, taskIds: [], tasks: [] } }))
+it('节点配置读取失败保留真实错误，不回退MQ', async () => {
   const { sourceApi } = await import('./index')
-  await sourceApi.sendCodeConfig({ sourceId: '7', flowId: '50', stepId: '2' })
-  expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({ sourceId: '7', flowId: '50', stepId: '2' })
-})
-it('保留没有 201 配置的真实错误', async () => {
-  fetchMock.mockResolvedValue(jsonResponse({ code: '-1', success: false, msg: '没有启用的 config_type=201 配置' }))
-  const { sourceApi } = await import('./index')
-  await expect(sourceApi.sendCodeConfig({ sourceId: '7', flowId: '50', stepId: '2' })).rejects.toThrow('没有启用的 config_type=201 配置')
-})
-
-it('部分派发失败时保留成功任务 ID 与逐项错误，供界面展示', async () => {
-  const receipt = { requestCnt: 2, sendCnt: 1, failCnt: 1, configId: '900', queue: 'manual', taskIds: ['1001', '1002'], tasks: [{ stepId: '2', taskIds: ['1002'], errors: ['broker unavailable'] }] }
-  fetchMock.mockResolvedValue(jsonResponse({ code: '-1', success: false, msg: '部分任务派发失败', data: receipt }))
-  const { sourceApi } = await import('./index')
-  expect(await sourceApi.sendCodeConfig({ sourceId: '7', flowId: '50', stepId: '2' })).toEqual(receipt)
+  vi.spyOn(sourceApi, 'sourceDetail').mockRejectedValue(new Error('源不存在'))
+  await expect(sourceApi.sendCodeConfig({ sourceId: '7', flowId: '50', stepId: '2' })).rejects.toThrow('源不存在')
+  expect(fetchMock).not.toHaveBeenCalled()
 })
 
 it('只读查询真实的 201 配置候选，显示名称和队列，ID 保持字符串', async () => {

@@ -1,10 +1,42 @@
 import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken } from './auth'
 import { streamModelInterfaceTest } from './modelInterfaceStream'
+import { taskInstFromLegacy } from './legacyAdapters'
+
+export interface GenerationModelCall {
+  interfaceId: string; name: string; kind: string; model: string; endpoint: string; method: string
+  timeoutSeconds: number; serverId?: string; serverName?: string; serverAddress?: string; capturedAt?: string
+}
+export interface MqCodeJob {
+  taskId: string
+  serverId: string
+  configId: string
+  queue: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  deletedAt?: string
+  message: string
+  callbackSent: boolean
+  stages: string[]
+  output: string
+  request?: import('./siteScript').SiteScriptModelRequest
+  modelCall?: GenerationModelCall
+  params?: Record<string, unknown>
+  result?: import('./siteScript').SiteScriptGenerateResult | null
+}
+export type GenerationRepositoryResult = Pick<GeneratedCodeArchive, 'repoId' | 'directoryId' | 'directoryPath'> & {
+  files: Pick<GeneratedCodeArchive['files'][number], 'path'>[]
+}
 
 export interface NodeGenerationSettings {
   configId: string
   enabled: boolean
-  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; workspaceMode?: 'config' | 'queue' | 'custom'; workspacePath?: string }
+  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; workspaceMode?: 'config-queue' | 'config' | 'queue' | 'custom'; workspacePath?: string; codeDirectory?: string; destinationMode?: 'type' | 'custom' }
+}
+export interface GenerationDestination {
+  repositoryId: string; directoryId: string; directoryPath: string; repoName: string
+  remoteUrl: string; branch: string; configType: string; matchedBy: 'type' | 'default'
 }
 export interface SourceCodeTask {
   taskId: string; sourceId: string; sourceName: string; flowId: string; configId: string; nodeName: string
@@ -12,7 +44,7 @@ export interface SourceCodeTask {
 }
 export interface SourceGenerationSnapshot {
   sourceId: string; name: string; url: string; flowId: string
-  nodes: { configId?: string; name: string; isRoot?: boolean; enabled: boolean }[]
+  nodes: { stepId?: string; configId?: string; name: string; isRoot?: boolean; enabled: boolean }[]
 }
 
 export interface RunnerWorkerProcess {
@@ -26,6 +58,7 @@ export interface RunnerWorkerProcess {
 }
 
 export interface RunnerInstance {
+  launcherVersion?: string | null
   runnerId: string
   name: string
   ipAddress: string
@@ -145,6 +178,7 @@ export interface PublishedScript {
 }
 
 export interface SiteCodeVersion extends PublishedScript {
+  associationDetached?: boolean
   codeId: string
   configId: string
   queueName: string
@@ -325,8 +359,10 @@ export interface RuntimeLogDetail extends RuntimeLogRecord {
   events: { eventId: string; time: string; stage: string; level: string; message: string; detail: string }[]
   streams: { streamId: string; lastSeq: number; byteCount: number; updatedAt: string }[]
   runs: RuntimeLogRecord[]
-  run: { slot: number; pid: number | null; entry: string; working_directory: string; interpreter: string
-    started_at: string | null; ended_at: string | null; exit_code: number | null; reason: string } | null
+  run: {
+    slot: number; pid: number | null; entry: string; working_directory: string; interpreter: string
+    started_at: string | null; ended_at: string | null; exit_code: number | null; reason: string
+  } | null
   logAvailable?: boolean
 }
 export interface RuntimeLogFilters {
@@ -394,16 +430,20 @@ export interface CodeRepositoryDirectory {
   isDefault: boolean
   revision: string
   codeCount?: number
+  generationDefault?: boolean
 }
 export type CodeRepositoryDirectoryInput = Pick<CodeRepositoryDirectory, 'name' | 'configType' | 'configTypeName' | 'path'> & Partial<Pick<CodeRepositoryDirectory, 'status' | 'revision'>>
 
 export interface CodeRepositoryFile {
+  deleteReason?: string
   path: string
   kind?: 'file' | 'directory'
   size: number | null
   managed: boolean
   canDelete: boolean
   gitUrl: string
+  /** 最后一次 Git 提交时间；目录为其下文件最近的提交时间。 */
+  updatedAt?: string | null
 }
 
 export interface CodeRepositoryFilePage {
@@ -456,7 +496,7 @@ async function checkBusinessSession(response: Response): Promise<void> {
   if (response.status !== 401) return
   // Runner 独立部署，认证目标可能与当前业务环境不同；仅业务身份接口确认失效才全局登出。
   // getInfo 沿用原有的 401 / 登录重定向处理；其他异常保留当前登录，随后报告 Runner 的错误。
-  await getInfo().catch(() => {})
+  await getInfo().catch(() => { })
 }
 
 async function request<T>(path: string, method: Method = 'GET', body?: unknown): Promise<T> {
@@ -495,6 +535,8 @@ function list<T>(path: string): Promise<T[]> {
 
 export interface ModelInterface {
   generationServerId?: string
+  generationServerMode?: 'auto' | 'manual' | 'direct'
+  generationServerMatch?: 'matched' | 'offline' | 'ambiguous' | 'unmatched' | 'local' | 'manual' | 'missing' | 'direct'
   id: string
   name: string
   kind: 'agent' | 'gemini-agent' | 'gemini-chat' | 'chat' | 'site-script'
@@ -521,23 +563,37 @@ export interface RepositoryFileReference {
   archiveId?: string; archiveStatus?: 'pending' | 'failed' | 'committed'
 }
 export interface GeneratedCodeArchive {
+  serverCodeDirectory?: string
   archiveId: string; status: 'pending' | 'failed' | 'committed'; message: string
   configId: string; repoId: string; directoryId: string; directoryPath: string; taskId: string; serverId: string
   createdAt: string; gitCommit: string; pushed: boolean
-  files: { path: string; relativePath: string; sha256: string; size: number }[]
+  files: { path: string; relativePath: string; sha256: string; size: number; serverPath?: string }[]
 }
 export interface RepositoryFileReferences {
   repoId: string; repoName: string; path: string; protectionReasons: string[]; items: RepositoryFileReference[]
 }
 export interface ModelInterfaceSettings { items: ModelInterface[]; revision: number }
+export interface GenerationGitBinding {
+  path: string; repositoryId: string; directoryId: string
+  repoName?: string; remoteUrl?: string; branch?: string; directoryPath?: string; error?: string
+}
 export interface CodeGenerationServer {
+  generationGitBindings?: GenerationGitBinding[]
+  supportedModels?: Pick<ModelInterface, 'id' | 'name' | 'model' | 'kind' | 'endpoint' | 'enabled' | 'generationServerMode'>[]
+  mqCapable?: boolean
+  mqGeneration?: { configId: string; queue: string; name: string } | null
+  launcherVersion?: string
   serverId: string; name: string; endpoint: string; workspace: string; installDirectory: string
+  generationRoot?: string; runUser?: string
   ipAddress: string; osType: string; osVersion: string; version: string; pid?: number
   lastHeartbeat: string; status: 'online' | 'offline'
+  upgradeCapable?: boolean; actualDigest?: string
+  upgrade?: { digest: string; requestId: string; status: 'pending' | 'waiting' | 'upgrading' | 'succeeded' | 'failed'; message: string } | null
 }
+export interface CodeServerRelease { digest: string; version: string; publishedAt: string }
 export interface RemoteCodeFile {
-  name: string; path: string; isDirectory: boolean; size: number; modifiedAt: string; sha256?: string | null
-  content?: string; data?: string
+  name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: string; sha256?: string | null
+  content?: string; data?: string; accessError?: string
 }
 export interface ModelInterfaceTestInput {
   taskId?: string
@@ -550,23 +606,53 @@ export interface ModelInterfaceTestResult {
 }
 
 export const runnerManagementApi = {
+  codeGenerationTasks: async (query: { configId?: string; sourceId?: string; taskId?: string; state?: string; page: number; size: number }) => {
+    const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))
+    const result = await request<{ list: unknown[]; total: number }>('/code-generation/tasks?' + params)
+    return { list: result.list.map(taskInstFromLegacy), total: result.total }
+  },
+  createCodeGenerationTask: (body: { sourceId: string; flowId: string; stepId: string; configId: string; sourceName?: string; nodeName?: string; flowVersionId?: string; entryIds?: string[]; generation?: Record<string, unknown> }) => request<{ job: MqCodeJob }>('/code-generation/tasks', 'POST', body),
+  deleteCodeGenerationTask: (taskId: string, configId: string) => request<{ ok: true; message: string }>('/code-generation/tasks/delete', 'POST', { taskId, configId }),
+  deleteCodeGenerationTasks: (taskIds: string[], configId: string) => request<{ items: { taskId: string; ok: boolean; message: string }[]; deletedCount: number; failedCount: number }>('/code-generation/tasks/delete-batch', 'POST', { taskIds, configId }),
+  mqCodeJobSummaries: (taskIds: string[]) => request<{ items: (Pick<MqCodeJob, 'taskId' | 'serverId' | 'configId' | 'queue' | 'status' | 'callbackSent' | 'message'> & { finishedAt?: string; modelCall?: GenerationModelCall; archive?: GenerationRepositoryResult })[] }>(`/code-generation/tasks/summaries?taskIds=${encodeURIComponent(taskIds.join(','))}`),
+  mqCodeJob: (taskId: string) => request<{ job: MqCodeJob | null }>(`/code-generation/tasks/detail?taskId=${encodeURIComponent(taskId)}`),
   generatedCodeState: (configId: string) => request<{ autoCommit: boolean; archive: GeneratedCodeArchive | null }>(`/site-scripts/generation-state?configId=${encodeURIComponent(configId)}`),
   nodeGenerationSettings: (configId: string) => request<NodeGenerationSettings>(`/site-scripts/task-config?configId=${encodeURIComponent(configId)}`),
+  resolveGenerationDestination: (body: { configId?: string; queueName?: string; configType?: string }) => request<GenerationDestination>('/site-scripts/generation-destination?' + new URLSearchParams(Object.entries(body).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))),
+  setGenerationTypeDefault: (repoId: string, directoryId: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}/generation-default`, 'POST', {}),
   saveNodeGenerationSettings: (body: Pick<NodeGenerationSettings, 'configId'> & Partial<Omit<NodeGenerationSettings, 'configId'>>) => request<NodeGenerationSettings>('/site-scripts/task-config', 'POST', body),
   sourceCodeTasks: () => request<SourceCodeTask[]>('/source-code-tasks'),
   createSourceCodeTasks: (sources: SourceGenerationSnapshot[]) => request<{ created: SourceCodeTask[]; skipped: { sourceId: string; name: string; reason: string }[] }>('/source-code-tasks', 'POST', { sources }),
   saveGenerationPreference: (configId: string, autoCommit: boolean) => request<{ autoCommit: boolean }>('/site-scripts/generation-settings', 'POST', { configId, autoCommit }),
   commitGeneratedCode: (archiveId: string) => request<GeneratedCodeArchive>(`/site-scripts/generated-results/${encodeURIComponent(archiveId)}/commit`, 'POST', {}),
   codeGenerationServers: () => request<{ items: CodeGenerationServer[] }>('/code-servers'),
+  saveCodeServerGenerationDirectory: (serverId: string, generationRoot: string) => request<CodeGenerationServer>(`/code-servers/${encodeURIComponent(serverId)}/generation-directory`, 'POST', { generationRoot }),
+  saveGenerationGitBinding: (serverId: string, binding: Pick<GenerationGitBinding, 'path' | 'repositoryId'> & { directoryId?: string }) => request<{ items: GenerationGitBinding[] }>(`/code-servers/${encodeURIComponent(serverId)}/generation-git-binding`, 'POST', binding),
+  bindCodeServerMq: (serverId: string, configId: string) => request<{ binding: CodeGenerationServer['mqGeneration'] }>(`/code-servers/${encodeURIComponent(serverId)}/mq-binding`, 'POST', { configId }),
+  codeServerReleases: () => request<{ items: CodeServerRelease[] }>('/code-servers/releases'),
+  publishCodeServer: () => request<{ digest: string; version: string; created: boolean }>('/code-servers/releases', 'POST', {}),
+  upgradeCodeServers: (serverIds: string[], digest: string) => request<{ items: NonNullable<CodeGenerationServer['upgrade']>[] }>('/code-servers/upgrades', 'POST', { serverIds, digest }),
+  downloadCodeServerMigrationPackage: async (platform: string) => {
+    const token = readStoredToken()
+    const response = await fetch('/api/runner-management/code-servers/migration-package', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform })
+    })
+    if (response.status === 401) triggerSessionExpired()
+    if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '升级接入包下载失败') }
+    return response.blob()
+  },
   codeServerEnrollmentCode: () => request<{ code: string; expiresAt: string }>('/code-servers/enrollment-code', 'POST', {}),
   codeServerPackageInfo: () => request<{ platform: string }>('/code-servers/package'),
   remoteCodeFiles: <T = { items: RemoteCodeFile[]; path: string }>(serverId: string, input: Record<string, unknown>) => request<T>(`/code-servers/${encodeURIComponent(serverId)}/files`, 'POST', input),
   importRemoteCode: (serverId: string, input: { repositoryId: string; directoryId: string; paths: string[]; overwrite: boolean }) => request<CodeRepositoryUploadResult>(`/code-servers/${encodeURIComponent(serverId)}/import`, 'POST', input),
-  downloadCodeServerPackage: async (platform: string) => {
+  downloadCodeServerPackage: async (platform: string, digest?: string) => {
     const token = readStoredToken()
-    const response = await fetch('/api/runner-management/code-servers/package', { method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform }) })
-    await checkBusinessSession(response)
+    const response = await fetch('/api/runner-management/code-servers/package', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify({ platform, digest })
+    })
+    if (response.status === 401) triggerSessionExpired()
     if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message || '服务包下载失败') }
     return response.blob()
   },
@@ -609,8 +695,8 @@ export const runnerManagementApi = {
   saveDirectoryLayout: (layout: DirectoryLayout) => request<DirectoryLayout>(layout.bindingType === 'website' || layout.bindingType === 'custom'
     ? `/directory-layouts/${layout.bindingType}?owner=${encodeURIComponent(layout.ownerId || '')}`
     : layout.bindingType === 'queue'
-    ? `/directory-layouts/queues/${encodeURIComponent(layout.queueName)}`
-    : `/directory-layouts/configs/${encodeURIComponent(layout.configId)}`, 'POST', layout),
+      ? `/directory-layouts/queues/${encodeURIComponent(layout.queueName)}`
+      : `/directory-layouts/configs/${encodeURIComponent(layout.configId)}`, 'POST', layout),
   codeRepositoryTree: (repoId: string, commit?: string) => request<RepositoryTree>(`/settings/code-repos/${encodeURIComponent(repoId)}/tree${commit ? '?commit=' + encodeURIComponent(commit) : ''}`),
   siteCodeRepository: () => request<SiteCodeRepositorySetting>('/settings/site-code-repo'),
   updateSiteCodeRepository: (path: string) => request<SiteCodeRepositorySetting>('/settings/site-code-repo', 'POST', { path }),
@@ -650,8 +736,10 @@ export const runnerManagementApi = {
     const token = readStoredToken()
     let response: Response
     try {
-      response = await fetch('/api/runner-management/runner-package', { method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify(input) })
+      response = await fetch('/api/runner-management/runner-package', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) }, body: JSON.stringify(input)
+      })
     } catch { throw new Error('Runner 管理服务不可达') }
     await checkBusinessSession(response)
     if (!response.ok) {
@@ -664,11 +752,13 @@ export const runnerManagementApi = {
   },
   setDesiredRunner: (runnerId: string, digest: string) => request<{ runnerId: string; digest: string }>(`/runners/${encodeURIComponent(runnerId)}/desired-runner`, 'POST', { digest }),
   scriptBinding: (configId: string) => request<ScriptBinding | null>(`/configs/${encodeURIComponent(configId)}/script-release`),
-  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; promptTemplateId?: number; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
+  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; promptTemplateId?: number; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string; includeConfigId?: boolean }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
   adoptScript: (configId: string, scriptDigest: string) => request<ScriptBinding>(`/configs/${encodeURIComponent(configId)}/script-release`, 'POST', { scriptDigest }),
   siteCodeVersions: (configId: string, queueName: string) => list<SiteCodeVersion>(`/site-scripts/versions?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}`),
   siteCodeCatalog: () => list<SiteCodeVersion & { environments: ('test' | 'prd')[] }>('/site-scripts/catalog'),
   siteCodeContent: (digest: string) => request<SiteCodeVersion & { code: string }>(`/site-scripts/code?digest=${encodeURIComponent(digest)}`),
+  previewScriptFile: (digest: string, target: 'saved' | 'source') => request<{ repoId: string; path: string; gitCommit: string; content: string; size: number }>(`/site-scripts/file-association/preview?digest=${encodeURIComponent(digest)}&target=${target}`),
+  changeScriptFileAssociation: (input: { digest: string; configId: string; queueName: string; target: 'saved' | 'source'; action: 'unlink' | 'delete' }) => request<{ ok: true; message: string }>('/site-scripts/file-association', 'POST', input),
   siteCodeBindings: (configId: string, queueName: string, environment: 'test' | 'prd') => list<SiteCodeVersion>(`/site-scripts/bindings?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}&environment=${environment}`),
   bindSiteCode: (input: { configId: string; queueName: string; environment: 'test' | 'prd'; scriptDigest: string }) => request<SiteCodeVersion>('/site-scripts/bind', 'POST', input),
 }

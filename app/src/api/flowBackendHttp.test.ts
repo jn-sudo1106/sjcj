@@ -45,6 +45,15 @@ describe('流程分流实际 HTTP 请求', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ flowId: '123', page: 2, limit: 10 })
   })
 
+  it('流程和业务切回同一远程时，关联源仍使用旧源接口并保留流程条件', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://118.25.96.217:9999/')
+    const { sourceApi } = await import('./index')
+    await sourceApi.sourcePaged({ flowId: '14010130', page: 2, size: 10 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/source/sourcePaged')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ flowId: '14010130', page: 2, limit: 10 })
+  })
+
   it('流程步骤和配置补查显式保留本地来源，运行视图可明确选择原后台', async () => {
     window.location.hash = '#/canvas?view=overview'
     fetchMock

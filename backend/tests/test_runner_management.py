@@ -259,6 +259,37 @@ class ManagementIntegrationTest(unittest.TestCase):
                 self.request(query + '&view=directory&folder=' + quote(invalid))
             self.assertEqual(error.exception.code, 400)
 
+    def test_repository_file_list_times_follow_git_history_for_files_and_directories(self):
+        repo = self.request('/api/runner-management/settings/code-repos')[0]
+        root = Path(repo['path']); root.mkdir(parents=True, exist_ok=True)
+        self.app.git(root, 'init', '-b', 'main')
+        route = '/api/runner-management/settings/code-repos/' + repo['repoId']
+        def upload(path, date, content=b'pass', overwrite=False):
+            with patch.dict(os.environ, {'GIT_AUTHOR_DATE': date, 'GIT_COMMITTER_DATE': date}):
+                self.request(route + '/files', {'overwrite': overwrite, 'uploadType': 'folder', 'files': [
+                    {'name': path.rsplit('/', 1)[-1], 'relativePath': path, 'data': base64.b64encode(content).decode()}]})
+        first_time = '2026-10-01T09:00:00+08:00'
+        folder_time = '2026-10-02T10:00:00+08:00'
+        changed_time = '2026-10-05T11:00:00+08:00'
+        upload('[新闻].py', first_time)
+        initial = self.request(route + '/files')
+        self.assertEqual(initial['items'][0]['updatedAt'], first_time)
+        upload('lib/helper.py', folder_time)
+        upload('[新闻].py', changed_time, b'VALUE = 2', True)
+        upload('other.py', '2026-10-06T12:00:00+08:00')
+        # Local copying/cloning must not replace code history with an mtime.
+        os.utime(root / 'default' / '[新闻].py', (1, 1))
+        flat = self.request(route + '/files')
+        by_path = {item['path']: item for item in flat['items']}
+        self.assertEqual(by_path['default/[新闻].py']['updatedAt'], changed_time)
+        self.assertEqual(by_path['default/lib/helper.py']['updatedAt'], folder_time)
+        directory = self.request(route + '/files?view=directory&directoryId=default')
+        self.assertEqual(next(item for item in directory['items'] if item['kind'] == 'directory')['updatedAt'], folder_time)
+        with patch('backend.runner_management.repository_metadata._last_change', side_effect=OSError('temporary error')):
+            unavailable = self.request(route + '/files')
+        self.assertEqual(unavailable['total'], flat['total'])
+        self.assertTrue(all(item['updatedAt'] is None for item in unavailable['items']))
+
     def test_repository_file_metadata_uses_file_history_at_selected_snapshot(self):
         route = '/api/runner-management/settings/code-repos'
         repo = self.request(route)[0]
@@ -2141,6 +2172,7 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
 
         occupied = Path(self.tmp.name) / "occupied"
         occupied.mkdir()
+        (occupied / 'keep.txt').write_text('existing content', encoding='utf8')
         with self.assertRaises(HTTPError) as rejected:
             self.request("/api/runner-management/settings/site-code-repo", {"path": str(occupied)})
         self.assertEqual(rejected.exception.code, 409)
@@ -2386,7 +2418,7 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         self.assertEqual(self.request(url)["total"], 2)
         with self.assertRaises(HTTPError) as protected:
             urlopen(Request(self.url + url + "?path=code/x.py", method="DELETE"), timeout=5)
-        self.assertEqual(protected.exception.code, 400)
+        self.assertEqual(protected.exception.code, 404)
 
         typed = self.request("/api/runner-management/settings/code-repos", {
             "name": "网页类型仓库", "path": str(Path(self.tmp.name) / "typed-local"),

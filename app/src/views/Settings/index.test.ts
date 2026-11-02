@@ -6,6 +6,8 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import Settings from './index.vue'
+import CodeRepositoryTab from './CodeRepositoryTab.vue'
+import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 import { useAuthStore } from '@/stores/auth'
 
 
@@ -24,19 +26,42 @@ async function mountAt(query: Record<string, string> = {}, roles: string[] = [])
 
 describe('系统设置 · tab 壳', () => {
   afterEach(() => vi.unstubAllEnvs())
+  it('原大模型接口链接转到代码生成服务器的模型配置视图，菜单只保留合并入口', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'model-interfaces' })
+    expect(router.currentRoute.value.query).toEqual({ tab: 'code-servers', view: 'models' })
+    expect(wrapper.findComponent(CodeGenerationServersTab).exists()).toBe(true)
+    expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('大模型接口')
+    wrapper.unmount()
+  })
 
-  it('旧节点代码书签跳转到统一机器配置，保留筛选上下文', async () => {
+  it('生成结果链接保留仓库和配置子目录参数，并传递到仓库页面', async () => {
+    const query = { tab: 'code-repos', repoId: 'repo-result', directoryId: 'dir-links', folderPath: 'links/1401218' }
+    const { wrapper, router } = await mountAt(query)
+    expect(router.currentRoute.value.query).toEqual(query)
+    expect(wrapper.findComponent(CodeRepositoryTab).props()).toMatchObject({ repositoryId: 'repo-result', repositoryDirectoryId: 'dir-links', repositoryFolderPath: 'links/1401218', repositoryFilePath: '' })
+    wrapper.unmount()
+  })
+
+  it('旧节点代码书签跳转到服务器页面，保留筛选上下文', async () => {
     const { wrapper, router } = await mountAt({ tab: 'site-code', configId: '123' })
     expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('节点代码')
-    expect(wrapper.find('.st-tab-link.active').text()).toBe('机器配置')
-    expect(router.currentRoute.value.query).toEqual({ tab: 'assignments', configId: '123' })
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
+    expect(router.currentRoute.value.query).toEqual({ tab: 'runners', configId: '123' })
+    expect(wrapper.find('[data-testid="settings-server-workspace"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+  it('旧机器配置链接合并到服务器并保留实例和配置筛选', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'assignments', runnerId: 'r-2', configId: '123' })
+    expect(router.currentRoute.value.query).toEqual({ tab: 'runners', runnerId: 'r-2', configId: '123' })
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
     expect(wrapper.find('[data-testid="settings-runtime-bindings"]').exists()).toBe(true)
+    expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('机器配置')
     wrapper.unmount()
   })
   it('系统设置只剩机器与目录类 tab（来源组已迁回源管理，人与权限类已迁到用户权限设置）', async () => {
     const { wrapper } = await mountAt()
 
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '大模型接口', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '运行日志', '程序版本', '数据权限设置'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })
@@ -51,7 +76,7 @@ describe('系统设置 · tab 壳', () => {
   it('部署构建同样展示全部设置入口，直达服务器页签不回落', async () => {
     vi.stubEnv('DEV', false)
     const { wrapper, router } = await mountAt({ tab: 'runners' })
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '大模型接口', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '运行日志', '程序版本', '数据权限设置'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
     expect(router.currentRoute.value.query).toEqual({ tab: 'runners' })
   })
@@ -81,12 +106,18 @@ describe('系统设置 · tab 壳', () => {
     expect(router.currentRoute.value.query).toEqual({})
   })
 
-  // 1027：admin 是唯一的系统超管，账号维护只对他开放（后端 /api/v1/sys-user/** 同样只认 roles[admin]）。
-  // 1030：这一页整体搬到侧栏「用户权限设置」，可见性口径随页迁到 UserPermission/index.test.ts；
-  // 本页只负责把旧书签跳过去，read 账号也一样跳（新页会把看不到的 tab 归一到默认 tab）。
-  it('?tab=users 跳到用户权限设置的用户管理 tab，不看角色', async () => {
-    const { router } = await mountAt({ tab: 'users' }, ['read'])
-    expect(router.currentRoute.value.path).toBe('/user-permission')
-    expect(router.currentRoute.value.query).toEqual({ tab: 'users' })
+  // 1027：admin 是唯一的系统超管，账号维护只对他开放（后端 /api/v1/sys-user/** 同样只认 roles[admin]）
+  it('admin 会话多出「用户管理」tab，?tab=users 直达', async () => {
+    const { wrapper } = await mountAt({ tab: 'users' }, ['admin'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '运行日志', '程序版本', '数据权限设置', '用户管理'])
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('用户管理')
+    expect(wrapper.find('[data-testid="settings-user-management"]').exists()).toBe(true)
+  })
+
+  it('普通 read 账号看不到「用户管理」，书签直达也回落到节点类型', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'users' }, ['read'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).not.toContain('用户管理')
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
+    expect(router.currentRoute.value.query).toEqual({})
   })
 })

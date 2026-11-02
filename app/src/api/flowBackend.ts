@@ -19,6 +19,13 @@ export function usesFlowBackend(endpoint: string, hash: string): boolean {
 
 export type BackendScope = 'flow' | 'default'
 
+/** Only a separate flow backend needs its own source relationship lookup. */
+export function flowSourcesEndpoint(flowId: unknown, flowTarget: string | undefined, defaultTarget: string): string {
+  const normalized = (value: string) => new URL(value).href.replace(/\/+$/, '')
+  return flowId && flowTarget && normalized(flowTarget) !== normalized(defaultTarget)
+    ? 'flow/flowSources' : 'source/sourcePaged'
+}
+
 export function flowRequestPath(path: string, endpoint: string, target: string | undefined, hash: string, scope?: BackendScope): string {
   if (scope === 'default' || !target || !path.startsWith('/api/v1/') || !usesFlowBackend(endpoint, scope === 'flow' ? '#/flows' : hash)) return path
   return path.replace(/^\/api\//, '/api/local-flow/')

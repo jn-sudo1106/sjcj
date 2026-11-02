@@ -2,10 +2,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
-import { runnerManagementApi, type ModelInterfaceSettings } from '@/api/runnerManagement'
+import { runnerManagementApi, type ModelInterfaceSettings, type CodeGenerationServer } from '@/api/runnerManagement'
 import ModelInterfacesTab from './ModelInterfacesTab.vue'
 vi.mock('@/utils/clipboard', () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }))
 
@@ -27,11 +27,79 @@ beforeEach(() => {
   })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); document.body.innerHTML = '' })
-async function setup(role = 'admin') {
+it('自动匹配模型显示关联机器，配置支持自动和直接连接两种选择', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items: [{ ...fixture.items[0]!, generationServerMode: 'auto', generationServerId: 'server-1', generationServerMatch: 'matched' }] })
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'server-1', name: 'home171', ipAddress: '192.168.1.171', endpoint: '', workspace: '', installDirectory: '', osType: '', osVersion: '', version: '', lastHeartbeat: '', status: 'online' }] })
+  const w = await setup()
+  expect(w.text()).toContain('地址匹配：home171')
+  await w.findAll('button').find(button => button.text() === '编辑')!.trigger('click'); await flushPromises()
+  const picker = w.findAllComponents({ name: 'ElSelect' }).find(item => item.attributes('data-testid') === 'model-generation-server')!
+  expect(picker.props('modelValue')).toBe('@auto')
+  picker.vm.$emit('update:modelValue', '@direct'); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-save"]')!.click(); await flushPromises()
+  expect(runnerManagementApi.saveModelInterfaces).toHaveBeenCalledWith(expect.objectContaining({ items: [expect.objectContaining({ generationServerMode: 'direct', generationServerId: '' })] }))
+})
+async function setup(role = 'admin', props: Partial<InstanceType<typeof ModelInterfacesTab>['$props']> = {}) {
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = [role]
-  const w = mount(ModelInterfacesTab, { attachTo: document.body, global: { plugins: [pinia, ElementPlus] } })
+  const w = mount(ModelInterfacesTab, { props, attachTo: document.body, global: { plugins: [pinia, ElementPlus] } })
   wrappers.push(w); await flushPromises(); return w
 }
+const scopedServer: CodeGenerationServer = { serverId: 'server-a', name: '生成服务器 A', ipAddress: '192.168.1.171',
+  workspace: 'D:\\codeserver\\workspace', generationRoot: 'D:\\codeserver\\projects', endpoint: 'http://192.168.1.171:8093',
+  installDirectory: 'D:\\codeserver', osType: 'Windows', osVersion: 'Windows 11', version: '1', lastHeartbeat: '', status: 'online' }
+function scopedFixtures() {
+  const second = { ...scopedServer, serverId: 'server-b', name: '生成服务器 B', ipAddress: '192.168.1.172' }
+  const items = [
+    { ...fixture.items[0]!, id: 'model-a', name: 'A 的模型', generationServerMode: 'manual' as const, generationServerId: scopedServer.serverId },
+    { ...fixture.items[0]!, id: 'model-b', name: 'B 的模型', isDefault: false, generationServerMode: 'manual' as const, generationServerId: second.serverId },
+    { ...fixture.items[0]!, id: 'unbound', name: '未关联模型', isDefault: false, generationServerMode: 'direct' as const, generationServerId: '' },
+  ]
+  vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [scopedServer, second] })
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items })
+  return { items, second }
+}
+it('在服务器内按当前、全部、未关联筛选接口，选择其他服务器时切换对应接口', async () => {
+  const { second } = scopedFixtures()
+  const w = await setup('admin', { server: scopedServer, embedded: true })
+  expect(w.get('.mi-table').text()).toContain('A 的模型')
+  expect(w.get('.mi-table').text()).not.toContain('B 的模型')
+  const scope = w.findAllComponents({ name: 'ElSelect' }).find(item => item.attributes('data-testid') === 'model-scope')!
+  scope.vm.$emit('update:modelValue', 'unassigned'); await flushPromises()
+  expect(w.get('.mi-table').text()).toContain('未关联模型')
+  expect(w.get('.mi-table').text()).not.toContain('A 的模型')
+  scope.vm.$emit('update:modelValue', 'all'); await flushPromises()
+  expect(w.get('.mi-table').text()).toContain('B 的模型')
+  await w.setProps({ server: second }); await flushPromises()
+  expect(w.get('.mi-table').text()).toContain('B 的模型')
+  expect(w.get('.mi-table').text()).not.toContain('A 的模型')
+})
+it('在当前服务器新建接口默认绑定该实例，保存保留其他机器和未关联接口', async () => {
+  const { items } = scopedFixtures()
+  const w = await setup('admin', { server: scopedServer, embedded: true })
+  await w.get('[data-testid="model-add"]').trigger('click'); await flushPromises()
+  const input = document.querySelector<HTMLInputElement>('input[data-testid="model-name"], [data-testid="model-name"] input')!
+  input.value = '新增 A 模型'; input.dispatchEvent(new Event('input')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-save"]')!.click(); await flushPromises()
+  const saved = vi.mocked(runnerManagementApi.saveModelInterfaces).mock.calls[0]![0]
+  expect(saved.revision).toBe(3)
+  expect(saved.items).toHaveLength(4)
+  expect(saved.items.slice(0, 3)).toEqual(items)
+  expect(saved.items[3]).toMatchObject({ name: '新增 A 模型', generationServerMode: 'manual', generationServerId: scopedServer.serverId, prjDir: scopedServer.generationRoot })
+  expect(w.emitted('changed')).toHaveLength(1)
+})
+it('切换服务器前可保留尚未保存的接口编辑', async () => {
+  scopedFixtures()
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm' as never)
+  const w = await setup('admin', { server: scopedServer, embedded: true })
+  await w.get('[data-testid="model-add"]').trigger('click'); await flushPromises()
+  const input = document.querySelector<HTMLInputElement>('input[data-testid="model-name"], [data-testid="model-name"] input')!
+  input.value = '未保存'; input.dispatchEvent(new Event('input')); await flushPromises()
+  expect(await w.vm.beforeLeave()).toBe(false)
+  expect(confirm).toHaveBeenCalledOnce()
+  expect(document.querySelector('[data-testid="model-save"]')).not.toBeNull()
+  expect(await w.vm.beforeLeave()).toBe(true)
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+})
 it('新建接口保留已有配置并带乐观锁保存', async () => {
   const w = await setup()
   await w.get('[data-testid="model-add"]').trigger('click'); await flushPromises()
@@ -83,8 +151,8 @@ it('Agent 复制和测试使用 POST JSON，保留工作空间、文件路径与
   expect(requestText()).toContain('帮我采集')
   expect(requestText()).not.toContain('%E5')
   let body = JSON.parse(requestText().split('\n\n')[1]!)
-  expect(body.prj_dir).toBe(`${agent.prjDir}\\legacy`)
-  expect(body.code_dir).toBe('D:\\aicode\\legacy\\code')
+  expect(body.prj_dir).toBe(agent.prjDir)
+  expect(body.code_dir).toBe('D:\\aicode\\code')
   expect(body.output_file_dir).toBe(body.code_dir.replace(/code$/, 'output'))
   expect(body.input_file_dir).toBe(body.code_dir.replace(/code$/, 'input'))
   expect(body.model).toBe('hy3')
@@ -118,7 +186,7 @@ it('WB Agent 端口随编辑保存，测试可临时覆盖', async () => {
   document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
   expect(runnerManagementApi.streamModelInterfaceTest).toHaveBeenCalledWith(expect.objectContaining({ cdpPort: 9555 }), expect.any(Function), expect.any(AbortSignal))
   const first = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
-  expect(first.codeDir).toBe('D:\\aicode\\legacy\\code')
+  expect(first.codeDir).toBe('D:\\aicode\\code')
   document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
   const second = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
   expect(second.taskId).not.toBe(first.taskId)

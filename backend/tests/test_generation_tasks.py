@@ -1,8 +1,11 @@
 import unittest
+import json
+import io
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.tests import test_generated_archives as archive_tests
-from backend.runner_management import generation_tasks as jobs
+from backend.runner_management import generation_tasks as jobs, database_generation as tasks, code_servers
 from backend.runner_management.server import ApiError
 
 
@@ -13,14 +16,25 @@ class GenerationTasksTest(unittest.TestCase):
     start_remote = archive_tests.GeneratedArchivesTest.start_remote
     fixture = archive_tests.GeneratedArchivesTest.fixture
 
+    def execute_next(self):
+        server = code_servers.read(self.app, code_servers.registry(self.app)[0]['serverId'])
+        # Test fixtures have a registered worker; an ordinary heartbeat enables polling.
+        server['mqCapable'] = True
+        with self.app.store.connect() as db: code_servers.write(db, server)
+        job = tasks.claim(self.app, server)['job']
+        self.assertIsNotNone(job)
+        handler = SimpleNamespace(send_response=lambda *args: None, send_header=lambda *args: None,
+                                  end_headers=lambda: None, wfile=io.BytesIO())
+        tasks.execute(handler, self.app, server, job['taskId'])
+
     def configured(self):
         _, repo, origin, payload, calls = self.fixture()
         generation = {key: payload[key] for key in ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName', 'url')}
         generation.update(systemPrompt='编写可靠的代码', userPrompt='采集 {{sourceUrl}} 源 {{sourceId}}', fileNameMode='website')
         jobs.save_config(self.app, {'configId': '102', 'generation': generation})
         source = {'sourceId': '123', 'name': '测试源', 'url': 'https://example.net/news', 'flowId': '55', 'nodes': [
-            {'configId': '101', 'name': '首节点', 'isRoot': True},
-            {'configId': '102', 'name': '下载', 'enabled': True},
+            {'stepId': '1', 'configId': '101', 'name': '首节点', 'isRoot': True},
+            {'stepId': '2', 'configId': '102', 'name': '下载', 'enabled': True},
             {'configId': '103', 'name': '未配 AI'},
             {'configId': '102', 'name': '同配置重复引用'},
         ]}
@@ -44,7 +58,25 @@ class GenerationTasksTest(unittest.TestCase):
         self.assertIsNotNone(jobs.read_config(self.app, '102')['generation'])
         self.assertTrue(jobs.read_config(self.app, '102')['enabled'])
 
-    def test_background_generation_archives_and_binds_source_variables(self):
+    def test_node_directory_overrides_are_not_saved_and_legacy_overrides_are_ignored(self):
+        self.configured()
+        generation = jobs.read_config(self.app, '102')['generation']
+        self.assertEqual(generation['workspaceMode'], 'config')
+        legacy = jobs.save_config(self.app, {'configId': '102', 'generation': {**generation, 'workspaceMode': 'config-queue'}})
+        self.assertEqual(legacy['generation']['workspaceMode'], 'config')
+        saved = jobs.save_config(self.app, {'configId': '102', 'generation': {**generation, 'codeDirectory': 'shared/news/code'}})
+        self.assertEqual(saved['generation']['codeDirectory'], '')
+        jobs.save_config(self.app, {'configId': '102', 'generation': {**generation, 'workspaceMode': 'custom', 'workspacePath': '../old', 'codeDirectory': '../outside'}})
+        normalized = jobs.read_config(self.app, '102')['generation']
+        self.assertEqual((normalized['workspaceMode'], normalized['workspacePath'], normalized['codeDirectory']), ('config', '', ''))
+        legacy_record = jobs.read_config(self.app, '102')
+        legacy_record['generation'].update(workspaceMode='custom', workspacePath='old/node', codeDirectory='old/code')
+        with self.app.store.connect() as db:
+            db.execute('UPDATE settings SET setting_value=? WHERE setting_key=?', (json.dumps(legacy_record), jobs.key('102')))
+        normalized = jobs.read_config(self.app, '102')['generation']
+        self.assertEqual((normalized['workspaceMode'], normalized['workspacePath'], normalized['codeDirectory']), ('config', '', ''))
+
+    def test_api_worker_generation_archives_and_binds_source_variables(self):
         source, origin, calls = self.configured()
         jobs.save_config(self.app, {'configId': '101', 'enabled': True})
         with patch.object(jobs, 'ensure_worker'):
@@ -53,7 +85,7 @@ class GenerationTasksTest(unittest.TestCase):
         self.assertEqual(record['input']['url'], source['url'])
         self.assertIn(source['url'], record['input']['userPrompt'])
         self.assertIn('123', record['input']['userPrompt'])
-        jobs.run_one(self.app, record)
+        self.execute_next()
         result = jobs.listing(self.app)[0]
         self.assertEqual(result['status'], 'succeeded', result['message'])
         self.assertTrue(result['gitCommit'])
@@ -64,7 +96,7 @@ class GenerationTasksTest(unittest.TestCase):
         import json
         receipt = Path(calls[0]['prj_dir']) / 'tasks' / (record['taskId'] + '.json')
         self.assertEqual(json.loads(receipt.read_text('utf8'))['gitCommit'], result['gitCommit'])
-        self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = 1')
+        self.assertEqual(self.app.git(origin, 'show', 'main:default/102/newslink.py').strip(), 'VALUE = 1')
 
     def test_restart_marks_interrupted_without_repeating_model_calls(self):
         source, _, calls = self.configured()
@@ -89,10 +121,9 @@ class GenerationTasksTest(unittest.TestCase):
         jobs.save_config(self.app, {'configId': '101', 'enabled': True})
         with patch('backend.runner_management.model_interfaces.generate', side_effect=[RuntimeError('模型暂时不可用'), {'archive': {'archiveId': 'a' * 32, 'status': 'committed', 'gitCommit': 'b' * 40}}]) as generate:
             result = jobs.submit(self.app, {'sources': [source, {**source, 'sourceId': '124'}]})
-            worker = self.app._generation_worker
-            if worker:
-                worker.join(timeout=5)
-                self.assertFalse(worker.is_alive())
+            generate.assert_not_called()
+            self.execute_next()
+            self.execute_next()
             self.assertEqual(len(result['created']), 2)
             rows = sorted(jobs.listing(self.app), key=lambda row: row['sourceId'])
             self.assertEqual([row['status'] for row in rows], ['failed', 'succeeded'])

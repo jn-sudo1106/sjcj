@@ -24,13 +24,38 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.directoryDeliveryPreview).mockResolvedValue({ revision: 'layout-v1', targetPath: '123/prod', baselineDigest: null, items: [{ path: 'main.py', kind: 'file', size: 32, status: 'added' }] })
 })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); document.body.innerHTML = '' })
-async function setup(admin = true) {
+async function setup(admin = true, runnerId?: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
   await router.push({ path: '/settings', query: { tab: 'assignments', mode: 'versions' } }); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = [admin ? 'admin' : 'viewer']
-  const wrapper = mount(RunnerBindingTab, { global: { plugins: [pinia, router, ElementPlus] }, attachTo: document.body }); await flushPromises()
+  const wrapper = mount(RunnerBindingTab, { props: { runnerId }, global: { plugins: [pinia, router, ElementPlus] }, attachTo: document.body }); await flushPromises()
   return { wrapper, router }
 }
+it('选择服务器后仅显示该实例配置，新增绑定自动固定该实例', async () => {
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([existing, { ...existing, runtimeId: 'runtime-other', runnerId: 'r-2', name: '其他目录的配置' }])
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
+  expect(wrapper.text()).not.toContain('其他目录的配置')
+  expect(wrapper.text()).toContain('1 项配置 · 1 个实例')
+  expect(wrapper.findAll('th').map(item => item.text())).not.toContain('运行机器')
+  await wrapper.get('[data-testid="binding-create"]').trigger('click'); await flushPromises()
+  const picker = wrapper.findAllComponents({ name: 'ElSelect' }).find(item => item.attributes('data-testid') === 'binding-runner')!
+  expect(picker.props('modelValue')).toBe('r-1')
+  expect(picker.props('disabled')).toBe(true)
+  expect(wrapper.emitted('busy')?.at(-1)).toEqual([true])
+  vi.mocked(runnerManagementApi.saveRuntimeConfiguration).mockResolvedValue({ ...existing, runtimeId: 'new-for-r-1' })
+  await wrapper.get('[data-testid="binding-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveRuntimeConfiguration).toHaveBeenCalledWith(expect.objectContaining({ runnerId: 'r-1' }))
+  expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+  wrapper.unmount()
+})
+it('没有配置的实例不回退显示其他机器的配置', async () => {
+  const { wrapper } = await setup(false, 'missing-runner')
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(0)
+  expect(wrapper.text()).toContain('当前实例暂无机器配置')
+  expect(wrapper.find('[data-testid="binding-create"]').exists()).toBe(false)
+  wrapper.unmount()
+})
 it('直接启动使用机器已采用的目录和入口，显示实例数量及 PID', async () => {
   const direct = { ...existing, directoryTemplate: 'adopted/program', entryPoint: 'app/run.py',
     assignment: { ...existing.assignment!, processorType: 'deployment-entry', queue: '@deployment:abc' } }

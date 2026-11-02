@@ -40,7 +40,7 @@ async function create() {
         let nodes = flows.get(flowId)
         if (!nodes) { nodes = await flowCenterApi.steps(flowId, { withConfigDetails: false }); flows.set(flowId, nodes) }
         snapshots.push({ sourceId: source.sourceId, name: source.name, url: source.url, flowId,
-          nodes: nodes.map(node => ({ configId: node.configId, name: node.name, isRoot: node.isRoot, enabled: node.enabled })) })
+          nodes: nodes.map(node => ({ stepId: node.stepId, configId: node.configId, name: node.name, isRoot: node.isRoot, enabled: node.enabled })) })
       } catch (e) { failures.push({ sourceId: selected.sourceId, name: selected.name, reason: e instanceof Error ? e.message : String(e) }) }
     }
     if (snapshots.length) {
@@ -59,7 +59,7 @@ const time = (value: string) => value ? new Date(value).toLocaleString('zh-CN', 
 <template>
   <el-drawer v-model="open" title="代码生成" size="min(1000px, 96vw)" append-to-body destroy-on-close>
     <label class="generation-mode">任务方式
-      <select v-model="mode" aria-label="任务方式" :disabled="creating"><option value="ai">AI 代码生成</option><option value="mq">MQ 代码生成</option></select>
+      <select v-model="mode" aria-label="任务方式" :disabled="creating"><option value="ai">按节点生成配置批量创建</option><option value="mq">指定流程节点创建</option></select>
     </label>
     <SourceMqCodeTasks v-if="mode === 'mq'" :sources="sources" />
     <template v-else>

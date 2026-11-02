@@ -24,6 +24,7 @@ const mountDrawer = (sources = [source]) => mount(SourceCodeTasksDrawer, { props
 it('重新查询源详情，按生效默认流程加载发布拓扑，展示跳过原因', async () => {
   vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, defaultFlowId: '66' })
   const w = mountDrawer(); await flushPromises()
+  await w.get('[aria-label="任务方式"]').setValue('ai'); await flushPromises()
   await w.findAll('button').find(button => button.text() === '代码生成')!.trigger('click'); await flushPromises()
   expect(flowCenterApi.steps).toHaveBeenCalledWith('66', { withConfigDetails: false })
   expect(runnerManagementApi.createSourceCodeTasks).toHaveBeenCalledWith([expect.objectContaining({ sourceId: '123', flowId: '66', nodes: [expect.objectContaining({ isRoot: true, configId: '101' })] })])
@@ -33,6 +34,7 @@ it('重新查询源详情，按生效默认流程加载发布拓扑，展示跳�
 it('单个源读取失败不会阻止其他源；没有默认流程不提交错误任务', async () => {
   vi.mocked(sourceApi.sourceDetail).mockImplementation(async id => id === '123' ? { ...source, flowId: undefined } : { ...source, sourceId: id })
   const w = mountDrawer([source, { ...source, sourceId: '124' }]); await flushPromises()
+  await w.get('[aria-label="任务方式"]').setValue('ai'); await flushPromises()
   await w.findAll('button').find(button => button.text() === '代码生成')!.trigger('click'); await flushPromises()
   expect(runnerManagementApi.createSourceCodeTasks).toHaveBeenCalledWith([expect.objectContaining({ sourceId: '124' })])
   expect(w.text()).toContain('源没有生效的默认流程')
@@ -40,19 +42,19 @@ it('单个源读取失败不会阻止其他源；没有默认流程不提交错�
 })
 it('未选择源仍可查看后台任务，但不能创建', async () => {
   const w = mountDrawer([]); await flushPromises()
+  await w.get('[aria-label="任务方式"]').setValue('ai'); await flushPromises()
   expect(w.findAll('button').find(button => button.text() === '代码生成')!.attributes('disabled')).toBeDefined()
   expect(runnerManagementApi.sourceCodeTasks).toHaveBeenCalledOnce()
   w.unmount()
 })
 
-it('可以切换至独立 MQ 入口，原 AI 创建按钮不混入 MQ 表单', async () => {
+it('默认按节点配置批量创建，也可切换指定步骤创建', async () => {
   const w = mountDrawer(); await flushPromises()
-  await w.find('[aria-label="任务方式"]').setValue('mq'); await flushPromises()
-  expect(w.text()).toContain('默认队列（code-default）')
-  expect(w.text()).toContain('派发配置（201）')
-  expect(w.findAll('button').some(button => button.text() === '代码生成')).toBe(false)
-  expect(runnerManagementApi.createSourceCodeTasks).not.toHaveBeenCalled()
-  await w.find('[aria-label="任务方式"]').setValue('ai'); await flushPromises()
+  expect((w.get('[aria-label="任务方式"]').element as HTMLSelectElement).value).toBe('ai')
   expect(w.findAll('button').some(button => button.text() === '代码生成')).toBe(true)
+  await w.find('[aria-label="任务方式"]').setValue('mq'); await flushPromises()
+  expect(w.findAll('button').some(button => button.text() === '代码生成')).toBe(false)
+  expect(w.text()).toContain('数据库代码生成任务')
+  expect(w.text()).not.toContain('派发配置（201）')
   w.unmount()
 })

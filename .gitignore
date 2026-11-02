@@ -45,6 +45,7 @@ backend/code_generation_server/*
 !backend/code_generation_server/*.py
 !backend/code_generation_server/*.cmd
 !backend/code_generation_server/config.example.json
+!backend/code_generation_server/requirements.txt
 !backend/tests/
 backend/tests/*
 !backend/tests/*.py

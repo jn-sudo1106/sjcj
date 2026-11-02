@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { runnerManagementApi as api, type RepositoryFileReferences, type RepositoryFileReference } from '@/api/runnerManagement'
 import ConfigTemplateDrawer from '@/views/Monitor/taskList/ConfigTemplateDrawer.vue'
 
 const visible = ref(false), loading = ref(false), error = ref(''), scope = ref('all')
+const props = defineProps<{ canWrite?: boolean }>()
+const emit = defineEmits<{ changed: [] }>()
+const unlinking = ref('')
 const result = ref<RepositoryFileReferences>(), repoId = ref(''), path = ref('')
 const config = ref<InstanceType<typeof ConfigTemplateDrawer>>()
 const items = computed(() => (result.value?.items || []).filter(item => scope.value === 'all' || item.scope === scope.value))
@@ -22,6 +26,19 @@ function open(repositoryId: string, filePath: string) {
 function openConfig(item: RepositoryFileReference) {
   void config.value?.open(item.configId, { backendScope: item.sourceNodes.length ? 'flow' : 'default' })
 }
+async function unlinkNode(item: RepositoryFileReference) {
+  if (!props.canWrite || unlinking.value || !item.digest) return
+  const repositoryId = repoId.value, filePath = path.value
+  unlinking.value = item.codeId || item.digest
+  try {
+    try { await ElMessageBox.confirm(`取消配置 ${item.configId}、队列 ${item.queueName} 与「${filePath}」的关联？仓库文件和已发布的历史快照保留。`, '取消对应代码关联', { type: 'warning', confirmButtonText: '取消关联', cancelButtonText: '返回' }) }
+    catch { return }
+    await api.changeScriptFileAssociation({ digest: item.digest, configId: item.configId, queueName: item.queueName, target: 'saved', action: 'unlink' })
+    emit('changed')
+    if (repoId.value === repositoryId && path.value === filePath) await load()
+  } catch (e) { if (repoId.value === repositoryId && path.value === filePath) error.value = e instanceof Error ? e.message : String(e) }
+  finally { unlinking.value = '' }
+}
 const title = (item: RepositoryFileReference) => item.kind === 'deployment' ? item.name : item.kind === 'generation' ? item.archiveStatus === 'pending' ? '生成结果（待提交）' : item.archiveStatus === 'failed' ? '生成结果（归档失败）' : '节点生成代码归档' : item.kind === 'node' ? '节点代码关联' : item.isLatest ? '最新代码版本' : item.environments?.length || item.machineBindingCount ? '历史版本（仍有运行绑定）' : '历史代码版本'
 onBeforeUnmount(() => { sequence++ })
 defineExpose({ open })
@@ -35,7 +52,7 @@ defineExpose({ open })
     <div class="rr-filters"><button v-for="option in [{ key: 'all', label: '全部' }, { key: 'current', label: '当前引用' }, { key: 'history', label: '历史引用' }]" :key="option.key" :aria-pressed="scope === option.key" @click="scope = option.key">{{ option.label }}</button><span>共 {{ items.length }} 项</span></div>
     <div v-loading="loading" class="rr-list">
       <article v-for="(item, index) in items" :key="`${item.kind}-${item.deploymentId || item.digest || item.codeId}-${index}`" class="rr-card" data-testid="repository-reference">
-        <header><b>{{ title(item) }}</b><el-tag size="small" :type="item.scope === 'history' ? 'info' : 'primary'">{{ item.scope === 'history' ? '历史' : '当前' }}</el-tag><RouterLink v-if="item.deploymentId" :to="{ path: '/settings', query: { tab: 'directory-layout', deploymentId: item.deploymentId } }" target="_blank" rel="noopener" data-testid="reference-deployment-link">打开部署配置</RouterLink></header>
+        <header><b>{{ title(item) }}</b><el-tag size="small" :type="item.scope === 'history' ? 'info' : 'primary'">{{ item.scope === 'history' ? '历史' : '当前' }}</el-tag><el-button v-if="canWrite && item.kind === 'node' && item.scope === 'current' && item.digest" link type="danger" :disabled="!!unlinking" :loading="unlinking === item.codeId" data-testid="reference-unlink-node" @click="unlinkNode(item)">取消此关联</el-button><RouterLink v-if="item.deploymentId" :to="{ path: '/settings', query: { tab: 'directory-layout', deploymentId: item.deploymentId } }" target="_blank" rel="noopener" data-testid="reference-deployment-link">打开部署配置</RouterLink></header>
         <div v-for="node in item.sourceNodes" :key="`${node.flowId}-${node.stepId}`" class="rr-origin"><RouterLink :to="{ path: '/flows', query: { q: node.flowId } }" target="_blank" rel="noopener">{{ node.flowName }}</RouterLink><span>/ {{ node.nodeName }}</span><small>流程 {{ node.flowId }} · 节点 {{ node.stepId }}</small></div>
         <p v-if="!item.sourceNodes.length" class="rr-muted">未记录或未找到关联流程节点</p>
         <div class="rr-attributes"><span v-if="item.configId">配置 ID：<el-button link type="primary" :data-testid="`reference-config-${item.configId}`" @click="openConfig(item)">{{ item.configId }}</el-button></span><span v-if="item.queueName">MQ：{{ item.queueName }}</span><span v-if="item.publishedAt">保存时间：{{ new Date(item.publishedAt).toLocaleString('zh-CN', { hour12: false }) }}</span><span v-if="item.environments?.length">运行绑定：{{ item.environments.join('、') }}</span><span v-if="item.machineBindingCount">启用的机器绑定：{{ item.machineBindingCount }}</span></div>

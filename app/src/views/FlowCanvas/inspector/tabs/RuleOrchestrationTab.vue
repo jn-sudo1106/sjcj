@@ -46,6 +46,7 @@ import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCa
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { useFlowStore } from '@/stores/flow'
+import { canvasFlowIdOf } from '@/stores/flowVersion'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
@@ -61,6 +62,8 @@ import AlertConfigPanel from '../AlertConfigPanel.vue'
 const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
 const router = useRouter()
 const route = useRoute()
+// 源画布的 flow.flowId 是源视角工作区键（可能等于 sourceId），不能直接作为后端流程 ID。
+const siteScriptFlowId = computed(() => canvasFlowIdOf(useFlowStore()))
 const { tables } = useNodeInspectorAssets()
 
 // 编排内容的 UI/行为分流谓词（2026-09-29）：规则处理 + PDF 抓取都渲染同一套「脚本工作区」
@@ -2270,6 +2273,9 @@ function onTestScript() {
       :initial-url="siteScriptUrl"
       :initial-prompt="orchCfg.describe"
       :config-id="cfg?.configId"
+      :source-id="promptSourceId"
+      :flow-id="siteScriptFlowId"
+      :step-id="id"
       :queue-name="siteScriptQueue"
       :config-type="siteScriptConfigType"
       :template-variables="siteScriptPromptVariables"

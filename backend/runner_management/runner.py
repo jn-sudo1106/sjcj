@@ -383,6 +383,7 @@ class Runner:
             'ipAddress': self.ip_address,
             **self.os_info,
             'runnerDigest': os.getenv('RUNNER_RELEASE_DIGEST', 'source-local'),
+            'launcherVersion': os.getenv('PROGRAM_LAUNCHER_VERSION', ''),
             'runnerPid': os.getpid(), 'workerProcesses': workers, 'executionSchema': 2, 'logSchema': 1, 'retryPolicySchema': 1, 'processControlSchema': 2,
             'workerDigests': ','.join(sorted({digest for digest, child, _ in self.processes.values() if child.poll() is None})),
             'lastError': self.last_error,

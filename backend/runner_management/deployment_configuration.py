@@ -228,6 +228,7 @@ def ensure_node_configuration(app, payload):
     """Idempotent save from orchestration; never binds, delivers or starts a Runner."""
     from .server import ApiError, GIT_LOCK, required_text, CODE_VERSION_SELECT
     from .directory_layout import get_layout
+    from .script_file_links import state as file_link_state
     raw_source = payload.get('sourceNode')
     if not isinstance(raw_source, dict):
         raise ApiError('请提供来源流程节点')
@@ -254,7 +255,8 @@ def ensure_node_configuration(app, payload):
             # A config reused by another flow/node still gets its own deployment identity.
             config_identifier = legacy_id('config', source['configId'])
             legacy = items.get(config_identifier)
-            if legacy and not legacy.get('sourceNode') and legacy.get('queueName') == queue:
+            if (legacy and not legacy.get('sourceNode') and legacy.get('queueName') == queue
+                    and not file_link_state(db, legacy.get('codeId', '')).get('detached')):
                 current = legacy
                 if current['name'] == '配置 ' + source['configId']:
                     current = {**current, 'name': source['flowName'] + ' / ' + source['nodeName']}
@@ -264,6 +266,7 @@ def ensure_node_configuration(app, payload):
             identifier = current['deploymentId']
         versions = db.execute(CODE_VERSION_SELECT + 'WHERE a.config_id=? AND a.queue_name=? '
                               'ORDER BY v.published_at DESC,v.digest DESC', (source['configId'], queue)).fetchall()
+        versions = [row for row in versions if not file_link_state(db, row['code_id']).get('detached')]
         version = next((row for row in versions if row['digest'] == digest), None) if digest else next(
             (row for row in versions if current and row['code_id'] == current.get('codeId')), versions[0] if versions else None)
         if digest and not version:
@@ -291,7 +294,7 @@ def ensure_node_configuration(app, payload):
             # Update only this generated file; custom targets, dependencies and entry stay intact.
             layout['nodes'] = [dict(node, gitCommit=version['git_commit']) if matches_code(node) else node for node in layout['nodes']]
             layout['codeId'] = version['code_id']
-        elif current and queue != current.get('queueName'):
+        elif current and (queue != current.get('queueName') or file_link_state(db, current.get('codeId', '')).get('detached')):
             layout['codeId'] = ''
         layout.update(sourceNode=source, queueName=queue, configId=source['configId'])
         # Repeated saves without changes do not advance the deployment revision.

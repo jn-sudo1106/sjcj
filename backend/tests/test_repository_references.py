@@ -41,7 +41,7 @@ class RepositoryReferencesTest(unittest.TestCase):
             'nodes': [{'id': 'shared', 'parentId': '', 'name': 'app', 'kind': 'folder', 'repoId': repo['repoId'],
                        'sourcePath': path.rpartition('/')[0], 'sourceType': 'directory', 'gitCommit': second['gitCommit']}]})
         result = self.query(repo['repoId'], path)
-        self.assertIn('流程节点代码引用', result['protectionReasons'])
+        self.assertTrue(any('节点代码' in reason for reason in result['protectionReasons']))
         node = next(row for row in result['items'] if row['kind'] == 'node')
         self.assertEqual({row['flowId'] for row in node['sourceNodes']}, {'1', '2'})
         historical = next(row for row in result['items'] if row.get('digest') == first['scriptDigest'])
@@ -72,7 +72,7 @@ class RepositoryReferencesTest(unittest.TestCase):
         other = self.request(route + '/settings/code-repos', {'name': '其他仓库', 'path': str(Path(self.tmp.name) / 'other'), 'remoteUrl': '', 'branch': 'main'})
         self.assertEqual(self.query(other['repoId'], second['storagePath'])['items'], [])
         system = self.query(other['repoId'], 'code/unreferenced.py')
-        self.assertEqual(system['protectionReasons'], ['系统管理目录'])
+        self.assertEqual(system['protectionReasons'], [])
         self.assertEqual(system['items'], [])
         with self.assertRaises(HTTPError) as caught:
             self.query(first['repoId'], '../outside.py')

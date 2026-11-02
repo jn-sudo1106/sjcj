@@ -8,6 +8,9 @@ import { formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
 import { runnerManagementApi, type DeploymentConfiguration, type DirectoryDelivery, type DirectoryRunnerBinding, type RunnerInstance, type RuntimeConfiguration, type RuntimeConfigurationInput, type RunnerRetryPolicy } from '@/api/runnerManagement'
 import DirectoryDeliveryDialog from './DirectoryDeliveryDialog.vue'
 
+const props = defineProps<{ runnerId?: string }>()
+const emit = defineEmits<{ busy: [value: boolean] }>()
+
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const rows = ref<RuntimeConfiguration[]>([]), configurations = ref<DeploymentConfiguration[]>([]), runners = ref<RunnerInstance[]>([])
@@ -28,9 +31,10 @@ const executionQueue = computed(() => {
   return queue.startsWith('@deployment:') ? '' : queue
 })
 const hasExecution = computed(() => !!existingTask.value || !!selectedConfiguration.value?.entryPoint)
+const scopedRows = computed(() => rows.value.filter(item => !props.runnerId || item.runnerId === props.runnerId))
 const filteredRows = computed(() => {
   const search = keyword.value.trim().toLowerCase()
-  return rows.value.filter(item => {
+  return scopedRows.value.filter(item => {
     const configuration = configurationMap.value.get(item.deploymentId)
     return (!machineFilter.value || machineState(item.runnerId) === machineFilter.value) &&
       (!deliveryFilter.value || (item.binding?.delivery?.status || 'none') === deliveryFilter.value) &&
@@ -41,9 +45,10 @@ const filteredRows = computed(() => {
   })
 })
 const visibleRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
-const boundMachines = computed(() => new Set(rows.value.map(row => row.runnerId)))
+const boundMachines = computed(() => new Set(scopedRows.value.map(row => row.runnerId)))
 const onlineMachines = computed(() => [...boundMachines.value].filter(id => machineState(id) === 'online').length)
 const deliveryRow = ref<RuntimeConfiguration | null>(null)
+watch(() => editing.value || saving.value || !!controlling.value || !!deliveryRow.value, value => emit('busy', value), { immediate: true })
 const deliveryBinding = computed<DirectoryRunnerBinding | null>(() => deliveryRow.value?.binding || null)
 const machineStates = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常', unknown: '状态未知' }
 const deliveryStates = { none: '未下发', pending: '等待下发', running: '下发中', success: '已下发', failed: '下发失败' }
@@ -165,7 +170,7 @@ function open(row: RuntimeConfiguration | null = null) {
   editingRow.value = row; editing.value = true; formError.value = ''; stopPoll(); ++request
   const item = configurationMap.value.get(row?.deploymentId || '') || (!row ? configurations.value[0] : undefined)
   Object.assign(form, { runtimeId: row?.runtimeId, revision: row?.revision, deploymentId: item?.deploymentId || '', layoutRevision: item?.revision || '',
-    runnerId: row?.runnerId || '', concurrency: row?.assignment?.concurrency || 1,
+    runnerId: row?.runnerId || props.runnerId || '', concurrency: row?.assignment?.concurrency || 1,
     retryPolicy: row?.retryPolicy ? { ...row.retryPolicy, delaysSeconds: [...row.retryPolicy.delaysSeconds] } : defaultRetryPolicy() })
   retryWindowMinutes.value = form.retryPolicy.windowSeconds / 60
   retryDelays.value = form.retryPolicy.delaysSeconds.join(', ')
@@ -177,6 +182,7 @@ function selectConfiguration(value: unknown) {
 function cancel() { editing.value = false; editingRow.value = null; formError.value = ''; poll() }
 async function save() {
   if (!canWrite.value || saving.value || !form.deploymentId || !form.runnerId) return
+  if (props.runnerId && form.runnerId !== props.runnerId) { formError.value = '请选择当前服务器实例'; return }
   saving.value = true; formError.value = ''
   try {
     const tokens = retryDelays.value.split(/[,，]/).map(value => value.trim())
@@ -225,30 +231,30 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
 </script>
 
 <template>
-  <section class="rb-page" data-testid="settings-runtime-bindings">
+  <section class="rb-page" :class="{ 'rb-scoped': !!runnerId }" data-testid="settings-runtime-bindings">
     <div class="rb-filters">
-      <label class="rb-search">机器 / 流程 / 节点 / MQ<el-input v-model="keyword" clearable :prefix-icon="Search" :disabled="editing" placeholder="IP、流程、节点、配置 ID、MQ 或目录" aria-label="搜索机器配置" /></label>
-      <label>机器状态<el-select v-model="machineFilter" placeholder="全部状态" :disabled="editing" aria-label="筛选机器状态" data-testid="binding-machine-filter"><el-option label="全部状态" value="" /><el-option v-for="(label, value) in machineStates" :key="value" :value="value" :label="label" /></el-select></label>
+      <label class="rb-search">{{ runnerId ? '查询' : '机器 / 流程 / 节点 / MQ' }}<el-input v-model="keyword" clearable :prefix-icon="Search" :disabled="editing" placeholder="IP、流程、节点、配置 ID、MQ 或目录" aria-label="搜索机器配置" /></label>
+      <label v-if="!runnerId">机器状态<el-select v-model="machineFilter" placeholder="全部状态" :disabled="editing" aria-label="筛选机器状态" data-testid="binding-machine-filter"><el-option label="全部状态" value="" /><el-option v-for="(label, value) in machineStates" :key="value" :value="value" :label="label" /></el-select></label>
       <label>下发状态<el-select v-model="deliveryFilter" placeholder="全部状态" :disabled="editing" aria-label="筛选下发状态" data-testid="binding-delivery-filter"><el-option label="全部状态" value="" /><el-option v-for="(label, value) in deliveryStates" :key="value" :value="value" :label="label" /></el-select></label>
       <span class="rb-filter-note">绑定目录 · 下发代码 · 启动节点程序</span>
     </div>
     <div class="rb-card">
       <header class="rb-toolbar">
-        <div><strong>机器与流程节点绑定</strong><span>{{ rows.length }} 项配置 · {{ boundMachines.size }} 个实例 · {{ onlineMachines }} 个在线</span></div>
+        <div><strong>{{ runnerId ? '当前实例的机器配置' : '机器与流程节点绑定' }}</strong><span>{{ scopedRows.length }} 项配置 · {{ boundMachines.size }} 个实例 · {{ onlineMachines }} 个在线</span></div>
         <div><el-button :icon="Refresh" circle :disabled="loading || saving || editing || !!controlling" aria-label="刷新机器配置" @click="load" /><el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="loading || saving || editing || !!controlling || !!error" data-testid="binding-create" @click="open()">新增绑定</el-button></div>
       </header>
       <el-alert v-if="error" :title="`机器配置加载失败：${error}`" description="当前信息可能已过期，请刷新重试。" type="error" :closable="false" show-icon class="rb-error" />
       <div v-loading="loading" class="rb-table">
         <table class="rc-data-table">
-          <colgroup><col class="rb-col-machine"><col class="rb-col-config"><col class="rb-col-mq"><col class="rb-col-directory"><col class="rb-col-state"><col class="rb-col-actions"></colgroup>
-          <thead><tr><th>运行机器</th><th>流程 / 配置节点</th><th>节点 MQ</th><th>运行目录</th><th>程序与下发</th><th>操作</th></tr></thead>
+          <colgroup><col v-if="!runnerId" class="rb-col-machine"><col class="rb-col-config"><col class="rb-col-mq"><col class="rb-col-directory"><col class="rb-col-state"><col class="rb-col-actions"></colgroup>
+          <thead><tr><th v-if="!runnerId">运行机器</th><th>流程 / 配置节点</th><th>节点 MQ</th><th>运行目录</th><th>程序与下发</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-if="editing" class="rb-draft" data-testid="binding-new-row">
-              <td colspan="6">
+              <td :colspan="runnerId ? 5 : 6">
                 <div class="rb-editor">
                   <div class="rb-editor-title"><strong>{{ editingRow ? '编辑机器配置' : '新增机器配置' }}</strong><span>选择机器和部署配置，保存后可手动下发代码</span></div>
                   <div class="rb-editor-fields">
-                    <label>运行机器<el-select v-model="form.runnerId" filterable :disabled="saving || !!editingRow" placeholder="选择 IP / Runner 实例目录" aria-label="选择运行机器" data-testid="binding-runner"><el-option v-for="runner in runners" :key="runner.runnerId" :value="runner.runnerId" :label="runnerLabel(runner.runnerId)" /></el-select></label>
+                    <label>运行机器<el-select v-model="form.runnerId" filterable :disabled="saving || !!editingRow || !!runnerId" placeholder="选择 IP / Runner 实例目录" aria-label="选择运行机器" data-testid="binding-runner"><el-option v-for="runner in runners.filter(item => !runnerId || item.runnerId === runnerId)" :key="runner.runnerId" :value="runner.runnerId" :label="runnerLabel(runner.runnerId)" /></el-select></label>
                     <label>运行目录<el-select :model-value="form.deploymentId" filterable :disabled="saving" placeholder="选择部署配置，可搜索流程、节点或 MQ" aria-label="选择运行目录" data-testid="binding-deployment" @update:model-value="selectConfiguration"><el-option v-for="item in configurations" :key="item.deploymentId" :value="item.deploymentId" :label="configurationLabel(item)" /></el-select></label>
                     <div class="rb-execution-summary" data-testid="binding-execution-summary"><span v-if="selectedConfiguration?.sourceNode">流程：{{ selectedConfiguration.sourceNode.flowName }}<br />配置节点：{{ selectedConfiguration.sourceNode.nodeName }}</span><span v-if="selectedConfiguration?.sourceNode && executionQueue">节点 MQ 队列：{{ executionQueue }}</span><span v-else-if="existingTask?.queue && !existingTask.queue.startsWith('@deployment:')">运行 MQ：{{ existingTask.queue }}</span><span v-if="selectedConfiguration?.entryPoint">启动文件：{{ selectedConfiguration.entryPoint }}</span><small>{{ hasExecution ? '直接启动所选文件；仅入口变更无需下发，文件 hash 变化后下发并手动启动' : '在部署配置中选择启动文件；未选择时仅下发代码' }}</small></div>
                     <div class="rb-path-preview"><el-icon><Folder /></el-icon><div><span>目标目录</span><code data-testid="binding-target-preview">{{ fullPath(form.runnerId, resolveDirectory(selectedConfiguration)) || (resolveDirectory(selectedConfiguration) ? `Runner / ${resolveDirectory(selectedConfiguration)}` : '请先选择已配置完整目录的部署配置') }}</code></div></div>
@@ -269,7 +275,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
               </td>
             </tr>
             <tr v-for="row in visibleRows" :key="row.runtimeId" data-testid="binding-row">
-              <td>
+              <td v-if="!runnerId">
                 <div class="rb-machine-title"><strong :title="machineMap.get(row.runnerId)?.name || row.runnerId">{{ machineMap.get(row.runnerId)?.name || row.runnerId }}</strong><span class="rb-machine-state" :class="`is-${machineState(row.runnerId)}`">{{ machineStates[machineState(row.runnerId)] }}</span></div>
                 <small :title="`最近心跳：${formatRunnerHeartbeat(machineMap.get(row.runnerId)?.lastHeartbeat)}（北京时间）`">{{ machineMap.get(row.runnerId)?.ipAddress || 'IP 未知' }} · {{ machineMap.get(row.runnerId)?.platform || '平台未知' }}</small>
                 <small :title="`Runner 实例目录：${machineMap.get(row.runnerId)?.installDirectory || '未知'}\n最近心跳：${formatRunnerHeartbeat(machineMap.get(row.runnerId)?.lastHeartbeat)}（北京时间）`">{{ machineMap.get(row.runnerId)?.installDirectory || '实例目录未知' }}</small>
@@ -317,7 +323,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
                 <el-button v-if="canWrite" link type="danger" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row)" @click="remove(row)">移除</el-button>
               </div></td>
             </tr>
-            <tr v-if="!loading && !visibleRows.length && !editing"><td colspan="6" class="rb-empty">{{ error ? '服务不可用，请刷新重试' : rows.length ? '没有匹配的机器配置' : '暂无机器配置，先保存部署配置，再新增绑定' }}</td></tr>
+            <tr v-if="!loading && !visibleRows.length && !editing"><td :colspan="runnerId ? 5 : 6" class="rb-empty">{{ error ? '服务不可用，请刷新重试' : scopedRows.length ? '没有匹配的机器配置' : runnerId ? '当前实例暂无机器配置，可新增绑定' : '暂无机器配置，先保存部署配置，再新增绑定' }}</td></tr>
           </tbody>
         </table>
       </div>
@@ -328,6 +334,10 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
 </template>
 
 <style scoped>
+.rb-scoped .rb-filter-note, .rb-scoped .rb-footer > span { display: none; }
+.rb-scoped .rb-filters { gap: 10px; padding: 8px 12px; align-items: center; }.rb-scoped .rb-filters .rb-search { flex: 1; width: auto; min-width: 180px; }.rb-scoped .rb-filters label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }.rb-scoped .rb-filters label:not(.rb-search) { width: 200px; }.rb-scoped .rb-filters .el-input, .rb-scoped .rb-filters .el-select { margin-top: 0; flex: 1; min-width: 0; }
+.rb-scoped .rb-table table { min-width: 740px; }.rb-scoped .rb-col-config { width: 25%; }.rb-scoped .rb-col-mq { width: 12%; }.rb-scoped .rb-col-directory { width: 24%; }.rb-scoped .rb-col-state { width: 23%; }.rb-scoped .rb-col-actions { width: 110px; }
+.rb-scoped .rb-table td { padding: 8px; }.rb-scoped .rb-table small { margin-top: 3px; line-height: 1.35; }.rb-scoped .rb-actions { gap: 4px 8px; }.rb-scoped .rb-actions .el-button { font-size: 11px; }.rb-scoped .rb-toolbar, .rb-scoped .rb-footer { padding: 8px 12px; }.rb-scoped .rb-program-status { margin-bottom: 5px; }.rb-scoped .rb-editor-fields { grid-template-columns: 1fr 1fr; }.rb-scoped .rb-path-preview { grid-column: 1 / -1; }.rb-page.rb-scoped { gap: 8px; }
 .rb-page { display:flex; flex:1; flex-direction:column; min-height:0; gap:12px; }
 .rb-filters { display:flex; align-items:end; gap:16px; padding:14px 16px; border:1px solid var(--el-border-color-light); border-radius:12px; background:var(--el-bg-color); }
 .rb-filters label { width:145px; flex-shrink:0; }

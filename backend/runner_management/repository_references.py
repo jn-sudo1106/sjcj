@@ -36,12 +36,14 @@ def references(app, repo_id, path):
         for row in db.execute('SELECT release_digest,runner_id FROM assignments WHERE enabled=1').fetchall():
             machines.setdefault(row['release_digest'], set()).add(row['runner_id'])
         latest = {}
+        from .script_file_links import state
+        links = {asset['code_id']: state(db, asset['code_id']) for asset in assets}
         for version in versions:
             latest.setdefault(version['code_id'], version['digest'])
         for asset in assets:
             if (asset['repo_id'] or default_repo) == repo_id and asset['storage_path'] == path:
-                items.append({'kind': 'node', 'scope': 'current', 'configId': asset['config_id'],
-                              'codeId': asset['code_id'], 'queueName': asset['queue_name']})
+                items.append({'kind': 'node', 'scope': 'history' if links[asset['code_id']].get('detached') else 'current', 'configId': asset['config_id'],
+                              'codeId': asset['code_id'], 'queueName': asset['queue_name'], 'digest': latest.get(asset['code_id'], '')})
         for version in versions:
             asset = asset_map[version['code_id']]
             owner_repo = version['repo_id'] or asset['repo_id'] or default_repo
@@ -55,8 +57,10 @@ def references(app, repo_id, path):
                 continue
             bound = sorted(bindings.get(version['digest'], set()))
             machine_count = len(machines.get(version['digest'], set()))
-            is_latest = latest[version['code_id']] == version['digest']
-            items.append({'kind': 'version', 'scope': 'current' if is_latest or bound or machine_count else 'history',
+            is_latest = latest[version['code_id']] == version['digest'] and not links[version['code_id']].get('detached')
+            source_detached = (links[version['code_id']].get('sourceDetached') and links[version['code_id']].get('digest') == version['digest']
+                               and path == version.get('source_repo_path') and path != version.get('repository_storage_path') and not targets)
+            items.append({'kind': 'version', 'scope': 'current' if not source_detached and (is_latest or bound or machine_count) else 'history',
                           'configId': asset['config_id'], 'codeId': asset['code_id'], 'queueName': asset['queue_name'],
                           'gitCommit': version.get('source_git_commit') or version['git_commit'],
                           'digest': version['digest'], 'publishedAt': version['published_at'],
@@ -95,13 +99,8 @@ def references(app, repo_id, path):
             if item['kind'] != 'deployment' or not nodes:
                 nodes = [*nodes, *related, *known.get(item.get('configId'), [])]
             item['sourceNodes'] = list({(node['flowId'], node['stepId'], node['configId']): node for node in nodes}.values())
-    reasons = []
-    if path.split('/')[0].lower() == 'code':
-        reasons.append('系统管理目录')
-    if any(item['kind'] == 'node' for item in items):
-        reasons.append('流程节点代码引用')
-    if any(item['kind'] == 'version' for item in items):
-        reasons.append('代码版本引用')
-    if any(item['kind'] == 'generation' and (item['archiveStatus'] == 'committed' or item.get('gitCommit')) for item in items):
-        reasons.append('节点生成代码归档引用')
+    from .repository_delete_policy import policy, reason
+    with app.store.connect() as db:
+        blocked = reason(policy(app, db, repo_id), path)
+    reasons = [blocked] if blocked else []
     return {'repoId': repo_id, 'repoName': repo['name'], 'path': path, 'protectionReasons': reasons, 'items': items}
