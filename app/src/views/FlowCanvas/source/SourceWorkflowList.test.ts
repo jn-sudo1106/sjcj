@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
+  pickFlowTemplate: vi.fn(async () => 'template-1'),
+}))
 // 流程列表（flowMode=list）：数据来自 source-group 绑定；入组的源只列来源组流程、只读（1021-02），没有任何兼容模式提示。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'

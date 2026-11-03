@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
+  pickFlowTemplate: vi.fn(async () => 'template-1'),
+}))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -115,7 +119,7 @@ describe('SourceWorkflowTabs', () => {
     await flushPromises()
 
     expect(workflowBindingApi.createForSource).toHaveBeenCalledWith({
-      sourceId: '100', name: '补数据流程', definition: expect.objectContaining({ main: expect.any(Array) }), primary: false,
+      sourceId: '100', name: '补数据流程', templateId: 'template-1', primary: false,
     })
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })

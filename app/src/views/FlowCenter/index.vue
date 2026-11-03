@@ -11,13 +11,14 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
+import { flowCenterApi, sourceApi, type FlowRecord, type FlowTemplateGroup, type SourceCategory } from '@/api'
 import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
-import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { makeStructureTemplate } from '@/utils/flow/flowTemplates'
+import { createFlowFromTemplate as createUsingTemplate, pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { parseIdList } from '@/utils/flow/flowSearch'
@@ -34,10 +35,148 @@ const flows = ref<FlowRecord[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const query = ref('')
+const templateOptions = ref<FlowRecord[]>([])
+const templateError = ref('')
+const filterTemplateId = ref('')
+const templateGroups = ref<FlowTemplateGroup[]>([])
+const groupError = ref('')
+const groupsLoading = ref(false)
+let groupsSeq = 0
+let groupSelectionSeq = 0
+let mounted = true
+const selectedGroup = computed(() => templateGroups.value.find(group => group.id === filterTemplateId.value))
+const groupTitle = computed(() => scope.value === 'template' ? '模板管理' : selectedGroup.value?.name || '全部流程')
+function defaultGroupId() {
+  return templateGroups.value.find(group => group.id !== 'unassigned' && !group.disabled && group.flowCount > 0)?.id
+    || (templateGroups.value.some(group => group.id === 'unassigned' && group.flowCount > 0) ? 'unassigned' : templateGroups.value.find(group => group.id !== 'unassigned' && !group.disabled)?.id) || 'unassigned'
+}
+async function loadTemplateGroups(initial = false) {
+  const seq = ++groupsSeq
+  groupsLoading.value = true
+  groupError.value = ''
+  try {
+    const groups = await flowCenterApi.templateGroups()
+    if (seq !== groupsSeq) return
+    const firstGroups = templateGroups.value.length === 0
+    templateGroups.value = groups
+    if ((initial || firstGroups) && !query.value && !filterTemplateId.value && scope.value === 'normal' && groupSelectionSeq === 0) {
+      filterTemplateId.value = defaultGroupId()
+      if (!initial) search()
+    }
+    if (!initial && filterTemplateId.value && !groups.some(group => group.id === filterTemplateId.value)) {
+      filterTemplateId.value = 'unassigned'
+      search()
+    }
+  } catch (e) { if (seq === groupsSeq) groupError.value = `模板分组加载失败：${(e as Error).message}` }
+  finally { if (seq === groupsSeq) groupsLoading.value = false }
+}
+async function initializeGroups() {
+  await loadTemplateGroups(true)
+  if (mounted) await load()
+}
+function selectTemplateGroup(id: string) {
+  groupSelectionSeq++
+  filterTemplateId.value = id
+  scope.value = 'normal'
+  search()
+}
+
+const selectedFlowIds = ref<string[]>([])
+const assignment = reactive({ open: false, templateId: '', ids: [] as string[], saving: false })
+const structureForm = reactive({ open: false, id: '', name: '单节点采集', seq: 0, keys: ['web-list'], saving: false })
+const structureTypes = [
+  { key: 'web-list', label: '采集' }, { key: 'web-detail', label: '详情采集' }, { key: 'file-download', label: '文件下载' },
+  { key: 'rule', label: '规则处理' }, { key: 'translate', label: '翻译' },
+  { key: 'ocr', label: 'OCR识别' }, { key: 'article-summary', label: '生成摘要' },
+  { key: 'article-tag', label: '打标签' },
+]
+async function loadTemplates() {
+  templateError.value = ''
+  try { templateOptions.value = await flowCenterApi.templates() }
+  catch (e) { templateError.value = `模板加载失败：${(e as Error).message}` }
+}
+function templateName(id: string) { return templateGroups.value.find(t => t.id === id)?.name || templateOptions.value.find(t => t.id === id)?.name || `模板 #${id}` }
+function changeScope() {
+  groupSelectionSeq++
+  filterTemplateId.value = ''
+  if (scope.value === 'template') {
+    sortField.value = 'seq'
+    sortOrder.value = 'asc'
+  }
+  search()
+}
+function templateFilter() {
+  groupSelectionSeq++
+  if (filterTemplateId.value) scope.value = 'normal'
+  search()
+}
+function toggleSelection(id: string, checked: boolean) {
+  selectedFlowIds.value = checked ? [...new Set([...selectedFlowIds.value, id])] : selectedFlowIds.value.filter(x => x !== id)
+}
+const selectableRows = computed(() => flows.value.filter(t => !t.isTemplate))
+const allSelected = computed(() => selectableRows.value.length > 0 && selectableRows.value.every(t => selectedFlowIds.value.includes(t.id)))
+function togglePageSelection(checked: boolean) { selectableRows.value.forEach(t => toggleSelection(t.id, checked)) }
+async function openAssignment(ids = selectedFlowIds.value) {
+  if (assignment.saving) return
+  assignment.ids = [...ids]
+  if (!assignment.ids.length) return
+  if (assignment.ids.length > 5000) { ElMessage.warning('每批最多归集5000个流程'); return }
+  await loadTemplates()
+  assignment.templateId = ''
+  assignment.open = true
+}
+async function assignTemplate() {
+  if (!assignment.templateId || assignment.saving) return
+  assignment.saving = true
+  const ids = [...assignment.ids]
+  const templateId = assignment.templateId
+  try {
+    const ack = await flowCenterApi.assignTemplate(ids, templateId)
+    if (!ack.ok) throw new Error(ack.message || '归集失败')
+    selectedFlowIds.value = selectedFlowIds.value.filter(id => !ids.includes(id))
+    assignment.open = false
+    void loadTemplateGroups()
+    ElMessage.success(`已将 ${ids.length} 个流程归集到「${templateName(templateId)}」`)
+    void load()
+  } catch (e) { ElMessage.error(`归集失败：${(e as Error).message}`) }
+  finally { assignment.saving = false }
+}
+function openStructureTemplate() {
+  Object.assign(structureForm, { open: true, id: '', name: '单节点采集', seq: 0, keys: ['web-list'] })
+}
+function useStructurePreset(preset: 'single' | 'download' | 'detail') {
+  structureForm.name = preset === 'download' ? '采集 → 下载' : preset === 'detail' ? '列表 → 详情' : '单节点采集'
+  structureForm.keys = preset === 'download' ? ['web-list', 'file-download'] : preset === 'detail' ? ['web-list', 'web-detail'] : ['web-list']
+}
+function moveStructureNode(index: number, offset: number) {
+  const keys = structureForm.keys
+  if (index + offset < 0 || index + offset >= keys.length) return
+  ;[keys[index], keys[index + offset]] = [keys[index + offset]!, keys[index]!]
+}
+async function saveStructureTemplate() {
+  if (!structureForm.name.trim() || !structureForm.keys.length || structureForm.saving) return
+  if (!Number.isInteger(structureForm.seq) || structureForm.seq < 0 || structureForm.seq > 2147483647) {
+    ElMessage.warning('SEQ必须为0至2147483647之间的整数')
+    return
+  }
+  structureForm.saving = true
+  try {
+    const saved = await flowCenterApi.save({
+      ...(structureForm.id ? { id: structureForm.id } : {}), name: structureForm.name.trim(),
+      definition: makeStructureTemplate(structureForm.keys), isTemplate: true, seq: structureForm.seq,
+    })
+    structureForm.open = false
+    await loadTemplates()
+    await loadTemplateGroups()
+    selectTemplateGroup(saved.id)
+    ElMessage.success(`流程模板「${saved.name}」已保存`)
+  } catch (e) { ElMessage.error(`模板保存失败：${(e as Error).message}`) }
+  finally { structureForm.saving = false }
+}
 // 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
 // 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。只用后端排序白名单里真有的字段。
 // 默认创建时间倒序（2026-09-29 用户要求）；创建/更新时间可在表头点选正序或倒序，与下拉框同一份状态。
-type SortField = 'createDt' | 'updateDt' | 'sourceCnt'
+type SortField = 'createDt' | 'updateDt' | 'sourceCnt' | 'seq'
 const sortField = ref<SortField>('createDt')
 const sortOrder = ref<'asc' | 'desc'>('desc')
 const sortKey = computed({
@@ -64,7 +203,7 @@ function sortClass(field: SortField) {
 }
 // 范围：全部 / 仅模板 / 仅普通流程。**服务端过滤**（flowPaged.templateFlag，2026-09-04 实测生效）。
 // 不要改成本地筛——分页之后本地只能筛当前这一页，跨页结果是错的（见下方"搜索、排序、翻页全在服务端"那段）。
-const scope = ref<'all' | 'template' | 'normal'>('all')
+const scope = ref<'all' | 'template' | 'normal'>('normal')
 // 分类与标签筛选（0904 I17 / Z7-6）。**都是服务端筛**，不回退本地——分页之后本地只能筛
 // 当前这一页，跨页结果是错的（本文件上方那段口径）。
 // ⚠️ 标签的**请求参数名是 `tags`，不是 `flowTags`**：出参字段叫 flowTags，但入参用它会被
@@ -241,7 +380,9 @@ async function load() {
       ...cond,
       field: sortField.value,
       order: sortOrder.value,
-      onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
+      onlyTemplate: filterTemplateId.value ? false : scope.value === 'all' ? undefined : scope.value === 'template',
+      templateId: filterTemplateId.value && filterTemplateId.value !== 'unassigned' ? filterTemplateId.value : undefined,
+      unassignedTemplate: filterTemplateId.value === 'unassigned',
       categoryId: filterCategoryIds.value[0] || undefined,
       tag: filterTag.value.trim() || undefined,
     })
@@ -281,7 +422,9 @@ async function loadWithMultiCategory(reqId: number, cond: ReturnType<typeof sear
       ...cond,
       field: sortField.value,
       order: sortOrder.value,
-      onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
+      onlyTemplate: filterTemplateId.value ? false : scope.value === 'all' ? undefined : scope.value === 'template',
+      templateId: filterTemplateId.value && filterTemplateId.value !== 'unassigned' ? filterTemplateId.value : undefined,
+      unassignedTemplate: filterTemplateId.value === 'unassigned',
       tag: filterTag.value.trim() || undefined,
     })
     if (loadSeq !== reqId) return
@@ -290,7 +433,9 @@ async function loadWithMultiCategory(reqId: number, cond: ReturnType<typeof sear
   }
   const filtered = all.filter((f) => idSet.has(String(f.categoryId ?? '')))
   const dir = sortOrder.value === 'desc' ? -1 : 1
-  if (sortField.value === 'sourceCnt') {
+  if (sortField.value === 'seq') {
+    filtered.sort((a, b) => dir * ((a.seq ?? 0) - (b.seq ?? 0)) || a.id.localeCompare(b.id, undefined, { numeric: true }))
+  } else if (sortField.value === 'sourceCnt') {
     filtered.sort((a, b) => dir * ((a.sourceCnt ?? 0) - (b.sourceCnt ?? 0)))
   } else {
     const key = sortField.value === 'createDt' ? 'createdAt' : 'updatedAt'
@@ -321,6 +466,8 @@ function resetQuery() {
   filterTag.value = ''
   filterConfigId.value = ''
   appliedConfigId = ''
+  filterTemplateId.value = defaultGroupId()
+  scope.value = 'normal'
   query.value = ''
   sortField.value = 'createDt'
   sortOrder.value = 'desc'
@@ -364,12 +511,14 @@ onMounted(() => {
       returnTo.value = { sourceId, siteId, view: String(route.query.view ?? 'flow'), name: String(route.query.fromName ?? '') }
     }
   }
-  void load()
+  void initializeGroups()
   void loadCategories()
+  void loadTemplates()
+  ui.registerAction('新建模板', openStructureTemplate)
   ui.registerAction('新建流程', () => { openCreateFlow() })
   ui.registerAction('从模板新建', () => { void openTemplateCreate() })
 })
-onUnmounted(() => ui.clearActions())
+onUnmounted(() => { mounted = false; groupsSeq++; ui.clearActions() })
 
 /**
  * 搜索、排序、翻页**全在服务端**（flowPaged 的 keywords / field+order / page+limit）。
@@ -387,7 +536,23 @@ const rows = computed(() => flows.value)
  * 刷新一下，编辑面板没了。activeId 仍保留，只用于表格行高亮。
  */
 const activeFlow = ref<FlowRecord | null>(null)
-function openFlow(t: FlowRecord) {
+let openSeq = 0
+async function openFlow(t: FlowRecord) {
+  const seq = ++openSeq
+  if (t.isTemplate) {
+    try {
+      const full = await flowCenterApi.detail(t.id)
+      if (seq !== openSeq) return
+      if (!full) throw new Error('模板不存在')
+      if (full.definition.structureOnly) {
+        const configs = full.definition.main.filter(id => full.definition.configs[id]).map(id => full.definition.configs[id]!)
+        const keys = configs.map(c => structureTypes.find(type => makeStructureTemplate([type.key]).configs['node-1']?.sub === c.sub)?.key)
+        if (keys.some(k => !k)) throw new Error('模板含有暂不支持的节点类型')
+        Object.assign(structureForm, { open: true, id: full.id, name: full.name, seq: full.seq ?? 0, keys: keys as string[] })
+        return
+      }
+    } catch (e) { ElMessage.error(`模板打开失败：${(e as Error).message}`); return }
+  }
   activeFlow.value = t
   activeId.value = t.id
 }
@@ -401,9 +566,13 @@ function replaceFlow(saved: FlowRecord) {
   flows.value = flows.value.some((item) => item.id === saved.id)
     ? flows.value.map((item) => (item.id === saved.id ? saved : item))
     : [saved, ...flows.value]
-  activeFlow.value = saved
-  activeId.value = saved.id
+  if (!(saved.isTemplate && saved.definition.structureOnly)) {
+    activeFlow.value = saved
+    activeId.value = saved.id
+  }
   void load()
+  void loadTemplates()
+  void loadTemplateGroups()
 }
 
 /**
@@ -420,7 +589,7 @@ async function toggleTemplate(t: FlowRecord) {
     await ElMessageBox.confirm(
       next
         ? `将把流程「${t.name}」标记为模板。模板会出现在「从模板新建」与新建源的候选里，供其它流程复制。`
-        : `将取消流程「${t.name}」的模板标记。已经从它复制出去的流程不受影响。`,
+        : `将取消流程「${t.name}」的模板标记。模板下仍有流程时需先将它们归集到其他模板。`,
       next ? '标记为模板' : '取消模板标记',
       { confirmButtonText: '确定', cancelButtonText: '取消' },
     )
@@ -430,7 +599,12 @@ async function toggleTemplate(t: FlowRecord) {
   try {
     const full = await flowCenterApi.detail(t.id)
     if (!full) throw new Error('流程详情读取失败，未做任何修改')
-    const saved = await flowCenterApi.save({ id: full.id, name: full.name, definition: full.definition, isTemplate: next })
+    if (!next && full.definition.structureOnly) {
+      ElMessage.info('结构模板用于定义节点，请使用“从模板新建”创建普通流程')
+      return
+    }
+    const fromTemplateId = next ? undefined : await pickFlowTemplate({ excludeId: full.id, message: '选择转为普通流程后的所属模板，保留现有节点与配置。' })
+    const saved = await flowCenterApi.save({ id: full.id, name: full.name, definition: full.definition, isTemplate: next, ...(fromTemplateId ? { fromTemplateId } : {}) })
     replaceFlow(saved)
     trackEdit('FLOW', saved.id, saved.name, {
       eventCode: next ? 'flow_template_mark' : 'flow_template_unmark',
@@ -440,6 +614,7 @@ async function toggleTemplate(t: FlowRecord) {
     })
     ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
   } catch (e) {
+    if (e === 'cancel' || e === 'close') return
     ElMessage.error(`${next ? '标记' : '取消标记'}失败：${(e as Error)?.message ?? String(e)}`)
   }
 }
@@ -473,6 +648,8 @@ async function toggleFlowEnable(t: FlowRecord, disable: boolean) {
     })
     ElMessage.success(`流程「${t.name}」已${action}`)
     void load()
+    void loadTemplates()
+    void loadTemplateGroups()
   } catch (e) {
     ElMessage.error(`${action}失败：${(e as Error)?.message ?? String(e)}`)
   }
@@ -520,13 +697,12 @@ async function createFromTemplate() {
   }
   const picked = templates.find((x) => x.id === templateForm.pickedId)
   if (!picked) return
+  if (templateForm.loading) return
   templateForm.loading = true
   try {
-    // 0929 F2：复制后立即逐步骤复制配置并换绑——大流程串行执行可能耗时，给用户一个非阻断反馈。
-    const detaching = ElMessage({ message: '正在复制流程并为节点复制独立配置…', duration: 0 })
-    const { flowId: newId, detach, publishError } = await copyWholeFlow(picked.id, `${picked.name}_copy`, { sourceFlowRef: `模板「${picked.name}」` })
-      .finally(() => detaching.close())
-    const created = await flowCenterApi.detail(newId)
+    const detaching = ElMessage({ message: '正在按模板新建流程…', duration: 0 })
+    const created = await createUsingTemplate(picked.id, `${picked.name}_copy`).finally(() => detaching.close())
+    const newId = created.id
     templateForm.open = false
     if (created) replaceFlow(created)
     else void load()
@@ -538,8 +714,6 @@ async function createFromTemplate() {
       pageEntry: `模板「${picked.name}」`,
     })
     ElMessage.success(`已从模板「${picked.name}」新建流程 #${newId}`)
-    reportDetachResult(detach)
-    if (publishError) ElMessage.warning(copiedPublishWarning(newId, publishError))
   } catch (e) {
     if (e === 'cancel' || e === 'close') return
     ElMessage.error(`从模板新建失败：${(e as Error)?.message ?? String(e)}`)
@@ -573,6 +747,12 @@ async function copyFlow(t: FlowRecord) {
   const reuseConfigs = mode === 'reuse'
   copyingFlowId.value = t.id
   try {
+    if (t.isTemplate) {
+      const created = await createUsingTemplate(t.id, `${t.name}_copy`, { reuseConfigs })
+      replaceFlow(created)
+      ElMessage.success(`已从模板「${t.name}」新建流程 #${created.id}`)
+      return
+    }
     const detaching = ElMessage({ message: reuseConfigs ? '正在复制流程…' : '正在复制流程并为节点复制独立配置…', duration: 0 })
     const { flowId: newId, detach, publishError } = await copyWholeFlow(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」`, reuseConfigs })
       .finally(() => detaching.close())
@@ -606,30 +786,37 @@ async function copyFlow(t: FlowRecord) {
  * **描述不自动带网站**：存量 flowDesc 是后端从源/网站灌的，所以列表里能看到"描述都是网站"。
  * 那些历史值如实展示不清洗，但本平台新建的不再继续产生这种驴唇不对马嘴的描述（I16-4）。
  */
-const createForm = reactive({ open: false, name: '未命名流程', categoryId: '', tags: '', description: '', saving: false })
+const createForm = reactive({ open: false, name: '未命名流程', categoryId: '', tags: '', description: '', templateId: '', saving: false })
 function openCreateFlow() {
   createForm.open = true
   createForm.name = '未命名流程'
   createForm.categoryId = ''
   createForm.tags = ''
   createForm.description = ''
+  createForm.templateId = templateOptions.value.some(t => t.id === filterTemplateId.value) ? filterTemplateId.value : ''
+  void loadTemplates()
 }
 async function createFlow() {
   const name = createForm.name.trim()
+  if (createForm.saving) return
   if (!name) {
     ElMessage.warning('请输入流程名称')
     return
   }
   createForm.saving = true
   try {
-    const created = await flowCenterApi.save({
-      name,
-      definition: makeBlankTemplateDefinition(),
-      // 只传填了的：saveFlow 是全量保存，传空串是"清空"而不是"不管"
-      ...(createForm.categoryId ? { categoryId: createForm.categoryId } : {}),
-      ...(createForm.tags.trim() ? { flowTags: normalizeTags(createForm.tags) } : {}),
-      ...(createForm.description.trim() ? { description: createForm.description.trim() } : {}),
-    })
+    if (!createForm.templateId) { ElMessage.warning('请选择所属流程模板'); return }
+    let created = await createUsingTemplate(createForm.templateId, name)
+    if (createForm.categoryId || createForm.tags.trim() || createForm.description.trim()) {
+      // 创建已成功后只做一次属性补充；失败关闭表单并展示新流程，避免重复创建。
+      createForm.open = false
+      replaceFlow(created)
+      created = await flowCenterApi.save({ id: created.id, name, definition: created.definition,
+        ...(createForm.categoryId ? { categoryId: createForm.categoryId } : {}),
+        ...(createForm.tags.trim() ? { flowTags: normalizeTags(createForm.tags) } : {}),
+        ...(createForm.description.trim() ? { description: createForm.description.trim() } : {}),
+      })
+    }
     createForm.open = false
     replaceFlow(created)
     trackCreate('FLOW', created.id, created.name, {
@@ -711,6 +898,7 @@ async function doRemoveFlow(flow: FlowRecord): Promise<boolean> {
     const ack = await flowCenterApi.remove([flow.id])
     if (!ack.ok) throw new Error(ack.message || '删除失败')
     afterFlowRemoved(flow)
+    void loadTemplateGroups()
     ElMessage.success(`流程「${flow.name}」已删除`)
     return true
   } catch (error) {
@@ -854,6 +1042,8 @@ async function confirmApply() {
         @keyup.enter="search"
       />
       <select v-model="sortKey" class="fc-input" aria-label="排序" data-testid="flow-center-sort" @change="search">
+        <option value="seq-asc">排序号 SEQ 升序</option>
+        <option value="seq-desc">排序号 SEQ 降序</option>
         <option value="createDt-desc">创建时间倒序</option>
         <option value="createDt-asc">创建时间正序</option>
         <option value="updateDt-desc">更新时间倒序</option>
@@ -862,11 +1052,18 @@ async function confirmApply() {
         <option value="sourceCnt-asc">使用源数最少</option>
       </select>
       <!-- 范围过滤在服务端（flowPaged.templateFlag），不是本地筛 -->
-      <select v-model="scope" class="fc-input" aria-label="范围" data-testid="flow-center-scope" @change="search">
+      <select v-model="scope" class="fc-input" aria-label="范围" data-testid="flow-center-scope" @change="changeScope">
         <option value="all">全部流程</option>
         <option value="template">仅模板</option>
         <option value="normal">仅普通流程</option>
       </select>
+      <select v-model="filterTemplateId" class="fc-input fc-template-select" aria-label="所属流程模板" data-testid="flow-template-filter" @change="templateFilter">
+        <option value="">全部模板归属</option>
+        <option value="unassigned">未归类</option>
+        <option v-for="group in templateGroups.filter(g => g.id !== 'unassigned')" :key="group.id" :value="group.id">{{ group.name }}（{{ group.flowCount }}）</option>
+      </select>
+      <button class="fc-dialog-btn" type="button" data-testid="new-structure-template" @click="openStructureTemplate">新建模板</button>
+      <button class="fc-dialog-btn" type="button" data-testid="assign-selected-flows" :disabled="!selectedFlowIds.length" @click="openAssignment()">归集到模板{{ selectedFlowIds.length ? `（${selectedFlowIds.length}）` : '' }}</button>
       <!-- 没有「刷新」按钮：它与「查询」是同一个请求，而且新建 / 保存 / 删除 / 关联之后
            列表都会自动重查（见 replaceFlow / removeFlow / confirmApply），不需要人工手动刷。 -->
       <!-- 分类树多选：复选框用 Element Plus 标准样式（与全站一致）；check-strictly 父子独立
@@ -915,10 +1112,28 @@ async function confirmApply() {
       </div>
     </div>
 
+    <div v-if="groupError" class="fc-group-error" role="alert">{{ groupError }}<button class="fc-link" @click="loadTemplateGroups()">重试</button></div>
+    <div class="fc-group-layout">
+      <aside class="fc-template-groups" aria-label="按流程模板分组" data-testid="flow-template-groups">
+        <div class="fc-group-caption">流程模板</div>
+        <div v-if="groupsLoading && !templateGroups.length" class="fc-group-note">正在读取模板…</div>
+        <button v-for="group in templateGroups" :key="group.id" type="button" class="fc-template-group" :class="{ active: filterTemplateId === group.id && scope === 'normal', unassigned: group.id === 'unassigned' }" :aria-pressed="filterTemplateId === group.id && scope === 'normal'" :title="group.id === 'unassigned' ? '未归类固定显示在最后' : `排序号 SEQ：${group.seq ?? 0}`" :data-testid="`flow-template-group-${group.id}`" @click="selectTemplateGroup(group.id)">
+          <span class="fc-group-name">{{ group.name }}<small v-if="group.disabled">已停用</small><b>{{ group.flowCount }}</b></span>
+          <span class="fc-group-structure">{{ group.structure }}</span>
+        </button>
+        <button type="button" class="fc-template-group fc-group-all" :class="{ active: !filterTemplateId && scope === 'normal' }" data-testid="flow-template-group-all" @click="selectTemplateGroup('')">全部流程</button>
+      </aside>
+      <div class="fc-group-content">
+        <div class="fc-group-heading" data-testid="flow-group-heading">
+          <div><strong>{{ groupTitle }}</strong><p v-if="selectedGroup && scope === 'normal'">{{ selectedGroup.structure }}</p></div>
+          <span>{{ total }} 个{{ scope === 'template' ? '模板' : '流程' }}</span>
+          <button v-if="selectedGroup && selectedGroup.id !== 'unassigned' && !selectedGroup.disabled && scope === 'normal'" type="button" class="fc-dialog-btn" data-testid="flow-group-create" @click="openCreateFlow">从此模板新建</button>
+        </div>
     <div class="fc-table-wrap" v-loading="loading">
       <table class="fc-table">
         <thead>
           <tr>
+            <th style="width: 32px"><input type="checkbox" aria-label="选择本页普通流程" data-testid="flow-select-page" :checked="allSelected" @change="togglePageSelection(($event.target as HTMLInputElement).checked)" /></th>
             <!-- 列对齐旧平台「流程管理」（流程ID/名称/业务大类/源总数/目录ID/标签/描述/创建/更新），
                  但不照搬全部：编码、状态、启停在本平台没有承载页面，搬过来只会是一列 `—`。 -->
             <th>流程 ID / 名称</th>
@@ -951,18 +1166,21 @@ async function confirmApply() {
             data-testid="flow-center-row"
             @click="openFlow(t)"
           >
+            <td @click.stop><input v-if="!t.isTemplate" type="checkbox" :aria-label="`选择流程 ${t.name}`" data-testid="flow-select" :checked="selectedFlowIds.includes(t.id)" @change="toggleSelection(t.id, ($event.target as HTMLInputElement).checked)" /></td>
             <td>
               <div class="fc-name">
                 <b class="fc-name-link">{{ t.name }}</b>
                 <!-- 角标而不是新开一列：这张表的列已经够挤了 -->
                 <span v-if="t.disabled" class="fc-badge warn" data-testid="flow-disabled-badge" title="已禁用（changeFlowEnable 置 is_delete=1），不能作为套用/更换目标">已禁用</span>
                 <span v-if="t.isTemplate" class="fc-badge" data-testid="flow-template-badge" title="已标记为流程模板">模板</span>
-                <span
+                <button
                   v-else-if="t.fromTemplateId"
+                  type="button"
                   class="fc-badge ghost"
-                  data-testid="flow-from-template"
-                  :title="`由模板 #${t.fromTemplateId} 复制而来`"
-                >来自 #{{ t.fromTemplateId }}</span>
+                  data-testid="flow-from-template" @click.stop="openAssignment([t.id])"
+                  :title="`所属模板：${templateName(t.fromTemplateId)}`"
+                >所属：{{ templateName(t.fromTemplateId) }}</button>
+                <button v-else class="fc-link" type="button" data-testid="flow-unassigned" @click.stop="openAssignment([t.id])">未归类</button>
                 <small>{{ t.version == null ? t.id : `${t.id} · v${t.version}` }}</small>
               </div>
             </td>
@@ -1068,7 +1286,7 @@ async function confirmApply() {
             </td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="8" class="fc-empty">
+            <td colspan="9" class="fc-empty">
               {{ loadError || configEmptyHint || (query ? `没有找到匹配「${query}」的流程` : '暂无流程') }}
             </td>
           </tr>
@@ -1096,6 +1314,9 @@ async function confirmApply() {
     </div>
 
 
+      </div>
+    </div>
+
     <FlowDetailDrawer
       :categories="categoryOptions"
       :flow="activeFlow"
@@ -1103,6 +1324,35 @@ async function confirmApply() {
       @saved="replaceFlow"
       @apply="openApply"
     />
+
+    <el-dialog v-model="structureForm.open" :title="structureForm.id ? '编辑流程模板' : '新建流程模板'" width="560px" destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!structureForm.saving" :show-close="!structureForm.saving">
+      <div class="fc-form">
+        <label class="fc-form-row"><span>模板名称 <em>*</em></span><input v-model="structureForm.name" class="fc-input" data-testid="structure-template-name" /></label>
+        <label class="fc-form-row"><span>排序号</span><input v-model.number="structureForm.seq" type="number" min="0" max="2147483647" step="1" class="fc-input" aria-label="显示顺序 SEQ" data-testid="structure-template-seq" /></label>
+        <p class="fc-form-hint">SEQ 越小越靠前，相同时按模板 ID 排序；未归类固定最后。</p>
+        <div class="fc-actions"><button class="fc-dialog-btn" type="button" @click="useStructurePreset('single')">单节点采集</button><button class="fc-dialog-btn" type="button" data-testid="structure-preset-download" @click="useStructurePreset('download')">采集 → 下载</button><button class="fc-dialog-btn" type="button" data-testid="structure-preset-detail" @click="useStructurePreset('detail')">列表 → 详情</button></div>
+        <div v-for="(_, index) in structureForm.keys" :key="index" class="fc-structure-step">
+          <span>第 {{ index + 1 }} 步</span>
+          <select v-model="structureForm.keys[index]" class="fc-input" data-testid="structure-node-type"><option v-for="type in structureTypes" :key="type.key" :value="type.key">{{ type.label }}</option></select>
+          <button class="fc-dialog-btn" type="button" :disabled="index === 0" aria-label="上移节点" @click="moveStructureNode(index, -1)">↑</button>
+          <button class="fc-dialog-btn" type="button" :disabled="index === structureForm.keys.length - 1" aria-label="下移节点" @click="moveStructureNode(index, 1)">↓</button>
+          <button class="fc-dialog-btn" type="button" :disabled="structureForm.keys.length === 1" aria-label="删除节点" @click="structureForm.keys.splice(index, 1)">删除</button>
+        </div>
+        <button class="fc-dialog-btn" type="button" :disabled="structureForm.keys.length >= 100" data-testid="structure-add-node" @click="structureForm.keys.push('web-list')">添加节点</button>
+        <p class="fc-form-hint">模板定义节点类型和顺序。网址、表、规则等由具体流程配置；修改模板仅影响之后新建的流程。</p>
+      </div>
+      <template #footer><button class="fc-dialog-btn" :disabled="structureForm.saving" @click="structureForm.open = false">取消</button><button class="fc-dialog-btn primary" :disabled="structureForm.saving || !structureForm.name.trim()" data-testid="structure-template-save" @click="saveStructureTemplate">{{ structureForm.saving ? '保存中…' : '保存模板' }}</button></template>
+    </el-dialog>
+
+    <el-dialog v-model="assignment.open" title="归集到流程模板" width="480px" :close-on-click-modal="false" :close-on-press-escape="!assignment.saving" :show-close="!assignment.saving">
+      <div class="fc-form">
+        <p class="fc-form-hint">将 {{ assignment.ids.length }} 个流程归集到所选模板，保留原有节点、配置和关联源。</p>
+        <select v-model="assignment.templateId" class="fc-input" aria-label="目标模板" data-testid="assign-template-pick"><option value="">请选择模板</option><option v-for="tpl in templateOptions" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option></select>
+        <p v-if="templateError" class="fc-form-hint">{{ templateError }}</p>
+        <p v-else-if="!templateOptions.length" class="fc-form-hint">暂无可用模板，请先新建模板。</p>
+      </div>
+      <template #footer><button class="fc-dialog-btn" :disabled="assignment.saving" @click="assignment.open = false">取消</button><button class="fc-dialog-btn primary" :disabled="assignment.saving || !assignment.templateId" data-testid="assign-template-submit" @click="assignTemplate">{{ assignment.saving ? '归集中…' : '确认归集' }}</button></template>
+    </el-dialog>
 
     <!-- 新建流程小表单（Z7-5）：名称必填，分类/标签/描述可选。
          业务大类不给选——生产里 bizType 一个值都没有，枚举无从照抄（0904 Q3）。 -->
@@ -1112,6 +1362,15 @@ async function confirmApply() {
           <span>流程名称 <em>*</em></span>
           <input v-model="createForm.name" class="fc-input" data-testid="create-flow-name" placeholder="必填" />
         </label>
+        <label class="fc-form-row">
+          <span>所属模板 <em>*</em></span>
+          <select v-model="createForm.templateId" class="fc-input" data-testid="create-flow-template">
+            <option value="">请选择模板</option>
+            <option v-for="tpl in templateOptions" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option>
+          </select>
+        </label>
+        <p v-if="templateError" class="fc-form-hint">{{ templateError }}</p>
+        <p v-else-if="!templateOptions.length" class="fc-form-hint">暂无模板，请先新建模板。</p>
         <label class="fc-form-row">
           <span>分类</span>
           <select v-model="createForm.categoryId" class="fc-input" data-testid="create-flow-category">
@@ -1127,7 +1386,7 @@ async function confirmApply() {
           <span>描述</span>
           <input v-model="createForm.description" class="fc-input" data-testid="create-flow-desc" placeholder="选填" />
         </label>
-        <p class="fc-form-hint">新流程从空白画布开始，可在工作区直接添加节点并修改节点配置。</p>
+        <p class="fc-form-hint">新流程按所选模板生成起始节点，之后可独立增删节点和配置。</p>
       </div>
       <template #footer>
         <button class="fc-dialog-btn" type="button" @click="createForm.open = false">取消</button>
@@ -1141,8 +1400,7 @@ async function confirmApply() {
     <el-dialog v-model="templateForm.open" title="从模板新建" width="480px" destroy-on-close>
       <div class="fc-form">
         <p class="fc-form-hint">
-          将复制模板的全部节点生成一条新的普通流程（会记录它来自哪个模板），
-          并自动为复制出的节点复制独立配置——之后修改新流程不会影响该模板。
+          结构模板提供起始节点；已有完整流程模板会复制节点及独立配置。新流程归集到所选模板，之后可独立调整。
         </p>
         <label class="fc-form-row">
           <span>模板 <em>*</em></span>
@@ -1195,8 +1453,46 @@ async function confirmApply() {
 </template>
 
 <style scoped>
+
+.fc-group-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; min-height: 0; align-items: start; }
+.fc-template-groups { border: 1px solid var(--rc-border-soft); border-radius: 8px; padding: 8px; background: #fff; max-height: calc(100vh - 210px); overflow-y: auto; }
+.fc-group-caption { padding: 6px 8px 10px; color: var(--rc-text-2); font-size: 12px; font-weight: 600; }
+.fc-template-group { display: flex; flex-direction: column; width: 100%; gap: 5px; margin-bottom: 4px; padding: 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; text-align: left; color: var(--rc-text); cursor: pointer; }
+.fc-template-group:hover, .fc-template-group.active { background: var(--rc-primary-bg); border-color: var(--rc-border); }
+.fc-template-group.active { color: var(--rc-primary); }
+.fc-group-name { display: flex; align-items: center; gap: 6px; width: 100%; font-size: 13px; overflow-wrap: anywhere; }
+.fc-group-name b { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fc-group-name small, .fc-group-structure { color: var(--rc-faint); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.fc-template-group.unassigned { border-top: 1px solid var(--rc-border-soft); margin-top: 8px; }
+.fc-group-all { margin-top: 4px; font-size: 12px; }
+.fc-group-note, .fc-group-error { padding: 8px; color: var(--rc-muted); font-size: 12px; overflow-wrap: anywhere; }
+.fc-group-error .fc-link { display: block; margin-top: 5px; }
+.fc-group-content { min-width: 0; }
+.fc-group-content .fc-table th:nth-child(2), .fc-group-content .fc-table td:nth-child(2) { min-width: 180px; }
+.fc-group-content .fc-table td:nth-child(7), .fc-group-content .fc-table td:nth-child(8) { white-space: nowrap; }
+.fc-group-heading { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 8px 10px; font-size: 12px; color: var(--rc-muted); }
+.fc-group-heading strong { font-size: 14px; color: var(--rc-text); }
+.fc-group-heading p { margin: 5px 0 0; }
+.fc-group-heading > span { margin-left: auto; white-space: nowrap; }
+.fc-template-select { display: none; }
+@media (min-width: 901px) and (max-width: 1600px) {
+  .fc-group-content .fc-table th:nth-child(3), .fc-group-content .fc-table td:nth-child(3),
+  .fc-group-content .fc-table th:nth-child(4), .fc-group-content .fc-table td:nth-child(4) { display: none; }
+  .fc-group-content .fc-table th, .fc-group-content .fc-table td { padding-left: 8px; padding-right: 8px; }
+}
+@media (max-width: 900px) {
+  .fc-group-layout { grid-template-columns: minmax(0, 1fr); }
+  .fc-template-groups { display: none; }
+  .fc-template-select { display: inline-block; }
+  .fc-group-content .fc-table { min-width: 1050px; }
+  .fc-group-heading { flex-wrap: wrap; }
+}
+
 .fc-copy-preview { height:min(560px, calc(100vh - 260px)); }
 .fc-copy-hint { color:var(--rc-text-2); font-size:12px; }
+.fc-structure-step { display: flex; align-items: center; gap: 8px; }
+.fc-structure-step .fc-input { flex: 1; min-width: 0; }
+[data-testid="flow-from-template"] { cursor: pointer; }
 .fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
 .fc-form { display: flex; flex-direction: column; gap: 10px; }

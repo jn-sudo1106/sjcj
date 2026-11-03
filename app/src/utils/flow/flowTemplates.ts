@@ -208,3 +208,42 @@ export function removeTemplateNode(definition: FlowDefinition, nodeId: string): 
 }
 
 export const templateNodeOptions = LIB_GROUPS.flatMap((group) => group.items)
+
+/** 从节点类型构造独立骨架，业务配置与运行身份不进入结构模板。 */
+export function structureNode(config: NodeConfig): NodeConfig {
+  const next: NodeConfig = {
+    title: config.title, sub: config.sub, template: config.template, kind: config.kind,
+    configType: config.configType, status: '待配置', planned: config.planned,
+    collect: config.collect, base: [], fields: [], inmap: [], params: [], output: [],
+  }
+  if (config.collectCfg) {
+    const c = config.collectCfg
+    next.collectCfg = {
+      snatchType: c.snatchType, collectorKind: c.collectorKind, webKind: c.webKind,
+      isDetail: c.isDetail, url: '', inputTable: '', outputTable: '', inputParams: [],
+    }
+  }
+  return next
+}
+
+export function makeStructureTemplate(keys: string[]): FlowDefinition {
+  const definition = makeBlankTemplateDefinition()
+  definition.structureOnly = true
+  keys.forEach((key) => {
+    const seed = NODE_CONFIGS[key]
+    if (!seed) throw new Error(`未知节点类型：${key}`)
+    const id = `node-${Object.keys(definition.configs).length + 1}`
+    definition.configs[id] = structureNode(seed)
+    definition.configs[id]!.title = ({ 'web-list': '采集', 'web-detail': '详情采集', 'file-download': '文件下载', rule: '规则处理', translate: '翻译', ocr: 'OCR识别', 'article-summary': '生成摘要', 'article-tag': '打标签' } as Record<string, string>)[key] || seed.title
+    if (key === 'web-list' && keys.includes('web-detail')) definition.configs[id]!.title = '列表采集'
+    definition.configs[id]!.configType = ({ 'web-list': '90', 'web-detail': '90', 'file-download': '95', rule: '600', translate: '800', ocr: '150', 'article-summary': '720', 'article-tag': '730' } as Record<string, string>)[key]
+    definition.main.splice(definition.main.length - 1, 0, id)
+  })
+  return definition
+}
+
+export function instantiateStructureTemplate(definition: FlowDefinition): FlowDefinition {
+  const copy = sanitizeTemplateDefinition(definition)
+  copy.configs = Object.fromEntries(Object.entries(copy.configs).map(([id, config]) => [id, structureNode(config)]))
+  return copy
+}

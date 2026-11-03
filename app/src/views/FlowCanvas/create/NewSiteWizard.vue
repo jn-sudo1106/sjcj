@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // 新建采集闸门原型：单页填写网站 + 首批源，创建后进入画布配流程。
-// 不做分步向导，也不在这一页选择流程、模板或节点配置。
+// 提交时先选择流程模板，再创建网站、源和对应流程。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { flowCenterApi, siteApi, workflowBindingApi, type Site, type Source } from '@/api'
-import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { siteApi, workflowBindingApi, type Site, type Source } from '@/api'
+import { pickFlowTemplate, createFlowFromTemplate } from '@/utils/flow/createFromTemplate'
 import { useUiStore } from '@/stores/ui'
 import { firstSourceId } from '@/utils/url/workspaceRoute'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
@@ -73,11 +73,11 @@ function onCancelGate() {
  * 网站和源此时已经落库，这一步失败不回滚，只提示——画布里还能用流程标签栏「＋」补建。
  * 返回失败说明，成功返回空串。
  */
-async function createSharedFlow(name: string, sourceIds: string[]): Promise<string> {
+async function createSharedFlow(name: string, sourceIds: string[], templateId: string): Promise<string> {
   if (!sourceIds.length) return ''
   let flowId: string
   try {
-    flowId = (await flowCenterApi.save({ name, definition: makeBlankTemplateDefinition() })).id
+    flowId = (await createFlowFromTemplate(templateId, name)).id
   } catch (error) {
     return `网站和源已创建，但新建流程失败：${(error as Error)?.message ?? String(error)}。可在画布流程标签栏点「＋」新建`
   }
@@ -133,18 +133,20 @@ async function onCreateAndEnter() {
   const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: 0 }
   creating.value = true
   try {
+    const templateId = await pickFlowTemplate()
     const res = await siteApi.siteCreate(siteForCreate, sources)
     if (!res?.ok) {
       ElMessage.warning(res?.message || '创建失败，请重试')
       return
     }
     const sourceId = res.sourceId || firstSourceId(sources)
-    const flowNote = await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [])
+    const flowNote = await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [], templateId)
     const dirNote = await addToBizDir(site, res.sourceIds ?? [])
     if (flowNote || dirNote) ElMessage.warning([flowNote, dirNote].filter(Boolean).join('；'))
     else ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，共用流程「${siteForCreate.name.trim()}」），已进入首个源的流程视图`)
     await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
   } catch (error) {
+    if (error === 'cancel' || error === 'close') return
     ElMessage.error(`创建失败：${(error as Error).message ?? '网络异常'}，请勿重复提交；如已返回网站 ID，请先回查网站后再继续`)
   } finally {
     creating.value = false

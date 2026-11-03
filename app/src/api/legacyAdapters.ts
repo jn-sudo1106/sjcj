@@ -1135,7 +1135,9 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
     nodeType: record.nodeType == null && record.nodeKind == null && record.type == null && record.template == null
       ? undefined
       : String(record.nodeType ?? record.nodeKind ?? record.type ?? record.template),
-    configType: record.configType == null ? undefined : String(record.configType),
+    configType: record.configType == null
+      ? (legacyNumber(record.stepType) === undefined ? undefined : String(legacyNumber(record.stepType)))
+      : String(record.configType),
     // 步骤级类型副本（cs_item_config.step_type 的 JSON 键，未存时为 null）。前端不展示它，
     // 只回读有效数字；实际步骤修改时随报文补写，首次补齐不单独触发脏判断。
     stepType: legacyNumber(record.stepType),
@@ -1388,6 +1390,7 @@ export function flowDefinitionFromConf(conf: unknown): FlowDefinition {
   // 我们的结构以 main 数组为准；states/paths 那套（或任何别的形状）一律当空流程。
   if (!Array.isArray(record.main)) return blank
   return {
+    ...(record.structureOnly === true ? { structureOnly: true } : {}),
     main: record.main.map(String),
     branches: Array.isArray(record.branches) ? record.branches as FlowDefinition['branches'] : [],
     configs: record.configs && typeof record.configs === 'object'
@@ -1405,6 +1408,7 @@ export function flowFromLegacy(input: unknown): FlowRecord {
   return {
     id: String(record.flowId ?? ''),
     name: String(record.flowName ?? ''),
+    seq: legacyNumber(record.seq),
     definition: flowDefinitionFromConf(record.flowConf),
     updatedAt: record.updateDt == null ? '' : String(record.updateDt),
     sourceCnt: legacyNumber(record.sourceCnt),
@@ -1445,6 +1449,8 @@ export function flowToLegacy(input: FlowSaveInput): LegacyRecord {
   // 模板标记只在显式传了才提交。saveFlow 是**全量保存**，不传这个字段时后端保持原值；
   // 传 undefined 会被 JSON 丢掉，等价于不传——所以这里用 in 判断而不是真值判断。
   if (input.isTemplate !== undefined) payload.templateFlag = input.isTemplate ? 1 : 0
+  if (input.fromTemplateId !== undefined) payload.refFlowId = input.fromTemplateId
+  if (input.seq !== undefined) payload.seq = input.seq
   // 同 templateFlag：只有显式传了才进 payload。saveFlow 是全量保存，
   // 不传 = 保持后端原值，传空串 = 清空——两者不能混。
   // F5（0929）：**清空不能再传 null**——后端 update 分支用 MyBatis-Plus updateById，

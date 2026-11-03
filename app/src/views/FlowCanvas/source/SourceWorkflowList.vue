@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { workflowBindingApi, type FlowRecord, type WorkflowBinding, type WorkflowBindingRole } from '@/api'
-import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
 
@@ -72,10 +72,11 @@ async function createFlow() {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
     })
+    const templateId = await pickFlowTemplate()
     const created = await workflowBindingApi.createForSource({
+      templateId,
       sourceId: props.sourceId,
       name: result.value.trim(),
-      definition: makeBlankTemplateDefinition(),
       primary: !rows.value.some(isOwn),
     })
     ElMessage.success('流程已创建')

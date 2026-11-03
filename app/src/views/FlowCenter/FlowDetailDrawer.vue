@@ -21,6 +21,7 @@ import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import FlowVersionBar from '@/views/FlowCanvas/canvas/FlowVersionBar.vue'
 import FlowVersionHistory from './FlowVersionHistory.vue'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import { trackEdit } from '@/utils/logEvents'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
@@ -240,13 +241,14 @@ function loadIntoWorkspace(flow: FlowRecord, steps: Step[]) {
  * 与名称一样随 flow 变化重置；**业务大类只读展示**——生产里 bizType 一个值都没有，
  * 枚举无从照抄（0904 Q3），不给选。
  */
-const metaForm = reactive({ categoryId: '', tags: '', description: '' })
+const metaForm = reactive({ categoryId: '', tags: '', description: '', seq: 0 })
 watch(() => props.flow?.id, (id, prev) => {
   // 打开时绑定步骤自动保存、关闭时解绑（绑定的是流程工作区形态，见 ensureAutosaveBound）
   if (id && !prev) ensureAutosaveBound()
   if (!id && prev) ensureAutosaveUnbound()
   // 抽屉是独立的一块工作区，不该继承画布页上次留下的收起/展开状态（两边共用同一对 ui 标志）
   ui.resetInspectorLayout()
+  metaForm.seq = props.flow?.seq ?? 0
   metaForm.categoryId = props.flow?.categoryId ?? ''
   metaForm.tags = props.flow?.flowTags ?? ''
   metaForm.description = props.flow?.description ?? ''
@@ -356,6 +358,7 @@ async function openFlowInWorkspace(flow: FlowRecord) {
       ? { ...(full ?? flow), id: editFlowId, version: editVersion }
       : (full ?? flow)
     workingFlow.value = record
+    metaForm.seq = record.seq ?? 0
     // 0927：一次取回**带 configType 的完整步骤**（withConfigDetails 默认 true）——它既是
     // 快照（改名/孤儿「关联」整包回写），也是工作区画布的内容源（配合下方"有步骤行就按
     // 步骤还原"），configType 让摘要/翻译/打标签等节点一回读就是对的模板，不用再补查。
@@ -442,7 +445,7 @@ async function selectVersion(versionId: string | null) {
   }
 }
 
-async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<FlowRecord | null> {
+async function persistFlow(showMessage = true, isTemplate?: boolean, fromTemplateId?: string): Promise<FlowRecord | null> {
   if (!workingFlow.value || saving.value || publishing.value) return null
   const trimmed = name.value.trim()
   if (!trimmed) {
@@ -454,6 +457,10 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
   if (canvas.configDirty) {
     canvas.select(canvas.dirtyConfigNodes[0])
     ElMessage.warning(`节点${unsavedConfigTitles().join('、')}的配置还没保存，请先点右侧节点配置底部的「保存」，再保存流程`)
+    return null
+  }
+  if (!Number.isInteger(metaForm.seq) || metaForm.seq < 0 || metaForm.seq > 2147483647) {
+    ElMessage.warning('SEQ必须为0至2147483647之间的整数')
     return null
   }
   saving.value = true
@@ -480,8 +487,10 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
       name: trimmed,
       definition: definitionFromCanvas(),
       ...(isTemplate === undefined ? {} : { isTemplate }),
+      ...(fromTemplateId ? { fromTemplateId } : {}),
       // 这三项在抽屉里可编辑，保存时一并提交。空串是有意义的（= 清空），
       // 所以这里**不做"空就不传"**——与新建表单不同，那边空表示"没填过"。
+      seq: metaForm.seq,
       categoryId: metaForm.categoryId,
       flowTags: normalizeTags(metaForm.tags),
       description: metaForm.description.trim(),
@@ -523,8 +532,11 @@ async function toggleTemplate() {
   const next = !workingFlow.value.isTemplate
   togglingTemplate.value = true
   try {
-    const saved = await persistFlow(false, next)
+    const fromTemplateId = next ? undefined : await pickFlowTemplate({ excludeId: workingFlow.value.id, message: '选择转为普通流程后的所属模板，保留现有节点与配置。' })
+    const saved = await persistFlow(false, next, fromTemplateId)
     if (saved) ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error((e as Error).message)
   } finally {
     togglingTemplate.value = false
   }
@@ -639,6 +651,10 @@ async function publishVersion() {
     <!-- 流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述可改，随「保存流程」一起提交。
          业务大类只读——生产里 bizType 一个值都没有，枚举无从照抄（0904 Q3）。 -->
     <div class="fd-meta">
+      <label class="fd-meta-item">
+        <span>排序号</span>
+        <input v-model.number="metaForm.seq" type="number" min="0" max="2147483647" step="1" style="width: 82px" class="fd-meta-input" :disabled="!!historyRow || loadingDetail" data-testid="flow-meta-seq" title="SEQ，越小越靠前" />
+      </label>
       <label class="fd-meta-item">
         <span>分类</span>
         <select v-model="metaForm.categoryId" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-category">
