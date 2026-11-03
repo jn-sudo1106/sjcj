@@ -24,6 +24,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('EditSourceDialog', () => {
+  it('仅快捷编辑提供业务目录调整入口', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    const quick = mount(EditSourceDialog, { props: { open: true, source, quick: true } })
+    const regular = mount(EditSourceDialog, { props: { open: true, source } })
+    await flushPromises()
+    expect(quick.find('[data-testid="edit-source-biz-select"]').exists()).toBe(true)
+    expect(regular.find('[data-testid="edit-source-biz-select"]').exists()).toBe(false)
+    quick.unmount()
+    regular.unmount()
+  })
   it('快捷编辑与源详情共用名称、URL、核心参数表单，预填最新值并只提交这三个字段', async () => {
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, name: '最新名称', url: 'https://latest.example.com', coreParam: '原始参数' })
     const update = vi.spyOn(sourceApi, 'updateSourceCore').mockResolvedValue({ ok: true })

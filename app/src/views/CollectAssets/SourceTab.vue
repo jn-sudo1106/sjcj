@@ -490,6 +490,10 @@ async function loadBizMembership() {
 }
 const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
 
+watch(() => ui.sourceListRevision, () => {
+  if (props.scope === 'all' && view.value === 'table') void loadBizMembership()
+})
+
 // 按目录：发送 = 复用源列表的「发任务」（不勾选 = 按当前筛选范围，已含目录范围）；定时 = 按范围统一定时弹窗
 const overviewRef = ref<InstanceType<typeof SourceOverviewView>>()
 const scheduleRef = ref<InstanceType<typeof CategoryScheduleModal>>()
