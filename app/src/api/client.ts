@@ -475,9 +475,16 @@ export function usesMockAdapter(endpoint: string, options: RequestOptions = {}):
   return MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey))
 }
 
+/**
+ * 请求体参数：绝大多数接口是对象（`{ id }` 这类），但批量接口会把数组直接当 body
+ * （如 `config/entryType/batchGenerateAiCommont` 传 `tableIds: (string | number)[]`），
+ * 序列化走 `JSON.stringify`，数组本身就是合法的 JSON 体，所以这里一并放行。
+ */
+export type RequestParams = Record<string, unknown> | unknown[]
+
 export async function request<T>(
   endpoint: string,
-  params?: Record<string, unknown>,
+  params?: RequestParams,
   options: RequestOptions = {},
 ): Promise<T> {
   try {
@@ -490,13 +497,14 @@ export async function request<T>(
         throw new Error(`mock URL 参数失败注入: ${endpoint}`)
       }
       const handler = mockRegistry[endpoint]
-      if (handler) return handler(params) as T
+      if (handler) return handler(params as Record<string, unknown> | undefined) as T
       if (ENDPOINT_PATHS.has(endpoint)) return fallback(endpoint) as T
       throw new Error(`[mock] 端点不在契约清单: ${endpoint}`)
     }
     const method = options.method ?? 'POST'
     const paramsIn = options.paramsIn ?? (method === 'GET' ? 'query' : 'body')
-    const httpParams = options.httpParams ?? params
+    // body 分支走 JSON.stringify，数组体原样序列化；query / form 分支只能是键值对象，这里收回对象类型。
+    const httpParams = (options.httpParams ?? params) as Record<string, unknown> | undefined
     const httpEndpoint = options.httpEndpoint ?? endpoint
     const originalPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
     const resolvedPath = flowRequestPath(originalPath, httpEndpoint, import.meta.env.VITE_FLOW_PROXY_TARGET, window.location.hash, options.backendScope)
