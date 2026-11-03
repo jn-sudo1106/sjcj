@@ -12,17 +12,20 @@ import SourceGroupTab from './SourceGroupTab.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { sourceGroupApi, flowCenterApi, sourceApi, type SourceGroup, type SourceFlowBind, type FlowRecord } from '@/api'
+import * as sourceDirs from '@/api/sourceDirs'
 
 // stub SourceOverviewView：选中范围由外部注入，selection-actions 槽位渲染可控 ids，
 // 成员测试才能驱动「移出来源组 / 换到其他组」。
 const selectIds = vi.hoisted(() => ({ value: [] as string[] }))
+// 成员表「业务目录」列：stub 给出列头，并用固定的假源渲染 extra-cell 槽位
+const EXTRA_SOURCE = { sourceId: 's1' } as never
 vi.mock('@/views/FlowCanvas/result/SourceOverviewView.vue', () => ({
   default: {
     name: 'SourceOverviewView',
-    props: { currentSiteId: String, scopeSourceGroupId: String, scopeEmptyText: String },
+    props: { currentSiteId: String, scopeSourceGroupId: String, scopeEmptyText: String, extraColumnLabel: String },
     emits: ['open-source', 'open-source-data', 'open-site'],
-    template: '<div class="sov-stub" data-testid="sov-stub"><slot name="filter-extra" /><slot name="selection-actions" :ids="ids()" /></div>',
-    setup: () => ({ ids: () => selectIds.value }),
+    template: '<div class="sov-stub" data-testid="sov-stub"><span data-testid="sov-extra-head">{{ extraColumnLabel }}</span><slot name="filter-extra" /><slot name="selection-actions" :ids="ids()" /><div class="sov-extra" data-testid="sov-extra-cell"><slot name="extra-cell" :source="extraSource" /></div></div>',
+    setup: () => ({ ids: () => selectIds.value, extraSource: EXTRA_SOURCE }),
   },
 }))
 
@@ -115,6 +118,8 @@ async function mountTab(overrides?: {
     list: [],
   }))
   vi.spyOn(flowCenterApi, 'list').mockResolvedValue([FLOW_21000006])
+  // 成员表「业务目录」列默认拿到空映射（各用例按需覆盖）；不 mock 会真去扫整棵业务目录树
+  if (!vi.isMockFunction(sourceDirs.bizMembership)) vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
   const wrapper = mount(SourceGroupTab, { global: { plugins: [ElementPlus, router] }, attachTo: document.body })
   mountedTabs.push(wrapper)
@@ -679,6 +684,45 @@ describe('来源组页签 · 成员操作', () => {
     await wrapper.findAll('.sg-item-select')[1]!.trigger('click')
     await settle()
     expect(wrapper.find('[data-testid="sg-add-source"]').attributes('disabled')).toBeDefined()
+  })
+})
+
+describe('来源组页签 · 成员表业务目录列', () => {
+  it('选中组后成员表给出「业务目录」列头，按源显示完整路径标签', async () => {
+    const { wrapper } = await mountTab()
+    // 成员表出现前不拉业务目录关系
+    expect(sourceDirs.bizMembership).not.toHaveBeenCalled()
+    vi.mocked(sourceDirs.bizMembership).mockResolvedValue(new Map([['s1', ['d1', 'd2']]]))
+    vi.spyOn(sourceDirs, 'dirPath').mockImplementation((id) => id === 'd1' ? ['股票数据', '基本资料'] : ['债券数据', '基本资料'])
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
+    await settle()
+    expect(sourceDirs.bizMembership).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="sov-extra-head"]').text()).toBe('业务目录')
+    expect(wrapper.findAll('.sg-biz-tag').map((tag) => tag.attributes('title'))).toEqual(['股票数据 / 基本资料', '债券数据 / 基本资料'])
+    expect(wrapper.find('[data-testid="sg-biz-empty"]').exists()).toBe(false)
+  })
+
+  it('业务目录关系加载中显示「加载中…」，不提前标成未归类', async () => {
+    const { wrapper } = await mountTab()
+    let resolve!: (map: Map<string, string[]>) => void
+    vi.mocked(sourceDirs.bizMembership).mockReturnValue(new Promise((done) => { resolve = done }))
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="sg-biz-loading"]').text()).toBe('加载中…')
+    expect(wrapper.find('[data-testid="sg-biz-empty"]').exists()).toBe(false)
+    resolve(new Map())
+    await flushPromises()
+    expect(wrapper.find('[data-testid="sg-biz-loading"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="sg-biz-empty"]').text()).toBe('未归类')
+  })
+
+  it('业务目录关系加载失败显示「加载失败」，不当成未归类', async () => {
+    const { wrapper } = await mountTab()
+    vi.mocked(sourceDirs.bizMembership).mockRejectedValue(new Error('网络异常'))
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="sg-biz-error"]').text()).toBe('加载失败')
+    expect(wrapper.find('[data-testid="sg-biz-empty"]').exists()).toBe(false)
   })
 })
 

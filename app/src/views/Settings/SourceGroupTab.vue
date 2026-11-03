@@ -31,7 +31,7 @@ import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
 import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
 import BizDirTreePanel, { type PickedBizDir } from '@/views/CollectAssets/BizDirTreePanel.vue'
 import SourceGroupFlowDiffDrawer from './SourceGroupFlowDiffDrawer.vue'
-import { bizDirGroupIds, resetBizDirGroupCache } from '@/api/sourceDirs'
+import { bizDirGroupIds, bizMembership, dirPath, resetBizDirGroupCache } from '@/api/sourceDirs'
 
 const auth = useAuthStore()
 // 2026-10-13：本页挂在源管理「我的分组」（从系统设置迁回，管理员也在这里改），不再有只读模式
@@ -228,10 +228,41 @@ function stopMemberCounts(): void {
   visibleCountIds.clear()
 }
 
+// ---- 成员表「业务目录」列 ----
+// 口径与源管理列表一致（SourceTab 的「业务目录」列）：源反查业务目录没有接口，只能把整棵业务目录树
+// 逐个 listSources 一遍（bizMembership 内部按会话缓存），加入 / 移出后由 invalidateBizSources 作废旧结果。
+const bizOf = ref(new Map<string, string[]>())
+const bizMembershipState = ref<'loading' | 'ready' | 'error'>('loading')
+/** 一条完整路径一个标签；节点没加载到时退化成 #ID，不显示成空 */
+const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
+let bizMembershipSeq = 0
+let bizMembershipStarted = false
+async function loadBizMembership() {
+  const reqId = ++bizMembershipSeq
+  bizMembershipState.value = 'loading'
+  try {
+    const map = await bizMembership()
+    if (reqId !== bizMembershipSeq) return
+    bizOf.value = map
+    bizMembershipState.value = 'ready'
+  } catch {
+    if (reqId !== bizMembershipSeq) return
+    bizMembershipState.value = 'error'
+  }
+}
+/** 选中组（右边成员表出现）才拉；整表进过源列表的源都在里面，切组不用重拉 */
+function ensureBizMembership() {
+  if (bizMembershipStarted) return
+  bizMembershipStarted = true
+  void loadBizMembership()
+}
+watch(() => selectedGroupId.value, (id) => { if (id) ensureBizMembership() }, { immediate: true })
+
 /** 成员变了（本页或其他页面改了来源组成员）：成员数重查，目录推导结果作废，已选目录重新统计 */
 watch(() => ui.sourceListRevision, () => {
   resetMemberCounts()
   resetBizDirGroupCache()
+  if (bizMembershipStarted) void loadBizMembership()
   if (bizDirs.value.length) void onBizDirChange(bizDirs.value)
 })
 onMounted(observeMemberCounts)
@@ -832,6 +863,7 @@ watch(() => route.query.group, (id) => {
           <SourceOverviewView
             :key="selectedGroup.sourceGroupId"
             current-site-id=""
+            extra-column-label="业务目录"
             :scope-source-group-id="selectedGroup.sourceGroupId"
             scope-empty-text="该来源组还没有成员，可在源列表勾选后「调整来源组」，或点「添加源」"
             @open-source="openSource"
@@ -868,6 +900,15 @@ watch(() => route.query.group, (id) => {
                 />
               </el-select>
               <el-button size="small" type="primary" plain data-testid="sg-move-members" :disabled="!canWrite || !ids.length || !moveTarget" @click="selectedIds = [...ids]; moveMembers()">换到其他组</el-button>
+            </template>
+            <!-- 成员表「业务目录」列：与源管理列表同一样式（一条完整路径一个标签），组内源归类是否一致一眼可见 -->
+            <template #extra-cell="{ source }">
+              <span v-if="bizMembershipState === 'loading'" class="sg-muted" data-testid="sg-biz-loading">加载中…</span>
+              <span v-else-if="bizMembershipState === 'error'" class="sg-muted" data-testid="sg-biz-error">加载失败</span>
+              <template v-else>
+                <span v-for="name in bizNames(source.sourceId)" :key="name" class="sg-biz-tag" :title="name">{{ name }}</span>
+                <span v-if="!bizNames(source.sourceId).length" class="sg-muted" data-testid="sg-biz-empty">未归类</span>
+              </template>
             </template>
           </SourceOverviewView>
         </template>
@@ -1138,6 +1179,9 @@ watch(() => route.query.group, (id) => {
   color: #64748b;
 }
 .sg-note { font-size: 12px; color: var(--rc-muted); line-height: 1.6; }
+/* 成员表「业务目录」列，与源管理列表的 .ca-biz-tag / .ca-muted 保持一致 */
+.sg-biz-tag { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 4px 2px 0; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
+.sg-muted { color: var(--rc-faint); }
 .sg-empty { color: var(--rc-faint); font-size: 12px; padding: 12px 8px; text-align: center; }
 .sg-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .sg-toolbar {
