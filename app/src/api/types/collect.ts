@@ -118,6 +118,7 @@ export interface EntryType {
   checkRule?: string
   coreParam?: string
   /** AI 综合描述：由 AI 结合真实数据样本提炼的业务画像描述 */
+  aiComment?: string
   aiCommont?: string
 }
 

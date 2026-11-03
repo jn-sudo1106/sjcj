@@ -3253,19 +3253,31 @@ export const entryApi = {
       httpParams: { entryTypeId: tableId, dsKind },
     }),
   /**
-   * 单表生成/刷新 AI 综合描述 (ai_commont)
+   * 单表生成/刷新 AI 综合描述 (AI_COMMENT)
    */
+  generateAiComment: (tableId: string | number) =>
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiComment', {}, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId },
+    }),
   generateAiCommont: (tableId: string | number) =>
-    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', {}, {
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiComment', {}, {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId },
     }),
   /**
-   * 批量生成 AI 综合描述 (ai_commont)
+   * 批量生成 AI 综合描述 (AI_COMMENT)
    */
+  batchGenerateAiComment: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', tableIds ?? [], {
+      method: 'POST',
+      paramsIn: 'body',
+      httpParams: { skipExisting },
+    }),
   batchGenerateAiCommont: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
-    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiCommont', tableIds ?? [], {
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', tableIds ?? [], {
       method: 'POST',
       paramsIn: 'body',
       httpParams: { skipExisting },

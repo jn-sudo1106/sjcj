@@ -427,7 +427,8 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
     checkFlag: record.checkFlag as string | number | undefined,
     checkRule: record.checkRule == null ? undefined : String(record.checkRule),
     coreParam: record.coreParam == null ? undefined : String(record.coreParam),
-    aiCommont: record.aiCommont == null ? (record.ai_commont == null ? undefined : String(record.ai_commont)) : String(record.aiCommont),
+    aiComment: (record.aiComment ?? record.ai_comment ?? record.aiCommont ?? record.ai_commont) == null ? undefined : String(record.aiComment ?? record.ai_comment ?? record.aiCommont ?? record.ai_commont),
+    aiCommont: (record.aiComment ?? record.ai_comment ?? record.aiCommont ?? record.ai_commont) == null ? undefined : String(record.aiComment ?? record.ai_comment ?? record.aiCommont ?? record.ai_commont),
   }
 }
 
@@ -448,7 +449,8 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     checkFlag: input.checkFlag,
     checkRule: input.checkRule,
     coreParam: input.coreParam,
-    aiCommont: input.aiCommont,
+    aiComment: input.aiComment ?? input.aiCommont,
+    aiCommont: input.aiComment ?? input.aiCommont,
     items: input.fields.map((field, index) => ({
       itemId: field.itemId,
       itemCode: field.prop,
