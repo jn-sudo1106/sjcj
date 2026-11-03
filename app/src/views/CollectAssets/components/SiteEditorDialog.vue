@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type Site, type SourceCategory } from '@/api'
+import { dirPath, loadDirChildren, searchDirs } from '@/api/sourceDirs'
 
 /**
  * 网站基本信息弹窗：**新建与编辑共用一套表单**（2026-09-18）。
@@ -61,93 +62,53 @@ function removeTag(name: string) {
   tags.value = tags.value.filter((t) => t !== name)
 }
 
-// form.categoryPath 存的其实是选中项的 categoryId（字段名是历史遗留，实际内容是 id
-// 不是斜杠路径）。
-//
-// 2026-09-18：原来是把「根 + 一层子级」拍平成 `父 / 子` 的 el-select，**只有两级**——
-// 而真实目录是三级往上（财经资讯 / 财经媒体 / 中央级媒体）。三级以下的目录在这里
-// 根本选不到，用户只能先挑个二级再进详情改。改成与查询那边同一个 el-tree-select
-// （懒加载子级），区别只是这里**单选**。
+// 网站的 categoryId 选择业务目录；原有网站的目录 ID 在用户未调整时保留。
+const searchHits = ref<SourceCategory[]>([])
+const searching = ref(false)
+const searchKeyword = ref('')
+const categoryError = ref('')
+const categoryTreeData = computed(() => searchKeyword.value ? searchHits.value : [])
+
 async function loadCategoryChildren(
   node: { level: number; data: SourceCategory },
   resolve: (nodes: SourceCategory[]) => void,
 ) {
-  if (node.level === 0) {
-    resolve(props.categories)
-    return
-  }
-  if (node.data.children?.length) {
-    resolve(node.data.children)
-    return
-  }
   try {
-    resolve(await sourceApi.sourceCategories(node.data.id))
-  } catch {
-    resolve([])   // 取不到子级不影响选当前这级
+    const nodes = await loadDirChildren('biz', node.level === 0 ? '' : node.data.id)
+    categoryError.value = ''
+    resolve(nodes)
+  } catch (error) {
+    categoryError.value = `业务目录加载失败：${error instanceof Error ? error.message : String(error)}`
+    resolve([])
   }
-}
-
-/**
- * 分类的跨层级模糊搜索（2026-09-18 用户提）。
- *
- * el-tree-select 自带的 `filterable` 是**本地**过滤，只认已经展开加载过的节点——
- * 目录有四层（财经资讯 / 财经媒体 / 主流媒体 / 中国网财经），不展开就搜不到，
- * 等于只能一层层点。
- *
- * 它支持 `remote-method`（tree-select/src/select.mjs 里 filterMethod 会回落到 remoteMethod），
- * 所以输入时走后端的 `category/categoryQuery`，把命中结果**平铺**成一层塞给 data；
- * 清空输入就还原成原来的懒加载树。
- */
-const searchHits = ref<SourceCategory[]>([])
-const searching = ref(false)
-const searchKeyword = ref('')
-
-/** 搜索态用平铺结果，否则用原来的树 */
-const categoryTreeData = computed(() => (searchKeyword.value ? searchHits.value : props.categories))
-
-/** 祖先 id 链 → 可读路径。只认已加载的那两层，认不出的段跳过，至少能给个上下文。 */
-function pathLabelOf(name: string, path?: string): string {
-  if (!path) return name
-  const names: string[] = []
-  for (const id of path.split(',').map((x) => x.trim()).filter((x) => x && x !== '0')) {
-    const hit = findCategory(props.categories, id)
-    if (hit) names.push(hit.name)
-  }
-  return names.length ? `${names.join(' / ')} / ${name}` : name
-}
-function findCategory(nodes: SourceCategory[], id: string): SourceCategory | undefined {
-  for (const node of nodes) {
-    if (node.id === id) return node
-    const hit = node.children?.length ? findCategory(node.children, id) : undefined
-    if (hit) return hit
-  }
-  return undefined
 }
 
 let searchSeq = 0
 async function searchCategory(keyword: string) {
   const wd = keyword.trim()
+  const seq = ++searchSeq
   searchKeyword.value = wd
   if (!wd) {
     searchHits.value = []
+    searching.value = false
     return
   }
-  const seq = ++searchSeq
   searching.value = true
   try {
-    const hits = await sourceApi.searchCategories(wd)
-    if (seq !== searchSeq) return   // 打字快时只认最后一次
-    // 同名结果要能分开：路径只解析得到已加载的那两层，更深的祖先认不出来，
-    // 于是「财经资讯 / 财经媒体 / 主流媒体」可能出现两条一模一样的（实测搜"主流"就是）。
-    // 只给**真正重名**的那几条补上 ID，不重名的保持干净。
-    const labeled = hits.map((hit) => ({ id: hit.id, name: pathLabelOf(hit.name, hit.path ?? '') }))
+    const hits = await searchDirs('biz', wd)
+    if (seq !== searchSeq) return
+    categoryError.value = ''
+    const labeled = hits.map((hit) => ({ id: hit.id, name: dirPath(hit.id).join(' / ') || hit.name }))
     const seen = new Map<string, number>()
     for (const item of labeled) seen.set(item.name, (seen.get(item.name) ?? 0) + 1)
     searchHits.value = labeled.map((item) => (
       (seen.get(item.name) ?? 0) > 1 ? { ...item, name: `${item.name}（#${item.id}）` } : item
     ))
-  } catch {
-    if (seq === searchSeq) searchHits.value = []
+  } catch (error) {
+    if (seq === searchSeq) {
+      searchHits.value = []
+      categoryError.value = `业务目录搜索失败：${error instanceof Error ? error.message : String(error)}`
+    }
   } finally {
     if (seq === searchSeq) searching.value = false
   }
@@ -193,6 +154,8 @@ async function loadCategoryLabel(dirId?: string) {
 }
 
 function openEditor(site: Site) {
+  void searchCategory('')
+  categoryError.value = ''
   Object.assign(form, {
     siteId: site.siteId,
     name: site.name,
@@ -209,6 +172,8 @@ function openEditor(site: Site) {
 
 /** 新建态：清空表单（没有 site 可读） */
 function openCreator() {
+  void searchCategory('')
+  categoryError.value = ''
   Object.assign(form, { siteId: '', name: '', categoryPath: '' })
   tags.value = []
   tagInput.value = ''
@@ -249,7 +214,7 @@ async function createSite(categoryId: string) {
 async function save() {
   const categoryId = form.categoryPath
   if (!form.name.trim() || !categoryId) {
-    ElMessage.warning('请填写网站名称和分类')
+    ElMessage.warning('请填写网站名称并选择业务目录')
     return
   }
   saving.value = true
@@ -287,12 +252,13 @@ defineExpose({ openEditor, openCreator })
     </div>
     <el-form class="ca-site-form" label-position="top">
       <el-form-item label="网站名称" required><el-input v-model="form.name" placeholder="请输入网站名称" /></el-form-item>
-      <el-form-item label="所属分类" required>
+      <el-form-item label="业务目录" required>
         <!-- 与查询那边同一个树选择器，只是单选（不加 multiple）。
              check-strictly：允许直接选中间层级——网站本来就可以只挂到二级目录上。 -->
         <el-tree-select
           v-model="form.categoryPath"
-          placeholder="输入关键词搜索，或逐级展开选择"
+          placeholder="选择业务目录，可搜索或逐级展开"
+          data-testid="site-biz-directory"
           style="width: 100%"
           clearable
           filterable
@@ -307,6 +273,7 @@ defineExpose({ openEditor, openCreator })
           :lazy="!searchKeyword"
           :load="loadCategoryChildren"
         />
+        <div v-if="categoryError" class="ca-site-category-error" role="alert">{{ categoryError }}</div>
       </el-form-item>
       <el-form-item label="标签">
         <div class="ca-site-tags" data-testid="site-tag-editor">
@@ -346,6 +313,7 @@ defineExpose({ openEditor, openCreator })
 .ca-site-form :deep(.el-form-item) { margin-bottom: 16px; }
 .ca-site-form :deep(.el-form-item__label) { padding-bottom: 5px; color: var(--rc-text-2); font-size: 12px; line-height: 1.2; }
 /* 标签区：已选的做成 chips，右侧留一个可输入可选的下拉（候选来自 site/siteTags） */
+.ca-site-category-error { color: var(--rc-error); font-size: 12px; line-height: 1.5; }
 .ca-site-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
 .ca-site-tag {
   display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px 0 9px;
