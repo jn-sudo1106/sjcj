@@ -30,27 +30,42 @@ const siteId = ref(UNBIND_SITE_ID)
 const originalSiteId = ref(UNBIND_SITE_ID)
 const siteOptions = ref<{ siteId: string; name: string }[]>([])
 const siteLoadError = ref('')
+const siteLoading = ref(false)
+const knownSites = new Map<string, { siteId: string; name: string }>()
+let siteRequestId = 0
 /** 当前网站不在列表里（如已软删）时也要能显示出来，不然下拉里只剩一串 ID */
 const siteSelectOptions = computed(() => {
   const list = siteOptions.value
-  if (originalSiteId.value === UNBIND_SITE_ID || list.some((s) => s.siteId === originalSiteId.value)) return list
-  return [{ siteId: originalSiteId.value, name: props.source?.siteName || `网站 ${originalSiteId.value}` }, ...list]
+  const selectedId = siteId.value
+  if (selectedId === UNBIND_SITE_ID || list.some((s) => s.siteId === selectedId)) return list
+  const selected = knownSites.get(selectedId)
+  return [selected || { siteId: selectedId, name: selectedId === originalSiteId.value ? (props.source?.siteName || `网站 ${selectedId}`) : `网站 ${selectedId}` }, ...list]
 })
 function normalizeSiteId(value: unknown): string {
   const id = value == null ? '' : String(value)
   return id && id !== '-1' ? id : UNBIND_SITE_ID
 }
-async function loadSites() {
+async function loadSites(keyword = '') {
+  const requestId = ++siteRequestId
   siteLoadError.value = ''
+  siteLoading.value = true
   try {
-    siteOptions.value = (await siteApi.sitePaged({ page: 1, size: 2000 })).list.map((s) => ({ siteId: String(s.siteId), name: s.name }))
+    const result = await siteApi.sitePaged({ page: 1, size: 2000, ...(keyword.trim() ? { name: keyword.trim() } : {}) })
+    if (requestId !== siteRequestId || !props.open) return
+    siteOptions.value = result.list.map((s) => ({ siteId: String(s.siteId), name: s.name }))
+    siteOptions.value.forEach((site) => knownSites.set(site.siteId, site))
   } catch {
+    if (requestId !== siteRequestId || !props.open) return
     siteLoadError.value = '网站列表加载失败，本次保存不改所属网站'
+  } finally {
+    if (requestId === siteRequestId) siteLoading.value = false
   }
 }
 
 watch(() => props.open, (open) => {
-  if (!open || !props.source) return
+  if (!open || !props.source) { siteRequestId++; siteLoading.value = false; return }
+  knownSites.clear()
+  siteOptions.value = []
   name.value = props.source.name
   url.value = isParam.value
     ? (props.source.urlTemplate || props.source.baseUrl || props.source.url || '')
@@ -168,6 +183,9 @@ async function onSave() {
         <el-select
           v-model="siteId"
           filterable
+          remote
+          :remote-method="loadSites"
+          :loading="siteLoading"
           aria-label="所属网站"
           data-testid="edit-source-site"
           style="width: 100%"
