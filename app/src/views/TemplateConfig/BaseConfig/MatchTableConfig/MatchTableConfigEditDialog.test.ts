@@ -6,7 +6,9 @@
 //    除表单四个字段外原样带回 tableId/type/delFlag（页面没入口，整行回传正是旧版把它们带回去的方式），
 //    但不发 createTime/updateTime；
 // ③ 表名称必填（旧版留空也能存成一条永远不会被选中的规则）；
-// ④ 状态提交字符串 '0'/'1'（旧版 radio 是数字 0/1，本域统一按 TemplateRow 的字符串口径）。
+// ④ 状态提交字符串 '0'/'1'（旧版 radio 是数字 0/1，本域统一按 TemplateRow 的字符串口径）；
+// ⑤ 左表右明细版从某张表发起新增时，preset 的表名会回填进输入框、表 ID 落进 tableId，
+//    这样新增的规则也能按 ID 认到表（旧版新增的行 tableId 一直是空）。
 // 挂载方式同 QuestionDicEditDialog.test.ts：el-dialog 是 append-to-body 的 teleport，
 // 用 attachTo: document.body + document 查询，不要 stub teleport（stub 后 ElSelect 会递归更新报错）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,13 +21,13 @@ vi.mock('@/api/templateConfig', () => ({
   matchTableConfigApi: { save: vi.fn() },
 }))
 
-type Vm = { open: (record?: Record<string, unknown> | null) => void }
+type Vm = { open: (record?: Record<string, unknown> | null, preset?: { tableName?: string; tableId?: number }) => void }
 
 function mountDialog() {
   return mount(MatchTableConfigEditDialog, { global: { plugins: [ElementPlus] }, attachTo: document.body })
 }
-function callOpen(wrapper: ReturnType<typeof mountDialog>, record?: Record<string, unknown> | null) {
-  ;(wrapper.vm as unknown as Vm).open(record ?? null)
+function callOpen(wrapper: ReturnType<typeof mountDialog>, record?: Record<string, unknown> | null, preset?: { tableName?: string; tableId?: number }) {
+  ;(wrapper.vm as unknown as Vm).open(record ?? null, preset)
 }
 function footerButton(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>('.el-dialog__footer button')].find((b) => b.textContent?.trim() === label)
@@ -124,6 +126,20 @@ describe('MatchTableConfigEditDialog', () => {
       type: '0',
       delFlag: '0',
     })
+  })
+
+  it('从左栏那张表发起新增：表名回填、tableId 一起落库，表名仍可改', async () => {
+    const wrapper = mountDialog()
+    callOpen(wrapper, null, { tableName: '客户风险结果监管', tableId: 1042 })
+    await flushPromises()
+
+    expect(document.querySelector('.el-dialog__title')?.textContent).toBe('新增')
+    expect(itemByLabel('表名称').querySelector('input')!.value).toBe('客户风险结果监管')
+
+    fill('表名称', 'KHFA_KHZBJG_JG')
+    await saveClick(wrapper)
+
+    expect(savedPayload()).toMatchObject({ tableName: 'KHFA_KHZBJG_JG', tableId: 1042 })
   })
 
   it('表名称必填：留空或全空格都不发请求', async () => {

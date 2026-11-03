@@ -1,4 +1,4 @@
-import { directoryQueryParams } from './sourceDirectoryScope'
+﻿import { directoryQueryParams } from './sourceDirectoryScope'
 import { sourceScopePaged } from './siteSourceScope'
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { DEFAULT_API_PROXY_TARGET } from '@/constants/backend'
@@ -17,7 +17,7 @@ import type {
   TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, CreateJobsInput, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
-  FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
+  FlowRecord, FlowSaveInput, FlowTemplateGroup, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
   SourceFlowBind, SourceFlowsView, WorkflowBinding,
   SourceGroup, SourceGroupState, MembershipRangeResult,
@@ -3252,6 +3252,42 @@ export const entryApi = {
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId, dsKind },
     }),
+  /**
+   * 单表生成/刷新 AI 综合描述 (ai_commont)
+   * 后端只认 query 上的 entryTypeId（httpParams 决定真实报文）；第一参 params 是给 mock 分支用的
+   * ——request() 在 mock 下把 params 直接交给 handler，传 `{}` 会让演示模式永远回「实体不存在」。
+   */
+  generateAiComment: (tableId: string | number) =>
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiComment', { tableId }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId },
+    }),
+  generateAiCommont: (tableId: string | number) =>
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', { tableId }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId },
+    }),
+  /**
+   * 批量生成 AI 综合描述 (AI_COMMENT)
+   * 后端 EntryTypeController#batchGenerateAiComment：`@RequestBody(required=false) List<Integer>` 收**裸数组**
+   * （不套字段），`skipExisting` 是 `@RequestParam` 走 query。ids 传空数组 = 全库重跑（后端 else 分支）。
+   * ID 统一转数字：声明是 List<Integer>，不赌 Jackson 的字符串强转。
+   * ⚠️ 这里不能再写 httpParams：request() 是 `options.httpParams ?? params`，一写就把数组体整个覆盖掉。
+   */
+  batchGenerateAiComment: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', (tableIds ?? []).map(Number), {
+      method: 'POST',
+      paramsIn: 'body',
+      query: { skipExisting },
+    }),
+  batchGenerateAiCommont: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', (tableIds ?? []).map(Number), {
+      method: 'POST',
+      paramsIn: 'body',
+      query: { skipExisting },
+    }),
 }
 
 // 参数列表（M5 采集资产）
@@ -3433,6 +3469,7 @@ function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
     ownFlowIds: hasOwn ? (Array.isArray(view.ownFlowIds) ? view.ownFlowIds : []).map(String) : (sourceGroupId ? [] : flowIds),
     ownDefaultFlowId: hasOwn ? text(view.ownDefaultFlowId) : (sourceGroupId ? undefined : defaultFlowId),
     ownBindings: hasOwn ? bindRows(view.ownBindings) : (sourceGroupId ? [] : bindings),
+    ownDataAvailable: hasOwn || !sourceGroupId,
   }
 }
 
@@ -3751,9 +3788,11 @@ export const workflowBindingApi = {
       if (view.ownDefaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
       return { flowIds: rest, defaultFlowId: rest.length ? (view.ownDefaultFlowId ?? null) : null }
     }),
-  /** 新建一条空白流程并关联到源：两步（先建流程、再关联），第二步失败时说明流程已建出来，别留下谁也不知道的孤儿 */
-  createForSource: async (input: { sourceId: string; name: string; definition: FlowDefinition; primary?: boolean }): Promise<WorkflowBinding> => {
-    const created = await flowCenterApi.save({ name: input.name, definition: input.definition })
+  /** 按所选模板新建流程并关联到源：两步（先建流程、再关联），第二步失败时说明流程已建出来，别留下谁也不知道的孤儿 */
+  createForSource: async (input: { sourceId: string; name: string; templateId: string; primary?: boolean }): Promise<WorkflowBinding> => {
+    if (!input.templateId) throw new Error('新建流程必须选择所属流程模板')
+    const { createFlowFromTemplate } = await import('@/utils/flow/createFromTemplate')
+    const created = await createFlowFromTemplate(input.templateId, input.name)
     try {
       await workflowBindingApi.bind({ sourceId: input.sourceId, workflowId: created.id, primary: input.primary })
     } catch (error) {
@@ -3785,11 +3824,13 @@ export const flowCenterApi = {
     page?: number
     size?: number
     keywords?: string
-    field?: 'updateDt' | 'createDt' | 'flowName' | 'sourceCnt' | 'flowId'
+    field?: 'updateDt' | 'createDt' | 'flowName' | 'sourceCnt' | 'flowId' | 'seq'
     order?: 'asc' | 'desc'
     /** 只看模板 / 只看普通流程；不传 = 全部。**服务端过滤**（2026-09-04 实测：传 1 得 0 条、
      *  传 0 得 738 条）。不要改成本地筛——分页之后本地只能筛当前这一页，见 FlowCenter 的注释。 */
     onlyTemplate?: boolean
+    templateId?: string
+    unassignedTemplate?: boolean
     /** 按目录分类过滤（`cs_flow.category_id`）。同样是服务端筛。 */
     categoryId?: string
     /** 按标签过滤。
@@ -3812,6 +3853,8 @@ export const flowCenterApi = {
         field: cond.field ?? 'updateDt',
         order: cond.order ?? 'desc',
         templateFlag: cond.onlyTemplate === undefined ? undefined : (cond.onlyTemplate ? 1 : 0),
+        refFlowId: cond.templateId || undefined,
+        unassignedTemplate: cond.unassignedTemplate || undefined,
         categoryId: cond.categoryId || undefined,
         tags: cond.tag || undefined,
         flowId: ids.length === 1 ? Number(ids[0]) : undefined,
@@ -3819,6 +3862,25 @@ export const flowCenterApi = {
       },
     })
     return flowPageFromLegacy(result)
+  },
+  templateGroups: async (): Promise<FlowTemplateGroup[]> => {
+    const result = await request<{ templateId?: string | number | null; name: string; seq?: number | null; flowCount: number; structure: string; disabled?: boolean }[]>('flow/flowTemplateGroups', {}, {
+      method: 'GET', httpEndpoint: 'flow/flowTemplateGroups',
+    })
+    if (!Array.isArray(result)) throw new Error('模板分组响应格式错误')
+    return result.map(group => ({
+      id: group.templateId == null ? 'unassigned' : String(group.templateId),
+      seq: group.seq == null ? undefined : Number(group.seq),
+      name: group.name, flowCount: Number(group.flowCount), structure: group.structure, disabled: group.disabled === true,
+    }))
+  },
+  assignTemplate: async (flowIds: string[], templateFlowId: string): Promise<Ack> => {
+    if (!flowIds.length || !templateFlowId) return { ok: false, message: '请选择流程和模板' }
+    const payload = { flowIds, templateFlowId }
+    const result = await request<unknown>('flow/assignTemplate', payload, {
+      method: 'POST', httpEndpoint: 'flow/assignTemplate', httpParams: payload,
+    })
+    return ackFromApiResult(result)
   },
   /**
    * 模板下拉候选（0903 H24）。等价于 `paged({ onlyTemplate: true })` 但不分页，
@@ -3956,6 +4018,7 @@ export const flowCenterApi = {
    */
   save: async (flow: FlowSaveInput): Promise<FlowRecord> => {
     const name = flow.name.trim()
+    if (flow.seq !== undefined && (!Number.isInteger(flow.seq) || flow.seq < 0 || flow.seq > 2147483647)) throw new Error('SEQ必须为0至2147483647之间的整数')
     if (!name) throw new Error('流程名称不能为空')
     const payload = flowToLegacy({ ...flow, name })
     const result = await request<unknown>('flow/saveFlow', payload, {
@@ -4038,6 +4101,22 @@ export const flowCenterApi = {
     const steps = sourceStepsFromLegacy(result, '')
     // 只要表 ID 的调用方（siteUsedTables）跳过逐配置补查，与 sourceApi.sourceSteps 同一个开关
     return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps, options.backendScope ?? 'flow')
+  },
+  /**
+   * 按节点配置 ID 反查用到它的流程（1030 会议议题 8）。bee-top 没有专门的反查接口，
+   * nextConfigPaged 不带 svg 时支持 `configId` 等值过滤，返回的步骤行带 flowId。
+   * ⚠️ 这条读的是 cs_item_config：只覆盖**已发布**的版本，只有草稿的流程查不到（10-30 186 实测）。
+   */
+  flowIdsByConfig: async (configId: string): Promise<string[]> => {
+    const result = await request<unknown>('item/next/nextConfigPaged', { configId }, {
+      method: 'GET',
+      httpEndpoint: 'item/next/nextConfigPaged',
+      httpParams: { configId: Number(configId), page: 1, limit: 1000 },
+    })
+    // request 已把分页信封归一成 { list }；兼容直接回 data 数组的旧形状
+    const page = result as { list?: { flowId?: unknown }[]; data?: { flowId?: unknown }[] } | null
+    const rows = page?.list ?? page?.data ?? []
+    return [...new Set(rows.map((r) => (r.flowId == null ? '' : String(r.flowId))).filter(Boolean))]
   },
 }
 
@@ -4161,13 +4240,15 @@ export const itemApi = {
    *  `isRoot: 1`（此前只交 itemConfig + configId，后端按 isRoot 走 ROOT 更新分支时可能认不出）。
    *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。
    *  0929：可选 `outEntry`（入口行输出表，数字表 ID 串）——不在 validateRootUpdate 拒绝清单里，
-   *  有非空值才携带；空/缺失时省略，selective update 保持库中值（不能拿 null 去"清空"输出表）。 */
-  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
+   *  有非空值才携带；空/缺失时省略，selective update 保持库中值（不能拿 null 去"清空"输出表）。
+   *  出参列同样允许更新：未编辑时不带 outContext，清空时传空串（null 会被 selective update 忽略）。 */
+  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null, ref?: FlowVersionRef | null, outColumns?: string[]) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
     itemConfig: Number(stepId),
     ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
     isRoot: 1,
     configId: Number(configId),
     ...(outEntry != null && String(outEntry).trim() !== '' ? { outEntry: Number(outEntry) } : {}),
+    ...(outColumns !== undefined ? { outContext: outColumns.join(',') } : {}),
     ...versionRefParams(ref),
   }, {
     method: 'POST',

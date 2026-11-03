@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { h } from 'vue'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import VectorConfigPage from './index.vue'
 import { vectorConfigApi } from '@/api/templateConfig'
 
@@ -181,6 +181,25 @@ describe('VectorConfigPage', () => {
 
     expect(vectorConfigApi.remove).not.toHaveBeenCalled()
     expect(vectorConfigApi.page).toHaveBeenCalledTimes(1)
+  })
+
+  // 后端 delete 只有把向量库 collection 和 vector_config 元数据都删掉，重查才看不到这一行；
+  // 业务失败（code 非 0）必须落到错误提示，不能报「删除成功」却把行留在列表里。
+  it('「删除」失败：提示错误、不报「删除成功」、不刷新列表', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const success = vi.spyOn(ElMessage, 'success')
+    const error = vi.spyOn(ElMessage, 'error')
+    vi.mocked(vectorConfigApi.remove).mockRejectedValueOnce(new Error('向量库删除失败：boom'))
+    vi.mocked(vectorConfigApi.page).mockClear()
+
+    await deleteIcon(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledWith('向量库删除失败：boom')
+    expect(success).not.toHaveBeenCalled()
+    expect(vectorConfigApi.page).not.toHaveBeenCalled()
   })
 
   it('「新建」开空弹窗，「编辑」把整行交给弹窗，「详情」走 openDetail', async () => {

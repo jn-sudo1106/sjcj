@@ -1,29 +1,29 @@
-// 组级「源数据权限」的读写编排 —— 系统设置 → 数据权限设置 的可见/排除范围面板用。
+// 组级「源数据权限」范围的读写 —— 系统设置 → 数据权限设置 的可见/排除范围编辑器用。
 //
-// 只负责按规则落库 sys_group_res，不碰后端鉴权核心（AuthContext/InfoSourceController 的过滤逻辑）。
-// 后端源列表只认 SOURCE 规则解析出的 sourceIds（见 bee/auth/AuthResEnum.java、InfoSourceController.java），
-// 所以这里把「整目录 / 单源」两类选择都落成 resType=SOURCE 的规则：
-//   · 整目录（含子级）→ SOURCE / ACCEPT|REJECT / STRUCT，condJson=[{field:CATEGORY_ID, op:IN, values:展开后代}]
-//       - values 用 expandCategoryIds 把选中目录展开成「自身+全部后代 CATEGORY_ID」，
-//         因为后端 STRUCT 只跑 `SELECT SOURCE_ID from cs_source where CATEGORY_ID IN (values)`，不自动级联子目录。
-//       - remarks 存 {roots:[选中目录ID]} 供回显还原成最小目录集（否则回显会把每个后代都当成一个整目录）。
-//   · 单源 → SOURCE / ACCEPT|REJECT / ID，resCond=逗号 SOURCE_ID 串。
+// 落库口径（后端 SysGroupResService.saveSourceScope 负责，前端只传用户点选的结果）：
+//   · 目录 → resType=SOURCE / condType=STRUCT，后端把目录展开成「自身+全部后代 CATEGORY_ID」
+//     编译成 CATEGORY_ID IN (...)，remarks 存 {roots:[...]} 供回显还原成用户点选的最小集。
+//     展开必须在后端做：ID 列表长度已经不是 varchar(2000) 能装的（见 V3.5.0 迁移）。
+//   · 单源   → resType=SOURCE / condType=ID，resCond=逗号 SOURCE_ID 串。
+// ⚠️ cfg_category 一张表里是两套目录，取源方式不同（口径照源管理左侧，见 api/sourceDirs.ts）：
+//   · 系统目录 = 源上的单个 cs_source.CATEGORY_ID；
+//   · 业务目录 = 固定根 -2 下的树，成员只在 cfg_category_source_bind，一个源可进多个业务目录。
+// 所以「某目录下有哪些源」一律走 sourcePaged 的 directory{kind,includeDescendants}，由后端按 kind 生成各自谓词；
+// 不要用 source/categorySources（它只把 ID 塞进 CATEGORY_ID IN (...)，业务目录永远查不到源）。
+// 权限读取侧也按这两套口径取并集（bee-config 的 AuthResEnum.sourceStructSql），选择器命中数与实际授权才对得上。
 // 一个组本面板最多维护 4 条规则（可见/排除 × 目录/源）；其它 resType（CONFIG/ENTRY_TYPE/PARAM/CATEGORY）
-// 以及 SOURCE/SQL 存量规则不归本面板管，保存时不动它们。
-import {
-  pagedGroupRes,
-  addGroupRes,
-  modifyGroupRes,
-  deleteGroupRes,
-  previewGroupRes,
-  stringifyCondJson,
-  parseCondJson,
-  type GroupResRule,
-} from './groupRes'
-import { expandCategoryIds } from './index'
+// 以及 SOURCE/SQL 存量规则不归本面板管，保存时后端也不动它们。
+import { request } from './client'
+import { sourceApi } from './index'
+import type { DirKind } from './sourceDirs'
+
+const EP = {
+  scope: 'group-res/source-scope',
+  saveScope: 'group-res/modify-source-scope',
+} as const
 
 export interface SourceGrant {
-  /** 用户选中的“整目录”CATEGORY_ID（最小集，未展开） */
+  /** 用户选中的目录 CATEGORY_ID（系统目录与业务目录共用这一列，最小集、未展开） */
   dirIds: string[]
   /** 用户选中的单个源 SOURCE_ID */
   sourceIds: string[]
@@ -34,100 +34,67 @@ export interface GroupSourceScope {
   reject: SourceGrant
 }
 
-const emptyGrant = (): SourceGrant => ({ dirIds: [], sourceIds: [] })
+/** 保存回执：后端按方向回报落库结果，expandedCategoryIds 是整目录展开后的目录数 */
+export interface ScopeSaveSummary {
+  groupId: number
+  accept: { dirIds: number; expandedCategoryIds: number; sourceIds: number }
+  reject: { dirIds: number; expandedCategoryIds: number; sourceIds: number }
+}
 
 const uniq = (arr: string[]): string[] => Array.from(new Set(arr.filter(Boolean)))
 
-/** STRUCT 规则里 CATEGORY_ID IN 的 values（回显兜底用；优先走 remarks.roots） */
-function categoryIdsFromCondJson(condJson: string | null | undefined): string[] {
-  const hit = parseCondJson(condJson ?? null).find((i) => i.field === 'CATEGORY_ID')
-  return hit ? hit.values : []
-}
+const asText = (v: unknown): string => (v == null ? '' : String(v))
 
-/** 回显“整目录”最小集：优先 remarks.roots，没有（存量/手工规则）再退回 condJson values */
-function rootsFromRule(r: GroupResRule): string[] {
-  const raw = (r.remarks ?? '').trim()
-  if (raw.startsWith('{')) {
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { roots?: unknown }).roots)) {
-        return uniq((parsed as { roots: unknown[] }).roots.map(String))
-      }
-    } catch {
-      // 落到 condJson 兜底
-    }
+function grantFrom(raw: unknown): SourceGrant {
+  const rec = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  return {
+    dirIds: uniq(Array.isArray(rec.dirIds) ? rec.dirIds.map(asText) : []),
+    sourceIds: uniq(Array.isArray(rec.sourceIds) ? rec.sourceIds.map(asText) : []),
   }
-  return uniq(categoryIdsFromCondJson(r.condJson))
 }
 
-/** 读某组的源数据权限，归成 { accept, reject } × { dirIds, sourceIds } */
+/** 读某组的源数据权限（后端已把 SOURCE 规则归并成 目录/单源 两类） */
 export async function getGroupSourceScope(groupId: number): Promise<GroupSourceScope> {
-  const res = await pagedGroupRes({ groupId, limit: 200 })
-  const scope: GroupSourceScope = { accept: emptyGrant(), reject: emptyGrant() }
-  res.list
-    .filter((r) => r.resType === 'SOURCE' && r.isDelete === 0)
-    .forEach((r) => {
-      const grant = r.action === 'REJECT' ? scope.reject : scope.accept
-      if (r.condType === 'ID') {
-        if (r.resCond) grant.sourceIds.push(...r.resCond.split(',').map((s) => s.trim()))
-      } else if (r.condType === 'STRUCT') {
-        grant.dirIds.push(...rootsFromRule(r))
-      }
-    })
-  scope.accept.dirIds = uniq(scope.accept.dirIds)
-  scope.accept.sourceIds = uniq(scope.accept.sourceIds)
-  scope.reject.dirIds = uniq(scope.reject.dirIds)
-  scope.reject.sourceIds = uniq(scope.reject.sourceIds)
-  return scope
-}
-
-/** 写一个“整目录”槽（STRUCT）：空则删；非空展开后代 + 试算 + add/modify，多余旧规则删掉 */
-async function writeStructSlot(groupId: number, action: 'ACCEPT' | 'REJECT', dirIds: string[], existing: GroupResRule[]): Promise<void> {
-  if (!dirIds.length) {
-    if (existing.length) await deleteGroupRes(existing.map((r) => r.id))
-    return
-  }
-  const values = await expandCategoryIds(dirIds)
-  const condJson = stringifyCondJson([{ field: 'CATEGORY_ID', op: 'IN', values }])
-  const preview = await previewGroupRes({ resType: 'SOURCE', condType: 'STRUCT', resCond: '', condJson })
-  if (preview.error) throw new Error(`目录条件试算失败：${preview.error}`)
-  const remarks = JSON.stringify({ roots: dirIds })
-  const payload = { groupId, resType: 'SOURCE', action, condType: 'STRUCT', resCond: '', condJson, remarks }
-  if (existing.length) {
-    await modifyGroupRes({ ...payload, id: existing[0].id })
-    if (existing.length > 1) await deleteGroupRes(existing.slice(1).map((r) => r.id))
-  } else {
-    await addGroupRes(payload)
+  const data = await request<Partial<GroupSourceScope> | null>(EP.scope, { groupId }, { method: 'GET' })
+  return {
+    accept: grantFrom(data?.accept),
+    reject: grantFrom(data?.reject),
   }
 }
 
-/** 写一个“单源”槽（ID）：空则删；非空试算 + add/modify，多余旧规则删掉 */
-async function writeIdSlot(groupId: number, action: 'ACCEPT' | 'REJECT', sourceIds: string[], existing: GroupResRule[]): Promise<void> {
-  if (!sourceIds.length) {
-    if (existing.length) await deleteGroupRes(existing.map((r) => r.id))
-    return
-  }
-  const resCond = uniq(sourceIds).join(',')
-  const preview = await previewGroupRes({ resType: 'SOURCE', condType: 'ID', resCond })
-  if (preview.error) throw new Error(`源条件试算失败：${preview.error}`)
-  const payload = { groupId, resType: 'SOURCE', action, condType: 'ID', resCond }
-  if (existing.length) {
-    await modifyGroupRes({ ...payload, id: existing[0].id })
-    if (existing.length > 1) await deleteGroupRes(existing.slice(1).map((r) => r.id))
-  } else {
-    await addGroupRes(payload)
-  }
+/** 保存某组的源数据权限：一次请求、后端一个事务重建 4 个槽 */
+export async function saveGroupSourceScope(groupId: number, scope: GroupSourceScope): Promise<ScopeSaveSummary> {
+  const data = await request<ScopeSaveSummary>(EP.saveScope, {
+    groupId,
+    accept: { dirIds: uniq(scope.accept.dirIds), sourceIds: uniq(scope.accept.sourceIds) },
+    reject: { dirIds: uniq(scope.reject.dirIds), sourceIds: uniq(scope.reject.sourceIds) },
+  }, { method: 'POST' })
+  return data
 }
 
-/** 保存某组的源数据权限：只重建 SOURCE 的 ID/STRUCT 四个槽，其它规则原样保留 */
-export async function saveGroupSourceScope(groupId: number, scope: GroupSourceScope): Promise<void> {
-  const existing = (await pagedGroupRes({ groupId, limit: 200 })).list.filter(
-    (r) => r.resType === 'SOURCE' && r.isDelete === 0 && (r.condType === 'ID' || r.condType === 'STRUCT'),
-  )
-  const slot = (action: string, condType: string) => existing.filter((r) => r.action === action && r.condType === condType)
-
-  await writeStructSlot(groupId, 'ACCEPT', uniq(scope.accept.dirIds), slot('ACCEPT', 'STRUCT'))
-  await writeIdSlot(groupId, 'ACCEPT', uniq(scope.accept.sourceIds), slot('ACCEPT', 'ID'))
-  await writeStructSlot(groupId, 'REJECT', uniq(scope.reject.dirIds), slot('REJECT', 'STRUCT'))
-  await writeIdSlot(groupId, 'REJECT', uniq(scope.reject.sourceIds), slot('REJECT', 'ID'))
+/**
+ * 某目录（含全部子级）下的源，一次取到 limit 条。
+ *
+ * 走的是源管理左侧同一条查询口：sourcePaged 的 `directory{kind,mode:'selected',selections[].includeDescendants}`，
+ * 后端按 kind 生成两套谓词（系统目录=`cs_source.CATEGORY_ID IN 目录树`，
+ * 业务目录=`SOURCE_ID IN cfg_category_source_bind 与目录树的 ACTIVE 绑定`，见 SiteSourceScopeMapper.xml）。
+ * 老口 source/categorySources 只把 ID 塞进 CATEGORY_ID IN (...)，业务目录取到的是空列表，别再用它。
+ *
+ * total>list.length 说明被 limit 截断（目录太大），调用方据此提示改为勾选该目录而不是逐条选源。
+ */
+export async function listDirectorySources(
+  kind: DirKind,
+  categoryId: string,
+  opts: { keyword?: string; limit?: number } = {},
+): Promise<{ total: number; list: { id: string; name: string }[] }> {
+  const page = await sourceApi.sourcePaged({
+    page: 1,
+    size: opts.limit ?? 2000,
+    ...(opts.keyword?.trim() ? { name: opts.keyword.trim() } : {}),
+    directory: { kind, mode: 'selected', selections: [{ id: categoryId, includeDescendants: true }] },
+  })
+  const list = (page?.list ?? [])
+    .map((row) => ({ id: asText(row.sourceId), name: asText(row.name) }))
+    .filter((row) => row.id)
+  return { total: Number(page?.total ?? list.length), list }
 }

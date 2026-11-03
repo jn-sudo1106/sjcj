@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
+  pickFlowTemplate: vi.fn(async () => 'template-1'),
+}))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -62,6 +66,14 @@ beforeEach(() => {
 })
 
 describe('SourceWorkflowTabs', () => {
+  it('根据关联结果通知画布，加载失败不当作空列表', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([])).mockRejectedValueOnce(new Error('网络异常'))
+    const empty = await mountTabs()
+    expect(empty.wrapper.emitted('status')).toEqual([['loading'], ['empty']])
+    const failed = await mountTabs()
+    expect(failed.wrapper.emitted('status')).toEqual([['loading'], ['error']])
+  })
+
   it('正式版本模式打开流程画布时自动进入隔离草稿，节点下拉和加节点无需额外解锁', async () => {
     const managed = { ...MAIN, versionManaged: true }
     const draft = {
@@ -115,7 +127,7 @@ describe('SourceWorkflowTabs', () => {
     await flushPromises()
 
     expect(workflowBindingApi.createForSource).toHaveBeenCalledWith({
-      sourceId: '100', name: '补数据流程', definition: expect.objectContaining({ main: expect.any(Array) }), primary: false,
+      sourceId: '100', name: '补数据流程', templateId: 'template-1', primary: false,
     })
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })
@@ -274,7 +286,7 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     wrapper.unmount()
   })
 
-  it('解绑主流程：同一确认框选新主流程，一次提交；解绑的是当前标签就切到新主流程', async () => {
+  it('解绑主流程：直接解绑并自动切换剩余主流程，不显示确认或接续弹窗', async () => {
     const NEW_MAIN = { ...AUX, primary: true }
     vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN, AUX])).mockResolvedValueOnce(loaded([NEW_MAIN]))
     const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
@@ -282,29 +294,158 @@ describe('SourceWorkflowTabs · 右键菜单与复用', () => {
     await rightClick(wrapper, '11')
     q('workflow-ctx-unbind')!.click()
     await flushPromises()
-    const radios = wrapper.findAll('[data-testid="workflow-unbind-next"]')
-    expect(radios).toHaveLength(1)
-    expect((radios[0].element as HTMLInputElement).checked).toBe(true)
-    expect(wrapper.find('[data-testid="workflow-unbind-last"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="workflow-unbind-ok"]').trigger('click')
-    await flushPromises()
     expect(unbind).toHaveBeenCalledWith('100', '11', '12')
     expect(router.currentRoute.value.query.workflowId).toBe('12')
+    expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('解绑最后一条流程：允许，但写明源将没有任何流程；解绑后离开当前流程', async () => {
+  it('解绑最后一条流程：直接执行，只显示一个接续弹窗并离开原流程', async () => {
     vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValueOnce(loaded([]))
     const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
     const { wrapper, router } = await mountTabs(dialogStub)
     await rightClick(wrapper, '11')
     q('workflow-ctx-unbind')!.click()
     await flushPromises()
-    expect(wrapper.get('[data-testid="workflow-unbind-last"]').text()).toContain('将没有任何流程')
-    await wrapper.get('[data-testid="workflow-unbind-ok"]').trigger('click')
-    await flushPromises()
     expect(unbind).toHaveBeenCalledWith('100', '11', undefined)
     expect(router.currentRoute.value.query.flowId).toBeUndefined()
+    expect(wrapper.get('[data-testid="workflow-after-unbind"]').text()).toContain('当前源暂无可用流程')
+    expect(wrapper.get('[data-testid="workflow-after-create"]').text()).toBe('新建流程')
+    expect(wrapper.get('[data-testid="workflow-after-copy"]').text()).toBe('复制流程')
+    expect(wrapper.get('[data-testid="workflow-after-bind"]').text()).toBe('关联已有流程')
+    expect(wrapper.find('[data-testid="workflow-unbind-ok"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="workflow-after-later"]').trigger('click')
+    expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(false)
+    expect(unbind).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  const pickerStub = { name: 'ReplaceFlowDialog', props: { purpose: String, modelValue: Boolean, excludeFlowIds: Array, embedded: Boolean, busy: Boolean }, emits: ['update:modelValue', 'pick'], template: '<div v-if="modelValue" data-testid="followup-picker" />' }
+
+  it('新建、复制和关联均在原弹窗内切换，返回后保持已解绑状态', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValue(loaded([]))
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
+    const bind = vi.spyOn(workflowBindingApi, 'bind')
+    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ id: 'template-1', name: '模板' }] as never)
+    const { wrapper } = await mountTabs({ ...dialogStub, ReplaceFlowDialog: pickerStub })
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    await wrapper.get('[data-testid="workflow-after-create"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workflow-followup-form"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="workflow-unbind-dialog"]')).toHaveLength(1)
+    await wrapper.get('[data-testid="workflow-followup-back"]').trigger('click')
+    for (const action of ['copy', 'bind']) {
+      await wrapper.get(`[data-testid="workflow-after-${action}"]`).trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('[data-testid="workflow-unbind-dialog"]')).toHaveLength(1)
+      expect(wrapper.getComponent({ name: 'ReplaceFlowDialog' }).props()).toMatchObject({ embedded: true })
+      wrapper.getComponent({ name: 'ReplaceFlowDialog' }).vm.$emit('update:modelValue', false)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(true)
+    }
+    expect(wrapper.find('[data-testid="workflow-tab-11"]').exists()).toBe(false)
+    expect(unbind).toHaveBeenCalledTimes(1)
+    expect(bind).not.toHaveBeenCalled()
+    expect(copyWholeFlow).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each(['create', 'copy', 'bind'] as const)('解绑后通过 %s 接续，自动关联为主流程并打开，不再弹接续窗口', async (action) => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockResolvedValueOnce(loaded([])).mockResolvedValue(loaded([{ ...AUX, primary: true }]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [] })
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
+    const create = vi.spyOn(workflowBindingApi, 'createForSource').mockResolvedValue(AUX)
+    const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue()
+    vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: '新流程' } as never)
+    vi.mocked(copyWholeFlow).mockResolvedValue({ flowId: '12' })
+    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ id: 'template-1', name: '模板' }] as never)
+    const { wrapper, router } = await mountTabs({ ...dialogStub, ReplaceFlowDialog: pickerStub })
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    await wrapper.get(`[data-testid="workflow-after-${action}"]`).trigger('click')
+    await flushPromises()
+    if (action !== 'create') {
+      wrapper.getComponent({ name: 'ReplaceFlowDialog' }).vm.$emit('pick', { id: '12', name: '新流程' })
+      await flushPromises()
+      if (action === 'copy') {
+        await wrapper.get('[data-testid="workflow-followup-submit"]').trigger('click')
+        await flushPromises()
+      }
+      expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '12', primary: true })
+    } else {
+      await wrapper.get('[data-testid="workflow-followup-name"]').setValue('新流程')
+      await wrapper.get('[data-testid="workflow-followup-submit"]').trigger('click')
+      await flushPromises()
+      expect(create).toHaveBeenCalledWith({ sourceId: '100', name: '新流程', templateId: 'template-1', primary: true })
+    }
+    expect(router.currentRoute.value.query.workflowId).toBe('12')
+    expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(false)
+    expect(unbind).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('只剩禁用流程时也给接续入口，新关联流程替换不可用的主流程', async () => {
+    const disabled = { ...AUX, primary: true, workflowStatus: 'DISABLED' as const }
+    const replacement = { ...MAIN, workflowId: '20', publishedFlowId: '20' }
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN, disabled])).mockResolvedValueOnce(loaded([disabled])).mockResolvedValue(loaded([{ ...disabled, primary: false }, replacement]))
+    vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
+    const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue()
+    const { wrapper, router } = await mountTabs({ ...dialogStub, ReplaceFlowDialog: pickerStub })
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    await wrapper.get('[data-testid="workflow-after-bind"]').trigger('click')
+    wrapper.getComponent({ name: 'ReplaceFlowDialog' }).vm.$emit('pick', { id: '20', name: '可用流程' })
+    await flushPromises()
+    expect(bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '20', primary: true })
+    expect(router.currentRoute.value.query.workflowId).toBe('20')
+    wrapper.unmount()
+  })
+
+  it('解绑成功但重读失败时只提示重新加载，不重复解绑或误报没有可用流程', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValueOnce(loaded([MAIN])).mockRejectedValueOnce(new Error('网络异常')).mockResolvedValue(loaded([]))
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue()
+    const { wrapper } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="workflow-after-refresh-error"]').text()).toContain('无法读取最新流程列表')
+    expect(wrapper.find('[data-testid="workflow-after-bind"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workflow-unbind-ok"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="workflow-after-reload"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workflow-after-bind"]').exists()).toBe(true)
+    expect(unbind).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('解绑失败保留原流程；旧源的刷新响应不覆盖切换后的源', async () => {
+    const load = vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    const unbind = vi.spyOn(workflowBindingApi, 'unbind').mockRejectedValueOnce(new Error('解绑失败'))
+    const { wrapper } = await mountTabs(dialogStub)
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workflow-tab-11"]').exists()).toBe(true)
+    let resolveOld!: (value: ReturnType<typeof loaded>) => void
+    load.mockImplementation((id) => id === '100' ? new Promise(resolve => { resolveOld = resolve }) : Promise.resolve(loaded([{ ...AUX, workflowId: '21' }])))
+    unbind.mockResolvedValue()
+    await rightClick(wrapper, '11')
+    q('workflow-ctx-unbind')!.click()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workflow-after-bind"]').exists()).toBe(false)
+    await wrapper.setProps({ sourceId: '200' })
+    await flushPromises()
+    resolveOld(loaded([]))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workflow-tab-21"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="workflow-after-unbind"]').exists()).toBe(false)
+    expect(unbind).toHaveBeenLastCalledWith('100', '11', undefined)
     wrapper.unmount()
   })
 

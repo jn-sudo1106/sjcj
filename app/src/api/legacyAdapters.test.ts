@@ -318,6 +318,7 @@ describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 4
   it('数字字符串 stepType 可回读并随新建和修改请求保存', () => {
     const step = stepFromLegacy({ itemConfig: 42, stepType: '95' }, '1')
     expect(step.stepType).toBe(95)
+    expect(step.configType).toBe('95')
     expect(stepToSaveItemConfigPayload(step)).toMatchObject({ stepType: 95 })
     expect(stepToStepModifyPayload(step)).toMatchObject({ stepType: 95 })
   })

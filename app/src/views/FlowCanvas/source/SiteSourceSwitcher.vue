@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import CodeConfigButton from '../result/CodeConfigButton.vue'
+import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
+import FlowReadonlyPreview from '../shared/FlowReadonlyPreview.vue'
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, nextTick, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
@@ -12,7 +14,7 @@ import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { isUnpublishedFlowError } from '@/utils/flow/flowPublish'
 import { toExternalHref } from '@/utils/url/externalUrl'
-import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -589,6 +591,19 @@ const addDlg = reactive({
   bindFlowIds: [] as string[],
   mainFlowId: '',
 })
+const bindPickerOpen = ref(false)
+const templatePreview = ref<FlowRecord | null>(null)
+function onBindFlowsPicked(flows: FlowRecord[]) {
+  bindFlowOptions.value = [...bindFlowOptions.value.filter(f => !flows.some(selected => selected.id === f.id)), ...flows]
+  addDlg.bindFlowIds = flows.map(f => f.id)
+  if (!addDlg.bindFlowIds.includes(addDlg.mainFlowId)) addDlg.mainFlowId = addDlg.bindFlowIds[0] || ''
+  bindPickerOpen.value = false
+}
+async function previewTemplateFlow() {
+  if (!templateDefault.flowId) return
+  try { templatePreview.value = await flowCenterApi.detail(templateDefault.flowId) }
+  catch (error) { ElMessage.error(`流程读取失败：${error instanceof Error ? error.message : String(error)}`) }
+}
 const bindFlowOptions = ref<FlowRecord[]>([])
 const bindFlowLoading = ref(false)
 async function loadBindFlowOptions() {
@@ -868,6 +883,14 @@ async function submitAdd() {
     if (!copiedId) return
     addedId = copiedId
   } else {
+    let templateId = ''
+    if (isProductionCreateEnabled()) {
+      try { templateId = await pickFlowTemplate() }
+      catch (error) {
+        if (error !== 'cancel' && error !== 'close') ElMessage.error((error as Error).message)
+        return
+      }
+    }
     const res = await siteApi.sourceAdd(
       props.siteId,
       { sourceId, ...target, configId: '', mainTable: '', owner: site.value?.owner || 'admin', state: 'C' },
@@ -882,8 +905,8 @@ async function submitAdd() {
     // 只在真实新建通道里建：mock 源是前端假 ID，拿去建真实流程必然关联失败。流程失败不回滚源，提示去「＋」补建。
     if (isProductionCreateEnabled()) {
       try {
-        await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, definition: makeBlankTemplateDefinition(), primary: true })
-        ElMessage.success(`已添加源「${target.name}」，并新建了带首节点的空白流程`)
+        await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, templateId, primary: true })
+        ElMessage.success(`已添加源「${target.name}」，并按模板新建了流程`)
       } catch (error) {
         ElMessage.warning(`已添加源「${target.name}」，但新建空白流程失败：${(error as Error)?.message ?? String(error)}。可在流程标签栏点「＋」补建`)
       }
@@ -1654,7 +1677,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             <label><input v-model="addDlg.flowMode" type="radio" value="bind" data-testid="source-flow-bind" /> 关联已有流程</label>
             <label><input v-model="addDlg.flowMode" type="radio" value="none" data-testid="source-flow-none" /> 不关联流程</label>
           </div>
+          <button v-if="addDlg.flowMode === 'copy'" type="button" class="rc-btn" :disabled="!templateDefault.flowId || templateDefault.loading" data-testid="preview-template-flow" @click="previewTemplateFlow">预览模板默认流程及配置</button>
           <template v-if="addDlg.flowMode === 'bind'">
+            <button type="button" class="rc-btn" data-testid="preview-bind-flows" @click="bindPickerOpen = true">预览并选择流程</button>
             <el-select
               v-model="addDlg.bindFlowIds"
               class="ssw-flow-select"
@@ -1810,6 +1835,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       </template>
     </div>
   </div>
+  <FlowPickerDialog v-if="bindPickerOpen" :selected="addDlg.bindFlowIds" :site-flow-counts="{}" hide-site-usage @close="bindPickerOpen = false" @confirm="onBindFlowsPicked" />
+  <el-dialog :model-value="!!templatePreview" title="模板默认流程预览" width="min(1100px, calc(100vw - 32px))" append-to-body @close="templatePreview = null">
+    <FlowReadonlyPreview v-if="templatePreview" :flow="templatePreview" style="height: min(600px, calc(100vh - 210px))" />
+  </el-dialog>
 </template>
 
 <style scoped>

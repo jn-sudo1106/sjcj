@@ -8,7 +8,7 @@ vi.mock('@/api/client', async (importOriginal) => {
 
 import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi, type SourceCategory } from './index'
 import {
-  addSourcesToBizDir, bizDirTables, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
+  addSourcesToBizDir, bizDirGroupIds, bizDirTables, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
   importFromTemplateToBizDir, moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
 } from './sourceDirs'
 import type { Source, SourceFlowsView } from './types'
@@ -298,5 +298,56 @@ describe('sourceDirs · 按模板批量新增（10-22）', () => {
     expect(r.failed).toEqual(['A（名称重复）'])
     expect(r.added).toEqual(['300'])
     expect(r.partial).toEqual(['#300 B（归入网站失败）'])
+  })
+})
+
+// 1030 会议议题 5：来源组按业务目录筛（10-31 定按成员推导）——目录（含子目录）里的源分属哪些组
+describe('bizDirGroupIds', () => {
+  it('按 directory 条件翻完所有页，汇总源的 sourceGroupId 并去重；同一目录走缓存', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (p) => ({
+      total: 7000,
+      list: (p?.page === 1
+        ? [{ sourceId: '1', sourceGroupId: '3' }, { sourceId: '2' }]
+        : [{ sourceId: '9', sourceGroupId: '3' }, { sourceId: '8', sourceGroupId: '5' }]) as Source[],
+    }))
+    const progress: string[] = []
+    expect((await bizDirGroupIds('9011494', (d, t) => progress.push(`${d}/${t}`))).sort()).toEqual(['3', '5'])
+    expect(paged).toHaveBeenCalledTimes(2)
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({
+      page: 2, size: 5000,
+      directory: { kind: 'biz', mode: 'selected', selections: [{ id: '9011494', includeDescendants: true }] },
+    }))
+    expect(progress).toEqual(['1/2', '2/2'])
+    await bizDirGroupIds('9011494')
+    expect(paged).toHaveBeenCalledTimes(2)
+  })
+
+  it('中途再次选同一目录复用进行中的统计，也能拿到进度', async () => {
+    let releasePage2!: () => void
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation((p) => p?.page === 1
+      ? Promise.resolve({ total: 7000, list: [] as Source[] })
+      : new Promise((resolve) => { releasePage2 = () => resolve({ total: 7000, list: [{ sourceId: '9', sourceGroupId: '5' }] as Source[] }) }))
+    const first = bizDirGroupIds('9011494')
+    await vi.waitFor(() => expect(releasePage2).toBeTypeOf('function'))
+    const progress: string[] = []
+    const second = bizDirGroupIds('9011494', (d, t) => progress.push(`${d}/${t}`))
+    expect(second).toBe(first)
+    expect(progress).toEqual(['1/2'])
+    releasePage2()
+    expect(await second).toEqual(['5'])
+    expect(progress).toEqual(['1/2', '2/2'])
+  })
+
+  it('某页失败后剩下的页不再请求，失败不缓存', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (p) => {
+      if (p?.page === 2) throw new Error('超时')
+      return { total: 30000, list: [] as Source[] }
+    })
+    await expect(bizDirGroupIds('9011494')).rejects.toThrow('超时')
+    // 6 页：第 1 页 + 并发起的 2、3、4 页；第 2 页失败后 5、6 页不再发
+    expect(paged.mock.calls.map((c) => c[0]?.page)).toEqual([1, 2, 3, 4])
+    paged.mockResolvedValue({ total: 1, list: [] as Source[] })
+    await bizDirGroupIds('9011494')
+    expect(paged).toHaveBeenCalledTimes(5)
   })
 })

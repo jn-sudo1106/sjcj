@@ -13,6 +13,7 @@
 import { request } from './client'
 import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi } from './index'
 import type { Source, SourceCategory, SourceFlowsView } from './types'
+import { drainQueue } from '@/utils/concurrency'
 
 export type DirKind = 'sys' | 'biz'
 
@@ -196,8 +197,76 @@ export function bizMembership(): Promise<Map<string, string[]>> {
   return membershipTask
 }
 
+/** 一个目录的统计：进度挂在任务上，中途再次选中同一目录（复用进行中的任务）也能接着看进度 */
+interface DirGroupTask {
+  task: Promise<string[]>
+  done: number
+  total: number
+  listeners: Set<(done: number, total: number) => void>
+}
+const dirGroupCache = new Map<string, DirGroupTask>()
+const DIR_GROUP_PAGE_SIZE = 5000
+const DIR_GROUP_CONCURRENCY = 3
+
+/**
+ * 业务目录（含子目录）里的源分属哪些来源组（1030 会议议题 5）。来源组本身没挂业务目录
+ *（cfg_category_source_bind.SOURCE_GROUP_ID 在 186 上没有数据），10-31 定按成员推导、只读：
+ * 组内有源在这个目录里，组就算在这个目录下。sourcePaged 的 directory 条件由后端展开子目录，
+ * 按 5000 一页翻完取 sourceGroupId；大目录（186 产业数据 6.2 万源）要十几页，3 页并发。
+ * 按目录缓存，失败不缓存；某页失败后剩下的页不再发。
+ */
+export function bizDirGroupIds(categoryId: string, onProgress?: (done: number, total: number) => void): Promise<string[]> {
+  let entry = dirGroupCache.get(categoryId)
+  if (!entry) {
+    entry = startDirGroupTask(categoryId)
+    dirGroupCache.set(categoryId, entry)
+  }
+  if (onProgress) {
+    const current = entry
+    current.listeners.add(onProgress)
+    if (current.total) onProgress(current.done, current.total)
+    const off = () => { current.listeners.delete(onProgress) }
+    current.task.then(off, off)
+  }
+  return entry.task
+}
+
+function startDirGroupTask(categoryId: string): DirGroupTask {
+  const directory = { kind: 'biz' as const, mode: 'selected' as const, selections: [{ id: categoryId, includeDescendants: true }] }
+  const entry: DirGroupTask = { task: Promise.resolve([]), done: 0, total: 0, listeners: new Set() }
+  const report = () => entry.listeners.forEach((fn) => fn(entry.done, entry.total))
+  entry.task = (async () => {
+    const groups = new Set<string>()
+    const collect = (list: Source[]) => list.forEach((s) => { if (s.sourceGroupId) groups.add(String(s.sourceGroupId)) })
+    const first = await sourceApi.sourcePaged({ page: 1, size: DIR_GROUP_PAGE_SIZE, directory })
+    collect(first.list)
+    entry.total = Math.max(1, Math.ceil((first.total || 0) / DIR_GROUP_PAGE_SIZE))
+    entry.done = 1
+    report()
+    const queue = Array.from({ length: entry.total - 1 }, (_, i) => i + 2)
+    // 某页失败时 drainQueue 清空队列，剩下的页不再发
+    await drainQueue(queue, DIR_GROUP_CONCURRENCY, async (page) => {
+      collect((await sourceApi.sourcePaged({ page, size: DIR_GROUP_PAGE_SIZE, directory })).list)
+      entry.done++
+      report()
+    })
+    return [...groups]
+  })().catch((error: unknown) => {
+    // 统计期间缓存可能已被作废并换成新任务，只删自己
+    if (dirGroupCache.get(categoryId) === entry) dirGroupCache.delete(categoryId)
+    throw error
+  })
+  return entry
+}
+/** 来源组成员变了：目录 → 组的推导结果作废（下次选目录重新统计） */
+export function resetBizDirGroupCache() {
+  dirGroupCache.clear()
+}
+
 function invalidateBizSources(categoryIds: string[]) {
   categoryIds.forEach((id) => dirSourcesCache.delete(id))
+  // 按祖先目录缓存（含子目录），子目录变动也会影响上层，整体作废
+  dirGroupCache.clear()
   membershipTask = null
 }
 
@@ -408,6 +477,7 @@ export function resetSourceDirCache() {
   childrenCache.clear()
   nodeIndex.clear()
   dirSourcesCache.clear()
+  dirGroupCache.clear()
   membershipTask = null
   pathTasks.clear()
   dirTablesCache.clear()

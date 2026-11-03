@@ -41,6 +41,7 @@ import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 import { timeAgo } from '@/utils/format/relativeTime'
+import { readColumnPrefs, writeColumnPrefs } from '@/utils/table/columnPrefs'
 import { isFavoriteSource, loadFavoriteSources, toggleFavoriteSource } from '@/utils/sourceFavorites'
 import {
   CollectLimitError,
@@ -160,6 +161,53 @@ const emit = defineEmits<{
 type StatusFilter = 'all' | 'C' | 'L' | 'E' | 'disabled'
 
 const rows = ref<Source[]>([])
+const MIN_URL_WIDTH = 80
+const urlColumnWidth = ref(Math.max(MIN_URL_WIDTH, readColumnPrefs('sources', 'source-overview')?.widths?.url ?? 220))
+const resizingUrl = ref(false)
+let stopUrlResize: (() => void) | undefined
+
+function startUrlResize(event: PointerEvent) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  stopUrlResize?.()
+  const startX = event.clientX
+  const startWidth = urlColumnWidth.value
+  const previousCursor = document.body.style.cursor
+  const previousUserSelect = document.body.style.userSelect
+  resizingUrl.value = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+
+  function move(event: PointerEvent) {
+    urlColumnWidth.value = Math.max(MIN_URL_WIDTH, Math.round(startWidth + event.clientX - startX))
+  }
+  function stop() {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
+    window.removeEventListener('blur', stop)
+    document.body.style.cursor = previousCursor
+    document.body.style.userSelect = previousUserSelect
+    resizingUrl.value = false
+    stopUrlResize = undefined
+    writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value } }, 'source-overview')
+  }
+  stopUrlResize = stop
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop)
+  window.addEventListener('pointercancel', stop)
+  window.addEventListener('blur', stop)
+}
+
+function resizeUrlByKey(event: KeyboardEvent) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  urlColumnWidth.value = Math.max(MIN_URL_WIDTH, urlColumnWidth.value + (event.key === 'ArrowLeft' ? -20 : 20))
+  writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value } }, 'source-overview')
+}
+
+onDeactivated(() => stopUrlResize?.())
+onBeforeUnmount(() => stopUrlResize?.())
 const originalPaths = ref(new Map<string, string>())
 function originalDirectoryOf(source: Source): string {
   return (source.dirId ? originalPaths.value.get(source.dirId) : '')
@@ -230,7 +278,7 @@ function removeCondition(row: ConditionRow) {
 }
 function conditionPlaceholder(row: ConditionRow) {
   if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return sourceCondFieldOf(row.field).placeholder
-  return '源 ID / 名称 / URL，自动识别'
+  return '源 ID / 名称 / URL'
 }
 function onConditionInput(row: ConditionRow, value: string) {
   row.value = value
@@ -245,6 +293,11 @@ function onConditionInput(row: ConditionRow, value: string) {
     row.field = target
     row.op = defaultSourceCondOp(target)
   }
+}
+function onConditionKeydown(row: ConditionRow, event: KeyboardEvent) {
+  if (event.isComposing || (row.field === 'sourceIds' && !event.ctrlKey && !event.metaKey)) return
+  event.preventDefault()
+  search()
 }
 function onFieldPicked(row: ConditionRow) {
   row.pinned = true
@@ -453,6 +506,8 @@ let sourceRequestSeq = 0
 /** 隐藏的列（「我的视图」显示设置）；不在视图里时恒为空 = 全部显示 */
 const hiddenColumns = ref<string[]>([])
 const showCol = (key: string) => !hiddenColumns.value.includes(key)
+/** 配置 ID 列只在来源组成员表里显示（1030 会议议题 6：看组内源配置是否一致）；普通源列表 0812 起不显示 */
+const showConfigCol = computed(() => !!props.scopeSourceGroupId)
 /** 实际隐藏掉的列数（空态行 colspan 用）：网站列只在不限网站时有，来源组两列只在 groupOps 时有 */
 const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
   && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
@@ -1340,14 +1395,16 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 :title="o.unsupported"
               >{{ o.unsupported ? `${o.label}（暂不支持）` : o.label }}</option>
             </select>
-            <input
+            <textarea
               :value="sourceCondNeedsValue(row.op) ? row.value : ''"
+              :class="{ 'sov-multiline-ids': row.field === 'sourceIds' && row.value.includes('\n') }"
+              rows="1"
               data-testid="source-overview-search-text"
               :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
               :disabled="!sourceCondNeedsValue(row.op)"
-              @input="onConditionInput(row, ($event.target as HTMLInputElement).value)"
-              @keyup.enter="search"
-            />
+              @input="onConditionInput(row, ($event.target as HTMLTextAreaElement).value)"
+              @keydown.enter="onConditionKeydown(row, $event)"
+            ></textarea>
             <button
               v-if="conditions.length > 1 || sourceCondActive(row)"
               type="button"
@@ -1497,7 +1554,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       </span>
     </div>
     <div v-if="!websiteCards" class="sov-table-wrap" :class="{ loading }">
-      <table class="sov-table">
+      <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px` }">
         <thead>
           <tr>
             <th class="sov-check-col">
@@ -1519,7 +1576,23 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <!-- 来源组与默认流程：配置入口统一放在「选中来源」操作中 -->
             <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
             <th v-if="crossSite && groupOps && showCol('defaultFlow')">默认流程</th>
-            <th v-if="showCol('url')">URL</th><th v-if="showCol('mainTable')">主表</th>
+            <th v-if="showCol('url')" class="sov-url-head" :class="{ 'is-resizing': resizingUrl }">
+              URL
+              <div
+                class="sov-url-resizer"
+                role="separator"
+                tabindex="0"
+                aria-label="调整 URL 列宽"
+                aria-orientation="vertical"
+                :aria-valuenow="urlColumnWidth"
+                :aria-valuemin="MIN_URL_WIDTH"
+                title="拖动调整 URL 列宽"
+                data-testid="source-url-resizer"
+                @pointerdown.stop="startUrlResize"
+                @keydown="resizeUrlByKey"
+                @click.stop
+              />
+            </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol">配置 ID</th>
             <th v-if="showCol('tags')">标签</th>
             <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>
@@ -1610,6 +1683,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
               >{{ tableNameOf(source.mainTable) }}</button>
               <template v-else>—</template>
             </td>
+            <td v-if="showConfigCol" data-testid="source-overview-config">{{ source.configId || '—' }}</td>
             <td v-if="showCol('tags')">
               <!-- 标签列与备注列都点开同一个弹窗：想删掉某一个标签只有这条路（批量条只能追加/清空） -->
               <button
@@ -1657,7 +1731,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1689,7 +1763,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       @saved="onMarkEdited"
       @close="editTarget = null"
     />
-    <EditSourceDialog v-if="quickEditSource" :open="true" :source="quickEditSource" quick @update:open="quickEditSource = null" @saved="onQuickEdited" />
+    <EditSourceDialog v-if="quickEditSource" :open="true" :source="quickEditSource" quick @update:open="quickEditSource = null" @saved="onQuickEdited" @directories-changed="ui.notifySourceListChanged()" />
     <LaunchConfirmDialog
       v-if="launchOpen && launchScope"
       :mode="launchScope.mode"
@@ -1742,9 +1816,9 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-shell { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 12px; background: #f8fafc; gap: 10px; }
 .sov-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .sov-filter label, .sov-filter .sov-field { display: grid; gap: 4px; color: var(--rc-muted); font-size: 11px; }
-.sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
-.sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
-.sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
+.sov-filter input, .sov-filter select, .sov-filter textarea { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
+.sov-filter input:focus, .sov-filter select:focus, .sov-filter textarea:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
+.sov-filter input:disabled, .sov-filter textarea:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
 .sov-filter-options { display: contents; }
 .sov-site-select { width: 116px; }
 .sov-site-select :deep(.el-select__wrapper) { min-height: 30px; padding: 0 8px; border-radius: 6px; box-shadow: 0 0 0 1px #dbe3ee inset; font-size: 12px; }
@@ -1755,7 +1829,8 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-search { display: flex; align-items: center; gap: 4px; }
 .sov-filter .sov-search select { min-width: 88px; }
 .sov-filter .sov-search select.sov-op { min-width: 0; width: 72px; }
-.sov-filter .sov-search input { min-width: 190px; }
+.sov-filter .sov-search textarea { min-width: 190px; padding: 6px 8px; resize: none; overflow: hidden; white-space: nowrap; font-family: inherit; line-height: 16px; }
+.sov-filter .sov-search textarea.sov-multiline-ids:focus { height: 72px; overflow: auto; white-space: pre-wrap; }
 .sov-cond-btn {
   flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 22px; cursor: pointer;
@@ -1767,8 +1842,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
 .sov-filter.is-compact {
-  /* 一行排开（10-21 用户：合并成一排）。各控件的 flex-basis 就是读得全的下限，放得下就先一行再按上限放大；
-     目录展开后 13.6 寸约 974px 也能一行，只有更窄、下限都放不下时才按整个控件换行。 */
+  /* 控件按可读下限紧凑排列，宽屏只放大到各自上限；空间不足时按整个控件换行。 */
   flex-wrap: wrap; align-items: flex-start; gap: 6px; min-height: 52px; padding: 8px 12px;
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
@@ -1780,20 +1854,22 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
 .sov-filter.is-compact label select, .sov-filter.is-compact label input { width: 100%; }
 /* 查询那格：预留字段、条件、输入框和同时显示的删除 / 添加按钮所需宽度，余量留给输入框。 */
-.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 236px; min-width: 236px; max-width: 420px; }
+.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 260px; min-width: 260px; max-width: 420px; }
 /* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
 .sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
-.sov-filter.is-compact select {
+.sov-filter.is-compact select,
+.sov-filter.is-compact textarea {
   height: 34px; min-width: 0; border-color: var(--rc-border); border-radius: 6px; font-size: 13px;
 }
 .sov-filter.is-compact input:hover,
-.sov-filter.is-compact select:hover { border-color: #bfdbfe; }
+.sov-filter.is-compact select:hover,
+.sov-filter.is-compact textarea:hover { border-color: #bfdbfe; }
 /* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
 .sov-filter.is-compact .sov-search { flex-wrap: nowrap; flex: 1 1 auto; }
 .sov-filter.is-compact .sov-search select { width: 76px; flex: none; }
 .sov-filter.is-compact .sov-search select.sov-op { width: 60px; }
-.sov-filter.is-compact .sov-search input { width: 64px; flex: 1 1 64px; min-width: 64px; }
+.sov-filter.is-compact .sov-search textarea { width: 64px; flex: 1 1 64px; min-width: 64px; }
 /* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
 .sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
 .sov-filter.is-compact .sov-site-select { width: 100%; min-width: 0; }
@@ -1806,8 +1882,9 @@ defineExpose({ openLaunch, clearSelection, refresh })
    「数据量 ≤」约 51px 被截成「数据量」（2026-10-16 用户截图反馈）。
    100px 时文字区约 67px，留出约 16px 余量：字体回退到更宽的 ≤ 也读得全，同时不把这一行挤到换行。 */
 .sov-filter.is-compact .sov-fl-count { flex: 0 0 100px; min-width: 100px; }
-.sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
-.sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
+.sov-filter.is-compact .sov-filter-actions { flex-wrap: wrap; flex: none; max-width: 100%; min-height: 34px; }
+.sov-filter.is-compact .sov-filter-actions > :deep(button) { height: 34px; white-space: nowrap; }
+.sov-summary-ops { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
 
@@ -1834,9 +1911,14 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-default-flow .sov-link { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; text-align: left; }
 .sov-group .sov-link { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
-.sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
-.sov-url a { color: inherit; text-decoration: none; }
+.sov-url-head, .sov-url { width: var(--sov-url-width); min-width: var(--sov-url-width); max-width: var(--sov-url-width); box-sizing: border-box; }
+.sov-url { color: var(--rc-primary) !important; }
+.sov-url a { display: block; width: calc(var(--sov-url-width) - 20px); overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; }
 .sov-url a:hover { text-decoration: underline; }
+.sov-url-resizer { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; touch-action: none; user-select: none; }
+.sov-url-resizer::after { content: ''; position: absolute; top: 4px; bottom: 4px; right: 1px; width: 2px; border-radius: 1px; background: transparent; }
+.sov-url-head:hover .sov-url-resizer::after { background: var(--rc-border); }
+.sov-url-resizer:hover::after, .sov-url-resizer:focus-visible::after, .sov-url-head.is-resizing .sov-url-resizer::after { background: var(--rc-primary); }
 .sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-muted { color: var(--rc-faint); }
 .sov-no-flow { color: #dc2626; font-size: 12px; }
@@ -1866,6 +1948,23 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-toast-close { margin-left: auto; padding: 0; color: var(--rc-muted) !important; font-size: 16px !important; }
 .sov-btn.danger { color: #b91c1c; border-color: #fecaca; }
 .sov-btn.ghost { color: var(--rc-faint); }
+/* 摘要栏 / 筛选栏这一排按钮来自三处，尺寸各不相同，排在一起高矮不齐（2026-11-03 收口）：
+   - 本组件的 .sov-btn：30px / 12px / 圆角 6px（基准）
+   - CodeConfigButton 的「代码生成」自带全局 .rc-btn：34px / 13px / 圆角 7px；
+     它是多根节点组件（按钮 + 弹层），父组件的 scoped 类落不到按钮上，只能 :deep 兜
+   - 父页面插槽里的按钮（源管理的「按目录 ▾」「归类 ▾」带 .ca-save-view）：34px，.sm 才是 30px
+   统一成基准规格。图标方块按钮（新增网站，.ca-create-site 30×30）在筛选栏且不在下面的选择器里，不受影响。 */
+.sov-filter-actions :deep(.rc-btn),
+.sov-summary :deep(.rc-btn),
+.sov-summary :deep(.ca-save-view),
+.sov-summary .sov-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
 .sov-state { display: inline-flex; padding: 2px 7px; border-radius: 999px; background: #ecfdf3; color: #15803d; font-size: 11px; font-weight: 700; }
 .sov-state.error { background: #fef2f2; color: #dc2626; }
 .sov-state.muted { background: #f1f5f9; color: #64748b; }

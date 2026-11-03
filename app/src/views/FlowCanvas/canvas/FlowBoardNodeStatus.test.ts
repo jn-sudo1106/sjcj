@@ -5,6 +5,7 @@
 // 根因是两处口径不一致：卡片那行表名用 effectiveOutputTable（没显式设就继承上游），
 // 状态判定只认 nodeOutputTable（显式值）。本文件锁住"两边必须一致"。
 import { describe, expect, it } from 'vitest'
+import { defineComponent } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -96,5 +97,34 @@ describe('FlowBoard · 节点状态与卡片上的表名必须一致', () => {
     expect(card.find('.rc-node-table').exists()).toBe(false)
     const chip = card.findAll('.rc-chip').find((c) => c.text() === '待配置')!
     expect(chip.attributes('title')).toContain('输出表')
+  })
+})
+
+
+describe('FlowBoard · 无关联流程', () => {
+  it('空列表或加载失败时隐藏兜底节点，关联后恢复画布', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas?sourceId=100')
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const flow = useFlowStore()
+    flow.loadFromSource({ sourceId: '100', name: '测试源', url: 'https://example.com', mainTable: '900', configId: '123', owner: '', state: 'C' }, [])
+    expect(flow.layout.nodes.length).toBeGreaterThan(0)
+    const tabs = defineComponent({ name: 'WorkflowTabsStub', emits: ['status'], template: '<div />' })
+    const wrapper = mount(FlowBoard, { global: { plugins: [pinia, router, ElementPlus], stubs: { SourceWorkflowTabs: tabs, CanvasHeader: true } } })
+    const tab = wrapper.getComponent(tabs)
+    tab.vm.$emit('status', 'empty')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="workflow-canvas-status"]').text()).toContain('暂无关联流程')
+    expect(wrapper.find('.rc-flow-node').exists()).toBe(false)
+    tab.vm.$emit('status', 'error')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="workflow-canvas-status"]').text()).toContain('加载失败')
+    tab.vm.$emit('status', 'ready')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="workflow-canvas-status"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-flow-node').exists()).toBe(true)
+    wrapper.unmount()
   })
 })

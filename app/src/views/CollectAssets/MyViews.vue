@@ -682,16 +682,10 @@ onActivated(() => {
 .mv-gchip button { border: 0; background: none; color: #059669; cursor: pointer; width: 18px; height: 18px; border-radius: 50%; }
 .mv-gchip button:hover { background: #d1fae5; }
 .mv-via { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; }
-/* 查询栏两行（用户 10-13 定）：查询条件一行、查询 / 清空按钮另起一行靠右。
-   右栏比系统目录窄，条件用网格按比例分满一行（不会单个掉到下一行），按钮行固定在下面 */
-.mv-content :deep(.sov-filter.is-compact) {
-  display: grid; align-items: center; gap: 8px;
-  grid-template-columns: minmax(270px, 3fr) minmax(72px, 1.1fr) minmax(76px, 1.1fr) minmax(64px, 1fr) minmax(64px, 1fr) minmax(56px, .9fr);
+/* 条件沿用源列表的紧凑宽度和自动换行；查询 / 清空按钮另起一行靠右（用户 10-13 定）。 */
+.mv-content :deep(.sov-filter.is-compact .sov-filter-actions) {
+  flex-basis: 100%; flex-wrap: wrap; justify-content: flex-end; margin-left: 0;
 }
-.mv-content :deep(.sov-filter.is-compact .sov-field),
-.mv-content :deep(.sov-filter.is-compact label) { min-width: 0; }
-.mv-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 0; }
-.mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { grid-column: 1 / -1; justify-self: end; margin-left: 0; }
 .mv-drawer { display: flex; flex-direction: column; gap: 6px; }
 .mv-sec { font-weight: 600; margin-top: 10px; }
 .mv-hint { margin: 0; font-size: 12px; color: var(--rc-faint); }

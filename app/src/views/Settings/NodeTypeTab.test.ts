@@ -122,6 +122,7 @@ describe('节点类型页面', () => {
     expect(wrapper.find('[data-testid="node-type-delete"]').exists()).toBe(false)
   })
 
+  // 1030：配置队列只给旧「发配置」用，新建不再预填 source-config
   it('新建不填类型 ID 时不带 sourceType；成功后刷新列表和抓取类型字典', async () => {
     const add = vi.spyOn(configApi, 'nodeTypeAdd').mockResolvedValue({ ok: true, message: '新增成功, sourceType=801' })
     const { wrapper, reload } = await mountAs(['admin'])
@@ -132,7 +133,7 @@ describe('节点类型页面', () => {
     await chooseGroup(wrapper, 'node-type-group-edit', '规则类')
     await clickSave()
 
-    expect(add).toHaveBeenCalledWith(expect.objectContaining({ typeName: '新类型', typeGroup: '规则类', sourceType: undefined, downType: 'source-config' }))
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ typeName: '新类型', typeGroup: '规则类', sourceType: undefined, downType: undefined }))
     expect(configApi.nodeTypeList).toHaveBeenCalledTimes(2)
     expect(reload).toHaveBeenCalled()
   })

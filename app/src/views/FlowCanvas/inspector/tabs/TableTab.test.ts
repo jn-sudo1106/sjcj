@@ -320,9 +320,10 @@ describe('TableTab · 输出字段选择 = 旧平台出参列 OutContext（1010 
   const checked = (wrapper: Awaited<ReturnType<typeof mountCollector>>['wrapper']) =>
     wrapper.findAll('[data-testid="output-fields-list"] .rc-tag.on').map((t) => t.text().split(' ')[0])
 
-  it('出参列为空 = 默认全部字段', async () => {
+  it('出参列为空时不勾选，提示默认使用全部字段', async () => {
     const { wrapper } = await mountCollector()
-    expect(checked(wrapper)).toEqual(['title', 'url', 'body'])
+    expect(checked(wrapper)).toEqual([])
+    expect(wrapper.text()).toContain('不选默认全部字段')
   })
 
   it('后端存的列名 K1/K3 回显成对应字段', async () => {
@@ -331,11 +332,21 @@ describe('TableTab · 输出字段选择 = 旧平台出参列 OutContext（1010 
   })
 
   it('取消勾选后按列名写回 taskCfg.outColumns（落步骤 outContext）', async () => {
-    const { flow, wrapper } = await mountCollector()
+    const { flow, wrapper } = await mountCollector(['K1', 'K2', 'K3'])
     await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[1].trigger('click')
     expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K3'])
     await wrapper.get('[data-testid="select-all-fields"]').trigger('click')
     expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K2', 'K3'])
+  })
+
+  it('清空后可重新选择字段，并按列名保存', async () => {
+    const { flow, wrapper } = await mountCollector(['K1', 'K2', 'K3'])
+    await wrapper.get('[data-testid="clear-all-fields"]').trigger('click')
+    expect(checked(wrapper)).toEqual([])
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual([])
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[1].trigger('click')
+    expect(checked(wrapper)).toEqual(['url'])
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K2'])
   })
 })
 

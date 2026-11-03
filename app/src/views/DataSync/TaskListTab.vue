@@ -17,12 +17,16 @@ const auth = useAuthStore()
 const admin = computed(() => auth.info?.name === 'admin')
 const customers = ref<SyncCustomer[]>([])
 const clients = ref<SyncClient[]>([])
+const customerNames = ref(new Map<string, string>())
+const clientNames = ref(new Map<string, string>())
 const tasks = ref<SyncTask[]>([])
 const total = ref(0)
 const loading = ref(false)
 const loadError = ref('')
 const pageNo = ref(1)
 const pageSize = ref(10)
+// 名称映射用的客户端上限：一次取全，任务分页只 10 条，映射表反而需要更大的范围
+const CLIENT_MAP_SIZE = 500
 const selected = ref<SyncTask[]>([])
 const filter = reactive({ customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', taskName: '',
   sourceTableName: String(route.query.tableName ?? ''), targetTableName: '', taskStatus: '', taskIdStr: '' })
@@ -49,6 +53,15 @@ const deleteTarget = ref<SyncTask | null>(null)
 const deleteTableOperation = ref<'0' | '1' | '2'>('0')
 const deleteBusy = ref(false)
 
+// 抽屉里逐段展示的 SQL，顺序即客户端执行顺序（前置/后置对目标库，可为空）
+type SqlField = 'startSql' | 'beforeSql' | 'fromSql' | 'conditionSql' | 'insertSql' | 'updateSql' | 'afterSql'
+const SQL_FIELDS: SqlField[] = ['startSql', 'beforeSql', 'fromSql', 'conditionSql', 'insertSql', 'updateSql', 'afterSql']
+const SQL_FIELD_LABELS: Record<SqlField, string> = {
+  startSql: '查询目标数据起始 SQL', beforeSql: '前置 SQL（针对目标数据库）', fromSql: '查询源数据 SQL',
+  conditionSql: '条件 SQL', insertSql: '保存数据 SQL', updateSql: '更新数据 SQL',
+  afterSql: '后置 SQL（针对目标数据库）',
+}
+
 async function load() {
   loading.value = true
   try {
@@ -64,21 +77,38 @@ async function load() {
 
 async function loadClients() {
   clients.value = []
+  clientNames.value = new Map()
   filter.clientId = ''
-  if (!filter.customerId) return
   try {
-    const res = await syncApi.clients({ customerId: filter.customerId, pageNo: 1, pageSize: 100 })
+    // admin 未选客户时要按全量客户端建名称映射，否则跨客户的任务只能显示 #ID
+    const res = await syncApi.clients(filter.customerId
+      ? { customerId: filter.customerId, pageNo: 1, pageSize: CLIENT_MAP_SIZE }
+      : { pageNo: 1, pageSize: CLIENT_MAP_SIZE })
     clients.value = res.list ?? []
+    clientNames.value = new Map(clients.value.map((item) => [String(item.id), item.clientName]))
   } catch (error) { ElMessage.error(String(error)) }
+}
+
+async function loadCustomers() {
+  try {
+    // 非 admin 不走 /customer/all（那会把其它客户名称发给无关账号），只取自己所属客户
+    const list = admin.value
+      ? (await syncApi.customers()) ?? []
+      : (await syncApi.customerPage({ customerId: filter.customerId, pageNo: 1, pageSize: 10 })).list ?? []
+    customers.value = list
+    customerNames.value = new Map(list.map((item) => [String(item.id), item.customerName]))
+  } catch (error) { ElMessage.error(String(error)) }
+}
+
+const ownerName = (names: Map<string, string>, id: unknown) => {
+  const key = String(id ?? '')
+  if (!key) return '—'
+  return names.get(key) || `#${key}`
 }
 
 watch(() => filter.customerId, () => { void loadClients(); pageNo.value = 1; void load() })
 onMounted(async () => {
-  if (admin.value) {
-    try { customers.value = await syncApi.customers() ?? [] }
-    catch (error) { ElMessage.error(String(error)) }
-  }
-  await Promise.all([loadClients(), load()])
+  await Promise.all([loadCustomers(), loadClients(), load()])
 })
 
 function search() { pageNo.value = 1; void load() }
@@ -109,7 +139,7 @@ async function saveDetail() {
   if (!detail.value) return
   if (!detail.value.taskName || !detail.value.cron || !detail.value.fromSql || !detail.value.startSql ||
       !detail.value.conditionSql || !detail.value.insertSql || !detail.value.updateSql) {
-    ElMessage.warning('请填写任务名称、定时策略和全部 SQL')
+    ElMessage.warning('请填写任务名称、定时策略和除前后置外的全部 SQL')
     return
   }
   if (isSinkTarget(sinkType.value)) {
@@ -223,12 +253,12 @@ async function confirmRemove() {
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon class="sync-alert" />
     <div class="sync-filter">
       <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" class="sync-filter-input"><el-option v-for="item in customers" :key="item.id" :value="String(item.id)" :label="item.customerName" /></el-select>
-      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="sync-filter-input"><el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="item.clientName" /></el-select>
-      <el-input v-model="filter.taskName" placeholder="任务名称" class="sync-filter-input" @keyup.enter="search" />
-      <el-input v-model="filter.sourceTableName" placeholder="源表名称" class="sync-filter-input" @keyup.enter="search" />
-      <el-input v-model="filter.targetTableName" placeholder="目标表名称" class="sync-filter-input" @keyup.enter="search" />
-      <el-select v-model="filter.taskStatus" placeholder="全部状态" class="sync-filter-input"><el-option value="" label="全部状态" /><el-option value="0" label="已启用" /><el-option value="1" label="已暂停" /></el-select>
-      <el-input v-model="filter.taskIdStr" placeholder="任务 ID，逗号分隔" class="sync-filter-input" @keyup.enter="search" />
+      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="sync-filter-input" @clear="search"><el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="item.clientName" /></el-select>
+      <el-input v-model="filter.taskName" clearable placeholder="任务名称" class="sync-filter-input" @keyup.enter="search" @clear="search" />
+      <el-input v-model="filter.sourceTableName" clearable placeholder="源表名称" class="sync-filter-input" @keyup.enter="search" @clear="search" />
+      <el-input v-model="filter.targetTableName" clearable placeholder="目标表名称" class="sync-filter-input" @keyup.enter="search" @clear="search" />
+      <el-select v-model="filter.taskStatus" clearable placeholder="全部状态" class="sync-filter-input" @clear="search"><el-option value="0" label="已启用" /><el-option value="1" label="已暂停" /></el-select>
+      <el-input v-model="filter.taskIdStr" clearable placeholder="任务 ID，逗号分隔" class="sync-filter-input" @keyup.enter="search" @clear="search" />
       <div class="sync-filter-actions">
         <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button>
       </div>
@@ -247,6 +277,8 @@ async function confirmRemove() {
       <el-table-column type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="85" />
       <el-table-column prop="taskName" label="任务名称" min-width="190" show-overflow-tooltip><template #default="{ row }"><el-button link type="primary" @click="openDetail(row, false)">{{ row.taskName }}</el-button></template></el-table-column>
+      <el-table-column label="客户" min-width="130" show-overflow-tooltip><template #default="{ row }">{{ ownerName(customerNames, row.customerId) }}</template></el-table-column>
+      <el-table-column label="客户端" min-width="130" show-overflow-tooltip><template #default="{ row }">{{ ownerName(clientNames, row.clientId) }}</template></el-table-column>
       <el-table-column prop="sourceTable" label="源表" min-width="170" show-overflow-tooltip />
       <el-table-column prop="targetTableName" label="目标表" min-width="150" show-overflow-tooltip />
       <el-table-column label="方式" width="75"><template #default="{ row }">{{ Number(row.syncType) === 1 ? 'SQL' : 'CDC' }}</template></el-table-column>
@@ -274,7 +306,10 @@ async function confirmRemove() {
           <el-form-item label="同步任务类型"><el-input model-value="SQL 查询" disabled /></el-form-item>
           <el-form-item label="同步任务名称"><el-input v-model="detail.taskName" :disabled="!detailEdit" /></el-form-item>
           <el-form-item label="同步定时策略"><el-input v-model="detail.cron" :disabled="!detailEdit" /></el-form-item>
-          <el-form-item v-for="field in ['startSql', 'fromSql', 'conditionSql', 'insertSql', 'updateSql'] as const" :key="field" :label="({ startSql: '查询目标数据起始 SQL', fromSql: '查询源数据 SQL', conditionSql: '条件 SQL', insertSql: '保存数据 SQL', updateSql: '更新数据 SQL' })[field]">
+          <!-- 编码只读：它决定同步两端连哪个库，列映射与建表产物都是按原来那端生成的，这里改了会让两边对不上 -->
+          <el-form-item label="源数据源编码"><el-input v-model="detail.sourceCode" disabled /></el-form-item>
+          <el-form-item label="目标数据源编码"><el-input v-model="detail.targetSourceCode" disabled /></el-form-item>
+          <el-form-item v-for="field in SQL_FIELDS" :key="field" :label="SQL_FIELD_LABELS[field]">
             <el-input v-model="detail[field]" type="textarea" :rows="4" :disabled="!detailEdit" />
           </el-form-item>
         </el-form>

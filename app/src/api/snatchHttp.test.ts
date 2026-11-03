@@ -32,4 +32,13 @@ describe('source/sendSnatchWithParam 回执', () => {
     const ack = await sourceApi.sendSnatchWithParam(payload)
     expect(ack.failed).toBeUndefined()
   })
+
+  it('指定辅助流程时 flowId 放在 query，body 仍只发送参数', async () => {
+    fetchMock.mockResolvedValue(ok({ total: 1, failCount: 0, successCount: 1 }))
+    const { sourceApi } = await import('./index')
+    await sourceApi.sendSnatchWithParam({ ...payload, flowId: '21000040', param: { '1401218_150': '20261102' } })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(new URL(url, 'http://localhost').searchParams.get('flowId')).toBe('21000040')
+    expect(JSON.parse(init.body)).toEqual({ '1401218_150': '20261102' })
+  })
 })

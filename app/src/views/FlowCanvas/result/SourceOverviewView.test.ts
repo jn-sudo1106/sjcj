@@ -152,6 +152,14 @@ describe('SourceOverviewView', () => {
     expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('配置 ID')
   })
 
+  it('来源组成员表显示配置 ID 列（1030 会议议题 6）', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, configId: '1401003' }] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceGroupId: '3' } })
+    await flushPromises()
+    expect(wrapper.findAll('th').map((th) => th.text())).toContain('配置 ID')
+    expect(wrapper.get('[data-testid="source-overview-config"]').text()).toBe('1401003')
+  })
+
   it('状态筛选按拆分字段发送：停用走 enable，不向旧接口发 state=disabled（0812 纠偏）', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
@@ -188,7 +196,7 @@ describe('SourceOverviewView', () => {
     await wrapper.get('[data-testid="source-overview-search-field"]').setValue('sourceIds')
     await wrapper.get('[data-testid="source-overview-search-text"]').setValue('src-1, src-2')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
-    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: 'src-1, src-2' }))
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: 'src-1,src-2' }))
     expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('操作')
 
     await wrapper.get('[data-testid="source-overview-source-link"]').trigger('click')
@@ -1451,8 +1459,20 @@ describe('源视图 · 查询三合一（0917-11）', () => {
     await text.setValue('430016214, 430016215')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
-    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '430016214, 430016215' }))
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '430016214,430016215' }))
     expect(lastQ(page)?.name).toBeUndefined()
+  })
+
+  it('多行源 ID 保留输入并按逗号分隔查询', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    const text = wrapper.get('[data-testid="source-overview-search-text"]')
+    expect(text.classes()).not.toContain('sov-multiline-ids')
+    await text.setValue('301288560\n301288561\n391004096')
+    expect(text.classes()).toContain('sov-multiline-ids')
+    expect((text.element as HTMLTextAreaElement).value).toBe('301288560\n301288561\n391004096')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '301288560,301288561,391004096' }))
   })
 
   it('切字段时如果框里有值就立刻重查，空着就不白打一次请求', async () => {
@@ -1481,7 +1501,7 @@ describe('源视图 · 查询三合一（0917-11）', () => {
   it('占位提示：没手动选字段时说明会自动识别；手动选了就跟着字段走', async () => {
     const { wrapper } = await mountWithSpy()
     const text = () => (wrapper.get('[data-testid="source-overview-search-text"]').element as HTMLInputElement).placeholder
-    expect(text()).toBe('源 ID / 名称 / URL，自动识别')
+    expect(text()).toBe('源 ID / 名称 / URL')
     await wrapper.get('[data-testid="source-overview-search-field"]').setValue('sourceUrl')
     expect(text()).toBe('URL 关键字，如 centec')
   })
@@ -1504,7 +1524,7 @@ describe('源视图 · 查询三合一（0917-11）', () => {
 
     await run('430016214, 430016215')
     expect(field()).toBe('sourceIds')
-    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '430016214, 430016215' }))
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '430016214,430016215' }))
 
     await run('三友医疗')
     expect(field()).toBe('name')

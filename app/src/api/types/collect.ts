@@ -1,4 +1,4 @@
-// 采集配置域（P1-3 拆 8 域 · collect 域）
+﻿// 采集配置域（P1-3 拆 8 域 · collect 域）
 // 包含 Config（采集配置）/ ConfigParamBinding（参数绑定）/ ConfigActionLog（操作日志）/
 //       EntryType（实体表）/ EntryField（表字段）
 // 跨域被引用：source 域 Site.params: ConfigParamBinding[]
@@ -117,6 +117,9 @@ export interface EntryType {
   checkFlag?: string | number
   checkRule?: string
   coreParam?: string
+  /** AI 综合描述：由 AI 结合真实数据样本提炼的业务画像描述 */
+  aiComment?: string
+  aiCommont?: string
 }
 
 export interface EntryField {

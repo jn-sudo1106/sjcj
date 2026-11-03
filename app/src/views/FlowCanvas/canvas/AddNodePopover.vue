@@ -5,7 +5,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { LIB_GROUPS, type LibGroup, type LibItem } from './flowModel'
 import { useDictStore } from '@/stores/dict'
 
-const props = defineProps<{ x: number; y: number; compact?: boolean }>()
+const props = defineProps<{ x: number; y: number; compact?: boolean; nodeGroups?: LibGroup[] }>()
 const emit = defineEmits<{ pick: [template: string]; close: []; dragstart: [event: DragEvent, template: string] }>()
 
 const dict = useDictStore()
@@ -24,6 +24,7 @@ const orderByCode = computed(() => {
   return order
 })
 const groups = computed<LibGroup[]>(() => {
+  if (props.nodeGroups) return props.nodeGroups
   const sourceByCode = new Map<string, { code: string; name: string }>()
   for (const display of dict.snatchTypes) {
     const m = /^\[(\d+)\]\s*-\s*(.+)$/.exec(display)

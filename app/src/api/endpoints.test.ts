@@ -54,6 +54,20 @@ describe('端点契约一致性', () => {
     expect(LIVE_ENDPOINTS.has('item/next/enable')).toBe(true)
     expect(LIVE_ENDPOINTS.has('item/next/delete')).toBe(true)
   })
+  it('源数据权限范围编辑器 4 条端点已登记并放行 live（漏登记时 mock 模式会抛「端点不在契约清单」）', () => {
+    for (const path of [
+      'group-res/source-scope',
+      'group-res/modify-source-scope',
+      'category/scopeTree',
+      'source/categorySources',
+    ]) {
+      expect(ENDPOINT_PATHS.has(path), `${path} 不在契约清单`).toBe(true)
+      expect(LIVE_ENDPOINTS.has(path), `${path} 未标 live`).toBe(true)
+    }
+    // 保存是事务写，必须进 danger 清单受生产写保护约束
+    expect(DANGER_ENDPOINTS.has('group-res/modify-source-scope')).toBe(true)
+    expect(DANGER_ENDPOINTS.has('category/scopeTree')).toBe(false)
+  })
   it('所有已注册 mock 端点都在契约清单内', () => {
     for (const key of Object.keys(mockRegistry)) {
       expect(ENDPOINT_PATHS.has(key), `${key} 不在契约清单`).toBe(true)

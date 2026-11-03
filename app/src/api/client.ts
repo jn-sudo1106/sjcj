@@ -290,6 +290,7 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 是比端点表本身更容易被忽略的隐患：万一以后哪天真的接了、却没顺手核对这里，
   // 反而是"看起来已经放行"，实际请求发出去才会被 ProductionWriteBlockedError 拦下。
   'flow/saveFlow',
+  'flow/assignTemplate',
   'flow/deleteFlow',
   // ⚠️ 唯一一条写**存量生产表**的：changeFlowBatch 改的是 cs_source.FLOW_ID，不是 cs_flow，
   // 且单次上限 5000 条。**这个字段有消费方**——执行器按 FLOW_ID 反查配置后执行（2026-09-03
@@ -474,9 +475,16 @@ export function usesMockAdapter(endpoint: string, options: RequestOptions = {}):
   return MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey))
 }
 
+/**
+ * 请求体参数：绝大多数接口是对象（`{ id }` 这类），但批量接口会把数组直接当 body
+ * （如 `config/entryType/batchGenerateAiCommont` 传 `tableIds: (string | number)[]`），
+ * 序列化走 `JSON.stringify`，数组本身就是合法的 JSON 体，所以这里一并放行。
+ */
+export type RequestParams = Record<string, unknown> | unknown[]
+
 export async function request<T>(
   endpoint: string,
-  params?: Record<string, unknown>,
+  params?: RequestParams,
   options: RequestOptions = {},
 ): Promise<T> {
   try {
@@ -489,13 +497,14 @@ export async function request<T>(
         throw new Error(`mock URL 参数失败注入: ${endpoint}`)
       }
       const handler = mockRegistry[endpoint]
-      if (handler) return handler(params) as T
+      if (handler) return handler(params as Record<string, unknown> | undefined) as T
       if (ENDPOINT_PATHS.has(endpoint)) return fallback(endpoint) as T
       throw new Error(`[mock] 端点不在契约清单: ${endpoint}`)
     }
     const method = options.method ?? 'POST'
     const paramsIn = options.paramsIn ?? (method === 'GET' ? 'query' : 'body')
-    const httpParams = options.httpParams ?? params
+    // body 分支走 JSON.stringify，数组体原样序列化；query / form 分支只能是键值对象，这里收回对象类型。
+    const httpParams = (options.httpParams ?? params) as Record<string, unknown> | undefined
     const httpEndpoint = options.httpEndpoint ?? endpoint
     const originalPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
     const resolvedPath = flowRequestPath(originalPath, httpEndpoint, import.meta.env.VITE_FLOW_PROXY_TARGET, window.location.hash, options.backendScope)

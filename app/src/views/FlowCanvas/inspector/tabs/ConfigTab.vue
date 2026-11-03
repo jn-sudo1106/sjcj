@@ -29,6 +29,7 @@ import CodeGenerationSwitch from '../CodeGenerationSwitch.vue'
 // patchSource 内部 applyParamSourceUrlToFirstCollectNode 会自动把首节点 cc.url / cc.urlParamRefs 同步好
 // （见 flowModel.ts:401-408）；本文件不再直接双向绑定 model，只做一次性只读派生。
 
+const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
 // 复制节点 = 新增一套配置（0828 D02），与画布右键菜单同一条路径
 const duplicateNode = useDuplicateNode()
@@ -195,6 +196,7 @@ function onScheduleChange(patch: Partial<CollectorSchedule>) {
  */
 const jobToggling = ref(false)
 async function onToggleJob(enabled: boolean) {
+  if (props.templateDefaults) return
   const job = flow.sourceJob
   if (!job || jobToggling.value) return
   // 没有 jobId = 这条定时刚保存、还没回查到真 ID（见 NodeInspector.syncSourceCron）。
@@ -234,6 +236,7 @@ const isFirstCollectorNode = computed(() => isRealCollectorNode(id.value) && flo
 // 首节点 = 主链上第一个真正抓取数据的节点（跳过登录节点，同上面 isRealCollectorNode）；
 // 整条链都没有这样的节点（规则 / PDF 开头）时，退回主链上第一个节点。
 const showSchedule = computed(() => {
+  if (props.templateDefaults) return false
   const firstCollector = flow.main.find(isRealCollectorNode)
   return firstCollector ? firstCollector === id.value : flow.isFirstMainNodeId(id.value)
 })
@@ -314,7 +317,9 @@ function onBizType(e: Event) {
 
 const configUrl = computed(() => cfg.value?.configUrl ?? '')
 function onConfigUrl(e: Event) {
-  flow.setConfigUrl(id.value, (e.target as HTMLInputElement).value)
+  const url = (e.target as HTMLInputElement).value
+  flow.setConfigUrl(id.value, url)
+  if (props.templateDefaults && cc.value) flow.patchCollect(id.value, { url })
 }
 
 // 配置 URL 跟旧 ConfigEdit 同一接口：GET config/configDetail → 原始记录的 configUrl。
@@ -351,14 +356,15 @@ watch(
 </script>
 
 <template>
-  <CodeGenerationSwitch v-if="flow.isFirstMainNodeId(id)" :key="cfg?.configId" :config-id="cfg?.configId" />
+  <CodeGenerationSwitch v-if="!props.templateDefaults && flow.isFirstMainNodeId(id)" :key="cfg?.configId" :config-id="cfg?.configId" />
   <!-- 节点配置：单屏纵向分组，无步进器 / 无子 Tab（0706 调整4） -->
   <!-- 节点名称不属于配置，底部「保存配置」不管它（0824-11 §1.2b）。
        采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
        源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
        规则节点的节点名称 = 规则名称，直接编辑（「选择已有」入口 2026-09-04 已删，见下方注释）。 -->
   <div class="rc-field"><label>节点名称</label>
-    <div v-if="isRule || isPdf" class="rc-input-group">
+    <input v-if="props.templateDefaults" class="rc-input" :value="cfg?.title" aria-label="节点名称" @input="onTitle" />
+    <div v-else-if="isRule || isPdf" class="rc-input-group">
       <input class="rc-input" :value="cfg?.title" placeholder="直接输入规则名称" @input="onTitle" />
     </div>
     <div v-else-if="cc" class="rc-input-group">
@@ -367,10 +373,14 @@ watch(
     </div>
     <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
   </div>
-  <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" />
+  <EditNodeSourceDialog v-if="!props.templateDefaults" v-model:open="editNodeSourceOpen" :node-id="id" />
   <!-- 节点类型（所有节点通用展示，从节点配置提取准确名称；OCR/AI/规则/媒体等所有新增节点一并展示） -->
   <div class="rc-field"><label>节点类型</label>
     <div class="rc-readonly" data-testid="node-type-display">{{ currentNodeType }}</div>
+  </div>
+  <div v-if="props.templateDefaults" class="rc-actions-row">
+    <button class="rc-btn" type="button" :disabled="flow.main.indexOf(id) <= 1" @click="flow.move(id, -1)">上移</button>
+    <button class="rc-btn" type="button" :disabled="flow.main.indexOf(id) >= flow.main.length - 2" @click="flow.move(id, 1)">下移</button>
   </div>
   <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
   <!-- 有定时就默认展开（2026-09-18 用户提）：收着的话根本不知道这个源还有定时在跑 -->
@@ -551,7 +561,7 @@ watch(
       </div>
     </div>
   </div>
-  <template v-if="!cc && !isRuleLike">
+  <template v-if="!props.templateDefaults && !cc && !isRuleLike">
     <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
 
     <div v-for="(row, i) in cfg?.base ?? []" :key="row[0]" class="rc-field">

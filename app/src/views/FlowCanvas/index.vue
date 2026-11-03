@@ -5,6 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
+import { restoreTemplateDefaults } from '@/utils/flow/flowTemplates'
+import { loadTemplateDefaults } from '@/utils/flow/applyTemplateToSource'
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useFlowReadiness } from '@/views/FlowCanvas/canvas/useFlowReadiness'
@@ -41,6 +43,7 @@ const ui = useUiStore()
 const ws = useWorkspaceStore()
 const sourceReturn = useSourceReturnStore()
 const sourceReady = ref(false)
+const workflowStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
 const runtime = useRuntimeStore()
 // 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
@@ -140,6 +143,11 @@ watch(
 )
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
+/** 没有关联流程 / 流程列表加载失败：画布和右侧配置都让位，只显示一句提示（2026-11-03）。
+ *  只在明确 empty / error 时让位——「加载中」照常渲染，否则刷新时会闪一下空白，
+ *  而且没上报状态的画布（单测里 stub 的、或子组件没挂）会把配置区一起挡掉。 */
+const workflowBlocked = computed(() => !isDataView.value && !!flow.sourceCtx
+  && (workflowStatus.value === 'empty' || workflowStatus.value === 'error'))
 // 数据 / 文件 / 任务视图的节点和表都跟着当前流程走：页头切换流程后整块重挂，不残留上一条流程的筛选（2026-10-19）
 const flowScopedKey = computed(() => `${flow.sourceCtx?.sourceId ?? ''}:${flow.sourceCtx?.flowId ?? ''}`)
 const isOverviewView = computed(() => activeView.value === 'overview' && !!flow.sourceCtx)
@@ -345,6 +353,8 @@ function onSplitStart(e: MouseEvent) {
 
 async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   sourceReady.value = false
+  // 同源切流程时页签组件不会重挂，保留它已经上报的状态。
+  if (flow.sourceCtx?.sourceId !== sourceId) workflowStatus.value = 'loading'
   const runtimeView = !!import.meta.env.VITE_FLOW_PROXY_TARGET && normalizeSourceView(route.query.view) !== 'flow'
   // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
@@ -428,6 +438,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     ElMessage.error(sourceLoadError.value)
     return
   }
+  const defaults = runtimeView ? undefined : await loadTemplateDefaults(flowId, steps)
   const viewingDraft = !!selectedBinding?.draftFlowId && flowId === selectedBinding.draftFlowId
   flow.loadFromSource({
     ...source,
@@ -442,6 +453,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     publishedFlowId: selectedBinding?.publishedFlowId,
     draftFlowId: selectedBinding?.draftFlowId,
   }, steps, null)
+  restoreTemplateDefaults(flow.configs, defaults, true)
   restoreFlowInspector(sourceId, flowId)
   // 回到源可能需要等待后端数秒：加载完成后再恢复，不受早期深链的 1.5 秒窗口限制。
   await nextTick()
@@ -636,6 +648,7 @@ async function onStartCapture() {
   try {
     await snatchLauncher.value?.launch(s.sourceId, {
       configId,
+      flowId: s.flowId,
       queue: undefined,
       onSuccess: () => {
         const runId = runtime.startCapture(
@@ -846,12 +859,12 @@ onUnmounted(() => {
         <div
           v-else
           class="rc-flow-shell"
-          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed, 'version-readonly': isPublishedFlowView && !isDataView }"
+          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed, 'version-readonly': isPublishedFlowView && !isDataView, 'no-workflow': workflowBlocked }"
           :style="{ '--insp-w': inspWidth }"
         >
-          <template v-if="!ui.inspectorExpanded">
+          <template v-if="!ui.inspectorExpanded || workflowBlocked">
             <ResultView v-if="isDataView" :key="flowScopedKey" class="rc-flow-center" />
-            <FlowBoard v-else />
+            <FlowBoard v-else @workflow-status="workflowStatus = $event" />
           </template>
           <button
             v-else
@@ -860,6 +873,7 @@ onUnmounted(() => {
             :title="isDataView ? '点击恢复数据' : '点击恢复画布'"
             @click="ui.toggleInspectorExpanded()"
           >» {{ isDataView ? '数据已收起' : '画布已收起' }}</button>
+          <template v-if="!workflowBlocked">
           <div
             v-if="!ui.inspectorExpanded && !ui.inspectorCollapsed"
             class="rc-insp-splitter"
@@ -878,6 +892,7 @@ onUnmounted(() => {
             @click="ui.toggleInspectorCollapsed()"
           >« 节点配置</button>
           <NodeInspector v-else />
+          </template>
         </div>
       </div>
     </div>
@@ -969,4 +984,5 @@ onUnmounted(() => {
   .rc-flow-shell > :last-child:not(.rc-insp-collapsed) { min-height: 520px; }
   .rc-flow-shell > .rc-insp-collapsed { width: 100%; height: 36px; writing-mode: horizontal-tb; }
 }
+.rc-flow-shell.no-workflow, .rc-flow-shell.source-mode.no-workflow { grid-template-columns: minmax(0, 1fr); }
 </style>

@@ -12,7 +12,7 @@ import {
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
-import DataTableSidebar from './DataTableSidebar.vue'
+import DataTableSidebar from '@/components/DataTableSidebar.vue'
 import { favoriteEntryIds, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
@@ -40,7 +40,7 @@ import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 import { currentBackendHost } from '@/api/client'
-import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
+import { SYNC_PLATFORM_BACKEND_HOSTS } from '@/constants/backend'
 import { dataStateInfo } from '@/constants/runState'
 import { upperDataId, upperDataText } from './upperData'
 
@@ -399,7 +399,7 @@ function buildQuery(): RowQuery {
 const router = useRouter()
 const workspace = useWorkspaceStore()
 // 「同步到其他环境」只在和同步服务同库的环境出现：别的环境带过去的表名，在同步服务的库里可能不存在，同名表搬的也是同步服务那边的数据
-const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
+const syncSameBackend = SYNC_PLATFORM_BACKEND_HOSTS.includes(currentBackendHost())
 const selectedRowKeys = ref<string[]>([])
 
 let tableChangeRequest = 0

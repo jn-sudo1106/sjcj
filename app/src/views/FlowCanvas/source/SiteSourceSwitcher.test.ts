@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
+  pickFlowTemplate: vi.fn(async () => 'template-1'),
+}))
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -801,6 +805,23 @@ describe('SiteSourceSwitcher · 按模板源新建：流程三选一（1016）',
     await flushPromises()
   }
 
+  it('建源时可预览模板流程，也可从流程选择器带回关联流程', async () => {
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ id: 'flow-100', name: '微博流程' } as never)
+    const wrapper = await createWrapper()
+    await openWithName(wrapper)
+    await wrapper.get('[data-testid="preview-template-flow"]').trigger('click')
+    await flushPromises()
+    expect(detail).toHaveBeenCalledWith('flow-100')
+    await wrapper.get('[data-testid="source-flow-bind"]').setValue(true)
+    await wrapper.get('[data-testid="preview-bind-flows"]').trigger('click')
+    const picker = wrapper.findComponent({ name: 'FlowPickerDialog' })
+    expect(picker.exists()).toBe(true)
+    picker.vm.$emit('confirm', [{ id: 'flow-300', name: '新流程' }])
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('新流程')
+  })
+
   it('默认「复制模板源的默认流程」：flag=1，后端复制流程；不再额外关联模板源的流程', async () => {
     const wrapper = await createWrapper()
     await openWithName(wrapper)
@@ -1251,9 +1272,9 @@ it('右键发采集代码打开独立表单，关闭源菜单后点击表单仍�
   await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
   await wrapper.get('[data-testid="source-menu-code"]').trigger('click'); await flushPromises()
   expect(wrapper.find('[data-testid="source-menu-code"]').exists()).toBe(false)
-  expect(wrapper.find('[aria-label="201 派发配置 ID"]').exists()).toBe(true)
+  expect(wrapper.find('.mq-code-tasks').text()).toContain('为选中源生效默认流程的 ROOT 步骤创建数据库代码生成任务')
   window.dispatchEvent(new MouseEvent('click')); await flushPromises()
-  expect(wrapper.find('[aria-label="201 派发配置 ID"]').exists()).toBe(true)
+  expect(wrapper.find('.mq-code-tasks').exists()).toBe(true)
   expect(sourceApi.sendSnatchWithParam).not.toHaveBeenCalled()
   wrapper.unmount()
 })

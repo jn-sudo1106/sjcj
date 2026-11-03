@@ -432,6 +432,7 @@ async function sendFetchForNode(nodeId: string) {
   if (!sourceId.value) return
   await snatchLauncher.value?.launch(sourceId.value, {
     configId: flow.configs[nodeId]?.configId,
+    flowId: canvasFlowIdOf(flow),
     onSuccess: () => ElMessage.success('已发起抓取'),
   })
 }
@@ -442,6 +443,7 @@ async function onSendFetch() {
   // 无参数直发，与源视图那三档同一套。外面再套一层"是否继续"纯属多点一次。
   await snatchLauncher.value?.launch(sourceId.value, {
     configId: selectedCfg.value?.configId,
+    flowId: canvasFlowIdOf(flow),
     onSuccess: () => ElMessage.success('已发起抓取'),
   })
 }
@@ -501,6 +503,7 @@ function buildCurrentFallbackSteps(): Step[] {
 
 function buildCurrentConfigHint() {
   return {
+    flowId: canvasFlowIdOf(flow),
     configId: selectedCfg.value?.configId,
     stepId: (selectedCfg.value as any)?.stepId || (/^\d+$/.test(selectedNodeId.value) ? selectedNodeId.value : undefined),
     title: selectedCfg.value?.title,

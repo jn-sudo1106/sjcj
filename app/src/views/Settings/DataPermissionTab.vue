@@ -3,8 +3,8 @@
 //
 // 排版布局：
 // 左侧：分页展示用户组（来自 sys-user 的 distinct GROUP_ID，组名取成员 user_name）。
-// 右侧：可见范围 / 排除范围 / 全部规则明细 三 tab。前两个共用一套「范围面板 + 选择器弹窗」，
-//       选择器是目录→源两级、点选（无内联勾选树）；落库交给 groupSourceScope 服务（SOURCE/STRUCT + SOURCE/ID）。
+// 右侧：可见范围 / 排除范围 / 全部规则明细 三 tab。前两个共用一套内嵌的「双栏范围编辑器」
+//       （左目录树、右该目录的源，无弹窗），落库交给 groupSourceScope 服务一次保存整范围。
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -22,18 +22,17 @@ import {
   deleteGroupRes,
   groupResDetail,
   groupResMeta,
+  listGroupIds,
   pagedGroupRes,
   type GroupResMeta,
   type GroupResRule,
 } from '@/api/groupRes'
 import { getGroupSourceScope, saveGroupSourceScope, type GroupSourceScope, type SourceGrant } from '@/api/groupSourceScope'
-import { pagedSysUser } from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
 import { groupName, readGroupNames, setGroupName } from '@/utils/groupNames'
 import GroupResEditDialog from './GroupResEditDialog.vue'
 import GroupResDetailDrawer from './GroupResDetailDrawer.vue'
-import SourceScopePanel from './groupRes/SourceScopePanel.vue'
-import SourceScopePicker from './groupRes/SourceScopePicker.vue'
+import SourceScopeEditor from './groupRes/SourceScopeEditor.vue'
 
 defineOptions({ name: 'DataPermissionTab' })
 
@@ -62,29 +61,20 @@ export interface GroupRow {
   name: string
 }
 
-const DEFAULT_GROUP_NAMES: Record<number, string> = {
-  90001: '超级管理员',
-  90002: '奇点的角色',
-  100001: '分析师',
-  100002: '业务运营组',
-  90099: 'POC01',
-}
-
-const allGroupIds = ref<number[]>([90001, 90002, 100001, 100002, 90099])
-// groupId → 该组第一个非空 user_name，作为组展示名（后端没有 GROUP_NAME 列，用成员用户名代指组名）。
-const groupUserNames = ref<Record<number, string>>({})
+const allGroupIds = ref<number[]>([])
 const groupSearchKey = ref('')
-const currentGroupId = ref<number | null>(90001)
+const currentGroupId = ref<number | null>(null)
 const groupPage = ref(1)
 const groupPageSize = ref(20)
 const groupLoading = ref(false)
+const scopeDirty = ref(false)
 
 const groupList = computed<GroupRow[]>(() => {
   const localNames = readGroupNames()
   const keyword = groupSearchKey.value.trim().toLowerCase()
   return allGroupIds.value
     .map((id) => {
-      const name = localNames[String(id)] || groupUserNames.value[id] || DEFAULT_GROUP_NAMES[id] || `用户组 ${id}`
+      const name = localNames[String(id)] || groupName(id) || `用户组 ${id}`
       return { groupId: id, name }
     })
     .filter((g) => {
@@ -113,49 +103,46 @@ const currentGroup = computed(() => {
   if (!currentGroupId.value) return null
   return groupList.value.find((g) => g.groupId === currentGroupId.value) ?? {
     groupId: currentGroupId.value,
-    name: groupName(currentGroupId.value) || groupUserNames.value[currentGroupId.value] || DEFAULT_GROUP_NAMES[currentGroupId.value] || `用户组 ${currentGroupId.value}`,
+    name: groupName(currentGroupId.value) || `用户组 ${currentGroupId.value}`,
   }
 })
 
-// 左侧用户组来自用户表：sys-user/list 逐页拉满、取 distinct GROUP_ID（仅排除 null）即所有有成员的组。
-// 组展示名取该组第一个非空 user_name（后端无 GROUP_NAME 列）；改名(localStorage) > user_name > 默认名 > 兜底。
-const GROUP_SCAN_PAGE_SIZE = 200
+// 左侧用户组：调用 /api/v1/group-res/groups 接口，获取可配置的组 ID 列表（>90000 且存在于 sys_user 或 sys_group_res）。
+// 组展示名由前端本地映射（readGroupNames / groupName）或回退默认「用户组 {id}」。
 async function fetchGroups() {
   groupLoading.value = true
   try {
-    const scanned = new Set<number>()
-    const names: Record<number, string> = {}
-    try {
-      let page = 1
-      let fetched = 0
-      for (;;) {
-        const res = await pagedSysUser({ page, limit: GROUP_SCAN_PAGE_SIZE })
-        res.list.forEach((u) => {
-          if (u.groupId === null) return
-          scanned.add(u.groupId)
-          if (u.userName && !names[u.groupId]) names[u.groupId] = u.userName
-        })
-        fetched += res.list.length
-        if (res.list.length === 0 || fetched >= res.total) break
-        page++
-      }
-    } catch {
-      // 扫描失败不阻断：下面仍并入默认组
-    }
-    groupUserNames.value = names
-    const set = new Set<number>(scanned)
-    Object.keys(DEFAULT_GROUP_NAMES).forEach((k) => set.add(Number(k)))
-    allGroupIds.value = Array.from(set).sort((a, b) => a - b)
+    const ids = await listGroupIds()
+    allGroupIds.value = ids || []
     if (!currentGroupId.value && allGroupIds.value.length > 0) {
       currentGroupId.value = allGroupIds.value[0]!
     }
+  } catch (e) {
+    ElMessage.error(`加载用户组列表失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
     groupLoading.value = false
   }
 }
 
-function onSelectGroup(row: GroupRow | null) {
+async function onSelectGroup(row: GroupRow | null) {
   if (!row) return
+  if (row.groupId === currentGroupId.value) return
+  if (scopeDirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        '当前用户组有未保存的权限配置修改，切换将丢失这些更改。是否继续切换？',
+        '未保存提醒',
+        {
+          confirmButtonText: '放弃修改并切换',
+          cancelButtonText: '留在此页',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+  }
+  scopeDirty.value = false
   currentGroupId.value = row.groupId
   runQuery()
   void loadScope(row.groupId)
@@ -188,51 +175,29 @@ async function promptRenameGroup(row: GroupRow) {
   }
 }
 
-async function promptAddGroup() {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入用户组 ID（必须大于 90000）', '添加用户组', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      inputPattern: /^[1-9]\d{4,}$/,
-      inputErrorMessage: '请输入大于 90000 的数字 ID',
-    })
-    const id = Number(value.trim())
-    if (id <= 90000) {
-      ElMessage.warning('用户组 ID 必须大于 90000')
-      return
-    }
-    if (!allGroupIds.value.includes(id)) {
-      allGroupIds.value = [...allGroupIds.value, id].sort((a, b) => a - b)
-    }
-    currentGroupId.value = id
-    ElMessage.success(`用户组 #${id} 已加入列表`)
-  } catch {
-    // 取消
-  }
-}
-
 // --------------------------------------------------------------------------
-// 右侧：源数据权限（可见/排除范围，面板 + 选择器；落库走 groupSourceScope）
+// 右侧：源数据权限（可见/排除范围，内嵌双栏编辑器；落库走 groupSourceScope 一次保存）
 // --------------------------------------------------------------------------
 const activeRightTab = ref<'accept' | 'reject' | 'ruleList'>('accept')
 const emptyGrant = (): SourceGrant => ({ dirIds: [], sourceIds: [] })
 const scope = ref<GroupSourceScope>({ accept: emptyGrant(), reject: emptyGrant() })
 const scopeLoading = ref(false)
 const savingPermissions = ref(false)
-const pickerVisible = ref(false)
-const pickerKind = ref<'accept' | 'reject'>('accept')
 
-// 面板/选择器只在 accept|reject 下用；ruleList tab 不渲染面板。
+// 编辑器只在 accept|reject 下用；ruleList tab 不渲染编辑器。
 const currentKind = computed<'accept' | 'reject'>(() => (activeRightTab.value === 'reject' ? 'reject' : 'accept'))
+const currentGrant = computed<SourceGrant>(() => (currentKind.value === 'accept' ? scope.value.accept : scope.value.reject))
 
 async function loadScope(groupId: number | null) {
   if (!groupId) {
     scope.value = { accept: emptyGrant(), reject: emptyGrant() }
+    scopeDirty.value = false
     return
   }
   scopeLoading.value = true
   try {
     scope.value = await getGroupSourceScope(groupId)
+    scopeDirty.value = false
   } catch (e) {
     ElMessage.error(`加载源数据权限失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
@@ -240,17 +205,9 @@ async function loadScope(groupId: number | null) {
   }
 }
 
-function onEditScope(kind: 'accept' | 'reject') {
-  pickerKind.value = kind
-  pickerVisible.value = true
-}
-
-function onPickerConfirm(grant: SourceGrant) {
-  scope.value = { ...scope.value, [pickerKind.value]: grant }
-}
-
 function onUpdateScopeGrant(kind: 'accept' | 'reject', grant: SourceGrant) {
   scope.value = { ...scope.value, [kind]: grant }
+  scopeDirty.value = true
 }
 
 async function onSaveScope() {
@@ -260,22 +217,56 @@ async function onSaveScope() {
   }
   const a = scope.value.accept
   const r = scope.value.reject
-  const summary =
+
+  // P1-1: 冲突预检（可见与排除是否有重叠的目录或源）
+  const rDirSet = new Set(r.dirIds)
+  const rSrcSet = new Set(r.sourceIds)
+  const overlapDirs = a.dirIds.filter((d) => rDirSet.has(d))
+  const overlapSrcs = a.sourceIds.filter((s) => rSrcSet.has(s))
+  const hasConflict = overlapDirs.length > 0 || overlapSrcs.length > 0
+
+  const conflictWarnings: string[] = []
+  if (overlapDirs.length > 0) {
+    conflictWarnings.push(`⚠️ 目录冲突：目录 [${overlapDirs.join(', ')}] 同时存在于可见与排除范围中（排除规则将优先覆盖）。`)
+  }
+  if (overlapSrcs.length > 0) {
+    conflictWarnings.push(`⚠️ 单源冲突：数据源 [${overlapSrcs.join(', ')}] 同时存在于可见与排除范围中（排除规则将优先覆盖）。`)
+  }
+
+  // P1-2: 空可见范围的高危确认
+  const isEmptyAccept = a.dirIds.length === 0 && a.sourceIds.length === 0
+  const emptyWarning = isEmptyAccept
+    ? '⚠️ 警告：当前未配置任何可见范围，保存后该组所有用户将无法查看任何数据源！\n\n'
+    : ''
+
+  let confirmMessage = emptyWarning +
     `可见：整目录 ${a.dirIds.length} 个 · 单源 ${a.sourceIds.length} 个\n` +
     `排除：整目录 ${r.dirIds.length} 个 · 单源 ${r.sourceIds.length} 个`
+  if (conflictWarnings.length > 0) {
+    confirmMessage += `\n\n` + conflictWarnings.join('\n')
+  }
+
+  const dialogType = (isEmptyAccept || hasConflict) ? 'warning' : 'info'
+
   try {
-    await ElMessageBox.confirm(summary, '确认保存数据权限', {
+    await ElMessageBox.confirm(confirmMessage, '确认保存数据权限', {
       confirmButtonText: '确认保存',
       cancelButtonText: '返回修改',
-      type: 'info',
+      type: dialogType,
     })
   } catch {
     return
   }
   savingPermissions.value = true
   try {
-    await saveGroupSourceScope(currentGroupId.value, scope.value)
-    ElMessage.success(`保存成功，用户组 #${currentGroupId.value} 源权限已生效`)
+    const saved = await saveGroupSourceScope(currentGroupId.value, scope.value)
+    scopeDirty.value = false
+    // 展开后的目录数只有后端知道（STRUCT 里存的是自身+全部后代），回报给用户免得以为只生效了一个目录
+    const seg = (key: 'accept' | 'reject') => {
+      const s = saved?.[key]
+      return s ? `整目录 ${s.dirIds} 个（展开 ${s.expandedCategoryIds} 个目录）· 单源 ${s.sourceIds} 个` : '未改动'
+    }
+    ElMessage.success(`保存成功，用户组 #${currentGroupId.value} 源权限已生效：可见 ${seg('accept')}；排除 ${seg('reject')}`)
     await loadScope(currentGroupId.value)
     void load()
   } catch (e) {
@@ -364,6 +355,9 @@ function openEdit(row: GroupResRule) {
 function onSaved() {
   page.value = 1
   void load()
+  if (currentGroupId.value) {
+    void loadScope(currentGroupId.value)
+  }
 }
 
 // 详情
@@ -406,14 +400,19 @@ async function remove(row: GroupResRule) {
   } finally {
     deleting.value = 0
     void load()
+    if (currentGroupId.value) {
+      void loadScope(currentGroupId.value)
+    }
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   void loadMeta()
-  void load()
-  void fetchGroups()
-  void loadScope(currentGroupId.value)
+  await fetchGroups()
+  runQuery()
+  if (currentGroupId.value) {
+    void loadScope(currentGroupId.value)
+  }
 })
 </script>
 
@@ -426,9 +425,6 @@ onMounted(() => {
         <div class="dp-card-header">
           <div class="dp-card-title">
             <span>用户组</span>
-            <el-tooltip content="添加用户组" placement="top">
-              <el-button link type="primary" :icon="Plus" class="dp-add-group-btn" @click="promptAddGroup" />
-            </el-tooltip>
           </div>
           <div class="dp-card-search">
             <el-input
@@ -447,6 +443,7 @@ onMounted(() => {
             :data="pagedGroups"
             size="small"
             highlight-current-row
+            :current-row-key="currentGroupId ?? undefined"
             row-key="groupId"
             class="dp-group-table"
             @row-click="onSelectGroup"
@@ -523,6 +520,10 @@ onMounted(() => {
             <span v-if="currentGroup" class="dp-current-group-badge">
               当前用户组：<strong>{{ currentGroup.name }}</strong> (ID: {{ currentGroup.groupId }})
             </span>
+            <span class="dp-scope-sum" data-testid="group-res-scope-sum">
+              {{ currentKind === 'accept' ? '可见' : '排除' }}已选：整目录 {{ currentGrant.dirIds.length }} · 单源 {{ currentGrant.sourceIds.length }}
+              <span v-if="scopeDirty" class="dp-scope-dirty-badge">（未保存）</span>
+            </span>
             <div class="dp-scope-actions">
               <el-button v-if="canWrite" size="small" :icon="Refresh" @click="loadScope(currentGroupId)">重置</el-button>
               <el-button
@@ -538,11 +539,13 @@ onMounted(() => {
               </el-button>
             </div>
           </div>
-          <SourceScopePanel
+          <SourceScopeEditor
+            class="dp-scope-editor"
             :grant="currentKind === 'accept' ? scope.accept : scope.reject"
             :kind="currentKind"
-            @edit="onEditScope(currentKind)"
-            @update="(g: SourceGrant) => onUpdateScopeGrant(currentKind, g)"
+            :disabled="!canWrite"
+            data-testid="group-res-scope-editor"
+            @update:grant="(g: SourceGrant) => onUpdateScopeGrant(currentKind, g)"
           />
         </div>
 
@@ -639,12 +642,6 @@ onMounted(() => {
     <!-- 弹窗与抽屉 -->
     <GroupResEditDialog ref="dialogRef" :meta="meta" @saved="onSaved" />
     <GroupResDetailDrawer v-model="detailVisible" :rule="detailRule" :meta="meta" />
-    <SourceScopePicker
-      v-model="pickerVisible"
-      :kind="pickerKind"
-      :initial="pickerKind === 'accept' ? scope.accept : scope.reject"
-      @confirm="onPickerConfirm"
-    />
   </div>
 </template>
 
@@ -696,10 +693,6 @@ onMounted(() => {
   font-size: 15px;
   font-weight: 600;
   color: #0f172a;
-}
-
-.dp-add-group-btn {
-  padding: 2px 4px;
 }
 
 .dp-card-search {
@@ -914,6 +907,12 @@ onMounted(() => {
   gap: 12px;
 }
 
+/* 内嵌双栏编辑器占满 tab 剩余高度（两栏各自滚动，页面不出现第二层滚动条） */
+.dp-scope-editor {
+  flex: 1;
+  min-height: 360px;
+}
+
 .dp-current-group-badge {
   font-size: 12px;
   color: #475569;
@@ -921,6 +920,18 @@ onMounted(() => {
   padding: 4px 10px;
   border-radius: 4px;
   border: 1px solid #e2e8f0;
+}
+
+/* 当前 tab 的选择计数（对齐原型顶部摘要） */
+.dp-scope-sum {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.dp-scope-dirty-badge {
+  color: #ea580c;
+  font-weight: 600;
+  margin-left: 4px;
 }
 
 .dp-current-group-badge strong {

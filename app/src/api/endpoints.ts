@@ -1,4 +1,4 @@
-// 端点契约清单 —— 采集配置中心 API 的单一事实源。
+﻿// 端点契约清单 —— 采集配置中心 API 的单一事实源。
 // 依据《数据中心现有功能逆向工程_2026-06-17.md》：线上 Data Center 共提取 142 个 /v1 端点。
 // 本清单收录已考证端点（path = 真实 /v1 路径，不含前缀），按 14 个前缀域组织；
 // 每域注释「逆向统计目标数 / 本清单收录数」，未逐一还原的为登录态待补，真接入时按同名 path 规范补齐。
@@ -14,7 +14,7 @@ export interface EndpointSpec {
 }
 
 export const ENDPOINTS: EndpointSpec[] = [
-  /* ── source 源（目标 36 / 收录 36） ── */
+  /* ── source 源（目标 36 / 收录 37，含 2026-10-30 新增 categorySources） ── */
   { path: 'source/sourcePaged', desc: '源分页列表', impl: true, live: true },
   { path: 'source/sourceDetail', desc: '源详情', impl: true, live: true },
   { path: 'source/sourceSame', desc: '同站源下拉（数据表页选源用）', impl: true, live: true },
@@ -105,8 +105,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeToSuccess', desc: '改为成功状态', danger: true },
   { path: 'source/saveJsonQuery', desc: '保存时 Json 查询' },
   { path: 'source/monitorQuery', desc: '源监控查询' },
+  // 2026-10-30 数据权限范围编辑器：某目录下的源一次给全（供「全选/清空本目录」和每目录已选计数）。
+  // 权限与口径完全复用 sourcePaged（同一条 buildSourceExample），allSub=true 时由后端展开后代目录，
+  // 前端不自己拼 categorys 串；total>list.length 说明被 limit 截断（目录太大，应改用整目录授权）。
+  { path: 'source/categorySources', desc: '目录下源列表（GET categoryId/allSub/keyword/limit，limit 默认 2000、上限 5000；Paged<Source>）', live: true },
 
-  /* ── category 分类（目标 6 / 收录 6） ── */
+  /* ── category 分类（目标 6 / 收录 7） ── */
   // 源选择器沿用旧平台 categoryPaged 根节点读取；子节点仍需按 parentId 懒加载，暂不把 categoryTree 误标为完整 live。
   { path: 'category/categoryPaged', desc: '分类分页', live: true },
   // 2026-09-18 接上：新建/编辑网站的分类选择器靠它做跨层级模糊搜索——懒加载树的本地
@@ -123,6 +127,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'category/listSources', desc: '视图目录的源行和来源组（GET categoryId；返回 { sourceIds, sourceGroupIds }，sourceIds 含来源组展开的成员，不含子目录）' },
   { path: 'category/addSources', desc: '视图目录加入源 / 来源组（POST { categoryId, sourceIds[], sourceGroupIds[] }，增量，重复跳过；来源组会把当前成员展开成源行；返回新增源数）', danger: true },
   { path: 'category/delSources', desc: '视图目录移出源 / 来源组（POST 同 addSources；删来源组连当前成员的源行一起删；同时传源和来源组只删一部分，前端分开调）', danger: true },
+  // 2026-10-30 数据权限范围选择器：原来按层调 categoryPaged 拼树（顶层几十个目录=几十次请求），
+  // 一次给全量目录 + 每目录源数（直属/含后代）后打开只需一次请求。口径与 categoryPaged 一致：
+  // groupId>90000 按 sys_group_res 映射的 categoryIds 过滤（含 -999 视为不限），其余按自身 GROUP_ID。
+  { path: 'category/scopeTree', desc: '全量目录 + 每目录源数（GET 无参；扁平节点 { id, name, parentId, level, directCount, subtreeCount, hasChildren }，按当前账号目录权限过滤）', live: true },
 
   /* ── config 配置 + 实体 + 参数（目标 35 / 收录 27） ── */
   { path: 'config/configPaged', desc: '配置分页', impl: true, live: true },
@@ -171,6 +179,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/entryTypePagedView', desc: '实体表分页', impl: true, live: true },
   { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组', live: true },
   { path: 'config/entryType', desc: '实体表详情', impl: true, live: true },
+  { path: 'config/entryType/generateAiComment', desc: '单表生成/刷新AI综合描述', danger: true, impl: true, live: true },
+  { path: 'config/entryType/generateAiCommont', desc: '单表生成/刷新AI综合描述(兼容别名)', danger: true, impl: true, live: true },
+  { path: 'config/entryType/batchGenerateAiComment', desc: '批量生成AI综合描述 → POST /api/v1/config/entryType/batchGenerateAiComment?skipExisting=（**body 是裸 ID 数组** List<Integer>、不套字段；skipExisting 走 query；空数组=全库重跑）', danger: true, impl: true, live: true },
+  { path: 'config/entryType/batchGenerateAiCommont', desc: '批量生成AI综合描述(兼容别名)', danger: true, impl: true, live: true },
   { path: 'config/saveEntryType', desc: '⚠️ mock 时代占位，旧仓库无此路径，非真实契约端点，仅 mock/index.ts 引用', danger: true, impl: true },
   { path: 'config/entryTypeAddAll', desc: '新建实体表', danger: true, impl: true, live: true },
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },
@@ -593,6 +605,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/node-prompts/selection', desc: '读取节点配置选用的提示词', live: true },
   { path: 'flow/node-prompts/selection/save', desc: '保存节点配置选用的提示词', live: true, danger: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
+  { path: 'flow/flowTemplateGroups', desc: '模板分组、节点顺序与全局流程数量，包含未归类', live: true },
+  { path: 'flow/assignTemplate', desc: '批量归集流程到模板，仅修改归属', live: true, danger: true },
   { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）；update 分支不校验 state=D，前端保存后回查详情兜底（0929 F8）', danger: true, live: true },
   { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D；有源挂载即拒绝，前端先换绑/解绑再删，0929 F1）', danger: true, live: true },
   { path: 'flow/changeFlowEnable', desc: '批量启停流程（GET ids 逗号串 + enable 0=启用/1=禁用，置 cs_flow.IS_DELETE，排除 state=D）——0929 F6 重新注册，流程中心行内启停', live: true },
@@ -772,10 +786,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },
   { path: 'site/queueTaskPaged', desc: '队列任务明细分页', impl: true },
 
-  /* ── group-res 组级数据权限（收录 7 / SysGroupResController，系统设置 → 数据权限设置） ──
-     契约来源：接口文档-组数据权限.md（2026-10-19）。只有 list 返回 Paged（code 数字 0/-1），
-     其余 6 条返回 RspResult（code 字符串 "0"/"-1"）。7 条全部要求 admin 角色，非 admin 后端回 403。
-     ⚠️ 7 条均未经真实联调（需 admin 会话），live 按契约文档标上；首次实测后请回写本注释。 */
+  /* ── group-res 组级数据权限（收录 9 / SysGroupResController，系统设置 → 数据权限设置） ──
+     契约来源：接口文档-组数据权限.md（2026-10-19）+ 接口文档-biz_type与组数据权限.md §2.11（2026-10-30）。
+     只有 list 返回 Paged（code 数字 0/-1），其余返回 RspResult（code 字符串 "0"/"-1"）。
+     全部要求 admin 角色，非 admin 后端回 403。
+     ⚠️ 均未经真实联调（需 admin 会话），live 按契约文档标上；首次实测后请回写本注释。 */
   { path: 'group-res/groups', desc: '已授权数据权限组候选（既有 mock 入口）', impl: true },
   { path: 'group-res/list', desc: '数据权限规则分页（groupId 必填且 >90000；resType/action 可选）', impl: true, live: true },
   { path: 'group-res/detail', desc: '数据权限规则详情', impl: true, live: true },
@@ -784,6 +799,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'group-res/add', desc: '新增数据权限规则（admin；成功即清该组权限缓存）', danger: true, impl: true, live: true },
   { path: 'group-res/modify', desc: '修改数据权限规则（admin；body 必须带 id）', danger: true, impl: true, live: true },
   { path: 'group-res/delete', desc: '删除数据权限规则（admin；ids 在 query，软删 isDelete=1）', danger: true, impl: true, live: true },
+  // 2026-10-30「源数据权限」范围编辑器：读一次拿 accept/reject 两方向的选择结果，写一次一个事务重建
+  // SOURCE 的 4 个槽（可见/排除 × 整目录/单源），替代前端逐条 add/modify/delete。ID 全程按字符串传，
+  // SOURCE_ID 是 bigint，走 JSON 数字会在 JS 侧丢精度。
+  { path: 'group-res/source-scope', desc: '源数据权限范围读取（GET groupId；返回 { accept, reject }，各含 dirIds/sourceIds）', live: true },
+  { path: 'group-res/modify-source-scope', desc: '源数据权限范围保存（POST JSON body { groupId, accept, reject }；整目录由后端展开成自身+全部后代，成功即清该组权限缓存）', danger: true, live: true },
 
   /* ── sys-user 用户管理（收录 6 / SysUserAdminController，系统设置 → 用户管理） ──
      表 SYS_USER（10 列，本仓无它的 DDL，口径取自 SysUserMapper.xml 的 resultMap）+ SYS_USER_2_ROLE + SYS_ROLE。

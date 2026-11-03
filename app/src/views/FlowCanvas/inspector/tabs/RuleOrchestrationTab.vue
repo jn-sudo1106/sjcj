@@ -60,6 +60,7 @@ import AlertConfigPanel from '../AlertConfigPanel.vue'
 // 数据监控节点不出现「上传 Excel」样本文件入口（0917 产品口径，画布和监控视图两处一致）；
 // 规则处理节点照旧保留——那里的 Excel 是给"按样本生成规则脚本"用的。
 const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
+const props = defineProps<{ templateDefaults?: boolean }>()
 const router = useRouter()
 const route = useRoute()
 // 源画布的 flow.flowId 是源视角工作区键（可能等于 sourceId），不能直接作为后端流程 ID。
@@ -1374,7 +1375,7 @@ async function onSiteScriptSaved(version: PublishedScript, configId: string, que
     ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存编排配置重试`)
   }
 }
-const hasSiteScriptMode = computed(() => !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value)
+const hasSiteScriptMode = computed(() => !props.templateDefaults && !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value)
 const orchestrationMode = ref<'config' | 'ai'>('ai')
 function onOrchestrationTabKeydown(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -1756,7 +1757,7 @@ function onTestScript() {
        OCR 抓取节点只显「是否保存为文件」+「指定输出文件名」（2026-10-08 恢复/新增），其余编排区块仍不出现。 -->
   <div v-if="!isOcr && !isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
-    <span v-if="!isScriptless" class="ni-section-actions">
+    <span v-if="!props.templateDefaults && !isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     </span>
   </div>
@@ -2009,7 +2010,7 @@ function onTestScript() {
         </el-select>
       </div>
     </div>
-    <div class="ocr-actions">
+    <div v-if="!props.templateDefaults" class="ocr-actions">
       <button
         class="rc-btn primary"
         type="button"
@@ -2113,7 +2114,16 @@ function onTestScript() {
       </label>
     </span>
   </div>
-  <div v-if="isRule || isCaptureStyle" class="rc-generation-actions" data-testid="rule-generation-actions">
+  <div v-if="props.templateDefaults && !isScriptless && (isRule || isCaptureStyle)" class="rc-field">
+    <label>脚本 / 抓取配置</label>
+    <textarea
+      class="rc-input rc-textarea"
+      aria-label="模板脚本或抓取配置"
+      :value="orchCfg.script ?? ''"
+      @input="onScriptChange(($event.target as HTMLTextAreaElement).value)"
+    />
+  </div>
+  <div v-if="!props.templateDefaults && (isRule || isCaptureStyle)" class="rc-generation-actions" data-testid="rule-generation-actions">
     <!-- 0929：上传 Excel 与「测试脚本」是规则/监控节点的能力，采集节点只保留「生成配置」（S3-3）。
          1005：样本槽位按节点派生——真规则处理收 Excel，PDF 抓取收 PDF，两者白名单不交叉。 -->
     <input
@@ -2204,7 +2214,7 @@ function onTestScript() {
     </div>
     <pre ref="mainThinkingRef" class="rc-main-stream-text">{{ thinkingText.trim() || (generating ? '等待模型返回思考过程…' : '暂无思考过程') }}</pre>
   </div>
-  <div v-if="isRule && (orchCfg.script?.trim() || generationState === 'content' || generationState === 'done')" class="rc-main-result" data-testid="main-stream-result">
+  <div v-if="!props.templateDefaults && isRule && (orchCfg.script?.trim() || generationState === 'content' || generationState === 'done')" class="rc-main-result" data-testid="main-stream-result">
     <div class="rc-main-result-head">
       <span>生成结果</span>
       <button
@@ -2241,7 +2251,7 @@ function onTestScript() {
 
   <!-- 动作链摘要 / 切换已有配置都是「抓取配置 XML」这套东西的配套件，纯配置节点整块不出现（0921 口径）；
        OCR 抓取节点同样不出现（2026-09-22 口径：编排配置整页空白）。 -->
-  <template v-if="isCaptureStyle && !isRule">
+  <template v-if="!props.templateDefaults && isCaptureStyle && !isRule">
     <!-- 配置路径（0804 S3-3 措辞口径）：采集节点生成后展示 XML 落盘路径，未生成时给明确占位 -->
     <div class="rc-field">
       <label>配置路径</label>
@@ -2293,7 +2303,7 @@ function onTestScript() {
     />
   </div>
   <RuleWorkbenchDialog
-    v-if="!isOcr && !isAudioText && !isVideoAudio"
+    v-if="!props.templateDefaults && !isOcr && !isAudioText && !isVideoAudio"
     v-model:open="workbenchDialogOpen"
     :title="promptPreviewOpen ? promptPreviewTitle : workbenchTitle"
     :prompt-preview-only="promptPreviewOpen"

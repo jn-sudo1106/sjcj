@@ -182,9 +182,10 @@ export function useStepWrite() {
    * 会被当成「删除根节点」拒绝）。API 层 `rootConfigUpdate` 交 `{ itemConfig, flowId, isRoot: 1, configId }`
    * 最小集 + **输出表有值时附带 outEntry**（2026-09-29 与旧平台 handleSaveRoot 对齐；outEntry 不在
    * validateRootUpdate 拒绝清单里，见 api/index.ts），
-   * 其余字段保持库中值（selective update）。成功后同步快照 configId/outputTable，避免下次自动保存重复写。
+   * 出参列变化时同样附带 outContext（后端允许），其余字段保持库中值（selective update）。
+   * 成功后同步快照 configId/outputTable/outColumns，避免下次自动保存重复写。
    */
-  async function updateRootConfig(nodeId: string, configId: string, outputTable?: string): Promise<void> {
+  async function updateRootConfig(nodeId: string, configId: string, outputTable?: string, outColumns?: string[]): Promise<void> {
     const snapshot = sourceStore.stepSnapshots[nodeId]
     // 输出表有值才带 outEntry；空值（采集入口无输出表/null）不带——selective update 对缺键
     // 保持库中值，不会把已落库的输出表清掉，也不会拿空串去撞后端的非空校验。
@@ -195,15 +196,20 @@ export function useStepWrite() {
     const ack = await version.withDraft(rootFlowId, (ref) => {
       // 参数按需拼装：outEntry 只在有值（或后面还要接版本信息）时才占位，避免拖 undefined 尾参
       const args: Parameters<typeof itemApi.rootConfigUpdate> = [nodeId, configId, rootFlowId]
-      if (carryOutEntry || ref) args.push(carryOutEntry ? outputTable : undefined)
-      if (ref) args.push(ref)
+      if (carryOutEntry || ref || outColumns !== undefined) args.push(carryOutEntry ? outputTable : undefined)
+      if (ref || outColumns !== undefined) args.push(ref ?? undefined)
+      if (outColumns !== undefined) args.push(outColumns)
       return itemApi.rootConfigUpdate(...args)
     })
     assertOk(ack, '修改流程入口配置失败')
     // 快照同步为画布值（输出表空也同步成 null）：差异已被本次提交消费，避免下一轮自动保存
     // 因同一差异重复调用；空输出表后端不落库的差异留给下次加载消解。
     sourceStore.rememberSteps([
-      { ...snapshot, configId, ...(outputTable !== undefined ? { outputTable: outputTable || null } : {}) },
+      {
+        ...snapshot, configId,
+        ...(outputTable !== undefined ? { outputTable: outputTable || null } : {}),
+        ...(outColumns !== undefined ? { outColumns: [...outColumns] } : {}),
+      },
     ], 'merge')
   }
 
@@ -441,6 +447,7 @@ export function useStepWrite() {
       // 后端 validateRootUpdate 拒：outputTable/entryTypeId/cond 传非空即报错）。
       // 0929：**输出表（outEntry）变了同样要写**——入口节点的输出表是画布可改的步骤字段
       // （表配置里改/补），只换配置才写的话，改完自动保存显示成功、库里 outEntry 纹丝不动。
+      // 出参列也属于步骤：仅修改勾选时必须通过 ROOT 最小集写入，否则刷新后选择丢失。
       if (isRootStepStepId(id)) {
         const cfg = flow.configs[id]
         const snapshot = sourceStore.stepSnapshots[id]
@@ -448,8 +455,10 @@ export function useStepWrite() {
           const outTable = effectiveOutputTable(cfg)
           const outChanged = (snapshot.outputTable ?? null) !== (outTable || null)
           const configChanged = snapshot.configId !== cfg.configId
-          if (configChanged || outChanged) {
-            await updateRootConfig(id, cfg.configId, outChanged ? outTable : undefined)
+          const outColumns = cfg.taskCfg?.outColumns ?? snapshot.outColumns ?? []
+          const columnsChanged = outColumns.join(',') !== (snapshot.outColumns ?? []).join(',')
+          if (configChanged || outChanged || columnsChanged) {
+            await updateRootConfig(id, cfg.configId, outChanged ? outTable : undefined, columnsChanged ? outColumns : undefined)
             updated += 1
           }
         }

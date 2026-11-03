@@ -22,6 +22,7 @@ import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 
+const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
 const { tables, ensureTableFields } = useNodeInspectorAssets()
 
@@ -246,9 +247,7 @@ const outputTableFields = computed(() => nodeTableId.value
   ? fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output)
   : [])
 const selectedOutputFieldProps = computed<string[]>(() => {
-  const all = outputTableFields.value.map((f) => f.prop)
   const saved = cfg.value?.taskCfg?.outColumns ?? []
-  if (!saved.length) return all
   const propByToken = new Map<string, string>()
   for (const f of outputTableFields.value) {
     propByToken.set(f.prop, f.prop)
@@ -272,6 +271,9 @@ function toggleOutputField(prop: string) {
 }
 function selectAllOutputFields() {
   writeOutputFields(outputTableFields.value.map((f) => f.prop))
+}
+function clearOutputFields() {
+  writeOutputFields([])
 }
 
 function selectPresetTable(tableId: string) {
@@ -406,8 +408,8 @@ async function onTableSaved(tableId: string) {
         >
           <el-option v-for="t in outputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
         </el-select>
-        <button class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
-        <button class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
+        <button v-if="!props.templateDefaults" class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
+        <button v-if="!props.templateDefaults" class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
       </div>
       <div v-if="availablePresets.length" class="rc-preset-tables" data-testid="table-presets">
         <span class="rc-preset-label">常用默认表：</span>
@@ -424,13 +426,13 @@ async function onTableSaved(tableId: string) {
         </button>
       </div>
     </div>
-    <!-- 输出字段选择（2026-10-10 恢复）= 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。
-         没有「清空」：按旧平台口径空就是全部，清空等于全选。 -->
+    <!-- 输出字段选择 = 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。 -->
     <div v-if="outputTableFields.length" class="rc-field">
       <div class="rc-field-header">
         <label>输出字段选择（已选中 {{ selectedOutputFieldProps.length }} / {{ outputTableFields.length }} 个字段，不选默认全部字段）</label>
         <div class="rc-field-actions">
           <button type="button" class="rc-text-btn" data-testid="select-all-fields" @click="selectAllOutputFields">全选</button>
+          <button type="button" class="rc-text-btn" data-testid="clear-all-fields" @click="clearOutputFields">清空</button>
         </div>
       </div>
       <div class="rc-tag-row" data-testid="output-fields-list">
@@ -494,7 +496,7 @@ async function onTableSaved(tableId: string) {
       <div class="rc-help">输出进入实体表/原始文件/规则 Trace/邮件审计，经 run_id 供 Skill Run 追溯。</div>
     </template>
 
-    <TableEditDialog v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
+    <TableEditDialog v-if="!props.templateDefaults" v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
   </template>
 </template>
 

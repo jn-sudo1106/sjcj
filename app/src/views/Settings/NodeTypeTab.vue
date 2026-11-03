@@ -85,7 +85,7 @@ const DETAIL_FIELDS: { key: keyof NodeType; label: string }[] = [
   { key: 'sourceType', label: '类型 ID' },
   { key: 'typeName', label: '类型名称' },
   { key: 'typeGroup', label: '分组类型' },
-  { key: 'downType', label: '配置队列' },
+  { key: 'downType', label: '配置队列（旧）' },
   { key: 'topic', label: '默认消息队列' },
   { key: 'seq', label: '排序' },
   { key: 'procType', label: '处理类型' },
@@ -133,11 +133,15 @@ const form = reactive({
   notes: '', procType: '', params: '',
 })
 
+const TOPIC_HINT = '画布新建这类节点时，用它作为节点队列的初始值；节点运行用节点自己配置的队列，不读这里'
+const DOWN_TYPE_HINT = '旧系统「发配置」用的队列，当前不参与运行'
+
 function openCreate() {
   void loadGroups()
   editing.value = null
   Object.assign(form, {
-    sourceType: '', typeName: '', typeGroup: '', downType: 'source-config', topic: '', seq: null,
+    // 1030 会议：配置队列只给旧系统「发配置」用（bee-top ConfigSender / ConfigManager），运行不读它，新建不再预填
+    sourceType: '', typeName: '', typeGroup: '', downType: '', topic: '', seq: null,
     notes: '', procType: '', params: '',
   })
   editVisible.value = true
@@ -248,8 +252,8 @@ async function save() {
             <th style="width: 90px">类型 ID</th>
             <th style="width: 160px">类型名称</th>
             <th style="width: 110px">分组类型</th>
-            <th style="width: 180px">配置队列</th>
-            <th style="width: 160px">默认消息队列</th>
+            <th style="width: 180px" :title="DOWN_TYPE_HINT">配置队列（旧）</th>
+            <th style="width: 160px" :title="TOPIC_HINT">默认消息队列</th>
             <th style="width: 70px">排序</th>
             <th>备注</th>
             <th style="width: 220px">操作</th>
@@ -308,11 +312,13 @@ async function save() {
             <el-option v-for="group in groupOptions" :key="group" :label="group" :value="group" />
           </el-select>
         </el-form-item>
-        <el-form-item label="配置队列">
-          <el-input v-model="form.downType" placeholder="如：source-config" />
-        </el-form-item>
         <el-form-item label="默认消息队列">
           <el-input v-model="form.topic" placeholder="可不填" />
+          <div class="nt-field-hint">{{ TOPIC_HINT }}</div>
+        </el-form-item>
+        <el-form-item label="配置队列（旧）">
+          <el-input v-model="form.downType" placeholder="一般不用填" />
+          <div class="nt-field-hint">{{ DOWN_TYPE_HINT }}</div>
         </el-form-item>
         <!-- 「备注」在「排序」之前 —— 顺序照抄旧 `SOURCE_TYPE.base` 的列序 -->
         <el-form-item label="备注">
@@ -343,6 +349,7 @@ async function save() {
 <style scoped>
 .nt-main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .nt-spacer { flex: 1; }
+.nt-field-hint { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--rc-text-2); }
 .nt-table { flex: 1; min-height: 0; overflow: auto; }
 .nt-ellipsis { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nt-empty { text-align: center; color: var(--rc-faint); padding: 32px 0; }

@@ -37,11 +37,15 @@ const title = computed(() => (recordId.value == null ? '新增' : '编辑'))
 /** 没有 UI 入口、但编辑保存时要原样带回的列（见文件头偏差 2） */
 let passthrough: Pick<MatchTableConfig, 'tableId' | 'type' | 'delFlag'> = {}
 
-/** 打开弹窗：传 record = 编辑（带 id），不传 = 新增（落各字段初始值） */
-function open(record?: MatchTableConfig | null) {
+/**
+ * 打开弹窗：传 record = 编辑（带 id），不传 = 新增。
+ * `preset` 只在新增时用 —— 左表右明细后新增是从某张表发起的，把表名与表 ID 带进来，
+ * 落库的 tableId 让这条规则以后能按 ID 认到这张表（旧版新增的行 tableId 一直是空）。
+ */
+function open(record?: MatchTableConfig | null, preset?: { tableName?: string; tableId?: number }) {
   recordId.value = record?.id == null ? undefined : Number(record.id)
-  passthrough = { tableId: record?.tableId, type: record?.type, delFlag: record?.delFlag }
-  form.tableName = record?.tableName == null ? '' : String(record.tableName)
+  passthrough = { tableId: record?.tableId ?? preset?.tableId, type: record?.type, delFlag: record?.delFlag }
+  form.tableName = record?.tableName == null ? preset?.tableName ?? '' : String(record.tableName)
   form.selectionType = record?.selectionType == null ? 'text_selection' : String(record.selectionType)
   form.rule = record?.rule == null ? '' : String(record.rule)
   form.status = record?.status == null ? '0' : String(record.status)

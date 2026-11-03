@@ -36,8 +36,8 @@ function mockApis() {
   ])
   spy(syncApi, 'clients', {
     list: [
-      { id: 3, customerId: 7, clientName: '客户端A', timingSync: 'off', fileSync: 'off', realtimeSync: 'off' },
-      { id: 4, customerId: 7, clientName: '客户端B', timingSync: 'off', fileSync: 'off', realtimeSync: 'off' },
+      { id: 3, customerId: 7, clientName: '客户端A', timingSync: 'off', fileSync: 'off' },
+      { id: 4, customerId: 7, clientName: '客户端B', timingSync: 'off', fileSync: 'off' },
     ],
     total: 2,
   })

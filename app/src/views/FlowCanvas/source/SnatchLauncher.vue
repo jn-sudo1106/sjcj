@@ -8,6 +8,7 @@ import { hasLoadParams, normalizeLoadParams } from './paramNormalize'
 const paramModalRef = ref<InstanceType<typeof SourceParamModal>>()
 // 真实发送成功后触发（弹框确认后 / 直发后都会调用），用于衔接流程视图的运行态模拟。
 let afterSend: (() => void) | undefined
+let requestedFlowId: string | undefined
 // 调用方传了 onSuccess 时，它自己的提示（如「已发起抓取 RUN-xxx」）比弹窗通用的「发送成功…」
 // 更具体，弹窗那条就该让路——不然一次发送弹两条提示（0901 生产实测反馈的真体验问题）。
 const suppressModalToast = ref(false)
@@ -21,12 +22,14 @@ async function sendWithParamsCallback(
   skip: number,
   queue: string,
 ) {
-  const res = await sourceApi.sendSnatchWithParam({ ids, param, all: all as 0 | 1, include, skip, queue })
+  const res = await sourceApi.sendSnatchWithParam({ ids, param, all: all as 0 | 1, include, skip, queue, flowId: requestedFlowId })
   afterSend?.()
   return res
 }
 
 interface LaunchOptions {
+  /** 本次运行的流程；不传时使用源的默认流程。 */
+  flowId?: string
   /** 节点引用的配置 ID；传入时仅展示/发送该配置的参数，其余忽略。 */
   configId?: string
   queue?: string
@@ -41,6 +44,7 @@ async function launch(
   opts: LaunchOptions = {},
 ): Promise<Awaited<ReturnType<typeof sourceApi.sendSnatchWithParam>> | undefined> {
   afterSend = opts.onSuccess
+  requestedFlowId = opts.flowId
   suppressModalToast.value = !!opts.onSuccess
   try {
     const raw = await sourceApi.loadParams([sourceId])
@@ -57,6 +61,7 @@ async function launch(
       include: [],
       skip: 0,
       queue: opts.queue,
+      flowId: opts.flowId,
     })
     afterSend?.()
     return res

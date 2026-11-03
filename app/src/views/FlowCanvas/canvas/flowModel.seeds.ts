@@ -1357,7 +1357,7 @@ export function applyStepDetails(
   const rebuilt: string[] = []
   orderSourceSteps(steps).forEach((step, i) => {
     const current = configs[step.stepId]
-    if (!current) return
+    if (!current || (current.templateDefaults && !step.configId)) return
     const shouldBeLogin = !!step.isLoginConfig
     const isLogin = collectorCapabilityOf(current)?.kind === 'login'
     const shouldBeDataValidation = step.configType === '800'

@@ -8,7 +8,7 @@ import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
-import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
+import { dataApi, flowCenterApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -2382,6 +2382,62 @@ describe('ResultView · 孤立首节点（没有后继也没有上游）', () =>
     expect(confirm).not.toHaveBeenCalled()
     // 走到了 SnatchLauncher：它的第一步就是探参数
     expect(loadParams).toHaveBeenCalled()
+  })
+
+  it.each(['主按钮', '节点右键'])('切到辅助流程后，数据页%s发起抓取传当前流程 ID', async (entry) => {
+    const wrapper = await mountLone()
+    useFlowStore().patchSourceCtx({ flowId: '21000040', primaryFlowId: '14009350' })
+    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true })
+    try {
+      if (entry === '节点右键') {
+        wrapper.findComponent(ProcessNodeRail).vm.$emit('node-menu', { nodeId: 'only', x: 100, y: 100 })
+        await flushPromises()
+        await wrapper.get('[data-testid="rail-menu-send-fetch"]').trigger('click')
+      } else {
+        await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+      }
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ flowId: '21000040' }))
+    } finally { wrapper.unmount() }
+  })
+})
+
+describe('ResultView · 辅助流程的后续任务', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it.each(['勾选', '全部'])('%s发后续使用辅助流程的节点配置和步骤 ID', async (mode) => {
+    setActivePinia(createPinia())
+    const current = { ...mockSourceDetail({ sourceId: '391007768' })!, flowId: '21000040', primaryFlowId: '14009350' }
+    const steps: Step[] = [
+      { stepId: '41895', sourceId: '-1', name: '智能采集', configId: '1401218', isRoot: true, outputTable: '900', enabled: true },
+      { stepId: '41896', sourceId: '-1', name: '辅助后续', configId: '1401219', inputTable: '900', outputTable: '901', dependsOn: ['41895'], enabled: true },
+    ]
+    const flow = useFlowStore()
+    flow.loadFromSource(current, steps)
+    const byFlow = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(steps)
+    const bySource = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { ...steps[0], stepId: '40596', configId: '1400935' },
+      { ...steps[1], stepId: '40597', configId: '1400974', dependsOn: ['40596'] },
+    ])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [{ dataId: '901', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }] })
+    const send = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交' })
+    const batch = vi.spyOn(dataApi, 'nextStepBatch').mockResolvedValue({ message: '已提交' })
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const wrapper = mountResultView()
+    try {
+      await flushPromises()
+      await selectNode(wrapper, '41895')
+      await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['901'])
+      await flushPromises()
+      await wrapper.get(`[data-testid="${mode === '全部' ? 'data-exec-all-btn' : 'data-exec-btn'}"]`).trigger('click')
+      await flushPromises()
+      expect(byFlow).toHaveBeenCalledWith('21000040', { withConfigDetails: false, backendScope: 'default' })
+      expect(bySource).not.toHaveBeenCalled()
+      if (mode === '全部') expect(batch).toHaveBeenCalledWith(expect.objectContaining({ configId: '1401219', itemConfig: '41896' }))
+      else expect(send).toHaveBeenCalledWith(current.sourceId, '900', ['901'], expect.objectContaining({ configId: '1401219', itemConfig: '41896' }))
+    } finally { wrapper.unmount() }
   })
 })
 

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h, onMounted } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import FlowCanvas from './index.vue'
@@ -49,7 +50,68 @@ describe('源工作区本地流程与原运行环境的切换', () => {
 })
 
 describe('未绑流程的源（2026-10-12）', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+  it('未关联流程时即使源有旧配置也不显示节点和配置面板', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    const source = { sourceId: '430024673', siteId: '125', name: '测试源', url: 'https://example.com', mainTable: '900', configId: '1401126', state: 'C' } as Source
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue([])
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue({ rows: [], sourceGroupId: null })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/canvas', query: { sourceId: source.sourceId, siteId: '125', view: 'flow' } })
+    await router.isReady()
+    const pinia = createPinia(); setActivePinia(pinia)
+    const wrapper = mount(FlowCanvas, { global: {
+      plugins: [pinia, router], directives: { loading: {} },
+      stubs: { NodeInspector: { template: '<div data-testid="inspector-stub" />' }, CanvasHeader: true, ResultView: true, SiteSourceSwitcher: true, SourceTabsBar: true, SourceSummaryView: true, TaskView: true, FileView: true, SiteDetailView: true, CompareSplit: true, LoginConfigSelectDialog: true, NewSiteWizard: true },
+    } })
+    try {
+      await flushPromises()
+      expect(useFlowStore().layout.nodes.length).toBeGreaterThan(0)
+      expect(wrapper.get('[data-testid="workflow-canvas-status"]').text()).toContain('暂无关联流程')
+      expect(wrapper.find('.rc-flow-node').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="inspector-stub"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(true)
+    } finally { wrapper.unmount() }
+  })
+
+  it('同源绑定后切换流程地址，保留已就绪状态并继续显示右侧配置区', async () => {
+    const source = { sourceId: '100', name: '测试源', flowId: '11', state: 'C' } as Source
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue([])
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
+    const list = vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([{ workflowId: '11', primary: true }] as WorkflowBinding[])
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/canvas', query: { sourceId: '100', view: 'flow', flowId: '11' } })
+    const pinia = createPinia(); setActivePinia(pinia)
+    const readyBoard = defineComponent({
+      emits: ['workflow-status'],
+      setup(_, { emit }) { onMounted(() => emit('workflow-status', 'ready')); return () => h('div') },
+    })
+    const wrapper = mount(FlowCanvas, { global: {
+      plugins: [pinia, router], directives: { loading: {} },
+      stubs: { FlowBoard: readyBoard, NodeInspector: { template: '<div data-testid="inspector-stub" />' }, ResultView: true, SiteSourceSwitcher: true, SourceTabsBar: true, SourceSummaryView: true, TaskView: true, FileView: true, SiteDetailView: true, CompareSplit: true, LoginConfigSelectDialog: true, NewSiteWizard: true },
+    } })
+    try {
+      await flushPromises()
+      expect(wrapper.find('[data-testid="inspector-stub"]').exists()).toBe(true)
+      const board = wrapper.getComponent(readyBoard).vm
+      list.mockResolvedValue([{ workflowId: '12', primary: true }] as WorkflowBinding[])
+      await router.replace({ query: { ...router.currentRoute.value.query, workflowId: '12', flowId: '12' } })
+      await flushPromises()
+      expect(useFlowStore().sourceCtx?.flowId).toBe('12')
+      expect(wrapper.getComponent(readyBoard).vm).toBe(board)
+      expect(wrapper.find('[data-testid="inspector-stub"]').exists()).toBe(true)
+      expect(wrapper.find('.no-workflow').exists()).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
   it('按源查步骤报「源未绑定有效流程」时照常打开画布（空步骤），不报源加载失败', async () => {
     const source = { sourceId: '430024673', siteId: '125', name: '国家统计局', configId: '1401126', state: 'C' } as Source
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
