@@ -146,7 +146,10 @@ function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tab
 }
 
 beforeEach(() => resetNodeConfigAutosave())
-afterEach(() => {
+// 卸载时的自动保存（1021-06）是 fire-and-forget：不先把微任务排空就还原 mock，
+// 那次 updateConfig 会落在下一个用例刚装好的 spy 上，把它的调用次数算多。
+afterEach(async () => {
+  await flushPromises()
   vi.restoreAllMocks()
   routerPush.mockClear()
   routerReplace.mockClear()

@@ -443,8 +443,9 @@ const batchAiLoading = ref(false)
 async function onGenerateSingleAiCommont(entry: EntryType) {
   try {
     ElMessage.info(`正在为表【${entry.name || entry.tableName}】采样并生成 AI 描述，请稍候...`)
-    const res = await entryApi.generateAiCommont(entry.tableId)
+    const res = await entryApi.generateAiComment(entry.tableId)
     const resultText = res && typeof res === 'object' && 'data' in res ? String((res as any).data) : String(res)
+    entry.aiComment = resultText
     entry.aiCommont = resultText
     ElMessage.success(`表【${entry.name || entry.tableName}】AI 描述生成成功！`)
   } catch (err) {
@@ -471,7 +472,7 @@ async function onBatchGenerateAiCommont() {
   batchAiLoading.value = true
   try {
     const ids = isSelected ? selected.value : undefined
-    await entryApi.batchGenerateAiCommont(ids, true)
+    await entryApi.batchGenerateAiComment(ids, true)
     ElMessage.success('批量生成任务已提交后台异步执行，请稍后刷新列表查看！')
   } catch (err) {
     ElMessage.error(`提交失败: ${err instanceof Error ? err.message : String(err)}`)

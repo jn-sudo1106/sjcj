@@ -12,7 +12,7 @@ import {
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
-import DataTableSidebar from './DataTableSidebar.vue'
+import DataTableSidebar from '@/components/DataTableSidebar.vue'
 import { favoriteEntryIds, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'

@@ -82,6 +82,34 @@ export function mockEntrySetDsKind(params?: Record<string, unknown>): { ok: bool
   return { ok: true, message: `数据源已更新为 ${target.dsKind}，id:${target.tableId}` }
 }
 
+/**
+ * 单表生成 AI 综合描述（真实端点走 bee-config 采样 + LLM，mock 不接模型）。
+ * 按表结构拼一句确定性的话并写回 ENTRIES，让「生成 → 回填 aiCommont → 保存」在演示模式下闭环；
+ * 没有 handler 时 client.ts 的 fallback 只回 `{ok,demo,message}`，调用方 `String(res.data)` 会把 "undefined" 填进表单。
+ * handler 收到的是 request 的 params（{ tableId }），不是 httpParams 的旧字段名 entryTypeId。
+ */
+export function mockGenerateAiCommont(params?: Record<string, unknown>): { code: number; data: string; msg: string } {
+  const id = String(params?.tableId ?? '')
+  const target = ENTRIES.find((e) => e.tableId === id)
+  if (!target) return { code: 1, data: '', msg: `实体不存在，未生成:${id}` }
+  const keys = target.fields.slice(0, 3).map((f) => f.desc).filter(Boolean).join('、')
+  const commont = `【${target.tableName}】按 ${target.keyField} 唯一去重的${target.dsKind === 'CK' ? ' ClickHouse' : ' MySQL'} 数据表，核心字段：${keys}，当前约 ${target.rowCount} 行。`
+  target.aiCommont = commont
+  return { code: 0, data: commont, msg: '生成成功（演示数据，未调用模型）' }
+}
+
+/**
+ * 批量生成：真实后端把任务丢队列异步执行，立即回执；mock 同样只算张数，不在这里同步编 N 段描述。
+ * 这条路径的 params 是 tableIds 数组（未勾选时为空数组 = 后端按「缺描述的表」全量捞）。
+ */
+export function mockBatchGenerateAiCommont(params?: Record<string, unknown> | unknown[]): { code: number; data: { total: number }; msg: string } {
+  const ids = Array.isArray(params) ? (params as unknown[]).map((id) => String(id)) : []
+  const total = ids.length
+    ? ENTRIES.filter((e) => ids.includes(e.tableId)).length
+    : ENTRIES.filter((e) => !e.aiCommont).length
+  return { code: 0, data: { total }, msg: `批量任务已提交（演示）：${total} 张表` }
+}
+
 // 新建 / 编辑表：按 tableId upsert，无 tableId 视为新建（内存 session 持久化）
 let entrySeq = 1
 export function cloneEntryStructure(tableId: string, sourceId: string): EntryType | null {

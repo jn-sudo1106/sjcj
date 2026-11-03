@@ -81,6 +81,8 @@ const srcRow = (wrapper: EditorWrapper, id: string) => wrapper.find(`[data-src="
 /** 勾选框是原生 input（同源管理左侧一致），checked / indeterminate 直接读 DOM 属性 */
 const dirCheck = (wrapper: EditorWrapper, id: string) => wrapper.find<HTMLInputElement>(`[data-dir-check="${id}"]`)
 const srcCheck = (wrapper: EditorWrapper, id: string) => wrapper.find<HTMLInputElement>(`[data-src-check="${id}"]`)
+/** 列头行的全选勾选框（原生 input，和左栏目录行同一套三态） */
+const srcAllCheck = (wrapper: EditorWrapper) => wrapper.find<HTMLInputElement>('[data-testid="sse-src-check-all"]')
 const headBtn = (wrapper: EditorWrapper, testid: string) => wrapper.find(`[data-testid="${testid}"]`)
 const emittedGrant = (wrapper: EditorWrapper): SourceGrant =>
   wrapper.emitted('update:grant')!.at(-1)![0] as SourceGrant
@@ -88,6 +90,11 @@ const emittedGrant = (wrapper: EditorWrapper): SourceGrant =>
 async function expand(wrapper: EditorWrapper, id: string) {
   const caret = dirRow(wrapper, id).find('.caret.btn')
   if (!caret.classes('open')) await caret.trigger('click')
+  await flushPromises()
+}
+/** 点左栏目录把右栏的源取回来（首屏不自动聚焦，右栏用例都要先走这一步） */
+async function focusOn(wrapper: EditorWrapper, id: string) {
+  await dirRow(wrapper, id).trigger('click')
   await flushPromises()
 }
 
@@ -106,28 +113,42 @@ describe('SourceScopeEditor', () => {
   it('默认进业务目录，取源按 directory{kind:biz,includeDescendants:true} 走关系表口径', async () => {
     const wrapper = await mountEditor()
 
-    expect(headBtn(wrapper, 'sse-kind-biz').classes()).toContain('on')
+    expect(headBtn(wrapper, 'sse-dir-kind').text()).toBe('业务目录')
     expect(dirRow(wrapper, '9001').exists()).toBe(true)
+    // 首屏不自动聚焦：一个目录最多取 2000 条源，进页面就取会拖慢左栏的树
+    expect(vi.mocked(sourceApi.sourcePaged)).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="sse-focus-dir"]').text()).toContain('未选择目录')
+    expect(wrapper.find('.sse-srcs .sse-empty').text()).toBe('在左侧点一个目录')
+
+    await focusOn(wrapper, '9001')
     expect(wrapper.find('[data-testid="sse-focus-dir"]').text()).toContain('产业数据')
     // 子目录 9011 的成员 b3 也在列表里：这就是「业务分类查不到源」修完的样子
     expect(srcRow(wrapper, 'b3').exists()).toBe(true)
     expect(lastDirectory().directory).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: '9001', includeDescendants: true }] })
   })
 
-  it('切到系统目录：特殊根 -1/-2 不进列表，取源换成 kind=sys', async () => {
+  it('点过的目录源结果留着，重复点不再打第二次请求', async () => {
     const wrapper = await mountEditor()
-    await headBtn(wrapper, 'sse-kind-sys').trigger('click')
-    await flushPromises()
+    await focusOn(wrapper, '9001')
+    await focusOn(wrapper, '9002')
+    expect(vi.mocked(sourceApi.sourcePaged)).toHaveBeenCalledTimes(2)
 
-    const labels = wrapper.findAll('[data-dir]').map((row) => row.text())
-    expect(labels).toEqual(['财经', '政经'])
-    await dirRow(wrapper, 's1').trigger('click')
-    await flushPromises()
-    expect(lastDirectory().directory.kind).toBe('sys')
-    expect(srcRow(wrapper, 'x1').exists()).toBe(true)
+    await focusOn(wrapper, '9001')
+    expect(vi.mocked(sourceApi.sourcePaged)).toHaveBeenCalledTimes(2)
+    expect(srcRow(wrapper, 'b1').exists()).toBe(true)
   })
 
-  it('勾选目录=写入 dirIds；父级已授权时自动展开，展开出来的子级勾选框禁用', async () => {
+  it('不展示系统目录：左栏只有 -2 下的业务树，也不会按 kind=sys 取源', async () => {
+    const wrapper = await mountEditor()
+
+    expect(wrapper.find('[data-testid="sse-kind-sys"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-dir]').map((row) => row.text())).toEqual(['产业数据', '公众号'])
+    expect(dirRow(wrapper, 's1').exists()).toBe(false)
+    // 根层只取 -2 的子级（系统目录的根层是 parentId=undefined 那次调用）
+    expect(vi.mocked(sourceApi.sourceCategories).mock.calls.every(([parentId]) => parentId !== undefined)).toBe(true)
+  })
+
+  it('勾选目录=写入 dirIds；父级已授权时自动展开，展开出来的子级显示成已勾选', async () => {
     const wrapper = await mountEditor()
     await dirCheck(wrapper, '9001').setValue(true)
     expect(emittedGrant(wrapper).dirIds).toEqual(['9001'])
@@ -135,8 +156,18 @@ describe('SourceScopeEditor', () => {
     // 真实页面是 v-model 回灌的，用例照着把选择结果喂回去；子级行是勾上时自动取回来展开的
     await wrapper.setProps({ grant: grant({ dirIds: ['9001'] }) })
     await vi.waitFor(() => {
-      expect(dirCheck(wrapper, '9011').attributes('disabled')).toBeDefined()
+      const kid = dirCheck(wrapper, '9011')
+      // 子级不在 dirIds 里（上级展开本来含它），但视觉上必须读成「已勾」：置灰会让人以为它没进权限
+      expect(kid.element.checked).toBe(true)
+      expect(kid.attributes('aria-disabled')).toBe('true')
+      expect(kid.attributes('disabled')).toBeUndefined()
+      expect(dirRow(wrapper, '9011').classes()).toContain('sel')
     }, { timeout: 2000, interval: 20 })
+
+    // 点这个「已勾」不给改：要单独调子级得先取消上级目录
+    const emissions = wrapper.emitted('update:grant')?.length ?? 0
+    await dirCheck(wrapper, '9011').setValue(false)
+    expect(wrapper.emitted('update:grant')?.length ?? 0).toBe(emissions)
   })
 
   it('存量规则父级与子级都存着时，展开子级把冗余的子级条目收敛掉', async () => {
@@ -148,9 +179,10 @@ describe('SourceScopeEditor', () => {
   it('三态：只勾满一部分显示半选，子树全覆盖才显示勾', async () => {
     const wrapper = await mountEditor({ grant: grant({ dirIds: ['9011'] }) })
     await expand(wrapper, '9001')
-    // 子目录的成员要看得到才算数：没取过 9011 的源时，不敢替它说「父级也全覆盖了」
-    await dirRow(wrapper, '9011').trigger('click')
-    await flushPromises()
+    // 父目录的源要取回来才判得成「子树全覆盖」
+    await focusOn(wrapper, '9001')
+    // 子目录的成员也要看得到才算数：没取过 9011 的源时，不敢替它说「父级也全覆盖了」
+    await focusOn(wrapper, '9011')
     expect(dirCheck(wrapper, '9001').element.indeterminate).toBe(true)
     expect(dirCheck(wrapper, '9001').element.checked).toBe(false)
 
@@ -163,8 +195,8 @@ describe('SourceScopeEditor', () => {
   it('点勾满的父级=整棵子树一起取消（目录条目与子树里单独选中的源都不留）', async () => {
     const wrapper = await mountEditor({ grant: grant({ dirIds: ['9011'], sourceIds: ['b1', 'b2'] }) })
     await expand(wrapper, '9001')
-    await dirRow(wrapper, '9011').trigger('click')
-    await flushPromises()
+    await focusOn(wrapper, '9001')
+    await focusOn(wrapper, '9011')
     expect(dirCheck(wrapper, '9001').element.checked).toBe(true)
 
     await dirCheck(wrapper, '9001').setValue(false)
@@ -173,16 +205,19 @@ describe('SourceScopeEditor', () => {
     expect(next.sourceIds).toEqual([])
   })
 
-  it('被上级目录覆盖时：源行显示已勾选且禁用，全选/清空禁用、点行不改选择', async () => {
+  it('被上级目录覆盖时：源行显示已勾选（不压暗）且不出现「随目录」标签，列头全选框/清空禁用、点行不改选择', async () => {
     const wrapper = await mountEditor({ grant: grant({ dirIds: ['9001'] }) })
     await expand(wrapper, '9001')
-    await dirRow(wrapper, '9011').trigger('click')
-    await flushPromises()
+    await focusOn(wrapper, '9011')
 
     expect(srcRow(wrapper, 'b3').classes()).toContain('cov')
+    expect(srcRow(wrapper, 'b3').text()).not.toContain('随目录')
+    expect(srcRow(wrapper, 'b3').text()).toContain('汽车资讯')
     expect(srcCheck(wrapper, 'b3').element.checked).toBe(true)
-    expect(srcCheck(wrapper, 'b3').attributes('disabled')).toBeDefined()
-    expect(headBtn(wrapper, 'sse-select-all').attributes('disabled')).toBeDefined()
+    expect(srcCheck(wrapper, 'b3').attributes('disabled')).toBeUndefined()
+    expect(srcCheck(wrapper, 'b3').attributes('aria-disabled')).toBe('true')
+    expect(srcAllCheck(wrapper).attributes('disabled')).toBeDefined()
+    expect(srcAllCheck(wrapper).element.checked).toBe(true)
     expect(headBtn(wrapper, 'sse-clear').attributes('disabled')).toBeDefined()
 
     await srcRow(wrapper, 'b3').trigger('click')
@@ -191,6 +226,7 @@ describe('SourceScopeEditor', () => {
 
   it('源行是三列（勾选框 / 源 ID / 源名称），点勾选框=单独加入且不动目录勾选', async () => {
     const wrapper = await mountEditor({ grant: grant({ dirIds: ['9002'] }) })
+    await focusOn(wrapper, '9001')
     const row = srcRow(wrapper, 'b1')
     expect(row.find('input[type=checkbox]').exists()).toBe(true)
     expect(row.find('.col-id').text()).toBe('#b1')
@@ -203,9 +239,27 @@ describe('SourceScopeEditor', () => {
     expect(next.sourceIds).toEqual(['b1'])
   })
 
+  // 右栏列头：全选框从标题行挪到搜索框下方，和源行同一套 padding / 列宽，逐列对齐
+  it('全选框在搜索框下方的列头行，列头写着源 ID / 源名称', async () => {
+    const wrapper = await mountEditor()
+    await focusOn(wrapper, '9001')
+    const srcs = wrapper.find('.sse-srcs')
+    const at = (sel: string) => Array.from(srcs.element.children).findIndex((el) => el.matches(sel))
+
+    expect(at('.sse-pane-search')).toBeLessThan(at('.sse-src-h'))
+    expect(at('.sse-src-h')).toBeLessThan(at('.sse-list'))
+    const head = srcs.find('[data-testid="sse-src-head"]')
+    expect(head.text()).toContain('源 ID')
+    expect(head.text()).toContain('源名称')
+    expect(head.find('[data-testid="sse-src-check-all"]').exists()).toBe(true)
+    // 标题行只留目录名 + 清空，不再挂勾选框
+    expect(srcs.find('.sse-pane-h').find('[data-testid="sse-src-check-all"]').exists()).toBe(false)
+  })
+
   // 右栏的源筛选：报源 ID 也要能定位到（源 ID 就是列表那一列），大小写不敏感
   it('源搜索按名称或源 ID 过滤', async () => {
     const wrapper = await mountEditor()
+    await focusOn(wrapper, '9001')
     const kw = wrapper.find('[data-testid="sse-src-kw"]')
 
     await kw.setValue('b2')
@@ -221,47 +275,59 @@ describe('SourceScopeEditor', () => {
     expect(wrapper.find('.sse-empty').text()).toBe('无匹配源')
   })
 
-  it('全选=并入本目录含子级的全部源；清空=按目录移除且不动目录勾选与其它目录的源', async () => {
+  it('列头勾选框=全选本目录含子级的源；清空=按目录移除且不动目录勾选与其它目录的源', async () => {
     const wrapper = await mountEditor({ grant: grant({ dirIds: ['9002'], sourceIds: ['other'] }) })
-    await headBtn(wrapper, 'sse-select-all').trigger('click')
+    await focusOn(wrapper, '9001')
+    await srcAllCheck(wrapper).trigger('click')
     expect(emittedGrant(wrapper).sourceIds.sort()).toEqual(['b1', 'b2', 'b3', 'other'])
 
+    // 只选上一部分 → 半选；清空按目录收掉，目录勾选和别的目录选中的源都不动
     await wrapper.setProps({ grant: grant({ dirIds: ['9002'], sourceIds: ['other', 'b1', 'b2'] }) })
+    expect(srcAllCheck(wrapper).element.checked).toBe(false)
+    expect(srcAllCheck(wrapper).element.indeterminate).toBe(true)
     expect(headBtn(wrapper, 'sse-clear').text()).toContain('清空 (2)')
     await headBtn(wrapper, 'sse-clear').trigger('click')
     expect(emittedGrant(wrapper).sourceIds).toEqual(['other'])
     expect(emittedGrant(wrapper).dirIds).toEqual(['9002'])
+
+    // 整目录的源都单独选上 → 勾选框显示勾 → 再点一次就是取消这一批
+    await wrapper.setProps({ grant: grant({ dirIds: ['9002'], sourceIds: ['b1', 'b2', 'b3'] }) })
+    expect(srcAllCheck(wrapper).element.checked).toBe(true)
+    await srcAllCheck(wrapper).trigger('click')
+    expect(emittedGrant(wrapper).sourceIds).toEqual([])
+    expect(emittedGrant(wrapper).dirIds).toEqual(['9002'])
   })
 
-  it('左栏搜索跨层级，但只留当前这套目录的命中', async () => {
+  it('左栏搜索跨层级，但只留业务目录的命中', async () => {
     const wrapper = await mountEditor()
     await wrapper.find('[data-testid="sse-dir-kw"]').setValue('汽车')
     await vi.waitFor(() => {
       expect(wrapper.findAll('[data-dir]').map((row) => row.attributes('data-dir'))).toEqual(['9011'])
     }, { timeout: 4000, interval: 30 })
 
-    await headBtn(wrapper, 'sse-kind-sys').trigger('click')
+    // 换成系统目录那条的关键词（s1a「上市公司」）：命中只剩业务目录的 9011
     await wrapper.find('[data-testid="sse-dir-kw"]').setValue('上市公司')
     await vi.waitFor(() => {
-      expect(wrapper.findAll('[data-dir]').map((row) => row.attributes('data-dir'))).toEqual(['s1a'])
+      expect(vi.mocked(sourceApi.searchCategories).mock.calls).toContainEqual(['上市公司'])
+      expect(wrapper.findAll('[data-dir]').map((row) => row.attributes('data-dir'))).toEqual(['9011'])
     }, { timeout: 4000, interval: 30 })
   })
 
-  it('业务目录还没有目录时退到系统目录，不把左栏留空', async () => {
-    // 只影响这两次取根层的调用，别把默认实现换掉（会串到后面的用例）
-    vi.mocked(sourceApi.sourceCategories)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: 's1', name: '财经', parentId: '' }])
+  it('还没有业务目录时左栏留空，不再退到系统目录', async () => {
+    // 只影响这一次取根层的调用，别把默认实现换掉（会串到后面的用例）
+    vi.mocked(sourceApi.sourceCategories).mockResolvedValueOnce([])
     const wrapper = await mountEditor()
-    expect(headBtn(wrapper, 'sse-kind-sys').classes()).toContain('on')
-    expect(dirRow(wrapper, 's1').exists()).toBe(true)
+    expect(vi.mocked(sourceApi.sourceCategories).mock.calls).toEqual([['-2']])
+    expect(dirRow(wrapper, 's1').exists()).toBe(false)
+    expect(wrapper.find('.sse-cats .sse-empty').text()).toBe('还没有业务目录')
   })
 
   it('disabled 时所有写操作控件禁用（非 admin 只能看）', async () => {
     const wrapper = await mountEditor({ disabled: true })
     expect(dirCheck(wrapper, '9001').attributes('disabled')).toBeDefined()
+    await focusOn(wrapper, '9001')
     expect(srcCheck(wrapper, 'b1').attributes('disabled')).toBeDefined()
-    expect(headBtn(wrapper, 'sse-select-all').attributes('disabled')).toBeDefined()
+    expect(srcAllCheck(wrapper).attributes('disabled')).toBeDefined()
     expect(headBtn(wrapper, 'sse-clear').attributes('disabled')).toBeDefined()
   })
 
@@ -270,6 +336,7 @@ describe('SourceScopeEditor', () => {
     const many = Array.from({ length: 250 }, (_, i) => ({ sourceId: `s_${i + 1}`, name: `源${i + 1}` }))
     vi.mocked(sourceApi.sourcePaged).mockResolvedValueOnce({ total: 250, list: many } as never)
     const wrapper = await mountEditor()
+    await focusOn(wrapper, '9001')
 
     const loadMoreBtn = headBtn(wrapper, 'sse-load-more')
     expect(loadMoreBtn.exists()).toBe(true)
