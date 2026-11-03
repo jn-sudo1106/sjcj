@@ -1884,7 +1884,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
    100px 时文字区约 67px，留出约 16px 余量：字体回退到更宽的 ≤ 也读得全，同时不把这一行挤到换行。 */
 .sov-filter.is-compact .sov-fl-count { flex: 0 0 100px; min-width: 100px; }
 .sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
-.sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
+.sov-summary-ops { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
 
@@ -1948,6 +1948,23 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-toast-close { margin-left: auto; padding: 0; color: var(--rc-muted) !important; font-size: 16px !important; }
 .sov-btn.danger { color: #b91c1c; border-color: #fecaca; }
 .sov-btn.ghost { color: var(--rc-faint); }
+/* 摘要栏 / 筛选栏这一排按钮来自三处，尺寸各不相同，排在一起高矮不齐（2026-11-03 收口）：
+   - 本组件的 .sov-btn：30px / 12px / 圆角 6px（基准）
+   - CodeConfigButton 的「代码生成」自带全局 .rc-btn：34px / 13px / 圆角 7px；
+     它是多根节点组件（按钮 + 弹层），父组件的 scoped 类落不到按钮上，只能 :deep 兜
+   - 父页面插槽里的按钮（源管理的「按目录 ▾」「归类 ▾」带 .ca-save-view）：34px，.sm 才是 30px
+   统一成基准规格。图标方块按钮（新增网站，.ca-create-site 30×30）在筛选栏且不在下面的选择器里，不受影响。 */
+.sov-filter-actions :deep(.rc-btn),
+.sov-summary :deep(.rc-btn),
+.sov-summary :deep(.ca-save-view),
+.sov-summary .sov-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
 .sov-state { display: inline-flex; padding: 2px 7px; border-radius: 999px; background: #ecfdf3; color: #15803d; font-size: 11px; font-weight: 700; }
 .sov-state.error { background: #fef2f2; color: #dc2626; }
 .sov-state.muted { background: #f1f5f9; color: #64748b; }
