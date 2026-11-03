@@ -101,7 +101,7 @@ async function addToBizDir(site: Site, sourceIds: string[]): Promise<string> {
     await addSourcesToBizDir(site.dirId, sourceIds)
     return ''
   } catch (error) {
-    return `源已创建，但加入业务目录「${site.category}」失败：${(error as Error)?.message ?? String(error)}。可在源管理「目录归类 → 加入业务目录」补上（源 ID：${sourceIds.join(',')}）`
+    return `源已创建，但加入业务目录「${site.category}」失败：${(error as Error)?.message ?? String(error)}。可在源管理「归类 → 加入业务目录」补上（源 ID：${sourceIds.join(',')}）`
   }
 }
 

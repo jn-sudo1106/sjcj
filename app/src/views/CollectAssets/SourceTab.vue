@@ -22,6 +22,7 @@ import SourceDirPanel, { type DirScope } from './SourceDirPanel.vue'
 import BizDirPickerDialog from './BizDirPickerDialog.vue'
 import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
+import ChangeSiteDialog from './ChangeSiteDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
 import { BIZ_DIR_ROOT_ID, bizMembership, expandDirIds, loadDirChildren, dirPath } from '@/api/sourceDirs'
 
@@ -542,6 +543,27 @@ function openBizTemplate(ids: string[]) {
   bizTemplate.open = true
 }
 
+// 批量修改所属网站（2026-11-03）：放在「归类」下拉里，和业务目录无关，系统目录页签也能用。
+// 一个源只属于一个网站，改的是归属不是新增关联；必须有勾选，不做「按当前筛选范围」的整批搬移。
+const siteChange = reactive({ open: false, ids: [] as string[] })
+function openSiteChange(ids: string[]) {
+  if (!ids.length) return
+  siteChange.ids = [...ids]
+  siteChange.open = true
+}
+/** 改完成员归属变了：让表格按 sourceListRevision 重查（可能已不属于当前网站范围） */
+function afterSiteChanged() {
+  ui.notifySourceListChanged()
+}
+/** 「归类」下拉的命令分发：业务目录三项只在业务目录页签出现，改所属网站两边都有 */
+type ClassifyCommand = 'add' | 'move' | 'template' | 'site'
+function onClassifyCommand(ids: string[], command: ClassifyCommand) {
+  if (command === 'add') openBizPicker(ids)
+  else if (command === 'move') void openBizMove(ids)
+  else if (command === 'template') openBizTemplate(ids)
+  else openSiteChange(ids)
+}
+
 // 勾选源后「加入视图目录」（2026-10-13 目录版）：选视图 → 选目录；条件视图与「另存为视图」10-13 起下线
 const addToView = reactive({ open: false, ids: [] as string[] })
 function openAddToView(ids: string[]) {
@@ -817,14 +839,15 @@ onUnmounted(() => {
           </template>
         </el-dropdown>
       </template>
-      <template v-if="scope === 'all' && showDirPanel && dirScope.kind === 'biz'" #summary-ops="{ ids }">
-        <el-dropdown trigger="click" data-testid="biz-ops" @command="(command: 'add' | 'move' | 'template') => (command === 'add' ? openBizPicker(ids) : command === 'move' ? openBizMove(ids) : openBizTemplate(ids))">
-          <button class="ca-save-view sm" type="button">目录归类 ▾</button>
+      <template v-if="scope === 'all' && showDirPanel" #summary-ops="{ ids }">
+        <el-dropdown trigger="click" data-testid="biz-ops" @command="(command: ClassifyCommand) => onClassifyCommand(ids, command)">
+          <button class="ca-save-view sm" type="button">归类 ▾</button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="add" data-testid="source-pick-for-biz">加入业务目录…</el-dropdown-item>
-              <el-dropdown-item command="move" :disabled="!canMoveBiz || !ids.length" data-testid="source-move-biz">{{ canMoveBiz && ids.length ? `移到其他业务目录…（${ids.length} 个）` : '移到其他业务目录…（先在左侧点一个目录，再勾选源）' }}</el-dropdown-item>
-              <el-dropdown-item command="template" :disabled="!canMoveBiz || ids.length !== 1" data-testid="source-template-import-biz">{{ !canMoveBiz ? '按模板批量新增…（先在左侧点一个目录）' : ids.length !== 1 ? '按模板批量新增…（请只勾选一个源作为模板）' : '按模板批量新增…' }}</el-dropdown-item>
+              <el-dropdown-item v-if="dirScope.kind === 'biz'" command="add" data-testid="source-pick-for-biz">加入业务目录…</el-dropdown-item>
+              <el-dropdown-item v-if="dirScope.kind === 'biz'" command="move" :disabled="!canMoveBiz || !ids.length" data-testid="source-move-biz">{{ canMoveBiz && ids.length ? `移到其他业务目录…（${ids.length} 个）` : '移到其他业务目录…（先在左侧点一个目录，再勾选源）' }}</el-dropdown-item>
+              <el-dropdown-item v-if="dirScope.kind === 'biz'" command="template" :disabled="!canMoveBiz || ids.length !== 1" data-testid="source-template-import-biz">{{ !canMoveBiz ? '按模板批量新增…（先在左侧点一个目录）' : ids.length !== 1 ? '按模板批量新增…（请只勾选一个源作为模板）' : '按模板批量新增…' }}</el-dropdown-item>
+              <el-dropdown-item command="site" :divided="dirScope.kind === 'biz'" :disabled="!ids.length" data-testid="source-change-site">{{ ids.length ? `修改所属网站…（${ids.length} 个）` : '修改所属网站…（先勾选源）' }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -871,6 +894,7 @@ onUnmounted(() => {
     <BizDirPickerDialog v-if="bizPicker.open" :initial-source-ids="bizPicker.ids" :initial-directory-ids="defaultBizDirIds" @close="bizPicker.open = false" @saved="afterBizChanged" />
     <BizDirMoveDialog v-if="bizMove.open" :source-ids="bizMove.ids" :from-dir-ids="bizMove.fromDirIds" :from-label="`${dirLabelText}${dirWithSub ? '（含子级）' : ''}`" @close="bizMove.open = false" @saved="afterBizChanged" />
     <BizTemplateImportDialog v-if="bizTemplate.open" :template-id="bizTemplate.templateId" :dir-id="bizTemplate.dirId" :dir-label="dirLabelText" @close="bizTemplate.open = false" @saved="afterBizChanged" />
+    <ChangeSiteDialog v-if="siteChange.open" :source-ids="siteChange.ids" @close="siteChange.open = false" @saved="afterSiteChanged" />
     <CategoryScheduleModal ref="scheduleRef" />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。

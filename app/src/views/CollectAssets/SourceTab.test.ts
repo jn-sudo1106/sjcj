@@ -296,6 +296,62 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     }
   })
 
+  // 2026-11-03：批量改所属网站放进「归类」下拉（原「目录归类」），系统目录页签也能用
+  it('系统目录页签也有「归类」下拉：只有「修改所属网站」，业务目录三项不出现', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '1', name: '测试源', state: 'C' } as never] })
+    const { wrapper } = await mountList()
+    try {
+      await flushPromises()
+      const dropdown = wrapper.findAllComponents({ name: 'ElDropdown' }).find((d) => d.attributes('data-testid') === 'biz-ops')!
+      expect(dropdown.text()).toContain('归类')
+      expect(dropdown.text()).not.toContain('目录归类')
+      await dropdown.get('button').trigger('click')
+      await flushPromises()
+      const items = [...document.querySelectorAll('.el-dropdown-menu__item')].map((el) => el.textContent ?? '')
+      expect(items.some((text) => text.includes('修改所属网站'))).toBe(true)
+      expect(items.some((text) => text.includes('加入业务目录'))).toBe(false)
+      expect(items.some((text) => text.includes('移到其他业务目录'))).toBe(false)
+      // 没勾选源时这一项不可用
+      expect(document.querySelector('[data-testid="source-change-site"]')?.className).toContain('is-disabled')
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, page]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
+  it('勾选源后「修改所属网站」带入勾选的源打开弹窗；没勾选时点不动', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '1', name: '测试源', state: 'C' } as never] })
+    const sites = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 1, list: [{ siteId: '77', name: '目标站' } as never] })
+    const { wrapper } = await mountList()
+    try {
+      await flushPromises()
+      const dropdown = wrapper.findAllComponents({ name: 'ElDropdown' }).find((d) => d.attributes('data-testid') === 'biz-ops')!
+      dropdown.vm.$emit('command', 'site')
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'ChangeSiteDialog' }).exists()).toBe(false)
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      dropdown.vm.$emit('command', 'site')
+      await flushPromises()
+      const dialog = wrapper.findComponent({ name: 'ChangeSiteDialog' })
+      expect(dialog.props('sourceIds')).toEqual(['1'])
+      expect(sites).toHaveBeenCalled()
+      dialog.vm.$emit('close')
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'ChangeSiteDialog' }).exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, page, sites]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+    }
+  })
+
   // 顶上那条网站工具栏整条不出现，视图切换 / 刷新嵌进源列表筛选栏的操作区，两条栏并成一条
   it('只剩一条栏：工具条以源模式嵌在源列表筛选栏里，没有新增网站、搜索、分类、标签、统计', async () => {
     const { wrapper } = await mountList()
