@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { entryApi, flowCenterApi, flowVersionApi, itemApi, sourceApi } from '@/api'
-import { stepToSaveItemConfigPayload } from '@/api/legacyAdapters'
+import { stepFromLegacy, stepToSaveItemConfigPayload, stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useFlowVersionStore } from '@/stores/flowVersion'
@@ -679,6 +679,65 @@ describe('useStepWrite.persistFlowSteps', () => {
     await expect(persistFlowSteps()).rejects.toThrow('ROOT配置已变化或不存在')
     // 快照仍指向旧配置：重试还会再发，不会假成功
     expect(source.stepSnapshots['41352']?.configId).toBe('1400917')
+  })
+
+  it.each([
+    ['首次勾选', undefined, ['K1', 'K2']],
+    ['修改选择', ['K1', 'K2'], ['K2']],
+    ['清空选择', ['K1', 'K2'], []],
+  ] as const)('根节点%s：出参列通过 ROOT 通道保存并可回读', async (_label, before, after) => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41928', isRoot: true, dependsOn: undefined,
+      flowId: '21000050', outColumns: before ? [...before] : undefined,
+    }
+    const sourceInfo = {
+      sourceId: '430016384', name: 'test', url: 'http://x', configId: '1400917',
+      mainTable: '6200026', owner: 'a', state: 'C', flowId: '21000050',
+    } as const
+    flow.loadFromSource(sourceInfo, [rootStep])
+    source.rememberSteps([rootStep], 'replace')
+    flow.patchTaskConfig('41928', { outColumns: [...after] })
+    const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true })
+    const modify = vi.spyOn(itemApi, 'stepModify')
+    const { persistFlowSteps } = useStepWrite()
+
+    expect(await persistFlowSteps()).toEqual({ created: 0, updated: 1, skipped: 0 })
+    expect(rootUpdate).toHaveBeenCalledWith('41928', '1400917', '21000050', undefined, undefined, [...after])
+    expect(modify).not.toHaveBeenCalled()
+    expect(source.stepSnapshots['41928'].outColumns).toEqual(after)
+    await persistFlowSteps()
+    expect(rootUpdate).toHaveBeenCalledTimes(1)
+
+    const saved = stepFromLegacy({ ...stepToStepModifyPayload(source.stepSnapshots['41928']), isRoot: 1 }, sourceInfo.sourceId)
+    flow.loadFromSource(sourceInfo, [saved])
+    expect(flow.configs['41928'].taskCfg?.outColumns ?? []).toEqual(after)
+  })
+
+  it('根节点出参列写入失败：保留旧快照，重试仍提交选择', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41928', isRoot: true, dependsOn: undefined,
+      flowId: '21000050', outColumns: ['K1'],
+    }
+    flow.loadFromSource(
+      { sourceId: '430016384', name: 'test', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '21000050' },
+      [rootStep],
+    )
+    source.rememberSteps([rootStep], 'replace')
+    flow.patchTaskConfig('41928', { outColumns: ['K2'] })
+    const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: false, message: '写入失败' })
+    const { persistFlowSteps } = useStepWrite()
+    await expect(persistFlowSteps()).rejects.toThrow('写入失败')
+    expect(source.stepSnapshots['41928'].outColumns).toEqual(['K1'])
+    rootUpdate.mockResolvedValue({ ok: true })
+    await persistFlowSteps()
+    expect(rootUpdate).toHaveBeenCalledTimes(2)
+    expect(source.stepSnapshots['41928'].outColumns).toEqual(['K2'])
   })
 
   // 0927 P1-8：虚拟根（svg 回退行 stepId='0'、isRoot=1）不是真实物化 ROOT——isRootStepStepId

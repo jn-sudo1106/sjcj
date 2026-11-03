@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
 import { ElMessage } from 'element-plus'
-import { flowVersionApi, itemApi, sourceApi } from '@/api'
+import { flowVersionApi, itemApi, sourceApi, type FlowVersionOverview } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { FLOW_AUTOSAVE_MS, FLOW_AUTOSAVE_RETRY_BASE_MS, resetFlowAutosaveForTests, useFlowAutosave } from './useFlowAutosave'
 import type { Step } from '@/api'
 
@@ -56,6 +57,45 @@ describe('useFlowAutosave', () => {
     resetFlowAutosaveForTests()
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it.each([false, true])('首节点出参列在配置保存后写入步骤，版本模式=%s', async (versioned) => {
+    const root: Step = { ...SNAPSHOT, isRoot: true, flowId: '21000050' }
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: '430016384', name: 'test', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '21000050' },
+      [root],
+    )
+    useSourceStore().rememberSteps([root], 'replace')
+    const action = vi.spyOn(flowVersionApi, 'action').mockResolvedValue({ versionId: '1051' })
+    if (versioned) {
+      const published: FlowVersionOverview = {
+        enabled: true, curVer: 2, nextVer: 3, publishId: '1050', draftId: null,
+        versions: [{ versionId: '1050', flowVer: 2, ver: 4, state: 'C', isLock: 0, isDelete: 0, baseId: null }],
+      }
+      vi.mocked(flowVersionApi.overview).mockResolvedValueOnce(published).mockResolvedValue({
+        ...published, draftId: '1051',
+        versions: [...published.versions, { versionId: '1051', flowVer: 3, ver: 0, state: 'W', isLock: 0, isDelete: 0, baseId: '1050' }],
+      })
+    }
+    const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true })
+    const { bind, unbind, status, flush } = useFlowAutosave()
+    bind()
+    await flush()
+    expect(rootUpdate).not.toHaveBeenCalled()
+    expect(action).not.toHaveBeenCalled()
+    flow.patchTaskConfig('40600', { outColumns: ['K1', 'K2'] })
+    flow.markNodeConfigSaved('40600')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
+    expect(rootUpdate).toHaveBeenCalledWith('40600', '1400917', '21000050', undefined,
+      versioned ? { flowId: '21000050', versionId: '1051', ver: 0 } : undefined, ['K1', 'K2'])
+    if (versioned) expect(action).toHaveBeenCalledWith('draft', {
+      flowId: '21000050', versionId: '1050', ver: 4, expectedPublishId: '1050',
+    })
+    expect(status.value).toBe('saved')
+    expect(flow.flowDirty).toBe(false)
+    unbind()
   })
 
   it('flowDirty 后 800ms 才提交，成功后头部是已保存且只清流程脏', async () => {

@@ -292,6 +292,20 @@ describe('flow 流程 HTTP 契约', () => {
     expect(JSON.parse(String(init2.body))).toEqual({ itemConfig: 41352, flowId: 1400935, isRoot: 1, configId: 1400999 })
   })
 
+  it.each([
+    [['K1', 'K2'], 'K1,K2'],
+    [[], ''],
+  ] as const)('流程入口出参列：%j 写入 outContext=%j，清空使用空串而非 null', async (columns, expected) => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
+    const { itemApi } = await import('./index')
+    await itemApi.rootConfigUpdate('41928', '1401233', '21000050', undefined, { flowId: '21000050', versionId: '1050', ver: 3 }, [...columns])
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({
+      itemConfig: 41928, flowId: 21000050, isRoot: 1, configId: 1401233,
+      versionId: '1050', ver: 3, outContext: expected,
+    })
+  })
+
   it('GET /v1/flow/changeFlowEnable：ids 逗号串 + enable 0/1（F6 启停）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '处理成功，共处理 2 条', data: null }))
     const { flowCenterApi } = await import('./index')
