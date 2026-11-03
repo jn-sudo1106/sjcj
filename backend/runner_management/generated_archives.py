@@ -25,6 +25,10 @@ def store(app, record):
     from .directory_layout import store_layout
     with app.store.connect() as db:
         store_layout(db, PREFIX + record['archiveId'], record)
+        from .source_code_relations import sync_archive
+        sync_archive(db, record)
+        from .deployment_resources import enqueue_archive
+        enqueue_archive(db, record)
 
 
 def config_id(value):
@@ -81,7 +85,9 @@ def destination(app, body):
         if repo['status'] != 'ACTIVE':
             raise ApiError('代码仓库已停用', 409)
         directory = get_directory(app, db, repo_id, directory_id, config_type=node_type)
+    from .source_code_relations import source_context
     return {'configId': owner, 'repoId': repo_id, 'directoryId': directory_id, 'directoryPath': directory['path'],
+            'sourceContext': source_context(body.get('sourceContext')),
             'repositoryPrefix': owner if include_id and directory['path'].split('/')[-1] != owner else '',
             'configType': node_type, 'queueName': str(body.get('queueName', ''))[:120], 'autoCommit': body.get('autoCommit', False), 'deferCommit': body.get('deferCommit', False)}
 

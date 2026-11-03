@@ -23,6 +23,7 @@ const targetTreeRef = ref<{ $el: HTMLElement; setCurrentKey: (key: string | null
 const environment = ref<'test' | 'prd'>('test'), preview = ref(false)
 const nodePickerOpen = ref(false), nodePickerError = ref('')
 const runtimes = ref<RuntimeConfiguration[] | null>(null), bindingError = ref(''), listFailed = ref(false)
+const deletingId = ref('')
 let loadId = 0, treeId = 0, fileMetadataId = 0, initialized = false
 const codes = computed(() => [...new Map(catalog.value.map(row => [row.codeId, row])).values()])
 const configs = computed(() => [...new Set(codes.value.map(row => row.configId))])
@@ -104,6 +105,18 @@ async function backToList() {
   const query = { ...route.query }
   for (const key of ['deploymentId', 'configId', 'codeId', 'queue', 'website', 'directory']) delete query[key]
   await router.replace({ query })
+}
+async function deleteConfiguration(item: DeploymentConfiguration) {
+  if (!canWrite.value || busy.value || loading.value) return
+  busy.value = true; deletingId.value = item.deploymentId; error.value = ''
+  try {
+    try { await ElMessageBox.confirm(`删除部署配置「${item.name}」？仓库代码和机器上已下发的文件会保留。`, '删除部署配置', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) }
+    catch { return }
+    await runnerManagementApi.deleteDeploymentConfiguration(item.deploymentId, item.revision)
+    configurations.value = configurations.value.filter(row => row.deploymentId !== item.deploymentId)
+    ElMessage.success('部署配置已删除')
+  } catch (e) { error.value = problem(e) }
+  finally { busy.value = false; deletingId.value = '' }
 }
 async function loadEditorResources() {
   const [rows, repos] = await Promise.all([runnerManagementApi.siteCodeCatalog(), runnerManagementApi.codeRepositories()])
@@ -289,7 +302,7 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <el-alert v-if="bindingError && !layout" :title="bindingError" type="warning" :closable="false" show-icon />
     <DeploymentConfigDrawer ref="configDetails" />
-    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" @open-config="item => configDetails?.open(item)" />
+    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" :deleting-id="deletingId" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" @open-config="item => configDetails?.open(item)" @remove="deleteConfiguration" />
     <section v-if="layout" class="dl-configuration" aria-label="部署配置设置" data-testid="layout-settings">
       <div class="dl-identity-fields">
         <label>配置名称<el-input v-model="layout.name" :readonly="!canWrite || preview" :disabled="busy || loading" placeholder="如：新闻列表抓取生产配置" aria-label="配置名称" data-testid="deployment-name" /></label>

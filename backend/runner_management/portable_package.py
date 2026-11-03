@@ -33,6 +33,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import runpy
+import socket
 import sys
 from urllib.parse import urlparse
 from urllib.error import URLError
@@ -98,6 +99,7 @@ def main():
                     identity = json_request(server, '/api/runners/enroll', payload={
                         'packageToken': config['packageToken'], 'installDirectory': str(runner.directory),
                         'ipAddress': runner.ip_address, 'platform': sys.platform,
+                        'hostName': socket.gethostname(),
                         **getattr(runner, 'os_info', {}),
                         'capabilities': ['python', 'deployment-entry', 'retry-policy'],
                     })

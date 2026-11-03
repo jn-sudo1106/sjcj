@@ -1150,9 +1150,14 @@ class Application:
             raise ApiError("首次登记需要登记码", 403)
         if len(code) > 128:
             raise ApiError("登记码长度无效")
-        directory = str(Path(required_text(payload, "installDirectory", 1024)).resolve())
         ip = required_text(payload, "ipAddress", 64)
         platform = required_text(payload, "platform", 64)
+        from .runner_identity import install_directory, directory_key, reported_name
+        try:
+            directory = install_directory(payload.get('installDirectory'), platform)
+            name = reported_name(payload.get('name') or payload.get('hostName'), ip)
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
         os_type, os_version = reported_os(payload)
         capabilities = payload.get("capabilities", [])
         if not isinstance(capabilities, list) or not all(isinstance(x, str) for x in capabilities):
@@ -1169,10 +1174,17 @@ class Application:
                 row = db.execute("SELECT * FROM enrollment_codes WHERE code_hash=?", (hashlib.sha256(code.encode()).hexdigest(),)).fetchone()
                 if not row or row["used_at"] or row["expires_at"] < now():
                     raise ApiError("登记码无效或已过期", 403)
-            if db.execute("SELECT 1 FROM runners WHERE ip_address=? AND install_directory=?", (ip, directory)).fetchone():
-                raise ApiError("该机器 IP 与目录已有实例", 409)
+            for existing in db.execute('SELECT install_directory,platform FROM runners WHERE ip_address=?', (ip,)).fetchall():
+                if existing['platform'] != platform:
+                    continue
+                try:
+                    duplicate = directory_key(existing['install_directory'], platform, legacy=True) == directory_key(directory, platform)
+                except ValueError:
+                    duplicate = existing['install_directory'] == directory
+                if duplicate:
+                    raise ApiError("该机器 IP 与目录已有实例", 409)
             db.execute("INSERT INTO runners (runner_id,name,ip_address,install_directory,platform,capabilities,token_hash,status,last_heartbeat,desired_digest,actual_digest,last_error,os_type,os_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-                runner_id, str(payload.get("name") or socket.gethostname())[:100], ip, directory,
+                runner_id, name, ip, directory,
                 platform, json.dumps(capabilities), hashlib.sha256(token.encode()).hexdigest(),
                 "offline", None, None, None, None, os_type, os_version,
             ))
@@ -1652,7 +1664,14 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and path == "/api/runners/me/heartbeat":
                 runner_pid, worker_processes = heartbeat_processes(body)
                 os_type, os_version = reported_os(body)
+                from .runner_identity import reported_name
+                try:
+                    host_name = reported_name(body.get('hostName'), None)
+                except ValueError as exc:
+                    raise ApiError(str(exc)) from exc
                 with app.store.connect() as db:
+                    if host_name and runner['name'] in ('', runner['ip_address'], socket.gethostname()):
+                        db.execute('UPDATE runners SET name=? WHERE runner_id=?', (host_name, runner['runner_id']))
                     launcher_version = body.get('launcherVersion')
                     if isinstance(launcher_version, str) and 0 < len(launcher_version) <= 80:
                         db.execute('UPDATE runners SET launcher_version=? WHERE runner_id=?', (launcher_version, runner['runner_id']))
@@ -1874,6 +1893,28 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/source-code-tasks' and method in ('GET', 'POST'):
             from .generation_tasks import listing, submit
             return listing(app) if method == 'GET' else submit(app, body)
+        if sub == '/source-code-relations' and method == 'GET':
+            from .source_code_relations import listing
+            return listing(app, {key: values[0] for key, values in query.items() if values})
+        if sub == '/deployment-resources' and method in ('GET', 'POST'):
+            from .deployment_resources import rules, save_rules, entry_names
+            if method == 'POST':
+                return save_rules(app, body, self.headers)
+            with app.store.connect() as db:
+                return entry_names(db, rules(db))
+        if sub == '/node-deployment-resource' and method in ('GET', 'POST'):
+            from .deployment_resources import node_choice
+            return node_choice(app, body if method == 'POST' else {key: values[0] for key, values in query.items() if values}, save=method == 'POST')
+        if sub == '/deployment-jobs' and method == 'GET':
+            from .deployment_resources import listing
+            return listing(app, {key: values[0] for key, values in query.items() if values})
+        if sub == '/deployment-jobs' and method == 'POST':
+            from .deployment_resources import deploy_existing
+            return deploy_existing(app, body)
+        deployment_action = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})/(publish|retry|rollback)', sub)
+        if deployment_action and method == 'POST':
+            from .deployment_resources import action
+            return action(app, *deployment_action.groups())
         if sub == '/site-scripts/generation-destination' and method == 'GET':
             from .generation_destinations import automatic
             return automatic(app, {key: (query.get(key) or [''])[0] for key in ('configId', 'queueName', 'configType')})
@@ -1948,12 +1989,19 @@ class Handler(BaseHTTPRequestHandler):
                     return with_source_nodes(db, [get_configuration(app, deployment_route.group(1), db)])[0]
             if method == 'POST':
                 return save_configuration(app, body, deployment_route.group(1))
+            if method == 'DELETE':
+                from .deployment_configuration import remove_configuration
+                return remove_configuration(app, deployment_route.group(1), (query.get('revision') or [''])[0])
         if sub == '/runtime-configurations':
             from .deployment_configuration import list_runtimes, save_runtime
             if method == 'GET':
                 return list_runtimes(app)
             if method == 'POST':
                 return save_runtime(app, body)
+        runtime_entry = re.fullmatch(r'/runtime-configurations/([A-Za-z0-9_-]+)/entry', sub)
+        if runtime_entry and method in ('GET', 'POST'):
+            from .runtime_entry import entry
+            return entry(app, runtime_entry.group(1), body if method == 'POST' else None)
         runtime_control = re.fullmatch(r'/runtime-configurations/([A-Za-z0-9_-]+)/(start|stop)', sub)
         if runtime_control and method == 'POST':
             from .runtime_history import control
@@ -2274,6 +2322,15 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
 
     sweeper = threading.Thread(target=sweep, name="runner-offline-sweeper", daemon=True)
     sweeper.start()
+    def deployment_sweep() -> None:
+        from .deployment_resources import dispatch
+        while not stopped.wait(RUNNER_SWEEP_INTERVAL_SECONDS):
+            try:
+                dispatch(application)
+            except Exception as exc:
+                print(f"代码部署调度失败：{exc}", file=sys.stderr, flush=True)
+    deployment_worker = threading.Thread(target=deployment_sweep, name='generated-code-deployment', daemon=True)
+    deployment_worker.start()
     try:
         server.serve_forever()
     finally:
@@ -2283,6 +2340,7 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
             lan_server.shutdown(); lan_server.server_close()
             lan_thread.join(timeout=5)
         sweeper.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
+        deployment_worker.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
 
 
 if __name__ == "__main__":

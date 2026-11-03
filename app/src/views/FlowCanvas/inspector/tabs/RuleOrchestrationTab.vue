@@ -64,7 +64,7 @@ const router = useRouter()
 const route = useRoute()
 // 源画布的 flow.flowId 是源视角工作区键（可能等于 sourceId），不能直接作为后端流程 ID。
 const siteScriptFlowId = computed(() => canvasFlowIdOf(useFlowStore()))
-const { tables } = useNodeInspectorAssets()
+const { tables, ensureTableFields } = useNodeInspectorAssets()
 
 // 编排内容的 UI/行为分流谓词（2026-09-29）：规则处理 + PDF 抓取都渲染同一套「脚本工作区」
 // （描述/系统提示词/脚本正文/生成脚本/保存脚本 + 表绑定门禁）。
@@ -1403,13 +1403,21 @@ const siteScriptConfigType = computed(() => {
   if (!cfg.value) return ''
   return cfg.value.configType || String(configTypeFrom(cfg.value) ?? '')
 })
+const siteScriptOutputTableId = computed(() => cfg.value?.collectCfg?.outputTable || cfg.value?.outputTable || orchCfg.value.outputTableId || '')
+watch(siteScriptOutputTableId, tableId => { if (hasSiteScriptMode.value) ensureTableFields(tableId) }, { immediate: true })
+const siteScriptOutputTable = computed(() => tables.value.find(table => table.tableId === siteScriptOutputTableId.value))
+const siteScriptOutputFields = computed(() => {
+  const fields = siteScriptOutputTable.value?.fields ?? (cfg.value?.output ?? []).map(field => ({ prop: field.name, desc: field.desc, columnName: undefined, itemId: undefined }))
+  const selected = cfg.value?.taskCfg?.outColumns?.length ? cfg.value.taskCfg.outColumns : orchCfg.value.outputFields
+  return selected?.length ? fields.filter(field => selected.includes(field.prop) || !!field.columnName && selected.includes(field.columnName)) : fields
+})
 const siteScriptPromptVariables = computed(() => ({
   source_table: sourceTableName.value, input_table: sourceTableName.value,
-  output_table: orchCfg.value.outputTable?.trim() || sourceTableName.value,
+  output_table: siteScriptOutputTable.value?.tableName || siteScriptOutputTableId.value,
   input_fields: (orchCfg.value.inputFields?.length ? orchCfg.value.inputFields : inputFieldOptions.value.map(f => f.itemCode)).join(','),
-  output_fields: (orchCfg.value.outputFields?.length ? orchCfg.value.outputFields : outputFieldOptions.value.map(f => f.itemCode)).join(','),
+  output_fields: siteScriptOutputFields.value.map(field => field.prop).join(','),
   input_pair: inputFieldOptions.value.filter(f => !orchCfg.value.inputFields?.length || orchCfg.value.inputFields.includes(f.itemCode)).map(f => `${f.itemName}:${f.itemCode}`).join(','),
-  output_pair: outputFieldOptions.value.filter(f => !orchCfg.value.outputFields?.length || orchCfg.value.outputFields.includes(f.itemCode)).map(f => `${f.itemName}:${f.itemCode}`).join(','),
+  output_pair: siteScriptOutputFields.value.map(field => `${field.desc}:${field.prop}`).join(','),
   source_id: promptSourceId.value || '', source_cron: sourceCron.value || '',
   provider_code: orchCfg.value.modelProviderCode || '', model: orchCfg.value.modelCode || '',
 }))
@@ -2279,6 +2287,8 @@ function onTestScript() {
       :queue-name="siteScriptQueue"
       :config-type="siteScriptConfigType"
       :template-variables="siteScriptPromptVariables"
+      :output-fields="siteScriptOutputFields"
+      :output-table="siteScriptOutputTable?.tableName || siteScriptOutputTableId"
       @saved="onSiteScriptSaved"
     />
   </div>

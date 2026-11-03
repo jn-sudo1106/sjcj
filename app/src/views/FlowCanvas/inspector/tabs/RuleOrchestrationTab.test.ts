@@ -2678,6 +2678,27 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     wrapper.unmount()
   })
 
+  it('AI 代码工作区读取输出表字段及其 ID，按表配置的出参列筛选', async () => {
+    const { flow, wrapper } = mountOnCollectorNode(() => {
+      const output = { ...INPUT_TABLE, tableId: '900', tableName: 'sense_data.TB_NEWS', fields: [
+        { prop: 'news_title', desc: '新闻标题', itemId: '10001', columnName: 'K1', type: 'string' as const, required: false },
+        { prop: 'news_url', desc: '新闻链接', itemId: '10002', columnName: 'K2', type: 'url' as const, required: false },
+      ] }
+      vi.mocked(entryApi.entryDetail).mockResolvedValue(output)
+      useFlowStore().configs['web-1'].collectCfg!.outputTable = '900'
+      useFlowStore().configs['web-1'].taskCfg = { queue: 'news', urlRule: '', outColumns: ['K2'] }
+    })
+    await flushPromises()
+    const dialog = wrapper.findComponent(SiteScriptGeneratorDialog)
+    expect(dialog.props('outputTable')).toBe('sense_data.TB_NEWS')
+    expect(dialog.props('outputFields')).toEqual([expect.objectContaining({ prop: 'news_url', desc: '新闻链接', itemId: '10002' })])
+    expect(entryApi.entryDetail).toHaveBeenCalledWith('900')
+    flow.configs['web-1'].taskCfg!.outColumns = []
+    await flushPromises()
+    expect(dialog.props('outputFields')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
   it('采集节点的 Python 生成入口使用当前源列表 URL 和任务队列', async () => {
     const { flow, wrapper } = mountOnCollectorNode()
     useSourceStore().sourceCfg = { sourceId: 's-1', name: '测试源', url: 'https://www.realcan.cn/newscenter', configId: 'c-1', mainTable: '', owner: '', state: 'C' }

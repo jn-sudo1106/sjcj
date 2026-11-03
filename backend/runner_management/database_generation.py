@@ -72,6 +72,8 @@ def create(app, body):
         raise ApiError('任务数据 ID 无效')
     task_id = uuid.uuid4().hex
     data.update(configId=owner, taskId=task_id, sampleId='www.realcan.cn.py', autoCommit=True, deferCommit=False)
+    from .source_code_relations import source_context
+    data['sourceContext'] = source_context({'sourceId': source_id, 'flowId': flow_id, 'stepId': step_id, 'flowVersionId': body.get('flowVersionId')})
     for field in ('systemPrompt', 'userPrompt'):
         for name, value in {'sourceId': source_id, 'flowId': flow_id, 'configId': owner, 'taskId': task_id,
                             'sourceName': str(body.get('sourceName') or source_id), 'url': data['url'], 'sourceUrl': data['url']}.items():
@@ -89,6 +91,8 @@ def create(app, body):
     with app.store.connect() as db:
         db.execute('INSERT INTO generation_jobs (task_id,source_id,flow_id,config_id,interface_id,status,server_id,created_at,lease_until,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
                    (task_id, source_id, flow_id, owner, selected['id'], 'queued', '', record['createdAt'], 0, json.dumps(record, ensure_ascii=False)))
+        from .source_code_relations import note_task
+        note_task(db, record)
     return {'job': public(record)}
 
 

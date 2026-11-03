@@ -19,6 +19,7 @@ const machineFilter = ref(''), deliveryFilter = ref(''), page = ref(1), pageSize
 const loading = ref(false), saving = ref(false), error = ref(''), formError = ref('')
 const editing = ref(false), editingRow = ref<RuntimeConfiguration | null>(null)
 const controlling = ref(''), programErrors = ref<Record<string, string>>({})
+const entryRow = ref<RuntimeConfiguration | null>(null), entryFiles = ref<string[]>([]), selectedEntry = ref(''), entryRevision = ref(''), entryLayoutRevision = ref('')
 const defaultRetryPolicy = (): RunnerRetryPolicy => ({ enabled: true, maxAttempts: 5, windowSeconds: 300, delaysSeconds: [5, 15, 30, 60] })
 const form = reactive<Omit<RuntimeConfigurationInput, 'environment' | 'retryPolicy'> & { retryPolicy: RunnerRetryPolicy }>({ deploymentId: '', layoutRevision: '', runnerId: '', concurrency: 1, retryPolicy: defaultRetryPolicy() })
 const retryWindowMinutes = ref(5), retryDelays = ref('5, 15, 30, 60')
@@ -48,7 +49,7 @@ const visibleRows = computed(() => filteredRows.value.slice((page.value - 1) * p
 const boundMachines = computed(() => new Set(scopedRows.value.map(row => row.runnerId)))
 const onlineMachines = computed(() => [...boundMachines.value].filter(id => machineState(id) === 'online').length)
 const deliveryRow = ref<RuntimeConfiguration | null>(null)
-watch(() => editing.value || saving.value || !!controlling.value || !!deliveryRow.value, value => emit('busy', value), { immediate: true })
+watch(() => editing.value || !!entryRow.value || saving.value || !!controlling.value || !!deliveryRow.value, value => emit('busy', value), { immediate: true })
 const deliveryBinding = computed<DirectoryRunnerBinding | null>(() => deliveryRow.value?.binding || null)
 const machineStates = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常', unknown: '状态未知' }
 const deliveryStates = { none: '未下发', pending: '等待下发', running: '下发中', success: '已下发', failed: '下发失败' }
@@ -143,10 +144,34 @@ async function controlProgram(row: RuntimeConfiguration, start: boolean) {
   } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
   finally { controlling.value = ''; poll() }
 }
+async function configureEntry(row: RuntimeConfiguration) {
+  if (!canWrite.value || controlling.value) return
+  controlling.value = row.runtimeId; stopPoll(); ++request
+  try {
+    const result = await runnerManagementApi.runtimeEntry(row.runtimeId)
+    if (!result.files.length) throw new Error('此部署配置没有可启动的 Python 文件')
+    entryRow.value = row; entryFiles.value = result.files; selectedEntry.value = result.entryPoint
+    entryRevision.value = result.revision; entryLayoutRevision.value = result.layoutRevision
+    if (result.files.length === 1) await applyEntry()
+  } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
+  finally { controlling.value = ''; poll() }
+}
+async function applyEntry() {
+  if (!entryRow.value || !selectedEntry.value || saving.value) return
+  const row = entryRow.value
+  saving.value = true
+  try {
+    const item = await runnerManagementApi.saveRuntimeEntry(row.runtimeId, { entryPoint: selectedEntry.value, revision: entryRevision.value, layoutRevision: entryLayoutRevision.value })
+    rows.value = rows.value.map(value => value.runtimeId === item.runtimeId ? item : value)
+    configurations.value = configurations.value.map(value => value.deploymentId === item.deploymentId ? { ...value, entryPoint: selectedEntry.value, revision: item.layoutRevision } : value)
+    entryRow.value = null; delete programErrors.value[row.runtimeId]; ElMessage.success('启动文件已保存，可点击启动')
+  } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
+  finally { saving.value = false; poll() }
+}
 function stopPoll() { clearTimeout(timer); timer = undefined }
 function poll() {
   stopPoll()
-  if (active && initialized && !editing.value && !loading.value && !controlling.value) timer = setTimeout(() => { void refreshRows() }, rows.value.some(row => inFlight(row) || programState(row).waiting) ? 3000 : 15000)
+  if (active && initialized && !editing.value && !entryRow.value && !loading.value && !controlling.value) timer = setTimeout(() => { void refreshRows() }, rows.value.some(row => inFlight(row) || programState(row).waiting) ? 3000 : 15000)
 }
 async function refreshRows() {
   const seq = ++request
@@ -225,7 +250,7 @@ function delivered(item: DirectoryDelivery) {
 watch([keyword, machineFilter, deliveryFilter, pageSize], () => { page.value = 1 })
 watch(() => filteredRows.value.length, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize.value))) })
 onMounted(() => { void load() })
-onActivated(() => { active = true; if (initialized && !loading.value && !editing.value) void load() })
+onActivated(() => { active = true; if (initialized && !loading.value && !editing.value && !entryRow.value) void load() })
 onDeactivated(() => { active = false; stopPoll() })
 onUnmounted(() => { active = false; ++request; stopPoll() })
 </script>
@@ -300,6 +325,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
                 <div class="rb-directory-title"><el-icon><Folder /></el-icon><strong :title="directoryPath(row) || row.directoryTemplate" data-testid="binding-directory">{{ directoryPath(row) || (row.deploymentId ? '待完善目录模板' : '待选择部署配置') }}</strong></div>
                 <small v-if="fullPath(row.runnerId, directoryPath(row))" :title="fullPath(row.runnerId, directoryPath(row))" data-testid="binding-full-path">目标：{{ fullPath(row.runnerId, directoryPath(row)) }}</small>
                 <small v-if="row.entryPoint" :title="row.entryPoint">启动文件：{{ row.entryPoint }}</small>
+                <div v-if="entryRow?.runtimeId === row.runtimeId" class="rb-entry-picker"><el-select v-model="selectedEntry" aria-label="选择启动文件" placeholder="选择一个 Python 启动文件" filterable :disabled="saving"><el-option v-for="file in entryFiles" :key="file" :value="file" :label="file" /></el-select><el-button link type="primary" :disabled="!selectedEntry" :loading="saving" @click="applyEntry">保存入口</el-button><el-button link :disabled="saving" @click="entryRow = null; poll()">取消</el-button></div>
                 <small v-if="row.assignment && row.assignment.processorType !== 'deployment-entry' && row.entryPoint" class="rb-inline-error">旧启动方式，请编辑保存后采用所选文件</small>
                 <small v-if="row.binding?.delivery?.status === 'success' && row.binding.delivery.installedPath" :title="row.binding.delivery.installedPath" data-testid="binding-installed-path">上次落盘：{{ row.binding.delivery.installedPath }}</small>
               </td>
@@ -315,6 +341,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
               </td>
               <td><div class="rb-actions">
                 <el-button link type="primary" data-testid="binding-logs" @click="viewLogs(row)">日志</el-button>
+                <el-button v-if="canWrite && row.deploymentId && !row.assignment?.enabled" link type="primary" :disabled="loading || editing || saving || !!controlling || inFlight(row)" data-testid="binding-entry" @click="configureEntry(row)">{{ row.entryPoint ? '更换入口' : '设置入口' }}</el-button>
                 <el-button v-if="canWrite && row.assignment" link type="primary" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row) || (row.assignment.enabled && !canRestoreProcesses(row)) || machineState(row.runnerId) !== 'online'" :loading="controlling === row.runtimeId && (!row.assignment.enabled || canRestoreProcesses(row))" data-testid="binding-start" @click="controlProgram(row, true)">{{ canRestoreProcesses(row) ? '恢复进程' : '启动' }}</el-button>
                 <el-button v-if="canWrite && row.assignment" link type="danger" :disabled="loading || !!error || editing || saving || !!controlling || !row.assignment.enabled" :loading="controlling === row.runtimeId && row.assignment.enabled" data-testid="binding-stop" @click="controlProgram(row, false)">停止</el-button>
                 <el-button v-if="canWrite" link type="primary" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row)" @click="open(row)">编辑</el-button>
@@ -376,4 +403,5 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
 .rb-editor-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; border-top:1px solid var(--el-border-color-lighter); margin-top:16px; padding-top:12px; }.rb-editor-footer > span { color:var(--rc-muted); font-size:12px; }
 .rb-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-top:1px solid var(--el-border-color-lighter); }.rb-footer > span { font-size:12px; color:var(--rc-muted); }
 @media (max-width:1100px) { .rb-filter-note, .rb-footer > span { display:none; }.rb-footer { justify-content:flex-end; }.rb-filters .rb-search { flex:1; width:auto; } }
+.rb-entry-picker{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}.rb-entry-picker .el-select{width:100%;max-width:320px}
 </style>

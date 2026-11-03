@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import uuid
+from contextlib import nullcontext
 
 from .directory_bindings import owner_key, owner_layout
 from .directory_layout import normalize, safe_path, snapshot_files
@@ -127,9 +128,9 @@ def file_sources(names, sources):
     return result
 
 
-def request_delivery(app, binding_type, owner_id, runner_id, payload):
+def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=None):
     from .server import ApiError, GIT_LOCK
-    with GIT_LOCK, app.store.connect() as db:
+    with GIT_LOCK, (nullcontext(_db) if _db is not None else app.store.connect()) as db:
         expire_deliveries(db)
         layout, owner_id = bound_layout(app, binding_type, owner_id, runner_id, db)
         if payload.get('revision') != layout['revision']:

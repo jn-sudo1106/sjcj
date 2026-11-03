@@ -8,7 +8,7 @@ import { runnerManagementApi, type DeploymentConfiguration, type DirectoryDelive
 import { useAuthStore } from '@/stores/auth'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { runtimeConfigurations: vi.fn(), deploymentConfigurations: vi.fn(), instances: vi.fn(), saveRuntimeConfiguration: vi.fn(), startRuntimeProgram: vi.fn(), stopRuntimeProgram: vi.fn(), removeRuntimeConfiguration: vi.fn(), directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { runtimeEntry: vi.fn(), saveRuntimeEntry: vi.fn(), runtimeConfigurations: vi.fn(), deploymentConfigurations: vi.fn(), instances: vi.fn(), saveRuntimeConfiguration: vi.fn(), startRuntimeProgram: vi.fn(), stopRuntimeProgram: vi.fn(), removeRuntimeConfiguration: vi.fn(), directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
 const configuration: DeploymentConfiguration = { deploymentId: 'a'.repeat(32), name: '新闻生产配置', pathStyle: 'config', codeId: '', configId: '123', queueName: 'news_list', siteHost: '', directoryTemplate: '{configId}/prod', entryPoint: 'main.py', nodes: [], revision: 'layout-v1',
   sourceNode: { flowId: 'flow-88', flowName: '财经新闻采集流程', stepId: 'step-7', nodeName: '网页列表抓取', configId: '123' } }
 const existing: RuntimeConfiguration = { runtimeId: 'runtime-1', deploymentId: configuration.deploymentId, name: configuration.name, runnerId: 'r-1', assignmentId: 'assignment-1', appliedRevision: 'layout-v1', layoutRevision: 'layout-v1', revision: 'runtime-v1', directoryTemplate: configuration.directoryTemplate, entryPoint: 'main.py',
@@ -432,5 +432,30 @@ it('自动刷新机器心跳状态，编辑期间暂停刷新，分页后查询�
   const calls = vi.mocked(runnerManagementApi.runtimeConfigurations).mock.calls.length
   await vi.advanceTimersByTimeAsync(16000)
   expect(runnerManagementApi.runtimeConfigurations).toHaveBeenCalledTimes(calls)
+  wrapper.unmount()
+})
+
+it('单个启动文件自动保存入口后展示启动按钮，不自动启动进程', async () => {
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, assignment: null, assignmentId: '', entryPoint: '' }])
+  vi.mocked(runnerManagementApi.runtimeEntry).mockResolvedValue({ files: ['run.py'], entryPoint: 'run.py', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
+  vi.mocked(runnerManagementApi.saveRuntimeEntry).mockResolvedValue({ ...existing, entryPoint: 'run.py', assignment: { ...existing.assignment!, enabled: false } })
+  const { wrapper } = await setup()
+  await wrapper.get('[data-testid="binding-entry"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveRuntimeEntry).toHaveBeenCalledWith('runtime-1', { entryPoint: 'run.py', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
+  expect(wrapper.find('[data-testid="binding-start"]').exists()).toBe(true)
+  expect(runnerManagementApi.startRuntimeProgram).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('多个文件在当前列表选择入口后保存', async () => {
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, assignment: null, assignmentId: '', entryPoint: '' }])
+  vi.mocked(runnerManagementApi.runtimeEntry).mockResolvedValue({ files: ['one.py', 'two.py'], entryPoint: '', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
+  vi.mocked(runnerManagementApi.saveRuntimeEntry).mockResolvedValue({ ...existing, entryPoint: 'two.py', assignment: { ...existing.assignment!, enabled: false } })
+  const { wrapper } = await setup()
+  await wrapper.get('[data-testid="binding-entry"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveRuntimeEntry).not.toHaveBeenCalled()
+  const picker = wrapper.findAllComponents({ name: 'ElSelect' }).find(item => item.props('ariaLabel') === '选择启动文件')!
+  picker.vm.$emit('update:modelValue', 'two.py'); await flushPromises()
+  await wrapper.findAll('button').find(item => item.text() === '保存入口')!.trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveRuntimeEntry).toHaveBeenCalledWith('runtime-1', { entryPoint: 'two.py', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
   wrapper.unmount()
 })

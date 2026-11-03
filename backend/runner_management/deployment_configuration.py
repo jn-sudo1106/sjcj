@@ -22,6 +22,7 @@ from .directory_layout import (encode, get_config_layout, get_queue_layout,
 
 DEPLOYMENT_PREFIX = 'deployment-config:'
 RUNTIME_PREFIX = 'runtime-config:'
+DELETED_PREFIX = 'deployment-config-deleted:'
 
 
 def legacy_id(kind, owner):
@@ -41,6 +42,8 @@ def registry_key(layout, asset=None):
 
 
 def configurations(app, db):
+    deleted = {row['setting_key'][len(DELETED_PREFIX):] for row in db.execute(
+        'SELECT setting_key FROM settings WHERE setting_key LIKE ?', (DELETED_PREFIX + '%',)).fetchall()}
     result = {row['setting_key'][len(DEPLOYMENT_PREFIX):]: json.loads(row['setting_value'])
               for row in db.execute('SELECT * FROM settings WHERE setting_key LIKE ?', (DEPLOYMENT_PREFIX + '%',)).fetchall()}
     candidates = set()
@@ -59,6 +62,8 @@ def configurations(app, db):
     from .server import ApiError
     for kind, owner in sorted(candidates):
         identifier = legacy_id(kind, owner)
+        if identifier in deleted:
+            continue
         if identifier in result:
             continue
         try:
@@ -105,6 +110,34 @@ def list_configurations(app, keyword=''):
                        (' '.join(str(item.get(key, '')) for key in ('name', 'deploymentId', 'configId', 'queueName', 'siteHost', 'directoryTemplate')) +
                         ' '.join(str(node) for node in item.get('relatedSourceNodes', []))).casefold()),
                       key=lambda item: (item['name'].casefold(), item['deploymentId']))
+
+
+def remove_configuration(app, identifier, expected_revision):
+    from .server import ApiError, GIT_LOCK, now
+    from .directory_bindings import owner_key
+    from .directory_delivery import expire_deliveries
+    with GIT_LOCK, app.store.connect() as db:
+        item = get_configuration(app, identifier, db)
+        if expected_revision != item['revision']:
+            raise ApiError('部署配置已更新，请刷新列表后再删除', 409)
+        if (any(doc.get('deploymentId') == identifier for doc in documents(db))
+                or db.execute('SELECT 1 FROM directory_runner_bindings WHERE binding_type=? AND owner_id=?', ('deployment', identifier)).fetchone()
+                or any(row.get('deploymentId') == identifier for row in runtime_rows(app, db))):
+            raise ApiError('部署配置已绑定机器，请先到「服务器」移除对应绑定后再删除', 409)
+        expire_deliveries(db)
+        owners = [('deployment', identifier)]
+        if item.get('legacyType'):
+            owners.append((item['legacyType'], item['legacyOwner']))
+        for kind, owner in owners:
+            if db.execute("SELECT 1 FROM directory_deliveries WHERE binding_type=? AND owner_key=? AND status IN ('pending','running')",
+                          (kind, owner_key(owner))).fetchone():
+                raise ApiError('此部署配置有代码正在下发，请完成后再删除', 409)
+        db.execute('DELETE FROM settings WHERE setting_key=?', (DEPLOYMENT_PREFIX + identifier,))
+        if item.get('legacyType'):
+            # Old layouts/code assets remain as history, but must not recreate
+            # the deleted legacy projection on the next list request.
+            store_layout(db, DELETED_PREFIX + identifier, {'deploymentId': identifier, 'name': item['name'], 'deletedAt': now()})
+        return {'ok': True}
 
 
 def with_source_nodes(db, items):
@@ -212,6 +245,9 @@ def save_configuration(app, payload, identifier='', *, _db=None):
                     raise ApiError('关联代码必须属于来源节点配置')
                 item['codeId'] = code_id
         if current:
+            for key in ('managedBy', 'deploymentEnvironment'):
+                if key in current:
+                    item[key] = current[key]
             for key in ('legacyType', 'legacyOwner'):
                 if key in current:
                     item[key] = current[key]
@@ -245,7 +281,7 @@ def ensure_node_configuration(app, payload):
     identifier = uuid.uuid5(uuid.NAMESPACE_URL, 'ce:node-deployment:' + encode(identity)).hex
     with GIT_LOCK, app.store.connect() as db:
         items = configurations(app, db)
-        matches = [item for item in items.values() if item.get('sourceNode') and
+        matches = [item for item in items.values() if item.get('managedBy') != 'generated-code' and item.get('sourceNode') and
                    tuple(item['sourceNode'][key] for key in ('flowId', 'stepId', 'configId')) == identity]
         if len(matches) > 1 and identifier not in items:
             raise ApiError('该流程节点已有多个部署配置，请在部署配置中选择要更新的项', 409)
@@ -506,11 +542,11 @@ def program_snapshot(app, layout, db):
     return digest
 
 
-def save_runtime(app, payload):
+def save_runtime(app, payload, *, _db=None):
     from .server import ApiError, GIT_LOCK, now, required_text, valid_environment
     from .directory_bindings import owner_key
     from .directory_delivery import target_path
-    with GIT_LOCK, app.store.connect() as db:
+    with (nullcontext() if _db is not None else GIT_LOCK), (nullcontext(_db) if _db is not None else app.store.connect()) as db:
         rows = runtime_rows(app, db)
         old = next((row for row in rows if row['runtimeId'] == payload.get('runtimeId')), None)
         if payload.get('runtimeId') and not old:

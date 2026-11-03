@@ -64,6 +64,17 @@ class DatabaseGenerationTest(unittest.TestCase):
             tasks.execute(handler, self.app, server, job['taskId'])
         saved = tasks.read(self.app, job['taskId'])
         self.assertEqual(saved['status'], 'succeeded', saved['message'])
+        from backend.runner_management.source_code_relations import listing
+        relation = listing(self.app, {'taskId': job['taskId']})
+        self.assertEqual(relation['total'], 2)
+        self.assertTrue(all(item['sourceId'] == body['sourceId'] and item['configId'] == body['configId'] for item in relation['items']))
+        self.assertTrue(all(item['gitCommit'] == saved['result']['archive']['gitCommit'] for item in relation['items']))
+        self.assertTrue(all(item['latestTaskId'] == job['taskId'] for item in relation['items']))
+        latest = tasks.create(self.app, body)['job']
+        self.assertTrue(all(item['latestTaskId'] == latest['taskId'] and item['taskId'] == job['taskId']
+                            for item in listing(self.app, {'sourceId': body['sourceId']})['items']))
+        response = self.request('/api/runner-management/source-code-relations?sourceId=' + body['sourceId'])
+        self.assertEqual(response['total'], 2)
         # Previously completed tasks only stored repository paths in the result.
         # Recover source paths from the original archive receipt, not today's root.
         saved['result']['archive'].pop('serverCodeDirectory', None)
