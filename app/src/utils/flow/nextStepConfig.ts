@@ -1,4 +1,4 @@
-import { sourceApi, type Step } from '@/api'
+import { flowCenterApi, sourceApi, type Step } from '@/api'
 
 export interface ResolvedNextStepConfig {
   /** 是否存在后续步骤节点 */
@@ -36,6 +36,7 @@ export interface ResolvedNextStepConfig {
 }
 
 export interface CurrentNodeConfigHint {
+  flowId?: string
   configId?: string
   stepId?: string
   title?: string
@@ -246,6 +247,17 @@ export async function fetchNextStepConfig(
   fallbackSteps?: Step[],
   currentConfig?: CurrentNodeConfigHint,
 ): Promise<ResolvedNextStepConfig> {
+  // 源可关联多条流程；已指定流程时只读该流程，不能回退到源默认流程或其他流程快照。
+  if (currentConfig?.flowId) {
+    let currentSteps = fallbackSteps ?? []
+    try {
+      const fetched = await flowCenterApi.steps(currentConfig.flowId, { withConfigDetails: false, backendScope: 'default' })
+      if (fetched.length) currentSteps = fetched
+    } catch {
+      // 只允许使用调用方提供的当前流程步骤兜底。
+    }
+    return resolveNextStepConfigFromSteps(currentSteps, currentNodeId, currentConfig)
+  }
   let steps: Step[] = []
 
   const isTest = import.meta.env.MODE === 'test'

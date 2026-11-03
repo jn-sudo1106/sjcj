@@ -28,7 +28,7 @@ const src = computed(() => flow.sourceCtx)
 const view = ref<SourceWorkspaceView>(normalizeSourceView(route.query.view))
 const flowMode = computed(() => route.query.flowMode === 'list' ? 'list' : 'canvas')
 const isPrimaryFlow = computed(() => !src.value?.primaryFlowId || src.value.primaryFlowId === src.value.flowId)
-const canStartPublishedFlow = computed(() => isPrimaryFlow.value && src.value?.workflowVersionStatus !== 'DRAFT')
+const canStartPublishedFlow = computed(() => src.value?.workflowVersionStatus !== 'DRAFT')
 const versionMeta = computed(() => {
   const s = src.value
   if (!s?.workflowVersionStatus) return null
@@ -289,7 +289,7 @@ function srcSnatch() {
             @click="void retryFlowSave()"
           >保存失败，点击重试</button>
         </span>
-        <button class="rc-btn primary" type="button" :disabled="!canStartPublishedFlow" :title="!isPrimaryFlow ? '辅助/补数据流程不能从正常抓取入口启动' : src?.workflowVersionStatus === 'DRAFT' ? '草稿发布后才能作为新的运行版本发起抓取' : ''" @click="srcSnatch">发起抓取</button>
+        <button class="rc-btn primary" type="button" :disabled="!canStartPublishedFlow" :title="src?.workflowVersionStatus === 'DRAFT' ? '草稿发布后才能作为新的运行版本发起抓取' : ''" @click="srcSnatch">发起抓取</button>
         <CodeConfigButton data-testid="source-capture-code" :build-targets="captureCodeTargets" :node-configs="flow.configs" label="代码生成" />
       </div>
     </div>

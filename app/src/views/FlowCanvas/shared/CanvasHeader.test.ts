@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import CanvasHeader from './CanvasHeader.vue'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
 import { cloneConfig, isMonitorNode, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -50,6 +51,24 @@ describe('CanvasHeader · 流程二级导航', () => {
     expect(wrapper.find('.ch-canvas-actions').exists()).toBe(false)
     expect(wrapper.find('[data-testid="replace-flow-open"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="copy-current-flow"]').exists()).toBe(false)
+  })
+})
+
+describe('CanvasHeader · 当前流程发起抓取', () => {
+  it.each(['PUBLISHED', 'DRAFT'] as const)('辅助流程 %s：仅草稿禁止抓取', async (status) => {
+    const wrapper = await mountHeader()
+    useFlowStore().loadFromSource({
+      sourceId: '430024910', name: '测试源', url: '', configId: '', mainTable: '', owner: '', state: 'C',
+      flowId: '21000040', primaryFlowId: '14009350', workflowVersionStatus: status,
+    }, [])
+    const start = vi.fn()
+    useUiStore().registerAction('发起抓取', start)
+    await flushPromises()
+    const button = wrapper.get<HTMLButtonElement>('[aria-label="源运行操作"] .rc-btn.primary')
+    expect(button.element.disabled).toBe(status === 'DRAFT')
+    await button.trigger('click')
+    expect(start).toHaveBeenCalledTimes(status === 'DRAFT' ? 0 : 1)
+    wrapper.unmount()
   })
 })
 

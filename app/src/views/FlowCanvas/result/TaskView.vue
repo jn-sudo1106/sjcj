@@ -133,8 +133,8 @@ const DATE_SHORTCUTS = [
  */
 type TaskSearchField = 'taskId' | 'parentId' | 'taskUrl'
 const TASK_SEARCH_FIELDS: { value: TaskSearchField; label: string; placeholder: string; ready: boolean }[] = [
-  { value: 'taskId', label: '任务 ID', placeholder: '输入任务 ID，回车查询', ready: true },
-  { value: 'parentId', label: '数据 ID', placeholder: '输入数据 ID，回车查询', ready: true },
+  { value: 'taskId', label: '任务 ID', placeholder: '输入数字任务 ID，回车查询', ready: true },
+  { value: 'parentId', label: '数据 ID', placeholder: '输入数字数据 ID，回车查询', ready: true },
   { value: 'taskUrl', label: '任务 URL', placeholder: '输入任务 URL 片段，回车查询', ready: true },
 ]
 const searchField = ref<TaskSearchField>('taskId')
@@ -605,6 +605,18 @@ const filtersDirty = computed(() => {
  * 条件没变（比如同样的条件再点一次）watch 不会触发，手动重查——点了查询总得有反应。
  */
 function runQuery() {
+  const text = searchText.value.trim()
+  if (text && searchField.value !== 'taskUrl') {
+    const label = searchField.value === 'taskId' ? '任务 ID' : '数据 ID'
+    if (!/^\d+$/.test(text)) {
+      ElMessage.warning(`${label}只能输入数字；队列名请使用「队列名筛选」`)
+      return
+    }
+    if (BigInt(text) > 9223372036854775807n) {
+      ElMessage.warning(`${label}超出有效范围，请检查输入的 ID`)
+      return
+    }
+  }
   const changed = filtersDirty.value
   Object.assign(filters, draftConditions())
   if (!changed) {
