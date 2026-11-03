@@ -22,6 +22,7 @@ import FlowVersionBar from '@/views/FlowCanvas/canvas/FlowVersionBar.vue'
 import FlowVersionHistory from './FlowVersionHistory.vue'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
+import { instantiateStructureTemplate, makeStructureTemplate, structureDefinition } from '@/utils/flow/flowTemplates'
 import { trackEdit } from '@/utils/logEvents'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
@@ -31,6 +32,7 @@ const props = withDefaults(defineProps<{ flow: FlowRecord | null; categories?: {
 const emit = defineEmits<{
   close: []
   saved: [flow: FlowRecord]
+  templateSaved: [flow: FlowRecord]
   apply: [flow: FlowRecord]
 }>()
 
@@ -93,6 +95,15 @@ const autosave = useFlowAutosave()
 const name = ref('')
 const saving = ref(false)
 const publishing = ref(false)
+const structureMode = computed(() => !!props.flow?.definition.structureOnly)
+const newTemplate = computed(() => structureMode.value && !props.flow?.id)
+const structurePresets = [
+  { name: '单节点采集', testId: 'structure-preset-single', keys: ['web-list'] },
+  { name: '采集 → 下载', testId: 'structure-preset-download', keys: ['web-list', 'file-download'] },
+  { name: '列表 → 详情', testId: 'structure-preset-detail', keys: ['web-list', 'web-detail'] },
+]
+const selectedStructureNode = computed(() => canvas.configs[canvas.selectedId])
+const selectedStructureIndex = computed(() => canvas.main.indexOf(canvas.selectedId))
 const workingFlow = ref<FlowRecord | null>(null)
 const versionState = ref<WorkflowBinding | null>(null)
 // 多流程接口（workflow/*）未上线时没有草稿 / 发布：直接编辑原流程，保存即生效（合并 leo 分支前的行为）。
@@ -133,7 +144,30 @@ function unsavedConfigTitles(): string[] {
   return canvas.dirtyConfigNodes.map((id) => `「${canvas.configs[id]?.title || id}」`)
 }
 
-async function closeWorkspace() {
+const leaving = ref(false)
+
+async function canClose(): Promise<boolean> {
+  if (leaving.value || saving.value || publishing.value) return false
+  leaving.value = true
+  try {
+    return await confirmLeave()
+  } finally {
+    leaving.value = false
+  }
+}
+
+async function confirmLeave(): Promise<boolean> {
+  if (structureMode.value) {
+    if (canvas.flowDirty || name.value !== props.flow?.name || metaForm.seq !== (props.flow?.seq ?? 0)) {
+      try {
+        await ElMessageBox.confirm('关闭后将丢失未保存的模板改动。', '关闭模板编辑', {
+          confirmButtonText: '仍然关闭', cancelButtonText: '继续编辑', type: 'warning',
+        })
+      } catch { return false }
+    }
+    return true
+  }
+  if (loadingDetail.value) return true
   // 节点配置改了没点「保存」就关抽屉，改动会直接丢掉，先确认
   if (canvas.configDirty) {
     try {
@@ -144,29 +178,51 @@ async function closeWorkspace() {
       )
     } catch {
       canvas.select(canvas.dirtyConfigNodes[0])
-      return
+      return false
     }
   }
+  const record = workingFlow.value
+  if (record && (
+    name.value !== record.name || metaForm.seq !== (record.seq ?? 0)
+    || metaForm.categoryId !== (record.categoryId ?? '')
+    || normalizeTags(metaForm.tags) !== normalizeTags(record.flowTags ?? '')
+    || metaForm.description.trim() !== (record.description ?? '').trim()
+  )) {
+    try {
+      await ElMessageBox.confirm('离开后将丢失未保存的流程属性改动。', '流程属性未保存', {
+        confirmButtonText: '仍然离开', cancelButtonText: '继续编辑', type: 'warning',
+      })
+    } catch { return false }
+  }
+  let flushFailed = false
   if (canvas.flowDirty || autosave.status.value === 'saving') {
-    await autosave.flush()
-    if (autosave.status.value === 'error') {
-      try {
-        await ElMessageBox.confirm(
-          `画布改动尚未保存成功（${autosave.lastError.value || '保存失败'}）。\n仍然关闭将丢失这些改动，确定关闭吗？`,
-          '保存失败',
-          {
-            confirmButtonText: '仍然关闭',
-            cancelButtonText: '留在此页',
-            type: 'warning',
-          },
-        )
-      } catch {
-        return
-      }
+    try {
+      await autosave.flush()
+    } catch {
+      // 等待中的保存也可能失败，仍应让用户选择是否保留工作区。
+      flushFailed = true
     }
   }
-  emit('close')
+  const status = autosave.status.value
+  if (flushFailed || status === 'error' || status === 'pending') {
+    try {
+      await ElMessageBox.confirm(
+        flushFailed || status === 'error'
+          ? `画布改动尚未保存成功（${autosave.lastError.value || '保存失败'}）。仍然离开将丢失这些改动。`
+          : '画布仍有待配置或未保存的步骤。仍然离开可能丢失这些改动。',
+        '步骤未保存',
+        { confirmButtonText: '仍然离开', cancelButtonText: '留在此页', type: 'warning' },
+      )
+    } catch { return false }
+  }
+  return true
 }
+
+async function closeWorkspace() {
+  if (await canClose()) emit('close')
+}
+
+defineExpose({ canClose })
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -185,7 +241,7 @@ function definitionFromCanvas(): FlowDefinition {
   }
 }
 
-function loadIntoWorkspace(flow: FlowRecord, steps: Step[]) {
+function loadIntoWorkspace(flow: FlowRecord, steps: Step[], structureOnly = false) {
   name.value = flow.name
   canvas.clearSourceCtx()
   canvas.clearSiteCtx()
@@ -202,7 +258,7 @@ function loadIntoWorkspace(flow: FlowRecord, steps: Step[]) {
     updatedAt: flow.updatedAt,
   })
   // 0926：流程工作区形态——节点写 / 自动保存按 flowId 锚定（见 flow store flowIdMode 注释）
-  canvas.setFlowIdMode(true)
+  canvas.setFlowIdMode(!structureOnly)
   // 步骤快照：flowConf 画布的节点改名 / 条件编辑 / 孤儿「关联」仍要整包回写步骤行，必须有快照。
   // 由 openFlowInWorkspace 并进打开窗口取回（失败走空数组，改名/关联会提示缺快照，不阻断画布）。
   sourceStore.rememberSteps(steps, 'replace')
@@ -242,10 +298,9 @@ function loadIntoWorkspace(flow: FlowRecord, steps: Step[]) {
  * 枚举无从照抄（0904 Q3），不给选。
  */
 const metaForm = reactive({ categoryId: '', tags: '', description: '', seq: 0 })
-watch(() => props.flow?.id, (id, prev) => {
-  // 打开时绑定步骤自动保存、关闭时解绑（绑定的是流程工作区形态，见 ensureAutosaveBound）
-  if (id && !prev) ensureAutosaveBound()
-  if (!id && prev) ensureAutosaveUnbound()
+watch([() => props.flow?.id, structureMode], ([id, structureOnly]) => {
+  if (id && !structureOnly) ensureAutosaveBound()
+  else ensureAutosaveUnbound()
   // 抽屉是独立的一块工作区，不该继承画布页上次留下的收起/展开状态（两边共用同一对 ui 标志）
   ui.resetInspectorLayout()
   metaForm.seq = props.flow?.seq ?? 0
@@ -263,7 +318,7 @@ function normalizeTags(raw: string): string {
 }
 
 const derivedFromConfig = ref(false)
-async function deriveFromFlowConfig(flow: FlowRecord, prefetchedSteps?: Step[]): Promise<boolean> {
+async function deriveFromFlowConfig(flow: FlowRecord, requestId: number, prefetchedSteps?: Step[]): Promise<boolean> {
   // 0927 起打开工作区先把步骤整批取回（withConfigDetails 默认 true，configType/configUrl 等
   // 已挂在步骤上），这里直接用，不再整包重拉。configDetail 只剩一个用途：步骤里**没有真实
   // 根行**时合成 stub 起点（rootStepForSource 要 url/mainTable）——svg+flowId 正常返回自带
@@ -278,6 +333,7 @@ async function deriveFromFlowConfig(flow: FlowRecord, prefetchedSteps?: Step[]):
         prefetchedSteps,
       ]
     : await Promise.all([configApi.configDetail(flow.id), flowCenterApi.steps(flow.id, ...draftVersionArgs(flow.id))])
+  if (requestId !== loadSeq) return false
   const stubSource: Source = {
     sourceId: '',
     name: config?.name || flow.name,
@@ -359,15 +415,19 @@ async function openFlowInWorkspace(flow: FlowRecord) {
       : (full ?? flow)
     workingFlow.value = record
     metaForm.seq = record.seq ?? 0
+    metaForm.categoryId = record.categoryId ?? ''
+    metaForm.tags = record.flowTags ?? ''
+    metaForm.description = record.description ?? ''
     // 0927：一次取回**带 configType 的完整步骤**（withConfigDetails 默认 true）——它既是
     // 快照（改名/孤儿「关联」整包回写），也是工作区画布的内容源（配合下方"有步骤行就按
     // 步骤还原"），configType 让摘要/翻译/打标签等节点一回读就是对的模板，不用再补查。
     // 流程版本（2026-10-10）：217 起发布版只读，有草稿时工作区画布显示草稿
     await flowVersion.load(editFlowId)
+    if (reqId !== loadSeq) return
     const steps = await flowCenterApi.steps(editFlowId, ...draftVersionArgs(editFlowId))
       .catch((reason) => {
         console.warn('[flow-drawer] 步骤快照加载失败：改名/孤儿关联将缺少快照', reason)
-        stepsLoadFailed.value = true
+        if (reqId === loadSeq) stepsLoadFailed.value = true
         return [] as Step[]
       })
     if (reqId !== loadSeq) return
@@ -388,7 +448,7 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     // flowConf 只兜底「步骤侧没有内容」的场景（新建未落库流程 / 步骤接口故障）。
     const hasRealSteps = steps.some((s) => !!s.stepId)
     if (hasRealSteps) {
-      const derived = await deriveFromFlowConfig(record, steps).catch(() => false)
+      const derived = await deriveFromFlowConfig(record, reqId, steps).catch(() => false)
       if (reqId !== loadSeq) return
       if (derived) return
     }
@@ -397,7 +457,7 @@ async function openFlowInWorkspace(flow: FlowRecord) {
       return
     }
     // 存量流程走这条：flowConf 空，但这个流程自己的 config/步骤有真实内容
-    const derived = await deriveFromFlowConfig(record).catch(() => false)
+    const derived = await deriveFromFlowConfig(record, reqId).catch(() => false)
     if (reqId !== loadSeq) return
     if (!derived) loadIntoWorkspace(record, steps) // 配置和步骤都没给出内容，那就是一张真空白画布
   } catch (error) {
@@ -410,14 +470,78 @@ async function openFlowInWorkspace(flow: FlowRecord) {
   }
 }
 
-watch(() => props.flow?.id, () => {
-  if (props.flow) void openFlowInWorkspace(props.flow)
+watch([() => props.flow?.id, structureMode], () => {
+  const flow = props.flow
+  if (!flow) {
+    ++loadSeq
+    return
+  }
+  if (structureMode.value) {
+    ++loadSeq
+    loadingDetail.value = false
+    derivedFromConfig.value = false
+    stepsLoadFailed.value = false
+    workingFlow.value = flow
+    loadIntoWorkspace({ ...flow, definition: instantiateStructureTemplate(flow.definition) }, [], true)
+    return
+  }
+  void openFlowInWorkspace(flow)
 }, { immediate: true })
+
+async function useStructurePreset(preset: (typeof structurePresets)[number]) {
+  const record = workingFlow.value
+  if (!record || !newTemplate.value || saving.value) return
+  if (canvas.flowDirty || name.value !== record.name) {
+    try {
+      await ElMessageBox.confirm('应用后将替换模板名称和画布节点。', '应用预置结构', {
+        confirmButtonText: '应用预置', cancelButtonText: '继续编辑', type: 'warning',
+      })
+    } catch { return }
+  }
+  if (workingFlow.value !== record || saving.value) return
+  loadIntoWorkspace({ ...record, name: preset.name, definition: makeStructureTemplate(preset.keys) }, [], true)
+}
+
+async function saveStructureTemplate() {
+  const record = workingFlow.value
+  if (!record || !structureMode.value || saving.value) return
+  const trimmed = name.value.trim()
+  if (!trimmed) {
+    ElMessage.warning('请输入模板名称')
+    return
+  }
+  if (!Number.isInteger(metaForm.seq) || metaForm.seq < 0 || metaForm.seq > 2147483647) {
+    ElMessage.warning('SEQ必须为0至2147483647之间的整数')
+    return
+  }
+  let definition: FlowDefinition
+  try {
+    definition = structureDefinition(canvas)
+  } catch (error) {
+    ElMessage.warning((error as Error).message)
+    return
+  }
+  saving.value = true
+  try {
+    const { id } = record
+    const saved = await flowCenterApi.save({
+      ...(id ? { id } : {}), name: trimmed, definition, isTemplate: true, seq: metaForm.seq,
+    })
+    ElMessage.success(`流程模板「${saved.name}」已保存`)
+    if (workingFlow.value !== record) return
+    canvas.markSaved()
+    emit('templateSaved', saved)
+  } catch (error) {
+    ElMessage.error(`模板保存失败：${(error as Error).message}`)
+  } finally {
+    saving.value = false
+  }
+}
 
 // ---- 查看历史版本（2026-10-14，设计稿/设计方案/1014-流程历史版本查看_开发设计方案）----
 // 选一个历史版本：画布按该版本重读步骤并整体只读；节点结构是当时的，节点配置不随版本保存（217 实测），
 // 提示条把这一点说清楚。只做查看，不做切换发布版本。
-const showVersionHistory = computed(() => flowVersion.enabled && flowVersion.flowId === (workingFlow.value?.id || props.flow?.id))
+const showVersionHistory = computed(() => !structureMode.value && flowVersion.enabled && flowVersion.flowId === (workingFlow.value?.id || props.flow?.id))
 const historyRow = computed(() => (showVersionHistory.value ? flowVersion.history : undefined))
 const viewingVersionId = computed(() => historyRow.value?.versionId ?? flowVersion.currentVersionId)
 const historyLabel = computed(() => {
@@ -599,6 +723,7 @@ async function publishVersion() {
     ref="drawerRef"
     class="fd-drawer"
     :class="{ 'is-resizing': resizing }"
+    :inert="leaving"
     :style="drawerWidth === undefined ? undefined : { '--fd-drawer-width': `${drawerWidth}px` }"
     aria-label="流程工作区"
   >
@@ -606,9 +731,10 @@ async function publishVersion() {
     <header class="fd-head">
       <div class="fd-title">
         <span class="fd-kicker">流程工作区</span>
-        <input v-model="name" class="fd-name" aria-label="流程名称" :disabled="!!historyRow" @input="canvas.setFlowName(name)" />
+        <input v-model="name" class="fd-name" :aria-label="structureMode ? '模板名称' : '流程名称'" :disabled="!!historyRow || (structureMode && saving)" @input="canvas.setFlowName(name)" />
         <p>
-          {{ workingFlow?.id || flow.id }} · 更新于 {{ workingFlow?.updatedAt || flow.updatedAt || '—' }}
+          <template v-if="newTemplate">新建流程模板</template>
+          <template v-else>{{ workingFlow?.id || flow.id }} · 更新于 {{ workingFlow?.updatedAt || flow.updatedAt || '—' }}</template>
           <span v-if="versionState?.draftFlowId" class="fd-badge draft" data-testid="flow-drawer-version-status">
             草稿 v{{ versionState.draftVersionNo }}
           </span>
@@ -616,7 +742,7 @@ async function publishVersion() {
             当前发布 v{{ versionState.publishedVersionNo }}
           </span>
           <!-- 217 流程版本（2026-10-11）：紧凑徽标 + 放弃 / 发布，与源画布流程标签栏同一组件 -->
-          <FlowVersionBar />
+          <FlowVersionBar v-if="!structureMode" />
           <FlowVersionHistory
             v-if="showVersionHistory"
             :overview="flowVersion.overview"
@@ -630,7 +756,7 @@ async function publishVersion() {
       </div>
       <!-- 0927 P0-1：抽屉内保存状态条（embedded 画布不渲染 CanvasHeader，状态/重试原来
            无处可看可点；同时把 error 态的「强关出口」显式化，见 closeWorkspace）。 -->
-      <div v-if="!loadingDetail" class="fd-save-status" data-testid="flow-drawer-save-status">
+      <div v-if="!structureMode && !loadingDetail" class="fd-save-status" data-testid="flow-drawer-save-status">
         <template v-if="autosave.status.value === 'error'">
           <span class="fd-save-text is-error">步骤保存失败，将自动重试</span>
           <button
@@ -645,7 +771,7 @@ async function publishVersion() {
         <template v-else-if="autosave.status.value === 'pending'"><span class="fd-save-text is-pending">待补全节点配置后自动保存（见右侧提示）</span></template>
         <template v-else-if="autosave.status.value === 'saved'"><span class="fd-save-text">步骤已保存</span></template>
       </div>
-      <button class="fd-close" type="button" title="关闭" @click="void closeWorkspace()">✕</button>
+      <button class="fd-close" type="button" title="关闭" :disabled="structureMode && saving" @click="void closeWorkspace()">✕</button>
     </header>
 
     <!-- 流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述可改，随「保存流程」一起提交。
@@ -653,25 +779,37 @@ async function publishVersion() {
     <div class="fd-meta">
       <label class="fd-meta-item">
         <span>排序号</span>
-        <input v-model.number="metaForm.seq" type="number" min="0" max="2147483647" step="1" style="width: 82px" class="fd-meta-input" :disabled="!!historyRow || loadingDetail" data-testid="flow-meta-seq" title="SEQ，越小越靠前" />
+        <input v-model.number="metaForm.seq" type="number" min="0" max="2147483647" step="1" style="width: 82px" class="fd-meta-input" :disabled="!!historyRow || loadingDetail || (structureMode && saving)" data-testid="flow-meta-seq" title="SEQ，越小越靠前" />
       </label>
-      <label class="fd-meta-item">
+      <label v-if="!structureMode" class="fd-meta-item">
         <span>分类</span>
         <select v-model="metaForm.categoryId" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-category">
           <option value="">不设置</option>
           <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
       </label>
-      <label class="fd-meta-item">
+      <label v-if="!structureMode" class="fd-meta-item">
         <span>标签</span>
         <input v-model="metaForm.tags" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-tags" placeholder="多个用逗号或空格分隔" />
       </label>
-      <label class="fd-meta-item grow">
+      <label v-if="!structureMode" class="fd-meta-item grow">
         <span>描述</span>
         <input v-model="metaForm.description" class="fd-meta-input" :disabled="!!historyRow" data-testid="flow-meta-desc" placeholder="选填" />
       </label>
-      <span v-if="flow.bizType" class="fd-meta-ro" title="业务大类（只读）">大类 {{ flow.bizType }}</span>
-      <span v-if="flow.createdAt" class="fd-meta-ro">创建于 {{ flow.createdAt }}</span>
+      <template v-if="newTemplate">
+        <span class="fd-meta-ro">预置结构</span>
+        <button
+          v-for="preset in structurePresets"
+          :key="preset.testId"
+          class="fd-secondary"
+          type="button"
+          :disabled="saving"
+          :data-testid="preset.testId"
+          @click="void useStructurePreset(preset)"
+        >{{ preset.name }}</button>
+      </template>
+      <span v-if="!structureMode && flow.bizType" class="fd-meta-ro" title="业务大类（只读）">大类 {{ flow.bizType }}</span>
+      <span v-if="!structureMode && flow.createdAt" class="fd-meta-ro">创建于 {{ flow.createdAt }}</span>
     </div>
 
     <div v-if="loadingDetail" class="fd-loading" data-testid="flow-workspace-loading">正在加载流程定义…</div>
@@ -699,10 +837,11 @@ async function publishVersion() {
     <div
       v-if="!loadingDetail"
       class="fd-workspace"
-      :class="{ expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed }"
+      :class="{ 'fd-structure': structureMode, expanded: !structureMode && ui.inspectorExpanded, 'insp-collapsed': !structureMode && ui.inspectorCollapsed }"
+      :inert="structureMode && saving"
     >
       <button
-        v-if="ui.inspectorExpanded"
+        v-if="!structureMode && ui.inspectorExpanded"
         type="button"
         class="fd-strip"
         data-testid="flow-drawer-canvas-collapsed"
@@ -710,10 +849,28 @@ async function publishVersion() {
         @click="ui.toggleInspectorExpanded()"
       >» 画布已收起</button>
       <section v-else class="fd-canvas" aria-label="流程节点">
-        <FlowBoard embedded />
+        <FlowBoard :key="structureMode ? 'template' : 'flow'" embedded :structure-template="structureMode" />
+      </section>
+      <section v-if="structureMode" class="fd-structure-inspector" aria-label="模板节点设置">
+        <h3>模板节点</h3>
+        <p>点画布上的「＋」添加节点。可以拖动节点调整顺序。</p>
+        <template v-if="selectedStructureNode">
+          <label class="fd-meta-item">
+            <span>节点名称</span>
+            <input
+              :value="selectedStructureNode.title"
+              class="fd-meta-input"
+              @input="canvas.setTitle(canvas.selectedId, ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <div class="fd-structure-actions">
+            <button class="fd-secondary" type="button" :disabled="selectedStructureIndex <= 1" @click="canvas.move(canvas.selectedId, -1)">上移</button>
+            <button class="fd-secondary" type="button" :disabled="selectedStructureIndex >= canvas.main.length - 2" @click="canvas.move(canvas.selectedId, 1)">下移</button>
+          </div>
+        </template>
       </section>
       <button
-        v-if="ui.inspectorCollapsed"
+        v-else-if="ui.inspectorCollapsed"
         type="button"
         class="fd-strip"
         data-testid="flow-drawer-inspector-collapsed"
@@ -725,7 +882,12 @@ async function publishVersion() {
       </section>
     </div>
 
-    <footer class="fd-foot">
+    <footer v-if="structureMode" class="fd-foot">
+      <span class="fd-foot-note">模板提供起始节点与顺序。用模板新建后，可在具体流程中调整节点和业务配置。</span>
+      <button class="fd-secondary" type="button" :disabled="saving" @click="void closeWorkspace()">取消</button>
+      <button class="fd-primary" type="button" :disabled="saving" data-testid="structure-template-save" @click="void saveStructureTemplate()">{{ saving ? '保存中…' : '保存模板' }}</button>
+    </footer>
+    <footer v-else class="fd-foot">
       <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
            答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
            这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
@@ -784,6 +946,12 @@ async function publishVersion() {
 .fd-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 42%) minmax(420px, 1fr); gap: 10px; padding: 10px; background: #f4f7fb; }
 .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
 .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
+.fd-workspace.fd-structure { grid-template-columns: minmax(0, 1fr) minmax(180px, 28%); }
+.fd-structure-inspector { min-width: 0; overflow: auto; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+.fd-structure-inspector h3 { margin: 0; font-size: 14px; }
+.fd-structure-inspector p { margin: 8px 0 16px; font-size: 12px; color: #64748b; }
+.fd-structure-inspector label { display: grid; gap: 6px; }
+.fd-structure-actions { display: flex; gap: 8px; margin-top: 12px; }
 .fd-canvas, .fd-inspector { min-width: 0; min-height: 0; }
 .fd-strip { min-width: 0; padding: 0; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; writing-mode: vertical-rl; }
 .fd-strip:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-color: #93c5fd; }
@@ -795,7 +963,7 @@ async function publishVersion() {
 .fd-primary:disabled, .fd-secondary:disabled { opacity: .55; cursor: not-allowed; }
 @media (max-width: 980px) {
   .fd-drawer { width: var(--fd-drawer-width, 100vw); }
-  .fd-workspace:not(.expanded):not(.insp-collapsed) { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
+  .fd-workspace:not(.expanded):not(.insp-collapsed):not(.fd-structure) { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
   .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
   .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
 }

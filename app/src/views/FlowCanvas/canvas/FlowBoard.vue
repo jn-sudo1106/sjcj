@@ -8,6 +8,7 @@ let flowBoardSeq = 0
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore, type EdgeSlot } from '@/stores/flow'
+import { makeStructureNode, MAX_STRUCTURE_NODES, structureNodeGroups } from '@/utils/flow/flowTemplates'
 import { tableForDownstream } from '@/utils/flow/tableSync'
 import { useSourceStore } from '@/stores/source'
 import { useDuplicateNode } from './useDuplicateNode'
@@ -44,7 +45,7 @@ import {
 // （vue-tsc：TS1232 + TS2307 + 连带 any）。
 const markerPrefix = `rc-arrow-${++flowBoardSeq}`
 
-const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+const props = withDefaults(defineProps<{ embedded?: boolean; structureTemplate?: boolean }>(), { embedded: false })
 const flow = useFlowStore()
 // 复制节点 = 新增一套配置（0828 D02）：副本必须绑一份新配置，不能沿用原 configId
 const duplicateNode = useDuplicateNode()
@@ -62,8 +63,8 @@ const recommending = ref(false)
 const flowVersion = useFlowVersionStore()
 const isLeoPublishedView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
   && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
-const isPublishedView = computed(() => isLeoPublishedView.value
-  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow)))
+const isPublishedView = computed(() => !props.structureTemplate && (isLeoPublishedView.value
+  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow))))
 
 // 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
@@ -235,6 +236,25 @@ function footClass(cfg: NodeConfig) {
   return { warn: foot.warn, ok: foot.left === '运行' }
 }
 
+function insertNode(afterId: string, template: string) {
+  if (!props.structureTemplate) {
+    flow.insertAfter(afterId, template)
+    return
+  }
+  const node = makeStructureNode(template)
+  if (!node) return
+  if (flow.main.length - 2 >= MAX_STRUCTURE_NODES) {
+    ElMessage.warning(`模板最多可包含 ${MAX_STRUCTURE_NODES} 个节点`)
+    return
+  }
+  flow.insertAfter(afterId, node)
+}
+
+function removeNode(id: string) {
+  if (props.structureTemplate) flow.remove(id)
+  else void deleteCanvasNode(id)
+}
+
 // ---- 拖放 ----
 function onDragOver(ev: DragEvent) {
   ev.preventDefault()
@@ -263,7 +283,7 @@ function onDrop(ev: DragEvent) {
   }
   const template = ev.dataTransfer?.getData('text/plain')
   if (!template) return
-  flow.insertAfter(afterId, template)
+  insertNode(afterId, template)
 }
 function onSlotDrop(ev: DragEvent, afterId: string) {
   ev.preventDefault()
@@ -273,8 +293,8 @@ function onSlotDrop(ev: DragEvent, afterId: string) {
     flow.moveTo(nodeId, afterId)
     return
   }
-  const template = ev.dataTransfer?.getData('text/plain') || 'web'
-  flow.insertAfter(afterId, template)
+  const template = ev.dataTransfer?.getData('text/plain')
+  insertNode(afterId, template || (props.structureTemplate ? '' : 'web'))
 }
 // 拖拽画布节点本身 → 重排
 function onNodeDragStart(ev: DragEvent, id: string) {
@@ -324,7 +344,7 @@ function menuAction(action: string) {
   else if (action === 'move-down' && id) flow.move(id, 1)
   else if (action === 'toggle' && id) flow.toggleDisabled(id)
   else if (action === 'run-node' && id) runNode(id)
-  else if (action === 'delete' && id) void deleteCanvasNode(id)
+  else if (action === 'delete' && id) removeNode(id)
 }
 
 // 孤儿步骤关联（0925）：解析不出 lastStep 的步骤节点在画布上带「孤儿」标记，
@@ -454,7 +474,7 @@ function openEdgeAddPopover(x: number, y: number, slot: EdgeSlot) {
 // 旧平台语义（SourceStepCard openCreatePanel）：新步骤上级 = 该节点的上级；上级没有输出表不能加后续。
 /** 根位节点（没有上级）不能加兄弟；已发布只读版本不显示 */
 function canAddSibling(id: string): boolean {
-  return !isPublishedView.value && !!flow.canvasParentMap.get(id)
+  return !props.structureTemplate && !isPublishedView.value && !!flow.canvasParentMap.get(id)
 }
 /** 上级没有可给下游的表时不能加（提示沿用旧平台原文） */
 function siblingBlockedReason(id: string): string {
@@ -497,7 +517,7 @@ function onPickNode(template: string) {
   if (addPop.siblingOf) flow.addSibling(addPop.siblingOf, template)
   else if (addPop.edge) flow.insertOnEdge(addPop.edge.parentId, addPop.edge.childIds, template)
   else if (addPop.branch) flow.addNodeToBranch(addPop.branch.ownerId, addPop.branch.branchId, template)
-  else flow.insertAfter(addPop.afterId, template)
+  else insertNode(addPop.afterId, template)
   closeAddPopover()
 }
 
@@ -511,7 +531,8 @@ function openNodePalette() {
   menu.show = false
 }
 function pickNodeFromPalette(template: string) {
-  flow.insertAfter(flow.selectedId || 'end', template)
+  insertNode(flow.selectedId || 'end', template)
+  if (props.structureTemplate) closeNodePalette()
 }
 function onPaletteDragStart(event: DragEvent, template: string) {
   if (!event.dataTransfer) return
@@ -604,7 +625,7 @@ watch(
         </svg>
 
         <!-- 空白源画布引导卡 -->
-        <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
+        <div v-if="!props.structureTemplate && !flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
           <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，或按当前对象智能生成一套初始流程；生成后再逐节点调整。</div>
           <div class="rc-empty-cta-btns">
@@ -721,7 +742,7 @@ watch(
             type="button"
             title="删除节点"
             data-testid="node-delete"
-            @click.stop="void deleteCanvasNode(n.id)"
+            @click.stop="removeNode(n.id)"
           >✕</button>
           <!-- 0930 顶栏（用户选定方案 A）：左边类型名，右边状态标签 + 步骤 ID。
                0904 I12（Z6-1）要求把类型写出来；左侧 `90`/`R` 类型编号徽标 0930 去掉（「没什么用」）。
@@ -729,7 +750,7 @@ watch(
                草稿节点是本地临时 ID，不显示。状态标签原来绝对定位在右上角，与 ID 抢位置，并进来排在 ID 前。 -->
           <div class="rc-node-meta">
             <div class="rc-node-type" data-testid="node-type-label">{{ nodeTypeLabel(n.cfg) }}</div>
-            <div class="rc-node-meta-end">
+            <div v-if="!props.structureTemplate" class="rc-node-meta-end">
               <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
               <button
                 v-if="n.orphan && !isPublishedView"
@@ -755,8 +776,8 @@ watch(
 
           <!-- 0926 反馈→拍板：卡片只标「条件」tag（提示该节点有条件进入），不再展示 cond 具体文案——
                具体内容在连线/分支列标签上展示；条件与「运行」状态同行；悬停仍可看全文 -->
-          <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
-          <div class="rc-node-foot">
+          <div v-if="!props.structureTemplate && tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
+          <div v-if="!props.structureTemplate" class="rc-node-foot">
             <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
             <span v-if="extraParentsTitle(n.id)" :data-testid="`node-extra-parents-${n.id}`" class="rc-node-cond" :title="extraParentsTitle(n.id)">另有上级</span>
             <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
@@ -767,19 +788,19 @@ watch(
     </div>
     </div>
 
-    <button class="rc-btn rc-flow-xml" type="button" @click.stop="xmlOpen = true">XML</button>
-    <FlowXmlDialog v-model:open="xmlOpen" :xml="xml" :flow-id="flow.flowId" :can-export="canExportXml" />
+    <button v-if="!props.structureTemplate" class="rc-btn rc-flow-xml" type="button" @click.stop="xmlOpen = true">XML</button>
+    <FlowXmlDialog v-if="!props.structureTemplate" v-model:open="xmlOpen" :xml="xml" :flow-id="flow.flowId" :can-export="canExportXml" />
 
     <!-- 右键菜单 -->
     <div v-if="menu.show" class="rc-node-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @click.stop>
       <template v-if="menu.nodeId">
         <button type="button" @click="menuAction('insert-node')">添加节点</button>
         <div class="sep" />
-        <button type="button" @click="menuAction('copy')">复制节点</button>
+        <button v-if="!props.structureTemplate" type="button" @click="menuAction('copy')">复制节点</button>
         <button type="button" @click="menuAction('move-up')">上移</button>
         <button type="button" @click="menuAction('move-down')">下移</button>
-        <button type="button" @click="menuAction('toggle')">运行 / 停止</button>
-        <button type="button" :disabled="runtime.running" @click="menuAction('run-node')">运行此节点</button>
+        <button v-if="!props.structureTemplate" type="button" @click="menuAction('toggle')">运行 / 停止</button>
+        <button v-if="!props.structureTemplate" type="button" :disabled="runtime.running" @click="menuAction('run-node')">运行此节点</button>
         <div class="sep" />
         <button class="danger" type="button" @click="menuAction('delete')">删除节点</button>
       </template>
@@ -793,6 +814,7 @@ watch(
       v-if="addPop.show"
       :x="addPop.x"
       :y="addPop.y"
+      :node-groups="props.structureTemplate ? structureNodeGroups : undefined"
       @pick="onPickNode"
       @close="closeAddPopover"
     />
@@ -800,6 +822,7 @@ watch(
       v-if="nodePalette.show"
       :x="nodePalette.x"
       :y="nodePalette.y"
+      :node-groups="props.structureTemplate ? structureNodeGroups : undefined"
       compact
       @pick="pickNodeFromPalette"
       @dragstart="onPaletteDragStart"
