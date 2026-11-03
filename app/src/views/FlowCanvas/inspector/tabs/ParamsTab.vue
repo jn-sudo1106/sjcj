@@ -22,9 +22,12 @@ const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.val
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
 watch(nodeTableId, (tid) => ensureTableFields(tid), { immediate: true })
 const outputTableFields = computed(() =>
-  fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output))
-const outColumns = computed<string[]>(() => cfg.value?.taskCfg?.outColumns ?? [])
-const canAddOutColumn = computed(() => outputTableFields.value.some((f) => !outColumns.value.includes(f.prop)))
+  fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output)
+    .map((f) => ({ ...f, value: f.columnName || f.prop })))
+// 与表配置一致：保存物理列名，兼容历史字段名；只在编辑时写回，不因回显修改配置。
+const outColumns = computed<string[]>(() => (cfg.value?.taskCfg?.outColumns ?? []).map((token) =>
+  outputTableFields.value.find((f) => f.value === token || f.prop === token)?.value ?? token))
+const canAddOutColumn = computed(() => outputTableFields.value.some((f) => !outColumns.value.includes(f.value)))
 
 function onOutColumnChange(index: number, e: Event) {
   const next = [...outColumns.value]
@@ -32,8 +35,8 @@ function onOutColumnChange(index: number, e: Event) {
   flow.patchTaskConfig(id.value, { outColumns: next })
 }
 function addOutColumn() {
-  const next = outputTableFields.value.find((f) => !outColumns.value.includes(f.prop))
-  if (next) flow.patchTaskConfig(id.value, { outColumns: [...outColumns.value, next.prop] })
+  const next = outputTableFields.value.find((f) => !outColumns.value.includes(f.value))
+  if (next) flow.patchTaskConfig(id.value, { outColumns: [...outColumns.value, next.value] })
 }
 function removeOutColumn(index: number) {
   flow.patchTaskConfig(id.value, { outColumns: outColumns.value.filter((_, i) => i !== index) })
@@ -76,7 +79,7 @@ const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId
     <div v-if="outColumns.length" class="pt-field-list">
       <div v-for="(fieldId, index) in outColumns" :key="`${fieldId}-${index}`" class="pt-field-row">
         <select class="rc-select" :value="fieldId" @change="onOutColumnChange(index, $event)">
-          <option v-for="f in outputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+          <option v-for="f in outputTableFields" :key="f.prop" :value="f.value">{{ f.prop }} · {{ f.desc }}</option>
         </select>
         <button class="rc-row-del" type="button" title="删除字段" @click="removeOutColumn(index)">×</button>
       </div>

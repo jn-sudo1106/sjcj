@@ -166,3 +166,63 @@ it('任务配置中的出参列继续写入当前节点 taskCfg', async () => {
   expect(flow.configs['web-1'].taskCfg?.outColumns).toHaveLength(1)
   wrapper.unmount()
 })
+
+describe('TaskTab · 出参列与表配置使用相同的物理列名', () => {
+  async function mountOutColumns(outColumns: string[]) {
+    const result = await mountTaskTab()
+    result.flow.configs['web-1'].collectCfg!.outputTable = '900'
+    result.flow.patchTaskConfig('web-1', { outColumns })
+    await flushPromises()
+    return result
+  }
+
+  it('表配置全选后切换任务配置，每行都回显对应字段', async () => {
+    const { flow, wrapper } = await mountOutColumns([])
+    flow.setActiveTab('table')
+    await flushPromises()
+    await wrapper.get('[data-testid="select-all-fields"]').trigger('click')
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K2', 'K3'])
+
+    flow.setActiveTab('task')
+    await flushPromises()
+    const selects = wrapper.findAll<HTMLSelectElement>('.pt-outcols select')
+    expect(selects.map((s) => s.element.value)).toEqual(['K1', 'K2', 'K3'])
+    expect(selects.map((s) => s.element.selectedOptions[0]?.textContent)).toEqual([
+      'title-K1 · 标题', 'url-K2 · URL', 'publish_date-K3 · 发布时间',
+    ])
+    expect(wrapper.get('.pt-outcols .rc-btn').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('回读的物理列名和历史字段名都能回显，展示不改写已存数据', async () => {
+    const { flow, wrapper } = await mountOutColumns(['K1', 'url-K2'])
+    expect(wrapper.findAll<HTMLSelectElement>('.pt-outcols select').map((s) => s.element.value))
+      .toEqual(['K1', 'K2'])
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'url-K2'])
+    wrapper.unmount()
+  })
+
+  it('添加跳过已选列，修改和删除后仍按物理列名保存', async () => {
+    const { flow, wrapper } = await mountOutColumns(['K1', 'url-K2'])
+    await wrapper.get('.pt-outcols .rc-btn').trigger('click')
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K2', 'K3'])
+    await wrapper.findAll('.pt-outcols .rc-row-del')[1].trigger('click')
+    await wrapper.findAll('.pt-outcols select')[1].setValue('K2')
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K2'])
+    wrapper.unmount()
+  })
+
+  it('表字段没有物理列名时仍使用字段名', async () => {
+    const { flow, wrapper } = await mountOutColumns([])
+    vi.mocked(entryApi.entryDetail).mockResolvedValue({
+      ...INPUT_TABLE, tableId: 'no-columns',
+      fields: INPUT_TABLE.fields.map(({ columnName: _columnName, ...field }) => field),
+    })
+    flow.configs['web-1'].collectCfg!.outputTable = 'no-columns'
+    await flushPromises()
+    await wrapper.get('.pt-outcols .rc-btn').trigger('click')
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['title-K1'])
+    expect(wrapper.get<HTMLSelectElement>('.pt-outcols select').element.value).toBe('title-K1')
+    wrapper.unmount()
+  })
+})
