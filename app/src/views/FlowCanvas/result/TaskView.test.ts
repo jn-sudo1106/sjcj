@@ -425,6 +425,56 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
+  it.each([
+    ['taskId', '任务 ID', 'news_snt', '只能输入数字'],
+    ['parentId', '数据 ID', 'news_snt', '只能输入数字'],
+    ['taskId', '任务 ID', '9223372036854775808', '超出有效范围'],
+    ['parentId', '数据 ID', '9223372036854775808', '超出有效范围'],
+  ])('%s（%s）输入 %s 时提示、不发请求且保留已有列表', async (field, label, value, reason) => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+      total: 1, list: [{ taskId: '74111', state: 'C', taskName: '已加载任务' } as TaskInst],
+    })
+    const warn = vi.spyOn(ElMessage, 'warning')
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    try {
+      await flushPromises()
+      const calls = paged.mock.calls.length
+      await wrapper.get('[data-testid="task-search-field"]').setValue(field)
+      await wrapper.get('[data-testid="task-search-text"]').setValue(value)
+      await wrapper.get('[data-testid="task-query"]').trigger('click')
+      await flushPromises()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${label}${reason}`))
+      expect(paged).toHaveBeenCalledTimes(calls)
+      expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('已加载任务')
+      await wrapper.get('[data-testid="task-search-text"]').trigger('keyup.enter')
+      await flushPromises()
+      expect(paged).toHaveBeenCalledTimes(calls)
+    } finally { wrapper.unmount() }
+  })
+
+  it.each(['taskId', 'parentId'])('%s 的有效 Long 大整数保持字符串精度', async (field) => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="task-search-field"]').setValue(field)
+      await wrapper.get('[data-testid="task-search-text"]').setValue(' 9223372036854775807 ')
+      await wrapper.get('[data-testid="task-search-text"]').trigger('keyup.enter')
+      await flushPromises()
+      expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ [field]: '9223372036854775807' }))
+    } finally { wrapper.unmount() }
+  })
+
   // 2026-09-28 实测后端认 parentId：源 430017712 共 83 条，parentId=1035124 → 2 条、不存在的 → 0 条
   it('按数据 ID 查询发 parentId，不带 taskId', async () => {
     setActivePinia(createPinia())

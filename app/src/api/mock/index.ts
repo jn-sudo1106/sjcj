@@ -329,6 +329,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/entryType/generateAiCommont': mockGenerateAiCommont,
   'config/entryType/batchGenerateAiComment': mockBatchGenerateAiCommont,
   'config/entryType/batchGenerateAiCommont': mockBatchGenerateAiCommont,
+  // 3768d15 起端点新增了拼写正确的 `AiComment` 版本（旧拼写 `AiCommont` 作为兼容别名保留），
+  // 两个都标了 impl，mock 里复用同一 handler，否则端点契约测试会判「标 impl 的端点缺 mock handler」。
+  'config/entryType/generateAiComment': mockGenerateAiCommont,
+  'config/entryType/batchGenerateAiComment': mockBatchGenerateAiCommont,
 
   // 采集资产 · 参数（M5）
   'config/paramPaged': mockParamPaged,

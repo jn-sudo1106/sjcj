@@ -12,11 +12,12 @@ const source: Source = {
 /** el-select 在单测里没注册 Element Plus：给个能 v-model 的替身，测试里 $emit('update:modelValue') 驱动 */
 const elSelectStub = {
   name: 'ElSelectStub',
-  props: ['modelValue', 'disabled'],
+  props: ['modelValue', 'disabled', 'remoteMethod'],
   emits: ['update:modelValue'],
   template: '<div class="el-select-stub" :data-value="modelValue"><slot /></div>',
 }
-const quickStubs = { global: { stubs: { 'el-select': elSelectStub, 'el-option': true } } }
+const elOptionStub = { name: 'ElOptionStub', props: ['label', 'value'], template: '<span :data-value="value">{{ label }}</span>' }
+const quickStubs = { global: { stubs: { 'el-select': elSelectStub, 'el-option': elOptionStub } } }
 
 beforeEach(() => {
   vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 2, list: [{ siteId: 'site-a', name: '网站 A' }, { siteId: 'site-b', name: '网站 B' }] } as never)
@@ -24,6 +25,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('EditSourceDialog', () => {
+  it('仅快捷编辑提供业务目录调整入口', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    const quick = mount(EditSourceDialog, { props: { open: true, source, quick: true } })
+    const regular = mount(EditSourceDialog, { props: { open: true, source } })
+    await flushPromises()
+    expect(quick.find('[data-testid="edit-source-biz-select"]').exists()).toBe(true)
+    expect(regular.find('[data-testid="edit-source-biz-select"]').exists()).toBe(false)
+    quick.unmount()
+    regular.unmount()
+  })
   it('快捷编辑与源详情共用名称、URL、核心参数表单，预填最新值并只提交这三个字段', async () => {
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, name: '最新名称', url: 'https://latest.example.com', coreParam: '原始参数' })
     const update = vi.spyOn(sourceApi, 'updateSourceCore').mockResolvedValue({ ok: true })
@@ -62,6 +73,45 @@ describe('EditSourceDialog', () => {
     expect(update).toHaveBeenCalled()
     expect(change).toHaveBeenCalledWith(['source-a'], '0')
     expect(wrapper.emitted('saved')?.[0]).toEqual([expect.objectContaining({ siteId: '0' })])
+    wrapper.unmount()
+  })
+
+  it('快捷编辑按网站名称远程搜索，并在搜索结果变化时保留已选网站', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, coreParam: '' })
+    vi.mocked(siteApi.sitePaged).mockImplementation(async (query) => ({
+      total: 1,
+      list: query?.name === '携程' ? [{ siteId: '2282', name: '携程' }] : [{ siteId: 'site-a', name: '网站 A' }],
+    }) as never)
+    const wrapper = mount(EditSourceDialog, { props: { open: true, source, quick: true }, ...quickStubs })
+    await flushPromises()
+    const select = wrapper.getComponent({ name: 'ElSelectStub' })
+    await select.props('remoteMethod')('携程')
+    await flushPromises()
+    expect(siteApi.sitePaged).toHaveBeenLastCalledWith({ page: 1, size: 2000, name: '携程' })
+    expect(wrapper.text()).toContain('携程（ID 2282）')
+    select.vm.$emit('update:modelValue', '2282')
+    await select.props('remoteMethod')('别的网站')
+    await flushPromises()
+    expect(wrapper.text()).toContain('携程（ID 2282）')
+    wrapper.unmount()
+  })
+
+  it('较早的网站搜索响应不会覆盖较新的结果', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    let finishFirst!: (value: unknown) => void
+    vi.mocked(siteApi.sitePaged).mockImplementation((query) => {
+      if (query?.name === '旧') return new Promise((resolve) => { finishFirst = resolve }) as never
+      return Promise.resolve({ total: 1, list: [{ siteId: 'new', name: '新结果' }] }) as never
+    })
+    const wrapper = mount(EditSourceDialog, { props: { open: true, source, quick: true }, ...quickStubs })
+    await flushPromises()
+    const select = wrapper.getComponent({ name: 'ElSelectStub' })
+    void select.props('remoteMethod')('旧')
+    await select.props('remoteMethod')('新')
+    finishFirst({ total: 1, list: [{ siteId: 'old', name: '旧结果' }] })
+    await flushPromises()
+    expect(wrapper.text()).toContain('新结果')
+    expect(wrapper.text()).not.toContain('旧结果')
     wrapper.unmount()
   })
 

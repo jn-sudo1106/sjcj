@@ -636,6 +636,7 @@ async function onStartCapture() {
   try {
     await snatchLauncher.value?.launch(s.sourceId, {
       configId,
+      flowId: s.flowId,
       queue: undefined,
       onSuccess: () => {
         const runId = runtime.startCapture(

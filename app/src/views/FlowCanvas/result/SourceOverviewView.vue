@@ -1699,7 +1699,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       @saved="onMarkEdited"
       @close="editTarget = null"
     />
-    <EditSourceDialog v-if="quickEditSource" :open="true" :source="quickEditSource" quick @update:open="quickEditSource = null" @saved="onQuickEdited" />
+    <EditSourceDialog v-if="quickEditSource" :open="true" :source="quickEditSource" quick @update:open="quickEditSource = null" @saved="onQuickEdited" @directories-changed="ui.notifySourceListChanged()" />
     <LaunchConfirmDialog
       v-if="launchOpen && launchScope"
       :mode="launchScope.mode"

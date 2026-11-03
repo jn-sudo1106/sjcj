@@ -9,9 +9,10 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type Source } from '@/api'
+import EditSourceBizDirs from './EditSourceBizDirs.vue'
 
 const props = defineProps<{ open: boolean; source: Source | null; quick?: boolean }>()
-const emit = defineEmits<{ 'update:open': [boolean]; saved: [Source] }>()
+const emit = defineEmits<{ 'update:open': [boolean]; saved: [Source]; 'directories-changed': [] }>()
 
 const name = ref('')
 const url = ref('')
@@ -20,6 +21,7 @@ const coreParam = ref('')
 const coreParamLoaded = ref(false)
 const loadError = ref('')
 const saving = ref(false)
+const bizDirsRef = ref<InstanceType<typeof EditSourceBizDirs>>()
 const isParam = computed(() => props.source?.kind === 'param')
 
 const UNBIND_SITE_ID = '0'
@@ -28,27 +30,42 @@ const siteId = ref(UNBIND_SITE_ID)
 const originalSiteId = ref(UNBIND_SITE_ID)
 const siteOptions = ref<{ siteId: string; name: string }[]>([])
 const siteLoadError = ref('')
+const siteLoading = ref(false)
+const knownSites = new Map<string, { siteId: string; name: string }>()
+let siteRequestId = 0
 /** 当前网站不在列表里（如已软删）时也要能显示出来，不然下拉里只剩一串 ID */
 const siteSelectOptions = computed(() => {
   const list = siteOptions.value
-  if (originalSiteId.value === UNBIND_SITE_ID || list.some((s) => s.siteId === originalSiteId.value)) return list
-  return [{ siteId: originalSiteId.value, name: props.source?.siteName || `网站 ${originalSiteId.value}` }, ...list]
+  const selectedId = siteId.value
+  if (selectedId === UNBIND_SITE_ID || list.some((s) => s.siteId === selectedId)) return list
+  const selected = knownSites.get(selectedId)
+  return [selected || { siteId: selectedId, name: selectedId === originalSiteId.value ? (props.source?.siteName || `网站 ${selectedId}`) : `网站 ${selectedId}` }, ...list]
 })
 function normalizeSiteId(value: unknown): string {
   const id = value == null ? '' : String(value)
   return id && id !== '-1' ? id : UNBIND_SITE_ID
 }
-async function loadSites() {
+async function loadSites(keyword = '') {
+  const requestId = ++siteRequestId
   siteLoadError.value = ''
+  siteLoading.value = true
   try {
-    siteOptions.value = (await siteApi.sitePaged({ page: 1, size: 2000 })).list.map((s) => ({ siteId: String(s.siteId), name: s.name }))
+    const result = await siteApi.sitePaged({ page: 1, size: 2000, ...(keyword.trim() ? { name: keyword.trim() } : {}) })
+    if (requestId !== siteRequestId || !props.open) return
+    siteOptions.value = result.list.map((s) => ({ siteId: String(s.siteId), name: s.name }))
+    siteOptions.value.forEach((site) => knownSites.set(site.siteId, site))
   } catch {
+    if (requestId !== siteRequestId || !props.open) return
     siteLoadError.value = '网站列表加载失败，本次保存不改所属网站'
+  } finally {
+    if (requestId === siteRequestId) siteLoading.value = false
   }
 }
 
 watch(() => props.open, (open) => {
-  if (!open || !props.source) return
+  if (!open || !props.source) { siteRequestId++; siteLoading.value = false; return }
+  knownSites.clear()
+  siteOptions.value = []
   name.value = props.source.name
   url.value = isParam.value
     ? (props.source.urlTemplate || props.source.baseUrl || props.source.url || '')
@@ -107,24 +124,26 @@ async function onSave() {
       return
     }
     const nextSiteId = siteId.value
+    let savedSource = updated
+    const warnings: string[] = []
     if (props.quick && !siteLoadError.value && nextSiteId !== originalSiteId.value) {
       const moved = await sourceApi.changeSite([current.sourceId], nextSiteId).catch((error: unknown) => ({
         ok: false, message: error instanceof Error ? error.message : String(error),
       }))
-      if (!moved?.ok) {
-        // 名称等已经写进去了：照常回传、关窗，只提示网站没换成
-        emit('saved', updated)
-        ElMessage.warning(`源信息已保存，但更换所属网站失败：${moved?.message || '请重试'}`)
-        close()
-        return
-      }
-      emit('saved', { ...updated, siteId: nextSiteId })
-      ElMessage.success(nextSiteId === UNBIND_SITE_ID ? '源信息已保存，已解除网站绑定' : '源信息已保存，所属网站已更换')
-      close()
-      return
+      if (!moved?.ok) warnings.push(`更换所属网站失败：${moved?.message || '请重试'}`)
+      else savedSource = { ...updated, siteId: nextSiteId }
     }
-    emit('saved', updated)
-    ElMessage.success(res.message || '源信息已保存')
+    if (props.quick && bizDirsRef.value) {
+      try {
+        if (await bizDirsRef.value.save()) emit('directories-changed')
+      } catch (error) {
+        emit('directories-changed')
+        warnings.push(error instanceof Error ? error.message : String(error))
+      }
+    }
+    emit('saved', savedSource)
+    if (warnings.length) ElMessage.warning(`源信息已保存，但${warnings.join('；')}`)
+    else ElMessage.success(res.message || '源信息已保存')
     close()
   } catch (error) {
     ElMessage.error(`保存失败：${error instanceof Error ? error.message : String(error)}`)
@@ -164,6 +183,9 @@ async function onSave() {
         <el-select
           v-model="siteId"
           filterable
+          remote
+          :remote-method="loadSites"
+          :loading="siteLoading"
           aria-label="所属网站"
           data-testid="edit-source-site"
           style="width: 100%"
@@ -178,6 +200,10 @@ async function onSave() {
             ? `保存后该源不属于任何网站，只能按源 ID（${source?.sourceId}）找回。`
             : '一个源只能属于一个网站：保存后原网站将不再包含该源。' }}
         </div>
+      </div>
+      <div v-if="quick && source" class="rc-field">
+        <label>业务目录</label>
+        <EditSourceBizDirs ref="bizDirsRef" :source-id="source.sourceId" :disabled="saving" />
       </div>
       <div class="rc-field">
         <label>核心参数</label>
@@ -204,7 +230,7 @@ async function onSave() {
 
 <style scoped>
 .esd-backdrop { position: fixed; inset: 0; z-index: 91; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.28); }
-.esd-card { width: min(520px, calc(100vw - 48px)); background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; padding: 16px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
+.esd-card { max-height: calc(100vh - 48px); overflow-y: auto; box-sizing: border-box; width: min(520px, calc(100vw - 48px)); background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; padding: 16px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
 .esd-title { font-size: 13px; font-weight: 800; color: var(--rc-text); margin-bottom: 12px; }
 .esd-source { margin-bottom: 14px; color: var(--rc-muted); font-size: 12px; overflow-wrap: anywhere; }
 .esd-load-error { margin-bottom: 12px; color: var(--rc-error); font-size: 12px; }

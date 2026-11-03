@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SiteEditorDialog from './SiteEditorDialog.vue'
 import { siteApi, sourceApi, type Site, type SourceCategory } from '@/api'
+import { resetSourceDirCache } from '@/api/sourceDirs'
 
 const categories: SourceCategory[] = [{ id: '7', name: '新闻', children: [] }] as never
 
@@ -28,7 +29,7 @@ const stubs = {
     name: 'ElTreeSelect',
     // Boolean 要显式声明类型，否则模板里的无值属性（lazy / check-strictly）传进来是空串
     props: {
-      modelValue: null, data: null, load: null, cacheData: null,
+      modelValue: null, data: null, load: null, cacheData: null, remoteMethod: null,
       lazy: Boolean, checkStrictly: Boolean, filterable: Boolean, clearable: Boolean,
     },
     template: '<div class="el-tree-select" />',
@@ -187,7 +188,44 @@ describe('SiteEditorDialog 新建网站', () => {
 
 // 2026-09-18 用户提：新建网站的分类只有两级，而查询那边是三级树。
 describe('SiteEditorDialog 分类选择器', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); resetSourceDirCache() })
+
+  it('下拉只加载业务目录根及其子目录', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const list = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parent) => parent === '-2'
+      ? [{ id: '101', name: '业务目录' }]
+      : [{ id: '102', name: '子目录' }])
+    const wrapper = mount(SiteEditorDialog, {
+      props: { visible: true, site: null, categories, mode: 'create' as const }, global: { stubs },
+    })
+    const tree = wrapper.getComponent({ name: 'ElTreeSelect' })
+    const load = tree.props('load') as (node: unknown, resolve: (nodes: unknown[]) => void) => Promise<void>
+    const root = vi.fn()
+    await load({ level: 0, data: {} }, root)
+    expect(list).toHaveBeenCalledWith('-2')
+    expect(root).toHaveBeenCalledWith([expect.objectContaining({ id: '101' })])
+    const children = vi.fn()
+    await load({ level: 1, data: { id: '101' } }, children)
+    expect(list).toHaveBeenCalledWith('101')
+    expect(children).toHaveBeenCalledWith([expect.objectContaining({ id: '102' })])
+    expect(wrapper.text()).toContain('业务目录')
+  })
+
+  it('搜索只展示业务目录，不混入系统目录和视图目录', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'searchCategories').mockResolvedValue([
+      { id: '101', name: '业务', path: '-2,101' },
+      { id: '201', name: '系统', path: '0,201' },
+      { id: '301', name: '视图', path: '-1,301' },
+    ] as never)
+    const wrapper = mount(SiteEditorDialog, {
+      props: { visible: true, site: null, categories, mode: 'create' as const }, global: { stubs },
+    })
+    const tree = wrapper.getComponent({ name: 'ElTreeSelect' })
+    await (tree.props('remoteMethod') as (keyword: string) => Promise<void>)('目录')
+    await flushPromises()
+    expect(tree.props('data')).toEqual([{ id: '101', name: '业务' }])
+  })
 
   it('用的是懒加载树选择器，不是拍平成「父 / 子」的两级下拉', async () => {
     vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])

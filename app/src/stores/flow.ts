@@ -368,9 +368,11 @@ export const useFlowStore = defineStore('flow', () => {
    * 新建节点挂到 parentId 下，并接管 childIds（这些子节点的上级改成新节点）。
    * childIds 为空 = 只追加一个子节点；parentId 已有其他子节点时新节点就成了一条新分支。
    */
-  function attachNewNode(template: string, parentId: string | undefined, childIds: string[]): string {
+  function attachNewNode(template: string | NodeConfig, parentId: string | undefined, childIds: string[]): string {
     const { parentOf } = canvasParents()
-    const { srcKey, cfg } = newNodeConfig(template, parentId ?? 'start', upstreamOutputTableVia(parentOf, parentId))
+    const { srcKey, cfg } = typeof template === 'string'
+      ? newNodeConfig(template, parentId ?? 'start', upstreamOutputTableVia(parentOf, parentId))
+      : { srcKey: 'node', cfg: template }
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
     placeNode(id, parentId, childIds)
@@ -419,7 +421,7 @@ export const useFlowStore = defineStore('flow', () => {
    * 在 prevId 下方插入：新节点挂到 prevId 下并**接管它的全部子节点**（分叉点下方插入 = 在分叉之前插）。
    * 'start' = 插到最前（新节点当根，原首节点挂到它下面）；'end' 或不在画布上的 id = 追加到主链末尾。
    */
-  function insertAfter(prevId: string, template: string) {
+  function insertAfter(prevId: string, template: string | NodeConfig) {
     const { parentOf } = canvasParents()
     if (prevId === 'start') {
       const first = main.value.find((id) => !isTerm(id))

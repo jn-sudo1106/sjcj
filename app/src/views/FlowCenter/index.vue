@@ -83,13 +83,6 @@ function selectTemplateGroup(id: string) {
 
 const selectedFlowIds = ref<string[]>([])
 const assignment = reactive({ open: false, templateId: '', ids: [] as string[], saving: false })
-const structureForm = reactive({ open: false, id: '', name: '单节点采集', seq: 0, keys: ['web-list'], saving: false })
-const structureTypes = [
-  { key: 'web-list', label: '采集' }, { key: 'web-detail', label: '详情采集' }, { key: 'file-download', label: '文件下载' },
-  { key: 'rule', label: '规则处理' }, { key: 'translate', label: '翻译' },
-  { key: 'ocr', label: 'OCR识别' }, { key: 'article-summary', label: '生成摘要' },
-  { key: 'article-tag', label: '打标签' },
-]
 async function loadTemplates() {
   templateError.value = ''
   try { templateOptions.value = await flowCenterApi.templates() }
@@ -141,37 +134,21 @@ async function assignTemplate() {
   } catch (e) { ElMessage.error(`归集失败：${(e as Error).message}`) }
   finally { assignment.saving = false }
 }
-function openStructureTemplate() {
-  Object.assign(structureForm, { open: true, id: '', name: '单节点采集', seq: 0, keys: ['web-list'] })
-}
-function useStructurePreset(preset: 'single' | 'download' | 'detail') {
-  structureForm.name = preset === 'download' ? '采集 → 下载' : preset === 'detail' ? '列表 → 详情' : '单节点采集'
-  structureForm.keys = preset === 'download' ? ['web-list', 'file-download'] : preset === 'detail' ? ['web-list', 'web-detail'] : ['web-list']
-}
-function moveStructureNode(index: number, offset: number) {
-  const keys = structureForm.keys
-  if (index + offset < 0 || index + offset >= keys.length) return
-  ;[keys[index], keys[index + offset]] = [keys[index + offset]!, keys[index]!]
-}
-async function saveStructureTemplate() {
-  if (!structureForm.name.trim() || !structureForm.keys.length || structureForm.saving) return
-  if (!Number.isInteger(structureForm.seq) || structureForm.seq < 0 || structureForm.seq > 2147483647) {
-    ElMessage.warning('SEQ必须为0至2147483647之间的整数')
-    return
+async function openStructureTemplate() {
+  if (blockWhileEditingTemplate() || !await canReplaceWorkspace()) return
+  ++openSeq
+  activeFlow.value = {
+    id: '', name: '单节点采集', seq: 0, updatedAt: '',
+    definition: makeStructureTemplate(['web-list']), isTemplate: true,
   }
-  structureForm.saving = true
-  try {
-    const saved = await flowCenterApi.save({
-      ...(structureForm.id ? { id: structureForm.id } : {}), name: structureForm.name.trim(),
-      definition: makeStructureTemplate(structureForm.keys), isTemplate: true, seq: structureForm.seq,
-    })
-    structureForm.open = false
-    await loadTemplates()
-    await loadTemplateGroups()
-    selectTemplateGroup(saved.id)
-    ElMessage.success(`流程模板「${saved.name}」已保存`)
-  } catch (e) { ElMessage.error(`模板保存失败：${(e as Error).message}`) }
-  finally { structureForm.saving = false }
+  activeId.value = ''
+}
+
+async function onStructureTemplateSaved(saved: FlowRecord) {
+  closeFlow()
+  const selection = groupSelectionSeq
+  await Promise.all([loadTemplates(), loadTemplateGroups()])
+  if (mounted && selection === groupSelectionSeq) selectTemplateGroup(saved.id)
 }
 // 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
 // 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。只用后端排序白名单里真有的字段。
@@ -536,27 +513,43 @@ const rows = computed(() => flows.value)
  * 刷新一下，编辑面板没了。activeId 仍保留，只用于表格行高亮。
  */
 const activeFlow = ref<FlowRecord | null>(null)
+const workspace = ref<InstanceType<typeof FlowDetailDrawer> | null>(null)
 let openSeq = 0
+
+function blockWhileEditingTemplate() {
+  if (!activeFlow.value?.definition.structureOnly) return false
+  ElMessage.warning('请先保存或关闭模板编辑')
+  return true
+}
+
+async function canReplaceWorkspace() {
+  const active = activeFlow.value
+  if (!active) return true
+  const canClose = await workspace.value?.canClose()
+  return canClose === true && activeFlow.value === active
+}
+
 async function openFlow(t: FlowRecord) {
+  if (blockWhileEditingTemplate() || activeFlow.value?.id === t.id) return
   const seq = ++openSeq
+  let record = t
   if (t.isTemplate) {
     try {
       const full = await flowCenterApi.detail(t.id)
       if (seq !== openSeq) return
       if (!full) throw new Error('模板不存在')
-      if (full.definition.structureOnly) {
-        const configs = full.definition.main.filter(id => full.definition.configs[id]).map(id => full.definition.configs[id]!)
-        const keys = configs.map(c => structureTypes.find(type => makeStructureTemplate([type.key]).configs['node-1']?.sub === c.sub)?.key)
-        if (keys.some(k => !k)) throw new Error('模板含有暂不支持的节点类型')
-        Object.assign(structureForm, { open: true, id: full.id, name: full.name, seq: full.seq ?? 0, keys: keys as string[] })
-        return
-      }
-    } catch (e) { ElMessage.error(`模板打开失败：${(e as Error).message}`); return }
+      if (full.definition.structureOnly) record = full
+    } catch (e) {
+      if (seq === openSeq) ElMessage.error(`模板打开失败：${(e as Error).message}`)
+      return
+    }
   }
-  activeFlow.value = t
-  activeId.value = t.id
+  if (seq !== openSeq || !await canReplaceWorkspace() || seq !== openSeq) return
+  activeFlow.value = record
+  activeId.value = record.id
 }
 function closeFlow() {
+  ++openSeq
   activeFlow.value = null
   activeId.value = ''
 }
@@ -566,7 +559,7 @@ function replaceFlow(saved: FlowRecord) {
   flows.value = flows.value.some((item) => item.id === saved.id)
     ? flows.value.map((item) => (item.id === saved.id ? saved : item))
     : [saved, ...flows.value]
-  if (!(saved.isTemplate && saved.definition.structureOnly)) {
+  if (!activeFlow.value?.definition.structureOnly && !saved.definition.structureOnly) {
     activeFlow.value = saved
     activeId.value = saved.id
   }
@@ -847,6 +840,7 @@ function normalizeTags(raw: string): string {
  * 被后端以有源拒绝后走同一个提示。
  */
 async function removeFlow(flow: FlowRecord) {
+  if (flow.id === activeId.value && blockWhileEditingTemplate()) return
   if ((flow.sourceCnt ?? 0) > 0) {
     await promptUnbindFirst(flow, flow.sourceCnt)
     return
@@ -1318,31 +1312,14 @@ async function confirmApply() {
     </div>
 
     <FlowDetailDrawer
+      ref="workspace"
       :categories="categoryOptions"
       :flow="activeFlow"
       @close="closeFlow"
       @saved="replaceFlow"
+      @template-saved="onStructureTemplateSaved"
       @apply="openApply"
     />
-
-    <el-dialog v-model="structureForm.open" :title="structureForm.id ? '编辑流程模板' : '新建流程模板'" width="560px" destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!structureForm.saving" :show-close="!structureForm.saving">
-      <div class="fc-form">
-        <label class="fc-form-row"><span>模板名称 <em>*</em></span><input v-model="structureForm.name" class="fc-input" data-testid="structure-template-name" /></label>
-        <label class="fc-form-row"><span>排序号</span><input v-model.number="structureForm.seq" type="number" min="0" max="2147483647" step="1" class="fc-input" aria-label="显示顺序 SEQ" data-testid="structure-template-seq" /></label>
-        <p class="fc-form-hint">SEQ 越小越靠前，相同时按模板 ID 排序；未归类固定最后。</p>
-        <div class="fc-actions"><button class="fc-dialog-btn" type="button" @click="useStructurePreset('single')">单节点采集</button><button class="fc-dialog-btn" type="button" data-testid="structure-preset-download" @click="useStructurePreset('download')">采集 → 下载</button><button class="fc-dialog-btn" type="button" data-testid="structure-preset-detail" @click="useStructurePreset('detail')">列表 → 详情</button></div>
-        <div v-for="(_, index) in structureForm.keys" :key="index" class="fc-structure-step">
-          <span>第 {{ index + 1 }} 步</span>
-          <select v-model="structureForm.keys[index]" class="fc-input" data-testid="structure-node-type"><option v-for="type in structureTypes" :key="type.key" :value="type.key">{{ type.label }}</option></select>
-          <button class="fc-dialog-btn" type="button" :disabled="index === 0" aria-label="上移节点" @click="moveStructureNode(index, -1)">↑</button>
-          <button class="fc-dialog-btn" type="button" :disabled="index === structureForm.keys.length - 1" aria-label="下移节点" @click="moveStructureNode(index, 1)">↓</button>
-          <button class="fc-dialog-btn" type="button" :disabled="structureForm.keys.length === 1" aria-label="删除节点" @click="structureForm.keys.splice(index, 1)">删除</button>
-        </div>
-        <button class="fc-dialog-btn" type="button" :disabled="structureForm.keys.length >= 100" data-testid="structure-add-node" @click="structureForm.keys.push('web-list')">添加节点</button>
-        <p class="fc-form-hint">模板定义节点类型和顺序。网址、表、规则等由具体流程配置；修改模板仅影响之后新建的流程。</p>
-      </div>
-      <template #footer><button class="fc-dialog-btn" :disabled="structureForm.saving" @click="structureForm.open = false">取消</button><button class="fc-dialog-btn primary" :disabled="structureForm.saving || !structureForm.name.trim()" data-testid="structure-template-save" @click="saveStructureTemplate">{{ structureForm.saving ? '保存中…' : '保存模板' }}</button></template>
-    </el-dialog>
 
     <el-dialog v-model="assignment.open" title="归集到流程模板" width="480px" :close-on-click-modal="false" :close-on-press-escape="!assignment.saving" :show-close="!assignment.saving">
       <div class="fc-form">
@@ -1490,8 +1467,6 @@ async function confirmApply() {
 
 .fc-copy-preview { height:min(560px, calc(100vh - 260px)); }
 .fc-copy-hint { color:var(--rc-text-2); font-size:12px; }
-.fc-structure-step { display: flex; align-items: center; gap: 8px; }
-.fc-structure-step .fc-input { flex: 1; min-width: 0; }
 [data-testid="flow-from-template"] { cursor: pointer; }
 .fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
