@@ -45,6 +45,12 @@ import {
 const markerPrefix = `rc-arrow-${++flowBoardSeq}`
 
 const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+const emit = defineEmits<{ workflowStatus: [status: 'loading' | 'ready' | 'empty' | 'error'] }>()
+const workflowStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
+function onWorkflowStatus(status: 'loading' | 'ready' | 'empty' | 'error') {
+  workflowStatus.value = status
+  emit('workflowStatus', status)
+}
 const flow = useFlowStore()
 // 复制节点 = 新增一套配置（0828 D02）：副本必须绑一份新配置，不能沿用原 configId
 const duplicateNode = useDuplicateNode()
@@ -561,10 +567,15 @@ watch(
       v-if="!props.embedded && flow.sourceCtx"
       :key="flow.sourceCtx.sourceId"
       :source-id="flow.sourceCtx.sourceId"
+      @status="onWorkflowStatus"
     />
 
     <!-- 画布主体单独做定位容器（0928）：节点库按钮原来相对整块 .rc-canvas 用写死的 top:108px
          躲开头部，头部一多出分支提示条就压到提示文字上；改成相对画布区域定位，头部多高都不影响。 -->
+    <div v-if="!props.embedded && flow.sourceCtx && workflowStatus !== 'ready'" class="rc-workflow-empty" data-testid="workflow-canvas-status">
+      {{ workflowStatus === 'empty' ? '当前源暂无关联流程，请先关联流程；来源组的流程请到来源组配置。' : workflowStatus === 'error' ? '流程列表加载失败，请刷新后重试。' : '正在加载流程…' }}
+    </div>
+    <template v-else>
     <div v-if="isLeoPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
       已发布 v{{ flow.sourceCtx?.workflowVersionNo ?? '—' }} 为只读版本；点击上方“编辑新版本”后再修改节点。
     </div>
@@ -840,6 +851,7 @@ watch(
         >关联</el-button>
       </template>
     </el-dialog>
+    </template>
   </main>
 </template>
 
@@ -859,6 +871,7 @@ watch(
 .rc-canvas-scroll { flex: 1; overflow: auto; background-color: #f7f9fc; background-image: radial-gradient(#dfe7f2 0.8px, transparent 0.8px); background-size: 22px 22px; }
 .rc-flow-xml { position: absolute; z-index: 30; right: 32px; bottom: 32px; height: 28px; padding: 0 10px; border-color: var(--rc-border); background: rgba(255, 255, 255, .9); color: var(--rc-text-2); font-size: 11px; }
 .rc-flow-xml:hover { border-color: #bfdbfe; background: #fff; color: var(--rc-primary-ink); }
+.rc-workflow-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; color: var(--rc-muted); font-size: 13px; text-align: center; }
 .rc-canvas-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-node-library-toggle { position: absolute; z-index: 31; top: 12px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
 .rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }

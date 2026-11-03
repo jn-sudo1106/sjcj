@@ -41,6 +41,7 @@ const ui = useUiStore()
 const ws = useWorkspaceStore()
 const sourceReturn = useSourceReturnStore()
 const sourceReady = ref(false)
+const workflowStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
 const runtime = useRuntimeStore()
 // 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
@@ -345,6 +346,8 @@ function onSplitStart(e: MouseEvent) {
 
 async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   sourceReady.value = false
+  // 同源切流程时页签组件不会重挂，保留它已经上报的状态。
+  if (flow.sourceCtx?.sourceId !== sourceId) workflowStatus.value = 'loading'
   const runtimeView = !!import.meta.env.VITE_FLOW_PROXY_TARGET && normalizeSourceView(route.query.view) !== 'flow'
   // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
@@ -847,12 +850,12 @@ onUnmounted(() => {
         <div
           v-else
           class="rc-flow-shell"
-          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed, 'version-readonly': isPublishedFlowView && !isDataView }"
+          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed, 'version-readonly': isPublishedFlowView && !isDataView, 'no-workflow': !isDataView && !!flow.sourceCtx && workflowStatus !== 'ready' }"
           :style="{ '--insp-w': inspWidth }"
         >
-          <template v-if="!ui.inspectorExpanded">
+          <template v-if="!ui.inspectorExpanded || (!isDataView && workflowStatus !== 'ready')">
             <ResultView v-if="isDataView" :key="flowScopedKey" class="rc-flow-center" />
-            <FlowBoard v-else />
+            <FlowBoard v-else @workflow-status="workflowStatus = $event" />
           </template>
           <button
             v-else
@@ -861,6 +864,7 @@ onUnmounted(() => {
             :title="isDataView ? '点击恢复数据' : '点击恢复画布'"
             @click="ui.toggleInspectorExpanded()"
           >» {{ isDataView ? '数据已收起' : '画布已收起' }}</button>
+          <template v-if="isDataView || !flow.sourceCtx || workflowStatus === 'ready'">
           <div
             v-if="!ui.inspectorExpanded && !ui.inspectorCollapsed"
             class="rc-insp-splitter"
@@ -879,6 +883,7 @@ onUnmounted(() => {
             @click="ui.toggleInspectorCollapsed()"
           >« 节点配置</button>
           <NodeInspector v-else />
+          </template>
         </div>
       </div>
     </div>
@@ -970,4 +975,5 @@ onUnmounted(() => {
   .rc-flow-shell > :last-child:not(.rc-insp-collapsed) { min-height: 520px; }
   .rc-flow-shell > .rc-insp-collapsed { width: 100%; height: 36px; writing-mode: horizontal-tb; }
 }
+.rc-flow-shell.no-workflow, .rc-flow-shell.source-mode.no-workflow { grid-template-columns: minmax(0, 1fr); }
 </style>

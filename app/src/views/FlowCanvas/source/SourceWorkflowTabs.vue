@@ -16,6 +16,7 @@ import { useFlowVersionStore } from '@/stores/flowVersion'
 import { confirmedSharedFlows, registerSharedFlowGuard, type CarryConfigs, type SharedFlowAction } from '@/utils/flow/sharedFlowGuard'
 
 const props = defineProps<{ sourceId: string }>()
+const emit = defineEmits<{ status: [status: 'loading' | 'ready' | 'empty' | 'error'] }>()
 const route = useRoute()
 const router = useRouter()
 const flow = useFlowStore()
@@ -26,6 +27,9 @@ const adding = ref(false)
 const addMenuOpen = ref(false)
 const copyOpen = ref(false)
 const versionBusy = ref(false)
+let loadRequest = 0
+let disposed = false
+let unbindFollowupSourceId = ''
 // 入组的源只走来源组的流程（1021-02）：只列组流程、只读，不给「＋」；要单独配置先退出来源组。
 // 组还没绑流程时 rows 是空的，所以组 ID 单独记（workflowBindingApi.load 带回）
 const groupId = ref('')
@@ -44,21 +48,31 @@ const activeWorkflowId = computed(() => {
 })
 const activeRow = computed(() => rows.value.find(row => row.workflowId === activeWorkflowId.value))
 
-async function load() {
+async function load(): Promise<boolean> {
+  if (disposed) return false
+  const request = ++loadRequest
   loading.value = true
+  emit('status', 'loading')
   const sourceId = props.sourceId
   try {
     const loaded = await workflowBindingApi.load(sourceId)
+    if (disposed || request !== loadRequest || sourceId !== props.sourceId) return false
     rows.value = loaded.rows
     groupId.value = loaded.sourceGroupId ?? ''
+    emit('status', loaded.rows.length ? 'ready' : 'empty')
     if (flow.sourceCtx?.sourceId === sourceId) {
       flow.patchSourceCtx({ primaryFlowId: loaded.rows.find(row => row.primary)?.workflowId })
     }
     void loadUserCounts()
+    return true
   } catch (error) {
-    ElMessage.error(`流程页签加载失败：${(error as Error)?.message ?? String(error)}`)
+    if (!disposed && request === loadRequest && sourceId === props.sourceId) {
+      emit('status', 'error')
+      ElMessage.error(`流程页签加载失败：${(error as Error)?.message ?? String(error)}`)
+    }
+    return false
   } finally {
-    loading.value = false
+    if (!disposed && request === loadRequest) loading.value = false
   }
 }
 
@@ -79,7 +93,8 @@ async function openFlow(workflowId: string) {
 }
 
 async function finishCreate(workflowId: string) {
-  await load()
+  unbindFollowupSourceId = ''
+  if (!await load()) return
   await openFlow(workflowId)
 }
 
@@ -136,6 +151,7 @@ async function publishDraft(row: WorkflowBinding) {
 async function createBlank() {
   addMenuOpen.value = false
   if (adding.value) return
+  const sourceId = props.sourceId
   try {
     const result = await ElMessageBox.prompt('创建后会新增一个流程标签，可直接在画布和右侧配置区继续编辑。', '新建流程', {
       inputValue: `新流程-${new Date().toISOString().slice(0, 10)}`,
@@ -144,14 +160,17 @@ async function createBlank() {
       confirmButtonText: '创建并打开',
       cancelButtonText: '取消',
     })
+    if (disposed || sourceId !== props.sourceId) return
     adding.value = true
     const templateId = await pickFlowTemplate()
+    if (disposed || sourceId !== props.sourceId) return
     const created = await workflowBindingApi.createForSource({
       templateId,
-      sourceId: props.sourceId,
+      sourceId,
       name: result.value.trim(),
-      primary: !rows.value.some(row => !row.inherited || row.own),
+      primary: unbindFollowupSourceId === props.sourceId || !rows.value.some(row => !row.inherited || row.own),
     })
+    if (disposed || sourceId !== props.sourceId) return
     ElMessage.success(`流程「${created.workflowName}」已创建`)
     await finishCreate(created.workflowId)
   } catch (error) {
@@ -176,12 +195,15 @@ function chooseReuse() {
 }
 async function reuseExisting(picked: FlowRecord) {
   if (adding.value) return
+  const sourceId = props.sourceId
   // 10-29：选中即关联并打开，不再弹「复用并打开」确认
   try {
     adding.value = true
-    await workflowBindingApi.bind({ sourceId: props.sourceId, workflowId: picked.id, primary: !rows.value.some(isOwn) })
+    await workflowBindingApi.bind({ sourceId, workflowId: picked.id, primary: unbindFollowupSourceId === sourceId || !rows.value.some(isOwn) })
+    if (disposed || sourceId !== props.sourceId) return
     ElMessage.success(`已关联流程「${picked.name}」`)
     reuseOpen.value = false
+    unbindDlg.open = false
     await finishCreate(picked.id)
   } catch (error) {
     ElMessage.error(`关联失败：${(error as Error)?.message ?? String(error)}`)
@@ -208,6 +230,8 @@ onMounted(() => {
   window.addEventListener('keydown', onKey)
 })
 onBeforeUnmount(() => {
+  disposed = true
+  loadRequest++
   window.removeEventListener('click', closeMenu)
   window.removeEventListener('scroll', closeMenu, true)
   window.removeEventListener('keydown', onKey)
@@ -259,44 +283,139 @@ async function toggleFlowEnable(row: WorkflowBinding) {
   }
 }
 
-// 解绑：是主流程且还有别的就在同一个确认框里选新的主流程，一次提交；最后一条也允许，写明后果
-const unbindDlg = reactive({ open: false, row: null as WorkflowBinding | null, next: '', busy: false })
-const unbindOthers = computed(() => rows.value.filter(row => isOwn(row) && row.workflowId !== unbindDlg.row?.workflowId))
-function askUnbind(row: WorkflowBinding) {
-  closeMenu()
-  unbindDlg.row = row
-  unbindDlg.next = rows.value.find(item => isOwn(item) && item.workflowId !== row.workflowId)?.workflowId ?? ''
-  unbindDlg.open = true
-}
-async function confirmUnbind() {
-  const row = unbindDlg.row
-  if (!row || unbindDlg.busy) return
-  unbindDlg.busy = true
-  const wasActive = row.workflowId === activeWorkflowId.value
-  try {
-    await workflowBindingApi.unbind(props.sourceId, row.workflowId, row.primary && unbindDlg.next ? unbindDlg.next : undefined)
-    unbindDlg.open = false
-    ElMessage.success(`已解绑「${row.workflowName}」，流程本身没有删除`)
-    await load()
-    if (wasActive) {
-      const target = rows.value.find(item => item.primary) ?? rows.value[0]
-      if (target) await openFlow(target.workflowId)
-      else {
-        const { workflowId: _w, flowId: _f, ...rest } = route.query
-        await router.replace({ path: '/canvas', query: rest })
-      }
+// 右键直接解绑；没有可用流程时才打开接续选择。
+const followupAction = ref<'choose' | 'new' | 'copy' | 'bind' | 'copy-name'>('choose')
+const followupName = ref('')
+const followupTemplates = ref<FlowRecord[]>([])
+const followupTemplateId = ref('')
+const followupLoading = ref(false)
+const followupError = ref('')
+const followupPicked = ref<FlowRecord | null>(null)
+const unbindDlg = reactive({ open: false, row: null as WorkflowBinding | null, busy: false, sourceId: '', done: false, refreshError: false, wasActive: false })
+async function refreshAfterUnbind() {
+  if (!await load()) {
+    if (!disposed && unbindDlg.sourceId === props.sourceId) {
+      unbindDlg.refreshError = true
+      unbindDlg.open = true
     }
+    return
+  }
+  if (disposed || unbindDlg.sourceId !== props.sourceId) return
+  unbindDlg.refreshError = false
+  const available = rows.value.filter(row => row.workflowStatus !== 'DISABLED')
+  const target = available.find(row => row.primary) ?? available[0]
+  if (unbindDlg.wasActive || !target) {
+    if (target) await openFlow(target.workflowId)
+    else {
+      const { workflowId: _w, flowId: _f, ...rest } = route.query
+      await router.replace({ path: '/canvas', query: rest })
+    }
+  }
+  unbindDlg.open = !target && !inGroup.value
+}
+async function unbindFlow(row: WorkflowBinding) {
+  if (unbindDlg.busy) return
+  closeMenu()
+  unbindFollowupSourceId = ''
+  unbindDlg.open = false
+  unbindDlg.row = row
+  followupAction.value = 'choose'
+  followupError.value = ''
+  unbindDlg.done = false
+  unbindDlg.refreshError = false
+  unbindDlg.sourceId = props.sourceId
+  unbindDlg.wasActive = row.workflowId === activeWorkflowId.value
+  unbindDlg.busy = true
+  const sourceId = props.sourceId
+  const others = rows.value.filter(item => isOwn(item) && item.workflowId !== row.workflowId)
+  const next = others.find(item => item.workflowStatus !== 'DISABLED') ?? others[0]
+  try {
+    await workflowBindingApi.unbind(sourceId, row.workflowId, row.primary ? next?.workflowId : undefined)
+    if (disposed || sourceId !== props.sourceId) return
+    unbindDlg.done = true
+    ElMessage.success(`已解绑「${row.workflowName}」，流程本身没有删除`)
+    await refreshAfterUnbind()
   } catch (error) {
-    ElMessage.error(`解绑失败：${(error as Error)?.message ?? String(error)}`)
+    if (disposed || sourceId !== props.sourceId) return
+    if (unbindDlg.done) {
+      unbindDlg.refreshError = true
+      unbindDlg.open = true
+    }
+    ElMessage.error(`${unbindDlg.done ? '流程已解绑，刷新失败' : '解绑失败'}：${(error as Error)?.message ?? String(error)}`)
   } finally {
     unbindDlg.busy = false
   }
 }
-
-async function copyExisting(sourceFlow: FlowRecord) {
-  if (adding.value) return
+async function retryUnbindRefresh() {
+  if (unbindDlg.busy) return
+  unbindDlg.busy = true
   try {
-    const result = await ElMessageBox.prompt(
+    await refreshAfterUnbind()
+  } catch (error) {
+    unbindDlg.refreshError = true
+    ElMessage.error(`流程已解绑，刷新失败：${(error as Error)?.message ?? String(error)}`)
+  } finally {
+    unbindDlg.busy = false
+  }
+}
+async function continueAfterUnbind(action: 'new' | 'copy' | 'bind') {
+  if (unbindDlg.busy || adding.value || followupLoading.value || unbindDlg.sourceId !== props.sourceId) return
+  unbindFollowupSourceId = props.sourceId
+  followupAction.value = action
+  followupError.value = ''
+  if (action !== 'new') return
+  followupName.value = `新流程-${new Date().toISOString().slice(0, 10)}`
+  followupTemplateId.value = ''
+  followupTemplates.value = []
+  followupLoading.value = true
+  const sourceId = props.sourceId
+  try {
+    const templates = await flowCenterApi.templates()
+    if (disposed || sourceId !== props.sourceId) return
+    followupTemplates.value = templates
+    followupTemplateId.value = templates[0]?.id ?? ''
+    if (!templates.length) followupError.value = '暂无流程模板，请先到流程中心新建模板'
+  } catch (error) {
+    followupError.value = `模板加载失败：${(error as Error)?.message ?? String(error)}`
+  } finally {
+    followupLoading.value = false
+  }
+}
+function pickFollowupCopy(picked: FlowRecord) {
+  followupPicked.value = picked
+  followupName.value = `${picked.name}_副本`
+  followupAction.value = 'copy-name'
+}
+async function submitFollowup() {
+  if (adding.value || followupLoading.value || !followupName.value.trim() || unbindDlg.sourceId !== props.sourceId) return
+  if (followupAction.value === 'copy-name' && followupPicked.value) {
+    await copyExisting(followupPicked.value, followupName.value.trim())
+    return
+  }
+  if (!followupTemplateId.value) return
+  const sourceId = props.sourceId
+  adding.value = true
+  try {
+    const created = await workflowBindingApi.createForSource({ sourceId, name: followupName.value.trim(), templateId: followupTemplateId.value, primary: true })
+    if (disposed || sourceId !== props.sourceId) return
+    ElMessage.success(`流程「${created.workflowName}」已创建`)
+    unbindDlg.open = false
+    await finishCreate(created.workflowId)
+  } catch (error) {
+    ElMessage.error(`新建流程失败：${(error as Error)?.message ?? String(error)}`)
+  } finally {
+    adding.value = false
+  }
+}
+watch(() => unbindDlg.open, (open) => {
+  if (!open) unbindFollowupSourceId = ''
+})
+
+async function copyExisting(sourceFlow: FlowRecord, name?: string) {
+  if (adding.value) return
+  const sourceId = props.sourceId
+  try {
+    const result = name ? { value: name } : await ElMessageBox.prompt(
       `将复制「${sourceFlow.name}」的流程结构和节点配置，生成一条互不影响的新流程。`,
       '从流程或模板新建',
       {
@@ -307,23 +426,27 @@ async function copyExisting(sourceFlow: FlowRecord) {
         cancelButtonText: '取消',
       },
     )
+    if (disposed || sourceId !== props.sourceId) return
     adding.value = true
+    const primary = unbindFollowupSourceId === sourceId || !rows.value.some(row => !row.inherited || row.own)
     const copied = await copyWholeFlow(sourceFlow.id, result.value.trim(), {
       sourceFlowRef: `流程「${sourceFlow.name}」#${sourceFlow.id}`,
     })
     try {
       await workflowBindingApi.bind({
-        sourceId: props.sourceId,
+        sourceId,
         workflowId: copied.flowId,
-        primary: !rows.value.some(row => !row.inherited || row.own),
+        primary,
       })
     } catch (error) {
       throw new Error(`已生成流程 #${copied.flowId}，但关联当前源失败：${(error as Error)?.message ?? String(error)}`)
     }
+    if (disposed || sourceId !== props.sourceId) return
     reportDetachResult(copied.detach, `原流程「${sourceFlow.name}」`)
     if (copied.publishError) ElMessage.warning(copiedPublishWarning(copied.flowId, copied.publishError))
     ElMessage.success(`已从「${sourceFlow.name}」创建新流程`)
     copyOpen.value = false
+    unbindDlg.open = false
     await finishCreate(copied.flowId)
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
@@ -454,12 +577,16 @@ onBeforeUnmount(() => {
 })
 
 watch(() => props.sourceId, async () => {
-  await load()
+  unbindFollowupSourceId = ''
+  unbindDlg.open = false
+  copyOpen.value = false
+  reuseOpen.value = false
+  if (!await load()) return
   const row = activeRow.value
   if (row?.versionManaged === true && !row.draftFlowId) await createDraft(row, { notify: false })
 })
 onMounted(async () => {
-  await load()
+  if (!await load()) return
   const row = activeRow.value
   if (row?.versionManaged === true && !row.draftFlowId) await createDraft(row, { notify: false })
 })
@@ -576,7 +703,7 @@ onMounted(async () => {
         <template v-if="isOwn(ctxMenu.row)">
           <button v-if="!ctxMenu.row.primary" type="button" role="menuitem" data-testid="workflow-ctx-primary" @click="setPrimary(ctxMenu.row)">设为主流程</button>
           <button type="button" role="menuitem" :data-testid="isDisabled(ctxMenu.row) ? 'workflow-ctx-enable' : 'workflow-ctx-disable'" @click="toggleFlowEnable(ctxMenu.row)">{{ isDisabled(ctxMenu.row) ? '启用流程' : '禁用流程' }}</button>
-          <button type="button" role="menuitem" class="danger" data-testid="workflow-ctx-unbind" @click="askUnbind(ctxMenu.row)">解绑流程</button>
+          <button type="button" role="menuitem" class="danger" data-testid="workflow-ctx-unbind" :disabled="unbindDlg.busy" @click="unbindFlow(ctxMenu.row)">解绑流程</button>
         </template>
         <template v-else>
           <div class="swt-ctx-note">来源组流程，请到来源组修改</div>
@@ -614,23 +741,51 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="unbindDlg.open" title="解绑流程" width="460px" append-to-body data-testid="workflow-unbind-dialog">
-      <template v-if="unbindDlg.row">
-        <p class="swt-dlg-p">解除当前源与「{{ unbindDlg.row.workflowName }}」#{{ unbindDlg.row.workflowId }} 的关联。流程本身不删除，其他使用它的源不受影响。</p>
-        <template v-if="unbindDlg.row.primary && unbindOthers.length">
-          <p class="swt-dlg-p">这是主流程，解绑后改用：</p>
-          <label v-for="other in unbindOthers" :key="other.workflowId" class="swt-dlg-radio">
-            <input v-model="unbindDlg.next" type="radio" :value="other.workflowId" data-testid="workflow-unbind-next">
-            {{ other.workflowName }} <span class="swt-id">#{{ other.workflowId }}</span>
-          </label>
+    <el-dialog v-model="unbindDlg.open" :class="{ 'rfd-dialog': followupAction === 'copy' || followupAction === 'bind' }" :title="followupAction === 'new' ? '新建流程' : followupAction === 'copy' || followupAction === 'copy-name' ? '复制流程' : followupAction === 'bind' ? '关联已有流程' : '流程已解绑'" :width="followupAction === 'copy' || followupAction === 'bind' ? 'min(1440px, calc(100vw - 32px))' : '460px'" append-to-body :show-close="!unbindDlg.busy && !adding" :close-on-click-modal="false" :close-on-press-escape="!unbindDlg.busy && !adding" data-testid="workflow-unbind-dialog">
+      <div v-if="followupAction === 'choose' || unbindDlg.refreshError" data-testid="workflow-after-unbind">
+        <p class="swt-dlg-p">已解绑「{{ unbindDlg.row?.workflowName }}」，流程本身没有删除。</p>
+        <p v-if="unbindDlg.busy" class="swt-dlg-p">正在核对当前流程…</p>
+        <p v-else-if="unbindDlg.refreshError" class="swt-dlg-warn" data-testid="workflow-after-refresh-error">暂时无法读取最新流程列表，请重新加载后再选择下一步操作。</p>
+        <template v-else>
+          <p class="swt-dlg-p">当前源暂无可用流程，接下来：</p>
+          <div class="swt-followup-actions">
+            <el-button data-testid="workflow-after-create" @click="continueAfterUnbind('new')">新建流程</el-button>
+            <el-button data-testid="workflow-after-copy" @click="continueAfterUnbind('copy')">复制流程</el-button>
+            <el-button type="primary" data-testid="workflow-after-bind" @click="continueAfterUnbind('bind')">关联已有流程</el-button>
+          </div>
         </template>
-        <p v-if="!unbindOthers.length" class="swt-dlg-warn" data-testid="workflow-unbind-last">
-          这是最后一条流程：解绑后这个源将没有任何流程，无法发起任务。
-        </p>
-      </template>
-      <template #footer>
-        <el-button @click="unbindDlg.open = false">取消</el-button>
-        <el-button type="danger" :loading="unbindDlg.busy" data-testid="workflow-unbind-ok" @click="confirmUnbind">解绑</el-button>
+      </div>
+      <ReplaceFlowDialog
+        v-else-if="followupAction === 'copy' || followupAction === 'bind'"
+        :key="followupAction"
+        embedded
+        :model-value="true"
+        :purpose="followupAction"
+        :busy="adding"
+        :exclude-flow-ids="followupAction === 'bind' ? ownFlowIds : []"
+        @update:model-value="followupAction = 'choose'"
+        @pick="followupAction === 'copy' ? pickFollowupCopy($event) : reuseExisting($event)"
+      />
+      <form v-else class="swt-followup-form" data-testid="workflow-followup-form" @submit.prevent="submitFollowup">
+        <label>流程名称<input v-model="followupName" class="rc-input" data-testid="workflow-followup-name" :disabled="adding" /></label>
+        <label v-if="followupAction === 'new'">所属流程模板
+          <select v-model="followupTemplateId" class="rc-input" data-testid="workflow-followup-template" :disabled="adding || followupLoading">
+            <option v-for="item in followupTemplates" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+        </label>
+        <p v-else class="swt-dlg-p">复制「{{ followupPicked?.name }}」的结构和配置，新流程可独立编辑。</p>
+        <p v-if="followupLoading" class="swt-dlg-p">正在加载模板…</p>
+        <p v-if="followupError" class="swt-dlg-warn">{{ followupError }}</p>
+      </form>
+      <template v-if="followupAction !== 'copy' && followupAction !== 'bind'" #footer>
+        <template v-if="followupAction === 'choose' || unbindDlg.refreshError">
+          <el-button :disabled="unbindDlg.busy" data-testid="workflow-after-later" @click="unbindDlg.open = false">稍后处理</el-button>
+          <el-button v-if="unbindDlg.refreshError" type="primary" :loading="unbindDlg.busy" data-testid="workflow-after-reload" @click="retryUnbindRefresh">重新加载</el-button>
+        </template>
+        <template v-else-if="followupAction === 'new' || followupAction === 'copy-name'">
+          <el-button :disabled="adding" data-testid="workflow-followup-back" @click="followupAction = followupAction === 'copy-name' ? 'copy' : 'choose'">返回</el-button>
+          <el-button type="primary" :loading="adding" :disabled="!followupName.trim() || followupLoading || (followupAction === 'new' && !followupTemplateId)" data-testid="workflow-followup-submit" @click="submitFollowup">{{ followupAction === 'new' ? '创建并打开' : '复制并打开' }}</el-button>
+        </template>
       </template>
     </el-dialog>
   </div>
@@ -660,6 +815,12 @@ onMounted(async () => {
 .swt-add-menu { position: absolute; top: 32px; right: 0; z-index: 40; width: 190px; padding: 5px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 10px 24px rgb(15 23 42 / 14%); }
 .swt-add-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-text-2); text-align: left; cursor: pointer; }
 .swt-add-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.swt-followup-form { display: grid; gap: 16px; }
+.swt-followup-form label { display: grid; gap: 8px; font-size: 13px; }
+.swt-followup-form .rc-input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 13px; outline: none; }
+.swt-followup-form .rc-input:focus { border-color: var(--rc-primary); }
+.swt-followup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.swt-followup-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .swt-compat { align-self: center; margin-left: 7px; color: #92400e; font-size: 10px; white-space: nowrap; }
 .swt-seg { flex: none; align-self: center; margin: 0 6px 0 2px; padding: 2px 7px; border-radius: 10px; background: #e2e8f0; color: #475569; font-size: 10px; white-space: nowrap; cursor: help; }
 .swt-seg.group { background: #ede9fe; color: #6d28d9; }
@@ -675,6 +836,5 @@ onMounted(async () => {
 .swt-ctx button.danger:hover { background: #fef2f2; }
 .swt-ctx-note { padding: 6px 10px; color: var(--rc-faint); font-size: 12px; }
 .swt-dlg-p { margin: 0 0 8px; color: var(--rc-text-2); font-size: 13px; line-height: 1.6; }
-.swt-dlg-radio { display: flex; align-items: center; gap: 6px; margin: 4px 0 4px 4px; font-size: 13px; cursor: pointer; }
 .swt-dlg-warn { margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; background: #fff7ed; color: #9a3412; font-size: 12px; }
 </style>

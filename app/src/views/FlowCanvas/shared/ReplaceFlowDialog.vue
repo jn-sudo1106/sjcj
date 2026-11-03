@@ -4,7 +4,8 @@
 //   - 按流程：列流程（名称 / ID 查），选中即选这条流程；
 //   - 按源：列源（源 ID / 名称查，默认分页列全部源），每行带它的所属流程，选中即选该源的所属流程。
 // 只负责选择；复制新建、关联或更换由调用方完成。
-import { computed, reactive, watch } from 'vue'
+import { computed, defineComponent, h, reactive, watch } from 'vue'
+import { ElDialog } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import FlowReadonlyPreview from './FlowReadonlyPreview.vue'
 import ResizableFlowSplit from './ResizableFlowSplit.vue'
@@ -15,6 +16,9 @@ import { validFlowIdOf } from '@/utils/flow/stepPersist'
 
 const props = defineProps<{
   modelValue: boolean
+  /** 在已有操作弹窗内展示选择内容，不再创建另一层弹窗。 */
+  embedded?: boolean
+  busy?: boolean
   /** 本源当前所属流程：列出来但不可选（换成自己没有意义） */
   currentFlowId?: string
   /** 这些流程列出但不可选，标「已关联」（复用现有流程时排除本源已关联的） */
@@ -168,6 +172,13 @@ const confirmText = computed(() => props.purpose === 'bind'
   ? '关联此流程'
   : props.purpose === 'copy' ? '以此新建' : '更换为此流程')
 
+const InlinePicker = defineComponent({
+  inheritAttrs: false,
+  setup(_, { slots }) {
+    return () => h('div', { class: 'rfd-embedded' }, [slots.default?.(), h('div', { class: 'rfd-inline-footer' }, slots.footer?.())])
+  },
+})
+
 function close() {
   emit('update:modelValue', false)
 }
@@ -177,7 +188,8 @@ function confirm() {
 </script>
 
 <template>
-  <el-dialog
+  <component
+    :is="embedded ? InlinePicker : ElDialog"
     :model-value="modelValue"
     class="rfd-dialog"
     :title="dialogTitle"
@@ -300,19 +312,20 @@ function confirm() {
       <span v-if="state.picked" class="rfd-picked">
         已选：{{ state.picked.name }}（#{{ state.picked.id }}）
       </span>
-      <button class="rc-btn" type="button" @click="close">取消</button>
+      <button class="rc-btn" type="button" :disabled="busy" @click="close">{{ embedded ? '返回' : '取消' }}</button>
       <button
         class="rc-btn primary rfd-confirm"
         type="button"
         data-testid="replace-flow-confirm"
-        :disabled="!state.picked"
+        :disabled="!state.picked || busy"
         @click="confirm"
       >{{ confirmText }}</button>
     </template>
-  </el-dialog>
+  </component>
 </template>
 
 <style scoped>
+:deep(.rfd-inline-footer) { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .rfd-content { height:min(610px, calc(100vh - 270px)); min-height:300px; }
 .rfd-list { display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; }
 .rfd-table { flex:1; min-height:0; font-size:12px; }

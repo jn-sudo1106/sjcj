@@ -41,6 +41,7 @@ import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 import { timeAgo } from '@/utils/format/relativeTime'
+import { readColumnPrefs, writeColumnPrefs } from '@/utils/table/columnPrefs'
 import { isFavoriteSource, loadFavoriteSources, toggleFavoriteSource } from '@/utils/sourceFavorites'
 import {
   CollectLimitError,
@@ -160,6 +161,53 @@ const emit = defineEmits<{
 type StatusFilter = 'all' | 'C' | 'L' | 'E' | 'disabled'
 
 const rows = ref<Source[]>([])
+const MIN_URL_WIDTH = 80
+const urlColumnWidth = ref(Math.max(MIN_URL_WIDTH, readColumnPrefs('sources', 'source-overview')?.widths?.url ?? 220))
+const resizingUrl = ref(false)
+let stopUrlResize: (() => void) | undefined
+
+function startUrlResize(event: PointerEvent) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  stopUrlResize?.()
+  const startX = event.clientX
+  const startWidth = urlColumnWidth.value
+  const previousCursor = document.body.style.cursor
+  const previousUserSelect = document.body.style.userSelect
+  resizingUrl.value = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+
+  function move(event: PointerEvent) {
+    urlColumnWidth.value = Math.max(MIN_URL_WIDTH, Math.round(startWidth + event.clientX - startX))
+  }
+  function stop() {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
+    window.removeEventListener('blur', stop)
+    document.body.style.cursor = previousCursor
+    document.body.style.userSelect = previousUserSelect
+    resizingUrl.value = false
+    stopUrlResize = undefined
+    writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value } }, 'source-overview')
+  }
+  stopUrlResize = stop
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop)
+  window.addEventListener('pointercancel', stop)
+  window.addEventListener('blur', stop)
+}
+
+function resizeUrlByKey(event: KeyboardEvent) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  urlColumnWidth.value = Math.max(MIN_URL_WIDTH, urlColumnWidth.value + (event.key === 'ArrowLeft' ? -20 : 20))
+  writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value } }, 'source-overview')
+}
+
+onDeactivated(() => stopUrlResize?.())
+onBeforeUnmount(() => stopUrlResize?.())
 const originalPaths = ref(new Map<string, string>())
 function originalDirectoryOf(source: Source): string {
   return (source.dirId ? originalPaths.value.get(source.dirId) : '')
@@ -1506,7 +1554,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       </span>
     </div>
     <div v-if="!websiteCards" class="sov-table-wrap" :class="{ loading }">
-      <table class="sov-table">
+      <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px` }">
         <thead>
           <tr>
             <th class="sov-check-col">
@@ -1528,7 +1576,23 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <!-- 来源组与默认流程：配置入口统一放在「选中来源」操作中 -->
             <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
             <th v-if="crossSite && groupOps && showCol('defaultFlow')">默认流程</th>
-            <th v-if="showCol('url')">URL</th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol">配置 ID</th>
+            <th v-if="showCol('url')" class="sov-url-head" :class="{ 'is-resizing': resizingUrl }">
+              URL
+              <div
+                class="sov-url-resizer"
+                role="separator"
+                tabindex="0"
+                aria-label="调整 URL 列宽"
+                aria-orientation="vertical"
+                :aria-valuenow="urlColumnWidth"
+                :aria-valuemin="MIN_URL_WIDTH"
+                title="拖动调整 URL 列宽"
+                data-testid="source-url-resizer"
+                @pointerdown.stop="startUrlResize"
+                @keydown="resizeUrlByKey"
+                @click.stop
+              />
+            </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol">配置 ID</th>
             <th v-if="showCol('tags')">标签</th>
             <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>
@@ -1847,9 +1911,14 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-default-flow .sov-link { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; text-align: left; }
 .sov-group .sov-link { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
-.sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
-.sov-url a { color: inherit; text-decoration: none; }
+.sov-url-head, .sov-url { width: var(--sov-url-width); min-width: var(--sov-url-width); max-width: var(--sov-url-width); box-sizing: border-box; }
+.sov-url { color: var(--rc-primary) !important; }
+.sov-url a { display: block; width: calc(var(--sov-url-width) - 20px); overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; }
 .sov-url a:hover { text-decoration: underline; }
+.sov-url-resizer { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; touch-action: none; user-select: none; }
+.sov-url-resizer::after { content: ''; position: absolute; top: 4px; bottom: 4px; right: 1px; width: 2px; border-radius: 1px; background: transparent; }
+.sov-url-head:hover .sov-url-resizer::after { background: var(--rc-border); }
+.sov-url-resizer:hover::after, .sov-url-resizer:focus-visible::after, .sov-url-head.is-resizing .sov-url-resizer::after { background: var(--rc-primary); }
 .sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-muted { color: var(--rc-faint); }
 .sov-no-flow { color: #dc2626; font-size: 12px; }

@@ -136,4 +136,16 @@ describe('ReplaceFlowDialog', () => {
     expect(overview).toHaveBeenCalledWith('2')
     expect((q('[data-testid="replace-flow-confirm"]') as HTMLButtonElement).disabled).toBe(false)
   })
+  it('嵌入已有弹窗时仅展示选择内容，返回不再创建弹窗', async () => {
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(ReplaceFlowDialog, { props: { modelValue: true, embedded: true, purpose: 'bind' }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+    await flushPromises()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(wrapper.find('[data-testid="replace-flow-keyword"]').exists()).toBe(true)
+    const back = wrapper.findAll('button').find(button => button.text() === '返回')!
+    await back.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
+    wrapper.unmount()
+  })
+
 })

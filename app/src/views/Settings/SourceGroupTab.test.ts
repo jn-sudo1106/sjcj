@@ -35,6 +35,9 @@ vi.mock('@/views/CollectAssets/BizDirTreePanel.vue', () => ({
     template: '<div class="biz-dir-stub" />',
   },
 }))
+vi.mock('./SourceGroupFlowDiffDrawer.vue', () => ({
+  default: { name: 'SourceGroupFlowDiffDrawer', props: ['group', 'defaultFlowLabel'], template: '<div />' },
+}))
 
 const GROUP_3: SourceGroup = {
   sourceGroupId: '3',
@@ -105,6 +108,8 @@ async function mountTab(overrides?: {
   if (overrides?.list) vi.spyOn(sourceGroupApi, 'list').mockImplementation(overrides.list)
   else vi.spyOn(sourceGroupApi, 'list').mockResolvedValue(overrides?.groups ?? [GROUP_3, GROUP_1])
   vi.spyOn(sourceGroupApi, 'bindings').mockResolvedValue(overrides?.bindings ?? BINDINGS_3)
+  vi.spyOn(sourceGroupApi, 'detail').mockImplementation(async (id) => (overrides?.groups ?? [GROUP_3, GROUP_1]).find((group) => group.sourceGroupId === id) ?? null)
+  vi.spyOn(sourceGroupApi, 'members').mockResolvedValue({ rows: [], hasMore: false })
   vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => ({
     total: q?.sourceGroupId === '3' ? 255 : 22,
     list: [],
@@ -118,6 +123,12 @@ async function mountTab(overrides?: {
 }
 
 const dom = (sel: string) => document.querySelector(sel) as HTMLElement | null
+async function openGroupAction(wrapper: VueWrapper, action: string, groupId = '3') {
+  await wrapper.get(`[data-group-id="${groupId}"]`).trigger('contextmenu', { clientX: 100, clientY: 150 })
+  await settle()
+  ;(dom(`[data-testid="${action}"]`) as HTMLButtonElement).click()
+  await settle()
+}
 
 describe('来源组页签 · 列表与选中', () => {
   it('只对进入视口的组查成员数，点选后右侧加载', async () => {
@@ -131,7 +142,7 @@ describe('来源组页签 · 列表与选中', () => {
     showGroups(wrapper, ['3', '1'])
     await flushPromises()
     expect(items.map((i) => i.text())).toEqual(['twitter1255', '测试组122'])
-    await items[0]!.trigger('click')
+    await items[0]!.get('.sg-item-select').trigger('click')
     await settle()
     expect(wrapper.find('.sg-toolbar').text()).toContain('twitter1')
     expect(sourceGroupApi.bindings).toHaveBeenCalledWith({ sourceGroupId: '3' })
@@ -192,6 +203,86 @@ describe('来源组页签 · 列表与选中', () => {
     useUiStore().notifySourceListChanged()
     await flushPromises()
     expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(3)
+  })
+
+  it('数量排序统计未进视口的组，零成员正常排序，失败置后且可重试', async () => {
+    const groups = [GROUP_3, GROUP_1, { ...GROUP_1, sourceGroupId: '4', sourceGroupName: '空组' }, { ...GROUP_1, sourceGroupId: '5', sourceGroupName: '失败组' }]
+    const { wrapper } = await mountTab({ groups })
+    vi.mocked(sourceApi.sourcePaged).mockImplementation(async (query) => {
+      const id = String(query!.sourceGroupId)
+      if (id === '5') throw new Error('计数失败')
+      return { total: ({ '1': 2, '3': 20, '4': 0 } as Record<string, number>)[id]!, list: [] }
+    })
+    const ids = () => wrapper.findAll('.sg-item').map((item) => item.attributes('data-group-id'))
+    expect(sourceApi.sourcePaged).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    await flushPromises()
+    expect(ids()).toEqual(['4', '1', '3', '5'])
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    expect(wrapper.get('[data-testid="sg-count-retry"]').attributes('title')).toContain('1 组计数失败')
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    expect(ids()).toEqual(['3', '1', '4', '5'])
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [] })
+    await wrapper.get('[data-testid="sg-count-retry"]').trigger('click')
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(5)
+    expect(sourceApi.sourcePaged).toHaveBeenLastCalledWith({ page: 1, size: 1, sourceGroupId: '5' })
+    expect(ids()).toEqual(['3', '1', '5', '4'])
+    expect(wrapper.find('[data-testid="sg-count-retry"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    expect(ids()).toEqual(['3', '1', '4', '5'])
+  })
+
+  it('排序计数最多并发 3 个，未齐时保留原序，取消后停止排队并复用已取得计数', async () => {
+    const groups = Array.from({ length: 7 }, (_, i) => ({ ...GROUP_1, sourceGroupId: String(i + 1), sourceGroupName: `组${i + 1}` }))
+    const { wrapper } = await mountTab({ groups })
+    const pending = new Map<string, () => void>()
+    vi.mocked(sourceApi.sourcePaged).mockImplementation((query) => new Promise((resolve) => {
+      const id = String(query!.sourceGroupId)
+      pending.set(id, () => resolve({ total: Number(id), list: [] }))
+    }))
+    const ids = () => wrapper.findAll('.sg-item').map((item) => item.attributes('data-group-id'))
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(3)
+    expect(wrapper.get('[data-testid="sg-count-sort"]').attributes('title')).toContain('0/7')
+    expect(wrapper.get('[data-testid="sg-count-sort"]').attributes('aria-busy')).toBe('true')
+    pending.get('3')!()
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    expect(ids()).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    for (const id of ['1', '2', '4']) pending.get(id)!()
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(4)
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(7)
+    for (const id of ['5', '6', '7']) pending.get(id)!()
+    await flushPromises()
+    expect(ids()).toEqual(['7', '6', '5', '4', '3', '2', '1'])
+    expect(wrapper.get('[data-testid="sg-count-sort"]').attributes('aria-busy')).toBe('false')
+  })
+
+  it('数量排序遵守业务目录和搜索范围，扩大筛选只补取缺失的组计数', async () => {
+    const dirs = await import('@/api/sourceDirs')
+    vi.spyOn(dirs, 'bizDirGroupIds').mockResolvedValue(['3', '1', '4'])
+    const { wrapper } = await mountTab({ groups: [GROUP_3, GROUP_1, { ...GROUP_3, sourceGroupId: '4', sourceGroupName: 'twitter4' }, { ...GROUP_1, sourceGroupId: '5' }] })
+    wrapper.getComponent({ name: 'BizDirTreePanel' }).vm.$emit('select', [{ id: 'a', path: '行业' }])
+    await settle()
+    await wrapper.get('input[data-testid="sg-search"]').setValue('twitter')
+    vi.mocked(sourceApi.sourcePaged).mockImplementation(async (query) => ({ total: Number(query!.sourceGroupId), list: [] }))
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    await wrapper.get('[data-testid="sg-count-sort"]').trigger('click')
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('.sg-item').map((item) => item.attributes('data-group-id'))).toEqual(['4', '3'])
+    await wrapper.get('input[data-testid="sg-search"]').setValue('')
+    await flushPromises()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledTimes(3)
+    expect(sourceApi.sourcePaged).toHaveBeenLastCalledWith({ page: 1, size: 1, sourceGroupId: '1' })
+    expect(wrapper.findAll('.sg-item').map((item) => item.attributes('data-group-id'))).toEqual(['4', '3', '1'])
   })
 
   it('搜索框按组名 / 编码 / ID 过滤左侧列表，无匹配时提示', async () => {
@@ -287,7 +378,7 @@ describe('来源组页签 · 列表与选中', () => {
 
   it('右侧成员源列表用 scopeSourceGroupId 限定（SourceOverviewView 收到该 prop）', async () => {
     const { wrapper } = await mountTab()
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
     const sov = wrapper.findComponent({ name: 'SourceOverviewView' })
     expect(sov.exists()).toBe(true)
@@ -305,9 +396,9 @@ describe('来源组页签 · 流程配置抽屉', () => {
         { id: '33', sourceGroupId: '3', flowId: '21000007', isDefault: false, state: 'DISABLED', revision: 1 },
       ],
     })
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
-    await wrapper.find('[data-testid="sg-flow-btn"]').trigger('click')
+    await openGroupAction(wrapper, 'sg-flow-btn')
     await settle()
     // 抽屉内容 teleport 到 body → 用真实 DOM 查
     expect(document.body.textContent).toContain('流程配置')
@@ -326,9 +417,9 @@ describe('来源组页签 · 流程配置抽屉', () => {
     const bindFlows = vi.spyOn(sourceGroupApi, 'bindFlows').mockResolvedValue({ ok: true, message: '操作成功' })
     vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ list: [], total: 0 } as unknown as Awaited<ReturnType<typeof flowCenterApi.paged>>)
     const { wrapper } = await mountTab()
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
-    await wrapper.find('[data-testid="sg-flow-btn"]').trigger('click')
+    await openGroupAction(wrapper, 'sg-flow-btn')
     await settle()
     ;(dom('[data-testid="sg-pick-flows"]') as HTMLButtonElement).click()
     await settle()
@@ -349,22 +440,22 @@ describe('来源组页签 · 流程配置抽屉', () => {
       groups: [{ ...GROUP_3, state: 'DISABLED', flowIds: [], defaultFlowId: undefined }],
       bindings: [],
     })
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
-    await wrapper.find('[data-testid="sg-flow-btn"]').trigger('click')
+    await openGroupAction(wrapper, 'sg-flow-btn')
     await settle()
     const save = dom('[data-testid="sg-save-flows"]') as HTMLButtonElement
     expect(save.disabled).toBe(true)
-    expect(document.body.textContent).toContain('组已停用，请先在「组资料」中启用后修改流程列表')
+    expect(document.body.textContent).toContain('组已停用，请先在「编辑」中启用后修改流程列表')
   })
 })
 
-describe('来源组页签 · 组资料抽屉', () => {
-  it('保存组资料带 revision；删除空组先查成员', async () => {
+describe('来源组页签 · 编辑抽屉', () => {
+  it('从菜单编辑来源组，保存带 revision', async () => {
     const { wrapper } = await mountTab()
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
-    await wrapper.find('[data-testid="sg-detail-btn"]').trigger('click')
+    await openGroupAction(wrapper, 'sg-detail-btn')
     await settle()
     const name = dom('[data-testid="sg-name"]') as HTMLInputElement
     name.value = 'twitter1改名'
@@ -376,15 +467,147 @@ describe('来源组页签 · 组资料抽屉', () => {
     await settle()
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ sourceGroupId: '3', revision: 2, sourceGroupName: 'twitter1改名' }))
 
-    // 删除有成员的组：先提示「先移出全部成员」，不发删除请求
-    vi.spyOn(sourceGroupApi, 'members').mockResolvedValue({ rows: [{ sourceId: '1', sourceName: 'x' }], hasMore: false })
-    const remove = vi.spyOn(sourceGroupApi, 'remove')
-    const removeBtn = dom('[data-testid="sg-remove"]') as HTMLButtonElement
-    removeBtn.click()
+    expect(dom('[data-testid="sg-remove"]')).toBeNull()
+  })
+})
+
+describe('来源组页签 · 组项菜单与解散', () => {
+  it('右键命中并高亮该组，菜单收拢四个入口，编辑与差异均使用命中的组', async () => {
+    const { wrapper } = await mountTab()
+    await wrapper.get('[data-group-id="3"] .sg-item-select').trigger('click')
+    await wrapper.get('[data-group-id="1"]').trigger('contextmenu', { clientX: 1800, clientY: 1200 })
     await settle()
+    expect(wrapper.get('[data-group-id="1"]').classes()).toContain('active')
+    expect(wrapper.get('.sg-toolbar').text()).toContain('测试组1')
+    expect(wrapper.find('.sg-toolbar [data-testid="sg-detail-btn"]').exists()).toBe(false)
+    expect([...document.querySelectorAll('[data-testid="sg-context-menu"] button')].map((button) => button.textContent)).toEqual(['编辑', '流程配置', '查看流程差异', '解散来源组'])
+    ;(dom('[data-testid="sg-detail-btn"]') as HTMLButtonElement).click()
+    await settle()
+    expect((dom('[data-testid="sg-name"]') as HTMLInputElement).value).toBe('测试组1')
+    expect(document.body.textContent).toContain('编辑 · 测试组1')
+    // 关闭抽屉，再从悬停的更多入口打开同一份菜单。
+    wrapper.findAllComponents({ name: 'ElDrawer' }).find((drawer) => String(drawer.props('title')).startsWith('编辑'))!.vm.$emit('update:modelValue', false)
+    await wrapper.get('[data-testid="sg-more-1"]').trigger('click')
+    await settle()
+    ;(dom('[data-testid="sg-flow-diff-btn"]') as HTMLButtonElement).click()
+    await settle()
+    expect(wrapper.getComponent({ name: 'SourceGroupFlowDiffDrawer' }).props('group').sourceGroupId).toBe('1')
+    expect(dom('[data-testid="sg-context-menu"]')).toBeNull()
+  })
+
+  it('菜单支持键盘打开、Escape 和点击外部关闭，非管理员不能编辑或解散', async () => {
+    const { wrapper } = await mountTab()
+    await wrapper.get('[data-group-id="3"] .sg-item-select').trigger('keydown', { key: 'F10', shiftKey: true })
+    await settle()
+    expect(dom('[data-testid="sg-context-menu"]')).not.toBeNull()
+    dom('[data-testid="sg-context-menu"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await settle()
+    expect(dom('[data-testid="sg-context-menu"]')).toBeNull()
+    useAuthStore().roles = ['read']
+    await wrapper.get('[data-testid="sg-more-1"]').trigger('click')
+    await settle()
+    expect((dom('[data-testid="sg-detail-btn"]') as HTMLButtonElement).disabled).toBe(true)
+    expect((dom('[data-testid="sg-dissolve"]') as HTMLButtonElement).disabled).toBe(true)
+    expect((dom('[data-testid="sg-flow-diff-btn"]') as HTMLButtonElement).disabled).toBe(false)
+    await wrapper.get('.sg-content').trigger('scroll')
+    expect(dom('[data-testid="sg-context-menu"]')).not.toBeNull()
+    await wrapper.get('.sg-list').trigger('scroll')
+    expect(dom('[data-testid="sg-context-menu"]')).toBeNull()
+    await wrapper.get('[data-testid="sg-more-1"]').trigger('click')
+    await settle()
+    document.body.click()
+    await settle()
+    expect(dom('[data-testid="sg-context-menu"]')).toBeNull()
+  })
+
+  it('一次确认覆盖完整分页成员，先移出再按最新 revision 删除右键命中的组', async () => {
+    const { wrapper } = await mountTab()
+    let ids = Array.from({ length: 201 }, (_, i) => String(1000 + i))
+    const originalIds = [...ids]
+    let revision = 1
+    vi.mocked(sourceGroupApi.detail).mockImplementation(async (id) => ({ ...(id === '1' ? GROUP_1 : GROUP_3), revision }))
+    vi.mocked(sourceGroupApi.members).mockImplementation(async (_, offset, limit) => ({ rows: ids.slice(offset, offset + limit).map((sourceId) => ({ sourceId, sourceName: sourceId })), hasMore: offset + limit < ids.length }))
+    const change = vi.spyOn(sourceGroupApi, 'changeMembers').mockImplementation(async () => { ids = []; revision = 4; return { ok: true, message: '' } })
+    const remove = vi.spyOn(sourceGroupApi, 'remove').mockImplementation(async () => { vi.mocked(sourceGroupApi.list).mockResolvedValue([GROUP_3]); return { ok: true, message: '' } })
+    selectIds.value = ['999']
+    await openGroupAction(wrapper, 'sg-dissolve', '1')
+    expect(sourceGroupApi.members).toHaveBeenCalledWith('1', 200, 200)
+    expect(document.body.textContent).toContain('201')
+    expect(document.body.textContent).toContain('源记录和采集数据保留')
+    expect(change).not.toHaveBeenCalled()
     expect(remove).not.toHaveBeenCalled()
-    // 数量另用 sourcePaged 按组筛的 count（members 只取 1 条判断有没有）
-    expect(document.body.textContent).toContain('还有 255 个成员，请先移出全部成员')
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(change).toHaveBeenCalledWith({ sourceIds: originalIds, sourceGroupId: null, expectedSourceGroupId: '1' })
+    expect(remove).toHaveBeenCalledWith({ sourceGroupId: '1', revision: 4 })
+    expect(change.mock.invocationCallOrder[0]).toBeLessThan(remove.mock.invocationCallOrder[0]!)
+    expect(dom('[data-testid="sg-dissolve-dialog"]')).toBeNull()
+    expect(useUiStore().sourceListRevision).toBe(1)
+  })
+
+  it('成员读取失败不能确认，不把读取失败当空组', async () => {
+    const { wrapper } = await mountTab()
+    vi.mocked(sourceGroupApi.members).mockRejectedValue(new Error('成员加载失败'))
+    const remove = vi.spyOn(sourceGroupApi, 'remove')
+    await openGroupAction(wrapper, 'sg-dissolve')
+    expect((dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(document.body.textContent).toContain('成员加载失败')
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('确认前成员变化时停止，不移出新成员、不发删除请求', async () => {
+    const { wrapper } = await mountTab()
+    vi.mocked(sourceGroupApi.members).mockResolvedValue({ rows: [{ sourceId: '100', sourceName: 'A' }], hasMore: false })
+    const change = vi.spyOn(sourceGroupApi, 'changeMembers')
+    const remove = vi.spyOn(sourceGroupApi, 'remove')
+    await openGroupAction(wrapper, 'sg-dissolve')
+    vi.mocked(sourceGroupApi.members).mockResolvedValue({ rows: [{ sourceId: '101', sourceName: 'B' }], hasMore: false })
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(document.body.textContent).toContain('成员已变化')
+    expect(change).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('移出失败不继续删除；移出后仍有成员也不删除', async () => {
+    const { wrapper } = await mountTab()
+    vi.mocked(sourceGroupApi.members).mockResolvedValue({ rows: [{ sourceId: '100', sourceName: 'A' }], hasMore: false })
+    const change = vi.spyOn(sourceGroupApi, 'changeMembers').mockRejectedValueOnce(new Error('退组失败'))
+    const remove = vi.spyOn(sourceGroupApi, 'remove')
+    await openGroupAction(wrapper, 'sg-dissolve')
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(document.body.textContent).toContain('退组失败')
+    expect(remove).not.toHaveBeenCalled()
+    ;(dom('[data-testid="sg-dissolve-reload"]') as HTMLButtonElement).click()
+    await settle()
+    change.mockResolvedValue({ ok: true, message: '' })
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(document.body.textContent).toContain('组内仍有成员')
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('移出成功而删除失败时可重试删除，不重复移出；空组直接删除', async () => {
+    const { wrapper } = await mountTab()
+    let ids = ['100']
+    vi.mocked(sourceGroupApi.members).mockImplementation(async () => ({ rows: ids.map((sourceId) => ({ sourceId, sourceName: sourceId })), hasMore: false }))
+    const change = vi.spyOn(sourceGroupApi, 'changeMembers').mockImplementation(async () => { ids = []; return { ok: true, message: '' } })
+    const remove = vi.spyOn(sourceGroupApi, 'remove').mockRejectedValueOnce(new Error('删除失败')).mockResolvedValue({ ok: true, message: '' })
+    await openGroupAction(wrapper, 'sg-dissolve')
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(document.body.textContent).toContain('成员已移出，来源组尚未删除')
+    expect(dom('[data-testid="sg-dissolve-confirm"]')!.textContent).toContain('重试删除空组')
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(change).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledTimes(2)
+    await openGroupAction(wrapper, 'sg-dissolve', '1')
+    ;(dom('[data-testid="sg-dissolve-confirm"]') as HTMLButtonElement).click()
+    await settle()
+    expect(change).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenLastCalledWith({ sourceGroupId: '1', revision: 1 })
   })
 })
 
@@ -421,7 +644,7 @@ describe('来源组页签 · 成员操作', () => {
     const { wrapper } = await mountTab()
     // 先设勾选再选组：SOV stub 首次渲染 selection-actions 槽时 ids 即有值
     selectIds.value = ['391000500']
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
     const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
     const confirm = vi.spyOn(ElMessageBox, 'confirm')
@@ -442,7 +665,7 @@ describe('来源组页签 · 成员操作', () => {
 
   it('成员表操作区有「添加源」，点开选源弹窗（backend 模式）；停用组不能添加', async () => {
     const { wrapper } = await mountTab({ groups: [GROUP_3, { ...GROUP_1, state: 'DISABLED' }] })
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
     const add = wrapper.find('[data-testid="sg-add-source"]')
     expect(add.attributes('disabled')).toBeUndefined()
@@ -453,7 +676,7 @@ describe('来源组页签 · 成员操作', () => {
     expect(picker.props('backendMode')).toBe(true)
     expect(picker.props('groupId')).toBe('3')
 
-    await wrapper.findAll('.sg-item')[1]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[1]!.trigger('click')
     await settle()
     expect(wrapper.find('[data-testid="sg-add-source"]').attributes('disabled')).toBeDefined()
   })
@@ -463,7 +686,7 @@ describe('来源组页签 · 权限', () => {
   it('非 admin：所有写按钮禁用，显示只读提示', async () => {
     useAuthStore().roles = ['read']
     const { wrapper } = await mountTab()
-    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await wrapper.findAll('.sg-item-select')[0]!.trigger('click')
     await settle()
     expect(wrapper.text()).toContain('当前账号仅可查看，修改需要管理员权限')
     expect((wrapper.get('[data-testid="sg-new"]').element as HTMLButtonElement).disabled).toBe(true)
