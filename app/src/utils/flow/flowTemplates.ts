@@ -12,6 +12,7 @@ import {
   cloneConfig,
   makeBlankFlow,
   type FlowDef,
+  type LibGroup,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -226,17 +227,86 @@ export function structureNode(config: NodeConfig): NodeConfig {
   return next
 }
 
+export const structureNodeGroups: LibGroup[] = [
+  { title: '采集类', items: [
+    { template: 'web-list', code: '90', name: '列表采集', desc: '采集入口或列表页', pill: 'p1' },
+    { template: 'web-detail', code: '90', name: '详情采集', desc: '采集详情页内容', pill: 'p1' },
+    { template: 'file-download', code: '95', name: '文件下载', desc: '下载文件或附件', pill: 'p1' },
+    { template: 'ocr', code: '150', name: 'OCR识别', desc: '从图片中识别文字', pill: 'p1' },
+  ] },
+  { title: '处理类', items: [
+    { template: 'rule', code: '600', name: '规则处理', desc: '按规则处理上游数据', pill: 'p1' },
+    { template: 'article-summary', code: '720', name: '生成摘要', desc: '提取文章摘要', pill: 'p1' },
+    { template: 'article-tag', code: '730', name: '打标签', desc: '为文章添加标签', pill: 'p1' },
+    { template: 'translate', code: '800', name: '翻译', desc: '翻译上游内容', pill: 'p1' },
+  ] },
+]
+const structureTypeByKey = new Map(structureNodeGroups.flatMap(group => group.items.map(item => [item.template, item])))
+const structureCodes = new Set([...structureTypeByKey.values()].map(item => item.code))
+export const MAX_STRUCTURE_NODES = 100
+
+function copyTemplateDefaults(config: NodeConfig): NodeConfig {
+  const next = sanitizeTemplateConfig(config)
+  delete next.configId
+  delete next.configUpdateDt
+  delete next.stepSourceId
+  if (next.collectCfg) {
+    delete next.collectCfg.credentialRef
+    delete next.collectCfg.loginConfigs
+    delete next.collectCfg.defaultLoginConfigId
+  }
+  for (const orchestration of [next.ruleCfg, next.execCfg]) {
+    if (!orchestration) continue
+    delete orchestration.scriptPath
+    delete orchestration.ruleId
+    orchestration.mode = 'new'
+  }
+  return next
+}
+
+export function makeStructureNode(key: string): NodeConfig | undefined {
+  const type = structureTypeByKey.get(key)
+  const seed = NODE_CONFIGS[key]
+  if (!type || !seed) return
+  return { ...structureNode(seed), title: type.name, configType: type.code }
+}
+
+export function structureDefinition({ main, configs, branches, branchGroups }: FlowDefinition): FlowDefinition {
+  if (main[0] !== 'start' || main.at(-1) !== 'end') {
+    throw new Error('模板画布缺少完整的开始或结束节点')
+  }
+  if (branches.length || branchGroups?.length) {
+    throw new Error('模板只支持顺序编排，请移除分支后保存')
+  }
+  const ids = main.slice(1, -1)
+  if (ids.length < 1 || ids.length > MAX_STRUCTURE_NODES) {
+    throw new Error(`模板需包含 1 至 ${MAX_STRUCTURE_NODES} 个节点`)
+  }
+  const seen = new Set(['start', 'end'])
+  const entries = ids.map((id, index) => {
+    const step = `第 ${index + 1} 个节点`
+    const config = configs[id]
+    if (seen.has(id)) throw new Error(`${step}重复，请检查画布顺序`)
+    seen.add(id)
+    if (!config) throw new Error(`${step}缺少配置，请检查画布结构`)
+    const title = typeof config.title === 'string' ? config.title.trim() : ''
+    if (!title) throw new Error(`请填写${step}的名称`)
+    if (!structureCodes.has(config.configType ?? '')) throw new Error(`${step}「${title}」的类型不受支持`)
+    return [id, { ...copyTemplateDefaults(config), title, templateDefaults: true as const }] as const
+  })
+  if (Object.keys(configs).length !== ids.length) throw new Error('模板画布含有未编排的节点')
+  return { main: [...main], configs: Object.fromEntries(entries), branches: [], branchGroups: [], structureOnly: true }
+}
+
 export function makeStructureTemplate(keys: string[]): FlowDefinition {
   const definition = makeBlankTemplateDefinition()
   definition.structureOnly = true
   keys.forEach((key) => {
-    const seed = NODE_CONFIGS[key]
-    if (!seed) throw new Error(`未知节点类型：${key}`)
+    const config = makeStructureNode(key)
+    if (!config) throw new Error(`未知节点类型：${key}`)
     const id = `node-${Object.keys(definition.configs).length + 1}`
-    definition.configs[id] = structureNode(seed)
-    definition.configs[id]!.title = ({ 'web-list': '采集', 'web-detail': '详情采集', 'file-download': '文件下载', rule: '规则处理', translate: '翻译', ocr: 'OCR识别', 'article-summary': '生成摘要', 'article-tag': '打标签' } as Record<string, string>)[key] || seed.title
-    if (key === 'web-list' && keys.includes('web-detail')) definition.configs[id]!.title = '列表采集'
-    definition.configs[id]!.configType = ({ 'web-list': '90', 'web-detail': '90', 'file-download': '95', rule: '600', translate: '800', ocr: '150', 'article-summary': '720', 'article-tag': '730' } as Record<string, string>)[key]
+    if (key === 'web-list' && !keys.includes('web-detail')) config.title = '采集'
+    definition.configs[id] = config
     definition.main.splice(definition.main.length - 1, 0, id)
   })
   return definition
@@ -244,6 +314,25 @@ export function makeStructureTemplate(keys: string[]): FlowDefinition {
 
 export function instantiateStructureTemplate(definition: FlowDefinition): FlowDefinition {
   const copy = sanitizeTemplateDefinition(definition)
-  copy.configs = Object.fromEntries(Object.entries(copy.configs).map(([id, config]) => [id, structureNode(config)]))
+  copy.configs = Object.fromEntries(Object.entries(copy.configs).map(([id, config]) => [
+    id, config.templateDefaults ? copyTemplateDefaults(config) : structureNode(config),
+  ]))
   return copy
+}
+
+/** 步骤接口仍决定拓扑和身份；只给尚未配置的真实节点回填该流程自己的默认值快照。 */
+export function restoreTemplateDefaults(configs: Record<string, NodeConfig>, definition?: FlowDefinition, keepSourceUrl = false) {
+  if (!definition || definition.structureOnly) return
+  for (const [id, config] of Object.entries(configs)) {
+    const defaults = definition.configs[id]
+    if ((config.configId && config.configId !== '0') || !defaults?.templateDefaults) continue
+    const restored = copyTemplateDefaults(defaults)
+    if (keepSourceUrl && restored.collectCfg && config.collectCfg) restored.collectCfg.url = config.collectCfg.url
+    configs[id] = {
+      ...restored,
+      title: config.title,
+      configName: config.title,
+      disabled: config.disabled,
+    }
+  }
 }

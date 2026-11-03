@@ -98,6 +98,8 @@ export interface NodeConfig {
   template?: string
   /** 节点类型 ID（旧平台「抓取类型」= config.configType，如 90 网页抓取、150 OCR抓取、800 翻译助手） */
   configType?: string
+  /** 由模板复制的编辑默认值。仅用于尚未绑定配置的实际步骤。 */
+  templateDefaults?: true
   /** 本节点引用的配置 ID（迁移数据来自 Step.configId）。0824-00 §1.1 的新模型里 FlowNode N:1 Config，
    *  节点必须且只能引用一个配置——这个字段就是那个引用。参数绑定/解绑要按它调 config/configParam* 接口。 */
   configId?: string

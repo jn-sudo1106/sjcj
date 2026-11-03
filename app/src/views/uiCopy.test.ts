@@ -392,7 +392,7 @@ describe('最新方案 UI 入口收口', () => {
 
   // 出参列内部区块与任务参数取值同属任务配置。
   it('任务配置包含参数绑定与出参列区块', () => {
-    expect(taskTab).toContain('<ParamsTab />')
+    expect(taskTab).toMatch(/<ParamsTab\b[^>]*:template-defaults=/)
     expect(paramsTab).toContain('<label>出参列</label>')
     expect(nodeInspector).not.toContain("tab === 'params'")
   })

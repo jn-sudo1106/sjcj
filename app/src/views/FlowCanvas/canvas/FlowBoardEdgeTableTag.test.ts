@@ -11,6 +11,7 @@ import ElementPlus from 'element-plus'
 import FlowBoard from './FlowBoard.vue'
 import { useFlowStore } from '@/stores/flow'
 import { entryApi } from '@/api'
+import { makeStructureTemplate } from '@/utils/flow/flowTemplates'
 
 class ResizeObserverStub {
   observe() {}
@@ -19,7 +20,7 @@ class ResizeObserverStub {
 }
 ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver ??= ResizeObserverStub
 
-async function mountBoard() {
+async function mountBoard(structureTemplate = false) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/canvas', component: { template: '<div />' } }],
@@ -29,8 +30,13 @@ async function mountBoard() {
   const pinia = createPinia()
   setActivePinia(pinia)
   const flow = useFlowStore()
-  flow.newFlow('standard')
-  const wrapper = mount(FlowBoard, { global: { plugins: [pinia, router, ElementPlus] } })
+  if (structureTemplate) {
+    flow.load({
+      ...makeStructureTemplate(['web-list', 'web-detail']),
+      id: 'template', name: '列表详情模板', version: '', updatedAt: '',
+    })
+  } else flow.newFlow('standard')
+  const wrapper = mount(FlowBoard, { props: { embedded: structureTemplate, structureTemplate }, global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   return { flow, wrapper }
 }
@@ -81,6 +87,26 @@ describe('FlowBoard · 连线表关系标注', () => {
 
 // 节点卡片自己身上的「⊞ 输出表」角标（用户 2026-09-01 追加确认：跟连线标注同一套兜底+解析）。
 describe('FlowBoard · 节点卡片「⊞ 输出表」角标', () => {
+  it('模板配置输入表和输出表后，节点卡片立即显示对应表名和编号', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockImplementation(async id => ({
+      tableId: id, tableName: `T_${id}`, name: id === '6200026' ? '列表数据表' : '详情数据表', fields: [],
+    }))
+    const { flow, wrapper } = await mountBoard(true)
+    try {
+      expect(wrapper.findAll('.rc-node-table')).toHaveLength(0)
+      flow.patchCollect('node-1', { outputTable: '6200026' })
+      flow.patchCollect('node-2', { inputTable: '6200026', outputTable: '6200027' })
+      await flushPromises()
+      expect(wrapper.findAll('.rc-node-table').map(label => label.text())).toEqual([
+        '⊞ 列表数据表 (6200026)',
+        '⊞ 列表数据表 (6200026) → 详情数据表 (6200027)',
+      ])
+    } finally {
+      wrapper.unmount()
+      vi.restoreAllMocks()
+    }
+  })
+
   // 2026-09-04 修正这条的口径：兜底展示要保留（不能整块消失），但**采集节点**不能把输入表
   // 冒充成输出表——它的编辑框写的是「请选择输出表」，输出表必填。原来标成「输出表 X」，
   // 卡片底部却是「待配置」，看上去自相矛盾（用户实例：流程 1400984 的「网页抓取测试01」，

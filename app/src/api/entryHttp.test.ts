@@ -290,4 +290,56 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
       expect(list.map((t) => t.tableId)).toEqual(['2101720', '9001'])
     })
   })
+
+  // 批量生成 AI 描述（11-03 修）：后端 EntryTypeController#batchGenerateAiComment 是
+  // `@RequestBody(required=false) List<Integer>` + `@RequestParam skipExisting`，
+  // 所以数组直接当 body（不套字段）、skipExisting 必须在 query。
+  // 之前写成 httpParams: { skipExisting } 会被 request() 的 `options.httpParams ?? params` 整个盖掉数组体，
+  // 后端拿 JSON 对象去反序列化 List<Integer> 直接 400，勾选的表根本没送出去。
+  describe('batchGenerateAiComment', () => {
+    it('勾选表批量生成：body 是裸 ID 数组，skipExisting 走 query 不进 body', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '批量生成任务已启动', data: { total: 2 } }))
+      const { entryApi } = await import('./index')
+
+      await entryApi.batchGenerateAiComment(['2102157', '2101001'], true)
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(init.method).toBe('POST')
+      expect(url).toContain('/api/v1/config/entryType/batchGenerateAiComment?')
+      expect(url).toContain('skipExisting=true')
+      expect(JSON.parse(String(init.body))).toEqual([2102157, 2101001])
+    })
+
+    it('skipExisting=false 也照发（不靠后端默认值），URL 上是 false', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '批量生成任务已启动', data: null }))
+      const { entryApi } = await import('./index')
+
+      await entryApi.batchGenerateAiComment(['2102157'], false)
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('skipExisting=false')
+      expect(JSON.parse(String(init.body))).toEqual([2102157])
+    })
+
+    // 未勾选时代码传空数组：后端 `entryTypeIds != null && !isEmpty` 的 else 分支就是全库重跑
+    it('不传 ids 发空数组体（全库），不再退成 {skipExisting} 对象', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '批量生成任务已启动', data: null }))
+      const { entryApi } = await import('./index')
+
+      await entryApi.batchGenerateAiComment(undefined, true)
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(String(init.body))).toEqual([])
+    })
+
+    it('拼写别名 batchGenerateAiCommont 打同一个端点', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '批量生成任务已启动', data: null }))
+      const { entryApi } = await import('./index')
+
+      await entryApi.batchGenerateAiCommont(['2102157'], true)
+
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/config/entryType/batchGenerateAiComment?')
+    })
+  })
 })
