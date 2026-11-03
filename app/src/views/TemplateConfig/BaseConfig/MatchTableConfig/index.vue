@@ -4,6 +4,7 @@
 //
 // 2026-11-03 改版：左表右明细。左侧复用数据中心「数据查询」的表导航（@/components/DataTableSidebar.vue），
 // 右侧是当前表选中的规则；原「表名称 + 状态」查询区与分页器整体去掉，找表改用侧栏自带的搜表名/ID。
+// 侧栏在本页只按业务目录分组（biz-only，「数据库」页签不出）；数据中心那一页两种分组都保留。
 //
 // 为什么规则一次性拉全、不在选表时按条件查后端：
 // · /poc/match-table-config/page 的条件只有 name（LIKE table_name）、selectionType、ids，**没有 tableId**
@@ -189,6 +190,7 @@ onMounted(() => {
         :tables="tables"
         :selected-id="selectedTableId"
         scope="all"
+        biz-only
         :loading="navigationLoading"
         :error="navigationError"
         @select="selectTable"

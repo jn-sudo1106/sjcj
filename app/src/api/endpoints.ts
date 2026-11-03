@@ -181,7 +181,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/entryType', desc: '实体表详情', impl: true, live: true },
   { path: 'config/entryType/generateAiComment', desc: '单表生成/刷新AI综合描述', danger: true, impl: true, live: true },
   { path: 'config/entryType/generateAiCommont', desc: '单表生成/刷新AI综合描述(兼容别名)', danger: true, impl: true, live: true },
-  { path: 'config/entryType/batchGenerateAiComment', desc: '批量生成AI综合描述', danger: true, impl: true, live: true },
+  { path: 'config/entryType/batchGenerateAiComment', desc: '批量生成AI综合描述 → POST /api/v1/config/entryType/batchGenerateAiComment?skipExisting=（**body 是裸 ID 数组** List<Integer>、不套字段；skipExisting 走 query；空数组=全库重跑）', danger: true, impl: true, live: true },
   { path: 'config/entryType/batchGenerateAiCommont', desc: '批量生成AI综合描述(兼容别名)', danger: true, impl: true, live: true },
   { path: 'config/saveEntryType', desc: '⚠️ mock 时代占位，旧仓库无此路径，非真实契约端点，仅 mock/index.ts 引用', danger: true, impl: true },
   { path: 'config/entryTypeAddAll', desc: '新建实体表', danger: true, impl: true, live: true },

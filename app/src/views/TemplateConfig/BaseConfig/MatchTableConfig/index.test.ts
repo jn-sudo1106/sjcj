@@ -41,13 +41,14 @@ const TABLES: EntryType[] = [
 
 const dialogOpen = vi.fn()
 
-/** 侧栏自身的行为由数据中心 DataQueryTab.test.ts 覆盖，这里只当发射器用 */
+/** 侧栏自身的行为由 components/DataTableSidebar.test.ts 覆盖，这里只当发射器用 */
 const SidebarStub = defineComponent({
   name: 'DataTableSidebar',
   props: {
     tables: { type: Array as PropType<EntryType[]>, required: true },
     selectedId: { type: String, required: true },
     scope: { type: String, required: true },
+    bizOnly: { type: Boolean, default: false },
     loading: { type: Boolean, required: true },
     error: { type: String, required: true },
   },
@@ -317,6 +318,8 @@ describe('MatchTableConfigPage', () => {
 
     expect(sidebarOf(wrapper).props('error')).toBe('')
     expect(sidebarOf(wrapper).props('tables')).toHaveLength(TABLES.length)
+    // 本页侧栏只按业务目录分组，「数据库」页签不出（数据中心那一页两种分组都保留）
+    expect(sidebarOf(wrapper).props('bizOnly')).toBe(true)
   })
 
   it('规则拉取失败在右侧报错并可重试', async () => {

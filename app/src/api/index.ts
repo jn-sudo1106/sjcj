@@ -3254,33 +3254,39 @@ export const entryApi = {
     }),
   /**
    * 单表生成/刷新 AI 综合描述 (ai_commont)
+   * 后端只认 query 上的 entryTypeId（httpParams 决定真实报文）；第一参 params 是给 mock 分支用的
+   * ——request() 在 mock 下把 params 直接交给 handler，传 `{}` 会让演示模式永远回「实体不存在」。
    */
   generateAiComment: (tableId: string | number) =>
-    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiComment', {}, {
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiComment', { tableId }, {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId },
     }),
   generateAiCommont: (tableId: string | number) =>
-    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', {}, {
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', { tableId }, {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId },
     }),
   /**
    * 批量生成 AI 综合描述 (AI_COMMENT)
+   * 后端 EntryTypeController#batchGenerateAiComment：`@RequestBody(required=false) List<Integer>` 收**裸数组**
+   * （不套字段），`skipExisting` 是 `@RequestParam` 走 query。ids 传空数组 = 全库重跑（后端 else 分支）。
+   * ID 统一转数字：声明是 List<Integer>，不赌 Jackson 的字符串强转。
+   * ⚠️ 这里不能再写 httpParams：request() 是 `options.httpParams ?? params`，一写就把数组体整个覆盖掉。
    */
   batchGenerateAiComment: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
-    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', tableIds ?? [], {
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', (tableIds ?? []).map(Number), {
       method: 'POST',
       paramsIn: 'body',
-      httpParams: { skipExisting },
+      query: { skipExisting },
     }),
   batchGenerateAiCommont: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
-    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', tableIds ?? [], {
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', (tableIds ?? []).map(Number), {
       method: 'POST',
       paramsIn: 'body',
-      httpParams: { skipExisting },
+      query: { skipExisting },
     }),
 }
 

@@ -175,29 +175,6 @@ async function promptRenameGroup(row: GroupRow) {
   }
 }
 
-async function promptAddGroup() {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入用户组 ID（必须大于 90000）', '添加用户组', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      inputPattern: /^[1-9]\d{4,}$/,
-      inputErrorMessage: '请输入大于 90000 的数字 ID',
-    })
-    const id = Number(value.trim())
-    if (id <= 90000) {
-      ElMessage.warning('用户组 ID 必须大于 90000')
-      return
-    }
-    if (!allGroupIds.value.includes(id)) {
-      allGroupIds.value = [...allGroupIds.value, id].sort((a, b) => a - b)
-    }
-    await onSelectGroup({ groupId: id, name: groupName(id) || `用户组 ${id}` })
-    ElMessage.success(`用户组 #${id} 已加入列表`)
-  } catch {
-    // 取消
-  }
-}
-
 // --------------------------------------------------------------------------
 // 右侧：源数据权限（可见/排除范围，内嵌双栏编辑器；落库走 groupSourceScope 一次保存）
 // --------------------------------------------------------------------------
@@ -448,9 +425,6 @@ onMounted(async () => {
         <div class="dp-card-header">
           <div class="dp-card-title">
             <span>用户组</span>
-            <el-tooltip content="添加用户组" placement="top">
-              <el-button link type="primary" :icon="Plus" class="dp-add-group-btn" @click="promptAddGroup" />
-            </el-tooltip>
           </div>
           <div class="dp-card-search">
             <el-input
@@ -719,10 +693,6 @@ onMounted(async () => {
   font-size: 15px;
   font-weight: 600;
   color: #0f172a;
-}
-
-.dp-add-group-btn {
-  padding: 2px 4px;
 }
 
 .dp-card-search {
