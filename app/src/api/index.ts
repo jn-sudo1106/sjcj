@@ -3254,19 +3254,30 @@ export const entryApi = {
     }),
   /**
    * 单表生成/刷新 AI 综合描述 (ai_commont)
-   * params 带 tableId 是给 mock handler 认表用的；真实请求仍只发 httpParams 里的 entryTypeId（query）。
    */
+  generateAiComment: (tableId: string | number) =>
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiComment', {}, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId },
+    }),
   generateAiCommont: (tableId: string | number) =>
-    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', { tableId }, {
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', {}, {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId },
     }),
   /**
-   * 批量生成 AI 综合描述 (ai_commont)
+   * 批量生成 AI 综合描述 (AI_COMMENT)
    */
+  batchGenerateAiComment: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', tableIds ?? [], {
+      method: 'POST',
+      paramsIn: 'body',
+      httpParams: { skipExisting },
+    }),
   batchGenerateAiCommont: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
-    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiCommont', tableIds ?? [], {
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiComment', tableIds ?? [], {
       method: 'POST',
       paramsIn: 'body',
       httpParams: { skipExisting },
