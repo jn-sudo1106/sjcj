@@ -448,9 +448,9 @@ onMounted(async () => {
         <div class="dp-card-header">
           <div class="dp-card-title">
             <span>用户组</span>
-            <el-tooltip content="添加用户组" placement="top">
+            <!-- <el-tooltip content="添加用户组" placement="top">
               <el-button link type="primary" :icon="Plus" class="dp-add-group-btn" @click="promptAddGroup" />
-            </el-tooltip>
+            </el-tooltip> -->
           </div>
           <div class="dp-card-search">
             <el-input
