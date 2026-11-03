@@ -1842,8 +1842,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
 .sov-filter.is-compact {
-  /* 一行排开（10-21 用户：合并成一排）。各控件的 flex-basis 就是读得全的下限，放得下就先一行再按上限放大；
-     目录展开后 13.6 寸约 974px 也能一行，只有更窄、下限都放不下时才按整个控件换行。 */
+  /* 控件按可读下限紧凑排列，宽屏只放大到各自上限；空间不足时按整个控件换行。 */
   flex-wrap: wrap; align-items: flex-start; gap: 6px; min-height: 52px; padding: 8px 12px;
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
@@ -1855,7 +1854,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
 .sov-filter.is-compact label select, .sov-filter.is-compact label input { width: 100%; }
 /* 查询那格：预留字段、条件、输入框和同时显示的删除 / 添加按钮所需宽度，余量留给输入框。 */
-.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 236px; min-width: 236px; max-width: 420px; }
+.sov-filter.is-compact .sov-field { display: flex; flex: 1 1 260px; min-width: 260px; max-width: 420px; }
 /* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
 .sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
@@ -1883,7 +1882,8 @@ defineExpose({ openLaunch, clearSelection, refresh })
    「数据量 ≤」约 51px 被截成「数据量」（2026-10-16 用户截图反馈）。
    100px 时文字区约 67px，留出约 16px 余量：字体回退到更宽的 ≤ 也读得全，同时不把这一行挤到换行。 */
 .sov-filter.is-compact .sov-fl-count { flex: 0 0 100px; min-width: 100px; }
-.sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
+.sov-filter.is-compact .sov-filter-actions { flex-wrap: wrap; flex: none; max-width: 100%; min-height: 34px; }
+.sov-filter.is-compact .sov-filter-actions > :deep(button) { height: 34px; white-space: nowrap; }
 .sov-summary-ops { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }

@@ -1235,15 +1235,9 @@ watch(() => route.query.group, (id) => {
 .sg-info dt { color: var(--rc-faint); }
 .sg-info dd { margin: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sg-drawer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-/* 查询栏两行，与「我的视图」（MyViews.vue）一致：条件按比例铺满一行，按钮行靠右。
-   组内范围已限定，没有「来源组」筛选，比我的视图少一列 */
-.sg-content :deep(.sov-filter.is-compact) {
-  display: grid; align-items: center; gap: 8px;
-  grid-template-columns: minmax(270px, 3fr) minmax(72px, 1.1fr) minmax(64px, 1fr) minmax(64px, 1fr) minmax(56px, .9fr);
+/* 条件沿用源列表的紧凑宽度和自动换行，避免大屏网格把控件间距撑开；按钮单独一行靠右。 */
+.sg-content :deep(.sov-filter.is-compact .sov-filter-actions) {
+  flex-basis: 100%; flex-wrap: wrap; justify-content: flex-end; margin-left: 0;
 }
-.sg-content :deep(.sov-filter.is-compact .sov-field),
-.sg-content :deep(.sov-filter.is-compact label) { min-width: 0; }
-.sg-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 0; }
-.sg-content :deep(.sov-filter.is-compact .sov-filter-actions) { grid-column: 1 / -1; justify-self: end; margin-left: 0; }
 @media (max-width: 1100px) { .sg-nav { width: 170px; } }
 </style>
