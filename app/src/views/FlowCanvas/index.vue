@@ -5,6 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
+import { restoreTemplateDefaults } from '@/utils/flow/flowTemplates'
+import { loadTemplateDefaults } from '@/utils/flow/applyTemplateToSource'
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useFlowReadiness } from '@/views/FlowCanvas/canvas/useFlowReadiness'
@@ -428,6 +430,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     ElMessage.error(sourceLoadError.value)
     return
   }
+  const defaults = runtimeView ? undefined : await loadTemplateDefaults(flowId, steps)
   const viewingDraft = !!selectedBinding?.draftFlowId && flowId === selectedBinding.draftFlowId
   flow.loadFromSource({
     ...source,
@@ -442,6 +445,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     publishedFlowId: selectedBinding?.publishedFlowId,
     draftFlowId: selectedBinding?.draftFlowId,
   }, steps, null)
+  restoreTemplateDefaults(flow.configs, defaults, true)
   restoreFlowInspector(sourceId, flowId)
   // 回到源可能需要等待后端数秒：加载完成后再恢复，不受早期深链的 1.5 秒窗口限制。
   await nextTick()

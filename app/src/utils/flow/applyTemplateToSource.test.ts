@@ -9,6 +9,7 @@ const mockSourceDetail = vi.fn()
 const mockSteps = vi.fn()
 const mockStepConfigDetails = vi.fn()
 const mockConfigDetail = vi.fn()
+const mockFlowDetail = vi.fn()
 const mockOverview = vi.fn(async () => ({ enabled: false, versions: [], draftId: null as string | null }))
 
 vi.mock('@/api', () => ({
@@ -17,7 +18,10 @@ vi.mock('@/api', () => ({
     sourceSteps: vi.fn(),
     stepConfigDetails: (...args: unknown[]) => mockStepConfigDetails(...args),
   },
-  flowCenterApi: { steps: (...args: unknown[]) => mockSteps(...args) },
+  flowCenterApi: {
+    steps: (...args: unknown[]) => mockSteps(...args),
+    detail: (...args: unknown[]) => mockFlowDetail(...args),
+  },
   configApi: { configDetail: (...args: unknown[]) => mockConfigDetail(...args) },
   flowVersionApi: { overview: (...args: unknown[]) => mockOverview(...(args as [])), action: vi.fn() },
   versionArgs: (ref: unknown) => (ref ? [ref] : []),
@@ -25,6 +29,7 @@ vi.mock('@/api', () => ({
 
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas } from './applyTemplateToSource'
 import { useFlowStore } from '@/stores/flow'
+import { instantiateStructureTemplate, makeStructureTemplate, structureDefinition } from './flowTemplates'
 
 // 首屏快速路径（withConfigDetails=false）的步骤没有 configType，只有 type='rule'
 const bareSteps = (): Step[] => [
@@ -37,7 +42,30 @@ describe('画布重载补 configDetail', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    mockFlowDetail.mockResolvedValue(null)
     mockStepConfigDetails.mockImplementation(async (steps: Step[]) => withDetails(steps))
+  })
+
+  it('按后端分配的步骤 ID 恢复模板默认值，并保留源的 URL', async () => {
+    mockSourceDetail.mockResolvedValue({ sourceId: 's1', name: '源', url: 'https://source.example.com', flowId: '14007240' })
+    mockSteps.mockResolvedValue(bareSteps())
+    const template = makeStructureTemplate(['web-list'])
+    const node = template.configs['node-1']!
+    node.configUrl = 'https://template.example.com'
+    node.collectCfg!.url = node.configUrl
+    node.collectCfg!.outputTable = '925'
+    const copied = instantiateStructureTemplate(structureDefinition(template))
+    // instantiateStructure 将模板 ID 改为步骤 ID；用实际步骤键模拟接口返回。
+    mockFlowDetail.mockResolvedValue({ definition: {
+      ...copied, main: ['start', 'st1', 'end'], configs: { st1: copied.configs['node-1'] },
+    } })
+
+    expect(await reloadSourceIntoCanvas('s1')).toBe(true)
+    expect(mockFlowDetail).toHaveBeenCalledWith('14007240')
+    expect(useFlowStore().configs.st1).toMatchObject({
+      configUrl: 'https://template.example.com',
+      collectCfg: { url: 'https://source.example.com', outputTable: '925' },
+    })
   })
 
   it('源画布重载后 730 步骤落成文章打标签节点，不带 ruleCfg', async () => {

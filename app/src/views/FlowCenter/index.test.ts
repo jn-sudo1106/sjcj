@@ -8,7 +8,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { configApi, flowCenterApi, flowVersionApi, itemApi, sourceApi, workflowBindingApi, type FlowRecord, type SourceCategory } from '@/api'
+import { configApi, entryApi, flowCenterApi, flowVersionApi, itemApi, paramApi, sourceApi, workflowBindingApi, type FlowRecord, type SourceCategory } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useNodeStore } from '@/stores/node'
 import { useUiStore } from '@/stores/ui'
@@ -109,7 +109,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       directives: { loading: {} },
       stubs: {
         FlowBoard: realBoard ? false : { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
-        NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 任务配置</div>' },
+        NodeInspector: realBoard ? false : { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 任务配置</div>' },
         // 选源弹窗：真组件在 FlowSourcePickerDialog.test.ts 单独测。这里只关心 confirmApply
         // 的分批 / changeFlowBatch / 错误处理，stub 出「设 modelValue + 触发 confirm」两个口子。
         FlowSourcePickerDialog: {
@@ -166,6 +166,23 @@ describe('流程中心 · 列表', () => {
     expect(cells[0].text()).toBe('3')
     expect(cells[1].text()).toBe('—')
     expect(cells[1].attributes('title')).toContain('读取失败')
+  })
+
+  it('结构模板的节点数来自画布定义，完整流程模板仍按实际步骤计数', async () => {
+    const structure = { ...FLOWS[0]!, id: 'structure-template', isTemplate: true, definition: makeStructureTemplate(['web-list', 'web-detail', 'file-download']) }
+    const full = { ...FLOWS[1]!, isTemplate: true }
+    const detail = vi.spyOn(flowCenterApi, 'detail').mockImplementation(async id => id === structure.id ? structure : full)
+    const steps = vi.spyOn(flowCenterApi, 'steps').mockImplementation(async id =>
+      id === structure.id ? [{ isRoot: true }] as never : [{ isRoot: true, configId: '100' }, {}] as never)
+    const emptyDefinition = { main: [], branches: [], configs: {} }
+    const w = await mountCenter([
+      { ...structure, definition: emptyDefinition },
+      { ...full, definition: emptyDefinition },
+    ])
+    await flushPromises()
+    expect(w.findAll('[data-testid="flow-node-cnt"]').map(cell => cell.text())).toEqual(['3', '2'])
+    expect(detail.mock.calls.map(([id]) => id)).toEqual([structure.id])
+    expect(steps.mock.calls.map(([id]) => id)).toEqual([structure.id, full.id])
   })
 
   it('有 IntersectionObserver 时节点数只读进入视口的行', async () => {
@@ -498,9 +515,9 @@ describe('流程中心 · 操作列', () => {
     expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '标记为模板', '禁用流程', '删除流程'])
   })
 
-  it('已是模板的行，按钮文案变成「取消模板」', async () => {
+  it('模板行使用「编辑模板」和「取消模板标记」', async () => {
     const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
-    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '取消模板标记', '禁用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑模板', '复制流程', '关联到源', '取消模板标记', '禁用流程', '删除流程'])
   })
 
   it('已禁用的行：按钮变「启用流程」、行带禁用徽标', async () => {
@@ -1232,12 +1249,18 @@ describe('流程模板结构与归集', () => {
   it('在流程工作区的节点库添加下载并调整顺序，只保存模板结构', async () => {
     class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ list: [], total: 0 })
+    const addConfig = vi.spyOn(configApi, 'addConfig')
     const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOWS[0], isTemplate: true })
     try {
       const w = await mountCenter(FLOWS, FLOWS.length, undefined, true)
       vi.mocked(flowCenterApi.steps).mockClear()
       await w.get('[data-testid="new-structure-template"]').trigger('click')
       const workspace = w.get('[aria-label="流程工作区"]')
+      await workspace.get('input[aria-label="URL"]').setValue('https://example.com/list?page=1')
+      expect(workspace.get('[aria-label="节点设置"]').findAll('.rc-top-tab').map(tab => tab.text()))
+        .toEqual(['节点配置', '表配置', '编排配置', '任务配置'])
       await workspace.get('[data-testid="node-library-toggle"]').trigger('click')
       const download = workspace.findAll('.anp-item').find(item => item.text().includes('文件下载'))
       expect(download).toBeDefined()
@@ -1245,7 +1268,7 @@ describe('流程模板结构与归集', () => {
       const moveUp = workspace.findAll('button').find(button => button.text() === '上移')
       await moveUp!.trigger('click')
       expect(workspace.findAll('.rc-node-title').map(node => node.text())).toEqual(['文件下载', '采集'])
-      expect(workspace.find('[data-testid="embedded-node-inspector"]').exists()).toBe(false)
+      expect(workspace.find('[data-testid="node-config-save"]').exists()).toBe(false)
       expect(workspace.find('[data-testid="flow-publish"]').exists()).toBe(false)
       expect(useFlowStore().flowIdMode).toBe(false)
       expect(flowCenterApi.detail).not.toHaveBeenCalled()
@@ -1262,7 +1285,9 @@ describe('流程模板结构与归集', () => {
       expect(nodes.map(node => node.configType)).toEqual(['95', '90'])
       expect(nodes[0]?.collectCfg).toMatchObject({ collectorKind: 'file_download', url: '', inputTable: '', outputTable: '' })
       expect(nodes[0]).not.toHaveProperty('taskCfg')
-      expect(w.find('[aria-label="流程工作区"]').exists()).toBe(false)
+      expect(nodes[1]).toMatchObject({ templateDefaults: true, configUrl: 'https://example.com/list?page=1' })
+      expect(addConfig).not.toHaveBeenCalled()
+      expect(w.find('[aria-label="流程工作区"]').exists()).toBe(true)
     } finally {
       vi.unstubAllGlobals()
     }
@@ -1328,6 +1353,54 @@ describe('按模板分组展示', () => {
     expect(w.get('[data-testid="flow-template-group-empty"]').text()).toContain('0')
     expect(w.get('[data-testid="flow-template-group-unassigned"]').attributes('aria-pressed')).toBe('true')
     expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ unassignedTemplate:true }))
+    expect(w.find('[data-testid="flow-group-edit"]').exists()).toBe(false)
+  })
+  it('没有归集流程的模板也可以从分组直接打开编辑器', async () => {
+    const template = {
+      id: 'empty', name: '列表详情模板', seq: 12, isTemplate: true, updatedAt: '',
+      definition: makeStructureTemplate(['web-list', 'web-detail']),
+    }
+    const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(template)
+    vi.spyOn(flowCenterApi, 'templateGroups').mockResolvedValue([
+      { id: template.id, name: template.name, structure: '列表采集 → 详情采集', flowCount: 0, disabled: false },
+    ])
+    const w = await mountCenter([])
+    await w.get('[data-testid="flow-group-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(detail).toHaveBeenCalledWith(template.id)
+    expect(w.get('input[aria-label="模板名称"]').element).toHaveProperty('value', template.name)
+    expect(w.get('[data-testid="flow-meta-seq"]').element).toHaveProperty('value', '12')
+    expect(w.get('[data-testid="structure-template-save"]').text()).toBe('保存模板')
+    expect(useFlowStore().main).toEqual(['start', 'node-1', 'node-2', 'end'])
+    expect(flowCenterApi.steps).not.toHaveBeenCalled()
+  })
+  it('模板有未保存改动时确认再切换，保存后可以直接编辑另一模板', async () => {
+    const first = { id: 't1', name: '第一个模板', seq: 0, isTemplate: true, updatedAt: '', definition: makeStructureTemplate(['web-list']) }
+    const second = { ...first, id: 't2', name: '第二个模板' }
+    vi.spyOn(flowCenterApi, 'detail').mockImplementation(async id => id === first.id ? first : second)
+    vi.spyOn(flowCenterApi, 'templateGroups').mockResolvedValue([first, second].map(({ id, name }) => ({
+      id, name, flowCount: 0, structure: '采集', disabled: false,
+    })))
+    vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...first, seq: 7 })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+    const w = await mountCenter([])
+    const editGroup = () => w.get('[data-testid="flow-group-edit"]').trigger('click')
+    await editGroup()
+    await flushPromises()
+    await w.get('[data-testid="flow-meta-seq"]').setValue('7')
+    await w.get('[data-testid="flow-template-group-t2"]').trigger('click')
+    await editGroup()
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(w.get('input[aria-label="模板名称"]').element).toHaveProperty('value', first.name)
+    await w.get('[data-testid="structure-template-save"]').trigger('click')
+    await flushPromises()
+    await editGroup()
+    await flushPromises()
+    expect(w.get('input[aria-label="模板名称"]').element).toHaveProperty('value', second.name)
+    expect(confirm).toHaveBeenCalledTimes(1)
   })
   it('停用模板仍可查看成员，不能直接从它新建流程', async () => {
     vi.spyOn(flowCenterApi,'templateGroups').mockResolvedValue([
@@ -1339,6 +1412,7 @@ describe('按模板分组展示', () => {
     await flushPromises()
     expect(w.get('[data-testid="flow-group-heading"]').text()).toContain('停用模板')
     expect(w.find('[data-testid="flow-group-create"]').exists()).toBe(false)
+    expect(w.find('[data-testid="flow-group-edit"]').exists()).toBe(true)
   })
   it('列表详情预置生成两个网页节点，详情节点保留详情身份', async () => {
     const save=vi.spyOn(flowCenterApi,'save').mockResolvedValue({ ...FLOWS[0],isTemplate:true })

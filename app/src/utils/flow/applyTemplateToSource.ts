@@ -1,3 +1,4 @@
+import { restoreTemplateDefaults } from './flowTemplates'
 // 流程复制 / 重载的共用实现（2026-09-22 抽出）。
 // 1008-08：「套用流程模板」整个功能去掉了（会上定的），`applyTemplateToSource()` 随之删除；
 // 下面的历史说明里提到它的地方保留，只作来龙去脉。
@@ -84,18 +85,29 @@ export async function reloadSourceIntoCanvas(sourceId: string, preferredFlowId?:
   const steps = flowId
     ? await flowCenterApi.steps(flowId, { withConfigDetails: false, ...(versionId ? { versionId } : {}) })
     : (await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })) ?? []
+  const defaults = await loadTemplateDefaults(flowId, steps)
   const { useFlowStore } = await import('@/stores/flow')
   const flow = useFlowStore()
   const sameSource = String(flow.sourceCtx?.sourceId ?? '') === String(sourceId)
   flow.loadFromSource(preferredFlowId
     ? { ...detail, flowId, primaryFlowId: validFlowIdOf(detail.flowId) || undefined }
     : detail, steps, null)
+  restoreTemplateDefaults(flow.configs, defaults, true)
   // 定时 cron 在 job 表、sourceDetail 里恒为 null（见 index.vue backfillSourceSchedule）。loadFromSource
   // 重建了源上下文，进入画布时补的 cron 随之丢失，节点定时退回「每天」兜底显示（2026-10-27 发布 v3 后实测）。
   // sourceJob 不随重载清空，同一个源直接重新套回即可，不置脏。
   if (sameSource && flow.sourceJob?.schedule) flow.applySourceSchedule(flow.sourceJob.schedule)
   await backfillReloadedStepDetails(flow, steps)
   return true
+}
+
+export async function loadTemplateDefaults(flowId: string | undefined, steps: Step[]) {
+  if (!flowId || !steps.some(step => !step.configId || step.configId === '0')) return
+  try {
+    return (await flowCenterApi.detail(flowId))?.definition
+  } catch (error) {
+    console.warn('[flow-template] 默认值读取失败', flowId, error)
+  }
 }
 
 /**
@@ -145,9 +157,11 @@ export async function reloadFlowIntoCanvas(flowId: string): Promise<boolean> {
     state: 'C',
   }
   const rootStep = steps.some((s) => s.isRoot) ? null : rootStepForSource(stubSource)
+  const defaults = await loadTemplateDefaults(flowId, steps)
   const { useFlowStore } = await import('@/stores/flow')
   const flow = useFlowStore()
   flow.loadFromSource(stubSource, rootStep ? [rootStep, ...steps] : steps)
+  restoreTemplateDefaults(flow.configs, defaults)
   flow.flowId = flowId
   // 0926：流程工作区形态——重载后节点写 / 自动保存按 flowId 锚定（与 FlowDetailDrawer 同口径）
   flow.setFlowIdMode(true)

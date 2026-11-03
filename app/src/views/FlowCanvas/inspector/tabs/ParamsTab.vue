@@ -7,6 +7,7 @@ import { collectorCapabilityOf, fieldOptionsFromTableOrOutput, type NodeConfig }
 import UrlParamEditor from '../UrlParamEditor.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 
+const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
 const { tables, ensureTableFields } = useNodeInspectorAssets()
 
@@ -60,6 +61,7 @@ const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId
       本源为参数源，URL 模板在首个采集节点生效；本节点的 URL 参数按下方单独配置。
     </div>
     <UrlParamEditor
+      :template-defaults="props.templateDefaults"
       :url="cc.url"
       :config-id="cfg?.configId"
       :param-refs="cc.urlParamRefs ?? []"

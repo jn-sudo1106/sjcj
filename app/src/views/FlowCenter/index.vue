@@ -135,7 +135,7 @@ async function assignTemplate() {
   finally { assignment.saving = false }
 }
 async function openStructureTemplate() {
-  if (blockWhileEditingTemplate() || !await canReplaceWorkspace()) return
+  if (!await canReplaceWorkspace()) return
   ++openSeq
   activeFlow.value = {
     id: '', name: '单节点采集', seq: 0, updatedAt: '',
@@ -145,10 +145,15 @@ async function openStructureTemplate() {
 }
 
 async function onStructureTemplateSaved(saved: FlowRecord) {
-  closeFlow()
+  const created = !activeFlow.value?.id
+  rememberTemplate(saved)
+  activeFlow.value = saved
+  activeId.value = saved.id
   const selection = groupSelectionSeq
   await Promise.all([loadTemplates(), loadTemplateGroups()])
-  if (mounted && selection === groupSelectionSeq) selectTemplateGroup(saved.id)
+  if (!mounted) return
+  if (created && selection === groupSelectionSeq) selectTemplateGroup(saved.id)
+  else void load()
 }
 // 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
 // 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。只用后端排序白名单里真有的字段。
@@ -304,7 +309,7 @@ async function resolveConfigFilter(): Promise<{ flowIds?: string[]; hint: string
   return { flowIds, hint: flowIds.length ? '' : `没有已发布的流程用到配置 ${configId}（只有草稿的流程查不到）` }
 }
 
-const { counts: nodeCounts, load: loadNodeCounts } = useFlowNodeCounts()
+const { counts: nodeCounts, load: loadNodeCounts, rememberTemplate } = useFlowNodeCounts()
 /**
  * 节点数只读视口内（上下各多留 200px）的行：每页最多 200 条，整页读就是 200 次步骤请求。
  * 行滚进视口才排队，滚出去的还没开始的会被下一次 load 作废；没有 IntersectionObserver（测试环境）时整页读。
@@ -516,12 +521,6 @@ const activeFlow = ref<FlowRecord | null>(null)
 const workspace = ref<InstanceType<typeof FlowDetailDrawer> | null>(null)
 let openSeq = 0
 
-function blockWhileEditingTemplate() {
-  if (!activeFlow.value?.definition.structureOnly) return false
-  ElMessage.warning('请先保存或关闭模板编辑')
-  return true
-}
-
 async function canReplaceWorkspace() {
   const active = activeFlow.value
   if (!active) return true
@@ -529,16 +528,16 @@ async function canReplaceWorkspace() {
   return canClose === true && activeFlow.value === active
 }
 
-async function openFlow(t: FlowRecord) {
-  if (blockWhileEditingTemplate() || activeFlow.value?.id === t.id) return
+async function openFlow(target: FlowRecord | FlowTemplateGroup) {
+  if (activeFlow.value?.id === target.id) return
   const seq = ++openSeq
-  let record = t
-  if (t.isTemplate) {
+  let record = 'definition' in target ? target : undefined
+  if (!record || record.isTemplate) {
     try {
-      const full = await flowCenterApi.detail(t.id)
+      const full = await flowCenterApi.detail(target.id)
       if (seq !== openSeq) return
       if (!full) throw new Error('模板不存在')
-      if (full.definition.structureOnly) record = full
+      record = full
     } catch (e) {
       if (seq === openSeq) ElMessage.error(`模板打开失败：${(e as Error).message}`)
       return
@@ -840,7 +839,10 @@ function normalizeTags(raw: string): string {
  * 被后端以有源拒绝后走同一个提示。
  */
 async function removeFlow(flow: FlowRecord) {
-  if (flow.id === activeId.value && blockWhileEditingTemplate()) return
+  if (flow.id === activeId.value && activeFlow.value?.definition.structureOnly) {
+    ElMessage.warning('请先关闭模板编辑再删除')
+    return
+  }
   if ((flow.sourceCnt ?? 0) > 0) {
     await promptUnbindFirst(flow, flow.sourceCnt)
     return
@@ -1112,7 +1114,7 @@ async function confirmApply() {
         <div class="fc-group-caption">流程模板</div>
         <div v-if="groupsLoading && !templateGroups.length" class="fc-group-note">正在读取模板…</div>
         <button v-for="group in templateGroups" :key="group.id" type="button" class="fc-template-group" :class="{ active: filterTemplateId === group.id && scope === 'normal', unassigned: group.id === 'unassigned' }" :aria-pressed="filterTemplateId === group.id && scope === 'normal'" :title="group.id === 'unassigned' ? '未归类固定显示在最后' : `排序号 SEQ：${group.seq ?? 0}`" :data-testid="`flow-template-group-${group.id}`" @click="selectTemplateGroup(group.id)">
-          <span class="fc-group-name">{{ group.name }}<small v-if="group.disabled">已停用</small><b>{{ group.flowCount }}</b></span>
+          <span class="fc-group-name">{{ group.name }}<small v-if="group.disabled">已停用</small><b>{{ group.flowCount }} 个流程</b></span>
           <span class="fc-group-structure">{{ group.structure }}</span>
         </button>
         <button type="button" class="fc-template-group fc-group-all" :class="{ active: !filterTemplateId && scope === 'normal' }" data-testid="flow-template-group-all" @click="selectTemplateGroup('')">全部流程</button>
@@ -1121,6 +1123,7 @@ async function confirmApply() {
         <div class="fc-group-heading" data-testid="flow-group-heading">
           <div><strong>{{ groupTitle }}</strong><p v-if="selectedGroup && scope === 'normal'">{{ selectedGroup.structure }}</p></div>
           <span>{{ total }} 个{{ scope === 'template' ? '模板' : '流程' }}</span>
+          <button v-if="selectedGroup && selectedGroup.id !== 'unassigned' && scope === 'normal'" type="button" class="fc-dialog-btn" data-testid="flow-group-edit" @click="openFlow(selectedGroup)">编辑模板</button>
           <button v-if="selectedGroup && selectedGroup.id !== 'unassigned' && !selectedGroup.disabled && scope === 'normal'" type="button" class="fc-dialog-btn" data-testid="flow-group-create" @click="openCreateFlow">从此模板新建</button>
         </div>
     <div class="fc-table-wrap" v-loading="loading">
@@ -1188,8 +1191,7 @@ async function confirmApply() {
             <!-- 描述如实展示不清洗：存量里这个值是后端从源/网站灌的，所以会看到"描述都是网站"
                  （0904 I16-4）。改的是**本平台新建流程不再自动带**，不是把历史值洗掉。 -->
             <td class="fc-muted fc-ellipsis" :title="t.description || ''">{{ t.description || '—' }}</td>
-            <!-- 使用源数：flowPaged / flowDetail 都回填计算列 sourceCnt（口径 cs_source.IS_DELETE >= 0，
-                 含禁用源）。列表接口不返回 flowConf，所以节点数那列是 0，源数这列才是真的。 -->
+            <!-- 使用源数：flowPaged / flowDetail 都回填 sourceCnt（含禁用源）。 -->
             <td :class="{ 'fc-muted': !t.sourceCnt }" data-testid="flow-source-cnt">
               <button
                 v-if="t.sourceCnt"
@@ -1214,8 +1216,8 @@ async function confirmApply() {
                 <!-- 图标按钮必须配悬停提示，否则光看图标不知道是干什么的（用户 2026-09-05）。
                      用 el-tooltip 而不是原生 title：原生要悬停约 1 秒才出、样式也弱。
                      title/aria-label 仍然保留——屏幕阅读器读的是它，不是 tooltip。 -->
-                <el-tooltip content="编辑流程" placement="top" :show-after="120">
-                  <button class="fc-icon-btn" type="button" title="编辑流程" aria-label="编辑流程" @click.stop="openFlow(t)">
+                <el-tooltip :content="t.isTemplate ? '编辑模板' : '编辑流程'" placement="top" :show-after="120">
+                  <button class="fc-icon-btn" type="button" :title="t.isTemplate ? '编辑模板' : '编辑流程'" :aria-label="t.isTemplate ? '编辑模板' : '编辑流程'" @click.stop="openFlow(t)">
                     <Edit />
                   </button>
                 </el-tooltip>
@@ -1438,7 +1440,7 @@ async function confirmApply() {
 .fc-template-group:hover, .fc-template-group.active { background: var(--rc-primary-bg); border-color: var(--rc-border); }
 .fc-template-group.active { color: var(--rc-primary); }
 .fc-group-name { display: flex; align-items: center; gap: 6px; width: 100%; font-size: 13px; overflow-wrap: anywhere; }
-.fc-group-name b { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fc-group-name b { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fc-group-name small, .fc-group-structure { color: var(--rc-faint); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .fc-template-group.unassigned { border-top: 1px solid var(--rc-border-soft); margin-top: 8px; }
 .fc-group-all { margin-top: 4px; font-size: 12px; }

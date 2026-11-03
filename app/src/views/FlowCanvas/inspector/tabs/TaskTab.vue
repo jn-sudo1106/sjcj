@@ -15,6 +15,7 @@ import ConditionRow from '../ConditionRow.vue'
 import ParamsTab from './ParamsTab.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 
+const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
 const { tables, params, ensureTableFields } = useNodeInspectorAssets()
 
@@ -131,7 +132,7 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
   </div>
   <section v-if="showParameterFields" class="tt-params" aria-label="任务参数与出参列">
     <h3>参数与出参</h3>
-    <ParamsTab />
+    <ParamsTab :template-defaults="props.templateDefaults" />
   </section>
   <div class="rc-field">
     <label>任务参数取值</label>

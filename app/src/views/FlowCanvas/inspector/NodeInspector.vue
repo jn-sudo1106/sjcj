@@ -37,15 +37,15 @@ import ConfigTab from './tabs/ConfigTab.vue'
 import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 import { shortTime, versionCutoff } from '@/views/FlowCenter/flowVersionHistory'
 
-const props = withDefaults(defineProps<{ hideAi?: boolean }>(), { hideAi: false })
+const props = withDefaults(defineProps<{ hideAi?: boolean; templateDefaults?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
 // 只读（2026-10-10，10-11 起 217 发布版可直接改、首次保存自动生成草稿）：217 的锁定草稿，以及 leo 版本状态
 // 里的已发布版。只读也要能滚动、
 // 切页签、展开收起查看——原来外层整块 pointer-events: none，连滚动条都拖不动（用户反馈）。
 // 现在只让内容区本身不接收鼠标（滚轮落到外层滚动容器照常滚），启停 / 更换配置 / 保存单独禁用。
 const flowVersion = useFlowVersionStore()
-const readonly = computed(() => (flow.sourceCtx?.workflowVersionManaged !== false && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
-  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow)))
+const readonly = computed(() => !props.templateDefaults && ((flow.sourceCtx?.workflowVersionManaged !== false && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
+  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow))))
 const sourceStore = useSourceStore()
 const ui = useUiStore()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
@@ -229,7 +229,7 @@ async function ensureUsage(currentConfigId: string) {
   }
 }
 watch([nodeConfigDirty, configId], ([dirty, cid]) => {
-  if (dirty && cid) void ensureUsage(cid)
+  if (!props.templateDefaults && dirty && cid) void ensureUsage(cid)
 }, { immediate: true })
 
 function ensureConfigNameFromTitle(node = cfg.value, nodeId = id.value) {
@@ -239,6 +239,7 @@ function ensureConfigNameFromTitle(node = cfg.value, nodeId = id.value) {
 }
 
 async function onSaveNodeConfig() {
+  if (props.templateDefaults) return
   const node = cfg.value
   if (!node || saving.value || savingDeployment.value) return
   const savedNodeId = id.value, savedTab = tab.value
@@ -538,7 +539,7 @@ function autoSaveBlocked(node: NodeConfig): boolean {
   return false
 }
 async function autosaveNode(nodeId: string | undefined, atTab: string) {
-  if (!nodeId || !flow.dirtyConfigNodes.includes(nodeId)) return
+  if (props.templateDefaults || !nodeId || !flow.dirtyConfigNodes.includes(nodeId)) return
   const node = flow.configs[nodeId]
   if (!node || autoSaveBlocked(node)) return
   // 共用流程还没确认过：不自动保存，留着未保存标记等用户点「保存」时再问（10-29）
@@ -561,7 +562,7 @@ async function flushDirtyNodes() {
 }
 watch(() => flow.selectedId, (_next, prev) => { void autosaveNode(prev, tab.value) })
 watch(() => flow.activeTab, (_next, prev) => { void autosaveNode(id.value, prev) })
-const unregisterFlusher = registerNodeConfigFlusher(flushDirtyNodes)
+const unregisterFlusher = props.templateDefaults ? undefined : registerNodeConfigFlusher(flushDirtyNodes)
 // Ctrl / ⌘ + S：立即保存当前节点
 function onSaveKey(event: KeyboardEvent) {
   if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
@@ -569,10 +570,10 @@ function onSaveKey(event: KeyboardEvent) {
   event.preventDefault()
   if (cfg.value && !readonly.value && canSaveNodeConfig.value && !saving.value) void onSaveNodeConfig()
 }
-window.addEventListener('keydown', onSaveKey)
+if (!props.templateDefaults) window.addEventListener('keydown', onSaveKey)
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onSaveKey)
-  unregisterFlusher()
+  unregisterFlusher?.()
   // 离开画布：能存的照存（不等结果，失败会弹提示）
   void flushDirtyNodes()
 })
@@ -639,27 +640,27 @@ onMounted(async () => {
             @click="ui.toggleInspectorCollapsed()"
           >» 收起</button>
           <!-- 节点启停开关（0710 会议 D5）：停用=数据流经此节点时跳过不处理；逐节点验证通过后全开再定时跑 -->
-          <label class="ni-enable-switch" :class="{ 'ni-readonly': readonly }" :title="cfg.disabled ? '节点已停用：数据在此节点不处理，点击启用' : '节点运行中：点击停用（数据将跳过此节点）'">
+          <label v-if="!props.templateDefaults" class="ni-enable-switch" :class="{ 'ni-readonly': readonly }" :title="cfg.disabled ? '节点已停用：数据在此节点不处理，点击启用' : '节点运行中：点击停用（数据将跳过此节点）'">
             <input type="checkbox" :checked="!cfg.disabled" @change="flow.setNodeDisabled(id, !($event.target as HTMLInputElement).checked)" />
             <span>{{ cfg.disabled ? '已停用' : '启用中' }}</span>
           </label>
-          <span class="rc-status" :class="statusClass">{{ statusText }}</span>
+          <span v-if="!props.templateDefaults" class="rc-status" :class="statusClass">{{ statusText }}</span>
         </div>
       </div>
 
       <!-- 配置条（0824-00 §6.1 + 0828 §2.1-2b）：保持原来的静态展示，旁边加一个轻量「更换」入口。
            表单里不再另起一行「本节点使用配置」——那是同一份信息显示两遍。 -->
-      <div class="rc-config-bar" :class="{ 'ni-readonly': readonly }">
+      <div v-if="!props.templateDefaults" class="rc-config-bar" :class="{ 'ni-readonly': readonly }">
         <span class="cb-label">当前配置</span>
         <span v-if="cfg?.configName" class="cb-name" :title="cfg.configName">{{ cfg.configName }}</span>
         <span v-if="configId" class="cb-id" :title="`配置 ID ${configId}`">#{{ configId }}</span>
         <span class="cb-origin" :class="{ fresh: !configId || isInitialSourceConfig }">{{ configOriginText }}</span>
         <NodeConfigSelect v-if="id" :node-id="id" />
       </div>
-      <div v-if="historyConfigNote" class="ni-history-note" data-testid="history-config-note">{{ historyConfigNote }}</div>
+      <div v-if="!props.templateDefaults && historyConfigNote" class="ni-history-note" data-testid="history-config-note">{{ historyConfigNote }}</div>
 
       <!-- 0929 F2：复制时配置去共享失败的常驻提示——该节点配置仍与来源流程共享，保存前会再弹确认。 -->
-      <div v-if="sharedConfigWarning" class="ni-output-warn" data-testid="shared-config-warn">
+      <div v-if="!props.templateDefaults && sharedConfigWarning" class="ni-output-warn" data-testid="shared-config-warn">
         <el-alert
           type="warning"
           :closable="false"
@@ -670,11 +671,11 @@ onMounted(async () => {
       </div>
 
       <!-- 输出表未就绪的常驻提示；entry/95 文件下载同样需要选表。 -->
-      <div v-if="inputMismatch" class="ni-output-warn" data-testid="input-table-mismatch">
+      <div v-if="!props.templateDefaults && inputMismatch" class="ni-output-warn" data-testid="input-table-mismatch">
         <el-alert type="info" :closable="false" show-icon title="输入表与上游输出表不一致" :description="`本节点输入表 ${inputMismatch.own}，上游输出表 ${inputMismatch.upstream}。上游插入、删除节点或改表时，本节点输入表不会自动跟随`" />
       </div>
 
-      <div v-if="outputTableWarning" class="ni-output-warn" data-testid="output-table-warn">
+      <div v-if="!props.templateDefaults && outputTableWarning" class="ni-output-warn" data-testid="output-table-warn">
         <el-alert type="warning" :closable="false" show-icon title="输出表未选择" :description="outputTableWarningText" />
       </div>
 
@@ -694,15 +695,18 @@ onMounted(async () => {
 
       <div class="rc-inspector-body">
         <NodeAiChat v-if="tab === 'ai'" :key="id" />
-        <TaskTab v-else-if="tab === 'task'" />
-        <TableTab v-else-if="tab === 'table'" />
-        <RuleOrchestrationTab v-else-if="tab === 'orchestration'" />
-        <ConfigTab v-else />
+        <TaskTab v-else-if="tab === 'task'" :template-defaults="props.templateDefaults" />
+        <TableTab v-else-if="tab === 'table'" :template-defaults="props.templateDefaults" />
+        <RuleOrchestrationTab v-else-if="tab === 'orchestration'" :template-defaults="props.templateDefaults" />
+        <ConfigTab v-else :template-defaults="props.templateDefaults" />
       </div>
 
       <!-- 节点配置脏状态条（0824-00 §5.4）：右侧只保留保存动作 -->
       <!-- AI 对话不产生配置改动，不挂保存条 -->
-      <div v-if="tab !== 'ai'" class="rc-insp-foot">
+      <div v-if="props.templateDefaults" class="rc-insp-foot">
+        <span class="foot-note">这些是新流程的默认值，点击工作区下方的「保存模板」一并保存。</span>
+      </div>
+      <div v-else-if="tab !== 'ai'" class="rc-insp-foot">
         <span class="foot-note">
           <i v-if="nodeConfigDirty && !readonly" class="foot-dot" />{{ footNote }}
         </span>
@@ -729,7 +733,8 @@ onMounted(async () => {
         </div>
       </div>
       <div class="rc-inspector-body">
-        <div class="rc-help">当前画布为空或未选择节点。用画布中间的「智能推荐流程」起草链路，或点击连线上的「＋」手工添加步骤。</div>
+        <div v-if="props.templateDefaults" class="rc-help">点击画布上的「＋」添加节点。</div>
+        <div v-else class="rc-help">当前画布为空或未选择节点。用画布中间的「智能推荐流程」起草链路，或点击连线上的「＋」手工添加步骤。</div>
       </div>
     </template>
   </div>

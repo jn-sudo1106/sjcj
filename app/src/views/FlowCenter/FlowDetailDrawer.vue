@@ -22,7 +22,7 @@ import FlowVersionBar from '@/views/FlowCanvas/canvas/FlowVersionBar.vue'
 import FlowVersionHistory from './FlowVersionHistory.vue'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
-import { instantiateStructureTemplate, makeStructureTemplate, structureDefinition } from '@/utils/flow/flowTemplates'
+import { instantiateStructureTemplate, makeStructureTemplate, restoreTemplateDefaults, structureDefinition } from '@/utils/flow/flowTemplates'
 import { trackEdit } from '@/utils/logEvents'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
@@ -102,8 +102,6 @@ const structurePresets = [
   { name: '采集 → 下载', testId: 'structure-preset-download', keys: ['web-list', 'file-download'] },
   { name: '列表 → 详情', testId: 'structure-preset-detail', keys: ['web-list', 'web-detail'] },
 ]
-const selectedStructureNode = computed(() => canvas.configs[canvas.selectedId])
-const selectedStructureIndex = computed(() => canvas.main.indexOf(canvas.selectedId))
 const workingFlow = ref<FlowRecord | null>(null)
 const versionState = ref<WorkflowBinding | null>(null)
 // 多流程接口（workflow/*）未上线时没有草稿 / 发布：直接编辑原流程，保存即生效（合并 leo 分支前的行为）。
@@ -158,7 +156,7 @@ async function canClose(): Promise<boolean> {
 
 async function confirmLeave(): Promise<boolean> {
   if (structureMode.value) {
-    if (canvas.flowDirty || name.value !== props.flow?.name || metaForm.seq !== (props.flow?.seq ?? 0)) {
+    if (newTemplate.value || canvas.flowDirty || canvas.configDirty || name.value !== props.flow?.name || metaForm.seq !== (props.flow?.seq ?? 0)) {
       try {
         await ElMessageBox.confirm('关闭后将丢失未保存的模板改动。', '关闭模板编辑', {
           confirmButtonText: '仍然关闭', cancelButtonText: '继续编辑', type: 'warning',
@@ -352,6 +350,7 @@ async function deriveFromFlowConfig(flow: FlowRecord, requestId: number, prefetc
   const rootStep = steps.some((step) => step.isRoot) ? null : rootStepForSource(stubSource)
   const seedSteps = rootStep ? [rootStep, ...steps] : steps
   canvas.loadFromSource(stubSource, seedSteps)
+  restoreTemplateDefaults(canvas.configs, flow.definition)
   // loadFromSource 把 FlowDef.id 设成了 source.sourceId（这里是空串，stub 源故意不担真源）——
   // 流程 ID 必须显式纠正回来，不然「流程 XML」导出（flowId 要用于导入导出）会把它显示成空。
   canvas.flowId = flow.id
@@ -491,7 +490,7 @@ watch([() => props.flow?.id, structureMode], () => {
 async function useStructurePreset(preset: (typeof structurePresets)[number]) {
   const record = workingFlow.value
   if (!record || !newTemplate.value || saving.value) return
-  if (canvas.flowDirty || name.value !== record.name) {
+  if (canvas.flowDirty || canvas.configDirty || name.value !== record.name) {
     try {
       await ElMessageBox.confirm('应用后将替换模板名称和画布节点。', '应用预置结构', {
         confirmButtonText: '应用预置', cancelButtonText: '继续编辑', type: 'warning',
@@ -529,8 +528,12 @@ async function saveStructureTemplate() {
     })
     ElMessage.success(`流程模板「${saved.name}」已保存`)
     if (workingFlow.value !== record) return
+    const persisted = { ...saved, seq: metaForm.seq, isTemplate: true, definition }
+    workingFlow.value = persisted
+    name.value = saved.name
+    canvas.setFlowName(saved.name)
     canvas.markSaved()
-    emit('templateSaved', saved)
+    emit('templateSaved', persisted)
   } catch (error) {
     ElMessage.error(`模板保存失败：${(error as Error).message}`)
   } finally {
@@ -837,11 +840,11 @@ async function publishVersion() {
     <div
       v-if="!loadingDetail"
       class="fd-workspace"
-      :class="{ 'fd-structure': structureMode, expanded: !structureMode && ui.inspectorExpanded, 'insp-collapsed': !structureMode && ui.inspectorCollapsed }"
+      :class="{ expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed }"
       :inert="structureMode && saving"
     >
       <button
-        v-if="!structureMode && ui.inspectorExpanded"
+        v-if="ui.inspectorExpanded"
         type="button"
         class="fd-strip"
         data-testid="flow-drawer-canvas-collapsed"
@@ -851,26 +854,8 @@ async function publishVersion() {
       <section v-else class="fd-canvas" aria-label="流程节点">
         <FlowBoard :key="structureMode ? 'template' : 'flow'" embedded :structure-template="structureMode" />
       </section>
-      <section v-if="structureMode" class="fd-structure-inspector" aria-label="模板节点设置">
-        <h3>模板节点</h3>
-        <p>点画布上的「＋」添加节点。可以拖动节点调整顺序。</p>
-        <template v-if="selectedStructureNode">
-          <label class="fd-meta-item">
-            <span>节点名称</span>
-            <input
-              :value="selectedStructureNode.title"
-              class="fd-meta-input"
-              @input="canvas.setTitle(canvas.selectedId, ($event.target as HTMLInputElement).value)"
-            />
-          </label>
-          <div class="fd-structure-actions">
-            <button class="fd-secondary" type="button" :disabled="selectedStructureIndex <= 1" @click="canvas.move(canvas.selectedId, -1)">上移</button>
-            <button class="fd-secondary" type="button" :disabled="selectedStructureIndex >= canvas.main.length - 2" @click="canvas.move(canvas.selectedId, 1)">下移</button>
-          </div>
-        </template>
-      </section>
       <button
-        v-else-if="ui.inspectorCollapsed"
+        v-if="ui.inspectorCollapsed"
         type="button"
         class="fd-strip"
         data-testid="flow-drawer-inspector-collapsed"
@@ -878,32 +863,35 @@ async function publishVersion() {
         @click="ui.toggleInspectorCollapsed()"
       >« 节点配置</button>
       <section v-else class="fd-inspector" aria-label="节点设置">
-        <NodeInspector hide-ai />
+        <NodeInspector :key="structureMode ? 'template' : 'flow'" hide-ai :template-defaults="structureMode" />
       </section>
     </div>
 
-    <footer v-if="structureMode" class="fd-foot">
-      <span class="fd-foot-note">模板提供起始节点与顺序。用模板新建后，可在具体流程中调整节点和业务配置。</span>
-      <button class="fd-secondary" type="button" :disabled="saving" @click="void closeWorkspace()">取消</button>
-      <button class="fd-primary" type="button" :disabled="saving" data-testid="structure-template-save" @click="void saveStructureTemplate()">{{ saving ? '保存中…' : '保存模板' }}</button>
-    </footer>
-    <footer v-else class="fd-foot">
+    <footer class="fd-foot">
       <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
            答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
            这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
-      <span v-if="historyRow" class="fd-foot-note">历史版本只能查看；要修改请先返回当前版本。</span>
+      <span v-if="structureMode" class="fd-foot-note">用模板新建流程时会带入节点和默认配置，可以在新流程中独立修改。</span>
+      <span v-else-if="historyRow" class="fd-foot-note">历史版本只能查看；要修改请先返回当前版本。</span>
       <span v-else-if="versioned" class="fd-foot-note">修改只保存到草稿，不影响当前运行版本；发布后，新发起的任务使用新版本，运行中的任务保持原版本。</span>
       <span v-else class="fd-foot-note">节点配置在右侧直接修改；关联到源后，这些源将共用本流程的配置——此后改这里会同时影响它们。</span>
       <button
+        v-if="!structureMode"
         class="fd-secondary"
         type="button"
         :disabled="saving || togglingTemplate || !!historyRow"
         data-testid="flow-drawer-toggle-template"
         @click="toggleTemplate"
       >{{ workingFlow?.isTemplate ? '取消模板' : '标记为模板' }}</button>
-      <button class="fd-secondary" type="button" :disabled="saving || publishing || !!historyRow" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
-      <button :class="versioned ? 'fd-secondary' : 'fd-primary'" type="button" :disabled="saving || publishing || loadingDetail || !!historyRow" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : (versioned ? '保存草稿' : '保存流程') }}</button>
-      <button v-if="versioned" class="fd-primary" type="button" :disabled="saving || publishing || loadingDetail || !versionState?.draftFlowId" data-testid="flow-publish" @click="publishVersion">{{ publishing ? '发布中…' : `发布 v${versionState?.draftVersionNo ?? '—'}` }}</button>
+      <button v-if="!structureMode" class="fd-secondary" type="button" :disabled="saving || publishing || !!historyRow" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
+      <button
+        :class="versioned && !structureMode ? 'fd-secondary' : 'fd-primary'"
+        type="button"
+        :disabled="saving || publishing || loadingDetail || !!historyRow"
+        :data-testid="structureMode ? 'structure-template-save' : 'flow-save'"
+        @click="structureMode ? saveStructureTemplate() : persistFlow()"
+      >{{ saving ? '保存中…' : (structureMode ? '保存模板' : versioned ? '保存草稿' : '保存流程') }}</button>
+      <button v-if="versioned && !structureMode" class="fd-primary" type="button" :disabled="saving || publishing || loadingDetail || !versionState?.draftFlowId" data-testid="flow-publish" @click="publishVersion">{{ publishing ? '发布中…' : `发布 v${versionState?.draftVersionNo ?? '—'}` }}</button>
     </footer>
   </aside>
 </template>
@@ -946,12 +934,6 @@ async function publishVersion() {
 .fd-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 42%) minmax(420px, 1fr); gap: 10px; padding: 10px; background: #f4f7fb; }
 .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
 .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
-.fd-workspace.fd-structure { grid-template-columns: minmax(0, 1fr) minmax(180px, 28%); }
-.fd-structure-inspector { min-width: 0; overflow: auto; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
-.fd-structure-inspector h3 { margin: 0; font-size: 14px; }
-.fd-structure-inspector p { margin: 8px 0 16px; font-size: 12px; color: #64748b; }
-.fd-structure-inspector label { display: grid; gap: 6px; }
-.fd-structure-actions { display: flex; gap: 8px; margin-top: 12px; }
 .fd-canvas, .fd-inspector { min-width: 0; min-height: 0; }
 .fd-strip { min-width: 0; padding: 0; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; writing-mode: vertical-rl; }
 .fd-strip:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-color: #93c5fd; }
@@ -963,7 +945,7 @@ async function publishVersion() {
 .fd-primary:disabled, .fd-secondary:disabled { opacity: .55; cursor: not-allowed; }
 @media (max-width: 980px) {
   .fd-drawer { width: var(--fd-drawer-width, 100vw); }
-  .fd-workspace:not(.expanded):not(.insp-collapsed):not(.fd-structure) { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
+  .fd-workspace:not(.expanded):not(.insp-collapsed) { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
   .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
   .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
 }

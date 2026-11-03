@@ -9,10 +9,11 @@ import {
   makeStructureNode,
   structureDefinition,
   structureNodeGroups,
+  restoreTemplateDefaults,
   instantiateStructureTemplate,
   sanitizeTemplateDefinition,
 } from './flowTemplates'
-import { NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
+import { NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 const source: Source = {
   sourceId: 'source-template-test', name: '测试源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
@@ -89,6 +90,33 @@ describe('流程模板与源绑定组合', () => {
 })
 
 describe('流程结构模板', () => {
+  it('将网址、表、参数和规则复制到未配置步骤，已绑定配置的节点保留自身设置', () => {
+    const initial = makeStructureTemplate(['web-list', 'rule'])
+    const web = initial.configs['node-1']!
+    web.configId = '123'
+    web.configUrl = 'https://example.com/list'
+    Object.assign(web.collectCfg!, { outputTable: '900', urlParamRefs: ['45'], urlParamValues: { '45': '1' } })
+    const rule = initial.configs['node-2']!
+    rule.ruleCfg = { mode: 'new', describe: '', inputTableId: '900', inputFields: [], outputFields: [], script: 'return row', scriptPath: 'shared.py' }
+    const stored = structureDefinition(initial)
+    const copied = instantiateStructureTemplate(stored)
+    const remapped = { ...copied, configs: { '101': copied.configs['node-1']!, '102': copied.configs['node-2']! } }
+    const live: Record<'101' | '102', NodeConfig> = {
+      '101': { ...web, configId: undefined, configUrl: '' },
+      '102': { ...rule, configId: undefined, ruleCfg: undefined },
+    }
+    restoreTemplateDefaults(live, remapped)
+    expect(live['101']).toMatchObject({ configUrl: 'https://example.com/list', collectCfg: { outputTable: '900', urlParamValues: { '45': '1' } } })
+    expect(live['101'].configId).toBeUndefined()
+    expect(live['102']).toMatchObject({ ruleCfg: { script: 'return row' } })
+    expect(live['102'].ruleCfg?.scriptPath).toBeUndefined()
+    live['101'].configId = '456'
+    live['101'].configUrl = 'https://example.com/independent'
+    restoreTemplateDefaults(live, remapped)
+    expect(live['101'].configUrl).toBe('https://example.com/independent')
+    expect(stored.configs['node-1']?.configUrl).toBe('https://example.com/list')
+  })
+
   it('模板节点库的每个条目都能生成对应类型的节点', () => {
     for (const { template, code } of structureNodeGroups.flatMap(group => group.items)) {
       expect(makeStructureNode(template), template).toMatchObject({ configType: code })

@@ -245,6 +245,25 @@ const structureTypeByKey = new Map(structureNodeGroups.flatMap(group => group.it
 const structureCodes = new Set([...structureTypeByKey.values()].map(item => item.code))
 export const MAX_STRUCTURE_NODES = 100
 
+function copyTemplateDefaults(config: NodeConfig): NodeConfig {
+  const next = sanitizeTemplateConfig(config)
+  delete next.configId
+  delete next.configUpdateDt
+  delete next.stepSourceId
+  if (next.collectCfg) {
+    delete next.collectCfg.credentialRef
+    delete next.collectCfg.loginConfigs
+    delete next.collectCfg.defaultLoginConfigId
+  }
+  for (const orchestration of [next.ruleCfg, next.execCfg]) {
+    if (!orchestration) continue
+    delete orchestration.scriptPath
+    delete orchestration.ruleId
+    orchestration.mode = 'new'
+  }
+  return next
+}
+
 export function makeStructureNode(key: string): NodeConfig | undefined {
   const type = structureTypeByKey.get(key)
   const seed = NODE_CONFIGS[key]
@@ -273,7 +292,7 @@ export function structureDefinition({ main, configs, branches, branchGroups }: F
     const title = typeof config.title === 'string' ? config.title.trim() : ''
     if (!title) throw new Error(`请填写${step}的名称`)
     if (!structureCodes.has(config.configType ?? '')) throw new Error(`${step}「${title}」的类型不受支持`)
-    return [id, { ...structureNode(config), title }] as const
+    return [id, { ...copyTemplateDefaults(config), title, templateDefaults: true as const }] as const
   })
   if (Object.keys(configs).length !== ids.length) throw new Error('模板画布含有未编排的节点')
   return { main: [...main], configs: Object.fromEntries(entries), branches: [], branchGroups: [], structureOnly: true }
@@ -295,6 +314,25 @@ export function makeStructureTemplate(keys: string[]): FlowDefinition {
 
 export function instantiateStructureTemplate(definition: FlowDefinition): FlowDefinition {
   const copy = sanitizeTemplateDefinition(definition)
-  copy.configs = Object.fromEntries(Object.entries(copy.configs).map(([id, config]) => [id, structureNode(config)]))
+  copy.configs = Object.fromEntries(Object.entries(copy.configs).map(([id, config]) => [
+    id, config.templateDefaults ? copyTemplateDefaults(config) : structureNode(config),
+  ]))
   return copy
+}
+
+/** 步骤接口仍决定拓扑和身份；只给尚未配置的真实节点回填该流程自己的默认值快照。 */
+export function restoreTemplateDefaults(configs: Record<string, NodeConfig>, definition?: FlowDefinition, keepSourceUrl = false) {
+  if (!definition || definition.structureOnly) return
+  for (const [id, config] of Object.entries(configs)) {
+    const defaults = definition.configs[id]
+    if ((config.configId && config.configId !== '0') || !defaults?.templateDefaults) continue
+    const restored = copyTemplateDefaults(defaults)
+    if (keepSourceUrl && restored.collectCfg && config.collectCfg) restored.collectCfg.url = config.collectCfg.url
+    configs[id] = {
+      ...restored,
+      title: config.title,
+      configName: config.title,
+      disabled: config.disabled,
+    }
+  }
 }

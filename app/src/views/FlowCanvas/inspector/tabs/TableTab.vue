@@ -22,6 +22,7 @@ import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 
+const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
 const { tables, ensureTableFields } = useNodeInspectorAssets()
 
@@ -407,8 +408,8 @@ async function onTableSaved(tableId: string) {
         >
           <el-option v-for="t in outputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
         </el-select>
-        <button class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
-        <button class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
+        <button v-if="!props.templateDefaults" class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
+        <button v-if="!props.templateDefaults" class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
       </div>
       <div v-if="availablePresets.length" class="rc-preset-tables" data-testid="table-presets">
         <span class="rc-preset-label">常用默认表：</span>
@@ -495,7 +496,7 @@ async function onTableSaved(tableId: string) {
       <div class="rc-help">输出进入实体表/原始文件/规则 Trace/邮件审计，经 run_id 供 Skill Run 追溯。</div>
     </template>
 
-    <TableEditDialog v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
+    <TableEditDialog v-if="!props.templateDefaults" v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
   </template>
 </template>
 
