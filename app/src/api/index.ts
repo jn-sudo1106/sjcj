@@ -1,4 +1,4 @@
-import { directoryQueryParams } from './sourceDirectoryScope'
+﻿import { directoryQueryParams } from './sourceDirectoryScope'
 import { sourceScopePaged } from './siteSourceScope'
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { DEFAULT_API_PROXY_TARGET } from '@/constants/backend'
@@ -3251,6 +3251,24 @@ export const entryApi = {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { entryTypeId: tableId, dsKind },
+    }),
+  /**
+   * 单表生成/刷新 AI 综合描述 (ai_commont)
+   */
+  generateAiCommont: (tableId: string | number) =>
+    request<{ code: number; data: string; msg: string }>('config/entryType/generateAiCommont', {}, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpParams: { entryTypeId: tableId },
+    }),
+  /**
+   * 批量生成 AI 综合描述 (ai_commont)
+   */
+  batchGenerateAiCommont: (tableIds?: (string | number)[], skipExisting: boolean = true) =>
+    request<{ code: number; data: unknown; msg: string }>('config/entryType/batchGenerateAiCommont', tableIds ?? [], {
+      method: 'POST',
+      paramsIn: 'body',
+      httpParams: { skipExisting },
     }),
 }
 

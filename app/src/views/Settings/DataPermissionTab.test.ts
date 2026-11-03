@@ -30,8 +30,7 @@ vi.mock('@/api/groupSourceScope', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return {
     ...actual,
-    listScopeCategories: vi.fn(async () => []),
-    listCategorySources: vi.fn(async () => ({ total: 0, list: [] })),
+    listDirectorySources: vi.fn(async () => ({ total: 0, list: [] })),
     getGroupSourceScope: vi.fn(async () => ({ accept: { dirIds: [], sourceIds: [] }, reject: { dirIds: [], sourceIds: [] } })),
     saveGroupSourceScope: vi.fn(async () => ({
       groupId: 0,

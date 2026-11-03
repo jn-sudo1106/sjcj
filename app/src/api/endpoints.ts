@@ -1,4 +1,4 @@
-// 端点契约清单 —— 采集配置中心 API 的单一事实源。
+﻿// 端点契约清单 —— 采集配置中心 API 的单一事实源。
 // 依据《数据中心现有功能逆向工程_2026-06-17.md》：线上 Data Center 共提取 142 个 /v1 端点。
 // 本清单收录已考证端点（path = 真实 /v1 路径，不含前缀），按 14 个前缀域组织；
 // 每域注释「逆向统计目标数 / 本清单收录数」，未逐一还原的为登录态待补，真接入时按同名 path 规范补齐。
@@ -179,6 +179,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/entryTypePagedView', desc: '实体表分页', impl: true, live: true },
   { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组', live: true },
   { path: 'config/entryType', desc: '实体表详情', impl: true, live: true },
+  { path: 'config/entryType/generateAiCommont', desc: '单表生成/刷新AI综合描述', danger: true, impl: true, live: true },
+  { path: 'config/entryType/batchGenerateAiCommont', desc: '批量生成AI综合描述', danger: true, impl: true, live: true },
   { path: 'config/saveEntryType', desc: '⚠️ mock 时代占位，旧仓库无此路径，非真实契约端点，仅 mock/index.ts 引用', danger: true, impl: true },
   { path: 'config/entryTypeAddAll', desc: '新建实体表', danger: true, impl: true, live: true },
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },

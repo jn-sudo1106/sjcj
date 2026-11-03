@@ -1,8 +1,8 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, CaretBottom, CaretTop, Connection, CopyDocument, Delete, Download, Edit, Key, MoreFilled, Odometer, RefreshRight, Star, StarFilled, SwitchButton, View } from '@element-plus/icons-vue'
+import { ArrowDown, CaretBottom, CaretTop, Connection, CopyDocument, Delete, Download, Edit, Key, MoreFilled, Odometer, RefreshRight, Star, StarFilled, SwitchButton, View, MagicStick } from '@element-plus/icons-vue'
 import { entryApi, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
@@ -438,6 +438,48 @@ function exportFields(e: EntryType) {
 }
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const batchAiLoading = ref(false)
+
+async function onGenerateSingleAiCommont(entry: EntryType) {
+  try {
+    ElMessage.info(`正在为表【${entry.name || entry.tableName}】采样并生成 AI 描述，请稍候...`)
+    const res = await entryApi.generateAiCommont(entry.tableId)
+    const resultText = res && typeof res === 'object' && 'data' in res ? String((res as any).data) : String(res)
+    entry.aiCommont = resultText
+    ElMessage.success(`表【${entry.name || entry.tableName}】AI 描述生成成功！`)
+  } catch (err) {
+    ElMessage.error(`生成失败: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function onBatchGenerateAiCommont() {
+  const isSelected = selected.value.length > 0
+  const confirmMsg = isSelected
+    ? `已勾选 ${selected.value.length} 张表，是否为所选表批量采样并生成 AI 综合描述？`
+    : '未勾选表，是否为系统中所有【缺失综合描述】的表在后台批量生成？'
+  
+  try {
+    await ElMessageBox.confirm(confirmMsg, '批量生成 AI 描述', {
+      confirmButtonText: '确定提交',
+      cancelButtonText: '取消',
+      type: 'info',
+    })
+  } catch {
+    return
+  }
+
+  batchAiLoading.value = true
+  try {
+    const ids = isSelected ? selected.value : undefined
+    await entryApi.batchGenerateAiCommont(ids, true)
+    ElMessage.success('批量生成任务已提交后台异步执行，请稍后刷新列表查看！')
+  } catch (err) {
+    ElMessage.error(`提交失败: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    batchAiLoading.value = false
+  }
+}
+
 const onEnterSearch = withoutComposition(() => onSearch())
 </script>
 
@@ -467,6 +509,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item :icon="RefreshRight" :disabled="!selected.length || rebuilding" data-testid="entry-batch-rebuild" @click="onBatchRebuild">检查并重建物理表<span style="margin-left: 4px; color: var(--rc-muted); font-size: 12px">（表不存在时自动新建）</span></el-dropdown-item>
+              <el-dropdown-item :icon="MagicStick" :disabled="batchAiLoading" data-testid="entry-batch-ai-commont" @click="onBatchGenerateAiCommont">批量生成 AI 描述</el-dropdown-item>
               <el-dropdown-item :icon="Delete" :disabled="!selected.length || rebuilding" divided style="color: #dc2626" @click="onBatchDelete">批量删除</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -571,6 +614,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
                     <template #dropdown><el-dropdown-menu>
                       <el-dropdown-item :icon="CopyDocument" @click="onCopy(e)">复制新表</el-dropdown-item>
                       <el-dropdown-item :icon="Download" @click="onExtractFields(e)">提取表字段</el-dropdown-item>
+                      <el-dropdown-item :icon="MagicStick" @click="onGenerateSingleAiCommont(e)">生成 AI 综合描述</el-dropdown-item>
                       <el-dropdown-item :icon="RefreshRight" divided :disabled="rebuilding" data-testid="entry-rebuild" @click="onRebuildTables([e.tableId])">检查并重建物理表（不存在时新建）</el-dropdown-item>
                       <el-dropdown-item :icon="RefreshRight" @click="onCheckTable(e)">同步物理表结构</el-dropdown-item>
                       <el-dropdown-item :icon="Odometer" @click="onCalc(e)">重新计算数据量</el-dropdown-item>

@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   Config,
   ConfigActionLog,
   ConfigParamBinding,
@@ -427,6 +427,7 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
     checkFlag: record.checkFlag as string | number | undefined,
     checkRule: record.checkRule == null ? undefined : String(record.checkRule),
     coreParam: record.coreParam == null ? undefined : String(record.coreParam),
+    aiCommont: record.aiCommont == null ? (record.ai_commont == null ? undefined : String(record.ai_commont)) : String(record.aiCommont),
   }
 }
 
@@ -447,6 +448,7 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     checkFlag: input.checkFlag,
     checkRule: input.checkRule,
     coreParam: input.coreParam,
+    aiCommont: input.aiCommont,
     items: input.fields.map((field, index) => ({
       itemId: field.itemId,
       itemCode: field.prop,

@@ -1,7 +1,8 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pinyin } from 'pinyin-pro'
+import { RefreshRight } from '@element-plus/icons-vue'
 import { entryApi, type EntryField, type EntryType } from '../../api'
 import {
   ENTRY_FIELD_DEFAULT_WIDTH, ENTRY_PREPROCESS_PRESETS,
@@ -90,6 +91,22 @@ function blankField(seq: number): EntryField {
   return { prop: '', desc: '', type: 'string', required: false, dedup: false, seq, columnName: `K${k}`, width: ENTRY_FIELD_DEFAULT_WIDTH }
 }
 
+const generatingCommont = ref(false)
+async function onRefreshAiCommont() {
+  if (!form.tableId) return
+  generatingCommont.value = true
+  try {
+    const res = await entryApi.generateAiCommont(form.tableId)
+    const resultText = res && typeof res === 'object' && 'data' in res ? String((res as any).data) : String(res)
+    form.aiCommont = resultText
+    ElMessage.success('AI 综合描述刷新成功！')
+  } catch (error) {
+    ElMessage.error(`生成失败: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    generatingCommont.value = false
+  }
+}
+
 function reset() {
   const entry = props.entry
   Object.assign(form, {
@@ -97,6 +114,7 @@ function reset() {
     tableName: entry?.tableName ?? '',
     name: entry?.name ?? '',
     remark: entry?.remark ?? '',
+    aiCommont: entry?.aiCommont ?? '',
     // entry 是响应式 props，字段元素是 Vue reactive Proxy；structuredClone 处理不了 Proxy，需先 toRaw 剥掉再 clone
     fields: entry?.fields?.map((field) => structuredClone(toRaw(field))) ?? [],
     keyField: entry?.keyField,
@@ -305,6 +323,27 @@ async function submit() {
         </select>
       </div>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>
+      <div v-if="isEdit" class="rc-field ete-wide" style="margin-top: 4px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <label style="font-weight: 600; color: #1e293b;">AI 综合描述 (ai_commont)</label>
+          <button
+            class="rc-btn"
+            type="button"
+            :disabled="generatingCommont"
+            style="padding: 2px 8px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;"
+            @click="onRefreshAiCommont"
+          >
+            <el-icon :class="{ 'is-loading': generatingCommont }"><RefreshRight /></el-icon>
+            {{ generatingCommont ? 'AI 采样生成中...' : '刷新 / 重新生成' }}
+          </button>
+        </div>
+        <textarea
+          v-model="form.aiCommont"
+          class="rc-input"
+          rows="3"
+          placeholder="暂无 AI 综合描述。点击右上角【刷新 / 重新生成】，由 AI 结合该表真实数据采样自动提炼..."
+        />
+      </div>
     </div>
 
     <div class="ete-title"><strong>字段定义</strong>
