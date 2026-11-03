@@ -323,7 +323,11 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 1026：单独改数据源 DS_KIND（快速同步到 CK 的回写），mock 里真改 ENTRIES 那一条
   'config/entry-type-ds-kind': mockEntrySetDsKind,
   // AI 综合描述：真实后端采样 + LLM，mock 按表结构拼一句并写回 ENTRIES（批量只回执，不同步生成）
+  // generateAiCommont / batchGenerateAiCommont 是后端兼容的旧拼写别名，正名键要一并注册，
+  // 否则 endpoints.test.ts 的「标 impl 的端点都有专属 mock handler」会漏检。
+  'config/entryType/generateAiComment': mockGenerateAiCommont,
   'config/entryType/generateAiCommont': mockGenerateAiCommont,
+  'config/entryType/batchGenerateAiComment': mockBatchGenerateAiCommont,
   'config/entryType/batchGenerateAiCommont': mockBatchGenerateAiCommont,
 
   // 采集资产 · 参数（M5）

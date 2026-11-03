@@ -10,6 +10,8 @@ const props = defineProps<{
   scope: 'all' | 'favorites' | 'recent'
   loading: boolean
   error: string
+  /** 只按业务目录分组（选表规则配置）：不给「数据库」页签，也不渲染按引擎分的分组 */
+  bizOnly?: boolean
 }>()
 const emit = defineEmits<{ select: [EntryType]; collapse: []; retry: [] }>()
 const keyword = ref('')
@@ -33,6 +35,7 @@ function toggle(key: string) {
 }
 
 // 「全部表」两个页签（10-28 孙总）：默认按业务目录，按数据库分的原样保留。
+// bizOnly（选表规则配置）只留业务目录这一种分组，页签整条不出。
 // 业务目录下的表 = 目录直属源涉及的输出表（口径和取数见 api/sourceDirs.ts bizDirTables），
 // 逐级展开时才查，只列当前可选的表（props.tables 里没有的表点了也打不开）。
 const tab = ref<'biz' | 'db'>('biz')
@@ -130,7 +133,7 @@ const dirRows = computed(() => {
       </template>
       <template v-else>
         <div class="dt-all-tables"><el-icon><Coin /></el-icon>全部表 <span>{{ tables.length }}</span></div>
-        <div class="dt-tabs" role="tablist" aria-label="全部表分组方式">
+        <div v-if="!bizOnly" class="dt-tabs" role="tablist" aria-label="全部表分组方式">
           <button type="button" role="tab" data-tab="biz" :aria-selected="tab === 'biz'" :class="{ active: tab === 'biz' }" @click="showTab('biz')">业务目录</button>
           <button type="button" role="tab" data-tab="db" :aria-selected="tab === 'db'" :class="{ active: tab === 'db' }" @click="showTab('db')">数据库</button>
         </div>
