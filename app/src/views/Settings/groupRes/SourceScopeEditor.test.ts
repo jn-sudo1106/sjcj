@@ -205,13 +205,14 @@ describe('SourceScopeEditor', () => {
     expect(next.sourceIds).toEqual([])
   })
 
-  it('被上级目录覆盖时：源行显示已勾选（不压暗）并标「随目录」，列头全选框/清空禁用、点行不改选择', async () => {
+  it('被上级目录覆盖时：源行显示已勾选（不压暗）且不出现「随目录」标签，列头全选框/清空禁用、点行不改选择', async () => {
     const wrapper = await mountEditor({ grant: grant({ dirIds: ['9001'] }) })
     await expand(wrapper, '9001')
     await focusOn(wrapper, '9011')
 
     expect(srcRow(wrapper, 'b3').classes()).toContain('cov')
-    expect(srcRow(wrapper, 'b3').text()).toContain('随目录')
+    expect(srcRow(wrapper, 'b3').text()).not.toContain('随目录')
+    expect(srcRow(wrapper, 'b3').text()).toContain('汽车资讯')
     expect(srcCheck(wrapper, 'b3').element.checked).toBe(true)
     expect(srcCheck(wrapper, 'b3').attributes('disabled')).toBeUndefined()
     expect(srcCheck(wrapper, 'b3').attributes('aria-disabled')).toBe('true')

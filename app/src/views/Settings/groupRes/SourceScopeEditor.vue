@@ -500,7 +500,7 @@ onMounted(async () => {
           :checked="srcAllChecked"
           :indeterminate.prop="srcAllPartial"
           :disabled="srcAllDisabled"
-          :title="focusCovered ? '整目录已授权，源随目录生效' : '全选 / 取消本目录（含子级）的源'"
+          :title="focusCovered ? '整目录已授权，本目录的源已全部生效，无需单独勾选' : '全选 / 取消本目录（含子级）的源'"
           aria-label="全选本目录的源"
           data-testid="sse-src-check-all"
           @click.prevent="onToggleSrcAll"
@@ -531,7 +531,6 @@ onMounted(async () => {
           >
           <span class="col-id">#{{ s.id }}</span>
           <span class="col-nm">{{ s.name }}</span>
-          <span v-if="srcRowLocked && !isSrcSel(s.id)" class="sse-cov-tag">随目录</span>
         </div>
         <div v-if="srcHidden > 0" class="sse-more">
           <span>还有 {{ srcHidden }} 条未渲染</span>
@@ -563,8 +562,9 @@ onMounted(async () => {
 .sse-pane-h .p .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sse-pane-h .btns { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .sse-pane-search { height: 54px; flex-shrink: 0; display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid #e2e8f0; }
-/* 全选勾选框 + 列头单独一行：padding / gap / 列宽照抄源行，保证和下面的列表逐列对齐 */
-.sse-src-h { height: 34px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #e2e8f0; background: #fff; font-size: 11px; color: #64748b; }
+/* 全选勾选框 + 列头单独一行：padding / gap / 列宽照抄源行，保证和下面的列表逐列对齐。
+   源行有 3px 左边框（选中时画强调条），列头要留同宽占位，否则整行比列表靠左 3px。 */
+.sse-src-h { height: 34px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-left: 3px solid transparent; border-bottom: 1px solid #e2e8f0; background: #fff; font-size: 11px; color: #64748b; }
 .sse-src-h .col-id { width: 128px; flex-shrink: 0; }
 .sse-src-h .col-nm { flex: 1; min-width: 0; }
 .sse-list { flex: 1; overflow: auto; }
@@ -586,9 +586,8 @@ onMounted(async () => {
 .sse-row.dir.sel { background: #eff6ff; border-left-color: #2563eb; }
 .sse.biz .sse-row.dir.sel { background: #f5f3ff; border-left-color: #7c3aed; }
 .sse-row.src.sel { background: #ecfdf5; border-left-color: #16a34a; }
-/* 随上级目录生效的源：照实显示勾选，只靠标签和行底色区分，不压暗（压暗看着像没进权限） */
+/* 随上级目录生效的源：照实显示勾选、不压暗也不加标签，只靠行底色（白）与勾选框提示和「单独选中」（绿条）区分 */
 .sse-row.src.cov { background: #fff; }
-.sse-row .sse-cov-tag { font-size: 11px; color: #16a34a; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 0 6px; line-height: 17px; flex-shrink: 0; }
 .sse-check[aria-disabled='true'] { cursor: default; }
 .sse-row.dir.focus { box-shadow: inset 0 0 0 1px #bfdbfe; }
 .mini { border: 1px solid #e2e8f0; background: #fff; color: #475569; border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
