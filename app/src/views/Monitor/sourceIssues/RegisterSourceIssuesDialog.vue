@@ -24,7 +24,7 @@ async function submit() {
   saving.value = true
   error.value = ''
   try {
-    const records = await sourceIssueApi.create({ sources: targets.value, description: description.value.trim() })
+    const records = await sourceIssueApi.create({ sourceIds: targets.value.map(source => source.sourceId), description: description.value.trim() })
     ElMessage.success(`已为 ${records.length} 个源分别登记问题（前端演示）`)
     emit('registered', records)
     emit('close')
@@ -41,7 +41,7 @@ async function submit() {
     <div class="sir-body">
       <p class="sir-summary">已选 {{ targets.length }} 个源<span v-if="targets.length > 1"> · 同一描述分别登记，每条问题可独立处理</span></p>
       <ul class="sir-sources" aria-label="本次登记的源">
-        <li v-for="source in targets" :key="source.sourceId"><span>{{ source.name }}</span><small>{{ source.sourceId }}</small></li>
+        <li v-for="source in targets" :key="source.sourceId"><span>{{ source.sourceName }}</span><small>{{ source.sourceId }}</small></li>
       </ul>
       <label class="sir-label" for="source-issue-description">问题描述 <span>*</span></label>
       <el-input id="source-issue-description" type="textarea" v-model="description" class="sir-description" aria-label="问题描述" :disabled="saving" maxlength="1000" :rows="5" resize="vertical" placeholder="描述发现的问题，例如：网站已更新，但平台连续两天没有新增数据。" data-testid="source-issue-description" @input="error = ''" />

@@ -26,6 +26,7 @@ import {
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import RegisterSourceIssuesDialog from '@/views/Monitor/sourceIssues/RegisterSourceIssuesDialog.vue'
+import type { SourceIssueSource } from '@/api/sourceIssues'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
 import EditSourceDialog from '@/views/FlowCanvas/source/EditSourceDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
@@ -668,9 +669,11 @@ function sourceState(source: Source) {
 // 复用已有接口，不新起批量端点：发抓取用 sendSnatchWithParam（与单源同一个，ids 传多个），
 // 启停用 changeSourceEnable 逐个调（后端没有批量启停端点，旧平台源列表页也是自己循环调的）。
 const selectedIds = ref<string[]>([])
-const issueRegistrationSources = ref<Source[]>([])
+const issueRegistrationSources = ref<SourceIssueSource[]>([])
 function registerSelectedIssues() {
-  issueRegistrationSources.value = selectedSources.value.map(source => ({ ...source }))
+  issueRegistrationSources.value = selectedSources.value.map(source => ({
+    sourceId: source.sourceId, sourceName: source.name, siteId: source.siteId, siteName: source.siteName,
+  }))
 }
 // ---- 1008-04 来源组批量操作（勾选后「选中来源 ▾」下拉）----
 const sourceGroupOpsOpen = ref(false)

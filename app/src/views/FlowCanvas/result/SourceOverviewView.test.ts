@@ -36,7 +36,10 @@ describe('SourceOverviewView', () => {
     await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
     await wrapper.get('[data-testid="batch-register-issue"]').trigger('click')
     const dialog = wrapper.findComponent({ name: 'RegisterSourceIssuesDialog' })
-    expect(dialog.props('sources')).toEqual([source, second])
+    expect(dialog.props('sources')).toEqual([
+      { sourceId: 'src-1', sourceName: '当前网站源', siteId: 'site-current' },
+      { sourceId: 'src-2', sourceName: '第二个源', siteId: 'site-current' },
+    ])
     expect(wrapper.findAll('.sov-name-content button')).toHaveLength(2)
     dialog.vm.$emit('close')
     await flushPromises()

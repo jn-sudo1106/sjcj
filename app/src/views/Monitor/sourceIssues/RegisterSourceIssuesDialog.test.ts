@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import RegisterSourceIssuesDialog from './RegisterSourceIssuesDialog.vue'
 import { sourceIssueApi } from '@/api/sourceIssues'
-const sources = [{ sourceId: 'a', name: '源甲' }, { sourceId: 'b', name: '源乙' }]
+const sources = [{ sourceId: 'a', sourceName: '源甲' }, { sourceId: 'b', sourceName: '源乙' }]
 let wrapper: VueWrapper
 beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks() })
@@ -27,7 +27,7 @@ describe('多源问题登记', () => {
     await wrapper.get('textarea').setValue('  更新缺失  ')
     await wrapper.get('[data-testid="source-issue-register-submit"]').trigger('click')
     await flushPromises()
-    expect(create).toHaveBeenCalledWith({ sources, description: '更新缺失' })
+    expect(create).toHaveBeenCalledWith({ sourceIds: ['a', 'b'], description: '更新缺失' })
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toContain('更新缺失')
     expect(wrapper.emitted('close')).toBeUndefined()
   })

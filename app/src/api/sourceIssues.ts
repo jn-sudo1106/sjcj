@@ -1,32 +1,39 @@
 import { previewSourceIssues } from './mock/sourceIssues'
 
-/** 前端展示模型；接口契约确认后，仅在本文件替换演示实现。 */
-export type SourceIssueStatus = 'open' | 'handled'
+/** 字段与后端一致（沿用源管理口径）：状态用 `state: 0/1`，时间用 `yyyy-MM-dd HH:mm:ss`。
+ *  接真实接口时只换 `sourceIssueApi` 的实现，页面结构不用动。 */
+export type SourceIssueState = 0 | 1
 export interface SourceIssueSource {
   sourceId: string
-  name: string
+  sourceName: string
   siteId?: string
   siteName?: string
 }
 export interface SourceIssue extends SourceIssueSource {
   id: string
   description: string
-  status: SourceIssueStatus
+  /** 0 = 待处理，1 = 已处理 */
+  state: SourceIssueState
   createdBy: string
-  createdAt: string
+  /** 登记时间，`yyyy-MM-dd HH:mm:ss` */
+  createTime: string
   handledBy?: string
-  handledAt?: string
+  /** 处理时间，`yyyy-MM-dd HH:mm:ss`，未处理为空 */
+  handleTime?: string
 }
 export interface SourceIssueQuery {
   keyword: string
-  status: SourceIssueStatus | 'all'
-  startDate: string
-  endDate: string
+  /** 0 待处理 / 1 已处理；不传 = 全部（后端「全部时不传 state」） */
+  state?: SourceIssueState
+  /** 登记时间下界，`yyyy-MM-dd`，含当日 */
+  createTimeStart: string
+  /** 登记时间上界，`yyyy-MM-dd`，传页面结束日的次日，后端按 `<` 排他 */
+  createTimeEnd: string
   page: number
   size: number
 }
 export interface CreateSourceIssuesInput {
-  sources: SourceIssueSource[]
+  sourceIds: string[]
   description: string
 }
 

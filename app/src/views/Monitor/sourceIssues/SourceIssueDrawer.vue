@@ -29,7 +29,7 @@ async function load() {
 }
 watch(() => [props.modelValue, props.issueId], load, { immediate: true })
 async function handle() {
-  if (!issue.value || saving.value || issue.value.status === 'handled') return
+  if (!issue.value || saving.value || issue.value.state === 1) return
   const id = issue.value.id
   saving.value = true
   try {
@@ -48,11 +48,11 @@ async function handle() {
     <div v-loading="loading" class="sid-body">
       <div v-if="error" role="alert"><p>{{ error }}</p><el-button @click="load">重新加载</el-button></div>
       <template v-else-if="issue">
-        <el-tag :type="issue.status === 'open' ? 'warning' : 'success'" effect="light">{{ issue.status === 'open' ? '待处理' : '已处理' }}</el-tag>
-        <div class="sid-source"><button class="sid-link" type="button" @click="emit('openSource', issue)">{{ issue.name }}</button><small>源 ID {{ issue.sourceId }}<template v-if="issue.siteName"> · {{ issue.siteName }}</template></small></div>
-        <dl class="sid-meta"><div><dt>登记人</dt><dd>{{ issue.createdBy }}</dd></div><div><dt>登记时间</dt><dd>{{ localDateTime(issue.createdAt) }}</dd></div><template v-if="issue.status === 'handled'"><div><dt>处理人</dt><dd>{{ issue.handledBy || '—' }}</dd></div><div><dt>处理时间</dt><dd>{{ localDateTime(issue.handledAt) }}</dd></div></template></dl>
+        <el-tag :type="issue.state === 0 ? 'warning' : 'success'" effect="light">{{ issue.state === 0 ? '待处理' : '已处理' }}</el-tag>
+        <div class="sid-source"><button class="sid-link" type="button" @click="emit('openSource', issue)">{{ issue.sourceName }}</button><small>源 ID {{ issue.sourceId }}<template v-if="issue.siteName"> · {{ issue.siteName }}</template></small></div>
+        <dl class="sid-meta"><div><dt>登记人</dt><dd>{{ issue.createdBy }}</dd></div><div><dt>登记时间</dt><dd>{{ localDateTime(issue.createTime) }}</dd></div><template v-if="issue.state === 1"><div><dt>处理人</dt><dd>{{ issue.handledBy || '—' }}</dd></div><div><dt>处理时间</dt><dd>{{ localDateTime(issue.handleTime) }}</dd></div></template></dl>
         <h3>问题描述</h3><p class="sid-description" data-testid="source-issue-full-description">{{ issue.description }}</p>
-        <div class="sid-actions"><el-button @click="emit('openSource', issue)">进入源工作区</el-button><el-button v-if="issue.status === 'open'" type="primary" :loading="saving" data-testid="source-issue-detail-handle" @click="handle">标记已处理</el-button></div>
+        <div class="sid-actions"><el-button @click="emit('openSource', issue)">进入源工作区</el-button><el-button v-if="issue.state === 0" type="primary" :loading="saving" data-testid="source-issue-detail-handle" @click="handle">标记已处理</el-button></div>
       </template>
     </div>
   </el-drawer>
