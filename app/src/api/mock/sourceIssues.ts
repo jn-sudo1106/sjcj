@@ -7,9 +7,9 @@ import { useAuthStore } from '@/stores/auth'
 const ago = (days: number) => new Date(Date.now() - days * 86400000).toISOString()
 let nextId = 4
 const records: SourceIssue[] = [
-  { id: 'preview-3', sourceId: '440106716', name: '海关-8位-出口-美元-商品分组_copy', siteName: '海关总署', description: '部分月份的商品数据缺失，请检查月份遍历规则并补采。', status: 'open', createdBy: '李明', createdAt: ago(0) },
-  { id: 'preview-2', sourceId: '440106715', name: '阿里法拍详细信息', siteName: '淘宝', description: '拍卖日期与入库日期不一致，需要检查日期提取配置。', status: 'open', createdBy: '张悦', createdAt: ago(1) },
-  { id: 'preview-1', sourceId: '440106714', name: '导入2610', siteName: '链家', description: '详情页请求持续超时。', status: 'handled', createdBy: '李明', createdAt: ago(3), handledBy: '王磊', handledAt: ago(2) },
+  { id: 'preview-3', sourceId: '440106716', name: '海关-8位-出口-美元-商品分组_copy', siteId: '58', siteName: '海关总署', description: '部分月份的商品数据缺失，请检查月份遍历规则并补采。', status: 'open', createdBy: '李明', createdAt: ago(0) },
+  { id: 'preview-2', sourceId: '440106715', name: '阿里法拍详细信息', siteId: '61', siteName: '淘宝', description: '拍卖日期与入库日期不一致，需要检查日期提取配置。', status: 'open', createdBy: '张悦', createdAt: ago(1) },
+  { id: 'preview-1', sourceId: '440106714', name: '导入2610', siteId: '44', siteName: '链家', description: '详情页请求持续超时。', status: 'handled', createdBy: '李明', createdAt: ago(3), handledBy: '王磊', handledAt: ago(2) },
 ]
 const actor = () => readLoginUsername() || useAuthStore().name || '当前账号'
 const copy = (record: SourceIssue): SourceIssue => ({ ...record })
