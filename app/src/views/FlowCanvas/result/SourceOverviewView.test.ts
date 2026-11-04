@@ -26,6 +26,25 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('多选源后从操作栏登记问题，向弹窗传入所选源，不增加行内问题图标', async () => {
+    const second = { ...source, sourceId: 'src-2', name: '第二个源' }
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [source, second] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="batch-register-issue"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-register-issue"]').trigger('click')
+    const dialog = wrapper.findComponent({ name: 'RegisterSourceIssuesDialog' })
+    expect(dialog.props('sources')).toEqual([source, second])
+    expect(wrapper.findAll('.sov-name-content button')).toHaveLength(2)
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'RegisterSourceIssuesDialog' }).exists()).toBe(false)
+    expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('2')
+    wrapper.unmount()
+  })
+
   it('网站与来源组按服务端组合筛选，切组重置分页 / 勾选；清空查询不解除组范围', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 60, list: [source] })
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current', scopeSourceGroupId: '3' }, global: { components: { ElPagination } } })

@@ -1,0 +1,49 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import ElementPlus from 'element-plus'
+import RegisterSourceIssuesDialog from './RegisterSourceIssuesDialog.vue'
+import { sourceIssueApi } from '@/api/sourceIssues'
+const sources = [{ sourceId: 'a', name: '源甲' }, { sourceId: 'b', name: '源乙' }]
+let wrapper: VueWrapper
+beforeEach(() => setActivePinia(createPinia()))
+afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks() })
+function render() {
+  wrapper = mount(RegisterSourceIssuesDialog, { props: { sources }, global: { plugins: [createPinia(), ElementPlus], stubs: { 'el-dialog': { template: '<div role="dialog"><slot /><slot name="footer" /></div>' } } } })
+  return wrapper
+}
+
+describe('多源问题登记', () => {
+  it('展示所选源，只填描述；空描述拦截，失败保留输入', async () => {
+    const create = vi.spyOn(sourceIssueApi, 'create').mockRejectedValue(new Error('登记失败'))
+    render()
+    expect(wrapper.text()).toContain('已选 2 个源')
+    expect(wrapper.text()).toContain('源甲')
+    expect(wrapper.findAll('textarea')).toHaveLength(1)
+    await wrapper.get('[data-testid="source-issue-register-submit"]').trigger('click')
+    expect(create).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alert"]').text()).toContain('请填写问题描述')
+    await wrapper.get('textarea').setValue('  更新缺失  ')
+    await wrapper.get('[data-testid="source-issue-register-submit"]').trigger('click')
+    await flushPromises()
+    expect(create).toHaveBeenCalledWith({ sources, description: '更新缺失' })
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toContain('更新缺失')
+    expect(wrapper.emitted('close')).toBeUndefined()
+  })
+
+  it('提交期间不重复登记或关闭，成功通知调用方并关闭', async () => {
+    let resolve!: (records: never[]) => void
+    const create = vi.spyOn(sourceIssueApi, 'create').mockReturnValue(new Promise(done => { resolve = done }))
+    render()
+    await wrapper.get('textarea').setValue('更新缺失')
+    await wrapper.get('[data-testid="source-issue-register-submit"]').trigger('click')
+    await wrapper.get('[data-testid="source-issue-register-submit"]').trigger('click')
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('close')).toBeUndefined()
+    resolve([])
+    await flushPromises()
+    expect(wrapper.emitted('registered')).toHaveLength(1)
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+})
