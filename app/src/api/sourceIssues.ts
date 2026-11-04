@@ -1,25 +1,28 @@
-import { previewSourceIssues } from './mock/sourceIssues'
+import { ApiError, request } from './client'
 
-/** 字段与后端一致（沿用源管理口径）：状态用 `state: 0/1`，时间用 `yyyy-MM-dd HH:mm:ss`。
- *  接真实接口时只换 `sourceIssueApi` 的实现，页面结构不用动。 */
+export const SOURCE_ISSUE_BATCH_LIMIT = 100
+
+/** 字段与后端一致（沿用源管理口径）：状态用 `state: 0/1`，时间用 `yyyy-MM-dd HH:mm:ss`。 */
 export type SourceIssueState = 0 | 1
 export interface SourceIssueSource {
   sourceId: string
   sourceName: string
-  siteId?: string
-  siteName?: string
+  siteId?: string | null
+  siteName?: string | null
 }
 export interface SourceIssue extends SourceIssueSource {
   id: string
+  /** 软删除的源保留问题快照，工作区入口不可用。 */
+  sourceAvailable: boolean
   description: string
   /** 0 = 待处理，1 = 已处理 */
   state: SourceIssueState
   createdBy: string
   /** 登记时间，`yyyy-MM-dd HH:mm:ss` */
   createTime: string
-  handledBy?: string
+  handledBy?: string | null
   /** 处理时间，`yyyy-MM-dd HH:mm:ss`，未处理为空 */
-  handleTime?: string
+  handleTime?: string | null
 }
 export interface SourceIssueQuery {
   keyword: string
@@ -37,17 +40,42 @@ export interface CreateSourceIssuesInput {
   description: string
 }
 
-/** 四项能力 + 演示态标记。接真实接口时只换 sourceIssueApi 的实现，页面结构不用动。 */
-export interface SourceIssueApi {
-  paged(query: SourceIssueQuery): Promise<{ list: SourceIssue[]; total: number }>
-  create(input: CreateSourceIssuesInput): Promise<SourceIssue[]>
-  detail(id: string): Promise<SourceIssue>
-  handle(id: string): Promise<SourceIssue>
-  /** true = 内存演示台账。接真实接口时改成 false，并一并删掉这些演示提示：
-   *  SourceIssuesView.vue 顶部的 si-preview 提示条和「已标记为已处理（前端演示）」，
-   *  SourceIssueDrawer.vue 的处理成功提示，RegisterSourceIssuesDialog.vue 的成功提示与底部说明。 */
-  preview: boolean
-}
+type SourceIssuePage = { list: SourceIssue[]; total: number }
 
-// 用户确认先做前端。尚无后端契约，不猜测 HTTP 端点、不把演示记录写进源标签或浏览器缓存。
-export const sourceIssueApi: SourceIssueApi = { ...previewSourceIssues, preview: true }
+export const sourceIssueApi = {
+  async paged({ size, ...query }: SourceIssueQuery): Promise<SourceIssuePage> {
+    const page = await request<SourceIssuePage>('source/issue/paged', { ...query, limit: size }, { method: 'GET', mode: 'http' })
+    if (!Array.isArray(page?.list) || !Number.isInteger(page.total) || page.total < 0) {
+      throw new Error('源问题分页响应格式无效')
+    }
+    return page
+  },
+
+  async create(input: CreateSourceIssuesInput): Promise<SourceIssue[]> {
+    try {
+      const records = await request<SourceIssue[]>('source/issue/addBatch', { ...input }, { mode: 'http' })
+      if (!Array.isArray(records) || !records.length) throw new SyntaxError('登记响应缺少记录')
+      return records
+    } catch (error) {
+      const cause = (error instanceof ApiError ? error.cause : error) as
+        { name?: string; status?: number; payload?: { code?: string | number } } | undefined
+      if (cause?.name === 'TimeoutError' || cause?.name === 'TypeError' || cause?.name === 'SyntaxError'
+        || (cause?.status ?? 0) >= 500 || String(cause?.payload?.code) === '500') {
+        throw new Error('未能确认登记结果。请先到源问题台账核对是否已登记，再决定是否提交。')
+      }
+      throw error
+    }
+  },
+
+  async detail(id: string): Promise<SourceIssue> {
+    const issue = await request<SourceIssue>('source/issue/detail', { id }, { method: 'GET', mode: 'http' })
+    if (issue?.id !== id) throw new Error('源问题详情响应格式无效')
+    return issue
+  },
+
+  async handle(id: string): Promise<SourceIssue> {
+    const issue = await request<SourceIssue>('source/issue/handle', { id }, { mode: 'http' })
+    if (issue?.id !== id || issue.state !== 1) throw new Error('未能确认处理结果，请刷新台账核对。')
+    return issue
+  },
+}

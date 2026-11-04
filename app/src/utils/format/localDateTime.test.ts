@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { localDateTime } from './localDateTime'
+import { addDays, businessDate, localDateTime } from './localDateTime'
 
 describe('localDateTime', () => {
   it('服务端 yyyy-MM-dd HH:mm:ss 原样展示，不做时区换算', () => {
@@ -26,4 +26,9 @@ describe('localDateTime', () => {
     expect(localDateTime('')).toBe('—')
     expect(localDateTime('暂未处理')).toBe('暂未处理')
   })
+})
+it('上海已跨日时使用上海日期，排他上界按日历加一天', () => {
+  const date = businessDate(new Date('2026-11-03T16:30:00Z'))
+  expect(date).toBe('2026-11-04')
+  expect(addDays(date, 1)).toBe('2026-11-05')
 })

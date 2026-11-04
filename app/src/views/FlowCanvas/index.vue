@@ -29,7 +29,7 @@ import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
 import { firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
-import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
+import { normalizeSourceView, normalizeSiteView, resolveSourceIssueReturn, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
 import { flushNodeConfigs } from './inspector/nodeConfigAutosave'
 import { useSourceReturnStore } from '@/stores/sourceReturn'
@@ -141,7 +141,13 @@ watch(
   rememberSourceReturn,
   { flush: 'post' },
 )
-const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
+const sourceIssueReturn = computed(() => resolveSourceIssueReturn(router, route.query.sourceIssueReturn))
+const fromSourceIssues = computed(() => !!sourceIssueReturn.value)
+// 仅在目标源尚未通过台账入口校验时占位，同源切流程保留已经加载的工作区。
+const verifiedIssueSourceId = ref('')
+const awaitingIssueSource = computed(() => fromSourceIssues.value
+  && verifiedIssueSourceId.value !== String(route.query.sourceId ?? ''))
+const awaitingSource = computed(() => !!route.query.sourceId && (!flow.sourceCtx || awaitingIssueSource.value))
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 /** 没有关联流程 / 流程列表加载失败：画布和右侧配置都让位，只显示一句提示（2026-11-03）。
  *  只在明确 empty / error 时让位——「加载中」照常渲染，否则刷新时会闪一下空白，
@@ -363,23 +369,34 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   sourceLoadError.value = ''
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
+  const fromIssue = fromSourceIssues.value
   let source: Source | null
   let sourceSteps: { steps: Step[] } | { error: unknown }
   try {
-    ;[source, sourceSteps] = await Promise.all([
-      sourceApi.sourceDetail(sourceId),
-      // 按源查的步骤只给未绑流程的源兜底，绑了流程的源用不上：它的失败先记下，真要用时再报（见下方 steps）。
-      // 2026-10-12：217 后端对未绑流程的源报「源未绑定有效流程」，对绑了只有草稿的新流程报「请先进入流程草稿编辑…」
-      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }).then((steps) => ({ steps }), (error: unknown) => ({ error })),
-    ])
+    const sourceResult = fromIssue
+      ? sourceApi.sourceDetailScoped(sourceId)
+      : sourceApi.sourceDetail(sourceId)
+    // 从问题台账进入时先核对源详情权限，再读取工作区数据。
+    const loadSteps = () => sourceApi.sourceSteps(sourceId, { withConfigDetails: false })
+      .then((steps) => ({ steps }), (error: unknown) => ({ error }))
+    const stepsResult = fromIssue
+      ? sourceResult.then((visibleSource) => visibleSource ? loadSteps() : { steps: [] })
+      : loadSteps()
+    ;[source, sourceSteps] = await Promise.all([sourceResult, stepsResult])
   } catch (error) {
     // 异常不能再往外抛：调用方 enterFromRoute 的 promise 没人接，占位会永远停在「加载中」。
+    if (fromIssue) {
+      if (String(route.query.sourceId ?? '') !== sourceId) return
+      verifiedIssueSourceId.value = ''
+    }
     const detail = (error as Error)?.message ?? '网络异常'
     sourceLoadError.value = `源加载失败：${detail}`
     ElMessage.error(sourceLoadError.value)
     return
   }
+  if (fromIssue && String(route.query.sourceId ?? '') !== sourceId) return
   if (!source) {
+    if (fromIssue) verifiedIssueSourceId.value = ''
     sourceReturn.clear(sourceId)
     sourceLoadError.value = '源不存在或已被删除'
     ElMessage.error('源不存在')
@@ -439,6 +456,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     return
   }
   const defaults = runtimeView ? undefined : await loadTemplateDefaults(flowId, steps)
+  if (fromIssue && String(route.query.sourceId ?? '') !== sourceId) return
   const viewingDraft = !!selectedBinding?.draftFlowId && flowId === selectedBinding.draftFlowId
   flow.loadFromSource({
     ...source,
@@ -467,6 +485,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
   const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId || ''
   if (ownerSiteId) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId })
+  verifiedIssueSourceId.value = fromIssue ? sourceId : ''
   sourceReady.value = true
   rememberSourceReturn()
   // 0915-02：源态下「全部」页签同样常驻——0915-03 的钻取闭环要靠它回到网站数据视图
@@ -816,7 +835,7 @@ onUnmounted(() => {
     <!-- 两列布局（0710 会议 B1）：左列源侧栏（页面级，在视图层之上），右列内容区随流程/数据/任务视图切换 -->
     <div class="rc-canvas-cols" :class="{ 'with-tabs': !!flow.sourceCtx || !!ws.siteTabs.length }">
       <SiteSourceSwitcher
-        v-if="sidebarSiteId"
+        v-if="sidebarSiteId && !awaitingIssueSource"
         :site-id="sidebarSiteId"
         :active-key="sidebarActiveKey"
         :source-group-id="sidebarSourceGroupId"
@@ -834,6 +853,7 @@ onUnmounted(() => {
         <!-- key 用加载完成后的 ctx，避免切换时读到旧源数据。 -->
         <div v-if="awaitingSource" class="rc-source-loading" :class="{ 'is-error': !!sourceLoadError }">
           {{ sourceLoadError || '正在加载源…' }}
+          <el-button v-if="sourceLoadError && sourceIssueReturn" link type="primary" @click="router.push(sourceIssueReturn)">返回问题列表</el-button>
         </div>
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />

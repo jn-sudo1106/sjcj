@@ -2,18 +2,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { createPinia } from 'pinia'
 import ElementPlus, { ElSelect } from 'element-plus'
 import SourceIssuesView from './SourceIssuesView.vue'
+import { useAuthStore } from '@/stores/auth'
 import { sourceIssueApi, type SourceIssue } from '@/api/sourceIssues'
 
-const issue: SourceIssue = { id: 'i1', sourceId: 's1', sourceName: '测试源', siteId: 'site1', description: '更新缺失', state: 0, createdBy: 'admin', createTime: '2026-11-03 09:00:00' }
+const issue: SourceIssue = { id: 'i1', sourceId: 's1', sourceName: '测试源', sourceAvailable: true, siteId: 'site1', description: '更新缺失', state: 0, createdBy: 'admin', createTime: '2026-11-03 09:00:00' }
 let wrapper: VueWrapper
 beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }) })
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 async function render(query: Record<string, string> = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/monitor', component: { template: '<div />' } }, { path: '/canvas', component: { template: '<div />' } }] })
   await router.push({ path: '/monitor', query: { tab: 'sourceIssues', ...query } })
-  wrapper = mount(SourceIssuesView, { global: { plugins: [router, ElementPlus] } })
+  wrapper = mount(SourceIssuesView, { global: { plugins: [router, createPinia(), ElementPlus] } })
   await flushPromises()
   return router
 }
@@ -61,6 +63,50 @@ describe('源问题查询与跳转', () => {
     expect(wrapper.find('[data-testid="source-issues-error"]').exists()).toBe(false)
     expect(paged).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('更新缺失')
+  })
+
+  it('默认待处理，重置恢复待处理', async () => {
+    const paged = vi.spyOn(sourceIssueApi, 'paged').mockResolvedValue({ list: [issue], total: 1 })
+    const router = await render()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 0 }))
+    await router.replace({ path: '/monitor', query: { tab: 'sourceIssues', issueState: 'all' } })
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: undefined }))
+    await wrapper.get('[data-testid="source-issues-reset"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 0 }))
+  })
+
+  it.each(['', 'unexpected'])('URL 中非法状态 %j 回到待处理，非法页大小回到 20', async issueState => {
+    const paged = vi.spyOn(sourceIssueApi, 'paged').mockResolvedValue({ list: [issue], total: 1 })
+    await render({ issueState, issueSize: '200', issuePage: 'Infinity' })
+    expect(paged).toHaveBeenCalledOnce()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 0, size: 20, page: 1 }))
+  })
+
+  it('第 2 页刷新失败后仍在原页，重试也保留原页', async () => {
+    const paged = vi.spyOn(sourceIssueApi, 'paged').mockResolvedValueOnce({ list: [issue], total: 60 })
+      .mockRejectedValueOnce(new Error('网络异常')).mockResolvedValue({ list: [issue], total: 60 })
+    const router = await render({ issuePage: '2' })
+    const refresh = wrapper.get('[data-testid="source-issues-refresh"]')
+    await refresh.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledTimes(2)
+    expect(router.currentRoute.value.query.issuePage).toBe('2')
+    expect(wrapper.get('.si-pager').attributes('style')).toContain('display: none')
+    await refresh.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
+  })
+
+  it('已删除源保留台账名称，不显示工作区链接；只读账号不显示处理操作', async () => {
+    vi.spyOn(sourceIssueApi, 'paged').mockResolvedValue({ list: [{ ...issue, sourceAvailable: false }], total: 1 })
+    await render()
+    useAuthStore().roles = ['read']
+    await flushPromises()
+    expect(wrapper.text()).toContain('测试源（已删除）')
+    expect(wrapper.find('[data-testid="source-issue-source-i1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="source-issue-handle-i1"]').exists()).toBe(false)
   })
 
   it('旧查询晚返回不覆盖新状态的查询结果', async () => {

@@ -671,6 +671,7 @@ function sourceState(source: Source) {
 const selectedIds = ref<string[]>([])
 const issueRegistrationSources = ref<SourceIssueSource[]>([])
 function registerSelectedIssues() {
+  if (auth.role !== 'admin') return
   issueRegistrationSources.value = selectedSources.value.map(source => ({
     sourceId: source.sourceId, sourceName: source.name, siteId: source.siteId, siteName: source.siteName,
   }))
@@ -1535,7 +1536,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
             @clear-remark="clearSelectedRemark"
           />
         </div>
-        <button class="sov-btn" type="button" data-testid="batch-register-issue" @click="registerSelectedIssues">登记问题</button>
+        <button v-if="auth.role === 'admin'" class="sov-btn" type="button" data-testid="batch-register-issue" @click="registerSelectedIssues">登记问题</button>
         <button class="sov-btn" type="button" data-testid="batch-enable" @click="batchToggleEnable(false)">启用</button>
         <button class="sov-btn danger" type="button" data-testid="batch-disable" @click="batchToggleEnable(true)">停用</button>
         <button class="sov-btn ghost" type="button" data-testid="batch-clear" @click="clearSelection">取消</button>
@@ -1765,7 +1766,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <button v-if="lastSavedTag" type="button" data-testid="source-mark-view-batch" @click="viewMarkedBatch">查看这一批</button>
       <button class="sov-toast-close" type="button" aria-label="关闭提示" @click="hideMarkToast">×</button>
     </div>
-    <RegisterSourceIssuesDialog v-if="issueRegistrationSources.length" :sources="issueRegistrationSources" @close="issueRegistrationSources = []" />
+    <RegisterSourceIssuesDialog v-if="auth.role === 'admin' && issueRegistrationSources.length" :sources="issueRegistrationSources" @close="issueRegistrationSources = []" />
     <EditSourceMarkDialog
       v-if="editTarget"
       :source="editTarget"

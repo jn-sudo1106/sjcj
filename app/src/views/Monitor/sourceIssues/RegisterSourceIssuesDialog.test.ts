@@ -9,8 +9,8 @@ const sources = [{ sourceId: 'a', sourceName: '源甲' }, { sourceId: 'b', sourc
 let wrapper: VueWrapper
 beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks() })
-function render() {
-  wrapper = mount(RegisterSourceIssuesDialog, { props: { sources }, global: { plugins: [createPinia(), ElementPlus], stubs: { 'el-dialog': { template: '<div role="dialog"><slot /><slot name="footer" /></div>' } } } })
+function render(targets = sources) {
+  wrapper = mount(RegisterSourceIssuesDialog, { props: { sources: targets }, global: { plugins: [createPinia(), ElementPlus], stubs: { 'el-dialog': { template: '<div role="dialog"><slot /><slot name="footer" /></div>' } } } })
   return wrapper
 }
 
@@ -30,6 +30,14 @@ describe('多源问题登记', () => {
     expect(create).toHaveBeenCalledWith({ sourceIds: ['a', 'b'], description: '更新缺失' })
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toContain('更新缺失')
     expect(wrapper.emitted('close')).toBeUndefined()
+  })
+
+  it('超过 100 个源时显示上限并禁止提交', async () => {
+    const create = vi.spyOn(sourceIssueApi, 'create').mockResolvedValue([])
+    render(Array.from({ length: 101 }, (_, i) => ({ sourceId: String(i + 1), sourceName: '测试源' })))
+    expect(wrapper.get('[role="alert"]').text()).toContain('单次最多登记 100 个源')
+    expect((wrapper.get('[data-testid="source-issue-register-submit"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('提交期间不重复登记或关闭，成功通知调用方并关闭', async () => {

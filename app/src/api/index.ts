@@ -550,6 +550,10 @@ export const sourceApi = {
     })
     return sourcePageFromLegacy(result)
   },
+  sourceDetailScoped: async (sourceId: string) => {
+    const result = await request<unknown>('source/sourceDetailScoped', { sourceId }, { method: 'GET', mode: 'http' })
+    return result ? sourceFromLegacy(result) : null
+  },
   sourceDetail: async (sourceId: string) => {
     const result = await request<unknown>('source/sourceDetail', { sourceId }, {
       method: 'GET',
