@@ -1601,7 +1601,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 @keydown="resizeUrlByKey"
                 @click.stop
               />
-            </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol">配置 ID</th>
+            </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol"><button class="sov-sort" :class="sortClass('CONFIG_ID')" type="button" data-testid="sort-config-id" :title="sortLabel('CONFIG_ID')" @click="toggleSort('CONFIG_ID')">配置 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('tags')">标签</th>
             <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>

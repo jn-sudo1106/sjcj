@@ -1126,6 +1126,51 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
       type: undefined,
     }))
   })
+
+  // 配置 ID 列只在来源组成员表里显示（showConfigCol = !!scopeSourceGroupId），排序也只在那一处给。
+  it('来源组成员表支持按「配置 ID」排序：升序 -> 降序 -> 取消排序', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceGroupId: 'g1' } })
+    await flushPromises()
+
+    const btn = wrapper.get('[data-testid="sort-config-id"]')
+    expect(btn.classes()).not.toContain('ascending')
+    expect(btn.attributes('title')).toBe('未排序')
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.classes()).toContain('ascending')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'CONFIG_ID',
+      sorted: 1,
+      type: 'ASC',
+    }))
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.classes()).toContain('descending')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'CONFIG_ID',
+      sorted: -1,
+      type: 'DESC',
+    }))
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.classes()).not.toContain('descending')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: undefined,
+      sorted: undefined,
+      type: undefined,
+    }))
+  })
+
+  it('普通源列表（无来源组范围）不出现配置 ID 排序入口', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="sort-config-id"]').exists()).toBe(false)
+  })
 })
 
 // 2026-09-18 实测反馈：批量导入后「侧栏 2 个源、主区共 0 个源」——侧栏刷新了自己，
