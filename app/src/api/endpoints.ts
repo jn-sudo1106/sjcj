@@ -815,9 +815,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'sys-user/list', desc: '用户分页（登录名/用户名模糊，组 ID 与状态精确；留空即不过滤）', impl: true, live: true },
   { path: 'sys-user/detail', desc: '用户详情（含已绑定角色的 ID 与名称回显，不含口令）', impl: true, live: true },
   { path: 'sys-user/add', desc: '新增用户（admin；初始密码必填，服务端按 {p}+md5(登录名+明文) 落库；组 ID 留空沿用创建人所在组；自动绑 read 角色）', danger: true, impl: true, live: true },
-  { path: 'sys-user/update', desc: '修改用户（admin；只能改用户名与所属组，登录名不可改）', danger: true, impl: true, live: true },
+  { path: 'sys-user/update', desc: '修改用户（admin；改用户名、所属组及角色，登录名不可改）', danger: true, impl: true, live: true },
   { path: 'sys-user/update-status', desc: '启用/停用（admin；停用连带解除该用户全部角色绑定，启用要求该用户已有角色）', danger: true, impl: true, live: true },
   { path: 'sys-user/change-password', desc: '重置密码（admin；明文入参，内置 admin 账号拒绝）', danger: true, impl: true, live: true },
+  { path: 'sys-user/roles', desc: '角色列表（admin；供编辑用户时选择角色）', impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

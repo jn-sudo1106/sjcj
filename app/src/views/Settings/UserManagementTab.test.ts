@@ -133,6 +133,27 @@ describe('用户管理页面', () => {
     expect(add).not.toHaveBeenCalled()
   })
 
+  it('编辑用户：角色可以选择，保存时带上选中的 roleId', async () => {
+    const wrapper = await mountAs(['admin'])
+    const update = vi.spyOn(sysUserApi, 'updateSysUser').mockResolvedValue({ ok: true })
+    const editBtns = wrapper.findAll('[data-testid="sys-user-edit"]')
+    await editBtns[0].trigger('click')
+    await flushPromises()
+
+    const roleSelect = dialogEl().querySelector('[data-testid="sys-user-role-select"]')
+    expect(roleSelect).not.toBeNull()
+
+    dialogEl().querySelector<HTMLElement>('[data-testid="sys-user-save"]')!.click()
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update.mock.calls[0]![0]).toMatchObject({
+      userId: 12,
+      userLoginName: 'zhonghe',
+      roleId: 2,
+    })
+  })
+
   it('点状态开关停用要二次确认，确认后按 status=1 调接口并重查列表（只改状态，不解绑角色）', async () => {
     const wrapper = await mountAs(['admin'])
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
