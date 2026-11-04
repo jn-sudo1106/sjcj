@@ -7,6 +7,8 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 from .runtime_schema import SQLITE_SCHEMA as LOG_SCHEMA, MYSQL_SCHEMA as MYSQL_LOG_SCHEMA, TABLES as LOG_TABLES
+from .source_code_schema import SQLITE_SCHEMA as SOURCE_CODE_SCHEMA, MYSQL_SCHEMA as MYSQL_SOURCE_CODE_SCHEMA
+from .deployment_resource_schema import SQLITE_SCHEMA as DEPLOYMENT_SCHEMA, MYSQL_SCHEMA as MYSQL_DEPLOYMENT_SCHEMA
 
 
 SCHEMA = """
@@ -109,7 +111,11 @@ class Store:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
-            db.executescript(SCHEMA + LOG_SCHEMA)
+            db.executescript(SCHEMA + LOG_SCHEMA + SOURCE_CODE_SCHEMA + DEPLOYMENT_SCHEMA)
+            relation_columns = {row[1] for row in db.execute('PRAGMA table_info(source_code_relations)')}
+            for name in ('latest_task_id', 'latest_task_created_at'):
+                if name not in relation_columns:
+                    db.execute(f"ALTER TABLE source_code_relations ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
             columns = {row[1] for row in db.execute("PRAGMA table_info(runners)")}
             if "worker_digests" not in columns:
                 db.execute("ALTER TABLE runners ADD COLUMN worker_digests TEXT")
@@ -164,7 +170,7 @@ class Store:
 
 
 MYSQL_TABLES = ("runners", "enrollment_codes", "releases", "assignments", "script_bindings", "runner_upgrades",
-                "code_assets", "code_versions", "code_runtime_bindings", "settings", "generation_jobs",
+                "code_assets", "code_versions", "code_runtime_bindings", "settings", "generation_jobs", "source_code_relations", "deployment_jobs",
                 "code_repositories", "code_repo_rules", "config_runner_bindings", "queue_runner_bindings", "directory_runner_bindings", "directory_deliveries") + LOG_TABLES
 MYSQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ce_runner_runners (
@@ -311,9 +317,13 @@ class MySqlStore:
         }
         with pymysql.connect(**self.kwargs) as db:
             with db.cursor() as cursor:
-                for statement in (MYSQL_SCHEMA + MYSQL_LOG_SCHEMA).split(";"):
+                for statement in (MYSQL_SCHEMA + MYSQL_LOG_SCHEMA + MYSQL_SOURCE_CODE_SCHEMA + MYSQL_DEPLOYMENT_SCHEMA).split(";"):
                     if statement.strip():
                         cursor.execute(statement)
+                for name, length in (('latest_task_id', 80), ('latest_task_created_at', 50)):
+                    cursor.execute('SHOW COLUMNS FROM ce_runner_source_code_relations LIKE %s', (name,))
+                    if not cursor.fetchone():
+                        cursor.execute(f"ALTER TABLE ce_runner_source_code_relations ADD COLUMN {name} VARCHAR({length}) NOT NULL DEFAULT ''")
                 for name, definition in (("runner_pid", "BIGINT NULL"), ("worker_processes", "LONGTEXT NULL"), ("os_type", "VARCHAR(64) NULL"), ("os_version", "VARCHAR(255) NULL"), ("launcher_version", "VARCHAR(80) NULL")):
                     cursor.execute("SHOW COLUMNS FROM ce_runner_runners LIKE %s", (name,))
                     if not cursor.fetchone():

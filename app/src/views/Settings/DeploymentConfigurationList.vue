@@ -3,8 +3,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import type { DeploymentConfiguration, RuntimeConfiguration } from '@/api/runnerManagement'
 
-const props = defineProps<{ items: DeploymentConfiguration[]; runtimes: RuntimeConfiguration[] | null; loading: boolean; canWrite: boolean; failed: boolean }>()
-const emit = defineEmits<{ open: [id: string]; create: []; refresh: []; openConfig: [item: DeploymentConfiguration] }>()
+const props = defineProps<{ items: DeploymentConfiguration[]; runtimes: RuntimeConfiguration[] | null; loading: boolean; canWrite: boolean; failed: boolean; deletingId?: string }>()
+const emit = defineEmits<{ open: [id: string]; create: []; refresh: []; openConfig: [item: DeploymentConfiguration]; remove: [item: DeploymentConfiguration] }>()
 const query = reactive({ name: '', flow: '', configId: '', queue: '' })
 const applied = ref({ ...query }), page = ref(1), size = ref(20)
 const includes = (value: string | undefined, search: string) => (value || '').toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())
@@ -53,7 +53,7 @@ function time(value?: string) {
           <el-table-column prop="queueName" label="任务队列" min-width="155" show-overflow-tooltip><template #default="{ row }">{{ row.queueName || '—' }}</template></el-table-column>
           <el-table-column label="绑定机器" width="88" align="center"><template #default="{ row }"><span :title="runtimes === null ? '绑定信息加载失败，请刷新重试' : '按 Runner 实例去重统计'">{{ runtimes === null ? '—' : machineCounts.get(row.deploymentId)?.size || 0 }}</span></template></el-table-column>
           <el-table-column label="更新时间" min-width="150"><template #default="{ row }"><span class="deployment-time" :title="row.updatedAt ? time(row.updatedAt) : '历史配置未记录更新时间'">{{ time(row.updatedAt) }}</span></template></el-table-column>
-          <el-table-column label="操作" width="62" align="center"><template #default="{ row }"><el-button link type="primary" :disabled="loading" @click="emit('open', row.deploymentId)">{{ canWrite ? '编辑' : '查看' }}</el-button></template></el-table-column>
+          <el-table-column label="操作" :width="canWrite ? 110 : 62" align="center"><template #default="{ row }"><el-button link type="primary" :disabled="loading" @click="emit('open', row.deploymentId)">{{ canWrite ? '编辑' : '查看' }}</el-button><el-button v-if="canWrite" link type="danger" :loading="deletingId === row.deploymentId" :disabled="loading || runtimes === null || !!machineCounts.get(row.deploymentId)?.size" :title="runtimes === null ? '绑定信息加载失败，请先刷新' : machineCounts.get(row.deploymentId)?.size ? '请先到服务器移除机器绑定' : '删除部署配置，保留仓库代码和机器文件'" :data-testid="`deployment-delete-${row.deploymentId}`" @click="emit('remove', row)">删除</el-button></template></el-table-column>
         </el-table>
       </div>
       <footer class="deployment-list-footer"><span>点击部署名称配置目标目录和仓库代码</span><el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" :total="filtered.length" :disabled="loading" /></footer>

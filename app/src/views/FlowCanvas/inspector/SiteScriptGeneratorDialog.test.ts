@@ -35,6 +35,7 @@ const oldVersion: SiteCodeVersion = { codeId: 'code-1', configId: 'c-1', queueNa
   prompt: '原版本提示词', url: 'https://www.realcan.cn/newscenter', repoId: webRepo.repoId,
   repoName: webRepo.name, repoPath: webRepo.path }
 const sampleCode = 'def scrape(url):\n    return []\n'
+const promptWithQueue = (text: string) => `${text}\n\n【当前节点 MQ 主题】\nMQ 主题：news_list\n【MQ 主题结束】`
 const defaultDirectory = (repoId: string): CodeRepositoryDirectory => ({ directoryId: 'default', repoId,
   name: '默认目录', configType: '', configTypeName: '', path: 'default', status: 'ACTIVE', isDefault: true, revision: 'v1' })
 const webDirectory: CodeRepositoryDirectory = { ...defaultDirectory(webRepo.repoId), directoryId: 'web-dir',
@@ -54,7 +55,7 @@ const stubs = {
 const mountDialog = (props: Partial<InstanceType<typeof SiteScriptGeneratorDialog>['$props']> = {}) => mount(SiteScriptGeneratorDialog, {
   props: { open: true, initialUrl: 'https://www.realcan.cn/newscenter', initialPrompt: '',
     configId: 'c-1', queueName: 'news_list', configType: '90', ...props },
-  global: { stubs, directives: { loading: {} }, plugins: [createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })] },
+  global: { stubs: { ...stubs, NodeDeploymentPanel: true }, directives: { loading: {} }, plugins: [createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })] },
 })
 
 beforeEach(() => {
@@ -74,6 +75,54 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([])
 })
 afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllEnvs() })
+
+it.each(['task', 'direct'] as const)('%s 生成的用户提示词包含输出字段名称和 ID，保留手工需求', async mode => {
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
+  const outputFields = [{ prop: 'news_title', desc: '新闻标题', itemId: '12001', columnName: 'K1' }]
+  const w = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', outputFields, outputTable: 'sense_data.TB_NEWS' })
+  await flushPromises()
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('字段名：新闻标题；字段 ID：12001')
+  await w.get('[data-testid="site-script-prompt"]').setValue('仅采集当前页，不要翻页')
+  if (mode === 'direct') await w.get('[data-testid="generation-mode-direct"]').trigger('click')
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  const input = vi.mocked(mode === 'task' ? submitSiteScriptTask : generateSiteScript).mock.calls[0]![0]
+  expect(input.userPrompt).toContain('仅采集当前页，不要翻页')
+  expect(input.userPrompt).toContain('MQ 主题：news_list')
+  expect(input.userPrompt?.match(/【当前节点 MQ 主题】/g)).toHaveLength(1)
+  expect(input.userPrompt).toContain('字段名：新闻标题；字段 ID：12001；字段标识：news_title；物理列：K1')
+  expect(input.prompt).toBe(input.userPrompt)
+  expect(input.userPrompt?.match(/【当前节点输出字段】/g)).toHaveLength(1)
+  w.unmount()
+})
+
+it('字段异步加载和重新选择时更新提示词字段段落，不覆盖用户输入', async () => {
+  const w = mountDialog()
+  await flushPromises()
+  await w.get('[data-testid="site-script-prompt"]').setValue('保留的采集要求')
+  await w.setProps({ outputFields: [{ prop: 'title', desc: '标题', itemId: '100' }] })
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('字段 ID：100')
+  await w.setProps({ outputFields: [{ prop: 'url', desc: '链接', itemId: '101' }] })
+  const prompt = (w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value
+  expect(prompt).toContain('保留的采集要求')
+  expect(prompt).toContain('字段名：链接；字段 ID：101')
+  expect(prompt).not.toContain('字段 ID：100')
+  w.unmount()
+})
+
+it('旧生成配置回读后补齐输出字段并自动保存，批量生成也使用更新后的用户提示词', async () => {
+  vi.mocked(runnerManagementApi.nodeGenerationSettings).mockResolvedValue({ configId: 'c-1', enabled: true, generation: {
+    interfaceId: 'legacy', repositoryId: defaultRepo.repoId, directoryId: 'default', configType: '90', queueName: 'news_list',
+    systemPrompt: '保留系统要求', userPrompt: '已保存的采集要求', url: 'https://www.realcan.cn/newscenter', fileNameMode: 'website', destinationMode: 'custom',
+  } })
+  const w = mountDialog({ outputFields: [{ prop: 'title', desc: '标题', itemId: '2001' }] })
+  await flushPromises()
+  const prompt = (w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value
+  expect(prompt).toContain('已保存的采集要求')
+  expect(prompt).toContain('字段名：标题；字段 ID：2001')
+  expect((w.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe('保留系统要求')
+  w.unmount(); await flushPromises()
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', generation: expect.objectContaining({ userPrompt: prompt }) }))
+})
 
 it('模型配置入口跳转到合并后的服务器模型页并携带关联实例', async () => {
   vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 1, items: [{
@@ -114,6 +163,7 @@ it('切换调用接口时展示代码编辑区且不发送任务上下文', asyn
   expect(wrapper.find('[data-testid="generation-dispatch-config"]').exists()).toBe(false)
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   expect(vi.mocked(generateSiteScript).mock.calls[0]?.[0].taskContext).toBeUndefined()
+  expect(vi.mocked(generateSiteScript).mock.calls[0]?.[0].sourceContext).toEqual({ sourceId: '1', flowId: '2', stepId: '3' })
   expect(submitSiteScriptTask).not.toHaveBeenCalled()
   wrapper.unmount()
 })
@@ -141,7 +191,7 @@ it('切换方式保留提示词和已有代码，重新打开默认任务方式'
   expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
   await wrapper.get('[data-testid="generation-mode-direct"]').trigger('click')
   expect(wrapper.get('[aria-label="可编辑 Python 代码"]').element).toHaveProperty('value', sampleCode)
-  expect(wrapper.get('[data-testid="site-script-prompt"]').element).toHaveProperty('value', '保留这份用户提示词')
+  expect(wrapper.get('[data-testid="site-script-prompt"]').element).toHaveProperty('value', promptWithQueue('保留这份用户提示词'))
   await wrapper.setProps({ open: false }); await wrapper.setProps({ open: true }); await flushPromises()
   expect(wrapper.get('[data-testid="generation-mode-task"]').classes()).toContain('active')
   expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
@@ -256,11 +306,11 @@ it('重新进入 AI 工作区恢复节点保存的模型和提示词', async () 
     systemPrompt: '批量系统提示词', userPrompt: '采集 https://old.example.com/news', url: 'https://old.example.com/news', fileNameMode: 'queue', workspaceMode: 'custom', workspacePath: 'news/cninfo', codeDirectory: 'manual/code',
   } })
   const w = mountDialog(); await flushPromises()
-  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe('采集 https://www.realcan.cn/newscenter')
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(promptWithQueue('采集 https://www.realcan.cn/newscenter'))
   expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
   await w.get('[data-testid="site-script-system-prompt"]').setValue('更新后的系统提示词')
   w.unmount(); await flushPromises()
-  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ repositoryId: defaultRepo.repoId, systemPrompt: '更新后的系统提示词', userPrompt: '采集 https://www.realcan.cn/newscenter', fileNameMode: 'queue' }) }))
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ repositoryId: defaultRepo.repoId, systemPrompt: '更新后的系统提示词', userPrompt: promptWithQueue('采集 https://www.realcan.cn/newscenter'), fileNameMode: 'queue' }) }))
   const saved = vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mock.calls.at(-1)![0].generation!
   expect(saved).not.toHaveProperty('workspaceMode'); expect(saved).not.toHaveProperty('workspacePath'); expect(saved).not.toHaveProperty('codeDirectory')
 })
@@ -271,7 +321,7 @@ it('连续编辑提示词合并为一次自动保存，保存失败明确显示'
   await w.get('[data-testid="site-script-prompt"]').setValue('最终修改')
   await new Promise(resolve => setTimeout(resolve, 750)); await flushPromises()
   expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledOnce()
-  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ userPrompt: '最终修改' }) }))
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ userPrompt: promptWithQueue('最终修改') }) }))
   expect(w.text()).toContain('自动保存失败：网络断开')
   expect(w.get('[data-testid="site-script-prompt"]').attributes('disabled')).toBeUndefined()
   w.unmount()
@@ -409,11 +459,11 @@ it('选择其他命名提示词并保存选择，已有代码恢复原选择和�
   const w = mountDialog({ configType: '90', initialPrompt: '抓取公告' }); await flushPromises()
   expect(w.getComponent(PromptTemplatePicker).props('modelValue')).toBe(8)
   w.getComponent(PromptTemplatePicker).vm.$emit('select', 9); await flushPromises()
-  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe('公告需求 抓取公告')
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(promptWithQueue('公告需求 抓取公告'))
   await w.get('[data-testid="site-script-manual"]').trigger('click')
   await w.get('[aria-label="可编辑 Python 代码"]').setValue(sampleCode)
   await w.get('[data-testid="site-script-publish"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ promptTemplateId: 9, userPrompt: '公告需求 抓取公告' }))
+  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ promptTemplateId: 9, userPrompt: promptWithQueue('公告需求 抓取公告') }))
   w.unmount()
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([{ ...oldVersion, promptTemplateId: 9 }])
   vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...oldVersion, promptTemplateId: 9, systemPrompt: '已保存系统提示词', code: sampleCode })
@@ -435,7 +485,7 @@ it('按节点类型读取默认代码模板，替换变量；已有版本的提�
   vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...oldVersion, code: sampleCode, systemPrompt: '已保存系统提示词' })
   const existing = mountDialog({ configType: '90' }); await flushPromises()
   expect((existing.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe('已保存系统提示词')
-  expect((existing.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(oldVersion.prompt)
+  expect((existing.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(promptWithQueue(oldVersion.prompt))
   existing.unmount()
 })
 it('已保存代码路径在新标签页打开对应仓库文件，未保存的位置不提供链接', async () => {
@@ -709,12 +759,12 @@ it('系统和用户提示词独立编辑，生成及保存均提交两份内容�
   await wrapper.get('[data-testid="site-script-system-prompt"]').setValue('系统：保留指定函数接口')
   await wrapper.get('[data-testid="site-script-prompt"]').setValue('用户：抓取标题和发布日期')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: '用户：抓取标题和发布日期', prompt: '用户：抓取标题和发布日期' }), expect.any(AbortSignal), expect.any(Function))
+  expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: promptWithQueue('用户：抓取标题和发布日期'), prompt: promptWithQueue('用户：抓取标题和发布日期') }), expect.any(AbortSignal), expect.any(Function))
   await wrapper.get('[data-testid="site-script-publish"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: '用户：抓取标题和发布日期' }))
+  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: promptWithQueue('用户：抓取标题和发布日期') }))
   await wrapper.get('[data-testid="site-script-reset-system-prompt"]').trigger('click')
   expect((wrapper.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT)
-  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe('用户：抓取标题和发布日期')
+  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(promptWithQueue('用户：抓取标题和发布日期'))
   wrapper.unmount()
 })
 it('已有版本恢复各自提示词，修改系统提示词后标记待保存，空提示词阻止生成', async () => {
@@ -723,7 +773,7 @@ it('已有版本恢复各自提示词，修改系统提示词后标记待保存�
   vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...saved, code: sampleCode })
   const wrapper = mountDialog(); await flushPromises()
   expect((wrapper.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe(saved.systemPrompt)
-  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(saved.userPrompt)
+  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(promptWithQueue(saved.userPrompt))
   expect(wrapper.text()).toContain('已保存并提交 Git')
   await wrapper.get('[data-testid="site-script-system-prompt"]').setValue('修改后的系统规则')
   expect(wrapper.text()).toContain('有修改待保存')
@@ -752,7 +802,7 @@ it('首次生成直接进入编辑区，重新生成可切换预览且保留手�
   await wrapper.get('[data-testid="site-script-candidate-tab"]').trigger('click')
   await wrapper.get('[data-testid="site-script-adopt"]').trigger('click')
   expect((wrapper.get('[aria-label="可编辑 Python 代码"]').element as HTMLTextAreaElement).value).toContain('return [1]')
-  expect(generateSiteScript).toHaveBeenCalledWith({ taskId: expect.any(String), interfaceId: 'legacy', prompt: '抓取新闻列表', userPrompt: '抓取新闻列表', systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, url: 'https://www.realcan.cn/newscenter', sampleId: 'www.realcan.cn.py' }, expect.any(AbortSignal), expect.any(Function))
+  expect(generateSiteScript).toHaveBeenCalledWith({ taskId: expect.any(String), interfaceId: 'legacy', prompt: promptWithQueue('抓取新闻列表'), userPrompt: promptWithQueue('抓取新闻列表'), systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, url: 'https://www.realcan.cn/newscenter', sampleId: 'www.realcan.cn.py' }, expect.any(AbortSignal), expect.any(Function))
   expect(vi.mocked(generateSiteScript).mock.calls[0]![0].taskId).not.toBe(vi.mocked(generateSiteScript).mock.calls[1]![0].taskId)
   wrapper.unmount()
 })
@@ -768,7 +818,7 @@ it('已有代码读取原仓库及代码，预览按目录保存的位置', asyn
   expect((wrapper.get('[data-testid="site-script-repository"]').element as HTMLSelectElement).value).toBe(webRepo.repoId)
   expect(wrapper.get('[data-testid="site-script-storage-path"]').text()).toBe('E:/ce/web-code/default/www.realcan.cn.py')
   expect((wrapper.get('[aria-label="可编辑 Python 代码"]').element as HTMLTextAreaElement).value).toBe(sampleCode)
-  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(oldVersion.prompt)
+  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(promptWithQueue(oldVersion.prompt))
   expect((wrapper.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT)
   expect((wrapper.get('[data-testid="site-script-publish"]').element as HTMLButtonElement).disabled).toBe(false)
   expect(wrapper.get('[data-testid="site-code-versions"]').text()).not.toContain('队列通用')

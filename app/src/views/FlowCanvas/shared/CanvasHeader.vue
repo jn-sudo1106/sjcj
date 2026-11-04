@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
-import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
+import { normalizeSourceView, resolveSourceIssueReturn, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { flushNodeConfigs } from '../inspector/nodeConfigAutosave'
@@ -205,7 +205,9 @@ function openOwningFlow() {
  * 归属网站按既有优先级取：源上下文 > URL。游离源（无网站归属，见 0824-11 §1.2c-3）
  * 没有可回的源视图，退回网站列表。
  */
+const sourceIssueReturn = computed(() => resolveSourceIssueReturn(router, route.query.sourceIssueReturn))
 function backToSourceView() {
+  if (sourceIssueReturn.value) { void router.push(sourceIssueReturn.value); return }
   const siteId = src.value?.siteId || String(route.query.siteId ?? '')
   if (siteId) router.push({ path: '/canvas', query: { siteId, view: 'source' } })
   else router.push('/collect')
@@ -243,7 +245,7 @@ function srcSnatch() {
 
 <template>
   <div v-if="src" class="rc-canvas-head">
-    <button class="rc-btn ghost" type="button" @click="backToSourceView">← 返回源视图</button>
+    <button class="rc-btn ghost" type="button" @click="backToSourceView">← {{ sourceIssueReturn ? '返回问题列表' : '返回源视图' }}</button>
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'overview' }" type="button" @click="switchView('overview')">概览</button>
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程</button>

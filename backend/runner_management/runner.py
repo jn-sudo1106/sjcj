@@ -140,6 +140,7 @@ class Runner:
             raise ValueError("该目录已经登记，不可覆盖实例身份")
         payload = {
             "code": code, "installDirectory": str(self.directory),
+            "hostName": socket.gethostname(),
             "ipAddress": ip or self.ip_address,
             "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy"],
             **self.os_info,
@@ -381,6 +382,7 @@ class Runner:
         ]
         return {
             'ipAddress': self.ip_address,
+            'hostName': socket.gethostname(),
             **self.os_info,
             'runnerDigest': os.getenv('RUNNER_RELEASE_DIGEST', 'source-local'),
             'launcherVersion': os.getenv('PROGRAM_LAUNCHER_VERSION', ''),

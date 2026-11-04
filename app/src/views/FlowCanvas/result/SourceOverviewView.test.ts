@@ -26,6 +26,29 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('多选源后从操作栏登记问题，向弹窗传入所选源，不增加行内问题图标', async () => {
+    useAuthStore().roles = ['admin']
+    const second = { ...source, sourceId: 'src-2', name: '第二个源' }
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [source, second] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="batch-register-issue"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-register-issue"]').trigger('click')
+    const dialog = wrapper.findComponent({ name: 'RegisterSourceIssuesDialog' })
+    expect(dialog.props('sources')).toEqual([
+      { sourceId: 'src-1', sourceName: '当前网站源', siteId: 'site-current' },
+      { sourceId: 'src-2', sourceName: '第二个源', siteId: 'site-current' },
+    ])
+    expect(wrapper.findAll('.sov-name-content button')).toHaveLength(2)
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'RegisterSourceIssuesDialog' }).exists()).toBe(false)
+    expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('2')
+    wrapper.unmount()
+  })
+
   it('网站与来源组按服务端组合筛选，切组重置分页 / 勾选；清空查询不解除组范围', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 60, list: [source] })
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current', scopeSourceGroupId: '3' }, global: { components: { ElPagination } } })
@@ -1103,6 +1126,51 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
       sorted: undefined,
       type: undefined,
     }))
+  })
+
+  // 配置 ID 列只在来源组成员表里显示（showConfigCol = !!scopeSourceGroupId），排序也只在那一处给。
+  it('来源组成员表支持按「配置 ID」排序：升序 -> 降序 -> 取消排序', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceGroupId: 'g1' } })
+    await flushPromises()
+
+    const btn = wrapper.get('[data-testid="sort-config-id"]')
+    expect(btn.classes()).not.toContain('ascending')
+    expect(btn.attributes('title')).toBe('未排序')
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.classes()).toContain('ascending')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'CONFIG_ID',
+      sorted: 1,
+      type: 'ASC',
+    }))
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.classes()).toContain('descending')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'CONFIG_ID',
+      sorted: -1,
+      type: 'DESC',
+    }))
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.classes()).not.toContain('descending')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: undefined,
+      sorted: undefined,
+      type: undefined,
+    }))
+  })
+
+  it('普通源列表（无来源组范围）不出现配置 ID 排序入口', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="sort-config-id"]').exists()).toBe(false)
   })
 })
 

@@ -17,6 +17,7 @@ async function mountAt(query: Record<string, string> = {}, roles: string[] = [])
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
+  // 旧用户管理书签继续携带当前会话，具体权限由用户权限设置页判断。
   useAuthStore().roles = roles
   const wrapper = mount(Settings, { global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
@@ -60,7 +61,7 @@ describe('系统设置 · tab 壳', () => {
   it('系统设置只剩机器与目录类 tab（来源组已迁回源管理，人与权限类已迁到用户权限设置）', async () => {
     const { wrapper } = await mountAt()
 
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '运行日志', '程序版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })
@@ -75,7 +76,7 @@ describe('系统设置 · tab 壳', () => {
   it('部署构建同样展示全部设置入口，直达服务器页签不回落', async () => {
     vi.stubEnv('DEV', false)
     const { wrapper, router } = await mountAt({ tab: 'runners' })
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '运行日志', '程序版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
     expect(router.currentRoute.value.query).toEqual({ tab: 'runners' })
   })
@@ -105,9 +106,20 @@ describe('系统设置 · tab 壳', () => {
     expect(router.currentRoute.value.query).toEqual({})
   })
 
-  it.each([['admin'], ['read']])('旧用户管理书签跳到用户权限设置（%s）', async (role) => {
-    const { router } = await mountAt({ tab: 'users' }, [role])
+  it('admin 的旧用户管理书签跳到用户权限设置，系统设置不再展示重复入口', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'users' }, ['admin'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(router.currentRoute.value.path).toBe('/user-permission')
     expect(router.currentRoute.value.query).toEqual({ tab: 'users' })
+    expect(wrapper.find('[data-testid="settings-user-management"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('普通 read 账号的旧用户管理书签转交用户权限设置判断权限', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'users' }, ['read'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).not.toContain('用户管理')
+    expect(router.currentRoute.value.path).toBe('/user-permission')
+    expect(router.currentRoute.value.query).toEqual({ tab: 'users' })
+    wrapper.unmount()
   })
 })

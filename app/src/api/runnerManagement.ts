@@ -333,6 +333,38 @@ export interface RuntimeConfigurationInput {
   retryPolicy?: RunnerRetryPolicy
 }
 
+export type DeploymentEnvironment = 'test' | 'production'
+export interface DeploymentResourceRule {
+  resourceId?: string; isDefault?: boolean; resourceName?: string
+  configType: string; configTypeName: string; environment: DeploymentEnvironment | 'both'
+  runnerId: string; enabled: boolean
+  deploymentDirectory?: string
+  entryPoint?: string
+  entryPoints?: string[]
+}
+export interface NodeDeploymentContext {
+  sourceId: string; flowId: string; stepId: string; configId: string; configType: string; environment: DeploymentEnvironment
+  queueName?: string; archiveId?: string
+}
+export interface NodeDeploymentResource extends NodeDeploymentContext {
+  resourceId: string; revision: string; defaultResourceId: string; effectiveResourceId: string
+  resources: DeploymentResourceRule[]
+  targetPath?: string; deploymentDirectory?: string; resourceDirectory?: string; pathError?: string
+}
+export interface GeneratedDeploymentJob {
+  jobId: string; sourceId: string; flowId: string; stepId: string; configId: string; configType: string
+  environment: DeploymentEnvironment; archiveId: string; taskId: string; gitCommit: string
+  status: 'waiting_resource' | 'queued' | 'delivering' | 'success' | 'failed' | 'superseded'
+  runnerId: string; runnerName?: string; runnerIp?: string; instanceDirectory?: string
+  deploymentId: string; deliveryId: string; runtimeId: string; targetPath: string; installedPath: string
+  message: string; createdAt: string; updatedAt: string; parentJobId: string; automatic: boolean; rollback: boolean
+  repositoryId?: string; repositoryName?: string; gitDirectory?: string; resourceDirectory?: string
+}
+export interface GeneratedDeploymentQuery {
+  sourceId?: string; flowId?: string; stepId?: string; configId?: string
+  environment?: DeploymentEnvironment; status?: string; page?: number; size?: number
+}
+
 export interface RuntimeLogRecord {
   recordId: string
   runnerId: string
@@ -606,6 +638,13 @@ export interface ModelInterfaceTestResult {
 }
 
 export const runnerManagementApi = {
+  deploymentResources: () => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources'),
+  nodeDeploymentResource: (context: NodeDeploymentContext) => request<NodeDeploymentResource>('/node-deployment-resource?' + new URLSearchParams(Object.entries(context).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))),
+  saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
+  saveDeploymentResources: (body: { items: DeploymentResourceRule[]; revision: string }) => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources', 'POST', body),
+  generatedDeployments: (query: GeneratedDeploymentQuery = {}) => request<{ items: GeneratedDeploymentJob[]; total: number }>('/deployment-jobs?' + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))),
+  deployGeneratedArchive: (body: { archiveId: string; configId: string; sourceId: string; flowId: string; stepId: string }) => request<GeneratedDeploymentJob>('/deployment-jobs', 'POST', body),
+  generatedDeploymentAction: (jobId: string, action: 'publish' | 'retry' | 'rollback') => request<GeneratedDeploymentJob>(`/deployment-jobs/${encodeURIComponent(jobId)}/${action}`, 'POST', {}),
   codeGenerationTasks: async (query: { configId?: string; sourceId?: string; taskId?: string; state?: string; page: number; size: number }) => {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))
     const result = await request<{ list: unknown[]; total: number }>('/code-generation/tasks?' + params)
@@ -673,8 +712,11 @@ export const runnerManagementApi = {
   deploymentConfigurations: (keyword = '') => list<DeploymentConfiguration>(`/deployment-configurations?keyword=${encodeURIComponent(keyword)}`),
   deploymentConfiguration: (id: string) => request<DeploymentConfiguration>(`/deployment-configurations/${encodeURIComponent(id)}`),
   saveDeploymentConfiguration: (layout: DeploymentConfiguration) => request<DeploymentConfiguration>(layout.deploymentId ? `/deployment-configurations/${encodeURIComponent(layout.deploymentId)}` : '/deployment-configurations', 'POST', layout),
+  deleteDeploymentConfiguration: (id: string, revision: string) => request<{ ok: true }>(`/deployment-configurations/${encodeURIComponent(id)}?revision=${encodeURIComponent(revision)}`, 'DELETE'),
   ensureNodeDeployment: (input: { sourceNode: DeploymentSourceNode; queueName: string; scriptDigest?: string }) => request<DeploymentConfiguration>('/deployment-configurations/from-node', 'POST', input),
   runtimeConfigurations: () => list<RuntimeConfiguration>('/runtime-configurations'),
+  runtimeEntry: (id: string) => request<{ files: string[]; entryPoint: string; revision: string; layoutRevision: string }>(`/runtime-configurations/${encodeURIComponent(id)}/entry`),
+  saveRuntimeEntry: (id: string, body: { entryPoint: string; revision: string; layoutRevision: string }) => request<RuntimeConfiguration>(`/runtime-configurations/${encodeURIComponent(id)}/entry`, 'POST', body),
   saveRuntimeConfiguration: (input: RuntimeConfigurationInput) => request<RuntimeConfiguration>('/runtime-configurations', 'POST', input),
   startRuntimeProgram: (id: string, revision: string) => request<RuntimeConfiguration>(`/runtime-configurations/${encodeURIComponent(id)}/start`, 'POST', { revision }),
   stopRuntimeProgram: (id: string, revision: string) => request<RuntimeConfiguration>(`/runtime-configurations/${encodeURIComponent(id)}/stop`, 'POST', { revision }),

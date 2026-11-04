@@ -14,8 +14,14 @@ export interface EndpointSpec {
 }
 
 export const ENDPOINTS: EndpointSpec[] = [
-  /* ── source 源（目标 36 / 收录 37，含 2026-10-30 新增 categorySources） ── */
+  /* ── source 源（收录 55 条） ── */
   { path: 'source/sourcePaged', desc: '源分页列表', impl: true, live: true },
+  // 源问题及其工作区详情按调用强制 HTTP，端点清单用于环境写保护，不依赖 live 标记。
+  { path: 'source/sourceDetailScoped', desc: '源工作区受限详情' },
+  { path: 'source/issue/paged', desc: '源问题分页' },
+  { path: 'source/issue/detail', desc: '源问题详情' },
+  { path: 'source/issue/addBatch', desc: '批量登记源问题', danger: true },
+  { path: 'source/issue/handle', desc: '标记源问题已处理', danger: true },
   { path: 'source/sourceDetail', desc: '源详情', impl: true, live: true },
   { path: 'source/sourceSame', desc: '同站源下拉（数据表页选源用）', impl: true, live: true },
   { path: 'source/categoryTree', desc: '源分类目录树（计数）', impl: true },

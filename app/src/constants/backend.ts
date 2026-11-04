@@ -16,6 +16,13 @@ export const TEST_SYNC_PLATFORM_PROXY_TARGET = 'http://124.223.180.186:9999'
 /** 写保护 / 顶栏「生产环境」徽标按主机名判定；dev 与 test 默认目标都不在这台，不触发守卫。 */
 export const PRODUCTION_BACKEND_HOSTS = ['115.227.21.133']
 
+/** 源问题写保护的直连目标和网关入口，含网关候选容器直连端口。 */
+export const SOURCE_ISSUE_WRITE_BLOCKED_HOSTS = [...PRODUCTION_BACKEND_HOSTS, '118.25.96.217', 'app217']
+export const SOURCE_ISSUE_WRITE_BLOCKED_GATEWAYS = [
+  '47.120.11.60:2806', '47.120.11.60:806', '47.120.11.60:8086',
+  '47.120.11.60:2807', '47.120.11.60:807', '47.120.11.60:8087',
+]
+
 /**
  * 允许走真实「新建采集」（site/add → snatchSave → bindSite）的后端主机。
  * 生产 217（原「仅生产可新建」）＋ 本地开发环境 186（2026-10-12：开发环境完整后端，新建/改/删全放行）。

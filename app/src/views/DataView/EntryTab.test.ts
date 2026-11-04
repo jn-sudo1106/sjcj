@@ -82,6 +82,40 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy).toHaveBeenLastCalledWith(expect.objectContaining({ entryTypeId: undefined, name: undefined, enable: undefined }))
   })
 
+  it.each(['TB_sw_file_resource', '1.5', '2147483648'])('表 ID 输入 %s 时先提示，保留列表并阻止按钮及回车请求', async (value) => {
+    const paged = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [{ tableId: '6100048', name: '申万_文件资源表', tableName: 'sense_data.TB_sw_file_resource', fields: [] }] })
+    const warning = vi.spyOn(ElMessage, 'warning')
+    warning.mockClear()
+    await mountTab()
+    await waitForLoad()
+    const calls = paged.mock.calls.length
+    const input = wrapper.get('input[placeholder="表 ID"]')
+    await input.setValue(value)
+    await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('表 ID'))
+    expect(paged).toHaveBeenCalledTimes(calls)
+    expect(wrapper.text()).toContain('申万_文件资源表')
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledTimes(calls)
+    await input.setValue(' 6100048 ')
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ entryTypeId: '6100048' }))
+  })
+
+  it('深链接中的非法表 ID 也在请求前提示', async () => {
+    const paged = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
+    const warning = vi.spyOn(ElMessage, 'warning')
+    paged.mockClear()
+    warning.mockClear()
+    await mountTab({ entryTypeId: 'TB_sw_file_resource' })
+    await waitForLoad()
+    expect(paged).not.toHaveBeenCalled()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('表 ID 只能输入数字'))
+  })
+
   it('库类型默认全部；切 CK 保留名称条件，翻页与排序继续带类型，重置恢复全部', async () => {
     const paged = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 60, list: [] })
     await mountTab()

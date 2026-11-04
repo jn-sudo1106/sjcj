@@ -239,6 +239,34 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
 
 // 返回按钮（0828 W5-6/7 合并）：不回网站列表，回**当前源所属网站**的源视图。
 describe('CanvasHeader · 返回源视图', () => {
+  it('从源问题进入时返回问题列表，恢复日期、状态与页码', async () => {
+    const wrapper = await mountHeader()
+    const router = wrapper.vm.$router
+    router.addRoute({ path: '/monitor', component: { template: '<div />' } })
+    useFlowStore().loadFromSource({ sourceId: 'source-a', name: '源 A', url: '', configId: '', mainTable: '', owner: '', state: 'C', siteId: '7' }, [], null)
+    const back = '/monitor?tab=sourceIssues&issueStatus=handled&issueStart=2026-11-01&issuePage=2'
+    await router.replace({ path: '/canvas', query: { sourceId: 'source-a', view: 'overview', sourceIssueReturn: back } })
+    await flushPromises()
+    const button = wrapper.findAll('button').find(button => button.text().includes('返回问题列表'))!
+    await button.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(back)
+    wrapper.unmount()
+  })
+
+  it('问题返回地址不允许跳到外部或其他管理页面', async () => {
+    const wrapper = await mountHeader()
+    const router = wrapper.vm.$router
+    useFlowStore().loadFromSource({ sourceId: 'source-a', name: '源 A', url: '', configId: '', mainTable: '', owner: '', state: 'C', siteId: '7' }, [], null)
+    await router.replace({ path: '/canvas', query: { sourceId: 'source-a', sourceIssueReturn: 'https://example.com/monitor?tab=sourceIssues' } })
+    await flushPromises()
+    const button = wrapper.findAll('button').find(button => button.text().includes('返回源视图'))!
+    await button.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ siteId: '7', view: 'source' })
+    wrapper.unmount()
+  })
+
   it('有所属网站时回该网站的源视图', async () => {
     const wrapper = await mountHeader()
     const flow = useFlowStore()

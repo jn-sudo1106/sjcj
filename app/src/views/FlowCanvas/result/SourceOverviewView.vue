@@ -25,6 +25,8 @@ import {
   visibleIssueTags,
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
+import RegisterSourceIssuesDialog from '@/views/Monitor/sourceIssues/RegisterSourceIssuesDialog.vue'
+import type { SourceIssueSource } from '@/api/sourceIssues'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
 import EditSourceDialog from '@/views/FlowCanvas/source/EditSourceDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
@@ -667,6 +669,13 @@ function sourceState(source: Source) {
 // 复用已有接口，不新起批量端点：发抓取用 sendSnatchWithParam（与单源同一个，ids 传多个），
 // 启停用 changeSourceEnable 逐个调（后端没有批量启停端点，旧平台源列表页也是自己循环调的）。
 const selectedIds = ref<string[]>([])
+const issueRegistrationSources = ref<SourceIssueSource[]>([])
+function registerSelectedIssues() {
+  if (auth.role !== 'admin') return
+  issueRegistrationSources.value = selectedSources.value.map(source => ({
+    sourceId: source.sourceId, sourceName: source.name, siteId: source.siteId, siteName: source.siteName,
+  }))
+}
 // ---- 1008-04 来源组批量操作（勾选后「选中来源 ▾」下拉）----
 const sourceGroupOpsOpen = ref(false)
 const flowConfigOpen = ref(false)
@@ -1527,6 +1536,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
             @clear-remark="clearSelectedRemark"
           />
         </div>
+        <button v-if="auth.role === 'admin'" class="sov-btn" type="button" data-testid="batch-register-issue" @click="registerSelectedIssues">登记问题</button>
         <button class="sov-btn" type="button" data-testid="batch-enable" @click="batchToggleEnable(false)">启用</button>
         <button class="sov-btn danger" type="button" data-testid="batch-disable" @click="batchToggleEnable(true)">停用</button>
         <button class="sov-btn ghost" type="button" data-testid="batch-clear" @click="clearSelection">取消</button>
@@ -1592,7 +1602,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 @keydown="resizeUrlByKey"
                 @click.stop
               />
-            </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol">配置 ID</th>
+            </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol"><button class="sov-sort" :class="sortClass('CONFIG_ID')" type="button" data-testid="sort-config-id" :title="sortLabel('CONFIG_ID')" @click="toggleSort('CONFIG_ID')">配置 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('tags')">标签</th>
             <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>
@@ -1756,6 +1766,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <button v-if="lastSavedTag" type="button" data-testid="source-mark-view-batch" @click="viewMarkedBatch">查看这一批</button>
       <button class="sov-toast-close" type="button" aria-label="关闭提示" @click="hideMarkToast">×</button>
     </div>
+    <RegisterSourceIssuesDialog v-if="auth.role === 'admin' && issueRegistrationSources.length" :sources="issueRegistrationSources" @close="issueRegistrationSources = []" />
     <EditSourceMarkDialog
       v-if="editTarget"
       :source="editTarget"

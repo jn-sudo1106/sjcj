@@ -4,7 +4,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessageBox } from 'element-plus'
-import { runnerManagementApi, type DeploymentConfiguration } from '@/api/runnerManagement'
+import { runnerManagementApi, type DeploymentConfiguration, type RuntimeConfiguration } from '@/api/runnerManagement'
 import { useAuthStore } from '@/stores/auth'
 import { configApi, flowCenterApi } from '@/api'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
@@ -12,12 +12,13 @@ import DeploymentNodePicker from './DeploymentNodePicker.vue'
 import DeploymentConfigurationList from './DeploymentConfigurationList.vue'
 
 vi.mock('@/api', () => ({ configApi: { configDetail: vi.fn(), configDetailRaw: vi.fn() }, sourceApi: { sourcePaged: vi.fn() }, flowCenterApi: { paged: vi.fn(), steps: vi.fn() } }))
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { siteCodeCatalog: vi.fn(), codeRepositories: vi.fn(), deploymentConfigurations: vi.fn(), deploymentConfiguration: vi.fn(), saveDeploymentConfiguration: vi.fn(), codeRepositoryTree: vi.fn(), codeRepositoryFileMetadata: vi.fn(), directoryLayout: vi.fn(), runtimeConfigurations: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { siteCodeCatalog: vi.fn(), codeRepositories: vi.fn(), deploymentConfigurations: vi.fn(), deploymentConfiguration: vi.fn(), saveDeploymentConfiguration: vi.fn(), deleteDeploymentConfiguration: vi.fn(), codeRepositoryTree: vi.fn(), codeRepositoryFileMetadata: vi.fn(), directoryLayout: vi.fn(), runtimeConfigurations: vi.fn() } }))
 const origin = { flowId: 'flow1', flowName: '新闻流程', stepId: 'step1', nodeName: '列表抓取', configId: '123' }
 const base: DeploymentConfiguration = { deploymentId: 'a'.repeat(32), name: '新闻生产配置', pathStyle: 'config', legacyType: 'config', legacyOwner: '123', codeId: 'code1', configId: '123', queueName: 'news_list', siteHost: '', revision: 'v1', directoryTemplate: '{configId}/prod', entryPoint: 'main.py', nodes: [{ id: 'main', parentId: '', name: 'main.py', kind: 'file', repoId: 'repo1', sourcePath: 'src/main.py', sourceType: 'file', gitCommit: 'a'.repeat(40) }] }
 const second = { ...base, deploymentId: 'b'.repeat(32), name: '公共模块', pathStyle: 'custom' as const, configId: '', directoryTemplate: 'shared/python', entryPoint: '' }
 beforeEach(() => {
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([])
+  vi.mocked(runnerManagementApi.deleteDeploymentConfiguration).mockResolvedValue({ ok: true })
   vi.mocked(flowCenterApi.paged).mockResolvedValue({ list: [], total: 0 })
   vi.mocked(configApi.configDetail).mockResolvedValue({ configId: '123', name: '列表配置', topic: 'news_list', enabled: true })
   vi.mocked(runnerManagementApi.directoryLayout).mockResolvedValue(structuredClone(base))
@@ -46,6 +47,45 @@ it('旧节点配置链接仍能定位，返回列表后点击名称打开另一�
   expect(runnerManagementApi.deploymentConfiguration).toHaveBeenCalledWith(second.deploymentId)
   expect(wrapper.get('[data-testid="deployment-name"]').element).toHaveProperty('value', second.name)
   wrapper.unmount()
+})
+it('列表确认后删除指定部署并携带修订号，保留其他配置和当前查询', async () => {
+  vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  const w = await setup({})
+  await w.get('input[aria-label="查询部署名称"]').setValue('新闻')
+  await w.get('[data-testid="deployment-search"]').trigger('click')
+  await w.get(`[data-testid="deployment-delete-${base.deploymentId}"]`).trigger('click'); await flushPromises()
+  expect(runnerManagementApi.deleteDeploymentConfiguration).toHaveBeenCalledWith(base.deploymentId, base.revision)
+  expect(w.find(`[data-testid="deployment-open-${base.deploymentId}"]`).exists()).toBe(false)
+  expect(w.get('input[aria-label="查询部署名称"]').element).toHaveProperty('value', '新闻')
+  expect(w.getComponent(DeploymentConfigurationList).props('items').map(item => item.deploymentId)).toEqual([second.deploymentId])
+  w.unmount()
+})
+it('取消删除不请求接口，删除失败保留原行和后端错误', async () => {
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm' as never)
+  const w = await setup({})
+  const button = () => w.get(`[data-testid="deployment-delete-${base.deploymentId}"]`)
+  await button().trigger('click'); await flushPromises()
+  expect(runnerManagementApi.deleteDeploymentConfiguration).not.toHaveBeenCalled()
+  vi.mocked(runnerManagementApi.deleteDeploymentConfiguration).mockRejectedValue(new Error('部署配置已更新，请刷新列表后再删除'))
+  await button().trigger('click'); await flushPromises()
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(w.text()).toContain('部署配置已更新')
+  expect(w.find(`[data-testid="deployment-open-${base.deploymentId}"]`).exists()).toBe(true)
+  w.unmount()
+})
+it('绑定机器或绑定查询失败时禁用删除，只读账号不展示删除入口', async () => {
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ deploymentId: base.deploymentId, runnerId: 'runner-1' } as RuntimeConfiguration])
+  const bound = await setup({})
+  expect(bound.get(`[data-testid="deployment-delete-${base.deploymentId}"]`).attributes('disabled')).toBeDefined()
+  expect(bound.get(`[data-testid="deployment-delete-${base.deploymentId}"]`).attributes('title')).toContain('移除机器绑定')
+  bound.unmount()
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockRejectedValue(new Error('offline'))
+  const failed = await setup({})
+  expect(failed.get(`[data-testid="deployment-delete-${base.deploymentId}"]`).attributes('disabled')).toBeDefined()
+  failed.unmount()
+  const readonly = await setup({}, false)
+  expect(readonly.find(`[data-testid="deployment-delete-${base.deploymentId}"]`).exists()).toBe(false)
+  readonly.unmount()
 })
 it('默认进入列表，组合查询与分页在编辑返回后保留，查询失败不会误显示机器数为零', async () => {
   const wrapper = await setup({})

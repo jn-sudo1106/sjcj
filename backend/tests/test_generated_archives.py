@@ -94,6 +94,17 @@ class GeneratedArchivesTest(unittest.TestCase):
         self.assertEqual(blocked['archive']['status'], 'failed')
         self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = 2')
 
+    def test_direct_generation_persists_source_node_file_relations_without_task(self):
+        service, repo, origin, payload, calls = self.fixture()
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'direct-1',
+            'sourceContext': {'sourceId': '430024910', 'flowId': '21000040', 'stepId': '41895'}})
+        rows = self.request('/api/runner-management/source-code-relations?sourceId=430024910')['items']
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row['taskId'] == 'direct-1' and row['configId'] == '101' for row in rows))
+        self.assertTrue(all(row['gitCommit'] == result['archive']['gitCommit'] for row in rows))
+        with self.app.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) AS total FROM generation_jobs').fetchone()['total'], 0)
+
     def test_push_retry_does_not_regenerate_and_commit_is_idempotent(self):
         service, repo, origin, payload, calls = self.fixture()
         push = self.app.push_git

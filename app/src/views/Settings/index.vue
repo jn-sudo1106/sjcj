@@ -17,6 +17,7 @@ import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 import ProgramVersionsTab from './ProgramVersionsTab.vue'
+import DeploymentResourcesTab from './DeploymentResourcesTab.vue'
 
 // 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
 // 各环境展示同一套入口，菜单可见性统一由账号权限决定（2026-10-26）。
@@ -28,6 +29,7 @@ const ALL_TABS: { key: string; label: string; permission: string; comp: Componen
   { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab },
   { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
   { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab },
+  { key: 'deployment-resources', label: '部署资源', permission: 'settings:assignments', comp: DeploymentResourcesTab },
   { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab },
   { key: 'releases', label: '程序版本', permission: 'settings:releases', comp: ProgramVersionsTab },
 ]

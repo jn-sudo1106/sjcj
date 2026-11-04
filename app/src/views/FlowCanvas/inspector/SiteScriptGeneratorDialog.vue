@@ -8,8 +8,10 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
 import { nodePromptsAvailable } from '@/constants/deployGates'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
+import NodeDeploymentPanel from './NodeDeploymentPanel.vue'
 import { createGenerationTaskId, matchingGenerationGitBinding, nodeGenerationCodeDirectory } from '@/utils/generationWorkspace'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
+import { withSiteScriptOutputFields, withSiteScriptQueuePrompt, type SiteScriptOutputField } from '@/utils/flow/siteScriptOutputPrompt'
 
 const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL 编写完整的 Python 新闻抓取代码。
 提供 scrape(url) 函数，返回新闻字典列表，字段包含 title、date、url、summary、content。
@@ -18,7 +20,7 @@ const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL
 保持样例的函数接口和返回结构，根据目标网站调整页面选择器，不照搬样例站点的域名。
 只生成抓取代码，不包含 MQ、数据库、流程调度逻辑；导入模块时不要发起网络请求。`
 
-const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string>; sourceId?: string; flowId?: string; stepId?: string }>()
+const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string>; sourceId?: string; flowId?: string; stepId?: string; outputFields?: SiteScriptOutputField[]; outputTable?: string }>()
 const emit = defineEmits<{ saved: [version: PublishedScript, configId: string, queueName: string] }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
@@ -309,7 +311,15 @@ function clearDraft() {
 function syncPromptDefaults(template?: NodePromptTemplate) {
   const variables = { ...props.templateVariables, url: props.initialUrl, describe: props.initialPrompt, config_id: props.configId || '', queue_name: props.queueName || '' }
   defaultSystemPrompt.value = template ? fillNodePrompt(template.systemPrompt, variables) : DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
-  defaultUserPrompt.value = template ? fillNodePrompt(template.userPromptTemplate || DEFAULT_PROMPT, variables) : DEFAULT_PROMPT
+  defaultUserPrompt.value = outputPrompt(template ? fillNodePrompt(template.userPromptTemplate || DEFAULT_PROMPT, variables) : DEFAULT_PROMPT)
+}
+
+function outputPrompt(text: string) { return withSiteScriptQueuePrompt(withSiteScriptOutputFields(text, props.outputFields, props.outputTable), props.queueName) }
+function syncOutputPrompt() {
+  const clean = promptSnapshot.value === promptTextKey()
+  prompt.value = outputPrompt(prompt.value)
+  defaultUserPrompt.value = outputPrompt(defaultUserPrompt.value)
+  if (clean) promptSnapshot.value = promptTextKey()
 }
 
 async function initialize() {
@@ -412,6 +422,8 @@ async function initialize() {
     taskConfigContext = context
     taskConfigStatus.value = taskConfigResult.status === 'fulfilled' && taskConfigResult.value?.generation ? '生成配置已自动保存' : '修改后自动保存'
     taskConfigReady = taskConfigResult.status === 'fulfilled'
+    syncOutputPrompt()
+    if (newContext) promptSnapshot.value = promptTextKey()
   }
 }
 
@@ -472,12 +484,15 @@ watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId
   pendingTaskConfig = { session: sessionId, body: { configId: props.configId, generation: {
     interfaceId: modelInterfaceId.value, repositoryId: repositoryId.value, directoryId: directoryId.value,
     configType: generationConfigType.value, queueName: props.queueName || '', systemPrompt: systemPrompt.value,
-    userPrompt: prompt.value, url: url.value, fileNameMode: fileNameMode.value,
+    userPrompt: outputPrompt(prompt.value), url: url.value, fileNameMode: fileNameMode.value,
     destinationMode: destinationMode.value,
   } } }
   taskConfigStatus.value = '等待自动保存…'
   taskConfigTimer = setTimeout(flushTaskConfig, 700)
 }, { flush: 'sync' })
+watch([() => props.outputFields, () => props.outputTable], () => {
+  if (!loading.value) syncOutputPrompt()
+}, { deep: true })
 onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++; filePreviewSequence++ })
 
 async function previewAssociatedFile(target: 'saved' | 'source') {
@@ -548,7 +563,7 @@ async function loadVersion(version: SiteCodeVersion, restoreDestination = true) 
     selectedPromptId.value = result.promptTemplateId || 0
     syncPromptDefaults(promptTemplates.value.find(item => item.promptId === selectedPromptId.value))
     code.value = result.code
-    prompt.value = (result.userPrompt ?? result.prompt).trim() || props.initialPrompt.trim() || defaultUserPrompt.value
+    prompt.value = outputPrompt((result.userPrompt ?? result.prompt).trim() || props.initialPrompt.trim() || defaultUserPrompt.value)
     systemPrompt.value = result.systemPrompt?.trim() || defaultSystemPrompt.value
     promptSnapshot.value = promptTextKey()
     loadedVersion.value = result
@@ -571,7 +586,7 @@ function selectVersion(digest: string) {
   const version = versions.value.find((item) => item.scriptDigest === digest)
   if (version) void loadVersion(version)
 }
-function restorePrompt() { prompt.value = defaultUserPrompt.value }
+function restorePrompt() { prompt.value = outputPrompt(defaultUserPrompt.value) }
 function restoreSystemPrompt() { systemPrompt.value = defaultSystemPrompt.value }
 async function selectPromptTemplate(id: number) {
   if (id === selectedPromptId.value || busy.value) return
@@ -594,6 +609,7 @@ function cancelGenerate() {
 
 async function generate() {
   if (busy.value) return
+  syncOutputPrompt()
   if (archiveGeneration.value && destinationMode.value === 'type' && !directoryGitBinding.value && destinationLookupError.value) { error.value = `自动提交位置查询失败：${destinationLookupError.value}`; return }
   if (directoryBindingError.value) { error.value = `目录 Git 绑定不可用：${directoryBindingError.value}`; return }
   if (modelsLoading.value || modelError.value || !selectedModel.value) { error.value = '请先选择可用的大模型接口'; return }
@@ -622,6 +638,7 @@ async function generate() {
     const selectedInterface = selectedModel.value
     const interfaceUrl = selectedInterface ? new URL(selectedInterface.endpoint) : undefined
     const input: SiteScriptGenerateInput = { taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py',
+      ...(props.sourceId && props.flowId && props.stepId ? { sourceContext: { sourceId: props.sourceId, flowId: props.flowId, stepId: props.stepId } } : {}),
       ...(taskGeneration.value && selectedInterface && interfaceUrl ? { modelCall: {
         interfaceId: selectedInterface.id, name: selectedInterface.name, kind: selectedInterface.kind, model: selectedInterface.model,
         endpoint: `${interfaceUrl.protocol}//${interfaceUrl.host}${interfaceUrl.pathname}`,
@@ -815,6 +832,7 @@ function download() {
       <div v-if="sourceFilePath"><span>来源文件</span><button type="button" class="site-script-file-link" :disabled="busy || !savedSourceAssociation" :title="savedSourceAssociation ? sourceFilePath : '保存后可查看关联版本'" @click="previewAssociatedFile('source')" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</button><el-button link :disabled="busy" data-testid="site-script-unlink-source" @click="changeAssociatedFile('source', 'unlink')">取消关联</el-button><el-button v-if="savedSourceAssociation" link type="danger" :disabled="busy" data-testid="site-script-delete-source" @click="changeAssociatedFile('source', 'delete')">删除文件</el-button></div>
     </div>
     <p v-if="error && !open" class="site-script-error" role="alert">{{ error }}</p>
+    <NodeDeploymentPanel v-if="configId && sourceId && flowId && stepId" :source-id="sourceId" :flow-id="flowId" :step-id="stepId" :config-id="configId" :config-type="generationConfigType" :queue-name="queueName" :archive-id="archive?.status === 'committed' ? archive.archiveId : undefined" />
     <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">AI 生成代码</el-button>
   </section>
   <el-dialog v-model="open" title="AI 代码工作区" width="min(1360px, 96vw)" top="3vh" append-to-body data-testid="site-script-dialog">
