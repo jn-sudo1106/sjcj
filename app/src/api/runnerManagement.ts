@@ -1,4 +1,4 @@
-import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken, triggerSessionExpired } from './auth'
+import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken } from './auth'
 import { streamModelInterfaceTest } from './modelInterfaceStream'
 import { taskInstFromLegacy } from './legacyAdapters'
 
