@@ -1,4 +1,5 @@
 import type { Source } from '@/api'
+import type { Router } from 'vue-router'
 
 export type SourceWorkspaceView = 'overview' | 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
 // 网站详情页视图。monitor（数据源告警）2026-09-10 接入，枚举位此前已占好。
@@ -33,4 +34,11 @@ export function normalizeSiteMonitorTab(tab: unknown): SiteMonitorTab {
 /** Hash 路由发生并发更新时，以地址栏中的 view 作为工作区视图兜底状态。 */
 export function sourceViewFromHash(hash: string): SourceWorkspaceView {
   return normalizeSourceView(hash.split('?')[1]?.split('&').find((item) => item.startsWith('view='))?.slice(5))
+}
+
+/** 只接受源问题看板的站内返回路径。 */
+export function resolveSourceIssueReturn(router: Router, target: unknown): string {
+  if (typeof target !== 'string' || !target.startsWith('/monitor?')) return ''
+  const resolved = router.resolve(target)
+  return resolved.path === '/monitor' && resolved.query.tab === 'sourceIssues' ? resolved.fullPath : ''
 }

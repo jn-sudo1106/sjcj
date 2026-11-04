@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { sourceIssueApi, type SourceIssue, type SourceIssueSource } from '@/api/sourceIssues'
+import { SOURCE_ISSUE_BATCH_LIMIT, sourceIssueApi, type SourceIssue, type SourceIssueSource } from '@/api/sourceIssues'
 import { readLoginUsername } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 
@@ -9,27 +9,29 @@ const props = defineProps<{ sources: SourceIssueSource[] }>()
 const emit = defineEmits<{ close: []; registered: [records: SourceIssue[]] }>()
 const auth = useAuthStore()
 const targets = computed(() => [...new Map(props.sources.map(source => [source.sourceId, source])).values()])
+const overLimit = computed(() => targets.value.length > SOURCE_ISSUE_BATCH_LIMIT)
 const description = ref('')
 const saving = ref(false)
 const error = ref('')
-const account = computed(() => readLoginUsername() || auth.name || '当前账号')
+// 以登录接口返回的会话账号为准，与服务端登记人一致。
+const account = computed(() => auth.name || readLoginUsername() || '当前账号')
 
 function close() {
   if (!saving.value) emit('close')
 }
 async function submit() {
-  if (saving.value) return
+  if (saving.value || overLimit.value) return
   if (!description.value.trim()) { error.value = '请填写问题描述'; return }
   if (!targets.value.length) { error.value = '请先选择源'; return }
   saving.value = true
   error.value = ''
   try {
     const records = await sourceIssueApi.create({ sourceIds: targets.value.map(source => source.sourceId), description: description.value.trim() })
-    ElMessage.success(`已为 ${records.length} 个源分别登记问题（前端演示）`)
+    ElMessage.success(`已为 ${records.length} 个源分别登记问题`)
     emit('registered', records)
     emit('close')
   } catch (cause) {
-    error.value = (cause as Error)?.message || '登记失败，请重试'
+    error.value = (cause as Error)?.message || '未能确认登记结果，请先到台账核对。'
   } finally {
     saving.value = false
   }
@@ -47,11 +49,11 @@ async function submit() {
       <el-input id="source-issue-description" type="textarea" v-model="description" class="sir-description" aria-label="问题描述" :disabled="saving" maxlength="1000" :rows="5" resize="vertical" placeholder="描述发现的问题，例如：网站已更新，但平台连续两天没有新增数据。" data-testid="source-issue-description" @input="error = ''" />
       <div class="sir-meta"><span>登记账号：{{ account }}</span><span>登记时间：提交时自动记录</span></div>
       <p v-if="error" class="sir-error" role="alert" data-testid="source-issue-register-error">{{ error }}</p>
-      <p class="sir-preview">前端演示：记录仅在本次页面会话内保留。</p>
+      <p v-if="overLimit" class="sir-error" role="alert">单次最多登记 {{ SOURCE_ISSUE_BATCH_LIMIT }} 个源，请减少选择后提交。</p>
     </div>
     <template #footer>
       <el-button :disabled="saving" @click="close">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="!targets.length" data-testid="source-issue-register-submit" @click="submit">{{ targets.length > 1 ? `登记 ${targets.length} 条问题` : '登记' }}</el-button>
+      <el-button type="primary" :loading="saving" :disabled="!targets.length || overLimit" data-testid="source-issue-register-submit" @click="submit">{{ targets.length > 1 ? `登记 ${targets.length} 条问题` : '登记' }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -68,7 +70,6 @@ async function submit() {
 .sir-label span, .sir-error { color: var(--rc-error); }
 .sir-description { width: 100%; }
 .sir-meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 12px; color: var(--rc-muted); font-size: 12px; }
-.sir-preview { margin: 14px 0 0; color: var(--rc-muted); font-size: 12px; }
 .sir-error { font-size: 12px; margin: 10px 0 0; }
 </style>
 <style>

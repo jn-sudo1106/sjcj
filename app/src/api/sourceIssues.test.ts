@@ -1,72 +1,111 @@
 // @vitest-environment jsdom
+/// <reference types="vitest/jsdom" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SourceIssueQuery } from './sourceIssues'
-const loginUsername = vi.hoisted(() => vi.fn(() => 'admin'))
-vi.mock('./auth', () => ({ readLoginUsername: loginUsername }))
-vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ name: '当前系统账号' }) }))
-const query: SourceIssueQuery = { keyword: '', state: undefined, createTimeStart: '', createTimeEnd: '', page: 1, size: 20 }
-const sourceIds = ['a', 'b']
+import { BASE_URL } from './client'
+import { sourceIssueApi, type SourceIssue, type SourceIssueQuery } from './sourceIssues'
 
-beforeEach(() => { vi.resetModules(); loginUsername.mockReturnValue('admin'); vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-03T09:00:00')) })
-afterEach(() => vi.useRealTimers())
+const issue: SourceIssue = {
+  id: '10001', sourceId: '9007199254740993', sourceName: '测试源', sourceAvailable: true,
+  description: '缺数', state: 0, createdBy: 'collector', createTime: '2026-11-03 09:00:00',
+  siteId: null, siteName: null, handledBy: null, handleTime: null,
+}
+const query: SourceIssueQuery = { keyword: '', createTimeStart: '', createTimeEnd: '', page: 1, size: 40 }
+const fetcher = vi.fn<typeof fetch>()
+const reply = (body: unknown) => new Response(JSON.stringify(body))
 
-describe('源问题前端演示服务', () => {
-  it('已有登录会话没有登录名缓存时沿用系统账号', async () => {
-    loginUsername.mockReturnValue('')
-    const { sourceIssueApi } = await import('./sourceIssues')
-    const [created] = await sourceIssueApi.create({ sourceIds: ['a'], description: '账号核对' })
-    expect(created!.createdBy).toBe('当前系统账号')
-    const handled = await sourceIssueApi.handle(created!.id)
-    expect(handled.handledBy).toBe('当前系统账号')
-    expect(handled.state).toBe(1)
-    expect(handled.handleTime).toBe('2026-11-03 09:00:00')
+beforeEach(() => {
+  vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
+  vi.stubGlobal('fetch', fetcher.mockReset())
+})
+const initialUrl = window.location.href
+afterEach(() => {
+  jsdom.reconfigure({ url: initialUrl })
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
+
+describe('源问题 HTTP 契约', () => {
+  it('分页使用 limit 和原始日期，区分待处理和全部，沿用通用解包', async () => {
+    fetcher.mockImplementation(async () => reply({ code: 0, data: [issue], count: 3 }))
+    await expect(sourceIssueApi.paged({ ...query, state: 0, createTimeEnd: '2026-11-04' }))
+      .resolves.toEqual({ list: [issue], total: 3 })
+    const [url, options] = fetcher.mock.calls[0]!
+    expect(url).toBe(BASE_URL + 'source/issue/paged?createTimeEnd=2026-11-04&page=1&state=0&limit=40')
+    expect(options).toMatchObject({ method: 'GET', credentials: 'include' })
+    await sourceIssueApi.paged(query)
+    expect(fetcher.mock.calls[1]![0]).toBe(BASE_URL + 'source/issue/paged?page=1&limit=40')
   })
 
-  it('批量登记每个源独立记录，自动记录账号和源管理口径的时间，重复源只登记一次', async () => {
-    const { sourceIssueApi } = await import('./sourceIssues')
-    const created = await sourceIssueApi.create({ sourceIds: [...sourceIds, 'a'], description: '  字段缺失  ' })
-    expect(created).toHaveLength(2)
-    expect(new Set(created.map(row => row.id)).size).toBe(2)
-    expect(created.map(row => row.sourceId)).toEqual(['a', 'b'])
-    expect(created.every(row => row.description === '字段缺失' && row.state === 0 && row.createdBy === 'admin')).toBe(true)
-    expect(created[0]!.createTime).toBe('2026-11-03 09:00:00')
-    expect(created[1]!.createTime).toBe(created[0]!.createTime)
-    expect(created[0]!.handleTime).toBeUndefined()
+  it('登记和处理发送 JSON，详情发送 GET，字符串 ID 不丢精度', async () => {
+    const handled = { ...issue, state: 1, handledBy: 'operator', handleTime: '2026-11-03 10:00:00' }
+    fetcher.mockResolvedValueOnce(reply({ success: true, code: '0', data: [issue] }))
+      .mockResolvedValueOnce(reply({ success: true, code: '0', data: issue }))
+      .mockResolvedValueOnce(reply({ success: true, code: '0', data: handled }))
+    const input = { sourceIds: [issue.sourceId], description: '缺数' }
+    await expect(sourceIssueApi.create(input)).resolves.toEqual([issue])
+    expect(fetcher).toHaveBeenNthCalledWith(1, BASE_URL + 'source/issue/addBatch',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }))
+    await expect(sourceIssueApi.detail(issue.id)).resolves.toEqual(issue)
+    expect(fetcher).toHaveBeenNthCalledWith(2, BASE_URL + 'source/issue/detail?id=10001',
+      expect.objectContaining({ method: 'GET' }))
+    await expect(sourceIssueApi.handle(issue.id)).resolves.toEqual(handled)
+    expect(fetcher).toHaveBeenNthCalledWith(3, BASE_URL + 'source/issue/handle',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ id: issue.id }) }))
   })
 
-  it('状态、关键词和登记日期按后端口径筛选，分页不丢失筛选口径', async () => {
-    const { sourceIssueApi } = await import('./sourceIssues')
-    await sourceIssueApi.create({ sourceIds, description: '字段缺失' })
-    const filtered = { ...query, keyword: '字段缺失', state: 0 as const, createTimeStart: '2026-11-03', createTimeEnd: '2026-11-04', size: 1 }
-    const first = await sourceIssueApi.paged(filtered)
-    const second = await sourceIssueApi.paged({ ...filtered, page: 2 })
-    expect(first.total).toBe(2)
-    expect(second.total).toBe(2)
-    expect(first.list[0]!.id).not.toBe(second.list[0]!.id)
-    expect((await sourceIssueApi.paged({ ...filtered, keyword: 'b' })).total).toBe(1)
-    expect((await sourceIssueApi.paged({ ...filtered, createTimeEnd: '2026-11-03' })).total).toBe(0)
-    expect((await sourceIssueApi.paged({ ...query, state: 1 })).total).toBe(1)
+  it('保留明确的业务失败，断网后只提示核对台账', async () => {
+    const input = { sourceIds: [issue.sourceId], description: '缺数' }
+    fetcher.mockResolvedValueOnce(reply({ success: false, code: '-1', msg: '整批未登记' }))
+      .mockRejectedValueOnce(new TypeError('网络中断'))
+    await expect(sourceIssueApi.create(input)).rejects.toThrow('整批未登记')
+    await expect(sourceIssueApi.create(input)).rejects.toThrow('先到源问题台账核对')
+    expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
-  it('处理一条不影响同批其他源，重复处理保留第一次处理人和时间', async () => {
-    const { sourceIssueApi } = await import('./sourceIssues')
-    const [first, second] = await sourceIssueApi.create({ sourceIds, description: '同一问题' })
-    const handled = await sourceIssueApi.handle(first!.id)
-    vi.setSystemTime(new Date('2026-11-04T10:00:00'))
-    expect(await sourceIssueApi.handle(first!.id)).toEqual(handled)
-    expect(handled.handledBy).toBe('admin')
-    expect(handled.handleTime).toBeTruthy()
-    expect((await sourceIssueApi.detail(second!.id)).state).toBe(0)
+  it('登记超时后只发送一次，并要求核对台账', async () => {
+    vi.useFakeTimers()
+    try {
+      fetcher.mockImplementation((_url, options) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      }))
+      const result = sourceIssueApi.create({ sourceIds: [issue.sourceId], description: '缺数' })
+      const assertion = expect(result).rejects.toThrow('先到源问题台账核对')
+      await vi.advanceTimersByTimeAsync(20_000)
+      await assertion
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('空描述或无效源不产生部分登记，读取结果不允许反向修改台账', async () => {
-    const { sourceIssueApi } = await import('./sourceIssues')
-    const before = await sourceIssueApi.paged(query)
-    await expect(sourceIssueApi.create({ sourceIds, description: '  ' })).rejects.toThrow('请填写问题描述')
-    await expect(sourceIssueApi.create({ sourceIds: [...sourceIds, ''], description: '问题' })).rejects.toThrow('有效的源')
-    expect((await sourceIssueApi.paged(query)).total).toBe(before.total)
-    const [created] = await sourceIssueApi.create({ sourceIds, description: '原描述' })
-    created!.description = '不能写回'
-    expect((await sourceIssueApi.detail(created!.id)).description).toBe('原描述')
+  it.each(['115.227.21.133:9999', '118.25.96.217:9999', 'app217:9999', '47.120.11.60:2806'])(
+    '生产写保护拦截代理到 %s 的登记和处理', async target => {
+      vi.stubEnv('VITE_API_PROXY_TARGET', `http://${target}`)
+      await expect(sourceIssueApi.create({ sourceIds: [issue.sourceId], description: '缺数' })).rejects.toThrow('生产环境写保护')
+      await expect(sourceIssueApi.handle(issue.id)).rejects.toThrow('生产环境写保护')
+      expect(fetcher).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['', 'http://app186:9999'])('同域 2806 按实际请求地址拦截写操作（构建目标 %j），分页正常', async target => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', '')
+    vi.stubEnv('VITE_AUTH_PROXY_TARGET', target)
+    jsdom.reconfigure({ url: 'http://47.120.11.60:2806/sjcj/#/monitor?tab=sourceIssues' })
+    await expect(sourceIssueApi.create({ sourceIds: [issue.sourceId], description: '缺数' })).rejects.toThrow('生产环境写保护')
+    await expect(sourceIssueApi.handle(issue.id)).rejects.toThrow('生产环境写保护')
+    expect(fetcher).not.toHaveBeenCalled()
+    fetcher.mockResolvedValueOnce(reply({ code: 0, data: [issue], count: 1 }))
+    await expect(sourceIssueApi.paged(query)).resolves.toEqual({ list: [issue], total: 1 })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('186 开发目标允许真实登记和处理', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://124.223.180.186:9999')
+    const handled = { ...issue, state: 1, handledBy: 'operator' }
+    fetcher.mockResolvedValueOnce(reply({ success: true, code: '0', data: [issue] }))
+      .mockResolvedValueOnce(reply({ success: true, code: '0', data: handled }))
+    await expect(sourceIssueApi.create({ sourceIds: [issue.sourceId], description: '缺数' })).resolves.toEqual([issue])
+    await expect(sourceIssueApi.handle(issue.id)).resolves.toEqual(handled)
+    expect(fetcher).toHaveBeenCalledTimes(2)
   })
 })

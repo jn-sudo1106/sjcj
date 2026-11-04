@@ -27,6 +27,7 @@ const source: Source = {
 
 describe('SourceOverviewView', () => {
   it('多选源后从操作栏登记问题，向弹窗传入所选源，不增加行内问题图标', async () => {
+    useAuthStore().roles = ['admin']
     const second = { ...source, sourceId: 'src-2', name: '第二个源' }
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [source, second] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })

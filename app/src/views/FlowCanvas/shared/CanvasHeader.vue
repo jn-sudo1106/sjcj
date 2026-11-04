@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, workflowBindingApi, type WorkflowBinding } from '@/api'
-import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
+import { normalizeSourceView, resolveSourceIssueReturn, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { flushNodeConfigs } from '../inspector/nodeConfigAutosave'
@@ -205,12 +205,7 @@ function openOwningFlow() {
  * 归属网站按既有优先级取：源上下文 > URL。游离源（无网站归属，见 0824-11 §1.2c-3）
  * 没有可回的源视图，退回网站列表。
  */
-const sourceIssueReturn = computed(() => {
-  const target = route.query.sourceIssueReturn
-  if (typeof target !== 'string' || !target.startsWith('/monitor?')) return ''
-  const resolved = router.resolve(target)
-  return resolved.path === '/monitor' && resolved.query.tab === 'sourceIssues' ? resolved.fullPath : ''
-})
+const sourceIssueReturn = computed(() => resolveSourceIssueReturn(router, route.query.sourceIssueReturn))
 function backToSourceView() {
   if (sourceIssueReturn.value) { void router.push(sourceIssueReturn.value); return }
   const siteId = src.value?.siteId || String(route.query.siteId ?? '')
