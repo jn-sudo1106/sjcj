@@ -120,7 +120,17 @@ async function loadFavorites(requestId: number) {
   applyFavView()
 }
 
-async function load() {
+async function load(resetPage = false) {
+  const tableId = entryTypeIdFilter.value.trim()
+  if (tableId && !/^\d+$/.test(tableId)) {
+    ElMessage.warning('表 ID 只能输入数字。按名称查询请使用右侧「表名称」框')
+    return
+  }
+  if (tableId && BigInt(tableId) > 2147483647n) {
+    ElMessage.warning('表 ID 超出有效范围，请输入 0～2147483647 之间的整数')
+    return
+  }
+  if (resetPage) page.value = 1
   const requestId = ++loadRequest
   loading.value = true
   try {
@@ -150,7 +160,7 @@ function onPage() {
   if (favOnly.value) applyFavView()
   else void load()
 }
-function onSearch() { page.value = 1; void load() }
+function onSearch() { void load(true) }
 function onDsKindChange() {
   selected.value = []
   onSearch()
@@ -493,7 +503,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
         <el-option label="CK" value="CK" />
         <el-option label="MYSQL" value="MYSQL" />
       </el-select>
-      <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" style="width: 150px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" inputmode="numeric" aria-label="表 ID，仅支持数字" title="表 ID 仅支持数字，按名称查询请使用右侧表名称框" style="width: 150px" @keyup.enter="onEnterSearch" />
       <el-input v-model="nameFilter" clearable placeholder="表名称" style="width: 190px" @keyup.enter="onEnterSearch" />
       <button class="rc-btn" type="button" @click="onSearch">查询</button>
       <button class="rc-btn" type="button" @click="onReset">重置</button>
