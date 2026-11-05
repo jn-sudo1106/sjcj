@@ -432,11 +432,12 @@ describe('SourceOverviewView · 勾选与批量', () => {
     expect(toggle).not.toHaveBeenCalled()
   })
 
-  it('「取消」清空勾选', async () => {
+  // 1104：批量操作栏去掉了「取消」按钮（挨着「停用」容易误点），取消勾选走行勾选框/表头全选
+  it('批量操作栏不再有「取消」按钮', async () => {
     const wrapper = await mountWithRows()
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
-    await wrapper.get('[data-testid="batch-clear"]').trigger('click')
-    expect(wrapper.find('[data-testid="source-batch-count"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="source-batch-count"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="batch-clear"]').exists()).toBe(false)
   })
 })
 
@@ -1702,6 +1703,43 @@ describe('源视图 · 不限网站（采集资产源列表视图，0924-06）',
   const lastQuery = (page: { mock: { calls: unknown[][] } }) => page.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
 
   afterEach(() => vi.restoreAllMocks())
+
+  // 1104 会议「页面卡顿」：源管理卡片视图首屏只发列表和筛选必需的请求。
+  // 流程 / 主表只影响表格列文字，卡片视图一条都不该拉；网站全量候选推迟到筛选项展开时。
+  it('卡片视图首屏不拉流程、主表、网站全量候选', async () => {
+    const flows = vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
+    const tables = vi.spyOn(dataApi, 'tables').mockResolvedValue([])
+    const { sites } = await mountCross({ websiteCards: true, groupOps: true })
+    expect(flows).not.toHaveBeenCalled()
+    expect(tables).not.toHaveBeenCalled()
+    expect(sites).not.toHaveBeenCalled()
+  })
+
+  // 表格视图同理：先把这一页源列表放出去，流程 / 主表 / 网站候选等它回来再补，
+  // 首屏不再和列表抢同一个连接（网关上单连接只有一百多 KB/s）。
+  it('表格视图的流程 / 主表 / 网站候选等列表这一页回来之后才补', async () => {
+    let release!: () => void
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(() => new Promise((done) => {
+      release = () => done({ total: 0, list: [] })
+    }) as never)
+    const flows = vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
+    const tables = vi.spyOn(dataApi, 'tables').mockResolvedValue([])
+    const sites = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body })
+    await flushPromises()
+    expect(flows).not.toHaveBeenCalled()
+    expect(tables).not.toHaveBeenCalled()
+    expect(sites).not.toHaveBeenCalled()
+    expect(wrapper.emitted('pageLoaded')).toBeFalsy()
+
+    release()
+    await flushPromises()
+    expect(wrapper.emitted('pageLoaded')).toBeTruthy()
+    expect(flows).toHaveBeenCalledTimes(1)
+    expect(tables).toHaveBeenCalledTimes(1)
+    expect(sites).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
 
   it('不带 siteIds；多出「所属网站」列（用接口返回的 siteName），未关联的源显示「未关联」', async () => {
     const { wrapper, page } = await mountCross()

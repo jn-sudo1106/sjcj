@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
 import { blankSourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
-import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -477,9 +477,15 @@ const listScopeEmptyText = computed(() => bizActive.value ? '这个业务目录�
 // 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
 const bizOf = ref(new Map<string, string[]>())
 const bizMembershipState = ref<'loading' | 'ready' | 'error'>('loading')
-watch(view, (next) => {
-  if (props.scope === 'all' && next === 'table' && bizMembershipState.value !== 'ready') void loadBizMembership()
-})
+// 1104 会议「页面卡顿」：业务目录归属没有反查接口，只能把整棵业务目录树逐个 listSources（186 上约 75 个请求，
+// 8 并发）。不再跟着列表一起发，等源列表这一页回来（SourceOverviewView 的 pageLoaded）再补，
+// 首屏不会因为这条重查询把列表挤在后面。
+async function onOverviewPageLoaded() {
+  // 只在「还没查过」时补：失败后不跟着翻页重试（重试点仍是工具栏刷新 / 目录变更）
+  if (props.scope !== 'all' || view.value !== 'table' || bizMembershipState.value !== 'loading') return
+  await nextTick()
+  void loadBizMembership()
+}
 async function loadBizMembership() {
   bizMembershipState.value = 'loading'
   try {
@@ -729,7 +735,7 @@ onMounted(() => {
   if (recentOnly.value) void loadRecentSites()
   if (props.scope !== 'all') void loadCategories({ revalidate: true })
   if (props.scope !== 'all') void loadTagOptions()
-  if (props.scope === 'all' && view.value === 'table') void loadBizMembership()
+  // 源管理表格视图的「业务目录」列等源列表首屏回来再查（见 onOverviewPageLoaded）
   ui.registerAction('新建采集', openNewFlowCanvas)
 })
 // 外层 CollectAssets 套了 KeepAlive：tab 之间切换不重新挂载，onMounted 不再跑。
@@ -830,6 +836,7 @@ onUnmounted(() => {
       @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
       @open-source-group="openSourceGroup"
+      @page-loaded="onOverviewPageLoaded"
     >
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
         <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图目录</button>

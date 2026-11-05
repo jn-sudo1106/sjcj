@@ -167,6 +167,22 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     wrapper.unmount()
   })
 
+  // 1104 会议「页面卡顿」：业务目录归属没有反查接口，要整棵目录树逐个 listSources（186 上约 75 个请求），
+  // 不能跟着首屏一起发——等源列表这一页回来（SourceOverviewView 的 pageLoaded）再查。
+  it('「业务目录」等源列表这一页回来再查，不跟首屏抢请求', async () => {
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    let release!: () => void
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(() => new Promise((done) => {
+      release = () => done({ total: 0, list: [] })
+    }) as never)
+    const { wrapper } = await mountList()
+    expect(membership).not.toHaveBeenCalled()
+    release()
+    await flushPromises()
+    expect(membership).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('默认收起业务目录、不选任何目录：不拉目录内的源，按全库查询；旧的展开偏好不覆盖默认值', async () => {
     sourceDirs.resetSourceDirCache()
     localStorage.setItem('sjcj.sourceDirPanel.collapsed', '0')

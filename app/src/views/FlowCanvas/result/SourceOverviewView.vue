@@ -162,6 +162,11 @@ const emit = defineEmits<{
   editSite: [site: Site]
   deleteSite: [site: Site]
   refreshSites: []
+  /**
+   * 表格视图的一页列表已经回来（成功、空、失败都会发）：父级据此把「业务目录」这类重查询
+   *（整棵业务目录树逐个 listSources）排到首屏之后，不和列表抢同一个连接池。
+   */
+  pageLoaded: []
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -645,13 +650,19 @@ async function loadSources() {
       ? conditions.value.find((c) => c.field === 'name' && !c.pinned && mightBeUrlFragment(c.value) && !fieldTakenByOther('sourceUrl', c))
       : undefined
     urlFallback.value = guess ? { key: guess.key, keyword: guess.value.trim() } : null
+    // 行已经回来了，再去补「默认流程」「主表」这些只影响列文字的全量候选
+    loadRowLookups()
   } catch (error) {
     if (requestId !== sourceRequestSeq) return
     rows.value = []
     total.value = 0
     loadError.value = `加载源列表失败：${error instanceof Error ? error.message : String(error)}`
   } finally {
-    if (requestId === sourceRequestSeq) loading.value = false
+    if (requestId === sourceRequestSeq) {
+      loading.value = false
+      // 成功 / 空 / 失败都通知父级：父级的「业务目录」列不能一直停在加载中
+      emit('pageLoaded')
+    }
   }
 }
 function search() {
@@ -1084,6 +1095,19 @@ function withTimeout(task: Promise<unknown>, ms: number): Promise<void> {
   })
 }
 
+/**
+ * 首屏之后才补的「名称类」辅助列表（1104 会议：页面卡顿先砍首屏并发）：
+ * - 网站候选：行里没带 siteName 时要用它把 siteId 换成名称，但不必跟列表同时发；
+ *   卡片视图不渲染这一列，改到筛选项展开时拉（见模板 visible-change）；
+ * - 默认流程 / 主表只影响列文字，卡片视图也不渲染这两列。
+ */
+function loadRowLookups() {
+  if (props.websiteCards) return
+  if (crossSite.value && showCol('site')) void loadSiteOptions()
+  if (crossSite.value && props.groupOps && showCol('defaultFlow')) void loadFlowOptions()
+  if (showCol('mainTable')) void loadTableOptions()
+}
+
 async function ensureExportLookups(sources: Source[]) {
   const tasks: Promise<unknown>[] = []
   if (crossSite.value && showCol('site')) tasks.push(loadSiteOptions())
@@ -1439,12 +1463,12 @@ watch(rows, () => {
 onMounted(() => {
   document.addEventListener('mousedown', onMarkPointerDown)
   document.addEventListener('keydown', onMarkKeydown)
+  // 1104 会议「页面卡顿」：首屏只发列表和筛选项真正需要的请求。网关上单连接只有一百多 KB/s，
+  // 流程图 / 主表这类只影响列文字的全量候选会和首屏争带宽，改为行回来后再补（loadRowLookups）；
+  // 网站全量候选改成展开筛选项时才拉（卡片视图首屏不再下载）。
   void loadSources()
   void loadTagCandidates()
-  if (!props.scopeDirectory) void loadSiteOptions()
-  void loadSourceGroupOptions()
-  void loadFlowOptions()
-  void loadTableOptions()
+  if (crossSite.value && props.groupOps) void loadSourceGroupOptions()
   void loadFavoriteSources()
 })
 onUnmounted(() => {
@@ -1559,7 +1583,8 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <div class="sov-filter-options">
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
       <label v-if="crossSite" class="sov-fl-site"><span class="sov-label-text">网站</span>
-        <ElSelect v-model="siteFilter" class="sov-site-select" data-testid="source-overview-site" aria-label="网站" filterable :remote="!!scopeDirectory" :remote-method="loadSiteOptions" @visible-change="(open: boolean) => { if (open && scopeDirectory) void loadSiteOptions() }" placeholder="全部网站" no-match-text="没有匹配的网站" @change="search">
+        <!-- 全量网站候选不再随首屏下载（1104 卡顿）：展开下拉时才拉一次，拉完就是本地过滤 -->
+        <ElSelect v-model="siteFilter" class="sov-site-select" data-testid="source-overview-site" aria-label="网站" filterable :remote="!!scopeDirectory" :remote-method="loadSiteOptions" @visible-change="(open: boolean) => { if (open) void loadSiteOptions() }" placeholder="全部网站" no-match-text="没有匹配的网站" @change="search">
           <ElOption label="全部网站" value="" />
           <ElOption v-if="!scopeSiteIds" label="未关联网站" :value="UNBOUND_SITE" />
           <ElOption v-for="s in siteFilterOptions" :key="s.siteId" :label="s.name" :value="s.siteId" />
@@ -1660,7 +1685,8 @@ defineExpose({ openLaunch, clearSelection, refresh })
         <button v-if="auth.role === 'admin'" class="sov-btn" type="button" data-testid="batch-register-issue" @click="registerSelectedIssues">登记问题</button>
         <button class="sov-btn" type="button" data-testid="batch-enable" @click="batchToggleEnable(false)">启用</button>
         <button class="sov-btn danger" type="button" data-testid="batch-disable" @click="batchToggleEnable(true)">停用</button>
-        <button class="sov-btn ghost" type="button" data-testid="batch-clear" @click="clearSelection">取消</button>
+        <!-- 1104：批量操作栏不再放「取消」按钮。取消勾选靠行勾选框/表头全选即可，
+             它紧挨着「停用」，容易被当成危险操作的撤销键误点。 -->
       </template>
       <!-- 紧凑样式下筛选栏一行放不下，针对整批结果的两个操作挪到这一行右侧 -->
       <span v-if="crossSite" class="sov-summary-ops">
