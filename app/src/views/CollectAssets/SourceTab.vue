@@ -8,6 +8,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { sourceSearchRoute, useSourceSearchStore, finishSourceSearchReturn } from '@/stores/sourceSearch'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
 import { favoriteSourceIds, favoriteSourcesLoaded, loadFavoriteSources } from '@/utils/sourceFavorites'
 import { recentLoaded, recentRankOf, recentSiteIds, recordSiteVisit, loadRecentSites } from '@/utils/siteRecents'
@@ -411,7 +412,7 @@ const sourceScopeEmptyText = computed(() => {
   return ''
 })
 /** 打开源：与网站详情「源视图」同一落点（概览视图），带上网站上下文，左侧才加载得出同网站的源 */
-function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview') {
+function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview', searchContextId?: string) {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
   // 两条埋点，口径不同：SITE/ENTER 归「最近打开的网站」（读 `recent`），
   // SOURCE/CLICK 归「最近查看的源」（读 `page` 明细）。不能只打一条——前者是网站，后者是源。
@@ -423,7 +424,7 @@ function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overvie
   })
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath },
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath, ...sourceSearchRoute(searchContextId) },
   })
 }
 function openSiteFromList(siteId: string) {
@@ -437,6 +438,21 @@ const dirCollapsed = ref(true)
 const showDirPanel = computed(() => props.scope === 'all')
 const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
 const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
+watch([() => route.query.sourceSearchReturn, dirPanelRef], ([id, panel]) => {
+  if (route.path !== '/collect') return
+  const context = useSourceSearchStore().get(id)
+  if (!context) return
+  const saved = context.listState
+  if (!saved?.directoryScope && !saved?.dataQueryHitIds) return
+  if (String(route.query.tab ?? 'source') !== (props.scope === 'all' ? 'source' : props.scope)) return
+  ui.setAssetView('table')
+  if (route.query.from === 'data-query' && saved?.dataQueryHitIds) ws.setDataQueryHits([...saved.dataQueryHitIds])
+  if (props.scope !== 'all') return
+  if (!saved?.directoryScope) return
+  dirScope.value = JSON.parse(JSON.stringify(saved.directoryScope))
+  dirCollapsed.value = saved.directoryCollapsed ?? true
+  panel?.restore(dirScope.value)
+}, { immediate: true, flush: 'sync' })
 const dirActive = computed(() => showDirPanel.value && (dirScope.value.directory ? dirScope.value.directory.mode !== 'none' : dirScope.value.all || dirScope.value.dirIds.length > 0))
 const bizActive = computed(() => dirActive.value && dirScope.value.kind === 'biz')
 function onDirScope(scope: DirScope) { dirScope.value = scope }
@@ -474,8 +490,9 @@ const dirScopeLabel = computed(() => (dirActive.value ? `${dirKindLabel.value}�
 const listScopeSourceIds = computed(() => props.scope === 'all' ? undefined : sourceScopeSourceIds.value)
 const listScopeEmptyText = computed(() => bizActive.value ? '这个业务目录里还没有源，请点击「添加源到业务目录」' : sourceScopeEmptyText.value)
 
-// 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存
-const bizOf = ref(new Map<string, string[]>())
+// 「业务目录」列：源 → 所在业务目录。没有反查接口，整棵业务目录树 listSources 一遍，会话内缓存。
+// 2026-11-05：改成边算边渲染（reactive Map + bizMembership 的 onDir 回调），不再整列「加载中…」等到最后。
+const bizOf = reactive(new Map<string, string[]>())
 const bizMembershipState = ref<'loading' | 'ready' | 'error'>('loading')
 // 1104 会议「页面卡顿」：业务目录归属没有反查接口，只能把整棵业务目录树逐个 listSources（186 上约 75 个请求，
 // 8 并发）。不再跟着列表一起发，等源列表这一页回来（SourceOverviewView 的 pageLoaded）再补，
@@ -488,14 +505,24 @@ async function onOverviewPageLoaded() {
 }
 async function loadBizMembership() {
   bizMembershipState.value = 'loading'
+  // 重算（刷新 / 归类变更）时先清掉旧归属，逐目录回调会一点点补回来
+  bizOf.clear()
   try {
-    bizOf.value = await bizMembership()
+    const map = await bizMembership((dirId, sourceIds) => {
+      sourceIds.forEach((sourceId) => {
+        const dirs = bizOf.get(sourceId)
+        if (dirs) { if (!dirs.includes(dirId)) bizOf.set(sourceId, [...dirs, dirId]) }
+        else bizOf.set(sourceId, [dirId])
+      })
+    })
+    bizOf.clear()
+    map.forEach((dirs, sourceId) => bizOf.set(sourceId, dirs))
     bizMembershipState.value = 'ready'
   } catch {
     bizMembershipState.value = 'error'
   }
 }
-const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
+const bizNames = (sourceId: string) => (bizOf.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
 /**
  * 「业务目录」列给导出用的文本（1104）：表格里这一列是 `extra-cell` 槽位渲染的标签，
  * 导出拿不到，所以按同一口径拼成一段文字（多个目录用顿号相连）。
@@ -774,8 +801,10 @@ onUnmounted(() => {
         class="ca-source-list"
         current-site-id=""
         :scope-source-ids="dataHits"
-        @open-source="openSourceFromList"
-        @open-source-data="openSourceFromList($event, 'data')"
+        :search-navigation="{ returnTo: route.fullPath, label: '数据查询命中源', restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { dataQueryHitIds: dataHits } }"
+        @search-restored="finishSourceSearchReturn(router, route)"
+        @open-source="(source, context) => openSourceFromList(source, 'overview', context)"
+        @open-source-data="(source, context) => openSourceFromList(source, 'data', context)"
         @open-site="openSiteFromList"
         @open-source-group="openSourceGroup"
       />
@@ -829,11 +858,13 @@ onUnmounted(() => {
       :group-ops="scope === 'all'"
       :website-cards="scope === 'all' && view === 'card'"
       :include-empty-site-ids="includedEmptySiteIds"
+      :search-navigation="{ returnTo: route.fullPath, label: props.scope === 'all' ? '系统目录' : props.scope === 'favorite' ? '我的收藏' : '最近打开', restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { directoryScope: dirScope, directoryCollapsed: dirCollapsed } }"
+      @search-restored="finishSourceSearchReturn(router, route)"
       @edit-site="openSiteEditor"
       @delete-site="onDeleteSite"
       @refresh-sites="refreshAll"
-      @open-source="openSourceFromList"
-      @open-source-data="openSourceFromList($event, 'data')"
+      @open-source="(source, context) => openSourceFromList(source, 'overview', context)"
+      @open-source-data="(source, context) => openSourceFromList(source, 'data', context)"
       @open-site="openSiteFromList"
       @open-source-group="openSourceGroup"
       @page-loaded="onOverviewPageLoaded"
@@ -871,11 +902,11 @@ onUnmounted(() => {
         </el-dropdown>
       </template>
       <template v-if="scope === 'all'" #extra-cell="{ source }">
-        <span v-if="bizMembershipState === 'loading'" class="ca-muted">加载中…</span>
-        <span v-else-if="bizMembershipState === 'error'" class="ca-muted">加载失败</span>
+        <span v-if="bizMembershipState === 'error'" class="ca-muted">加载失败</span>
         <template v-else>
           <span v-for="name in bizNames(source.sourceId)" :key="name" class="ca-biz-tag" :title="name">{{ name }}</span>
-          <span v-if="!bizNames(source.sourceId).length" class="ca-muted">未归类</span>
+          <span v-if="bizMembershipState === 'loading' && !bizNames(source.sourceId).length" class="ca-muted" title="正在读取这个源的业务目录归属">…</span>
+          <span v-else-if="!bizNames(source.sourceId).length" class="ca-muted">未归类</span>
         </template>
       </template>
       <template #filter-extra>

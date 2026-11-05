@@ -5,7 +5,7 @@
 // 2. 采集资产的「源列表视图」（0924-06，表格视图改为源列表）：currentSiteId 传空 = 不限网站，
 //    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
-import { computed, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth'
 import SourceDataCleanupDialog from '@/views/CollectAssets/SourceDataCleanupDialog.vue'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
+import { useSourceSearchStore, sourceSearchListPath, type SourceSearchNavigation, type SourceSearchOrigin } from '@/stores/sourceSearch'
 import {
   mergeIssueTags,
   normalizeIssueTag,
@@ -150,13 +151,14 @@ const props = defineProps<{
   /** 采集资产系统目录的两种展示，共用本组件的查询条件与目录范围。 */
   websiteCards?: boolean
   includeEmptySiteIds?: string[]
+  searchNavigation?: SourceSearchNavigation
 }>()
 const emit = defineEmits<{
-  openSource: [source: Source]
+  openSource: [source: Source, searchContextId?: string]
   /** 点「所属网站」（仅不限网站时有这一列） */
   openSite: [siteId: string]
   /** 点「数据量」这个数字（0903 Y1-15）：进这个源的数据视图，而不是流程视图 */
-  openSourceData: [source: Source]
+  openSourceData: [source: Source, searchContextId?: string]
   /** 点来源组名（1008-04）：跳到「来源组」目录页签并选中该组 */
   openSourceGroup: [sourceGroupId: string]
   editSite: [site: Site]
@@ -167,6 +169,7 @@ const emit = defineEmits<{
    *（整棵业务目录树逐个 listSources）排到首屏之后，不和列表抢同一个连接池。
    */
   pageLoaded: []
+  searchRestored: []
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -239,6 +242,53 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
+const tableElement = ref<HTMLElement>()
+const appliedSearch = ref<SourceSearchOrigin | null>(null)
+let appliedSearchId = ''
+let searchActive = true
+let restoringSearch = false
+function restoreSearch(): boolean {
+  const navigation = props.searchNavigation
+  if (!searchActive || !navigation?.restoreId || restoringSearch) return false
+  const context = useSourceSearchStore().get(navigation.restoreId)
+  if (!context || sourceSearchListPath(navigation.returnTo) !== context.returnTo) return false
+  restoringSearch = true
+  void nextTick().then(async () => {
+    if (!searchActive || props.searchNavigation?.restoreId !== context.id) return
+    applyViewState(context.viewState)
+    page.value = context.page
+    clearSelection()
+    emit('searchRestored')
+    const request = sourceRequestSeq + 1
+    await loadSources()
+    await nextTick()
+    if (searchActive && request === sourceRequestSeq && tableElement.value) {
+      tableElement.value.scrollTop = context.scrollTop
+      tableElement.value.scrollLeft = context.scrollLeft
+    }
+  }).finally(() => { restoringSearch = false })
+  return true
+}
+function openSourceResult(source: Source, data = false) {
+  function publish(contextId?: string) {
+    if (data) {
+      if (contextId) emit('openSourceData', source, contextId)
+      else emit('openSourceData', source)
+    } else {
+      if (contextId) emit('openSource', source, contextId)
+      else emit('openSource', source)
+    }
+  }
+  // 页签额度不在这里拦：切源/开源的落点由画布/工作区统一处理（满了自动关最右侧那个，
+  // 见 FlowCanvas/index.vue 的 onSwitchTarget 与 onTabQuotaFull）。这里拦住只会让用户
+  // 看到一个「请先关闭一个」的提示却什么也做不了（用户 2026-11-05 反馈）。
+  if (!props.searchNavigation || !appliedSearch.value) { publish(); return }
+  const origin = { ...appliedSearch.value, scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0 }
+  const search = useSourceSearchStore()
+  if (!appliedSearchId || !search.get(appliedSearchId)) appliedSearchId = search.create(origin)
+  else Object.assign(search.get(appliedSearchId)!, { scrollTop: origin.scrollTop, scrollLeft: origin.scrollLeft, page: origin.page })
+  publish(appliedSearchId)
+}
 const cardQuery = ref<SourceFilter | null>(null)
 const cardScopeEmpty = ref(false)
 const cardRevision = ref(0)
@@ -618,6 +668,13 @@ async function fetchSourcePage(query: SourceFilter & { page: number; size: numbe
 
 async function loadSources() {
   const requestId = ++sourceRequestSeq
+  const navigation = props.searchNavigation
+  const requestOrigin: SourceSearchOrigin | null = navigation ? JSON.parse(JSON.stringify({
+    query: currentQuery(), empty: noScopeMatch.value, viewState: currentViewState.value,
+    page: page.value, total: 0, scrollTop: 0, scrollLeft: 0, label: navigation.label,
+    returnTo: navigation.returnTo,
+    listState: navigation.listState,
+  })) : null
   if (props.websiteCards) {
     loading.value = false
     cardScopeEmpty.value = noScopeMatch.value
@@ -627,6 +684,7 @@ async function loadSources() {
     return
   }
   if (noScopeMatch.value) {
+    appliedSearch.value = null
     rows.value = []
     total.value = 0
     loadError.value = ''
@@ -636,7 +694,7 @@ async function loadSources() {
   loading.value = true
   loadError.value = ''
   try {
-    const result = await fetchSourcePage({ ...currentQuery(), page: page.value, size: size.value })
+    const result = await fetchSourcePage({ ...(requestOrigin?.query ?? currentQuery()), page: page.value, size: size.value })
     if (requestId !== sourceRequestSeq) return
     // 不再对服务端结果做二次过滤（0831 X0）。2026-08-31 会上实测：搜「内容重复」时
     // 开发人员当场说"他查到了，但是没返回"——就是这里，服务端明明返回了 N 行，
@@ -646,6 +704,8 @@ async function loadSources() {
     // 分页页数也跟着错。服务端返回什么就展示什么，这是唯一自洽的口径。
     rows.value = applyMarkOverlay(result.list)
     total.value = result.total
+    appliedSearch.value = requestOrigin ? { ...requestOrigin, total: result.total } : null
+    appliedSearchId = ''
     const guess = result.total === 0
       ? conditions.value.find((c) => c.field === 'name' && !c.pinned && mightBeUrlFragment(c.value) && !fieldTakenByOther('sourceUrl', c))
       : undefined
@@ -657,6 +717,7 @@ async function loadSources() {
     rows.value = []
     total.value = 0
     loadError.value = `加载源列表失败：${error instanceof Error ? error.message : String(error)}`
+    appliedSearch.value = null
   } finally {
     if (requestId === sourceRequestSeq) {
       loading.value = false
@@ -1466,7 +1527,7 @@ onMounted(() => {
   // 1104 会议「页面卡顿」：首屏只发列表和筛选项真正需要的请求。网关上单连接只有一百多 KB/s，
   // 流程图 / 主表这类只影响列文字的全量候选会和首屏争带宽，改为行回来后再补（loadRowLookups）；
   // 网站全量候选改成展开筛选项时才拉（卡片视图首屏不再下载）。
-  void loadSources()
+  if (!restoreSearch()) void loadSources()
   void loadTagCandidates()
   if (crossSite.value && props.groupOps) void loadSourceGroupOptions()
   void loadFavoriteSources()
@@ -1479,26 +1540,33 @@ onUnmounted(() => {
 // AppShell），切页或切 tab 都不卸载（2026-10-16 用户报：切页后提示仍在）。提示条本身是手动关闭的，
 // 所以这里是它唯一自动收掉的时机——离场即收掉；没走缓存的卸载路径也一并清。
 onDeactivated(hideMarkToast)
+onDeactivated(() => { searchActive = false })
+onActivated(() => { searchActive = true; if (!restoringSearch) restoreSearch() })
+watch(() => props.searchNavigation?.restoreId, () => { restoreSearch() })
 onBeforeUnmount(hideMarkToast)
 watch(() => props.currentSiteId, () => {
+  if (restoringSearch) return
   page.value = 1
   void loadSources()
   void loadTagCandidates()
 })
 // 源范围变了（本页取消了收藏 / 切了分组）：清掉勾选再重查，「我的收藏」里就不再有它
 watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () => {
+  if (restoringSearch) return
   clearSelection()
   page.value = 1
   void loadSources()
 })
 // 来源组 / 视图目录 / 系统目录范围变了：清掉勾选再重查
 watch(() => `${props.scopeSourceGroupId ?? ''}|${props.scopeViewCategoryId ?? ''}|${props.scopeCategoryIds?.join(',') ?? ''}|${props.scopeVersion ?? 0}|${JSON.stringify(props.scopeDirectory)}`, () => {
+  if (restoringSearch) return
   clearSelection()
   page.value = 1
   void loadSources()
 })
 // 页签范围变了（最近打开多了一个网站）：已选的网站若不在新范围里就放掉，再重查
 watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
+  if (restoringSearch) return
   if (siteFilter.value && siteFilter.value !== UNBOUND_SITE && !siteFilterOptions.value.some((s) => s.siteId === siteFilter.value)) {
     siteFilter.value = ''
   }
@@ -1712,7 +1780,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
         <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
       </span>
     </div>
-    <div v-if="!websiteCards" class="sov-table-wrap" :class="{ loading }">
+    <div v-if="!websiteCards" ref="tableElement" class="sov-table-wrap" :class="{ loading }">
       <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px` }">
         <thead>
           <tr>
@@ -1788,8 +1856,8 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <!-- 源 ID 与源名称走同一个入口（2026-09-09）：两列指的是同一个源，
                  名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
-            <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
-            <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
+            <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="openSourceResult(source)">{{ source.sourceId }}</button></td>
+            <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="openSourceResult(source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
             <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
             <td v-if="showOriginalDirectory" class="sov-original-dir" :title="originalDirectoryOf(source)" data-testid="source-overview-original-directory">
               {{ originalDirectoryOf(source) }}
@@ -1869,7 +1937,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 type="button"
                 data-testid="source-data-count"
                 :title="`查看这 ${source.dataCount} 条数据`"
-                @click="emit('openSourceData', source)"
+                @click="openSourceResult(source, true)"
               >{{ source.dataCount }}</button>
               <template v-else>{{ source.dataCount ?? '—' }}</template>
             </td>

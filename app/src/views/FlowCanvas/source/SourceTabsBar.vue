@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useWorkspaceStore, type OrderedTab, type WorkspaceTabRef } from '@/stores/workspace'
 import { useFlowStore } from '@/stores/flow'
+import { sourceSearchRoute, useSourceSearchStore, sourceSearchListPath } from '@/stores/sourceSearch'
 
 // 源详情工作区页签条（优化 0701 问题三 · 方案 B）：多个源并存为可关闭页签,视觉对齐原系统使用习惯。
 // 首位是不可关闭的「源列表」固定页签：回列表后仍能看到已打开的源并可点回（0702 追加优化）。
@@ -31,6 +32,11 @@ const route = useRoute()
 const onList = computed(() => !route.path.startsWith('/canvas'))
 // 网站聚合态 = 某个「全部」页签被激活：在 /canvas 上有 siteId、没有 sourceId
 const onSiteAll = computed(() => !onList.value && !!route.query.siteId && !route.query.sourceId)
+const tabsElement = ref<HTMLElement>()
+watch(() => [ws.activeSourceId, route.query.siteId, onList.value, ws.orderedTabs.length], async () => {
+  await nextTick()
+  tabsElement.value?.querySelector('.rc-src-tab.on')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+})
 function isSiteActive(siteId: string) {
   return onSiteAll.value && String(route.query.siteId) === siteId
 }
@@ -46,7 +52,7 @@ function goSiteAll(siteId: string) {
 /** 关掉页签后落到接任的那个；一个都不剩才回网站列表。 */
 function goNext(next: WorkspaceTabRef | null) {
   if (!next) {
-    router.push('/collect')
+    goList()
     return
   }
   if (next.kind === 'site') goSiteAll(next.id)
@@ -76,12 +82,13 @@ function navTo(key: string) {
   // 侧栏取的是 `flow.sourceCtx?.siteId || route.query.siteId`，而 sourceDetail 实测返回 siteId: null，
   // URL 再不带就两头落空（2026-08-28 修）。
   const siteId = snap?.siteId
-  router.push({ path: '/canvas', query: { ...(siteId ? { siteId } : {}), sourceId: key, view } })
+  void router.push({ path: '/canvas', query: { ...(siteId ? { siteId } : {}), sourceId: key, view, ...sourceSearchRoute(snap?.searchContextId) } }).then(failure => {
+    if (!failure) ws.activate(key)
+  })
 }
 
 function onActivate(sourceId: string) {
   if (!onList.value && !onSiteAll.value && sourceId === ws.activeSourceId) return
-  ws.activate(sourceId)
   navTo(sourceId)
 }
 
@@ -101,7 +108,8 @@ function isActive(t: OrderedTab) {
 function goList() {
   if (onList.value) return
   ws.exitCompare() // 离开源详情工作区时退出临时的对比视图，回列表看到的是正常单栏页签
-  router.push('/collect')
+  const context = useSourceSearchStore().get(route.query.sourceSearch)
+  router.push(context ? sourceSearchListPath(context.returnTo, context.id) : '/collect')
 }
 
 async function onClose(t: OrderedTab) {
@@ -140,7 +148,7 @@ async function onCloseAll() {
   ws.exitCompare()
   ;[...ws.tabs].forEach((t) => ws.close(t.sourceId))
   ws.clearSiteTabs()
-  if (!onList.value) router.push('/collect')
+  if (!onList.value) goList()
 }
 
 // ---- 右键菜单（2026-09-18）：对齐浏览器页签的三项 ----
@@ -269,7 +277,7 @@ function onDragEnd() {
   <div v-if="ws.tabs.length || ws.siteTabs.length" class="rc-src-tabs">
     <!-- 只有页签这一段横向滚动；「n/8 清空」在下面的固定区里（2026-09-16 走查：
          之前整条一起滚，页签一多「清空」就被挤到屏幕外，满 8 个想清理反而得先滚过去找按钮） -->
-    <div class="rc-src-tabs-scroll" role="tablist">
+    <div ref="tabsElement" class="rc-src-tabs-scroll" role="tablist">
     <button
       class="rc-src-tab list-tab"
       :class="{ on: onList }"

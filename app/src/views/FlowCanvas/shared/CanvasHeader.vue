@@ -245,7 +245,7 @@ function srcSnatch() {
 
 <template>
   <div v-if="src" class="rc-canvas-head">
-    <button class="rc-btn ghost" type="button" @click="backToSourceView">← {{ sourceIssueReturn ? '返回问题列表' : '返回源视图' }}</button>
+    <button v-if="!route.query.sourceSearch || sourceIssueReturn" class="rc-btn ghost" type="button" @click="backToSourceView">← {{ sourceIssueReturn ? '返回问题列表' : '返回源视图' }}</button>
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'overview' }" type="button" @click="switchView('overview')">概览</button>
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程</button>

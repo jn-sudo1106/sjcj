@@ -27,6 +27,7 @@ import { recordSiteVisit } from '@/utils/siteRecents'
 import { trackClick } from '@/utils/logEvents'
 import { readSourceGroupCache, sourceGroupCacheBackend, sourceGroupCacheKey, writeSourceGroupCache } from '@/utils/sourceGroupCache'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
+import { sourceSearchRoute, finishSourceSearchReturn } from '@/stores/sourceSearch'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
 import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
@@ -756,7 +757,7 @@ async function moveMembers(): Promise<void> {
 
 /** 打开源：与网站详情「源视图」同一落点（SourceTab.openSourceFromList 同口径）。
  *  同样记一笔「最近打开的网站」——「我的分组」也是源管理的常见入口，不记会漏掉一整条进入路径。 */
-function openSource(source: Source, view: 'overview' | 'data' = 'overview'): void {
+function openSource(source: Source, view: 'overview' | 'data' = 'overview', searchContextId?: string): void {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
   trackClick('SOURCE', source.sourceId, source.name, {
     eventCode: 'source_open',
@@ -766,7 +767,7 @@ function openSource(source: Source, view: 'overview' | 'data' = 'overview'): voi
   })
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath },
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath, ...sourceSearchRoute(searchContextId) },
   })
 }
 
@@ -915,9 +916,11 @@ watch(() => route.query.group, (id) => {
             extra-column-label="业务目录"
             :extra-cell-text="bizCellText"
             :scope-source-group-id="selectedGroup.sourceGroupId"
+            :search-navigation="{ returnTo: router.resolve({ path: route.path, query: { ...route.query, group: selectedGroup.sourceGroupId } }).fullPath, label: `我的分组 · ${selectedGroup.sourceGroupName}`, restoreId: String(route.query.sourceSearchReturn ?? '') }"
+            @search-restored="finishSourceSearchReturn(router, route)"
             scope-empty-text="该来源组还没有成员，可在源列表勾选后「调整来源组」，或点「添加源」"
-            @open-source="openSource"
-            @open-source-data="openSource($event, 'data')"
+            @open-source="(source, context) => openSource(source, 'overview', context)"
+            @open-source-data="(source, context) => openSource(source, 'data', context)"
             @open-site="openSite"
           >
             <!-- 1030 议题 5：「添加源」放成员表操作区右侧，与系统目录「新增网站」同一位置 -->

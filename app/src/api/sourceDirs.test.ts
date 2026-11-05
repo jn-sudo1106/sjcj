@@ -98,10 +98,54 @@ describe('sourceDirs · 业务目录里的源', () => {
   })
 
   it('目录成员请求失败不能伪装成未归类，失败后允许重试', async () => {
-    requestMock.mockRejectedValueOnce(new Error('网络异常'))
+    requestMock.mockImplementationOnce(async () => null) // scopeTree：这个环境没有该接口
+    requestMock.mockImplementationOnce(async () => { throw new Error('网络异常') }) // 第一个 listSources
     await expect(bizMembership()).rejects.toThrow('网络异常')
     const map = await bizMembership()
     expect(map.get('1')).toContain('9011495')
+  })
+
+  // 1105：整棵业务目录树早先是逐层 expandDirIds（186 上 108 个目录 = 108 个 categoryPaged），
+  // 和后面每个目录的 listSources 一起把浏览器连接打满。scopeTree 一次给全量目录，就不该再逐层拉。
+  it('有 scopeTree 时一次拿全业务目录，不再逐层 categoryPaged', async () => {
+    requestMock.mockImplementation(async (endpoint: string, body: Record<string, unknown>) => {
+      if (endpoint === 'category/scopeTree') {
+        return [
+          { id: '-2', name: '业务分类', parentId: '', level: 1 },
+          { id: '9011494', name: '股票数据', parentId: '-2', level: 2 },
+          { id: '9011495', name: '基本资料', parentId: '9011494', level: 3 },
+          { id: '9011496', name: '股票行情', parentId: '9011494', level: 3 },
+          { id: '9011515', name: '宏观数据', parentId: '-2', level: 2 },
+          { id: '9008953', name: '海外社媒', parentId: '0', level: 1 },
+        ]
+      }
+      if (endpoint === 'category/listSources') return { sourceIds: DIR_SOURCES[String(body.categoryId)] ?? [], sourceGroupIds: [] }
+      return null
+    })
+    const map = await bizMembership()
+    expect(requestMock.mock.calls.filter(([ep]) => ep === 'category/scopeTree')).toHaveLength(1)
+    expect(sourceApi.sourceCategories).not.toHaveBeenCalled()
+    expect(map.get('1')?.sort()).toEqual(['9011495', '9011496'])
+    expect(map.get('4')).toEqual(['9011515'])
+  })
+
+  it('scopeTree 拿不到时退回逐层展开，结果一致', async () => {
+    requestMock.mockImplementation(async (endpoint: string, body: Record<string, unknown>) => {
+      if (endpoint === 'category/scopeTree') throw new Error('404')
+      if (endpoint === 'category/listSources') return { sourceIds: DIR_SOURCES[String(body.categoryId)] ?? [], sourceGroupIds: [] }
+      return null
+    })
+    const map = await bizMembership()
+    expect(requestMock.mock.calls.filter(([ep]) => ep === 'category/scopeTree')).toHaveLength(1)
+    expect(sourceApi.sourceCategories).toHaveBeenCalledWith('-2')
+    expect(map.get('1')?.sort()).toEqual(['9011495', '9011496'])
+  })
+
+  it('每算完一个目录回调一次，边算边给调用方', async () => {
+    const seen: Array<[string, string[]]> = []
+    await bizMembership((dirId, sourceIds) => seen.push([dirId, sourceIds]))
+    expect(seen.map(([id]) => id).sort()).toEqual(['9011495', '9011496', '9011515'])
+    expect(seen.find(([id]) => id === '9011515')?.[1]).toEqual(['3', '4'])
   })
 
   it('加入：POST 数字 ID，返回新增数，并让该目录的源缓存失效', async () => {
