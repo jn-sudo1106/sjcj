@@ -43,6 +43,12 @@ class ManagementAuthTest(unittest.TestCase):
         with patch('backend.runner_management.server.urlopen', return_value=io.BytesIO(b'{"code":"-1","data":null}')), self.assertRaises(ApiError) as denied:
             self.app.authenticate_admin(self.headers, '192.168.1.36')
         self.assertEqual(denied.exception.status, 401)
+
         with patch('backend.runner_management.server.urlopen', side_effect=HTTPError('http://business.test', 401, 'unauthorized', {}, None)), self.assertRaises(ApiError) as denied:
             self.app.authenticate_admin(self.headers, '192.168.1.36')
         self.assertEqual(denied.exception.status, 401)
+
+    def test_admin_role_works_for_non_admin_login_name_and_returns_audit_identity(self):
+        user = {'roles':['admin'], 'userLoginName':'muyan'}
+        with patch('backend.runner_management.server.urlopen', return_value=io.BytesIO(json.dumps({'code':'0','data':user}).encode())):
+            self.assertEqual(self.app.authenticate_admin(self.headers,'192.168.1.36',write=True), user)

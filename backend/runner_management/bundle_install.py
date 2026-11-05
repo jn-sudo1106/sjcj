@@ -136,7 +136,63 @@ def directory_lock(target):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def install_bundle(target, files, manifest, digest, cache, public_key, make_current=True):
+def live_journal(target, cache):
+    directory = cache / 'live-updates'
+    if linked(directory) or not directory.resolve().is_relative_to(cache.resolve()): raise ValueError('在线更新恢复目录无效')
+    return directory / (hashlib.sha256(str(target.resolve()).encode()).hexdigest() + '.json')
+
+
+def recover_live_update(target, cache):
+    journal = live_journal(target, cache)
+    if not journal.exists(): return
+    if linked(journal) or journal.stat().st_size > 30 * 1024 * 1024: raise ValueError('在线更新恢复记录无效')
+    record = json.loads(journal.read_text(encoding='utf8'))
+    if record.get('target') != str(target.resolve()): raise ValueError('在线更新恢复目录不匹配')
+    entries = record.get('files')
+    if not isinstance(entries, dict) or any(not safe_relative(name) or '/' in name for name in entries): raise ValueError('在线更新恢复路径无效')
+    committed = read_registry(target)['current'].get(record['key']) == record['digest']
+    for name, item in entries.items():
+        path = target / name
+        if linked(path) or path.exists() and not path.is_file(): raise ValueError('在线更新恢复文件无效')
+        current = path.read_bytes() if path.exists() else None
+        previous = base64.b64decode(item['before'], validate=True) if item['before'] is not None else None
+        matches_new = current is not None and hashlib.sha256(current).hexdigest() == item['after']
+        if committed:
+            if not matches_new: raise ValueError('在线更新提交后的文件已被修改：' + name)
+        elif not matches_new and current != previous:
+            raise ValueError('在线更新中断后文件被其他操作修改，无法自动恢复：' + name)
+    if not committed:
+        for name, item in entries.items():
+            path = target / name
+            if item['before'] is None: path.unlink(missing_ok=True)
+            else: atomic_write(path, base64.b64decode(item['before'], validate=True))
+        old = record.get('registry')
+        if old is None: (target / 'version.json').unlink(missing_ok=True)
+        else: atomic_write(target / 'version.json', base64.b64decode(old, validate=True))
+    journal.unlink()
+
+
+def install_live(target, mapped, registry, key, digest, cache):
+    updates = {name: data for name, data in mapped.items() if not (target / name).is_file() or (target / name).read_bytes() != data}
+    registry_path = target / 'version.json'
+    record = {'target': str(target.resolve()), 'key': key, 'digest': digest,
+              'registry': base64.b64encode(registry_path.read_bytes()).decode() if registry_path.exists() else None,
+              'files': {name: {'before': base64.b64encode((target / name).read_bytes()).decode() if (target / name).exists() else None,
+                               'after': hashlib.sha256(data).hexdigest()} for name, data in updates.items()}}
+    journal = live_journal(target, cache)
+    atomic_write(journal, json.dumps(record).encode())
+    try:
+        for name, data in updates.items(): atomic_write(target / name, data)
+        registry['current'][key] = digest
+        atomic_write(registry_path, registry_bytes(registry))
+    except Exception:
+        recover_live_update(target, cache)
+        raise
+    journal.unlink()
+    return registry
+
+
+def install_bundle(target, files, manifest, digest, cache, public_key, make_current=True, *, protected_programs=None):
     from .python_cache import is_python_cache
     directories = manifest.get('directories', [])
     if not isinstance(directories, list) or any(not safe_relative(name) for name in directories):
@@ -149,6 +205,7 @@ def install_bundle(target, files, manifest, digest, cache, public_key, make_curr
         if (linked(backup) or linked(target)
                 or backup.resolve().parent != target.parent.resolve()):
             raise ValueError('代码目录不能使用符号链接')
+        recover_live_update(target, cache)
         if backup.exists():
             if not target.exists():
                 os.replace(backup, target)
@@ -225,6 +282,11 @@ def install_bundle(target, files, manifest, digest, cache, public_key, make_curr
             existing = target / name
             if existing.is_file() and name not in own_files and name.casefold() not in owned and existing.read_bytes() != data:
                 raise ValueError('目标目录已有未托管的同名文件：' + name)
+        if protected_programs:
+            from .live_deployment import validate
+            validate({name: (target / name).read_bytes() for name in own_files}, mapped, protected_programs)
+            if any(not (target / directory).is_dir() for directory in directories): raise ValueError('公共目录结构发生变化，请先停止处理程序')
+            return install_live(target, mapped, registry, key, digest, cache)
         temporary = Path(tempfile.mkdtemp(prefix='.' + target.name + '.incoming-', dir=target.parent))
         try:
             if target.exists():

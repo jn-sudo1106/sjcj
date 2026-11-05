@@ -265,8 +265,13 @@ def agent_directories(selected, task_id=None):
         raise ApiError('实例 ID 或任务 ID 无效')
     path_type = PureWindowsPath if '\\' in root or re.match(r'^[A-Za-z]:', root) else PurePosixPath
     base = path_type(root) / selected.get('_workspaceDirectory', '')
+    code = selected.get('_codeDirectory') or str(base / 'code')
+    from .generation_workspaces import output_subdirectory
+    suffix = output_subdirectory({'outputSubdirectory': selected.get('_codeSubdirectory', '')})
+    if suffix:
+        code = str(path_type(code).joinpath(*suffix.split('/')))
     return {'instanceId': instance_id, 'taskId': task_id, 'prjDir': str(base),
-            'inputFileDir': str(base / 'input'), 'codeDir': selected.get('_codeDirectory') or str(base / 'code'), 'outputFileDir': str(base / 'output'),
+            'inputFileDir': str(base / 'input'), 'codeDir': code, 'outputFileDir': str(base / 'output'),
             'taskRecordPath': str(base / 'tasks' / (task_id + '.json'))}
 
 
@@ -472,6 +477,8 @@ def generate(app, body, emit=None):
     if not selected or not selected['enabled']:
         raise ApiError('所选模型接口不存在或已停用')
     selected = dict(selected)
+    from .generation_workspaces import output_subdirectory
+    selected['_codeSubdirectory'] = output_subdirectory(body)
     if emit:
         selected['_emit'] = emit
     remote = selected.get('generationServerId') and selected['kind'] in ('agent', 'gemini-agent')
@@ -539,26 +546,24 @@ def _generate(app, body, selected):
     if not isinstance(system, str) or not system.strip() or len(system) > 12000:
         raise ApiError('请填写 1–12000 字的系统提示词')
     try:
-        file_name = service.file_name_for_url(payload.get('url', ''))
+        from .generation_prompt_context import filename, variables, fill, compose
+        file_name = filename(body, service)
     except service.GenerationError as exc:
         raise ApiError(str(exc), exc.status) from exc
     if payload.get('sampleId') != service.SAMPLE_ID:
         raise ApiError('样例代码标识无效')
-    if remote_target and body.get('fileName'):
-        requested_name = body['fileName']
-        if not isinstance(requested_name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.py', requested_name) or '..' in requested_name:
-            raise ApiError('生成代码文件名无效')
-        file_name = requested_name
+    task_id = body.get('taskId')
+    workspace = agent_directories(selected, task_id) if selected['kind'] in ('agent', 'gemini-agent') else None
+    if workspace: task_id = workspace['taskId']
+    values = variables(body, file_name, workspace)
     if selected['kind'] == 'site-script':
+        payload.update(systemPrompt=fill(system, values), userPrompt=fill(user, values), prompt=fill(user, values))
         request = Request(selected['endpoint'], data=json.dumps(payload, ensure_ascii=False).encode('utf8'),
                           headers={'Content-Type': 'application/json'}, method='POST')
     else:
-        prompt = (f'系统要求：\n{system.strip()}\n\n用户要求：\n{user.strip()}\n\n'
-                  f'目标列表 URL：{payload["url"]}\n文件名：{file_name}\n'
-                  f'参考样例：\n```python\n{service.SAMPLE}\n```\n'
-                  + ('请将本次生成的代码及依赖文件保存到请求指定的 code_dir 目录内，不要保存到 input_file_dir 或 output_file_dir。完成文件写入后再返回结果。'
-                   if remote_target else '请在响应正文返回完整 Python 代码，不要仅返回服务器文件路径。'))
-        request = workbuddy_request(selected, prompt, body.get('taskId'))
+        # Required execution context precedes user text; no fixed sample and no
+        # hidden suffix after the user's final MQ/context block.
+        request = workbuddy_request(selected, compose(system, user, values), task_id)
     from .code_servers import model_request
     selected['_workspace'] = getattr(request, 'generation_workspace', None)
     emit = selected.get('_emit')

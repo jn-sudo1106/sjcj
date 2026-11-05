@@ -38,7 +38,7 @@ def put(app, record):
                    (json.dumps(record, ensure_ascii=False), record['status'], record['serverId'], record['taskId']))
 
 
-def create(app, body):
+def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
     from .server import ApiError
     from .generation_tasks import read_config, stamp
     from .model_interfaces import listing
@@ -50,7 +50,7 @@ def create(app, body):
     if not isinstance(override, dict): raise ApiError('代码生成配置无效')
     data = copy.deepcopy(saved)
     fields = ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName', 'systemPrompt', 'userPrompt',
-              'url', 'fileNameMode', 'fileName', 'destinationMode')
+              'url', 'fileNameMode', 'fileName', 'destinationMode', 'outputSubdirectory')
     data.update({key: override[key] for key in fields if key in override})
     if any(not isinstance(value, str) or len(value) > (12000 if 'Prompt' in key else 2000) for key, value in data.items()):
         raise ApiError('代码生成配置字段无效或过长')
@@ -70,7 +70,7 @@ def create(app, body):
     entries = body.get('entryIds') or []
     if not isinstance(entries, list) or len(entries) > 1000 or any(not re.fullmatch(r'[1-9][0-9]{0,19}', str(value)) for value in entries):
         raise ApiError('任务数据 ID 无效')
-    task_id = uuid.uuid4().hex
+    task_id = _task_id or uuid.uuid4().hex
     data.update(configId=owner, taskId=task_id, sampleId='www.realcan.cn.py', autoCommit=True, deferCommit=False)
     from .source_code_relations import source_context
     data['sourceContext'] = source_context({'sourceId': source_id, 'flowId': flow_id, 'stepId': step_id, 'flowVersionId': body.get('flowVersionId')})
@@ -88,7 +88,15 @@ def create(app, body):
               'params': {'orchestration': {'aiGeneration': data}}}
     from .mq_generation import model_call_info
     record['modelCall'] = model_call_info(app, record, selected)
+    if _lineage: record.update(_lineage)
     with app.store.connect() as db:
+        if _node_update:
+            key, previous, updated = _node_update
+            from .store import MySqlConnection
+            compare = 'BINARY setting_value=BINARY ?' if isinstance(db, MySqlConnection) else 'setting_value=?'
+            if db.execute('UPDATE settings SET setting_value=? WHERE setting_key=? AND ' + compare,
+                          (updated, key, previous)).rowcount != 1:
+                raise ApiError('节点生成配置已修改，请重新打开修正工作区后再提交', 409)
         db.execute('INSERT INTO generation_jobs (task_id,source_id,flow_id,config_id,interface_id,status,server_id,created_at,lease_until,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
                    (task_id, source_id, flow_id, owner, selected['id'], 'queued', '', record['createdAt'], 0, json.dumps(record, ensure_ascii=False)))
         from .source_code_relations import note_task

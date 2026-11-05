@@ -119,6 +119,7 @@ class Runner:
         self.identity_path = self.directory / "identity.json"
         self.identity = json.loads(self.identity_path.read_text(encoding="utf-8")) if self.identity_path.exists() else None
         self.processes: dict[str, tuple[str, subprocess.Popen, object]] = {}
+        self.program_lock = threading.RLock()
         self.process_info: dict[str, dict] = {}
         self.last_error = ""
         self.running = True
@@ -142,7 +143,7 @@ class Runner:
             "code": code, "installDirectory": str(self.directory),
             "hostName": socket.gethostname(),
             "ipAddress": ip or self.ip_address,
-            "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy"],
+            "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy", "file-browser"],
             **self.os_info,
         }
         result = json_request(self.server, "/api/runners/enroll", payload=payload)
@@ -240,6 +241,10 @@ class Runner:
             raise
 
     def _start(self, assignment: dict, slot: int = 0) -> None:
+        with self.program_lock:
+            self._start_locked(assignment, slot)
+
+    def _start_locked(self, assignment: dict, slot: int = 0) -> None:
         assignment_id = assignment["assignmentId"] if slot == 0 else f"{assignment['assignmentId']}:{slot}"
         digest = assignment["releaseDigest"]
         release_dir, manifest = self.prepare(digest)
@@ -325,6 +330,9 @@ class Runner:
                 raise ValueError('启动目录不能使用符号链接')
         if not target.resolve().is_relative_to(self.directory) or not target.is_dir():
             raise ValueError('启动目录不存在，请先下发代码')
+        from .bundle_install import directory_lock, recover_live_update
+        with directory_lock(target):
+            recover_live_update(target, self.directory / 'code')
         if code_key(manifest) not in read_registry(target)['current']:
             raise ValueError('此部署配置尚未下发到启动目录')
         for expected in release_dir.rglob('*'):
@@ -369,6 +377,11 @@ class Runner:
 
     def delivery_cycle(self) -> None:
         try:
+            from .runner_files import poll
+            poll(self)
+        except Exception as exc:
+            self.logs.event(self.log_session, 'stage', str(exc), stage='file-browser', level='error')
+        try:
             self.deliver_pending()
         except Exception as exc:
             self.last_error = ('目录下发：' + (str(exc) or type(exc).__name__))[:500]
@@ -382,6 +395,8 @@ class Runner:
         ]
         return {
             'ipAddress': self.ip_address,
+            'fileBrowserSchema': 1,
+            'liveFileDeploymentSchema': 1,
             'hostName': socket.gethostname(),
             **self.os_info,
             'runnerDigest': os.getenv('RUNNER_RELEASE_DIGEST', 'source-local'),

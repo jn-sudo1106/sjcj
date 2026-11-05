@@ -144,12 +144,7 @@ it('默认任务方式只提交任务，扩大提示词区域且隐藏代码编�
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ taskContext: { sourceId: '1', flowId: '2', stepId: '3' } }), expect.any(AbortSignal))
   expect(generateSiteScript).not.toHaveBeenCalled()
-  expect(wrapper.get('[data-testid="generation-task-status"]').text()).toContain('501 · 已保存到数据库')
-  expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
-  expect(wrapper.find('[data-testid="site-script-publish"]').exists()).toBe(false)
-  expect(wrapper.find('.site-script-workspace.is-task').exists()).toBe(true)
-  expect(wrapper.get('[data-testid="site-script-prompt"]').attributes('disabled')).toBeUndefined()
-  expect(wrapper.get('[data-testid="generation-mode-task"]').text()).toBe('任务方式')
+  expect(wrapper.emitted('update:open')?.at(-1)).toEqual([false])
   expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ configId: '1401081' }))
   wrapper.unmount(); await flushPromises()
 })
@@ -205,6 +200,7 @@ it('任务提交失败时在提示词区域展示错误，不需要打开生成�
   expect(wrapper.get('[data-testid="site-script-error"]').text()).toBe('任务接口暂不可用')
   expect(wrapper.find('[data-testid="site-script-code-panel"]').exists()).toBe(false)
   expect(wrapper.find('[data-testid="generation-task-status"]').exists()).toBe(false)
+  expect(wrapper.emitted('update:open')).toBeUndefined()
   wrapper.unmount()
 })
 
@@ -289,6 +285,15 @@ it('生成时展示实际过程，失败后保留输出且按文本显示', asyn
 const generatedArchive = { archiveId: 'a'.repeat(32), status: 'pending' as const, message: '', configId: 'c-1', repoId: webRepo.repoId,
   directoryId: 'default', directoryPath: 'default', taskId: 'task', serverId: 'server', createdAt: '', gitCommit: '', pushed: false,
   files: [{ path: 'default/www.realcan.cn.py', relativePath: 'www.realcan.cn.py', sha256: 'hash', size: 10 }] }
+it('生成子目录自动保存并随生成请求传递，目录预览包含 sites', async () => {
+  const w = mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '4' }); await flushPromises()
+  await w.get('[data-testid="site-script-output-subdirectory"]').setValue('sites')
+  expect(w.get('[data-testid="site-script-output-directory"]').text()).toContain('/code/sites')
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ outputSubdirectory: 'sites' }), expect.any(AbortSignal))
+  expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ outputSubdirectory: 'sites' }) }))
+  w.unmount()
+})
 it('修改生成配置后自动保存，关闭工作区立即提交待保存内容，不调用模型或发布代码', async () => {
   const w = mountDialog(); await flushPromises()
   expect(w.find('[data-testid="save-generation-config"]').exists()).toBe(false)
@@ -341,6 +346,7 @@ it('按配置类型默认提交links，可切到自定义且任务请求保存�
   expect(w.get('[data-testid="site-script-storage-path"]').text()).toContain('links/c-1/')
   await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   expect(submitSiteScriptTask).toHaveBeenLastCalledWith(expect.objectContaining({ destinationMode: 'type', repositoryId: webRepo.repoId, directoryId: webDirectory.directoryId }), expect.any(AbortSignal))
+  await w.setProps({ open: false }); await w.setProps({ open: true }); await flushPromises()
   const modeControl = w.getComponent('[data-testid="generation-destination-mode"]') as VueWrapper
   modeControl.vm.$emit('update:modelValue', 'custom'); await flushPromises()
   await w.get('[data-testid="site-script-repository"]').setValue(defaultRepo.repoId); await flushPromises()

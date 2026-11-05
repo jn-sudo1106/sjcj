@@ -9,7 +9,7 @@ import CodeRepositoryTab from './CodeRepositoryTab.vue'
 
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   codeRepositories: vi.fn(), createCodeRepository: vi.fn(), updateCodeRepository: vi.fn(),
-  moveCodeRepository: vi.fn(), setDefaultCodeRepository: vi.fn(), verifyCodeRepository: vi.fn(), uploadCodeRepositoryFiles: vi.fn(),
+  moveCodeRepository: vi.fn(), setDefaultCodeRepository: vi.fn(), verifyCodeRepository: vi.fn(), uploadCodeRepositoryFiles: vi.fn(), createCodeRepositoryFolder: vi.fn(),
   codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(), deleteCodeRepositoryFile: vi.fn(),
   codeRepositoryDirectories: vi.fn(), saveCodeRepositoryDirectory: vi.fn(), removeCodeRepositoryDirectory: vi.fn(),
   codeRepositoryFileReferences: vi.fn(),
@@ -50,6 +50,19 @@ async function mountTab() {
   await flushPromises()
   return wrapper
 }
+it('在当前文件夹新建目录，上传目标也保持当前文件夹', async () => {
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default',
+    total: 1, page: 1, pageSize: 50, items: [{ path: 'links/1401218', kind: 'directory', size: null, managed: false, canDelete: false, gitUrl: '' }] })
+  vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'sites', action: 'confirm' } as Awaited<ReturnType<typeof ElMessageBox.prompt>>)
+  vi.mocked(runnerManagementApi.createCodeRepositoryFolder).mockResolvedValue({ repoId: generic.repoId, gitCommit: 'abc', pushed: true, changed: true, files: [] })
+  const wrapper = await mountTab()
+  await wrapper.get('[data-testid="code-repo-preview-links/1401218"]').trigger('click'); await flushPromises()
+  await wrapper.get('[data-testid="code-repo-new-folder"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.createCodeRepositoryFolder).toHaveBeenCalledWith(generic.repoId, { name: 'sites', folder: 'links/1401218' })
+  await wrapper.get('[data-testid="code-repo-upload-selected"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-upload-directory"]').text()).toBe('links/1401218/')
+  wrapper.unmount()
+})
 it('仓库目录和路径列表都显示北京时间的 Git 更新时间，缺失时间显示占位', async () => {
   vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default', total: 3, page: 1, pageSize: 50, items: [
     { path: 'links', kind: 'directory', size: null, managed: false, canDelete: false, gitUrl: '', updatedAt: '2026-10-30T01:02:03+00:00' },
@@ -81,7 +94,7 @@ it('从运行版本跳转时直接选择指定仓库，并可再次切换目标�
   const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: 'repo-web' }, global: { stubs, directives: { loading: {} } } })
   await flushPromises()
   expect(wrapper.get('[data-testid="code-repo-workspace"]').text()).toContain('网页抓取代码')
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1, undefined, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1, undefined, '', 'updated-desc')
   await wrapper.setProps({ repositoryId: 'repo-default' }); await flushPromises()
   expect(wrapper.get('[data-testid="code-repo-workspace"]').text()).toContain('默认仓库')
   wrapper.unmount()
@@ -93,11 +106,11 @@ it('从编排配置跳转到仓库文件时自动选择配置目录、展开子�
   const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: web.repoId, repositoryDirectoryId: directory.directoryId, repositoryFilePath: '网页抓取/新闻/www.example.com.py' }, global: { stubs, directives: { loading: {} } } })
   await flushPromises()
   expect(wrapper.get('.rd-row.selected').text()).toContain('网页抓取代码')
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '新闻')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '新闻', 'updated-desc')
   expect(runnerManagementApi.codeRepositoryFileContent).toHaveBeenLastCalledWith(web.repoId, '网页抓取/新闻/www.example.com.py')
   expect(wrapper.get('[data-testid="code-repo-preview"]').text()).toContain('# 网页抓取/新闻/www.example.com.py')
   await wrapper.setProps({ repositoryFilePath: '网页抓取/second.py' }); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '', 'updated-desc')
   expect(wrapper.get('[data-testid="code-repo-preview"]').text()).toContain('# 网页抓取/second.py')
   wrapper.unmount()
 })
@@ -106,13 +119,13 @@ it('多文件任务跳转到配置子目录，切换任务或仓库根目录不�
   vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
   const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: web.repoId, repositoryDirectoryId: directory.directoryId, repositoryFolderPath: 'links/1401218' }, global: { stubs, directives: { loading: {} } } })
   await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '1401218')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '1401218', 'updated-desc')
   expect(wrapper.get('.rd-row.selected').text()).toContain('网页抓取代码')
   expect(runnerManagementApi.codeRepositoryFileContent).not.toHaveBeenCalled()
   await wrapper.setProps({ repositoryFolderPath: 'links/1401219/sub' }); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '1401219/sub')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, directory.directoryId, '1401219/sub', 'updated-desc')
   await wrapper.setProps({ repositoryFolderPath: '' }); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, undefined, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, undefined, '', 'updated-desc')
   expect(wrapper.find('[data-testid="code-repo-preview"]').exists()).toBe(false)
   wrapper.unmount()
 })
@@ -120,7 +133,7 @@ it('文件已删除或仓库不存在时显示错误，不打开其他仓库的�
   vi.mocked(runnerManagementApi.codeRepositoryFileContent).mockRejectedValue(new Error('文件不存在'))
   const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: web.repoId, repositoryFilePath: '旧目录/missing.py', repositoryDirectoryId: 'deleted-directory' }, global: { stubs, directives: { loading: {} } } })
   await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, undefined, '旧目录')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(web.repoId, '', 1, undefined, '旧目录', 'updated-desc')
   expect(wrapper.get('[data-testid="code-repo-preview"]').text()).toContain('文件不存在')
   wrapper.unmount()
   vi.mocked(runnerManagementApi.codeRepositoryFileContent).mockClear()
@@ -143,7 +156,7 @@ it('仓库配置列表在代码列表上方，默认选中第一条且按列表�
   expect(wrapper.find('[data-testid="code-repo-repo-web"]').exists()).toBe(true)
   await flushPromises()
   expect(wrapper.get('[data-testid="code-repo-workspace"]').text()).toContain('网页抓取代码')
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1, undefined, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1, undefined, '', 'updated-desc')
   await wrapper.get('[data-testid="code-repo-query"]').setValue('没有匹配')
   expect(wrapper.find('[data-testid="code-repo-repo-web"]').exists()).toBe(false)
   expect(wrapper.find('[data-testid="code-repo-workspace"]').exists()).toBe(false)
@@ -174,7 +187,7 @@ it('在仓库下按节点类型新建目录，选择目录浏览并上传到该�
   vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
   await wrapper.get('[data-testid="repo-directory-save"]').trigger('click'); await flushPromises()
   expect(runnerManagementApi.saveCodeRepositoryDirectory).toHaveBeenCalledWith(generic.repoId, expect.objectContaining({ name: '网页抓取代码', configType: '90', path: '网页抓取' }), undefined)
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '', 'updated-desc')
   await wrapper.get('[data-testid="code-repo-upload-selected"]').trigger('click')
   expect(wrapper.get('[data-testid="code-repo-upload-directory"]').text()).toBe('网页抓取/')
   wrapper.unmount()
@@ -321,7 +334,7 @@ it('查看仓库文件并删除非系统文件', async () => {
   const wrapper = await mountTab()
   await wrapper.get('[data-testid="code-repo-repo-web"]').trigger('click')
   await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1, undefined, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1, undefined, '', 'updated-desc')
   expect(wrapper.get('[data-testid="code-repo-file-code/c-1/a.py"]').text()).toContain('受保护')
   await wrapper.get('[data-testid="code-repo-file-网页抓取/sample.py"]').trigger('click')
   await flushPromises()
@@ -330,6 +343,18 @@ it('查看仓库文件并删除非系统文件', async () => {
   await wrapper.get('[data-testid="code-repo-delete-网页抓取/sample.py"]').trigger('click')
   await flushPromises()
   expect(runnerManagementApi.deleteCodeRepositoryFile).toHaveBeenCalledWith('repo-web', '网页抓取/sample.py')
+})
+
+it('仓库文件默认时间倒序，点击时间列切换正序并重新查询第一页', async () => {
+  const wrapper = await mountTab()
+  const sort = wrapper.get('[data-testid="code-repo-time-sort"]')
+  expect(sort.text()).toContain('↓')
+  await sort.trigger('click'); await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(expect.any(String), '', 1, undefined, '', 'updated-asc')
+  expect(wrapper.get('[data-testid="code-repo-time-sort"]').text()).toContain('↑')
+  await wrapper.get('[data-testid="code-repo-time-sort"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(expect.any(String), '', 1, undefined, '', 'updated-desc')
+  wrapper.unmount()
 })
 
 it('文件读取失败时在内容抽屉显示错误', async () => {
@@ -358,15 +383,15 @@ it('默认目录视图打开文件夹、预览子文件并返回，路径列表�
   expect(wrapper.get('[data-testid="code-repo-preview-shared/python/处理程序"]').text()).toBe('处理程序')
   expect(wrapper.get('[data-testid="code-repo-file-shared/python/处理程序"]').text()).toContain('文件夹')
   await wrapper.get('[data-testid="code-repo-file-shared/python/处理程序"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '处理程序')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '处理程序', 'updated-desc')
   expect(runnerManagementApi.codeRepositoryFileContent).not.toHaveBeenCalled()
   expect(wrapper.get('[data-testid="code-repo-preview-shared/python/处理程序/main.py"]').text()).toBe('main.py')
   await wrapper.get('[data-testid="code-repo-file-shared/python/处理程序/main.py"]').trigger('click'); await flushPromises()
   expect(runnerManagementApi.codeRepositoryFileContent).toHaveBeenLastCalledWith(generic.repoId, file.path)
   await wrapper.get('[aria-label="当前仓库目录"] button').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '', 'updated-desc')
   await wrapper.get('[data-testid="code-repo-paths-view"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId)
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, undefined, 'updated-desc')
   expect(wrapper.get('[data-testid="code-repo-preview-shared/python/处理程序/main.py"]').text()).toBe(file.path)
   expect(wrapper.find('[aria-label="当前仓库目录"]').exists()).toBe(false)
   wrapper.unmount()
@@ -381,12 +406,12 @@ it('从全部仓库文件打开配置目录时同步左侧选择，子目录沿�
   await wrapper.get('[data-testid="code-repo-preview-websnatch"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[data-testid="repo-directory-dir-web"] .rd-title').attributes('aria-pressed')).toBe('true')
   expect(wrapper.get('.rd-all').attributes('aria-pressed')).toBe('false')
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, '', 'updated-desc')
   await wrapper.get('[data-testid="code-repo-preview-websnatch/utils"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, 'utils')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId, 'utils', 'updated-desc')
   expect(wrapper.get('[data-testid="repo-directory-dir-web"] .rd-title').attributes('aria-pressed')).toBe('true')
   await wrapper.get('.rd-all').trigger('click'); await flushPromises()
   expect(wrapper.get('.rd-all').attributes('aria-pressed')).toBe('true')
-  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, undefined, '')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, undefined, '', 'updated-desc')
   wrapper.unmount()
 })

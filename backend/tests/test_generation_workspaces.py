@@ -5,6 +5,15 @@ from backend.runner_management.server import ApiError
 
 
 class StableWorkspacesTest(unittest.TestCase):
+    def test_output_subdirectory_keeps_root_and_updates_windows_and_unix_code_paths(self):
+        from backend.runner_management.model_interfaces import agent_directories
+        for root, expected in [(r'D:\workspace', r'D:\workspace\101\code\sites'), ('/data/workspace', '/data/workspace/101/code/sites')]:
+            selected = {'id': 'test', 'prjDir': root, '_workspaceDirectory': '101', '_codeSubdirectory': 'sites'}
+            self.assertEqual(agent_directories(selected, 'test')['codeDir'], expected)
+        self.assertEqual(workspaces.node_defaults({})['outputSubdirectory'], '')
+        for value in ('../outside', '/absolute', r'D:\outside', 'a//b', '.git', 'CON', None):
+            with self.subTest(value=value), self.assertRaises(ApiError):
+                workspaces.node_defaults({'outputSubdirectory': value})
     def test_git_binding_match_uses_directory_boundaries_and_remote_os(self):
         from backend.runner_management.generation_git_bindings import match, relative_path
         server = {'workspace': r'D:\workspace', 'generationGitBindings': [

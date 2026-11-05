@@ -14,7 +14,19 @@ _LOCKS = {}
 
 def node_defaults(body):
     """Node workspaces are owned by CodeServer, never by node form overrides."""
-    return {**body, 'workspaceMode': 'config', 'workspacePath': '', 'codeDirectory': ''}
+    return {**body, 'workspaceMode': 'config', 'workspacePath': '', 'codeDirectory': '',
+            'outputSubdirectory': output_subdirectory(body)}
+
+
+def output_subdirectory(body):
+    from .server import ApiError
+    value = body.get('outputSubdirectory', '')
+    if not isinstance(value, str) or len(value) > 120 or (value and not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', value)):
+        raise ApiError('生成子目录须为相对目录，仅支持字母、数字、下划线、短横线和 /')
+    reserved = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+    if any(part.upper() in reserved for part in value.split('/')):
+        raise ApiError('生成子目录不能使用系统保留名称')
+    return value
 
 
 def server_busy(server_id):

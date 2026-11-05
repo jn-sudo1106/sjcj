@@ -18,8 +18,12 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
-function render() {
-  return mount(RunnerManagementTab, { props: { section: 'runners' }, global: { plugins: [ElementPlus] } })
+async function render() {
+  const wrapper = mount(RunnerManagementTab, { props: { section: 'runners' }, global: { plugins: [ElementPlus] } })
+  await flushPromises()
+  const status = wrapper.findAllComponents({ name: 'ElSelect' }).find(select => select.attributes('data-testid') === 'runner-status-filter')!
+  status.vm.$emit('update:modelValue', ''); await flushPromises()
+  return wrapper
 }
 
 describe('Runner 实例页面', () => {
@@ -101,6 +105,11 @@ describe('Runner 实例页面', () => {
     const wrapper = mount(RunnerManagementTab, { props: { section: 'runners' }, global: { plugins: [ElementPlus],
       stubs: { ElDialog: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' } } } })
     await flushPromises()
+    const status = wrapper.findAllComponents({ name: 'ElSelect' }).find(select => select.attributes('data-testid') === 'runner-status-filter')!
+    expect(status.props('modelValue')).toBe('online')
+    expect(wrapper.find('[data-testid="runner-select-r-2"]').exists()).toBe(false)
+    // Batch/filter scenarios below explicitly include offline instances.
+    status.vm.$emit('update:modelValue', ''); await flushPromises()
     return { wrapper, latest }
   }
   it('勾选按实例 ID 区分同 IP 目录，全选只覆盖当前筛选且筛选后清空选择', async () => {
@@ -226,7 +235,7 @@ describe('Runner 实例页面', () => {
   it('心跳列表、提示和详情将 UTC 转换为补零的北京时间', async () => {
     vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, lastHeartbeat: '2026-10-12T16:36:50+00:00' }, instances[1]!])
     vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
-    const wrapper = render(); await flushPromises()
+    const wrapper = await render(); await flushPromises()
     const cells = wrapper.findAll('[data-testid="runner-heartbeat"]')
     expect(cells[0]!.text()).toBe('2026-10-13 00:36:50')
     expect(cells[0]!.attributes('title')).toContain('北京时间')
@@ -272,7 +281,7 @@ describe('Runner 实例页面', () => {
   it('同 IP 不同目录分别展示，不把实例按 IP 合并', async () => {
     vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue(instances)
     vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
-    const wrapper = render()
+    const wrapper = await render()
     await flushPromises()
     const rows = wrapper.findAll('tbody tr')
     expect(rows).toHaveLength(2)
@@ -283,7 +292,7 @@ describe('Runner 实例页面', () => {
   it('显示 Runner 上报的系统类型与版本，旧实例保留平台类型并提示版本未上报', async () => {
     vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, platform: 'win32', osType: 'Windows', osVersion: '11 Professional · 10.0.22631' }, { ...instances[1]!, platform: 'linux' }])
     vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
-    const wrapper = render(); await flushPromises()
+    const wrapper = await render(); await flushPromises()
     expect(wrapper.findAll('th').map(cell => cell.text())).toContain('操作系统')
     const cells = wrapper.findAll('[data-testid="runner-os"]')
     expect(cells[0]!.text()).toContain('Windows'); expect(cells[0]!.text()).toContain('10.0.22631')
@@ -296,7 +305,7 @@ describe('Runner 实例页面', () => {
   it('接口不可用时显示真实错误，不使用演示实例', async () => {
     vi.spyOn(runnerManagementApi, 'instances').mockRejectedValue(new Error('服务未部署'))
     vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
-    const wrapper = render()
+    const wrapper = await render()
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('服务未部署')
     expect(wrapper.findAll('tbody tr')).toHaveLength(1)
@@ -308,7 +317,7 @@ describe('Runner 实例页面', () => {
     const actual = 'sha256:' + 'a'.repeat(64), desired = 'sha256:' + 'b'.repeat(64)
     vi.spyOn(runnerManagementApi, 'instances').mockResolvedValue([{ ...instances[0]!, actualDigest: actual, desiredDigest: desired }, { ...instances[1]!, actualDigest: 'source-local', desiredDigest: null }])
     vi.spyOn(runnerManagementApi, 'releases').mockResolvedValue([])
-    const wrapper = render(); await flushPromises()
+    const wrapper = await render(); await flushPromises()
     expect(wrapper.findAll('th').map(item => item.text())).toContain('Runner 版本')
     const versions = wrapper.findAll('[data-testid="runner-version"]')
     expect(versions[0]!.text()).toContain('当前：aaaaaaaaaaaa')

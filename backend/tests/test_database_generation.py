@@ -33,6 +33,37 @@ class DatabaseGenerationTest(unittest.TestCase):
         return SimpleNamespace(send_response=lambda *args: None, send_header=lambda *args: None,
                                end_headers=lambda: None, wfile=io.BytesIO())
 
+    def test_task_prompt_variables_use_executing_machine_and_queue_filename(self):
+        service, origin, body, calls = self.configured()
+        job = tasks.create(self.app, {**body, 'generation': {'fileNameMode':'queue',
+            'systemPrompt':'目录 {{code_dir}}', 'userPrompt':'地址 {{url}}，文件 {{file_name}}，保存到 {{code_file_path}}。{{code_save_requirement}}\n【MQ 主题结束】'}})['job']
+        server = code_servers.read(self.app,service.identity['serverId'])
+        tasks.claim(self.app,server); tasks.execute(self.handler(),self.app,server,job['taskId'])
+        self.assertEqual(tasks.read(self.app,job['taskId'])['status'],'succeeded')
+        request = calls[0]
+        self.assertIn('生成文件名：download.py',request['prompt'])
+        self.assertIn('代码保存目录：'+request['code_dir'],request['prompt'])
+        self.assertIn(str(service.workspace.root/'101'/'code'/'download.py'),request['prompt'])
+        self.assertNotIn('{{file_name}}',request['prompt']);self.assertNotIn('{{code_dir}}',request['prompt'])
+        self.assertTrue(request['prompt'].endswith('【MQ 主题结束】'))
+
+    def test_task_subdirectory_reaches_model_prompt_workspace_and_git(self):
+        service, origin, body, calls = self.configured()
+        job = tasks.create(self.app, {**body, 'generation': {'outputSubdirectory': 'sites',
+            'userPrompt': '保存到 {{code_dir}}；文件 {{code_file_path}}'}})['job']
+        self.assertEqual(tasks.read(self.app, job['taskId'])['input']['outputSubdirectory'], 'sites')
+        server = code_servers.read(self.app, service.identity['serverId'])
+        tasks.claim(self.app, server)
+        tasks.execute(self.handler(), self.app, server, job['taskId'])
+        saved = tasks.read(self.app, job['taskId'])
+        self.assertEqual(saved['status'], 'succeeded')
+        self.assertEqual(calls[0]['code_dir'], str(service.workspace.root / '101/code/sites'))
+        self.assertIn(calls[0]['code_dir'], calls[0]['prompt'])
+        paths = self.app.git(origin, 'ls-tree', '-r', '--name-only', 'main').splitlines()
+        self.assertTrue(paths)
+        self.assertTrue(all(path.startswith('default/101/sites/') for path in paths), paths)
+        self.assertFalse(any('/sites/sites/' in path for path in paths))
+
     def test_create_is_database_only_captures_identity_model_and_does_not_start_generation(self):
         service, origin, body, calls = self.configured()
         with patch('backend.runner_management.mq_generation.fetch_json', side_effect=AssertionError('不能访问 MQ')):

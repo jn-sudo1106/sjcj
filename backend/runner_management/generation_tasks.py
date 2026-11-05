@@ -55,7 +55,7 @@ def save_config(app, body):
                 if not isinstance(incoming, dict):
                     raise ApiError('AI 生成配置无效')
                 fields = ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName',
-                          'systemPrompt', 'userPrompt', 'url', 'fileNameMode')
+                          'systemPrompt', 'userPrompt', 'url', 'fileNameMode', 'outputSubdirectory')
                 data = {name: incoming.get(name, '') for name in fields}
                 from .generation_workspaces import node_defaults
                 data = node_defaults(data)

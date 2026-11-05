@@ -86,9 +86,12 @@ def destination(app, body):
             raise ApiError('代码仓库已停用', 409)
         directory = get_directory(app, db, repo_id, directory_id, config_type=node_type)
     from .source_code_relations import source_context
+    from .generation_workspaces import output_subdirectory
+    repository_prefix = '/'.join(part for part in (
+        owner if include_id and directory['path'].split('/')[-1] != owner else '', output_subdirectory(body)) if part)
     return {'configId': owner, 'repoId': repo_id, 'directoryId': directory_id, 'directoryPath': directory['path'],
             'sourceContext': source_context(body.get('sourceContext')),
-            'repositoryPrefix': owner if include_id and directory['path'].split('/')[-1] != owner else '',
+            'repositoryPrefix': repository_prefix,
             'configType': node_type, 'queueName': str(body.get('queueName', ''))[:120], 'autoCommit': body.get('autoCommit', False), 'deferCommit': body.get('deferCommit', False)}
 
 

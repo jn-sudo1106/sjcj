@@ -1,4 +1,4 @@
-import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken, triggerSessionExpired } from './auth'
+import { ACCESS_TOKEN_HEADER, getInfo, readStoredToken } from './auth'
 import { streamModelInterfaceTest } from './modelInterfaceStream'
 import { taskInstFromLegacy } from './legacyAdapters'
 
@@ -7,6 +7,10 @@ export interface GenerationModelCall {
   timeoutSeconds: number; serverId?: string; serverName?: string; serverAddress?: string; capturedAt?: string
 }
 export interface MqCodeJob {
+  parentTaskId?: string
+  rootTaskId?: string
+  attempt?: number
+  correction?: string
   taskId: string
   serverId: string
   configId: string
@@ -32,7 +36,7 @@ export type GenerationRepositoryResult = Pick<GeneratedCodeArchive, 'repoId' | '
 export interface NodeGenerationSettings {
   configId: string
   enabled: boolean
-  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; workspaceMode?: 'config-queue' | 'config' | 'queue' | 'custom'; workspacePath?: string; codeDirectory?: string; destinationMode?: 'type' | 'custom' }
+  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; outputSubdirectory?: string; workspaceMode?: 'config-queue' | 'config' | 'queue' | 'custom'; workspacePath?: string; codeDirectory?: string; destinationMode?: 'type' | 'custom' }
 }
 export interface GenerationDestination {
   repositoryId: string; directoryId: string; directoryPath: string; repoName: string
@@ -638,19 +642,27 @@ export interface ModelInterfaceTestResult {
 }
 
 export const runnerManagementApi = {
+  requestRunnerFiles: (id: string, body: { action: 'list' | 'read'; path: string }) => request<{ requestId: string }>(`/runners/${encodeURIComponent(id)}/files`, 'POST', body),
+  runnerFileResult: (id: string) => request<{ status: 'pending' | 'success' | 'failed'; error?: string; result?: { path: string; items?: RemoteCodeFile[]; truncated?: boolean; content?: string; sha256?: string } }>(`/runner-file-requests/${encodeURIComponent(id)}`),
+  nodePromptTemplates: (params: { sourceType?: string; nodeTypeName?: string; category?: string; templateUse: 'config' | 'script' }) => request<import('./nodePrompts').NodePromptTemplate[]>('/node-prompt-templates?' + new URLSearchParams(Object.entries(params).filter(([,value]) => value !== undefined) as [string,string][])),
+  saveNodePromptTemplate: (body: Partial<import('./nodePrompts').NodePromptTemplate> & { sourceType: string }) => request<import('./nodePrompts').NodePromptTemplate>('/node-prompt-templates/save', 'POST', body),
+  previewPromptDeletion: (body: { promptId: number; sourceType: string; nodeTypeName: string; templateUse: 'config' | 'script' }) => request<{ promptId: number; promptName: string; revision: string; canDelete: boolean; reason: string; referenceCount: number }>('/node-prompt-templates/delete-preview', 'POST', body),
+  deletePromptTemplate: (body: { promptId: number; sourceType: string; nodeTypeName: string; templateUse: 'config' | 'script'; revision: string }) => request<{ deleted: boolean; promptId: number }>('/node-prompt-templates/delete', 'POST', body),
   deploymentResources: () => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources'),
   nodeDeploymentResource: (context: NodeDeploymentContext) => request<NodeDeploymentResource>('/node-deployment-resource?' + new URLSearchParams(Object.entries(context).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))),
   saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
   saveDeploymentResources: (body: { items: DeploymentResourceRule[]; revision: string }) => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources', 'POST', body),
   generatedDeployments: (query: GeneratedDeploymentQuery = {}) => request<{ items: GeneratedDeploymentJob[]; total: number }>('/deployment-jobs?' + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))),
   deployGeneratedArchive: (body: { archiveId: string; configId: string; sourceId: string; flowId: string; stepId: string }) => request<GeneratedDeploymentJob>('/deployment-jobs', 'POST', body),
-  generatedDeploymentAction: (jobId: string, action: 'publish' | 'retry' | 'rollback') => request<GeneratedDeploymentJob>(`/deployment-jobs/${encodeURIComponent(jobId)}/${action}`, 'POST', {}),
+  generatedDeploymentAction: (jobId: string, action: 'publish' | 'retry' | 'rollback' | 'sync-git') => request<GeneratedDeploymentJob>(`/deployment-jobs/${encodeURIComponent(jobId)}/${action}`, 'POST', {}),
   codeGenerationTasks: async (query: { configId?: string; sourceId?: string; taskId?: string; state?: string; page: number; size: number }) => {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))
     const result = await request<{ list: unknown[]; total: number }>('/code-generation/tasks?' + params)
     return { list: result.list.map(taskInstFromLegacy), total: result.total }
   },
   createCodeGenerationTask: (body: { sourceId: string; flowId: string; stepId: string; configId: string; sourceName?: string; nodeName?: string; flowVersionId?: string; entryIds?: string[]; generation?: Record<string, unknown> }) => request<{ job: MqCodeJob }>('/code-generation/tasks', 'POST', body),
+  prepareCodeRegeneration: (taskId: string) => request<{ taskId: string; generation: Record<string, string>; context: Record<string, string>; nodePromptRevision: string; canUpdateNode: boolean }>(`/code-generation/tasks/regeneration?taskId=${encodeURIComponent(taskId)}`),
+  regenerateCodeTask: (body: { taskId: string; requestId: string; systemPrompt: string; userPrompt: string; correction: string; interfaceId: string; updateNodePrompts: boolean; nodePromptRevision: string }) => request<{ job: MqCodeJob }>('/code-generation/tasks/regeneration', 'POST', body),
   deleteCodeGenerationTask: (taskId: string, configId: string) => request<{ ok: true; message: string }>('/code-generation/tasks/delete', 'POST', { taskId, configId }),
   deleteCodeGenerationTasks: (taskIds: string[], configId: string) => request<{ items: { taskId: string; ok: boolean; message: string }[]; deletedCount: number; failedCount: number }>('/code-generation/tasks/delete-batch', 'POST', { taskIds, configId }),
   mqCodeJobSummaries: (taskIds: string[]) => request<{ items: (Pick<MqCodeJob, 'taskId' | 'serverId' | 'configId' | 'queue' | 'status' | 'callbackSent' | 'message'> & { finishedAt?: string; modelCall?: GenerationModelCall; archive?: GenerationRepositoryResult })[] }>(`/code-generation/tasks/summaries?taskIds=${encodeURIComponent(taskIds.join(','))}`),
@@ -752,10 +764,12 @@ export const runnerManagementApi = {
   codeRepositoryDirectories: (repoId: string) => list<CodeRepositoryDirectory>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories`),
   saveCodeRepositoryDirectory: (repoId: string, input: CodeRepositoryDirectoryInput, directoryId?: string) => request<CodeRepositoryDirectory>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories${directoryId ? '/' + encodeURIComponent(directoryId) : ''}`, 'POST', input),
   removeCodeRepositoryDirectory: (repoId: string, directoryId: string, revision: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}?revision=${encodeURIComponent(revision)}`, 'DELETE'),
-  uploadCodeRepositoryFiles: (repoId: string, input: { overwrite: boolean; directoryId?: string; uploadType?: 'files' | 'folder'; files: { name: string; data: string; relativePath?: string }[] }) =>
+  createCodeRepositoryFolder: (repoId: string, input: { name: string; directoryId?: string; folder?: string }) =>
+    request<CodeRepositoryUploadResult>(`/settings/code-repos/${encodeURIComponent(repoId)}/folders`, 'POST', input),
+  uploadCodeRepositoryFiles: (repoId: string, input: { overwrite: boolean; directoryId?: string; folder?: string; uploadType?: 'files' | 'folder'; files: { name: string; data: string; relativePath?: string }[] }) =>
     request<CodeRepositoryUploadResult>(`/settings/code-repos/${encodeURIComponent(repoId)}/files`, 'POST', input),
-  codeRepositoryFiles: (repoId: string, keyword = '', page = 1, directoryId?: string, folder?: string) =>
-    request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}${folder !== undefined ? '&view=directory&folder=' + encodeURIComponent(folder) : ''}`),
+  codeRepositoryFiles: (repoId: string, keyword = '', page = 1, directoryId?: string, folder?: string, sort: 'updated-desc' | 'updated-asc' = 'updated-desc') =>
+    request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}${folder !== undefined ? '&view=directory&folder=' + encodeURIComponent(folder) : ''}&sort=${sort}`),
   codeRepositoryFileContent: (repoId: string, path: string) =>
     request<CodeRepositoryFileContent>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/content?path=${encodeURIComponent(path)}`),
   codeRepositoryFileReferences: (repoId: string, path: string) => request<RepositoryFileReferences>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/references?path=${encodeURIComponent(path)}`),

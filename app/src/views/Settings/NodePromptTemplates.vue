@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVariables.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { nodePromptApi, type NodePromptTemplate, type TemplateUse } from '@/api/nodePrompts'
+import { runnerManagementApi } from '@/api/runnerManagement'
 import type { NodeType } from '@/api'
 
 const props = defineProps<{ node: NodeType; canWrite: boolean }>()
-const use = ref<TemplateUse>('config'), rows = ref<NodePromptTemplate[]>([])
+const use = ref<TemplateUse>('script'), rows = ref<NodePromptTemplate[]>([])
 const loading = ref(false), saving = ref(false), error = ref(''), selected = ref(0), ready = ref(false)
 const form = reactive({ promptId: 0, promptName: '', nodeType: '', nodeTypeName: '', category: 'collect', isActive: 1, isDefault: 1,
   systemPrompt: '', userPromptTemplate: '', outputSchema: '', parameters: '', exampleInput: '', exampleOutput: '', revision: '' })
@@ -63,7 +65,20 @@ async function save() {
   } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { saving.value = false }
 }
-watch(() => props.node.sourceType, () => { use.value = 'config'; void load() }, { immediate: true })
+async function remove() {
+  if (!props.canWrite || !form.promptId || saving.value || loading.value) return
+  saving.value = true; error.value = ''
+  const body = { promptId: form.promptId, sourceType: props.node.sourceType, nodeTypeName: props.node.typeName, templateUse: use.value }
+  try {
+    const preview = await runnerManagementApi.previewPromptDeletion(body)
+    if (!preview.canDelete) { error.value = preview.reason; return }
+    try { await ElMessageBox.confirm(`确认删除提示词「${preview.promptName}」（ID：${preview.promptId}）？${dirty.value ? '当前未保存的修改将放弃。' : ''}删除前由管理服务保留备份，节点中已保存的提示词内容不变。`, '删除提示词', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) } catch { return }
+    await runnerManagementApi.deletePromptTemplate({ ...body, revision: preview.revision })
+    ElMessage.success('提示词模板已删除'); await load()
+  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { saving.value = false }
+}
+watch(() => props.node.sourceType, () => { use.value = 'script'; void load() }, { immediate: true })
 defineExpose({ confirmLeave })
 </script>
 
@@ -78,8 +93,9 @@ defineExpose({ confirmLeave })
     </header>
     <el-alert v-if="errorLabel" :title="errorLabel" type="error" :closable="false" show-icon />
     <div class="np-workspace">
-      <nav aria-label="提示词列表"><button v-for="row in rows" :key="row.promptId" type="button" :class="{ active: selected === row.promptId }" :disabled="loading || saving" @click="choose(row)"><b>{{ row.promptName }}</b><span>{{ row.isDefault ? '默认 · ' : '' }}{{ row.isActive ? '已启用' : '已停用' }}</span></button><p v-if="!rows.length" class="np-muted">暂无提示词{{ canWrite ? '，填写后保存即可创建' : '' }}</p></nav>
+      <nav aria-label="提示词列表"><button v-for="row in rows" :key="row.promptId" type="button" :class="{ active: selected === row.promptId }" :disabled="loading || saving" @click="choose(row)"><b>{{ row.promptName }}</b><span data-testid="node-prompt-id">ID：{{ row.promptId }}</span><span>{{ row.isDefault ? '默认 · ' : '' }}{{ row.isActive ? '已启用' : '已停用' }}</span></button><p v-if="!rows.length" class="np-muted">暂无提示词{{ canWrite ? '，填写后保存即可创建' : '' }}</p></nav>
       <el-form v-if="ready" class="np-editor" label-position="top" :disabled="!canWrite || saving || loading" @submit.prevent>
+        <p class="np-muted" data-testid="selected-prompt-id">提示词 ID：{{ form.promptId || '未保存' }}</p>
         <div class="np-fields">
           <el-form-item label="提示词名称" required class="np-name"><el-input v-model="form.promptName" maxlength="100" data-testid="node-prompt-name" placeholder="例如：新闻列表抓取" /></el-form-item>
           <el-form-item label="类型编码"><el-input :model-value="form.nodeType" disabled /></el-form-item>
@@ -91,10 +107,11 @@ defineExpose({ confirmLeave })
           <el-form-item label="系统提示词" required><el-input v-model="form.systemPrompt" type="textarea" :rows="12" maxlength="12000" data-testid="node-prompt-system" /></el-form-item>
           <el-form-item label="用户提示词模板"><el-input v-model="form.userPromptTemplate" type="textarea" :rows="12" maxlength="12000" placeholder="支持 {{变量名}}，如 {{describe}}、{{url}}" data-testid="node-prompt-user" /></el-form-item>
         </div>
-        <p class="np-muted" v-pre>常用变量：{{describe}}、{{source_table}}、{{output_table}}、{{input_fields}}、{{output_fields}}；代码生成还支持 {{url}}、{{config_id}}、{{queue_name}}。</p>
+        <p class="np-muted" v-pre>常用变量：{{describe}}、{{source_table}}、{{output_table}}、{{input_fields}}、{{output_fields}}。</p>
+        <CodeGenerationPromptVariables v-if="use === 'script'" />
         <el-collapse><el-collapse-item title="变量、输出结构与示例" name="extra"><div class="np-prompts"><el-form-item v-for="field in jsonFields" :key="field.key" :label="field.label"><el-input v-model="form[field.key]" type="textarea" :rows="5" :maxlength="field.key === 'exampleOutput' ? 12000 : 60000" /></el-form-item></div></el-collapse-item></el-collapse>
         <p class="np-muted">公共模板在工作区加载时使用；当前节点已保存的提示词不会被回写覆盖。</p>
-        <footer><span v-if="dirty">有未保存的修改</span><el-button v-if="canWrite" type="primary" :loading="saving" data-testid="node-prompt-save" @click="save">保存模板</el-button></footer>
+        <footer><el-button v-if="canWrite && form.promptId" type="danger" plain :disabled="saving || loading" data-testid="node-prompt-delete" @click="remove">删除模板</el-button><span v-if="dirty">有未保存的修改</span><el-button v-if="canWrite" type="primary" :loading="saving" data-testid="node-prompt-save" @click="save">保存模板</el-button></footer>
       </el-form>
     </div>
   </section>

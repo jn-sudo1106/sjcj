@@ -32,7 +32,7 @@ async function setup(query: Record<string, string> = {}, admin = true) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
   await router.push({ path: '/settings', query }); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = [admin ? 'admin' : 'read']
-  const w = mount(DeploymentResourcesTab, { global: { plugins: [pinia, router, ElementPlus], stubs: { DeploymentRuntimeActions: true } }, attachTo: document.body })
+  const w = mount(DeploymentResourcesTab, { global: { plugins: [pinia, router, ElementPlus], stubs: { DeploymentRuntimeActions: true, RunnerFilesDrawer: true } }, attachTo: document.body })
   wrappers.push(w); await flushPromises(); return w
 }
 it('配置链接进入部署记录，已完成记录仅提供程序与日志操作', async () => {
@@ -114,7 +114,14 @@ it('入口文件在当前行编辑并随资源保存', async () => {
   const w = await setup()
   expect(w.text()).toContain('入口文件')
   expect(w.text()).toContain('未设置')
-  await change(w, ElInput, '列表入口文件', 'worker/main.py')
+  await w.findAll('button').find(button => button.text() === '编辑')!.trigger('click'); await flushPromises()
+  await w.get('[data-testid="choose-resource-entry"]').trigger('click'); await flushPromises()
+  const picker = w.findComponent({ name: 'RunnerFilesDrawer' })
+  expect(picker.props('selectFile')).toBe(true)
+  expect(picker.props('directory')).toBe('D:\\Runner1\\instance\\test')
+  picker.vm.$emit('selected', 'worker/main.py'); await flushPromises()
+  expect(runnerManagementApi.saveDeploymentResources).not.toHaveBeenCalled()
+  await w.findAll('button').find(button => button.text() === '保存')!.trigger('click'); await flushPromises()
   expect(runnerManagementApi.saveDeploymentResources).toHaveBeenCalledWith({ revision: 'rev1', items: [{ ...rule, entryPoint: 'worker/main.py' }] })
   expect(w.text()).toContain('worker/main.py')
 })
@@ -124,4 +131,88 @@ it('未指定资源默认入口时显示实际采用的文件名', async () => {
   const w = await setup()
   expect(w.text()).toContain('cn.chinahdht.com.py')
   expect(w.text()).not.toContain('自动识别')
+})
+
+it('环境部署目录可点击并将实际目录和所属Runner交给文件面板', async () => {
+  const w = await setup()
+  await w.get('[data-testid="browse-resource-directory"]').trigger('click'); await flushPromises()
+  const browser = w.findComponent({ name:'RunnerFilesDrawer' })
+  expect(browser.exists()).toBe(true)
+  expect(browser.props('runner').runnerId).toBe('r1')
+  expect(browser.props('directory')).toContain('test')
+})
+
+it('部署记录打开实际落盘目录，点击目录不打开部署详情', async () => {
+  const installedPath = 'D:\\Runner1\\instance\\test\\links\\1401218'
+  vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ items: [{ ...job, installedPath }], total: 1 })
+  const w = await setup({ configId: '1401218' })
+  await w.get('[data-testid="browse-deployment-directory"]').trigger('click'); await flushPromises()
+  const browser = w.findComponent({ name: 'RunnerFilesDrawer' })
+  expect(browser.props('runner').runnerId).toBe('r1')
+  expect(browser.props('directory')).toBe(installedPath)
+  expect(document.body.querySelector('.dr-details')).toBeNull()
+})
+
+it('部署记录没有落盘路径时使用目标相对目录', async () => {
+  const w = await setup({ configId: '1401218' })
+  await w.get('[data-testid="browse-deployment-directory"]').trigger('click'); await flushPromises()
+  expect(w.findComponent({ name: 'RunnerFilesDrawer' }).props('directory')).toBe('test/links/1401218')
+})
+
+it('部署详情的目录也可打开，切换到文件面板时关闭详情', async () => {
+  const w = await setup({ configId: '1401218' })
+  await w.find('.el-table__body tr').trigger('click'); await flushPromises()
+  const button = document.body.querySelector('[data-testid="browse-deployment-detail-directory"]') as HTMLButtonElement
+  expect(button).not.toBeNull(); button.click(); await flushPromises()
+  expect(w.findComponent({ name: 'RunnerFilesDrawer' }).props('directory')).toBe(job.targetPath)
+  expect(document.body.querySelector('.dr-details')).toBeNull()
+})
+
+it('所属实例不存在时保留目录文字', async () => {
+  vi.mocked(runnerManagementApi.instances).mockResolvedValue([])
+  const w = await setup({ configId: '1401218' })
+  expect(w.find('[data-testid="browse-deployment-directory"]').exists()).toBe(false)
+  expect(w.text()).toContain(job.targetPath)
+})
+
+it('部署记录Git目录链接定位仓库目录，点击不打开详情', async () => {
+  const w = await setup({ configId: '1401218' })
+  const link = w.get('[data-testid="browse-deployment-git-directory"]')
+  const target = new URL(link.attributes('href')!, 'http://localhost')
+  expect(target.searchParams.get('tab')).toBe('code-repos')
+  expect(target.searchParams.get('repoId')).toBe('repo1')
+  expect(target.searchParams.get('folderPath')).toBe('links/1401218')
+  await link.trigger('click'); await flushPromises()
+  expect(document.body.querySelector('.dr-details')).toBeNull()
+})
+
+it('部署详情也提供Git目录跳转，只读账号可以使用', async () => {
+  const w = await setup({ configId: '1401218' }, false)
+  await w.find('.el-table__body tr').trigger('click'); await flushPromises()
+  const link = document.body.querySelector('[data-testid="browse-deployment-detail-git-directory"]') as HTMLAnchorElement
+  expect(link).not.toBeNull()
+  expect(new URL(link.href).searchParams.get('folderPath')).toBe(job.gitDirectory)
+})
+
+it('未记录仓库的Git目录保留文字，不提供无效跳转', async () => {
+  vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ items: [{ ...job, repositoryId: '' }], total: 1 })
+  const w = await setup({ configId: '1401218' })
+  expect(w.find('[data-testid="browse-deployment-git-directory"]').exists()).toBe(false)
+  expect(w.text()).toContain(job.gitDirectory)
+})
+
+it('已完成记录可同步Git代码，保留原记录并重新加载部署进度', async () => {
+  vi.mocked(runnerManagementApi.generatedDeploymentAction).mockResolvedValue({ ...job, jobId: 'new-job', status: 'waiting_resource' })
+  const w = await setup({ configId: '1401218' })
+  await w.get('[data-testid="sync-deployment-git"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.generatedDeploymentAction).toHaveBeenCalledWith(job.jobId, 'sync-git')
+  expect(runnerManagementApi.generatedDeployments).toHaveBeenCalledTimes(2)
+  expect(document.body.querySelector('.dr-details')).toBeNull()
+})
+
+it('被新版替代的历史记录显示无需分配', async () => {
+  vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ items: [{ ...job, status: 'superseded', runnerIp: '', runnerId: '', targetPath: '', message: '已由更新的生成结果替代' }], total: 1 })
+  const w = await setup({ configId: '1401218' })
+  expect(w.text()).toContain('无需分配')
+  expect(w.text()).not.toContain('待分配')
 })

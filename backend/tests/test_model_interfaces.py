@@ -394,7 +394,7 @@ class ModelInterfacesTest(unittest.TestCase):
             for row in config['items']:
                 row['endpoint'] = f'http://127.0.0.1:{upstream.server_port}/' + ('legacy' if row['kind'] == 'site-script' else row['kind'])
             self.request('/api/runner-management/settings/model-interfaces', config)
-            payload = {'prompt': '不要翻页 & 提取新闻', 'systemPrompt': '系统角色', 'url': 'https://example.com/news?a=1&b=2', 'sampleId': 'www.realcan.cn.py'}
+            payload = {'prompt': '不要翻页 & 提取新闻\n\n【当前节点 MQ 主题】\nMQ 主题：auto_snatch_web_link\n【MQ 主题结束】', 'systemPrompt': '系统角色', 'url': 'https://example.com/news?a=1&b=2', 'sampleId': 'www.realcan.cn.py'}
             for row in config['items']:
                 result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'interfaceId': row['id']})
                 self.assertIn('def scrape(url)', result['code'])
@@ -407,9 +407,12 @@ class ModelInterfacesTest(unittest.TestCase):
             self.assertEqual(agent['input_file_dir'], r'D:\aicode\input')
             self.assertEqual(agent['code_dir'], agent['input_file_dir'].removesuffix('input') + 'code')
             self.assertIn('application/json', calls[1][2]['Content-Type'])
-            self.assertIn(payload['prompt'], agent['prompt'])
-            self.assertIn(payload['url'], agent['prompt'])
-            self.assertIn('系统角色', agent['prompt'])
+            self.assertTrue(agent['prompt'].endswith('系统要求：\n系统角色\n\n用户要求：\n' + payload['prompt']))
+            self.assertTrue(agent['prompt'].endswith('【MQ 主题结束】'))
+            self.assertNotIn('参考样例', agent['prompt'])
+            self.assertIn('目标列表 URL：' + payload['url'], agent['prompt'])
+            self.assertIn('生成文件名：example.com.py', agent['prompt'])
+            self.assertIn('代码保存目录：' + agent['code_dir'], agent['prompt'])
             self.assertEqual(calls[2][1]['stream'], ['1'])
             self.assertNotIn('Access-Token', calls[1][2])
             with self.assertRaises(HTTPError):

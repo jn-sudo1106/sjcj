@@ -3,38 +3,45 @@ from __future__ import annotations
 
 import re
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
 from .directory_layout import git_files, safe_path
 
 
-@lru_cache(maxsize=4096)
-def _last_change(root: str, commit: str, path: str):
-    result = subprocess.run(
-        ['git', '--no-pager', '--literal-pathspecs', 'log', '-1', '--format=%cI',
-         '--no-show-signature', commit, '--', path],
-        cwd=root, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3, check=False,
-    )
-    if result.returncode:
-        raise RuntimeError('读取仓库文件时间失败')
-    return result.stdout.strip() or None
+@lru_cache(maxsize=64)
+def _change_times(root: str, commit: str):
+    # One history walk supports global ordering before paging, rather than
+    # starting one Git process per file in a large directory.
+    result = subprocess.run(['git', '--no-pager', 'log', '--no-show-signature',
+        '--format=%x00%H%x00%cI%x00', '--name-only', '-z', '--no-renames', commit, '--'],
+        cwd=root, capture_output=True, timeout=15, check=False)
+    if result.returncode: raise RuntimeError('读取仓库文件时间失败')
+    tokens = result.stdout.split(b'\0'); values = {}; current = None; index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token and index + 2 < len(tokens) and re.fullmatch(rb'[0-9a-f]{40}', tokens[index + 1]):
+            current = tokens[index + 2].decode('ascii'); index += 3; continue
+        name = token.removeprefix(b'\n').decode('utf8', errors='replace')
+        if name and current:
+            values.setdefault(name, current)
+            parts = name.split('/')
+            for depth in range(1, len(parts)): values.setdefault('/'.join(parts[:depth]), current)
+        index += 1
+    return values
 
 
 def file_times(root: Path, commit: str, paths: list[str]) -> dict:
-    """Last Git change per visible file/directory, cached by immutable snapshot.
+    """Last Git change per file/directory, cached by immutable snapshot.
 
     Filesystem mtimes change during cloning/copying and cannot describe code history.
     Directory paths use the latest commit touching a descendant. No remote Git calls.
     """
     if not commit or not paths:
         return {}
-    def load(path):
-        try: return path, _last_change(str(root.resolve()), commit, path)
-        except (OSError, subprocess.TimeoutExpired, RuntimeError): return path, None
-    with ThreadPoolExecutor(max_workers=min(8, len(paths))) as executor:
-        return dict(executor.map(load, paths))
+    try: values = _change_times(str(root.resolve()), commit)
+    except (OSError, subprocess.TimeoutExpired, RuntimeError): values = {}
+    return {path: values.get(path) for path in paths}
 
 
 def file_metadata(app, repo_id: str, path: str, commit: str = '') -> dict:

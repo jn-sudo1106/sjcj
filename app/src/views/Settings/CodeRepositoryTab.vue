@@ -23,6 +23,9 @@ const verifyingId = ref('')
 const verification = reactive<Record<string, CodeRepositoryVerification>>({})
 const uploadOpen = ref(false)
 const uploadRepo = ref<CodeRepository | null>(null)
+const uploadTarget = ref<{ directoryId?: string; folder?: string }>({})
+const uploadTargetLabel = ref('')
+const folderCreating = ref(false)
 const uploadType = ref<'files' | 'folder'>('files')
 const uploadOverwrite = ref(false)
 const uploadFiles = ref<File[]>([])
@@ -37,6 +40,8 @@ let directoriesReady = false
 let linkedTargetKey = ''
 const fileRows = ref<CodeRepositoryFile[]>([])
 const fileView = ref<'directory' | 'paths'>('directory')
+const fileSort = ref<'updated-desc' | 'updated-asc'>('updated-desc')
+function toggleFileSort() { fileSort.value = fileSort.value === 'updated-desc' ? 'updated-asc' : 'updated-desc'; void loadFiles(1) }
 const folderPath = ref('')
 const folderCrumbs = computed(() => folderPath.value.split('/').filter(Boolean).map((name, index, parts) => ({ name, path: parts.slice(0, index + 1).join('/') })))
 const fileKeyword = ref('')
@@ -158,12 +163,44 @@ async function verify(repo: CodeRepository) {
 }
 function openUpload(repo: CodeRepository, type: 'files' | 'folder' = 'files') {
   uploadRepo.value = repo
+  uploadTarget.value = currentUploadTarget()
+  uploadTargetLabel.value = currentUploadLabel()
   uploadType.value = type
   uploadOverwrite.value = false
   uploadFiles.value = []
   uploadSkipped.value = 0
   uploadError.value = ''
   uploadOpen.value = true
+}
+function currentUploadTarget() {
+  return { ...(selectedDirectory.value ? { directoryId: selectedDirectory.value.directoryId } : {}),
+    ...(folderPath.value ? { folder: folderPath.value } : {}) }
+}
+function currentUploadLabel() {
+  return selectedDirectory.value
+    ? [selectedDirectory.value.path, folderPath.value].filter(Boolean).join('/')
+    : folderPath.value || filesRepo.value?.uploadDirectory || 'default'
+}
+async function createFolder() {
+  const repo = filesRepo.value
+  if (!repo) return
+  const target = currentUploadTarget()
+  const label = currentUploadLabel()
+  let name: string
+  try {
+    const answer = await ElMessageBox.prompt(`在 ${label}/ 下新建文件夹`, '新建文件夹', {
+      inputPlaceholder: '文件夹名称', inputPattern: /^[^/\\]+$/, inputErrorMessage: '请输入单个文件夹名称',
+    })
+    name = answer.value.trim()
+  } catch { return }
+  if (!name) return
+  folderCreating.value = true
+  try {
+    const result = await runnerManagementApi.createCodeRepositoryFolder(repo.repoId, { name, ...target })
+    ElMessage.success(result.pushed ? '文件夹已创建并推送' : '文件夹已创建')
+    if (selectedRepoId.value === repo.repoId) await loadFiles(1)
+  } catch (e) { ElMessage.error(message(e)) }
+  finally { folderCreating.value = false }
 }
 function selectUploadFiles(event: Event) {
   const selected = Array.from((event.target as HTMLInputElement).files ?? [])
@@ -206,7 +243,7 @@ async function submitUpload() {
       ...(uploadType.value === 'folder' ? { relativePath: file.webkitRelativePath } : {}),
     })))
     const result = await runnerManagementApi.uploadCodeRepositoryFiles(repo.repoId, {
-      overwrite: uploadOverwrite.value, files, ...(selectedDirectory.value ? { directoryId: selectedDirectory.value.directoryId } : {}),
+      overwrite: uploadOverwrite.value, files, ...uploadTarget.value,
       ...(uploadType.value === 'folder' ? { uploadType: 'folder' as const } : {}),
     })
     uploadOpen.value = false
@@ -225,11 +262,8 @@ async function loadFiles(page = filePage.value) {
   fileLoading.value = true
   fileError.value = ''
   try {
-    const result = await (fileView.value === 'directory'
-      ? runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page, selectedDirectory.value?.directoryId, folderPath.value)
-      : selectedDirectory.value
-      ? runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page, selectedDirectory.value.directoryId)
-      : runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page))
+    const result = await runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page,
+      selectedDirectory.value?.directoryId, fileView.value === 'directory' ? folderPath.value : undefined, fileSort.value)
     if (requestId !== fileRequestId || selectedRepoId.value !== repo.repoId) return
     fileRows.value = result.items
     fileTotal.value = result.total
@@ -418,10 +452,11 @@ onMounted(() => { void load() })
           <span class="crp-repo-type" :title="filesRepo.configType ? `[${filesRepo.configType}] ${typeNames.get(filesRepo.configType) || filesRepo.configTypeName}` : '通用仓库'">{{ filesRepo.configType ? `[${filesRepo.configType}] ${typeNames.get(filesRepo.configType) || filesRepo.configTypeName}` : '通用仓库' }}</span>
           <span class="crp-repo-path" :title="`服务器目录：${filesRepo.path}`">服务器：{{ filesRepo.path }}</span>
           <span class="crp-repo-push" :class="filesRepo.remoteUrl ? 'crp-on' : 'crp-off'" :title="filesRepo.remoteUrl ? `上传后自动推送到 origin/${filesRepo.branch}` : '仅保存在本地，未配置远程 Git 地址'">{{ filesRepo.remoteUrl ? `自动推送 origin/${filesRepo.branch}` : '仅保存在本地' }}</span>
-          <span class="crp-repo-upload" :title="`上传目录：${selectedDirectory?.path || filesRepo.uploadDirectory}/`">上传：{{ selectedDirectory?.path || filesRepo.uploadDirectory }}/</span>
+          <span class="crp-repo-upload" :title="`上传目录：${currentUploadLabel()}/`">上传：{{ currentUploadLabel() }}/</span>
         </div>
         <div class="crp-code-actions">
           <el-button size="small" :loading="fileLoading" data-testid="code-repo-files-refresh" @click="loadFiles(1)">刷新文件</el-button>
+          <el-button v-if="canWrite && filesRepo.status === 'ACTIVE'" size="small" :loading="folderCreating" :disabled="selectedDirectory?.status === 'DISABLED'" data-testid="code-repo-new-folder" @click="createFolder">新建文件夹</el-button>
           <el-dropdown v-if="canWrite && filesRepo.status === 'ACTIVE'" trigger="click" :disabled="selectedDirectory?.status === 'DISABLED'">
             <el-button type="primary" size="small" :disabled="selectedDirectory?.status === 'DISABLED'" data-testid="code-repo-upload">上传 ▾</el-button>
             <template #dropdown>
@@ -447,7 +482,7 @@ onMounted(() => { void load() })
           <p v-if="fileError" class="crp-error" role="alert">{{ fileError }}</p>
           <div class="crp-file-scroll">
             <table class="rc-data-table crp-files-table">
-              <thead><tr><th>{{ fileView === 'directory' ? '名称' : '文件路径' }}</th><th class="crp-file-time" title="最后一次 Git 提交时间，按北京时间展示">更新时间</th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
+              <thead><tr><th>{{ fileView === 'directory' ? '名称' : '文件路径' }}</th><th class="crp-file-time" :aria-sort="fileSort === 'updated-desc' ? 'descending' : 'ascending'" title="最后一次 Git 提交时间，按北京时间展示"><button type="button" class="crp-sort-button" data-testid="code-repo-time-sort" :disabled="fileLoading" :aria-label="fileSort === 'updated-desc' ? '按更新时间从旧到新排序' : '按更新时间从新到旧排序'" @click="toggleFileSort">更新时间 {{ fileSort === 'updated-desc' ? '↓' : '↑' }}</button></th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="row in fileRows" :key="row.path" class="crp-file-row" :class="{ 'crp-file-selected': previewPath === row.path }" :data-testid="`code-repo-file-${row.path}`" @click="openFileRow(row)">
                   <td class="crp-file-path" :title="row.path"><button type="button" class="crp-file-link" :data-testid="`code-repo-preview-${row.path}`" @click.stop="openFileRow(row)"><el-icon v-if="fileView === 'directory'" :class="{ 'crp-folder-icon': row.kind === 'directory' }"><Folder v-if="row.kind === 'directory'" /><Document v-else /></el-icon>{{ fileView === 'directory' ? row.path.split('/').at(-1) : row.path }}</button></td>
@@ -467,7 +502,7 @@ onMounted(() => { void load() })
     <p v-else-if="!loading && !error" class="crp-preview-empty">{{ filter.trim() ? '没有匹配的仓库' : '暂无代码仓库，请先新建仓库。' }}</p>
     <el-dialog v-model="uploadOpen" :title="`${uploadType === 'folder' ? '上传文件夹' : '上传文件'}${uploadRepo ? ` · ${uploadRepo.name}` : ''}`" width="min(620px, 94vw)" append-to-body :close-on-click-modal="!uploading" :close-on-press-escape="!uploading" :show-close="!uploading" data-testid="code-repo-upload-dialog">
       <div class="crp-upload-form">
-        <p class="crp-upload-destination">上传目录：<b data-testid="code-repo-upload-directory">{{ selectedDirectory?.path || uploadRepo?.uploadDirectory || 'default' }}/</b></p>
+        <p class="crp-upload-destination">上传目录：<b data-testid="code-repo-upload-directory">{{ uploadTargetLabel }}/</b></p>
         <label v-if="uploadType === 'folder'">选择文件夹<input type="file" webkitdirectory multiple :disabled="uploading" data-testid="code-repo-upload-folder-files" @change="selectUploadFiles" /></label>
         <label v-else>选择文件<input type="file" multiple :disabled="uploading" data-testid="code-repo-upload-files" @change="selectUploadFiles" /></label>
         <div v-if="uploadFiles.length" class="crp-upload-list"><b>已选 {{ uploadFiles.length }} 个文件</b><ul><li v-for="file in uploadFiles.slice(0, 50)" :key="uploadPath(file)">{{ uploadPath(file) }}</li></ul><span v-if="uploadFiles.length > 50">另有 {{ uploadFiles.length - 50 }} 个文件</span></div>
@@ -510,6 +545,7 @@ onMounted(() => { void load() })
 .crp-view-switch { display:flex; flex-shrink:0; border:1px solid var(--rc-border); border-radius:6px; overflow:hidden; }.crp-view-switch button { display:flex; align-items:center; gap:4px; border:0; padding:5px 8px; background:transparent; color:var(--rc-muted); cursor:pointer; font-size:12px; }.crp-view-switch button[aria-pressed="true"] { background:var(--rc-primary-bg); color:var(--rc-primary); }.crp-view-switch button:focus-visible,.crp-breadcrumb button:focus-visible { outline:2px solid var(--rc-primary); outline-offset:-2px; }
 .crp-breadcrumb { display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:12px; color:var(--rc-muted); }.crp-breadcrumb button { border:0; background:transparent; color:var(--rc-primary); cursor:pointer; padding:2px; }.crp-file-link { display:inline-flex; align-items:center; gap:6px; }.crp-folder-icon { color:var(--el-color-warning); }
 .crp-file-search { width: min(230px, 45%); }.crp-file-link { padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; }
+.crp-sort-button{border:0;background:none;padding:0;color:inherit;font:inherit;font-weight:inherit;cursor:pointer}.crp-sort-button:disabled{cursor:wait;opacity:.6}
 .crp-files-table td { padding-top:7px; padding-bottom:7px; }
 .crp-files-table .crp-file-time { width:158px; white-space:nowrap; font-size:12px; font-variant-numeric:tabular-nums; }
 .crp-file-link:hover { text-decoration: underline; }.crp-file-row { cursor: pointer; }.crp-file-row:hover, .crp-file-selected { background: var(--rc-primary-bg); }

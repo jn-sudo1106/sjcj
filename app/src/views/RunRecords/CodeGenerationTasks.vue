@@ -9,6 +9,7 @@ import { runnerManagementApi, type MqCodeJob, type GenerationModelCall, type Gen
 import { runStateInfo } from '@/constants/runState'
 import { prettyJsonText } from '@/utils/jsonText'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
+import CodeTaskRegeneration from './CodeTaskRegeneration.vue'
 
 const props = defineProps<{ initialConfigId?: string; initialTaskId?: string }>()
 const configId = ref(props.initialConfigId || '')
@@ -38,6 +39,22 @@ const detailLoading = ref(false)
 const detailError = ref('')
 const referenceModel = ref<GenerationModelCall | null>(null), referenceError = ref('')
 const detailTab = ref('request')
+const revising = ref(false)
+const regenerationJob = ref<MqCodeJob | null>(null), openingRegeneration = ref('')
+let regenerationSequence = 0
+async function openRegeneration(task: TaskInst) {
+  if (!canDelete.value || openingRegeneration.value) return
+  const request = ++regenerationSequence
+  openingRegeneration.value = task.taskId
+  try {
+    const result = await runnerManagementApi.mqCodeJob(task.taskId)
+    if (request !== regenerationSequence || !active) return
+    if (!result.job || !['succeeded', 'failed'].includes(result.job.status)) throw new Error('请在代码生成任务执行结束后重新生成')
+    regenerationJob.value = result.job; revising.value = true
+  } catch (e) { if (request === regenerationSequence && active) ElMessage.error(e instanceof Error ? e.message : String(e)) }
+  finally { if (request === regenerationSequence) openingRegeneration.value = '' }
+}
+function closeRegeneration() { revising.value = false; regenerationJob.value = null }
 let listSequence = 0
 let detailSequence = 0
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -76,6 +93,16 @@ const modelLabel = computed(() => modelInfo.value?.model || object(job.value?.re
 const requestText = computed(() => {
   const request = job.value?.request
   return request ? `${request.method} ${request.url}\n${Object.entries(request.headers).map(([key, value]) => `${key}: ${value}`).join('\n')}\n\n${JSON.stringify(request.body, null, 2)}` : ''
+})
+const requestHeaderText = computed(() => {
+  const request = job.value?.request
+  return request ? `${request.method} ${request.url}\n${Object.entries(request.headers).map(([key, value]) => `${key}: ${value}`).join('\n')}` : ''
+})
+const requestTextFields = computed(() => Object.entries(job.value?.request?.body || {}).filter(([key, value]) =>
+  typeof value === 'string' && (value.includes('\n') || ['prompt', 'system_prompt', 'user_prompt', 'systemPrompt', 'userPrompt'].includes(key))))
+const requestBodyText = computed(() => {
+  const expanded = new Set(requestTextFields.value.map(([key]) => key))
+  return JSON.stringify(Object.fromEntries(Object.entries(job.value?.request?.body || {}).filter(([key]) => !expanded.has(key))), null, 2)
 })
 const taskParamsText = computed(() => {
   const raw = selected.value?.vars || selected.value?.params || '暂无参数'
@@ -141,7 +168,7 @@ function repositoryResult(task: TaskInst) {
       ...(files.length === 1 ? { filePath: first } : { folderPath: folder.join('/') }) } } }
 }
 function pickSource(value: string | string[]) { sourceId.value = Array.isArray(value) ? value[0] || '' : value; void search() }
-function clearDetail() { stopPolling(); selected.value = null; job.value = null; detailOpen.value = false }
+function clearDetail() { revising.value = false; stopPolling(); selected.value = null; job.value = null; detailOpen.value = false }
 async function loadMetadata(items: TaskInst[], sequence: number) {
   const ownerIds = [...new Set(items.map(item => taskInfo(item).sourceId).filter(id => /^[1-9]\d*$/.test(id)))]
   const flowIds = [...new Set(items.map(item => taskInfo(item).flowId).filter(id => /^[1-9]\d*$/.test(id) && !flows.value[id]))]
@@ -275,6 +302,7 @@ async function loadDetail() {
   }
 }
 function openDetail(task: TaskInst) {
+  revising.value = false
   stopPolling()
   selected.value = task
   job.value = null
@@ -284,10 +312,17 @@ function openDetail(task: TaskInst) {
   detailOpen.value = true
   void loadDetail()
 }
+async function regenerated(created: MqCodeJob) {
+  closeRegeneration(); taskId.value = ''; state.value = ''; configId.value = created.configId; page.value = 1
+  await load()
+  const row = rows.value.find(item => item.taskId === created.taskId)
+  if (row) { openDetail(row); detailTab.value = 'output' }
+  ElMessage.success('新任务已提交，等待匹配代码生成服务器')
+}
 onMounted(loadConfigs)
 onActivated(() => { active = true; if (detailOpen.value) void loadDetail() })
-onDeactivated(() => { active = false; stopPolling() })
-onBeforeUnmount(() => { active = false; ++listSequence; stopPolling() })
+onDeactivated(() => { active = false; ++regenerationSequence; openingRegeneration.value = ''; closeRegeneration(); stopPolling() })
+onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; stopPolling() })
 </script>
 
 <template>
@@ -315,7 +350,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; stopPolling() })
       <el-table-column label="任务信息 / 状态 / 结果" min-width="145"><template #default="{ row }"><el-button link type="primary" @click.stop="openDetail(row)">{{ row.taskId }}</el-button><div class="cell-ellipsis" :title="row.taskName">{{ row.taskName || '代码生成任务' }}</div><span class="task-status" :class="`is-${execution[row.taskId] || 'unknown'}`" :data-testid="`code-task-status-${row.taskId}`">{{ execution[row.taskId] === 'succeeded' ? '已完成' : executionLabel(row) }}</span><small v-if="rowFinishedAt[row.taskId]" :title="`完成时间：${formatRunnerDateTime(rowFinishedAt[row.taskId])}`">完成 {{ formatRunnerDateTime(rowFinishedAt[row.taskId]) }}</small><small v-else>{{ formatRunnerDateTime(row.createdAt, '—') }}</small><template v-if="repositoryResult(row)"><RouterLink :to="repositoryResult(row)!.target" class="cell-source" :data-testid="`code-task-repository-${row.taskId}`" :title="repositoryResult(row)!.count === 1 ? '查看仓库代码文件' : '查看该配置生成的仓库文件'" @click.stop>{{ repositoryResult(row)!.label }}</RouterLink><small v-if="repositoryResult(row)!.count > 1">{{ repositoryResult(row)!.count }} 个文件</small></template></template></el-table-column>
       <el-table-column label="所属源 / 流程节点" min-width="165"><template #default="{ row }"><RouterLink v-if="taskInfo(row).sourceId" :to="sourceLink(row)" class="cell-source" :title="taskInfo(row).sourceId" @click.stop>{{ taskInfo(row).sourceName }}</RouterLink><span v-else>未记录源</span><small>源 {{ taskInfo(row).sourceId || '—' }}</small><div class="cell-ellipsis" :title="`${taskInfo(row).flowName} / ${taskInfo(row).nodeName}`">{{ taskInfo(row).flowName }} / {{ taskInfo(row).nodeName }}</div><small :title="taskInfo(row).configId">配置 {{ taskInfo(row).configId || '—' }}</small></template></el-table-column>
       <el-table-column label="模型 / 调用地址" min-width="155"><template #default="{ row }"><div class="cell-ellipsis" :title="taskModel(row)?.name">{{ taskModel(row)?.name || '未记录模型' }}</div><small>{{ taskModel(row)?.model || '接口默认模型' }}</small><div class="cell-ellipsis model-endpoint" :title="taskModel(row)?.endpoint">{{ taskModel(row)?.endpoint || '—' }}</div><div class="cell-ellipsis" :title="generationServerLabel(taskModel(row), ['waiting', 'queued'].includes(execution[row.taskId] || ''))" data-testid="task-generation-server">{{ generationServerLabel(taskModel(row), ['waiting', 'queued'].includes(execution[row.taskId] || '')) }}</div></template></el-table-column>
-      <el-table-column label="操作" width="82" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="openDetail(row)">查看详情</el-button><el-button v-if="canDelete" link type="danger" :loading="deleting === row.taskId" :disabled="!!deleting || execution[row.taskId] === 'running'" :title="execution[row.taskId] === 'running' ? '执行结束后可删除' : '删除此代码生成任务'" data-testid="delete-code-task" @click.stop="removeTask(row)">删除</el-button></template></el-table-column>
+      <el-table-column label="操作" width="145" fixed="right"><template #default="{ row }"><div class="code-task-row-actions"><el-button link type="primary" @click.stop="openDetail(row)">查看详情</el-button><el-button v-if="canDelete && ['succeeded', 'failed'].includes(execution[row.taskId])" link type="primary" :loading="openingRegeneration === row.taskId" :disabled="!!openingRegeneration || !!deleting" data-testid="open-regeneration" @click.stop="openRegeneration(row)">修改后重新生成</el-button><el-button v-if="canDelete" link type="danger" :loading="deleting === row.taskId" :disabled="!!deleting || execution[row.taskId] === 'running'" :title="execution[row.taskId] === 'running' ? '执行结束后可删除' : '删除此代码生成任务'" data-testid="delete-code-task" @click.stop="removeTask(row)">删除</el-button></div></template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" @current-change="load" @size-change="search" />
     </section>
@@ -324,6 +359,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; stopPolling() })
       <template v-if="selected">
         <div class="detail-summary">
           <div>任务 ID：{{ selected.taskId }}</div>
+          <div v-if="job?.parentTaskId">上次任务：{{ job.parentTaskId }} · 第 {{ job.attempt || 2 }} 次生成</div>
           <div>生成状态：{{ executionLabel(selected) }}</div>
           <div>业务状态：{{ runStateInfo(selected.state).label }}</div>
           <div>节点配置：{{ selected.configId || configId }}</div>
@@ -338,6 +374,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; stopPolling() })
         <el-alert v-else-if="job" :title="`${statuses[job.status]} · ${job.callbackSent ? '结果已保存' : '尚未完成'}`" :description="job.message" :type="job.status === 'failed' ? 'error' : 'info'" :closable="false" />
         <el-alert v-else-if="!detailLoading" title="暂无处理机执行记录，任务可能尚未被领取。" type="info" :closable="false" />
         <el-tabs v-model="detailTab">
+          <el-tab-pane label="提示词" name="prompts"><h4>系统提示词</h4><pre>{{ generation.systemPrompt || '未记录' }}</pre><h4>用户提示词</h4><pre>{{ generation.userPrompt || generation.prompt || '未记录' }}</pre><p v-if="job?.correction">本次修正要求：{{ job.correction }}</p></el-tab-pane>
           <el-tab-pane label="过程输出" name="output"><pre>{{ job?.stages?.join('\n') }}{{ job?.stages?.length ? '\n\n' : '' }}{{ job?.output || '暂无过程输出' }}</pre></el-tab-pane>
           <el-tab-pane label="模型调用" name="request">
             <p class="model-info-source">{{ modelSource }}</p>
@@ -351,7 +388,15 @@ onBeforeUnmount(() => { active = false; ++listSequence; stopPolling() })
             </dl>
             <p v-else>历史任务未保存完整模型配置；{{ generation.interfaceId ? `接口 ID：${generation.interfaceId}` : '暂无模型接口信息' }}。</p>
             <details v-if="generation.systemPrompt || generation.userPrompt || generation.prompt" class="task-prompts"><summary>任务提示词</summary><h4>系统提示词</h4><pre>{{ generation.systemPrompt || '未记录' }}</pre><h4>用户提示词</h4><pre>{{ generation.userPrompt || generation.prompt || '未记录' }}</pre></details>
-            <h4>执行时构造的 HTTP 请求</h4><pre data-testid="generation-model-request">{{ requestText || '尚未构造模型请求，当前展示的是任务调用配置，不代表已经发起调用。' }}</pre>
+            <h4>执行时构造的 HTTP 请求</h4><section data-testid="generation-model-request">
+              <template v-if="job?.request">
+                <pre>{{ requestHeaderText }}</pre>
+                <h4>请求参数</h4><pre data-testid="generation-request-parameters">{{ requestBodyText }}</pre>
+                <article v-for="[key, value] in requestTextFields" :key="key"><h4>{{ key }}<span v-if="key === 'prompt'"> · 提示词</span></h4><pre data-testid="generation-request-text">{{ value }}</pre></article>
+                <details><summary>原始 HTTP 请求</summary><pre>{{ requestText }}</pre></details>
+              </template>
+              <pre v-else>尚未构造模型请求，当前展示的是任务调用配置，不代表已经发起调用。</pre>
+            </section>
           </el-tab-pane>
           <el-tab-pane label="生成结果" name="result"><section v-if="job?.result" class="generation-result" data-testid="generation-result">
             <dl class="result-info"><div><dt>结果文件</dt><dd>{{ resultFiles.length ? `${resultFiles.length} 个文件` : job.result.fileName }}</dd></div><div><dt>Git 状态</dt><dd>{{ gitResultStatus }}</dd></div><div v-if="resultArchive?.gitCommit"><dt>提交版本</dt><dd :title="resultArchive.gitCommit">{{ resultArchive.gitCommit.slice(0, 12) }}</dd></div></dl>
@@ -368,6 +413,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; stopPolling() })
       <el-empty v-else description="选择左侧任务，查看模型调用、过程输出和生成结果" />
     </section>
     </div>
+    <CodeTaskRegeneration v-if="revising && regenerationJob && canDelete" :key="regenerationJob.taskId" :job="regenerationJob" @created="regenerated" @cancel="closeRegeneration" />
   </section>
 </template>
 
@@ -389,6 +435,7 @@ header span { font-size: 12px; color: var(--el-text-color-secondary); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--el-fill-color-light); padding: 14px; border-radius: 6px; font-size: 12px; }
 .task-status { display:inline-block; margin:3px 0; padding:1px 6px; border-radius:4px; font-size:11px; color:var(--el-text-color-secondary); background:var(--el-fill-color-light); }.task-status.is-succeeded { color:var(--el-color-success); background:var(--el-color-success-light-9); }.task-status.is-failed { color:var(--el-color-danger); background:var(--el-color-danger-light-9); }.task-status.is-running { color:var(--el-color-primary); background:var(--el-color-primary-light-9); }
 .result-info { display:flex; flex-wrap:wrap; gap:12px 24px; }.result-info dt,.result-paths dt { color:var(--el-text-color-secondary); font-size:12px; }.result-info dd,.result-paths dd { margin:4px 0 0; font-size:12px; overflow-wrap:anywhere; }.result-file { padding:4px 0 12px; border-bottom:1px solid var(--el-border-color-lighter); }.result-paths { display:grid; gap:12px; }.result-paths a { color:var(--el-color-primary); text-decoration:none; }.result-paths a:hover { text-decoration:underline; }.result-message { color:var(--el-text-color-secondary); font-size:12px; }
+.code-task-row-actions { display:flex; flex-direction:column; align-items:flex-start; gap:5px; }.code-task-row-actions :deep(.el-button + .el-button) { margin-left:0; }
 @media (max-width:1100px) { .task-layout { grid-template-columns:minmax(370px,1fr) minmax(340px,1fr); gap:10px; }.detail-summary,.model-info { grid-template-columns:1fr; }.model-info .model-address { grid-column:auto; } }
 @media (max-width:760px) { .code-tasks { overflow:auto; }.task-layout { grid-template-columns:1fr; grid-template-rows:360px minmax(320px,auto); flex:none; }.task-detail-panel { overflow:visible; }header span { display:none; } }
 </style>

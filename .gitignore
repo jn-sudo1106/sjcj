@@ -49,6 +49,10 @@ backend/code_generation_server/*
 !backend/tests/
 backend/tests/*
 !backend/tests/*.py
+!backend/queue_processors/
+backend/queue_processors/*
+!backend/queue_processors/*.py
+!backend/queue_processors/requirements.txt
 !backend/legacy_qinlongclaw/
 backend/legacy_qinlongclaw/*
 !backend/legacy_qinlongclaw/*.py

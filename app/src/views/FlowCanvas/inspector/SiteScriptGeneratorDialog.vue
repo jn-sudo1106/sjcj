@@ -8,6 +8,8 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
 import { nodePromptsAvailable } from '@/constants/deployGates'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
+import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVariables.vue'
+import AiCodeWorkspaceDialog from '@/components/AiCodeWorkspaceDialog.vue'
 import NodeDeploymentPanel from './NodeDeploymentPanel.vue'
 import { createGenerationTaskId, matchingGenerationGitBinding, nodeGenerationCodeDirectory } from '@/utils/generationWorkspace'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
@@ -59,9 +61,14 @@ async function loadGenerationMachines() {
 watch(() => selectedModel.value?.generationServerId, () => { void loadGenerationMachines() })
 const archiveError = ref('')
 const destinationMode = ref<'type' | 'custom'>('type')
+const outputSubdirectory = ref('')
+const subdirectoryValid = computed(() => !outputSubdirectory.value || /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(outputSubdirectory.value))
 const automaticDestination = ref<GenerationDestination | null>(null), destinationLookupError = ref('')
 const generationConfigType = computed(() => props.configType || automaticDestination.value?.configType || '')
-const workspacePreview = computed(() => nodeGenerationCodeDirectory(generationMachine.value?.generationRoot || generationMachine.value?.workspace || '生成服务器工作空间', props.configId || '配置ID', props.queueName || '请先配置队列'))
+const workspacePreview = computed(() => {
+  const root = nodeGenerationCodeDirectory(generationMachine.value?.generationRoot || generationMachine.value?.workspace || '生成服务器工作空间', props.configId || '配置ID', props.queueName || '请先配置队列')
+  return outputSubdirectory.value ? root + (root.includes('\\') ? '\\' : '/') + outputSubdirectory.value.replaceAll('/', root.includes('\\') ? '\\' : '/') : root
+})
 const directoryGitBinding = computed(() => destinationMode.value === 'custom' ? undefined : matchingGenerationGitBinding(generationMachine.value, workspacePreview.value))
 const automaticTarget = computed(() => directoryGitBinding.value || automaticDestination.value)
 const taskConfigError = ref(''), savingTaskConfig = ref(false)
@@ -336,6 +343,7 @@ async function initialize() {
     archive.value = null; archivePreview.value = ''; archivePreviewPath.value = ''; archiveSavedKey.value = ''; archiveError.value = ''
     repositoryId.value = ''
     fileNameMode.value = 'website'
+    outputSubdirectory.value = ''
     destinationMode.value = 'type'; automaticDestination.value = null; destinationLookupError.value = ''
     prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
     systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
@@ -410,6 +418,7 @@ async function initialize() {
     repositoryId.value = saved.repositoryId
     directoryId.value = saved.directoryId
     fileNameMode.value = saved.fileNameMode
+    outputSubdirectory.value = saved.outputSubdirectory || ''
     destinationMode.value = saved.destinationMode || 'custom'
     systemPrompt.value = saved.systemPrompt
     prompt.value = saved.userPrompt
@@ -472,7 +481,7 @@ watch(directoryId, () => {
   repositoryFileError.value = ''
   if (fileChooserOpen.value && selectedDirectory.value && !directoriesLoading.value) void loadRepositoryFiles(1)
 }, { flush: 'sync' })
-watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId.value, directoryId.value, generationConfigType.value, props.queueName, systemPrompt.value, prompt.value, url.value, fileNameMode.value, destinationMode.value]), () => {
+watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId.value, directoryId.value, generationConfigType.value, props.queueName, systemPrompt.value, prompt.value, url.value, fileNameMode.value, destinationMode.value, outputSubdirectory.value]), () => {
   const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
   if (!taskConfigReady || loading.value || taskConfigContext !== context) return
   if (taskConfigTimer) clearTimeout(taskConfigTimer)
@@ -485,7 +494,7 @@ watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId
     interfaceId: modelInterfaceId.value, repositoryId: repositoryId.value, directoryId: directoryId.value,
     configType: generationConfigType.value, queueName: props.queueName || '', systemPrompt: systemPrompt.value,
     userPrompt: outputPrompt(prompt.value), url: url.value, fileNameMode: fileNameMode.value,
-    destinationMode: destinationMode.value,
+    destinationMode: destinationMode.value, outputSubdirectory: outputSubdirectory.value,
   } } }
   taskConfigStatus.value = '等待自动保存…'
   taskConfigTimer = setTimeout(flushTaskConfig, 700)
@@ -609,6 +618,7 @@ function cancelGenerate() {
 
 async function generate() {
   if (busy.value) return
+  if (!subdirectoryValid.value) { error.value = '生成子目录须为相对目录，例如 sites'; return }
   syncOutputPrompt()
   if (archiveGeneration.value && destinationMode.value === 'type' && !directoryGitBinding.value && destinationLookupError.value) { error.value = `自动提交位置查询失败：${destinationLookupError.value}`; return }
   if (directoryBindingError.value) { error.value = `目录 Git 绑定不可用：${directoryBindingError.value}`; return }
@@ -632,12 +642,13 @@ async function generate() {
   submittedTask.value = null
   try {
     if(archiveGeneration.value && props.sourceId && props.flowId && props.stepId && props.configId) {
-      await runnerManagementApi.saveNodeGenerationSettings({configId:props.configId,generation:{interfaceId:modelInterfaceId.value,repositoryId:repositoryId.value,directoryId:directoryId.value,configType:generationConfigType.value,queueName:props.queueName || '',systemPrompt:systemPrompt.value,userPrompt:prompt.value,url:url.value,fileNameMode:fileNameMode.value,destinationMode:destinationMode.value}})
+      await runnerManagementApi.saveNodeGenerationSettings({configId:props.configId,generation:{interfaceId:modelInterfaceId.value,repositoryId:repositoryId.value,directoryId:directoryId.value,configType:generationConfigType.value,queueName:props.queueName || '',systemPrompt:systemPrompt.value,userPrompt:prompt.value,url:url.value,fileNameMode:fileNameMode.value,destinationMode:destinationMode.value,outputSubdirectory:outputSubdirectory.value}})
     }
     if (active.signal.aborted) return
     const selectedInterface = selectedModel.value
     const interfaceUrl = selectedInterface ? new URL(selectedInterface.endpoint) : undefined
     const input: SiteScriptGenerateInput = { taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py',
+      ...(outputSubdirectory.value ? { outputSubdirectory: outputSubdirectory.value } : {}),
       ...(props.sourceId && props.flowId && props.stepId ? { sourceContext: { sourceId: props.sourceId, flowId: props.flowId, stepId: props.stepId } } : {}),
       ...(taskGeneration.value && selectedInterface && interfaceUrl ? { modelCall: {
         interfaceId: selectedInterface.id, name: selectedInterface.name, kind: selectedInterface.kind, model: selectedInterface.model,
@@ -651,7 +662,13 @@ async function generate() {
         directoryId: directoryId.value, autoCommit: true, deferCommit: false, fileName: fileName.value } : {}) }
     if (taskGeneration.value) {
       const receipt = await submitSiteScriptTask(input, active.signal)
-      if (!active.signal.aborted) submittedTask.value = { ...receipt, status: 'waiting' }
+      if (!active.signal.aborted) {
+        submittedTask.value = { ...receipt, status: 'waiting' }
+        generating.value = false
+        controller = null
+        ElMessage.success('代码生成任务已提交，可在任务中心查看进度')
+        open.value = false
+      }
       return
     }
     const result = await generateSiteScript(input, active.signal, event => {
@@ -824,6 +841,7 @@ function download() {
     <p v-if="repositoriesError" class="site-script-error" role="alert">仓库加载失败：{{ repositoriesError }}</p>
     <p v-if="templateError" class="site-script-error" role="alert">{{ templateError }}</p>
     <div class="site-script-naming"><span>文件命名方式</span><el-select v-model="fileNameMode" size="small" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select><code :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code></div>
+    <div v-if="archiveGeneration" class="site-script-naming"><span>生成子目录</span><el-input v-model="outputSubdirectory" size="small" :disabled="busy" placeholder="如 sites" style="width: 140px; flex: 0 0 140px" data-testid="site-script-output-subdirectory" /><code :title="workspacePreview" data-testid="site-script-output-directory">{{ workspacePreview }}</code></div>
     <p v-if="directoryGitBinding" :class="directoryBindingError ? 'site-script-error' : 'site-script-hint'" data-testid="generation-directory-git-target">目录 Git 绑定：{{ directoryGitBinding.repoName || directoryGitBinding.repositoryId }} / {{ directoryGitBinding.directoryPath || directoryGitBinding.directoryId }} · {{ directoryGitBinding.remoteUrl || '仅本地提交' }} · {{ directoryGitBinding.branch }}{{ directoryBindingError ? ` · ${directoryBindingError}` : '' }}</p>
     <div class="site-script-paths">
       <div v-if="selectedRepository && selectedDirectory"><span>保存关联</span><code :title="`${selectedRepository.name} / ${selectedDirectory.name}`" data-testid="site-script-destination">{{ selectedRepository.name }} / {{ selectedDirectory.name }}</code></div>
@@ -835,7 +853,7 @@ function download() {
     <NodeDeploymentPanel v-if="configId && sourceId && flowId && stepId" :source-id="sourceId" :flow-id="flowId" :step-id="stepId" :config-id="configId" :config-type="generationConfigType" :queue-name="queueName" :archive-id="archive?.status === 'committed' ? archive.archiveId : undefined" />
     <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">AI 生成代码</el-button>
   </section>
-  <el-dialog v-model="open" title="AI 代码工作区" width="min(1360px, 96vw)" top="3vh" append-to-body data-testid="site-script-dialog">
+  <AiCodeWorkspaceDialog v-model="open" data-testid="site-script-dialog">
     <div v-loading="loading" class="site-script-workspace" :class="{ 'is-task': taskGeneration }">
       <section class="site-script-settings" data-testid="site-script-prompt-panel">
         <nav v-if="taskContextAvailable" class="site-script-output-tabs" aria-label="生成方式"><button type="button" data-testid="generation-mode-task" :disabled="busy" :class="{active:generationMode==='task'}" @click="generationMode='task'">任务方式</button><button type="button" data-testid="generation-mode-direct" :disabled="busy" :class="{active:generationMode==='direct'}" @click="generationMode='direct'">调用接口</button></nav>
@@ -846,6 +864,7 @@ function download() {
         <p v-if="taskContextAvailable" class="site-script-machine" data-testid="generation-machine">{{ machineMessage }}</p>
         <div v-if="remoteGeneration && !taskGeneration" class="site-script-auto-commit"><small>生成完成后自动提交到节点选择的 Git 目录；input、code、output 目录固定复用，任务记录保存在 tasks/任务ID.json。</small></div>
         </div>
+        <CodeGenerationPromptVariables />
         <div class="site-script-prompts">
         <section class="site-script-prompt-group">
           <div class="site-script-panel-head"><label for="site-script-system-prompt"><b>系统提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-system-prompt" @click="restoreSystemPrompt">恢复默认</el-button></div>
@@ -898,7 +917,7 @@ function download() {
       </section>
     </div>
     <template #footer><div class="site-script-footer"><el-button :disabled="publishing" @click="open = false">关闭</el-button><el-button v-if="!taskGeneration" type="primary" :loading="publishing" :disabled="busy || !code.trim() || showCandidate || isSaved || !configId || !repositoryId || !!directoriesError || !selectedDirectory || !!loadedVersion?.directoryLayout" data-testid="site-script-publish" @click="publish">保存并提交</el-button></div></template>
-  </el-dialog>
+  </AiCodeWorkspaceDialog>
   <el-drawer v-model="filePreviewOpen" title="关联代码文件" size="min(860px, 94vw)" append-to-body data-testid="site-script-file-preview">
     <div v-loading="filePreviewLoading" class="site-script-file-preview"><p v-if="filePreviewError" class="site-script-error" role="alert">{{ filePreviewError }}</p><template v-if="filePreview"><b>{{ filePreview.path }}</b><p>Git {{ filePreview.gitCommit.slice(0, 12) }} · 关联时的文件快照</p><pre>{{ filePreview.content }}</pre></template></div>
     <template #footer><div class="site-script-footer"><el-button :disabled="fileActionBusy" @click="filePreviewOpen = false">关闭</el-button><el-button :disabled="busy || filePreviewLoading" data-testid="site-script-preview-unlink" @click="changeAssociatedFile(filePreviewTarget, 'unlink')">取消关联</el-button><el-button type="danger" plain :disabled="busy || filePreviewLoading" data-testid="site-script-preview-delete" @click="changeAssociatedFile(filePreviewTarget, 'delete')">删除文件</el-button></div></template>

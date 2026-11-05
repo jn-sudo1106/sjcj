@@ -1,6 +1,7 @@
 export const DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT = '你是 Python 网站采集脚本开发者。参考给定样例的接口和代码风格，为目标列表页编写完整、可独立保存的 Python 代码。只返回代码，不要 Markdown 围栏或解释。必须提供 scrape(url) 函数并返回 list[dict]；每条尽量包含 title/date/url/summary/content。不要生成 MQ、数据库、文件上传或流程调度代码。导入模块时不能发起网站请求。不要照搬样例站点的域名、页面选择器和专用解析逻辑。'
 
 export interface SiteScriptGenerateInput {
+  outputSubdirectory?: string
   /** 生成代码归属信息；不会将直接调用切换为任务方式。 */
   sourceContext?: { sourceId: string; flowId: string; stepId: string }
   taskContext?: { sourceId: string; flowId: string; stepId: string }

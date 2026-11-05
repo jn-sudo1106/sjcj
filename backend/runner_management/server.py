@@ -507,8 +507,18 @@ class Application:
                     directory = self.repository_upload_directory(db, row)
                 from .repository_directories import managed_paths
                 protected_paths = {path.casefold() for path in managed_paths(db, repo_id, exclude_config_id=owner_config_id)}
+                from .repository_delete_policy import policy as repository_policy, reason as repository_reason
+                current_references = repository_policy(self, db, repo_id) if owner_config_id is None else None
             if payload.get("directory") not in (None, "", directory):
                 raise ApiError("上传目录由仓库配置类型决定", 400)
+            # folder is relative to the selected type directory, or to the
+            # repository root when no type directory is selected.
+            if 'folder' in payload:
+                folder = payload['folder']
+                if not isinstance(folder, str) or not folder or any(not part for part in folder.split('/')):
+                    raise ApiError('目标文件夹路径无效')
+                directory = (directory + '/' + folder) if payload.get('directoryId') else folder
+                self.upload_path(directory, '.gitkeep')
             paths = []
             for relative, content in decoded:
                 parent, _, name = relative.rpartition('/')
@@ -549,12 +559,27 @@ class Application:
                 if target.resolve().relative_to(repo.resolve()).parts[0].lower() == "code":
                     raise ApiError("code 目录由系统管理，请上传到其他目录")
                 same_content = target.is_file() and target.stat().st_size == len(content) and target.read_bytes() == content
-                if relative.as_posix().casefold() in protected_paths and not (owner_config_id is not None and same_content):
-                    raise ApiError('文件已有流程代码或历史版本引用，请在流程节点中更新代码', 409)
+                if owner_config_id is None:
+                    # Immutable historical commits remain readable when HEAD is
+                    # restored or updated. Only live links restrict manual edits.
+                    blocked = repository_reason(current_references, relative.as_posix())
+                else:
+                    blocked = '文件被其他配置引用' if relative.as_posix().casefold() in protected_paths else ''
+                if blocked and not same_content:
+                    raise ApiError(f'{relative.as_posix()}：{blocked}；请先在“查看引用”中处理当前关联，或在流程节点中更新代码', 409)
                 if owner_config_id is not None and (relative.as_posix() in changed_paths or target.exists() and relative.as_posix() not in tracked_paths and not same_content):
                     raise ApiError('目标文件有未提交的本地修改，不能自动覆盖：' + relative.as_posix(), 409)
                 if target.exists() and not overwrite:
                     raise ApiError(f"{relative.as_posix()} 已存在；如需更新请勾选覆盖", 409)
+            if owner_config_id is None:
+                candidates = b''.join(relative.as_posix().encode('utf8') + b'\0' for relative, _ in paths)
+                ignored = subprocess.run(['git', 'check-ignore', '-z', '--stdin'], cwd=repo, input=candidates,
+                                         capture_output=True, timeout=20, check=False)
+                if ignored.returncode not in (0, 1):
+                    raise ApiError('读取仓库忽略规则失败，未写入上传文件', 409)
+                if ignored.stdout:
+                    excluded = [name.decode('utf8') for name in ignored.stdout.split(b'\0') if name]
+                    raise ApiError('以下文件被 Git 忽略，未写入本次上传：' + '、'.join(excluded[:10]), 409)
             previous_contents = {}
             for relative, content in paths:
                 target = repo / relative
@@ -606,9 +631,24 @@ class Application:
                         {"path": relative.as_posix(), "size": len(content),
                          "gitUrl": self.git_url_for(row, commit, relative)} for relative, content in paths]}
 
-    def list_repository_files(self, repo_id: str, keyword: str = "", page: int = 1, directory_id: str = "", view: str = "paths", folder: str = "") -> dict:
+    def create_repository_folder(self, repo_id: str, payload: dict) -> dict:
+        name = payload.get('name')
+        if not isinstance(name, str) or not name or '/' in name or '\\' in name:
+            raise ApiError('请填写单个文件夹名称')
+        self.upload_path('default', name)
+        with GIT_LOCK:
+            # A tracked marker keeps empty folders visible in Git and on refresh.
+            relative = name + '/.gitkeep'
+            return self.upload_repository_files(repo_id, {
+                **{key: payload[key] for key in ('directoryId', 'folder') if key in payload},
+                'uploadType': 'folder', 'overwrite': False,
+                'files': [{'name': '.gitkeep', 'relativePath': relative, 'data': ''}],
+            })
+
+    def list_repository_files(self, repo_id: str, keyword: str = "", page: int = 1, directory_id: str = "", view: str = "paths", folder: str = "", sort: str = 'updated-desc') -> dict:
         if len(keyword) > 100 or not 1 <= page <= 100000:
             raise ApiError("文件列表查询参数无效")
+        if sort not in ('updated-desc', 'updated-asc', 'name'): raise ApiError('文件排序方式无效')
         if view not in ('paths', 'directory') or len(folder) > 500 or (folder and (
                 folder.startswith('/') or '\\' in folder or ':' in folder
                 or any(part in ('', '.', '..') or part.lower() == '.git' for part in folder.split('/')))):
@@ -629,7 +669,7 @@ class Application:
         if result.returncode:
             raise ApiError("读取仓库文件列表失败", 500)
         names = [name for name in result.stdout.split("\0") if name and keyword.casefold() in name.casefold()
-                 and (not prefix or name.startswith(prefix)) and not name.endswith('/.gitkeep')]
+                 and (not prefix or name.startswith(prefix))]
         names.sort(key=str.casefold)
         folders = set()
         if view == 'directory':
@@ -639,6 +679,8 @@ class Application:
                 if not name.startswith(browse_prefix):
                     continue
                 rest = name[len(browse_prefix):]
+                if rest == '.gitkeep':
+                    continue
                 child = browse_prefix + rest.split('/')[0]
                 children.add(child)
                 if '/' in rest:
@@ -646,13 +688,22 @@ class Application:
             # Group all tracked paths before paging; a directory is never split
             # across pages or omitted because its descendants are on another page.
             names = sorted(children, key=lambda name: (name not in folders, name.casefold()))
+        else:
+            names = [name for name in names if not name.endswith('/.gitkeep')]
         total = len(names)
         commit = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=repo,
                                 capture_output=True, text=True, timeout=10, check=False)
         head = commit.stdout.strip() if commit.returncode == 0 else ""
         from .repository_metadata import file_times
+        updated = file_times(repo, head, names)
+        if sort != 'name':
+            def order(name):
+                value = updated.get(name)
+                try: stamp = datetime.fromisoformat(value).timestamp() if value else None
+                except (ValueError, TypeError): stamp = None
+                return (name not in folders, stamp is None, (-stamp if sort == 'updated-desc' else stamp) if stamp is not None else 0, name.casefold())
+            names.sort(key=order)
         visible_names = names[(page - 1) * 50:page * 50]
-        updated = file_times(repo, head, visible_names)
         items = []
         for name in visible_names:
             relative = Path(name)
@@ -1097,11 +1148,11 @@ class Application:
             raise ApiError("处理程序分配已失效", 401)
         return row
 
-    def authenticate_admin(self, headers, client_ip: str, write: bool = False) -> None:
+    def authenticate_admin(self, headers, client_ip: str, write: bool = False) -> dict | None:
         configured = os.getenv("RUNNER_ADMIN_TOKEN", "")
         supplied = headers.get("Access-Token", "") or headers.get("Authorization", "").removeprefix("Bearer ")
         if configured and hmac.compare_digest(configured, supplied):
-            return
+            return {'userLoginName': 'management-token'}
         auth_url = os.getenv("RUNNER_AUTH_URL", "")
         if auth_url:
             forwarded = {key: headers[key] for key in ("Cookie", "Access-Token") if headers.get(key)}
@@ -1125,7 +1176,7 @@ class Application:
             roles = payload["data"].get("roles", [])
             if write and "admin" not in roles:
                 raise ApiError("需要管理员权限", 403)
-            return
+            return payload['data']
         if os.getenv("RUNNER_DEV_MODE") == "1" and client_ip in ("127.0.0.1", "::1"):
             return
         raise ApiError("管理服务尚未配置用户认证", 503)
@@ -1620,6 +1671,13 @@ class Handler(BaseHTTPRequestHandler):
             return app.enroll(body, local_auto=local_auto)
         if path.startswith("/api/runners/me/"):
             runner = app.authenticate_runner(self.headers)
+            if method == 'GET' and path == '/api/runners/me/file-requests':
+                from .runner_files import pending
+                return pending(app, runner['runner_id'])
+            file_result = re.fullmatch(r'/api/runners/me/file-requests/([0-9a-f]{32})/result', path)
+            if method == 'POST' and file_result:
+                from .runner_files import complete
+                return complete(app, runner['runner_id'], file_result.group(1), body)
             process_stop = re.fullmatch(r'/api/runners/me/process-stops/([0-9a-f]{32})/result', path)
             if method == 'POST' and process_stop:
                 from .process_control import acknowledge
@@ -1676,6 +1734,12 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(launcher_version, str) and 0 < len(launcher_version) <= 80:
                         db.execute('UPDATE runners SET launcher_version=? WHERE runner_id=?', (launcher_version, runner['runner_id']))
                     capabilities = json.loads(runner['capabilities'])
+                    capabilities = [value for value in capabilities if value != 'file-browser']
+                    if body.get('fileBrowserSchema') == 1:
+                        capabilities.append('file-browser')
+                    capabilities = [value for value in capabilities if value != 'live-file-deployment']
+                    if body.get('liveFileDeploymentSchema') == 1:
+                        capabilities.append('live-file-deployment')
                     capabilities = [value for value in capabilities if value != 'deployment-entry']
                     if body.get('executionSchema') == 2:
                         capabilities.append('deployment-entry')
@@ -1797,7 +1861,15 @@ class Handler(BaseHTTPRequestHandler):
         sub = path[len(prefix):]
         file_read = (method == 'POST' and re.fullmatch(r'/code-servers/[0-9a-f-]+/files', sub)
                      and body.get('action') in ('list', 'read', 'export', 'download', 'logs'))
-        app.authenticate_admin(self.headers, self.client_address[0], write=method != "GET" and not file_read)
+        admin_identity = app.authenticate_admin(self.headers, self.client_address[0], write=(method != "GET" and not file_read) or sub.startswith('/runner-file-requests/'))
+        runner_files = re.fullmatch(r'/runners/([0-9a-f-]{36})/files', sub)
+        if runner_files and method == 'POST':
+            from .runner_files import create
+            return create(app, runner_files.group(1), body)
+        file_request = re.fullmatch(r'/runner-file-requests/([0-9a-f]{32})', sub)
+        if file_request and method == 'GET':
+            from .runner_files import result
+            return result(app, file_request.group(1))
         if sub == '/code-servers' and method == 'GET':
             from .code_servers import listing
             return listing(app)
@@ -1816,6 +1888,9 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/code-generation/tasks' and method in ('GET', 'POST'):
             from .database_generation import paged, create
             return paged(app, {key: values[0] for key, values in query.items()}) if method == 'GET' else create(app, body)
+        if sub == '/code-generation/tasks/regeneration' and method in ('GET', 'POST'):
+            from .generation_regeneration import prepare, submit
+            return prepare(app, (query.get('taskId') or [''])[0]) if method == 'GET' else submit(app, body.get('taskId', ''), body)
         if sub in ('/code-generation/tasks/delete', '/code-generation/tasks/delete-batch') and method == 'POST':
             from .database_generation import remove
             return remove(app, body)
@@ -1893,6 +1968,17 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/source-code-tasks' and method in ('GET', 'POST'):
             from .generation_tasks import listing, submit
             return listing(app) if method == 'GET' else submit(app, body)
+        if sub == '/node-prompt-templates' and method == 'GET':
+            from .node_prompt_templates import listing
+            return listing(app, {key: values[0] for key, values in query.items() if values})
+        if sub == '/node-prompt-templates/save' and method == 'POST':
+            from .node_prompt_templates import save
+            identity = admin_identity or {}
+            actor = str(identity.get('userLoginName') or identity.get('username') or identity.get('name') or 'management-service')
+            return save(app, body, actor)
+        if sub in ('/node-prompt-templates/delete-preview', '/node-prompt-templates/delete') and method == 'POST':
+            from .node_prompt_templates import preview, remove
+            return (preview if sub.endswith('delete-preview') else remove)(app, body)
         if sub == '/source-code-relations' and method == 'GET':
             from .source_code_relations import listing
             return listing(app, {key: values[0] for key, values in query.items() if values})
@@ -1911,7 +1997,7 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/deployment-jobs' and method == 'POST':
             from .deployment_resources import deploy_existing
             return deploy_existing(app, body)
-        deployment_action = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})/(publish|retry|rollback)', sub)
+        deployment_action = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})/(publish|retry|rollback|sync-git)', sub)
         if deployment_action and method == 'POST':
             from .deployment_resources import action
             return action(app, *deployment_action.groups())
@@ -2101,6 +2187,9 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/site-scripts/file-association' and method == 'POST':
             from .script_file_links import change
             return change(app, body)
+        repo_folder = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/folders', sub)
+        if repo_folder and method == 'POST':
+            return app.create_repository_folder(repo_folder.group(1), body)
         repo_files = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files", sub)
         repo_metadata = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files/metadata", sub)
         repo_references = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/files/references', sub)
@@ -2117,7 +2206,7 @@ class Handler(BaseHTTPRequestHandler):
         if repo_files and method == "GET":
             return app.list_repository_files(repo_files.group(1), (query.get("keyword") or [""])[0],
                                              int((query.get("page") or ["1"])[0]), (query.get('directoryId') or [''])[0],
-                                             (query.get('view') or ['paths'])[0], (query.get('folder') or [''])[0])
+                                             (query.get('view') or ['paths'])[0], (query.get('folder') or [''])[0], (query.get('sort') or ['updated-desc'])[0])
         if repo_files and method == "DELETE":
             return app.delete_repository_file(repo_files.group(1), (query.get("path") or [""])[0])
         repo_action = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})(/path|/default|/verify|/files)?", sub)

@@ -36,6 +36,15 @@ def archive_root(archive):
 def mapping(rule, archive, runner):
     from .directory_layout import safe_path
     source = archive_root(archive)
+    # A generated site folder belongs to the same physical configuration as
+    # its shared listener, rather than becoming a nested deployment owner.
+    owner = str(archive.get('configId') or '')
+    prefix = archive.get('repositoryPrefix', '').strip('/')
+    directory = safe_path(archive['directoryPath'])
+    if owner and (prefix == owner or prefix.startswith(owner + '/')):
+        source = directory + '/' + safe_path(owner)
+    elif owner and directory.split('/')[-1] == owner:
+        source = directory
     root = relative_directory(rule.get('deploymentDirectory', ''), runner)
     destination = PurePosixPath(root) / source
     return {'targetPath': safe_path(destination.as_posix(), template=True), 'sourceBase': source, 'resourceRoot': root}

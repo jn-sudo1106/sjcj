@@ -1,6 +1,7 @@
 """Runner-side materialization of manually requested directory snapshots."""
 from urllib.request import Request, urlopen
 import traceback
+from contextlib import nullcontext
 
 from .artifacts import verify_artifact
 from .bundle_install import cache_bundle, install_bundle, linked, safe_relative
@@ -53,7 +54,10 @@ def install_delivery(runner, job):
             or manifest.get('layoutRevision') != job['layoutRevision'] or manifest.get('versionFile') != 'version.json'):
         raise ValueError('代码包与下发任务的目录配置不一致')
     stage('install', '开始写入目标目录 ' + str(target))
-    install_bundle(target, files, manifest, digest, cache, runner.identity['publicKey'])
+    with getattr(runner, 'program_lock', nullcontext()):
+        from .live_deployment import runner_programs
+        programs = runner_programs(runner, target) if hasattr(runner, 'processes') else []
+        install_bundle(target, files, manifest, digest, cache, runner.identity['publicKey'], protected_programs=programs)
     stage('installed', '文件和 version.json 已写入 ' + str(target))
     return str(target)
 

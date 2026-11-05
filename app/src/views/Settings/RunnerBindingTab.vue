@@ -63,6 +63,10 @@ function runnerLabel(id: string) {
 }
 const sourceNode = (row: RuntimeConfiguration) => configurationMap.value.get(row.deploymentId)?.sourceNode
 const configurationId = (row: RuntimeConfiguration) => sourceNode(row)?.configId || configurationMap.value.get(row.deploymentId)?.configId || row.assignment?.configId || ''
+function showConfigurationId(row: RuntimeConfiguration) {
+  const id = configurationId(row)
+  return !!id && !(row.name || '').split(/[^A-Za-z0-9_-]+/).includes(id)
+}
 function runtimeQueue(row: RuntimeConfiguration) {
   const queue = row.assignment?.queue || ''
   return queue.startsWith('@deployment:') ? '' : queue
@@ -315,7 +319,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
                   <strong :title="`${row.name}\n部署 ID：${row.deploymentId || '未绑定'}`">{{ row.name }}</strong>
                   <small>{{ configurationId(row) ? '历史配置 · 未记录来源节点' : row.deploymentId ? '公共目录 · 未绑定流程节点' : '未关联部署配置' }}</small>
                 </template>
-                <small v-if="configurationId(row)" :title="configurationId(row)">配置 ID：{{ configurationId(row) }}</small>
+                <small v-if="showConfigurationId(row)" :title="configurationId(row)">配置 ID：{{ configurationId(row) }}</small>
               </td>
               <td>
                 <strong :title="`${sourceNode(row) ? nodeQueue(row) || '节点未设置 MQ 队列' : '未绑定流程节点，无节点 MQ'}${row.assignment ? `\n${row.assignment.concurrency} 并发` : ''}`" data-testid="binding-node-mq">{{ sourceNode(row) ? nodeQueue(row) || '未设置' : '未绑定节点' }}</strong>

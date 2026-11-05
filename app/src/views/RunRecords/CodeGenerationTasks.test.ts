@@ -21,11 +21,38 @@ function render(rowTask: TaskInst = task, role = 'admin') {
     ElTabs: { template: '<div><slot /></div>' }, ElTabPane: { template: '<div><slot /></div>' },
     GlobalSourceSelect: { name: 'GlobalSourceSelect', props: ['modelValue'], emits: ['update:modelValue'], template: '<div />' },
     RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' },
-    ElSelect: true, ElOption: true, ElInput: true, ElPagination: true,
+    ElSelect: true, ElOption: true, ElInput: true, ElPagination: true, CodeTaskRegeneration: true,
     ElEmpty: { props: ['description'], template: '<div>{{ description }}</div>' },
   } } })
 }
 describe('代码生成任务', () => {
+  it('从列表操作直接打开AI修正工作区，保留详情布局，提交后查看新任务', async () => {
+    const childRow = { ...task, taskId: 'child', configId: 'node-3' }
+    const parent = { taskId: task.taskId, configId: 'node-3', status: 'succeeded', callbackSent: true, stages: [], output: '', message: '', serverId: '', queue: '', createdAt: '' } as const
+    vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [task, childRow], total: 2 })
+    vi.mocked(runnerManagementApi.mqCodeJobSummaries).mockResolvedValue({ items: [task, childRow].map(row => ({ taskId: row.taskId, status: 'succeeded' })) } as never)
+    vi.spyOn(runnerManagementApi, 'mqCodeJob').mockImplementation(async id => ({ job: { ...parent, stages: [], taskId: id } }))
+    const w = render(); await flushPromises()
+    await w.findAll('[data-testid="open-regeneration"]')[0]!.trigger('click'); await flushPromises()
+    expect(w.get('[data-testid="code-task-split-layout"]').classes()).not.toContain('is-revising')
+    expect(w.get('[data-testid="code-task-detail-panel"]').findComponent({ name: 'CodeTaskRegeneration' }).exists()).toBe(false)
+    const editor = w.findComponent({ name: 'CodeTaskRegeneration' })
+    expect(editor.props('job').taskId).toBe(task.taskId)
+    editor.vm.$emit('created', { ...parent, taskId: 'child', status: 'queued' }); await flushPromises()
+    expect(runnerManagementApi.mqCodeJob).toHaveBeenLastCalledWith('child')
+    expect(w.findComponent({ name: 'CodeTaskRegeneration' }).exists()).toBe(false)
+    expect(w.get('[data-testid="code-task-detail-panel"]').text()).toContain('任务 ID：child')
+    w.unmount()
+  })
+  it('列表状态过期时重新查询执行状态，运行中的任务不能打开重新生成', async () => {
+    vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [task], total: 1 })
+    vi.mocked(runnerManagementApi.mqCodeJobSummaries).mockResolvedValue({ items: [{ taskId: task.taskId, status: 'succeeded' }] } as never)
+    vi.spyOn(runnerManagementApi, 'mqCodeJob').mockResolvedValue({ job: { taskId: task.taskId, status: 'running' } as never })
+    const w = render(); await flushPromises()
+    await w.get('[data-testid="open-regeneration"]').trigger('click'); await flushPromises()
+    expect(w.findComponent({ name: 'CodeTaskRegeneration' }).exists()).toBe(false)
+    w.unmount()
+  })
   beforeEach(() => {
     vi.spyOn(runnerManagementApi, 'mqCodeJobSummaries').mockResolvedValue({ items: [] })
     vi.spyOn(runnerManagementApi, 'modelInterfaces').mockResolvedValue({ items: [], revision: 1 })
@@ -145,7 +172,7 @@ describe('代码生成任务', () => {
     vi.spyOn(runnerManagementApi, 'mqCodeJob').mockResolvedValue({ job: {
       taskId: '123', serverId: 'server-1', configId: 'node-3', queue: 'code_mq', status: 'succeeded', createdAt: '', message: '已提交 Git',
       callbackSent: true, stages: ['开始生成'], output: '模型正在处理',
-      request: { method: 'POST', url: 'http://model/wb/agent', headers: { 'Content-Type': 'application/json' }, body: { prompt: '生成采集代码' } },
+      request: { method: 'POST', url: 'http://model/wb/agent', headers: { 'Content-Type': 'application/json' }, body: { model: 'hy3', prj_dir: 'D:\\news\\workspace', prompt: '系统要求：\n生成采集代码\n\n用户要求：\n保留标题和日期' } },
       result: { fileName: 'news.py', code: 'print("done")', warnings: [], archive: {
         archiveId: 'internal-archive-id', status: 'committed', message: '', configId: 'node-3', repoId: 'repo-code', directoryId: 'dir-links', directoryPath: 'links', taskId: '123', serverId: 'server-1',
         createdAt: '', gitCommit: 'a'.repeat(40), pushed: true, serverCodeDirectory: 'D:\\workspace\\node-3\\code', files: [
@@ -161,6 +188,9 @@ describe('代码生成任务', () => {
     expect(wrapper.text()).toContain('生成成功 · 结果已保存')
     expect(wrapper.text()).toContain('模型正在处理')
     expect(wrapper.text()).toContain('POST http://model/wb/agent')
+    expect(wrapper.get('[data-testid="generation-request-text"]').text()).toBe('系统要求：\n生成采集代码\n\n用户要求：\n保留标题和日期')
+    expect(JSON.parse(wrapper.get('[data-testid="generation-request-parameters"]').text())).toEqual({ model: 'hy3', prj_dir: 'D:\\news\\workspace' })
+    expect(wrapper.text()).toContain('原始 HTTP 请求')
     expect(wrapper.text()).toContain('news.py')
     const result = wrapper.get('[data-testid="generation-result"]')
     expect(result.text()).not.toContain('print("done")')

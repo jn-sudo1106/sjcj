@@ -18,6 +18,35 @@ class DeploymentResourcesTest(unittest.TestCase):
     request = baseline.ManagementIntegrationTest.request
     route = '/api/runner-management/deployment-resources'
 
+    def test_site_subdirectory_reuses_parent_deployment_and_keeps_listener(self):
+        import copy
+        self.fixture()
+        original = self.archive(include_helper=False)
+        saved = self.save_rules(self.runner)
+        self.request(self.route, {**saved, 'items': [{**saved['items'][0], 'entryPoint': 'default/1401218/main.py'}]})
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        previous = self.jobs()[0]
+        self.assertEqual(previous['status'], 'success', previous)
+        uploaded = self.app.upload_repository_files(self.repo['repoId'], {
+            'folder': 'default/1401218/sites', 'files': [{'name': 'example.com.py', 'data': base64.b64encode(b'def scrape(url): return []\n').decode()}]}, owner_config_id='1401218')
+        record = copy.deepcopy(original)
+        record.update(archiveId='sites-update', taskId='sites-update', createdAt='2026-11-06T01:00:00Z',
+                      gitCommit=uploaded['gitCommit'], repositoryPrefix='1401218/sites', files=uploaded['files'])
+        generated_archives.store(self.app, record)
+        resources.dispatch(self.app)
+        current = self.jobs()[0]
+        self.assertEqual(current['deploymentId'], previous['deploymentId'])
+        self.assertEqual(current['targetPath'], previous['targetPath'])
+        self.runner.deliver_pending(); resources.dispatch(self.app)
+        current = self.jobs()[0]
+        self.assertEqual(current['status'], 'success', current)
+        root = self.runner.directory / 'test/default/1401218'
+        self.assertEqual((root / 'main.py').read_bytes(), b'VALUE = 1\n')
+        self.assertTrue((root / 'sites/example.com.py').is_file())
+        with self.app.store.connect() as db:
+            from backend.runner_management.deployment_configuration import configurations
+            self.assertEqual(configurations(self.app, db)[current['deploymentId']]['entryPoint'], 'main.py')
+
     def tearDown(self):
         if getattr(self, 'other', None): self.other.close()
         baseline.ManagementIntegrationTest.tearDown(self)
@@ -63,6 +92,45 @@ class DeploymentResourcesTest(unittest.TestCase):
 
     def act(self, job, action):
         return self.request('/api/runner-management/deployment-jobs/' + job['jobId'] + '/' + action, {})
+
+    def test_sync_git_deploys_added_dependencies_preserves_history_and_deduplicates(self):
+        self.fixture(); archive = self.archive(include_helper=False); self.save_rules(self.runner)
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        old = self.jobs()[0]
+        uploaded = self.app.upload_repository_files(self.repo['repoId'], {
+            'directoryId': 'default', 'uploadType': 'folder', 'files': [{
+                'name': 'extra.txt', 'relativePath': '1401218/extra.txt', 'data': base64.b64encode(b'new dependency').decode()}]}, owner_config_id='1401218')
+        synced = self.act(old, 'sync-git')
+        self.assertNotEqual(synced['jobId'], old['jobId'])
+        self.assertEqual(synced['gitCommit'], uploaded['gitCommit'])
+        self.assertFalse(synced['rollback']); self.assertTrue(synced['gitSync'])
+        self.assertEqual(self.act(old, 'sync-git')['jobId'], synced['jobId'])
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        self.assertEqual((self.runner.directory / 'test/default/1401218/extra.txt').read_bytes(), b'new dependency')
+        self.assertEqual(self.jobs()[0]['status'], 'success')
+        self.assertEqual(self.act(old, 'sync-git')['jobId'], synced['jobId'])
+        history = next(row for row in self.jobs() if row['jobId'] == old['jobId'])
+        self.assertEqual(history['gitCommit'], archive['gitCommit'])
+        self.assertFalse(self.runner.get('/api/runners/me/assignments'))
+
+    def test_sync_git_fetches_remote_branch_without_overwriting_worktree(self):
+        self.fixture(); self.archive(include_helper=False); self.save_rules(self.runner)
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        old = self.jobs()[0]; root = Path(self.repo['path']); remote = Path(self.tmp.name) / 'remote.git'
+        self.app.git(root, 'clone', '--bare', str(root), str(remote))
+        self.app.git(root, 'remote', 'add', 'origin', str(remote))
+        with self.app.store.connect() as db: db.execute('UPDATE code_repositories SET remote_url=? WHERE repo_id=?', (remote.as_uri(),self.repo['repoId']))
+        clone = Path(self.tmp.name) / 'editor'; self.app.git(root, 'clone', str(remote), str(clone))
+        (clone/'default/1401218/extra.txt').write_text('from remote')
+        self.app.git(clone,'add','.'); self.app.git(clone,'-c','user.name=Test','-c','user.email=test@local','commit','-m','dependencies')
+        self.app.git(clone,'push','origin','main')
+        expected = self.app.git(clone,'rev-parse','HEAD').strip()
+        main = root/'default/1401218/main.py'; main.write_text('uncommitted work')
+        self.assertEqual(self.act(old,'sync-git')['gitCommit'],expected)
+        self.assertEqual(main.read_text(),'uncommitted work')
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        self.assertEqual((self.runner.directory/'test/default/1401218/extra.txt').read_text(),'from remote')
+        self.assertEqual(main.read_text(),'uncommitted work')
 
     def pool(self, other):
         current = self.request(self.route)

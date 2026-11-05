@@ -1,5 +1,6 @@
 import { request } from './client'
 import type { PromptTemplateItem } from './prompt'
+import { runnerManagementApi } from './runnerManagement'
 
 export type TemplateUse = 'config' | 'script'
 export interface NodePromptTemplate extends Omit<PromptTemplateItem, 'version'> {
@@ -9,9 +10,9 @@ export interface NodePromptTemplate extends Omit<PromptTemplateItem, 'version'> 
 }
 export const nodePromptApi = {
   list: (params: { sourceType?: string; nodeTypeName?: string; category?: string; templateUse: TemplateUse }) =>
-    request<NodePromptTemplate[]>('flow/node-prompts', params, { mode: 'http', method: 'GET', backendScope: 'flow' }),
+    runnerManagementApi.nodePromptTemplates(params),
   save: (input: Partial<NodePromptTemplate> & { sourceType: string }) =>
-    request<NodePromptTemplate>('flow/node-prompts/save', input, { mode: 'http', method: 'POST', backendScope: 'flow' }),
+    runnerManagementApi.saveNodePromptTemplate(input),
   selection: (configId: string) => request<{ promptTemplateId: number; hasSelection?: boolean }>('flow/node-prompts/selection', { configId, templateUse: 'config' }, { mode: 'http', method: 'GET', backendScope: 'flow' }),
   select: (configId: string, promptTemplateId: number) => request<{ promptTemplateId: number }>('flow/node-prompts/selection/save', { configId, promptTemplateId, templateUse: 'config' }, { mode: 'http', method: 'POST', backendScope: 'flow' }),
 }

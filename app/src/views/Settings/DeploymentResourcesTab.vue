@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import { runnerManagementApi, type DeploymentResourceRule, type GeneratedDeploymentJob, type RunnerInstance, type RuntimeConfiguration } from '@/api/runnerManagement'
 import { deploymentStatuses } from '@/utils/deploymentStatus'
 import DeploymentRuntimeActions from './DeploymentRuntimeActions.vue'
+import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
 
 const route = useRoute(), auth = useAuthStore()
@@ -20,12 +21,35 @@ const nodeType = ref(typeof route.query.nodeType === 'string' ? route.query.node
 const loading = ref(false), saving = ref(false), error = ref(''), formError = ref('')
 const draft = ref<DeploymentResourceRule | null>(null), editing = ref(-1), busyJob = ref(''), selected = ref<GeneratedDeploymentJob | null>(null)
 const editingResourceId = ref('')
+const browsing = ref<{ runner: RunnerInstance; directory: string } | null>(null)
+const entryPicker = ref<{ runner: RunnerInstance; directory: string; row: DeploymentResourceRule } | null>(null)
+function chooseEntry(row: DeploymentResourceRule) {
+  const runner = machine(row.runnerId)
+  if (!runner) return
+  entryPicker.value = { runner, directory: resourceDirectory(row), row }
+}
+function selectEntry(path: string) {
+  if (entryPicker.value) entryPicker.value.row.entryPoint = path
+  entryPicker.value = null
+}
 const inlineEditing = computed(() => !!editingResourceId.value)
 const committedResources = ref<DeploymentResourceRule[]>([])
 const supports = (item: DeploymentResourceRule, value: string) => item.environment === value || item.environment === 'both'
 const filtered = computed(() => resources.value.filter(item => (item.resourceId === editingResourceId.value || ((!nodeType.value || item.configType === nodeType.value) && (!env.value || supports(item, env.value))))))
 const machine = (id: string) => runners.value.find(item => item.runnerId === id)
 const label = (id: string) => { const item = machine(id); return item ? `${item.ipAddress} · ${item.installDirectory}` : id }
+function browseResource(row: DeploymentResourceRule) {
+  const runner = machine(row.runnerId)
+  if (runner) browsing.value = { runner, directory: resourceDirectory(row) }
+}
+function browseDeployment(row: GeneratedDeploymentJob, directory = row.installedPath || row.targetPath) {
+  const runner = machine(row.runnerId)
+  if (runner && directory) {
+    selected.value = null
+    browsing.value = { runner, directory }
+  }
+}
+const repositoryDirectoryLink = (row: GeneratedDeploymentJob) => ({ path: '/settings', query: { tab: 'code-repos', repoId: row.repositoryId, folderPath: row.gitDirectory } })
 const resourceDirectory = (item: DeploymentResourceRule) => {
   const root = machine(item.runnerId)?.installDirectory || ''
   const value = item.deploymentDirectory?.trim()
@@ -110,10 +134,14 @@ async function saveRow(row: DeploymentResourceRule) {
   } catch (e) { error.value = message(e) }
   finally { saving.value = false }
 }
-async function act(job: GeneratedDeploymentJob, action: 'retry') {
+async function act(job: GeneratedDeploymentJob, action: 'retry' | 'sync-git') {
   if (busyJob.value) return
   busyJob.value = job.jobId
-  try { await runnerManagementApi.generatedDeploymentAction(job.jobId, action); ElMessage.success('部署任务已提交'); await load() }
+  try {
+    const result = await runnerManagementApi.generatedDeploymentAction(job.jobId, action)
+    ElMessage.success(action === 'sync-git' && result.status === 'success' ? '已部署仓库最新版本' : '部署任务已提交')
+    await load()
+  }
   catch (e) { ElMessage.error(message(e)) }
   finally { busyJob.value = '' }
 }
@@ -142,7 +170,7 @@ onDeactivated(stop); onUnmounted(stop)
         <el-select v-model="draft.environment" aria-label="默认资源环境"><el-option label="测试" value="test" /><el-option label="生产" value="production" /><el-option label="生产和测试" value="both" /></el-select>
         <el-select v-model="draft.runnerId" placeholder="选择服务器实例" filterable aria-label="默认部署服务器"><el-option v-if="draft.runnerId && !machine(draft.runnerId)" :value="draft.runnerId" label="原实例已不存在，请重新选择" disabled /><el-option v-for="item in runners" :key="item.runnerId" :value="item.runnerId" :label="`${label(item.runnerId)} · ${item.status === 'online' ? '在线' : '离线'}`" /></el-select>
         <el-input v-model="draft.deploymentDirectory" aria-label="环境部署目录" :placeholder="machine(draft.runnerId)?.installDirectory || '默认使用 Runner instance 目录'" />
-        <el-input v-model="draft.entryPoint" aria-label="入口文件" placeholder="如 main.py" />
+        <el-button :disabled="!machine(draft.runnerId) || saving" aria-label="选择入口文件" @click="chooseEntry(draft)">{{ draft.entryPoint || '选择入口文件' }}</el-button>
         <div class="dr-actions"><el-switch v-model="draft.enabled" active-text="启用" inactive-text="停用" />
         <span>是否默认</span><el-switch v-model="draft.isDefault" active-text="是" inactive-text="否" />
         <el-button type="primary" :loading="saving" @click="save">保存</el-button><el-button :disabled="saving" @click="draft = null">取消</el-button></div>
@@ -154,8 +182,8 @@ onDeactivated(stop); onUnmounted(stop)
         <el-table-column label="节点类型" min-width="140"><template #default="{ row }"><el-select v-if="canWrite && editingResourceId === row.resourceId" v-model="row.configType" aria-label="列表节点类型" :disabled="saving || !!draft" filterable><el-option v-for="item in types" :key="item.sourceType" :value="String(item.sourceType)" :label="item.typeName" /></el-select><span v-else class="dr-value">{{ row.configTypeName }}</span></template></el-table-column>
         <el-table-column label="环境" min-width="145"><template #default="{ row }"><el-select v-if="canWrite && editingResourceId === row.resourceId" v-model="row.environment" aria-label="列表资源环境" :disabled="saving || !!draft"><el-option label="测试" value="test" /><el-option label="生产" value="production" /><el-option label="生产和测试" value="both" /></el-select><span v-else class="dr-value">{{ row.environment === 'both' ? '生产和测试' : row.environment === 'test' ? '测试' : '生产' }}</span></template></el-table-column>
         <el-table-column label="服务器 / Runner 实例" min-width="170"><template #default="{ row }"><el-select v-if="canWrite && editingResourceId === row.resourceId" v-model="row.runnerId" aria-label="列表服务器实例" :disabled="saving || !!draft" filterable><el-option v-for="item in runners" :key="item.runnerId" :value="item.runnerId" :label="item.ipAddress" :title="item.installDirectory">{{ item.ipAddress }} · {{ item.installDirectory }}</el-option></el-select><span v-else class="dr-value">{{ machine(row.runnerId)?.ipAddress || '实例不存在' }}</span></template></el-table-column>
-        <el-table-column label="环境部署目录" min-width="200"><template #default="{ row }"><el-input v-if="canWrite && editingResourceId === row.resourceId" v-model="row.deploymentDirectory" aria-label="列表环境部署目录" :placeholder="resourceDirectory({ ...row, deploymentDirectory: '' })" :disabled="saving || !!draft" /><span v-else class="dr-value">{{ resourceDirectory(row) }}</span></template></el-table-column>
-        <el-table-column label="入口文件" min-width="180"><template #default="{ row }"><el-input v-if="canWrite && editingResourceId === row.resourceId" v-model="row.entryPoint" aria-label="列表入口文件" :placeholder="row.entryPoints?.join('、') || '如 main.py'" :disabled="saving || !!draft" /><span v-else class="dr-value" :title="row.entryPoint || row.entryPoints?.join('、')">{{ row.entryPoint || row.entryPoints?.join('、') || '未设置' }}</span></template></el-table-column>
+        <el-table-column label="环境部署目录" min-width="200"><template #default="{ row }"><el-input v-if="canWrite && editingResourceId === row.resourceId" v-model="row.deploymentDirectory" aria-label="列表环境部署目录" :placeholder="resourceDirectory({ ...row, deploymentDirectory: '' })" :disabled="saving || !!draft" /><el-button v-else-if="canWrite && machine(row.runnerId)" link type="primary" class="dr-directory-link" :title="resourceDirectory(row)" data-testid="browse-resource-directory" @click="browseResource(row)">📁 {{ resourceDirectory(row) }}</el-button><span v-else class="dr-value">{{ resourceDirectory(row) }}</span></template></el-table-column>
+        <el-table-column label="入口文件" min-width="180"><template #default="{ row }"><el-button v-if="canWrite && editingResourceId === row.resourceId" link type="primary" aria-label="选择列表入口文件" data-testid="choose-resource-entry" :title="row.entryPoint" :disabled="saving || !!draft || !machine(row.runnerId)" @click="chooseEntry(row)">{{ row.entryPoint || '选择入口文件' }}</el-button><span v-else class="dr-value" :title="row.entryPoint || row.entryPoints?.join('、')">{{ row.entryPoint || row.entryPoints?.join('、') || '未设置' }}</span></template></el-table-column>
         <el-table-column label="状态" width="120"><template #default="{ row }"><el-switch v-if="canWrite && editingResourceId === row.resourceId" v-model="row.enabled" aria-label="资源启用状态" :disabled="saving || !!draft" :active-text="row.enabled ? '启用' : '停用'" /><span v-else class="dr-value">{{ row.enabled ? '启用' : '停用' }}</span></template></el-table-column>
         <el-table-column label="是否默认" width="120"><template #default="{ row }"><el-switch v-if="canWrite && editingResourceId === row.resourceId" v-model="row.isDefault" aria-label="资源默认状态" :disabled="saving || !!draft" :active-text="row.isDefault ? '是' : '否'" /><span v-else class="dr-value">{{ row.isDefault !== false ? '是' : '否' }}</span></template></el-table-column>
         <el-table-column v-if="canWrite" label="操作" width="130" fixed="right"><template #default="{ row }">
@@ -169,16 +197,18 @@ onDeactivated(stop); onUnmounted(stop)
         <el-table-column label="源 / 配置" min-width="130"><template #default="{ row }">配置 {{ row.configId }}<small>源 {{ row.sourceId }} · 节点 {{ row.stepId }}</small></template></el-table-column>
         <el-table-column label="环境" width="75"><template #default="{ row }">{{ row.environment === 'test' ? '测试' : '生产' }}</template></el-table-column>
         <el-table-column label="部署状态" min-width="125"><template #default="{ row }"><span :title="row.message">{{ deploymentStatuses[row.status] || row.status }}</span></template></el-table-column>
-        <el-table-column label="服务器 / 目录" min-width="190"><template #default="{ row }">{{ row.runnerIp || '待分配' }}<small>{{ row.installedPath || row.targetPath || row.message }}</small></template></el-table-column>
-        <el-table-column label="Git 目录" min-width="180"><template #default="{ row }"><code>{{ row.gitDirectory || '未记录' }}</code><small>{{ row.repositoryName || row.repositoryId }}</small></template></el-table-column>
+        <el-table-column label="服务器 / 目录" min-width="190"><template #default="{ row }">{{ row.runnerIp || (row.status === 'superseded' ? '无需分配' : '待分配') }}<small><el-button v-if="canWrite && machine(row.runnerId) && (row.installedPath || row.targetPath)" link type="primary" class="dr-job-directory" data-testid="browse-deployment-directory" :title="row.installedPath || row.targetPath" @click.stop="browseDeployment(row)">📁 {{ row.installedPath || row.targetPath }}</el-button><template v-else>{{ row.installedPath || row.targetPath || row.message }}</template></small></template></el-table-column>
+        <el-table-column label="Git 目录" min-width="180"><template #default="{ row }"><RouterLink v-if="row.repositoryId && row.gitDirectory" :to="repositoryDirectoryLink(row)" class="dr-git-directory" data-testid="browse-deployment-git-directory" @click.stop>📁 {{ row.gitDirectory }}</RouterLink><code v-else>{{ row.gitDirectory || '未记录' }}</code><small>{{ row.repositoryName || row.repositoryId }}</small></template></el-table-column>
         <el-table-column label="Git 版本" width="120"><template #default="{ row }"><code>{{ row.gitCommit.slice(0, 12) }}</code></template></el-table-column>
         <el-table-column label="更新时间" width="165"><template #default="{ row }">{{ formatRunnerDateTime(row.updatedAt) }}</template></el-table-column>
-        <el-table-column label="操作" min-width="255"><template #default="{ row }"><DeploymentRuntimeActions :job="row" :current-runtime="runtimes.find(item => item.runtimeId === row.runtimeId) || null" /><template v-if="canWrite"><el-button v-if="['waiting_resource','queued','failed'].includes(row.status)" link :disabled="!!busyJob" @click.stop="act(row, 'retry')">重试</el-button></template></template></el-table-column>
+        <el-table-column label="操作" min-width="255"><template #default="{ row }"><DeploymentRuntimeActions :job="row" :current-runtime="runtimes.find(item => item.runtimeId === row.runtimeId) || null" /><template v-if="canWrite"><el-button v-if="row.status === 'success'" link :disabled="!!busyJob" data-testid="sync-deployment-git" @click.stop="act(row, 'sync-git')">同步 Git 代码</el-button><el-button v-if="['waiting_resource','queued','failed'].includes(row.status)" link :disabled="!!busyJob" @click.stop="act(row, 'retry')">重试</el-button></template></template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="page" :total="total" :page-size="20" layout="total, prev, pager, next" @current-change="load" />
     </template>
+    <RunnerFilesDrawer v-if="browsing" :runner="browsing.runner" :directory="browsing.directory" @close="browsing = null" />
+    <RunnerFilesDrawer v-if="entryPicker" :runner="entryPicker.runner" :directory="entryPicker.directory" select-file @selected="selectEntry" @close="entryPicker = null" />
     <el-drawer :model-value="!!selected" title="部署详情" size="min(620px, 92vw)" @close="selected = null">
-      <template v-if="selected"><dl class="dr-details"><template v-for="field in [{label:'状态',value:deploymentStatuses[selected.status]}, {label:'说明',value:selected.message}, {label:'源 / 流程 / 节点',value:`${selected.sourceId} / ${selected.flowId} / ${selected.stepId}`}, {label:'配置 ID',value:selected.configId}, {label:'生成任务',value:selected.taskId}, {label:'Git 仓库',value:selected.repositoryName || selected.repositoryId}, {label:'Git 目录',value:selected.gitDirectory}, {label:'Git 版本',value:selected.gitCommit}, {label:'Runner 实例',value:selected.runnerId}, {label:'实例目录',value:selected.instanceDirectory}, {label:'环境部署目录',value:selected.resourceDirectory}, {label:'部署目录',value:selected.installedPath || selected.targetPath}, {label:'更新时间',value:formatRunnerDateTime(selected.updatedAt)}]" :key="field.label"><dt>{{ field.label }}</dt><dd>{{ field.value || '—' }}</dd></template></dl>
+      <template v-if="selected"><dl class="dr-details"><template v-for="field in [{label:'状态',value:deploymentStatuses[selected.status]}, {label:'说明',value:selected.message}, {label:'源 / 流程 / 节点',value:`${selected.sourceId} / ${selected.flowId} / ${selected.stepId}`}, {label:'配置 ID',value:selected.configId}, {label:'生成任务',value:selected.taskId}, {label:'Git 仓库',value:selected.repositoryName || selected.repositoryId}, {label:'Git 目录',value:selected.gitDirectory}, {label:'Git 版本',value:selected.gitCommit}, {label:'Runner 实例',value:selected.runnerId}, {label:'实例目录',value:selected.instanceDirectory}, {label:'环境部署目录',value:selected.resourceDirectory}, {label:'部署目录',value:selected.installedPath || selected.targetPath}, {label:'更新时间',value:formatRunnerDateTime(selected.updatedAt)}]" :key="field.label"><dt>{{ field.label }}</dt><dd><RouterLink v-if="field.label === 'Git 目录' && selected.repositoryId && selected.gitDirectory" :to="repositoryDirectoryLink(selected)" class="dr-git-directory" data-testid="browse-deployment-detail-git-directory">📁 {{ field.value }}</RouterLink><el-button v-else-if="canWrite && machine(selected.runnerId) && field.value && ['实例目录','环境部署目录','部署目录'].includes(field.label)" link type="primary" class="dr-job-directory" :data-testid="field.label === '部署目录' ? 'browse-deployment-detail-directory' : undefined" @click="browseDeployment(selected, field.value)">📁 {{ field.value }}</el-button><template v-else>{{ field.value || '—' }}</template></dd></template></dl>
         <DeploymentRuntimeActions :job="selected" :current-runtime="runtimes.find(item => item.runtimeId === selected?.runtimeId) || null" />
         <RouterLink v-if="selected.deploymentId" :to="{path:'/settings',query:{tab:'directory-layout',deploymentId:selected.deploymentId}}" target="_blank">查看部署配置</RouterLink>
       </template>
@@ -197,4 +227,7 @@ onDeactivated(stop); onUnmounted(stop)
 .dr-resources :deep(.el-switch){height:32px;margin-left:12px}
 .dr-row-actions{display:flex;align-items:center;gap:12px;height:32px;white-space:nowrap}
 .dr-row-actions .el-button{margin:0}
+.dr-directory-link{min-width:0;max-width:100%;padding-left:12px}.dr-directory-link :deep(span){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dr-job-directory{max-width:100%;height:auto;white-space:normal;text-align:left}.dr-job-directory :deep(span){min-width:0;overflow-wrap:anywhere}
+.dr-git-directory{color:var(--el-color-primary);text-decoration:none;overflow-wrap:anywhere}.dr-git-directory:hover{text-decoration:underline}
 </style>

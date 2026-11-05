@@ -280,15 +280,33 @@ class ManagementIntegrationTest(unittest.TestCase):
         # Local copying/cloning must not replace code history with an mtime.
         os.utime(root / 'default' / '[新闻].py', (1, 1))
         flat = self.request(route + '/files')
+        self.assertEqual([item['path'] for item in flat['items']], ['default/other.py','default/[新闻].py','default/lib/helper.py'])
         by_path = {item['path']: item for item in flat['items']}
         self.assertEqual(by_path['default/[新闻].py']['updatedAt'], changed_time)
         self.assertEqual(by_path['default/lib/helper.py']['updatedAt'], folder_time)
         directory = self.request(route + '/files?view=directory&directoryId=default')
         self.assertEqual(next(item for item in directory['items'] if item['kind'] == 'directory')['updatedAt'], folder_time)
-        with patch('backend.runner_management.repository_metadata._last_change', side_effect=OSError('temporary error')):
+        with patch('backend.runner_management.repository_metadata._change_times', side_effect=OSError('temporary error')):
             unavailable = self.request(route + '/files')
         self.assertEqual(unavailable['total'], flat['total'])
         self.assertTrue(all(item['updatedAt'] is None for item in unavailable['items']))
+
+    def test_repository_time_sort_is_global_before_paging_and_can_reverse(self):
+        repo = self.request('/api/runner-management/settings/code-repos')[0]
+        root = Path(repo['path']); root.mkdir(parents=True,exist_ok=True); self.app.git(root,'init','-b','main')
+        route = '/api/runner-management/settings/code-repos/' + repo['repoId'] + '/files'
+        with patch.dict(os.environ,{'GIT_AUTHOR_DATE':'2026-10-01T09:00:00+08:00','GIT_COMMITTER_DATE':'2026-10-01T09:00:00+08:00'}):
+            self.request(route,{'uploadType':'folder','files':[{'name':f'a{index:02}.py','relativePath':f'a{index:02}.py','data':base64.b64encode(b'pass').decode()} for index in range(51)]})
+        with patch.dict(os.environ,{'GIT_AUTHOR_DATE':'2026-10-02T09:00:00+08:00','GIT_COMMITTER_DATE':'2026-10-02T09:00:00+08:00'}):
+            self.request(route,{'files':[{'name':'z-new.py','data':base64.b64encode(b'pass').decode()}]})
+        newest=self.request(route); oldest=self.request(route+'?sort=updated-asc')
+        self.assertEqual(newest['total'],52);self.assertEqual(newest['items'][0]['path'],'default/z-new.py')
+        self.assertEqual(oldest['items'][0]['path'],'default/a00.py')
+        second=self.request(route+'?sort=updated-asc&page=2')
+        self.assertEqual(second['items'][-1]['path'],'default/z-new.py')
+        directory=self.request(route+'?view=directory&directoryId=default')
+        self.assertEqual(directory['items'][0]['path'],'default/z-new.py')
+        with self.assertRaises(HTTPError):self.request(route+'?sort=invalid')
 
     def test_repository_file_metadata_uses_file_history_at_selected_snapshot(self):
         route = '/api/runner-management/settings/code-repos'
@@ -2345,6 +2363,65 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
             db.execute("UPDATE code_repositories SET local_path=? WHERE repo_id=?",
                        (str(Path(self.tmp.name) / "missing"), repo["repoId"]))
         self.assertEqual(self.request(verify_url, {})["status"], "error")
+
+    def test_upload_restores_historical_files_but_protects_current_node_links(self):
+        root = '/api/runner-management'
+        repo = self.request(root + '/settings/code-repos')[0]
+        route = root + '/settings/code-repos/' + repo['repoId']
+        first = self.request(route + '/directories', {'name': '旧网站目录', 'configType': '90', 'configTypeName': '网页抓取', 'path': 'links'})
+        payload = {'configId': 'history-upload', 'queueName': 'news_list', 'configType': '90',
+                   'repositoryId': repo['repoId'], 'directoryId': first['directoryId'],
+                   'codeType': 'site', 'siteHost': 'example.com', 'code': 'def scrape(url):\n    return []\n'}
+        old = self.request(root + '/site-scripts/publish', payload)
+        second = self.request(route + '/directories', {'name': '当前网站目录', 'configType': '90', 'configTypeName': '网页抓取', 'path': 'current'})
+        current = self.request(root + '/site-scripts/publish', {**payload, 'directoryId': second['directoryId'], 'code': 'def scrape(url):\n    return [{"title":"new"}]\n'})
+        def upload(directory_id, content, overwrite=False):
+            return self.request(route + '/files', {'directoryId': directory_id, 'overwrite': overwrite,
+                'files': [{'name': 'example.com.py', 'data': base64.b64encode(content).decode()}]})
+        with self.assertRaises(HTTPError) as active:
+            upload(second['directoryId'], b'# cannot change current', True)
+        self.assertIn('current/example.com.py', active.exception.read().decode('utf8'))
+        # The original immutable Git snapshot remains readable after HEAD update.
+        upload(first['directoryId'], b'# historical path new HEAD', True)
+        self.assertEqual(self.app.git(Path(repo['path']), 'show', old['gitCommit'] + ':' + old['storagePath']), payload['code'])
+        with urlopen(Request(self.url + route + '/files?path=links/example.com.py', method='DELETE')) as response:
+            self.assertEqual(response.status, 200)
+        upload(first['directoryId'], b'# restored historical file')
+        self.assertEqual((Path(repo['path']) / 'links/example.com.py').read_bytes(), b'# restored historical file')
+        # Identical bytes are safe even for a current link, with explicit overwrite.
+        current_bytes = (Path(repo['path']) / current['storagePath']).read_bytes()
+        upload(second['directoryId'], current_bytes, True)
+        self.assertEqual((Path(repo['path']) / current['storagePath']).read_bytes(), current_bytes)
+
+    def test_repository_empty_folders_and_upload_target_preserve_existing_files(self):
+        bare = Path(self.tmp.name) / 'directory-remote.git'
+        subprocess.run(['git', 'init', '--bare', str(bare)], check=True, capture_output=True)
+        local = Path(self.tmp.name) / 'directory-local'
+        repo = self.request('/api/runner-management/settings/code-repos', {
+            'name': '目录操作测试', 'path': str(local), 'remoteUrl': bare.as_uri(), 'branch': 'main'})
+        route = '/api/runner-management/settings/code-repos/' + repo['repoId']
+        created = self.request(route + '/folders', {'name': '1401218', 'folder': 'links'})
+        self.assertTrue(created['pushed'])
+        self.assertEqual(subprocess.run(['git', '--git-dir', str(bare), 'show', 'main:links/1401218/.gitkeep'],
+                                        check=True, capture_output=True).stdout, b'')
+        listing = self.request(route + '/files?view=directory&folder=links')
+        self.assertEqual([(row['path'], row['kind']) for row in listing['items']], [('links/1401218', 'directory')])
+        self.assertEqual(self.request(route + '/files?view=directory&folder=links/1401218')['total'], 0)
+        uploaded = self.request(route + '/files', {'folder': 'links/1401218', 'files': [
+            {'name': 'newslink.py', 'data': base64.b64encode(b'# keep me').decode()}]})
+        self.assertEqual(uploaded['files'][0]['path'], 'links/1401218/newslink.py')
+        # Ignored files fail validation before any writes, with the old folder intact.
+        (local / '.gitignore').write_text('*.tmp\n', encoding='utf8')
+        with self.assertRaises(HTTPError) as ignored:
+            self.request(route + '/files', {'folder': 'links/1401218', 'files': [
+                {'name': 'new.py', 'data': base64.b64encode(b'new').decode()},
+                {'name': 'ignored.tmp', 'data': base64.b64encode(b'ignored').decode()}]})
+        self.assertEqual(ignored.exception.code, 409)
+        self.assertEqual((local / 'links/1401218/newslink.py').read_bytes(), b'# keep me')
+        self.assertFalse((local / 'links/1401218/new.py').exists())
+        for folder in ('../outside', '/absolute', 'links//bad'):
+            with self.assertRaises(HTTPError):
+                self.request(route + '/folders', {'name': 'new', 'folder': folder})
 
     def test_upload_repository_files_commits_pushes_and_rejects_unsafe_paths(self):
         bare = Path(self.tmp.name) / "upload-remote.git"

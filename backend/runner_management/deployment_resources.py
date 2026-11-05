@@ -364,6 +364,8 @@ def action(app, identifier, operation):
         row = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (identifier,)).fetchone()
         if not row: raise ApiError('部署记录不存在', 404)
         job = json.loads(row['payload'])
+        if operation == 'sync-git':
+            return view(sync_git(app, db, job))
         if operation == 'publish':
             if job['environment'] != 'test' or job['status'] != 'success':
                 raise ApiError('请先完成该版本的测试环境部署，再发布生产', 409)
@@ -389,6 +391,50 @@ def action(app, identifier, operation):
         raise ApiError('部署操作无效')
 
 
+def sync_git(app, db, job):
+    """Explicitly deploy a new pinned repository snapshot; preserve generation receipts."""
+    from pathlib import Path
+    from .server import ApiError
+    from .directory_layout import git_files
+    from .delivery_ignore import ignored_paths
+    from .python_cache import is_python_cache
+    from .repository_directories import get_directory
+    if job['status'] != 'success': raise ApiError('请等待当前部署成功后再同步 Git 代码', 409)
+    archive = dict(job['archive'])
+    repo = app.repository(db, archive['repoId'])
+    if repo['status'] != 'ACTIVE': raise ApiError('代码仓库已停用', 409)
+    directory = get_directory(app, db, archive['repoId'], archive['directoryId'], config_type=archive['configType'])
+    if directory['path'] != archive['directoryPath']: raise ApiError('仓库配置目录已变更，请先更新节点的仓库关联', 409)
+    root = Path(repo['local_path'])
+    if repo['remote_url']:
+        # Fetch only the configured branch; leave the server worktree untouched.
+        app.git(root, 'fetch', '--no-tags', 'origin', 'refs/heads/' + repo['branch'])
+        commit = app.git(root, 'rev-parse', '--verify', 'FETCH_HEAD^{commit}').strip()
+    else:
+        commit = app.git(root, 'rev-parse', '--verify', 'refs/heads/' + repo['branch'] + '^{commit}').strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', commit): raise ApiError('仓库最新提交无效', 409)
+    prefix = archive_root(archive).rstrip('/') + '/'
+    tree = git_files(app, repo, commit)
+    excluded = ignored_paths(repo, commit, tree)
+    files = [{'path': path} for path in sorted(tree) if path.startswith(prefix) and path not in excluded and not is_python_cache(path)]
+    if not files: raise ApiError('仓库对应配置目录没有可部署文件', 409)
+    rows = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=? ORDER BY created_at DESC,job_id DESC', owner(job)).fetchall()
+    for row in rows:
+        previous = json.loads(row['payload'])
+        if previous['status'] in (*WAITING, 'delivering'):
+            if previous.get('gitSync') and previous['gitCommit'] == commit and previous['archive']['repoId'] == archive['repoId']:
+                return previous
+            raise ApiError('该节点环境已有部署任务，请等待完成后再同步', 409)
+    latest = json.loads(rows[0]['payload']) if rows else job
+    if latest['status'] == 'success' and latest['gitCommit'] == commit:
+        return latest
+    archive.update(gitCommit=commit, files=files, pushed=bool(repo['remote_url']))
+    synced = enqueue(db, archive, job['environment'], parent=job['jobId'], rollback=True)
+    synced.update(rollback=False, gitSync=True, message='已锁定最新 Git 版本，等待部署')
+    persist(db, synced)
+    return synced
+
+
 def target(rule, job, runner=None):
     return mapping(rule, job['archive'], runner)['targetPath']
 
@@ -403,8 +449,7 @@ def layout_nodes(archive, source_base=None):
     nodes, folders = [], {}
     for file in archive['files']:
         path = safe_path(file['path'])
-        if not path.startswith(original_base): raise ApiError('生成文件不在归档的仓库目录内', 422)
-        if not path.startswith(base): continue
+        if not path.startswith(base): raise ApiError('生成文件不在归档的仓库目录内', 422)
         relative = safe_path(path[len(base):])
         parent = ''
         parts = relative.split('/')
@@ -434,13 +479,25 @@ def prepare(app, db, job, rule, runner):
     root = mapped_paths['targetPath']
     kind = PureWindowsPath if PureWindowsPath(runner['install_directory']).drive else PurePosixPath
     absolute = kind(runner['install_directory']) / root
+    processes = []
     for process in json.loads(runner['worker_processes'] or '[]'):
         directory = process.get('workingDirectory', '')
         if directory and (kind(directory) == absolute or absolute in kind(directory).parents or kind(directory) in absolute.parents):
-            job.update(status='queued', message='目标目录中的处理程序正在运行，请先停止后部署'); return
+            processes.append(process)
+    job.update(runnerId=runner['runner_id'], runnerName=runner['name'], runnerIp=runner['ip_address'],
+               instanceDirectory=runner['install_directory'], targetPath=root,
+               resourceDirectory=str(kind(runner['install_directory']) / mapped_paths['resourceRoot']))
     identity = owner(job)
     deployment_id = uuid.uuid5(uuid.NAMESPACE_URL, 'ce:auto-deployment:' + json.dumps(identity)).hex
-    for item in configurations(app, db).values():
+    layouts = configurations(app, db)
+    # Sources using the same node configuration share one physical directory and
+    # registry owner. Their generation/deployment receipts remain independent.
+    shared = [item for item in layouts.values() if item.get('managedBy') == 'generated-code'
+              and item.get('configId') == job['configId'] and item.get('queueName', '') == job['archive'].get('queueName', '')
+              and item.get('deploymentEnvironment') == job['environment'] and kind(target_path(item)) == kind(root)
+              and db.execute('SELECT 1 FROM directory_runner_bindings WHERE owner_id=? AND runner_id=?', (item['deploymentId'], runner['runner_id'])).fetchone()]
+    if len(shared) == 1: deployment_id = shared[0]['deploymentId']
+    for item in layouts.values():
         if item['deploymentId'] == deployment_id: continue
         other = kind(target_path(item))
         target_root = kind(root)
@@ -448,7 +505,7 @@ def prepare(app, db, job, rule, runner):
         if db.execute('SELECT 1 FROM directory_runner_bindings WHERE owner_id=? AND runner_id=?',
                       (item['deploymentId'], runner['runner_id'])).fetchone():
             raise ApiError('目标目录已被其他部署配置使用，请修改部署资源的部署目录', 409)
-    current = configurations(app, db).get(deployment_id)
+    current = layouts.get(deployment_id)
     archive = job['archive']
     if mapped_paths:
         # Deploy the configuration's complete Git folder at the pinned commit,
@@ -468,11 +525,33 @@ def prepare(app, db, job, rule, runner):
                'pathStyle': 'config', 'nodes': nodes, 'entryPoint': '', 'revision': current['revision'] if current else '',
                'sourceNode': {'flowId': job['flowId'], 'flowName': job['flowId'], 'stepId': job['stepId'],
                               'nodeName': job['stepId'], 'configId': job['configId']}}
+    if processes:
+        from .live_deployment import validate, server_programs
+        from .directory_delivery import baseline
+        from .directory_layout import snapshot_files
+        try:
+            if any(kind(process['workingDirectory']) != absolute for process in processes):
+                raise ValueError('父级或子级目录中有程序运行，请先停止后部署')
+            digest, before, old_manifest = baseline(app, 'deployment', deployment_id, runner['runner_id'], root, db)
+            if not digest: raise ValueError('无法确认当前目录已下发的文件，请先停止处理程序')
+            after, _, directories = snapshot_files(app, payload, db)
+            validate(before, after, server_programs(app, db, processes))
+            if set(directories) - set(old_manifest.get('directories', [])):
+                raise ValueError('公共目录结构发生变化，请先停止处理程序')
+            if 'live-file-deployment' not in json.loads(runner['capabilities']):
+                raise ValueError('仅独立脚本发生变化；请先升级 Runner 以支持程序运行时增量下发')
+        except ValueError as error:
+            job.update(status='queued', message=str(error)); return
     if rule.get('entryPoint'):
         from .runtime_entry import candidates
-        if rule['entryPoint'] not in candidates(app, payload, db):
+        entry = rule['entryPoint']
+        # File picker stores paths relative to the resource directory. Legacy
+        # values are already relative to the configuration directory.
+        resource_prefix = mapped_paths['sourceBase'].rstrip('/') + '/'
+        if entry.startswith(resource_prefix): entry = entry[len(resource_prefix):]
+        if entry not in candidates(app, payload, db):
             raise ApiError('部署资源指定的入口文件不存在于当前代码配置：' + rule['entryPoint'], 422)
-        payload['entryPoint'] = rule['entryPoint']
+        payload['entryPoint'] = entry
     elif not current or not current.get('entryPoint'):
         from .runtime_entry import candidates
         entries = candidates(app, payload, db)
@@ -501,7 +580,7 @@ def prepare(app, db, job, rule, runner):
         saved_runtime = json.loads(existing['setting_value'])
         runtime = {**runtime, **saved_runtime} if saved_runtime.get('assignmentId') else {**saved_runtime, **runtime}
     store_layout(db, RUNTIME_PREFIX + runtime_id, runtime)
-    if layout.get('entryPoint'):
+    if layout.get('entryPoint') and not processes:
         from .deployment_configuration import save_runtime, runtime_rows
         row = next(item for item in runtime_rows(app, db) if item['runtimeId'] == runtime_id)
         adopted = save_runtime(app, {'runtimeId': runtime_id, 'revision': row['revision'],
