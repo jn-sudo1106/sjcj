@@ -48,7 +48,7 @@ export function mightBeUrlFragment(text: string): boolean {
  *   flowId=1400330 得 46 条、与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略。
  *   只能手动选，不参与自动识别（纯数字一律按源 ID）。放最后，免得「＋」加行时先加出它来。
  */
-export type SourceCondField = SourceSearchField | 'remark' | 'entryTypeId' | 'flowId' | 'defaultFlowId'
+export type SourceCondField = SourceSearchField | 'remark' | 'entryTypeId' | 'flowId' | 'defaultFlowId' | 'configId'
 export type SourceCondOp = 'eq' | 'like' | 'notEmpty' | 'empty'
 
 export interface SourceCondition {
@@ -94,11 +94,22 @@ export const SOURCE_COND_FIELDS: { value: SourceCondField; label: string; placeh
   // 1008-04 默认流程筛选：sourcePaged 认 `defaultFlowId`（2026-10-09 实测：只匹配默认流程，
   // 与 flowId 的「任一生效关联」不同）。只能手动选，不参与自动识别；放最后。
   { value: 'defaultFlowId', label: '默认流程 ID', placeholder: '流程 ID，如 14009350', ops: [{ value: 'eq', label: '等于' }] },
+  // 1104 按配置查源：旧平台源列表的「配置」筛选（`0828-源视图迁移核对` §1 记的缺口）。
+  // source-api.md §1.1 的 SourceCond 生效字段含 `configId`（Long，后端内部反查主配置），
+  // 用来查「这份配置被哪些源用」。只能手动选，不参与自动识别（纯数字一律按源 ID）；放最后。
+  { value: 'configId', label: '配置 ID', placeholder: '配置 ID，如 1400765', ops: [{ value: 'eq', label: '等于' }] },
 ]
 
 export function sourceCondFieldOf(field: SourceCondField) {
   return SOURCE_COND_FIELDS.find((f) => f.value === field)!
 }
+
+/**
+ * 只能手动选、不参与「按输入内容自动识别」的字段。
+ * 自动识别只认源 ID / 名称 / URL（见文件头）：纯数字一律算源 ID，这几个 ID 类字段和备注
+ * 一旦插进来就会被自动改掉，静默漏结果；所以它们只从下拉里选，选完 `pinned` 生效。
+ */
+export const MANUAL_ONLY_COND_FIELDS: SourceCondField[] = ['remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId']
 
 /** 字段的默认条件：第一个后端支持的 */
 export function defaultSourceCondOp(field: SourceCondField): SourceCondOp {

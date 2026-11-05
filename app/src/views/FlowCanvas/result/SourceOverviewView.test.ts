@@ -100,6 +100,9 @@ describe('SourceOverviewView', () => {
   it('分组分页、查询范围导出和任务预览均携带固定源 ID', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
     vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    // 1104：导出会等名称类候选（站点 / 主表名），这里给空结果，免得等真请求
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'] } })
     await flushPromises()
     await wrapper.get('[data-testid="source-export"]').trigger('click')
@@ -119,6 +122,8 @@ describe('SourceOverviewView', () => {
   it('系统目录范围：列表、导出、按条件发任务都带 categorys；范围变了重查；目录说明不发给后端', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
     vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeCategoryIds: ['100', '101'], scopeLabel: '系统目录：财经资讯（含子级）' } })
     await flushPromises()
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ categorys: '100,101', dirLabel: '系统目录：财经资讯（含子级）' }))
@@ -296,6 +301,7 @@ describe('SourceOverviewView · 勾选与批量', () => {
       return { total: 3, list: [page1, page2, hidden] }
     })
     const download = vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
     await flushPromises()
 
@@ -1381,7 +1387,7 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
-  it('同一字段只能一行：别的行占了的字段置灰；七个字段加满后没有「+」', async () => {
+  it('同一字段只能一行：别的行占了的字段置灰；八个字段加满后没有「+」', async () => {
     const { wrapper } = await mountWithSpy()
     await add(wrapper)
     const secondOptions = fields(wrapper)[1]!.findAll('option')
@@ -1392,8 +1398,9 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await add(wrapper)
     await add(wrapper)
     await add(wrapper)
-    // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），字段数 7
-    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId'])
+    await add(wrapper)
+    // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），1104 加了「配置 ID」（configId），字段数 8
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
   })
 
@@ -1418,6 +1425,18 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(lastQ(page)).toEqual(expect.objectContaining({ entryTypeId: '6200029' }))
+    expect(lastQ(page)?.sourceIds).toBeUndefined()
+  })
+
+  // 1104：旧平台源列表的「配置」筛选，查「这份配置被哪些源用」
+  it('按配置 ID 查：选「配置 ID」填值后作为 configId 发出；纯数字不会被自动识别成源 ID', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await fields(wrapper)[0]!.setValue('configId')
+    await texts(wrapper)[0]!.setValue('1400765')
+    expect((fields(wrapper)[0]!.element as HTMLSelectElement).value).toBe('configId')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ configId: '1400765' }))
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
@@ -2073,3 +2092,80 @@ describe('SourceOverviewView · 视图状态', () => {
   })
 })
 
+
+// 1104：导出列不再写死 12 列，改成跟表格当前显示的列同源（表格后来加的
+// 「业务目录 / 原始目录 / 所属网站 / 来源组 / 默认流程 / 配置 ID」原来全漏了）
+describe('SourceOverviewView · 导出列与表格同源', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const BIZ: Record<string, string> = { '391000500': '财经 / 公告', '430024667': '未归类' }
+  const groupSource: Source = {
+    sourceId: '391000500', name: '组内源', url: 'https://a.example.com', siteId: '105', sourceGroupId: '3',
+    defaultFlowId: '14010130', mainTable: 'TB_1', tags: ['#财经', '#重复'], state: 'C', remark: '备注 A',
+    dataCount: 12, lastInsertAt: '2026-11-01 10:00:00', lastSuccessAt: '2026-11-01 09:00:00', lastTaskAt: '2026-11-01 08:00:00',
+    dirId: '9911041', configId: 'cfg-1', owner: 'tester',
+  }
+  const indepSource: Source = { sourceId: '430024667', name: '独立源', url: '', siteId: '0', state: 'E', configId: '', mainTable: '', owner: '' }
+
+  async function exportRows(props: Record<string, unknown>) {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [groupSource, indepSource] })
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 1, list: [{ siteId: '105', name: '公众号采集-测试' }] as never })
+    vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([{ sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 }] as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ id: '14010130', name: '抓取流程', state: 'C' }] as never)
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([{ tableId: 'TB_1', name: '财经主表' }] as never)
+    // loadDirPath 有模块级缓存，用别的用例没碰过的目录 ID，免得读到别人的缓存路径
+    vi.spyOn(sourceApi, 'categoryById').mockResolvedValue({ id: '9911041', name: '新闻', parentId: '0' } as never)
+    const download = vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    const wrapper = mount(SourceOverviewView, {
+      props: {
+        currentSiteId: '', groupOps: true, extraColumnLabel: '业务目录',
+        extraCellText: (s: Source) => BIZ[s.sourceId] ?? '', showOriginalDirectory: true, ...props,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-export"]').trigger('click')
+    await flushPromises()
+    const rows = (download.mock.calls[0]?.[1] ?? []) as string[][]
+    wrapper.unmount()
+    return rows
+  }
+
+  it('源管理列表：业务目录、原始目录、所属网站、来源组、默认流程、主表名、标签、状态都导出', async () => {
+    const rows = await exportRows({})
+    expect(rows[0]).toEqual([
+      '源 ID', '源名称', '业务目录', '原始目录', '所属网站', '来源组', '默认流程', 'URL', '主表',
+      '标签', '数据量', '新入', '成功', '最近任务', '最近成功', '状态', '备注',
+    ])
+    expect(rows[1]).toEqual([
+      '391000500', '组内源', '财经 / 公告', '新闻', '公众号采集-测试', 'twitter1', '抓取流程 · 14010130',
+      'https://a.example.com', '财经主表 · TB_1', '#财经、#重复', '12',
+      '2026-11-01 10:00:00', '2026-11-01 09:00:00', '2026-11-01 08:00:00', '2026-11-01 09:00:00', '正常', '备注 A',
+    ])
+    // 没关联网站 / 没入组 / 没默认流程 / 没主表 / 没目录 的兜底文案
+    expect(rows[2]).toEqual([
+      '430024667', '独立源', '未归类', '—', '未关联', '未分组', '未设置默认流程', '', '', '', '', '', '', '', '', '异常', '',
+    ])
+  })
+
+  it('显示设置里隐藏的列不导出', async () => {
+    const rows = await exportRows({
+      viewState: {
+        v: 1, conditions: [], site: '', sourceGroup: '', status: 'all', tag: '', countMax: '',
+        sortField: '', sortDirection: 'asc', pageSize: 20, hiddenColumns: ['url', 'tags'],
+      },
+    })
+    expect(rows[0]).not.toContain('URL')
+    expect(rows[0]).not.toContain('标签')
+    expect(rows[0]).toContain('主表')
+  })
+
+  it('来源组详情才有「配置 ID」列，导出跟着表格走', async () => {
+    const rows = await exportRows({
+      scopeSourceGroupId: '3', extraColumnLabel: undefined, extraCellText: undefined, showOriginalDirectory: false,
+    })
+    const head = rows[0] ?? []
+    expect(head).toContain('配置 ID')
+    expect(rows[1]?.[head.indexOf('配置 ID')]).toBe('cfg-1')
+  })
+})

@@ -235,6 +235,13 @@ const bizOf = ref(new Map<string, string[]>())
 const bizMembershipState = ref<'loading' | 'ready' | 'error'>('loading')
 /** 一条完整路径一个标签；节点没加载到时退化成 #ID，不显示成空 */
 const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
+/** 导出「业务目录」列用的文本（1104）：与 #extra-cell 槽位同一口径，多个目录用顿号相连 */
+function bizCellText(source: Source): string {
+  if (bizMembershipState.value === 'loading') return '加载中…'
+  if (bizMembershipState.value === 'error') return '加载失败'
+  const names = bizNames(source.sourceId)
+  return names.length ? names.join('、') : '未归类'
+}
 let bizMembershipSeq = 0
 let bizMembershipStarted = false
 async function loadBizMembership() {
@@ -864,6 +871,7 @@ watch(() => route.query.group, (id) => {
             :key="selectedGroup.sourceGroupId"
             current-site-id=""
             extra-column-label="业务目录"
+            :extra-cell-text="bizCellText"
             :scope-source-group-id="selectedGroup.sourceGroupId"
             scope-empty-text="该来源组还没有成员，可在源列表勾选后「调整来源组」，或点「添加源」"
             @open-source="openSource"

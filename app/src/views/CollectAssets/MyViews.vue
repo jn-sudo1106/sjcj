@@ -101,6 +101,8 @@ const moveTargets = computed(() => tree.value.dirs
   .map((d) => ({ id: d.id, label: pathText(tree.value, d.id) }))
   .sort((a, b) => a.label.localeCompare(b.label, 'zh')))
 const placeText = (sourceId: string) => placesOf(tree.value, sourceId, members.value, groupName).join('；')
+/** 导出「所在目录」列用的文本（1104）：与 #extra-cell 槽位同一口径（没有目录时是「—」） */
+const placeCellText = (source: Source) => placeText(source.sourceId) || '—'
 const viaGroup = (sourceId: string) => {
   const g = onlyViaGroup(tree.value, selectedDir.value, sourceId, members.value)
   return g ? groupName(g) : ''
@@ -560,6 +562,7 @@ onActivated(() => {
             :scope-source-ids="viewCategoryScope ? undefined : scopeIds"
             :scope-empty-text="'这个目录里还没有源，点右上「＋」添加'"
             extra-column-label="所在目录"
+            :extra-cell-text="placeCellText"
             @open-source="openSource"
             @open-source-data="openSource($event, 'data')"
             @open-site="openSite"

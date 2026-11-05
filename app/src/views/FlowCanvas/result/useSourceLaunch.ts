@@ -32,6 +32,9 @@ export type SourceFilter = {
   defaultFlowId?: string
   /** 按主表过滤（1022 会议）：`sourcePaged` 的 `entryTypeId`，匹配源的主表 */
   entryTypeId?: string
+  /** 按配置过滤（1104）：`sourcePaged` 的 `configId`（source-api.md §1.1 SourceCond 生效字段，
+   *  Long，后端内部反查主配置）。用来查「这份配置被哪些源用」——旧平台源列表的「配置」筛选。 */
+  configId?: string
   /** 「我的视图」目录（10-15）：`sourcePaged` 的 `viewCategoryId`。只有 sourcePaged 认，其它按条件的接口不认 */
   viewCategoryId?: string
   /** 系统目录（2026-10-21）：`sourcePaged` 的 `categorys`，逗号分隔、只匹配直属，调用方已展开子级 */
@@ -117,6 +120,8 @@ export function describeFilters(query: SourceFilter): string {
   if (query.flowId) parts.push(`流程 #${query.flowId}`)
   if (query.defaultFlowId) parts.push(`默认流程 #${query.defaultFlowId}`)
   if (query.entryTypeId) parts.push(`主表 #${query.entryTypeId}`)
+  // 1104 按配置查：按条件发任务 / 导出的确认弹窗也要看得到，否则少了一条参与筛选的条件也不知道
+  if (query.configId) parts.push(`配置 #${query.configId}`)
   if (query.sourceGroupId) parts.push(`来源组 #${query.sourceGroupId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
   // NULL / NOT NULL 是后端认的空值标记（2026-09-29），照字面写成「URL 含「NULL」」会看不懂
@@ -243,24 +248,5 @@ export async function sendInBatches(
   return { sent, failed, skipped: batches.slice(index).flat() }
 }
 
-export const SOURCE_EXPORT_HEADER = [
-  '源 ID', '源名称', 'URL', '主表', '标签', '备注', '状态', '数据量', '新入', '成功', '最近任务', '最近成功',
-] as const
-
-export function sourceToExportRow(source: Source): string[] {
-  return [
-    source.sourceId,
-    source.name,
-    source.url || '',
-    source.mainTable || '',
-    (source.tags ?? []).join('、'),
-    source.remark || '',
-    sourceStatusLabel(source),
-    source.dataCount == null ? '' : String(source.dataCount),
-    // 「新入 / 成功」= 最近入库 / 最近成功时间（对齐旧平台；导出留精确时间戳而非「N 天前」）
-    source.lastInsertAt || '',
-    source.lastSuccessAt || '',
-    source.lastTaskAt || '',
-    source.lastSuccessAt || '',
-  ]
-}
+// 源列表的导出列（1104 起）由 SourceOverviewView 的 `exportColumns` 按表格当前可见列现算，
+// 不再在这里维护一份固定列清单 —— 两边各写一份才会出现「表里有、导出没有」的字段缺失。

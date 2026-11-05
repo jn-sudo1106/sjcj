@@ -47,17 +47,17 @@ import { readColumnPrefs, writeColumnPrefs } from '@/utils/table/columnPrefs'
 import { isFavoriteSource, loadFavoriteSources, toggleFavoriteSource } from '@/utils/sourceFavorites'
 import {
   CollectLimitError,
-  SOURCE_EXPORT_HEADER,
   collectAllUnderQuery,
   describeFilters,
   partitionLaunchTargets,
   resolveScope,
   sendInBatches,
-  sourceToExportRow,
+  sourceStatusLabel,
   type LaunchScope,
   type SourceFilter,
 } from './useSourceLaunch'
 import {
+  MANUAL_ONLY_COND_FIELDS,
   SOURCE_COND_FIELDS,
   defaultSourceCondOp,
   detectSourceSearchField,
@@ -139,6 +139,12 @@ const props = defineProps<{
    * 内容由父级用 `extra-cell` 槽位按行渲染。不给 = 原样。
    */
   extraColumnLabel?: string
+  /**
+   * 额外一列在**导出**时的取值（1104）：表格里这一列是 `extra-cell` 槽位按行渲染的纯展示内容，
+   * 组件自己拿不到（例如源管理「业务目录」要父级查源→目录归属），导出要带这一列就得父级给个取值函数。
+   * 不传 = 导出这一列留空，避免导出的表头和表格列不一致。
+   */
+  extraCellText?: (source: Source) => string
   showOriginalDirectory?: boolean
   quickEdit?: boolean
   /** 采集资产系统目录的两种展示，共用本组件的查询条件与目录范围。 */
@@ -279,7 +285,7 @@ function removeCondition(row: ConditionRow) {
   if (wasActive) search()
 }
 function conditionPlaceholder(row: ConditionRow) {
-  if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return sourceCondFieldOf(row.field).placeholder
+  if (row.pinned || MANUAL_ONLY_COND_FIELDS.includes(row.field)) return sourceCondFieldOf(row.field).placeholder
   return '源 ID / 名称 / URL'
 }
 function onConditionInput(row: ConditionRow, value: string) {
@@ -288,7 +294,7 @@ function onConditionInput(row: ConditionRow, value: string) {
     row.pinned = false
     return
   }
-  if (row.pinned || row.field === 'remark' || row.field === 'flowId' || row.field === 'entryTypeId') return
+  if (row.pinned || MANUAL_ONLY_COND_FIELDS.includes(row.field)) return
   // 识别出的字段被别的行占了，退回按名称查（名称是兜底口径）；名称也占了就不动
   const target = ([detectSourceSearchField(value), 'name'] as const).find((f) => f && !fieldTakenByOther(f, row))
   if (target && target !== row.field) {
@@ -336,15 +342,23 @@ const UNBOUND_SITE = '-1'
  */
 const sourceGroupFilter = ref('')
 const sourceGroupOptions = ref<{ sourceGroupId: string; name: string; state: string }[]>([])
+let sourceGroupOptionsTask: Promise<void> | null = null
 async function loadSourceGroupOptions() {
   if (!props.groupOps || sourceGroupOptions.value.length) return
-  try {
-    const rows = await sourceGroupApi.list()
-    sourceGroupOptions.value = rows.map((g) => ({ sourceGroupId: g.sourceGroupId, name: g.sourceGroupName, state: g.state }))
-  } catch {
-    // 候选只是筛选辅助，拉不到就只剩「全部来源组」，不打断列表
-    sourceGroupOptions.value = []
+  if (!sourceGroupOptionsTask) {
+    sourceGroupOptionsTask = (async () => {
+      try {
+        const rows = await sourceGroupApi.list()
+        sourceGroupOptions.value = rows.map((g) => ({ sourceGroupId: g.sourceGroupId, name: g.sourceGroupName, state: g.state }))
+      } catch {
+        // 候选只是筛选辅助，拉不到就只剩「全部来源组」，不打断列表
+        sourceGroupOptions.value = []
+      } finally {
+        sourceGroupOptionsTask = null
+      }
+    })()
   }
+  return sourceGroupOptionsTask
 }
 const sourceGroupNameById = computed(() => new Map(sourceGroupOptions.value.map((g) => [g.sourceGroupId, g.name])))
 /** 来源组列显示：组名；组列表没拉到（候选加载失败）时用「组 #ID」兜底 */
@@ -354,14 +368,22 @@ function sourceGroupNameOf(source: Source): string {
 }
 /** 流程候选（默认流程列名称、指定流程运行一次的选项），排除停用 */
 const flowOptions = ref<FlowRecord[]>([])
+let flowOptionsTask: Promise<void> | null = null
 async function loadFlowOptions() {
   if (flowOptions.value.length) return
-  try {
-    const rows = await flowCenterApi.list()
-    flowOptions.value = rows.filter((f) => f.state !== 'D')
-  } catch {
-    flowOptions.value = []
+  if (!flowOptionsTask) {
+    flowOptionsTask = (async () => {
+      try {
+        const rows = await flowCenterApi.list()
+        flowOptions.value = rows.filter((f) => f.state !== 'D')
+      } catch {
+        flowOptions.value = []
+      } finally {
+        flowOptionsTask = null
+      }
+    })()
   }
+  return flowOptionsTask
 }
 const flowNameById = computed(() => new Map(flowOptions.value.map((f) => [f.id, f.name])))
 /** 默认流程列显示：流程名 · ID；流程列表没拉到时用 ID */
@@ -380,14 +402,22 @@ async function openFlowNode(flowId: string) {
 }
 /** 主表列名称（1022 会议：只有表 ID 认不出是哪张表）：sourcePaged 不返回表名，拉一次全量表做映射 */
 const tableOptions = ref<DataTableMeta[]>([])
+let tableOptionsTask: Promise<void> | null = null
 async function loadTableOptions() {
   if (tableOptions.value.length) return
-  try {
-    tableOptions.value = await dataApi.tables()
-  } catch {
-    // 只是名称辅助，拉不到就显示 ID
-    tableOptions.value = []
+  if (!tableOptionsTask) {
+    tableOptionsTask = (async () => {
+      try {
+        tableOptions.value = await dataApi.tables()
+      } catch {
+        // 只是名称辅助，拉不到就显示 ID
+        tableOptions.value = []
+      } finally {
+        tableOptionsTask = null
+      }
+    })()
   }
+  return tableOptionsTask
 }
 const tableNameById = computed(() => new Map(tableOptions.value.map((t) => [t.tableId, t.name || t.tableName])))
 /** 主表列显示：表名 · ID；表列表没拉到时用 ID */
@@ -418,17 +448,24 @@ async function openMainTable(tableId: string) {
  */
 const siteOptions = ref<{ siteId: string; name: string }[]>([])
 let siteOptionsSequence = 0
+/** 同一个「全量候选」请求只飞一次：挂载时已经在飞了，导出前再调一次不应该再发一遍 */
+let siteOptionsTask: Promise<void> | null = null
 async function loadSiteOptions(keyword = '') {
   if (!crossSite.value || !props.scopeDirectory && siteOptions.value.length) return
+  if (!keyword && siteOptionsTask) return siteOptionsTask
   const sequence = ++siteOptionsSequence
-  try {
-    const result = await siteApi.sitePaged({ page: 1, size: props.scopeDirectory ? 50 : 2000, ...(keyword ? { name: keyword } : {}) })
-    if (sequence !== siteOptionsSequence) return
-    siteOptions.value = result.list.map((s) => ({ siteId: s.siteId, name: s.name }))
-  } catch {
-    // 候选只是筛选辅助，拉不到就只剩「未关联网站」，不打断列表
-    siteOptions.value = []
-  }
+  const task = (async () => {
+    try {
+      const result = await siteApi.sitePaged({ page: 1, size: props.scopeDirectory ? 50 : 2000, ...(keyword ? { name: keyword } : {}) })
+      if (sequence !== siteOptionsSequence) return
+      siteOptions.value = result.list.map((s) => ({ siteId: s.siteId, name: s.name }))
+    } catch {
+      // 候选只是筛选辅助，拉不到就只剩「未关联网站」，不打断列表
+      siteOptions.value = []
+    }
+  })()
+  if (!keyword) siteOptionsTask = task.finally(() => { siteOptionsTask = null })
+  return keyword ? task : siteOptionsTask
 }
 const siteNameById = computed(() => new Map(siteOptions.value.map((s) => [s.siteId, s.name])))
 function siteNameOf(source: Source): string {
@@ -986,6 +1023,87 @@ function closeLaunch() {
   launchSending.value = false
 }
 
+interface SourceExportColumn { label: string; value: (source: Source) => string }
+
+/**
+ * 导出哪些列（1104）：**跟表格当前显示的列一致**，顺序也按表格来。
+ *
+ * 原来导出是一份写死的 12 列清单（源 ID…最近成功），表格后来加的「业务目录 / 原始目录 / 所属网站 /
+ * 来源组 / 默认流程 / 配置 ID」都不在里面，用户看到的表比导出的表宽，导出等于少了一半信息。
+ * 现在两边同源：列的存在条件（不限网站 / 来源组能力 / 来源组详情 / 父级多给一列）和「显示设置」里
+ * 隐藏的列都照表格走，用户隐藏掉的列也不导出。
+ */
+const exportColumns = computed<SourceExportColumn[]>(() => {
+  const cols: SourceExportColumn[] = [
+    { label: '源 ID', value: (s) => s.sourceId },
+    { label: '源名称', value: (s) => s.name },
+  ]
+  if (props.extraColumnLabel) {
+    cols.push({ label: props.extraColumnLabel, value: (s) => props.extraCellText?.(s) ?? '' })
+  }
+  if (props.showOriginalDirectory) cols.push({ label: '原始目录', value: originalDirectoryOf })
+  if (crossSite.value && showCol('site')) {
+    cols.push({ label: '所属网站', value: (s) => (s.siteId && s.siteId !== '0' ? siteNameOf(s) : '未关联') })
+  }
+  if (crossSite.value && props.groupOps && showCol('sourceGroup')) {
+    cols.push({ label: '来源组', value: sourceGroupNameOf })
+  }
+  if (crossSite.value && props.groupOps && showCol('defaultFlow')) {
+    cols.push({ label: '默认流程', value: (s) => (s.defaultFlowId ? flowNameOf(s.defaultFlowId) : '未设置默认流程') })
+  }
+  if (showCol('url')) cols.push({ label: 'URL', value: (s) => s.url || '' })
+  if (showCol('mainTable')) cols.push({ label: '主表', value: (s) => (s.mainTable ? tableNameOf(s.mainTable) : '') })
+  if (showConfigCol.value) cols.push({ label: '配置 ID', value: (s) => (s.configId == null ? '' : String(s.configId)) })
+  if (showCol('tags')) cols.push({ label: '标签', value: (s) => (s.tags ?? []).join('、') })
+  if (showCol('dataCount')) cols.push({ label: '数据量', value: (s) => (s.dataCount == null ? '' : String(s.dataCount)) })
+  // 「新入 / 成功」= 最近入库 / 最近成功时间（对齐旧平台；导出留精确时间戳而非「N 天前」）
+  if (showCol('newIn')) cols.push({ label: '新入', value: (s) => s.lastInsertAt || '' })
+  if (showCol('success')) cols.push({ label: '成功', value: (s) => s.lastSuccessAt || '' })
+  if (showCol('lastTask')) cols.push({ label: '最近任务', value: (s) => s.lastTaskAt || '' })
+  if (showCol('lastSuccess')) cols.push({ label: '最近成功', value: (s) => s.lastSuccessAt || '' })
+  if (showCol('state')) cols.push({ label: '状态', value: sourceStatusLabel })
+  if (showCol('remark')) cols.push({ label: '备注', value: (s) => s.remark || '' })
+  return cols
+})
+
+/**
+ * 导出前补齐「名称类」辅助数据：站点 / 来源组 / 默认流程 / 主表名 / 原始目录路径。
+ * 这些列表平时只给当前页、按需加载（站点选择框、来源组筛选等），全量导出时可能还没拉过，
+ * 不补就会导出一堆裸 ID。都拿不到就按原来的 ID 兜底，不阻断导出。
+ *
+ * 候选请求一律**有上限地等**（见 EXPORT_LOOKUP_TIMEOUT_MS）：接口慢或不通时不能让「导出」
+ * 这个动作挂在网络上——导出的主体是已经收齐的源列表，名称只是锦上添花。
+ */
+const EXPORT_LOOKUP_TIMEOUT_MS = 2500
+
+function withTimeout(task: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    const done = () => { clearTimeout(timer); resolve() }
+    void task.then(done, done)
+  })
+}
+
+async function ensureExportLookups(sources: Source[]) {
+  const tasks: Promise<unknown>[] = []
+  if (crossSite.value && showCol('site')) tasks.push(loadSiteOptions())
+  if (crossSite.value && props.groupOps && showCol('sourceGroup')) tasks.push(loadSourceGroupOptions())
+  if (crossSite.value && props.groupOps && showCol('defaultFlow')) tasks.push(loadFlowOptions())
+  if (showCol('mainTable')) tasks.push(loadTableOptions())
+  if (tasks.length) await Promise.allSettled(tasks.map((task) => withTimeout(task, EXPORT_LOOKUP_TIMEOUT_MS)))
+  if (!props.showOriginalDirectory) return
+  const missing = [...new Set(sources
+    .map((s) => s.dirId)
+    .filter((id): id is string => !!id && !originalPaths.value.has(id)))]
+  await Promise.allSettled(missing.map((id) => withTimeout(
+    loadDirPath(id)
+      .then((path) => { originalPaths.value.set(id, path.join(' / ')) })
+      // 路径拉不到：originalDirectoryOf 会退回接口给的 categoryPath / 「系统目录 #ID」
+      .catch(() => {}),
+    EXPORT_LOOKUP_TIMEOUT_MS,
+  )))
+}
+
 async function exportSources() {
   // 0831 F08：按当前查询条件全量导出，不是当前页，也不是勾选项。
   // 发任务在勾选时走 selected；导出始终走 currentQuery()，跟「查询」同一套字段。
@@ -1007,7 +1125,10 @@ async function exportSources() {
       ElMessage.warning('当前查询条件没有命中任何源')
       return
     }
-    const rows = [[...SOURCE_EXPORT_HEADER], ...sources.map(sourceToExportRow)]
+    collectProgress.value = '正在整理导出字段…'
+    await ensureExportLookups(sources)
+    const cols = exportColumns.value
+    const rows = [cols.map((col) => col.label), ...sources.map((source) => cols.map((col) => col.value(source)))]
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     downloadXlsx(`源列表_${props.currentSiteId || '全部网站'}_${date}.xlsx`, rows, '源列表')
     ElMessage.success(`已按当前查询条件导出 ${sources.length} 个源`)

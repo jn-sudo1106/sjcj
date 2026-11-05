@@ -9,7 +9,6 @@ import {
   partitionLaunchTargets,
   resolveScope,
   sendInBatches,
-  sourceToExportRow,
 } from './useSourceLaunch'
 
 const src = (id: string, extra: Partial<Source> = {}): Source => ({
@@ -177,6 +176,11 @@ describe('describeFilters / 导出行', () => {
     expect(describeFilters({ entryTypeId: '6200029' })).toBe('主表 #6200029')
   })
 
+  // 1104：按配置筛选时同理，确认弹窗要看得到「这份配置」
+  it('配置 ID 条件列进人话描述', () => {
+    expect(describeFilters({ configId: '1400765' })).toBe('配置 #1400765')
+  })
+
   // `%` / `NULL` 是后端认的空值标记（0920-07），照字面写成「备注含「%」」没人看得懂
   it('备注的空值标记翻译成人话，不照字面写', () => {
     expect(describeFilters({ remark: '%' })).toBe('有备注')
@@ -192,12 +196,5 @@ describe('describeFilters / 导出行', () => {
   it('数据量上限也要进人话描述，0 不能被当成没填', () => {
     expect(describeFilters({ count: 5 })).toBe('数据量 ≤ 5')
     expect(describeFilters({ count: 0 })).toBe('数据量 ≤ 0')
-  })
-
-  it('标签用顿号连且不带 #——导出给人看，不回写', () => {
-    const row = sourceToExportRow(src('1', { tags: ['正文缺失', '内容重复'], remark: '验证正常' }))
-    expect(row[4]).toBe('正文缺失、内容重复')
-    expect(row[4]).not.toContain('#')
-    expect(row[5]).toBe('验证正常')
   })
 })

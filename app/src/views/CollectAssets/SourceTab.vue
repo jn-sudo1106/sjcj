@@ -490,6 +490,16 @@ async function loadBizMembership() {
   }
 }
 const bizNames = (sourceId: string) => (bizOf.value.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
+/**
+ * 「业务目录」列给导出用的文本（1104）：表格里这一列是 `extra-cell` 槽位渲染的标签，
+ * 导出拿不到，所以按同一口径拼成一段文字（多个目录用顿号相连）。
+ */
+function bizCellText(source: Source): string {
+  if (bizMembershipState.value === 'loading') return '加载中…'
+  if (bizMembershipState.value === 'error') return '加载失败'
+  const names = bizNames(source.sourceId)
+  return names.length ? names.join('、') : '未归类'
+}
 
 watch(() => ui.sourceListRevision, () => {
   if (props.scope === 'all' && view.value === 'table') void loadBizMembership()
@@ -807,6 +817,7 @@ onUnmounted(() => {
       :scope-version="dirScopeVersion"
       :scope-empty-text="listScopeEmptyText"
       :extra-column-label="scope === 'all' ? '业务目录' : undefined"
+      :extra-cell-text="scope === 'all' ? bizCellText : undefined"
       :show-original-directory="scope === 'all'"
       :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
