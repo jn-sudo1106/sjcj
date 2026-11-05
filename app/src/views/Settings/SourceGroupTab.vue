@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { recordSiteVisit } from '@/utils/siteRecents'
 import { trackClick } from '@/utils/logEvents'
+import { readSourceGroupCache, sourceGroupCacheBackend, sourceGroupCacheKey, writeSourceGroupCache } from '@/utils/sourceGroupCache'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
@@ -43,6 +44,20 @@ const canWrite = computed(() => auth.role === 'admin')
 // ---- 左侧组列表 ----
 const groups = ref<SourceGroup[]>([])
 const loading = ref(false)
+/**
+ * 1105：`source-group/list` 慢（后端要算全组流程绑定，186 上 1.4s 起、库忙时 10s+），
+ * 有本机缓存时先渲染上次结果，再静默刷新；`loading` 只在「没有任何内容可显示」时才亮。
+ */
+const refreshing = ref(false)
+const groupCacheAccount = computed(() => (auth.info?.id != null ? String(auth.info.id) : ''))
+const groupCacheKey = computed(() => (groupCacheAccount.value ? sourceGroupCacheKey(groupCacheAccount.value, sourceGroupCacheBackend()) : ''))
+function hydrateGroupsCache(): boolean {
+  if (!groupCacheKey.value) return false
+  const cached = readSourceGroupCache(groupCacheKey.value)
+  if (!cached?.length) return false
+  groups.value = cached
+  return true
+}
 const selectedGroupId = ref<string>('')
 const selectedGroup = computed(() => groups.value.find((g) => g.sourceGroupId === selectedGroupId.value) ?? null)
 const diffGroup = ref<SourceGroup | null>(null)
@@ -160,11 +175,16 @@ const visibleCountIds = new Set<string>()
 const pendingCountIds = new Set<string>()
 let countObserver: IntersectionObserver | undefined
 let countsActive = false
+/**
+ * 1105：成员数是逐组打 `sourcePaged`（同一台慢接口），首屏先让组列表刷新拿到最新数据再放行，
+ * 不然缓存一渲染就有 3 个重请求和组列表抢库。
+ */
+let countsReady = false
 let countRequests = 0
 let countVersion = 0
 
 function loadMemberCounts(): void {
-  if (!countsActive) return
+  if (!countsActive || !countsReady) return
   const ids = groupCountSort.value === 'default' ? visibleCountIds : filteredGroups.value.map((group) => group.sourceGroupId)
   for (const id of ids) {
     if (countRequests >= 3) break
@@ -337,13 +357,21 @@ const pickerVisible = ref(false)
 let listRequest = 0
 let bindingRequest = 0
 
-async function reloadGroups(): Promise<void> {
+/**
+ * 拉来源组列表。
+ * @param options.silent 静默刷新：已有缓存内容时不亮「加载中…」、失败也不弹错（保留旧内容）。
+ *   首屏只有缓存命中时才静默，其余场景（刷新按钮、写操作后）仍走原来的明显 loading。
+ */
+async function reloadGroups(options: { silent?: boolean } = {}): Promise<void> {
   const request = ++listRequest
-  loading.value = true
+  const silent = options.silent === true && groups.value.length > 0
+  if (silent) refreshing.value = true
+  else loading.value = true
   try {
     const rows = await sourceGroupApi.list()
     if (request !== listRequest) return
     groups.value = rows
+    writeSourceGroupCache(groupCacheKey.value, rows)
     resetMemberCounts()
     // 选中组被删 / 刷新后不存在 → 清空选中
     if (selectedGroupId.value && !rows.some((g) => g.sourceGroupId === selectedGroupId.value)) {
@@ -353,9 +381,18 @@ async function reloadGroups(): Promise<void> {
       await loadGroupDetail(selectedGroupId.value)
     }
   } catch (error) {
-    if (request === listRequest) ElMessage.error((error as Error)?.message ?? String(error))
+    // 静默刷新失败：界面上仍有缓存内容可看，不打断；下一次刷新/切页签会再试
+    if (request === listRequest && !silent) ElMessage.error((error as Error)?.message ?? String(error))
   } finally {
-    if (request === listRequest) loading.value = false
+    if (request === listRequest) {
+      loading.value = false
+      refreshing.value = false
+      // 列表落地后才放行成员数（逐组 sourcePaged），避免首屏几个重请求互相抢
+      if (!countsReady) {
+        countsReady = true
+        loadMemberCounts()
+      }
+    }
   }
 }
 
@@ -761,13 +798,18 @@ watch(selectedGroup, () => {
 }, { immediate: true })
 
 onMounted(() => {
-  void loadFlows()
-  void reloadGroups()
   // 1008-04：从源列表点来源组名跳过来（/collect?tab=personal&group=<id>）时，选中该组
   const fromQuery = String(route.query.group ?? '')
   if (fromQuery && /^\d+$/.test(fromQuery)) {
     selectedGroupId.value = fromQuery
   }
+  // 1105：先渲染本机缓存（有的话），再静默刷新组列表；流程候选等列表落地后再拉，
+  // 首屏不要两个请求抢连接（flowList 只服务「默认流程」名称显示，晚 1s 无所谓）。
+  const hydrated = hydrateGroupsCache()
+  void (async () => {
+    await reloadGroups({ silent: hydrated })
+    void loadFlows()
+  })()
 })
 // 同页签内再次点来源组名（tab 没变，KeepAlive 不重挂）：watch query.group 选中新组
 watch(() => route.query.group, (id) => {
@@ -864,7 +906,7 @@ watch(() => route.query.group, (id) => {
               <span v-else class="sg-faint">未配置 / 暂不可用</span>
             </span>
             <div class="sg-actions">
-              <button class="sg-icon-btn" type="button" title="刷新" aria-label="刷新" :disabled="loading" @click="reloadGroups"><el-icon><Refresh /></el-icon></button>
+              <button class="sg-icon-btn" type="button" :title="refreshing ? '正在刷新…' : '刷新'" aria-label="刷新" :disabled="loading || refreshing" :class="{ 'is-refreshing': refreshing }" @click="reloadGroups()"><el-icon :class="{ 'is-loading': refreshing }"><Refresh /></el-icon></button>
             </div>
           </div>
           <SourceOverviewView

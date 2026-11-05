@@ -13,6 +13,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { sourceGroupApi, flowCenterApi, sourceApi, type SourceGroup, type SourceFlowBind, type FlowRecord } from '@/api'
 import * as sourceDirs from '@/api/sourceDirs'
+import { clearSourceGroupCache, readSourceGroupCache, sourceGroupCacheBackend, sourceGroupCacheKey, writeSourceGroupCache } from '@/utils/sourceGroupCache'
 
 // stub SourceOverviewView：选中范围由外部注入，selection-actions 槽位渲染可控 ids，
 // 成员测试才能驱动「移出来源组 / 换到其他组」。
@@ -76,7 +77,21 @@ function showGroups(wrapper: VueWrapper, ids: string[], isIntersecting = true) {
   } as IntersectionObserverEntry)), {} as IntersectionObserver)
 }
 
+// 1105 本机缓存：显式给一个账号，缓存 key 才非空（真实环境由路由守卫 fetchInfo 填好）
+const TEST_ACCOUNT = 7
+function makeAccount(): void {
+  useAuthStore().info = { id: TEST_ACCOUNT, name: 'admin', roles: ['admin'], groups: [], avatar: '', introduction: '', group: 1 }
+}
+function groupCacheKey(): string {
+  return sourceGroupCacheKey(String(TEST_ACCOUNT), sourceGroupCacheBackend())
+}
+function seedGroupCache(groups: SourceGroup[]): void {
+  makeAccount()
+  writeSourceGroupCache(groupCacheKey(), groups)
+}
+
 beforeEach(() => {
+  clearSourceGroupCache()
   setActivePinia(createPinia())
   useAuthStore().roles = ['admin']
   selectIds.value = []
@@ -735,5 +750,51 @@ describe('来源组页签 · 权限', () => {
     expect(wrapper.text()).toContain('当前账号仅可查看，修改需要管理员权限')
     expect((wrapper.get('[data-testid="sg-new"]').element as HTMLButtonElement).disabled).toBe(true)
     expect((wrapper.get('[data-testid="sg-add-source"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('来源组页签 · 列表本机缓存（1105）', () => {
+  it('有缓存时先渲染上次结果、不亮「加载中…」，后台刷新后覆盖并回写缓存', async () => {
+    seedGroupCache([GROUP_3])
+    let resolveList: (rows: SourceGroup[]) => void = () => {}
+    const list = vi.fn(() => new Promise<SourceGroup[]>((resolve) => { resolveList = resolve }))
+    const { wrapper } = await mountTab({ list })
+
+    // 首屏不等接口：直接是缓存里的组，且没有「加载中…」
+    expect(wrapper.findAll('.sg-item').map((item) => item.text())).toEqual(['twitter1'])
+    expect(wrapper.find('.sg-empty').exists()).toBe(false)
+    expect(list).toHaveBeenCalledTimes(1)
+    // 流程候选等列表落地后再拉，首屏不抢连接
+    expect(flowCenterApi.list).not.toHaveBeenCalled()
+
+    resolveList([GROUP_1])
+    await settle()
+    expect(wrapper.findAll('.sg-item').map((item) => item.text())).toEqual(['测试组1'])
+    expect(readSourceGroupCache(groupCacheKey())).toEqual([GROUP_1])
+    expect(flowCenterApi.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('无缓存时仍显示「加载中…」，拿到列表后写入缓存', async () => {
+    makeAccount()
+    let resolveList: (rows: SourceGroup[]) => void = () => {}
+    const list = vi.fn(() => new Promise<SourceGroup[]>((resolve) => { resolveList = resolve }))
+    const { wrapper } = await mountTab({ list })
+
+    expect(wrapper.get('.sg-empty').text()).toBe('加载中…')
+    expect(readSourceGroupCache(groupCacheKey())).toBeNull()
+
+    resolveList([GROUP_3])
+    await settle()
+    expect(wrapper.find('.sg-empty').exists()).toBe(false)
+    expect(readSourceGroupCache(groupCacheKey())).toEqual([GROUP_3])
+  })
+
+  it('静默刷新失败时保留缓存内容、不弹错', async () => {
+    seedGroupCache([GROUP_3])
+    const list = vi.fn(() => Promise.reject(new Error('请求异常 [source-group/list]')))
+    const { wrapper } = await mountTab({ list })
+
+    expect(wrapper.findAll('.sg-item').map((item) => item.text())).toEqual(['twitter1'])
+    expect(document.body.textContent).not.toContain('请求异常')
   })
 })
