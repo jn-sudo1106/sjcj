@@ -27,6 +27,7 @@ const EP = {
   update: 'sys-user/update',
   status: 'sys-user/update-status',
   password: 'sys-user/change-password',
+  roles: 'sys-user/roles',
 } as const
 
 /** SYS_USER.USER_STATUS：0-有效 / 1-失效（列是 BIGINT，没有物理删除） */
@@ -66,6 +67,13 @@ export interface SysUserQuery {
 /** 写类接口 data 是标量（新增 id / 状态回执）时的形状 */
 export type SysUserAck = Ack & { data?: number }
 
+export interface SysRoleOption {
+  roleId: number
+  roleName: string
+  roleStatus?: number
+  roleRemark?: string
+}
+
 /** 新增 / 修改入参：写成 type 别名（不是 interface）才能带隐式索引签名，直接喂给 request 的 params */
 export type SysUserInput = {
   userId?: number
@@ -74,6 +82,10 @@ export type SysUserInput = {
   /** 留空即由服务端沿用创建人（当前 admin）所在的组 */
   groupId?: number
   userPassword?: string
+  /** 角色 ID，编辑时传给后端更新角色绑定 */
+  roleId?: number
+  /** 角色 ID 字符串（兼容多角色或逗号分隔） */
+  roleIds?: string
 }
 
 /** 表单校验入参（编辑态带上原登录名，用来判「登录名是否被改」） */
@@ -99,6 +111,11 @@ export function pagedSysUser(query: SysUserQuery): Promise<Paged<SysUserRow>> {
 
 export function sysUserDetail(userId: number): Promise<SysUserRow | null> {
   return request<SysUserRow | null>(EP.detail, { userId }, { method: 'GET' })
+}
+
+/** 获取全部有效角色列表（供用户编辑时选择角色） */
+export function getSysRoles(): Promise<SysRoleOption[]> {
+  return request<SysRoleOption[]>(EP.roles, {}, { method: 'GET' })
 }
 
 /** 新增用户，data 为新 userId；服务端会自动给它绑一条只读（read）角色 */
