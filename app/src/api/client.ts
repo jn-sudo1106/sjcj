@@ -2,7 +2,14 @@ import { mockRegistry } from './mock'
 import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { flowRequestPath, type BackendScope } from './flowBackend'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
-import { PRODUCTION_BACKEND_HOSTS, CREATE_ALLOWED_BACKEND_HOSTS, POC_API_PREFIX, DEFAULT_POC_PROXY_TARGET } from '@/constants/backend'
+import {
+  PRODUCTION_BACKEND_HOSTS,
+  CREATE_ALLOWED_BACKEND_HOSTS,
+  SOURCE_ISSUE_WRITE_BLOCKED_HOSTS,
+  SOURCE_ISSUE_WRITE_BLOCKED_GATEWAYS,
+  POC_API_PREFIX,
+  DEFAULT_POC_PROXY_TARGET,
+} from '@/constants/backend'
 
 // 数据适配层：默认 mock。两种切真实后端的方式：
 // ①按端点：endpoints.ts 把某端点标 live:true 后自动切真实，其余仍走 mock —— 功能一个个上线用这个。
@@ -369,6 +376,13 @@ function isProductionWriteAllowed(httpEndpoint: string): boolean {
   return PRODUCTION_CREATE_ENDPOINTS.has(httpEndpoint)
 }
 
+function isProtectedSourceIssueTarget(target: string): boolean {
+  if (!target) return false
+  const url = new URL(target, window.location.href)
+  return SOURCE_ISSUE_WRITE_BLOCKED_HOSTS.includes(url.hostname)
+    || SOURCE_ISSUE_WRITE_BLOCKED_GATEWAYS.includes(url.host)
+}
+
 export class ProductionWriteBlockedError extends Error {
   httpEndpoint: string
 
@@ -519,7 +533,10 @@ export async function request<T>(
       ? originalPath
       : currentBackendTarget()
     const productionDestination = PRODUCTION_BACKEND_HOSTS.some((host) => destination.includes(host))
-    if (isDanger(endpoint) && productionDestination && !isProductionWriteAllowed(httpEndpoint)) {
+    // 同域静态部署的反代不一定注入构建变量，因此还要检查浏览器实际请求的地址。
+    const protectedSourceIssueWrite = (httpEndpoint === 'source/issue/addBatch' || httpEndpoint === 'source/issue/handle')
+      && (isProtectedSourceIssueTarget(resolvedPath) || isProtectedSourceIssueTarget(destination))
+    if (protectedSourceIssueWrite || (isDanger(endpoint) && productionDestination && !isProductionWriteAllowed(httpEndpoint))) {
       throw new ProductionWriteBlockedError(httpEndpoint)
     }
     const headers: Record<string, string> = {}
@@ -556,7 +573,7 @@ export async function request<T>(
         signal: controller.signal,
       })
     } catch (error) {
-      if (timeoutExpired) throw new Error(`请求超时（${timeoutMs / 1000} 秒），后端未及时响应，请稍后重试`)
+      if (timeoutExpired) throw Object.assign(new Error(`请求超时（${timeoutMs / 1000} 秒），后端未及时响应，请稍后重试`), { name: 'TimeoutError' })
       // 保留 AbortError 名称：调用方（如 taskStat 的 isAbort）靠 ApiError.cause.name 区分「取消」与真实错误。
       if (options.signal?.aborted && controller.signal.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' })
       throw error

@@ -262,6 +262,10 @@ export function mockSourcePaged(params?: Record<string, unknown>): Paged<Source>
       } else if (field === 'LAST_SUCCESS' || field === 'lastSuccess') {
         valA = a.lastSuccessAt ?? ''
         valB = b.lastSuccessAt ?? ''
+      } else if (field === 'CONFIG_ID' || field === 'configId') {
+        // 后端 SourceSort 白名单里有 CONFIG_ID，库里是数字列；空配置排最前（同 MyBatis 的 NULL 排序）
+        valA = a.configId ? Number(a.configId) : -1
+        valB = b.configId ? Number(b.configId) : -1
       }
       if (valA === valB) return 0
       const cmp = valA > valB ? 1 : -1

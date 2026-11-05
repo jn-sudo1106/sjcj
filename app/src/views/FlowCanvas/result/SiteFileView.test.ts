@@ -287,6 +287,39 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('two.html')
   })
 
+  it('全部网站查询失败显示表 ID 和真实原因，重查成功后清除提示', async () => {
+    const imported = { ...table, tableId: '6100048' }
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([imported])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(imported)
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockRejectedValue(new Error('数据表或相关字段不存在 sense_data.TB_sw_file_resource'))
+    const wrapper = shallowMount(SiteFileView, {
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false } },
+    })
+    try {
+      await flushPromises()
+      const error = wrapper.get('[data-testid="site-file-error"]')
+      expect(error.text()).toContain('6100048')
+      expect(error.text()).toContain('数据表或相关字段不存在 sense_data.TB_sw_file_resource')
+      expect(error.attributes('role')).toBe('alert')
+      rows.mockResolvedValue({ total: 1, list: [file('s1', '1', 'imported.html')] })
+      await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="site-file-error"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('imported.html')
+    } finally { wrapper.unmount() }
+  })
+
+  it('文件表目录加载失败显示接口原因', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockRejectedValue(new Error('服务暂时不可用'))
+    const wrapper = shallowMount(SiteFileView, {
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false } },
+    })
+    try {
+      await flushPromises()
+      expect(wrapper.get('[data-testid="site-file-error"]').text()).toContain('服务暂时不可用')
+    } finally { wrapper.unmount() }
+  })
+
   it('自定义 SQL 筛选：对齐旧平台 FileList2.vue 的同名筛选项，此前迁移遗漏（补漏）', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)

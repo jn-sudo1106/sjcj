@@ -151,11 +151,38 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源', categoryPath: '原系统/测试目录' } as never] })
     const { wrapper, list } = await mountList()
     expect(list.props('showOriginalDirectory')).toBe(true)
-    expect(wrapper.get('.sov-extra').text()).toBe('加载中…')
+    // 1105：加载中不再是整列「加载中…」，未算到的源给个省略号占位（鼠标悬停有说明），算到就出标签
+    expect(wrapper.get('.sov-extra').text()).toBe('…')
+    expect(wrapper.get('.sov-extra .ca-muted').attributes('title')).toBe('正在读取这个源的业务目录归属')
     resolve(new Map([['s1', ['d1', 'd2']]]))
     await flushPromises()
     expect(wrapper.findAll('.ca-biz-tag').map(tag => tag.attributes('title'))).toEqual(['股票数据 / 基本资料', '债券数据 / 基本资料'])
     expect(wrapper.get('[data-testid="source-overview-original-directory"]').text()).toBe('原系统 / 测试目录')
+    wrapper.unmount()
+  })
+
+  // 1105：「业务目录」列边算边渲染——整棵业务目录树逐个 listSources 在生产要几十秒，
+  // 不能等全部算完才出结果，每个目录算完就先把这一批源标上。
+  it('业务目录边算边渲染：先算完的目录立刻出标签，不等整棵树', async () => {
+    let resolve!: (map: Map<string, string[]>) => void
+    let onDir!: (dirId: string, sourceIds: string[]) => void
+    vi.spyOn(sourceDirs, 'bizMembership').mockImplementation((listener) => {
+      onDir = listener!
+      return new Promise(done => { resolve = done })
+    })
+    vi.spyOn(sourceDirs, 'dirPath').mockImplementation(id => [id === 'd1' ? '股票数据' : '债券数据'])
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源' } as never] })
+    const { wrapper } = await mountList()
+    expect(wrapper.get('.sov-extra').text()).toBe('…')
+    onDir('d1', ['s1'])
+    await flushPromises()
+    expect(wrapper.findAll('.ca-biz-tag').map(tag => tag.attributes('title'))).toEqual(['股票数据'])
+    onDir('d2', ['s1'])
+    await flushPromises()
+    expect(wrapper.findAll('.ca-biz-tag').map(tag => tag.attributes('title'))).toEqual(['股票数据', '债券数据'])
+    resolve(new Map([['s1', ['d1', 'd2']]]))
+    await flushPromises()
+    expect(wrapper.findAll('.ca-biz-tag')).toHaveLength(2)
     wrapper.unmount()
   })
 
@@ -164,6 +191,22 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源' } as never] })
     const { wrapper } = await mountList()
     expect(wrapper.get('.sov-extra').text()).toBe('加载失败')
+    wrapper.unmount()
+  })
+
+  // 1104 会议「页面卡顿」：业务目录归属没有反查接口，要整棵目录树逐个 listSources（186 上约 75 个请求），
+  // 不能跟着首屏一起发——等源列表这一页回来（SourceOverviewView 的 pageLoaded）再查。
+  it('「业务目录」等源列表这一页回来再查，不跟首屏抢请求', async () => {
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    let release!: () => void
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(() => new Promise((done) => {
+      release = () => done({ total: 0, list: [] })
+    }) as never)
+    const { wrapper } = await mountList()
+    expect(membership).not.toHaveBeenCalled()
+    release()
+    await flushPromises()
+    expect(membership).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

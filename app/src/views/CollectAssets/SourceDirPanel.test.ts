@@ -41,6 +41,18 @@ async function expand(w: Awaited<ReturnType<typeof mountPanel>>, id: string) {
 }
 
 describe('SourceDirPanel', () => {
+  it('从搜索工作区恢复目录选择，初始化的默认业务目录不会覆盖它', async () => {
+    const scope: DirScope = { kind: 'sys', directory: { kind: 'sys', mode: 'selected', selections: [{ id: '100', includeDescendants: true }] }, dirIds: ['100'], labels: [{ id: '100', path: '财经资讯', hasKids: true }] }
+    const w = mount(SourceDirPanel, { props: { collapsed: false }, global: { plugins: [ElementPlus] } })
+    w.vm.restore(scope)
+    await flushPromises()
+    expect(lastScope(w)).toEqual(scope)
+    expect(w.get('[data-testid="dir-kind-sys"]').attributes('aria-selected')).toBe('true')
+    w.vm.clear()
+    await flushPromises()
+    expect(lastScope(w).directory?.mode).toBe('none')
+    w.unmount()
+  })
   it('默认业务目录不全选（不按目录筛），手动全选后范围含全部子级', async () => {
     const w = await mountPanel(true, 'biz')
     expect(w.get('[data-testid="dir-panel-rail"]').text()).not.toContain('全')

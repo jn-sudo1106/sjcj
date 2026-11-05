@@ -5,11 +5,17 @@
 //   · 登录名：新建必填、编辑不可改——它参与口令哈希（{p} + md5(登录名+明文)），改了等于把密码作废（决策 ⑧A）。
 //   · 初始密码：只有新建能设，服务端加密后落库，任何接口都不回显（决策 ①C）。
 //   · 所属组：新建时预填当前登录管理员自己的组（决策 ⑤ 的补充口径），可以改；后端在留空时同样兜底成创建人的组。
-//   · 角色：这一页不提供入口。新账号由服务端自动落到只读（read）角色；
-//     要给谁 admin 权限，由 admin 直接改后台数据库的 SYS_USER_2_ROLE（决策 ④A）。
+//   · 角色：编辑时支持选择角色并同步更新 SYS_USER_2_ROLE 绑定；新建账号由服务端默认落到只读（read）角色。
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { addSysUser, sysUserFormError, updateSysUser, type SysUserRow } from '@/api/sysUser'
+import {
+  addSysUser,
+  getSysRoles,
+  sysUserFormError,
+  updateSysUser,
+  type SysRoleOption,
+  type SysUserRow,
+} from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
 
 const emit = defineEmits<{ saved: [] }>()
@@ -19,22 +25,89 @@ const auth = useAuthStore()
 const visible = ref(false)
 const saving = ref(false)
 const editing = ref<SysUserRow | null>(null)
-const form = reactive({ userLoginName: '', userName: '', groupId: '', userPassword: '' })
+const form = reactive({
+  userLoginName: '',
+  userName: '',
+  groupId: '',
+  userPassword: '',
+  roleId: undefined as number | undefined,
+})
 
 const isEdit = computed(() => !!editing.value)
 /** 当前登录管理员自己的组：新建时作为所属组的默认值 */
 const creatorGroup = computed(() => auth.info?.group)
 
+const roleOptions = ref<SysRoleOption[]>([])
+const loadingRoles = ref(false)
+
+const ROLE_NAME_LABELS: Record<string, string> = {
+  admin: 'admin（管理员）',
+  read: 'read（只读）',
+  user: 'user（普通用户）',
+  operation: 'operation（操作员）',
+}
+
+function roleLabel(item: SysRoleOption): string {
+  if (ROLE_NAME_LABELS[item.roleName]) return ROLE_NAME_LABELS[item.roleName]
+  return item.roleRemark ? `${item.roleName}（${item.roleRemark}）` : item.roleName
+}
+
+const DEFAULT_ROLES: SysRoleOption[] = [
+  { roleId: 57, roleName: 'admin', roleRemark: '超级管理员' },
+  { roleId: 52, roleName: 'read', roleRemark: '只读用户' },
+  { roleId: 55, roleName: 'user', roleRemark: '用户角色' },
+  { roleId: 56, roleName: 'operation', roleRemark: '操作人员' },
+]
+
+function ensureCurrentRoleInOptions() {
+  if (!editing.value || form.roleId === undefined) return
+  const found = roleOptions.value.some((r) => r.roleId === form.roleId)
+  if (!found && editing.value.roleNames) {
+    roleOptions.value.push({
+      roleId: form.roleId,
+      roleName: editing.value.roleNames,
+    })
+  }
+}
+
+async function loadRoles() {
+  loadingRoles.value = true
+  try {
+    const res = await getSysRoles()
+    if (Array.isArray(res) && res.length > 0) {
+      roleOptions.value = res
+    } else {
+      roleOptions.value = [...DEFAULT_ROLES]
+    }
+  } catch {
+    roleOptions.value = [...DEFAULT_ROLES]
+  } finally {
+    loadingRoles.value = false
+    ensureCurrentRoleInOptions()
+  }
+}
+
 /** 外部调用：传 row = 编辑（登录名跟着原值且不可改），不传 = 新建（组 ID 预填创建人所在组） */
 function open(row?: SysUserRow) {
   editing.value = row ?? null
+  let initialRoleId: number | undefined = undefined
+  if (row?.roleIds) {
+    const firstId = Number(row.roleIds.split(',')[0])
+    if (!isNaN(firstId)) {
+      initialRoleId = firstId
+    }
+  }
   Object.assign(form, {
     userLoginName: row?.userLoginName ?? '',
     userName: row?.userName ?? '',
     groupId: row ? String(row.groupId ?? '') : String(creatorGroup.value ?? ''),
     userPassword: '',
+    roleId: initialRoleId,
   })
   visible.value = true
+  if (row) {
+    void loadRoles()
+  }
 }
 defineExpose({ open })
 
@@ -50,6 +123,10 @@ async function save() {
     ElMessage.warning(invalid)
     return
   }
+  if (isEdit.value && form.roleId === undefined) {
+    ElMessage.warning('请选择角色')
+    return
+  }
   saving.value = true
   try {
     const userName = form.userName.trim()
@@ -60,6 +137,8 @@ async function save() {
         userLoginName: editing.value.userLoginName,
         userName,
         groupId,
+        roleId: form.roleId,
+        roleIds: form.roleId !== undefined ? String(form.roleId) : undefined,
       })
     } else {
       await addSysUser({
@@ -112,12 +191,26 @@ async function save() {
         />
         <div class="su-hint">落库形态为 {p} + md5(登录名 + 密码)，与「修改密码」一致，数据库里查不到明文</div>
       </el-form-item>
-      <el-form-item label="角色">
-        <div class="su-hint">
-          {{ isEdit
-            ? `${editing?.roleNames || '该账号已没有角色'}（本页不维护角色；停用会清空绑定，重新启用前要先把绑定加回数据库）`
-            : '新账号由服务端自动绑定只读（read）角色；需要 admin 权限请由管理员在后台数据库维护 SYS_USER_2_ROLE' }}
+      <el-form-item label="角色" :required="isEdit">
+        <el-select
+          v-if="isEdit"
+          v-model="form.roleId"
+          placeholder="请选择角色"
+          :loading="loadingRoles"
+          data-testid="sys-user-role-select"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="item in roleOptions"
+            :key="item.roleId"
+            :label="roleLabel(item)"
+            :value="item.roleId"
+          />
+        </el-select>
+        <div v-else class="su-hint">
+          新账号由服务端自动绑定只读（read）角色；如需其他角色可在创建后通过编辑修改
         </div>
+        <div v-if="isEdit" class="su-hint">修改角色会同步更新该账号的系统访问权限</div>
       </el-form-item>
     </el-form>
     <template #footer>

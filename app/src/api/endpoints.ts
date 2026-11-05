@@ -14,8 +14,14 @@ export interface EndpointSpec {
 }
 
 export const ENDPOINTS: EndpointSpec[] = [
-  /* ── source 源（目标 36 / 收录 37，含 2026-10-30 新增 categorySources） ── */
+  /* ── source 源（收录 55 条） ── */
   { path: 'source/sourcePaged', desc: '源分页列表', impl: true, live: true },
+  // 源问题及其工作区详情按调用强制 HTTP，端点清单用于环境写保护，不依赖 live 标记。
+  { path: 'source/sourceDetailScoped', desc: '源工作区受限详情' },
+  { path: 'source/issue/paged', desc: '源问题分页' },
+  { path: 'source/issue/detail', desc: '源问题详情' },
+  { path: 'source/issue/addBatch', desc: '批量登记源问题', danger: true },
+  { path: 'source/issue/handle', desc: '标记源问题已处理', danger: true },
   { path: 'source/sourceDetail', desc: '源详情', impl: true, live: true },
   { path: 'source/sourceSame', desc: '同站源下拉（数据表页选源用）', impl: true, live: true },
   { path: 'source/categoryTree', desc: '源分类目录树（计数）', impl: true },
@@ -815,9 +821,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'sys-user/list', desc: '用户分页（登录名/用户名模糊，组 ID 与状态精确；留空即不过滤）', impl: true, live: true },
   { path: 'sys-user/detail', desc: '用户详情（含已绑定角色的 ID 与名称回显，不含口令）', impl: true, live: true },
   { path: 'sys-user/add', desc: '新增用户（admin；初始密码必填，服务端按 {p}+md5(登录名+明文) 落库；组 ID 留空沿用创建人所在组；自动绑 read 角色）', danger: true, impl: true, live: true },
-  { path: 'sys-user/update', desc: '修改用户（admin；只能改用户名与所属组，登录名不可改）', danger: true, impl: true, live: true },
+  { path: 'sys-user/update', desc: '修改用户（admin；改用户名、所属组及角色，登录名不可改）', danger: true, impl: true, live: true },
   { path: 'sys-user/update-status', desc: '启用/停用（admin；停用连带解除该用户全部角色绑定，启用要求该用户已有角色）', danger: true, impl: true, live: true },
   { path: 'sys-user/change-password', desc: '重置密码（admin；明文入参，内置 admin 账号拒绝）', danger: true, impl: true, live: true },
+  { path: 'sys-user/roles', desc: '角色列表（admin；供编辑用户时选择角色）', impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

@@ -38,6 +38,7 @@ const checked = reactive({ sys: new Set<string>(), biz: new Set<string>() })
 const focus = reactive<{ sys: string | null; biz: string | null }>({ sys: null, biz: null })
 const allChecked = reactive({ sys: false, biz: false })
 const selectingAll = ref(false)
+let restored = false
 
 const rootKey = (k: DirKind) => `${k}:root`
 async function ensureKids(k: DirKind, parentId = ''): Promise<DirNode[]> {
@@ -195,7 +196,18 @@ async function selectAll() {
   allChecked[k] = true
   await emitScope()
 }
-defineExpose({ clear })
+function restore(scope: DirScope) {
+  restored = true
+  scopeSeq++
+  kind.value = scope.kind
+  allChecked[scope.kind] = scope.directory?.mode === 'all' || !!scope.all
+  const selections = scope.directory?.selections ?? scope.dirIds.map(id => ({ id, includeDescendants: true }))
+  checked[scope.kind] = new Set(selections.filter(s => s.includeDescendants).map(s => s.id))
+  focus[scope.kind] = selections.find(s => !s.includeDescendants)?.id ?? null
+  emit('change', scope)
+  void ensureKids(scope.kind)
+}
+defineExpose({ clear, restore })
 
 async function switchKind(k: DirKind) {
   if (kind.value === k) return
@@ -233,6 +245,7 @@ function parentPathOf(node: DirNode): string {
 // 进页面：业务目录不选任何目录（= 不按目录筛）；还没有业务目录时退到系统目录
 async function init() {
   const roots = await ensureKids('biz')
+  if (restored) return
   if (!roots.length && !loadError.value) await switchKind('sys')
   else await emitScope()
 }

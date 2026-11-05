@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
@@ -23,16 +23,17 @@ import CompareSplit from './result/CompareSplit.vue'
 import TaskView from './result/TaskView.vue'
 import FileView from './result/FileView.vue'
 import MonitorConfigView from './result/MonitorConfigView.vue'
-import SiteSourceSwitcher from './source/SiteSourceSwitcher.vue'
+import SourceSearchSidebar from './source/SourceSearchSidebar.vue'
 import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
 import { firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
-import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
+import { normalizeSourceView, normalizeSiteView, resolveSourceIssueReturn, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
 import { flushNodeConfigs } from './inspector/nodeConfigAutosave'
 import { useSourceReturnStore } from '@/stores/sourceReturn'
+import { useSourceSearchStore, sourceSearchRoute } from '@/stores/sourceSearch'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,6 +43,9 @@ const { ensureFlowReady } = useFlowReadiness()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const sourceReturn = useSourceReturnStore()
+const sourceSearch = useSourceSearchStore()
+const requestedSearchId = computed(() => typeof route.query.sourceSearch === 'string' ? route.query.sourceSearch : '')
+const searchContext = computed(() => route.query.sourceId ? sourceSearch.get(route.query.sourceSearch) : undefined)
 const sourceReady = ref(false)
 const workflowStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
 const runtime = useRuntimeStore()
@@ -141,7 +145,14 @@ watch(
   rememberSourceReturn,
   { flush: 'post' },
 )
-const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
+const sourceIssueReturn = computed(() => resolveSourceIssueReturn(router, route.query.sourceIssueReturn))
+const fromSourceIssues = computed(() => !!sourceIssueReturn.value)
+// 仅在目标源尚未通过台账入口校验时占位，同源切流程保留已经加载的工作区。
+const verifiedIssueSourceId = ref('')
+const awaitingIssueSource = computed(() => fromSourceIssues.value
+  && verifiedIssueSourceId.value !== String(route.query.sourceId ?? ''))
+const awaitingSource = computed(() => !!route.query.sourceId && (!flow.sourceCtx || awaitingIssueSource.value
+  || (!!searchContext.value && flow.sourceCtx.sourceId !== String(route.query.sourceId))))
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 /** 没有关联流程 / 流程列表加载失败：画布和右侧配置都让位，只显示一句提示（2026-11-03）。
  *  只在明确 empty / error 时让位——「加载中」照常渲染，否则刷新时会闪一下空白，
@@ -198,9 +209,11 @@ watch(
 
 // ---- 源侧栏（0710 会议 B1）：页面级左列，流程/数据/任务视图共用；接线自 FlowBoard 顶部横排切换器迁入 ----
 // 网站详情页没有 sourceCtx（画布内部代表源不登记为编排对象），侧栏 siteId 需要兜底读路由自己的 siteId
-const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.query.siteId ?? ''))
+const sidebarSiteId = computed(() => requestedSearchId.value
+  ? String(route.query.siteId ?? '')
+  : flow.sourceCtx?.siteId || String(route.query.siteId ?? ''))
 // 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
-const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
+const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : searchContext.value ? String(route.query.sourceId ?? '') : flow.sourceCtx?.sourceId ?? ''))
 const sidebarSourceGroupId = computed(() => String(route.query.sourceGroupId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
   // 1021-06：先把能自动保存的节点配置存掉，剩下存不掉的（新节点、共享配置等）才走下面的提示
@@ -235,7 +248,25 @@ async function confirmDiscardIfDirty(): Promise<boolean> {
 }
 // 切换只改路由，加载统一走 route watcher → enterFromRoute；视图随身携带（切源不切视图，0710 会议第 7/10 条）
 async function onSwitchTarget(target: Source) {
-  if (!(await confirmDiscardIfDirty())) return
+  const contextId = searchContext.value?.id
+  // 搜索态里跨源翻页是最常见的动作（用户 2026-11-05 反馈）：页签满了不该把人拦在门外，
+  // 按既有口径（2026-09-18「关最右侧那个腾位」）自动腾一个位置再切，别弹「请先关闭一个」。
+  // 腾不出来（当前画布有未保存改动，protectedTab 兜着）时照旧走 open() 失败 + 提示。
+  if (contextId && !ws.tabs.some(tab => tab.sourceId === target.sourceId) && ws.orderedTabs.length >= MAX_WORKSPACE_TABS) {
+    const evicted = ws.evictOldestTab(protectedTab())
+    if (evicted) ElMessage.info(`页签已满，已自动关闭最右侧的「${evicted.name}」（可随时重新打开）`)
+  }
+  if (!contextId && !(await confirmDiscardIfDirty())) return
+  if (contextId) {
+    const siteId = target.siteId && target.siteId !== '0' && target.siteId !== '-1' ? target.siteId : ''
+    const snapshot = ws.snapshotOf(target.sourceId)
+    void router.replace({ path: '/canvas', query: {
+      ...(siteId ? { siteId } : {}), sourceId: target.sourceId,
+      view: snapshot?.view ?? normalizeSourceView(route.query.view),
+      ...sourceSearchRoute(contextId),
+    } })
+    return
+  }
   // 从「按条件查源」的命中态点进来（2026-09-09）：强制进数据视图并把产生这批命中的条件
   // 一并带过去。侧栏那一行写着「906 条」，进去看到的就得是那 906 条——不带条件的话
   // 看到的是这个源的全部数据，那个数字反而成了误导。
@@ -351,7 +382,11 @@ function onSplitStart(e: MouseEvent) {
   window.addEventListener('mouseup', onSplitEnd)
 }
 
+let sourceLoadSequence = 0
 async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
+  const sequence = ++sourceLoadSequence
+  const requestedQuery = { ...route.query }
+  const isCurrent = () => sequence === sourceLoadSequence && String(route.query.sourceId ?? '') === sourceId
   sourceReady.value = false
   // 同源切流程时页签组件不会重挂，保留它已经上报的状态。
   if (flow.sourceCtx?.sourceId !== sourceId) workflowStatus.value = 'loading'
@@ -363,23 +398,35 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   sourceLoadError.value = ''
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
+  const fromIssue = fromSourceIssues.value
   let source: Source | null
   let sourceSteps: { steps: Step[] } | { error: unknown }
   try {
-    ;[source, sourceSteps] = await Promise.all([
-      sourceApi.sourceDetail(sourceId),
-      // 按源查的步骤只给未绑流程的源兜底，绑了流程的源用不上：它的失败先记下，真要用时再报（见下方 steps）。
-      // 2026-10-12：217 后端对未绑流程的源报「源未绑定有效流程」，对绑了只有草稿的新流程报「请先进入流程草稿编辑…」
-      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }).then((steps) => ({ steps }), (error: unknown) => ({ error })),
-    ])
+    const sourceResult = fromIssue
+      ? sourceApi.sourceDetailScoped(sourceId)
+      : sourceApi.sourceDetail(sourceId)
+    // 从问题台账进入时先核对源详情权限，再读取工作区数据。
+    const loadSteps = () => sourceApi.sourceSteps(sourceId, { withConfigDetails: false })
+      .then((steps) => ({ steps }), (error: unknown) => ({ error }))
+    const stepsResult = fromIssue
+      ? sourceResult.then((visibleSource) => visibleSource ? loadSteps() : { steps: [] })
+      : loadSteps()
+    ;[source, sourceSteps] = await Promise.all([sourceResult, stepsResult])
   } catch (error) {
+    if (!isCurrent()) return
     // 异常不能再往外抛：调用方 enterFromRoute 的 promise 没人接，占位会永远停在「加载中」。
+    if (fromIssue) {
+      if (String(route.query.sourceId ?? '') !== sourceId) return
+      verifiedIssueSourceId.value = ''
+    }
     const detail = (error as Error)?.message ?? '网络异常'
     sourceLoadError.value = `源加载失败：${detail}`
     ElMessage.error(sourceLoadError.value)
     return
   }
+  if (!isCurrent()) return
   if (!source) {
+    if (fromIssue) verifiedIssueSourceId.value = ''
     sourceReturn.clear(sourceId)
     sourceLoadError.value = '源不存在或已被删除'
     ElMessage.error('源不存在')
@@ -397,12 +444,13 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   } catch {
     bindings = []
   }
+  if (!isCurrent()) return
   const legacyFlowId = validFlowIdOf(source.flowId)
   const primaryBinding = bindings.find(binding => binding.primary)
   const primaryFlowId = primaryBinding?.publishedFlowId ?? legacyFlowId
   const primaryWorkflowId = primaryBinding?.workflowId
-  const requestedWorkflowId = String(route.query.workflowId ?? '').trim()
-  const requestedFlowId = validFlowIdOf(String(route.query.flowId ?? ''))
+  const requestedWorkflowId = String(requestedQuery.workflowId ?? '').trim()
+  const requestedFlowId = validFlowIdOf(String(requestedQuery.flowId ?? ''))
   const selectedBinding = bindings.find(binding => binding.workflowId === requestedWorkflowId)
     ?? bindings.find(binding => [binding.workflowId, binding.draftFlowId, binding.publishedFlowId].includes(requestedFlowId))
     ?? primaryBinding
@@ -421,6 +469,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     const flowVersion = useFlowVersionStore()
     const editingView = normalizeSourceView(route.query.view) === 'flow'
     if (flowId) await flowVersion.load(flowId)
+    if (!isCurrent()) return
     const versionId = editingView || !flowVersion.published ? flowVersion.viewVersionId : null
     if (flowId) {
       steps = await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
@@ -433,12 +482,15 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
       throw sourceSteps.error
     }
   } catch (error) {
+    if (!isCurrent()) return
     const detail = (error as Error)?.message ?? '网络异常'
     sourceLoadError.value = `流程步骤加载失败：${detail}`
     ElMessage.error(sourceLoadError.value)
     return
   }
+  if (!isCurrent()) return
   const defaults = runtimeView ? undefined : await loadTemplateDefaults(flowId, steps)
+  if (!isCurrent()) return
   const viewingDraft = !!selectedBinding?.draftFlowId && flowId === selectedBinding.draftFlowId
   flow.loadFromSource({
     ...source,
@@ -457,21 +509,24 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   restoreFlowInspector(sourceId, flowId)
   // 回到源可能需要等待后端数秒：加载完成后再恢复，不受早期深链的 1.5 秒窗口限制。
   await nextTick()
+  if (!isCurrent()) return
   pendingUntil.value = Date.now() + PENDING_WINDOW_MS
   restoreRequestedInspector()
   pendingUntil.value = 0
   if (!ws.open(source.sourceId, source.name)) {
     onTabQuotaFull(fromOutside, () => ws.open(source.sourceId, source.name), '当前源')
   }
+  ws.saveSnapshot(source.sourceId, { searchContextId: searchContext.value?.id, view: normalizeSourceView(route.query.view) })
   // 把所属网站记进页签快照：切页签时 URL 上没有 siteId，而 sourceDetail 又不返回它（实测为 null），
   // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
-  const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId || ''
-  if (ownerSiteId) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId })
+  const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || (!searchContext.value ? ws.snapshotOf(source.sourceId)?.siteId : '') || ''
+  if (ownerSiteId || searchContext.value) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId || undefined })
+  verifiedIssueSourceId.value = fromIssue ? sourceId : ''
   sourceReady.value = true
   rememberSourceReturn()
   // 0915-02：源态下「全部」页签同样常驻——0915-03 的钻取闭环要靠它回到网站数据视图
-  if (ownerSiteId) void ensureSiteTabNamed(ownerSiteId)
-  else void resolveOwnerSite(source.sourceId)
+  if (ownerSiteId && !requestedSearchId.value) void ensureSiteTabNamed(ownerSiteId)
+  else if (!ownerSiteId && !requestedSearchId.value) void resolveOwnerSite(source.sourceId)
   void backfillStepDetails(sourceId, steps ?? [], runtimeView ? 'default' : 'flow')
   void backfillSourceSchedule(sourceId)
 }
@@ -525,7 +580,7 @@ async function resolveOwnerSite(sourceId: string) {
     ws.saveSnapshot(sourceId, { siteId })
     flow.patchSourceCtx({ siteId })
     // 反查出来了才建得了「全部」页签——上面那条路径（source.siteId 直接可用）已经建过
-    void ensureSiteTabNamed(String(siteId))
+    if (!searchContext.value) void ensureSiteTabNamed(String(siteId))
   } catch {
     // 反查失败不影响主流程：左侧列表保持空态，用户仍可从网站列表进入
   }
@@ -724,6 +779,7 @@ async function enterFromRoute(opts: { fromOutside?: boolean } = {}) {
   const siteId = String(route.query.siteId ?? '')
   const sourceId = String(route.query.sourceId ?? '')
   if (siteId && !sourceId) {
+    sourceLoadSequence++
     sourceReady.value = false
     // 0915-05（2026-09-16）：这里原本把网站态的 view=task 重定向到一级任务中心 /tasks
     // （0812 计划 M1-3「网站汇总态任务页签已删除」）。该结论已被 0915 会议推翻——
@@ -794,7 +850,22 @@ onBeforeRouteLeave(async (to) => {
     return false
   }
 })
+onBeforeRouteUpdate(async (to, from) => {
+  if (!sourceReady.value || (!from.query.sourceSearch && !to.query.sourceSearch)) return true
+  if (to.query.sourceId === from.query.sourceId && to.query.siteId === from.query.siteId) return true
+  // 关闭页签已经经过自己的未保存确认，不再重复提示。
+  if (!ws.tabs.some(tab => tab.sourceId === String(from.query.sourceId ?? ''))) return true
+  try {
+    await flushNodeConfigs()
+    if (flow.flowDirty) await autosave.flush()
+    return !flow.dirty || await confirmDiscardIfDirty()
+  } catch (error) {
+    ElMessage.error(`切换前保存失败：${(error as Error).message}`)
+    return false
+  }
+})
 onUnmounted(() => {
+  sourceLoadSequence++
   resolveLoginConfigSelection?.()
   resolveLoginConfigSelection = null
   window.removeEventListener('hashchange', syncActiveView)
@@ -815,8 +886,9 @@ onUnmounted(() => {
     <SourceTabsBar v-if="flow.sourceCtx || ws.siteTabs.length" />
     <!-- 两列布局（0710 会议 B1）：左列源侧栏（页面级，在视图层之上），右列内容区随流程/数据/任务视图切换 -->
     <div class="rc-canvas-cols" :class="{ 'with-tabs': !!flow.sourceCtx || !!ws.siteTabs.length }">
-      <SiteSourceSwitcher
-        v-if="sidebarSiteId"
+      <SourceSearchSidebar
+        v-if="(sidebarSiteId || requestedSearchId) && !awaitingIssueSource"
+        :context-id="requestedSearchId"
         :site-id="sidebarSiteId"
         :active-key="sidebarActiveKey"
         :source-group-id="sidebarSourceGroupId"
@@ -834,6 +906,7 @@ onUnmounted(() => {
         <!-- key 用加载完成后的 ctx，避免切换时读到旧源数据。 -->
         <div v-if="awaitingSource" class="rc-source-loading" :class="{ 'is-error': !!sourceLoadError }">
           {{ sourceLoadError || '正在加载源…' }}
+          <el-button v-if="sourceLoadError && sourceIssueReturn" link type="primary" @click="router.push(sourceIssueReturn)">返回问题列表</el-button>
         </div>
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />

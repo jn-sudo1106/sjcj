@@ -18,4 +18,10 @@ describe('viewStateFilter', () => {
     expect(viewStateFilter(st({}))).toMatchObject({ state: undefined, enable: undefined, count: undefined, field: undefined, sorted: undefined, tags: [] })
     expect(viewStateFilter(st({ status: 'disabled' }))).toMatchObject({ state: undefined, enable: '1' })
   })
+
+  // 1104：按配置查源（旧平台源列表的「配置」筛选），条件要原样进 sourcePaged 的 configId
+  it('配置 ID 条件转成 sourcePaged 的 configId', () => {
+    const q = viewStateFilter(st({ conditions: [{ field: 'configId', op: 'eq', value: '1400765' }] }))
+    expect(q.configId).toBe('1400765')
+  })
 })

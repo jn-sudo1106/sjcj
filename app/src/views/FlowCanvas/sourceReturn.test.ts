@@ -20,7 +20,7 @@ const source = { sourceId: '391002508', siteId: '8', name: '贝壳详情采集',
 const steps = ['501', '502'].map((stepId, index) => ({ stepId, sourceId: source.sourceId, name: `采集 ${index+1}`, configId: String(100+index), inputTable: '900', outputTable: '900', nodeType: 'entry', configType: '90', dependsOn: [index ? '501' : '0'], enabled: true } as Step))
 const Root = defineComponent({ components: { AppModuleHead }, template: '<AppModuleHead /><router-view />' })
 
-async function openSource(view = 'flow') {
+async function openSource(view = 'flow', extraQuery: Record<string, string> = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const auth = useAuthStore()
@@ -28,9 +28,10 @@ async function openSource(view = 'flow') {
   auth.info = { id: 1, name: 'admin', roles: ['admin'], groups: [], avatar: '', introduction: '', group: 1 }
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/canvas', component: FlowCanvas },
+    { path: '/monitor', component: { template: '<div>监控中心</div>' } },
     { path: '/settings', component: { template: '<div>系统设置</div>' } },
   ] })
-  await router.push({ path: '/canvas', query: { sourceId: source.sourceId, siteId: '8', view, workflowId: '300', flowId: '301' } })
+  await router.push({ path: '/canvas', query: { sourceId: source.sourceId, siteId: '8', view, workflowId: '300', flowId: '301', ...extraQuery } })
   await router.isReady()
   const wrapper = mount(Root, { global: {
     plugins: [pinia, router, ElementPlus], directives: { loading: {} },
@@ -46,6 +47,7 @@ describe('源 → 设置 → 返回源', () => {
     resetFlowAutosaveForTests()
     resetNodeConfigAutosave()
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    vi.spyOn(sourceApi, 'sourceDetailScoped').mockResolvedValue(source)
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
     vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
     vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue([])
@@ -57,6 +59,41 @@ describe('源 → 设置 → 返回源', () => {
     vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(steps)
   })
   afterEach(() => { resetFlowAutosaveForTests(); resetNodeConfigAutosave(); vi.restoreAllMocks() })
+
+  it('从问题台账进入时，源权限失效则不读步骤并可返回原页', async () => {
+    vi.mocked(sourceApi.sourceDetailScoped).mockRejectedValueOnce(new Error('源不存在、已删除或无访问权限'))
+    const back = '/monitor?tab=sourceIssues&issuePage=2'
+    const { router, wrapper } = await openSource('overview', { sourceIssueReturn: back })
+    try {
+      expect(sourceApi.sourceSteps).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('源不存在、已删除或无访问权限')
+      await wrapper.findAll('button').find(button => button.text() === '返回问题列表')!.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.fullPath).toBe(back)
+    } finally { wrapper.unmount() }
+  })
+
+  it('从问题台账进入后，同源切流程保留画布和侧栏', async () => {
+    const { router, wrapper, flow } = await openSource('flow', {
+      sourceIssueReturn: '/monitor?tab=sourceIssues&issuePage=2',
+    })
+    try {
+      const sidebar = wrapper.findComponent({ name: 'SiteSourceSwitcher' })
+      expect(sidebar.exists()).toBe(true)
+      expect(sourceApi.sourceDetailScoped).toHaveBeenCalledWith(source.sourceId)
+      expect(sourceApi.sourceDetail).not.toHaveBeenCalled()
+      let resolve!: (value: Source) => void
+      vi.mocked(sourceApi.sourceDetailScoped).mockReturnValueOnce(new Promise(done => { resolve = done }))
+      await router.replace({ query: { ...router.currentRoute.value.query, workflowId: '200', flowId: '201' } })
+      await flushPromises()
+      expect(wrapper.find('.rc-source-loading').exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'SiteSourceSwitcher' }).vm).toBe(sidebar.vm)
+      expect(flow.sourceCtx?.flowId).toBe('301')
+      resolve(source)
+      await flushPromises()
+      expect(flow.sourceCtx?.flowId).toBe('201')
+    } finally { wrapper.unmount() }
+  })
 
   it('从源切来源组先处理未保存确认；取消保留当前源，确认后切到本站组范围', async () => {
     const { router, wrapper, flow } = await openSource()

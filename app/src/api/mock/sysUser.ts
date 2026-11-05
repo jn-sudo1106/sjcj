@@ -11,6 +11,7 @@ import {
   STATUS_INVALID,
   STATUS_VALID,
   sysUserFormError,
+  type SysRoleOption,
   type SysUserRow,
 } from '../sysUser'
 
@@ -28,10 +29,14 @@ interface MockUser {
   updateTime: string | null
 }
 
-/** SYS_ROLE 的本系统既有角色：admin 只由管理员在后台数据库里维护 */
+/** SYS_ROLE 的本系统既有角色 */
 const ROLES = [
   { key: 1, name: 'admin' },
   { key: 2, name: 'read' },
+  { key: 52, name: 'read' },
+  { key: 55, name: 'user' },
+  { key: 56, name: 'operation' },
+  { key: 57, name: 'admin' },
 ]
 const READ_ROLE_ID = 2
 /** mock 没有会话，新建时创建人所在组用一个固定值顶替 */
@@ -171,9 +176,23 @@ export function mockSysUserUpdate(params?: Record<string, unknown>): { ok: boole
   if (invalid) throw new Error(invalid)
   row.userName = String(params?.userName).trim()
   row.groupId = Number(params?.groupId)
+  if (params?.roleId !== undefined && params?.roleId !== null && params?.roleId !== '') {
+    row.roleIds = [Number(params.roleId)]
+  } else if (params?.roleIds !== undefined && params?.roleIds !== null && params?.roleIds !== '') {
+    row.roleIds = String(params.roleIds).split(',').map(Number).filter(Boolean)
+  }
   row.modifier = 'admin'
   row.updateTime = now()
   return { ok: true, message: '修改成功' }
+}
+
+export function mockSysUserRoles(): SysRoleOption[] {
+  return [
+    { roleId: 57, roleName: 'admin', roleRemark: '超级管理员' },
+    { roleId: 52, roleName: 'read', roleRemark: '只读用户' },
+    { roleId: 55, roleName: 'user', roleRemark: '用户角色' },
+    { roleId: 56, roleName: 'operation', roleRemark: '操作人员' },
+  ]
 }
 
 export function mockSysUserStatus(params?: Record<string, unknown>): { ok: boolean; message: string } {

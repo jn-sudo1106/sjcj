@@ -260,6 +260,9 @@ const execMode = computed<ExecMode>(() => {
  */
 const noExecReason = computed(() => {
   if (execMode.value !== 'none') return ''
+  // 按表浏览时页面不指向具体节点（这张表可能由多个节点产出，也可能就是源主表），
+  // 说「当前节点没有配置输入表 / 输出表」是错的——表明明就在下面显示着。
+  if (browseMode.value === 'table' && !selectedNodeId.value) return '按表浏览：切到「按步骤」并选中节点后可发任务'
   if (!outputTableId.value && !inputTableId.value) return '当前节点没有配置输入表 / 输出表，无法执行'
   return '当前节点没有后续节点，也没有可回退的上游，无法发任务'
 })
@@ -353,7 +356,13 @@ const canPickRows = computed(() => {
   // 单节点源（孤立首节点，2026-09-24 用户要求也给勾选）：「发起抓取」发的是整个源、不看勾选，
   // 但同一排的「删除数据 → 删除选中的数据」要靠勾选——不给勾选列，那一项就永远是灰的。
   if (execMode.value === 'fetch') return true
-  return false
+  /**
+   * 按表浏览 + 这张表不归属唯一节点（多个节点产出同一张表 / 选的是源主表）时，
+   * `selectedNodeId` 是空的，execMode 落在 'none'，勾选列整列都不渲染；
+   * 可「删除数据」的门禁只看测试表，菜单还在——于是「删除选中的数据」永远是灰的
+   * （2026-11-05 用户报「按照表筛选前面的勾选没有了」）。要删数据就得先能勾，这里放行。
+   */
+  return meta.value?.state === 'C'
 })
 
 const selectedRowIds = ref<string[]>([])

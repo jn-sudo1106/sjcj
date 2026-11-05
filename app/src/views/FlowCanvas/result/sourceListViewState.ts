@@ -92,6 +92,8 @@ export function viewStateFilter(state: SourceListViewState): SourceFilter {
     sourceGroupId: state.sourceGroup || undefined,
     defaultFlowId: cond.defaultFlowId,
     entryTypeId: cond.entryTypeId,
+    // 1104 按配置查源（旧平台源列表的「配置」筛选）；后端 SourceCond 认 configId
+    configId: cond.configId,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
     state: state.status === 'all' || state.status === 'disabled' ? undefined : state.status,

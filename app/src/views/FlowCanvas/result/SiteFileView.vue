@@ -36,6 +36,11 @@ const tableLoading = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
+function fileQueryError(cause: unknown, operation = '加载文件列表失败'): string {
+  const detail = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : ''
+  const message = table.value ? `${operation}（表 ID ${table.value.tableId}）` : operation
+  return detail ? `${message}，${detail}` : `${message}，请重试`
+}
 const failedSources = ref<MergeLoadMoreResult<FileResourceRecord>['failedSources']>([])
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
@@ -102,10 +107,10 @@ async function loadResourceTable() {
     const picked = await pickTableWithFiles(candidates, tableHasFilesInScope())
     if (requestId !== tableRequest) return
     await selectTable(picked ?? candidates[0], requestId)
-  } catch {
+  } catch (cause) {
     if (requestId !== tableRequest) return
-    error.value = '加载文件资源表失败'
-    ElMessage.warning('加载文件列表失败')
+    error.value = fileQueryError(cause, '加载文件资源表失败')
+    ElMessage.warning(error.value)
   } finally {
     if (requestId === tableRequest) tableLoading.value = false
   }
@@ -172,9 +177,9 @@ async function loadMore(requestId = queryRequest) {
     rows.value = [...rows.value, ...result.rows]
     failedSources.value = result.failedSources
     allExhausted.value = result.allExhausted
-  } catch {
+  } catch (cause) {
     if (requestId !== queryRequest) return
-    error.value = '加载文件列表失败，请重试'
+    error.value = fileQueryError(cause)
   } finally {
     if (requestId === queryRequest) loadingMore.value = false
   }
@@ -249,9 +254,9 @@ async function resetAndLoad(resetPage = true) {
     }
     mergeStates = initMergeState<FileResourceRecord>(candidateSourceIds)
     await loadMore(requestId)
-  } catch {
+  } catch (cause) {
     if (requestId !== queryRequest) return
-    error.value = '加载文件列表失败，请重试'
+    error.value = fileQueryError(cause)
   } finally {
     if (requestId === queryRequest) loading.value = false
   }
@@ -393,7 +398,7 @@ function openPreview(file: FileResourceRecord) {
     </div>
 
     <div v-if="tableLoading" class="sfv-empty">正在定位 file_resource 文件资源表…</div>
-    <div v-else-if="error" class="sfv-empty">{{ error }}</div>
+    <div v-else-if="error" class="sfv-empty" role="alert" data-testid="site-file-error">{{ error }}</div>
     <div v-else-if="noCandidateSources" class="sfv-empty">当前网站没有可查询的源</div>
     <template v-else>
       <div v-if="failedSources.length" class="sfv-notice" data-testid="site-file-partial-fail">
@@ -508,7 +513,7 @@ function openPreview(file: FileResourceRecord) {
 .sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .sfv-toolbar :deep(.sss-wrap) { min-width: 170px; width: 170px; }
 .sfv-toolbar :deep(.sss-input) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sfv-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
+.sfv-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; color: var(--rc-faint); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; text-align: center; }
 .sfv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .sfv-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .sfv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }

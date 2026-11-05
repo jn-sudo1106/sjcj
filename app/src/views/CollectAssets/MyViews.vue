@@ -19,6 +19,7 @@ import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { recordSiteVisit } from '@/utils/siteRecents'
 import { trackClick } from '@/utils/logEvents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
+import { sourceSearchRoute, useSourceSearchStore, finishSourceSearchReturn } from '@/stores/sourceSearch'
 import { HIDEABLE_SOURCE_COLUMNS, SOURCE_SORT_FIELDS, blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import SaveViewDialog from './SaveViewDialog.vue'
 import GroupSourcePicker from './GroupSourcePicker.vue'
@@ -101,6 +102,8 @@ const moveTargets = computed(() => tree.value.dirs
   .map((d) => ({ id: d.id, label: pathText(tree.value, d.id) }))
   .sort((a, b) => a.label.localeCompare(b.label, 'zh')))
 const placeText = (sourceId: string) => placesOf(tree.value, sourceId, members.value, groupName).join('；')
+/** 导出「所在目录」列用的文本（1104）：与 #extra-cell 槽位同一口径（没有目录时是「—」） */
+const placeCellText = (source: Source) => placeText(source.sourceId) || '—'
 const viaGroup = (sourceId: string) => {
   const g = onlyViaGroup(tree.value, selectedDir.value, sourceId, members.value)
   return g ? groupName(g) : ''
@@ -155,6 +158,8 @@ async function loadTree() {
     const loaded = await sourceViewApi.loadTree(userId.value, view)
     if (activeId.value !== view.viewId) return
     tree.value = loaded
+    const restoredDir = useSourceSearchStore().get(route.query.sourceSearchReturn)?.listState?.viewDirectoryId
+    if (restoredDir && dirById(loaded, restoredDir)) selectedDir.value = restoredDir
     void loadMembers()
   } catch (e) {
     if (activeId.value !== view.viewId) return
@@ -431,7 +436,7 @@ async function importLocal() {
 }
 
 // ---- 打开源 / 网站 ----
-function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
+function openSource(source: Source, view: 'overview' | 'data' = 'overview', searchContextId?: string) {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId, source.siteName)
   trackClick('SOURCE', source.sourceId, source.name, {
     eventCode: 'source_open',
@@ -439,7 +444,7 @@ function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
     firstModule: '采集资产',
     pageName: '我的视图',
   })
-  void router.push({ path: '/canvas', query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath } })
+  void router.push({ path: '/canvas', query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, ...(view === 'data' && source.mainTable ? { tableId: source.mainTable } : {}), returnTo: route.fullPath, ...sourceSearchRoute(searchContextId) } })
 }
 function openSite(siteId: string) {
   recordSiteVisit(siteId)
@@ -558,10 +563,13 @@ onActivated(() => {
             :scope-view-category-id="viewCategoryScope"
             :scope-version="scopeVersion"
             :scope-source-ids="viewCategoryScope ? undefined : scopeIds"
+            :search-navigation="{ returnTo: route.fullPath, label: `我的视图 · ${targetLabel}`, restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { viewDirectoryId: selectedDir } }"
+            @search-restored="finishSourceSearchReturn(router, route)"
             :scope-empty-text="'这个目录里还没有源，点右上「＋」添加'"
             extra-column-label="所在目录"
-            @open-source="openSource"
-            @open-source-data="openSource($event, 'data')"
+            :extra-cell-text="placeCellText"
+            @open-source="(source, context) => openSource(source, 'overview', context)"
+            @open-source-data="(source, context) => openSource(source, 'data', context)"
             @open-site="openSite"
             @open-source-group="openSourceGroup"
           >

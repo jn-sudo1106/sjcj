@@ -2100,6 +2100,70 @@ describe('ResultView · 删除数据', () => {
   })
 })
 
+// 1105：按表浏览时这张表可能由多个节点产出（或就是源主表），页面不指向唯一节点 ⇒ execMode 落到
+// 'none' ⇒ 勾选列整列不渲染，可「删除数据」只看测试表，菜单还在，于是「删除选中的数据」永远是灰的。
+// 用户报的正是这个：「按照表筛选前面的勾选没有了」。
+describe('ResultView · 按表浏览的勾选与删除（1105）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  async function mountTableMode(outputTable: string, tableState: string | undefined = 'C') {
+    railDefault.open = false
+    localStorage.setItem('rc.dataview.result.browseMode', 'table')
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'end')
+    // 两个节点写同一张表 ⇒ outputTables 里这张表挂着 2 个节点 ⇒ 按表模式不认唯一节点，
+    // selectedNodeId 为空（与「配置副本」这类多节点同表的老流程一致）。
+    Object.assign(flow.configs, {
+      first: cfg({ title: '抓取列表页', outputTable }),
+      mid: cfg({ title: '处理A', inputTable: outputTable, outputTable }),
+    })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, state: tableState })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    const wrapper = mountResultView()
+    await flushPromises()
+    return { wrapper, current }
+  }
+
+  it('多节点同表 + 测试表：勾选列在（能删选中数据），提示不再谎称「没有配置输入表/输出表」', async () => {
+    const { wrapper } = await mountTableMode('T1')
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+
+    expect(grid.props('selectable')).toBe(true)
+    expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('按表浏览：切到「按步骤」并选中节点后可发任务')
+    expect(wrapper.text()).not.toContain('当前节点没有配置输入表 / 输出表')
+    // 没有可发任务的节点，「已选 N 条」照样能提示勾了几行
+    expect(wrapper.text()).toContain('已选 0 条')
+  })
+
+  it('勾选两行后「删除选中的数据」可点，走 rowDeleteBatch 且带这张表', async () => {
+    const { wrapper } = await mountTableMode('T1')
+    const batch = vi.spyOn(dataApi, 'rowDeleteBatch').mockResolvedValue({ success: 2, all: 2, not_found: 0 })
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+
+    const menu = wrapper.find('[data-testid="data-delete"]').element.parentElement!
+    const item = () => [...menu.querySelectorAll('.el-dropdown-item')].find(el => el.textContent === '删除选中的数据')!
+    expect(item().getAttribute('disabled')).not.toBeNull()
+
+    await grid.vm.$emit('update:selectedIds', ['e1', 'e2'])
+    await flushPromises()
+    expect(item().getAttribute('disabled')).toBeNull()
+
+    await item().dispatchEvent(new Event('click'))
+    await flushPromises()
+    expect(batch).toHaveBeenCalledWith('T1', ['e1', 'e2'])
+  })
+
+  it('正式表（state≠C）仍然不给勾选——删除门禁没变宽', async () => {
+    const { wrapper } = await mountTableMode('T1', 'AC')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
+    expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(false)
+  })
+})
+
 // 从网站汇总「按条件查源」的命中列表点进某个源（2026-09-09）：侧栏那一行写着「906 条」，
 // 进来看到的就得是那 906 条。条件走 store 不走 URL——本视图按 sourceId 做 key，源→源切换
 // 会销毁重建，用 query 传会撞上「旧实例抹掉 query、新实例读不到」的竞态。

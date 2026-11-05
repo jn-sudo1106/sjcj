@@ -15,6 +15,8 @@ export interface SourceTab {
 }
 
 export interface SourceTabSnapshot {
+  /** 从成功查询进入的搜索范围；各源页签独立关联，不随别的列表查询改写。 */
+  searchContextId?: string
   /** 源详情视图（0706 Phase4；0711 R11 加文件）：流程（默认）/ 数据 / 文件（仅源态）/ 任务（仅网站态） */
   view?: 'overview' | 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
   /** 网站页签内当前停留的编排对象（0710 会议 B3）：'site' = 统一流程模板，否则为源 sourceId；激活页签时恢复 */

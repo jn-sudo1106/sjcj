@@ -67,7 +67,7 @@ describe('菜单权限接线', () => {
     await router.isReady()
     const wrapper = mount(Settings, { global: { plugins: [router, ElementPlus] } })
     await flushPromises()
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['分类目录', '服务器', '处理机', '代码仓库', '部署配置', '运行日志', '程序版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['分类目录', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(wrapper.find('[data-testid="settings-category"]').exists()).toBe(true)
     expect(router.currentRoute.value.query).toEqual({})
   })
