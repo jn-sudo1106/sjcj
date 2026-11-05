@@ -1590,12 +1590,14 @@ defineExpose({ openLaunch, clearSelection, refresh })
           <ElOption v-for="s in siteFilterOptions" :key="s.siteId" :label="s.name" :value="s.siteId" />
         </ElSelect>
       </label>
-      <!-- 来源组筛选（1008-04）：只在源列表视图（groupOps）出现；不含「未归组」 -->
+      <!-- 来源组筛选（1008-04）：只在源列表视图（groupOps）出现；不含「未归组」。
+           1105 用户要求跟「网站」一样支持模糊搜索（组上百个，原生 select 只能滚）：
+           换成 ElSelect + filterable，样式沿用网站那个下拉（sov-site-select）。 -->
       <label v-if="crossSite && groupOps" class="sov-fl-group"><span class="sov-label-text">来源组</span>
-        <select v-model="sourceGroupFilter" data-testid="source-overview-group" @change="search">
-          <option value="">全部来源组</option>
-          <option v-for="g in sourceGroupOptions" :key="g.sourceGroupId" :value="g.sourceGroupId" :disabled="g.state !== 'ACTIVE'">{{ g.name }}</option>
-        </select>
+        <ElSelect v-model="sourceGroupFilter" class="sov-site-select" data-testid="source-overview-group" aria-label="来源组" filterable placeholder="全部来源组" no-match-text="没有匹配的来源组" @visible-change="(open: boolean) => { if (open) void loadSourceGroupOptions() }" @change="search">
+          <ElOption label="全部来源组" value="" />
+          <ElOption v-for="g in sourceGroupOptions" :key="g.sourceGroupId" :label="g.name" :value="g.sourceGroupId" :disabled="g.state !== 'ACTIVE'" />
+        </ElSelect>
       </label>
       <label class="sov-fl-state"><span class="sov-label-text">状态</span>
         <select v-model="statusFilter" data-testid="source-overview-state" @change="search">

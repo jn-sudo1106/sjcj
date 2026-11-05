@@ -1934,6 +1934,8 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
       { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006', revision: 2 },
       { sourceGroupId: '1', sourceGroupCode: 'test1', sourceGroupName: '测试组1', state: 'ACTIVE', flowIds: [], revision: 1 },
+      // 停用的组也要出现在筛选下拉里（不可选）：查历史成员的组还得能定位
+      { sourceGroupId: '9', sourceGroupCode: 'paused9', sourceGroupName: '停用组9', state: 'DISABLED', flowIds: [], revision: 1 },
     ])
     vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body, global: { plugins } })
@@ -2024,13 +2026,19 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     wrapper.unmount()
   })
 
-  it('来源组筛选：选组后查询带 sourceGroupId；不含「未归组」选项', async () => {
+  it('来源组筛选：下拉跟网站一样可模糊搜索（filterable），选组后查询带 sourceGroupId；不含「未归组」选项', async () => {
     const { wrapper, page } = await mountGroupOps()
-    const groupSelect = wrapper.find('[data-testid="source-overview-group"]')
+    const groupSelect = wrapper.findAllComponents({ name: 'ElSelect' }).find((c) => c.attributes('data-testid') === 'source-overview-group')!
     expect(groupSelect.exists()).toBe(true)
-    const options = groupSelect.findAll('option')
-    expect(options.map((o) => o.attributes('value'))).toEqual(['', '3', '1'])
-    await groupSelect.setValue('3')
+    // 1105 用户要求：组上百个，原生 select 只能滚，改成能输入关键字过滤的 ElSelect
+    expect(groupSelect.props('filterable')).toBe(true)
+    const options = groupSelect.findAllComponents({ name: 'ElOption' })
+    expect(options.map((o) => o.props('label'))).toEqual(['全部来源组', 'twitter1', '测试组1', '停用组9'])
+    expect(options.map((o) => o.props('value'))).toEqual(['', '3', '1', '9'])
+    // 停用的组仍列出来，但不可选
+    expect(options[3].props('disabled')).toBe(true)
+    groupSelect.vm.$emit('update:modelValue', '3')
+    groupSelect.vm.$emit('change', '3')
     await wrapper.find('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(page.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ sourceGroupId: '3' }))
