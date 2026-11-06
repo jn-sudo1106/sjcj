@@ -2360,8 +2360,10 @@ function onTestScript() {
 .rc-orchestration-tabs button { flex: 1; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted); font-size: 12px; cursor: pointer; }
 .rc-orchestration-tabs button.active { background: var(--rc-card); color: var(--rc-primary); font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / 6%); }
 .rc-orchestration-tabs button:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
-.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
-.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
+/* 字段名按「小标题」呈现（2026-11-05，1105 会议）：12px/600/#334155，层级向「参数配置」区块看齐；
+   四个 Tab 各自 scoped 覆盖了同一份规则（ConfigTab / TableTab / TaskTab / RuleOrchestrationTab），改这里记得同步。 */
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 14px; }
+.rc-field label { display: block; color: #334155; font-size: 12px; font-weight: 600; margin-bottom: 6px; letter-spacing: .01em; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-textarea { min-height: 74px; resize: vertical; line-height: 1.5; }

@@ -558,8 +558,10 @@ async function onTableSaved(tableId: string) {
 </template>
 
 <style scoped>
-.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
-.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
+/* 字段名按「小标题」呈现（2026-11-05，1105 会议）：12px/600/#334155，层级向「参数配置」区块看齐；
+   四个 Tab 各自 scoped 覆盖了同一份规则（ConfigTab / TableTab / TaskTab / RuleOrchestrationTab），改这里记得同步。 */
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 14px; }
+.rc-field label { display: block; color: #334155; font-size: 12px; font-weight: 600; margin-bottom: 6px; letter-spacing: .01em; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; font-family: inherit; resize: vertical; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-input[disabled] { background: #f8fafc; color: var(--rc-faint); }
