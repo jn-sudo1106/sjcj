@@ -765,3 +765,73 @@ describe('TableTab · 摘要/音视频/OCR 处理节点（与规则处理同一�
     wrapper.unmount()
   })
 })
+
+// 1106 W4（doc1 §3 出参收口三层回归的「界面层」）：出参列（OutContext）在任务配置出参入口
+// 去掉后只剩表配置这一个入口。既有用例覆盖勾选/回显/清空，这里补界面↔报文一致、未选输出表、
+// 历史未知列三种边界，防止「界面勾了但报文没带 / 界面没勾却写了几列」。
+describe('TableTab · 出参列边界与报文结构（1106 W4）', () => {
+  const OUT_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+
+  async function mountCollector(outColumns?: string[], outputTable = '2103330') {
+    mockAssets()
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [OUT_TABLE] })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(OUT_TABLE)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.inputTable = '2103330'
+    cfg.collectCfg!.outputTable = outputTable
+    cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), outColumns }
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+
+  function payloadOf(flow: ReturnType<typeof useFlowStore>) {
+    return stepToStepModifyPayload(mergeStepForWrite({
+      cfg: flow.configs['web-1'], nodeId: 'web-1', sourceId: '440043210',
+    }))
+  }
+
+  it('勾选出参列后保存报文：outContext 为物理列名逗号串，与界面勾选一致', async () => {
+    const { flow, wrapper } = await mountCollector([])
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[0].trigger('click') // title
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[2].trigger('click') // body
+    const payload = payloadOf(flow)
+    expect(typeof payload.outContext).toBe('string')
+    expect(String(payload.outContext).split(',')).toEqual(['K1', 'K3'])
+    expect(String(payload.outContext).split(',').every((col) => /^K\d+$/.test(col))).toBe(true)
+    expect(payload.outEntry).toBe(2103330)
+    // 报文回读成步骤模型后与界面勾选一致（界面层可回归断言）
+    expect(stepFromLegacy({ ...payload, itemConfig: 1 }, '440043210').outColumns).toEqual(['K1', 'K3'])
+    wrapper.unmount()
+  })
+
+  it('还没选输出表：不渲染出参选择区，保存报文也不写 outContext', async () => {
+    const { flow, wrapper } = await mountCollector(undefined, '')
+    expect(wrapper.find('[data-testid="output-fields-list"]').exists()).toBe(false)
+    expect(payloadOf(flow).outContext).toBeNull()
+    wrapper.unmount()
+  })
+
+  // 历史步骤的 outContext 可能是「旧输出表」的列名，当前只把能在本表解析到的列显示成勾选。
+  // 现状：不动 → 原样保留；任一勾选动作 → 按当前可见字段整体重写，解析不到的旧列被丢弃。
+  // 与输入侧「未知列保留、只有明确移除才删」不一致，口径待 R3 统一（本条先锁住现状防再变化）。
+  it('历史出参列含当前表里不存在的列：不动时保留；任一勾选动作按可见字段重写', async () => {
+    const { flow, wrapper } = await mountCollector(['K1', 'K9'])
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K9'])
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[0].trigger('click') // 取消 title
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual([])
+    wrapper.unmount()
+  })
+})
