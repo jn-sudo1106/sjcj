@@ -224,10 +224,16 @@ export function useDynamicTabs(options: UseDynamicTabsOptions = {}) {
   const currentComponent = computed<Component | undefined>(() => activeTab.value?.comp)
 
   // 5. 自动纠偏与 URL 规范化（避免手动输入不存在或未授权的 ?tab=xxx 停留在无效状态）
+  //
+  // 纠偏只作用于本页自己的地址：被 AppShell 的 KeepAlive 缓存下来的页面实例，它的 watch 不会随
+  // deactivate 停掉，若不加这层判断，它会在别的页面上用自己那份 tab 表把 ?tab= 改掉（数据同步点
+  // 页签「闪一下没切过去」就是这么来的）。
+  const ownPath = options.path ?? route?.path
   if (options.autoNormalizeQuery !== false && route && router) {
     watch(
       () => route?.query?.tab,
       (tab) => {
+        if (ownPath && route.path !== ownPath) return
         const activeKey = activeTab.value?.key
         if (!activeKey) return
 
