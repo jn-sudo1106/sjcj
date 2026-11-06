@@ -9,6 +9,7 @@ import {
   makeDefaultRuleOrchestration,
   makeDefaultExecConfig,
   type NodeConfig,
+  type FieldOption,
   type CollectConfig,
   type CollectorSchedule,
   type ConditionGroup,
@@ -147,6 +148,18 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
+  /**
+   * 只由**步骤保存**落库的任务字段（2026-11-04 F2 收口）。
+   * 节点配置保存只带 queue（payload 里是 topic，见 nodeConfigPayload），上下文来源/参数取值/
+   * 出参列只存在于步骤里（stepPersist 读 taskCfg.contextMap / outColumns）。
+   * 改这些字段必须让 flowRev 自增：步骤自动保存只 watch flowRev（useFlowAutosave.bind），
+   * 否则用户勾了输入字段就走人，什么都没落库。
+   */
+  const STEP_LEVEL_TASK_KEYS = ['contextMap', 'paramValues', 'outColumns']
+  function touchesStepLevelTask(patch: Partial<TaskConfig>): boolean {
+    return STEP_LEVEL_TASK_KEYS.some((key) => key in patch)
+  }
+
   function patchTaskConfig(id: string, patch: Partial<TaskConfig>) {
     const c = configs[id]
     if (!c) return
@@ -173,6 +186,8 @@ export const useNodeStore = defineStore('node', () => {
     const taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
     c.taskCfg = taskCfg
     touchConfig(id)
+    // 步骤级字段还要排进步骤自动保存，否则勾选只在内存里（F2 收口）。
+    if (touchesStepLevelTask(patch)) touchFlow()
   }
 
   function patchSchedule(id: string, patch: Partial<CollectorSchedule>) {
@@ -206,6 +221,8 @@ export const useNodeStore = defineStore('node', () => {
     if (!c.taskCfg) c.taskCfg = { queue: '', urlRule: '' }
     c.taskCfg.outColumns = unique
     touchConfig(id)
+    // 出参列同样只落在步骤的 outContext 上，改完要排进步骤自动保存。
+    touchFlow()
   }
 
   function setInputTable(id: string, tableId: string) {
@@ -217,18 +234,24 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
-  function setInputFields(id: string, fields: string[]) {
+  function setInputFields(id: string, fields: string[], options: FieldOption[] = []) {
     const c = configs[id]
     if (!c) return
     c.inputFields = [...new Set(fields.filter(Boolean))]
-    touchConfig(id)
+    const columns = new Map(options.map((field) => [field.prop, field.columnName || field.prop]))
+    patchTaskConfig(id, { contextMap: c.inputFields.map((prop) => columns.get(prop) ?? prop) })
   }
 
   function resetInputFields(id: string) {
     const c = configs[id]
     if (!c) return
     delete c.inputFields
+    // 换输入表/清空勾选后必须把 context 落成「显式空」（[]），不能只删 inputFields：
+    // mergeStepForWrite 的兜底是 `cfg.taskCfg?.contextMap ?? snapshot?.contextMap`，键一删就会
+    // 回退到旧步骤快照里的列，把上一张表的 K 列写进新表步骤（2026-11-04 F2 收口）。
+    if (c.taskCfg) c.taskCfg.contextMap = []
     touchConfig(id)
+    touchFlow()
   }
 
   function setTaskQueue(id: string, value: string) {

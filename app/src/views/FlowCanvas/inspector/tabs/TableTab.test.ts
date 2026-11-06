@@ -14,6 +14,8 @@ import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType, RuleOrchestration } from '@/api'
+import { mergeStepForWrite } from '@/utils/flow/stepPersist'
+import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 
 const INPUT_TABLE: EntryType = {
   tableId: '2102154', tableName: 'sense_data.TB_JD_SKU_BASE', name: 'JD-商品基础',
@@ -34,6 +36,129 @@ function mockAssets() {
 
 afterEach(() => vi.restoreAllMocks())
 
+describe('TableTab · 任务输入字段选择', () => {
+  const table: EntryType = {
+    tableId: '900', tableName: 'TB_INPUT', fields: [
+      { prop: 'title-K1', desc: '标题', type: 'string', required: false, columnName: 'K1', itemId: '9001' },
+      { prop: 'url-K2', desc: '详情链接', type: 'url', required: false, columnName: 'K2', itemId: '9002' },
+    ],
+  }
+  async function open(contextMap?: string[]) {
+    mockAssets()
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(table)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['first'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.configs.first.collectCfg!.outputTable = '900'
+    const cfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    cfg.collectCfg!.inputTable = '900'
+    cfg.collectCfg!.outputTable = '900'
+    cfg.taskCfg = { queue: '', urlRule: '', contextMap, outColumns: ['K1'] }
+    flow.configs['8914101'] = cfg
+    flow.main = ['start', 'first', '8914101', 'end']
+    flow.select('8914101')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+
+  it('回显物理列、不写默认值，也不因打开页面标记修改', async () => {
+    const { flow, wrapper } = await open(['K2'])
+    flow.markSaved()
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="input-fields-list"] .rc-tag.on').map((tag) => tag.text())).toHaveLength(1)
+    expect(flow.dirty).toBe(false)
+    expect(flow.configs['8914101'].inputFields).toBeUndefined()
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K2'])
+    wrapper.unmount()
+  })
+
+  it('勾选输入字段写入 context 物理列，保存回读不丢勾选', async () => {
+    const { flow, wrapper } = await open()
+    await wrapper.get('[data-testid="select-all-input-fields"]').trigger('click')
+    const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg?.contextMap).toEqual(['K1', 'K2'])
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '440043210' }))
+    expect(payload).toMatchObject({ context: 'K1,K2', outContext: 'K1' })
+    const saved = stepFromLegacy({ ...payload, itemConfig: 8914101 }, '440043210')
+    cfg.taskCfg!.contextMap = saved.contextMap
+    delete cfg.inputFields
+    flow.setActiveTab('task')
+    await flushPromises()
+    flow.setActiveTab('table')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="input-fields-list"] .rc-tag.on')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('未知输入列在修改其他字段时保留，只有明确移除才删除', async () => {
+    const { flow, wrapper } = await open(['K2', 'K99'])
+    expect(wrapper.get('[data-testid="unknown-input-fields"]').text()).toContain('K99')
+    await wrapper.get('[data-testid="select-all-input-fields"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K1', 'K2', 'K99'])
+    await wrapper.get('[aria-label="移除输入字段 K99"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K1', 'K2'])
+    wrapper.unmount()
+  })
+
+  it('换表前保留旧表及字段，避免相同 K 列错误关联', async () => {
+    const { flow, wrapper } = await open(['K2'])
+    const select = wrapper.get('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
+    select.vm.$emit('update:modelValue', '901')
+    await flushPromises()
+    expect(flow.configs['8914101'].collectCfg?.inputTable).toBe('900')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K2'])
+    expect(wrapper.get('[data-testid="input-reference-warning"]').text()).toContain('再切换输入表')
+    wrapper.unmount()
+  })
+
+  it('勾选输入字段 / 出参列会排进步骤自动保存（flowRev 自增）', async () => {
+    const { flow, wrapper } = await open(['K2'])
+    flow.markSaved()
+    await flushPromises()
+    const rev = flow.flowRev
+    await wrapper.get('[data-testid="select-all-input-fields"]').trigger('click')
+    // 步骤自动保存只 watch flowRev（useFlowAutosave.bind）；不 touchFlow 就只是内存里改了，
+    // 用户勾完直接离开画布什么都不落库——2026-11-04 F2 收口修的就是这条。
+    expect(flow.flowRev).toBeGreaterThan(rev)
+    expect(flow.dirty).toBe(true)
+
+    const revAfterInput = flow.flowRev
+    await wrapper.get('[data-testid="select-all-fields"]').trigger('click')
+    expect(flow.flowRev).toBeGreaterThan(revAfterInput)
+    wrapper.unmount()
+  })
+
+  it('未指定与明确清空分开提示，不把空勾选一律当「没有输入字段」', async () => {
+    const { flow, wrapper } = await open(undefined)
+    const hint = () => wrapper.get('[data-testid="input-fields-state-hint"]').text()
+    expect(hint()).toContain('未指定输入字段')
+    expect(wrapper.text()).toContain('输入字段选择（未指定）')
+
+    await wrapper.get('[data-testid="clear-all-input-fields"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual([])
+    expect(hint()).toContain('已清空输入字段')
+    expect(wrapper.text()).toContain('输入字段选择（已选中 0 / 2 个字段）')
+    wrapper.unmount()
+  })
+
+  it('换输入表清空勾选时把 context 落成显式空，不回退到旧步骤快照', async () => {
+    const { flow, wrapper } = await open([])
+    const select = wrapper.get('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
+    select.vm.$emit('update:modelValue', '')
+    await flushPromises()
+    const cfg = flow.configs['8914101']
+    expect(cfg.inputFields).toBeUndefined()
+    // 键不能删：mergeStepForWrite 的兜底是 `contextMap ?? snapshot?.contextMap`，
+    // 删键会回退到旧表的列（旧表 K 列写进新表步骤）。
+    expect(cfg.taskCfg?.contextMap).toEqual([])
+    expect(stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '440043210' })).context).toBeNull()
+    wrapper.unmount()
+  })
+})
+
 function mountOnRuleNode() {
   setActivePinia(createPinia())
   const flow = useFlowStore()
@@ -45,6 +170,24 @@ function mountOnRuleNode() {
 }
 
 describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置搬回）', () => {
+  it('规则 itemId 不阻断换输入表（访问地址用途已从表配置撤回）', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    const cfg = flow.configs['rule-1']
+    cfg.itemId = '9002'
+    flow.patchRuleConfig('rule-1', { inputTableId: INPUT_TABLE.tableId, inputFields: ['sku_id'] })
+    flow.setInputTable('rule-1', INPUT_TABLE.tableId)
+    cfg.taskCfg = { queue: '', urlRule: '', contextMap: ['K1'] }
+    await flushPromises()
+    const binder = wrapper.findComponent(RuleTableFieldBinder)
+    binder.vm.$emit('update:modelValue', { inputFields: [] })
+    await flushPromises()
+    binder.vm.$emit('update:modelValue', { inputTableId: '901', inputFields: [] })
+    await flushPromises()
+    expect(cfg.ruleCfg?.inputTableId).toBe('901')
+    expect(cfg.itemId).toBe('9002')
+    wrapper.unmount()
+  })
   it('展示表/字段绑定表单，不再有「保存并配置编排」按钮', async () => {
     mockAssets()
     const { wrapper } = mountOnRuleNode()
@@ -139,7 +282,7 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     await flushPromises()
     const shown = () => wrapper.get('[data-testid="input-fields-list"]').findAll('.rc-tag').map((t) => t.text())
 
-    // 默认全选：两个都在，没有切换按钮
+    // 未显式选择时展示全部候选，不出切换按钮
     expect(shown()).toHaveLength(2)
     expect(wrapper.find('[data-testid="toggle-only-selected-input-fields"]').exists()).toBe(false)
 
@@ -159,7 +302,7 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(wrapper.find('[data-testid="toggle-only-selected-input-fields"]').exists()).toBe(false)
   })
 
-  it('非规则节点：表配置展示输入表/输入字段，默认全选且切换表后恢复默认', async () => {
+  it('非规则节点：输入字段写入 context，清空引用后才能换表', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnCollectorNode()
     flow.patchCollect('web-1', { inputTable: INPUT_TABLE.tableId })
@@ -171,7 +314,8 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(flow.configs['web-1'].inputFields).toEqual([])
     await wrapper.find('[data-testid="select-all-input-fields"]').trigger('click')
     expect(flow.configs['web-1'].inputFields).toEqual(['sku_id', 'sku_name'])
-    // 输入表下拉 0902 改成 el-select（原生 <select> 换成可搜索的），清空走 update:model-value
+    await wrapper.find('[data-testid="clear-all-input-fields"]').trigger('click')
+    // 清空字段后允许改表，保留显式空 context
     const inputTableSelect = wrapper.find('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
     await inputTableSelect.vm.$emit('update:modelValue', '')
     await flushPromises()

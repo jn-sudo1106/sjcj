@@ -138,7 +138,7 @@ export interface NodeConfig {
   coreParam?: string
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable?: string
-  /** 表配置中已选的输入字段；未设置时默认使用输入表全部字段。 */
+  /** 旧草稿输入字段代码；编辑时派生自 taskCfg.contextMap，持久化及回显以 context 为准。 */
   inputFields?: string[]
   /** 节点进入条件：语义为本节点只处理满足条件的输入表行 */
   entryCondition?: ConditionGroup

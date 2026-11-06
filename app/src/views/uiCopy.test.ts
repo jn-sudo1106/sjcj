@@ -380,20 +380,35 @@ describe('最新方案 UI 入口收口', () => {
     expect(taskTab).not.toContain('isFirstDataNode')
   })
 
-  // 上下文来源 2026-08-28 对齐旧平台（W4-2）：多选下拉取代"每行一个 select + 添加/删除"，
-  // 行为细节（候选不过滤 / 文案 / 存 columnName）由 tabs/TaskTab.test.ts 实测锁定，这里只守 UI 形态。
-  it('上下文来源是多选下拉，不再有逐行添加/删除', () => {
-    expect(taskTab).toContain('data-testid="context-map-select"')
-    expect(taskTab).toContain('multiple')
+  // 输入字段（旧「上下文来源」）2026-11-04 起融合进表配置（F2-A2）：任务页只读同一份输入选择，
+  // 勾选入口在 TableTab 的 input-fields-list；行为细节由 tabs/TaskTab.test.ts 与 TableTab 用例锁定。
+  it('输入字段勾选只在表配置，任务配置不再有独立上下文多选', () => {
+    expect(tableTab).toContain('data-testid="input-fields-list"')
+    expect(taskTab).not.toContain('data-testid="context-map-select"')
     expect(taskTab).not.toContain('addTaskField')
     expect(taskTab).not.toContain('removeTaskField')
     expect(taskTab).not.toContain('+ 添加字段')
   })
 
-  // 出参列内部区块与任务参数取值同属任务配置。
-  it('任务配置包含参数绑定与出参列区块', () => {
+  // 2026-11-05 用户要求（原话「先调整任务URL，撤销之前和表结构字段绑定，恢复之前的功能，放在任务配置列表」）：
+  // 任务 URL 的来源字段/表达式不再挂在表配置的输入字段「访问地址用途」上，回到任务配置 Tab，仍落步骤 itemId/stepUrl。
+  // 行为细节由 tabs/TaskTab.test.ts 的「任务 URL 来源字段与表达式」用例锁定，这里只守归属与形态。
+  it('任务 URL 来源字段与表达式回到任务配置，表配置不再有访问地址用途', () => {
+    expect(taskTab).toContain('data-testid="task-url-toggle"')
+    expect(taskTab).toContain('data-testid="task-url-source"')
+    expect(taskTab).toContain('data-testid="task-url-expr"')
+    expect(taskTab).toContain('任务 URL（来源字段 / 表达式）')
+    expect(tableTab).not.toContain('field-url-action')
+    expect(tableTab).not.toContain('TaskUrlExpression')
+    expect(tableTab).not.toContain('input-url-settings')
+    expect(configTab).not.toContain('data-testid="task-url-toggle"')
+  })
+
+  // 出参列（OutContext）2026-11-04 起只在表配置维护：任务配置保留参数绑定，不再有重复编辑区（F2-A1）。
+  it('任务配置保留参数绑定，输出字段只在表配置编辑', () => {
     expect(taskTab).toMatch(/<ParamsTab\b[^>]*:template-defaults=/)
-    expect(paramsTab).toContain('<label>出参列</label>')
+    expect(paramsTab).not.toContain('<label>出参列</label>')
+    expect(tableTab).toContain('data-testid="output-fields-list"')
     expect(nodeInspector).not.toContain("tab === 'params'")
   })
 

@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
 import { ElMessage } from 'element-plus'
 import { flowVersionApi, itemApi, sourceApi, type FlowVersionOverview } from '@/api'
+import { stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { FLOW_AUTOSAVE_MS, FLOW_AUTOSAVE_RETRY_BASE_MS, resetFlowAutosaveForTests, useFlowAutosave } from './useFlowAutosave'
@@ -116,6 +117,22 @@ describe('useFlowAutosave', () => {
     expect(savedClock.value).toMatch(/^\d{2}:\d{2}$/)
     expect(flow.flowDirty).toBe(false)
     expect(flow.configDirty).toBe(true)
+    unbind()
+  })
+
+  it('勾选输入字段（contextMap）本身就会排进步骤自动保存，不必先改地址或手动保存', async () => {
+    const flow = loadTestSource()
+    const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const { bind, unbind } = useFlowAutosave()
+    bind()
+    // 表配置勾选墙走的就是这一条：TableTab.writeInputFields → flow.setInputFields → patchTaskConfig(contextMap)
+    flow.setInputFields('40600', ['标题'], [{ prop: '标题', desc: '标题', columnName: 'K1' }])
+    await flushPromises()
+    expect(modify).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
+    expect(modify).toHaveBeenCalledTimes(1)
+    // 真实请求体由 stepToStepModifyPayload 生成（mock 拦在它外面），这里校验落到后端的 context。
+    expect(stepToStepModifyPayload(modify.mock.calls[0][0]).context).toBe('K1')
     unbind()
   })
 

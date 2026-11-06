@@ -1,5 +1,6 @@
 import type { ConditionGroup, FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { RuleOrchestration } from '@/api/types/rule'
+import { inputFieldTokens } from '@/utils/flow/inputFieldSelection'
 
 export function xmlEscape(value: string): string {
   return value
@@ -128,12 +129,15 @@ function nodeXml(id: string, cfg: NodeConfig): string[] {
   }
 
   const table = { outputTable: cfg.outputTable, inputTable: cfg.inputTable, dedupMode: cfg.dedupMode, ...cfg.outputAdvanced }
-  const hasFieldSelection = (cfg.outFields?.length ?? 0) > 0 || (cfg.inputFields?.length ?? 0) > 0
+  // 入参以 taskCfg.contextMap 为准（2026-11-04 F2 收口）：只读 cfg.inputFields 会让导出的 XML
+  // 与真正保存到步骤里的 context 不同源——界面上勾好的字段不在导出文件里，反之亦然。
+  const inputFieldIds = inputFieldTokens(cfg)
+  const hasFieldSelection = (cfg.outFields?.length ?? 0) > 0 || inputFieldIds.length > 0
   if (Object.values(table).some((value) => value !== undefined) || cfg.inmap.length || cfg.output.length || hasFieldSelection) {
     lines.push(line(3, `<table${attrs(table)}>`))
     lines.push(...cfg.inmap.map((mapping) => line(4, `<input${attrs(mapping)} />`)))
     lines.push(...cfg.output.map((field) => line(4, `<output${attrs(field)} />`)))
-    lines.push(...(cfg.inputFields ?? []).map((fieldId) => line(4, `<inField${attrs({ id: fieldId })} />`)))
+    lines.push(...inputFieldIds.map((fieldId) => line(4, `<inField${attrs({ id: fieldId })} />`)))
     lines.push(...(cfg.outFields ?? []).map((fieldId) => line(4, `<outField${attrs({ id: fieldId })} />`)))
     lines.push(line(3, '</table>'))
   }

@@ -19,9 +19,6 @@ import TaskScheduleSettings from '../TaskScheduleSettings.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import EditNodeSourceDialog from '../EditNodeSourceDialog.vue'
-import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
-import { taskUrlFieldsApply, taskUrlSourceMissing, type TaskUrlScope } from '@/utils/flow/stepPersist'
-import { useSourceStore } from '@/stores/source'
 import CodeGenerationSwitch from '../CodeGenerationSwitch.vue'
 
 // 参数源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
@@ -51,35 +48,6 @@ const currentNodeType = computed(() => {
   return nodeTypeLabel(cfg.value) || nodeCapability.value?.label || '—'
 })
 const isLoginNode = computed(() => nodeCapability.value?.kind === 'login')
-
-// ---- 任务 URL 来源字段 / 规则表达式（2026-10-19 按旧平台 SourceStepCard 恢复编辑）----
-// 0804 当时删的是 urlSourceField / urlRule，那两个字段从没对上过后端；真值在步骤的 itemId / url 上，
-// 而且有 `K2+'#need_upload_xq/xq/'` 这种拼标记给采集端用的写法，不只是带参数。
-// 适用范围见 stepPersist 的 taskUrlFieldsApply（2026-10-21 对齐旧平台：采集类后续步含 PDF；首节点、规则类不显示）。
-// 两项都落在步骤上，随画布自动保存。来源字段旧平台必填，新平台 10-21 定先不强制：没选只提示、照常保存。
-const { tables, ensureTableFields } = useNodeInspectorAssets()
-const sourceStore = useSourceStore()
-const taskUrlScope = computed<TaskUrlScope>(() => ({ main: flow.main, branches: flow.branches, configs: flow.configs, branchGroups: flow.branchGroups }))
-const taskUrlInputTable = computed(() => (id.value ? flow.effectiveInputTableFor(id.value) : ''))
-const showTaskUrl = computed(() => !!id.value && taskUrlFieldsApply(taskUrlScope.value, id.value, sourceStore.stepSnapshots[id.value]))
-const taskUrlSourceUnset = computed(() => !!id.value && taskUrlSourceMissing(taskUrlScope.value, id.value, sourceStore.stepSnapshots[id.value]))
-// 跟「运行设置」一样默认收起（用户 10-21），切节点回到收起
-const taskUrlOpen = ref(false)
-watch(id, () => { taskUrlOpen.value = false })
-watch(() => (showTaskUrl.value ? taskUrlInputTable.value : ''), (tableId) => { if (tableId) ensureTableFields(tableId) }, { immediate: true })
-const taskUrlFieldOptions = computed(() => (tables.value.find((t) => t.tableId === taskUrlInputTable.value)?.fields ?? [])
-  .filter((f) => !!f.itemId)
-  .map((f) => ({ value: String(f.itemId), label: `${f.desc || f.prop}${f.columnName ? `（${f.columnName}）` : ''}` })))
-/** -1 是旧平台「未选」的占位 */
-const taskUrlSourceValue = computed(() => (cfg.value?.itemId && cfg.value.itemId !== '-1' ? cfg.value.itemId : ''))
-const unknownTaskUrlSource = computed(() => (taskUrlSourceValue.value && !taskUrlFieldOptions.value.some((o) => o.value === taskUrlSourceValue.value)
-  ? taskUrlSourceValue.value : ''))
-function onTaskUrlSource(e: Event) {
-  flow.setTaskUrlSourceField(id.value, (e.target as HTMLSelectElement).value)
-}
-function onStepUrl(e: Event) {
-  flow.setStepUrl(id.value, (e.target as HTMLInputElement).value)
-}
 
 // 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）
 const runtimeSettings = computed<CollectorRuntimeSettings>(() => {
@@ -534,33 +502,6 @@ watch(
   <!-- 运行策略（config.runPolicy）已迁到 RuntimePolicySummary.vue，2026-08-31 先不在节点配置展示。 -->
 
   <!-- 非采集非规则（且非规则式节点）：基础字段 / 参数 / 试跑信息 -->
-  <!-- 任务 URL（2026-10-19 恢复、10-21 对齐旧平台）：采集类后续步含 PDF，放在采集表单外面，见脚本注释 -->
-  <div v-if="showTaskUrl" class="tu-wrap">
-    <button class="tu-toggle" type="button" data-testid="task-url-toggle" @click="taskUrlOpen = !taskUrlOpen">
-      {{ taskUrlOpen ? '▾' : '▸' }} 任务 URL（来源字段 / 表达式）<span v-if="taskUrlSourceUnset" class="task-url-unset">· 来源字段未选</span>
-    </button>
-    <div v-if="taskUrlOpen" class="tu-body">
-      <div class="rc-field"><label>任务 URL 来源字段（来自输入表）</label>
-        <select class="rc-select" :value="taskUrlSourceValue" data-testid="task-url-source" aria-label="任务 URL 来源字段" @change="onTaskUrlSource">
-          <option value="">未选择</option>
-          <option v-for="opt in taskUrlFieldOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          <option v-if="unknownTaskUrlSource" :value="unknownTaskUrlSource">#{{ unknownTaskUrlSource }}（输入表里没找到这个字段）</option>
-        </select>
-        <div v-if="taskUrlSourceUnset" class="rc-help task-url-unset" data-testid="task-url-source-unset">未选来源字段：$VAL$ 取不到值，下游任务可能没有 URL</div>
-      </div>
-      <div class="rc-field"><label>任务 URL 规则表达式</label>
-        <input
-          class="rc-input"
-          :value="cfg?.stepUrl || '$VAL$'"
-          placeholder="例如：$VAL$ 或 K2+'#need_upload_xq/xq/'"
-          aria-label="任务 URL 规则表达式"
-          data-testid="task-url-expr"
-          @change="onStepUrl"
-        />
-        <div class="rc-help">默认 $VAL$ 从来源字段取值，支持系统动态函数与字符串拼接；留空保存为 $VAL$。</div>
-      </div>
-    </div>
-  </div>
   <template v-if="!props.templateDefaults && !cc && !isRuleLike">
     <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
 
@@ -607,12 +548,6 @@ watch(
 
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
-.task-url-unset { color: var(--rc-warn); }
-/* 与 CollectorSettings 的「运行设置」折叠项同款 */
-.tu-wrap { margin-top: 4px; margin-bottom: 10px; }
-.tu-toggle { display: block; border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
-.tu-toggle:hover { color: var(--rc-primary-ink); }
-.tu-body { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rc-border-soft); }
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-textarea { min-height: 74px; resize: vertical; line-height: 1.5; }

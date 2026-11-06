@@ -21,6 +21,8 @@ import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
+import { inputFieldSelection, inputFieldTokens } from '@/utils/flow/inputFieldSelection'
+import MultiTableOutputEditor from '../MultiTableOutputEditor.vue'
 
 const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
@@ -29,6 +31,20 @@ const { tables, ensureTableFields } = useNodeInspectorAssets()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const cc = computed(() => cfg.value?.collectCfg)
+const inputReferenceWarning = ref('')
+watch(id, () => { inputReferenceWarning.value = '' })
+
+function inputTableChangeAllowed(tableId: string) {
+  const current = flow.effectiveInputTableFor(id.value)
+  if (tableId === current) return true
+  const hasFields = inputFieldTokens(cfg.value).length || cfg.value?.taskCfg?.contextMap?.length
+  if (hasFields) {
+    inputReferenceWarning.value = '请先清除已选输入字段，再切换输入表，避免原字段绑定到新表。'
+    return false
+  }
+  inputReferenceWarning.value = ''
+  return true
+}
 
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
@@ -48,10 +64,17 @@ const ruleCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
   name: cfg.value?.title ?? '',
 }))
-function patchRule(p: Partial<RuleOrchestration>) {
+function patchRule(p: Partial<RuleOrchestration>, restoring = false) {
+  if (p.inputTableId !== undefined && !inputTableChangeAllowed(p.inputTableId)) return
   // 规则处理写 ruleCfg；其余规则式节点写 execCfg（共用同一个绑定组件，落点按节点类型分）
   if (isRule.value) flow.patchRuleConfig(id.value, p)
   else flow.patchExecConfig(id.value, p)
+  // 用户清空后不再用旧 context 恢复勾选，也不能在换表时将旧 K 列套进新表。
+  // 只读回显保持旧 token，不在元数据加载时改写持久化字段。
+  if (p.inputFields && !restoring) {
+    const columns = new Map(inputFieldOptions.value.map((field) => [field.itemCode, field.columnName || field.itemCode]))
+    flow.patchTaskConfig(id.value, { contextMap: p.inputFields.map((code) => columns.get(code) ?? code) })
+  }
   if (p.inputTableId !== undefined) flow.setInputTable(id.value, p.inputTableId)
   if (p.outputTableId !== undefined) flow.setOutputTable(id.value, p.outputTableId)
 }
@@ -96,12 +119,13 @@ watch(
       const outputFields = restoreFieldsFromColumns(ruleCfg.value.outputFields, outColumns, outOpts)
       if (outputFields) patch.outputFields = outputFields
     }
-    if (Object.keys(patch).length) patchRule(patch)
+    if (Object.keys(patch).length) patchRule(patch, true)
   },
   { immediate: true },
 )
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
+const showMultiTableOutput = computed(() => !!cc.value && nodeCapability.value?.kind !== 'login' && nodeCapability.value?.outputMode !== 'fixed')
 
 // ---- 非规则节点：统一输入表/输入字段配置（0806） ----
 const ownInputTableId = computed(() => cc.value?.inputTable || cfg.value?.inputTable || '')
@@ -114,11 +138,8 @@ watch(inputTableId, (tid) => ensureTableFields(tid), { immediate: true })
 const inputTableFields = computed(() => inputTableId.value
   ? fieldOptionsFromTableOrOutput(inputTableId.value, tables.value, cfg.value?.output)
   : [])
-const savedInputFields = computed<string[] | undefined>(() => cfg.value?.inputFields)
-const selectedInputFieldProps = computed<string[]>(() => {
-  const allProps = inputTableFields.value.map((f) => f.prop)
-  return savedInputFields.value === undefined ? allProps : savedInputFields.value
-})
+const inputSelection = computed(() => inputFieldSelection(cfg.value, inputTableFields.value))
+const selectedInputFieldProps = computed(() => inputSelection.value.selected)
 function isInputFieldSelected(prop: string): boolean {
   return selectedInputFieldProps.value.includes(prop)
 }
@@ -126,7 +147,10 @@ function toggleInputField(prop: string) {
   const current = new Set(selectedInputFieldProps.value)
   if (current.has(prop)) current.delete(prop)
   else current.add(prop)
-  flow.setInputFields(id.value, [...current])
+  writeInputFields([...current, ...inputSelection.value.unknown])
+}
+function writeInputFields(fields: string[]) {
+  flow.setInputFields(id.value, fields, inputTableFields.value)
 }
 /**
  * 只看已选（2026-09-23，用户：「字段确实有点多」）。默认开：勾选墙只铺已选的字段。
@@ -138,12 +162,23 @@ const inputPartiallySelected = computed(() =>
 const visibleInputFields = computed(() => (inputOnlySelected.value && inputPartiallySelected.value
   ? inputTableFields.value.filter((f) => isInputFieldSelected(f.prop))
   : inputTableFields.value))
+/**
+ * 空勾选有两种语义（2026-11-04 F2 收口）：未指定＝保存时沿用旧 context；明确清空＝落 null。
+ * 展示成一个空墙，用户分不出来，所以按 `inputSelection.specified` 给不同提示。
+ */
+const inputFieldsHint = computed(() => {
+  const { selected, unknown, specified } = inputSelection.value
+  if (!specified) return '未指定输入字段：保存时沿用该步骤原有的上下文来源；勾选后按勾选传递。'
+  if (!selected.length && !unknown.length) return '已清空输入字段：保存后该步骤的上下文来源为空，不再沿用旧列。'
+  return '勾选字段随任务传递，按勾选顺序写入 context。'
+})
 function selectAllInputFields() {
-  flow.setInputFields(id.value, inputTableFields.value.map((f) => f.prop))
+  writeInputFields([...inputTableFields.value.map((f) => f.prop), ...inputSelection.value.unknown])
 }
 function clearAllInputFields() {
-  flow.setInputFields(id.value, [])
+  writeInputFields([])
 }
+
 // 表下拉支持输入搜索（0902）：生产表数量远超一屏，useNodeInspectorAssets 只预加载 100 张，
 // 覆盖不了长尾——下拉里翻不到就以为表不存在。跟规则节点的表绑定（RuleTableFieldBinder.vue）
 // 同一套做法：el-select filterable remote，按关键字查 entryApi.entryPaged，不再只认预加载列表。
@@ -201,6 +236,7 @@ function onInputTableVisible(open: boolean) {
 }
 function onInputTableId(value: string | undefined | null) {
   const v = value ?? ''
+  if (!inputTableChangeAllowed(v)) return
   if (cc.value) flow.patchCollect(id.value, { inputTable: v })
   else flow.setInputTable(id.value, v)
   flow.resetInputFields(id.value)
@@ -239,7 +275,7 @@ const DEFAULT_PRESET_TABLES = [
 const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
 // 输出字段选择（2026-10-10 恢复）：就是旧平台步骤编辑里的「出参列 (OutContext)」，
-// 落 taskCfg.outColumns → 步骤 outContext，与「任务配置 → 出参列」是同一份数据。
+// 落 taskCfg.outColumns → 步骤 outContext，作为统一编辑入口；任务配置不再重复提供出参列。
 // 口径跟旧平台：空 = 默认全部字段。后端存物理列名（K1…），这里按字段展示：
 // 读时列名 / 字段名都认，写时换回列名（表里没有列名才写字段名）。
 watch(nodeTableId, (tid) => ensureTableFields(tid), { immediate: true })
@@ -339,6 +375,7 @@ async function onTableSaved(tableId: string) {
 </script>
 
 <template>
+  <div v-if="inputReferenceWarning" class="rc-help input-field-warning" role="status" data-testid="input-reference-warning">{{ inputReferenceWarning }}</div>
   <template v-if="ruleStyled">
     <RuleTableFieldBinder
       :model-value="ruleCfg"
@@ -370,7 +407,7 @@ async function onTableSaved(tableId: string) {
       </div>
       <div v-if="inputTableFields.length" class="rc-field">
         <div class="rc-field-header">
-          <label>输入字段选择（已选中 {{ selectedInputFieldProps.length }} / {{ inputTableFields.length }} 个字段，默认包含全部字段）</label>
+          <label>输入字段选择（{{ inputSelection.specified ? `已选中 ${selectedInputFieldProps.length} / ${inputTableFields.length} 个字段` : '未指定' }}）</label>
           <div class="rc-field-actions">
             <button v-if="inputPartiallySelected" type="button" class="rc-text-btn" data-testid="toggle-only-selected-input-fields" @click="inputOnlySelected = !inputOnlySelected">{{ inputOnlySelected ? `显示全部 ${inputTableFields.length} 个` : '只看已选' }}</button>
             <button type="button" class="rc-text-btn" data-testid="select-all-input-fields" @click="selectAllInputFields">全选</button>
@@ -385,10 +422,18 @@ async function onTableSaved(tableId: string) {
             :class="{ on: isInputFieldSelected(f.prop) }"
             @click="toggleInputField(f.prop)"
           >
-            <input type="checkbox" :checked="isInputFieldSelected(f.prop)" class="rc-tag-check" @click.stop="toggleInputField(f.prop)" />
+            <input type="checkbox" :checked="isInputFieldSelected(f.prop)" :aria-label="`选择输入字段 ${f.desc || f.prop}`" class="rc-tag-check" @click.stop="toggleInputField(f.prop)" />
             <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
           </span>
         </div>
+        <div class="rc-help" data-testid="input-fields-state-hint">{{ inputFieldsHint }}</div>
+      </div>
+      <div v-if="inputSelection.unknown.length" class="rc-help input-field-warning" data-testid="unknown-input-fields">
+        {{ inputTableFields.length ? '未找到的输入字段' : '待解析的输入字段' }}：
+        <span v-for="token in inputSelection.unknown" :key="token" class="unknown-input-field">
+          {{ token }}
+          <button type="button" class="rc-text-btn" :aria-label="`移除输入字段 ${token}`" @click="writeInputFields([...selectedInputFieldProps, ...inputSelection.unknown.filter((item) => item !== token)])">移除</button>
+        </span>
       </div>
     </template>
     <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
@@ -449,6 +494,11 @@ async function onTableSaved(tableId: string) {
       </div>
       <div class="rc-help">即旧平台的「出参列 (OutContext)」：勾选的字段传给后续步骤；不选默认全部字段。</div>
     </div>
+    <MultiTableOutputEditor
+      v-if="showMultiTableOutput" :key="id"
+      :model-value="structuredConfigValue" :main-table-id="nodeTableId" :tables="tables"
+      @update:model-value="flow.setStructuredConfig(id, $event)"
+    />
     <div class="rc-field">
       <label>去重方式</label>
       <div class="rc-segment" data-testid="table-dedup-segment">
@@ -472,7 +522,14 @@ async function onTableSaved(tableId: string) {
     <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
          **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->
-    <div class="rc-field">
+    <details v-if="showMultiTableOutput" class="table-advanced">
+      <summary>高级配置</summary>
+      <div class="rc-field">
+        <label>结构化配置</label>
+        <textarea class="rc-input" rows="3" placeholder='{"globals":["列ID"]}' :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
+      </div>
+    </details>
+    <div v-else class="rc-field">
       <label><span>结构化配置</span></label>
       <textarea class="rc-input" rows="2" placeholder='{"globals":["列ID"]}' :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
     </div>
@@ -585,4 +642,8 @@ async function onTableSaved(tableId: string) {
 .rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
 .rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
+.input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }
+.unknown-input-field { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 8px; }
+.table-advanced { margin: 10px 0; color: var(--rc-muted); font-size: 11px; }
+.table-advanced summary { cursor: pointer; margin-bottom: 8px; }
 </style>

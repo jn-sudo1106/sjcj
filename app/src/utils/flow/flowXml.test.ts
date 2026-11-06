@@ -133,4 +133,19 @@ describe('flowXml', () => {
     expect(xml).toContain('<exec mode="new" format="xml">')
     expect(xml).toContain('<script>&lt;config&gt;&lt;url&gt;x&lt;/url&gt;&lt;/config&gt;</script>')
   })
+
+  it('导出 <inField> 跟步骤 context 同源：有 contextMap 就按它，旧草稿才退回 inputFields', () => {
+    const def = flowFixture()
+    const cfg = def.configs['web-list']!
+    // 普通节点的持久化真值是 taskCfg.contextMap（物理列名）；cfg.inputFields 是旧草稿位。
+    cfg.taskCfg = { queue: '', urlRule: '', contextMap: ['K2'] }
+    cfg.inputFields = ['legacy-draft']
+    const xml = flowToXml(def)
+    expect(xml).toContain('<inField id="K2" />')
+    expect(xml).not.toContain('<inField id="legacy-draft" />')
+
+    // 没有 contextMap 的老数据仍按 inputFields 导出，保证 XML 往返不丢字段
+    cfg.taskCfg = { queue: '', urlRule: '' }
+    expect(flowToXml(def)).toContain('<inField id="legacy-draft" />')
+  })
 })

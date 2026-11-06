@@ -1,19 +1,23 @@
 <script setup lang="ts">
 // 任务配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：有效输入表摘要 → 进入条件 → 队列名称 → 参数绑定与出参列 → 任务参数取值 → 上下文来源。
+// 内容：有效输入表摘要 → 任务 URL（来源字段 / 表达式）→ 进入条件 → 队列名称 → 参数绑定 → 任务参数取值。
+// 任务 URL 来源字段 / 规则表达式在任务配置维护（2026-11-05 从「表配置字段用途」撤回，
+// 恢复 2026-10-19 按旧平台 SourceStepCard 恢复编辑、10-21 对齐旧平台的旧口径：步骤 itemId / url）。
 // 进入条件留在本 Tab（2026-08-28 确认）；入口文案按 0828 D20 改成「添加条件」，
 // 落库仍在流程的步骤上（Step.condition，0824-11 §1.1）。
-// 「任务 URL 来源字段/规则」0804 从本 Tab 删除；2026-10-19 按旧平台在「节点配置」Tab 恢复（步骤 itemId / url），见 ConfigTab。
 // 行为与原 NodeInspector 内联实现 1:1，仅物理搬迁；共享资产 tables/params 经 useNodeInspectorAssets 注入。
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'
 import {
-  fieldOptionsFromTableOrOutput, rendersAsRuleNode, isRuleLikeNode, isPdfNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
+  fieldOptionsFromTableOrOutput, isRuleLikeNode, isPdfNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
   type ConditionGroup, type NodeConfig, type TaskParamValue,
 } from '@/views/FlowCanvas/canvas/flowModel'
+import { inputFieldSelection } from '@/utils/flow/inputFieldSelection'
+import { taskUrlFieldsApply, taskUrlSourceMissing, type TaskUrlScope } from '@/utils/flow/stepPersist'
 import ConditionRow from '../ConditionRow.vue'
 import ParamsTab from './ParamsTab.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
+import { useSourceStore } from '@/stores/source'
 
 const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
@@ -22,9 +26,6 @@ const { tables, params, ensureTableFields } = useNodeInspectorAssets()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const cc = computed(() => cfg.value?.collectCfg)
-// 规则处理形态（含 PDF 抓取，2026-09-29）：任务配置的「上下文来源」栏隐藏——
-// 这类节点的入出参在「表配置」里选，这里再来一个入口是同一件事的第二处，两处能填出不一致的值。
-const isRule = computed(() => (cfg.value ? rendersAsRuleNode(cfg.value) : false))
 // 沿用原参数 Tab 的适用范围；规则式、PDF 等节点的出入参继续在表配置中处理。
 const showParameterFields = computed(() => !!cfg.value && !isRuleLikeNode(cfg.value) && !isPdfNode(cfg.value))
 
@@ -52,9 +53,37 @@ watch(inputTableId, (tid) => ensureTableFields(tid), { immediate: true })
 const inputTableFields = computed(() =>
   fieldOptionsFromTableOrOutput(inputTableId.value, tables.value, prevNode.value?.output ?? cfg.value?.output))
 const selectedInputFields = computed(() => {
-  const selected = cfg.value?.inputFields
-  return selected === undefined ? inputTableFields.value : inputTableFields.value.filter((field) => selected.includes(field.prop))
+  const selected = inputFieldSelection(cfg.value, inputTableFields.value).selected
+  return inputTableFields.value.filter((field) => selected.includes(field.prop))
 })
+
+// ---- 任务 URL 来源字段 / 规则表达式（2026-11-05 从节点配置 Tab 搬回任务配置 Tab）----
+// 0804 当时删的是 urlSourceField / urlRule，那两个字段从没对上过后端；真值在步骤的 itemId / url 上，
+// 而且有 `K2+'#need_upload_xq/xq/'` 这种拼标记给采集端用的写法，不只是带参数。
+// 适用范围见 stepPersist 的 taskUrlFieldsApply（2026-10-21 对齐旧平台：采集类后续步含 PDF；首节点、规则类不显示）。
+// 两项都落在步骤上，随画布自动保存。来源字段旧平台必填，新平台 10-21 定先不强制：没选只提示、照常保存。
+const sourceStore = useSourceStore()
+const taskUrlScope = computed<TaskUrlScope>(() => ({ main: flow.main, branches: flow.branches, configs: flow.configs, branchGroups: flow.branchGroups }))
+const taskUrlInputTable = computed(() => (id.value ? flow.effectiveInputTableFor(id.value) : ''))
+const showTaskUrl = computed(() => !!id.value && taskUrlFieldsApply(taskUrlScope.value, id.value, sourceStore.stepSnapshots[id.value]))
+const taskUrlSourceUnset = computed(() => !!id.value && taskUrlSourceMissing(taskUrlScope.value, id.value, sourceStore.stepSnapshots[id.value]))
+// 跟「运行设置」一样默认收起（用户 10-21），切节点回到收起
+const taskUrlOpen = ref(false)
+watch(id, () => { taskUrlOpen.value = false })
+watch(() => (showTaskUrl.value ? taskUrlInputTable.value : ''), (tableId) => { if (tableId) ensureTableFields(tableId) }, { immediate: true })
+const taskUrlFieldOptions = computed(() => (tables.value.find((t) => t.tableId === taskUrlInputTable.value)?.fields ?? [])
+  .filter((f) => !!f.itemId)
+  .map((f) => ({ value: String(f.itemId), label: `${f.desc || f.prop}${f.columnName ? `（${f.columnName}）` : ''}` })))
+/** -1 是旧平台「未选」的占位 */
+const taskUrlSourceValue = computed(() => (cfg.value?.itemId && cfg.value.itemId !== '-1' ? cfg.value.itemId : ''))
+const unknownTaskUrlSource = computed(() => (taskUrlSourceValue.value && !taskUrlFieldOptions.value.some((o) => o.value === taskUrlSourceValue.value)
+  ? taskUrlSourceValue.value : ''))
+function onTaskUrlSource(e: Event) {
+  flow.setTaskUrlSourceField(id.value, (e.target as HTMLSelectElement).value)
+}
+function onStepUrl(e: Event) {
+  flow.setStepUrl(id.value, (e.target as HTMLInputElement).value)
+}
 // 任务配置独立于已退役的配置功能；队列未填时按当前源自动生成。
 const ownTaskQueue = computed(() => (cfg.value ? nodeTaskQueue(cfg.value) : ''))
 const taskQueueFallback = computed(() => {
@@ -81,30 +110,6 @@ function onTaskParamValueChange(paramId: string, key: 'fieldId' | 'valueExpr', e
   })
 }
 
-// 「出参列」（outColumns）由上方 ParamsTab 内部区块维护；这里处理输入表的「上下文来源」。
-// 两者取值来源本来就不同：上下文来源取输入表字段，出参列取输出表字段——放在一起容易被误当成一类。
-//
-// 2026-08-28 对齐旧平台（旧 SourceStep.vue「上下文来源」+ page/base/EntryItemMultiSelect.vue）：
-//   ① 候选取**输入表全部字段**，不按表配置的勾选过滤——旧平台直接 queryEntryType(表).items；
-//   ② 一个**多选下拉**一次选完，不再是"每行一个 select + 添加/删除按钮"；
-//   ③ 选项文案 `[K1] - 标题 - [title]`（columnName / itemName / itemCode 三段）；
-//   ④ 存 **columnName**（旧平台 `item.join(',')` 存的就是 columnName），不是 prop。
-// ④ 现在改零代价：步骤写接口还没实现，contextMap 从没落过库；等 W9 接了再改就要写迁移。
-const contextMap = computed<string[]>(() => cfg.value?.taskCfg?.contextMap ?? [])
-function onContextMapChange(next: string[]) {
-  flow.patchTaskConfig(id.value, { contextMap: next })
-}
-/** 选项文案照抄旧平台 EntryItemMultiSelect：`[columnName] - 展示名 - [编码]` */
-function contextOptionLabel(f: { prop: string; desc: string; columnName?: string }) {
-  const column = f.columnName || f.prop
-  const code = f.prop.replace(/-K\d+$/, '')
-  return `[${column}] - ${f.desc || code} - [${code}]`
-}
-/** 候选的值 = columnName；表里查不到 columnName 时退回 prop，至少不丢这一项 */
-function contextOptionValue(f: { prop: string; columnName?: string }) {
-  return f.columnName || f.prop
-}
-
 const entryCondition = computed<ConditionGroup | undefined>(() => (cfg.value ? nodeEntryCondition(cfg.value) : undefined))
 function onEntryConditionChange(cond: ConditionGroup | undefined) {
   flow.setEntryCondition(id.value, cond)
@@ -119,6 +124,33 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
       {{ effectiveInputTableId ? `${ownInputTable ? '显式' : '继承'} · ${effectiveInputTableId}` : '暂无有效输入表，请先到「表配置」选择输入表或配置上游输出表。' }}
     </div>
   </div>
+  <!-- 任务 URL（2026-11-05 从节点配置搬回任务配置；10-19 恢复、10-21 对齐旧平台）：采集类后续步含 PDF -->
+  <div v-if="showTaskUrl" class="tu-wrap">
+    <button class="tu-toggle" type="button" data-testid="task-url-toggle" @click="taskUrlOpen = !taskUrlOpen">
+      {{ taskUrlOpen ? '▾' : '▸' }} 任务 URL（来源字段 / 表达式）<span v-if="taskUrlSourceUnset" class="task-url-unset">· 来源字段未选</span>
+    </button>
+    <div v-if="taskUrlOpen" class="tu-body">
+      <div class="rc-field"><label>任务 URL 来源字段（来自输入表）</label>
+        <select class="rc-select" :value="taskUrlSourceValue" data-testid="task-url-source" aria-label="任务 URL 来源字段" @change="onTaskUrlSource">
+          <option value="">未选择</option>
+          <option v-for="opt in taskUrlFieldOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          <option v-if="unknownTaskUrlSource" :value="unknownTaskUrlSource">#{{ unknownTaskUrlSource }}（输入表里没找到这个字段）</option>
+        </select>
+        <div v-if="taskUrlSourceUnset" class="rc-help task-url-unset" data-testid="task-url-source-unset">未选来源字段：$VAL$ 取不到值，下游任务可能没有 URL</div>
+      </div>
+      <div class="rc-field"><label>任务 URL 规则表达式</label>
+        <input
+          class="rc-input"
+          :value="cfg?.stepUrl || '$VAL$'"
+          placeholder="例如：$VAL$ 或 K2+'#need_upload_xq/xq/'"
+          aria-label="任务 URL 规则表达式"
+          data-testid="task-url-expr"
+          @change="onStepUrl"
+        />
+        <div class="rc-help">默认 $VAL$ 从来源字段取值，支持系统动态函数与字符串拼接；留空保存为 $VAL$。</div>
+      </div>
+    </div>
+  </div>
   <ConditionRow v-if="hasEffectiveInput" integrated :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
   <!-- 队列名称（0824-00 §6.6 改名，旧字段 topic）对所有采集节点展示；固定产物节点仍由能力模型锁定。 -->
   <div class="rc-field"><label>队列名称{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
@@ -130,8 +162,8 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
       @input="onTaskQueueChange"
     />
   </div>
-  <section v-if="showParameterFields" class="tt-params" aria-label="任务参数与出参列">
-    <h3>参数与出参</h3>
+  <section v-if="showParameterFields" class="tt-params" aria-label="任务参数配置">
+    <h3>参数配置</h3>
     <ParamsTab :template-defaults="props.templateDefaults" />
   </section>
   <div class="rc-field">
@@ -142,6 +174,7 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
         <b>{{ taskParamLabel(item.paramId) }}</b>
         <select class="rc-select" :value="item.fieldId" @change="onTaskParamValueChange(item.paramId, 'fieldId', $event)">
           <option value="">取值字段（输入表）</option>
+          <option v-if="item.fieldId && !selectedInputFields.some((field) => field.prop === item.fieldId)" :value="item.fieldId">{{ item.fieldId }}（未加入输入或字段已失效）</option>
           <option v-for="f in selectedInputFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
         </select>
         <input class="rc-input" :value="item.valueExpr" placeholder="值函数（可选，如 trim($VAL$)）" @input="onTaskParamValueChange(item.paramId, 'valueExpr', $event)" />
@@ -149,30 +182,7 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     </div>
     <div v-else class="rc-readonly-hint">请先在上方绑定参数。</div>
   </div>
-  <!-- 规则节点不显示这一栏（2026-09-04 会上）：它的入参在「表配置」里选，
-       这里再来一个「入参来源」是同一件事的第二个入口，两处能填出不一致的值。
-       写入侧也已经统一——规则节点的 context 取自 ruleCfg.inputFields（见 stepPersist）。 -->
-  <div v-if="!isRule" class="rc-field"><label>上下文来源</label>
-    <el-select
-      :model-value="contextMap"
-      multiple
-      filterable
-      collapse-tags
-      collapse-tags-tooltip
-      :disabled="!hasEffectiveInput"
-      :placeholder="hasEffectiveInput ? '请选择列' : '暂无有效输入表'"
-      style="width: 100%"
-      data-testid="context-map-select"
-      @update:model-value="onContextMapChange"
-    >
-      <el-option
-        v-for="f in inputTableFields"
-        :key="contextOptionValue(f)"
-        :label="contextOptionLabel(f)"
-        :value="contextOptionValue(f)"
-      />
-    </el-select>
-  </div>
+
 </template>
 
 <style scoped>
@@ -183,6 +193,12 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
+/* 任务 URL 折叠（2026-11-05 从节点配置搬回）：与 CollectorSettings 的「运行设置」同款 */
+.task-url-unset { color: var(--rc-warn); }
+.tu-wrap { margin-top: 4px; margin-bottom: 10px; }
+.tu-toggle { display: block; border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
+.tu-toggle:hover { color: var(--rc-primary-ink); }
+.tu-body { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rc-border-soft); }
 .ni-task-param-list { display: grid; gap: 8px; }
 .ni-task-param-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px; border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff; }
 .ni-task-param-row b { color: var(--rc-text-2); font-size: 12px; }
