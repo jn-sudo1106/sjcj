@@ -49,3 +49,40 @@ export function readOutputTableConfig(text: string): { config?: OutputTableConfi
 export function writeOutputTableConfig(config: OutputTableConfig, table: OutputTableDefinition): string {
   return JSON.stringify({ globals: [], checkIds: [], ...config, table })
 }
+
+/** 输出表写入方式：单表（不写 subs）/ 多表（1 张副表）/ 超限（历史 ≥2 张或更深嵌套，只读）。 */
+export type OutputMode = 'single' | 'multi' | 'overflow'
+
+export function outputModeOfConfig(config: OutputTableConfig | undefined): OutputMode {
+  const subs = config?.table?.subs ?? []
+  if (!subs.length) return 'single'
+  if (subs.length > 1 || subs.some((sub) => (sub.subs ?? []).length > 0)) return 'overflow'
+  return 'multi'
+}
+
+export function outputModeOf(text: string): OutputMode {
+  return outputModeOfConfig(readOutputTableConfig(text).config)
+}
+
+/** 仅「多表」且恰好 1 张副表时返回该副表定义；单表 / 超限返回 undefined。 */
+export function subTableOf(config: OutputTableConfig | undefined): OutputTableDefinition | undefined {
+  if (outputModeOfConfig(config) !== 'multi') return undefined
+  return config?.table?.subs?.[0]
+}
+
+/** 只改 table.subs，其余属性（globals / checkIds / 未知字段 / 主表定义）原样回写。 */
+export function withSubTable(config: OutputTableConfig, sub: OutputTableDefinition | undefined): string {
+  const table = config.table
+  if (!table) return JSON.stringify(config)
+  const next: OutputTableDefinition = { ...table }
+  if (sub) next.subs = [sub]
+  else delete next.subs
+  return writeOutputTableConfig(config, next)
+}
+
+/** 字段 code：优先 columnName（K1），否则取 prop 的 -K<n> 后缀，用于主表/副表同名自动对应。 */
+export function columnCodeOf(field: { columnName?: string; prop?: string }): string {
+  if (field.columnName) return String(field.columnName)
+  const matched = /(?:^|-)([A-Za-z]+\d+)$/.exec(String(field.prop ?? ''))
+  return matched ? matched[1] : ''
+}

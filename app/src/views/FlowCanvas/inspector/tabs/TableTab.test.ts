@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useFlowStore } from '@/stores/flow'
@@ -15,6 +15,7 @@ import { entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType, RuleOrchestration } from '@/api'
 import { mergeStepForWrite } from '@/utils/flow/stepPersist'
+import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 
 const INPUT_TABLE: EntryType = {
@@ -832,6 +833,150 @@ describe('TableTab · 出参列边界与报文结构（1106 W4）', () => {
     expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K9'])
     await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[0].trigger('click') // 取消 title
     expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual([])
+    wrapper.unmount()
+  })
+})
+
+describe('TableTab · 单表/多表输出开关（1106 W5）', () => {
+  const MAIN_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+  const SUB_TABLE: EntryType = {
+    tableId: '2103400', tableName: 'sense_data.TB_FILES', name: '附件资源表',
+    fields: [
+      { prop: 'file_id', desc: '文件ID', type: 'string', required: false, columnName: 'K1', itemId: '7001' },
+      { prop: 'file_name', desc: '文件名', type: 'string', required: false, columnName: 'K2', itemId: '7002' },
+      { prop: 'size', desc: '大小', type: 'string', required: false, columnName: 'K5', itemId: '7003' },
+    ],
+  }
+  const SECOND_SUB: EntryType = { tableId: '2103500', tableName: 'sense_data.TB_OTHER', name: '其它附表', fields: [] }
+  const rootConfig = { table: { entryTypeId: 2103330, keys: ['news'], colMap: [] as Array<{ colId: string; fromId: string }> } }
+
+  async function mountMulti(structuredConfig?: string) {
+    mockAssets()
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: [MAIN_TABLE, SUB_TABLE, SECOND_SUB] })
+    vi.spyOn(entryApi, 'entryDetail').mockImplementation(async (tableId: string) =>
+      [MAIN_TABLE, SUB_TABLE, SECOND_SUB].find((table) => table.tableId === tableId) ?? MAIN_TABLE)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.inputTable = '2103330'
+    cfg.collectCfg!.outputTable = '2103330'
+    if (structuredConfig !== undefined) cfg.collectCfg!.structuredConfig = structuredConfig
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+  const configOf = (flow: ReturnType<typeof useFlowStore>) =>
+    JSON.parse(flow.configs['web-1'].collectCfg?.structuredConfig || '{}')
+  // codeRule 走「配置保存」报文（buildConfigPayload），不在 stepModify 报文里。
+  const codeRuleOf = (flow: ReturnType<typeof useFlowStore>) =>
+    String(buildConfigPayload(flow.configs['web-1']).codeRule ?? '')
+
+  it('默认单表：有「写入方式」，不渲染副表分组，保存报文不写 table.subs', async () => {
+    const { flow, wrapper } = await mountMulti(JSON.stringify(rootConfig))
+    const segment = wrapper.get('[data-testid="output-mode-segment"]')
+    expect(segment.text()).toContain('单表')
+    expect(segment.text()).toContain('多表')
+    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(false)
+    expect(codeRuleOf(flow)).not.toContain('subs')
+    wrapper.unmount()
+  })
+
+  it('切到多表出现副表分组；选副表 + 勾字段按 code 自动生成 colMap，并写进报文 subs', async () => {
+    const { flow, wrapper } = await mountMulti(JSON.stringify(rootConfig))
+    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(2)').trigger('click')
+    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(true)
+    const select = wrapper.get('[data-testid="sub-output-table"]').findComponent({ name: 'ElSelect' })
+    select.vm.$emit('update:modelValue', '2103400')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="sub-table-current"]').text()).toContain('附件资源表 · 2103400')
+    const chips = wrapper.findAll('[data-testid="sub-output-fields-list"] .rc-tag')
+    expect(chips).toHaveLength(3)
+    await chips[0].trigger('click')
+    await chips[1].trigger('click')
+    const config = configOf(flow)
+    expect(config.table.subs).toHaveLength(1)
+    expect(config.table.subs[0]).toMatchObject({
+      entryTypeId: 2103400,
+      keys: ['news'],
+      colMap: [{ colId: '7001', fromId: 'title' }, { colId: '7002', fromId: 'url' }],
+    })
+    expect(codeRuleOf(flow)).toContain('"entryTypeId":2103400')
+    // 主表定义原样保留
+    expect(config.table.entryTypeId).toBe(2103330)
+    expect(config.table.keys).toEqual(['news'])
+    wrapper.unmount()
+  })
+
+  it('主表里没有同名列的副表字段标「待对应」：点它只提示，不写 colMap', async () => {
+    const { flow, wrapper } = await mountMulti(JSON.stringify(rootConfig))
+    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(2)').trigger('click')
+    wrapper.get('[data-testid="sub-output-table"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '2103400')
+    await flushPromises()
+    const chips = wrapper.findAll('[data-testid="sub-output-fields-list"] .rc-tag')
+    expect(chips[2].text()).toContain('待对应')
+    await chips[2].trigger('click')
+    expect(wrapper.get('[data-testid="sub-table-hint"]').text()).toContain('没有同名列')
+    expect(configOf(flow).table.subs[0].colMap).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('已配置 1 张副表时「更换」选第二张被拒：就地提示，subs 不变', async () => {
+    const configured = { table: { ...rootConfig.table, subs: [{ entryTypeId: 2103400, keys: ['news'], colMap: [] }] } }
+    const { flow, wrapper } = await mountMulti(JSON.stringify(configured))
+    await wrapper.get('[data-testid="change-sub-type"]').trigger('click')
+    wrapper.get('[data-testid="sub-output-table"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '2103500')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="sub-table-hint"]').text()).toContain('最多 1 张副表')
+    const config = configOf(flow)
+    expect(config.table.subs).toHaveLength(1)
+    expect(config.table.subs[0].entryTypeId).toBe(2103400)
+    wrapper.unmount()
+  })
+
+  it('切回单表：确认后移除 subs；取消则留在多表且配置不变', async () => {
+    const configured = { table: { ...rootConfig.table, subs: [{ entryTypeId: 2103400, keys: ['news'], colMap: [] }] } }
+    const { flow, wrapper } = await mountMulti(JSON.stringify(configured))
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce(new Error('cancel'))
+    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(1)').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalled()
+    expect(configOf(flow).table.subs).toHaveLength(1)
+    expect(wrapper.get('[data-testid="output-mode-segment"] button:nth-child(2)').classes()).toContain('active')
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(1)').trigger('click')
+    await flushPromises()
+    expect(configOf(flow).table.subs).toBeUndefined()
+    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(false)
+    expect(codeRuleOf(flow)).not.toContain('subs')
+    wrapper.unmount()
+  })
+
+  it('历史配置 2 张以上副表：只读提示，保存不截断原配置', async () => {
+    const overflow = {
+      table: {
+        ...rootConfig.table,
+        subs: [
+          { entryTypeId: 2103400, keys: ['files'], colMap: [] },
+          { entryTypeId: 2103500, keys: ['more'], colMap: [] },
+        ],
+      },
+    }
+    const { flow, wrapper } = await mountMulti(JSON.stringify(overflow))
+    expect(wrapper.get('[data-testid="sub-table-overflow"]').text()).toContain('只支持主表 + 1 张副表')
+    expect(wrapper.find('[data-testid="sub-output-fields-list"]').exists()).toBe(false)
+    const text = flow.configs['web-1'].collectCfg?.structuredConfig ?? ''
+    expect(JSON.parse(text).table.subs).toHaveLength(2)
+    expect(codeRuleOf(flow)).toContain('"entryTypeId":2103500')
     wrapper.unmount()
   })
 })

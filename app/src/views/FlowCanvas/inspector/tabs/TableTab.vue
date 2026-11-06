@@ -7,7 +7,7 @@
 // 2026-09-18：翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频并入规则式表/字段绑定（isRuleLike），绑定内容存 execCfg 而非 ruleCfg。
 // 2026-09-22：OCR 抓取并入同一套绑定（用户口径：表配置跟翻译助手一致）。
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
   collectorCapabilityOf, isRuleNode, isRuleLikeNode, isPdfNode, isMonitorNode, isDataValidationNode, makeDefaultRuleOrchestration, makeDefaultExecConfig,
@@ -22,7 +22,8 @@ import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { inputFieldSelection, inputFieldTokens } from '@/utils/flow/inputFieldSelection'
-import MultiTableOutputEditor from '../MultiTableOutputEditor.vue'
+import SubTableOutputGroup from '../SubTableOutputGroup.vue'
+import { outputModeOf, readOutputTableConfig, subTableOf, withSubTable } from '@/utils/flow/multiTableOutput'
 
 const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
@@ -342,6 +343,32 @@ function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
 // 结构化配置 / 正文规则（0804 S3-1）：非规则节点走 store 的双轨 setter（采集类写
 // collectCfg，非采集类写 NodeConfig 顶层，两边取哪边由 setStructuredConfig 内部判断，本组件不用分支）。
 const structuredConfigValue = computed(() => cc.value?.structuredConfig ?? cfg.value?.structuredConfig ?? '')
+// 1106 W5：单表 / 多表（写入方式）。状态一律从 structuredConfigValue 推导，只有「切到多表但还没选副表」是本组件本地态。
+const outputModeState = computed(() => outputModeOf(structuredConfigValue.value))
+const multiRequested = ref(false)
+const multiActive = computed(() => outputModeState.value !== 'single' || multiRequested.value)
+watch(() => outputModeState.value, (mode) => { multiRequested.value = mode !== 'single' })
+watch(id, () => { multiRequested.value = false })
+function subTableLabel(): string {
+  const tableId = String(subTableOf(readOutputTableConfig(structuredConfigValue.value).config)?.entryTypeId ?? '')
+  if (!tableId) return ''
+  const table = tables.value.find((item) => item.tableId === tableId)
+  return table ? `${table.name || table.tableName} · ${tableId}` : `数据表 #${tableId}`
+}
+async function setOutputMode(mode: 'single' | 'multi') {
+  if (mode === 'multi') { multiRequested.value = true; return }
+  multiRequested.value = false
+  if (outputModeState.value === 'single') return
+  const name = subTableLabel()
+  try {
+    await ElMessageBox.confirm(`切回单表会移除已配置的副表「${name}」，确定吗？`, '切回单表', { type: 'warning', confirmButtonText: '确认移除', cancelButtonText: '取消' })
+  } catch {
+    multiRequested.value = true
+    return
+  }
+  const { config } = readOutputTableConfig(structuredConfigValue.value)
+  flow.setStructuredConfig(id.value, withSubTable(config ?? {}, undefined))
+}
 const contentRulesValue = computed(() => cc.value?.contentRules ?? cfg.value?.contentRules ?? '')
 function onStructuredConfig(e: Event) {
   flow.setStructuredConfig(id.value, (e.target as HTMLTextAreaElement).value)
@@ -494,8 +521,17 @@ async function onTableSaved(tableId: string) {
       </div>
       <div class="rc-help">即旧平台的「出参列 (OutContext)」：勾选的字段传给后续步骤；不选默认全部字段。</div>
     </div>
-    <MultiTableOutputEditor
-      v-if="showMultiTableOutput" :key="id"
+    <!-- 1106 W5：写入方式（单表默认 / 多表 = 多一套副表配置）。单表时不写 table.subs，报文与现状一致。 -->
+    <div v-if="showMultiTableOutput" class="rc-field">
+      <label>写入方式</label>
+      <div class="rc-segment" data-testid="output-mode-segment">
+        <button type="button" :class="{ active: !multiActive }" @click="setOutputMode('single')">单表</button>
+        <button type="button" :class="{ active: multiActive }" @click="setOutputMode('multi')">多表</button>
+      </div>
+      <div class="rc-help">{{ multiActive ? '上方输出表照写；再加一套副表配置，写它的字段。' : '只写上方这张输出表。要同时写一张副表时切到「多表」。' }}</div>
+    </div>
+    <SubTableOutputGroup
+      v-if="showMultiTableOutput && multiActive"
       :model-value="structuredConfigValue" :main-table-id="nodeTableId" :tables="tables"
       @update:model-value="flow.setStructuredConfig(id, $event)"
     />

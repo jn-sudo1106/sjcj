@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { entryApi, type EntryType } from '@/api'
 import { readOutputTableConfig, writeOutputTableConfig, type OutputColumnMapping, type OutputTableDefinition } from '@/utils/flow/multiTableOutput'
 
-const props = defineProps<{ modelValue: string; mainTableId: string; tables: EntryType[] }>()
+const props = defineProps<{ modelValue: string; mainTableId: string; tables: EntryType[]; maxSubs?: number }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 const parsed = computed(() => readOutputTableConfig(props.modelValue))
 const root = computed(() => parsed.value.config?.table)
@@ -97,6 +97,8 @@ function fieldLabel(field: EntryType['fields'][number]) {
   return `${field.desc || field.prop}${field.columnName ? `（${field.columnName}）` : ''}`
 }
 const rootMismatch = computed(() => !!root.value && String(root.value.entryTypeId) !== props.mainTableId)
+// 1106 W5：外层「副表」分组最多 1 张，达到上限后不再提供「添加输出表」（历史配置仍可编辑/移除）。
+const addBlocked = computed(() => props.maxSubs !== undefined && children.value.length >= props.maxSubs)
 function apply() {
   if (!draft.value || !parsed.value.config) return
   const value = draft.value
@@ -142,7 +144,7 @@ function remove(index: number) {
   <section class="mto" aria-label="多表输出" data-testid="multi-table-output">
     <div class="mto-heading">
       <span>多表输出 <span v-if="root" class="mto-count">{{ children.length + 1 }} 张表</span></span>
-      <button v-if="!draft" type="button" class="mto-link" :disabled="!!parsed.error || !mainTableId" data-testid="add-output-table" @click="edit(root ? children.length : -1)">{{ root ? '＋ 添加输出表' : '配置多表输出' }}</button>
+      <button v-if="!draft" type="button" class="mto-link" :disabled="!!parsed.error || !mainTableId || addBlocked" data-testid="add-output-table" @click="edit(root ? children.length : -1)">{{ root ? '＋ 添加输出表' : '配置多表输出' }}</button>
     </div>
     <p v-if="parsed.error" class="mto-hint">{{ parsed.error }}</p>
     <p v-else-if="!root && !draft" class="mto-hint">需要把同一批采集结果写入多张表时，在这里添加输出目标。</p>
