@@ -103,6 +103,13 @@ watch(() => flow.selectedId, () => {
 const inputMismatch = computed(() => (id.value
   ? inputTableMismatch({ main: flow.main, branches: flow.branches, configs: flow.configs, branchGroups: flow.branchGroups }, id.value)
   : null))
+// 一行能说清的放正文，解释放 title（2026-11-05：原来两层标题+描述太高太灰）
+const inputMismatchText = computed(() => (inputMismatch.value
+  ? `输入表 ${inputMismatch.value.own} 与上游输出表 ${inputMismatch.value.upstream} 不一致，上游改动不会自动跟随`
+  : ''))
+const inputMismatchTitle = computed(() => (inputMismatch.value
+  ? `本节点输入表 ${inputMismatch.value.own}，上游输出表 ${inputMismatch.value.upstream}。上游插入、删除节点或改表时，本节点输入表不会自动跟随`
+  : ''))
 const outputTableWarning = computed(() => {
   const node = cfg.value
   if (!node) return false
@@ -660,23 +667,24 @@ onMounted(async () => {
       <div v-if="!props.templateDefaults && historyConfigNote" class="ni-history-note" data-testid="history-config-note">{{ historyConfigNote }}</div>
 
       <!-- 0929 F2：复制时配置去共享失败的常驻提示——该节点配置仍与来源流程共享，保存前会再弹确认。 -->
-      <div v-if="!props.templateDefaults && sharedConfigWarning" class="ni-output-warn" data-testid="shared-config-warn">
-        <el-alert
-          type="warning"
-          :closable="false"
-          show-icon
-          title="该节点配置仍与来源共享"
-          :description="`配置 #${sharedConfigWarning.configId} 在复制流程时未能自动复制独立配置，目前仍与${sharedConfigWarning.sourceFlowRef}共享。修改它会同时影响该流程及所有使用它的源；保存前会再弹一次确认。`"
-        />
+      <div v-if="!props.templateDefaults && sharedConfigWarning" class="ni-note ni-note-warn" data-testid="shared-config-warn">
+        <span class="ni-note-mark" aria-hidden="true">!</span>
+        <span class="ni-note-text">
+          <b>该节点配置仍与来源共享</b>：配置 #{{ sharedConfigWarning.configId }} 在复制流程时未能自动复制独立配置，目前仍与{{ sharedConfigWarning.sourceFlowRef }}共享；修改会影响该流程及所有使用它的源，保存前会再确认一次。
+        </span>
+      </div>
+
+      <!-- 0928 表联动：用户指定的输入表与上游输出表不一致，上游插入/删除/改表时本节点不会跟随（只提示、不拦）。
+           2026-11-05 用户说原来的 el-alert 太丑：收成一条紧凑提示，一句小字，全文放悬浮 title。 -->
+      <div v-if="!props.templateDefaults && inputMismatch" class="ni-note ni-note-info" data-testid="input-table-mismatch">
+        <span class="ni-note-mark" aria-hidden="true">i</span>
+        <span class="ni-note-text is-one-line" :title="inputMismatchTitle">{{ inputMismatchText }}</span>
       </div>
 
       <!-- 输出表未就绪的常驻提示；entry/95 文件下载同样需要选表。 -->
-      <div v-if="!props.templateDefaults && inputMismatch" class="ni-output-warn" data-testid="input-table-mismatch">
-        <el-alert type="info" :closable="false" show-icon title="输入表与上游输出表不一致" :description="`本节点输入表 ${inputMismatch.own}，上游输出表 ${inputMismatch.upstream}。上游插入、删除节点或改表时，本节点输入表不会自动跟随`" />
-      </div>
-
-      <div v-if="!props.templateDefaults && outputTableWarning" class="ni-output-warn" data-testid="output-table-warn">
-        <el-alert type="warning" :closable="false" show-icon title="输出表未选择" :description="outputTableWarningText" />
+      <div v-if="!props.templateDefaults && outputTableWarning" class="ni-note ni-note-warn" data-testid="output-table-warn">
+        <span class="ni-note-mark" aria-hidden="true">!</span>
+        <span class="ni-note-text"><b>输出表未选择</b>：{{ outputTableWarningText }}</span>
       </div>
 
       <!-- 顶层 Tab：节点配置 / 表配置 / 编排配置 / 任务配置；普通画布可按需保留 AI 对话。 -->
@@ -769,10 +777,18 @@ onMounted(async () => {
 
 /* 0927 H1：输出表未就绪警告条（与配置条同宽节奏，紧凑不喧宾） */
 .ni-history-note { padding: 5px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fffbeb; color: #92400e; font-size: 11px; line-height: 1.5; }
-.ni-output-warn { padding: 6px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fffcf5; }
-.ni-output-warn .el-alert { padding: 6px 10px; }
-.ni-output-warn .el-alert__title { font-size: 11px; line-height: 1.4; }
-.ni-output-warn .el-alert__description { font-size: 10px; line-height: 1.5; margin-top: 2px; }
+/* 节点头的常驻提示条（0927 H1 / 0928 表联动 / 0929 F2）：原来是 el-alert 的「粗标题 + 灰描述」两层，
+   在 ~380px 的检查器里又高又闷；收成一条行内提示——一句 11px 文案 + 小圆点标记，全文交给 title。
+   底色刻意压得很淡（与 .ni-history-note 同节奏），别在检查器顶部抢戏。 */
+.ni-note { display: flex; align-items: flex-start; gap: 7px; padding: 5px 12px; border-bottom: 1px solid var(--rc-border-soft); font-size: 11px; line-height: 1.55; }
+.ni-note-info { background: #f8fafc; color: var(--rc-text-2); }
+.ni-note-warn { background: #fffbeb; color: #92400e; }
+.ni-note-mark { flex: none; width: 14px; height: 14px; margin-top: 1px; border-radius: 50%; color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.ni-note-info .ni-note-mark { background: #94a3b8; }
+.ni-note-warn .ni-note-mark { background: #f59e0b; }
+.ni-note-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ni-note-text.is-one-line { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ni-note-text b { font-weight: 700; }
 .cb-label { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }
 .cb-name { font-size: 11px; font-weight: 600; color: var(--rc-text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-id { font-size: 11px; font-weight: 600; color: var(--rc-text); font-variant-numeric: tabular-nums; }
