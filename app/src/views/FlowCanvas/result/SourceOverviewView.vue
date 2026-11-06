@@ -5,7 +5,7 @@
 // 2. 采集资产的「源列表视图」（0924-06，表格视图改为源列表）：currentSiteId 传空 = 不限网站，
 //    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
@@ -178,24 +178,36 @@ type StatusFilter = 'all' | 'C' | 'L' | 'E' | 'disabled'
 
 const rows = ref<Source[]>([])
 const MIN_URL_WIDTH = 80
-const urlColumnWidth = ref(Math.max(MIN_URL_WIDTH, readColumnPrefs('sources', 'source-overview')?.widths?.url ?? 220))
+// 源名称是列表的主标识列：默认宽按原来「名称最多 190px + 左右内边距」取值，
+// 太窄连「海关-8位-出…」都读不出来，所以下限比 URL 高（2026-11-05 用户要求名称列也能拖）。
+const MIN_NAME_WIDTH = 120
+const DEFAULT_NAME_WIDTH = 210
+const savedWidths = readColumnPrefs('sources', 'source-overview')?.widths
+const urlColumnWidth = ref(Math.max(MIN_URL_WIDTH, savedWidths?.url ?? 220))
+const nameColumnWidth = ref(Math.max(MIN_NAME_WIDTH, savedWidths?.name ?? DEFAULT_NAME_WIDTH))
 const resizingUrl = ref(false)
-let stopUrlResize: (() => void) | undefined
+const resizingName = ref(false)
+let stopColumnResize: (() => void) | undefined
 
-function startUrlResize(event: PointerEvent) {
+/** 名称 / URL 两列宽度共用同一条 prefs 记录（writeColumnPrefs 整条覆盖），写的时候必须一起写。 */
+function persistColumnWidths() {
+  writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value, name: nameColumnWidth.value } }, 'source-overview')
+}
+
+function startColumnResize(event: PointerEvent, width: Ref<number>, minWidth: number, resizing: Ref<boolean>) {
   if (event.button !== 0) return
   event.preventDefault()
-  stopUrlResize?.()
+  stopColumnResize?.()
   const startX = event.clientX
-  const startWidth = urlColumnWidth.value
+  const startWidth = width.value
   const previousCursor = document.body.style.cursor
   const previousUserSelect = document.body.style.userSelect
-  resizingUrl.value = true
+  resizing.value = true
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
 
-  function move(event: PointerEvent) {
-    urlColumnWidth.value = Math.max(MIN_URL_WIDTH, Math.round(startWidth + event.clientX - startX))
+  function move(moveEvent: PointerEvent) {
+    width.value = Math.max(minWidth, Math.round(startWidth + moveEvent.clientX - startX))
   }
   function stop() {
     window.removeEventListener('pointermove', move)
@@ -204,26 +216,39 @@ function startUrlResize(event: PointerEvent) {
     window.removeEventListener('blur', stop)
     document.body.style.cursor = previousCursor
     document.body.style.userSelect = previousUserSelect
-    resizingUrl.value = false
-    stopUrlResize = undefined
-    writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value } }, 'source-overview')
+    resizing.value = false
+    stopColumnResize = undefined
+    persistColumnWidths()
   }
-  stopUrlResize = stop
+  stopColumnResize = stop
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', stop)
   window.addEventListener('pointercancel', stop)
   window.addEventListener('blur', stop)
 }
 
-function resizeUrlByKey(event: KeyboardEvent) {
-  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-  event.preventDefault()
-  urlColumnWidth.value = Math.max(MIN_URL_WIDTH, urlColumnWidth.value + (event.key === 'ArrowLeft' ? -20 : 20))
-  writeColumnPrefs('sources', { hidden: [], order: [], widths: { url: urlColumnWidth.value } }, 'source-overview')
+function startUrlResize(event: PointerEvent) {
+  startColumnResize(event, urlColumnWidth, MIN_URL_WIDTH, resizingUrl)
+}
+function startNameResize(event: PointerEvent) {
+  startColumnResize(event, nameColumnWidth, MIN_NAME_WIDTH, resizingName)
 }
 
-onDeactivated(() => stopUrlResize?.())
-onBeforeUnmount(() => stopUrlResize?.())
+function resizeColumnByKey(event: KeyboardEvent, width: Ref<number>, minWidth: number) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  width.value = Math.max(minWidth, width.value + (event.key === 'ArrowLeft' ? -20 : 20))
+  persistColumnWidths()
+}
+function resizeUrlByKey(event: KeyboardEvent) {
+  resizeColumnByKey(event, urlColumnWidth, MIN_URL_WIDTH)
+}
+function resizeNameByKey(event: KeyboardEvent) {
+  resizeColumnByKey(event, nameColumnWidth, MIN_NAME_WIDTH)
+}
+
+onDeactivated(() => stopColumnResize?.())
+onBeforeUnmount(() => stopColumnResize?.())
 const originalPaths = ref(new Map<string, string>())
 function originalDirectoryOf(source: Source): string {
   return (source.dirId ? originalPaths.value.get(source.dirId) : '')
@@ -1781,7 +1806,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       </span>
     </div>
     <div v-if="!websiteCards" ref="tableElement" class="sov-table-wrap" :class="{ loading }">
-      <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px` }">
+      <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px`, '--sov-name-width': `${nameColumnWidth}px` }">
         <thead>
           <tr>
             <th class="sov-check-col">
@@ -1796,7 +1821,23 @@ defineExpose({ openLaunch, clearSelection, refresh })
             </th>
             <th class="sov-fav-col" title="收藏"></th>
             <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
-            <th>源名称</th>
+            <th class="sov-name-head" :class="{ 'is-resizing': resizingName }">
+              源名称
+              <div
+                class="sov-col-resizer"
+                role="separator"
+                tabindex="0"
+                aria-label="调整源名称列宽"
+                aria-orientation="vertical"
+                :aria-valuenow="nameColumnWidth"
+                :aria-valuemin="MIN_NAME_WIDTH"
+                title="拖动调整源名称列宽"
+                data-testid="source-name-resizer"
+                @pointerdown.stop="startNameResize"
+                @keydown="resizeNameByKey"
+                @click.stop
+              />
+            </th>
             <th v-if="extraColumnLabel" data-testid="source-overview-extra-head">{{ extraColumnLabel }}</th>
             <th v-if="showOriginalDirectory">原始目录</th>
             <th v-if="crossSite && showCol('site')">所属网站</th>
@@ -1806,7 +1847,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <th v-if="showCol('url')" class="sov-url-head" :class="{ 'is-resizing': resizingUrl }">
               URL
               <div
-                class="sov-url-resizer"
+                class="sov-col-resizer"
                 role="separator"
                 tabindex="0"
                 aria-label="调整 URL 列宽"
@@ -2129,8 +2170,10 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-table { width: max(100%, 1260px); border-collapse: collapse; font-size: 12px; }
 .sov-table th, .sov-table td { padding: 9px 10px; border-bottom: 1px solid #edf2f7; text-align: left; white-space: nowrap; color: var(--rc-text-2); }
 .sov-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--rc-muted); font-weight: 700; }
-.sov-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text) !important; font-weight: 600; }
-.sov-name-content { display: flex; align-items: center; gap: 6px; }
+/* 源名称与 URL 都支持拖列宽（2026-11-05）：宽度走 CSS 变量，列宽记在列偏好里 */
+.sov-name-head, .sov-name { width: var(--sov-name-width); min-width: var(--sov-name-width); max-width: var(--sov-name-width); box-sizing: border-box; }
+.sov-name { overflow: hidden; text-overflow: ellipsis; color: var(--rc-text) !important; font-weight: 600; }
+.sov-name-content { display: flex; align-items: center; gap: 6px; width: 100%; }
 .sov-name-content .sov-source-link { flex: 1; min-width: 0; }
 .sov-quick-edit { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-muted); cursor: pointer; }
 .sov-quick-edit:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
@@ -2138,15 +2181,16 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-original-dir { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .sov-default-flow .sov-link { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; text-align: left; }
 .sov-group .sov-link { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
-.sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
+.sov-source-link { display: block; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url-head, .sov-url { width: var(--sov-url-width); min-width: var(--sov-url-width); max-width: var(--sov-url-width); box-sizing: border-box; }
 .sov-url { color: var(--rc-primary) !important; }
 .sov-url a { display: block; width: calc(var(--sov-url-width) - 20px); overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; }
 .sov-url a:hover { text-decoration: underline; }
-.sov-url-resizer { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; touch-action: none; user-select: none; }
-.sov-url-resizer::after { content: ''; position: absolute; top: 4px; bottom: 4px; right: 1px; width: 2px; border-radius: 1px; background: transparent; }
-.sov-url-head:hover .sov-url-resizer::after { background: var(--rc-border); }
-.sov-url-resizer:hover::after, .sov-url-resizer:focus-visible::after, .sov-url-head.is-resizing .sov-url-resizer::after { background: var(--rc-primary); }
+/* 表头右缘的拖拽手柄：名称列与 URL 列共用一套样式与交互 */
+.sov-col-resizer { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; touch-action: none; user-select: none; }
+.sov-col-resizer::after { content: ''; position: absolute; top: 4px; bottom: 4px; right: 1px; width: 2px; border-radius: 1px; background: transparent; }
+.sov-table th:hover .sov-col-resizer::after { background: var(--rc-border); }
+.sov-col-resizer:hover::after, .sov-col-resizer:focus-visible::after, .sov-table th.is-resizing .sov-col-resizer::after { background: var(--rc-primary); }
 .sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-muted { color: var(--rc-faint); }
 .sov-no-flow { color: #dc2626; font-size: 12px; }
