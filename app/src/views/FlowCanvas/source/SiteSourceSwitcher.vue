@@ -278,6 +278,17 @@ function copySourceUrl(s: Source) {
 }
 
 const editSourceOpen = ref(false)
+/** 右键「编辑源」编辑的是被右击的那一行；源详情头的「编辑」不传，退回当前源（2026-11-05）。 */
+const editSource = ref<Source | null>(null)
+function openEditSource(s: Source) {
+  editSource.value = s
+  editSourceOpen.value = true
+  closeRowMenu()
+}
+function onEditOpenChange(open: boolean) {
+  editSourceOpen.value = open
+  if (!open) editSource.value = null
+}
 function applyEditedSource(updated: Source) {
   const local = children.value.find((c) => c.sourceId === updated.sourceId)
   if (local) {
@@ -1484,7 +1495,12 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
     <button v-else class="ssw-expand" type="button" title="展开源侧栏" @click="collapsed = false">»</button>
   </aside>
 
-  <EditSourceDialog v-model:open="editSourceOpen" :source="activeSource" @saved="applyEditedSource" />
+  <EditSourceDialog
+    :open="editSourceOpen"
+    :source="editSource ?? activeSource"
+    @update:open="onEditOpenChange"
+    @saved="applyEditedSource"
+  />
 
   <!-- 全局对比选择器（B4）：默认列本站其他源，输入即全局搜索（含跨站） -->
   <div v-if="cmp.show" class="ssw-cmp-pop" @click.stop>
@@ -1509,6 +1525,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
     :style="{ left: `${rowMenu.x}px`, top: `${rowMenu.y}px` }"
     @click.stop
   >
+    <button type="button" data-testid="source-menu-edit" @click="openEditSource(rowMenu.source!)">编辑源</button>
     <button type="button" @click="startRename(rowMenu.source!)">重命名</button>
     <button
       type="button"

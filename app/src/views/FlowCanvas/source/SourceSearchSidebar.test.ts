@@ -3,6 +3,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, type Source } from '@/api'
 import { useSourceSearchStore, type SourceSearchOrigin } from '@/stores/sourceSearch'
 import { blankSourceListViewState } from '../result/sourceListViewState'
@@ -21,7 +22,7 @@ async function setup(patch: Partial<SourceSearchOrigin> = {}) {
   await router.push('/collect')
   const store = useSourceSearchStore()
   const id = store.create(origin(patch))
-  const wrapper = mount(SourceSearchSidebar, { props: { contextId: id, siteId: '10', activeKey: '1' }, global: { plugins: [router], stubs: { SiteSourceSwitcher: true } } })
+  const wrapper = mount(SourceSearchSidebar, { props: { contextId: id, siteId: '10', activeKey: '1' }, global: { plugins: [router], stubs: { SiteSourceSwitcher: true, SourceParamModal: true, EditSourceDialog: true, ChangeSiteDialog: true, CodeConfigButton: true } } })
   await flushPromises()
   return { router, wrapper, store, id }
 }
@@ -75,6 +76,45 @@ describe('搜索结果侧栏', () => {
     await wrapper.get('[data-testid="search-mode"]').setValue('search'); await flushPromises()
     expect(store.get(second)?.mode).toBe('search')
     expect(wrapper.findAll('.search-item')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  // 2026-11-05：搜索结果的行也要能右键做站内那套编辑动作（用户发图要求「跟 URL 一样」之后补充）
+  it('结果行右键打开菜单，重命名后重取本次结果并把新值抛给画布', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '改名后的公告' } as never)
+    const update = vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
+    const { wrapper } = await setup()
+    paged.mockClear()
+
+    await wrapper.get('.search-item').trigger('contextmenu', { clientX: 40, clientY: 30 })
+    expect(wrapper.find('.sra-menu').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="search-menu-edit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="search-menu-rename"]').trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ sourceId: '2', name: '改名后的公告' }))
+    expect(wrapper.emitted('edited')?.[0]).toEqual([expect.objectContaining({ sourceId: '2', name: '改名后的公告' })])
+    // 动作完成后走 ui.sourceListRevision 重取本次搜索结果（别的列表也一起刷新）
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 200 }))
+    wrapper.unmount()
+  })
+
+  it('在结果里删掉当前打开的源后退回搜索列表', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...row, sourceId: '1' }] })
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const del = vi.spyOn(sourceApi, 'deleteSource').mockResolvedValue({ ok: true })
+    const { wrapper, router, id } = await setup()
+
+    await wrapper.get('.search-item').trigger('contextmenu', { clientX: 40, clientY: 30 })
+    await wrapper.get('[data-testid="search-menu-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(del).toHaveBeenCalledWith(['1'])
+    expect(router.currentRoute.value.query).toEqual({ tab: 'views', viewId: '8', sourceSearchReturn: id })
     wrapper.unmount()
   })
 })

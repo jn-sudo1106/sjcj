@@ -7,10 +7,11 @@ import { useUiStore } from '@/stores/ui'
 import { useRoute, useRouter } from 'vue-router'
 import { describeFilters } from '../result/useSourceLaunch'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
+import SourceRowActions, { type SourceRowActionKind } from './SourceRowActions.vue'
 
 defineOptions({ inheritAttrs: false })
 const props = defineProps<{ contextId?: string; siteId: string; activeKey: string }>()
-const emit = defineEmits<{ pick: [source: Source] }>()
+const emit = defineEmits<{ pick: [source: Source]; edited: [source: Source] }>()
 const search = useSourceSearchStore()
 const ui = useUiStore()
 const router = useRouter()
@@ -23,6 +24,7 @@ const rows = ref<Source[]>([])
 const loading = ref(false)
 const error = ref('')
 const listElement = ref<HTMLElement>()
+const rowActions = ref<InstanceType<typeof SourceRowActions>>()
 const description = computed(() => context.value ? describeFilters(context.value.query) : '')
 // 侧栏不分页：一次取回本次查询的前 N 个源，剩余交给「返回搜索列表」看
 const RESULT_LIMIT = 200
@@ -58,6 +60,14 @@ function changeMode(event: Event) {
   const next = (event.target as HTMLSelectElement).value as 'search' | 'site'
   if (next === 'site' && !hasSite.value) return
   if (context.value) context.value.mode = next
+}
+// 右键菜单里的动作都在 SourceRowActions 里做完了：这里只管结果——
+// 重取本次搜索结果（watch ui.sourceListRevision 会触发 load，其他列表也跟着刷新），
+// 编辑/重命名当前源时把新值抛给画布去同步页签和 flow store；删掉的是当前源就退回搜索列表。
+function onRowChanged(kind: SourceRowActionKind, source: Source) {
+  ui.notifySourceListChanged()
+  if (kind === 'edited' || kind === 'renamed') emit('edited', source)
+  if (kind === 'deleted' && source.sourceId === props.activeKey) returnToList()
 }
 function siteLabel(source: Source) {
   if (source.siteName) return source.siteName
@@ -96,7 +106,7 @@ function siteLabel(source: Source) {
           <p v-else-if="error" class="search-empty search-failed" role="alert">{{ error }}<button class="search-retry" @click="load">重试</button></p>
           <p v-else-if="!rows.length" class="search-empty">没有符合原查询条件的源</p>
           <template v-else>
-            <button v-for="source in rows" :key="source.sourceId" class="search-item" :class="{ active: activeKey === source.sourceId }" type="button" :aria-current="activeKey === source.sourceId ? 'true' : undefined" :title="`${source.name}\n${source.sourceId} · ${siteLabel(source)}`" @click="emit('pick', source)">
+            <button v-for="source in rows" :key="source.sourceId" class="search-item" :class="{ active: activeKey === source.sourceId }" type="button" :aria-current="activeKey === source.sourceId ? 'true' : undefined" :title="`${source.name}\n${source.sourceId} · ${siteLabel(source)}`" @click="emit('pick', source)" @contextmenu.prevent.stop="rowActions?.open($event, source)">
               <span class="search-dot" />
               <span class="search-row-text">
                 <span class="search-row-name">{{ source.name }}</span>
@@ -116,6 +126,8 @@ function siteLabel(source: Source) {
       </template>
     </template>
   </aside>
+
+  <SourceRowActions v-if="mode === 'search'" ref="rowActions" @changed="onRowChanged" />
 </template>
 
 <style scoped>

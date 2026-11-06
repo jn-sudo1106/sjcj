@@ -289,6 +289,14 @@ async function onSwitchTarget(target: Source) {
 function onSwitchAdded(s: Source) {
   onSwitchTarget(s)
 }
+// 搜索结果侧栏右键「编辑源 / 重命名」后，若改的正是画布当前打开的源，
+// 页签标题和 flow store 里的源名/URL 要跟着变，否则头部和侧栏会对不上（2026-11-05）。
+function onSidebarSourceEdited(s: Source) {
+  if (flow.sourceCtx?.sourceId !== s.sourceId) return
+  if (s.url !== undefined && s.url !== flow.sourceCtx.url) flow.patchSource({ name: s.name, url: s.url })
+  flow.patchSourceCtx({ name: s.name, url: s.url })
+  ws.renameTab(s.sourceId, s.name)
+}
 // ---- 左栏数据表模式（0924-10）----
 /** 只在「网站态 + 数据视图」允许切到数据表列表（Q4）；其他视图左栏恒为源列表 */
 const sidebarAllowTableMode = computed(() => isSiteDetail.value && normalizeSiteView(route.query.view) === 'data')
@@ -898,6 +906,7 @@ onUnmounted(() => {
         @pick-table="onPickTable"
         @pick="onSwitchTarget"
         @added="onSwitchAdded"
+        @edited="onSidebarSourceEdited"
         @compare="onSidebarCompare"
         @pick-site="onSwitchToSite"
         @pick-group="onPickSourceGroup"
