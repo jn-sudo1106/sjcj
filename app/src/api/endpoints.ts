@@ -831,10 +831,26 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'sys-user-group/list', desc: '用户组与部门平铺列表（admin）', impl: true, live: true },
   { path: 'sys-user-group/update', desc: '修改用户组与部门（admin；修改名称、编码、上级部门等）', danger: true, impl: true, live: true },
 
+  /* ── 数据权限组（SysDataGroupController，系统设置 → 数据权限设置左侧列表的主档） ──
+     sys_data_group.id 就是 sys_group_res.group_id（V3.6.2 按 SELECT group_id AS id 平滑迁移），
+     所以这一组端点只提供组本身的主档与角色绑定，可见/排除范围仍走 group-res / group-source-scope。 */
+  { path: 'sys-data-group/list', desc: '数据权限组列表（admin；含关联角色与角色名）', live: true },
+  { path: 'sys-data-group/options', desc: '数据权限组下拉选项（admin；已排除停用组）', live: true },
+  { path: 'sys-data-group/detail', desc: '数据权限组详情（admin；按 ?id= 查）', live: true },
+  { path: 'sys-data-group/add', desc: '新增数据权限组（admin）', danger: true, live: true },
+  { path: 'sys-data-group/update', desc: '修改数据权限组（admin；selective 更新，未传的名称/编码会按校验默认值落库）', danger: true, live: true },
+  { path: 'sys-data-group/delete', desc: '删除数据权限组（admin；软删除并清角色关联，按 ?id= 传参）', danger: true, live: true },
+  { path: 'sys-data-group/status', desc: '启用/停用数据权限组（admin）', danger: true, live: true },
+  { path: 'sys-data-group/roles', desc: '查询数据权限组已绑定的角色 ID（admin）', live: true },
+  { path: 'sys-data-group/bind-roles', desc: '为数据权限组绑定角色（admin；全量覆盖）', danger: true, live: true },
+  { path: 'sys-data-group/role-groups', desc: '查询角色已绑定的数据权限组 ID（admin）', live: true },
+  { path: 'sys-data-group/bind-role-groups', desc: '为角色绑定数据权限组（admin；全量覆盖）', danger: true, live: true },
+
   /* ── 动态菜单与权限导航（SysMenuController） ── */
   { path: 'sys/menu/user-nav', desc: '获取当前用户动态菜单分组与权限码', impl: true, live: true },
   { path: 'sys/menu/tree', desc: '全量菜单与资源树（供菜单配置树形表格展示）', impl: true, live: true },
   { path: 'sys/menu/save', desc: '保存/更新菜单资源（admin）', danger: true, impl: true, live: true },
+  { path: 'sys/menu/sort', desc: '批量更新菜单排序与层级归属（admin）', danger: true, impl: true, live: true },
   { path: 'sys/menu/delete', desc: '级联删除菜单资源（admin）', danger: true, impl: true, live: true },
   { path: 'sys/menu/clean-legacy', desc: '一键清洗老库历史残留按钮（admin）', danger: true, impl: true, live: true },
 

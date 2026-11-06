@@ -84,9 +84,12 @@ export async function updateMenuSort(items: SysMenuSortItem[]): Promise<void> {
 
 /**
  * 删除菜单及其子项
+ *
+ * 这里不能再传参数化的 httpEndpoint：client 的 live 判定优先取 httpEndpoint，
+ * 动态路径不在 LIVE_ENDPOINTS 清单里会被 mock 接管（点了删除只改内存、库不动）。
  */
 export async function deleteMenu(id: number): Promise<void> {
-  await request<Ack>(EP.delete, { id }, { method: 'DELETE', httpEndpoint: `sys/menu/${id}` })
+  await request<Ack>(EP.delete, { id }, { method: 'POST' })
 }
 
 /**

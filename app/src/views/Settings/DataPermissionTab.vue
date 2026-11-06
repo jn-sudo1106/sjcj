@@ -2,7 +2,7 @@
 // 系统设置 → 数据权限设置（组级数据权限 / sys_group_res 行级规则）。
 //
 // 排版布局：
-// 左侧：分页展示用户组（来自 sys-user 的 distinct GROUP_ID，组名取成员 user_name）。
+// 左侧：分页展示数据权限组（主档 sys_data_group，其 id 即 sys_group_res.group_id）。
 // 右侧：可见范围 / 排除范围 / 全部规则明细 三 tab。前两个共用一套内嵌的「双栏范围编辑器」
 //       （左目录树、右该目录的源，无弹窗），落库交给 groupSourceScope 服务一次保存整范围。
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -23,15 +23,13 @@ import {
   GROUP_ID_FLOOR,
   groupResDetail,
   groupResMeta,
-  listGroupIds,
   pagedGroupRes,
   type GroupResMeta,
   type GroupResRule,
 } from '@/api/groupRes'
 import { getGroupSourceScope, saveGroupSourceScope, type GroupSourceScope, type SourceGrant } from '@/api/groupSourceScope'
 import { useAuthStore } from '@/stores/auth'
-import { groupCode, groupName, readGroupNames, setGroupName } from '@/utils/groupNames'
-import { getSysUserGroupOptions, updateSysUserGroup, type SysUserGroupOption } from '@/api/sysUser'
+import { fetchDataGroupList, saveDataGroup } from '@/api/sysDataGroup'
 import GroupResEditDialog from './GroupResEditDialog.vue'
 import GroupResDetailDrawer from './GroupResDetailDrawer.vue'
 import SourceScopeEditor from './groupRes/SourceScopeEditor.vue'
@@ -56,7 +54,7 @@ function optionName(list: { key: string; name: string }[] | undefined, key: stri
 }
 
 // --------------------------------------------------------------------------
-// 左侧：用户组列表与分页
+// 左侧：数据权限组列表与分页
 // --------------------------------------------------------------------------
 export interface GroupRow {
   groupId: number
@@ -74,22 +72,14 @@ const groupLoading = ref(false)
 const scopeDirty = ref(false)
 
 const groupList = computed<GroupRow[]>(() => {
-  const localNames = readGroupNames()
   const keyword = groupSearchKey.value.trim().toLowerCase()
-  return dbGroups.value
-    .map((g) => {
-      const name = localNames[String(g.groupId)] || g.name || groupName(g.groupId) || `用户组 ${g.groupId}`
-      const code = g.code || groupCode(g.groupId) || String(g.groupId)
-      return { groupId: g.groupId, name, code }
-    })
-    .filter((g) => {
-      if (!keyword) return true
-      return (
-        String(g.groupId).includes(keyword) ||
-        (g.code && g.code.toLowerCase().includes(keyword)) ||
-        g.name.toLowerCase().includes(keyword)
-      )
-    })
+  if (!keyword) return dbGroups.value
+  return dbGroups.value.filter(
+    (g) =>
+      String(g.groupId).includes(keyword) ||
+      (g.code && g.code.toLowerCase().includes(keyword)) ||
+      g.name.toLowerCase().includes(keyword),
+  )
 })
 
 const totalGroupCount = computed(() => groupList.value.length)
@@ -110,52 +100,35 @@ const pagedGroups = computed<GroupRow[]>(() => {
 
 const currentGroup = computed(() => {
   if (!currentGroupId.value) return null
-  return groupList.value.find((g) => g.groupId === currentGroupId.value) ?? {
-    groupId: currentGroupId.value,
-    name: groupName(currentGroupId.value) || `用户组 ${currentGroupId.value}`,
-    code: groupCode(currentGroupId.value) || String(currentGroupId.value),
-  }
+  return (
+    groupList.value.find((g) => g.groupId === currentGroupId.value) ?? {
+      groupId: currentGroupId.value,
+      name: `数据权限组 ${currentGroupId.value}`,
+      code: String(currentGroupId.value),
+    }
+  )
 })
 
-// 左侧用户组：主要来自 sys_user_group 表（调用 getSysUserGroupOptions 接口），
-// 同时并查 listGroupIds 作为兼容候选。组名与编码优先从 sys_user_group 取值。
+// 左侧数据权限组：主档是 sys_data_group（其 id 就是 sys_group_res.group_id，见 V3.6.2 迁移）。
+// 只保留后端允许配规则的那一段（groupId > GROUP_ID_FLOOR），内部超管组配了不生效，列出来只会误导。
 async function fetchGroups() {
   groupLoading.value = true
   try {
-    const [options, ids] = await Promise.all([
-      getSysUserGroupOptions().catch(() => [] as SysUserGroupOption[]),
-      listGroupIds().catch(() => [] as number[]),
-    ])
-    const rowMap = new Map<number, GroupRow>()
-    if (Array.isArray(options)) {
-      options.forEach((opt) => {
-        if (opt.id > GROUP_ID_FLOOR) {
-          rowMap.set(opt.id, {
-            groupId: opt.id,
-            name: opt.label,
-            code: opt.code || String(opt.id),
-          })
-        }
-      })
-    }
-    if (Array.isArray(ids)) {
-      ids.forEach((id) => {
-        if (id > GROUP_ID_FLOOR && !rowMap.has(id)) {
-          rowMap.set(id, {
-            groupId: id,
-            name: groupName(id) || `用户组 ${id}`,
-            code: groupCode(id) || String(id),
-          })
-        }
-      })
-    }
-    dbGroups.value = Array.from(rowMap.values()).sort((a, b) => a.groupId - b.groupId)
+    const groups = await fetchDataGroupList()
+    dbGroups.value = groups
+      .filter((g) => Number(g.id) > GROUP_ID_FLOOR)
+      .map((g) => ({
+        groupId: Number(g.id),
+        name: g.groupName || `数据权限组 ${g.id}`,
+        code: g.groupCode || String(g.id),
+      }))
+      .sort((a, b) => a.groupId - b.groupId)
     allGroupIds.value = dbGroups.value.map((g) => g.groupId)
     if (!currentGroupId.value && dbGroups.value.length > 0) {
       currentGroupId.value = dbGroups.value[0]!.groupId
     }
   } catch (e) {
-    ElMessage.error(`加载用户组列表失败：${e instanceof Error ? e.message : String(e)}`)
+    ElMessage.error(`加载数据权限组列表失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
     groupLoading.value = false
   }
@@ -167,7 +140,7 @@ async function onSelectGroup(row: GroupRow | null) {
   if (scopeDirty.value) {
     try {
       await ElMessageBox.confirm(
-        '当前用户组有未保存的权限配置修改，切换将丢失这些更改。是否继续切换？',
+        '当前数据权限组有未保存的权限配置修改，切换将丢失这些更改。是否继续切换？',
         '未保存提醒',
         {
           confirmButtonText: '放弃修改并切换',
@@ -195,7 +168,7 @@ function nextGroupPage() {
 
 async function promptRenameGroup(row: GroupRow) {
   try {
-    const { value } = await ElMessageBox.prompt('请输入用户组名称', `重命名用户组 #${row.groupId}`, {
+    const { value } = await ElMessageBox.prompt('请输入数据权限组名称', `重命名数据权限组 #${row.groupId}`, {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       inputValue: row.name,
@@ -203,20 +176,19 @@ async function promptRenameGroup(row: GroupRow) {
       inputErrorMessage: '名称长度为 1-50 字符',
     })
     const newName = value?.trim()
-    if (newName) {
-      try {
-        await updateSysUserGroup({ id: row.groupId, groupName: newName, groupCode: row.code })
-      } catch {
-        // 容错降级
-      }
-      setGroupName(row.groupId, newName)
-      const target = dbGroups.value.find((g) => g.groupId === row.groupId)
-      if (target) {
-        target.name = newName
-      }
-      allGroupIds.value = [...allGroupIds.value]
-      ElMessage.success('用户组名称修改成功')
+    if (!newName) return
+    try {
+      // update 走 selective 落库，但后端校验会把缺省的 groupCode 补成空串，所以原编码必须一并回传
+      await saveDataGroup({ id: row.groupId, groupName: newName, groupCode: row.code })
+    } catch (e: unknown) {
+      ElMessage.error(`数据权限组名称修改失败：${e instanceof Error ? e.message : String(e)}`)
+      return
     }
+    const target = dbGroups.value.find((g) => g.groupId === row.groupId)
+    if (target) {
+      target.name = newName
+    }
+    ElMessage.success('数据权限组名称修改成功')
   } catch {
     // 取消
   }
@@ -259,7 +231,7 @@ function onUpdateScopeGrant(kind: 'accept' | 'reject', grant: SourceGrant) {
 
 async function onSaveScope() {
   if (!currentGroupId.value) {
-    ElMessage.warning('请先在左侧选择一个用户组')
+    ElMessage.warning('请先在左侧选择一个数据权限组')
     return
   }
   const a = scope.value.accept
@@ -313,7 +285,7 @@ async function onSaveScope() {
       const s = saved?.[key]
       return s ? `整目录 ${s.dirIds} 个（展开 ${s.expandedCategoryIds} 个目录）· 单源 ${s.sourceIds} 个` : '未改动'
     }
-    ElMessage.success(`保存成功，用户组 #${currentGroupId.value} 源权限已生效：可见 ${seg('accept')}；排除 ${seg('reject')}`)
+    ElMessage.success(`保存成功，数据权限组 #${currentGroupId.value} 源权限已生效：可见 ${seg('accept')}；排除 ${seg('reject')}`)
     await loadScope(currentGroupId.value)
     void load()
   } catch (e) {
@@ -336,7 +308,7 @@ const DEFAULT_SIZE = 20
 const size = ref(DEFAULT_SIZE)
 let seq = 0
 
-// 明细查询由左侧选中组驱动（联动）：不再独立输入组 ID，切换左侧用户组即重查该组规则。
+// 明细查询由左侧选中组驱动（联动）：不再独立输入组 ID，切换左侧数据权限组即重查该组规则。
 async function load() {
   const id = ++seq
   loading.value = true
@@ -357,8 +329,8 @@ async function load() {
           if (!dbGroups.value.some((g) => g.groupId === r.groupId)) {
             dbGroups.value.push({
               groupId: r.groupId,
-              name: groupName(r.groupId) || `用户组 ${r.groupId}`,
-              code: groupCode(r.groupId) || String(r.groupId),
+              name: `数据权限组 ${r.groupId}`,
+              code: String(r.groupId),
             })
             dbGroups.value.sort((a, b) => a.groupId - b.groupId)
           }
@@ -475,11 +447,11 @@ onMounted(async () => {
   <div class="dp-shell" data-testid="settings-data-permission">
     <!-- 左右分栏容器 -->
     <div class="dp-split-layout">
-      <!-- 左侧：用户组分页列表 -->
+      <!-- 左侧：数据权限组分页列表 -->
       <div class="dp-card dp-left-card">
         <div class="dp-card-header">
           <div class="dp-card-title">
-            <span>用户组</span>
+            <span>数据权限组</span>
           </div>
           <div class="dp-card-search">
             <el-input
@@ -503,7 +475,7 @@ onMounted(async () => {
             class="dp-group-table"
             @row-click="onSelectGroup"
           >
-            <el-table-column prop="name" label="用户组名称" min-width="120" show-overflow-tooltip>
+            <el-table-column prop="name" label="数据权限组名称" min-width="120" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="dp-group-name-cell" :class="{ active: currentGroupId === row.groupId }">
                   <span class="dp-group-name-text">{{ row.name }}</span>
@@ -513,7 +485,7 @@ onMounted(async () => {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column prop="groupId" label="用户组编码" width="100" align="center">
+            <el-table-column prop="groupId" label="组编码" width="100" align="center">
               <template #default="{ row }">
                 <span class="dp-group-code-tag">{{ row.code || row.groupId }}</span>
               </template>
@@ -573,7 +545,7 @@ onMounted(async () => {
         <div v-if="activeRightTab !== 'ruleList'" class="dp-scope-pane" v-loading="scopeLoading">
           <div class="dp-scope-topbar">
             <span v-if="currentGroup" class="dp-current-group-badge">
-              当前用户组：<strong>{{ currentGroup.name }}</strong> (ID: {{ currentGroup.groupId }})
+              当前数据权限组：<strong>{{ currentGroup.name }}</strong> (ID: {{ currentGroup.groupId }})
             </span>
             <span class="dp-scope-sum" data-testid="group-res-scope-sum">
               {{ currentKind === 'accept' ? '可见' : '排除' }}已选：整目录 {{ currentGrant.dirIds.length }} · 单源 {{ currentGrant.sourceIds.length }}
@@ -607,7 +579,7 @@ onMounted(async () => {
         <!-- Tab 3：原有规则明细表格 -->
         <div v-show="activeRightTab === 'ruleList'" class="dp-rule-list-pane" v-loading="loading">
           <el-form :inline="true" class="dp-filter-form" size="small" @submit.prevent>
-            <el-form-item label="用户组">
+            <el-form-item label="数据权限组">
               <span class="dp-cur-group" data-testid="group-res-current-group">
                 {{ currentGroup ? `${currentGroup.name} (${currentGroup.groupId})` : '未选择' }}
               </span>

@@ -52,24 +52,21 @@ const EP = {
 
 /**
  * 获取数据组列表 (包含关联角色信息)
+ *
+ * 不吞异常：这里返回空数组会让页面看起来「一个数据组都没配」，与接口没通是两种完全不同的事，
+ * 交给调用方决定怎么提示。mock 模式下未实现专属 handler 的端点会回 null，统一收敛成空列表。
  */
 export async function fetchDataGroupList(params?: { keyword?: string; status?: number }): Promise<SysDataGroupItem[]> {
-  try {
-    return await request<SysDataGroupItem[]>(EP.list, params ?? {}, { method: 'GET' })
-  } catch {
-    return []
-  }
+  const res = await request<SysDataGroupItem[]>(EP.list, params ?? {}, { method: 'GET' })
+  return Array.isArray(res) ? res : []
 }
 
 /**
- * 获取数据组下拉选项
+ * 获取数据组下拉选项 (后端已排除停用组)
  */
 export async function fetchDataGroupOptions(): Promise<SysDataGroupOption[]> {
-  try {
-    return await request<SysDataGroupOption[]>(EP.options, {}, { method: 'GET' })
-  } catch {
-    return []
-  }
+  const res = await request<SysDataGroupOption[]>(EP.options, {}, { method: 'GET' })
+  return Array.isArray(res) ? res : []
 }
 
 /**
@@ -81,58 +78,55 @@ export async function fetchDataGroupDetail(id: number): Promise<SysDataGroupItem
 
 /**
  * 新增或更新数据组
+ *
+ * update 走的是后端 selective 更新，但 groupCode 缺省会被校验逻辑补成空串再落库，
+ * 所以改名必须把原编码一并带上。
  */
 export async function saveDataGroup(form: SysDataGroupForm): Promise<Ack> {
   const url = form.id ? EP.update : EP.add
-  return await request<Ack>(url, {}, { method: 'POST', body: form })
+  return await request<Ack>(url, form as unknown as Record<string, unknown>, { method: 'POST' })
 }
 
 /**
- * 删除数据组
+ * 删除数据组（后端 @RequestParam，走 query 不走 JSON 体）
  */
 export async function deleteDataGroup(id: number): Promise<Ack> {
-  return await request<Ack>(EP.delete, { id }, { method: 'POST' })
+  return await request<Ack>(EP.delete, { id }, { method: 'POST', paramsIn: 'query' })
 }
 
 /**
  * 切换数据组状态 (0-启用, 1-停用)
  */
 export async function toggleDataGroupStatus(id: number, status: number): Promise<Ack> {
-  return await request<Ack>(EP.status, {}, { method: 'POST', body: { id, status } })
+  return await request<Ack>(EP.status, { id, status }, { method: 'POST' })
 }
 
 /**
  * 查询指定数据组关联的角色ID列表
  */
 export async function fetchDataGroupRoles(dataGroupId: number): Promise<number[]> {
-  try {
-    return await request<number[]>(EP.roles, { dataGroupId }, { method: 'GET' })
-  } catch {
-    return []
-  }
+  const res = await request<number[]>(EP.roles, { dataGroupId }, { method: 'GET' })
+  return Array.isArray(res) ? res : []
 }
 
 /**
  * 为数据组绑定角色列表
  */
 export async function bindRolesToDataGroup(dataGroupId: number, roleIds: number[]): Promise<Ack> {
-  return await request<Ack>(EP.bindRoles, {}, { method: 'POST', body: { dataGroupId, roleIds } })
+  return await request<Ack>(EP.bindRoles, { dataGroupId, roleIds }, { method: 'POST' })
 }
 
 /**
  * 查询指定角色关联的数据组ID列表
  */
 export async function fetchRoleDataGroups(roleId: number): Promise<number[]> {
-  try {
-    return await request<number[]>(EP.roleGroups, { roleId }, { method: 'GET' })
-  } catch {
-    return []
-  }
+  const res = await request<number[]>(EP.roleGroups, { roleId }, { method: 'GET' })
+  return Array.isArray(res) ? res : []
 }
 
 /**
  * 为角色绑定数据组列表
  */
 export async function bindDataGroupsToRole(roleId: number, dataGroupIds: number[]): Promise<Ack> {
-  return await request<Ack>(EP.bindRoleGroups, {}, { method: 'POST', body: { roleId, dataGroupIds } })
+  return await request<Ack>(EP.bindRoleGroups, { roleId, dataGroupIds }, { method: 'POST' })
 }
