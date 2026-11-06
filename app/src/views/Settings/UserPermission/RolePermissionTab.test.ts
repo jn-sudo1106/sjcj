@@ -144,12 +144,102 @@ describe('角色管理 · RolePermissionTab', () => {
 
   it('菜单权限树提供展开/折叠与全选操作按钮', async () => {
     const { wrapper } = await mountComponent()
+    // 默认选中的 admin 是只读的，先切到可编辑角色再看工具栏
+    await wrapper.findAll('.role-card-item')[1]?.trigger('click')
+    await flushPromises()
     const buttons = wrapper.findAll('.tree-actions button')
     const buttonTexts = buttons.map((b) => b.text())
     expect(buttonTexts).toContain('全部折叠')
     expect(buttonTexts).toContain('全选')
     expect(buttonTexts).toContain('全不选')
     expect(buttonTexts).toContain('保存菜单权限')
+    wrapper.unmount()
+  })
+
+  it('admin 角色不可编辑：编辑入口置灰，点击不打开编辑弹窗', async () => {
+    const { wrapper } = await mountComponent()
+    const adminCard = wrapper.findAll('.role-card-item')[0]!
+    expect(adminCard.text()).toContain('admin')
+
+    const editBtn = adminCard.find('[data-testid="role-edit"]')
+    expect(editBtn.exists()).toBe(true)
+    expect(editBtn.attributes('disabled')).toBeDefined()
+
+    // 即使触发点击（防御路径），也只提示、不弹窗
+    await editBtn.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.el-dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('admin 角色的右侧区域整体不可点击：只剩只读横幅，无勾选框与全选/保存按钮', async () => {
+    const { wrapper } = await mountComponent()
+    // 默认选中第一个角色 admin
+    expect(wrapper.find('[data-testid="role-readonly-band"]').exists()).toBe(true)
+    expect(wrapper.find('.role-detail-pane').classes()).toContain('is-readonly')
+    // 整个右侧（含页签）为 inert 且带 pointer-events 兜底，点不动也聚焦不到
+    const tabs = wrapper.find('[data-testid="role-readonly-tabs"]')
+    expect(tabs.exists()).toBe(true)
+    expect(tabs.attributes('inert')).toBeDefined()
+    expect(tabs.classes()).toContain('is-inert')
+    // 菜单 tab：树只作展示，写操作按钮整体不渲染
+    expect(wrapper.findAll('.custom-permission-tree .el-checkbox').length).toBe(0)
+    const buttonTexts = wrapper.findAll('.tree-actions button').map((b) => b.text())
+    expect(buttonTexts).toContain('全部折叠')
+    expect(buttonTexts).not.toContain('全选')
+    expect(buttonTexts).not.toContain('全不选')
+    expect(buttonTexts).not.toContain('保存菜单权限')
+    wrapper.unmount()
+  })
+
+  it('admin 角色的数据组 tab 也没有配置入口（只保留查看范围）', async () => {
+    const { wrapper } = await mountComponent()
+    // jsdom 不执行 inert 的点击拦截，这里只为检查数据组面板里的写入口确实不存在
+    const dataGroupTab = wrapper.findAll('.role-right-tabs .el-tabs__item').find((t) => t.text() === '数据组')
+    await dataGroupTab?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.data-group-pane').exists()).toBe(true)
+    const texts = wrapper.findAll('.data-group-pane button').map((b) => b.text())
+    expect(texts).toContain('查看范围')
+    expect(texts).not.toContain('配置规则')
+    expect(texts).not.toContain('前往数据权限配置页')
+    wrapper.unmount()
+  })
+
+  it('非 admin 角色仍可编辑：编辑入口可用且可打开弹窗、菜单树可勾选', async () => {
+    const { wrapper } = await mountComponent()
+    const readCard = wrapper.findAll('.role-card-item')[1]!
+    expect(readCard.text()).toContain('read')
+
+    // 先选中 read 角色（点卡片），再走编辑入口
+    await readCard.trigger('click')
+    await flushPromises()
+
+    // read 角色：右侧恢复可交互，菜单树有勾选框、写操作按钮齐全
+    expect(wrapper.findAll('.custom-permission-tree .el-checkbox').length).toBeGreaterThan(0)
+    const buttonTexts = wrapper.findAll('.tree-actions button').map((b) => b.text())
+    expect(buttonTexts).toContain('全选')
+    expect(buttonTexts).toContain('全不选')
+    expect(buttonTexts).toContain('保存菜单权限')
+    expect(wrapper.find('[data-testid="role-readonly-band"]').exists()).toBe(false)
+    expect(wrapper.find('.role-right-tabs').attributes('inert')).toBeUndefined()
+    expect(wrapper.find('.role-detail-pane').classes()).not.toContain('is-readonly')
+
+    // 数据组 tab 的配置入口对普通角色照常存在
+    const dataGroupTab = wrapper.findAll('.role-right-tabs .el-tabs__item').find((t) => t.text() === '数据组')
+    await dataGroupTab?.trigger('click')
+    await flushPromises()
+    const groupTexts = wrapper.findAll('.data-group-pane button').map((b) => b.text())
+    expect(groupTexts).toContain('前往数据权限配置页')
+    expect(groupTexts).toContain('配置规则')
+
+    const editBtn = readCard.find('[data-testid="role-edit"]')
+    expect(editBtn.attributes('disabled')).toBeUndefined()
+    await editBtn.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.el-dialog').exists()).toBe(true)
+    expect(wrapper.find('.el-dialog').text()).toContain('编辑角色')
     wrapper.unmount()
   })
 })

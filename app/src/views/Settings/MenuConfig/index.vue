@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   ElMessage,
   ElMessageBox,
@@ -45,7 +45,6 @@ const drawerVisible = ref(false)
 const drawerTitle = ref('新增资源')
 const isEditing = ref(false)
 const currentEditId = ref<number | null>(null)
-const previewDrawerVisible = ref(false)
 const diagnosticsVisible = ref(false)
 const detailDrawerVisible = ref(false)
 const detailItem = ref<SysMenuTreeNode | null>(null)
@@ -573,7 +572,7 @@ async function handleMoveQuick(data: SysMenuTreeNode, direction: 'up' | 'down') 
 }
 
 // 全部展开 / 折叠
-const isAllExpanded = ref(true)
+const isAllExpanded = ref(false)
 function toggleExpandAll() {
   isAllExpanded.value = !isAllExpanded.value
   if (!treeRef.value) return
@@ -585,6 +584,44 @@ function toggleExpandAll() {
     node.expanded = isAllExpanded.value
   }
 }
+
+// 默认展开策略：只展开「目录」这一层，菜单行可见但默认收起 —— 和真实侧栏同形
+// （侧栏本来就只到 目录 -> 菜单，页内 Tab 与按钮不在侧栏上）。
+// 一旦有搜索或类型/状态筛选就全展开，否则筛出来的菜单/Tab/按钮会藏在收起的父节点里看不见。
+const hasTreeFilter = computed(
+  () => !!searchKeyword.value.trim() || filterType.value !== 'ALL' || filterStatus.value !== 'ALL',
+)
+
+const defaultExpandedKeys = computed<number[]>(() => {
+  const keys: number[] = []
+  const walk = (nodes: SysMenuTreeNode[]) => {
+    for (const node of nodes) {
+      if (hasTreeFilter.value || node.type === 0) keys.push(node.id)
+      if (node.children?.length) walk(node.children)
+    }
+  }
+  walk(filteredTreeData.value)
+  return keys
+})
+
+// el-tree 只在重建节点时读 default-expanded-keys，筛选变化后按同一口径补一次
+watch(
+  defaultExpandedKeys,
+  (keys) => {
+    if (!treeRef.value) return
+    interface TreeNodeInternal {
+      expanded: boolean
+      data?: { id?: number }
+    }
+    const expanded = new Set(keys)
+    const nodes = (treeRef.value.store?._getAllNodes?.() as TreeNodeInternal[]) || []
+    for (const node of nodes) {
+      node.expanded = node.data?.id !== undefined && expanded.has(node.data.id)
+    }
+    isAllExpanded.value = nodes.length > 0 && nodes.every((node) => node.expanded)
+  },
+  { flush: 'post' },
+)
 
 // 打开新增抽屉
 function handleAdd(parentId = 0, defaultType = 1) {
@@ -612,7 +649,7 @@ function handleAdd(parentId = 0, defaultType = 1) {
 function handleEdit(row: SysMenuTreeNode) {
   isEditing.value = true
   currentEditId.value = row.id
-  drawerTitle.value = `编辑资源: ${row.label}`
+  drawerTitle.value = `编辑: ${row.label}`
   form.value = {
     id: row.id,
     parentId: row.parentId,
@@ -661,6 +698,12 @@ async function handleSubmit() {
     ElMessage.warning('请输入菜单或资源名称')
     return
   }
+  // 页内 Tab 的 key 就是前端 componentMap 的键名与地址栏 ?tab= 的值，留空会让页签点了没反应
+  // （useDynamicTabs 只能按 id 兜底补成 tab-N，切过去的地址也就不再稳定可读）
+  if (form.value.type === 2 && !form.value.linkAddress?.trim()) {
+    ElMessage.warning('请填写页内 Tab 标识 Key（例如 users），留空会导致该页签点了没反应')
+    return
+  }
   try {
     await saveMenu(form.value)
     ElMessage.success(isEditing.value ? '更新成功' : '新增成功')
@@ -706,32 +749,6 @@ async function handleCleanLegacy() {
   }
 }
 
-// 侧栏实时模拟计算
-const simulatedSidebarGroups = computed(() => {
-  const dirs = rawTreeData.value
-    .filter((i) => i.type === 0 && i.status === 0)
-    .sort((a, b) => a.order - b.order)
-
-  return dirs
-    .map((dir) => {
-      const menus = (dir.children || [])
-        .filter(
-          (m) =>
-            m.type === 1 &&
-            m.status === 0 &&
-            m.linkAddress &&
-            m.linkAddress.startsWith('/')
-        )
-        .sort((a, b) => a.order - b.order)
-      return {
-        key: dir.modelCode?.replace('group:', '') || String(dir.id),
-        label: dir.label,
-        items: menus,
-      }
-    })
-    .filter((g) => g.items.length > 0)
-})
-
 onMounted(() => {
   void loadTree()
 })
@@ -767,11 +784,6 @@ onMounted(() => {
           >
             <el-icon class="mr-1"><WarningFilled /></el-icon>
             老库脏数据自检 ({{ legacyIssues.length }}项异常)
-          </el-button>
-
-          <el-button plain @click="previewDrawerVisible = true">
-            <el-icon class="mr-1"><View /></el-icon>
-            实时侧栏预览
           </el-button>
 
           <el-button type="primary" @click="handleAdd(0, 0)">
@@ -872,6 +884,7 @@ onMounted(() => {
             <span class="meta-col col-path">路由地址</span>
             <span class="meta-col col-order">排序</span>
             <span class="meta-col col-status">状态</span>
+            <span class="meta-col col-time">更新时间</span>
             <span class="meta-col col-ops">操作</span>
           </div>
         </div>
@@ -881,7 +894,8 @@ onMounted(() => {
             ref="treeRef"
             :data="filteredTreeData"
             node-key="id"
-            :default-expand-all="true"
+            :default-expand-all="false"
+            :default-expanded-keys="defaultExpandedKeys"
             :expand-on-click-node="false"
             :props="{ label: 'label', children: 'children' }"
             draggable
@@ -913,22 +927,6 @@ onMounted(() => {
                   >
                     {{ data.label }}
                   </span>
-                  <span
-                    v-if="data.updateTime"
-                    class="node-update-time"
-                    :title="'最后更新时间: ' + data.updateTime"
-                  >
-                    {{ data.updateTime }}
-                  </span>
-                  <el-tag
-                    v-if="data.id >= 901 && data.id <= 906"
-                    type="danger"
-                    size="small"
-                    effect="dark"
-                    class="legacy-tag ml-1"
-                  >
-                    老库残留
-                  </el-tag>
                 </div>
 
                 <!-- 右侧：路由 + 排序 + 启停 + 操作按钮（组件文件路径只在详情/编辑抽屉中查看，列表不展示） -->
@@ -981,6 +979,13 @@ onMounted(() => {
                     />
                   </div>
 
+                  <div class="meta-time">
+                    <span v-if="data.updateTime" class="time-code" :title="'最后更新时间: ' + data.updateTime">
+                      {{ data.updateTime }}
+                    </span>
+                    <span v-else class="path-none">-</span>
+                  </div>
+
                   <div class="meta-actions">
                     <el-tooltip
                       v-if="data.type < 3"
@@ -999,7 +1004,22 @@ onMounted(() => {
                       />
                     </el-tooltip>
                     <el-tooltip
-                      content="编辑资源"
+                      content="查看详情"
+                      placement="top"
+                      :show-after="200"
+                    >
+                      <el-button
+                        type="info"
+                        link
+                        size="small"
+                        :icon="View"
+                        class="op-icon-btn"
+                        aria-label="查看详情"
+                        @click="handleViewDetail(data)"
+                      />
+                    </el-tooltip>
+                    <el-tooltip
+                      content="编辑"
                       placement="top"
                       :show-after="200"
                     >
@@ -1130,7 +1150,7 @@ onMounted(() => {
         </el-form-item>
 
         <!-- 路由路径 -->
-        <el-form-item>
+        <el-form-item :required="form.type === 2">
           <template #label>
             <span>
               {{
@@ -1139,7 +1159,7 @@ onMounted(() => {
                   : form.type === 1
                   ? '页面路由地址 (以 / 开头)'
                   : form.type === 2
-                  ? '页内 Tab 标识 Key (例如 users)'
+                  ? '页内 Tab 标识 Key (必填，例如 users)'
                   : '触发行为/动作路径 (可选)'
               }}
             </span>
@@ -1221,7 +1241,7 @@ onMounted(() => {
             <!-- 图标检索与网格点选面板 -->
             <div class="icon-picker-panel">
               <div class="panel-header">
-                <span class="panel-title">全量图标库 (共 {{ allElementIcons.length }} 款)</span>
+                <span class="panel-title">Element Plus 全量图标库 (共 {{ allElementIcons.length }} 款)</span>
                 <el-input
                   v-model="iconSearchKey"
                   placeholder="搜索图标名称或含义..."
@@ -1347,7 +1367,7 @@ onMounted(() => {
         </div>
 
         <el-descriptions :column="1" border class="mt-4 detail-descriptions">
-          <el-descriptions-item label="排序序号">
+          <el-descriptions-item label="排序序号 (order)">
             <el-tag type="primary" effect="dark" class="order-detail-tag">
               #{{ detailItem.order ?? 0 }}
             </el-tag>
@@ -1442,32 +1462,6 @@ onMounted(() => {
         </span>
       </template>
     </el-dialog>
-
-    <!-- ==================== 侧栏实时模拟预览抽屉 ==================== -->
-    <el-drawer
-      v-model="previewDrawerVisible"
-      title="侧栏导航实时预览 (所见即所得)"
-      size="320px"
-      class="sidebar-preview-drawer"
-    >
-      <div class="preview-tip">
-        当前根据当前菜单树中 <b>type=0</b> 分组与有效 <b>type=1</b> 菜单实时动态计算：
-      </div>
-      <div class="mock-sidebar">
-        <div v-for="group in simulatedSidebarGroups" :key="group.key" class="mock-group">
-          <div class="mock-group-title">{{ group.label }}</div>
-          <div
-            v-for="item in group.items"
-            :key="item.id"
-            class="mock-item"
-            :class="{ 'is-active': item.id === 8300 }"
-          >
-            <el-icon class="mr-2"><component :is="getIconComponent(item.icon)" /></el-icon>
-            <span class="mock-item-label">{{ item.label }}</span>
-          </div>
-        </div>
-      </div>
-    </el-drawer>
   </div>
 </template>
 
@@ -1655,6 +1649,12 @@ onMounted(() => {
   text-align: center;
 }
 
+.col-time {
+  flex: 0 0 150px;
+  width: 150px;
+  text-align: left;
+}
+
 .col-ops {
   flex: 0 0 120px;
   width: 120px;
@@ -1789,14 +1789,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.node-update-time {
-  font-size: 11px;
-  color: #94a3b8;
-  font-family: monospace;
-  margin-left: 6px;
-  flex-shrink: 0;
-}
-
 .field-label-box {
   display: flex;
   align-items: baseline;
@@ -1885,6 +1877,23 @@ onMounted(() => {
   display: flex;
   justify-content: center;
   align-items: center;
+}
+
+.meta-time {
+  flex: 0 0 150px;
+  width: 150px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.time-code {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .meta-actions {
@@ -2283,40 +2292,5 @@ onMounted(() => {
   color: var(--el-text-color-secondary);
   margin-bottom: 16px;
   line-height: 1.5;
-}
-
-.mock-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.mock-group-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--el-text-color-placeholder);
-  margin-bottom: 6px;
-}
-
-.mock-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.mock-item:hover {
-  background: var(--el-fill-color-light);
-  color: var(--el-color-primary);
-}
-
-.mock-item.is-active {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-  font-weight: 500;
 }
 </style>

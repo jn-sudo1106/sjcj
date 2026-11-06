@@ -5,6 +5,11 @@
 //   右侧：展示选中角色对应的两大维度配置（Tab 页签切换）：
 //     - 菜单 tab：全量系统资源/菜单树勾选与授权保存（功能权限）；
 //     - 数据组 tab：展示该角色关联的数据组、成员分布与数据权限范围配置（数据权限）。
+//
+// admin 为系统超级管理员角色：SysMenuService 对 admin 直接下发全量菜单、数据组维度也天然穿透，
+// 角色本身（名称/描述/状态/菜单授权）没有任何可编辑的业务意义，因此整角色只读：
+// 列表的编辑入口置灰 + 弹窗入口二次拦截 + 右侧详情区整块 inert（含页签在内一律点不动、
+// 也不能用键盘聚焦），并隐藏菜单树勾选框、全选/全不选/保存按钮与数据组的跳转配置入口。
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type ElTree } from 'element-plus'
@@ -16,6 +21,7 @@ import {
   Edit,
   Folder,
   FolderOpened,
+  Lock,
   Plus,
   Search,
   View,
@@ -105,6 +111,13 @@ const roleForm = reactive({
 })
 
 const isEditingRole = computed(() => roleForm.roleId !== undefined)
+
+/** admin 为系统超级管理员角色（后端按角色名判定），该角色整体只读 */
+function isAdminRole(role: Pick<SysRoleRow, 'roleName'> | null | undefined): boolean {
+  return !!role && role.roleName.trim().toLowerCase() === 'admin'
+}
+
+const isAdminSelected = computed(() => isAdminRole(selectedRole.value))
 
 onMounted(async () => {
   await Promise.all([loadTreeData(), loadRoles(), loadGroupAndUserData()])
@@ -234,6 +247,10 @@ async function handleSavePermissions() {
     ElMessage.warning('请先在左侧选择要授权的角色')
     return
   }
+  if (isAdminSelected.value) {
+    ElMessage.warning('admin 为系统超级管理员角色，不可编辑菜单权限')
+    return
+  }
   if (!treeRef.value) return
 
   savingPermissions.value = true
@@ -357,6 +374,10 @@ function openAddRole() {
 }
 
 function openEditRole(role: SysRoleRow) {
+  if (isAdminRole(role)) {
+    ElMessage.warning('admin 为系统超级管理员角色，不可编辑')
+    return
+  }
   dialogTitle.value = '编辑角色'
   Object.assign(roleForm, {
     roleId: role.roleId,
@@ -487,8 +508,22 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
           <div class="role-card-footer">
             <span class="role-user-count">已分配用户: <b>{{ r.userCount }}</b> 人</span>
             <div class="role-card-actions" @click.stop>
-              <el-tooltip content="编辑角色" placement="top">
-                <el-button link type="primary" size="small" :icon="Edit" @click="openEditRole(r)" />
+              <el-tooltip
+                :content="isAdminRole(r) ? 'admin 为系统超级管理员角色，不可编辑' : '编辑角色'"
+                placement="top"
+              >
+                <!-- disabled 按钮自身不派发鼠标事件，用 span 兜住 tooltip 的 hover -->
+                <span class="role-action-trigger">
+                  <el-button
+                    link
+                    type="primary"
+                    size="small"
+                    :icon="Edit"
+                    :disabled="isAdminRole(r)"
+                    data-testid="role-edit"
+                    @click="openEditRole(r)"
+                  />
+                </span>
               </el-tooltip>
               <el-tooltip
                 v-if="!r.isSys"
@@ -512,8 +547,8 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
       </div>
     </aside>
 
-    <!-- 右侧：选定角色的 菜单tab / 数据组tab -->
-    <main class="role-detail-pane">
+    <!-- 右侧：选定角色的 菜单tab / 数据组tab；admin 整块只读且不可点击（含页签） -->
+    <main class="role-detail-pane" :class="{ 'is-readonly': isAdminSelected }">
       <div class="role-detail-header">
         <div class="current-role-badge">
           <span class="label">当前角色：</span>
@@ -525,8 +560,20 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
         </div>
       </div>
 
-      <!-- 右侧内嵌 Tab：菜单 / 数据组 -->
-      <el-tabs v-model="activeRightTab" class="role-right-tabs">
+      <!-- admin：整块只读提示（放在 inert 区域之外，保证始终可读） -->
+      <div v-if="isAdminSelected" class="role-readonly-band" data-testid="role-readonly-band">
+        <el-icon :size="14"><Lock /></el-icon>
+        <span>admin 为系统超级管理员角色，右侧区域整体只读：页签与配置均不可点击</span>
+      </div>
+
+      <!-- inert：admin 时右侧（含页签）既不可点击也不可聚焦 -->
+      <el-tabs
+        v-model="activeRightTab"
+        class="role-right-tabs"
+        :class="{ 'is-inert': isAdminSelected }"
+        :inert="isAdminSelected ? '' : undefined"
+        :data-testid="isAdminSelected ? 'role-readonly-tabs' : undefined"
+      >
         <!-- 1. 菜单 tab -->
         <el-tab-pane label="菜单" name="menu">
           <div class="tab-pane-container">
@@ -536,18 +583,21 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
                 <el-button size="small" :icon="isAllExpanded ? Folder : FolderOpened" @click="toggleExpandAll">
                   {{ isAllExpanded ? '全部折叠' : '全部展开' }}
                 </el-button>
-                <el-button size="small" @click="toggleSelectAll(true)">全选</el-button>
-                <el-button size="small" @click="toggleSelectAll(false)">全不选</el-button>
-                <el-button
-                  type="primary"
-                  size="small"
-                  :icon="Check"
-                  :loading="savingPermissions"
-                  :disabled="!selectedRole"
-                  @click="handleSavePermissions"
-                >
-                  保存菜单权限
-                </el-button>
+                <!-- admin 只读：勾选/全选/授权保存整体不出现 -->
+                <template v-if="!isAdminSelected">
+                  <el-button size="small" :disabled="!selectedRole" @click="toggleSelectAll(true)">全选</el-button>
+                  <el-button size="small" :disabled="!selectedRole" @click="toggleSelectAll(false)">全不选</el-button>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Check"
+                    :loading="savingPermissions"
+                    :disabled="!selectedRole"
+                    @click="handleSavePermissions"
+                  >
+                    保存菜单权限
+                  </el-button>
+                </template>
               </div>
             </div>
 
@@ -555,7 +605,7 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
               <el-tree
                 ref="treeRef"
                 :data="resourceTree"
-                show-checkbox
+                :show-checkbox="!isAdminSelected"
                 node-key="id"
                 :default-expand-all="true"
                 :expand-on-click-node="false"
@@ -593,7 +643,7 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
                   style="width: 240px"
                 />
               </div>
-              <div class="toolbar-right">
+              <div v-if="!isAdminSelected" class="toolbar-right">
                 <el-button size="small" :icon="Connection" @click="navigateToDataPermission()">
                   前往数据权限配置页
                 </el-button>
@@ -601,7 +651,7 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
             </div>
 
             <!-- 超管特权提示 / 普通角色说明 -->
-            <div v-if="selectedRole?.roleName === 'admin'" class="group-alert-box">
+            <div v-if="isAdminSelected" class="group-alert-box">
               <el-alert
                 title="超级管理员特权提示"
                 description="admin 为系统超级管理员角色，系统底层天然穿透所有数据权限限制，拥有全平台所有数据组与采集源的全部访问与操作权限。"
@@ -666,12 +716,20 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
                     <span v-else class="text-muted">未限制</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="170" align="center" fixed="right">
+                <el-table-column label="操作" :width="isAdminSelected ? 110 : 170" align="center" fixed="right">
                   <template #default="{ row }">
                     <el-button link type="primary" size="small" :icon="View" @click="viewGroupScopeDetail(row)">
                       查看范围
                     </el-button>
-                    <el-button link type="primary" size="small" :icon="ArrowRight" @click="navigateToDataPermission(row.groupId)">
+                    <!-- admin 只读：不提供跳转到数据权限配置的写入口 -->
+                    <el-button
+                      v-if="!isAdminSelected"
+                      link
+                      type="primary"
+                      size="small"
+                      :icon="ArrowRight"
+                      @click="navigateToDataPermission(row.groupId)"
+                    >
                       配置规则
                     </el-button>
                   </template>
@@ -779,7 +837,8 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
       </div>
       <template #footer>
         <el-button @click="groupDetailDialogVisible = false">关闭</el-button>
-        <el-button type="primary" @click="navigateToDataPermission(viewingGroup?.groupId)">
+        <!-- admin 只读：不提供去配置规则的写入口 -->
+        <el-button v-if="!isAdminSelected" type="primary" @click="navigateToDataPermission(viewingGroup?.groupId)">
           去配置完整规则
         </el-button>
       </template>
@@ -906,6 +965,11 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
   gap: 2px;
 }
 
+.role-card-actions .role-action-trigger {
+  display: inline-flex;
+  align-items: center;
+}
+
 /* 右侧主面板 */
 .role-detail-pane {
   flex: 1;
@@ -950,6 +1014,28 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
 .current-role-badge .role-none {
   color: #94a3b8;
   font-style: italic;
+}
+
+/* admin 只读横幅：在 inert 区域之外，说明为什么整块点不动 */
+.role-readonly-band {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 16px 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+/* inert 兜底：老浏览器不支持 inert 时，右侧同样不接受鼠标交互；整体压暗提示不可操作 */
+.role-right-tabs.is-inert {
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.72;
 }
 
 /* 右侧子 Tabs */

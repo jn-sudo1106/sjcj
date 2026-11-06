@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import MenuConfigView from './index.vue'
 import * as sysMenuApi from '@/api/sysMenuConfig'
 
@@ -122,11 +122,16 @@ describe('MenuConfigView (菜单配置与资源管理中心)', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('菜单配置与资源管理中心')
+    // 头部文案在 871ac0b 有意改成「菜单配置 + 四类资源说明」（旧断言里的「菜单配置与资源管理中心」
+    // 这句已不是产品文案）。按现状钉住标题与说明，标题被吞或四类资源说明少了任何一类都会红。
+    expect(wrapper.find('.main-title').text()).toBe('菜单配置')
+    expect(wrapper.text()).toContain('统一编排维护系统目录分组 (DIR)、一级功能页面 (MENU)、页内标签 (TAB) 与操作按钮权限 (BUTTON)')
     expect(wrapper.text()).toContain('首页')
     expect(wrapper.text()).toContain('采集资产总览')
     expect(wrapper.text()).toContain('菜单配置')
-    expect(wrapper.text()).toContain('菜单树查询')
+    // 默认只展开目录层：8300「菜单配置」这行可见，但它下面的 8301 按钮行收起，不在列表里
+    // （按钮级的可见性由下面「默认只展开到菜单层」那条用例专门管）
+    expect(wrapper.text()).not.toContain('菜单树查询')
 
     // 统计胶囊
     expect(wrapper.find('.stat-pill.dir .stat-val').text()).toBe('3') // 1000, 8000, 900
@@ -183,19 +188,117 @@ describe('MenuConfigView (菜单配置与资源管理中心)', () => {
     expect(wrapper.text()).toContain('新建顶级分组目录')
   })
 
-  it('点击「实时侧栏预览」打开侧栏模拟抽屉', async () => {
+  // 页内 Tab 的 key 既是前端 componentMap 的键名，也是地址栏 ?tab= 的值；留空会让页签
+  // 「点了没反应」（useDynamicTabs 只能按 id 兜底补 tab-N），所以类型=页内 Tab 时必填，且拦在发请求之前。
+  it('页内 Tab 的标识 Key 必填：留空保存被拦下，填上才发请求', async () => {
+    const wrapper = mount(MenuConfigView, {
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    const warning = vi.spyOn(ElMessage, 'warning')
+
+    // 「添加子项」走 handleAdd(data.id, data.type + 1)：展开后第 2 个按钮落在「采集资产总览」这条
+    // 菜单 (type=1) 上，所以子级的默认类型就是页内 Tab (type=2)
+    const addChildBtns = wrapper.findAll('.op-icon-btn[aria-label="添加子项"]')
+    await addChildBtns[1]!.trigger('click')
+    await flushPromises()
+
+    const items = wrapper.findAll('.el-form-item')
+    const keyItem = items.find((i) => i.text().includes('页内 Tab 标识 Key'))
+    if (!keyItem) throw new Error('没打开页内 Tab 类型的表单（默认类型推断失效）')
+    expect(keyItem.classes()).toContain('is-required')
+
+    const nameItem = items.find((i) => i.text().includes('名称'))
+    await nameItem!.find('input').setValue('测试页签')
+
+    const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))
+    await saveBtn!.trigger('click')
+    await flushPromises()
+    expect(sysMenuApi.saveMenu).not.toHaveBeenCalled()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('页内 Tab 标识 Key'))
+
+    await keyItem.find('input').setValue('users')
+    await saveBtn!.trigger('click')
+    await flushPromises()
+    expect(sysMenuApi.saveMenu).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sysMenuApi.saveMenu).mock.calls[0]![0]).toMatchObject({
+      type: 2,
+      name: '测试页签',
+      linkAddress: 'users',
+    })
+  })
+
+  it('更新时间单独成列，不再挤在节点名称后面', async () => {
     const wrapper = mount(MenuConfigView, {
       global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
-    const previewBtn = wrapper.findAll('button').find((b) => b.text().includes('实时侧栏预览'))
-    expect(previewBtn).toBeDefined()
-    await previewBtn!.trigger('click')
+    const headerCols = wrapper.findAll('.tree-header-bar .meta-col').map((c) => c.text())
+    expect(headerCols).toEqual(['路由地址', '排序', '状态', '更新时间', '操作'])
+
+    const timeCells = wrapper.findAll('.custom-tree-row .meta-time')
+    expect(timeCells.length).toBeGreaterThan(0)
+    expect(timeCells.map((c) => c.text()).join(' ')).toContain('2026-11-05 21:05:37')
+    // 名称列里不该再有时间戳（原来两者挤在一起，列宽一变就错位）
+    for (const main of wrapper.findAll('.node-main')) {
+      expect(main.text()).not.toContain('2026-11-05')
+    }
+  })
+
+  // 默认展开策略：只展开「目录」一层。菜单行可见但默认收起，页内 Tab 与按钮都藏在菜单里
+  // —— 与真实侧栏同形（侧栏本来就只到 目录 -> 菜单），所以不再需要单独的侧栏预览抽屉。
+  it('默认只展开到菜单层：页内 Tab 收起，「全部展开」才露出 Tab 与按钮', async () => {
+    vi.spyOn(sysMenuApi, 'getMenuTree').mockResolvedValue([
+      {
+        id: 8000, parentId: 0, label: '系统管理', type: 0, linkAddress: '', modelCode: 'group:settings',
+        icon: 'Setting', order: 8, status: 0,
+        children: [
+          {
+            id: 8200, parentId: 8000, label: '用户权限设置', type: 1, linkAddress: '/user-permission', modelCode: 'settings',
+            icon: 'UserFilled', order: 2, status: 0,
+            children: [
+              {
+                id: 8201, parentId: 8200, label: '数据权限设置', type: 2, linkAddress: 'data-permission', modelCode: 'settings:dataPermission',
+                icon: '', order: 1, status: 0,
+                children: [
+                  { id: 8299, parentId: 8201, label: '清理按钮', type: 3, linkAddress: '', modelCode: 'settings:clean', icon: '', order: 1, status: 0, children: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ])
+    const wrapper = mount(MenuConfigView, {
+      global: { plugins: [ElementPlus] },
+    })
     await flushPromises()
 
-    expect(wrapper.find('.sidebar-preview-drawer').exists()).toBe(true)
-    expect(wrapper.text()).toContain('侧栏导航实时预览')
+    const labelsOf = () => wrapper.findAll('.node-label').map((n) => n.text())
+    // 首屏只到菜单层：Tab 行与按钮行都不该出现
+    expect(labelsOf()).toEqual(['系统管理', '用户权限设置'])
+
+    const expandBtn = wrapper.findAll('button').find((b) => b.text().includes('全部展开'))
+    expect(expandBtn).toBeDefined()
+    await expandBtn!.trigger('click')
+    await flushPromises()
+    expect(labelsOf()).toEqual(['系统管理', '用户权限设置', '数据权限设置', '清理按钮'])
+  })
+
+  // 侧栏预览抽屉已下线：配置树默认就是「只展开到菜单层」的所见即所得形态，
+  // 再挂一个预览入口属于重复功能（2026-11-06 需求）
+  it('实时侧栏预览入口已删除，顶栏只留自检与新建', async () => {
+    const wrapper = mount(MenuConfigView, {
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const buttonTexts = wrapper.findAll('.actions-area button').map((b) => b.text())
+    expect(buttonTexts.some((t) => t.includes('实时侧栏预览'))).toBe(false)
+    expect(wrapper.text()).not.toContain('侧栏导航实时预览')
+    expect(wrapper.find('.sidebar-preview-drawer').exists()).toBe(false)
+    expect(buttonTexts.some((t) => t.includes('新建顶级目录'))).toBe(true)
   })
 
   it('操作列仅展示纯图标按钮，不展示冗余文字，且带有 aria-label', async () => {
@@ -253,10 +356,11 @@ describe('MenuConfigView (菜单配置与资源管理中心)', () => {
     const iconItems = wrapper.findAll('.icon-grid-item')
     expect(iconItems.length).toBeGreaterThan(200)
 
-    // 点击某图标项能选中
+    // 点击某图标项能选中（原测试只 click 了一下、什么都没断言，这里把「选中态真的变了」钉住）
     const firstIcon = iconItems[0]
-    await firstIcon.trigger('click')
+    await firstIcon!.trigger('click')
     await flushPromises()
+    expect(firstIcon!.classes()).toContain('is-selected')
 
     // 清空图标
     const clearBtn = wrapper.findAll('button').find((b) => b.text().includes('清空'))
