@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 任务配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：有效输入表摘要 → 任务 URL（来源字段 / 表达式）→ 进入条件 → 队列名称 → 参数绑定 → 任务参数取值。
+// 内容：有效输入表摘要 → 进入条件 → 队列名称 → 参数绑定 → 任务参数取值 → 任务 URL（来源字段 / 表达式）。
 // 任务 URL 来源字段 / 规则表达式在任务配置维护（2026-11-05 从「表配置字段用途」撤回，
 // 恢复 2026-10-19 按旧平台 SourceStepCard 恢复编辑、10-21 对齐旧平台的旧口径：步骤 itemId / url）。
 // 进入条件留在本 Tab（2026-08-28 确认）；入口文案按 0828 D20 改成「添加条件」，
@@ -124,33 +124,6 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
       {{ effectiveInputTableId ? `${ownInputTable ? '显式' : '继承'} · ${effectiveInputTableId}` : '暂无有效输入表，请先到「表配置」选择输入表或配置上游输出表。' }}
     </div>
   </div>
-  <!-- 任务 URL（2026-11-05 从节点配置搬回任务配置；10-19 恢复、10-21 对齐旧平台）：采集类后续步含 PDF -->
-  <div v-if="showTaskUrl" class="tu-wrap">
-    <button class="tu-toggle" type="button" data-testid="task-url-toggle" @click="taskUrlOpen = !taskUrlOpen">
-      {{ taskUrlOpen ? '▾' : '▸' }} 任务 URL（来源字段 / 表达式）<span v-if="taskUrlSourceUnset" class="task-url-unset">· 来源字段未选</span>
-    </button>
-    <div v-if="taskUrlOpen" class="tu-body">
-      <div class="rc-field"><label>任务 URL 来源字段（来自输入表）</label>
-        <select class="rc-select" :value="taskUrlSourceValue" data-testid="task-url-source" aria-label="任务 URL 来源字段" @change="onTaskUrlSource">
-          <option value="">未选择</option>
-          <option v-for="opt in taskUrlFieldOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          <option v-if="unknownTaskUrlSource" :value="unknownTaskUrlSource">#{{ unknownTaskUrlSource }}（输入表里没找到这个字段）</option>
-        </select>
-        <div v-if="taskUrlSourceUnset" class="rc-help task-url-unset" data-testid="task-url-source-unset">未选来源字段：$VAL$ 取不到值，下游任务可能没有 URL</div>
-      </div>
-      <div class="rc-field"><label>任务 URL 规则表达式</label>
-        <input
-          class="rc-input"
-          :value="cfg?.stepUrl || '$VAL$'"
-          placeholder="例如：$VAL$ 或 K2+'#need_upload_xq/xq/'"
-          aria-label="任务 URL 规则表达式"
-          data-testid="task-url-expr"
-          @change="onStepUrl"
-        />
-        <div class="rc-help">默认 $VAL$ 从来源字段取值，支持系统动态函数与字符串拼接；留空保存为 $VAL$。</div>
-      </div>
-    </div>
-  </div>
   <ConditionRow v-if="hasEffectiveInput" integrated :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
   <!-- 队列名称（0824-00 §6.6 改名，旧字段 topic）对所有采集节点展示；固定产物节点仍由能力模型锁定。 -->
   <div class="rc-field"><label>队列名称{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
@@ -183,6 +156,34 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     <div v-else class="rc-readonly-hint">请先在上方绑定参数。</div>
   </div>
 
+  <!-- 任务 URL（2026-11-05 从节点配置搬回任务配置；10-19 恢复、10-21 对齐旧平台）：采集类后续步含 PDF。
+       2026-11-05 晚：用户要求放到最下面，不再夹在输入表和进入条件之间。 -->
+  <div v-if="showTaskUrl" class="tu-wrap">
+    <button class="tu-toggle" type="button" data-testid="task-url-toggle" @click="taskUrlOpen = !taskUrlOpen">
+      {{ taskUrlOpen ? '▾' : '▸' }} 任务 URL（来源字段 / 表达式）<span v-if="taskUrlSourceUnset" class="task-url-unset">· 来源字段未选</span>
+    </button>
+    <div v-if="taskUrlOpen" class="tu-body">
+      <div class="rc-field"><label>任务 URL 来源字段（来自输入表）</label>
+        <select class="rc-select" :value="taskUrlSourceValue" data-testid="task-url-source" aria-label="任务 URL 来源字段" @change="onTaskUrlSource">
+          <option value="">未选择</option>
+          <option v-for="opt in taskUrlFieldOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          <option v-if="unknownTaskUrlSource" :value="unknownTaskUrlSource">#{{ unknownTaskUrlSource }}（输入表里没找到这个字段）</option>
+        </select>
+        <div v-if="taskUrlSourceUnset" class="rc-help task-url-unset" data-testid="task-url-source-unset">未选来源字段：$VAL$ 取不到值，下游任务可能没有 URL</div>
+      </div>
+      <div class="rc-field"><label>任务 URL 规则表达式</label>
+        <input
+          class="rc-input"
+          :value="cfg?.stepUrl || '$VAL$'"
+          placeholder="例如：$VAL$ 或 K2+'#need_upload_xq/xq/'"
+          aria-label="任务 URL 规则表达式"
+          data-testid="task-url-expr"
+          @change="onStepUrl"
+        />
+        <div class="rc-help">默认 $VAL$ 从来源字段取值，支持系统动态函数与字符串拼接；留空保存为 $VAL$。</div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -193,9 +194,10 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
-/* 任务 URL 折叠（2026-11-05 从节点配置搬回）：与 CollectorSettings 的「运行设置」同款 */
+/* 任务 URL 折叠（2026-11-05 从节点配置搬回）：与 CollectorSettings 的「运行设置」同款。
+   11-05 晚放到最下面，加一条分隔线，避免和「任务参数取值」糊在一起 */
 .task-url-unset { color: var(--rc-warn); }
-.tu-wrap { margin-top: 4px; margin-bottom: 10px; }
+.tu-wrap { margin: 14px 0 4px; padding-top: 12px; border-top: 1px solid var(--rc-border-soft); }
 .tu-toggle { display: block; border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
 .tu-toggle:hover { color: var(--rc-primary-ink); }
 .tu-body { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rc-border-soft); }

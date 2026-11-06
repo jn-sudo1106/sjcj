@@ -240,4 +240,17 @@ describe('TaskTab · 任务 URL 来源字段与表达式', () => {
     expect(wrapper.find('[data-testid="task-url-source"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="task-url-expr"]').exists()).toBe(false)
   })
+
+  // 2026-11-05 晚用户要求：任务 URL 不再夹在输入表和进入条件之间，放到最下面
+  it('任务 URL 排在队列、参数配置、任务参数取值之后，是最后一节', async () => {
+    const { wrapper } = mountChain('web-2')
+    await flushPromises()
+    const text = wrapper.text()
+    const toggleIndex = text.indexOf('任务 URL（来源字段 / 表达式）')
+    expect(toggleIndex).toBeGreaterThan(-1)
+    expect(toggleIndex).toBeGreaterThan(text.indexOf('有效输入表'))
+    expect(toggleIndex).toBeGreaterThan(text.indexOf('队列名称'))
+    expect(toggleIndex).toBeGreaterThan(text.indexOf('参数配置'))
+    expect(toggleIndex).toBeGreaterThan(text.indexOf('任务参数取值'))
+  })
 })
