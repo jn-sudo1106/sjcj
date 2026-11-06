@@ -366,6 +366,70 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     }
   })
 
+  // 2026-11-05：迁移旧平台「操作类 → 状态调整 → 删除」（SourceList.vue:1849 deleteBatch）。
+  // 旧平台文案是「是否确定要删除源，数量:N?, ids= ...」，这里把数量与 ID 都摆进确认弹窗。
+  it('勾选源后「删除」二次确认，确认后调批量删除接口、清勾选并刷新列表', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [{ sourceId: '1', name: '源一', state: 'C' }, { sourceId: '2', name: '源二', state: 'C' }] as never,
+    })
+    const remove = vi.spyOn(sourceApi, 'deleteSource').mockResolvedValue({ ok: true, message: '删除成功' } as never)
+    vi.mocked(ElMessageBox.confirm).mockReset()
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    vi.mocked(ElMessage.success).mockClear()
+    const { wrapper } = await mountList()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      await wrapper.get('[data-testid="source-check-2"]').setValue(true)
+      const loads = page.mock.calls.length
+      await wrapper.get('[data-testid="source-batch-delete"]').trigger('click')
+      await flushPromises()
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('2 个源（1、2）'),
+        '删除源（2 个）',
+        expect.objectContaining({ confirmButtonText: '删除', confirmButtonClass: 'el-button--danger' }),
+      )
+      expect(remove).toHaveBeenCalledWith(['1', '2'])
+      expect(ElMessage.success).toHaveBeenCalledWith('删除成功')
+      // 勾选清空（批量条收起）+ 列表重查
+      expect(wrapper.find('[data-testid="source-batch-count"]').exists()).toBe(false)
+      expect(page.mock.calls.length).toBeGreaterThan(loads)
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, page, remove]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+      localStorage.clear()
+    }
+  })
+
+  it('删除确认弹窗取消时不发请求、勾选保留', async () => {
+    sourceDirs.resetSourceDirCache()
+    const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])
+    const membership = vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '1', name: '源一', state: 'C' } as never] })
+    const remove = vi.spyOn(sourceApi, 'deleteSource').mockResolvedValue({ ok: true, message: '' } as never)
+    vi.mocked(ElMessageBox.confirm).mockReset()
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce(new Error('cancel') as never)
+    const { wrapper } = await mountList()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="source-check-1"]').setValue(true)
+      await wrapper.get('[data-testid="source-batch-delete"]').trigger('click')
+      await flushPromises()
+      expect(remove).not.toHaveBeenCalled()
+      expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('已选 1')
+    } finally {
+      wrapper.unmount()
+      for (const spy of [categories, membership, page, remove]) spy.mockRestore()
+      sourceDirs.resetSourceDirCache()
+      localStorage.clear()
+    }
+  })
+
   it('勾选源后「修改所属网站」带入勾选的源打开弹窗；没勾选时点不动', async () => {
     sourceDirs.resetSourceDirCache()
     const categories = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([])

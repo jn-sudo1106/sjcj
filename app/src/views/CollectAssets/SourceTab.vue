@@ -616,6 +616,53 @@ function openAddToView(ids: string[]) {
 function onAddedToView(viewName: string, place: string, count: number) {
   ElMessage.success(`已加入视图「${viewName}」的「${place}」（新增 ${count} 个源）`)
 }
+
+/**
+ * 批量删除源（2026-11-05，迁移旧平台「操作类 → 状态调整 → 删除」）。
+ * 旧平台实现：`data-view-feature-2606-rule-vue2/src/page/config/SourceList.vue:1849` `deleteBatch()`——
+ * 没勾选先报「请选择要删除的源」；确认弹窗写明数量和 ids；成功后提示并刷新列表。
+ * 这里放在「系统目录」页签的源列表视图批量条里（`#selection-actions` 插槽，只有 scope=all 才渲染）。
+ * 接口沿用 sourceApi.deleteSource（GET /v1/source/delete?ids=a,b，旧平台 src/api/source.js:243 同一条）。
+ * ⚠️ 永久删除、不可恢复：确认文案必须把数量和一串 ID 摆出来，不能只说"N 个"。
+ */
+async function onBatchDeleteSources(ids: string[]) {
+  const targets = [...new Set(ids.filter(Boolean))]
+  if (!targets.length) {
+    ElMessage.warning('请选择要删除的源')
+    return
+  }
+  const preview = targets.slice(0, 10).join('、')
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除选中的 ${targets.length} 个源（${preview}${targets.length > 10 ? ' 等' : ''}），删除后不可恢复。确认删除？`,
+      `删除源（${targets.length} 个）`,
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const res = await sourceApi.deleteSource(targets)
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '删除失败，请重试')
+      return
+    }
+    trackDelete('SOURCE', targets.join(','), `${targets.length} 个源`, {
+      eventCode: 'source_delete_batch',
+      eventName: '批量删除源',
+      firstModule: '采集资产',
+      pageName: '系统目录',
+    })
+    ElMessage.success(res.message || `已删除 ${targets.length} 个源`)
+  } catch (error) {
+    ElMessage.error(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    // 与旧平台一致：成功、失败都刷新（可能有部分源已被删掉），顺带清掉失效的勾选
+    overviewRef.value?.clearSelection()
+    await overviewRef.value?.refresh()
+    await refreshAll()
+  }
+}
 /** 点来源组名（1008-04）：跳到「我的分组」并选中该组 */
 function openSourceGroup(sourceGroupId: string) {
   void router.push({ path: '/collect', query: { tab: 'personal', group: sourceGroupId } })
@@ -871,6 +918,8 @@ onUnmounted(() => {
     >
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
         <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图目录</button>
+        <!-- 迁移旧平台「操作类 → 状态调整 → 删除」（2026-11-05）：永久删除，二次确认弹窗里会列数量与 ID -->
+        <button class="ca-save-view sm danger" type="button" data-testid="source-batch-delete" title="永久删除选中的源，不可恢复" @click="onBatchDeleteSources(ids)">删除</button>
       </template>
       <template v-if="scope === 'all'" #summary-extra>
         <span v-if="dirActive" class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
@@ -987,6 +1036,9 @@ onUnmounted(() => {
 .ca-save-view.sm { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
 .ca-save-view.ca-create-site { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 30px; padding: 0; color: var(--rc-primary); }
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
+/* 批量删除源（2026-11-05）：与源视图批量条的 .sov-btn.danger 同一套红，误点也要被确认弹窗拦一道 */
+.ca-save-view.danger { color: #b91c1c; border-color: #fecaca; }
+.ca-save-view.danger:hover { border-color: #b91c1c; color: #b91c1c; }
 
 /* 系统目录页签：左侧目录面板 + 源列表（2026-10-21） */
 .ca-dir-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; }
