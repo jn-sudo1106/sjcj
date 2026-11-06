@@ -1,4 +1,4 @@
-﻿// 端点契约清单 —— 采集配置中心 API 的单一事实源。
+// 端点契约清单 —— 采集配置中心 API 的单一事实源。
 // 依据《数据中心现有功能逆向工程_2026-06-17.md》：线上 Data Center 共提取 142 个 /v1 端点。
 // 本清单收录已考证端点（path = 真实 /v1 路径，不含前缀），按 14 个前缀域组织；
 // 每域注释「逆向统计目标数 / 本清单收录数」，未逐一还原的为登录态待补，真接入时按同名 path 规范补齐。
@@ -798,6 +798,7 @@ export const ENDPOINTS: EndpointSpec[] = [
      全部要求 admin 角色，非 admin 后端回 403。
      ⚠️ 均未经真实联调（需 admin 会话），live 按契约文档标上；首次实测后请回写本注释。 */
   { path: 'group-res/groups', desc: '已授权数据权限组候选（既有 mock 入口）', impl: true },
+  { path: 'group-res/group-options', desc: '可配置数据权限用户组选项（来自 sys_user_group 表，已滤掉 <=90000）', impl: true, live: true },
   { path: 'group-res/list', desc: '数据权限规则分页（groupId 必填且 >90000；resType/action 可选）', impl: true, live: true },
   { path: 'group-res/detail', desc: '数据权限规则详情', impl: true, live: true },
   { path: 'group-res/meta', desc: '配置元数据（resType/action/condType 枚举 + 各 resType 可选列，表单不得硬编码）', impl: true, live: true },
@@ -825,6 +826,26 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'sys-user/update-status', desc: '启用/停用（admin；停用连带解除该用户全部角色绑定，启用要求该用户已有角色）', danger: true, impl: true, live: true },
   { path: 'sys-user/change-password', desc: '重置密码（admin；明文入参，内置 admin 账号拒绝）', danger: true, impl: true, live: true },
   { path: 'sys-user/roles', desc: '角色列表（admin；供编辑用户时选择角色）', impl: true, live: true },
+  { path: 'sys-user-group/options', desc: '用户组与部门下拉选项（admin；供用户管理选择所属组）', impl: true, live: true },
+  { path: 'sys-user-group/tree', desc: '用户组与部门树形结构（admin）', impl: true, live: true },
+  { path: 'sys-user-group/list', desc: '用户组与部门平铺列表（admin）', impl: true, live: true },
+  { path: 'sys-user-group/update', desc: '修改用户组与部门（admin；修改名称、编码、上级部门等）', danger: true, impl: true, live: true },
+
+  /* ── 动态菜单与权限导航（SysMenuController） ── */
+  { path: 'sys/menu/user-nav', desc: '获取当前用户动态菜单分组与权限码', impl: true, live: true },
+  { path: 'sys/menu/tree', desc: '全量菜单与资源树（供菜单配置树形表格展示）', impl: true, live: true },
+  { path: 'sys/menu/save', desc: '保存/更新菜单资源（admin）', danger: true, impl: true, live: true },
+  { path: 'sys/menu/delete', desc: '级联删除菜单资源（admin）', danger: true, impl: true, live: true },
+  { path: 'sys/menu/clean-legacy', desc: '一键清洗老库历史残留按钮（admin）', danger: true, impl: true, live: true },
+
+  /* ── 角色权限管理（SysRoleAdminController，系统设置 → 用户权限设置 → 角色权限管理，仅 admin） ── */
+  { path: 'sys-role/list', desc: '角色列表（admin；包含内置角色及用户数统计）', impl: true, live: true },
+  { path: 'sys-role/add', desc: '新增角色（admin；角色名称与备注）', danger: true, impl: true, live: true },
+  { path: 'sys-role/update', desc: '修改角色（admin；修改名称、备注与启用状态）', danger: true, impl: true, live: true },
+  { path: 'sys-role/delete', desc: '删除角色（admin；内置角色与关联用户角色不可删）', danger: true, impl: true, live: true },
+  { path: 'sys-role/resource-tree', desc: '全量系统资源权限树（admin；供角色授权勾选）', impl: true, live: true },
+  { path: 'sys-role/resource-ids', desc: '获取角色已授权资源ID列表（admin）', impl: true, live: true },
+  { path: 'sys-role/assign-resources', desc: '保存角色资源分配（admin；全量覆盖授权并驱逐缓存）', danger: true, impl: true, live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

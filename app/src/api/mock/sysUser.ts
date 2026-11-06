@@ -12,6 +12,7 @@ import {
   STATUS_VALID,
   sysUserFormError,
   type SysRoleOption,
+  type SysUserGroupOption,
   type SysUserRow,
 } from '../sysUser'
 
@@ -73,6 +74,12 @@ function roleName(roleIds: number[]): string {
   return roleIds.map((id) => ROLES.find((role) => role.key === id)?.name ?? `角色${id}`).join(',')
 }
 
+const MOCK_GROUP_NAMES: Record<number, string> = {
+  1: '系统管理组',
+  100001: '研发部',
+  100002: '运营部',
+}
+
 function toView(row: MockUser): SysUserRow {
   return {
     userId: row.userId,
@@ -80,6 +87,7 @@ function toView(row: MockUser): SysUserRow {
     userName: row.userName,
     userStatus: row.userStatus,
     groupId: row.groupId,
+    groupName: row.groupId != null ? (MOCK_GROUP_NAMES[row.groupId] || `用户组_${row.groupId}`) : null,
     roleIds: row.roleIds.length ? row.roleIds.join(',') : null,
     roleNames: row.roleIds.length ? roleName(row.roleIds) : null,
     creator: row.creator,
@@ -88,6 +96,14 @@ function toView(row: MockUser): SysUserRow {
     updateTime: row.updateTime,
     protectedAccount: row.userLoginName.toLowerCase() === PROTECTED_LOGIN_NAME,
   }
+}
+
+export function mockSysUserGroupOptions(): SysUserGroupOption[] {
+  return [
+    { id: 100001, label: '研发部' },
+    { id: 100002, label: '运营部' },
+    { id: 1, label: '系统管理组' },
+  ]
 }
 
 function find(id: unknown): MockUser {

@@ -7,6 +7,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import UserManagementTab from './UserManagementTab.vue'
+import SysUserDetailDrawer from './SysUserDetailDrawer.vue'
 import * as sysUserApi from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
 import type { SysUserRow } from '@/api/sysUser'
@@ -21,17 +22,17 @@ class ResizeObserverStub {
 
 const ROWS: SysUserRow[] = [
   {
-    userId: 1, userLoginName: 'admin', userName: '系统管理员', userStatus: 0, groupId: 1,
+    userId: 1, userLoginName: 'admin', userName: '系统管理员', userStatus: 0, groupId: 1, groupName: '系统管理组',
     roleIds: '1', roleNames: 'admin', creator: 'system', createTime: '2024-01-08 09:12:00',
     modifier: null, updateTime: null, protectedAccount: true,
   },
   {
-    userId: 12, userLoginName: 'zhonghe', userName: '钟和', userStatus: 0, groupId: 100001,
+    userId: 12, userLoginName: 'zhonghe', userName: '钟和', userStatus: 0, groupId: 100001, groupName: '研发部',
     roleIds: '2', roleNames: 'read', creator: 'admin', createTime: '2026-09-14 10:22:00',
     modifier: null, updateTime: null, protectedAccount: false,
   },
   {
-    userId: 14, userLoginName: 'like', userName: '李可', userStatus: 1, groupId: 100002,
+    userId: 14, userLoginName: 'like', userName: '李可', userStatus: 1, groupId: 100002, groupName: '运营部',
     roleIds: null, roleNames: null, creator: 'admin', createTime: '2026-08-30 11:02:00',
     modifier: 'admin', updateTime: '2026-10-20 17:30:00', protectedAccount: false,
   },
@@ -85,6 +86,7 @@ describe('用户管理页面', () => {
     expect(vi.mocked(sysUserApi.pagedSysUser).mock.lastCall?.[0]).toEqual({ loginName: '', userName: '', userStatus: '', page: 1, limit: 20 })
     const text = wrapper.text()
     expect(text).toContain('zhonghe')
+    expect(text).toContain('研发部')
     expect(text).toContain('read')
     expect(text).toContain('无角色')
     expect(text).toContain('失效')
@@ -197,5 +199,39 @@ describe('用户管理页面', () => {
     const switches = wrapper.findAll('.el-switch')
     expect(switches.length).toBe(ROWS.length)
     switches.forEach((item) => expect(item.find('input').attributes('disabled')).toBeDefined())
+  })
+
+  it('用户列表与详情抽屉均展示组名称而非组 ID', async () => {
+    const wrapper = await mountAs(['admin'])
+    const text = wrapper.text()
+    expect(text).toContain('研发部')
+    expect(text).toContain('运营部')
+    expect(text).toContain('系统管理组')
+
+    // 打开钟和的详情抽屉
+    const detailBtns = wrapper.findAll('[data-testid="sys-user-detail"]')
+    await detailBtns[1].trigger('click')
+    await flushPromises()
+
+    const drawer = wrapper.findComponent(SysUserDetailDrawer)
+    expect(drawer.exists()).toBe(true)
+    expect(drawer.props('user')?.groupName).toBe('研发部')
+    expect(drawer.text()).toContain('用户组')
+    expect(drawer.text()).not.toContain('所属组')
+    expect(drawer.text()).toContain('研发部')
+  })
+
+  it('编辑用户弹窗中正确展示用户组名称而非组 ID，且标签为用户组', async () => {
+    const wrapper = await mountAs(['admin'])
+    const editBtns = wrapper.findAll('[data-testid="sys-user-edit"]')
+    // 点钟和 (groupId 100001, 研发部) 的编辑
+    await editBtns[0].trigger('click')
+    await flushPromises()
+
+    expect(dialogEl().textContent).toContain('用户组')
+    expect(dialogEl().textContent).not.toContain('所属组')
+    expect(dialogField('sys-user-group-id').value).toBe('100001')
+    const groupSelect = dialogEl().querySelector('[data-testid="sys-user-group-select"]')
+    expect(groupSelect?.textContent).toContain('研发部')
   })
 })

@@ -87,7 +87,6 @@ function stateClass(state: string) {
     direction="rtl"
     size="75%"
     destroy-on-close
-    v-loading="loading"
   >
     <!-- 轻量筛选 -->
     <div class="cl-filters">
@@ -101,7 +100,17 @@ function stateClass(state: string) {
       <button class="rc-btn" type="button" @click="reset">重置</button>
     </div>
 
-    <el-table :data="rows" border stripe row-key="logId" class="cl-table" max-height="700">
+    <!-- v-loading 挂 el-table（指令在组件根元素上才生效）：挂在 <el-drawer> 上运行时无效，
+         控制台还会报 "Runtime directive used on component with non-element root node" -->
+    <el-table
+      v-loading="loading"
+      :data="rows"
+      border
+      stripe
+      row-key="logId"
+      class="cl-table"
+      max-height="700"
+    >
       <el-table-column label="时间" width="170" prop="createDt" class-name="mono-cell" />
       <el-table-column label="消息" min-width="300" prop="logMsg" show-overflow-tooltip>
         <template #default="{ row }">
@@ -129,7 +138,7 @@ function stateClass(state: string) {
         :page-sizes="[10, 30, 100, 200]"
         layout="total, sizes, prev, pager, next, jumper"
         background
-        small
+        size="small"
         @current-change="load"
         @size-change="() => { page = 1; load() }"
       />

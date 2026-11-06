@@ -1,34 +1,41 @@
 <script setup lang="ts">
-import { ref, watch, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import DataQueryTab from './DataQueryTab.vue'
 import EntryTab from './EntryTab.vue'
 
 // 数据中心的两个 tab（2026-09-19）。此前这里是单页，只有数据查询；「表 ID 列表」
 // 原本挂在采集资产下，这次迁过来——表结构是"数据"这条线的东西，跟查数据放一起才顺，
-// 采集资产那边管的是网站与源。采集资产的 tab 条保留（当前只剩「网站列表」一项）。
+// 采集资产那边管的是网站与源。
 //
 // 结构照搬 CollectAssets/index.vue：tab 落 URL query，刷新和深链回得到同一个 tab。
-const TABS: { key: string; label: string }[] = [
-  { key: 'query', label: '数据查询' },
-  { key: 'entry', label: '表 ID 列表' },
-]
+// 页内 tab 的数据源改为后端菜单（sys_menu menu_type=2，/data 下 2 条），下面的常量只作兜底。
 const comps: Record<string, Component> = { query: DataQueryTab, entry: EntryTab }
+const { tabs } = useDynamicTabs({
+  componentMap: comps,
+  fallbackTabs: [
+    { key: 'query', label: '数据查询', order: 1 },
+    { key: 'entry', label: '表 ID 列表', order: 2 },
+  ],
+  path: '/data',
+  autoNormalizeQuery: false,
+})
 const route = useRoute()
 const router = useRouter()
-const validTabs = new Set(TABS.map((tab) => tab.key))
+const validTabs = computed(() => new Set(tabs.value.map((tab) => tab.key)))
 const active = ref('query')
 function normalizeTab(tab: unknown): string {
   const key = String(tab ?? '')
-  return validTabs.has(key) ? key : 'query'
+  return validTabs.value.has(key) ? key : (tabs.value[0]?.key ?? 'query')
 }
 watch(() => route.query.tab, (tab) => {
   active.value = normalizeTab(tab)
 }, { immediate: true })
 function selectTab(key: string) {
   const tab = normalizeTab(key)
-  // 默认 tab 不写进 URL，保持 /data 这个地址干净（与采集资产同口径）
-  const query = tab === 'query' ? {} : { tab }
+  // 默认 tab（后端排序第一条）不写进 URL，保持 /data 这个地址干净（与采集资产同口径）
+  const query = tab === tabs.value[0]?.key ? {} : { tab }
   void router.replace({ path: '/data', query })
 }
 </script>
@@ -38,7 +45,7 @@ function selectTab(key: string) {
     <div class="dc-tabs-wrap">
       <div class="dc-tabs-inner">
         <button
-          v-for="t in TABS"
+          v-for="t in tabs"
           :key="t.key"
           class="dc-tab-link"
           :class="{ active: active === t.key }"

@@ -24,6 +24,7 @@ const EP = {
   meta: 'group-res/meta',
   preview: 'group-res/preview',
   groups: 'group-res/groups',
+  groupOptions: 'group-res/group-options',
 } as const
 
 /** 只有大于这个值的用户组才走 sys_group_res 映射（≤90000 是系统内置组） */
@@ -130,11 +131,31 @@ export function groupResMeta(): Promise<GroupResMeta> {
 }
 
 /**
- * 组 ID 候选（只读，admin）：现有用户的组 ∪ 已配过规则的组，后端已滤掉 ≤90000 的内置组，升序。
- * 组没有名称数据（全库无 GROUP_NAME 列），展示名由前端自维护（utils/groupNames.ts）。
+ * 组 ID 候选（只读，admin）：来自 sys_user_group 表（兼容 SYS_USER 与 sys_group_res），后端已滤掉 ≤90000 的内置组，升序。
  */
 export function listGroupIds(): Promise<number[]> {
   return request<number[]>(EP.groups, undefined, { method: 'GET' })
+}
+
+export interface GroupOptionItem {
+  id: number
+  label: string
+  code?: string
+  parentId?: number
+}
+
+/** 组候选选项（只读，含 ID、组名与编码，来自 sys_user_group 表） */
+export async function listGroupOptions(): Promise<GroupOptionItem[]> {
+  try {
+    const res = await request<GroupOptionItem[]>(EP.groupOptions, undefined, { method: 'GET' })
+    if (Array.isArray(res)) return res
+    if (res && typeof res === 'object' && 'data' in res && Array.isArray((res as { data: unknown }).data)) {
+      return (res as { data: GroupOptionItem[] }).data
+    }
+    return []
+  } catch {
+    return []
+  }
 }
 
 /** 新增规则，data 为新记录 id */

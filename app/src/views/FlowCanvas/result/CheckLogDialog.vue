@@ -132,7 +132,7 @@ function close() {
           :total="total"
           layout="total, prev, pager, next, jumper"
           background
-          small
+          size="small"
           :disabled="loading"
           @current-change="load"
         />

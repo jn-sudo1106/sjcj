@@ -50,8 +50,26 @@ import {
 // metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
 import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
-import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview, mockGroupIds } from './groupRes'
-import { mockSysUserList, mockSysUserDetail, mockSysUserAdd, mockSysUserUpdate, mockSysUserStatus, mockSysUserPassword, mockSysUserRoles } from './sysUser'
+import { mockGroupResMeta, mockGroupResList, mockGroupResDetail, mockGroupResAdd, mockGroupResModify, mockGroupResDelete, mockGroupResPreview, mockGroupIds, mockGroupOptions } from './groupRes'
+import { mockSysUserList, mockSysUserDetail, mockSysUserAdd, mockSysUserUpdate, mockSysUserStatus, mockSysUserPassword, mockSysUserRoles, mockSysUserGroupOptions } from './sysUser'
+import {
+  mockSysRoleList,
+  mockSysRoleAdd,
+  mockSysRoleUpdate,
+  mockSysRoleDelete,
+  mockSysResourceTree,
+  mockRoleResourceIds,
+  mockAssignRoleResources,
+  mockUserNav,
+} from './sysRole'
+import {
+  buildMockTree,
+  mockResourceList,
+  handleMockSaveMenu,
+  handleMockSortMenu,
+  handleMockDeleteMenu,
+  handleMockCleanLegacy,
+} from './sysMenu'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
@@ -293,6 +311,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'group-res/delete': mockGroupResDelete,
   'group-res/preview': mockGroupResPreview,
   'group-res/groups': mockGroupIds,
+  'group-res/group-options': mockGroupOptions,
   // 用户管理（系统设置 → 用户管理，SysUserAdminController）：内存表 SYS_USER + 角色绑定
   'sys-user/list': mockSysUserList,
   'sys-user/detail': mockSysUserDetail,
@@ -301,6 +320,30 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'sys-user/update-status': mockSysUserStatus,
   'sys-user/change-password': mockSysUserPassword,
   'sys-user/roles': mockSysUserRoles,
+  'sys-user-group/options': mockSysUserGroupOptions,
+  'sys-user-group/update': () => ({ ok: true, message: '操作成功' }),
+  'sys/menu/user-nav': mockUserNav,
+  'sys/menu/tree': () => buildMockTree(mockResourceList),
+  'sys/menu/save': (body) => {
+    handleMockSaveMenu((body || {}) as never)
+    return { ok: true, message: '操作成功' }
+  },
+  'sys/menu/sort': (body) => {
+    handleMockSortMenu((body || []) as never)
+    return { ok: true, message: '操作成功' }
+  },
+  'sys/menu/clean-legacy': () => handleMockCleanLegacy(),
+  'sys/menu/delete': (body) => {
+    handleMockDeleteMenu(Number((body as Record<string, unknown>)?.id))
+    return { ok: true, message: '删除成功' }
+  },
+  'sys-role/list': mockSysRoleList,
+  'sys-role/add': mockSysRoleAdd,
+  'sys-role/update': mockSysRoleUpdate,
+  'sys-role/delete': mockSysRoleDelete,
+  'sys-role/resource-tree': mockSysResourceTree,
+  'sys-role/resource-ids': mockRoleResourceIds,
+  'sys-role/assign-resources': mockAssignRoleResources,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。

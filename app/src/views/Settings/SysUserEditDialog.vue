@@ -4,19 +4,26 @@
 // 新建与编辑能填的东西不一样，都是后端规则决定的，不是 UI 省事：
 //   · 登录名：新建必填、编辑不可改——它参与口令哈希（{p} + md5(登录名+明文)），改了等于把密码作废（决策 ⑧A）。
 //   · 初始密码：只有新建能设，服务端加密后落库，任何接口都不回显（决策 ①C）。
-//   · 所属组：新建时预填当前登录管理员自己的组（决策 ⑤ 的补充口径），可以改；后端在留空时同样兜底成创建人的组。
+//   · 用户组：新建时预填当前登录管理员自己的组（决策 ⑤ 的补充口径），可以改；后端在留空时同样兜底成创建人的组。
 //   · 角色：编辑时支持选择角色并同步更新 SYS_USER_2_ROLE 绑定；新建账号由服务端默认落到只读（read）角色。
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   addSysUser,
   getSysRoles,
+  getSysUserGroupOptions,
   sysUserFormError,
   updateSysUser,
   type SysRoleOption,
+  type SysUserGroupOption,
   type SysUserRow,
 } from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
+import { readGroupNames } from '@/utils/groupNames'
+
+const props = defineProps<{
+  presetGroupOptions?: SysUserGroupOption[]
+}>()
 
 const emit = defineEmits<{ saved: [] }>()
 
@@ -34,11 +41,58 @@ const form = reactive({
 })
 
 const isEdit = computed(() => !!editing.value)
-/** 当前登录管理员自己的组：新建时作为所属组的默认值 */
+/** 当前登录管理员自己的组：新建时作为用户组的默认值 */
 const creatorGroup = computed(() => auth.info?.group)
 
 const roleOptions = ref<SysRoleOption[]>([])
 const loadingRoles = ref(false)
+
+const groupOptions = ref<SysUserGroupOption[]>([])
+const loadingGroups = ref(false)
+
+function ensureCurrentGroupInOptions() {
+  if (form.groupId !== undefined && form.groupId !== '') {
+    const gid = Number(form.groupId)
+    if (isNaN(gid) || gid <= 0) return
+    const localNames = readGroupNames()
+    const bestName = (editing.value?.groupName && !editing.value.groupName.startsWith('用户组_'))
+      ? editing.value.groupName
+      : (localNames[String(gid)] || editing.value?.groupName || `用户组_${gid}`)
+
+    const existing = groupOptions.value.find((g) => Number(g.id) === gid)
+    if (existing) {
+      if (bestName && (!existing.label || existing.label.startsWith('用户组_'))) {
+        existing.label = bestName
+      }
+    } else {
+      groupOptions.value.unshift({
+        id: gid,
+        label: bestName,
+      })
+    }
+  }
+}
+
+async function loadGroupOptions() {
+  loadingGroups.value = true
+  try {
+    const res = await getSysUserGroupOptions()
+    if (Array.isArray(res) && res.length > 0) {
+      const localNames = readGroupNames()
+      groupOptions.value = res.map((item) => ({
+        ...item,
+        label: (item.label && !item.label.startsWith('用户组_'))
+          ? item.label
+          : (localNames[String(item.id)] || item.label || `用户组_${item.id}`),
+      }))
+    }
+  } catch {
+    // 静默降级
+  } finally {
+    loadingGroups.value = false
+    ensureCurrentGroupInOptions()
+  }
+}
 
 const ROLE_NAME_LABELS: Record<string, string> = {
   admin: 'admin（管理员）',
@@ -97,14 +151,19 @@ function open(row?: SysUserRow) {
       initialRoleId = firstId
     }
   }
+  if (props.presetGroupOptions && props.presetGroupOptions.length > 0) {
+    groupOptions.value = [...props.presetGroupOptions]
+  }
   Object.assign(form, {
     userLoginName: row?.userLoginName ?? '',
     userName: row?.userName ?? '',
-    groupId: row ? String(row.groupId ?? '') : String(creatorGroup.value ?? ''),
+    groupId: row?.groupId != null ? String(row.groupId) : (creatorGroup.value != null ? String(creatorGroup.value) : ''),
     userPassword: '',
     roleId: initialRoleId,
   })
   visible.value = true
+  ensureCurrentGroupInOptions()
+  void loadGroupOptions()
   if (row) {
     void loadRoles()
   }
@@ -174,10 +233,25 @@ async function save() {
       <el-form-item label="用户名" required>
         <el-input v-model="form.userName" placeholder="页面上显示的真实姓名" data-testid="sys-user-name" />
       </el-form-item>
-      <el-form-item label="所属组 ID" required>
-        <el-input v-model="form.groupId" placeholder="如 100001" data-testid="sys-user-group-id" />
+      <el-form-item label="用户组" required>
+        <el-select
+          v-model="form.groupId"
+          filterable
+          placeholder="请选择用户组"
+          data-testid="sys-user-group-select"
+          :loading="loadingGroups"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="item in groupOptions"
+            :key="item.id"
+            :label="item.label"
+            :value="String(item.id)"
+          />
+        </el-select>
+        <input type="hidden" data-testid="sys-user-group-id" :value="form.groupId" />
         <div class="su-hint">
-          {{ isEdit ? '改组会连带改变该账号能看到的数据范围（数据权限按组配置）' : `默认沿用你自己所在的组${creatorGroup === undefined ? '（会话里没取到组，请手工填写）' : ''}；数据权限（来源组、源、目录）都挂在组上` }}
+          {{ isEdit ? '改用户组会连带改变该账号能看到的数据范围（数据权限按用户组配置）' : `默认沿用创建人用户组${creatorGroup === undefined ? '（会话里没取到用户组，请从下拉选择）' : ''}；数据权限挂在用户组上` }}
         </div>
       </el-form-item>
       <el-form-item v-if="!isEdit" label="初始密码" required>
@@ -191,9 +265,8 @@ async function save() {
         />
         <div class="su-hint">落库形态为 {p} + md5(登录名 + 密码)，与「修改密码」一致，数据库里查不到明文</div>
       </el-form-item>
-      <el-form-item label="角色" :required="isEdit">
+      <el-form-item label="角色" required>
         <el-select
-          v-if="isEdit"
           v-model="form.roleId"
           placeholder="请选择角色"
           :loading="loadingRoles"
@@ -207,9 +280,7 @@ async function save() {
             :value="item.roleId"
           />
         </el-select>
-        <div v-else class="su-hint">
-          新账号由服务端自动绑定只读（read）角色；如需其他角色可在创建后通过编辑修改
-        </div>
+        <div v-if="!isEdit" class="su-hint">新账号由服务端默认分配只读（read）角色，也可在此指定初始角色</div>
         <div v-if="isEdit" class="su-hint">修改角色会同步更新该账号的系统访问权限</div>
       </el-form-item>
     </el-form>

@@ -321,7 +321,7 @@ defineExpose({ open })
             :page-sizes="[20, 40, 100, 200]"
             layout="total, sizes, prev, pager, next, jumper"
             background
-            small
+            size="small"
             @current-change="() => void load()"
             @size-change="() => { page = 1; void load() }"
           />

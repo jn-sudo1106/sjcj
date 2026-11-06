@@ -221,7 +221,7 @@ const joining = ref(false)
       <el-table-column prop="siteId" label="网站 ID" width="100" />
       <el-table-column prop="url" label="URL" :min-width="$slots.aside ? 140 : 200" show-overflow-tooltip />
     </el-table>
-    <el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[20, 40, 100]" layout="total, sizes, prev, pager, next" small @current-change="load" @size-change="search" />
+    <el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[20, 40, 100]" layout="total, sizes, prev, pager, next" size="small" @current-change="load" @size-change="search" />
     </div>
     </div>
     <template #footer><div class="picker-footer"><span>已选 {{ selected.length }} 个源（跨页保留）</span><el-button :icon="Refresh" circle size="small" :disabled="busy" aria-label="刷新源列表" title="刷新源列表" @click="load" /><el-button :disabled="busy" @click="emit('update:modelValue', false)">取消</el-button><slot name="submit" :ids="selected"><el-button type="primary" :disabled="!selected.length" :loading="joining" data-testid="picker-save" @click="save">{{ confirmText || '加入分组' }}</el-button></slot></div></template>

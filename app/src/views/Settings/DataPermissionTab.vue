@@ -20,6 +20,7 @@ import {
 } from '@element-plus/icons-vue'
 import {
   deleteGroupRes,
+  GROUP_ID_FLOOR,
   groupResDetail,
   groupResMeta,
   listGroupIds,
@@ -29,7 +30,8 @@ import {
 } from '@/api/groupRes'
 import { getGroupSourceScope, saveGroupSourceScope, type GroupSourceScope, type SourceGrant } from '@/api/groupSourceScope'
 import { useAuthStore } from '@/stores/auth'
-import { groupName, readGroupNames, setGroupName } from '@/utils/groupNames'
+import { groupCode, groupName, readGroupNames, setGroupName } from '@/utils/groupNames'
+import { getSysUserGroupOptions, updateSysUserGroup, type SysUserGroupOption } from '@/api/sysUser'
 import GroupResEditDialog from './GroupResEditDialog.vue'
 import GroupResDetailDrawer from './GroupResDetailDrawer.vue'
 import SourceScopeEditor from './groupRes/SourceScopeEditor.vue'
@@ -59,8 +61,10 @@ function optionName(list: { key: string; name: string }[] | undefined, key: stri
 export interface GroupRow {
   groupId: number
   name: string
+  code?: string
 }
 
+const dbGroups = ref<GroupRow[]>([])
 const allGroupIds = ref<number[]>([])
 const groupSearchKey = ref('')
 const currentGroupId = ref<number | null>(null)
@@ -72,14 +76,19 @@ const scopeDirty = ref(false)
 const groupList = computed<GroupRow[]>(() => {
   const localNames = readGroupNames()
   const keyword = groupSearchKey.value.trim().toLowerCase()
-  return allGroupIds.value
-    .map((id) => {
-      const name = localNames[String(id)] || groupName(id) || `用户组 ${id}`
-      return { groupId: id, name }
+  return dbGroups.value
+    .map((g) => {
+      const name = localNames[String(g.groupId)] || g.name || groupName(g.groupId) || `用户组 ${g.groupId}`
+      const code = g.code || groupCode(g.groupId) || String(g.groupId)
+      return { groupId: g.groupId, name, code }
     })
     .filter((g) => {
       if (!keyword) return true
-      return String(g.groupId).includes(keyword) || g.name.toLowerCase().includes(keyword)
+      return (
+        String(g.groupId).includes(keyword) ||
+        (g.code && g.code.toLowerCase().includes(keyword)) ||
+        g.name.toLowerCase().includes(keyword)
+      )
     })
 })
 
@@ -104,18 +113,46 @@ const currentGroup = computed(() => {
   return groupList.value.find((g) => g.groupId === currentGroupId.value) ?? {
     groupId: currentGroupId.value,
     name: groupName(currentGroupId.value) || `用户组 ${currentGroupId.value}`,
+    code: groupCode(currentGroupId.value) || String(currentGroupId.value),
   }
 })
 
-// 左侧用户组：调用 /api/v1/group-res/groups 接口，获取可配置的组 ID 列表（>90000 且存在于 sys_user 或 sys_group_res）。
-// 组展示名由前端本地映射（readGroupNames / groupName）或回退默认「用户组 {id}」。
+// 左侧用户组：主要来自 sys_user_group 表（调用 getSysUserGroupOptions 接口），
+// 同时并查 listGroupIds 作为兼容候选。组名与编码优先从 sys_user_group 取值。
 async function fetchGroups() {
   groupLoading.value = true
   try {
-    const ids = await listGroupIds()
-    allGroupIds.value = ids || []
-    if (!currentGroupId.value && allGroupIds.value.length > 0) {
-      currentGroupId.value = allGroupIds.value[0]!
+    const [options, ids] = await Promise.all([
+      getSysUserGroupOptions().catch(() => [] as SysUserGroupOption[]),
+      listGroupIds().catch(() => [] as number[]),
+    ])
+    const rowMap = new Map<number, GroupRow>()
+    if (Array.isArray(options)) {
+      options.forEach((opt) => {
+        if (opt.id > GROUP_ID_FLOOR) {
+          rowMap.set(opt.id, {
+            groupId: opt.id,
+            name: opt.label,
+            code: opt.code || String(opt.id),
+          })
+        }
+      })
+    }
+    if (Array.isArray(ids)) {
+      ids.forEach((id) => {
+        if (id > GROUP_ID_FLOOR && !rowMap.has(id)) {
+          rowMap.set(id, {
+            groupId: id,
+            name: groupName(id) || `用户组 ${id}`,
+            code: groupCode(id) || String(id),
+          })
+        }
+      })
+    }
+    dbGroups.value = Array.from(rowMap.values()).sort((a, b) => a.groupId - b.groupId)
+    allGroupIds.value = dbGroups.value.map((g) => g.groupId)
+    if (!currentGroupId.value && dbGroups.value.length > 0) {
+      currentGroupId.value = dbGroups.value[0]!.groupId
     }
   } catch (e) {
     ElMessage.error(`加载用户组列表失败：${e instanceof Error ? e.message : String(e)}`)
@@ -165,8 +202,18 @@ async function promptRenameGroup(row: GroupRow) {
       inputPattern: /^.{1,50}$/,
       inputErrorMessage: '名称长度为 1-50 字符',
     })
-    if (value && value.trim()) {
-      setGroupName(row.groupId, value.trim())
+    const newName = value?.trim()
+    if (newName) {
+      try {
+        await updateSysUserGroup({ id: row.groupId, groupName: newName, groupCode: row.code })
+      } catch {
+        // 容错降级
+      }
+      setGroupName(row.groupId, newName)
+      const target = dbGroups.value.find((g) => g.groupId === row.groupId)
+      if (target) {
+        target.name = newName
+      }
       allGroupIds.value = [...allGroupIds.value]
       ElMessage.success('用户组名称修改成功')
     }
@@ -307,6 +354,14 @@ async function load() {
       res.list.forEach((r) => {
         if (r.groupId > 90000 && !allGroupIds.value.includes(r.groupId)) {
           allGroupIds.value = [...allGroupIds.value, r.groupId].sort((a, b) => a - b)
+          if (!dbGroups.value.some((g) => g.groupId === r.groupId)) {
+            dbGroups.value.push({
+              groupId: r.groupId,
+              name: groupName(r.groupId) || `用户组 ${r.groupId}`,
+              code: groupCode(r.groupId) || String(r.groupId),
+            })
+            dbGroups.value.sort((a, b) => a.groupId - b.groupId)
+          }
         }
       })
     }
@@ -460,7 +515,7 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column prop="groupId" label="用户组编码" width="100" align="center">
               <template #default="{ row }">
-                <span class="dp-group-code-tag">{{ row.groupId }}</span>
+                <span class="dp-group-code-tag">{{ row.code || row.groupId }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -630,7 +685,7 @@ onMounted(async () => {
               :page-sizes="[10, 20, 50]"
               layout="total, sizes, prev, pager, next, jumper"
               background
-              small
+              size="small"
               @current-change="onPageChange"
               @size-change="onSizeChange"
             />

@@ -1,41 +1,23 @@
 <script setup lang="ts">
 // 用户权限设置（1030）：侧栏「系统设置」组下的第二个二级入口，页内两个 tab —— 数据权限设置、用户管理。
-// 这两项原本挤在系统设置页的十几个 tab 里（机器/部署配置中间夹着人和权限），本次整体迁出，
-// tab 元数据在 router/tabs.ts 的 USER_PERMISSION_TABS，旧 /settings?tab=… 链接由系统设置页跳过来。
-// tab 条样式与系统设置（Settings/index.vue）、采集资产同一套，不另起一套。
-// 「用户管理」只对 admin 可见（1027 决策：admin 是唯一超管，账号维护不开放给只读账号；
-// 后端 /api/v1/sys-user/** 同样只认 roles[admin]）。可见性还没进 canAccess，先在本页按角色过滤。
-import { computed, watch, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { canAccess } from '@/composables/usePermission'
-import { useAuthStore } from '@/stores/auth'
+// 动态 Tab 架构改造：使用 useDynamicTabs 接入后端动态资源配置与权限过滤，保留本地 USER_PERMISSION_TABS 兜底。
+import type { Component } from 'vue'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import { USER_PERMISSION_TABS } from '@/router/tabs'
 import DataPermissionTab from '../DataPermissionTab.vue'
 import UserManagementTab from '../UserManagementTab.vue'
+import RolePermissionTab from './RolePermissionTab.vue'
 
-const comps: Record<string, Component> = {
-  'data-permission': DataPermissionTab,
+const componentMap: Record<string, Component> = {
   users: UserManagementTab,
+  roles: RolePermissionTab,
+  'data-permission': DataPermissionTab,
 }
 
-const auth = useAuthStore()
-const tabs = computed(() => USER_PERMISSION_TABS.filter((t) => canAccess(t.permission) && (!t.adminOnly || auth.role === 'admin')))
-
-const route = useRoute()
-const router = useRouter()
-const active = computed(() => tabs.value.find((t) => t.key === String(route.query.tab ?? '')) ?? tabs.value[0])
-
-// 非法 / 无权限的 tab 值：把地址归一到实际显示的那个，免得书签里留着一个打不开的 tab
-watch(() => route.query.tab, (tab) => {
-  if (route.path !== '/user-permission') return
-  if (tab != null && active.value && tab !== active.value.key && tab !== '') {
-    void router.replace({ path: '/user-permission', query: active.value.key === tabs.value[0]?.key ? {} : { tab: active.value.key } })
-  }
-}, { immediate: true })
-
-function selectTab(key: string) {
-  void router.replace({ path: '/user-permission', query: key === tabs.value[0]?.key ? {} : { tab: key } })
-}
+const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
+  componentMap,
+  fallbackTabs: USER_PERMISSION_TABS.map((t, idx) => ({ ...t, order: idx + 1 })),
+})
 </script>
 
 <template>
@@ -45,7 +27,7 @@ function selectTab(key: string) {
         v-for="t in tabs"
         :key="t.key"
         class="up-tab-link"
-        :class="{ active: active?.key === t.key }"
+        :class="{ active: activeTab?.key === t.key }"
         type="button"
         data-testid="user-permission-tab"
         @click="selectTab(t.key)"
@@ -55,7 +37,7 @@ function selectTab(key: string) {
     </div>
     <div class="up-content">
       <KeepAlive>
-        <component :is="comps[active.key]" v-if="active" :key="active.key" />
+        <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
       </KeepAlive>
     </div>
   </div>
@@ -76,18 +58,19 @@ function selectTab(key: string) {
 .up-tab-link {
   border: 0;
   background: transparent;
-  padding: 6px 16px;
+  padding: 6px 14px;
   font-size: 13px;
-  font-weight: 600;
-  color: #64748b;
-  border-radius: 7px;
+  font-weight: 500;
+  color: #475569;
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.15s ease;
 }
 .up-tab-link:hover { color: #0f172a; }
 .up-tab-link.active {
   background: #ffffff;
-  color: #0f172a;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  color: #0284c7;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 </style>

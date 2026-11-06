@@ -1,14 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-const TABS: { key: string; label: string }[] = [
-  { key: 'sourceCheck', label: '数据源告警' },
-  { key: 'sourceIssues', label: '源问题' },
-  { key: 'queueCheck', label: '队列告警' },
-  { key: 'commJob', label: '自定义告警' },
-  { key: 'taskList', label: '任务实例' },
-  { key: 'taskStat', label: '任务统计' },
-]
+import type { Component } from 'vue'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import SourceCheck from './sourceCheck/index.vue'
 import SourceIssuesView from './sourceIssues/SourceIssuesView.vue'
 import QueueCheck from './queueCheck/index.vue'
@@ -16,8 +8,19 @@ import CommJob from './commJob/index.vue'
 import TaskList from './taskList/index.vue'
 import TaskStat from './taskStat/index.vue'
 
+// 页内 tab 由后端菜单下发（sys_menu menu_type=2，/monitor 下 6 条），本地这份只是
+// 菜单接口没下发 / 加载失败时的兜底；文案、顺序、权限码都以 route.meta.tabs 为准。
+const fallbackTabs = [
+  { key: 'sourceCheck', label: '数据源告警', order: 1 },
+  { key: 'sourceIssues', label: '源问题', order: 2 },
+  { key: 'queueCheck', label: '队列告警', order: 3 },
+  { key: 'commJob', label: '自定义告警', order: 4 },
+  { key: 'taskList', label: '任务实例', order: 5 },
+  { key: 'taskStat', label: '任务统计', order: 6 },
+]
+
 // key → 组件映射：改用具名组件 + <component :is>，好让内容区像「模板配置」一样带过渡切换
-const comps: Record<string, Component> = {
+const componentMap: Record<string, Component> = {
   sourceCheck: SourceCheck,
   sourceIssues: SourceIssuesView,
   queueCheck: QueueCheck,
@@ -26,30 +29,21 @@ const comps: Record<string, Component> = {
   taskStat: TaskStat,
 }
 
-const route = useRoute()
-const router = useRouter()
-const activeTab = ref('sourceCheck')
-watch(
-  () => route.query.tab,
-  (tab) => {
-    const key = String(tab ?? '')
-    activeTab.value = TABS.some((t) => t.key === key) ? key : 'sourceCheck'
-  },
-  { immediate: true },
-)
-function selectTab(key: string) {
-  void router.replace({ path: '/monitor', query: key === 'sourceCheck' ? {} : { tab: key } })
-}
+const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
+  componentMap,
+  fallbackTabs,
+  path: '/monitor',
+})
 </script>
 
 <template>
   <div class="ra-tabs-wrap">
     <div class="ra-tabs-inner">
       <button
-        v-for="t in TABS"
+        v-for="t in tabs"
         :key="t.key"
         class="ra-tab-link"
-        :class="{ active: activeTab === t.key }"
+        :class="{ active: activeTab?.key === t.key }"
         @click="selectTab(t.key)"
       >
         {{ t.label }}
@@ -58,7 +52,11 @@ function selectTab(key: string) {
   </div>
 
   <transition name="fade-slide" mode="out-in">
-    <component :is="comps[activeTab]" :key="activeTab" />
+    <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
+    <el-empty
+      v-else
+      description="该页签暂未找到对应组件，请检查「菜单配置 → 页内 Tab」里配的组件文件路径"
+    />
   </transition>
 </template>
 

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { ruleApi, type Rule, type RuleGroup, type RuleGate, type RuleTestCase, type SharedConfig } from '../../api'
 import { useUiStore } from '../../stores/ui'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import RuleGroupPanel from './RuleGroupPanel.vue'
 import RuleDetailDrawer from './RuleDetailDrawer.vue'
 import FunctionTester from './FunctionTester.vue'
@@ -14,22 +15,25 @@ const ui = useUiStore()
 
 // 顶层 tab（0721 会议 §六-1）：参数模块从采集资产迁入，与"规则组/函数"同级；
 // 现有规则组+规则列表+函数测试器整体作为"规则" tab（改动最小，不拆分成更细的规则组/函数两个 tab）。
-const TABS: { key: string; label: string }[] = [
-  { key: 'rule', label: '规则' },
-  { key: 'param', label: '参数中心' },
-]
+// 页内 tab 的数据源改为后端菜单（sys_menu menu_type=2，/rules 下 2 条），下面的常量只作兜底。
 const route = useRoute()
 const router = useRouter()
-const activeTab = ref('rule')
+const { tabs, activeTab } = useDynamicTabs({
+  fallbackTabs: [
+    { key: 'rule', label: '规则', order: 1 },
+    { key: 'param', label: '参数中心', order: 2 },
+  ],
+  path: '/rules',
+  // 本页保留自己的 selectTab（默认 tab 不带 query）与 template 旧链接跳转，关掉内置纠偏
+  autoNormalizeQuery: false,
+})
 watch(() => route.query.tab, (tab) => {
   if (tab === 'template') {
     void router.replace('/flows')
-    return
   }
-  activeTab.value = tab === 'param' ? tab : 'rule'
 }, { immediate: true })
 function selectTab(key: string) {
-  void router.replace({ path: '/rules', query: key === 'rule' ? {} : { tab: key } })
+  void router.replace({ path: '/rules', query: key === tabs.value[0]?.key ? {} : { tab: key } })
 }
 
 // ---- 数据 ----
@@ -217,10 +221,10 @@ onUnmounted(() => {
   <div class="ra-tabs-wrap">
     <div class="ra-tabs-inner">
       <button
-        v-for="t in TABS"
+        v-for="t in tabs"
         :key="t.key"
         class="ra-tab-link"
-        :class="{ active: activeTab === t.key }"
+        :class="{ active: activeTab?.key === t.key }"
         @click="selectTab(t.key)"
       >
         {{ t.label }}
@@ -228,7 +232,7 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <ParamTab v-if="activeTab === 'param'" />
+  <ParamTab v-if="activeTab?.key === 'param'" />
 
   <template v-else>
   <div class="ra-layout">
@@ -312,7 +316,7 @@ onUnmounted(() => {
           :page-sizes="[10, 20, 50]"
           layout="total, sizes, prev, pager, next"
           background
-          small
+          size="small"
           @current-change="loadList"
           @size-change="onSizeChange"
         />

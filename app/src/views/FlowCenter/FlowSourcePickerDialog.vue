@@ -364,7 +364,7 @@ watch(() => props.flow?.id, (id) => {
         :page-size="PAGE_SIZE"
         layout="total, prev, pager, next, jumper"
         background
-        small
+        size="small"
         @current-change="load"
       />
     </div>

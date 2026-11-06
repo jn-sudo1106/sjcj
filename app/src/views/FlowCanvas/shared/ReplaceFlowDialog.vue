@@ -297,7 +297,7 @@ function confirm() {
         :page-sizes="[20, 40, 100]"
         layout="prev, pager, next"
         background
-        small
+        size="small"
         @current-change="load"
         @size-change="search"
       />

@@ -651,7 +651,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
         :page-sizes="[10, 30, 100, 200]"
         layout="total, sizes, prev, pager, next, jumper"
         background
-        small
+        size="small"
         @current-change="onPage"
         @size-change="onSize"
       />

@@ -46,6 +46,7 @@ import StructCondEditor from './groupRes/StructCondEditor.vue'
 import CondValueInput from './groupRes/CondValueInput.vue'
 import * as groupResApi from '@/api/groupRes'
 import * as groupSourceScope from '@/api/groupSourceScope'
+import * as sysUserApi from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
 import { clearGroupNames, setGroupName } from '@/utils/groupNames'
 import type { GroupResMeta, GroupResRule } from '@/api/groupRes'
@@ -110,6 +111,11 @@ async function mountAs(roles: string[], groupId = '100001') {
   vi.spyOn(groupResApi, 'groupResMeta').mockResolvedValue(META)
   vi.spyOn(groupResApi, 'pagedGroupRes').mockResolvedValue({ total: ROWS.length, list: ROWS.map((r) => ({ ...r })) })
   vi.spyOn(groupResApi, 'listGroupIds').mockResolvedValue([90001, 90002, 100001, 100002, 90099])
+  vi.spyOn(sysUserApi, 'getSysUserGroupOptions').mockResolvedValue([
+    { id: 100001, label: '研发部', code: 'DEPT_DEV' },
+    { id: 100002, label: '运营部', code: 'DEPT_OPS' },
+  ])
+  vi.spyOn(sysUserApi, 'updateSysUserGroup').mockResolvedValue({ ok: true, message: '操作成功' })
   alive?.unmount()
   const wrapper = mount(DataPermissionTab, { global: { plugins: [pinia, ElementPlus] } })
   alive = wrapper
@@ -542,6 +548,34 @@ describe('数据权限设置页面', () => {
       expect(tableText).toContain('90001')
       expect(tableText).toContain('90004')
       expect(tableText).toContain('90006')
+    })
+
+    it('左侧用户组从 sys_user_group 表加载选项数据并展示名称与编码', async () => {
+      vi.spyOn(sysUserApi, 'getSysUserGroupOptions').mockResolvedValueOnce([
+        { id: 100001, label: '大数据研发部', code: 'DEPT_BIGDATA' },
+        { id: 100002, label: '数据资产运营部', code: 'DEPT_DATA_OPS' },
+      ])
+      const wrapper = await mountAs(['admin'], '')
+      const tableText = wrapper.find('.dp-left-table-wrap').text()
+      expect(tableText).toContain('大数据研发部')
+      expect(tableText).toContain('DEPT_BIGDATA')
+      expect(tableText).toContain('数据资产运营部')
+      expect(tableText).toContain('DEPT_DATA_OPS')
+    })
+
+    it('重命名用户组：调用 updateSysUserGroup 保存至 sys_user_group 表', async () => {
+      const updateGroup = vi.spyOn(sysUserApi, 'updateSysUserGroup').mockResolvedValue({ ok: true, message: '操作成功' })
+      vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '研发中台组' } as never)
+      const wrapper = await mountAs(['admin'], '')
+      await flushPromises()
+      const renameBtn = wrapper.find('.dp-rename-icon')
+      expect(renameBtn.exists()).toBe(true)
+      await renameBtn.trigger('click')
+      await flushPromises()
+      expect(updateGroup).toHaveBeenCalledWith(expect.objectContaining({
+        id: 90001,
+        groupName: '研发中台组',
+      }))
     })
 
     it('选中用户组会读取其源数据权限（getGroupSourceScope）', async () => {

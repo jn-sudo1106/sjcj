@@ -4,15 +4,20 @@ import { readStoredToken, setUnauthorizedHandler } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 import { canAccess } from '../composables/usePermission'
 import { loginRedirect } from './loginRedirect'
+import { generateRoutesFromNav, addDynamicRoutes } from './dynamicRoutes'
+import { setupNavPerf } from '../utils/navPerf'
 
 const routes: RouteRecordRaw[] = [
   // 登录页无 AppShell，路径沿用旧系统 /user/login
   { path: '/user/login', component: () => import('../views/Login/index.vue'), meta: { public: true } },
+  { path: '/403', component: () => import('../views/Error/403.vue'), meta: { public: true } },
+  { path: '/404', component: () => import('../views/Error/404.vue'), meta: { public: true } },
   {
     path: '/',
+    name: 'RootLayout',
     component: () => import('../layouts/AppShell.vue'),
     children: [
-      { path: '', redirect: '/overview' },
+      { path: '', name: 'RootRedirect', redirect: '/overview' },
       { path: '/overview', component: () => import('../views/Overview/index.vue') },
       {
         path: '/canvas',
@@ -30,25 +35,14 @@ const routes: RouteRecordRaw[] = [
       { path: '/sync', component: () => import('../views/DataSync/index.vue') },
       { path: '/sync/create', component: () => import('../views/DataSync/TaskWizard.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
-      // 基础配置（1015 迁入，旧 ai-chat-view「基础配置」组）：侧栏排在模板配置之前，
-      // 表字段管理在页内以 tab 呈现，页面代码放在 views/TemplateConfig/BaseConfig/ 下（同属问数配置域），
-      // 元数据见 router/tabs.ts 的 BASE_CONFIG_TABS。
+      { path: '/ai-chat', component: () => import('../views/TemplateConfig/AiChat/index.vue') },
       { path: '/base-config', component: () => import('../views/TemplateConfig/BaseConfig/index.vue') },
-      // 问数配置 → 模板配置（1013 起从旧 ai-chat-view「模板配置」域逐个迁入的 8 个子模块，1015 收成页内 tab）。
-      // 8 个子模块不再有独立地址，元数据见 router/tabs.ts 的 TEMPLATE_CONFIG_TABS，
-      // 页面容器见 views/TemplateConfig/index.vue，权限码由页内 tab 过 canAccess 过滤。
       { path: '/template-config', component: () => import('../views/TemplateConfig/index.vue') },
-      // 问数系统配置（1015 迁入，旧 ai-chat-view「系统配置」组）：参数设置 + 页面配置两个页内 tab，
-      // 页面代码放在 views/TemplateConfig/SystemConfig/ 下（与模板配置同域），元数据见 router/tabs.ts 的 SYSTEM_CONFIG_TABS。
       { path: '/system-config', component: () => import('../views/TemplateConfig/SystemConfig/index.vue') },
-      // 辅助工具（1020）：独立一级分组（元数据见 router/tabs.ts 的 TABS，group: auxiliary），
-      // 页面本体在 views/AuxiliaryTool/index.vue。不声明 permission，与其余入口一样默认放行。
       { path: '/auxiliary-tool', component: () => import('../views/AuxiliaryTool/index.vue') },
-      // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
-      // 用户权限设置（1030）：系统设置组下的第二个入口，页内两个 tab（数据权限设置 / 用户管理，后者仅 admin）。
-      // 元数据见 router/tabs.ts 的 TABS + USER_PERMISSION_TABS，容器见 views/Settings/UserPermission/index.vue。
       { path: '/user-permission', component: () => import('../views/Settings/UserPermission/index.vue'), meta: { permission: 'settings' } },
+      { path: '/menu-config', component: () => import('../views/Settings/MenuConfig/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
       { path: '/tools', redirect: (to) => ({ path: '/monitor', query: to.query }) },
       // 「运行记录」改名「任务中心」（0819 N4-2 / 0812 M3-11），路径随之从 /runs 改到
@@ -66,6 +60,88 @@ export const router = createRouter({
     return savedPosition || { top: 0 }
   },
 })
+
+/**
+ * 动态路由装配（幂等：装配成功后 `isRoutesLoaded` 置位，后续调用直接返回）。
+ *
+ * 2026-11-06 从「首次业务导航」里抽出来：装配要遍历全部菜单记录并逐条 addRoute（动 matcher），
+ * 放在守卫里等于让用户第一次点菜单时同步承担这份成本。现在改为登录成功/应用冷启动时预热。
+ *
+ * 菜单还没到（老后端没这个接口 / 尚未登录）时不置 `isRoutesLoaded`，等下一次导航或预热再试；
+ * 404 兜底路由与菜单无关，先注入（`hasRoute` 保证只加一次）。
+ */
+export function ensureDynamicRoutes(): string[] {
+  const auth = useAuthStore()
+  if (auth.isRoutesLoaded) return auth.dynamicRouteNames
+  try {
+    if (auth.menuGroups && auth.menuGroups.length > 0) {
+      const dynamicRoutes = generateRoutesFromNav(auth.menuGroups)
+      auth.dynamicRouteNames = addDynamicRoutes(router, dynamicRoutes, 'RootLayout')
+      auth.isRoutesLoaded = true
+    }
+    // 动态注入 404 兜底路由
+    if (!router.hasRoute('CatchAllNotFound')) {
+      router.addRoute({
+        path: '/:pathMatch(.*)*',
+        name: 'CatchAllNotFound',
+        redirect: '/404',
+      })
+    }
+  } catch (e) {
+    console.warn('动态路由初始化异常:', e)
+    auth.isRoutesLoaded = true
+  }
+  return auth.dynamicRouteNames
+}
+
+/**
+ * 冷启动预热：已登录用户（刷新页面）在应用挂载时就把会话/菜单/动态路由准备好，
+ * 别等第一次点侧栏才做。**不阻塞任何导航**：即使后端慢 10 秒，页面也已经按会话快照渲染出来了。
+ */
+export async function warmUpAuth(): Promise<void> {
+  const auth = useAuthStore()
+  if (!auth.isLoggedIn) return
+  try {
+    // 有快照也要校准一次：菜单/权限可能在别的会话里被改过（fetchInfo 内部单飞，守卫不会重复请求）
+    await auth.fetchInfo()
+  } catch {
+    return
+  }
+  ensureDynamicRoutes()
+}
+
+/**
+ * 会话恢复的「导航预算」（毫秒）。
+ *
+ * 背景（2026-11-06 实测）：后端 `/user-info.htm` 在部分环境要 10 秒才回，而这个 await 在
+ * `beforeEach` 里 → 用户点一次菜单就卡 10 秒（`[perf] 守卫 9949ms · 首帧 166ms`）。
+ * 会话/菜单属于「补充信息」而不是「渲染前提」：侧栏有本地 TABS 兜底、权限未加载时 canAccess 放行，
+ * 所以这里给导航一个很短的预算，超时就先放行，请求继续在后台跑，落地后 Pinia 响应式补上。
+ */
+const SESSION_BUDGET_MS = 250
+
+/** 在预算内等 promise；超预算返回 false（promise 仍继续在后台跑） */
+async function withinBudget(task: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms)
+  })
+  const outcome = await Promise.race([task.then(() => true as const).catch(() => true as const), timeout])
+  if (timer !== undefined) clearTimeout(timer)
+  return outcome === true ? true : false
+}
+
+/** 后台发现会话真的失效时：清会话 + 回登录页（此时用户可能已经在页面上，弹窗由 401 处理器兜底） */
+function fallbackToLogin(redirect: string): void {
+  const auth = useAuthStore()
+  void auth
+    .logout()
+    .catch(() => {})
+    .finally(() => {
+      if (router.currentRoute.value.path === '/user/login') return
+      void router.push({ path: '/user/login', query: { redirect } })
+    })
+}
 
 // 全站守卫：迁移旧 permission.js —— 业务路由默认需认证；有 Token 但角色未加载时先恢复用户，
 // 失败则清理会话回登录页；已登录访问登录页跳 /overview。导出以便单测直接驱动。
@@ -85,18 +161,56 @@ export const authGuard = async (to: { meta: Record<string, unknown>; path: strin
   if (!auth.isLoggedIn) {
     return { path: '/user/login', query: { redirect: to.fullPath } }
   }
-  if (!auth.roles.length) {
+
+  // 会话恢复（getInfo 与菜单接口在 store 里并行、且单飞——与冷启动预热共用同一个请求）
+  const t0 = performance.now()
+  const sessionTask: Promise<unknown> | null = !auth.roles.length
+    ? auth.fetchInfo()
+    : !auth.isMenusLoaded
+      ? auth.fetchUserNav()
+      : null
+
+  if (sessionTask) {
+    const settledInTime = await withinBudget(sessionTask, SESSION_BUDGET_MS)
+    if (!settledInTime) {
+      // 后端慢：先放行，别让点击卡在网络上；失败在后台兜底跳登录
+      void sessionTask
+        .then(() => ensureDynamicRoutes())
+        .catch(() => fallbackToLogin(to.fullPath))
+      if (import.meta.env.DEV) {
+        console.warn(`[nav] 会话恢复超过 ${SESSION_BUDGET_MS}ms，先放行 ${to.path}（后台继续，落地后再补齐菜单）`)
+      }
+      return true
+    }
     try {
-      await auth.fetchInfo()
+      await sessionTask
     } catch {
       await auth.logout()
       return { path: '/user/login', query: { redirect: to.fullPath } }
     }
   }
+
+  // 动态路由装配与注册（幂等；正常情况已在登录/冷启动阶段完成）
+  ensureDynamicRoutes()
+  if (sessionTask && import.meta.env.DEV) {
+    console.warn(
+      `[nav] 会话/菜单恢复 ${Math.round(performance.now() - t0)}ms · 动态路由 ${auth.dynamicRouteNames.length} 条`,
+    )
+  }
+
+  // 根路径定向到用户有权限的第一个菜单
+  if (to.path === '/') {
+    const firstMenuPath = auth.menuGroups?.[0]?.items?.[0]?.path || '/overview'
+    return firstMenuPath
+  }
+
   // 菜单权限口子（0924-02）：没权限的入口连地址直达也拦住，回总览
   if (!canAccess(to.meta.permission as string | undefined)) return '/overview'
   return true
 }
+
+// 开发态导航性能打点（必须注册在业务守卫之前，才能量到完整耗时；见 utils/navPerf.ts）
+setupNavPerf(router)
 
 router.beforeEach(authGuard)
 
@@ -141,9 +255,9 @@ setUnauthorizedHandler(() => {
     closeOnPressEscape: false,
   }).finally(() => {
     // 会话已死：不调 logout.htm（实测该接口此时返回 500，调用无意义），仅清本地状态
-    useAuthStore().clear()
-    void router.push({ path: '/user/login', query: { redirect } }).finally(() => {
-      sessionExpiredShown = false
-    })
+    sessionExpiredShown = false
+    const auth = useAuthStore()
+    auth.clear()
+    void router.push({ path: '/user/login', query: { redirect } })
   })
 })

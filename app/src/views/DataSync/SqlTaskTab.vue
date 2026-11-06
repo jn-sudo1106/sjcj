@@ -290,7 +290,7 @@ void loadClients()
         :page-size="pageSize"
         :total="total"
         layout="prev, pager, next"
-        small
+        size="small"
         background
         @current-change="onPageChange"
       />

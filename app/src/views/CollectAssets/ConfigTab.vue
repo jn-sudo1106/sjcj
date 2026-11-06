@@ -117,7 +117,7 @@ function onDelete(c: Config) {
         :page-sizes="[10, 20, 50]"
         layout="total, sizes, prev, pager, next"
         background
-        small
+        size="small"
         @current-change="load"
         @size-change="onSize"
       />

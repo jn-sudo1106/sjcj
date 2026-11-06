@@ -20,6 +20,7 @@ import {
   mergeRows,
   percentOf,
   pieSlices,
+  progressOf,
   quickRange,
   rateActiveOf,
   thresholdOf,
@@ -103,6 +104,27 @@ describe('stat · 占比 / 配色 / 阈值', () => {
     expect(percentOf(250, 1000)).toBe(25)
     expect(percentOf(1, 3)).toBe(33.33)
     expect(percentOf(1, 0)).toBe(0)
+  })
+
+  it('percentOf 兜底异常输入：占比上限 100，非有限值/负数一律 0', () => {
+    // 后端口径不一致时单组 cnt 有可能大于合计（进度条不能画出 >100 的值）
+    expect(percentOf(1200, 1000)).toBe(100)
+    expect(percentOf(Number.NaN, 1000)).toBe(0)
+    expect(percentOf(10, Number.NaN)).toBe(0)
+    expect(percentOf(-5, 1000)).toBe(0)
+  })
+
+  it('progressOf：el-progress 的 percentage 只收 0~100 的有限数值', () => {
+    expect(progressOf(0)).toBe(0)
+    expect(progressOf(33.33)).toBe(33.33)
+    expect(progressOf(100)).toBe(100)
+    // 越界 → 夹到边界（不报警、不画空条）
+    expect(progressOf(250)).toBe(100)
+    expect(progressOf(-1)).toBe(0)
+    // 非有限值 → 0（百分比位置留空比显示 NaN 条好）
+    expect(progressOf(Number.NaN)).toBe(0)
+    expect(progressOf(Number.POSITIVE_INFINITY)).toBe(0)
+    expect(progressOf(Number.NEGATIVE_INFINITY)).toBe(0)
   })
 
   it('errorColor 三档：>20 红、>5 黄、其余绿（旧页色值）', () => {
@@ -235,5 +257,12 @@ describe('stat · 时间口径（旧页用 moment，这里用原生 Date 复刻�
     expect(toNum(undefined)).toBe(0)
     expect(toNum('12')).toBe(12)
     expect(toNum(0)).toBe(0)
+  })
+
+  it('toNum：解不出来的串/非有限值也折成 0（避免 NaN 渗透成「NaN%」与非法 percentage）', () => {
+    expect(toNum('null')).toBe(0)
+    expect(toNum('--')).toBe(0)
+    expect(toNum(Number.NaN)).toBe(0)
+    expect(toNum(Number.POSITIVE_INFINITY)).toBe(0)
   })
 })

@@ -1832,7 +1832,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             :total="bindDlg.total"
             layout="total, prev, pager, next"
             background
-            small
+            size="small"
             :disabled="bindDlg.loading"
             @current-change="loadBindCandidates"
           />

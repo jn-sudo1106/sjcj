@@ -3,9 +3,8 @@
 // 结构与口径照「全局数据 → 数据中心」（views/DataView/index.vue）：tab 落 URL query，刷新/深链回得到同一个 tab。
 // tab 元数据（标题、说明、权限码）统一在 router/tabs.ts 的 TEMPLATE_CONFIG_TABS，
 // key 就是旧侧栏的 TAB key；8 个子模块不再有独立地址，只能通过 /template-config?tab= 访问。
-import { computed, watch, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { canAccess } from '@/composables/usePermission'
+import type { Component } from 'vue'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import { TEMPLATE_CONFIG_TABS } from '@/router/tabs'
 import SqlTemplatePage from './SqlTemplatePage.vue'
 import TableTemplatePage from './TableTemplate/index.vue'
@@ -29,23 +28,13 @@ const comps: Record<string, Component> = {
   'word-segment-config': WordSegmentConfigPage,
 }
 
-const route = useRoute()
-const router = useRouter()
-
-const tabs = computed(() => TEMPLATE_CONFIG_TABS.filter((t) => canAccess(t.permission)))
-const active = computed(() => tabs.value.find((t) => t.key === String(route.query.tab ?? '')) ?? tabs.value[0])
-
-// 非法 / 无权限的 tab 值：把地址归一到实际显示的那个，免得书签里留着一个打不开的 tab
-watch(() => route.query.tab, (tab) => {
-  if (route.path !== '/template-config') return
-  if (tab == null || tab === '' || tab === active.value?.key) return
-  void selectTab(String(active.value?.key ?? ''))
-}, { immediate: true })
-
-function selectTab(key: string) {
-  // 默认 tab 不写进 URL，保持 /template-config 这个地址干净（与数据中心同口径）
-  void router.replace({ path: '/template-config', query: key === tabs.value[0]?.key ? {} : { tab: key } })
-}
+// 页内 tab 由后端菜单下发（sys_menu menu_type=2，/template-config 下 8 条），
+// 文案 / 顺序 / 权限码都以 route.meta.tabs 为准；本地常量只作接口没下发时的兜底。
+const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
+  componentMap: comps,
+  fallbackTabs: TEMPLATE_CONFIG_TABS.map((t, idx) => ({ ...t, order: idx + 1 })),
+  path: '/template-config',
+})
 </script>
 
 <template>
@@ -55,9 +44,9 @@ function selectTab(key: string) {
         v-for="t in tabs"
         :key="t.key"
         class="tc-tab-link"
-        :class="{ active: active?.key === t.key }"
+        :class="{ active: activeTab?.key === t.key }"
         type="button"
-        :title="t.desc"
+        :title="String(t.remark || t.desc || '')"
         data-testid="template-config-tab"
         @click="selectTab(t.key)"
       >
@@ -66,7 +55,7 @@ function selectTab(key: string) {
     </div>
     <div class="tc-content">
       <transition name="fade-slide" mode="out-in">
-        <component :is="comps[active!.key]" v-if="active" :key="active.key" />
+        <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
       </transition>
     </div>
   </div>

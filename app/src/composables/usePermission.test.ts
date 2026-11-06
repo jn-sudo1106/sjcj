@@ -24,6 +24,44 @@ describe('canAccess 默认实现', () => {
     expect(real.canAccess('settings')).toBe(true)
     expect(real.canAccess('settings:nodeType')).toBe(true)
   })
+
+  // 1106：菜单接口失败时 permissions 是空数组，但那是「未知」不是「零权限」。
+  // 不区分的话侧栏和页内 tab 会整片消失（表现为「功能都没了」），见 useDynamicTabs 的同批修复。
+  it('菜单加载失败（menusLoadFailed）→ 兜底放行；明确零权限 → 拦截', async () => {
+    const real = await vi.importActual<typeof import('./usePermission')>('./usePermission')
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.roles = ['operator'] // 非 admin
+    auth.isMenusLoaded = true
+    auth.permissions = []
+
+    expect(real.canAccess('settings')).toBe(false)
+
+    auth.menusLoadFailed = true
+    expect(real.canAccess('settings')).toBe(true)
+  })
+
+  // 1106 需求：root（超级管理员）什么都不校验
+  it('root 超级管理员：roles 含 root 或登录名是 root 时一律放行（不看权限码）', async () => {
+    const real = await vi.importActual<typeof import('./usePermission')>('./usePermission')
+
+    setActivePinia(createPinia())
+    const byRole = useAuthStore()
+    byRole.roles = ['root']
+    byRole.isMenusLoaded = true
+    byRole.permissions = []
+    expect(real.canAccess('settings')).toBe(true)
+    expect(real.canAccess('settings:roles')).toBe(true)
+
+    // 老账号：roles 只给普通角色，靠登录名兜底
+    setActivePinia(createPinia())
+    const byName = useAuthStore()
+    byName.roles = ['read']
+    byName.loginUsername = 'root'
+    byName.isMenusLoaded = true
+    byName.permissions = []
+    expect(real.canAccess('settings')).toBe(true)
+  })
 })
 
 describe('菜单权限接线', () => {
@@ -84,7 +122,7 @@ describe('菜单权限接线', () => {
     await router.isReady()
     const wrapper = mount(UserPermission, { global: { plugins: [pinia, router, ElementPlus] } })
     await flushPromises()
-    expect(wrapper.findAll('.up-tab-link').map((b) => b.text())).toEqual(['用户管理'])
+    expect(wrapper.findAll('.up-tab-link').map((b) => b.text())).toEqual(['用户管理', '角色管理'])
     expect(wrapper.find('.up-tab-link.active').text()).toBe('用户管理')
     // 可见的只剩这一项，它就是本页默认 tab —— 默认 tab 不写进地址（口径同系统设置页）
     expect(router.currentRoute.value.query).toEqual({})

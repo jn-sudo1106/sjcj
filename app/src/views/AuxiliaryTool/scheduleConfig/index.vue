@@ -404,7 +404,7 @@ onMounted(() => void loadSummary())
                   :page-size="20"
                   :total="detailState[row.schedule].jobs.length"
                   layout="total, prev, pager, next"
-                  small
+                  size="small"
                   background
                   @current-change="(value: number) => onDetailPage(row.schedule, value)"
                 />
@@ -463,7 +463,7 @@ onMounted(() => void loadSummary())
         :page-sizes="[10, 30, 100]"
         layout="total, sizes, prev, pager, next, jumper"
         background
-        small
+        size="small"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />

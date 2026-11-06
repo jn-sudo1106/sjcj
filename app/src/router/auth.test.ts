@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { router, authGuard, isChunkLoadError } from './index'
+import { router, authGuard, ensureDynamicRoutes, isChunkLoadError } from './index'
 import { useAuthStore } from '../stores/auth'
 import { ACCESS_TOKEN_KEY, triggerSessionExpired } from '../api/auth'
 import { ElMessageBox } from 'element-plus'
@@ -102,6 +102,50 @@ describe('authGuard（迁移旧 permission.js）', () => {
     expect(await authGuard(to('/overview'))).toEqual({ path: '/user/login', query: { redirect: '/overview' } })
     expect(auth.token).toBe('')
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull()
+  })
+
+  // 1106 实测：后端 `/user-info.htm` 在部分环境要 ~10s 才回，守卫 await 它 → 点一次菜单卡 10 秒
+  // （控制台 `[perf] /collect 总 10114ms · 守卫 9949ms · 首帧 166ms`）。
+  // 会话恢复不是渲染前提（侧栏有本地兜底、权限未知时 canAccess 放行），所以给导航一个短预算：
+  // 超时就先放行，请求继续在后台跑，落地后 Pinia 响应式补齐。
+  it('会话恢复超过导航预算：先放行，不把点击卡在网络上', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const auth = loginAs()
+      fetchMock.mockImplementation(() => new Promise(() => {})) // 永远不回的会话接口
+
+      const pending = authGuard(to('/collect'))
+      await vi.advanceTimersByTimeAsync(400)
+
+      await expect(pending).resolves.toBe(true)
+      // 没有因为「慢」被误判成失效会话
+      expect(auth.token).toBe('tok')
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('ensureDynamicRoutes 幂等：重复调用不重复注册，只装配一次', async () => {
+    const auth = loginAs(['admin'])
+    auth.menuGroups = [
+      {
+        groupKey: 'home',
+        groupLabel: '首页',
+        order: 1,
+        items: [
+          { id: 99, key: 'warmup-probe', label: '预热探针', path: '/warmup-probe', order: 1, componentPath: 'views/Overview/index.vue' },
+        ],
+      },
+    ]
+    auth.isRoutesLoaded = false
+
+    const first = ensureDynamicRoutes()
+    expect(first.length).toBeGreaterThan(0)
+    expect(auth.isRoutesLoaded).toBe(true)
+    // 第二次直接返回缓存结果，不再 addRoute
+    expect(ensureDynamicRoutes()).toEqual(first)
   })
 })
 

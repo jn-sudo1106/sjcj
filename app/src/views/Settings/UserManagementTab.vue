@@ -19,15 +19,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Edit, Key, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import {
   changeSysUserStatus,
+  getSysUserGroupOptions,
   pagedSysUser,
   resetSysUserPassword,
   statusText,
   sysUserDetail,
   STATUS_INVALID,
   STATUS_VALID,
+  type SysUserGroupOption,
   type SysUserRow,
 } from '@/api/sysUser'
 import { useAuthStore } from '@/stores/auth'
+import { readGroupNames } from '@/utils/groupNames'
 import SysUserEditDialog from './SysUserEditDialog.vue'
 import SysUserDetailDrawer from './SysUserDetailDrawer.vue'
 
@@ -36,9 +39,29 @@ defineOptions({ name: 'UserManagementTab' })
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 
+const groupOptions = ref<SysUserGroupOption[]>([])
+
+async function loadGroupOptions() {
+  try {
+    const opts = await getSysUserGroupOptions()
+    if (Array.isArray(opts) && opts.length > 0) {
+      const localNames = readGroupNames()
+      groupOptions.value = opts.map((opt) => ({
+        ...opt,
+        label: (opt.label && !opt.label.startsWith('用户组_'))
+          ? opt.label
+          : (localNames[String(opt.id)] || opt.label || `用户组_${opt.id}`),
+      }))
+    }
+  } catch {
+    // 降级兜底
+  }
+}
+
 onMounted(() => {
   // 进页面就出第一页账号，不要求先点查询
   void load()
+  void loadGroupOptions()
 })
 
 // ---- 查询条件（草稿 → 已生效两态：只有点查询、翻页或重置才发列表请求） ----
@@ -69,8 +92,23 @@ async function load() {
       limit: size.value,
     })
     if (id === seq) {
-      rows.value = res.list
+      const localNames = readGroupNames()
+      rows.value = res.list.map((r) => {
+        const local = r.groupId ? localNames[String(r.groupId)] : undefined
+        const effectiveName = (r.groupName && !r.groupName.startsWith('用户组_'))
+          ? r.groupName
+          : (local || r.groupName || (r.groupId ? `用户组_${r.groupId}` : null))
+        return {
+          ...r,
+          groupName: effectiveName,
+        }
+      })
       total.value = res.total
+      for (const r of rows.value) {
+        if (r.groupId && r.groupName && !groupOptions.value.some((o) => o.id === r.groupId)) {
+          groupOptions.value.push({ id: r.groupId, label: r.groupName })
+        }
+      }
     }
   } catch (e) {
     if (id !== seq) return
@@ -221,8 +259,23 @@ function lockWrite(row: SysUserRow): boolean {
       <el-form-item label="用户名">
         <el-input v-model="draft.userName" clearable placeholder="模糊匹配" data-testid="sys-user-filter-name" @keyup.enter="runQuery" />
       </el-form-item>
-      <el-form-item label="所属组 ID">
-        <el-input v-model="draft.groupId" clearable placeholder="如 100001" data-testid="sys-user-filter-group" @keyup.enter="runQuery" />
+      <el-form-item label="用户组">
+        <el-select
+          v-model="draft.groupId"
+          clearable
+          filterable
+          placeholder="全部"
+          data-testid="sys-user-filter-group"
+          style="width: 150px"
+        >
+          <el-option label="全部" value="" />
+          <el-option
+            v-for="opt in groupOptions"
+            :key="opt.id"
+            :label="opt.label"
+            :value="String(opt.id)"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="状态">
         <el-select v-model="draft.userStatus" placeholder="全部" data-testid="sys-user-filter-status">
@@ -247,8 +300,8 @@ function lockWrite(row: SysUserRow): boolean {
         <el-table-column prop="userId" label="用户 ID" width="80" align="center" />
         <el-table-column prop="userLoginName" label="登录名" min-width="130" align="center" show-overflow-tooltip />
         <el-table-column prop="userName" label="用户名" min-width="110" align="center" show-overflow-tooltip />
-        <el-table-column label="所属组" width="96" align="center">
-          <template #default="{ row }">{{ row.groupId ?? '—' }}</template>
+        <el-table-column label="用户组" min-width="120" align="center" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.groupName || '—' }}</template>
         </el-table-column>
         <el-table-column label="角色" min-width="160" align="center" show-overflow-tooltip>
           <template #default="{ row }">
@@ -307,13 +360,13 @@ function lockWrite(row: SysUserRow): boolean {
         :page-sizes="[10, 20, 50]"
         layout="total, sizes, prev, pager, next, jumper"
         background
-        small
+        size="small"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />
     </div>
 
-    <SysUserEditDialog ref="dialogRef" @saved="onSaved" />
+    <SysUserEditDialog ref="dialogRef" :preset-group-options="groupOptions" @saved="onSaved" />
     <SysUserDetailDrawer v-model="detailVisible" :user="detailUser" />
   </div>
 </template>

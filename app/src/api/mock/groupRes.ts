@@ -140,6 +140,14 @@ export function mockGroupIds(): number[] {
   return Array.from(ids).sort((a, b) => a - b)
 }
 
+export function mockGroupOptions(): Array<{ id: number; label: string; code: string; parentId: number }> {
+  return [
+    { id: 100001, label: '研发部', code: 'DEPT_DEV_01', parentId: 0 },
+    { id: 100002, label: '运营部', code: 'DEPT_OPS_01', parentId: 0 },
+    { id: 90001, label: '超级管理员组', code: 'GROUP_90001', parentId: 0 },
+  ]
+}
+
 /** 试算：mock 不连业务表，ID 条件按填入的 ID 如实回命中数，SQL 条件只做黑名单预检（命中数恒 0）。 */
 export function mockGroupResPreview(params?: Record<string, unknown>): GroupResPreview {
   const condType = String(params?.condType ?? 'ID')

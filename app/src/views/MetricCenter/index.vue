@@ -12,13 +12,9 @@
 //
 // ⚠️ 动作类键（`add`）**不保留**：它是「进页就自动打开新增弹窗」的一次性指令，跟着页签跑会变成
 // 「每次点回指标列表都弹一次新增」。（该机制本身已在 1014 随跳页一起删除，这条留着是防回潮。）
-import { ref, watch, type Component } from 'vue'
+import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-const TABS: { key: string; label: string }[] = [
-  { key: 'indicatorDataset', label: '指标数据集' },
-  { key: 'indicatorsList', label: '指标列表' },
-  { key: 'indicatorsResult', label: '指标结果' },
-]
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 /** 切页签时保留的上下文键（与 indicatorDataset/index.vue 的 openMeasureList 写进去的键同一套） */
 const CARRY_KEYS = ['sourceId', 'entryTypeId', 'entryType', 'datasetId', 'datasetName', 'configId'] as const
 import IndicatorDataset from './indicatorDataset/index.vue'
@@ -32,17 +28,21 @@ const comps: Record<string, Component> = {
   indicatorsResult: IndicatorsResult,
 }
 
+// 页内 tab 由后端菜单下发（sys_menu menu_type=2，/metrics 下 3 条），本地兜底只在菜单没下发时生效。
+// 切页签要保留一组跨页签上下文键，所以这里关掉内置纠偏、继续用本页的 selectTab。
+const { tabs, activeTab, currentComponent } = useDynamicTabs({
+  componentMap: comps,
+  fallbackTabs: [
+    { key: 'indicatorDataset', label: '指标数据集', order: 1 },
+    { key: 'indicatorsList', label: '指标列表', order: 2 },
+    { key: 'indicatorsResult', label: '指标结果', order: 3 },
+  ],
+  path: '/metrics',
+  autoNormalizeQuery: false,
+})
+
 const route = useRoute()
 const router = useRouter()
-const activeTab = ref('indicatorDataset')
-watch(
-  () => route.query.tab,
-  (tab) => {
-    const key = String(tab ?? '')
-    activeTab.value = TABS.some((t) => t.key === key) ? key : 'indicatorDataset'
-  },
-  { immediate: true },
-)
 function selectTab(key: string) {
   const query: Record<string, string> = {}
   CARRY_KEYS.forEach((k) => {
@@ -50,8 +50,8 @@ function selectTab(key: string) {
     const text = (Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '')).trim()
     if (text) query[k] = text
   })
-  // 默认页签（指标数据集）不带 tab 键，URL 更干净；旧版这一行为保留
-  const isDefault = key === 'indicatorDataset'
+  // 默认页签（后端排序第一条）不带 tab 键，URL 更干净；旧版这一行为保留
+  const isDefault = key === tabs.value[0]?.key
   void router.replace({
     path: '/metrics',
     query: isDefault ? query : { tab: key, ...query },
@@ -63,10 +63,10 @@ function selectTab(key: string) {
   <div class="ra-tabs-wrap">
     <div class="ra-tabs-inner">
       <button
-        v-for="t in TABS"
+        v-for="t in tabs"
         :key="t.key"
         class="ra-tab-link"
-        :class="{ active: activeTab === t.key }"
+        :class="{ active: activeTab?.key === t.key }"
         @click="selectTab(t.key)"
       >
         {{ t.label }}
@@ -75,7 +75,7 @@ function selectTab(key: string) {
   </div>
 
   <transition name="fade-slide" mode="out-in">
-    <component :is="comps[activeTab]" :key="activeTab" />
+    <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
   </transition>
 </template>
 

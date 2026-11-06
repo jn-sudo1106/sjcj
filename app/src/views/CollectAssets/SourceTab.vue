@@ -1007,7 +1007,7 @@ onUnmounted(() => {
         :page-sizes="[10, 20, 50]"
         layout="total, sizes, prev, pager, next"
         background
-        small
+        size="small"
         @current-change="loadList"
         @size-change="() => { page = 1; loadList() }"
       />

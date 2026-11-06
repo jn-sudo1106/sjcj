@@ -1,4 +1,10 @@
 // 首页 + 8 个业务模块元数据 — 路由与独立系统导航共用，口径同《采集配置中心_开发方案.md》信息架构。
+//
+// 2026-11-06：侧栏与页内 tab 的数据源已统一为后端菜单（sys/menu/user-nav，库表 sys_menu）：
+// - 侧栏：AppSidebar 优先用 auth.menuGroups，本文件的 TABS 仅在菜单接口没下发时兜底；
+// - 页内 tab：各页面经 useDynamicTabs 读 route.meta.tabs（sys_menu 的 menu_type=2 记录），
+//   本文件的 TEMPLATE_CONFIG_TABS / BASE_CONFIG_TABS / SYSTEM_CONFIG_TABS / USER_PERMISSION_TABS
+//   只作为 fallbackTabs 兜底，文案、顺序、权限码最终以后端配置为准。
 export interface TabMeta {
   key: string
   path: string
@@ -27,6 +33,8 @@ export const TABS: TabMeta[] = [
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
 
+  // 问数配置 → AI智能问数（基于大模型与数据智能体的交互式问数、图表生成与业务诊断工作台）
+  { key: 'ai-chat', path: '/ai-chat', label: 'AI智能问数', desc: '基于大模型与数据智能体的交互式问数、图表生成与业务诊断工作台', group: 'template' },
   // 问数配置 → 基础配置（1015 迁入，旧 ai-chat-view「基础配置」组 /demo/entity-build + /demo/vector-data）：
   // 侧栏排在「模板配置」之前，子模块（表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理、实体改写管理）在页内以 tab 呈现（见 BASE_CONFIG_TABS 与 views/TemplateConfig/BaseConfig/index.vue）。
   { key: 'base-config', path: '/base-config', label: '基础配置', desc: '表字段管理、向量表数据浏览、选表规则配置、向量表管理、表改写管理、实体改写管理（旧 ai-chat-view「基础配置」域）', group: 'template' },
@@ -48,6 +56,8 @@ export const TABS: TabMeta[] = [
   // 用户权限设置（1030）：原系统设置页内的「数据权限设置」「用户管理」两个 tab 整体迁到这里，
   // 与「系统设置」并列挂在侧栏同一个组下（组标题就是系统设置）。页内 tab 元数据见 USER_PERMISSION_TABS。
   { key: 'user-permission', path: '/user-permission', label: '用户权限设置', desc: '数据权限设置、用户管理（仅 admin）', group: 'settings', permission: 'settings' },
+  // 菜单配置：系统资源与菜单数据维护，支持多级目录、菜单、页内Tab与操作权限管理
+  { key: 'menu-config', path: '/menu-config', label: '菜单配置', desc: '系统目录、菜单、页内Tab与按钮操作权限维护', group: 'settings', permission: 'settings' },
 ]
 
 /**
@@ -137,6 +147,6 @@ export interface UserPermissionTabMeta {
 
 export const USER_PERMISSION_TABS: UserPermissionTabMeta[] = [
   { key: 'users', label: '用户管理', permission: 'settings:users', adminOnly: true },
+  { key: 'roles', label: '角色管理', permission: 'settings:roles', adminOnly: true },
   { key: 'data-permission', label: '数据权限设置', permission: 'settings:dataPermission' },
 ]
-
