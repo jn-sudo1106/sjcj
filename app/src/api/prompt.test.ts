@@ -15,13 +15,14 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
 describe('提示词表读取', () => {
   it('本地流程模板从同一管理接口读取，过滤停用并优先默认版本', async () => {
     vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
-    const spy = mockFetch({ code: '0', data: [
+    const spy = mockFetch([
       { promptId: 1, isActive: 0, isDefault: 1, version: 9 },
       { promptId: 2, isActive: 1, isDefault: 0, version: 8 },
       { promptId: 3, isActive: 1, isDefault: 1, version: 1 },
-    ] })
+    ])
     expect((await fetchPromptList('collect', '网页抓取')).map(row => row.promptId)).toEqual([3, 2])
-    expect(String(spy.mock.calls[0][0])).toContain('/api/local-flow/v1/flow/node-prompts')
+    // 2026-11-05 合并后：流程侧模板改走 runner-management 的 node-prompt-templates（原 /api/local-flow/v1/flow/node-prompts）
+    expect(String(spy.mock.calls[0][0])).toContain('/api/runner-management/node-prompt-templates')
     expect(String(spy.mock.calls[0][0])).toContain('templateUse=config')
   })
   it('category 为 NULL 的行也要保留（翻译那一行就是这样）', async () => {
