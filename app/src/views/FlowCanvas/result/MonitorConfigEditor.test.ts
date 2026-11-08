@@ -54,6 +54,7 @@ const RuleOrchestrationTabStub = defineComponent({
       h('button', { 'data-testid': 'orch-patch', onClick: () => this.ctx.patch({ describe: '拍了拍描述' }) }),
       h('button', { 'data-testid': 'orch-methods', onClick: () => this.ctx.setMonitorMethods(['当日数据是否正常入库']) }),
       h('button', { 'data-testid': 'orch-alert', onClick: () => this.ctx.setMonitorAlertConfig(DEFAULT_SNAPSHOT) }),
+      h('button', { 'data-testid': 'orch-generated', onClick: () => { this.ctx.patch({ script: 'def main(): pass', scriptPath: '/code01/m.py' }); this.ctx.onScriptGenerated?.() } }),
     ])
   },
 })
@@ -317,7 +318,7 @@ describe('MonitorConfigEditor', () => {
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('保存成功往外抛 saved，父级（列表页）据此关弹窗并刷新', async () => {
+  it('保存成功往外抛 saved，父级（列表页）据此刷新列表', async () => {
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
@@ -338,5 +339,24 @@ describe('MonitorConfigEditor', () => {
     await flushPromises()
 
     expect(wrapper.emitted('saved')).toHaveLength(1)
+  })
+
+  it('生成脚本成功后自动保存，不用再手点「保存配置」（1105 会议）', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
+    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 'TB_RAW', tableName: 'sense_data.TB_RAW', fields: [] } as never)
+    const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+
+    const wrapper = mountEditor()
+    await pickSource(wrapper)
+    await driveContext(wrapper, 'orch-generated')
+
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update.mock.calls[0][0].checkConf).toContain('/code01/m.py')
+    expect(success).toHaveBeenCalledWith('脚本已生成，监控配置已自动保存')
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
   })
 })

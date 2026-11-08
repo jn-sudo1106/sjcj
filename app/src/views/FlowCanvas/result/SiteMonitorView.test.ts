@@ -107,6 +107,18 @@ describe('SiteMonitorView', () => {
     expect(wrapper.get('[data-testid="site-monitor-alarm-count"]').text()).toContain('1')
   })
 
+  it('「条数」列从执行结果里取出数量单独显示（1105 会议）', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
+      total: 2,
+      list: [check({ id: '1', lastMsg: '2026-09-09 11:00:46---正常, 数量:1240' }), check({ id: '2', lastMsg: '校验正常' })],
+    })
+    const wrapper = mountView()
+    await pickSource(wrapper)
+
+    const counts = wrapper.findAll('[data-testid="monitor-result-count"]').map((cell) => cell.text())
+    expect(counts).toEqual(['1240', '—'])
+  })
+
   // isDelete 的语义是反的：0 才是在用。旧平台在 loadData 里转了一道，
   // 迁过来最容易在这里把布尔搞反。
   it('在用开关按 isDelete 反向语义显示，切换时发的是 0/1 而不是布尔', async () => {

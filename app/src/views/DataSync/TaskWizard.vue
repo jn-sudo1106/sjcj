@@ -402,7 +402,7 @@ async function submit() {
 </template>
 
 <style scoped>
-.sync-wizard { padding: 20px; background: #fff; border: 1px solid #e5eaf2; border-radius: 12px; min-height: 100%; }
+.sync-wizard { padding: 20px; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); min-height: 100%; }
 .sync-wizard-head, .sync-row, .sync-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sync-wizard-head h2 { margin: 0; font-size: 19px; }.sync-wizard-head p { margin: 4px 0 0; color: #64748b; font-size: 13px; }
 .sync-steps { margin: 26px 0; }.sync-wizard-body { max-width: 1280px; margin: 0 auto; }.sync-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; max-width: 900px; margin: 0 auto; }

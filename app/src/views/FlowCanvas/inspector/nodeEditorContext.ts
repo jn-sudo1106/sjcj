@@ -29,6 +29,8 @@ export interface NodeEditorContext {
   sourceId: Ref<string>
   /** 节点自己没配过定时时的兜底调度（画布 = 当前源，网站态 = 所选源） */
   sourceSchedule: Ref<CollectorSchedule | null | undefined>
+  /** 生成脚本成功后回调。监控配置弹窗用它自动保存（1105 会议）；画布不提供，仍由用户手动保存节点 */
+  onScriptGenerated?: () => void
 }
 
 const KEY: InjectionKey<NodeEditorContext> = Symbol('NodeEditorContext')

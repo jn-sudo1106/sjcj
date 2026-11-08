@@ -1192,3 +1192,66 @@ describe('TaskView', () => {
     })
   })
 })
+
+describe('TaskView · 任务中心左列表右详情（1105 会议）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const tasks = [
+    { taskId: '501', sourceId: '391007768', state: 'E', taskName: '抓取列表', typeName: '采集', parentId: '9001', taskUrl: 'https://a.example/1', createdAt: '2026-11-06 09:00:00' },
+    { taskId: '502', sourceId: '391007768', state: 'C', taskName: '抓取详情', typeName: '采集', createdAt: '2026-11-06 09:01:00' },
+  ] as TaskInst[]
+
+  async function mountGlobal() {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 2, list: tasks })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    return { wrapper, paged }
+  }
+
+  it('点列表行在右侧常驻显示详情，不再打开抽屉', async () => {
+    const { wrapper } = await mountGlobal()
+    try {
+      expect(wrapper.find('[data-testid="task-split-layout"]').exists()).toBe(true)
+      expect(wrapper.findComponent({ name: 'TaskDetailDrawer' }).exists()).toBe(false)
+      expect(wrapper.get('[data-testid="task-detail-panel"]').text()).toContain('选择左侧任务')
+
+      await wrapper.findAll('[data-testid="task-row"]')[1]!.trigger('click')
+      const detail = wrapper.getComponent({ name: 'TaskDetailContent' })
+      expect(detail.props('task')).toMatchObject({ taskId: '502' })
+      expect(detail.props('closable')).toBe(false)
+      expect(wrapper.findAll('[data-testid="task-row"]')[1]!.classes()).toContain('is-selected')
+    } finally { wrapper.unmount() }
+  })
+
+  it('列表压缩成 5 列，数据 ID、URL、队列、创建时间都还在', async () => {
+    const { wrapper } = await mountGlobal()
+    try {
+      useAuthStore().roles = ['admin']
+      await flushPromises()
+      const table = wrapper.get('[data-testid="source-task-table"]')
+      expect(table.findAll('thead th')).toHaveLength(5)
+      const first = wrapper.findAll('[data-testid="task-row"]')[0]!
+      expect(first.get('[data-testid="task-biz-link"]').text()).toBe('9001')
+      expect(first.get('[data-testid="task-url-link"]').attributes('href')).toBe('https://a.example/1')
+      expect(first.text()).toContain('2026-11-06 09:00:00')
+      expect(first.text()).toContain('异常')
+    } finally { wrapper.unmount() }
+  })
+
+  it('刷新后右侧详情换成同一任务的最新数据', async () => {
+    const { wrapper, paged } = await mountGlobal()
+    try {
+      await wrapper.findAll('[data-testid="task-row"]')[0]!.trigger('click')
+      paged.mockResolvedValue({ total: 1, list: [{ ...tasks[0]!, state: 'C' }] })
+      await wrapper.get('[data-testid="task-refresh"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.getComponent({ name: 'TaskDetailContent' }).props('task')).toMatchObject({ taskId: '501', state: 'C' })
+    } finally { wrapper.unmount() }
+  })
+})

@@ -25,6 +25,8 @@
 //     等于把线上监控真实的阈值/条件覆盖掉（0916 起就有这条红线，见 monitorCkSource.ts）。
 //   · 草稿态一律走 syncMonitorAlertConfig：手上没有真实节点，整包写会把线上真实的
 //     监控方法/脚本路径覆盖成默认空值。
+//   · 生成脚本成功后自动走一次保存（1105 会议），与手点「保存配置」同一条通路；
+//     生成只对真实监控节点开放（草稿节点没有表配置会被拦下），所以自动保存不会碰到草稿态。
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { entryApi, sourceApi, type Source, type Step } from '@/api'
@@ -143,6 +145,8 @@ provideNodeEditorContext({
   },
   sourceId: computed(() => selectedSourceId.value),
   sourceSchedule: source,
+  // 生成脚本成功后自动保存（1105 会议）：不然要再手点「保存配置」才落库，忘了点脚本就白生成了
+  onScriptGenerated: () => { void save({ auto: true }) },
 })
 
 let requestId = 0
@@ -223,9 +227,9 @@ watch(selectedNodeId, () => {
  * 草稿态（源上没有数据监控节点）必须走窄通路：监控方法/编排在草稿里是默认值，
  * 整包写会把 ck_source 里真实存在的脚本路径、监控方法覆盖成空。
  */
-async function save() {
+async function save(options: { auto?: boolean } = {}) {
   const cfg = node.value
-  if (!cfg || !selectedSourceId.value) return
+  if (!cfg || !selectedSourceId.value || saving.value) return
   saving.value = true
   try {
     if (isDraftNode.value || (alertTouched.value && !nodeConfigDirty.value)) {
@@ -242,10 +246,10 @@ async function save() {
     resetBaseline()
     alertTouched.value = false
     alertEmitCount = 1
-    ElMessage.success('监控配置已保存')
+    ElMessage.success(options.auto ? '脚本已生成，监控配置已自动保存' : '监控配置已保存')
     emit('saved')
   } catch (e) {
-    ElMessage.error(`监控配置保存失败：${e instanceof Error ? e.message : String(e)}`)
+    ElMessage.error(`${options.auto ? '脚本已生成，但自动保存失败，请点「保存配置」重试' : '监控配置保存失败'}：${e instanceof Error ? e.message : String(e)}`)
   } finally {
     saving.value = false
   }
@@ -270,8 +274,12 @@ watch(selectedSourceId, (sourceId) => {
       <select v-if="nodeOptions.length" v-model="selectedNodeId" class="smc-input" aria-label="数据监控节点">
         <option v-for="item in nodeOptions" :key="item.id" :value="item.id">{{ item.title }}</option>
       </select>
-      <span v-if="isDraftNode" class="smc-draft-note" data-testid="site-monitor-draft-note">
-        {{ selectedSourceId ? '该源还没有数据监控节点，可先在这里配置监控' : '选个源即可把这份配置落到该源上' }}
+      <!-- 1105 会议：没选源时直接点「生成脚本」会报错，提示要醒目并说清先做什么；
+           草稿节点没有表配置，生成脚本会被拦下，这里提前说明，免得用户以为配完了却没存上。 -->
+      <span v-if="isDraftNode" class="smc-draft-note" :class="{ warn: !selectedSourceId }" data-testid="site-monitor-draft-note">
+        {{ selectedSourceId
+          ? '该源还没有数据监控节点：可先在这里配置告警；生成脚本需要先在流程画布添加数据监控节点并配好输入表'
+          : '请先选择源：选个源即可把这份配置落到该源上，生成脚本和保存都需要源' }}
       </span>
       <button
         class="rc-btn primary"
@@ -279,7 +287,7 @@ watch(selectedSourceId, (sourceId) => {
         data-testid="site-monitor-config-save"
         :disabled="!canSave"
         :title="selectedSourceId ? (dirty ? '' : '改动监控方法、描述或告警配置后即可保存') : '先选择源'"
-        @click="save"
+        @click="save()"
       >{{ saving ? '保存中…' : '保存配置' }}</button>
     </div>
 
@@ -302,6 +310,7 @@ watch(selectedSourceId, (sourceId) => {
 .smc-shell { display: flex; flex-direction: column; min-height: 0; flex: 1; background: #fff; }
 .smc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
 .smc-draft-note { color: var(--rc-faint); font-size: 11px; }
+.smc-draft-note.warn { color: var(--el-color-warning, #e6a23c); font-weight: 500; }
 .smc-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); font-size: 12px; outline: none; min-width: 180px; max-width: 320px; background: #fff; }
 .smc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .smc-toolbar .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }

@@ -18,6 +18,7 @@ import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import TaskDetailDrawer from './TaskDetailDrawer.vue'
+import TaskDetailContent from './TaskDetailContent.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
@@ -331,9 +332,10 @@ async function ensureSourceMetadata(targetSourceId: string) {
   }
 }
 
+// 任务中心（global）左列表右详情（1105 会议，对齐代码生成任务页）：详情常驻右侧，不开抽屉
 function openDetail(task: TaskInst) {
   detailTask.value = task
-  detailVisible.value = true
+  detailVisible.value = !props.global
   if (task.sourceId && !stepsBySource.value[task.sourceId]) {
     void ensureSourceMetadata(task.sourceId)
   }
@@ -510,6 +512,10 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     if (requestId !== taskRequest) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
+    // 自动刷新后右侧详情换成同一任务的最新一行，状态和结果才跟得上
+    const shown = detailTask.value
+    const fresh = shown ? rows.value.find((row) => row.taskId === shown.taskId) : undefined
+    if (fresh) detailTask.value = fresh
     void loadGlobalSourceNames(rows.value)
   } catch (error) {
     if (requestId !== taskRequest) return
@@ -695,11 +701,11 @@ const nextStepHints = computed(() => {
 <template>
   <main class="tv-shell">
     <CanvasHeader v-if="!siteWide && !global" />
-    <div class="tv-body">
+    <div class="tv-body" :class="{ 'is-global': global }">
       <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>
         <div v-if="global" class="tv-global-head">
-          <div class="tv-global-title">任务中心</div>
+          <div class="tv-global-title">采集任务</div>
           <div class="tv-global-sub">查看和管理全部源的任务，可按源、节点、状态和创建时间筛选。</div>
         </div>
         <template v-if="!siteWide && !global && railOpen">
@@ -804,7 +810,105 @@ const nextStepHints = computed(() => {
         <p v-if="filtersDirty && !loading" class="tv-dirty" role="status" data-testid="task-filters-dirty">查询条件已修改，点「查询」执行</p>
         <p v-if="loading && loadingSeconds >= 2" class="tv-slow" role="status" data-testid="task-slow-hint">查询中，已等待 {{ loadingSeconds }} 秒。只按创建时间查询时后端较慢，加上源、状态等条件会快很多。</p>
 
-        <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
+        <div :class="global ? 'tv-split' : 'tv-plain'" :data-testid="global ? 'task-split-layout' : undefined">
+        <section class="tv-list-panel" aria-label="任务列表">
+        <table v-if="global" class="rc-data-table tv-table tv-compact-table" data-testid="source-task-table" v-loading="loading">
+          <colgroup>
+            <col style="width: 118px" />
+            <col style="width: 150px" />
+            <col />
+            <col style="width: 150px" />
+            <col v-if="canWrite" style="width: 52px" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>任务 / 状态</th>
+              <th>{{ showSourceColumn ? '所属源 / 节点' : '流程节点' }}</th>
+              <th>任务名称 / 数据</th>
+              <th>队列 / 创建时间</th>
+              <th v-if="canWrite">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="task in rows"
+              :key="task.taskId"
+              class="tv-row"
+              :class="{ 'is-selected': detailTask?.taskId === task.taskId }"
+              tabindex="0"
+              data-testid="task-row"
+              @click="openDetail(task)"
+              @keydown.enter="openDetail(task)"
+            >
+              <td>
+                <a v-if="task.taskId" class="tv-link tv-id-link" data-testid="task-id-link" :title="`查看任务详情: ${task.taskId}`">{{ task.taskId }}</a>
+                <span v-else class="muted">—</span>
+                <div class="tv-stack">
+                  <span class="rc-status" :class="stateClass(task.state)"><span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}</span>
+                  <span class="tv-sub">{{ task.typeName || '—' }}</span>
+                </div>
+              </td>
+              <td>
+                <template v-if="showSourceColumn">
+                  <a
+                    v-if="task.sourceId"
+                    class="tv-link tv-source-link"
+                    role="button"
+                    tabindex="0"
+                    data-testid="task-source-link"
+                    :title="`打开源: ${sourceNames[task.sourceId] || task.sourceId}`"
+                    @click.stop="openSource(task)"
+                    @keydown.enter.stop="openSource(task)"
+                  >{{ sourceNames[task.sourceId] || task.sourceId }}</a>
+                  <span v-else class="muted">—</span>
+                  <div v-if="task.sourceId && sourceNames[task.sourceId]" class="tv-source-id" data-testid="task-source-id">{{ task.sourceId }}</div>
+                </template>
+                <div class="tv-sub tv-ellipsis" :title="nodeName(task)">{{ nodeName(task) }}</div>
+              </td>
+              <td>
+                <div class="tv-ellipsis" :title="task.taskName">{{ task.taskName || '—' }}</div>
+                <div class="tv-sub">
+                  数据 ID
+                  <a
+                    v-if="taskDataId(task)"
+                    class="tv-link"
+                    role="button"
+                    tabindex="0"
+                    data-testid="task-biz-link"
+                    :title="`定位数据 ID: ${taskDataId(task)}`"
+                    @click.stop="onLocateData(task)"
+                    @keydown.enter.stop="onLocateData(task)"
+                  >{{ taskDataId(task) }}</a>
+                  <span v-else>—</span>
+                </div>
+                <a
+                  v-if="toExternalHref(task.taskUrl)"
+                  class="tv-link tv-url-link tv-sub"
+                  :href="toExternalHref(task.taskUrl)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :title="task.taskUrl"
+                  data-testid="task-url-link"
+                  @click.stop
+                >{{ task.taskUrl }}</a>
+              </td>
+              <td>
+                <div
+                  class="tv-queue-cell"
+                  :class="{ 'tv-queue-clickable': queueName(task) !== '—' }"
+                  :title="queueName(task) !== '—' ? '点击按此队列筛选' : undefined"
+                  @click.stop="onSelectQueue(queueName(task))"
+                >{{ queueName(task) }}</div>
+                <div class="tv-time">{{ task.createdAt || '—' }}</div>
+              </td>
+              <td v-if="canWrite" class="tv-actions-cell">
+                <button class="tv-resend" type="button" data-testid="task-resend" @click.stop="resendTask(task)">重发</button>
+              </td>
+            </tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="canWrite ? 5 : 4" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
+          </tbody>
+        </table>
+        <table v-else class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
           <colgroup>
             <col style="width: 110px" />
             <col v-if="showSourceColumn" style="width: 130px" />
@@ -922,16 +1026,31 @@ const nextStepHints = computed(() => {
             v-model:page-size="size"
             :total="total"
             :page-sizes="[20, 40, 100, 200]"
-            layout="total, sizes, prev, pager, next, jumper"
+            :layout="global ? 'total, sizes, prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
             background
             size="small"
             @current-change="() => loadTasks()"
             @size-change="onSizeChange"
           />
         </div>
+        </section>
+        <section v-if="global" class="tv-detail-panel" aria-label="任务详情" data-testid="task-detail-panel">
+          <TaskDetailContent
+            v-if="detailTask"
+            :task="detailTask"
+            :closable="false"
+            :source-name="sourceNames[detailTask.sourceId] || detailTask.sourceId"
+            :step-name="nodeName(detailTask)"
+            @locate-data="onLocateData"
+            @open-source="openSource"
+          />
+          <div v-else class="tv-detail-empty">选择左侧任务，查看标识信息、执行时间和排错详情</div>
+        </section>
+        </div>
       </template>
     </div>
     <TaskDetailDrawer
+      v-if="!global"
       v-model="detailVisible"
       :task="detailTask"
       :source-name="detailTask ? (sourceNames[detailTask.sourceId] || detailTask.sourceId) : ''"
@@ -945,6 +1064,29 @@ const nextStepHints = computed(() => {
 <style scoped>
 .tv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 .tv-body { flex: 1; overflow: auto; padding: 12px; }
+/* 任务中心：页面本身不滚，左列表、右详情各自滚动（AGENTS.md 滚动容器约定，只留一层主滚动） */
+.tv-body.is-global { display: flex; flex-direction: column; overflow: hidden; }
+.tv-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(560px, 1.3fr) minmax(380px, 1fr); gap: 12px; }
+.tv-split .tv-list-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: var(--rc-radius-sm); }
+.tv-split .tv-list-panel .tv-table { flex: none; }
+.tv-split .tv-pager { margin-top: auto; }
+.tv-detail-panel { min-width: 0; min-height: 0; overflow-y: auto; border: 1px solid var(--rc-border-soft); border-radius: var(--rc-radius-sm); }
+.tv-detail-panel :deep(.ffd-detail) { padding: 14px 16px; }
+.tv-detail-empty { padding: 48px 16px; color: var(--rc-faint); font-size: 12px; text-align: center; }
+.tv-compact-table { table-layout: fixed; }
+.tv-compact-table td { vertical-align: top; }
+.tv-row { cursor: pointer; }
+.tv-row:hover td { background: #f8fafc; }
+.tv-row.is-selected td { background: var(--rc-primary-bg); }
+.tv-row:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+.tv-stack { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-top: 4px; }
+.tv-sub { color: var(--rc-faint); font-size: 11px; }
+.tv-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-compact-table .tv-url-link { display: block; max-width: 100%; }
+.tv-compact-table .tv-source-link { max-width: 100%; }
+.tv-compact-table .tv-time { margin-top: 4px; }
+@media (max-width: 1100px) { .tv-split { grid-template-columns: minmax(480px, 1fr) minmax(360px, 1fr); gap: 10px; } }
+@media (max-width: 760px) { .tv-body.is-global { overflow: auto; } .tv-split { grid-template-columns: 1fr; grid-template-rows: 420px minmax(320px, auto); flex: none; } .tv-detail-panel { overflow: visible; } }
 .tv-global-head { margin: 2px 0 14px; }
 .tv-global-title { color: var(--rc-text); font-size: 17px; font-weight: 700; }
 .tv-global-sub { margin-top: 4px; color: var(--rc-muted); font-size: 12px; }

@@ -59,7 +59,7 @@ import AlertConfigPanel from '../AlertConfigPanel.vue'
 //
 // 数据监控节点不出现「上传 Excel」样本文件入口（0917 产品口径，画布和监控视图两处一致）；
 // 规则处理节点照旧保留——那里的 Excel 是给"按样本生成规则脚本"用的。
-const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
+const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule, onScriptGenerated } = useNodeEditorContext()
 const props = defineProps<{ templateDefaults?: boolean }>()
 const router = useRouter()
 const route = useRoute()
@@ -1286,6 +1286,11 @@ async function onGenerateScript(
   thinkingText.value = ''
   generationMessage.value = ''
   generationState.value = 'idle'
+  // 生成报错、或取消时一个字都还没输出，要还原原来的脚本：否则模型挂掉（1105 会议上
+  // DeepSeek 调用失败）会把节点上已保存的脚本和路径清空，接着点保存就把空路径写进去了。
+  // 取消时已经输出了一部分则保留（用户主动停下，要看已有内容）。
+  const previousScript = { script: orchCfg.value.script ?? '', scriptPath: orchCfg.value.scriptPath ?? '' }
+  let failed = false
   patch({ script: '', scriptPath: '' })
   try {
     const legacyRuleId = !isRule.value ? await ensureLegacyComposeRuleId() : undefined
@@ -1349,15 +1354,20 @@ async function onGenerateScript(
       generationMessage.value = generationMessage.value || '保存完成'
     }
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
+    if (orchCfg.value.script?.trim()) onScriptGenerated?.()
   } catch (e) {
     if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
       ElMessage.info('已取消生成')
     } else {
+      failed = true
       generationState.value = 'error'
       generationMessage.value = (e as Error)?.message ?? String(e)
       ElMessage.error(`生成${isRule.value ? '脚本' : '配置'}失败：${(e as Error)?.message ?? String(e)}`)
     }
   } finally {
+    const keepPrevious = failed || !orchCfg.value.script?.trim()
+    const changed = (orchCfg.value.script ?? '') !== previousScript.script || (orchCfg.value.scriptPath ?? '') !== previousScript.scriptPath
+    if (keepPrevious && changed) patch(previousScript)
     if (generateAbort.value === controller) generateAbort.value = null
     generating.value = false
   }

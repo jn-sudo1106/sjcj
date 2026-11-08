@@ -20,10 +20,12 @@ defineOptions({ name: 'TaskCenter' })
 
 <template>
   <div class="task-center">
-    <nav class="task-tabs" aria-label="任务类型">
+    <!-- 页签样式与监控中心、规则资产、指标中心一致（1105 会议：任务中心样式与其他页面对齐） -->
+    <nav class="ra-tabs-inner" aria-label="任务类型">
       <button
         v-for="t in tabs"
         :key="t.key"
+        class="ra-tab-link"
         :class="{ active: activeTab?.key === t.key }"
         @click="selectTab(t.key)"
       >
@@ -41,9 +43,10 @@ defineOptions({ name: 'TaskCenter' })
 </template>
 
 <style scoped>
-.task-center { min-height: 0; height: 100%; display: flex; flex-direction: column; }
+.task-center { min-height: 0; height: 100%; display: flex; flex-direction: column; gap: 12px; }
 .task-content { flex: 1; min-height: 0; }
-.task-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--el-border-color); padding: 0 20px; }
-.task-tabs button { cursor: pointer; background: none; border: none; padding: 12px 0; color: var(--el-text-color-regular); border-bottom: 2px solid transparent; }
-.task-tabs button.active { color: var(--el-color-primary); border-bottom-color: var(--el-color-primary); }
+.ra-tabs-inner { align-self: flex-start; display: inline-flex; padding: 4px; background: #f1f5f9; border-radius: 10px; gap: 4px; }
+.ra-tab-link { border: 0; background: transparent; padding: 6px 16px; font-size: 13px; font-weight: 600; color: #64748b; border-radius: 7px; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.ra-tab-link:hover { color: #0f172a; }
+.ra-tab-link.active { background: #ffffff; color: #0f172a; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
 </style>

@@ -18,6 +18,9 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
   componentMap,
   fallbackTabs: USER_PERMISSION_TABS.map((t, idx) => ({ ...t, order: idx + 1 })),
 })
+
+// 这几个页签根元素自己就是白底卡片（rc-card），容器不再套卡片，免得卡片套卡片
+const SELF_FRAMED_TABS = new Set(['users'])
 </script>
 
 <template>
@@ -35,7 +38,7 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
         {{ t.label }}
       </button>
     </div>
-    <div class="up-content">
+    <div class="up-content" :class="{ 'is-framed': activeTab && !SELF_FRAMED_TABS.has(activeTab.key) }">
       <KeepAlive>
         <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
       </KeepAlive>
@@ -46,6 +49,8 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
 <style scoped>
 .up-page { display: flex; flex-direction: column; gap: 12px; height: 100%; }
 .up-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 页签内容统一白底卡片，令牌同监控中心各页（.sc-shell 等）；自带卡片的页签不再套一层 */
+.up-content.is-framed { padding: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: auto; }
 .up-tabs-inner {
   display: inline-flex;
   flex-wrap: wrap;
@@ -55,22 +60,22 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
   border-radius: 10px;
   gap: 4px;
 }
+/* 页签与监控中心、规则资产等模块同一套样式（1107 页面盘点：此前选中文字是天蓝色） */
 .up-tab-link {
   border: 0;
   background: transparent;
-  padding: 6px 14px;
+  padding: 6px 16px;
   font-size: 13px;
-  font-weight: 500;
-  color: #475569;
-  border-radius: 6px;
+  font-weight: 600;
+  color: #64748b;
+  border-radius: 7px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .up-tab-link:hover { color: #0f172a; }
 .up-tab-link.active {
   background: #ffffff;
-  color: #0284c7;
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 </style>

@@ -18,6 +18,13 @@ import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
 import { runnerManagementApi } from '@/api/runnerManagement'
 import { resetNodeConfigAutosave } from '../nodeConfigAutosave'
+
+// 生成成功回调（监控配置弹窗靠它自动保存）：包一层真实上下文，只把回调换成可断言的桩
+const scriptGenerated = vi.hoisted(() => vi.fn())
+vi.mock('../nodeEditorContext', async (original) => {
+  const actual = await original<typeof import('../nodeEditorContext')>()
+  return { ...actual, useNodeEditorContext: () => ({ ...actual.useNodeEditorContext(), onScriptGenerated: scriptGenerated }) }
+})
 vi.mock('@/api/nodePrompts', async original => {
   const actual = await original<typeof import('@/api/nodePrompts')>()
   return { ...actual, nodePromptApi: { ...actual.nodePromptApi,
@@ -1348,6 +1355,42 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
     expect(requestSignal?.aborted).toBe(true)
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id):')
+  })
+
+  it('生成脚本报错时还原节点上原有的脚本和路径（1105 会议：模型调用失败）', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', {
+      describe: '按 sku_id 生成 sku_name',
+      script: 'def main(sku_id):\n    return {}\n',
+      scriptPath: '/rules/saved/orch-173.py',
+    })
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onContent?.('def broken(')
+      throw new Error('模型接口 502')
+    })
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg?.script).toBe('def main(sku_id):\n    return {}\n')
+    expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/rules/saved/orch-173.py')
+  })
+
+  it('生成成功才通知宿主（监控配置弹窗据此自动保存），失败不通知', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    scriptGenerated.mockClear()
+    const generate = vi.spyOn(ruleApi, 'dataProcessGenerate').mockRejectedValueOnce(new Error('模型接口 502'))
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+    expect(scriptGenerated).not.toHaveBeenCalled()
+
+    generate.mockResolvedValueOnce({ script: 'def main():\n    return {}\n', scriptPath: '/rules/new.py' } as never)
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+    expect(scriptGenerated).toHaveBeenCalledTimes(1)
   })
 
   it('主面板生成中按钮切换为停止图标并可点击取消', async () => {

@@ -4,7 +4,7 @@
 //     smv-toolbar / smv-summary / rc-data-table / el-pagination 同一套）；
 //   · 「新增配置」打开居中弹窗，弹窗内容就是改版前这个 Tab 的整页编辑器
 //     （MonitorConfigEditor.vue：按源选数据监控节点 + 编排/告警配置）；
-//   · 行上「编辑」用该行的 sourceId 打开同一个弹窗，保存后回到列表并刷新。
+//   · 行上「编辑」用该行的 sourceId 打开同一个弹窗；保存后弹窗留着（1105 会议：保存完还要接着生成、测试脚本），列表在后面刷新。
 //
 // 列表数据走 ck_source 分页接口（/api/source/page，2026-09-18 后端新增，
 // /api/source/list 的分页版）；监控结果那张列表是 sourceCheck 的旧监控表，别混。
@@ -17,7 +17,7 @@
 // （1:1 迁 CheckAdd.vue）+ `Monitor/sourceCheck/index.vue`（1:1 迁 MonitorList）。
 // 唯独缺 MonitorModal 那层壳——列表要用它带进来的 sourceId 过滤、并作为「加监控」的数据源；
 // 少了它「数据源」就没值可提交。壳已补在 `Monitor/sourceCheck/SourceMonitorDialog.vue`，这里直接调它。
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ckSourceApi, type CkSourceRecord } from '@/api'
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
 import SourceMonitorDialog from '@/views/Monitor/sourceCheck/SourceMonitorDialog.vue'
@@ -35,8 +35,8 @@ const PAGE_SIZE = 10
 const loading = ref(false)
 const error = ref('')
 
-/** 新增/编辑弹窗：open 控制显隐，sourceId 为 '' 是「新增」（全部源起步），有值是编辑那一行的源 */
-const dialog = reactive({ open: false, sourceId: '' })
+/** 新增/编辑弹窗：open 控制显隐，sourceId 是编辑器起步的源（新增时取当前源，没有则为 ''） */
+const dialog = reactive({ open: false, sourceId: '', mode: 'add' as 'add' | 'edit' })
 
 async function load() {
   loading.value = true
@@ -68,17 +68,27 @@ function clearFilters() {
   runQuery()
 }
 
+// 1105 会议：新增时没有默认源，用户直接点「生成脚本」就报错。当前已锁定某个源（画布进来、
+// 或在「监控结果」里选过源）时带上它；网站「全部」视图没有源，仍从「全部源」起步。
 function openAdd() {
-  dialog.sourceId = ''
+  dialog.sourceId = props.sourceId ?? ''
+  dialog.mode = 'add'
   dialog.open = true
 }
 function openEdit(row: CkSourceRecord) {
   dialog.sourceId = String(row.sourceId)
+  dialog.mode = 'edit'
   dialog.open = true
 }
-/** 编辑器里保存成功后：关掉弹窗并刷新列表，让新写进去的那条立刻可见 */
+const dialogTitle = computed(() => {
+  if (dialog.mode === 'edit') return `编辑监控配置（源 ${dialog.sourceId}）`
+  return dialog.sourceId ? `新增监控配置（源 ${dialog.sourceId}）` : '新增监控配置'
+})
+/**
+ * 编辑器里保存成功后只刷新列表、不关弹窗（1105 会议）：生成脚本后要先「保存配置」落库，
+ * 之前一保存就关窗，用户没法接着测试脚本或改告警，只能重新打开。关窗交给弹窗右上角。
+ */
 function onSaved() {
-  dialog.open = false
   void load()
 }
 
@@ -179,7 +189,7 @@ watch(() => props.sourceId, () => {
       v-model="dialog.open"
       class="smc-dialog"
       data-testid="site-monitor-config-dialog"
-      :title="dialog.sourceId ? `编辑监控配置（源 ${dialog.sourceId}）` : '新增监控配置'"
+      :title="dialogTitle"
       width="min(1080px, 94vw)"
       top="5vh"
       append-to-body

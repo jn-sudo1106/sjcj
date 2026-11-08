@@ -11,6 +11,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { sourceCheckApi, type SourceCheck } from '@/api'
 import { confirmDanger } from '@/utils/confirmDanger'
+import { checkCountOf } from '@/utils/monitor/checkCount'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import CheckLogDialog from './CheckLogDialog.vue'
 
@@ -173,6 +174,7 @@ function openLogs(row: SourceCheck) {
               <th style="width:56px">在用</th>
               <th style="width:72px">状态</th>
               <th style="width:180px">名称</th>
+              <th style="width:80px; text-align:right">条数</th>
               <th style="min-width:280px">执行结果</th>
               <th style="width:160px">表</th>
               <th style="width:120px">上次</th>
@@ -194,6 +196,7 @@ function openLogs(row: SourceCheck) {
                 <span class="rc-status" :class="row.state === 'E' ? 'err' : 'ok'">{{ row.state === 'E' ? '告警' : '正常' }}</span>
               </td>
               <td :title="row.name">{{ row.name }}</td>
+              <td class="smv-count" :class="{ alarm: row.state === 'E' }" data-testid="monitor-result-count">{{ checkCountOf(row.lastMsg) || '—' }}</td>
               <td class="smv-msg" :class="{ alarm: row.state === 'E' }" :title="row.lastMsg">{{ resultText(row.lastMsg) || '—' }}</td>
               <td :title="row.tableName">{{ row.tableName || '—' }}</td>
               <td :title="`cron ${row.schedule || '—'}｜下次 ${row.nextRun || '—'}`">{{ row.lastRun || '—' }}</td>
@@ -203,7 +206,7 @@ function openLogs(row: SourceCheck) {
               </td>
             </tr>
             <tr v-if="!rows.length && !loading">
-              <td colspan="7" class="smv-empty-cell">{{ selectedSourceId ? '该源还没有配置监控' : '暂无监控配置' }}</td>
+              <td colspan="8" class="smv-empty-cell">{{ selectedSourceId ? '该源还没有配置监控' : '暂无监控配置' }}</td>
             </tr>
           </tbody>
         </table>
@@ -246,6 +249,8 @@ function openLogs(row: SourceCheck) {
 .smv-table tbody tr.is-alarm td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
 .smv-msg { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-text-2); }
 .smv-msg.alarm { color: #b91c1c; }
+.smv-count { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--rc-text); }
+.smv-count.alarm { color: #b91c1c; }
 /* 操作列钉在右边：表格在常见宽度下就会横向滚动（实测 944 > 840），而「日志」
    「立即运行」是这页仅有的两个动作，滚出视野等于没有。rc-data-table 的 th 本身不 sticky，
    这里不会跟固定表头打架。 */

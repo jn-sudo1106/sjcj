@@ -84,6 +84,15 @@ describe('系统设置 · tab 壳', () => {
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })
 
+  it('自带卡片的页签不再套外框，其余页签由容器统一套白底卡片（1107 页面盘点）', async () => {
+    const { wrapper } = await mountAt()
+    expect(wrapper.get('.st-content').classes()).not.toContain('is-framed')
+
+    await wrapper.findAll('.st-tab-link').find((b) => b.text() === '处理机')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.st-content').classes()).toContain('is-framed')
+  })
+
   // 2026-10-13：来源组迁回源管理「我的分组」，旧书签跳过去并带上选中的组
   it('?tab=source-group 跳到源管理「我的分组」', async () => {
     const { router } = await mountAt({ tab: 'source-group', group: '3' })
