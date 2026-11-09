@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, CaretBottom, CaretTop, Connection, CopyDocument, Delete, Download, Edit, Key, MoreFilled, Odometer, RefreshRight, Star, StarFilled, SwitchButton, View, MagicStick } from '@element-plus/icons-vue'
 import { entryApi, type EntryType } from '../../api'
@@ -12,12 +12,14 @@ import QuickCkSyncDialog from './QuickCkSyncDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { copyToClipboard } from '@/utils/clipboard'
 import { favoriteEntryIds, isFavoriteEntry, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
+import { PHYSICAL_TABLE_UNKNOWN_LABEL } from '@/utils/data/missingTable'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 
 const route = useRoute()
+const router = useRouter()
 
 const list = ref<EntryType[]>([])
 const total = ref(0)
@@ -194,7 +196,24 @@ function onFavOnlyChange(value: string | number | boolean) {
   favOnly.value = Boolean(value)
   page.value = 1
   void load()
+  // 状态回写 URL：刷新 / 分享 / 从总览深链进来都能落到同一个视图；关掉就删参数，保持地址干净
+  const query = { ...route.query }
+  if (favOnly.value) query.fav = '1'
+  else delete query.fav
+  void router.replace({ query })
 }
+
+// 1108：总览「我的收藏」弹层的数据表行走 ?fav=1 直达「只看收藏」。
+// 这里只置初值不请求：onMounted 的首次 load() 会按 favOnly 走收藏分支，避免挂载时打两次请求。
+favOnly.value = route.query.fav === '1'
+watch(() => route.query.fav, (raw) => {
+  const next = raw === '1'
+  // 开关自己回写 URL 时也会走到这里，值一致就直接返回，避免 replace ↔ watch 打转
+  if (next === favOnly.value) return
+  favOnly.value = next
+  page.value = 1
+  void load()
+})
 
 // §1.3-7：深链接 ?entryTypeId= 进入自动带入检索，并 watch 路由参数变化即时刷新。
 watch(() => route.query.entryTypeId, (id) => {
@@ -328,12 +347,29 @@ async function onCheckTable(e: EntryType) {
   }
 }
 
-function onCalc(e: EntryType) {
-  confirmDanger(
-    '是否要强制计算数据表对应的源数据量',
-    `如有手动删除表数据等操作，本次计算将强制修正源上数据量不一致的问题: ${e.tableId}`,
-    () => entryApi.calcEntrySum(e.tableId),
-  )
+/**
+ * 「重新计算数据量」（1106 §10.3）：这是**触发重算**的动作，不是读快照。
+ * 回执必须和「列表刷新 / 查询读最近成功快照」区分开，不能只说泛化的「操作成功」；
+ * 成功后 load() 读后端新统计快照，失败时列表保留上次成功值（不清零，§10.3）。
+ */
+async function onCalc(e: EntryType) {
+  try {
+    await ElMessageBox.confirm(
+      `将按源数据强制重新统计该表的数据量（用于手动删表数据等导致的不一致）: ${e.tableId}`,
+      '重新计算数据量',
+      { type: 'warning', confirmButtonText: '确认重算', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const ack = await entryApi.calcEntrySum(e.tableId)
+    ElMessage.success(ack?.message || `已触发重新计算数据量（表 ${e.tableId}），列表将刷新为最新统计快照`)
+    await load() // 读新快照：列表刷新本身不触发重算
+  } catch (error) {
+    // 重算失败不动列表里的旧值（保留上次成功统计）
+    ElMessage.error(`重新计算数据量失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 function onRebuildIndex(e: EntryType) {
   confirmDanger(
@@ -555,6 +591,13 @@ const onEnterSearch = withoutComposition(() => onSearch())
               title="点击按物理表名排序"
               @click="onSort('tableName')"
             >物理表名<span class="et-sort-caret"><el-icon class="et-sort-up" :class="{ active: sortKey === 'tableName' && sortDir === 'asc' }"><CaretTop /></el-icon><el-icon class="et-sort-down" :class="{ active: sortKey === 'tableName' && sortDir === 'desc' }"><CaretBottom /></el-icon></span></th>
+            <!-- 1106 §10.3：数据量读后端统计快照；§8.3 未知（后端没给 rowCount）显示「—」，绝不兜成 0。
+                 想看最新值走「重新计算数据量」触发重算，列表刷新只读最近一次成功快照。 -->
+            <th style="width: 96px" title="数据量来自后端统计快照（最近一次成功统计）；后端未给值时显示「—」，不会当成 0。需要用「重新计算数据量」触发重算">数据量</th>
+            <!-- 1106 §10.1/§10.2：物理表状态分档。后端暂无表状态快照接口——config/checkTable 是结构差异检查、
+                 config/rebuildTable 会建表，都不能当只读状态查询，所以这里统一「状态待检查」，
+                 真实缺失由数据查询的结构化缺表错误更新（DataQueryPanel），等后端快照接口再接真实状态。 -->
+            <th style="width: 100px" :title="`物理表状态：后端暂无状态快照接口，统一显示「${PHYSICAL_TABLE_UNKNOWN_LABEL}」；数据查询返回结构化缺表错误时才标「物理表不存在」`">物理表</th>
             <th style="width: 84px" title="表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路">数据源</th>
             <th
               class="et-sortable"
@@ -589,6 +632,10 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td>{{ e.tableId }}</td>
             <td>{{ e.name || '—' }}</td>
             <td>{{ e.tableName }}</td>
+            <!-- §8.3：rowCount 未知（undefined）显示「—」，0 是真实的空表才显示 0 -->
+            <td class="et-row-count" data-testid="entry-row-count">{{ e.rowCount == null ? '—' : e.rowCount }}</td>
+            <!-- §10.1：无后端物理表状态快照字段，统一「状态待检查」，不猜缺表也不猜正常 -->
+            <td class="et-physical-state" data-testid="entry-physical-state">{{ PHYSICAL_TABLE_UNKNOWN_LABEL }}</td>
             <td>{{ e.dsKind ?? 'MYSQL' }}</td>
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
@@ -760,6 +807,9 @@ const onEnterSearch = withoutComposition(() => onSearch())
 
 /* 操作列：对齐指标中心的行内图标操作（24px 热区 + hover 底色 + el-tooltip 文案） */
 .et-actions { display: flex; align-items: center; gap: 10px; }
+/* 数据量右对齐、等宽数字；物理表状态是中性说明文字，不用告警色（§7.3） */
+.et-row-count { text-align: right; font-variant-numeric: tabular-nums; }
+.et-physical-state { color: var(--rc-muted); white-space: nowrap; }
 .et-op-icon {
   display: inline-flex;
   align-items: center;
