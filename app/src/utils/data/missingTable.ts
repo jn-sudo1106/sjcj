@@ -15,3 +15,6 @@ export function isMissingTableError(message: string): boolean {
 }
 
 export const MISSING_TABLE_HINT = '数据库里没有这张表的实体表（只有表定义），暂无数据可查'
+
+// 1105 会议：物理表状态列暂无后端快照字段，统一展示「状态待检查」，不猜缺表也不猜正常。
+export const PHYSICAL_TABLE_UNKNOWN_LABEL = '状态待检查'
