@@ -311,7 +311,7 @@ const stats = computed(() => {
   }
 })
 
-// 检测老库异常按钮 (type=1 且路由为空或非 / 开头，或者 id 为 900-906)
+// 检测历史脏数据异常按钮 (menu_type=1 且路由为空或非 / 开头，或者 id 为 900-906)
 const legacyIssues = computed(() => {
   const list = allFlatList.value
   return list.filter((i) => {
@@ -737,7 +737,7 @@ async function handleDelete(row: SysMenuTreeNode) {
   }
 }
 
-// 一键清洗老库历史残留按钮
+// 一键清洗 sys_menu 历史残留按钮
 async function handleCleanLegacy() {
   try {
     const res = await cleanLegacyButtons()
@@ -783,7 +783,7 @@ onMounted(() => {
             @click="diagnosticsVisible = true"
           >
             <el-icon class="mr-1"><WarningFilled /></el-icon>
-            老库脏数据自检 ({{ legacyIssues.length }}项异常)
+            历史脏数据自检 ({{ legacyIssues.length }}项异常)
           </el-button>
 
           <el-button type="primary" @click="handleAdd(0, 0)">
@@ -876,7 +876,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 树形数据组件 (直接展示清晰树形结构，不展示 res_model_code) -->
+      <!-- 树形数据组件 (直接展示清晰树形结构，不展示权限码 perms) -->
       <div class="tree-table-wrapper">
         <div class="tree-header-bar">
           <div class="header-name">菜单名称</div>
@@ -906,7 +906,7 @@ onMounted(() => {
           >
             <template #default="{ data }">
               <div class="custom-tree-row">
-                <!-- 左侧：类型徽标 + 图标 + 名称 + 老库标签 -->
+                <!-- 左侧：类型徽标 + 图标 + 名称 + 历史脏数据标签 -->
                 <div class="node-main">
                   <el-tag
                     size="small"
@@ -1420,34 +1420,34 @@ onMounted(() => {
       </template>
     </el-drawer>
 
-    <!-- ==================== 老库历史数据诊断对话框 ==================== -->
+    <!-- ==================== sys_menu 历史脏数据诊断对话框 ==================== -->
     <el-dialog
       v-model="diagnosticsVisible"
-      title="老库历史遗留数据诊断与清洗"
+      title="菜单历史脏数据诊断与清洗"
       width="640px"
       destroy-on-close
     >
       <div class="diag-body">
         <el-alert
-          title="检测到历史遗留操作按钮因 res_type=1 导致误上侧栏"
+          title="检测到历史遗留操作按钮因 menu_type=1 导致误上侧栏"
           type="warning"
           :closable="false"
           show-icon
         >
           <template #default>
-            系统老版本常量定义中 1 代表按钮，缺少合法的前端路由路径（以 <code>/</code> 开头），被动态菜单服务误当成了一级页面菜单，并在侧栏呈现为齿轮 ⚙️。
+            sys_menu 里 <code>menu_type</code>=1 是菜单、3 才是按钮；这些历史脏数据把操作按钮标成了 1（菜单）又缺少以 <code>/</code> 开头的合法路由，被动态菜单服务当成一级页面，在侧栏显示为齿轮 ⚙️。
           </template>
         </el-alert>
 
         <div class="diag-list-box">
           <div class="diag-list-header">
             <span>受影响的孤立按钮权限记录 ({{ legacyIssues.length }} 项):</span>
-            <span class="text-muted text-xs">建议规范化为 res_type=3 并转移至「用户管理」</span>
+            <span class="text-muted text-xs">建议规范化为 menu_type=3（按钮）并转移至「用户管理」Tab</span>
           </div>
           <div class="diag-list-items">
             <div v-for="item in legacyIssues" :key="item.id" class="diag-item">
               <span class="diag-item-name">⚙️ {{ item.label }} (ID: {{ item.id }})</span>
-              <el-tag size="small" type="warning">res_type: 1 ➔ 应为 3-按钮</el-tag>
+              <el-tag size="small" type="warning">menu_type: 1 ➔ 应为 3-按钮</el-tag>
             </div>
           </div>
         </div>

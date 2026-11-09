@@ -39,14 +39,14 @@ const KNOWN_VIEW_COMPONENTS: Record<string, () => Promise<unknown>> = {
 export interface ComponentSource {
   /** sys_menu.component_path，如 views/Overview/index.vue */
   componentPath?: string
-  /** 备注；老库把组件路径写在这里，如 src/views/Overview/index.vue */
+  /** 备注；sys_menu 历史脏数据把组件路径写在这里，如 src/views/Overview/index.vue */
   remark?: string
 }
 
 /**
  * 把后端配置的前端组件文件路径规范化成 views 下的 glob 键（`../views/Xxx/index.vue`）。
  *
- * 后端「菜单配置」页的输入格式并不严格（placeholder 是 `views/Overview/index.vue`，老库 remark 里
+ * 后端「菜单配置」页的输入格式并不严格（placeholder 是 `views/Overview/index.vue`，sys_menu 历史脏数据 remark 里
  * 存的是 `src/views/...`），这里统一兼容：`views/`、`src/views/`、`@/views/`、`/views/` 前缀、
  * 反斜杠分隔符、只写到目录（`views/Overview`）、省略 `.vue` 后缀、大小写不一致。
  *
@@ -91,7 +91,7 @@ export function loadViewComponent(componentPath?: string): (() => Promise<unknow
 /**
  * 解析视图组件，优先级：
  * 1. 后端菜单下发的 componentPath（`sys_menu.component_path`，最权威）；
- * 2. 后端菜单的 remark（老库把组件路径写在备注里时的兼容）；
+ * 2. 后端菜单的 remark（sys_menu 历史脏数据把组件路径写在备注里时的兼容）；
  * 3. 前端内置的核心视图映射（后两者都没配时的稳定兜底，省掉 glob 扫描）；
  * 4. path 约定式查找（如 /my-page → ../views/MyPage/index.vue 或 ../views/my-page/index.vue）。
  */
@@ -141,7 +141,7 @@ function resolveRouteName(item: NavMenu, routePath: string, usedNames: Set<strin
  * 将后端接口返回的 menuGroups 解析构建为 Vue Router 的 RouteRecordRaw 列表。
  *
  * 路由的 path / 组件文件 / 路由名 / 标题 / 图标 / 权限码 / 页内 tab 全部取自后端菜单记录
- * （`sys/menu/user-nav`，数据源是「菜单配置」页维护的 SYS_RESOURCE），前端只负责把
+ * （`sys/menu/user-nav`，数据源是「菜单配置」页维护的 sys_menu），前端只负责把
  * componentPath 映射成 import() 懒加载函数——后端新增菜单后不再需要改前端路由表。
  */
 export function generateRoutesFromNav(menuGroups: NavGroup[]): RouteRecordRaw[] {
