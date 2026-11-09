@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { checkCountOf } from '@/utils/monitor/checkCount'
 import { ElMessage } from 'element-plus'
 import {
   Search,
@@ -328,6 +329,13 @@ function onSourceChange() {
           />
         </template>
       </el-table-column>
+      <!-- 条数从执行结果文字里取（1105 会议：一眼看到查出多少条），后端给独立字段后改读字段 -->
+      <el-table-column label="条数" width="90" align="right">
+        <template #default="{ row }">
+          <b v-if="checkCountOf(row.lastMsg)" class="sc-count" :class="{ alarm: row.state === 'E' }" data-testid="check-result-count">{{ checkCountOf(row.lastMsg) }}</b>
+          <span v-else class="sc-count-none">—</span>
+        </template>
+      </el-table-column>
       <!-- 执行结果：剥时间戳前缀，超长省略 -->
       <el-table-column label="执行结果" min-width="200" prop="lastMsg" show-overflow-tooltip>
         <template #default="{ row }">
@@ -572,4 +580,7 @@ function onSourceChange() {
   line-height: 1.55;
 }
 /* 与 TaskView 同款 rc-btn / tv-icon-btn：rc-btn 由全局 tokens.css 注入，这里不重写 */
+.sc-count { font-variant-numeric: tabular-nums; color: var(--rc-text); }
+.sc-count.alarm { color: var(--rc-error); }
+.sc-count-none { color: var(--rc-faint); }
 </style>

@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { describe, expect, it, vi } from 'vitest'
+import ElementPlus from 'element-plus'
 import Overview from './index.vue'
 
 vi.mock('../../api', () => ({
@@ -21,6 +22,14 @@ vi.mock('../../api', () => ({
     }),
     trend: () => Promise.resolve([]),
   },
+  // 总览说明条右端的「我的收藏」入口会并发拉三类收藏（1108），不 mock 就会走到真实的 http 客户端
+  favoriteApi: {
+    listIds: (itemType: string) => Promise.resolve(
+      itemType === 'SITE' ? ['1', '2'] : itemType === 'ENTRY_TYPE' ? ['a'] : [],
+    ),
+    add: () => Promise.resolve({ ok: true }),
+    remove: () => Promise.resolve({ ok: true }),
+  },
 }))
 
 describe('Overview panorama integration', () => {
@@ -37,7 +46,7 @@ describe('Overview panorama integration', () => {
 
     const wrapper = mount(Overview, {
       global: {
-        plugins: [createPinia(), router],
+        plugins: [createPinia(), ElementPlus, router],
         directives: { loading: {} },
         stubs: {
           AssetFlow: {
@@ -56,6 +65,11 @@ describe('Overview panorama integration', () => {
 
     expect(wrapper.text()).toContain('7 网站')
     expect(wrapper.text()).toContain('3 异常')
+
+    // 说明条右端多了「我的收藏 3」：网站 2 · 源 0 · 表 1
+    const chip = wrapper.get('[data-testid="overview-favorite-entry"]')
+    expect(chip.text()).toContain('我的收藏')
+    expect(chip.text()).toContain('3')
 
     await wrapper.get('[data-test="select-branch"]').trigger('click')
     await flushPromises()

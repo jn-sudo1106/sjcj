@@ -19,6 +19,12 @@ const expanded = ref(new Set(['MYSQL']))
 const matches = (table: EntryType) => [table.name, table.tableName, table.tableId]
   .some(value => value?.toLowerCase().includes(keyword.value.trim().toLowerCase()))
 const matchesSearch = computed(() => props.tables.filter(matches))
+function dataCount(table: EntryType) {
+  return table.rowCount == null ? '—' : `${table.rowCount.toLocaleString('zh-CN')} 条`
+}
+function tableTitle(table: EntryType) {
+  return `${table.name || table.tableName} · ${table.tableId} · ${table.dsKind ?? 'MYSQL'} · 数据量 ${dataCount(table)}`
+}
 const sections = computed(() => {
   return {
     db: [
@@ -126,8 +132,8 @@ const dirRows = computed(() => {
       <div v-if="error" class="dt-message" role="alert">{{ error }}<button class="rc-btn" type="button" @click="emit('retry')">重新加载</button></div>
       <template v-else-if="keyword.trim() || scope !== 'all'">
         <span class="dt-search-count">{{ keyword.trim() ? '找到' : scope === 'favorites' ? '我的收藏' : '最近查看' }} {{ matchesSearch.length }} 张表</span>
-        <button v-for="table in matchesSearch" :key="table.tableId" class="dt-entry" :class="{ active: table.tableId === selectedId }" type="button" :data-table-id="table.tableId" :aria-current="table.tableId === selectedId ? 'true' : undefined" :title="`${table.name || table.tableName} · ${table.tableId} · ${table.dsKind ?? 'MYSQL'}`" @click="emit('select', table)">
-          <el-icon class="dt-table-icon"><Grid /></el-icon><span class="dt-entry-name">{{ table.name || table.tableName }}</span><span class="dt-entry-id">{{ table.tableId }}</span>
+        <button v-for="table in matchesSearch" :key="table.tableId" class="dt-entry" :class="{ active: table.tableId === selectedId }" type="button" :data-table-id="table.tableId" :aria-current="table.tableId === selectedId ? 'true' : undefined" :title="tableTitle(table)" @click="emit('select', table)">
+          <el-icon class="dt-table-icon"><Grid /></el-icon><span class="dt-entry-main"><span class="dt-entry-name">{{ table.name || table.tableName }}</span><span class="dt-entry-id">{{ table.tableId }}</span></span><span class="dt-entry-count" :aria-label="`数据量 ${dataCount(table)}`">{{ dataCount(table) }}</span>
         </button>
         <p v-if="!matchesSearch.length && !loading" class="dt-message">{{ keyword.trim() ? '没有匹配的数据表' : scope === 'favorites' ? '点击表名旁的星标，将常用表加入收藏' : '查看过的数据表会显示在这里' }}</p>
       </template>
@@ -145,8 +151,8 @@ const dirRows = computed(() => {
             <button v-if="row.kind === 'dir'" class="dt-section dt-dir" type="button" :style="{ paddingLeft: `${4 + row.depth * 16}px` }" :data-dir-id="row.node.id" :aria-expanded="expandedDirs.has(row.node.id)" :title="row.node.name" @click="toggleDir(row.node.id)">
               <el-icon class="dt-caret" :class="{ open: expandedDirs.has(row.node.id) }"><ArrowRight /></el-icon><el-icon class="dt-folder-icon"><FolderOpened v-if="expandedDirs.has(row.node.id)" /><Folder v-else /></el-icon><span class="dt-entry-name">{{ row.node.name }}</span><span v-if="row.count !== undefined" class="dt-section-count">{{ row.count }}</span>
             </button>
-            <button v-else-if="row.kind === 'table'" class="dt-entry" :class="{ active: row.table.tableId === selectedId }" type="button" :style="{ paddingLeft: `${24 + row.depth * 16}px` }" :data-table-id="row.table.tableId" :aria-current="row.table.tableId === selectedId ? 'true' : undefined" :title="`${row.table.name || row.table.tableName} · ${row.table.tableId} · ${row.table.dsKind ?? 'MYSQL'}`" @click="emit('select', row.table)">
-              <el-icon class="dt-table-icon"><Grid /></el-icon><span class="dt-entry-name">{{ row.table.name || row.table.tableName }}</span><span class="dt-entry-id">{{ row.table.tableId }}</span>
+            <button v-else-if="row.kind === 'table'" class="dt-entry" :class="{ active: row.table.tableId === selectedId }" type="button" :style="{ paddingLeft: `${24 + row.depth * 16}px` }" :data-table-id="row.table.tableId" :aria-current="row.table.tableId === selectedId ? 'true' : undefined" :title="tableTitle(row.table)" @click="emit('select', row.table)">
+              <el-icon class="dt-table-icon"><Grid /></el-icon><span class="dt-entry-main"><span class="dt-entry-name">{{ row.table.name || row.table.tableName }}</span><span class="dt-entry-id">{{ row.table.tableId }}</span></span><span class="dt-entry-count" :aria-label="`数据量 ${dataCount(row.table)}`">{{ dataCount(row.table) }}</span>
             </button>
             <div v-else class="dt-message" :style="{ paddingLeft: `${24 + row.depth * 16}px` }">{{ row.text }}<button v-if="row.retry" class="rc-btn" type="button" @click="loadDir(row.retry)">重试</button></div>
           </template>
@@ -157,8 +163,8 @@ const dirRows = computed(() => {
               <el-icon><ArrowDown v-if="expanded.has(section.key)" /><ArrowRight v-else /></el-icon><el-icon><component :is="section.icon" /></el-icon><span>{{ section.label }}</span><span class="dt-section-count">{{ section.tables.length }}</span>
             </button>
             <div v-if="expanded.has(section.key)" class="dt-entries">
-              <button v-for="table in section.tables" :key="table.tableId" class="dt-entry" :class="{ active: table.tableId === selectedId }" type="button" :data-table-id="table.tableId" :aria-current="table.tableId === selectedId ? 'true' : undefined" :title="`${table.name || table.tableName} · ${table.tableId} · ${table.dsKind ?? 'MYSQL'}`" @click="emit('select', table)">
-                <el-icon class="dt-table-icon"><Grid /></el-icon><span class="dt-entry-name">{{ table.name || table.tableName }}</span><span class="dt-entry-id">{{ table.tableId }}</span>
+              <button v-for="table in section.tables" :key="table.tableId" class="dt-entry" :class="{ active: table.tableId === selectedId }" type="button" :data-table-id="table.tableId" :aria-current="table.tableId === selectedId ? 'true' : undefined" :title="tableTitle(table)" @click="emit('select', table)">
+                <el-icon class="dt-table-icon"><Grid /></el-icon><span class="dt-entry-main"><span class="dt-entry-name">{{ table.name || table.tableName }}</span><span class="dt-entry-id">{{ table.tableId }}</span></span><span class="dt-entry-count" :aria-label="`数据量 ${dataCount(table)}`">{{ dataCount(table) }}</span>
               </button>
               <p v-if="!section.tables.length && !loading" class="dt-message">{{ section.empty }}</p>
             </div>
@@ -186,12 +192,14 @@ const dirRows = computed(() => {
 .dt-section-count, .dt-all-tables > span { flex: none; color: var(--rc-faint); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .dt-section-count { margin-left: auto; }
 .dt-entries { padding: 0 0 4px 16px; }
-.dt-entry { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px; border: 0; border-radius: 6px; background: transparent; color: var(--rc-text); font: inherit; text-align: left; cursor: pointer; }
+.dt-entry { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; min-height: 42px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--rc-text); font: inherit; text-align: left; cursor: pointer; }
 .dt-entry.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .dt-table-icon { flex: none; color: var(--rc-faint); font-size: 12px; }
 .dt-entry.active .dt-table-icon { color: var(--rc-primary); }
 .dt-entry-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.dt-entry-id { flex: none; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--rc-faint); font-variant-numeric: tabular-nums; }
+.dt-entry-main { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
+.dt-entry-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--rc-faint); font-variant-numeric: tabular-nums; }
+.dt-entry-count { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-text-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .dt-message { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 5px 8px; margin: 0; color: var(--rc-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .dt-all-tables { display: flex; align-items: center; gap: 4px; padding: 10px 4px 4px; margin-top: 0; color: var(--rc-text-2); font-size: 13px; font-weight: 600; }
 .dt-all-tables > .el-icon { color: var(--rc-muted); font-size: 13px; }

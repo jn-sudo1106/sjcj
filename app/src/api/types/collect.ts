@@ -105,7 +105,10 @@ export interface EntryType {
   name?: string // 表显示名（业务名）
   remark?: string // 备注
   fields: EntryField[]
+  /** 表数据量：后端优先实际 COUNT，没有时使用 MariaDB 估算值。 */
   rowCount?: number
+  /** MariaDB 物理表统计估算，包含 CK 类型的 MariaDB 写入表；缺失表示不可用。 */
+  estimatedRowCount?: number
   sourceId?: string
   owner?: string
   updatedAt?: string

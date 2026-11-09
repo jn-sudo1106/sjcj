@@ -27,6 +27,7 @@ import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 import FlowSourcesManagerDialog, { type ManageTab } from './FlowSourcesManagerDialog.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
+import FlowVariantDrawer from './FlowVariantDrawer.vue'
 import FlowReadonlyPreview from '@/views/FlowCanvas/shared/FlowReadonlyPreview.vue'
 
 const ui = useUiStore()
@@ -83,6 +84,16 @@ function selectTemplateGroup(id: string) {
 
 const selectedFlowIds = ref<string[]>([])
 const assignment = reactive({ open: false, templateId: '', ids: [] as string[], saving: false })
+// 「分析变体 / 推荐归类」抽屉（1105 会议：流程模板 → 变体两级归类，后端出指纹前由前端现算）
+const variantOpen = ref(false)
+function openVariantFlow(flow: FlowRecord) {
+  variantOpen.value = false
+  void openFlow(flow)
+}
+function onVariantAssigned() {
+  void loadTemplateGroups()
+  void load()
+}
 async function loadTemplates() {
   templateError.value = ''
   try { templateOptions.value = await flowCenterApi.templates() }
@@ -1123,6 +1134,7 @@ async function confirmApply() {
         <div class="fc-group-heading" data-testid="flow-group-heading">
           <div><strong>{{ groupTitle }}</strong><p v-if="selectedGroup && scope === 'normal'">{{ selectedGroup.structure }}</p></div>
           <span>{{ total }} 个{{ scope === 'template' ? '模板' : '流程' }}</span>
+          <button v-if="selectedGroup && scope === 'normal' && selectedGroup.flowCount > 0" type="button" class="fc-dialog-btn" data-testid="flow-group-variants" @click="variantOpen = true">{{ selectedGroup.id === 'unassigned' ? '推荐归类' : '分析变体' }}</button>
           <button v-if="selectedGroup && selectedGroup.id !== 'unassigned' && scope === 'normal'" type="button" class="fc-dialog-btn" data-testid="flow-group-edit" @click="openFlow(selectedGroup)">编辑模板</button>
           <button v-if="selectedGroup && selectedGroup.id !== 'unassigned' && !selectedGroup.disabled && scope === 'normal'" type="button" class="fc-dialog-btn" data-testid="flow-group-create" @click="openCreateFlow">从此模板新建</button>
         </div>
@@ -1313,6 +1325,13 @@ async function confirmApply() {
       </div>
     </div>
 
+    <FlowVariantDrawer
+      v-model="variantOpen"
+      :group="selectedGroup"
+      :template-groups="templateGroups"
+      @open-flow="openVariantFlow"
+      @assigned="onVariantAssigned"
+    />
     <FlowDetailDrawer
       ref="workspace"
       :categories="categoryOptions"

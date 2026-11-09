@@ -8,6 +8,7 @@
 // 是多余的（它是全局页面才需要）。
 import { reactive, ref, watch } from 'vue'
 import { sourceCheckApi, type SourceCheck, type SourceCheckLog } from '@/api'
+import { checkCountOf } from '@/utils/monitor/checkCount'
 
 const props = defineProps<{ modelValue: boolean; check: SourceCheck | null }>()
 const emit = defineEmits<{ 'update:modelValue': [open: boolean] }>()
@@ -99,6 +100,7 @@ function close() {
           <thead>
             <tr>
               <th style="width:160px">时间</th>
+              <th style="width:80px; text-align:right">条数</th>
               <th style="min-width:320px">消息</th>
               <th style="width:160px">名称</th>
               <th style="width:72px">状态</th>
@@ -110,6 +112,7 @@ function close() {
             <!-- 告警行整条标红：这点旧平台做对了，保留 -->
             <tr v-for="log in rows" :key="log.logId" :class="{ 'is-alarm': log.state === 'E' }">
               <td>{{ log.createDt || '—' }}</td>
+              <td class="cld-count" data-testid="check-log-count">{{ checkCountOf(log.logMsg) || '—' }}</td>
               <td class="cld-msg" :title="log.logMsg">{{ log.logMsg || '—' }}</td>
               <td :title="log.name">{{ log.name || '—' }}</td>
               <!-- 状态转中文：E/C 是后端口径，直接摆出来让人猜没有意义。
@@ -119,7 +122,7 @@ function close() {
               <td :title="log.tableName">{{ log.tableName || '—' }}</td>
             </tr>
             <tr v-if="!rows.length && !loading">
-              <td colspan="6" class="cld-empty-cell">暂无校验日志</td>
+              <td colspan="7" class="cld-empty-cell">暂无校验日志</td>
             </tr>
           </tbody>
         </table>
@@ -155,4 +158,5 @@ function close() {
 .cld-empty { padding: 40px; text-align: center; color: var(--rc-faint); font-size: 13px; }
 .cld-empty-cell { padding: 32px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 .cld-pager { display: flex; justify-content: flex-end; padding-top: 10px; }
+.cld-count { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 </style>

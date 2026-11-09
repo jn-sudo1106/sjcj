@@ -59,7 +59,7 @@ describe('全局任务中心', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('任务中心')
+    expect(wrapper.text()).toContain('采集任务')
     expect(wrapper.text()).toContain('抓取列表')
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(false)
     expect(paged).toHaveBeenCalledWith(expect.objectContaining({ siteId: '', sourceId: undefined, state: 'L' }))

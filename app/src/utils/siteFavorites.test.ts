@@ -103,7 +103,7 @@ describe('siteFavorites', () => {
   it('本地存的是坏 JSON 时忽略，不抛错', async () => {
     localStorage.setItem(LEGACY_KEY, '{not json')
     vi.spyOn(favoriteApi, 'listIds').mockResolvedValue(['11'])
-    await expect(loadFavoriteSites()).resolves.toBeUndefined()
+    await expect(loadFavoriteSites()).resolves.toBe(true)
     expect(isFavoriteSite('11')).toBe(true)
   })
 })

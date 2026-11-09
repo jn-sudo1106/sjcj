@@ -3,6 +3,7 @@ import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { type SourceCheckLog } from '@/api'
 import { pagedCheckJobLogs } from '@/api/monitor'
+import { checkCountOf } from '@/utils/monitor/checkCount'
 const props = defineProps<{
   sourceId: string
   jobId?: string
@@ -112,6 +113,12 @@ function stateClass(state: string) {
       max-height="700"
     >
       <el-table-column label="时间" width="170" prop="createDt" class-name="mono-cell" />
+      <el-table-column label="条数" width="90" align="right">
+        <template #default="{ row }">
+          <b v-if="checkCountOf(row.logMsg)" class="cl-count" :class="{ alarm: row.state === 'E' }" data-testid="check-log-count">{{ checkCountOf(row.logMsg) }}</b>
+          <span v-else class="cl-count-none">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="消息" min-width="300" prop="logMsg" show-overflow-tooltip>
         <template #default="{ row }">
           <span :class="stateClass(row.state)">{{ row.logMsg }}</span>
@@ -202,4 +209,7 @@ function stateClass(state: string) {
   color: var(--rc-ok, #15803d);
   background: #f0fdf4;
 }
+.cl-count { font-variant-numeric: tabular-nums; color: var(--rc-text); }
+.cl-count.alarm { color: var(--rc-error); }
+.cl-count-none { color: var(--rc-faint); }
 </style>

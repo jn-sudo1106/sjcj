@@ -21,6 +21,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type EntryType, type SourceCheck } from '@/api'
 import { addSourceCheck, checkOneManual, updateSourceCheck } from '@/api/monitor'
+import { summarizeCheckOne } from './checkOneSummary'
 import SourceCronDialog from './SourceCronDialog.vue'
 
 const props = defineProps<{
@@ -203,7 +204,8 @@ async function onCheckOne() {
     })
     const detail = (res as { data?: unknown; message?: string })?.data
     checkResult.value = true
-    checkResultMsg.value = `规则校验->返回成功  上下文json：${JSON.stringify(detail ?? res)}`
+    const summary = summarizeCheckOne(detail ?? res)
+    checkResultMsg.value = `规则校验->返回成功${summary ? `：${summary}` : ''}  上下文json：${JSON.stringify(detail ?? res)}`
   } catch (error) {
     checkResult.value = false
     checkResultMsg.value = `规则校验->返回失败：${error instanceof Error ? error.message : String(error)}`

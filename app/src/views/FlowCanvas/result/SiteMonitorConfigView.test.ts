@@ -177,6 +177,17 @@ describe('SiteMonitorConfigView · 新增/编辑配置弹窗（2026-09-18 改版
     expect(editor.props('siteId')).toBe('site-4')
   })
 
+  it('已锁定当前源时「＋ 新增配置」默认带上该源（1105 会议）', async () => {
+    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+    const wrapper = mountView({ siteId: 'site-4', sourceId: '430016944' })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(MonitorConfigEditorStub).props('sourceId')).toBe('430016944')
+  })
+
   it('行上「编辑」打开弹窗，编辑器带该行的 sourceId', async () => {
     vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({ list: [row({ sourceId: 1400995 })] }))
     const wrapper = mountView()
@@ -189,7 +200,7 @@ describe('SiteMonitorConfigView · 新增/编辑配置弹窗（2026-09-18 改版
     expect(wrapper.findComponent(MonitorConfigEditorStub).props('sourceId')).toBe('1400995')
   })
 
-  it('编辑器保存成功后关掉弹窗并刷新列表', async () => {
+  it('编辑器保存成功后弹窗留着、列表在后面刷新（1105 会议：保存完还要接着生成、测试脚本）', async () => {
     const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
     const wrapper = mountView()
     await flushPromises()
@@ -198,8 +209,23 @@ describe('SiteMonitorConfigView · 新增/编辑配置弹窗（2026-09-18 改版
 
     await editorSaved(wrapper)
 
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(true)
     expect(paged).toHaveBeenCalledTimes(2) // 首屏一次 + 保存后刷新一次
+  })
+
+  it('弹窗标题：新增带当前源时仍是「新增」，行上编辑才是「编辑」', async () => {
+    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({ list: [row({ sourceId: 1400995 })] }))
+    const wrapper = mountView({ siteId: 'site-4', sourceId: '430016944' })
+    await flushPromises()
+    const title = () => wrapper.getComponent({ name: 'ElDialog' }).props('title')
+
+    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
+    await flushPromises()
+    expect(title()).toBe('新增监控配置（源 430016944）')
+
+    await wrapper.get('[data-testid="site-monitor-config-edit"]').trigger('click')
+    await flushPromises()
+    expect(title()).toBe('编辑监控配置（源 1400995）')
   })
 })
 

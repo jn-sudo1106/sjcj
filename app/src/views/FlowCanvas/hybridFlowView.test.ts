@@ -164,3 +164,39 @@ describe('未绑流程的源（2026-10-12）', () => {
   })
 })
 
+describe('源详情页加载提速（1107）', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+  it('流程绑定与源详情并行发；源已绑流程时不再读源视角步骤', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    const source = { sourceId: '430024680', siteId: '125', name: '测试源', configId: '1', flowId: '200', state: 'C' } as Source
+    let releaseDetail!: (value: Source) => void
+    vi.spyOn(sourceApi, 'sourceDetail').mockImplementation(() => new Promise((resolve) => { releaseDetail = resolve }))
+    const sourceSteps = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue([])
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
+    const bindings = vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([{ workflowId: '200', publishedFlowId: '200', primary: true } as WorkflowBinding])
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue({ rows: [], sourceGroupId: null })
+    const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/canvas', query: { sourceId: source.sourceId, siteId: '125', view: 'flow' } })
+    await router.isReady()
+    const pinia = createPinia(); setActivePinia(pinia)
+    const wrapper = mount(FlowCanvas, { global: {
+      plugins: [pinia, router], directives: { loading: {} },
+      stubs: { FlowBoard: true, ResultView: true, NodeInspector: true, SiteSourceSwitcher: true, SourceTabsBar: true, SourceSummaryView: true, TaskView: true, FileView: true, SiteDetailView: true, CompareSplit: true, LoginConfigSelectDialog: true, NewSiteWizard: true, SourceWorkflowTabs: true, SourceWorkflowList: true, CanvasHeader: true },
+    } })
+    try {
+      await flushPromises()
+      // 源详情还没回来，绑定已经在读了
+      expect(bindings).toHaveBeenCalledWith(source.sourceId, { withNames: false })
+      expect(steps).not.toHaveBeenCalled()
+      releaseDetail(source)
+      await flushPromises()
+      expect(steps).toHaveBeenCalledWith('200', expect.objectContaining({ withConfigDetails: false }))
+      expect(sourceSteps).not.toHaveBeenCalled()
+      expect(useFlowStore().sourceCtx?.flowId).toBe('200')
+    } finally { wrapper.unmount() }
+  })
+})
+
