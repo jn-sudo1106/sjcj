@@ -11,7 +11,10 @@ import LaunchJobBar from '@/components/LaunchJobBar.vue'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
+import { onBeforeUnmount, onMounted } from 'vue'
 import { syncSiteVisit } from '@/utils/siteRecents'
+import { prefetchRoute } from '@/utils/prefetchRoute'
+import { TABS } from '@/router/tabs'
 
 const ui = useUiStore()
 const auth = useAuthStore()
@@ -23,6 +26,50 @@ const router = useRouter()
 router.afterEach((to) => {
   const siteId = to.path === '/canvas' ? String(to.query.siteId ?? '') || null : null
   syncSiteVisit(siteId)
+})
+
+// 首屏稳定后的空闲时段，按侧栏顺序预热前几个入口的页面 chunk：
+// 把「第一次点某个菜单才下载」的等待摊到用户还没点击的时候。
+const PREFETCH_LIMIT = 8
+let idleHandle: number | undefined
+let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+onMounted(() => {
+  // 单测环境不跑：避免后台定时器在用例结束后触发
+  if (import.meta.env.MODE === 'test') return
+  const paths: string[] = (
+    auth.menuGroups.length > 0
+      ? auth.menuGroups.flatMap((group) => group.items.map((item) => item.path))
+      : TABS.map((tab) => tab.path)
+  )
+    .filter((path): path is string => !!path)
+    .slice(0, PREFETCH_LIMIT)
+  if (!paths.length) return
+
+  let index = 0
+  const step = () => {
+    if (index >= paths.length) return
+    prefetchRoute(router, paths[index])
+    index += 1
+    schedule()
+  }
+  const schedule = () => {
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+    }
+    if (typeof w.requestIdleCallback === 'function') {
+      idleHandle = w.requestIdleCallback(step, { timeout: 3000 })
+    } else {
+      idleTimer = setTimeout(step, 800)
+    }
+  }
+  schedule()
+})
+
+onBeforeUnmount(() => {
+  const w = window as Window & { cancelIdleCallback?: (id: number) => void }
+  if (idleHandle !== undefined && typeof w.cancelIdleCallback === 'function') w.cancelIdleCallback(idleHandle)
+  if (idleTimer !== undefined) clearTimeout(idleTimer)
 })
 </script>
 
@@ -38,7 +85,9 @@ router.afterEach((to) => {
 
         <main class="rc-pane">
           <router-view v-slot="{ Component }">
-            <KeepAlive :key="auth.info?.id ?? 'signed-out'" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" /></KeepAlive>
+            <!-- key 用「登录会话标识」而不是 auth.info?.id：后者首次 fetchInfo 才从 undefined 变真实值，
+                 key 一变 KeepAlive 就整体替换，刚挂载的页面被销毁重建（首屏接口白打一遍） -->
+            <KeepAlive :key="auth.cacheKey" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" /></KeepAlive>
           </router-view>
         </main>
       </section>

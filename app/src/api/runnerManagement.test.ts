@@ -237,7 +237,7 @@ describe('Runner 管理接口', () => {
       '/api/runner-management/settings/code-repos/repo1/directories',
       '/api/runner-management/settings/code-repos/repo1/directories/dir1',
       '/api/runner-management/settings/code-repos/repo1/directories/dir1?revision=v2',
-      '/api/runner-management/settings/code-repos/repo1/files?keyword=%E5%88%97%E8%A1%A8&page=1&directoryId=dir1',
+      '/api/runner-management/settings/code-repos/repo1/files?keyword=%E5%88%97%E8%A1%A8&page=1&directoryId=dir1&sort=updated-desc',
       '/api/runner-management/settings/code-repos/repo1/files', '/api/runner-management/site-scripts/publish',
     ])
     expect(JSON.parse(fetchSpy.mock.calls[6]![1].body as string).directoryId).toBe('dir1')
@@ -246,7 +246,7 @@ describe('Runner 管理接口', () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
     vi.stubGlobal('fetch', fetchSpy)
     await runnerManagementApi.codeRepositoryFiles('repo1', '', 2, 'dir1', '公共/工具')
-    expect(fetchSpy).toHaveBeenLastCalledWith('/api/runner-management/settings/code-repos/repo1/files?keyword=&page=2&directoryId=dir1&view=directory&folder=' + encodeURIComponent('公共/工具'), expect.objectContaining({ method: 'GET' }))
+    expect(fetchSpy).toHaveBeenLastCalledWith('/api/runner-management/settings/code-repos/repo1/files?keyword=&page=2&directoryId=dir1&view=directory&folder=' + encodeURIComponent('公共/工具') + '&sort=updated-desc', expect.objectContaining({ method: 'GET' }))
   })
   it('处理进程关闭提交实例、并发序号、PID 和启动代次，不发送任意系统命令', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'pending' }) })

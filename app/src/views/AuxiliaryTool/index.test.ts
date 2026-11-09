@@ -13,11 +13,13 @@ import AuxiliaryTool from './index.vue'
 // 切 tab 的用例会一直停在初始值；useRouter 只记 replace 调用。
 const router = vi.hoisted(() => ({ replace: vi.fn() }))
 const routeQuery = vi.hoisted(() => ({ current: { tab: undefined as string | undefined } }))
+const routeMeta = vi.hoisted(() => ({ current: {} as Record<string, unknown> }))
 vi.mock('vue-router', async () => {
   const { reactive } = await import('vue')
   routeQuery.current = reactive(routeQuery.current)
+  routeMeta.current = reactive(routeMeta.current)
   return {
-    useRoute: () => ({ query: routeQuery.current }),
+    useRoute: () => ({ query: routeQuery.current, meta: routeMeta.current }),
     useRouter: () => ({ replace: router.replace }),
   }
 })
@@ -51,6 +53,7 @@ vi.mock('./ossUpload/index.vue', async () => {
 beforeEach(() => {
   router.replace.mockReset()
   routeQuery.current.tab = undefined
+  routeMeta.current.tabs = undefined
 })
 
 describe('辅助工具容器', () => {
@@ -92,5 +95,20 @@ describe('辅助工具容器', () => {
     expect(router.replace).toHaveBeenLastCalledWith({ path: '/auxiliary-tool', query: {} })
     await wrapper.findAll('.ra-tab-link')[2]!.trigger('click')
     expect(router.replace).toHaveBeenLastCalledWith({ path: '/auxiliary-tool', query: { tab: 'urlBuild' } })
+  })
+
+  // 页内 tab 的数据源是后端菜单（dynamicRoutes 把 sys_menu 的 menu_type=2 记录写进 route.meta.tabs），
+  // 本地 FALLBACK_TABS 只在菜单接口没下发时兜底。
+  it('后端下发的页内 tab 覆盖本地兜底：文案与顺序都按后端', () => {
+    routeMeta.current.tabs = [
+      { id: 2, key: 'urlBuild', label: 'URL生成（后端）', permission: '', order: 1 },
+      { id: 1, key: 'mqList', label: 'MQ队列（后端）', permission: '', order: 2 },
+    ]
+    const wrapper = mount(AuxiliaryTool)
+
+    expect(wrapper.findAll('.ra-tab-link').map((b) => b.text())).toEqual(['URL生成（后端）', 'MQ队列（后端）'])
+    // 默认落在后端排序第一条，且真的渲染出对应子页面
+    expect(wrapper.find('.ra-tab-link.active').text()).toBe('URL生成（后端）')
+    expect(wrapper.find('.stub-url').exists()).toBe(true)
   })
 })

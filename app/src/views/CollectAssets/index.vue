@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import SourceGroupTab from '@/views/Settings/SourceGroupTab.vue'
@@ -16,7 +17,10 @@ const directories = useSourceGroupsStore()
 // 「表 ID 列表」2026-09-19 迁到数据中心（/data?tab=entry）——表结构属于"数据"那条线，
 // 这里管的是网站与源。**tab 条先保留**（虽然只剩一项）。
 // 1008-03「来源组」2026-10-13 曾移到系统设置，同日迁回：就是下面的「我的分组」。
-const TABS: { key: string; label: string }[] = [
+//
+// 页内 tab 由后端菜单下发（sys_menu menu_type=2，/collect 下 5 条：source / personal /
+// views / favorite / recent），下面这份只作接口没下发时的兜底。
+const FALLBACK_TABS = [
   { key: 'source', label: '系统目录' },
   { key: 'personal', label: '我的分组' },
   // 2026-10-12「我的视图」：用户自己保存的源列表查询，只有自己可见（方案 1012-我的视图_开发设计方案）
@@ -37,11 +41,18 @@ const comps: Record<string, Component> = { source: SourceTab, personal: SourceGr
 const SCOPES: Record<string, 'all' | 'favorite' | 'recent'> = { source: 'all', favorite: 'favorite', recent: 'recent' }
 const route = useRoute()
 const router = useRouter()
-const validTabs = new Set(TABS.map((tab) => tab.key))
+// 本页有自己的「默认目录偏好」和旧书签跳转（template / param / entry），归一化交给下面的 watch，
+// 关掉 useDynamicTabs 内置纠偏，免得两边同时改地址。
+const { tabs } = useDynamicTabs({
+  componentMap: comps,
+  fallbackTabs: FALLBACK_TABS.map((t, idx) => ({ ...t, order: idx + 1 })),
+  autoNormalizeQuery: false,
+})
+const validTabs = computed(() => new Set(tabs.value.map((tab) => tab.key)))
 const active = ref('source')
 function normalizeTab(tab: unknown): string {
   const key = String(tab ?? '')
-  return validTabs.has(key) ? key : 'source'
+  return validTabs.value.has(key) ? key : 'source'
 }
 // 参数模块迁到规则资产；旧“流程模板”链接统一收口到流程中心。
 watch(() => [route.query.tab, directories.account, directories.defaultMode, route.path, route.query.state, route.query.category], ([tab]) => {
@@ -84,7 +95,7 @@ function changePreference(event: Event) {
     <div class="ca-tabs-wrap">
       <div class="ca-tabs-inner">
         <button
-          v-for="t in TABS"
+          v-for="t in tabs"
           :key="t.key"
           class="ca-tab-link"
           :class="{ active: active === t.key }"

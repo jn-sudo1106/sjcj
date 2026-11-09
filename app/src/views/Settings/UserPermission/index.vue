@@ -1,41 +1,26 @@
 <script setup lang="ts">
 // 用户权限设置（1030）：侧栏「系统设置」组下的第二个二级入口，页内两个 tab —— 数据权限设置、用户管理。
-// 这两项原本挤在系统设置页的十几个 tab 里（机器/部署配置中间夹着人和权限），本次整体迁出，
-// tab 元数据在 router/tabs.ts 的 USER_PERMISSION_TABS，旧 /settings?tab=… 链接由系统设置页跳过来。
-// tab 条样式与系统设置（Settings/index.vue）、采集资产同一套，不另起一套。
-// 「用户管理」只对 admin 可见（1027 决策：admin 是唯一超管，账号维护不开放给只读账号；
-// 后端 /api/v1/sys-user/** 同样只认 roles[admin]）。可见性还没进 canAccess，先在本页按角色过滤。
-import { computed, watch, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { canAccess } from '@/composables/usePermission'
-import { useAuthStore } from '@/stores/auth'
+// 动态 Tab 架构改造：使用 useDynamicTabs 接入后端动态资源配置与权限过滤，保留本地 USER_PERMISSION_TABS 兜底。
+import type { Component } from 'vue'
+import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import { USER_PERMISSION_TABS } from '@/router/tabs'
 import DataPermissionTab from '../DataPermissionTab.vue'
 import UserManagementTab from '../UserManagementTab.vue'
+import RolePermissionTab from './RolePermissionTab.vue'
 
-const comps: Record<string, Component> = {
-  'data-permission': DataPermissionTab,
+const componentMap: Record<string, Component> = {
   users: UserManagementTab,
+  roles: RolePermissionTab,
+  'data-permission': DataPermissionTab,
 }
 
-const auth = useAuthStore()
-const tabs = computed(() => USER_PERMISSION_TABS.filter((t) => canAccess(t.permission) && (!t.adminOnly || auth.role === 'admin')))
+const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
+  componentMap,
+  fallbackTabs: USER_PERMISSION_TABS.map((t, idx) => ({ ...t, order: idx + 1 })),
+})
 
-const route = useRoute()
-const router = useRouter()
-const active = computed(() => tabs.value.find((t) => t.key === String(route.query.tab ?? '')) ?? tabs.value[0])
-
-// 非法 / 无权限的 tab 值：把地址归一到实际显示的那个，免得书签里留着一个打不开的 tab
-watch(() => route.query.tab, (tab) => {
-  if (route.path !== '/user-permission') return
-  if (tab != null && active.value && tab !== active.value.key && tab !== '') {
-    void router.replace({ path: '/user-permission', query: active.value.key === tabs.value[0]?.key ? {} : { tab: active.value.key } })
-  }
-}, { immediate: true })
-
-function selectTab(key: string) {
-  void router.replace({ path: '/user-permission', query: key === tabs.value[0]?.key ? {} : { tab: key } })
-}
+// 这几个页签根元素自己就是白底卡片（rc-card），容器不再套卡片，免得卡片套卡片
+const SELF_FRAMED_TABS = new Set(['users'])
 </script>
 
 <template>
@@ -45,7 +30,7 @@ function selectTab(key: string) {
         v-for="t in tabs"
         :key="t.key"
         class="up-tab-link"
-        :class="{ active: active?.key === t.key }"
+        :class="{ active: activeTab?.key === t.key }"
         type="button"
         data-testid="user-permission-tab"
         @click="selectTab(t.key)"
@@ -53,9 +38,9 @@ function selectTab(key: string) {
         {{ t.label }}
       </button>
     </div>
-    <div class="up-content">
+    <div class="up-content" :class="{ 'is-framed': activeTab && !SELF_FRAMED_TABS.has(activeTab.key) }">
       <KeepAlive>
-        <component :is="comps[active.key]" v-if="active" :key="active.key" />
+        <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
       </KeepAlive>
     </div>
   </div>
@@ -64,6 +49,8 @@ function selectTab(key: string) {
 <style scoped>
 .up-page { display: flex; flex-direction: column; gap: 12px; height: 100%; }
 .up-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 页签内容统一白底卡片，令牌同监控中心各页（.sc-shell 等）；自带卡片的页签不再套一层 */
+.up-content.is-framed { padding: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: auto; }
 .up-tabs-inner {
   display: inline-flex;
   flex-wrap: wrap;
@@ -73,6 +60,7 @@ function selectTab(key: string) {
   border-radius: 10px;
   gap: 4px;
 }
+/* 页签与监控中心、规则资产等模块同一套样式（1107 页面盘点：此前选中文字是天蓝色） */
 .up-tab-link {
   border: 0;
   background: transparent;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { loginRedirect } from '@/router/loginRedirect'
+import { ensureDynamicRoutes } from '@/router'
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CircleCheck, Hide, Lock, User, View } from '@element-plus/icons-vue'
@@ -56,6 +57,10 @@ async function handleSubmit() {
   try {
     await auth.login(params)
     errorMsg.value = ''
+    // 2026-11-06 首次点击卡顿优化：会话与菜单（/user-info.htm + /sys/menu/user-nav）在登录页
+    // **后台预热**，并把动态路由提前装配好；跳转不等待它们（守卫 await 的是同一批 in-flight 请求，
+    // store 里已做单飞去重），这样用户第一次点侧栏时不用再等两个接口 + 一次路由装配。
+    void auth.prefetchSession().then(() => ensureDynamicRoutes())
     await router.push(loginRedirect(route.query.redirect))
   } catch (e) {
     errorMsg.value = (e as Error).message || '登录异常,请稍后再说'

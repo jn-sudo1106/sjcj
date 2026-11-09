@@ -835,3 +835,65 @@ describe('taskUrlFieldsApply / taskUrlSourceMissing', () => {
     expect(taskUrlFieldsApply(rooted, 'n-2', { stepId: '1', sourceId: '-1', name: 'r', isRoot: true } as Step)).toBe(false)
   })
 })
+
+// 1106 W4（doc1 §3 出参收口三层回归的「报文层 / 运行层」）：采集节点（非规则）的出参走了
+// 「表配置唯一入口」，落 taskCfg.outColumns（物理列名）→ 步骤 outColumns → stepModify 报文
+// outContext（逗号串）。报文是执行器唯一输入，所以这里断言的是**结构**：字符串、每段都是
+// 物理列名、顺序与个数对得上，并与 outEntry/entryTypeId 同源——只断言「非空」测不出
+// 「把 K1 写成 title」「列数少一个」这类真实回归。
+describe('采集节点出参报文结构（1106 W4 · 报文层 / 运行层）', () => {
+  function collectCfg(outColumns: string[] | undefined, outputTable = '6200027', inputTable = '6200026') {
+    const cfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    if (cfg.collectCfg) {
+      cfg.collectCfg.inputTable = inputTable
+      cfg.collectCfg.outputTable = outputTable
+    }
+    cfg.taskCfg = { queue: '', urlRule: '', outColumns }
+    return cfg
+  }
+
+  it('出参列按物理列名逗号串落 outContext，且与 outEntry / entryTypeId 同源', () => {
+    const step = mergeStepForWrite({
+      cfg: collectCfg(['K1', 'K3']),
+      nodeId: '40600',
+      sourceId: '430016398',
+    })
+    const payload = stepToStepModifyPayload(step)
+    expect(step.outColumns).toEqual(['K1', 'K3'])
+    expect(typeof payload.outContext).toBe('string')
+    expect(String(payload.outContext).split(',')).toEqual(['K1', 'K3'])
+    // 每段都是物理列名（K 列），不是字段名/中文标题——执行器只认列名
+    expect(String(payload.outContext).split(',').every((col) => /^K\d+$/.test(col))).toBe(true)
+    expect(payload.outEntry).toBe(6200027)
+    expect(payload.entryTypeId).toBe(6200026)
+  })
+
+  /** 把「出参列 → 步骤 → stepModify 报文」串起来，三层用例共用。 */
+  function payloadOf(outColumns: string[] | undefined) {
+    return stepToStepModifyPayload(mergeStepForWrite({
+      cfg: collectCfg(outColumns),
+      nodeId: '40600',
+      sourceId: '430016398',
+    }))
+  }
+
+  it('出参列清空：报文 outContext 为 null（选择性更新，不写空串去覆盖库中旧值）', () => {
+    expect(payloadOf(['K1']).outContext).toBe('K1')
+    expect(payloadOf([]).outContext).toBeNull()
+  })
+
+  it('运行层：下游步骤 context 引用的每一列都在上游 outContext 里（$outId 才解析得到）', () => {
+    const upstream = payloadOf(['K1', 'K2', 'K3'])
+    const downCfg = collectCfg(['K1'])
+    downCfg.taskCfg = { queue: '', urlRule: '', outColumns: ['K1'], contextMap: ['K2', 'K3'] }
+    const downstream = stepToStepModifyPayload(mergeStepForWrite({
+      cfg: downCfg,
+      nodeId: '40601',
+      sourceId: '430016398',
+    }))
+    const upColumns = String(upstream.outContext).split(',')
+    const downColumns = String(downstream.context).split(',')
+    expect(downColumns.length).toBeGreaterThan(0)
+    for (const col of downColumns) expect(upColumns).toContain(col)
+  })
+})

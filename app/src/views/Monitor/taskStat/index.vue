@@ -80,6 +80,7 @@ import {
   mergeRows,
   percentOf,
   pieSlices,
+  progressOf,
   quickRange,
   rateActiveOf,
   thresholdOf,
@@ -833,7 +834,7 @@ onUnmounted(() => {
               <div class="ts-metric-icon ts-i-amber">
                 <el-progress
                   type="circle"
-                  :percentage="errorRate"
+                  :percentage="progressOf(errorRate)"
                   :width="34"
                   :stroke-width="4"
                   :color="errorColor(errorRate)"
@@ -1116,7 +1117,7 @@ onUnmounted(() => {
             <template v-else-if="col.slot === 'rate'">
               <el-progress
                 class="ts-inline-progress"
-                :percentage="percentOf(scope.row.cnt, totalCnt)"
+                :percentage="progressOf(percentOf(scope.row.cnt, totalCnt))"
                 :show-text="false"
                 :stroke-width="6"
                 color="#3e79f7"
@@ -1133,7 +1134,7 @@ onUnmounted(() => {
               <template v-if="scope.row.errorCnt > 0">
                 <el-progress
                   class="ts-inline-progress"
-                  :percentage="scope.row.errorRate"
+                  :percentage="progressOf(scope.row.errorRate)"
                   :show-text="false"
                   :stroke-width="6"
                   :color="errorColor(scope.row.errorRate)"

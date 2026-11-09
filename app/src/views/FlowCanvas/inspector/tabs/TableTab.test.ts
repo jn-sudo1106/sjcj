@@ -14,6 +14,9 @@ import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType, RuleOrchestration } from '@/api'
+import { mergeStepForWrite } from '@/utils/flow/stepPersist'
+import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 
 const INPUT_TABLE: EntryType = {
   tableId: '2102154', tableName: 'sense_data.TB_JD_SKU_BASE', name: 'JD-商品基础',
@@ -34,6 +37,129 @@ function mockAssets() {
 
 afterEach(() => vi.restoreAllMocks())
 
+describe('TableTab · 任务输入字段选择', () => {
+  const table: EntryType = {
+    tableId: '900', tableName: 'TB_INPUT', fields: [
+      { prop: 'title-K1', desc: '标题', type: 'string', required: false, columnName: 'K1', itemId: '9001' },
+      { prop: 'url-K2', desc: '详情链接', type: 'url', required: false, columnName: 'K2', itemId: '9002' },
+    ],
+  }
+  async function open(contextMap?: string[]) {
+    mockAssets()
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(table)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['first'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.configs.first.collectCfg!.outputTable = '900'
+    const cfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    cfg.collectCfg!.inputTable = '900'
+    cfg.collectCfg!.outputTable = '900'
+    cfg.taskCfg = { queue: '', urlRule: '', contextMap, outColumns: ['K1'] }
+    flow.configs['8914101'] = cfg
+    flow.main = ['start', 'first', '8914101', 'end']
+    flow.select('8914101')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+
+  it('回显物理列、不写默认值，也不因打开页面标记修改', async () => {
+    const { flow, wrapper } = await open(['K2'])
+    flow.markSaved()
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="input-fields-list"] .rc-tag.on').map((tag) => tag.text())).toHaveLength(1)
+    expect(flow.dirty).toBe(false)
+    expect(flow.configs['8914101'].inputFields).toBeUndefined()
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K2'])
+    wrapper.unmount()
+  })
+
+  it('勾选输入字段写入 context 物理列，保存回读不丢勾选', async () => {
+    const { flow, wrapper } = await open()
+    await wrapper.get('[data-testid="select-all-input-fields"]').trigger('click')
+    const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg?.contextMap).toEqual(['K1', 'K2'])
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '440043210' }))
+    expect(payload).toMatchObject({ context: 'K1,K2', outContext: 'K1' })
+    const saved = stepFromLegacy({ ...payload, itemConfig: 8914101 }, '440043210')
+    cfg.taskCfg!.contextMap = saved.contextMap
+    delete cfg.inputFields
+    flow.setActiveTab('task')
+    await flushPromises()
+    flow.setActiveTab('table')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="input-fields-list"] .rc-tag.on')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('未知输入列在修改其他字段时保留，只有明确移除才删除', async () => {
+    const { flow, wrapper } = await open(['K2', 'K99'])
+    expect(wrapper.get('[data-testid="unknown-input-fields"]').text()).toContain('K99')
+    await wrapper.get('[data-testid="select-all-input-fields"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K1', 'K2', 'K99'])
+    await wrapper.get('[aria-label="移除输入字段 K99"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K1', 'K2'])
+    wrapper.unmount()
+  })
+
+  it('换表前保留旧表及字段，避免相同 K 列错误关联', async () => {
+    const { flow, wrapper } = await open(['K2'])
+    const select = wrapper.get('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
+    select.vm.$emit('update:modelValue', '901')
+    await flushPromises()
+    expect(flow.configs['8914101'].collectCfg?.inputTable).toBe('900')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual(['K2'])
+    expect(wrapper.get('[data-testid="input-reference-warning"]').text()).toContain('再切换输入表')
+    wrapper.unmount()
+  })
+
+  it('勾选输入字段 / 出参列会排进步骤自动保存（flowRev 自增）', async () => {
+    const { flow, wrapper } = await open(['K2'])
+    flow.markSaved()
+    await flushPromises()
+    const rev = flow.flowRev
+    await wrapper.get('[data-testid="select-all-input-fields"]').trigger('click')
+    // 步骤自动保存只 watch flowRev（useFlowAutosave.bind）；不 touchFlow 就只是内存里改了，
+    // 用户勾完直接离开画布什么都不落库——2026-11-04 F2 收口修的就是这条。
+    expect(flow.flowRev).toBeGreaterThan(rev)
+    expect(flow.dirty).toBe(true)
+
+    const revAfterInput = flow.flowRev
+    await wrapper.get('[data-testid="select-all-fields"]').trigger('click')
+    expect(flow.flowRev).toBeGreaterThan(revAfterInput)
+    wrapper.unmount()
+  })
+
+  it('未指定与明确清空分开提示，不把空勾选一律当「没有输入字段」', async () => {
+    const { flow, wrapper } = await open(undefined)
+    const hint = () => wrapper.get('[data-testid="input-fields-state-hint"]').text()
+    expect(hint()).toContain('未指定输入字段')
+    expect(wrapper.text()).toContain('输入字段选择（未指定）')
+
+    await wrapper.get('[data-testid="clear-all-input-fields"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual([])
+    expect(hint()).toContain('已清空输入字段')
+    expect(wrapper.text()).toContain('输入字段选择（已选中 0 / 2 个字段）')
+    wrapper.unmount()
+  })
+
+  it('换输入表清空勾选时把 context 落成显式空，不回退到旧步骤快照', async () => {
+    const { flow, wrapper } = await open([])
+    const select = wrapper.get('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
+    select.vm.$emit('update:modelValue', '')
+    await flushPromises()
+    const cfg = flow.configs['8914101']
+    expect(cfg.inputFields).toBeUndefined()
+    // 键不能删：mergeStepForWrite 的兜底是 `contextMap ?? snapshot?.contextMap`，
+    // 删键会回退到旧表的列（旧表 K 列写进新表步骤）。
+    expect(cfg.taskCfg?.contextMap).toEqual([])
+    expect(stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '440043210' })).context).toBeNull()
+    wrapper.unmount()
+  })
+})
+
 function mountOnRuleNode() {
   setActivePinia(createPinia())
   const flow = useFlowStore()
@@ -45,6 +171,24 @@ function mountOnRuleNode() {
 }
 
 describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置搬回）', () => {
+  it('规则 itemId 不阻断换输入表（访问地址用途已从表配置撤回）', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    const cfg = flow.configs['rule-1']
+    cfg.itemId = '9002'
+    flow.patchRuleConfig('rule-1', { inputTableId: INPUT_TABLE.tableId, inputFields: ['sku_id'] })
+    flow.setInputTable('rule-1', INPUT_TABLE.tableId)
+    cfg.taskCfg = { queue: '', urlRule: '', contextMap: ['K1'] }
+    await flushPromises()
+    const binder = wrapper.findComponent(RuleTableFieldBinder)
+    binder.vm.$emit('update:modelValue', { inputFields: [] })
+    await flushPromises()
+    binder.vm.$emit('update:modelValue', { inputTableId: '901', inputFields: [] })
+    await flushPromises()
+    expect(cfg.ruleCfg?.inputTableId).toBe('901')
+    expect(cfg.itemId).toBe('9002')
+    wrapper.unmount()
+  })
   it('展示表/字段绑定表单，不再有「保存并配置编排」按钮', async () => {
     mockAssets()
     const { wrapper } = mountOnRuleNode()
@@ -139,7 +283,7 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     await flushPromises()
     const shown = () => wrapper.get('[data-testid="input-fields-list"]').findAll('.rc-tag').map((t) => t.text())
 
-    // 默认全选：两个都在，没有切换按钮
+    // 未显式选择时展示全部候选，不出切换按钮
     expect(shown()).toHaveLength(2)
     expect(wrapper.find('[data-testid="toggle-only-selected-input-fields"]').exists()).toBe(false)
 
@@ -159,7 +303,7 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(wrapper.find('[data-testid="toggle-only-selected-input-fields"]').exists()).toBe(false)
   })
 
-  it('非规则节点：表配置展示输入表/输入字段，默认全选且切换表后恢复默认', async () => {
+  it('非规则节点：输入字段写入 context，清空引用后才能换表', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnCollectorNode()
     flow.patchCollect('web-1', { inputTable: INPUT_TABLE.tableId })
@@ -171,7 +315,8 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(flow.configs['web-1'].inputFields).toEqual([])
     await wrapper.find('[data-testid="select-all-input-fields"]').trigger('click')
     expect(flow.configs['web-1'].inputFields).toEqual(['sku_id', 'sku_name'])
-    // 输入表下拉 0902 改成 el-select（原生 <select> 换成可搜索的），清空走 update:model-value
+    await wrapper.find('[data-testid="clear-all-input-fields"]').trigger('click')
+    // 清空字段后允许改表，保留显式空 context
     const inputTableSelect = wrapper.find('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
     await inputTableSelect.vm.$emit('update:modelValue', '')
     await flushPromises()
@@ -618,6 +763,184 @@ describe('TableTab · 摘要/音视频/OCR 处理节点（与规则处理同一�
     expect(cfg.execCfg?.outputFields).toEqual(['sku_name'])
     expect(cfg.inputTable).toBe(INPUT_TABLE.tableId)
     expect(cfg.outputTable).toBe(INPUT_TABLE.tableId)
+    wrapper.unmount()
+  })
+})
+
+// 1106 W4（doc1 §3 出参收口三层回归的「界面层」）：出参列（OutContext）在任务配置出参入口
+// 去掉后只剩表配置这一个入口。既有用例覆盖勾选/回显/清空，这里补界面↔报文一致、未选输出表、
+// 历史未知列三种边界，防止「界面勾了但报文没带 / 界面没勾却写了几列」。
+describe('TableTab · 出参列边界与报文结构（1106 W4）', () => {
+  const OUT_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+
+  async function mountCollector(outColumns?: string[], outputTable = '2103330') {
+    mockAssets()
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [OUT_TABLE] })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(OUT_TABLE)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.inputTable = '2103330'
+    cfg.collectCfg!.outputTable = outputTable
+    cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), outColumns }
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+
+  function payloadOf(flow: ReturnType<typeof useFlowStore>) {
+    return stepToStepModifyPayload(mergeStepForWrite({
+      cfg: flow.configs['web-1'], nodeId: 'web-1', sourceId: '440043210',
+    }))
+  }
+
+  it('勾选出参列后保存报文：outContext 为物理列名逗号串，与界面勾选一致', async () => {
+    const { flow, wrapper } = await mountCollector([])
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[0].trigger('click') // title
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[2].trigger('click') // body
+    const payload = payloadOf(flow)
+    expect(typeof payload.outContext).toBe('string')
+    expect(String(payload.outContext).split(',')).toEqual(['K1', 'K3'])
+    expect(String(payload.outContext).split(',').every((col) => /^K\d+$/.test(col))).toBe(true)
+    expect(payload.outEntry).toBe(2103330)
+    // 报文回读成步骤模型后与界面勾选一致（界面层可回归断言）
+    expect(stepFromLegacy({ ...payload, itemConfig: 1 }, '440043210').outColumns).toEqual(['K1', 'K3'])
+    wrapper.unmount()
+  })
+
+  it('还没选输出表：不渲染出参选择区，保存报文也不写 outContext', async () => {
+    const { flow, wrapper } = await mountCollector(undefined, '')
+    expect(wrapper.find('[data-testid="output-fields-list"]').exists()).toBe(false)
+    expect(payloadOf(flow).outContext).toBeNull()
+    wrapper.unmount()
+  })
+
+  // 历史步骤的 outContext 可能是「旧输出表」的列名，当前只把能在本表解析到的列显示成勾选。
+  // 现状：不动 → 原样保留；任一勾选动作 → 按当前可见字段整体重写，解析不到的旧列被丢弃。
+  // 与输入侧「未知列保留、只有明确移除才删」不一致，口径待 R3 统一（本条先锁住现状防再变化）。
+  it('历史出参列含当前表里不存在的列：不动时保留；任一勾选动作按可见字段重写', async () => {
+    const { flow, wrapper } = await mountCollector(['K1', 'K9'])
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K9'])
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[0].trigger('click') // 取消 title
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual([])
+    wrapper.unmount()
+  })
+})
+describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-08 最终口径）', () => {
+  // 2026-11-08 用户口径（第三次）：多表（副表 / 回写父表）整块删除——输出表就是唯一写入目标，
+  // 输入表 == 输出表时后端按「更新父表」处理（isMulti=2），界面只给一句提示。
+  const MAIN_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+  // 只用于「历史残留 subs」用例：子表（副表）这条线 2026-11-08 起取消，没有配置入口了。
+  const LEGACY_SUB: EntryType = {
+    tableId: '2103400', tableName: 'sense_data.TB_FILES', name: '附件资源表',
+    fields: [{ prop: 'file_id', desc: '文件ID', type: 'string', required: false, columnName: 'K1', itemId: '7001' }],
+  }
+  const LEGACY_SUB_2: EntryType = { tableId: '2103500', tableName: 'sense_data.TB_OTHER', name: '其它附表', fields: [] }
+  const INPUT_SRC: EntryType = {
+    tableId: '2103200', tableName: 'sense_data.TB_SRC', name: '来源列表',
+    fields: [{ prop: 'source_id', desc: '源ID', type: 'string', required: false, columnName: 'K1' }],
+  }
+  const rootConfig = { table: { entryTypeId: 2103330, keys: ['news'], colMap: [] as Array<{ colId: string; fromId: string }> } }
+
+  async function mountTableMode(structuredConfig?: string, opts: { sameTable?: boolean } = {}) {
+    mockAssets()
+    const all = [MAIN_TABLE, LEGACY_SUB, LEGACY_SUB_2, INPUT_SRC]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: all.length, list: all })
+    vi.spyOn(entryApi, 'entryDetail').mockImplementation(async (tableId: string) =>
+      all.find((table) => table.tableId === tableId) ?? MAIN_TABLE)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.inputTable = opts.sameTable ? '2103330' : '2103200'
+    cfg.collectCfg!.outputTable = '2103330'
+    if (structuredConfig !== undefined) cfg.collectCfg!.structuredConfig = structuredConfig
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+  const configOf = (flow: ReturnType<typeof useFlowStore>) =>
+    JSON.parse(flow.configs['web-1'].collectCfg?.structuredConfig || '{}')
+  // codeRule 走「配置保存」报文（buildConfigPayload），不在 stepModify 报文里。
+  const codeRuleOf = (flow: ReturnType<typeof useFlowStore>) =>
+    String(buildConfigPayload(flow.configs['web-1']).codeRule ?? '')
+
+  it('输出表段不再有「写入方式」：多表入口（副表 / 回写父表）已整体删除', async () => {
+    const { wrapper } = await mountTableMode(JSON.stringify(rootConfig))
+    expect(wrapper.find('[data-testid="output-table-field"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="output-mode-segment"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="output-mode-hint"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="parent-writeback"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="legacy-sub-note"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('输入表与输出表相同：提示按「更新父表」处理，保存报文不写 table.subs', async () => {
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(rootConfig), { sameTable: true })
+    expect(wrapper.get('[data-testid="output-table-same-as-input"]').text()).toContain('更新父表')
+    expect(wrapper.find('[data-testid="output-mode-segment"]').exists()).toBe(false)
+    expect(codeRuleOf(flow)).not.toContain('subs')
+    wrapper.unmount()
+  })
+
+  it('历史配置里的副表（子表）：不识别、不提示、不截断，保存原样带出', async () => {
+    const overflow = {
+      table: {
+        ...rootConfig.table,
+        subs: [
+          { entryTypeId: 2103400, keys: ['files'], colMap: [] },
+          { entryTypeId: 2103500, keys: ['more'], colMap: [] },
+        ],
+      },
+    }
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(overflow))
+    expect(wrapper.find('[data-testid="legacy-sub-note"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="parent-writeback"]').exists()).toBe(false)
+    expect(JSON.parse(flow.configs['web-1'].collectCfg?.structuredConfig ?? '{}').table.subs).toHaveLength(2)
+    // 前端不清理、不改写：报文原样带出历史 subs
+    expect(codeRuleOf(flow)).toContain('"entryTypeId":2103500')
+    wrapper.unmount()
+  })
+
+  it('历史配置里残留 parentWriteBack：界面不再读取也不再改写，保存原样带出', async () => {
+    const stale = {
+      table: rootConfig.table,
+      parentWriteBack: { version: 1, mode: 'insert', locateBy: '', colMap: [{ colId: 'K1', fromId: 'title' }] },
+    }
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(stale))
+    // 没有回写面板，也不因为这段配置把界面撑开
+    expect(wrapper.find('[data-testid="parent-writeback"]').exists()).toBe(false)
+    expect(configOf(flow).parentWriteBack).toEqual({
+      version: 1, mode: 'insert', locateBy: '', colMap: [{ colId: 'K1', fromId: 'title' }],
+    })
+    wrapper.unmount()
+  })
+
+  it('结构化配置始终是普通 textarea，改动仍能落库', async () => {
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(rootConfig))
+    const textarea = wrapper.findAll('textarea')[0]
+    await textarea.setValue('{"globals":["K1"]}')
+    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('{"globals":["K1"]}')
     wrapper.unmount()
   })
 })

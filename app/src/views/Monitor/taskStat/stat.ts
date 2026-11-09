@@ -43,8 +43,15 @@ export const GROUP_TITLE: Record<StatGroup, string> = {
 /** 时间范围最大跨度（含首尾共 30 天，超出自动截断） */
 export const MAX_RANGE_DAYS = 30
 
+/**
+ * 后端的 cnt 可能是 null、数字串，也可能是解不出来的串（`'null'`/`'--'`）：
+ * 后者 `Number()` 会得到 NaN，顺着 errorCnt → errorRate → `<el-progress :percentage>` 一路渗透，
+ * 既在控制台刷 prop 警告，也把「NaN%」显示到页面上。非有限值一律折成 0。
+ */
 export function toNum(v: unknown): number {
-  return v === null || v === undefined ? 0 : Number(v)
+  if (v === null || v === undefined) return 0
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
 }
 
 /** 分组键：来源 + 配置（缺哪一维用 s- / c- 占位，与旧页 keyOf 完全一致） */
@@ -105,10 +112,30 @@ export function groupLabel(item: Pick<StatRow, 'sourceId' | 'configId'>, group: 
   return `源#${item.sourceId}`
 }
 
-/** 行内任务占比 = 该组任务数 / 总任务数（保留 2 位，旧页 percentOf） */
+/**
+ * 行内任务占比 = 该组任务数 / 总任务数（保留 2 位，旧页 percentOf）。
+ * 分母为 0 / 非有限值、分子异常时返回 0；结果上限 100（占比按定义不会超过整份数据）。
+ */
 export function percentOf(cnt: number, total: number): number {
-  if (!total) return 0
-  return Number(((cnt / total) * 100).toFixed(2))
+  const t = Number(total)
+  const c = Number(cnt)
+  if (!Number.isFinite(t) || t <= 0 || !Number.isFinite(c) || c <= 0) return 0
+  return Math.min(100, Number(((c / t) * 100).toFixed(2)))
+}
+
+/**
+ * 进度条百分比收口（`<el-progress>` 的 percentage 只接受 0~100 的**有限**数值，
+ * Element Plus 用 custom validator 卡范围，越界或 NaN 会在控制台刷
+ * `Invalid prop: custom validator check failed for prop "percentage"`）。
+ *
+ * 这里只收口**进度条的视觉值**：错误率等展示文案仍按各自口径如实显示
+ * （例如后端两路聚合不一致导致 ERROR 数 > 任务数时，文字仍显示真实百分比，
+ * 但进度条画到 100% 满格，不会因为一个越界数字报警或渲染成空条）。
+ */
+export function progressOf(v: number): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(100, Math.max(0, n))
 }
 
 /** 错误率三档配色：>20% 红、>5% 黄、否则绿（旧页 errorColor，原样保留 antd 的色值） */

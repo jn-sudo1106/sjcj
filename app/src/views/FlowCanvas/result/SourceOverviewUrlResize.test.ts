@@ -94,3 +94,73 @@ describe('源列表 URL 列宽拖动', () => {
     }
   })
 })
+
+describe('源列表 源名称列宽拖动（2026-11-05：与 URL 列同一套交互）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.removeItem(prefsKey)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    vi.spyOn(favoriteApi, 'listIds').mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.removeItem(prefsKey)
+    sessionStorage.clear()
+  })
+
+  it('拖宽名称列只改名称列宽，保存 name 且不动已存的 url 宽度', async () => {
+    localStorage.setItem(prefsKey, JSON.stringify({ widths: { url: 500 } }))
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '10' }, global: { plugins: [ElementPlus] } })
+    try {
+      await flushPromises()
+      const resizer = wrapper.get('[data-testid="source-name-resizer"]')
+      expect(resizer.attributes('aria-valuenow')).toBe('210')
+      const oldCursor = document.body.style.cursor
+      const oldSelect = document.body.style.userSelect
+      resizer.element.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 300, bubbles: true }))
+      expect(document.body.style.cursor).toBe('col-resize')
+      movePointer(400)
+      await flushPromises()
+      expect(wrapper.get('.sov-table').attributes('style')).toContain('--sov-name-width: 310px')
+      expect(wrapper.get('.sov-table').attributes('style')).toContain('--sov-url-width: 500px')
+      expect(wrapper.get('.sov-name').attributes('title')).toBe(source.name)
+      window.dispatchEvent(new MouseEvent('pointerup'))
+      expect(document.body.style.cursor).toBe(oldCursor)
+      expect(document.body.style.userSelect).toBe(oldSelect)
+      expect(JSON.parse(localStorage.getItem(prefsKey)!).widths).toEqual({ url: 500, name: 310 })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('拖窄保留最小宽度（120），键盘可微调', async () => {
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '10' }, global: { plugins: [ElementPlus] } })
+    try {
+      await flushPromises()
+      wrapper.get('[data-testid="source-name-resizer"]').element.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 300, bubbles: true }))
+      movePointer(-500)
+      await flushPromises()
+      expect(wrapper.get('[data-testid="source-name-resizer"]').attributes('aria-valuenow')).toBe('120')
+      window.dispatchEvent(new MouseEvent('pointerup'))
+      await wrapper.get('[data-testid="source-name-resizer"]').trigger('keydown', { key: 'ArrowRight' })
+      expect(JSON.parse(localStorage.getItem(prefsKey)!).widths.name).toBe(140)
+      expect(wrapper.get('.sov-table').attributes('style')).toContain('--sov-name-width: 140px')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('重新打开沿用保存的名称宽度，URL 宽度也各自恢复', async () => {
+    localStorage.setItem(prefsKey, JSON.stringify({ widths: { name: 340, url: 500 } }))
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '10' }, global: { plugins: [ElementPlus] } })
+    try {
+      await flushPromises()
+      expect(wrapper.get('[data-testid="source-name-resizer"]').attributes('aria-valuenow')).toBe('340')
+      expect(wrapper.get('[data-testid="source-url-resizer"]').attributes('aria-valuenow')).toBe('500')
+      expect(wrapper.get('.sov-table').attributes('style')).toContain('--sov-name-width: 340px')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})

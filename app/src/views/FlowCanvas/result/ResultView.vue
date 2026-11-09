@@ -1945,7 +1945,7 @@ async function onTestScript() {
             :total="total"
             :page-sizes="PAGE_SIZES"
             layout="total, sizes, prev, pager, next"
-            small
+            size="small"
             data-testid="data-pagination"
             @size-change="runQuery"
           />

@@ -15,6 +15,8 @@ import TrendPanel from './panels/TrendPanel.vue'
 import DistributionPanel from './panels/DistributionPanel.vue'
 import AlertPanel from './panels/AlertPanel.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import FavoriteEntry from './components/FavoriteEntry.vue'
+import { loadFavoriteSummary } from '@/utils/favoriteSummary'
 
 const router = useRouter()
 const ui = useUiStore()
@@ -53,9 +55,11 @@ function onUpdateDays(d: number) {
 const updatedAt = computed(() => data.value?.updatedAt ?? '-')
 
 onMounted(async () => {
+  // 收藏汇总和页面数据并发拉：胶囊首屏就该有数字，不要等 KPI 回来才补
+  void loadFavoriteSummary()
   await loadAll()
   ui.registerAction('刷新', async () => {
-    await loadAll()
+    await Promise.all([loadAll(), loadFavoriteSummary()])
     ElMessage.success('已刷新采集资产总览')
   })
   ui.registerAction('导出', () => ElMessage.info('导出总览：演示环境占位'))
@@ -85,6 +89,8 @@ onUnmounted(() => ui.clearActions())
         <div>实时掌握采集资产运行态势，提升数据采集稳定性与治理效率。</div>
         <div class="ov-fresh">
           <span>数据更新时间：{{ updatedAt }}</span>
+          <span class="ov-fresh-sep" aria-hidden="true" />
+          <FavoriteEntry />
         </div>
       </div>
 
@@ -126,7 +132,9 @@ onUnmounted(() => ui.clearActions())
   min-width: 0;
   color: #334155;
   font-size: 13px;
-  padding: 10px 16px;
+  /* 收藏胶囊高 26，这里用 6px 纵向内边距把它兜住：说明条总高仍是 38 左右，
+     加胶囊不把下面的 KPI 栅格推下去（验收标准 §7-1） */
+  padding: 6px 16px;
   border-radius: 8px;
   background: linear-gradient(90deg, rgba(37, 99, 235, 0.04) 0%, rgba(6, 182, 212, 0.04) 100%);
   border: 1px solid rgba(37, 99, 235, 0.06);
@@ -144,16 +152,32 @@ onUnmounted(() => ui.clearActions())
   white-space: nowrap;
 }
 
+.ov-fresh-sep {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  background: #d9e4f3;
+}
+
 @media (max-width: 720px) {
   .ov {
     height: auto;
     min-height: 0;
   }
 
+  .ov-intro {
+    padding: 10px 16px;
+  }
+
   .ov-intro,
   .ov-fresh {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  /* 纵排时分隔线没有意义（上一条文字、下一条胶囊） */
+  .ov-fresh-sep {
+    display: none;
   }
 }
 </style>

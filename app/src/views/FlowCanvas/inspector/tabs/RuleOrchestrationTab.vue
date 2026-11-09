@@ -59,7 +59,7 @@ import AlertConfigPanel from '../AlertConfigPanel.vue'
 //
 // 数据监控节点不出现「上传 Excel」样本文件入口（0917 产品口径，画布和监控视图两处一致）；
 // 规则处理节点照旧保留——那里的 Excel 是给"按样本生成规则脚本"用的。
-const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
+const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule, onScriptGenerated } = useNodeEditorContext()
 const props = defineProps<{ templateDefaults?: boolean }>()
 const router = useRouter()
 const route = useRoute()
@@ -1286,6 +1286,11 @@ async function onGenerateScript(
   thinkingText.value = ''
   generationMessage.value = ''
   generationState.value = 'idle'
+  // 生成报错、或取消时一个字都还没输出，要还原原来的脚本：否则模型挂掉（1105 会议上
+  // DeepSeek 调用失败）会把节点上已保存的脚本和路径清空，接着点保存就把空路径写进去了。
+  // 取消时已经输出了一部分则保留（用户主动停下，要看已有内容）。
+  const previousScript = { script: orchCfg.value.script ?? '', scriptPath: orchCfg.value.scriptPath ?? '' }
+  let failed = false
   patch({ script: '', scriptPath: '' })
   try {
     const legacyRuleId = !isRule.value ? await ensureLegacyComposeRuleId() : undefined
@@ -1349,15 +1354,20 @@ async function onGenerateScript(
       generationMessage.value = generationMessage.value || '保存完成'
     }
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
+    if (orchCfg.value.script?.trim()) onScriptGenerated?.()
   } catch (e) {
     if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
       ElMessage.info('已取消生成')
     } else {
+      failed = true
       generationState.value = 'error'
       generationMessage.value = (e as Error)?.message ?? String(e)
       ElMessage.error(`生成${isRule.value ? '脚本' : '配置'}失败：${(e as Error)?.message ?? String(e)}`)
     }
   } finally {
+    const keepPrevious = failed || !orchCfg.value.script?.trim()
+    const changed = (orchCfg.value.script ?? '') !== previousScript.script || (orchCfg.value.scriptPath ?? '') !== previousScript.scriptPath
+    if (keepPrevious && changed) patch(previousScript)
     if (generateAbort.value === controller) generateAbort.value = null
     generating.value = false
   }
@@ -2360,8 +2370,10 @@ function onTestScript() {
 .rc-orchestration-tabs button { flex: 1; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted); font-size: 12px; cursor: pointer; }
 .rc-orchestration-tabs button.active { background: var(--rc-card); color: var(--rc-primary); font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / 6%); }
 .rc-orchestration-tabs button:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
-.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
-.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
+/* 字段名按「小标题」呈现（2026-11-05，1105 会议）：12px/600/#334155，层级向「参数配置」区块看齐；
+   四个 Tab 各自 scoped 覆盖了同一份规则（ConfigTab / TableTab / TaskTab / RuleOrchestrationTab），改这里记得同步。 */
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 14px; }
+.rc-field label { display: block; color: #334155; font-size: 12px; font-weight: 600; margin-bottom: 6px; letter-spacing: .01em; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-textarea { min-height: 74px; resize: vertical; line-height: 1.5; }

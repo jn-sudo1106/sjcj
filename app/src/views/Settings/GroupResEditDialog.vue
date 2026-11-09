@@ -25,6 +25,7 @@ import {
   type GroupResMeta,
   type GroupResRule,
 } from '@/api/groupRes'
+import { getSysUserGroupOptions, type SysUserGroupOption } from '@/api/sysUser'
 import StructCondEditor from './groupRes/StructCondEditor.vue'
 import CondValueInput from './groupRes/CondValueInput.vue'
 
@@ -39,6 +40,16 @@ const editing = ref<GroupResRule | null>(null)
 const form = reactive({ groupId: '', action: '', resType: '', condType: 'ID', resCond: '', remarks: '' })
 /** STRUCT 模式的条件行（condJson 的编辑态）；其他模式不用 */
 const condItems = ref<GroupResCondItem[]>([])
+const groupOptions = ref<SysUserGroupOption[]>([])
+
+async function loadGroupOptions() {
+  try {
+    const list = await getSysUserGroupOptions()
+    groupOptions.value = list.filter((g) => g.id > GROUP_ID_FLOOR)
+  } catch {
+    // 忽略
+  }
+}
 
 const condTypes = computed(() => (props.meta?.condTypes ?? []).filter((o) => SUPPORTED_COND_TYPES.has(o.key)))
 const currentType = computed(() => props.meta?.resTypes.find((t) => t.key === form.resType) ?? null)
@@ -71,6 +82,9 @@ function open(rule?: GroupResRule) {
   // STRUCT 回显走 condJson；解析失败（历史脏数据）回空数组，由用户重配而不是带着坏值提交
   condItems.value = rule?.condType === 'STRUCT' ? parseCondJson(rule.condJson) : []
   visible.value = true
+  if (!rule) {
+    void loadGroupOptions()
+  }
 }
 defineExpose({ open })
 
@@ -170,12 +184,29 @@ async function save() {
   <el-dialog v-model="visible" :title="editing ? `编辑数据权限规则 · ${editing.id}` : '新建数据权限规则'" width="680px" append-to-body destroy-on-close>
     <el-form label-width="96px" size="default" @submit.prevent>
       <el-form-item label="用户组 ID" required>
-        <el-input
-          v-model="form.groupId"
-          :disabled="!!editing"
-          placeholder="如 100001"
-          data-testid="group-res-rule-group-id"
-        />
+        <div style="width: 100%;">
+          <el-select
+            v-if="!editing && groupOptions.length > 0"
+            v-model="form.groupId"
+            filterable
+            placeholder="快捷选择已配置用户组"
+            style="width: 100%; margin-bottom: 6px;"
+            data-testid="group-res-group-select"
+          >
+            <el-option
+              v-for="g in groupOptions"
+              :key="g.id"
+              :label="`${g.label}（${g.code ? g.code + ' · ' : ''}${g.id}）`"
+              :value="String(g.id)"
+            />
+          </el-select>
+          <el-input
+            v-model="form.groupId"
+            :disabled="!!editing"
+            placeholder="如 100001"
+            data-testid="group-res-rule-group-id"
+          />
+        </div>
         <div class="gr-hint">{{ editing ? '规则归属的用户组不可改；要给别的组配规则请关闭后新建' : `规则挂在该用户组下，ID 必须大于 ${GROUP_ID_FLOOR}（内置组不走本表）` }}</div>
       </el-form-item>
       <el-form-item label="行为" required>

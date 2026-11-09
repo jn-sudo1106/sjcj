@@ -7,6 +7,8 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import AppSidebar from './AppSidebar.vue'
 import { TABS } from '@/router/tabs'
+import { useAuthStore } from '@/stores/auth'
+import type { NavGroup } from '@/api/menu'
 
 function makeRouter() {
   return createRouter({
@@ -54,7 +56,7 @@ describe('AppSidebar', () => {
     const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '问数配置')!
     // 1015 迁入旧「系统配置」域后组下有「问数系统配置」；同日迁入旧「基础配置」组，「基础配置」排在模板配置之前
     // 1020 的「辅助工具」是独立分组，不在这里
-    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['基础配置', '模板配置', '问数系统配置'])
+    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['AI智能问数', '基础配置', '模板配置', '问数系统配置'])
     const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
     expect(active).toHaveLength(1)
     expect(active[0].text()).toContain('模板配置')
@@ -153,10 +155,106 @@ describe('AppSidebar', () => {
   it('系统管理组有「系统设置 + 用户权限设置」两个入口，/user-permission 下高亮后者', async () => {
     const { wrapper } = await mountAt('/user-permission')
     const group = wrapper.findAll('.rc-nav-group').find((g) => g.find('.rc-nav-title').text() === '系统管理')!
-    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['系统设置', '用户权限设置'])
+    expect(group.findAll('.rc-nav-item').map((i) => i.text())).toEqual(['系统设置', '用户权限设置', '菜单配置'])
 
     const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
     expect(active).toHaveLength(1)
     expect(active[0].text()).toContain('用户权限设置')
   })
 })
+
+// 后端动态菜单（sys/menu/user-nav → auth.menuGroups）驱动侧栏：分组、顺序、文案、图标、权限过滤
+// 全部以后端为准，本地 TABS 只在接口没下发数据时兜底（AppSidebar 的 navGroups computed）。
+describe('AppSidebar · 后端动态菜单', () => {
+  async function mountWithNav(
+    groups: NavGroup[],
+    path = '/overview',
+    options: { permissions?: string[]; roles?: string[] } = {},
+  ) {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/overview', component: { template: '<div />' } },
+        { path: '/backend-page', component: { template: '<div />' } },
+        { path: '/hidden-page', component: { template: '<div />' } },
+      ],
+    })
+    await router.push(path)
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.menuGroups = groups
+    auth.roles = options.roles ?? ['admin']
+    auth.permissions = options.permissions ?? []
+    auth.isMenusLoaded = true
+    const wrapper = mount(AppSidebar, { global: { plugins: [pinia, router, ElementPlus] } })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('分组标题 / 菜单文案 / 顺序按后端下发渲染，本地 TABS 的入口不再出现', async () => {
+    const wrapper = await mountWithNav([
+      {
+        groupKey: 'backend-a',
+        groupLabel: '后端分组A',
+        order: 1,
+        items: [{ id: 1, key: 'backend-page', label: '后端页面', path: '/backend-page', icon: 'Cpu', order: 1 }],
+      },
+      {
+        groupKey: 'backend-b',
+        groupLabel: '后端分组B',
+        order: 2,
+        items: [{ id: 2, key: 'overview', label: '后端总览', path: '/overview', order: 1 }],
+      },
+    ])
+
+    expect(wrapper.findAll('.rc-nav-title').map((n) => n.text())).toEqual(['后端分组A', '后端分组B'])
+    expect(wrapper.findAll('.rc-nav-label').map((n) => n.text())).toEqual(['后端页面', '后端总览'])
+    // 本地 TABS 里的其它入口（源管理 / 流程中心…）只该在菜单没下发时出现
+    expect(wrapper.findAll('.rc-nav-label').map((n) => n.text())).not.toContain('源管理')
+  })
+
+  it('外链（.htm）与无权限入口被过滤，整组被过滤后不渲染空分组', async () => {
+    const wrapper = await mountWithNav(
+      [
+        {
+          groupKey: 'g1',
+          groupLabel: '有内容',
+          order: 1,
+          items: [
+            { id: 1, key: 'overview', label: '总览', path: '/overview', order: 1 },
+            { id: 2, key: 'legacy', label: '老外链', path: '/legacy.htm', order: 2 },
+            { id: 3, key: 'hidden-page', label: '无权限页', path: '/hidden-page', permission: 'secret', order: 3 },
+          ],
+        },
+        {
+          groupKey: 'g2',
+          groupLabel: '全被过滤',
+          order: 2,
+          items: [{ id: 4, key: 'hidden', label: '只有无权限项', path: '/hidden-page', permission: 'secret', order: 1 }],
+        },
+      ],
+      '/overview',
+      { permissions: ['overview'], roles: ['read'] },
+    )
+
+    expect(wrapper.findAll('.rc-nav-title').map((n) => n.text())).toEqual(['有内容'])
+    expect(wrapper.findAll('.rc-nav-label').map((n) => n.text())).toEqual(['总览'])
+  })
+
+  it('后端给了不认识的图标名也不崩（回落默认图标，不留空图标位）', async () => {
+    const wrapper = await mountWithNav([
+      {
+        groupKey: 'g',
+        groupLabel: '组',
+        order: 1,
+        items: [{ id: 1, key: 'backend-page', label: '页面', path: '/backend-page', icon: '不存在的图标', order: 1 }],
+      },
+    ])
+
+    expect(wrapper.findAll('.rc-nav-icon .el-icon')).toHaveLength(1)
+    expect(wrapper.find('.rc-nav-icon svg').exists()).toBe(true)
+  })
+})
+

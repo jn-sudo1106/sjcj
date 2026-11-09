@@ -2,19 +2,77 @@
 // 侧栏导航（P3 收尾 · AppShell 拆分）
 // 职责：按 group 分组的导航菜单 + 高亮 active 路由 + 收起侧栏按钮
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
-import { computed, type Component } from 'vue'
+import { computed, onBeforeUnmount, ref, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, Connection, DataAnalysis, Document, Files, Grid, Histogram, Monitor, Odometer, Setting, SetUp, Tickets, Tools, UserFilled } from '@element-plus/icons-vue'
+import {
+  Bell,
+  Box,
+  ChatDotRound,
+  Clock,
+  Collection,
+  Connection,
+  Cpu,
+  DataAnalysis,
+  DataBoard,
+  Document,
+  Files,
+  Folder,
+  Grid,
+  Histogram,
+  HomeFilled,
+  Key,
+  List,
+  Lock,
+  Management,
+  Menu as MenuIcon,
+  Monitor,
+  Odometer,
+  Operation,
+  PieChart,
+  Setting,
+  SetUp,
+  Share,
+  Tickets,
+  Tools,
+  TrendCharts,
+  UserFilled,
+} from '@element-plus/icons-vue'
+import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
 import { canAccess } from '@/composables/usePermission'
+import { prefetchRoute } from '@/utils/prefetchRoute'
 
 const router = useRouter()
 
 const activeKey = useActiveNavKey()
 
 const ui = useUiStore()
+const auth = useAuthStore()
+
+// 点击到路由生效之间有个空窗（守卫 + chunk 加载）。先把高亮切到目标项，
+// 让「点了」这件事立刻有反馈；导航结束（含被守卫改道）后交回真实路由。
+const pendingPath = ref('')
+const stopAfterEach = router.afterEach(() => {
+  pendingPath.value = ''
+})
+onBeforeUnmount(() => stopAfterEach())
+
+function isActive(path: string, key: string) {
+  return pendingPath.value ? pendingPath.value === path : key === activeKey.value
+}
+
+function goTo(path: string) {
+  pendingPath.value = path
+  void router.push(path)
+}
+
+/** 鼠标移到/聚焦到菜单上时就把目标页 chunk 预取下来（幂等，失败静默） */
+function prefetch(path: string) {
+  prefetchRoute(router, path)
+}
 
 const groupLabels = {
   home: '首页',
@@ -32,16 +90,39 @@ const groupLabels = {
   settings: '系统管理',
 } as const
 
-const navGroups = computed(() =>
-  Object.entries(groupLabels)
+const navGroups = computed(() => {
+  if (auth.menuGroups && auth.menuGroups.length > 0) {
+    return auth.menuGroups
+      .map((g) => ({
+        key: g.groupKey,
+        label: g.groupLabel,
+        items: g.items
+          .filter((t) => canAccess(t.permission) && !t.path?.toLowerCase().endsWith('.htm'))
+          .map((t) => {
+            const meta = TABS.find((m) => m.key === t.key)
+            return {
+              key: t.key,
+              label: t.label || meta?.label || t.key,
+              path: t.path || meta?.path || `/${t.key}`,
+              desc: meta?.desc || '',
+              group: g.groupKey,
+              permission: t.permission,
+              icon: t.icon,
+            }
+          }),
+      }))
+      .filter((g) => g.items.length > 0)
+  }
+
+  return Object.entries(groupLabels)
     .map(([key, label]) => ({
       key,
       label,
       // 菜单权限口子（0924-02）：canAccess 现在恒放行，接入人员菜单权限后这里自动生效
       items: TABS.filter((t) => t.group === key && canAccess(t.permission)),
     }))
-    .filter((g) => g.items.length > 0),
-)
+    .filter((g) => g.items.length > 0)
+})
 
 // 键必须与 TABS 的 key 一一对应：漏一个不会报错，只会渲染出一个空的 <el-icon> 占位方块。
 // 2026-09-02 把 TAB key 从 'flow' 改成 'flows'（对齐 /flows 路径）时漏改这里，流程中心的图标
@@ -58,6 +139,7 @@ const navIcons: Record<string, Component> = {
   sync: Connection,
   monitor: Monitor,
   // 问数配置 → 基础配置（1015 迁入，问数配置组第一个入口，表字段管理在页内以 tab 呈现）
+  'ai-chat': ChatDotRound,
   'base-config': Grid,
   // 问数配置 → 模板配置（1015 起 8 个子模块收成这一个入口，在页内以 tab 呈现；与基础配置、问数系统配置并列）
   // TAB key 带连字符，对象键必须加引号，漏加不报错只出空图标
@@ -69,6 +151,49 @@ const navIcons: Record<string, Component> = {
   settings: Setting,
   // 用户权限设置（1030）：与「系统设置」并列在同一个组下，页内两个 tab
   'user-permission': UserFilled,
+  'menu-config': MenuIcon,
+
+  // 扩展标准样式图标支持（按图标名匹配）
+  HomeFilled,
+  Folder,
+  DataBoard,
+  Cpu,
+  Management,
+  Operation,
+  Share,
+  Bell,
+  Lock,
+  Key,
+  TrendCharts,
+  PieChart,
+  List,
+  Collection,
+  Odometer,
+  Box,
+  Connection,
+  Document,
+  Histogram,
+  DataAnalysis,
+  Files,
+  Clock,
+  Monitor,
+  ChatDotRound,
+  Grid,
+  Tickets,
+  SetUp,
+  Tools,
+  Setting,
+  UserFilled,
+  Menu: MenuIcon,
+}
+
+function getNavIcon(t: { key: string; icon?: string }) {
+  if (t.icon) {
+    const elIcon = (ElementPlusIconsVue as Record<string, Component>)[t.icon]
+    if (elIcon) return elIcon
+    if (navIcons[t.icon]) return navIcons[t.icon]
+  }
+  return navIcons[t.key] || Setting
 }
 </script>
 
@@ -86,12 +211,14 @@ const navIcons: Record<string, Component> = {
       >
         <button
           class="rc-nav-item"
-          :class="{ active: t.key === activeKey }"
+          :class="{ active: isActive(t.path, t.key) }"
           type="button"
-          @click="router.push(t.path)"
+          @pointerenter="prefetch(t.path)"
+          @focus="prefetch(t.path)"
+          @click="goTo(t.path)"
         >
           <span class="rc-nav-icon"
-            ><el-icon><component :is="navIcons[t.key]" /></el-icon
+            ><el-icon><component :is="getNavIcon(t)" /></el-icon
           ></span>
           <span class="rc-nav-label">{{ t.label }}</span>
         </button>

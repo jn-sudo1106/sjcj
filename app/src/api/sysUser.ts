@@ -19,6 +19,7 @@
 // 页面本身只对 admin 角色可见（见 views/Settings/index.vue 的 adminOnly 过滤）。
 import { request } from './client'
 import type { Ack, Paged } from './types/common'
+import { setDbUserGroups } from '@/utils/groupNames'
 
 const EP = {
   list: 'sys-user/list',
@@ -43,6 +44,8 @@ export interface SysUserRow {
   userName: string
   userStatus: number
   groupId: number | null
+  /** 所属用户组/部门名称 (来自 sys_user_group) */
+  groupName?: string | null
   /** 已分配角色 ID，逗号分隔；无角色时为 null（此时启用会被后端拒绝） */
   roleIds: string | null
   /** 已分配角色名，逗号分隔 */
@@ -58,6 +61,7 @@ export interface SysUserQuery {
   loginName?: string
   userName?: string
   groupId?: number
+  groupName?: string
   /** 空串 / undefined = 不按状态过滤 */
   userStatus?: number | ''
   page?: number
@@ -88,11 +92,32 @@ export type SysUserInput = {
   roleIds?: string
 }
 
+export interface SysUserGroupOption {
+  id: number
+  label: string
+  code?: string
+  parentId?: number
+  disabled?: boolean
+}
+
+export type SysUserGroupUpdateInput = {
+  id: number
+  groupName: string
+  groupCode?: string
+  parentId?: number
+  orderNum?: number
+  leader?: string
+  phone?: string
+  email?: string
+  status?: number
+  remark?: string
+}
+
 /** 表单校验入参（编辑态带上原登录名，用来判「登录名是否被改」） */
 export interface SysUserFormCheck {
   loginName: string
   userName: string
-  groupId: string
+  groupId: string | number
   password: string
   /** 编辑态的原登录名；新建时留空 */
   originLoginName?: string
@@ -103,6 +128,7 @@ export function pagedSysUser(query: SysUserQuery): Promise<Paged<SysUserRow>> {
     loginName: query.loginName || undefined,
     userName: query.userName || undefined,
     groupId: query.groupId,
+    groupName: query.groupName || undefined,
     userStatus: query.userStatus === '' || query.userStatus === undefined ? undefined : query.userStatus,
     page: query.page ?? 1,
     limit: query.limit ?? 20,
@@ -111,6 +137,29 @@ export function pagedSysUser(query: SysUserQuery): Promise<Paged<SysUserRow>> {
 
 export function sysUserDetail(userId: number): Promise<SysUserRow | null> {
   return request<SysUserRow | null>(EP.detail, { userId }, { method: 'GET' })
+}
+
+/** 获取全部有效用户组选项列表（来自 sys_user_group） */
+export async function getSysUserGroupOptions(): Promise<SysUserGroupOption[]> {
+  try {
+    const res = await request<SysUserGroupOption[]>('sys-user-group/options', {}, { method: 'GET' })
+    const list = Array.isArray(res)
+      ? res
+      : res && typeof res === 'object' && 'data' in res && Array.isArray((res as { data: unknown }).data)
+        ? (res as { data: SysUserGroupOption[] }).data
+        : []
+    if (list.length > 0) {
+      setDbUserGroups(list.map((g) => ({ id: g.id, label: g.label, code: g.code })))
+    }
+    return list
+  } catch {
+    return []
+  }
+}
+
+/** 修改用户组/部门信息 (更新 sys_user_group 表) */
+export function updateSysUserGroup(form: SysUserGroupUpdateInput): Promise<Ack> {
+  return request<Ack>('sys-user-group/update', form, { method: 'POST' })
 }
 
 /** 获取全部有效角色列表（供用户编辑时选择角色） */
@@ -152,8 +201,10 @@ export function sysUserFormError(check: SysUserFormCheck): string | null {
     if (!check.password) return '请填写初始密码'
   }
   if (!check.userName.trim()) return '请填写用户名'
-  if (!/^\d+$/.test(check.groupId.trim())) return '请填写所属组 ID（数字）'
-  if (Number(check.groupId.trim()) <= 0) return '所属组 ID 必须大于 0'
+  const gidStr = check.groupId === undefined || check.groupId === null ? '' : String(check.groupId).trim()
+  if (!gidStr) return '请选择用户组'
+  if (!/^\d+$/.test(gidStr)) return '用户组必须是正整数'
+  if (Number(gidStr) <= 0) return '用户组必须大于 0'
   if (editing && loginName && loginName !== check.originLoginName) return '登录名创建后不可修改；需要换登录名请新建用户'
   return null
 }

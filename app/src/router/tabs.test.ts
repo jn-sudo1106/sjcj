@@ -67,7 +67,7 @@ describe('Phase 3.1 画布入口退役', () => {
   // 表字段管理一个页内 tab（元数据在 BASE_CONFIG_TABS）。
   it('侧栏暴露基础配置 + 模板配置 + 问数系统配置三个入口，子模块作为页内 tab', () => {
     const templateTabs = TABS.filter((t) => t.group === 'template')
-    expect(templateTabs.map((t) => `${t.key}:${t.label}`)).toEqual(['base-config:基础配置', 'template-config:模板配置', 'system-config:问数系统配置'])
+    expect(templateTabs.map((t) => `${t.key}:${t.label}`)).toEqual(['ai-chat:AI智能问数', 'base-config:基础配置', 'template-config:模板配置', 'system-config:问数系统配置'])
 
     const shell = router.options.routes.find((r) => r.path === '/')
     const baseRoute = shell?.children?.find((r) => r.path === '/base-config')
@@ -141,7 +141,7 @@ describe('Phase 3.1 画布入口退役', () => {
   // 三条断言各钉一个「漏了不报错」的点：TABS 缺项 → 侧栏没入口；路由缺项 → 点进去白屏；
   // key 与路径段不一致 → 高亮与面包屑静默回退到「采集资产总览」。
   it('系统设置组有「系统设置 + 用户权限设置」两个入口，数据权限/用户管理收成页内 tab', () => {
-    expect(TABS.filter((t) => t.group === 'settings').map((t) => `${t.key}:${t.label}`)).toEqual(['settings:系统设置', 'user-permission:用户权限设置'])
+    expect(TABS.filter((t) => t.group === 'settings').map((t) => `${t.key}:${t.label}`)).toEqual(['settings:系统设置', 'user-permission:用户权限设置', 'menu-config:菜单配置'])
 
     const shell = router.options.routes.find((r) => r.path === '/')
     const route = shell?.children?.find((r) => r.path === '/user-permission')
@@ -152,6 +152,7 @@ describe('Phase 3.1 画布入口退役', () => {
     // 顺序即默认：第一项「用户管理」是无 ?tab= 时落地的那个（1030 定档），它也正是唯一 adminOnly 的一项
     expect(USER_PERMISSION_TABS.map((t) => `${t.key}:${t.label}:${t.permission}`)).toEqual([
       'users:用户管理:settings:users',
+      'roles:角色管理:settings:roles',
       'data-permission:数据权限设置:settings:dataPermission',
     ])
     expect(USER_PERMISSION_TABS[0]?.adminOnly).toBe(true)

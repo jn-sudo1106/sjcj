@@ -18,6 +18,8 @@ const LEGACY_KEY = 'rc.site.favorites'
 
 /** 收藏的网站 ID。三处共用这一份。 */
 export const favoriteSiteIds = ref<Set<string>>(new Set())
+/** 是否已从后端拉过一次（成败都算）：没拉过时空集不代表"没有收藏"（1108 总览「我的收藏」要区分加载中与空态） */
+export const favoriteSitesLoaded = ref(false)
 
 /** Merge only returned cards; never replace favorites outside the current page. */
 export function applySiteFavoriteStates(states: { siteId: string; favorited: boolean }[]): void {
@@ -61,22 +63,28 @@ export async function toggleFavoriteSite(siteId: string): Promise<boolean> {
 }
 
 /** 同一时刻只跑一次加载：网站列表 / 收藏两个 tab 挂载时会同时来要 */
-let loading: Promise<void> | null = null
+let loading: Promise<boolean> | null = null
 
 /**
  * 从后端拉当前账号的全部网站收藏，替换本地状态。进页面、切回 tab 时调用。
  * 失败（未登录、网络）不清空已有状态，也不打扰——星标只是辅助信息，别为它弹错。
+ *
+ * 返回是否拉取成功：星标不需要这个结果，但总览的「我的收藏」汇总要分辨「0 条收藏」和
+ * 「没拉到」（1108），所以把成败交出去而不是在内部吞掉。
  */
-export function loadFavoriteSites(): Promise<void> {
+export function loadFavoriteSites(): Promise<boolean> {
   if (loading) return loading
   loading = (async () => {
     try {
       const ids = await favoriteApi.listIds('SITE')
       favoriteSiteIds.value = new Set(ids)
       await migrateLegacyLocal()
+      return true
     } catch {
       /* 保留现状 */
+      return false
     } finally {
+      favoriteSitesLoaded.value = true
       loading = null
     }
   })()

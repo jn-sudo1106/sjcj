@@ -147,7 +147,7 @@ function openSource(issue: SourceIssue) {
       <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="row.state === 0 ? 'warning' : 'success'" size="small" effect="light">{{ row.state === 0 ? '待处理' : '已处理' }}</el-tag></template></el-table-column>
       <el-table-column label="操作" width="150"><template #default="{ row }"><div class="si-row-actions"><el-button link type="primary" @click="openDetail(row)">详情</el-button><el-button v-if="auth.role === 'admin' && row.state === 0" link type="primary" :loading="handling.has(row.id)" :disabled="loading" :data-testid="`source-issue-handle-${row.id}`" @click="handle(row)">标记已处理</el-button></div></template></el-table-column>
     </el-table>
-    <div v-show="!error" class="si-pager"><el-pagination :current-page="filters.page" :page-size="filters.size" :total="total" :page-sizes="[20, 40, 100]" layout="total, sizes, prev, pager, next, jumper" background small data-testid="source-issues-pagination" @current-change="setQuery({ ...filters, page: $event })" @size-change="setQuery({ ...filters, page: 1, size: $event })" /></div>
+    <div v-show="!error" class="si-pager"><el-pagination :current-page="filters.page" :page-size="filters.size" :total="total" :page-sizes="[20, 40, 100]" layout="total, sizes, prev, pager, next, jumper" background size="small" data-testid="source-issues-pagination" @current-change="setQuery({ ...filters, page: $event })" @size-change="setQuery({ ...filters, page: 1, size: $event })" /></div>
     <SourceIssueDrawer v-if="detailOpen" v-model="detailOpen" :issue-id="detailId" @handled="load" @open-source="openSource" />
   </section>
 </template>

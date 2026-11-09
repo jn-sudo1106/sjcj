@@ -317,6 +317,20 @@ describe('选表分组 / 动态表结构 API 旧平台 HTTP 契约（E 包 T1b�
     expect(group.main).toBe('2')
   })
 
+  it('数据表导航的三个分组保留数据量，0 不当成缺失', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: {
+      list1: [{ entryTypeId: 1, dataCnt: 4000000000 }],
+      list2: [{ entryTypeId: 2, dataCnt: 0 }],
+      list3: [{ entryTypeId: 3, dataCnt: null }],
+    } }))
+    const { dataApi } = await import('./index')
+    const group = await dataApi.entryTypesGroup()
+    expect(group.list1[0]?.rowCount).toBe(4000000000)
+    expect(group.list2[0]?.rowCount).toBe(0)
+    expect(group.list3[0]?.rowCount).toBeUndefined()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('tableMeta 用 GET 调 entry/queryEntryType，参数名是 type（不是 typeId）；响应是扁平记录，不包 curEntryType', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0', msg: null,

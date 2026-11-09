@@ -289,6 +289,14 @@ async function onSwitchTarget(target: Source) {
 function onSwitchAdded(s: Source) {
   onSwitchTarget(s)
 }
+// 搜索结果侧栏右键「编辑源 / 重命名」后，若改的正是画布当前打开的源，
+// 页签标题和 flow store 里的源名/URL 要跟着变，否则头部和侧栏会对不上（2026-11-05）。
+function onSidebarSourceEdited(s: Source) {
+  if (flow.sourceCtx?.sourceId !== s.sourceId) return
+  if (s.url !== undefined && s.url !== flow.sourceCtx.url) flow.patchSource({ name: s.name, url: s.url })
+  flow.patchSourceCtx({ name: s.name, url: s.url })
+  ws.renameTab(s.sourceId, s.name)
+}
 // ---- 左栏数据表模式（0924-10）----
 /** 只在「网站态 + 数据视图」允许切到数据表列表（Q4）；其他视图左栏恒为源列表 */
 const sidebarAllowTableMode = computed(() => isSiteDetail.value && normalizeSiteView(route.query.view) === 'data')
@@ -398,20 +406,23 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   sourceLoadError.value = ''
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
+  //
+  // 源详情页加载提速（1107）：流程绑定（sourceFlows）只依赖 sourceId，跟源详情并行发，
+  // 不再等源详情回来再串一轮。源视角的步骤（nextConfigPaged?sourceId=）只在源没有绑流程时才用得上，
+  // 以前每次都并行发、还要等它回来才往下走——它慢的时候整页跟着慢，现在改成没流程时才补读。
   const fromIssue = fromSourceIssues.value
   let source: Source | null
-  let sourceSteps: { steps: Step[] } | { error: unknown }
+  // 绑定列表读失败时不挡住画布：退回源上的默认流程 ID，流程标签栏自己会报错。
+  const loadBindings = () => runtimeView
+    ? Promise.resolve([] as Awaited<ReturnType<typeof workflowBindingApi.list>>)
+    : workflowBindingApi.list(sourceId, { withNames: false }).catch(() => [] as Awaited<ReturnType<typeof workflowBindingApi.list>>)
+  // 从问题台账进入要先核对源详情权限，那条路径仍等源详情回来再读绑定
+  const earlyBindings = fromIssue ? undefined : loadBindings()
   try {
-    const sourceResult = fromIssue
-      ? sourceApi.sourceDetailScoped(sourceId)
-      : sourceApi.sourceDetail(sourceId)
     // 从问题台账进入时先核对源详情权限，再读取工作区数据。
-    const loadSteps = () => sourceApi.sourceSteps(sourceId, { withConfigDetails: false })
-      .then((steps) => ({ steps }), (error: unknown) => ({ error }))
-    const stepsResult = fromIssue
-      ? sourceResult.then((visibleSource) => visibleSource ? loadSteps() : { steps: [] })
-      : loadSteps()
-    ;[source, sourceSteps] = await Promise.all([sourceResult, stepsResult])
+    source = fromIssue
+      ? await sourceApi.sourceDetailScoped(sourceId)
+      : await sourceApi.sourceDetail(sourceId)
   } catch (error) {
     if (!isCurrent()) return
     // 异常不能再往外抛：调用方 enterFromRoute 的 promise 没人接，占位会永远停在「加载中」。
@@ -434,16 +445,11 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   }
   // 0925 整体切 flowId：源已绑流程（Source.flowId 为有效数字、且非 '0' 哨兵）→ 步骤按流程
   // 查询（svg=true 自带真实根节点行 / 「流程入口」行，lastStep 已改写为根 ID），展示与
-  // 流程管理画布一致；未绑流程的源维持源视角查询（源虚拟根）。源视角那份并行结果仅作兜底。
+  // 流程管理画布一致；未绑流程的源维持源视角查询（源虚拟根），这时才补读。
   // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（ActiveFlow 判定四处共用）。
   // 新模型允许一个源关联多条流程（source-group 接口）。路由 flowId 是当前查看/编辑目标；primaryFlowId 才是运行入口。
   // 绑定列表读失败时不挡住画布：退回源上的默认流程 ID（Source.flowId 即后端的 defaultFlowId），流程标签栏自己会报错。
-  let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
-  try {
-    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId, { withNames: false })
-  } catch {
-    bindings = []
-  }
+  const bindings = await (earlyBindings ?? loadBindings())
   if (!isCurrent()) return
   const legacyFlowId = validFlowIdOf(source.flowId)
   const primaryBinding = bindings.find(binding => binding.primary)
@@ -473,13 +479,14 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     const versionId = editingView || !flowVersion.published ? flowVersion.viewVersionId : null
     if (flowId) {
       steps = await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
-    } else if ('steps' in sourceSteps) {
-      steps = sourceSteps.steps
-    } else if (/源未绑定有效流程/.test((sourceSteps.error as Error)?.message ?? '')) {
-      // 未绑流程（如新建采集失败没建出流程）就是没有步骤：画布照常打开，用流程标签栏「＋」新建流程
-      steps = []
     } else {
-      throw sourceSteps.error
+      try {
+        steps = await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })
+      } catch (error) {
+        // 未绑流程（如新建采集失败没建出流程）就是没有步骤：画布照常打开，用流程标签栏「＋」新建流程
+        if (!/源未绑定有效流程/.test((error as Error)?.message ?? '')) throw error
+        steps = []
+      }
     }
   } catch (error) {
     if (!isCurrent()) return
@@ -898,6 +905,7 @@ onUnmounted(() => {
         @pick-table="onPickTable"
         @pick="onSwitchTarget"
         @added="onSwitchAdded"
+        @edited="onSidebarSourceEdited"
         @compare="onSidebarCompare"
         @pick-site="onSwitchToSite"
         @pick-group="onPickSourceGroup"

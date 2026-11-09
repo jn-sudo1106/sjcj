@@ -273,6 +273,12 @@ describe('isMulti 落库推导（2026-08-28：「更新父表」不由用户选�
     expect(buildConfigPayload(detailNode('2103330', '2103331')).isMulti).toBe(0)
   })
 
+  it('存量 multiMode=2 且输入≠输出：按原值保留 2，不擅自改写', () => {
+    const cfg = detailNode('2103330', '2103331')
+    cfg.collectCfg!.multiMode = 2
+    expect(buildConfigPayload(cfg).isMulti).toBe(2)
+  })
+
   it('输入表为空时不算成「相同」，落库 0', () => {
     expect(buildConfigPayload(detailNode('', '')).isMulti).toBe(0)
   })
@@ -300,6 +306,19 @@ describe('isMulti 落库推导（2026-08-28：「更新父表」不由用户选�
     cfg.collectCfg!.inputTable = '2101001'
     cfg.collectCfg!.outputTable = '2101002'
     expect(buildConfigPayload(cfg).isMulti).toBe(0)
+  })
+
+  // 2026-11-09 后端核对结论：saver 的 MergeParentSaver 按 ENTRY_ID=parentId 更新输出表记录，
+  // 只凭该步骤 CS_CONFIG.IS_MULTI=2 与请求 parentId，不看输入表是手选还是从上游继承。
+  it('输入表靠上游继承、与输出表相同 → 照样落库 2', () => {
+    const cfg = detailNode('', '2103330')
+    expect(buildConfigPayload(cfg).isMulti).toBe(0)
+    expect(buildConfigPayload(cfg, {}, { effectiveInputTableId: '2103330' }).isMulti).toBe(2)
+  })
+
+  it('继承来的输入表与输出表不同 → 仍落库 0', () => {
+    const cfg = detailNode('', '2103330')
+    expect(buildConfigPayload(cfg, {}, { effectiveInputTableId: '2103200' }).isMulti).toBe(0)
   })
 
   it('非采集节点没有 collectCfg，不写这个字段，保留 base 原值', () => {

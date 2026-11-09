@@ -42,7 +42,7 @@ const condRows = computed(() => {
     <dl v-if="rule" class="gr-detail">
       <dt>规则 ID</dt>
       <dd>{{ rule.id }}</dd>
-      <dt>用户组</dt>
+      <dt>数据权限组</dt>
       <dd data-testid="group-res-detail-group">{{ groupLabel(rule.groupId) }}</dd>
       <dt>行为</dt>
       <dd>{{ optionName(meta?.actions, rule.action) }}</dd>

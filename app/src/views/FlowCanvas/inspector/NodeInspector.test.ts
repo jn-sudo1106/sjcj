@@ -120,6 +120,44 @@ describe('NodeInspector 输出表未就绪警告条（0927 H1）', () => {
   })
 })
 
+// 0928 表联动：输入表 ≠ 上游输出表时只提示、不拦。2026-11-05 用户嫌 el-alert 太丑，
+// 收成一条左侧色条 + 一句小字的行内提示，details 放 title。
+describe('NodeInspector 输入表与上游不一致提示（0928 / 2026-11-05 紧凑样式）', () => {
+  function mountChain(inputTable: string) {
+    mockAssets(); setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.configs['web-1'].collectCfg!.outputTable = '6399997'
+    flow.configs['web-2'] = cloneConfig(NODE_CONFIGS['web-detail'])
+    flow.configs['web-2'].collectCfg!.inputTable = inputTable
+    flow.main = ['start', 'web-1', 'web-2', 'end']
+    flow.select('web-2')
+    const wrapper = mount(NodeInspector)
+    return { flow, wrapper }
+  }
+
+  it('输入表与上游不一致：一条紧凑提示，正文一行 + 全文放 title，不再用 el-alert', async () => {
+    const { wrapper } = mountChain('6399998')
+    await flushPromises()
+    const note = wrapper.get('[data-testid="input-table-mismatch"]')
+    expect(note.classes()).toContain('ni-note')
+    expect(note.classes()).toContain('ni-note-info')
+    expect(note.find('.el-alert').exists()).toBe(false)
+    const text = note.get('.ni-note-text')
+    expect(text.classes()).toContain('is-one-line')
+    expect(text.text()).toBe('输入表 6399998 与上游输出表 6399997 不一致，上游改动不会自动跟随')
+    expect(text.attributes('title')).toBe('本节点输入表 6399998，上游输出表 6399997。上游插入、删除节点或改表时，本节点输入表不会自动跟随')
+    wrapper.unmount()
+  })
+
+  it('输入表与上游一致：不显示提示', async () => {
+    const { wrapper } = mountChain('6399997')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="input-table-mismatch"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
 describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () => {
   it('打开画布选中非规则节点：规则相关 3 个 API 不调用；之后切到规则节点才补拉，且只拉一次', async () => {
     mockAssets()

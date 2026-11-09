@@ -9,16 +9,34 @@ import Settings from './index.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
 import { useAuthStore } from '@/stores/auth'
+import type { NavTab } from '@/api/menu'
 
 
-async function mountAt(query: Record<string, string> = {}, roles: string[] = []) {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }, { path: '/collect', component: { template: '<div />' } }, { path: '/user-permission', component: { template: '<div />' } }] })
+async function mountAt(
+  query: Record<string, string> = {},
+  roles: string[] = [],
+  opts: { tabs?: NavTab[]; permissions?: string[] } = {},
+) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      // meta.tabs 就是动态路由从后端菜单（sys_menu menu_type=2）带下来的页内 tab
+      { path: '/settings', component: { template: '<div />' }, meta: { tabs: opts.tabs } },
+      { path: '/collect', component: { template: '<div />' } },
+      { path: '/user-permission', component: { template: '<div />' } },
+    ],
+  })
   await router.push({ path: '/settings', query })
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
   // 旧用户管理书签继续携带当前会话，具体权限由用户权限设置页判断。
-  useAuthStore().roles = roles
+  const auth = useAuthStore()
+  auth.roles = roles
+  if (opts.permissions) {
+    auth.permissions = opts.permissions
+    auth.isMenusLoaded = true
+  }
   const wrapper = mount(Settings, { global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   return { wrapper, router }
@@ -64,6 +82,15 @@ describe('系统设置 · tab 壳', () => {
     expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '代码生成服务器', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
+  })
+
+  it('自带卡片的页签不再套外框，其余页签由容器统一套白底卡片（1107 页面盘点）', async () => {
+    const { wrapper } = await mountAt()
+    expect(wrapper.get('.st-content').classes()).not.toContain('is-framed')
+
+    await wrapper.findAll('.st-tab-link').find((b) => b.text() === '处理机')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.st-content').classes()).toContain('is-framed')
   })
 
   // 2026-10-13：来源组迁回源管理「我的分组」，旧书签跳过去并带上选中的组
@@ -120,6 +147,25 @@ describe('系统设置 · tab 壳', () => {
     expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).not.toContain('用户管理')
     expect(router.currentRoute.value.path).toBe('/user-permission')
     expect(router.currentRoute.value.query).toEqual({ tab: 'users' })
+    wrapper.unmount()
+  })
+
+  // 后端菜单下发的页内 tab（动态路由 meta.tabs，来自 sys_menu menu_type=2 记录）：
+  // 文案 / 顺序 / 权限过滤全部以后端为准，本地 fallbackTabs 只在菜单没下发时兜底。
+  it('后端下发的页内 tab 覆盖本地清单：文案、顺序、权限过滤都按后端', async () => {
+    const { wrapper } = await mountAt({}, ['read'], {
+      tabs: [
+        { id: 3, key: 'runtime-logs', label: '运行日志（后端）', permission: 'settings:assignments', order: 2 },
+        { id: 1, key: 'node-type', label: '节点类型（后端）', permission: 'settings:nodeType', order: 1 },
+        { id: 2, key: 'category', label: '分类目录（后端）', permission: 'settings:secret', order: 3 },
+      ],
+      permissions: ['settings:nodeType', 'settings:assignments'],
+    })
+
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型（后端）', '运行日志（后端）'])
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型（后端）')
+    // 本地 fallback 有、后端没下发的入口（服务器 / 程序版本…）不再出现
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).not.toContain('服务器')
     wrapper.unmount()
   })
 })

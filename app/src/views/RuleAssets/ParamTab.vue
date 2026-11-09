@@ -317,7 +317,7 @@ async function batchDelete() {
         :page-sizes="[10, 30, 100, 200]"
         layout="total, sizes, prev, pager, next"
         background
-        small
+        size="small"
         @current-change="load"
         @size-change="onSize"
       />

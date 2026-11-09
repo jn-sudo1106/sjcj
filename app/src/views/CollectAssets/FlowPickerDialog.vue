@@ -185,7 +185,7 @@ void load()
     </ResizableFlowSplit>
     <template #footer>
       <div class="fp-footer">
-        <el-pagination v-model:current-page="page" :page-size="PAGE_SIZE" :total="total" layout="total, prev, pager, next" small @current-change="load" />
+        <el-pagination v-model:current-page="page" :page-size="PAGE_SIZE" :total="total" layout="total, prev, pager, next" size="small" @current-change="load" />
         <span class="fp-spacer" />
         <el-button @click="emit('close')">取消</el-button>
         <el-button type="primary" data-testid="flow-picker-confirm" @click="confirm">确定</el-button>

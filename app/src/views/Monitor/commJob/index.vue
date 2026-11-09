@@ -413,7 +413,7 @@ onMounted(() => void load())
         :page-sizes="[10, 20, 40, 100, 200]"
         layout="total, sizes, prev, pager, next, jumper"
         background
-        small
+        size="small"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />

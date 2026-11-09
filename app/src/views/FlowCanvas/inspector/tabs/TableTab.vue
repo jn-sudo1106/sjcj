@@ -21,6 +21,7 @@ import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
+import { inputFieldSelection, inputFieldTokens } from '@/utils/flow/inputFieldSelection'
 
 const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
@@ -29,6 +30,20 @@ const { tables, ensureTableFields } = useNodeInspectorAssets()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const cc = computed(() => cfg.value?.collectCfg)
+const inputReferenceWarning = ref('')
+watch(id, () => { inputReferenceWarning.value = '' })
+
+function inputTableChangeAllowed(tableId: string) {
+  const current = flow.effectiveInputTableFor(id.value)
+  if (tableId === current) return true
+  const hasFields = inputFieldTokens(cfg.value).length || cfg.value?.taskCfg?.contextMap?.length
+  if (hasFields) {
+    inputReferenceWarning.value = '请先清除已选输入字段，再切换输入表，避免原字段绑定到新表。'
+    return false
+  }
+  inputReferenceWarning.value = ''
+  return true
+}
 
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
@@ -48,10 +63,17 @@ const ruleCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
   name: cfg.value?.title ?? '',
 }))
-function patchRule(p: Partial<RuleOrchestration>) {
+function patchRule(p: Partial<RuleOrchestration>, restoring = false) {
+  if (p.inputTableId !== undefined && !inputTableChangeAllowed(p.inputTableId)) return
   // 规则处理写 ruleCfg；其余规则式节点写 execCfg（共用同一个绑定组件，落点按节点类型分）
   if (isRule.value) flow.patchRuleConfig(id.value, p)
   else flow.patchExecConfig(id.value, p)
+  // 用户清空后不再用旧 context 恢复勾选，也不能在换表时将旧 K 列套进新表。
+  // 只读回显保持旧 token，不在元数据加载时改写持久化字段。
+  if (p.inputFields && !restoring) {
+    const columns = new Map(inputFieldOptions.value.map((field) => [field.itemCode, field.columnName || field.itemCode]))
+    flow.patchTaskConfig(id.value, { contextMap: p.inputFields.map((code) => columns.get(code) ?? code) })
+  }
   if (p.inputTableId !== undefined) flow.setInputTable(id.value, p.inputTableId)
   if (p.outputTableId !== undefined) flow.setOutputTable(id.value, p.outputTableId)
 }
@@ -96,7 +118,7 @@ watch(
       const outputFields = restoreFieldsFromColumns(ruleCfg.value.outputFields, outColumns, outOpts)
       if (outputFields) patch.outputFields = outputFields
     }
-    if (Object.keys(patch).length) patchRule(patch)
+    if (Object.keys(patch).length) patchRule(patch, true)
   },
   { immediate: true },
 )
@@ -114,11 +136,8 @@ watch(inputTableId, (tid) => ensureTableFields(tid), { immediate: true })
 const inputTableFields = computed(() => inputTableId.value
   ? fieldOptionsFromTableOrOutput(inputTableId.value, tables.value, cfg.value?.output)
   : [])
-const savedInputFields = computed<string[] | undefined>(() => cfg.value?.inputFields)
-const selectedInputFieldProps = computed<string[]>(() => {
-  const allProps = inputTableFields.value.map((f) => f.prop)
-  return savedInputFields.value === undefined ? allProps : savedInputFields.value
-})
+const inputSelection = computed(() => inputFieldSelection(cfg.value, inputTableFields.value))
+const selectedInputFieldProps = computed(() => inputSelection.value.selected)
 function isInputFieldSelected(prop: string): boolean {
   return selectedInputFieldProps.value.includes(prop)
 }
@@ -126,7 +145,10 @@ function toggleInputField(prop: string) {
   const current = new Set(selectedInputFieldProps.value)
   if (current.has(prop)) current.delete(prop)
   else current.add(prop)
-  flow.setInputFields(id.value, [...current])
+  writeInputFields([...current, ...inputSelection.value.unknown])
+}
+function writeInputFields(fields: string[]) {
+  flow.setInputFields(id.value, fields, inputTableFields.value)
 }
 /**
  * 只看已选（2026-09-23，用户：「字段确实有点多」）。默认开：勾选墙只铺已选的字段。
@@ -138,12 +160,23 @@ const inputPartiallySelected = computed(() =>
 const visibleInputFields = computed(() => (inputOnlySelected.value && inputPartiallySelected.value
   ? inputTableFields.value.filter((f) => isInputFieldSelected(f.prop))
   : inputTableFields.value))
+/**
+ * 空勾选有两种语义（2026-11-04 F2 收口）：未指定＝保存时沿用旧 context；明确清空＝落 null。
+ * 展示成一个空墙，用户分不出来，所以按 `inputSelection.specified` 给不同提示。
+ */
+const inputFieldsHint = computed(() => {
+  const { selected, unknown, specified } = inputSelection.value
+  if (!specified) return '未指定输入字段：保存时沿用该步骤原有的上下文来源；勾选后按勾选传递。'
+  if (!selected.length && !unknown.length) return '已清空输入字段：保存后该步骤的上下文来源为空，不再沿用旧列。'
+  return '勾选字段随任务传递，按勾选顺序写入 context。'
+})
 function selectAllInputFields() {
-  flow.setInputFields(id.value, inputTableFields.value.map((f) => f.prop))
+  writeInputFields([...inputTableFields.value.map((f) => f.prop), ...inputSelection.value.unknown])
 }
 function clearAllInputFields() {
-  flow.setInputFields(id.value, [])
+  writeInputFields([])
 }
+
 // 表下拉支持输入搜索（0902）：生产表数量远超一屏，useNodeInspectorAssets 只预加载 100 张，
 // 覆盖不了长尾——下拉里翻不到就以为表不存在。跟规则节点的表绑定（RuleTableFieldBinder.vue）
 // 同一套做法：el-select filterable remote，按关键字查 entryApi.entryPaged，不再只认预加载列表。
@@ -201,6 +234,7 @@ function onInputTableVisible(open: boolean) {
 }
 function onInputTableId(value: string | undefined | null) {
   const v = value ?? ''
+  if (!inputTableChangeAllowed(v)) return
   if (cc.value) flow.patchCollect(id.value, { inputTable: v })
   else flow.setInputTable(id.value, v)
   flow.resetInputFields(id.value)
@@ -208,6 +242,10 @@ function onInputTableId(value: string | undefined | null) {
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
+// 2026-11-08 确认口径：输入表 == 输出表时按「更新父表」处理（isMulti=2，落库推导见
+// utils/flow/nodeConfigPayload.ts），界面只写这一张表并给一句提示。
+// 多表输出（副表 / 回写父表）整块已在用户确认后删除（2026-11-08 晚），这里只保留同表提示。
+const outputTableSameAsInput = computed(() => !!nodeTableId.value && effectiveInputTableId.value === nodeTableId.value)
 const currentDedupMode = computed<'source' | 'table'>(() => cc.value?.dedupMode || cfg.value?.dedupMode || 'source')
 
 // 去重列（0828 D11）：会上指出「去重列丢了，要加回来」。
@@ -239,7 +277,7 @@ const DEFAULT_PRESET_TABLES = [
 const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
 // 输出字段选择（2026-10-10 恢复）：就是旧平台步骤编辑里的「出参列 (OutContext)」，
-// 落 taskCfg.outColumns → 步骤 outContext，与「任务配置 → 出参列」是同一份数据。
+// 落 taskCfg.outColumns → 步骤 outContext，作为统一编辑入口；任务配置不再重复提供出参列。
 // 口径跟旧平台：空 = 默认全部字段。后端存物理列名（K1…），这里按字段展示：
 // 读时列名 / 字段名都认，写时换回列名（表里没有列名才写字段名）。
 watch(nodeTableId, (tid) => ensureTableFields(tid), { immediate: true })
@@ -339,6 +377,7 @@ async function onTableSaved(tableId: string) {
 </script>
 
 <template>
+  <div v-if="inputReferenceWarning" class="rc-help input-field-warning" role="status" data-testid="input-reference-warning">{{ inputReferenceWarning }}</div>
   <template v-if="ruleStyled">
     <RuleTableFieldBinder
       :model-value="ruleCfg"
@@ -370,7 +409,7 @@ async function onTableSaved(tableId: string) {
       </div>
       <div v-if="inputTableFields.length" class="rc-field">
         <div class="rc-field-header">
-          <label>输入字段选择（已选中 {{ selectedInputFieldProps.length }} / {{ inputTableFields.length }} 个字段，默认包含全部字段）</label>
+          <label>输入字段选择（{{ inputSelection.specified ? `已选中 ${selectedInputFieldProps.length} / ${inputTableFields.length} 个字段` : '未指定' }}）</label>
           <div class="rc-field-actions">
             <button v-if="inputPartiallySelected" type="button" class="rc-text-btn" data-testid="toggle-only-selected-input-fields" @click="inputOnlySelected = !inputOnlySelected">{{ inputOnlySelected ? `显示全部 ${inputTableFields.length} 个` : '只看已选' }}</button>
             <button type="button" class="rc-text-btn" data-testid="select-all-input-fields" @click="selectAllInputFields">全选</button>
@@ -385,14 +424,25 @@ async function onTableSaved(tableId: string) {
             :class="{ on: isInputFieldSelected(f.prop) }"
             @click="toggleInputField(f.prop)"
           >
-            <input type="checkbox" :checked="isInputFieldSelected(f.prop)" class="rc-tag-check" @click.stop="toggleInputField(f.prop)" />
+            <input type="checkbox" :checked="isInputFieldSelected(f.prop)" :aria-label="`选择输入字段 ${f.desc || f.prop}`" class="rc-tag-check" @click.stop="toggleInputField(f.prop)" />
             <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
           </span>
         </div>
+        <div class="rc-help" data-testid="input-fields-state-hint">{{ inputFieldsHint }}</div>
+      </div>
+      <div v-if="inputSelection.unknown.length" class="rc-help input-field-warning" data-testid="unknown-input-fields">
+        {{ inputTableFields.length ? '未找到的输入字段' : '待解析的输入字段' }}：
+        <span v-for="token in inputSelection.unknown" :key="token" class="unknown-input-field">
+          {{ token }}
+          <button type="button" class="rc-text-btn" :aria-label="`移除输入字段 ${token}`" @click="writeInputFields([...selectedInputFieldProps, ...inputSelection.unknown.filter((item) => item !== token)])">移除</button>
+        </span>
       </div>
     </template>
     <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
-    <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
+    <div class="rc-field">
+      <div class="rc-field-header">
+        <label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
+      </div>
       <div class="rc-input-group" data-testid="output-table-field">
         <el-select
           class="rc-table-select grow"
@@ -424,6 +474,9 @@ async function onTableSaved(tableId: string) {
         >
           {{ preset.name }} ({{ preset.tableId }})
         </button>
+      </div>
+      <div v-if="outputTableSameAsInput" class="rc-help" data-testid="output-table-same-as-input">
+        输入表与输出表相同：按「更新父表」处理，只写这一张表。
       </div>
     </div>
     <!-- 输出字段选择 = 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。 -->
@@ -501,8 +554,10 @@ async function onTableSaved(tableId: string) {
 </template>
 
 <style scoped>
-.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
-.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
+/* 字段名按「小标题」呈现（2026-11-05，1105 会议）：12px/600/#334155，层级向「参数配置」区块看齐；
+   四个 Tab 各自 scoped 覆盖了同一份规则（ConfigTab / TableTab / TaskTab / RuleOrchestrationTab），改这里记得同步。 */
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 14px; }
+.rc-field label { display: block; color: #334155; font-size: 12px; font-weight: 600; margin-bottom: 6px; letter-spacing: .01em; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; font-family: inherit; resize: vertical; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-input[disabled] { background: #f8fafc; color: var(--rc-faint); }
@@ -540,6 +595,8 @@ async function onTableSaved(tableId: string) {
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
+.rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
+/* 回写父表（输入表）面板：写入方式 / 定位键 / 字段映射 */
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
 .rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 5px 12px; cursor: pointer; }
 .rc-segment button.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }
@@ -585,4 +642,8 @@ async function onTableSaved(tableId: string) {
 .rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
 .rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
+.input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }
+.unknown-input-field { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 8px; }
+.table-advanced { margin: 10px 0; color: var(--rc-muted); font-size: 11px; }
+.table-advanced summary { cursor: pointer; margin-bottom: 8px; }
 </style>

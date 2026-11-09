@@ -397,7 +397,7 @@ function openPreview(file: FileResourceRecord) {
             :page-sizes="[20, 40, 100, 200]"
             layout="total, sizes, prev, pager, next, jumper"
             background
-            small
+            size="small"
             @current-change="loadList"
             @size-change="changePageSize"
           />

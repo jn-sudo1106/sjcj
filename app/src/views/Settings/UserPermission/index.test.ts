@@ -25,12 +25,19 @@ async function mountAt(query: Record<string, string> = {}, roles: string[] = [])
 }
 
 describe('用户权限设置 · tab 壳', () => {
-  it('admin 会话渲染两个 tab，默认落用户管理且地址不带 tab 参数', async () => {
+  it('admin 会话渲染三个 tab，默认落用户管理且地址不带 tab 参数', async () => {
     const { wrapper, router } = await mountAt({}, ['admin'])
-    expect(wrapper.findAll('.up-tab-link').map((b) => b.text())).toEqual(['用户管理', '数据权限设置'])
+    expect(wrapper.findAll('.up-tab-link').map((b) => b.text())).toEqual(['用户管理', '角色管理', '数据权限设置'])
     expect(wrapper.find('.up-tab-link.active').text()).toBe('用户管理')
     expect(router.currentRoute.value.query).toEqual({})
     expect(wrapper.find('[data-testid="settings-user-management"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('?tab=roles 直达角色权限管理', async () => {
+    const { wrapper } = await mountAt({ tab: 'roles' }, ['admin'])
+    expect(wrapper.find('.up-tab-link.active').text()).toBe('角色管理')
+    expect(wrapper.find('[data-testid="settings-role-permission"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -59,7 +66,7 @@ describe('用户权限设置 · tab 壳', () => {
 
   it('点「数据权限设置」写入 ?tab=data-permission，点回「用户管理」清掉参数', async () => {
     const { wrapper, router } = await mountAt({}, ['admin'])
-    await wrapper.findAll('.up-tab-link')[1]!.trigger('click')
+    await wrapper.findAll('.up-tab-link')[2]!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query).toEqual({ tab: 'data-permission' })
 

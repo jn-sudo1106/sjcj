@@ -419,7 +419,10 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
     name: record.typeName == null ? undefined : String(record.typeName),
     remark: record.remark == null ? undefined : String(record.remark),
     fields: items.map((item, index) => entryFieldFromLegacy(item, index, keySet)),
-    rowCount: record.dataCnt == null ? undefined : Number(record.dataCnt),
+    rowCount: record.dataCnt == null
+      ? (record.estimatedRowCount == null ? undefined : Number(record.estimatedRowCount))
+      : Number(record.dataCnt),
+    estimatedRowCount: record.estimatedRowCount == null ? undefined : Number(record.estimatedRowCount),
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
     keyField,
     state: record.state == null ? undefined : String(record.state),

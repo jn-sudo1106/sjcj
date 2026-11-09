@@ -454,3 +454,41 @@ describe('taskStat · 列定义与空态文案（旧页 columns / tableLocale）
     expect(emptyText(false, 100)).toBe('当前条件下暂无统计数据，可调整时间范围或过滤条件')
   })
 })
+
+describe('taskStat · 进度条百分比收口（el-progress 的 percentage 只接受 0~100 的有限数值）', () => {
+  // 线上现象：控制台刷 `Invalid prop: custom validator check failed for prop "percentage"`。
+  // 成因是后端两路聚合（总数 vs ERROR/多状态）口径不一致：ERROR 数可能大于任务数（错误率 >100），
+  // 甚至 cnt 给了非数字串（errorCnt 变 NaN → 错误率 NaN），这些值直接喂给 <el-progress> 就会越界。
+  it('ERROR 数大于任务数 / ERROR 路 cnt 非数字时，不触发 percentage 警告且进度条值夹在 0~100', async () => {
+    statMock.mockImplementation(async (query) => {
+      const state = String((query as Record<string, unknown>).state ?? '')
+      if (!state) {
+        return [
+          { sourceId: '161725', cnt: 10 },
+          { sourceId: '161801', cnt: 20 },
+        ]
+      }
+      return [
+        { sourceId: '161725', cnt: 25, state: 'E' },
+        { sourceId: '161801', cnt: 'null' as unknown as number, state: 'E' },
+      ]
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const w = await mountPage()
+    const messages = warn.mock.calls.map((c) => String(c[0] ?? ''))
+    warn.mockRestore()
+
+    expect(messages.filter((m) => m.includes('percentage'))).toEqual([])
+    // 页面上所有进度条（指标卡环图 + 任务占比 + 错误率）都是有限且落在 0~100 的值
+    const percentages = w.findAllComponents({ name: 'ElProgress' }).map((p) => p.props('percentage') as number)
+    expect(percentages.length).toBeGreaterThan(0)
+    percentages.forEach((v) => {
+      expect(Number.isFinite(v)).toBe(true)
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(100)
+    })
+    // 口径不一致是后端问题，展示文案仍如实反映（不把 250% 悄悄写成 100%）
+    expect(w.text()).toContain('250%')
+  })
+})
+

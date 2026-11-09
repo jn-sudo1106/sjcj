@@ -341,7 +341,7 @@ defineExpose({
         :page-sizes="[10, 20, 50]"
         layout="sizes, prev, pager, next"
         background
-        small
+        size="small"
         @current-change="(p: number) => emit('update:page', p)"
         @size-change="onSizeChange"
       />

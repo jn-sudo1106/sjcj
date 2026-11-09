@@ -3,6 +3,7 @@
 // 字段就是 SYS_USER 一行 + SYS_USER_2_ROLE 的角色回显；口令永远不出现在任何出参里。
 import { computed } from 'vue'
 import { statusText, type SysUserRow } from '@/api/sysUser'
+import { readGroupNames } from '@/utils/groupNames'
 
 const props = defineProps<{ modelValue: boolean; user: SysUserRow | null }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
@@ -13,6 +14,18 @@ const visible = computed({
 })
 
 const roleIds = computed(() => (props.user?.roleIds ?? '').split(',').filter(Boolean))
+
+const displayGroupName = computed(() => {
+  if (!props.user) return '—'
+  if (props.user.groupName && !props.user.groupName.startsWith('用户组_')) {
+    return props.user.groupName
+  }
+  if (props.user.groupId != null) {
+    const local = readGroupNames()[String(props.user.groupId)]
+    if (local) return local
+  }
+  return props.user.groupName || (props.user.groupId ? `用户组_${props.user.groupId}` : '—')
+})
 </script>
 
 <template>
@@ -24,8 +37,8 @@ const roleIds = computed(() => (props.user?.roleIds ?? '').split(',').filter(Boo
       <dd>{{ user.userLoginName }}</dd>
       <dt>用户名</dt>
       <dd>{{ user.userName }}</dd>
-      <dt>所属组 ID</dt>
-      <dd>{{ user.groupId ?? '—' }}</dd>
+      <dt>用户组</dt>
+      <dd>{{ displayGroupName }}</dd>
       <dt>状态</dt>
       <dd>{{ statusText(user.userStatus) }}</dd>
       <dt>已绑角色</dt>

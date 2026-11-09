@@ -278,6 +278,24 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sendSnatchWithParam).toHaveBeenCalledWith(expect.objectContaining({ ids: [source.sourceId] }))
   })
 
+  // 2026-11-05：源管理/搜索结果都补了「编辑源」，站内右键菜单也补上同一入口
+  it('右键菜单顶部提供「编辑源」，编辑的是被右击的那一行而不是当前源', async () => {
+    const wrapper = await createWrapper(() => {
+      const rows = [{ ...source }, { ...source, sourceId: 'source-b', name: '另一个源' }]
+      vi.mocked(siteApi.siteSourcePreview).mockResolvedValue(rows)
+      vi.mocked(siteApi.siteSources).mockResolvedValue(rows)
+    })
+    const other = wrapper.findAll('.ssw-row-main').find((row) => row.text().includes('另一个源'))!
+    await other.trigger('contextmenu', { clientX: 10, clientY: 10 })
+    expect(wrapper.find('[data-testid="source-menu-edit"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="source-menu-edit"]').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.getComponent({ name: 'EditSourceDialog' })
+    expect(dialog.props('open')).toBe(true)
+    expect(dialog.props('source')).toMatchObject({ sourceId: 'source-b', name: '另一个源' })
+  })
+
   // 0930 右键「复制源」；10-23 起只保留「仅制作源副本」（flag=0），新源沿用原源的流程
   it('右键复制源：flag=0，名称默认「原名_copy」，归入本网站；不复制 / 关联流程，没有配置二选一', async () => {
     const wrapper = await createWrapper()

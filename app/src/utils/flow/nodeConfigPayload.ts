@@ -174,16 +174,29 @@ export function configTypeFrom(cfg: NodeConfig): number | undefined {
  * 放在落库这一步算，而不是在下拉的 change 里算：用户可能先选详情页、之后再改输入/输出表，
  * 在 change 里算就会停在改表之前的结论。这里算能保证跟最终提交的表配置一致。
  */
-export function resolveMultiMode(cfg: NodeConfig): number | undefined {
+export function resolveMultiMode(cfg: NodeConfig, effectiveInputTableId?: string): number | undefined {
   const cc = cfg.collectCfg
   if (!cc) return undefined
   // 「未设置」占位已去掉（D10），界面永远显示一个具体值；模型上没值时按节点形态推导，
   // 与 ConfigTab 的回显兜底共用 defaultMultiMode，保证"看到的就是会写进去的"。
   const mode = cc.multiMode ?? defaultMultiMode(cfg)
   if (mode === 1) return 1
-  const input = cc?.inputTable ?? cfg.inputTable
+  // 存量 isMulti=2（旧平台「更新父表」）按原值保留，前端不擅自把它改写成 0/1
+  // （app/src/api/types/source.ts 要求写回以原值为准；生产实测有 2 的存量）。
+  if (mode === 2) return 2
+  // 输入表按「有效输入表」算（手选或上游继承）：2026-11-09 用 186 部署的 saver 反编译核对，
+  // 后端只看该步骤 CS_CONFIG.IS_MULTI 与请求里的 parentId（= 输入记录 entryId），
+  // 不关心输入表是手选还是继承来的；isMulti=2 走 MergeParentSaver 按 ENTRY_ID=parentId
+  // 更新输出表那条记录，isMulti=0 走 SingleSaver 按 PARENT_ID 插/更新**子记录**。
+  // 所以继承输入表且与输出表相同，也必须发 2，否则同表场景会多插一条子记录。
+  const input = effectiveInputTableId || cc?.inputTable || cfg.inputTable
   const output = cc?.outputTable ?? cfg.outputTable
   return input && output && input === output ? 2 : 0
+}
+
+/** 落库时用来判断「有效输入表」的入参（调用方从画布 store 取，见 flow.effectiveInputTableFor）。 */
+export interface BuildConfigOptions {
+  effectiveInputTableId?: string
 }
 
 /**
@@ -337,7 +350,11 @@ function ocrMultiModeFor(cfg: NodeConfig): number | undefined {
   }
 }
 
-export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
+export function buildConfigPayload(
+  cfg: NodeConfig,
+  base: Record<string, unknown> = {},
+  opts: BuildConfigOptions = {},
+): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
   // 只覆盖节点上确实有值的字段，其余保持 base 原值。
@@ -350,7 +367,7 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     ...(cfg.configUrl !== undefined ? { configUrl: cfg.configUrl } : {}),
     entryTypeId: (cc?.outputTable ?? cfg.outputTable) || undefined,
     inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
-    isMulti: isOcrNode(cfg) ? ocrMultiModeFor(cfg) : resolveMultiMode(cfg),
+    isMulti: isOcrNode(cfg) ? ocrMultiModeFor(cfg) : resolveMultiMode(cfg, opts.effectiveInputTableId),
     // 节点类型（0828 W0-7）：此前**完全没写**，导致复制出来的配置类型永远停在被复制那份上。
     configType: configTypeForSave(cfg, base),
     templetCode: cc?.bizType || undefined,
