@@ -690,9 +690,10 @@ describe('EntryTab · 表ID列表', () => {
     detail.mockClear()
     await mountTab()
     await waitForLoad()
-    expect(wrapper.findAll('[data-testid="entry-data-count"]').map((cell) => cell.text()))
+    expect(wrapper.findAll('[data-testid="entry-row-count"]').map((cell) => cell.text()))
       .toEqual(['1,234,567', '0', '—'])
-    expect(wrapper.findAll('th').some((th) => th.text() === '数据量')).toBe(true)
+    // 数据量只能有一列：4da9115 与 19458b5 两条并行线各加过一列，合并后曾出现两个「数据量」
+    expect(wrapper.findAll('th').filter((th) => th.text() === '数据量')).toHaveLength(1)
     expect(paged).toHaveBeenCalledTimes(1)
     expect(detail).not.toHaveBeenCalled()
   })
@@ -743,7 +744,7 @@ describe('EntryTab · 表ID列表', () => {
     await waitForLoad()
 
     const counts = wrapper.findAll('[data-testid="entry-row-count"]').map((td) => td.text())
-    expect(counts).toEqual(['—', '0', '1240'])
+    expect(counts).toEqual(['—', '0', '1,240'])
     // 物理表状态列：后端没有快照字段时统一「状态待检查」，不猜缺表也不猜正常
     const physical = wrapper.findAll('[data-testid="entry-physical-state"]')
     expect(physical).toHaveLength(3)
