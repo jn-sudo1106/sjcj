@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import * as roleApi from '@/api/role'
 import * as groupResApi from '@/api/groupRes'
 import * as sysUserApi from '@/api/sysUser'
+import * as sysDataGroupApi from '@/api/sysDataGroup'
 
 const MOCK_ROLES: roleApi.SysRoleRow[] = [
   { roleId: 57, roleName: 'admin', roleRemark: '超级管理员（系统内置）', roleStatus: 0, isSys: true, userCount: 1, createTime: '2024-01-01', modifierTime: '2024-01-01' },
@@ -37,6 +38,12 @@ beforeEach(() => {
   vi.spyOn(roleApi, 'getSysResourceTree').mockResolvedValue(JSON.parse(JSON.stringify(MOCK_TREE)))
   vi.spyOn(roleApi, 'getRoleResourceIds').mockResolvedValue([1, 2])
   vi.spyOn(groupResApi, 'listGroupIds').mockResolvedValue([100001, 100002])
+  vi.spyOn(sysDataGroupApi, 'fetchRoleDataGroups').mockResolvedValue([100001])
+  vi.spyOn(sysDataGroupApi, 'bindDataGroupsToRole').mockResolvedValue({ ok: true, message: '成功' } as any)
+  vi.spyOn(sysDataGroupApi, 'fetchDataGroupOptions').mockResolvedValue([
+    { id: 100001, label: '只读分析数据组', code: 'DATA_GROUP_READ', disabled: false },
+    { id: 100002, label: '运维支撑数据组', code: 'DATA_GROUP_OPS', disabled: false },
+  ])
   vi.spyOn(sysUserApi, 'pagedSysUser').mockResolvedValue({
     total: 2,
     list: [
@@ -231,7 +238,7 @@ describe('角色管理 · RolePermissionTab', () => {
     await dataGroupTab?.trigger('click')
     await flushPromises()
     const groupTexts = wrapper.findAll('.data-group-pane button').map((b) => b.text())
-    expect(groupTexts).toContain('前往数据权限配置页')
+    expect(groupTexts).toContain('保存数据组配置')
     expect(groupTexts).toContain('配置规则')
 
     const editBtn = readCard.find('[data-testid="role-edit"]')
@@ -240,6 +247,31 @@ describe('角色管理 · RolePermissionTab', () => {
     await flushPromises()
     expect(wrapper.find('.el-dialog').exists()).toBe(true)
     expect(wrapper.find('.el-dialog').text()).toContain('编辑角色')
+    wrapper.unmount()
+  })
+
+  it('数据组 tab 支持为角色勾选数据组并保存关联 (bindDataGroupsToRole)', async () => {
+    const { wrapper } = await mountComponent()
+    const readCard = wrapper.findAll('.role-card-item')[1]!
+    await readCard.trigger('click')
+    await flushPromises()
+
+    const dataGroupTab = wrapper.findAll('.role-right-tabs .el-tabs__item').find((t) => t.text() === '数据组')
+    await dataGroupTab?.trigger('click')
+    await flushPromises()
+
+    const saveBtn = wrapper.find('[data-testid="save-role-groups"]')
+    expect(saveBtn.exists()).toBe(true)
+
+    const selectionCol = wrapper.find('.el-table-column--selection')
+    expect(selectionCol.exists()).toBe(true)
+    expect(wrapper.find('.group-table-wrap').text()).not.toContain('分配给该角色')
+    expect(wrapper.find('.group-table-wrap').text()).not.toContain('该角色在组内成员')
+
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(sysDataGroupApi.bindDataGroupsToRole).toHaveBeenCalledWith(52, expect.any(Array))
     wrapper.unmount()
   })
 })

@@ -12,11 +12,10 @@
 // 也不能用键盘聚焦），并隐藏菜单树勾选框、全选/全不选/保存按钮与数据组的跳转配置入口。
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type ElTree } from 'element-plus'
+import { ElMessage, ElMessageBox, type ElTable, type ElTree } from 'element-plus'
 import {
   ArrowRight,
   Check,
-  Connection,
   Delete,
   Edit,
   Folder,
@@ -38,6 +37,12 @@ import {
   type SysRoleRow,
 } from '@/api/role'
 import { listGroupIds } from '@/api/groupRes'
+import {
+  bindDataGroupsToRole,
+  fetchDataGroupOptions,
+  fetchRoleDataGroups,
+  type SysDataGroupOption,
+} from '@/api/sysDataGroup'
 import { getGroupSourceScope, type GroupSourceScope } from '@/api/groupSourceScope'
 import { pagedSysUser, type SysUserRow } from '@/api/sysUser'
 import { groupName, readGroupNames } from '@/utils/groupNames'
@@ -93,6 +98,10 @@ const allUsers = ref<SysUserRow[]>([])
 const loadingGroups = ref(false)
 const groupSearchKey = ref('')
 const scopeCache = reactive<Record<number, GroupSourceScope>>({})
+const assignedGroupIds = ref<number[]>([])
+const savingRoleGroups = ref(false)
+const groupTableRef = ref<InstanceType<typeof ElTable> | null>(null)
+let isSyncingSelection = false
 
 // 数据组详情弹窗
 const groupDetailDialogVisible = ref(false)
@@ -160,11 +169,13 @@ async function loadRoles(targetRoleId?: number) {
 async function loadGroupAndUserData() {
   loadingGroups.value = true
   try {
-    const [groupIds, userRes] = await Promise.all([
+    const [groupIds, userRes, dataGroups] = await Promise.all([
       listGroupIds().catch(() => [] as number[]),
       pagedSysUser({ limit: 1000 }).catch(() => ({ list: [], total: 0 })),
+      fetchDataGroupOptions().catch(() => [] as SysDataGroupOption[]),
     ])
-    allGroupIds.value = groupIds || []
+    const extraIds = (dataGroups || []).map((g) => Number(g.id)).filter((id) => !isNaN(id) && id > 0)
+    allGroupIds.value = Array.from(new Set([...(groupIds || []), ...extraIds]))
     allUsers.value = userRes.list || []
   } catch (e) {
     console.error('加载数据组与用户数据失败:', e)
@@ -176,7 +187,7 @@ async function loadGroupAndUserData() {
 async function selectRole(role: SysRoleRow) {
   selectedRole.value = role
   if (!role) return
-  await loadRolePermissions(role.roleId)
+  await Promise.all([loadRolePermissions(role.roleId), loadRoleDataGroups(role.roleId)])
 }
 
 async function loadRolePermissions(roleId: number) {
@@ -192,6 +203,62 @@ async function loadRolePermissions(roleId: number) {
     ElMessage.error(`获取角色已分配权限失败: ${e instanceof Error ? e.message : String(e)}`)
   } finally {
     loadingTree.value = false
+  }
+}
+
+async function loadRoleDataGroups(roleId: number) {
+  try {
+    const ids = await fetchRoleDataGroups(roleId)
+    assignedGroupIds.value = Array.isArray(ids) ? ids.map(Number) : []
+  } catch (e) {
+    console.warn(`获取角色 #${roleId} 绑定数据组失败:`, e)
+    assignedGroupIds.value = []
+  }
+  await syncTableSelection()
+}
+
+async function syncTableSelection() {
+  await nextTick()
+  if (!groupTableRef.value) return
+  isSyncingSelection = true
+  try {
+    groupTableRef.value.clearSelection()
+    const assignedSet = new Set(assignedGroupIds.value)
+    for (const row of roleGroupList.value) {
+      if (assignedSet.has(row.groupId)) {
+        groupTableRef.value.toggleRowSelection(row, true)
+      }
+    }
+  } finally {
+    isSyncingSelection = false
+  }
+}
+
+function handleGroupSelectionChange(selection: RoleGroupItem[]) {
+  if (isSyncingSelection) return
+  const visibleIds = new Set(roleGroupList.value.map((r) => r.groupId))
+  const selectedVisibleIds = selection.map((r) => r.groupId)
+  const remainingIds = assignedGroupIds.value.filter((id) => !visibleIds.has(id))
+  assignedGroupIds.value = [...remainingIds, ...selectedVisibleIds]
+}
+
+async function handleSaveRoleGroups() {
+  if (!selectedRole.value) {
+    ElMessage.warning('请先在左侧选择要授权的角色')
+    return
+  }
+  if (isAdminSelected.value) {
+    ElMessage.warning('admin 为系统超级管理员角色，天然穿透所有数据组，无需单独绑定')
+    return
+  }
+  savingRoleGroups.value = true
+  try {
+    await bindDataGroupsToRole(selectedRole.value.roleId, assignedGroupIds.value)
+    ElMessage.success(`角色【${selectedRole.value.roleName}】数据组关联已成功保存`)
+  } catch (e) {
+    ElMessage.error(`保存数据组配置失败: ${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    savingRoleGroups.value = false
   }
 }
 
@@ -318,10 +385,17 @@ watch(
   ([tab, role]) => {
     if (tab === 'dataGroup' && role) {
       void fetchVisibleScopes()
+      void syncTableSelection()
     }
   },
   { immediate: true },
 )
+
+watch(roleGroupList, () => {
+  if (activeRightTab.value === 'dataGroup') {
+    void syncTableSelection()
+  }
+})
 
 async function fetchVisibleScopes() {
   const topGroups = allGroupIds.value.slice(0, 15)
@@ -644,8 +718,16 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
                 />
               </div>
               <div v-if="!isAdminSelected" class="toolbar-right">
-                <el-button size="small" :icon="Connection" @click="navigateToDataPermission()">
-                  前往数据权限配置页
+                <el-button
+                  type="primary"
+                  size="small"
+                  :icon="Check"
+                  :loading="savingRoleGroups"
+                  :disabled="!selectedRole"
+                  data-testid="save-role-groups"
+                  @click="handleSaveRoleGroups"
+                >
+                  保存数据组配置
                 </el-button>
               </div>
             </div>
@@ -672,7 +754,17 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
 
             <!-- 数据组表格 -->
             <div v-loading="loadingGroups" class="group-table-wrap">
-              <el-table :data="roleGroupList" stripe size="small" style="width: 100%" height="100%">
+              <el-table
+                ref="groupTableRef"
+                :data="roleGroupList"
+                row-key="groupId"
+                stripe
+                size="small"
+                style="width: 100%"
+                height="100%"
+                @selection-change="handleGroupSelectionChange"
+              >
+                <el-table-column v-if="!isAdminSelected" type="selection" width="50" align="center" :reserve-selection="true" />
                 <el-table-column prop="groupId" label="数据组 ID" width="110" align="center">
                   <template #default="{ row }">
                     <span class="group-id-badge">#{{ row.groupId }}</span>
@@ -681,25 +773,6 @@ function getNodeTypeTag(type: number): { label: string; type: 'primary' | 'succe
                 <el-table-column prop="groupName" label="数据组名称" min-width="150" show-overflow-tooltip>
                   <template #default="{ row }">
                     <span class="group-name-text">{{ row.groupName }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="该角色在组内成员" min-width="180">
-                  <template #default="{ row }">
-                    <div v-if="row.members.length > 0" class="member-tag-list">
-                      <el-tag
-                        v-for="u in row.members.slice(0, 3)"
-                        :key="u.userId"
-                        size="small"
-                        type="info"
-                        effect="plain"
-                      >
-                        {{ u.userName || u.userLoginName }}
-                      </el-tag>
-                      <span v-if="row.members.length > 3" class="member-more-tag">
-                        +{{ row.members.length - 3 }}人
-                      </span>
-                    </div>
-                    <span v-else class="text-muted">暂无该角色用户</span>
                   </template>
                 </el-table-column>
                 <el-table-column label="数据权限规则概况" min-width="160">

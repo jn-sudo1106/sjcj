@@ -25,6 +25,12 @@ const roleResourceBindings: Record<number, number[]> = {
   60: [1, 6, 7, 8],
 }
 
+const roleDataGroupBindingsStore: Record<number, number[]> = {
+  57: [100001, 100002],
+  52: [100001],
+  60: [100002],
+}
+
 let nextRoleId = 100
 
 export function mockSysRoleList(): SysRoleRow[] {
@@ -147,6 +153,18 @@ export function mockAssignRoleResources(params?: Record<string, unknown>) {
   const resourceIds = (params?.resourceIds as number[]) ?? []
   roleResourceBindings[roleId] = [...resourceIds]
   return { ok: true, message: '保存角色资源分配成功' }
+}
+
+export function mockSysDataGroupRoleGroups(params?: Record<string, unknown>): number[] {
+  const roleId = Number(params?.roleId)
+  return roleDataGroupBindingsStore[roleId] ? [...roleDataGroupBindingsStore[roleId]] : []
+}
+
+export function mockSysDataGroupBindRoleGroups(params?: Record<string, unknown>) {
+  const roleId = Number(params?.roleId)
+  const dataGroupIds = (params?.dataGroupIds as number[]) || []
+  roleDataGroupBindingsStore[roleId] = [...dataGroupIds]
+  return { ok: true, message: '为角色绑定数据组成功' }
 }
 
 export function mockUserNav(): UserNavData {
