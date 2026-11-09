@@ -15,6 +15,7 @@ import { entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType, RuleOrchestration } from '@/api'
 import { mergeStepForWrite } from '@/utils/flow/stepPersist'
+import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 
 const INPUT_TABLE: EntryType = {
@@ -832,6 +833,114 @@ describe('TableTab · 出参列边界与报文结构（1106 W4）', () => {
     expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K9'])
     await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[0].trigger('click') // 取消 title
     expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual([])
+    wrapper.unmount()
+  })
+})
+describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-08 最终口径）', () => {
+  // 2026-11-08 用户口径（第三次）：多表（副表 / 回写父表）整块删除——输出表就是唯一写入目标，
+  // 输入表 == 输出表时后端按「更新父表」处理（isMulti=2），界面只给一句提示。
+  const MAIN_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+  // 只用于「历史残留 subs」用例：子表（副表）这条线 2026-11-08 起取消，没有配置入口了。
+  const LEGACY_SUB: EntryType = {
+    tableId: '2103400', tableName: 'sense_data.TB_FILES', name: '附件资源表',
+    fields: [{ prop: 'file_id', desc: '文件ID', type: 'string', required: false, columnName: 'K1', itemId: '7001' }],
+  }
+  const LEGACY_SUB_2: EntryType = { tableId: '2103500', tableName: 'sense_data.TB_OTHER', name: '其它附表', fields: [] }
+  const INPUT_SRC: EntryType = {
+    tableId: '2103200', tableName: 'sense_data.TB_SRC', name: '来源列表',
+    fields: [{ prop: 'source_id', desc: '源ID', type: 'string', required: false, columnName: 'K1' }],
+  }
+  const rootConfig = { table: { entryTypeId: 2103330, keys: ['news'], colMap: [] as Array<{ colId: string; fromId: string }> } }
+
+  async function mountTableMode(structuredConfig?: string, opts: { sameTable?: boolean } = {}) {
+    mockAssets()
+    const all = [MAIN_TABLE, LEGACY_SUB, LEGACY_SUB_2, INPUT_SRC]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: all.length, list: all })
+    vi.spyOn(entryApi, 'entryDetail').mockImplementation(async (tableId: string) =>
+      all.find((table) => table.tableId === tableId) ?? MAIN_TABLE)
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.inputTable = opts.sameTable ? '2103330' : '2103200'
+    cfg.collectCfg!.outputTable = '2103330'
+    if (structuredConfig !== undefined) cfg.collectCfg!.structuredConfig = structuredConfig
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+  const configOf = (flow: ReturnType<typeof useFlowStore>) =>
+    JSON.parse(flow.configs['web-1'].collectCfg?.structuredConfig || '{}')
+  // codeRule 走「配置保存」报文（buildConfigPayload），不在 stepModify 报文里。
+  const codeRuleOf = (flow: ReturnType<typeof useFlowStore>) =>
+    String(buildConfigPayload(flow.configs['web-1']).codeRule ?? '')
+
+  it('输出表段不再有「写入方式」：多表入口（副表 / 回写父表）已整体删除', async () => {
+    const { wrapper } = await mountTableMode(JSON.stringify(rootConfig))
+    expect(wrapper.find('[data-testid="output-table-field"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="output-mode-segment"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="output-mode-hint"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="parent-writeback"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="legacy-sub-note"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('输入表与输出表相同：提示按「更新父表」处理，保存报文不写 table.subs', async () => {
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(rootConfig), { sameTable: true })
+    expect(wrapper.get('[data-testid="output-table-same-as-input"]').text()).toContain('更新父表')
+    expect(wrapper.find('[data-testid="output-mode-segment"]').exists()).toBe(false)
+    expect(codeRuleOf(flow)).not.toContain('subs')
+    wrapper.unmount()
+  })
+
+  it('历史配置里的副表（子表）：不识别、不提示、不截断，保存原样带出', async () => {
+    const overflow = {
+      table: {
+        ...rootConfig.table,
+        subs: [
+          { entryTypeId: 2103400, keys: ['files'], colMap: [] },
+          { entryTypeId: 2103500, keys: ['more'], colMap: [] },
+        ],
+      },
+    }
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(overflow))
+    expect(wrapper.find('[data-testid="legacy-sub-note"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="parent-writeback"]').exists()).toBe(false)
+    expect(JSON.parse(flow.configs['web-1'].collectCfg?.structuredConfig ?? '{}').table.subs).toHaveLength(2)
+    // 前端不清理、不改写：报文原样带出历史 subs
+    expect(codeRuleOf(flow)).toContain('"entryTypeId":2103500')
+    wrapper.unmount()
+  })
+
+  it('历史配置里残留 parentWriteBack：界面不再读取也不再改写，保存原样带出', async () => {
+    const stale = {
+      table: rootConfig.table,
+      parentWriteBack: { version: 1, mode: 'insert', locateBy: '', colMap: [{ colId: 'K1', fromId: 'title' }] },
+    }
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(stale))
+    // 没有回写面板，也不因为这段配置把界面撑开
+    expect(wrapper.find('[data-testid="parent-writeback"]').exists()).toBe(false)
+    expect(configOf(flow).parentWriteBack).toEqual({
+      version: 1, mode: 'insert', locateBy: '', colMap: [{ colId: 'K1', fromId: 'title' }],
+    })
+    wrapper.unmount()
+  })
+
+  it('结构化配置始终是普通 textarea，改动仍能落库', async () => {
+    const { flow, wrapper } = await mountTableMode(JSON.stringify(rootConfig))
+    const textarea = wrapper.findAll('textarea')[0]
+    await textarea.setValue('{"globals":["K1"]}')
+    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('{"globals":["K1"]}')
     wrapper.unmount()
   })
 })

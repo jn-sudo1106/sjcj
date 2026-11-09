@@ -124,9 +124,6 @@ watch(
 )
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
-// 采集类（非登录、非固定输出）表配置项较多，结构化配置收进「高级配置」；其余节点保持展开。
-const showAdvancedConfig = computed(() => !!cc.value
-  && nodeCapability.value?.kind !== 'login' && nodeCapability.value?.outputMode !== 'fixed')
 
 // ---- 非规则节点：统一输入表/输入字段配置（0806） ----
 const ownInputTableId = computed(() => cc.value?.inputTable || cfg.value?.inputTable || '')
@@ -245,6 +242,10 @@ function onInputTableId(value: string | undefined | null) {
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
+// 2026-11-08 确认口径：输入表 == 输出表时按「更新父表」处理（isMulti=2，落库推导见
+// utils/flow/nodeConfigPayload.ts），界面只写这一张表并给一句提示。
+// 多表输出（副表 / 回写父表）整块已在用户确认后删除（2026-11-08 晚），这里只保留同表提示。
+const outputTableSameAsInput = computed(() => !!nodeTableId.value && effectiveInputTableId.value === nodeTableId.value)
 const currentDedupMode = computed<'source' | 'table'>(() => cc.value?.dedupMode || cfg.value?.dedupMode || 'source')
 
 // 去重列（0828 D11）：会上指出「去重列丢了，要加回来」。
@@ -495,7 +496,10 @@ async function onTableSaved(tableId: string) {
       </div>
     </template>
     <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
-    <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
+    <div class="rc-field">
+      <div class="rc-field-header">
+        <label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
+      </div>
       <div class="rc-input-group" data-testid="output-table-field">
         <el-select
           class="rc-table-select grow"
@@ -527,6 +531,9 @@ async function onTableSaved(tableId: string) {
         >
           {{ preset.name }} ({{ preset.tableId }})
         </button>
+      </div>
+      <div v-if="outputTableSameAsInput" class="rc-help" data-testid="output-table-same-as-input">
+        输入表与输出表相同：按「更新父表」处理，只写这一张表。
       </div>
     </div>
     <!-- 输出字段选择 = 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。 -->
@@ -627,14 +634,7 @@ async function onTableSaved(tableId: string) {
     <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
          **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->
-    <details v-if="showAdvancedConfig" class="table-advanced">
-      <summary>高级配置</summary>
-      <div class="rc-field">
-        <label>结构化配置</label>
-        <textarea class="rc-input" rows="3" placeholder='{"globals":["列ID"]}' :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
-      </div>
-    </details>
-    <div v-else class="rc-field">
+    <div class="rc-field">
       <label><span>结构化配置</span></label>
       <textarea class="rc-input" rows="2" placeholder='{"globals":["列ID"]}' :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
     </div>
@@ -708,6 +708,8 @@ async function onTableSaved(tableId: string) {
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
+.rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
+/* 回写父表（输入表）面板：写入方式 / 定位键 / 字段映射 */
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
 .rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 5px 12px; cursor: pointer; }
 .rc-segment button.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }

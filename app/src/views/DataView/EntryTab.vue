@@ -599,7 +599,6 @@ const onEnterSearch = withoutComposition(() => onSearch())
                  真实缺失由数据查询的结构化缺表错误更新（DataQueryPanel），等后端快照接口再接真实状态。 -->
             <th style="width: 100px" :title="`物理表状态：后端暂无状态快照接口，统一显示「${PHYSICAL_TABLE_UNKNOWN_LABEL}」；数据查询返回结构化缺表错误时才标「物理表不存在」`">物理表</th>
             <th style="width: 84px" title="表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路">数据源</th>
-            <th style="width: 130px">数据量</th>
             <th
               class="et-sortable"
               :class="{ 'is-sorted': sortKey === 'keyField' }"
@@ -633,12 +632,11 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td>{{ e.tableId }}</td>
             <td>{{ e.name || '—' }}</td>
             <td>{{ e.tableName }}</td>
-            <!-- §8.3：rowCount 未知（undefined）显示「—」，0 是真实的空表才显示 0 -->
-            <td class="et-row-count" data-testid="entry-row-count">{{ e.rowCount == null ? '—' : e.rowCount }}</td>
+            <!-- §8.3：rowCount 未知（undefined）显示「—」，0 是真实的空表才显示 0；千分位与侧栏、表详情统一 -->
+            <td class="et-row-count" data-testid="entry-row-count">{{ e.rowCount == null ? '—' : e.rowCount.toLocaleString('zh-CN') }}</td>
             <!-- §10.1：无后端物理表状态快照字段，统一「状态待检查」，不猜缺表也不猜正常 -->
             <td class="et-physical-state" data-testid="entry-physical-state">{{ PHYSICAL_TABLE_UNKNOWN_LABEL }}</td>
             <td>{{ e.dsKind ?? 'MYSQL' }}</td>
-            <td data-testid="entry-data-count">{{ e.rowCount == null ? '—' : e.rowCount.toLocaleString('zh-CN') }}</td>
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
             <td>{{ e.remark || '—' }}</td>

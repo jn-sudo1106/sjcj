@@ -852,7 +852,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'sys/menu/save', desc: '保存/更新菜单资源（admin）', danger: true, impl: true, live: true },
   { path: 'sys/menu/sort', desc: '批量更新菜单排序与层级归属（admin）', danger: true, impl: true, live: true },
   { path: 'sys/menu/delete', desc: '级联删除菜单资源（admin）', danger: true, impl: true, live: true },
-  { path: 'sys/menu/clean-legacy', desc: '一键清洗老库历史残留按钮（admin）', danger: true, impl: true, live: true },
+  { path: 'sys/menu/clean-legacy', desc: '一键清洗 sys_menu 历史残留按钮（admin）', danger: true, impl: true, live: true },
 
   /* ── 角色权限管理（SysRoleAdminController，系统设置 → 用户权限设置 → 角色权限管理，仅 admin） ── */
   { path: 'sys-role/list', desc: '角色列表（admin；包含内置角色及用户数统计）', impl: true, live: true },

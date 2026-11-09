@@ -61,7 +61,7 @@ function resolveTabComponent(componentPath?: string): Component | undefined {
 /**
  * 在页面的 componentMap 里找组件。
  *
- * 后端 sys_menu 的 Tab「动作 Key」是老库 perms/route_path 迁过来的，历史数据里出现过
+ * 后端 sys_menu 的 Tab「动作 Key」是历史脏数据里的 perms/route_path 迁过来的，历史数据里出现过
  * `monitor:sourceCheck`、`monitor/sourceCheck` 这类带模块前缀的写法，直接按整串查不到组件，
  * 页面就成了「tab 栏在、内容区空白」（最难受的形态）。这里先按整串匹配，再按最后一段兜底。
  */
@@ -97,7 +97,7 @@ function uniqueTabKeys(list: { key?: unknown; id?: number }[]): string[] {
 }
 
 /**
- * 页面内部页签 (res_type = 2) 统一动态化 Composable
+ * 页面内部页签 (menu_type = 2) 统一动态化 Composable
  * 支持：后端动态数据拉取、角色权限码过滤、排序控制、URL query 自动归一化与防越权
  */
 export function useDynamicTabs(options: UseDynamicTabsOptions = {}) {

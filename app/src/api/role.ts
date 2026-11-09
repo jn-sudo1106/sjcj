@@ -1,4 +1,4 @@
-// 角色与权限管理（SYS_ROLE / SYS_ROLE_2_RES / SYS_RESOURCE）—— 系统设置 → 用户权限设置 → 角色权限管理
+// 角色与权限管理（SYS_ROLE / SYS_ROLE_2_RES / sys_menu）—— 系统设置 → 用户权限设置 → 角色权限管理
 // 后端契约：com.vanv.sys.controller.SysRoleAdminController，路径前缀 /api/v1/sys-role（bee-config）
 import { request } from './client'
 import type { Ack } from './types/common'

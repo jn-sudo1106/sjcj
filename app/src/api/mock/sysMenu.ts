@@ -1,6 +1,6 @@
 import type { SysMenuTreeNode, SysMenuForm, SysMenuSortItem } from '../sysMenuConfig'
 
-// 模拟老库历史数据与当前系统菜单树
+// 模拟 sys_menu 历史脏数据与当前系统菜单树
 export let mockResourceList: SysMenuTreeNode[] = [
   // 1. 首页 (Group: 1000)
   { id: 1000, parentId: 0, label: '首页', type: 0, linkAddress: '', modelCode: 'group:home', icon: 'HomeFilled', order: 1, status: 0, remark: '侧栏分组目录', children: [] },
@@ -42,7 +42,7 @@ export let mockResourceList: SysMenuTreeNode[] = [
   { id: 8303, parentId: 8300, label: '菜单修改', type: 3, linkAddress: '', modelCode: 'sys:menu:edit', icon: '', order: 3, status: 0, remark: '按钮权限', children: [] },
   { id: 8304, parentId: 8300, label: '菜单删除', type: 3, linkAddress: '', modelCode: 'sys:menu:delete', icon: '', order: 4, status: 0, remark: '按钮权限', children: [] },
 
-  // 老库残留测试数据
+  // sys_menu 历史脏数据样本
   { id: 900, parentId: 0, label: '用户管理 (老库残留)', type: 0, linkAddress: '', modelCode: 'legacy:users', icon: 'Setting', order: 9, status: 0, remark: '历史脏数据根节点', children: [] },
   { id: 901, parentId: 900, label: '用户导出', type: 1, linkAddress: '', modelCode: 'sys:user:export', icon: '', order: 1, status: 0, remark: '老库误标 res_type=1 的按钮', children: [] },
   { id: 902, parentId: 900, label: '用户修改', type: 1, linkAddress: '', modelCode: 'sys:user:edit', icon: '', order: 2, status: 0, remark: '老库误标 res_type=1 的按钮', children: [] },
