@@ -297,7 +297,9 @@ async function carryDirtyConfigs(configMap: Record<string, string>) {
     if (!node || !newId) continue
     const base = await baseRecordFor(newId)
     const payload = {
-      ...buildConfigPayload({ ...node, configUpdateDt: undefined }, base),
+      ...buildConfigPayload({ ...node, configUpdateDt: undefined }, base, {
+        effectiveInputTableId: flow.effectiveInputTableFor(nodeId),
+      }),
       configId: newId,
       configName: base.configName ?? node.configName,
     }
@@ -457,7 +459,7 @@ async function doCreateConfig(
   if (!opts.quiet && saving.value) return false
   if (!opts.quiet) saving.value = true
   try {
-    const payload = buildConfigPayload(node)
+    const payload = buildConfigPayload(node, {}, { effectiveInputTableId: flow.effectiveInputTableFor(nodeId) })
     const created = await configApi.addConfig(payload)
     if (!created.ok || !created.configId) {
       ElMessage.error(`${opts.quiet ? `节点「${node.title}」：` : ''}${created.message || '新增配置失败'}`)
@@ -501,7 +503,10 @@ async function doUpdateExistingConfig(node: NodeConfig, nodeId: string, opts: { 
     if (!opts.auto && !await assertConfigWritable(currentConfigId, flow.flowId)) return false
     return await enqueueConfigSave(currentConfigId, async () => {
       const base = await baseRecordFor(currentConfigId)
-      const payload = { ...buildConfigPayload(node, base), configId: currentConfigId }
+      const payload = {
+        ...buildConfigPayload(node, base, { effectiveInputTableId: flow.effectiveInputTableFor(nodeId) }),
+        configId: currentConfigId,
+      }
       const ack = await configApi.updateConfig(payload as never)
       if (ack && 'ok' in ack && !ack.ok) {
         ElMessage.error(`${opts.auto ? `节点「${node.title}」自动保存失败：` : ''}${ack.message || '保存配置失败'}`)
