@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 流程中心「关联流程到源」的选源弹窗（0903 §2.6 H05 的加强版，对齐旧平台）：
-// 表格勾选 + 按「源名称 / ID」和「所属流程」服务端筛 + ID 批量检索 + 全选本页。
+// 表格勾选 + 按「源名称 / ID」「所属网站」「所属流程」服务端筛 + ID 批量检索 + 全选本页。
+// 「所属网站」（1105 会议）：一个网站下的源通常共用流程，选网站后点「全选全部」即可一次关联。
 // 提交动作仍在 FlowCenter 的 confirmApply（分批 + 作业条 + 二次确认文案），这里只负责选。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElDialog, ElMessage } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
+import { flowCenterApi, siteApi, sourceApi, type FlowRecord, type Source } from '@/api'
 import { useSourceGroupNames } from './sourceGroupNames'
 
 const props = defineProps<{
@@ -27,6 +28,9 @@ const PAGE_SIZE = 20
 
 const keyword = ref('')
 const flowFilter = ref('')
+const siteFilter = ref('')
+const siteOptions = ref<{ id: string; name: string }[]>([])
+const siteOptLoading = ref(false)
 const flowOptions = ref<{ id: string; name: string }[]>([])
 const flowOptLoading = ref(false)
 const onlyUnbound = ref(false)
@@ -91,7 +95,7 @@ function clearSelected() {
 async function pickAllMatching() {
   if (selectingAll.value) return
   if (total.value > SELECT_ALL_MAX) {
-    ElMessage.warning(`匹配 ${total.value} 个，太多了——请先用「源名称」或「所属流程」收窄`)
+    ElMessage.warning(`匹配 ${total.value} 个，太多了——请先用「源名称」「所属网站」或「所属流程」收窄`)
     return
   }
   selectingAll.value = true
@@ -101,6 +105,7 @@ async function pickAllMatching() {
       const res = await sourceApi.sourcePaged({
         ...keywordQuery(),
         flowId: flowFilter.value || undefined,
+        siteIds: siteFilter.value || undefined,
         page: p,
         size: SELECT_ALL_PAGE,
       })
@@ -161,6 +166,7 @@ async function load() {
     const res = await sourceApi.sourcePaged({
       ...keywordQuery(),
       flowId: flowFilter.value || undefined,
+      siteIds: siteFilter.value || undefined,
       page: page.value,
       size: PAGE_SIZE,
     })
@@ -185,6 +191,19 @@ function onKeyword() {
 function onFlowFilter() {
   page.value = 1
   void load()
+}
+
+// 所属网站下拉：远程按名字搜网站（site/sitePaged 的 name 走 query，见 siteApi）
+async function searchSites(q: string) {
+  siteOptLoading.value = true
+  try {
+    const res = await siteApi.sitePaged({ name: q.trim() || undefined, page: 1, size: 30 })
+    siteOptions.value = res.list.map((site) => ({ id: site.siteId, name: site.name }))
+  } catch {
+    siteOptions.value = []
+  } finally {
+    siteOptLoading.value = false
+  }
 }
 
 // 所属流程下拉：远程按名字搜流程
@@ -235,6 +254,7 @@ watch(() => props.flow?.id, (id) => {
   if (!id) return
   keyword.value = ''
   flowFilter.value = ''
+  siteFilter.value = ''
   onlyUnbound.value = false
   chipsExpanded.value = false
   page.value = 1
@@ -243,6 +263,7 @@ watch(() => props.flow?.id, (id) => {
   void load()
   void loadGroupNames()
   void searchFlows('')
+  void searchSites('')
 }, { immediate: true })
 </script>
 
@@ -264,6 +285,20 @@ watch(() => props.flow?.id, (id) => {
         placeholder="按源名称 / ID 搜索"
         @input="onKeyword"
       >
+      <el-select
+        v-model="siteFilter"
+        class="fsp-flow"
+        data-testid="fsp-site-filter"
+        filterable
+        remote
+        clearable
+        placeholder="所属网站（全部）"
+        :remote-method="searchSites"
+        :loading="siteOptLoading"
+        @change="onFlowFilter"
+      >
+        <el-option v-for="o in siteOptions" :key="o.id" :label="`${o.name}（${o.id}）`" :value="o.id" />
+      </el-select>
       <el-select
         v-model="flowFilter"
         class="fsp-flow"

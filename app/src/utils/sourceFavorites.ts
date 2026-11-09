@@ -49,19 +49,22 @@ export async function toggleFavoriteSource(sourceId: string): Promise<boolean> {
 }
 
 /** 同一时刻只跑一次加载 */
-let loading: Promise<void> | null = null
+let loading: Promise<boolean> | null = null
 
 /**
  * 从后端拉当前账号的全部源收藏，替换本地状态。
  * 失败（未登录、网络）不清空已有状态，也不打扰——星标只是辅助信息，别为它弹错。
+ * 返回是否拉取成功（总览「我的收藏」汇总要分辨 0 条与没拉到，1108）。
  */
-export function loadFavoriteSources(): Promise<void> {
+export function loadFavoriteSources(): Promise<boolean> {
   if (loading) return loading
   loading = (async () => {
     try {
       favoriteSourceIds.value = new Set(await favoriteApi.listIds('SOURCE'))
+      return true
     } catch {
       /* 保留现状 */
+      return false
     } finally {
       favoriteSourcesLoaded.value = true
       loading = null

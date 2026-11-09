@@ -3683,6 +3683,34 @@ export const sourceGroupApi = {
  *
  * 没有版本 / 草稿 / 发布：后端还在评估（JSON 快照方案），行上 `versionManaged` 恒为 false，界面据此不显示版本相关入口。
  */
+/**
+ * 流程绑定读缓存（源详情页加载提速）：进入源画布时，主加载、头部流程切换器、流程页签各读一次
+ * sourceFlows，后两者还为了显示流程名对每条绑定的流程读一次 flowDetail（整份流程定义），
+ * 同一份数据要拉好几遍。这里把短时间内的重复读合并成一次。
+ * 任何会改绑定、改流程名 / 启停、改来源组成员的写操作前后都清空（见文件末尾 invalidateAround），
+ * 所以写完马上重读拿到的一定是新数据；save 的并发快照仍直接调 view，不走缓存。
+ */
+const BINDING_CACHE_MS = 15_000
+type CacheEntry<T> = { at: number; epoch: number; value: Promise<T> }
+let bindingCacheEpoch = 0
+const sourceFlowsCache = new Map<string, CacheEntry<SourceFlowsView>>()
+const flowLabelCache = new Map<string, CacheEntry<{ name: string; disabled?: boolean } | null>>()
+export function invalidateFlowBindingCache() {
+  bindingCacheEpoch += 1
+  sourceFlowsCache.clear()
+  flowLabelCache.clear()
+}
+function cachedRead<T>(cache: Map<string, CacheEntry<T>>, key: string, load: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key)
+  if (hit && hit.epoch === bindingCacheEpoch && Date.now() - hit.at < BINDING_CACHE_MS) return hit.value
+  const value = load()
+  const entry = { at: Date.now(), epoch: bindingCacheEpoch, value }
+  cache.set(key, entry)
+  // 失败不缓存，下一次照常重试
+  value.catch(() => { if (cache.get(key) === entry) cache.delete(key) })
+  return value
+}
+
 export const workflowBindingApi = {
   /** 流程版本（草稿 / 发布）接口是否可用。后端没有，恒为 false；流程中心据此不走版本流程。 */
   available: (): boolean => false,
@@ -3704,7 +3732,7 @@ export const workflowBindingApi = {
   load: async (sourceId: string, options: { withNames?: boolean } = {}): Promise<{ rows: WorkflowBinding[]; sourceGroupId: string | null }> => {
     // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
     if (!/^\d+$/.test(sourceId)) return { rows: [], sourceGroupId: null }
-    const view = await workflowBindingApi.view(sourceId)
+    const view = await cachedRead(sourceFlowsCache, sourceId, () => workflowBindingApi.view(sourceId))
     const groupId = view.sourceGroupId
     const groupActive = groupId ? view.bindings.filter((binding) => binding.state === 'ACTIVE') : []
     const ownActive = groupId ? [] : view.ownBindings.filter((binding) => binding.state === 'ACTIVE')
@@ -3718,7 +3746,8 @@ export const workflowBindingApi = {
     const names = new Map<string, string>()
     const disabledFlows = new Set<string>()
     if (options.withNames !== false) await Promise.all(ordered.map(async (binding) => {
-      const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
+      const flow = await cachedRead(flowLabelCache, binding.flowId, () => flowCenterApi.detail(binding.flowId)
+        .then((detail) => (detail ? { name: detail.name, disabled: detail.disabled } : null))).catch(() => null)
       if (flow?.name) names.set(binding.flowId, flow.name)
       if (flow?.disabled) disabledFlows.add(binding.flowId)
     }))
@@ -4397,3 +4426,17 @@ export const favoriteApi = {
       httpParams: { itemType, itemId: Number(itemId) },
     }),
 }
+
+/** 写操作前后都清一次绑定读缓存：写之前清，写的过程中发起的读也不会被当成新数据留下 */
+function invalidateAround<K extends string>(api: Record<K, (...args: never[]) => Promise<unknown>>, keys: K[]) {
+  for (const key of keys) {
+    const original = api[key]
+    api[key] = ((...args: never[]) => {
+      invalidateFlowBindingCache()
+      return original(...args).finally(invalidateFlowBindingCache)
+    }) as typeof original
+  }
+}
+invalidateAround(workflowBindingApi, ['save'])
+invalidateAround(sourceGroupApi, ['update', 'remove', 'changeMembers', 'changeMembersByRange', 'bindFlows', 'updateBindingState'])
+invalidateAround(flowCenterApi, ['save', 'remove', 'changeFlowEnable', 'bindSources'])

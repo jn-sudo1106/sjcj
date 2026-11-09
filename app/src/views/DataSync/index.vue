@@ -58,5 +58,6 @@ const { tabs, activeTab, selectTab, currentComponent } = useDynamicTabs({
 .sync-tabs { display: inline-flex; align-self: flex-start; gap: 4px; padding: 4px; background: #f1f5f9; border-radius: 10px; }
 .sync-tab { border: 0; background: transparent; padding: 6px 16px; color: #64748b; font-size: 13px; font-weight: 600; border-radius: 7px; cursor: pointer; }
 .sync-tab.active { background: #fff; color: #0f172a; box-shadow: 0 1px 3px #0000001a; }
-.sync-content { background: #fff; border: 1px solid #e5eaf2; border-radius: 12px; padding: 16px; min-width: 0; }
+/* 外框令牌同监控中心、指标中心各页（1107 页面盘点：此前是 12px 圆角、16px 内边距） */
+.sync-content { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); padding: 12px; min-width: 0; }
 </style>

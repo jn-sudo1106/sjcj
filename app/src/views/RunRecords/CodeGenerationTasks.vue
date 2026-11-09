@@ -336,7 +336,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
         <el-option v-for="code in ['L', 'C', 'E']" :key="code" :value="code" :label="code === 'L' ? '待处理 / 运行中' : runStateInfo(code).label" />
       </el-select>
       <el-button native-type="submit" type="primary" >查询</el-button>
-      <el-button :icon="Refresh" aria-label="刷新代码生成任务" :loading="loading" @click="load()" />
+      <el-button :icon="Refresh" class="filter-icon-btn" aria-label="刷新代码生成任务" :loading="loading" @click="load()" />
     </form>
     <el-alert v-if="error" :title="`代码生成任务加载失败：${error}`" type="error" :closable="false" show-icon />
     <el-alert v-if="executionError" :title="`执行状态查询失败：${executionError}`" type="warning" :closable="false" />
@@ -410,7 +410,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
           <el-tab-pane label="任务参数" name="params"><pre>{{ taskParamsText }}</pre><pre v-if="selected.taskResult">{{ taskResultText }}</pre></el-tab-pane>
         </el-tabs>
       </template>
-      <el-empty v-else description="选择左侧任务，查看模型调用、过程输出和生成结果" />
+      <div v-else class="detail-empty">选择左侧任务，查看模型调用、过程输出和生成结果</div>
     </section>
     </div>
     <CodeTaskRegeneration v-if="revising && regenerationJob && canDelete" :key="regenerationJob.taskId" :job="regenerationJob" @created="regenerated" @cancel="closeRegeneration" />
@@ -418,17 +418,23 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
 </template>
 
 <style scoped>
-.code-tasks { display: flex; flex-direction: column; gap: 12px; padding: 14px; overflow: hidden; min-width:0; min-height:0; }
-header { display: flex; align-items: baseline; gap: 16px; }
-h2 { font-size: 18px; margin: 0; }
-header span { font-size: 12px; color: var(--el-text-color-secondary); }
-.filters { display: flex; gap: 10px; flex-wrap: wrap; }
+/* 卡片壳、标题与采集任务页（TaskView 任务中心形态）同一套令牌，两个页签切换时版式不跳 */
+.code-tasks { display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: hidden; min-width:0; min-height:0; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
+header { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 4px; }
+h2 { color: var(--rc-text); font-size: 17px; font-weight: 700; margin: 0; }
+header span { font-size: 12px; color: var(--rc-muted); }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* 控件高 28px、字号 12px，与同页「采集任务」的筛选栏一致（1107 页面盘点：此前是 Element 默认 32px） */
+.filters :deep(.el-input__wrapper), .filters :deep(.el-select__wrapper) { min-height: 28px; height: 28px; font-size: 12px; }
+.filters :deep(.el-input__inner) { height: 26px; font-size: 12px; }
+.filters :deep(.el-button) { height: 28px; padding: 0 14px; font-size: 12px; margin-left: 0; }
+.filters .filter-icon-btn { width: 28px; padding: 0; }
 .config-select { width: 220px; max-width: 100%; }
 .task-search { width: 160px; }
 .state-select { width: 130px; }
 .task-table { flex: 1; min-height: 120px; }
 .task-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }.task-actions span { font-size:11px; color:var(--el-text-color-secondary); }
-.task-layout { display:grid; grid-template-columns:minmax(460px,1.05fr) minmax(400px,1fr); gap:12px; flex:1; min-height:0; min-width:0; }.task-list-panel { display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0; }.task-detail-panel { overflow-y:auto; min-width:0; min-height:0; padding:12px; border:1px solid var(--el-border-color-lighter); border-radius:6px; }.detail-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; font-size:13px; }.detail-heading b { overflow-wrap:anywhere; }.detail-heading span { font-weight:400; color:var(--el-text-color-secondary); }.cell-ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }.task-table small { display:block; color:var(--el-text-color-secondary); font-size:11px; }.model-endpoint { color:var(--el-text-color-secondary); font-family:Consolas,monospace; font-size:11px; }.cell-source { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--el-color-primary); font-size:12px; }
+.task-layout { display:grid; grid-template-columns:minmax(560px,1.3fr) minmax(380px,1fr); gap:12px; flex:1; min-height:0; min-width:0; }.task-list-panel { display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0; padding:10px; border:1px solid var(--rc-border-soft); border-radius:var(--rc-radius-sm); }.detail-empty { padding:48px 16px; color:var(--rc-faint); font-size:12px; text-align:center; }.task-detail-panel { overflow-y:auto; min-width:0; min-height:0; padding:14px 16px; border:1px solid var(--rc-border-soft); border-radius:var(--rc-radius-sm); }.detail-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; font-size:13px; }.detail-heading b { overflow-wrap:anywhere; }.detail-heading span { font-weight:400; color:var(--el-text-color-secondary); }.cell-ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }.task-table small { display:block; color:var(--el-text-color-secondary); font-size:11px; }.model-endpoint { color:var(--el-text-color-secondary); font-family:Consolas,monospace; font-size:11px; }.cell-source { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--el-color-primary); font-size:12px; }
 .detail-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; overflow-wrap: anywhere; }
 .model-info-source { color: var(--el-text-color-secondary); font-size: 12px; }.model-info { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }.model-info .model-address { grid-column: 1 / -1; }.model-info dt { color: var(--el-text-color-secondary); font-size: 12px; }.model-info dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 13px; }h4 { font-size: 13px; margin: 14px 0 6px; }.task-prompts { font-size: 13px; margin-top: 14px; }.task-prompts summary { cursor: pointer; }
 :deep(.el-alert) { margin-top: 8px; flex-shrink: 0; }
@@ -436,6 +442,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--el-fill-
 .task-status { display:inline-block; margin:3px 0; padding:1px 6px; border-radius:4px; font-size:11px; color:var(--el-text-color-secondary); background:var(--el-fill-color-light); }.task-status.is-succeeded { color:var(--el-color-success); background:var(--el-color-success-light-9); }.task-status.is-failed { color:var(--el-color-danger); background:var(--el-color-danger-light-9); }.task-status.is-running { color:var(--el-color-primary); background:var(--el-color-primary-light-9); }
 .result-info { display:flex; flex-wrap:wrap; gap:12px 24px; }.result-info dt,.result-paths dt { color:var(--el-text-color-secondary); font-size:12px; }.result-info dd,.result-paths dd { margin:4px 0 0; font-size:12px; overflow-wrap:anywhere; }.result-file { padding:4px 0 12px; border-bottom:1px solid var(--el-border-color-lighter); }.result-paths { display:grid; gap:12px; }.result-paths a { color:var(--el-color-primary); text-decoration:none; }.result-paths a:hover { text-decoration:underline; }.result-message { color:var(--el-text-color-secondary); font-size:12px; }
 .code-task-row-actions { display:flex; flex-direction:column; align-items:flex-start; gap:5px; }.code-task-row-actions :deep(.el-button + .el-button) { margin-left:0; }
-@media (max-width:1100px) { .task-layout { grid-template-columns:minmax(370px,1fr) minmax(340px,1fr); gap:10px; }.detail-summary,.model-info { grid-template-columns:1fr; }.model-info .model-address { grid-column:auto; } }
+@media (max-width:1100px) { .task-layout { grid-template-columns:minmax(480px,1fr) minmax(360px,1fr); gap:10px; }.detail-summary,.model-info { grid-template-columns:1fr; }.model-info .model-address { grid-column:auto; } }
 @media (max-width:760px) { .code-tasks { overflow:auto; }.task-layout { grid-template-columns:1fr; grid-template-rows:360px minmax(320px,auto); flex:none; }.task-detail-panel { overflow:visible; }header span { display:none; } }
 </style>

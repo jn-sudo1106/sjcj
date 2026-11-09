@@ -25,7 +25,8 @@ function mountDlg(modelValue: string[] = []) {
         'el-select': {
           props: ['modelValue'],
           emits: ['update:modelValue', 'change'],
-          template: '<select data-testid="fsp-flow-filter" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\', $event.target.value)"><option value=""></option><option value="flow-9">flow-9</option></select>',
+          // data-testid 由使用处透传（所属网站 / 所属流程两个下拉共用这个桩）
+          template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\', $event.target.value)"><option value=""></option><option value="flow-9">flow-9</option><option value="site-7">site-7</option></select>',
         },
       },
     },
@@ -118,6 +119,21 @@ describe('FlowSourcePickerDialog', () => {
     await w.get('[data-testid="fsp-flow-filter"]').setValue('flow-9')
     await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ flowId: 'flow-9' }))
+  })
+
+  it('所属网站筛选 → sourcePaged 带 siteIds，全选全部也按该网站取（1105 会议）', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 50, list: [src('a')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-site-filter"]').setValue('site-7')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ siteIds: 'site-7', page: 1 }))
+
+    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ siteIds: 'site-7', size: 1000 }))
   })
 
   // 2026-10-19：后端 name 只匹配名称，输 ID 搜不到；纯数字改按源 ID 查，其余仍按名称

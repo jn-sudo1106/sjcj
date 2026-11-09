@@ -15,6 +15,7 @@
 // 调用方在恰当时机（挂载完成/切表/切源/路由深链）显式调用 expose 出去的 search()/refresh()。
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { isMissingTableError, MISSING_TABLE_HINT } from '@/utils/data/missingTable'
 import { ArrowDown, ArrowUp, Coin, Filter, Warning } from '@element-plus/icons-vue'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
@@ -147,6 +148,7 @@ const page = ref(1)
 const size = ref(props.pageSize ?? 20)
 const loading = ref(false)
 const queryError = ref('')
+const missingTable = ref(false)
 const hasQueried = ref(false)
 const appliedFilter = ref<DataQueryFilter | null>(null)
 const appliedSource = ref('')
@@ -158,6 +160,7 @@ watch([() => props.tableId, () => props.sourceId], () => {
   loading.value = false
   hasQueried.value = false
   queryError.value = ''
+  missingTable.value = false
   appliedFilter.value = null
   appliedSource.value = ''
   emit('update:selectedKeys', [])
@@ -181,6 +184,7 @@ const appliedConditions = computed(() => {
 const emptyTitle = computed(() => {
   if (props.contextError) return '数据表暂不可用'
   if (!props.tableId) return '请从左侧选择数据表'
+  if (missingTable.value) return '实体表不存在'
   if (queryError.value) return '查询失败，请重试'
   if (!hasQueried.value) return '选择条件后点击查询'
   return appliedConditions.value.length ? '没有符合筛选条件的数据' : '这张表暂无数据'
@@ -230,6 +234,7 @@ async function loadRows(preserveSelection = false) {
   const requestId = ++rowRequest
   loading.value = true
   queryError.value = ''
+  missingTable.value = false
   try {
     const filter = currentFilter()
     const submitted = { ...filter, page: page.value, size: size.value }
@@ -250,12 +255,15 @@ async function loadRows(preserveSelection = false) {
     emit('loaded', { rows: result.list, total: result.total })
   } catch (error) {
     if (requestId !== rowRequest) return
-    queryError.value = String(error instanceof Error ? error.message : error).slice(0, 100)
+    const message = String(error instanceof Error ? error.message : error)
+    missingTable.value = isMissingTableError(message)
+    queryError.value = missingTable.value ? MISSING_TABLE_HINT : message.slice(0, 100)
     rows.value = []
     total.value = 0
     emit('update:selectedKeys', [])
     emit('loaded', { rows: [], total: 0 })
-    ElMessage.error(`查询失败:${queryError.value}`)
+    if (missingTable.value) ElMessage.warning(MISSING_TABLE_HINT)
+    else ElMessage.error(`查询失败:${queryError.value}`)
   } finally {
     if (requestId === rowRequest) loading.value = false
   }
@@ -496,7 +504,7 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
             <span v-if="queryError">{{ queryError }}</span>
             <span v-else-if="!contextError && appliedConditions.length" class="dqp-empty-conditions">当前条件：{{ appliedConditions.join('；') }}</span>
             <button v-if="contextError" class="rc-btn" type="button" @click="emit('retry-context')">重新加载数据表</button>
-            <button v-else-if="queryError" class="rc-btn" type="button" @click="search()">重新查询</button>
+            <button v-else-if="queryError && !missingTable" class="rc-btn" type="button" @click="search()">重新查询</button>
             <button v-else-if="appliedConditions.length" class="rc-btn" type="button" @click="clearFilters">清空筛选</button>
           </div>
         </template>

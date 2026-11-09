@@ -571,6 +571,36 @@ describe('EntryTab · 表ID列表', () => {
     expect(wrapper.findAll('tbody tr')).toHaveLength(3)
   })
 
+  // 1108：总览「我的收藏」弹层的数据表行走 ?fav=1，落地即「只看收藏」，不用再手动开开关；
+  // 关掉开关要能把参数摘掉，刷新/分享的地址和当前视图才一致。
+  it('1108 深链 fav=1 直接落在只看收藏；关掉开关后参数摘掉', async () => {
+    serverFavorites.add('2')
+    const all: EntryType[] = [
+      { tableId: '1', tableName: 'tb_a', name: '政策文件', fields: [] },
+      { tableId: '2', tableName: 'tb_b', name: '通用新闻表', fields: [] },
+    ]
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockImplementation(async (p) => {
+      const hit = p?.entryTypeId ? all.filter((e) => e.tableId === p.entryTypeId) : all
+      return { total: hit.length, list: hit }
+    })
+    await mountTab({ fav: '1' })
+    await waitForLoad()
+
+    // 只按收藏的表 ID 查（'1' 是未收藏的表，不该出现在请求里）；表格里也没有它
+    const ids = pagedSpy.mock.calls.map((c) => c[0]?.entryTypeId).filter(Boolean)
+    expect(ids).toContain('2')
+    expect(ids).not.toContain('1')
+    expect(wrapper.text()).not.toContain('政策文件')
+
+    const sw = wrapper.findComponent({ name: 'ElSwitch' })
+    await sw.vm.$emit('update:modelValue', false)
+    await sw.vm.$emit('change', false)
+    await waitForLoad()
+
+    expect(wrapper.vm.$route.query.fav).toBeUndefined()
+    expect(wrapper.text()).toContain('政策文件')
+  })
+
   it('1013 收藏星标：点击收藏变实心（后端已记），取消恢复空心；失败时回滚并提示', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
@@ -699,5 +729,64 @@ describe('EntryTab · 表ID列表', () => {
     await btn.trigger('click')
     await flushPromises()
     expect(wrapper.findComponent(QuickCkSyncDialog).props('modelValue')).toBe(false)
+  })
+
+  // 1106 §8.3 / §10.3：数据量未知不显示 0；重算回执与列表刷新读快照区分开。
+  it('数据量未知显示「—」，已知 0 才显示 0；物理表状态统一「状态待检查」', async () => {
+    const entries: EntryType[] = [
+      { tableId: 't1', tableName: 'tb_a', fields: [] },
+      { tableId: 't2', tableName: 'tb_b', rowCount: 0, fields: [] },
+      { tableId: 't3', tableName: 'tb_c', rowCount: 1240, fields: [] },
+    ]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: entries })
+    await mountTab()
+    await waitForLoad()
+
+    const counts = wrapper.findAll('[data-testid="entry-row-count"]').map((td) => td.text())
+    expect(counts).toEqual(['—', '0', '1240'])
+    // 物理表状态列：后端没有快照字段时统一「状态待检查」，不猜缺表也不猜正常
+    const physical = wrapper.findAll('[data-testid="entry-physical-state"]')
+    expect(physical).toHaveLength(3)
+    expect(physical.every((td) => td.text() === '状态待检查')).toBe(true)
+  })
+
+  it('重新计算数据量：回执明确是「重算」而非泛化「操作成功」，失败时保留列表旧值', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', rowCount: 99, fields: [] }]
+    const paged = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const calcSpy = vi.spyOn(entryApi, 'calcEntrySum').mockResolvedValue({ ok: true, message: '' })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({}) as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    // 本文件前面用例的 spy 没有 restore，mock.calls 会累积，用增量断言
+    const loadCallsBefore = paged.mock.calls.length
+    // 同文件前面的用例会在 body 里留下没关掉的 dropdown 菜单，取最后一个（本次刚打开的）
+    const menuItems = () => new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').filter((el) => el.text() === '重新计算数据量')
+    await wrapper.find('[data-testid="entry-more"]').trigger('click')
+    await flushPromises()
+    await menuItems().pop()!.trigger('click')
+    await flushPromises()
+
+    expect(calcSpy).toHaveBeenCalledWith('t1')
+    // 回执不能是泛化的「操作成功」，要点明重算动作
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('重新计算数据量'))
+    // 列表刷新读的是重算后的新快照（多一次列表请求）
+    expect(paged.mock.calls.length).toBe(loadCallsBefore + 1)
+
+    // 重算失败：保留上次成功统计（不把列表值改成 0/「—」），并给出真实错误
+    calcSpy.mockRejectedValue(new Error('重算服务不可用'))
+    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({}) as never)
+    await wrapper.find('[data-testid="entry-more"]').trigger('click')
+    await flushPromises()
+    await menuItems().pop()!.trigger('click')
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('重算服务不可用'))
+    // 失败不刷新列表，保留上次成功统计
+    expect(paged.mock.calls.length).toBe(loadCallsBefore + 1)
+    expect(wrapper.find('[data-testid="entry-row-count"]').text()).toBe('99')
   })
 })

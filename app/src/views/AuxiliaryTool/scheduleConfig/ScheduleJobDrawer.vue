@@ -403,17 +403,14 @@ defineExpose({ show })
 
     <CronEditModal ref="cronEditRef" :callback="onSubmitBatch" @refresh="onCronRefresh" />
 
-    <!-- 任务详情（只读，列全部字段） -->
-    <el-dialog v-model="detailVisible" title="任务详情" width="720px" append-to-body>
-      <el-descriptions border :column="2" size="small">
-        <el-descriptions-item v-for="field in detailFields" :key="field.label" :label="field.label">
+    <!-- 任务详情（只读，列全部字段）：实体详情统一用右侧抽屉（AGENTS.md 详情弹层约定），叠在任务列表抽屉之上 -->
+    <el-drawer v-model="detailVisible" title="任务详情" size="560px" append-to-body data-testid="schedule-job-detail">
+      <el-descriptions border :column="1" size="small">
+        <el-descriptions-item v-for="field in detailFields" :key="field.label" :label="field.label" label-class-name="sd-detail-label">
           {{ field.value }}
         </el-descriptions-item>
       </el-descriptions>
-      <template #footer>
-        <el-button type="primary" @click="detailVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
+    </el-drawer>
 
     <!-- 单条编辑用的表达式弹窗（与批量共用一个组件，mode 不同） -->
     <CronEditModal ref="singleCronRef" :callback="onSubmitCron" @refresh="innerRefresh" />
@@ -478,4 +475,5 @@ defineExpose({ show })
   justify-content: flex-end;
   padding: 10px 0 2px;
 }
+:deep(.sd-detail-label) { width: 120px; }
 </style>
