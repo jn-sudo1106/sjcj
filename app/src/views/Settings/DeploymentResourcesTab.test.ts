@@ -12,7 +12,7 @@ import DeploymentResourcesTab from './DeploymentResourcesTab.vue'
 vi.mock('@/api', () => ({ configApi: { nodeTypeList: vi.fn() } }))
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { runtimeConfigurations: vi.fn(), deploymentResources: vi.fn(), saveDeploymentResources: vi.fn(), instances: vi.fn(), generatedDeployments: vi.fn(), generatedDeploymentAction: vi.fn() } }))
 const rule = { resourceId: 'a'.repeat(32), resourceName: '网页抓取测试机', isDefault: true, configType: '90', configTypeName: '网页抓取', environment: 'test' as const, runnerId: 'r1', deploymentDirectory: 'test', enabled: true }
-const job = { jobId: 'job-1', sourceId: '430024910', flowId: '21000040', stepId: '41895', configId: '1401218', environment: 'test',
+const job = { jobId: 'job-1', deploymentId: '4667a6baf9b459dcb01b7d093671447d', sourceId: '430024910', flowId: '21000040', stepId: '41895', configId: '1401218', environment: 'test',
   gitCommit: 'a'.repeat(40), status: 'success', taskId: 'task-1', message: '代码部署完成', createdAt: '2026-11-02T01:00:00Z', updatedAt: '2026-11-02T01:02:00Z', runnerId: 'r1', runnerIp: '192.168.1.201', targetPath: 'test/links/1401218', repositoryId: 'repo1', repositoryName: '默认仓库', gitDirectory: 'links/1401218' } as GeneratedDeploymentJob
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
@@ -161,7 +161,10 @@ it('部署记录没有落盘路径时使用目标相对目录', async () => {
 
 it('部署详情的目录也可打开，切换到文件面板时关闭详情', async () => {
   const w = await setup({ configId: '1401218' })
+  expect(w.text()).toContain(job.deploymentId)
   await w.find('.el-table__body tr').trigger('click'); await flushPromises()
+  expect(document.body.querySelector('.dr-details')?.textContent).toContain(`部署 ID${job.deploymentId}`)
+  expect(document.body.querySelector('.dr-details')?.textContent).toContain(`部署任务 ID${job.jobId}`)
   const button = document.body.querySelector('[data-testid="browse-deployment-detail-directory"]') as HTMLButtonElement
   expect(button).not.toBeNull(); button.click(); await flushPromises()
   expect(w.findComponent({ name: 'RunnerFilesDrawer' }).props('directory')).toBe(job.targetPath)

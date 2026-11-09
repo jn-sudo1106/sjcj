@@ -208,9 +208,18 @@ class CodeServerTest(unittest.TestCase):
         with patch.dict('os.environ', {'RUNNER_LAN_HOST': '192.168.1.36'}):
             info = self.request('/api/runner-management/code-servers/package')
         self.assertEqual(info['platform'], f'http://192.168.1.36:{self.server.server_port}')
+        package_info=info['package']
+        self.assertTrue(package_info['version'])
+        self.assertTrue(package_info['updatedAt'])
         with patch.dict('os.environ', {'RUNNER_LAN_HOST': ''}), patch('backend.runner_management.runner.machine_ip', return_value='192.168.1.40'):
             info = self.request('/api/runner-management/code-servers/package')
         self.assertEqual(info['platform'], f'http://192.168.1.40:{self.server.server_port}')
+        self.assertEqual(info['package'],package_info)
+        with zipfile.ZipFile(io.BytesIO(code_servers.package(self.app,self.url,existing=True))) as archive:
+            self.assertEqual(json.loads(archive.read('package-version.json')),package_info)
+        with patch.object(code_servers,'PACKAGE_FILES',code_servers.PACKAGE_FILES[:-1]):
+            changed=code_servers.package_info(self.app)
+        self.assertNotEqual(changed['digest'],package_info['digest'])
 
     def start_remote(self):
         directory = Path(self.tmp.name) / 'code-server'

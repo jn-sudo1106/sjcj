@@ -506,6 +506,8 @@ def prepare(app, db, job, rule, runner):
                       (item['deploymentId'], runner['runner_id'])).fetchone():
             raise ApiError('目标目录已被其他部署配置使用，请修改部署资源的部署目录', 409)
     current = layouts.get(deployment_id)
+    if current:
+        job['deploymentId'] = deployment_id
     archive = job['archive']
     if mapped_paths:
         # Deploy the configuration's complete Git folder at the pinned commit,
@@ -535,10 +537,13 @@ def prepare(app, db, job, rule, runner):
             digest, before, old_manifest = baseline(app, 'deployment', deployment_id, runner['runner_id'], root, db)
             if not digest: raise ValueError('无法确认当前目录已下发的文件，请先停止处理程序')
             after, _, directories = snapshot_files(app, payload, db)
-            validate(before, after, server_programs(app, db, processes))
+            adds_site_script = validate(before, after, server_programs(app, db, processes))
             if set(directories) - set(old_manifest.get('directories', [])):
                 raise ValueError('公共目录结构发生变化，请先停止处理程序')
-            if 'live-file-deployment' not in json.loads(runner['capabilities']):
+            capabilities = json.loads(runner['capabilities'])
+            if adds_site_script and 'live-site-deployment' not in capabilities:
+                raise ValueError('等待 Runner 升级，以便在线下发新增网站脚本')
+            if 'live-file-deployment' not in capabilities:
                 raise ValueError('仅独立脚本发生变化；请先升级 Runner 以支持程序运行时增量下发')
         except ValueError as error:
             job.update(status='queued', message=str(error)); return

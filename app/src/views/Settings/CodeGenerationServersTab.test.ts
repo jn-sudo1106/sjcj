@@ -189,9 +189,10 @@ async function setup(role = 'admin', query: Record<string, string> = { tab: 'cod
   const w = mount(CodeGenerationServersTab, { attachTo: document.body, global: { plugins: [pinia, ElementPlus, router] } })
   wrappers.push(w); await flushPromises(); return w
 }
-it('服务器页面默认配置大模型接口，并可切换工作空间', async () => {
+it('服务器页面默认显示智能体接口，并可切换工作空间', async () => {
   const w = await setup('admin', { tab: 'code-servers' })
   expect(w.get('[data-testid="code-server-models-view"]').classes()).toContain('active')
+  expect(w.get('[data-testid="code-server-models-view"]').text()).toBe('智能体接口')
   expect(w.find('[data-testid="model-scope"]').exists()).toBe(true)
   expect(api.remoteCodeFiles).not.toHaveBeenCalled()
   await w.get('[data-testid="code-server-files-view"]').trigger('click'); await flushPromises()

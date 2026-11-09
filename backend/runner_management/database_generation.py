@@ -18,7 +18,7 @@ def read(app, task_id):
     record = json.loads(row['payload'])
     record.update(status='queued' if row['status'] == 'claimed' else row['status'], serverId=row['server_id'])
     archive = (record.get('result') or {}).get('archive')
-    if archive and archive.get('archiveId') and not archive.get('serverCodeDirectory'):
+    if archive and archive.get('archiveId') and (not archive.get('serverCodeDirectory') or not archive.get('filesScope')):
         from .generated_archives import PREFIX, public as archive_public
         with app.store.connect() as db:
             saved = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (PREFIX + archive['archiveId'],)).fetchone()

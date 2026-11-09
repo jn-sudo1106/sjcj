@@ -121,9 +121,27 @@ def create(app, selected, workspace, target):
     return record
 
 
+def changed_files(record, files):
+    before = record.get('beforeCodeFiles')
+    if not isinstance(before, dict):
+        return files
+    code_dir = record['codeDirectory'].rstrip('/') + '/'
+    prefix = (record.get('repositoryPrefix') or '').strip('/')
+    result = []
+    for item in files:
+        relative = item.get('relativePath', '')
+        if prefix:
+            relative = relative.removeprefix(prefix + '/')
+        if before.get(code_dir + relative) != item['sha256']:
+            result.append(item)
+    return result
+
+
 def public(record):
     result = {key: record.get(key) for key in ('archiveId', 'status', 'message', 'configId', 'repoId', 'directoryId',
             'directoryPath', 'taskId', 'serverId', 'createdAt', 'files', 'gitCommit', 'pushed')}
+    result['files'] = changed_files(record, record.get('files', []))
+    result['filesScope'] = 'changes' if isinstance(record.get('beforeCodeFiles'), dict) else 'archive'
     code_dir = (record.get('workspace') or {}).get('codeDir')
     if code_dir:
         from .directory_layout import safe_path
@@ -132,7 +150,7 @@ def public(record):
         kind = PureWindowsPath if '\\' in code_dir or PureWindowsPath(code_dir).drive else PurePosixPath
         files = []
         prefix = (record.get('repositoryPrefix') or '').strip('/')
-        for item in record.get('files', []):
+        for item in result['files']:
             file = dict(item)
             relative = item.get('relativePath') or ''
             if prefix and relative.startswith(prefix + '/'):
@@ -167,8 +185,9 @@ def collect(app, record):
         destination = (record['repositoryPrefix'] + '/' if record.get('repositoryPrefix') else '') + relative
         files.append({'relativePath': destination, 'sourceRelativePath': relative, 'data': item['data'], 'sha256': digest,
                       'size': len(data), 'path': record['directoryPath'] + '/' + destination})
+    files = changed_files(record, files)
     if not files:
-        raise ApiError('本次 code 目录没有生成文件，请检查生成服务输出')
+        raise ApiError('本次没有新增或修改代码文件，请检查生成服务输出')
     return sorted(files, key=lambda item: item['relativePath'])
 
 
@@ -214,7 +233,7 @@ def commit(app, archive_id):
                 raise ApiError('节点仓库目录已经变化，请重新生成或手工选择文件保存', 409)
             files = collect(app, record)
             manifest = [{key: item[key] for key in ('path', 'relativePath', 'sha256', 'size')} for item in files]
-            original_files = record.get('sourceFiles', record['files'])
+            original_files = changed_files(record, record.get('sourceFiles', record['files']))
             if original_files and original_files != manifest:
                 raise ApiError('生成文件在上次提交后发生变化，不能沿用原结果重试，请重新生成或手工保存', 409)
             record['files'] = manifest

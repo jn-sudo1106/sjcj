@@ -112,7 +112,8 @@ def listing(app, query):
         raise ApiError('分页参数无效')
     clauses, values = [], []
     for name, column in (('sourceId', 'source_id'), ('flowId', 'flow_id'), ('stepId', 'step_id'), ('configId', 'config_id'),
-                         ('taskId', 'task_id'), ('latestTaskId', 'latest_task_id'), ('archiveId', 'archive_id'), ('repositoryId', 'repo_id'), ('filePath', 'file_path')):
+                         ('taskId', 'task_id'), ('latestTaskId', 'latest_task_id'), ('archiveId', 'archive_id'), ('repositoryId', 'repo_id'),
+                         ('filePath', 'file_path'), ('archiveStatus', 'archive_status')):
         value = query.get(name) or ''
         if not isinstance(value, str) or len(value) > (2000 if name == 'filePath' else 80):
             raise ApiError('关联查询条件无效')

@@ -1,5 +1,11 @@
 import type { CodeGenerationServer, ModelInterface } from '@/api/runnerManagement'
 
+export const DEFAULT_CHAT_CDP_PORT = 9222
+
+export function modelRequestMethod(model: Pick<ModelInterface, 'kind' | 'cdpPort'>): 'GET' | 'POST' {
+  return model.kind === 'chat' && model.cdpPort === null ? 'GET' : 'POST'
+}
+
 export function matchingGenerationGitBinding(server: CodeGenerationServer | undefined, directory: string) {
   if (!server) return undefined
   const windows = /[\\]|^[A-Za-z]:/.test(server.workspace)

@@ -30,7 +30,7 @@ describe('系统设置 · tab 壳', () => {
     const { wrapper, router } = await mountAt({ tab: 'model-interfaces' })
     expect(router.currentRoute.value.query).toEqual({ tab: 'code-servers', view: 'models' })
     expect(wrapper.findComponent(CodeGenerationServersTab).exists()).toBe(true)
-    expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('大模型接口')
+    expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('智能体接口')
     wrapper.unmount()
   })
 

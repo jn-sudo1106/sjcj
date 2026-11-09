@@ -1,4 +1,5 @@
 import io
+import hashlib
 import base64
 import json
 import os
@@ -104,6 +105,16 @@ class CodeServerUpgradeTest(unittest.TestCase):
         self.assertEqual(denied.exception.code,401)
         with zipfile.ZipFile(io.BytesIO(code_servers.package(self.app,self.url,existing=True))) as archive:
             self.assertNotIn('config.json',archive.namelist());self.assertNotIn('identity.json',archive.namelist())
+            connection=json.loads(archive.read('config.package.json'))
+            example=json.loads(archive.read('config.example.json'))
+            self.assertEqual(connection['platform'],self.url)
+            self.assertTrue(connection['enrollCode'])
+            self.assertEqual(example['platform'],self.url)
+            self.assertEqual(example['enrollCode'],connection['enrollCode'])
+            with self.app.store.connect() as db:
+                code=db.execute('SELECT setting_value FROM settings WHERE setting_key=?',
+                                ('code-server-enroll:'+hashlib.sha256(connection['enrollCode'].encode()).hexdigest(),)).fetchone()
+            self.assertIsNotNone(code)
             self.assertIn('runner_management/bootstrapper.py',archive.namelist())
             self.assertIn('service.py',archive.namelist());self.assertIn('requirements.txt',archive.namelist())
         # An offline instance already on this digest completes when it reconnects.

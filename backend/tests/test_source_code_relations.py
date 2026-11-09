@@ -46,6 +46,11 @@ class SourceCodeRelationsTest(unittest.TestCase):
             sourceContext={'sourceId': '430024911', 'flowId': '21000040', 'stepId': '41895'}))
         self.assertEqual(relations.listing(self.app, {'configId': '101'})['total'], 4)
         self.assertEqual(relations.listing(self.app, {'sourceId': '430024910'})['items'][0]['gitCommit'], 'a' * 40)
+        generated_archives.store(self.app, self.archive(archiveId='archive-3', status='failed'))
+        result = relations.listing(self.app, {'sourceId': '430024910', 'flowId': '21000040', 'stepId': '41895',
+                                              'configId': '101', 'archiveStatus': 'committed'})
+        self.assertEqual(result['total'], 2)
+        self.assertEqual({row['archiveId'] for row in result['items']}, {'archive-1'})
 
     def test_unknown_source_is_not_inferred_from_config_or_directory(self):
         generated_archives.store(self.app, self.archive(sourceContext={}))

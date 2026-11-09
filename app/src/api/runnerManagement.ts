@@ -46,6 +46,10 @@ export interface SourceCodeTask {
   taskId: string; sourceId: string; sourceName: string; flowId: string; configId: string; nodeName: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'; createdAt: string; startedAt: string; finishedAt: string; message: string; archiveId: string; gitCommit: string
 }
+export interface SourceCodeRelation {
+  relationId: string; archiveId: string; repoId: string; directoryId: string; filePath: string
+  gitCommit: string; archiveStatus: string
+}
 export interface SourceGenerationSnapshot {
   sourceId: string; name: string; url: string; flowId: string
   nodes: { stepId?: string; configId?: string; name: string; isRoot?: boolean; enabled: boolean }[]
@@ -584,7 +588,7 @@ export interface ModelInterface {
   timeoutSeconds: number
   inputFileDir: string
   prjDir?: string
-  cdpPort?: number
+  cdpPort?: number | null
   testSystemPrompt?: string
   testUserPrompt?: string
   codeDir: string
@@ -627,13 +631,14 @@ export interface CodeGenerationServer {
   upgrade?: { digest: string; requestId: string; status: 'pending' | 'waiting' | 'upgrading' | 'succeeded' | 'failed'; message: string } | null
 }
 export interface CodeServerRelease { digest: string; version: string; publishedAt: string }
+export interface CodeServerPackageInfo { platform: string; package?: { version: string; digest: string; updatedAt: string } }
 export interface RemoteCodeFile {
   name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: string; sha256?: string | null
   content?: string; data?: string; accessError?: string
 }
 export interface ModelInterfaceTestInput {
   taskId?: string
-  cdpPort?: number
+  cdpPort?: number | null
   interfaceId: string; prompt: string; model?: string; stream?: boolean
   title?: string; prjDir?: string; inputFileDir?: string; codeDir?: string; outputFileDir?: string; url?: string; systemPrompt?: string
 }
@@ -673,6 +678,8 @@ export const runnerManagementApi = {
   setGenerationTypeDefault: (repoId: string, directoryId: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}/generation-default`, 'POST', {}),
   saveNodeGenerationSettings: (body: Pick<NodeGenerationSettings, 'configId'> & Partial<Omit<NodeGenerationSettings, 'configId'>>) => request<NodeGenerationSettings>('/site-scripts/task-config', 'POST', body),
   sourceCodeTasks: () => request<SourceCodeTask[]>('/source-code-tasks'),
+  sourceCodeRelations: (context: { sourceId: string; flowId: string; stepId: string; configId: string }) =>
+    request<{ items: SourceCodeRelation[]; total: number }>('/source-code-relations?' + new URLSearchParams({ ...context, archiveStatus: 'committed', size: '20' })),
   createSourceCodeTasks: (sources: SourceGenerationSnapshot[]) => request<{ created: SourceCodeTask[]; skipped: { sourceId: string; name: string; reason: string }[] }>('/source-code-tasks', 'POST', { sources }),
   saveGenerationPreference: (configId: string, autoCommit: boolean) => request<{ autoCommit: boolean }>('/site-scripts/generation-settings', 'POST', { configId, autoCommit }),
   commitGeneratedCode: (archiveId: string) => request<GeneratedCodeArchive>(`/site-scripts/generated-results/${encodeURIComponent(archiveId)}/commit`, 'POST', {}),
@@ -694,7 +701,7 @@ export const runnerManagementApi = {
     return response.blob()
   },
   codeServerEnrollmentCode: () => request<{ code: string; expiresAt: string }>('/code-servers/enrollment-code', 'POST', {}),
-  codeServerPackageInfo: () => request<{ platform: string }>('/code-servers/package'),
+  codeServerPackageInfo: () => request<CodeServerPackageInfo>('/code-servers/package'),
   remoteCodeFiles: <T = { items: RemoteCodeFile[]; path: string }>(serverId: string, input: Record<string, unknown>) => request<T>(`/code-servers/${encodeURIComponent(serverId)}/files`, 'POST', input),
   importRemoteCode: (serverId: string, input: { repositoryId: string; directoryId: string; paths: string[]; overwrite: boolean }) => request<CodeRepositoryUploadResult>(`/code-servers/${encodeURIComponent(serverId)}/import`, 'POST', input),
   downloadCodeServerPackage: async (platform: string, digest?: string) => {

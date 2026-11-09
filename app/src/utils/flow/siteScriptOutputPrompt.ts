@@ -12,6 +12,10 @@ export function withSiteScriptQueuePrompt(prompt: string, queueName = ''): strin
 
 const fieldBlock = /(?:\n\n)?【当前节点输出字段】\n[\s\S]*?\n【输出字段结束】/g
 
+export function siteScriptOutputBlock(prompt: string) {
+  return prompt.match(fieldBlock)?.at(-1)?.trim() || ''
+}
+
 /** Replace only the generated field block, preserving the user's instructions. */
 export function withSiteScriptOutputFields(prompt: string, fields: SiteScriptOutputField[] = [], table = ''): string {
   const body = prompt.replace(fieldBlock, '')

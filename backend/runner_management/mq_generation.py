@@ -159,7 +159,7 @@ def normalize(message,binding):
 def model_call_info(app, record, selected=None):
     """Capture resolved interface identity without credentials or sending a model request."""
     from .generation_tasks import read_config
-    from .model_interfaces import listing
+    from .model_interfaces import listing, model_request_method
     from .code_servers import registry
     from .server import now
     if selected is None:
@@ -173,7 +173,7 @@ def model_call_info(app, record, selected=None):
     endpoint = address.scheme + '://' + address.netloc.rsplit('@', 1)[-1] + address.path
     server = next((item for item in registry(app) if item['serverId'] == selected.get('generationServerId')), {})
     return {'interfaceId': selected['id'], 'name': selected['name'], 'kind': selected['kind'], 'model': selected['model'],
-            'endpoint': endpoint, 'method': 'GET' if selected['kind'] == 'chat' else 'POST',
+            'endpoint': endpoint, 'method': model_request_method(selected),
             'timeoutSeconds': selected['timeoutSeconds'], 'serverId': selected.get('generationServerId', ''),
             'serverName': server.get('name', ''), 'serverAddress': server.get('ipAddress', ''), 'capturedAt': now()}
 

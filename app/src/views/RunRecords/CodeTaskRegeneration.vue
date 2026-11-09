@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { runnerManagementApi as api, type MqCodeJob, type ModelInterface } from '@/api/runnerManagement'
+import { fillNodePrompt, nodePromptApi, type NodePromptTemplate } from '@/api/nodePrompts'
 import { createGenerationTaskId as newRequestId } from '@/utils/generationWorkspace'
+import { siteScriptOutputBlock, withSiteScriptQueuePrompt } from '@/utils/flow/siteScriptOutputPrompt'
 import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVariables.vue'
 import AiCodeWorkspaceDialog from '@/components/AiCodeWorkspaceDialog.vue'
+import PromptTemplatePicker from '@/views/FlowCanvas/inspector/PromptTemplatePicker.vue'
 
 const props = defineProps<{ job: MqCodeJob }>()
 const emit = defineEmits<{ created: [job: MqCodeJob]; cancel: [] }>()
@@ -12,17 +16,70 @@ const prepared = ref<Awaited<ReturnType<typeof api.prepareCodeRegeneration>> | n
 const systemPrompt = ref(''), userPrompt = ref(''), correction = ref(''), interfaceId = ref(''), updateNodePrompts = ref(false)
 const rightTab = ref('result')
 const open = ref(true), showPrevious = ref(false)
+const templates = ref<NodePromptTemplate[]>([]), templatesLoading = ref(false), templateError = ref('')
+const selectedTemplateId = ref(0)
+const promptText = computed(() => JSON.stringify([systemPrompt.value, userPrompt.value]))
+let appliedPromptText = ''
 let requestId = newRequestId(), submittedBody = '', alive = true
 const files = computed(() => props.job.result?.archive?.files || [])
 const modelMissing = computed(() => !!interfaceId.value && !models.value.some(model => model.id === interfaceId.value))
 const ready = computed(() => !loading.value && !!prepared.value && !modelMissing.value && !!interfaceId.value && !!systemPrompt.value.trim() && !!userPrompt.value.trim())
+const missingTemplateFields = computed(() => selectedTemplateId.value > 0 && /\{\{\s*output_fields\s*\}\}/.test(systemPrompt.value + '\n' + userPrompt.value))
 function repositoryFile(path: string) { return { path: '/settings', query: { tab: 'code-repos', repoId: props.job.result?.archive?.repoId, filePath: path } } }
+
+async function loadTemplates(snapshot: NonNullable<typeof prepared.value>) {
+  templatesLoading.value = true
+  try {
+    const sourceType = snapshot.generation.configType || (await api.resolveGenerationDestination({
+      configId: snapshot.context.configId, queueName: snapshot.generation.queueName,
+    })).configType
+    const items = await nodePromptApi.list({ sourceType, templateUse: 'script' })
+    if (alive) templates.value = items.filter(item => item.isActive === 1)
+  } catch (e) {
+    if (alive) templateError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (alive) templatesLoading.value = false
+  }
+}
+
+async function selectTemplate(id: number) {
+  if (!prepared.value || loading.value || submitting.value || id === selectedTemplateId.value) return
+  if (!id) { selectedTemplateId.value = 0; return }
+  const template = templates.value.find(item => item.promptId === id)
+  if (!template) return
+  if (promptText.value !== appliedPromptText) {
+    try {
+      await ElMessageBox.confirm('切换提示词将替换当前系统和用户提示词，是否继续？', '切换提示词', {
+        confirmButtonText: '切换', cancelButtonText: '保留当前内容', type: 'warning',
+      })
+    } catch { return }
+  }
+  if (!alive || submitting.value) return
+  const { generation, context } = prepared.value
+  const original = generation.userPrompt || ''
+  const outputBlock = siteScriptOutputBlock(original)
+  const description = original.match(/^[ \t]*(?:-[ \t]*)?需求描述[：:][ \t]*([^\r\n]+)$/m)?.[1]?.trim()
+  const variables = { ...context, source_id: context.sourceId, config_id: context.configId,
+    url: generation.url, queue_name: generation.queueName,
+    ...(outputBlock ? { output_fields: outputBlock, output_table: outputBlock.match(/^输出表：(.+)$/m)?.[1] || '' } : {}),
+    ...(description ? { describe: description } : {}),
+  }
+  systemPrompt.value = fillNodePrompt(template.systemPrompt, variables)
+  const rendered = fillNodePrompt(template.userPromptTemplate || original, variables)
+  const prompt = outputBlock && !rendered.includes(outputBlock) ? `${rendered}\n\n${outputBlock}` : rendered
+  userPrompt.value = withSiteScriptQueuePrompt(prompt, generation.queueName)
+  selectedTemplateId.value = id
+  appliedPromptText = promptText.value
+}
+
 onMounted(async () => {
   try {
     const [snapshot, settings] = await Promise.all([api.prepareCodeRegeneration(props.job.taskId), api.modelInterfaces()])
     if (!alive) return
     prepared.value = snapshot; models.value = settings.items.filter(model => model.enabled)
     systemPrompt.value = snapshot.generation.systemPrompt || ''; userPrompt.value = snapshot.generation.userPrompt || ''; interfaceId.value = snapshot.generation.interfaceId || ''
+    appliedPromptText = promptText.value
+    void loadTemplates(snapshot)
   } catch (e) { if (alive) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (alive) loading.value = false }
 })
@@ -52,7 +109,10 @@ async function submit() {
       <div class="regeneration-columns">
       <form class="regeneration-form" @submit.prevent="submit">
         <div class="regeneration-mode">任务方式<span>提交后创建新任务，原任务记录保留</span></div>
-        <label>模型接口<el-select v-model="interfaceId" aria-label="重新生成模型接口" :disabled="submitting || loading" filterable><el-option v-if="modelMissing" :value="interfaceId" :label="`${interfaceId}（已停用或不存在）`" disabled /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'}`" /></el-select></label>
+        <PromptTemplatePicker :items="templates" :model-value="selectedTemplateId" :loading="templatesLoading" :disabled="loading || submitting" test-id="regeneration-prompt-template" @select="selectTemplate" />
+        <el-alert v-if="templateError" :title="`提示词模板加载失败：${templateError}`" type="warning" :closable="false" />
+        <el-alert v-if="missingTemplateFields" title="原任务没有记录输出字段，请在提示词中补全字段名和字段 ID" type="warning" :closable="false" />
+        <label>智能体接口<el-select v-model="interfaceId" aria-label="重新生成智能体接口" :disabled="submitting || loading" filterable><el-option v-if="modelMissing" :value="interfaceId" :label="`${interfaceId}（已停用或不存在）`" disabled /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'}`" /></el-select></label>
         <CodeGenerationPromptVariables />
         <div class="regeneration-prompts">
           <label>系统提示词<el-input v-model="systemPrompt" aria-label="重新生成系统提示词" type="textarea" :rows="12" maxlength="12000" :disabled="submitting || loading" /></label>
