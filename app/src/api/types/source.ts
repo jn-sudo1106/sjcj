@@ -486,6 +486,9 @@ export interface Step {
   // 原样回读 null（legacyAdapters:1089），与「未提交」的 undefined 语义不同——ROOT 行
   // 输出表差异判断（useStepWrite）依赖这个三态。
   outputTable?: string | null
+  /** 回填目标表与物理列（后端 fillEntry / fillContext），仅属于本步骤。 */
+  fillTable?: string | null
+  fillColumns?: string[]
   configId?: string // 本步骤使用配置
   /** @deprecated 0804 拍板：任务 URL 来源字段已从 UI 删除，仅供历史流程回读，见开发方案 §2.3。
    *  2026-08-26 核实：这个字段名从未对上过真实响应（nextConfigPaged 没有 urlSourceField 这个

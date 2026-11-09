@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useFlowStore } from '@/stores/flow'
@@ -15,7 +15,6 @@ import { entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType, RuleOrchestration } from '@/api'
 import { mergeStepForWrite } from '@/utils/flow/stepPersist'
-import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 
 const INPUT_TABLE: EntryType = {
@@ -837,146 +836,128 @@ describe('TableTab · 出参列边界与报文结构（1106 W4）', () => {
   })
 })
 
-describe('TableTab · 单表/多表输出开关（1106 W5）', () => {
-  const MAIN_TABLE: EntryType = {
-    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
-    fields: [
-      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
-      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
-      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
-    ],
-  }
-  const SUB_TABLE: EntryType = {
-    tableId: '2103400', tableName: 'sense_data.TB_FILES', name: '附件资源表',
-    fields: [
-      { prop: 'file_id', desc: '文件ID', type: 'string', required: false, columnName: 'K1', itemId: '7001' },
-      { prop: 'file_name', desc: '文件名', type: 'string', required: false, columnName: 'K2', itemId: '7002' },
-      { prop: 'size', desc: '大小', type: 'string', required: false, columnName: 'K5', itemId: '7003' },
-    ],
-  }
-  const SECOND_SUB: EntryType = { tableId: '2103500', tableName: 'sense_data.TB_OTHER', name: '其它附表', fields: [] }
-  const rootConfig = { table: { entryTypeId: 2103330, keys: ['news'], colMap: [] as Array<{ colId: string; fromId: string }> } }
-
-  async function mountMulti(structuredConfig?: string) {
+describe('TableTab · 回填表和字段', () => {
+  async function open(
+    template = 'web-detail',
+    fill: { fillTable?: string | null; fillColumns?: string[] } = { fillTable: INPUT_TABLE.tableId, fillColumns: ['K2', 'K99'] },
+  ) {
     mockAssets()
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: [MAIN_TABLE, SUB_TABLE, SECOND_SUB] })
-    vi.spyOn(entryApi, 'entryDetail').mockImplementation(async (tableId: string) =>
-      [MAIN_TABLE, SUB_TABLE, SECOND_SUB].find((table) => table.tableId === tableId) ?? MAIN_TABLE)
     setActivePinia(createPinia())
     const flow = useFlowStore()
-    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
-    cfg.collectCfg!.inputTable = '2103330'
-    cfg.collectCfg!.outputTable = '2103330'
-    if (structuredConfig !== undefined) cfg.collectCfg!.structuredConfig = structuredConfig
-    flow.configs['web-1'] = cfg
-    flow.select('web-1')
+    const cfg = cloneConfig(NODE_CONFIGS[template])
+    cfg.configId = '13'
+    cfg.taskCfg = { queue: '', urlRule: '', ...fill }
+    flow.configs['8914101'] = cfg
+    flow.main = ['start', '8914101', 'end']
+    flow.select('8914101')
     flow.setActiveTab('table')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     return { flow, wrapper }
   }
-  const configOf = (flow: ReturnType<typeof useFlowStore>) =>
-    JSON.parse(flow.configs['web-1'].collectCfg?.structuredConfig || '{}')
-  // codeRule 走「配置保存」报文（buildConfigPayload），不在 stepModify 报文里。
-  const codeRuleOf = (flow: ReturnType<typeof useFlowStore>) =>
-    String(buildConfigPayload(flow.configs['web-1']).codeRule ?? '')
 
-  it('默认单表：有「写入方式」，不渲染副表分组，保存报文不写 table.subs', async () => {
-    const { flow, wrapper } = await mountMulti(JSON.stringify(rootConfig))
-    const segment = wrapper.get('[data-testid="output-mode-segment"]')
-    expect(segment.text()).toContain('单表')
-    expect(segment.text()).toContain('多表')
-    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(false)
-    expect(codeRuleOf(flow)).not.toContain('subs')
+  it('未配置回填时只有「输出字段二（回填数据）」开关，不展示表选择和字段', async () => {
+    const { wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="fill-enabled-toggle"]').text()).toContain('输出字段二（回填数据）')
+    expect((wrapper.get('[data-testid="fill-enabled-toggle"] input').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('[data-testid="fill-table-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="fill-fields-list"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('切到多表出现副表分组；选副表 + 勾字段按 code 自动生成 colMap，并写进报文 subs', async () => {
-    const { flow, wrapper } = await mountMulti(JSON.stringify(rootConfig))
-    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(2)').trigger('click')
-    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(true)
-    const select = wrapper.get('[data-testid="sub-output-table"]').findComponent({ name: 'ElSelect' })
-    select.vm.$emit('update:modelValue', '2103400')
+  it('勾选后默认回填到入参表，并展示该表字段供选择', async () => {
+    const { flow, wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
+    flow.configs['8914101'].collectCfg!.inputTable = INPUT_TABLE.tableId
     await flushPromises()
-    expect(wrapper.get('[data-testid="sub-table-current"]').text()).toContain('附件资源表 · 2103400')
-    const chips = wrapper.findAll('[data-testid="sub-output-fields-list"] .rc-tag')
-    expect(chips).toHaveLength(3)
-    await chips[0].trigger('click')
-    await chips[1].trigger('click')
-    const config = configOf(flow)
-    expect(config.table.subs).toHaveLength(1)
-    expect(config.table.subs[0]).toMatchObject({
-      entryTypeId: 2103400,
-      keys: ['news'],
-      colMap: [{ colId: '7001', fromId: 'title' }, { colId: '7002', fromId: 'url' }],
-    })
-    expect(codeRuleOf(flow)).toContain('"entryTypeId":2103400')
-    // 主表定义原样保留
-    expect(config.table.entryTypeId).toBe(2103330)
-    expect(config.table.keys).toEqual(['news'])
+
+    await wrapper.get('[data-testid="fill-enabled-toggle"] input').setValue(true)
+    await flushPromises()
+
+    expect(flow.configs['8914101'].taskCfg?.fillTable).toBe(INPUT_TABLE.tableId)
+    expect(flow.configs['8914101'].taskCfg?.fillColumns).toEqual([])
+    expect(wrapper.get('[data-testid="fill-table-field"]').text()).toContain(INPUT_TABLE.tableId)
+    expect(wrapper.findAll('[data-testid="fill-fields-list"] .rc-tag')).toHaveLength(2)
     wrapper.unmount()
   })
 
-  it('主表里没有同名列的副表字段标「待对应」：点它只提示，不写 colMap', async () => {
-    const { flow, wrapper } = await mountMulti(JSON.stringify(rootConfig))
-    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(2)').trigger('click')
-    wrapper.get('[data-testid="sub-output-table"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '2103400')
+  it('打开时回显目标表、勾选态和物理列，未知列保留且不触发修改', async () => {
+    const { flow, wrapper } = await open()
+    flow.markSaved()
     await flushPromises()
-    const chips = wrapper.findAll('[data-testid="sub-output-fields-list"] .rc-tag')
-    expect(chips[2].text()).toContain('待对应')
-    await chips[2].trigger('click')
-    expect(wrapper.get('[data-testid="sub-table-hint"]').text()).toContain('没有同名列')
-    expect(configOf(flow).table.subs[0].colMap).toEqual([])
+    expect((wrapper.get('[data-testid="fill-enabled-toggle"] input').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.get('[data-testid="fill-table-field"]').text()).toContain(INPUT_TABLE.tableId)
+    expect(wrapper.findAll('[data-testid="fill-fields-list"] .rc-tag.on')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="unknown-fill-fields"]').text()).toContain('K99')
+    expect(flow.dirty).toBe(false)
     wrapper.unmount()
   })
 
-  it('已配置 1 张副表时「更换」选第二张被拒：就地提示，subs 不变', async () => {
-    const configured = { table: { ...rootConfig.table, subs: [{ entryTypeId: 2103400, keys: ['news'], colMap: [] }] } }
-    const { flow, wrapper } = await mountMulti(JSON.stringify(configured))
-    await wrapper.get('[data-testid="change-sub-type"]').trigger('click')
-    wrapper.get('[data-testid="sub-output-table"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '2103500')
-    await flushPromises()
-    expect(wrapper.get('[data-testid="sub-table-hint"]').text()).toContain('最多 1 张副表')
-    const config = configOf(flow)
-    expect(config.table.subs).toHaveLength(1)
-    expect(config.table.subs[0].entryTypeId).toBe(2103400)
+  it('勾选字段发送物理列名，并保留尚未解析的历史列', async () => {
+    const { flow, wrapper } = await open()
+    const rev = flow.flowRev
+    await wrapper.get('[aria-label="选择回填字段 商品ID"]').setValue(true)
+    const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg?.fillColumns).toEqual(['K2', 'K99', 'K1'])
+    expect(flow.flowRev).toBeGreaterThan(rev)
+    expect(stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1' })))
+      .toMatchObject({ fillEntry: 2102154, fillContext: 'K2,K99,K1' })
     wrapper.unmount()
   })
 
-  it('切回单表：确认后移除 subs；取消则留在多表且配置不变', async () => {
-    const configured = { table: { ...rootConfig.table, subs: [{ entryTypeId: 2103400, keys: ['news'], colMap: [] }] } }
-    const { flow, wrapper } = await mountMulti(JSON.stringify(configured))
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce(new Error('cancel'))
-    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(1)').trigger('click')
+  it('切换目标表同时清空旧字段，不继承旧表同名 K 列', async () => {
+    const { flow, wrapper } = await open()
+    wrapper.get('[data-testid="fill-table-field"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '901')
     await flushPromises()
-    expect(confirm).toHaveBeenCalled()
-    expect(configOf(flow).table.subs).toHaveLength(1)
-    expect(wrapper.get('[data-testid="output-mode-segment"] button:nth-child(2)').classes()).toContain('active')
-    confirm.mockResolvedValueOnce('confirm' as never)
-    await wrapper.get('[data-testid="output-mode-segment"] button:nth-child(1)').trigger('click')
-    await flushPromises()
-    expect(configOf(flow).table.subs).toBeUndefined()
-    expect(wrapper.find('[data-testid="sub-table-group"]').exists()).toBe(false)
-    expect(codeRuleOf(flow)).not.toContain('subs')
+    expect(flow.configs['8914101'].taskCfg).toMatchObject({ fillTable: '901', fillColumns: [] })
     wrapper.unmount()
   })
 
-  it('历史配置 2 张以上副表：只读提示，保存不截断原配置', async () => {
-    const overflow = {
-      table: {
-        ...rootConfig.table,
-        subs: [
-          { entryTypeId: 2103400, keys: ['files'], colMap: [] },
-          { entryTypeId: 2103500, keys: ['more'], colMap: [] },
-        ],
-      },
-    }
-    const { flow, wrapper } = await mountMulti(JSON.stringify(overflow))
-    expect(wrapper.get('[data-testid="sub-table-overflow"]').text()).toContain('只支持主表 + 1 张副表')
-    expect(wrapper.find('[data-testid="sub-output-fields-list"]').exists()).toBe(false)
-    const text = flow.configs['web-1'].collectCfg?.structuredConfig ?? ''
-    expect(JSON.parse(text).table.subs).toHaveLength(2)
-    expect(codeRuleOf(flow)).toContain('"entryTypeId":2103500')
+  it('清空目标表发送 clearFill，并且不从旧快照恢复表和字段', async () => {
+    const { flow, wrapper } = await open()
+    wrapper.get('[data-testid="fill-table-field"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', undefined)
+    await flushPromises()
+    const cfg = flow.configs['8914101']
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1', snapshot: {
+      stepId: '8914101', sourceId: '-1', name: '旧配置', enabled: true, fillTable: '2102154', fillColumns: ['K2'],
+    } }))
+    expect(payload.clearFill).toBe(true)
+    expect(payload).not.toHaveProperty('fillEntry')
+    expect(payload).not.toHaveProperty('fillContext')
+    expect(wrapper.find('[data-testid="clear-fill-fields"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('取消勾选发送 clearFill，收起表选择和字段，且不从旧快照恢复', async () => {
+    const { flow, wrapper } = await open()
+    await wrapper.get('[data-testid="fill-enabled-toggle"] input').setValue(false)
+    await flushPromises()
+    const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg).toMatchObject({ fillTable: null, fillColumns: [] })
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1', snapshot: {
+      stepId: '8914101', sourceId: '-1', name: '旧配置', enabled: true, fillTable: '2102154', fillColumns: ['K2'],
+    } }))
+    expect(payload.clearFill).toBe(true)
+    expect(payload).not.toHaveProperty('fillEntry')
+    expect(payload).not.toHaveProperty('fillContext')
+    expect(wrapper.find('[data-testid="fill-table-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="clear-fill-fields"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each(['login-collect', 'file-download', 'rule'])('%s 隐藏回填配置，保留历史数据', async (template) => {
+    const { flow, wrapper } = await open(template)
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
+    expect(flow.configs['8914101'].taskCfg).toMatchObject({ fillTable: INPUT_TABLE.tableId, fillColumns: ['K2', 'K99'] })
+    wrapper.unmount()
+  })
+
+  it.each(['web-detail'])('%s 支持明确清空，报文用空串覆盖旧字段', async (template) => {
+    const { flow, wrapper } = await open(template)
+    await wrapper.get('[data-testid="clear-fill-fields"]').trigger('click')
+    const cfg = flow.configs['8914101']
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1' }))
+    expect(payload).toMatchObject({ fillEntry: 2102154, fillContext: '' })
     wrapper.unmount()
   })
 })

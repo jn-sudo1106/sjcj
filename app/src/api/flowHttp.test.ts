@@ -306,6 +306,39 @@ describe('flow 流程 HTTP 契约', () => {
     })
   })
 
+  it('回填字段：新建走 query，修改和 ROOT 走 JSON，版本信息保留', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
+    const { itemApi } = await import('./index')
+    const step = { stepId: '12', sourceId: '-1', name: '回填步骤', enabled: true, fillTable: '2102154', fillColumns: ['K2'] }
+    const ref = { flowId: '42', versionId: '1050', ver: 3 }
+    await itemApi.saveItemConfig(step, ref)
+    const [url, create] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const query = new URL(url, 'http://local.test').searchParams
+    expect(create.method).toBe('POST')
+    expect(query.get('fillEntry')).toBe('2102154')
+    expect(query.get('fillContext')).toBe('K2')
+    expect(query.get('versionId')).toBe('1050')
+    await itemApi.stepModify({ ...step, fillColumns: [] }, ref)
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toMatchObject({ fillEntry: 2102154, fillContext: '', versionId: '1050', ver: 3 })
+    await itemApi.rootConfigUpdate('10', '11', '42', undefined, ref, undefined, { fillTable: '2102154', fillColumns: [] })
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ itemConfig: 10, configId: 11, flowId: 42, isRoot: 1, fillEntry: 2102154, fillContext: '', versionId: '1050', ver: 3 })
+  })
+
+  it('取消回填：新建、修改和 ROOT 都使用 clearFill，保留版本引用', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
+    const { itemApi } = await import('./index')
+    const step = { stepId: '12', sourceId: '-1', name: '回填步骤', enabled: true, fillTable: null, fillColumns: [] }
+    const ref = { flowId: '42', versionId: '1050', ver: 3 }
+    await itemApi.saveItemConfig(step, ref)
+    expect(new URL(fetchMock.mock.calls[0][0], 'http://local.test').searchParams.get('clearFill')).toBe('true')
+    await itemApi.stepModify(step, ref)
+    const modified = JSON.parse(String(fetchMock.mock.calls[1][1].body))
+    expect(modified).toMatchObject({ clearFill: true, versionId: '1050', ver: 3 })
+    expect(modified).not.toHaveProperty('fillEntry')
+    await itemApi.rootConfigUpdate('10', '11', '42', undefined, ref, undefined, { fillTable: null, fillColumns: [] })
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ itemConfig: 10, configId: 11, flowId: 42, isRoot: 1, clearFill: true, versionId: '1050', ver: 3 })
+  })
+
   it('GET /v1/flow/changeFlowEnable：ids 逗号串 + enable 0/1（F6 启停）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '处理成功，共处理 2 条', data: null }))
     const { flowCenterApi } = await import('./index')

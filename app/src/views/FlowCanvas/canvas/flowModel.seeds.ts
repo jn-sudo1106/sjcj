@@ -1148,6 +1148,8 @@ function applyStepTaskFields(cfg: NodeConfig, step: Step) {
     ...(step.urlRule !== undefined ? { urlRule: step.urlRule } : {}),
     ...(step.contextMap !== undefined ? { contextMap: [...step.contextMap] } : {}),
     ...(step.outColumns !== undefined ? { outColumns: [...step.outColumns] } : {}),
+    ...(step.fillTable !== undefined ? { fillTable: step.fillTable } : {}),
+    ...(step.fillColumns !== undefined ? { fillColumns: [...step.fillColumns] } : {}),
   }
 }
 

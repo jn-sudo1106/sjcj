@@ -155,7 +155,7 @@ export const useNodeStore = defineStore('node', () => {
    * 改这些字段必须让 flowRev 自增：步骤自动保存只 watch flowRev（useFlowAutosave.bind），
    * 否则用户勾了输入字段就走人，什么都没落库。
    */
-  const STEP_LEVEL_TASK_KEYS = ['contextMap', 'paramValues', 'outColumns']
+  const STEP_LEVEL_TASK_KEYS = ['contextMap', 'paramValues', 'outColumns', 'fillTable', 'fillColumns']
   function touchesStepLevelTask(patch: Partial<TaskConfig>): boolean {
     return STEP_LEVEL_TASK_KEYS.some((key) => key in patch)
   }
@@ -176,6 +176,7 @@ export const useNodeStore = defineStore('node', () => {
     }
     if ('contextMap' in next) next.contextMap = [...new Set((next.contextMap ?? []).filter(Boolean))]
     if ('outColumns' in next) next.outColumns = [...new Set((next.outColumns ?? []).filter(Boolean))]
+    if ('fillColumns' in next) next.fillColumns = [...new Set((next.fillColumns ?? []).filter(Boolean))]
     // 固定产物类型节点的队列不可覆盖（0711 T5，与 patchCollect 的输出表防线同一口径）
     if ('queue' in next) {
       const cap = collectorCapabilityOf(c)

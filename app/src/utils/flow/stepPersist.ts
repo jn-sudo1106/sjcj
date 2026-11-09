@@ -478,6 +478,8 @@ export function mergeStepForWrite(args: {
     // 没配置过的空 outputTable 直接提交上去（旧写法遇到规则节点只填了输入表就会把 outputTable
     // 提交成空/沿用创建时从上游继承来的陈旧值，跟编辑框「默认 = 输入表」的承诺对不上）。
     outputTable: effectiveOutputTable(cfg) || snapshot?.outputTable,
+    fillTable: cfg.taskCfg?.fillTable !== undefined ? cfg.taskCfg.fillTable : snapshot?.fillTable,
+    fillColumns: cfg.taskCfg?.fillColumns ?? snapshot?.fillColumns,
     configId: cfg.configId || snapshot?.configId,
     mainConfig: snapshot?.mainConfig,
     // 0925 步骤归属切 flowId：入参（画布流程 ID）优先，新建节点由调用方传入；快照回读兜底。

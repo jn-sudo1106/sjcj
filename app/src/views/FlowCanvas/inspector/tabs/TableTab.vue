@@ -7,7 +7,7 @@
 // 2026-09-18：翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频并入规则式表/字段绑定（isRuleLike），绑定内容存 execCfg 而非 ruleCfg。
 // 2026-09-22：OCR 抓取并入同一套绑定（用户口径：表配置跟翻译助手一致）。
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
   collectorCapabilityOf, isRuleNode, isRuleLikeNode, isPdfNode, isMonitorNode, isDataValidationNode, makeDefaultRuleOrchestration, makeDefaultExecConfig,
@@ -22,8 +22,6 @@ import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { inputFieldSelection, inputFieldTokens } from '@/utils/flow/inputFieldSelection'
-import SubTableOutputGroup from '../SubTableOutputGroup.vue'
-import { outputModeOf, readOutputTableConfig, subTableOf, withSubTable } from '@/utils/flow/multiTableOutput'
 
 const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
@@ -126,7 +124,9 @@ watch(
 )
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
-const showMultiTableOutput = computed(() => !!cc.value && nodeCapability.value?.kind !== 'login' && nodeCapability.value?.outputMode !== 'fixed')
+// 采集类（非登录、非固定输出）表配置项较多，结构化配置收进「高级配置」；其余节点保持展开。
+const showAdvancedConfig = computed(() => !!cc.value
+  && nodeCapability.value?.kind !== 'login' && nodeCapability.value?.outputMode !== 'fixed')
 
 // ---- 非规则节点：统一输入表/输入字段配置（0806） ----
 const ownInputTableId = computed(() => cc.value?.inputTable || cfg.value?.inputTable || '')
@@ -313,6 +313,63 @@ function clearOutputFields() {
   writeOutputFields([])
 }
 
+// 回填属于步骤，不能落入可被其他节点复用的 config 配置。
+// 当前仅开放具备表输出的采集通道；保留其他节点历史值，不在加载时擦除。
+const showFillConfig = computed(() => !!cc.value && !isRuleLike.value
+  && nodeCapability.value?.kind !== 'login' && nodeCapability.value?.kind !== 'file_download')
+const fillTableSearch = useTableSearch()
+const fillTableId = computed(() => cfg.value?.taskCfg?.fillTable ?? '')
+const fillTableOptions = computed(() => withCurrentOption(fillTableSearch.results.value, fillTableId.value, '当前配置'))
+watch([fillTableId, showFillConfig], ([tid, show]) => { if (show) void ensureTableFields(tid) }, { immediate: true })
+const fillFields = computed(() => fillTableId.value
+  ? fieldOptionsFromTableOrOutput(fillTableId.value, tables.value)
+  : [])
+const fillColumns = computed(() => cfg.value?.taskCfg?.fillColumns ?? [])
+const fillColumnNames = computed(() => fillFields.value.map((f) => f.columnName || f.prop))
+const unknownFillColumns = computed(() => fillColumns.value.filter((col) => !fillColumnNames.value.includes(col)))
+function onFillTableId(value: string | null | undefined) {
+  if (!value) {
+    flow.patchTaskConfig(id.value, { fillTable: null, fillColumns: [] })
+    return
+  }
+  if (value === fillTableId.value) return
+  // 同名 K 列不代表相同业务字段，换表时与字段一起更新，避免旧绑定误写新表。
+  flow.patchTaskConfig(id.value, { fillTable: value, fillColumns: [] })
+}
+function onFillTableVisible(open: boolean) {
+  if (open && !fillTableSearch.results.value.length) void fillTableSearch.runSearch('')
+}
+function toggleFillColumn(column: string) {
+  const current = new Set(fillColumns.value)
+  if (current.has(column)) current.delete(column)
+  else current.add(column)
+  flow.patchTaskConfig(id.value, { fillColumns: [...current] })
+}
+function selectAllFillColumns() {
+  flow.patchTaskConfig(id.value, { fillColumns: [...fillColumnNames.value, ...unknownFillColumns.value] })
+}
+/**
+ * 回填开关（1109 收敛）：勾选 = 本步骤在主输出表之外再写一张表，默认写回入参表。
+ * 不额外存布尔位，勾选态一律由持久化字段推导——这样历史「有字段无目标表」的不完整配置
+ * 也会显示成已勾选，用户能直接看到并补表，而不是被界面藏起来。
+ */
+const fillEnabled = computed(() => !!fillTableId.value || fillColumns.value.length > 0)
+function setFillEnabled(enabled: boolean) {
+  if (!enabled) {
+    // 取消必须整体清空：fillTable=null 才让保存链路发 clearFill，只清字段会留下孤儿目标表。
+    flow.patchTaskConfig(id.value, { fillTable: null, fillColumns: [] })
+    return
+  }
+  // 已手选过目标表就保留，只在为空时落到默认入参表。
+  if (fillTableId.value) return
+  const defaultTable = inputTableId.value
+  if (!defaultTable) {
+    ElMessage.info('请先选择输入表，再启用输出字段二（回填数据）')
+    return
+  }
+  flow.patchTaskConfig(id.value, { fillTable: defaultTable, fillColumns: [] })
+}
+
 function selectPresetTable(tableId: string) {
   if (nodeCapability.value?.outputMode === 'fixed') return
   if (cc.value) flow.patchCollect(id.value, { outputTable: tableId })
@@ -343,32 +400,6 @@ function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
 // 结构化配置 / 正文规则（0804 S3-1）：非规则节点走 store 的双轨 setter（采集类写
 // collectCfg，非采集类写 NodeConfig 顶层，两边取哪边由 setStructuredConfig 内部判断，本组件不用分支）。
 const structuredConfigValue = computed(() => cc.value?.structuredConfig ?? cfg.value?.structuredConfig ?? '')
-// 1106 W5：单表 / 多表（写入方式）。状态一律从 structuredConfigValue 推导，只有「切到多表但还没选副表」是本组件本地态。
-const outputModeState = computed(() => outputModeOf(structuredConfigValue.value))
-const multiRequested = ref(false)
-const multiActive = computed(() => outputModeState.value !== 'single' || multiRequested.value)
-watch(() => outputModeState.value, (mode) => { multiRequested.value = mode !== 'single' })
-watch(id, () => { multiRequested.value = false })
-function subTableLabel(): string {
-  const tableId = String(subTableOf(readOutputTableConfig(structuredConfigValue.value).config)?.entryTypeId ?? '')
-  if (!tableId) return ''
-  const table = tables.value.find((item) => item.tableId === tableId)
-  return table ? `${table.name || table.tableName} · ${tableId}` : `数据表 #${tableId}`
-}
-async function setOutputMode(mode: 'single' | 'multi') {
-  if (mode === 'multi') { multiRequested.value = true; return }
-  multiRequested.value = false
-  if (outputModeState.value === 'single') return
-  const name = subTableLabel()
-  try {
-    await ElMessageBox.confirm(`切回单表会移除已配置的副表「${name}」，确定吗？`, '切回单表', { type: 'warning', confirmButtonText: '确认移除', cancelButtonText: '取消' })
-  } catch {
-    multiRequested.value = true
-    return
-  }
-  const { config } = readOutputTableConfig(structuredConfigValue.value)
-  flow.setStructuredConfig(id.value, withSubTable(config ?? {}, undefined))
-}
 const contentRulesValue = computed(() => cc.value?.contentRules ?? cfg.value?.contentRules ?? '')
 function onStructuredConfig(e: Event) {
   flow.setStructuredConfig(id.value, (e.target as HTMLTextAreaElement).value)
@@ -521,20 +552,58 @@ async function onTableSaved(tableId: string) {
       </div>
       <div class="rc-help">即旧平台的「出参列 (OutContext)」：勾选的字段传给后续步骤；不选默认全部字段。</div>
     </div>
-    <!-- 1106 W5：写入方式（单表默认 / 多表 = 多一套副表配置）。单表时不写 table.subs，报文与现状一致。 -->
-    <div v-if="showMultiTableOutput" class="rc-field">
-      <label>写入方式</label>
-      <div class="rc-segment" data-testid="output-mode-segment">
-        <button type="button" :class="{ active: !multiActive }" @click="setOutputMode('single')">单表</button>
-        <button type="button" :class="{ active: multiActive }" @click="setOutputMode('multi')">多表</button>
-      </div>
-      <div class="rc-help">{{ multiActive ? '上方输出表照写；再加一套副表配置，写它的字段。' : '只写上方这张输出表。要同时写一张副表时切到「多表」。' }}</div>
+    <!-- 输出字段二（回填数据，1109 收敛）：开关控制，勾选后默认写回入参表，字段按物理列名勾选。 -->
+    <div v-if="showFillConfig && !props.templateDefaults" class="rc-field" data-testid="fill-config-field">
+      <label class="rc-fill-toggle" data-testid="fill-enabled-toggle">
+        <input
+          type="checkbox"
+          :checked="fillEnabled"
+          aria-label="输出字段二（回填数据）"
+          @change="setFillEnabled(($event.target as HTMLInputElement).checked)"
+        />
+        <span>输出字段二（回填数据）</span>
+      </label>
+      <template v-if="fillEnabled">
+        <div data-testid="fill-table-field">
+          <el-select
+            class="rc-table-select"
+            :model-value="fillTableId || undefined"
+            filterable remote clearable
+            :remote-method="fillTableSearch.debouncedSearch"
+            :loading="fillTableSearch.loading.value"
+            placeholder="选择回填数据表（默认入参表）"
+            @update:model-value="onFillTableId"
+            @visible-change="onFillTableVisible"
+          >
+            <el-option v-for="t in fillTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+          </el-select>
+          <div class="rc-help">默认写回入参表，可改选其他表；字段值按物理列名同名映射。取消勾选即取消本步骤回填。</div>
+        </div>
+        <div v-if="fillTableId || fillColumns.length">
+          <div class="rc-field-header">
+            <label>回填字段（已配置 {{ fillColumns.length }} 个）</label>
+            <div class="rc-field-actions">
+              <button v-if="fillFields.length" type="button" class="rc-text-btn" data-testid="select-all-fill-fields" @click="selectAllFillColumns">全选</button>
+              <button type="button" class="rc-text-btn" data-testid="clear-fill-fields" @click="flow.patchTaskConfig(id, { fillColumns: [] })">清空字段</button>
+            </div>
+          </div>
+          <div v-if="fillFields.length" class="rc-tag-row" data-testid="fill-fields-list">
+            <label v-for="f in fillFields" :key="f.prop" class="rc-tag" :class="{ on: fillColumns.includes(f.columnName || f.prop) }">
+              <input type="checkbox" class="rc-tag-check" :checked="fillColumns.includes(f.columnName || f.prop)" :aria-label="`选择回填字段 ${f.desc || f.prop}`" @change="toggleFillColumn(f.columnName || f.prop)" />
+              <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
+            </label>
+          </div>
+          <div v-if="!fillTableId && fillColumns.length" class="rc-help input-field-warning">已有回填字段，但未配置回填数据表，请先选择表。</div>
+          <div v-else-if="!fillFields.length" class="rc-help">暂无可选字段，请检查目标表结构是否已加载。</div>
+          <div v-if="unknownFillColumns.length" class="rc-help" data-testid="unknown-fill-fields">
+            未解析的回填字段（保存时保留）：
+            <span v-for="col in unknownFillColumns" :key="col" class="unknown-input-field">{{ col }}
+              <button type="button" class="rc-text-btn" :aria-label="`移除回填字段 ${col}`" @click="toggleFillColumn(col)">移除</button>
+            </span>
+          </div>
+        </div>
+      </template>
     </div>
-    <SubTableOutputGroup
-      v-if="showMultiTableOutput && multiActive"
-      :model-value="structuredConfigValue" :main-table-id="nodeTableId" :tables="tables"
-      @update:model-value="flow.setStructuredConfig(id, $event)"
-    />
     <div class="rc-field">
       <label>去重方式</label>
       <div class="rc-segment" data-testid="table-dedup-segment">
@@ -558,7 +627,7 @@ async function onTableSaved(tableId: string) {
     <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
          **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->
-    <details v-if="showMultiTableOutput" class="table-advanced">
+    <details v-if="showAdvancedConfig" class="table-advanced">
       <summary>高级配置</summary>
       <div class="rc-field">
         <label>结构化配置</label>
@@ -591,6 +660,7 @@ async function onTableSaved(tableId: string) {
 
     <TableEditDialog v-if="!props.templateDefaults" v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
   </template>
+
 </template>
 
 <style scoped>
@@ -598,6 +668,9 @@ async function onTableSaved(tableId: string) {
    四个 Tab 各自 scoped 覆盖了同一份规则（ConfigTab / TableTab / TaskTab / RuleOrchestrationTab），改这里记得同步。 */
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 14px; }
 .rc-field label { display: block; color: #334155; font-size: 12px; font-weight: 600; margin-bottom: 6px; letter-spacing: .01em; }
+/* 输出字段二（回填数据）开关：沿用字段小标题字号，但作为一个可点的整行 */
+.rc-field label.rc-fill-toggle { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; }
+.rc-fill-toggle input { margin: 0; width: 13px; height: 13px; accent-color: var(--rc-primary); cursor: pointer; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; font-family: inherit; resize: vertical; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-input[disabled] { background: #f8fafc; color: var(--rc-faint); }
@@ -679,6 +752,8 @@ async function onTableSaved(tableId: string) {
 .rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
 .rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
 .rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
+.rc-field label.rc-tag { display: inline-flex; margin-bottom: 0; font-size: 11px; font-weight: 500; }
+.rc-field label.rc-tag.on { font-weight: 700; }
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 .input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }
 .unknown-input-field { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 8px; }
