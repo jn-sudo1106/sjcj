@@ -32,6 +32,25 @@ async function mountPage() {
 }
 async function choose(id: string) { await wrapper.findAll(`[data-table-id="${id}"]`)[0]!.trigger('click'); await flushPromises() }
 describe('数据查询左侧库与表导航', () => {
+  it('全部表的数据库列表直接显示每张表的数据量，不逐表查统计', async () => {
+    vi.mocked(dataApi.entryTypesGroup).mockResolvedValue({ list1: [
+      { tableId: 'm1', tableName: 'tb_mysql', dsKind: 'MYSQL', fields: [], rowCount: 1234567 },
+      { tableId: 'c1', tableName: 'tb_ck', dsKind: 'CK', fields: [], rowCount: 0 },
+      { tableId: 'unknown', tableName: 'tb_unknown', fields: [] },
+    ], list2: [], list3: [] })
+    const detail = vi.spyOn(entryApi, 'entryDetail')
+    await mountPage()
+    await wrapper.get('[data-tab="db"]').trigger('click')
+    await wrapper.get('[data-group="CK"]').trigger('click')
+    expect(wrapper.get('[data-table-id="m1"] .dt-entry-count').text()).toBe('1,234,567 条')
+    expect(wrapper.get('[data-table-id="c1"] .dt-entry-count').text()).toBe('0 条')
+    expect(wrapper.get('[data-table-id="unknown"] .dt-entry-count').text()).toBe('—')
+    expect(wrapper.get('[data-table-id="m1"] .dt-entry-id').text()).toBe('m1')
+    expect(wrapper.get('[data-table-id="m1"]').attributes('title')).toContain('数据量 1,234,567 条')
+    expect(dataApi.entryTypesGroup).toHaveBeenCalledTimes(1)
+    expect(detail).not.toHaveBeenCalled()
+    expect(dataApi.rowQueryPaged).toHaveBeenCalledTimes(1)
+  })
   it('默认完整目录，展开 CK 不改查询，点击 CK 表才切表；同名表显示类型与 ID', async () => {
     await mountPage()
     expect(dataApi.entryTypesGroup).toHaveBeenLastCalledWith(undefined)

@@ -66,6 +66,19 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
     expect(params.get('limit')).toBe('30')
   })
 
+  it('列表展示统一数据量，优先 dataCnt（包含 0），缺失时兼容估算字段', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 5, data: [
+      { entryTypeId: 1, dataCnt: 4000000000, estimatedRowCount: 300 },
+      { entryTypeId: 2, dataCnt: 0, estimatedRowCount: 10 },
+      { entryTypeId: 3, dataCnt: null, estimatedRowCount: 23 },
+      { entryTypeId: 4 },
+      { entryTypeId: 5, estimatedRowCount: 0 },
+    ] }))
+    const { entryApi } = await import('./index')
+    const result = await entryApi.entryPaged({})
+    expect(result.list.map((entry) => entry.rowCount)).toEqual([4000000000, 0, 23, undefined, 0])
+  })
+
   // 窄接口（2026-10-26）：只改 DS_KIND，POST 查询参数，不走整对象 modifyEntryType
   it('单独置数据源使用 POST 查询参数 entryTypeId + dsKind', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '数据源已更新为 CK，id:2101020' }))

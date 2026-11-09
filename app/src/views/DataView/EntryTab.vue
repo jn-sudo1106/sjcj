@@ -556,6 +556,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
               @click="onSort('tableName')"
             >物理表名<span class="et-sort-caret"><el-icon class="et-sort-up" :class="{ active: sortKey === 'tableName' && sortDir === 'asc' }"><CaretTop /></el-icon><el-icon class="et-sort-down" :class="{ active: sortKey === 'tableName' && sortDir === 'desc' }"><CaretBottom /></el-icon></span></th>
             <th style="width: 84px" title="表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路">数据源</th>
+            <th style="width: 130px">数据量</th>
             <th
               class="et-sortable"
               :class="{ 'is-sorted': sortKey === 'keyField' }"
@@ -590,6 +591,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td>{{ e.name || '—' }}</td>
             <td>{{ e.tableName }}</td>
             <td>{{ e.dsKind ?? 'MYSQL' }}</td>
+            <td data-testid="entry-data-count">{{ e.rowCount == null ? '—' : e.rowCount.toLocaleString('zh-CN') }}</td>
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
             <td>{{ e.remark || '—' }}</td>

@@ -649,6 +649,24 @@ describe('EntryTab · 表ID列表', () => {
     expect((dt!.element.nextElementSibling as HTMLElement).textContent).toBe('CK')
   })
 
+  it('列表只展示统一数据量，区分 0 与不可用且不逐表查询', async () => {
+    const paged = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: [
+      { tableId: '3', tableName: 'sense_data.TB_A', dsKind: 'CK', fields: [], rowCount: 1234567 },
+      { tableId: '2', tableName: 'sense_data.TB_B', fields: [], rowCount: 0 },
+      { tableId: '1', tableName: 'sense_data.TB_MISSING', fields: [] },
+    ] })
+    const detail = vi.spyOn(entryApi, 'entryDetail')
+    paged.mockClear()
+    detail.mockClear()
+    await mountTab()
+    await waitForLoad()
+    expect(wrapper.findAll('[data-testid="entry-data-count"]').map((cell) => cell.text()))
+      .toEqual(['1,234,567', '0', '—'])
+    expect(wrapper.findAll('th').some((th) => th.text() === '数据量')).toBe(true)
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(detail).not.toHaveBeenCalled()
+  })
+
   // 快速同步到 CK 入口（2026-10-22）：2026-10-23 去掉后端主机门控，任何环境都显示；点击打开弹窗并带上当前行
   it('「同步到 CK」入口始终显示，点击把当前行交给弹窗', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
