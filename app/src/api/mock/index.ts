@@ -61,6 +61,8 @@ import {
   mockRoleResourceIds,
   mockAssignRoleResources,
   mockUserNav,
+  mockSysDataGroupRoleGroups,
+  mockSysDataGroupBindRoleGroups,
 } from './sysRole'
 import {
   buildMockTree,
@@ -344,6 +346,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'sys-role/resource-tree': mockSysResourceTree,
   'sys-role/resource-ids': mockRoleResourceIds,
   'sys-role/assign-resources': mockAssignRoleResources,
+  'sys-data-group/role-groups': mockSysDataGroupRoleGroups,
+  'sys-data-group/bind-role-groups': mockSysDataGroupBindRoleGroups,
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
   // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。
