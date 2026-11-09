@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 系统设置 → 用户权限设置 → 角色管理（SYS_ROLE / SYS_ROLE_2_RES / SYS_RESOURCE / sys_group_res）
+// 系统设置 → 用户权限设置 → 角色管理（SYS_ROLE / SYS_ROLE_2_RES / sys_menu / sys_group_res）
 // 左右分栏交互：
 //   左侧：展示角色列表（支持角色搜索、新建、编辑、删除与内置角色保护）。
 //   右侧：展示选中角色对应的两大维度配置（Tab 页签切换）：

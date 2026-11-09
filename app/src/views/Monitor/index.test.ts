@@ -106,7 +106,7 @@ describe('监控中心 · 页内 tab（后端驱动）', () => {
     expect(router.replace).toHaveBeenLastCalledWith({ path: '/monitor', query: {} })
   })
 
-  it('后端 key 带模块前缀（老库脏数据 monitor:sourceIssues）也能匹配到组件', () => {
+  it('后端 key 带模块前缀（历史脏数据 monitor:sourceIssues）也能匹配到组件', () => {
     routeMeta.current.tabs = [
       { id: 1, key: 'monitor:sourceIssues', label: '源问题', permission: 'monitor', order: 1 },
     ]

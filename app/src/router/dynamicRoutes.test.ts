@@ -4,7 +4,7 @@ import type { NavGroup, NavMenu } from '@/api/menu'
 import { generateRoutesFromNav, resolveComponent, toViewComponentKey } from './dynamicRoutes'
 
 // 动态路由装配的契约：path / 组件文件 / 路由名 / 标题 / 权限码全部以后端 sys/menu/user-nav
-// 下发的菜单记录为准（数据源是「菜单配置」页维护的 SYS_RESOURCE），前端只把 componentPath
+// 下发的菜单记录为准（数据源是「菜单配置」页维护的 sys_menu），前端只把 componentPath
 // 映射成 import() 懒加载函数。这组用例锁死「后端数据优先」这条口径。
 
 let seq = 0
@@ -86,7 +86,7 @@ describe('generateRoutesFromNav（路由信息来自后端）', () => {
     expect(resolveComponent('/custom-page')).toBeNull()
   })
 
-  it('后端 component_path 缺失时读取老库写在 remark 里的组件路径', () => {
+  it('后端 component_path 缺失时读取 sys_menu 历史脏数据写在 remark 里的组件路径', () => {
     const routes = generateRoutesFromNav(
       groups(item({ path: '/legacy-page', remark: 'src/views/Overview/index.vue' })),
     )

@@ -1,4 +1,4 @@
-// 用户动态菜单与权限导航（SYS_RESOURCE）—— 用户登录后获取可访问的菜单分组与权限码
+// 用户动态菜单与权限导航（sys_menu）—— 用户登录后获取可访问的菜单分组与权限码
 // 后端契约：com.vanv.sys.controller.SysMenuController，路径前缀 /api/v1/sys/menu（bee-config）
 import { request } from './client'
 
@@ -36,7 +36,7 @@ export interface NavMenu {
    * 为空时前端回退到 `Route_<key>`。
    */
   routeName?: string
-  /** 备注；老库把组件路径直接写在备注里（如 `src/views/Overview/index.vue`），装配时兼容读取 */
+  /** 备注；sys_menu 历史脏数据把组件路径直接写在备注里（如 `src/views/Overview/index.vue`），装配时兼容读取 */
   remark?: string
 }
 

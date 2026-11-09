@@ -20,7 +20,7 @@ async function mountAt(
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      // meta.tabs 就是动态路由从后端菜单（sys_menu res_type=2）带下来的页内 tab
+      // meta.tabs 就是动态路由从后端菜单（sys_menu menu_type=2）带下来的页内 tab
       { path: '/settings', component: { template: '<div />' }, meta: { tabs: opts.tabs } },
       { path: '/collect', component: { template: '<div />' } },
       { path: '/user-permission', component: { template: '<div />' } },
@@ -141,7 +141,7 @@ describe('系统设置 · tab 壳', () => {
     wrapper.unmount()
   })
 
-  // 后端菜单下发的页内 tab（动态路由 meta.tabs，来自 sys_menu res_type=2 记录）：
+  // 后端菜单下发的页内 tab（动态路由 meta.tabs，来自 sys_menu menu_type=2 记录）：
   // 文案 / 顺序 / 权限过滤全部以后端为准，本地 fallbackTabs 只在菜单没下发时兜底。
   it('后端下发的页内 tab 覆盖本地清单：文案、顺序、权限过滤都按后端', async () => {
     const { wrapper } = await mountAt({}, ['read'], {

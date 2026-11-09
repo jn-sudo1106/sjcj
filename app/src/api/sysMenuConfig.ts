@@ -93,7 +93,7 @@ export async function deleteMenu(id: number): Promise<void> {
 }
 
 /**
- * 一键清洗老库历史残留按钮
+ * 一键清洗 sys_menu 历史残留按钮
  */
 export async function cleanLegacyButtons(): Promise<CleanLegacyData> {
   const res = await request<CleanLegacyData | { data: CleanLegacyData }>(EP.cleanLegacy, {}, { method: 'POST' })

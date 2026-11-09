@@ -139,7 +139,7 @@ describe('MenuConfigView (菜单配置与资源管理中心)', () => {
     expect(wrapper.find('.stat-pill.button .stat-val').text()).toBe('1') // 8301
   })
 
-  it('展示老库脏数据异常胶囊并能打开自检弹窗', async () => {
+  it('展示历史脏数据异常胶囊并能打开自检弹窗', async () => {
     const wrapper = mount(MenuConfigView, {
       global: { plugins: [ElementPlus] },
     })
@@ -147,7 +147,7 @@ describe('MenuConfigView (菜单配置与资源管理中心)', () => {
 
     const issueBtn = wrapper.find('.issue-btn')
     expect(issueBtn.exists()).toBe(true)
-    expect(issueBtn.text()).toContain('老库脏数据自检')
+    expect(issueBtn.text()).toContain('历史脏数据自检')
 
     await issueBtn.trigger('click')
     await flushPromises()
@@ -155,7 +155,7 @@ describe('MenuConfigView (菜单配置与资源管理中心)', () => {
     expect(wrapper.text()).toContain('用户导出')
   })
 
-  it('一键规范化转换老库脏数据', async () => {
+  it('一键规范化转换历史脏数据', async () => {
     const wrapper = mount(MenuConfigView, {
       global: { plugins: [ElementPlus] },
     })
