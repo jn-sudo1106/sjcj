@@ -12,7 +12,7 @@
 // 也不能用键盘聚焦），并隐藏菜单树勾选框、全选/全不选/保存按钮与数据组的跳转配置入口。
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type ElTable, type ElTree } from 'element-plus'
+import { ElMessage, ElMessageBox, type TableInstance, type ElTree } from 'element-plus'
 import {
   ArrowRight,
   Check,
@@ -100,7 +100,7 @@ const groupSearchKey = ref('')
 const scopeCache = reactive<Record<number, GroupSourceScope>>({})
 const assignedGroupIds = ref<number[]>([])
 const savingRoleGroups = ref(false)
-const groupTableRef = ref<InstanceType<typeof ElTable> | null>(null)
+const groupTableRef = ref<TableInstance | null>(null)
 let isSyncingSelection = false
 
 // 数据组详情弹窗
