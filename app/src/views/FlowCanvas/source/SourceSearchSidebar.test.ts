@@ -117,4 +117,41 @@ describe('搜索结果侧栏', () => {
     expect(router.currentRoute.value.query).toEqual({ tab: 'views', viewId: '8', sourceSearchReturn: id })
     wrapper.unmount()
   })
+
+  // 2026-11-09：用户在截图里指「左下角的源编辑没了」——恢复站点侧栏那块「源详情 + 编辑」
+  it('左下角显示当前源的「源详情」，可折叠，编辑按钮打开编辑弹窗', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    const { wrapper } = await setup()
+    // 当前打开的是 '1'，结果里只有 '2' → 没有源详情
+    expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(false)
+
+    await wrapper.setProps({ activeKey: '2' })
+    expect(wrapper.get('[data-testid="active-source-detail"]').text()).toContain('跨网站的公告')
+    expect(wrapper.get('[data-testid="active-source-full-id"]').text()).toBe('2')
+    await wrapper.get('[data-testid="edit-source"]').trigger('click')
+    expect(wrapper.getComponent({ name: 'EditSourceDialog' }).props('open')).toBe(true)
+
+    await wrapper.get('.sdp-header').trigger('click')
+    expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('当前源不在本次结果里时用父级 activeSource 兜底，编辑保存只抛给画布、不重取整表', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    const { wrapper } = await setup()
+    const outside = { sourceId: '9', name: '不在结果里的源', siteId: '10' } as Source
+    await wrapper.setProps({ activeKey: '9', activeSource: outside })
+    expect(wrapper.text()).toContain('当前源不在本页结果中')
+    expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe('不在结果里的源')
+    paged.mockClear()
+
+    const dialog = wrapper.getComponent({ name: 'EditSourceDialog' })
+    dialog.vm.$emit('saved', { ...outside, name: '改过的源' })
+    await flushPromises()
+
+    expect(wrapper.emitted('edited')?.at(-1)).toEqual([expect.objectContaining({ sourceId: '9', name: '改过的源' })])
+    // 就地改行即可，整表重取会重置列表滚动位置
+    expect(paged).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

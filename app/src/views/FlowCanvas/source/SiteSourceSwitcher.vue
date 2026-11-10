@@ -13,19 +13,18 @@ import { importProgressText } from './importProgress'
 import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { isUnpublishedFlowError } from '@/utils/flow/flowPublish'
-import { toExternalHref } from '@/utils/url/externalUrl'
 import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
 import EditSourceDialog from './EditSourceDialog.vue'
+import SourceDetailPanel from './SourceDetailPanel.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useUiStore } from '@/stores/ui'
 import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
-import { copyToClipboard } from '@/utils/clipboard'
 import { trackCreate, trackDelete, trackEdit } from '@/utils/logEvents'
 
 const props = defineProps<{
@@ -167,7 +166,6 @@ defineExpose({ reload: () => load(true) })
 
 const collapsed = ref(false)
 const listExpanded = ref(true)
-const detailExpanded = ref(false)
 const kw = ref('')
 /**
  * 按数据条件反查出的命中源（2026-09-09）。数据视图点「按条件查源」后写进 store，
@@ -245,40 +243,8 @@ function onListScroll(e: Event) {
 }
 const activeSource = computed(() => children.value.find((s) => s.sourceId === props.activeKey) || null)
 
-/**
- * 复制走全站统一的 `copyToClipboard`（2026-09-22 修）。
- *
- * 这里原先自己写了一套 `navigator.clipboard.writeText` + catch，
- * **在部署站上必然失败**：生产是 http、非安全上下文，浏览器压根不暴露 `navigator.clipboard`，
- * 于是每次都落到 catch、`ElMessage.info('源 ID: xxx')` 把值弹成一条提示——
- * 用户看到的就是"复制不了，还冒出个浮层"（2026-09-22 用户在生产报的）。
- * 关键是它**根本没尝试过复制**：没有 execCommand 兜底。
- *
- * `utils/clipboard.ts` 那条路才是全的（异步 API → execCommand → 可一步复制的弹窗），
- * 0920-03 刚加固过。全站只该有那一个复制实现。
- */
-function copyText(text: string, label: string) {
-  void copyToClipboard(text, label)
-}
-function copyId(id: string) {
-  void copyText(id, '源 ID')
-}
-function sourceDisplayUrl(s: Source) {
-  return s.kind === 'param' ? (s.urlTemplate || s.baseUrl || s.url || '') : (s.url || '')
-}
-/**
- * 源 URL 可点开（2026-09-17 用户提，与 CanvasHeader 摘要行同批）：看到地址就想去原站核对。
- * 参数源这里展示的是 urlTemplate（带 $PARAM$ 占位符），不是能打开的地址，不给链接。
- */
-function sourceOpenUrl(s: Source) {
-  return s.kind === 'param' ? '' : toExternalHref(s.url)
-}
-function copySourceUrl(s: Source) {
-  void copyText(sourceDisplayUrl(s), '源 URL')
-}
-
 const editSourceOpen = ref(false)
-/** 右键「编辑源」编辑的是被右击的那一行；源详情头的「编辑」不传，退回当前源（2026-11-05）。 */
+/** 右键「编辑源」编辑的是被右击的那一行；「源详情」头部那个「编辑」已随区块进 SourceDetailPanel（编辑当前源）。 */
 const editSource = ref<Source | null>(null)
 function openEditSource(s: Source) {
   editSource.value = s
@@ -1417,66 +1383,13 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         </div>
       </template>
 
-      <!-- 选中源详情分割栏：点击源后完整展示源名称和源 ID -->
-      <div v-if="activeSource" class="ssw-section-toggle ssw-detail-header" @click="detailExpanded = !detailExpanded">
-        <span class="ssw-section-title">源详情</span>
-        <span class="ssw-detail-head-right">
-          <button
-            class="ssw-copy-btn"
-            type="button"
-            data-testid="edit-source"
-            title="编辑源名称和源 URL"
-            @click.stop="editSourceOpen = true"
-          >编辑</button>
-          <span class="ssw-section-icon">{{ detailExpanded ? '▼' : '▶' }}</span>
-        </span>
-      </div>
-      <div v-if="activeSource && detailExpanded" class="ssw-active-detail" data-testid="active-source-detail">
-        <div class="ssw-detail-field">
-          <span class="ssw-detail-label">源名称</span>
-          <div class="ssw-detail-val name" data-testid="active-source-full-name">{{ activeSource.name }}</div>
-        </div>
-        <div class="ssw-detail-field">
-          <span class="ssw-detail-label">源 ID</span>
-          <div class="ssw-detail-val with-copy">
-            <code data-testid="active-source-full-id">{{ activeSource.sourceId }}</code>
-            <button class="ssw-copy-btn" type="button" title="复制源 ID" @click="copyId(activeSource.sourceId)">复制</button>
-          </div>
-        </div>
-        <div class="ssw-detail-field">
-          <span class="ssw-detail-label">源 URL</span>
-          <div class="ssw-detail-val with-copy">
-            <!-- 三行封顶后全文靠悬浮看，所以用 el-tooltip 而不是原生 title（原生要等约 1 秒、
-                 长 URL 还会被拉成横穿屏幕的一条，见 tokens.css 的 .rc-tip-longtext）。 -->
-            <el-tooltip
-              v-if="sourceDisplayUrl(activeSource)"
-              :content="sourceDisplayUrl(activeSource)"
-              placement="top-start"
-              :show-after="120"
-              popper-class="rc-tip-longtext"
-            >
-              <a
-                v-if="sourceOpenUrl(activeSource)"
-                class="ssw-detail-url ssw-detail-link"
-                :href="sourceOpenUrl(activeSource)"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-testid="active-source-url"
-              >{{ sourceDisplayUrl(activeSource) }}</a>
-              <span v-else class="ssw-detail-url" data-testid="active-source-url">{{ sourceDisplayUrl(activeSource) }}</span>
-            </el-tooltip>
-            <span v-else class="ssw-detail-url" data-testid="active-source-url">—</span>
-            <button
-              class="ssw-copy-btn"
-              type="button"
-              data-testid="copy-source-url"
-              title="复制源 URL"
-              :disabled="!sourceDisplayUrl(activeSource)"
-              @click="copySourceUrl(activeSource)"
-            >复制</button>
-          </div>
-        </div>
-      </div>
+      <!-- 选中源详情：与搜索结果侧栏共用 SourceDetailPanel（2026-11-09 从本文件抽出，默认收起沿用原行为） -->
+      <SourceDetailPanel
+        v-if="activeSource"
+        :source="activeSource"
+        :default-expanded="false"
+        @edited="applyEditedSource"
+      />
       <div class="ssw-foot">
         <button class="ssw-foot-btn" type="button" title="添加源" @click="openAdd">＋ 添加源</button>
         <button
@@ -2149,7 +2062,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   .ssw-kind-seg button small { font-size: 11px; }
 }
 
-/* 折叠分割栏 & 选中源详情 */
+/* 折叠分割栏（选中源详情已抽到 SourceDetailPanel.vue） */
 .ssw-section-toggle {
   display: flex;
   align-items: center;
@@ -2174,104 +2087,6 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   font-size: 9px;
   color: var(--rc-muted);
 }
-.ssw-active-detail {
-  flex: none;
-  margin: 0 6px 6px;
-  padding: 8px 9px;
-  background: #fff;
-  border: 1px solid var(--rc-border-soft);
-  border-top: none;
-  border-bottom-left-radius: 6px;
-  border-bottom-right-radius: 6px;
-  font-size: 11px;
-}
-.ssw-detail-field {
-  margin-bottom: 6px;
-}
-.ssw-detail-field:last-child {
-  margin-bottom: 0;
-}
-.ssw-detail-label {
-  display: block;
-  font-size: 10px;
-  color: var(--rc-muted);
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-.ssw-detail-val.name {
-  color: var(--rc-text);
-  font-weight: 600;
-  word-break: break-all;
-  line-height: 1.35;
-}
-.ssw-detail-head-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.ssw-detail-val.with-copy {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 4px;
-}
-.ssw-detail-val.with-copy code {
-  font-family: monospace;
-  font-size: 10px;
-  color: #2563eb;
-  background: #eff6ff;
-  padding: 2px 5px;
-  border-radius: 4px;
-  word-break: break-all;
-  flex: 1;
-  min-width: 0;
-}
-.ssw-copy-btn {
-  flex: none;
-  padding: 1px 6px;
-  border: 1px solid var(--rc-border);
-  border-radius: 4px;
-  background: #f8fafc;
-  color: var(--rc-text-2);
-  font-size: 10px;
-  cursor: pointer;
-}
-.ssw-copy-btn:hover:not(:disabled) {
-  background: #eff6ff;
-  border-color: #93c5fd;
-  color: var(--rc-primary-ink);
-}
-.ssw-copy-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-/* 默认呈现为蓝色链接（2026-09-21 用户反馈） */
-a.ssw-detail-link,
-.ssw-detail-url.ssw-detail-link {
-  color: var(--rc-primary);
-  text-decoration: none;
-}
-a.ssw-detail-link:hover,
-.ssw-detail-url.ssw-detail-link:hover {
-  color: var(--rc-primary);
-  text-decoration: underline;
-}
-.ssw-detail-url {
-  color: var(--rc-faint);
-  font-size: 10px;
-  word-break: break-all;
-  line-height: 1.35;
-  flex: 1;
-  min-width: 0;
-  /* 封顶 3 行：公众号那类 URL 有 200+ 字符，光 break-all 会折出十几行，把下面的
-     「添加源 / 对比 / 批量导入」整个顶出可视区（2026-09-17 走查）。
-     截断不丢信息——完整地址在 title 悬浮里，右边还有「复制」按钮。 */
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 /* 批量导入弹窗（新增源 / 关联已有源共用一个入口，靠 tab 分） */
 .ssw-add-card.bind { width: min(760px, calc(100vw - 32px)); }
 .batch-tabs { margin-bottom: 16px; }

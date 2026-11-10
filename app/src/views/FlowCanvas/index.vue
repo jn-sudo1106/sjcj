@@ -898,6 +898,7 @@ onUnmounted(() => {
         :context-id="requestedSearchId"
         :site-id="sidebarSiteId"
         :active-key="sidebarActiveKey"
+        :active-source="flow.sourceCtx"
         :source-group-id="sidebarSourceGroupId"
         :allow-table-mode="sidebarAllowTableMode"
         :active-table-id="sidebarActiveTableId"

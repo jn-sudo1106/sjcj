@@ -6,11 +6,15 @@ import { useSourceSearchStore, sourceSearchListPath } from '@/stores/sourceSearc
 import { useUiStore } from '@/stores/ui'
 import { useRoute, useRouter } from 'vue-router'
 import { describeFilters } from '../result/useSourceLaunch'
+import { trackEdit } from '@/utils/logEvents'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import SourceRowActions, { type SourceRowActionKind } from './SourceRowActions.vue'
+import SourceDetailPanel from './SourceDetailPanel.vue'
 
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{ contextId?: string; siteId: string; activeKey: string }>()
+/** activeSource：画布当前打开的源（index.vue 传 flow.sourceCtx）。源不在本次结果前 200 条里时，
+ *  列表里找不到它，源详情仍要能显示——所以由父级兜底传入，rows 只作回退。 */
+const props = defineProps<{ contextId?: string; siteId: string; activeKey: string; activeSource?: Source | null }>()
 const emit = defineEmits<{ pick: [source: Source]; edited: [source: Source] }>()
 const search = useSourceSearchStore()
 const ui = useUiStore()
@@ -73,6 +77,32 @@ function siteLabel(source: Source) {
   if (source.siteName) return source.siteName
   return source.siteId && source.siteId !== '0' ? `网站 #${source.siteId}` : '未关联网站'
 }
+// ---- 左下角「源详情 + 编辑」（2026-11-09 补回）----
+// 2026-11-05 aff515f 起，从搜索结果打开源时左栏换成搜索结果列表，原来 SiteSourceSwitcher
+// 底部那块「源详情 + 编辑」不再渲染（用户反馈「左下角的源编辑没了」）。这里按同一套
+// 视觉与 data-testid 复用 SourceDetailPanel，列表仍然只负责导航。
+const detailSource = computed<Source | null>(() => {
+  const key = props.activeKey
+  if (!key) return null
+  if (props.activeSource?.sourceId === key) return props.activeSource
+  return rows.value.find(source => source.sourceId === key) ?? null
+})
+// 编辑成功后只就地改这一行 + 抛给画布同步页签：整表重取会重置列表滚动位置，
+// 与站点侧栏 applyEditedSource 同口径（那边也是本地 patch）。
+function onDetailEdited(updated: Source) {
+  const local = rows.value.find(source => source.sourceId === updated.sourceId)
+  if (local) {
+    local.name = updated.name
+    local.url = updated.url
+  }
+  trackEdit('SOURCE', updated.sourceId, updated.name, {
+    eventCode: 'source_update',
+    eventName: '编辑源',
+    firstModule: '采集资产',
+    pageName: '搜索结果',
+  })
+  emit('edited', updated)
+}
 </script>
 
 <template>
@@ -115,6 +145,7 @@ function siteLabel(source: Source) {
             </button>
           </template>
         </div>
+        <SourceDetailPanel v-if="detailSource" :source="detailSource" @edited="onDetailEdited" />
         <div v-if="context.total > rows.length" class="search-foot">
           <button class="search-foot-btn" type="button" @click="returnToList">本次共 {{ context.total }} 个源，回到搜索列表查看</button>
         </div>
