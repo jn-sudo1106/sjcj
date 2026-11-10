@@ -132,21 +132,88 @@ describe('源列表批量绑定流程', () => {
     wrapper.unmount()
   })
 
-  it('提交中禁止重复提交、改流程和关闭，限定最多四个源同时处理', async () => {
+  it('提交中禁止重复提交、改流程和关闭，所有源逐个串行提交', async () => {
     let finish!: () => void
     const pending = new Promise<void>((resolve) => { finish = resolve })
     const save = vi.spyOn(workflowBindingApi, 'save').mockImplementation(() => pending)
     const wrapper = render(['1', '2', '3', '4', '5'])
     await pick(wrapper)
     await wrapper.get('[data-testid="batch-bind-submit"]').trigger('click')
-    await wrapper.get('[data-testid="batch-bind-submit"]').trigger('click')
-    expect(save).toHaveBeenCalledTimes(4)
+    // 串行：同一时刻只有 1 个源在写，避免后端按流程行加锁时自己抢自己的锁
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="batch-bind-submit"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="batch-bind-pick"]').attributes('disabled')).toBeDefined()
     expect(wrapper.findComponent({ name: 'ElDialog' }).attributes('close-on-click-modal')).toBe('false')
     finish()
     await flushPromises()
     expect(save).toHaveBeenCalledTimes(5)
     expect(wrapper.get('[data-testid="batch-bind-result"]').text()).toContain('绑定成功 5 个源')
+    wrapper.unmount()
+  })
+
+  it('锁冲突自动重试后成功，不记为失败', async () => {
+    const calls: string[] = []
+    vi.spyOn(workflowBindingApi, 'save').mockImplementation(async (id, change) => {
+      calls.push(id)
+      if (id === '1' && calls.length === 1) {
+        throw new Error('请求异常 [source-group/bindSourceFlows]: 操作冲突：流程正在被其他人操作，请稍后重试：'
+          + ' ### Error querying database. Cause: com.mysql.cj.jdbc.exceptions.MySQLTransactionRollbackException: Lock wait timeout exceeded'
+          + ' ### SQL: SELECT FLOW_ID FROM cs_flow WHERE FLOW_ID = ? FOR UPDATE NOWAIT')
+      }
+      change(view())
+    })
+    const wrapper = render(['1', '2'])
+    await pick(wrapper)
+    await wrapper.get('[data-testid="batch-bind-submit"]').trigger('click')
+    await flushPromises()
+    expect(calls).toEqual(['1', '1', '2'])
+    const result = wrapper.get('[data-testid="batch-bind-result"]').text()
+    expect(result).toContain('绑定成功 2 个源，未绑定 0 个源')
+    expect(wrapper.find('[data-testid="batch-bind-retry"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('重试仍失败时只展示可读原因，不泄露 SQL 与 mapper 细节', async () => {
+    vi.spyOn(workflowBindingApi, 'save').mockImplementation(async (id) => {
+      if (id === '2') {
+        throw new Error('请求异常 [source-group/bindSourceFlows]: 操作冲突：流程正在被其他人操作，请稍后重试：'
+          + ' ### Error querying database. Cause: com.mysql.cj.jdbc.exceptions.MySQLTransactionRollbackException: Lock wait timeout exceeded; try restarting transaction'
+          + ' ### The error may exist in com/vanvbee/dao/mapper/CsFlowMapper.java (best guess)'
+          + ' ### SQL: SELECT FLOW_ID FROM cs_flow WHERE FLOW_ID = ? FOR UPDATE NOWAIT; nested exception is java.sql.SQLException: x')
+      }
+    })
+    const wrapper = render(['2'])
+    await pick(wrapper)
+    await wrapper.get('[data-testid="batch-bind-submit"]').trigger('click')
+    await flushPromises()
+    const result = wrapper.get('[data-testid="batch-bind-result"]').text()
+    expect(result).toContain('锁等待超时')
+    for (const leak of ['###', 'SELECT', 'cs_flow', 'mapper', 'MySQL', 'nested exception', '请求异常 [']) {
+      expect(result).not.toContain(leak)
+    }
+    wrapper.unmount()
+  })
+
+  it('重试未绑定只重跑失败项，成功后按钮消失', async () => {
+    let failOnce = true
+    vi.spyOn(workflowBindingApi, 'save').mockImplementation(async (id, change) => {
+      if (id === '2' && failOnce) {
+        failOnce = false
+        throw new Error('网络连接失败')
+      }
+      change(view())
+    })
+    const wrapper = render(['1', '2'])
+    await pick(wrapper)
+    await wrapper.get('[data-testid="batch-bind-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="batch-bind-result"]').text()).toContain('绑定成功 1 个源，未绑定 1 个源')
+    expect(wrapper.get('[data-testid="batch-bind-result"]').text()).toContain('2：网络连接失败')
+    await wrapper.get('[data-testid="batch-bind-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="batch-bind-result"]').text()).toContain('绑定成功 2 个源，未绑定 0 个源')
+    expect(wrapper.find('[data-testid="batch-bind-retry"]').exists()).toBe(false)
+    expect(wrapper.emitted('saved')?.at(-1)?.[0]).toEqual(expect.arrayContaining(['1', '2']))
     wrapper.unmount()
   })
 
