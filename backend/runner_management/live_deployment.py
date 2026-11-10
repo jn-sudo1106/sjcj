@@ -2,11 +2,16 @@
 import ast
 import io
 import json
+import re
 import zipfile
 
 
+def site_script_path(path):
+    return bool(re.fullmatch(r'sites/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.py', path))
+
+
 def validate(before, after, programs):
-    """Only independent top-level scripts may change; running signed files stay exact."""
+    """Return whether delivery adds a site script. Running signed files stay exact."""
     folded = lambda files: {name.casefold(): (name, data) for name, data in files.items() if name != 'manifest.json'}
     old, new = folded(before), folded(after)
     if len(old) != len(before) or len(new) != len(after): raise ValueError('文件大小写或名称冲突')
@@ -24,13 +29,17 @@ def validate(before, after, programs):
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import): imported.update(alias.name.split('.')[0].casefold() for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and node.module: imported.add(node.module.split('.')[0].casefold())
+    adds_site_script = False
     for key, (name, data) in new.items():
         if key in old and old[key][1] == data: continue
-        if ('/' in name or not name.endswith('.py') or name.casefold() in ('__init__.py', 'sitecustomize.py', 'usercustomize.py')
+        if key not in old and site_script_path(name):
+            adds_site_script = True
+        elif ('/' in name or not name.endswith('.py') or name.casefold() in ('__init__.py', 'sitecustomize.py', 'usercustomize.py')
                 or name.split('.')[0].casefold() in imported):
             raise ValueError('公共依赖或非独立脚本发生变化，请先停止处理程序：' + name)
         try: ast.parse(data.decode('utf-8-sig'))
         except (SyntaxError, UnicodeError): raise ValueError('新增或修改的脚本不是有效 Python 文件：' + name)
+    return adds_site_script
 
 
 def server_programs(app, db, processes):

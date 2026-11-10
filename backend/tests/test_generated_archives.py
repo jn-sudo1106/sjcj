@@ -78,6 +78,7 @@ class GeneratedArchivesTest(unittest.TestCase):
         second = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'task-2'})
         self.assertEqual(second['archive']['status'], 'committed')
         self.assertNotEqual(second['archive']['gitCommit'], archive['gitCommit'])
+        self.assertEqual([file['path'] for file in second['archive']['files']], ['default/newslink.py'])
         self.assertEqual(calls[0]['code_dir'], calls[1]['code_dir'])
         self.assertEqual(Path(calls[0]['prj_dir']), service.workspace.root / '101')
         self.assertEqual(Path(calls[0]['code_dir']), service.workspace.root / '101' / 'code')

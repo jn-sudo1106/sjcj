@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RouterLink } from 'vue-router'
 import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript, submitSiteScriptTask, type SiteScriptGenerateInput, type SiteScriptModelRequest } from '@/api/siteScript'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface, type GeneratedCodeArchive, type CodeGenerationServer, type GenerationDestination } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface, type GeneratedCodeArchive, type CodeGenerationServer, type GenerationDestination, type SourceCodeRelation } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTemplate } from '@/api/nodePrompts'
 import { nodePromptsAvailable } from '@/constants/deployGates'
@@ -11,7 +11,7 @@ import PromptTemplatePicker from './PromptTemplatePicker.vue'
 import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVariables.vue'
 import AiCodeWorkspaceDialog from '@/components/AiCodeWorkspaceDialog.vue'
 import NodeDeploymentPanel from './NodeDeploymentPanel.vue'
-import { createGenerationTaskId, matchingGenerationGitBinding, nodeGenerationCodeDirectory } from '@/utils/generationWorkspace'
+import { createGenerationTaskId, matchingGenerationGitBinding, modelRequestMethod, nodeGenerationCodeDirectory } from '@/utils/generationWorkspace'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
 import { withSiteScriptOutputFields, withSiteScriptQueuePrompt, type SiteScriptOutputField } from '@/utils/flow/siteScriptOutputPrompt'
 
@@ -36,6 +36,33 @@ let modelsRequest = 0
 const selectedModel = computed(() => modelInterfaces.value.find(row => row.id === modelInterfaceId.value && row.enabled))
 const remoteGeneration = computed(() => !!selectedModel.value?.generationServerId && ['agent', 'gemini-agent'].includes(selectedModel.value.kind))
 const taskContextAvailable = computed(() => !!props.sourceId && !!props.flowId && !!props.stepId)
+const sourceRepositoryFiles = ref<SourceCodeRelation[]>([])
+const sourceRepositoryLoading = ref(false), sourceRepositoryError = ref('')
+let sourceRepositoryRequest = 0
+const recentSourceFiles = computed(() => {
+  const seen = new Set<string>()
+  return sourceRepositoryFiles.value.filter(file => {
+    const key = JSON.stringify([file.repoId, file.filePath])
+    if (file.archiveStatus !== 'committed' || seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).slice(0, 5)
+})
+async function loadSourceRepositoryFiles() {
+  const request = ++sourceRepositoryRequest
+  const { sourceId, flowId, stepId, configId } = props
+  if (!sourceId || !flowId || !stepId || !configId) return
+  sourceRepositoryLoading.value = true
+  sourceRepositoryError.value = ''
+  try {
+    const result = await runnerManagementApi.sourceCodeRelations({ sourceId, flowId, stepId, configId })
+    if (request === sourceRepositoryRequest) sourceRepositoryFiles.value = result.items
+  } catch (e) {
+    if (request === sourceRepositoryRequest) sourceRepositoryError.value = message(e)
+  } finally {
+    if (request === sourceRepositoryRequest) sourceRepositoryLoading.value = false
+  }
+}
 const generationMode = ref<'task' | 'direct'>('task')
 const submittedTask = ref<{ taskId: string; queue: string; status: 'waiting' | 'running' | 'succeeded' | 'failed' } | null>(null)
 const taskGeneration = computed(() => taskContextAvailable.value && generationMode.value === 'task')
@@ -46,8 +73,8 @@ const generationMachine = computed(() => generationServers.value.find(row => row
 const machineMessage = computed(() => {
   if (machineLookupError.value) return `生成机器信息暂时无法读取（${machineLookupError.value}），任务仍可提交并等待匹配机器。`
   const worker = generationMachine.value
-  if (!worker && selectedModel.value?.generationServerMatch === 'ambiguous') return '接口地址匹配多个生成实例，请在大模型接口中选择具体机器；任务等待正确绑定后执行。'
-  if (!worker) return taskGeneration.value ? '模型尚无可用的生成机器，任务可以先提交，等待匹配的机器上线。' : '未关联生成机器，将按模型接口配置直接调用。'
+  if (!worker && selectedModel.value?.generationServerMatch === 'ambiguous') return '接口地址匹配多个生成实例，请在智能体接口中选择具体机器；任务等待正确绑定后执行。'
+  if (!worker) return taskGeneration.value ? '模型尚无可用的生成机器，任务可以先提交，等待匹配的机器上线。' : '未关联生成机器，将按智能体接口配置直接调用。'
   return `${worker.name} · ${worker.ipAddress} · ${worker.status === 'online' ? '在线' : '离线'}${taskGeneration.value && worker.status !== 'online' ? '，任务等待机器恢复' : ''}${taskGeneration.value && !worker.mqCapable ? '，等待升级支持任务消费' : ''}`
 })
 let machineRequest = 0
@@ -107,6 +134,7 @@ async function commitArchive() {
     archive.value = result
     if (result.status === 'committed') {
       markArchiveSaved()
+      void loadSourceRepositoryFiles()
       ElMessage.success(result.pushed ? '生成文件已提交并推送到 Git' : '生成文件已提交到本地仓库，仓库未配置远程地址')
     }
   } catch (e) { if (session === sessionId) error.value = `生成文件提交失败：${message(e)}` }
@@ -126,8 +154,8 @@ async function loadModels() {
     if (request !== modelsRequest) return
     modelInterfaces.value = result.items.filter(row => row.enabled)
     if (!modelInterfaceId.value) modelInterfaceId.value = (modelInterfaces.value.find(row => row.isDefault) || modelInterfaces.value[0])?.id || ''
-    if (!selectedModel.value) modelError.value = '所选模型接口已停用或不可用，请选择可用接口'
-  } catch (e) { if (request === modelsRequest) modelError.value = `模型接口加载失败：${e instanceof Error ? e.message : String(e)}` }
+    if (!selectedModel.value) modelError.value = '所选智能体接口已停用或不可用，请选择可用接口'
+  } catch (e) { if (request === modelsRequest) modelError.value = `智能体接口加载失败：${e instanceof Error ? e.message : String(e)}` }
   finally { if (request === modelsRequest) modelsLoading.value = false }
 }
 const promptTextKey = () => JSON.stringify([systemPrompt.value, prompt.value])
@@ -440,6 +468,12 @@ watch(() => [props.configId, props.queueName, props.initialUrl, props.configType
   cancelGenerate()
   void initialize()
 }, { immediate: true })
+watch(() => [props.sourceId, props.flowId, props.stepId, props.configId] as const, () => {
+  sourceRepositoryFiles.value = []
+  sourceRepositoryLoading.value = false
+  sourceRepositoryError.value = ''
+  void loadSourceRepositoryFiles()
+}, { immediate: true })
 watch(open, visible => {
   cancelGenerate()
   if (!visible) {
@@ -448,6 +482,7 @@ watch(open, visible => {
     fileRequestId++
     codeLoading.value = false
     fileChooserOpen.value = false
+    if (submittedTask.value) void loadSourceRepositoryFiles()
     return
   }
   generationMode.value = 'task'
@@ -502,7 +537,7 @@ watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId
 watch([() => props.outputFields, () => props.outputTable], () => {
   if (!loading.value) syncOutputPrompt()
 }, { deep: true })
-onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++; filePreviewSequence++ })
+onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++; filePreviewSequence++; sourceRepositoryRequest++ })
 
 async function previewAssociatedFile(target: 'saved' | 'source') {
   const version = associatedVersion.value
@@ -622,7 +657,7 @@ async function generate() {
   syncOutputPrompt()
   if (archiveGeneration.value && destinationMode.value === 'type' && !directoryGitBinding.value && destinationLookupError.value) { error.value = `自动提交位置查询失败：${destinationLookupError.value}`; return }
   if (directoryBindingError.value) { error.value = `目录 Git 绑定不可用：${directoryBindingError.value}`; return }
-  if (modelsLoading.value || modelError.value || !selectedModel.value) { error.value = '请先选择可用的大模型接口'; return }
+  if (modelsLoading.value || modelError.value || !selectedModel.value) { error.value = '请先选择可用的智能体接口'; return }
   if (archiveGeneration.value && (!props.configId || !selectedRepository.value || !selectedDirectory.value || directoriesError.value || archiveError.value)) { error.value = archiveError.value || '请先保存节点并选择有效的仓库和配置目录'; return }
   if (!systemPrompt.value.trim()) { error.value = '请填写系统提示词'; return }
   if (!prompt.value.trim()) { error.value = '请填写用户提示词'; return }
@@ -653,7 +688,7 @@ async function generate() {
       ...(taskGeneration.value && selectedInterface && interfaceUrl ? { modelCall: {
         interfaceId: selectedInterface.id, name: selectedInterface.name, kind: selectedInterface.kind, model: selectedInterface.model,
         endpoint: `${interfaceUrl.protocol}//${interfaceUrl.host}${interfaceUrl.pathname}`,
-        method: selectedInterface.kind === 'chat' ? 'GET' : 'POST', timeoutSeconds: selectedInterface.timeoutSeconds,
+        method: modelRequestMethod(selectedInterface), timeoutSeconds: selectedInterface.timeoutSeconds,
         serverId: selectedInterface.generationServerId || '', serverName: generationMachine.value?.name || '',
         serverAddress: generationMachine.value?.ipAddress || '', capturedAt: new Date().toISOString(),
       } } : {}),
@@ -691,6 +726,7 @@ async function generate() {
     if (result.archive) {
       archive.value = result.archive; archivePreview.value = result.code; archivePreviewPath.value = result.previewPath || ''; archiveSavedKey.value = ''; archiveError.value = ''
       markArchiveSaved()
+      if (result.archive.status === 'committed') void loadSourceRepositoryFiles()
     }
     generationStages.value.push(result.archive?.status === 'failed' ? '生成完成，Git 归档失败，请重试提交。' : '代码生成完成')
     workspaceTab.value = 'code'
@@ -817,6 +853,16 @@ function download() {
     <div class="site-script-task-config" role="status" data-testid="generation-config-status">{{ taskConfigStatus }}</div>
     <p v-if="taskConfigError" class="site-script-error" role="alert">{{ taskConfigError }}</p>
     <div class="site-script-context"><span v-if="configType" data-testid="site-script-node-type">节点类型 [{{ configType }}] {{ nodeTypeName }}</span><span :title="queueName">队列 {{ queueName || '未配置' }}</span></div>
+    <div v-if="taskContextAvailable && configId" class="site-script-paths" data-testid="site-script-source-repository">
+      <div><strong>当前源仓库代码</strong><small v-if="!sourceRepositoryLoading && !sourceRepositoryError && recentSourceFiles.length">已生成并归档</small><el-button link type="primary" :disabled="sourceRepositoryLoading" @click="loadSourceRepositoryFiles">刷新</el-button></div>
+      <div v-if="sourceRepositoryLoading">正在查询归档记录…</div>
+      <div v-else-if="sourceRepositoryError" class="site-script-error" role="alert">仓库代码查询失败：{{ sourceRepositoryError }}</div>
+      <div v-else-if="!recentSourceFiles.length">暂无生成代码的仓库归档记录</div>
+      <div v-for="file in recentSourceFiles" :key="file.relationId">
+        <RouterLink :to="{ path: '/settings', query: { tab: 'code-repos', repoId: file.repoId, directoryId: file.directoryId || undefined, filePath: file.filePath } }" target="_blank" rel="noopener" class="site-script-repository-link" :title="file.filePath">{{ file.filePath }}</RouterLink>
+        <code v-if="file.gitCommit" :title="file.gitCommit">{{ file.gitCommit.slice(0, 10) }}</code>
+      </div>
+    </div>
     <div v-if="archiveGeneration" class="site-script-naming"><span>提交位置</span><el-radio-group v-model="destinationMode" :disabled="busy" size="small" data-testid="generation-destination-mode"><el-radio-button value="type">按配置类型</el-radio-button><el-radio-button value="custom">自定义仓库目录</el-radio-button></el-radio-group><span v-if="destinationMode === 'type' && automaticDestination && !directoryGitBinding">{{ automaticDestination.repoName }} / {{ automaticDestination.directoryPath }}/</span></div>
     <p v-if="archiveGeneration && destinationMode === 'type' && !directoryGitBinding && destinationLookupError" class="site-script-error">自动提交位置查询失败：{{ destinationLookupError }}</p>
     <div class="site-script-destination-fields">
@@ -859,7 +905,7 @@ function download() {
         <nav v-if="taskContextAvailable" class="site-script-output-tabs" aria-label="生成方式"><button type="button" data-testid="generation-mode-task" :disabled="busy" :class="{active:generationMode==='task'}" @click="generationMode='task'">任务方式</button><button type="button" data-testid="generation-mode-direct" :disabled="busy" :class="{active:generationMode==='direct'}" @click="generationMode='direct'">调用接口</button></nav>
         <div class="site-script-controls">
         <PromptTemplatePicker :items="promptTemplates" :model-value="selectedPromptId" :disabled="busy" test-id="script-prompt-template" @select="selectPromptTemplate" />
-        <div class="site-script-model"><label>大模型</label><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading" placeholder="选择大模型接口" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink :to="{ path: '/settings', query: { tab: 'code-servers', view: 'models', ...(selectedModel?.generationServerId ? { serverId: selectedModel.generationServerId } : {}) } }" target="_blank" rel="noopener">配置</RouterLink></div>
+        <div class="site-script-model"><label>智能体接口</label><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading" placeholder="选择智能体接口" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink :to="{ path: '/settings', query: { tab: 'code-servers', view: 'models', ...(selectedModel?.generationServerId ? { serverId: selectedModel.generationServerId } : {}) } }" target="_blank" rel="noopener">配置</RouterLink></div>
         <p v-if="modelError" class="site-script-error" role="alert">{{ modelError }}</p>
         <p v-if="taskContextAvailable" class="site-script-machine" data-testid="generation-machine">{{ machineMessage }}</p>
         <div v-if="remoteGeneration && !taskGeneration" class="site-script-auto-commit"><small>生成完成后自动提交到节点选择的 Git 目录；input、code、output 目录固定复用，任务记录保存在 tasks/任务ID.json。</small></div>

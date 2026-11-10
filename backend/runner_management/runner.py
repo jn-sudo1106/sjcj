@@ -396,7 +396,7 @@ class Runner:
         return {
             'ipAddress': self.ip_address,
             'fileBrowserSchema': 1,
-            'liveFileDeploymentSchema': 1,
+            'liveFileDeploymentSchema': 2,
             'hostName': socket.gethostname(),
             **self.os_info,
             'runnerDigest': os.getenv('RUNNER_RELEASE_DIGEST', 'source-local'),

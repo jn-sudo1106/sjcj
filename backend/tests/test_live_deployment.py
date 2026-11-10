@@ -42,13 +42,14 @@ class LiveDeploymentTest(unittest.TestCase):
         self.assertEqual((self.target/'main.py').read_bytes(),self.old['main.py'])
 
     def test_failure_rolls_back_added_file_and_version_receipt(self):
+        (self.target/'sites').mkdir()
         registry = (self.target/'version.json').read_bytes(); original = install.atomic_write
         def fail(path,data):
             if Path(path)==self.target/'version.json' and data!=registry: raise OSError('disk full')
             return original(path,data)
         with patch.object(install,'atomic_write',side_effect=fail), self.assertRaises(OSError):
-            self.install({**self.old,'www.mkky.cn.py':b'VALUE=2'},[self.old])
-        self.assertFalse((self.target/'www.mkky.cn.py').exists())
+            self.install({**self.old,'sites/www.mkky.cn.py':b'VALUE=2'},[self.old])
+        self.assertFalse((self.target/'sites/www.mkky.cn.py').exists())
         self.assertEqual((self.target/'version.json').read_bytes(),registry)
 
     def test_interrupted_live_update_is_recovered_before_next_install(self):

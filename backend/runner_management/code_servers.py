@@ -22,6 +22,30 @@ from urllib.request import Request, urlopen
 LOCK = threading.Lock()
 PREFIX = 'code-server:'
 MAX_RESULT = 15 * 1024 * 1024
+PACKAGE_FILES = ('start.py', 'start.cmd', '__init__.py', 'service.py', 'bootstrapper.py', 'mq_worker.py', 'requirements.txt')
+PACKAGE_SUPPORT_FILES = ('__init__.py', 'artifacts.py', 'bootstrapper.py', 'program_launcher.py', 'runner.py')
+
+
+def package_info(app):
+    source = Path(__file__).resolve().parents[1] / 'code_generation_server'
+    support = Path(__file__).resolve().parent
+    files = [(name, source / name) for name in (*PACKAGE_FILES, 'config.example.json')]
+    files += [('runner_management/' + name, support / name) for name in PACKAGE_SUPPORT_FILES]
+    files.append(('package-builder.py', Path(__file__)))
+    fingerprint = [(name, hashlib.sha256(path.read_bytes()).hexdigest()) for name, path in files]
+    digest = 'sha256:' + hashlib.sha256(json.dumps(fingerprint).encode()).hexdigest()
+    key = 'code-server-package-info-v1'
+    with LOCK, app.store.connect() as db:
+        saved = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key,)).fetchone()
+        current = json.loads(saved['setting_value']) if saved else {}
+        if current.get('digest') == digest:
+            return current
+        updated = datetime.fromtimestamp(max(path.stat().st_mtime for _, path in files), timezone.utc)
+        version = updated.astimezone(timezone(timedelta(hours=8))).strftime('%Y.%m.%d') + '.' + digest[7:15]
+        result = {'version': version, 'digest': digest, 'updatedAt': updated.isoformat(timespec='seconds')}
+        db.execute('DELETE FROM settings WHERE setting_key=?', (key,))
+        db.execute('INSERT INTO settings (setting_key,setting_value) VALUES (?,?)', (key, json.dumps(result)))
+    return result
 
 
 def instance_token(app, server_id):
@@ -270,15 +294,21 @@ def package(app, platform, existing=False, digest=''):
         from .artifacts import verify_artifact
         release_data=app.artifacts.read(digest)
         verify_artifact(release_data,digest,pinned['signature'],app.artifacts.public_key)
-    code = enrollment_code(app) if not existing else None
+    code = enrollment_code(app)
     data = io.BytesIO()
     source = Path(__file__).resolve().parents[1] / 'code_generation_server'
     with zipfile.ZipFile(data, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name in ('start.py', 'start.cmd', 'config.example.json','__init__.py','service.py','bootstrapper.py','mq_worker.py','requirements.txt'):
+        for name in PACKAGE_FILES:
             archive.write(source / name, name)
+        connection = {'platform': platform, 'enrollCode': code['code']}
+        example = json.loads((source / 'config.example.json').read_text(encoding='utf8'))
+        example.update(connection)
+        archive.writestr('config.example.json', json.dumps(example, ensure_ascii=False, indent=2))
+        archive.writestr('config.package.json', json.dumps(connection, ensure_ascii=False, indent=2))
         support=Path(__file__).resolve().parent
-        for name in ('__init__.py','artifacts.py','bootstrapper.py','program_launcher.py','runner.py'):
+        for name in PACKAGE_SUPPORT_FILES:
             archive.write(support/name,'runner_management/'+name)
+        archive.writestr('package-version.json', json.dumps(package_info(app), ensure_ascii=False, indent=2))
         if pinned:
             stem='code-server-versions/'+digest[7:]
             archive.writestr(stem+'.zip',release_data)
@@ -292,12 +322,12 @@ def package(app, platform, existing=False, digest=''):
             '1. 解压到独立目录，修改 config.json 的 workspace 为模型机器上的工作空间。\n'
             '2. platform 必须是本机可访问的平台管理地址；平台也必须能访问本机 8093 端口。\n'
             '3. 以普通用户登录后运行 start.cmd（Windows），或 python start.py（Linux/Windows）；不要使用 SYSTEM 等内置服务账户。升级继续沿用启动账户。\n'
-            '4. 在平台“大模型接口”选择本服务器，模型地址填写本机地址，例如 http://127.0.0.1:6000/wb/agent。\n'
+            '4. 在平台“智能体接口”选择本服务器，模型地址填写本机地址，例如 http://127.0.0.1:6000/wb/agent。\n'
             '5. prj_dir、input_file_dir、code_dir、output_file_dir 都必须位于 workspace 内，可使用相对路径。\n'
             '6. 实例身份保存在 identity.json，重启请保留；同机多个实例需使用不同目录和 port。\n'
             '7. 拷贝为新实例时重新下载包，或在平台获取新登记码填入 enrollCode；登记码仅可用一次，有效 24 小时。\n'
             '8. 多网卡可配置 advertiseUrl，例如 http://192.168.1.171:8093。\n'
             '9. 服务日志：logs/service.log；启动及升级日志：logs/launcher.log、logs/worker.log。\n'
-            '10. 升级接入包不含 config.json 和 identity.json；停止旧程序，覆盖解压代码并运行 start.cmd 一次，以后在平台一键升级。\n'
+            '10. 启动器更新包携带 config.package.json，启动时把下载时填写的管理服务地址及新登记码合并到 config.json，保留已有工作空间、监听端口和 identity.json。停止旧程序后覆盖解压并运行 start.cmd。\n'
             '11. 正常升级等待模型调用及文件操作完成；版本签名或健康检查失败自动保留/恢复旧版本。\n')
     return data.getvalue()

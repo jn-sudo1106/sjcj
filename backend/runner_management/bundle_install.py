@@ -143,16 +143,20 @@ def live_journal(target, cache):
 
 
 def recover_live_update(target, cache):
+    from .live_deployment import site_script_path
+
     journal = live_journal(target, cache)
     if not journal.exists(): return
     if linked(journal) or journal.stat().st_size > 30 * 1024 * 1024: raise ValueError('在线更新恢复记录无效')
     record = json.loads(journal.read_text(encoding='utf8'))
     if record.get('target') != str(target.resolve()): raise ValueError('在线更新恢复目录不匹配')
     entries = record.get('files')
-    if not isinstance(entries, dict) or any(not safe_relative(name) or '/' in name for name in entries): raise ValueError('在线更新恢复路径无效')
+    if not isinstance(entries, dict) or any(not safe_relative(name) or ('/' in name and not site_script_path(name)) for name in entries): raise ValueError('在线更新恢复路径无效')
     committed = read_registry(target)['current'].get(record['key']) == record['digest']
     for name, item in entries.items():
         path = target / name
+        if linked(path.parent) or not path.resolve().is_relative_to(target.resolve()):
+            raise ValueError('在线更新恢复路径无效')
         if linked(path) or path.exists() and not path.is_file(): raise ValueError('在线更新恢复文件无效')
         current = path.read_bytes() if path.exists() else None
         previous = base64.b64decode(item['before'], validate=True) if item['before'] is not None else None
@@ -285,7 +289,9 @@ def install_bundle(target, files, manifest, digest, cache, public_key, make_curr
         if protected_programs:
             from .live_deployment import validate
             validate({name: (target / name).read_bytes() for name in own_files}, mapped, protected_programs)
-            if any(not (target / directory).is_dir() for directory in directories): raise ValueError('公共目录结构发生变化，请先停止处理程序')
+            if (any(not (target / directory).is_dir() for directory in directories)
+                    or any(not (target / name).parent.is_dir() for name in mapped)):
+                raise ValueError('公共目录结构发生变化，请先停止处理程序')
             return install_live(target, mapped, registry, key, digest, cache)
         temporary = Path(tempfile.mkdtemp(prefix='.' + target.name + '.incoming-', dir=target.parent))
         try:

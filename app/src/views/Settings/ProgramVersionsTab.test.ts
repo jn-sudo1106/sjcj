@@ -10,11 +10,12 @@ import ProgramVersionsTab from './ProgramVersionsTab.vue'
 
 vi.mock('./RunnerManagementTab.vue', () => ({ default: { props:['section'], template:'<div data-testid="runner-releases">Runner {{section}}</div>' } }))
 const digest='sha256:'+'a'.repeat(64)
+const currentPackage={version:'2026.11.09.abc12345',digest:'sha256:'+'b'.repeat(64),updatedAt:'2026-11-09T08:40:00Z'}
 const wrappers:ReturnType<typeof mount>[]=[]
 beforeEach(() => {
   vi.spyOn(api,'codeServerReleases').mockResolvedValue({items:[{digest,version:'2026.10.29.2',publishedAt:'2026-10-29T00:00:00Z'}]})
   vi.spyOn(api,'publishCodeServer').mockResolvedValue({digest,version:'2026.10.29.2',created:false})
-  vi.spyOn(api,'codeServerPackageInfo').mockResolvedValue({platform:'http://192.168.1.32:8092'})
+  vi.spyOn(api,'codeServerPackageInfo').mockResolvedValue({platform:'http://192.168.1.32:8092',package:currentPackage})
   vi.spyOn(api,'downloadCodeServerPackage').mockResolvedValue(new Blob(['package']))
   vi.spyOn(api,'downloadCodeServerMigrationPackage').mockResolvedValue(new Blob(['update']))
   vi.stubGlobal('URL',Object.assign(URL,{createObjectURL:vi.fn(()=>'blob:test'),revokeObjectURL:vi.fn()}))
@@ -45,11 +46,30 @@ it('按所选 CodeServer 版本下载包，默认平台地址来自服务端而�
   await flushPromises()
   expect(api.downloadCodeServerPackage).toHaveBeenCalledWith('http://192.168.1.32:8092',digest)
 })
+it('当前下载包展示真实版本和北京时间，下载弹窗使用相同版本',async()=>{
+  const {w}=await setup('code-server')
+  const current=w.get('[data-testid="current-code-server-package"]')
+  expect(current.text()).toContain('2026.11.09.abc12345')
+  expect(current.text()).toContain('2026-11-09 16:40:00')
+  expect(w.text()).toContain('最新服务版本')
+  await w.findAll('button').find(b=>b.text()==='下载启动器更新包')!.trigger('click');await flushPromises()
+  expect(document.querySelector('[data-testid="download-code-server-package-version"]')!.textContent).toContain(currentPackage.version)
+})
+it('下载包信息失败时展示真实错误，服务版本仍可查看',async()=>{
+  vi.mocked(api.codeServerPackageInfo).mockRejectedValue(new Error('下载包信息请求失败'))
+  const {w}=await setup('code-server')
+  expect(w.get('[data-testid="current-code-server-package"]').text()).toContain('下载包信息加载失败')
+  expect(w.text()).toContain('下载包信息请求失败')
+  expect(w.text()).toContain('2026.10.29.2')
+})
 it('启动器更新包独立下载，旧实例保留身份，普通账号不显示发布及下载写入口',async()=>{
   const {w}=await setup('code-server')
   await w.findAll('button').find(b=>b.text()==='下载启动器更新包')!.trigger('click');await flushPromises()
+  const address=document.querySelector<HTMLInputElement>('.el-dialog input')!
+  address.value='http://192.168.1.32:18092';address.dispatchEvent(new Event('input'));await flushPromises()
+  expect(document.body.textContent).toContain('包含新登记码和上方填写的管理服务地址')
   document.querySelectorAll<HTMLButtonElement>('.el-dialog button').forEach(b=>{if(b.textContent==='下载')b.click()})
-  await flushPromises();expect(api.downloadCodeServerMigrationPackage).toHaveBeenCalledWith('http://192.168.1.32:8092')
+  await flushPromises();expect(api.downloadCodeServerMigrationPackage).toHaveBeenCalledWith('http://192.168.1.32:18092')
   const {w:readonly}=await setup('code-server','read')
   expect(readonly.find('[data-testid="publish-code-server"]').exists()).toBe(false)
   expect(readonly.text()).not.toContain('下载服务包')

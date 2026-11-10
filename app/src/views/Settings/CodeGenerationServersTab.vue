@@ -311,7 +311,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
         </div>
       </aside>
       <section class="cg-main" aria-label="服务器配置与工作空间" data-testid="code-server-workspace-panel">
-        <nav class="cg-detail-tabs" aria-label="服务器配置视图"><button type="button" :class="{active:detailView==='models'}" :disabled="busy || navigating" data-testid="code-server-models-view" @click="selectDetailView('models')">大模型接口</button><button type="button" :class="{active:detailView==='files'}" :disabled="busy || navigating" data-testid="code-server-files-view" @click="selectDetailView('files')">工作空间</button></nav>
+        <nav class="cg-detail-tabs" aria-label="服务器配置视图"><button type="button" :class="{active:detailView==='models'}" :disabled="busy || navigating" data-testid="code-server-models-view" @click="selectDetailView('models')">智能体接口</button><button type="button" :class="{active:detailView==='files'}" :disabled="busy || navigating" data-testid="code-server-files-view" @click="selectDetailView('files')">工作空间</button></nav>
         <ModelInterfacesTab v-if="detailView === 'models'" ref="modelPanel" :server="selected" embedded @changed="refresh(true)" />
     <template v-else-if="selected">
       <div class="cg-workspace-head"><b :title="`${selected.name} · ${selected.workspace}`">{{ selected.name }} · {{ selected.workspace }}</b><el-button link :disabled="busy" @click="showLogs">服务日志</el-button></div>

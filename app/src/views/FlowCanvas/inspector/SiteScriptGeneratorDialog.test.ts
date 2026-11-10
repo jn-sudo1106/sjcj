@@ -18,6 +18,7 @@ vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   codeRepositories: vi.fn(), codeRepositoryDirectories: vi.fn(), codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(),
   modelInterfaces: vi.fn(),
   generatedCodeState: vi.fn(), saveGenerationPreference: vi.fn(), commitGeneratedCode: vi.fn(),
+  sourceCodeRelations: vi.fn(),
   nodeGenerationSettings: vi.fn(), saveNodeGenerationSettings: vi.fn(),
   codeGenerationServers: vi.fn(),
   resolveGenerationDestination: vi.fn(),
@@ -66,6 +67,7 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.nodeGenerationSettings).mockResolvedValue({ configId: 'c-1', enabled: false, generation: null })
   vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mockImplementation(async body => ({ configId: body.configId, enabled: false, generation: body.generation || null }))
   vi.mocked(runnerManagementApi.generatedCodeState).mockResolvedValue({ autoCommit: true, archive: null })
+  vi.mocked(runnerManagementApi.sourceCodeRelations).mockResolvedValue({ items: [], total: 0 })
   vi.mocked(runnerManagementApi.saveGenerationPreference).mockImplementation(async (_id, autoCommit) => ({ autoCommit }))
   vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
   vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 0, items: [{ id: 'legacy', name: '现有服务', kind: 'site-script', model: '', endpoint: 'http://127.0.0.1:8091/api/ai/site-script/generate', enabled: true, isDefault: true, timeoutSeconds: 120, inputFileDir: '', codeDir: '', outputFileDir: '', stream: true }] })
@@ -75,6 +77,27 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([])
 })
 afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllEnvs() })
+
+it('按当前源、流程、节点和配置显示已归档仓库代码，切换源后清除旧结果', async () => {
+  const context = { sourceId: '430024910', flowId: '21000040', stepId: '41895', configId: '1401218' }
+  const file = { relationId: 'relation-1', archiveId: 'archive-1', repoId: 'repo-web', directoryId: 'web-dir',
+    filePath: 'links/1401218/sites/example.com.py', gitCommit: 'a'.repeat(40), archiveStatus: 'committed' }
+  vi.mocked(runnerManagementApi.sourceCodeRelations).mockResolvedValueOnce({ items: [
+    { ...file, relationId: 'pending', archiveStatus: 'pending', filePath: 'not-committed.py' }, file,
+  ], total: 2 })
+  const w = mountDialog({ ...context, open: false })
+  await flushPromises()
+  const section = () => w.get('[data-testid="site-script-source-repository"]')
+  expect(runnerManagementApi.sourceCodeRelations).toHaveBeenCalledWith(context)
+  expect(section().findAll('a')).toHaveLength(1)
+  expect(section().get('a').attributes('href')).toContain('filePath=links/1401218/sites/example.com.py')
+  await w.setProps({ sourceId: '430024911' }); await flushPromises()
+  expect(runnerManagementApi.sourceCodeRelations).toHaveBeenLastCalledWith({ ...context, sourceId: '430024911' })
+  expect(section().text()).toContain('暂无生成代码的仓库归档记录')
+  expect(section().find('a').exists()).toBe(false)
+  w.unmount()
+  await flushPromises()
+})
 
 it.each(['task', 'direct'] as const)('%s 生成的用户提示词包含输出字段名称和 ID，保留手工需求', async mode => {
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
@@ -451,7 +474,7 @@ it('选择大模型后按所选接口生成，停用的模型不出现在选项�
 it('模型配置查询失败时保留编辑区并阻止调用其他默认服务', async () => {
   vi.mocked(runnerManagementApi.modelInterfaces).mockRejectedValue(new Error('配置服务不可用'))
   const w = mountDialog(); await flushPromises()
-  expect(w.text()).toContain('模型接口加载失败：配置服务不可用')
+  expect(w.text()).toContain('智能体接口加载失败：配置服务不可用')
   expect((w.get('[data-testid="site-script-generate"]').element as HTMLButtonElement).disabled).toBe(true)
   expect(w.find('[data-testid="site-script-prompt"]').exists()).toBe(true)
   expect(generateSiteScript).not.toHaveBeenCalled()

@@ -25,6 +25,9 @@ def cdp_port(value=9223):
     return value
 
 
+DEFAULT_CHAT_CDP_PORT = 9222
+
+
 def defaults():
     common = dict(enabled=True, timeoutSeconds=300, prjDir='', inputFileDir='', codeDir='', outputFileDir='', stream=True)
     return [
@@ -34,7 +37,7 @@ def defaults():
              endpoint='http://192.168.1.171:6000/wb/agent', isDefault=False, prjDir=r'D:\aicode',
              codeDir=r'D:\aicode\code', outputFileDir=r'D:\aicode\output', cdpPort=9223),
         dict(common, id='workbuddy-chat-hy3', name='Chat · hy3', kind='chat', model='hy3',
-             endpoint='http://192.168.1.171:6000/workbuudy/chat', isDefault=False),
+             endpoint='http://192.168.1.171:6000/workbuudy/chat', isDefault=False, cdpPort=DEFAULT_CHAT_CDP_PORT),
     ]
 
 
@@ -87,6 +90,8 @@ def listing(app, servers=None):
         item.setdefault('generationServerId', '')
         if item['kind'] == 'agent':
             item.setdefault('cdpPort', 9223)
+        elif item['kind'] == 'chat':
+            item.setdefault('cdpPort', DEFAULT_CHAT_CDP_PORT)
     if servers is None:
         from .code_servers import registry
         servers = registry(app)
@@ -156,6 +161,9 @@ def save(app, body, update_test_prompts=False):
         row['timeoutSeconds'] = timeout
         if row['kind'] == 'agent':
             row['cdpPort'] = cdp_port(raw.get('cdpPort', 9223))
+        elif row['kind'] == 'chat':
+            port = raw.get('cdpPort', DEFAULT_CHAT_CDP_PORT)
+            row['cdpPort'] = cdp_port(port) if port is not None else None
         if row['isDefault'] and not row['enabled']:
             raise ApiError('默认模型接口必须启用')
         rows.append(row)
@@ -275,10 +283,15 @@ def agent_directories(selected, task_id=None):
             'taskRecordPath': str(base / 'tasks' / (task_id + '.json'))}
 
 
+def model_request_method(selected):
+    return 'GET' if selected['kind'] == 'chat' and selected.get('cdpPort', DEFAULT_CHAT_CDP_PORT) is None else 'POST'
+
+
 def workbuddy_request(selected, prompt, task_id=None):
-    from .server import ApiError
     params = {'model': selected['model'], 'prompt': prompt}
-    if selected['kind'] == 'gemini-chat':
+    if selected['kind'] in ('chat', 'gemini-chat') and model_request_method(selected) == 'POST':
+        if selected['kind'] == 'chat':
+            params['cdp_port'] = cdp_port(selected.get('cdpPort', DEFAULT_CHAT_CDP_PORT))
         return Request(selected['endpoint'], data=json.dumps(params, ensure_ascii=False).encode('utf-8'),
                        headers={'Content-Type': 'application/json', 'Accept': 'text/plain, application/json, text/event-stream'}, method='POST')
     if selected['kind'] in ('agent', 'gemini-agent'):
@@ -346,6 +359,8 @@ def prepare_test(app, body):
         if selected['kind'] == 'agent':
             selected['cdpPort'] = cdp_port(body.get('cdpPort', selected.get('cdpPort', 9223)))
         if selected['kind'] == 'chat':
+            port = body.get('cdpPort', selected.get('cdpPort', DEFAULT_CHAT_CDP_PORT))
+            selected['cdpPort'] = cdp_port(port) if port is not None else None
             stream = body.get('stream', selected['stream'])
             if type(stream) is not bool:
                 raise ApiError('stream 必须为布尔值')

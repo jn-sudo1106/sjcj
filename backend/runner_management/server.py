@@ -1737,9 +1737,11 @@ class Handler(BaseHTTPRequestHandler):
                     capabilities = [value for value in capabilities if value != 'file-browser']
                     if body.get('fileBrowserSchema') == 1:
                         capabilities.append('file-browser')
-                    capabilities = [value for value in capabilities if value != 'live-file-deployment']
-                    if body.get('liveFileDeploymentSchema') == 1:
+                    capabilities = [value for value in capabilities if value not in ('live-file-deployment', 'live-site-deployment')]
+                    if body.get('liveFileDeploymentSchema') in (1, 2):
                         capabilities.append('live-file-deployment')
+                    if body.get('liveFileDeploymentSchema') == 2:
+                        capabilities.append('live-site-deployment')
                     capabilities = [value for value in capabilities if value != 'deployment-entry']
                     if body.get('executionSchema') == 2:
                         capabilities.append('deployment-entry')
@@ -1938,8 +1940,9 @@ class Handler(BaseHTTPRequestHandler):
             return enrollment_code(app)
         if sub == '/code-servers/package' and method == 'GET':
             from .runner import machine_ip
+            from .code_servers import package_info
             address = os.getenv('RUNNER_LAN_HOST', '').strip() or machine_ip('http://127.0.0.1:8092')
-            return {'platform': f'http://{address}:{self.server.server_port}'}
+            return {'platform': f'http://{address}:{self.server.server_port}', 'package': package_info(app)}
         if sub == '/code-servers/package' and method == 'POST':
             from .code_servers import package
             data = package(app, required_text(body, 'platform', 2000), digest=body.get('digest', ''))

@@ -10,7 +10,7 @@ import ModelInterfacesTab from './ModelInterfacesTab.vue'
 vi.mock('@/utils/clipboard', () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }))
 
 const fixture: ModelInterfaceSettings = { revision: 3, items: [{ id: 'legacy', name: '默认模型', kind: 'chat', model: 'hy3',
-  endpoint: 'http://localhost/chat', enabled: true, isDefault: true, stream: true, timeoutSeconds: 300,
+  endpoint: 'http://localhost/chat', enabled: true, isDefault: true, stream: true, timeoutSeconds: 300, cdpPort: null,
   inputFileDir: '', codeDir: '', outputFileDir: '' }] }
 const wrappers: ReturnType<typeof mount>[] = []
 beforeEach(() => {
@@ -44,6 +44,97 @@ async function setup(role = 'admin', props: Partial<InstanceType<typeof ModelInt
   const w = mount(ModelInterfacesTab, { props, attachTo: document.body, global: { plugins: [pinia, ElementPlus] } })
   wrappers.push(w); await flushPromises(); return w
 }
+it('批量预览导入不同智能体端口，跳过重复请求，保存失败后保留预览并可重试', async () => {
+  vi.spyOn(crypto, 'randomUUID').mockImplementation(() => { throw new Error('HTTP 页面不支持 randomUUID') })
+  const w = await setup()
+  await w.get('[data-testid="model-import"]').trigger('click'); await flushPromises()
+  const request = (port: number) => 'curl.exe -N -X POST "http://host:6000/wb/agent" -d \'' +
+    JSON.stringify({ prj_dir: 'D:\\aicode', input_file_dir: 'D:\\aicode\\input', model: 'hy3', prompt: '', cdp_port: port }) + "'"
+  const input = document.querySelector<HTMLTextAreaElement>('[data-testid="model-import-text"] textarea, textarea[data-testid="model-import-text"]')!
+  input.value = [request(9222), request(9333), request(9222)].join('\n')
+  input.dispatchEvent(new Event('input')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-import-preview"]')!.click(); await flushPromises()
+  expect(document.body.textContent).toContain('已跳过 1 条相同配置')
+  const save = document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!
+  expect(save.textContent).toContain('2')
+  vi.mocked(runnerManagementApi.saveModelInterfaces).mockRejectedValueOnce(new Error('连接暂时失败'))
+  save.click(); await flushPromises()
+  expect(document.body.textContent).toContain('连接暂时失败')
+  expect(save.disabled).toBe(false)
+  save.click(); await flushPromises()
+  expect(runnerManagementApi.saveModelInterfaces).toHaveBeenCalledTimes(2)
+  const payload = vi.mocked(runnerManagementApi.saveModelInterfaces).mock.calls[1]![0]
+  expect(payload.items).toHaveLength(3)
+  expect(payload.revision).toBe(3)
+  expect(payload.items[0]!.isDefault).toBe(true)
+  expect(payload.items.slice(1).map(item => item.cdpPort)).toEqual([9222, 9333])
+  expect(payload.items.slice(1).every(item => !!item.id && !item.isDefault && item.generationServerMode === 'auto')).toBe(true)
+  expect(w.get('[data-testid="model-port-' + payload.items[1]!.id + '"]').text()).toBe('9222')
+  expect(w.get('[data-testid="model-port-' + payload.items[2]!.id + '"]').text()).toBe('9333')
+})
+
+it('任何 curl 解析失败时阻止整批保存，修改输入后清除旧预览', async () => {
+  const w = await setup()
+  await w.get('[data-testid="model-import"]').trigger('click'); await flushPromises()
+  const input = document.querySelector<HTMLTextAreaElement>('[data-testid="model-import-text"] textarea, textarea[data-testid="model-import-text"]')!
+  input.value = 'curl http://host/wb/chat?model=hy3\ncurl -X POST http://host/wb/agent -d invalid'
+  input.dispatchEvent(new Event('input')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-import-preview"]')!.click(); await flushPromises()
+  expect(document.body.textContent).toContain('第 2 条请求解析失败')
+  expect(document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.disabled).toBe(true)
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+  input.value = 'curl http://host/wb/chat?model=hy3'
+  input.dispatchEvent(new Event('input')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-import-preview"]')!.click(); await flushPromises()
+  expect(document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.disabled).toBe(false)
+  input.value += '&prompt=changed'
+  input.dispatchEvent(new Event('input')); await flushPromises()
+  expect(document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.textContent).toBe('解析预览')
+  expect(document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.disabled).toBe(false)
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+})
+
+it('导入可选择 Chat 类型，自定义地址解析预览后再确认保存', async () => {
+  const w = await setup()
+  await w.get('[data-testid="model-import"]').trigger('click'); await flushPromises()
+  const type = w.findAllComponents({ name: 'ElRadioGroup' }).find(item => item.attributes('data-testid') === 'model-import-type')!
+  type.vm.$emit('update:modelValue', 'chat'); await flushPromises()
+  const input = document.querySelector<HTMLTextAreaElement>('[data-testid="model-import-text"] textarea, textarea[data-testid="model-import-text"]')!
+  input.value = 'curl -X POST http://host/custom-chat -d \'{"model":"hy3","prompt":"","cdp_port":"9222"}\''
+  input.dispatchEvent(new Event('input')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.click(); await flushPromises()
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+  expect(document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.textContent).toBe('导入 1 个接口')
+  document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.click(); await flushPromises()
+  expect(vi.mocked(runnerManagementApi.saveModelInterfaces).mock.calls[0]![0].items[1]).toMatchObject({
+    kind: 'chat', cdpPort: 9222, endpoint: 'http://host/custom-chat',
+  })
+})
+
+it('只读用户可以查看智能体端口，隐藏导入入口', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({
+    revision: 3, items: [{ ...fixture.items[0]!, cdpPort: 9222 }],
+  })
+  const w = await setup('read')
+  expect(w.get('[data-testid="model-port-legacy"]').text()).toBe('9222')
+  expect(w.find('[data-testid="model-import"]').exists()).toBe(false)
+})
+it('171 已有接口即使改过目录、提示词和关联方式，再次导入也会跳过', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items: [{
+    ...fixture.items[0]!, kind: 'agent', endpoint: 'http://192.168.1.171:6000/wb/agent', cdpPort: 9222,
+    prjDir: 'D:\\codeserver\\workspace', inputFileDir: '', codeDir: '', outputFileDir: '',
+    testUserPrompt: '手工编辑过的提示词', generationServerId: 'server-171', generationServerMode: 'manual',
+  }] })
+  const w = await setup()
+  await w.get('[data-testid="model-import"]').trigger('click'); await flushPromises()
+  const input = document.querySelector<HTMLTextAreaElement>('[data-testid="model-import-text"] textarea, textarea[data-testid="model-import-text"]')!
+  input.value = 'curl.exe -X POST http://192.168.1.171:6000/wb/agent -d \'{"prj_dir":"D:\\\\aicode","model":"hy3","prompt":"","cdp_port":9222}\''
+  input.dispatchEvent(new Event('input')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-import-preview"]')!.click(); await flushPromises()
+  expect(document.body.textContent).toContain('已跳过 1 条相同配置')
+  expect(document.querySelector<HTMLButtonElement>('[data-testid="model-import-save"]')!.disabled).toBe(true)
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+})
 const scopedServer: CodeGenerationServer = { serverId: 'server-a', name: '生成服务器 A', ipAddress: '192.168.1.171',
   workspace: 'D:\\codeserver\\workspace', generationRoot: 'D:\\codeserver\\projects', endpoint: 'http://192.168.1.171:8093',
   installDirectory: 'D:\\codeserver', osType: 'Windows', osVersion: 'Windows 11', version: '1', lastHeartbeat: '', status: 'online' }
@@ -191,6 +282,29 @@ it('WB Agent 端口随编辑保存，测试可临时覆盖', async () => {
   const second = vi.mocked(runnerManagementApi.streamModelInterfaceTest).mock.calls.at(-1)![0]
   expect(second.taskId).not.toBe(first.taskId)
   expect(second.codeDir).toBe(first.codeDir)
+})
+it('WB Chat 默认使用 CDP 端口 9222，保存自定义端口后测试可以临时改端口', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({
+    revision: 3, items: [{ ...fixture.items[0]!, cdpPort: undefined }],
+  })
+  const w = await setup()
+  await w.findAll('button').find(button => button.text() === '编辑')!.trigger('click'); await flushPromises()
+  const input = document.querySelector<HTMLInputElement>('[data-testid="model-cdp-port"] input')!
+  expect(input.value).toBe('9222')
+  input.value = '9444'; input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('change')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-save"]')!.click(); await flushPromises()
+  expect(vi.mocked(runnerManagementApi.saveModelInterfaces).mock.calls[0]![0].items[0]!.cdpPort).toBe(9444)
+  await w.findAll('button').find(button => button.text() === '复制请求')!.trigger('click'); await flushPromises()
+  const request = vi.mocked(copyToClipboard).mock.calls.at(-1)![0]
+  expect(request).toMatch(/^POST http:\/\/localhost\/chat\nContent-Type: application\/json\n/)
+  expect(JSON.parse(request.split('\n\n')[1]!)).toEqual({ model: 'hy3', prompt: '南京到上海的距离', cdp_port: 9444 })
+  await w.findAll('button').find(button => button.text() === '测试')!.trigger('click'); await flushPromises()
+  const port = document.querySelector<HTMLInputElement>('[data-testid="model-test-cdp-port"] input')!
+  expect(port.value).toBe('9444')
+  port.value = '9333'; port.dispatchEvent(new Event('input')); port.dispatchEvent(new Event('change')); await flushPromises()
+  document.querySelector<HTMLButtonElement>('[data-testid="model-send-test"]')!.click(); await flushPromises()
+  expect(runnerManagementApi.streamModelInterfaceTest).toHaveBeenCalledWith(expect.objectContaining({ cdpPort: 9333 }), expect.any(Function), expect.any(AbortSignal))
+  expect(runnerManagementApi.saveModelInterfaces).toHaveBeenCalledTimes(1)
 })
 it('编辑移除样例；测试弹窗使用独立参数发送并展示结果，不修改接口配置', async () => {
   const w = await setup()

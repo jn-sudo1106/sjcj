@@ -6,6 +6,7 @@ import { sourceApi, flowCenterApi, type Source, type TaskInst } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
 import { runnerManagementApi, type MqCodeJob, type GenerationModelCall, type GenerationRepositoryResult } from '@/api/runnerManagement'
+import { modelRequestMethod } from '@/utils/generationWorkspace'
 import { runStateInfo } from '@/constants/runState'
 import { prettyJsonText } from '@/utils/jsonText'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
@@ -186,7 +187,7 @@ async function loadMetadata(items: TaskInst[], sequence: number) {
       if (sequence !== listSequence) return
       modelReferences.value = Object.fromEntries(settings.items.map(model => { const endpoint = new URL(model.endpoint); return [model.id, {
         interfaceId: model.id, name: model.name, kind: model.kind, model: model.model, endpoint: `${endpoint.protocol}//${endpoint.host}${endpoint.pathname}`,
-        method: model.kind === 'chat' ? 'GET' : 'POST', timeoutSeconds: model.timeoutSeconds,
+        method: modelRequestMethod(model), timeoutSeconds: model.timeoutSeconds,
       }] }))
     }).catch(() => { failures.push('当前模型配置参考读取失败') }) : Promise.resolve(),
   ])
@@ -288,7 +289,7 @@ async function loadDetail() {
         if (model) {
           const endpoint = new URL(model.endpoint)
           referenceModel.value = { interfaceId: model.id, name: model.name, kind: model.kind, model: model.model,
-            endpoint: `${endpoint.protocol}//${endpoint.host}${endpoint.pathname}`, method: model.kind === 'chat' ? 'GET' : 'POST', timeoutSeconds: model.timeoutSeconds, serverId: model.generationServerId }
+            endpoint: `${endpoint.protocol}//${endpoint.host}${endpoint.pathname}`, method: modelRequestMethod(model), timeoutSeconds: model.timeoutSeconds, serverId: model.generationServerId }
         }
         referenceError.value = model ? '' : '任务所选接口已不存在，无法查询当前配置参考'
       } catch (e) { if (sequence === detailSequence) referenceError.value = `当前模型配置参考查询失败：${e instanceof Error ? e.message : String(e)}` }

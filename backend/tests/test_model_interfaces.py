@@ -95,7 +95,7 @@ class ModelInterfacesTest(unittest.TestCase):
         thread=threading.Thread(target=upstream.serve_forever,daemon=True);thread.start()
         try:
             config=models.listing(self.app)
-            config['items'][2]['endpoint']=f'http://127.0.0.1:{upstream.server_port}/chat'
+            config['items'][2].update(endpoint=f'http://127.0.0.1:{upstream.server_port}/chat', cdpPort=None)
             models.save(self.app,config)
             payload={'interfaceId':'workbuddy-chat-hy3','prompt':'生成代码','url':'https://example.com','sampleId':'www.realcan.cn.py','responseStream':True}
             request=Request(self.url+'/api/runner-management/model-interfaces/generate',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'})
@@ -171,6 +171,48 @@ class ModelInterfacesTest(unittest.TestCase):
                     models.save(self.app, broken)
                 with self.assertRaises(ApiError):
                     models.prepare_test(self.app, {'interfaceId': agent['id'], 'prompt': '测试', 'cdpPort': invalid})
+
+    def test_wb_chat_uses_json_post_when_cdp_port_is_configured(self):
+        from backend.runner_management.server import ApiError
+        config = models.listing(self.app)
+        chat = config['items'][2]
+        chat['endpoint'] = 'http://192.168.2.180:6000/wb/chat'
+        self.assertEqual(chat.pop('cdpPort'), 9222)
+        models.save(self.app, config)
+        current = models.listing(self.app)
+        saved_chat = current['items'][2]
+        self.assertEqual(saved_chat['cdpPort'], 9222)
+        request = models.workbuddy_request(saved_chat, '地球有多大？')
+        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.full_url, chat['endpoint'])
+        self.assertEqual(request.get_header('Content-type'), 'application/json')
+        self.assertEqual(json.loads(request.data), {'model': 'hy3', 'prompt': '地球有多大？', 'cdp_port': 9222})
+
+        test = {'interfaceId': chat['id'], 'prompt': '测试'}
+        _, request = models.prepare_test(self.app, {**test, 'cdpPort': 9333})
+        self.assertEqual(json.loads(request.data)['cdp_port'], 9333)
+        _, request = models.prepare_test(self.app, {**test, 'cdpPort': None})
+        self.assertEqual(request.get_method(), 'GET')
+        self.assertIn('stream=1', request.full_url)
+        self.assertEqual(models.listing(self.app), current)
+        for invalid in (True, '9222', 0, 65536, 9222.5):
+            with self.subTest(port=invalid):
+                broken = copy.deepcopy(current)
+                broken['items'][2]['cdpPort'] = invalid
+                with self.assertRaises(ApiError):
+                    models.save(self.app, broken)
+                with self.assertRaises(ApiError):
+                    models.prepare_test(self.app, {**test, 'cdpPort': invalid})
+
+        saved_chat['cdpPort'] = 9444
+        models.save(self.app, current)
+        _, request = models.prepare_test(self.app, test)
+        self.assertEqual(json.loads(request.data)['cdp_port'], 9444)
+        current = models.listing(self.app)
+        current['items'][2]['cdpPort'] = None
+        models.save(self.app, current)
+        _, request = models.prepare_test(self.app, test)
+        self.assertEqual(request.get_method(), 'GET')
 
     def test_gemini_chat_uses_post_json_prompt_and_model_only(self):
         config = models.listing(self.app)
@@ -261,7 +303,7 @@ class ModelInterfacesTest(unittest.TestCase):
         thread = threading.Thread(target=upstream.serve_forever, daemon=True); thread.start()
         try:
             config = models.listing(self.app)
-            config['items'][2]['endpoint'] = f'http://127.0.0.1:{upstream.server_port}/chat'
+            config['items'][2].update(endpoint=f'http://127.0.0.1:{upstream.server_port}/chat', cdpPort=None)
             models.save(self.app, config)
             request = Request(self.url + '/api/runner-management/model-interfaces/test',
                               data=json.dumps({'interfaceId': 'workbuddy-chat-hy3', 'prompt': 'hello', 'responseStream': True}).encode(),
@@ -286,6 +328,7 @@ class ModelInterfacesTest(unittest.TestCase):
         original = {'revision': 9, 'items': models.defaults()}
         for item in original['items']:
             item.pop('prjDir', None)
+        original['items'][2].pop('cdpPort')
         original['items'][1]['endpoint'] = 'http://192.168.1.171:6000/wb/agent'
         with self.app.store.connect() as db:
             db.execute('INSERT INTO settings (setting_key,setting_value) VALUES (?,?)',
@@ -293,6 +336,7 @@ class ModelInterfacesTest(unittest.TestCase):
         loaded = models.listing(self.app)
         self.assertEqual(loaded['revision'], 9)
         self.assertEqual(loaded['items'][1]['prjDir'], r'D:\aicode')
+        self.assertEqual(loaded['items'][2]['cdpPort'], 9222)
         for old, new in zip(original['items'], loaded['items']):
             self.assertEqual({key: new[key] for key in old}, old)
 
@@ -318,6 +362,7 @@ class ModelInterfacesTest(unittest.TestCase):
             config = models.listing(self.app)
             for row in config['items']:
                 row['endpoint'] = f'http://127.0.0.1:{upstream.server_port}/' + row['kind']
+            config['items'][2]['cdpPort'] = None
             original = models.save(self.app, config)
             payload = {'interfaceId': 'workbuddy-chat-hy3', 'prompt': '南京 & 上海', 'model': 'temporary', 'stream': False,
                        'endpoint': 'http://not-allowed.invalid/', 'kind': 'agent'}
@@ -413,7 +458,8 @@ class ModelInterfacesTest(unittest.TestCase):
             self.assertIn('目标列表 URL：' + payload['url'], agent['prompt'])
             self.assertIn('生成文件名：example.com.py', agent['prompt'])
             self.assertIn('代码保存目录：' + agent['code_dir'], agent['prompt'])
-            self.assertEqual(calls[2][1]['stream'], ['1'])
+            self.assertEqual(calls[2][1]['cdp_port'], 9222)
+            self.assertNotIn('stream', calls[2][1])
             self.assertNotIn('Access-Token', calls[1][2])
             with self.assertRaises(HTTPError):
                 self.request('/api/runner-management/model-interfaces/generate', {**payload, 'interfaceId': 'missing'})
