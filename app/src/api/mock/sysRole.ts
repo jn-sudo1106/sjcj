@@ -244,7 +244,7 @@ export function mockUserNav(): UserNavData {
             componentPath: 'views/RunRecords/index.vue', routeName: 'Tasks',
             tabs: [
               { id: 5101, key: 'collection', label: '采集任务', permission: 'tasks', order: 1, componentPath: 'views/FlowCanvas/result/TaskView.vue' },
-              { id: 5102, key: 'code-generation', label: '代码生成', permission: 'tasks', order: 2, componentPath: 'views/RunRecords/CodeGenerationTasks.vue' },
+              { id: 5102, key: 'code-generation', label: '智能体任务', permission: 'tasks', order: 2, componentPath: 'views/RunRecords/CodeGenerationTasks.vue' },
             ],
           },
           {
@@ -281,7 +281,7 @@ export function mockUserNav(): UserNavData {
             tabs: [
               { id: 8101, key: 'node-type', label: '节点类型', permission: 'settings:nodeType', order: 1, componentPath: 'views/Settings/NodeTypeTab.vue' },
               { id: 8102, key: 'category', label: '分类目录', permission: 'settings:category', order: 2, componentPath: 'views/Settings/CategoryTab.vue' },
-              { id: 8103, key: 'code-servers', label: '代码生成服务器', permission: 'settings:nodeType', order: 3, componentPath: 'views/Settings/CodeGenerationServersTab.vue' },
+              { id: 8103, key: 'code-servers', label: '智能体资源', permission: 'settings:nodeType', order: 3, componentPath: 'views/Settings/CodeGenerationServersTab.vue' },
               { id: 8104, key: 'runners', label: '服务器', permission: 'settings:runners', order: 4, componentPath: 'views/Settings/ServerConfigurationsTab.vue' },
               { id: 8105, key: 'processors', label: '处理机', permission: 'settings:assignments', order: 5, componentPath: 'views/Settings/ProcessorProcessesTab.vue' },
               { id: 8106, key: 'code-repos', label: '代码仓库', permission: 'settings:releases', order: 6, componentPath: 'views/Settings/CodeRepositoryTab.vue' },

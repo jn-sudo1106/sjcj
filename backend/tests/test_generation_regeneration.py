@@ -64,6 +64,7 @@ class GenerationRegenerationTest(unittest.TestCase):
         for field, value in before['generation'].items():
             if field not in ('systemPrompt', 'userPrompt'): self.assertEqual(after['generation'][field], value)
         self.assertEqual(after['generation']['systemPrompt'], body['systemPrompt'])
+        self.assertEqual(after['generation']['promptTemplateId'], 0)
         self.assertIn('修正发布日期', after['generation']['userPrompt'])
         saved = tasks.read(self.app, child['taskId']); saved.update(status='failed'); tasks.put(self.app, saved)
         body['requestId'] = 'b'*32

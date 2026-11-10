@@ -6,7 +6,7 @@ import re
 import uuid
 
 FIELDS = ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName', 'systemPrompt', 'userPrompt',
-          'url', 'fileNameMode', 'fileName', 'destinationMode', 'outputSubdirectory')
+          'url', 'fileNameMode', 'fileName', 'destinationMode', 'outputSubdirectory', 'referenceFiles')
 
 
 def revision(raw):
@@ -70,7 +70,7 @@ def submit(app, task_id, body):
             if not saved or not json.loads(saved['setting_value']).get('generation'): raise ApiError('节点尚无保存的生成配置，不能更新提示词', 409)
             if body.get('nodePromptRevision') != revision(saved['setting_value']): raise ApiError('节点生成配置已修改，请重新打开修正工作区后再提交', 409)
             updated = json.loads(saved['setting_value'])
-            updated['generation'].update(systemPrompt=body['systemPrompt'], userPrompt=user_prompt)
+            updated['generation'].update(systemPrompt=body['systemPrompt'], userPrompt=user_prompt, promptTemplateId=0)
             updated['updatedAt'] = stamp()
             node_update = (key(original['configId']), saved['setting_value'], json.dumps(updated, ensure_ascii=False))
         lineage = {'parentTaskId': task_id, 'rootTaskId': original.get('rootTaskId') or task_id,

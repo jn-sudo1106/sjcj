@@ -40,7 +40,7 @@ function pickRailNode(id: string) {
 // 0915-05（2026-09-16）：`siteWide` 此前只有单测在用，页面上没有任何入口渲染过它。
 // 接进网站详情页时补了两处——① siteId 不能再只从 `flow.sourceCtx` 取（网站态压根没有 sourceCtx，
 // 取到空串会被 loadTasks 的守卫短路成空列表）；② 空态判定同理，见下方 hasContext。
-const props = defineProps<{ siteWide?: boolean; siteId?: string; global?: boolean }>()
+const props = defineProps<{ siteWide?: boolean; siteId?: string; global?: boolean; hideHeader?: boolean }>()
 const flow = useFlowStore()
 const source = computed(() => flow.sourceCtx)
 const sourceId = computed(() => props.global ? '' : (source.value?.sourceId ?? ''))
@@ -700,7 +700,7 @@ const nextStepHints = computed(() => {
 
 <template>
   <main class="tv-shell">
-    <CanvasHeader v-if="!siteWide && !global" />
+    <CanvasHeader v-if="!siteWide && !global && !hideHeader" />
     <div class="tv-body" :class="{ 'is-global': global }">
       <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>

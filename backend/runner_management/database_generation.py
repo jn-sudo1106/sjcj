@@ -49,14 +49,20 @@ def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
     override = body.get('generation') or {}
     if not isinstance(override, dict): raise ApiError('代码生成配置无效')
     data = copy.deepcopy(saved)
+    # Template selection belongs to the editor; jobs execute the saved prompt snapshot.
+    data.pop('promptTemplateId', None)
+    references = data.pop('referenceFiles', [])
     fields = ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName', 'systemPrompt', 'userPrompt',
               'url', 'fileNameMode', 'fileName', 'destinationMode', 'outputSubdirectory')
     data.update({key: override[key] for key in fields if key in override})
     if any(not isinstance(value, str) or len(value) > (12000 if 'Prompt' in key else 2000) for key, value in data.items()):
         raise ApiError('代码生成配置字段无效或过长')
     if not data.get('systemPrompt', '').strip() or not data.get('userPrompt', '').strip(): raise ApiError('请填写系统和用户提示词')
+    from .generation_references import snapshot
+    data['referenceFiles'] = snapshot(app, override.get('referenceFiles', references))
     selected = next((item for item in listing(app)['items'] if item['id'] == data.get('interfaceId') and item['enabled']), None)
-    if not selected: raise ApiError('所选模型不存在或已禁用')
+    from .agent_pool import ALL
+    if not selected and data.get('interfaceId') != ALL: raise ApiError('所选模型不存在或已禁用')
     from .generation_workspaces import directory, node_defaults
     from .generated_archives import destination
     directory({**data, 'configId': owner})
@@ -87,7 +93,7 @@ def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
               'input': data, 'task': {'SourceId': source_id, 'Url': data['url']},
               'params': {'orchestration': {'aiGeneration': data}}}
     from .mq_generation import model_call_info
-    record['modelCall'] = model_call_info(app, record, selected)
+    record['modelCall'] = model_call_info(app, record, selected) if selected else {'interfaceId': ALL, 'name': '全选 · 等待空闲智能体', 'endpoint': '', 'kind': 'agent', 'model': ''}
     if _lineage: record.update(_lineage)
     with app.store.connect() as db:
         if _node_update:
@@ -98,7 +104,7 @@ def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
                           (updated, key, previous)).rowcount != 1:
                 raise ApiError('节点生成配置已修改，请重新打开修正工作区后再提交', 409)
         db.execute('INSERT INTO generation_jobs (task_id,source_id,flow_id,config_id,interface_id,status,server_id,created_at,lease_until,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
-                   (task_id, source_id, flow_id, owner, selected['id'], 'queued', '', record['createdAt'], 0, json.dumps(record, ensure_ascii=False)))
+                   (task_id, source_id, flow_id, owner, data['interfaceId'], 'queued', '', record['createdAt'], 0, json.dumps(record, ensure_ascii=False)))
         from .source_code_relations import note_task
         note_task(db, record)
     return {'job': public(record)}
@@ -187,17 +193,37 @@ def claim(app, server):
     from .code_servers import registry
     machine = next((row for row in registry(app) if row['serverId'] == server['serverId']), None)
     if not machine or machine['status'] != 'online' or not machine.get('mqCapable'): return {'job': None}
-    interfaces = [row['id'] for row in listing(app)['items'] if row['enabled'] and row.get('generationServerId') == server['serverId']]
+    from .agent_pool import ALL, KINDS, acquire, release
+    with LOCK:
+        with app.store.connect() as db:
+            expired = db.execute("SELECT task_id,payload FROM generation_jobs WHERE status='claimed' AND lease_until<?", (time.time(),)).fetchall()
+        models = listing(app)['items']
+        for old in expired:
+            identifier = json.loads(old['payload'])['input']['interfaceId']
+            item = next((item for item in models if item['id'] == identifier), None)
+            if item: release(app, item, old['task_id'])
+    choices = [row for row in listing(app)['items'] if row['enabled'] and row.get('generationServerId') == server['serverId'] and row['runtimeStatus'] == 'idle']
+    interfaces = [row['id'] for row in choices]
     if not interfaces: return {'job': None}
     server_id, clock = server['serverId'], time.time()
     with app.store.connect() as db:
-        rows = db.execute("SELECT task_id FROM generation_jobs WHERE interface_id IN (" + ','.join('?' for _ in interfaces)
-                          + ") AND (status='queued' OR (status='claimed' AND lease_until<?)) ORDER BY created_at,task_id LIMIT 20", [*interfaces, clock]).fetchall()
+        rows = db.execute("SELECT task_id,interface_id FROM generation_jobs WHERE interface_id IN (" + ','.join('?' for _ in [*interfaces, ALL])
+                          + ") AND (status='queued' OR (status='claimed' AND lease_until<?)) ORDER BY created_at,task_id LIMIT 20", [*interfaces, ALL, clock]).fetchall()
     for row in rows:
-        with LOCK, app.store.connect() as db:
-            changed = db.execute("UPDATE generation_jobs SET status='claimed',server_id=?,lease_until=? WHERE task_id=? AND (status='queued' OR (status='claimed' AND lease_until<?))",
-                                 (server_id, clock + 60, row['task_id'], clock)).rowcount
-        if changed: return {'job': {'taskId': row['task_id']}}
+        for item in choices:
+            if not (item['id'] == row['interface_id'] or row['interface_id'] == ALL and item['kind'] in KINDS): continue
+            with LOCK:
+                if not acquire(app, item, row['task_id']): continue
+                with app.store.connect() as db:
+                    record = read(app, row['task_id'])
+                    record['input']['interfaceId'] = item['id']
+                    record['params']['orchestration']['aiGeneration']['interfaceId'] = item['id']
+                    from .mq_generation import model_call_info
+                    record['modelCall'] = model_call_info(app, record, item)
+                    changed = db.execute("UPDATE generation_jobs SET status='claimed',server_id=?,lease_until=?,payload=? WHERE task_id=? AND (status='queued' OR (status='claimed' AND lease_until<?))",
+                                         (server_id, clock + 60, json.dumps(record, ensure_ascii=False), row['task_id'], clock)).rowcount
+                if changed: return {'job': {'taskId': row['task_id']}}
+                release(app, item, row['task_id'])
     return {'job': None}
 
 
@@ -238,7 +264,7 @@ def execute(handler, app, server, task_id):
             try: handler.wfile.write((json.dumps({'type': kind, **fields}, ensure_ascii=False) + '\n').encode()); handler.wfile.flush()
             except OSError: connected = False
     try:
-        result = generate(app, record['input'], emit)
+        result = generate(app, record['input'], emit, _lease_owner=task_id, _reference_snapshot=record['input'].get('referenceFiles', []))
         if not result.get('archive'):
             result['archive'] = archive_text(app, record, result)
         archive = result.get('archive') or {}
@@ -248,6 +274,10 @@ def execute(handler, app, server, task_id):
         record.update(status='failed', message=str(error)[:1500]); emit('error', message=record['message'])
     finally:
         record.update(finishedAt=now(), callbackSent=True); put(app, record)
+        from .agent_pool import release
+        from .model_interfaces import listing
+        item = next((item for item in listing(app)['items'] if item['id'] == record['input']['interfaceId']), None)
+        if item: release(app, item, task_id)
         with LOCK: ACTIVE.discard(task_id)
     emit('done', status=record['status'], message=record['message'], result=record['result'])
     return RESPONSE_SENT

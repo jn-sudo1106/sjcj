@@ -25,6 +25,8 @@ const arrowId = `pnr-arrow-${++railSeq}`
 const props = withDefaults(defineProps<{
   layout: HorizontalLayout
   modelValue?: string
+  /** Omit for the existing single-node navigation mode. */
+  selectedIds?: string[]
   selectable?: (nodeId: string) => boolean
   /** 运行状态由任务/数据查看等只读视图提供；画布编辑态不传。 */
   nodeStates?: Record<string, string | undefined>
@@ -44,6 +46,7 @@ const props = withDefaults(defineProps<{
 })
 const emit = defineEmits<{
   'update:modelValue': [nodeId: string]
+  'update:selectedIds': [nodeIds: string[]]
   /**
    * 节点右键（0917-06 / 0917-08，2026-09-21 用户定）。
    * **菜单内容由各视图自己渲染**：这条轨道被数据 / 文件 / 任务 / 监控四个视图复用，
@@ -61,7 +64,10 @@ function onNodeMenu(ev: MouseEvent, nodeId: string) {
 const railStyle = computed(() => ({ width: `${props.layout.totalWidth}px`, height: `${props.layout.totalHeight}px` }))
 const finalNodeId = computed(() => props.layout.nodes.filter((node) => !node.branch).at(-1)?.id)
 function pick(nodeId: string) {
-  if (props.selectable(nodeId)) emit('update:modelValue', nodeId)
+  if (!props.selectable(nodeId)) return
+  if (props.selectedIds !== undefined) {
+    emit('update:selectedIds', props.selectedIds.includes(nodeId) ? props.selectedIds.filter(id => id !== nodeId) : [...props.selectedIds, nodeId])
+  } else emit('update:modelValue', nodeId)
 }
 function stateText(state?: string) {
   return state === 'E' ? '异常' : state === 'L' ? '运行中' : state === 'C' ? '完成' : state === 'D' ? '已停用' : ''
@@ -193,8 +199,11 @@ function nodeTitle(node: RailNode): string {
       v-for="node in layout.nodes"
       :key="node.id"
       class="pnr-node"
-      :class="{ active: modelValue === node.id, disabled: !selectable(node.id), skipped: isSkipped(node.id) }"
+      :class="{ active: selectedIds !== undefined ? selectedIds.includes(node.id) : modelValue === node.id, disabled: !selectable(node.id), skipped: isSkipped(node.id) }"
       type="button"
+      :role="selectedIds !== undefined ? 'checkbox' : undefined"
+      :aria-checked="selectedIds !== undefined ? selectedIds.includes(node.id) : undefined"
+      :aria-disabled="selectedIds !== undefined ? !selectable(node.id) : undefined"
       :data-node-id="node.id"
       :data-testid="`rail-node-${node.id}`"
       :title="nodeTitle(node)"
@@ -202,15 +211,18 @@ function nodeTitle(node: RailNode): string {
       @click="pick(node.id)"
       @contextmenu="onNodeMenu($event, node.id)"
     >
+      <span v-if="selectedIds !== undefined" class="pnr-node-check" aria-hidden="true">{{ selectedIds.includes(node.id) ? '✓' : '' }}</span>
       <span class="pnr-node-icon" :title="badgeTitle(node)">{{ badgeText(node) }}</span>
       <span class="pnr-node-text">
+        <slot name="node-text" :node="node">
         <b>{{ node.cfg.title }}</b>
         <small v-if="displayTableName(node)" class="pnr-node-sub pnr-node-table">{{ displayTableName(node) }}</small>
         <small v-if="queueSub(node)" class="pnr-node-sub pnr-node-queue">{{ queueSub(node) }}</small>
         <small v-else-if="!displayTableName(node) && node.cfg.sub" class="pnr-node-sub">{{ node.cfg.sub }}</small>
+        </slot>
       </span>
       <span v-if="nodeStates[node.id]" class="pnr-node-state" :class="`state-${nodeStates[node.id]}`" :title="stateText(nodeStates[node.id])" :aria-label="stateText(nodeStates[node.id])" />
-      <span v-if="node.id === finalNodeId" class="pnr-node-final">最终结果</span>
+      <span v-if="selectedIds === undefined && node.id === finalNodeId" class="pnr-node-final">最终结果</span>
       <!-- 本次不发：角标而不是把节点整个灰掉——灰掉会跟「已停用」（落库的那个）看着一样 -->
       <span v-if="isSkipped(node.id)" class="pnr-node-skip" data-testid="rail-node-skip-badge" title="本次不发后续任务（右键可恢复）">本次不发</span>
     </button>
@@ -226,6 +238,8 @@ function nodeTitle(node: RailNode): string {
 .pnr-node { position: absolute; z-index: 1; display: flex; align-items: center; gap: 8px; box-sizing: border-box; padding: 5px 8px; border: 1px solid #d6e1ed; border-radius: 8px; background: #fff; color: #334155; cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s, background .15s; }
 .pnr-node:hover:not(.disabled):not(.active) { border-color: #bfdbfe; box-shadow: 0 4px 12px -8px rgba(37, 99, 235, .45); }
 .pnr-node.active { border-color: #2563eb; background: #f8fbff; box-shadow: 0 0 0 1px #bfdbfe; }
+.pnr-node-check { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border: 1px solid var(--el-border-color); border-radius: 3px; font-size: 11px; }
+.pnr-node.active .pnr-node-check { background: var(--el-color-primary); border-color: var(--el-color-primary); color: #fff; }
 .pnr-node.disabled { cursor: default; opacity: .62; }
 /* 本次不发（0917-06）：虚线边 + 淡化文字，但**不跟「已停用」同色**——
    那个是落库的配置状态，这个只影响这一次发送 */

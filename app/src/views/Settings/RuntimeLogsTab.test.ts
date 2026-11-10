@@ -49,9 +49,9 @@ it('运行日志新增代码生成服务类型，按路由实例读取升级日�
 })
 it('代码服务日志查询失败显示真实错误，离线实例说明日志需恢复连接后读取', async () => {
   vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'offline', name: '离线机器', status: 'offline' }] } as never)
-  vi.mocked(runnerManagementApi.remoteCodeFiles).mockRejectedValue(new Error('代码生成服务器连接超时'))
+  vi.mocked(runnerManagementApi.remoteCodeFiles).mockRejectedValue(new Error('智能体资源连接超时'))
   const { wrapper } = await setup({ tab: 'runtime-logs', kind: 'code-server', serverId: 'offline' })
-  expect(wrapper.text()).toContain('代码生成服务器连接超时')
+  expect(wrapper.text()).toContain('智能体资源连接超时')
   expect(wrapper.text()).toContain('服务离线，无法远程读取本机日志')
   expect(wrapper.text()).not.toContain('暂无此类型日志')
   wrapper.unmount()
@@ -104,6 +104,9 @@ it('历史实例信息优先于当前清单，仅缺失字段按实例 ID 补全
 it('按绑定查询，展示失败阶段、异常堆栈、采用版本和真实退出码', async () => {
   const { wrapper } = await setup()
   expect(runnerManagementApi.runtimeLogs).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: 'binding1', pageSize: 20 }))
+  expect(runnerManagementApi.runtimeLogs).toHaveBeenCalledWith(expect.objectContaining({ kind: 'run', since: '' }))
+  expect(wrapper.get('#log-tab-output').attributes('aria-selected')).toBe('true')
+  await wrapper.get('#log-tab-events').trigger('click')
   expect(wrapper.text()).toContain('Traceback'); expect(wrapper.text()).toContain('缺少公共模块')
   await wrapper.get('#log-tab-info').trigger('click')
   expect(wrapper.text()).toContain('sha256:adopted'); expect(wrapper.text()).toContain('1234'); expect(wrapper.text()).toContain('python.exe')
@@ -260,6 +263,7 @@ it('重试暂停后在执行过程顶部直接展示程序异常，过滤不隐�
     { seq: 1, index: 1, text: "ModuleNotFoundError: No module named 'save_batches'", time: record.requestedAt, source: 'console' },
   ], cursor: 1, firstCursor: 1, lastSeq: 1, hasEarlier: false })
   const { wrapper } = await setup()
+  await wrapper.get('#log-tab-events').trigger('click')
   expect(wrapper.get('#log-tab-events').attributes('aria-selected')).toBe('true')
   expect(wrapper.get('[data-testid="program-error"]').text()).toContain("ModuleNotFoundError: No module named 'save_batches'")
   await wrapper.get('[data-testid="program-error"] button').trigger('click')

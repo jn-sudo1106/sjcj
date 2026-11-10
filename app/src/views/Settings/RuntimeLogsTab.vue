@@ -35,6 +35,7 @@ const follow = ref(true), search = ref(''), errorsOnly = ref(false), consoleBox 
 const runtimeId = computed(() => typeof route.query.runtimeId === 'string' ? route.query.runtimeId : '')
 const queryText = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : ''
 const processContext = computed(() => !!queryText('processPid'))
+const programContext = computed(() => processContext.value || (!!runtimeId.value && !queryText('recordId')))
 const scopeKey = computed(() => JSON.stringify(['runtimeId', 'recordId', 'runnerId', 'assignmentId', 'processPid', 'processSlot', 'kind', 'serverId'].map(queryText)))
 let loadedScope = ''
 const programError = computed(() => {
@@ -92,12 +93,12 @@ async function query() { filters.page = 1; resetSelection(); await refresh() }
 function applyScope() {
   loadedScope = scopeKey.value
   search.value = ''; errorsOnly.value = false; follow.value = true
-  Object.assign(filters, { keyword: '', runnerId: queryText('runnerId'), kind: queryText('kind') === 'code-server' ? 'code-server' : processContext.value ? 'run' : '', status: '', period: processContext.value ? 'all' : '24', page: 1 })
+  Object.assign(filters, { keyword: '', runnerId: queryText('runnerId'), kind: queryText('kind') === 'code-server' ? 'code-server' : programContext.value ? 'run' : '', status: '', period: programContext.value ? 'all' : '24', page: 1 })
   resetSelection()
 }
 async function select(id: string) {
   selected.value = id; detail.value = null; streamId.value = ''; streamChosenManually.value = false; lines.value = []; cursor.value = 0; firstCursor.value = 0
-  ++outputSeq; detailError.value = ''; outputError.value = ''; outputNotice.value = ''; hasEarlier.value = false; follow.value = true; tab.value = processContext.value ? 'output' : 'events'; scrollTop.value = 0
+  ++outputSeq; detailError.value = ''; outputError.value = ''; outputNotice.value = ''; hasEarlier.value = false; follow.value = true; tab.value = programContext.value ? 'output' : 'events'; scrollTop.value = 0
   await loadDetail(id)
 }
 async function loadDetail(id: string, background = false) {

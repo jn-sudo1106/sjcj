@@ -33,6 +33,20 @@ class DatabaseGenerationTest(unittest.TestCase):
         return SimpleNamespace(send_response=lambda *args: None, send_header=lambda *args: None,
                                end_headers=lambda: None, wfile=io.BytesIO())
 
+    def test_saved_template_selection_does_not_invalidate_task_prompt_snapshot(self):
+        service, origin, body, calls = self.configured()
+        for template_id in (70, 0):
+            with self.subTest(template_id=template_id):
+                generation = generation_tasks.read_config(self.app, '101')['generation']
+                generation_tasks.save_config(self.app, {'configId': '101', 'generation': {**generation, 'promptTemplateId': template_id}})
+                job = self.request('/api/runner-management/code-generation/tasks', body)['job']
+                saved = tasks.read(self.app, job['taskId'])
+                self.assertEqual(saved['status'], 'queued')
+                self.assertIn(body['sourceId'], saved['input']['systemPrompt'])
+                self.assertNotIn('promptTemplateId', saved['input'])
+                self.assertEqual(generation_tasks.read_config(self.app, '101')['generation']['promptTemplateId'], template_id)
+        self.assertFalse(calls)
+
     def test_task_prompt_variables_use_executing_machine_and_queue_filename(self):
         service, origin, body, calls = self.configured()
         job = tasks.create(self.app, {**body, 'generation': {'fileNameMode':'queue',
@@ -241,7 +255,7 @@ class DatabaseGenerationTest(unittest.TestCase):
         job = tasks.create(self.app, body)['job']
         server = code_servers.read(self.app, service.identity['serverId'])
         tasks.claim(self.app, server)
-        def generate(app, data, emit):
+        def generate(app, data, emit, **kwargs):
             self.assertEqual(tasks.read(app, job['taskId'])['message'], '正在调用模型生成代码')
             emit('request', request={'method': 'POST', 'url': 'http://model/agent', 'headers': {}, 'body': {}})
             emit('progress', message='正在连接模型服务，等待过程输出…')

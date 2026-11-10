@@ -10,7 +10,7 @@ const route = useRoute()
 const { tabs, activeTab, selectTab } = useDynamicTabs({
   fallbackTabs: [
     { key: 'collection', label: '采集任务', order: 1 },
-    { key: 'code-generation', label: '代码生成', order: 2 },
+    { key: 'code-generation', label: '智能体任务', order: 2 },
   ],
 })
 
@@ -29,7 +29,7 @@ defineOptions({ name: 'TaskCenter' })
         :class="{ active: activeTab?.key === t.key }"
         @click="selectTab(t.key)"
       >
-        {{ t.label }}
+        {{ t.key === 'code-generation' ? '智能体任务' : t.label }}
       </button>
     </nav>
     <CodeGenerationTasks

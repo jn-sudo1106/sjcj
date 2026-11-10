@@ -41,6 +41,11 @@ export function createGenerationTaskId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
+export function nodeGenerationInputDirectory(root: string, configId: string) {
+  const separator = root.includes('\\') || /^[A-Za-z]:/.test(root) ? '\\' : '/'
+  return `${root.replace(/[\\/]+$/, '')}${separator}${configId}${separator}input`.replace(/[\\/]/g, separator)
+}
+
 /** Paths belong to the model server, whose OS may differ from the browser's. */
 export function generationWorkspace(config: ModelInterface, taskId: string) {
   const root = config.prjDir?.trim() || ''

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
+import { ALL_AGENTS, isAgentInterface, agentStatusLabel } from '@/utils/agentPool'
 import { runnerManagementApi as api, type MqCodeJob, type ModelInterface } from '@/api/runnerManagement'
 import { fillNodePrompt, nodePromptApi, type NodePromptTemplate } from '@/api/nodePrompts'
 import { createGenerationTaskId as newRequestId } from '@/utils/generationWorkspace'
@@ -22,7 +23,7 @@ const promptText = computed(() => JSON.stringify([systemPrompt.value, userPrompt
 let appliedPromptText = ''
 let requestId = newRequestId(), submittedBody = '', alive = true
 const files = computed(() => props.job.result?.archive?.files || [])
-const modelMissing = computed(() => !!interfaceId.value && !models.value.some(model => model.id === interfaceId.value))
+const modelMissing = computed(() => !!interfaceId.value && interfaceId.value !== ALL_AGENTS && !models.value.some(model => model.id === interfaceId.value))
 const ready = computed(() => !loading.value && !!prepared.value && !modelMissing.value && !!interfaceId.value && !!systemPrompt.value.trim() && !!userPrompt.value.trim())
 const missingTemplateFields = computed(() => selectedTemplateId.value > 0 && /\{\{\s*output_fields\s*\}\}/.test(systemPrompt.value + '\n' + userPrompt.value))
 function repositoryFile(path: string) { return { path: '/settings', query: { tab: 'code-repos', repoId: props.job.result?.archive?.repoId, filePath: path } } }
@@ -76,7 +77,7 @@ onMounted(async () => {
   try {
     const [snapshot, settings] = await Promise.all([api.prepareCodeRegeneration(props.job.taskId), api.modelInterfaces()])
     if (!alive) return
-    prepared.value = snapshot; models.value = settings.items.filter(model => model.enabled)
+    prepared.value = snapshot; models.value = settings.items.filter(model => model.enabled && isAgentInterface(model))
     systemPrompt.value = snapshot.generation.systemPrompt || ''; userPrompt.value = snapshot.generation.userPrompt || ''; interfaceId.value = snapshot.generation.interfaceId || ''
     appliedPromptText = promptText.value
     void loadTemplates(snapshot)
@@ -101,7 +102,7 @@ async function submit() {
 </script>
 
 <template>
-  <AiCodeWorkspaceDialog v-model="open" title="AI 代码工作区 · 修改后重新生成" :busy="submitting" data-testid="regeneration-dialog" @close="emit('cancel')">
+  <AiCodeWorkspaceDialog v-model="open" title="代码生成 · 修改后重新生成" :busy="submitting" data-testid="regeneration-dialog" @close="emit('cancel')">
     <section v-loading="loading" class="regeneration" :class="{ 'has-previous': showPrevious }" aria-label="修改后重新生成" data-testid="regeneration-workspace">
       <div class="regeneration-heading"><span class="regeneration-context">原任务 {{ job.taskId }} · 第 {{ (job.attempt || 1) + 1 }} 次生成</span><el-button link type="primary" data-testid="toggle-previous-generation" @click="showPrevious = !showPrevious">{{ showPrevious ? '收起上次结果' : '查看上次结果' }}</el-button></div>
       <p v-if="prepared" class="regeneration-context">{{ prepared.context.sourceName || prepared.context.sourceId }} · 流程 {{ prepared.context.flowId }} · {{ prepared.context.nodeName }} · 配置 {{ prepared.context.configId }}</p>
@@ -112,7 +113,7 @@ async function submit() {
         <PromptTemplatePicker :items="templates" :model-value="selectedTemplateId" :loading="templatesLoading" :disabled="loading || submitting" test-id="regeneration-prompt-template" @select="selectTemplate" />
         <el-alert v-if="templateError" :title="`提示词模板加载失败：${templateError}`" type="warning" :closable="false" />
         <el-alert v-if="missingTemplateFields" title="原任务没有记录输出字段，请在提示词中补全字段名和字段 ID" type="warning" :closable="false" />
-        <label>智能体接口<el-select v-model="interfaceId" aria-label="重新生成智能体接口" :disabled="submitting || loading" filterable><el-option v-if="modelMissing" :value="interfaceId" :label="`${interfaceId}（已停用或不存在）`" disabled /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'}`" /></el-select></label>
+        <label>智能体接口<el-select v-model="interfaceId" aria-label="重新生成智能体接口" :disabled="submitting || loading" filterable><el-option :value="ALL_AGENTS" label="全选 · 任意空闲智能体" /><el-option v-if="modelMissing" :value="interfaceId" :label="`${interfaceId}（已停用或不存在）`" disabled /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'} · ${agentStatusLabel(model)}`" /></el-select></label>
         <CodeGenerationPromptVariables />
         <div class="regeneration-prompts">
           <label>系统提示词<el-input v-model="systemPrompt" aria-label="重新生成系统提示词" type="textarea" :rows="12" maxlength="12000" :disabled="submitting || loading" /></label>

@@ -96,6 +96,8 @@ def listing(app, servers=None):
         from .code_servers import registry
         servers = registry(app)
     resolve_servers(result['items'], servers)
+    from .agent_pool import annotate
+    annotate(app, result['items'], servers)
     return result
 
 
@@ -377,7 +379,14 @@ def prepare_test(app, body):
 
 
 def test_interface(app, body):
+    from .agent_pool import hold
     selected, request = prepare_test(app, body)
+    with hold(app, selected):
+        return _test_interface(app, body, (selected, request))
+
+
+def _test_interface(app, body, prepared):
+    selected, request = prepared
     started = time.monotonic()
     try:
         try:
@@ -399,9 +408,16 @@ def test_interface(app, body):
 
 
 def stream_test(handler, app, body):
+    from .agent_pool import hold
+    selected, request = prepare_test(app, body)
+    with hold(app, selected):
+        return _stream_test(handler, app, body, (selected, request))
+
+
+def _stream_test(handler, app, body, prepared):
     """Relay upstream bytes as they arrive, without buffering the whole response."""
     from .server import RESPONSE_SENT
-    selected, request = prepare_test(app, body)
+    selected, request = prepared
     started = time.monotonic()
     handler.send_response(200)
     handler.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
@@ -486,7 +502,33 @@ def stream_generate(handler, app, body):
     return RESPONSE_SENT
 
 
-def generate(app, body, emit=None):
+def generate(app, body, emit=None, *, _lease_owner=None, _reference_snapshot=None):
+    from .agent_pool import ALL, KINDS, acquire, hold
+    from .server import ApiError
+    from .generation_references import snapshot
+    references = snapshot(app, body.get('referenceFiles', [])) if _reference_snapshot is None else _reference_snapshot
+    body = {**body, '_referenceSnapshot': references}
+    candidates = listing(app)['items']
+    if body.get('interfaceId') == ALL:
+        candidates = [item for item in candidates if item['kind'] in KINDS and item['runtimeStatus'] == 'idle']
+        if references: candidates = [item for item in candidates if item.get('generationServerId')]
+    else:
+        candidates = [item for item in candidates if item['id'] == body.get('interfaceId') and item['enabled']]
+        if not candidates: raise ApiError('所选模型接口不存在或已停用')
+    for item in candidates:
+        # Existing legacy generators have no browser session to reserve.
+        if item['kind'] == 'site-script':
+            return _generate_reserved(app, body, emit)
+        if item['runtimeStatus'] not in ('idle', 'busy'):
+            continue
+        owner = _lease_owner or uuid.uuid4().hex
+        if not acquire(app, item, owner, renew=_lease_owner is not None): continue
+        with hold(app, item, owner):
+            return _generate_reserved(app, {**body, 'interfaceId': item['id']}, emit)
+    raise ApiError('暂无空闲且在线的智能体，请使用任务方式等待资源', 409)
+
+
+def _generate_reserved(app, body, emit=None):
     from .server import ApiError
     selected = next((row for row in listing(app)['items'] if row['id'] == body.get('interfaceId')), None)
     if not selected or not selected['enabled']:
@@ -497,6 +539,8 @@ def generate(app, body, emit=None):
     if emit:
         selected['_emit'] = emit
     remote = selected.get('generationServerId') and selected['kind'] in ('agent', 'gemini-agent')
+    if body.get('_referenceSnapshot') and not remote:
+        raise ApiError('使用 Git 参考文件需要关联智能体资源，才能同步输入目录', 409)
     if not remote:
         return _generate(app, body, selected)
     from . import generation_workspaces as workspaces
@@ -526,6 +570,8 @@ def generate(app, body, emit=None):
         try:
             from .code_servers import operation
             from .generated_archives import relative_workspace_path
+            from .generation_references import sync
+            sync(app, selected['generationServerId'], workspace, body.get('_referenceSnapshot', []), emit)
             code_path = relative_workspace_path(app, selected['generationServerId'], workspace['codeDir'])
             operation(app, selected['generationServerId'], {'action': 'mkdir', 'path': code_path})
             selected['_beforeCodeFiles'] = {item['path']: item['sha256'] for item in operation(
