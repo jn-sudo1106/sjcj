@@ -12,7 +12,7 @@ const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.spyOn(api, 'prepareCodeRegeneration').mockResolvedValue(snapshot)
   vi.spyOn(nodePromptApi, 'list').mockResolvedValue([])
-  vi.spyOn(api, 'modelInterfaces').mockResolvedValue({ items: [{ id: 'model', name: 'Agent', model: 'hy3', enabled: true }], revision: 1 } as never)
+  vi.spyOn(api, 'modelInterfaces').mockResolvedValue({ items: [{ id: 'model', name: 'Agent', kind: 'agent', model: 'hy3', enabled: true }], revision: 1 } as never)
   vi.spyOn(api, 'regenerateCodeTask').mockResolvedValue({ job: { ...job, taskId: 'child', status: 'queued' } })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks() })
@@ -29,7 +29,7 @@ it('复用AI大工作区并带入任务快照，默认放大提示词，按需�
   expect(api.prepareCodeRegeneration).toHaveBeenCalledWith(job.taskId)
   expect(input(w, '重新生成系统提示词').props('modelValue')).toBe('原系统提示词')
   expect(input(w, '重新生成用户提示词').props('modelValue')).toBe('原用户提示词')
-  expect(w.findComponent({ name: 'AiCodeWorkspaceDialog' }).props('title')).toContain('AI 代码工作区')
+  expect(w.findComponent({ name: 'AiCodeWorkspaceDialog' }).props('title')).toContain('代码生成')
   expect(w.findComponent({ name: 'ElDialog' }).props('width')).toBe('min(1360px, 96vw)')
   expect(w.find('[data-testid="previous-code-snapshot"]').exists()).toBe(false)
   await w.get('[data-testid="toggle-previous-generation"]').trigger('click')

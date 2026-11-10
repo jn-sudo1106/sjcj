@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineOptions({ inheritAttrs: false })
 const open = defineModel<boolean>({ required: true })
-withDefaults(defineProps<{ title?: string; busy?: boolean }>(), { title: 'AI 代码工作区', busy: false })
+withDefaults(defineProps<{ title?: string; busy?: boolean }>(), { title: '代码生成', busy: false })
 </script>
 
 <template>

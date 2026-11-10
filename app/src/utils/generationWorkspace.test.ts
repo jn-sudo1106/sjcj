@@ -1,6 +1,12 @@
 import { expect, it } from 'vitest'
-import { createGenerationTaskId, generationWorkspace, matchingGenerationGitBinding, nodeGenerationCodeDirectory } from './generationWorkspace'
+import { createGenerationTaskId, generationWorkspace, matchingGenerationGitBinding, nodeGenerationCodeDirectory, nodeGenerationInputDirectory } from './generationWorkspace'
 import type { CodeGenerationServer, ModelInterface } from '@/api/runnerManagement'
+
+it('参考文件使用配置下的 input 目录，不受代码生成子目录影响', () => {
+  expect(nodeGenerationInputDirectory('D:\\coder\\workspace\\', '1401218')).toBe('D:\\coder\\workspace\\1401218\\input')
+  expect(nodeGenerationInputDirectory('/data/workspace/', '1401218')).toBe('/data/workspace/1401218/input')
+  expect(nodeGenerationInputDirectory('/', '1401218')).toBe('/1401218/input')
+})
 
 it('目录Git绑定按最长目录前缀匹配，区分路径边界和远程操作系统', () => {
   const server = { workspace: 'D:\\workspace', generationGitBindings: [

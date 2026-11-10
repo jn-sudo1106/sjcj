@@ -69,12 +69,24 @@ class GenerationTasksTest(unittest.TestCase):
         jobs.save_config(self.app, {'configId': '102', 'generation': {**generation, 'workspaceMode': 'custom', 'workspacePath': '../old', 'codeDirectory': '../outside'}})
         normalized = jobs.read_config(self.app, '102')['generation']
         self.assertEqual((normalized['workspaceMode'], normalized['workspacePath'], normalized['codeDirectory']), ('config', '', ''))
+
         legacy_record = jobs.read_config(self.app, '102')
         legacy_record['generation'].update(workspaceMode='custom', workspacePath='old/node', codeDirectory='old/code')
         with self.app.store.connect() as db:
             db.execute('UPDATE settings SET setting_value=? WHERE setting_key=?', (json.dumps(legacy_record), jobs.key('102')))
         normalized = jobs.read_config(self.app, '102')['generation']
         self.assertEqual((normalized['workspaceMode'], normalized['workspacePath'], normalized['codeDirectory']), ('config', '', ''))
+
+    def test_template_selection_and_custom_mode_survive_node_saves(self):
+        self.configured()
+        generation = jobs.read_config(self.app, '102')['generation']
+        for template_id in (70, 0):
+            saved = jobs.save_config(self.app, {'configId': '102', 'generation': {**generation, 'promptTemplateId': template_id}})
+            self.assertEqual(saved['generation']['promptTemplateId'], template_id)
+            self.assertEqual(jobs.read_config(self.app, '102')['generation']['promptTemplateId'], template_id)
+        for invalid in (True, '70', -1):
+            with self.subTest(template_id=invalid), self.assertRaises(ApiError):
+                jobs.save_config(self.app, {'configId': '102', 'generation': {**generation, 'promptTemplateId': invalid}})
 
     def test_api_worker_generation_archives_and_binds_source_variables(self):
         source, origin, calls = self.configured()

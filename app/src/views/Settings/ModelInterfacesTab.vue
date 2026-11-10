@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { agentStatusLabel } from '@/utils/agentPool'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -20,7 +21,7 @@ const generationServers = ref<CodeGenerationServer[]>([])
 const serverLoadError = ref('')
 async function loadServers() {
   try { generationServers.value = (await runnerManagementApi.codeGenerationServers()).items; serverLoadError.value = '' }
-  catch { serverLoadError.value = '代码生成服务器列表加载失败，可点击刷新重试' }
+  catch { serverLoadError.value = '智能体资源列表加载失败，可点击刷新重试' }
 }
 const loading = ref(false), saving = ref(false), error = ref(''), keyword = ref(''), drawer = ref(false)
 const statusSavingId = ref('')
@@ -369,6 +370,7 @@ defineExpose({ beforeLeave })
       <el-table-column label="智能体端口" width="100"><template #default="{ row }"><span :data-testid="'model-port-' + row.id">{{ supportsCdp(row.kind) ? row.cdpPort === null ? '—' : row.cdpPort ?? defaultCdpPort(row.kind) : '—' }}</span></template></el-table-column>
       <el-table-column label="接口地址 / 生成机器" :min-width="embedded ? 170 : 240"><template #default="{row}"><div class="mi-endpoint" :title="row.endpoint">{{ row.endpoint }}</div><small>{{ generationServerText(row) }}</small></template></el-table-column>
       <el-table-column label="状态" :width="embedded ? 95 : 125"><template #default="{ row }"><div class="mi-status"><el-switch :model-value="row.enabled" :loading="statusSavingId === row.id" :disabled="!canWrite || loading || !!statusSavingId || saving || promptSaving || testing" :before-change="() => toggleEnabled(row)" :aria-label="`${row.name}启用状态`" :data-testid="`model-toggle-${row.id}`" /><span>{{ row.enabled ? '启用' : '停用' }}</span></div></template></el-table-column>
+      <el-table-column label="运行状态" width="90"><template #default="{ row }"><span :data-testid="`model-runtime-${row.id}`">{{ agentStatusLabel(row) }}</span></template></el-table-column>
       <el-table-column label="操作" :width="embedded ? 180 : 280"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ usesQueryAddress(row) ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button></div></template></el-table-column>
     </el-table>
     <el-dialog v-model="importOpen" title="导入智能体接口" width="min(960px, 96vw)" top="5vh" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving" data-testid="model-import-dialog">
@@ -392,7 +394,7 @@ defineExpose({ beforeLeave })
     <el-drawer v-model="drawer" :title="form.id ? '智能体接口配置' : '新增智能体接口'" size="min(620px, 94vw)" :close-on-click-modal="false">
       <el-form label-position="top" :disabled="saving || !canWrite" class="mi-form">
         <el-form-item label="接口名称" required><el-input v-model="form.name" maxlength="100" data-testid="model-name" /></el-form-item>
-        <el-form-item label="代码生成服务器"><el-select v-model="generationServerChoice" data-testid="model-generation-server"><el-option value="@auto" label="按接口地址自动匹配" /><el-option value="@direct" label="直接连接智能体接口" /><el-option v-for="server in generationServers" :key="server.serverId" :value="server.serverId" :label="`${server.name} · ${server.ipAddress} · ${server.status === 'online' ? '在线' : '离线'}`" /></el-select><span v-if="serverLoadError" class="mi-error">{{ serverLoadError }}</span></el-form-item>
+        <el-form-item label="智能体资源"><el-select v-model="generationServerChoice" data-testid="model-generation-server"><el-option value="@auto" label="按接口地址自动匹配" /><el-option value="@direct" label="直接连接智能体接口" /><el-option v-for="server in generationServers" :key="server.serverId" :value="server.serverId" :label="`${server.name} · ${server.ipAddress} · ${server.status === 'online' ? '在线' : '离线'}`" /></el-select><span v-if="serverLoadError" class="mi-error">{{ serverLoadError }}</span></el-form-item>
         <div class="mi-pair"><el-form-item label="接口类型"><el-select v-model="form.kind" @change="changeKind"><el-option v-for="(label, key) in kinds" :key="key" :value="key" :label="label" /></el-select></el-form-item><el-form-item label="模型标识" :required="needsModel(form.kind)"><el-input v-model="form.model" :disabled="!needsModel(form.kind)" :placeholder="needsModel(form.kind) ? '例如 hy3' : '由服务端配置'" /></el-form-item></div>
         <el-form-item label="接口地址" required><el-input v-model="form.endpoint" placeholder="http://主机:端口/workbuudy/chat" /></el-form-item>
         <el-form-item v-if="form.kind === 'gemini-agent'" label="任务标题（title）"><el-input v-model="form.title" maxlength="200" placeholder="代码优化测试" /></el-form-item>
@@ -402,7 +404,7 @@ defineExpose({ beforeLeave })
           <el-form-item label="输入目录（自动生成）"><el-input :model-value="formDirectories.inputFileDir" readonly /></el-form-item>
           <el-form-item label="代码目录（自动生成）"><el-input :model-value="formDirectories.codeDir" readonly /></el-form-item>
           <el-form-item label="输出目录（自动生成）"><el-input :model-value="formDirectories.outputFileDir" readonly /></el-form-item>
-          <p class="mi-note">接口测试的输入、代码和输出目录位于工作空间下。节点生成的工作目录由代码生成服务器设置统一管理。</p>
+          <p class="mi-note">接口测试的输入、代码和输出目录位于工作空间下。节点生成的工作目录由智能体资源设置统一管理。</p>
         </template>
         <el-form-item label="超时（秒）"><el-input-number v-model="form.timeoutSeconds" :min="10" :max="1800" :step="10" /></el-form-item>
         <el-form-item v-if="supportsCdp(form.kind)" label="智能体端口"><el-input-number :model-value="form.cdpPort ?? undefined" @update:model-value="form.cdpPort = $event ?? null" :min="1" :max="65535" :precision="0" controls-position="right" :placeholder="form.kind === 'chat' ? '留空使用 GET' : undefined" data-testid="model-cdp-port" /></el-form-item>
@@ -416,7 +418,7 @@ defineExpose({ beforeLeave })
         <div class="mi-test-params">
         <el-form label-position="top" :disabled="testing" class="mi-form">
           <el-form-item label="接口地址"><el-input :model-value="testForm.endpoint" readonly /></el-form-item>
-          <el-form-item v-if="testForm.generationServerId" label="代码生成服务器"><span>{{ generationServers.find(server => server.serverId === testForm.generationServerId)?.name || testForm.generationServerId }}</span></el-form-item>
+          <el-form-item v-if="testForm.generationServerId" label="智能体资源"><span>{{ generationServers.find(server => server.serverId === testForm.generationServerId)?.name || testForm.generationServerId }}</span></el-form-item>
           <div class="mi-pair"><el-form-item label="模型标识"><el-input v-model="testForm.model" :disabled="!needsModel(testForm.kind)" :placeholder="needsModel(testForm.kind) ? '例如 hy3' : '由服务端配置'" data-testid="model-test-model" /></el-form-item><el-form-item label="超时"><span>{{ testForm.timeoutSeconds }} 秒</span></el-form-item></div>
           <el-form-item v-if="testForm.kind === 'gemini-agent'" label="任务标题（title）"><el-input v-model="testForm.title" maxlength="200" data-testid="model-test-title" /></el-form-item>
           <template v-if="isAgent(testForm.kind)">

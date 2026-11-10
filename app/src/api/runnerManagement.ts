@@ -33,10 +33,11 @@ export type GenerationRepositoryResult = Pick<GeneratedCodeArchive, 'repoId' | '
   files: Pick<GeneratedCodeArchive['files'][number], 'path'>[]
 }
 
+export interface GenerationReferenceFile { repositoryId: string; path: string; gitCommit?: string; sha256?: string; size?: number }
 export interface NodeGenerationSettings {
   configId: string
   enabled: boolean
-  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; outputSubdirectory?: string; workspaceMode?: 'config-queue' | 'config' | 'queue' | 'custom'; workspacePath?: string; codeDirectory?: string; destinationMode?: 'type' | 'custom' }
+  generation: null | { interfaceId: string; repositoryId: string; directoryId: string; configType: string; queueName: string; systemPrompt: string; userPrompt: string; url: string; fileNameMode: 'website' | 'queue'; referenceFiles?: GenerationReferenceFile[]; promptTemplateId?: number; outputSubdirectory?: string; workspaceMode?: 'config-queue' | 'config' | 'queue' | 'custom'; workspacePath?: string; codeDirectory?: string; destinationMode?: 'type' | 'custom' }
 }
 export interface GenerationDestination {
   repositoryId: string; directoryId: string; directoryPath: string; repoName: string
@@ -574,6 +575,7 @@ function list<T>(path: string): Promise<T[]> {
 }
 
 export interface ModelInterface {
+  runtimeStatus?: 'idle' | 'busy' | 'offline' | 'disabled'
   generationServerId?: string
   generationServerMode?: 'auto' | 'manual' | 'direct'
   generationServerMatch?: 'matched' | 'offline' | 'ambiguous' | 'unmatched' | 'local' | 'manual' | 'missing' | 'direct'

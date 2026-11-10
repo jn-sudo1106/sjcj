@@ -140,7 +140,7 @@ async function openLinkedTarget() {
   if (detailView.value === 'models' && !await beforeServerNavigation()) { linkedTargetKey = target.key; return }
   if (detail.value && content.value !== original.value) { error.value = '请先保存或关闭当前文件，再打开任务的生成目录'; return }
   const server = servers.value.find(row => row.serverId === target.id)
-  if (!server) { selectedId.value = target.id; error.value = '任务对应的代码生成服务器不存在或已删除'; return }
+  if (!server) { selectedId.value = target.id; error.value = '任务对应的智能体资源不存在或已删除'; return }
   linkedTargetKey = target.key
   detailView.value = target.view
   keyword.value = ''; selectedId.value = server.serverId; files.value = []; selection.value = []; detail.value = false
@@ -161,7 +161,7 @@ async function openLinkedTarget() {
     error.value = '任务记录的生成目录无效'; return
   }
   folder.value = relative
-  if (server.status !== 'online') { error.value = '任务对应的代码生成服务器当前离线，恢复在线后可刷新目录'; return }
+  if (server.status !== 'online') { error.value = '任务对应的智能体资源当前离线，恢复在线后可刷新目录'; return }
   await browse(relative)
 }
 watch(requestedTarget, () => {
@@ -287,9 +287,9 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
     <div class="cg-toolbar cg-page-actions"><el-button v-if="canWrite" :disabled="busy" data-testid="manage-program-versions" @click="manageVersions">程序版本</el-button><el-button v-if="canWrite" @click="copyCode">获取登记码</el-button><el-button @click="refresh()">刷新</el-button></div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <div class="cg-layout" data-testid="code-server-split-layout">
-      <aside class="cg-sidebar" aria-label="代码生成服务器">
+      <aside class="cg-sidebar" aria-label="智能体资源">
         <div class="cg-sidebar-head"><b>服务器</b><span>{{ rows.length }}</span></div>
-        <el-input v-model="keyword" placeholder="搜索名称、IP、实例 ID、工作空间" clearable class="cg-search" aria-label="筛选代码生成服务器" />
+        <el-input v-model="keyword" placeholder="搜索名称、IP、实例 ID、工作空间" clearable class="cg-search" aria-label="筛选智能体资源" />
         <div class="cg-server-list">
           <div v-for="row in rows" :key="row.serverId" class="cg-server-card" :class="{ 'is-selected': selectedId === row.serverId }" role="button" :tabindex="busy ? -1 : 0" :aria-pressed="selectedId === row.serverId" :data-testid="`code-server-${row.serverId}`" @click="choose(row)" @keydown.enter.self="choose(row)" @keydown.space.self.prevent="choose(row)">
             <div class="cg-server-heading"><b :title="row.name">{{ row.name }}</b><el-tag :type="row.status === 'online' ? 'success' : 'info'" size="small">{{ row.status === 'online' ? '在线' : '离线' }}</el-tag></div>
@@ -307,7 +307,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
           </template>
         </div>
           </div>
-          <el-empty v-if="!rows.length" :image-size="52" :description="keyword ? '没有匹配的服务器' : '暂无代码生成服务器'" />
+          <el-empty v-if="!rows.length" :image-size="52" :description="keyword ? '没有匹配的服务器' : '暂无智能体资源'" />
         </div>
       </aside>
       <section class="cg-main" aria-label="服务器配置与工作空间" data-testid="code-server-workspace-panel">
@@ -326,7 +326,6 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
         <dl><div><dt>实例 ID</dt><dd>{{ selected.serverId }}</dd></div><div><dt>实例目录</dt><dd>{{ selected.installDirectory }}</dd></div><div><dt>运行账户</dt><dd>{{ selected.runUser || '未上报' }}</dd></div><div><dt>系统</dt><dd>{{ selected.osVersion || selected.osType }}</dd></div><div><dt>服务地址</dt><dd>{{ selected.endpoint }}</dd></div><div><dt>启动器版本</dt><dd>{{ selected.launcherVersion || '未上报' }}</dd></div><div><dt>服务版本 ID</dt><dd>{{ selected.actualDigest || '历史版本' }}</dd></div></dl>
       </details>
       <div class="cg-server-config">
-        <div class="cg-models"><span class="cg-label">关联模型</span><span v-for="model in selected.supportedModels || []" :key="model.id" :title="`${model.endpoint} · ${model.generationServerMode === 'auto' ? '地址匹配' : '手工关联'}`" data-testid="code-server-supported-model">{{ model.name }}{{ model.model ? ` · ${model.model}` : '' }}<small>{{ model.generationServerMode === 'auto' ? '地址匹配' : '手工关联' }}{{ model.enabled ? '' : ' · 已停用' }}</small></span><span v-if="!selected.supportedModels?.length">暂无匹配模型</span></div>
         <div class="cg-queue"><span class="cg-label">任务领取</span><span>按模型自动领取数据库任务</span><small v-if="!selected.mqCapable">更新服务后支持任务领取</small></div>
       </div>
       <el-alert v-if="selected.status !== 'online'" title="服务器离线，暂时无法浏览工作空间" type="info" :closable="false" />
@@ -381,7 +380,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
 .cg-server-list { overflow-y:auto; min-height:0; flex:1; }.cg-server-card { border:1px solid var(--el-border-color-lighter); border-radius:6px; padding:10px; margin-bottom:8px; cursor:pointer; }.cg-server-card:hover { border-color:var(--el-color-primary-light-5); }.cg-server-card.is-selected { border-color:var(--el-color-primary); background:var(--el-color-primary-light-9); }.cg-server-card:focus-visible { outline:2px solid var(--el-color-primary); outline-offset:-2px; }
 .cg-server-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; }.cg-server-heading b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.cg-server-address { margin-top:5px; font-size:12px; }.cg-server-id { margin:4px 0 8px; color:var(--el-text-color-secondary); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cg-search { flex-shrink:0; }.cg-main { display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--el-border-color-lighter); border-radius:6px; min-height:0; min-width:0; overflow-y:auto; }.cg-main > * { flex-shrink:0; }
-.cg-server-summary,.cg-models,.cg-queue { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; font-size:12px; color:var(--el-text-color-secondary); }.cg-server-summary .el-button,.cg-queue .el-button { margin-left:0; }.cg-server-config { display:flex; flex-direction:column; gap:6px; }.cg-label { color:var(--el-text-color-regular); }.cg-models small { margin-left:5px; color:var(--el-text-color-secondary); font-size:11px; }
+.cg-server-summary,.cg-queue { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; font-size:12px; color:var(--el-text-color-secondary); }.cg-server-summary .el-button,.cg-queue .el-button { margin-left:0; }.cg-server-config { display:flex; flex-direction:column; gap:6px; }.cg-label { color:var(--el-text-color-regular); }
 .cg-server-details { font-size:12px; }.cg-server-details summary { color:var(--el-text-color-secondary); cursor:pointer; }.cg-server-details dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 16px; margin:10px 0 0; }.cg-server-details dt { color:var(--el-text-color-secondary); }.cg-server-details dd { margin:3px 0 0; overflow-wrap:anywhere; }.cg-workspace-empty { flex:1; }
 .cg-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; }
 .cg-detail-tabs { display:flex; gap:4px; border-bottom:1px solid var(--el-border-color-light); padding-bottom:6px; }.cg-detail-tabs button { border:0; border-radius:5px; padding:6px 14px; color:var(--el-text-color-secondary); background:transparent; cursor:pointer; font-size:13px; }.cg-detail-tabs button.active { color:var(--el-color-primary); background:var(--el-color-primary-light-9); }.cg-detail-tabs button:disabled { cursor:default; opacity:.6; }

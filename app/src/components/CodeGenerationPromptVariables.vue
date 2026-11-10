@@ -7,6 +7,7 @@ const variables = [
   ['code_save_requirement', '本次文件命名、保存目录和返回结果要求'],
   ['prj_dir', '本次生成工作空间（Agent）'],
   ['input_file_dir', '本次输入目录（Agent）'],
+  ['reference_files', '本次参考文件的完整路径'],
   ['output_file_dir', '本次输出目录（Agent）'],
   ['config_id', '节点配置 ID'], ['queue_name', '节点 MQ 主题'], ['task_id', '本次生成任务 ID'],
 ] as const

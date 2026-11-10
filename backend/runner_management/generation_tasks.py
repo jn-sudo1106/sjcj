@@ -69,6 +69,11 @@ def save_config(app, body):
                     raise ApiError('每份提示词不能超过 12000 字')
                 if any(len(data[name]) > 2000 for name in fields if 'Prompt' not in name):
                     raise ApiError('AI 生成配置字段过长')
+                if 'promptTemplateId' in incoming:
+                    prompt_id = incoming['promptTemplateId']
+                    if type(prompt_id) is not int or not 0 <= prompt_id <= 2147483647:
+                        raise ApiError('提示词模板 ID 无效')
+                    data['promptTemplateId'] = prompt_id
                 if data['fileNameMode'] not in ('website', 'queue'):
                     raise ApiError('文件命名方式无效')
                 from .generation_workspaces import directory
@@ -76,8 +81,11 @@ def save_config(app, body):
                 from .generated_archives import destination
                 destination(app, {**data, 'configId': owner})
                 from .model_interfaces import listing
-                if not any(row['id'] == data['interfaceId'] and row['enabled'] for row in listing(app)['items']):
+                from .agent_pool import allows
+                if not allows(listing(app)['items'], data['interfaceId']):
                     raise ApiError('所选模型接口不存在或已停用')
+                from .generation_references import normalize
+                data['referenceFiles'] = normalize(incoming.get('referenceFiles', []))
                 record['generation'] = data
         record['updatedAt'] = stamp()
         with app.store.connect() as db:

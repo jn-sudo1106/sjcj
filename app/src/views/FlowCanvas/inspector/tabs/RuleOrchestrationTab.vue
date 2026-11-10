@@ -1745,7 +1745,7 @@ function onTestScript() {
 <template>
   <div v-if="hasSiteScriptMode" class="rc-orchestration-tabs" role="tablist" aria-label="生成方式" data-testid="orchestration-mode-tabs">
     <button id="orchestration-config-tab" type="button" role="tab" data-mode="config" data-testid="orchestration-config-tab" :class="{ active: orchestrationMode === 'config' }" :aria-selected="orchestrationMode === 'config'" :tabindex="orchestrationMode === 'config' ? 0 : -1" aria-controls="orchestration-config-panel" @click="orchestrationMode = 'config'" @keydown="onOrchestrationTabKeydown">生成配置</button>
-    <button id="orchestration-ai-tab" type="button" role="tab" data-mode="ai" data-testid="orchestration-ai-tab" :class="{ active: orchestrationMode === 'ai' }" :aria-selected="orchestrationMode === 'ai'" :tabindex="orchestrationMode === 'ai' ? 0 : -1" aria-controls="orchestration-ai-panel" @click="orchestrationMode = 'ai'" @keydown="onOrchestrationTabKeydown">AI 生成脚本</button>
+    <button id="orchestration-ai-tab" type="button" role="tab" data-mode="ai" data-testid="orchestration-ai-tab" :class="{ active: orchestrationMode === 'ai' }" :aria-selected="orchestrationMode === 'ai'" :tabindex="orchestrationMode === 'ai' ? 0 : -1" aria-controls="orchestration-ai-panel" @click="orchestrationMode = 'ai'" @keydown="onOrchestrationTabKeydown">智能体</button>
   </div>
   <div id="orchestration-config-panel" v-show="!hasSiteScriptMode || orchestrationMode === 'config'" :role="hasSiteScriptMode ? 'tabpanel' : undefined" :aria-labelledby="hasSiteScriptMode ? 'orchestration-config-tab' : undefined" data-testid="orchestration-config-panel">
   <div v-if="isMonitor" class="rc-field rc-monitor-methods-field" data-testid="monitor-methods-field">

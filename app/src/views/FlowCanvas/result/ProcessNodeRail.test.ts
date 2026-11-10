@@ -6,6 +6,17 @@ import { entryApi } from '@/api'
 import { buildHorizontalLayout, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('ProcessNodeRail', () => {
+  it('多选模式显示勾选状态并切换节点，不触发原来的单选导航', async () => {
+    const layout = buildHorizontalLayout(['start', 'web-list', 'web-detail', 'end'], [], NODE_CONFIGS, [], { includeTerminals: false })
+    const wrapper = mount(ProcessNodeRail, { props: { layout, selectedIds: ['web-list'], selectable: () => true } })
+    expect(wrapper.get('[data-node-id="web-list"]').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-node-id="web-detail"]').trigger('click')
+    expect(wrapper.emitted('update:selectedIds')).toEqual([[['web-list', 'web-detail']]])
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    await wrapper.get('[data-node-id="web-list"]').trigger('click')
+    expect(wrapper.emitted('update:selectedIds')?.at(-1)).toEqual([[]])
+    wrapper.unmount()
+  })
   it('点击可选节点时只发出该 nodeId', async () => {
     const layout = buildHorizontalLayout(['start', 'web-list', 'end'], [], NODE_CONFIGS, [], { includeTerminals: false })
     const wrapper = mount(ProcessNodeRail, { props: { layout, modelValue: '', selectable: () => true } })

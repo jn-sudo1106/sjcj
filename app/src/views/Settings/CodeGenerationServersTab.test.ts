@@ -124,31 +124,29 @@ it('左侧筛选同步工作空间选择，没有匹配时清空右侧文件上�
   const second = { ...server, serverId: 'remote-2', name: '机器 B', ipAddress: '192.168.1.172' }
   vi.mocked(api.codeGenerationServers).mockResolvedValue({ items: [server, second] })
   const w = await setup()
-  await w.get('[aria-label="筛选代码生成服务器"]').setValue(second.ipAddress); await flushPromises()
+  await w.get('[aria-label="筛选智能体资源"]').setValue(second.ipAddress); await flushPromises()
   expect(w.find('[data-testid="code-server-remote-1"]').exists()).toBe(false)
   expect(w.get('.cg-workspace-head').text()).toContain(second.name)
   expect(api.remoteCodeFiles).toHaveBeenLastCalledWith(second.serverId, { action: 'list', path: '' })
-  await w.get('[aria-label="筛选代码生成服务器"]').setValue('no-such-server'); await flushPromises()
+  await w.get('[aria-label="筛选智能体资源"]').setValue('no-such-server'); await flushPromises()
   expect(w.get('[data-testid="code-server-workspace-panel"]').text()).toContain('没有匹配的服务器')
   expect(w.find('.cg-files').exists()).toBe(false)
   const calls = vi.mocked(api.remoteCodeFiles).mock.calls.length
   await w.findAll('button').find(button => button.text() === '刷新')!.trigger('click'); await flushPromises()
   expect(w.find('.cg-files').exists()).toBe(false)
   expect(api.remoteCodeFiles).toHaveBeenCalledTimes(calls)
-  await w.get('[aria-label="筛选代码生成服务器"]').setValue(''); await flushPromises()
+  await w.get('[aria-label="筛选智能体资源"]').setValue(''); await flushPromises()
   expect(w.get('.cg-workspace-head').text()).toContain(server.name)
 })
-it('服务器展示按接口地址识别的模型及停用状态', async () => {
+it('工作空间不再显示关联模型区域', async () => {
   vi.mocked(api.codeGenerationServers).mockResolvedValue({ items: [{ ...server, supportedModels: [
     { id: 'agent', name: 'WB Agent', model: 'hy3', kind: 'agent', endpoint: 'http://192.168.1.171:6000/wb/agent', enabled: true, generationServerMode: 'auto' },
     { id: 'gemini', name: 'Gemini Chat', model: 'gemini-lite', kind: 'gemini-chat', endpoint: 'http://192.168.1.171:6000/gemini/chat', enabled: false, generationServerMode: 'manual' },
   ] }] })
   const w = await setup()
-  const matches = w.findAll('[data-testid="code-server-supported-model"]')
-  expect(matches).toHaveLength(2)
-  expect(matches[0]!.text()).toContain('WB Agent · hy3')
-  expect(matches[0]!.text()).toContain('地址匹配')
-  expect(matches[1]!.text()).toContain('已停用')
+  expect(w.find('[data-testid="code-server-supported-model"]').exists()).toBe(false)
+  expect(w.find('.cg-models').exists()).toBe(false)
+  expect(w.get('.cg-server-config').text()).toContain('任务领取')
 })
 it('服务器信息展示服务实际报告的运行账户', async () => {
   vi.mocked(api.codeGenerationServers).mockResolvedValue({ items: [{ ...server, runUser: 'home171\\leo' }] })
@@ -227,7 +225,7 @@ it('已有工作空间页面收到模型视图链接时切换到接口配置', a
 })
 it('任务服务器不存在或目录位于当前工作空间外时显示错误，不回落到其他机器', async () => {
   const missing = await setup('admin', { tab: 'code-servers', serverId: 'deleted-server', serverFolder: '/old/code' })
-  expect(missing.text()).toContain('任务对应的代码生成服务器不存在或已删除')
+  expect(missing.text()).toContain('任务对应的智能体资源不存在或已删除')
   expect(api.remoteCodeFiles).not.toHaveBeenCalled()
   const outside = await setup('admin', { tab: 'code-servers', serverId: server.serverId, serverFolder: 'D:/other/1401218/code' })
   expect(outside.text()).toContain('任务记录的生成路径不在该服务器当前工作空间内')

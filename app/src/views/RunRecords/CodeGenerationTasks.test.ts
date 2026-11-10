@@ -10,9 +10,9 @@ import { runnerManagementApi } from '@/api/runnerManagement'
 import CodeGenerationTasks from './CodeGenerationTasks.vue'
 
 const task: TaskInst = { taskId: '123', configId: '2011', sourceId: '', state: 'W', taskName: '生成脚本', typeName: '', updatedAt: '', vars: '{"codeSourceId":"source-1","sourceFlowId":"flow-2","stepConfigId":"node-3"}' }
-function render(rowTask: TaskInst = task, role = 'admin') {
+function render(rowTask: TaskInst = task, role = 'admin', sourceScopeId?: string) {
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = [role]
-  return mount(CodeGenerationTasks, { global: { plugins: [pinia], directives: { loading: {} }, stubs: {
+  return mount(CodeGenerationTasks, { props: { sourceScopeId }, global: { plugins: [pinia], directives: { loading: {} }, stubs: {
     ElTable: { name: 'ElTable', props: ['data'], setup: props => { provide('code-task-rows', toRef(props, 'data')) }, template: '<div><slot /></div>' },
     ElTableColumn: { template: '<div><slot v-for="row in tableRows" :row="row" /></div>', setup: () => ({ tableRows: inject<Ref<TaskInst[]>>('code-task-rows', ref([rowTask])) }) },
     ElButton: { template: '<button><slot /></button>' },
@@ -25,7 +25,16 @@ function render(rowTask: TaskInst = task, role = 'admin') {
     ElEmpty: { props: ['description'], template: '<div>{{ description }}</div>' },
   } } })
 }
-describe('代码生成任务', () => {
+describe('智能体任务', () => {
+  it('源任务入口始终带当前源筛选，不能切换到其他源', async () => {
+    vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [], total: 0 })
+    const wrapper = render(task, 'admin', '430024910'); await flushPromises()
+    expect(runnerManagementApi.codeGenerationTasks).toHaveBeenCalledWith(expect.objectContaining({ sourceId: '430024910' }))
+    expect(wrapper.find('[data-testid="code-task-source-filter"]').exists()).toBe(false)
+    await wrapper.get('[aria-label="刷新智能体任务"]').trigger('click'); await flushPromises()
+    expect(runnerManagementApi.codeGenerationTasks).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: '430024910' }))
+    wrapper.unmount()
+  })
   it('从列表操作直接打开AI修正工作区，保留详情布局，提交后查看新任务', async () => {
     const childRow = { ...task, taskId: 'child', configId: 'node-3' }
     const parent = { taskId: task.taskId, configId: 'node-3', status: 'succeeded', callbackSent: true, stages: [], output: '', message: '', serverId: '', queue: '', createdAt: '' } as const

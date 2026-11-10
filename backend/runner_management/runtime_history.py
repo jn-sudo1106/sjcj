@@ -467,7 +467,10 @@ def list_records(app, query):
             where.append('record_id NOT IN (' + ','.join('?' for _ in uncertain) + ')'); args.extend(uncertain)
     since = one('since', (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
     if since:
-        where.append('requested_at>=?'); args.append(since)
+        where.append("(requested_at>=? OR updated_at>=? "
+                     "OR (kind IN ('run','runner') AND status IN ('checking','running')) "
+                     "OR EXISTS (SELECT 1 FROM runtime_log_streams s WHERE s.record_id=runtime_operations.record_id AND s.updated_at>=?))")
+        args.extend((since, since, since))
     if one('until'):
         where.append('requested_at<=?'); args.append(one('until'))
     if one('keyword'):

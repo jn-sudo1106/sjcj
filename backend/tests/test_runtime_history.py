@@ -21,6 +21,19 @@ from backend.runner_management.runtime_history import ingest_event, cleanup, ins
 
 
 class RuntimeHistoryTest(unittest.TestCase):
+    def test_recent_output_and_long_running_programs_are_visible_across_days(self):
+        old_date = (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()
+        recent_date = datetime.now(timezone.utc).isoformat()
+        active, output, archived = (uuid.uuid4().hex for _ in range(3))
+        with self.app.store.connect() as db:
+            insert_record(db, active, {}, 'run', {}, status='running', date=old_date)
+            insert_record(db, output, {}, 'run', {}, status='exited', date=old_date)
+            insert_record(db, archived, {}, 'run', {}, status='exited', date=old_date)
+            db.execute('INSERT INTO runtime_log_streams VALUES (?,?,?,?,?,?)',
+                       (uuid.uuid4().hex, output, '', 1, 100, recent_date))
+        result = self.request('/api/runner-management/runtime-operations?kind=run')
+        self.assertEqual({row['recordId'] for row in result['items']}, {active, output})
+        self.assertEqual(result['total'], 2)
     def test_all_time_keeps_old_records_while_missing_since_still_defaults_to_24_hours(self):
         route = '/api/runner-management/runtime-operations?kind=stop'
         old_id, recent_id = uuid.uuid4().hex, uuid.uuid4().hex
