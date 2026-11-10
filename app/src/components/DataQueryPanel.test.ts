@@ -67,6 +67,54 @@ describe('DataQueryPanel · 独立挂载', () => {
     wrapper.unmount()
   })
 
+  it('结构化缺表错误：显示「物理表不存在」+ 数量「—」+ 刷新状态，保留真实错误与重新查询', async () => {
+    // 结构化信号只认 cause.body 字段（§10.1/§10.2）；message 里不带 1146 / doesn't exist 也算缺表
+    const missing = Object.assign(new Error('请求异常 [data/rowQueryPaged]: 表不可用'), {
+      cause: { status: 400, body: { code: 1146, msg: 'Table x' } },
+    })
+    const query = vi.spyOn(dataApi, 'rowQueryPaged')
+      .mockRejectedValueOnce(missing)
+      .mockResolvedValueOnce({ total: 0, list: [] })
+    const wrapper = mountPanel({ workspaceLayout: true })
+    wrapper.vm.search()
+    await flushPromises()
+
+    const empty = wrapper.get('[data-testid="data-query-empty"]')
+    expect(empty.text()).toContain('物理表不存在')
+    // 真实错误仍然展示，不被「缺表」话术替换
+    expect(empty.text()).toContain('请求异常')
+    expect(empty.text()).not.toContain('暂无数据')
+    // 数量未知按「—」，不是「共 0 条」
+    expect(empty.get('[data-testid="data-query-missing-hint"]').text()).toContain('数量：—')
+    expect(wrapper.get('[data-testid="data-query-count"]').text()).toBe('数量 —')
+    expect(wrapper.get('[data-testid="data-query-physical-state"]').text()).toContain('物理表不存在')
+    // 「重新查询」始终保留；缺表时额外给单次「刷新状态」（点一次查一次，不自动循环）
+    expect(empty.find('[data-testid="data-query-retry"]').exists()).toBe(true)
+    await empty.get('[data-testid="data-query-refresh-state"]').trigger('click')
+    await flushPromises()
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="data-query-count"]').text()).toBe('共 0 条')
+    expect(wrapper.get('[data-testid="data-query-physical-state"]').text()).toContain('物理表正常')
+    wrapper.unmount()
+  })
+
+  it('文本带数据库异常特征但无结构化字段：按真实错误展示，不判缺表', async () => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockRejectedValue(new Error("Table 'sense_data.tb_yq' doesn't exist"))
+    const wrapper = mountPanel({ workspaceLayout: true })
+    wrapper.vm.search()
+    await flushPromises()
+
+    const empty = wrapper.get('[data-testid="data-query-empty"]')
+    expect(empty.text()).toContain('查询失败，请重试')
+    expect(empty.text()).toContain("doesn't exist")
+    expect(empty.text()).not.toContain('物理表不存在')
+    expect(empty.find('[data-testid="data-query-refresh-state"]').exists()).toBe(false)
+    expect(empty.find('[data-testid="data-query-retry"]').exists()).toBe(true)
+    // 未知状态明确标「状态待检查」，不猜正常也不猜缺表
+    expect(wrapper.get('[data-testid="data-query-physical-state"]').text()).toContain('状态待检查')
+    wrapper.unmount()
+  })
+
   it('切表立即清空旧结果，同表来回切换后迟到的旧请求也不能覆盖新结果', async () => {
     let resolveOld!: (result: { list: DataRow[]; total: number }) => void
     const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValueOnce({ total: 1, list: [ROW] })
