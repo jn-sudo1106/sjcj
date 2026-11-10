@@ -1234,20 +1234,24 @@ function handleKeyDown(e: KeyboardEvent) {
 <style scoped>
 .rc-aichat-workbench {
   display: flex;
-  height: calc(100vh - 54px);
+  height: 100%;
   width: 100%;
+  min-width: 0;
+  min-height: 0;
   background: var(--rc-bg);
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 /* 左侧会话侧栏 */
 .rc-aichat-sidebar {
-  width: 260px;
+  width: 240px;
   background: var(--rc-surface);
   border-right: 1px solid var(--rc-border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  min-height: 0;
 }
 
 .rc-sidebar-header {
@@ -1353,6 +1357,7 @@ function handleKeyDown(e: KeyboardEvent) {
 /* 右侧主工作区 */
 .rc-aichat-main {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1369,6 +1374,8 @@ function handleKeyDown(e: KeyboardEvent) {
   justify-content: space-between;
   padding: 0 20px;
   flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .rc-topbar-left {
@@ -1399,19 +1406,22 @@ function handleKeyDown(e: KeyboardEvent) {
 /* 新建会话引导页面 */
 .rc-new-session-view {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 36px 24px;
+  overflow-x: hidden;
+  padding: 32px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  max-width: 880px;
   width: 100%;
-  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .rc-hero-section {
   text-align: center;
   margin-bottom: 28px;
+  width: 100%;
+  max-width: 800px;
 }
 
 .rc-hero-icon {
@@ -1467,8 +1477,10 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .rc-starter-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .rc-starter-card {
@@ -1532,9 +1544,10 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .rc-features-bar {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .rc-feature-item {
@@ -1570,20 +1583,23 @@ function handleKeyDown(e: KeyboardEvent) {
 /* 对话流 */
 .rc-chat-thread {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 24px 20px;
+  overflow-x: hidden;
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  max-width: 960px;
+  gap: 18px;
   width: 100%;
-  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .rc-msg-row {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .rc-msg-row.user {
@@ -1613,7 +1629,6 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 .rc-msg-bubble {
-  max-width: 820px;
   border-radius: var(--rc-radius);
 }
 
@@ -1624,6 +1639,8 @@ function handleKeyDown(e: KeyboardEvent) {
   font-size: 13px;
   line-height: 1.5;
   box-shadow: var(--rc-shadow-soft);
+  max-width: min(720px, 80%);
+  word-break: break-word;
 }
 
 .rc-msg-time {
@@ -1635,6 +1652,9 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .rc-msg-bubble.assistant {
   flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1648,6 +1668,9 @@ function handleKeyDown(e: KeyboardEvent) {
   font-size: 13px;
   line-height: 1.6;
   color: var(--rc-text);
+  width: 100%;
+  box-sizing: border-box;
+  word-break: break-word;
 }
 
 /* 确认后展示区域 */
@@ -1717,6 +1740,9 @@ function handleKeyDown(e: KeyboardEvent) {
   border-radius: var(--rc-radius);
   overflow: hidden;
   box-shadow: var(--rc-shadow-soft);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .rc-sql-head {
@@ -1756,14 +1782,19 @@ function handleKeyDown(e: KeyboardEvent) {
   font-size: 12px;
   color: #7dd3fc;
   overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
   line-height: 1.5;
+  box-sizing: border-box;
 }
 
 /* KPI 卡片 */
 .rc-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .rc-kpi-card {
@@ -1816,6 +1847,9 @@ function handleKeyDown(e: KeyboardEvent) {
   border: 1px solid var(--rc-border);
   padding: 16px;
   border-radius: var(--rc-radius);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .rc-dataview-head {
@@ -1896,6 +1930,12 @@ function handleKeyDown(e: KeyboardEvent) {
   background: #10b981;
 }
 
+.rc-table-view {
+  width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
 .rc-preview-table {
   width: 100%;
   border-collapse: collapse;
@@ -1933,6 +1973,8 @@ function handleKeyDown(e: KeyboardEvent) {
   border-radius: var(--rc-radius);
   padding: 14px 16px;
   font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .rc-insight-title {
@@ -1969,18 +2011,23 @@ function handleKeyDown(e: KeyboardEvent) {
 .rc-aichat-footer {
   border-top: 1px solid var(--rc-border);
   background: var(--rc-surface);
-  padding: 14px 20px;
+  padding: 12px 24px;
+  width: 100%;
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .rc-input-box {
-  max-width: 960px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
   border: 1px solid var(--rc-border);
   border-radius: var(--rc-radius);
   background: var(--rc-surface);
   padding: 10px 14px;
   box-shadow: var(--rc-shadow-soft);
   transition: border-color 0.2s;
+  box-sizing: border-box;
 }
 
 .rc-input-box:focus-within {
@@ -1998,6 +2045,7 @@ function handleKeyDown(e: KeyboardEvent) {
   color: var(--rc-text);
   background: transparent;
   line-height: 1.5;
+  box-sizing: border-box;
 }
 
 .rc-input-toolbar {
@@ -2015,8 +2063,9 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 .rc-footer-caption {
-  max-width: 960px;
-  margin: 6px auto 0;
+  width: 100%;
+  max-width: 100%;
+  margin: 6px 0 0;
   text-align: center;
   font-size: 11px;
   color: var(--rc-faint);
