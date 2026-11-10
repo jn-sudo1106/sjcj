@@ -84,6 +84,20 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('抓取网络层异常')
   })
 
+  it('回传失败时如实标注演示数据，不再提示“已完成”', async () => {
+    vi.mocked(submitClarificationAnswer).mockRejectedValueOnce(new Error('[mock] 端点不在契约清单: ai/chat/clarification'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await confirmWithTables(wrapper, [101])
+
+    expect(submitClarificationAnswer).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="aichat-demo-badge"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="aichat-demo-badge"]').text()).toContain('问数网关未接通')
+    // 结果区照常展示，但卡片仍锁定为已采纳，不回到未确认状态
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+  })
+
   it('支持在趋势图表与明细数据表之间切换视图', async () => {
     const wrapper = mountView()
     await flushPromises()

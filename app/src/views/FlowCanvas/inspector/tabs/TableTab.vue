@@ -347,7 +347,12 @@ function toggleFillColumn(column: string) {
   flow.patchTaskConfig(id.value, { fillColumns: [...current] })
 }
 function selectAllFillColumns() {
-  flow.patchTaskConfig(id.value, { fillColumns: [...fillColumnNames.value, ...unknownFillColumns.value] })
+  // 字段已解析出来时只选当前表真实存在的列，避免目标表结构变更后把历史未知列一起提交；
+  // 字段还没拿到（异步加载中 / 表不可达）时保留未知列，避免把用户已选的列清空。
+  const next = fillFields.value.length
+    ? [...fillColumnNames.value]
+    : [...fillColumnNames.value, ...unknownFillColumns.value]
+  flow.patchTaskConfig(id.value, { fillColumns: next })
 }
 /**
  * 回填开关（1109 收敛）：勾选 = 本步骤在主输出表之外再写一张表，默认写回入参表。
@@ -759,6 +764,4 @@ async function onTableSaved(tableId: string) {
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 .input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }
 .unknown-input-field { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 8px; }
-.table-advanced { margin: 10px 0; color: var(--rc-muted); font-size: 11px; }
-.table-advanced summary { cursor: pointer; margin-bottom: 8px; }
 </style>

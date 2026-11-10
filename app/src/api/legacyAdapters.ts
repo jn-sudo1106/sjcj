@@ -1199,8 +1199,12 @@ export function sourceStepsFromLegacy(input: unknown, sourceId: string): Step[] 
 /** null 表示明确取消；undefined 表示未编辑。clearFill 不属于持久化正文。 */
 export function stepFillToLegacy(fill?: Pick<Step, 'fillTable' | 'fillColumns'>): Record<string, unknown> {
   if (fill?.fillTable === null) return { clearFill: true }
+  // 表 ID 必须是正整数：非法值（演示用的 t-notice、空串）会变成 NaN/0，JSON 序列化后是
+  // null，后端会当成“清空目标表”。这类值直接不携带 fillEntry，只更新字段。
+  const rawFillEntry = fill?.fillTable
+  const fillEntry = rawFillEntry == null || rawFillEntry === '' ? undefined : Number(rawFillEntry)
   return {
-    ...(fill?.fillTable !== undefined ? { fillEntry: Number(fill.fillTable) } : {}),
+    ...(fillEntry !== undefined && Number.isInteger(fillEntry) && fillEntry > 0 ? { fillEntry } : {}),
     // 明确清空字段必须传空串，不能用会被选择性更新忽略的 null。
     ...(fill?.fillColumns !== undefined ? { fillContext: fill.fillColumns.join(',') } : {}),
   }

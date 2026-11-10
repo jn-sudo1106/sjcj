@@ -76,6 +76,18 @@ describe('智能体 curl 批量导入', () => {
     expect(parseAgentCurls(agent, 'agent').items[0]).toMatchObject({ kind: 'agent', prjDir: 'D:\\aicode' })
   })
 
+  it('不支持的 curl 参数直接报错并点名，不会静默丢掉认证类选项', () => {
+    for (const command of [
+      'curl -X POST http://host/wb/chat --compressed -d \'{"model":"hy3"}\'',
+      'curl -X POST http://host/wb/chat -u user:pass -d \'{"model":"hy3"}\'',
+    ]) {
+      const result = parseAgentCurls(command)
+      expect(result.items).toEqual([])
+      expect(result.errors[0]).toContain('存在不支持的 curl 参数')
+    }
+    expect(parseAgentCurls('curl -X POST http://host/wb/chat --compressed -d \'{"model":"hy3"}\'').errors[0]).toContain('--compressed')
+  })
+
   it.each([
     'curl -X POST http://host/wb/chat -d \'{"model":"hy3","cdp_port":0}\'',
     'curl -X POST http://host/wb/chat -d \'{"model":"hy3","cdp_port":"not-a-port"}\'',

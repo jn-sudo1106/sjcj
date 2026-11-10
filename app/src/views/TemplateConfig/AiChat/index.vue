@@ -54,6 +54,8 @@ const currentClarification = ref<Clarification>({
   ],
 })
 const clarifyConfirmed = ref<boolean>(false)
+// 澄清答案是否真的回传成功：null=未提交、false=问数网关未接通（只展示本地演示结果）
+const clarifyDelivered = ref<boolean | null>(null)
 const selectedTables = ref<string[]>([])
 const clarifySessionId = ref<string>('s1')
 const clarifyRound = ref<number>(1)
@@ -117,10 +119,15 @@ async function handleConfirmClarify(payload: { selectedEntryTypeIds: number[]; f
       selectedEntryTypeIds: payload.selectedEntryTypeIds,
       freeText: payload.freeText || undefined,
     })
+    clarifyDelivered.value = true
+    clarifyRound.value += 1
+    ElMessage.success('已采纳您选择的分析口径，已回传智能体继续分析')
   } catch {
-    // 问数网关未就绪时保留本地演示结果，不阻断用户看到已采纳状态
+    // 问数网关（ai/chat/*）尚未接入本项目后端：如实告知走的是本地演示，
+    // 不能吞掉错误再提示“已完成”，否则用户会以为结果来自真实查询。
+    clarifyDelivered.value = false
+    ElMessage.warning('问数网关尚未接通，当前展示为本地演示结果，所选口径暂未回传')
   }
-  ElMessage.success('已采纳您选择的分析口径，数据下钻已完成！')
   scrollToBottom()
 }
 
@@ -146,7 +153,8 @@ function handleSend() {
 
   setTimeout(() => {
     isSending.value = false
-    ElMessage.success('智能体已响应您的指令，分析结果已刷新')
+    // 发送链路同样依赖问数网关（ai/chat/completion），未接通时如实说明，不伪造“智能体已响应”
+    ElMessage.info('演示交互：问数网关尚未接通，本次提问未实际发送')
     scrollToBottom()
   }, 1000)
 }
@@ -162,6 +170,7 @@ function handleKeyDown(e: KeyboardEvent) {
 // 新建会话
 function handleNewChat() {
   clarifyConfirmed.value = false
+  clarifyDelivered.value = null
   selectedTables.value = []
   clarifySessionId.value = `s-${Date.now()}`
   clarifyRound.value = 1
@@ -233,6 +242,15 @@ function handleNewChat() {
           <span class="rc-aichat-brand">AI 智能问数</span>
           <el-tag size="small" type="primary" effect="plain" class="rc-badge-tag">Agent 工作台</el-tag>
         </div>
+        <!-- 问数网关未接通时，结果区必须标明是本地演示，不能让用户当成真实查询 -->
+        <el-tag
+          v-if="clarifyDelivered === false"
+          size="small"
+          type="warning"
+          effect="plain"
+          class="rc-badge-tag"
+          data-testid="aichat-demo-badge"
+        >演示数据 · 问数网关未接通</el-tag>
       </header>
 
       <!-- 消息交互流容器 -->

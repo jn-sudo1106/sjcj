@@ -1002,6 +1002,15 @@ describe('TableTab · 回填表和字段', () => {
     wrapper.unmount()
   })
 
+  it('全选只勾当前表真实字段，不把历史未知列一起提交', async () => {
+    const { flow, wrapper } = await open()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="unknown-fill-fields"]').text()).toContain('K99')
+    await wrapper.get('[data-testid="select-all-fill-fields"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.fillColumns).toEqual(['K1', 'K2'])
+    wrapper.unmount()
+  })
+
   it('勾选字段发送物理列名，并保留尚未解析的历史列', async () => {
     const { flow, wrapper } = await open()
     const rev = flow.flowRev

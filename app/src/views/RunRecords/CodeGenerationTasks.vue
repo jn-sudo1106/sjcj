@@ -88,7 +88,7 @@ const modelInfo = computed(() => {
   const snapshot = object(generation.value.modelCall)
   return typeof snapshot.interfaceId === 'string' ? snapshot as unknown as GenerationModelCall : referenceModel.value
 })
-const interfaceLabel = computed(() => modelInfo.value?.name || modelInfo.value?.interfaceId || generation.value.interfaceId || '历史任务未记录模型接口')
+const interfaceLabel = computed(() => modelInfo.value?.name || modelInfo.value?.interfaceId || generation.value.interfaceId || '历史任务未记录智能体接口')
 const modelSource = computed(() => job.value?.modelCall ? job.value.startedAt ? '执行端记录的调用配置' : '创建任务时保存的调用配置' : object(generation.value.modelCall).interfaceId ? '提交任务时保存的调用配置' : referenceModel.value ? '当前接口配置参考（历史任务未保存快照，不代表当时的实际配置）' : '任务未记录完整模型配置')
 const modelLabel = computed(() => modelInfo.value?.model || object(job.value?.request?.body).model || (modelInfo.value ? '接口默认模型' : '未记录'))
 const requestText = computed(() => {
@@ -368,7 +368,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
           <div>来源流程：{{ taskInfo(selected).flowName }}</div>
           <div>流程节点：{{ taskInfo(selected).nodeName }} · 配置 {{ job?.configId || taskInfo(selected).configId || '—' }}</div>
           <div v-if="job">生成服务实例：{{ job.serverId || '等待匹配机器' }}</div>
-          <div>模型接口：{{ interfaceLabel }}</div>
+          <div>智能体接口：{{ interfaceLabel }}</div>
           <div>大模型：{{ modelLabel }}</div>
         </div>
         <el-alert v-if="detailError" :title="`执行详情加载失败：${detailError}`" type="error" :closable="false" />
@@ -387,7 +387,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
               <div><dt>调用超时</dt><dd>{{ modelInfo.timeoutSeconds }} 秒</dd></div>
               <div><dt>代码生成服务器</dt><dd>{{ generationServerLabel(modelInfo, job?.status === 'queued') }}</dd></div>
             </dl>
-            <p v-else>历史任务未保存完整模型配置；{{ generation.interfaceId ? `接口 ID：${generation.interfaceId}` : '暂无模型接口信息' }}。</p>
+            <p v-else>历史任务未保存完整模型配置；{{ generation.interfaceId ? `接口 ID：${generation.interfaceId}` : '暂无智能体接口信息' }}。</p>
             <details v-if="generation.systemPrompt || generation.userPrompt || generation.prompt" class="task-prompts"><summary>任务提示词</summary><h4>系统提示词</h4><pre>{{ generation.systemPrompt || '未记录' }}</pre><h4>用户提示词</h4><pre>{{ generation.userPrompt || generation.prompt || '未记录' }}</pre></details>
             <h4>执行时构造的 HTTP 请求</h4><section data-testid="generation-model-request">
               <template v-if="job?.request">

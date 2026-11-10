@@ -63,6 +63,19 @@ describe('回填字段保存契约', () => {
     expect(payload).not.toHaveProperty('fillContext')
   })
 
+  it('目标表不是合法表 ID 时不携带 fillEntry，避免 NaN 被当成清空', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    for (const badTable of ['t-notice', '', '0', '2102154.5']) {
+      cfg.taskCfg = { queue: '', urlRule: '', fillTable: badTable, fillColumns: ['K2'] }
+      const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: 'new-step', sourceId: source.sourceId }))
+      expect(payload).not.toHaveProperty('fillEntry')
+      expect(payload.fillContext).toBe('K2')
+      expect(payload.clearFill).toBeUndefined()
+    }
+    cfg.taskCfg = { queue: '', urlRule: '', fillTable: '2102154', fillColumns: ['K2'] }
+    expect(stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: 'new-step', sourceId: source.sourceId }))).toMatchObject({ fillEntry: 2102154 })
+  })
+
   it('回填编辑触发步骤自动保存所依赖的 flowRev', () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
