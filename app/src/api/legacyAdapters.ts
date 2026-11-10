@@ -1152,6 +1152,8 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
     outputTable: record.outputTable == null && record.outEntry == null
       ? undefined
       : String(record.outputTable ?? record.outEntry),
+    fillTable: record.fillEntry == null ? undefined : String(record.fillEntry),
+    fillColumns: record.fillContext == null ? undefined : splitFieldList(record.fillContext) ?? [],
     configId: record.configId == null ? undefined : String(record.configId),
     mainConfig: record.mainConfig == null ? undefined : String(record.mainConfig),
     // 0925：步骤归属整体切 flowId（bee-top FLOW_ID 列）；老后端不回时 undefined，双轨兼容。
@@ -1194,6 +1196,20 @@ export function sourceStepsFromLegacy(input: unknown, sourceId: string): Step[] 
 // 目前见过的所有样本里恒为固定值（null/null/null/[]/true/true），语义未确认，这里按实测值
 // 原样透传，不体现进 Step 类型——一旦哪天见到非固定值的样本，说明这几项真的可变，需要另建
 // Step 字段承接。
+/** null 表示明确取消；undefined 表示未编辑。clearFill 不属于持久化正文。 */
+export function stepFillToLegacy(fill?: Pick<Step, 'fillTable' | 'fillColumns'>): Record<string, unknown> {
+  if (fill?.fillTable === null) return { clearFill: true }
+  // 表 ID 必须是正整数：非法值（演示用的 t-notice、空串）会变成 NaN/0，JSON 序列化后是
+  // null，后端会当成“清空目标表”。这类值直接不携带 fillEntry，只更新字段。
+  const rawFillEntry = fill?.fillTable
+  const fillEntry = rawFillEntry == null || rawFillEntry === '' ? undefined : Number(rawFillEntry)
+  return {
+    ...(fillEntry !== undefined && Number.isInteger(fillEntry) && fillEntry > 0 ? { fillEntry } : {}),
+    // 明确清空字段必须传空串，不能用会被选择性更新忽略的 null。
+    ...(fill?.fillColumns !== undefined ? { fillContext: fill.fillColumns.join(',') } : {}),
+  }
+}
+
 function stepWritePayloadBase(step: Step): Record<string, unknown> {
   return {
     lastStep: step.dependsOn?.length ? step.dependsOn.join(',') : null,
@@ -1211,6 +1227,7 @@ function stepWritePayloadBase(step: Step): Record<string, unknown> {
     cond: step.condition ?? null,
     outEntry: step.outputTable == null ? null : Number(step.outputTable),
     outContext: step.outColumns?.length ? step.outColumns.join(',') : null,
+    ...stepFillToLegacy(step),
     itemId: step.itemId == null ? null : Number(step.itemId),
     // file 已废弃，仅回读保留；任何新建/修改请求都归一为 entry，rule 等其它身份原样发送。
     type: step.nodeType === 'file' ? 'entry' : step.nodeType ?? 'entry',

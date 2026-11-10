@@ -944,3 +944,138 @@ describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-
     wrapper.unmount()
   })
 })
+
+describe('TableTab · 回填表和字段', () => {
+  async function open(
+    template = 'web-detail',
+    fill: { fillTable?: string | null; fillColumns?: string[] } = { fillTable: INPUT_TABLE.tableId, fillColumns: ['K2', 'K99'] },
+  ) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS[template])
+    cfg.configId = '13'
+    cfg.taskCfg = { queue: '', urlRule: '', ...fill }
+    flow.configs['8914101'] = cfg
+    flow.main = ['start', '8914101', 'end']
+    flow.select('8914101')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+
+  it('未配置回填时只有「输出字段二（回填数据）」开关，不展示表选择和字段', async () => {
+    const { wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="fill-enabled-toggle"]').text()).toContain('输出字段二（回填数据）')
+    expect((wrapper.get('[data-testid="fill-enabled-toggle"] input').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('[data-testid="fill-table-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="fill-fields-list"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('勾选后默认回填到入参表，并展示该表字段供选择', async () => {
+    const { flow, wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
+    flow.configs['8914101'].collectCfg!.inputTable = INPUT_TABLE.tableId
+    await flushPromises()
+
+    await wrapper.get('[data-testid="fill-enabled-toggle"] input').setValue(true)
+    await flushPromises()
+
+    expect(flow.configs['8914101'].taskCfg?.fillTable).toBe(INPUT_TABLE.tableId)
+    expect(flow.configs['8914101'].taskCfg?.fillColumns).toEqual([])
+    expect(wrapper.get('[data-testid="fill-table-field"]').text()).toContain(INPUT_TABLE.tableId)
+    expect(wrapper.findAll('[data-testid="fill-fields-list"] .rc-tag')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('打开时回显目标表、勾选态和物理列，未知列保留且不触发修改', async () => {
+    const { flow, wrapper } = await open()
+    flow.markSaved()
+    await flushPromises()
+    expect((wrapper.get('[data-testid="fill-enabled-toggle"] input').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.get('[data-testid="fill-table-field"]').text()).toContain(INPUT_TABLE.tableId)
+    expect(wrapper.findAll('[data-testid="fill-fields-list"] .rc-tag.on')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="unknown-fill-fields"]').text()).toContain('K99')
+    expect(flow.dirty).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('全选只勾当前表真实字段，不把历史未知列一起提交', async () => {
+    const { flow, wrapper } = await open()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="unknown-fill-fields"]').text()).toContain('K99')
+    await wrapper.get('[data-testid="select-all-fill-fields"]').trigger('click')
+    expect(flow.configs['8914101'].taskCfg?.fillColumns).toEqual(['K1', 'K2'])
+    wrapper.unmount()
+  })
+
+  it('勾选字段发送物理列名，并保留尚未解析的历史列', async () => {
+    const { flow, wrapper } = await open()
+    const rev = flow.flowRev
+    await wrapper.get('[aria-label="选择回填字段 商品ID"]').setValue(true)
+    const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg?.fillColumns).toEqual(['K2', 'K99', 'K1'])
+    expect(flow.flowRev).toBeGreaterThan(rev)
+    expect(stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1' })))
+      .toMatchObject({ fillEntry: 2102154, fillContext: 'K2,K99,K1' })
+    wrapper.unmount()
+  })
+
+  it('切换目标表同时清空旧字段，不继承旧表同名 K 列', async () => {
+    const { flow, wrapper } = await open()
+    wrapper.get('[data-testid="fill-table-field"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '901')
+    await flushPromises()
+    expect(flow.configs['8914101'].taskCfg).toMatchObject({ fillTable: '901', fillColumns: [] })
+    wrapper.unmount()
+  })
+
+  it('清空目标表发送 clearFill，并且不从旧快照恢复表和字段', async () => {
+    const { flow, wrapper } = await open()
+    wrapper.get('[data-testid="fill-table-field"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', undefined)
+    await flushPromises()
+    const cfg = flow.configs['8914101']
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1', snapshot: {
+      stepId: '8914101', sourceId: '-1', name: '旧配置', enabled: true, fillTable: '2102154', fillColumns: ['K2'],
+    } }))
+    expect(payload.clearFill).toBe(true)
+    expect(payload).not.toHaveProperty('fillEntry')
+    expect(payload).not.toHaveProperty('fillContext')
+    expect(wrapper.find('[data-testid="clear-fill-fields"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('取消勾选发送 clearFill，收起表选择和字段，且不从旧快照恢复', async () => {
+    const { flow, wrapper } = await open()
+    await wrapper.get('[data-testid="fill-enabled-toggle"] input').setValue(false)
+    await flushPromises()
+    const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg).toMatchObject({ fillTable: null, fillColumns: [] })
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1', snapshot: {
+      stepId: '8914101', sourceId: '-1', name: '旧配置', enabled: true, fillTable: '2102154', fillColumns: ['K2'],
+    } }))
+    expect(payload.clearFill).toBe(true)
+    expect(payload).not.toHaveProperty('fillEntry')
+    expect(payload).not.toHaveProperty('fillContext')
+    expect(wrapper.find('[data-testid="fill-table-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="clear-fill-fields"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each(['login-collect', 'file-download', 'rule'])('%s 隐藏回填配置，保留历史数据', async (template) => {
+    const { flow, wrapper } = await open(template)
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
+    expect(flow.configs['8914101'].taskCfg).toMatchObject({ fillTable: INPUT_TABLE.tableId, fillColumns: ['K2', 'K99'] })
+    wrapper.unmount()
+  })
+
+  it.each(['web-detail'])('%s 支持明确清空，报文用空串覆盖旧字段', async (template) => {
+    const { flow, wrapper } = await open(template)
+    await wrapper.get('[data-testid="clear-fill-fields"]').trigger('click')
+    const cfg = flow.configs['8914101']
+    const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1' }))
+    expect(payload).toMatchObject({ fillEntry: 2102154, fillContext: '' })
+    wrapper.unmount()
+  })
+})

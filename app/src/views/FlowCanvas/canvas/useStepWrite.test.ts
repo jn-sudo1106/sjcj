@@ -1337,3 +1337,50 @@ describe('useStepWrite · 任务 URL 来源字段与表达式', () => {
     expect(create.mock.calls[0][0].url).toBe('$VAL$')
   })
 })
+
+
+describe('useStepWrite · ROOT 回填元数据', () => {
+  it('仅改回填字段通过 ROOT 最小集保存，快照更新后不重复写', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const root: Step = {
+      ...SNAPSHOT, stepId: '41352', name: '入口', isRoot: true, configId: '1400935',
+      dependsOn: undefined, mainConfig: '1400935', flowId: '1400935',
+      fillTable: '2102154', fillColumns: ['K2'],
+    }
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test', url: 'http://x', configId: '1400935', mainTable: '6200026', flowId: '1400935' } as never,
+      [root],
+    )
+    source.rememberSteps([root], 'replace')
+    flow.patchTaskConfig(root.stepId, { fillColumns: [] })
+    const update = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true, message: 'ok' })
+    const modify = vi.spyOn(itemApi, 'stepModify')
+    const { persistFlowSteps } = useStepWrite()
+    expect(await persistFlowSteps()).toMatchObject({ updated: 1 })
+    expect(update).toHaveBeenCalledWith('41352', '1400935', '1400935', undefined, undefined, undefined, { fillTable: '2102154', fillColumns: [] })
+    expect(source.stepSnapshots[root.stepId].fillColumns).toEqual([])
+    expect(modify).not.toHaveBeenCalled()
+    await persistFlowSteps()
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+it('ROOT 取消回填优先于旧快照，保存后不重复提交', async () => {
+  setActivePinia(createPinia())
+  const flow = useFlowStore()
+  const source = useSourceStore()
+  const root: Step = { ...SNAPSHOT, stepId: '41352', isRoot: true, configId: '1400935', flowId: '1400935', dependsOn: undefined, fillTable: '2102154', fillColumns: ['K2'] }
+  flow.loadFromSource({ sourceId: '430016398', name: 'test', url: 'http://x', configId: '1400935', mainTable: '6200026', flowId: '1400935' } as never, [root])
+  source.rememberSteps([root], 'replace')
+  flow.patchTaskConfig(root.stepId, { fillTable: null, fillColumns: [] })
+  const update = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true, message: 'ok' })
+  const { persistFlowSteps } = useStepWrite()
+  await persistFlowSteps()
+  expect(update).toHaveBeenCalledWith('41352', '1400935', '1400935', undefined, undefined, undefined, { fillTable: null, fillColumns: [] })
+  expect(source.stepSnapshots[root.stepId].fillTable).toBeNull()
+  await persistFlowSteps()
+  expect(update).toHaveBeenCalledTimes(1)
+})

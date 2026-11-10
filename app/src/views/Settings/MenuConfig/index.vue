@@ -17,7 +17,6 @@ import {
   Rank,
   Refresh,
   Search,
-  Sort,
   View,
   WarningFilled,
 } from '@element-plus/icons-vue'
@@ -756,84 +755,55 @@ onMounted(() => {
 
 <template>
   <div class="menu-config-page">
-    <!-- 顶部工作台卡片 -->
-    <el-card shadow="never" class="header-card">
-      <div class="header-container">
+    <div class="rc-card menu-config-card">
+      <!-- 卡片头部：标题、说明与全局操作（与系统设置其他页签同形） -->
+      <div class="rc-card-head head-bar">
         <div class="title-area">
-          <div class="icon-badge">
-            <el-icon><MenuIcon /></el-icon>
+          <div class="title-row">
+            <span class="rc-card-title main-title">菜单配置</span>
           </div>
-          <div>
-            <div class="title-row">
-              <span class="main-title">菜单配置</span>
-            </div>
-            <div class="sub-title">
-              统一编排维护系统目录分组 (DIR)、一级功能页面 (MENU)、页内标签 (TAB) 与操作按钮权限 (BUTTON)
-            </div>
+          <div class="rc-card-sub sub-title" title="统一编排维护系统目录分组 (DIR)、一级功能页面 (MENU)、页内标签 (TAB) 与操作按钮权限 (BUTTON)">
+            统一编排维护系统目录分组 (DIR)、一级功能页面 (MENU)、页内标签 (TAB) 与操作按钮权限 (BUTTON)
           </div>
         </div>
 
-        <!-- 顶部功能按钮 -->
         <div class="actions-area">
-          <el-button
+          <button
             v-if="legacyIssues.length > 0"
-            type="warning"
-            plain
-            class="issue-btn"
+            type="button"
+            class="rc-btn issue-btn"
             @click="diagnosticsVisible = true"
           >
-            <el-icon class="mr-1"><WarningFilled /></el-icon>
+            <el-icon><WarningFilled /></el-icon>
             历史脏数据自检 ({{ legacyIssues.length }}项异常)
-          </el-button>
+          </button>
 
-          <el-button type="primary" @click="handleAdd(0, 0)">
-            <el-icon class="mr-1"><Plus /></el-icon>
+          <button type="button" class="rc-btn primary" @click="handleAdd(0, 0)">
+            <el-icon><Plus /></el-icon>
             新建顶级目录
-          </el-button>
+          </button>
 
-          <el-button :loading="loading" @click="loadTree">
-            <el-icon><Refresh /></el-icon>
-          </el-button>
+          <button
+            type="button"
+            class="rc-btn icon-btn"
+            title="刷新菜单树"
+            aria-label="刷新菜单树"
+            :disabled="loading"
+            @click="loadTree"
+          >
+            <el-icon :class="{ 'is-loading': loading }"><Refresh /></el-icon>
+          </button>
         </div>
       </div>
 
-      <!-- 统计指标胶囊 -->
-      <div class="stats-row">
-        <div class="stat-pill dir">
-          <span class="stat-dot"></span>
-          <span class="stat-name">目录</span>
-          <span class="stat-val">{{ stats.dir }}</span>
-        </div>
-        <div class="stat-pill menu">
-          <span class="stat-dot"></span>
-          <span class="stat-name">菜单</span>
-          <span class="stat-val">{{ stats.menu }}</span>
-        </div>
-        <div class="stat-pill tab">
-          <span class="stat-dot"></span>
-          <span class="stat-name">页内Tab</span>
-          <span class="stat-val">{{ stats.tab }}</span>
-        </div>
-        <div class="stat-pill button">
-          <span class="stat-dot"></span>
-          <span class="stat-name">按钮</span>
-          <span class="stat-val">{{ stats.button }}</span>
-        </div>
-        <div class="stat-total">
-          已纳管资源总计: <b>{{ stats.total }}</b> 个
-        </div>
-      </div>
-    </el-card>
-
-    <!-- 工具栏与树形数据表格卡片 -->
-    <el-card shadow="never" class="table-card">
-      <div class="toolbar-row">
+      <!-- 筛选与视图工具栏 -->
+      <div class="rc-toolbar wrap toolbar-row">
         <div class="filter-controls">
           <el-input
             v-model="searchKeyword"
             placeholder="搜索菜单名、路由路径..."
             clearable
-            style="width: 320px"
+            class="search-input"
             :prefix-icon="Search"
           />
 
@@ -841,7 +811,7 @@ onMounted(() => {
             v-model="filterType"
             placeholder="全部类型"
             clearable
-            style="width: 130px"
+            class="filter-select"
             @clear="filterType = 'ALL'"
           >
             <el-option label="全部类型" value="ALL" />
@@ -855,34 +825,31 @@ onMounted(() => {
             v-model="filterStatus"
             placeholder="全部状态"
             clearable
-            style="width: 120px"
+            class="filter-select is-compact"
             @clear="filterStatus = 'ALL'"
           >
             <el-option label="全部状态" value="ALL" />
             <el-option label="正常启用" value="0" />
             <el-option label="已停用" value="1" />
           </el-select>
-
-          <div class="sort-tip-pill">
-            <el-icon class="mr-1 text-primary"><Sort /></el-icon>
-            <span>支持全级拖拽与上下快捷调序，按排序值升序编排</span>
-          </div>
         </div>
 
+        <span class="toolbar-spacer" />
+
         <div class="table-actions">
-          <el-button size="small" plain @click="toggleExpandAll">
+          <button type="button" class="rc-btn" @click="toggleExpandAll">
             {{ isAllExpanded ? '全部折叠' : '全部展开' }}
-          </el-button>
+          </button>
         </div>
       </div>
 
-      <!-- 树形数据组件 (直接展示清晰树形结构，不展示权限码 perms) -->
+      <!-- 树形资源列表（组件文件路径等长字段只在详情/编辑抽屉中查看） -->
       <div class="tree-table-wrapper">
         <div class="tree-header-bar">
           <div class="header-name">菜单名称</div>
           <div class="header-meta">
             <span class="meta-col col-path">路由地址</span>
-            <span class="meta-col col-order">排序</span>
+            <span class="meta-col col-order" title="支持全级拖拽与上下快捷调序，按排序值升序编排">排序</span>
             <span class="meta-col col-status">状态</span>
             <span class="meta-col col-time">更新时间</span>
             <span class="meta-col col-ops">操作</span>
@@ -906,16 +873,11 @@ onMounted(() => {
           >
             <template #default="{ data }">
               <div class="custom-tree-row">
-                <!-- 左侧：类型徽标 + 图标 + 名称 + 历史脏数据标签 -->
+                <!-- 左侧：类型徽标 + 图标 + 名称 -->
                 <div class="node-main">
-                  <el-tag
-                    size="small"
-                    :type="getNodeTypeTag(data.type).type"
-                    effect="light"
-                    class="type-tag"
-                  >
+                  <span class="type-tag" :class="`is-${data.type}`">
                     {{ getNodeTypeTag(data.type).label }}
-                  </el-tag>
+                  </span>
                   <el-icon v-if="data.icon && getIconComponent(data.icon)" class="node-icon">
                     <component :is="getIconComponent(data.icon)" />
                   </el-icon>
@@ -929,7 +891,7 @@ onMounted(() => {
                   </span>
                 </div>
 
-                <!-- 右侧：路由 + 排序 + 启停 + 操作按钮（组件文件路径只在详情/编辑抽屉中查看，列表不展示） -->
+                <!-- 右侧：路由 + 排序 + 启停 + 更新时间 + 操作 -->
                 <div class="node-meta" @click.stop>
                   <div class="meta-path">
                     <span v-if="data.linkAddress" class="path-code" :title="'路由地址: ' + data.linkAddress">
@@ -972,11 +934,12 @@ onMounted(() => {
                     <el-switch
                       :model-value="data.status === 0"
                       size="small"
-                      active-text="启用"
-                      inactive-text="停用"
-                      inline-prompt
+                      :aria-label="`${data.label}启用状态`"
                       @change="handleToggleStatus(data)"
                     />
+                    <span class="status-text" :class="data.status === 0 ? 'is-on' : 'is-off'">
+                      {{ data.status === 0 ? '启用' : '停用' }}
+                    </span>
                   </div>
 
                   <div class="meta-time">
@@ -1060,8 +1023,30 @@ onMounted(() => {
             :image-size="60"
           />
         </div>
+
+        <div class="tree-foot-bar">
+          <span class="foot-total">共 <b>{{ stats.total }}</b> 项资源</span>
+          <span class="stats-row">
+            <span class="stat-pill dir">
+              <span class="stat-name">目录</span>
+              <b class="stat-val">{{ stats.dir }}</b>
+            </span>
+            <span class="stat-pill menu">
+              <span class="stat-name">菜单</span>
+              <b class="stat-val">{{ stats.menu }}</b>
+            </span>
+            <span class="stat-pill tab">
+              <span class="stat-name">页内Tab</span>
+              <b class="stat-val">{{ stats.tab }}</b>
+            </span>
+            <span class="stat-pill button">
+              <span class="stat-name">按钮</span>
+              <b class="stat-val">{{ stats.button }}</b>
+            </span>
+          </span>
+        </div>
       </div>
-    </el-card>
+    </div>
 
     <!-- ==================== 新增 / 编辑抽屉 ==================== -->
     <el-drawer
@@ -1348,62 +1333,49 @@ onMounted(() => {
         <!-- 头部节点概览 -->
         <div class="detail-header-card">
           <div class="detail-icon-box">
-            <el-icon v-if="detailItem.icon && getIconComponent(detailItem.icon)" :size="26">
+            <el-icon v-if="detailItem.icon && getIconComponent(detailItem.icon)" :size="24">
               <component :is="getIconComponent(detailItem.icon)" />
             </el-icon>
-            <el-icon v-else :size="26"><MenuIcon /></el-icon>
+            <el-icon v-else :size="24"><MenuIcon /></el-icon>
           </div>
           <div class="detail-title-info">
             <div class="detail-name">{{ detailItem.label }}</div>
             <div class="detail-tags">
-              <el-tag size="small" :type="getNodeTypeTag(detailItem.type).type" effect="light">
-                {{ getNodeTypeTag(detailItem.type).label }}
-              </el-tag>
-              <el-tag size="small" :type="detailItem.status === 0 ? 'success' : 'info'" effect="plain">
+              <span class="detail-kind">{{ getNodeTypeTag(detailItem.type).label }}</span>
+              <span class="rc-status" :class="detailItem.status === 0 ? 'ok' : 'muted'">
                 {{ detailItem.status === 0 ? '启用' : '停用' }}
-              </el-tag>
+              </span>
             </div>
           </div>
         </div>
 
-        <el-descriptions :column="1" border class="mt-4 detail-descriptions">
-          <el-descriptions-item label="排序序号 (order)">
-            <el-tag type="primary" effect="dark" class="order-detail-tag">
-              #{{ detailItem.order ?? 0 }}
-            </el-tag>
-            <span class="order-detail-tip text-muted ml-2">（按此序号大小升序排序展示）</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="ID">
-            <code>{{ detailItem.id }}</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="上级父节点">
-            <!-- <code>{{ detailItem.parentId ?? 0 }}</code> -->
-            <span class="text-muted ml-2">
-              {{ detailItem.parentId === 0 ? '【顶级根目录】' : (allFlatList.find((n) => n.id === detailItem?.parentId)?.label || '') }}
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item label="路由地址">
-            <code>{{ detailItem.linkAddress || '—' }}</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="前端组件路径">
-            <code>{{ detailItem.componentPath || '—' }}</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="路由英文名">
-            <code>{{ detailItem.routeName || '—' }}</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="权限标识码">
-            <code>{{ detailItem.modelCode || '—' }}</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="图标名称">
-            <code>{{ detailItem.icon || '—' }}</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="最后更新时间">
-            {{ detailItem.updateTime || '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="备注说明">
-            {{ detailItem.remark || '—' }}
-          </el-descriptions-item>
-        </el-descriptions>
+        <dl class="rc-kv detail-kv">
+          <dt>排序序号 (order)</dt>
+          <dd>
+            <span class="order-detail-tag">#{{ detailItem.order ?? 0 }}</span>
+            <span class="order-detail-tip">（按此序号大小升序排序展示）</span>
+          </dd>
+          <dt>ID</dt>
+          <dd><code class="detail-code">{{ detailItem.id }}</code></dd>
+          <dt>上级父节点</dt>
+          <dd class="detail-parent">
+            {{ detailItem.parentId === 0 ? '【顶级根目录】' : (allFlatList.find((n) => n.id === detailItem?.parentId)?.label || '') }}
+          </dd>
+          <dt>路由地址</dt>
+          <dd><code class="detail-code">{{ detailItem.linkAddress || '—' }}</code></dd>
+          <dt>前端组件路径</dt>
+          <dd><code class="detail-code">{{ detailItem.componentPath || '—' }}</code></dd>
+          <dt>路由英文名</dt>
+          <dd><code class="detail-code">{{ detailItem.routeName || '—' }}</code></dd>
+          <dt>权限标识码</dt>
+          <dd><code class="detail-code">{{ detailItem.modelCode || '—' }}</code></dd>
+          <dt>图标名称</dt>
+          <dd><code class="detail-code">{{ detailItem.icon || '—' }}</code></dd>
+          <dt>最后更新时间</dt>
+          <dd>{{ detailItem.updateTime || '—' }}</dd>
+          <dt>备注说明</dt>
+          <dd>{{ detailItem.remark || '—' }}</dd>
+        </dl>
       </div>
 
       <template #footer>
@@ -1467,151 +1439,238 @@ onMounted(() => {
 
 <style scoped>
 .menu-config-page {
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-}
-
-.header-card {
-  border-radius: 12px;
-}
-
-.header-container {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 12px;
+  padding: 16px;
+}
+
+.menu-config-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ---------- 卡片头部（与设置页其他页签同形：标题 + 说明 + 操作） ---------- */
+.head-bar {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 11px 18px 13px;
 }
 
 .title-area {
   display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.icon-badge {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .title-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-width: 0;
 }
 
 .main-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
+  flex-shrink: 0;
+  color: var(--rc-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.head-total {
+  color: var(--rc-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.head-total b {
+  color: var(--rc-text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .sub-title {
+  overflow: hidden;
+  color: var(--rc-muted);
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 2px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .actions-area {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.stats-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--el-border-color-lighter);
   flex-wrap: wrap;
-}
-
-.stat-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color-light);
-}
-
-.stat-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.stat-pill.dir .stat-dot { background: #2563eb; }
-.stat-pill.menu .stat-dot { background: #16a34a; }
-.stat-pill.tab .stat-dot { background: #d97706; }
-.stat-pill.button .stat-dot { background: #7c3aed; }
-
-.stat-name {
-  color: var(--el-text-color-secondary);
-}
-
-.stat-val {
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.stat-total {
+  gap: 8px;
   margin-left: auto;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 
-.table-card {
-  border-radius: 12px;
+.actions-area .rc-btn {
+  height: 32px;
+  font-size: 12.5px;
 }
 
-.toolbar-row {
+.actions-area .rc-btn .el-icon {
+  font-size: 14px;
+}
+
+.issue-btn {
+  height: 26px !important;
+  padding: 0 10px !important;
+  border-radius: 999px !important;
+  border-color: #fde3c4 !important;
+  background: var(--rc-warn-bg) !important;
+  color: #b45309 !important;
+  font-size: 12px !important;
+  font-weight: 500;
+}
+
+.issue-btn:hover {
+  border-color: #fbd5a5 !important;
+  background: #ffedd5 !important;
+  color: #92400e !important;
+}
+
+.icon-btn {
+  width: 32px;
+  padding: 0;
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--rc-muted);
+}
+
+.icon-btn:hover {
+  background: var(--rc-primary-bg) !important;
+  color: var(--rc-primary);
+}
+
+.icon-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---------- 树表底部汇总条 ---------- */
+.tree-foot-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 6px 16px;
+  min-height: 38px;
+  padding: 6px 18px;
+  border-top: 1px solid var(--rc-border-soft);
+  background: var(--rc-surface);
+}
+
+.foot-total {
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+.foot-total b {
+  margin: 0 2px;
+  color: var(--rc-text-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 资源统计（汇总条内的轻量计数） ---------- */
+.stats-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.stat-pill + .stat-pill::before {
+  content: '·';
+  margin: 0 8px;
+  color: var(--rc-faint);
+}
+
+.stat-name {
+  color: var(--rc-muted);
+}
+
+.stat-val {
+  color: var(--rc-text-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 工具栏 ---------- */
+.toolbar-row {
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  min-height: 54px;
+  padding: 9px 18px;
 }
 
 .filter-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+  gap: 10px;
 }
 
+.search-input {
+  width: 260px;
+}
+
+.filter-select {
+  width: 124px;
+}
+
+.filter-select.is-compact {
+  width: 112px;
+}
+
+.toolbar-spacer {
+  flex: 1 1 24px;
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-actions .rc-btn {
+  height: 32px;
+  font-size: 12.5px;
+}
+
+/* ---------- 树形表格 ---------- */
 .tree-table-wrapper {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .tree-header-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  gap: 16px;
+  height: 42px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid #e8eef6;
   background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 13px;
-  font-weight: 600;
-  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--rc-text-2);
 }
 
 .header-name {
@@ -1622,30 +1681,31 @@ onMounted(() => {
 .header-meta {
   display: flex;
   align-items: center;
-  gap: 16px;
   flex-shrink: 0;
+  gap: 16px;
 }
 
 .meta-col {
-  font-size: 13px;
-  color: #475569;
+  color: var(--rc-text-2);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .col-path {
-  flex: 0 0 250px;
-  width: 250px;
+  flex: 0 0 240px;
+  width: 240px;
   text-align: left;
 }
 
 .col-order {
-  flex: 0 0 60px;
-  width: 60px;
+  flex: 0 0 64px;
+  width: 64px;
   text-align: center;
 }
 
 .col-status {
-  flex: 0 0 70px;
-  width: 70px;
+  flex: 0 0 76px;
+  width: 76px;
   text-align: center;
 }
 
@@ -1662,8 +1722,8 @@ onMounted(() => {
 }
 
 .tree-body-wrapper {
-  min-height: 200px;
-  padding: 6px 16px 12px;
+  min-height: 260px;
+  padding: 6px 12px 14px;
 }
 
 .menu-tree-container {
@@ -1671,175 +1731,187 @@ onMounted(() => {
 }
 
 .menu-tree-container :deep(.el-tree-node__content) {
-  min-height: 44px;
+  min-height: 42px;
   height: auto;
-  border-radius: 6px;
   margin: 1px 0;
-  padding-top: 3px;
-  padding-bottom: 3px;
+  padding-top: 2px;
+  padding-bottom: 2px;
   padding-right: 0 !important;
-  transition: all 0.15s ease;
+  border-radius: var(--rc-radius-sm);
+  transition: background-color 0.15s ease;
 }
 
 .menu-tree-container :deep(.el-tree-node__content:hover) {
-  background-color: #f1f5f9;
+  background-color: #f8fbff;
 }
 
 .menu-tree-container :deep(.el-tree-node:focus > .el-tree-node__content) {
-  background-color: #f8fafc;
+  background-color: #f1f6ff;
+}
+
+.menu-tree-container :deep(.el-tree-node__expand-icon) {
+  color: var(--rc-faint);
+}
+
+.menu-tree-container :deep(.el-tree-node__drop-indicator) {
+  height: 2px;
+  background-color: var(--rc-primary);
 }
 
 .custom-tree-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   width: 100%;
+  min-width: 0;
   padding-right: 0;
 }
 
 .node-main {
   display: flex;
   align-items: center;
-  gap: 8px;
   flex: 1;
+  gap: 8px;
   min-width: 0;
 }
 
 .type-tag {
-  font-size: 11px;
-  padding: 0 6px;
-  height: 20px;
-  line-height: 18px;
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 7px;
   flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.type-tag.is-0 {
+  border-color: #dbeafe;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+}
+
+.type-tag.is-1 {
+  border-color: #bbf7d0;
+  background: var(--rc-ok-bg);
+  color: var(--rc-ok);
+}
+
+.type-tag.is-2 {
+  border-color: #fed7aa;
+  background: var(--rc-warn-bg);
+  color: var(--rc-warn);
+}
+
+.type-tag.is-3 {
+  border-color: var(--rc-border);
+  background: #f8fafc;
+  color: var(--rc-muted);
 }
 
 .node-icon {
-  font-size: 15px;
-  color: #64748b;
   flex-shrink: 0;
+  color: var(--rc-faint);
+  font-size: 14px;
 }
 
 .node-label {
-  font-size: 13.5px;
-  color: #1e293b;
-  white-space: nowrap;
   overflow: hidden;
+  color: #1e293b;
+  font-size: 13px;
   text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   transition: color 0.15s ease;
 }
 
 .node-label:hover {
-  color: #0284c7;
-  text-decoration: underline;
+  color: var(--rc-primary);
 }
 
 .node-label.level-0 {
+  color: var(--rc-text);
   font-weight: 700;
-  color: #0f172a;
 }
 
 .node-label.level-1 {
-  font-weight: 600;
   color: #1e293b;
+  font-weight: 600;
 }
 
 .node-label.level-2 {
-  font-weight: 500;
   color: #334155;
+  font-weight: 500;
 }
 
 .node-label.level-3 {
+  color: var(--rc-muted);
+  font-size: 12.5px;
   font-weight: 400;
-  color: #64748b;
-}
-
-.legacy-tag {
-  flex-shrink: 0;
 }
 
 .node-meta {
   display: flex;
   align-items: center;
-  gap: 16px;
   flex-shrink: 0;
+  gap: 16px;
 }
 
 .meta-path {
-  flex: 0 0 250px;
-  width: 250px;
+  flex: 0 0 240px;
+  width: 240px;
   overflow: hidden;
   text-align: left;
   line-height: 1.3;
 }
 
 .path-code {
-  font-size: 12px;
-  font-family: monospace;
-  color: #0284c7;
-  background: #f0f9ff;
-  border: 1px solid #e0f2fe;
-  padding: 1px 6px;
-  border-radius: 4px;
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid #dbeafe;
+  border-radius: 5px;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.field-label-box {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.field-sub-tip {
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-  font-weight: normal;
-}
-
 .path-none {
-  color: #cbd5e1;
-  font-size: 12px;
   padding-left: 2px;
-}
-
-.sort-tip-pill {
-  display: inline-flex;
-  align-items: center;
+  color: var(--rc-faint);
   font-size: 12px;
-  color: #0369a1;
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
-  padding: 4px 10px;
-  border-radius: 14px;
 }
 
 .meta-order {
-  flex: 0 0 60px;
-  width: 60px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  flex: 0 0 64px;
+  width: 64px;
+  gap: 2px;
 }
 
 .drag-handle {
-  cursor: grab;
-  color: #94a3b8;
   display: inline-flex;
   align-items: center;
-  padding: 2px;
-  border-radius: 4px;
-  transition: all 0.2s;
+  padding: 3px;
+  border-radius: 5px;
+  color: var(--rc-faint);
+  cursor: grab;
+  transition: all 0.15s ease;
 }
 
 .drag-handle:hover {
-  color: #0284c7;
-  background: #e0f2fe;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary);
 }
 
 .drag-handle:active {
@@ -1849,157 +1921,178 @@ onMounted(() => {
 .order-quick-actions {
   display: inline-flex;
   flex-direction: column;
-  margin-left: 2px;
 }
 
 .order-btn {
+  height: 11px !important;
   padding: 0 !important;
-  height: 12px !important;
-  line-height: 12px !important;
-  font-size: 12px !important;
-  color: #94a3b8 !important;
-  border-radius: 2px;
+  margin: 0 !important;
+  border-radius: 3px;
+  color: var(--rc-faint) !important;
+  font-size: 11px !important;
+  line-height: 11px !important;
 }
 
 .order-btn:hover {
-  color: #0284c7 !important;
-  background-color: #f0f9ff;
-}
-
-.menu-tree-container :deep(.el-tree-node__drop-indicator) {
-  height: 2px;
-  background-color: #0284c7;
+  background: var(--rc-primary-bg) !important;
+  color: var(--rc-primary) !important;
 }
 
 .meta-status {
-  flex: 0 0 70px;
-  width: 70px;
   display: flex;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
+  flex: 0 0 76px;
+  width: 76px;
+  gap: 6px;
+}
+
+.meta-status :deep(.el-switch) {
+  --el-switch-on-color: var(--rc-primary);
+  --el-switch-off-color: #cbd5e1;
+  flex-shrink: 0;
+}
+
+.status-text {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.status-text.is-on {
+  color: var(--rc-primary-ink);
+}
+
+.status-text.is-off {
+  color: var(--rc-muted);
 }
 
 .meta-time {
-  flex: 0 0 150px;
-  width: 150px;
   display: flex;
   align-items: center;
+  flex: 0 0 150px;
+  width: 150px;
   overflow: hidden;
 }
 
 .time-code {
-  font-size: 11px;
-  color: #94a3b8;
-  font-family: monospace;
-  white-space: nowrap;
   overflow: hidden;
+  color: var(--rc-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .meta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 120px;
   width: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-
-.detail-container {
-  padding: 4px 0;
-}
-
-.detail-header-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-
-.detail-icon-box {
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
-  background: #e0f2fe;
-  color: #0284c7;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.detail-title-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.detail-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.detail-tags {
-  margin-top: 4px;
-  display: flex;
-  gap: 6px;
-}
-
-.order-detail-tag {
-  font-size: 13px;
-  font-weight: 700;
-  font-family: monospace;
-}
-
-.order-detail-tip {
-  font-size: 12px;
+  gap: 2px;
 }
 
 .meta-actions :deep(.el-button) {
   margin: 0 !important;
 }
 
-.meta-actions :deep(.el-button + .el-button) {
-  margin-left: 0 !important;
-}
-
 .op-icon-btn {
-  padding: 4px !important;
-  font-size: 15px !important;
-  margin: 0 !important;
-  height: 26px !important;
-  width: 26px !important;
-  border-radius: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  width: 26px !important;
+  height: 26px !important;
+  padding: 0 !important;
+  border-radius: 5px;
+  color: var(--rc-muted) !important;
+  font-size: 14px !important;
 }
 
 .op-icon-btn:hover {
-  background-color: #e0f2fe;
+  background: var(--rc-primary-bg) !important;
+  color: var(--rc-primary) !important;
 }
 
 .op-del-btn:hover {
-  background-color: #fee2e2 !important;
+  background: var(--rc-error-bg) !important;
+  color: var(--rc-error) !important;
 }
 
-.text-muted {
-  color: var(--el-text-color-placeholder);
+.tree-body-wrapper :deep(.el-empty) {
+  padding: 30px 0;
+}
+
+.tree-body-wrapper :deep(.el-empty__description p) {
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+/* ---------- 抽屉通用 ---------- */
+.menu-edit-drawer :deep(.el-drawer__header),
+.menu-detail-drawer :deep(.el-drawer__header) {
+  margin: 0;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--rc-border-soft);
+  color: var(--rc-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.menu-edit-drawer :deep(.el-drawer__body),
+.menu-detail-drawer :deep(.el-drawer__body) {
+  padding: 16px 20px;
+}
+
+.menu-edit-drawer :deep(.el-drawer__footer),
+.menu-detail-drawer :deep(.el-drawer__footer) {
+  padding: 12px 20px;
+  border-top: 1px solid var(--rc-border-soft);
+}
+
+.drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---------- 编辑表单 ---------- */
+.edit-form :deep(.el-form-item__label) {
+  padding-bottom: 4px;
+  color: var(--rc-text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.edit-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+
+.field-label-box {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.field-sub-tip {
+  color: var(--rc-faint);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .type-option-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   width: 100%;
 }
 
 .type-option-desc {
+  color: var(--rc-muted);
   font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 
 .tree-select-node-item {
@@ -2010,22 +2103,22 @@ onMounted(() => {
 }
 
 .tree-select-node-item .select-icon {
-  font-size: 14px;
-  color: #64748b;
   margin-right: 4px;
+  color: var(--rc-faint);
+  font-size: 14px;
 }
 
 .tree-select-node-item .select-text {
   color: #1e293b;
 }
 
-/* 菜单图标选择器样式 */
+/* ---------- 图标选择器 ---------- */
 .icon-selector-card {
   width: 100%;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  background: var(--el-fill-color-blank);
   overflow: hidden;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
 }
 
 .icon-current-preview {
@@ -2033,28 +2126,28 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--el-fill-color-light);
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--rc-border-soft);
+  background: #fbfdff;
 }
 
 .preview-box {
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  border: 1px dashed var(--el-border-color);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--el-fill-color-blank);
-  color: var(--el-text-color-placeholder);
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
+  border: 1px dashed var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
+  color: var(--rc-faint);
 }
 
 .preview-box.has-icon {
   border-style: solid;
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
+  border-color: #dbeafe;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary);
 }
 
 .preview-empty {
@@ -2070,30 +2163,31 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
+  color: var(--rc-primary);
   font-size: 13px;
   font-weight: 600;
-  color: var(--el-color-primary);
 }
 
 .icon-name {
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .icon-desc {
+  color: var(--rc-muted);
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-  font-weight: normal;
+  font-weight: 400;
 }
 
 .preview-none {
+  color: var(--rc-text-2);
   font-size: 13px;
-  color: var(--el-text-color-regular);
 }
 
 .preview-tip {
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
   margin-top: 2px;
+  color: var(--rc-faint);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .icon-picker-panel {
@@ -2104,13 +2198,14 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 10px;
 }
 
 .panel-title {
+  color: var(--rc-text-2);
   font-size: 12px;
   font-weight: 500;
-  color: var(--el-text-color-regular);
 }
 
 .icon-category-tabs {
@@ -2118,17 +2213,18 @@ onMounted(() => {
 }
 
 .icon-category-tabs :deep(.el-tabs__header) {
-  margin: 0 0 8px 0;
+  margin: 0 0 8px;
 }
 
 .icon-category-tabs :deep(.el-tabs__nav-wrap::after) {
   height: 1px;
+  background-color: var(--rc-border-soft);
 }
 
 .icon-category-tabs :deep(.el-tabs__item) {
+  height: 30px;
   padding: 0 8px;
   font-size: 12px;
-  height: 30px;
   line-height: 30px;
 }
 
@@ -2139,13 +2235,13 @@ onMounted(() => {
 }
 
 .cat-count {
+  color: var(--rc-faint);
   font-size: 11px;
-  color: var(--el-text-color-secondary);
-  font-weight: normal;
+  font-weight: 400;
 }
 
 .icon-category-tabs :deep(.el-tabs__item.is-active) .cat-count {
-  color: var(--el-color-primary);
+  color: var(--rc-primary);
   font-weight: 600;
 }
 
@@ -2167,85 +2263,204 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 8px 4px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  cursor: pointer;
-  background: var(--el-fill-color-blank);
-  transition: all 0.2s ease;
   min-height: 58px;
+  padding: 8px 4px;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: var(--rc-radius-sm);
+  background: var(--rc-surface);
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 .icon-grid-item:hover {
-  border-color: var(--el-color-primary-light-5);
-  background: var(--el-fill-color-light);
+  border-color: #bfdbfe;
+  background: #f8fbff;
   transform: translateY(-1px);
 }
 
 .icon-grid-item.is-selected {
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
+  border-color: var(--rc-primary);
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary);
   font-weight: 500;
 }
 
 .item-icon {
   margin-bottom: 4px;
-  color: var(--el-text-color-primary);
+  color: var(--rc-text-2);
 }
 
 .icon-grid-item.is-selected .item-icon {
-  color: var(--el-color-primary);
+  color: var(--rc-primary);
 }
 
 .item-name {
-  font-size: 11px;
-  color: var(--el-text-color-regular);
-  text-align: center;
-  line-height: 1.2;
-  word-break: break-all;
   max-width: 100%;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  word-break: break-all;
 }
 
 .item-cn-sub {
-  font-size: 10px;
-  color: var(--el-text-color-secondary);
-  margin-top: 1px;
-  text-align: center;
-  line-height: 1.1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 100%;
+  overflow: hidden;
+  margin-top: 1px;
+  color: var(--rc-faint);
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .icon-grid-item.is-selected .item-name,
 .icon-grid-item.is-selected .item-cn-sub {
-  color: var(--el-color-primary);
+  color: var(--rc-primary);
 }
 
 .check-corner {
   position: absolute;
   top: 0;
   right: 0;
-  width: 16px;
-  height: 16px;
-  background: var(--el-color-primary);
-  color: #fff;
-  border-bottom-left-radius: 6px;
-  border-top-right-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-top-right-radius: 5px;
+  border-bottom-left-radius: 6px;
+  background: var(--rc-primary);
+  color: #fff;
 }
 
 .icon-empty {
-  text-align: center;
   padding: 24px 0;
+  color: var(--rc-faint);
   font-size: 12px;
-  color: var(--el-text-color-placeholder);
+  text-align: center;
 }
 
+/* ---------- 资源详情 ---------- */
+.detail-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 2px 0;
+}
+
+.detail-header-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.detail-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary);
+}
+
+.detail-title-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-name {
+  color: var(--rc-text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.detail-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.detail-kind {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.detail-kv {
+  grid-template-columns: 104px 1fr;
+  gap: 12px 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
+}
+
+.detail-kv dt {
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+.detail-kv dd {
+  min-width: 0;
+  margin: 0;
+  color: #1e293b;
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+.detail-parent {
+  color: var(--rc-text-2) !important;
+}
+
+.detail-code {
+  padding: 1px 6px;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.order-detail-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: var(--rc-primary);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.order-detail-tip {
+  margin-left: 8px;
+  color: var(--rc-faint);
+  font-size: 11.5px;
+}
+
+/* ---------- 历史脏数据诊断 ---------- */
 .diag-body {
   display: flex;
   flex-direction: column;
@@ -2253,44 +2468,89 @@ onMounted(() => {
 }
 
 .diag-list-box {
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
   overflow: hidden;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
 }
 
 .diag-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 8px 12px;
-  background: var(--el-fill-color-light);
+  background: #f8fafc;
+  color: var(--rc-text-2);
   font-size: 12px;
   font-weight: 600;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
 }
 
 .diag-list-items {
   max-height: 240px;
   overflow-y: auto;
-  divide-y: 1px solid var(--el-border-color-lighter);
 }
 
 .diag-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 8px 12px;
+  border-bottom: 1px solid var(--rc-border-soft);
   font-size: 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .diag-item:last-child {
   border-bottom: none;
 }
 
-.preview-tip {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 16px;
-  line-height: 1.5;
+.diag-item-name {
+  color: var(--rc-text-2);
+}
+
+/* ---------- 13.6 寸及以下适配 ---------- */
+@media (max-width: 1240px) {
+  .search-input {
+    width: 220px;
+  }
+
+  .col-path,
+  .meta-path {
+    flex-basis: 190px;
+    width: 190px;
+  }
+
+  .sub-title {
+    max-width: 460px;
+  }
+}
+
+@media (max-width: 980px) {
+  .menu-config-page {
+    padding: 12px;
+  }
+
+  .title-area {
+    width: 100%;
+  }
+
+  .actions-area {
+    margin-left: 0;
+  }
+
+  .stats-row {
+    width: 100%;
+  }
+
+  .col-path,
+  .meta-path {
+    flex-basis: 150px;
+    width: 150px;
+  }
+
+  .col-time,
+  .meta-time {
+    display: none;
+  }
 }
 </style>

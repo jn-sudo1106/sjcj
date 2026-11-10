@@ -71,6 +71,7 @@ import {
   sourceStepsFromLegacy,
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
+  stepFillToLegacy,
   summaryRowFromLegacy,
   taskInstFromLegacy,
   assertLegacySnatchSaveLogin,
@@ -4274,14 +4275,16 @@ export const itemApi = {
    *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。
    *  0929：可选 `outEntry`（入口行输出表，数字表 ID 串）——不在 validateRootUpdate 拒绝清单里，
    *  有非空值才携带；空/缺失时省略，selective update 保持库中值（不能拿 null 去"清空"输出表）。
-   *  出参列同样允许更新：未编辑时不带 outContext，清空时传空串（null 会被 selective update 忽略）。 */
-  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null, ref?: FlowVersionRef | null, outColumns?: string[]) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
+   *  出参列同样允许更新：未编辑时不带 outContext，清空时传空串（null 会被 selective update 忽略）。
+   *  回填表/字段作为可选步骤元数据携带；清空字段传空串，fillTable=null 则用 clearFill 显式取消回填。 */
+  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null, ref?: FlowVersionRef | null, outColumns?: string[], fill?: Pick<Step, 'fillTable' | 'fillColumns'>) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
     itemConfig: Number(stepId),
     ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
     isRoot: 1,
     configId: Number(configId),
     ...(outEntry != null && String(outEntry).trim() !== '' ? { outEntry: Number(outEntry) } : {}),
     ...(outColumns !== undefined ? { outContext: outColumns.join(',') } : {}),
+    ...stepFillToLegacy(fill),
     ...versionRefParams(ref),
   }, {
     method: 'POST',

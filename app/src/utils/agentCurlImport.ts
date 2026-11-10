@@ -95,7 +95,7 @@ function parseCommand(args: string[], importType: AgentCurlImportType): ModelInt
         data = value
       }
     } else if (/^https?:\/\//i.test(arg) && !endpoint) endpoint = arg
-    else throw new Error('存在不支持的 curl 参数，请使用 JSON 请求示例')
+    else throw new Error('存在不支持的 curl 参数「' + arg + '」，请使用 JSON 请求示例')
   }
   let target: URL
   try { target = new URL(endpoint) } catch { throw new Error('接口地址无效') }
