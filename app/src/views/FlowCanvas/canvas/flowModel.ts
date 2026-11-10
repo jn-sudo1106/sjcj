@@ -271,6 +271,9 @@ export interface TaskConfig {
   contextMap?: string[]
   /** 当前节点输出表中保留并传给后续节点的字段。 */
   outColumns?: string[]
+  /** 本步骤回填目标表及物理列名，与节点配置分开保存。 */
+  fillTable?: string | null
+  fillColumns?: string[]
   /** @deprecated 旧版任务参数多选；加载时迁为 paramValues。 */
   paramRefs?: string[]
 }

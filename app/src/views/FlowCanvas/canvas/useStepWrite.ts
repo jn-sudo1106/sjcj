@@ -185,7 +185,7 @@ export function useStepWrite() {
    * 出参列变化时同样附带 outContext（后端允许），其余字段保持库中值（selective update）。
    * 成功后同步快照 configId/outputTable/outColumns，避免下次自动保存重复写。
    */
-  async function updateRootConfig(nodeId: string, configId: string, outputTable?: string, outColumns?: string[]): Promise<void> {
+  async function updateRootConfig(nodeId: string, configId: string, outputTable?: string, outColumns?: string[], fill?: Pick<Step, 'fillTable' | 'fillColumns'>): Promise<void> {
     const snapshot = sourceStore.stepSnapshots[nodeId]
     // 输出表有值才带 outEntry；空值（采集入口无输出表/null）不带——selective update 对缺键
     // 保持库中值，不会把已落库的输出表清掉，也不会拿空串去撞后端的非空校验。
@@ -196,9 +196,10 @@ export function useStepWrite() {
     const ack = await version.withDraft(rootFlowId, (ref) => {
       // 参数按需拼装：outEntry 只在有值（或后面还要接版本信息）时才占位，避免拖 undefined 尾参
       const args: Parameters<typeof itemApi.rootConfigUpdate> = [nodeId, configId, rootFlowId]
-      if (carryOutEntry || ref || outColumns !== undefined) args.push(carryOutEntry ? outputTable : undefined)
-      if (ref || outColumns !== undefined) args.push(ref ?? undefined)
-      if (outColumns !== undefined) args.push(outColumns)
+      if (carryOutEntry || ref || outColumns !== undefined || fill) args.push(carryOutEntry ? outputTable : undefined)
+      if (ref || outColumns !== undefined || fill) args.push(ref ?? undefined)
+      if (outColumns !== undefined || fill) args.push(outColumns)
+      if (fill) args.push(fill)
       return itemApi.rootConfigUpdate(...args)
     })
     assertOk(ack, '修改流程入口配置失败')
@@ -206,7 +207,7 @@ export function useStepWrite() {
     // 因同一差异重复调用；空输出表后端不落库的差异留给下次加载消解。
     sourceStore.rememberSteps([
       {
-        ...snapshot, configId,
+        ...snapshot, configId, ...fill,
         ...(outputTable !== undefined ? { outputTable: outputTable || null } : {}),
         ...(outColumns !== undefined ? { outColumns: [...outColumns] } : {}),
       },
@@ -457,8 +458,12 @@ export function useStepWrite() {
           const configChanged = snapshot.configId !== cfg.configId
           const outColumns = cfg.taskCfg?.outColumns ?? snapshot.outColumns ?? []
           const columnsChanged = outColumns.join(',') !== (snapshot.outColumns ?? []).join(',')
-          if (configChanged || outChanged || columnsChanged) {
-            await updateRootConfig(id, cfg.configId, outChanged ? outTable : undefined, columnsChanged ? outColumns : undefined)
+          const fillTable = cfg.taskCfg?.fillTable !== undefined ? cfg.taskCfg.fillTable : snapshot.fillTable
+          const fillColumns = cfg.taskCfg?.fillColumns ?? snapshot.fillColumns
+          const fillChanged = fillTable !== snapshot.fillTable
+            || (fillColumns ?? []).join(',') !== (snapshot.fillColumns ?? []).join(',')
+          if (configChanged || outChanged || columnsChanged || fillChanged) {
+            await updateRootConfig(id, cfg.configId, outChanged ? outTable : undefined, columnsChanged ? outColumns : undefined, fillChanged ? { fillTable, fillColumns } : undefined)
             updated += 1
           }
         }
