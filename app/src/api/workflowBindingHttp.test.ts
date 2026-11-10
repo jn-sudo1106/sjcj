@@ -47,6 +47,16 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
   const calls = () => fetchMock.mock.calls.map(([url, init]) => ({ url: new URL(String(url), 'http://local.test'), init: init as RequestInit }))
   const bindCalls = () => calls().filter((c) => c.url.pathname.endsWith('/source-group/bindSourceFlows'))
 
+  it('读取最新绑定后确认无需变更，仅发查询而不提交绑定', async () => {
+    fetchMock.mockResolvedValueOnce(ok(ALONE))
+    const { workflowBindingApi } = await load()
+    const change = vi.fn(() => null)
+    await workflowBindingApi.save('430024667', change)
+    expect(change).toHaveBeenCalledWith(expect.objectContaining({ ownFlowIds: ['100', '101'], ownDefaultFlowId: '100' }))
+    expect(calls()).toHaveLength(1)
+    expect(bindCalls()).toHaveLength(0)
+  })
+
   it('读取：sourceId 走 query；默认流程为主流程，停用的绑定不出现，流程名取自流程详情', async () => {
     fetchMock.mockResolvedValue(ok(ALONE))
     const { workflowBindingApi } = await load()

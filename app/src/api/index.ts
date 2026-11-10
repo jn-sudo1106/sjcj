@@ -3782,14 +3782,16 @@ export const workflowBindingApi = {
   },
   /**
    * 整体保存源自有的流程：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交。
+   * change 返回 null 表示无需变更，不发写请求。
    * 只动 own* 那一套，来源组的流程不经这里改。入组的源后端一律拒绝（10-21 186 实测），界面上组内源不给入口。
    */
   save: async (
     sourceId: string,
-    change: (view: SourceFlowsView) => { flowIds: string[]; defaultFlowId: string | null },
+    change: (view: SourceFlowsView) => { flowIds: string[]; defaultFlowId: string | null } | null,
   ): Promise<void> => {
     const view = await workflowBindingApi.view(sourceId)
     const next = change(view)
+    if (!next) return
     const body = {
       sourceId,
       expectedFlowIds: view.ownFlowIds,

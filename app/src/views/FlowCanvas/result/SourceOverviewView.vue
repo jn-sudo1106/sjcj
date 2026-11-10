@@ -33,6 +33,7 @@ import EditSourceDialog from '@/views/FlowCanvas/source/EditSourceDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
+import BatchBindFlowsDialog from '@/views/CollectAssets/BatchBindFlowsDialog.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
 import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
@@ -814,6 +815,20 @@ function registerSelectedIssues() {
 const sourceGroupOpsOpen = ref(false)
 const flowConfigOpen = ref(false)
 const flowConfigSource = ref<Source | null>(null)
+const batchFlowSourceIds = ref<string[]>([])
+function openBatchBindFlows() {
+  if (auth.role !== 'admin' || !selectedIds.value.length) return
+  batchFlowSourceIds.value = [...selectedIds.value]
+}
+async function onBatchFlowsSaved(sourceIds: string[]) {
+  const saved = new Set(sourceIds)
+  const remaining = selectedIds.value.filter((id) => !saved.has(id))
+  const requestId = sourceRequestSeq + 1
+  await loadSources()
+  await nextTick()
+  if (sourceRequestSeq !== requestId) return
+  selectedIds.value = remaining.filter((id) => rows.value.some((row) => row.sourceId === id))
+}
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
 const batchCronOpen = ref(false)
@@ -1765,6 +1780,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
         <slot name="selection-actions" :ids="selectedIds" />
+        <button v-if="auth.role === 'admin'" class="sov-btn" type="button" data-testid="batch-bind-flows" @click="openBatchBindFlows">绑定流程</button>
         <div ref="markAnchorRef" class="sov-mark-anchor">
           <button class="sov-btn sov-mark-btn" type="button" data-testid="batch-mark" :aria-expanded="markOpen" @click="toggleMarkPopover">添加标记</button>
           <SourceMarkPopover
@@ -2049,6 +2065,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
     <SourceCodeTasksDrawer v-if="codeTasksOpen" v-model="codeTasksOpen" :sources="rows.filter(row => selectedIds.includes(row.sourceId))" />
     <!-- 1008-04 来源组批量操作弹窗 / 抽屉 -->
+    <BatchBindFlowsDialog v-if="batchFlowSourceIds.length" :source-ids="batchFlowSourceIds" @close="batchFlowSourceIds = []" @saved="onBatchFlowsSaved" />
     <SourceFlowConfigDrawer
       v-if="flowConfigOpen && flowConfigSource"
       :source="flowConfigSource"

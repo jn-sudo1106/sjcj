@@ -26,6 +26,41 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('勾选后直接从操作栏批量绑定流程，成功项取消勾选、失败项保留并刷新当前列表', async () => {
+    useAuthStore().roles = ['admin']
+    const second = { ...source, sourceId: 'src-2', name: '第二个源' }
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [source, second] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="batch-bind-flows"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-bind-flows"]').trigger('click')
+    const dialog = wrapper.findComponent({ name: 'BatchBindFlowsDialog' })
+    expect(dialog.props('sourceIds')).toEqual(['src-1', 'src-2'])
+    const before = page.mock.calls.length
+    dialog.vm.$emit('saved', ['src-1'])
+    await flushPromises()
+    expect(page.mock.calls.length).toBeGreaterThan(before)
+    expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('1')
+    expect((wrapper.get('[data-testid="source-check-src-2"]').element as HTMLInputElement).checked).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['src-1', 'src-2'])
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'BatchBindFlowsDialog' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('非管理员勾选源后不显示批量绑定入口', async () => {
+    useAuthStore().roles = ['viewer']
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    expect(wrapper.find('[data-testid="batch-bind-flows"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('多选源后从操作栏登记问题，向弹窗传入所选源，不增加行内问题图标', async () => {
     useAuthStore().roles = ['admin']
     const second = { ...source, sourceId: 'src-2', name: '第二个源' }
