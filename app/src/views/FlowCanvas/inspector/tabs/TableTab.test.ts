@@ -436,7 +436,7 @@ describe('TableTab · 去重列（0828 D11）', () => {
 })
 
 // 数据监控节点（2026-09-01）：monitor 复用 rule 种子，表配置只负责输入表/入参字段绑定。
-describe('TableTab · 输出字段选择 = 旧平台出参列 OutContext（1010 恢复）', () => {
+describe('TableTab · 输出字段（主表）= 旧平台出参列 OutContext（1010 恢复）', () => {
   const OUT_TABLE: EntryType = {
     tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
     fields: [
@@ -837,8 +837,10 @@ describe('TableTab · 出参列边界与报文结构（1106 W4）', () => {
   })
 })
 describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-08 最终口径）', () => {
-  // 2026-11-08 用户口径（第三次）：多表（副表 / 回写父表）整块删除——输出表就是唯一写入目标，
-  // 输入表 == 输出表时后端按「更新父表」处理（isMulti=2），界面只给一句提示。
+  // 2026-11-08 用户口径（第三次）：旧的「副表 / 回写父表」整块删除——输出表是主写入目标，
+  // 输入表 == 输出表时后端按「更新父表」处理（isMulti=2），单表下只给一句提示。
+  // 2026-11-09 晚用户要求恢复「单表/多表」：多表 = 再指定「输出父表」+「输出字段（回填）」，
+  // 走步骤 fillTable / fillColumns（见下方「单表/多表与输出字段（回填）」）。
   const MAIN_TABLE: EntryType = {
     tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
     fields: [
@@ -859,7 +861,10 @@ describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-
   }
   const rootConfig = { table: { entryTypeId: 2103330, keys: ['news'], colMap: [] as Array<{ colId: string; fromId: string }> } }
 
-  async function mountTableMode(structuredConfig?: string, opts: { sameTable?: boolean } = {}) {
+  async function mountTableMode(
+    structuredConfig?: string,
+    opts: { sameTable?: boolean; fill?: { fillTable: string; fillColumns: string[] } } = {},
+  ) {
     mockAssets()
     const all = [MAIN_TABLE, LEGACY_SUB, LEGACY_SUB_2, INPUT_SRC]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: all.length, list: all })
@@ -870,6 +875,7 @@ describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-
     const cfg = cloneConfig(NODE_CONFIGS['web-list'])
     cfg.collectCfg!.inputTable = opts.sameTable ? '2103330' : '2103200'
     cfg.collectCfg!.outputTable = '2103330'
+    if (opts.fill) cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), ...opts.fill }
     if (structuredConfig !== undefined) cfg.collectCfg!.structuredConfig = structuredConfig
     flow.configs['web-1'] = cfg
     flow.select('web-1')
@@ -884,7 +890,7 @@ describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-
   const codeRuleOf = (flow: ReturnType<typeof useFlowStore>) =>
     String(buildConfigPayload(flow.configs['web-1']).codeRule ?? '')
 
-  it('输出表段不再有「写入方式」：多表入口（副表 / 回写父表）已整体删除', async () => {
+  it('输出表段没有旧的「写入方式」：多表改由「单表/多表」+ 输出父表承载', async () => {
     const { wrapper } = await mountTableMode(JSON.stringify(rootConfig))
     expect(wrapper.find('[data-testid="output-table-field"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="output-mode-segment"]').exists()).toBe(false)
@@ -895,9 +901,29 @@ describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-
     wrapper.unmount()
   })
 
-  it('输入表与输出表相同：提示按「更新父表」处理，保存报文不写 table.subs', async () => {
+  it('输入表与输出表相同：历史存过回填也强制单表，输出父表/输出字段隐藏', async () => {
+    const { flow, wrapper } = await mountTableMode(undefined, {
+      sameTable: true,
+      fill: { fillTable: '2103330', fillColumns: ['title'] },
+    })
+    expect(wrapper.get('[data-testid="table-mode-single"]').classes()).toContain('active')
+    expect((wrapper.get('[data-testid="table-mode-multi"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="fill-fields-list"]').exists()).toBe(false)
+    // 数据与界面保持一致：历史回填在同表判定成立时清成 null，保存即发 clearFill
+    expect(flow.configs['web-1'].taskCfg?.fillTable).toBeNull()
+    expect(flow.configs['web-1'].taskCfg?.fillColumns).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('输入表与输出表相同：默认单表且多表不可选，输出父表/输出字段隐藏，保存报文不写 table.subs', async () => {
     const { flow, wrapper } = await mountTableMode(JSON.stringify(rootConfig), { sameTable: true })
     expect(wrapper.get('[data-testid="output-table-same-as-input"]').text()).toContain('更新父表')
+    expect(wrapper.get('[data-testid="table-mode-single"]').classes()).toContain('active')
+    expect((wrapper.get('[data-testid="table-mode-multi"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="fill-table-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="fill-fields-list"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="output-mode-segment"]').exists()).toBe(false)
     expect(codeRuleOf(flow)).not.toContain('subs')
     wrapper.unmount()
@@ -945,7 +971,7 @@ describe('TableTab · 输出表与「更新父表」提示（1106 W5 · 2026-11-
   })
 })
 
-describe('TableTab · 回填表和字段', () => {
+describe('TableTab · 单表/多表与输出字段（回填）', () => {
   async function open(
     template = 'web-detail',
     fill: { fillTable?: string | null; fillColumns?: string[] } = { fillTable: INPUT_TABLE.tableId, fillColumns: ['K2', 'K99'] },
@@ -955,6 +981,11 @@ describe('TableTab · 回填表和字段', () => {
     const flow = useFlowStore()
     const cfg = cloneConfig(NODE_CONFIGS[template])
     cfg.configId = '13'
+    // 单表只在输入表 != 输出表时可选；这里固定成两张不同的表，让回填用例走「单表可选」路径。
+    if (cfg.collectCfg) {
+      cfg.collectCfg.inputTable = INPUT_TABLE.tableId
+      cfg.collectCfg.outputTable = '900'
+    }
     cfg.taskCfg = { queue: '', urlRule: '', ...fill }
     flow.configs['8914101'] = cfg
     flow.main = ['start', '8914101', 'end']
@@ -965,36 +996,52 @@ describe('TableTab · 回填表和字段', () => {
     return { flow, wrapper }
   }
 
-  it('未配置回填时只有「输出字段二（回填数据）」开关，不展示表选择和字段', async () => {
+  it('未配置回填即单表：不展示输出父表和输出字段（回填）', async () => {
     const { wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
-    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="fill-enabled-toggle"]').text()).toContain('输出字段二（回填数据）')
-    expect((wrapper.get('[data-testid="fill-enabled-toggle"] input').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('[data-testid="table-mode-field"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="table-mode-single"]').classes()).toContain('active')
+    expect(wrapper.get('[data-testid="table-mode-multi"]').classes()).not.toContain('active')
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="fill-table-field"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="fill-fields-list"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('勾选后默认回填到入参表，并展示该表字段供选择', async () => {
+  it('切到多表后默认输出父表为入参表，并展示该表字段供选择', async () => {
     const { flow, wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
     flow.configs['8914101'].collectCfg!.inputTable = INPUT_TABLE.tableId
     await flushPromises()
 
-    await wrapper.get('[data-testid="fill-enabled-toggle"] input').setValue(true)
+    await wrapper.get('[data-testid="table-mode-multi"]').trigger('click')
     await flushPromises()
 
     expect(flow.configs['8914101'].taskCfg?.fillTable).toBe(INPUT_TABLE.tableId)
     expect(flow.configs['8914101'].taskCfg?.fillColumns).toEqual([])
+    expect(wrapper.get('[data-testid="table-mode-multi"]').classes()).toContain('active')
+    expect(wrapper.get('[data-testid="fill-config-field"]').text()).toContain('输出父表')
     expect(wrapper.get('[data-testid="fill-table-field"]').text()).toContain(INPUT_TABLE.tableId)
     expect(wrapper.findAll('[data-testid="fill-fields-list"] .rc-tag')).toHaveLength(2)
     wrapper.unmount()
   })
 
-  it('打开时回显目标表、勾选态和物理列，未知列保留且不触发修改', async () => {
+  it('没有入参表时切多表先留空，提示选择输出父表', async () => {
+    const { flow, wrapper } = await open('web-detail', { fillTable: null, fillColumns: [] })
+    flow.configs['8914101'].collectCfg!.inputTable = ''
+    await flushPromises()
+
+    await wrapper.get('[data-testid="table-mode-multi"]').trigger('click')
+    await flushPromises()
+
+    expect(flow.configs['8914101'].taskCfg?.fillTable).toBe('')
+    expect(wrapper.get('[data-testid="table-mode-multi"]').classes()).toContain('active')
+    expect(wrapper.get('[data-testid="fill-table-missing-hint"]').text()).toContain('未选择输出父表')
+    wrapper.unmount()
+  })
+
+  it('打开时回显多表、输出父表、勾选态和物理列，未知列保留且不触发修改', async () => {
     const { flow, wrapper } = await open()
     flow.markSaved()
     await flushPromises()
-    expect((wrapper.get('[data-testid="fill-enabled-toggle"] input').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.get('[data-testid="table-mode-multi"]').classes()).toContain('active')
     expect(wrapper.get('[data-testid="fill-table-field"]').text()).toContain(INPUT_TABLE.tableId)
     expect(wrapper.findAll('[data-testid="fill-fields-list"] .rc-tag.on')).toHaveLength(1)
     expect(wrapper.get('[data-testid="unknown-fill-fields"]').text()).toContain('K99')
@@ -1014,7 +1061,7 @@ describe('TableTab · 回填表和字段', () => {
   it('勾选字段发送物理列名，并保留尚未解析的历史列', async () => {
     const { flow, wrapper } = await open()
     const rev = flow.flowRev
-    await wrapper.get('[aria-label="选择回填字段 商品ID"]').setValue(true)
+    await wrapper.get('[aria-label="选择输出字段（回填） 商品ID"]').setValue(true)
     const cfg = flow.configs['8914101']
     expect(cfg.taskCfg?.fillColumns).toEqual(['K2', 'K99', 'K1'])
     expect(flow.flowRev).toBeGreaterThan(rev)
@@ -1023,7 +1070,7 @@ describe('TableTab · 回填表和字段', () => {
     wrapper.unmount()
   })
 
-  it('切换目标表同时清空旧字段，不继承旧表同名 K 列', async () => {
+  it('切换输出父表同时清空旧字段，不继承旧表同名 K 列', async () => {
     const { flow, wrapper } = await open()
     wrapper.get('[data-testid="fill-table-field"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '901')
     await flushPromises()
@@ -1031,27 +1078,30 @@ describe('TableTab · 回填表和字段', () => {
     wrapper.unmount()
   })
 
-  it('清空目标表发送 clearFill，并且不从旧快照恢复表和字段', async () => {
+  it('清空输出父表回到单表，并发 clearFill', async () => {
     const { flow, wrapper } = await open()
     wrapper.get('[data-testid="fill-table-field"]').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', undefined)
     await flushPromises()
     const cfg = flow.configs['8914101']
+    expect(cfg.taskCfg).toMatchObject({ fillTable: null, fillColumns: [] })
+    expect(wrapper.get('[data-testid="table-mode-single"]').classes()).toContain('active')
+    expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
     const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1', snapshot: {
       stepId: '8914101', sourceId: '-1', name: '旧配置', enabled: true, fillTable: '2102154', fillColumns: ['K2'],
     } }))
     expect(payload.clearFill).toBe(true)
     expect(payload).not.toHaveProperty('fillEntry')
     expect(payload).not.toHaveProperty('fillContext')
-    expect(wrapper.find('[data-testid="clear-fill-fields"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('取消勾选发送 clearFill，收起表选择和字段，且不从旧快照恢复', async () => {
+  it('切回单表发送 clearFill，收起输出父表和字段，且不从旧快照恢复', async () => {
     const { flow, wrapper } = await open()
-    await wrapper.get('[data-testid="fill-enabled-toggle"] input').setValue(false)
+    await wrapper.get('[data-testid="table-mode-single"]').trigger('click')
     await flushPromises()
     const cfg = flow.configs['8914101']
     expect(cfg.taskCfg).toMatchObject({ fillTable: null, fillColumns: [] })
+    expect(wrapper.get('[data-testid="table-mode-single"]').classes()).toContain('active')
     const payload = stepToStepModifyPayload(mergeStepForWrite({ cfg, nodeId: '8914101', sourceId: '-1', snapshot: {
       stepId: '8914101', sourceId: '-1', name: '旧配置', enabled: true, fillTable: '2102154', fillColumns: ['K2'],
     } }))
@@ -1063,8 +1113,9 @@ describe('TableTab · 回填表和字段', () => {
     wrapper.unmount()
   })
 
-  it.each(['login-collect', 'file-download', 'rule'])('%s 隐藏回填配置，保留历史数据', async (template) => {
+  it.each(['login-collect', 'file-download', 'rule'])('%s 隐藏单表/多表与回填配置，保留历史数据', async (template) => {
     const { flow, wrapper } = await open(template)
+    expect(wrapper.find('[data-testid="table-mode-field"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="fill-config-field"]').exists()).toBe(false)
     expect(flow.configs['8914101'].taskCfg).toMatchObject({ fillTable: INPUT_TABLE.tableId, fillColumns: ['K2', 'K99'] })
     wrapper.unmount()
