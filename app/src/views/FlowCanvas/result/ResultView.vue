@@ -15,6 +15,7 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
+import { planSkipCondSend } from '@/utils/flow/skipCondPlan'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
 import { confirmDanger, confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
@@ -350,6 +351,14 @@ const execDisabledReason = computed(() => {
   return ''
 })
 const canExecute = computed(() => execMode.value !== 'none' && !execDisabledReason.value)
+/**
+ * 「本次跳过条件」只给"发后续"用（1109-R01）：它跳过的是**下游节点的进入条件**，
+ * "发起本节点任务 / 发起抓取 / 从上一节点重跑"根本不是这个语境，给了开关也没处生效。
+ * 只要处在"发后续"语境就**显示**（哪怕还没勾数据）：第一版把它绑在 canExecute 上，
+ * 结果表里没数据时整个开关都不渲染，用户只看到"发后续"是灰的，以为这功能不存在。
+ * 不可执行时改为 disabled + tooltip，别隐藏。
+ */
+const canSkipCondThisSend = computed(() => execMode.value === 'input' && !isCurrentNodeAction.value)
 const canPickRows = computed(() => {
   if (execMode.value === 'upstream') return true
   if (execMode.value === 'input') return true
@@ -406,6 +415,52 @@ const skippedStepIds = computed(() => new Set(skippedNodeIds.value.map(stepIdOfN
 const skipHintText = computed(() => (skippedNodeIds.value.length
   ? `\n已标「本次不发」的 ${skippedNodeIds.value.length} 个节点不会收到任务。`
   : ''))
+
+/**
+ * 「本次跳过进入条件」（1109-R01 第一档/第二档，2026-11-09 用户定先做这两档）。
+ *
+ * 对应后端 `source/nextStep` 的存量参数 `skipCond=1`（InfoSourceController:2300-2313）：
+ * 把本次 `itemConfig` 里的步骤**整批**跳过进入条件（cond），但 `hasExecNext` 幂等检查照常执行
+ * （ItemConfigService:559-563、:635），所以不会绕过"已执行就不重复发"的防线。
+ *
+ * 两点边界，别在这个开关上想当然：
+ * - **按节点**（2026-11-09 用户要求"要能选节点"）：`skipCondStepIds` 存本次勾选要跳的步骤 ID。
+ *   后端只有**整批** `skipCond=1`（没有 `ignoreConditionStepIds`），所以勾选非全量时前端按
+ *   「跳过组 / 正常组」拆成两次 `nextStep` 请求：后端是按 `itemConfig` 逐节点独立建任务，
+ *   两次请求与一次请求语义等价（同一批 entryId、不同 configId，互不依赖）。
+ *   勾选覆盖全部目标节点时只发一次，避免多余请求。
+ * - 一次性动作：不写回节点配置，也不进页签快照，受理成功或换源/换节点/换版本即清，
+ *   避免下一次普通发送继承上一次的放行状态（验收要求"再次普通发送恢复原行为"）。
+ */
+const forceSkipCond = ref(false)
+/** 本次勾选要跳过进入条件的步骤 ID（空 = 未启用；全量 = 等价旧的整批跳过）。 */
+const skipCondStepIds = ref<string[]>([])
+
+/**
+ * 「本次发送设置」面板（2026-11-09 用户：「能不能合并在一起选择条件和跳过条件」）。
+ *
+ * 一个节点本次只有三种处置，天然互斥——所以用单值枚举，而不是「本次不发」和「忽略条件」
+ * 两个独立勾选框（两个都勾上时语义要额外解释，反而更容易点错）：
+ * - normal  ：照常发送、照常判断进入条件
+ * - skipCond：发送，但本次不判断进入条件（后端 skipCond=1；勾选非全量时拆两次请求）
+ * - mute    ：本次不发（沿用 skippedNodeIds，仍进页签快照）
+ */
+type SendSettingMode = 'normal' | 'skipCond' | 'mute'
+interface SendSettingOption {
+  stepId: string
+  nodeId: string
+  name: string
+  condition: string
+  configId?: string
+}
+const sendSettingVisible = ref(false)
+const sendSettingLoading = ref(false)
+const sendSettingError = ref('')
+const sendSettingOptions = ref<SendSettingOption[]>([])
+const sendSettingMode = ref<Record<string, SendSettingMode>>({})
+/** 已生效的设置条数（不开面板时显示在按钮上） */
+const sendSettingBadge = computed(() => skipCondStepIds.value.length + skippedNodeIds.value.length)
+const sendSettingDraftCount = computed(() => Object.values(sendSettingMode.value).filter((m) => m !== 'normal').length)
 
 /** 节点轨道的右键菜单（0917-06 / 0917-08）。菜单项按被右键的那个节点算，不看当前选中。 */
 const nodeMenu = ref<{ show: boolean; nodeId: string; x: number; y: number }>({ show: false, nodeId: '', x: 0, y: 0 })
@@ -467,12 +522,25 @@ function showNextStepReceipt(res: { message?: string }) {
   if (receipt.entries.length === 0) {
     // 解析不出任何 ok_/reject_ 分组（如全部 ID 无效）：按提交数原样展示，不假装有结果。
     ElMessage.success(res?.message || '操作已提交（演示）')
+    return
+  }
+  // 1109-R01：`skip_`（因已执行跳过）和 `condError_`（条件表达式异常）都不是成功。
+  // 尤其 condError_ 必须单独走 warning——它既没发出去、又不属于"被进入条件拒绝"，
+  // 混进 success 文案就成了"把未发送显示成成功"。
+  const extra: string[] = []
+  if (receipt.skipCount > 0) extra.push(`${receipt.skipCount} 条因已执行跳过`)
+  if (receipt.condErrorCount > 0) extra.push(`${receipt.condErrorCount} 条条件表达式异常`)
+  const extraText = extra.length ? `，${extra.join('，')}` : ''
+  // 强制跳过条件模式（skipCond=1）的回执口径是「共处理 / 强制跳过条件发送」，点出来才看得懂为什么放行了
+  const forceText = receipt.forceSkipped > 0 ? `（强制跳过条件发送 ${receipt.forceSkipped} 条）` : ''
+  if (receipt.condErrorCount > 0) {
+    ElMessage.warning(`已提交 ${receipt.submitted} 条${forceText}：${receipt.okCount} 条已进入下一步${extraText}`)
   } else if (receipt.rejectCount > 0 && receipt.okCount === 0) {
-    ElMessage.warning(`已提交 ${receipt.submitted} 条，全部被目标节点的进入条件拒绝，未进入下一步`)
+    ElMessage.warning(`已提交 ${receipt.submitted} 条${forceText}，全部被目标节点的进入条件拒绝，未进入下一步${extraText}`)
   } else if (receipt.rejectCount > 0) {
-    ElMessage.warning(`已提交 ${receipt.submitted} 条：${receipt.okCount} 条已进入下一步，${receipt.rejectCount} 条被进入条件拒绝`)
+    ElMessage.warning(`已提交 ${receipt.submitted} 条${forceText}：${receipt.okCount} 条已进入下一步，${receipt.rejectCount} 条被进入条件拒绝${extraText}`)
   } else {
-    ElMessage.success(`已提交 ${receipt.submitted} 条，${receipt.okCount} 条已进入下一步`)
+    ElMessage.success(`已提交 ${receipt.submitted} 条${forceText}，${receipt.okCount} 条已进入下一步${extraText}`)
   }
 }
 // M3-0K：nextStep 失败时原始报错定位不到是哪个节点配错（旧平台节点条件语法出错会导致
@@ -520,11 +588,96 @@ function buildCurrentConfigHint() {
   }
 }
 
+/**
+ * 打开「选择跳过进入条件的节点」面板（1109-R01 按节点）。
+ *
+ * 列表口径必须和真正发送时的下游集合一致，所以不自己沿着画布猜，直接复用
+ * `fetchNextStepConfig` 的 `downstreamSteps`（含层序去重、已在 onSendNextStep 里被「本次不发」
+ * 过滤过一次），并再按 `skippedStepIds` 过滤一遍——用户可能刚标完「本次不发」就来点这个。
+ * 默认全选：等于旧平台的整批行为，用户不勾选就开开关时不应悄悄只跳一部分。
+ */
+/** 步骤 ID → 画布节点 ID（面板拿到的是 stepId，「本次不发」存的是节点 ID，两者要能对上）。 */
+function nodeIdOfStepId(stepId: string): string {
+  const hit = Object.entries(flow.configs).find(([nodeId]) => stepIdOfNode(nodeId) === stepId)
+  if (hit) return hit[0]
+  return /^\d+$/.test(stepId) ? stepId : ''
+}
+
+async function openSendSettings() {
+  if (execMode.value !== 'input') return
+  sendSettingVisible.value = true
+  sendSettingLoading.value = true
+  sendSettingError.value = ''
+  try {
+    const info = await fetchNextStepConfig(
+      sourceId.value,
+      selectedNodeId.value,
+      buildCurrentFallbackSteps(),
+      buildCurrentConfigHint(),
+    )
+    // 这里**不剔除**已标「本次不发」的节点：面板要能把它改回正常，剔除就再也找不回来了
+    const skipSet = new Set(skipCondStepIds.value)
+    const muteSet = skippedStepIds.value
+    sendSettingOptions.value = (info?.downstreamSteps ?? [])
+      .map((step) => {
+        const stepId = String(step.stepId)
+        return {
+          stepId,
+          nodeId: nodeIdOfStepId(stepId),
+          name: step.name || stepId,
+          condition: step.condition || '',
+          configId: step.configId,
+        }
+      })
+      .filter((opt) => /^\d+$/.test(opt.stepId))
+    const modes: Record<string, SendSettingMode> = {}
+    for (const opt of sendSettingOptions.value) {
+      modes[opt.stepId] = muteSet.has(opt.stepId) ? 'mute' : skipSet.has(opt.stepId) ? 'skipCond' : 'normal'
+    }
+    sendSettingMode.value = modes
+    if (!sendSettingOptions.value.length) sendSettingError.value = '当前节点没有可发送的下游节点'
+  } catch (err) {
+    sendSettingError.value = (err as Error)?.message || '读取下游节点失败，请稍后重试'
+  } finally {
+    sendSettingLoading.value = false
+  }
+}
+function setSendSettingMode(opt: SendSettingOption, mode: SendSettingMode) {
+  // 没有进入条件的节点本来就必发，「忽略条件」对它没有意义，别给一个点了没反应的选项
+  if (mode === 'skipCond' && !opt.condition) return
+  sendSettingMode.value = { ...sendSettingMode.value, [opt.stepId]: mode }
+}
+function resetSendSettings() {
+  const next: Record<string, SendSettingMode> = {}
+  for (const opt of sendSettingOptions.value) next[opt.stepId] = 'normal'
+  sendSettingMode.value = next
+}
+function confirmSendSettings() {
+  const covered = new Set(sendSettingOptions.value.map((opt) => opt.nodeId).filter(Boolean))
+  // 面板只覆盖"当前节点的下游"，面板外的既有标记（理论上是换节点后残留）保持不动
+  const outsideSkipped = skippedNodeIds.value.filter((id) => !covered.has(id))
+  const muteNodeIds: string[] = []
+  const skipIds: string[] = []
+  for (const opt of sendSettingOptions.value) {
+    const mode = sendSettingMode.value[opt.stepId] ?? 'normal'
+    if (mode === 'mute' && opt.nodeId) muteNodeIds.push(opt.nodeId)
+    if (mode === 'skipCond') skipIds.push(opt.stepId)
+  }
+  skippedNodeIds.value = [...outsideSkipped, ...muteNodeIds]
+  skipCondStepIds.value = skipIds
+  forceSkipCond.value = skipIds.length > 0
+  sendSettingVisible.value = false
+}
+function clearSkipCond() {
+  skipCondStepIds.value = []
+  forceSkipCond.value = false
+}
+
 function runNextStep(
   ids: string[],
   tableId: string,
   nodeName: string,
-  configOptions?: { configId?: string; itemConfig?: string; stepId?: string; nextStep?: string },
+  configOptions?: { configId?: string; itemConfig?: string; stepId?: string; nextStep?: string; skipCond?: 0 | 1 },
 ) {
   return withNodeErrorContext(nodeName, () =>
     configOptions ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
@@ -619,11 +772,47 @@ async function onSendNextStep() {
   const fanout = (nextInfo?.branchHint ? `\n这批数据会按各后继节点的进入条件分流到：${nextInfo.branchHint}` : '') ||
     (branchTargets.value.length ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}` : '')
 
+  /**
+   * 1109-R01 按节点：本次实际跳过的步骤 = 弹窗勾选集 ∩ 本次发送范围。
+   * 勾了又标「本次不发后续」的节点会自动失效（它本来就不发，谈不上跳过条件）。
+   */
+  const skipPlan = planSkipCondSend(downstreamIds, forceSkipCond.value ? skipCondStepIds.value : [])
+  const skipSendIds = skipPlan.skipIds
+  const normalSendIds = skipPlan.normalIds
+  const skipCondActive = skipSendIds.length > 0
+  // 后端只有整批 `skipCond=1`：既要跳一部分、又要正常发另一部分时拆两次请求。
+  // 覆盖全部目标节点就只发一次（等于旧整批行为），少一次网络往返与一次失败面。
+  const splitSend = skipPlan.split
+  const skipSendNames = keptDownstream
+    .filter((step) => skipSendIds.includes(String(step.stepId)))
+    .map((step) => step.name || step.stepId)
+    .join('、')
+
   const configOptions = {
     ...(targetConfigId ? { configId: targetConfigId } : {}),
     ...(hasTargetStepId ? { itemConfig: targetStepId, stepId: targetStepId, nextStep: targetStepId } : {}),
+    // 1109-R01：只有真的指定了目标步骤才传 skipCond——没有 itemConfig 时后端会防御性忽略该参数
+    // （InfoSourceController:2310-2313），传了会让确认文案说"已跳过"而实际没跳过。
+    // 拆两次时不走这条整批请求，skipCond 由 skip 那批自己带。
+    ...(skipPlan.skipCond && hasTargetStepId ? { skipCond: 1 as const } : {}),
   }
   const hasOpts = Object.keys(configOptions).length > 0
+  const skipCondHint = !skipCondActive
+    ? ''
+    : splitSend
+      ? `\n本次只忽略这些节点的进入条件：${skipSendNames}；其余 ${normalSendIds.length} 个节点照常判断条件。`
+        + `\n（后端只有整批跳过参数，会拆成两次发送：先发忽略条件的节点，再发正常判断的节点；不改节点保存的条件，发完自动关闭。）`
+      : `\n本次将跳过「${targetNodeName}」的进入条件判断（不改节点保存的条件，发完自动关闭）。`
+  // 开关开着但没有可指定的步骤：别让请求悄悄退回"普通发送"，用户会以为条件已被跳过
+  if (forceSkipCond.value && !hasTargetStepId) {
+    ElMessage.warning('当前找不到可指定的目标步骤，「本次跳过条件」无法生效，请先刷新后重试')
+    return
+  }
+  // 弹窗里勾的节点全被「本次不发」摘掉了：这时不能静默退回普通发送，得让用户知道开关没生效
+  if (forceSkipCond.value && hasTargetStepId && !skipCondActive && downstreamIds.length) {
+    ElMessage.warning('已勾选跳过的节点不在本次发送范围内（可能刚标了「本次不发后续」），请重新选择')
+    return
+  }
 
   // 整条下游都被标了"本次不发"：别发一个空 itemConfig 出去（后端会当成"发所有下一步"，
   // 正好跟用户的意图相反）
@@ -634,15 +823,46 @@ async function onSendNextStep() {
 
   // 有分支分流时**必须确认**：分流去了哪几个节点是用户不知道的信息，
   // 不能因为只勾了两条就把它咽掉（0917-05 口径）
+  // 拆两次请求是用户看不到的实现细节，必须先说清楚再发（和"分流去向"同理，别咽掉）
   await confirmOrRun(
-    ids.length > DIRECT_ROWS_MAX || !!fanout,
+    ids.length > DIRECT_ROWS_MAX || !!fanout || splitSend,
     '发后续任务',
-    `将对选中的 ${count} 条数据发起后续节点「${targetNodeName}」的处理任务。${fanout}${skipHintText.value}\n是否继续？`,
+    `将对选中的 ${count} 条数据发起后续节点「${targetNodeName}」的处理任务。${fanout}${skipHintText.value}${skipCondHint}\n是否继续？`,
     async () => {
-      const res = await withNodeErrorContext(targetNodeName, () =>
-        hasOpts ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
-      )
-      return res
+      // 单批（含"全部跳过"与"完全不跳过"）：保持一次请求，行为和旧平台一致
+      if (!splitSend) {
+        const res = await withNodeErrorContext(targetNodeName, () =>
+          hasOpts ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
+        )
+        // 受理成功才清：失败时保留勾选，用户可以直接重试同一批（不至于悄悄变回正常条件判断）
+        clearSkipCond()
+        return res
+      }
+      /**
+       * 拆两次：后端 `nextStep` 按 `itemConfig` 逐节点独立建任务（7 个 stepId 就是 7 组回执，
+       * 互不依赖），配不同 `configId` 也不会撞 `hasExecNext` 幂等检查，所以"跳过组一次 +
+       * 正常组一次"与"一次请求里逐节点判断"等价。先发跳过组：它放行的节点若失败，
+       * 后面正常组还没发，用户重试代价小。
+       */
+      const runBatch = async (batchIds: string[], withSkip: boolean) => {
+        const batchItem = batchIds.join(',')
+        const batchConfigId = keptDownstream
+          .find((step) => batchIds.includes(String(step.stepId)) && step.configId)?.configId
+          || targetConfigId
+        return withNodeErrorContext(targetNodeName, () => dataApi.nextStep(sourceId.value, tableId, ids, {
+          ...(batchConfigId ? { configId: batchConfigId } : {}),
+          itemConfig: batchItem,
+          stepId: batchItem,
+          nextStep: batchItem,
+          ...(withSkip ? { skipCond: 1 as const } : {}),
+        }))
+      }
+      const skipRes = await runBatch(skipSendIds, true)
+      // 跳过组的回执先单独展示（口径是"共处理/强制跳过条件发送"），正常组的回执交给 onSuccess
+      showNextStepReceipt(skipRes)
+      const normalRes = await runBatch(normalSendIds, false)
+      clearSkipCond()
+      return normalRes
     },
     showNextStepReceipt,
   )
@@ -726,6 +946,13 @@ const sendAllBlockedReason = computed(() => {
 async function onSendAllUnderFilter() {
   if (execMode.value !== 'input' || !canPickRows.value) return
   if (sendAllBlockedReason.value) return
+  // 1109-R01：批量接口 nextStep2 没有 skipCond（对应旧组件 skipCondUnavailableTip「批量接口暂不支持」）。
+  // 开关在工具栏上是共用的，这里必须**明确挡住**——否则用户勾了"本次跳过条件"再点"发全部"，
+  // 条件照常判断、数据被静默拒绝，看起来像功能失效。
+  if (forceSkipCond.value) {
+    ElMessage.warning('「发全部」暂不支持忽略进入条件：请先点「跳过条件」把勾选清空，或改用勾选数据后的「发后续任务」')
+    return
+  }
 
   if (isCurrentNodeAction.value) {
     const nodeName = selectedCfg.value?.title || selectedNodeId.value
@@ -1031,6 +1258,13 @@ function onSortChange(field: string, order: 'ascend' | 'descend' | '') {
 watch([selectedNodeId, page, () => ({ ...filters }), skippedNodeIds], () => {
   const key = tabKey.value
   if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters }, skippedNodeIds: [...skippedNodeIds.value] })
+})
+
+// 「本次跳过条件」是一次性动作（1109-R01 验收：再次普通发送必须恢复原行为）：
+// 换源 / 换节点 / 换读的流程版本都清掉，别让上一次的放行状态跟着走。
+// 它刻意不进快照——恢复页签时如果需要，得重新勾一次，避免以为"这次还在跳过"。
+watch([sourceId, selectedNodeId, () => canvasFlowIdOf(flow), () => flowVersion.viewVersionId], () => {
+  clearSkipCond()
 })
 
 // 表元 + 数据
@@ -1814,6 +2048,20 @@ async function onTestScript() {
             data-testid="data-no-exec-reason"
             :title="noExecReason"
           >{{ noExecReason }}</span>
+          <!-- 1109-R01：本次发送设置（「本次不发」＋「忽略进入条件」合并成一个面板，
+               2026-11-09 用户要求）。只在"发后续"出现；一次性，不写回节点配置。 -->
+          <button
+            v-if="canSkipCondThisSend"
+            class="rc-btn rv-send-setting-btn"
+            type="button"
+            data-testid="data-send-settings"
+            :class="{ 'is-on': sendSettingBadge > 0 }"
+            :aria-pressed="sendSettingBadge > 0 ? 'true' : 'false'"
+            :title="sendSettingBadge > 0
+              ? `本次发送已调整 ${sendSettingBadge} 个下游节点（忽略进入条件 / 本次不发）。一次性，不改节点保存的配置；受理成功或换源/换节点/换版本后自动清空。「发全部」不支持。点击可重新设置。`
+              : '逐节点设置本次发送：照常发送 / 忽略进入条件 / 本次不发。可以先设好再勾数据（一次性，不改节点配置；仅对「发后续任务」生效）'"
+            @click="openSendSettings"
+          >{{ sendSettingBadge ? `发送设置 · ${sendSettingBadge}` : '发送设置' }}</button>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
             <button
               class="rc-btn primary"
@@ -1823,7 +2071,6 @@ async function onTestScript() {
               :title="execDisabledReason"
               @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
             >{{ actionBtnText }}</button>
-            <CodeConfigButton v-if="execMode !== 'upstream'" data-testid="data-code-btn" :build-targets="dataCodeTargets" :select-step="execMode !== 'fetch' && !isCurrentNodeAction" :node-configs="flow.configs" :disabled="execMode !== 'fetch' && !selectedRowIds.length" label="代码生成" />
             <el-dropdown
               v-if="execMode === 'input' && canPickRows"
               trigger="click"
@@ -1846,6 +2093,10 @@ async function onTestScript() {
               </template>
             </el-dropdown>
           </div>
+          <!-- 代码生成原先并进上面的连体按钮组里，跟「发后续」共用一个外轮廓，
+               看起来像被切碎的一个按钮（2026-11-09 用户："按钮都并在一起太丑"）。
+               它不是主操作，挪出连体组单独占一格，间距交给 .rv-data-ops 的 gap。 -->
+          <CodeConfigButton v-if="execMode !== 'upstream'" data-testid="data-code-btn" :build-targets="dataCodeTargets" :select-step="execMode !== 'fetch' && !isCurrentNodeAction" :node-configs="flow.configs" :disabled="execMode !== 'fetch' && !selectedRowIds.length" label="代码生成" />
           <!-- 同表多后继：不再拦，只说清会分流到哪几个（2026-09-04）。
                原来这里是禁用勾选 + 一句藏在 title 里的"无法确定任务目标节点"，纯黑盒。 -->
           <span
@@ -2149,6 +2400,84 @@ async function onTestScript() {
       >全部恢复（{{ skippedNodeIds.length }}）</button>
     </div>
 
+    <!-- 1109-R01 本次发送设置：一个节点三种处置（正常 / 忽略进入条件 / 本次不发），
+         互斥单值。勾选"忽略条件"非全量时由 onSendNextStep 拆成两次请求。 -->
+    <el-dialog
+      v-model="sendSettingVisible"
+      title="本次发送设置"
+      width="680px"
+      top="8vh"
+      append-to-body
+      data-testid="send-setting-dialog"
+    >
+      <div class="rv-send-setting">
+        <p class="rv-send-setting-tip">
+          只影响<strong>本次</strong>从这个页面发出的「发后续任务」，不改节点保存的配置，也不进页签快照：
+          受理成功、换源 / 换节点 / 换版本后自动清空。
+        </p>
+        <div v-if="sendSettingLoading" class="rv-send-setting-loading">正在读取下游节点…</div>
+        <p v-else-if="sendSettingError" class="rv-send-setting-error">{{ sendSettingError }}</p>
+        <template v-else>
+          <div class="rv-send-setting-head">
+            <span>下游节点（{{ sendSettingOptions.length }}）</span>
+            <span class="rv-send-setting-ops">
+              <button type="button" class="rc-btn tiny" @click="resetSendSettings">全部恢复默认</button>
+            </span>
+          </div>
+          <div class="rv-send-setting-list">
+            <div
+              v-for="opt in sendSettingOptions"
+              :key="opt.stepId"
+              class="rv-send-setting-row"
+              :class="`is-${sendSettingMode[opt.stepId] || 'normal'}`"
+              :data-testid="`send-setting-row-${opt.stepId}`"
+            >
+              <div class="rv-send-setting-meta">
+                <span class="rv-send-setting-name">{{ opt.name }}</span>
+                <span class="rv-send-setting-id">#{{ opt.stepId }}</span>
+                <span
+                  class="rv-send-setting-cond"
+                  :class="{ 'is-empty': !opt.condition }"
+                  :title="opt.condition || '没有进入条件：这个节点每次都会照常发送'"
+                >{{ opt.condition || '无进入条件' }}</span>
+              </div>
+              <div class="rv-send-setting-modes">
+                <button
+                  v-for="m in ([
+                    { key: 'normal', label: '正常发送' },
+                    { key: 'skipCond', label: '忽略条件' },
+                    { key: 'mute', label: '本次不发' },
+                  ] as const)"
+                  :key="m.key"
+                  type="button"
+                  class="rc-btn tiny rv-send-setting-mode"
+                  :class="{ on: (sendSettingMode[opt.stepId] || 'normal') === m.key }"
+                  :disabled="m.key === 'skipCond' && !opt.condition"
+                  :title="m.key === 'skipCond'
+                    ? (opt.condition ? '本次照发，但不判断它的进入条件' : '这个节点没有进入条件，忽略条件没有意义')
+                    : m.key === 'mute'
+                      ? '本次不往这个节点发（下游节点照常）'
+                      : '照常发送、照常判断进入条件'"
+                  :data-testid="`send-setting-${opt.stepId}-${m.key}`"
+                  @click="setSendSettingMode(opt, m.key)"
+                >{{ m.label }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <button class="rc-btn" type="button" @click="sendSettingVisible = false">取消</button>
+        <button
+          class="rc-btn primary"
+          type="button"
+          data-testid="send-setting-confirm"
+          :disabled="sendSettingLoading || !!sendSettingError"
+          @click="confirmSendSettings"
+        >保存{{ sendSettingDraftCount ? `（${sendSettingDraftCount} 个调整）` : '' }}</button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="filePreview.visible"
       :title="filePreview.name || '文件预览'"
@@ -2318,7 +2647,23 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    下一行时自然左对齐，不做额外处理——响应式下让位比硬撑更好。
    按钮尺寸由上面的 .ctx-summary .rc-btn（28px）统一接管，跟同行的「查询/清空」一致；
    删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
-.rv-data-ops { margin-left: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* 数据操作组前面加一道分隔线（2026-11-09 用户："这一排按钮优化下"）：
+   左边是"对这批数据做什么"，右边是"对查询做什么"，十几个 28px 按钮直接连排分不清组。 */
+.rv-data-ops {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  padding-left: 10px;
+  border-left: 1px solid var(--rc-border-soft);
+}
+/* 主操作（发后续）与后面的次要操作之间再松一点：同一排 28px 按钮贴等距，
+   眼睛没法一眼分出"哪个是发出去的"（2026-11-09 用户："按钮都并在一起太丑"）。 */
+.rv-data-ops > .rc-btn-group { margin-right: 4px; }
+/* 数据操作组里的文字按钮统一内边距，避免"跳过条件 · 3 个"这种长文案把行撑开；
+   宽度差异交给文字本身，不固定宽度——固定宽度反而会让中文短文案显空。 */
+.rv-data-ops > .rc-btn { padding: 0 10px; }
 /* 无可执行操作时的说明：工具栏本来就挤，超出就省略，全文走 title */
 .rv-no-exec { font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
@@ -2392,4 +2737,82 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-d-preset { height: 24px; padding: 0 6px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; }
 .ctx-summary :deep(.dcb) { flex: 1 1 380px; min-width: 260px; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
+/* 1109-R01「本次发送设置」：一次性动作，开启态用主色描边+浅底，和 primary 实心按钮区分开，
+   避免被当成"发出去"的主操作。2026-11-09 用户反馈这排按钮太碎：去掉虚线（截图里像没做完的
+   按钮），改实线浅底，开启态用"圆点 + 主色"表示生效，不再靠文字里塞"已开"撑宽按钮。 */
+.rv-send-setting-btn {
+  border-color: var(--rc-border);
+  background: #fff;
+  color: var(--rc-text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rv-send-setting-btn:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary); }
+.rv-send-setting-btn:disabled { opacity: .5; cursor: not-allowed; }
+.rv-send-setting-btn.is-on {
+  border-color: var(--rc-primary);
+  color: var(--rc-primary);
+  background: color-mix(in srgb, var(--rc-primary) 10%, #fff);
+  font-weight: 600;
+}
+.rv-send-setting-btn.is-on::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* 「本次发送设置」面板：一行一个节点，右侧三态分段按钮 */
+.rv-send-setting { display: flex; flex-direction: column; gap: 10px; }
+.rv-send-setting-tip { margin: 0; font-size: 12px; line-height: 1.65; color: var(--rc-text-2); }
+.rv-send-setting-tip strong { color: var(--rc-primary); }
+.rv-send-setting-loading,
+.rv-send-setting-error { margin: 0; padding: 18px 0; text-align: center; font-size: 12px; color: var(--rc-text-2); }
+.rv-send-setting-error { color: #b91c1c; }
+.rv-send-setting-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--rc-text-2); }
+.rv-send-setting-ops { display: inline-flex; gap: 6px; }
+.rv-send-setting-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  overflow: auto;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: 8px;
+  padding: 2px 10px;
+}
+.rv-send-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+.rv-send-setting-row + .rv-send-setting-row { border-top: 1px dashed var(--rc-border-soft); }
+.rv-send-setting-meta { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.rv-send-setting-name { font-size: 12px; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34%; }
+.rv-send-setting-id { font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-faint); flex: none; }
+.rv-send-setting-cond {
+  min-width: 0;
+  font-family: var(--rc-mono, monospace);
+  font-size: 11px;
+  color: var(--rc-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rv-send-setting-cond.is-empty { color: var(--rc-faint); font-style: italic; }
+.rv-send-setting-modes { flex: none; display: inline-flex; gap: 4px; }
+.rv-send-setting-mode { height: 24px; padding: 0 8px; font-size: 12px; }
+.rv-send-setting-mode.on {
+  border-color: var(--rc-primary);
+  color: var(--rc-primary);
+  background: color-mix(in srgb, var(--rc-primary) 10%, #fff);
+  font-weight: 600;
+}
+.rv-send-setting-mode:disabled { opacity: .45; cursor: not-allowed; }
+/* 行左边框跟着状态变色：忽略条件=主色、本次不发=中性灰 */
+.rv-send-setting-row.is-skipCond { box-shadow: inset 2px 0 0 var(--rc-primary); }
+.rv-send-setting-row.is-mute { box-shadow: inset 2px 0 0 var(--rc-border); }
+.rv-send-setting-row.is-mute .rv-send-setting-name { color: var(--rc-faint); text-decoration: line-through; }
 </style>

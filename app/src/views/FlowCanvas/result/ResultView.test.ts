@@ -1213,6 +1213,31 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T1', ['d1', 'd2'])
   })
 
+  // 1109-R01（2026-11-09 用户："能不能合并在一起选择条件和跳过条件"）：
+  // 「本次不发」与「忽略进入条件」合并成同一个面板、按节点三态互斥。
+  // 这条只钉住"面板打得开、读不到可发送步骤时不许保存"——避免又变回一个点了没反应的按钮。
+  it('「发送设置」面板：读不到可发送的下游步骤时，保存按钮禁用并给出提示', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+
+    await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
+    await flushPromises()
+
+    // el-dialog 被桩成"只渲染默认插槽"，footer 里的保存按钮断言不到；这里钉住面板本体已打开、
+    // 且读不到可发送步骤时给出明确提示（不静默变成一个空面板）。
+    expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('当前节点没有可发送的下游节点')
+  })
+
   it('首节点显式有输入表且后面还有后继：按钮是「发后续任务」，不是「发起抓取」（0824：前一个节点把行发给后一个）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!

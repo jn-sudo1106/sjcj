@@ -1,4 +1,4 @@
-﻿import { directoryQueryParams } from './sourceDirectoryScope'
+import { directoryQueryParams } from './sourceDirectoryScope'
 import { sourceScopePaged } from './siteSourceScope'
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { DEFAULT_API_PROXY_TARGET } from '@/constants/backend'
@@ -2734,11 +2734,13 @@ export const dataApi = {
       httpParams: { ids: taskIds.join(',') },
     }),
   // 发选中/本页后续：entryIds 逗号连接（危险）。同时带上后续步骤/配置标识（configId / itemConfig / stepId / nextStep）
+  // `skipCond=1` 是旧平台 nextStep 存量参数（InfoSourceController:2300）：本次 itemConfig 指定的步骤整批
+  // 跳过进入条件判断，不写回节点配置。旧 Vue 在 StepItemConfigSelect 里也是只给 nextStep 传、批量接口不传。
   nextStep: (
     sourceId: string,
     tableId: string,
     entryIds: string[],
-    configOptions?: string | { configId?: string; itemConfig?: string; stepId?: string; nextStep?: string },
+    configOptions?: string | { configId?: string; itemConfig?: string; stepId?: string; nextStep?: string; skipCond?: 0 | 1 },
   ) => {
     const opts = typeof configOptions === 'string'
       ? { configId: configOptions }
@@ -2754,6 +2756,8 @@ export const dataApi = {
         ...(opts.itemConfig ? { itemConfig: opts.itemConfig } : {}),
         ...(opts.stepId ? { stepId: opts.stepId } : {}),
         ...(opts.nextStep ? { nextStep: opts.nextStep } : {}),
+        // 只在明确开启时才传，避免给旧后端塞一个没意义的 0（后端只认 0/1，其余值直接报参数错误）
+        ...(opts.skipCond === 1 ? { skipCond: 1 } : {}),
       },
     })
   },

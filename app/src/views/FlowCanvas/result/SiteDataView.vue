@@ -780,10 +780,17 @@ function failedSourceText({ sourceId, error }: MergeLoadMoreResult<DataRow>['fai
 
 function showNextStepReceipt(res: { message?: string }) {
   const receipt = parseNextStepReceipt(res?.message || '')
-  if (receipt.entries.length === 0) ElMessage.success(res?.message || '操作已提交（演示）')
-  else if (receipt.rejectCount > 0 && receipt.okCount === 0) ElMessage.warning(`已提交 ${receipt.submitted} 条，全部被目标节点的进入条件拒绝，未进入下一步`)
-  else if (receipt.rejectCount > 0) ElMessage.warning(`已提交 ${receipt.submitted} 条：${receipt.okCount} 条已进入下一步，${receipt.rejectCount} 条被进入条件拒绝`)
-  else ElMessage.success(`已提交 ${receipt.submitted} 条，${receipt.okCount} 条已进入下一步`)
+  if (receipt.entries.length === 0) { ElMessage.success(res?.message || '操作已提交（演示）'); return }
+  // 1109-R01：与 ResultView 同口径——skip_ / condError_ 不算成功，condError_ 单独 warning。
+  const extra: string[] = []
+  if (receipt.skipCount > 0) extra.push(`${receipt.skipCount} 条因已执行跳过`)
+  if (receipt.condErrorCount > 0) extra.push(`${receipt.condErrorCount} 条条件表达式异常`)
+  const extraText = extra.length ? `，${extra.join('，')}` : ''
+  const forceText = receipt.forceSkipped > 0 ? `（强制跳过条件发送 ${receipt.forceSkipped} 条）` : ''
+  if (receipt.condErrorCount > 0) ElMessage.warning(`已提交 ${receipt.submitted} 条${forceText}：${receipt.okCount} 条已进入下一步${extraText}`)
+  else if (receipt.rejectCount > 0 && receipt.okCount === 0) ElMessage.warning(`已提交 ${receipt.submitted} 条${forceText}，全部被目标节点的进入条件拒绝，未进入下一步${extraText}`)
+  else if (receipt.rejectCount > 0) ElMessage.warning(`已提交 ${receipt.submitted} 条${forceText}：${receipt.okCount} 条已进入下一步，${receipt.rejectCount} 条被进入条件拒绝${extraText}`)
+  else ElMessage.success(`已提交 ${receipt.submitted} 条${forceText}，${receipt.okCount} 条已进入下一步${extraText}`)
 }
 
 /**

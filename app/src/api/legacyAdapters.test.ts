@@ -1006,6 +1006,39 @@ describe('nextStep 回执解析（0812 计划 M3-0J，样例取自 2026-08-18 �
     expect(r.submitted).toBe(0)
     expect(r.entries).toEqual([])
   })
+
+  /* 1109-R01：强制跳过条件（skipCond=1）——回执换成「共处理 / 强制跳过条件发送」口径，
+     普通模式那套"本次发送"在这条链路上不存在，正则必须两种都认。 */
+  it('强制跳过条件模式：识别「共处理」提交数与「强制跳过条件发送」条数', () => {
+    const r = parseNextStepReceipt('共处理:3 条, 强制跳过条件发送:3 条, 因已执行跳过:0 条, 结果:,ok_41752: [3条]')
+    expect(r.submitted).toBe(3)
+    expect(r.forceSkipped).toBe(3)
+    expect(r.okCount).toBe(3)
+    expect(r.entries).toEqual([{ status: 'ok', nodeId: '41752', count: 3 }])
+  })
+
+  it('skip_ 分组（因已执行跳过）单独计数，不能算进 ok', () => {
+    const r = parseNextStepReceipt('共处理:2 条, 强制跳过条件发送:2 条, 因已执行跳过:1 条, 结果:,ok_41752: [1条],skip_41752: [1条]')
+    expect(r.okCount).toBe(1)
+    expect(r.skipCount).toBe(1)
+    expect(r.forceSkipped).toBe(2)
+    expect(r.rejectCount).toBe(0)
+  })
+
+  it('condError_ 分组（条件表达式异常）单独计数，既不算 ok 也不算 reject', () => {
+    const r = parseNextStepReceipt('本次发送:2 条, 结果:,ok_41756: [1条],condError_41758: [1条]')
+    expect(r.okCount).toBe(1)
+    expect(r.condErrorCount).toBe(1)
+    expect(r.rejectCount).toBe(0)
+    expect(r.entries.map((e) => e.status)).toEqual(['ok', 'condError'])
+  })
+
+  it('普通模式不返回 forceSkipped（保持 0，前端据此判断不是强制口径）', () => {
+    const r = parseNextStepReceipt('本次发送:1 条, 结果:,ok_39025: [1条]')
+    expect(r.forceSkipped).toBe(0)
+    expect(r.skipCount).toBe(0)
+    expect(r.condErrorCount).toBe(0)
+  })
 })
 
 describe('旧平台源列表标记字段', () => {
