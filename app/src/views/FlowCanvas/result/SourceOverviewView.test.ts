@@ -1441,6 +1441,22 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
   })
 
+  // 1105 方案 T2「＋条件移入输入框」：不再有独立加号按钮，加号是值输入框内的后缀
+  it('「＋条件」在值输入框内，不独立成行尾按钮', async () => {
+    const { wrapper } = await mountWithSpy()
+    const addBtn = wrapper.get('[data-testid="source-overview-condition-add"]')
+    const value = addBtn.element.parentElement as HTMLElement
+    expect(value.classList.contains('sov-value')).toBe(true)
+    expect(value.classList.contains('has-add')).toBe(true)
+    expect(value.querySelector('[data-testid="source-overview-search-text"]')).not.toBeNull()
+    // 加号在 .sov-value 里，它的父级仍是条件行 .sov-search，不与「×」并列成独立按钮列
+    expect((value.parentElement as HTMLElement).classList.contains('sov-search')).toBe(true)
+    await add(wrapper)
+    const adds = wrapper.findAll('[data-testid="source-overview-condition-add"]')
+    expect(adds).toHaveLength(1)
+    expect((adds[0]!.element.parentElement as HTMLElement).classList.contains('sov-value')).toBe(true)
+  })
+
   // 0930-15（会后 Leon：「可以根据流程查有哪些源」）
   it('按流程 ID 查：选「流程 ID」填值后作为 flowId 发出；纯数字不会被自动识别成源 ID', async () => {
     const { wrapper, page } = await mountWithSpy()

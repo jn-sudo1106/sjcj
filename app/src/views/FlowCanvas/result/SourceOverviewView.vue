@@ -1682,16 +1682,29 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 :title="o.unsupported"
               >{{ o.unsupported ? `${o.label}（暂不支持）` : o.label }}</option>
             </select>
-            <textarea
-              :value="sourceCondNeedsValue(row.op) ? row.value : ''"
-              :class="{ 'sov-multiline-ids': row.field === 'sourceIds' && row.value.includes('\n') }"
-              rows="1"
-              data-testid="source-overview-search-text"
-              :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
-              :disabled="!sourceCondNeedsValue(row.op)"
-              @input="onConditionInput(row, ($event.target as HTMLTextAreaElement).value)"
-              @keydown.enter="onConditionKeydown(row, $event)"
-            ></textarea>
+            <!-- 「＋条件」在输入框内（1105 方案 T2）：加号是值输入框右侧的内联后缀，
+                 不再作为行尾独立按钮，窄屏（is-compact）下也不会多挤出一列。 -->
+            <span class="sov-value" :class="{ 'has-add': index === conditions.length - 1 && canAddCondition }">
+              <textarea
+                :value="sourceCondNeedsValue(row.op) ? row.value : ''"
+                :class="{ 'sov-multiline-ids': row.field === 'sourceIds' && row.value.includes('\n') }"
+                rows="1"
+                data-testid="source-overview-search-text"
+                :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
+                :disabled="!sourceCondNeedsValue(row.op)"
+                @input="onConditionInput(row, ($event.target as HTMLTextAreaElement).value)"
+                @keydown.enter="onConditionKeydown(row, $event)"
+              ></textarea>
+              <button
+                v-if="index === conditions.length - 1 && canAddCondition"
+                type="button"
+                class="sov-cond-btn add sov-value-add"
+                data-testid="source-overview-condition-add"
+                title="添加条件（与已有条件同时满足）"
+                aria-label="添加条件"
+                @click="addCondition"
+              >+</button>
+            </span>
             <button
               v-if="conditions.length > 1 || sourceCondActive(row)"
               type="button"
@@ -1701,15 +1714,6 @@ defineExpose({ openLaunch, clearSelection, refresh })
               :aria-label="conditions.length > 1 ? '删除这个条件' : '清空这个条件'"
               @click="removeCondition(row)"
             >×</button>
-            <button
-              v-if="index === conditions.length - 1 && canAddCondition"
-              type="button"
-              class="sov-cond-btn add"
-              data-testid="source-overview-condition-add"
-              title="添加条件（与已有条件同时满足）"
-              aria-label="添加条件"
-              @click="addCondition"
-            >+</button>
           </div>
         </div>
       </div>
@@ -2174,6 +2178,12 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter .sov-search select.sov-op { min-width: 0; width: 72px; }
 .sov-filter .sov-search textarea { min-width: 190px; padding: 6px 8px; resize: none; overflow: hidden; white-space: nowrap; font-family: inherit; line-height: 16px; }
 .sov-filter .sov-search textarea.sov-multiline-ids:focus { height: 72px; overflow: auto; white-space: pre-wrap; }
+/* 值输入框：加号是框内右侧的后缀（1105 方案 T2「＋条件移入输入框」），不再作为行尾独立按钮占一列 */
+.sov-filter .sov-search .sov-value { position: relative; display: flex; flex: 1 1 190px; min-width: 190px; }
+.sov-filter .sov-search .sov-value > textarea { flex: 1 1 auto; width: 100%; min-width: 0; }
+.sov-filter .sov-search .sov-value.has-add > textarea { padding-right: 26px; }
+.sov-filter .sov-search .sov-value-add { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: #fff; }
+.sov-filter .sov-search .sov-value-add:hover { background: var(--rc-primary-bg); }
 .sov-cond-btn {
   flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 22px; cursor: pointer;
@@ -2213,6 +2223,10 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter.is-compact .sov-search select { width: 76px; flex: none; }
 .sov-filter.is-compact .sov-search select.sov-op { width: 60px; }
 .sov-filter.is-compact .sov-search textarea { width: 64px; flex: 1 1 64px; min-width: 64px; }
+/* 加号收进输入框后，窄屏压的是框本身，不再多出一列按钮 */
+.sov-filter.is-compact .sov-search .sov-value { flex: 1 1 64px; min-width: 64px; }
+.sov-filter.is-compact .sov-search .sov-value > textarea { flex: 1 1 auto; width: 100%; min-width: 0; }
+.sov-filter.is-compact .sov-search .sov-value-add { right: 6px; }
 /* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
 .sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
 .sov-filter.is-compact .sov-site-select { width: 100%; min-width: 0; }
