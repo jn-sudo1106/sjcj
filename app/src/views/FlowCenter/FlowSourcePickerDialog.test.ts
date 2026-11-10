@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
-import { flowCenterApi, sourceApi, sourceGroupApi, type Source } from '@/api'
+import { flowCenterApi, siteApi, sourceApi, sourceGroupApi, type Source } from '@/api'
 
 const FLOW = { id: 'flow-1', name: '新闻流程' } as never
 
@@ -42,6 +42,8 @@ beforeEach(() => {
   vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
     { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 },
   ] as never)
+  // 打开弹窗会拉一份网站清单补「网站」列的名字
+  vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -85,7 +87,7 @@ describe('FlowSourcePickerDialog', () => {
 
   it('全选全部：拉当前筛选下的所有源选中，尊重「仅看未关联到本流程」', async () => {
     const paged = vi.spyOn(sourceApi, 'sourcePaged')
-      // 初始 load / 切「仅看未关联」后的 load / 全选全部取回都返回这一页数据
+      // 初始 load / 切「仅看未关联」后的全量取回 / 全选全部取回都返回这一页数据
       .mockResolvedValue({ total: 3, list: [src('a', { flowId: 'flow-1' }), src('b'), src('c')] })
     vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
 
@@ -93,10 +95,10 @@ describe('FlowSourcePickerDialog', () => {
     await flushPromises()
     await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
     await flushPromises()
-    expect(w.get('[data-testid="fsp-pick-all"]').text()).toContain('全选全部（共 3 条）')
-    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    // 勾上「仅看未关联」后就是本地筛完的集合：一页装得下时由「全选本页」覆盖，无需再出「全选全部」
+    expect(w.findAll('tbody tr')).toHaveLength(2)
+    await w.get('[data-testid="fsp-pick-page"]').trigger('click')
     await flushPromises()
-
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 1000 }))
     // a 已绑本流程（flow-1）被「仅看未关联」排除
     expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['b', 'c'])
@@ -195,6 +197,55 @@ describe('FlowSourcePickerDialog', () => {
     expect(w.findAll('tbody tr').map((r) => r.text())).toHaveLength(1)
     expect(w.text()).toContain('源-b')
     expect(w.text()).not.toContain('源-a')
+  })
+
+  // 2026-11-09 用户反馈：表格「网站」列只显示 28 这种数字 ID，认不出是哪个网站
+  it('「网站」列显示网站名：siteName 为空时用网站清单补全，行内自带的名字优先', async () => {
+    vi.mocked(siteApi.sitePaged).mockResolvedValue({
+      total: 1, list: [{ siteId: '28', name: 'JungleScout' }],
+    } as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2, list: [src('a', { siteId: '28' }), src('b', { siteId: '16', siteName: '企业预警通' })],
+    })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    const cells = w.findAll('tbody tr').map((r) => r.findAll('td')[3].text())
+    expect(cells[0]).toBe('JungleScout')
+    expect(cells[1]).toBe('企业预警通')
+  })
+
+  // 2026-11-09 用户反馈：「仅看未关联到本流程」要跟前面的筛选条件联动
+  it('「仅看未关联」与前置条件联动：总数按筛完的数量算，翻页/全选全部同一口径', async () => {
+    const all = Array.from({ length: 30 }, (_, i) => src(`s${i}`, i < 5 ? { flowId: 'flow-1' } : {}))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: all.length, list: all })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-site-filter"]').setValue('site-7')
+    await flushPromises()
+    await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await flushPromises()
+
+    // 带着网站条件取全 30 条 → 本地筛掉已绑本流程的 5 条，剩 25 条才是「共 N 条」
+    expect(w.get('[data-testid="fsp-pick-all"]').text()).toBe('全选全部（共 25 条）')
+    expect(w.findAll('tbody tr')).toHaveLength(20) // 25 条按每页 20 条切
+    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    await flushPromises()
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toHaveLength(25)
+  })
+
+  it('「仅看未关联」范围超过全量上限时提示先收窄，不硬拉全量', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 25_000, list: [src('a')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await flushPromises()
+    expect(w.text()).toContain('匹配 25000 个，太多了')
   })
 
   it('ID 批量检索：查到的源加入选择，未找到的提示', async () => {
