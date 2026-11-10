@@ -22,7 +22,7 @@ export const TABS: TabMeta[] = [
   { key: 'rules', path: '/rules', label: '规则资产', desc: '规则组、表达式、测试集、发布门禁、参数', group: 'config' },
   { key: 'metrics', path: '/metrics', label: '指标中心', desc: '指标数据集、指标定义、口径维护', group: 'config' },
   { key: 'data', path: '/data', label: '数据中心', desc: '实体数据、原始文件、表结构', group: 'ops' },
-  { key: 'files', path: '/files', label: '文件中心', desc: '默认全平台，可按网站、源查询文件资源', group: 'ops' },
+  { key: 'files', path: '/files', label: '文件中心', desc: '左侧业务目录树，可按目录、网站、源查询文件资源', group: 'ops' },
   // 流程中心（0828 W6-1）：Flow 是与源/规则/指标并列的一类资产，且被多个源复用——
   // 塞进采集资产的 tab 会暗示它从属于某个源，所以提为一级入口。
   // 1003：流程中心与规则、指标归入「流程与规则」，数据中心独立于源工作区。

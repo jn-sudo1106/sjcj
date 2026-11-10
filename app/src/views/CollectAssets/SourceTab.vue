@@ -434,7 +434,9 @@ function openSiteFromList(siteId: string) {
 }
 // ---- 系统目录 / 业务目录（2026-10-21，原型 设计稿/原型设计/源管理_系统目录与业务目录_原型_2026-10-21.html）----
 // 左侧传原始目录选择，网站和源列表都由业务后端解析；查询前不展开树、不枚举成员。
-const dirCollapsed = ref(true)
+const dirCollapsed = ref(false)
+const directoryTab = ref<'sys' | 'biz' | 'group'>('biz')
+const sourceGroupFilter = ref('')
 const showDirPanel = computed(() => props.scope === 'all')
 const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
 const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
@@ -450,8 +452,10 @@ watch([() => route.query.sourceSearchReturn, dirPanelRef], ([id, panel]) => {
   if (props.scope !== 'all') return
   if (!saved?.directoryScope) return
   dirScope.value = JSON.parse(JSON.stringify(saved.directoryScope))
-  dirCollapsed.value = saved.directoryCollapsed ?? true
-  panel?.restore(dirScope.value)
+  dirCollapsed.value = saved.directoryCollapsed ?? false
+  directoryTab.value = saved.directoryTab ?? dirScope.value.kind
+  sourceGroupFilter.value = context.viewState.sourceGroup
+  panel?.restore(dirScope.value, directoryTab.value)
 }, { immediate: true, flush: 'sync' })
 const dirActive = computed(() => showDirPanel.value && (dirScope.value.directory ? dirScope.value.directory.mode !== 'none' : dirScope.value.all || dirScope.value.dirIds.length > 0))
 const bizActive = computed(() => dirActive.value && dirScope.value.kind === 'biz')
@@ -886,7 +890,7 @@ onUnmounted(() => {
 
     <!-- 源列表视图（0924-06）：一行一个源，复用网站详情的「源视图」，不限网站 -->
     <div v-else class="ca-dir-layout" :class="{ 'with-dir': showDirPanel, collapsed: dirCollapsed }">
-    <SourceDirPanel v-if="showDirPanel" ref="dirPanelRef" v-model:collapsed="dirCollapsed" class="ca-dir-panel" @change="onDirScope" />
+    <SourceDirPanel v-if="showDirPanel" ref="dirPanelRef" v-model:collapsed="dirCollapsed" v-model:active-tab="directoryTab" v-model:source-group-id="sourceGroupFilter" class="ca-dir-panel" :class="{ 'group-navigation': directoryTab === 'group' && !dirCollapsed }" @change="onDirScope" />
     <SourceOverviewView
       ref="overviewRef"
       class="ca-source-list"
@@ -903,9 +907,11 @@ onUnmounted(() => {
       :show-original-directory="scope === 'all'"
       :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
+      v-model:source-group-id="sourceGroupFilter"
+      :group-filter-in-sidebar="showDirPanel"
       :website-cards="scope === 'all' && view === 'card'"
       :include-empty-site-ids="includedEmptySiteIds"
-      :search-navigation="{ returnTo: route.fullPath, label: props.scope === 'all' ? '系统目录' : props.scope === 'favorite' ? '我的收藏' : '最近打开', restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { directoryScope: dirScope, directoryCollapsed: dirCollapsed } }"
+      :search-navigation="{ returnTo: route.fullPath, label: props.scope === 'all' ? '系统目录' : props.scope === 'favorite' ? '我的收藏' : '最近打开', restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { directoryScope: dirScope, directoryCollapsed: dirCollapsed, directoryTab } }"
       @search-restored="finishSourceSearchReturn(router, route)"
       @edit-site="openSiteEditor"
       @delete-site="onDeleteSite"
@@ -1045,6 +1051,7 @@ onUnmounted(() => {
 .ca-dir-layout.with-dir { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 12px; align-items: stretch; }
 .ca-dir-layout.with-dir.collapsed { grid-template-columns: 36px minmax(0, 1fr); }
 .ca-dir-panel { min-height: 0; max-height: 100%; align-self: start; }
+.ca-dir-panel.group-navigation { align-self: stretch; overflow: hidden; }
 .ca-dir-layout > .ca-source-list { min-width: 0; min-height: 0; }
 .ca-dir-scope { display: inline-flex; align-items: center; min-width: 0; color: var(--rc-text-2); font-size: 13px; }
 /* 摘要行一排放不下时先缩目录名（悬停看全称） */

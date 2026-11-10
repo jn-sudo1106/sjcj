@@ -6,7 +6,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { dataApi, fileApi, siteApi, type DataTableMeta, type FileResourceRecord, type Source } from '@/api'
+import { dataApi, fileApi, siteApi, sourceApi, type DataTableMeta, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
@@ -14,7 +14,7 @@ import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 import { loadFlowFileTables, mergeFileTableCandidates, pickTableWithFiles } from '@/utils/file/fileTables'
 
-const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
+const props = defineProps<{ siteId?: string; initialSourceId?: string; sourceScopeDirId?: string; scopeLabel?: string }>()
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const MAX_PARALLEL_REQUESTS = 8
@@ -51,6 +51,27 @@ const usesDirectPaging = computed(() => !props.siteId || !!selectedSourceId.valu
 const tableWrapRef = ref<HTMLElement | null>(null)
 const loadMoreSentinelRef = ref<HTMLElement | null>(null)
 
+// 筛选区压成一行后，自定义 SQL / 历史条件 / 全屏编辑收进「高级」浮层（默认收起）。
+// 历史条件与全屏编辑由 SqlConditionEditor 自带的输入框右侧动作承载，搬进浮层后能力不回退。
+const advOpen = ref(false)
+const advWrapRef = ref<HTMLElement | null>(null)
+/** 有目录范围但未选源：当前看到的是整表全量，表头右侧必须说清楚没按目录收窄 */
+const scopeGlobalNote = computed(() => !!props.sourceScopeDirId && !selectedSourceId.value)
+function toggleAdvanced() {
+  advOpen.value = !advOpen.value
+}
+function onDocMousedown(event: MouseEvent) {
+  if (!advOpen.value) return
+  const target = event.target as Node | null
+  if (target && advWrapRef.value?.contains(target)) return
+  advOpen.value = false
+}
+/** 回车即查询；中文输入法上屏时的 Enter 不算，避免选词把查询带出去 */
+function onEnterQuery(event: KeyboardEvent) {
+  if (event.isComposing) return
+  runQuery()
+}
+
 let mergeStates: MergeSourceState<FileResourceRecord>[] = []
 let candidateSourceIds: string[] = []
 let tableRequest = 0
@@ -76,8 +97,14 @@ function setupLoadMoreObserver() {
   loadMoreObserver.observe(loadMoreSentinelRef.value)
 }
 watch([tableWrapRef, loadMoreSentinelRef, usesDirectPaging, allExhausted], () => void nextTick(setupLoadMoreObserver), { flush: 'post' })
-onMounted(() => void nextTick(setupLoadMoreObserver))
-onBeforeUnmount(teardownLoadMoreObserver)
+onMounted(() => {
+  void nextTick(setupLoadMoreObserver)
+  document.addEventListener('mousedown', onDocMousedown)
+})
+onBeforeUnmount(() => {
+  teardownLoadMoreObserver()
+  document.removeEventListener('mousedown', onDocMousedown)
+})
 
 async function loadResourceTable() {
   const requestId = ++tableRequest
@@ -356,6 +383,29 @@ watch(selectedSourceId, () => {
   if (table.value) void resetAndLoad()
 })
 
+/**
+ * 文件中心「目录 → 源」：目录收窄的是**可选的源范围**，所以切目录后要把落在目录外的源清掉，
+ * 否则会出现「左栏是目录 A、右下角源选择器还是目录 B 的源」的越界状态。
+ * 校验走后端（业务目录 = SOURCE_ID IN cfg_category_source_bind），失败时不清、避免误伤用户选择。
+ */
+let scopeCheck = 0
+watch(() => props.sourceScopeDirId, (dir) => {
+  const current = selectedSourceId.value
+  if (!dir || !current) return
+  const requestId = ++scopeCheck
+  void sourceApi.sourcePaged({
+    page: 1,
+    size: 1,
+    sourceIds: [current],
+    directory: { kind: 'biz', mode: 'selected', selections: [{ id: dir, includeDescendants: true }] },
+  }).then((result) => {
+    if (requestId !== scopeCheck || selectedSourceId.value !== current) return
+    if (!result.list.length && !result.total) selectedSourceId.value = ''
+  }).catch(() => {
+    // 校验接口失败保持当前选择：不能因为网络问题把用户选好的源吞掉
+  })
+}, { immediate: true })
+
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
 
 // 点表格行开预览（2026-08-21 产品意见）：预览篇幅大，与「详情」的字段列表拆开各走各的抽屉。
@@ -371,13 +421,15 @@ function openPreview(file: FileResourceRecord) {
 
 <template>
   <main class="sfv-shell">
-    <div class="sfv-toolbar">
+    <!-- 筛选区单排（方案 A）：源 → 文件表 → 文件名 → 类型 → 状态 → 弹性 → 高级 → 查询 → 清空；
+         flex-wrap:nowrap + 各级 min-width，1200 宽度也必须一排不换行。 -->
+    <div class="sfv-toolbar" data-testid="site-file-filters">
       <slot name="toolbar-prefix" />
-      <SiteSourceSelect v-if="siteId" v-model="selectedSourceId" :site-id="siteId" />
-      <GlobalSourceSelect v-else v-model="selectedSourceId" />
+      <SiteSourceSelect v-if="siteId" v-model="selectedSourceId" :site-id="siteId" class="sfv-ctl-src" />
+      <GlobalSourceSelect v-else v-model="selectedSourceId" :directory-dir-id="sourceScopeDirId" class="sfv-ctl-src" />
       <select
         v-if="tableCandidates.length > 1"
-        class="sfv-input"
+        class="sfv-input sfv-ctl-tbl"
         aria-label="表ID"
         data-testid="site-file-table-select"
         :value="table?.tableId"
@@ -385,14 +437,37 @@ function openPreview(file: FileResourceRecord) {
       >
         <option v-for="c in tableCandidates" :key="c.tableId" :value="c.tableId">[{{ c.tableId }}] {{ c.name || c.tableName }}</option>
       </select>
-      <input v-model="filters.fileName" class="sfv-input" placeholder="文件名或展示名" aria-label="文件名">
-      <input v-model="filters.ext" class="sfv-input" placeholder="类型，如 pdf、html" aria-label="文件类型">
-      <select v-model="filters.state" class="sfv-input" aria-label="状态">
+      <input v-model="filters.fileName" class="sfv-input sfv-ctl-name" placeholder="文件名或展示名" aria-label="文件名" @keydown.enter="onEnterQuery">
+      <input v-model="filters.ext" class="sfv-input sfv-ctl-ext" placeholder="类型，如 pdf、html" aria-label="文件类型" @keydown.enter="onEnterQuery">
+      <select v-model="filters.state" class="sfv-input sfv-ctl-state" aria-label="状态">
         <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
       </select>
-      <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="table?.tableId" :table-name="table?.tableName" class="sfv-sql">
-        <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sfv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
-      </SqlConditionEditor>
+      <span class="sfv-toolbar-gap" />
+      <!-- 自定义 SQL / 历史条件 / 全屏编辑整体收进「高级」浮层，默认收起，展开时按钮主色描边 -->
+      <div ref="advWrapRef" class="sfv-adv-wrap">
+        <button
+          class="sfv-adv-btn"
+          :class="{ on: advOpen }"
+          type="button"
+          :aria-expanded="advOpen"
+          data-testid="site-file-advanced"
+          @click="toggleAdvanced"
+        >高级<span class="sfv-adv-caret">{{ advOpen ? '▴' : '▾' }}</span></button>
+        <div v-if="advOpen" class="sfv-adv" data-testid="site-file-advanced-panel">
+          <p class="sfv-adv-title">自定义 SQL（K 字段可直接写）</p>
+          <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="table?.tableId" :table-name="table?.tableName">
+            <input
+              :value="value"
+              class="sfv-input sfv-adv-input"
+              placeholder="自定义SQL, 如 K1 IS NULL"
+              aria-label="自定义SQL"
+              @input="update(($event.target as HTMLInputElement).value)"
+              @keydown.enter="onEnterQuery"
+            >
+          </SqlConditionEditor>
+          <p class="sfv-adv-foot">历史条件与全屏编辑在输入框右侧；回车或「查询」生效</p>
+        </div>
+      </div>
       <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
       <button class="rc-btn" type="button" @click="clearFilters">清空</button>
     </div>
@@ -405,8 +480,12 @@ function openPreview(file: FileResourceRecord) {
         {{ failedSources.length }} 个源本次查询失败，结果可能不完整：{{ failedSources.map(failedSourceText).join('；') }}
       </div>
       <div class="sfv-tablehead">
+        <span v-if="scopeLabel" class="sfv-scope" data-testid="site-file-scope-label">
+          <span class="sfv-scope-k">目录：</span>{{ scopeLabel }}<span class="sfv-scope-sep"> · </span>
+        </span>
         <span class="sfv-tablename">{{ table?.name || table?.tableName || 'file_resource' }}</span>
         <span class="sfv-count">{{ usesDirectPaging ? `共 ${total} 个文件` : `已加载 ${rows.length} 个文件` }}</span>
+        <span v-if="scopeGlobalNote" class="sfv-scope-note" data-testid="site-file-scope-note">未选源 → 整表全量</span>
       </div>
       <div ref="tableWrapRef" class="sfv-table-wrap">
         <table class="rc-data-table sfv-table" v-loading="loading">
@@ -501,22 +580,45 @@ function openPreview(file: FileResourceRecord) {
 </template>
 
 <style scoped>
-.sfv-sql { flex: 0 1 260px; min-width: 180px; }
-.sfv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
-/* 默认就换行（2026-08-20）：原先 nowrap、只在 ≤900px 的断点才 wrap，中间宽度区间会把
-   筛选条件挤出容器；筛选行横向滚动很难用——「查询」按钮会被滚出视野。 */
+.sfv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); container-type: inline-size; }
+/* 筛选区单排（方案 A，11-08）：源/表/文件名弹性收窄、类型/状态与按钮固定，nowrap 保证一排不换行。
+   各控件 min-width 之和 + 固定按钮 ≈ 780px，低于 1200 视口下右栏可用宽度（1200 - 左栏 252 - 间距）。 */
 .sfv-unmatched { display: inline-flex; align-items: center; gap: 5px; color: var(--rc-text-2); }
 .sfv-unmatched em { flex: none; padding: 1px 5px; border-radius: 4px; background: #fef3c7; color: #92400e; font-size: 10px; font-style: normal; }
-.sfv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
-.sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
+.sfv-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: 0; padding: 8px 10px; border-bottom: 1px solid var(--rc-border-soft); }
+.sfv-input { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; text-overflow: ellipsis; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
-.sfv-toolbar :deep(.sss-wrap) { min-width: 170px; width: 170px; }
-.sfv-toolbar :deep(.sss-input) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfv-toolbar .rc-btn, .sfv-foot .rc-btn { flex: none; height: 28px; padding: 0 10px; font-size: 12px; }
+/* 弹性比例与最小宽度按方案 A mockup：源 150 / 表 140 / 文件名 100 / 类型 88 / 状态 84 */
+.sfv-ctl-src { flex: 1 1 200px; min-width: 150px; }
+.sfv-toolbar :deep(.sss-wrap), .sfv-toolbar :deep(.gss-wrap) { flex: 1 1 200px; width: auto; min-width: 150px; }
+.sfv-toolbar :deep(.sss-input), .sfv-toolbar :deep(.gss-input) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfv-ctl-tbl { flex: 1 1 180px; min-width: 140px; }
+.sfv-ctl-name { flex: 1 1 130px; min-width: 100px; }
+.sfv-ctl-ext { flex: 0 1 110px; min-width: 88px; }
+.sfv-ctl-state { flex: 0 1 96px; min-width: 84px; }
+.sfv-toolbar-gap { flex: 1 1 0; min-width: 0; }
+/* 「高级」浮层：默认收起，展开时按钮主色描边；SQL 输入 + 历史条件 + 全屏编辑都在浮层里 */
+.sfv-adv-wrap { position: relative; flex: none; }
+.sfv-adv-btn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
+.sfv-adv-btn:hover { border-color: #c7d2fe; color: #4f46e5; }
+.sfv-adv-btn.on { border-color: #c7d2fe; background: #eef2ff; color: #4f46e5; }
+.sfv-adv-caret { font-size: 10px; }
+.sfv-adv { position: absolute; right: 0; top: 34px; z-index: 20; width: 430px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; box-shadow: 0 12px 28px rgba(15, 23, 42, .12); }
+.sfv-adv-title { margin: 0 0 8px; color: var(--rc-text-2); font-size: 12px; font-weight: 600; }
+.sfv-adv :deep(.sql-condition-field) { display: flex; width: 100%; }
+.sfv-adv-input { flex: 1; width: 100%; }
+.sfv-adv-foot { margin: 8px 0 0; color: var(--rc-faint); font-size: 11px; }
 .sfv-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; color: var(--rc-faint); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; text-align: center; }
 .sfv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .sfv-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .sfv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
+/* 表头左侧「目录：X ·」——目录是当前唯一的范围维度，必须和文件表名连在一起显示 */
+.sfv-scope { max-width: 42%; overflow: hidden; color: var(--rc-text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.sfv-scope-k { color: var(--rc-faint); font-weight: 400; }
+.sfv-scope-sep { color: var(--rc-faint); }
+/* 有目录但没选源时右对齐的浅灰提示：此刻看到的是整表全量，不是目录内汇总 */
+.sfv-scope-note { margin-left: auto; color: var(--rc-faint); font-size: 12px; white-space: nowrap; }
 .sfv-count, .muted { color: var(--rc-faint); font-size: 12px; }
 .sfv-table-wrap { flex: 1; min-height: 0; overflow: auto; }
 .sfv-load-sentinel { width: 1px; height: 1px; }
@@ -531,8 +633,12 @@ function openPreview(file: FileResourceRecord) {
 .soft { color: var(--rc-faint); }
 .sfv-empty-row { padding: 40px 12px !important; color: var(--rc-faint) !important; text-align: center; }
 .sfv-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); }
-@media (max-width: 900px) {
-  .sfv-toolbar :deep(.sss-wrap), .sfv-toolbar :deep(.gss-wrap) { min-width: 220px; width: auto; }
+/* 折行只看「自身容器宽度」而不是视口：文件中心满宽右栏 ≈930px 单排，
+   流程画布抽屉 / 流程中心里同一组件只有 700~800px，此时允许折成两行，避免按钮被裁掉。
+   min-width 之和 + 固定按钮 ≈ 800px，所以阈值取 860px。 */
+@container (max-width: 860px) {
+  .sfv-toolbar { flex-wrap: wrap; }
+  .sfv-adv { width: min(430px, calc(100vw - 40px)); }
 }
 .sfv-row { cursor: pointer; }
 .sfv-row.active > td { background: var(--rc-primary-bg); }

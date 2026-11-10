@@ -58,6 +58,9 @@ const idImport = reactive({ open: false, text: '', loading: false })
 const SELECT_ALL_PAGE = 1000
 const SELECT_ALL_MAX = 20_000
 const selectingAll = ref(false)
+// 「全选全部」快照（筛选签名 + 当时选中的 ID）：提交前复核据此只回补快照之后新进入范围的源，
+// 用户全选后手动取消的源仍在快照里，不会被回补。
+const selectAllSnapshot = ref<{ signature: string; ids: Set<string> } | null>(null)
 
 // 选中态：modelValue 直接透传，另存名字缓存好在标签上显示
 const CHIP_LIMIT = 15
@@ -89,6 +92,26 @@ function pickPage() {
 function clearSelected() {
   setSelected([])
   chipsExpanded.value = false
+  selectAllSnapshot.value = null
+}
+
+/**
+ * 按同一套筛选把当前范围下的源全部取回来（1106 §4.5）：「全选全部」与提交前范围复核共用，
+ * 保证两条路径取的是同一批数据，不会出现「全选时带了这个网站，复核时漏掉」。
+ */
+async function fetchAllMatching(): Promise<{ rows: Source[]; picked: Source[] }> {
+  const collected: Source[] = []
+  for (let p = 1; collected.length < total.value; p++) {
+    const res = await sourceApi.sourcePaged(buildQuery({ page: p, size: SELECT_ALL_PAGE }))
+    if (!res.list.length) break
+    collected.push(...res.list)
+    if (res.list.length < SELECT_ALL_PAGE) break
+  }
+  const rows = onlyUnbound.value && props.flow
+    ? collected.filter((s) => String(s.flowId ?? '') !== String(props.flow!.id))
+    : collected
+  // 1008-06：组内源不能单独关联，全选/复核都跳过
+  return { rows, picked: rows.filter((s) => !inGroup(s)) }
 }
 
 // 当前筛选（源名称 + 所属流程；「仅看未关联」是本页过滤，这里按 flowId 一并排除）下全选。
@@ -99,27 +122,15 @@ async function pickAllMatching() {
     return
   }
   selectingAll.value = true
+  const signature = filterSignature()
   try {
-    const collected: Source[] = []
-    for (let p = 1; collected.length < total.value; p++) {
-      const res = await sourceApi.sourcePaged({
-        ...keywordQuery(),
-        flowId: flowFilter.value || undefined,
-        siteIds: siteFilter.value || undefined,
-        page: p,
-        size: SELECT_ALL_PAGE,
-      })
-      if (!res.list.length) break
-      collected.push(...res.list)
-      if (res.list.length < SELECT_ALL_PAGE) break
-    }
-    const picked = (onlyUnbound.value && props.flow
-      ? collected.filter((s) => String(s.flowId ?? '') !== String(props.flow!.id))
-      : collected
-    ).filter((s) => !inGroup(s)) // 1008-06：组内源不能单独关联，全选也跳过
+    const { rows, picked } = await fetchAllMatching()
     picked.forEach((s) => nameCache.value.set(s.sourceId, s.name))
-    setSelected([...props.modelValue, ...picked.map((s) => s.sourceId)])
-    const skipped = collected.length - picked.length
+    const next = [...props.modelValue, ...picked.map((s) => s.sourceId)]
+    setSelected(next)
+    // 快照：提交前复核据此只回补"全选之后才进入范围"的源；用户随后手动取消的源仍在快照里，不会被回补
+    selectAllSnapshot.value = { signature, ids: new Set(next) }
+    const skipped = rows.length - picked.length
     ElMessage.success(`已选中全部 ${picked.length} 个源${skipped ? `（跳过 ${skipped} 个组内源）` : ''}`)
   } catch (e) {
     ElMessage.error(`全选失败：${(e as Error)?.message ?? String(e)}`)
@@ -157,19 +168,34 @@ function keywordQuery(): { sourceId?: string; name?: string } {
   return /^\d+$/.test(q) ? { sourceId: q } : { name: q }
 }
 
+/**
+ * 统一查询构造（1106 §4.5）：普通列表、翻页、全选本页、全选全部、提交前复核都从这里取参数，
+ * 保证每条路径带的是同一套筛选（关键字 / 所属网站 / 所属流程 / 分页）。网站范围继续走服务端
+ * `siteIds`（不退化成本地过滤，避免「看似全部、其实只有本页」）。
+ */
+function buildQuery(overrides: { page?: number; size?: number } = {}) {
+  return {
+    ...keywordQuery(),
+    flowId: flowFilter.value || undefined,
+    siteIds: siteFilter.value || undefined,
+    page: overrides.page ?? page.value,
+    size: overrides.size ?? PAGE_SIZE,
+  }
+}
+
+/** 当前筛选的签名：判断「全选全部」的快照是否还对得上当前条件 */
+function filterSignature(): string {
+  const q = buildQuery({ page: 1, size: 0 })
+  return JSON.stringify([q.sourceId ?? '', q.name ?? '', q.flowId ?? '', q.siteIds ?? '', onlyUnbound.value])
+}
+
 let reqId = 0
 async function load() {
   const id = ++reqId
   loading.value = true
   error.value = ''
   try {
-    const res = await sourceApi.sourcePaged({
-      ...keywordQuery(),
-      flowId: flowFilter.value || undefined,
-      siteIds: siteFilter.value || undefined,
-      page: page.value,
-      size: PAGE_SIZE,
-    })
+    const res = await sourceApi.sourcePaged(buildQuery())
     if (id !== reqId) return
     rows.value = res.list
     total.value = res.total
@@ -183,15 +209,89 @@ async function load() {
   }
 }
 
-let kwTimer: ReturnType<typeof setTimeout> | undefined
-function onKeyword() {
-  clearTimeout(kwTimer)
-  kwTimer = setTimeout(() => { page.value = 1; void load() }, 300)
-}
-function onFlowFilter() {
+/**
+ * 任何筛选条件变化（网站 / 所属流程 / 关键字 / 未绑定开关）都作废本次待关联勾选并回第 1 页。
+ * 不清的话，先勾了 A 网站的源再切到 B 网站，提交时会把 A 的源一起带过去（§4.5 明确禁止）。
+ */
+function onFilterChange() {
+  clearSelected()
   page.value = 1
   void load()
 }
+
+let kwTimer: ReturnType<typeof setTimeout> | undefined
+function onKeyword() {
+  clearTimeout(kwTimer)
+  kwTimer = setTimeout(onFilterChange, 300)
+}
+function onOnlyUnboundChange(e: Event) {
+  onlyUnbound.value = (e.target as HTMLInputElement).checked
+  onFilterChange()
+}
+
+/**
+ * 提交前范围复核（§4.5）：先按 ID 回查一次勾选项，再按当前筛选回补「全选全部」之后的新增源。
+ *  - 已删除 / 已并入来源组 / 查不到的源剔除并提示（已有保留）；ID 批量检索进来的源不受当前筛选限制。
+ *  - 用「全选全部」选过、且筛选条件没变的，把快照之后新进入范围的源补进来（缺则补）；
+ *    用户全选后手动取消的源仍在快照里，不会被回补。
+ * 复核接口失败不拦提交：宁可少校验一次，也不能把用户的显式动作卡死。
+ */
+async function revalidateSelection(): Promise<boolean> {
+  const ids = [...new Set(props.modelValue)].filter(Boolean)
+  if (!ids.length) return false
+  let next = ids
+  let dropped = 0
+  try {
+    const res = await sourceApi.sourcePaged({ sourceIds: ids, page: 1, size: ids.length })
+    const found = new Map(res.list.map((s) => [s.sourceId, s]))
+    next = ids.filter((id) => {
+      const s = found.get(id)
+      return !!s && !inGroup(s)
+    })
+    dropped = ids.length - next.length
+  } catch {
+    // 复核失败不拦提交，沿用原选择
+  }
+
+  let added: string[] = []
+  const snapshot = selectAllSnapshot.value
+  if (snapshot && snapshot.signature === filterSignature()) {
+    try {
+      const { picked } = await fetchAllMatching()
+      added = picked.map((s) => s.sourceId).filter((id) => !next.includes(id) && !snapshot.ids.has(id))
+    } catch {
+      // 回补失败不拦提交
+    }
+  }
+
+  if (dropped || added.length) {
+    next = [...new Set([...next, ...added])]
+    setSelected(next)
+    if (dropped) ElMessage.warning(`提交前复核：${dropped} 个源已不可关联（已删除或已并入来源组），已从本次选择中移除`)
+    if (added.length) ElMessage.info(`提交前复核：筛选范围内新增 ${added.length} 个源，已一并加入本次关联`)
+  }
+  if (!next.length) ElMessage.warning('勾选的源已全部不可关联，请重新选择要关联的源')
+  return next.length > 0
+}
+
+const confirming = ref(false)
+/** 点「确认关联」：先做提交前范围复核，再交给父级做二次确认和分批提交 */
+async function onConfirm() {
+  if (confirming.value || !props.modelValue.length) return
+  confirming.value = true
+  let ok = false
+  try {
+    ok = await revalidateSelection()
+  } finally {
+    confirming.value = false
+  }
+  if (ok) emit('confirm')
+}
+
+// 成功关联后父级会清空选择：快照一起丢弃，避免下次复核误回补
+watch(() => props.modelValue.length, (len) => {
+  if (!len) selectAllSnapshot.value = null
+})
 
 // 所属网站下拉：远程按名字搜网站（site/sitePaged 的 name 走 query，见 siteApi）
 async function searchSites(q: string) {
@@ -250,13 +350,19 @@ async function submitByIds() {
 const chipsExpanded = ref(false)
 const showChips = computed(() => props.modelValue.length > 0 && (props.modelValue.length <= CHIP_LIMIT || chipsExpanded.value))
 
+let lastFlowId = ''
 watch(() => props.flow?.id, (id) => {
   if (!id) return
+  // 换目标流程：上一次的勾选不属于这次关联，作废（首次打开不清，父级会重置；页签切换重挂载也不清）
+  const switched = !!lastFlowId && lastFlowId !== String(id)
+  lastFlowId = String(id)
   keyword.value = ''
   flowFilter.value = ''
   siteFilter.value = ''
   onlyUnbound.value = false
   chipsExpanded.value = false
+  selectAllSnapshot.value = null
+  if (switched) clearSelected()
   page.value = 1
   idImport.open = false
   idImport.text = ''
@@ -275,6 +381,9 @@ watch(() => props.flow?.id, (id) => {
   >
     <p class="fsp-note">
       勾选要关联的源，可多选。关联后这些源将<b>共用本流程的配置并按它运行</b>；此后修改这个流程的配置会同时影响它们。
+    </p>
+    <p class="fsp-note fsp-note-sub" data-testid="fsp-note-not-default">
+      「添加关联」不等于「设为默认流程」：这里只决定这些源按哪个流程运行，源的默认流程/来源组绑定仍在来源与分组里维护。
     </p>
 
     <div class="fsp-filters">
@@ -295,7 +404,7 @@ watch(() => props.flow?.id, (id) => {
         placeholder="所属网站（全部）"
         :remote-method="searchSites"
         :loading="siteOptLoading"
-        @change="onFlowFilter"
+        @change="onFilterChange"
       >
         <el-option v-for="o in siteOptions" :key="o.id" :label="`${o.name}（${o.id}）`" :value="o.id" />
       </el-select>
@@ -309,12 +418,12 @@ watch(() => props.flow?.id, (id) => {
         placeholder="所属流程（全部）"
         :remote-method="searchFlows"
         :loading="flowOptLoading"
-        @change="onFlowFilter"
+        @change="onFilterChange"
       >
         <el-option v-for="o in flowOptions" :key="o.id" :label="`${o.name}（${o.id}）`" :value="o.id" />
       </el-select>
       <label class="fsp-check">
-        <input v-model="onlyUnbound" type="checkbox" data-testid="fsp-only-unbound"> 仅看未关联到本流程
+        <input :checked="onlyUnbound" type="checkbox" data-testid="fsp-only-unbound" @change="onOnlyUnboundChange"> 仅看未关联到本流程
       </label>
       <button class="fsp-btn" type="button" @click="idImport.open = !idImport.open">
         {{ idImport.open ? '收起 ID 批量检索' : 'ID 批量检索' }}
@@ -329,12 +438,13 @@ watch(() => props.flow?.id, (id) => {
     </div>
 
     <div class="fsp-selbar">
-      <button type="button" class="fsp-linkbtn" data-testid="fsp-pick-page" @click="pickPage">全选本页</button>
+      <button type="button" class="fsp-linkbtn" data-testid="fsp-pick-page" title="只勾选当前这一页的源（不含来源组内的源）" @click="pickPage">全选本页</button>
       <button
         v-if="total > visibleRows.length"
         type="button"
         class="fsp-linkbtn"
         data-testid="fsp-pick-all"
+        title="按当前筛选（网站 / 流程 / 关键字）勾选全部源，不只是本页；不含来源组内的源"
         :disabled="selectingAll"
         @click="pickAllMatching"
       >{{ selectingAll ? '取全部中…' : `全选全部（共 ${total} 条）` }}</button>
@@ -412,9 +522,9 @@ watch(() => props.flow?.id, (id) => {
         class="fsp-btn primary"
         type="button"
         data-testid="flow-apply-confirm"
-        :disabled="submitting || !modelValue.length"
-        @click="emit('confirm')"
-      >{{ submitting ? '关联中…' : `确认关联（${modelValue.length} 个）` }}</button>
+        :disabled="submitting || confirming || !modelValue.length"
+        @click="onConfirm"
+      >{{ submitting ? '关联中…' : confirming ? '复核中…' : `确认关联（${modelValue.length} 个）` }}</button>
     </template>
     <div v-if="embedded" class="fsp-embedded-foot">
       <button class="fsp-btn" type="button" @click="emit('close')">取消</button>
@@ -422,9 +532,9 @@ watch(() => props.flow?.id, (id) => {
         class="fsp-btn primary"
         type="button"
         data-testid="flow-apply-confirm"
-        :disabled="submitting || !modelValue.length"
-        @click="emit('confirm')"
-      >{{ submitting ? '关联中…' : `确认关联（${modelValue.length} 个）` }}</button>
+        :disabled="submitting || confirming || !modelValue.length"
+        @click="onConfirm"
+      >{{ submitting ? '关联中…' : confirming ? '复核中…' : `确认关联（${modelValue.length} 个）` }}</button>
     </div>
   </component>
 </template>
@@ -432,6 +542,7 @@ watch(() => props.flow?.id, (id) => {
 <style scoped>
 .fsp-embedded-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .fsp-note { margin: 0 0 10px; color: var(--rc-text-2); font-size: 12px; line-height: 1.6; }
+.fsp-note-sub { color: var(--rc-faint); }
 .fsp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .fsp-input { height: 28px; width: 220px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; }
 .fsp-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }

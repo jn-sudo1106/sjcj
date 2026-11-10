@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import SourceDirPanel, { type DirScope } from './SourceDirPanel.vue'
-import { sourceApi, type SourceCategory } from '@/api'
+import { sourceApi, sourceGroupApi, type SourceCategory } from '@/api'
 import { resetSourceDirCache } from '@/api/sourceDirs'
 
 const cat = (id: string, name: string, parentId = ''): SourceCategory => ({ id, name, ...(parentId ? { parentId } : {}) })
@@ -21,6 +21,7 @@ const TREE: Record<string, SourceCategory[]> = {
 beforeEach(() => {
   resetSourceDirCache()
   vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => TREE[parentId ?? 'root'] ?? [])
+  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([])
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -41,6 +42,47 @@ async function expand(w: Awaited<ReturnType<typeof mountPanel>>, id: string) {
 }
 
 describe('SourceDirPanel', () => {
+  it('业务目录初始化较慢时，不把用户刚切到的来源组 Tab 改回系统目录', async () => {
+    let finish!: (value: SourceCategory[]) => void
+    vi.mocked(sourceApi.sourceCategories).mockImplementation(async parentId => parentId === '-2' ? new Promise(resolve => { finish = resolve }) : TREE[parentId ?? 'root'] ?? [])
+    const w = mount(SourceDirPanel, { props: { collapsed: false }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await w.get('[data-testid="dir-kind-group"]').trigger('click')
+    finish([])
+    await flushPromises()
+    expect(w.get('[data-testid="dir-kind-group"]').attributes('aria-selected')).toBe('true')
+    w.unmount()
+  })
+  it('保留系统/业务目录 Tab；来源组切换不解除目录范围，再切回保留目录点选', async () => {
+    const w = await mountPanel()
+    await row(w, '200').get('[data-testid="dir-name"]').trigger('click')
+    await flushPromises()
+    const count = w.emitted('change')!.length
+    await w.get('[data-testid="dir-kind-group"]').trigger('click')
+    await flushPromises()
+    expect(w.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['系统目录', '业务目录', '来源组'])
+    expect(w.get('[data-testid="source-group-filter"]').isVisible()).toBe(true)
+    expect(w.get('[data-testid="dir-tree"]').isVisible()).toBe(false)
+    expect(w.emitted('change')).toHaveLength(count)
+    await w.get('[data-testid="dir-kind-sys"]').trigger('click')
+    expect(lastScope(w).dirIds).toEqual(['200'])
+    expect(row(w, '200').classes()).toContain('on')
+    w.unmount()
+  })
+
+  it('恢复来源组 Tab 时保留原目录范围及来源组选择，折叠条显示来源组', async () => {
+    const w = await mountPanel()
+    const scope: DirScope = { kind: 'biz', dirIds: ['900'], labels: [{ id: '900', path: '股票数据', hasKids: false }] }
+    await w.setProps({ sourceGroupId: '15' })
+    w.vm.restore(scope, 'group')
+    await flushPromises()
+    expect(w.get('[data-testid="dir-kind-group"]').attributes('aria-selected')).toBe('true')
+    expect(lastScope(w)).toEqual(scope)
+    await w.setProps({ collapsed: true })
+    expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('来源组')
+    expect(w.get('[data-testid="dir-panel-rail"]').text()).toContain('1')
+    w.unmount()
+  })
   it('从搜索工作区恢复目录选择，初始化的默认业务目录不会覆盖它', async () => {
     const scope: DirScope = { kind: 'sys', directory: { kind: 'sys', mode: 'selected', selections: [{ id: '100', includeDescendants: true }] }, dirIds: ['100'], labels: [{ id: '100', path: '财经资讯', hasKids: true }] }
     const w = mount(SourceDirPanel, { props: { collapsed: false }, global: { plugins: [ElementPlus] } })

@@ -10,6 +10,7 @@ import type { Router, RouteLocationNormalizedLoaded } from 'vue-router'
 interface SourceSearchListState {
   directoryScope?: DirScope
   directoryCollapsed?: boolean
+  directoryTab?: 'sys' | 'biz' | 'group'
   viewDirectoryId?: string
   dataQueryHitIds?: string[]
 }

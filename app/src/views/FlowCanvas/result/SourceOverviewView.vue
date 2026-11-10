@@ -131,6 +131,9 @@ const props = defineProps<{
    * （源流程配置 / 调整来源组 / 指定流程运行一次）。
    */
   groupOps?: boolean
+  /** 源管理左侧来源组筛选；其它列表继续使用原来的顶部下拉。 */
+  sourceGroupId?: string
+  groupFilterInSidebar?: boolean
   /**
    * 「我的视图」（2026-10-12）：外部给定一套视图状态（条件 / 排序 / 每页条数 / 隐藏列），
    * 挂载时和每次换成新对象时套用并重查。不传 = 原来的默认条件、全部列。
@@ -155,6 +158,7 @@ const props = defineProps<{
   searchNavigation?: SourceSearchNavigation
 }>()
 const emit = defineEmits<{
+  'update:sourceGroupId': [sourceGroupId: string]
   openSource: [source: Source, searchContextId?: string]
   /** 点「所属网站」（仅不限网站时有这一列） */
   openSite: [siteId: string]
@@ -309,10 +313,10 @@ function openSourceResult(source: Source, data = false) {
   // 见 FlowCanvas/index.vue 的 onSwitchTarget 与 onTabQuotaFull）。这里拦住只会让用户
   // 看到一个「请先关闭一个」的提示却什么也做不了（用户 2026-11-05 反馈）。
   if (!props.searchNavigation || !appliedSearch.value) { publish(); return }
-  const origin = { ...appliedSearch.value, scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0 }
+  const origin = { ...appliedSearch.value, listState: props.searchNavigation.listState, scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0 }
   const search = useSourceSearchStore()
   if (!appliedSearchId || !search.get(appliedSearchId)) appliedSearchId = search.create(origin)
-  else Object.assign(search.get(appliedSearchId)!, { scrollTop: origin.scrollTop, scrollLeft: origin.scrollLeft, page: origin.page })
+  else Object.assign(search.get(appliedSearchId)!, { scrollTop: origin.scrollTop, scrollLeft: origin.scrollLeft, page: origin.page, listState: origin.listState })
   publish(appliedSearchId)
 }
 const cardQuery = ref<SourceFilter | null>(null)
@@ -421,7 +425,15 @@ const UNBOUND_SITE = '-1'
  * ——后端 sourcePaged 只接受正数 sourceGroupId，传 -1 / 0 报「sourceGroupId 必须为正数」
  * （2026-10-09 实测），所以下拉不提供筛未归组的选项。
  */
-const sourceGroupFilter = ref('')
+const sourceGroupFilter = ref(props.sourceGroupId ?? '')
+watch(sourceGroupFilter, value => emit('update:sourceGroupId', value), { flush: 'sync' })
+watch(() => props.sourceGroupId, value => {
+  if (value === undefined || value === sourceGroupFilter.value) return
+  sourceGroupFilter.value = value
+  if (restoringSearch) return
+  clearSelection()
+  search()
+})
 const sourceGroupOptions = ref<{ sourceGroupId: string; name: string; state: string }[]>([])
 let sourceGroupOptionsTask: Promise<void> | null = null
 async function loadSourceGroupOptions() {
@@ -767,6 +779,11 @@ function clearFilters() {
   dataCountMax.value = ''
   siteFilter.value = ''
   sourceGroupFilter.value = ''
+  search()
+}
+function clearSourceGroupFilter() {
+  sourceGroupFilter.value = ''
+  clearSelection()
   search()
 }
 function toggleSort(field: string) {
@@ -1701,7 +1718,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <!-- 来源组筛选（1008-04）：只在源列表视图（groupOps）出现；不含「未归组」。
            1105 用户要求跟「网站」一样支持模糊搜索（组上百个，原生 select 只能滚）：
            换成 ElSelect + filterable，样式沿用网站那个下拉（sov-site-select）。 -->
-      <label v-if="crossSite && groupOps" class="sov-fl-group"><span class="sov-label-text">来源组</span>
+      <label v-if="crossSite && groupOps && !groupFilterInSidebar" class="sov-fl-group"><span class="sov-label-text">来源组</span>
         <ElSelect v-model="sourceGroupFilter" class="sov-site-select" data-testid="source-overview-group" aria-label="来源组" filterable placeholder="全部来源组" no-match-text="没有匹配的来源组" @visible-change="(open: boolean) => { if (open) void loadSourceGroupOptions() }" @change="search">
           <ElOption label="全部来源组" value="" />
           <ElOption v-for="g in sourceGroupOptions" :key="g.sourceGroupId" :label="g.name" :value="g.sourceGroupId" :disabled="g.state !== 'ACTIVE'" />
@@ -1752,6 +1769,13 @@ defineExpose({ openLaunch, clearSelection, refresh })
       </div>
     </div>
 
+    <div v-if="groupFilterInSidebar && sourceGroupFilter" class="sov-active-scope" data-testid="source-group-active-filter">
+      <span>已选条件</span>
+      <span class="sov-scope-chip" :title="sourceGroupNameById.get(sourceGroupFilter) || `组 #${sourceGroupFilter}`">
+        来源组：{{ sourceGroupNameById.get(sourceGroupFilter) || `组 #${sourceGroupFilter}` }}
+        <button type="button" aria-label="清除来源组筛选" @click="clearSourceGroupFilter">×</button>
+      </span>
+    </div>
     <SourceWebsiteCards
       v-if="cardQuery"
       v-show="websiteCards"
@@ -2178,6 +2202,9 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-progress { color: var(--rc-muted); font-size: 11px; }
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }
 .sov-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--rc-text-2); font-size: 12px; }
+.sov-active-scope { display: flex; align-items: center; gap: 8px; color: var(--rc-faint); font-size: 12px; }
+.sov-scope-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 6px; border: 1px solid var(--rc-border); border-radius: 4px; background: var(--el-color-primary-light-9); color: var(--rc-primary); overflow-wrap: anywhere; }
+.sov-scope-chip button { flex: none; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; }
 .sov-summary b { color: var(--rc-text); }
 /* 源管理（跨网站）：勾选操作和右侧按钮保持一排，不折行 */
 .sov-summary.one-row { flex-wrap: nowrap; white-space: nowrap; }
