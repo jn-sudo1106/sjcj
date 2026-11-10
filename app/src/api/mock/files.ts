@@ -1,4 +1,4 @@
-import type { DataRow, EntryType, Paged, RawFile, RawFileQuery, RawFileStats } from '../types'
+import type { DataRow, EntryType, Paged, RawFile, RawFileQuery, RawFileStats, Source } from '../types'
 import { SOURCES, mockSourceSteps } from './sources'
 
 // 原始文件 mock（0711 R11 落地；0812 计划 M3-1 字段对齐旧平台后同步改写）：文件视图仅源态
@@ -220,4 +220,52 @@ export function mockFileResourceRows(params?: Record<string, unknown>): Paged<Da
   const size = Math.max(1, Number(params?.size ?? 20))
   const start = (page - 1) * size
   return { total: filtered.length, list: filtered.slice(start, start + size).map(fileResourceRow) }
+}
+
+// 保存时 JSON 快照（旧 /v1/fileJsonPaged，2026-11-09 接回）：按源确定性派生，
+// 保证「保存JSON」视图和任务详情在 mock 模式下也能看到与源/任务对得上的行。
+function jsonSnapshotsOfSource(source: Source): Record<string, unknown>[] {
+  const steps = mockSourceSteps({ sourceId: source.sourceId })
+  if (!steps.length) return []
+  const baseTime = source.lastSuccessAt || '2026-11-09 08:00:00'
+  return Array.from({ length: 6 }, (_, i) => {
+    const step = steps[i % steps.length]
+    const taskId = String(202611090100 + i)
+    return {
+      id: `${source.sourceId}-json-${i + 1}`,
+      sourceId: source.sourceId,
+      taskId,
+      configId: step.configId || '',
+      fileId: step.stepId,
+      realName: source.mainTable || '',
+      showName: `${source.mainTable || 'table'}_${taskId}.json`,
+      storePath: `/sense-data/json/${source.sourceId}/${taskId}.json`,
+      fileSize: 10240 + i * 4096,
+      // 每 4 条留一条「被消重」，跟旧列表的 state 筛选项对得上
+      state: i % 4 === 3 ? 'AC' : 'C',
+      md5: `mock-md5-${source.sourceId}-${i}`,
+      extName: 'json',
+      encode: 'UTF-8',
+      createDt: baseTime,
+      updateDt: baseTime,
+    }
+  })
+}
+
+export function mockJsonPaged(params?: Record<string, unknown>): Paged<Record<string, unknown>> {
+  const sourceId = String(params?.sourceId ?? '')
+  const taskId = String(params?.taskId ?? '').trim()
+  const state = String(params?.state ?? '').trim()
+  if (sourceId && !SOURCES.some((source) => source.sourceId === sourceId)) return { total: 0, list: [] }
+  const sources = sourceId ? SOURCES.filter((source) => source.sourceId === sourceId) : SOURCES
+  const all = sources.flatMap(jsonSnapshotsOfSource)
+  const filtered = all.filter((row) => {
+    if (taskId && !String(row.taskId).includes(taskId)) return false
+    if (state && row.state !== state) return false
+    return true
+  })
+  const page = Math.max(1, Number(params?.page ?? 1))
+  const limit = Math.max(1, Number(params?.limit ?? params?.size ?? 20))
+  const start = (page - 1) * limit
+  return { total: filtered.length, list: filtered.slice(start, start + limit) }
 }

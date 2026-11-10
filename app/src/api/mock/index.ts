@@ -196,7 +196,7 @@ import {
 import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs, mockSameConfigs } from './configs'
 import { mockEntryPaged, mockEntryDetail, mockEntrySetDsKind, mockGenerateAiCommont, mockBatchGenerateAiCommont, mockSaveEntryType } from './entries'
 import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
-import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows } from './files'
+import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows, mockJsonPaged } from './files'
 
 // mock 注册表：key = 真实 /v1 端点路径，value = 处理函数。
 // 真接入时这张表整体被 http 请求取代，端点字符串不变。
@@ -395,6 +395,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'file/resourceTableMeta': mockFileResourceTableMeta,
   'file/resourceRows': mockFileResourceRows,
   'file/filePaged': mockFilePaged,
+  'file/fileJsonPaged': mockJsonPaged,
+  // 真实地址键（endpoints.ts 里的 live 判定键）也留一份，避免 mock 模式直接按真实键调用时落到 fallback。
+  'fileJsonPaged': mockJsonPaged,
   'file/fileStats': mockFileStats,
   'file/upload': () => ({ ok: true, message: '文件已保存' }),
 

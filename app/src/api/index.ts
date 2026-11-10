@@ -16,7 +16,7 @@ import type {
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, CreateJobsInput, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
-  OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
+  OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, JsonSnapshotRecord, JsonSnapshotQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, FlowTemplateGroup, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
   SourceFlowBind, SourceFlowsView, WorkflowBinding,
@@ -2538,6 +2538,40 @@ function fileResourceSql(q: FileResourceQuery): string | undefined {
   return parts.join(' AND ') || undefined
 }
 
+/**
+ * 旧 OrifileResource（tb_orifile_resource）→ JsonSnapshotRecord。
+ * 旧实体主键字段名是 `resourceId`，但部分查询/序列化配置下会直接给 `id`，两者都收。
+ */
+function jsonSnapshotFromLegacy(row: Record<string, unknown>): JsonSnapshotRecord {
+  const pick = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = row[key]
+      if (value !== undefined && value !== null && value !== '') return String(value)
+    }
+    return undefined
+  }
+  const size = Number(row.fileSize)
+  return {
+    id: pick('id', 'resourceId') ?? '',
+    sourceId: pick('sourceId') ?? '',
+    taskId: pick('taskId'),
+    configId: pick('configId'),
+    fileId: pick('fileId'),
+    parentId: pick('parentId'),
+    realName: pick('realName'),
+    showName: pick('showName'),
+    storePath: pick('storePath'),
+    fileSize: Number.isFinite(size) ? size : undefined,
+    state: pick('state'),
+    md5: pick('md5'),
+    extName: pick('extName'),
+    encode: pick('encode'),
+    createDt: pick('createDt'),
+    updateDt: pick('updateDt'),
+    remarks: pick('remarks'),
+  }
+}
+
 function fileResourceFromDataRow(row: DataRow): FileResourceRecord {
   return {
     dataId: row.dataId,
@@ -3389,6 +3423,43 @@ export const fileApi = {
     }, options)
     return { total: result.total, list: result.list.map(fileResourceFromDataRow) }
   },
+  /**
+   * 保存时 JSON 快照分页（旧 `/v1/fileJsonPaged`，2026-11-09 从旧平台 1:1 接回）。
+   *
+   * 这是「每次入库保存的原始 JSON」清单，不是 file_resource 文件表：按源或按任务查，
+   * 用来回答「这条任务到底往表里存了什么」。分页参数旧端点叫 `page`/`limit`（不是 size）。
+   */
+  jsonPaged: async (q: JsonSnapshotQuery, options: DataRequestOptions = {}) => {
+    const page = q.page ?? 1
+    const limit = q.size ?? 20
+    const result = await request<Paged<Record<string, unknown>>>('file/fileJsonPaged', {
+      page, limit,
+      sourceId: q.sourceId,
+      taskId: q.taskId,
+      state: q.state,
+      title: q.title,
+    }, {
+      method: 'GET',
+      ...options,
+      httpEndpoint: 'fileJsonPaged',
+      httpParams: {
+        page,
+        limit,
+        // 空串照样会被后端当成筛选值（sourceId='' 查不到任何行），参数没值时干脆不带
+        sourceId: q.sourceId || undefined,
+        taskId: q.taskId || undefined,
+        state: q.state || undefined,
+        title: q.title || undefined,
+      },
+    })
+    return { total: Number(result?.total ?? 0), list: (result?.list ?? []).map(jsonSnapshotFromLegacy) }
+  },
+  /**
+   * 快照原文地址（旧 `/v1/readJson?id=&sourceId=`，同源 Cookie 鉴权）。
+   * 后端按 storePath 读文件并直接吐原文，不适合走 request() 解析 JSON，列表里直接新窗口打开。
+   */
+  jsonReadUrl: (snapshot: Pick<JsonSnapshotRecord, 'id' | 'sourceId'>) =>
+    `${BASE_URL}readJson?${new URLSearchParams({ id: snapshot.id, sourceId: snapshot.sourceId }).toString()}`,
 }
 
 // 工作台摘要（首页）

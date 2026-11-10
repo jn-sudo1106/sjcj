@@ -73,8 +73,16 @@ import {
 } from './sourceSearchField'
 import { snatchFailureSummary } from '@/utils/snatchResult'
 import SourceCodeTasksDrawer from './SourceCodeTasksDrawer.vue'
+import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import CodeConfigButton from './CodeConfigButton.vue'
 const codeTasksOpen = ref(false)
+/** 源列表「保存时 JSON」列打开的抽屉对象（旧平台行内「查询 → 保存时Json」）。 */
+const jsonSource = ref<Source | null>(null)
+
+/** 操作列菜单：目前只有「保存时JSON」；后续行级操作都往这里加。 */
+function onRowActionsCommand(command: string, source: Source) {
+  if (command === 'json-snapshot') jsonSource.value = source
+}
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -1907,6 +1915,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <th v-if="showCol('lastTask')"><button class="sov-sort" :class="sortClass('LAST_RUN')" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('lastSuccess')"><button class="sov-sort" :class="sortClass('LAST_SUCCESS')" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('state')">状态</th><th v-if="showCol('remark')">备注</th>
+            <th v-if="showCol('rowActions')" class="sov-actions-head">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -2038,8 +2047,31 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 @click="openMarkEditor(source)"
               >{{ source.remark || '—' }}</button>
             </td>
+            <!-- 操作列（2026-11-09）：对齐旧平台源列表最右侧的「操作」列——默认只露一个 ⋯，
+                 点开才给出该行的操作项。当前只有「保存时JSON」（旧平台行内「查询 → 保存时Json」）。
+                 做成下拉而不是直接铺按钮：源列表一行信息已经很多，低频调试入口不该常驻占位。 -->
+            <td v-if="showCol('rowActions')" class="sov-actions-cell">
+              <el-dropdown trigger="click" @command="onRowActionsCommand($event, source)">
+                <button
+                  class="sov-more"
+                  type="button"
+                  title="操作"
+                  aria-haspopup="menu"
+                  :aria-label="`源 ${source.sourceId} 的操作`"
+                  :data-testid="`source-actions-${source.sourceId}`"
+                >⋯</button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      command="json-snapshot"
+                      data-testid="source-action-json-snapshot"
+                    >保存时JSON</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 16 : 15) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -2117,6 +2149,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
     />
     <SourceDataCleanupDialog v-if="cleanupOpen" v-model="cleanupOpen" :source-ids="selectedIds" @cleaned="loadSources" />
     <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
+    <JsonSnapshotDrawer v-if="jsonSource" :source="jsonSource" @close="jsonSource = null" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
   </section>
@@ -2224,6 +2257,10 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-extra { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text-2); font-size: 12px; }
 .sov-original-dir { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .sov-default-flow .sov-link { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; text-align: left; }
+.sov-actions-head { width: 64px; text-align: center; }
+.sov-actions-cell { text-align: center; }
+.sov-more { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 1; cursor: pointer; }
+.sov-more:hover { border-color: var(--rc-border-soft); background: #f1f5f9; color: var(--rc-text-2); }
 .sov-group .sov-link { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .sov-source-link { display: block; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url-head, .sov-url { width: var(--sov-url-width); min-width: var(--sov-url-width); max-width: var(--sov-url-width); box-sizing: border-box; }

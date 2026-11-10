@@ -260,7 +260,8 @@ describe('SourceOverviewView', () => {
     await wrapper.get('[data-testid="source-overview-search-text"]').setValue('src-1, src-2')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: 'src-1,src-2' }))
-    expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('操作')
+    // 2026-11-09：源列表最右侧补了「操作」列（⋯ 菜单 → 保存时JSON），此处从「不含操作列」改为「含操作列」
+    expect(wrapper.findAll('th').map((th) => th.text())).toContain('操作')
 
     await wrapper.get('[data-testid="source-overview-source-link"]').trigger('click')
     expect(wrapper.emitted('openSource')?.[0]).toEqual([source])
