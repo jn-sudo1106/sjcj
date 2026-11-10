@@ -15,11 +15,33 @@ export interface AiAgentOption {
   icon: string
 }
 
-export interface ClarifyOption {
-  id: number
-  title: string
-  desc: string
-  table: string
+export interface ClarificationOption {
+  /** cfg_entry_type 主键：回传时用它锁定，不按表名匹配 */
+  entryTypeId: number
+  tableName: string
+  typeName?: string | null
+  /** 区分点（明细/汇总、来源网站等） */
+  hint?: string | null
+}
+
+export type ClarificationKind = 'table_choice' | 'metric_choice' | 'free_text'
+
+/** 选表/指标不确定时的结构化澄清载荷，与 MCP 的 clarification 字段一一对应。 */
+export interface Clarification {
+  kind: ClarificationKind
+  reason?: 'TOO_MANY' | 'NO_MATCH' | 'AMBIGUOUS' | (string & {})
+  question?: string
+  allowFreeText: boolean
+  maxSelect: number
+  options: ClarificationOption[]
+}
+
+/** 用户在卡片上确认后回传给智能体的结构化答案。 */
+export interface ClarificationAnswer {
+  sessionId: string
+  round: number
+  selectedEntryTypeIds: number[]
+  freeText?: string
 }
 
 export interface ChatMessage {
@@ -28,12 +50,9 @@ export interface ChatMessage {
   content: string
   createdAt: string
   // 智能体交互与富文本卡片扩展
-  clarification?: {
-    required: boolean
-    confirmed: boolean
-    selectedOptionId: number
-    selectedTimeRange: string
-    options: ClarifyOption[]
+  clarification?: Clarification & {
+    confirmed?: boolean
+    selectedEntryTypeIds?: number[]
   }
   thinking?: {
     completed: boolean
@@ -65,6 +84,7 @@ const EP = {
   sessions: 'ai/chat/sessions',
   agents: 'ai/chat/agents',
   completion: 'ai/chat/completion',
+  clarification: 'ai/chat/clarification',
 } as const
 
 export async function listAiSessions(): Promise<AiSessionItem[]> {
@@ -91,4 +111,14 @@ export async function listAiAgents(): Promise<AiAgentOption[]> {
       { id: 'monitor-advisor', name: '采集监控与诊断助手', desc: '抓取异常诊断与反爬建议', icon: 'Monitor' },
     ]
   }
+}
+
+/**
+ * 回传多选表/指标澄清的答案（entryTypeId 列表 + 自由补充）。
+ *
+ * 网关侧按 { sessionId, round, selectedEntryTypeIds, freeText } 交给智能体，
+ * 由它用 submit_table_selection(selected_entry_type_ids=...) 推进同一会话。
+ */
+export async function submitClarificationAnswer(answer: ClarificationAnswer): Promise<void> {
+  await request<unknown>(EP.clarification, { ...answer }, { method: 'POST' })
 }

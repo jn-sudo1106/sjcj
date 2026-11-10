@@ -9,10 +9,10 @@ import {
   Delete,
   Plus,
   Search,
-  Select,
   TrendCharts,
 } from '@element-plus/icons-vue'
-import { listAiSessions, type AiSessionItem } from '@/api/aiChat'
+import { listAiSessions, submitClarificationAnswer, type AiSessionItem, type Clarification } from '@/api/aiChat'
+import ClarificationCard from './ClarificationCard.vue'
 
 // 会话
 const sessions = ref<AiSessionItem[]>([])
@@ -25,11 +25,39 @@ const enableReasoning = ref<boolean>(true)
 const enableAutoChart = ref<boolean>(true)
 const isSending = ref<boolean>(false)
 
-// 交互澄清卡片状态
-const clarifySelectedDim = ref<number>(1)
-const clarifySelectedTime = ref<number>(2) // 1: 24h, 2: 7d, 3: 30d
+// 交互澄清卡片：载荷结构与 MCP 的 clarification 一致，选项全部来自真实候选（这里用演示数据）
+const currentClarification = ref<Clarification>({
+  kind: 'table_choice',
+  reason: 'TOO_MANY',
+  question: '「异常任务」可能落在多张表里，请选择本次要排查的范围（可多选）：',
+  allowFreeText: true,
+  maxSelect: 5,
+  options: [
+    {
+      entryTypeId: 101,
+      tableName: 'ck_source_log',
+      typeName: '抓取网络层异常',
+      hint: 'HTTP 403 被封锁、504 超时、SSL 握手失败等网络拦截',
+    },
+    {
+      entryTypeId: 102,
+      tableName: 'ck_clean_error',
+      typeName: '规则清洗异常',
+      hint: '网页改版导致 XPath 失效、字段提取为空、正则未命中',
+    },
+    {
+      entryTypeId: 103,
+      tableName: 'sys_runner_task',
+      typeName: '调度队列积压',
+      hint: 'Runner 执行器离线、任务排队超时被系统强制取消',
+    },
+  ],
+})
 const clarifyConfirmed = ref<boolean>(false)
-const clarifyConfirming = ref<boolean>(false)
+const selectedTables = ref<string[]>([])
+const clarifySessionId = ref<string>('s1')
+const clarifyRound = ref<number>(1)
+const clarifyCardKey = ref<number>(0)
 
 // 视图切换与思考链折叠
 const activeDataView = ref<'chart' | 'table'>('chart')
@@ -74,28 +102,26 @@ function scrollToBottom() {
   })
 }
 
-// 选择澄清口径
-function selectDimension(id: number) {
+// 确认澄清：锁定卡片，把「选了哪几张表」按 entryTypeId 回传给智能体会话
+async function handleConfirmClarify(payload: { selectedEntryTypeIds: number[]; freeText: string }) {
   if (clarifyConfirmed.value) return
-  clarifySelectedDim.value = id
-}
+  clarifyConfirmed.value = true
+  selectedTables.value = currentClarification.value.options
+    .filter((option) => payload.selectedEntryTypeIds.includes(option.entryTypeId))
+    .map((option) => option.typeName || option.tableName)
 
-// 选择时间窗口
-function selectTimeWindow(timeId: number) {
-  if (clarifyConfirmed.value) return
-  clarifySelectedTime.value = timeId
-}
-
-// 确认澄清
-function handleConfirmClarify() {
-  if (clarifyConfirming.value || clarifyConfirmed.value) return
-  clarifyConfirming.value = true
-  setTimeout(() => {
-    clarifyConfirming.value = false
-    clarifyConfirmed.value = true
-    ElMessage.success('已采纳您选择的分析口径，数据下钻已完成！')
-    scrollToBottom()
-  }, 700)
+  try {
+    await submitClarificationAnswer({
+      sessionId: clarifySessionId.value,
+      round: clarifyRound.value,
+      selectedEntryTypeIds: payload.selectedEntryTypeIds,
+      freeText: payload.freeText || undefined,
+    })
+  } catch {
+    // 问数网关未就绪时保留本地演示结果，不阻断用户看到已采纳状态
+  }
+  ElMessage.success('已采纳您选择的分析口径，数据下钻已完成！')
+  scrollToBottom()
 }
 
 // 复制 SQL
@@ -136,8 +162,10 @@ function handleKeyDown(e: KeyboardEvent) {
 // 新建会话
 function handleNewChat() {
   clarifyConfirmed.value = false
-  clarifySelectedDim.value = 1
-  clarifySelectedTime.value = 2
+  selectedTables.value = []
+  clarifySessionId.value = `s-${Date.now()}`
+  clarifyRound.value = 1
+  clarifyCardKey.value += 1
   ElMessage.info('已创建全新问数会话')
 }
 </script>
@@ -228,104 +256,16 @@ function handleNewChat() {
             <!-- 引导文字 -->
             <div class="rc-clarify-intro">
               <strong class="rc-highlight">👋 收到您的排查诉求：</strong>
-              由于采集平台的「异常任务」涵盖不同故障阶段与业务口径，为了给您生成最准确的 SQL 与分析结论，<strong>请选择本次重点排查的维度与时间范围：</strong>
+              由于采集平台的「异常任务」涵盖不同故障阶段与业务口径，为了给您生成最准确的 SQL 与分析结论，<strong>请选择本次排查涉及的表（可多选）：</strong>
             </div>
 
-            <!-- 过程中的多轮交互问答：口径澄清卡片 -->
-            <div class="rc-interactive-card" :class="{ confirmed: clarifyConfirmed }">
-              <div class="rc-card-header">
-                <span class="rc-card-title">
-                  <span class="rc-step-dot"></span>
-                  请选择分析口径（点击卡片切换）：
-                </span>
-                <span class="rc-card-hint">智能体交互澄清 · 步骤 1/1</span>
-              </div>
-
-              <!-- 3 个维度的单选卡片 -->
-              <div class="rc-dimension-grid">
-                <div
-                  class="rc-dim-card"
-                  :class="{ selected: clarifySelectedDim === 1 }"
-                  @click="selectDimension(1)"
-                >
-                  <div class="rc-dim-head">
-                    <span class="rc-dim-name">🌐 抓取网络层异常</span>
-                    <span class="rc-dim-badge">{{ clarifySelectedDim === 1 ? '●' : '○' }}</span>
-                  </div>
-                  <p class="rc-dim-desc">HTTP 403被封锁、504超时、SSL握手失败等网络拦截。</p>
-                  <div class="rc-dim-meta">涉及表: ck_source_log</div>
-                </div>
-
-                <div
-                  class="rc-dim-card"
-                  :class="{ selected: clarifySelectedDim === 2 }"
-                  @click="selectDimension(2)"
-                >
-                  <div class="rc-dim-head">
-                    <span class="rc-dim-name">🧹 规则清洗异常</span>
-                    <span class="rc-dim-badge">{{ clarifySelectedDim === 2 ? '●' : '○' }}</span>
-                  </div>
-                  <p class="rc-dim-desc">网页改版导致XPath失效、字段提取为空、正则校验未命中。</p>
-                  <div class="rc-dim-meta">涉及表: ck_clean_error</div>
-                </div>
-
-                <div
-                  class="rc-dim-card"
-                  :class="{ selected: clarifySelectedDim === 3 }"
-                  @click="selectDimension(3)"
-                >
-                  <div class="rc-dim-head">
-                    <span class="rc-dim-name">⏱️ 调度队列积压</span>
-                    <span class="rc-dim-badge">{{ clarifySelectedDim === 3 ? '●' : '○' }}</span>
-                  </div>
-                  <p class="rc-dim-desc">Runner执行器离线、任务排队超时被系统强制取消。</p>
-                  <div class="rc-dim-meta">涉及表: sys_runner_task</div>
-                </div>
-              </div>
-
-              <!-- 时间范围与操作栏 -->
-              <div class="rc-card-footer">
-                <div class="rc-time-group">
-                  <span class="rc-sublabel">时间窗口:</span>
-                  <div class="rc-time-chips">
-                    <button
-                      class="rc-time-btn"
-                      :class="{ active: clarifySelectedTime === 1 }"
-                      @click="selectTimeWindow(1)"
-                    >
-                      近 24 小时
-                    </button>
-                    <button
-                      class="rc-time-btn"
-                      :class="{ active: clarifySelectedTime === 2 }"
-                      @click="selectTimeWindow(2)"
-                    >
-                      近 7 天
-                    </button>
-                    <button
-                      class="rc-time-btn"
-                      :class="{ active: clarifySelectedTime === 3 }"
-                      @click="selectTimeWindow(3)"
-                    >
-                      近 30 天
-                    </button>
-                  </div>
-                </div>
-
-                <el-button
-                  v-if="!clarifyConfirmed"
-                  type="primary"
-                  size="small"
-                  :loading="clarifyConfirming"
-                  @click="handleConfirmClarify"
-                >
-                  确认选择并开始分析 ➔
-                </el-button>
-                <el-tag v-else type="success" size="small" effect="light">
-                  <el-icon><Select /></el-icon> 已采纳该口径
-                </el-tag>
-              </div>
-            </div>
+            <!-- 多选表澄清卡片：选项来自服务端候选，确认后按 entryTypeId 回传给智能体 -->
+            <ClarificationCard
+              :key="clarifyCardKey"
+              :clarification="currentClarification"
+              :confirmed="clarifyConfirmed"
+              @confirm="handleConfirmClarify"
+            />
 
             <!-- 用户确认后的分析结果呈现区 -->
             <transition name="el-fade-in-linear">
@@ -340,7 +280,7 @@ function handleNewChat() {
                     <span class="rc-toggle-arrow" :class="{ collapsed: !isThinkingExpanded }">▼</span>
                   </div>
                   <div v-if="isThinkingExpanded" class="rc-thinking-body">
-                    <div>✓ 1. 采纳用户澄清口径：<strong>抓取网络层异常</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code></div>
+                    <div>✓ 1. 采纳用户澄清口径：<strong>{{ selectedTables.join('、') || '未指定表' }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code></div>
                     <div>✓ 2. 定位数据表：<code>ck_source_log</code> (记录失败原因)，关联 <code>sys_site</code> 提取站点名称</div>
                     <div>✓ 3. SQL 审查通过，执行耗时 82ms，扫描 32,450 行数据。</div>
                   </div>
@@ -742,147 +682,6 @@ LIMIT 10;</pre>
 
 .rc-highlight {
   color: var(--rc-primary);
-}
-
-/* 交互澄清卡片 */
-.rc-interactive-card {
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius);
-  padding: 16px;
-  box-shadow: var(--rc-shadow-soft);
-  transition: all 0.2s ease;
-}
-
-.rc-interactive-card.confirmed {
-  opacity: 0.85;
-}
-
-.rc-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--rc-border-soft);
-}
-
-.rc-card-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rc-text);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.rc-step-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #f59e0b;
-}
-
-.rc-card-hint {
-  font-size: 11px;
-  color: var(--rc-muted);
-}
-
-.rc-dimension-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.rc-dim-card {
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius-sm);
-  padding: 12px;
-  background: var(--rc-bg);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-
-.rc-dim-card:hover {
-  border-color: var(--rc-primary);
-}
-
-.rc-dim-card.selected {
-  border-color: var(--rc-primary);
-  background: var(--rc-primary-bg);
-}
-
-.rc-dim-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.rc-dim-name {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--rc-text);
-}
-
-.rc-dim-badge {
-  color: var(--rc-primary);
-  font-weight: bold;
-}
-
-.rc-dim-desc {
-  font-size: 11px;
-  color: var(--rc-muted);
-  line-height: 1.4;
-  margin: 8px 0;
-}
-
-.rc-dim-meta {
-  font-family: monospace;
-  font-size: 10px;
-  color: var(--rc-primary);
-}
-
-.rc-card-footer {
-  margin-top: 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.rc-time-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.rc-sublabel {
-  font-size: 12px;
-  color: var(--rc-muted);
-}
-
-.rc-time-chips {
-  display: flex;
-  gap: 4px;
-}
-
-.rc-time-btn {
-  background: var(--rc-bg);
-  border: 1px solid var(--rc-border);
-  padding: 4px 10px;
-  border-radius: var(--rc-radius-sm);
-  font-size: 11px;
-  color: var(--rc-text-2);
-  cursor: pointer;
-}
-
-.rc-time-btn.active {
-  background: var(--rc-primary);
-  color: #ffffff;
-  border-color: var(--rc-primary);
-  font-weight: 600;
 }
 
 /* 确认后展示区域 */
