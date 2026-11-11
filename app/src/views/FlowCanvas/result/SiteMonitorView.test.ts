@@ -92,7 +92,7 @@ describe('SiteMonitorView', () => {
     expect(wrapper.text()).toContain('共 1 条监控')
   })
 
-  it('告警行整行标记，执行结果剥掉与「上次」重复的时间戳前缀', async () => {
+  it('状态与执行结果分开：状态码不再把整行染红，执行结果剥掉与「上次」重复的时间戳前缀', async () => {
     vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
       total: 1,
       list: [check({ state: 'E', lastMsg: '2026-09-09 11:00:46---[X]:日增量-异常, 数量:0' })],
@@ -101,22 +101,25 @@ describe('SiteMonitorView', () => {
     await pickSource(wrapper)
 
     const row = wrapper.get('.smv-table tbody tr')
-    expect(row.classes()).toContain('is-alarm')
+    // 1106 §7.3：固定状态码 E 不能直接当数据异常，不再按状态给整行/条数染色
+    expect(row.classes()).not.toContain('is-alarm')
     // 时间戳前缀不再出现在结果列里，只留真正的结果文本
     expect(row.get('.smv-msg').text()).toBe('[X]:日增量-异常, 数量:0')
     expect(wrapper.get('[data-testid="site-monitor-alarm-count"]').text()).toContain('1')
   })
 
-  it('「条数」列从执行结果里取出数量单独显示（1105 会议）', async () => {
+  it('「条数」列只读结构化字段，不再从执行结果文本里解析数量（1106 §7.5）', async () => {
+    const withCount = { ...check({ id: '2' }), cnt: 0 }
     vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
       total: 2,
-      list: [check({ id: '1', lastMsg: '2026-09-09 11:00:46---正常, 数量:1240' }), check({ id: '2', lastMsg: '校验正常' })],
+      list: [check({ id: '1', lastMsg: '2026-09-09 11:00:46---正常, 数量:1240' }), withCount],
     })
     const wrapper = mountView()
     await pickSource(wrapper)
 
     const counts = wrapper.findAll('[data-testid="monitor-result-count"]').map((cell) => cell.text())
-    expect(counts).toEqual(['1240', '—'])
+    // 日志里的「数量:1240」不再被当成条数；缺结构化字段显示「—」，0 是真实值
+    expect(counts).toEqual(['—', '0'])
   })
 
   // isDelete 的语义是反的：0 才是在用。旧平台在 loadData 里转了一道，

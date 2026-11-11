@@ -616,8 +616,6 @@ async function openSendSettings() {
       buildCurrentConfigHint(),
     )
     // 这里**不剔除**已标「本次不发」的节点：面板要能把它改回正常，剔除就再也找不回来了
-    const skipSet = new Set(skipCondStepIds.value)
-    const muteSet = skippedStepIds.value
     sendSettingOptions.value = (info?.downstreamSteps ?? [])
       .map((step) => {
         const stepId = String(step.stepId)
@@ -630,10 +628,11 @@ async function openSendSettings() {
         }
       })
       .filter((opt) => /^\d+$/.test(opt.stepId))
+    // 2026-11-10 用户：「默认本次不发，只是单个操作，无需记住」——每次打开都是全「本次不发」，
+    // 不读上一次的勾选。面板本身就是本次发送的一次性设置（不写回节点配置），所以默认值只有
+    // 「本次不发」这一个合理选项：用户挑哪几步发，就只把那几步改成「正常发送」。
     const modes: Record<string, SendSettingMode> = {}
-    for (const opt of sendSettingOptions.value) {
-      modes[opt.stepId] = muteSet.has(opt.stepId) ? 'mute' : skipSet.has(opt.stepId) ? 'skipCond' : 'normal'
-    }
+    for (const opt of sendSettingOptions.value) modes[opt.stepId] = 'mute'
     sendSettingMode.value = modes
     if (!sendSettingOptions.value.length) sendSettingError.value = '当前节点没有可发送的下游节点'
   } catch (err) {
@@ -647,12 +646,17 @@ function setSendSettingMode(opt: SendSettingOption, mode: SendSettingMode) {
   if (mode === 'skipCond' && !opt.condition) return
   sendSettingMode.value = { ...sendSettingMode.value, [opt.stepId]: mode }
 }
+/**
+ * 默认全是「本次不发」，所以这里的恢复动作只能是「全部正常发送」，
+ * 原来的「全部恢复默认」在这个默认值下等于什么都不做（2026-11-10 用户改默认值后同步改文案）。
+ */
 function resetSendSettings() {
   const next: Record<string, SendSettingMode> = {}
   for (const opt of sendSettingOptions.value) next[opt.stepId] = 'normal'
   sendSettingMode.value = next
 }
-function confirmSendSettings() {
+/** 把面板里的三态落到本次发送状态（不关面板、不发请求）。 */
+function applySendSettings() {
   const covered = new Set(sendSettingOptions.value.map((opt) => opt.nodeId).filter(Boolean))
   // 面板只覆盖"当前节点的下游"，面板外的既有标记（理论上是换节点后残留）保持不动
   const outsideSkipped = skippedNodeIds.value.filter((id) => !covered.has(id))
@@ -666,11 +670,31 @@ function confirmSendSettings() {
   skippedNodeIds.value = [...outsideSkipped, ...muteNodeIds]
   skipCondStepIds.value = skipIds
   forceSkipCond.value = skipIds.length > 0
-  sendSettingVisible.value = false
 }
-function clearSkipCond() {
+/**
+ * 面板底部「发后续」：先落设置再直接发，省掉"保存 → 关弹窗 → 再点主按钮"那一步（2026-11-10 用户要求）。
+ * 没勾数据时不关面板也不发，只提示——否则用户会以为发出去了。
+ */
+async function confirmSendSettingsAndSend() {
+  if (sendSettingLoading.value || !!sendSettingError.value) return
+  if (!selectedRowIds.value.length) {
+    ElMessage.info('请先在列表里勾选要发送的数据')
+    return
+  }
+  applySendSettings()
+  sendSettingVisible.value = false
+  await onSendNextStep()
+}
+/**
+ * 清空本次发送的一次性设置：跳过条件 + 「本次不发」都要清。
+ *
+ * 2026-11-10 用户：「默认本次不发，只是单个操作，无需记住」——「本次不发」只对这一批生效，
+ * 受理成功后必须一起清掉，否则下一批会静默沿用「全都不发」，发出去等于什么都没发。
+ */
+function clearSendSettings() {
   skipCondStepIds.value = []
   forceSkipCond.value = false
+  skippedNodeIds.value = []
 }
 
 function runNextStep(
@@ -835,7 +859,7 @@ async function onSendNextStep() {
           hasOpts ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
         )
         // 受理成功才清：失败时保留勾选，用户可以直接重试同一批（不至于悄悄变回正常条件判断）
-        clearSkipCond()
+        clearSendSettings()
         return res
       }
       /**
@@ -861,7 +885,7 @@ async function onSendNextStep() {
       // 跳过组的回执先单独展示（口径是"共处理/强制跳过条件发送"），正常组的回执交给 onSuccess
       showNextStepReceipt(skipRes)
       const normalRes = await runBatch(normalSendIds, false)
-      clearSkipCond()
+      clearSendSettings()
       return normalRes
     },
     showNextStepReceipt,
@@ -1264,7 +1288,7 @@ watch([selectedNodeId, page, () => ({ ...filters }), skippedNodeIds], () => {
 // 换源 / 换节点 / 换读的流程版本都清掉，别让上一次的放行状态跟着走。
 // 它刻意不进快照——恢复页签时如果需要，得重新勾一次，避免以为"这次还在跳过"。
 watch([sourceId, selectedNodeId, () => canvasFlowIdOf(flow), () => flowVersion.viewVersionId], () => {
-  clearSkipCond()
+  clearSendSettings()
 })
 
 // 表元 + 数据
@@ -2059,9 +2083,9 @@ async function onTestScript() {
             :aria-pressed="sendSettingBadge > 0 ? 'true' : 'false'"
             :title="sendSettingBadge > 0
               ? `本次发送已调整 ${sendSettingBadge} 个下游节点（忽略进入条件 / 本次不发）。一次性，不改节点保存的配置；受理成功或换源/换节点/换版本后自动清空。「发全部」不支持。点击可重新设置。`
-              : '逐节点设置本次发送：照常发送 / 忽略进入条件 / 本次不发。可以先设好再勾数据（一次性，不改节点配置；仅对「发后续任务」生效）'"
+              : '逐节点指定本次发后续：照常发送 / 忽略进入条件 / 本次不发。可以先设好再勾数据（一次性，不改节点配置；仅对「发后续任务」生效）'"
             @click="openSendSettings"
-          >{{ sendSettingBadge ? `发送设置 · ${sendSettingBadge}` : '发送设置' }}</button>
+          >{{ sendSettingBadge ? `发后续设置 · ${sendSettingBadge}` : '发后续设置' }}</button>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
             <button
               class="rc-btn primary"
@@ -2421,7 +2445,7 @@ async function onTestScript() {
           <div class="rv-send-setting-head">
             <span>下游节点（{{ sendSettingOptions.length }}）</span>
             <span class="rv-send-setting-ops">
-              <button type="button" class="rc-btn tiny" @click="resetSendSettings">全部恢复默认</button>
+              <button type="button" class="rc-btn tiny" @click="resetSendSettings">全部正常发送</button>
             </span>
           </div>
           <div class="rv-send-setting-list">
@@ -2468,13 +2492,15 @@ async function onTestScript() {
       </div>
       <template #footer>
         <button class="rc-btn" type="button" @click="sendSettingVisible = false">取消</button>
+        <!-- 2026-11-10 用户：「我把这个按钮改成发后续就好了，你不用多点一步了」——
+             点这里直接落本次设置并发出去，不再需要"保存 → 关弹窗 → 再点主按钮"。 -->
         <button
           class="rc-btn primary"
           type="button"
           data-testid="send-setting-confirm"
           :disabled="sendSettingLoading || !!sendSettingError"
-          @click="confirmSendSettings"
-        >保存{{ sendSettingDraftCount ? `（${sendSettingDraftCount} 个调整）` : '' }}</button>
+          @click="confirmSendSettingsAndSend"
+        >发后续{{ sendSettingDraftCount ? `（${sendSettingDraftCount} 个调整）` : '' }}</button>
       </template>
     </el-dialog>
 

@@ -109,10 +109,11 @@ function close() {
             </tr>
           </thead>
           <tbody>
-            <!-- 告警行整条标红：这点旧平台做对了，保留 -->
-            <tr v-for="log in rows" :key="log.logId" :class="{ 'is-alarm': log.state === 'E' }">
+            <!-- 不按 log.state === 'E' 染红整行：1106 §7.3 固定状态码不能直接当数据异常；
+                 条数只读运行记录的结构化字段（§7.5/§8.6），日志原文只进 tooltip -->
+            <tr v-for="log in rows" :key="log.logId">
               <td>{{ log.createDt || '—' }}</td>
-              <td class="cld-count" data-testid="check-log-count">{{ checkCountOf(log.logMsg) || '—' }}</td>
+              <td class="cld-count" data-testid="check-log-count">{{ checkCountOf(log) || '—' }}</td>
               <td class="cld-msg" :title="log.logMsg">{{ log.logMsg || '—' }}</td>
               <td :title="log.name">{{ log.name || '—' }}</td>
               <!-- 状态转中文：E/C 是后端口径，直接摆出来让人猜没有意义。
@@ -154,7 +155,7 @@ function close() {
 .cld-table-wrap { max-height: 56vh; overflow: auto; margin-top: 12px; }
 .cld-table-wrap td { font-size: 12px; }
 .cld-msg { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cld-table-wrap tbody tr.is-alarm td { color: #b91c1c; }
+
 .cld-empty { padding: 40px; text-align: center; color: var(--rc-faint); font-size: 13px; }
 .cld-empty-cell { padding: 32px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 .cld-pager { display: flex; justify-content: flex-end; padding-top: 10px; }

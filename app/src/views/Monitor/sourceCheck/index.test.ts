@@ -317,3 +317,40 @@ describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList
     expect(paged).toHaveBeenCalledTimes(2)
   })
 })
+
+// 1106 §7.5 / §8.6 / §7.3：条数只读结构化字段，不解析中文日志；状态码 E 不能直接当数据异常染红。
+describe('数据源告警 · 条数口径', () => {
+  it('lastMsg 里的「数量:5」不再解析：无结构化字段显示「—」，且 state=E 也不染红', async () => {
+    vi.spyOn(monitorApi, 'pagedSourceCheck').mockResolvedValue({
+      total: 2,
+      list: [
+        check({ id: 'ck-a', state: 'E', lastMsg: '2026-09-09 11:00:46---异常, 数量:5' }),
+        // 后端未来给结构化数值字段（按 unknown 兼容注入）
+        { ...check({ id: 'ck-b', state: 'E' }), cnt: 7 } as unknown as SourceCheck,
+      ],
+    })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    const rows = wrapper.findAll('tr.el-table__row')
+    const none = rows[0]!.find('.sc-count-none')
+    expect(none.exists()).toBe(true)
+    expect(none.text()).toBe('—')
+    expect(none.classes()).not.toContain('alarm')
+    // 无结构化字段时不渲染数值（执行结果列仍显示原始日志原文，数值列不受影响）
+    expect(rows[0]!.find('.sc-count').exists()).toBe(false)
+    expect(wrapper.findAll('.sc-count.alarm')).toHaveLength(0)
+
+    const cells = wrapper.findAll('[data-testid="check-result-count"]')
+    expect(cells).toHaveLength(1)
+    expect(cells[0]!.text()).toBe('7')
+    expect(cells[0]!.classes()).not.toContain('alarm')
+  })
+
+  it('条数列表头带来源说明（tooltip）', async () => {
+    pagedSpy()
+    const wrapper = mountPage()
+    await flushPromises()
+    expect(wrapper.text()).toContain('条数')
+  })
+})

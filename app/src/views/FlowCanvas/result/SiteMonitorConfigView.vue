@@ -5,6 +5,8 @@
 //   · 「新增配置」打开居中弹窗，弹窗内容就是改版前这个 Tab 的整页编辑器
 //     （MonitorConfigEditor.vue：按源选数据监控节点 + 编排/告警配置）；
 //   · 行上「编辑」用该行的 sourceId 打开同一个弹窗；保存后弹窗留着（1105 会议：保存完还要接着生成、测试脚本），列表在后面刷新。
+//   · 关闭弹窗 / 换一条记录编辑时，若编辑器里还有未保存改动，先确认「放弃修改 / 继续编辑」
+//     （1106 §7.3：保存只能由显式动作触发，关窗/切记录不能静默丢改动，也不能借机顺手保存）。
 //
 // 列表数据走 ck_source 分页接口（/api/source/page，2026-09-18 后端新增，
 // /api/source/list 的分页版）；监控结果那张列表是 sourceCheck 的旧监控表，别混。
@@ -18,6 +20,7 @@
 // 唯独缺 MonitorModal 那层壳——列表要用它带进来的 sourceId 过滤、并作为「加监控」的数据源；
 // 少了它「数据源」就没值可提交。壳已补在 `Monitor/sourceCheck/SourceMonitorDialog.vue`，这里直接调它。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { ckSourceApi, type CkSourceRecord } from '@/api'
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
 import SourceMonitorDialog from '@/views/Monitor/sourceCheck/SourceMonitorDialog.vue'
@@ -37,6 +40,11 @@ const error = ref('')
 
 /** 新增/编辑弹窗：open 控制显隐，sourceId 是编辑器起步的源（新增时取当前源，没有则为 ''） */
 const dialog = reactive({ open: false, sourceId: '', mode: 'add' as 'add' | 'edit' })
+/**
+ * 弹窗内容的挂载序号：换记录（含用户确认「放弃修改」后切到同一条）时 +1，
+ * 让编辑器整块重挂、上一份未保存改动真正被丢弃——只改 sourceId 时同源重开不会重挂。
+ */
+const dialogSeq = ref(0)
 
 async function load() {
   loading.value = true
@@ -68,16 +76,49 @@ function clearFilters() {
   runQuery()
 }
 
+const editorRef = ref<InstanceType<typeof MonitorConfigEditor>>()
+
+/** 编辑器里有没有还没保存的改动（生成未保存的脚本也算，见 MonitorConfigEditor 的 isDirty） */
+function editorDirty(): boolean {
+  return !!editorRef.value?.isDirty?.()
+}
+
+/** 关窗 / 切换记录前确认：有未保存改动时必须由用户明确选「放弃修改」，否则留在原地继续编辑 */
+async function confirmDiscard(action: string): Promise<boolean> {
+  if (!dialog.open || !editorDirty()) return true
+  try {
+    await ElMessageBox.confirm(
+      `当前配置还有未保存的改动，${action}会丢弃这些改动。`,
+      '放弃修改？',
+      { type: 'warning', confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', distinguishCancelAndClose: true },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** el-dialog 关闭前：有未保存改动先问；保存成功后编辑器 isDirty 已是 false，直接放行 */
+function onDialogBeforeClose(done: () => void) {
+  void confirmDiscard('关闭弹窗').then((ok) => {
+    if (ok) done()
+  })
+}
+
 // 1105 会议：新增时没有默认源，用户直接点「生成脚本」就报错。当前已锁定某个源（画布进来、
 // 或在「监控结果」里选过源）时带上它；网站「全部」视图没有源，仍从「全部源」起步。
-function openAdd() {
+async function openAdd() {
+  if (!(await confirmDiscard('切换到新增配置'))) return
   dialog.sourceId = props.sourceId ?? ''
   dialog.mode = 'add'
+  dialogSeq.value += 1
   dialog.open = true
 }
-function openEdit(row: CkSourceRecord) {
+async function openEdit(row: CkSourceRecord) {
+  if (!(await confirmDiscard('切换到另一条记录'))) return
   dialog.sourceId = String(row.sourceId)
   dialog.mode = 'edit'
+  dialogSeq.value += 1
   dialog.open = true
 }
 const dialogTitle = computed(() => {
@@ -194,10 +235,12 @@ watch(() => props.sourceId, () => {
       top="5vh"
       append-to-body
       destroy-on-close
+      :before-close="onDialogBeforeClose"
     >
       <div class="smc-dialog-body">
         <MonitorConfigEditor
-          :key="dialog.sourceId || 'new'"
+          ref="editorRef"
+          :key="`${dialog.sourceId || 'new'}::${dialogSeq}`"
           :site-id="siteId"
           :source-id="dialog.sourceId || undefined"
           @saved="onSaved"

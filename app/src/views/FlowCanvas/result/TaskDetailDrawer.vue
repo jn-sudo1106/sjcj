@@ -13,6 +13,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   locateData: [task: TaskInst]
   openSource: [task: TaskInst]
+  openSnapshots: [task: TaskInst]
 }>()
 </script>
 
@@ -30,6 +31,7 @@ const emit = defineEmits<{
       @close="emit('update:modelValue', false)"
       @locate-data="emit('locateData', $event)"
       @open-source="emit('openSource', $event)"
+      @open-snapshots="emit('openSnapshots', $event)"
     />
   </el-drawer>
 </template>
