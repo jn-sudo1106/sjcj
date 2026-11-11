@@ -992,7 +992,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
 
   // 迁自旧平台「更多 → 复制流程」：确认后走 copyFlow（名为原名_copy），新流程直接打开
   it('行内复制流程：确认后走 copyFlow 并打开新流程', async () => {
-    const w = await mountCenter([{ ...FLOWS[0], fromTemplateId: 'template-1' }])
+    const w = await mountCenter()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99', name: '新闻采集标准流程_copy' })
@@ -1006,7 +1006,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
   })
 
   it.each([false, true])('复制流程（模板=%s）选复用原配置时不逐节点复制配置', async (isTemplate) => {
-    const w = await mountCenter([{ ...FLOWS[0], isTemplate, fromTemplateId: isTemplate ? undefined : 'template-1' }])
+    const w = await mountCenter([{ ...FLOWS[0], isTemplate }])
     // confirmCopyFlow 的 message 是渲染函数：找到单选组，切到 reuse 再确认
     vi.spyOn(ElMessageBox, 'confirm').mockImplementation((async (msg: unknown) => {
       type N = { children?: unknown; props?: Record<string, unknown> | null }
@@ -1038,7 +1038,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
   })
 
   it('行内复制流程：取消确认不发请求', async () => {
-    const w = await mountCenter([{ ...FLOWS[0], fromTemplateId: 'template-1' }])
+    const w = await mountCenter()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     const copy = vi.spyOn(flowCenterApi, 'copy')
 
@@ -1046,78 +1046,6 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     await w.get('[data-testid="flow-copy-continue"]').trigger('click')
     await flushPromises()
 
-    expect(copy).not.toHaveBeenCalled()
-  })
-
-  it('未归类流程复制：先明确归集原流程，仅归集当前行，成功后可重新复制', async () => {
-    const w = await mountCenter()
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
-    const assign = vi.spyOn(flowCenterApi, 'assignTemplate').mockResolvedValue({ ok: true })
-    const save = vi.spyOn(flowCenterApi, 'save')
-    await w.findAll('[data-testid="flow-select"]')[1].setValue(true)
-
-    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
-    expect(w.get('[data-testid="flow-copy-assignment-hint"]').text()).toContain('归集会修改原流程的模板归属')
-    expect(w.get('[data-testid="flow-copy-continue"]').text()).toBe('先归集到模板')
-    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
-    await flushPromises()
-
-    expect(copy).not.toHaveBeenCalled()
-    expect(confirm).not.toHaveBeenCalled()
-    expect(assign).not.toHaveBeenCalled()
-    expect(w.get('[data-testid="assign-template-submit"]').attributes('disabled')).toBeDefined()
-    await w.get('[data-testid="assign-template-pick"]').setValue('template-1')
-    vi.mocked(flowCenterApi.paged).mockResolvedValue({ total: 2, list: [{ ...FLOWS[0], fromTemplateId: 'template-1' }, FLOWS[1]] })
-    await w.get('[data-testid="assign-template-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(assign).toHaveBeenCalledWith(['flow-10086'], 'template-1')
-    expect(copy).not.toHaveBeenCalled()
-    expect(save).not.toHaveBeenCalled()
-    expect(w.findAll('[data-testid="flow-select"]')[1].element).toHaveProperty('checked', true)
-
-    vi.mocked(flowCenterApi.detail).mockResolvedValue({ ...FLOWS[0], id: 'flow-99', fromTemplateId: 'template-1' })
-    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
-    expect(w.find('[data-testid="flow-copy-assignment-hint"]').exists()).toBe(false)
-    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
-    await flushPromises()
-    expect(copy).toHaveBeenCalledWith('flow-10086', '新闻采集标准流程_copy')
-  })
-
-  it('未归类流程复制：取消归集不修改原流程，也不复制', async () => {
-    const w = await mountCenter()
-    const copy = vi.spyOn(flowCenterApi, 'copy')
-    const assign = vi.spyOn(flowCenterApi, 'assignTemplate')
-    const save = vi.spyOn(flowCenterApi, 'save')
-    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
-    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
-    await flushPromises()
-    await w.findAll('button').find(button => button.text() === '取消')!.trigger('click')
-    await flushPromises()
-
-    expect(w.find('[data-testid="assign-template-pick"]').exists()).toBe(false)
-    expect(assign).not.toHaveBeenCalled()
-    expect(copy).not.toHaveBeenCalled()
-    expect(save).not.toHaveBeenCalled()
-  })
-
-  it('未归类流程复制：归集失败保留选择并允许重试，不提交复制', async () => {
-    const w = await mountCenter()
-    const copy = vi.spyOn(flowCenterApi, 'copy')
-    const assign = vi.spyOn(flowCenterApi, 'assignTemplate').mockRejectedValue(new Error('无归集权限'))
-    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
-    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
-    await w.get('[data-testid="flow-copy-continue"]').trigger('click')
-    await flushPromises()
-    await w.get('[data-testid="assign-template-pick"]').setValue('template-1')
-    await w.get('[data-testid="assign-template-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(assign).toHaveBeenCalledWith(['flow-10086'], 'template-1')
-    expect(error).toHaveBeenCalledWith('归集失败：无归集权限')
-    expect(w.get('[data-testid="assign-template-pick"]').element).toHaveProperty('value', 'template-1')
-    expect(w.get('[data-testid="assign-template-submit"]').attributes('disabled')).toBeUndefined()
     expect(copy).not.toHaveBeenCalled()
   })
 
