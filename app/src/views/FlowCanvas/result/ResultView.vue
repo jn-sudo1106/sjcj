@@ -2475,7 +2475,7 @@ async function onTestScript() {
                   :key="m.key"
                   type="button"
                   class="rc-btn tiny rv-send-setting-mode"
-                  :class="{ on: (sendSettingMode[opt.stepId] || 'normal') === m.key }"
+                  :class="[`is-${m.key}`, { on: (sendSettingMode[opt.stepId] || 'normal') === m.key }]"
                   :disabled="m.key === 'skipCond' && !opt.condition"
                   :title="m.key === 'skipCond'
                     ? (opt.condition ? '本次照发，但不判断它的进入条件' : '这个节点没有进入条件，忽略条件没有意义')
@@ -2491,16 +2491,18 @@ async function onTestScript() {
         </template>
       </div>
       <template #footer>
-        <button class="rc-btn" type="button" @click="sendSettingVisible = false">取消</button>
-        <!-- 2026-11-10 用户：「我把这个按钮改成发后续就好了，你不用多点一步了」——
-             点这里直接落本次设置并发出去，不再需要"保存 → 关弹窗 → 再点主按钮"。 -->
-        <button
-          class="rc-btn primary"
-          type="button"
-          data-testid="send-setting-confirm"
-          :disabled="sendSettingLoading || !!sendSettingError"
-          @click="confirmSendSettingsAndSend"
-        >发后续{{ sendSettingDraftCount ? `（${sendSettingDraftCount} 个调整）` : '' }}</button>
+        <div class="rv-send-setting-foot">
+          <button class="rc-btn ghost" type="button" @click="sendSettingVisible = false">取消</button>
+          <!-- 2026-11-10 用户：「我把这个按钮改成发后续就好了，你不用多点一步了」——
+               点这里直接落本次设置并发出去，不再需要"保存 → 关弹窗 → 再点主按钮"。 -->
+          <button
+            class="rc-btn primary"
+            type="button"
+            data-testid="send-setting-confirm"
+            :disabled="sendSettingLoading || !!sendSettingError"
+            @click="confirmSendSettingsAndSend"
+          >发后续{{ sendSettingDraftCount ? `（${sendSettingDraftCount} 个调整）` : '' }}</button>
+        </div>
       </template>
     </el-dialog>
 
@@ -2790,55 +2792,124 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
   background: currentColor;
 }
 
-/* 「本次发送设置」面板：一行一个节点，右侧三态分段按钮 */
-.rv-send-setting { display: flex; flex-direction: column; gap: 10px; }
-.rv-send-setting-tip { margin: 0; font-size: 12px; line-height: 1.65; color: var(--rc-text-2); }
-.rv-send-setting-tip strong { color: var(--rc-primary); }
+/* 「本次发送设置」面板：一行一个节点，右侧三态分段按钮。
+   2026-11-10 样式优化（用户圈了行首状态条与底部按钮）：状态条从贴边 inset 阴影改成独立竖条、
+   三态按钮并成一组分段控件、底部按钮加 flex 间距，说明文字做成浅底提示块。 */
+.rv-send-setting { display: flex; flex-direction: column; gap: 12px; }
+.rv-send-setting-tip {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--rc-bg);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--rc-text-2);
+}
+.rv-send-setting-tip strong { color: var(--rc-primary); font-weight: 600; }
 .rv-send-setting-loading,
-.rv-send-setting-error { margin: 0; padding: 18px 0; text-align: center; font-size: 12px; color: var(--rc-text-2); }
-.rv-send-setting-error { color: #b91c1c; }
+.rv-send-setting-error { margin: 0; padding: 22px 0; text-align: center; font-size: 12px; color: var(--rc-text-2); }
+.rv-send-setting-error { color: var(--rc-error); }
 .rv-send-setting-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--rc-text-2); }
 .rv-send-setting-ops { display: inline-flex; gap: 6px; }
+/* 批量恢复是次要动作：做成文字按钮，别跟右侧三态按钮抢注意力 */
+.rv-send-setting-ops .rc-btn {
+  height: 24px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rc-primary);
+}
+.rv-send-setting-ops .rc-btn:hover { border-color: transparent; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rv-send-setting-list {
   display: flex;
   flex-direction: column;
   max-height: 46vh;
   overflow: auto;
-  border: 1px solid var(--rc-border-soft);
+  border: 1px solid var(--rc-border);
   border-radius: 8px;
-  padding: 2px 10px;
+  padding: 4px;
 }
 .rv-send-setting-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 0;
+  padding: 9px 10px 9px 18px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
 }
-.rv-send-setting-row + .rv-send-setting-row { border-top: 1px dashed var(--rc-border-soft); }
+.rv-send-setting-row + .rv-send-setting-row { border-top: 1px solid var(--rc-border-soft); }
+.rv-send-setting-row:hover { background: var(--rc-bg); }
+/* 行首状态条：正常=透明，忽略条件=主色，本次不发=中性灰 */
+.rv-send-setting-row::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: transparent;
+}
+.rv-send-setting-row.is-skipCond { background: color-mix(in srgb, var(--rc-primary) 5%, #fff); }
+.rv-send-setting-row.is-skipCond::before { background: var(--rc-primary); }
+.rv-send-setting-row.is-mute { background: var(--rc-bg); }
+.rv-send-setting-row.is-mute::before { background: #cbd5e1; }
 .rv-send-setting-meta { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.rv-send-setting-name { font-size: 12px; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34%; }
-.rv-send-setting-id { font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-faint); flex: none; }
+.rv-send-setting-name { font-size: 12px; font-weight: 600; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36%; }
+.rv-send-setting-id { flex: none; font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-faint); }
 .rv-send-setting-cond {
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--rc-primary-bg);
   font-family: var(--rc-mono, monospace);
   font-size: 11px;
+  line-height: 16px;
   color: var(--rc-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rv-send-setting-cond.is-empty { color: var(--rc-faint); font-style: italic; }
-.rv-send-setting-modes { flex: none; display: inline-flex; gap: 4px; }
-.rv-send-setting-mode { height: 24px; padding: 0 8px; font-size: 12px; }
-.rv-send-setting-mode.on {
-  border-color: var(--rc-primary);
-  color: var(--rc-primary);
-  background: color-mix(in srgb, var(--rc-primary) 10%, #fff);
-  font-weight: 600;
+.rv-send-setting-cond.is-empty { background: transparent; color: var(--rc-faint); font-style: italic; }
+/* 三态并成一组分段控件：一个轨道 + 三格，选中格用白底浮起，避免三个独立按钮各自描边 */
+.rv-send-setting-modes {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--rc-border);
+  border-radius: 7px;
+  background: var(--rc-bg);
 }
-.rv-send-setting-mode:disabled { opacity: .45; cursor: not-allowed; }
-/* 行左边框跟着状态变色：忽略条件=主色、本次不发=中性灰 */
-.rv-send-setting-row.is-skipCond { box-shadow: inset 2px 0 0 var(--rc-primary); }
-.rv-send-setting-row.is-mute { box-shadow: inset 2px 0 0 var(--rc-border); }
+.rv-send-setting-mode {
+  height: 24px;
+  min-width: 60px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--rc-text-2);
+  font-weight: 500;
+}
+.rv-send-setting-mode:hover:not(:disabled):not(.on) { border: 0; background: #eef4ff; color: var(--rc-primary-ink); }
+.rv-send-setting-mode.on {
+  border: 0;
+  background: #fff;
+  color: var(--rc-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.rv-send-setting-mode.is-mute.on { color: var(--rc-muted); }
+.rv-send-setting-mode:disabled { opacity: 0.45; cursor: not-allowed; }
 .rv-send-setting-row.is-mute .rv-send-setting-name { color: var(--rc-faint); text-decoration: line-through; }
+/* 底部操作：两个按钮右对齐、8px 间距（之前是裸 button 并排，间距只有空格） */
+.rv-send-setting-foot { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+.rv-send-setting-foot .rc-btn { min-width: 88px; }
+.rv-send-setting-foot .rc-btn:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+
 </style>
