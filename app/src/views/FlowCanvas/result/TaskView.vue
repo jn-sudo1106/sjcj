@@ -19,6 +19,7 @@ import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import TaskDetailContent from './TaskDetailContent.vue'
+import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
@@ -339,6 +340,25 @@ function openDetail(task: TaskInst) {
   if (task.sourceId && !stepsBySource.value[task.sourceId]) {
     void ensureSourceMetadata(task.sourceId)
   }
+}
+
+// 「保存时 JSON」抽屉（2026-11-10，钉钉反馈）：任务行可直接开，按任务 ID 预填，
+// 不用再回源列表按源查；源列表 ⋯ 的入口保留（按源巡检时用）。
+const snapshotSource = ref<Pick<Source, 'sourceId' | 'name'> | null>(null)
+const snapshotTaskId = ref('')
+
+function openSnapshots(task: TaskInst) {
+  if (!task.sourceId) return
+  snapshotTaskId.value = task.taskId ? String(task.taskId) : ''
+  snapshotSource.value = {
+    sourceId: task.sourceId,
+    name: sourceNames.value[task.sourceId] || task.sourceId,
+  }
+}
+
+function closeSnapshots() {
+  snapshotSource.value = null
+  snapshotTaskId.value = ''
 }
 
 /**
@@ -818,7 +838,7 @@ const nextStepHints = computed(() => {
             <col style="width: 150px" />
             <col />
             <col style="width: 150px" />
-            <col v-if="canWrite" style="width: 52px" />
+            <col style="width: 104px" />
           </colgroup>
           <thead>
             <tr>
@@ -826,7 +846,7 @@ const nextStepHints = computed(() => {
               <th>{{ showSourceColumn ? '所属源 / 节点' : '流程节点' }}</th>
               <th>任务名称 / 数据</th>
               <th>队列 / 创建时间</th>
-              <th v-if="canWrite">操作</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -901,11 +921,12 @@ const nextStepHints = computed(() => {
                 >{{ queueName(task) }}</div>
                 <div class="tv-time">{{ task.createdAt || '—' }}</div>
               </td>
-              <td v-if="canWrite" class="tv-actions-cell">
-                <button class="tv-resend" type="button" data-testid="task-resend" @click.stop="resendTask(task)">重发</button>
+              <td class="tv-actions-cell">
+                <button class="tv-action-btn" type="button" data-testid="task-json-btn" @click.stop="openSnapshots(task)">JSON</button>
+                <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click.stop="resendTask(task)">重发</button>
               </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="canWrite ? 5 : 4" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
+            <tr v-if="!rows.length && !loading"><td colspan="5" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
           </tbody>
         </table>
         <table v-else class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
@@ -1043,6 +1064,7 @@ const nextStepHints = computed(() => {
             :step-name="nodeName(detailTask)"
             @locate-data="onLocateData"
             @open-source="openSource"
+            @open-snapshots="openSnapshots"
           />
           <div v-else class="tv-detail-empty">选择左侧任务，查看标识信息、执行时间和排错详情</div>
         </section>
@@ -1057,6 +1079,13 @@ const nextStepHints = computed(() => {
       :step-name="detailTask ? nodeName(detailTask) : ''"
       @locate-data="onLocateData"
       @open-source="openSource"
+      @open-snapshots="openSnapshots"
+    />
+    <JsonSnapshotDrawer
+      v-if="snapshotSource"
+      :source="snapshotSource"
+      :task-id="snapshotTaskId"
+      @close="closeSnapshots"
     />
   </main>
 </template>

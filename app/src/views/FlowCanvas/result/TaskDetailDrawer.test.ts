@@ -188,8 +188,9 @@ describe('TaskDetailDrawer', () => {
     }]
     const jsonPaged = vi.spyOn(fileApi, 'jsonPaged').mockResolvedValue({ list: snapshots, total: 7 })
 
+    const task = mockTask()
     const wrapper = mount(TaskDetailDrawer, {
-      props: { modelValue: true, task: mockTask() },
+      props: { modelValue: true, task },
       global: { stubs: { ElDrawer: ElDrawerStub } },
     })
     await flushPromises()
@@ -203,10 +204,14 @@ describe('TaskDetailDrawer', () => {
     expect(links[0]!.attributes('href')).toContain('readJson?id=7400100')
     expect(links[0]!.attributes('href')).toContain('sourceId=src_1001')
     expect(wrapper.text()).toContain('共 7 份')
-    // 抽屉里只列最近几份，超量时指路源列表的那一列（旧平台口径：快照归属源，不归属单个任务页签）
+    // 抽屉里只列最近几份，超量由「查看全部」打开完整抽屉（2026-11-10：不再让人回源列表）
     const hint = wrapper.find('[data-testid="task-snapshot-hint"]')
     expect(hint.exists()).toBe(true)
-    expect(hint.text()).toContain('完整列表见源列表该源的「保存时 JSON」列')
+    expect(hint.text()).toContain('点「查看全部」打开完整列表')
+
+    await wrapper.get('[data-testid="task-snapshot-all"]').trigger('click')
+    expect(wrapper.emitted('openSnapshots')).toHaveLength(1)
+    expect(wrapper.emitted('openSnapshots')![0]).toEqual([task])
 
     wrapper.unmount()
   })

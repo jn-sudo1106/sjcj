@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
+import { fetchNextStepConfig, type ResolvedNextStepConfig } from '@/utils/flow/nextStepConfig'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
@@ -52,7 +53,7 @@ const DataGridStub = {
   template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
 const ElDrawerStub = { name: 'ElDrawer', props: ['modelValue'], template: '<div><slot /></div>' }
-const ElDialogStub = { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /></div>' }
+const ElDialogStub = { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' }
 const TaskInstDialogStub = { name: 'TaskInstDialog', props: ['modelValue', 'sourceId', 'parentId', 'canWrite'], template: '<div />' }
 const RowDetailFieldsStub = {
   name: 'RowDetailFields',
@@ -89,9 +90,26 @@ vi.mock('./resultLayoutPref', async (importOriginal) => ({
   initialRailOpen: () => railDefault.open,
 }))
 
+// 「发送设置」面板的下游步骤来自真实 fetchNextStepConfig；但单测 mockSourceSteps 的 stepId 是
+// `${sourceId}-sN`（非纯数字），会被 openSendSettings 的 /^\d+$/ 过滤掉、面板永远没有节点。
+// 这里包一层：默认仍走真实实现，个别用例用 mockResolvedValueOnce 喂数字 stepId 的下游。
+const nextStepConfigHolder = vi.hoisted(() => ({
+  real: undefined as unknown as (typeof import('@/utils/flow/nextStepConfig'))['fetchNextStepConfig'],
+}))
+vi.mock('@/utils/flow/nextStepConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/flow/nextStepConfig')>()
+  nextStepConfigHolder.real = actual.fetchNextStepConfig
+  return { ...actual, fetchNextStepConfig: vi.fn(actual.fetchNextStepConfig) }
+})
+
 // 既有用例验证步骤工作流；新模式用例单独覆盖默认按表。
 beforeEach(() => localStorage.setItem('rc.dataview.result.browseMode', 'step'))
-afterEach(() => { localStorage.clear(); railDefault.open = true })
+afterEach(() => {
+  localStorage.clear()
+  railDefault.open = true
+  // 个别用例会临时改 fetchNextStepConfig 的返回，这里恢复真实实现，别漏到后面用例。
+  vi.mocked(fetchNextStepConfig).mockImplementation(nextStepConfigHolder.real)
+})
 
 describe('ResultView', () => {
   afterEach(() => {
@@ -1216,7 +1234,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
   // 1109-R01（2026-11-09 用户："能不能合并在一起选择条件和跳过条件"）：
   // 「本次不发」与「忽略进入条件」合并成同一个面板、按节点三态互斥。
   // 这条只钉住"面板打得开、读不到可发送步骤时不许保存"——避免又变回一个点了没反应的按钮。
-  it('「发送设置」面板：读不到可发送的下游步骤时，保存按钮禁用并给出提示', async () => {
+  it('「发后续设置」面板：读不到可发送的下游步骤时，底部按钮禁用并给出提示', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1232,10 +1250,89 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
     await flushPromises()
 
-    // el-dialog 被桩成"只渲染默认插槽"，footer 里的保存按钮断言不到；这里钉住面板本体已打开、
-    // 且读不到可发送步骤时给出明确提示（不静默变成一个空面板）。
+    // 这里钉住面板本体已打开、底部按钮已改名「发后续」、且读不到可发送步骤时禁用并给出提示
+    // （不静默变成一个点了没反应的按钮）。
     expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('当前节点没有可发送的下游节点')
+    const confirmBtn = wrapper.get('[data-testid="send-setting-confirm"]')
+    expect(confirmBtn.text()).toContain('发后续')
+    expect(confirmBtn.text()).not.toContain('保存')
+    expect(confirmBtn.attributes('disabled')).toBeDefined()
+  })
+
+  // 2026-11-10 用户：「我把这个按钮改成发后续就好了，你不用多点一步了」——
+  // 面板底部不再是"保存"，点一下落本次设置并直接发出（= 旧"保存 → 关弹窗 → 再点主按钮"两步）。
+  it('「发后续设置」底部按钮是「发后续」：没勾数据时只提示不关面板，勾了就直接发出', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
+        { dataId: 'd2', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
+      ],
+    })
+    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 2 条' })
+    // 面板打开与真正发送各调一次 fetchNextStepConfig，用持久 mock 保证两次都拿得到下游。
+    vi.mocked(fetchNextStepConfig).mockResolvedValue({
+      hasNext: true,
+      disabledTitles: [],
+      nextSteps: [],
+      targetNodeName: 'html解析',
+      downstreamSteps: [
+        { stepId: '41756', name: 'html解析', condition: '' },
+        { stepId: '41758', name: 'html下载', condition: '' },
+      ],
+    } as unknown as ResolvedNextStepConfig)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+    // 入口按钮叫「发后续设置」，和主按钮「发后续」区分开（2026-11-10 用户：主按钮不动，
+    // 特殊的发后续走这个入口）。
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发后续设置')
+    await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
+    await flushPromises()
+
+    const confirmBtn = wrapper.get('[data-testid="send-setting-confirm"]')
+    expect(confirmBtn.text()).toContain('发后续')
+    expect(confirmBtn.text()).not.toContain('保存')
+
+    // 2026-11-10 用户：「默认本次不发，只是单个操作，无需记住」——面板一打开每行都是「本次不发」，
+    // 底部按钮直接把改动数报出来，用户只挑要发的那几步改「正常发送」。
+    expect(confirmBtn.text()).toBe('发后续（2 个调整）')
+    expect(wrapper.get('[data-testid="send-setting-row-41756"]').classes()).toContain('is-mute')
+    expect(wrapper.get('[data-testid="send-setting-41756-mute"]').classes()).toContain('on')
+
+    // 挑着发：只把 41756 改成「正常发送」，41758 留在「本次不发」。
+    await wrapper.get('[data-testid="send-setting-41756-normal"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="send-setting-confirm"]').text()).toBe('发后续（1 个调整）')
+
+    // 一条都没勾：不能悄悄发出去（会发 0 条让用户以为成功了），也不能关面板。
+    await confirmBtn.trigger('click')
+    await flushPromises()
+    expect(ElMessage.info).toHaveBeenCalledWith('请先在列表里勾选要发送的数据')
+    expect(nextStep).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(true)
+
+    // 勾了行再点一次：落设置 + 直接发，面板关闭（不用再点主按钮）。
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
+    await flushPromises()
+    await wrapper.get('[data-testid="send-setting-confirm"]').trigger('click')
+    await flushPromises()
+    expect(nextStep).toHaveBeenCalledTimes(1)
+    expect(nextStep.mock.calls[0][2]).toEqual(['d1', 'd2'])
+    // 「本次不发」的 41758 被剔出本次下游，只发 41756。
+    const sentOptions = nextStep.mock.calls[0][3] as { itemConfig?: string } | undefined
+    expect(sentOptions?.itemConfig).toBe('41756')
+    expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(false)
+    // 一次性：发完立刻清空（「本次不发」不记住），入口按钮回到不带数字的状态。
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发后续设置')
   })
 
   it('首节点显式有输入表且后面还有后继：按钮是「发后续任务」，不是「发起抓取」（0824：前一个节点把行发给后一个）', async () => {

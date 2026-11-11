@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // 「保存时 JSON」抽屉（旧平台源列表 → 查询 → 保存时Json，2026-11-09 接回）。
 // 这层只守接线：按哪个源/任务查、readJson 直链怎么拼、筛选回到第 1 页、错误与空态文案、重新保存要不要确认。
+// 2026-11-10 起任务详情/任务中心也能开这个抽屉，传 taskId 进来要按任务预填（仍可清空回看整个源）。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
@@ -170,6 +171,32 @@ describe('JsonSnapshotDrawer · 保存时 JSON', () => {
     await flushPromises()
 
     expect(reSave).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+
+  it('带 taskId 进来按任务预填；清空后回看整个源（任务入口，2026-11-10）', async () => {
+    const jsonPaged = vi.spyOn(fileApi, 'jsonPaged').mockResolvedValue({ list: [snapshot()], total: 1 })
+
+    const wrapper = mount(JsonSnapshotDrawer, {
+      props: { source: SOURCE, taskId: '88801' },
+      global: { plugins: [ElementPlus], stubs: { ElDrawer: ElDrawerStub } },
+    })
+    await flushPromises()
+
+    expect(jsonPaged).toHaveBeenLastCalledWith({
+      sourceId: 'src_1001',
+      taskId: '88801',
+      state: undefined,
+      page: 1,
+      size: 20,
+    })
+    const input = wrapper.find('input[data-testid="json-task-filter"]').element as HTMLInputElement
+    expect(input.value).toBe('88801')
+
+    await wrapper.findAll('button').find((b) => b.text() === '清空')!.trigger('click')
+    await flushPromises()
+    expect(jsonPaged).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: undefined, page: 1 }))
 
     wrapper.unmount()
   })

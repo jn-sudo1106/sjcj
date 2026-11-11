@@ -18,6 +18,7 @@ const emit = defineEmits<{
   close: []
   locateData: [task: TaskInst]
   openSource: [task: TaskInst]
+  openSnapshots: [task: TaskInst]
 }>()
 
 function textOf(value: unknown): string {
@@ -98,6 +99,10 @@ function onLocateData() {
   if (props.task && taskDataId(props.task)) {
     emit('locateData', props.task)
   }
+}
+
+function onOpenSnapshots() {
+  if (props.task) emit('openSnapshots', props.task)
 }
 
 function onOpenSource() {
@@ -293,7 +298,15 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
     <div class="tdd-block" data-testid="task-snapshots">
       <div class="tdd-block-head">
         <span class="tdd-block-title">本任务入库保存的原始 JSON</span>
-        <span v-if="snapshotTotal" class="tdd-snapshot-count">共 {{ snapshotTotal }} 份</span>
+        <span class="tdd-block-right">
+          <span v-if="snapshotTotal" class="tdd-snapshot-count">共 {{ snapshotTotal }} 份</span>
+          <button
+            class="tdd-block-more"
+            type="button"
+            data-testid="task-snapshot-all"
+            @click="onOpenSnapshots"
+          >查看全部</button>
+        </span>
       </div>
       <div v-if="snapshotsLoading" class="tdd-empty">加载中…</div>
       <div v-else-if="snapshotError" class="tdd-empty">{{ snapshotError }}</div>
@@ -314,7 +327,7 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
         </li>
       </ul>
       <p v-if="snapshotTotal > snapshots.length" class="tdd-snapshot-hint" data-testid="task-snapshot-hint">
-        此处只列最近 {{ snapshots.length }} 份；完整列表见源列表该源的「保存时 JSON」列（按任务 ID 筛选）。
+        此处只列最近 {{ snapshots.length }} 份；点「查看全部」打开完整列表（可按任务 ID / 状态筛选）。
       </p>
     </div>
   </div>
@@ -358,6 +371,9 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
 }
 .tdd-empty { color: var(--rc-faint); font-size: 12px; }
 .tdd-snapshot-count { color: var(--rc-faint); font-size: 11px; }
+.tdd-block-right { display: flex; align-items: center; gap: 8px; }
+.tdd-block-more { padding: 0; border: none; background: none; color: #3b82f6; font-size: 11px; cursor: pointer; }
+.tdd-block-more:hover { text-decoration: underline; }
 .tdd-snapshots { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .tdd-snapshot-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #f8fafc; }
 .tdd-snapshot-meta { color: var(--rc-faint); font-size: 11px; word-break: break-all; }

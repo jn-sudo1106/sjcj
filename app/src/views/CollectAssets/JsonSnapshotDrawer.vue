@@ -12,7 +12,12 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { dataApi, fileApi, type JsonSnapshotRecord, type Source } from '@/api'
 
-const props = defineProps<{ source: Source }>()
+// 2026-11-10：入口从源列表扩到任务（同事反馈「看保存json还要返回源列表」）：传 taskId 进来即按任务预填，
+// 抽屉里清空任务 ID 仍可回看整个源。source 只需要标识与名称，任务行拿不到完整 Source 也能开。
+const props = defineProps<{
+  source: Pick<Source, 'sourceId' | 'name'>
+  taskId?: string
+}>()
 const emit = defineEmits<{ close: [] }>()
 
 const rows = ref<JsonSnapshotRecord[]>([])
@@ -21,7 +26,7 @@ const loading = ref(false)
 const listError = ref('')
 const page = ref(1)
 const size = ref(20)
-const taskId = ref('')
+const taskId = ref(props.taskId || '')
 const state = ref('')
 const reSaving = ref('')
 
@@ -109,8 +114,9 @@ async function reSave(row: JsonSnapshotRecord) {
   }
 }
 
-watch(() => props.source.sourceId, () => {
-  taskId.value = ''
+// 换源或换任务时重置筛选；任务入口带 taskId 进来就按该任务预填
+watch([() => props.source.sourceId, () => props.taskId], () => {
+  taskId.value = props.taskId || ''
   state.value = ''
   page.value = 1
   void loadList()
