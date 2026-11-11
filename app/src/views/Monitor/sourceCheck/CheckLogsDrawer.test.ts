@@ -42,26 +42,29 @@ afterEach(() => {
 })
 
 describe('CheckLogsDrawer · 条数口径', () => {
-  it('logMsg 含「数量:5」但无结构化字段：显示「—」，且 state=E 不染红', async () => {
+  it('结构化字段优先；后端未给字段时按日志文本兜底；都没有显示「—」；state=E 不染红', async () => {
     vi.spyOn(monitorApi, 'pagedCheckJobLogs').mockResolvedValue({
-      total: 2,
+      total: 3,
       list: [
+        // 无结构化字段：按文本兜底解析出 5（后端 CkJobLog 目前只有 logMsg，见 checkCount.ts 过渡说明）
         log({ logId: 'l1', state: 'E', logMsg: '2026-09-09 11:00:46---异常, 数量:5' }),
-        // 后端未来给结构化数值字段（按 unknown 兼容注入）
-        { ...log({ logId: 'l2', state: 'E', logMsg: '' }), cnt: 9 } as unknown as SourceCheckLog,
+        // 后端未来给结构化数值字段（按 unknown 兼容注入）：优先于文本
+        { ...log({ logId: 'l2', state: 'E', logMsg: '异常, 数量:999' }), cnt: 9 } as unknown as SourceCheckLog,
+        // 文本里也没有条数：显示「—」，不当成 0
+        log({ logId: 'l3', state: 'C', logMsg: '2026-09-09 11:00:46---正常' }),
       ],
     })
     const wrapper = mountDrawer()
     wrapper.vm.show('s1', 'job-9')
     await flushPromises()
 
-    const none = wrapper.findAll('.cl-count-none')
-    expect(none).toHaveLength(1)
-    expect(none[0]!.text()).toBe('—')
     expect(wrapper.findAll('.cl-count.alarm')).toHaveLength(0)
 
     const cells = wrapper.findAll('[data-testid="check-log-count"]')
-    expect(cells).toHaveLength(1)
-    expect(cells[0]!.text()).toBe('9')
+    expect(cells.map((cell) => cell.text())).toEqual(['5', '9'])
+
+    const none = wrapper.findAll('.cl-count-none')
+    expect(none).toHaveLength(1)
+    expect(none[0]!.text()).toBe('—')
   })
 })

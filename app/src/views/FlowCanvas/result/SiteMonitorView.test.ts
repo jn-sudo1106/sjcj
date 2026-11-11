@@ -108,7 +108,7 @@ describe('SiteMonitorView', () => {
     expect(wrapper.get('[data-testid="site-monitor-alarm-count"]').text()).toContain('1')
   })
 
-  it('「条数」列只读结构化字段，不再从执行结果文本里解析数量（1106 §7.5）', async () => {
+  it('「条数」列结构化优先，后端未给字段时按执行结果文本兜底（1106 §7.5 的过渡口径）', async () => {
     const withCount = { ...check({ id: '2' }), cnt: 0 }
     vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
       total: 2,
@@ -118,8 +118,8 @@ describe('SiteMonitorView', () => {
     await pickSource(wrapper)
 
     const counts = wrapper.findAll('[data-testid="monitor-result-count"]').map((cell) => cell.text())
-    // 日志里的「数量:1240」不再被当成条数；缺结构化字段显示「—」，0 是真实值
-    expect(counts).toEqual(['—', '0'])
+    // 无结构化字段 → 文本兜底 1240；有结构化字段 → 用它（0 是真实值，不是未知）
+    expect(counts).toEqual(['1240', '0'])
   })
 
   // isDelete 的语义是反的：0 才是在用。旧平台在 loadData 里转了一道，

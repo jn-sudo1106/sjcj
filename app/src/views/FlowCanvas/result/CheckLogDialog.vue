@@ -110,7 +110,7 @@ function close() {
           </thead>
           <tbody>
             <!-- 不按 log.state === 'E' 染红整行：1106 §7.3 固定状态码不能直接当数据异常；
-                 条数只读运行记录的结构化字段（§7.5/§8.6），日志原文只进 tooltip -->
+                 条数优先读运行记录的结构化字段（§7.5/§8.6），后端未提供时按文本兼容解析（过渡），取不到显示「—」 -->
             <tr v-for="log in rows" :key="log.logId">
               <td>{{ log.createDt || '—' }}</td>
               <td class="cld-count" data-testid="check-log-count">{{ checkCountOf(log) || '—' }}</td>

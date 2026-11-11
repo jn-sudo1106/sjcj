@@ -334,7 +334,7 @@ function onSourceChange() {
            日志原文仍在「执行结果」列，不塞进数值。 -->
       <el-table-column label="条数" width="90" align="right">
         <template #header>
-          <el-tooltip content="来自运行记录的结构化数值字段（cnt / count / metrics.cnt 等）；后端未给字段时显示「—」，不从执行结果文字里解析" placement="top">
+          <el-tooltip content="优先读运行记录的结构化数值字段（cnt / count / metrics.cnt 等）；后端未提供时按执行结果文本兼容解析，都取不到显示「—」" placement="top">
             <span class="sc-th-tip">条数</span>
           </el-tooltip>
         </template>

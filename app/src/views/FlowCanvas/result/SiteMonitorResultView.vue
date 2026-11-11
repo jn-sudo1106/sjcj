@@ -182,7 +182,7 @@ function openLogs(row: SourceCheck) {
             </tr>
           </thead>
           <tbody>
-            <!-- 不按状态码染红整行/条数：1106 §7.3 固定 E 不能直接当数据异常，§7.5/§8.6 条数只读结构化字段 -->
+            <!-- 不按状态码染红整行/条数：1106 §7.3 固定 E 不能直接当数据异常，§7.5/§8.6 条数结构化优先、文本过渡兜底 -->
             <tr v-for="row in rows" :key="row.id">
               <td @click.stop>
                 <el-switch

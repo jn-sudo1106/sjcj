@@ -116,7 +116,7 @@ function stateClass(state: string) {
       <!-- 1106 §7.5 / §8.6：条数只读运行记录的结构化数值字段，不解析 logMsg 中文日志；取不到显示「—」（§8.3） -->
       <el-table-column label="条数" width="90" align="right">
         <template #header>
-          <el-tooltip content="来自运行记录的结构化数值字段（cnt / count / metrics.cnt 等）；后端未给字段时显示「—」，不从日志文字里解析" placement="top">
+          <el-tooltip content="优先读运行记录的结构化数值字段（cnt / count / metrics.cnt 等）；后端未提供时按日志文本兼容解析，都取不到显示「—」" placement="top">
             <span class="cl-th-tip">条数</span>
           </el-tooltip>
         </template>
