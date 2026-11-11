@@ -36,8 +36,16 @@ describe('SourceOverviewView', () => {
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
     await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
     await wrapper.get('[data-testid="batch-bind-flows"]').trigger('click')
+    // 1110 §10.1：点「绑定流程」直接进流程选择，不再先开空白弹窗
+    const picker = wrapper.findComponent({ name: 'FlowPickerDialog' })
+    expect(picker.exists()).toBe(true)
+    expect(picker.props('scopeHint')).toContain('2 个源')
+    const flows = [{ id: '20', name: '流程二' }]
+    picker.vm.$emit('confirm', flows)
+    await flushPromises()
     const dialog = wrapper.findComponent({ name: 'BatchBindFlowsDialog' })
     expect(dialog.props('sourceIds')).toEqual(['src-1', 'src-2'])
+    expect(dialog.props('initialFlows')).toEqual(flows)
     const before = page.mock.calls.length
     dialog.vm.$emit('saved', ['src-1'])
     await flushPromises()

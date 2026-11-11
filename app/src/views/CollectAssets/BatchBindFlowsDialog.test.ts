@@ -12,9 +12,9 @@ const flows = [{ id: '20', name: '流程二' }, { id: '30', name: '流程三' }]
 const view = (overrides: Partial<SourceFlowsView> = {}): SourceFlowsView => ({
   flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [], ...overrides,
 })
-function render(sourceIds = ['1', '2']) {
+function render(sourceIds = ['1', '2'], initialFlows?: FlowRecord[]) {
   return mount(BatchBindFlowsDialog, {
-    props: { sourceIds },
+    props: initialFlows ? { sourceIds, initialFlows } : { sourceIds },
     global: {
       plugins: [ElementPlus],
       stubs: {
@@ -37,6 +37,17 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 
 describe('源列表批量绑定流程', () => {
+  it('入口已选好流程时进弹窗即开始绑定，不再要求点「选择流程」', async () => {
+    vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(view())
+    const request = vi.spyOn(client, 'request').mockResolvedValue({})
+    const wrapper = render(['1'], flows)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="batch-bind-pick"]').exists()).toBe(false)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="batch-bind-result"]').text()).toContain('绑定成功 1 个源，未绑定 0 个源')
+    wrapper.unmount()
+  })
+
   it('所选流程全部已有时跳过写入；显式调整默认流程时仅更新原绑定', async () => {
     vi.spyOn(workflowBindingApi, 'view').mockResolvedValue(view({ ownFlowIds: ['10', '20', '30'], ownDefaultFlowId: '10' }))
     const request = vi.spyOn(client, 'request').mockResolvedValue({})
@@ -142,7 +153,8 @@ describe('源列表批量绑定流程', () => {
     // 串行：同一时刻只有 1 个源在写，避免后端按流程行加锁时自己抢自己的锁
     expect(save).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="batch-bind-submit"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="batch-bind-pick"]').attributes('disabled')).toBeDefined()
+    // 流程已选定并开始执行：不再提供「选择流程」，避免提交中换流程
+    expect(wrapper.find('[data-testid="batch-bind-pick"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'ElDialog' }).attributes('close-on-click-modal')).toBe('false')
     finish()
     await flushPromises()

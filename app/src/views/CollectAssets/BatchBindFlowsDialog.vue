@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { workflowBindingApi, type FlowRecord } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { isLockConflictError, readableApiError } from '@/utils/apiError'
 import FlowPickerDialog from './FlowPickerDialog.vue'
 
-const props = defineProps<{ sourceIds: string[] }>()
+const props = defineProps<{
+  sourceIds: string[]
+  /** 入口已经先选好流程（源列表点「绑定流程」直接进流程选择）：进弹窗即开始绑定，不再要求点第二次 */
+  initialFlows?: FlowRecord[]
+}>()
 const emit = defineEmits<{ close: []; saved: [sourceIds: string[]] }>()
 const auth = useAuthStore()
 // 固定本次勾选范围，列表刷新或翻页不改变提交对象。
 const targets = [...new Set(props.sourceIds)]
-const flows = ref<FlowRecord[]>([])
+const flows = ref<FlowRecord[]>(props.initialFlows ? [...props.initialFlows] : [])
 const defaultFlowId = ref('preserve')
 const pickerOpen = ref(false)
 const saving = ref(false)
@@ -94,6 +98,10 @@ async function save() {
   await run([...targets])
 }
 
+onMounted(() => {
+  if (flows.value.length && targets.length) void run([...targets])
+})
+
 /** 只重跑上次没绑上的源，已成功的不再重复写。 */
 async function retryFailed() {
   if (saving.value || !failed.value.length) return
@@ -122,7 +130,7 @@ async function retryFailed() {
         <el-tag v-for="flow in flows" :key="flow.id">{{ flow.name || '流程' }} · {{ flow.id }}</el-tag>
         <span v-if="!flows.length" class="bbf-hint">尚未选择流程</span>
       </div>
-      <el-button :disabled="saving || finished" data-testid="batch-bind-pick" @click="pickerOpen = true">选择流程</el-button>
+      <el-button v-if="!started" :disabled="saving" data-testid="batch-bind-pick" @click="pickerOpen = true">选择流程</el-button>
       <label class="bbf-default">
         默认流程
         <el-select v-model="defaultFlowId" :disabled="saving || finished || !flows.length" data-testid="batch-bind-default">

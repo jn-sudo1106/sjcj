@@ -34,6 +34,7 @@ import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
 import BatchBindFlowsDialog from '@/views/CollectAssets/BatchBindFlowsDialog.vue'
+import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
 import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
@@ -841,9 +842,26 @@ const sourceGroupOpsOpen = ref(false)
 const flowConfigOpen = ref(false)
 const flowConfigSource = ref<Source | null>(null)
 const batchFlowSourceIds = ref<string[]>([])
+/** 本次批量绑定的目标源（点按钮时固定，选择流程期间翻页/改勾选不改变提交对象） */
+const batchBindTargetIds = ref<string[]>([])
+const batchInitialFlows = ref<FlowRecord[]>([])
+const batchBindPickerOpen = ref(false)
+/** 点「绑定流程」直接进流程选择（1110 §10.1）：不再先开一个空白弹窗再点「选择流程」 */
 function openBatchBindFlows() {
   if (auth.role !== 'admin' || !selectedIds.value.length) return
-  batchFlowSourceIds.value = [...selectedIds.value]
+  batchBindTargetIds.value = [...selectedIds.value]
+  batchBindPickerOpen.value = true
+}
+/** 选定流程后直接开始绑定：弹窗带流程进入即执行，展示进度与逐源结果 */
+function onBatchBindFlowsPicked(flows: FlowRecord[]) {
+  batchBindPickerOpen.value = false
+  if (!flows.length) return
+  batchInitialFlows.value = [...flows]
+  batchFlowSourceIds.value = [...batchBindTargetIds.value]
+}
+function onBatchBindFlowsClose() {
+  batchFlowSourceIds.value = []
+  batchInitialFlows.value = []
 }
 async function onBatchFlowsSaved(sourceIds: string[]) {
   const saved = new Set(sourceIds)
@@ -2125,7 +2143,16 @@ defineExpose({ openLaunch, clearSelection, refresh })
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
     <SourceCodeTasksDrawer v-if="codeTasksOpen" v-model="codeTasksOpen" :sources="rows.filter(row => selectedIds.includes(row.sourceId))" />
     <!-- 1008-04 来源组批量操作弹窗 / 抽屉 -->
-    <BatchBindFlowsDialog v-if="batchFlowSourceIds.length" :source-ids="batchFlowSourceIds" @close="batchFlowSourceIds = []" @saved="onBatchFlowsSaved" />
+    <FlowPickerDialog
+      v-if="batchBindPickerOpen"
+      :selected="[]"
+      :site-flow-counts="{}"
+      hide-site-usage
+      :scope-hint="`将为勾选的 ${batchBindTargetIds.length} 个源绑定流程`"
+      @close="batchBindPickerOpen = false"
+      @confirm="onBatchBindFlowsPicked"
+    />
+    <BatchBindFlowsDialog v-if="batchFlowSourceIds.length" :source-ids="batchFlowSourceIds" :initial-flows="batchInitialFlows" @close="onBatchBindFlowsClose" @saved="onBatchFlowsSaved" />
     <SourceFlowConfigDrawer
       v-if="flowConfigOpen && flowConfigSource"
       :source="flowConfigSource"
