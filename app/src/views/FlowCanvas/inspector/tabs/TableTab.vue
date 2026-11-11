@@ -728,11 +728,11 @@ async function onTableSaved(tableId: string) {
 .rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-left: 0; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .rc-input-btn:last-child { border-radius: 0 7px 7px 0; }
 .rc-input-btn:hover { background: var(--rc-primary-bg); }
-.rc-mini-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.rc-mini-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .rc-mini-table th { text-align: left; color: var(--rc-muted); font-weight: 600; padding: 6px 5px; border-bottom: 1px solid #eef2f7; }
 .rc-mini-table td { padding: 7px 5px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text-2); }
 .rc-edit-table th:last-child, .rc-edit-table td:last-child { width: 26px; padding: 4px 2px; }
-.rc-cell-input { width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 4px 5px; outline: none; }
+.rc-cell-input { width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 12px; padding: 4px 5px; outline: none; }
 .rc-cell-input:hover { border-color: #dbe3ee; }
 .rc-cell-input:focus { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 2px #dbeafe; }
 .rc-row-del { width: 20px; height: 20px; border: 0; background: transparent; color: var(--rc-faint); font-size: 12px; cursor: pointer; border-radius: 4px; }
@@ -747,18 +747,18 @@ async function onTableSaved(tableId: string) {
 /* 回写父表（输入表）面板：写入方式 / 定位键 / 字段映射 */
 .rc-segment button:disabled { opacity: 0.45; cursor: not-allowed; }
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
-.rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 5px 12px; cursor: pointer; }
+.rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 12px; padding: 5px 12px; cursor: pointer; }
 .rc-segment button.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }
 
 .rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
-.rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }
+.rc-preset-label { font-size: 12px; color: var(--rc-muted); font-weight: 600; }
 .rc-preset-chip {
   padding: 3px 8px;
   border: 1px solid #d5e2f2;
   border-radius: 5px;
   background: #f8fafc;
   color: var(--rc-text-2);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s ease;
@@ -784,13 +784,13 @@ async function onTableSaved(tableId: string) {
 .rc-field-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .rc-field-header label { margin-bottom: 0; }
 .rc-field-actions { display: flex; gap: 8px; }
-.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; }
 .rc-text-btn:hover { text-decoration: underline; }
 .rc-tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
+.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
 .rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
 .rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
-.rc-field label.rc-tag { display: inline-flex; margin-bottom: 0; font-size: 11px; font-weight: 500; }
+.rc-field label.rc-tag { display: inline-flex; margin-bottom: 0; font-size: 12px; font-weight: 500; }
 .rc-field label.rc-tag.on { font-weight: 700; }
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 .input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }

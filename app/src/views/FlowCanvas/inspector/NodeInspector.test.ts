@@ -50,6 +50,30 @@ describe('编排保存自动同步部署配置', () => {
     expect(wrapper.text()).not.toContain('部署配置同步失败，可重试')
     wrapper.unmount()
   })
+  it('一次保存只弹一条成功提示：配置保存与部署配置同步合并成一条（1105-S1）', async () => {
+    mockAssets(); setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['123'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1401081', configName: '新闻列表' }
+    flow.select('123'); flow.setActiveTab('orchestration')
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ configId: '1401081' })
+    vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1401081', name: '新闻列表' } as never)
+    // 编排 Tab 保存会顺带同步部署配置：以前这里是两条绿条
+    vi.mocked(syncNodeDeployment).mockResolvedValue({ ok: true } as never)
+    const success = vi.spyOn(ElMessage, 'success')
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } }); await flushPromises()
+    flow.setDedupMode('123', 'table'); await flushPromises()
+    success.mockClear()
+    await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises()
+
+    const texts = success.mock.calls.map((c) => String(c[0]))
+    expect(texts).toHaveLength(1)
+    expect(texts[0]).toContain('配置 #1401081 已保存')
+    expect(texts[0]).toContain('对应流程节点的部署配置已生成或更新')
+    expect(texts[0]!.startsWith('已保存：')).toBe(true)
+    wrapper.unmount()
+  })
+
   it('配置保存失败时不生成部署配置', async () => {
     mockAssets(); setActivePinia(createPinia())
     const flow = useFlowStore()
