@@ -113,10 +113,17 @@ function stateClass(state: string) {
       max-height="700"
     >
       <el-table-column label="时间" width="170" prop="createDt" class-name="mono-cell" />
+      <!-- 1106 §7.5 / §8.6：条数只读运行记录的结构化数值字段，不解析 logMsg 中文日志；取不到显示「—」（§8.3） -->
       <el-table-column label="条数" width="90" align="right">
+        <template #header>
+          <el-tooltip content="来自运行记录的结构化数值字段（cnt / count / metrics.cnt 等）；后端未给字段时显示「—」，不从日志文字里解析" placement="top">
+            <span class="cl-th-tip">条数</span>
+          </el-tooltip>
+        </template>
         <template #default="{ row }">
-          <b v-if="checkCountOf(row.logMsg)" class="cl-count" :class="{ alarm: row.state === 'E' }" data-testid="check-log-count">{{ checkCountOf(row.logMsg) }}</b>
-          <span v-else class="cl-count-none">—</span>
+          <!-- 不按 row.state === 'E' 染红：§7.3 固定状态码不等于数据异常 -->
+          <b v-if="checkCountOf(row)" class="cl-count" data-testid="check-log-count">{{ checkCountOf(row) }}</b>
+          <span v-else class="cl-count-none" :title="row.logMsg || ''">—</span>
         </template>
       </el-table-column>
       <el-table-column label="消息" min-width="300" prop="logMsg" show-overflow-tooltip>
@@ -210,6 +217,6 @@ function stateClass(state: string) {
   background: #f0fdf4;
 }
 .cl-count { font-variant-numeric: tabular-nums; color: var(--rc-text); }
-.cl-count.alarm { color: var(--rc-error); }
+.cl-th-tip { cursor: help; border-bottom: 1px dotted var(--rc-muted); }
 .cl-count-none { color: var(--rc-faint); }
 </style>

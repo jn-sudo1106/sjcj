@@ -329,11 +329,19 @@ function onSourceChange() {
           />
         </template>
       </el-table-column>
-      <!-- 条数从执行结果文字里取（1105 会议：一眼看到查出多少条），后端给独立字段后改读字段 -->
+      <!-- 1106 §7.5 / §8.6：条数只读运行记录的结构化数值字段（cnt/count/recordCount/metrics.cnt 等），
+           不解析 lastMsg 里的「数量:xxx」中文日志；取不到显示「—」（§8.3 未知不能默认 0）。
+           日志原文仍在「执行结果」列，不塞进数值。 -->
       <el-table-column label="条数" width="90" align="right">
+        <template #header>
+          <el-tooltip content="来自运行记录的结构化数值字段（cnt / count / metrics.cnt 等）；后端未给字段时显示「—」，不从执行结果文字里解析" placement="top">
+            <span class="sc-th-tip">条数</span>
+          </el-tooltip>
+        </template>
         <template #default="{ row }">
-          <b v-if="checkCountOf(row.lastMsg)" class="sc-count" :class="{ alarm: row.state === 'E' }" data-testid="check-result-count">{{ checkCountOf(row.lastMsg) }}</b>
-          <span v-else class="sc-count-none">—</span>
+          <!-- 不再按 row.state === 'E' 染红：§7.3 不能把固定状态码直接解释成数据异常 -->
+          <b v-if="checkCountOf(row)" class="sc-count" data-testid="check-result-count">{{ checkCountOf(row) }}</b>
+          <span v-else class="sc-count-none" :title="row.lastMsg || ''">—</span>
         </template>
       </el-table-column>
       <!-- 执行结果：剥时间戳前缀，超长省略 -->
@@ -581,6 +589,6 @@ function onSourceChange() {
 }
 /* 与 TaskView 同款 rc-btn / tv-icon-btn：rc-btn 由全局 tokens.css 注入，这里不重写 */
 .sc-count { font-variant-numeric: tabular-nums; color: var(--rc-text); }
-.sc-count.alarm { color: var(--rc-error); }
+.sc-th-tip { cursor: help; border-bottom: 1px dotted var(--rc-muted); }
 .sc-count-none { color: var(--rc-faint); }
 </style>

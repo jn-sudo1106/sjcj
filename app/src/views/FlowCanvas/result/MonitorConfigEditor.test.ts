@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
 import { useNodeEditorContext } from '@/views/FlowCanvas/inspector/nodeEditorContext'
 import type { MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
@@ -303,6 +303,8 @@ describe('MonitorConfigEditor', () => {
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
     const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    // 有未保存改动：切源前会问「放弃修改 / 继续编辑」，这里选放弃
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
 
     const wrapper = mountEditor()
     await pickSource(wrapper)
@@ -341,22 +343,66 @@ describe('MonitorConfigEditor', () => {
     expect(wrapper.emitted('saved')).toHaveLength(1)
   })
 
-  it('生成脚本成功后自动保存，不用再手点「保存配置」（1105 会议）', async () => {
+  // 1106 §7.3：生成 ≠ 保存。生成只把脚本写回表单，落库必须由用户显式点「保存配置」。
+  it('生成脚本后不自动保存：标「已生成，未保存」，保存按钮保持可用，点保存才落库', async () => {
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
     const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
     vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 'TB_RAW', tableName: 'sense_data.TB_RAW', fields: [] } as never)
-    const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }) as never)
 
     const wrapper = mountEditor()
     await pickSource(wrapper)
     await driveContext(wrapper, 'orch-generated')
 
+    // 生成只回写表单：不写库、不抛 saved、提示「请点击保存生效」
+    expect(update).not.toHaveBeenCalled()
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith('脚本已生成，请点击保存生效')
+    // 界面明确「已生成，未保存」，保存按钮保持可用并高亮
+    expect(wrapper.get('[data-testid="site-monitor-script-pending"]').text()).toBe('脚本已生成，未保存')
+    const save = wrapper.get('[data-testid="site-monitor-config-save"]')
+    expect(save.attributes('disabled')).toBeUndefined()
+    expect(save.classes()).toContain('smc-save-pending')
+    expect((wrapper.vm as unknown as { isDirty: () => boolean }).isDirty()).toBe(true)
+
+    // 显式保存才真正落库
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+    await save.trigger('click')
+    await flushPromises()
+
     expect(update).toHaveBeenCalledTimes(1)
     expect(update.mock.calls[0][0].checkConf).toContain('/code01/m.py')
-    expect(success).toHaveBeenCalledWith('脚本已生成，监控配置已自动保存')
     expect(wrapper.emitted('saved')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="site-monitor-script-pending"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
+    expect((wrapper.vm as unknown as { isDirty: () => boolean }).isDirty()).toBe(false)
+  })
+
+  it('生成未保存时切源：先确认「放弃修改 / 继续编辑」', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
+    vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 'TB_RAW', tableName: 'sense_data.TB_RAW', fields: [] } as never)
+    vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }) as never)
+    const confirmBox = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+
+    const wrapper = mountEditor()
+    await pickSource(wrapper)
+    await driveContext(wrapper, 'orch-generated')
+
+    // 继续编辑：留在当前源，未保存状态不丢
+    await pickSource(wrapper, 'other-source')
+    expect(confirmBox).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).props('modelValue')).toBe(SOURCE.sourceId)
+    expect(wrapper.find('[data-testid="site-monitor-script-pending"]').exists()).toBe(true)
+
+    // 放弃修改：切到新源，未保存标记随记录切换清掉
+    confirmBox.mockResolvedValueOnce('confirm' as never)
+    await pickSource(wrapper, 'other-source')
+    expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).props('modelValue')).toBe('other-source')
+    expect(wrapper.find('[data-testid="site-monitor-script-pending"]').exists()).toBe(false)
   })
 })
