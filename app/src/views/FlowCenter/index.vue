@@ -734,6 +734,7 @@ async function createFromTemplate() {
  */
 const copyingFlowId = ref('')
 const copyPreviewFlow = ref<FlowRecord | null>(null)
+const copyNeedsAssignment = computed(() => !!copyPreviewFlow.value && !copyPreviewFlow.value.isTemplate && !copyPreviewFlow.value.fromTemplateId)
 function continueCopy() {
   const flow = copyPreviewFlow.value
   copyPreviewFlow.value = null
@@ -741,6 +742,10 @@ function continueCopy() {
 }
 async function copyFlow(t: FlowRecord) {
   if (copyingFlowId.value) return
+  if (!t.isTemplate && !t.fromTemplateId) {
+    await openAssignment([t.id])
+    return
+  }
   const mode = await confirmCopyFlow({
     title: '复制流程',
     lines: [`将复制流程「${t.name}」（#${t.id}）及其全部节点，生成新流程「${t.name}_copy」，不复制关联源。节点配置：`],
@@ -1430,9 +1435,10 @@ async function confirmApply() {
 
 
     <el-dialog :model-value="!!copyPreviewFlow" title="复制流程：查看流程及配置" width="min(1100px, calc(100vw - 32px))" append-to-body @close="copyPreviewFlow = null">
-      <p class="fc-copy-hint">复制优先使用已发布版本；没有发布版时使用草稿。下一步可选择复制独立配置或复用原配置。</p>
+      <p v-if="copyNeedsAssignment" class="fc-copy-hint" role="status" data-testid="flow-copy-assignment-hint">此流程未归类，复制前需先归集到正确的流程模板。归集会修改原流程的模板归属，保留现有节点、配置和关联源。归集完成后，请重新点击复制。</p>
+      <p v-else class="fc-copy-hint">复制优先使用已发布版本；没有发布版时使用草稿。下一步可选择复制独立配置或复用原配置。</p>
       <FlowReadonlyPreview v-if="copyPreviewFlow" :flow="copyPreviewFlow" class="fc-copy-preview" />
-      <template #footer><el-button @click="copyPreviewFlow = null">取消</el-button><el-button type="primary" data-testid="flow-copy-continue" @click="continueCopy">下一步</el-button></template>
+      <template #footer><el-button @click="copyPreviewFlow = null">取消</el-button><el-button type="primary" data-testid="flow-copy-continue" @click="continueCopy">{{ copyNeedsAssignment ? '先归集到模板' : '下一步' }}</el-button></template>
     </el-dialog>
 
     <FlowSourcesManagerDialog
