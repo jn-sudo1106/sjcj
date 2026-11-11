@@ -2897,6 +2897,7 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
   font-weight: 500;
 }
 .rv-send-setting-mode:hover:not(:disabled):not(.on) { border: 0; background: #eef4ff; color: var(--rc-primary-ink); }
+/* 三态选中统一主色（2026-11-11 用户：「本次不发应该是蓝色的吧」）：不再给「本次不发」单独降级成灰色。 */
 .rv-send-setting-mode.on {
   border: 0;
   background: #fff;
@@ -2904,7 +2905,6 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
-.rv-send-setting-mode.is-mute.on { color: var(--rc-muted); }
 .rv-send-setting-mode:disabled { opacity: 0.45; cursor: not-allowed; }
 .rv-send-setting-row.is-mute .rv-send-setting-name { color: var(--rc-faint); text-decoration: line-through; }
 /* 底部操作：两个按钮右对齐、8px 间距（之前是裸 button 并排，间距只有空格） */
