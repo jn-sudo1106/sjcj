@@ -44,6 +44,14 @@ export interface ClarificationAnswer {
   freeText?: string
 }
 
+export interface PieSlice {
+  label: string
+  value: number
+  displayValue?: string
+  color?: string
+  tone?: 'primary' | 'cyan' | 'indigo' | 'amber' | 'ok' | 'err' | 'muted' | 'orange' | 'purple'
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -72,7 +80,9 @@ export interface ChatMessage {
   }>
   chartData?: {
     title: string
-    bars: Array<{ label: string; value: number; displayValue: string; color?: string }>
+    pieTitle?: string
+    bars?: Array<{ label: string; value: number; displayValue: string; color?: string }>
+    slices?: PieSlice[]
     tableColumns: Array<{ prop: string; label: string }>
     tableRows: Array<Record<string, unknown>>
   }
