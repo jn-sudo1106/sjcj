@@ -17,6 +17,8 @@ import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { normalizeSiteView, type SiteWorkspaceView } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
+import SourceBizDirectoryLink from '../source/SourceBizDirectoryLink.vue'
+import { finishSourceSearchReturn, sourceSearchListPath } from '@/stores/sourceSearch'
 import SiteDataView from './SiteDataView.vue'
 import SiteTablesOverview from './SiteTablesOverview.vue'
 import SiteFileView from './SiteFileView.vue'
@@ -27,6 +29,14 @@ const props = defineProps<{ siteId: string }>()
 const ws = useWorkspaceStore()
 const route = useRoute()
 const router = useRouter()
+const sourceOverviewRef = ref<InstanceType<typeof SourceOverviewView>>()
+function openBizDirectory(directoryId: string) {
+  const contextId = sourceOverviewRef.value?.captureListReturn(route.fullPath, '网站源视图')
+  void router.push({ path: '/collect', query: {
+    tab: 'source', bizDirId: directoryId,
+    directoryReturn: sourceSearchListPath(route.fullPath, contextId),
+  } })
+}
 
 // 数据视图「按条件查源」跳过来时 URL 上带的那批源 ID（0903 Y2-4）。
 //
@@ -206,7 +216,11 @@ function openSourceData(source: Source) {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :scope-source-group-id="sourceGroupId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
+      <SourceOverviewView v-if="view === 'source'" ref="sourceOverviewRef" :current-site-id="siteId" :scope-source-group-id="sourceGroupId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" :search-navigation="route.query.sourceSearchReturn ? { returnTo: route.fullPath, label: '网站源视图', restoreId: String(route.query.sourceSearchReturn) } : undefined" class="sdv-body" @search-restored="finishSourceSearchReturn(router, route)" @open-source="openSource" @open-source-data="openSourceData">
+        <template #source-name-extra="{ source }">
+          <SourceBizDirectoryLink :source-id="source.sourceId" @navigate="openBizDirectory" />
+        </template>
+      </SourceOverviewView>
       <SiteTablesOverview v-else-if="view === 'data' && showTablesOverview" :site-id="siteId" class="sdv-body" @pick="openTableFromOverview" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" :locked-table-id="lockedTableId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />

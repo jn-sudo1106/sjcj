@@ -80,6 +80,56 @@ async function mountAt(query?: Record<string, string>, props?: { scope?: 'all' |
 }
 
 describe('SourceTab 加载与初始筛选', () => {
+  it('网站目录深链定位指定目录，清除旧筛选，保留返回入口；复用页面再次跳转仍生效', async () => {
+    sourceDirs.resetSourceDirCache()
+    const nodes = [
+      { id: 'd1', name: '行业数据', parentId: '' },
+      { id: 'd2', name: '化工', parentId: 'd1' },
+      { id: 'd3', name: '能源', parentId: 'd1' },
+    ]
+    vi.spyOn(sourceDirs, 'loadDirChildren').mockImplementation(async (_kind, parent = '') => nodes.filter(node => node.parentId === parent))
+    vi.spyOn(sourceDirs, 'loadDirPath').mockImplementation(async id => ['行业数据', id === 'd2' ? '化工' : '能源'])
+    vi.spyOn(sourceDirs, 'dirNode').mockImplementation(id => nodes.find(node => node.id === id))
+    vi.spyOn(sourceDirs, 'dirPath').mockImplementation(id => id === 'd1' ? ['行业数据'] : ['行业数据', id === 'd2' ? '化工' : '能源'])
+    vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const back = '/canvas?siteId=294&view=source&sourceGroupId=3'
+    const { wrapper, router } = await mountAt({ tab: 'source', bizDirId: 'd2', directoryReturn: back })
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    expect(useUiStore().assetView).toBe('table')
+    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd2', includeDescendants: false }] })
+    expect(wrapper.get('[data-dir="d2"][data-testid="dir-node"]').classes()).toContain('on')
+    expect(router.currentRoute.value.query.bizDirId).toBeUndefined()
+    for (const [query] of vi.mocked(sourceApi.sourcePaged).mock.calls) expect(query?.directory).toMatchObject({ mode: 'selected' })
+    await list.get('[data-testid="source-overview-state"]').setValue('E')
+    list.vm.$emit('update:sourceGroupId', '3')
+    await wrapper.get('[data-testid="directory-return"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(back)
+    await router.push({ path: '/collect', query: { tab: 'source', bizDirId: 'd3', directoryReturn: back } })
+    await flushPromises()
+    await flushPromises()
+    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd3', includeDescendants: false }] })
+    const query = vi.mocked(sourceApi.sourcePaged).mock.lastCall?.[0]
+    expect(query?.state).toBeUndefined()
+    expect(query?.sourceGroupId).toBeUndefined()
+    expect(query?.siteIds).toBeUndefined()
+    wrapper.unmount()
+    useUiStore().setAssetView('card')
+  })
+
+  it('目录定位失败保留指定目录范围，不回退成全站查询', async () => {
+    vi.spyOn(sourceDirs, 'loadDirChildren').mockResolvedValue([])
+    vi.spyOn(sourceDirs, 'loadDirPath').mockRejectedValue(new Error('目录已删除'))
+    vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const { wrapper, router } = await mountAt({ tab: 'source', bizDirId: 'missing' })
+    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'missing', includeDescendants: false }] })
+    expect(ElMessage.error).toHaveBeenCalledWith('目录定位失败：目录已删除')
+    expect(router.currentRoute.value.query.bizDirId).toBe('missing')
+    for (const [query] of vi.mocked(sourceApi.sourcePaged).mock.calls) expect(query?.directory).toMatchObject({ mode: 'selected' })
+    wrapper.unmount()
+    useUiStore().setAssetView('card')
+  })
+
   beforeEach(() => {
     vi.mocked(ElMessage.warning).mockClear()
     vi.mocked(ElMessage.success).mockClear()
