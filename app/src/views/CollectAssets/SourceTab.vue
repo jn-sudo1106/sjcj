@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
-import { blankSourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import { blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import { computed, nextTick, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -25,7 +25,7 @@ import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
 import ChangeSiteDialog from './ChangeSiteDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
-import { BIZ_DIR_ROOT_ID, bizMembership, expandDirIds, loadDirChildren, dirPath } from '@/api/sourceDirs'
+import { BIZ_DIR_ROOT_ID, bizMembership, expandDirIds, loadDirChildren, loadDirPath, dirPath } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -468,8 +468,10 @@ const listDirectory = computed<SourceDirectoryScope | undefined>(() => {
   const scope = dirScope.value
   return scope.directory ?? { kind: scope.kind, mode: scope.all ? 'all' : scope.dirIds.length ? 'selected' : 'none', selections: scope.all ? [] : scope.dirIds.map(id => ({ id, includeDescendants: scope.labels.find(label => label.id === id)?.hasKids ?? false })) }
 })
+const directoryJumpViewState = ref<SourceListViewState>()
 const routeSourceViewState = computed(() => {
-  if (props.scope !== 'all' || stateFilter.value !== 'error') return undefined
+  if (props.scope !== 'all') return undefined
+  if (stateFilter.value !== 'error') return directoryJumpViewState.value
   return { ...blankSourceListViewState(), status: 'E' as const }
 })
 // Legacy bulk operations resolve IDs only when explicitly invoked, never before displaying cards.
@@ -555,6 +557,40 @@ watch(() => ui.sourceListRevision, () => {
 
 // 按目录：发送 = 复用源列表的「发任务」（不勾选 = 按当前筛选范围，已含目录范围）；定时 = 按范围统一定时弹窗
 const overviewRef = ref<InstanceType<typeof SourceOverviewView>>()
+const directoryReturn = computed(() => {
+  const value = route.query.directoryReturn
+  return typeof value === 'string' && value.startsWith('/canvas?') ? value : ''
+})
+let directoryJumpSeq = 0
+watch([() => route.path, () => route.query.bizDirId, dirPanelRef], async ([path, rawId, panel]) => {
+  const seq = ++directoryJumpSeq
+  if (path !== '/collect' || props.scope !== 'all' || route.query.tab !== 'source' || typeof rawId !== 'string' || !rawId.trim()) return
+  const id = rawId.trim()
+  ui.setAssetView('table')
+  dirCollapsed.value = false
+  directoryTab.value = 'biz'
+  keyword.value = ''
+  categoryFilter.value = []
+  tagFilter.value = ''
+  stateFilter.value = 'all'
+  sourceGroupFilter.value = ''
+  directoryJumpViewState.value = blankSourceListViewState()
+  // 先固定目录范围，避免异步展开树期间短暂查出全站源。
+  dirScope.value = { kind: 'biz', dirIds: [id], labels: [{ id, path: `#${id}`, hasKids: false }], directory: { kind: 'biz', mode: 'selected', selections: [{ id, includeDescendants: false }] } }
+  if (!panel) return
+  panel.restore(dirScope.value, 'biz')
+  try {
+    await loadDirPath(id)
+    if (seq !== directoryJumpSeq) return
+    await panel.revealDir(id)
+    if (seq !== directoryJumpSeq) return
+    const query = { ...route.query }
+    delete query.bizDirId
+    void router.replace({ path: route.path, query })
+  } catch (error) {
+    if (seq === directoryJumpSeq) ElMessage.error(`目录定位失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}, { immediate: true, flush: 'post' })
 const scheduleRef = ref<InstanceType<typeof CategoryScheduleModal>>()
 async function onDirCommand(command: 'send' | 'schedule') {
   if (command === 'send') {
@@ -939,6 +975,7 @@ onUnmounted(() => {
         <button class="ca-save-view sm danger" type="button" data-testid="source-batch-delete" title="永久删除选中的源，不可恢复" @click="onBatchDeleteSources(ids)">删除</button>
       </template>
       <template v-if="scope === 'all'" #summary-extra>
+        <button v-if="directoryReturn" class="ca-save-view sm" type="button" data-testid="directory-return" @click="router.push(directoryReturn)">返回网站源视图</button>
         <span v-if="dirActive" class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
           · {{ dirKindLabel }}：<b>{{ dirLabelText }}</b><template v-if="dirWithSub">（含子级）</template>
           <button class="ca-dir-clear" type="button" data-testid="dir-scope-clear" title="清除目录范围" aria-label="清除目录范围" @click="dirPanelRef?.clear()">×</button>

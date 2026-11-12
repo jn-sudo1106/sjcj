@@ -10,6 +10,7 @@ import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { useSourceSearchStore } from '@/stores/sourceSearch'
 
 // 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
 // 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
@@ -26,6 +27,27 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('目录跳转快照保留筛选和页码，返回网站源视图时恢复', async () => {
+    const query = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 40, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current', scopeSourceGroupId: '3' }, global: { components: { ElPagination } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-overview-state"]').setValue('E')
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:current-page', 2)
+    await flushPromises()
+    const id = wrapper.vm.captureListReturn('/canvas?siteId=site-current&view=source&sourceGroupId=3', '网站源视图')
+    expect(useSourceSearchStore().get(id)?.page).toBe(2)
+    wrapper.unmount()
+    const restored = shallowMount(SourceOverviewView, { props: {
+      currentSiteId: 'site-current', scopeSourceGroupId: '3',
+      searchNavigation: { returnTo: '/canvas?siteId=site-current&view=source&sourceGroupId=3', label: '网站源视图', restoreId: id },
+    } })
+    await flushPromises()
+    expect(restored.get('[data-testid="source-overview-state"]').element).toHaveProperty('value', 'E')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, state: 'E', siteIds: 'site-current', sourceGroupId: '3' }))
+    expect(restored.emitted('searchRestored')).toHaveLength(1)
+    restored.unmount()
+  })
+
   it('勾选后直接从操作栏批量绑定流程，成功项取消勾选、失败项保留并刷新当前列表', async () => {
     useAuthStore().roles = ['admin']
     const second = { ...source, sourceId: 'src-2', name: '第二个源' }

@@ -1675,7 +1675,14 @@ function refresh() {
   return loadSources()
 }
 // 源管理「系统目录」页签的「按目录发送」复用这里的发任务流程（不勾选 = 按当前筛选范围，含目录范围）
-defineExpose({ openLaunch, clearSelection, refresh })
+function captureListReturn(returnTo: string, label: string): string {
+  return useSourceSearchStore().create({
+    returnTo, label, query: currentQuery(), viewState: currentViewState.value,
+    empty: noScopeMatch.value, page: page.value, total: total.value,
+    scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0,
+  })
+}
+defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
 </script>
 
 <template>
@@ -1969,7 +1976,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
                  名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="openSourceResult(source)">{{ source.sourceId }}</button></td>
-            <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="openSourceResult(source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
+            <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="openSourceResult(source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div><slot name="source-name-extra" :source="source" /></td>
             <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
             <td v-if="showOriginalDirectory" class="sov-original-dir" :title="originalDirectoryOf(source)" data-testid="source-overview-original-directory">
               {{ originalDirectoryOf(source) }}

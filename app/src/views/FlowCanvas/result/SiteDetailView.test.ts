@@ -3,14 +3,41 @@ import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { defineComponent } from 'vue'
 import SiteDetailView from './SiteDetailView.vue'
 import { useFlowStore } from '@/stores/flow'
 import { siteApi, type Source } from '@/api'
 import { useWorkspaceStore } from '@/stores/workspace'
 
-const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }, { path: '/collect', component: { template: '<div />' } }] })
 
 describe('SiteDetailView', () => {
+  it('目录入口位于源名称插槽，跳转使用独立目录范围并携带网站列表返回快照', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas?siteId=294&view=source&sourceGroupId=3')
+    const capture = vi.fn().mockReturnValue('saved-list')
+    const listStub = defineComponent({
+      name: 'SourceOverviewView',
+      setup(_, { expose }) { expose({ captureListReturn: capture }) },
+      template: '<div><slot name="source-name-extra" :source="{ sourceId: \'s1\' }" /></div>',
+    })
+    const wrapper = shallowMount(SiteDetailView, { props: { siteId: '294' }, global: { plugins: [router], stubs: { SourceOverviewView: listStub } } })
+    await flushPromises()
+    const link = wrapper.findComponent({ name: 'SourceBizDirectoryLink' })
+    expect(link.props('sourceId')).toBe('s1')
+    link.vm.$emit('navigate', 'd2')
+    await flushPromises()
+    expect(capture).toHaveBeenCalledWith('/canvas?siteId=294&view=source&sourceGroupId=3', '网站源视图')
+    expect(router.currentRoute.value.path).toBe('/collect')
+    expect(router.currentRoute.value.query).toMatchObject({ tab: 'source', bizDirId: 'd2' })
+    expect(router.currentRoute.value.query.siteId).toBeUndefined()
+    expect(router.currentRoute.value.query.sourceGroupId).toBeUndefined()
+    const back = new URL(String(router.currentRoute.value.query.directoryReturn), 'http://localhost')
+    expect(back.searchParams.get('siteId')).toBe('294')
+    expect(back.searchParams.get('sourceSearchReturn')).toBe('saved-list')
+    wrapper.unmount()
+  })
+
   it('网站来源组范围传给分页列表，清除后恢复全部；打开源保留该筛选', async () => {
     setActivePinia(createPinia())
     await router.push({ path: '/canvas', query: { siteId: 'site-a', view: 'source', sourceGroupId: '3' } })
