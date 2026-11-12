@@ -92,6 +92,12 @@ export interface SourceCheckLog {
   logType: string
   tableName: string
   sourceId: string
+  /** 旧平台没有；脚本执行器把结构化结论写在这里（JSON 串） */
+  remarks?: string
+  logCode?: string
+  logDt?: string
+  jobId?: number | string
+  groupId?: number
 }
 
 /** 监控列表查询入参 */

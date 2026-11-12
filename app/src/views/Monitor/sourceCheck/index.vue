@@ -7,11 +7,13 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import type { MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
+import type { MonitorKind, MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
 import {
   MonitorQueryLimitError,
   listMonitors,
   listMonitorsOfSource,
+  listSourceSummary,
+  listSourceNames,
   listSourceOptions,
   runMonitorsNow,
   setMonitorsEnabled,
@@ -20,15 +22,18 @@ import {
 import { deleteSourceCheck } from '@/api/monitor'
 import { summarizeSources } from '@/utils/monitor/sourceSummary'
 import { confirmDanger } from '@/utils/confirmDanger'
-import SourceSelect from './SourceSelect.vue'
 import MonitorBatchDialog from './MonitorBatchDialog.vue'
 import MonitorWatchDrawer from './MonitorWatchDrawer.vue'
 import MonitorConfigEditor from '@/views/FlowCanvas/result/MonitorConfigEditor.vue'
 import RunsDrawer from '@/views/FlowCanvas/result/monitor-runs/RunsDrawer.vue'
 import {
+  CHECK_DATE_OPTIONS,
   ENABLE_OPTIONS,
   STATUS_OPTIONS,
   checkCoverageOf,
+  sourceHintOf,
+  sourceSubtitleOf,
+  sourceTitleOf,
   coverageOf,
   dataHintOf,
   dataPillOf,
@@ -65,8 +70,15 @@ const PAGE_SIZES = [10, 30, 100, 200]
 const loading = ref(false)
 const records = ref<MonitorRecordView[]>([])
 const directory = ref<MonitorSourceOption[]>([])
+/** 按需取到的源名称（目录超限时仍能显示名字，而不是只剩 ID） */
+const nameIndex = ref<MonitorSourceOption[]>([])
 /** 源目录可用时才能列出「未配置检查的源」；不可用时降级为「仅已配置源 + 提示」 */
 const directoryReady = ref(false)
+/** 全局视图不再尝试拉全量源目录（24 万源必然超限，20 次串行请求只会让首屏变慢） */
+const directorySkipped = ref(false)
+/** 服务端源聚合（C07 首期）结果；null 表示不可用，页面回落到「只列已配置源」 */
+const summaryRows = ref<MonitorSourceRow[] | null>(null)
+const summaryTotal = ref(0)
 const loadError = ref('')
 const directoryError = ref('')
 let refreshToken = 0
@@ -76,6 +88,7 @@ const draft = reactive<SourceListQuery>({
   enable: 'all',
   status: 'all',
   keyword: '',
+  checkDate: 'all',
 })
 /** 已生效的筛选：刷新时用它，避免把输入到一半的草稿当成查询条件 */
 const applied = reactive<SourceListQuery>({ ...draft })
@@ -142,7 +155,28 @@ const scopedRecords = computed(() => {
   return records.value
 })
 
+/** 名称来源：目录优先，其次是按 ID 批量取回的那批 */
+const sourceCatalog = computed<MonitorSourceOption[]>(() => {
+  const map = new Map<string, MonitorSourceOption>()
+  for (const item of nameIndex.value) map.set(item.sourceId, item)
+  for (const item of directory.value) map.set(item.sourceId, item)
+  return [...map.values()]
+})
+
+/** 传给聚合函数的源描述（id/name/siteId/siteName 四个字段） */
+const sourceLikes = computed(() =>
+  sourceCatalog.value.map((item) => ({
+    id: item.sourceId,
+    name: item.name,
+    siteId: item.siteId,
+    siteName: item.siteName,
+    tableName: item.tableName,
+  })),
+)
+
 const allRows = computed<MonitorSourceRow[]>(() => {
+  // 服务端聚合可用时直接用它：一行一个源、含未配置检查的源，且分组权限由后端保证。
+  if (scopeKind.value !== 'source' && summaryRows.value) return summaryRows.value
   if (scopeKind.value === 'source') {
     const monitors = scopedRecords.value
     return summarizeSources(monitors, [
@@ -150,16 +184,11 @@ const allRows = computed<MonitorSourceRow[]>(() => {
     ])
   }
   if (scopeKind.value === 'global' && !directoryReady.value) {
-    // 降级：源目录拿不到（超限/失败）时只列已配置源，页面顶部另有提示，不把分页结果拼成「全量」
-    return summarizeSources(records.value)
+    // 降级：源目录拿不到（超限/失败）时只列已配置源，页面顶部另有提示，不把分页结果拼成「全量」。
+    // 名称仍走「按 ID 取回」的那批，别退化成只剩 ID。
+    return summarizeSources(records.value, sourceLikes.value)
   }
-  const sources = directory.value.map((item) => ({
-    id: item.sourceId,
-    name: item.name,
-    siteId: item.siteId,
-    siteName: item.siteName,
-  }))
-  return summarizeSources(scopedRecords.value, sources)
+  return summarizeSources(scopedRecords.value, sourceLikes.value)
 })
 
 const filteredRows = computed(() => filterSourceRows(allRows.value, applied))
@@ -213,7 +242,15 @@ async function loadRecords(request: number): Promise<void> {
 async function loadDirectory(request: number): Promise<void> {
   directoryError.value = ''
   directoryReady.value = false
+  directorySkipped.value = false
   if (scopeKind.value === 'source') return
+  if (scopeKind.value === 'global') {
+    // 真机源 24 万条，`source/sourcePaged` 一页 200 拉满 20 页也取不完。
+    // 与其串行打完 20 个请求再报错（首屏等十几秒），不如直接按「仅已配置源」出数据，
+    // 名称走 `listSourceNames` 按 ID 批量取（2 个请求）。
+    directorySkipped.value = true
+    return
+  }
   try {
     const loaded = await listSourceOptions(props.siteId ? { siteId: props.siteId } : {})
     if (request !== refreshToken) return
@@ -226,11 +263,49 @@ async function loadDirectory(request: number): Promise<void> {
   }
 }
 
+/**
+ * 记录拿到后按 sourceId 批量补名称。
+ * 源目录 24 万+ 拉不全（全局会提示「源数量超过 4000」），但列表只需要这些源的名字。
+ */
+async function loadSourceNames(request: number): Promise<void> {
+  const ids = [...new Set(records.value.map((row) => row.sourceId))]
+  if (!ids.length) {
+    nameIndex.value = []
+    return
+  }
+  try {
+    const loaded = await listSourceNames(ids)
+    if (request !== refreshToken) return
+    nameIndex.value = loaded
+  } catch {
+    if (request !== refreshToken) return
+    nameIndex.value = []
+  }
+}
+
+/**
+ * 服务端源聚合（C07 首期）：真正把「未配置检查的源」列出来，并由后端按分组过滤。
+ * 失败/未部署时保持 null，页面继续用老的「已配置源 + 按 ID 取名」路径，不假装聚合成功。
+ */
+async function loadSummary(request: number): Promise<void> {
+  summaryRows.value = null
+  summaryTotal.value = 0
+  if (scopeKind.value === 'source') return
+  const result = await listSourceSummary(props.siteId ? { siteId: props.siteId } : {})
+  if (request !== refreshToken) return
+  if (result.unavailable) return
+  summaryRows.value = result.rows
+  summaryTotal.value = result.total
+  summaryRows.value = result.rows
+  summaryTotal.value = result.total
+}
+
 async function refreshData(): Promise<void> {
   const request = ++refreshToken
   loading.value = true
   try {
-    await Promise.all([loadRecords(request), loadDirectory(request)])
+    await Promise.all([loadRecords(request), loadDirectory(request), loadSummary(request)])
+    await loadSourceNames(request)
   } finally {
     if (request === refreshToken) {
       loading.value = false
@@ -249,6 +324,7 @@ function applyFilters(): void {
   applied.sourceId = scopeKind.value === 'source' ? props.sourceId : draft.sourceId
   applied.enable = draft.enable
   applied.status = draft.status
+  applied.checkDate = draft.checkDate ?? 'all'
   applied.keyword = draft.keyword.trim()
   page.value = 1
   collapseExpanded()
@@ -259,6 +335,7 @@ function resetFilters(): void {
   draft.sourceId = scopeKind.value === 'source' ? props.sourceId : ''
   draft.enable = 'all'
   draft.status = 'all'
+  draft.checkDate = 'all'
   draft.keyword = ''
   applyFilters()
 }
@@ -376,10 +453,22 @@ async function toggleMonitor(monitor: MonitorRecordView, next: boolean): Promise
   }
 }
 
+/** 检查方式决定立即运行走哪条链路：脚本检查走执行器，规则检查走旧调度器。 */
+const kindIndex = computed<Record<string, MonitorKind>>(() =>
+  Object.fromEntries(records.value.map((row) => [row.id, row.kind])),
+)
+
 async function runMonitor(monitor: MonitorRecordView): Promise<void> {
   try {
-    await runMonitorsNow([monitor.id])
-    ElMessage.success('已提交执行（受理不代表执行成功）')
+    const result = await runMonitorsNow([monitor.id], kindIndex.value)
+    if (result.runnerSkipped) {
+      // 没抢到占位锁：既没跑脚本也没写库，不能用「已提交」误导。
+      ElMessage.warning('这条检查正在另一个执行实例运行，本次已跳过（没有产生新的运行记录）')
+    } else if (result.runnerRunIds?.length) {
+      ElMessage.success(`已提交执行 · ${result.runnerRunIds[0]}（受理不代表执行成功，结果见运行记录）`)
+    } else {
+      ElMessage.success('已提交执行（受理不代表执行成功）')
+    }
   } catch (err) {
     ElMessage.error(readableError(err, '提交执行失败'))
   } finally {
@@ -393,8 +482,16 @@ async function batchRun(): Promise<void> {
   if (!selectedIds.value.length) return
   const ids = [...selectedIds.value]
   try {
-    await runMonitorsNow(ids)
-    ElMessage.success(`已提交 ${ids.length} 项执行`)
+    const result = await runMonitorsNow(ids, kindIndex.value)
+    const parts: string[] = []
+    if (result.viaRunner) parts.push(`${result.viaRunner} 项脚本检查走执行器`)
+    if (result.viaLegacy) parts.push(`${result.viaLegacy} 项规则检查走调度器`)
+    const head = parts.length ? `已提交 ${ids.length} 项：${parts.join('、')}` : `已提交 ${ids.length} 项执行`
+    if (result.runnerSkipped) {
+      ElMessage.warning(`${head}；另有 ${result.runnerSkipped} 项因另一实例正在运行而跳过`)
+    } else {
+      ElMessage.success(head)
+    }
   } catch (err) {
     ElMessage.error(readableError(err, '提交执行失败'))
   } finally {
@@ -456,6 +553,19 @@ onMounted(() => {
       <span>监控记录加载失败：{{ loadError }}</span>
       <button type="button" class="sc-link" @click="refresh()">重试</button>
     </div>
+    <div v-if="summaryRows" data-testid="sc-summary-hint" class="sc-hint sc-hint-muted">
+      <span>
+        服务端按源聚合：本组共 {{ summaryTotal }} 个源（含未配置检查的源），当前加载
+        {{ summaryRows.length }} 个（已配置的排在最前）。计划覆盖仍需服务端按时隙聚合，暂显示「—」；
+        找某个源请用上面的关键词。
+      </span>
+    </div>
+    <div v-else-if="directorySkipped && scopeKind === 'global'" class="sc-hint sc-hint-muted">
+      <span>
+        按已配置监控的源展示。未配置检查的源、以及全站汇总，需服务端聚合（C07）后再出行；
+        找不到源时用上面的关键词按名称 / ID / 主表筛选。
+      </span>
+    </div>
     <div v-else-if="directoryError" class="sc-hint">
       <span v-if="scopeKind === 'site'">
         网站源目录加载失败：{{ directoryError }}。为避免串出其他网站的数据，当前不展示列表。
@@ -467,24 +577,11 @@ onMounted(() => {
     </div>
 
     <div class="sc-filter-row">
-      <template v-if="scopeKind === 'global'">
-        <SourceSelect v-model="draft.sourceId" class="sc-filter-source" />
-      </template>
-      <el-select
-        v-else-if="scopeKind === 'site'"
-        v-model="draft.sourceId"
-        class="sc-filter-source"
-        filterable
-        clearable
-        placeholder="源（限当前网站）"
-      >
-        <el-option
-          v-for="item in directory"
-          :key="item.sourceId"
-          :value="item.sourceId"
-          :label="`[${item.sourceId}]${item.name}`"
-        />
-      </el-select>
+      <!--
+        只有一个源筛选框：源目录在 24 万源的环境里拉不全，「源 ID 下拉」实际选不到东西，
+        而它和下面的关键词框又都在做「找某个源」，两个框并排只会让人猜哪个生效。
+        这里统一成关键词（名称 / ID / 主表，客户端过滤已加载行），源ID 精确匹配也在其中。
+      -->
 
       <label class="sc-filter-field"><span>启停状态</span><el-select v-model="draft.enable" class="sc-filter-select" aria-label="启停状态" placeholder="启停状态">
         <el-option v-for="item in ENABLE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
@@ -492,12 +589,15 @@ onMounted(() => {
       <label class="sc-filter-field"><span>数据情况</span><el-select v-model="draft.status" class="sc-filter-select" aria-label="数据情况" placeholder="数据情况">
         <el-option v-for="item in STATUS_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
       </el-select></label>
+      <label class="sc-filter-field"><span>最近检查</span><el-select v-model="draft.checkDate" class="sc-filter-select" aria-label="最近检查日期" placeholder="最近检查">
+        <el-option v-for="item in CHECK_DATE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+      </el-select></label>
       <el-input
         v-model="draft.keyword"
         class="sc-filter-keyword"
-        aria-label="筛选已加载源的名称或 ID"
+        aria-label="按源名称、源 ID 或主表筛选已加载的源"
         clearable
-        placeholder="筛选已加载源名称 / ID"
+        placeholder="源名称 / ID / 主表"
         @keyup.enter="applyFilters"
       />
       <el-button type="primary" @click="applyFilters">查询</el-button>
@@ -633,11 +733,11 @@ onMounted(() => {
 
       <el-table-column label="源与网站" min-width="158">
         <template #default="{ row }">
-          <span class="sc-name" :title="row.sourceName || row.sourceId" @click="toggleExpand(row)">
-            {{ row.sourceName || row.sourceId }}
+          <span class="sc-name" :title="sourceHintOf(row)" @click="toggleExpand(row)">
+            {{ sourceTitleOf(row) }}
           </span>
-          <div class="subline" :title="`${row.sourceId} · ${row.siteName || '网站未回显'}`">
-            {{ row.sourceId }} · {{ row.siteName || '—' }}
+          <div class="subline" :title="sourceHintOf(row)">
+            {{ sourceSubtitleOf(row) }}
           </div>
         </template>
       </el-table-column>
@@ -794,6 +894,12 @@ onMounted(() => {
 .sc-hint-error {
   border-left-color: var(--rc-error, #dc2626);
   background: var(--rc-error-bg, #fef2f2);
+}
+/* 说明性提示（不是错误）：全局视图按已配置源展示 */
+.sc-hint-muted {
+  border-left-color: var(--rc-border, #e2e8f0);
+  background: var(--rc-bg, #f8fafc);
+  color: var(--rc-muted, #64748b);
 }
 .sc-filter-row {
   padding: 2px 12px 0;

@@ -150,6 +150,50 @@ export function mockSourceCheckPaged(params?: Record<string, unknown>): Paged<So
   return { total: list.length, list }
 }
 
+/**
+ * 源维度聚合（C07 首期）：演示口径，一行一个源，含未配置检查的源。
+ * 真实字段口径见 `source/check/sourceSummary`；这里只保证结构一致，方便 mock 模式看页面。
+ */
+export function mockSourceCheckSummary(params?: Record<string, unknown>): Record<string, unknown> {
+  const keyword = String(params?.keyword ?? '')
+  const rows = [
+    {
+      sourceId: 301236115,
+      sourceName: '上市公司新闻',
+      siteId: 25,
+      siteName: '财经资讯站',
+      tableName: 'sense_data.news_main',
+      monitorTotal: 2,
+      monitorEnabled: 2,
+      lastCheckAt: '2026-11-12 09:00:00',
+      dataState: 'abnormal',
+    },
+    {
+      sourceId: 301276575,
+      sourceName: '支付宝-基金评论',
+      siteId: 25,
+      siteName: '财经资讯站',
+      tableName: 'sense_data.TB_ZFB_COMMENT',
+      monitorTotal: 1,
+      monitorEnabled: 1,
+      lastCheckAt: '2026-11-12 08:00:00',
+      dataState: 'normal',
+    },
+    {
+      sourceId: 390000019,
+      sourceName: '港口吞吐量',
+      siteId: 25,
+      siteName: '财经资讯站',
+      tableName: 'sense_data.TB_PORT',
+      monitorTotal: 0,
+      monitorEnabled: 0,
+      lastCheckAt: null,
+      dataState: 'none',
+    },
+  ].filter((row) => !keyword || row.sourceName.includes(keyword) || String(row.sourceId).includes(keyword))
+  return { total: rows.length, list: rows }
+}
+
 /** 变更启停（真实改内存表）。enable: 0=启用 → isDelete=0；1=停用 → isDelete=1 */
 export function mockSourceCheckChangeEnable(params?: Record<string, unknown>) {
   const ids = String(params?.ids ?? '').split(',').filter(Boolean)

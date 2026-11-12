@@ -199,7 +199,7 @@ OVERDUE_SQL = """SELECT c.ID id, c.SOURCE_ID sourceId, c.NAME name, c.SCHEDULE c
    AND c.NEXT_RUN < DATE_SUB(NOW(), INTERVAL %s MINUTE)
    AND NOT EXISTS (SELECT 1 FROM ck_job_log l
                     WHERE l.JOB_ID = c.ID AND l.SOURCE_ID = c.SOURCE_ID
-                      AND l.CREATE_DT >= DATE_SUB(c.NEXT_RUN, INTERVAL 5 MINUTE))
+                      AND l.CREATE_DT >= c.NEXT_RUN)
  ORDER BY c.NEXT_RUN LIMIT 500"""
 
 
@@ -235,30 +235,35 @@ def scan(app, config=None, fetch=None, now=None):
         snapshot['monitors'] = {'available': False, 'error': f'漏跑核对失败：{exc}', 'items': [], 'count': 0}
     snapshot['summary'] = {
         'queueProblems': snapshot['queue']['summary']['problems'],
-        'queueUnobservable': 0 if snapshot['queue']['reachable'] else 1,
+        'queueUnobservable': 0 if snapshot['queue']['reachable'] and not snapshot['queue']['error'] else 1,
         'overdueMonitors': snapshot['monitors']['count'],
-        'healthy': bool(snapshot['queue']['reachable'] and snapshot['queue']['summary']['problems'] == 0
+        'healthy': bool(snapshot['queue']['reachable'] and not snapshot['queue']['error'] and snapshot['queue']['summary']['problems'] == 0
                         and snapshot['monitors']['available'] and snapshot['monitors']['count'] == 0),
     }
     write(app, SETTING, snapshot)
     previous = read(app, STATE) or {}
     signature = signature_of(snapshot)
-    if signature != previous.get('signature'):
-        # 问题签名变化才通知；恢复为正常时只更新签名，不发「已恢复」邮件。
-        if signature != 'ok' and config['notify'].get('enabled'):
-            try:
-                send_digest(config, snapshot)
-                previous['lastSentAt'] = stamp()
-            except Exception as exc:
-                previous['lastError'] = f'巡检通知投递失败：{exc}'
-        previous['signature'] = signature
-        write(app, STATE, previous)
+    notified = previous.get('lastNotifiedSignature')
+    # Preserve receipts made before this field existed. A failed send must not
+    # advance the delivered cursor and suppress retries of an unchanged issue.
+    if notified is None and previous.get('lastSentAt') and not previous.get('lastError'):
+        notified = previous.get('signature')
+    if signature == 'ok':
+        previous.update(lastNotifiedSignature='ok', lastError='')
+    elif signature != notified and config['notify'].get('enabled'):
+        try:
+            send_digest(config, snapshot)
+            previous.update(lastSentAt=stamp(), lastNotifiedSignature=signature, lastError='')
+        except Exception as exc:
+            previous['lastError'] = f'巡检通知投递失败：{exc}'
+    previous['signature'] = signature
+    write(app, STATE, previous)
     return snapshot
 
 
 def signature_of(snapshot):
     parts = [f"{item['name']}:{item['status']}" for item in snapshot['queue']['items'] if item['status'] != 'ok']
-    if not snapshot['queue']['reachable']:
+    if not snapshot['queue']['reachable'] or snapshot['queue']['error']:
         parts.append('queue:unobservable')
     if not snapshot['monitors']['available']:
         parts.append('monitors:unobservable')
@@ -273,7 +278,7 @@ def send_digest(config, snapshot):
         raise WatchUnavailable('未配置独立邮件通道或收件人')
     lines = []
     queue = snapshot['queue']
-    if not queue['reachable']:
+    if not queue['reachable'] or queue['error']:
         lines.append(f"队列指标不可取得：{queue['error']}（不能视为正常）")
     for item in queue['items']:
         if item['status'] != 'ok':

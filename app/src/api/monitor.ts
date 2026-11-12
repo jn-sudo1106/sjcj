@@ -13,6 +13,8 @@ const EP = {
   checkOne: 'source/check/check-one',
   pagedLogs: 'source/check/paged-logs',
   lastRun: 'source/lastRun',
+  /** C07 首期：源维度聚合（服务端按源分页，含未配置检查的源） */
+  sourceSummary: 'source/check/sourceSummary',
 } as const
 
 // ---- 入参适配：旧平台用 pageNo/pageSize，新平台 mock + client.ts 契约统一 page/limit ----
@@ -32,6 +34,14 @@ function adaptPage(q: Record<string, unknown>): Record<string, unknown> {
 /** 分页查询源检查列表 */
 export function pagedSourceCheck(query: SourceCheckQuery): Promise<Paged<SourceCheck>> {
   return request<Paged<SourceCheck>>(EP.paged, adaptPage(query), { method: 'GET' })
+}
+
+/** 源维度聚合（C07 首期）。
+ * 与 `paged` 的区别：行是「源」不是「检查记录」，未配置检查的源也会返回，
+ * 由服务端按登录用户分组过滤（不要在前端拼全量源目录代替）。
+ */
+export function pagedSourceSummary(query: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(EP.sourceSummary, adaptPage(query), { method: 'GET' })
 }
 
 /** 分页查询源检查历史日志 */

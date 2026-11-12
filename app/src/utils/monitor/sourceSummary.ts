@@ -11,6 +11,8 @@ export interface SourceLike {
   name?: string
   siteId?: string
   siteName?: string
+  /** 源的主表（源目录里的 mainTable / tableName）；监控记录没带表名时用它兜底 */
+  tableName?: string
 }
 
 export type MonitorTone = MonitorSourceRow['tone']
@@ -97,9 +99,14 @@ export function summarizeSource(sourceId: string, monitors: MonitorRecordView[],
     tone = 'warn'
   }
 
+  const tableName =
+    monitors.find((m) => typeof m.tableName === 'string' && m.tableName.length > 0)?.tableName ||
+    source?.tableName
+
   return {
     sourceId,
     sourceName: source?.name ?? monitors[0]?.sourceName,
+    tableName,
     siteId: source?.siteId,
     siteName: source?.siteName,
     monitorTotal: total,

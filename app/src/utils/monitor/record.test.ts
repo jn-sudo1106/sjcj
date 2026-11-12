@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { dataStatusOf, execStatusOf, parseCheckConf, serializeCheckConf, toMonitorRecord, toMonitorRun } from './record'
+import {
+  dataStatusOf,
+  execStatusOf,
+  parseCheckConf,
+  parseRunRemarks,
+  serializeCheckConf,
+  toMonitorRecord,
+  toMonitorRun,
+} from './record'
 import type { SourceCheck, SourceCheckLog } from '../../api/types/monitor'
 
 function row(over: Partial<SourceCheck> = {}): SourceCheck {
@@ -122,5 +130,35 @@ describe('toMonitorRun', () => {
     expect(run.exec).toBe('failed')
     expect(run.data).toBe('unknown')
     expect(run.notify).toBe('unknown')
+  })
+
+  it('带结构化 REMARKS 时读检查数/异常数/runId/窗口，不再从中文里抠数字', () => {
+    const remarks = JSON.stringify({
+      runId: 'run-1104-20261112164840',
+      status: 'ABNORMAL',
+      checkedCount: 7,
+      abnormalCount: 2,
+      durationMs: 311,
+      window: { start: '2026-11-12 00:00:00', end: '2026-11-12 16:48:40' },
+      reason: '异常数超过阈值',
+      scriptPath: '/code01/x.py',
+    })
+    const run = toMonitorRun({ ...log, remarks })
+    expect(run.legacy).toBe(false)
+    expect(run.checkedCount).toBe(7)
+    expect(run.abnormalCount).toBe(2)
+    expect(run.runId).toBe('run-1104-20261112164840')
+    expect(run.count).toBe('7')
+    expect(run.window).toEqual({ start: '2026-11-12 00:00:00', end: '2026-11-12 16:48:40' })
+    expect(run.summary).toBe('异常数超过阈值')
+  })
+
+  it('REMARKS 非法或只有部分字段时按未知处理，不补 0', () => {
+    expect(parseRunRemarks('not json')).toEqual({})
+    expect(parseRunRemarks('[]')).toEqual({})
+    expect(parseRunRemarks('{"checkedCount":"abc"}').checkedCount).toBeUndefined()
+    const run = toMonitorRun({ ...log, remarks: '{"runId":"run-1"}' })
+    expect(run.legacy).toBe(true)
+    expect(run.checkedCount).toBeUndefined()
   })
 })

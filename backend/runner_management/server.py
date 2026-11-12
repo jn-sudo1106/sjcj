@@ -1598,6 +1598,193 @@ class Application:
         return {"digest": digest, "signature": signature, "created": inserted.rowcount > 0}
 
 
+# ---- AI 数据监控执行器（monitor-runner）：状态 / 手动扫描 / 后台轮询 ----
+MONITOR_RUNNER_STATE_KEY = "monitor-runner:state"
+MONITOR_RUNNER_DEFAULT_SECONDS = 60
+MONITOR_RUNNER_MIN_SECONDS = 10
+MONITOR_RUNNER_DEFAULT_LIMIT = 5
+MONITOR_RUNNER_MAX_LIMIT = 50
+MONITOR_RUNNER_WORKER_LIMIT = 20
+MONITOR_RUNNER_LOCK = threading.RLock()
+MONITOR_RUNNER_WORKER = None
+
+
+def monitor_runner_enabled() -> bool:
+    """执行器总开关：未配置时默认开启，0/false/no/off 视为关闭。"""
+    value = (os.getenv("RUNNER_MONITOR_RUNNER_ENABLED") or "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
+def monitor_runner_interval() -> int:
+    """后台轮询间隔（秒）：默认 60，最小 10。"""
+    raw = (os.getenv("RUNNER_MONITOR_RUNNER_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else MONITOR_RUNNER_DEFAULT_SECONDS
+    except ValueError:
+        value = MONITOR_RUNNER_DEFAULT_SECONDS
+    return max(MONITOR_RUNNER_MIN_SECONDS, value)
+
+
+def monitor_runner_state(app) -> dict:
+    """读取持久化状态；没有跑过时返回空 dict。"""
+    from . import monitor_batches as batches
+    return batches.read(app, MONITOR_RUNNER_STATE_KEY) or {}
+
+
+def monitor_runner_status(app) -> dict:
+    """执行器状态：enabled/running/interval + 最近一轮结果。
+
+    配置缺失或配置里没有业务库时明确返回 available=false 与原因，
+    不拿 0 计数冒充正常；这里不做连库探测（前端会轮询状态，避免每次探测阻塞），
+    连接失败由 scan 的 503 和后台线程的 lastError 暴露。
+    """
+    from . import monitor_runner
+    state = monitor_runner_state(app)
+    worker = MONITOR_RUNNER_WORKER
+    status = {
+        "enabled": monitor_runner_enabled(),
+        "running": bool(worker is not None and worker.is_alive()),
+        "intervalSeconds": monitor_runner_interval(),
+        "lastRunAt": state.get("lastRunAt"),
+        "lastError": state.get("lastError"),
+        "lastResult": None,
+    }
+    if state.get("lastRunAt"):
+        status["lastResult"] = {
+            "count": int(state.get("count") or 0),
+            "applied": int(state.get("applied") or 0),
+            "at": state["lastRunAt"],
+        }
+    try:
+        cfg = monitor_runner.load_config()
+    except monitor_runner.RunnerUnavailable as exc:
+        status.update(available=False, reason=str(exc))
+        return status
+    except Exception as exc:
+        status.update(available=False, reason=f"执行器配置不可读：{exc}")
+        return status
+    if not (cfg.get("db") or {}).get("database"):
+        status.update(available=False, reason="未配置业务数据库（db.database 为空），无法执行 AI 检查")
+        return status
+    status.update(available=True, reason=None)
+    return status
+
+
+def monitor_runner_connect(cfg):
+    """按执行器配置连接业务库；pymysql 延迟导入，未安装时按不可用处理。"""
+    import pymysql
+    db = cfg.get("db") or {}
+    return pymysql.connect(
+        host=db.get("host"), port=int(db.get("port") or 3306),
+        user=db.get("user") or "", password=db.get("password") or "",
+        database=db.get("database") or None, charset="utf8mb4",
+        autocommit=True, connect_timeout=5,
+    )
+
+
+def monitor_runner_execute(*, apply: bool = False, limit: int = MONITOR_RUNNER_WORKER_LIMIT,
+                           monitor_ids=None, force: bool = False) -> list:
+    """打开业务库执行一轮到点检查；配置/库不可用时抛 RunnerUnavailable。"""
+    from . import monitor_runner
+    cfg = monitor_runner.load_config()
+    if not (cfg.get("db") or {}).get("database"):
+        raise monitor_runner.RunnerUnavailable("未配置业务数据库（db.database 为空），无法执行 AI 检查")
+    try:
+        conn = monitor_runner_connect(cfg)
+    except monitor_runner.RunnerUnavailable:
+        raise
+    except Exception as exc:
+        raise monitor_runner.RunnerUnavailable(f"无法连接监控库：{exc}") from exc
+    try:
+        # 同一时刻只允许一轮执行，避免手动扫描和后台线程重复跑同一批检查。
+        with MONITOR_RUNNER_LOCK:
+            return list(monitor_runner.run_due(conn, cfg, apply=apply, limit=limit,
+                                               monitor_ids=monitor_ids, force=force))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def monitor_runner_scan(payload: dict) -> dict:
+    """手动扫描：默认 apply=false（只执行检查、不写库）。"""
+    payload = payload or {}
+    apply = payload.get("apply", False)
+    if not isinstance(apply, bool):
+        raise ApiError("apply 必须是布尔值")
+    force = payload.get("force", False)
+    if not isinstance(force, bool):
+        raise ApiError("force 必须是布尔值")
+    raw_limit = payload.get("limit")
+    if raw_limit in (None, ""):
+        limit = MONITOR_RUNNER_DEFAULT_LIMIT
+    else:
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            raise ApiError("limit 无效")
+    limit = max(1, min(limit, MONITOR_RUNNER_MAX_LIMIT))
+    raw_ids = payload.get("monitorIds")
+    if raw_ids in (None, ""):
+        monitor_ids = []
+    elif isinstance(raw_ids, list):
+        try:
+            monitor_ids = [int(value) for value in raw_ids]
+        except (TypeError, ValueError):
+            raise ApiError("monitorIds 必须是整数数组")
+    else:
+        raise ApiError("monitorIds 必须是整数数组")
+    items = monitor_runner_execute(apply=apply, limit=limit,
+                                   monitor_ids=monitor_ids, force=force)
+    return {"applied": apply, "count": len(items), "items": items}
+
+
+def monitor_runner_round(app) -> dict:
+    """后台一轮：执行检查并把结果落到 monitor-runner:state。"""
+    from . import monitor_batches as batches
+    at = now()
+    try:
+        items = monitor_runner_execute(apply=True, limit=MONITOR_RUNNER_WORKER_LIMIT)
+    except Exception as exc:
+        state = monitor_runner_state(app)
+        state.update(lastRunAt=at, count=0, applied=0, lastError=f"执行失败：{exc}")
+        batches.write(app, MONITOR_RUNNER_STATE_KEY, state)
+        raise
+    state = monitor_runner_state(app)
+    state.update(
+        lastRunAt=at,
+        count=len(items),
+        applied=sum(1 for item in items if item.get("applied")),
+        lastError=None,
+    )
+    batches.write(app, MONITOR_RUNNER_STATE_KEY, state)
+    return state
+
+
+def monitor_runner_worker(app, stopped) -> None:
+    """后台线程主体：按间隔执行；单轮异常只记 lastError，线程不能死。"""
+    while not stopped.is_set():
+        try:
+            monitor_runner_round(app)
+        except Exception as exc:
+            print(f"AI 数据监控执行失败：{exc}", file=sys.stderr, flush=True)
+        if stopped.wait(monitor_runner_interval()):
+            return
+
+
+def monitor_runner_start(app, stopped):
+    """总开关打开时启动后台线程，返回线程对象；关闭时返回 None。"""
+    global MONITOR_RUNNER_WORKER
+    if not monitor_runner_enabled():
+        return None
+    worker = threading.Thread(target=monitor_runner_worker, args=(app, stopped),
+                              name="monitor-runner", daemon=True)
+    worker.start()
+    MONITOR_RUNNER_WORKER = worker
+    return worker
+
+
 class Handler(BaseHTTPRequestHandler):
     application: Application
 
@@ -1888,6 +2075,16 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/monitor-watch/scan' and method == 'POST':
             from .monitor_watch import run_scan as run_monitor_watch
             return run_monitor_watch(app)
+        if sub == '/monitor-runner/status' and method == 'GET':
+            return monitor_runner_status(app)
+        if sub == '/monitor-runner/scan' and method == 'POST':
+            from . import monitor_runner
+            try:
+                return monitor_runner_scan(body)
+            except monitor_runner.RunnerUnavailable as exc:
+                # 库连不上/配置缺失返回 503，不伪装成成功。
+                self.respond(503, {"error": str(exc)})
+                return RESPONSE_SENT
         runner_files = re.fullmatch(r'/runners/([0-9a-f-]{36})/files', sub)
         if runner_files and method == 'POST':
             from .runner_files import create
@@ -2427,6 +2624,7 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
     monitor_delivery_worker = start_monitor_delivery(application, stopped)
     from .monitor_watch import start as start_monitor_watch
     monitor_watch_worker = start_monitor_watch(application, stopped)
+    monitor_runner_thread = monitor_runner_start(application, stopped)
 
     def sweep() -> None:
         last_cleanup = 0
@@ -2463,6 +2661,8 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
         deployment_worker.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
         monitor_delivery_worker.join(timeout=1)
         monitor_watch_worker.join(timeout=1)
+        if monitor_runner_thread:
+            monitor_runner_thread.join(timeout=1)
 
 
 if __name__ == "__main__":

@@ -16,10 +16,19 @@ import {
   handleRunNow,
   pagedCheckJobLogs,
   pagedSourceCheck,
+  pagedSourceSummary,
   updateSourceCheck,
 } from './monitor'
 import type { SourceCheck, SourceCheckLog } from './types/monitor'
-import type { MonitorCheckConf, MonitorKind, MonitorRecordView, MonitorRunView } from './types/monitorCenter'
+import type {
+  MonitorCheckConf,
+  MonitorDataStatus,
+  MonitorKind,
+  MonitorRecordView,
+  MonitorRunView,
+  MonitorSourceRow,
+} from './types/monitorCenter'
+import { requestRunnerManagement } from './runnerManagement'
 import { parseCheckConf, serializeCheckConf, toMonitorRecord, toMonitorRun } from '../utils/monitor/record'
 
 /** 单页大小：旧接口按 page/limit 分页 */
@@ -45,12 +54,16 @@ interface ListOptions {
   maxPages?: number
 }
 
-/** 按旧 paged 接口翻页拉全量原始行（不自动去重，保存时以最后一次读到的为准）。 */
+/**
+ * 按旧 paged 接口翻页拉全量原始行（不自动去重，保存时以最后一次读到的为准）。
+ *
+ * 首页拿到 total 后，其余页并发取——串行翻页在真机上是「首屏慢」的主要来源之一
+ * （首页 300ms、每多一页多一个往返，用户看到的就是白屏越等越久）。
+ */
 export async function listMonitorRows(options: ListOptions = {}): Promise<SourceCheck[]> {
   const maxPages = options.maxPages ?? MONITOR_MAX_PAGES
-  const rows: SourceCheck[] = []
-  for (let page = 1; page <= maxPages; page += 1) {
-    const res = await pagedSourceCheck({
+  const query = (page: number) =>
+    pagedSourceCheck({
       page,
       // 契约是 page/limit；adaptPage 只认 pageNo/pageSize，传 size 会被当未知字段带上、
       // 而 limit 仍是 undefined，真实后端按默认 10 条返回（fe-list 报的坑）。
@@ -58,12 +71,23 @@ export async function listMonitorRows(options: ListOptions = {}): Promise<Source
       sourceId: options.sourceId,
       name: options.name,
     } as never)
-    const list = Array.isArray(res?.list) ? res.list : []
-    rows.push(...list)
-    const total = Number(res?.total ?? 0)
-    if (!list.length || rows.length >= total) return rows
+
+  const first = await query(1)
+  const firstList = Array.isArray(first?.list) ? first.list : []
+  const total = Number(first?.total ?? 0)
+  if (!firstList.length || firstList.length >= total) return firstList
+
+  // 后端可能按自己的上限给页大小（例如历史接口默认 10 条）：按首页实际条数推算页数，
+  // 否则 total 对了也会漏取后半段。
+  const pageSize = firstList.length || MONITOR_PAGE_SIZE
+  const pages = Math.ceil(total / pageSize)
+  if (pages > maxPages) throw new MonitorQueryLimitError(maxPages)
+  const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, index) => query(index + 2)))
+  const rows = [...firstList]
+  for (const res of rest) {
+    if (Array.isArray(res?.list)) rows.push(...res.list)
   }
-  throw new MonitorQueryLimitError(maxPages)
+  return rows
 }
 
 /** 列表视图：一行一条监控记录（按记录身份，不是按源）。 */
@@ -146,9 +170,90 @@ export async function setMonitorsEnabled(ids: string[], enabled: boolean): Promi
   return changeSourceCheckEnable(ids, enabled)
 }
 
-/** 立即运行：返回的是旧接口回执（无 runId），页面必须区分「已受理」与「执行成功」。 */
-export async function runMonitorsNow(ids: string[]): Promise<unknown> {
-  return handleRunNow(ids)
+export interface MonitorRunnerItem {
+  runId?: string
+  monitorId?: number | string
+  status?: string
+  checkedCount?: number
+  abnormalCount?: number
+  message?: string
+  error?: string | null
+  /** 没抢到占位锁（另一实例正在执行同一条检查）时为 true，此时既没跑脚本也没写库。 */
+  skipped?: boolean
+  reason?: string
+}
+
+export interface MonitorRunnerScanResult {
+  applied?: boolean
+  count?: number
+  items?: MonitorRunnerItem[]
+}
+
+/**
+ * 触发「脚本检查（AI）」的执行器立即运行。
+ *
+ * 和旧 `runNow` 的区别：旧接口只是把 `next_run` 置为 now，等 Java 调度器捡起；
+ * 而脚本检查不由 Java 执行（`lockForDeal` 已经排除 `kind=ai`），必须走执行器才有真实结论。
+ * 返回的 runId 才是「这次运行」的身份，`accepted` 只代表已受理。
+ */
+export async function runScriptMonitorsNow(
+  ids: string[],
+  options: { apply?: boolean; force?: boolean } = {},
+): Promise<MonitorRunnerScanResult> {
+  const monitorIds = ids.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+  return requestRunnerManagement<MonitorRunnerScanResult>('/monitor-runner/scan', 'POST', {
+    apply: options.apply ?? true,
+    force: options.force ?? true,
+    monitorIds,
+  })
+}
+
+export interface RunNowResult {
+  /** 走执行器的（AI 脚本检查） */
+  viaRunner: number
+  /** 走旧 Java 调度器的（SQL 规则检查） */
+  viaLegacy: number
+  /** 执行器里因「另一实例正在执行」被跳过的条数（不是失败，也不是已执行） */
+  runnerSkipped: number
+  /** 执行器本次真正产生的运行编号（用于提示「本次运行是 run-…」） */
+  runnerRunIds: string[]
+  runner?: MonitorRunnerScanResult
+}
+
+/** 执行器返回项里哪些是「跳过」：显式 skipped，或 status=SKIPPED（兼容旧字段）。 */
+export function countRunnerSkipped(result?: MonitorRunnerScanResult): number {
+  return (result?.items ?? []).filter((item) => item.skipped === true || item.status === 'SKIPPED').length
+}
+
+/** 执行器本次产生的 runId（跳过项没有 runId，不能混进来）。 */
+export function runnerRunIdsOf(result?: MonitorRunnerScanResult): string[] {
+  return (result?.items ?? [])
+    .filter((item) => !item.skipped && item.status !== 'SKIPPED' && typeof item.runId === 'string')
+    .map((item) => String(item.runId))
+}
+
+/**
+ * 立即运行。按检查方式分流：
+ *   · `ai`（脚本检查）→ 执行器，按 monitorId 真跑；
+ *   · 其它（规则检查）→ 旧 `runNow`，把 next_run 置 now 交给 Java 调度器。
+ * 两种都只代表「已受理」，执行结果以运行记录为准。
+ */
+export async function runMonitorsNow(ids: string[], kinds: Record<string, MonitorKind> = {}): Promise<RunNowResult> {
+  const scriptIds = ids.filter((id) => kinds[id] === 'ai')
+  const legacyIds = ids.filter((id) => kinds[id] !== 'ai')
+  if (!scriptIds.length) {
+    await handleRunNow(legacyIds.length ? legacyIds : ids)
+    return { viaRunner: 0, viaLegacy: legacyIds.length || ids.length, runnerSkipped: 0, runnerRunIds: [] }
+  }
+  const runner = await runScriptMonitorsNow(scriptIds)
+  if (legacyIds.length) await handleRunNow(legacyIds)
+  return {
+    viaRunner: scriptIds.length,
+    viaLegacy: legacyIds.length,
+    runnerSkipped: countRunnerSkipped(runner),
+    runnerRunIds: runnerRunIdsOf(runner),
+    runner,
+  }
 }
 
 export interface ListRunsOptions {
@@ -231,6 +336,9 @@ export async function listSourceOptions(options: { siteId?: string } = {}): Prom
   const collected = new Map<string, MonitorSourceOption>()
   for (let page = 1; page <= SOURCE_MAX_PAGES; page += 1) {
     const res = await sourceApi.sourcePaged({ page, size: SOURCE_PAGE_SIZE })
+    // 首页就能看出总量超不超上限：超了立刻失败，不要一页一页翻满 20 次再报错
+    // （真机 24 万源，20 次串行请求要等十几秒，页面看起来像卡死）。
+    if (page === 1) assertSourceCountWithinLimit(Number(res?.total ?? 0))
     const list = Array.isArray(res?.list) ? res.list : []
     for (const source of list) {
       if (!source?.sourceId || collected.has(source.sourceId)) continue
@@ -240,7 +348,140 @@ export async function listSourceOptions(options: { siteId?: string } = {}): Prom
       return [...collected.values()]
     }
   }
-  // 源目录和监控记录不是一回事：这里超限说明「源太多、一次列不全」，
-  // 不能复用 MonitorQueryLimitError 的「监控记录超过 N 页」，否则排查会被引到错的地方。
-  throw new Error(`源数量超过 ${SOURCE_MAX_PAGES * SOURCE_PAGE_SIZE} 个，无法一次列全；请按网站查看，或直接用名称/ID 搜索`)
+  // 翻满上限还没取完（total 在翻页过程中变大）：同样按「源太多」处理。
+  throw new Error(sourceTooManyMessage())
+}
+
+function sourceTooManyMessage(): string {
+  return `源数量超过 ${SOURCE_MAX_PAGES * SOURCE_PAGE_SIZE} 个，无法一次列全；请按网站查看，或直接用名称/ID 搜索`
+}
+
+/** 源目录一次拉全的上限：超了直接失败，不做无意义的翻页。 */
+function assertSourceCountWithinLimit(total: number): void {
+  if (Number.isFinite(total) && total > SOURCE_MAX_PAGES * SOURCE_PAGE_SIZE) {
+    throw new Error(sourceTooManyMessage())
+  }
+}
+
+/**
+ * 按源 ID 批量取名称（列表回显用）。
+ *
+ * 生产有 24 万+ 源，`listSourceOptions` 拉全量必然触顶；但列表其实只需要「本页出现过的那些源」
+ * 的名字。后端 `source/sourcePaged` 支持 `ids`（逗号分隔），按 200 个一批取，373 条监控只要 2 次请求。
+ * 取不到的源仍按 `源 <ID>` 兜底，不编造名称。
+ */
+export async function listSourceNames(sourceIds: string[]): Promise<MonitorSourceOption[]> {
+  const ids = [...new Set(sourceIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+  if (!ids.length) return []
+  const { sourceApi } = await import('./index')
+  const collected = new Map<string, MonitorSourceOption>()
+  for (let start = 0; start < ids.length; start += SOURCE_PAGE_SIZE) {
+    const chunk = ids.slice(start, start + SOURCE_PAGE_SIZE)
+    const res = await sourceApi.sourcePaged({ ids: chunk.join(','), page: 1, size: chunk.length })
+    const list = Array.isArray(res?.list) ? res.list : []
+    for (const source of list) {
+      if (!source?.sourceId || collected.has(source.sourceId)) continue
+      collected.set(source.sourceId, toSourceOption(source))
+    }
+  }
+  return [...collected.values()]
+}
+
+/** 服务端源聚合返回的一行（C07 首期）。字段名与后端 `source/check/sourceSummary` 对齐。 */
+interface SourceSummaryPayload {
+  sourceId?: number | string
+  sourceName?: string
+  siteId?: number | string | null
+  siteName?: string
+  tableName?: string
+  monitorTotal?: number
+  monitorEnabled?: number
+  lastCheckAt?: string | null
+  /** none 未配置 / disabled 全停用 / unknown 有启用但没跑过 / abnormal 有告警 / normal 正常 */
+  dataState?: string
+}
+
+function dataOfState(state: string | undefined): MonitorDataStatus {
+  if (state === 'abnormal') return 'abnormal'
+  if (state === 'normal') return 'normal'
+  return 'unknown'
+}
+
+function labelOfState(state: string | undefined): { label: string; tone: MonitorSourceRow['tone'] } {
+  switch (state) {
+    case 'abnormal':
+      return { label: '数据异常', tone: 'bad' }
+    case 'normal':
+      return { label: '数据正常', tone: 'good' }
+    case 'disabled':
+      return { label: '已停用', tone: 'muted' }
+    case 'none':
+      return { label: '未配置检查', tone: 'muted' }
+    default:
+      return { label: '尚未检查', tone: 'unknown' }
+  }
+}
+
+function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
+  const total = Number(item.monitorTotal ?? 0)
+  const enabled = Number(item.monitorEnabled ?? 0)
+  const state = item.dataState
+  const { label, tone } = labelOfState(state)
+  return {
+    sourceId: String(item.sourceId ?? ''),
+    sourceName: item.sourceName || undefined,
+    tableName: item.tableName || undefined,
+    siteId: item.siteId == null ? undefined : String(item.siteId),
+    siteName: item.siteName || undefined,
+    monitorTotal: total,
+    monitorEnabled: enabled,
+    // 计划覆盖需要「预期时隙」表，服务端首期只给出不可用标记，页面如实显示「—（需服务端聚合）」。
+    coverage: null,
+    coverageUnavailable: true,
+    data: total === 0 ? 'unknown' : dataOfState(state),
+    exec: 'unknown',
+    notifyFailures: 0,
+    lastCheckAt: item.lastCheckAt || undefined,
+    label,
+    tone,
+    monitors: [],
+    unconfigured: total === 0,
+  }
+}
+
+/**
+ * 拉服务端源聚合（C07 首期）。
+ * 不可用时返回 `unavailable: true`，页面回落到「只列已配置源」的老路径——**不要**用前端拼全量源目录顶替。
+ */
+export async function listSourceSummary(
+  options: { siteId?: string; keyword?: string; maxPages?: number } = {},
+): Promise<{ total: number; rows: MonitorSourceRow[]; unavailable: boolean }> {
+  const maxPages = options.maxPages ?? 10
+  const query = (page: number) =>
+    pagedSourceSummary({
+      page,
+      limit: MONITOR_PAGE_SIZE,
+      siteId: options.siteId,
+      keyword: options.keyword,
+    })
+
+  try {
+    const first = await query(1)
+    const firstList = Array.isArray(first?.list) ? (first.list as SourceSummaryPayload[]) : []
+    const total = Number(first?.total ?? firstList.length)
+    const rows = firstList.map(toSourceSummaryRow)
+    if (!firstList.length || firstList.length >= total) return { total, rows, unavailable: false }
+
+    const pageSize = firstList.length || MONITOR_PAGE_SIZE
+    const pages = Math.min(Math.ceil(total / pageSize), maxPages)
+    const rest = await Promise.all(
+      Array.from({ length: Math.max(0, pages - 1) }, (_, index) =>
+        query(index + 2).then((res) => (Array.isArray(res?.list) ? (res.list as SourceSummaryPayload[]) : [])),
+      ),
+    )
+    for (const list of rest) rows.push(...list.map(toSourceSummaryRow))
+    return { total, rows, unavailable: false }
+  } catch {
+    return { total: 0, rows: [], unavailable: true }
+  }
 }

@@ -30,6 +30,22 @@ describe('方法元数据', () => {
     expect(text).not.toMatch(/\d+\s*(条|%)/)
   })
 
+  it('默认描述不留占位符，按选择写入空值/无数据口径', () => {
+    const text = defaultDescription({
+      sourceName: '圣路易斯联储-批发商库存',
+      tableName: 'sense_data.fred_monthly',
+      methods: ['today_landed'],
+      window: '当日 00:00 至当前（Asia/Shanghai 业务时区）',
+      nullPolicy: 'allow',
+      noDataPolicy: 'alarm',
+    })
+    expect(text).not.toContain('【')
+    expect(text).not.toContain('业务约定')
+    expect(text).toContain('字段值为空按允许处理')
+    expect(text).toContain('判为异常并告警')
+    expect(text).toContain('Asia/Shanghai')
+  })
+
   it('默认系统提示词非空且约束只读（空串会让 data-engine 直接报错）', () => {
     const text = defaultSystemPrompt()
     expect(text.trim().length).toBeGreaterThan(10)

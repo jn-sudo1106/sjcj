@@ -75,6 +75,21 @@ export interface MonitorCheckConf {
   noDataPolicy?: 'no_data' | 'alarm' | 'unknown'
   /** 已生效版本号（如 v3）；旧记录没有 */
   version?: string
+  /** 生成脚本里实际使用的入库时间列（脚本自动探测不到时需要显式传入） */
+  timeColumn?: string
+  /**
+   * 本次检查覆盖的时间窗口。不填按「当日 00:00 → 现在」。
+   * 执行器把它换算成 `DQ_START_DATE/DQ_END_DATE` 传进脚本——窗口必须有边界，
+   * 否则停更的表会被算出「连续几百天异常」。
+   */
+  window?: { type?: 'today' | 'hours' | 'period'; hours?: number; periodHours?: number }
+  /**
+   * 脚本检查自己的计划状态。
+   *
+   * Java 调度器会把 `NEXT_RUN` 为空或到期的行全部捡走（`CkSourceMapper.lockForDeal`），
+   * 所以 AI 记录的 `ck_source.NEXT_RUN` 停在远期、由执行器把真正的「上次/下次」写在这里。
+   */
+  schedule?: { last?: string; next?: string }
   /** 未识别键必须保留 */
   [key: string]: unknown
 }
@@ -213,6 +228,8 @@ export interface MonitorRunView {
 export interface MonitorSourceRow {
   sourceId: string
   sourceName?: string
+  /** 主表物理名；列表副标题用它代替源 ID，便于业务辨认 */
+  tableName?: string
   siteId?: string
   siteName?: string
   monitorTotal: number

@@ -92,6 +92,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/changeEnable', desc: '启停源检查 → GET ?ids=&enable=（0=启用/1=停用，与 isDelete 同向）', danger: true, impl: true, live: true },
   { path: 'source/check/check-one', desc: '执行一次源检查（CheckAdd「验证」）→ POST body', danger: true, impl: true, live: true },
   { path: 'source/check/runNow', desc: '立即运行源检查 → GET ?ids=', danger: true, impl: true, live: true },
+  // C07 首期：源维度聚合（一行一个源，含未配置检查的源；服务端按登录用户分组过滤）。
+  // 漏登记时 mock 模式会抛「端点不在契约清单」，页面只能降级成「仅已配置源」。
+  { path: 'source/check/sourceSummary', desc: '源维度聚合（C07 首期）→ GET ?page=&limit=&siteId=&keyword=', impl: true, live: true },
   { path: 'source/check/paged-logs', desc: '源检查历史日志 → GET ?sourceId=&jobId=&state=&name=&page=&limit=', impl: true, live: true },
   // 定时预览：旧平台 `GET /v1/source/lastRun?cron=<urlencoded>`（api/util.js checkCron），
   // 返回该 cron 的最近若干次运行时间（**裸数组**）；CheckAdd 的「定时」弹窗「测试」用它。
@@ -866,6 +869,27 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'sys-role/resource-tree', desc: '全量系统资源权限树（admin；供角色授权勾选）', impl: true, live: true },
   { path: 'sys-role/resource-ids', desc: '获取角色已授权资源ID列表（admin）', impl: true, live: true },
   { path: 'sys-role/assign-resources', desc: '保存角色资源分配（admin；全量覆盖授权并驱逐缓存）', danger: true, impl: true, live: true },
+
+  /* ── 流程中心「模板 → 实例」（1109 方案 §5 / §12 C02、C09、C10、C12；1110 二轮复核后定稿） ──
+     这批端点目前**后端未落地**（C09/C12 属新增能力，C02 缺 siteCoverage/templateSourceCnt），
+     因此一律不标 live：mock 模式按 `mock/flowCenterCenter.ts` 的原型数据出图，
+     接后端后逐条把 httpEndpoint 指到真实路径再标 live，页面无需改动。
+     · C02 instancePaged / templateMetas：读取实例（含覆盖网站、覆盖源数）与模板摘要
+     · C09 scopePreview / bindFlowsByScope / batchJob：范围预览 → 冻结 scopeToken → 服务端作业 → 轮询
+     · C12 instanceDraft / instanceActivate：草稿只记范围意图、不写 cs_source_flow_bind，激活才提交绑定
+     · C11 instanceDiff：实例间配置差异（只比实例自身配置，源调度单列）
+     · C10 unclassified*：未归类/结构待核对只读扫描 + 单条归集 */
+  { path: 'flow-center/templateMetas', desc: '模板摘要列表（结构指纹、节点链、实例数、覆盖源数）', impl: true },
+  { path: 'flow-center/instancePaged', desc: '实例分页（含覆盖网站、覆盖源数、草稿标记）', impl: true },
+  { path: 'flow-center/scopePreview', desc: '范围预览：冻结范围内 新增/跳过/组内源/预计不可操作/补默认 计数', impl: true },
+  { path: 'flow-center/instanceDraft', desc: '保存实例草稿（C12：只写实例与目标范围意图，不写绑定，不可执行）', danger: true, impl: true },
+  { path: 'flow-center/instanceActivate', desc: '激活草稿并提交绑定作业（C12 → C09）', danger: true, impl: true },
+  { path: 'flow-center/bindFlowsByScope', desc: '按冻结范围批量绑定源到实例（C09：服务端作业 + scopeToken 幂等 + 分批）', danger: true, impl: true },
+  { path: 'flow-center/batchJob', desc: '批量绑定作业进度（C09：新增/跳过/失败/待开始/执行中 与失败清单）', impl: true },
+  { path: 'flow-center/instanceDiff', desc: '实例配置差异（C11：只比实例自身配置，源调度单列）', impl: true },
+  { path: 'flow-center/unclassified', desc: '未归类/结构待核对只读扫描清单（C10）', impl: true },
+  { path: 'flow-center/unclassifiedAssign', desc: '单条归集到模板（C10；本期不做批量归集）', danger: true, impl: true },
+  { path: 'flow-center/unclassifiedStatus', desc: '单条核对状态（待确认/已确认/忽略）', danger: true, impl: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

@@ -126,6 +126,55 @@ export function toMonitorRecord(row: SourceCheck, sourceName?: string): MonitorR
 }
 
 /** 旧日志行 → 运行视图。没有结构化结果，`legacy` 置 true，页面必须标注「旧日志」。 */
+/**
+ * 读执行器写进 `ck_job_log.REMARKS` 的结构化结论。
+ *
+ * 旧平台这一列从来没用过（都是 null），只有「脚本执行器」会写：
+ * `{runId, status, checkedCount, abnormalCount, durationMs, window:{start,end}, reason, scriptPath}`。
+ * 解析失败一律当作「没有结构化结论」，绝不把未知当 0。
+ */
+export interface MonitorRunStructured {
+  runId?: string
+  checkedCount?: number
+  abnormalCount?: number
+  durationMs?: number
+  window?: { start?: string; end?: string }
+  reason?: string
+  scriptPath?: string
+  status?: string
+}
+
+export function parseRunRemarks(raw: unknown): MonitorRunStructured {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (!text || text[0] !== '{') return {}
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const source = parsed as Record<string, unknown>
+    const num = (value: unknown): number | undefined => {
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value)
+      return undefined
+    }
+    const window = source.window && typeof source.window === 'object' ? (source.window as Record<string, unknown>) : {}
+    return {
+      runId: typeof source.runId === 'string' ? source.runId : undefined,
+      checkedCount: num(source.checkedCount),
+      abnormalCount: num(source.abnormalCount),
+      durationMs: num(source.durationMs),
+      window: {
+        start: typeof window.start === 'string' ? window.start : undefined,
+        end: typeof window.end === 'string' ? window.end : undefined,
+      },
+      reason: typeof source.reason === 'string' ? source.reason : undefined,
+      scriptPath: typeof source.scriptPath === 'string' ? source.scriptPath : undefined,
+      status: typeof source.status === 'string' ? source.status : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
 export function toMonitorRun(log: SourceCheckLog): MonitorRunView {
   const text = typeof log.logMsg === 'string' ? log.logMsg : ''
   const exec: MonitorExecStatus =
@@ -136,20 +185,28 @@ export function toMonitorRun(log: SourceCheckLog): MonitorRunView {
         : FAIL_PATTERNS.some((re) => re.test(text))
           ? 'failed'
           : 'succeeded'
+  const structured = parseRunRemarks(log.remarks)
+  const hasStructured = structured.checkedCount !== undefined || structured.abnormalCount !== undefined
   return {
     id: String(log.logId ?? ''),
     sourceId: String(log.sourceId ?? ''),
     monitorName: log.name,
     // 旧平台精确到秒；没有时区信息，按本地展示，不臆造时区
     at: log.createDt ?? '',
-    trigger: 'legacy',
+    trigger: hasStructured ? 'manual' : 'legacy',
     exec,
     data: dataStatusOf(exec, log.state),
     notify: 'unknown',
-    count: checkCountOf(log),
+    // 有结构化结论就不再拿中文日志兜底抠数字（两条口径不能混用）
+    count: hasStructured ? String(structured.checkedCount ?? '—') : checkCountOf(log),
+    checkedCount: structured.checkedCount,
+    abnormalCount: structured.abnormalCount,
+    runId: structured.runId,
+    summary: structured.reason,
+    window: structured.window && (structured.window.start || structured.window.end) ? { ...structured.window } : undefined,
     message: text,
     deliveries: [],
-    legacy: true,
+    legacy: !hasStructured,
     raw: log,
   }
 }
