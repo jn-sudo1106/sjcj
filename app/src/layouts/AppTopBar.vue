@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 顶栏（P3 收尾 · AppShell 拆分）
-// 职责：品牌标识 + 帮助/通知入口 + 账号下拉菜单（修改密码 / 退出登录）
+// 职责：品牌标识 + 帮助/通知入口 + 账号下拉菜单（我的工作台 / 修改密码 / 退出登录）
 // 退出登录带二次确认，文案对齐旧 UserMenu.vue（计划 §11.2 红线 4）
+// 工作台与其他页面共用相同顶栏，不根据页面切换品牌和头像样式。
 import { computed, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import { Bell, QuestionFilled, SwitchButton, User } from '@element-plus/icons-vue'
+import { Bell, Monitor, QuestionFilled, SwitchButton, User } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { currentBackendHost, isProductionBackend } from '@/api/client'
@@ -16,9 +17,9 @@ const auth = useAuthStore()
 // 连生产时必须一眼看出，避免联调误操作。
 // 2026-09-29：同机另有连 133 的平台（2807），徽标统一显示「后台环境 + 后端地址」，不再写生产/测试；
 // 连 118 时保留写保护说明和红色，其余用中性的主色。
+// 2026-11-11 工作台顶栏同样用这份真实环境徽标，不使用设计稿里的假「生产环境」。
 const connectedToProduction = isProductionBackend()
 const backendHost = currentBackendHost()
-
 async function handleLogout() {
   try {
     await ElMessageBox.confirm('真的要注销登录吗 ?', '提示', {
@@ -34,10 +35,15 @@ async function handleLogout() {
 }
 
 const accountName = computed(() => auth.name || '未登录')
+// 所有页面头像统一取账号名前 4 个字符。
 const accountAvatarLabel = computed(() => accountName.value.slice(0, 4))
 const changePwdVisible = ref(false)
 
 function handleAccountCommand(command: string) {
+  if (command === 'workbench') {
+    void router.push('/workbench')
+    return
+  }
   if (command === 'logout') {
     void handleLogout()
     return
@@ -51,9 +57,7 @@ function handleAccountCommand(command: string) {
 <template>
   <header class="rc-topbar">
     <div class="rc-brand">
-      <span class="rc-brand-mark">
-        <img :src="companyLogo" alt="" />
-      </span>
+      <span class="rc-brand-mark"><img :src="companyLogo" alt="" /></span>
       <strong>青龙智能采集中心</strong>
       <span v-if="connectedToProduction" class="rc-env-badge" data-testid="prod-env-badge">
         后台环境 {{ backendHost }} · 允许新建，禁止改删
@@ -75,13 +79,19 @@ function handleAccountCommand(command: string) {
         placement="bottom-end"
         @command="handleAccountCommand"
       >
-        <button class="rc-user" type="button" :aria-label="`${accountName}，打开账号菜单`">
-          <span class="rc-avatar">
-            {{ accountAvatarLabel }}
-          </span>
+        <button
+          class="rc-user"
+          type="button"
+          :aria-label="`${accountName}，打开账号菜单`"
+        >
+          <span class="rc-avatar">{{ accountAvatarLabel }}</span>
         </button>
         <template #dropdown>
           <el-dropdown-menu>
+            <el-dropdown-item command="workbench">
+              <el-icon><Monitor /></el-icon>
+              我的工作台
+            </el-dropdown-item>
             <el-dropdown-item command="change-password">
               <el-icon><User /></el-icon>
               修改密码

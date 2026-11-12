@@ -10,8 +10,8 @@ import AppModuleHead from './AppModuleHead.vue'
 import LaunchJobBar from '@/components/LaunchJobBar.vue'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
-import { useRouter } from 'vue-router'
-import { onBeforeUnmount, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { syncSiteVisit } from '@/utils/siteRecents'
 import { prefetchRoute } from '@/utils/prefetchRoute'
 import { TABS } from '@/router/tabs'
@@ -23,6 +23,13 @@ const auth = useAuthStore()
 // 只有画布页带 siteId；其它路由统一传 null，表示"不在某个网站上"。
 // 放在布局层是因为它对整个应用生命周期只注册一次，且不依赖任何业务页面是否挂载。
 const router = useRouter()
+const route = useRoute()
+
+// 工作台仅保留纯色内容背景，顶栏、侧栏、面包屑及主区留白均复用平台布局。
+// 其他显式 fullwidth 页面仍可隐藏侧栏/面包屑；下方模板对工作台单独保留。
+// 所有页面滚动统一由 .rc-pane 承担；path 兜底兼容动态菜单覆盖 meta。
+const isFullWidth = computed(() => route.meta.layout === 'fullwidth' || route.path === '/workbench')
+
 router.afterEach((to) => {
   const siteId = to.path === '/canvas' ? String(to.query.siteId ?? '') || null : null
   syncSiteVisit(siteId)
@@ -74,14 +81,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="rc-app">
+  <div class="rc-app" :class="{ 'rc-app--full': isFullWidth }">
     <AppTopBar />
 
-    <div class="rc-shell" :class="{ 'nav-collapsed': ui.navCollapsed }">
-      <AppSidebar />
+    <div
+      class="rc-shell"
+      :class="{ 'rc-shell--full': isFullWidth && route.path !== '/workbench', 'nav-collapsed': ui.navCollapsed && (!isFullWidth || route.path === '/workbench') }"
+    >
+      <AppSidebar v-if="!isFullWidth || route.path === '/workbench'" />
 
-      <section class="rc-main">
-        <AppModuleHead />
+      <section class="rc-main" :class="{ 'rc-main--full': isFullWidth && route.path !== '/workbench' }">
+        <AppModuleHead v-if="!isFullWidth || route.path === '/workbench'" />
 
         <main class="rc-pane">
           <router-view v-slot="{ Component }">
@@ -154,12 +164,41 @@ onBeforeUnmount(() => {
   overflow: auto;
 }
 
+/* ---------- 全宽布局（opt-in：route.meta.layout='fullwidth' 或 path='/workbench'） ---------- */
+.rc-app--full {
+  grid-template-rows: 56px 1fr;
+  /* 设计稿工作台画布是纯色 #f5f8fe，不用标准页的极光渐变底 */
+  background: #f5f8fe;
+}
+
+/* 全宽页去掉标准页的极光光斑（::before），保证画布干净、不与内容层抢视觉 */
+.rc-app--full::before {
+  display: none;
+}
+
+.rc-shell--full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 全宽页自己负责内容内边距（零内边距，页面里再排版），滚动只留在 .rc-pane 一处 */
+.rc-main--full {
+  padding: 0;
+}
+
 @media (max-width: 980px) {
   .rc-app {
     grid-template-rows: auto 1fr;
     height: auto;
     min-height: 100vh;
     overflow: auto;
+  }
+
+  /* 全宽页在窄屏也保持「顶栏 + 单一主区滚动」，避免页面滚动和主区滚动叠加 */
+  .rc-app.rc-app--full {
+    grid-template-rows: 56px 1fr;
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
   }
 
   .rc-shell,

@@ -20,13 +20,16 @@ function makeRouter() {
     routes: [
       { path: '/overview', component: { template: '<div />' } },
       { path: '/user/login', component: { template: '<div />' } },
+      // 全宽个人页：AppTopBar 以 meta.layout='fullwidth' 或 path='/workbench' 识别（path 兜底动态路由覆盖 meta）
+      { path: '/workbench', component: { template: '<div />' } },
+      { path: '/workbench-meta', component: { template: '<div />' }, meta: { layout: 'fullwidth' } },
     ],
   })
 }
 
-async function mountTopBar(component: Component = AppTopBar) {
+async function mountTopBar(component: Component = AppTopBar, path = '/overview') {
   const router = makeRouter()
-  await router.push('/overview')
+  await router.push(path)
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -92,6 +95,43 @@ describe('AppTopBar', () => {
 
     expect(auth.token).toBe('tok-1')
     expect(router.currentRoute.value.path).toBe('/overview')
+  })
+})
+
+// 「我的工作台」入口 + 全宽顶栏（设计稿 68px/34px；真实环境徽标与真实用户名）
+describe('AppTopBar 工作台入口与全宽顶栏', () => {
+  it('账号菜单第一项是「我的工作台」，选中后跳到 /workbench', async () => {
+    const { wrapper, router } = await mountTopBar()
+    const items = wrapper.findAllComponents({ name: 'ElDropdownItem' })
+    expect(items.length).toBe(3)
+    expect(items[0].text()).toContain('我的工作台')
+
+    await wrapper.findComponent({ name: 'ElDropdown' }).vm.$emit('command', 'workbench')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/workbench')
+  })
+
+  it.each(['/workbench', '/workbench-meta'])('工作台 %s 复用统一品牌、头像和顶部工作栏', async (path) => {
+    const { wrapper } = await mountTopBar(AppTopBar, path)
+    const auth = useAuthStore()
+    auth.name = '王晓峰'
+    await flushPromises()
+    expect(wrapper.find('.rc-topbar').classes()).not.toContain('rc-topbar--full')
+    expect(wrapper.find('.rc-brand img').exists()).toBe(true)
+    expect(wrapper.find('.rc-brand strong').text()).toBe('青龙智能采集中心')
+    expect(wrapper.find('.rc-brand-tile').exists()).toBe(false)
+    expect(wrapper.find('.rc-brand-crumb').exists()).toBe(false)
+    expect(wrapper.find('.rc-avatar').text()).toBe('王晓峰')
+    expect(wrapper.findAllComponents({ name: 'ElDropdownItem' })[0].text()).toContain('我的工作台')
+  })
+
+  it('标准页顶栏保持原样：无工作台品牌区、无用户名，菜单项仍含「我的工作台」', async () => {
+    const { wrapper } = await mountTopBar()
+    expect(wrapper.find('.rc-topbar').classes()).not.toContain('rc-topbar--full')
+    expect(wrapper.find('.rc-brand-home').exists()).toBe(false)
+    expect(wrapper.find('.rc-brand-crumb').exists()).toBe(false)
+    expect(wrapper.find('.rc-user-name').exists()).toBe(false)
+    expect(wrapper.findAllComponents({ name: 'ElDropdownItem' })[0].text()).toContain('我的工作台')
   })
 })
 
