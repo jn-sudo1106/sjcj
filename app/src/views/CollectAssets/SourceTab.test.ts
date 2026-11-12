@@ -262,6 +262,29 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     wrapper.unmount()
   })
 
+  // 2026-11-11：源 → 所在目录的回路。点「业务目录」列里的路径 = 左栏定位并选中这个目录，
+  // 列表只剩它下面的源，点的那条源就在结果里（不用换页，同点来源组名跳走的口径）。
+  it('点「业务目录」列里的路径：展开左栏并选中这个目录，列表按该目录筛', async () => {
+    sourceDirs.resetSourceDirCache()
+    vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parent) => (parent === '-2' ? [{ id: '900', name: '股票数据' }] : []))
+    vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map([['s1', ['900']]]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源' } as never] })
+    const { wrapper, list } = await mountList()
+    await wrapper.get('[data-testid="dir-panel-fold"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dir-panel-rail"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="biz-dir-900"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    // 折叠的左栏被展开，业务目录页签选中这个目录（只看本目录，不含子级）
+    expect(wrapper.find('[data-testid="dir-panel-rail"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="dir-kind-biz"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[data-testid="dir-node"][data-dir="900"]').classes()).toContain('on')
+    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: '900', includeDescendants: false }] })
+    wrapper.unmount()
+    sourceDirs.resetSourceDirCache()
+  })
+
   // 1104 会议「页面卡顿」：业务目录归属没有反查接口，要整棵目录树逐个 listSources（186 上约 75 个请求），
   // 不能跟着首屏一起发——等源列表这一页回来（SourceOverviewView 的 pageLoaded）再查。
   it('「业务目录」等源列表这一页回来再查，不跟首屏抢请求', async () => {

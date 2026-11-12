@@ -225,4 +225,40 @@ describe('SourceDirPanel', () => {
     await flushPromises()
     expect(lastScope(w).dirIds).toEqual([])
   })
+
+  // 2026-11-11：源列表「业务目录」列点路径 → 左栏定位并选中这个目录（只看本目录，同点名称）。
+  it('点源列表里的业务目录路径：选中该目录、切到业务目录树并展开到它', async () => {
+    // 深目录的祖先还没加载过：revealDir 先用 loadDirPath（这里走 categoryById）补齐节点
+    vi.spyOn(sourceApi, 'categoryById').mockImplementation(async (id) => (id === '901' ? cat('901', '股票行情', '900') : cat('900', '股票数据', '-2')))
+    const w = await mountPanel()
+    await row(w, '200').get('[data-testid="dir-name"]').trigger('click')
+    await flushPromises()
+    await w.vm.revealDir('901')
+    await flushPromises()
+    await flushPromises()
+    expect(w.get('[data-testid="dir-kind-biz"]').attributes('aria-selected')).toBe('true')
+    expect(lastScope(w)).toMatchObject({
+      kind: 'biz',
+      all: false,
+      dirIds: ['901'],
+      directory: { kind: 'biz', mode: 'selected', selections: [{ id: '901', includeDescendants: false }] },
+    })
+    // 祖先 900 自动展开，901 直接可见并高亮
+    expect(row(w, '901').classes()).toContain('on')
+    expect(w.findAll('[data-testid="dir-name"]').map((n) => n.text())).toEqual(['股票数据', '股票行情'])
+    w.unmount()
+  })
+
+  it('点到的目录在树里查不到（已删除）：保持当前范围，不把列表筛空', async () => {
+    const w = await mountPanel()
+    await row(w, '200').get('[data-testid="dir-name"]').trigger('click')
+    await flushPromises()
+    const before = lastScope(w)
+    vi.spyOn(sourceApi, 'categoryById').mockResolvedValue(null)
+    await w.vm.revealDir('999')
+    await flushPromises()
+    expect(lastScope(w)).toEqual(before)
+    expect(lastScope(w).dirIds).toEqual(['200'])
+    w.unmount()
+  })
 })

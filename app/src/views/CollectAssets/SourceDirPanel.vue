@@ -10,7 +10,7 @@
 // - 面板可折叠，折叠后窄条上显示已选目录数，筛选不变。
 // 来源组 Tab 仅切换左栏内容，不解除目录范围；来源组与当前目录可组合筛选。
 // 目录数据与后端口径见 api/sourceDirs.ts。
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
 import { dirNode, dirPath, loadDirPath, loadDirChildren, searchDirs, type DirKind, type DirNode } from '@/api/sourceDirs'
@@ -46,6 +46,7 @@ const checked = reactive({ sys: new Set<string>(), biz: new Set<string>() })
 const focus = reactive<{ sys: string | null; biz: string | null }>({ sys: null, biz: null })
 const allChecked = reactive({ sys: false, biz: false })
 const selectingAll = ref(false)
+const treeRef = ref<HTMLElement>()
 let restored = false
 
 const rootKey = (k: DirKind) => `${k}:root`
@@ -216,7 +217,40 @@ function restore(scope: DirScope, tab: SourceDirectoryTab = scope.kind) {
   emit('change', scope)
   void ensureKids(scope.kind)
 }
-defineExpose({ clear, restore })
+
+/**
+ * 「业务目录」列点路径进来（2026-11-11）：选中这一个目录（只看本目录、不含子级，与点名称同口径），
+ * 并把树展开到它、滚到可见位置。深目录的祖先可能还没加载过，先用 loadDirPath 补齐节点再逐层拉子级。
+ * 目录在业务目录树里查不到（已被删除、或源挂在别的目录树）时不改当前范围，避免把列表筛成空。
+ */
+async function revealDir(id: string, k: DirKind = 'biz') {
+  try {
+    await loadDirPath(id)
+  } catch {
+    return
+  }
+  restored = true
+  scopeSeq++
+  kind.value = k
+  activeTab.value = k
+  keyword.value = ''
+  const chain: string[] = []
+  for (let node = dirNode(id); node; node = node.parentId ? dirNode(node.parentId) : undefined) chain.unshift(node.id)
+  let parent = ''
+  for (const nodeId of chain.slice(0, -1)) {
+    await ensureKids(k, parent)
+    open.add(nodeId)
+    parent = nodeId
+  }
+  await ensureKids(k, parent)
+  allChecked[k] = false
+  checked[k].clear()
+  focus[k] = id
+  await emitScope()
+  await nextTick()
+  treeRef.value?.querySelector<HTMLElement>(`[data-dir="${id}"]`)?.scrollIntoView?.({ block: 'center' })
+}
+defineExpose({ clear, restore, revealDir })
 
 async function switchKind(k: DirKind) {
   activeTab.value = k
@@ -280,7 +314,7 @@ void init()
       <span v-else-if="pickedCount">已选 {{ pickedCount }} 个目录</span>
       <button v-if="pickedCount" class="sdp-link" type="button" data-testid="dir-clear" @click="clear">清空</button>
     </div>
-    <div v-show="activeTab !== 'group'" class="sdp-tree" data-testid="dir-tree">
+    <div v-show="activeTab !== 'group'" ref="treeRef" class="sdp-tree" data-testid="dir-tree">
       <template v-if="hits">
         <div v-if="searching" class="sdp-empty">搜索中…</div>
         <div v-else-if="!hits.length" class="sdp-empty">没有匹配的目录</div>

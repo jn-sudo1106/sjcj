@@ -526,7 +526,18 @@ async function loadBizMembership() {
     bizMembershipState.value = 'error'
   }
 }
-const bizNames = (sourceId: string) => (bizOf.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
+const bizDirs = (sourceId: string) => (bizOf.get(sourceId) ?? []).map((id) => ({ id, path: dirPath(id).join(' / ') || `#${id}` }))
+const bizNames = (sourceId: string) => bizDirs(sourceId).map((dir) => dir.path)
+/**
+ * 点「业务目录」列里的路径（2026-11-11）：左侧切到业务目录、选中这一个目录，列表只剩它下面的源，
+ * 点的那条源就在结果里（同点行内来源组名跳走的口径，只是不用换页）。
+ * 目录在树里查不到时（已被删除）SourceDirPanel.revealDir 保持原范围，用户能看出点的人没反应。
+ */
+function focusBizDir(dirId: string) {
+  dirCollapsed.value = false
+  directoryTab.value = 'biz'
+  void dirPanelRef.value?.revealDir(dirId)
+}
 /**
  * 「业务目录」列给导出用的文本（1104）：表格里这一列是 `extra-cell` 槽位渲染的标签，
  * 导出拿不到，所以按同一口径拼成一段文字（多个目录用顿号相连）。
@@ -959,9 +970,18 @@ onUnmounted(() => {
       <template v-if="scope === 'all'" #extra-cell="{ source }">
         <span v-if="bizMembershipState === 'error'" class="ca-muted">加载失败</span>
         <template v-else>
-          <span v-for="name in bizNames(source.sourceId)" :key="name" class="ca-biz-tag" :title="name">{{ name }}</span>
-          <span v-if="bizMembershipState === 'loading' && !bizNames(source.sourceId).length" class="ca-muted" title="正在读取这个源的业务目录归属">…</span>
-          <span v-else-if="!bizNames(source.sourceId).length" class="ca-muted">未归类</span>
+          <button
+            v-for="dir in bizDirs(source.sourceId)"
+            :key="dir.id"
+            class="ca-biz-tag"
+            type="button"
+            :title="dir.path"
+            :aria-label="`只看业务目录 ${dir.path} 下的源`"
+            :data-testid="`biz-dir-${dir.id}`"
+            @click.stop="focusBizDir(dir.id)"
+          >{{ dir.path }}</button>
+          <span v-if="bizMembershipState === 'loading' && !bizDirs(source.sourceId).length" class="ca-muted" title="正在读取这个源的业务目录归属">…</span>
+          <span v-else-if="!bizDirs(source.sourceId).length" class="ca-muted">未归类</span>
         </template>
       </template>
       <template #filter-extra>
@@ -1060,6 +1080,10 @@ onUnmounted(() => {
 .ca-dir-clear { flex: none; width: 18px; height: 18px; margin-left: 4px; border: 0; border-radius: 50%; background: none; padding: 0; color: var(--rc-faint); font-size: 15px; line-height: 18px; cursor: pointer; }
 .ca-dir-clear:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
 .ca-biz-tag { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 4px 2px 0; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
+/* 业务目录标签可点（2026-11-11）：点了在左栏选中这个目录，列表只剩它下面的源 */
+button.ca-biz-tag { display: block; border: 0; text-align: left; font-family: inherit; cursor: pointer; }
+button.ca-biz-tag:hover { background: #ede9fe; text-decoration: underline; }
+button.ca-biz-tag:focus-visible { outline: 2px solid #7c3aed; outline-offset: 1px; }
 .ca-muted { color: var(--rc-faint); }
 @media (max-width: 900px) {
   .ca-dir-layout.with-dir, .ca-dir-layout.with-dir.collapsed { grid-template-columns: 1fr; }
