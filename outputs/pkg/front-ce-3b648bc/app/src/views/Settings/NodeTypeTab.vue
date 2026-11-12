@@ -1,0 +1,359 @@
+<script setup lang="ts">
+// 系统设置 → 节点类型（0924-05）。旧平台「配置 → 源类型」（page/config/SourceTypeList.vue）的迁移：
+// 名称模糊查询 + 列表（不分页，后端就不分页）+ 详情（右侧抽屉）+ 新建 / 编辑（居中短表单）。
+//
+// 删除（2026-10-14 补）：照旧平台——二次确认后调 sourceType/delete。被配置 / 有效源引用时后端会拒绝并回原因
+// （186 实测「该源类型已被配置引用，无法删除」，连软删除的配置也算），前端只原样提示，不自己判断引用。
+//
+// 写操作仅管理员可见（与 ParamTab / DataQueryTab 同口径）；保存后刷新抓取类型字典，画布节点类型下拉立即生效。
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { configApi, type NodeType, type NodeTypeInput } from '@/api'
+import { useAuthStore } from '@/stores/auth'
+import { useDictStore } from '@/stores/dict'
+import NodePromptTemplates from './NodePromptTemplates.vue'
+
+const auth = useAuthStore()
+const dict = useDictStore()
+const canWrite = computed(() => auth.role === 'admin')
+
+// ---- 列表 ----
+const keyword = ref('')
+const groupFilter = ref('')
+const groupOptions = ref<string[]>([])
+const groupsLoading = ref(false)
+const groupsFailed = ref(false)
+let groupsSeq = 0
+
+async function loadGroups() {
+  const id = ++groupsSeq
+  groupsLoading.value = true
+  try {
+    const options = await configApi.nodeTypeGroups()
+    if (id === groupsSeq) {
+      groupOptions.value = options
+      groupsFailed.value = false
+    }
+  } catch (e) {
+    if (id !== groupsSeq) return
+    groupOptions.value = []
+    groupsFailed.value = true
+    ElMessage.error(`加载分组类型失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    if (id === groupsSeq) groupsLoading.value = false
+  }
+}
+const list = ref<NodeType[]>([])
+const loading = ref(false)
+let seq = 0
+
+async function load() {
+  void loadGroups()
+  const id = ++seq
+  loading.value = true
+  try {
+    const rows = await configApi.nodeTypeList(keyword.value, groupFilter.value)
+    if (id === seq) list.value = rows
+  } catch (e) {
+    if (id !== seq) return
+    list.value = []
+    ElMessage.error(`加载节点类型失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    if (id === seq) loading.value = false
+  }
+}
+function onReset() {
+  keyword.value = ''
+  groupFilter.value = ''
+  void load()
+}
+onMounted(load)
+
+// ---- 详情 ----
+const detailVisible = ref(false)
+const detail = ref<NodeType | null>(null)
+const detailTab = ref('base')
+const promptTemplates = ref<InstanceType<typeof NodePromptTemplates>>()
+function openDetail(row: NodeType, tab = 'base') {
+  detail.value = row
+  detailTab.value = tab
+  detailVisible.value = true
+}
+async function closeDetail(done: () => void) { if (!promptTemplates.value || await promptTemplates.value.confirmLeave()) done() }
+async function changeDetailTab(tab: string | number) { return tab === detailTab.value || !promptTemplates.value || await promptTemplates.value.confirmLeave() }
+const DETAIL_FIELDS: { key: keyof NodeType; label: string }[] = [
+  { key: 'sourceType', label: '类型 ID' },
+  { key: 'typeName', label: '类型名称' },
+  { key: 'typeGroup', label: '分组类型' },
+  { key: 'downType', label: '配置队列（旧）' },
+  { key: 'topic', label: '默认消息队列' },
+  { key: 'seq', label: '排序' },
+  { key: 'procType', label: '处理类型' },
+  { key: 'params', label: '参数' },
+  { key: 'notes', label: '备注' },
+]
+
+// ---- 删除 ----
+const deleting = ref('')
+async function remove(row: NodeType) {
+  if (deleting.value) return
+  try {
+    await ElMessageBox.confirm(`是否确认删除源类型 [ ${row.sourceType} ] - ${row.typeName} ?`, '提示', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  deleting.value = row.sourceType
+  try {
+    const ack = await configApi.nodeTypeDelete(row.sourceType)
+    ElMessage.success(`删除成功：${ack?.message || '操作成功'}`)
+  } catch (e) {
+    ElMessage.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    deleting.value = ''
+    // 成功失败都刷新（旧平台同口径）；画布里的节点类型下拉 / 默认队列用的是这份字典
+    void load()
+    void dict.loadSnatchTypes()
+    void dict.loadNodeTypeTopics()
+  }
+}
+
+// ---- 新建 / 编辑 ----
+const editVisible = ref(false)
+const editing = ref<NodeType | null>(null)
+const saving = ref(false)
+// 字段顺序对齐旧平台：`editCols = [...SOURCE_TYPE.base, ...SOURCE_TYPE.other].filter(!noEdit)`
+// → 类型ID / 类型名称 / 配置队列 / 默认消息队列 / 备注 / 排序 / 处理类型 / 参数(JSON)。
+// 最后两项（procType、params）是 2026-10-16 补的，之前漏迁。
+const form = reactive({
+  sourceType: '', typeName: '', typeGroup: '', downType: '', topic: '', seq: null as number | null,
+  notes: '', procType: '', params: '',
+})
+
+const TOPIC_HINT = '画布新建这类节点时，用它作为节点队列的初始值；节点运行用节点自己配置的队列，不读这里'
+const DOWN_TYPE_HINT = '旧系统「发配置」用的队列，当前不参与运行'
+
+function openCreate() {
+  void loadGroups()
+  editing.value = null
+  Object.assign(form, {
+    // 1030 会议：配置队列只给旧系统「发配置」用（bee-top ConfigSender / ConfigManager），运行不读它，新建不再预填
+    sourceType: '', typeName: '', typeGroup: '', downType: '', topic: '', seq: null,
+    notes: '', procType: '', params: '',
+  })
+  editVisible.value = true
+}
+function openEdit(row: NodeType) {
+  void loadGroups()
+  editing.value = row
+  Object.assign(form, {
+    sourceType: row.sourceType, typeName: row.typeName, downType: row.downType, topic: row.topic,
+    typeGroup: row.typeGroup ?? '',
+    seq: row.seq, notes: row.notes, procType: row.procType, params: row.params,
+  })
+  editVisible.value = true
+}
+
+/** 修改时只发改动过的字段：后端是增量更新，整份发过去会把没动的空值也写进库 */
+function changedFields(before: NodeType): NodeTypeInput {
+  const patch: NodeTypeInput = {}
+  if (form.typeName.trim() !== before.typeName) patch.typeName = form.typeName.trim()
+  if (form.typeGroup.trim() !== (before.typeGroup ?? '')) patch.typeGroup = form.typeGroup.trim()
+  if (form.downType.trim() !== before.downType) patch.downType = form.downType.trim()
+  if (form.topic.trim() !== before.topic) patch.topic = form.topic.trim()
+  if (form.seq !== before.seq) patch.seq = form.seq
+  if (form.notes.trim() !== before.notes) patch.notes = form.notes.trim()
+  if (form.procType.trim() !== before.procType) patch.procType = form.procType.trim()
+  if (form.params.trim() !== before.params) patch.params = form.params.trim()
+  return patch
+}
+async function openEditorPrompts() {
+  if (!editing.value) return
+  if (Object.keys(changedFields(editing.value)).length) {
+    try { await ElMessageBox.confirm('节点类型信息尚未保存，是否放弃修改并打开提示词模板？', '未保存的修改', { confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning' }) } catch { return }
+  }
+  editVisible.value = false
+  openDetail(editing.value, 'prompts')
+}
+
+async function save() {
+  const typeName = form.typeName.trim()
+  if (!typeName) {
+    ElMessage.warning('请填写类型名称')
+    return
+  }
+  if (form.sourceType.trim() && !/^\d+$/.test(form.sourceType.trim())) {
+    ElMessage.warning('类型 ID 只能是数字，不填由系统自动分配')
+    return
+  }
+  const typeGroup = form.typeGroup.trim()
+  if (typeGroup && typeGroup !== (editing.value?.typeGroup ?? '') && !groupOptions.value.includes(typeGroup)) {
+    ElMessage.warning('请选择已配置的分组类型')
+    return
+  }
+  saving.value = true
+  try {
+    if (editing.value) {
+      const patch = changedFields(editing.value)
+      if (!Object.keys(patch).length) {
+        editVisible.value = false
+        return
+      }
+      const ack = await configApi.nodeTypeUpdate(editing.value.sourceType, patch)
+      ElMessage.success(ack?.message || '修改成功')
+    } else {
+      const ack = await configApi.nodeTypeAdd({
+        sourceType: form.sourceType.trim() || undefined,
+        typeName,
+        typeGroup: form.typeGroup.trim() || undefined,
+        downType: form.downType.trim() || undefined,
+        topic: form.topic.trim() || undefined,
+        seq: form.seq ?? undefined,
+        notes: form.notes.trim() || undefined,
+        procType: form.procType.trim() || undefined,
+        params: form.params.trim() || undefined,
+      })
+      ElMessage.success(ack?.message || '新增成功')
+    }
+    editVisible.value = false
+    void load()
+    // 画布里节点类型下拉用的是这份字典；新建节点的默认队列也从这里取
+    void dict.loadSnatchTypes()
+    void dict.loadNodeTypeTopics()
+  } catch (e) {
+    ElMessage.error(`保存失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    saving.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="rc-card nt-main" data-testid="settings-node-type">
+    <div class="rc-toolbar wrap">
+      <el-input v-model="keyword" clearable placeholder="类型名称" style="width: 220px" data-testid="node-type-keyword" @keyup.enter="load" @clear="load" />
+      <el-select v-model="groupFilter" clearable filterable :value-on-clear="''" :loading="groupsLoading" :disabled="groupsFailed" placeholder="分组类型" style="width: 200px" data-testid="node-type-group-filter" @change="load">
+        <el-option v-for="group in groupOptions" :key="group" :label="group" :value="group" />
+      </el-select>
+      <button class="rc-btn" type="button" @click="load">查询</button>
+      <button class="rc-btn" type="button" @click="onReset">重置</button>
+      <span class="nt-spacer" />
+      <span class="muted">共 {{ list.length }} 个节点类型</span>
+      <button v-if="canWrite" class="rc-btn primary" type="button" data-testid="node-type-create" @click="openCreate">新建</button>
+    </div>
+
+    <div v-loading="loading" class="rc-table-scroll nt-table">
+      <table class="rc-data-table">
+        <thead>
+          <tr>
+            <th style="width: 90px">类型 ID</th>
+            <th style="width: 160px">类型名称</th>
+            <th style="width: 110px">分组类型</th>
+            <th style="width: 180px" :title="DOWN_TYPE_HINT">配置队列（旧）</th>
+            <th style="width: 160px" :title="TOPIC_HINT">默认消息队列</th>
+            <th style="width: 70px">排序</th>
+            <th>备注</th>
+            <th style="width: 220px">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="t in list" :key="t.sourceType" data-testid="node-type-row">
+            <td>{{ t.sourceType }}</td>
+            <td>{{ t.typeName || '—' }}</td>
+            <td>{{ t.typeGroup || '未分组' }}</td>
+            <td>{{ t.downType || '—' }}</td>
+            <td>{{ t.topic || '—' }}</td>
+            <td>{{ t.seq ?? '—' }}</td>
+            <td class="nt-ellipsis" :title="t.notes">{{ t.notes || '—' }}</td>
+            <td>
+              <el-button link type="primary" size="small" @click="openDetail(t)">详情</el-button>
+              <el-button link type="primary" size="small" data-testid="node-type-prompts" @click="openDetail(t, 'prompts')">提示词模板</el-button>
+              <el-button v-if="canWrite" link type="primary" size="small" data-testid="node-type-edit" @click="openEdit(t)">编辑</el-button>
+              <el-button v-if="canWrite" link type="danger" size="small" :loading="deleting === t.sourceType" data-testid="node-type-delete" @click="remove(t)">删除</el-button>
+            </td>
+          </tr>
+          <tr v-if="!loading && !list.length">
+            <td colspan="8" class="nt-empty">{{ keyword.trim() || groupFilter.trim() ? '没有匹配的节点类型' : '暂无节点类型' }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 详情：实体详情统一右侧抽屉（AGENTS.md 详情弹层约定） -->
+    <el-drawer v-model="detailVisible" :title="detail ? `节点类型 · ${detail.typeName}` : '节点类型'" size="min(1080px, calc(100vw - 32px))" :before-close="closeDetail" destroy-on-close>
+      <el-tabs v-model="detailTab" :before-leave="changeDetailTab">
+      <el-tab-pane label="基本信息" name="base">
+      <dl v-if="detail" class="nt-detail">
+        <template v-for="f in DETAIL_FIELDS" :key="f.key">
+          <dt>{{ f.label }}</dt>
+          <dd>{{ detail[f.key] === '' || detail[f.key] == null ? '—' : detail[f.key] }}</dd>
+        </template>
+      </dl>
+      </el-tab-pane>
+      <el-tab-pane label="提示词模板" name="prompts"><NodePromptTemplates v-if="detail && detailTab === 'prompts'" ref="promptTemplates" :node="detail" :can-write="canWrite" /></el-tab-pane>
+      </el-tabs>
+    </el-drawer>
+
+    <!-- 新建 / 编辑：短表单，居中弹窗 -->
+    <el-dialog v-model="editVisible" :title="editing ? '编辑节点类型' : '新建节点类型'" width="460px" append-to-body destroy-on-close>
+      <el-form label-width="96px" size="default" @submit.prevent>
+        <el-form-item label="类型 ID">
+          <el-input v-model="form.sourceType" :disabled="!!editing" :placeholder="editing ? '' : '不填由系统自动分配'" />
+        </el-form-item>
+        <el-form-item label="类型名称" required>
+          <el-input v-model="form.typeName" maxlength="50" placeholder="如：网页抓取" />
+        </el-form-item>
+        <el-form-item label="分组类型">
+          <el-select v-model="form.typeGroup" clearable filterable :value-on-clear="''" :loading="groupsLoading" :disabled="groupsLoading || groupsFailed" placeholder="请选择分组，可留空" style="width: 100%" data-testid="node-type-group-edit">
+            <el-option v-if="form.typeGroup && !groupOptions.includes(form.typeGroup)" :label="`${form.typeGroup}（已移出可选项）`" :value="form.typeGroup" disabled />
+            <el-option v-for="group in groupOptions" :key="group" :label="group" :value="group" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="默认消息队列">
+          <el-input v-model="form.topic" placeholder="可不填" />
+          <div class="nt-field-hint">{{ TOPIC_HINT }}</div>
+        </el-form-item>
+        <el-form-item label="配置队列（旧）">
+          <el-input v-model="form.downType" placeholder="一般不用填" />
+          <div class="nt-field-hint">{{ DOWN_TYPE_HINT }}</div>
+        </el-form-item>
+        <!-- 「备注」在「排序」之前 —— 顺序照抄旧 `SOURCE_TYPE.base` 的列序 -->
+        <el-form-item label="备注">
+          <el-input v-model="form.notes" type="textarea" :rows="3" maxlength="200" />
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="form.seq" :controls="false" style="width: 100%" placeholder="可不填" />
+        </el-form-item>
+        <!-- 2026-10-16 补齐：旧 `SOURCE_TYPE.other` 的「处理类型」「参数(JSON)」。
+             旧版这两列都是普通文本输入（params 的 type 是 textArea，不是 json），
+             所以这里同样不做 JSON 校验——旧 BaseEdit 只对 type==='json' 的列校验并压缩。 -->
+        <el-form-item label="处理类型">
+          <el-input v-model="form.procType" placeholder="如：200" data-testid="node-type-proc-edit" />
+        </el-form-item>
+        <el-form-item label="参数(JSON)">
+          <el-input v-model="form.params" type="textarea" :rows="4" placeholder="参数 JSON，可不填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button v-if="editing" @click="openEditorPrompts">提示词模板</el-button>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" data-testid="node-type-save" @click="save">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.nt-main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.nt-spacer { flex: 1; }
+.nt-field-hint { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--rc-text-2); }
+.nt-table { flex: 1; min-height: 0; overflow: auto; }
+.nt-ellipsis { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-empty { text-align: center; color: var(--rc-faint); padding: 32px 0; }
+.nt-detail { display: grid; grid-template-columns: 96px 1fr; gap: 10px 12px; margin: 0; font-size: 13px; }
+.nt-detail dt { color: var(--rc-muted); }
+.nt-detail dd { margin: 0; color: var(--rc-text); word-break: break-all; white-space: pre-wrap; }
+</style>

@@ -11,7 +11,7 @@ import TaskStat from './taskStat/index.vue'
 // 页内 tab 由后端菜单下发（sys_menu menu_type=2，/monitor 下 6 条），本地这份只是
 // 菜单接口没下发 / 加载失败时的兜底；文案、顺序、权限码都以 route.meta.tabs 为准。
 const fallbackTabs = [
-  { key: 'sourceCheck', label: '数据源告警', order: 1 },
+  { key: 'sourceCheck', label: '数据源监控', order: 1 },
   { key: 'sourceIssues', label: '源问题', order: 2 },
   { key: 'queueCheck', label: '队列告警', order: 3 },
   { key: 'commJob', label: '自定义告警', order: 4 },
@@ -68,19 +68,20 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
 }
 .ra-tabs-inner {
   display: inline-flex;
-  padding: 4px;
+  padding: 3px;
   background: #f1f5f9;
-  border-radius: 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: 7px;
   gap: 4px;
 }
 .ra-tab-link {
   border: 0;
   background: transparent;
-  padding: 6px 16px;
+  padding: 6px 14px;
   font-size: 13px;
   font-weight: 600;
   color: #64748b;
-  border-radius: 7px;
+  border-radius: 5px;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -88,8 +89,8 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
   color: #0f172a;
 }
 .ra-tab-link.active {
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--rc-primary);
+  color: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 

@@ -125,7 +125,8 @@ describe('监控中心 · 页内 tab（后端驱动）', () => {
     // 1106 调整：后端下发的 tab 一条都解析不到组件时，整页退回页面本地的 fallbackTabs。
     // 「tab 栏在、内容区全空」等于整页不可用（数据同步 / 问数系统配置 / 模板配置 / 基础配置 就这么废过），
     // 比退回旧列表更糟；部分缺失仍保留后端 tab 并显示空态（见下一条用例）。
-    expect(wrapper.findAll('.ra-tab-link').map((b) => b.text())).toContain('数据源告警')
+    // 1111 起页签名统一为「数据源监控」（与后端菜单一致），fallback 列表同步改名
+    expect(wrapper.findAll('.ra-tab-link').map((b) => b.text())).toContain('数据源监控')
     expect(wrapper.find('.stub-source-check').exists()).toBe(true)
     // 开发态把后端下发的 key / component_path 打出来，方便对齐菜单配置
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('unknown-tab'))

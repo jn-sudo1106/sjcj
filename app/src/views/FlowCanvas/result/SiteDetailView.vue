@@ -15,7 +15,7 @@ import { useUiStore } from '@/stores/ui'
 import { siteApi, type Site, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { normalizeSiteMonitorTab, normalizeSiteView, type SiteMonitorTab, type SiteWorkspaceView } from '@/utils/url/workspaceRoute'
+import { normalizeSiteView, type SiteWorkspaceView } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
 import SiteDataView from './SiteDataView.vue'
 import SiteTablesOverview from './SiteTablesOverview.vue'
@@ -172,16 +172,8 @@ watch(
 )
 function switchView(target: SiteWorkspaceView) {
   if (view.value === target) return
-  // 换视图整包换 query：监控视图的子 Tab（monitorTab）跟着一起清掉，下次进来回到「监控结果」。
+  // 换视图整包换 query：监控视图已合成一页，不再有子 Tab 需要清理。
   void router.replace({ path: '/canvas', query: { siteId: props.siteId, view: target } })
-}
-/** 监控视图的子 Tab（0916）：URL 是唯一真相，刷新/深链/前进后退都停在同一档。 */
-const monitorTab = computed<SiteMonitorTab>(() => normalizeSiteMonitorTab(route.query.monitorTab))
-function switchMonitorTab(tab: SiteMonitorTab) {
-  const query = { ...route.query }
-  if (tab === 'result') delete query.monitorTab
-  else query.monitorTab = tab
-  void router.replace({ path: route.path, query })
 }
 function openSource(source: Source) {
   // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
@@ -219,7 +211,7 @@ function openSourceData(source: Source) {
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" :locked-table-id="lockedTableId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
       <TaskView v-else-if="view === 'task'" site-wide :site-id="siteId" class="sdv-body" />
-      <SiteMonitorView v-else-if="view === 'monitor'" :site-id="siteId" :tab="monitorTab" class="sdv-body" @update:tab="switchMonitorTab" />
+      <SiteMonitorView v-else-if="view === 'monitor'" :site-id="siteId" class="sdv-body" />
     </template>
   </main>
 </template>

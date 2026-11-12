@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Back, Refresh } from '@element-plus/icons-vue'
-import { sourceApi, type Source } from '@/api'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Back, Close, Refresh, Search } from '@element-plus/icons-vue'
+import { sourceApi, sourceGroupApi, type Source, type SourceGroup } from '@/api'
+import type { SourceFilter } from '../result/useSourceLaunch'
 import { useSourceSearchStore, sourceSearchListPath } from '@/stores/sourceSearch'
 import { useUiStore } from '@/stores/ui'
 import { useRoute, useRouter } from 'vue-router'
@@ -32,6 +33,66 @@ const rowActions = ref<InstanceType<typeof SourceRowActions>>()
 const description = computed(() => context.value ? describeFilters(context.value.query) : '')
 // 侧栏不分页：一次取回本次查询的前 N 个源，剩余交给「返回搜索列表」看
 const RESULT_LIMIT = 200
+// ---- 结果内源搜索（1111 用户反馈：本次搜索结果没有像网站源列表那样的源搜索框）----
+// 口径：在本次查询条件上**再叠加**一次筛选（关键词 / 来源组），只影响这个侧栏看到的结果；
+// 原条件仍原样存在 context 里，所以「回到搜索列表」看到的还是原来那次查询，不会被悄悄改掉。
+const filterKeyword = ref('')
+const filterGroupId = ref('')
+const groups = ref<SourceGroup[]>([])
+const groupsFailed = ref(false)
+const filterActive = computed(() => !!filterKeyword.value.trim() || !!filterGroupId.value)
+const filterGroupName = computed(() => {
+  if (!filterGroupId.value) return ''
+  return groups.value.find(group => group.sourceGroupId === filterGroupId.value)?.sourceGroupName ?? `组 #${filterGroupId.value}`
+})
+const filterLabel = computed(() => [
+  filterKeyword.value.trim() ? `关键词：${filterKeyword.value.trim()}` : '',
+  filterGroupName.value ? `来源组：${filterGroupName.value}` : '',
+].filter(Boolean).join(' · '))
+const hitText = computed(() => [description.value, filterLabel.value].filter(Boolean).join(' · ') || '全部源')
+const emptyText = computed(() => filterActive.value ? '本次结果里没有匹配的源' : '没有符合原查询条件的源')
+let filterTimer: ReturnType<typeof setTimeout> | undefined
+/**
+ * 把搜索框叠加到本次查询条件上：
+ * - 关键词按源名模糊（`name`，服务端条件，与原目录/排序/来源组等条件取交集）；
+ * - 纯数字按源 ID 精确（`sourceIds`），同时丢弃原条件的 `name`——用户已经在按 ID 找，两者相与基本是空集；
+ *   原条件本身带着 `sourceIds` 范围时取交集，ID 不在范围内直接判定无匹配，不发请求；
+ * - 来源组走 `sourceGroupId`（服务端条件，只接受正数）。
+ */
+function refineQuery(base: SourceFilter): SourceFilter | null {
+  const keyword = filterKeyword.value.trim()
+  const query: SourceFilter = { ...base }
+  if (keyword) {
+    if (/^\d+$/.test(keyword)) {
+      const scoped = (base.sourceIds ?? '').split(',').map(id => id.trim()).filter(Boolean)
+      if (scoped.length && !scoped.includes(keyword)) return null
+      query.sourceIds = keyword
+      delete query.name
+    } else {
+      query.name = keyword
+    }
+  }
+  if (filterGroupId.value) query.sourceGroupId = filterGroupId.value
+  return query
+}
+async function loadGroups() {
+  groupsFailed.value = false
+  try {
+    groups.value = await sourceGroupApi.list()
+  } catch {
+    groups.value = []
+    groupsFailed.value = true
+  }
+}
+function onFilterInput() {
+  if (filterTimer) clearTimeout(filterTimer)
+  filterTimer = setTimeout(() => void load(), 300)
+}
+function clearFilter() {
+  filterKeyword.value = ''
+  filterGroupId.value = ''
+  void load()
+}
 let requestSeq = 0
 async function load() {
   const seq = ++requestSeq
@@ -41,9 +102,11 @@ async function load() {
   error.value = ''
   rows.value = []
   try {
-    const result = current.empty || current.query.sourceIds === ''
-      ? { list: [], total: 0 }
-      : await sourceApi.sourcePaged({ ...current.query, page: 1, size: RESULT_LIMIT })
+    const scopedEmpty = current.empty || current.query.sourceIds === ''
+    const query = scopedEmpty ? null : refineQuery(current.query)
+    const result = query
+      ? await sourceApi.sourcePaged({ ...query, page: 1, size: RESULT_LIMIT })
+      : { list: [], total: 0 }
     if (seq !== requestSeq) return
     rows.value = result.list
     current.total = result.total
@@ -54,8 +117,11 @@ async function load() {
     if (seq === requestSeq) loading.value = false
   }
 }
+// 换一次查询就清掉上一次的关键词/来源组筛选（在 load 之前注册，先清再取）
+watch(() => context.value?.id, () => { filterKeyword.value = ''; filterGroupId.value = '' })
 watch(() => [context.value?.id, mode.value, ui.sourceListRevision], () => { void load() }, { immediate: true })
-onBeforeUnmount(() => { requestSeq++ })
+onMounted(() => { void loadGroups() })
+onBeforeUnmount(() => { requestSeq++; if (filterTimer) clearTimeout(filterTimer) })
 function returnToList() {
   if (context.value) void router.push(sourceSearchListPath(context.value.returnTo, context.value.id))
   else void router.push(sourceSearchListPath(typeof route.query.returnTo === 'string' ? route.query.returnTo : '/collect'))
@@ -120,6 +186,31 @@ function onDetailEdited(updated: Source) {
         <button class="search-collapse" type="button" aria-label="收起搜索结果" title="收起搜索结果" @click="collapsed = true">«</button>
       </div>
       <template v-if="mode === 'search'">
+        <div class="search-filter">
+          <div class="search-filter-field">
+            <el-icon class="search-filter-icon"><Search /></el-icon>
+            <input
+              v-model="filterKeyword"
+              class="search-filter-input"
+              type="text"
+              autocomplete="off"
+              placeholder="搜索源 / 来源组"
+              aria-label="在本次搜索结果里搜索源"
+              data-testid="result-search-input"
+              @input="onFilterInput"
+              @keydown.enter="load"
+              @keydown.esc="clearFilter"
+            />
+            <button v-if="filterActive" class="search-filter-clear" type="button" aria-label="清除搜索条件" title="清除搜索条件" data-testid="result-search-clear" @click="clearFilter">
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
+          <select v-model="filterGroupId" class="search-filter-group" aria-label="按来源组筛选本次结果" title="按来源组筛选本次结果" data-testid="result-search-group" @change="load">
+            <option value="">全部来源组</option>
+            <option v-for="group in groups" :key="group.sourceGroupId" :value="group.sourceGroupId">{{ group.sourceGroupName }}</option>
+          </select>
+        </div>
+        <p v-if="groupsFailed" class="search-filter-failed">来源组加载失败<button class="search-retry" type="button" @click="loadGroups">重试</button></p>
         <div class="search-section">
           <span class="search-section-title">搜索结果 ({{ context.total }})</span>
           <span class="search-section-actions">
@@ -128,13 +219,13 @@ function onDetailEdited(updated: Source) {
         </div>
         <div class="search-hit">
           <span class="search-hit-label" :title="context.label">{{ context.label }}</span>
-          <strong class="search-hit-text" :title="description">{{ description || '全部源' }}</strong>
+          <strong class="search-hit-text" :title="hitText">{{ hitText }}</strong>
         </div>
         <p v-if="!loading && !error && rows.length && activeKey && !rows.some(source => source.sourceId === activeKey)" class="search-hint">当前源不在本页结果中</p>
         <div ref="listElement" class="search-list" :aria-busy="loading">
           <p v-if="loading" class="search-empty">正在加载…</p>
           <p v-else-if="error" class="search-empty search-failed" role="alert">{{ error }}<button class="search-retry" @click="load">重试</button></p>
-          <p v-else-if="!rows.length" class="search-empty">没有符合原查询条件的源</p>
+          <p v-else-if="!rows.length" class="search-empty">{{ emptyText }}</p>
           <template v-else>
             <button v-for="source in rows" :key="source.sourceId" class="search-item" :class="{ active: activeKey === source.sourceId }" type="button" :aria-current="activeKey === source.sourceId ? 'true' : undefined" :title="`${source.name}\n${source.sourceId} · ${siteLabel(source)}`" @click="emit('pick', source)" @contextmenu.prevent.stop="rowActions?.open($event, source)">
               <span class="search-dot" />
@@ -182,6 +273,20 @@ function onDetailEdited(updated: Source) {
 .search-mode { flex: none; display: flex; align-items: center; gap: 4px; padding: 8px 8px 0; }
 .search-mode-select { flex: 1; min-width: 0; height: 30px; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; color: var(--rc-text-2); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .search-mode-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
+
+/* 结果内源搜索：视觉与网站数据视图「源列表」的 .ssw-search 一致（28px / 7px 圆角 / 聚焦蓝光环） */
+.search-filter { flex: none; display: flex; flex-direction: column; gap: 5px; padding: 6px 8px 0; }
+.search-filter-field { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px 0 8px; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; }
+.search-filter-field:focus-within { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.search-filter-icon { flex: none; color: var(--rc-muted); font-size: 13px; }
+.search-filter-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--rc-text); font: inherit; font-size: 12px; outline: none; }
+.search-filter-input::placeholder { color: var(--rc-muted); }
+.search-filter-clear { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-muted); cursor: pointer; }
+.search-filter-clear:hover { background: var(--rc-border-soft); color: var(--rc-text); }
+.search-filter-clear :deep(svg) { width: 12px; height: 12px; }
+.search-filter-group { width: 100%; height: 26px; padding: 0 6px; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; color: var(--rc-text-2); font: inherit; font-size: 11px; cursor: pointer; }
+.search-filter-group:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
+.search-filter-failed { flex: none; margin: 4px 8px 0; font-size: 11px; color: var(--rc-error); }
 
 .search-hit { flex: none; display: grid; gap: 2px; margin: 8px 8px 6px; padding: 5px 8px; border: 1px solid #bfdbfe; border-radius: 6px; background: var(--rc-primary-bg); }
 .search-hit-label, .search-hit-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

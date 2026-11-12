@@ -1,0 +1,159 @@
+<script setup lang="ts">
+// 总览页主壳（P3-1 收尾 · 性能优化）
+//   · P0-1: 4 panel 改 props 收窄（具体字段而非完整 OverviewSummary）
+// 备注：之前试过 P1-4 把 3 个 panel 改 defineAsyncComponent 做 chunk split，但实测
+//   · 4 panel 是页面必须显示的，staggered 反而比同步出更慢（用户先看到 KPI，再一段段补齐）
+//   · jsdom + vitest 下 defineAsyncComponent 不会被 flushPromises 等到，Overview 集成测试挂掉
+//   · P0-1 props 收窄已拿到重渲染隔离的主收益，P1-4 撤回
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { overviewApi, type OverviewSummary, type TrendPoint } from '@/api'
+import { useUiStore } from '@/stores/ui'
+import KpiPanel from './panels/KpiPanel.vue'
+import TrendPanel from './panels/TrendPanel.vue'
+import DistributionPanel from './panels/DistributionPanel.vue'
+import AlertPanel from './panels/AlertPanel.vue'
+import EmptyState from '@/components/EmptyState.vue'
+
+const router = useRouter()
+const ui = useUiStore()
+
+const data = ref<OverviewSummary | null>(null)
+const trend = ref<TrendPoint[]>([])
+const days = ref(7)
+const loading = ref(false)
+const loadError = ref('')
+
+async function loadSummary() {
+  data.value = await overviewApi.summary()
+}
+
+async function loadTrend() {
+  trend.value = await overviewApi.trend(days.value)
+}
+
+async function loadAll() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    await Promise.all([loadSummary(), loadTrend()])
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : '数据加载失败，请稍后重试'
+  } finally {
+    loading.value = false
+  }
+}
+
+function onUpdateDays(d: number) {
+  days.value = d
+  loadTrend()
+}
+
+const updatedAt = computed(() => data.value?.updatedAt ?? '-')
+
+onMounted(async () => {
+  await loadAll()
+  ui.registerAction('刷新', async () => {
+    await loadAll()
+    ElMessage.success('已刷新采集资产总览')
+  })
+  ui.registerAction('导出', () => ElMessage.info('导出总览：演示环境占位'))
+  ui.registerAction('新建采集', () => {
+    router.push({ path: '/canvas', query: { mode: 'new' } })
+  })
+})
+
+onUnmounted(() => ui.clearActions())
+</script>
+
+<template>
+  <div v-loading="loading" class="ov">
+    <EmptyState
+      v-if="loadError"
+      icon="!"
+      title="加载失败"
+      :text="loadError"
+      action="重新加载"
+      size="lg"
+      class="ov-empty-wrap"
+      @action="loadAll"
+    />
+
+    <template v-else-if="data">
+      <div class="ov-intro">
+        <div>实时掌握采集资产运行态势，提升数据采集稳定性与治理效率。</div>
+        <div class="ov-fresh">
+          <span>数据更新时间：{{ updatedAt }}</span>
+        </div>
+      </div>
+
+      <KpiPanel :kpi="data.kpi" :by-state="data.byState" :trend="trend" />
+      <DistributionPanel :panorama="data.panorama" :by-category="data.byCategory" :source-total="data.kpi.sources" />
+      <TrendPanel :by-cycle="data.byCycle" :source-total="data.kpi.sources" :trend="trend" @update-days="onUpdateDays" />
+      <AlertPanel :top-sources="data.topSources" :exceptions="data.exceptions" :kpi="data.kpi" />
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.ov {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ov > * {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.ov-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  color: #334155;
+  font-size: 13px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.04) 0%, rgba(6, 182, 212, 0.04) 100%);
+  border: 1px solid rgba(37, 99, 235, 0.06);
+}
+
+.ov-fresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .ov {
+    height: auto;
+    min-height: 0;
+  }
+
+  .ov-intro,
+  .ov-fresh {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+</style>

@@ -1,0 +1,130 @@
+// 菜单权限口子（0924-02）。canAccess 现在恒放行；这里把它 mock 成"拒绝 settings"，
+// 锁住三处调用方（侧栏、路由守卫、系统设置页内 tab）确实都在问它——将来接入人员权限时只改 canAccess。
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import ElementPlus from 'element-plus'
+import { TABS } from '@/router/tabs'
+import { ACCESS_TOKEN_KEY } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
+
+const denied = new Set<string>()
+vi.mock('./usePermission', () => ({
+  canAccess: (p?: string) => !p || !denied.has(p),
+}))
+
+beforeEach(() => denied.clear())
+
+describe('canAccess 默认实现', () => {
+  it('当前恒放行（人员菜单权限尚未设计）', async () => {
+    const real = await vi.importActual<typeof import('./usePermission')>('./usePermission')
+    expect(real.canAccess()).toBe(true)
+    expect(real.canAccess('settings')).toBe(true)
+    expect(real.canAccess('settings:nodeType')).toBe(true)
+  })
+
+  // 1106：菜单接口失败时 permissions 是空数组，但那是「未知」不是「零权限」。
+  // 不区分的话侧栏和页内 tab 会整片消失（表现为「功能都没了」），见 useDynamicTabs 的同批修复。
+  it('菜单加载失败（menusLoadFailed）→ 兜底放行；明确零权限 → 拦截', async () => {
+    const real = await vi.importActual<typeof import('./usePermission')>('./usePermission')
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.roles = ['operator'] // 非 admin
+    auth.isMenusLoaded = true
+    auth.permissions = []
+
+    expect(real.canAccess('settings')).toBe(false)
+
+    auth.menusLoadFailed = true
+    expect(real.canAccess('settings')).toBe(true)
+  })
+
+  // 1106 需求：root（超级管理员）什么都不校验
+  it('root 超级管理员：roles 含 root 或登录名是 root 时一律放行（不看权限码）', async () => {
+    const real = await vi.importActual<typeof import('./usePermission')>('./usePermission')
+
+    setActivePinia(createPinia())
+    const byRole = useAuthStore()
+    byRole.roles = ['root']
+    byRole.isMenusLoaded = true
+    byRole.permissions = []
+    expect(real.canAccess('settings')).toBe(true)
+    expect(real.canAccess('settings:roles')).toBe(true)
+
+    // 老账号：roles 只给普通角色，靠登录名兜底
+    setActivePinia(createPinia())
+    const byName = useAuthStore()
+    byName.roles = ['read']
+    byName.loginUsername = 'root'
+    byName.isMenusLoaded = true
+    byName.permissions = []
+    expect(real.canAccess('settings')).toBe(true)
+  })
+})
+
+describe('菜单权限接线', () => {
+  it('系统设置声明了权限码 settings，且路由 meta 同值', async () => {
+    expect(TABS.find((t) => t.key === 'settings')?.permission).toBe('settings')
+    const { router } = await import('@/router')
+    const shell = router.options.routes.find((r) => r.path === '/')
+    expect(shell?.children?.find((r) => r.path === '/settings')?.meta?.permission).toBe('settings')
+  })
+
+  it('侧栏：无权限的入口不渲染', async () => {
+    denied.add('settings')
+    const AppSidebar = (await import('@/layouts/AppSidebar.vue')).default
+    const router = createRouter({ history: createMemoryHistory(), routes: TABS.map((t) => ({ path: t.path, component: { template: '<div />' } })) })
+    await router.push('/overview')
+    await router.isReady()
+    setActivePinia(createPinia())
+    const wrapper = mount(AppSidebar, { global: { plugins: [router, ElementPlus] } })
+    await flushPromises()
+    const labels = wrapper.findAll('.rc-nav-item').map((n) => n.text())
+    expect(labels).not.toContain('系统设置')
+    expect(wrapper.findAll('.rc-nav-title').map((n) => n.text())).not.toContain('系统设置')
+  })
+
+  it('路由守卫：已登录但无权限，直达地址也回总览', async () => {
+    denied.add('settings')
+    localStorage.setItem(ACCESS_TOKEN_KEY, JSON.stringify({ value: 'tok', expire: Date.now() + 1000_000 }))
+    setActivePinia(createPinia())
+    useAuthStore().roles = ['admin']
+    const { authGuard } = await import('@/router')
+    expect(await authGuard({ meta: { permission: 'settings' }, path: '/settings', fullPath: '/settings' })).toBe('/overview')
+    denied.clear()
+    expect(await authGuard({ meta: { permission: 'settings' }, path: '/settings', fullPath: '/settings' })).toBe(true)
+  })
+
+  it('系统设置页内 tab：无权限的 tab 不显示，地址指向它时回落到可见的第一个', async () => {
+    denied.add('settings:nodeType')
+    const Settings = (await import('@/views/Settings/index.vue')).default
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
+    await router.push({ path: '/settings', query: { tab: 'node-type' } })
+    await router.isReady()
+    const wrapper = mount(Settings, { global: { plugins: [router, ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['分类目录', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
+    expect(wrapper.find('[data-testid="settings-category"]').exists()).toBe(true)
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+
+  // 1030：数据权限设置 / 用户管理迁到「用户权限设置」页，接线照旧——页内 tab 仍然只问 canAccess。
+  it('用户权限设置页内 tab：无权限的 tab 不显示，地址指向它时回落到可见的那个', async () => {
+    denied.add('settings:dataPermission')
+    const UserPermission = (await import('@/views/Settings/UserPermission/index.vue')).default
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useAuthStore().roles = ['admin']
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/user-permission', component: { template: '<div />' } }] })
+    await router.push({ path: '/user-permission', query: { tab: 'data-permission' } })
+    await router.isReady()
+    const wrapper = mount(UserPermission, { global: { plugins: [pinia, router, ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.findAll('.up-tab-link').map((b) => b.text())).toEqual(['用户管理', '角色管理'])
+    expect(wrapper.find('.up-tab-link.active').text()).toBe('用户管理')
+    // 可见的只剩这一项，它就是本页默认 tab —— 默认 tab 不写进地址（口径同系统设置页）
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+})

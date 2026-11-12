@@ -1,0 +1,41 @@
+/* 全局类只用于监控编辑宿主，避免 Element Plus 默认标题和编辑器标题重复。 */
+.monitor-editor-dialog.el-dialog {
+  width: min(1080px, calc(100vw - 32px));
+  margin: 32px auto;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.monitor-editor-dialog .el-dialog__header {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+}
+
+.monitor-editor-dialog .el-dialog__title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.monitor-editor-dialog .el-dialog__headerbtn {
+  position: static;
+  width: 28px;
+  height: 28px;
+}
+
+.monitor-editor-dialog .el-dialog__body {
+  padding: 0;
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .monitor-editor-dialog.el-dialog { margin: 16px auto; }
+}

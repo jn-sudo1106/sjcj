@@ -119,6 +119,35 @@ describe('FilePreview', () => {
     expect(wrapper.find('[data-testid="file-preview-text"] pre').text()).toBe('{"ID": "386",')
   })
 
+  // 2026-11-11 线上「文章对不上」：预览弹窗是单实例复用的，上一条数据的正文如果比
+  // 新那条晚到，就会把新文章盖成旧文章——标题/链接（新行）和正文（旧行）对不上。
+  it('换数据后，上一条数据的响应晚到也不能覆盖当前正文', async () => {
+    let finishFirst!: (b: ArrayBuffer) => void
+    const fetchOss = vi.spyOn(ossFile, 'fetchOssFile').mockImplementation((path) => {
+      if (path === '/qinlong/dds/old/content.txt') {
+        return new Promise<ArrayBuffer>((resolve) => { finishFirst = resolve })
+      }
+      return Promise.resolve(bufOf('沪硅产业正文'))
+    })
+
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/old/content.txt', name: 'content.txt', ext: 'txt' } })
+    await flushPromises()
+    expect(fetchOss).toHaveBeenCalledTimes(1)
+
+    // 换成下一条数据：新正文先到
+    await wrapper.setProps({ path: '/qinlong/dds/new/content.txt', name: 'content.txt', ext: 'txt' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="file-preview-text"] pre').text()).toBe('沪硅产业正文')
+
+    // 上一条（旧文章）的响应此刻才回来——必须被丢弃
+    finishFirst(bufOf('华发集团正文'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="file-preview-text"] pre').text()).toBe('沪硅产业正文')
+    // 链接仍是当前这条
+    expect(wrapper.get('[data-testid="file-preview-open-window"]').attributes('href'))
+      .toContain('fileId=/qinlong/dds/new/content.txt')
+  })
+
   it('文本文件当同源 /oss 接口失败时，自动回退到直连 iframe 渲染而不报错中断', async () => {
     vi.spyOn(ossFile, 'fetchOssFile').mockRejectedValue(new Error('取文件失败（HTTP 404）'))
     const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/content.txt', name: 'content.txt', ext: 'txt' } })

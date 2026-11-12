@@ -1,0 +1,13 @@
+front-ce 前端构建包
+====================
+仓库: /Users/liligo/Desktop/JN/JN-sjcj (master)
+提交: 3b648bc 动态菜单优化
+提交时间: 2026-11-06 20:16:58 +0800
+构建时间: 2026-11-06 16:40:18 -0800
+构建命令: cd app && npm run build   (vue-tsc -b && vite build)
+Node: v24.14.0 / npm 11.9.0
+base: /  (未设置 VITE_BASE；若部署在子路径需 VITE_BASE=/sjcj/ 重新构建)
+VITE_SITE_CREATE_TARGET: production (来自 app/.env.local)
+
+dist/  : 生产构建产物，整目录内容可直接作为 nginx root（zip 内文件在根层）
+源码包 : front-ce-src-3b648bc-20261106.zip（git archive HEAD，1406 个文件，不含 node_modules/.env.local/outputs）

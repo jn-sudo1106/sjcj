@@ -4,7 +4,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Search } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -329,7 +329,9 @@ const actionBtnText = computed(() => {
   if (execMode.value === 'fetch') return '发起抓取'
   if (execMode.value === 'upstream') return '从上一节点重跑'
   if (execMode.value === 'input') {
-    return isCurrentNodeAction.value ? '发起本节点任务' : '发后续'
+    if (isCurrentNodeAction.value) return '发起本节点任务'
+    return sendSettingOptions.value.length && sendSettingSelectedCount.value < sendSettingOptions.value.length
+      ? `发后续（${sendSettingSelectedCount.value} 个节点）` : '发后续'
   }
   return '发后续'
 })
@@ -341,6 +343,7 @@ const execDisabledReason = computed(() => {
   if (execMode.value === 'fetch' && !isVerifiedFirstNode.value) return '当前节点无输入表，暂不支持独立手动执行'
   if (execMode.value === 'input') {
     if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
+    if (!isCurrentNodeAction.value && sendSettingOptions.value.length && !sendSettingSelectedCount.value) return '请至少选择一个发送节点'
     if (!isCurrentNodeAction.value && !successorTableId.value && !outputTableId.value) {
       return '后续节点无有效输入表，无法发后续'
     }
@@ -394,8 +397,7 @@ const DIRECT_ROWS_MAX = 20
  * 如果我点个（叉），他就只发第一个」。
  *
  * **与节点「停用」（`Step.enabled`）是两件事**：那个落在后端 `cs_item_config` 上、
- * 对所有源所有运行生效；这个只影响"从这个页签点出去的发后续任务"，存页签快照
- * （刷新浏览器就没了）。排错时随手标一下不该改到线上配置。
+ * 对所有源所有运行生效；这里仅影响本次发送，不保存到页签快照。
  *
  * 语义是**过滤不截断**（2026-09-21 用户定）：A→B→C 跳过 B，C 照发。
  * 代价用户知道——B 不跑，C 这次多半空跑；这是临时排错动作，不是配置变更。
@@ -436,15 +438,7 @@ const forceSkipCond = ref(false)
 /** 本次勾选要跳过进入条件的步骤 ID（空 = 未启用；全量 = 等价旧的整批跳过）。 */
 const skipCondStepIds = ref<string[]>([])
 
-/**
- * 「本次发送设置」面板（2026-11-09 用户：「能不能合并在一起选择条件和跳过条件」）。
- *
- * 一个节点本次只有三种处置，天然互斥——所以用单值枚举，而不是「本次不发」和「忽略条件」
- * 两个独立勾选框（两个都勾上时语义要额外解释，反而更容易点错）：
- * - normal  ：照常发送、照常判断进入条件
- * - skipCond：发送，但本次不判断进入条件（后端 skipCond=1；勾选非全量时拆两次请求）
- * - mute    ：本次不发（沿用 skippedNodeIds，仍进页签快照）
- */
+/** 本次发送范围与节点菜单共用既有排除/忽略条件状态，默认全部发送。 */
 type SendSettingMode = 'normal' | 'skipCond' | 'mute'
 interface SendSettingOption {
   stepId: string
@@ -457,10 +451,24 @@ const sendSettingVisible = ref(false)
 const sendSettingLoading = ref(false)
 const sendSettingError = ref('')
 const sendSettingOptions = ref<SendSettingOption[]>([])
-const sendSettingMode = ref<Record<string, SendSettingMode>>({})
-/** 已生效的设置条数（不开面板时显示在按钮上） */
+const sendSettingSearch = ref('')
+let sendSettingRequest = 0
 const sendSettingBadge = computed(() => skipCondStepIds.value.length + skippedNodeIds.value.length)
-const sendSettingDraftCount = computed(() => Object.values(sendSettingMode.value).filter((m) => m !== 'normal').length)
+const sendSettingMatches = computed(() => {
+  const query = sendSettingSearch.value.trim().toLowerCase()
+  return sendSettingOptions.value.filter(opt => `${opt.name} ${opt.stepId}`.toLowerCase().includes(query))
+})
+function sendSettingModeOf(opt: SendSettingOption): SendSettingMode {
+  if (isNodeSkipped(opt.nodeId)) return 'mute'
+  return skipCondStepIds.value.includes(opt.stepId) ? 'skipCond' : 'normal'
+}
+const sendSettingSelectedCount = computed(() => sendSettingOptions.value.filter(opt => sendSettingModeOf(opt) !== 'mute').length)
+const sendSettingRangeLabel = computed(() => {
+  if (sendSettingOptions.value.length && sendSettingSelectedCount.value < sendSettingOptions.value.length) {
+    return `${sendSettingSelectedCount.value}/${sendSettingOptions.value.length}`
+  }
+  return skippedNodeIds.value.length ? `已排除 ${skippedNodeIds.value.length}` : '全部'
+})
 
 /** 节点轨道的右键菜单（0917-06 / 0917-08）。菜单项按被右键的那个节点算，不看当前选中。 */
 const nodeMenu = ref<{ show: boolean; nodeId: string; x: number; y: number }>({ show: false, nodeId: '', x: 0, y: 0 })
@@ -468,14 +476,23 @@ const menuNodeIsFirst = computed(() => (nodeMenu.value.nodeId
   ? isFirstRunnableNode(flow.main, flow.configs, nodeMenu.value.nodeId)
   : false))
 const menuNodeTitle = computed(() => flow.configs[nodeMenu.value.nodeId]?.title || nodeMenu.value.nodeId)
+const menuSendOption = computed<SendSettingOption>(() => {
+  const nodeId = nodeMenu.value.nodeId
+  const loaded = sendSettingOptions.value.find(opt => opt.nodeId === nodeId)
+  if (loaded) return loaded
+  const cfg = flow.configs[nodeId]
+  const condition = cfg ? nodeEntryCondition(cfg) : undefined
+  return { nodeId, stepId: stepIdOfNode(nodeId), name: menuNodeTitle.value,
+    condition: condition && conditionGroupIsSet(condition) ? conditionGroupLabel(condition) : '' }
+})
 function openNodeMenu(payload: { nodeId: string; x: number; y: number }) {
   nodeMenu.value = {
     show: true,
     nodeId: payload.nodeId,
-    // 菜单宽 ~150px，贴右边缘时往左挪，别被视口裁掉（与 FlowBoard.openMenu 同款处理）
-    x: Math.min(payload.x, window.innerWidth - 168),
-    y: payload.y,
+    x: Math.max(8, Math.min(payload.x, window.innerWidth - 220)),
+    y: Math.max(8, Math.min(payload.y, window.innerHeight - 200)),
   }
+  if (canSkipCondThisSend.value) void loadSendSettings()
 }
 function closeNodeMenu() {
   nodeMenu.value.show = false
@@ -484,7 +501,10 @@ function toggleSkipNode(nodeId: string) {
   skippedNodeIds.value = isNodeSkipped(nodeId)
     ? skippedNodeIds.value.filter((id) => id !== nodeId)
     : [...skippedNodeIds.value, nodeId]
-  closeNodeMenu()
+  if (isNodeSkipped(nodeId)) {
+    skipCondStepIds.value = skipCondStepIds.value.filter(id => id !== stepIdOfNode(nodeId))
+    forceSkipCond.value = skipCondStepIds.value.length > 0
+  }
 }
 function restoreAllSkipped() {
   skippedNodeIds.value = []
@@ -588,113 +608,70 @@ function buildCurrentConfigHint() {
   }
 }
 
-/**
- * 打开「选择跳过进入条件的节点」面板（1109-R01 按节点）。
- *
- * 列表口径必须和真正发送时的下游集合一致，所以不自己沿着画布猜，直接复用
- * `fetchNextStepConfig` 的 `downstreamSteps`（含层序去重、已在 onSendNextStep 里被「本次不发」
- * 过滤过一次），并再按 `skippedStepIds` 过滤一遍——用户可能刚标完「本次不发」就来点这个。
- * 默认全选：等于旧平台的整批行为，用户不勾选就开开关时不应悄悄只跳一部分。
- */
-/** 步骤 ID → 画布节点 ID（面板拿到的是 stepId，「本次不发」存的是节点 ID，两者要能对上）。 */
+/** 步骤 ID → 画布节点 ID。发送参数仍使用真实步骤 ID。 */
 function nodeIdOfStepId(stepId: string): string {
   const hit = Object.entries(flow.configs).find(([nodeId]) => stepIdOfNode(nodeId) === stepId)
   if (hit) return hit[0]
   return /^\d+$/.test(stepId) ? stepId : ''
 }
-
-async function openSendSettings() {
-  if (execMode.value !== 'input') return
-  sendSettingVisible.value = true
+async function loadSendSettings() {
+  if (!canSkipCondThisSend.value) return
+  const request = ++sendSettingRequest
   sendSettingLoading.value = true
   sendSettingError.value = ''
   try {
     const info = await fetchNextStepConfig(
-      sourceId.value,
-      selectedNodeId.value,
-      buildCurrentFallbackSteps(),
-      buildCurrentConfigHint(),
+      sourceId.value, selectedNodeId.value, buildCurrentFallbackSteps(), buildCurrentConfigHint(),
     )
-    // 这里**不剔除**已标「本次不发」的节点：面板要能把它改回正常，剔除就再也找不回来了
-    sendSettingOptions.value = (info?.downstreamSteps ?? [])
-      .map((step) => {
-        const stepId = String(step.stepId)
-        return {
-          stepId,
-          nodeId: nodeIdOfStepId(stepId),
-          name: step.name || stepId,
-          condition: step.condition || '',
-          configId: step.configId,
-        }
-      })
-      .filter((opt) => /^\d+$/.test(opt.stepId))
-    // 2026-11-10 用户：「默认本次不发，只是单个操作，无需记住」——每次打开都是全「本次不发」，
-    // 不读上一次的勾选。面板本身就是本次发送的一次性设置（不写回节点配置），所以默认值只有
-    // 「本次不发」这一个合理选项：用户挑哪几步发，就只把那几步改成「正常发送」。
-    const modes: Record<string, SendSettingMode> = {}
-    for (const opt of sendSettingOptions.value) modes[opt.stepId] = 'mute'
-    sendSettingMode.value = modes
+    if (request !== sendSettingRequest) return
+    sendSettingOptions.value = (info?.downstreamSteps ?? []).map(step => {
+      const stepId = String(step.stepId)
+      return { stepId, nodeId: nodeIdOfStepId(stepId), name: step.name || stepId,
+        condition: step.condition || '', configId: step.configId }
+    }).filter(opt => /^\d+$/.test(opt.stepId))
     if (!sendSettingOptions.value.length) sendSettingError.value = '当前节点没有可发送的下游节点'
   } catch (err) {
-    sendSettingError.value = (err as Error)?.message || '读取下游节点失败，请稍后重试'
+    if (request === sendSettingRequest) sendSettingError.value = (err as Error)?.message || '读取下游节点失败，请稍后重试'
   } finally {
-    sendSettingLoading.value = false
+    if (request === sendSettingRequest) sendSettingLoading.value = false
   }
+}
+watch(sendSettingVisible, visible => {
+  if (visible) openSendSettings()
+})
+function openSendSettings() {
+  sendSettingSearch.value = ''
+  void loadSendSettings()
 }
 function setSendSettingMode(opt: SendSettingOption, mode: SendSettingMode) {
-  // 没有进入条件的节点本来就必发，「忽略条件」对它没有意义，别给一个点了没反应的选项
-  if (mode === 'skipCond' && !opt.condition) return
-  sendSettingMode.value = { ...sendSettingMode.value, [opt.stepId]: mode }
+  if (mode === 'skipCond' && (!opt.condition || !opt.stepId || isNodeSkipped(opt.nodeId))) return
+  skippedNodeIds.value = skippedNodeIds.value.filter(id => id !== opt.nodeId)
+  if (mode === 'mute') skippedNodeIds.value.push(opt.nodeId)
+  skipCondStepIds.value = skipCondStepIds.value.filter(id => id !== opt.stepId)
+  if (mode === 'skipCond') skipCondStepIds.value.push(opt.stepId)
+  forceSkipCond.value = skipCondStepIds.value.length > 0
 }
-/**
- * 默认全是「本次不发」，所以这里的恢复动作只能是「全部正常发送」，
- * 原来的「全部恢复默认」在这个默认值下等于什么都不做（2026-11-10 用户改默认值后同步改文案）。
- */
-function resetSendSettings() {
-  const next: Record<string, SendSettingMode> = {}
-  for (const opt of sendSettingOptions.value) next[opt.stepId] = 'normal'
-  sendSettingMode.value = next
-}
-/** 把面板里的三态落到本次发送状态（不关面板、不发请求）。 */
-function applySendSettings() {
-  const covered = new Set(sendSettingOptions.value.map((opt) => opt.nodeId).filter(Boolean))
-  // 面板只覆盖"当前节点的下游"，面板外的既有标记（理论上是换节点后残留）保持不动
-  const outsideSkipped = skippedNodeIds.value.filter((id) => !covered.has(id))
-  const muteNodeIds: string[] = []
-  const skipIds: string[] = []
-  for (const opt of sendSettingOptions.value) {
-    const mode = sendSettingMode.value[opt.stepId] ?? 'normal'
-    if (mode === 'mute' && opt.nodeId) muteNodeIds.push(opt.nodeId)
-    if (mode === 'skipCond') skipIds.push(opt.stepId)
+function setSendTargets(options: SendSettingOption[], selected: boolean) {
+  const nodeIds = new Set(options.map(opt => opt.nodeId))
+  const stepIds = new Set(options.map(opt => opt.stepId))
+  skippedNodeIds.value = skippedNodeIds.value.filter(id => !nodeIds.has(id))
+  if (!selected) {
+    skippedNodeIds.value.push(...nodeIds)
+    skipCondStepIds.value = skipCondStepIds.value.filter(id => !stepIds.has(id))
+    forceSkipCond.value = skipCondStepIds.value.length > 0
   }
-  skippedNodeIds.value = [...outsideSkipped, ...muteNodeIds]
-  skipCondStepIds.value = skipIds
-  forceSkipCond.value = skipIds.length > 0
 }
-/**
- * 面板底部「发后续」：先落设置再直接发，省掉"保存 → 关弹窗 → 再点主按钮"那一步（2026-11-10 用户要求）。
- * 没勾数据时不关面板也不发，只提示——否则用户会以为发出去了。
- */
-async function confirmSendSettingsAndSend() {
-  if (sendSettingLoading.value || !!sendSettingError.value) return
-  if (!selectedRowIds.value.length) {
-    ElMessage.info('请先在列表里勾选要发送的数据')
-    return
-  }
-  applySendSettings()
-  sendSettingVisible.value = false
-  await onSendNextStep()
-}
-/**
- * 清空本次发送的一次性设置：跳过条件 + 「本次不发」都要清。
- *
- * 2026-11-10 用户：「默认本次不发，只是单个操作，无需记住」——「本次不发」只对这一批生效，
- * 受理成功后必须一起清掉，否则下一批会静默沿用「全都不发」，发出去等于什么都没发。
- */
+/** 仅受理成功或切换发送上下文后恢复默认，失败重试保留设置。 */
 function clearSendSettings() {
+  ++sendSettingRequest
   skipCondStepIds.value = []
   forceSkipCond.value = false
   skippedNodeIds.value = []
+  sendSettingOptions.value = []
+  sendSettingVisible.value = false
+  sendSettingLoading.value = false
+  sendSettingError.value = ''
+  sendSettingSearch.value = ''
 }
 
 function runNextStep(
@@ -840,7 +817,8 @@ async function onSendNextStep() {
 
   // 整条下游都被标了"本次不发"：别发一个空 itemConfig 出去（后端会当成"发所有下一步"，
   // 正好跟用户的意图相反）
-  if (skippedStepIds.value.size && !downstreamIds.length && !fallbackSuccStepId) {
+  if (skippedStepIds.value.size && !downstreamIds.length
+    && ((nextInfo?.downstreamSteps?.length ?? 0) > 0 || !singleStepId || skippedStepIds.value.has(String(singleStepId)))) {
     ElMessage.warning('这条下游的节点都标了「本次不发」，没有可发的节点')
     return
   }
@@ -962,6 +940,7 @@ async function onSendUpstream() {
 // 用户没写过的条件偷偷混进他的 SQL，报错时会指向一个他没写过的东西，不做。
 // 要真正支持，需要后端在 nextStep2 上加 parentId（已并入 0903 后端需求 H9 一起问）。
 const sendAllBlockedReason = computed(() => {
+  if (!isCurrentNodeAction.value && sendSettingBadge.value) return '本次发送设置仅支持勾选数据后发后续，请先恢复全部发送并取消忽略条件'
   if (filters.dataId && filters.parentId) return '「发全部」不支持按数据 ID / 父 ID 筛选，请改用勾选后「发后续任务」'
   if (filters.dataId) return '「发全部」不支持按数据 ID 筛选，请改用勾选后「发后续任务」'
   if (filters.parentId) return '「发全部」不支持按父 ID 筛选，请改用勾选后「发后续任务」'
@@ -974,7 +953,7 @@ async function onSendAllUnderFilter() {
   // 开关在工具栏上是共用的，这里必须**明确挡住**——否则用户勾了"本次跳过条件"再点"发全部"，
   // 条件照常判断、数据被静默拒绝，看起来像功能失效。
   if (forceSkipCond.value) {
-    ElMessage.warning('「发全部」暂不支持忽略进入条件：请先点「跳过条件」把勾选清空，或改用勾选数据后的「发后续任务」')
+    ElMessage.warning('「发全部」暂不支持忽略进入条件：请先在节点菜单取消忽略条件，或改用勾选数据后的「发后续」')
     return
   }
 
@@ -1133,8 +1112,6 @@ watch(
       if (flow.selectedId !== targetId) {
         flow.select(targetId)
       }
-      // 「本次不发」跟着页签走（切视图、切节点都还在），刷新浏览器才清掉
-      skippedNodeIds.value = [...(snap?.skippedNodeIds ?? [])]
       if (!fromQuery && snapId === targetId) {
         page.value = snap?.page ?? 1
         if (snap?.filters) {
@@ -1279,9 +1256,9 @@ function onSortChange(field: string, order: 'ascend' | 'descend' | '') {
 }
 
 // 浏览状态实时写入源页签快照，切换后恢复。
-watch([selectedNodeId, page, () => ({ ...filters }), skippedNodeIds], () => {
+watch([selectedNodeId, page, () => ({ ...filters })], () => {
   const key = tabKey.value
-  if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters }, skippedNodeIds: [...skippedNodeIds.value] })
+  if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters } })
 })
 
 // 「本次跳过条件」是一次性动作（1109-R01 验收：再次普通发送必须恢复原行为）：
@@ -2072,20 +2049,38 @@ async function onTestScript() {
             data-testid="data-no-exec-reason"
             :title="noExecReason"
           >{{ noExecReason }}</span>
-          <!-- 1109-R01：本次发送设置（「本次不发」＋「忽略进入条件」合并成一个面板，
-               2026-11-09 用户要求）。只在"发后续"出现；一次性，不写回节点配置。 -->
-          <button
+          <el-popover
             v-if="canSkipCondThisSend"
-            class="rc-btn rv-send-setting-btn"
-            type="button"
-            data-testid="data-send-settings"
-            :class="{ 'is-on': sendSettingBadge > 0 }"
-            :aria-pressed="sendSettingBadge > 0 ? 'true' : 'false'"
-            :title="sendSettingBadge > 0
-              ? `本次发送已调整 ${sendSettingBadge} 个下游节点（忽略进入条件 / 本次不发）。一次性，不改节点保存的配置；受理成功或换源/换节点/换版本后自动清空。「发全部」不支持。点击可重新设置。`
-              : '逐节点指定本次发后续：照常发送 / 忽略进入条件 / 本次不发。可以先设好再勾数据（一次性，不改节点配置；仅对「发后续任务」生效）'"
-            @click="openSendSettings"
-          >{{ sendSettingBadge ? `发后续设置 · ${sendSettingBadge}` : '发后续设置' }}</button>
+            v-model:visible="sendSettingVisible"
+            trigger="click"
+            placement="bottom-end"
+            :width="360"
+          >
+            <template #reference>
+              <button class="rc-btn rv-send-setting-btn" type="button" data-testid="data-send-settings"
+                :class="{ 'is-on': sendSettingBadge > 0 }"
+                title="本次发送范围，默认全部发送；仅对勾选数据的发后续生效"
+              >发送范围：{{ sendSettingRangeLabel }}<el-icon><ArrowDown /></el-icon></button>
+            </template>
+            <section v-if="sendSettingVisible" class="rv-send-range" role="dialog" aria-label="本次发送范围" data-testid="send-range-panel">
+              <header><strong>本次发送范围</strong><span>仅本次</span></header>
+              <div class="rv-send-range-search"><el-icon><Search /></el-icon><input v-model="sendSettingSearch" aria-label="搜索发送节点" placeholder="搜索节点名称 / 步骤 ID" /></div>
+              <p v-if="sendSettingLoading" class="rv-send-setting-loading">正在读取下游节点…</p>
+              <p v-else-if="sendSettingError" class="rv-send-setting-error">{{ sendSettingError }}<button type="button" @click="loadSendSettings">重试</button></p>
+              <template v-else>
+                <div class="rv-send-range-ops"><span>已选 <b>{{ sendSettingSelectedCount }}</b> / {{ sendSettingOptions.length }} 个节点</span><button type="button" data-testid="send-range-all" @click="setSendTargets(sendSettingOptions, true)">全选</button><button type="button" data-testid="send-range-clear" @click="setSendTargets(sendSettingOptions, false)">清空</button></div>
+                <div v-if="sendSettingSearch.trim()" class="rv-send-range-filter-ops"><span>匹配 {{ sendSettingMatches.length }} 个</span><button type="button" :disabled="!sendSettingMatches.length" @click="setSendTargets(sendSettingMatches, true)">勾选搜索结果</button><button type="button" :disabled="!sendSettingMatches.length" @click="setSendTargets(sendSettingMatches, false)">取消搜索结果</button></div>
+                <div class="rv-send-range-list">
+                  <label v-for="opt in sendSettingMatches" :key="opt.stepId" class="rv-send-range-row" :title="opt.name">
+                    <input type="checkbox" :checked="sendSettingModeOf(opt) !== 'mute'" :aria-label="`发送到${opt.name}`" :data-testid="`send-range-${opt.stepId}`" @change="setSendTargets([opt], ($event.target as HTMLInputElement).checked)" />
+                    <span>{{ opt.name }}</span><small>#{{ opt.stepId }}</small>
+                  </label>
+                  <p v-if="!sendSettingMatches.length" class="rv-send-range-empty">没有匹配的节点</p>
+                </div>
+              </template>
+              <footer><span>{{ sendSettingOptions.length && !sendSettingSelectedCount ? '请至少选择一个节点' : '发送成功后恢复全部发送' }}</span><button class="rc-btn" type="button" data-testid="send-range-done" @click="sendSettingVisible = false">完成</button></footer>
+            </section>
+          </el-popover>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
             <button
               class="rc-btn primary"
@@ -2409,13 +2404,16 @@ async function onTestScript() {
         data-testid="rail-menu-send-fetch"
         @click="sendFetchForNode(nodeMenu.nodeId)"
       >发起抓取</button>
-      <CodeConfigButton data-testid="rail-menu-code" :build-targets="() => nodeCodeTargets(nodeMenu.nodeId)" :node-configs="flow.configs" label="代码生成" />
-      <button
-        type="button"
-        data-testid="rail-menu-toggle-skip"
-        :title="isNodeSkipped(nodeMenu.nodeId) ? '恢复后，发后续任务会把它带上' : '只影响从本页发出的发后续任务，不改线上配置'"
-        @click="toggleSkipNode(nodeMenu.nodeId)"
-      >{{ isNodeSkipped(nodeMenu.nodeId) ? '恢复发送' : '本次不发后续' }}</button>
+      <label class="rv-node-send-option">
+        <input type="checkbox" data-testid="rail-menu-toggle-skip" :checked="isNodeSkipped(nodeMenu.nodeId)" @change="toggleSkipNode(nodeMenu.nodeId)" />
+        <span>本次不发后续</span>
+      </label>
+      <label class="rv-node-send-option" :class="{ disabled: sendSettingLoading || !menuSendOption.condition || !menuSendOption.stepId || isNodeSkipped(nodeMenu.nodeId) || !canSkipCondThisSend }">
+        <input type="checkbox" data-testid="rail-menu-ignore-condition" :checked="skipCondStepIds.includes(menuSendOption.stepId)"
+          :disabled="sendSettingLoading || !menuSendOption.condition || !menuSendOption.stepId || isNodeSkipped(nodeMenu.nodeId) || !canSkipCondThisSend"
+          @change="setSendSettingMode(menuSendOption, ($event.target as HTMLInputElement).checked ? 'skipCond' : 'normal')" />
+        <span>本次忽略进入条件</span>
+      </label>
       <button
         v-if="skippedNodeIds.length > 1 || (skippedNodeIds.length === 1 && !isNodeSkipped(nodeMenu.nodeId))"
         type="button"
@@ -2423,88 +2421,6 @@ async function onTestScript() {
         @click="restoreAllSkipped"
       >全部恢复（{{ skippedNodeIds.length }}）</button>
     </div>
-
-    <!-- 1109-R01 本次发送设置：一个节点三种处置（正常 / 忽略进入条件 / 本次不发），
-         互斥单值。勾选"忽略条件"非全量时由 onSendNextStep 拆成两次请求。 -->
-    <el-dialog
-      v-model="sendSettingVisible"
-      title="本次发送设置"
-      width="680px"
-      top="8vh"
-      append-to-body
-      data-testid="send-setting-dialog"
-    >
-      <div class="rv-send-setting">
-        <p class="rv-send-setting-tip">
-          只影响<strong>本次</strong>从这个页面发出的「发后续任务」，不改节点保存的配置，也不进页签快照：
-          受理成功、换源 / 换节点 / 换版本后自动清空。
-        </p>
-        <div v-if="sendSettingLoading" class="rv-send-setting-loading">正在读取下游节点…</div>
-        <p v-else-if="sendSettingError" class="rv-send-setting-error">{{ sendSettingError }}</p>
-        <template v-else>
-          <div class="rv-send-setting-head">
-            <span>下游节点（{{ sendSettingOptions.length }}）</span>
-            <span class="rv-send-setting-ops">
-              <button type="button" class="rc-btn tiny" @click="resetSendSettings">全部正常发送</button>
-            </span>
-          </div>
-          <div class="rv-send-setting-list">
-            <div
-              v-for="opt in sendSettingOptions"
-              :key="opt.stepId"
-              class="rv-send-setting-row"
-              :class="`is-${sendSettingMode[opt.stepId] || 'normal'}`"
-              :data-testid="`send-setting-row-${opt.stepId}`"
-            >
-              <div class="rv-send-setting-meta">
-                <span class="rv-send-setting-name">{{ opt.name }}</span>
-                <span class="rv-send-setting-id">#{{ opt.stepId }}</span>
-                <span
-                  class="rv-send-setting-cond"
-                  :class="{ 'is-empty': !opt.condition }"
-                  :title="opt.condition || '没有进入条件：这个节点每次都会照常发送'"
-                >{{ opt.condition || '无进入条件' }}</span>
-              </div>
-              <div class="rv-send-setting-modes">
-                <button
-                  v-for="m in ([
-                    { key: 'normal', label: '正常发送' },
-                    { key: 'skipCond', label: '忽略条件' },
-                    { key: 'mute', label: '本次不发' },
-                  ] as const)"
-                  :key="m.key"
-                  type="button"
-                  class="rc-btn tiny rv-send-setting-mode"
-                  :class="[`is-${m.key}`, { on: (sendSettingMode[opt.stepId] || 'normal') === m.key }]"
-                  :disabled="m.key === 'skipCond' && !opt.condition"
-                  :title="m.key === 'skipCond'
-                    ? (opt.condition ? '本次照发，但不判断它的进入条件' : '这个节点没有进入条件，忽略条件没有意义')
-                    : m.key === 'mute'
-                      ? '本次不往这个节点发（下游节点照常）'
-                      : '照常发送、照常判断进入条件'"
-                  :data-testid="`send-setting-${opt.stepId}-${m.key}`"
-                  @click="setSendSettingMode(opt, m.key)"
-                >{{ m.label }}</button>
-              </div>
-            </div>
-          </div>
-        </template>
-      </div>
-      <template #footer>
-        <div class="rv-send-setting-foot">
-          <button class="rc-btn ghost" type="button" @click="sendSettingVisible = false">取消</button>
-          <!-- 2026-11-10 用户：「我把这个按钮改成发后续就好了，你不用多点一步了」——
-               点这里直接落本次设置并发出去，不再需要"保存 → 关弹窗 → 再点主按钮"。 -->
-          <button
-            class="rc-btn primary"
-            type="button"
-            data-testid="send-setting-confirm"
-            :disabled="sendSettingLoading || !!sendSettingError"
-            @click="confirmSendSettingsAndSend"
-          >发后续{{ sendSettingDraftCount ? `（${sendSettingDraftCount} 个调整）` : '' }}</button>
-        </div>
-      </template>
-    </el-dialog>
 
     <el-dialog
       v-model="filePreview.visible"
@@ -2562,7 +2478,7 @@ async function onTestScript() {
 /* 节点右键菜单：视觉对齐源侧栏的 .ssw-row-menu（全站第 5 处右键菜单，样式刻意一致） */
 .rv-node-menu-mask { position: fixed; z-index: 91; inset: 0; }
 .rv-node-menu {
-  position: fixed; z-index: 92; min-width: 150px; padding: 4px;
+  position: fixed; z-index: 92; width: 212px; padding: 4px;
   background: #fff; border: 1px solid var(--rc-border); border-radius: 7px;
   box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.38);
 }
@@ -2571,6 +2487,10 @@ async function onTestScript() {
   display: block; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 4px;
   background: transparent; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer;
 }
+.rv-node-send-option { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
+.rv-node-send-option input { width: 14px; height: 14px; margin: 0; accent-color: var(--rc-primary); }
+.rv-node-send-option:hover { background: var(--rc-primary-bg); border-radius: 4px; }
+.rv-node-send-option.disabled { color: var(--rc-faint); cursor: default; }
 .rv-node-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rv-rail-ctl { position: absolute; top: 6px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
 .rv-rail-icon-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); cursor: pointer; transition: all 0.15s ease; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
@@ -2792,124 +2712,31 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
   background: currentColor;
 }
 
-/* 「本次发送设置」面板：一行一个节点，右侧三态分段按钮。
-   2026-11-10 样式优化（用户圈了行首状态条与底部按钮）：状态条从贴边 inset 阴影改成独立竖条、
-   三态按钮并成一组分段控件、底部按钮加 flex 间距，说明文字做成浅底提示块。 */
-.rv-send-setting { display: flex; flex-direction: column; gap: 12px; }
-.rv-send-setting-tip {
-  margin: 0;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: var(--rc-bg);
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--rc-text-2);
-}
-.rv-send-setting-tip strong { color: var(--rc-primary); font-weight: 600; }
-.rv-send-setting-loading,
-.rv-send-setting-error { margin: 0; padding: 22px 0; text-align: center; font-size: 12px; color: var(--rc-text-2); }
+/* 本次发送范围：单一勾选列表，条件设置留在节点菜单。 */
+.rv-send-range { display: flex; flex-direction: column; gap: 10px; color: var(--rc-text-2); font-size: 12px; }
+.rv-send-range header { display: flex; align-items: center; gap: 8px; }
+.rv-send-range header strong { color: var(--rc-text); font-size: 13px; }
+.rv-send-range header > span { color: var(--rc-faint); font-size: 10px; }
+.rv-send-range-search { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 5px; color: var(--rc-faint); }
+.rv-send-range-search:focus-within { border-color: var(--rc-primary); }
+.rv-send-range-search input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; font-size: 12px; color: var(--rc-text); }
+.rv-send-range-ops, .rv-send-range-filter-ops { display: flex; align-items: center; gap: 12px; font-size: 11px; }
+.rv-send-range-ops > span, .rv-send-range-filter-ops > span { margin-right: auto; }
+.rv-send-range-ops b { color: var(--rc-primary); }
+.rv-send-range-ops button, .rv-send-range-filter-ops button, .rv-send-setting-error button { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; font-size: 11px; }
+.rv-send-range-filter-ops button:disabled { opacity: .45; cursor: default; }
+.rv-send-range-list { max-height: min(280px, 38vh); overflow: auto; border-block: 1px solid var(--rc-border-soft); }
+.rv-send-range-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 4px; cursor: pointer; }
+.rv-send-range-row + .rv-send-range-row { border-top: 1px solid var(--rc-border-soft); }
+.rv-send-range-row:hover { background: var(--rc-primary-bg); }
+.rv-send-range-row input { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--rc-primary); }
+.rv-send-range-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-send-range-row small { margin-left: auto; flex: none; color: var(--rc-faint); font-size: 10px; }
+.rv-send-range-empty, .rv-send-setting-loading, .rv-send-setting-error { margin: 0; padding: 18px 0; text-align: center; color: var(--rc-muted); font-size: 12px; }
 .rv-send-setting-error { color: var(--rc-error); }
-.rv-send-setting-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--rc-text-2); }
-.rv-send-setting-ops { display: inline-flex; gap: 6px; }
-/* 批量恢复是次要动作：做成文字按钮，别跟右侧三态按钮抢注意力 */
-.rv-send-setting-ops .rc-btn {
-  height: 24px;
-  padding: 0 8px;
-  border-color: transparent;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--rc-primary);
-}
-.rv-send-setting-ops .rc-btn:hover { border-color: transparent; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.rv-send-setting-list {
-  display: flex;
-  flex-direction: column;
-  max-height: 46vh;
-  overflow: auto;
-  border: 1px solid var(--rc-border);
-  border-radius: 8px;
-  padding: 4px;
-}
-.rv-send-setting-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px 9px 18px;
-  border-radius: 6px;
-  transition: background 0.15s ease;
-}
-.rv-send-setting-row + .rv-send-setting-row { border-top: 1px solid var(--rc-border-soft); }
-.rv-send-setting-row:hover { background: var(--rc-bg); }
-/* 行首状态条：正常=透明，忽略条件=主色，本次不发=中性灰 */
-.rv-send-setting-row::before {
-  content: '';
-  position: absolute;
-  left: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 18px;
-  border-radius: 2px;
-  background: transparent;
-}
-.rv-send-setting-row.is-skipCond { background: color-mix(in srgb, var(--rc-primary) 5%, #fff); }
-.rv-send-setting-row.is-skipCond::before { background: var(--rc-primary); }
-.rv-send-setting-row.is-mute { background: var(--rc-bg); }
-.rv-send-setting-row.is-mute::before { background: #cbd5e1; }
-.rv-send-setting-meta { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.rv-send-setting-name { font-size: 12px; font-weight: 600; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36%; }
-.rv-send-setting-id { flex: none; font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-faint); }
-.rv-send-setting-cond {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: var(--rc-primary-bg);
-  font-family: var(--rc-mono, monospace);
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--rc-text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rv-send-setting-cond.is-empty { background: transparent; color: var(--rc-faint); font-style: italic; }
-/* 三态并成一组分段控件：一个轨道 + 三格，选中格用白底浮起，避免三个独立按钮各自描边 */
-.rv-send-setting-modes {
-  flex: none;
-  display: inline-flex;
-  padding: 2px;
-  gap: 2px;
-  border: 1px solid var(--rc-border);
-  border-radius: 7px;
-  background: var(--rc-bg);
-}
-.rv-send-setting-mode {
-  height: 24px;
-  min-width: 60px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--rc-text-2);
-  font-weight: 500;
-}
-.rv-send-setting-mode:hover:not(:disabled):not(.on) { border: 0; background: #eef4ff; color: var(--rc-primary-ink); }
-/* 三态选中统一主色（2026-11-11 用户：「本次不发应该是蓝色的吧」）：不再给「本次不发」单独降级成灰色。 */
-.rv-send-setting-mode.on {
-  border: 0;
-  background: #fff;
-  color: var(--rc-primary);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-}
-.rv-send-setting-mode:disabled { opacity: 0.45; cursor: not-allowed; }
-.rv-send-setting-row.is-mute .rv-send-setting-name { color: var(--rc-faint); text-decoration: line-through; }
-/* 底部操作：两个按钮右对齐、8px 间距（之前是裸 button 并排，间距只有空格） */
-.rv-send-setting-foot { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
-.rv-send-setting-foot .rc-btn { min-width: 88px; }
-.rv-send-setting-foot .rc-btn:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+.rv-send-setting-error button { display: block; margin: 8px auto 0; }
+.rv-send-range footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rv-send-range footer > span { color: var(--rc-faint); font-size: 10px; }
+.rv-send-range footer .rc-btn { padding: 4px 10px; font-size: 12px; }
 
 </style>

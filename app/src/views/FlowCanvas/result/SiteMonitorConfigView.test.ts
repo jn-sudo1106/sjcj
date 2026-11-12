@@ -1,342 +1,258 @@
 // @vitest-environment jsdom
-// 监控视图「监控配置」Tab（2026-09-18 改版）：页面主体 = ck_source 分页列表（样式同「监控结果」），
-// 「＋ 新增配置」/ 行上「编辑」打开居中弹窗，弹窗内容是 MonitorConfigEditor（改版前这个 Tab 的整页）。
-// 本文件测的是**列表与弹窗的接线**：分页/筛选调用契约、新增与编辑往编辑器传什么、保存后弹窗留着并刷新列表、
-// 以及有未保存改动时关窗 / 切记录的「放弃修改 / 继续编辑」确认（1106 §7.3）。
-// 编辑器本身的字段级行为在 MonitorConfigEditor.test.ts 里测——这里把编辑器换成桩。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+// 检查项面板（1111 源内监控视图）：一页一个源，列表由容器传入（不再自拉 ck_source 分页）。
+// 这里测接线：列展示口径、启用开关事件、编辑/新增弹窗锁源、运行记录事件、未保存改动确认。
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { ElMessageBox } from 'element-plus'
+import type { MonitorRecordView } from '@/api/types/monitorCenter'
 import SiteMonitorConfigView from './SiteMonitorConfigView.vue'
-import { ckSourceApi, type CkSourceRecord } from '@/api'
 
-function row(over: Partial<CkSourceRecord> = {}): CkSourceRecord {
+function monitor(over: Partial<MonitorRecordView> = {}): MonitorRecordView {
   return {
-    id: 1, sourceId: 1400995, name: '日增量监控', tableName: 'sense_data.tb_jjjk',
-    schedule: '0 0 * * * ?', lastRun: '2026-09-18 10:00:00', nextRun: '2026-09-18 11:00:00',
-    lastMsg: '正常, 数量:1240',
+    id: 'm-1',
+    sourceId: 'src-1',
+    name: '日增量监控',
+    tableName: 'sense_data.tb_jjjk',
+    kind: 'ai',
+    enabled: true,
+    schedule: '0 0 * * * ?',
+    nextRun: '2026-11-11 12:00:00',
+    lastRun: '2026-11-11 11:00:00',
+    publishStatus: 'ready',
+    exec: 'succeeded',
+    data: 'normal',
+    notify: 'unknown',
+    lastCheckAt: '2026-11-11 11:00:46',
+    count: '1240',
+    conf: { methods: ['rowCount'] },
+    raw: {} as never,
     ...over,
   }
 }
 
-function pageResult(over: Partial<Awaited<ReturnType<typeof ckSourceApi.page>>> = {}) {
-  return {
-    total: 1, pages: 1, pageNum: 1, pageSize: 10, list: [row()],
-    ...over,
-  }
-}
-
-/** 编辑器桩：暴露 props（新增/编辑各传什么 sourceId）+ isDirty（父级关窗/切记录的守卫依据），saved 由用例手动抛 */
-const MonitorConfigEditorStub = defineComponent({
+/** 编辑器桩的「有未保存改动」开关：父级关窗守卫直接读 stub 的 isDirty() */
+let editorDirty = false
+const EditorStub = defineComponent({
   name: 'MonitorConfigEditor',
-  props: ['siteId', 'sourceId'],
-  emits: ['saved'],
-  data: () => ({ dirty: false }),
+  props: ['siteId', 'sourceId', 'sourceLocked', 'record'],
+  emits: ['saved', 'cancel'],
   methods: {
-    isDirty(): boolean { return this.dirty },
-  },
-  template: '<div data-testid="monitor-editor-stub" />',
-})
-
-/** 监控弹窗桩（SourceMonitorDialog，旧平台 `MonitorModal.vue` 的迁移版）：
- *  只暴露 showModal(sourceId)，并把收到的源 ID 渲染出来——入口有没有把当前源带上，一眼可断言 */
-const SourceMonitorDialogStub = defineComponent({
-  name: 'SourceMonitorDialog',
-  data: () => ({ opened: false, sourceId: '' }),
-  methods: {
-    showModal(id?: string) {
-      this.opened = true
-      this.sourceId = id ?? ''
+    isBusy(): boolean { return false },
+    isDirty(): boolean {
+      return editorDirty
     },
   },
-  template: '<div v-if="opened" data-testid="source-monitor-stub">{{ sourceId || "(empty)" }}</div>',
+  template: '<div data-testid="monitor-editor-stub" :data-locked="String(sourceLocked)" />',
+})
+
+const ElDialogStub = defineComponent({
+  name: 'ElDialog',
+  props: ['modelValue', 'title', 'width', 'beforeClose'],
+  emits: ['update:modelValue'],
+  methods: {
+    async onCloseClick() {
+      const done = () => this.$emit('update:modelValue', false)
+      const beforeClose = this.beforeClose as ((d: () => void) => void) | undefined
+      if (beforeClose) await beforeClose(done)
+      else done()
+    },
+  },
+  template: `<div v-if="modelValue" data-testid="site-monitor-editor-dialog">
+    <button type="button" data-testid="config-dialog-close" @click="onCloseClick">×</button>
+    <slot />
+  </div>`,
 })
 
 const stubs = {
-  MonitorConfigEditor: MonitorConfigEditorStub,
-  SourceMonitorDialog: SourceMonitorDialogStub,
-  // el-dialog 不注册 Element Plus 也能裸挂载：只关心"开着时渲染 slot"＋关闭走 before-close(done)
-  ElDialog: defineComponent({
-    name: 'ElDialog',
-    props: ['modelValue', 'title', 'width', 'beforeClose'],
-    emits: ['update:modelValue'],
-    methods: {
-      onCloseClick() {
-        const done = () => this.$emit('update:modelValue', false)
-        const beforeClose = this.beforeClose as ((d: () => void) => void) | undefined
-        if (beforeClose) beforeClose(done)
-        else done()
-      },
-    },
-    template: `<div v-if="modelValue" data-testid="config-dialog-stub">
-      <button type="button" data-testid="config-dialog-close" @click="onCloseClick">×</button>
-      <slot />
-    </div>`,
+  MonitorConfigEditor: EditorStub,
+  ElDialog: ElDialogStub,
+  ElSwitch: defineComponent({
+    name: 'ElSwitch',
+    props: ['modelValue', 'loading', 'disabled'],
+    emits: ['change'],
+    template: '<button class="el-switch" :data-on="modelValue" @click="$emit(\'change\', !modelValue)" />',
   }),
-  ElPagination: {
-    name: 'ElPagination',
-    props: ['currentPage', 'pageSize', 'total'],
-    emits: ['current-change', 'update:currentPage'],
-    // 与真实 el-pagination 同序：先 update:currentPage（v-model 回写），再 current-change（触发查询）
-    template: '<button class="pager-stub" data-testid="next-page" @click="$emit(\'update:currentPage\', currentPage + 1); $emit(\'current-change\', currentPage + 1)" />',
-  },
 }
 
-function mountView(props: { siteId: string; sourceId?: string } = { siteId: 'site-4' }) {
+function mountView(over: { monitors?: MonitorRecordView[]; loading?: boolean; error?: string } = {}) {
   return mount(SiteMonitorConfigView, {
-    props,
-    global: { stubs, directives: { loading: {} } },
+    props: {
+      siteId: 'site-4',
+      sourceId: 'src-1',
+      monitors: over.monitors ?? [monitor()],
+      loading: over.loading ?? false,
+      error: over.error ?? '',
+    },
+    global: { stubs },
   })
 }
 
-/** 改编辑器桩的"有没有未保存改动"——父级关窗/切记录时据此弹确认 */
-function setEditorDirty(wrapper: ReturnType<typeof mountView>, dirty: boolean) {
-  ;(wrapper.findComponent(MonitorConfigEditorStub).vm as unknown as { dirty: boolean }).dirty = dirty
-}
-
-/** 在编辑器桩上抛一次 saved（= 弹窗里点完保存） */
-async function editorSaved(wrapper: ReturnType<typeof mountView>) {
-  await wrapper.findComponent(MonitorConfigEditorStub).vm.$emit('saved')
-  await flushPromises()
-}
+beforeEach(() => {
+  editorDirty = false
+})
 
 afterEach(() => vi.restoreAllMocks())
 
-describe('SiteMonitorConfigView · ck_source 分页列表（2026-09-18 改版）', () => {
-  it('首屏按分页契约查询整表并渲染行与总数，不默认带筛选条件', async () => {
-    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({
-      total: 12, pages: 2, list: [row(), row({ id: 2, sourceId: 1400996, name: '日达标监控' })],
-    }))
-    const wrapper = mountView()
-    await flushPromises()
+describe('SiteMonitorConfigView · 检查项表', () => {
+  it('渲染检查项 8 列与启用/总数，展示方式、摘要、数据结论、计划', () => {
+    const wrapper = mountView({
+      monitors: [monitor(), monitor({ id: 'm-2', name: '日达标监控', enabled: false, data: 'abnormal' })],
+    })
 
-    expect(paged).toHaveBeenCalledTimes(1)
-    expect(paged).toHaveBeenCalledWith({ pageNum: 1, pageSize: 10 })
-    expect(wrapper.text()).toContain('共 12 条监控配置')
-    expect(wrapper.get('.smv-table tbody').text()).toContain('日增量监控')
-    expect(wrapper.get('.smv-table tbody').text()).toContain('日达标监控')
+    const head = wrapper.get('[data-testid="site-monitor-checks-table"] thead').text()
+    for (const column of ['名称', '方式', '检查摘要', '启用', '最近数据结论', '计划', '编辑', '运行记录']) {
+      expect(head).toContain(column)
+    }
+    expect(wrapper.get('[data-testid="site-monitor-checks-count"]').text()).toContain('1 启用 ／ 共 2 项')
+    expect(wrapper.text()).toContain('日增量监控')
+    expect(wrapper.text()).toContain('AI 检查')
+    expect(wrapper.text()).toContain('rowCount')
+    expect(wrapper.text()).toContain('数据正常')
+    expect(wrapper.text()).toContain('数据异常')
+    expect(wrapper.text()).toContain('0 0 * * * ?')
   })
 
-  it('翻页把新页码带上重新查询', async () => {
-    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({ pageNum: 2 }))
-    const wrapper = mountView()
-    await flushPromises()
-
-    await wrapper.get('[data-testid="next-page"]').trigger('click')
-    await flushPromises()
-
-    expect(paged).toHaveBeenLastCalledWith({ pageNum: 2, pageSize: 10 })
+  it('草稿状态在名称旁标「未生效」，不冒充已生效', () => {
+    const wrapper = mountView({ monitors: [monitor({ publishStatus: 'draft' })] })
+    expect(wrapper.text()).toContain('未生效')
   })
 
-  it('名称筛选：查询带上 name，清空后回到整表', async () => {
-    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    const wrapper = mountView()
-    await flushPromises()
-
-    await wrapper.get('input[aria-label="名称"]').setValue('增量')
-    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
-    await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith({ pageNum: 1, pageSize: 10, name: '增量' })
-
-    await wrapper.findAll('button').find((b) => b.text() === '清空')!.trigger('click')
-    await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith({ pageNum: 1, pageSize: 10 })
+  it('空列表给加监控引导，不显示空表格', () => {
+    const wrapper = mountView({ monitors: [] })
+    expect(wrapper.get('[data-testid="site-monitor-checks-empty"]').text()).toContain('＋ 加监控')
+    expect(wrapper.find('[data-testid="site-monitor-checks-table"]').exists()).toBe(false)
   })
 
-  it('查询失败时给出错误而不是空表格假装没事', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockRejectedValue(new Error('后端 500'))
-    const wrapper = mountView()
-    await flushPromises()
+  it('加载失败显示错误并可重试', async () => {
+    const wrapper = mountView({ error: '后端 500' })
+    expect(wrapper.get('[data-testid="site-monitor-checks-error"]').text()).toContain('后端 500')
 
-    expect(wrapper.text()).toContain('后端 500')
+    await wrapper.findAll('button').find((b) => b.text() === '重试')!.trigger('click')
+    expect(wrapper.emitted('retry')).toHaveLength(1)
   })
 
-  it('空列表给引导文案，指到「＋ 新增配置」', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({ total: 0, pages: 0, list: [] }))
+  it('不提供换源入口：没有源选择组件，并提示源已锁定', () => {
     const wrapper = mountView()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('暂无监控配置')
-    expect(wrapper.text()).toContain('＋ 新增配置')
+    expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('当前源锁定')
   })
 })
 
-describe('SiteMonitorConfigView · 按当前源过滤（2026-09-28 画布监控视图）', () => {
-  it('传入 sourceId 时查询带上该源', async () => {
-    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    mountView({ siteId: 'site-4', sourceId: '430016944' })
-    await flushPromises()
+describe('SiteMonitorConfigView · 开关与运行记录', () => {
+  it('点启用开关把目标状态抛给容器（由容器统一调 API 与刷新）', async () => {
+    const wrapper = mountView()
+    await wrapper.get('[data-testid="site-monitor-check-toggle"]').trigger('click')
 
-    expect(paged).toHaveBeenCalledWith({ pageNum: 1, pageSize: 10, sourceId: '430016944' })
+    const events = wrapper.emitted('toggle')!
+    expect(events).toHaveLength(1)
+    expect((events[0]![0] as MonitorRecordView).id).toBe('m-1')
+    expect(events[0]![1]).toBe(false)
   })
 
-  it('换源时回到第一页按新源重查', async () => {
-    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    const wrapper = mountView({ siteId: 'site-4', sourceId: 'a' })
-    await flushPromises()
+  it('启用中的开关在请求期间置 loading，避免连点', () => {
+    const wrapper = mount(SiteMonitorConfigView, {
+      props: { siteId: 'site-4', sourceId: 'src-1', monitors: [monitor()], togglingId: 'm-1' },
+      global: { stubs },
+    })
+    expect(wrapper.getComponent({ name: 'ElSwitch' }).props('loading')).toBe(true)
+  })
 
-    await wrapper.setProps({ sourceId: 'b' })
-    await flushPromises()
-
-    expect(paged).toHaveBeenLastCalledWith({ pageNum: 1, pageSize: 10, sourceId: 'b' })
+  it('行上「记录」按该检查项打开运行记录（带 monitorId 的入口交给容器）', async () => {
+    const wrapper = mountView()
+    await wrapper.get('[data-testid="site-monitor-check-runs"]').trigger('click')
+    const events = wrapper.emitted('runs')!
+    expect((events[0]![0] as MonitorRecordView).id).toBe('m-1')
   })
 })
 
-describe('SiteMonitorConfigView · 新增/编辑配置弹窗（2026-09-18 改版）', () => {
-  it('「＋ 新增配置」打开弹窗，编辑器不带 sourceId（全部源起步）', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+describe('SiteMonitorConfigView · 新增/编辑锁源', () => {
+  it('「＋ 加监控」打开编辑器，sourceId 必填且只读（sourceLocked=true）', async () => {
     const wrapper = mountView()
-    await flushPromises()
     expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(false)
 
-    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
-    await flushPromises()
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
 
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(true)
-    const editor = wrapper.findComponent(MonitorConfigEditorStub)
-    expect(editor.props('sourceId')).toBeUndefined()
+    const editor = wrapper.findComponent(EditorStub)
+    expect(editor.exists()).toBe(true)
     expect(editor.props('siteId')).toBe('site-4')
+    expect(editor.props('sourceId')).toBe('src-1')
+    expect(editor.props('record')).toBeNull()
+    expect(editor.props('sourceLocked')).toBe(true)
   })
 
-  it('已锁定当前源时「＋ 新增配置」默认带上该源（1105 会议）', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    const wrapper = mountView({ siteId: 'site-4', sourceId: '430016944' })
-    await flushPromises()
+  it('行上「编辑」用当前源打开编辑器（页面内所有检查项同属一个源）', async () => {
+    const wrapper = mountView({ monitors: [monitor({ id: 'm-9' })] })
+    await wrapper.get('[data-testid="site-monitor-check-edit"]').trigger('click')
 
-    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.findComponent(MonitorConfigEditorStub).props('sourceId')).toBe('430016944')
+    const editor = wrapper.findComponent(EditorStub)
+    expect(editor.props('sourceId')).toBe('src-1')
+    expect(editor.props('record')).toMatchObject({ id: 'm-9' })
+    expect(editor.props('sourceLocked')).toBe(true)
   })
 
-  it('行上「编辑」打开弹窗，编辑器带该行的 sourceId', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({ list: [row({ sourceId: 1400995 })] }))
+  it('编辑器保存后弹窗保留、记录切到回读结果，并通知容器刷新（不在这里自己拉列表）', async () => {
     const wrapper = mountView()
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
+    const saved = monitor({ id: 'm-new', name: '新建检查项' })
+
+    await wrapper.findComponent(EditorStub).vm.$emit('saved', saved)
     await flushPromises()
 
-    await wrapper.get('[data-testid="site-monitor-config-edit"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(true)
-    expect(wrapper.findComponent(MonitorConfigEditorStub).props('sourceId')).toBe('1400995')
+    // 规格：保存后不关窗（可继续编辑/测试），并把当前记录换成回读结果，避免再次保存变成重复新增。
+    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(true)
+    expect(wrapper.findComponent(EditorStub).props('record')).toMatchObject({ id: 'm-new' })
+    const events = wrapper.emitted('saved')!
+    expect(events).toHaveLength(1)
+    expect((events[0]![0] as MonitorRecordView).id).toBe('m-new')
   })
 
-  it('编辑器保存成功后弹窗留着、列表在后面刷新（1105 会议：保存完还要接着生成、测试脚本）', async () => {
-    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+  it('保存后回读不到记录时保留弹窗并原样告诉容器（由容器/编辑器提示未回读）', async () => {
     const wrapper = mountView()
-    await flushPromises()
-    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
+
+    await wrapper.findComponent(EditorStub).vm.$emit('saved', null)
     await flushPromises()
 
-    await editorSaved(wrapper)
-
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(true)
-    expect(paged).toHaveBeenCalledTimes(2) // 首屏一次 + 保存后刷新一次
+    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(true)
+    expect(wrapper.findComponent(EditorStub).props('record')).toBeNull()
+    expect(wrapper.emitted('saved')![0]![0]).toBeNull()
   })
 
-  it('弹窗标题：新增带当前源时仍是「新增」，行上编辑才是「编辑」', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({ list: [row({ sourceId: 1400995 })] }))
-    const wrapper = mountView({ siteId: 'site-4', sourceId: '430016944' })
-    await flushPromises()
-    const title = () => wrapper.getComponent({ name: 'ElDialog' }).props('title')
-
-    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
-    await flushPromises()
-    expect(title()).toBe('新增监控配置（源 430016944）')
-
-    await wrapper.get('[data-testid="site-monitor-config-edit"]').trigger('click')
-    await flushPromises()
-    expect(title()).toBe('编辑监控配置（源 1400995）')
-  })
-})
-
-describe('SiteMonitorConfigView · 「＋ 新增监控」（2026-10-16 迁移旧平台 SourceList 的加监控）', () => {
-  it('点「＋ 新增监控」先开监控弹窗，并把当前源交给它（旧 MonitorModal.showModal(record)）', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    const wrapper = mountView({ siteId: 'site-4', sourceId: '430016944' })
+  it('编辑器点「取消」由宿主关窗，并清掉当前记录（下次加监控不带上旧记录）', async () => {
+    const wrapper = mountView({ monitors: [monitor({ id: 'm-9' })] })
+    await wrapper.get('[data-testid="site-monitor-check-edit"]').trigger('click')
+    await wrapper.findComponent(EditorStub).vm.$emit('cancel')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="source-monitor-stub"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(false)
 
-    await wrapper.get('[data-testid="site-monitor-check-add"]').trigger('click')
-    await flushPromises()
-
-    // 这个源要一路传进弹窗内的列表：列表按它过滤，「加监控」再拿它预填「数据源」。
-    // 少了它，「数据源」就没值可提交给后端。
-    expect(wrapper.get('[data-testid="source-monitor-stub"]').text()).toBe('430016944')
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
+    expect(wrapper.findComponent(EditorStub).props('record')).toBeNull()
   })
 
-  it('未带源（网站「全部」形态）也照常打开，源交给用户在弹窗内自行选定', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    const wrapper = mountView({ siteId: 'site-4' })
-    await flushPromises()
-
-    await wrapper.get('[data-testid="site-monitor-check-add"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="source-monitor-stub"]').text()).toBe('(empty)')
-  })
-
-  it('关闭弹窗：有未保存改动先问「放弃修改 / 继续编辑」，取消则留在弹窗', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
-    const confirmBox = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+  it('有未保存改动时关窗先确认；取消则留在弹窗', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
     const wrapper = mountView()
-    await flushPromises()
-    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
-    await flushPromises()
-    setEditorDirty(wrapper, true)
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
+    editorDirty = true
 
     await wrapper.get('[data-testid="config-dialog-close"]').trigger('click')
     await flushPromises()
-    expect(confirmBox).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(true)
 
-    confirmBox.mockResolvedValueOnce('confirm' as never)
-    await wrapper.get('[data-testid="config-dialog-close"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(false)
+    expect(confirm).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(true)
   })
 
-  it('弹窗开着时再点另一条记录：有未保存改动先确认，取消则保持原记录', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({
-      list: [row({ sourceId: 1400995 }), row({ id: 2, sourceId: 1400996 })],
-    }))
-    const confirmBox = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+  it('有未保存改动时确认放弃才关闭', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const wrapper = mountView()
-    await flushPromises()
-    await wrapper.get('[data-testid="site-monitor-config-add"]').trigger('click')
-    await flushPromises()
-    setEditorDirty(wrapper, true)
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
+    editorDirty = true
 
-    const edits = wrapper.findAll('[data-testid="site-monitor-config-edit"]')
-    await edits[1].trigger('click')
-    await flushPromises()
-    expect(confirmBox).toHaveBeenCalledTimes(1)
-    // 继续编辑：还是「新增」那条（sourceId 为空），没被静默换成第二行
-    expect(wrapper.findComponent(MonitorConfigEditorStub).props('sourceId')).toBeUndefined()
-
-    confirmBox.mockResolvedValueOnce('confirm' as never)
-    await edits[1].trigger('click')
-    await flushPromises()
-    expect(wrapper.findComponent(MonitorConfigEditorStub).props('sourceId')).toBe('1400996')
-  })
-
-  it('没有未保存改动时关窗 / 切记录不弹确认', async () => {
-    vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult({
-      list: [row({ sourceId: 1400995 }), row({ id: 2, sourceId: 1400996 })],
-    }))
-    const confirmBox = vi.spyOn(ElMessageBox, 'confirm')
-    const wrapper = mountView()
-    await flushPromises()
-    await wrapper.get('[data-testid="site-monitor-config-edit"]').trigger('click')
-    await flushPromises()
-    await wrapper.findAll('[data-testid="site-monitor-config-edit"]')[1].trigger('click')
-    await flushPromises()
     await wrapper.get('[data-testid="config-dialog-close"]').trigger('click')
     await flushPromises()
 
-    expect(confirmBox).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="monitor-editor-stub"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(false)
   })
 })

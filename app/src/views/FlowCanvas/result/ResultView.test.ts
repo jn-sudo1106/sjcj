@@ -67,7 +67,11 @@ const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], t
 const ElDropdownStub = { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' }
 const ElDropdownMenuStub = { name: 'ElDropdownMenu', template: '<div><slot /></div>' }
 const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item" :disabled="disabled ? \'\' : undefined"><slot /></div>' }
-const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false, AddDataMenu: false, ExportMenu: false, FullscreenToggle: false, BrowseModeToggle: false }
+const ElPopoverStub = {
+  name: 'ElPopover', props: ['visible'], emits: ['update:visible'],
+  template: `<div><div @click="$emit('update:visible', !visible)"><slot name="reference" /></div><slot v-if="visible" /></div>`,
+}
+const STUBS = { ElPopover: ElPopoverStub, ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false, AddDataMenu: false, ExportMenu: false, FullscreenToggle: false, BrowseModeToggle: false }
 
 function mountResultView() {
   return shallowMount(ResultView, {
@@ -1231,10 +1235,8 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T1', ['d1', 'd2'])
   })
 
-  // 1109-R01（2026-11-09 用户："能不能合并在一起选择条件和跳过条件"）：
-  // 「本次不发」与「忽略进入条件」合并成同一个面板、按节点三态互斥。
-  // 这条只钉住"面板打得开、读不到可发送步骤时不许保存"——避免又变回一个点了没反应的按钮。
-  it('「发后续设置」面板：读不到可发送的下游步骤时，底部按钮禁用并给出提示', async () => {
+  // 发送范围读失败时明确反馈，不显示可误操作的批量勾选。
+  it('发送范围读不到下游步骤时显示错误与重试入口', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1250,19 +1252,14 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
     await flushPromises()
 
-    // 这里钉住面板本体已打开、底部按钮已改名「发后续」、且读不到可发送步骤时禁用并给出提示
-    // （不静默变成一个点了没反应的按钮）。
-    expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="send-range-panel"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('当前节点没有可发送的下游节点')
-    const confirmBtn = wrapper.get('[data-testid="send-setting-confirm"]')
-    expect(confirmBtn.text()).toContain('发后续')
-    expect(confirmBtn.text()).not.toContain('保存')
-    expect(confirmBtn.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.rv-send-setting-error').text()).toContain('重试')
+    expect(wrapper.find('[data-testid="send-range-clear"]').exists()).toBe(false)
+
   })
 
-  // 2026-11-10 用户：「我把这个按钮改成发后续就好了，你不用多点一步了」——
-  // 面板底部不再是"保存"，点一下落本次设置并直接发出（= 旧"保存 → 关弹窗 → 再点主按钮"两步）。
-  it('「发后续设置」底部按钮是「发后续」：没勾数据时只提示不关面板，勾了就直接发出', async () => {
+  it('发送范围默认全选，排除节点后只发所选步骤，成功后恢复全部发送', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1292,47 +1289,28 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'first')
-    // 入口按钮叫「发后续设置」，和主按钮「发后续」区分开（2026-11-10 用户：主按钮不动，
-    // 特殊的发后续走这个入口）。
-    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发后续设置')
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：全部')
     await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
     await flushPromises()
-
-    const confirmBtn = wrapper.get('[data-testid="send-setting-confirm"]')
-    expect(confirmBtn.text()).toContain('发后续')
-    expect(confirmBtn.text()).not.toContain('保存')
-
-    // 2026-11-10 用户：「默认本次不发，只是单个操作，无需记住」——面板一打开每行都是「本次不发」，
-    // 底部按钮直接把改动数报出来，用户只挑要发的那几步改「正常发送」。
-    expect(confirmBtn.text()).toBe('发后续（2 个调整）')
-    expect(wrapper.get('[data-testid="send-setting-row-41756"]').classes()).toContain('is-mute')
-    expect(wrapper.get('[data-testid="send-setting-41756-mute"]').classes()).toContain('on')
-
-    // 挑着发：只把 41756 改成「正常发送」，41758 留在「本次不发」。
-    await wrapper.get('[data-testid="send-setting-41756-normal"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('[data-testid="send-setting-confirm"]').text()).toBe('发后续（1 个调整）')
-
-    // 一条都没勾：不能悄悄发出去（会发 0 条让用户以为成功了），也不能关面板。
-    await confirmBtn.trigger('click')
-    await flushPromises()
-    expect(ElMessage.info).toHaveBeenCalledWith('请先在列表里勾选要发送的数据')
+    expect((wrapper.get('[data-testid="send-range-41756"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.get('[data-testid="send-range-41758"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('[data-testid="send-range-41758"]').setValue(false)
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：1/2')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeDefined()
     expect(nextStep).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(true)
-
-    // 勾了行再点一次：落设置 + 直接发，面板关闭（不用再点主按钮）。
+    await wrapper.get('[data-testid="send-range-done"]').trigger('click')
     await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
     await flushPromises()
-    await wrapper.get('[data-testid="send-setting-confirm"]').trigger('click')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续（1 个节点）')
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
     expect(nextStep).toHaveBeenCalledTimes(1)
     expect(nextStep.mock.calls[0][2]).toEqual(['d1', 'd2'])
-    // 「本次不发」的 41758 被剔出本次下游，只发 41756。
-    const sentOptions = nextStep.mock.calls[0][3] as { itemConfig?: string } | undefined
-    expect(sentOptions?.itemConfig).toBe('41756')
-    expect(wrapper.find('[data-testid="send-setting-dialog"]').exists()).toBe(false)
-    // 一次性：发完立刻清空（「本次不发」不记住），入口按钮回到不带数字的状态。
-    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发后续设置')
+    expect((nextStep.mock.calls[0][3] as { itemConfig?: string })?.itemConfig).toBe('41756')
+    expect(wrapper.find('[data-testid="send-range-panel"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：全部')
+    wrapper.unmount()
+
   })
 
   it('首节点显式有输入表且后面还有后继：按钮是「发后续任务」，不是「发起抓取」（0824：前一个节点把行发给后一个）', async () => {
@@ -2666,18 +2644,21 @@ describe('ResultView · 节点右键菜单（0917-06 / 0917-08）', () => {
     expect(menu.find('[data-testid="rail-menu-toggle-skip"]').exists()).toBe(true)
   })
 
-  it('点「本次不发后续」：节点上出现角标，菜单文案变成「恢复发送」', async () => {
+  it('勾选「本次不发后续」同步节点标记，菜单保持展开，取消后恢复发送', async () => {
     const { wrapper, flow } = await mountWithRail()
     const firstId = flow.main.find((id) => flow.configs[id]) || 'first'
 
-    ;(await openMenuOn(wrapper, firstId)).get('[data-testid="rail-menu-toggle-skip"]').trigger('click')
+    ;(await openMenuOn(wrapper, firstId)).get('[data-testid="rail-menu-toggle-skip"]').setValue(true)
     await flushPromises()
 
     // 标记传给了轨道（角标由 ProcessNodeRail 渲染，这里验 prop 传对了）
     expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toEqual([firstId])
-    // 菜单关掉了；再右键同一个节点，文案变成恢复
-    expect(wrapper.find('[data-testid="rail-node-menu"]').exists()).toBe(false)
-    expect((await openMenuOn(wrapper, firstId)).get('[data-testid="rail-menu-toggle-skip"]').text()).toBe('恢复发送')
+    expect(wrapper.find('[data-testid="rail-node-menu"]').exists()).toBe(true)
+    const checkbox = wrapper.get('[data-testid="rail-menu-toggle-skip"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    await checkbox.setValue(false)
+    expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toEqual([])
+
   })
 
   // 核心：标了「本次不发」的节点不出现在 itemConfig 里，它的下游照发
@@ -2698,7 +2679,7 @@ describe('ResultView · 节点右键菜单（0917-06 / 0917-08）', () => {
     // 标记下游第一个节点，再发一次
     const skipStepId = fullIds[0]
     const skipNodeId = Object.keys(flow.configs).find((id) => String((flow.configs[id] as { stepId?: string }).stepId ?? id) === skipStepId) || skipStepId
-    ;(await openMenuOn(wrapper, skipNodeId)).get('[data-testid="rail-menu-toggle-skip"]').trigger('click')
+    ;(await openMenuOn(wrapper, skipNodeId)).get('[data-testid="rail-menu-toggle-skip"]').setValue(true)
     await flushPromises()
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
@@ -2716,7 +2697,7 @@ describe('ResultView · 节点右键菜单（0917-06 / 0917-08）', () => {
     if (ids.length < 2) return
 
     for (const id of ids) {
-      ;(await openMenuOn(wrapper, id)).get('[data-testid="rail-menu-toggle-skip"]').trigger('click')
+      ;(await openMenuOn(wrapper, id)).get('[data-testid="rail-menu-toggle-skip"]').setValue(true)
       await flushPromises()
     }
     expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toHaveLength(2)
@@ -2724,6 +2705,134 @@ describe('ResultView · 节点右键菜单（0917-06 / 0917-08）', () => {
     ;(await openMenuOn(wrapper, ids[0])).get('[data-testid="rail-menu-restore-all"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toEqual([])
+  })
+})
+
+describe('ResultView · 本次发送范围契约', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const downstream = {
+    hasNext: true, disabledTitles: [], nextSteps: [], targetTableId: 'T1', targetStepId: '41756',
+    targetConfigId: '210', targetNodeName: 'HTML 解析',
+    downstreamSteps: [
+      { stepId: '41756', configId: '210', name: 'HTML 解析', condition: 'K1 != nil' },
+      { stepId: '41758', configId: '220', name: '摘要', condition: '' },
+    ],
+  } as unknown as ResolvedNextStepConfig
+  async function setupRange() {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    Object.assign(flow.configs.mid, { stepId: '41756' })
+    Object.assign(flow.configs.mid2, { stepId: '41758' })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [{ dataId: 'd1', sourceId: current.sourceId, title: '', summary: '', acceptState: 'pending' }] })
+    vi.mocked(fetchNextStepConfig).mockResolvedValue(downstream)
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const send = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交' })
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1'])
+    await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
+    await flushPromises()
+    return { wrapper, flow, send }
+  }
+  async function openNode(wrapper: ReturnType<typeof mountResultView>, nodeId: string) {
+    wrapper.findComponent(ProcessNodeRail).vm.$emit('node-menu', { nodeId, x: 100, y: 100 })
+    await flushPromises()
+    return wrapper.get('[data-testid="rail-node-menu"]')
+  }
+  it('按步骤 ID 搜索只操作匹配项，关闭重开保持当前发送范围', async () => {
+    const { wrapper } = await setupRange()
+    await wrapper.get('input[aria-label="搜索发送节点"]').setValue('41756')
+    expect(wrapper.find('[data-testid="send-range-41758"]').exists()).toBe(false)
+    const cancelResults = wrapper.findAll('.rv-send-range-filter-ops button')[1]
+    await cancelResults.trigger('click')
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：1/2')
+    await wrapper.get('[data-testid="send-range-done"]').trigger('click')
+    await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('input[aria-label="搜索发送节点"]').element).toHaveProperty('value', '')
+    expect(wrapper.get('[data-testid="send-range-41756"]').element).toHaveProperty('checked', false)
+    expect(wrapper.get('[data-testid="send-range-41758"]').element).toHaveProperty('checked', true)
+    wrapper.unmount()
+  })
+  it('清空到零个节点时禁用发送，不退回发送全部或主后继', async () => {
+    const { wrapper, send } = await setupRange()
+    await wrapper.get('[data-testid="send-range-clear"]').trigger('click')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：0/2')
+    expect(wrapper.get('[data-testid="data-exec-all-btn"]').attributes('disabled')).toBeDefined()
+    // 即使程序派发点击，也不能把空范围当成后端的“全部下一步”。
+    wrapper.get('[data-testid="data-exec-btn"]').element.dispatchEvent(new MouseEvent('click'))
+    await flushPromises()
+    expect(send).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="send-range-all"]').trigger('click')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+  it('节点菜单没有代码生成，排除节点同步批量列表并清除该节点忽略条件', async () => {
+    const { wrapper } = await setupRange()
+    let menu = await openNode(wrapper, 'mid')
+    expect(menu.find('[data-testid="rail-menu-code"]').exists()).toBe(false)
+    expect(menu.text()).not.toContain('代码生成')
+    expect(wrapper.find('[data-testid="data-code-btn"]').exists()).toBe(true)
+    await menu.get('[data-testid="rail-menu-ignore-condition"]').setValue(true)
+    await menu.get('[data-testid="rail-menu-toggle-skip"]').setValue(true)
+    menu = wrapper.get('[data-testid="rail-node-menu"]')
+    expect(menu.get('[data-testid="rail-menu-ignore-condition"]').element).toHaveProperty('checked', false)
+    expect(menu.get('[data-testid="rail-menu-ignore-condition"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="send-range-41756"]').element).toHaveProperty('checked', false)
+    await menu.get('[data-testid="rail-menu-toggle-skip"]').setValue(false)
+    expect(wrapper.get('[data-testid="send-range-41756"]').element).toHaveProperty('checked', true)
+    wrapper.unmount()
+  })
+  it('逐节点忽略条件仍按旧接口拆分，受理成功后恢复正常条件与全部范围', async () => {
+    const { wrapper, send } = await setupRange()
+    const menu = await openNode(wrapper, 'mid')
+    await menu.get('[data-testid="rail-menu-ignore-condition"]').setValue(true)
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls[0][3]).toMatchObject({ itemConfig: '41756', configId: '210', skipCond: 1 })
+    expect(send.mock.calls[1][3]).toMatchObject({ itemConfig: '41758', configId: '220' })
+    expect(send.mock.calls[1][3]).not.toHaveProperty('skipCond')
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：全部')
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledTimes(3)
+    expect(send.mock.calls[2][3]).toMatchObject({ itemConfig: '41756,41758' })
+    expect(send.mock.calls[2][3]).not.toHaveProperty('skipCond')
+    wrapper.unmount()
+  })
+  it('发送失败保留排除范围以便重试', async () => {
+    const { wrapper, send } = await setupRange()
+    await wrapper.get('[data-testid="send-range-41758"]').setValue(false)
+    send.mockRejectedValueOnce(new Error('网络异常'))
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：1/2')
+    expect(wrapper.get('[data-testid="send-range-41758"]').element).toHaveProperty('checked', false)
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(send.mock.calls[1][3]).toMatchObject({ itemConfig: '41756' })
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：全部')
+    wrapper.unmount()
+  })
+  it('切换节点后忽略上一节点未完成的范围请求', async () => {
+    const { wrapper } = await setupRange()
+    await wrapper.get('[data-testid="send-range-done"]').trigger('click')
+    let resolve!: (value: ResolvedNextStepConfig) => void
+    vi.mocked(fetchNextStepConfig).mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    await wrapper.get('[data-testid="data-send-settings"]').trigger('click')
+    await selectNode(wrapper, 'mid')
+    resolve(downstream)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="send-range-panel"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toBe('发送范围：全部')
+    wrapper.unmount()
   })
 })
 

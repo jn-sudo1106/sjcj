@@ -27,6 +27,21 @@ const CK_SOURCE_IS_DELETE = 0
 const CK_SOURCE_VER = 12
 
 /**
+ * 一个源在 ck_source 里有多条记录时，画布同步必须停手（2026-11-12 最小保护）。
+ *
+ * /api/source/update 只按 sourceId 匹配，一条 payload 会命中该源**所有**行；而监控中心
+ * 的模型已经是「一源多检查项、各自独立记录」，靠 sourceId 整包覆盖会把别的检查项
+ * 的配置、启停一起改掉。同一份 payload 又无法表达「只改其中一条」，因此这里不猜、直接拒绝，
+ * 由用户到监控中心按记录（monitorId）编辑。单条记录时仍可同步，行为与旧版一致。
+ */
+export class MultipleCkSourceRowsError extends Error {
+  constructor(sourceId: string, count: number) {
+    super(`该源在监控记录里已有 ${count} 条检查项，画布保存不再按源覆盖；请到监控中心按检查项编辑（sourceId=${sourceId}）`)
+    this.name = 'MultipleCkSourceRowsError'
+  }
+}
+
+/**
  * ck_source.CREATE_DT 的文本格式：**ISO-8601 本地时间** `YYYY-MM-DDTHH:mm:ss`。
  *
  * 后端 CkSource.createDt 是 `LocalDateTime`，Spring 默认的 Jackson（JSR-310）只认 ISO-8601，
@@ -156,6 +171,7 @@ export async function syncMonitorAlertConfig(
     await syncMonitorCkSource(trimmed, node ? { ...node, alertConfig } : undefined)
     return
   }
+  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing.length)
   const previousConf = parseCheckConf(existing[0]?.checkConf)
   const updated = await ckSourceApi.update({
     sourceId: Number(trimmed),
@@ -174,8 +190,13 @@ export async function syncMonitorAlertConfig(
  *   见 scheduleCron.ts，不是直接读 node.schedule.cron；三层都没配过时取界面兜底值
  *   `0 0 0 * * ?`，不再留空——调度侧要求 SCHEDULE 非空），
  *   tableName=**表配置 Tab 选中的输入表**物理名（只有表 ID 时回查一次表详情）、
- *   checkConf=监控方法+编排配置序列化的 JSON、
- *   state/isDelete/createDt/ver 按上面的固定值补齐。
+ *   checkConf=监控方法+编排配置序列化的 JSON。
+ *
+ * 写入边界（2026-11-12 最小保护）：
+ *   - **新建**才补 state/isDelete/createDt/ver（新记录要能进调度）；
+ *   - **更新**只写上面四个定义字段，不碰 state/isDelete/createDt/ver——画布保存不能重新启用
+ *     已停用的检查项，也不能改别人的创建时间；
+ *   - 该源在 ck_source 里已有多条记录时直接抛 MultipleCkSourceRowsError，不再按 sourceId 整包覆盖。
  *
  * `sourceSchedule` 传画布当前源（flow.sourceCfg）：节点没配过定时时，节点配置 Tab 显示的就是
  * 源上的定时，保存就该写同一个值，否则出现「界面有 cron、落库是空」。
@@ -192,25 +213,32 @@ export async function syncMonitorCkSource(
   const orchCfg = monitorOrchestrationOf(node)
   // checkConf 不落 systemPrompt / script（2026-09-07 约定）：系统提示词与脚本体都属于生成
   // 脚本的中间产物，ck_source 只需要监控执行所需的配置（脚本路径、表、字段、调度等）。
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 解构剔除这两个键：ck_source 不落提示词与脚本体
   const { systemPrompt: _omitPrompt, script: _omitScript, ...orchestration } = orchCfg
   const existing = await ckSourceApi.list(trimmed)
+  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing.length)
   const previousConf = parseCheckConf(existing[0]?.checkConf)
-  const payload: CkSourcePayload = {
+  // update 只提交「定义」字段：name / schedule / tableName / checkConf。
+  // state（启用状态）、isDelete（逻辑删除）、createDt、ver 属于运行/生命周期字段，
+  // 画布保存不得重置——否则「停用的检查项」会被一次节点保存重新启用（2026-11-12 最小保护）。
+  const definition: CkSourcePayload = {
     sourceId: Number(trimmed),
     name: node?.title ?? '',
     schedule: nodeScheduleCron(node, sourceSchedule),
     tableName: await resolveInputTableName(node, orchCfg),
     checkConf: buildCheckConf(node, orchestration, previousConf),
+  }
+  if (existing.length) {
+    const updated = await ckSourceApi.update(definition)
+    if (!updated) throw new Error('按 sourceId 未命中任何行')
+    return
+  }
+  // 只有新建才补生命周期字段：新记录直接进入可调度状态（2026-09-07 约定）。
+  await ckSourceApi.insert({
+    ...definition,
     state: CK_SOURCE_STATE,
     isDelete: CK_SOURCE_IS_DELETE,
     createDt: formatDateTime(new Date()),
     ver: CK_SOURCE_VER,
-  }
-  if (existing.length) {
-    const updated = await ckSourceApi.update(payload)
-    if (!updated) throw new Error('按 sourceId 未命中任何行')
-    return
-  }
-  // insert 与 update 同一份 payload：新建的监控源记录直接进入可调度状态（2026-09-07 约定）。
-  await ckSourceApi.insert(payload)
+  })
 }

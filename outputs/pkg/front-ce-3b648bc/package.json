@@ -1,0 +1,24 @@
+{
+  "name": "front-ce",
+  "private": true,
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "test": "node scripts/dev.cjs --backend test",
+    "build": "npm --prefix app run build",
+    "preview": "npm --prefix app run preview",
+    "test:unit": "npm --prefix app run test:unit",
+    "test:unit:watch": "npm --prefix app run test:unit:watch",
+    "lint": "npm --prefix app run lint",
+    "lint:fix": "npm --prefix app run lint:fix",
+    "format": "npm --prefix app run format",
+    "deploy": "npm --prefix app run deploy",
+    "deploy:head": "npm --prefix app run deploy:head",
+    "deploy:docker": "node deploy-docker.js"
+  },
+  "allowScripts": {
+    "ssh2@1.17.0": true
+  }
+}
