@@ -4,11 +4,13 @@
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  ArrowDown,
   ArrowRight,
   ChatDotRound,
   Close,
   CopyDocument,
   Delete,
+  Download,
   Plus,
   Search,
   TrendCharts,
@@ -19,8 +21,12 @@ import {
   type AiSessionItem,
   type ChatMessage,
   type Clarification,
+  type PieSlice,
 } from '@/api/aiChat'
+import { downloadCsv, toCsv, csvDateTag, type CsvCell } from '@/utils/csv'
+import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
 import ClarificationCard from './ClarificationCard.vue'
+import AiPieChart from './AiPieChart.vue'
 
 interface StarterPrompt {
   tag: string
@@ -63,10 +69,122 @@ const enableReasoning = ref<boolean>(true)
 const enableAutoChart = ref<boolean>(true)
 const isSending = ref<boolean>(false)
 
-// 视图切换与思考链折叠
-const activeDataView = ref<'chart' | 'table'>('chart')
+// 视图切换与思考链折叠（支持趋势柱状、占比饼图与明细数据表）
+const activeDataView = ref<'chart' | 'pie' | 'table'>('chart')
 const isThinkingExpanded = ref<boolean>(true)
 const chatContainerRef = ref<HTMLElement | null>(null)
+
+// 提取消息中的切片数据，若未显式提供则从柱状数据智能转换
+function getMsgSlices(msg: ChatMessage): PieSlice[] {
+  if (!msg.chartData) return []
+  if (msg.chartData.slices && msg.chartData.slices.length > 0) {
+    return msg.chartData.slices
+  }
+  if (!msg.chartData.bars || msg.chartData.bars.length === 0) {
+    return []
+  }
+  return msg.chartData.bars.map((bar) => {
+    const cleanLabel = bar.label.replace(/^\d+\.\s*/, '').split('(')[0].trim() || bar.label
+    return {
+      label: cleanLabel,
+      value: bar.value,
+      displayValue: bar.displayValue,
+      color:
+        bar.color === 'red'
+          ? '#dc2626'
+          : bar.color === 'orange'
+            ? '#ea580c'
+            : bar.color === 'green'
+              ? '#16a34a'
+              : '#2563eb',
+      tone:
+        bar.color === 'red'
+          ? 'err'
+          : bar.color === 'green'
+            ? 'ok'
+            : bar.color === 'orange'
+              ? 'amber'
+              : 'primary',
+    }
+  })
+}
+
+// 提取饼图中心摘要数据
+function getMsgPieCenter(msg: ChatMessage) {
+  if (msg.kpis && msg.kpis.length > 0) {
+    return {
+      value: msg.kpis[0].value,
+      label: msg.kpis[0].label,
+    }
+  }
+  const slices = getMsgSlices(msg)
+  const sum = slices.reduce((acc, s) => acc + (Number(s.value) || 0), 0)
+  return {
+    value: sum > 0 ? (sum >= 1000 ? sum.toLocaleString() : String(sum)) : '',
+    label: '样本总计',
+  }
+}
+
+// 清理导出文件名，去除特殊符号与表情
+function getSafeExportFileName(title: string, defaultName = '问数明细数据'): string {
+  const clean = title
+    .replace(/[^\u4e00-\u9fa5a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+  return clean || defaultName
+}
+
+// 导出明细表格数据为 Excel (.xlsx)
+function exportTableToExcel(msg: ChatMessage) {
+  if (!msg.chartData?.tableColumns?.length || !msg.chartData?.tableRows?.length) {
+    ElMessage.warning('当前暂无可导出的明细数据')
+    return
+  }
+  const cols = msg.chartData.tableColumns
+  const rows = msg.chartData.tableRows
+  const headerRow: XlsxCell[] = cols.map((c) => c.label)
+  const dataRows: XlsxCell[][] = rows.map((r) =>
+    cols.map((c) => {
+      const v = r[c.prop]
+      return v != null ? (typeof v === 'number' ? v : String(v)) : ''
+    })
+  )
+  const baseName = getSafeExportFileName(msg.chartData.title || '', '问数明细报表')
+  const fileName = `${baseName}_${exportDateTag()}`
+  downloadXlsx(fileName, [headerRow, ...dataRows], baseName.slice(0, 31))
+  ElMessage.success(`已成功导出 Excel 文件：${fileName}.xlsx`)
+}
+
+// 导出明细表格数据为 CSV (.csv)
+function exportTableToCsv(msg: ChatMessage) {
+  if (!msg.chartData?.tableColumns?.length || !msg.chartData?.tableRows?.length) {
+    ElMessage.warning('当前暂无可导出的明细数据')
+    return
+  }
+  const cols = msg.chartData.tableColumns
+  const rows = msg.chartData.tableRows
+  const headers = cols.map((c) => c.label)
+  const dataRows: CsvCell[][] = rows.map((r) =>
+    cols.map((c) => {
+      const v = r[c.prop]
+      return v != null ? (typeof v === 'number' ? v : String(v)) : ''
+    })
+  )
+  const baseName = getSafeExportFileName(msg.chartData.title || '', '问数明细数据')
+  const fileName = `${baseName}_${csvDateTag()}`
+  const csvContent = toCsv(headers, dataRows)
+  downloadCsv(fileName, csvContent)
+  ElMessage.success(`已成功导出 CSV 文件：${fileName}.csv`)
+}
+
+// 统一数据导出分发
+function handleExportData(msg: ChatMessage, type: 'excel' | 'csv') {
+  if (type === 'excel') {
+    exportTableToExcel(msg)
+  } else {
+    exportTableToCsv(msg)
+  }
+}
 
 // 交互澄清卡片：载荷结构与 MCP 的 clarification 一致
 const currentClarification = ref<Clarification>({
@@ -177,10 +295,16 @@ LIMIT 10;`,
       ],
       chartData: {
         title: '📊 网络层失败率最高 TOP 3 网站对比',
+        pieTitle: '🥧 异常任务网络故障成因占比分布',
         bars: [
           { label: '1. 行业资讯网 (主要报错: HTTP 403 触发 IP 防火墙)', value: 68.2, displayValue: '68.20%', color: 'red' },
           { label: '2. 地方科技信息通报 (主要报错: Read timed out 响应超时)', value: 81.5, displayValue: '81.50%', color: 'orange' },
           { label: '3. 某商业招标采购网 (主要报错: Connection reset 连接重置)', value: 87.3, displayValue: '87.30%', color: 'orange' },
+        ],
+        slices: [
+          { label: '行业资讯网 (403阻断)', value: 412, displayValue: '412 次 (32.8%)', color: '#dc2626', tone: 'err' },
+          { label: '某商业招标采购网 (连接重置)', value: 447, displayValue: '447 次 (35.6%)', color: '#ea580c', tone: 'orange' },
+          { label: '地方科技信息通报 (响应超时)', value: 396, displayValue: '396 次 (31.6%)', color: '#f59e0b', tone: 'amber' },
         ],
         tableColumns: [
           { prop: 'siteName', label: '网站名称' },
@@ -248,10 +372,16 @@ LIMIT 10;`,
       ],
       chartData: {
         title: '📊 响应耗时最长 TOP 3 网站对比',
+        pieTitle: '🥧 慢请求站点耗时与超时重试占比',
         bars: [
           { label: '1. 科技政策公开网 (平均 18.6s)', value: 92, displayValue: '18,600 ms', color: 'red' },
           { label: '2. 产经统计公报网 (平均 12.4s)', value: 68, displayValue: '12,400 ms', color: 'orange' },
           { label: '3. 地方企业信用公示 (平均 8.1s)', value: 45, displayValue: '8,100 ms', color: 'orange' },
+        ],
+        slices: [
+          { label: '科技政策公开网 (>15s)', value: 190, displayValue: '190 次 (44.2%)', color: '#dc2626', tone: 'err' },
+          { label: '产经统计公报网 (JS延迟)', value: 120, displayValue: '120 次 (27.9%)', color: '#ea580c', tone: 'orange' },
+          { label: '地方企业信用公示 (验证码)', value: 120, displayValue: '120 次 (27.9%)', color: '#f59e0b', tone: 'amber' },
         ],
         tableColumns: [
           { prop: 'siteName', label: '网站名称' },
@@ -319,10 +449,16 @@ LIMIT 10;`,
       ],
       chartData: {
         title: '📊 昨日异常抓取任务 TOP 3 网站失败量对比',
+        pieTitle: '🥧 昨日主要故障原因与失败量占比',
         bars: [
           { label: '1. 宏观商业智库 (HTTP 403 反爬拦截)', value: 890, displayValue: '890 次', color: 'red' },
           { label: '2. 地方招投标公示台 (Gateway 504 超时)', value: 654, displayValue: '654 次', color: 'orange' },
           { label: '3. 医药信息技术网 (SSL 握手拒绝)', value: 432, displayValue: '432 次', color: 'orange' },
+        ],
+        slices: [
+          { label: '宏观商业智库 (403反爬)', value: 890, displayValue: '890 次 (45.0%)', color: '#dc2626', tone: 'err' },
+          { label: '地方招投标公示台 (504超时)', value: 654, displayValue: '654 次 (33.1%)', color: '#ea580c', tone: 'orange' },
+          { label: '医药信息技术网 (SSL拒绝)', value: 432, displayValue: '432 次 (21.9%)', color: '#f59e0b', tone: 'amber' },
         ],
         tableColumns: [
           { prop: 'siteName', label: '网站名称' },
@@ -390,10 +526,16 @@ LIMIT 10;`,
       ],
       chartData: {
         title: '📊 提取命中率较低的规则 TOP 3 对比',
+        pieTitle: '🥧 清洗空值异常成因分布占比',
         bars: [
           { label: '1. 财经新闻正文抽取 (命中率 84.5%)', value: 84.5, displayValue: '84.50%', color: 'orange' },
           { label: '2. 标讯发布时间解析 (命中率 88.2%)', value: 88.2, displayValue: '88.20%', color: 'orange' },
           { label: '3. 附件下载链接抽取 (命中率 96.0%)', value: 96.0, displayValue: '96.00%', color: 'green' },
+        ],
+        slices: [
+          { label: 'DOM 结构变更/class改名', value: 868, displayValue: '868 条 (58.4%)', color: '#dc2626', tone: 'err' },
+          { label: '日期格式变更包含周几', value: 449, displayValue: '449 条 (30.2%)', color: '#ea580c', tone: 'orange' },
+          { label: '详情页无附件标签', value: 168, displayValue: '168 条 (11.4%)', color: '#16a34a', tone: 'ok' },
         ],
         tableColumns: [
           { prop: 'siteName', label: '规则/模板名称' },
@@ -658,10 +800,16 @@ function handleSend(customTitle?: string) {
         ],
         chartData: {
           title: '📊 异常任务分布与失败原因占比',
+          pieTitle: '🥧 异常阶段与影响规模分布占比',
           bars: [
             { label: '1. 网络层拦截 (HTTP 403 / 504)', value: 72.4, displayValue: '72.40%', color: 'red' },
             { label: '2. 规则清洗异常 (XPath 失效)', value: 18.6, displayValue: '18.60%', color: 'orange' },
             { label: '3. 调度队列积压超时', value: 9.0, displayValue: '9.00%', color: 'orange' },
+          ],
+          slices: [
+            { label: '网络抓取层拦截 (403/504)', value: 910, displayValue: '910 条 (61.9%)', color: '#dc2626', tone: 'err' },
+            { label: '规则清洗层异常 (XPath失效)', value: 477, displayValue: '477 条 (32.5%)', color: '#ea580c', tone: 'orange' },
+            { label: '调度队列层积压超时', value: 83, displayValue: '83 条 (5.6%)', color: '#f59e0b', tone: 'amber' },
           ],
           tableColumns: [
             { prop: 'siteName', label: '异常层级' },
@@ -712,10 +860,16 @@ function handleSend(customTitle?: string) {
         ],
         chartData: {
           title: '📊 TOP 3 数据源统计与对比',
+          pieTitle: '🥧 采集吞吐量数据源占比分布',
           bars: [
             { label: '1. 宏观商业数据源', value: 88.5, displayValue: '32,100 次', color: 'green' },
             { label: '2. 地方科技信息通报', value: 65.2, displayValue: '24,300 次', color: 'orange' },
             { label: '3. 某商业招标采购网', value: 54.1, displayValue: '19,800 次', color: 'orange' },
+          ],
+          slices: [
+            { label: '宏观商业数据源', value: 32100, displayValue: '32,100 次 (42.1%)', color: '#16a34a', tone: 'ok' },
+            { label: '地方科技信息通报', value: 24300, displayValue: '24,300 次 (31.9%)', color: '#2563eb', tone: 'primary' },
+            { label: '某商业招标采购网', value: 19800, displayValue: '19,800 次 (26.0%)', color: '#8b5cf6', tone: 'purple' },
           ],
           tableColumns: [
             { prop: 'siteName', label: '站点名称' },
@@ -758,26 +912,83 @@ function handleSend(customTitle?: string) {
     scrollToBottom()
 
     setTimeout(() => {
-      const followUpReply: ChatMessage = {
-        id: `m-${Date.now()}-a`,
-        role: 'assistant',
-        content: `已根据您的追问「${content}」完成了针对性下钻与分析更新：`,
-        createdAt: '刚刚',
-        thinking: {
-          completed: true,
-          durationMs: 640,
-          steps: [
-            `采纳上下文约束与连续追问：${content}`,
-            '微调 SQL 筛选谓词与聚合粒度',
-            '执行结果已更新。',
-          ],
-        },
-        insights: [`已根据您的指令「${content}」完成处理，数据已刷新。`],
-        suggestions: ['将本次分析结果保存为快捷报表', '生成每日定时运行任务'],
+      const isExportQuery =
+        (content.includes('导出') || content.includes('下载')) &&
+        (content.includes('CSV') ||
+          content.includes('csv') ||
+          content.includes('Excel') ||
+          content.includes('excel') ||
+          content.includes('表格') ||
+          content.includes('数据'))
+
+      let followUpReply: ChatMessage
+
+      if (isExportQuery) {
+        // 查找当前会话中最近一条具备表格数据的回答卡片
+        const targetMsg = [...list]
+          .reverse()
+          .find((m) => m.role === 'assistant' && m.chartData?.tableRows?.length)
+        const isExcel = content.includes('Excel') || content.includes('excel')
+        const formatName = isExcel ? 'Excel (.xlsx)' : 'CSV (.csv)'
+        const rowCount = targetMsg?.chartData?.tableRows?.length || 0
+
+        if (targetMsg) {
+          if (isExcel) {
+            exportTableToExcel(targetMsg)
+          } else {
+            exportTableToCsv(targetMsg)
+          }
+        }
+
+        const safeTitle = (targetMsg?.chartData?.title || '问数明细').replace(/[📊🥧\s]/g, '')
+        followUpReply = {
+          id: `m-${Date.now()}-a`,
+          role: 'assistant',
+          content: targetMsg
+            ? `已为您生成并导出「${safeTitle}」的 ${formatName} 数据文件（共计 ${rowCount} 条明细记录），浏览器已触发下载。\n\n您也可以在明细数据表视图中随时点击「导出为 Excel」或「导出为 CSV」重新下载。`
+            : `当前会话中暂未找到可导出的明细数据表，请先执行问数查询后再导出。`,
+          createdAt: '刚刚',
+          thinking: {
+            completed: true,
+            durationMs: 420,
+            steps: [
+              `识别到用户数据导出指令：${content}`,
+              `解析会话上下文中最近一次执行结果的二维表结构（共 ${rowCount} 条数据）`,
+              `触发 ${formatName} 格式文件下载流`,
+            ],
+          },
+          insights: targetMsg
+            ? [
+                `导出字段覆盖：${targetMsg.chartData?.tableColumns?.map((c) => c.label).join('、') || '全部明细字段'}。`,
+              ]
+            : ['建议先输入业务问题查询数据，系统生成明细表后即可一键导出。'],
+          suggestions: ['查看该批任务近 7 天历史趋势', '为失败量最高的数据源配置告警规则'],
+        }
+      } else {
+        followUpReply = {
+          id: `m-${Date.now()}-a`,
+          role: 'assistant',
+          content: `已根据您的追问「${content}」完成了针对性下钻与分析更新：`,
+          createdAt: '刚刚',
+          thinking: {
+            completed: true,
+            durationMs: 640,
+            steps: [
+              `采纳上下文约束与连续追问：${content}`,
+              '微调 SQL 筛选谓词与聚合粒度',
+              '执行结果已更新。',
+            ],
+          },
+          insights: [`已根据您的指令「${content}」完成处理，数据已刷新。`],
+          suggestions: ['将本次分析结果保存为快捷报表', '生成每日定时运行任务'],
+        }
       }
+
       list.push(followUpReply)
       isSending.value = false
-      ElMessage.success('智能体已响应您的指令，分析结果已刷新')
+      if (!isExportQuery) {
+        ElMessage.success('智能体已响应您的指令，分析结果已刷新')
+      }
       scrollToBottom()
     }, 600)
   }
@@ -1095,11 +1306,16 @@ function handleKeyDown(e: KeyboardEvent) {
                   <!-- 图表/明细视图切换 -->
                   <div v-if="msg.chartData" class="rc-dataview-card">
                     <div class="rc-dataview-head">
-                      <span class="rc-dataview-title">{{ msg.chartData.title }}</span>
-                      <el-radio-group v-model="activeDataView" size="small">
-                        <el-radio-button value="chart">趋势图表</el-radio-button>
-                        <el-radio-button value="table">明细数据表</el-radio-button>
-                      </el-radio-group>
+                      <span class="rc-dataview-title">
+                        {{ activeDataView === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
+                      </span>
+                      <div class="rc-dataview-actions">
+                        <el-radio-group v-model="activeDataView" size="small">
+                          <el-radio-button value="chart">趋势图表</el-radio-button>
+                          <el-radio-button value="pie">占比饼图</el-radio-button>
+                          <el-radio-button value="table">明细数据表</el-radio-button>
+                        </el-radio-group>
+                      </div>
                     </div>
 
                     <!-- 趋势柱状视图 -->
@@ -1127,8 +1343,43 @@ function handleKeyDown(e: KeyboardEvent) {
                       </div>
                     </div>
 
+                    <!-- 占比饼图视图 -->
+                    <div v-else-if="activeDataView === 'pie'" class="rc-pie-view">
+                      <AiPieChart
+                        :slices="getMsgSlices(msg)"
+                        :center-label="getMsgPieCenter(msg).label"
+                        :center-value="getMsgPieCenter(msg).value"
+                      />
+                    </div>
+
                     <!-- 明细表格视图 -->
                     <div v-else class="rc-table-view">
+                      <div class="rc-table-meta-bar">
+                        <span class="rc-table-records-count">
+                          共 {{ msg.chartData.tableRows ? msg.chartData.tableRows.length : 0 }} 条明细记录
+                        </span>
+                        <div class="rc-table-quick-export">
+                          <el-button
+                            size="small"
+                            link
+                            type="primary"
+                            data-testid="rc-table-export-excel"
+                            @click="exportTableToExcel(msg)"
+                          >
+                            <el-icon><Download /></el-icon> 导出 Excel
+                          </el-button>
+                          <span class="rc-table-divider">|</span>
+                          <el-button
+                            size="small"
+                            link
+                            type="primary"
+                            data-testid="rc-table-export-csv"
+                            @click="exportTableToCsv(msg)"
+                          >
+                            <el-icon><Download /></el-icon> 导出 CSV
+                          </el-button>
+                        </div>
+                      </div>
                       <table class="rc-preview-table">
                         <thead>
                           <tr>
@@ -1857,12 +2108,26 @@ function handleKeyDown(e: KeyboardEvent) {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .rc-dataview-title {
   font-weight: 600;
   font-size: 13px;
   color: var(--rc-text);
+}
+
+.rc-dataview-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rc-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .rc-chart-view {
@@ -1930,10 +2195,43 @@ function handleKeyDown(e: KeyboardEvent) {
   background: #10b981;
 }
 
+.rc-pie-view {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .rc-table-view {
   width: 100%;
   overflow-x: auto;
   box-sizing: border-box;
+}
+
+.rc-table-meta-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--rc-bg, #f8fafc);
+  border: 1px solid var(--rc-border-soft, #e2e8f0);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  font-size: 12px;
+}
+
+.rc-table-records-count {
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+}
+
+.rc-table-quick-export {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rc-table-divider {
+  color: var(--rc-border, #cbd5e1);
+  font-size: 11px;
 }
 
 .rc-preview-table {
