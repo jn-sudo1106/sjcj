@@ -4,13 +4,36 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AlertConfigPanel from './AlertConfigPanel.vue'
 
-function mountPanel() {
+// 节点上已保存的告警配置（对应 NodeConfig.alertConfig）。面板只回填它，不再自带演示值。
+const SAVED_CONFIG = {
+  enabled: true,
+  policies: [
+    {
+      name: '数据延迟超过阈值',
+      metric: 'delay_minutes',
+      operator: 'gt',
+      threshold: '30',
+      consecutiveCount: 3,
+      repeatMinutes: 30,
+      recoveryNotify: true,
+      enabled: true,
+      channelTypes: ['email', 'dingtalk'] as Array<'email' | 'dingtalk'>,
+    },
+  ],
+  channels: [
+    { type: 'email' as const, enabled: true, target: 'ops@example.com' },
+    { type: 'dingtalk' as const, enabled: true, target: 'Webhook 已配置 · @数据值班' },
+  ],
+}
+
+function mountPanel(alertConfig: typeof SAVED_CONFIG | null = SAVED_CONFIG) {
   return mount(AlertConfigPanel, {
     props: {
       nodeId: 'monitor-1',
       nodeTitle: '数据质量监控',
       sourceLabel: 'test1 / TEST_ADB',
       scriptPath: '/code01/202609/monitor.py',
+      alertConfig: alertConfig ?? undefined,
     },
     global: { plugins: [ElementPlus] },
   })
@@ -124,5 +147,32 @@ describe('AlertConfigPanel', () => {
         expect.objectContaining({ type: 'email', enabled: true, target: 'alarm@example.com' }),
       ]),
     })
+  })
+
+  // 评审 E1 回归：挂载/切节点只回填，不得 emit——否则「打开编排页 + 任意一次保存」
+  // 就会把已存告警配置改成面板里的演示值。
+  it('挂载时不 emit（浏览节点不等于修改告警）', async () => {
+    const wrapper = mountPanel()
+    await flushPromises()
+    expect(wrapper.emitted('update:alert-config')).toBeUndefined()
+  })
+
+  it('节点没有告警配置时显示空态，不注入演示策略', async () => {
+    const wrapper = mountPanel(null)
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="alert-policy-row"]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('还没有通知渠道')
+    expect(wrapper.emitted('update:alert-config')).toBeUndefined()
+  })
+
+  it('没有渠道时保存策略会被拦下（提示先加渠道）', async () => {
+    const wrapper = mountPanel(null)
+    await wrapper.get('[data-testid="alert-add-policy"]').trigger('click')
+    const name = document.body.querySelector('[data-testid="alert-policy-name"]') as HTMLInputElement
+    name.value = '空值率'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    document.body.querySelector('[data-testid="alert-save-policy"]')?.dispatchEvent(new Event('click', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.emitted('update:alert-config')).toBeUndefined()
   })
 })

@@ -24,7 +24,7 @@ import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
-import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import { enqueueConfigSave, isActiveNodeConfigFlusher, registerNodeConfigFlusher } from './nodeConfigAutosave'
@@ -591,7 +591,11 @@ async function autosaveNode(nodeId: string | undefined, atTab: string) {
     try {
       await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
     } catch (e) {
-      ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      // 同源多条检查项时同步会被拒绝：这是浏览触发的自动保存，不能再弹错误打断用户切换；
+      // 真正要落库请到监控中心按记录编辑（手动点保存时会给明确提示）。
+      if (!(e instanceof MultipleCkSourceRowsError)) {
+        ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      }
     }
   }
   await syncSourceCron(node, nodeId)

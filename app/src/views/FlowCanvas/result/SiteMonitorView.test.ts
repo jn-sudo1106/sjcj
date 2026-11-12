@@ -1,240 +1,364 @@
 // @vitest-environment jsdom
-// 监控视图（0910 从旧平台「数据源告警」迁入，第一期只读 + 开关）。
-// 这里验证接线：首屏分页、按源查询、告警标记、启停的 isDelete 反向语义、日志弹窗传参。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+// 源内 / 网站监控视图容器（1111 去双 Tab 后的一页式实现）。
+//
+// 这里测容器接线，不测子组件内部：
+//   - 源内：源只来自 props（无换源）、6 项信息条 + 最差事实走 summarizeSource、检查项/最近运行挂载；
+//   - 网站：只按 siteId 列本站源，7 项摘要全部占位，不混入其他网站的源；
+//   - 运行抽屉统一开 fe-runs 的 RunsDrawer（sourceId / monitorId 两种范围）。
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
+import type { MonitorRecordView } from '@/api/types/monitorCenter'
+import { siteApi, sourceApi, type Source } from '@/api'
+import { listMonitors, listMonitorsOfSource, setMonitorsEnabled } from '@/api/monitorCenter'
 import SiteMonitorView from './SiteMonitorView.vue'
-import { siteApi, sourceCheckApi, type Source, type SourceCheck } from '@/api'
 
-function check(over: Partial<SourceCheck> = {}): SourceCheck {
+vi.mock('@/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api')>()
   return {
-    id: 'ck-1', isDelete: 0, state: 'C', name: '日增量监控',
-    lastMsg: '2026-09-09 11:00:46---正常, 数量:1240',
-    tableName: 'sense_data.tb_jjjk', schedule: '0 0 * * * ?',
-    nextRun: '2026-09-09 12:00:00', lastRun: '2026-09-09 11:00:19',
-    sourceId: 's1', checkConf: '{}',
+    ...actual,
+    sourceApi: { ...actual.sourceApi, sourceDetail: vi.fn() },
+    siteApi: { ...actual.siteApi, siteSources: vi.fn() },
+  }
+})
+vi.mock('@/api/monitorCenter', () => ({
+  listMonitors: vi.fn(),
+  listMonitorsOfSource: vi.fn(),
+  setMonitorsEnabled: vi.fn(),
+  listRuns: vi.fn(),
+}))
+
+const sourceDetailMock = vi.mocked(sourceApi.sourceDetail)
+const siteSourcesMock = vi.mocked(siteApi.siteSources)
+const listMonitorsMock = vi.mocked(listMonitors)
+const listOfSourceMock = vi.mocked(listMonitorsOfSource)
+const setEnabledMock = vi.mocked(setMonitorsEnabled)
+
+function monitor(over: Partial<MonitorRecordView> = {}): MonitorRecordView {
+  return {
+    id: 'm-1',
+    sourceId: 'src-1',
+    sourceName: '源一',
+    name: '日增量监控',
+    tableName: 'sense_data.tb_jjjk',
+    kind: 'ai',
+    enabled: true,
+    schedule: '0 0 * * * ?',
+    nextRun: '2026-11-11 12:00:00',
+    lastRun: '2026-11-11 11:00:00',
+    publishStatus: 'ready',
+    exec: 'succeeded',
+    data: 'normal',
+    notify: 'unknown',
+    lastCheckAt: '2026-11-11 11:00:46',
+    count: '1240',
+    conf: { methods: ['rowCount'] },
+    raw: {} as never,
     ...over,
   }
 }
 
-function source(id: string, name = `源${id}`): Source {
-  return { sourceId: id, name, url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
+function source(id: string, over: Partial<Source> = {}): Source {
+  return {
+    sourceId: id,
+    name: `源${id}`,
+    url: '',
+    configId: '',
+    mainTable: `sense_data.${id}`,
+    owner: 'admin',
+    state: 'C',
+    ...over,
+  }
 }
+
+const ConfigStub = defineComponent({
+  name: 'SiteMonitorConfigView',
+  props: ['siteId', 'sourceId', 'monitors', 'loading', 'error', 'togglingId'],
+  emits: ['saved', 'toggle', 'runs', 'retry'],
+  template: '<div data-testid="config-panel" :data-source-id="sourceId" />',
+})
+
+const ResultStub = defineComponent({
+  name: 'SiteMonitorResultView',
+  props: ['sourceId', 'title'],
+  emits: ['all', 'detail'],
+  data: () => ({ refreshCalls: 0 }),
+  methods: {
+    async refresh() {
+      this.refreshCalls += 1
+    },
+  },
+  template: '<div data-testid="result-panel" :data-source-id="sourceId" />',
+})
+
+const RunsDrawerStub = defineComponent({
+  name: 'RunsDrawer',
+  props: ['open', 'sourceId', 'monitorId', 'title', 'initialRun'],
+  emits: ['close'],
+  template:
+    '<div v-if="open" data-testid="runs-drawer" :data-source-id="sourceId" :data-monitor-id="monitorId" :data-title="title" />',
+})
 
 const stubs = {
-  SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
-  CheckLogDialog: { name: 'CheckLogDialog', props: ['modelValue', 'check'], template: '<div />' },
-  // 配置 Tab 自己会拉 ck_source 分页列表，容器用例里只关心挂没挂上，不看它的内部行为
-  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId', 'sourceId'], template: '<div data-testid="config-panel" />' },
-  ElSwitch: {
-    name: 'ElSwitch',
-    props: ['modelValue', 'loading', 'disabled'],
-    emits: ['change'],
-    template: '<button class="el-switch" :data-on="modelValue" @click="$emit(\'change\', !modelValue)" />',
-  },
-  ElPagination: { name: 'ElPagination', props: ['currentPage', 'pageSize', 'total'], template: '<div />' },
+  SiteMonitorConfigView: ConfigStub,
+  SiteMonitorResultView: ResultStub,
+  RunsDrawer: RunsDrawerStub,
 }
 
-function mountView(siteId = 'site-a') {
-  return mount(SiteMonitorView, { props: { siteId }, global: { stubs, directives: { loading: {} } } })
+function mountSource(sourceId = 'src-1') {
+  return mount(SiteMonitorView, {
+    props: { siteId: 'site-4', sourceId },
+    global: { stubs },
+  })
 }
-function mountViewWithSourceSelect(siteId = 'site-auto') {
-  const { SiteSourceSelect, ...stubsWithoutSourceSelect } = stubs
-  void SiteSourceSelect
-  return mount(SiteMonitorView, { props: { siteId }, global: { stubs: stubsWithoutSourceSelect, directives: { loading: {} } } })
+
+function mountSite() {
+  return mount(SiteMonitorView, {
+    props: { siteId: 'site-4' },
+    global: { stubs },
+  })
 }
-async function pickSource(wrapper: ReturnType<typeof mountView>, sourceId = 's1') {
-  await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', sourceId)
-  await flushPromises()
-}
+
+beforeEach(() => {
+  sourceDetailMock.mockReset()
+  siteSourcesMock.mockReset()
+  listMonitorsMock.mockReset()
+  listOfSourceMock.mockReset()
+  setEnabledMock.mockReset()
+
+  sourceDetailMock.mockResolvedValue(source('src-1', { name: '源一', siteName: '测试网站' }))
+  siteSourcesMock.mockResolvedValue([source('src-a', { name: '源 A', siteName: '网站四' }), source('src-b', { name: '源 B', siteName: '网站四' })])
+  listMonitorsMock.mockResolvedValue([])
+  listOfSourceMock.mockResolvedValue([monitor()])
+  setEnabledMock.mockResolvedValue(undefined)
+})
 
 afterEach(() => vi.restoreAllMocks())
 
-describe('SiteMonitorView', () => {
-  it('进入监控视图首屏只按分页查询，不带 sourceId 和筛选条件', async () => {
-    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
-    const wrapper = mountView()
+describe('SiteMonitorView · 源内视图（锁源）', () => {
+  it('按 props 的 sourceId 加载监控，页面不提供换源下拉', async () => {
+    const wrapper = mountSource()
     await flushPromises()
 
-    expect(paged).toHaveBeenCalledTimes(1)
-    expect(paged).toHaveBeenCalledWith({ page: 1, size: 10 })
-    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('共 1 条监控')
+    expect(listOfSourceMock).toHaveBeenCalledWith('src-1')
+    expect(sourceDetailMock).toHaveBeenCalledWith('src-1')
+    expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('切换源')
+    expect(wrapper.text()).not.toContain('监控结果')
+    expect(wrapper.text()).not.toContain('监控配置')
   })
 
-  it('选中源后按该源查询，筛选条件一并透传', async () => {
-    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
-    const wrapper = mountView()
-    await pickSource(wrapper)
-
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's1', page: 1, size: 10 }))
-    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('共 1 条监控')
-
-    await wrapper.get('select[aria-label="告警状态"]').setValue('E')
-    await wrapper.get('input[aria-label="名称"]').setValue('增量')
-    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+  it('源信息条固定 6 项：源/网站/主表/检查项/最近检查/所选日期覆盖', async () => {
+    const wrapper = mountSource()
     await flushPromises()
 
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E', name: '增量' }))
+    const facts = wrapper.get('[data-testid="site-monitor-facts"]')
+    const labels = facts.findAll('dt').map((node) => node.text())
+    expect(labels).toEqual(['源', '网站', '主表', '检查项', '最近检查', '所选日期覆盖'])
+    expect(wrapper.get('[data-testid="site-monitor-fact-source"]').text()).toContain('源一（src-1）')
+    expect(wrapper.get('[data-testid="site-monitor-fact-site"]').text()).toContain('测试网站')
+    expect(wrapper.get('[data-testid="site-monitor-fact-table"]').text()).toContain('sense_data.src-1')
+    expect(wrapper.get('[data-testid="site-monitor-fact-checks"]').text()).toContain('1 启用 ／ 1 项')
+    expect(wrapper.get('[data-testid="site-monitor-fact-last"]').text()).toContain('2026-11-11 11:00:46')
+    expect(wrapper.get('[data-testid="site-monitor-fact-coverage"]').text()).toContain('—（需服务端聚合）')
   })
 
-  it('进入监控视图不默认选择第一个源，避免首屏带 sourceId 查询', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007770', 'baodu'), source('391007768', 'test1')])
-    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check({ sourceId: '391007770' })] })
-
-    const wrapper = mountViewWithSourceSelect('site-auto-first')
+  it('顶部最差事实直接用 summarizeSource：无检查项 = 未配置检查', async () => {
+    listOfSourceMock.mockResolvedValue([])
+    const wrapper = mountSource()
     await flushPromises()
 
-    expect(paged).toHaveBeenCalledTimes(1)
-    expect(paged).toHaveBeenCalledWith({ page: 1, size: 10 })
-    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('共 1 条监控')
+    const worst = wrapper.get('[data-testid="site-monitor-worst"]')
+    expect(worst.text()).toContain('未配置检查')
+    expect(worst.attributes('data-tone')).toBe('muted')
+    expect(wrapper.get('[data-testid="site-monitor-fact-checks"]').text()).toContain('0 启用 ／ 0 项')
+    expect(wrapper.get('[data-testid="site-monitor-fact-last"]').text()).toContain('尚未检查')
   })
 
-  it('状态与执行结果分开：状态码不再把整行染红，执行结果剥掉与「上次」重复的时间戳前缀', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
-      total: 1,
-      list: [check({ state: 'E', lastMsg: '2026-09-09 11:00:46---[X]:日增量-异常, 数量:0' })],
-    })
-    const wrapper = mountView()
-    await pickSource(wrapper)
-
-    const row = wrapper.get('.smv-table tbody tr')
-    // 1106 §7.3：固定状态码 E 不能直接当数据异常，不再按状态给整行/条数染色
-    expect(row.classes()).not.toContain('is-alarm')
-    // 时间戳前缀不再出现在结果列里，只留真正的结果文本
-    expect(row.get('.smv-msg').text()).toBe('[X]:日增量-异常, 数量:0')
-    expect(wrapper.get('[data-testid="site-monitor-alarm-count"]').text()).toContain('1')
-  })
-
-  it('「条数」列结构化优先，后端未给字段时按执行结果文本兜底（1106 §7.5 的过渡口径）', async () => {
-    const withCount = { ...check({ id: '2' }), cnt: 0 }
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
-      total: 2,
-      list: [check({ id: '1', lastMsg: '2026-09-09 11:00:46---正常, 数量:1240' }), withCount],
-    })
-    const wrapper = mountView()
-    await pickSource(wrapper)
-
-    const counts = wrapper.findAll('[data-testid="monitor-result-count"]').map((cell) => cell.text())
-    // 无结构化字段 → 文本兜底 1240；有结构化字段 → 用它（0 是真实值，不是未知）
-    expect(counts).toEqual(['1240', '0'])
-  })
-
-  // isDelete 的语义是反的：0 才是在用。旧平台在 loadData 里转了一道，
-  // 迁过来最容易在这里把布尔搞反。
-  it('在用开关按 isDelete 反向语义显示，切换时发的是 0/1 而不是布尔', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({
-      total: 2,
-      list: [check({ id: 'on', isDelete: 0 }), check({ id: 'off', isDelete: 1 })],
-    })
-    const changeEnable = vi.spyOn(sourceCheckApi, 'changeEnable').mockResolvedValue({ ok: true })
-    const wrapper = mountView()
-    await pickSource(wrapper)
-
-    const switches = wrapper.findAll('.el-switch')
-    expect(switches[0].attributes('data-on')).toBe('true')  // isDelete 0 → 在用
-    expect(switches[1].attributes('data-on')).toBe('false') // isDelete 1 → 停用
-
-    await switches[0].trigger('click')
-    await flushPromises()
-    expect(changeEnable).toHaveBeenCalledWith(['on'], 1) // 在用 → 停用，发 1
-  })
-
-  it('点日志把该条监控传给弹窗，源与 jobId 都带上', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check({ id: 'ck-9', sourceId: 's1' })] })
-    const wrapper = mountView()
-    await pickSource(wrapper)
-
-    await wrapper.get('[data-testid="site-monitor-logs"]').trigger('click')
-    const dialog = wrapper.findComponent({ name: 'CheckLogDialog' })
-    expect(dialog.props('modelValue')).toBe(true)
-    expect((dialog.props('check') as SourceCheck).id).toBe('ck-9')
-  })
-
-  it('「只看告警」是 state=E 的一键开关，再点回到全部', async () => {
-    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
-    const wrapper = mountView()
-    await pickSource(wrapper)
-
-    await wrapper.get('[data-testid="site-monitor-only-alarm"]').trigger('click')
-    await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E' }))
-
-    await wrapper.get('[data-testid="site-monitor-only-alarm"]').trigger('click')
-    await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 's1' }))
-    expect(paged.mock.lastCall?.[0]).not.toHaveProperty('state')
-  })
-
-  // 0916：监控视图拆成「监控结果 / 监控配置」两 Tab，当前展示的那张表整体落进第一个 Tab。
-  it('默认停在监控结果，点监控配置才挂上配置面板并往外抛 update:tab', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
-    const wrapper = mountView()
+  it('最差事实优先取数据异常（启用项中任一异常即整源异常）', async () => {
+    listOfSourceMock.mockResolvedValue([
+      monitor({ id: 'm-1', data: 'normal' }),
+      monitor({ id: 'm-2', data: 'abnormal' }),
+    ])
+    const wrapper = mountSource()
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="site-monitor-tab-result"]').classes()).toContain('on')
-    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(false)
-    expect(wrapper.find('.smv-table').exists()).toBe(true)
-
-    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
-    expect(wrapper.get('[data-testid="site-monitor-tab-config"]').classes()).toContain('on')
+    expect(wrapper.get('[data-testid="site-monitor-worst"]').text()).toContain('数据异常')
+    expect(wrapper.find('[data-testid="result-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
-    expect(wrapper.find('.smv-table').exists()).toBe(false)
-    // URL 落点交给上层（SiteDetailView），容器只负责把选择抛出去
-    expect(wrapper.emitted('update:tab')?.at(-1)).toEqual(['config'])
   })
 
-  it('tab 传 config 时直接停在监控配置（深链/刷新）', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
-    const wrapper = mount(SiteMonitorView, {
-      props: { siteId: 'site-a', tab: 'config' as const },
-      global: { stubs, directives: { loading: {} } },
-    })
+  it('检查项表与最近运行都挂在同一页，检查项拿到的是本页加载的数据', async () => {
+    const wrapper = mountSource()
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
-    expect(wrapper.find('.smv-table').exists()).toBe(false)
+    const panel = wrapper.getComponent(ConfigStub)
+    expect(panel.props('sourceId')).toBe('src-1')
+    expect((panel.props('monitors') as MonitorRecordView[]).map((m) => m.id)).toEqual(['m-1'])
+    expect(wrapper.getComponent(ResultStub).props('sourceId')).toBe('src-1')
   })
 
-  // 2026-09-28：容器选中的源现在同时透给「监控配置」Tab，两 Tab 按同一个源过滤
-  // （画布进来带 sourceId prop → 起步锁定当前源；网站全部不传 → 未选源前为 undefined、翻整表）。
-  it('监控配置 Tab 接容器选中的源；未选源时不传（翻整表）', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
-    const wrapper = mountViewWithSourceSelect()
+  it('启停由容器统一调 API 并重拉，子组件只抛目标状态', async () => {
+    const wrapper = mountSource()
     await flushPromises()
 
-    // 起步没选源：配置 Tab 不接 sourceId
-    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
-    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBeUndefined()
-
-    // 回到结果选中源 s1，再切配置：sourceId 随之透传
-    await wrapper.get('[data-testid="site-monitor-tab-result"]').trigger('click')
-    await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', 's1')
+    await wrapper.getComponent(ConfigStub).vm.$emit('toggle', monitor(), false)
     await flushPromises()
-    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
-    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('s1')
+
+    expect(setEnabledMock).toHaveBeenCalledWith(['m-1'], false)
+    expect(listOfSourceMock).toHaveBeenCalledTimes(2)
   })
 
-  it('外部传入 sourceId 时两 Tab 起步都按该源过滤', async () => {
-    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
-    const wrapper = mount(SiteMonitorView, {
-      props: { siteId: 'site-a', sourceId: 'source-current' },
-      global: { stubs, directives: { loading: {} } },
-    })
+  it('保存后重拉检查项并刷新最近运行', async () => {
+    const wrapper = mountSource()
     await flushPromises()
 
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'source-current' }))
-    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
-    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('source-current')
+    await wrapper.getComponent(ConfigStub).vm.$emit('saved')
+    await flushPromises()
+
+    expect(listOfSourceMock).toHaveBeenCalledTimes(2)
+    expect((wrapper.getComponent(ResultStub).vm as unknown as { refreshCalls: number }).refreshCalls).toBe(1)
   })
 
-  it('查询失败时给出错误而不是空表格假装没事', async () => {
-    vi.spyOn(sourceCheckApi, 'paged').mockRejectedValue(new Error('后端 500'))
-    const wrapper = mountView()
-    await pickSource(wrapper)
+  it('加载失败给出错误，不把失败当成「未配置」显示在信息条里', async () => {
+    listOfSourceMock.mockRejectedValue(new Error('后端 500'))
+    const wrapper = mountSource()
+    await flushPromises()
 
-    expect(wrapper.text()).toContain('后端 500')
+    expect(wrapper.find('[data-testid="site-monitor-facts"]').exists()).toBe(false)
+    const panel = wrapper.getComponent(ConfigStub)
+    expect(panel.props('error')).toContain('后端 500')
+    expect(panel.props('monitors')).toEqual([])
+  })
+})
+
+describe('SiteMonitorView · 运行抽屉（复用 RunsDrawer）', () => {
+  it('行上「记录」按 monitorId + sourceId 打开抽屉', async () => {
+    const wrapper = mountSource()
+    await flushPromises()
+
+    await wrapper.getComponent(ConfigStub).vm.$emit('runs', monitor({ id: 'm-7', name: '日达标监控' }))
+    await flushPromises()
+
+    const drawer = wrapper.get('[data-testid="runs-drawer"]')
+    expect(drawer.attributes('data-source-id')).toBe('src-1')
+    expect(drawer.attributes('data-monitor-id')).toBe('m-7')
+    expect(drawer.attributes('data-title')).toBe('日达标监控')
+  })
+
+  it('「全部记录」按 sourceId 打开抽屉', async () => {
+    const wrapper = mountSource()
+    await flushPromises()
+
+    await wrapper.getComponent(ResultStub).vm.$emit('all')
+    await flushPromises()
+
+    const drawer = wrapper.get('[data-testid="runs-drawer"]')
+    expect(drawer.attributes('data-source-id')).toBe('src-1')
+    expect(drawer.attributes('data-monitor-id')).toBe('')
+  })
+
+  it('最近运行「详情」带 monitorId 打开抽屉', async () => {
+    const wrapper = mountSource()
+    await flushPromises()
+
+    await wrapper.getComponent(ResultStub).vm.$emit('detail', { monitorId: 'm-2', monitorName: '日达标监控' })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="runs-drawer"]').attributes('data-monitor-id')).toBe('m-2')
+    expect(wrapper.getComponent(RunsDrawerStub).props('initialRun')).toMatchObject({ monitorId: 'm-2', monitorName: '日达标监控' })
+  })
+
+  it('抽屉关闭事件把 open 置回 false', async () => {
+    const wrapper = mountSource()
+    await flushPromises()
+    await wrapper.getComponent(ResultStub).vm.$emit('all')
+    await flushPromises()
+
+    await wrapper.getComponent(RunsDrawerStub).vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="runs-drawer"]').exists()).toBe(false)
+  })
+})
+
+describe('SiteMonitorView · 网站视图（只按 siteId）', () => {
+  it('源行运行记录按源范围打开，不能只取同源第一条检查', async () => {
+    listMonitorsMock.mockResolvedValue([
+      monitor({ id: 'm-a1', sourceId: 'src-a' }),
+      monitor({ id: 'm-a2', sourceId: 'src-a' }),
+    ])
+    const wrapper = mountSite()
+    await flushPromises()
+    await wrapper.get('[data-testid="site-monitor-site-row-runs"]').trigger('click')
+    const drawer = wrapper.get('[data-testid="runs-drawer"]')
+    expect(drawer.attributes('data-source-id')).toBe('src-a')
+    expect(drawer.attributes('data-monitor-id')).toBe('')
+  })
+
+  it('7 项摘要全部显示「—（需服务端聚合）」并说明原因，不用 0 冒充', async () => {
+    const wrapper = mountSite()
+    await flushPromises()
+
+    const summary = wrapper.get('[data-testid="site-monitor-site-summary"]')
+    expect(summary.findAll('dt').map((node) => node.text())).toEqual([
+      '有启用检查源',
+      '当日应检查源',
+      '至少完成一次',
+      '计划覆盖完整',
+      '数据异常源',
+      '执行失败源',
+      '漏跑源',
+    ])
+    expect(summary.findAll('dd')).toHaveLength(7)
+    expect(summary.findAll('dd').every((node) => node.text() === '—（需服务端聚合）')).toBe(true)
+    expect(summary.text()).toContain('需服务端按授权聚合')
+    expect(summary.text()).not.toMatch(/\b0\b/)
+    expect(wrapper.find('[data-testid="site-monitor-facts"]').exists()).toBe(false)
+  })
+
+  it('只列本站源，不出现其他网站的源', async () => {
+    listMonitorsMock.mockResolvedValue([
+      monitor({ id: 'm-a', sourceId: 'src-a', sourceName: '源 A' }),
+      monitor({ id: 'm-b', sourceId: 'src-b', sourceName: '源 B', data: 'abnormal' }),
+      monitor({ id: 'm-x', sourceId: 'src-other', sourceName: '别站源' }),
+    ])
+    const wrapper = mountSite()
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-testid="site-monitor-site-row"]')
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.attributes('data-source-id'))).toEqual(['src-a', 'src-b'])
+    expect(wrapper.html()).not.toContain('src-other')
+    expect(wrapper.html()).not.toContain('别站源')
+  })
+
+  it('源行展示检查项数量、最差事实、最近检查；未配置源也出现', async () => {
+    listMonitorsMock.mockResolvedValue([
+      monitor({ id: 'm-a', sourceId: 'src-a', lastCheckAt: '2026-11-11 09:00:00' }),
+    ])
+    const wrapper = mountSite()
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-testid="site-monitor-site-row"]')
+    expect(rows[0]!.text()).toContain('源 A')
+    expect(rows[0]!.text()).toContain('1 启用 ／ 共 1 项')
+    expect(rows[0]!.text()).toContain('数据正常')
+    expect(rows[0]!.text()).toContain('2026-11-11 09:00:00')
+    expect(rows[1]!.text()).toContain('源 B')
+    expect(rows[1]!.text()).toContain('未配置检查')
+  })
+
+  it('展开源行只展示该源的检查项，不跨源', async () => {
+    listMonitorsMock.mockResolvedValue([
+      monitor({ id: 'm-a', sourceId: 'src-a', name: '源 A 检查' }),
+      monitor({ id: 'm-b', sourceId: 'src-b', name: '源 B 检查', data: 'abnormal' }),
+    ])
+    const wrapper = mountSite()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="site-monitor-site-expand-src-a"]').trigger('click')
+    const detail = wrapper.get('[data-testid="site-monitor-site-subtable"]')
+    expect(detail.text()).toContain('源 A 检查')
+    expect(detail.text()).not.toContain('源 B 检查')
   })
 })

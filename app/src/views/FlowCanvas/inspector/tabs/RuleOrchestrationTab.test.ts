@@ -1621,6 +1621,23 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     flow.configs['monitor-1'].title = '库存监控'
     flow.configs['monitor-1'].schedule = { scheduleType: 'daily', scheduleTime: '08:00', weekdays: [], cron: '0 0 8 * * ?' }
     flow.setMonitorMethods('monitor-1', ['当日数据是否正常入库', '数据延迟监控'])
+    // 节点上已保存的告警配置（面板只回填它）。之前这条用例依赖「面板挂载即 emit 演示值」，
+    // 那正是 E1 缺陷：打开编排页就把线上告警改成演示阈值，任意一次保存就落库。
+    flow.configs['monitor-1'].alertConfig = {
+      enabled: true,
+      policies: [{
+        name: '数据延迟超过阈值',
+        metric: 'delay_minutes',
+        operator: 'gt',
+        threshold: '30',
+        consecutiveCount: 3,
+        repeatMinutes: 30,
+        recoveryNotify: true,
+        enabled: true,
+        channelTypes: ['email'],
+      }],
+      channels: [{ type: 'email', enabled: true, target: 'ops@example.com' }],
+    }
     useSourceStore().sourceCfg = {
       sourceId: '430016501', name: '源', url: '', configId: '', mainTable: '', owner: '', state: 'C',
     }
@@ -1682,20 +1699,20 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await triggerWorkbenchSave(wrapper)
 
     expect(insertSpy).not.toHaveBeenCalled()
-    // 2026-09-16 口径：update 与 insert 同一份 payload，state/isDelete/createDt/ver 都带上，
-    // schedule 取节点配置 Tab 的 cron、tableName 取表配置 Tab 的输入表。
+    // 2026-11-12 最小保护：update 只写定义字段（schedule 取节点配置 Tab 的 cron、
+    // tableName 取表配置 Tab 的输入表），不再带 state/isDelete/createDt/ver——
+    // 画布保存不能重新启用已停用的检查项，也不能改创建时间。
     const updatePayload = (ckSourceApi.update as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>
     expect(updatePayload).toMatchObject({
       sourceId: 430016501,
       name: '库存监控',
       schedule: '0 0 8 * * ?',
       tableName: 'sense_data.TB_JD_SKU_BASE',
-      state: 'E',
-      isDelete: 0,
-      ver: 12,
     })
-    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
-    expect(String(updatePayload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
+    expect(updatePayload).not.toHaveProperty('state')
+    expect(updatePayload).not.toHaveProperty('isDelete')
+    expect(updatePayload).not.toHaveProperty('createDt')
+    expect(updatePayload).not.toHaveProperty('ver')
   })
 
   it('流程未绑源（无 sourceId）时保存脚本不同步 ck_source', async () => {
@@ -2673,6 +2690,24 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
   it('数据监控节点在生成结果下方展示告警配置，规则处理节点不展示', async () => {
     mockAssets()
     const { wrapper: monitorWrapper } = mountOnMonitorNode()
+    expect(monitorWrapper.exists()).toBe(true)
+    // 挂载后写入节点配置再等一轮渲染：面板只按 props 回填，不做演示兜底
+    const flow = useFlowStore()
+    flow.configs['monitor-1'].alertConfig = {
+      enabled: true,
+      policies: [{
+        name: '数据延迟超过阈值',
+        metric: 'delay_minutes',
+        operator: 'gt',
+        threshold: '30',
+        consecutiveCount: 3,
+        repeatMinutes: 30,
+        recoveryNotify: true,
+        enabled: true,
+        channelTypes: ['email'],
+      }],
+      channels: [{ type: 'email', enabled: true, target: 'ops@example.com' }],
+    }
     await flushPromises()
     expect(monitorWrapper.find('[data-testid="monitor-alert-config"]').exists()).toBe(true)
     expect(monitorWrapper.find('[data-testid="alert-policy-row"]').text()).toContain('数据延迟超过阈值')

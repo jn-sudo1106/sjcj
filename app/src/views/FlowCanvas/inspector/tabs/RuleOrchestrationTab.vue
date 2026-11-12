@@ -2256,6 +2256,7 @@ function onTestScript() {
     :node-title="cfg?.title ?? ''"
     :source-label="sourceTableName"
     :script-path="orchCfg.scriptPath"
+    :alert-config="cfg?.alertConfig"
     @update:alert-config="setMonitorAlertConfig"
   />
 

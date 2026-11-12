@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import type { MonitorAlertChannelConfig, MonitorAlertConfig, MonitorAlertPolicyConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 type ChannelType = 'email' | 'dingtalk'
 type AlertLevel = 'critical' | 'warning' | 'info'
@@ -54,6 +54,13 @@ const props = defineProps<{
   nodeTitle: string
   sourceLabel: string
   scriptPath?: string
+  /**
+   * 节点上已保存的告警配置（NodeConfig.alertConfig）。
+   * 有值就回填成面板状态；没有就是空面板——**不再用演示策略/演示渠道兜底**。
+   * 之前的实现根本不接这个值、还在挂载时 immediate emit，等于「打开编排页就把线上告警
+   * 改成演示值（阈值 30、连续 3 次、邮件+钉钉）」，任意一次保存就落库（评审 E1）。
+   */
+  alertConfig?: MonitorAlertConfig
 }>()
 const emit = defineEmits<{
   'update:alert-config': [config: MonitorAlertConfig]
@@ -85,33 +92,52 @@ const policyDraft = reactive<PolicyDraft>({
   channelIds: ['email', 'dingtalk'],
 })
 
-const channels = ref<AlertChannel[]>([
-  {
-    id: 'email', type: 'email', name: '运维邮件组', target: 'ops@example.com', enabled: true,
-    recipients: 'ops@example.com', cc: '', senderName: '智能采集中心',
-  },
-  {
-    id: 'dingtalk', type: 'dingtalk', name: '数据平台群', target: 'Webhook 已配置 · @数据值班', enabled: true,
-    webhook: 'https://oapi.dingtalk.com/robot/send?access_token=demo', secretConfigured: true,
-    atAll: false, phones: '',
-  },
-])
+const channels = ref<AlertChannel[]>([])
+const policies = ref<AlertPolicy[]>([])
 
-const policies = ref<AlertPolicy[]>([
-  {
-    id: 'delay-policy',
-    name: '数据延迟超过阈值',
-    level: 'critical',
-    metric: 'delay_minutes',
-    operator: 'gt',
-    threshold: '30',
-    consecutiveCount: 3,
-    repeatMinutes: 30,
-    recoveryNotify: true,
-    enabled: true,
-    channelIds: ['email', 'dingtalk'],
-  },
-])
+function operatorOf(value: string): AlertOperator {
+  return value === 'gte' || value === 'eq' || value === 'lt' ? value : 'gt'
+}
+
+function channelFromConfig(config: MonitorAlertChannelConfig): AlertChannel {
+  const type = config.type === 'dingtalk' ? 'dingtalk' : 'email'
+  const target = config.target ?? ''
+  return {
+    id: type,
+    type,
+    name: type === 'email' ? '告警邮件组' : '告警群',
+    target: target || '未配置',
+    enabled: config.enabled !== false,
+    recipients: type === 'email' ? target : '',
+    cc: '',
+    senderName: '',
+    webhook: type === 'dingtalk' ? target : '',
+    secretConfigured: false,
+  }
+}
+
+function policyFromConfig(config: MonitorAlertPolicyConfig): AlertPolicy {
+  return {
+    id: `policy-${config.name}`,
+    name: config.name,
+    level: 'warning',
+    metric: config.metric,
+    operator: operatorOf(config.operator),
+    threshold: String(config.threshold ?? ''),
+    consecutiveCount: Math.max(1, Number(config.consecutiveCount) || 1),
+    repeatMinutes: Math.max(0, Number(config.repeatMinutes) || 0),
+    recoveryNotify: config.recoveryNotify !== false,
+    enabled: config.enabled !== false,
+    channelIds: (config.channelTypes ?? []).filter((type): type is ChannelType => type === 'email' || type === 'dingtalk'),
+  }
+}
+
+/** 只做「配置 → 面板」的单一方向回填；不会反过来 emit，避免挂载/切节点时覆盖已存配置。 */
+function hydrateFromConfig(config?: MonitorAlertConfig) {
+  enabled.value = config?.enabled ?? true
+  channels.value = (config?.channels ?? []).map(channelFromConfig)
+  policies.value = (config?.policies ?? []).map(policyFromConfig)
+}
 
 const activePolicies = computed(() => policies.value.filter((policy) => policy.enabled).length)
 
@@ -143,7 +169,20 @@ function syncAlertConfig() {
   emit('update:alert-config', alertConfigSnapshot())
 }
 
-watch(enabled, syncAlertConfig, { immediate: true })
+// 挂载与父组件配置变化时只回填，不 emit：浏览节点不等于修改告警（评审 E1 / 1104 E4）。
+watch(() => props.alertConfig, (config) => hydrateFromConfig(config), { immediate: true, deep: true })
+
+function toggleEnabled() {
+  enabled.value = !enabled.value
+  syncAlertConfig()
+}
+
+function addChannel(type: ChannelType) {
+  if (channels.value.some((channel) => channel.type === type)) return
+  channels.value.push(channelFromConfig({ type, enabled: true, target: '' }))
+  const channel = channels.value.find((item) => item.type === type)
+  if (channel) openChannelConfig(channel)
+}
 
 function levelText(level: AlertLevel): string {
   return level === 'critical' ? '严重' : level === 'warning' ? '警告' : '信息'
@@ -317,7 +356,7 @@ function saveChannel() {
           type="button"
           :aria-pressed="enabled"
           data-testid="alert-master-toggle"
-          @click="enabled = !enabled"
+          @click="toggleEnabled"
         >
           <span class="alert-toggle-dot" />
           {{ enabled ? '告警已启用' : '告警已停用' }}
@@ -376,7 +415,10 @@ function saveChannel() {
         </div>
         <span class="alert-demo-tag">演示配置</span>
       </div>
-      <div class="alert-channel-grid">
+      <div v-if="!channels.length" class="alert-empty">
+        还没有通知渠道。先添加邮件或钉钉渠道，再保存策略。
+      </div>
+      <div v-else class="alert-channel-grid">
         <div v-for="channel in channels" :key="channel.id" class="alert-channel" :data-testid="`alert-channel-${channel.type}`">
           <div class="alert-channel-icon" :class="`is-${channel.type}`">{{ channelIcon(channel.type) }}</div>
           <div class="alert-channel-body">
@@ -389,6 +431,11 @@ function saveChannel() {
           </div>
         </div>
       </div>
+    </div>
+
+    <div v-if="!channels.length" class="alert-panel-actions alert-channel-add">
+      <button class="rc-btn compact" type="button" data-testid="alert-add-channel-email" @click="addChannel('email')">＋ 邮件渠道</button>
+      <button class="rc-btn compact" type="button" data-testid="alert-add-channel-dingtalk" @click="addChannel('dingtalk')">＋ 钉钉渠道</button>
     </div>
 
     <el-dialog

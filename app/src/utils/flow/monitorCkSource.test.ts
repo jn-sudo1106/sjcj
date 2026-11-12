@@ -74,13 +74,13 @@ describe('syncMonitorCkSource', () => {
       name: '库存监控',
       schedule: '0 0 8 * * ?',
       tableName: 'sense_data.TB_JD_SKU_BASE',
-      // 2026-09-16 口径：update 也要带这几个固定值（不是只有 insert 才带 state）
-      state: 'E',
-      isDelete: 0,
-      ver: 12,
     })
-    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
-    expect(String(payload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
+    // 2026-11-12 最小保护：update 不再写生命周期字段，画布保存不能重新启用已停用的检查项，
+    // 也不能改创建时间/版本号（这几个字段属于监控记录自身，只由监控中心或调度侧维护）。
+    expect(payload).not.toHaveProperty('state')
+    expect(payload).not.toHaveProperty('isDelete')
+    expect(payload).not.toHaveProperty('createDt')
+    expect(payload).not.toHaveProperty('ver')
     const conf = JSON.parse(payload.checkConf ?? '{}')
     expect(conf.customKeep).toBe('keep-me')
     expect(conf.minSize).toBe('30')
@@ -90,6 +90,20 @@ describe('syncMonitorCkSource', () => {
     expect(conf.notifyType).toBe('mail')
     expect(conf.monitorMethods).toEqual(['数据延迟监控'])
     expect(conf.orchestration).toMatchObject({ scriptPath: '/code01/184.py' })
+  })
+
+  it('同源已有多个检查项时拒绝覆盖，不再按 sourceId 整包更新', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, sourceId: 430016501, name: '检查项A', checkConf: '{}' },
+      { id: 8, sourceId: 430016501, name: '检查项B', checkConf: '{}' },
+    ])
+    const update = vi.spyOn(ckSourceApi, 'update')
+    const insert = vi.spyOn(ckSourceApi, 'insert')
+
+    await expect(syncMonitorCkSource('430016501', makeMonitorNode()))
+      .rejects.toThrow(/已有 2 条检查项/)
+    expect(update).not.toHaveBeenCalled()
+    expect(insert).not.toHaveBeenCalled()
   })
 
   it('无记录 insert 时写入默认 startDt 与告警配置字段', async () => {
