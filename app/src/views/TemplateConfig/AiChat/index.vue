@@ -4,7 +4,6 @@
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown,
   ArrowRight,
   ChatDotRound,
   Close,
@@ -175,15 +174,6 @@ function exportTableToCsv(msg: ChatMessage) {
   const csvContent = toCsv(headers, dataRows)
   downloadCsv(fileName, csvContent)
   ElMessage.success(`已成功导出 CSV 文件：${fileName}.csv`)
-}
-
-// 统一数据导出分发
-function handleExportData(msg: ChatMessage, type: 'excel' | 'csv') {
-  if (type === 'excel') {
-    exportTableToExcel(msg)
-  } else {
-    exportTableToCsv(msg)
-  }
 }
 
 // 交互澄清卡片：载荷结构与 MCP 的 clarification 一致
