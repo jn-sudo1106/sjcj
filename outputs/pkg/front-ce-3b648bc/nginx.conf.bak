@@ -1,0 +1,225 @@
+server {
+    listen 80 default_server;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ---- 上传体积上限 ----
+    # ⚠️ Nginx 默认只放行 1MB，超过时**由网关自己回 413**（请求到不了后端），
+    # 页面表现就是「调用接口提示 413 Request Entity Too Large」（2026-09-17 部署后实测踩到）。
+    # 这里给通用上限，需要传大文件的接口在各自 location 里再放宽（见 /api/media、/api/speech）。
+    client_max_body_size 20m;
+    # 大文件先落磁盘再转发，别占内存
+    client_body_buffer_size 1m;
+
+    # ---- 通用响应头 ----
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # ---- gzip ----
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        application/javascript
+        application/json
+        application/xml
+        application/xml+rss
+        image/svg+xml
+        font/ttf
+        font/otf;
+
+    # ---- /sjcj/ 子路径托管 Vue 3 应用 ----
+    # 项目用 createWebHashHistory，所有路由都以 /sjcj/index.html#/xxx 形式落地，
+    # 不需要 try_files 回退到 index.html —— 路径部分永远是 index.html 自身的请求。
+    location /sjcj/ {
+        alias /usr/share/nginx/html/sjcj/;
+        index index.html;
+        autoindex off;
+    }
+
+    # 静态资源（Vite 产物带 hash）：一年强缓存
+    location ^~ /sjcj/assets/ {
+        alias /usr/share/nginx/html/sjcj/assets/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    # index.html 永远不缓存：避免部署后旧 HTML 引用已被替换的资源路径
+    location = /sjcj/index.html {
+        alias /usr/share/nginx/html/sjcj/index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Pragma "no-cache";
+        expires 0;
+    }
+
+    # ---- 后端 API 反向代理 ----
+    # 专用服务必须放在通用 /api/ 规则之前，避免被业务后端兜底。
+    location /api/answer/data-process {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    location /api/file/download {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    location /api/source {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    location /api/prompt {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    location /api/model {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    # 语音转文字（音频提取文字节点，2026-09-17）：与 data-process 同一台 8080（此处 8040 映射）。
+    # 上传音频最大 50MB，网关上限放宽到 60m；转写是同步长请求，后端读超时 3 分钟，超时给足。
+    location /api/speech {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 60m;
+        proxy_request_buffering off;
+        proxy_read_timeout 240s;
+        proxy_send_timeout 240s;
+    }
+
+    # 翻译（翻译助手节点，2026-09-18）：接口在 vanv-data-engine 的 translate 包，与 data-process 同一台。
+    # ⚠️ 它**不在 /api/answer 下**，必须单独写一条，否则会掉进通用 location /api/ 被业务后端（9999）兜底成 404。
+    location /api/translate {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    # 视频提取音频（视频提取音频节点，2026-09-17）：同一台服务。
+    # 视频后端上限 200MB（media.extract.max-file-size），网关放到 220m；
+    # 转码同步执行、后端超时默认 5 分钟，这里给 360s，别让网先把长请求掐断。
+    location /api/media {
+        proxy_pass http://192.168.1.31:8040;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 220m;
+        proxy_request_buffering off;
+        proxy_read_timeout 360s;
+        proxy_send_timeout 360s;
+    }
+
+    # OCR 识别（OCR抓取节点，2026-09-17）：独立部署的第三方服务，不在后端机上。
+    # 页面按同源路径 /ocr 调用（开发环境由 Vite 代理转发，生产必须在这里反代同一个前缀），
+    # 否则请求会落到 location / 的 404 上。镜像只有 10MB 上限，给 20m 富余。
+    location /ocr {
+        proxy_pass http://118.25.96.217:4864;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 20m;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    location /vrule/fastapi/execute/code {
+        proxy_pass http://192.168.1.31:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    # 其余业务接口统一转发到业务后端。
+    location /api/ {
+        proxy_pass http://118.25.96.217:9999;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    location /vrule/ {
+        proxy_pass http://118.25.96.217:9999;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
+    # 兜底：根路径与未匹配路径直接 404，不暴露站点目录
+    location = / {
+        return 404;
+    }
+    location / {
+        return 404;
+    }
+}

@@ -1,0 +1,322 @@
+// @vitest-environment jsdom
+// 源管理「我的视图」目录版（2026-10-13；10-14 没有根目录、父目录不汇总）：视图下拉、多级目录树、添加源 / 绑定来源组、
+// 随组带入的源排除与恢复、解绑、删除目录（有子目录时二次提醒）、旧条件视图提示、设为默认、跳到源详情不改写地址。
+// 右侧源列表 stub 掉：记下收到的源范围，并用固定的选中 ID 驱动批量操作槽位。
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { KeepAlive, defineComponent, h } from 'vue'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import ElementPlus, { ElMessageBox } from 'element-plus'
+import MyViews from './MyViews.vue'
+import GroupSourcePicker from './GroupSourcePicker.vue'
+import ViewDirTree from './ViewDirTree.vue'
+import { sourceApi, sourceGroupApi } from '@/api'
+import type { UserInfo } from '@/api/auth'
+import { localSourceViewApi, setSourceViewBackend, sourceViewApi } from '@/api/sourceViews'
+import { useAuthStore } from '@/stores/auth'
+import { useSourceGroupsStore } from '@/stores/sourceGroups'
+import { addDir, addSources, bindGroup, emptyTree } from './viewDirs'
+
+/** 来源组 g3 的当前成员（测试里可以改，模拟在「我的分组」里加减源） */
+const g3Members = vi.hoisted(() => ({ ids: ['t1', 't2', 't3'] }))
+vi.mock('./groupMembers', () => ({
+  loadGroupMembers: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === 'g3' ? [...g3Members.ids] : []])),
+  clearGroupMembersCache: () => {},
+}))
+
+/** 源列表最近一次收到的范围 */
+let scopeSeen: string[] | undefined
+let selectedIds: string[] = []
+vi.mock('@/views/FlowCanvas/result/SourceOverviewView.vue', () => ({
+  default: defineComponent({
+    name: 'SourceOverviewView',
+    props: { viewState: Object, currentSiteId: String, groupOps: Boolean, scopeSourceIds: Array, scopeEmptyText: String, extraColumnLabel: String },
+    setup(props, { slots }) {
+      return () => {
+        scopeSeen = props.scopeSourceIds as string[] | undefined
+        return h('div', { 'data-testid': 'sov-stub' }, [
+          ...(scopeSeen ?? []).map((id) => h('div', { 'data-testid': 'sov-row', 'data-id': id }, slots['extra-cell']?.({ source: { sourceId: id } }))),
+          slots['selection-actions']?.({ ids: selectedIds }),
+        ])
+      }
+    },
+  }),
+}))
+
+let wrapper: VueWrapper
+beforeEach(() => {
+  g3Members.ids = ['t1', 't2', 't3']
+  setSourceViewBackend('local') // 单测不连后端：用本机实现
+  localStorage.clear()
+  scopeSeen = undefined
+  selectedIds = []
+  setActivePinia(createPinia())
+  useAuthStore().info = { id: 7 } as UserInfo
+  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([{ sourceGroupId: 'g3', sourceGroupName: 'twitter1' }] as never)
+  vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+})
+afterEach(() => {
+  wrapper?.unmount()
+  vi.restoreAllMocks()
+  document.body.innerHTML = ''
+})
+
+async function mountPage() {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/collect', component: { template: '<div />' } }, { path: '/canvas', component: { template: '<div />' } }] })
+  await router.push({ path: '/collect', query: { tab: 'views' } })
+  await router.isReady()
+  wrapper = mount(MyViews, { global: { plugins: [ElementPlus, router] }, attachTo: document.body })
+  await settle()
+  return { router }
+}
+async function settle() { await flushPromises(); await new Promise((r) => setTimeout(r, 20)); await flushPromises() }
+const saved = async () => (await sourceViewApi.list('7'))[0].tree
+const dirNode = (name: string) => wrapper.findAll('[data-testid="view-dir-node"]').find((n) => n.text().includes(name))!
+const sorted = (ids?: string[]) => [...(ids ?? [])].sort()
+
+/** 广发：宏观 > 统计局（s1,s2）、央行（s3）；舆情（s4 + 来源组 g3 = t1,t2,t3） */
+async function seed() {
+  let t = emptyTree()
+  let r = addDir(t, null, '宏观'); t = r.tree; const macro = r.id
+  r = addDir(t, macro, '统计局'); t = addSources(r.tree, r.id, ['s1', 's2'])
+  r = addDir(t, macro, '央行'); t = addSources(r.tree, r.id, ['s3'])
+  r = addDir(t, null, '舆情'); t = bindGroup(addSources(r.tree, r.id, ['s4']), r.id, 'g3')
+  return localSourceViewApi.add('7', { viewName: '广发', tree: t })
+}
+
+describe('我的视图 · 目录版', () => {
+  it('没有视图：提示新建；新建后提示先建目录，「＋ 目录」建一级目录并选中', async () => {
+    await mountPage()
+    expect(wrapper.text()).toContain('还没有视图')
+    await wrapper.get('[data-testid="mv-new"]').trigger('click')
+    await settle()
+    const input = document.querySelector('input[data-testid="save-view-name"]') as HTMLInputElement
+    input.value = '广发'
+    input.dispatchEvent(new Event('input'))
+    ;(document.querySelector('[data-testid="save-view-submit"]') as HTMLElement).click()
+    await settle()
+    expect(wrapper.text()).toContain('这个视图还没有目录')
+    expect(wrapper.find('[data-testid="view-dir-root"]').exists()).toBe(false)
+    expect(scopeSeen).toBeUndefined()
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValueOnce({ value: '宏观' } as never)
+    await wrapper.get('[data-testid="mv-new-dir"]').trigger('click')
+    await settle()
+    expect((await saved()).dirs.map((d) => [d.name, d.parentId])).toEqual([['宏观', null]])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观')
+    expect(scopeSeen).toEqual([])
+  })
+
+  it('默认选中第一个一级目录；父目录不汇总子目录；目录显示自己的源数和「组」标记', async () => {
+    await seed()
+    await mountPage()
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观')
+    expect(scopeSeen).toEqual([])
+    await dirNode('统计局').trigger('click')
+    await settle()
+    expect(sorted(scopeSeen)).toEqual(['s1', 's2'])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观 / 统计局')
+    expect(dirNode('宏观').text()).toContain('0')
+    expect(dirNode('舆情').text()).toContain('组')
+    expect(dirNode('舆情').text()).toContain('4')
+  })
+
+  it('新建子目录：建在目录的「⋯」所在目录下，建完选中它', async () => {
+    await seed()
+    await mountPage()
+    const macroId = (await saved()).dirs.find((d) => d.name === '宏观')!.id
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValueOnce({ value: '财政部' } as never)
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'newChild', macroId)
+    await settle()
+    const t = await saved()
+    const fin = t.dirs.find((d) => d.name === '财政部')!
+    expect(t.dirs.find((d) => d.id === fin.parentId)!.name).toBe('宏观')
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('宏观 / 财政部')
+  })
+
+  it('添加源到选中目录（去重）；选来源组后绑定整个来源组', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('统计局').trigger('click')
+    await settle()
+    const picker = wrapper.findComponent(GroupSourcePicker)
+    picker.vm.$emit('pick', ['s1', 's9'])
+    await settle()
+    expect((await saved()).dirs.find((d) => d.name === '统计局')!.sources).toEqual(['s1', 's2', 's9'])
+    picker.vm.$emit('bindGroup', 'g3')
+    await settle()
+    expect((await saved()).dirs.find((d) => d.name === '统计局')!.groups).toEqual(['g3'])
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('twitter1')
+    expect(scopeSeen).toEqual(expect.arrayContaining(['t1', 't2', 't3']))
+  })
+
+  it('随来源组带入的源可单独移出（排除，组标签显示 2/3），可恢复；所在目录列标「随来源组」', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="sov-row"][data-id="t2"]').text()).toContain('随来源组 twitter1')
+    expect(wrapper.get('[data-testid="sov-row"][data-id="s4"]').text()).not.toContain('随来源组')
+    selectedIds = ['t2']
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    await wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$forceUpdate()
+    await settle()
+    await wrapper.get('[data-testid="mv-remove-sources"]').trigger('click')
+    await settle()
+    expect(scopeSeen).not.toContain('t2')
+    expect((await saved()).dirs.find((d) => d.name === '舆情')!.excluded).toEqual(['t2'])
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('2/3')
+    await wrapper.get('[data-testid="mv-restore"]').trigger('click')
+    await settle()
+    expect(scopeSeen).toContain('t2')
+  })
+
+  // 10-15 定：解绑时列出会随组移出的源，问要不要保留；保留的转成单独添加
+  it('解绑来源组：列出会移出的源；选「一起移出」→ 只剩单独添加的', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+    await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
+    await settle()
+    const message = mount({ render: () => confirm.mock.calls[0][0] as never })
+    expect(message.text()).toContain('下面 3 个随来源组带进来的源')
+    expect(message.findAll('li').map((li) => li.text())).toEqual(['t1', 't2', 't3'])
+    message.unmount()
+    expect(confirm.mock.calls[0][2]).toMatchObject({ confirmButtonText: '保留这些源', cancelButtonText: '一起移出', distinguishCancelAndClose: true })
+    expect(scopeSeen).toEqual(['s4'])
+    expect((await saved()).dirs.find((d) => d.name === '舆情')!.groups).toEqual([])
+  })
+
+  it('解绑来源组：选「保留这些源」→ 组解绑，组里的源转成单独添加（已排除的不算）', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    selectedIds = ['t2']
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never) // 先排除 t2
+    await wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$forceUpdate()
+    await settle()
+    await wrapper.get('[data-testid="mv-remove-sources"]').trigger('click')
+    await settle()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
+    await settle()
+    const yq = (await saved()).dirs.find((d) => d.name === '舆情')!
+    expect(yq).toMatchObject({ groups: [], excluded: [], sources: ['s4', 't1', 't3'] })
+    expect(sorted(scopeSeen)).toEqual(['s4', 't1', 't3'])
+  })
+
+  // 本页被 KeepAlive 缓存：去「我的分组」给组加了源再回来，要看到新成员（10-15 用户报：twitter 加到 27 个，视图里还是 26）
+  it('从别的页面回来时重读来源组成员：组里新加的源出现', async () => {
+    await seed()
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/collect', component: { template: '<div />' } }, { path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/collect', query: { tab: 'views' } })
+    await router.isReady()
+    const Host = defineComponent({
+      props: { show: Boolean },
+      setup: (props) => () => h(KeepAlive, null, [props.show ? h(MyViews) : null]),
+    })
+    wrapper = mount(Host, { props: { show: true }, global: { plugins: [ElementPlus, router] }, attachTo: document.body })
+    await settle()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('3/3')
+    await wrapper.setProps({ show: false })
+    g3Members.ids = ['t1', 't2', 't3', 't4']
+    await wrapper.setProps({ show: true })
+    await settle()
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('4/4')
+    expect(scopeSeen).toContain('t4')
+  })
+
+  // 1016：真实接口下绑定来源组是快照（rows），组里之后新加的源不会自动进来：提示 + 勾选加入
+  it('来源组新加的源不在目录里：提示条列出数量，「查看并加入」打开选源弹窗只看这些，加入后提示消失', async () => {
+    let t = emptyTree()
+    const r = addDir(t, null, '舆情')
+    t = bindGroup(addSources(r.tree, r.id, ['s4']), r.id, 'g3')
+    t = { ...t, dirs: t.dirs.map((d) => ({ ...d, rows: ['s4', 't1', 't2'] })) } // t3 是绑定后才进组的
+    await localSourceViewApi.add('7', { viewName: '广发', tree: t })
+    await mountPage()
+    expect(wrapper.get('[data-testid="mv-missing"]').text()).toContain('来源组「twitter1」有 1 个源还没在这个目录里')
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('2/3')
+    expect(scopeSeen).not.toContain('t3')
+
+    await wrapper.get('[data-testid="mv-missing-open"]').trigger('click')
+    await settle()
+    const picker = wrapper.findComponent(GroupSourcePicker)
+    expect(picker.props()).toMatchObject({ modelValue: true, initialGroupId: 'g3', initialMissingOnly: true, missingByGroup: { g3: ['t3'] } })
+    picker.vm.$emit('pick', ['t3'])
+    await settle()
+    expect(wrapper.find('[data-testid="mv-missing"]').exists()).toBe(false)
+    expect(scopeSeen).toContain('t3')
+  })
+
+  it('解绑来源组：直接关掉弹窗 = 不解绑', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('close')
+    await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
+    await settle()
+    expect((await saved()).dirs.find((d) => d.name === '舆情')!.groups).toEqual(['g3'])
+  })
+
+  it('删除有子目录的目录：二次提醒，确认后连同子目录一起删，选中剩下的第一个目录；第二次取消就不删', async () => {
+    await seed()
+    await mountPage()
+    const macroId = (await saved()).dirs.find((d) => d.name === '宏观')!.id
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never).mockRejectedValueOnce('cancel')
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', macroId)
+    await settle()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(String(confirm.mock.calls[1][0])).toContain('还有 2 个子目录')
+    expect((await saved()).dirs).toHaveLength(4)
+
+    confirm.mockReset().mockResolvedValue('confirm' as never)
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', macroId)
+    await settle()
+    expect((await saved()).dirs.map((d) => d.name)).toEqual(['舆情'])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 舆情')
+  })
+
+  it('删除没有子目录的目录：只确认一次', async () => {
+    await seed()
+    await mountPage()
+    const yq = (await saved()).dirs.find((d) => d.name === '舆情')!.id
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', yq)
+    await settle()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect((await saved()).dirs.map((d) => d.name)).not.toContain('舆情')
+  })
+
+  it('10-12 的条件视图读进来：提示改成目录视图；暂存本机时左栏提醒', async () => {
+    localStorage.setItem('ce:source-views:v1:7', JSON.stringify({ version: 1, views: [{ viewId: 'a', viewName: '旧条件', state: { v: 1, status: 'E', scopeIds: null }, isDefault: false, revision: 0, createdAt: '', updatedAt: '' }] }))
+    await mountPage()
+    expect(wrapper.find('[data-testid="mv-converted"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(true)
+  })
+
+  it('设为默认进入：视图标默认，源管理默认进入改为「我的视图」', async () => {
+    await seed()
+    await mountPage()
+    await (wrapper.vm as unknown as { onViewCommand: (c: string) => Promise<void> }).onViewCommand('default')
+    await settle()
+    expect((await sourceViewApi.list('7'))[0].isDefault).toBe(true)
+    expect(useSourceGroupsStore().preference).toBe('view')
+  })
+
+  // aa368d5：本页被 KeepAlive 缓存，跳到源详情后不能改写源详情的地址
+  it('跳到源详情后不改写源详情地址', async () => {
+    const v = await seed()
+    const { router } = await mountPage()
+    expect(router.currentRoute.value.query.viewId).toBe(v.viewId)
+    await router.push({ path: '/canvas', query: { sourceId: '10', view: 'overview', returnTo: '/collect?tab=views' } })
+    await settle()
+    expect(router.currentRoute.value.query.view).toBe('overview')
+    expect(router.currentRoute.value.query.viewId).toBeUndefined()
+  })
+})

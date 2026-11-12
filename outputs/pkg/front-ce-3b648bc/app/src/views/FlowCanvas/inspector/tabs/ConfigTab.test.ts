@@ -1,0 +1,585 @@
+// @vitest-environment jsdom
+// 节点配置 Tab：规则节点「选择已有规则」（0805 恢复 D3 砍掉的能力，按会议原话"新建是新建、选是选"
+// 分开做——节点名称输入框只管新建/改名，单独一个按钮 + 弹窗管选择，见方案 §1.3）。
+// 通过挂载整个 NodeInspector 测试（而非孤立挂载 ConfigTab），因为 useNodeInspectorAssets() 的
+// provide/inject 上下文由 NodeInspector 建立，脱离它调用会抛错（见 useNodeInspectorAssets.ts 设计约束）。
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import ElementPlus from 'element-plus'
+import NodeInspector from '../NodeInspector.vue'
+import TaskScheduleSettings from '../TaskScheduleSettings.vue'
+import { useFlowStore } from '@/stores/flow'
+import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { entryApi, paramApi, ruleApi, configApi, sourceApi } from '@/api'
+import type { EntryType } from '@/api'
+
+const OUTPUT_TABLE: EntryType = {
+  tableId: '2102200', tableName: 'sense_data.TB_EXISTING', name: '既有规则输入表',
+  fields: [{ prop: 'sku_id', desc: '商品ID', type: 'string', required: false, columnName: 'K1' }],
+}
+
+
+function mockAssets() {
+  vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [OUTPUT_TABLE] })
+  vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 0, list: [] })
+  vi.spyOn(ruleApi, 'ruleGroups').mockResolvedValue([])
+  vi.spyOn(ruleApi, 'rulePaged').mockResolvedValue({ total: 0, list: [] })
+  vi.spyOn(ruleApi, 'sharedConfigs').mockResolvedValue([])
+}
+
+afterEach(() => vi.restoreAllMocks())
+
+function mountOnRuleNode() {
+  setActivePinia(createPinia())
+  const flow = useFlowStore()
+  flow.configs['rule-1'] = cloneConfig(NODE_CONFIGS['rule'])
+  flow.select('rule-1')
+  flow.setActiveTab('config')
+  const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+  return { flow, wrapper }
+}
+
+// 「选择已有规则」入口 2026-09-04 已删除（旧规则平台废弃，现在统一走配置），
+// 原来那 4 条用例（按钮存在 / 打开弹窗 / 选中回填 / 反查表失败提示）随之删除。
+describe('ConfigTab · 规则节点', () => {
+  it('规则节点名称允许暂时清空，保存校验再提示必填', async () => {
+    const { flow, wrapper } = mountOnRuleNode()
+    await flushPromises()
+
+    const titleInput = wrapper.find('input[placeholder="直接输入规则名称"]')
+    await titleInput.setValue('')
+
+    expect((titleInput.element as HTMLInputElement).value).toBe('')
+    expect(flow.configs['rule-1'].title).toBe('')
+  })
+
+  it('规则节点隐藏适用源字段，未设置时默认写入 -1', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.configs['rule-1'].itemId = '-1'
+    flow.configs['rule-1'].stepSourceId = undefined
+    await flushPromises()
+
+    expect(wrapper.find('input[aria-label="适用源"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('适用源')
+    expect(flow.configs['rule-1'].stepSourceId).toBe('-1')
+    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
+  })
+})
+
+// S4-1（方案 §6.1）：登录节点自己的核心字段（账号/凭据引用）常显，不走采集节点运行设置里已废弃的 needLogin 开关
+describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
+  it('登录节点：显示旧平台登录字段；普通采集节点没有', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    expect(wrapper.text()).toContain('登录配置')
+    expect(wrapper.find('input[placeholder="登录用户名"]').exists()).toBe(true)
+    expect(wrapper.find('input[placeholder="登录密码"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('凭据引用')
+
+    setActivePinia(createPinia())
+    const flow2 = useFlowStore()
+    flow2.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow2.select('web-1')
+    flow2.setActiveTab('config')
+    const wrapper2 = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper2.text()).not.toContain('登录账号')
+    expect(wrapper2.text()).not.toContain('凭据引用')
+  })
+
+  it('新增登录配置：写入旧平台字段，并设为默认配置', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    const urlInput = wrapper.find('input[placeholder="登录 URL"]')
+    const loginNameInput = wrapper.find('input[placeholder="登录用户名"]')
+    const loginPwdInput = wrapper.find('input[placeholder="登录密码"]')
+    await urlInput.setValue('https://example.com/login')
+    await loginNameInput.setValue('main-user')
+    await loginPwdInput.setValue('pwd-001')
+
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs).toEqual([{
+      id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-001', newLoginConfig: '1', authConfig: '', enabled: true,
+    }])
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-1')
+  })
+
+  it('新建登录密码允许暂时为空，等待保存校验', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    const passwordInput = wrapper.find('input[placeholder="登录密码"]')
+    await wrapper.find('input[placeholder="登录 URL"]').setValue('https://example.com/login')
+    await wrapper.find('input[placeholder="登录用户名"]').setValue('main-user')
+    await passwordInput.setValue('')
+
+    expect((passwordInput.element as HTMLInputElement).value).toBe('')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs?.[0].loginPwd).toBe('')
+    expect(wrapper.find('.login-config-error').text()).toContain('请填写登录密码')
+  })
+
+  it('多登录配置：可新增第二条配置并停用其中一条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    await wrapper.find('input[placeholder="登录 URL"]').setValue('https://example.com/login')
+    await wrapper.find('input[placeholder="登录用户名"]').setValue('main-user')
+    await wrapper.find('input[placeholder="登录密码"]').setValue('pwd-001')
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    const urls = wrapper.findAll('input[placeholder="登录 URL"]')
+    const loginNames = wrapper.findAll('input[placeholder="登录用户名"]')
+    const passwords = wrapper.findAll('input[placeholder="登录密码"]')
+    await urls[1].setValue('https://example.com/login')
+    await loginNames[1].setValue('backup-user')
+    await passwords[1].setValue('pwd-002')
+
+    const second = flow.configs['login-1'].collectCfg?.loginConfigs?.[1]
+    expect(second).toMatchObject({ loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true })
+    const toggle = wrapper.get('[data-testid="login-config-enable-login-2"]')
+    expect(toggle.attributes('role')).toBe('switch')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="login-config-status-login-2"]').text()).toContain('已启用')
+    await toggle.trigger('click')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs?.[1].enabled).toBe(false)
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-1')
+    expect(wrapper.get('[data-testid="login-config-status-login-2"]').text()).toContain('已停用')
+  })
+
+  it('删除登录配置：首个和唯一配置都可删除，删除最后一个时清理旧字段', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.configs['login-1'].collectCfg = {
+      ...flow.configs['login-1'].collectCfg!,
+      account: 'legacy-account',
+      loginConfigs: [
+        { id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-001', newLoginConfig: '1', authConfig: '', enabled: true },
+        { id: 'login-2', loginUrl: 'https://example.com/login', loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true },
+      ],
+      defaultLoginConfigId: 'login-1',
+    }
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-login-1"] .rc-row-del').trigger('click')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs).toEqual([{
+      id: 'login-2', loginUrl: 'https://example.com/login', loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true,
+    }])
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-2')
+
+    await wrapper.find('[data-testid="login-config-login-2"] .rc-row-del').trigger('click')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs).toEqual([])
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBeUndefined()
+    expect(flow.configs['login-1'].collectCfg?.account).toBe('')
+    expect(wrapper.find('.login-config-empty').exists()).toBe(true)
+  })
+})
+
+// S4-1 曾让定时策略在登录和列表节点都显示；1008-08 起只在首节点显示（定时按源存，不在节点上，
+// 每个节点挂一份只会让人以为各节点各有定时）。首节点 = 主链上第一个真正抓取数据的节点，登录节点不算。
+describe('ConfigTab · 节点级定时策略', () => {
+  it('登录→列表抓取：定时策略只在列表抓取（首个真正抓取数据的节点）上显示，登录节点不显示', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.insertAfter('start', 'login')
+
+    flow.select('web-list')
+    flow.setActiveTab('config')
+    const webWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(webWrapper.find('.ni-schedule').exists()).toBe(true)
+
+    const loginId = flow.main.find((id) => flow.configs[id]?.collectCfg?.collectorKind === 'login')!
+    flow.select(loginId)
+    flow.setActiveTab('config')
+    const loginWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(loginWrapper.find('.ni-schedule').exists()).toBe(false)
+  })
+
+  it('采集 → 规则：规则节点（非首节点）不显示定时策略，首节点显示', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.configs['rule-1'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', 'web-1', 'rule-1', 'end']
+
+    flow.select('rule-1')
+    flow.setActiveTab('config')
+    const ruleWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(ruleWrapper.find('.ni-schedule').exists()).toBe(false)
+    expect(ruleWrapper.text()).not.toContain('定时策略')
+    ruleWrapper.unmount()
+
+    flow.select('web-1')
+    const webWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(webWrapper.find('.ni-schedule').exists()).toBe(true)
+    webWrapper.unmount()
+  })
+
+  it('流程不以采集节点开头（规则开头）：退回主链第一个节点显示，后面的节点不显示', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['rule-a'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.configs['rule-b'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', 'rule-a', 'rule-b', 'end']
+
+    flow.select('rule-a')
+    flow.setActiveTab('config')
+    const first = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(first.find('.ni-schedule').exists()).toBe(true)
+    first.unmount()
+
+    flow.select('rule-b')
+    const second = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(second.find('.ni-schedule').exists()).toBe(false)
+    second.unmount()
+  })
+})
+
+describe('ConfigTab · 配置 URL 从 config/configDetail 回填', () => {
+  it('已有 configId 且节点上还没有 URL 时，读原始记录的 configUrl 填上，不置脏', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      configId: 1400774,
+      configName: '证券之星列表配置',
+      configUrl: 'http://www.baidu.com',
+    })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400774', configName: '证券之星列表配置' }
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(configApi.configDetailRaw).toHaveBeenCalledWith('1400774')
+    expect(flow.configs['web-1'].configUrl).toBe('http://www.baidu.com')
+    expect(flow.configDirty).toBe(false)
+    expect((wrapper.find('[aria-label="URL"]').element as HTMLInputElement).value).toBe('http://www.baidu.com')
+    wrapper.unmount()
+  })
+
+  it('节点上已经有配置 URL 时不再请求', async () => {
+    mockAssets()
+    const detailRaw = vi.spyOn(configApi, 'configDetailRaw')
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = {
+      ...cloneConfig(NODE_CONFIGS['web-list']),
+      configId: '1400774',
+      configName: '证券之星列表配置',
+      configUrl: 'http://already.example/',
+    }
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(detailRaw).not.toHaveBeenCalled()
+    expect((wrapper.find('[aria-label="URL"]').element as HTMLInputElement).value).toBe('http://already.example/')
+    wrapper.unmount()
+  })
+
+  it('节点上配置 URL 还是空字符串时，用详情里的真值补上', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      success: true,
+      data: {
+        configId: 1400766,
+        configName: 'guancha-观察者网-金融科技',
+        configUrl: 'https://www.guancha.cn/jinrongkeji',
+      },
+    })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = {
+      ...cloneConfig(NODE_CONFIGS['web-list']),
+      configId: '1400766',
+      configName: 'guancha-观察者网-金融科技',
+      configUrl: '',
+    }
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(flow.configs['web-1'].configUrl).toBe('https://www.guancha.cn/jinrongkeji')
+    expect(flow.configDirty).toBe(false)
+    expect((wrapper.find('[aria-label="URL"]').element as HTMLInputElement).value).toBe('https://www.guancha.cn/jinrongkeji')
+    wrapper.unmount()
+  })
+})
+
+// 2026-09-18：翻译助手的节点配置与规则处理保持一致——只剩「节点名称 + 定时策略」，
+// 不再渲染通用的基础字段/参数三元表/发起抓取信息（那些是给自定义/规划中节点兜底的占位内容）。
+describe('ConfigTab · 翻译助手（与规则处理同表单）', () => {
+  it('只剩节点名称与定时策略，不渲染通用基础字段/参数/发起抓取信息', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['translate-1'] = cloneConfig(NODE_CONFIGS['translate'])
+    flow.main = ['start', 'translate-1', 'end'] // 定时策略只在首节点显示（1008-08）
+    flow.select('translate-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('节点名称')
+    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.text()).not.toContain('文本来源')
+    expect(wrapper.text()).not.toContain('能力状态')
+    expect(wrapper.text()).not.toContain('发起抓取信息')
+    expect(wrapper.text()).not.toContain('复制节点')
+    expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
+
+    // 节点名称仍可直接编辑
+    const titleInput = wrapper.find('.rc-field input.rc-input')
+    await titleInput.setValue('翻译节点改名')
+    expect(flow.configs['translate-1'].title).toBe('翻译节点改名')
+    wrapper.unmount()
+  })
+})
+
+// 2026-09-18：文章打标签与翻译助手同待遇——节点配置只剩「节点名称 + 定时策略」，
+// 不渲染通用的基础字段/参数三元表/发起抓取信息。
+describe('ConfigTab · 文章打标签（与规则处理同表单）', () => {
+  it('只剩节点名称与定时策略，不渲染通用基础字段/参数/发起抓取信息', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['tag-1'] = cloneConfig(NODE_CONFIGS['article-tag'])
+    flow.main = ['start', 'tag-1', 'end'] // 定时策略只在首节点显示（1008-08）
+    flow.select('tag-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('节点名称')
+    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.text()).not.toContain('文本来源')
+    expect(wrapper.text()).not.toContain('能力状态')
+    expect(wrapper.text()).not.toContain('发起抓取信息')
+    expect(wrapper.text()).not.toContain('复制节点')
+    expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
+
+    // 节点名称仍可直接编辑
+    const titleInput = wrapper.find('.rc-field input.rc-input')
+    await titleInput.setValue('打标签节点改名')
+    expect(flow.configs['tag-1'].title).toBe('打标签节点改名')
+    wrapper.unmount()
+  })
+})
+
+// 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
+// 节点配置只剩「节点名称 + 定时策略」，不渲染通用的基础字段/参数三元表/发起抓取信息。
+describe('ConfigTab · 摘要/音视频处理节点（与规则处理同表单）', () => {
+  it.each([
+    ['article-summary', '文本来源'],
+    ['audio-text', '音频来源'],
+    ['video-audio', '视频来源'],
+  ])('%s：只剩节点名称与定时策略，不渲染通用基础字段/参数/发起抓取信息', async (seedKey, baseLabel) => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['proc-1'] = cloneConfig(NODE_CONFIGS[seedKey])
+    flow.main = ['start', 'proc-1', 'end'] // 定时策略只在首节点显示（1008-08）
+    flow.select('proc-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('节点名称')
+    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.text()).not.toContain(baseLabel)
+    expect(wrapper.text()).not.toContain('能力状态')
+    expect(wrapper.text()).not.toContain('发起抓取信息')
+    expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+// 2026-09-22 用户报「定时为什么关不上」：首次保存定时时源上还没有 job，
+// 于是本地造了个 jobId 为空的壳，界面显示「已启用」，可那条定时没有 ID——
+// 点开关就是 setJobEnabled(['']) → 「没有可操作的定时任务」（截图里那两条重复提示）。
+describe('ConfigTab · 定时启停（2026-09-22）', () => {
+  function mountWithJob(jobId: string) {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.main = ['start', 'rule-1', 'end'] // 定时策略只在首节点显示（1008-08）
+    flow.setSourceJob({
+      jobId, jobName: 'j', sourceId: 's-1', schedule: '0 0 0 * * ?',
+      runCount: 0, successCount: 0, disabled: false,
+    })
+    return { flow, wrapper }
+  }
+
+  it('jobId 为空时不发请求，直接说清原因', async () => {
+    const setEnabled = vi.spyOn(sourceApi, 'setJobEnabled')
+    const { wrapper } = mountWithJob('')
+    await flushPromises()
+
+    wrapper.findComponent(TaskScheduleSettings).vm.$emit('toggle-enabled', true)
+    await flushPromises()
+
+    expect(setEnabled).not.toHaveBeenCalled()
+  })
+
+  it('有 jobId 时正常调启停接口', async () => {
+    const setEnabled = vi.spyOn(sourceApi, 'setJobEnabled').mockResolvedValue({ ok: true, message: 'ok' })
+    const { wrapper } = mountWithJob('j-9')
+    await flushPromises()
+
+    wrapper.findComponent(TaskScheduleSettings).vm.$emit('toggle-enabled', false)
+    await flushPromises()
+
+    expect(setEnabled).toHaveBeenCalledWith(['j-9'], false)
+  })
+})
+
+describe('ConfigTab · 节点类型展示（2026-09-24 走查：OCR及所有新增节点展示节点类型）', () => {
+  it.each([
+    ['ocr', 'OCR抓取'],
+    ['translate', '翻译助手'],
+    ['article-tag', '文章打标签'],
+    ['article-summary', '文章生成摘要'],
+    ['audio-text', '音频提取文字'],
+    ['video-audio', '视频提取音频'],
+    ['excel-collect', 'EXCEL抓取'],
+    ['web-list', '网页抓取'],
+    ['rule', '规则处理'],
+    ['monitor', '数据监控'],
+  ])('%s 节点展示正确的节点类型 %s', async (templateKey, expectedType) => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS[templateKey === 'monitor' ? 'rule' : templateKey])
+    if (templateKey === 'monitor') cfg.template = 'monitor'
+    flow.configs['node-test'] = cfg
+    flow.select('node-test')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const typeDisplay = wrapper.find('[data-testid="node-type-display"]')
+    expect(typeDisplay.exists()).toBe(true)
+    expect(typeDisplay.text()).toBe(expectedType)
+    // 验证「节点名称」纯净展示，不再出现 (= 规则处理名称)
+    const nameLabel = wrapper.findAll('.rc-field label').find((l) => l.text().startsWith('节点名称'))
+    expect(nameLabel?.text()).toBe('节点名称')
+    expect(wrapper.text()).not.toContain('（= 规则处理名称）')
+    expect(wrapper.text()).not.toContain('(= 规则处理名称)')
+    wrapper.unmount()
+  })
+
+  it('针对真实带规则壳的 OCR 节点（sub 存量为规则处理，title 为 OCR抓取），节点类型仍准确显示为 OCR抓取', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.title = 'OCR抓取'
+    cfg.configName = 'OCR抓取'
+    cfg.configId = '1401063'
+    cfg.sub = '规则处理 · group/page'
+    flow.configs['ocr-real'] = cfg
+    flow.select('ocr-real')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const typeDisplay = wrapper.find('[data-testid="node-type-display"]')
+    expect(typeDisplay.text()).toBe('OCR抓取')
+
+    const nameLabel = wrapper.findAll('.rc-field label').find((l) => l.text().startsWith('节点名称'))
+    expect(nameLabel?.text()).toBe('节点名称')
+    expect(wrapper.text()).not.toContain('规则处理名称')
+
+    // 顶部副标题不应再显示生硬的 "规则处理 · group/page"
+    expect(wrapper.find('.rc-insp-sub').text()).toBe('[150] OCR抓取 · 图片文字识别')
+    wrapper.unmount()
+  })
+
+  it('显式传入 configType 时优先直接读取对应的字典类型名称', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.configType = '160' // Mail抓取
+    flow.configs['custom-type'] = cfg
+    flow.select('custom-type')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const typeDisplay = wrapper.find('[data-testid="node-type-display"]')
+    expect(typeDisplay.text()).toBe('Mail抓取')
+    wrapper.unmount()
+  })
+})
+
+
+// 2026-11-05 撤回表配置字段用途，任务 URL 回到任务配置 Tab 维护（10-19/10-21 旧平台口径）
+describe('ConfigTab · 任务 URL 已迁到任务配置 Tab', () => {
+  it('节点配置不再展示任务 URL 选择器，已存 itemId/stepUrl 不被改写', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.configs['web-2'] = cloneConfig(NODE_CONFIGS['web-detail'])
+    flow.configs['web-2'].collectCfg!.inputTable = '900'
+    flow.configs['web-2'].itemId = '9002'
+    flow.configs['web-2'].stepUrl = "K2+'#x'"
+    flow.main = ['start', 'web-1', 'web-2', 'end']
+    flow.select('web-2')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="task-url-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="task-url-source"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="task-url-expr"]').exists()).toBe(false)
+    expect(flow.configs['web-2'].itemId).toBe('9002')
+    expect(flow.configs['web-2'].stepUrl).toBe("K2+'#x'")
+    wrapper.unmount()
+  })
+})
