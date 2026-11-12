@@ -4,6 +4,26 @@ import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
 import { submitClarificationAnswer } from '@/api/aiChat'
+import { downloadCsv } from '@/utils/csv'
+import { downloadXlsx } from '@/utils/format/xlsxExport'
+
+vi.mock('@/utils/csv', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/csv')>()
+  return {
+    ...actual,
+    downloadCsv: vi.fn(),
+    csvDateTag: vi.fn(() => '20261111'),
+  }
+})
+
+vi.mock('@/utils/format/xlsxExport', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/format/xlsxExport')>()
+  return {
+    ...actual,
+    downloadXlsx: vi.fn(),
+    exportDateTag: vi.fn(() => '20261111'),
+  }
+})
 
 vi.mock('@/api/aiChat', () => ({
   listAiSessions: vi.fn().mockImplementation(() =>
@@ -100,20 +120,125 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
   })
 
-  it('支持在趋势图表与明细数据表之间切换视图', async () => {
+  it('支持在趋势图表、占比饼图与明细数据表之间切换视图', async () => {
     const wrapper = mountView()
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
     expect(wrapper.find('.rc-table-view').exists()).toBe(false)
 
-    const radioBtns = wrapper.findAll('.el-radio-button')
-    if (radioBtns.length >= 2) {
-      await radioBtns[1].find('input').setValue('table')
-      await wrapper.vm.$nextTick()
-      expect(wrapper.find('.rc-table-view').exists()).toBe(true)
-    }
+    // 切换到「占比饼图」视图
+    const pieRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('占比饼图'))
+    expect(pieRadio).toBeTruthy()
+    await pieRadio!.find('input').setValue('pie')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rc-pie-chart"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rc-pie-legend"]').exists()).toBe(true)
+    expect(wrapper.findAll('.rc-pie-slice').length).toBeGreaterThan(0)
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-table-view').exists()).toBe(false)
+
+    // 切换到「明细数据表」视图
+    const tableRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('明细数据表'))
+    expect(tableRadio).toBeTruthy()
+    await tableRadio!.find('input').setValue('table')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
+
+    // 切换回「趋势图表」视图
+    const chartRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('趋势图表'))
+    expect(chartRadio).toBeTruthy()
+    await chartRadio!.find('input').setValue('chart')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-table-view').exists()).toBe(false)
+  })
+
+  it('支持在明细数据表视图快捷导出 Excel 与 CSV', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await confirmWithTables(wrapper, [101])
+
+    // 切换到明细表格视图
+    const tableRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('明细数据表'))
+    await tableRadio!.find('input').setValue('table')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+
+    // 点击表格上方快捷「导出 Excel」按钮
+    await wrapper.find('[data-testid="rc-table-export-excel"]').trigger('click')
+    expect(downloadXlsx).toHaveBeenCalledTimes(1)
+    const [xlsxFileName, xlsxRows] = vi.mocked(downloadXlsx).mock.calls[0]
+    expect(xlsxFileName).toContain('20261111')
+    expect(xlsxRows[0]).toEqual(['网站名称', '总任务数', '成功数', '失败数', '主要异常码'])
+
+    // 点击表格上方快捷「导出 CSV」按钮
+    await wrapper.find('[data-testid="rc-table-export-csv"]').trigger('click')
+    expect(downloadCsv).toHaveBeenCalledTimes(1)
+    const [csvFileName, csvContent] = vi.mocked(downloadCsv).mock.calls[0]
+    expect(csvFileName).toContain('20261111')
+    expect(csvContent).toContain('网站名称,总任务数,成功数,失败数,主要异常码')
+  })
+
+  it('支持通过卡片顶部的导出下拉菜单导出 Excel 与 CSV', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await confirmWithTables(wrapper, [101])
+
+    vi.mocked(downloadXlsx).mockClear()
+    vi.mocked(downloadCsv).mockClear()
+
+    const dropdown = wrapper.findComponent({ name: 'ElDropdown' })
+    expect(dropdown.exists()).toBe(true)
+
+    // 触发 Excel 导出命令
+    dropdown.vm.$emit('command', 'excel')
+    await wrapper.vm.$nextTick()
+    expect(downloadXlsx).toHaveBeenCalledTimes(1)
+
+    // 触发 CSV 导出命令
+    dropdown.vm.$emit('command', 'csv')
+    await wrapper.vm.$nextTick()
+    expect(downloadCsv).toHaveBeenCalledTimes(1)
+  })
+
+  it('输入包含导出的自然语言指令时，能识别意图并自动触发对应文件下载', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountView()
+    await flushPromises()
+    await confirmWithTables(wrapper, [101])
+
+    vi.mocked(downloadCsv).mockClear()
+
+    const input = wrapper.find('.rc-textarea')
+    await input.setValue('帮我把上面失败率最高的前3个网站的数据导出为CSV表格')
+    await wrapper.find('.rc-send-btn').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    vi.advanceTimersByTime(700)
+    await flushPromises()
+
+    expect(downloadCsv).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('已为您生成并导出')
+    vi.useRealTimers()
   })
 
   it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语与推荐场景卡片', async () => {
