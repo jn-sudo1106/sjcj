@@ -82,6 +82,39 @@ describe('sourceDirs · 目录树', () => {
     expect((await searchDirs('sys', '股票')).map((n) => n.id)).toEqual(['9008798'])
     expect(dirKindOf({ id: '9009401', parentId: '-1', path: '0,-1,' })).toBe('view')
   })
+
+  // 2026-11-11 186：业务目录（-2 整棵树）的 GROUP_ID 全是 NULL，而 categoryQuery 会按
+  // 「当前账号第一个角色的数据组」过滤（admin 角色 → 数据组 200），业务目录全被漏掉，
+  // 左栏搜「债券」= 没有匹配的目录。业务目录搜索改成按 scopeTree 的树来搜。
+  it('业务目录搜索走目录树，不受 categoryQuery 数据组过滤影响', async () => {
+    requestMock.mockImplementation(async (endpoint: string) => {
+      if (endpoint === 'category/scopeTree') {
+        return [
+          { id: '-2', name: '业务分类', parentId: '' },
+          { id: '9011500', name: '债券数据', parentId: '-2' },
+          { id: '9011501', name: '债券发行', parentId: '9011500' },
+          { id: '9008727', name: '债券', parentId: '0' },
+        ]
+      }
+      return null
+    })
+    const search = vi.spyOn(sourceApi, 'searchCategories')
+    expect((await searchDirs('biz', '债券')).map((n) => [n.id, n.parentId]))
+      .toEqual([['9011500', ''], ['9011501', '9011500']])
+    expect(search).not.toHaveBeenCalled()
+  })
+
+  it('业务目录搜索复用 scopeTree 一次请求；树上没匹配就是空，不退回 categoryQuery', async () => {
+    requestMock.mockImplementation(async (endpoint: string) => {
+      if (endpoint === 'category/scopeTree') {
+        return [{ id: '-2', name: '业务分类', parentId: '' }, { id: '9011500', name: '债券数据', parentId: '-2' }]
+      }
+      return null
+    })
+    await searchDirs('biz', '债券')
+    expect(await searchDirs('biz', '股票')).toEqual([])
+    expect(requestMock.mock.calls.filter(([ep]) => ep === 'category/scopeTree')).toHaveLength(1)
+  })
 })
 
 describe('sourceDirs · 业务目录里的源', () => {

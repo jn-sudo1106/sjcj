@@ -131,9 +131,25 @@ export function dirKindOf(c: { id: string; parentId?: string; path?: string }): 
   return 'sys'
 }
 
-/** 跨层级搜索，只留当前这套目录的（排除 -1、-2 根节点本身和视图目录） */
+/**
+ * 跨层级搜索，只留当前这套目录的（排除 -1、-2 根节点本身和视图目录）。
+ *
+ * ⚠️ 业务目录不能走 `category/categoryQuery`：后端那个接口会拼
+ * `group_id = AuthCenter.getGroupId()`（= 当前账号第一个角色的数据组），而业务目录
+ * （-2 整棵树）的 GROUP_ID 全是 NULL，于是任何有角色数据组的账号都搜不到业务目录。
+ * 2026-11-11 186 上复现：admin（角色 admin → 数据组 200）搜「债券」，
+ * categoryQuery 只回 9008727「债券」（GROUP_ID=200，属系统目录），按 kind 过滤后为空
+ * → 左栏「没有匹配的目录」，而树上「债券数据」好好地挂着。所以业务目录改从 scopeTree
+ * （和目录树同一口径，不受数据组过滤）里搜，拿不到该接口再退回 categoryQuery。
+ */
 export async function searchDirs(kind: DirKind, keyword: string): Promise<DirNode[]> {
-  const rows = await sourceApi.searchCategories(keyword)
+  const kw = keyword.trim()
+  if (!kw) return []
+  if (kind === 'biz') {
+    const inTree = await searchBizDirsInTree(kw.toLowerCase())
+    if (inTree) return inTree
+  }
+  const rows = await sourceApi.searchCategories(kw)
   return rows
     .filter((c) => !RESERVED_ROOTS.has(c.id) && dirKindOf(c) === kind)
     .map((c) => {
@@ -212,18 +228,70 @@ async function readScopeTree(): Promise<ScopeTreeRow[] | null> {
   return parsed
 }
 
-let bizTreeTask: Promise<string[]> | null = null
+let scopeTreeTask: Promise<ScopeTreeRow[] | null> | null = null
 
-/** 业务目录整棵树（含子级）的目录 ID，一次拿全；注册进 nodeIndex 让「业务目录」列能拼出路径 */
-async function bizTreeIdsViaScopeTree(): Promise<string[] | null> {
-  const rows = await readScopeTree()
-  if (!rows || !rows.length) return null
+/** scopeTree 结果会话内复用：整树枚举和业务目录搜索吃的是同一份数据，失败不缓存（下次还能重试） */
+function scopeTreeRows(): Promise<ScopeTreeRow[] | null> {
+  if (!scopeTreeTask) {
+    const task = readScopeTree()
+    scopeTreeTask = task
+    void task.then((rows) => {
+      if (!rows) scopeTreeTask = null
+    }, () => {
+      scopeTreeTask = null
+    })
+  }
+  return scopeTreeTask
+}
+
+/** scopeTree 扁平行 → 父级分组，业务目录树和搜索共用 */
+function scopeRowsByParent(rows: ScopeTreeRow[]): Map<string, ScopeTreeRow[]> {
   const children = new Map<string, ScopeTreeRow[]>()
   for (const row of rows) {
     const bucket = children.get(row.parentId)
     if (bucket) bucket.push(row)
     else children.set(row.parentId, [row])
   }
+  return children
+}
+
+/**
+ * 业务目录整棵树里按名字搜。
+ *
+ * 返回 null = 这个环境拿不到 scopeTree（老环境没接口 / 没权限 / 返回格式不认识），
+ * 由调用方退回 `categoryQuery` + kind 过滤的老口径。空数组是「树上确实没有匹配」。
+ */
+async function searchBizDirsInTree(keyword: string): Promise<DirNode[] | null> {
+  const rows = await scopeTreeRows()
+  if (!rows || !rows.length) return null
+  const children = scopeRowsByParent(rows)
+  // 认不出 -2 这棵树就说明口径不对，交给 categoryQuery 兜底
+  if (!children.has(BIZ_DIR_ROOT_ID)) return null
+  const hits: DirNode[] = []
+  const seen = new Set<string>([BIZ_DIR_ROOT_ID])
+  const queue = [BIZ_DIR_ROOT_ID]
+  while (queue.length) {
+    const parent = queue.shift()!
+    for (const child of children.get(parent) ?? []) {
+      if (seen.has(child.id)) continue
+      seen.add(child.id)
+      queue.push(child.id)
+      // -2 的直接子级在这套目录里是根层（parentId 记 ''），和 loadDirChildren('biz') 的口径对齐
+      const node = nodeIndex.get(child.id)
+        ?? toNode({ id: child.id, name: child.name }, child.parentId === BIZ_DIR_ROOT_ID ? '' : child.parentId)
+      if (child.name.toLowerCase().includes(keyword)) hits.push(node)
+    }
+  }
+  return hits
+}
+
+let bizTreeTask: Promise<string[]> | null = null
+
+/** 业务目录整棵树（含子级）的目录 ID，一次拿全；注册进 nodeIndex 让「业务目录」列能拼出路径 */
+async function bizTreeIdsViaScopeTree(): Promise<string[] | null> {
+  const rows = await scopeTreeRows()
+  if (!rows || !rows.length) return null
+  const children = scopeRowsByParent(rows)
   // 认不出 -2 这棵树就说明口径不对，交给逐层展开兜底
   if (!children.has(BIZ_DIR_ROOT_ID)) return null
   const ids: string[] = []
@@ -631,6 +699,7 @@ export function resetSourceDirCache() {
   dirGroupCache.clear()
   membershipTask = null
   bizTreeTask = null
+  scopeTreeTask = null
   membershipListeners.clear()
   pathTasks.clear()
   dirTablesCache.clear()
