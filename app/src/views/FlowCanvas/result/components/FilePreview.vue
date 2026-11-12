@@ -152,6 +152,16 @@ const htmlSrc = computed(() => (kind.value === 'html' && currentPath.value ? oss
 /** 任何带有效 OSS 路径的文件（含 K17 html、K6 正文 txt 等）均提供独立端口直连地址，供「新窗口打开」 */
 const publicFileUrl = computed(() => (currentPath.value ? ossPublicUrl(currentPath.value) : ''))
 
+/**
+ * 取数代号：每换一条数据 +1，响应回来时代号对不上就整个丢弃。
+ *
+ * 2026-11-11 线上报「文章对不上」：弹窗是**单实例复用**的（el-dialog 没有
+ * destroy-on-close，三个调用方都是同一份 FilePreview 换 props），上一条数据的
+ * 请求如果比新那条晚到（OSS 上正文对象本来就会被流水线就地重写，偶发慢/404 重试），
+ * `text.value = …` 会把新文章盖成旧文章——标题、链接都是新行，正文还是上一条，
+ * 用户看到的就是「预览和这个链接对不上」。代号守卫生效后，晚到的旧响应一律不落盘。
+ */
+let loadSeq = 0
 const loading = ref(false)
 const error = ref('')
 // 采集被拦判定（2026-09-11）：只对"体积小得不像正文"的 HTML 存档做，正常的 MB 级文章
@@ -187,6 +197,9 @@ function releaseBlob() {
   blobUrl.value = ''
 }
 function reset() {
+  // 换数据即作废在途请求：reset 之后即使本次不该 load（比如切到不支持的类型），
+  // 上一条的响应也不能再落进来。
+  loadSeq += 1
   releaseBlob()
   buffer.value = null
   text.value = ''
@@ -210,8 +223,11 @@ async function sniffBlocked() {
   // 体积已知且明显不小时跳过：正常文章都在 MB 级，没必要探。
   // 体积未知时照样探——调用方目前并不传 size，而**只读头部**，代价就是几十 KB。
   if (sizeNum.value > BLOCKED_ARCHIVE_SIZE_LIMIT) return
+  const seq = loadSeq
   try {
     const buf = await fetchOssFileHead(currentPath.value, BLOCKED_ARCHIVE_SNIFF_BYTES)
+    // 探测也是上一次数据的结论时不能落到这一条上（否则会把正常文章标成"采集被拦下"）
+    if (seq !== loadSeq) return
     const verdict = detectBlockedArchive(new TextDecoder('utf-8').decode(buf))
     if (verdict.blocked) blocked.value = verdict
   } catch {
@@ -225,6 +241,9 @@ const shouldLoad = computed(() => !!currentPath.value && kind.value !== 'none' &
 
 async function load() {
   if (!shouldLoad.value || !currentPath.value) return
+  // 代号由 reset()（换数据时）递增，这里只读取：同一条数据的 load 与 sniffBlocked 共用一个代号
+  const seq = loadSeq
+  const path = currentPath.value
   loading.value = true
   error.value = ''
   try {
@@ -232,8 +251,15 @@ async function load() {
     // 实测直连 9102 播放器报 MEDIA_ERR_SRC_NOT_SUPPORTED——OSS 回的是 201（不是 200/206）、
     // 类型是 octet-stream、也不支持 Range；取成带正确 MIME 的 blob 后时长、拖动都正常。
     const buf = isMedia.value
-      ? await fetchOssFile(currentPath.value, (received, total) => { loadedBytes.value = received; totalBytes.value = total })
-      : await fetchOssFile(currentPath.value)
+      ? await fetchOssFile(path, (received, total) => {
+        // 进度也归代号管：别的数据的下载进度不该画在这一条上
+        if (seq !== loadSeq) return
+        loadedBytes.value = received
+        totalBytes.value = total
+      })
+      : await fetchOssFile(path)
+    // 上一条数据的响应晚到：直接丢掉，不能把当前这条盖成旧文章
+    if (seq !== loadSeq) return
     if (kind.value === 'excel') {
       buffer.value = buf
     } else if (kind.value === 'text') {
@@ -247,6 +273,7 @@ async function load() {
       blobUrl.value = URL.createObjectURL(new Blob([buf], { type: mimeTypeOf(effectiveExt.value) }))
     }
   } catch (e) {
+    if (seq !== loadSeq) return
     // 文本或直连文件：同源 /oss 代理取字节流失败（如生产环境未配置 /oss 反代）时，平滑回退到 9102 直连框架预览
     if (kind.value === 'text' && publicFileUrl.value) {
       fallbackToFrame.value = true
@@ -254,7 +281,7 @@ async function load() {
       error.value = e instanceof Error ? e.message : String(e)
     }
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
