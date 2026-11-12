@@ -4,7 +4,11 @@ import { bizMembership, dirPath } from '@/api/sourceDirs'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ sourceId: string }>()
-const emit = defineEmits<{ navigate: [directoryId: string]; textChange: [sourceId: string, text: string] }>()
+const emit = defineEmits<{
+  navigate: [directoryId: string]
+  textChange: [sourceId: string, text: string]
+  membershipChange: [membership: Map<string, string[]> | undefined]
+}>()
 const ui = useUiStore()
 const directories = ref<{ id: string; path: string }[]>([])
 const state = ref<'loading' | 'ready' | 'error'>('loading')
@@ -20,12 +24,14 @@ async function load() {
   state.value = 'loading'
   directories.value = []
   visible.value = false
+  emit('membershipChange', undefined)
   try {
     // 行只在源列表返回后挂载；所有行复用现有的会话缓存和同一个在途请求。
     const membership = await bizMembership()
     if (request !== sequence) return
     directories.value = (membership.get(sourceId) ?? []).map(id => ({ id, path: dirPath(id).join(' / ') || `#${id}` }))
     state.value = 'ready'
+    emit('membershipChange', membership)
   } catch (cause) {
     if (request !== sequence) return
     state.value = 'error'

@@ -8,6 +8,7 @@ import SiteDetailView from './SiteDetailView.vue'
 import { useFlowStore } from '@/stores/flow'
 import { siteApi, type Source } from '@/api'
 import { useWorkspaceStore } from '@/stores/workspace'
+import * as sourceDirs from '@/api/sourceDirs'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }, { path: '/collect', component: { template: '<div />' } }] })
 
@@ -30,6 +31,11 @@ describe('SiteDetailView', () => {
     expect(list.props('extraColumnLabel')).toBe('业务目录')
     link.vm.$emit('text-change', 's1', '行业数据 / 化工')
     expect(list.props('extraCellText')({ sourceId: 's1' })).toBe('行业数据 / 化工')
+    const path = vi.spyOn(sourceDirs, 'dirPath').mockReturnValue(['行业数据', '能源'])
+    link.vm.$emit('membership-change', new Map([['outside-current-page', ['d3']]]))
+    expect(list.props('extraCellText')({ sourceId: 'outside-current-page' })).toBe('行业数据 / 能源')
+    expect(list.props('extraCellText')({ sourceId: 'unclassified' })).toBe('未归类')
+    path.mockRestore()
     link.vm.$emit('navigate', 'd2')
     await flushPromises()
     expect(capture).toHaveBeenCalledWith('/canvas?siteId=294&view=source&sourceGroupId=3', '网站源视图')
