@@ -12,19 +12,24 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }, { path: '/collect', component: { template: '<div />' } }] })
 
 describe('SiteDetailView', () => {
-  it('目录入口位于源名称插槽，跳转使用独立目录范围并携带网站列表返回快照', async () => {
+  it('业务目录列位于源名称后，跳转使用独立目录范围并携带网站列表返回快照', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas?siteId=294&view=source&sourceGroupId=3')
     const capture = vi.fn().mockReturnValue('saved-list')
     const listStub = defineComponent({
       name: 'SourceOverviewView',
+      props: ['extraColumnLabel', 'extraCellText'],
       setup(_, { expose }) { expose({ captureListReturn: capture }) },
-      template: '<div><slot name="source-name-extra" :source="{ sourceId: \'s1\' }" /></div>',
+      template: '<div><slot name="extra-cell" :source="{ sourceId: \'s1\' }" /></div>',
     })
     const wrapper = shallowMount(SiteDetailView, { props: { siteId: '294' }, global: { plugins: [router], stubs: { SourceOverviewView: listStub } } })
     await flushPromises()
     const link = wrapper.findComponent({ name: 'SourceBizDirectoryLink' })
     expect(link.props('sourceId')).toBe('s1')
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    expect(list.props('extraColumnLabel')).toBe('业务目录')
+    link.vm.$emit('text-change', 's1', '行业数据 / 化工')
+    expect(list.props('extraCellText')({ sourceId: 's1' })).toBe('行业数据 / 化工')
     link.vm.$emit('navigate', 'd2')
     await flushPromises()
     expect(capture).toHaveBeenCalledWith('/canvas?siteId=294&view=source&sourceGroupId=3', '网站源视图')

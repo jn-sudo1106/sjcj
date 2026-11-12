@@ -139,6 +139,7 @@ describe('SourceOverviewView', () => {
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', showOriginalDirectory: true, extraColumnLabel: '业务目录' } })
     await flushPromises()
     const labels = wrapper.findAll('th').map(th => th.text())
+    expect(labels.indexOf('业务目录')).toBe(labels.indexOf('源名称') + 1)
     expect(labels.indexOf('原始目录')).toBe(labels.indexOf('业务目录') + 1)
     expect(wrapper.findAll('[data-testid="source-overview-original-directory"]').map(cell => cell.text())).toEqual(['财经 / 行业 / 原材料', '系统目录 #101', '—'])
     wrapper.unmount()
