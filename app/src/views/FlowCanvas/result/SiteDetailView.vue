@@ -9,7 +9,7 @@
 // 冒充整个网站会得到错误结果（0812 会议结论）。数据/文件视图按 siteId 查询的真实实现见
 // M2/M3；在那之前网站汇总态的数据/文件页签展示"开发中"占位，不渲染依赖 flow.sourceCtx
 // 的旧 ResultView/FileView，避免用一个空的/串味的 flow.sourceCtx 发出错误查询。
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { siteApi, type Site, type Source } from '@/api'
@@ -30,6 +30,7 @@ const ws = useWorkspaceStore()
 const route = useRoute()
 const router = useRouter()
 const sourceOverviewRef = ref<InstanceType<typeof SourceOverviewView>>()
+const bizDirectoryText = reactive(new Map<string, string>())
 function openBizDirectory(directoryId: string) {
   const contextId = sourceOverviewRef.value?.captureListReturn(route.fullPath, '网站源视图')
   void router.push({ path: '/collect', query: {
@@ -216,9 +217,9 @@ function openSourceData(source: Source) {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <SourceOverviewView v-if="view === 'source'" ref="sourceOverviewRef" :current-site-id="siteId" :scope-source-group-id="sourceGroupId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" :search-navigation="route.query.sourceSearchReturn ? { returnTo: route.fullPath, label: '网站源视图', restoreId: String(route.query.sourceSearchReturn) } : undefined" class="sdv-body" @search-restored="finishSourceSearchReturn(router, route)" @open-source="openSource" @open-source-data="openSourceData">
-        <template #source-name-extra="{ source }">
-          <SourceBizDirectoryLink :source-id="source.sourceId" @navigate="openBizDirectory" />
+      <SourceOverviewView v-if="view === 'source'" ref="sourceOverviewRef" :current-site-id="siteId" :scope-source-group-id="sourceGroupId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" extra-column-label="业务目录" :extra-cell-text="source => bizDirectoryText.get(source.sourceId) ?? '加载中…'" :search-navigation="route.query.sourceSearchReturn ? { returnTo: route.fullPath, label: '网站源视图', restoreId: String(route.query.sourceSearchReturn) } : undefined" class="sdv-body" @search-restored="finishSourceSearchReturn(router, route)" @open-source="openSource" @open-source-data="openSourceData">
+        <template #extra-cell="{ source }">
+          <SourceBizDirectoryLink :source-id="source.sourceId" @navigate="openBizDirectory" @text-change="(sourceId, text) => bizDirectoryText.set(sourceId, text)" />
         </template>
       </SourceOverviewView>
       <SiteTablesOverview v-else-if="view === 'data' && showTablesOverview" :site-id="siteId" class="sdv-body" @pick="openTableFromOverview" />

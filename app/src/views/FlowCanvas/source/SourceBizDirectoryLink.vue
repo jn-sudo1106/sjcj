@@ -4,7 +4,7 @@ import { bizMembership, dirPath } from '@/api/sourceDirs'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ sourceId: string }>()
-const emit = defineEmits<{ navigate: [directoryId: string] }>()
+const emit = defineEmits<{ navigate: [directoryId: string]; textChange: [sourceId: string, text: string] }>()
 const ui = useUiStore()
 const directories = ref<{ id: string; path: string }[]>([])
 const state = ref<'loading' | 'ready' | 'error'>('loading')
@@ -37,12 +37,14 @@ function navigate(id: string) {
   emit('navigate', id)
 }
 watch([() => props.sourceId, () => ui.sourceListRevision], load, { immediate: true })
+watch([state, directories], () => {
+  emit('textChange', props.sourceId, state.value === 'loading' ? '加载中…' : state.value === 'error' ? '加载失败' : directories.value.map(dir => dir.path).join('、') || '未归类')
+}, { immediate: true })
 onBeforeUnmount(() => { sequence++ })
 </script>
 
 <template>
   <div class="sbd-line" data-testid="source-biz-directory" @click.stop>
-    <span class="sbd-label">业务目录：</span>
     <span v-if="state === 'loading'" class="sbd-muted" role="status">目录加载中…</span>
     <button v-else-if="state === 'error'" class="sbd-link" type="button" :title="error" @click="load">加载失败，重试</button>
     <template v-else-if="directories.length">
@@ -68,9 +70,9 @@ onBeforeUnmount(() => { sequence++ })
 </template>
 
 <style scoped>
-.sbd-line { display: flex; align-items: center; gap: 2px; min-width: 0; margin-top: 5px; font-size: 12px; line-height: 18px; font-weight: 400; }
-.sbd-label, .sbd-muted { color: var(--rc-muted); }
-.sbd-label, .sbd-more { flex-shrink: 0; }
+.sbd-line { display: flex; align-items: center; gap: 2px; width: 210px; max-width: 100%; min-width: 0; font-size: 12px; line-height: 18px; font-weight: 400; }
+.sbd-muted { color: var(--rc-muted); }
+.sbd-more { flex-shrink: 0; }
 .sbd-link { border: 0; padding: 0; background: none; color: var(--rc-primary); font: inherit; cursor: pointer; }
 .sbd-link:hover { text-decoration: underline; }
 .sbd-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; text-align: left; }
