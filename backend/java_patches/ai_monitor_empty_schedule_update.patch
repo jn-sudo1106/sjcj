@@ -1,0 +1,23 @@
+diff --git a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
+--- a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
++++ b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
+@@ -265,8 +265,16 @@
+     public Date calcNextDate(CkSource ckSource) {
+         String cron = ckSource.getSchedule();
++        // 空计划（仅手动 / AI 草稿）不能交给 CronSequenceGenerator，否则 MySQL 更新链路会抛
++        // "Cron expression must consist of 6 fields (found 0 in \"\")"，保存接口直接 500。
++        // 没有 cron 的检查只能停在远期，等手动运行或执行器按 check_conf.schedule 排期；
++        // 这里按 10 年停放，与 parkScriptCheck / ai_monitor_empty_schedule.patch 的口径一致。
++        if (StringUtils.isEmpty(cron) || cron.trim().isEmpty()) {
++            return new Date(System.currentTimeMillis() + 10L * 365 * 24 * 3600 * 1000);
++        }
++        cron = cron.trim();
+         if (cron.toUpperCase().startsWith("AFTER-")) {
+             int after = Integer.parseInt(cron.toUpperCase(Locale.ROOT).replace("AFTER-", ""));
+             return calcSourceJobDate(ckSource, after);
+         } else {
+             CronSequenceGenerator generator = new CronSequenceGenerator(cron);
+             Date nextDate = generator.next(ckSource.getLastRun() != null ? ckSource.getLastRun() : new Date());
+             return nextDate;
+         }
+     }

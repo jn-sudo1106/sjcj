@@ -18,7 +18,7 @@ python -m backend.runner_management.server
 
 AI 监控脚本的业务库由 `RUNNER_MONITOR_RUNNER_CONFIG` 指向的私有 JSON 配置提供，连接字段为 `db.host/port/user/password/database`，脚本环境使用 `DQ_DB_*`（可通过配置的 `env` 覆盖）。执行器同时派生一致的 `DB_*` 别名，兼容已生成的脚本。186 当前业务库端口为 9907，这个端口没有写死在代码中；部署 217 必须配置其自己的业务库，不复制 186 的数据库配置或凭据。此处与下面 Runner 管理数据的 `RUNNER_DB_*` 是两套配置。
 
-监控发布须同时检查前端、Python Runner 和 Java 业务后端。保存链路另有一个 Java 侧补丁 `java_patches/source_check_revision_cas.patch`（2026-11-13）：`/api/v1/source/check/update` 按主键单行更新，带 `ver` 时做乐观锁（不一致拒绝并提示「已被其他修改更新」），回执返回最新 `ver`。缺这个补丁时接口仍按行更新，但不会拦并发覆盖；前端会把记录上的 `ver` 一并提交，后端未实现时该字段被忽略，不报错。
+监控发布须同时检查前端、Python Runner 和 Java 业务后端。保存链路另有一个 Java 侧补丁 `java_patches/source_check_revision_cas.patch`（2026-11-13）：`/api/v1/source/check/update` 按主键单行更新，带 `ver` 时做乐观锁（不一致拒绝并提示「已被其他修改更新」），回执返回最新 `ver`。缺这个补丁时接口仍按行更新，但不会拦并发覆盖；前端会把记录上的 `ver` 一并提交，后端未实现时该字段被忽略，不报错。同一天还补了 `java_patches/ai_monitor_empty_schedule_update.patch`：`CkSourceService.calcNextDate` 对空 cron 直接返回 10 年后的时间，否则「仅手动」的 AI 检查在监控中心保存时会因 `Cron expression must consist of 6 fields (found 0 in "")` 报 500。两个补丁都已在 186 上编译部署（`/tmp/build_c13.sh` + `/tmp/deploy_c13.sh` 流程，jar 备份 `bee-config.jar.bak-c13-*`）。
 监控发布须同时检查前端、Python Runner 和 Java 业务后端。空计划 AI 草稿保存依赖 `java_patches/ai_monitor_empty_schedule.patch`：需在目标环境对应的 Java 源码中合入并构建；仅把此补丁文件推送到前端仓库不会修改 Java 运行产物。上线前以目标环境表结构重新核对脚本时间字段，不能把 186 的脚本或字段选择直接视为 217 已验证；至少验收草稿保存、脚本试跑、保存后关闭弹窗及失败回执一致性。
 
 字段候选由同一执行器的 `POST /api/runner-management/monitor-runner/table-fields` 查询业务库 `information_schema.COLUMNS`。接口缺失或查询失败时不回退到平台登记的业务字段；业务字段名可能实际映射到 `K1…K20`。执行器在试跑和正式执行前校验所选时间列，并注入 `DQ_TABLE_NAME`、`DQ_TIME_COLUMN`、`DQ_SOURCE_ID`、`DQ_START_DATE`、`DQ_END_DATE`。生成脚本应使用这些参数；有 `SOURCE_ID` 的共享表必须限定当前源。217 发布时需要同步部署此字段查询接口和新版前端；历史脚本不会因更改下拉框自动改写，必须重新生成并试跑。
