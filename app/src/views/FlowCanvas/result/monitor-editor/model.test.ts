@@ -3,12 +3,15 @@ import type { MonitorCheckConf, MonitorRecordView } from '@/api/types/monitorCen
 import {
   DEFAULT_WINDOW_HOURS,
   MAX_TIME_COLUMN_OPTIONS,
+  buildSaveFeedback,
   confFromForm,
   emptyForm,
   formFromRecord,
   formSignature,
   looksLikeTimeColumn,
   normalizeWindowHours,
+  needsRegenerate,
+  regenerateReasons,
   scheduleIntervalHours,
   timeColumnOptionsOf,
   windowOfForm,
@@ -182,5 +185,42 @@ describe('formSignature 覆盖新字段（dirty 判定）', () => {
     expect(formSignature({ ...base, timeColumn: 'CREATE_DT' })).not.toBe(signature)
     expect(formSignature({ ...base, windowType: 'hours' })).not.toBe(signature)
     expect(formSignature({ ...base, windowHours: '12' })).not.toBe(signature)
+  })
+})
+describe('regenerateReasons：换范围也算脚本过期', () => {
+  const ai = (over: Partial<ReturnType<typeof emptyForm>> = {}) =>
+    ({ ...emptyForm(), kind: 'ai' as const, sourceId: 's1', tableName: 'sense_data.TB_RAW', timeColumn: 'CREATE_DT', ...over })
+
+  it('什么都没改时为空', () => {
+    const base = ai()
+    expect(regenerateReasons(base, base)).toEqual([])
+    expect(needsRegenerate(base, base)).toBe(false)
+  })
+
+  it('换表/换时间列/改描述/改方法各自报出可读字段名', () => {
+    const base = ai()
+    expect(regenerateReasons(ai({ tableName: 'sense_data.TB_NEW' }), base)).toEqual(['检查表'])
+    expect(regenerateReasons(ai({ timeColumn: 'UPDATE_DT' }), base)).toEqual(['入库时间字段'])
+    expect(regenerateReasons(ai({ desc: '改过的描述' }), base)).toEqual(['描述'])
+    expect(regenerateReasons(ai({ methods: ['时效性检查'] }), base)).toEqual(['监控方法'])
+  })
+
+  it('多项一起改时按固定顺序拼接，规则检查不参与', () => {
+    const base = ai()
+    const changed = ai({ tableName: 'sense_data.TB_NEW', desc: '新描述' })
+    expect(regenerateReasons(changed, base)).toEqual(['检查表', '描述'])
+    expect(regenerateReasons({ ...base, kind: 'rule' }, { ...base, kind: 'rule' })).toEqual([])
+  })
+
+  it('保存回执用具体字段名，不说笼统的「描述或方法」', () => {
+    const text = buildSaveFeedback({ version: 'v3', script: 'print(1)' }, 'v3', {
+      kind: 'ai',
+      generated: false,
+      needsRegenerate: true,
+      regenerateReasons: ['检查表', '入库时间字段'],
+    })
+    expect(text).toContain('检查表、入库时间字段有改动')
+    expect(text).toContain('检查逻辑仍是 v3')
+    expect(text).not.toContain('描述或方法')
   })
 })

@@ -24,6 +24,7 @@ import {
   needsRegenerate,
   nextVersionOf,
   normalizeWindowHours,
+  regenerateReasons,
   scheduleIntervalHours,
   timeColumnOptionsOf,
   validateForm,
@@ -247,15 +248,26 @@ const recordStatusText = computed(() => {
 const needsRegenerateNotice = computed(() => {
   if (form.kind !== 'ai' || pending.value) return ''
   if (!hasAnyScript.value) return ''
-  return needsRegenerate(form, committedForm.value)
-    ? `描述或方法有改动：保存后计划/通知会生效，但检查逻辑仍是 ${form.version || '当前版本'}，需重新生成脚本才会改变`
-    : ''
+  const reasons = regenerateReasons(form, committedForm.value)
+  if (!reasons.length) return ''
+  return `${reasons.join('、')}有改动：保存后计划/通知会生效，但检查逻辑仍是 ${form.version || '当前版本'}，需重新生成脚本才会改变`
 })
 
 const importHint = computed(() => (form.kind === 'ai' ? 'AI 脚本检查' : '规则检查'))
 
 function stamp(): string {
   return new Date().toLocaleString('zh-CN', { hour12: false })
+}
+
+/**
+ * 试跑回执里的检查范围：表 + 入库时间字段。生成、试跑、保存、正式运行必须回显同一份范围
+ *（1113 修订稿 §7.9），所以试跑结果不能只说「生效 v3 的脚本」。
+ */
+function scopeText(): string {
+  const parts: string[] = []
+  if (form.tableName.trim()) parts.push(`表 ${form.tableName.trim()}`)
+  if (form.timeColumn.trim()) parts.push(`时间列 ${form.timeColumn.trim()}`)
+  return parts.length ? ` · ${parts.join(' · ')}` : ''
 }
 
 function errorText(error: unknown): string {
@@ -468,6 +480,14 @@ function onProviderChange(): void {
 }
 
 function onTableChange(): void {
+  // 候选脚本的列名/时间列是按生成时的表写死的：换表后留着它，保存就会把旧表范围的脚本发布出去
+  if (pending.value || candidate.script.trim() || candidate.scriptPath.trim()) {
+    candidate.script = ''
+    candidate.scriptPath = ''
+    pending.value = false
+    testResult.value = null
+    ElMessage.warning('检查表已改：原候选脚本按旧表生成，已作废，请重新生成')
+  }
   if (!form.tableName) {
     timeColumnFields.value = []
     form.timeColumn = ''
@@ -644,9 +664,9 @@ async function onTest(): Promise<void> {
     await verifyRule()
     return
   }
-  const target = pending.value
+  const target = `${pending.value
     ? '新生成、尚未保存的脚本（候选）'
-    : `生效 ${form.version || versionOf(recordState.value?.conf) || '当前'} 的脚本`
+    : `生效 ${form.version || versionOf(recordState.value?.conf) || '当前'} 的脚本`}${scopeText()}`
   const scriptText = displayedScript.value.trim()
   const path = activePath.value.trim()
   if (!scriptText && !path) {
@@ -717,7 +737,7 @@ async function verifyRule(): Promise<void> {
     })
     testResult.value = {
       label: '测试，未通知',
-      target: '规则检查配置（未保存校验）',
+      target: `规则检查配置（未保存校验）${scopeText()}`,
       summary: summarizeExecutionResult(raw),
       note: '未发送业务通知，未更新正式最近结果与启停状态',
       at: stamp(),
@@ -726,7 +746,7 @@ async function verifyRule(): Promise<void> {
   } catch (error) {
     testResult.value = {
       label: '测试失败，未通知',
-      target: '规则检查配置（未保存校验）',
+      target: `规则检查配置（未保存校验）${scopeText()}`,
       summary: errorText(error),
       note: '未写入正式结果',
       at: stamp(),
@@ -768,6 +788,7 @@ async function onSave(): Promise<void> {
     const baseVersion = versionOf(baseConf) || form.version
     const savedVersion = form.kind === 'ai' ? (generated ? nextVersionOf(baseVersion) : baseVersion) : ''
     const regenerate = needsRegenerate(form, committedForm.value)
+    const regenerateReasonsOf = regenerate ? regenerateReasons(form, committedForm.value) : []
     const conf = confFromForm(form, baseConf, {
       script: generated ? candidate.script : undefined,
       scriptPath: generated ? candidate.scriptPath : undefined,
@@ -802,6 +823,7 @@ async function onSave(): Promise<void> {
       kind: form.kind,
       generated,
       needsRegenerate: regenerate,
+      regenerateReasons: regenerateReasonsOf,
     })
     applyRecord(readback)
     ElMessage.success(feedback)

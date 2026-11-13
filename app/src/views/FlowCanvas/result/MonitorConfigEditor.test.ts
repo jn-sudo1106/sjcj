@@ -534,6 +534,42 @@ describe('MonitorConfigEditor 测试脚本', () => {
     expect(result).toContain('新生成、尚未保存的脚本')
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
   })
+
+  it('试跑回执标出检查范围（表），不只说测的是哪个版本', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-test"]').trigger('click')
+    await settle()
+
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    expect(result).toContain('表 sense_data.TB_RAW')
+  })
+
+  it('换检查表后原候选脚本作废，试跑对象退回生效脚本且带上新表', async () => {
+    const finalTable: EntryType = { ...TABLE, tableId: 't9', tableName: 'sense_data.TB_FINAL', name: '最终落库表' }
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ main: TABLE.tableId, list1: [TABLE, finalTable], list2: [], list3: [] })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+
+    const select = wrapper.find('[data-testid="mc-table-select"]')
+    await select.setValue('sense_data.TB_FINAL')
+    await settle()
+
+    // 旧表的脚本留着会在保存时把旧范围的列名发布出去，所以换表即作废，并明确告知
+    expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('已作废'))
+    await wrapper.find('[data-testid="mc-test"]').trigger('click')
+    await settle()
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    expect(result).toContain('生效 v3 的脚本')
+    expect(result).toContain('表 sense_data.TB_FINAL')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+  })
 })
 
 describe('MonitorConfigEditor 保存', () => {
@@ -737,6 +773,25 @@ describe('MonitorConfigEditor 保存', () => {
     expect(message).toContain('检查逻辑仍是 v3')
     expect(message).toContain('需重新生成脚本')
     expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+  })
+
+  it('换表后没重新生成就保存 → 回执点名具体字段有改动，不说笼统的「描述或方法」', async () => {
+    const finalTable: EntryType = { ...TABLE, tableId: 't9', tableName: 'sense_data.TB_FINAL', name: '最终落库表' }
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ main: TABLE.tableId, list1: [TABLE, finalTable], list2: [], list3: [] })
+    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord({ tableName: 'sense_data.TB_FINAL' })])
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-table-select"]').setValue('sense_data.TB_FINAL')
+    await settle()
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    const message = String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])
+    expect(message).toMatch(/检查表(、|有改动)/)
+    expect(message).toContain('检查逻辑仍是 v3')
+    expect(message).toContain('需重新生成脚本')
+    expect(message).not.toContain('描述或方法有改动')
   })
 
   it('保存后回读不到记录 → 提示「已提交，未回读到记录」，不猜 ID', async () => {

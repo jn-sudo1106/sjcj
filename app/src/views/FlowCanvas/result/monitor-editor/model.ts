@@ -157,8 +157,10 @@ export interface SaveFeedbackInput {
   kind: MonitorKind
   /** 本次保存是否带上了页面新生成的候选脚本 */
   generated: boolean
-  /** 描述/方法改过但没重新生成脚本 */
+  /** 描述/方法/检查表/时间列改过但没重新生成脚本 */
   needsRegenerate: boolean
+  /** 具体改过的字段名（`regenerateReasons` 的结果），用于把回执说清楚 */
+  regenerateReasons?: string[]
 }
 
 export interface ValidateError {
@@ -361,10 +363,27 @@ export function validateForm(form: MonitorEditorForm): ValidateError | null {
   return null
 }
 
+/**
+ * 改过哪些「必须重新生成脚本才改变检查行为」的字段（T02）。返回可读字段名，空数组表示没改。
+ *
+ * 除描述/方法外还比检查表与入库时间字段：脚本的列名、时间列都是按生成时的表写死的
+ *（2026-11-14 源结果检查改造后，生成只认本条检查选定的表），换表或换时间列后旧脚本
+ * 读到的是另一份范围，回执再说「计划已生效」会误导。
+ */
+export function regenerateReasons(form: MonitorEditorForm, baseline: MonitorEditorForm): string[] {
+  if (form.kind !== 'ai' || baseline.kind !== 'ai') return []
+  const reasons: string[] = []
+  if (form.sourceId.trim() !== baseline.sourceId.trim()) reasons.push('监控源')
+  if (form.tableName.trim() !== baseline.tableName.trim()) reasons.push('检查表')
+  if (form.timeColumn.trim() !== baseline.timeColumn.trim()) reasons.push('入库时间字段')
+  if (form.desc.trim() !== baseline.desc.trim()) reasons.push('描述')
+  if (signatureOfMethods(form.methods) !== signatureOfMethods(baseline.methods)) reasons.push('监控方法')
+  return reasons
+}
+
 /** 是否改过「必须重新生成脚本才改变检查行为」的字段（T02） */
 export function needsRegenerate(form: MonitorEditorForm, baseline: MonitorEditorForm): boolean {
-  if (form.kind !== 'ai' || baseline.kind !== 'ai') return false
-  return form.desc.trim() !== baseline.desc.trim() || signatureOfMethods(form.methods) !== signatureOfMethods(baseline.methods)
+  return regenerateReasons(form, baseline).length > 0
 }
 
 export function signatureOfMethods(methods: string[]): string {
@@ -411,7 +430,8 @@ export function buildSaveFeedback(conf: MonitorCheckConf | null, version: string
     const hasScript = !!effectiveScriptOf(conf) || !!effectiveScriptPathOf(conf)
     if (!hasScript) return '已保存草稿：未生效，不执行（没有可执行脚本，先生成脚本再保存）'
     if (input.needsRegenerate && !input.generated) {
-      return `已保存：计划/通知/判定策略已生效；描述或方法有改动，检查逻辑仍是 ${effectiveVersion}，需重新生成脚本才会改变`
+      const what = input.regenerateReasons?.length ? input.regenerateReasons.join('、') : '描述或方法'
+      return `已保存：计划/通知/判定策略已生效；${what}有改动，检查逻辑仍是 ${effectiveVersion}，需重新生成脚本才会改变`
     }
     return `已保存并生效 ${effectiveVersion}：保存的内容已发布，未自动运行一次检查`
   }
