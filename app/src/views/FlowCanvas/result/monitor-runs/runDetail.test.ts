@@ -12,6 +12,7 @@ import {
   countTextOf,
   deliveryEmptyText,
   deliveryRows,
+  durationTextOf,
   legacyNoteText,
   logRefOf,
   logSourceText,
@@ -402,3 +403,28 @@ function baseRaw() {
     sourceId: 's1',
   }
 }
+describe('durationTextOf · 脚本耗时（C06 durationMs）', () => {
+  it('毫秒 / 秒 / 分钟三档展示，未知与非法值写「未记录」', () => {
+    expect(durationTextOf(undefined)).toBe(MISSING_TEXT)
+    expect(durationTextOf(0)).toBe('0 ms')
+    expect(durationTextOf(850)).toBe('850 ms')
+    expect(durationTextOf(1500)).toBe('1.5 s')
+    expect(durationTextOf(59_999)).toBe('60.0 s')
+    expect(durationTextOf(60_000)).toBe('1 分 0 秒')
+    expect(durationTextOf(90_000)).toBe('1 分 30 秒')
+    expect(durationTextOf(-1)).toBe(MISSING_TEXT)
+  })
+
+  it('结论区新增「耗时」行：结构化运行取 durationMs，旧日志走「未记录」', () => {
+    const structured = Object.fromEntries(
+      summaryFields(run({ legacy: false, durationMs: 1500 })).map((field) => [field.label, field]),
+    )
+    expect(structured['耗时'].value).toBe('1.5 s')
+    expect(structured['耗时'].testid).toBe('run-duration')
+    expect(structured['耗时'].missing).toBeFalsy()
+
+    const legacy = Object.fromEntries(summaryFields(run({ legacy: true })).map((field) => [field.label, field]))
+    expect(legacy['耗时'].value).toBe(MISSING_TEXT)
+    expect(legacy['耗时'].missing).toBe(true)
+  })
+})

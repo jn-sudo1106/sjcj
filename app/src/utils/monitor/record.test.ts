@@ -8,8 +8,9 @@ import {
   serializeCheckConf,
   toMonitorRecord,
   toMonitorRun,
+  toMonitorRunItem,
 } from './record'
-import type { SourceCheck, SourceCheckLog } from '../../api/types/monitor'
+import type { SourceCheck, SourceCheckLog, SourceCheckRunItem } from '../../api/types/monitor'
 
 function row(over: Partial<SourceCheck> = {}): SourceCheck {
   return {
@@ -247,9 +248,20 @@ describe('parseRunConfig（JOB_CONF 冻结快照）', () => {
     expect(parseRunConfig('123')).toBeUndefined()
     expect(parseRunConfig('null')).toBeUndefined()
     expect(parseRunConfig('{}')).toBeUndefined()
-    expect(parseRunConfig({ version: 'v3' })).toBeUndefined()
     expect(parseRunConfig(null)).toBeUndefined()
     expect(parseRunConfig(undefined)).toBeUndefined()
+  })
+
+  it('新接口 configSnapshot 已是对象：对象输入同样可解析（不要求 JSON 串）', () => {
+    expect(parseRunConfig({ version: 'v3', plan: { cron: '0 0 6 * * *' } })).toEqual({
+      version: 'v3',
+      plan: { cron: '0 0 6 * * *' },
+    })
+    // 对象也可以是坏形状：数组 / 空对象 / 非对象标量仍然 undefined
+    expect(parseRunConfig({})).toBeUndefined()
+    expect(parseRunConfig([])).toBeUndefined()
+    expect(parseRunConfig(123)).toBeUndefined()
+    expect(parseRunConfig({ window: { type: 'hours', hours: 2 } })).toEqual({ window: { type: 'hours', hours: 2 } })
   })
 
   it('字段类型不对时跳过该字段，但同快照里的其它字段仍然可用', () => {
@@ -287,5 +299,108 @@ describe('toMonitorRun 读取 jobConf 快照', () => {
     expect(toMonitorRun(log).config).toBeUndefined()
     expect(toMonitorRun({ ...log, jobConf: '' }).config).toBeUndefined()
     expect(toMonitorRun({ ...log, jobConf: '{"version":' }).config).toBeUndefined()
+  })
+})
+
+describe('toMonitorRunItem（C06 /runs 结构化运行行）', () => {
+  function item(over: Partial<SourceCheckRunItem> = {}): SourceCheckRunItem {
+    return {
+      logId: 77213,
+      monitorId: 1109,
+      sourceId: '390000019',
+      name: '字段完整性',
+      tableName: 'sense_data.tb_jjjk',
+      state: 'C',
+      logDt: '2026-11-13 06:00:00',
+      createDt: '2026-11-13 06:00:05',
+      message: '正常, 数量:120',
+      legacy: false,
+      runId: 'run-1109-20261113060000',
+      status: 'NORMAL',
+      checkedCount: 120,
+      abnormalCount: 0,
+      durationMs: 1500,
+      window: { start: '2026-11-13 00:00:00', end: '2026-11-13 01:00:00', timezone: 'Asia/Shanghai' },
+      reason: null,
+      scriptPath: null,
+      overdue: false,
+      configSnapshot: { version: 'v3', plan: { cron: '0 0 6 * * *' } },
+      ...over,
+    }
+  }
+
+  it('结构化行：条数/耗时/窗口/快照/runId 直接取服务端字段，count 只放 checkedCount', () => {
+    const run = toMonitorRunItem(item())
+    expect(run).toMatchObject({
+      id: '77213',
+      runId: 'run-1109-20261113060000',
+      monitorName: '字段完整性',
+      trigger: 'unknown',
+      exec: 'succeeded',
+      data: 'normal',
+      count: '120',
+      checkedCount: 120,
+      abnormalCount: 0,
+      durationMs: 1500,
+      legacy: false,
+    })
+    expect(run.window).toEqual({
+      start: '2026-11-13 00:00:00',
+      end: '2026-11-13 01:00:00',
+      timezone: 'Asia/Shanghai',
+    })
+    expect(run.config).toEqual({ version: 'v3', plan: { cron: '0 0 6 * * *' } })
+    expect(run.legacyCount).toBeUndefined()
+  })
+
+  it('legacy 行不补默认值：runId/条数/耗时/窗口/快照全部缺省，旧日志条数只放 legacyCount', () => {
+    const run = toMonitorRunItem(
+      item({
+        logId: '77213',
+        legacy: true,
+        runId: null,
+        status: null,
+        checkedCount: null,
+        abnormalCount: null,
+        durationMs: null,
+        window: null,
+        configSnapshot: null,
+        state: 'E',
+        message: '2026-11-12 10:00:00---正常, 数量:1240',
+      }),
+    )
+    expect(run.legacy).toBe(true)
+    expect(run.trigger).toBe('legacy')
+    expect(run.runId).toBeUndefined()
+    expect(run.checkedCount).toBeUndefined()
+    expect(run.abnormalCount).toBeUndefined()
+    expect(run.durationMs).toBeUndefined()
+    expect(run.window).toBeUndefined()
+    expect(run.config).toBeUndefined()
+    expect(run.count).toBe('')
+    expect(run.legacyCount).toBe('1240')
+    // state=E 是「查出异常」，执行本身成功（与旧日志口径一致）
+    expect(run.exec).toBe('succeeded')
+    expect(run.data).toBe('abnormal')
+  })
+
+  it('状态映射：ERROR→失败、TIMEOUT→超时、SKIPPED→unknown、未知状态不猜成功', () => {
+    expect(toMonitorRunItem(item({ status: 'ERROR', state: 'E' })).exec).toBe('failed')
+    expect(toMonitorRunItem(item({ status: 'TIMEOUT' })).exec).toBe('timeout')
+    expect(toMonitorRunItem(item({ status: 'CANCELLED' })).exec).toBe('cancelled')
+    expect(toMonitorRunItem(item({ status: 'SKIPPED' })).exec).toBe('unknown')
+    // 未知 status 但 ck_source.state=C 表示「已经跑过」，按完成处理（不猜数据结论）
+    expect(toMonitorRunItem(item({ status: 'WHATEVER' })).exec).toBe('succeeded')
+    expect(toMonitorRunItem(item({ status: null, state: null, message: '' })).exec).toBe('unknown')
+    // 执行失败时不给数据结论（沿用 dataStatusOf 口径）
+    expect(toMonitorRunItem(item({ status: 'ERROR', state: 'C' })).data).toBe('unknown')
+  })
+
+  it('窗口/快照形状不完整时缺省，不用空对象伪装「已记录」', () => {
+    expect(toMonitorRunItem(item({ window: {} })).window).toBeUndefined()
+    expect(toMonitorRunItem(item({ window: null })).window).toBeUndefined()
+    expect(toMonitorRunItem(item({ configSnapshot: {} })).config).toBeUndefined()
+    // logId 为 null 时用 runId 当行主键，不丢行
+    expect(toMonitorRunItem(item({ logId: null })).id).toBe('run-1109-20261113060000')
   })
 })

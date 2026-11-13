@@ -63,6 +63,16 @@ export function countTextOf(value: number | undefined): string {
   return value == null ? '—' : String(value)
 }
 
+/** 脚本检查耗时（C06 durationMs）：<1s 用毫秒，<1min 用秒（一位小数），再长用「M 分 S 秒」。 */
+export function durationTextOf(durationMs: number | undefined): string {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return MISSING_TEXT
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)} s`
+  const minutes = Math.floor(durationMs / 60_000)
+  const seconds = Math.round((durationMs % 60_000) / 1000)
+  return `${minutes} 分 ${seconds} 秒`
+}
+
 const TRIGGER_TEXT: Record<MonitorRunView['trigger'], string> = {
   schedule: '计划触发',
   manual: '手动触发',
@@ -95,6 +105,9 @@ export function summaryFields(run: MonitorRunView): DetailField[] {
   }
 
   fields.push({ label: '触发方式', value: triggerTextOf(run.trigger) })
+
+  // C06 结构化耗时（durationMs）；旧日志/未记录时按统一口径显示「未记录」，不补 0
+  fields.push(field('耗时', durationTextOf(run.durationMs), { testid: 'run-duration' }))
 
   const runId = (run.runId ?? '').trim()
   if (runId) {

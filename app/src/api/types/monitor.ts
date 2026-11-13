@@ -132,6 +132,86 @@ export interface SourceCheckLogQuery extends PageQuery {
   name?: string
 }
 
+// ---------- C06 运行记录 / C01 单条详情（结构化新接口） ----------
+
+/** 运行窗口（RunItem.window）。后端按 JSON 原样透传，未记录的项可能缺失 */
+export interface SourceCheckRunWindow {
+  start?: string
+  end?: string
+  timezone?: string
+  [key: string]: unknown
+}
+
+/**
+ * 一条运行记录（GET /source/check/runs、GET /source/check/run 的行）。
+ *
+ * 后端把 `ck_job_log.REMARKS` 解析成结构化字段；`legacy:true` 表示 REMARKS 不是合法 JSON（老日志），
+ * 此时 runId/status/checkedCount/abnormalCount/durationMs/window/... 全为 null。
+ * **不要补默认值/零值**：页面按「旧日志」展示，缺失就是缺失（契约：缺字段一律 null）。
+ */
+export interface SourceCheckRunItem {
+  /** 旧日志行主键；结构化运行可能还没有对应日志行（null，此时靠 runId 定位） */
+  logId: string | number | null
+  monitorId: string | number
+  sourceId: string | number
+  name: string | null
+  tableName: string | null
+  /** ck_source 口径：C=完成 / E=异常/失败 */
+  state: string | null
+  logDt: string | null
+  createDt: string | null
+  /** 旧平台日志正文（logMsg）；旧日志的条数只存在于这段文本里 */
+  message: string | null
+  legacy: boolean
+  runId: string | null
+  status: string | null
+  checkedCount: number | null
+  abnormalCount: number | null
+  durationMs: number | null
+  window: SourceCheckRunWindow | null
+  reason: string | null
+  scriptPath: string | null
+  overdue: boolean | null
+  /** `ck_job_log.JOB_CONF` 的解析结果（对象或 null），给运行详情的「本次检查范围」用 */
+  configSnapshot: Record<string, unknown> | null
+}
+
+/** GET /source/check/runs 的分页回执（不包 RunItem 的信封） */
+export interface SourceCheckRunPage {
+  page: number
+  limit: number
+  total: number
+  items: SourceCheckRunItem[]
+}
+
+/** 单条检查项详情（GET /source/check/detail） */
+export interface SourceCheckDetailPayload {
+  monitor: SourceCheck
+  /** 服务端解析后的 checkConf；为 null 时调用方用 `monitor.checkConf` 兜底（不要用空对象） */
+  checkConf: Record<string, unknown> | null
+  scopeType: 'source_result' | 'node_input' | null
+  /** 当前有效配置版本（对应 ck_source.VER） */
+  revision: number | null
+}
+
+/** POST /source/check/run 的单条分流结果 */
+export interface SourceCheckRunResult {
+  id: number
+  kind: 'rule' | 'ai' | 'missing'
+  ok: boolean
+  runId?: string | null
+  status?: string | null
+  message: string | null
+}
+
+/** POST /source/check/run 的受理回执 */
+export interface SourceCheckRunAccepted {
+  accepted: number
+  failed: number
+  results: SourceCheckRunResult[]
+  acceptedAt: string | null
+}
+
 // ---------- 队列告警（1013 从旧平台 page/config/QueueCheck.vue 迁入） ----------
 
 /**

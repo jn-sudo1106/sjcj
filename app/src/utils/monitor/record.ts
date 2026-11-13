@@ -9,7 +9,7 @@
 // 再给出数据结论**（数量未知不是 0，也不是正常——1109 §6.4 / R01）。
 
 import { checkCountOf } from './checkCount'
-import type { SourceCheck, SourceCheckLog } from '../../api/types/monitor'
+import type { SourceCheck, SourceCheckLog, SourceCheckRunItem } from '../../api/types/monitor'
 import type {
   MonitorCheckConf,
   MonitorDataStatus,
@@ -220,22 +220,26 @@ function overduePolicyOfSnapshot(
 }
 
 /**
- * 解析 `ck_job_log.JOB_CONF` 里的冻结配置快照。
+ * 解析运行快照（旧列的 `ck_job_log.JOB_CONF`，或新接口的 `configSnapshot`）。
  *
- * 这一列不是可靠的 JSON：规则检查由 Java `saveLog` 写入且**超过 999 字符会被截断**，
- * 旧数据还可能是空串或普通文本。所以这里只做宽松解析——解析失败、非对象、空对象
- * （一条能用的字段都没读到）一律返回 undefined，页面继续显示「未记录」；
+ * 两种输入都要接：
+ *   · 旧接口 `jobConf` 是 JSON 串，且这一列不是可靠的 JSON——规则检查由 Java `saveLog` 写入且
+ *     **超过 999 字符会被截断**，旧数据还可能是空串或普通文本；
+ *   · 新接口 `/source/check/runs` 的 `configSnapshot` 已经是后端解析好的对象（可能是 null）。
+ * 解析失败、非对象、空对象（一条能用的字段都没读到）一律返回 undefined，页面继续显示「未记录」；
  * 绝不拿当前监控定义补齐，也绝不抛异常（一行坏日志不能拖垮整个运行列表）。
  */
 export function parseRunConfig(raw: unknown): MonitorRunConfig | undefined {
-  if (typeof raw !== 'string') return undefined
-  const text = raw.trim()
-  if (!text) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return undefined
+  if (raw === null || raw === undefined) return undefined
+  let parsed: unknown = raw
+  if (typeof raw === 'string') {
+    const text = raw.trim()
+    if (!text) return undefined
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      return undefined
+    }
   }
   const source = plainObjectOf(parsed)
   if (!source) return undefined
@@ -353,6 +357,110 @@ export function toMonitorRun(log: SourceCheckLog): MonitorRunView {
     deliveries: [],
     legacy: !hasStructured,
     raw: log,
+  }
+}
+
+/** 运行记录状态 → 视图执行状态（大小写不敏感；不认识的状态保持 unknown，不猜成功）。 */
+const RUN_ITEM_STATUS_EXEC: Record<string, MonitorExecStatus> = {
+  NORMAL: 'succeeded',
+  SUCCESS: 'succeeded',
+  SUCCEEDED: 'succeeded',
+  // 执行器把「跑完但查出异常」写成 ABNORMAL：执行本身成功，数据结论由 state 决定
+  ABNORMAL: 'succeeded',
+  ERROR: 'failed',
+  FAILED: 'failed',
+  FAIL: 'failed',
+  TIMEOUT: 'timeout',
+  TIMED_OUT: 'timeout',
+  CANCELLED: 'cancelled',
+  CANCELED: 'cancelled',
+  RUNNING: 'running',
+  QUEUED: 'queued',
+  PENDING: 'queued',
+  SKIPPED: 'unknown',
+}
+
+/** C06 运行行的执行状态：结构化 status 优先，其次旧日志文本，最后按 ck_source.state 兜底。 */
+function runItemExecOf(item: SourceCheckRunItem): MonitorExecStatus {
+  const status = typeof item.status === 'string' ? item.status.trim().toUpperCase() : ''
+  const fromStatus = RUN_ITEM_STATUS_EXEC[status]
+  if (fromStatus) return fromStatus
+  const text = typeof item.message === 'string' ? item.message : ''
+  if (CANCEL_PATTERNS.some((re) => re.test(text))) return 'cancelled'
+  if (TIMEOUT_PATTERNS.some((re) => re.test(text))) return 'timeout'
+  if (FAIL_PATTERNS.some((re) => re.test(text))) return 'failed'
+  // 旧日志没有结构化执行状态：state=C/E 都表示「已经跑过」（E 是查出异常，不是没跑成），
+  // 与 `toMonitorRun` 的口径一致，不在这里把 E 判成执行失败（否则数据结论会一起丢）。
+  if (item.state === 'C' || item.state === 'E') return 'succeeded'
+  return 'unknown'
+}
+
+/** C06 运行行的检查窗口；三个键都没有就不造空窗口（页面显示「未记录」）。 */
+function runItemWindowOf(item: SourceCheckRunItem): MonitorRunView['window'] {
+  const raw = item.window
+  if (!raw || typeof raw !== 'object') return undefined
+  const textOfKey = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim() ? value.trim() : undefined
+  const start = textOfKey(raw.start)
+  const end = textOfKey(raw.end)
+  const timezone = textOfKey(raw.timezone)
+  return start || end || timezone ? { start, end, timezone } : undefined
+}
+
+/**
+ * C06 结构化运行行（GET /source/check/runs）→ 运行视图。
+ *
+ * 与 `toMonitorRun`（旧 paged-logs）的区别：条数/耗时/窗口/冻结快照直接来自后端结构化字段，
+ * 不再从中文日志里抠数字。`legacy:true` 的行后端已明确「REMARKS 不是合法 JSON」：
+ * - `legacy` 原样透传，页面标「旧日志」；
+ * - runId / status / 条数 / 耗时 / 窗口保持缺省，**不补默认值、不补 0**；
+ * - 旧日志的条数只存在于 message 文本里，单独放进 `legacyCount`（仅展示，不参与判定），
+ *   避免 `count` 把「文本里抠出来的数」伪装成结构化结论。
+ */
+export function toMonitorRunItem(item: SourceCheckRunItem): MonitorRunView {
+  const legacy = item.legacy === true
+  const message = typeof item.message === 'string' ? item.message : ''
+  const runId = typeof item.runId === 'string' && item.runId.trim() ? item.runId.trim() : undefined
+  const status = typeof item.status === 'string' ? item.status.trim().toUpperCase() : ''
+  const reason = typeof item.reason === 'string' && item.reason.trim() ? item.reason.trim() : undefined
+  const checkedCount = nonNegativeIntOf(item.checkedCount)
+  const abnormalCount = nonNegativeIntOf(item.abnormalCount)
+  const durationMs = nonNegativeIntOf(item.durationMs)
+  const exec = runItemExecOf(item)
+  const legacyCount = legacy ? checkCountOf({ logMsg: message }) : ''
+  return {
+    // 行主键优先 logId（旧日志只有它）；结构化行再有 runId 也放 runId 字段，不覆盖 id
+    id: item.logId !== null && item.logId !== undefined ? String(item.logId) : (runId ?? ''),
+    monitorId:
+      item.monitorId !== null && item.monitorId !== undefined && String(item.monitorId) !== ''
+        ? String(item.monitorId)
+        : undefined,
+    sourceId: item.sourceId !== null && item.sourceId !== undefined ? String(item.sourceId) : '',
+    monitorName: typeof item.name === 'string' && item.name ? item.name : undefined,
+    at: item.createDt ?? item.logDt ?? '',
+    // /runs 不回传触发方式（计划/手动）：结构化行保持 unknown，不臆造 manual。
+    trigger: legacy ? 'legacy' : 'unknown',
+    exec,
+    data: item.state
+      ? dataStatusOf(exec, item.state)
+      : status === 'ABNORMAL'
+        ? 'abnormal'
+        : 'unknown',
+    notify: 'unknown',
+    count: checkedCount !== undefined ? String(checkedCount) : '',
+    checkedCount,
+    abnormalCount,
+    durationMs,
+    runId,
+    reason,
+    summary: reason,
+    window: runItemWindowOf(item),
+    // 冻结快照：configSnapshot 已经是对象；null 表示后端未记录，保持缺省（页面显示「未记录」）
+    config: parseRunConfig(item.configSnapshot),
+    message: message || undefined,
+    deliveries: [],
+    legacy,
+    legacyCount: legacyCount || undefined,
   }
 }
 

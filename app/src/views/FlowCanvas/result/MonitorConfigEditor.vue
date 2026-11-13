@@ -6,7 +6,7 @@ import type { EntryType } from '@/api/types/collect'
 import type { EntryTypeGroup } from '@/api/types/data'
 import type { MonitorCheckConf, MonitorKind, MonitorRecordView } from '@/api/types/monitorCenter'
 import type { ModelOption, ModelProviderOption } from '@/api/types/rule'
-import { listMonitorsOfSource, saveMonitor } from '@/api/monitorCenter'
+import { loadMonitorRecord, saveMonitor } from '@/api/monitorCenter'
 import { checkOneManual } from '@/api/monitor'
 import { defaultDescription, defaultSystemPrompt } from '@/utils/monitor/methods'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -852,15 +852,24 @@ async function verifyRule(): Promise<void> {
   }
 }
 
-function pickReadback(monitors: MonitorRecordView[] | null, beforeIds: string[] | null): MonitorRecordView | null {
-  if (!monitors) return null
-  const current = recordState.value
-  if (current) return monitors.find((item) => item.id === current.id) ?? null
-  // 新建记录没有 id 回执时按「保存前不存在的 id + 同名」定位；定位不到宁可不猜（不把旧记录当新记录）
-  if (!beforeIds) return null
-  const before = new Set(beforeIds)
-  const created = monitors.filter((item) => !before.has(item.id) && item.name === form.name.trim())
-  return created.length === 1 ? created[0]! : null
+/** 保存回执里的记录 id：`/add` 与 `/update` 都带 `data.id`，两种保存都能拿到确切主键。 */
+function savedIdOf(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return ''
+  const id = (raw as Record<string, unknown>).id
+  return id == null || id === '' ? '' : String(id)
+}
+
+/**
+ * 保存后回读。
+ *
+ * 1109 §5.3 时期没有单条读接口，只能按源拉全量再按「保存前不存在的 id + 同名」猜是哪条；
+ * C01 `/source/check/detail` 上线后改成按主键单条读：同源多条检查、名字重复、并发新增都不会错行。
+ * 读不到（接口失败或记录已被删）返回 null，由调用方提示刷新，不拿同源其它记录顶上。
+ */
+async function readbackAfterSave(raw: unknown): Promise<MonitorRecordView | null> {
+  const monitorId = recordState.value?.id || savedIdOf(raw)
+  if (!monitorId) return null
+  return (await loadMonitorRecord(monitorId).catch(() => undefined)) ?? null
 }
 
 async function onSave(): Promise<void> {
@@ -902,13 +911,7 @@ async function onSave(): Promise<void> {
     })
     if (form.kind === 'ai') conf.version = savedVersion || undefined
 
-    let beforeIds: string[] | null = null
-    if (!recordState.value) {
-      const before = await listMonitorsOfSource(form.sourceId.trim()).catch(() => null)
-      beforeIds = before?.map((item) => item.id) ?? null
-    }
-
-    await saveMonitor({
+    const saved = await saveMonitor({
       record: recordState.value ?? undefined,
       sourceId: form.sourceId.trim(),
       name: form.name.trim(),
@@ -918,9 +921,8 @@ async function onSave(): Promise<void> {
       schedule: form.schedule.trim(),
     })
 
-    // 保存回执不含完整记录（C01 未就绪）：按源回读，把回读结果当新基线；读不到就不猜 ID
-    const monitors = await listMonitorsOfSource(form.sourceId.trim()).catch(() => null)
-    const readback = pickReadback(monitors, beforeIds)
+    // 保存回执只带 id/ver：按主键回读完整记录当新基线；读不到就不猜 ID
+    const readback = await readbackAfterSave(saved.raw)
     if (!readback) {
       ElMessage.warning('已提交，未回读到记录：请刷新列表确认，本次不标记为已生效')
       emit('saved', null)

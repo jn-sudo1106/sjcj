@@ -19,6 +19,7 @@ import type { Source, Step } from '@/api/types/source'
 const mocks = vi.hoisted(() => ({
   saveMonitor: vi.fn(),
   listMonitorsOfSource: vi.fn(),
+  loadMonitorRecord: vi.fn(),
   checkOneManual: vi.fn(),
   fetchModelProviders: vi.fn(),
   fetchDefaultModels: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock('@/api/monitorCenter', async (importOriginal) => {
     ...actual,
     saveMonitor: mocks.saveMonitor,
     listMonitorsOfSource: mocks.listMonitorsOfSource,
+    loadMonitorRecord: mocks.loadMonitorRecord,
   }
 })
 
@@ -220,7 +222,7 @@ beforeEach(() => {
   vi.spyOn(ElMessage, 'info')
 
   mocks.saveMonitor.mockResolvedValue({ created: false, raw: {} })
-  mocks.listMonitorsOfSource.mockResolvedValue([])
+  mocks.loadMonitorRecord.mockResolvedValue(undefined)
   mocks.checkOneManual.mockResolvedValue({ success: true, message: '规则校验通过' })
   mocks.fetchModelProviders.mockResolvedValue([{ providerCode: 'deepseek', providerName: 'DeepSeek' }])
   mocks.fetchDefaultModels.mockResolvedValue([{ modelCode: 'deepseek-chat', modelName: 'deepseek-chat' }])
@@ -558,7 +560,7 @@ describe('MonitorConfigEditor 测试脚本', () => {
     expect(result).toContain('生效 v3 的脚本')
     expect(result).toContain('未发送业务通知')
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
-    expect(mocks.listMonitorsOfSource).not.toHaveBeenCalled()
+    expect(mocks.loadMonitorRecord).not.toHaveBeenCalled()
   })
 
   it('测试脚本优先走数据监控执行器（不依赖 vrule 执行端点）', async () => {
@@ -648,7 +650,7 @@ describe('MonitorConfigEditor 测试脚本', () => {
 describe('MonitorConfigEditor 保存', () => {
   it('模型选择随定义保存，重新打开优先使用本次选择而非旧编排模型', async () => {
     const record = aiRecord({ conf: { ...aiRecord().conf, modelProviderCode: 'new-provider', modelCode: 'new-model', orchestration: { modelProviderCode: 'old-provider', modelCode: 'old-model' } } })
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
     await wrapper.get('[data-testid="mc-save"]').trigger('click')
@@ -658,7 +660,7 @@ describe('MonitorConfigEditor 保存', () => {
 
   it('清空执行计划会显式提交空串，不能回退旧计划', async () => {
     const record = aiRecord()
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
     await wrapper.get('[data-testid="mc-tab-plan"]').trigger('click')
@@ -670,7 +672,7 @@ describe('MonitorConfigEditor 保存', () => {
 
   it('只有新脚本路径时仍保存候选路径，清掉旧正文并推进版本', async () => {
     vi.mocked(ruleApi.dataProcessGenerate).mockResolvedValue({ script: '', scriptPath: '/code/path-only.py' })
-    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord()])
+    mocks.loadMonitorRecord.mockResolvedValue(aiRecord())
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
@@ -784,7 +786,7 @@ describe('MonitorConfigEditor 保存', () => {
       effectiveVersion: 'v4',
       conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日是否有数据落地', version: 'v4', script: 'print("新脚本")', scriptPath: '/code/new.py' },
     })
-    mocks.listMonitorsOfSource.mockResolvedValue([readback])
+    mocks.loadMonitorRecord.mockResolvedValue(readback)
 
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
@@ -810,7 +812,7 @@ describe('MonitorConfigEditor 保存', () => {
   it('AI 有脚本但没有执行计划 → 按钮「保存（仅手动）」，回执只说手动运行、不说计划已生效', async () => {
     // timeColumn 与打开记录时自动选中的列一致，避免额外触发「需重新生成脚本」分支
     const record = aiRecord({ schedule: '', conf: { ...aiRecord().conf, timeColumn: 'publish_time' } })
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
 
@@ -833,7 +835,7 @@ describe('MonitorConfigEditor 保存', () => {
 
   it('AI 有脚本且有执行计划 → 仍是「保存并生效」，回执含计划已生效', async () => {
     const record = aiRecord({ conf: { ...aiRecord().conf, timeColumn: 'publish_time' } })
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
 
@@ -855,7 +857,7 @@ describe('MonitorConfigEditor 保存', () => {
         overduePolicy: { expectEveryMinutes: 30, graceMinutes: 5 },
       },
     })
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
     await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
@@ -891,7 +893,7 @@ describe('MonitorConfigEditor 保存', () => {
 
   it('规则检查在计划为空时行为不变：按钮仍是「保存并生效」，回执不提仅手动', async () => {
     const record = ruleRecord({ schedule: '' })
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
 
@@ -913,8 +915,9 @@ describe('MonitorConfigEditor 保存', () => {
       publishStatus: 'draft',
       conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: 'v1' },
     })
-    mocks.saveMonitor.mockResolvedValue({ created: true, raw: {} })
-    mocks.listMonitorsOfSource.mockResolvedValueOnce([]).mockResolvedValueOnce([draft])
+    // 新建时后端 /add 回执带 data.id，回读按这个 id 单条读（不再按源拉全量猜）
+    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3001 } })
+    mocks.loadMonitorRecord.mockResolvedValue(draft)
 
     const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
     await settle()
@@ -931,8 +934,33 @@ describe('MonitorConfigEditor 保存', () => {
     expect(message).toContain('不执行')
   })
 
+  it('新建保存后按回执 id 单条回读（C01），不再按源拉全量猜记录', async () => {
+    const draft = aiRecord({
+      id: '3002',
+      name: '单条回读',
+      effectiveVersion: undefined,
+      publishStatus: 'draft',
+      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: 'v1' },
+    })
+    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3002, ver: 1794 } })
+    mocks.loadMonitorRecord.mockResolvedValue(draft)
+
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-name-input"]').setValue('单条回读')
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await settle()
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    // 只按主键读一条：既不是 0 次（漏回读），也不是按源扫全量
+    expect(mocks.loadMonitorRecord).toHaveBeenCalledTimes(1)
+    expect(mocks.loadMonitorRecord).toHaveBeenCalledWith('3002')
+    expect(mocks.listMonitorsOfSource).not.toHaveBeenCalled()
+  })
+
   it('描述改过但没重新生成 → 回执说明检查逻辑仍是 v3，需重新生成', async () => {
-    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord()])
+    mocks.loadMonitorRecord.mockResolvedValue(aiRecord())
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -973,7 +1001,7 @@ describe('MonitorConfigEditor 保存', () => {
     const finalTable: EntryType = { ...TABLE, tableId: 't9', tableName: 'sense_data.TB_FINAL', name: '最终落库表' }
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ main: TABLE.tableId, list1: [TABLE, finalTable], list2: [], list3: [] })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord({ tableName: 'sense_data.TB_FINAL', effectiveVersion: 'v4' })])
+    mocks.loadMonitorRecord.mockResolvedValue(aiRecord({ tableName: 'sense_data.TB_FINAL', effectiveVersion: 'v4' }))
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -996,7 +1024,7 @@ describe('MonitorConfigEditor 保存', () => {
   it('换表后没重新生成就保存 → 回执点名具体字段有改动，不说笼统的「描述或方法」', async () => {
     const finalTable: EntryType = { ...TABLE, tableId: 't9', tableName: 'sense_data.TB_FINAL', name: '最终落库表' }
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ main: TABLE.tableId, list1: [TABLE, finalTable], list2: [], list3: [] })
-    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord({ tableName: 'sense_data.TB_FINAL' })])
+    mocks.loadMonitorRecord.mockResolvedValue(aiRecord({ tableName: 'sense_data.TB_FINAL' }))
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -1013,7 +1041,7 @@ describe('MonitorConfigEditor 保存', () => {
   })
 
   it('保存后回读不到记录 → 提示「已提交，未回读到记录」，不猜 ID', async () => {
-    mocks.listMonitorsOfSource.mockResolvedValue([])
+    mocks.loadMonitorRecord.mockResolvedValue(undefined)
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
@@ -1170,7 +1198,7 @@ describe('MonitorConfigEditor 入库时间字段', () => {
     vi.mocked(entryApi.entryDetail).mockRejectedValue(new Error('字段清单不可用'))
     vi.spyOn(entryApi, 'searchTables').mockResolvedValue([])
     const record = aiRecord()
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
 
     const wrapper = mountEditor({ record })
     await settle()
@@ -1203,7 +1231,7 @@ describe('MonitorConfigEditor 检查窗口', () => {
 
   it('保存把 timeColumn 与 window 写进 checkConf，未识别键整包保留', async () => {
     const record = timeColumnRecord()
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
 
@@ -1220,7 +1248,7 @@ describe('MonitorConfigEditor 检查窗口', () => {
 
   it('窗口切到 hours 后保存写 {type:"hours", hours:N}（N 夹到 1–720）', async () => {
     const record = aiRecord()
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -1236,7 +1264,7 @@ describe('MonitorConfigEditor 检查窗口', () => {
 
   it('「上一个周期」按当前计划间隔算 periodHours', async () => {
     const record = aiRecord()
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -1252,7 +1280,7 @@ describe('MonitorConfigEditor 检查窗口', () => {
 
   it('未配置窗口时默认「当日」，保存写 {type:"today"}', async () => {
     const record = aiRecord()
-    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    mocks.loadMonitorRecord.mockResolvedValue(record)
     const wrapper = mountEditor({ record })
     await settle()
 

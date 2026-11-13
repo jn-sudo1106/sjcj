@@ -7,31 +7,45 @@
 //   3. 保存时以原始行为底做**受控合并**：只写定义字段，启停/运行回执/未识别键原样带去，
 //      避免「保存一次就把启用改成停用、把 state 重置成 C」（1109 §3 问题 4）。
 //
-// 尚未就绪的服务端能力（C01 保存回执 / C06 运行列表 / C07 源聚合 / C08 通知回执）在这里
-// 保持缺席：页面按 C07 缺失显示「—（需服务端聚合）」，不要自己算全站数字。
+// 运行链路（C01 单条详情 / C05 立即运行 / C06 运行记录）优先走新接口，旧后端（217）不支持时
+// 自动降级到原实现（paged-logs + 执行器/runNow 分流），页面拿到的仍是同一套视图。
+//
+// 其余尚未就绪的服务端能力（C07 源聚合 / C08 通知回执）在这里保持缺席：
+// 页面按 C07 缺失显示「—（需服务端聚合）」，不要自己算全站数字。
 
 import {
   addSourceCheck,
   changeSourceCheckEnable,
+  getCheckRun,
+  getSourceCheckDetail,
   handleRunNow,
   pagedCheckJobLogs,
+  pagedCheckRuns,
   pagedSourceCheck,
   pagedSourceSummary,
   pagedSourceSummaryStats,
+  runChecksNow,
   updateSourceCheck,
 } from './monitor'
-import type { SourceCheck, SourceCheckLog } from './types/monitor'
+import type { SourceCheck, SourceCheckLog, SourceCheckRunItem } from './types/monitor'
 import type {
   MonitorCheckConf,
   MonitorCoverage,
   MonitorDataStatus,
+  MonitorDetail,
   MonitorKind,
   MonitorRecordView,
   MonitorRunView,
   MonitorSourceRow,
 } from './types/monitorCenter'
 import { requestRunnerManagement } from './runnerManagement'
-import { parseCheckConf, serializeCheckConf, toMonitorRecord, toMonitorRun } from '../utils/monitor/record'
+import {
+  parseCheckConf,
+  serializeCheckConf,
+  toMonitorRecord,
+  toMonitorRun,
+  toMonitorRunItem,
+} from '../utils/monitor/record'
 
 /** 单页大小：旧接口按 page/limit 分页 */
 export const MONITOR_PAGE_SIZE = 200
@@ -54,6 +68,49 @@ interface ListOptions {
   sourceId?: string
   name?: string
   maxPages?: number
+}
+
+/* ---------------- 新接口（C01/C05/C06）与旧后端降级判据 ---------------- */
+
+/** 从 client/ApiError 链上取 HTTP 状态码：非 2xx 时 client 会带上，业务/网络异常没有。 */
+function httpStatusOf(error: unknown): number | undefined {
+  const direct = (error as { status?: unknown } | null)?.status
+  if (typeof direct === 'number') return direct
+  const cause = (error as { cause?: { status?: unknown } } | null)?.cause
+  return cause && typeof cause.status === 'number' ? cause.status : undefined
+}
+
+/** 顺着 `cause` 链取最内层错误（client 会在外层包一层 ApiError）。 */
+function rootCauseOf(error: unknown): unknown {
+  let current: unknown = error
+  for (let depth = 0; depth < 4; depth += 1) {
+    const cause = (current as { cause?: unknown } | null)?.cause
+    if (!cause) return current
+    current = cause
+  }
+  return current
+}
+
+/** 网络层失败（断网/超时/连接被拒）：和「记录不存在」区分，前者必须抛给页面提示重试。 */
+function isNetworkFailure(error: unknown): boolean {
+  const root = rootCauseOf(error)
+  if (typeof TypeError !== 'undefined' && root instanceof TypeError) return true
+  const message = root instanceof Error ? root.message : String(root ?? '')
+  return /failed to fetch|networkerror|network error|load failed|connection refused|econnrefused|timed?\s?out/i.test(
+    message,
+  )
+}
+
+/**
+ * 「这条记录不存在」：404，或信封 `success:false`（client 解包时已 reject，且不带 status）。
+ * 命中时调用方返回 undefined 并提示「记录已不存在」，不要抛错、也不要拿同源第一条顶上。
+ */
+function isRecordMissing(error: unknown): boolean {
+  if (isNetworkFailure(error)) return false
+  const status = httpStatusOf(error)
+  if (status !== undefined) return status === 404
+  // 没有状态码 = client 解包信封失败（code 非 0：success:false / 记录不存在等），按不存在处理
+  return true
 }
 
 /**
@@ -237,13 +294,8 @@ export function runnerRunIdsOf(result?: MonitorRunnerScanResult): string[] {
     .map((item) => String(item.runId))
 }
 
-/**
- * 立即运行。按检查方式分流：
- *   · `ai`（脚本检查）→ 执行器，按 monitorId 真跑；
- *   · 其它（规则检查）→ 旧 `runNow`，把 next_run 置 now 交给 Java 调度器。
- * 两种都只代表「已受理」，执行结果以运行记录为准。
- */
-export async function runMonitorsNow(ids: string[], kinds: Record<string, MonitorKind> = {}): Promise<RunNowResult> {
+/** 旧实现：按检查方式分流（ai → 执行器 / 其余 → 旧 runNow）。新 `/run` 不可用时的降级路径，逻辑保持原样。 */
+async function runMonitorsNowLegacy(ids: string[], kinds: Record<string, MonitorKind>): Promise<RunNowResult> {
   const scriptIds = ids.filter((id) => kinds[id] === 'ai')
   const legacyIds = ids.filter((id) => kinds[id] !== 'ai')
   if (!scriptIds.length) {
@@ -261,6 +313,38 @@ export async function runMonitorsNow(ids: string[], kinds: Record<string, Monito
   }
 }
 
+/**
+ * 立即运行。优先走 C05 `POST /source/check/run`：一次带上全部 ids，由服务端按检查方式分流
+ * （rule → Java 调度器 / ai → 执行器），前端不再自己拆两半、也不再依赖页面传的 kind 表。
+ *
+ * 旧后端（217）没有该端点 → 404 / 非 2xx / 信封 `success:false` 时降级到
+ * `runMonitorsNowLegacy`（执行器 + 旧 runNow 分流，行为与历史一致）。
+ * 两种都只代表「已受理」，执行结果以运行记录为准。
+ */
+export async function runMonitorsNow(ids: string[], kinds: Record<string, MonitorKind> = {}): Promise<RunNowResult> {
+  if (!ids.length) return runMonitorsNowLegacy(ids, kinds)
+  try {
+    const accepted = await runChecksNow(ids)
+    // 形状防御：旧后端可能 200 + success:false（client 已 reject），网关也可能回一段不是回执的 JSON
+    if (!accepted || !Array.isArray(accepted.results)) throw new Error('运行受理响应缺少 results')
+    const results = accepted.results
+    return {
+      // 只统计真正成功的项：ok=false 是失败/未受理，页面另有失败提示，不能算「已提交」
+      viaRunner: results.filter((item) => item.kind === 'ai' && item.ok).length,
+      viaLegacy: results.filter((item) => item.kind === 'rule' && item.ok).length,
+      // 与执行器分支同口径：AI 项里因「另一实例正在执行」被跳过的数量
+      runnerSkipped: results.filter(
+        (item) => item.kind === 'ai' && !item.ok && String(item.status ?? '').toUpperCase() === 'SKIPPED',
+      ).length,
+      runnerRunIds: results
+        .map((item) => item.runId)
+        .filter((runId): runId is string => typeof runId === 'string' && runId.length > 0),
+    }
+  } catch {
+    return runMonitorsNowLegacy(ids, kinds)
+  }
+}
+
 export interface ListRunsOptions {
   /** 监控记录主键。**旧日志的 jobId 字段存的就是 ckSource.id**，不是采集调度 jobId（1109 §5.3⑧）。 */
   monitorId?: string
@@ -271,12 +355,8 @@ export interface ListRunsOptions {
   size?: number
 }
 
-/**
- * 运行记录。
- * 传 monitorId 时按 `jobId=monitorId` 查——这是旧后端 `CkJobLogService.saveLog` 的真实口径；
- * 不要传采集任务的 jobId，也不要传日志行序号，两者都查不到。
- */
-export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: number; list: MonitorRunView[] }> {
+/** 旧实现：`paged-logs` + `toMonitorRun`。新 `/runs` 不可用时的降级路径，逻辑保持原样。 */
+async function listRunsLegacy(options: ListRunsOptions = {}): Promise<{ total: number; list: MonitorRunView[] }> {
   const res = await pagedCheckJobLogs({
     page: options.page ?? 1,
     // 同上：旧日志接口也只认 page/limit
@@ -288,6 +368,99 @@ export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: 
   } as never)
   const logs: SourceCheckLog[] = Array.isArray(res?.list) ? res.list : []
   return { total: Number(res?.total ?? logs.length), list: logs.map((log) => toMonitorRun(log)) }
+}
+
+/**
+ * 运行记录。优先 C06 `GET /source/check/runs`（REMARKS 已在服务端结构化，条数/耗时/窗口/快照直接可用），
+ * 旧后端（217）没有该端点 → 404 / 非 2xx / 信封 `success:false` 时降级回旧 `paged-logs`。
+ * 两个分支返回同一个 `{ total, list }` 形状，页面不需要知道走的是哪条路。
+ *
+ * 传 monitorId 时旧日志按 `jobId=monitorId` 查——这是旧后端 `CkJobLogService.saveLog` 的真实口径；
+ * 不要传采集任务的 jobId，也不要传日志行序号，两者都查不到。
+ */
+export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: number; list: MonitorRunView[] }> {
+  try {
+    const res = await pagedCheckRuns({
+      monitorId: options.monitorId,
+      sourceId: options.sourceId,
+      state: options.state,
+      page: options.page ?? 1,
+      limit: options.size ?? 50,
+    })
+    if (!res || !Array.isArray(res.items)) throw new Error('运行记录响应缺少 items')
+    const items: SourceCheckRunItem[] = res.items
+    return { total: Number(res.total ?? items.length), list: items.map((item) => toMonitorRunItem(item)) }
+  } catch {
+    return listRunsLegacy(options)
+  }
+}
+
+/**
+ * C01 单条检查项详情（monitor 行 + 服务端解析后的 checkConf + 当前有效版本）。
+ * 记录不存在（404 / 信封 success:false）返回 undefined；只有网络异常才抛出。
+ */
+export async function loadMonitorDetail(monitorId: string): Promise<MonitorDetail | undefined> {
+  let payload
+  try {
+    payload = await getSourceCheckDetail(monitorId)
+  } catch (error) {
+    if (isRecordMissing(error)) return undefined
+    throw error
+  }
+  const monitor = payload?.monitor
+  if (!monitor || typeof monitor !== 'object' || !monitor.id) return undefined
+  // 服务端解析 checkConf 失败时给 null：用原始行兜底解析，**不要用空对象**（空对象会被当成「配置被清空」）
+  const checkConf: MonitorCheckConf = payload.checkConf
+    ? parseCheckConf(payload.checkConf)
+    : parseCheckConf(monitor.checkConf)
+  return {
+    monitor,
+    checkConf,
+    scopeType: payload.scopeType ?? checkConf.scopeType,
+    revision: payload.revision ?? monitor.ver,
+  }
+}
+
+/**
+ * C01 单条读 → 规范化记录视图（保存后回读：编辑时已知 id，新建时取 `/add` 回执里的 data.id）。
+ * 找不到返回 undefined，调用方提示「记录已不存在」，**不要用同源第一条顶上**；只有网络异常才抛出。
+ */
+export async function loadMonitorRecord(monitorId: string): Promise<MonitorRecordView | undefined> {
+  let payload
+  try {
+    payload = await getSourceCheckDetail(monitorId)
+  } catch (error) {
+    if (isRecordMissing(error)) return undefined
+    throw error
+  }
+  const monitor = payload?.monitor
+  if (!monitor || typeof monitor !== 'object' || !monitor.id) return undefined
+  return toMonitorRecord(monitor)
+}
+
+/**
+ * C06 单次运行详情。优先 `GET /source/check/run/{runId}`；
+ * 找不到（404 / 信封 success:false / 旧日志只有 logId）返回 undefined，调用方保留列表行兜底。
+ */
+export async function getRunDetail(
+  runId: string,
+  options: { monitorId?: string; logId?: string } = {},
+): Promise<MonitorRunView | undefined> {
+  const key = runId.trim()
+  if (!key) return undefined
+  let item: SourceCheckRunItem
+  try {
+    item = await getCheckRun(key, { monitorId: options.monitorId, logId: options.logId })
+  } catch (error) {
+    if (isRecordMissing(error)) return undefined
+    throw error
+  }
+  // 结构化运行可能没有日志行（logId 为 null），此时能认的是 runId；两者都没有才当找不到
+  if (!item || typeof item !== 'object') return undefined
+  const hasLogId = item.logId !== null && item.logId !== undefined && String(item.logId) !== ''
+  const hasRunId = typeof item.runId === 'string' && item.runId.trim() !== ''
+  if (!hasLogId && !hasRunId) return undefined
+  return toMonitorRunItem(item)
 }
 
 /** 通知事件的一次投递回执（执行器 `monitor_events` 的 delivery 字段）。 */
@@ -480,6 +653,23 @@ interface SourceSummaryPayload {
   /** 计划覆盖：{due, finished, missed, unavailable} */
   coverage?: { due?: number; finished?: number; missed?: number; unavailable?: boolean } | null
   coverageUnavailable?: boolean
+  /** 源关联的流程（cs_source.FLOW_ID）；null/0 表示未关联流程，不等于「不能配置检查」 */
+  flowId?: number | string | null
+  /** 执行结论（C07）：none 无启用检查 / unknown 没跑过 / succeeded / failed */
+  execState?: string
+}
+
+function execOfState(state: string | undefined): MonitorSourceRow['exec'] {
+  switch (state) {
+    case 'failed':
+      return 'failed'
+    case 'succeeded':
+      return 'succeeded'
+    case 'none':
+      return 'none'
+    default:
+      return 'unknown'
+  }
 }
 
 function dataOfState(state: string | undefined): MonitorDataStatus {
@@ -539,8 +729,10 @@ function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
     coverage: toCoverageOf(item.coverage),
     coverageUnavailable: item.coverageUnavailable !== false,
     data: total === 0 ? 'unknown' : dataOfState(state),
-    exec: 'unknown',
+    // 服务端按「最近一次运行」给执行结论；拿不到才是 unknown（不要默认成功）
+    exec: execOfState(item.execState),
     notifyFailures: 0,
+    flowId: item.flowId == null || String(item.flowId) === '0' ? undefined : String(item.flowId),
     lastCheckAt: item.lastCheckAt || undefined,
     label,
     tone,

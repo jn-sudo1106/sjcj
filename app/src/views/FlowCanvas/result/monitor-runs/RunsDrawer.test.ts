@@ -303,3 +303,65 @@ describe('RunsDrawer · 单次详情层', () => {
     expect(wrapper.get('[data-testid="run-log-missing"]').text()).toContain('run/2026-11-11/abc.log')
   })
 })
+
+describe('RunsDrawer · 详情优先走 C06 /run/{runId}', () => {
+  it('点详情先展示列表行，再用 getRunDetail 补全逐项结论', async () => {
+    vi.spyOn(monitorCenter, 'listRuns').mockResolvedValue({ total: 1, list: [structuredRun()] })
+    const spy = vi
+      .spyOn(monitorCenter, 'getRunDetail')
+      .mockResolvedValue(structuredRun({ logText: '详情接口返回的日志正文' }))
+
+    const wrapper = mountDrawer()
+    await flushPromises()
+    await wrapper.get('[data-testid="run-detail"]').trigger('click')
+
+    // 先同步进详情（列表行已有结构化字段），不白屏
+    expect(wrapper.find('[data-testid="run-detail-conclusion"]').exists()).toBe(true)
+
+    await flushPromises()
+    expect(spy).toHaveBeenCalledWith('run-20261111-0001', { monitorId: 'm1', logId: undefined })
+    expect(wrapper.text()).toContain('详情接口返回的日志正文')
+  })
+
+  it('旧日志没有 runId：用 logId 让服务端按日志定位', async () => {
+    vi.spyOn(monitorCenter, 'listRuns').mockResolvedValue({ total: 1, list: [legacyRun()] })
+    const spy = vi.spyOn(monitorCenter, 'getRunDetail').mockResolvedValue(legacyRun())
+
+    const wrapper = mountDrawer()
+    await flushPromises()
+    await wrapper.get('[data-testid="run-detail"]').trigger('click')
+    await flushPromises()
+
+    expect(spy).toHaveBeenCalledWith('l1', { monitorId: undefined, logId: 'l1' })
+    expect(wrapper.find('[data-testid="run-detail-legacy"]').exists()).toBe(true)
+  })
+
+  it('详情接口失败时静默保留列表行字段，不整页报错', async () => {
+    vi.spyOn(monitorCenter, 'listRuns').mockResolvedValue({ total: 1, list: [structuredRun()] })
+    vi.spyOn(monitorCenter, 'getRunDetail').mockRejectedValue(new Error('记录不存在'))
+
+    const wrapper = mountDrawer()
+    await flushPromises()
+    await wrapper.get('[data-testid="run-detail"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="run-detail-conclusion"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('100 / 3')
+    expect(wrapper.text()).not.toContain('记录不存在')
+  })
+})
+
+describe('RunsDrawer · 「最近运行」入口也优先补拉 C06 详情', () => {
+  it('initialRun 先展示列表行，再按 runId 补全详情', async () => {
+    vi.spyOn(monitorCenter, 'listRuns').mockResolvedValue({ total: 1, list: [structuredRun()] })
+    const spy = vi
+      .spyOn(monitorCenter, 'getRunDetail')
+      .mockResolvedValue(structuredRun({ logText: '最近运行入口补拉的日志' }))
+
+    const wrapper = mountDrawer({ initialRun: structuredRun() })
+    await flushPromises()
+
+    expect(spy).toHaveBeenCalledWith('run-20261111-0001', { monitorId: 'm1', logId: undefined })
+    expect(wrapper.text()).toContain('最近运行入口补拉的日志')
+  })
+})
