@@ -453,6 +453,7 @@ const sendSettingLoading = ref(false)
 const sendSettingError = ref('')
 const sendSettingOptions = ref<SendSettingOption[]>([])
 const sendSettingSearch = ref('')
+const sendNodeSelection = ref(false)
 let sendSettingRequest = 0
 const sendSettingBadge = computed(() => skipCondStepIds.value.length + skippedNodeIds.value.length)
 const sendSettingMatches = computed(() => {
@@ -464,6 +465,11 @@ function sendSettingModeOf(opt: SendSettingOption): SendSettingMode {
   return skipCondStepIds.value.includes(opt.stepId) ? 'skipCond' : 'normal'
 }
 const sendSettingSelectedCount = computed(() => sendSettingOptions.value.filter(opt => sendSettingModeOf(opt) !== 'mute').length)
+const sendSelectedNodeIds = computed(() => sendSettingOptions.value.filter(opt => !isNodeSkipped(opt.nodeId)).map(opt => opt.nodeId))
+const ignoreConditionNodeIds = computed(() => skipCondStepIds.value.map(nodeIdOfStepId).filter(Boolean))
+const sendConditionOptions = computed(() => sendSettingMatches.value.filter(opt => opt.condition && !isNodeSkipped(opt.nodeId)))
+const sendConditionCount = computed(() => sendConditionOptions.value.filter(opt => skipCondStepIds.value.includes(opt.stepId)).length)
+const allSendConditionsIgnored = computed(() => sendConditionOptions.value.length > 0 && sendConditionCount.value === sendConditionOptions.value.length)
 const sendSettingRangeLabel = computed(() => {
   if (sendSettingOptions.value.length && sendSettingSelectedCount.value < sendSettingOptions.value.length) {
     return `${sendSettingSelectedCount.value}/${sendSettingOptions.value.length}`
@@ -662,6 +668,24 @@ function setSendTargets(options: SendSettingOption[], selected: boolean) {
     forceSkipCond.value = skipCondStepIds.value.length > 0
   }
 }
+function setSendConditions(ignored: boolean) {
+  for (const opt of sendConditionOptions.value) setSendSettingMode(opt, ignored ? 'skipCond' : 'normal')
+}
+async function startSendNodeSelection() {
+  await loadSendSettings()
+  if (!canSkipCondThisSend.value || sendSettingLoading.value || sendSettingError.value || !sendSettingOptions.value.length) return
+  sendSettingVisible.value = false
+  sendSettingSearch.value = ''
+  railOpen.value = true
+  sendNodeSelection.value = true
+}
+function canSelectSendNode(nodeId: string) {
+  return !sendNodeSelection.value || sendSettingOptions.value.some(opt => opt.nodeId === nodeId)
+}
+function setRailSendTargets(nodeIds: string[]) {
+  setSendTargets(sendSettingOptions.value.filter(opt => nodeIds.includes(opt.nodeId)), true)
+  setSendTargets(sendSettingOptions.value.filter(opt => !nodeIds.includes(opt.nodeId)), false)
+}
 /** 仅受理成功或切换发送上下文后恢复默认，失败重试保留设置。 */
 function clearSendSettings() {
   ++sendSettingRequest
@@ -673,6 +697,7 @@ function clearSendSettings() {
   sendSettingLoading.value = false
   sendSettingError.value = ''
   sendSettingSearch.value = ''
+  sendNodeSelection.value = false
 }
 
 function runNextStep(
@@ -1916,17 +1941,31 @@ async function onTestScript() {
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
     <div v-if="browseMode === 'step' && selectedNodeId && railOpen" class="rv-railbox">
+      <div v-if="sendNodeSelection" class="rv-rail-send-controls" data-testid="rail-send-controls">
+        <strong>选择发送节点</strong><span>已选 {{ sendSettingSelectedCount }} 个</span>
+        <button type="button" @click="setSendTargets(sendSettingOptions, true)">全选</button>
+        <button type="button" @click="setSendTargets(sendSettingOptions, false)">清空</button>
+        <label><input type="checkbox" data-testid="rail-ignore-selected" :checked="allSendConditionsIgnored"
+          :indeterminate="sendConditionCount > 0 && !allSendConditionsIgnored" :disabled="!sendConditionOptions.length"
+          @change="setSendConditions(($event.target as HTMLInputElement).checked)" />忽略已选节点条件</label>
+        <button class="rc-btn" type="button" data-testid="rail-send-done" @click="sendNodeSelection = false">完成</button>
+      </div>
       <div class="rv-bar" data-testid="data-process-rail" :style="{ maxHeight: `${railHeight}px` }">
         <ProcessNodeRail
           :model-value="selectedNodeId"
           :layout="processLayout"
           :skipped="skippedNodeIds"
+          :selected-ids="sendNodeSelection ? sendSelectedNodeIds : undefined"
+          :selectable="canSelectSendNode"
+          :ignored-conditions="ignoreConditionNodeIds"
           @update:model-value="onSelectNode"
+          @update:selected-ids="setRailSendTargets"
           @node-menu="openNodeMenu"
         />
         <div v-if="!allNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
       </div>
       <div class="rv-rail-ctl">
+        <button v-if="canSkipCondThisSend && !sendNodeSelection" class="rc-btn" type="button" data-testid="rail-select-send-nodes" @click="startSendNodeSelection">多选发送节点</button>
         <button
           type="button"
           class="rv-rail-icon-btn"
@@ -2078,7 +2117,7 @@ async function onTestScript() {
               <button class="rc-btn rv-send-setting-btn" type="button" data-testid="data-send-settings"
                 :class="{ 'is-on': sendSettingBadge > 0 }"
                 title="本次发送范围，默认全部发送；仅对勾选数据的发后续生效"
-              >发送范围：{{ sendSettingRangeLabel }}<el-icon><ArrowDown /></el-icon></button>
+              >发送范围：{{ sendSettingRangeLabel }}<span v-if="skipCondStepIds.length"> · 忽略条件 {{ skipCondStepIds.length }}</span><el-icon><ArrowDown /></el-icon></button>
             </template>
             <section v-if="sendSettingVisible" class="rv-send-range" role="dialog" aria-label="本次发送范围" data-testid="send-range-panel">
               <header><strong>本次发送范围</strong><span>仅本次</span></header>
@@ -2088,15 +2127,28 @@ async function onTestScript() {
               <template v-else>
                 <div class="rv-send-range-ops"><span>已选 <b>{{ sendSettingSelectedCount }}</b> / {{ sendSettingOptions.length }} 个节点</span><button type="button" data-testid="send-range-all" @click="setSendTargets(sendSettingOptions, true)">全选</button><button type="button" data-testid="send-range-clear" @click="setSendTargets(sendSettingOptions, false)">清空</button></div>
                 <div v-if="sendSettingSearch.trim()" class="rv-send-range-filter-ops"><span>匹配 {{ sendSettingMatches.length }} 个</span><button type="button" :disabled="!sendSettingMatches.length" @click="setSendTargets(sendSettingMatches, true)">勾选搜索结果</button><button type="button" :disabled="!sendSettingMatches.length" @click="setSendTargets(sendSettingMatches, false)">取消搜索结果</button></div>
+                <label class="rv-send-condition-all" title="仅对当前列表中已选发送且有进入条件的节点生效">
+                  <input type="checkbox" data-testid="send-range-ignore-all" :checked="allSendConditionsIgnored"
+                    :indeterminate="sendConditionCount > 0 && !allSendConditionsIgnored" :disabled="!sendConditionOptions.length"
+                    @change="setSendConditions(($event.target as HTMLInputElement).checked)" />
+                  {{ sendSettingSearch.trim() ? '忽略搜索结果中已选节点条件' : '忽略已选节点条件' }}
+                </label>
                 <div class="rv-send-range-list">
-                  <label v-for="opt in sendSettingMatches" :key="opt.stepId" class="rv-send-range-row" :title="opt.name">
+                  <div v-for="opt in sendSettingMatches" :key="opt.stepId" class="rv-send-range-row" :class="{ 'is-ignored': sendSettingModeOf(opt) === 'skipCond' }">
+                    <label class="rv-send-range-target" :title="opt.name">
                     <input type="checkbox" :checked="sendSettingModeOf(opt) !== 'mute'" :aria-label="`发送到${opt.name}`" :data-testid="`send-range-${opt.stepId}`" @change="setSendTargets([opt], ($event.target as HTMLInputElement).checked)" />
                     <span>{{ opt.name }}</span><small>#{{ opt.stepId }}</small>
-                  </label>
+                    </label>
+                    <label class="rv-send-range-condition" :title="isNodeSkipped(opt.nodeId) ? '请先选择发送到此节点' : opt.condition || '此节点没有进入条件'">
+                      <input type="checkbox" :checked="sendSettingModeOf(opt) === 'skipCond'" :disabled="!opt.condition || isNodeSkipped(opt.nodeId)"
+                        :aria-label="`忽略${opt.name}进入条件`" :data-testid="`send-range-ignore-${opt.stepId}`"
+                        @change="setSendSettingMode(opt, ($event.target as HTMLInputElement).checked ? 'skipCond' : 'normal')" />忽略条件
+                    </label>
+                  </div>
                   <p v-if="!sendSettingMatches.length" class="rv-send-range-empty">没有匹配的节点</p>
                 </div>
               </template>
-              <footer><span>{{ sendSettingOptions.length && !sendSettingSelectedCount ? '请至少选择一个节点' : '发送成功后恢复全部发送' }}</span><button class="rc-btn" type="button" data-testid="send-range-done" @click="sendSettingVisible = false">完成</button></footer>
+              <footer><span>{{ sendSettingOptions.length && !sendSettingSelectedCount ? '请至少选择一个节点' : '仅本次，发送成功后恢复默认' }}</span><button v-if="browseMode === 'step'" class="rc-btn" type="button" data-testid="send-range-rail-select" :disabled="sendSettingLoading || !!sendSettingError" @click="startSendNodeSelection">流程图多选</button><button class="rc-btn" type="button" data-testid="send-range-done" @click="sendSettingVisible = false">完成</button></footer>
             </section>
           </el-popover>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
@@ -2747,7 +2799,11 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
   background: currentColor;
 }
 
-/* 本次发送范围：单一勾选列表，条件设置留在节点菜单。 */
+/* 本次发送范围与条件覆盖共用状态，并同步到流程图多选。 */
+.rv-rail-send-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 42px 8px 10px; color: var(--rc-text-2); font-size: 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.rv-rail-send-controls > button:not(.rc-btn) { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; font-size: 12px; }
+.rv-rail-send-controls label, .rv-send-condition-all { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; }
+.rv-rail-send-controls input, .rv-send-range input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--rc-primary); }
 .rv-send-range { display: flex; flex-direction: column; gap: 10px; color: var(--rc-text-2); font-size: 12px; }
 .rv-send-range header { display: flex; align-items: center; gap: 8px; }
 .rv-send-range header strong { color: var(--rc-text); font-size: 13px; }
@@ -2761,11 +2817,14 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-send-range-ops button, .rv-send-range-filter-ops button, .rv-send-setting-error button { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; font-size: 11px; }
 .rv-send-range-filter-ops button:disabled { opacity: .45; cursor: default; }
 .rv-send-range-list { max-height: min(280px, 38vh); overflow: auto; border-block: 1px solid var(--rc-border-soft); }
-.rv-send-range-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 4px; cursor: pointer; }
+.rv-send-range-row { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 8px 4px; }
 .rv-send-range-row + .rv-send-range-row { border-top: 1px solid var(--rc-border-soft); }
 .rv-send-range-row:hover { background: var(--rc-primary-bg); }
-.rv-send-range-row input { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--rc-primary); }
-.rv-send-range-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-send-range-row.is-ignored { background: var(--rc-primary-bg); }
+.rv-send-range-target { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; cursor: pointer; }
+.rv-send-range-target > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-send-range-condition { display: flex; flex: none; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
+.rv-send-range-condition:has(input:disabled), .rv-send-condition-all:has(input:disabled) { color: var(--rc-faint); cursor: default; }
 .rv-send-range-row small { margin-left: auto; flex: none; color: var(--rc-faint); font-size: 10px; }
 .rv-send-range-empty, .rv-send-setting-loading, .rv-send-setting-error { margin: 0; padding: 18px 0; text-align: center; color: var(--rc-muted); font-size: 12px; }
 .rv-send-setting-error { color: var(--rc-error); }

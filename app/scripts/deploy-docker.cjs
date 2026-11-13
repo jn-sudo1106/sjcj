@@ -82,6 +82,7 @@ const cfg = {
   prodPort: process.env.SJCJ_PROD_PORT || target.prodPort,
   publicPort: target.publicPort,
   backend: target.backend,
+  oss: target.oss,
   wanPort: process.env.WAN_INTERNAL_PORT || '8070',
 }
 
