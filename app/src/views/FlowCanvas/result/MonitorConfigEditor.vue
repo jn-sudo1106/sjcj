@@ -193,17 +193,24 @@ const activePath = computed(() => (pending.value ? candidate.scriptPath : effect
 const hasAnyScript = computed(() => !!displayedScript.value.trim() || !!activePath.value.trim())
 const canTest = computed(() => hasAnyScript.value)
 
-/** 底部主按钮：AI 检查有脚本才是「保存并生效」，否则保存为草稿（原型底部按钮语义）。 */
+/**
+ * 底部主按钮：AI 检查有脚本才可能「生效」，没脚本只能是草稿；
+ * 有脚本但计划为空时保存后不会自动跑，按钮明确写「仅手动」。
+ * 规则检查切过来时会自动补 DEFAULT_SCHEDULE（见 switchKind），保持「保存并生效」。
+ */
 const saveLabel = computed(() => {
-  if (form.kind === 'ai') return hasAnyScript.value ? '保存并生效' : '保存为草稿'
-  return '保存并生效'
+  if (form.kind !== 'ai') return '保存并生效'
+  if (!hasAnyScript.value) return '保存为草稿'
+  return form.schedule.trim() ? '保存并生效' : '保存（仅手动）'
 })
 
-const saveHint = computed(() =>
-  form.kind === 'ai' && !hasAnyScript.value
-    ? '没有可执行脚本：保存后为草稿，启用也不会执行'
-    : '生成与测试不改变生效版本；保存即生效',
-)
+const saveHint = computed(() => {
+  if (form.kind === 'ai') {
+    if (!hasAnyScript.value) return '没有可执行脚本：保存后为草稿，启用也不会执行'
+    if (!form.schedule.trim()) return '有脚本但未设执行计划：保存后只能手动运行；需要定时请填写执行计划'
+  }
+  return '生成与测试不改变生效版本；保存即生效'
+})
 
 /** 仅展示执行环境真实存在的时间列；旧配置仍保留，但缺失字段需重新选择。 */
 const timeColumnOptions = computed(() => timeColumnFields.value.length
@@ -864,6 +871,8 @@ async function onSave(): Promise<void> {
       generated,
       needsRegenerate: regenerate,
       regenerateReasons: regenerateReasonsOf,
+      // 用本次提交的计划判定（服务端回读只作展示）：空计划 = 保存后只能手动运行
+      scheduleEmpty: form.kind === 'ai' && !form.schedule.trim(),
     })
     applyRecord(readback)
     ElMessage.success(feedback)

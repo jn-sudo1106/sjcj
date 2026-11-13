@@ -224,3 +224,54 @@ describe('regenerateReasons：换范围也算脚本过期', () => {
     expect(text).not.toContain('描述或方法')
   })
 })
+
+describe('buildSaveFeedback：空执行计划不能假装已生效', () => {
+  const aiConf = { version: 'v3', script: 'print(1)' } as MonitorCheckConf
+  const emptySchedule = { kind: 'ai' as const, generated: false, needsRegenerate: false, scheduleEmpty: true }
+
+  it('AI 有脚本但没有执行计划：明确「只能手动运行」，不说计划已生效', () => {
+    const text = buildSaveFeedback(aiConf, 'v3', emptySchedule)
+    expect(text).toContain('已保存并生效 v3')
+    expect(text).toContain('未设执行计划：保存后只能手动运行；如需定时，请填写执行计划')
+    expect(text).not.toContain('计划/通知/判定策略已生效')
+    // 没有计划就谈不上「未自动运行一次检查」之外的计划语义，口径只留手动
+    expect(text).not.toContain('未自动运行一次检查')
+  })
+
+  it('没有脚本仍按草稿回执，空计划不改变这一段', () => {
+    const text = buildSaveFeedback({ version: 'v1' } as MonitorCheckConf, 'v1', emptySchedule)
+    expect(text).toContain('已保存草稿')
+    expect(text).not.toContain('只能手动运行')
+  })
+
+  it('AI 有脚本且有执行计划：保留计划/通知/判定策略已生效的口径', () => {
+    const text = buildSaveFeedback(aiConf, 'v3', { kind: 'ai', generated: false, needsRegenerate: false })
+    expect(text).toContain('已保存并生效 v3')
+    expect(text).toContain('计划/通知/判定策略已生效')
+    expect(text).not.toContain('只能手动运行')
+  })
+
+  it('空计划 + 需要重新生成：两段都说清楚，不夹带计划已生效', () => {
+    const text = buildSaveFeedback(aiConf, 'v3', {
+      kind: 'ai',
+      generated: false,
+      needsRegenerate: true,
+      regenerateReasons: ['检查表'],
+      scheduleEmpty: true,
+    })
+    expect(text).toContain('未设执行计划')
+    expect(text).toContain('检查表有改动')
+    expect(text).toContain('检查逻辑仍是 v3')
+    expect(text).not.toContain('计划/通知/判定策略已生效')
+  })
+
+  it('规则检查不受 scheduleEmpty 影响，保持原口径', () => {
+    const text = buildSaveFeedback({ version: 'v2' } as MonitorCheckConf, '', {
+      kind: 'rule',
+      generated: false,
+      needsRegenerate: false,
+      scheduleEmpty: true,
+    })
+    expect(text).toBe('已保存并生效 v2：保存的内容已发布')
+  })
+})

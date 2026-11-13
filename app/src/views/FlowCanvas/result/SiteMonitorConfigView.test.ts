@@ -118,6 +118,15 @@ describe('SiteMonitorConfigView · 检查项表', () => {
     expect(wrapper.text()).toContain('未生效')
   })
 
+  it('计划列为空时标「仅手动」，有计划的行不标', () => {
+    const withPlan = mountView({ monitors: [monitor()] })
+    expect(withPlan.text()).not.toContain('仅手动')
+
+    const manual = mountView({ monitors: [monitor({ schedule: '' })] })
+    expect(manual.text()).toContain('未设置')
+    expect(manual.text()).toContain('仅手动')
+  })
+
   it('空列表给加监控引导，不显示空表格', () => {
     const wrapper = mountView({ monitors: [] })
     expect(wrapper.get('[data-testid="site-monitor-checks-empty"]').text()).toContain('＋ 加监控')

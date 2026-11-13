@@ -738,6 +738,62 @@ describe('MonitorConfigEditor 保存', () => {
     expect(wrapper.find('[data-testid="mc-script-version"]').text()).toContain('v4')
   })
 
+  it('AI 有脚本但没有执行计划 → 按钮「保存（仅手动）」，回执只说手动运行、不说计划已生效', async () => {
+    // timeColumn 与打开记录时自动选中的列一致，避免额外触发「需重新生成脚本」分支
+    const record = aiRecord({ schedule: '', conf: { ...aiRecord().conf, timeColumn: 'publish_time' } })
+    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    const wrapper = mountEditor({ record })
+    await settle()
+
+    // 头部 meta 与按钮口径一致：计划为空 = 仅手动
+    expect(wrapper.text()).toContain('仅手动')
+    expect(wrapper.get('[data-testid="mc-save"]').text()).toBe('保存（仅手动）')
+
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    expect((mocks.saveMonitor.mock.calls[0][0] as { schedule: string }).schedule).toBe('')
+    const message = String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])
+    expect(message).toContain('已保存并生效 v3')
+    expect(message).toContain('未设执行计划')
+    expect(message).toContain('只能手动运行')
+    expect(message).toContain('如需定时，请填写执行计划')
+    expect(message).not.toContain('计划/通知/判定策略已生效')
+  })
+
+  it('AI 有脚本且有执行计划 → 仍是「保存并生效」，回执含计划已生效', async () => {
+    const record = aiRecord({ conf: { ...aiRecord().conf, timeColumn: 'publish_time' } })
+    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    const wrapper = mountEditor({ record })
+    await settle()
+
+    expect(wrapper.get('[data-testid="mc-save"]').text()).toBe('保存并生效')
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    const message = String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])
+    expect(message).toContain('已保存并生效 v3')
+    expect(message).toContain('计划/通知/判定策略已生效')
+    expect(message).not.toContain('只能手动运行')
+  })
+
+  it('规则检查在计划为空时行为不变：按钮仍是「保存并生效」，回执不提仅手动', async () => {
+    const record = ruleRecord({ schedule: '' })
+    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    const wrapper = mountEditor({ record })
+    await settle()
+
+    expect(wrapper.get('[data-testid="mc-save"]').text()).toBe('保存并生效')
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    const message = String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])
+    expect(message).toBe('已保存并生效 v2：保存的内容已发布')
+    expect(message).not.toContain('只能手动运行')
+  })
+
   it('AI 未生成过脚本 → 回执「已保存草稿，未生效，不执行」', async () => {
     const draft = aiRecord({
       id: 'mon-3001',

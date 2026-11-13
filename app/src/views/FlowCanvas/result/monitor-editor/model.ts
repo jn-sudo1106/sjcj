@@ -161,6 +161,13 @@ export interface SaveFeedbackInput {
   needsRegenerate: boolean
   /** 具体改过的字段名（`regenerateReasons` 的结果），用于把回执说清楚 */
   regenerateReasons?: string[]
+  /**
+   * 本次保存的执行计划是否为空（由调用方按表单判定，model 不去猜）。
+   *
+   * 有脚本但没计划的检查保存后永远不会自动跑，回执不能再说「计划已生效」；
+   * 只有 AI 分支会用到它，规则检查保持原口径。
+   */
+  scheduleEmpty?: boolean
 }
 
 export interface ValidateError {
@@ -423,7 +430,13 @@ export function formSignature(form: MonitorEditorForm): string {
   })
 }
 
-/** 保存回执文案：三种状态必须可区分，不能一律说「已生效」 */
+/**
+ * 保存回执文案：三种状态必须可区分，不能一律说「已生效」。
+ *
+ * AI 检查「有脚本但没有执行计划」时（186 上的 SCHEDULE='' 记录），保存本身成功、
+ * 版本号照旧，但这条检查永远不会自动运行；回执只留「未设执行计划」这一段，
+ * 不再声称计划已生效。
+ */
 export function buildSaveFeedback(conf: MonitorCheckConf | null, version: string, input: SaveFeedbackInput): string {
   const effectiveVersion = versionOf(conf) || version
   if (input.kind === 'ai') {
@@ -431,9 +444,15 @@ export function buildSaveFeedback(conf: MonitorCheckConf | null, version: string
     if (!hasScript) return '已保存草稿：未生效，不执行（没有可执行脚本，先生成脚本再保存）'
     if (input.needsRegenerate && !input.generated) {
       const what = input.regenerateReasons?.length ? input.regenerateReasons.join('、') : '描述或方法'
+      if (input.scheduleEmpty) {
+        return `已保存 ${effectiveVersion}。未设执行计划：保存后只能手动运行；如需定时，请填写执行计划；${what}有改动，检查逻辑仍是 ${effectiveVersion}，需重新生成脚本才会改变`
+      }
       return `已保存：计划/通知/判定策略已生效；${what}有改动，检查逻辑仍是 ${effectiveVersion}，需重新生成脚本才会改变`
     }
-    return `已保存并生效 ${effectiveVersion}：保存的内容已发布，未自动运行一次检查`
+    if (input.scheduleEmpty) {
+      return `已保存并生效 ${effectiveVersion}。未设执行计划：保存后只能手动运行；如需定时，请填写执行计划`
+    }
+    return `已保存并生效 ${effectiveVersion}：计划/通知/判定策略已生效，保存的内容已发布，未自动运行一次检查`
   }
   return effectiveVersion ? `已保存并生效 ${effectiveVersion}：保存的内容已发布` : '已保存并生效：保存的内容已发布'
 }
