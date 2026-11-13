@@ -6,20 +6,27 @@ import {
   LEGACY_NOTE,
   MISSING_TEXT,
   NO_RECEIPT_TEXT,
+  UNCLASSIFIED_SCOPE_TEXT,
   checkRows,
   checksEmptyText,
   countTextOf,
   deliveryEmptyText,
   deliveryRows,
+  legacyNoteText,
   logRefOf,
   logSourceText,
   logTextOf,
+  overdueTextOf,
+  receiversTextOf,
+  scopeTextOf,
   snapshotFields,
   snapshotMethodLabels,
   snapshotScript,
   summaryFields,
+  timeTypeTextOf,
   triggerTextOf,
   windowFields,
+  windowSpecTextOf,
   windowTextOf,
 } from './runDetail'
 
@@ -161,6 +168,118 @@ describe('snapshotFields · 冻结配置快照', () => {
   it('脚本去掉首尾空白；方法名走 methodLabel', () => {
     expect(snapshotScript({ script: '  const a = 1\n' })).toBe('const a = 1')
     expect(snapshotMethodLabels({ methods: ['value_range', 'required_null'] })).toEqual(['通用数值范围', '必填字段非空'])
+  })
+})
+
+describe('snapshotFields · 检查对象 / 表 / 时间口径 / 覆盖窗口 / 超期 / 收件人', () => {
+  function snapshot(config: Parameters<typeof snapshotFields>[0]) {
+    return Object.fromEntries(snapshotFields(config).map((field) => [field.label, field]))
+  }
+
+  it('检查对象：两个合法值给全称，缺键明确写「未分类」，不猜成源结果', () => {
+    expect(scopeTextOf('source_result')).toBe('源结果检查')
+    expect(scopeTextOf('node_input')).toBe('节点环节检查')
+    expect(scopeTextOf(undefined)).toBe(UNCLASSIFIED_SCOPE_TEXT)
+    expect(UNCLASSIFIED_SCOPE_TEXT).toBe('未分类（历史记录）')
+    expect(snapshot({ version: 'v3' })['检查对象'].value).toBe(UNCLASSIFIED_SCOPE_TEXT)
+    expect(snapshot({ version: 'v3' })['检查对象'].missing).toBeFalsy()
+  })
+
+  it('检查表 / 入库时间字段 / 时间口径 / 覆盖窗口缺失都写「未记录」', () => {
+    const fields = snapshot({ version: 'v3' })
+    for (const label of ['检查表', '入库时间字段', '时间口径', '覆盖窗口']) {
+      expect(fields[label].value, label).toBe(MISSING_TEXT)
+      expect(fields[label].missing, label).toBe(true)
+    }
+  })
+
+  it('检查表与入库时间字段按快照原值展示（mono，避免表名看错）', () => {
+    const fields = snapshot({ tableName: 'sense_data.tb_jjjk', timeColumn: 'create_dt' })
+    expect(fields['检查表'].value).toBe('sense_data.tb_jjjk')
+    expect(fields['检查表'].mono).toBe(true)
+    expect(fields['入库时间字段'].value).toBe('create_dt')
+    expect(fields['入库时间字段'].mono).toBe(true)
+  })
+
+  it('时间口径把枚举翻成可读语义，未知旧值原样保留', () => {
+    expect(timeTypeTextOf('C')).toBe('创建时间（create_dt）')
+    expect(timeTypeTextOf('U')).toBe('更新时间（update_dt）')
+    expect(timeTypeTextOf('M')).toBe('修改时间（modify_dt）')
+    expect(timeTypeTextOf('T')).toContain('上次任务')
+    expect(timeTypeTextOf('Z')).toBe('Z')
+    expect(timeTypeTextOf('')).toBe(MISSING_TEXT)
+    expect(timeTypeTextOf(undefined)).toBe(MISSING_TEXT)
+  })
+
+  it('覆盖窗口按 type 说人话：当日 / 最近 N 小时 / 上一个周期', () => {
+    expect(windowSpecTextOf({ type: 'today' })).toBe('当日 00:00 → 现在')
+    // 编辑器只存 type 不存 start/end，执行器按 type 现算；这里按执行器语义描述
+    expect(windowSpecTextOf({ type: 'hours', hours: 6 })).toBe('最近 6 小时')
+    expect(windowSpecTextOf({ type: 'hours' })).toBe('最近 24 小时')
+    expect(windowSpecTextOf({ type: 'hours', hours: -1 })).toBe('最近 24 小时')
+    expect(windowSpecTextOf({ type: 'period', periodHours: 12 })).toBe('上一个周期（12 小时）')
+    expect(windowSpecTextOf({ type: 'period' })).toBe('上一个周期')
+    expect(windowSpecTextOf({ start: '2026-11-12 00:00:00', end: '2026-11-12 16:00:00' })).toBe(
+      '2026-11-12 00:00:00 → 2026-11-12 16:00:00',
+    )
+    expect(windowSpecTextOf({ type: 'quarter' })).toBe('quarter')
+    expect(windowSpecTextOf(undefined)).toBe(MISSING_TEXT)
+  })
+
+  it('超期策略：配了预期更新周期才显示，宽限 0 不写成「宽限 0 分钟」', () => {
+    expect(overdueTextOf({ expectEveryMinutes: 30, graceMinutes: 10 })).toBe('每 30 分钟无新增即超期，宽限 10 分钟')
+    expect(overdueTextOf({ expectEveryMinutes: 30, graceMinutes: 0 })).toBe('每 30 分钟无新增即超期')
+    expect(overdueTextOf({ expectEveryMinutes: 30 })).toBe('每 30 分钟无新增即超期')
+    expect(overdueTextOf({ graceMinutes: 10 })).toBe('')
+    expect(overdueTextOf(undefined)).toBe('')
+  })
+
+  it('超期策略没配就不占行；收件人没有就不占行', () => {
+    expect(snapshot({ version: 'v3' })['超期策略']).toBeUndefined()
+    expect(snapshot({ version: 'v3' })['收件人']).toBeUndefined()
+    const fields = snapshot({
+      overduePolicy: { expectEveryMinutes: 30, graceMinutes: 10 },
+      receivers: ['ops@example.com'],
+    })
+    expect(fields['超期策略'].value).toBe('每 30 分钟无新增即超期，宽限 10 分钟')
+    expect(fields['超期策略'].wide).toBe(true)
+    expect(fields['收件人'].value).toBe('ops@example.com')
+  })
+
+  it('收件人去空白、用顿号连接；全空等于没配', () => {
+    expect(receiversTextOf(['a@example.com', ' b@example.com '])).toBe('a@example.com、b@example.com')
+    expect(receiversTextOf([' ', ''])).toBe('')
+    expect(receiversTextOf(undefined)).toBe('')
+    expect(snapshot({ receivers: [' ', ''] })['收件人']).toBeUndefined()
+  })
+
+  it('新增行带 testid，既有行不改名', () => {
+    const fields = snapshot({ version: 'v3', scopeType: 'node_input', tableName: 't', timeColumn: 'c', timeType: 'C' })
+    expect(fields['检查对象'].testid).toBe('run-snapshot-scope')
+    expect(fields['检查表'].testid).toBe('run-snapshot-table')
+    expect(fields['入库时间字段'].testid).toBe('run-snapshot-time-column')
+    expect(fields['时间口径'].testid).toBe('run-snapshot-time-type')
+    expect(fields['覆盖窗口'].testid).toBe('run-snapshot-window')
+    expect(fields['版本'].testid).toBeUndefined()
+  })
+})
+
+describe('legacyNoteText · 旧日志提示不能与快照区自相矛盾', () => {
+  it('非旧日志不显示横幅文案', () => {
+    expect(legacyNoteText(run({ legacy: false }))).toBe('')
+  })
+
+  it('旧日志没有 JOB_CONF 快照时维持「没有逐项结果与冻结快照」', () => {
+    const text = legacyNoteText(run({ legacy: true }))
+    expect(text).toContain(LEGACY_NOTE)
+    expect(text).toContain('没有逐项结果与冻结快照')
+  })
+
+  it('旧日志但有 JOB_CONF 快照时不再声称「没有冻结快照」', () => {
+    const text = legacyNoteText(run({ legacy: true, config: { version: 'v3' } }))
+    expect(text).toContain(LEGACY_NOTE)
+    expect(text).toContain('JOB_CONF')
+    expect(text).not.toContain('没有逐项结果与冻结快照')
   })
 })
 

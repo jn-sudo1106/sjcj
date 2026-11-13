@@ -102,6 +102,14 @@ export interface SourceCheckLog {
   sourceId: string
   /** 旧平台没有；脚本执行器把结构化结论写在这里（JSON 串） */
   remarks?: string
+  /**
+   * 本次执行的冻结配置快照（JSON 串，来自后端 `ck_job_log.JOB_CONF`）。
+   *
+   * Java 的 `CkJobLogService.saveLog` 写的是当时的 `ck_source.CHECK_CONF`（**超过 999 字符会被截断**），
+   * 脚本执行器写的是回写后的整包 conf；旧数据可能是空串或截断后的非法 JSON，所以只当可选数据读，
+   * 解析失败按「没有快照」处理（见 `utils/monitor/record.ts` 的 `parseRunConfig`）。
+   */
+  jobConf?: string
   logCode?: string
   logDt?: string
   jobId?: number | string

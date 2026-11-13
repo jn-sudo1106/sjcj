@@ -17,6 +17,7 @@ import type {
   MonitorKind,
   MonitorNotifyStatus,
   MonitorRecordView,
+  MonitorRunConfig,
   MonitorRunView,
   MonitorPublishStatus,
   MonitorScopeType,
@@ -135,7 +136,6 @@ export function toMonitorRecord(row: SourceCheck, sourceName?: string): MonitorR
   }
 }
 
-/** 旧日志行 → 运行视图。没有结构化结果，`legacy` 置 true，页面必须标注「旧日志」。 */
 /**
  * 读执行器写进 `ck_job_log.REMARKS` 的结构化结论。
  *
@@ -185,6 +185,137 @@ export function parseRunRemarks(raw: unknown): MonitorRunStructured {
   }
 }
 
+/** 正整数（超期预期更新周期 / 窗口小时数）；0 和负数都不算有效配置。 */
+function positiveIntOf(value: unknown): number | undefined {
+  const num = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  return Number.isInteger(num) && num > 0 ? num : undefined
+}
+
+/** 非负整数（超期宽限）；0 是有效值（不宽限）。 */
+function nonNegativeIntOf(value: unknown): number | undefined {
+  const num = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  return Number.isInteger(num) && num >= 0 ? num : undefined
+}
+
+function plainObjectOf(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+/**
+ * 超期策略的读取顺序与执行器 / 编辑器一致：`overduePolicy` > 旧键 `overdue` > 顶层键。
+ * 三种写法在历史 checkConf 里都出现过，快照是当时那份 conf 的副本，所以同样要能打开旧记录。
+ */
+function overduePolicyOfSnapshot(
+  source: Record<string, unknown>,
+): { expectEveryMinutes?: number; graceMinutes?: number } | undefined {
+  for (const candidate of [source.overduePolicy, source.overdue, source]) {
+    const value = plainObjectOf(candidate)
+    if (!value) continue
+    const expectEveryMinutes = positiveIntOf(value.expectEveryMinutes)
+    const graceMinutes = nonNegativeIntOf(value.graceMinutes)
+    if (expectEveryMinutes !== undefined || graceMinutes !== undefined) return { expectEveryMinutes, graceMinutes }
+  }
+  return undefined
+}
+
+/**
+ * 解析 `ck_job_log.JOB_CONF` 里的冻结配置快照。
+ *
+ * 这一列不是可靠的 JSON：规则检查由 Java `saveLog` 写入且**超过 999 字符会被截断**，
+ * 旧数据还可能是空串或普通文本。所以这里只做宽松解析——解析失败、非对象、空对象
+ * （一条能用的字段都没读到）一律返回 undefined，页面继续显示「未记录」；
+ * 绝不拿当前监控定义补齐，也绝不抛异常（一行坏日志不能拖垮整个运行列表）。
+ */
+export function parseRunConfig(raw: unknown): MonitorRunConfig | undefined {
+  if (typeof raw !== 'string') return undefined
+  const text = raw.trim()
+  if (!text) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  const source = plainObjectOf(parsed)
+  if (!source) return undefined
+
+  const textOf = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim() ? value.trim() : undefined
+  const stringsOf = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined
+    const list = value
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    return list.length ? list : undefined
+  }
+
+  const config: MonitorRunConfig = {}
+  // 单值文本字段；缺值就不写键，避免空字段把「没有快照」伪装成有快照。
+  const textKeys = [
+    'version',
+    'digest',
+    'name',
+    'desc',
+    'notifyOn',
+    'nullPolicy',
+    'noDataPolicy',
+    'script',
+    'tableName',
+    'timeColumn',
+    'timeType',
+  ] as const
+  for (const key of textKeys) {
+    const value = textOf(source[key])
+    if (value !== undefined) config[key] = value
+  }
+
+  const methods = stringsOf(source.methods)
+  if (methods) config.methods = methods
+  const channels = stringsOf(source.channels)
+  if (channels) config.channels = channels
+  const receivers = stringsOf(source.receivers)
+  if (receivers) config.receivers = receivers
+
+  // 检查对象只认两个合法值；旧快照没有该键就保持缺省（页面显示「未分类（历史记录）」），不推断。
+  if (source.scopeType === 'source_result' || source.scopeType === 'node_input') config.scopeType = source.scopeType
+
+  // 执行计划：快照里可能直接给 plan，也可能只有保存时写进 conf 顶层的 cron。
+  const planSource = plainObjectOf(source.plan)
+  const planCron = textOf(planSource?.cron) ?? textOf(source.cron)
+  const planText = textOf(planSource?.text)
+  if (planCron || planText) config.plan = { cron: planCron, text: planText }
+
+  // 检查窗口：只保留执行器认识的键，非法小时数交给展示层按执行器默认值兜底。
+  const windowSource = plainObjectOf(source.window)
+  if (windowSource) {
+    const window: NonNullable<MonitorRunConfig['window']> = {}
+    const type = textOf(windowSource.type)
+    if (type) window.type = type
+    const hours = positiveIntOf(windowSource.hours)
+    if (hours !== undefined) window.hours = hours
+    const periodHours = positiveIntOf(windowSource.periodHours)
+    if (periodHours !== undefined) window.periodHours = periodHours
+    const start = textOf(windowSource.start)
+    if (start) window.start = start
+    const end = textOf(windowSource.end)
+    if (end) window.end = end
+    if (Object.keys(window).length) config.window = window
+  }
+
+  const overduePolicy = overduePolicyOfSnapshot(source)
+  if (overduePolicy) config.overduePolicy = overduePolicy
+
+  // 一条字段都没读到 = 没有可用快照，交给页面走「未记录」空态。
+  return Object.keys(config).length ? config : undefined
+}
+
+/**
+ * 旧日志行 → 运行视图。
+ * 没有结构化结论时 `legacy` 置 true，页面必须标注「旧日志」；结构化结论与 JOB_CONF 快照
+ * 是两条独立数据源——没有 REMARKS 的记录仍然可能是正式运行（快照照常展示）。
+ */
 export function toMonitorRun(log: SourceCheckLog): MonitorRunView {
   const text = typeof log.logMsg === 'string' ? log.logMsg : ''
   const exec: MonitorExecStatus =
@@ -216,6 +347,8 @@ export function toMonitorRun(log: SourceCheckLog): MonitorRunView {
     reason: structured.reason,
     summary: structured.reason,
     window: structured.window && (structured.window.start || structured.window.end) ? { ...structured.window } : undefined,
+    // 冻结配置快照来自 JOB_CONF；旧日志没有这一列时保持缺省，页面显示「未记录」
+    config: parseRunConfig(log.jobConf),
     message: text,
     deliveries: [],
     legacy: !hasStructured,

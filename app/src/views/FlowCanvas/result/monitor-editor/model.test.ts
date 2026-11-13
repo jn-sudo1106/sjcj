@@ -14,6 +14,7 @@ import {
   regenerateReasons,
   scheduleIntervalHours,
   timeColumnOptionsOf,
+  validateForm,
   windowOfForm,
 } from './model'
 
@@ -273,5 +274,68 @@ describe('buildSaveFeedback：空执行计划不能假装已生效', () => {
       scheduleEmpty: true,
     })
     expect(text).toBe('已保存并生效 v2：保存的内容已发布')
+  })
+})
+
+describe('超期无新增策略（overduePolicy）', () => {
+  const aiForm = (over: Partial<ReturnType<typeof emptyForm>> = {}) => ({
+    ...emptyForm(),
+    kind: 'ai' as const,
+    sourceId: 's1',
+    name: '检查',
+    methods: ['today_landed'],
+    ...over,
+  })
+
+  it('表单填周期与宽限 → 写 overduePolicy；只填周期时宽限落 0', () => {
+    expect(confFromForm(aiForm({ overdueMinutes: '30', overdueGrace: '10' }), { kind: 'ai' }).overduePolicy).toEqual({
+      expectEveryMinutes: 30,
+      graceMinutes: 10,
+    })
+    expect(confFromForm(aiForm({ overdueMinutes: '30' }), { kind: 'ai' }).overduePolicy).toEqual({
+      expectEveryMinutes: 30,
+      graceMinutes: 0,
+    })
+  })
+
+  it('清空时把三种历史写法一起删除，避免旧键复活', () => {
+    const conf = confFromForm(aiForm(), {
+      kind: 'ai',
+      overduePolicy: { expectEveryMinutes: 30 },
+      overdue: { expectEveryMinutes: 20 },
+      expectEveryMinutes: 10,
+    } as MonitorCheckConf)
+    expect(conf.overduePolicy).toBeUndefined()
+    expect(conf.overdue).toBeUndefined()
+    expect(conf.expectEveryMinutes).toBeUndefined()
+  })
+
+  it('读取兼容三种历史写法：overduePolicy > overdue > 顶层 expectEveryMinutes', () => {
+    expect(formFromRecord(recordOf({ kind: 'ai', overduePolicy: { expectEveryMinutes: 30, graceMinutes: 5 } }))).toMatchObject({
+      overdueMinutes: '30',
+      overdueGrace: '5',
+    })
+    expect(formFromRecord(recordOf({ kind: 'ai', overdue: { expectEveryMinutes: 20 } })).overdueMinutes).toBe('20')
+    expect(formFromRecord(recordOf({ kind: 'ai', expectEveryMinutes: 10 } as MonitorCheckConf)).overdueMinutes).toBe('10')
+    expect(formFromRecord(recordOf({ kind: 'ai' })).overdueMinutes).toBe('')
+  })
+
+  it('规则检查不写超期策略（Java 调度器不认这个键）', () => {
+    const conf = confFromForm({ ...emptyForm(), kind: 'rule' as const, overdueMinutes: '30' }, { kind: 'rule' })
+    expect(conf.overduePolicy).toBeUndefined()
+  })
+
+  it('validateForm 拒绝 0 / 负数 / 小数分钟与负宽限，合法值放行', () => {
+    expect(validateForm(aiForm({ overdueMinutes: '0' }))?.key).toBe('overdue')
+    expect(validateForm(aiForm({ overdueMinutes: '-5' }))?.key).toBe('overdue')
+    expect(validateForm(aiForm({ overdueMinutes: '1.5' }))?.key).toBe('overdue')
+    expect(validateForm(aiForm({ overdueMinutes: '30', overdueGrace: '-1' }))?.key).toBe('overdue')
+    expect(validateForm(aiForm({ overdueMinutes: '30', overdueGrace: '10' }))).toBeNull()
+  })
+
+  it('签名覆盖超期字段：改了就算 dirty', () => {
+    const base = emptyForm()
+    expect(formSignature({ ...base, overdueMinutes: '30' })).not.toBe(formSignature(base))
+    expect(formSignature({ ...base, overdueGrace: '5' })).not.toBe(formSignature(base))
   })
 })

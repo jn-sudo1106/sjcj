@@ -8,12 +8,12 @@ import { computed } from 'vue'
 import type { MonitorRunView } from '@/api/types/monitorCenter'
 import {
   DELIVERY_NOTE,
-  LEGACY_NOTE,
   MISSING_TEXT,
   checkRows,
   checksEmptyText,
   deliveryEmptyText,
   deliveryRows,
+  legacyNoteText,
   logRefOf,
   logSourceText,
   logTextOf,
@@ -40,6 +40,7 @@ const deliveryEmpty = computed(() => deliveryEmptyText(props.run))
 const logText = computed(() => logTextOf(props.run))
 const logSource = computed(() => logSourceText(props.run))
 const logRef = computed(() => logRefOf(props.run))
+const legacyNote = computed(() => legacyNoteText(props.run))
 </script>
 
 <template>
@@ -54,9 +55,7 @@ const logRef = computed(() => logRefOf(props.run))
       <span v-if="run.legacy" class="mr-legacy" data-testid="run-detail-legacy">旧日志</span>
     </div>
 
-    <div v-if="run.legacy" class="mr-warn" data-testid="run-legacy-note">
-      {{ LEGACY_NOTE }}：本次运行只有旧日志文本，没有逐项结果与冻结快照；下方「未记录」的地方不用当前监控定义补齐。
-    </div>
+    <div v-if="run.legacy" class="mr-warn" data-testid="run-legacy-note">{{ legacyNote }}</div>
 
     <section class="mr-section" data-testid="run-detail-conclusion">
       <h3 class="mr-h3">结论与实际数值</h3>
@@ -125,7 +124,11 @@ const logRef = computed(() => logRefOf(props.run))
       <dl v-if="snapshot.length" class="mr-fields">
         <div v-for="item in snapshot" :key="item.label" class="mr-field" :class="{ 'is-wide': item.wide }">
           <dt>{{ item.label }}</dt>
-          <dd :class="{ 'is-mono': item.mono, 'is-missing': item.missing }" :title="item.value">{{ item.value }}</dd>
+          <dd
+            :class="{ 'is-mono': item.mono, 'is-missing': item.missing }"
+            :title="item.value"
+            :data-testid="item.testid"
+          >{{ item.value }}</dd>
         </div>
       </dl>
       <div v-else class="mr-empty" data-testid="run-snapshot-missing">

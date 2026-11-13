@@ -179,6 +179,203 @@ class MonitorEventsTest(unittest.TestCase):
             self.assertIsNone(batches.read(self.app, events.PREFIX + ids[1]))
             self.assertIsNotNone(batches.read(self.app, events.PREFIX + ids[4]))
 
+    # ---- notifyOn：策略决定建不建事件 -------------------------------------
+
+    def test_notify_on_none_never_creates_event(self):
+        for status in ('NORMAL', 'ABNORMAL', 'ERROR'):
+            self.assertIsNone(events.record(self.app, self.item(status), {'notifyOn': 'none'}))
+        self.assertEqual(events.listing(self.app), [])
+        self.assertIsNone(batches.read(self.app, events.INDEX_KEY))
+
+    def test_notify_on_error_is_default_for_missing_and_invalid(self):
+        # 缺键、空字符串、非法值、历史脏值 'disabled' 都按 error：异常建、正常不建。
+        confs = ({}, {'kind': 'ai'}, {'notifyOn': ''}, {'notifyOn': 'bogus'},
+                 {'notifyOn': 'disabled'}, None)
+        for index, conf in enumerate(confs):
+            self.assertIsNone(events.record(self.app, self.item(
+                'NORMAL', runId='run-1104-2026111211%02d00' % index), conf))
+        for index, conf in enumerate([{}, {'notifyOn': ''}, {'notifyOn': 'bogus'},
+                                      {'notifyOn': 'disabled'}]):
+            row = events.record(self.app, self.item(
+                'ABNORMAL', runId='run-1104-2026111212%02d00' % index), conf)
+            self.assertIsNotNone(row)
+            self.assertEqual(row['notifyOn'], 'error')
+        self.assertEqual(len(events.listing(self.app)), 4)
+
+    def test_notify_on_ok_only_records_normal(self):
+        self.assertIsNone(events.record(self.app, self.item('ABNORMAL'), {'notifyOn': 'ok'}))
+        row = events.record(self.app, self.item('NORMAL'), {'notifyOn': 'ok'})
+        self.assertIsNotNone(row)
+        self.assertEqual(row['status'], 'NORMAL')
+        self.assertEqual(row['notifyOn'], 'ok')
+        self.assertEqual(row['delivery']['state'], 'pending')
+        self.assertEqual([item['status'] for item in events.listing(self.app)], ['NORMAL'])
+
+    def test_notify_on_all_records_every_status_once_per_run(self):
+        normal = events.record(self.app, self.item('NORMAL'), {'notifyOn': 'all'})
+        abnormal = events.record(self.app, self.item('ABNORMAL', runId='run-1104-20261112210500'),
+                                 {'notifyOn': 'all'})
+        failed = events.record(self.app, self.item('ERROR', runId='run-1104-20261112211000',
+                                                   error='脚本超时'), {'notifyOn': 'all'})
+        self.assertEqual([row['status'] for row in events.listing(self.app)],
+                         ['ERROR', 'ABNORMAL', 'NORMAL'])
+        self.assertEqual(failed['reason'], '脚本超时')
+        for row in (normal, abnormal, failed):
+            self.assertEqual(row['notifyOn'], 'all')
+        # 同一 runId 重复 record 仍只有一条。
+        again = events.record(self.app, self.item('NORMAL'), {'notifyOn': 'all'})
+        self.assertEqual(again['eventId'], normal['eventId'])
+        self.assertEqual(len(events.listing(self.app)), 3)
+        self.assertEqual(len(batches.read(self.app, events.INDEX_KEY)), 3)
+
+    def test_notify_on_accepts_json_string_and_whitespace(self):
+        self.assertIsNone(events.record(self.app, self.item(), json.dumps({'notifyOn': 'none'})))
+        row = events.record(self.app, self.item('NORMAL', runId='run-1104-20261112130000'),
+                            '{"notifyOn": " OK "}')
+        self.assertEqual(row['notifyOn'], 'ok')
+        # 解析不了的 conf 按空配置处理 → 默认 error 口径。
+        self.assertIsNone(events.record(self.app, self.item(
+            'NORMAL', runId='run-1104-20261112131000'), 'not-json'))
+        self.assertIsNotNone(events.record(self.app, self.item(
+            'ABNORMAL', runId='run-1104-20261112132000'), 'not-json'))
+
+    # ---- 收件人：检查项优先，回落到全局 -----------------------------------
+
+    def test_conf_receivers_and_mail_to_are_merged(self):
+        self.configure(recipient='global@example.com')
+        conf = {'receivers': ['a@example.com', 'b@example.com'], 'mailTo': 'c@example.com'}
+        event = events.record(self.app, self.item(), conf)
+        self.assertEqual(event['recipients'],
+                         ['a@example.com', 'b@example.com', 'c@example.com'])
+        with patch.object(events.delivery, 'send') as sender:
+            result = events.deliver(self.app, event['eventId'])
+        self.assertEqual(result['delivery']['state'], 'sent')
+        self.assertEqual([row['recipient'] for row in result['deliveries']],
+                         ['a@example.com', 'b@example.com', 'c@example.com'])
+        self.assertTrue(all(row['state'] == 'sent' and row['channel'] == 'email'
+                            for row in result['deliveries']))
+        self.assertEqual(sender.call_count, 3)
+        # 检查项自带收件人时不再叠加全局收件人。
+        sent = [call.args[1]['recipient'] for call in sender.call_args_list]
+        self.assertNotIn('global@example.com', sent)
+
+    def test_dirty_receivers_are_split_deduped_and_filtered(self):
+        conf = {'receivers': 'a@example.com, b@example.com; a@example.com\nnot-an-email'}
+        event = events.record(self.app, self.item(), conf)
+        self.assertEqual(event['recipients'], ['a@example.com', 'b@example.com'])
+
+    def test_recipients_fall_back_to_global_config(self):
+        self.configure(recipient='ops@example.com')
+        event = events.record(self.app, self.item(), {'notifyOn': 'error'})
+        self.assertEqual(event['recipients'], [])
+        with patch.object(events.delivery, 'send') as sender:
+            result = events.deliver(self.app, event['eventId'])
+        self.assertEqual(result['deliveries'][0]['recipient'], 'ops@example.com')
+        sender.assert_called_once()
+
+    def test_conf_recipients_deliver_even_if_global_recipient_missing(self):
+        self.configure(recipient='')
+        event = events.record(self.app, self.item(), {'receivers': ['team@example.com']})
+        with patch.object(events.delivery, 'send') as sender:
+            result = events.deliver(self.app, event['eventId'])
+        self.assertEqual(result['delivery']['state'], 'sent')
+        self.assertEqual(result['deliveries'][0]['recipient'], 'team@example.com')
+        sender.assert_called_once()
+
+    def test_one_failed_recipient_does_not_block_others_and_retry_only_resends_it(self):
+        self.configure()
+        conf = {'receivers': ['bad@example.com', 'good@example.com']}
+        event = events.record(self.app, self.item(), conf)
+        base = events.now()
+
+        def flaky(config, row, recipient=None):
+            if recipient == 'bad@example.com':
+                raise OSError('mailbox full')
+
+        with patch.object(events, 'send_email', side_effect=flaky) as sender:
+            first = events.deliver(self.app, event['eventId'], moment=base)
+        self.assertEqual(first['delivery']['state'], 'failed')
+        self.assertEqual([(row['recipient'], row['state']) for row in first['deliveries']],
+                         [('bad@example.com', 'failed'), ('good@example.com', 'sent')])
+        self.assertIn('mailbox full', first['deliveries'][0]['error'])
+        self.assertIn('good@example.com', [row['recipient'] for row in first['deliveries']
+                                           if row['state'] == 'sent'])
+        self.assertEqual(sender.call_count, 2)
+        with patch.object(events, 'send_email') as sender:
+            second = events.deliver(self.app, event['eventId'],
+                                    moment=base + timedelta(seconds=events.RETRY_SECONDS + 1))
+            sender.assert_called_once()
+            # 只补发失败的那个，已成功的 good@ 不再重复收信。
+            self.assertEqual(sender.call_args.args[2], 'bad@example.com')
+        self.assertEqual(second['delivery']['state'], 'sent')
+        self.assertEqual(len(second['deliveries']), 3)
+        self.assertEqual([row['recipient'] for row in second['deliveries']
+                          if row['state'] == 'sent'].count('good@example.com'), 1)
+
+    # ---- 渠道：显式不开 mail 时不投递，也不伪装成已发送 -------------------
+
+    def test_channels_without_mail_creates_event_without_delivery(self):
+        self.configure()
+        event = events.record(self.app, self.item(), {'channels': ['dingtalk']})
+        self.assertEqual(event['channels'], ['dingtalk'])
+        self.assertEqual(event['delivery']['state'], 'not-configured')
+        self.assertEqual(event['delivery']['reason'], events.CHANNEL_DISABLED_REASON)
+        self.assertEqual(event['deliveries'], [])
+        with patch.object(events, 'send_email') as sender:
+            result = events.deliver(self.app, event['eventId'])
+            events.tick(self.app)
+        sender.assert_not_called()
+        self.assertEqual(result['delivery']['state'], 'not-configured')
+        self.assertEqual(result['delivery']['reason'], events.CHANNEL_DISABLED_REASON)
+        self.assertEqual(result['deliveries'], [])
+
+    def test_channels_empty_or_non_mail_string_blocks_mail(self):
+        for index, channels in enumerate(([], 'ding', 'dingtalk', 'dingtalk,webhook', [''])):
+            row = events.record(self.app, self.item(
+                runId='run-1104-2026111214%02d00' % index), {'channels': channels})
+            self.assertEqual(row['delivery']['state'], 'not-configured', channels)
+            self.assertEqual(row['delivery']['reason'], events.CHANNEL_DISABLED_REASON)
+
+    def test_channels_with_mail_delivers(self):
+        self.configure()
+        for index, channels in enumerate((['mail'], ['email'], 'mail,dingtalk',
+                                          [{'type': 'email'}])):
+            event = events.record(self.app, self.item(
+                runId='run-1104-2026111215%02d00' % index), {'channels': channels})
+            self.assertEqual(event['delivery']['state'], 'pending', channels)
+            with patch.object(events.delivery, 'send') as sender:
+                self.assertEqual(events.deliver(self.app, event['eventId'])['delivery']['state'],
+                                 'sent')
+                sender.assert_called_once()
+
+    def test_channels_absent_keeps_legacy_notify_type_behaviour(self):
+        self.configure()
+        mail = events.record(self.app, self.item(), {'notifyType': 'mail'})
+        self.assertEqual(mail['channels'], ['mail'])
+        self.assertEqual(mail['delivery']['state'], 'pending')
+        ding = events.record(self.app, self.item(runId='run-1104-20261112210500'),
+                             {'notifyType': 'ding'})
+        self.assertEqual(ding['channels'], ['dingtalk'])
+        self.assertEqual(ding['delivery']['state'], 'not-configured')
+        legacy = events.record(self.app, self.item(runId='run-1104-20261112211000'), {})
+        self.assertIsNone(legacy['channels'])
+        self.assertEqual(legacy['delivery']['state'], 'pending')
+
+    def test_channels_blocked_retry_is_http_200_and_stays_not_configured(self):
+        self.configure()
+        event = events.record(self.app, self.item(), {'channels': ['dingtalk']})
+        with patch.object(events, 'send_email') as sender:
+            result = self.request('/api/runner-management/monitor-runner/notifications/%s/retry'
+                                  % event['eventId'], {})
+        sender.assert_not_called()
+        self.assertEqual(result['event']['delivery']['state'], 'not-configured')
+        self.assertEqual(result['event']['delivery']['reason'], events.CHANNEL_DISABLED_REASON)
+        listing = self.request('/api/runner-management/monitor-runner/notifications?monitorId=1104')
+        row = listing['items'][0]
+        self.assertEqual(row['notifyOn'], 'error')
+        self.assertEqual(row['channels'], ['dingtalk'])
+        self.assertEqual(row['recipients'], [])
+
     def test_http_listing_and_retry(self):
         self.configure()
         first = events.record(self.app, self.item())

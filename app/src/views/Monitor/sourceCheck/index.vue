@@ -7,7 +7,12 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import type { MonitorKind, MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
+import type {
+  MonitorKind,
+  MonitorRecordView,
+  MonitorScopeType,
+  MonitorSourceRow,
+} from '@/api/types/monitorCenter'
 import {
   MonitorQueryLimitError,
   listMonitors,
@@ -71,6 +76,24 @@ const props = withDefaults(
 
 const PAGE_SIZES = [10, 30, 100, 200]
 
+/**
+ * 检查对象筛选（1113 §3）：全部 / 源结果检查 / 节点环节检查 / 未分类。
+ * 这是**检查项**属性而不是源属性，所以不能塞进 `SourceListQuery`（源级筛选会被服务端按源分页）；
+ * 旧记录 `scopeType` 缺省时只归入「未分类」，不推断成源结果。
+ */
+type ScopeFilter = 'all' | MonitorScopeType | 'unclassified'
+
+const SCOPE_OPTIONS: ReadonlyArray<{ value: ScopeFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'source_result', label: '源结果检查' },
+  { value: 'node_input', label: '节点环节检查' },
+  { value: 'unclassified', label: '未分类' },
+]
+
+function scopeLabelOf(filter: ScopeFilter): string {
+  return SCOPE_OPTIONS.find((item) => item.value === filter)?.label ?? '全部'
+}
+
 const loading = ref(false)
 const records = ref<MonitorRecordView[]>([])
 const directory = ref<MonitorSourceOption[]>([])
@@ -98,6 +121,9 @@ const draft = reactive<SourceListQuery>({
 })
 /** 已生效的筛选：刷新时用它，避免把输入到一半的草稿当成查询条件 */
 const applied = reactive<SourceListQuery>({ ...draft })
+/** 检查对象草稿 / 已生效值：与源级筛选一样先「查询」再生效 */
+const draftScope = ref<ScopeFilter>('all')
+const appliedScope = ref<ScopeFilter>('all')
 
 const page = ref(1)
 const pageSize = ref(30)
@@ -204,16 +230,52 @@ const allRows = computed<MonitorSourceRow[]>(() => {
   return summarizeSources(scopedRecords.value, sourceLikes.value)
 })
 
-/** 服务端聚合模式：筛选与分页都在服务端，客户端不再二次切片（否则每页只剩几条） */
-const summaryMode = computed(() => scopeKind.value !== 'source' && !!summaryRows.value)
+/**
+ * 检查对象筛选是否生效。
+ * 生效时按检查项过滤，并让源列表退回本地分页：服务端按源聚合只认源级条件，
+ * 不认「检查项属于哪一类」，若继续用服务端分页，会出现「当前页被隐藏一半、总数还是全站」的错乱。
+ */
+const scopeFilterActive = computed(() => appliedScope.value !== 'all')
+
+/**
+ * 服务端聚合模式：筛选与分页都在服务端，客户端不再二次切片（否则每页只剩几条）。
+ * 检查对象筛选期间强制关闭：那个维度只能按检查项在本地过滤，翻页与计数也必须跟着本地走。
+ */
+const summaryMode = computed(
+  () => scopeKind.value !== 'source' && !!summaryRows.value && !scopeFilterActive.value,
+)
 /** 服务端不认的筛选（执行失败/未生效/待判断）只能在当前页内过滤，避免翻页后「筛了个寂寞」 */
 const summaryUnsupported = computed(
   () => summaryMode.value && ['failed', 'draft', 'pending'].includes(applied.status),
 )
+/** 检查项是否命中当前的检查对象筛选；旧记录缺省 scopeType 只命中「未分类」 */
+function matchScope(monitor: MonitorRecordView, filter: ScopeFilter): boolean {
+  if (filter === 'all') return true
+  const scope = monitorScopeOf(monitor.conf)
+  if (filter === 'unclassified') return scope === undefined
+  return scope === filter
+}
+
+/** 展开行内实际展示的检查项：筛选生效时只留命中的那一类 */
+function visibleMonitorsOf(row: MonitorSourceRow): MonitorRecordView[] {
+  if (!scopeFilterActive.value) return row.monitors
+  return row.monitors.filter((monitor) => matchScope(monitor, appliedScope.value))
+}
+
+/** 行内检查项数口径：筛选时写清「已筛选 N / 共 M」，避免把过滤后的数量误读成总数变了 */
+function checkCountTextOf(row: MonitorSourceRow): string {
+  if (!scopeFilterActive.value) return `${row.monitorTotal} 项检查`
+  return `已筛选 ${visibleMonitorsOf(row).length} / 共 ${row.monitorTotal} 项检查`
+}
+
 const filteredRows = computed(() => {
-  if (!summaryMode.value) return filterSourceRows(allRows.value, applied)
-  if (!summaryUnsupported.value) return allRows.value
-  return filterSourceRows(allRows.value, { ...applied, enable: 'all', checkDate: 'all' })
+  let rows: MonitorSourceRow[]
+  if (!summaryMode.value) rows = filterSourceRows(allRows.value, applied)
+  else if (!summaryUnsupported.value) rows = allRows.value
+  else rows = filterSourceRows(allRows.value, { ...applied, enable: 'all', checkDate: 'all' })
+  if (!scopeFilterActive.value) return rows
+  // 整行隐藏：该源下没有任何命中检查项的源不出行（无检查项的源自然不参与）
+  return rows.filter((row) => row.monitors.some((monitor) => matchScope(monitor, appliedScope.value)))
 })
 const pagedRows = computed(() =>
   summaryMode.value
@@ -380,14 +442,18 @@ async function refresh(): Promise<void> {
 
 function applyFilters(): void {
   const sourceChanged = applied.sourceId !== draft.sourceId
+  // 记录应用前的分页口径：检查对象的生效/失效会在「服务端按源分页」和「本地分页」之间切换，
+  // 切换时必须重新取一次数据，否则会拿旧分页结果当新口径渲染。
+  const wasSummary = summaryMode.value
   applied.sourceId = scopeKind.value === 'source' ? props.sourceId : draft.sourceId
   applied.enable = draft.enable
   applied.status = draft.status
   applied.checkDate = draft.checkDate ?? 'all'
   applied.keyword = draft.keyword.trim()
+  appliedScope.value = draftScope.value
   page.value = 1
   collapseExpanded()
-  if (sourceChanged || summaryMode.value) {
+  if (sourceChanged || wasSummary || summaryMode.value) {
     void refresh()
   }
 }
@@ -398,6 +464,7 @@ function resetFilters(): void {
   draft.status = 'all'
   draft.checkDate = 'all'
   draft.keyword = ''
+  draftScope.value = 'all'
   applyFilters()
 }
 
@@ -541,6 +608,29 @@ function scopeMetaOf(monitor: MonitorRecordView): { text: string; cls: string; t
   return { text: '未分类', cls: 'is-none', title: '旧记录未标注检查对象归属，不推断为源结果' }
 }
 
+/**
+ * 超期无新增策略（1113 §5）：`conf.overduePolicy.expectEveryMinutes` 是「预期多久更新一次」，
+ * 执行器在窗口内没有新增数据时用「预期周期 + 宽限」判定断流。
+ *
+ * 只在配了预期周期时出徽标：没配的旧记录行为完全不变，页面上不能凭空给一个周期，
+ * 否则会让人以为这条检查已经被超期判定覆盖。宽限只放进 title，不占正文宽度。
+ */
+function overdueOf(monitor: MonitorRecordView): { text: string; title: string } {
+  const policy = monitor.conf?.overduePolicy
+  const expect = policy?.expectEveryMinutes
+  if (typeof expect !== 'number' || !Number.isFinite(expect) || expect <= 0) {
+    return { text: '', title: '' }
+  }
+  const grace = policy?.graceMinutes
+  const hasGrace = typeof grace === 'number' && Number.isFinite(grace) && grace > 0
+  return {
+    text: `每 ${expect} 分钟`,
+    title: hasGrace
+      ? `超期无新增：预期每 ${expect} 分钟更新一次，宽限 ${grace} 分钟`
+      : `超期无新增：预期每 ${expect} 分钟更新一次，未配置宽限`,
+  }
+}
+
 /** 检查方式决定立即运行走哪条链路：脚本检查走执行器，规则检查走旧调度器。 */
 const kindIndex = computed<Record<string, MonitorKind>>(() =>
   Object.fromEntries(records.value.map((row) => [row.id, row.kind])),
@@ -641,7 +731,14 @@ onMounted(() => {
       <span>监控记录加载失败：{{ loadError }}</span>
       <button type="button" class="sc-link" @click="refresh()">重试</button>
     </div>
-    <div v-if="summaryRows" data-testid="sc-summary-hint" class="sc-hint sc-hint-muted">
+    <div v-if="scopeFilterActive" data-testid="sc-scope-filter-hint" class="sc-hint sc-hint-muted">
+      <span>
+        已按检查对象筛选（{{ scopeLabelOf(appliedScope) }}）：只显示含该类检查项的源，展开后也只列该类检查项；
+        「共 N 个源」与翻页按筛选后的结果计算。检查对象是检查项属性，服务端源聚合不认这个维度，
+        因此筛选期间未配置检查的源不参与。
+      </span>
+    </div>
+    <div v-else-if="summaryMode" data-testid="sc-summary-hint" class="sc-hint sc-hint-muted">
       <span>
         服务端按源聚合：<template v-if="summaryStats">
           共 {{ summaryStats.totalSources }} 个源 · 已配置 {{ summaryStats.configuredSources }}（启用
@@ -684,6 +781,17 @@ onMounted(() => {
       <label class="sc-filter-field"><span>最近检查</span><el-select v-model="draft.checkDate" class="sc-filter-select" aria-label="最近检查日期" placeholder="最近检查">
         <el-option v-for="item in CHECK_DATE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
       </el-select></label>
+      <label class="sc-filter-field"><span>检查对象</span>
+        <el-select
+          v-model="draftScope"
+          class="sc-filter-scope"
+          aria-label="检查对象"
+          placeholder="检查对象"
+          data-testid="sc-scope-filter"
+        >
+          <el-option v-for="item in SCOPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+        </el-select>
+      </label>
       <el-input
         v-model="draft.keyword"
         class="sc-filter-keyword"
@@ -736,7 +844,10 @@ onMounted(() => {
           <section class="sc-inner">
             <div class="sc-inner-head">
               <span class="sc-inner-title">{{ row.sourceName || row.sourceId }}</span>
-              <span class="subline">· {{ row.monitorTotal }} 项检查 · 各自独立记录身份、启停和通知</span>
+              <span class="subline">
+                · <span data-testid="sc-scope-count">{{ checkCountTextOf(row) }}</span>
+                · 各自独立记录身份、启停和通知
+              </span>
               <template v-if="selectedMonitors.length">
                 <span class="sc-selected">已选 {{ selectedMonitors.length }} 项</span>
                 <el-button size="small" @click="batchRun">重跑所选</el-button>
@@ -750,7 +861,7 @@ onMounted(() => {
             </div>
 
             <el-table
-              :data="row.monitors"
+              :data="visibleMonitorsOf(row)"
               row-key="id"
               size="small"
               class="sc-inner-table"
@@ -791,7 +902,17 @@ onMounted(() => {
               </el-table-column>
               <el-table-column label="执行计划" min-width="130">
                 <template #default="{ row: monitor }">
-                  <span class="sc-ellipsis" :title="monitorPlanOf(monitor).plan">{{ monitorPlanOf(monitor).plan }}</span>
+                  <div class="sc-plan-line">
+                    <span class="sc-ellipsis" :title="monitorPlanOf(monitor).plan">{{ monitorPlanOf(monitor).plan }}</span>
+                    <span
+                      v-if="overdueOf(monitor).text"
+                      class="sc-overdue-tag"
+                      data-testid="sc-overdue-tag"
+                      :title="overdueOf(monitor).title"
+                    >
+                      {{ overdueOf(monitor).text }}
+                    </span>
+                  </div>
                   <div class="subline">下次 {{ monitorPlanOf(monitor).next }}</div>
                 </template>
               </el-table-column>
@@ -909,7 +1030,8 @@ onMounted(() => {
             暂无监控记录。可直接点击「新增监控」开始配置。
           </template>
           <template v-else>
-            没有符合筛选条件的源。
+            <template v-if="scopeFilterActive">没有含「{{ scopeLabelOf(appliedScope) }}」检查项的源。</template>
+            <template v-else>没有符合筛选条件的源。</template>
             <button type="button" class="sc-link" @click="resetFilters">重置筛选</button>
           </template>
         </div>
@@ -1025,6 +1147,10 @@ onMounted(() => {
 .sc-filter-source :deep(.el-select) { width: 158px !important; }
 .sc-filter-select {
   width: 96px;
+}
+/* 「源结果检查」等选项比既有下拉长，给到能完整读出、又不挤占关键词框的宽度 */
+.sc-filter-scope {
+  width: 112px;
 }
 .sc-filter-keyword {
   width: 154px;
@@ -1224,6 +1350,32 @@ onMounted(() => {
   background: var(--rc-bg, #f8fafc);
   border: 1px dashed var(--rc-border, #e2e8f0);
   color: var(--rc-faint, #94a3b8);
+}
+/* 超期无新增规格：轻量 tag 跟在执行计划后，不新增大列把 13.6 寸挤爆 */
+.sc-plan-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.sc-plan-line .sc-ellipsis {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sc-overdue-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--rc-border, #e2e8f0);
+  border-radius: 4px;
+  background: var(--rc-bg, #f8fafc);
+  color: var(--rc-text-2, #475569);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 .sc-inner-note {
   padding: 7px 10px;

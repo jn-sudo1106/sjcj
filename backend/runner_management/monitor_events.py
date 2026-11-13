@@ -2,11 +2,20 @@
 
 设计取舍
 --------
-* 只有 ``status != NORMAL`` 才建事件。AI 检查默认每 10 分钟跑一次，正常结果
-  也发邮件会把收件箱淹没；真正需要人处理的是异常和执行失败。
+* 建不建事件由检查项自己的通知策略 ``conf.notifyOn`` 决定（缺键/非法值按
+  ``error``）：``error`` 只在异常/执行失败时建，``ok`` 只在正常时建，``all``
+  每次都建，``none`` 静默。AI 检查默认每 10 分钟跑一次，``all`` 要慎用，
+  否则正常结果也会把收件箱淹没。
 * ``eventId`` 由 runId 尾部的时间戳决定，不额外取随机数：同一轮检查被重复
   调用（重跑 apply、接口重试）时必须落到同一条事件上，否则「已发送」的判定
   会失效、同一异常会被重复投递。
+* 收件人优先检查项自己的 ``conf.receivers`` / ``conf.mailTo``（数组或字符串，
+  逗号/分号/空格分隔的脏数据都能拆），都没有才回落到全局 ``delivery.json`` 的
+  ``notify.recipient``。多个收件人逐个投递：一个失败照常记该收件人的失败回执，
+  不影响其他人；重试只补发还没成功的那几个，不会给已收到的再发一遍。
+* 渠道看检查项的 ``conf.channels``：显式列了渠道但不含 ``mail`` 时不投邮件，
+  事件记 ``not-configured`` 并写明「该检查项未开启邮件渠道」——不伪装成已发送，
+  也不抛错（回执抽屉要能看到这条原因）。
 * 投递失败不是「没发生」：事件照常保留，``delivery.state`` 记 ``failed`` 并
   保留 attempt/error；SMTP 未配置时记 ``not-configured``，绝不能伪装成 sent。
 * 重试只针对 ``pending`` / ``not-configured`` / 未超次数的 ``failed``；每次
@@ -51,6 +60,15 @@ DEFAULT_POLL_SECONDS = 15
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
+NOTIFY_POLICIES = ('none', 'error', 'ok', 'all')
+DEFAULT_NOTIFY_POLICY = 'error'
+# 渠道枚举的历史差异：新配置写 mail，旧值里也出现过 email。
+MAIL_CHANNELS = ('mail', 'email')
+CHANNEL_DISABLED_REASON = '该检查项未开启邮件渠道'
+ADDRESS_PATTERN = re.compile(r'[^@\s]+@[^@\s]+\.[^@\s]+')
+# 收件人/渠道的脏数据分隔：中英文逗号、分号、空白都算。
+LIST_SEPARATORS = re.compile(r'[,;，；\s]+')
+
 LOCK = threading.RLock()
 
 
@@ -75,6 +93,104 @@ def event_id_for(monitor_id, run_id):
     match = re.search(r'(\d{8,14})$', str(run_id or ''))
     suffix = match.group(1) if match else now().strftime('%Y%m%d%H%M%S')
     return 'evt-%s-%s' % (int(monitor_id), suffix)
+
+
+def _conf_dict(conf):
+    """``conf`` 允许是 dict、JSON 字符串或 None；解析不了就按空配置处理。"""
+    if isinstance(conf, str):
+        try:
+            conf = json.loads(conf)
+        except ValueError:
+            return {}
+    return conf if isinstance(conf, dict) else {}
+
+
+def notify_policy(conf=None):
+    """``conf.notifyOn`` 归一成 none/error/ok/all；缺键与非法值一律按 error。"""
+    value = _conf_dict(conf).get('notifyOn')
+    policy = str(value or '').strip().lower()
+    return policy if policy in NOTIFY_POLICIES else DEFAULT_NOTIFY_POLICY
+
+
+def should_notify(status, policy):
+    """按策略判断这次运行要不要建事件；未知策略已在 ``notify_policy`` 里归一。"""
+    if policy == 'none':
+        return False
+    if policy == 'all':
+        return True
+    if policy == 'ok':
+        return status == runner.STATUS_NORMAL
+    return status != runner.STATUS_NORMAL
+
+
+def _tokens(value):
+    """把字符串/数组形式的配置项拆成去空白的分段，数组会递归摊平。"""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        result = []
+        for entry in value:
+            result.extend(_tokens(entry))
+        return result
+    return [part for part in LIST_SEPARATORS.split(str(value).strip()) if part]
+
+
+def recipients_of(conf=None):
+    """检查项自己的收件人（receivers 优先于 mailTo），空列表表示回落到全局。
+
+    脏数据里的逗号/空格分隔在这里拆开，并且只保留像邮箱的项——一个手滑写进去
+    的备注不能把整次投递拖成永久失败。
+    """
+    conf = _conf_dict(conf)
+    result, seen = [], set()
+    for field in ('receivers', 'mailTo'):
+        for address in _tokens(conf.get(field)):
+            if not ADDRESS_PATTERN.fullmatch(address):
+                continue
+            if address.lower() in seen:
+                continue
+            seen.add(address.lower())
+            result.append(address)
+    return result
+
+
+def _channel_names(value):
+    """渠道配置归一成小写名字列表；兼容 ``{type: 'email'}`` 这种对象形态。"""
+    entries = value if isinstance(value, (list, tuple, set)) else [value]
+    names = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            entry = entry.get('type') or entry.get('channel') or entry.get('name') or ''
+        for part in LIST_SEPARATORS.split(str(entry).strip().lower()):
+            if part:
+                names.append('mail' if part == 'email' else part)
+    return names
+
+
+def channels_of(conf=None):
+    """检查项的渠道列表；``None`` 表示没有声明（不限制渠道）。
+
+    ``channels`` 存在就按它判断（空数组也视为显式「一个渠道都没开」）；旧记录
+    没有该键时退回 ``notifyType``（mail/ding/dingtalk），与前端 ``channelsOfConf``
+    的兼容口径一致。没声明时沿用原有的邮件投递，旧配置行为不变。
+    """
+    conf = _conf_dict(conf)
+    value = conf.get('channels')
+    if 'channels' in conf and value is not None and value != '':
+        return _channel_names(value)
+    legacy = str(conf.get('notifyType') or '').strip().lower()
+    if legacy == 'ding':
+        return ['dingtalk']
+    if legacy in ('mail', 'dingtalk'):
+        return [legacy]
+    return None
+
+
+def mail_enabled(channels):
+    """``None``/未声明视为不限制；显式渠道里没有 mail/email 就是没开邮件。"""
+    if not isinstance(channels, list):
+        return True
+    return any(name in MAIL_CHANNELS for name in channels)
 
 
 def _delivery(event):
@@ -109,13 +225,19 @@ def _index_add(app, event_id):
 
 
 def record(app, item, conf=None, outcome=None):
-    """apply_result 落库成功后建事件；正常结果不建，同一 runId 幂等。
+    """apply_result 落库成功后按检查项通知策略建事件；同一 runId 幂等。
 
-    返回创建或已存在的事件；不需要通知时返回 None。
+    ``conf.notifyOn`` 决定建不建事件（none/error/ok/all，缺键与非法值按 error）；
+    返回创建或已存在的事件，策略判定不需要通知时返回 None。
     """
     item = item or {}
+    conf = _conf_dict(conf)
     status = str(item.get('status') or '').upper()
-    if not status or status == runner.STATUS_NORMAL:
+    if not status:
+        # 没有状态的调用拼不出有意义的回执（历史行为也不建事件）。
+        return None
+    policy = notify_policy(conf)
+    if not should_notify(status, policy):
         return None
     monitor_id = item.get('monitorId')
     if monitor_id in (None, ''):
@@ -131,6 +253,12 @@ def record(app, item, conf=None, outcome=None):
         error = item.get('error') or outcome.get('error') or ''
         reason = error if status == runner.STATUS_ERROR else ''
         reason = reason or item.get('reason') or error
+        channels = channels_of(conf)
+        delivery_state = {'state': 'pending', 'attempts': 0, 'lastAttemptAt': None,
+                          'nextAttemptAt': None, 'error': None, 'reason': None}
+        if not mail_enabled(channels):
+            # 该检查项没开邮件渠道：事件照建（回执要能看到原因），但不排队投递。
+            delivery_state.update(state='not-configured', reason=CHANNEL_DISABLED_REASON)
         event = {
             'eventId': event_id,
             'monitorId': int(monitor_id),
@@ -144,19 +272,24 @@ def record(app, item, conf=None, outcome=None):
             'window': item.get('window'),
             'reason': str(reason or ''),
             'createdAt': stamp(),
+            # 新增口径：本轮实际生效的策略/渠道，以及检查项自己配的收件人（空=回落全局）。
+            'notifyOn': policy,
+            'channels': channels,
+            'recipients': recipients_of(conf),
             'deliveries': [],
-            'delivery': {'state': 'pending', 'attempts': 0, 'lastAttemptAt': None,
-                         'nextAttemptAt': None, 'error': None, 'reason': None},
+            'delivery': delivery_state,
         }
         batches.write(app, key, event)
         _index_add(app, event_id)
         return event
 
 
-def smtp_configuration():
+def smtp_configuration(require_recipient=True):
     """读投递配置，返回 ``(config, None)`` 或 ``(None, 不可投递原因)``。
 
-    配置缺失/未开启不抛错：事件仍在，只是把真实原因写进 ``not-configured``。
+    检查项自带收件人时传 ``require_recipient=False``：全局 ``notify.recipient``
+    只作为回落，不因为它为空/无效就拦掉整次投递。配置缺失/未开启不抛错：
+    事件仍在，只是把真实原因写进 ``not-configured``。
     """
     path = (os.getenv('RUNNER_MONITOR_DELIVERY_CONFIG') or '').strip()
     if not path:
@@ -172,10 +305,11 @@ def smtp_configuration():
     if not (enabled is True or enabled == 1 or str(enabled).strip().lower() in ('true', 'yes', 'on')):
         return None, '邮件通知未开启（notify.enabled 不为 true）'
     recipient = str(notify.get('recipient') or '').strip()
-    if not recipient:
-        return None, '未配置收件人（notify.recipient 为空）'
-    if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', recipient):
-        return None, '收件人地址无效：%s' % recipient
+    if require_recipient:
+        if not recipient:
+            return None, '未配置收件人（notify.recipient 为空）'
+        if not ADDRESS_PATTERN.fullmatch(recipient):
+            return None, '收件人地址无效：%s' % recipient
     smtp = value.get('smtp') if isinstance(value.get('smtp'), dict) else {}
     missing = [name for name in ('host', 'port', 'user', 'password', 'from') if not smtp.get(name)]
     if missing:
@@ -186,7 +320,9 @@ def smtp_configuration():
 
 
 def status_label(status):
-    return {runner.STATUS_ABNORMAL: '数据异常', runner.STATUS_ERROR: '执行失败'}.get(status, '状态异常')
+    return {runner.STATUS_NORMAL: '检查正常',
+            runner.STATUS_ABNORMAL: '数据异常',
+            runner.STATUS_ERROR: '执行失败'}.get(status, '状态异常')
 
 
 def _window_text(window):
@@ -222,21 +358,59 @@ def body_for(event):
     ])
 
 
-def send_email(config, event):
-    """复用 monitor_delivery 的 SMTP 发送；只传它需要的 smtp 段。"""
+def send_email(config, event, recipient=None):
+    """复用 monitor_delivery 的 SMTP 发送；只传它需要的 smtp 段。
+
+    ``recipient`` 缺省时用全局配置里的收件人（老调用点的兼容口径）。
+    """
     delivery.send({'smtp': config['smtp']}, {
-        'recipient': config['notify']['recipient'],
+        'recipient': recipient or config['notify']['recipient'],
         'subject': subject_for(event),
         'body': body_for(event),
         'messageId': make_msgid(domain='monitor.local'),
     })
 
 
-def deliver(app, event_id, moment=None, manual=False):
-    """对单个事件尝试一次投递；返回事件（含最新 delivery/deliveries）。
+def _event_recipients(event):
+    """事件上冻结的检查项收件人；老事件没有该字段时返回空列表（回落全局）。"""
+    values = event.get('recipients')
+    if not isinstance(values, list):
+        return []
+    result = []
+    for value in values:
+        address = str(value or '').strip()
+        if address and ADDRESS_PATTERN.fullmatch(address):
+            result.append(address)
+    return result
 
-    ``manual=True`` 是 HTTP 重试：清零失败计数并立即尝试。已发送的事件不重复
-    发送，避免点一次重试就给收件人再发一封。
+
+def _sent_addresses(event):
+    sent = set()
+    for receipt in event.get('deliveries') or []:
+        if isinstance(receipt, dict) and receipt.get('state') == 'sent':
+            address = str(receipt.get('recipient') or '').strip().lower()
+            if address:
+                sent.add(address)
+    return sent
+
+
+def _pending_recipients(event, fallback=''):
+    """本轮要投的收件人：检查项自己的优先，否则回落全局；已成功的跳过。
+
+    重试靠这里实现「只补发失败的那几个」——给已经收到的收件人重复发信比漏发更糟。
+    """
+    configured = _event_recipients(event)
+    candidates = configured or ([fallback] if fallback else [])
+    sent = _sent_addresses(event)
+    return [address for address in candidates if address.lower() not in sent]
+
+
+def deliver(app, event_id, moment=None, manual=False):
+    """对单个事件的所有待投收件人各尝试一次；返回事件（含最新 delivery/deliveries）。
+
+    多个收件人逐个投递：一个失败照常写该收件人的失败回执，不影响其他收件人；
+    重试只补发还没成功的那几个。``manual=True`` 是 HTTP 重试：清零失败计数并
+    立即尝试。已发送的事件不重复发送，避免点一次重试就给收件人再发一封。
     """
     moment = moment or now()
     with LOCK:
@@ -262,39 +436,58 @@ def deliver(app, event_id, moment=None, manual=False):
             due = _moment(state.get('nextAttemptAt'))
             if due and moment < due:
                 return event
-        config, reason = smtp_configuration()
+        if not mail_enabled(event.get('channels')):
+            # 该检查项没开邮件渠道：不投递，也不伪装成已发送；原因要能反复读到。
+            if not (state.get('state') == 'not-configured' and state.get('reason') == CHANNEL_DISABLED_REASON):
+                state.update(state='not-configured', reason=CHANNEL_DISABLED_REASON,
+                             error=None, nextAttemptAt=None)
+                batches.write(app, key, event)
+            return event
+        config, reason = smtp_configuration(require_recipient=not _event_recipients(event))
         if config is None:
             if state.get('state') == 'not-configured' and state.get('reason') == reason:
                 return event
             state.update(state='not-configured', reason=reason, error=None, nextAttemptAt=None)
             batches.write(app, key, event)
             return event
+        recipients = _pending_recipients(event, config['notify'].get('recipient') or '')
+        if not recipients:
+            # 没有待投收件人（配置为空且全局也没有）：没东西可发，别空转重试。
+            state.update(state='not-configured', reason='未配置收件人', error=None, nextAttemptAt=None)
+            batches.write(app, key, event)
+            return event
         attempt = int(state.get('attempts') or 0) + 1
-        recipient = config['notify']['recipient']
-        receipt = {
-            'deliveryId': 'dlv-%s-%s' % (event_id, len(event.get('deliveries') or []) + 1),
-            'channel': 'email',
-            'recipient': recipient,
-            'attempt': attempt,
-            'state': 'failed',
-            'at': stamp(moment),
-        }
         # 先落 sending 再发信：发送过程中崩溃时能看出「结果未知」，不会当成还没发。
         state.update(state='sending', attempts=attempt, lastAttemptAt=stamp(moment),
                      reason=None, nextAttemptAt=None)
         event['delivery'] = state
         batches.write(app, key, event)
-        try:
-            send_email(config, event)
-        except Exception as exc:
-            receipt['error'] = ('%s: %s' % (type(exc).__name__, exc))[:500]
-            state.update(state='failed', error=receipt['error'])
+        errors = []
+        for recipient in recipients:
+            receipt = {
+                'deliveryId': 'dlv-%s-%s' % (event_id, len(event.get('deliveries') or []) + 1),
+                'channel': 'email',
+                'recipient': recipient,
+                'attempt': attempt,
+                'state': 'failed',
+                'at': stamp(moment),
+            }
+            try:
+                send_email(config, event, recipient)
+            except Exception as exc:
+                receipt['error'] = ('%s: %s' % (type(exc).__name__, exc))[:500]
+                errors.append(receipt['error'])
+            else:
+                receipt['state'] = 'sent'
+            event.setdefault('deliveries', []).append(receipt)
+            # 每封发完就落盘：进程中断也不会丢掉「某某已收到」这条事实。
+            batches.write(app, key, event)
+        if errors:
+            state.update(state='failed', error=errors[0])
             if attempt < MAX_ATTEMPTS:
                 state['nextAttemptAt'] = stamp(moment + timedelta(seconds=RETRY_SECONDS))
         else:
-            receipt['state'] = 'sent'
             state.update(state='sent', error=None, reason=None, nextAttemptAt=None, sentAt=stamp(moment))
-        event.setdefault('deliveries', []).append(receipt)
         event['delivery'] = state
         batches.write(app, key, event)
         return event

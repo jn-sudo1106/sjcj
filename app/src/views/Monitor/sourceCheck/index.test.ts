@@ -455,6 +455,171 @@ describe('行内展开与批量', () => {
   })
 })
 
+describe('检查对象筛选', () => {
+  /** 一个源 5 项检查：2 源结果 + 2 节点环节 + 1 旧记录（未分类）；另一个源只有 1 项节点环节 */
+  function scopeRecords(): MonitorRecordView[] {
+    return [
+      rec({ id: 'm1', sourceId: 's1', sourceName: '源一', name: '源结果甲', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm2', sourceId: 's1', sourceName: '源一', name: '源结果乙', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm3', sourceId: 's1', sourceName: '源一', name: '节点甲', conf: { scopeType: 'node_input' } }),
+      rec({ id: 'm4', sourceId: 's1', sourceName: '源一', name: '节点乙', conf: { scopeType: 'node_input' } }),
+      rec({ id: 'm5', sourceId: 's1', sourceName: '源一', name: '旧记录', conf: {} }),
+      rec({ id: 'm6', sourceId: 's2', sourceName: '源二', name: '源二节点', conf: { scopeType: 'node_input' } }),
+    ]
+  }
+
+  function outerRows(wrapper: VueWrapper): Array<{ sourceId: string }> {
+    const table = wrapper.findAllComponents({ name: 'ElTable' })[0]
+    return table.props('data') as Array<{ sourceId: string }>
+  }
+
+  async function applyScope(wrapper: VueWrapper, value: string): Promise<void> {
+    selectByPlaceholder(wrapper, '检查对象').vm.$emit('update:modelValue', value)
+    await buttonByText(wrapper, '查询').trigger('click')
+    await flushPromises()
+  }
+
+  async function expandFirst(wrapper: VueWrapper): Promise<void> {
+    await wrapper.findAll('.el-table__expand-icon')[0].trigger('click')
+    await flushPromises()
+  }
+
+  function innerNames(wrapper: VueWrapper): string[] {
+    return wrapper.findAll('.sc-inner-table .sc-name').map((item) => item.text())
+  }
+
+  it('四态筛选：只列命中检查项，无匹配源整行隐藏，行内计数写清「已筛选 N / 共 M」', async () => {
+    const cases = [
+      {
+        value: 'all',
+        rows: ['s1', 's2'],
+        items: ['源结果甲', '源结果乙', '节点甲', '节点乙', '旧记录'],
+        count: '5 项检查',
+      },
+      {
+        value: 'source_result',
+        // 源二只有节点环节检查：整行隐藏
+        rows: ['s1'],
+        items: ['源结果甲', '源结果乙'],
+        count: '已筛选 2 / 共 5 项检查',
+      },
+      {
+        value: 'node_input',
+        rows: ['s1', 's2'],
+        items: ['节点甲', '节点乙'],
+        count: '已筛选 2 / 共 5 项检查',
+      },
+      {
+        // 旧记录 scopeType 缺省：只在「未分类」里出现，不被推断成源结果
+        value: 'unclassified',
+        rows: ['s1'],
+        items: ['旧记录'],
+        count: '已筛选 1 / 共 5 项检查',
+      },
+    ]
+
+    for (const item of cases) {
+      mockedListMonitors.mockResolvedValue(scopeRecords())
+      const wrapper = await mountPage()
+      if (item.value !== 'all') {
+        await applyScope(wrapper, item.value)
+      }
+      expect(outerRows(wrapper).map((row) => row.sourceId)).toEqual(item.rows)
+
+      await expandFirst(wrapper)
+      expect(innerNames(wrapper)).toEqual(item.items)
+      expect(wrapper.get('[data-testid="sc-scope-count"]').text()).toBe(item.count)
+      // 源级计数按筛选后的源数走，不能还显示全站/未过滤的源数
+      expect(wrapper.text()).toMatch(new RegExp(`共\\s*${item.rows.length}\\s*个源`))
+      wrapper.unmount()
+    }
+  })
+
+  it('筛选生效时给出说明，且不再显示「服务端按源聚合」提示', async () => {
+    mockedListMonitors.mockResolvedValue(scopeRecords())
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-scope-filter-hint"]').exists()).toBe(false)
+
+    await applyScope(wrapper, 'source_result')
+    expect(wrapper.find('[data-testid="sc-scope-filter-hint"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('只显示含该类检查项的源')
+    expect(wrapper.text()).toContain('源结果检查')
+  })
+
+  it('服务端聚合可用时按检查对象筛选：退回本地过滤，计数与展示行一致（不拿服务端总数冒充）', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec({ id: 'm1', sourceId: 's1', sourceName: '源一', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm2', sourceId: 's2', sourceName: '源二', conf: { scopeType: 'node_input' } }),
+    ])
+    mockedSummary.mockResolvedValue({
+      total: 2,
+      unavailable: false,
+      rows: [
+        {
+          sourceId: 's1',
+          sourceName: '源一',
+          monitorTotal: 1,
+          monitorEnabled: 1,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'normal' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          label: '数据正常',
+          tone: 'good' as const,
+          monitors: [],
+          unconfigured: false,
+        },
+        {
+          sourceId: 's2',
+          sourceName: '源二',
+          monitorTotal: 1,
+          monitorEnabled: 1,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'unknown' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          label: '尚未检查',
+          tone: 'unknown' as const,
+          monitors: [],
+          unconfigured: false,
+        },
+      ],
+    })
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(true)
+
+    await applyScope(wrapper, 'source_result')
+    // 检查对象是检查项属性，服务端按源聚合装不下：筛选期间回到本地分页，计数才能和展示行一致
+    expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(false)
+    expect(outerRows(wrapper).map((row) => row.sourceId)).toEqual(['s1'])
+    expect(wrapper.text()).toMatch(/共\s*1\s*个源/)
+  })
+
+  it('超期策略：配了预期周期才渲染「每 N 分钟」，宽限只写在 title 里', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec({
+        id: 'm1',
+        name: '配宽限',
+        conf: { overduePolicy: { expectEveryMinutes: 60, graceMinutes: 10 } },
+      }),
+      rec({ id: 'm2', name: '只有周期', conf: { overduePolicy: { expectEveryMinutes: 30 } } }),
+      // 没配 overduePolicy / 周期非正数：都不出徽标，不凭空给周期
+      rec({ id: 'm3', name: '没配', conf: {} }),
+      rec({ id: 'm4', name: '周期非法', conf: { overduePolicy: { expectEveryMinutes: 0 } } }),
+    ])
+    const wrapper = await mountPage()
+    await expandFirst(wrapper)
+
+    const tags = wrapper.findAll('[data-testid="sc-overdue-tag"]')
+    expect(tags.map((tag) => tag.text())).toEqual(['每 60 分钟', '每 30 分钟'])
+    expect(tags[0].attributes('title')).toBe('超期无新增：预期每 60 分钟更新一次，宽限 10 分钟')
+    expect(tags[1].attributes('title')).toBe('超期无新增：预期每 30 分钟更新一次，未配置宽限')
+    expect(wrapper.text()).not.toContain('每 0 分钟')
+  })
+})
+
 describe('新增监控', () => {
   it('保存回读未知时保留候选，回读成功后关闭且新增不带旧记录', async () => {
     const wrapper = await mountPage()

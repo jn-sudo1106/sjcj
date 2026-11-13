@@ -3,6 +3,7 @@ import {
   dataStatusOf,
   execStatusOf,
   parseCheckConf,
+  parseRunConfig,
   parseRunRemarks,
   serializeCheckConf,
   toMonitorRecord,
@@ -163,5 +164,128 @@ describe('toMonitorRun', () => {
     const run = toMonitorRun({ ...log, remarks: '{"runId":"run-1"}' })
     expect(run.legacy).toBe(true)
     expect(run.checkedCount).toBeUndefined()
+  })
+})
+
+describe('parseRunConfig（JOB_CONF 冻结快照）', () => {
+  const conf = {
+    kind: 'ai',
+    version: 'v3',
+    digest: 'sha256:abc',
+    name: '每日新闻完整性',
+    desc: '检查标题字段完整',
+    methods: ['null', 'dup'],
+    plan: { cron: '0 30 8 * * *', text: '每天 08:30' },
+    notifyOn: 'error',
+    channels: ['mail', 'webhook'],
+    receivers: ['a@example.com', ' b@example.com '],
+    nullPolicy: 'abnormal',
+    noDataPolicy: 'no_data',
+    script: 'print(1)',
+    scopeType: 'node_input',
+    tableName: 'news_main',
+    timeColumn: 'create_dt',
+    timeType: 'C',
+    window: { type: 'hours', hours: 24 },
+    overduePolicy: { expectEveryMinutes: 30, graceMinutes: 10 },
+    // 执行器回写的计划状态不属于配置快照，不映射
+    schedule: { last: '2026-11-13 01:00:00', next: '2026-11-13 01:30:00' },
+  }
+
+  it('把快照映射成 MonitorRunConfig，未知键与执行器回写状态不混进来', () => {
+    expect(parseRunConfig(JSON.stringify(conf))).toEqual({
+      version: 'v3',
+      digest: 'sha256:abc',
+      name: '每日新闻完整性',
+      desc: '检查标题字段完整',
+      methods: ['null', 'dup'],
+      plan: { cron: '0 30 8 * * *', text: '每天 08:30' },
+      notifyOn: 'error',
+      channels: ['mail', 'webhook'],
+      receivers: ['a@example.com', 'b@example.com'],
+      nullPolicy: 'abnormal',
+      noDataPolicy: 'no_data',
+      script: 'print(1)',
+      scopeType: 'node_input',
+      tableName: 'news_main',
+      timeColumn: 'create_dt',
+      timeType: 'C',
+      window: { type: 'hours', hours: 24 },
+      overduePolicy: { expectEveryMinutes: 30, graceMinutes: 10 },
+    })
+  })
+
+  it('顶层 cron（保存时写进 conf）也能还原成执行计划', () => {
+    const config = parseRunConfig(JSON.stringify({ version: 'v2', cron: '0 0 8 * * *' }))
+    expect(config?.plan?.cron).toBe('0 0 8 * * *')
+    expect(config?.version).toBe('v2')
+  })
+
+  it('历史超期写法（overdue / 顶层周期）同样能读，宽限 0 是有效值', () => {
+    expect(parseRunConfig(JSON.stringify({ overdue: { expectEveryMinutes: 15, graceMinutes: 0 } }))?.overduePolicy).toEqual({
+      expectEveryMinutes: 15,
+      graceMinutes: 0,
+    })
+    expect(parseRunConfig(JSON.stringify({ expectEveryMinutes: '60' }))?.overduePolicy).toEqual({
+      expectEveryMinutes: 60,
+      graceMinutes: undefined,
+    })
+  })
+
+  it('scopeType 只认两个合法值；未知值不猜测', () => {
+    expect(parseRunConfig(JSON.stringify({ scopeType: 'source_result' }))?.scopeType).toBe('source_result')
+    expect(parseRunConfig(JSON.stringify({ scopeType: 'other' }))).toBeUndefined()
+  })
+
+  it('坏 JSON / 空串 / 非对象 / 空对象 → undefined，绝不 throw', () => {
+    expect(parseRunConfig('')).toBeUndefined()
+    expect(parseRunConfig('   ')).toBeUndefined()
+    expect(parseRunConfig('not json')).toBeUndefined()
+    // Java saveLog 会在 999 字符处截断，快照可能是半截 JSON
+    expect(parseRunConfig('{"version":"v3","desc":"检查')).toBeUndefined()
+    expect(parseRunConfig('[]')).toBeUndefined()
+    expect(parseRunConfig('123')).toBeUndefined()
+    expect(parseRunConfig('null')).toBeUndefined()
+    expect(parseRunConfig('{}')).toBeUndefined()
+    expect(parseRunConfig({ version: 'v3' })).toBeUndefined()
+    expect(parseRunConfig(null)).toBeUndefined()
+    expect(parseRunConfig(undefined)).toBeUndefined()
+  })
+
+  it('字段类型不对时跳过该字段，但同快照里的其它字段仍然可用', () => {
+    const config = parseRunConfig(
+      JSON.stringify({
+        version: 3,
+        methods: ['null', 123, ''],
+        receivers: 'a@example.com',
+        window: { type: 'hours', hours: -1 },
+        tableName: 'news_main',
+      }),
+    )
+    expect(config).toEqual({ methods: ['null'], tableName: 'news_main', window: { type: 'hours' } })
+  })
+})
+
+describe('toMonitorRun 读取 jobConf 快照', () => {
+  const log: SourceCheckLog = {
+    logId: '1001',
+    createDt: '2026-11-10 08:30:00',
+    logMsg: '检查完成',
+    name: '每日新闻完整性',
+    state: 'C',
+    logType: 'check',
+    tableName: 'news_main',
+    sourceId: 'src-1001',
+  }
+
+  it('有 jobConf 时填 config（规则检查的旧日志也能展示冻结快照）', () => {
+    const run = toMonitorRun({ ...log, jobConf: '{"version":"v3","tableName":"news_main"}' })
+    expect(run.config).toEqual({ version: 'v3', tableName: 'news_main' })
+  })
+
+  it('没有 jobConf 或快照不可解析时 config 缺失，页面继续「未记录」', () => {
+    expect(toMonitorRun(log).config).toBeUndefined()
+    expect(toMonitorRun({ ...log, jobConf: '' }).config).toBeUndefined()
+    expect(toMonitorRun({ ...log, jobConf: '{"version":' }).config).toBeUndefined()
   })
 })

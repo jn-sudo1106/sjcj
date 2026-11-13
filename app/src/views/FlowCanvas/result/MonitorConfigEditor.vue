@@ -867,7 +867,7 @@ async function onSave(): Promise<void> {
   if (busy.value) return
   const invalid = validateForm(form)
   if (invalid) {
-    activeTab.value = invalid.key === 'methods' ? 'check' : 'basic'
+    activeTab.value = invalid.key === 'methods' || invalid.key === 'overdue' ? 'check' : 'basic'
     ElMessage.warning(invalid.message)
     return
   }
@@ -1215,6 +1215,37 @@ defineExpose({
                   </div>
                   <p class="mc-hint" data-testid="mc-window-hint">{{ windowHint }}</p>
                 </div>
+                <div class="mc-grid mc-overdue-grid">
+                  <div class="mc-field">
+                    <label class="mc-label" for="mc-overdue-minutes">超期无新增（分钟）</label>
+                    <input
+                      id="mc-overdue-minutes"
+                      v-model="form.overdueMinutes"
+                      class="mc-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      placeholder="留空不判定"
+                      data-testid="mc-overdue-minutes"
+                    />
+                  </div>
+                  <div class="mc-field">
+                    <label class="mc-label" for="mc-overdue-grace">宽限（分钟）</label>
+                    <input
+                      id="mc-overdue-grace"
+                      v-model="form.overdueGrace"
+                      class="mc-input"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                      data-testid="mc-overdue-grace"
+                    />
+                  </div>
+                </div>
+                <p class="mc-hint" data-testid="mc-overdue-hint">
+                  按「距上次有新增数据过了多久」判断流：超过更新周期 + 宽限仍没有新增，判为超期异常（窗口内没数据不再一律按「无待检记录」放过）。留空只按上面的「本次无待检记录时」处理，不判超期。
+                </p>
                 <div class="mc-grid">
                   <div class="mc-field">
                     <label class="mc-label" for="mc-provider">模型供应商</label>

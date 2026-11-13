@@ -36,6 +36,8 @@ export interface DetailField {
   missing?: boolean
   /** 占满整行（长文本，如执行消息） */
   wide?: boolean
+  /** 组件上的定位标识；只给新增字段加，既有 testid 不改名 */
+  testid?: string
 }
 
 /** 有值 → trim 后的文本；null/undefined/空串 → 兜底文案。 */
@@ -45,9 +47,14 @@ export function valueText(value: unknown, fallback = MISSING_TEXT): string {
   return text || fallback
 }
 
-function field(label: string, value: unknown, opts: { mono?: boolean; wide?: boolean } = {}): DetailField {
+function field(
+  label: string,
+  value: unknown,
+  opts: { mono?: boolean; wide?: boolean; testid?: string } = {},
+): DetailField {
   const text = value == null ? '' : String(value).trim()
-  if (!text) return { label, value: MISSING_TEXT, missing: true, ...opts }
+  // 翻译函数（窗口/时间口径）自己就会给出「未记录」，同样算缺失，否则样式上会被当成有值。
+  if (!text || text === MISSING_TEXT) return { label, value: MISSING_TEXT, missing: true, ...opts }
   return { label, value: text, ...opts }
 }
 
@@ -190,18 +197,106 @@ const NO_DATA_POLICY_TEXT: Record<string, string> = {
   unknown: '待判断',
 }
 
+/** 检查对象只有两个合法值；快照缺键说明是还没有 scopeType 的历史记录，不推断成「源结果」。 */
+const SCOPE_TYPE_TEXT: Record<string, string> = {
+  source_result: '源结果检查',
+  node_input: '节点环节检查',
+}
+export const UNCLASSIFIED_SCOPE_TEXT = '未分类（历史记录）'
+
+export function scopeTextOf(scopeType: MonitorRunConfig['scopeType'] | undefined): string {
+  if (!scopeType) return UNCLASSIFIED_SCOPE_TEXT
+  return SCOPE_TYPE_TEXT[scopeType] ?? UNCLASSIFIED_SCOPE_TEXT
+}
+
+/**
+ * 入窗时间字段口径，与旧平台 TimeTypeEnum 一一对应（C=create_dt / U=update_dt / M、T=modify_dt）；
+ * 不认识的值原样保留，别把历史枚举翻译成错的语义。
+ */
+const TIME_TYPE_TEXT: Record<string, string> = {
+  C: '创建时间（create_dt）',
+  U: '更新时间（update_dt）',
+  M: '修改时间（modify_dt）',
+  T: '修改时间（modify_dt，起点取源上次任务）',
+}
+
+export function timeTypeTextOf(timeType: string | undefined): string {
+  const text = (timeType ?? '').trim()
+  if (!text) return MISSING_TEXT
+  return TIME_TYPE_TEXT[text] ?? text
+}
+
+/** 执行器对缺省/非法小时数的兜底值，展示层必须与 backend/runner_management/monitor_runner.py 保持一致。 */
+const DEFAULT_WINDOW_HOURS = 24
+
+/** 正整数才算有效配置；0 / 负数 / 非整数都交给执行器默认值兜底。 */
+function positiveIntOf(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+/**
+ * 覆盖窗口说人话。
+ * 只有 type 没有 start/end 是编辑器常态（起止由执行器按 type 现算），所以按 type 描述；
+ * 显式给了 start/end 的快照才展示具体区间。
+ */
+export function windowSpecTextOf(window: MonitorRunConfig['window'] | undefined): string {
+  if (!window) return MISSING_TEXT
+  const type = (window.type ?? '').trim()
+  if (type === 'hours') return `最近 ${positiveIntOf(window.hours) ?? DEFAULT_WINDOW_HOURS} 小时`
+  if (type === 'period') {
+    const periodHours = positiveIntOf(window.periodHours)
+    return periodHours ? `上一个周期（${periodHours} 小时）` : '上一个周期'
+  }
+  if (!type || type === 'today') {
+    if (window.start || window.end) return `${window.start ?? '—'} → ${window.end ?? '—'}`
+    return '当日 00:00 → 现在'
+  }
+  // 未知 type（后端以后可能新增）原样展示，至少不会假装成「当日」。
+  return type
+}
+
+/**
+ * 超期策略：没有预期更新周期就返回空串，页面不显示这一行——
+ * 只配宽限不配周期在判定上没有意义，展示出来反而误导。
+ */
+export function overdueTextOf(overduePolicy: MonitorRunConfig['overduePolicy'] | undefined): string {
+  const expectEveryMinutes = positiveIntOf(overduePolicy?.expectEveryMinutes)
+  if (expectEveryMinutes === undefined) return ''
+  const graceMinutes = overduePolicy?.graceMinutes
+  const graceText =
+    typeof graceMinutes === 'number' && Number.isInteger(graceMinutes) && graceMinutes > 0
+      ? `，宽限 ${graceMinutes} 分钟`
+      : ''
+  return `每 ${expectEveryMinutes} 分钟无新增即超期${graceText}`
+}
+
+export function receiversTextOf(receivers: string[] | undefined): string {
+  return (receivers ?? [])
+    .map((receiver) => receiver.trim())
+    .filter(Boolean)
+    .join('、')
+}
+
 /**
  * 冻结配置快照（只读 run.config）。
  * config 缺失时返回空数组，页面整段显示「未记录」，不用当前监控定义补齐。
+ *
+ * 有值才显示的行（收件人 / 超期策略）不占位，避免旧快照出现一堆「未记录」噪音；
+ * 检查对象例外——它决定这次到底查了源结果还是节点环节，缺键也要明确写「未分类」。
  */
 export function snapshotFields(config: MonitorRunConfig | undefined): DetailField[] {
   if (!config) return []
   const plan = config.plan
-  return [
+  const fields: DetailField[] = [
     field('版本', config.version, { mono: true }),
     field('快照摘要', config.digest, { mono: true }),
     field('监控名称', config.name),
     field('说明', config.desc, { wide: true }),
+    field('检查对象', scopeTextOf(config.scopeType), { testid: 'run-snapshot-scope' }),
+    field('检查表', config.tableName, { mono: true, testid: 'run-snapshot-table' }),
+    field('入库时间字段', config.timeColumn, { mono: true, testid: 'run-snapshot-time-column' }),
+    field('时间口径', timeTypeTextOf(config.timeType), { testid: 'run-snapshot-time-type' }),
+    field('覆盖窗口', windowSpecTextOf(config.window), { testid: 'run-snapshot-window' }),
     field(
       '检查方法',
       config.methods?.length ? config.methods.map((method) => methodLabel(method)).join('、') : '',
@@ -209,12 +304,36 @@ export function snapshotFields(config: MonitorRunConfig | undefined): DetailFiel
     field('执行计划', plan?.text || plan?.cron, { mono: true }),
     field('通知策略', config.notifyOn ? (NOTIFY_ON_TEXT[config.notifyOn] ?? config.notifyOn) : ''),
     field('通知渠道', config.channels?.filter(Boolean).join('、')),
+  ]
+  const receivers = receiversTextOf(config.receivers)
+  if (receivers) {
+    fields.push({ label: '收件人', value: receivers, wide: true, testid: 'run-snapshot-receivers' })
+  }
+  fields.push(
     field('空值策略', config.nullPolicy ? (NULL_POLICY_TEXT[config.nullPolicy] ?? config.nullPolicy) : ''),
     field(
       '无数据策略',
       config.noDataPolicy ? (NO_DATA_POLICY_TEXT[config.noDataPolicy] ?? config.noDataPolicy) : '',
     ),
-  ]
+  )
+  const overdue = overdueTextOf(config.overduePolicy)
+  if (overdue) {
+    fields.push({ label: '超期策略', value: overdue, wide: true, testid: 'run-snapshot-overdue' })
+  }
+  return fields
+}
+
+/**
+ * 旧日志横幅文案。
+ * 旧日志 = 没有 REMARKS 结构化结论，但 JOB_CONF 快照可能仍在（规则检查就是这种），
+ * 所以有快照时不能说「没有冻结快照」，否则与下方快照区自相矛盾。
+ */
+export function legacyNoteText(run: MonitorRunView): string {
+  if (!run.legacy) return ''
+  if (run.config) {
+    return `${LEGACY_NOTE}：本次运行只有旧日志文本，没有逐项结果；冻结快照来自 JOB_CONF，仅作参考。下方标「未记录」的地方不用当前监控定义补齐。`
+  }
+  return `${LEGACY_NOTE}：本次运行只有旧日志文本，没有逐项结果与冻结快照；下方「未记录」的地方不用当前监控定义补齐。`
 }
 
 export function snapshotScript(config: MonitorRunConfig | undefined): string {

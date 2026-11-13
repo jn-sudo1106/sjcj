@@ -75,6 +75,14 @@ export interface MonitorCheckConf {
   kind?: MonitorKind
   /** 检查对象归属；旧记录缺省（未分类） */
   scopeType?: MonitorScopeType
+  /**
+   * 超期无新增策略（1113 §5）：检查窗口内没有新增数据时，用「预期更新周期 + 宽限」判断是否断流。
+   *
+   * 由执行器在每次跑完后判定（`backend/runner_management/monitor_overdue.py`），
+   * 没配这个键的旧记录行为完全不变（窗口内无数据仍按 `noDataPolicy` 处理）。
+   * `expectEveryMinutes` 必须为正整数；`graceMinutes` 缺省 0。
+   */
+  overduePolicy?: { expectEveryMinutes?: number; graceMinutes?: number }
   /** 24 个通用方法里选中的那些（AI 检查） */
   methods?: string[]
   desc?: string
@@ -115,9 +123,20 @@ export interface MonitorRunConfig {
   plan?: { cron?: string; text?: string }
   notifyOn?: string
   channels?: string[]
+  receivers?: string[]
   nullPolicy?: string
   noDataPolicy?: string
   script?: string
+  /** 检查对象归属（1113 §3）；旧快照没有 */
+  scopeType?: MonitorScopeType
+  /** 本次检查读的物理表与入库时间列（源结果检查改造后由本条检查自己选定） */
+  tableName?: string
+  timeColumn?: string
+  timeType?: string
+  /** 覆盖的时间窗口；执行器按它换算 DQ_START_DATE/DQ_END_DATE */
+  window?: { type?: string; hours?: number; periodHours?: number; start?: string; end?: string }
+  /** 超期无新增策略（快照口径，不回查当前定义） */
+  overduePolicy?: { expectEveryMinutes?: number; graceMinutes?: number }
 }
 
 /** 一次通知投递。重试只增加 attempt，不新建 run（1110 §9.3 / C08）。 */

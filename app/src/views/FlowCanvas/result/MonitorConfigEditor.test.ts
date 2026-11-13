@@ -847,6 +847,48 @@ describe('MonitorConfigEditor 保存', () => {
     expect(message).not.toContain('只能手动运行')
   })
 
+  it('超期无新增策略：回显旧值，改完随保存写进 check_conf.overduePolicy', async () => {
+    const record = aiRecord({
+      conf: {
+        ...aiRecord().conf,
+        timeColumn: 'publish_time',
+        overduePolicy: { expectEveryMinutes: 30, graceMinutes: 5 },
+      },
+    })
+    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+
+    // 旧记录打开要能看见已生效的策略，不能显示空白让人以为没配
+    expect((wrapper.get('[data-testid="mc-overdue-minutes"]').element as HTMLInputElement).value).toBe('30')
+    expect((wrapper.get('[data-testid="mc-overdue-grace"]').element as HTMLInputElement).value).toBe('5')
+
+    await wrapper.get('[data-testid="mc-overdue-minutes"]').setValue('15')
+    await wrapper.get('[data-testid="mc-overdue-grace"]').setValue('0')
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    const saved = mocks.saveMonitor.mock.calls[0][0] as { conf: MonitorCheckConf }
+    expect(saved.conf.overduePolicy).toEqual({ expectEveryMinutes: 15, graceMinutes: 0 })
+    wrapper.unmount()
+  })
+
+  it('超期周期填非法值时拦截保存，不发请求', async () => {
+    const record = aiRecord({ conf: { ...aiRecord().conf, timeColumn: 'publish_time' } })
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.get('[data-testid="mc-overdue-minutes"]').setValue('0')
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    expect(String(vi.mocked(ElMessage.warning).mock.calls.at(-1)?.[0])).toContain('正整数分钟')
+    wrapper.unmount()
+  })
+
   it('规则检查在计划为空时行为不变：按钮仍是「保存并生效」，回执不提仅手动', async () => {
     const record = ruleRecord({ schedule: '' })
     mocks.listMonitorsOfSource.mockResolvedValue([record])

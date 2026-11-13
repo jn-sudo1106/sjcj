@@ -46,6 +46,15 @@ export interface MonitorEditorForm {
   windowType: MonitorWindowType
   /** 「最近 N 小时」的 N（字符串便于数字输入框双向绑定，保存时归一成 1–720 的整数） */
   windowHours: string
+  /**
+   * 超期无新增的预期更新周期（分钟）。空 = 不判定超期。
+   *
+   * 执行器按「距上次有新增数据过了多久」判断断流（`monitor_overdue.py`）。
+   * 没配这个值时，窗口内无数据仍按 `noDataPolicy` 处理——这是旧记录的行为，不能默认打开。
+   */
+  overdueMinutes: string
+  /** 超期判定的宽限（分钟），空按 0；给采集延迟留缓冲，避免整点抖动误报 */
+  overdueGrace: string
 }
 
 export type MonitorWindowType = 'today' | 'hours' | 'period'
@@ -144,6 +153,19 @@ export function windowOfForm(form: MonitorEditorForm): NonNullable<MonitorCheckC
   return { type: 'today' }
 }
 
+/**
+ * 表单 → 超期策略：更新周期留空/非法 = 不判定超期。
+ * 现在只有脚本检查由执行器跑，所以策略只对 AI 检查有意义；规则检查由 Java 调度，不写这个键。
+ */
+function overdueOfForm(form: MonitorEditorForm): { expectEveryMinutes: number; graceMinutes: number } | null {
+  if (form.kind !== 'ai') return null
+  // `<input type="number">` 上的 v-model 会把值转成 number，这里不能假设一定是 string
+  const every = integerOf(form.overdueMinutes)
+  if (every === undefined || every <= 0) return null
+  const grace = integerOf(form.overdueGrace)
+  return { expectEveryMinutes: every, graceMinutes: grace !== undefined && grace >= 0 ? grace : 0 }
+}
+
 /** checkConf.window → 表单值；未配置按「当日」，旧值非法按默认 24 小时 */
 function windowFormOfConf(conf: MonitorCheckConf): { windowType: MonitorWindowType; windowHours: string } {
   const raw = conf.window
@@ -171,7 +193,8 @@ export interface SaveFeedbackInput {
 }
 
 export interface ValidateError {
-  key: 'source' | 'name' | 'methods'
+  /** 定位到哪块表单：source/name 在基础页，methods/overdue 在检查页 */
+  key: 'source' | 'name' | 'methods' | 'overdue'
   message: string
 }
 
@@ -208,6 +231,8 @@ export function emptyForm(): MonitorEditorForm {
     timeColumn: '',
     windowType: 'today',
     windowHours: String(DEFAULT_WINDOW_HOURS),
+    overdueMinutes: '',
+    overdueGrace: '',
   }
 }
 
@@ -264,11 +289,39 @@ export function channelsOfConf(conf: MonitorCheckConf): string[] {
   return []
 }
 
+function integerOf(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined
+  const text = typeof value === 'number' ? String(value) : String(value).trim()
+  if (!text) return undefined
+  const num = Number(text)
+  return Number.isInteger(num) ? num : undefined
+}
+
+/**
+ * 超期策略的读取顺序与执行器一致：`overduePolicy` > 旧键 `overdue` > 顶层 `expectEveryMinutes`。
+ * 三种写法都在历史数据里出现过，页面要能打开旧记录；保存统一写回 `overduePolicy`。
+ */
+export function overduePolicyOf(
+  conf: MonitorCheckConf | null | undefined,
+): { expectEveryMinutes?: number; graceMinutes?: number } {
+  if (!conf) return {}
+  const candidates: unknown[] = [conf.overduePolicy, conf.overdue, conf]
+  for (const raw of candidates) {
+    if (!raw || typeof raw !== 'object') continue
+    const value = raw as Record<string, unknown>
+    const every = integerOf(value.expectEveryMinutes)
+    const grace = integerOf(value.graceMinutes)
+    if (every !== undefined || grace !== undefined) return { expectEveryMinutes: every, graceMinutes: grace }
+  }
+  return {}
+}
+
 export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
   const conf = record.conf ?? {}
   const orchestration = orchestrationOf(conf)
   const base = emptyForm()
   const windowForm = windowFormOfConf(conf)
+  const overdue = overduePolicyOf(conf)
   const methods = listOf(conf.methods).length ? listOf(conf.methods) : listOf(conf.monitorMethods)
   return {
     ...base,
@@ -300,6 +353,8 @@ export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
     timeColumn: textOf(conf.timeColumn),
     windowType: windowForm.windowType,
     windowHours: windowForm.windowHours,
+    overdueMinutes: overdue.expectEveryMinutes === undefined ? '' : String(overdue.expectEveryMinutes),
+    overdueGrace: overdue.graceMinutes === undefined ? '' : String(overdue.graceMinutes),
   }
 }
 
@@ -348,6 +403,16 @@ export function confFromForm(
     if (timeColumn) conf.timeColumn = timeColumn
     else delete conf.timeColumn
     conf.window = windowOfForm(form)
+    const overdue = overdueOfForm(form)
+    if (overdue) {
+      conf.overduePolicy = overdue
+    } else {
+      // 清空时必须把三种历史写法一起删掉：执行器读 overduePolicy > overdue > expectEveryMinutes，
+      // 只删新键会让旧键复活，页面显示「不判定超期」但实际还在报。
+      delete conf.overduePolicy
+      delete conf.overdue
+      delete conf.expectEveryMinutes
+    }
     if (extra.script !== undefined) conf.script = extra.script
     if (extra.scriptPath !== undefined) conf.scriptPath = extra.scriptPath
   } else {
@@ -367,6 +432,18 @@ export function validateForm(form: MonitorEditorForm): ValidateError | null {
   if (!form.sourceId.trim()) return { key: 'source', message: '请先选择被监控源' }
   if (!form.name.trim()) return { key: 'name', message: '请填写监控名称' }
   if (form.kind === 'ai' && !form.methods.length) return { key: 'methods', message: 'AI 检查至少选择一个监控方法' }
+  if (form.kind === 'ai' && String(form.overdueMinutes ?? '').trim()) {
+    const every = Number(form.overdueMinutes)
+    if (!Number.isInteger(every) || every <= 0) {
+      return { key: 'overdue', message: '超期判定的更新周期必须是正整数分钟（留空表示不判定超期）' }
+    }
+  }
+  if (form.kind === 'ai' && String(form.overdueGrace ?? '').trim()) {
+    const grace = Number(form.overdueGrace)
+    if (!Number.isInteger(grace) || grace < 0) {
+      return { key: 'overdue', message: '超期宽限必须是不小于 0 的整数分钟' }
+    }
+  }
   return null
 }
 
@@ -427,6 +504,8 @@ export function formSignature(form: MonitorEditorForm): string {
     timeColumn: form.timeColumn.trim(),
     windowType: form.windowType,
     windowHours: String(form.windowHours).trim(),
+    overdueMinutes: String(form.overdueMinutes ?? '').trim(),
+    overdueGrace: String(form.overdueGrace ?? '').trim(),
   })
 }
 
