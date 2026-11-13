@@ -95,6 +95,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   // C07 首期：源维度聚合（一行一个源，含未配置检查的源；服务端按登录用户分组过滤）。
   // 漏登记时 mock 模式会抛「端点不在契约清单」，页面只能降级成「仅已配置源」。
   { path: 'source/check/sourceSummary', desc: '源维度聚合（C07 首期）→ GET ?page=&limit=&siteId=&keyword=', impl: true, live: true },
+  // 与 sourceSummary 同源的「全站/本组统计」：不分页，只回计数。
+  { path: 'source/check/sourceSummaryStats', desc: '源维度聚合统计（C07）→ GET ?siteId=&keyword=', impl: true, live: true },
   { path: 'source/check/paged-logs', desc: '源检查历史日志 → GET ?sourceId=&jobId=&state=&name=&page=&limit=', impl: true, live: true },
   // 定时预览：旧平台 `GET /v1/source/lastRun?cron=<urlencoded>`（api/util.js checkCron），
   // 返回该 cron 的最近若干次运行时间（**裸数组**）；CheckAdd 的「定时」弹窗「测试」用它。

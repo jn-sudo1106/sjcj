@@ -13,11 +13,13 @@ import {
   listMonitors,
   listMonitorsOfSource,
   listSourceSummary,
+  loadSourceSummaryStats,
   listSourceNames,
   listSourceOptions,
   runMonitorsNow,
   setMonitorsEnabled,
   type MonitorSourceOption,
+  type SourceSummaryStats,
 } from '@/api/monitorCenter'
 import { deleteSourceCheck } from '@/api/monitor'
 import { summarizeSources } from '@/utils/monitor/sourceSummary'
@@ -79,6 +81,8 @@ const directorySkipped = ref(false)
 /** 服务端源聚合（C07 首期）结果；null 表示不可用，页面回落到「只列已配置源」 */
 const summaryRows = ref<MonitorSourceRow[] | null>(null)
 const summaryTotal = ref(0)
+/** 全站/本组统计（C07）：与分页同一范围口径；available=false 时显示「—」 */
+const summaryStats = ref<SourceSummaryStats | null>(null)
 const loadError = ref('')
 const directoryError = ref('')
 let refreshToken = 0
@@ -320,6 +324,12 @@ async function loadSummary(request: number): Promise<void> {
   }
   summaryRows.value = result.rows
   summaryTotal.value = result.total
+  const stats = await loadSourceSummaryStats({
+    siteId: props.siteId || undefined,
+    keyword: applied.keyword || undefined,
+  })
+  if (request !== refreshToken) return
+  summaryStats.value = stats.available ? stats : null
 }
 
 /** 启停筛选 → 服务端 enabled 参数（未配置走 dataState=none） */
@@ -603,8 +613,12 @@ onMounted(() => {
     </div>
     <div v-if="summaryRows" data-testid="sc-summary-hint" class="sc-hint sc-hint-muted">
       <span>
-        服务端按源聚合：共 {{ summaryTotal }} 个源（含未配置检查的源），已配置的排在最前。
-        筛选与翻页都由服务端执行；「执行失败 / 未生效 / 待判断」当前只能在当前页内过滤。
+        服务端按源聚合：<template v-if="summaryStats">
+          共 {{ summaryStats.totalSources }} 个源 · 已配置 {{ summaryStats.configuredSources }}（启用
+          {{ summaryStats.enabledSources }}）· 数据异常 {{ summaryStats.abnormalSources }} · 未配置检查
+          {{ summaryStats.notConfiguredSources }}
+        </template><template v-else>共 {{ summaryTotal }} 个源（全站统计暂不可用，显示「—」）</template>。
+        已配置的排在最前；筛选与翻页都由服务端执行，「执行失败 / 未生效 / 待判断」当前只能在当前页内过滤。
         计划覆盖仍需服务端按时隙聚合，暂显示「—」。
       </span>
     </div>

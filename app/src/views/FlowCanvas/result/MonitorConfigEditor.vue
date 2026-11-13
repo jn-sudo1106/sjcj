@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { dataApi, fetchDefaultModels, fetchModelProviders, sourceApi } from '@/api'
 import type { EntryType } from '@/api/types/collect'
@@ -23,6 +23,9 @@ import {
   formSignature,
   needsRegenerate,
   nextVersionOf,
+  normalizeWindowHours,
+  scheduleIntervalHours,
+  timeColumnOptionsOf,
   validateForm,
   versionOf,
 } from './monitor-editor/model'
@@ -30,8 +33,10 @@ import './monitor-editor/dialog.css'
 import { EXEC_TEXT } from '@/utils/monitor/record'
 import type { MonitorEditorForm } from './monitor-editor/model'
 import {
+  augmentMonitorSystemPrompt,
   generateMonitorScript,
   resolveMonitorGenerationContext,
+  resolveMonitorTableFields,
   summarizeExecutionResult,
   testMonitorScript,
 } from './monitor-editor/generation'
@@ -86,19 +91,80 @@ const descTouched = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const tableOptions = ref<Array<{ tableId: string; tableName: string; label: string }>>([])
+/** 目录里已带回的真实字段（tableName → prop 列表）：优先用它出「入库时间字段」候选，省一次请求 */
+const tableFieldsByName = ref<Record<string, string[]>>({})
+const timeColumnFields = ref<string[]>([])
 const providerOptions = ref<ModelProviderOption[]>([])
 const modelOptions = ref<ModelOption[]>([])
 const saving = ref(false)
 const busy = computed(() => saving.value || generating.value || testing.value)
 let sourceRequest = 0
 let modelRequest = 0
-onBeforeUnmount(() => { sourceRequest += 1; modelRequest += 1 })
+let timeColumnRequest = 0
+onBeforeUnmount(() => { sourceRequest += 1; modelRequest += 1; timeColumnRequest += 1; stopElapsedTimer() })
 
 /** 页面候选脚本：只存在内存里，保存成功后才进入记录（生成不自动保存） */
 const candidate = reactive({ script: '', scriptPath: '' })
 const pending = ref(false)
 const generating = ref(false)
 const generatingPreview = ref('')
+/** 生成过程中的思考文本（vibecoding 式过程展示，只保留最新片段） */
+const generatingThinking = ref('')
+const generatingElapsed = ref(0)
+const streamRef = ref<HTMLElement | null>(null)
+/** 脚本正文默认折叠到固定高度，避免长脚本把弹窗撑爆 */
+const scriptExpanded = ref(false)
+let elapsedTimer: number | undefined
+
+function startElapsedTimer(): void {
+  generatingElapsed.value = 0
+  const startedAt = Date.now()
+  window.clearInterval(elapsedTimer)
+  elapsedTimer = window.setInterval(() => {
+    generatingElapsed.value = (Date.now() - startedAt) / 1000
+  }, 200)
+}
+
+function stopElapsedTimer(): void {
+  window.clearInterval(elapsedTimer)
+  elapsedTimer = undefined
+}
+
+async function scrollStreamToEnd(): Promise<void> {
+  await nextTick()
+  const el = streamRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+/**
+ * 思考内容是**增量**推送的（generation.ts 透传每个 delta）。
+ * 之前误当成全量、只取最后 160 字，界面上就只剩孤零零一个词，看着像坏了。
+ * 这里累积全文，超长只保留尾部，交给 `<pre>` 自己滚动。
+ */
+const THINKING_LIMIT = 6000
+
+function appendThinking(prev: string, delta: string): string {
+  const text = `${prev}${delta}`
+  return text.length > THINKING_LIMIT ? `…${text.slice(-THINKING_LIMIT)}` : text
+}
+
+async function onCopyScript(): Promise<void> {
+  const text = displayedScript.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(`已复制脚本（${text.length} 字）`)
+  } catch {
+    const area = document.createElement('textarea')
+    area.value = text
+    document.body.appendChild(area)
+    area.select()
+    document.execCommand('copy')
+    document.body.removeChild(area)
+    ElMessage.success(`已复制脚本（${text.length} 字）`)
+  }
+}
+
 const generationError = ref('')
 /** 生成上下文降级说明（源未绑定流程、按主表生成独立监控时提示） */
 const generationNote = ref('')
@@ -138,6 +204,26 @@ const saveHint = computed(() =>
     ? '没有可执行脚本：保存后为草稿，启用也不会执行'
     : '生成与测试不改变生效版本；保存即生效',
 )
+
+/** 入库时间字段候选：真实字段里像时间列的；拿不到字段清单时退回固定候选（让用户手选，不猜） */
+const timeColumnOptions = computed(() => timeColumnOptionsOf(timeColumnFields.value, form.timeColumn))
+/** 「上一个周期」的窗口长度 = 当前执行计划间隔（算不出来按 24 小时） */
+const windowPeriodHours = computed(() => scheduleIntervalHours(form.schedule))
+const windowHint = computed(() => {
+  if (form.windowType === 'hours') {
+    return `执行器按最近 ${normalizeWindowHours(form.windowHours)} 小时算好 DQ_START_DATE / DQ_END_DATE 再跑脚本`
+  }
+  if (form.windowType === 'period') {
+    return `按当前计划间隔约 ${windowPeriodHours.value} 小时取上一个周期（算不出间隔时按 24 小时）`
+  }
+  return '按业务时区 Asia/Shanghai，从当日 00:00 到执行时刻'
+})
+/** 写进业务描述里的窗口口径（要具体，不能留占位符） */
+const descriptionWindow = computed(() => {
+  if (form.windowType === 'hours') return `最近 ${normalizeWindowHours(form.windowHours)} 小时（Asia/Shanghai 业务时区）`
+  if (form.windowType === 'period') return `上一个检查周期（约 ${windowPeriodHours.value} 小时，Asia/Shanghai 业务时区）`
+  return '当日 00:00 至当前（Asia/Shanghai 业务时区）'
+})
 
 const versionText = computed(() => {
   const current = form.version || versionOf(recordState.value?.conf)
@@ -234,24 +320,84 @@ watch(
       sourceName: form.sourceName,
       tableName: form.tableName,
       methods: [...form.methods],
+      window: descriptionWindow.value,
+      nullPolicy: form.nullPolicy,
+      noDataPolicy: form.noDataPolicy,
     })
   },
   { deep: true },
 )
 
+/**
+ * 字段清单 → 入库时间字段候选。
+ * 只在「当前没选」且真实清单只有一个像时间列的字段时自动选中；多个候选不猜
+ * （脚本会自报「无法自动识别入库时间列」，由用户确认，不偷偷填假列名）。
+ */
+function applyTimeColumnFields(fields: readonly string[]): void {
+  timeColumnFields.value = fields.map((field) => (field || '').trim()).filter(Boolean)
+  if (form.timeColumn.trim() || !timeColumnFields.value.length) return
+  const candidates = timeColumnOptionsOf(timeColumnFields.value)
+  if (candidates.length === 1) form.timeColumn = candidates[0]!
+}
+
+/** 换表/读源后刷新候选：目录里有字段直接用，否则按表 ID/物理名补一次（与脚本生成同一条解析链） */
+function syncTimeColumnFields(): void {
+  const tableName = form.tableName.trim()
+  if (!tableName) {
+    timeColumnFields.value = []
+    return
+  }
+  const fromCatalog = tableFieldsByName.value[tableName]
+  if (fromCatalog?.length) {
+    applyTimeColumnFields(fromCatalog)
+    return
+  }
+  void loadTimeColumnFields()
+}
+
+async function loadTimeColumnFields(): Promise<void> {
+  const request = ++timeColumnRequest
+  const tableName = form.tableName.trim()
+  if (!tableName) {
+    timeColumnFields.value = []
+    return
+  }
+  const tableId = tableOptions.value.find((table) => table.tableName === tableName)?.tableId ?? ''
+  const signature = formSignature(form)
+  const wasClean = signature === baseline.value
+  try {
+    const fields = await resolveMonitorTableFields({ tableName, tableId })
+    if (request !== timeColumnRequest || form.tableName.trim() !== tableName) return
+    const untouched = formSignature(form) === signature
+    applyTimeColumnFields(fields)
+    // 异步带出的唯一候选属于系统补全，不算用户改动（同「唯一关联表」的处理）
+    if (wasClean && untouched) baseline.value = formSignature(form)
+  } catch {
+    if (request !== timeColumnRequest) return
+    applyTimeColumnFields([])
+  }
+}
+
 function mergeTableOptions(group: EntryTypeGroup | null): void {
   const merged: EntryType[] = [...(group?.list2 ?? []), ...(group?.list1 ?? []), ...(group?.list3 ?? [])]
   const seen = new Set<string>()
   const options: Array<{ tableId: string; tableName: string; label: string }> = []
+  const fieldsByName: Record<string, string[]> = {}
   for (const table of merged) {
     if (!table?.tableId || seen.has(table.tableId)) continue
     seen.add(table.tableId)
     options.push({ tableId: table.tableId, tableName: table.tableName, label: table.name || table.tableName })
+    const fields = (table.fields ?? [])
+      .filter((field) => !!field.prop)
+      .map((field) => field.prop.trim())
+      .filter(Boolean)
+    if (fields.length) fieldsByName[table.tableName] = fields
   }
   if (form.tableName && !options.some((table) => table.tableName === form.tableName)) {
     options.unshift({ tableId: form.tableName, tableName: form.tableName, label: '当前关联表' })
   }
   tableOptions.value = options
+  tableFieldsByName.value = fieldsByName
 }
 
 async function loadSourceContext(): Promise<void> {
@@ -276,6 +422,8 @@ async function loadSourceContext(): Promise<void> {
     if (detail?.name) form.sourceName = detail.name
     mergeTableOptions(group)
     if (!form.tableName && tableOptions.value.length === 1) form.tableName = tableOptions.value[0].tableName
+    // 关联表定下来后再出「入库时间字段」候选（唯一候选的自动选中同样算系统补全）
+    syncTimeColumnFields()
     // 异步带出的源名/唯一关联表是系统补全，不算用户改动；
     // 否则打开已有记录/新建表单会立刻显示「未保存」，关窗还要多一次无意义确认。
     if (stillClean) baseline.value = formSignature(form)
@@ -325,7 +473,15 @@ function onProviderChange(): void {
 }
 
 function onTableChange(): void {
-  if (!form.tableName) return
+  if (!form.tableName) {
+    timeColumnFields.value = []
+    form.timeColumn = ''
+    return
+  }
+  // 换表后旧表的时间列可能不存在：清空再由新表字段重新给候选（唯一候选自动选中）
+  form.timeColumn = ''
+  timeColumnFields.value = []
+  syncTimeColumnFields()
 }
 
 async function confirmDiscard(what: string): Promise<boolean> {
@@ -355,6 +511,8 @@ async function onSourceChanged(sourceId: string): Promise<void> {
   form.sourceId = sourceId
   form.sourceName = ''
   form.tableName = ''
+  form.timeColumn = ''
+  timeColumnFields.value = []
   await loadSourceContext()
 }
 
@@ -371,6 +529,8 @@ async function onSourcePicked(sourceId: string, name: string): Promise<void> {
   form.sourceId = sourceId
   form.sourceName = name
   form.tableName = ''
+  form.timeColumn = ''
+  timeColumnFields.value = []
   await loadSourceContext()
 }
 
@@ -387,6 +547,9 @@ function fillDescription(): void {
     sourceName: form.sourceName,
     tableName: form.tableName,
     methods: [...form.methods],
+    window: descriptionWindow.value,
+    nullPolicy: form.nullPolicy,
+    noDataPolicy: form.noDataPolicy,
   })
 }
 
@@ -424,7 +587,10 @@ async function onGenerate(): Promise<void> {
   generating.value = true
   generationError.value = ''
   generatingPreview.value = ''
+  generatingThinking.value = ''
   generationNote.value = ''
+  scriptExpanded.value = false
+  startElapsedTimer()
   const previous = { script: candidate.script, scriptPath: candidate.scriptPath }
   try {
     // 源没绑定流程时退回「按表单选定的主表」生成独立监控脚本（configId=0），不再直接报错
@@ -437,12 +603,22 @@ async function onGenerate(): Promise<void> {
       context,
       description: form.desc,
       methods: [...form.methods],
-      // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底
-      systemPrompt: form.systemPrompt.trim() || defaultSystemPrompt(),
+      // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底；
+      // 再追加主表真实字段与入库时间列，避免模型自己发明列名（实测失败原因之一）
+      systemPrompt: augmentMonitorSystemPrompt(
+        form.systemPrompt.trim() || defaultSystemPrompt(),
+        timeColumnFields.value,
+        form.timeColumn,
+      ),
       providerCode: form.providerCode,
       modelCode: form.modelCode,
       onContent: (scriptSoFar) => {
         generatingPreview.value = scriptSoFar
+        void scrollStreamToEnd()
+      },
+      onThinking: (text) => {
+        generatingThinking.value = appendThinking(generatingThinking.value, text)
+        void scrollStreamToEnd()
       },
     })
     if (!result.script.trim() && !result.scriptPath.trim()) {
@@ -466,8 +642,10 @@ async function onGenerate(): Promise<void> {
     generationError.value = errorText(error)
     ElMessage.error(`生成脚本失败：${generationError.value}`)
   } finally {
+    stopElapsedTimer()
     generating.value = false
     generatingPreview.value = ''
+    generatingThinking.value = ''
   }
 }
 
@@ -572,6 +750,11 @@ async function onSave(): Promise<void> {
   }
   saving.value = true
   try {
+    // 不阻断：执行器不传 --time-column 时脚本会自报「无法自动识别入库时间列」并退出，
+    // 比页面偷偷填一个假列名再跑错要好
+    if (form.kind === 'ai' && !form.timeColumn.trim()) {
+      ElMessage.warning('未选择入库时间字段：表里有多个时间列时脚本会自报错，本次仍会保存')
+    }
     const baseConf: MonitorCheckConf = recordState.value?.conf ?? {}
     const generated = pending.value && !!(candidate.script.trim() || candidate.scriptPath.trim())
     const baseVersion = versionOf(baseConf) || form.version
@@ -820,9 +1003,17 @@ defineExpose({
                     <div class="mc-readonly" data-testid="mc-range-table">{{ form.tableName || '—' }}</div>
                   </div>
                   <div class="mc-field">
-                    <span class="mc-label">时间范围</span>
-                    <div class="mc-readonly">当日 00:00 → 当前</div>
-                    <p class="mc-hint">按业务时区 Asia/Shanghai 切日</p>
+                    <label class="mc-label" for="mc-time-column">入库时间字段</label>
+                    <select
+                      id="mc-time-column"
+                      v-model="form.timeColumn"
+                      class="mc-input"
+                      data-testid="mc-time-column"
+                    >
+                      <option value="">请选择</option>
+                      <option v-for="column in timeColumnOptions" :key="column" :value="column">{{ column }}</option>
+                    </select>
+                    <p class="mc-hint">脚本按这一列统计；不确定时选表的入库时间列</p>
                   </div>
                   <div class="mc-field">
                     <label class="mc-label" for="mc-null-policy">字段值为空时</label>
@@ -840,6 +1031,46 @@ defineExpose({
                       <option value="unknown">结论未知</option>
                     </select>
                   </div>
+                </div>
+                <div class="mc-field mc-window-field">
+                  <span class="mc-label">检查窗口</span>
+                  <div class="mc-segment mc-window-segment">
+                    <button
+                      type="button"
+                      class="mc-segment-item"
+                      :class="{ active: form.windowType === 'today' }"
+                      data-testid="mc-window-today"
+                      @click="form.windowType = 'today'"
+                    >当日（00:00 → 现在）</button>
+                    <button
+                      type="button"
+                      class="mc-segment-item"
+                      :class="{ active: form.windowType === 'hours' }"
+                      data-testid="mc-window-hours"
+                      @click="form.windowType = 'hours'"
+                    >最近 N 小时</button>
+                    <button
+                      type="button"
+                      class="mc-segment-item"
+                      :class="{ active: form.windowType === 'period' }"
+                      data-testid="mc-window-period"
+                      @click="form.windowType = 'period'"
+                    >上一个周期</button>
+                  </div>
+                  <div v-if="form.windowType === 'hours'" class="mc-inline mc-window-hours">
+                    <span class="mc-label">小时数</span>
+                    <input
+                      id="mc-window-hours"
+                      v-model="form.windowHours"
+                      class="mc-input"
+                      type="number"
+                      min="1"
+                      max="720"
+                      step="1"
+                      data-testid="mc-window-hours-input"
+                    />
+                  </div>
+                  <p class="mc-hint" data-testid="mc-window-hint">{{ windowHint }}</p>
                 </div>
                 <div class="mc-grid">
                   <div class="mc-field">
@@ -898,15 +1129,63 @@ defineExpose({
               {{ needsRegenerateNotice }}
             </p>
 
-            <details v-if="displayedScript.trim()" class="mc-script-details">
-              <summary>查看脚本正文（{{ displayedScript.length }} 字 · {{ pending ? '待保存' : '生效中' }}）</summary>
-              <pre class="mc-script-body" data-testid="mc-script-body">{{ displayedScript }}</pre>
-            </details>
+            <div v-if="displayedScript.trim()" class="mc-script-preview" data-testid="mc-script-preview">
+              <div class="mc-script-preview-head">
+                <strong>脚本正文</strong>
+                <span class="mc-faint">{{ displayedScript.length }} 字 · {{ pending ? '待保存' : '生效中' }}</span>
+                <span class="mc-script-preview-ops">
+                  <button type="button" class="mc-linkbtn" data-testid="mc-script-copy" @click="onCopyScript">复制</button>
+                  <button
+                    v-if="displayedScript.length > 600"
+                    type="button"
+                    class="mc-linkbtn"
+                    data-testid="mc-script-toggle"
+                    @click="scriptExpanded = !scriptExpanded"
+                  >
+                    {{ scriptExpanded ? '收起' : '展开全部' }}
+                  </button>
+                </span>
+              </div>
+              <pre
+                class="mc-script-body"
+                :class="{ 'is-expanded': scriptExpanded }"
+                data-testid="mc-script-body"
+              >{{ displayedScript }}</pre>
+            </div>
             <p v-else-if="activePath.trim()" class="mc-script-path" data-testid="mc-script-path">
               生效脚本文件：{{ activePath }}（暂未取得正文）
             </p>
 
-            <p v-if="generatingPreview" class="mc-hint" data-testid="mc-generating">生成中，已收到 {{ generatingPreview.length }} 字符…</p>
+            <div v-if="generating" class="mc-stream" data-testid="mc-stream">
+              <div class="mc-stream-head">
+                <strong>
+                  <span class="mc-stream-dot" />
+                  {{ generatingPreview ? '模型正在生成代码' : '模型正在思考' }}
+                </strong>
+                <span class="mc-faint">
+                  {{ generatingElapsed.toFixed(1) }}s
+                  <template v-if="generatingPreview"> · 已接收 {{ generatingPreview.length }} 字</template>
+                  <template v-else-if="generatingThinking"> · 已思考 {{ generatingThinking.length }} 字</template>
+                </span>
+              </div>
+
+              <!-- 代码开始输出后，思考过程收进折叠区，把空间让给正文 -->
+              <template v-if="generatingPreview">
+                <details v-if="generatingThinking" class="mc-stream-think">
+                  <summary>思考过程（{{ generatingThinking.length }} 字）</summary>
+                  <pre class="mc-stream-think-body" data-testid="mc-stream-thinking">{{ generatingThinking }}</pre>
+                </details>
+                <pre ref="streamRef" class="mc-script-body mc-stream-body" data-testid="mc-generating">{{ generatingPreview }}</pre>
+              </template>
+
+              <!-- 思考阶段：模型只推 thinking，代码在思考结束后才开始 -->
+              <template v-else>
+                <p class="mc-stream-note">
+                  模型先思考、再输出代码；这一段不会出现代码，代码会在思考结束后逐字出现。
+                </p>
+                <pre ref="streamRef" class="mc-stream-think-body is-live" data-testid="mc-stream-thinking">{{ generatingThinking || '正在连接模型…' }}</pre>
+              </template>
+            </div>
             <p v-if="generationNote" class="mc-notice mc-notice-warn" data-testid="mc-generate-note">
               {{ generationNote }}
             </p>
@@ -1158,6 +1437,10 @@ defineExpose({
 .mc-segment { display: inline-flex; padding: 2px; border: 1px solid #cbd8ed; border-radius: 6px; background: var(--rc-bg); }
 .mc-segment-item { height: 26px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: var(--rc-text-2); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .mc-segment-item.active { background: var(--rc-primary); color: #fff; }
+.mc-window-field { margin-top: 12px; }
+.mc-window-segment { align-self: flex-start; flex-wrap: wrap; }
+.mc-window-hours { align-self: flex-start; }
+.mc-window-hours .mc-input { flex: none; width: 96px; }
 .mc-split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .mc-col-script { position: sticky; top: 0; }
 .mc-pane { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #dce5f3; border-radius: 8px; background: var(--rc-surface); }
@@ -1172,9 +1455,29 @@ defineExpose({
 .mc-script-title h4 { margin: 0 0 12px; font-size: 12px; }
 .mc-script-title p { margin: 0; }
 .mc-script-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.mc-script-details { min-width: 0; }
-.mc-script-details summary { color: var(--rc-primary); cursor: pointer; font-weight: 600; line-height: 1.6; }
-.mc-script-body { margin: 8px 0 0; padding: 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); color: var(--rc-text-2); font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mc-script-preview { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mc-script-preview-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--rc-text); }
+.mc-script-preview-ops { margin-left: auto; display: inline-flex; gap: 10px; }
+.mc-linkbtn { padding: 0; border: 0; background: none; color: var(--rc-primary); font-size: 12px; font-weight: 600; cursor: pointer; }
+.mc-linkbtn:hover { text-decoration: underline; }
+.mc-script-body { margin: 0; padding: 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); color: var(--rc-text-2); font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.mc-script-body.is-expanded { max-height: none; overflow: visible; }
+.mc-stream { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--rc-primary); border-radius: 8px; background: rgba(37, 99, 235, 0.03); min-width: 0; }
+.mc-stream-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--rc-text); }
+.mc-stream-head strong { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+/* 呼吸点：告诉用户“还在跑”，而不是卡住了 */
+.mc-stream-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rc-primary); animation: mc-pulse 1.2s ease-in-out infinite; }
+@keyframes mc-pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+.mc-stream-note { margin: 0; color: var(--rc-muted); font-size: 11.5px; line-height: 1.6; }
+/* 思考正文：等宽 + 自动滚到底，避免像一行乱码 */
+.mc-stream-think-body { margin: 0; padding: 8px 10px; max-height: 180px; overflow: auto; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.mc-stream-think-body.is-live { max-height: 220px; }
+/* 代码开始输出后，思考收进折叠区 */
+.mc-stream-think { border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #fff; }
+.mc-stream-think > summary { padding: 6px 10px; cursor: pointer; color: var(--rc-muted); font-size: 11.5px; user-select: none; }
+.mc-stream-think > summary:hover { color: var(--rc-primary); }
+.mc-stream-think > .mc-stream-think-body { border-radius: 0 0 6px 6px; max-height: 140px; background: #f8fafc; }
+.mc-stream-body { max-height: 280px; }
 .mc-script-path { margin: 0; padding: 8px 10px; background: var(--rc-bg); border-radius: 6px; color: var(--rc-text-2); overflow-wrap: anywhere; }
 .mc-test-result { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); min-width: 0; }
 .mc-test-head { display: flex; flex-wrap: wrap; gap: 6px; }

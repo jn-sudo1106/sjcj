@@ -76,6 +76,44 @@ async function entryWithFields(tableId: string | undefined, tableName: string): 
 }
 
 /**
+ * 主表字段清单（prop/itemCode 口径）。
+ *
+ * 与脚本生成共用同一条解析链（tableId → entryDetail，缺失时按「库.表」物理名精确找一次），
+ * 保证「入库时间字段」下拉里出现的就是生成时能看到的真实列，不会出现两套口径。
+ * 拿不到字段时返回空数组，调用方退回固定候选，不臆造列名。
+ */
+export async function resolveMonitorTableFields(fallback?: GenerationFallback): Promise<string[]> {
+  const entry = await entryWithFields(fallback?.tableId, (fallback?.tableName ?? '').trim())
+  if (!entry || !Array.isArray(entry.fields)) return []
+  return entry.fields.map((field) => (field.prop || '').trim()).filter(Boolean)
+}
+
+/** 提示词里最多列多少个真实字段（够模型写脚本，又不至于把上下文撑爆） */
+export const MAX_PROMPT_COLUMNS = 40
+
+/**
+ * 生成脚本用的系统提示词：追加主表真实字段清单与入库时间列。
+ *
+ * 实测跑失败的原因之一是模型自己发明列名（表里没有 inst_time 却写 inst_time），
+ * 所以把主表真实列（前 40 个）明确写进提示词；拿不到字段清单就跳过这段，不编造。
+ * 共享层的 defaultSystemPrompt() 不动，只在调用点做拼接。
+ */
+export function augmentMonitorSystemPrompt(
+  basePrompt: string,
+  fields: readonly string[] = [],
+  timeColumn = '',
+): string {
+  const columns = [...new Set(fields.map((field) => (field || '').trim()).filter(Boolean))].slice(0, MAX_PROMPT_COLUMNS)
+  const extras: string[] = []
+  if (columns.length) extras.push(`该表真实字段：${columns.join(', ')}（只能用这些列名，不要臆造）`)
+  const column = (timeColumn || '').trim()
+  if (column) extras.push(`按 ${column} 统计入库时间`)
+  const prompt = (basePrompt || '').trim()
+  if (!extras.length) return prompt
+  return prompt ? `${prompt}\n\n${extras.join('\n')}` : extras.join('\n')
+}
+
+/**
  * 源没有流程/监控节点时的兜底上下文：只按表单选定的主表生成。
  * configId 固定 0（独立监控，不关联画布节点）。
  */
@@ -191,7 +229,8 @@ export function extractScriptPathFromMessage(message: string): string {
  */
 export async function generateMonitorScript(input: GenerateScriptInput): Promise<GenerateScriptResult> {
   const payload = buildDataProcessGeneratePayload({
-    description: input.description,
+    // 占位符/「业务约定」这类空话会让模型只给说明和片段，发出前先清掉
+    description: stripDescriptionPlaceholders(input.description),
     configId: input.context.configId,
     providerCode: input.providerCode,
     model: input.modelCode,
@@ -219,9 +258,71 @@ export async function generateMonitorScript(input: GenerateScriptInput): Promise
   })
 
   const done = donePayload as { message?: string; scriptPath?: string; script?: string } | null
-  const script = (result?.script || done?.script || streamed || '').trim()
-  const scriptPath = (result?.scriptPath || done?.scriptPath || extractScriptPathFromMessage(done?.message ?? '')).trim()
+  const originalPath = (result?.scriptPath || done?.scriptPath || extractScriptPathFromMessage(done?.message ?? '')).trim()
+  if (!originalPath || !originalPath.endsWith('.py')) throw new Error('生成结果缺少有效的 Python 文件路径')
+  const raw = (result?.script || done?.script || streamed || '').trim() || await ruleApi.fileDownloadScript(originalPath)
+  const script = cleanMonitorPython(raw)
+  // Generation services may persist the whole model reply. Keep that original
+  // artifact and publish a separate code-only candidate before exposing its path.
+  const scriptPath = originalPath.replace(/\.py$/, '.monitor.py')
+  await ruleApi.fileUploadScript(scriptPath, script)
+  if ((await ruleApi.fileDownloadScript(scriptPath)).trim() !== script) throw new Error('脚本保存后回读不一致，未启用候选脚本')
   return { script, scriptPath, message: done?.message ?? '' }
+}
+
+/**
+ * 模型回复里可能夹着说明文字、多个围栏、甚至只有片段。
+ * 目标：能拿出一个像 Python 脚本的正文就接受；实在拿不到才报错，并把收到的内容写进错误里便于定位。
+ */
+export function cleanMonitorPython(raw: string): string {
+  const text = (raw || '').trim()
+  if (!text) throw new Error('生成结果为空：模型没有返回任何内容，未保存候选文件')
+
+  // 没有围栏：沿用旧行为，直接当正文（老模型/兜底纯文本流就是这样）
+  if (!text.includes('```')) return text
+
+  const blocks = [...text.matchAll(/```(?:python|py)?[ \t]*\r?\n([\s\S]*?)```/gi)]
+    .map((m) => (m[1] || '').trim())
+    .filter(Boolean)
+
+  if (!blocks.length) {
+    // 只有开围栏没有闭围栏 —— 通常是生成被截断
+    const hint = describeIncompleteReply(text)
+    throw new Error(`生成结果不完整：代码围栏没有闭合，可能被截断了，未保存候选文件（${hint}）`)
+  }
+  if (blocks.length === 1) return blocks[0]!
+
+  // 多个代码块：只在「恰好一个带 def main」时才敢取，否则不猜
+  const withMain = blocks.filter((code) => /def\s+main\s*\(/.test(code))
+  if (withMain.length === 1) return withMain[0]!
+  const hint = describeIncompleteReply(text)
+  throw new Error(`生成结果包含多个代码块，无法确定哪个是正式脚本：未保存候选文件（${hint}）`)
+}
+
+/** 把「收到的内容大概长什么样」压成一句，便于用户/我们判断是模型跑偏还是被截断 */
+function describeIncompleteReply(text: string): string {
+  const fences = (text.match(/```/g) || []).length
+  const head = text.replace(/\s+/g, ' ').slice(0, 60)
+  const tail = text.replace(/\s+/g, ' ').slice(-60)
+  const flags = [
+    fences ? `围栏 ${fences} 个` : '没有代码围栏',
+    /def\s+main\s*\(/.test(text) ? '含 def main(' : '没有 def main(',
+    `共 ${text.length} 字`,
+  ].join('、')
+  return `${flags}。开头：${head}… 结尾：…${tail}`
+}
+
+/**
+ * 业务描述里的【】占位符会让模型改写成「说明 + 片段」而不是完整脚本。
+ * 已有记录里的旧描述可能还带占位符，这里统一去掉括号并替换空话。
+ */
+export function stripDescriptionPlaceholders(text: string): string {
+  return (text || '')
+    .replace(/【([^】]{0,60})】/g, '$1')
+    .replace(/业务约定/g, '常规业务标准')
+    .replace(/空值政策/g, '既定空值口径')
+    .replace(/生效起点/g, '监控生效时间')
+    .trim()
 }
 
 export interface MonitorTestOutcome {
@@ -263,5 +364,9 @@ export async function testMonitorScript(scriptPath: string, timeout = 60): Promi
   const path = (scriptPath ?? '').trim()
   if (!path) throw new Error('缺少脚本文件路径：无法执行测试')
   const raw = await ruleApi.executeCode({ codePath: path, timeout })
+  if (raw === null || typeof raw !== 'object') throw new Error('执行器未返回可确认的执行回执')
+  const receipt = raw as Record<string, unknown>
+  if (receipt.success !== true && receipt.ok !== true) throw new Error(summarizeExecutionResult(raw))
+  if (receipt.success === false || receipt.ok === false) throw new Error(summarizeExecutionResult(raw))
   return { ok: true, summary: summarizeExecutionResult(raw), raw }
 }

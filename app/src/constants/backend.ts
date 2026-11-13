@@ -13,8 +13,10 @@ export const DEFAULT_SYNC_PLATFORM_PROXY_TARGET = 'http://127.0.0.1:9999'
 /** test：连 186 测试环境的 Nginx 9999 端口转发 /api/sync-platform。 */
 export const TEST_SYNC_PLATFORM_PROXY_TARGET = 'http://124.223.180.186:9999'
 
-/** 写保护 / 顶栏「生产环境」徽标按主机名判定；dev 与 test 默认目标都不在这台，不触发守卫。 */
-export const PRODUCTION_BACKEND_HOSTS = ['115.227.21.133']
+/** 写保护 / 顶栏「生产环境」徽标按主机名判定；dev 与 test 默认目标都不在这台，不触发守卫。
+ *  2026-11-12：2807（133）的业务后端改指内网 192.168.1.30:9999，写保护主机同步加上它
+ *  （115.227.21.133 保留：存量包和同环境的公网入口还在用）。 */
+export const PRODUCTION_BACKEND_HOSTS = ['115.227.21.133', '192.168.1.30']
 
 /** 源问题写保护的直连目标和网关入口，含网关候选容器直连端口。 */
 export const SOURCE_ISSUE_WRITE_BLOCKED_HOSTS = [...PRODUCTION_BACKEND_HOSTS, '118.25.96.217', 'app217']
@@ -29,15 +31,17 @@ export const SOURCE_ISSUE_WRITE_BLOCKED_GATEWAYS = [
  * 186 不在 PRODUCTION_BACKEND_HOSTS 里，写保护本就不拦它；这里只解决 siteCreate 的独立闸门。
  * 133 测试环境（2807）2026-10-13 用户拍板放开：网站下添加源 / 批量导入要能真建源。
  */
-export const CREATE_ALLOWED_BACKEND_HOSTS = ['118.25.96.217', '124.223.180.186', '115.227.21.133']
+export const CREATE_ALLOWED_BACKEND_HOSTS = ['118.25.96.217', '124.223.180.186', '115.227.21.133', '192.168.1.30']
 
 /**
  * 数据同步服务（sync-platform）所在环境的后端主机。同步服务按它自己连的库列源表，
  * 前端连的后端不是这台时（如 2806 连 217），数据中心的表和同步服务对不上。
  * 2026-10-31：npm run test 下同步服务切至 186 环境，同时保留 133 兼容。
+ * 2026-11-12：同步服务随 133 环境内网化，2807 的后端主机是 192.168.1.30，这里同步加上它，
+ * 否则数据中心「同步到其他环境」按钮会消失（同 9f7c1360 的教训）。
  */
 export const SYNC_PLATFORM_BACKEND_HOST = '124.223.180.186'
-export const SYNC_PLATFORM_BACKEND_HOSTS = ['124.223.180.186', '115.227.21.133']
+export const SYNC_PLATFORM_BACKEND_HOSTS = ['124.223.180.186', '115.227.21.133', '192.168.1.30']
 /**
  * 旧 ai-chat-view（大模型问答 POC）的模板配置服务前缀（1013 迁入 SQL 模板配置）。
  * 它**不在 9999 业务后端上**，是独立进程，真实路径形如 /api/poc/sql-temp/page，

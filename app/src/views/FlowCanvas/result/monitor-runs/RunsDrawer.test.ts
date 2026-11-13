@@ -45,6 +45,7 @@ function legacyRun(over: Partial<MonitorRunView> = {}): MonitorRunView {
 function structuredRun(over: Partial<MonitorRunView> = {}): MonitorRunView {
   return {
     id: 'r2',
+    runId: 'run-20261111-0001',
     monitorId: 'm1',
     sourceId: 's1',
     monitorName: '字段完整性',
@@ -53,7 +54,8 @@ function structuredRun(over: Partial<MonitorRunView> = {}): MonitorRunView {
     exec: 'failed',
     data: 'abnormal',
     notify: 'accepted',
-    count: '',
+    count: '100',
+    checkedCount: 100,
     abnormalCount: 3,
     window: { start: '2026-11-11 00:00:00', end: '2026-11-11 23:59:59', timezone: 'Asia/Shanghai' },
     config: {
@@ -120,13 +122,51 @@ describe('RunsDrawer · 列表层', () => {
 
     expect(wrapper.findAll('[data-testid="run-legacy-tag"]')).toHaveLength(1)
     const counts = wrapper.findAll('[data-testid="run-count"]').map((node) => node.text())
+    // 旧日志保持现状：显示 run.count，不解析中文日志
     expect(counts).toContain('1240')
-    expect(counts).toContain('—')
+    // 结构化运行：检查 / 异常都来自结构化字段
+    expect(counts.some((text) => text.includes('检查 100 条') && text.includes('异常 3 条'))).toBe(true)
 
     const notifyTexts = wrapper.findAll('[data-testid="run-notify"]').map((node) => node.text())
     expect(notifyTexts).toContain('已受理·未送达')
     expect(notifyTexts).toContain('未取得回执')
     expect(notifyTexts.join(' ')).not.toContain('已送达')
+  })
+
+  it('条数：有结构化值时显示「检查 N 条 · 异常 M 条」，异常 > 0 错误色、= 0 中性色', async () => {
+    vi.spyOn(monitorCenter, 'listRuns').mockResolvedValue({
+      total: 2,
+      list: [
+        structuredRun({ abnormalCount: 3 }),
+        structuredRun({ id: 'r3', runId: 'run-20261111-0002', checkedCount: 0, abnormalCount: 0, count: '0' }),
+      ],
+    })
+    const wrapper = mountDrawer()
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="run-count-abnormal"]')).toHaveLength(2)
+    const rows = wrapper.findAll('[data-testid="run-count"]')
+    expect(rows[0].text()).toContain('检查 100 条')
+    expect(rows[0].text()).toContain('异常 3 条')
+    expect(rows[1].text()).toContain('异常 0 条')
+
+    const abnormal = wrapper.findAll('[data-testid="run-count-abnormal"]')
+    expect(abnormal[0].classes()).toContain('is-err')
+    expect(abnormal[1].classes()).toContain('is-muted')
+  })
+
+  it('条数：旧日志没有结构化值时不出现「检查 / 异常」分段，未知仍是「—」', async () => {
+    vi.spyOn(monitorCenter, 'listRuns').mockResolvedValue({
+      total: 2,
+      list: [legacyRun(), legacyRun({ id: 'l2', count: '' })],
+    })
+    const wrapper = mountDrawer()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="run-count-abnormal"]').exists()).toBe(false)
+    const counts = wrapper.findAll('[data-testid="run-count"]').map((node) => node.text())
+    expect(counts).toEqual(['1240', '—'])
+    expect(wrapper.findAll('[data-testid="run-legacy-tag"]')).toHaveLength(2)
   })
 
   it('检查项维度：入参带 monitorId + sourceId，范围文案是「当前检查项」', async () => {
@@ -205,12 +245,13 @@ describe('RunsDrawer · 单次详情层', () => {
     expect(wrapper.get('[data-testid="detail-data"]').text()).toBe('数据异常')
     expect(wrapper.get('[data-testid="detail-notify"]').text()).toBe('已受理 · 未确认送达')
 
-    // 条数未知显示 —，异常条数 3
-    const detailText = wrapper.text()
-    expect(detailText).toContain('—')
-    expect(detailText).toContain('3')
-    // 数据范围含时区（C06）
-    expect(detailText).toContain('Asia/Shanghai')
+    // 结论区「检查 / 异常」只认结构化字段；runId 与窗口（含时区）也来自本次运行
+    const conclusionText = wrapper.get('[data-testid="run-detail-conclusion"]').text()
+    expect(conclusionText).toContain('检查 / 异常')
+    expect(conclusionText).toContain('100 / 3')
+    expect(conclusionText).toContain('run-20261111-0001')
+    const rangeText = wrapper.get('[data-testid="run-detail-range"]').text()
+    expect(rangeText).toContain('2026-11-11 00:00:00 → 2026-11-11 23:59:59（Asia/Shanghai）')
     // 逐方法逐表
     expect(wrapper.get('[data-testid="run-detail-checks"]').text()).toContain('必填字段非空')
     // 冻结快照
@@ -235,6 +276,11 @@ describe('RunsDrawer · 单次详情层', () => {
     await wrapper.get('[data-testid="run-detail"]').trigger('click')
     expect(wrapper.get('[data-testid="run-detail-legacy"]').text()).toBe('旧日志')
     expect(wrapper.get('[data-testid="run-legacy-note"]').text()).toContain('旧日志，未取得结构化结论')
+    // 结论区的「检查 / 异常」直接给降级文案，不把日志文本里的 1240 当检查数
+    const conclusionText = wrapper.get('[data-testid="run-detail-conclusion"]').text()
+    expect(conclusionText).toContain('检查 / 异常')
+    expect(conclusionText).toContain('旧日志，未取得结构化结论')
+    expect(conclusionText).not.toContain('1240')
     expect(wrapper.get('[data-testid="run-snapshot-missing"]').text()).toContain('未记录')
     expect(wrapper.get('[data-testid="run-checks-empty"]').text()).toContain('未记录逐项结果')
     expect(wrapper.get('[data-testid="run-log-text"]').text()).toContain('数量:1240')

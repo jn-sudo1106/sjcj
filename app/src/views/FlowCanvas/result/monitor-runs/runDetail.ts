@@ -20,7 +20,6 @@ import {
   execTone,
   notifyTextOf,
   notifyTone,
-  runCountText,
   type RunTone,
 } from './runScope'
 
@@ -68,22 +67,35 @@ export function triggerTextOf(trigger: MonitorRunView['trigger']): string {
   return TRIGGER_TEXT[trigger] ?? TRIGGER_TEXT.unknown
 }
 
-/** 结论区的文字字段（执行/数据/通知三个状态由页面用色标渲染，不在这里重复）。 */
+/**
+ * 结论区的文字字段（执行/数据/通知三个状态由页面用色标渲染，不在这里重复）。
+ *
+ * 「检查 / 异常」只认结构化值（checkedCount / abnormalCount），未知写「—」、不补 0；
+ * 旧日志拿不到结构化结论时这一行直接写降级文案，不把中文日志里抠出来的条数当成检查数。
+ * runId 是 C06 的运行主键，和旧日志的 logId 不是一回事：没有 runId 时只展示日志 ID。
+ */
 export function summaryFields(run: MonitorRunView): DetailField[] {
-  const fields: DetailField[] = [
-    {
-      label: '检查条数',
-      value: runCountText(run),
-      missing: runCountText(run) === '—',
-    },
-    {
-      label: '异常条数',
-      value: countTextOf(run.abnormalCount),
-      missing: run.abnormalCount == null,
-    },
-    { label: '触发方式', value: triggerTextOf(run.trigger) },
-    { label: '运行 ID', value: valueText(run.id), mono: true, missing: !run.id },
-  ]
+  const fields: DetailField[] = []
+
+  if (run.legacy) {
+    fields.push({ label: '检查 / 异常', value: LEGACY_NOTE, missing: true })
+  } else {
+    fields.push({
+      label: '检查 / 异常',
+      value: `${countTextOf(run.checkedCount)} / ${countTextOf(run.abnormalCount)}`,
+      missing: run.checkedCount == null && run.abnormalCount == null,
+    })
+  }
+
+  fields.push({ label: '触发方式', value: triggerTextOf(run.trigger) })
+
+  const runId = (run.runId ?? '').trim()
+  if (runId) {
+    fields.push({ label: '运行 ID', value: runId, mono: true })
+  } else if ((run.id ?? '').trim()) {
+    fields.push({ label: '日志 ID', value: run.id, mono: true })
+  }
+
   const message = (run.message ?? '').trim()
   if (message) fields.push({ label: '执行消息', value: message, wide: true })
   return fields
@@ -91,16 +103,21 @@ export function summaryFields(run: MonitorRunView): DetailField[] {
 
 /**
  * 数据范围：窗口 + 时区。
- * 时区是运行冻结口径的一部分，缺失写「未记录」——不能拿浏览器本地时区顶替。
+ * 展示格式 `start → end（时区）`；时区缺失只显示区间，绝不拿浏览器本地时区顶替。
  */
-export function windowFields(run: MonitorRunView): DetailField[] {
+export function windowTextOf(run: MonitorRunView): string {
   const start = (run.window?.start ?? '').trim()
   const end = (run.window?.end ?? '').trim()
-  const range = start && end ? `${start} ~ ${end}` : start || end
-  return [
-    { label: '时间窗口', value: range || MISSING_TEXT, mono: true, missing: !range },
-    { label: '时区', value: valueText(run.window?.timezone), missing: !(run.window?.timezone ?? '').trim() },
-  ]
+  const timezone = (run.window?.timezone ?? '').trim()
+  const range = start && end ? `${start} → ${end}` : start || end
+  if (!range) return MISSING_TEXT
+  return timezone ? `${range}（${timezone}）` : range
+}
+
+export function windowFields(run: MonitorRunView): DetailField[] {
+  const value = windowTextOf(run)
+  // 整行展示：窗口 + 时区拼起来在 13.6 寸下超过半行，单独一行避免省略/换行错位。
+  return [{ label: '时间窗口', value, mono: true, missing: value === MISSING_TEXT, wide: true }]
 }
 
 function sampleText(samples: MonitorRunCheck['samples']): string {

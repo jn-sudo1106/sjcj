@@ -73,7 +73,7 @@ import {
   handleMockCleanLegacy,
 } from './sysMenu'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
-import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckSummary, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
+import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckSummary, mockSourceSummaryStats, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
   mockMqCheckPaged,
   mockMqCheckAdd,
@@ -511,6 +511,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 源监控（数据源告警，0910 迁入；内存表让写操作在 mock 下也能真落库）
   'source/check/paged': mockSourceCheckPaged,
   'source/check/sourceSummary': mockSourceCheckSummary,
+  'source/check/sourceSummaryStats': mockSourceSummaryStats,
   'source/check/paged-logs': mockSourceCheckLogs,
   'source/check/add': mockSourceCheckAdd,
   'source/check/update': mockSourceCheckUpdate,

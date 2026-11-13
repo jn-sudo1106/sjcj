@@ -15,6 +15,7 @@ const EP = {
   lastRun: 'source/lastRun',
   /** C07 首期：源维度聚合（服务端按源分页，含未配置检查的源） */
   sourceSummary: 'source/check/sourceSummary',
+  sourceSummaryStats: 'source/check/sourceSummaryStats',
 } as const
 
 // ---- 入参适配：旧平台用 pageNo/pageSize，新平台 mock + client.ts 契约统一 page/limit ----
@@ -42,6 +43,11 @@ export function pagedSourceCheck(query: SourceCheckQuery): Promise<Paged<SourceC
  */
 export function pagedSourceSummary(query: Record<string, unknown>): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>(EP.sourceSummary, adaptPage(query), { method: 'GET' })
+}
+
+/** 源维度聚合的全站/本组统计（不分页，只按 siteId+keyword 收范围） */
+export function pagedSourceSummaryStats(query: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(EP.sourceSummaryStats, adaptPage(query), { method: 'GET' })
 }
 
 /** 分页查询源检查历史日志 */

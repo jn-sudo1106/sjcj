@@ -17,6 +17,7 @@ import {
   pagedCheckJobLogs,
   pagedSourceCheck,
   pagedSourceSummary,
+  pagedSourceSummaryStats,
   updateSourceCheck,
 } from './monitor'
 import type { SourceCheck, SourceCheckLog } from './types/monitor'
@@ -453,6 +454,56 @@ function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
  * 拉服务端源聚合（C07 首期）。
  * 不可用时返回 `unavailable: true`，页面回落到「只列已配置源」的老路径——**不要**用前端拼全量源目录顶替。
  */
+export interface SourceSummaryStats {
+  available: boolean
+  totalSources: number
+  configuredSources: number
+  enabledSources: number
+  abnormalSources: number
+  uncheckedSources: number
+  notConfiguredSources: number
+}
+
+/**
+ * 全站/本组统计（C07）：与分页列表同一范围口径（siteId + keyword），不吃页内筛选。
+ * 取不到时 available=false，页面显示「—」，绝不填 0 冒充「没有异常」。
+ */
+export async function loadSourceSummaryStats(
+  options: { siteId?: string; keyword?: string } = {},
+): Promise<SourceSummaryStats> {
+  const empty: SourceSummaryStats = {
+    available: false,
+    totalSources: 0,
+    configuredSources: 0,
+    enabledSources: 0,
+    abnormalSources: 0,
+    uncheckedSources: 0,
+    notConfiguredSources: 0,
+  }
+  try {
+    const res = (await pagedSourceSummaryStats({
+      siteId: options.siteId,
+      keyword: options.keyword,
+    })) as Record<string, unknown> | undefined
+    if (!res) return empty
+    const num = (key: string) => {
+      const value = Number(res[key])
+      return Number.isFinite(value) ? value : 0
+    }
+    return {
+      available: true,
+      totalSources: num('totalSources'),
+      configuredSources: num('configuredSources'),
+      enabledSources: num('enabledSources'),
+      abnormalSources: num('abnormalSources'),
+      uncheckedSources: num('uncheckedSources'),
+      notConfiguredSources: num('notConfiguredSources'),
+    }
+  } catch {
+    return empty
+  }
+}
+
 export interface SourceSummaryQuery {
   siteId?: string
   keyword?: string

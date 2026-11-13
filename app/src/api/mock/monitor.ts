@@ -194,6 +194,18 @@ export function mockSourceCheckSummary(params?: Record<string, unknown>): Record
   return { total: rows.length, list: rows }
 }
 
+/** 源维度聚合统计（C07）：演示口径，只用于 mock 模式页面不至于空白。 */
+export function mockSourceSummaryStats(): Record<string, unknown> {
+  return {
+    totalSources: 140730,
+    configuredSources: 754,
+    enabledSources: 282,
+    abnormalSources: 236,
+    uncheckedSources: 0,
+    notConfiguredSources: 139976,
+  }
+}
+
 /** 变更启停（真实改内存表）。enable: 0=启用 → isDelete=0；1=停用 → isDelete=1 */
 export function mockSourceCheckChangeEnable(params?: Record<string, unknown>) {
   const ids = String(params?.ids ?? '').split(',').filter(Boolean)

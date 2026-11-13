@@ -20,6 +20,7 @@ import {
   summaryFields,
   triggerTextOf,
   windowFields,
+  windowTextOf,
 } from './runDetail'
 
 function run(over: Partial<MonitorRunView> = {}): MonitorRunView {
@@ -40,21 +41,47 @@ function run(over: Partial<MonitorRunView> = {}): MonitorRunView {
 }
 
 describe('summaryFields · 结论与实际数值', () => {
-  it('异常条数未知 → 「未记录」；检查条数未知 → 「—」；0 不省略', () => {
-    const fields = summaryFields(run({ count: '', abnormalCount: undefined }))
-    const byLabel = Object.fromEntries(fields.map((field) => [field.label, field]))
-    expect(byLabel['检查条数'].value).toBe('—')
-    expect(byLabel['检查条数'].missing).toBe(true)
-    expect(byLabel['异常条数'].value).toBe('—')
-    expect(byLabel['异常条数'].missing).toBe(true)
-    expect(byLabel['触发方式'].value).toBe('旧日志')
-
-    const zero = Object.fromEntries(
-      summaryFields(run({ count: '0', abnormalCount: 0 })).map((field) => [field.label, field]),
+  it('结构化运行：「检查 / 异常」显示 checkedCount / abnormalCount，未知写「—」', () => {
+    const known = Object.fromEntries(
+      summaryFields(run({ legacy: false, checkedCount: 100, abnormalCount: 3 })).map((field) => [field.label, field]),
     )
-    expect(zero['检查条数'].value).toBe('0')
-    expect(zero['异常条数'].value).toBe('0')
-    expect(zero['检查条数'].missing).toBeFalsy()
+    expect(known['检查 / 异常'].value).toBe('100 / 3')
+    expect(known['检查 / 异常'].missing).toBeFalsy()
+
+    const unknown = Object.fromEntries(
+      summaryFields(run({ legacy: false, checkedCount: undefined, abnormalCount: undefined })).map(
+        (field) => [field.label, field],
+      ),
+    )
+    expect(unknown['检查 / 异常'].value).toBe('— / —')
+    expect(unknown['检查 / 异常'].missing).toBe(true)
+  })
+
+  it('0 是有效值，不省略成「—」', () => {
+    const fields = Object.fromEntries(
+      summaryFields(run({ legacy: false, checkedCount: 0, abnormalCount: 0 })).map((field) => [field.label, field]),
+    )
+    expect(fields['检查 / 异常'].value).toBe('0 / 0')
+    expect(fields['检查 / 异常'].missing).toBe(false)
+  })
+
+  it('run.runId 优先展示为运行 ID；旧日志没有 runId 时展示日志 ID，不冒充运行 ID', () => {
+    const structured = Object.fromEntries(
+      summaryFields(run({ legacy: false, runId: 'run-20261111-0001' })).map((field) => [field.label, field]),
+    )
+    expect(structured['运行 ID'].value).toBe('run-20261111-0001')
+    expect(structured['运行 ID'].mono).toBe(true)
+
+    const legacy = Object.fromEntries(summaryFields(run()).map((field) => [field.label, field]))
+    expect(legacy['运行 ID']).toBeUndefined()
+    expect(legacy['日志 ID'].value).toBe('l1')
+  })
+
+  it('旧日志：「检查 / 异常」直接写降级文案，不回中文日志里抠条数', () => {
+    // 旧日志 count 是 1240（从日志文本解析），不能当成结构化检查数
+    const legacy = Object.fromEntries(summaryFields(run({ count: '1240' })).map((field) => [field.label, field]))
+    expect(legacy['检查 / 异常'].value).toBe(LEGACY_NOTE)
+    expect(legacy['检查 / 异常'].missing).toBe(true)
   })
 
   it('执行消息存在才占一整行', () => {
@@ -70,19 +97,27 @@ describe('summaryFields · 结论与实际数值', () => {
   })
 })
 
-describe('windowFields · 数据范围（窗口 + 时区）', () => {
-  it('窗口和时区缺失都写「未记录」，不拿浏览器时区补', () => {
+describe('windowFields / windowTextOf · 数据范围（窗口 + 时区）', () => {
+  it('窗口缺失写「未记录」，不拿浏览器时区补', () => {
     const fields = windowFields(run())
-    expect(fields.map((field) => field.value)).toEqual([MISSING_TEXT, MISSING_TEXT])
-    expect(fields.every((field) => field.missing)).toBe(true)
+    expect(fields).toHaveLength(1)
+    expect(fields[0].value).toBe(MISSING_TEXT)
+    expect(fields[0].missing).toBe(true)
+    expect(fields[0].wide).toBe(true)
+    expect(windowTextOf(run())).toBe(MISSING_TEXT)
   })
 
-  it('C06 的时区字段按原样展示', () => {
+  it('有窗口时按 start → end（时区）展示，时区缺失只显示区间', () => {
     const fields = windowFields(
       run({ window: { start: '2026-11-11 00:00:00', end: '2026-11-11 23:59:59', timezone: 'Asia/Shanghai' } }),
     )
-    expect(fields[0].value).toBe('2026-11-11 00:00:00 ~ 2026-11-11 23:59:59')
-    expect(fields[1].value).toBe('Asia/Shanghai')
+    expect(fields[0].value).toBe('2026-11-11 00:00:00 → 2026-11-11 23:59:59（Asia/Shanghai）')
+    expect(fields[0].missing).toBe(false)
+
+    expect(windowTextOf(run({ window: { start: '2026-11-11 00:00:00', end: '2026-11-11 23:59:59' } }))).toBe(
+      '2026-11-11 00:00:00 → 2026-11-11 23:59:59',
+    )
+    expect(windowTextOf(run({ window: { start: '2026-11-11 00:00:00' } }))).toBe('2026-11-11 00:00:00')
   })
 })
 

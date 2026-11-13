@@ -1,0 +1,714 @@
+/* 流程中心「模板 → 实例」页面样式。
+ *
+ * 视觉语言直接复用项目设计系统（`app/src/design/tokens.css` 的 --rc-* 令牌与
+ * rc-card / rc-toolbar / rc-data-table 等通用类 + Element Plus 组件），
+ * **不再照搬交互原型 HTML 里的自定义 CSS**——原型是独立演示页，字号、间距、
+ * 边框/阴影与产品其它页面（采集资产、系统设置、数据查看）不在一个体系里，
+ * 直接抄过来会「看着像另一个系统」。
+ *
+ * 这里只保留三类东西：
+ * 1) 页面骨架（头部 / 工具条 / 左右两栏布局）；
+ * 2) 原型独有的可视元素（结构预览节点链、左栏模板条目、实例行内两行文字）；
+ * 3) 组件与页面共用的状态块（空态 / 错误态 / 分页脚注）。
+ * 交互控件（输入框、下拉、按钮、分页、抽屉、弹窗）一律用 Element Plus 自带样式。
+ *
+ * 所有选择器都挂在 `.fc-root` 下：`.node` / `.on` / `.pager` 这类类名在画布、
+ * 数据表页也会出现，不收进作用域会互相污染。
+ */
+.fc-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  color: var(--rc-text);
+  font-size: 13px;
+  line-height: 1.55;
+  box-sizing: border-box;
+}
+
+.fc-root * {
+  box-sizing: border-box;
+}
+
+/* ---------- 页头 ---------- */
+.fc-root .fc-page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.fc-root .fc-crumb {
+  margin-bottom: 4px;
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+.fc-root .fc-crumb i {
+  margin: 0 6px;
+  color: var(--rc-faint);
+  font-style: normal;
+}
+
+.fc-root .fc-title {
+  margin: 0;
+  color: var(--rc-text);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.fc-root .fc-desc {
+  margin: 6px 0 0;
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+.fc-root .fc-desc b {
+  color: var(--rc-text-2);
+  font-weight: 700;
+}
+
+.fc-root .fc-head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-top: 2px;
+}
+
+/* 三个视图共用页头和导航，切换后不会丢失返回入口。 */
+.fc-root .fc-view-tabs {
+  display: flex;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rc-border-soft);
+}
+.fc-root .fc-legacy-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.fc-root .fc-legacy-view .fc-group-layout {
+  grid-template-columns: 216px minmax(0, 1fr);
+}
+.fc-root .fc-legacy-view .fc-table-wrap { overflow-x: auto; }
+.fc-root .fc-legacy-view .fc-template-groups {
+  padding: 8px;
+  border-color: var(--rc-border);
+  box-shadow: var(--rc-shadow);
+}
+.fc-root .fc-legacy-view .fc-template-group.active {
+  background: var(--rc-active-fill);
+  box-shadow: inset 3px 0 0 var(--rc-primary);
+}
+
+/* ---------- 工具条 ---------- */
+.fc-root .fc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
+  box-shadow: var(--rc-shadow);
+}
+
+.fc-root .fc-toolbar .fc-search {
+  width: 260px;
+}
+
+.fc-root .fc-toolbar .fc-select {
+  width: 132px;
+}
+
+.fc-root .fc-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 分段切换：观感对齐 Element 的 radio-button 组 */
+.fc-root .fc-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rc-border);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.fc-root .fc-seg button {
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--rc-text-2);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.fc-root .fc-seg button:hover {
+  color: var(--rc-primary-ink);
+}
+
+.fc-root .fc-seg button.on {
+  background: #fff;
+  color: var(--rc-primary-ink);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.fc-root .fc-seg button b {
+  margin-left: 4px;
+  color: var(--rc-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fc-root .fc-seg button.on b {
+  color: var(--rc-primary);
+}
+
+/* ---------- 左右两栏 ---------- */
+.fc-root .fc-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fc-root .fc-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* ---------- 左栏：模板列表 ---------- */
+.fc-root .fc-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 248px;
+  max-height: none;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
+  box-shadow: var(--rc-shadow);
+  overflow: hidden;
+}
+
+.fc-root .fc-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--rc-border-soft);
+  color: var(--rc-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fc-root .fc-rail-head em {
+  color: var(--rc-muted);
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.fc-root .fc-rail-body {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  overflow: auto;
+}
+
+.fc-root .fc-rail-item {
+  display: block;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.fc-root .fc-rail-item + .fc-rail-item {
+  margin-top: 2px;
+}
+
+.fc-root .fc-rail-item:hover {
+  background: #f6f9fe;
+}
+
+.fc-root .fc-rail-item.on {
+  background: var(--rc-active-fill);
+  box-shadow: inset 3px 0 0 var(--rc-primary);
+}
+
+.fc-root .fc-rail-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--rc-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.fc-root .fc-rail-item.on .fc-rail-name {
+  color: var(--rc-primary-ink);
+}
+
+.fc-root .fc-rail-name .dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: #cbd5e1;
+}
+
+.fc-root .fc-rail-item.on .fc-rail-name .dot {
+  background: var(--rc-primary);
+}
+
+.fc-root .fc-rail-shape {
+  margin-top: 3px;
+  color: var(--rc-muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.fc-root .fc-rail-shape i {
+  margin: 0 3px;
+  color: var(--rc-faint);
+  font-style: normal;
+}
+
+.fc-root .fc-rail-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 3px;
+  color: var(--rc-muted);
+  font-size: 11px;
+}
+
+.fc-root .fc-rail-meta b {
+  color: var(--rc-text-2);
+  font-weight: 700;
+}
+
+.fc-root .fc-rail-divider {
+  height: 1px;
+  margin: 8px 4px;
+  background: var(--rc-border-soft);
+}
+
+.fc-root .fc-rail-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--rc-text-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fc-root .fc-rail-entry:hover {
+  background: #f6f9fe;
+}
+
+.fc-root .fc-rail-entry.on {
+  background: var(--rc-active-fill);
+  color: var(--rc-primary-ink);
+  box-shadow: inset 3px 0 0 var(--rc-primary);
+}
+
+.fc-root .fc-rail-entry .n {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: var(--rc-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fc-root .fc-rail-entry.warn .n {
+  background: var(--rc-warn-bg);
+  color: var(--rc-warn);
+}
+
+.fc-root .fc-rail-note {
+  margin: 8px 4px 2px;
+  color: var(--rc-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 模板视图标题条：模板名 + 实例数 + 右侧「另存为新模板」 */
+.fc-root .fc-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  padding: 0 2px;
+  color: var(--rc-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.fc-root .fc-bar .el-tag {
+  font-weight: 500;
+}
+
+/* ---------- 结构预览 ---------- */
+.fc-root .fc-struct {
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
+  box-shadow: var(--rc-shadow);
+  overflow: hidden;
+}
+
+.fc-root .fc-struct-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rc-border-soft);
+  color: var(--rc-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fc-root .fc-struct-head b {
+  color: var(--rc-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.fc-root .fc-struct-head .lock {
+  margin-left: auto;
+  color: var(--rc-muted);
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.fc-root .fc-chain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+
+.fc-root .fc-chain .node {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--rc-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fc-root .fc-chain .node i {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--rc-primary);
+}
+
+.fc-root .fc-chain .node small {
+  color: var(--rc-muted);
+  font-size: 11px;
+}
+
+.fc-root .fc-chain .node.rule {
+  border-color: #bfdbfe;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+}
+
+.fc-root .fc-chain .node.out {
+  border-color: #bbf7d0;
+  background: var(--rc-ok-bg);
+  color: var(--rc-ok);
+}
+
+.fc-root .fc-chain .arw {
+  flex: none;
+  color: var(--rc-faint);
+  font-size: 12px;
+}
+
+/* ---------- 实例表格 ---------- */
+.fc-root .fc-table-card {
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface);
+  box-shadow: var(--rc-shadow);
+  overflow: hidden;
+}
+
+.fc-root .fc-table-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rc-border-soft);
+  color: var(--rc-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fc-root .fc-table-head b {
+  color: var(--rc-primary-ink);
+  font-weight: 700;
+}
+
+.fc-root .fc-table-head .fc-sub {
+  color: var(--rc-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.fc-root .fc-table-head .fc-spacer {
+  flex: 1;
+}
+
+.fc-root .fc-table-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* 给操作列明确留位；不足时只滚表格，不让表格撑宽整页。 */
+.fc-root .fc-instance-table {
+  width: 100%;
+  min-width: 1050px;
+  table-layout: fixed;
+}
+.fc-root .fc-col-name { width: 23%; }
+.fc-root .fc-col-site { width: 12%; }
+.fc-root .fc-col-summary { width: 21%; }
+.fc-root .fc-col-count { width: 88px; text-align: right; }
+.fc-root .fc-col-updated { width: 112px; }
+.fc-root .fc-col-actions { width: 242px; }
+.fc-root .fc-instance-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fc-root .fc-instance-table .fc-isub {
+  overflow-wrap: anywhere;
+}
+.fc-root .fc-instance-table .fc-cfgsum {
+  display: block;
+  max-width: 100%;
+}
+.fc-root .fc-instance-table .fc-cfgsum .arw { margin: 0 4px; }
+.fc-root .fc-section-label { font-weight: 600; }
+.fc-root .fc-bar-note {
+  color: var(--rc-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.fc-root .rc-data-table th {
+  font-size: 12px;
+}
+
+.fc-root .rc-data-table td {
+  font-size: 12px;
+}
+
+.fc-root .fc-iname {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--rc-text);
+  font-weight: 600;
+}
+
+.fc-root .fc-isub {
+  margin-top: 2px;
+  color: var(--rc-muted);
+  font-size: 11px;
+}
+
+.fc-root .fc-isub b {
+  color: var(--rc-text-2);
+  font-weight: 700;
+}
+
+.fc-root .fc-cfgsum {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 252px;
+  overflow: hidden;
+  color: var(--rc-text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fc-root .fc-cfgsum em {
+  color: var(--rc-muted);
+  font-style: normal;
+}
+
+.fc-root .fc-cfgsum .arw {
+  color: var(--rc-faint);
+}
+
+.fc-root .fc-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.fc-root .fc-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.fc-root .fc-num {
+  color: var(--rc-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-root .fc-num.r {
+  text-align: right;
+}
+
+.fc-root .fc-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--rc-border-soft);
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+
+.fc-root .fc-foot .pager {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ---------- 空态 / 错误态 ---------- */
+.fc-root .fc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 34px 16px;
+  color: var(--rc-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.fc-root .fc-empty b {
+  color: var(--rc-text-2);
+  font-size: 13px;
+}
+
+.fc-root .fc-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--rc-error-bg);
+  color: var(--rc-error);
+  font-size: 12px;
+}
+
+.fc-root .fc-empty-cell {
+  padding: 30px 12px;
+  color: var(--rc-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.fc-root .fc-empty-cell b {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--rc-text-2);
+}
+
+/* 小屏保留模板→实例两栏，不额外制造页面横向滚动。 */
+@media (max-width: 1440px) {
+  .fc-root .fc-rail { width: 216px; }
+  .fc-root .fc-toolbar { gap: 8px; }
+  .fc-root .fc-toolbar .fc-search { width: 220px; }
+  .fc-root .fc-toolbar .fc-select { width: 120px; }
+  .fc-root .fc-seg button { padding: 0 9px; }
+  .fc-root .fc-desc { max-width: 560px; }
+}
+@media (max-width: 1080px) {
+  .fc-root .fc-page-head { flex-wrap: wrap; }
+  .fc-root .fc-head-actions { margin-left: 0; padding-top: 0; }
+  .fc-root .fc-toolbar .fc-seg { order: -1; flex-basis: 100%; width: fit-content; }
+  .fc-root .fc-layout { flex-direction: column; }
+  .fc-root .fc-rail { width: 100%; }
+  .fc-root .fc-rail-body { max-height: 240px; overflow-y: auto; }
+  .fc-root .fc-content { width: 100%; }
+  .fc-root .fc-bar { flex-wrap: wrap; }
+}
+.fc-root .fc-seg button:focus-visible,
+.fc-root .fc-rail-item:focus-visible,
+.fc-root .fc-rail-entry:focus-visible {
+  outline: 2px solid var(--rc-primary);
+  outline-offset: -2px;
+}
+
+/* ---------- 板块小标题（结构卡片下的分组用） ---------- */
+.fc-root .fc-section-title {
+  margin: 0 0 8px;
+  color: var(--rc-text);
+  font-size: 13px;
+  font-weight: 700;
+}

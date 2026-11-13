@@ -40,6 +40,117 @@ export interface MonitorEditorForm {
   receivers: string
   /** 已生效版本号（页面只读，保存时写回 conf） */
   version: string
+  /** 入库时间字段：执行器按它拼 `--time-column`；空 = 不传（脚本自报错，页面不伪造列名） */
+  timeColumn: string
+  /** 检查窗口三选一：当日 / 最近 N 小时 / 上一个周期 */
+  windowType: MonitorWindowType
+  /** 「最近 N 小时」的 N（字符串便于数字输入框双向绑定，保存时归一成 1–720 的整数） */
+  windowHours: string
+}
+
+export type MonitorWindowType = 'today' | 'hours' | 'period'
+
+/** 检查窗口默认小时数（hours 与 period 的兜底值） */
+export const DEFAULT_WINDOW_HOURS = 24
+export const WINDOW_HOURS_MIN = 1
+export const WINDOW_HOURS_MAX = 720
+/** 入库时间字段的固定候选：拿不到主表字段清单时用它（不是伪造列名，是给用户手选） */
+export const FALLBACK_TIME_COLUMNS = ['CREATE_DT', 'UPDATE_DT', 'MODIFY_DT', 'publish_time', 'time'] as const
+export const MAX_TIME_COLUMN_OPTIONS = 20
+
+const TIME_COLUMN_SUFFIXES = ['_dt', '_time', '_date'] as const
+const TIME_COLUMN_NAMES = new Set(['time', 'date', 'publish_time', 'create_dt', 'update_dt', 'modify_dt'])
+
+/** 「像时间列」的启发式：后缀 _DT/_TIME/_DATE 或约定的时间列名（大小写不敏感） */
+export function looksLikeTimeColumn(field: string): boolean {
+  const name = (field ?? '').trim().toLowerCase()
+  if (!name) return false
+  if (TIME_COLUMN_NAMES.has(name)) return true
+  return TIME_COLUMN_SUFFIXES.some((suffix) => name.endsWith(suffix))
+}
+
+/**
+ * 入库时间字段下拉候选。
+ *
+ * - 有真实字段清单时只列「像时间列」的（最多 20 个）；
+ * - 拿不到清单（或清单里没有时间列）时退回固定候选，让用户手选，不猜；
+ * - 已保存的值即使不在清单里也保留为可选项，避免打开旧记录时下拉显示空白。
+ */
+export function timeColumnOptionsOf(fields: readonly string[] | null | undefined, current = ''): string[] {
+  const real = [...new Set((fields ?? []).map((field) => field.trim()).filter(Boolean))]
+  const matched = real.filter(looksLikeTimeColumn)
+  const base = matched.length ? matched : [...FALLBACK_TIME_COLUMNS]
+  const value = current.trim()
+  const options = value && !base.includes(value) ? [value, ...base] : base
+  return options.slice(0, MAX_TIME_COLUMN_OPTIONS)
+}
+
+/** 1–720 的整数；空值/非法值退回 24（页面与执行器口径一致） */
+export function normalizeWindowHours(value: unknown): number {
+  const text = typeof value === 'number' ? String(value) : String(value ?? '').trim()
+  if (!text) return DEFAULT_WINDOW_HOURS
+  const num = Number(text)
+  if (!Number.isFinite(num)) return DEFAULT_WINDOW_HOURS
+  return Math.min(WINDOW_HOURS_MAX, Math.max(WINDOW_HOURS_MIN, Math.round(num)))
+}
+
+function stepOf(field: string): number {
+  const matched = /^\*\/(\d+)$/.exec((field ?? '').trim())
+  return matched ? Number(matched[1]) : 0
+}
+
+function hourIntervalOfMinute(minute: string, hour: string): number {
+  // 每 N 分钟/每 N 小时（小时单位下不足 1 小时按 1 小时）
+  if (stepOf(minute)) return 1
+  const hourStep = stepOf(hour)
+  if (hourStep) return hourStep
+  const text = (hour ?? '').trim()
+  if (text === '*') return 1
+  const range = /^(\d+)-(\d+)(?:\/(\d+))?$/.exec(text)
+  if (range) return range[3] ? Number(range[3]) : 1
+  const hours = [...new Set(text.split(',').map((item) => Number(item)).filter((num) => Number.isFinite(num)))].sort((a, b) => a - b)
+  if (hours.length > 1) {
+    const gaps: number[] = []
+    for (let index = 1; index < hours.length; index += 1) gaps.push(hours[index]! - hours[index - 1]!)
+    // 跨天循环：最后一个与第一个 + 24
+    gaps.push(hours[0]! + 24 - hours[hours.length - 1]!)
+    return Math.min(...gaps.filter((gap) => gap > 0))
+  }
+  // 固定小时 = 每天一次；日/周级计划统一按 24 小时近似
+  return DEFAULT_WINDOW_HOURS
+}
+
+/**
+ * 从执行计划推「当前计划间隔」小时数（`window.type='period'` 的 periodHours）。
+ *
+ * 只解析页面能确定的日内周期：每 N 分钟/N 小时、小时 *、小时范围/步长、小时列表。
+ * 每天一次返回 24；AFTER:N、表达式无法解析或日/周级计划一律退回 24（页面算不出来不瞎猜）。
+ */
+export function scheduleIntervalHours(schedule: string): number {
+  const text = (schedule ?? '').trim()
+  if (!text) return DEFAULT_WINDOW_HOURS
+  // 采集任务后延迟触发：真实间隔取决于采集频率，页面算不出来
+  if (/^AFTER/i.test(text)) return DEFAULT_WINDOW_HOURS
+  const parts = text.split(/\s+/)
+  if (parts.length < 6) return DEFAULT_WINDOW_HOURS
+  const interval = hourIntervalOfMinute(parts[1] ?? '', parts[2] ?? '')
+  return Math.min(WINDOW_HOURS_MAX, Math.max(WINDOW_HOURS_MIN, Math.round(interval)))
+}
+
+/** 表单 → checkConf.window（执行器按它算 DQ_START_DATE / DQ_END_DATE） */
+export function windowOfForm(form: MonitorEditorForm): NonNullable<MonitorCheckConf['window']> {
+  if (form.windowType === 'hours') return { type: 'hours', hours: normalizeWindowHours(form.windowHours) }
+  if (form.windowType === 'period') return { type: 'period', periodHours: scheduleIntervalHours(form.schedule) }
+  return { type: 'today' }
+}
+
+/** checkConf.window → 表单值；未配置按「当日」，旧值非法按默认 24 小时 */
+function windowFormOfConf(conf: MonitorCheckConf): { windowType: MonitorWindowType; windowHours: string } {
+  const raw = conf.window
+  const spec = raw && typeof raw === 'object' ? raw : {}
+  if (spec.type === 'hours') return { windowType: 'hours', windowHours: String(normalizeWindowHours(spec.hours)) }
+  if (spec.type === 'period') return { windowType: 'period', windowHours: String(DEFAULT_WINDOW_HOURS) }
+  return { windowType: 'today', windowHours: String(DEFAULT_WINDOW_HOURS) }
 }
 
 export interface SaveFeedbackInput {
@@ -85,6 +196,9 @@ export function emptyForm(): MonitorEditorForm {
     channels: ['mail'],
     receivers: '',
     version: '',
+    timeColumn: '',
+    windowType: 'today',
+    windowHours: String(DEFAULT_WINDOW_HOURS),
   }
 }
 
@@ -145,6 +259,7 @@ export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
   const conf = record.conf ?? {}
   const orchestration = orchestrationOf(conf)
   const base = emptyForm()
+  const windowForm = windowFormOfConf(conf)
   const methods = listOf(conf.methods).length ? listOf(conf.methods) : listOf(conf.monitorMethods)
   return {
     ...base,
@@ -173,6 +288,9 @@ export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
     channels: channelsOfConf(conf),
     receivers: listOf(conf.receivers).join(', ') || textOf(conf.mailTo),
     version: textOf(conf.version),
+    timeColumn: textOf(conf.timeColumn),
+    windowType: windowForm.windowType,
+    windowHours: windowForm.windowHours,
   }
 }
 
@@ -216,6 +334,11 @@ export function confFromForm(
     conf.nullPolicy = form.nullPolicy
     conf.noDataPolicy = form.noDataPolicy
     conf.version = form.version || undefined
+    // 不猜列名：空就是不传，让脚本自报「无法自动识别入库时间列」，保存时页面只提示不阻断
+    const timeColumn = form.timeColumn.trim()
+    if (timeColumn) conf.timeColumn = timeColumn
+    else delete conf.timeColumn
+    conf.window = windowOfForm(form)
     if (extra.script !== undefined) conf.script = extra.script
     if (extra.scriptPath !== undefined) conf.scriptPath = extra.scriptPath
   } else {
@@ -275,6 +398,9 @@ export function formSignature(form: MonitorEditorForm): string {
     channels: [...form.channels].sort(),
     receivers: form.receivers.trim(),
     version: form.version,
+    timeColumn: form.timeColumn.trim(),
+    windowType: form.windowType,
+    windowHours: String(form.windowHours).trim(),
   })
 }
 
