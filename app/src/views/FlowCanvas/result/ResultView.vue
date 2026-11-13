@@ -1941,6 +1941,7 @@ async function onTestScript() {
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
     <div v-if="browseMode === 'step' && selectedNodeId && railOpen" class="rv-railbox">
+      <button v-if="canSkipCondThisSend && !sendNodeSelection" class="rc-btn rv-rail-select-send" type="button" data-testid="rail-select-send-nodes" @click="startSendNodeSelection">多选发送节点</button>
       <div v-if="sendNodeSelection" class="rv-rail-send-controls" data-testid="rail-send-controls">
         <strong>选择发送节点</strong><span>已选 {{ sendSettingSelectedCount }} 个</span>
         <button type="button" @click="setSendTargets(sendSettingOptions, true)">全选</button>
@@ -1965,7 +1966,6 @@ async function onTestScript() {
         <div v-if="!allNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
       </div>
       <div class="rv-rail-ctl">
-        <button v-if="canSkipCondThisSend && !sendNodeSelection" class="rc-btn" type="button" data-testid="rail-select-send-nodes" @click="startSendNodeSelection">多选发送节点</button>
         <button
           type="button"
           class="rv-rail-icon-btn"
@@ -2559,8 +2559,7 @@ async function onTestScript() {
    会跟着一起进全屏。 */
 .rv-shell.is-fullscreen { position: fixed; inset: 0; z-index: 60; height: 100vh; border: 0; border-radius: 0; }
 
-/* 轨道容器：控件浮在轨道右上角（.rv-bar 自己会横向滚动，控件必须放在滚动容器外面，
-   否则会跟着内容滚走）。收起流程按钮合并在轨道区右上角，不额外占用一行的空间。 */
+/* 轨道容器：多选入口在左上角、收起在右上角；控件放在滚动容器外，不随流程图滚走。 */
 .rv-railbox { position: relative; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
 /* 节点右键菜单：视觉对齐源侧栏的 .ssw-row-menu（全站第 5 处右键菜单，样式刻意一致） */
 .rv-node-menu-mask { position: fixed; z-index: 91; inset: 0; }
@@ -2580,6 +2579,7 @@ async function onTestScript() {
 .rv-node-send-option.disabled { color: var(--rc-faint); cursor: default; }
 .rv-node-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rv-rail-ctl { position: absolute; top: 6px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
+.rv-rail-select-send { position: absolute; top: 6px; left: 10px; z-index: 2; }
 .rv-rail-icon-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); cursor: pointer; transition: all 0.15s ease; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
 .rv-rail-icon-btn:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); background: var(--rc-primary-bg); }
 
