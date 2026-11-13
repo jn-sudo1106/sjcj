@@ -382,6 +382,7 @@ describe('MonitorConfigEditor 生成脚本', () => {
     mocks.resolveGenerationContext.mockResolvedValueOnce({
       ...GENERATION_CONTEXT,
       contextMode: 'table',
+      fallbackReason: 'flow-unavailable',
       configId: 0,
       sourceTable: 'sense_data.TB_RAW',
     })
@@ -400,9 +401,30 @@ describe('MonitorConfigEditor 生成脚本', () => {
     const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0][0] as { configId: number }
     expect(payload.configId).toBe(0)
     const note = wrapper.get('[data-testid="mc-generate-note"]')
-    expect(note.text()).toContain('还没有绑定流程')
+    expect(note.text()).toContain('没有读到该源的可用流程')
     expect(note.text()).toContain('不关联画布节点')
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('流程里没有监控节点时提示加节点关联，而不是笼统说没有绑定流程', async () => {
+    mocks.resolveGenerationContext.mockResolvedValueOnce({
+      ...GENERATION_CONTEXT,
+      contextMode: 'table',
+      fallbackReason: 'no-monitor-node',
+      configId: 0,
+      sourceTable: 'sense_data.TB_RAW',
+    })
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+
+    const note = wrapper.get('[data-testid="mc-generate-note"]').text()
+    expect(note).toContain('没有数据监控节点')
+    expect(note).toContain('添加数据监控节点')
+    expect(note).not.toContain('没有绑定流程')
     wrapper.unmount()
   })
 

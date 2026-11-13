@@ -2,6 +2,7 @@ import { entryApi, ruleApi, sourceApi } from '@/api'
 import type { EntryType } from '@/api/types/collect'
 import type { Source, Step } from '@/api/types/source'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import type { FlowBranchGroup } from '@/views/FlowCanvas/canvas/flowModel'
 import { buildSourceSeed, isMonitorNode } from '@/views/FlowCanvas/canvas/flowModel'
 
 /**
@@ -13,9 +14,27 @@ import { buildSourceSeed, isMonitorNode } from '@/views/FlowCanvas/canvas/flowMo
  *   data-engine 不校验 configId 是否存在（186/2806 实测 configId=0 可正常生成），
  *   此时脚本属于「独立监控」，不关联画布节点——不能用别源的 configId 顶替。
  */
+/**
+ * 退回「按主表独立生成」的真实原因。
+ *
+ * 为什么不用一句话概括：这四种情况的处理方式完全不同（无流程只能独立定时；有节点没保存
+ * 该去保存节点；节点没绑表该去选表），一律说成「没有绑定流程」会把人引到错误的排查方向。
+ */
+export type GenerationFallbackReason =
+  /** 读不到源流程：接口失败或后端报「源未绑定有效流程」 */
+  | 'flow-unavailable'
+  /** 流程读到了，但整张流程里没有数据监控节点 */
+  | 'no-monitor-node'
+  /** 有监控节点，但节点没有保存出 configId（画布上还没落库） */
+  | 'node-not-saved'
+  /** 有监控节点，但节点没有绑定输入表，取不到被检表 */
+  | 'node-no-input-table'
+
 export interface GenerationContext {
   /** 'flow' = 绑定画布节点；'table' = 仅按主表生成的独立监控 */
   contextMode: 'flow' | 'table'
+  /** 仅 table 模式：为什么没走流程上下文，供提示文案照实说明 */
+  fallbackReason?: GenerationFallbackReason
   configId: number
   sourceTable: string
   targetTable: string
@@ -119,23 +138,27 @@ export function augmentMonitorSystemPrompt(
  * 源没有流程/监控节点时的兜底上下文：只按表单选定的主表生成。
  * configId 固定 0（独立监控，不关联画布节点）。
  */
-async function resolveTableContext(fallback: GenerationFallback | undefined): Promise<GenerationContext> {
+async function resolveTableContext(
+  fallback: GenerationFallback | undefined,
+  reason: GenerationFallbackReason,
+): Promise<GenerationContext> {
   const tableName = (fallback?.tableName ?? '').trim()
   const entry = await entryWithFields(fallback?.tableId, tableName)
   const sourceTable = physicalName(tableName) || (entry?.tableName ?? '')
   if (!sourceTable) {
     throw new MonitorGenerationContextError(
-      '该源还没有绑定流程，且没有选定主表：请先选择要监控的表，再生成脚本',
+      '当前没有可用的数据监控节点，且没有选定主表：请先选择要监控的表，再生成脚本',
     )
   }
   const inputFieldOptions = fieldOptionsOf(entry)
   if (!inputFieldOptions.length) {
     throw new MonitorGenerationContextError(
-      `无法读取表 ${sourceTable} 的字段清单：请先确认该表已登记字段，或改用绑定流程的数据监控节点生成`,
+      `无法读取表 ${sourceTable} 的字段清单：请先确认该表已登记字段，或先在流程里添加并保存数据监控节点后重新生成`,
     )
   }
   return {
     contextMode: 'table',
+    fallbackReason: reason,
     configId: 0,
     sourceTable,
     targetTable: sourceTable,
@@ -143,6 +166,56 @@ async function resolveTableContext(fallback: GenerationFallback | undefined): Pr
     outputFields: [],
     inputFieldOptions,
     outputFieldOptions: inputFieldOptions,
+  }
+}
+
+/**
+ * 画布节点顺序：主链在前，分支组按渲染顺序在后（含嵌套子分支）。
+ *
+ * 为什么不直接遍历 `seed.configs`：对象键顺序不等于画布阅读顺序，同一个源有多个监控
+ * 节点时「取第一个」必须是用户视觉上的第一个。为什么不能只看 `seed.main`：主链在分叉处
+ * 就中断（flowTopology.ts），分叉下游和分支上的监控节点会全被漏掉——这正是此前
+ * 「节点明明存在却提示没有绑定流程」的根因（2026-11-13 修）。
+ */
+function orderedNodeIds(seed: ReturnType<typeof buildSourceSeed>): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  const push = (id: string) => {
+    if (!id || seen.has(id)) return
+    seen.add(id)
+    ids.push(id)
+  }
+  seed.main.forEach(push)
+  const walk = (groups: readonly FlowBranchGroup[] | undefined) => {
+    for (const group of groups ?? []) {
+      for (const branch of group.branches) {
+        branch.chain.forEach(push)
+        walk(branch.subGroups)
+      }
+    }
+  }
+  walk(seed.branchGroups)
+  return ids
+}
+
+/**
+ * table 模式的提示文案：按真实原因区分，并说明「这条检查怎么才会自动跑」。
+ *
+ * 产品规则（1111 方案 §3）：有流程没有监控节点也可以独立配置，只是不会随流程触发；
+ * 想入库后自动检查，需要回画布加节点并关联本条检查。
+ */
+export function describeTableFallback(context: GenerationContext): string {
+  const table = context.sourceTable || '当前主表'
+  switch (context.fallbackReason) {
+    case 'no-monitor-node':
+      return `该源流程里没有数据监控节点，本次按主表 ${table} 生成独立监控脚本；如需采集入库后自动检查，请在流程里添加数据监控节点并关联本条检查`
+    case 'node-not-saved':
+      return `流程里的数据监控节点还没有保存（缺少节点配置 ID），本次按主表 ${table} 生成独立监控脚本；保存节点后重新生成即可关联`
+    case 'node-no-input-table':
+      return `流程里的数据监控节点还没有绑定输入表，本次按主表 ${table} 生成独立监控脚本；请在节点里选择输入表后重新生成`
+    case 'flow-unavailable':
+    default:
+      return `没有读到该源的可用流程，本次按主表 ${table} 生成独立监控脚本（不关联画布节点，按自己的执行计划运行）`
   }
 }
 
@@ -168,23 +241,25 @@ export async function resolveMonitorGenerationContext(
     steps = (loadedSteps ?? []) as Step[]
   } catch {
     // 源未绑定有效流程（后端「运行时异常：源未绑定有效流程」）等：能按主表生成就不阻断
-    return resolveTableContext(fallback)
+    return resolveTableContext(fallback, 'flow-unavailable')
   }
-  if (!detail) return resolveTableContext(fallback)
+  if (!detail) return resolveTableContext(fallback, 'flow-unavailable')
 
   const seed = buildSourceSeed(detail, steps)
-  const node = seed.main.map((nodeId) => seed.configs[nodeId]).find((cfg) => cfg && isMonitorNode(cfg))
-  if (!node) return resolveTableContext(fallback)
+  const node = orderedNodeIds(seed)
+    .map((nodeId) => seed.configs[nodeId])
+    .find((cfg) => cfg && isMonitorNode(cfg))
+  if (!node) return resolveTableContext(fallback, 'no-monitor-node')
 
   const configId = Number(node.configId ?? 0)
-  if (!Number.isFinite(configId) || configId <= 0) return resolveTableContext(fallback)
+  if (!Number.isFinite(configId) || configId <= 0) return resolveTableContext(fallback, 'node-not-saved')
 
   const rule = node.ruleCfg
   const inputTable = (rule?.inputTable ?? node.inputTable ?? node.collectCfg?.inputTable ?? '').trim()
   const inputTableId = (rule?.inputTableId ?? '').trim()
   const inputEntry = await entryOf(inputTableId)
   const sourceTable = physicalName(inputTable) || (inputEntry?.tableName ?? '')
-  if (!sourceTable) return resolveTableContext(fallback)
+  if (!sourceTable) return resolveTableContext(fallback, 'node-no-input-table')
   const outputName = physicalName(rule?.outputTable ?? node.outputTable ?? node.collectCfg?.outputTable ?? '')
   const outputEntry = await entryOf((rule?.outputTableId ?? '').trim())
 

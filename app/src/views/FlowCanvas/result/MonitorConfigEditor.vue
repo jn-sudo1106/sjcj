@@ -35,6 +35,7 @@ import { EXEC_TEXT } from '@/utils/monitor/record'
 import type { MonitorEditorForm } from './monitor-editor/model'
 import {
   augmentMonitorSystemPrompt,
+  describeTableFallback,
   generateMonitorScript,
   resolveMonitorGenerationContext,
   resolveMonitorTableFields,
@@ -627,7 +628,9 @@ async function onGenerate(): Promise<void> {
     pending.value = true
     testResult.value = null
     if (context.contextMode === 'table') {
-      generationNote.value = `该源还没有绑定流程，本次按主表 ${context.sourceTable} 生成独立监控脚本（不关联画布节点）`
+      // 提示按真实原因区分（无流程 / 无监控节点 / 节点未保存 / 节点未绑表），
+      // 不再一律说成「还没有绑定流程」
+      generationNote.value = describeTableFallback(context)
       ElMessage.warning('脚本已生成（按主表生成，未关联画布节点）：保存后才会生效')
     } else {
       ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
