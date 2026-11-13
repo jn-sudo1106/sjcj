@@ -700,15 +700,6 @@ function handleQuickPrompt(text: string) {
   handleSend()
 }
 
-// 终止当前正在生成的流式请求
-function handleStopStream() {
-  if (currentAbortController.value) {
-    currentAbortController.value.abort()
-    currentAbortController.value = null
-  }
-  isSending.value = false
-}
-
 // 发送消息：对接后端 /api/poc/chat/agent SSE 流式接口
 async function handleSend(customTitle?: string) {
   const content = promptText.value.trim()
@@ -871,8 +862,9 @@ async function handleSend(customTitle?: string) {
       }
     }
   } catch (err) {
-    if (err && err.name !== 'AbortError') {
-      const errMsg = err.message || '智能体问数服务调用失败'
+    const failure = err as { name?: string; message?: string }
+    if (failure.name !== 'AbortError') {
+      const errMsg = failure.message || '智能体问数服务调用失败'
       if (!assistantMsg.content) {
         assistantMsg.content = `抱歉，未能完成本次问数：${errMsg}`
       }
