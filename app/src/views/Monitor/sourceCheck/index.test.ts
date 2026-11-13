@@ -274,9 +274,9 @@ describe('一行一源与源目录', () => {
     expect(wrapper.text()).toContain('重试')
   })
 
-  it('计划覆盖无 C07 显示「—（需服务端聚合）」且不按时隙推算', async () => {
+  it('计划覆盖无聚合数据时显示「—（计划不可推算）」且不按时隙推算', async () => {
     const wrapper = await mountPage()
-    expect(wrapper.text()).toContain('—（需服务端聚合）')
+    expect(wrapper.text()).toContain('—（计划不可推算）')
     expect(wrapper.text()).toContain('本页不推算漏跑')
   })
 

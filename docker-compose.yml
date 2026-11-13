@@ -10,6 +10,8 @@ services:
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-nginx:alpine}
         VITE_BASE: /sjcj/
         BACKEND_TARGET: ${BACKEND_TARGET:-http://118.25.96.217:9999}
+        # OSS 下载服务（9102）目标，默认与业务后端同机；133 现在单独指 115.227.21.133:9102
+        OSS_TARGET: ${OSS_TARGET:-http://118.25.96.217:9102}
     # 133 环境另起一套：GATEWAY_NAME=sjcj-gateway-133（部署脚本 SJCJ_TARGET=133 时自动带上）
     image: ${GATEWAY_NAME:-sjcj-gateway}:latest
     container_name: ${GATEWAY_NAME:-sjcj-gateway}

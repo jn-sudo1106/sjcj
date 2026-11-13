@@ -209,15 +209,20 @@ export function coverageOf(row: MonitorSourceRow): { main: string; sub: string; 
   if (row.monitorTotal === 0) {
     return { main: '—', sub: '尚未配置检查', title: '该源还没有监控记录，配置后才会有计划覆盖' }
   }
-  if (row.coverage) {
+  if (row.monitorEnabled === 0) {
+    return { main: '—', sub: '全部停用，不排期', title: '该源的检查项全部停用，服务端不为其安排时隙，因此不算漏跑' }
+  }
+  if (row.coverage && !row.coverageUnavailable) {
+    const { due, finished, missed } = row.coverage
     return {
-      main: `${row.coverage.finished} / ${row.coverage.due}`,
-      sub: '已完成 / 应到期',
-      title: '所选日期内的覆盖计数由服务端聚合（C07）',
+      main: `应 ${due} · 完成 ${finished}`,
+      sub: missed > 0 ? `漏 ${missed}` : '无漏跑',
+      title: `今天按时隙应执行 ${due} 次，已完成 ${finished} 次${missed > 0 ? `，漏跑 ${missed} 次` : ''}`
+        + '（按 cron 时隙计算，本月早于宽限期的时隙不算漏跑）',
     }
   }
   return {
-    main: '—（需服务端聚合）',
+    main: '—（计划不可推算）',
     sub: '本页不推算漏跑',
     title: '计划覆盖需要服务端按时隙聚合（C07），当前接口未就绪；本页不按时隙推算，也不把本页数量当全站',
   }

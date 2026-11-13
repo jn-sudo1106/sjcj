@@ -23,6 +23,7 @@ import {
 import type { SourceCheck, SourceCheckLog } from './types/monitor'
 import type {
   MonitorCheckConf,
+  MonitorCoverage,
   MonitorDataStatus,
   MonitorKind,
   MonitorRecordView,
@@ -400,6 +401,9 @@ interface SourceSummaryPayload {
   lastCheckAt?: string | null
   /** none 未配置 / disabled 全停用 / unknown 有启用但没跑过 / abnormal 有告警 / normal 正常 */
   dataState?: string
+  /** 计划覆盖：{due, finished, missed, unavailable} */
+  coverage?: { due?: number; finished?: number; missed?: number; unavailable?: boolean } | null
+  coverageUnavailable?: boolean
 }
 
 function dataOfState(state: string | undefined): MonitorDataStatus {
@@ -423,6 +427,25 @@ function labelOfState(state: string | undefined): { label: string; tone: Monitor
   }
 }
 
+function toCoverageOf(raw: unknown): MonitorCoverage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  const num = (key: string) => {
+    const parsed = Number(value[key])
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  const due = num('due')
+  const missed = num('missed')
+  return {
+    status: missed > 0 ? 'missed' : due > 0 ? 'completed' : 'not_due',
+    due,
+    finished: num('finished'),
+    succeeded: 0,
+    failed: 0,
+    missed: num('missed'),
+  }
+}
+
 function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
   const total = Number(item.monitorTotal ?? 0)
   const enabled = Number(item.monitorEnabled ?? 0)
@@ -436,9 +459,9 @@ function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
     siteName: item.siteName || undefined,
     monitorTotal: total,
     monitorEnabled: enabled,
-    // 计划覆盖需要「预期时隙」表，服务端首期只给出不可用标记，页面如实显示「—（需服务端聚合）」。
-    coverage: null,
-    coverageUnavailable: true,
+    // 计划覆盖：服务端按 cron 时隙算「应执行 / 已完成 / 漏跑」；AFTER 类计划标 unavailable。
+    coverage: toCoverageOf(item.coverage),
+    coverageUnavailable: item.coverageUnavailable !== false,
     data: total === 0 ? 'unknown' : dataOfState(state),
     exec: 'unknown',
     notifyFailures: 0,

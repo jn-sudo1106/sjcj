@@ -235,18 +235,18 @@ describe('coverageOf', () => {
     expect(coverageOf(row([]))).toMatchObject({ main: '—', sub: '尚未配置检查' })
   })
 
-  it('无 C07 显示「—（需服务端聚合）」并说明不推算', () => {
+  it('无 C07 显示「—（计划不可推算）」并说明不推算', () => {
     const coverage = coverageOf(row([rec()]))
-    expect(coverage.main).toBe('—（需服务端聚合）')
+    expect(coverage.main).toBe('—（计划不可推算）')
     expect(coverage.sub).toBe('本页不推算漏跑')
     expect(coverage.title).toContain('C07')
     expect(coverage.title).toContain('不按时隙推算')
   })
 
-  it('有聚合数据时才显示已完成 / 应到期', () => {
+  it('有聚合数据时显示「应 N · 完成 M」与漏跑', () => {
     const source = row([rec()])
     source.coverage = { status: 'completed', due: 4, finished: 3, succeeded: 3, failed: 0, missed: 0 }
-    expect(coverageOf(source).main).toBe('3 / 4')
+    expect(coverageOf(source).main).toBe('应 4 · 完成 3')
   })
 })
 
