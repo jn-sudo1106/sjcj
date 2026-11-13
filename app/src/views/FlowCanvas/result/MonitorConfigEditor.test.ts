@@ -188,6 +188,7 @@ function mountEditor(props: Record<string, unknown> = {}) {
     global: {
       stubs: {
         SiteSourceSelect: { template: '<div data-testid="mc-site-source-select" />' },
+        ElDrawer: { props: ['modelValue', 'title'], template: '<section v-if="modelValue" role="dialog" :aria-label="title"><slot /></section>' },
       },
     },
   })
@@ -229,6 +230,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('MonitorConfigEditor 四区结构与默认值', () => {
@@ -355,6 +357,73 @@ describe('MonitorConfigEditor 已有记录与脚本正文', () => {
 
     expect(wrapper.find('[data-testid="mc-script-path"]').text()).toContain('/code/monitor_v3.py')
     expect(wrapper.text()).not.toContain('还没有脚本')
+  })
+})
+
+describe('MonitorConfigEditor 脚本文件', () => {
+  it('正文存在时仍展示文件名和路径，并可预览当前已保存正文', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    expect(wrapper.get('[data-testid="mc-script-filename"]').text()).toBe('monitor_20261110.py')
+    expect(wrapper.get('[data-testid="mc-script-path"]').text()).toBe('/code/monitor_20261110.py')
+    await wrapper.get('[data-testid="mc-script-file-preview"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mc-file-full-code"]').text()).toContain('检查今日落地')
+    expect(ruleApi.fileDownloadScript).not.toHaveBeenCalled()
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('生成完成后即可预览候选文件，无需保存生效', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mc-script-filename"]').text()).toBe('new.monitor.py')
+    expect(wrapper.get('[data-testid="mc-script-file"]').text()).toContain('待保存候选')
+    await wrapper.get('[data-testid="mc-script-file-preview"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mc-file-full-code"]').text()).toBe('print("新脚本")')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('下载当前展示的正文，保留 .py 文件名并释放 Blob URL', async () => {
+    let downloaded: Blob | undefined
+    const create = vi.fn((blob: Blob) => { downloaded = blob; return 'blob:script' })
+    const revoke = vi.fn()
+    vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: revoke })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.get('[data-testid="mc-script-download"]').trigger('click')
+    await settle()
+    const anchor = click.mock.instances[0] as HTMLAnchorElement
+    expect(anchor.download).toBe('monitor_20261110.py')
+    expect(anchor.href).toBe('blob:script')
+    const text = await new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.readAsText(downloaded!)
+    })
+    expect(text).toBe('print("检查今日落地")')
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:script'))
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('只有路径时按需读取文件；读取失败明确提示，不下载空文件', async () => {
+    const wrapper = mountEditor({ record: aiRecord({ conf: { kind: 'ai', scriptPath: '/code/path-only.py' } }) })
+    await settle()
+    vi.mocked(ruleApi.fileDownloadScript).mockRejectedValueOnce(new Error('文件不存在'))
+    await wrapper.get('[data-testid="mc-script-file-preview"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[role="alert"]').text()).toContain('文件不存在')
+    expect(wrapper.get('[data-testid="mc-preview-download"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="mc-script-file-preview"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mc-file-full-code"]').text()).toBe('print("回读脚本")')
+    wrapper.unmount()
   })
 })
 

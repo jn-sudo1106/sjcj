@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { dataApi, fetchDefaultModels, fetchModelProviders, sourceApi } from '@/api'
+import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
+import { dataApi, fetchDefaultModels, fetchModelProviders, ruleApi, sourceApi } from '@/api'
 import type { EntryType } from '@/api/types/collect'
 import type { EntryTypeGroup } from '@/api/types/data'
 import type { MonitorCheckConf, MonitorKind, MonitorRecordView } from '@/api/types/monitorCenter'
@@ -192,6 +192,66 @@ const displayedScript = computed(() => (pending.value ? candidate.script : effec
 const activePath = computed(() => (pending.value ? candidate.scriptPath : effectivePath.value))
 const hasAnyScript = computed(() => !!displayedScript.value.trim() || !!activePath.value.trim())
 const canTest = computed(() => hasAnyScript.value)
+
+interface ScriptFileView { name: string; path: string; body: string; label: string }
+const scriptFile = computed<ScriptFileView>(() => {
+  const path = activePath.value.trim()
+  const name = path.split(/[\\/]/).pop() || `monitor-${recordState.value?.id || form.sourceId || 'draft'}-${pending.value ? 'candidate' : form.version || 'draft'}.py`
+  return {
+    name: name.endsWith('.py') ? name : `${name}.py`, path, body: displayedScript.value,
+    label: pending.value ? '待保存候选' : '已保存脚本',
+  }
+})
+const filePreviewOpen = ref(false)
+const previewFile = ref<ScriptFileView | null>(null)
+const filePreviewError = ref('')
+const filePreviewLoading = ref(false)
+const downloadingScript = ref(false)
+let filePreviewRequest = 0
+onBeforeUnmount(() => { filePreviewRequest += 1 })
+
+async function readScriptFile(file: ScriptFileView): Promise<string> {
+  const body = file.body.trim() ? file.body : await ruleApi.fileDownloadScript(file.path)
+  if (!body.trim()) throw new Error('脚本文件为空，暂时无法预览或下载')
+  return body
+}
+
+async function onPreviewScript(): Promise<void> {
+  const file = { ...scriptFile.value }
+  const request = ++filePreviewRequest
+  previewFile.value = file
+  filePreviewError.value = ''
+  filePreviewOpen.value = true
+  filePreviewLoading.value = true
+  try {
+    const body = await readScriptFile(file)
+    if (request === filePreviewRequest) previewFile.value = { ...file, body }
+  } catch (error) {
+    if (request === filePreviewRequest) filePreviewError.value = errorText(error)
+  } finally {
+    if (request === filePreviewRequest) filePreviewLoading.value = false
+  }
+}
+
+async function onDownloadScript(file: ScriptFileView = scriptFile.value): Promise<void> {
+  if (downloadingScript.value) return
+  downloadingScript.value = true
+  try {
+    const body = await readScriptFile(file)
+    const url = URL.createObjectURL(new Blob([body], { type: 'text/x-python;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = file.name
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  } catch (error) {
+    ElMessage.error(`下载脚本失败：${errorText(error)}`)
+  } finally {
+    downloadingScript.value = false
+  }
+}
 
 /**
  * 底部主按钮：AI 检查有脚本才可能「生效」，没脚本只能是草稿；
@@ -1212,6 +1272,19 @@ defineExpose({
               {{ needsRegenerateNotice }}
             </p>
 
+            <div v-if="hasAnyScript" class="mc-script-file" data-testid="mc-script-file">
+              <span class="mc-file-icon" aria-hidden="true">PY</span>
+              <div class="mc-file-info">
+                <strong :title="scriptFile.name" data-testid="mc-script-filename">{{ scriptFile.name }}</strong>
+                <span class="mc-faint">Python · {{ scriptFile.label }} · {{ displayedScript.length ? `${displayedScript.length} 字` : '正文待读取' }}</span>
+              </div>
+              <div class="mc-file-actions">
+                <button type="button" class="mc-linkbtn" data-testid="mc-script-file-preview" @click="onPreviewScript">预览</button>
+                <button type="button" class="mc-linkbtn" :disabled="downloadingScript" data-testid="mc-script-download" @click="onDownloadScript()">{{ downloadingScript ? '下载中…' : '下载' }}</button>
+              </div>
+              <p class="mc-file-location" data-testid="mc-script-path">{{ activePath || '仅保存脚本正文，下载时导出为 .py 文件' }}</p>
+            </div>
+
             <div v-if="displayedScript.trim()" class="mc-script-preview" data-testid="mc-script-preview">
               <div class="mc-script-preview-head">
                 <strong>脚本正文</strong>
@@ -1235,9 +1308,6 @@ defineExpose({
                 data-testid="mc-script-body"
               >{{ displayedScript }}</pre>
             </div>
-            <p v-else-if="activePath.trim()" class="mc-script-path" data-testid="mc-script-path">
-              生效脚本文件：{{ activePath }}（暂未取得正文）
-            </p>
 
             <div v-if="generating" class="mc-stream" data-testid="mc-stream">
               <div class="mc-stream-head">
@@ -1470,6 +1540,25 @@ defineExpose({
       </div>
     </footer>
   </div>
+  <el-drawer
+    v-model="filePreviewOpen"
+    :title="`脚本预览 · ${previewFile?.name || ''}`"
+    size="min(760px, calc(100vw - 24px))"
+    append-to-body
+    class="mc-file-preview-drawer"
+    @close="filePreviewRequest += 1; filePreviewLoading = false"
+  >
+    <div v-if="previewFile" class="mc-file-preview-content">
+      <div class="mc-file-preview-toolbar">
+        <span class="mc-faint">{{ previewFile.label }} · 只读预览</span>
+        <button type="button" class="mc-btn" :disabled="filePreviewLoading || downloadingScript || !!filePreviewError" data-testid="mc-preview-download" @click="onDownloadScript(previewFile)">下载 .py</button>
+      </div>
+      <p class="mc-file-location">{{ previewFile.path || previewFile.name }}</p>
+      <p v-if="filePreviewLoading" class="mc-hint">正在读取脚本文件…</p>
+      <p v-else-if="filePreviewError" class="mc-error" role="alert">{{ filePreviewError }}</p>
+      <pre v-else class="mc-file-full-code" data-testid="mc-file-full-code">{{ previewFile.body }}</pre>
+    </div>
+  </el-drawer>
 </template>
 
 <style scoped>
@@ -1561,7 +1650,15 @@ defineExpose({
 .mc-stream-think > summary:hover { color: var(--rc-primary); }
 .mc-stream-think > .mc-stream-think-body { border-radius: 0 0 6px 6px; max-height: 140px; background: #f8fafc; }
 .mc-stream-body { max-height: 280px; }
-.mc-script-path { margin: 0; padding: 8px 10px; background: var(--rc-bg); border-radius: 6px; color: var(--rc-text-2); overflow-wrap: anywhere; }
+.mc-script-file { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; border: 1px solid var(--rc-border); border-radius: 6px; padding: 10px; background: var(--rc-bg); }
+.mc-file-icon { display: grid; place-items: center; width: 34px; height: 38px; border: 1px solid var(--rc-border); border-radius: 5px; color: var(--rc-primary); background: var(--rc-surface); font-size: 11px; font-weight: 700; }
+.mc-file-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mc-file-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.mc-file-actions { display: flex; gap: 12px; }
+.mc-file-location { grid-column: 1 / -1; margin: 0; color: var(--rc-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.mc-file-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mc-file-preview-content { display: flex; flex-direction: column; gap: 12px; }
+.mc-file-full-code { margin: 0; padding: 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); color: var(--rc-text-2); font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mc-test-result { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); min-width: 0; }
 .mc-test-head { display: flex; flex-wrap: wrap; gap: 6px; }
 .mc-test-line { color: var(--rc-text-2); overflow-wrap: anywhere; white-space: pre-wrap; }
