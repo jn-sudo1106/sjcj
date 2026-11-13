@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   checkOneManual: vi.fn(),
   fetchModelProviders: vi.fn(),
   fetchDefaultModels: vi.fn(),
-  resolveGenerationContext: vi.fn(),
+  resolveSourceResultContext: vi.fn(),
   resolveTableFields: vi.fn(),
 }))
 
@@ -52,7 +52,7 @@ vi.mock('@/api', async (importOriginal) => {
 // 生成上下文解析依赖画布种子映射，属于 generation.ts 自己的单元；这里只验编辑器把上下文交给它
 vi.mock('./monitor-editor/generation', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./monitor-editor/generation')>()
-  return { ...actual, resolveMonitorGenerationContext: mocks.resolveGenerationContext, resolveMonitorTableFields: mocks.resolveTableFields }
+  return { ...actual, resolveSourceResultContext: mocks.resolveSourceResultContext, resolveMonitorTableFields: mocks.resolveTableFields }
 })
 
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
@@ -223,7 +223,7 @@ beforeEach(() => {
   mocks.checkOneManual.mockResolvedValue({ success: true, message: '规则校验通过' })
   mocks.fetchModelProviders.mockResolvedValue([{ providerCode: 'deepseek', providerName: 'DeepSeek' }])
   mocks.fetchDefaultModels.mockResolvedValue([{ modelCode: 'deepseek-chat', modelName: 'deepseek-chat' }])
-  mocks.resolveGenerationContext.mockResolvedValue(GENERATION_CONTEXT)
+  mocks.resolveSourceResultContext.mockResolvedValue(GENERATION_CONTEXT)
 })
 
 afterEach(() => {
@@ -271,6 +271,23 @@ describe('MonitorConfigEditor 四区结构与默认值', () => {
     await settle()
     const desc = (wrapper.find('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement).value
     expect(desc).toBe('用户写的业务描述')
+  })
+
+  it('新建时默认带出源的最终落库主表，而不是清单里的第一张表', async () => {
+    const finalTable: EntryType = { ...TABLE, tableId: 't9', tableName: 'sense_data.TB_FINAL', name: '最终落库表' }
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValueOnce({ main: TABLE.tableId, list1: [TABLE, finalTable], list2: [], list3: [] })
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValueOnce({ ...SOURCE, mainTable: 'sense_data.TB_FINAL' })
+
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+
+    const select = wrapper.find('[data-testid="mc-table-select"]').element as HTMLSelectElement
+    expect(select.value).toBe('sense_data.TB_FINAL')
+    // 页面按「源结果检查」标注范围（1113 修订 §4.1.5），不再出现流程绑定状态
+    expect(wrapper.text()).toContain('源结果检查')
+    expect(wrapper.text()).toContain('检查表：sense_data.TB_FINAL')
+    expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('关联表为空表单自动带出唯一表，不误报未保存', async () => {
@@ -367,7 +384,7 @@ describe('MonitorConfigEditor 生成脚本', () => {
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
     await settle()
 
-    expect(mocks.resolveGenerationContext).toHaveBeenCalledWith(SOURCE.sourceId, {
+    expect(mocks.resolveSourceResultContext).toHaveBeenCalledWith({
       tableName: expect.any(String),
       tableId: expect.any(String),
     })
@@ -378,13 +395,12 @@ describe('MonitorConfigEditor 生成脚本', () => {
     expect(ElMessage.success).toHaveBeenCalledWith('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
   })
 
-  it('源没有流程时按主表生成独立监控（configId=0）并提示未关联画布节点', async () => {
-    mocks.resolveGenerationContext.mockResolvedValueOnce({
+  it('源有流程、流程里也有监控节点时，生成仍只读表单选定的表，且不提示流程相关警告', async () => {
+    mocks.resolveSourceResultContext.mockResolvedValueOnce({
       ...GENERATION_CONTEXT,
-      contextMode: 'table',
-      fallbackReason: 'flow-unavailable',
       configId: 0,
-      sourceTable: 'sense_data.TB_RAW',
+      sourceTable: 'sense_data.TB_OTHER',
+      targetTable: 'sense_data.TB_OTHER',
     })
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
@@ -392,39 +408,14 @@ describe('MonitorConfigEditor 生成脚本', () => {
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
     await settle()
 
-    // 表单把「主表物理名 + 表 ID」交给上下文解析，源无流程时由它退回 table 模式
-    expect(mocks.resolveGenerationContext).toHaveBeenCalledWith(SOURCE.sourceId, {
-      tableName: 'sense_data.TB_RAW',
-      tableId: 't1',
-    })
-    // 生成请求带 configId=0（不借别源/别节点的 configId）
-    const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0][0] as { configId: number }
+    expect(mocks.resolveSourceResultContext).toHaveBeenCalledWith({ tableName: 'sense_data.TB_RAW', tableId: 't1' })
+    const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0][0] as { configId: number; sourceTable: string }
+    // 表单选的表就是本次生成的范围；configId=0 只是旧协议兼容值
     expect(payload.configId).toBe(0)
-    const note = wrapper.get('[data-testid="mc-generate-note"]')
-    expect(note.text()).toContain('没有读到该源的可用流程')
-    expect(note.text()).toContain('不关联画布节点')
+    expect(payload.sourceTable).toBe('sense_data.TB_OTHER')
+    expect(wrapper.find('[data-testid="mc-generate-note"]').exists()).toBe(false)
+    expect(ElMessage.warning).not.toHaveBeenCalled()
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  it('流程里没有监控节点时提示加节点关联，而不是笼统说没有绑定流程', async () => {
-    mocks.resolveGenerationContext.mockResolvedValueOnce({
-      ...GENERATION_CONTEXT,
-      contextMode: 'table',
-      fallbackReason: 'no-monitor-node',
-      configId: 0,
-      sourceTable: 'sense_data.TB_RAW',
-    })
-    const wrapper = mountEditor({ record: aiRecord() })
-    await settle()
-    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
-    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
-    await settle()
-
-    const note = wrapper.get('[data-testid="mc-generate-note"]').text()
-    expect(note).toContain('没有数据监控节点')
-    expect(note).toContain('添加数据监控节点')
-    expect(note).not.toContain('没有绑定流程')
     wrapper.unmount()
   })
 
@@ -442,7 +433,7 @@ describe('MonitorConfigEditor 生成脚本', () => {
   })
 
   it('生成失败保留原正文（生效脚本不被清空）', async () => {
-    vi.mocked(mocks.resolveGenerationContext).mockRejectedValueOnce(new Error('当前节点缺少可执行上下文'))
+    vi.mocked(mocks.resolveSourceResultContext).mockRejectedValueOnce(new Error('当前节点缺少可执行上下文'))
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')

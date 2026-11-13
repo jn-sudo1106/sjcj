@@ -17,9 +17,8 @@ import {
   MAX_PROMPT_COLUMNS,
   MonitorGenerationContextError,
   augmentMonitorSystemPrompt,
-  describeTableFallback,
-  resolveMonitorGenerationContext,
   resolveMonitorTableFields,
+  resolveSourceResultContext,
 } from './generation'
 
 const ENTRY = {
@@ -31,7 +30,9 @@ const ENTRY = {
   ],
 }
 
-describe('resolveMonitorGenerationContext 兜底', () => {
+describe('resolveSourceResultContext 源结果检查只读所选表', () => {
+  const fallback = { tableName: 'sense_data.TB_ZJH', tableId: '2100157' }
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
@@ -39,151 +40,48 @@ describe('resolveMonitorGenerationContext 兜底', () => {
     mocks.searchTables.mockResolvedValue([])
   })
 
-  it('源未绑定有效流程时，按表单主表生成独立监控上下文（configId=0）', async () => {
-    mocks.sourceDetail.mockRejectedValue(new Error('运行时异常：源未绑定有效流程，sourceId=301069515'))
-    mocks.sourceSteps.mockRejectedValue(new Error('运行时异常：源未绑定有效流程，sourceId=301069515'))
+  it('按表单选定的表生成：configId=0、被检表即所选表', async () => {
+    const context = await resolveSourceResultContext(fallback)
 
-    const context = await resolveMonitorGenerationContext('301069515', {
-      tableName: 'sense_data.TB_ZJH',
-      tableId: '2100157',
-    })
-
-    expect(context.contextMode).toBe('table')
     expect(context.configId).toBe(0)
     expect(context.sourceTable).toBe('sense_data.TB_ZJH')
+    expect(context.targetTable).toBe('sense_data.TB_ZJH')
     expect(context.inputFieldOptions).toHaveLength(2)
     expect(context.inputFields).toEqual([])
   })
 
-  it('流程存在但没有监控节点时同样退回主表', async () => {
-    mocks.sourceDetail.mockResolvedValue({ id: '301069515', name: '证监会公告' })
-    mocks.sourceSteps.mockResolvedValue([])
+  it('不读源流程：源流程接口失败或指向别的表都不影响本条检查', async () => {
+    // 即便源有流程、流程里的监控节点绑的是中间表，也绝不能改变本条检查的范围
+    mocks.sourceSteps.mockResolvedValue([
+      { stepId: '2', sourceId: '301069515', name: '数据监控', nodeType: 'monitor', configId: '2001', inputTable: '2100158' },
+    ])
+    mocks.sourceDetail.mockRejectedValue(new Error('运行时异常：源未绑定有效流程，sourceId=301069515'))
 
-    const context = await resolveMonitorGenerationContext('301069515', {
-      tableName: 'sense_data.TB_ZJH',
-      tableId: '2100157',
-    })
+    const context = await resolveSourceResultContext(fallback)
 
-    expect(context.contextMode).toBe('table')
-    expect(context.fallbackReason).toBe('no-monitor-node')
     expect(context.sourceTable).toBe('sense_data.TB_ZJH')
+    expect(mocks.sourceDetail).not.toHaveBeenCalled()
+    expect(mocks.sourceSteps).not.toHaveBeenCalled()
   })
 
-  it('既没有流程也没有可用主表时给出可执行提示', async () => {
-    mocks.sourceDetail.mockRejectedValue(new Error('源未绑定有效流程'))
-    mocks.sourceSteps.mockRejectedValue(new Error('源未绑定有效流程'))
-
-    await expect(resolveMonitorGenerationContext('301069515', {})).rejects.toBeInstanceOf(MonitorGenerationContextError)
+  it('没有选表时给出可执行提示，不发字段查询', async () => {
+    await expect(resolveSourceResultContext({})).rejects.toBeInstanceOf(MonitorGenerationContextError)
+    await expect(resolveSourceResultContext({})).rejects.toThrow(/请先选择要检查的表/)
+    expect(mocks.entryDetail).not.toHaveBeenCalled()
   })
 
-  it('主表读不到字段清单时不伪造字段', async () => {
-    mocks.sourceDetail.mockRejectedValue(new Error('源未绑定有效流程'))
-    mocks.sourceSteps.mockRejectedValue(new Error('源未绑定有效流程'))
+  it('表读不到字段清单时不伪造字段', async () => {
     mocks.entryDetail.mockResolvedValue(null)
 
-    await expect(
-      resolveMonitorGenerationContext('301069515', { tableName: 'sense_data.TB_ZJH', tableId: '2100157' }),
-    ).rejects.toThrow(/字段清单/)
+    await expect(resolveSourceResultContext(fallback)).rejects.toThrow(/字段清单/)
   })
 
-  it('未选择被监控源时不发任何请求', async () => {
-    await expect(resolveMonitorGenerationContext('', { tableName: 'sense_data.TB_ZJH' })).rejects.toThrow(/被监控源/)
-    expect(mocks.sourceDetail).not.toHaveBeenCalled()
+  it('只拿到物理名（没有表 ID）时按物理名精确查一次，查不到也不编造字段', async () => {
+    await expect(resolveSourceResultContext({ tableName: 'sense_data.TB_ZJH' })).rejects.toThrow(/字段清单/)
+    expect(mocks.searchTables).toHaveBeenCalledWith('sense_data.TB_ZJH', 20)
   })
 })
 
-describe('resolveMonitorGenerationContext 流程节点识别', () => {
-  const SOURCE = { id: '301069515', name: '证监会公告' }
-  const fallback = { tableName: 'sense_data.TB_ZJH', tableId: '2100157' }
-
-  const listStep = {
-    stepId: '1', sourceId: '301069515', name: '列表抓取', configId: '1001',
-    inputTable: '-', outputTable: '2100157', enabled: true,
-  }
-  const monitorStep = (overrides: Record<string, unknown> = {}) => ({
-    stepId: '2', sourceId: '301069515', name: '数据监控', nodeType: 'monitor',
-    configId: '2001', inputTable: '2100157', dependsOn: ['1'], enabled: true,
-    ...overrides,
-  })
-
-  beforeEach(() => {
-    vi.clearAllMocks()
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
-    mocks.entryDetail.mockResolvedValue(ENTRY)
-    mocks.searchTables.mockResolvedValue([])
-    mocks.sourceDetail.mockResolvedValue(SOURCE)
-  })
-
-  it('主链上的监控节点走 flow 上下文', async () => {
-    mocks.sourceSteps.mockResolvedValue([listStep, monitorStep()])
-
-    const context = await resolveMonitorGenerationContext('301069515', fallback)
-
-    expect(context.contextMode).toBe('flow')
-    expect(context.configId).toBe(2001)
-    expect(context.sourceTable).toBe('sense_data.TB_ZJH')
-  })
-
-  it('监控节点在分叉下游的分支上也能识别（不再误报没有绑定流程）', async () => {
-    // 1 有两个后继（2 详情、3 分类）→ 主链在 1 处中断，4（监控）挂在 3 的分支链上
-    mocks.sourceSteps.mockResolvedValue([
-      listStep,
-      { stepId: '2', sourceId: '301069515', name: '详情解析', configId: '1002', inputTable: '2100157', outputTable: '2100158', dependsOn: ['1'], enabled: true },
-      { stepId: '3', sourceId: '301069515', name: '分类提取', configId: '1003', inputTable: '2100157', outputTable: '2100159', dependsOn: ['1'], enabled: true },
-      monitorStep({ stepId: '4', configId: '2002', dependsOn: ['3'] }),
-    ])
-
-    const context = await resolveMonitorGenerationContext('301069515', fallback)
-
-    expect(context.contextMode).toBe('flow')
-    expect(context.configId).toBe(2002)
-  })
-
-  it('节点没有保存出 configId 时提示节点未保存，而不是说没有绑定流程', async () => {
-    mocks.sourceSteps.mockResolvedValue([listStep, monitorStep({ configId: undefined })])
-
-    const context = await resolveMonitorGenerationContext('301069515', fallback)
-
-    expect(context.contextMode).toBe('table')
-    expect(context.fallbackReason).toBe('node-not-saved')
-  })
-
-  it('节点没有绑定输入表时给出对应原因', async () => {
-    mocks.sourceSteps.mockResolvedValue([listStep, monitorStep({ inputTable: '-' })])
-
-    const context = await resolveMonitorGenerationContext('301069515', fallback)
-
-    expect(context.contextMode).toBe('table')
-    expect(context.fallbackReason).toBe('node-no-input-table')
-  })
-})
-
-describe('describeTableFallback 独立监控提示', () => {
-  const base = {
-    contextMode: 'table' as const, configId: 0, sourceTable: 'sense_data.TB_ZJH',
-    targetTable: 'sense_data.TB_ZJH', inputFields: [], outputFields: [],
-    inputFieldOptions: [], outputFieldOptions: [],
-  }
-
-  it('有流程但没监控节点：说清没有节点，并指出怎么才能随流程触发', () => {
-    const text = describeTableFallback({ ...base, fallbackReason: 'no-monitor-node' })
-    expect(text).toContain('没有数据监控节点')
-    expect(text).toContain('sense_data.TB_ZJH')
-    expect(text).toContain('添加数据监控节点')
-    expect(text).not.toContain('没有绑定流程')
-  })
-
-  it('节点未保存 / 未绑表：分别指向保存节点与选表', () => {
-    expect(describeTableFallback({ ...base, fallbackReason: 'node-not-saved' })).toContain('还没有保存')
-    expect(describeTableFallback({ ...base, fallbackReason: 'node-no-input-table' })).toContain('没有绑定输入表')
-  })
-
-  it('读不到流程时注明独立监控按自己的执行计划运行', () => {
-    const text = describeTableFallback({ ...base, fallbackReason: 'flow-unavailable' })
-    expect(text).toContain('没有读到该源的可用流程')
-    expect(text).toContain('按自己的执行计划运行')
-  })
-})
 describe('resolveMonitorTableFields 字段清单（与生成同一条解析链）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -195,6 +93,19 @@ describe('resolveMonitorTableFields 字段清单（与生成同一条解析链�
     mocks.entryDetail.mockResolvedValue(ENTRY)
     await expect(resolveMonitorTableFields({ tableName: 'sense_data.T' })).resolves.toEqual(['CREATE_DT'])
     expect(mocks.entryDetail).not.toHaveBeenCalled()
+  })
+
+  it('请求执行器时带上 Access-Token 头（登录是 token 制，仅靠 Cookie 会在会话过期后 401）', async () => {
+    const calls: Array<{ headers: Record<string, string> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> })
+      return new Response(JSON.stringify({ fields: ['CREATE_DT'] }), { status: 200 })
+    }))
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => (key === 'pro__Access-Token' ? JSON.stringify({ value: 'tok-abc' }) : null),
+    })
+    await resolveMonitorTableFields({ tableName: 'sense_data.T' })
+    expect(calls[0].headers['Access-Token']).toBe('tok-abc')
   })
 
   it('实际字段接口失败时不退回旧清单掩盖问题', async () => {

@@ -35,10 +35,9 @@ import { EXEC_TEXT } from '@/utils/monitor/record'
 import type { MonitorEditorForm } from './monitor-editor/model'
 import {
   augmentMonitorSystemPrompt,
-  describeTableFallback,
   generateMonitorScript,
-  resolveMonitorGenerationContext,
   resolveMonitorTableFields,
+  resolveSourceResultContext,
   summarizeExecutionResult,
   testMonitorScript,
   testMonitorScriptWithRunner,
@@ -168,8 +167,6 @@ async function onCopyScript(): Promise<void> {
 }
 
 const generationError = ref('')
-/** 生成上下文降级说明（源未绑定流程、按主表生成独立监控时提示） */
-const generationNote = ref('')
 const testing = ref(false)
 const testResult = ref<null | {
   label: string
@@ -279,7 +276,6 @@ function applyRecord(record: MonitorRecordView): void {
   candidate.scriptPath = ''
   pending.value = false
   generationError.value = ''
-  generationNote.value = ''
   generatingPreview.value = ''
   syncCommitted()
   void loadSourceContext()
@@ -415,6 +411,11 @@ async function loadSourceContext(): Promise<void> {
     const stillClean = wasClean && formSignature(form) === baseline.value
     if (detail?.name) form.sourceName = detail.name
     mergeTableOptions(group)
+    // 新建时默认带出源的最终落库主表（1113 修订 §4.1.1）；主表不在可选清单里才退回「唯一表」
+    if (!form.tableName && detail?.mainTable) {
+      const landed = tableOptions.value.find((table) => table.tableName === detail.mainTable)
+      if (landed) form.tableName = landed.tableName
+    }
     if (!form.tableName && tableOptions.value.length === 1) form.tableName = tableOptions.value[0].tableName
     // 关联表定下来后再出「入库时间字段」候选（唯一候选的自动选中同样算系统补全）
     syncTimeColumnFields()
@@ -501,7 +502,6 @@ async function onSourceChanged(sourceId: string): Promise<void> {
   pending.value = false
   testResult.value = null
   generationError.value = ''
-  generationNote.value = ''
   form.sourceId = sourceId
   form.sourceName = ''
   form.tableName = ''
@@ -519,7 +519,6 @@ async function onSourcePicked(sourceId: string, name: string): Promise<void> {
   pending.value = false
   testResult.value = null
   generationError.value = ''
-  generationNote.value = ''
   form.sourceId = sourceId
   form.sourceName = name
   form.tableName = ''
@@ -582,22 +581,18 @@ async function onGenerate(): Promise<void> {
   generationError.value = ''
   generatingPreview.value = ''
   generatingThinking.value = ''
-  generationNote.value = ''
   scriptExpanded.value = false
   startElapsedTimer()
   const previous = { script: candidate.script, scriptPath: candidate.scriptPath }
   try {
-    // 源没绑定流程时退回「按表单选定的主表」生成独立监控脚本（configId=0），不再直接报错
+    // 源结果检查只读本条检查选定的表：不读源流程、不借任何监控节点的 configId/输入表
     const tableId = tableOptions.value.find((table) => table.tableName === form.tableName)?.tableId ?? ''
     const fields = await resolveMonitorTableFields({ tableName: form.tableName, tableId })
     applyTimeColumnFields(fields)
     if (!form.timeColumn || !fields.includes(form.timeColumn)) {
       throw new Error(`请选择当前表实际存在的入库时间字段（当前：${form.timeColumn || '未选择'}），然后重新生成脚本`)
     }
-    const context = await resolveMonitorGenerationContext(form.sourceId, {
-      tableName: form.tableName,
-      tableId,
-    })
+    const context = await resolveSourceResultContext({ tableName: form.tableName, tableId })
     const result = await generateMonitorScript({
       context,
       description: form.desc,
@@ -627,14 +622,7 @@ async function onGenerate(): Promise<void> {
     candidate.scriptPath = result.scriptPath
     pending.value = true
     testResult.value = null
-    if (context.contextMode === 'table') {
-      // 提示按真实原因区分（无流程 / 无监控节点 / 节点未保存 / 节点未绑表），
-      // 不再一律说成「还没有绑定流程」
-      generationNote.value = describeTableFallback(context)
-      ElMessage.warning('脚本已生成（按主表生成，未关联画布节点）：保存后才会生效')
-    } else {
-      ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
-    }
+    ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
   } catch (error) {
     // 失败保留原正文：不吃掉已有的生效脚本/上一次候选，也不落库
     candidate.script = previous.script
@@ -857,7 +845,7 @@ defineExpose({
         </span>
         <span v-if="isDirty" class="mc-badge mc-badge-warn" data-testid="mc-dirty">有未保存修改</span>
         <span class="mc-head-meta" :title="lockedSourceLabel">
-          <template v-if="form.sourceId">源「{{ form.sourceName || form.sourceId }}」 · {{ form.tableName || '未关联表' }} · </template>
+          <template v-if="form.sourceId">源结果检查 · 源「{{ form.sourceName || form.sourceId }}」 · 检查表：{{ form.tableName || '未选择' }} · {{ form.schedule ? '独立定时' : '仅手动' }} · </template>
           <template v-if="isEditing">
             记录 {{ recordState?.id || '' }} · {{ importHint }} ·
             {{ recordState?.enabled ? '已启用' : '已停用（保存不改启停）' }}
@@ -927,7 +915,7 @@ defineExpose({
           <label
             class="mc-label"
             for="mc-table-select"
-            title="关联表只决定检查范围；生成脚本仍以源流程「数据监控」节点绑定的输入表为准"
+            title="本条检查的数据范围：生成、试跑和正式运行都读取这张表，不随源流程的监控节点变化"
           >
             {{ form.kind === 'ai' ? '关联表（数据范围）' : '表名' }}
           </label>
@@ -1210,9 +1198,6 @@ defineExpose({
                 <pre ref="streamRef" class="mc-stream-think-body is-live" data-testid="mc-stream-thinking">{{ generatingThinking || '正在连接模型…' }}</pre>
               </template>
             </div>
-            <p v-if="generationNote" class="mc-notice mc-notice-warn" data-testid="mc-generate-note">
-              {{ generationNote }}
-            </p>
             <p v-if="generationError" class="mc-error" data-testid="mc-generate-error">
               生成失败：{{ generationError }}（已保留原正文）
             </p>
