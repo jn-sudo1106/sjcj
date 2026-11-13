@@ -48,6 +48,25 @@ export interface MonitorCoverage {
 export type MonitorScopeType = 'source_result' | 'node_input'
 
 /**
+ * 画布节点与检查项的显式绑定（C12 前端半，2026-11-13）。
+ *
+ * 画布同步过去只能按 `sourceId` 查行数：0 条建、1 条改、多条拒绝——节点本身没有身份，
+ * 所以「一个源两个监控节点」「复制节点」「检查项删了重建」都无从表达（见 1113 §3 补充）。
+ * 绑定写在 `check_conf.binding` 里，Java 侧原样存文本，不需要改表：
+ *
+ * - `nodeKey`：画布节点 id（还原时就是后端 `stepId`，同一流程内稳定；复制节点会得到新 id）
+ * - `workflowId`：流程 id，防止跨流程 / 模板复制时串号
+ * - `bindingVersion`：节点侧检查范围（表 / 时间列）变化时递增，用于「范围变了要不要重新生成」的复核提示
+ * - `boundAt`：最近一次写入绑定的时间（服务端无关，前端本地时间串，仅用于展示）
+ */
+export interface MonitorCheckBinding {
+  workflowId?: string
+  nodeKey?: string
+  bindingVersion?: number
+  boundAt?: string
+}
+
+/**
  * 监控定义里 `checkConf` 的结构化视图。
  * 旧平台把整套配置塞在一个 JSON 串里，键名与语义见 1109 §2.1；这里只挑页面会读的键，
  * 其余键通过索引签名原样保留——保存时必须整包回写，不能因为不认识就丢掉（1110 §8.1）。
@@ -75,6 +94,8 @@ export interface MonitorCheckConf {
   kind?: MonitorKind
   /** 检查对象归属；旧记录缺省（未分类） */
   scopeType?: MonitorScopeType
+  /** 画布节点显式绑定（仅 `node_input` 检查有）；旧记录缺省，保存时按「唯一一条」收养 */
+  binding?: MonitorCheckBinding
   /**
    * 超期无新增策略（1113 §5）：检查窗口内没有新增数据时，用「预期更新周期 + 宽限」判断是否断流。
    *
@@ -137,6 +158,20 @@ export interface MonitorRunConfig {
   window?: { type?: string; hours?: number; periodHours?: number; start?: string; end?: string }
   /** 超期无新增策略（快照口径，不回查当前定义） */
   overduePolicy?: { expectEveryMinutes?: number; graceMinutes?: number }
+}
+
+/**
+ * C01：单条检查项详情（`GET /api/v1/source/check/detail?monitorId=`）。
+ *
+ * 旧能力只有按 sourceId 拉全量再猜：同源多条时保存后回读必然错行（1109 §5.3）。
+ * `revision` 就是 `ck_source.VER`，保存时原样带回做 CAS。
+ */
+export interface MonitorDetail {
+  monitor: SourceCheck
+  /** 服务端解析后的 checkConf；解析失败为 null，调用方自己再 parse（不要用空对象顶上） */
+  checkConf: MonitorCheckConf | null
+  scopeType?: MonitorScopeType
+  revision?: number
 }
 
 /** 一次通知投递。重试只增加 attempt，不新建 run（1110 §9.3 / C08）。 */
@@ -276,6 +311,8 @@ export interface MonitorSourceRow {
   coverageDetail?: string
   data: MonitorDataStatus
   exec: MonitorExecStatus
+  /** 源关联的流程（cs_source.FLOW_ID）；缺省 = 未关联流程（只影响「是否随流程触发」，不影响能否生成检查） */
+  flowId?: string
   notifyFailures: number
   lastCheckAt?: string
   /** 最差事实的展示文案与色调，由 summary 统一算，页面不再各自判断 */

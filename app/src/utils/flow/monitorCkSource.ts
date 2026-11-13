@@ -1,11 +1,12 @@
 // ck_source 监控源配置同步（C01 /api/v1/source/check/*，2026-11-13 切新接口）：
 // 数据监控节点保存时按当前流程的 sourceId 查 ck_source（GET /api/source/list，只读沿用旧接口），
-// 无则新增（POST /api/v1/source/check/add）、有则按主键更新（POST /api/v1/source/check/update，带 ver
+// 认领「绑定到本节点」的那条（check_conf.binding.nodeKey，C12 前端半），无则新增
+//（POST /api/v1/source/check/add）、有则按主键更新（POST /api/v1/source/check/update，带 ver
 // 乐观锁）。NodeInspector 底部「保存」（编排配置 Tab）与 RuleOrchestrationTab「保存脚本」两条保存
 // 路径共用，抽在这里保证 payload 口径一致。
 import { ckSourceApi, entryApi } from '@/api'
 import { addSourceCheck, updateSourceCheck } from '@/api/monitor'
-import type { MonitorScopeType } from '@/api/types/monitorCenter'
+import type { MonitorCheckBinding, MonitorScopeType } from '@/api/types/monitorCenter'
 import {
   makeDefaultRuleOrchestration,
   type CollectorSchedule,
@@ -119,6 +120,113 @@ function parseCheckConf(value: unknown): Record<string, unknown> {
   }
 }
 
+/** check_conf.binding → 结构化绑定；没有这个键（旧记录）或结构不对时返回 undefined。 */
+function bindingOf(conf: Record<string, unknown>): MonitorCheckBinding | undefined {
+  const raw = conf.binding
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const value = raw as Record<string, unknown>
+  const binding: MonitorCheckBinding = {}
+  const workflowId = typeof value.workflowId === 'string' ? value.workflowId.trim() : ''
+  if (workflowId) binding.workflowId = workflowId
+  const nodeKey = typeof value.nodeKey === 'string' ? value.nodeKey.trim() : ''
+  if (nodeKey) binding.nodeKey = nodeKey
+  const version = Math.trunc(Number(value.bindingVersion))
+  if (Number.isFinite(version) && version > 0) binding.bindingVersion = version
+  const boundAt = typeof value.boundAt === 'string' ? value.boundAt.trim() : ''
+  if (boundAt) binding.boundAt = boundAt
+  return Object.keys(binding).length ? binding : undefined
+}
+
+/**
+ * 绑定是否指向本节点（C12 前端半，2026-11-13）。
+ *
+ * `nodeKey` 必须一致；`workflowId` 双方都有时才比较——新建流程还没拿到后端流程 ID 时，
+ * 只按节点 ID 认，避免把「同一流程里的节点」判成别人。
+ */
+export function bindingMatches(
+  binding: MonitorCheckBinding | undefined,
+  workflowId: string | undefined,
+  nodeKey: string | undefined,
+): boolean {
+  if (!binding?.nodeKey || !nodeKey || binding.nodeKey !== nodeKey) return false
+  if (workflowId && binding.workflowId) return binding.workflowId === workflowId
+  return true
+}
+
+/** 在已有行里找「属于本节点」的那条：优先按显式绑定认领，不再依赖该源的行数。 */
+function pickBoundRow(
+  rows: CkSourceRecord[],
+  workflowId: string | undefined,
+  nodeKey: string | undefined,
+): CkSourceRecord | undefined {
+  if (!nodeKey) return undefined
+  return rows.find((row) => bindingMatches(bindingOf(parseCheckConf(row.checkConf)), workflowId, nodeKey))
+}
+
+/**
+ * 绑定版本：节点侧检查范围（输入表 / 时间列）变了才递增，首次绑定从 1 开始。
+ * 递增后检查项可以据此提示「范围变了，原脚本/阈值需要复核」，而不是静默沿用旧范围。
+ */
+function bindingVersionOf(previous: MonitorCheckBinding | undefined, scopeChanged: boolean): number {
+  const base = previous?.bindingVersion ?? 0
+  return scopeChanged || !base ? base + 1 : base
+}
+
+function nowStamp(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+}
+
+/**
+ * 检查范围（表 / 时间列）是否相对上次绑定变了。
+ *
+ * 只比较「会改变检查数据范围」的两项：`tableName`（行上的列）与 `orchestration.timeColumn`。
+ * 名称、告警阈值、监控方法的变化不算范围变化——那些不影响「这条检查看哪张表哪段时间」。
+ */
+function scopeChangedOf(
+  previousConf: Record<string, unknown>,
+  previousTableName: string | undefined,
+  tableName: string,
+  orchestration: Omit<RuleOrchestration, 'systemPrompt' | 'script'>,
+): boolean {
+  const previousOrch = previousConf.orchestration && typeof previousConf.orchestration === 'object'
+    ? previousConf.orchestration as Record<string, unknown>
+    : {}
+  const previousTimeColumn = typeof previousOrch.timeColumn === 'string' ? previousOrch.timeColumn.trim() : ''
+  const nextTimeColumn = orchardTimeColumnOf(orchestration).trim()
+  const previousTable = previousTableName?.trim() ?? ''
+  return previousTable !== tableName.trim() || previousTimeColumn !== nextTimeColumn
+}
+
+function orchardTimeColumnOf(orchestration: Omit<RuleOrchestration, 'systemPrompt' | 'script'>): string {
+  const value = (orchestration as { timeColumn?: unknown }).timeColumn
+  return typeof value === 'string' ? value : ''
+}
+
+/** 把绑定合并进 check_conf（对象层合并，其余键原样保留；没有 nodeKey 时退化为旧口径不写绑定）。 */
+function withBinding(
+  conf: Record<string, unknown>,
+  options: {
+    workflowId?: string
+    nodeKey?: string
+    previous?: MonitorCheckBinding
+    scopeChanged: boolean
+  },
+): Record<string, unknown> {
+  const { workflowId, nodeKey, previous, scopeChanged } = options
+  if (!nodeKey) return conf
+  const version = bindingVersionOf(previous, scopeChanged)
+  const versionChanged = version !== (previous?.bindingVersion ?? 0)
+  const binding: MonitorCheckBinding = {
+    ...(workflowId ? { workflowId } : {}),
+    nodeKey,
+    bindingVersion: version,
+    boundAt: versionChanged || !previous?.boundAt ? nowStamp() : previous.boundAt,
+  }
+  return { ...conf, binding }
+}
+
 function notifyTypeOf(alertConfig: MonitorAlertConfig | undefined, fallback: unknown): string | undefined {
   const enabledPolicies = alertConfig?.policies?.filter((policy) => policy.enabled) ?? []
   const channelTypes = enabledPolicies.flatMap((policy) => policy.channelTypes)
@@ -166,13 +274,20 @@ function buildCheckConf(
   node: NodeConfig | undefined,
   orchestration: Omit<RuleOrchestration, 'systemPrompt' | 'script'>,
   previous: Record<string, unknown>,
+  binding?: {
+    workflowId?: string
+    nodeKey?: string
+    previous?: MonitorCheckBinding
+    scopeChanged: boolean
+  },
 ): string {
-  return JSON.stringify(withNodeInputScope({
+  const merged = {
     ...previous,
     ...alertCheckConfOf(node?.alertConfig, previous),
     monitorMethods: node?.monitorMethods ?? [],
     orchestration,
-  }))
+  }
+  return JSON.stringify(withNodeInputScope(binding ? withBinding(merged, binding) : merged))
 }
 
 /**
@@ -193,16 +308,19 @@ export async function syncMonitorAlertConfig(
   sourceId: string | undefined,
   node: NodeConfig | undefined,
   alertConfig: MonitorAlertConfig | undefined,
+  options?: { workflowId?: string; nodeKey?: string },
 ): Promise<void> {
   const trimmed = sourceId?.trim()
   if (!trimmed) throw new Error('缺少源 ID')
   const existing = await ckSourceApi.list(trimmed)
   if (!existing.length) {
-    await syncMonitorCkSource(trimmed, node ? { ...node, alertConfig } : undefined)
+    await syncMonitorCkSource(trimmed, node ? { ...node, alertConfig } : undefined, undefined, options)
     return
   }
-  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
-  const current = existing[0]
+  // C12：优先认领「绑定到本节点」的那条；没有绑定才退回旧口径（唯一一条可改、多条拒绝）。
+  const bound = pickBoundRow(existing, options?.workflowId, options?.nodeKey?.trim() || undefined)
+  if (!bound && existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
+  const current = bound ?? existing[0]
   const previousConf = parseCheckConf(current.checkConf)
   // 按主键（C01）而不是按 sourceId 更新：只命中这一条，且带上 ver 做乐观锁——
   // 页面读到记录后别人又改过时，后端会拒绝而不是静默覆盖。
@@ -235,8 +353,10 @@ export async function syncMonitorAlertConfig(
  *   - **更新**走 C01 按主键 `/api/v1/source/check/update`，只写上面四个定义字段 + id/ver
  *     （ver 是乐观锁基线，由后端比较并递增）——画布保存不能重新启用已停用的检查项，
  *     也不能改别人的创建时间；
- *   - 该源在 ck_source 里已有多条记录时直接抛 MultipleCkSourceRowsError（画布无法表达「改哪一条」），
- *     不再按 sourceId 整包覆盖。
+ *   - C12 显式绑定（2026-11-13）：checkConf 里写 `binding = { workflowId, nodeKey, bindingVersion, boundAt }`，
+ *     保存时先按 `nodeKey` 认领本节点的记录——同源多节点、复制节点都只改自己那条；认领不到时：
+ *     零条 → 建行；唯一一条且无绑定（旧记录）→ 收养并补写绑定；其余（多条且都没有绑定）→
+ *     抛 MultipleCkSourceRowsError（画布无法判断改哪一条，交用户到监控中心处理）。
  *
  * `sourceSchedule` 传画布当前源（flow.sourceCfg）：节点没配过定时时，节点配置 Tab 显示的就是
  * 源上的定时，保存就该写同一个值，否则出现「界面有 cron、落库是空」。
@@ -247,6 +367,7 @@ export async function syncMonitorCkSource(
   sourceId: string | undefined,
   node: NodeConfig | undefined,
   sourceSchedule?: CollectorSchedule | null,
+  options?: { workflowId?: string; nodeKey?: string },
 ): Promise<void> {
   const trimmed = sourceId?.trim()
   if (!trimmed) return // 流程未绑源（草稿态）时跳过，不阻塞保存
@@ -256,8 +377,21 @@ export async function syncMonitorCkSource(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 解构剔除这两个键：ck_source 不落提示词与脚本体
   const { systemPrompt: _omitPrompt, script: _omitScript, ...orchestration } = orchCfg
   const existing = await ckSourceApi.list(trimmed)
-  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
-  const previousConf = parseCheckConf(existing[0]?.checkConf)
+  const workflowId = options?.workflowId?.trim() || undefined
+  const nodeKey = options?.nodeKey?.trim() || undefined
+  // C12（2026-11-13 前端半）：先按 check_conf.binding 认领本节点的检查项。
+  // 认领到 → 只改这一条，同源多节点/复制节点不再互相覆盖，也不再因为「该源有多行」被迫停手。
+  const bound = pickBoundRow(existing, workflowId, nodeKey)
+  if (!bound && existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
+  // 没有绑定时退回旧口径：零条 → 建行；唯一一条且**没有绑定**（旧记录）→ 收养并补写绑定。
+  // 唯一一条但绑定到别的节点 → 不收养，按本节点另建一条（这正是「一个源两个监控节点」的目标形态）。
+  const adoptTarget = bound
+    ?? (existing.length === 1 && !bindingOf(parseCheckConf(existing[0].checkConf)) ? existing[0] : undefined)
+  const previousConf = parseCheckConf(adoptTarget?.checkConf)
+  const previousBinding = bindingOf(previousConf)
+  const tableName = await resolveInputTableName(node, orchCfg)
+  // 只有「改的是一条已有记录」时才谈范围变化；新建行 / 收养旧记录都算首次绑定（版本从 1 开始）。
+  const scopeChanged = adoptTarget ? scopeChangedOf(previousConf, adoptTarget.tableName, tableName, orchestration) : false
   // update 只提交「定义」字段：name / schedule / tableName / checkConf。
   // state（启用状态）、isDelete（逻辑删除）、createDt、ver 属于运行/生命周期字段，
   // 画布保存不得重置——否则「停用的检查项」会被一次节点保存重新启用（2026-11-12 最小保护）。
@@ -265,17 +399,21 @@ export async function syncMonitorCkSource(
     sourceId: Number(trimmed),
     name: node?.title ?? '',
     schedule: nodeScheduleCron(node, sourceSchedule),
-    tableName: await resolveInputTableName(node, orchCfg),
-    checkConf: buildCheckConf(node, orchestration, previousConf),
+    tableName,
+    checkConf: buildCheckConf(node, orchestration, previousConf, {
+      workflowId,
+      nodeKey,
+      previous: previousBinding,
+      scopeChanged,
+    }),
   }
-  if (existing.length) {
-    const current = existing[0]
+  if (adoptTarget) {
     // 单条记录：按主键更新（C01 /api/v1/source/check/update），并带 ver 做乐观锁。
     // 旧 /api/source/update 只认 sourceId，一条 payload 命中该源所有行，才有多行时只能拒绝的问题。
     await updateSourceCheck({
       ...definition,
-      id: current.id,
-      ver: current.ver,
+      id: adoptTarget.id,
+      ver: adoptTarget.ver,
     })
     return
   }

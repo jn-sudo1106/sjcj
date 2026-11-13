@@ -1626,7 +1626,7 @@ async function onSaveScript() {
     // 源一并传进去：节点没配过定时时，节点配置 Tab 展示的就是源上的 cron，落库要用同一个值。
     if (isMonitor.value) {
       try {
-        await syncMonitorCkSource(promptSourceId.value, cfg.value, sourceSchedule.value)
+        await syncMonitorCkSource(promptSourceId.value, cfg.value, sourceSchedule.value, { workflowId: siteScriptFlowId.value, nodeKey: id.value })
       } catch (e) {
         if (e instanceof MultipleCkSourceRowsError) {
           alertCkSourceConflict(e)

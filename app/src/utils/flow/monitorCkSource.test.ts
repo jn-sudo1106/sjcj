@@ -327,3 +327,127 @@ describe('describeCkSourceConflictRows', () => {
     ])).toEqual(['检查项A｜id=7｜在用'])
   })
 })
+
+describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）', () => {
+  const options = { workflowId: '451', nodeKey: 'web-list-1' }
+
+  it('同源多条时按 nodeKey 认领本节点那条：只更新它，不再因「多条」停手', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-2', bindingVersion: 1 } }) },
+      { id: 8, ver: 12, sourceId: 430016501, name: '本节点', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 } }) },
+    ])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
+    const add = vi.spyOn(monitorApi, 'addSourceCheck')
+
+    await syncMonitorCkSource('430016501', makeMonitorNode(), undefined, options)
+
+    expect(add).not.toHaveBeenCalled()
+    const payload = update.mock.calls[0][0] as Record<string, unknown>
+    expect(payload).toMatchObject({ id: 8, ver: 12 })
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
+    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 })
+    // 范围没变：boundAt 沿用旧值语义（此处旧记录没有 boundAt，首次补齐即可）
+    expect(typeof conf.binding.boundAt).toBe('string')
+  })
+
+  it('唯一一条旧记录没有 binding 时收养它，并补写绑定（bindingVersion 从 1 开始）', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, ver: 11, sourceId: 430016501, name: '旧监控', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ customKeep: 'keep-me' }) },
+    ])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
+    const add = vi.spyOn(monitorApi, 'addSourceCheck')
+
+    await syncMonitorCkSource('430016501', makeMonitorNode(), undefined, options)
+
+    expect(add).not.toHaveBeenCalled()
+    const payload = update.mock.calls[0][0] as Record<string, unknown>
+    expect(payload).toMatchObject({ id: 7, ver: 11 })
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
+    expect(conf.customKeep).toBe('keep-me')
+    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 })
+  })
+
+  it('唯一一条但绑定的是别的节点时另建一条（一个源两个监控节点不再互相覆盖）', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-2', bindingVersion: 1 } }) },
+    ])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck')
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 102, ver: null })
+
+    await syncMonitorCkSource('430016501', makeMonitorNode(), undefined, options)
+
+    expect(update).not.toHaveBeenCalled()
+    const payload = add.mock.calls[0][0] as Record<string, unknown>
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
+    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 })
+  })
+
+  it('检查范围（输入表）变了才递增 bindingVersion，名称变化不递增', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      {
+        id: 8,
+        ver: 12,
+        sourceId: 430016501,
+        name: '本节点',
+        tableName: 'sense_data.TB_OLD',
+        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 3 } }),
+      },
+    ])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
+
+    await syncMonitorCkSource('430016501', makeMonitorNode(), undefined, options)
+    let conf = JSON.parse(String((update.mock.calls[0][0] as Record<string, unknown>).checkConf ?? '{}'))
+    // 表从 TB_OLD 变成 TB_JD_SKU_BASE → 范围变化，版本 +1
+    expect(conf.binding.bindingVersion).toBe(4)
+
+    // 第二次：表没变、只改名称 → 版本保持
+    update.mockClear()
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      {
+        id: 8,
+        ver: 13,
+        sourceId: 430016501,
+        name: '本节点',
+        tableName: 'sense_data.TB_JD_SKU_BASE',
+        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 4 } }),
+      },
+    ])
+    await syncMonitorCkSource('430016501', makeMonitorNode({ title: '改了名字' }), undefined, options)
+    conf = JSON.parse(String((update.mock.calls[0][0] as Record<string, unknown>).checkConf ?? '{}'))
+    expect(conf.binding.bindingVersion).toBe(4)
+    expect((update.mock.calls[0][0] as Record<string, unknown>).name).toBe('改了名字')
+  })
+
+  it('同源多条且都没有 binding 时仍然拒绝（旧记录无法判断改哪一条）', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, sourceId: 430016501, name: '检查项A', checkConf: '{}' },
+      { id: 8, sourceId: 430016501, name: '检查项B', checkConf: '{}' },
+    ])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck')
+
+    const error = await syncMonitorCkSource('430016501', makeMonitorNode(), undefined, options).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(MultipleCkSourceRowsError)
+    expect(update).not.toHaveBeenCalled()
+  })
+})
+
+describe('syncMonitorAlertConfig · C12 绑定认领', () => {
+  it('同源多条时只更新绑定到本节点那条，告警配置不再被「多条」挡住', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-2', bindingVersion: 1 } }) },
+      { id: 8, ver: 12, sourceId: 430016501, name: '本节点', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 }, script: '/code01/keep.py' }) },
+    ])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
+    const node = makeMonitorNode()
+
+    await syncMonitorAlertConfig('430016501', node, { ...node.alertConfig!, enabled: false }, { workflowId: '451', nodeKey: 'web-list-1' })
+
+    const payload = update.mock.calls[0][0] as Record<string, unknown>
+    expect(payload).toMatchObject({ id: 8, ver: 12 })
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
+    // 告警面板只合入告警键，脚本/绑定原样保留
+    expect(conf.notifyOn).toBe('disabled')
+    expect(conf.script).toBe('/code01/keep.py')
+    expect(conf.binding).toMatchObject({ nodeKey: 'web-list-1' })
+  })
+})

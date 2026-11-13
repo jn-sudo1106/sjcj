@@ -7,7 +7,7 @@ import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDial
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { ckSourceApi, configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { useFlowVersionStore } from '@/stores/flowVersion'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
@@ -33,6 +33,8 @@ function mockAssets() {
   vi.spyOn(ruleApi, 'ruleGroups').mockResolvedValue([])
   vi.spyOn(ruleApi, 'rulePaged').mockResolvedValue({ total: 0, list: [] })
   vi.spyOn(ruleApi, 'sharedConfigs').mockResolvedValue([])
+  // C12 绑定展示：非监控节点不发请求；监控节点用例再按需覆盖返回值。
+  vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
 }
 
 // review 0723 #9 修正：文档原描述（onMounted 无条件加载 6 个 API）已经不成立，当前代码已有 isRule 判断；
@@ -1226,5 +1228,91 @@ describe('数据监控节点保存：同源多条检查项', () => {
     expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
     wrapper.unmount()
     vi.mocked(syncMonitorCkSource).mockReset()
+  })
+})
+
+// C12 前端半的「读」这一侧（2026-11-13）：画布保存会把 check_conf.binding 写到 ck_source，
+// 检查器要把「本节点绑到哪条检查项」显式展示出来。只读回读，不许触发同步 / 写库。
+describe('数据监控节点：检查项显式绑定展示（C12）', () => {
+  type CkRows = Awaited<ReturnType<typeof ckSourceApi.list>>
+
+  async function mountMonitor(rows: CkRows | Error) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    // flowId 用于和 binding.workflowId 对齐（canvasFlowIdOf 读 sourceCfg.flowId）
+    flow.sourceCfg = {
+      sourceId: '430016501', name: '某源', url: 'http://x', configId: 'c-0',
+      mainTable: 'T1', owner: 'admin', state: 'C', flowId: '451',
+    } as never
+    const node = cloneConfig(NODE_CONFIGS['rule'])
+    node.template = 'monitor'
+    node.title = '库存监控'
+    node.configId = '1401088'
+    node.configName = '库存监控'
+    flow.configs['monitor-1'] = node
+    flow.main = ['monitor-1']
+    flow.select('monitor-1')
+    // 数据监控节点会加载提示词模板（fetch 相对 URL 在 jsdom 下解析不了），返回空列表即可。
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    const list = vi.spyOn(ckSourceApi, 'list')
+    if (rows instanceof Error) list.mockRejectedValue(rows)
+    else list.mockResolvedValue(rows)
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    return { wrapper, flow, list }
+  }
+
+  it('已绑定：显示检查项 ID、绑定版本、同步时间与名称', async () => {
+    const { wrapper } = await mountMonitor([
+      {
+        id: 7, sourceId: 430016501, name: '库存检查项',
+        checkConf: JSON.stringify({
+          binding: { workflowId: '451', nodeKey: 'monitor-1', bindingVersion: 2, boundAt: '2026-11-13 10:00' },
+        }),
+      },
+    ])
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('已绑定检查项 #7')
+    expect(block.text()).toContain('绑定版本 v2')
+    expect(block.text()).toContain('同步于 2026-11-13 10:00')
+    expect(block.text()).toContain('库存检查项')
+    expect(block.find('[data-testid="ni-monitor-open"]').attributes('title'))
+      .toBe('跳转到监控中心（需手动定位该检查项）')
+    wrapper.unmount()
+  })
+
+  it('旧记录（check_conf 没有 binding）显示未绑定，不误报成已绑定', async () => {
+    const { wrapper } = await mountMonitor([
+      { id: 9, sourceId: 430016501, name: '旧检查项', checkConf: JSON.stringify({ minSize: 0, cond: 'id > 0' }) },
+    ])
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('尚未绑定检查项：在监控中心生成并保存一次，或直接在此节点保存检查配置')
+    expect(block.find('[data-testid="ni-monitor-open"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('接口失败：显示「绑定信息读取失败」，不静默成未绑定', async () => {
+    const { wrapper } = await mountMonitor(new Error('接口 502'))
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('绑定信息读取失败')
+    expect(block.text()).not.toContain('尚未绑定检查项')
+    wrapper.unmount()
+  })
+
+  it('已绑定时点「在监控中心查看」→ 跳转 /monitor（sourceCheck 页签）', async () => {
+    const { wrapper } = await mountMonitor([
+      {
+        id: 11, sourceId: 430016501, name: '库存检查项',
+        checkConf: JSON.stringify({ binding: { nodeKey: 'monitor-1', bindingVersion: 1, boundAt: '2026-11-13 10:00' } }),
+      },
+    ])
+    routerPush.mockClear()
+    await wrapper.get('[data-testid="ni-monitor-open"]').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
+    wrapper.unmount()
   })
 })

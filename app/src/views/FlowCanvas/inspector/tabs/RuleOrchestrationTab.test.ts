@@ -1838,7 +1838,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     flow.setActiveTab('table')
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
-    const listSpy = vi.spyOn(ckSourceApi, 'list')
+    // 注：ckSourceApi.list 现在被「检查项绑定只读展示」用来读该源的检查项（打开检查器就会读一次），
+    // 不能用它判定「有没有同步写库」；这里改锁真正的写接口。
+    const insertSpy = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({})
+    const updateSpy = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     await flushPromises()
 
     const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
@@ -1846,7 +1849,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(listSpy).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 
   it('数据监控节点显示描述输入框', async () => {
