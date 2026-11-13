@@ -57,6 +57,8 @@ describe('syncMonitorCkSource', () => {
       name: '旧监控',
       checkConf: JSON.stringify({
         customKeep: 'keep-me',
+        kind: 'source_result',
+        script: '/code01/alert.py',
         minSize: '1',
         startDt: 'DATE_SUB(CURDATE(), INTERVAL 7 DAY)',
         cond: 'old cond',
@@ -65,11 +67,11 @@ describe('syncMonitorCkSource', () => {
       }),
     }])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
-    const insert = vi.spyOn(ckSourceApi, 'insert')
+    const add = vi.spyOn(monitorApi, 'addSourceCheck')
 
     await syncMonitorCkSource('430016501', makeMonitorNode())
 
-    expect(insert).not.toHaveBeenCalled()
+    expect(add).not.toHaveBeenCalled()
     const payload = update.mock.calls[0][0]
     expect(payload).toMatchObject({
       sourceId: 430016501,
@@ -86,6 +88,10 @@ describe('syncMonitorCkSource', () => {
     expect(payload).toMatchObject({ id: 7, ver: 9001 })
     const conf = JSON.parse(String(payload.checkConf ?? '{}'))
     expect(conf.customKeep).toBe('keep-me')
+    // 1113 设计修订稿：画布节点侧显式写 scopeType='node_input'，且不能洗掉原有键
+    expect(conf.scopeType).toBe('node_input')
+    expect(conf.kind).toBe('source_result')
+    expect(conf.script).toBe('/code01/alert.py')
     expect(conf.minSize).toBe('30')
     expect(conf.startDt).toBe('DATE_SUB(CURDATE(), INTERVAL 7 DAY)')
     expect(conf.cond).toContain('数据延迟超过阈值')
@@ -101,7 +107,7 @@ describe('syncMonitorCkSource', () => {
       { id: 8, sourceId: 430016501, name: '检查项B', checkConf: '{}' },
     ])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck')
-    const insert = vi.spyOn(ckSourceApi, 'insert')
+    const add = vi.spyOn(monitorApi, 'addSourceCheck')
 
     const error = await syncMonitorCkSource('430016501', makeMonitorNode()).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(MultipleCkSourceRowsError)
@@ -110,20 +116,25 @@ describe('syncMonitorCkSource', () => {
     expect((error as MultipleCkSourceRowsError).count).toBe(2)
     expect((error as MultipleCkSourceRowsError).rows.map((row) => row.id)).toEqual([7, 8])
     expect(update).not.toHaveBeenCalled()
-    expect(insert).not.toHaveBeenCalled()
+    expect(add).not.toHaveBeenCalled()
   })
 
-  it('无记录 insert 时写入默认 startDt 与告警配置字段', async () => {
+  it('无记录新建时写入默认 startDt 与告警配置字段', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
 
     await syncMonitorCkSource('430016501', makeMonitorNode())
 
-    const payload = insert.mock.calls[0][0]
-    expect(payload).toMatchObject({ state: 'E', isDelete: 0, ver: 12 })
-    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
-    expect(String(payload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
+    const payload = add.mock.calls[0][0] as Record<string, unknown>
+    // 新建走 C01 /api/v1/source/check/add：生命周期字段由后端 addObject 补
+    // （createDt / state='C' / isDelete=0 / nextRun），前端不再自己填，避免和调度侧口径分叉。
+    expect(payload).toMatchObject({ sourceId: 430016501, name: '库存监控' })
+    expect(payload).not.toHaveProperty('state')
+    expect(payload).not.toHaveProperty('isDelete')
+    expect(payload).not.toHaveProperty('createDt')
+    expect(payload).not.toHaveProperty('ver')
     const conf = JSON.parse(String(payload.checkConf ?? '{}'))
+    expect(conf.scopeType).toBe('node_input')
     expect(conf.minSize).toBe('30')
     expect(conf.startDt).toBe('DATE_SUB(CURDATE(), INTERVAL 1 DAY)')
     expect(conf.notifyOn).toBe('error')
@@ -134,43 +145,43 @@ describe('syncMonitorCkSource', () => {
   // 保存必须落这个推导值，否则出现「界面显示 0 0 8 * * ?、ck_source.SCHEDULE 是空」。
   it('schedule 按节点配置 Tab 的定时策略推导，不依赖 store 里已存的 cron', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
 
     await syncMonitorCkSource('430016501', makeMonitorNode({
       schedule: { scheduleType: '每天', scheduleTime: '08:00', weekdays: [], cron: '' },
     }))
 
-    expect(insert.mock.calls[0][0]).toMatchObject({ schedule: '0 0 8 * * ?' })
+    expect(add.mock.calls[0][0]).toMatchObject({ schedule: '0 0 8 * * ?' })
   })
 
   // 节点没配过定时 → 节点配置 Tab 显示的是源上的定时，落库要用同一个值。
   it('节点没配定时时用画布当前源的定时设置', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
 
     await syncMonitorCkSource('430016501', makeMonitorNode({ schedule: undefined }), {
       scheduleType: '交易日定时', scheduleTime: '08:30', weekdays: [1, 2, 3, 4, 5], cron: '',
     })
 
-    expect(insert.mock.calls[0][0]).toMatchObject({ schedule: '0 30 8 ? * 1-5' })
+    expect(add.mock.calls[0][0]).toMatchObject({ schedule: '0 30 8 ? * 1-5' })
   })
 
   // 一点定时都没配时，节点配置 Tab 那个 cron 框显示的是「每天 0:0」的兜底推导值——
   // 保存按界面口径照写，不再留空（空串等于这条监控不会被排期）。
   it('定时一点没配时 schedule 取节点配置 Tab 的兜底显示值', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
 
     await syncMonitorCkSource('430016501', makeMonitorNode({ schedule: undefined, collectCfg: undefined }))
 
-    expect(insert.mock.calls[0][0]).toMatchObject({ schedule: '0 0 0 * * ?' })
+    expect(add.mock.calls[0][0]).toMatchObject({ schedule: '0 0 0 * * ?' })
   })
 
   // 流程重新加载后只剩输入表 ID（物理表名不落步骤），表配置 Tab 显示的是那张表，
   // 落库也要拿到它的物理表名，而不是把 ID 写进 TABLE_NAME 或者写空。
   it('只有输入表 ID 时回查表详情取物理表名', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     const detail = vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
       tableId: '2102154', tableName: 'sense_data.TB_JD_SKU_BASE', name: '酒价基础表', fields: [],
     })
@@ -180,19 +191,19 @@ describe('syncMonitorCkSource', () => {
     }))
 
     expect(detail).toHaveBeenCalledWith('2102154')
-    expect(insert.mock.calls[0][0]).toMatchObject({ tableName: 'sense_data.TB_JD_SKU_BASE' })
+    expect(add.mock.calls[0][0]).toMatchObject({ tableName: 'sense_data.TB_JD_SKU_BASE' })
   })
 
   it('回查表详情失败时 tableName 留空，不抛出去打断保存', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     vi.spyOn(entryApi, 'entryDetail').mockRejectedValue(new Error('表详情不可用'))
 
     await syncMonitorCkSource('430016501', makeMonitorNode({
       ruleCfg: { mode: 'ref', scriptPath: '/code01/184.py', describe: '', inputTable: '', inputTableId: '2102154' },
     }))
 
-    expect(insert.mock.calls[0][0]).toMatchObject({ tableName: '' })
+    expect(add.mock.calls[0][0]).toMatchObject({ tableName: '' })
   })
 })
 
@@ -217,12 +228,12 @@ describe('syncMonitorAlertConfig', () => {
       }),
     }])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
-    const insert = vi.spyOn(ckSourceApi, 'insert')
+    const add = vi.spyOn(monitorApi, 'addSourceCheck')
 
     const node = makeMonitorNode()
     await syncMonitorAlertConfig('430016501', node, node.alertConfig)
 
-    expect(insert).not.toHaveBeenCalled()
+    expect(add).not.toHaveBeenCalled()
     const payload = update.mock.calls[0][0]
     // 只带 checkConf：name/schedule/tableName 交给节点保存那条通路，这里不碰
     expect(payload).toEqual({
@@ -249,26 +260,31 @@ describe('syncMonitorAlertConfig', () => {
     const node = makeMonitorNode()
     await syncMonitorAlertConfig('430016501', node, { ...node.alertConfig!, enabled: false })
 
-    expect(JSON.parse(String(update.mock.calls[0][0].checkConf ?? '{}')).notifyOn).toBe('disabled')
+    const conf = JSON.parse(String(update.mock.calls[0][0].checkConf ?? '{}'))
+    expect(conf.notifyOn).toBe('disabled')
+    expect(conf.scopeType).toBe('node_input')
   })
 
   it('该源还没有 ck_source 行时按节点建行，不静默失败', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
 
     const node = makeMonitorNode()
     await syncMonitorAlertConfig('430016501', node, node.alertConfig)
 
-    expect(insert.mock.calls[0][0]).toMatchObject({ sourceId: 430016501, name: '库存监控', state: 'E' })
+    const payload = add.mock.calls[0][0] as Record<string, unknown>
+    expect(payload).toMatchObject({ sourceId: 430016501, name: '库存监控' })
+    expect(payload).not.toHaveProperty('state')
+    expect(JSON.parse(String(payload.checkConf ?? '{}')).scopeType).toBe('node_input')
   })
 
   it('缺少源 ID 时报错，不写出一条无源记录', async () => {
     const list = vi.spyOn(ckSourceApi, 'list')
-    const insert = vi.spyOn(ckSourceApi, 'insert')
+    const add = vi.spyOn(monitorApi, 'addSourceCheck')
 
     await expect(syncMonitorAlertConfig('  ', makeMonitorNode(), undefined)).rejects.toThrow('缺少源 ID')
     expect(list).not.toHaveBeenCalled()
-    expect(insert).not.toHaveBeenCalled()
+    expect(add).not.toHaveBeenCalled()
   })
 })
 
@@ -278,36 +294,36 @@ describe('describeCkSourceConflictRows', () => {
 
   it('逐条列出名称｜id｜表｜启停｜更新时间', () => {
     expect(describeCkSourceConflictRows([
-      { ...base, id: 7, name: '检查项A', tableName: 'sense_data.TB_X', state: 'E', updateDt: '2026-09-18T10:00:00' },
-      { ...base, id: 8, name: '检查项B', tableName: 'sense_data.TB_Y', state: 'D', updateDt: '2026-09-19T03:05:09' },
+      { ...base, id: 7, name: '检查项A', tableName: 'sense_data.TB_X', isDelete: 0, state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { ...base, id: 8, name: '检查项B', tableName: 'sense_data.TB_Y', isDelete: 1, state: 'D', updateDt: '2026-09-19T03:05:09' },
     ])).toEqual([
-      '检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00',
+      '检查项A｜id=7｜表=sense_data.TB_X｜在用｜更新 2026-09-18 10:00',
       '检查项B｜id=8｜表=sense_data.TB_Y｜已停用｜更新 2026-09-19 03:05',
     ])
   })
 
   it('name 为空时写「未命名检查项」', () => {
     expect(describeCkSourceConflictRows([
-      { ...base, id: 7, name: '   ', tableName: 'sense_data.TB_X', state: 'E' },
-    ])).toEqual(['未命名检查项｜id=7｜表=sense_data.TB_X｜已启用'])
+      { ...base, id: 7, name: '   ', tableName: 'sense_data.TB_X', isDelete: 0, state: 'E' },
+    ])).toEqual(['未命名检查项｜id=7｜表=sense_data.TB_X｜在用'])
   })
 
   it('tableName 为空时省略「表=…」', () => {
     expect(describeCkSourceConflictRows([
-      { ...base, id: 7, name: '检查项A', tableName: '', state: 'E' },
-    ])).toEqual(['检查项A｜id=7｜已启用'])
+      { ...base, id: 7, name: '检查项A', tableName: '', isDelete: 0, state: 'E' },
+    ])).toEqual(['检查项A｜id=7｜在用'])
   })
 
-  it('state 非 E（含空值）一律记「已停用」', () => {
+  it('按 isDelete 判启停：0 在用、1 及其它停用；state 不参与', () => {
     expect(describeCkSourceConflictRows([
-      { ...base, id: 7, name: '检查项A', state: 'D' },
-      { ...base, id: 8, name: '检查项B' },
+      { ...base, id: 7, name: '检查项A', isDelete: 1, state: 'C' },
+      { ...base, id: 8, name: '检查项B', state: 'E' },
     ])).toEqual(['检查项A｜id=7｜已停用', '检查项B｜id=8｜已停用'])
   })
 
   it('updateDt 缺省时省略「更新 …」', () => {
     expect(describeCkSourceConflictRows([
-      { ...base, id: 7, name: '检查项A', state: 'E', updateDt: '  ' },
-    ])).toEqual(['检查项A｜id=7｜已启用'])
+      { ...base, id: 7, name: '检查项A', isDelete: 0, state: 'E', updateDt: '  ' },
+    ])).toEqual(['检查项A｜id=7｜在用'])
   })
 })

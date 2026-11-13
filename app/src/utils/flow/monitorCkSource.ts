@@ -1,9 +1,11 @@
-// ck_source 监控源配置同步（vanv-data-engine SourceController，2026-09-05）：
-// 数据监控节点保存时按当前流程的 sourceId 查 ck_source（GET /api/source/list），
-// 无则 insert、有则 update。NodeInspector 底部「保存」（编排配置 Tab）与
-// RuleOrchestrationTab「保存脚本」两条保存路径共用，抽在这里保证 payload 口径一致。
+// ck_source 监控源配置同步（C01 /api/v1/source/check/*，2026-11-13 切新接口）：
+// 数据监控节点保存时按当前流程的 sourceId 查 ck_source（GET /api/source/list，只读沿用旧接口），
+// 无则新增（POST /api/v1/source/check/add）、有则按主键更新（POST /api/v1/source/check/update，带 ver
+// 乐观锁）。NodeInspector 底部「保存」（编排配置 Tab）与 RuleOrchestrationTab「保存脚本」两条保存
+// 路径共用，抽在这里保证 payload 口径一致。
 import { ckSourceApi, entryApi } from '@/api'
-import { updateSourceCheck } from '@/api/monitor'
+import { addSourceCheck, updateSourceCheck } from '@/api/monitor'
+import type { MonitorScopeType } from '@/api/types/monitorCenter'
 import {
   makeDefaultRuleOrchestration,
   type CollectorSchedule,
@@ -12,20 +14,6 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import type { CkSourcePayload, CkSourceRecord, RuleOrchestration } from '@/api'
 import { nodeScheduleCron } from './scheduleCron'
-
-/**
- * ck_source 落库时的固定值（2026-09-16 定下的写入口径）：insert / update 都要带上，
- * 不是「只有新建才写」。这四个字段之外，运行状态类字段（LAST_RUN/NEXT_RUN/LOCK_STATE 等）
- * 一概不传——后端 SourceService 只写非空字段，不传即保留原值。
- *
- * IS_DELETE 写 **0 = 在用**：这张表里 1 才是停用/逻辑删除（旧平台监控列表
- * `enabled = isDelete === 0`、调度侧筛选 `coalesce(IS_DELETE, 0) = 0`、告警面板的
- * `sourceCheckApi.changeEnable` 0=在用/1=停用 都是这个方向）。写 1 会让刚保存的监控
- * 直接落在「停用」态、也不会被排期，所以这里必须是 0。
- */
-const CK_SOURCE_STATE = 'E'
-const CK_SOURCE_IS_DELETE = 0
-const CK_SOURCE_VER = 12
 
 /**
  * 一个源在 ck_source 里有多条记录时，画布同步必须停手（2026-11-12 最小保护）。
@@ -58,7 +46,8 @@ export class MultipleCkSourceRowsError extends Error {
  * `检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00`
  *
  * 字段口径（见 api/types/rule.ts 的 CkSourceRecord）：name 为空写「未命名检查项」；tableName
- * 为空省略「表=…」；state 只有 'E' 算启用（这张表用 1 表示停用/逻辑删除，见文件头 IS_DELETE 说明）；
+ * 为空省略「表=…」；启停看 `isDelete`（0 = 在用、1 = 停用，语义是反的），**不要用 `state`**——
+ * `state` 是最近一次执行结果（C 完成 / E 异常 / D 停用 / L 运行中），拿它判断启停会把异常的措施显示成「已启用」；
  * updateDt 是后端 LocalDateTime 的 ISO 串，这里转成 `YYYY-MM-DD HH:mm` 展示，缺省时省略该段。
  */
 export function describeCkSourceConflictRows(rows: CkSourceRecord[]): string[] {
@@ -67,7 +56,7 @@ export function describeCkSourceConflictRows(rows: CkSourceRecord[]): string[] {
     parts.push(`id=${row.id}`)
     const tableName = row.tableName?.trim()
     if (tableName) parts.push(`表=${tableName}`)
-    parts.push(row.state === 'E' ? '已启用' : '已停用')
+    parts.push(Number(row.isDelete) === 0 ? '在用' : '已停用')
     const updatedAt = formatConflictUpdateDt(row.updateDt)
     if (updatedAt) parts.push(`更新 ${updatedAt}`)
     return parts.join('｜')
@@ -80,19 +69,6 @@ function formatConflictUpdateDt(value: string | undefined): string {
   if (!raw) return ''
   const matched = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec(raw)
   return matched ? `${matched[1]} ${matched[2]}` : raw
-}
-
-/**
- * ck_source.CREATE_DT 的文本格式：**ISO-8601 本地时间** `YYYY-MM-DDTHH:mm:ss`。
- *
- * 后端 CkSource.createDt 是 `LocalDateTime`，Spring 默认的 Jackson（JSR-310）只认 ISO-8601，
- * 带空格的旧平台写法 `2026-09-16 18:24:38` 会在反序列化阶段就抛 HttpMessageNotReadableException，
- * 接口直接 400 Bad Request（不写库、也没有任何业务错误信息，实测 2026-09-16）。
- * 不带时区是因为 LocalDateTime 本身无时区语义，带上 Z 会被当成字面量解析成本地时间。
- */
-function formatDateTime(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
 }
 
 /**
@@ -173,17 +149,30 @@ function alertCheckConfOf(alertConfig: MonitorAlertConfig | undefined, previous:
   return result
 }
 
+/**
+ * 画布节点写入口径（2026-11-13，1113 设计修订稿）：两类检查在 checkConf 里显式区分归属。
+ * 画布数据监控节点检查的是「该节点的输入是否准确」→ 固定写 `node_input`；监控中心的源结果
+ * 检查写 `source_result`。旧记录没有这个键（未分类），画布一保存就显式归类。
+ *
+ * 只做对象层合并：`previous` 里画布不认识的键原样保留，不能因为加字段把别人的配置洗掉。
+ */
+const NODE_INPUT_SCOPE: MonitorScopeType = 'node_input'
+
+function withNodeInputScope(conf: Record<string, unknown>): Record<string, unknown> {
+  return { ...conf, scopeType: NODE_INPUT_SCOPE }
+}
+
 function buildCheckConf(
   node: NodeConfig | undefined,
   orchestration: Omit<RuleOrchestration, 'systemPrompt' | 'script'>,
   previous: Record<string, unknown>,
 ): string {
-  return JSON.stringify({
+  return JSON.stringify(withNodeInputScope({
     ...previous,
     ...alertCheckConfOf(node?.alertConfig, previous),
     monitorMethods: node?.monitorMethods ?? [],
     orchestration,
-  })
+  }))
 }
 
 /**
@@ -217,16 +206,17 @@ export async function syncMonitorAlertConfig(
   const previousConf = parseCheckConf(current.checkConf)
   // 按主键（C01）而不是按 sourceId 更新：只命中这一条，且带上 ver 做乐观锁——
   // 页面读到记录后别人又改过时，后端会拒绝而不是静默覆盖。
+  // 这一路也属于画布节点侧写入，同样补 scopeType='node_input'（旧键原样保留）。
   await updateSourceCheck({
     id: current.id,
     ver: current.ver,
     sourceId: Number(trimmed),
-    checkConf: JSON.stringify({ ...previousConf, ...alertCheckConfOf(alertConfig, previousConf) }),
+    checkConf: JSON.stringify(withNodeInputScope({ ...previousConf, ...alertCheckConfOf(alertConfig, previousConf) })),
   })
 }
 
 /**
- * 按 sourceId 同步 ck_source：无则 insert、有则 update。两条保存路径（编排配置 Tab 底部「保存」、
+ * 按 sourceId 同步 ck_source：无则新增、有则更新。两条保存路径（编排配置 Tab 底部「保存」、
  * 「保存脚本」）都走这里。
  *
  * 字段口径（2026-09-16 对齐后）：
@@ -235,10 +225,13 @@ export async function syncMonitorAlertConfig(
  *   见 scheduleCron.ts，不是直接读 node.schedule.cron；三层都没配过时取界面兜底值
  *   `0 0 0 * * ?`，不再留空——调度侧要求 SCHEDULE 非空），
  *   tableName=**表配置 Tab 选中的输入表**物理名（只有表 ID 时回查一次表详情）、
- *   checkConf=监控方法+编排配置序列化的 JSON。
+ *   checkConf=监控方法+编排配置序列化的 JSON，并显式写 `scopeType: 'node_input'`（画布节点侧归属）。
  *
  * 写入边界：
- *   - **新建**才补 state/isDelete/createDt/ver（新记录要能进调度）；
+ *   - **新建**走 C01 `/api/v1/source/check/add`，只提交上面四个定义字段 + scopeType；
+ *     生命周期字段由后端 `CkSourceService.addObject` 补：createDt=服务端当前时间、state='C'（正常）、
+ *     isDelete=0（启用）、nextRun 按 schedule 计算——所以新记录仍然**直接进入可调度状态**，
+ *     前端不再自己填这些值（填了也会被后端覆盖，反而和调度侧口径分叉）；
  *   - **更新**走 C01 按主键 `/api/v1/source/check/update`，只写上面四个定义字段 + id/ver
  *     （ver 是乐观锁基线，由后端比较并递增）——画布保存不能重新启用已停用的检查项，
  *     也不能改别人的创建时间；
@@ -286,12 +279,9 @@ export async function syncMonitorCkSource(
     })
     return
   }
-  // 只有新建才补生命周期字段：新记录直接进入可调度状态（2026-09-07 约定）。
-  await ckSourceApi.insert({
-    ...definition,
-    state: CK_SOURCE_STATE,
-    isDelete: CK_SOURCE_IS_DELETE,
-    createDt: formatDateTime(new Date()),
-    ver: CK_SOURCE_VER,
-  })
+  // 新建走 C01 `/api/v1/source/check/add`：后端 addObject 自己补生命周期字段
+  // （createDt / state='C' / isDelete=0 / nextRun），前端不传即不会覆盖服务端口径，
+  // 新记录依旧直接可调度（2026-09-07 约定，2026-11-13 切新接口后由后端落实）。
+  // 回执 data 里带 { id, ver, ... }，画布侧只负责建行、不需要再按 name+tableName 回查。
+  await addSourceCheck({ ...definition })
 }

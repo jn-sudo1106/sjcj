@@ -39,6 +39,15 @@ export interface MonitorCoverage {
 }
 
 /**
+ * 检查对象归属（1113 §3）：
+ * - `source_result`：源结果检查（监控中心入口，检查最终落库表的结果）
+ * - `node_input`：节点环节检查（画布数据监控节点，检查该节点的输入是否准确）
+ *
+ * 旧记录没有这个键，按「未分类（legacy）」处理——不推断、不默认，避免把两类检查混成一种。
+ */
+export type MonitorScopeType = 'source_result' | 'node_input'
+
+/**
  * 监控定义里 `checkConf` 的结构化视图。
  * 旧平台把整套配置塞在一个 JSON 串里，键名与语义见 1109 §2.1；这里只挑页面会读的键，
  * 其余键通过索引签名原样保留——保存时必须整包回写，不能因为不认识就丢掉（1110 §8.1）。
@@ -64,6 +73,8 @@ export interface MonitorCheckConf {
   /** 任务后延时：旧前端写 `AFTER:30`，旧后端识别 `AFTER-30`（1109 §5.3⑦） */
   after?: string
   kind?: MonitorKind
+  /** 检查对象归属；旧记录缺省（未分类） */
+  scopeType?: MonitorScopeType
   /** 24 个通用方法里选中的那些（AI 检查） */
   methods?: string[]
   desc?: string

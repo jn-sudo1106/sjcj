@@ -1660,7 +1660,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     mockAssets()
     const { wrapper } = setupMonitorSave()
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     const updateSpy = vi.spyOn(ckSourceApi, 'update')
     await flushPromises()
 
@@ -1668,14 +1668,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
     expect(ckSourceApi.list).toHaveBeenCalledWith('430016501')
     expect(updateSpy).not.toHaveBeenCalled()
-    expect(ckSourceApi.insert).toHaveBeenCalledWith(expect.objectContaining({
+    // 2026-11-13：新建走 C01 /api/v1/source/check/add，生命周期字段由后端补
+    //（createDt / state / isDelete / nextRun），前端不再传 state。
+    expect(monitorApi.addSourceCheck).toHaveBeenCalledWith(expect.objectContaining({
       sourceId: 430016501,
       name: '库存监控',
       schedule: '0 0 8 * * ?',
       tableName: 'sense_data.TB_JD_SKU_BASE',
-      state: 'E', // insert 默认启用（2026-09-07）
     }))
-    const payload = (ckSourceApi.insert as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { checkConf: string }
+    const payload = (monitorApi.addSourceCheck as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { checkConf: string }
     const conf = JSON.parse(payload.checkConf)
     expect(conf.monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
     expect(conf.minSize).toBe('30')
@@ -1693,7 +1694,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     mockAssets()
     const { wrapper } = setupMonitorSave()
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, ver: 9001, sourceId: 430016501, name: '旧名' }])
-    const insertSpy = vi.spyOn(ckSourceApi, 'insert')
+    const insertSpy = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     const updateSpy = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     await flushPromises()
 
@@ -1724,10 +1725,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     mockAssets()
     const { wrapper } = setupMonitorSave()
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
-      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', state: 'E', updateDt: '2026-09-18T10:00:00' },
-      { id: 8, sourceId: 430016501, name: '检查项B', state: 'D' },
+      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', isDelete: 0, state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { id: 8, sourceId: 430016501, name: '检查项B', isDelete: 1, state: 'D' },
     ])
-    const insert = vi.spyOn(ckSourceApi, 'insert')
+    const insert = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     const update = vi.spyOn(monitorApi, 'updateSourceCheck')
     const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm' as never)
     const error = vi.spyOn(ElMessage, 'error')
@@ -1740,7 +1741,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const [message, title, options] = alert.mock.calls[0] as unknown as [string, string, Record<string, unknown>]
     expect(title).toBe('同源有多条检查项，画布未写入')
     expect(message).toContain('画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。')
-    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00')
+    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜在用｜更新 2026-09-18 10:00')
     expect(message).toContain('检查项B｜id=8｜已停用')
     expect(message).toContain('请到监控中心按检查项逐条编辑或删除重复项。')
     expect(options).toMatchObject({
@@ -1780,7 +1781,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1400998', updatedAt: '2026-10-13 12:00:00' } as never)
     const updateConfig = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const insert = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     await flushPromises()
 
     const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
@@ -1815,7 +1816,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1400998', updatedAt: '2026-10-13 12:00:00' } as never)
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, ver: 9001, sourceId: 430016501, name: '旧名' }])
-    const insertSpy = vi.spyOn(ckSourceApi, 'insert')
+    const insertSpy = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     const updateSpy = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     await flushPromises()
 

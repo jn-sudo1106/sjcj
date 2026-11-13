@@ -22,6 +22,7 @@ import {
   type SourceSummaryStats,
 } from '@/api/monitorCenter'
 import { deleteSourceCheck } from '@/api/monitor'
+import { monitorScopeOf } from '@/utils/monitor/record'
 import { summarizeSources } from '@/utils/monitor/sourceSummary'
 import { confirmDanger } from '@/utils/confirmDanger'
 import MonitorBatchDialog from './MonitorBatchDialog.vue'
@@ -524,6 +525,22 @@ async function toggleMonitor(monitor: MonitorRecordView, next: boolean): Promise
   }
 }
 
+/**
+ * 检查对象归属（1113 §3）：源结果 / 节点环节 / 未分类。
+ * 旧记录没有 scopeType 键时必须显示「未分类」，不推断成源结果；
+ * 未分类用中性灰，不给误导性的语义色。
+ */
+function scopeMetaOf(monitor: MonitorRecordView): { text: string; cls: string; title: string } {
+  const scope = monitorScopeOf(monitor.conf)
+  if (scope === 'source_result') {
+    return { text: '源结果', cls: 'is-source', title: '源结果检查：监控中心入口，检查最终落库表的结果' }
+  }
+  if (scope === 'node_input') {
+    return { text: '节点环节', cls: 'is-node', title: '节点环节检查：画布数据监控节点，检查该节点输入是否准确' }
+  }
+  return { text: '未分类', cls: 'is-none', title: '旧记录未标注检查对象归属，不推断为源结果' }
+}
+
 /** 检查方式决定立即运行走哪条链路：脚本检查走执行器，规则检查走旧调度器。 */
 const kindIndex = computed<Record<string, MonitorKind>>(() =>
   Object.fromEntries(records.value.map((row) => [row.id, row.kind])),
@@ -754,6 +771,17 @@ onMounted(() => {
                     {{ monitorKindText(monitor.kind) }}
                   </span>
                   <div class="subline">{{ monitorPublishText(monitor.publishStatus, monitor.effectiveVersion) }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="检查对象" width="84">
+                <template #default="{ row: monitor }">
+                  <span
+                    class="sc-object-tag"
+                    :class="scopeMetaOf(monitor).cls"
+                    :title="scopeMetaOf(monitor).title"
+                  >
+                    {{ scopeMetaOf(monitor).text }}
+                  </span>
                 </template>
               </el-table-column>
               <el-table-column label="检查摘要" min-width="160">
@@ -1174,6 +1202,28 @@ onMounted(() => {
   padding: 18px 10px;
   color: var(--rc-muted, #64748b);
   font-size: 12px;
+}
+/* 检查对象归属标签（1113）：分类标签，不用健康/异常语义色；未分类保持中性灰 */
+.sc-object-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: var(--rc-text-2, #475569);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sc-object-tag.is-source {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
+}
+.sc-object-tag.is-none {
+  background: var(--rc-bg, #f8fafc);
+  border: 1px dashed var(--rc-border, #e2e8f0);
+  color: var(--rc-faint, #94a3b8);
 }
 .sc-inner-note {
   padding: 7px 10px;

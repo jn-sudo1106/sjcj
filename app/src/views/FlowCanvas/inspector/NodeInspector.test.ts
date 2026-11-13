@@ -1192,8 +1192,8 @@ describe('数据监控节点保存：同源多条检查项', () => {
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true })
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1401088', name: '库存监控' } as never)
     vi.mocked(syncMonitorCkSource).mockRejectedValue(new MultipleCkSourceRowsError('430016501', [
-      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', state: 'E', updateDt: '2026-09-18T10:00:00' },
-      { id: 8, sourceId: 430016501, name: '检查项B', state: 'D' },
+      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', isDelete: 0, state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { id: 8, sourceId: 430016501, name: '检查项B', isDelete: 1, state: 'D' },
     ]))
     const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm' as never)
     const error = vi.spyOn(ElMessage, 'error')
@@ -1212,7 +1212,7 @@ describe('数据监控节点保存：同源多条检查项', () => {
     const [message, title, options] = alert.mock.calls[0] as unknown as [string, string, Record<string, unknown>]
     expect(title).toBe('同源有多条检查项，画布未写入')
     expect(message).toContain('画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。')
-    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00')
+    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜在用｜更新 2026-09-18 10:00')
     expect(message).toContain('检查项B｜id=8｜已停用')
     expect(message).toContain('请到监控中心按检查项逐条编辑或删除重复项。')
     expect(options).toMatchObject({

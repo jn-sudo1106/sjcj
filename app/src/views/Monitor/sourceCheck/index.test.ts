@@ -383,6 +383,26 @@ describe('行内展开与批量', () => {
     expect(wrapper.text()).not.toContain('检查项A')
   })
 
+  it('检查对象列按 scopeType 显示：源结果 / 节点环节 / 未分类（缺键不推断）', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec({ id: 'm1', name: '源结果检查', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm2', name: '节点检查', conf: { scopeType: 'node_input' } }),
+      rec({ id: 'm3', name: '旧记录检查', conf: {} }),
+    ])
+    mockedListSources.mockResolvedValue([{ sourceId: 's1', name: '源一' }])
+    const wrapper = await mountPage()
+    await wrapper.findAll('.el-table__expand-icon')[0].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('检查对象')
+    const tags = wrapper.findAll('.sc-object-tag')
+    expect(tags.map((item) => item.text())).toEqual(['源结果', '节点环节', '未分类'])
+    // 未分类必须是中性灰（is-none），不能用源结果/节点环节的样式
+    expect(tags[2].classes()).toContain('is-none')
+    expect(tags[0].classes()).toContain('is-source')
+    expect(tags[1].classes()).toContain('is-node')
+  })
+
   it('编辑打开时带记录身份并锁源（否则会另存成重复记录）', async () => {
     const wrapper = await mountExpanded()
     await buttonByText(wrapper, '编辑').trigger('click')

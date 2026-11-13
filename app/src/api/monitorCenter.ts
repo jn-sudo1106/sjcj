@@ -140,6 +140,9 @@ export async function saveMonitor(input: SaveMonitorInput): Promise<{ created: b
   const conf: MonitorCheckConf = {
     ...input.conf,
     kind: input.kind,
+    // 1113 设计修订：监控中心入口保存的记录属于「源结果检查」。
+    // 显式传入的值优先（例如从画布节点检查转过来的记录不能被改写），旧记录首次保存时归类。
+    scopeType: input.conf.scopeType ?? 'source_result',
     ...(input.schedule !== undefined ? { cron: input.schedule } : {}),
   }
   if (input.record) {

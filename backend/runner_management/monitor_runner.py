@@ -534,6 +534,31 @@ def compose_message(row: Dict[str, Any], outcome: Dict[str, Any]) -> str:
     return "%s---[OK]:%s-正常, 检查数:%s 异常数:%s" % (stamp, name, checked, abnormal)
 
 
+def _overdue_detail(
+    app: Optional[Any],
+    row: Dict[str, Any],
+    conf: Dict[str, Any],
+    outcome: Dict[str, Any],
+    moment: Optional[_dt.datetime] = None,
+    persist: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """调用「超期无新增」判定。
+
+    ``monitor_overdue`` 依赖本模块的常量与 ``business_now``，这里延迟导入避免
+    循环依赖（与 ``monitor_events`` 的接法一致）。``persist=False`` 是干跑：
+    只读状态、只返回判定，不落任何状态。
+    """
+
+    if app is None:
+        return None
+    if (outcome or {}).get("status") == STATUS_ERROR:
+        # 执行失败时「0 条」不可信（多半是脚本没跑起来），既不能判超期，
+        # 也不能刷新 lastDataAt——留给下一次成功的执行。
+        return None
+    from . import monitor_overdue
+    return monitor_overdue.evaluate(app, row, conf, outcome, moment=moment, persist=persist)
+
+
 def run_due(
     conn,
     cfg: Dict[str, Any],
@@ -604,6 +629,16 @@ def run_due(
             if apply:
                 apply_result(conn, row, conf, outcome, item, cfg, app)
                 item["applied"] = True
+            elif app is not None:
+                # 干跑只算不写：只把「会不会判超期」带进输出，不改状态、不落状态。
+                # 判定依赖上次 apply 记下的 lastDataAt，所以干跑前得先真实跑过一次。
+                try:
+                    detail = _overdue_detail(app, row, conf, outcome, moment, persist=False)
+                except Exception as exc:  # 判定失败不能拖垮整轮扫描
+                    print("超期判定失败（干跑，%s）：%s" % (monitor_id, exc), file=sys.stderr, flush=True)
+                    detail = None
+                if detail is not None:
+                    item["overdue"] = detail
             results.append(item)
         finally:
             if claimed:
@@ -709,12 +744,17 @@ def structured_remarks(
     conf: Dict[str, Any],
     outcome: Dict[str, Any],
     cfg: Optional[Dict[str, Any]] = None,
+    overdue: Optional[Dict[str, Any]] = None,
 ) -> str:
     """``ck_job_log.REMARKS`` 的结构化结论（前端运行记录读它）。
 
     两件事必须保证：
     * 合法 JSON——宁可少字段，也不能截断成半个对象；
-    * ``runId``/``status``/两个计数/耗时优先保住，窗口、原因、脚本路径可选。
+    * ``runId``/``status``/两个计数/耗时优先保住，窗口、原因、脚本路径、
+      超期详情可选。
+
+    超长时按价值从低到高丢：``scriptPath`` → ``window`` → ``overdue`` →
+    截断 ``reason``；超期长原因只留在 ``reason`` 里，``overdue`` 只放短字段。
     """
 
     limit = int((cfg or {}).get("remarksMax") or REMARKS_MAX)
@@ -732,9 +772,18 @@ def structured_remarks(
         "scriptPath": conf.get("scriptPath"),
     }
     payload.update(optional)
+    if overdue and overdue.get("overdue"):
+        # 只在超期时出现：正常轮次不额外写字段，每条运行记录都能省一点。
+        payload["overdue"] = {
+            "overdue": True,
+            "expectEveryMinutes": overdue.get("expectEveryMinutes"),
+            "graceMinutes": overdue.get("graceMinutes"),
+            "lastDataAt": overdue.get("lastDataAt"),
+            "gapMinutes": overdue.get("gapMinutes"),
+        }
     text = json.dumps(payload, ensure_ascii=False)
     # 先丢低价值字段，再退化为只保留核心字段；理由超长就截断理由本身。
-    for key in ("scriptPath", "window"):
+    for key in ("scriptPath", "window", "overdue"):
         if len(text) <= limit:
             break
         payload.pop(key, None)
@@ -758,6 +807,29 @@ def apply_result(
 ) -> None:
     now = business_now()
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    # 写库/生成结构化结论之前先做「超期无新增」判定：脚本报 0 条只能是「正常」，
+    # 断流时这个「正常」是假绿，必须在这一步被抬成异常。
+    overdue = None
+    if app is not None:
+        try:
+            overdue = _overdue_detail(app, row, conf, outcome, now, persist=True)
+        except Exception as exc:
+            # 判定失败不能回滚已经跑完的结果，但也不能静默：从 stderr 能追到原因。
+            print("超期无新增判定失败：%s" % exc, file=sys.stderr, flush=True)
+    if overdue and overdue.get("overdue") and outcome.get("status") == STATUS_NORMAL:
+        overdue_reason = overdue.get("reason") or ""
+        outcome = dict(outcome)
+        report = dict(outcome.get("report") or {})
+        # 保持既有口径：异常数至少 1，前端/邮件按 abnormalCount>0 也能看出问题。
+        report["abnormalCount"] = max(1, _abnormal_count(report))
+        report["reason"] = overdue_reason
+        outcome["report"] = report
+        outcome["status"] = STATUS_ABNORMAL
+        # item 是 notification 事件与返回值的共同来源，一起改，避免状态自相矛盾。
+        item["status"] = STATUS_ABNORMAL
+        item["abnormalCount"] = report["abnormalCount"]
+        item["reason"] = overdue_reason
+        item["message"] = compose_message(row, outcome)
     message = item["message"]
     state = "E" if outcome["status"] != STATUS_NORMAL else "C"
     schedule = dict(conf.get("schedule") or {})
@@ -776,7 +848,7 @@ def apply_result(
             "WHERE ID=%s AND IS_DELETE=0",
             (state, message, stamp, json.dumps(conf, ensure_ascii=False), int(now.timestamp() * 1000), int(row["id"])),
         )
-        structured = structured_remarks(item, conf, outcome, cfg)
+        structured = structured_remarks(item, conf, outcome, cfg, overdue=overdue)
         cur.execute(
             "INSERT INTO ck_job_log (JOB_ID, NAME, SOURCE_ID, TABLE_NAME, JOB_TYPE, STATE, LOG_TYPE, "
             "LOG_CODE, LOG_MSG, JOB_CONF, REMARKS, LOG_DT, CREATE_DT, GROUP_ID) "

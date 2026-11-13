@@ -30,7 +30,7 @@ vi.mock('./runnerManagement', () => ({
 }))
 
 const { listMonitorRows, listRuns, listNotifications, retryNotification, saveMonitor, listSourceNames, runMonitorsNow, MONITOR_PAGE_SIZE } = await import('./monitorCenter')
-const { updateSourceCheck, handleRunNow } = await import('./monitor')
+const { updateSourceCheck, addSourceCheck, handleRunNow } = await import('./monitor')
 const { toMonitorRecord } = await import('../utils/monitor/record')
 
 describe('monitorCenter 分页参数', () => {
@@ -76,6 +76,39 @@ describe('monitorCenter 分页参数', () => {
     const payload = vi.mocked(updateSourceCheck).mock.calls.at(-1)![0] as Record<string, unknown>
     expect(payload).toMatchObject({ id: 'm1', isDelete: 1, state: 'E', schedule: '', tableName: '' })
     expect(JSON.parse(String(payload.checkConf)).cron).toBe('')
+  })
+})
+
+describe('checkConf 检查对象归属（1113）', () => {
+  beforeEach(() => {
+    vi.mocked(updateSourceCheck).mockReset()
+    vi.mocked(addSourceCheck).mockReset()
+  })
+
+  it('编辑已有记录时写入 source_result', async () => {
+    const record = toMonitorRecord({
+      id: 'm1', sourceId: 's1', name: '原名', state: 'C', isDelete: 0,
+      lastMsg: '', tableName: 'old_table', schedule: '0 8 * * * *', nextRun: '', lastRun: '',
+      checkConf: '{}',
+    })
+    await saveMonitor({ record, sourceId: 's1', name: '原名', kind: 'ai', conf: {} })
+    const payload = vi.mocked(updateSourceCheck).mock.calls.at(-1)![0] as Record<string, unknown>
+    expect(JSON.parse(String(payload.checkConf)).scopeType).toBe('source_result')
+  })
+
+  it('新建记录时写入 source_result', async () => {
+    await saveMonitor({ sourceId: 's1', name: '新监控', kind: 'ai', conf: { methods: ['notNull'] } })
+    const payload = vi.mocked(addSourceCheck).mock.calls.at(-1)![0] as Record<string, unknown>
+    const conf = JSON.parse(String(payload.checkConf))
+    expect(conf.scopeType).toBe('source_result')
+    // 其余配置不能因为这个字段被丢掉
+    expect(conf.methods).toEqual(['notNull'])
+  })
+
+  it('显式传入的 scopeType 不被覆盖（节点环节记录原样保存）', async () => {
+    await saveMonitor({ sourceId: 's1', name: '节点检查', kind: 'ai', conf: { scopeType: 'node_input' } })
+    const payload = vi.mocked(addSourceCheck).mock.calls.at(-1)![0] as Record<string, unknown>
+    expect(JSON.parse(String(payload.checkConf)).scopeType).toBe('node_input')
   })
 })
 

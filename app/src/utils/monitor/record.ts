@@ -19,6 +19,7 @@ import type {
   MonitorRecordView,
   MonitorRunView,
   MonitorPublishStatus,
+  MonitorScopeType,
 } from '../../api/types/monitorCenter'
 
 /** 执行结果文本里能确认「没跑成」的措辞。取不到结构化执行状态时的过渡判据。 */
@@ -52,6 +53,15 @@ export function monitorKindOf(conf: MonitorCheckConf): MonitorKind {
   // 旧记录没有 kind：有 script / methods 视为 AI，否则按旧规则
   if (conf.script || conf.scriptPath || (conf.methods && conf.methods.length) || scriptPathOf(conf)) return 'ai'
   return 'rule'
+}
+
+/**
+ * 检查对象归属（1113 §3）。
+ * 只读取 conf 里显式写下的值：旧记录没有该键 = 未分类（返回 undefined），
+ * 这里**不推断、不给默认值**，否则会把两类检查混成一种。
+ */
+export function monitorScopeOf(conf: MonitorCheckConf): MonitorScopeType | undefined {
+  return conf.scopeType
 }
 
 function scriptPathOf(conf: MonitorCheckConf): string {
