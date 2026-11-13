@@ -8,11 +8,15 @@
 // - 业务目录默认不全选；全选通过服务端 all 范围表达，不展开树或枚举成员；
 // - 目录的新增 / 改名 / 删除 / 移动在系统设置里，这里不给入口；
 // - 面板可折叠，折叠后窄条上显示已选目录数，筛选不变。
+// 来源组 Tab 仅切换左栏内容，不解除目录范围；来源组与当前目录可组合筛选。
 // 目录数据与后端口径见 api/sourceDirs.ts。
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
 import { dirNode, dirPath, loadDirPath, loadDirChildren, searchDirs, type DirKind, type DirNode } from '@/api/sourceDirs'
+import SourceGroupFilter from './SourceGroupFilter.vue'
+
+export type SourceDirectoryTab = DirKind | 'group'
 
 export interface DirScope {
   kind: DirKind
@@ -27,6 +31,10 @@ export interface DirScope {
 
 const props = defineProps<{ collapsed: boolean }>()
 const emit = defineEmits<{ 'update:collapsed': [boolean]; change: [DirScope] }>()
+const activeTab = defineModel<SourceDirectoryTab>('activeTab', { default: 'biz' })
+const sourceGroupId = defineModel<string>('sourceGroupId', { default: '' })
+const groupsVisited = ref(activeTab.value === 'group')
+watch(activeTab, tab => { if (tab === 'group') groupsVisited.value = true })
 
 const kind = ref<DirKind>('biz')
 const kids = reactive(new Map<string, DirNode[]>())
@@ -38,6 +46,7 @@ const checked = reactive({ sys: new Set<string>(), biz: new Set<string>() })
 const focus = reactive<{ sys: string | null; biz: string | null }>({ sys: null, biz: null })
 const allChecked = reactive({ sys: false, biz: false })
 const selectingAll = ref(false)
+const treeRef = ref<HTMLElement>()
 let restored = false
 
 const rootKey = (k: DirKind) => `${k}:root`
@@ -196,10 +205,11 @@ async function selectAll() {
   allChecked[k] = true
   await emitScope()
 }
-function restore(scope: DirScope) {
+function restore(scope: DirScope, tab: SourceDirectoryTab = scope.kind) {
   restored = true
   scopeSeq++
   kind.value = scope.kind
+  activeTab.value = tab
   allChecked[scope.kind] = scope.directory?.mode === 'all' || !!scope.all
   const selections = scope.directory?.selections ?? scope.dirIds.map(id => ({ id, includeDescendants: true }))
   checked[scope.kind] = new Set(selections.filter(s => s.includeDescendants).map(s => s.id))
@@ -207,9 +217,43 @@ function restore(scope: DirScope) {
   emit('change', scope)
   void ensureKids(scope.kind)
 }
-defineExpose({ clear, restore })
+
+/**
+ * 「业务目录」列点路径进来（2026-11-11）：选中这一个目录（只看本目录、不含子级，与点名称同口径），
+ * 并把树展开到它、滚到可见位置。深目录的祖先可能还没加载过，先用 loadDirPath 补齐节点再逐层拉子级。
+ * 目录在业务目录树里查不到（已被删除、或源挂在别的目录树）时不改当前范围，避免把列表筛成空。
+ */
+async function revealDir(id: string, k: DirKind = 'biz') {
+  try {
+    await loadDirPath(id)
+  } catch {
+    return
+  }
+  restored = true
+  scopeSeq++
+  kind.value = k
+  activeTab.value = k
+  keyword.value = ''
+  const chain: string[] = []
+  for (let node = dirNode(id); node; node = node.parentId ? dirNode(node.parentId) : undefined) chain.unshift(node.id)
+  let parent = ''
+  for (const nodeId of chain.slice(0, -1)) {
+    await ensureKids(k, parent)
+    open.add(nodeId)
+    parent = nodeId
+  }
+  await ensureKids(k, parent)
+  allChecked[k] = false
+  checked[k].clear()
+  focus[k] = id
+  await emitScope()
+  await nextTick()
+  treeRef.value?.querySelector<HTMLElement>(`[data-dir="${id}"]`)?.scrollIntoView?.({ block: 'center' })
+}
+defineExpose({ clear, restore, revealDir })
 
 async function switchKind(k: DirKind) {
+  activeTab.value = k
   if (kind.value === k) return
   kind.value = k
   keyword.value = ''
@@ -246,29 +290,31 @@ function parentPathOf(node: DirNode): string {
 async function init() {
   const roots = await ensureKids('biz')
   if (restored) return
-  if (!roots.length && !loadError.value) await switchKind('sys')
+  if (!roots.length && !loadError.value && activeTab.value !== 'group') await switchKind('sys')
   else await emitScope()
 }
 void init()
 </script>
 
 <template>
-  <section v-if="!props.collapsed" class="sdp" :class="{ biz: kind === 'biz' }" data-testid="source-dir-panel">
+  <section v-if="!props.collapsed" class="sdp" :class="{ biz: activeTab === 'biz' }" data-testid="source-dir-panel">
     <div class="sdp-head">
       <div class="sdp-kind" role="tablist" aria-label="目录类型">
-        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="kind === 'sys'" :class="{ on: kind === 'sys' }" data-testid="dir-kind-sys" @click="switchKind('sys')">系统目录</button>
-        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="kind === 'biz'" :class="{ on: kind === 'biz' }" data-testid="dir-kind-biz" @click="switchKind('biz')">业务目录</button>
+        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="activeTab === 'sys'" :class="{ on: activeTab === 'sys' }" data-testid="dir-kind-sys" @click="switchKind('sys')">系统目录</button>
+        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="activeTab === 'biz'" :class="{ on: activeTab === 'biz' }" data-testid="dir-kind-biz" @click="switchKind('biz')">业务目录</button>
+        <button type="button" role="tab" :disabled="selectingAll" :aria-selected="activeTab === 'group'" :class="{ on: activeTab === 'group' }" data-testid="dir-kind-group" @click="activeTab = 'group'">来源组</button>
       </div>
       <button class="sdp-fold" type="button" title="收起目录" aria-label="收起目录" data-testid="dir-panel-fold" @click="emit('update:collapsed', true)">«</button>
     </div>
-    <input v-model="keyword" class="sdp-search" placeholder="搜索目录" aria-label="搜索目录" data-testid="dir-search">
-    <div class="sdp-sub">
+    <SourceGroupFilter v-if="groupsVisited" v-show="activeTab === 'group'" v-model="sourceGroupId" />
+    <input v-show="activeTab !== 'group'" v-model="keyword" class="sdp-search" placeholder="搜索目录" aria-label="搜索目录" data-testid="dir-search">
+    <div v-show="activeTab !== 'group'" class="sdp-sub">
       <label class="sdp-all"><input type="checkbox" :checked="allChecked[kind]" :indeterminate.prop="!allChecked[kind] && pickedCount > 0" :disabled="selectingAll" data-testid="dir-select-all" @change="($event.target as HTMLInputElement).checked ? selectAll() : clear()">全选</label>
       <span v-if="selectingAll">加载中…</span>
       <span v-else-if="pickedCount">已选 {{ pickedCount }} 个目录</span>
       <button v-if="pickedCount" class="sdp-link" type="button" data-testid="dir-clear" @click="clear">清空</button>
     </div>
-    <div class="sdp-tree" data-testid="dir-tree">
+    <div v-show="activeTab !== 'group'" ref="treeRef" class="sdp-tree" data-testid="dir-tree">
       <template v-if="hits">
         <div v-if="searching" class="sdp-empty">搜索中…</div>
         <div v-else-if="!hits.length" class="sdp-empty">没有匹配的目录</div>
@@ -322,12 +368,12 @@ void init()
         <div v-else-if="!rows.length" class="sdp-empty">{{ kind === 'biz' ? '还没有业务目录' : '还没有系统目录' }}</div>
       </template>
     </div>
-    <div class="sdp-foot">目录的新增、改名、删除在「系统设置 → 分类目录」</div>
+    <div class="sdp-foot">{{ activeTab === 'group' ? '目录与来源组可同时筛选，切换页签保留已选范围。' : '目录的新增、改名、删除在「系统设置 → 分类目录」' }}</div>
   </section>
   <button
     v-else
     class="sdp-rail"
-    :class="{ biz: kind === 'biz' }"
+    :class="{ biz: activeTab === 'biz' }"
     type="button"
     title="展开目录"
     aria-label="展开目录"
@@ -335,15 +381,15 @@ void init()
     @click="emit('update:collapsed', false)"
   >
     <span class="sdp-rail-arrow">»</span>
-    <span class="sdp-rail-txt">{{ kind === 'biz' ? '业务目录' : '系统目录' }}</span>
-    <span v-if="allChecked[kind] || pickedCount" class="sdp-rail-dot">{{ allChecked[kind] ? '全' : pickedCount }}</span>
+    <span class="sdp-rail-txt">{{ activeTab === 'group' ? '来源组' : kind === 'biz' ? '业务目录' : '系统目录' }}</span>
+    <span v-if="activeTab === 'group' ? !!sourceGroupId : allChecked[kind] || pickedCount" class="sdp-rail-dot">{{ activeTab === 'group' ? 1 : allChecked[kind] ? '全' : pickedCount }}</span>
   </button>
 </template>
 
 <style scoped>
 .sdp { display: flex; flex-direction: column; min-height: 0; padding: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; }
 .sdp-head { flex: none; display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-.sdp-kind { flex: 1; display: grid; grid-template-columns: 1fr 1fr; padding: 3px; background: #eef2f7; border-radius: 8px; }
+.sdp-kind { flex: 1; display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 3px; background: #eef2f7; border-radius: 8px; }
 .sdp-kind button { border: 0; background: transparent; padding: 5px 0; border-radius: 6px; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; white-space: nowrap; }
 .sdp-kind button.on { background: #fff; color: var(--rc-text); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
 .sdp.biz .sdp-kind button.on { color: #7c3aed; }

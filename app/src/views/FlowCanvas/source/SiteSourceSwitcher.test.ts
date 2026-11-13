@@ -291,8 +291,9 @@ describe('SiteSourceSwitcher', () => {
     await wrapper.get('[data-testid="source-menu-edit"]').trigger('click')
     await flushPromises()
 
-    const dialog = wrapper.getComponent({ name: 'EditSourceDialog' })
-    expect(dialog.props('open')).toBe(true)
+    // 2026-11-09 起「源详情」抽成 SourceDetailPanel，它自带一个 EditSourceDialog；
+    // 这里要断言的是右键那条路径打开的实例（同一时刻只会有一个 open）。
+    const dialog = wrapper.findAllComponents({ name: 'EditSourceDialog' }).find((d) => d.props('open'))!
     expect(dialog.props('source')).toMatchObject({ sourceId: 'source-b', name: '另一个源' })
   })
 
@@ -356,7 +357,7 @@ describe('SiteSourceSwitcher', () => {
   it('源详情默认收起，展开后完整展示名称、ID 与 URL；源列表可独立收起', async () => {
     const wrapper = await createWrapper()
     expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(false)
-    await wrapper.get('.ssw-detail-header').trigger('click')
+    await wrapper.get('.sdp-header').trigger('click')
     expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe(source.name)
     expect(wrapper.get('[data-testid="active-source-full-id"]').text()).toBe(source.sourceId)
@@ -371,7 +372,7 @@ describe('SiteSourceSwitcher', () => {
   // 2026-09-17：地址要能直接点开去原站核对，不用先复制再贴地址栏
   it('源 URL 是可点开的外链，新窗口打开且带 noopener', async () => {
     const wrapper = await createWrapper()
-    await wrapper.get('.ssw-detail-header').trigger('click')
+    await wrapper.get('.sdp-header').trigger('click')
     const link = wrapper.get('[data-testid="active-source-url"]')
     expect(link.element.tagName).toBe('A')
     expect(link.attributes('href')).toBe(source.url + '/')
@@ -396,7 +397,7 @@ describe('SiteSourceSwitcher', () => {
     })
     await flushPromises()
 
-    await wrapper.get('.ssw-detail-header').trigger('click')
+    await wrapper.get('.sdp-header').trigger('click')
     const el = wrapper.get('[data-testid="active-source-url"]')
     expect(el.element.tagName).toBe('SPAN')
     expect(el.text()).toBe('javascript:alert(1)')
@@ -406,7 +407,7 @@ describe('SiteSourceSwitcher', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const wrapper = await createWrapper()
-    await wrapper.get('.ssw-detail-header').trigger('click')
+    await wrapper.get('.sdp-header').trigger('click')
     await wrapper.get('[data-testid="copy-source-url"]').trigger('click')
     expect(writeText).toHaveBeenCalledWith(source.url)
 
@@ -423,7 +424,7 @@ describe('SiteSourceSwitcher', () => {
       },
     })
     await flushPromises()
-    await empty.get('.ssw-detail-header').trigger('click')
+    await empty.get('.sdp-header').trigger('click')
     expect(empty.get('[data-testid="active-source-url"]').text()).toBe('—')
     expect((empty.get('[data-testid="copy-source-url"]').element as HTMLButtonElement).disabled).toBe(true)
   })
@@ -446,7 +447,7 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sourceUpdate).toHaveBeenCalledWith(expect.objectContaining({
       sourceId: source.sourceId, name: '改名后', url: 'https://new.example.com/list',
     }))
-    await wrapper.get('.ssw-detail-header').trigger('click')
+    await wrapper.get('.sdp-header').trigger('click')
     expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe('改名后')
     expect(wrapper.get('[data-testid="active-source-url"]').text()).toBe('https://new.example.com/list')
     expect(flow.sourceCtx?.name).toBe('改名后')
@@ -1155,12 +1156,15 @@ describe('SiteSourceSwitcher · 批量导入的结果通知', () => {
 // 现在统一走 utils/clipboard（异步 API → execCommand → 可一步复制的弹窗）。
 describe('SiteSourceSwitcher · 复制走全站统一实现（2026-09-22）', () => {
   it('源 ID / 源 URL 的复制都调 copyToClipboard，不自己碰 navigator.clipboard', async () => {
-    // 与 uiCopy.test.ts 同一套做法：?raw 读源码，锁住"不许再自造复制实现"
+    // 与 uiCopy.test.ts 同一套做法：?raw 读源码，锁住"不许再自造复制实现"。
+    // 2026-11-09 起复制按钮随「源详情」抽到 SourceDetailPanel，两个文件都要守这条约束。
     const src = String((await import('./SiteSourceSwitcher.vue?raw')).default)
+    const panel = String((await import('./SourceDetailPanel.vue?raw')).default)
     // 只禁**调用**形式：注释里还留着"原先自己写了一套 navigator.clipboard"的来由，不能一起误伤
     expect(src).not.toContain('await navigator.clipboard')
-    expect(src).toContain("from '@/utils/clipboard'")
-    expect(src).toContain('copyToClipboard(text, label)')
+    expect(panel).not.toContain('await navigator.clipboard')
+    expect(panel).toContain("from '@/utils/clipboard'")
+    expect(panel).toContain('copyToClipboard(text, label)')
   })
 
   // 2026-09-23 用户撞到：站 89 侧栏显示「源列表 (0) / 该网站暂无源」、页签停在「全部 · 89」，

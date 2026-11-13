@@ -19,6 +19,14 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'RootRedirect', redirect: '/overview' },
       { path: '/overview', component: () => import('../views/Overview/index.vue') },
+      // 我的工作台（个人页）：登录即可见，不进后端菜单、不带 permission，因此不走菜单授权，
+      // 也不会出现在侧栏；入口在顶栏账号菜单。meta.layout='fullwidth' 让 AppShell 走全宽布局
+      // （68px 顶栏、保留平台侧栏、无重复模块标题区、主区零内边距，滚动只发生在主区）。
+      {
+        path: '/workbench',
+        component: () => import('../views/Workbench/index.vue'),
+        meta: { layout: 'fullwidth' },
+      },
       {
         path: '/canvas',
         component: () => import('../views/FlowCanvas/index.vue'),

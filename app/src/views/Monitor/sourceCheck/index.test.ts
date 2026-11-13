@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
-// 数据源告警（旧 MonitorList.vue → sourceCheck/index.vue）表格操作接线回归。
-// 这里只验证「每个操作调到了哪条接口、带了什么参数」——旧页面这一列操作全是直连后端的，
-// 迁到新平台后最容易出的问题是接线断了或落回 mock，而不是少个按钮。
+// 源维度列表（1110 §3.2）页面行为回归：一行一源、未配置源出行、目录降级、
+// 筛选/刷新保留上下文、单源展开、批量只作用勾选、日志抽屉按记录 id 打开、新增直接进编辑器选源。
+// 断言只依赖对外可见的文案、接口参数与暴露方法，不触碰内部实现。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { h } from 'vue'
-import ElementPlus from 'element-plus'
+import { defineComponent, h, nextTick } from 'vue'
+import ElementPlus, { ElMessageBox } from 'element-plus'
+import type { MonitorRecordView } from '@/api/types/monitorCenter'
+import { deleteSourceCheck } from '@/api/monitor'
+import type { MonitorSourceOption } from '@/api/monitorCenter'
+import { MonitorQueryLimitError, listMonitors, listMonitorsOfSource, listSourceOptions, runMonitorsNow, setMonitorsEnabled } from '@/api/monitorCenter'
 import SourceCheckPage from './index.vue'
-import * as monitorApi from '../../../api/monitor'
-import type { SourceCheck } from '../../../api'
 
 // Element Plus 的表格内部用 ResizeObserver 量宽，jsdom 没有
 class ResizeObserverStub {
@@ -18,302 +20,372 @@ class ResizeObserverStub {
 }
 ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver ??= ResizeObserverStub
 
-// confirmDanger 真实实现要弹 ElMessageBox（无法在 jsdom 里点「确认执行」），
-// 测试直接放行动作本身——要验的是动作里发的接口，不是确认框。
+// confirmDanger 真实实现要弹 ElMessageBox（jsdom 里点不到「确认」），测试直接放行动作本身
 vi.mock('@/utils/confirmDanger', () => ({
   confirmDanger: (_title: string, _body: string, run: () => Promise<unknown>) => run(),
   confirmOrRun: (_need: boolean, _t: string, _b: string, run: () => Promise<unknown>) => run(),
 }))
 
-const openDialog = vi.fn()
-const logsShow = vi.fn()
+vi.mock('@/api/monitor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/monitor')>()),
+  deleteSourceCheck: vi.fn(),
+}))
 
-function check(over: Partial<SourceCheck> = {}): SourceCheck {
+vi.mock('@/api/monitorCenter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/monitorCenter')>()
   return {
-    id: 'ck-1',
-    isDelete: 0,
-    state: 'C',
-    lastMsg: '2026-09-09 11:00:46---正常, 数量:1240',
-    name: '日增量监控',
-    tableName: 'sense_data.tb_jjjk',
-    schedule: '0 0 * * * ?',
-    nextRun: '2026-09-09 12:00:00',
-    lastRun: '2026-09-09 11:00:19',
+    ...actual,
+    listMonitors: vi.fn(),
+    listMonitorsOfSource: vi.fn(),
+    listSourceOptions: vi.fn(),
+    setMonitorsEnabled: vi.fn(),
+    runMonitorsNow: vi.fn(),
+  }
+})
+
+const mockedListMonitors = vi.mocked(listMonitors)
+const mockedListOfSource = vi.mocked(listMonitorsOfSource)
+const mockedListSources = vi.mocked(listSourceOptions)
+const mockedSetEnabled = vi.mocked(setMonitorsEnabled)
+const mockedRunNow = vi.mocked(runMonitorsNow)
+const mockedDelete = vi.mocked(deleteSourceCheck)
+
+const editorDirty = vi.fn(() => false)
+
+const ElDialogStub = defineComponent({
+  name: 'ElDialog',
+  props: { modelValue: { type: Boolean, default: false }, title: { type: String, default: '' }, beforeClose: Function },
+  emits: ['update:modelValue'],
+  template: `<div v-if="modelValue" class="stub-dialog">
+    <div class="stub-dialog-title">{{ title }}</div>
+    <slot />
+    <div class="stub-dialog-footer"><slot name="footer" /></div>
+  </div>`,
+})
+
+const stubs = {
+  ElDialog: ElDialogStub,
+  SourceSelect: defineComponent({
+    name: 'SourceSelect',
+    props: { modelValue: { type: String, default: '' } },
+    emits: ['update:modelValue', 'change'],
+    template: '<div class="stub-source-select" />',
+  }),
+  // 统一编辑器：断言「打开时锁了哪个源、是否带记录身份」，不依赖其内部四区实现
+  MonitorConfigEditor: defineComponent({
+    name: 'MonitorConfigEditor',
+    props: {
+      siteId: { type: String, default: '' },
+      sourceId: { type: String, default: '' },
+      record: { type: Object, default: null },
+      sourceLocked: { type: Boolean, default: false },
+    },
+    emits: ['saved', 'cancel'],
+    setup(_props, { expose }) {
+      expose({ isDirty: editorDirty, isBusy: () => false })
+      return () => h('div', { class: 'stub-editor' })
+    },
+  }),
+  // 远程搜索选源器：只断言 emit 的 (sourceId, name)，不依赖其内部接口调用
+  SourcePickerRemote: defineComponent({
+    name: 'SourcePickerRemote',
+    props: {
+      modelValue: { type: String, default: '' },
+      selectedName: { type: String, default: '' },
+      placeholder: { type: String, default: '' },
+    },
+    emits: ['update:modelValue'],
+    setup() {
+      return () => h('div', { class: 'stub-source-picker' })
+    },
+  }),
+  // 统一运行抽屉：只断言「打开时带了哪个范围」，不依赖其内部实现
+  RunsDrawer: defineComponent({
+    name: 'RunsDrawer',
+    props: {
+      open: { type: Boolean, default: false },
+      sourceId: { type: String, default: '' },
+      monitorId: { type: String, default: '' },
+      title: { type: String, default: '' },
+    },
+    emits: ['close'],
+    setup(props) {
+      return () => (props.open ? h('div', { class: 'stub-runs' }, `${props.sourceId}|${props.monitorId}|${props.title}`) : null)
+    },
+  }),
+}
+
+function rec(patch: Partial<MonitorRecordView> = {}): MonitorRecordView {
+  return {
+    id: 'm1',
     sourceId: 's1',
-    checkConf: '{}',
-    ...over,
+    sourceName: '源一',
+    name: '检查项A',
+    kind: 'ai',
+    enabled: true,
+    schedule: '0 8 * * *',
+    publishStatus: 'ready',
+    exec: 'succeeded',
+    data: 'normal',
+    notify: 'unknown',
+    count: '3',
+    conf: { notifyOn: 'error', methods: ['a'] },
+    raw: {} as never,
+    ...patch,
   }
 }
 
-const stubs = {
-  SourceSelect: {
-    name: 'SourceSelect',
-    props: ['modelValue'],
-    emits: ['update:modelValue', 'change'],
-    template: '<div class="stub-source-select" />',
-  },
-  StatusTag: { name: 'StatusTag', props: ['state', 'text', 'tone'], template: '<span class="stub-status" />' },
-  CheckEditDialog: {
-    name: 'CheckEditDialog',
-    props: ['sourceId'],
-    emits: ['saved'],
-    setup(_p: unknown, { expose }: { expose: (o: Record<string, unknown>) => void }) {
-      expose({ openDialog })
-      return () => h('div', { class: 'stub-edit' })
-    },
-  },
-  CheckLogsDrawer: {
-    name: 'CheckLogsDrawer',
-    props: ['sourceId'],
-    setup(_p: unknown, { expose }: { expose: (o: Record<string, unknown>) => void }) {
-      expose({ show: logsShow })
-      return () => h('div', { class: 'stub-logs' })
-    },
-  },
-  ElSwitch: {
-    name: 'ElSwitch',
-    props: ['modelValue'],
-    emits: ['change'],
-    template: '<button class="stub-switch" @click="$emit(\'change\', !modelValue)" />',
-  },
-  ElPagination: { name: 'ElPagination', props: ['currentPage', 'pageSize', 'total'], template: '<div class="stub-pager" />' },
-  ElDrawer: { name: 'ElDrawer', props: ['modelValue', 'title'], template: '<div class="stub-drawer"><slot /></div>' },
-  ElDescriptions: { name: 'ElDescriptions', template: '<div><slot /></div>' },
-  ElDescriptionsItem: { name: 'ElDescriptionsItem', props: ['label'], template: '<div><slot /></div>' },
-}
-
-const ROWS: SourceCheck[] = [
-  check({ id: 'ck-1', isDelete: 0, sourceId: 's1', jobId: 'job-9', name: '日增量监控' }),
-  check({ id: 'ck-2', isDelete: 1, sourceId: 's1', name: '小时增量监控' }),
+const directory: MonitorSourceOption[] = [
+  { sourceId: 's1', name: '源一', siteName: '站A' },
+  { sourceId: 's2', name: '未配置源', siteName: '站A' },
 ]
 
-function mountPage(props: Record<string, unknown> = {}) {
-  // v-loading 由 ElementPlus 插件自带，别再覆盖注册一遍（会打 duplicate directive 警告）
-  return mount(SourceCheckPage, { props, global: { plugins: [ElementPlus], stubs } })
+function buttonByText(wrapper: VueWrapper, text: string): ReturnType<VueWrapper['find']> {
+  const found = wrapper.findAll('button').find((item) => item.text().trim() === text)
+  if (!found) throw new Error(`找不到按钮：${text}`)
+  return found
 }
 
-const pagedSpy = () => vi.spyOn(monitorApi, 'pagedSourceCheck').mockResolvedValue({ total: ROWS.length, list: ROWS })
-/** 勾选行：直接给 el-table 抛 selection-change（等价于用户勾了两行） */
-async function selectRows(wrapper: VueWrapper, ids: string[]) {
-  wrapper.findComponent({ name: 'ElTable' }).vm.$emit('selection-change', ids)
+async function mountPage(props: Record<string, string> = {}): Promise<VueWrapper> {
+  const wrapper = mount(SourceCheckPage, {
+    props,
+    global: { plugins: [ElementPlus], stubs },
+  })
   await flushPromises()
+  return wrapper
 }
-const btn = (wrapper: VueWrapper, text: string) =>
-  wrapper.findAll('button').find((b) => b.text().trim() === text)!
-/** 第一行的行内操作：已改成图标（原「更多」里的详情 / 立即运行 / 删除也平铺了），按 tooltip 文案找 */
-const link = (wrapper: VueWrapper, text: string) =>
-  wrapper.findAll('tr.el-table__row')[0].findAllComponents({ name: 'ElTooltip' })
-    .find((t: VueWrapper) => (t.props() as { content?: string }).content === text)!.find('.sc-op-icon')
+
+function selectByPlaceholder(wrapper: VueWrapper, placeholder: string) {
+  const found = wrapper
+    .findAllComponents({ name: 'ElSelect' })
+    .find((item) => item.props('placeholder') === placeholder)
+  if (!found) throw new Error(`找不到下拉：${placeholder}`)
+  return found
+}
 
 beforeEach(() => {
-  openDialog.mockClear()
-  logsShow.mockClear()
+  vi.clearAllMocks()
+  editorDirty.mockReturnValue(false)
+  mockedListMonitors.mockResolvedValue([rec()])
+  mockedListOfSource.mockResolvedValue([rec()])
+  mockedListSources.mockResolvedValue(directory)
+  mockedSetEnabled.mockResolvedValue(undefined)
+  mockedRunNow.mockResolvedValue(undefined)
+  mockedDelete.mockResolvedValue(undefined)
 })
+
 afterEach(() => {
   vi.restoreAllMocks()
-  document.body.innerHTML = ''
 })
 
-describe('数据源告警 · 表格操作与接口调用（对齐旧 MonitorList）', () => {
-  it('首屏按旧契约查询：sourceId/enable/state/name + page/limit（不发 size）', async () => {
-    const paged = pagedSpy()
-    const wrapper = mountPage()
-    await flushPromises()
-
-    expect(paged).toHaveBeenCalledTimes(1)
-    expect(paged).toHaveBeenCalledWith({ sourceId: '', enable: '', state: '', name: '', page: 1, limit: 10 })
-    expect(wrapper.text()).toContain('日增量监控')
+describe('一行一源与源目录', () => {
+  it('传入源目录时，未配置检查的源也出行且不显示绿色正常', async () => {
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('未配置源')
+    expect(wrapper.text()).toContain('未配置检查')
+    expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
+    expect(wrapper.text()).toMatch(/已配置\s*1/)
   })
 
-  it('「在用」「告警状态」选中「全部」时回显中文，请求仍按旧口径传空串', async () => {
-    const paged = pagedSpy()
-    const wrapper = mountPage()
-    await flushPromises()
-
-    // 前两个 ElSelect 是「在用」「告警状态」（第三个在 SourceSelect 内部）
-    const [enableSelect, stateSelect] = wrapper.findAllComponents({ name: 'ElSelect' })
-    expect(enableSelect.vm.$props.modelValue).toBe('-1')
-    expect(enableSelect.text()).toBe('全部')
-    expect(stateSelect.text()).toBe('全部')
-
-    // 切走再切回，避免「初始值恰好命中」的假阳性
-    enableSelect.vm.$emit('update:modelValue', '1')
-    stateSelect.vm.$emit('update:modelValue', 'E')
-    await flushPromises()
-    expect(enableSelect.text()).toBe('停用')
-    expect(stateSelect.text()).toBe('告警')
-
-    enableSelect.vm.$emit('update:modelValue', '-1')
-    stateSelect.vm.$emit('update:modelValue', '-1')
-    await flushPromises()
-    expect(enableSelect.text()).toBe('全部')
-    expect(stateSelect.text()).toBe('全部')
-
-    enableSelect.vm.$emit('change', '-1')
-    await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '', state: '' }))
+  it('源目录超限时降级为「仅已配置源」并给出可读提示', async () => {
+    mockedListSources.mockRejectedValue(new MonitorQueryLimitError(20))
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('监控记录超过 20 页')
+    expect(wrapper.text()).toContain('当前只列出已配置监控的源')
+    expect(wrapper.text()).not.toContain('未配置源')
   })
 
-  it('查询按钮带上名称条件重新拉取，并回到第 1 页', async () => {
-    const paged = pagedSpy()
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('input[placeholder="名称"]').setValue('增量')
-    await btn(wrapper, '查询').trigger('click')
-    await flushPromises()
-
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ name: '增量', page: 1, limit: 10 }))
+  it('监控记录加载失败时给出错误与重试', async () => {
+    mockedListMonitors.mockRejectedValue(new Error('boom'))
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('监控记录加载失败：boom')
+    expect(wrapper.text()).toContain('重试')
   })
 
-  it('行内开关按 isDelete 反向语义：在用→传 false 停用，停用→传 true 启用', async () => {
-    pagedSpy()
-    const changeEnable = vi.spyOn(monitorApi, 'changeSourceCheckEnable').mockResolvedValue({ ok: true } as never)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    const switches = wrapper.findAll('.stub-switch')
-    expect(switches).toHaveLength(2)
-
-    await switches[0].trigger('click') // ck-1 在用 → 停用
-    await flushPromises()
-    expect(changeEnable).toHaveBeenLastCalledWith(['ck-1'], false)
-
-    await switches[1].trigger('click') // ck-2 停用 → 启用
-    await flushPromises()
-    expect(changeEnable).toHaveBeenLastCalledWith(['ck-2'], true)
+  it('计划覆盖无 C07 显示「—（需服务端聚合）」且不按时隙推算', async () => {
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('—（需服务端聚合）')
+    expect(wrapper.text()).toContain('本页不推算漏跑')
   })
 
-  it('批量操作：重跑 / 停用 / 启用 / 删除各自打到对应接口（ids 用勾选集合）', async () => {
-    pagedSpy()
-    const runNow = vi.spyOn(monitorApi, 'handleRunNow').mockResolvedValue({} as never)
-    const changeEnable = vi.spyOn(monitorApi, 'changeSourceCheckEnable').mockResolvedValue({} as never)
-    const remove = vi.spyOn(monitorApi, 'deleteSourceCheck').mockResolvedValue({} as never)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    // 未勾选时批量条不出现（对齐旧版 dropdown 的 v-if）
-    expect(wrapper.find('.sc-batch-bar').exists()).toBe(false)
-
-    await selectRows(wrapper, ['ck-1', 'ck-2'])
-    expect(wrapper.find('.sc-batch-bar').exists()).toBe(true)
-
-    await btn(wrapper, '批量重跑').trigger('click')
-    await flushPromises()
-    expect(runNow).toHaveBeenLastCalledWith(['ck-1', 'ck-2'])
-
-    await btn(wrapper, '批量停用').trigger('click')
-    await flushPromises()
-    expect(changeEnable).toHaveBeenLastCalledWith(['ck-1', 'ck-2'], false)
-
-    await btn(wrapper, '批量启用').trigger('click')
-    await flushPromises()
-    expect(changeEnable).toHaveBeenLastCalledWith(['ck-1', 'ck-2'], true)
-
-    await btn(wrapper, '批量删除').trigger('click')
-    await flushPromises()
-    expect(remove).toHaveBeenLastCalledWith(['ck-1', 'ck-2'])
+  it('停用源显示已停用，不显示数据正常', async () => {
+    mockedListMonitors.mockResolvedValue([rec({ enabled: false, data: 'unknown' })])
+    mockedListSources.mockResolvedValue([{ sourceId: 's1', name: '源一' }])
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('已停用')
+    expect(wrapper.text()).not.toContain('数据正常')
   })
 
-  it('行内「立即运行 / 删除」打到 runNow / delete（单条 id）', async () => {
-    pagedSpy()
-    const runNow = vi.spyOn(monitorApi, 'handleRunNow').mockResolvedValue({} as never)
-    const remove = vi.spyOn(monitorApi, 'deleteSourceCheck').mockResolvedValue({} as never)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await link(wrapper, '立即运行').trigger('click')
-    await flushPromises()
-    expect(runNow).toHaveBeenLastCalledWith(['ck-1'])
-
-    await link(wrapper, '删除').trigger('click')
-    await flushPromises()
-    expect(remove).toHaveBeenLastCalledWith(['ck-1'])
+  it('源上下文锁定当前源，不加载整份源目录', async () => {
+    const wrapper = await mountPage({ sourceId: 's1' })
+    expect(mockedListOfSource).toHaveBeenCalledWith('s1')
+    expect(mockedListSources).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('已锁定到当前源')
   })
 
-  it('行内「详情」打开详情抽屉（不发请求，只看当前行）', async () => {
-    pagedSpy()
-    const wrapper = mountPage()
+  it('网站上下文按网站取源目录并锁定筛选项', async () => {
+    const wrapper = await mountPage({ siteId: 'site-1', siteName: '站A' })
+    expect(mockedListSources).toHaveBeenCalledWith({ siteId: 'site-1' })
+    expect(wrapper.text()).toContain('已锁定到当前网站')
+  })
+})
+
+describe('筛选与刷新', () => {
+  it('按数据情况与关键词筛选，刷新后保留筛选与分页大小', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec(),
+      rec({ id: 'm2', sourceId: 's2', sourceName: '未配置源', exec: 'failed', data: 'unknown' }),
+    ])
+    mockedListSources.mockResolvedValue(directory)
+    const wrapper = await mountPage()
+
+    selectByPlaceholder(wrapper, '数据情况').vm.$emit('update:modelValue', 'failed')
+    const keyword = wrapper.find('input[placeholder="筛选已加载源名称 / ID"]')
+    await keyword.setValue('未配置')
+    await buttonByText(wrapper, '查询').trigger('click')
     await flushPromises()
 
-    expect(wrapper.findComponent({ name: 'ElDrawer' }).exists()).toBe(false)
-    await link(wrapper, '详情').trigger('click')
+    expect(wrapper.text()).toContain('未配置源')
+    expect(wrapper.text()).not.toContain('源一')
+
+    // 分页大小改大后再刷新，不能被重置回默认 30
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:page-size', 100)
+    await nextTick()
+    await wrapper.find('button[title="保留当前筛选与分页大小重新查询"]').trigger('click')
     await flushPromises()
 
-    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
-    expect(drawer.exists()).toBe(true)
-    expect(drawer.props('modelValue')).toBe(true)
+    expect(mockedListMonitors).toHaveBeenCalledTimes(2)
+    expect(wrapper.findComponent({ name: 'ElPagination' }).props('pageSize')).toBe(100)
+    expect(wrapper.text()).toContain('未配置源')
+    expect(wrapper.text()).not.toContain('源一')
+  })
+})
+
+describe('行内展开与批量', () => {
+  async function mountExpanded(): Promise<VueWrapper> {
+    mockedListMonitors.mockResolvedValue([
+      rec(),
+      rec({ id: 'm2', name: '检查项B' }),
+      rec({ id: 'm3', sourceId: 's2', sourceName: '源二', name: '检查项C' }),
+    ])
+    mockedListSources.mockResolvedValue([
+      { sourceId: 's1', name: '源一' },
+      { sourceId: 's2', name: '源二' },
+    ])
+    const wrapper = await mountPage()
+    await wrapper.findAll('.el-table__expand-icon')[0].trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('同时只展开当前源，切源后前一个源收起', async () => {
+    const wrapper = await mountExpanded()
+    expect(wrapper.findAll('.sc-inner')).toHaveLength(1)
+    expect(wrapper.text()).toContain('检查项A')
+
+    await wrapper.findAll('.el-table__expand-icon')[1].trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.sc-inner')).toHaveLength(1)
+    expect(wrapper.text()).toContain('检查项C')
+    expect(wrapper.text()).not.toContain('检查项A')
   })
 
-  it('行内「编辑」把整行交给新增/修改弹窗', async () => {
-    pagedSpy()
-    const wrapper = mountPage()
+  it('编辑打开时带记录身份并锁源（否则会另存成重复记录）', async () => {
+    const wrapper = await mountExpanded()
+    await buttonByText(wrapper, '编辑').trigger('click')
     await flushPromises()
 
-    await link(wrapper, '编辑').trigger('click')
-    await flushPromises()
-    expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'ck-1' }))
+    const editor = wrapper.findComponent({ name: 'MonitorConfigEditor' })
+    expect(editor.exists()).toBe(true)
+    expect(editor.props('sourceId')).toBe('s1')
+    expect(editor.props('sourceLocked')).toBe(true)
+    // 必须是视图记录（按 monitorId 保存），不是旧接口原始行
+    expect((editor.props('record') as MonitorRecordView).id).toBe('m1')
   })
 
-  it('行内「日志」按旧版口径传 queryParam.sourceId + record.jobId', async () => {
-    pagedSpy()
-    const wrapper = mountPage()
-    await flushPromises()
+  it('批量操作只作用已勾选的检查项', async () => {
+    const wrapper = await mountExpanded()
+    const innerTable = wrapper.findAllComponents({ name: 'ElTable' })[1]
+    innerTable.vm.$emit('selection-change', [rec({ id: 'm2', name: '检查项B' })])
+    await nextTick()
 
-    await link(wrapper, '日志').trigger('click')
+    await buttonByText(wrapper, '启用所选').trigger('click')
     await flushPromises()
+    expect(mockedSetEnabled).toHaveBeenCalledWith(['m2'], true)
 
-    // 未在筛选里选源 → 回退到该行自身的 sourceId；jobId 用记录上的（不是记录 id）
-    expect(logsShow).toHaveBeenLastCalledWith('s1', 'job-9', '日增量监控')
+    const innerTableAfter = wrapper.findAllComponents({ name: 'ElTable' })[1]
+    innerTableAfter.vm.$emit('selection-change', [rec({ id: 'm2', name: '检查项B' })])
+    await nextTick()
+    await buttonByText(wrapper, '删除所选').trigger('click')
+    await flushPromises()
+    expect(mockedDelete).toHaveBeenCalledWith(['m2'])
   })
 
-  it('未选源时点「加监控」只提示不打开弹窗；选了源之后才打开', async () => {
-    pagedSpy()
-    const wrapper = mountPage()
-    await flushPromises()
+  it('记录入口按监控记录 id 打开运行抽屉，不传旧 jobId', async () => {
+    const wrapper = await mountExpanded()
+    await buttonByText(wrapper, '记录').trigger('click')
+    await nextTick()
+    // sourceId | monitorId | title：monitorId 必须是监控记录 id（旧日志 jobId 就是 ckSource.id）
+    expect(wrapper.find('.stub-runs').text()).toBe('s1|m1|检查项A')
 
-    await btn(wrapper, '加监控').trigger('click')
-    await flushPromises()
-    expect(openDialog).not.toHaveBeenCalled()
+    await buttonByText(wrapper, '结果').trigger('click')
+    await nextTick()
+    // 源级入口只带 sourceId，不带 monitorId，也不沿用上一条检查项名
+    expect(wrapper.find('.stub-runs').text()).toBe('s1||')
+  })
+})
 
-    await wrapper.findComponent({ name: 'SourceSelect' }).vm.$emit('update:modelValue', 's9')
-    await wrapper.findComponent({ name: 'SourceSelect' }).vm.$emit('change')
+describe('新增监控', () => {
+  it('保存回读未知时保留候选，回读成功后后续编辑沿用该记录身份', async () => {
+    const wrapper = await mountPage()
+    await buttonByText(wrapper, '新增监控').trigger('click')
     await flushPromises()
-
-    // 换源即查（旧版 d-source-select 的 @change → handleRefresh）
-    expect(vi.mocked(monitorApi.pagedSourceCheck).mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ sourceId: 's9' }),
-    )
-    expect(wrapper.findComponent({ name: 'CheckEditDialog' }).props('sourceId')).toBe('s9')
-
-    await btn(wrapper, '加监控').trigger('click')
+    const editor = wrapper.getComponent({ name: 'MonitorConfigEditor' })
+    editor.vm.$emit('saved', null)
     await flushPromises()
-    expect(openDialog).toHaveBeenLastCalledWith(null)
+    expect(wrapper.find('.stub-editor').exists()).toBe(true)
+    editor.vm.$emit('saved', rec({ id: 'new-monitor' }))
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'MonitorConfigEditor' }).props('record')).toMatchObject({ id: 'new-monitor' })
+    wrapper.unmount()
   })
 
-  it('内嵌形态：只去掉卡片壳，筛选整套保留，传入的源作为初值透给列表与弹窗', async () => {
-    const paged = pagedSpy()
-    const wrapper = mountPage({ embedded: true, sourceId: 's-embedded' })
+  it('关窗选择继续编辑后必须保留弹窗及未保存草稿', async () => {
+    const wrapper = await mountPage()
+    await buttonByText(wrapper, '新增监控').trigger('click')
     await flushPromises()
-
-    // 源是初值：查询按它过滤，「加监控」也拿它预填数据源
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's-embedded' }))
-    expect(wrapper.findComponent({ name: 'CheckEditDialog' }).props('sourceId')).toBe('s-embedded')
-    // 筛选表单不被裁剪——旧平台 MonitorModal 里的 MonitorList 就是完整带筛选的，
-    // 用户在弹窗里仍要能按 在用 / 告警状态 / 源ID 过滤
-    expect(wrapper.find('.stub-source-select').exists()).toBe(true)
-    // 卡片壳仍去掉：外层已经是弹窗
-    expect(wrapper.find('.sc-head').exists()).toBe(false)
+    editorDirty.mockReturnValue(true)
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const close = wrapper.getComponent(ElDialogStub).props('beforeClose') as (done: () => void) => Promise<void>
+    const done = vi.fn()
+    await close(done)
+    expect(done).not.toHaveBeenCalled()
+    expect(wrapper.find('.stub-editor').exists()).toBe(true)
+    wrapper.unmount()
   })
 
-  it('新增/修改保存成功后重新拉列表', async () => {
-    const paged = pagedSpy()
-    const wrapper = mountPage()
-    await flushPromises()
-    expect(paged).toHaveBeenCalledTimes(1)
+  it('全局视图直接进编辑器选源（不再多一层「先选择源」弹窗）', async () => {
+    const wrapper = await mountPage()
 
-    wrapper.findComponent({ name: 'CheckEditDialog' }).vm.$emit('saved')
+    await buttonByText(wrapper, '新增监控').trigger('click')
     await flushPromises()
-    expect(paged).toHaveBeenCalledTimes(2)
+
+    expect(wrapper.text()).not.toContain('新增监控 · 先选择源')
+    const editor = wrapper.findComponent({ name: 'MonitorConfigEditor' })
+    expect(editor.exists()).toBe(true)
+    // 全局入口：源为空、不锁源，由编辑器里的远程搜索选
+    expect(editor.props('sourceId')).toBe('')
+    expect(editor.props('record')).toBeNull()
+    expect(editor.props('sourceLocked')).toBe(false)
+  })
+
+  it('源上下文直接打开新增，不需要再选源', async () => {
+    const wrapper = await mountPage({ sourceId: 's1' })
+    await buttonByText(wrapper, '新增监控').trigger('click')
+    await flushPromises()
+    const editor = wrapper.findComponent({ name: 'MonitorConfigEditor' })
+    expect(editor.exists()).toBe(true)
+    expect(editor.props('sourceId')).toBe('s1')
+    expect(editor.props('record')).toBeNull()
   })
 })

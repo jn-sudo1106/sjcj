@@ -4,12 +4,34 @@ import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
 import { submitClarificationAnswer } from '@/api/aiChat'
+import { downloadCsv } from '@/utils/csv'
+import { downloadXlsx } from '@/utils/format/xlsxExport'
+
+vi.mock('@/utils/csv', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/csv')>()
+  return {
+    ...actual,
+    downloadCsv: vi.fn(),
+    csvDateTag: vi.fn(() => '20261111'),
+  }
+})
+
+vi.mock('@/utils/format/xlsxExport', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/format/xlsxExport')>()
+  return {
+    ...actual,
+    downloadXlsx: vi.fn(),
+    exportDateTag: vi.fn(() => '20261111'),
+  }
+})
 
 vi.mock('@/api/aiChat', () => ({
-  listAiSessions: vi.fn().mockResolvedValue([
-    { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' },
-    { id: 's2', title: '各网站抓取平均耗时与并发量', updatedAt: '3天前', group: 'week' },
-  ]),
+  listAiSessions: vi.fn().mockImplementation(() =>
+    Promise.resolve([
+      { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' },
+      { id: 's2', title: '各网站抓取平均耗时与并发量', updatedAt: '3天前', group: 'week' },
+    ])
+  ),
   listAiAgents: vi.fn().mockResolvedValue([
     { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
   ]),
@@ -98,19 +120,205 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
   })
 
-  it('支持在趋势图表与明细数据表之间切换视图', async () => {
+  it('支持在趋势图表、占比饼图与明细数据表之间切换视图', async () => {
     const wrapper = mountView()
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
     expect(wrapper.find('.rc-table-view').exists()).toBe(false)
 
-    const radioBtns = wrapper.findAll('.el-radio-button')
-    if (radioBtns.length >= 2) {
-      await radioBtns[1].find('input').setValue('table')
-      await wrapper.vm.$nextTick()
-      expect(wrapper.find('.rc-table-view').exists()).toBe(true)
-    }
+    // 切换到「占比饼图」视图
+    const pieRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('占比饼图'))
+    expect(pieRadio).toBeTruthy()
+    await pieRadio!.find('input').setValue('pie')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rc-pie-chart"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rc-pie-legend"]').exists()).toBe(true)
+    expect(wrapper.findAll('.rc-pie-slice').length).toBeGreaterThan(0)
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-table-view').exists()).toBe(false)
+
+    // 切换到「明细数据表」视图
+    const tableRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('明细数据表'))
+    expect(tableRadio).toBeTruthy()
+    await tableRadio!.find('input').setValue('table')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
+
+    // 切换回「趋势图表」视图
+    const chartRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('趋势图表'))
+    expect(chartRadio).toBeTruthy()
+    await chartRadio!.find('input').setValue('chart')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-table-view').exists()).toBe(false)
+  })
+
+  it('支持在明细数据表视图快捷导出 Excel 与 CSV', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await confirmWithTables(wrapper, [101])
+
+    // 切换到明细表格视图
+    const tableRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('明细数据表'))
+    await tableRadio!.find('input').setValue('table')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+
+    // 点击表格上方快捷「导出 Excel」按钮
+    await wrapper.find('[data-testid="rc-table-export-excel"]').trigger('click')
+    expect(downloadXlsx).toHaveBeenCalledTimes(1)
+    const [xlsxFileName, xlsxRows] = vi.mocked(downloadXlsx).mock.calls[0]
+    expect(xlsxFileName).toContain('20261111')
+    expect(xlsxRows[0]).toEqual(['网站名称', '总任务数', '成功数', '失败数', '主要异常码'])
+
+    // 点击表格上方快捷「导出 CSV」按钮
+    await wrapper.find('[data-testid="rc-table-export-csv"]').trigger('click')
+    expect(downloadCsv).toHaveBeenCalledTimes(1)
+    const [csvFileName, csvContent] = vi.mocked(downloadCsv).mock.calls[0]
+    expect(csvFileName).toContain('20261111')
+    expect(csvContent).toContain('网站名称,总任务数,成功数,失败数,主要异常码')
+  })
+
+  it('支持通过卡片顶部的导出下拉菜单导出 Excel 与 CSV', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await confirmWithTables(wrapper, [101])
+
+    vi.mocked(downloadXlsx).mockClear()
+    vi.mocked(downloadCsv).mockClear()
+
+    const dropdown = wrapper.findComponent({ name: 'ElDropdown' })
+    expect(dropdown.exists()).toBe(true)
+
+    // 触发 Excel 导出命令
+    dropdown.vm.$emit('command', 'excel')
+    await wrapper.vm.$nextTick()
+    expect(downloadXlsx).toHaveBeenCalledTimes(1)
+
+    // 触发 CSV 导出命令
+    dropdown.vm.$emit('command', 'csv')
+    await wrapper.vm.$nextTick()
+    expect(downloadCsv).toHaveBeenCalledTimes(1)
+  })
+
+  it('输入包含导出的自然语言指令时，能识别意图并自动触发对应文件下载', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountView()
+    await flushPromises()
+    await confirmWithTables(wrapper, [101])
+
+    vi.mocked(downloadCsv).mockClear()
+
+    const input = wrapper.find('.rc-textarea')
+    await input.setValue('帮我把上面失败率最高的前3个网站的数据导出为CSV表格')
+    await wrapper.find('.rc-send-btn').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    vi.advanceTimersByTime(700)
+    await flushPromises()
+
+    expect(downloadCsv).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('已为您生成并导出')
+    vi.useRealTimers()
+  })
+
+  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语与推荐场景卡片', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 初始在 s1 会话中，不应存在新会话页面
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
+
+    // 点击「新建问数会话」按钮
+    await wrapper.find('.rc-newchat-btn').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // 应该显示新会话页面
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+    expect(wrapper.find('.rc-hero-title').text()).toContain('AI 智能问数助手')
+    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(4)
+    expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
+  })
+
+  it('在新建会话页面点击推荐卡片可发起新问数会话', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('.rc-newchat-btn').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const starterCards = wrapper.findAll('.rc-starter-card')
+    expect(starterCards.length).toBeGreaterThan(0)
+
+    // 点击第二个推荐场景卡片（昨日各站点抓取成功率 TOP 10）
+    await starterCards[1].trigger('click')
+    await flushPromises()
+
+    // 新会话已创建，进入对话流，新会话欢迎页隐藏
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
+    expect(wrapper.text()).toContain('昨日各站点抓取成功率 TOP 10')
+  })
+
+  it('在左侧会话列表中点击不同会话可切换会话内容', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 初始渲染 s1
+    expect(wrapper.text()).toContain('帮我排查一下最近的异常任务数据。')
+
+    // 切换到 s2
+    const sessionItems = wrapper.findAll('.rc-session-item')
+    expect(sessionItems.length).toBeGreaterThanOrEqual(2)
+    await sessionItems[1].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // s2 内容呈现，s1 专属问题不呈现
+    expect(wrapper.text()).toContain('各网站抓取平均耗时与并发量')
+    expect(wrapper.text()).not.toContain('帮我排查一下最近的异常任务数据。')
+
+    // 切回 s1
+    await sessionItems[0].trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('帮我排查一下最近的异常任务数据。')
+  })
+
+  it('支持删除单条会话与清空所有会话', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const deleteBtns = wrapper.findAll('.rc-session-delete')
+    expect(deleteBtns.length).toBeGreaterThan(0)
+    await deleteBtns[0].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // s1 被删除
+    expect(wrapper.text()).not.toContain('排查近期异常任务与成功率')
+
+    // 点击清空
+    await wrapper.find('.rc-clear-btn').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('.rc-session-item')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
   })
 })

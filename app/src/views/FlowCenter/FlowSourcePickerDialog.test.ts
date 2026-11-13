@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
-import { flowCenterApi, sourceApi, sourceGroupApi, type Source } from '@/api'
+import { flowCenterApi, siteApi, sourceApi, sourceGroupApi, type Source } from '@/api'
 
 const FLOW = { id: 'flow-1', name: '新闻流程' } as never
 
@@ -21,7 +21,11 @@ function mountDlg(modelValue: string[] = []) {
       directives: { loading: {} },
       stubs: {
         'el-dialog': { props: ['modelValue', 'title'], template: '<div v-if="modelValue"><slot/><slot name="footer"/></div>' },
-        'el-pagination': { props: ['total', 'pageSize'], template: '<div data-testid="fsp-pager" :total="total" />' },
+        'el-pagination': {
+          props: ['total', 'pageSize', 'currentPage'],
+          emits: ['update:currentPage', 'current-change'],
+          template: '<div data-testid="fsp-pager"><button type="button" data-testid="fsp-pager-next" @click="$emit(\'update:currentPage\', currentPage + 1); $emit(\'current-change\', currentPage + 1)">next</button></div>',
+        },
         'el-select': {
           props: ['modelValue'],
           emits: ['update:modelValue', 'change'],
@@ -38,6 +42,8 @@ beforeEach(() => {
   vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
     { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 },
   ] as never)
+  // 打开弹窗会拉一份网站清单补「网站」列的名字
+  vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -81,16 +87,18 @@ describe('FlowSourcePickerDialog', () => {
 
   it('全选全部：拉当前筛选下的所有源选中，尊重「仅看未关联到本流程」', async () => {
     const paged = vi.spyOn(sourceApi, 'sourcePaged')
-      .mockResolvedValueOnce({ total: 50, list: [src('a'), src('b')] }) // 初始 load（还有更多页 → 全选全部按钮出现）
-      .mockResolvedValueOnce({ total: 3, list: [src('a', { flowId: 'flow-1' }), src('b'), src('c')] }) // 全选全部一次取回
+      // 初始 load / 切「仅看未关联」后的全量取回 / 全选全部取回都返回这一页数据
+      .mockResolvedValue({ total: 3, list: [src('a', { flowId: 'flow-1' }), src('b'), src('c')] })
     vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
 
     const w = mountDlg([])
     await flushPromises()
     await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
-    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
     await flushPromises()
-
+    // 勾上「仅看未关联」后就是本地筛完的集合：一页装得下时由「全选本页」覆盖，无需再出「全选全部」
+    expect(w.findAll('tbody tr')).toHaveLength(2)
+    await w.get('[data-testid="fsp-pick-page"]').trigger('click')
+    await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 1000 }))
     // a 已绑本流程（flow-1）被「仅看未关联」排除
     expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['b', 'c'])
@@ -185,9 +193,59 @@ describe('FlowSourcePickerDialog', () => {
     await flushPromises()
     expect(w.findAll('tbody tr')).toHaveLength(2)
     await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await flushPromises()
     expect(w.findAll('tbody tr').map((r) => r.text())).toHaveLength(1)
     expect(w.text()).toContain('源-b')
     expect(w.text()).not.toContain('源-a')
+  })
+
+  // 2026-11-09 用户反馈：表格「网站」列只显示 28 这种数字 ID，认不出是哪个网站
+  it('「网站」列显示网站名：siteName 为空时用网站清单补全，行内自带的名字优先', async () => {
+    vi.mocked(siteApi.sitePaged).mockResolvedValue({
+      total: 1, list: [{ siteId: '28', name: 'JungleScout' }],
+    } as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2, list: [src('a', { siteId: '28' }), src('b', { siteId: '16', siteName: '企业预警通' })],
+    })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    const cells = w.findAll('tbody tr').map((r) => r.findAll('td')[3].text())
+    expect(cells[0]).toBe('JungleScout')
+    expect(cells[1]).toBe('企业预警通')
+  })
+
+  // 2026-11-09 用户反馈：「仅看未关联到本流程」要跟前面的筛选条件联动
+  it('「仅看未关联」与前置条件联动：总数按筛完的数量算，翻页/全选全部同一口径', async () => {
+    const all = Array.from({ length: 30 }, (_, i) => src(`s${i}`, i < 5 ? { flowId: 'flow-1' } : {}))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: all.length, list: all })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-site-filter"]').setValue('site-7')
+    await flushPromises()
+    await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await flushPromises()
+
+    // 带着网站条件取全 30 条 → 本地筛掉已绑本流程的 5 条，剩 25 条才是「共 N 条」
+    expect(w.get('[data-testid="fsp-pick-all"]').text()).toBe('全选全部（共 25 条）')
+    expect(w.findAll('tbody tr')).toHaveLength(20) // 25 条按每页 20 条切
+    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    await flushPromises()
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toHaveLength(25)
+  })
+
+  it('「仅看未关联」范围超过全量上限时提示先收窄，不硬拉全量', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 25_000, list: [src('a')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await flushPromises()
+    expect(w.text()).toContain('匹配 25000 个，太多了')
   })
 
   it('ID 批量检索：查到的源加入选择，未找到的提示', async () => {
@@ -219,6 +277,137 @@ describe('FlowSourcePickerDialog', () => {
     const btn = w.get('[data-testid="flow-apply-confirm"]')
     expect(btn.attributes('disabled')).toBeUndefined()
     await btn.trigger('click')
+    await flushPromises()
+    expect(w.emitted('confirm')).toHaveLength(1)
+  })
+})
+
+describe('FlowSourcePickerDialog · 1106 §4.5 筛选与提交前范围复核', () => {
+  it('筛选变化：清空本次待关联勾选并回第 1 页（网站筛选 / 仅看未关联）', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 50, list: [src('a'), src('b')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg(['a', 'b'])
+    await flushPromises()
+
+    // 先翻到第 2 页：确认翻页确实走 load()（后续断言 page 回 1 才有意义）
+    await w.get('[data-testid="fsp-pager-next"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
+
+    // 切网站：勾选清空 + 回第 1 页 + 带 siteIds（服务端筛，不退化成当前页本地过滤）
+    await w.get('[data-testid="fsp-site-filter"]').setValue('site-7')
+    await flushPromises()
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual([])
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, siteIds: 'site-7' }))
+
+    // 重新勾选并再翻页后，切「仅看未关联」同样清空 + 回第 1 页
+    w.setProps({ modelValue: ['a'] })
+    await flushPromises()
+    await w.get('[data-testid="fsp-pager-next"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
+    await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await flushPromises()
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual([])
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }))
+  })
+
+  it('关键字变化：清空勾选并回第 1 页', async () => {
+    vi.useFakeTimers()
+    try {
+      const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 50, list: [src('a')] })
+      vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+      const w = mountDlg(['a'])
+      await flushPromises()
+      await w.get('[data-testid="fsp-pager-next"]').trigger('click')
+      await flushPromises()
+      expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
+
+      await w.get('[data-testid="fsp-keyword"]').setValue('香港')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual([])
+      expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, name: '香港' }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('「全选本页」只勾当前页（不查服务端）；「全选全部（共 N 条）」按同一筛选取全部', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 50, list: [src('a'), src('b')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    expect(w.get('[data-testid="fsp-pick-all"]').text()).toBe('全选全部（共 50 条）')
+
+    const before = paged.mock.calls.length
+    await w.get('[data-testid="fsp-pick-page"]').trigger('click')
+    expect(paged.mock.calls.length).toBe(before) // 本页直接用当前行，不再请求
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['a', 'b'])
+
+    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 1000 }))
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['a', 'b'])
+  })
+
+  it('提交前复核：剔除已删除 / 已并入来源组的源，剩下的仍提交', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+      .mockResolvedValue({ total: 2, list: [src('a'), src('b')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+
+    const w = mountDlg([])
+    await flushPromises()
+    // 复核回查：b 已并入来源组，ghost 已删除
+    paged.mockResolvedValue({ total: 2, list: [src('a'), src('b', { sourceGroupId: '3' })] })
+    await w.setProps({ modelValue: ['a', 'b', 'ghost'] })
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['a'])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('2 个源已不可关联'))
+    expect(w.emitted('confirm')).toHaveLength(1)
+  })
+
+  it('提交前复核：全部不可关联时不提交', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [src('a')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+
+    const w = mountDlg([])
+    await flushPromises()
+    paged.mockResolvedValue({ total: 0, list: [] })
+    await w.setProps({ modelValue: ['ghost'] })
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+    expect(w.emitted('confirm')).toBeUndefined()
+  })
+
+  it('全选全部后复核：补上快照之后新进入范围的源，用户手动取消的不回补', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+      // total 50 让「全选全部（共 N 条）」按钮出现（本页只有 2 行）
+      .mockResolvedValue({ total: 50, list: [src('a'), src('b')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    await flushPromises()
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['a', 'b'])
+
+    // 复核时筛选范围里多了 c（ID 回查也返回全部三条）
+    paged.mockResolvedValue({ total: 3, list: [src('a'), src('b'), src('c')] })
+    // 用户手动取消了 a
+    await w.setProps({ modelValue: ['b'] })
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    // a 在全选快照里（用户自己取消的）不回补，c 是快照之后才进入范围的，补上
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['b', 'c'])
     expect(w.emitted('confirm')).toHaveLength(1)
   })
 })

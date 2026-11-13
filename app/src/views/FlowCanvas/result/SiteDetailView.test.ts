@@ -3,14 +3,52 @@ import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { defineComponent } from 'vue'
 import SiteDetailView from './SiteDetailView.vue'
 import { useFlowStore } from '@/stores/flow'
 import { siteApi, type Source } from '@/api'
 import { useWorkspaceStore } from '@/stores/workspace'
+import * as sourceDirs from '@/api/sourceDirs'
 
-const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }, { path: '/collect', component: { template: '<div />' } }] })
 
 describe('SiteDetailView', () => {
+  it('业务目录列位于源名称后，跳转使用独立目录范围并携带网站列表返回快照', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas?siteId=294&view=source&sourceGroupId=3')
+    const capture = vi.fn().mockReturnValue('saved-list')
+    const listStub = defineComponent({
+      name: 'SourceOverviewView',
+      props: ['extraColumnLabel', 'extraCellText'],
+      setup(_, { expose }) { expose({ captureListReturn: capture }) },
+      template: '<div><slot name="extra-cell" :source="{ sourceId: \'s1\' }" /></div>',
+    })
+    const wrapper = shallowMount(SiteDetailView, { props: { siteId: '294' }, global: { plugins: [router], stubs: { SourceOverviewView: listStub } } })
+    await flushPromises()
+    const link = wrapper.findComponent({ name: 'SourceBizDirectoryLink' })
+    expect(link.props('sourceId')).toBe('s1')
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    expect(list.props('extraColumnLabel')).toBe('业务目录')
+    link.vm.$emit('text-change', 's1', '行业数据 / 化工')
+    expect(list.props('extraCellText')({ sourceId: 's1' })).toBe('行业数据 / 化工')
+    const path = vi.spyOn(sourceDirs, 'dirPath').mockReturnValue(['行业数据', '能源'])
+    link.vm.$emit('membership-change', new Map([['outside-current-page', ['d3']]]))
+    expect(list.props('extraCellText')({ sourceId: 'outside-current-page' })).toBe('行业数据 / 能源')
+    expect(list.props('extraCellText')({ sourceId: 'unclassified' })).toBe('未归类')
+    path.mockRestore()
+    link.vm.$emit('navigate', 'd2')
+    await flushPromises()
+    expect(capture).toHaveBeenCalledWith('/canvas?siteId=294&view=source&sourceGroupId=3', '网站源视图')
+    expect(router.currentRoute.value.path).toBe('/collect')
+    expect(router.currentRoute.value.query).toMatchObject({ tab: 'source', bizDirId: 'd2' })
+    expect(router.currentRoute.value.query.siteId).toBeUndefined()
+    expect(router.currentRoute.value.query.sourceGroupId).toBeUndefined()
+    const back = new URL(String(router.currentRoute.value.query.directoryReturn), 'http://localhost')
+    expect(back.searchParams.get('siteId')).toBe('294')
+    expect(back.searchParams.get('sourceSearchReturn')).toBe('saved-list')
+    wrapper.unmount()
+  })
+
   it('网站来源组范围传给分页列表，清除后恢复全部；打开源保留该筛选', async () => {
     setActivePinia(createPinia())
     await router.push({ path: '/canvas', query: { siteId: 'site-a', view: 'source', sourceGroupId: '3' } })
@@ -129,31 +167,9 @@ describe('SiteDetailView', () => {
     expect(flow.sourceCtx).toBeNull()
   })
 
-  // 0916：监控视图内部拆了「监控结果 / 监控配置」两 Tab，子 Tab 跟 view 一样落 URL——
-  // 刷新和深链要回得到同一档，所以由持有 route 的本组件解析与回写。
-  it('监控视图的子 Tab 由 URL 决定，切换时写回 monitorTab', async () => {
-    setActivePinia(createPinia())
-    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'monitor' } })
-    const wrapper = shallowMount(SiteDetailView, {
-      props: { siteId: 'site-zfb' },
-      global: {
-        plugins: [router],
-        stubs: { SourceOverviewView: true, SiteDataView: true, SiteMonitorResultView: true, SiteMonitorConfigView: true },
-      },
-    })
-    await flushPromises()
-
-    const monitor = wrapper.findComponent({ name: 'SiteMonitorView' })
-    expect(monitor.props('tab')).toBe('result')
-
-    // 子 Tab 条在容器内部，shallowMount 下取不到它的 DOM，这里验证接线：抛上来就得写进 URL
-    await monitor.vm.$emit('update:tab', 'config')
-    await flushPromises()
-    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', view: 'monitor', monitorTab: 'config' })
-    expect(wrapper.findComponent({ name: 'SiteMonitorView' }).props('tab')).toBe('config')
-  })
-
-  it('深链带 monitorTab=config 时直接停在监控配置', async () => {
+  // 1111：监控视图去掉「监控结果 / 监控配置」双 Tab 后，网站详情只负责给 siteId，
+  // 不再传 tab、也不再有 monitorTab 子路由；旧深链上的 monitorTab 参数被忽略。
+  it('监控视图只按 siteId 挂载，不再传 tab 子路由参数', async () => {
     setActivePinia(createPinia())
     await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'monitor', monitorTab: 'config' } })
     const wrapper = shallowMount(SiteDetailView, {
@@ -165,7 +181,11 @@ describe('SiteDetailView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.findComponent({ name: 'SiteMonitorView' }).props('tab')).toBe('config')
+    const monitor = wrapper.findComponent({ name: 'SiteMonitorView' })
+    expect(monitor.exists()).toBe(true)
+    expect(monitor.props('siteId')).toBe('site-zfb')
+    expect(monitor.props('tab')).toBeUndefined()
+    expect(monitor.attributes()).not.toHaveProperty('onUpdate:tab')
   })
 
   // 0812 计划 M1-5：快速切网站时，先发出的旧网站请求不能覆盖后发出的新网站已经展示的数据。

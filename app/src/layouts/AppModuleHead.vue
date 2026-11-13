@@ -24,7 +24,10 @@ const returning = ref(false)
 
 const activeKey = useActiveNavKey()
 
-const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
+// 个人工作台不进入权限菜单 TABS，但仍使用全站统一面包屑。
+const current = computed(() => route.path === '/workbench'
+  ? { key: 'workbench', path: '/workbench', label: '我的工作台' }
+  : TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
 
 // 源详情 / 新建采集画布的标题与面包屑
 const isSourceCanvas = computed(() => route.path.startsWith('/canvas'))

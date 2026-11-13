@@ -24,7 +24,7 @@ import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
-import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import { enqueueConfigSave, isActiveNodeConfigFlusher, registerNodeConfigFlusher } from './nodeConfigAutosave'
@@ -196,12 +196,30 @@ async function updateDeployment(node: NodeConfig, nodeId: string) {
   deploymentError.value = ''
   try {
     const deployment = await syncNodeDeployment(node, nodeId)
-    if (deployment) ElMessage.success('对应流程节点的部署配置已生成或更新')
+    if (deployment) noteSaveSuccess('对应流程节点的部署配置已生成或更新')
   } catch (e) {
     const detail = (e as Error)?.message ?? String(e)
     if (cfg.value === node) deploymentError.value = detail
     ElMessage.warning(`节点配置已保存，但部署配置同步失败：${detail}；可再次点击保存重试`)
   } finally { savingDeployment.value = false }
+}
+
+// 1105-S1（2026-11-10）：一次保存只弹一条成功提示。
+// 保存链路里有多个成功出口（配置本身、源定时、部署配置、画布上其余节点），
+// 以前一次保存可能连弹 2–4 条绿条，用户看不出到底成功了几次、也不确定是不是存了一半。
+// 这里把「本次保存」期间的成功提示先收进 notes，顶层保存结束后合并成一条；
+// 失败 / 警告不合并——出了问题时必须能定位是哪一步（reportWriteError / ElMessage.warning 原样即时弹）。
+let saveSuccessNotes: string[] | null = null
+function beginSaveSuccessBatch() { saveSuccessNotes = [] }
+function noteSaveSuccess(text: string) {
+  if (!saveSuccessNotes) { ElMessage.success(text); return }
+  if (!saveSuccessNotes.includes(text)) saveSuccessNotes.push(text)
+}
+function endSaveSuccessBatch() {
+  const notes = saveSuccessNotes
+  saveSuccessNotes = null
+  if (!notes?.length) return
+  ElMessage.success(notes.length === 1 ? notes[0] : `已保存：${notes.join('；')}`)
 }
 
 function reportWriteError(action: string, e: unknown) {
@@ -249,6 +267,16 @@ async function onSaveNodeConfig() {
   if (props.templateDefaults) return
   const node = cfg.value
   if (!node || saving.value || savingDeployment.value) return
+  beginSaveSuccessBatch()
+  try {
+    await saveNodeConfigNow(node)
+  } finally {
+    endSaveSuccessBatch()
+  }
+}
+
+/** 保存当前节点配置的实际实现（onSaveNodeConfig 只负责成功提示合并这一层）。 */
+async function saveNodeConfigNow(node: NodeConfig) {
   const savedNodeId = id.value, savedTab = tab.value
   if (deploymentError.value && !nodeConfigDirty.value) {
     await updateDeployment(node, savedNodeId)
@@ -350,7 +378,7 @@ async function saveOtherNodes(currentId: string) {
   } finally {
     saving.value = false
   }
-  if (created) ElMessage.success(`另有 ${created} 个新节点已一并建立配置并保存`)
+  if (created) noteSaveSuccess(`另有 ${created} 个新节点已一并建立配置并保存`)
   if (skipped.length) ElMessage.warning(`以下节点未能保存，请逐个检查：${skipped.join('、')}`)
   if (unconfigured.length) {
     ElMessage.warning(`以下节点尚未配置，请选择配置后保存：${unconfigured.map((n) => n.title).join('、')}`)
@@ -430,7 +458,7 @@ async function syncSourceCron(node: NodeConfig, nodeId: string) {
       schedule: next,
     })
     flow.clearScheduleEdited(nodeId)
-    ElMessage.success(`定时已保存：${next}`)
+    noteSaveSuccess(`定时已保存：${next}`)
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)
     ElMessage({ type: 'error', message: cronSaveErrorHint(message) ?? `定时保存失败：${message}`, duration: 8000, showClose: true })
@@ -478,7 +506,7 @@ async function doCreateConfig(
     // 文案不能承诺没做到的事（0903）：这一步只落了**配置**，节点本身（item/next 步骤）由画布
     // 自动保存另外落库。步骤没落成的话，重进画布这个节点就不存在了——而用户已经看到"成功"。
     // 所以这里只说配置这一半，把"节点还在保存中"一并讲清楚，别让人以为万事大吉就走了。
-    if (!opts.quiet) ElMessage.success(`配置 #${created.configId} 已新建并绑定；节点正在保存，请留意顶部保存状态`)
+    if (!opts.quiet) noteSaveSuccess(`配置 #${created.configId} 已新建并绑定；节点正在保存，请留意顶部保存状态`)
     return true
   } catch (e) {
     reportWriteError(opts.quiet ? `节点「${node.title}」新增配置` : '新增配置', e)
@@ -518,7 +546,7 @@ async function doUpdateExistingConfig(node: NodeConfig, nodeId: string, opts: { 
       // 同一配置的其他节点一并刷新。
       await refreshConfigUpdateDt(currentConfigId)
       if (opts.auto) autoSavedAt.value = { ...autoSavedAt.value, [nodeId]: clockNow() }
-      else ElMessage.success(ack?.message || `配置 #${currentConfigId} 已保存`)
+      else noteSaveSuccess(ack?.message || `配置 #${currentConfigId} 已保存`)
       return true
     })
   } catch (e) {
@@ -563,7 +591,11 @@ async function autosaveNode(nodeId: string | undefined, atTab: string) {
     try {
       await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
     } catch (e) {
-      ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      // 同源多条检查项时同步会被拒绝：这是浏览触发的自动保存，不能再弹错误打断用户切换；
+      // 真正要落库请到监控中心按记录编辑（手动点保存时会给明确提示）。
+      if (!(e instanceof MultipleCkSourceRowsError)) {
+        ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      }
     }
   }
   await syncSourceCron(node, nodeId)

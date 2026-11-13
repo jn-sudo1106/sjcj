@@ -33,6 +33,8 @@ import EditSourceDialog from '@/views/FlowCanvas/source/EditSourceDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
+import BatchBindFlowsDialog from '@/views/CollectAssets/BatchBindFlowsDialog.vue'
+import FlowPickerDialog from '@/views/CollectAssets/FlowPickerDialog.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
 import SourceCronDialog from '@/views/Monitor/sourceCheck/SourceCronDialog.vue'
@@ -72,8 +74,16 @@ import {
 } from './sourceSearchField'
 import { snatchFailureSummary } from '@/utils/snatchResult'
 import SourceCodeTasksDrawer from './SourceCodeTasksDrawer.vue'
+import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import CodeConfigButton from './CodeConfigButton.vue'
 const codeTasksOpen = ref(false)
+/** 源列表「保存时 JSON」列打开的抽屉对象（旧平台行内「查询 → 保存时Json」）。 */
+const jsonSource = ref<Source | null>(null)
+
+/** 操作列菜单：目前只有「保存时JSON」；后续行级操作都往这里加。 */
+function onRowActionsCommand(command: string, source: Source) {
+  if (command === 'json-snapshot') jsonSource.value = source
+}
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -130,6 +140,9 @@ const props = defineProps<{
    * （源流程配置 / 调整来源组 / 指定流程运行一次）。
    */
   groupOps?: boolean
+  /** 源管理左侧来源组筛选；其它列表继续使用原来的顶部下拉。 */
+  sourceGroupId?: string
+  groupFilterInSidebar?: boolean
   /**
    * 「我的视图」（2026-10-12）：外部给定一套视图状态（条件 / 排序 / 每页条数 / 隐藏列），
    * 挂载时和每次换成新对象时套用并重查。不传 = 原来的默认条件、全部列。
@@ -154,6 +167,7 @@ const props = defineProps<{
   searchNavigation?: SourceSearchNavigation
 }>()
 const emit = defineEmits<{
+  'update:sourceGroupId': [sourceGroupId: string]
   openSource: [source: Source, searchContextId?: string]
   /** 点「所属网站」（仅不限网站时有这一列） */
   openSite: [siteId: string]
@@ -308,10 +322,10 @@ function openSourceResult(source: Source, data = false) {
   // 见 FlowCanvas/index.vue 的 onSwitchTarget 与 onTabQuotaFull）。这里拦住只会让用户
   // 看到一个「请先关闭一个」的提示却什么也做不了（用户 2026-11-05 反馈）。
   if (!props.searchNavigation || !appliedSearch.value) { publish(); return }
-  const origin = { ...appliedSearch.value, scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0 }
+  const origin = { ...appliedSearch.value, listState: props.searchNavigation.listState, scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0 }
   const search = useSourceSearchStore()
   if (!appliedSearchId || !search.get(appliedSearchId)) appliedSearchId = search.create(origin)
-  else Object.assign(search.get(appliedSearchId)!, { scrollTop: origin.scrollTop, scrollLeft: origin.scrollLeft, page: origin.page })
+  else Object.assign(search.get(appliedSearchId)!, { scrollTop: origin.scrollTop, scrollLeft: origin.scrollLeft, page: origin.page, listState: origin.listState })
   publish(appliedSearchId)
 }
 const cardQuery = ref<SourceFilter | null>(null)
@@ -420,7 +434,15 @@ const UNBOUND_SITE = '-1'
  * ——后端 sourcePaged 只接受正数 sourceGroupId，传 -1 / 0 报「sourceGroupId 必须为正数」
  * （2026-10-09 实测），所以下拉不提供筛未归组的选项。
  */
-const sourceGroupFilter = ref('')
+const sourceGroupFilter = ref(props.sourceGroupId ?? '')
+watch(sourceGroupFilter, value => emit('update:sourceGroupId', value), { flush: 'sync' })
+watch(() => props.sourceGroupId, value => {
+  if (value === undefined || value === sourceGroupFilter.value) return
+  sourceGroupFilter.value = value
+  if (restoringSearch) return
+  clearSelection()
+  search()
+})
 const sourceGroupOptions = ref<{ sourceGroupId: string; name: string; state: string }[]>([])
 let sourceGroupOptionsTask: Promise<void> | null = null
 async function loadSourceGroupOptions() {
@@ -768,6 +790,11 @@ function clearFilters() {
   sourceGroupFilter.value = ''
   search()
 }
+function clearSourceGroupFilter() {
+  sourceGroupFilter.value = ''
+  clearSelection()
+  search()
+}
 function toggleSort(field: string) {
   if (sortField.value === field) {
     if (sortDirection.value === 'asc') sortDirection.value = 'desc'
@@ -814,6 +841,37 @@ function registerSelectedIssues() {
 const sourceGroupOpsOpen = ref(false)
 const flowConfigOpen = ref(false)
 const flowConfigSource = ref<Source | null>(null)
+const batchFlowSourceIds = ref<string[]>([])
+/** 本次批量绑定的目标源（点按钮时固定，选择流程期间翻页/改勾选不改变提交对象） */
+const batchBindTargetIds = ref<string[]>([])
+const batchInitialFlows = ref<FlowRecord[]>([])
+const batchBindPickerOpen = ref(false)
+/** 点「绑定流程」直接进流程选择（1110 §10.1）：不再先开一个空白弹窗再点「选择流程」 */
+function openBatchBindFlows() {
+  if (auth.role !== 'admin' || !selectedIds.value.length) return
+  batchBindTargetIds.value = [...selectedIds.value]
+  batchBindPickerOpen.value = true
+}
+/** 选定流程后直接开始绑定：弹窗带流程进入即执行，展示进度与逐源结果 */
+function onBatchBindFlowsPicked(flows: FlowRecord[]) {
+  batchBindPickerOpen.value = false
+  if (!flows.length) return
+  batchInitialFlows.value = [...flows]
+  batchFlowSourceIds.value = [...batchBindTargetIds.value]
+}
+function onBatchBindFlowsClose() {
+  batchFlowSourceIds.value = []
+  batchInitialFlows.value = []
+}
+async function onBatchFlowsSaved(sourceIds: string[]) {
+  const saved = new Set(sourceIds)
+  const remaining = selectedIds.value.filter((id) => !saved.has(id))
+  const requestId = sourceRequestSeq + 1
+  await loadSources()
+  await nextTick()
+  if (sourceRequestSeq !== requestId) return
+  selectedIds.value = remaining.filter((id) => rows.value.some((row) => row.sourceId === id))
+}
 const adjustGroupOpen = ref(false)
 const runOnceOpen = ref(false)
 const batchCronOpen = ref(false)
@@ -1617,7 +1675,14 @@ function refresh() {
   return loadSources()
 }
 // 源管理「系统目录」页签的「按目录发送」复用这里的发任务流程（不勾选 = 按当前筛选范围，含目录范围）
-defineExpose({ openLaunch, clearSelection, refresh })
+function captureListReturn(returnTo: string, label: string): string {
+  return useSourceSearchStore().create({
+    returnTo, label, query: currentQuery(), viewState: currentViewState.value,
+    empty: noScopeMatch.value, page: page.value, total: total.value,
+    scrollTop: tableElement.value?.scrollTop ?? 0, scrollLeft: tableElement.value?.scrollLeft ?? 0,
+  })
+}
+defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
 </script>
 
 <template>
@@ -1642,16 +1707,29 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 :title="o.unsupported"
               >{{ o.unsupported ? `${o.label}（暂不支持）` : o.label }}</option>
             </select>
-            <textarea
-              :value="sourceCondNeedsValue(row.op) ? row.value : ''"
-              :class="{ 'sov-multiline-ids': row.field === 'sourceIds' && row.value.includes('\n') }"
-              rows="1"
-              data-testid="source-overview-search-text"
-              :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
-              :disabled="!sourceCondNeedsValue(row.op)"
-              @input="onConditionInput(row, ($event.target as HTMLTextAreaElement).value)"
-              @keydown.enter="onConditionKeydown(row, $event)"
-            ></textarea>
+            <!-- 「＋条件」在输入框内（1105 方案 T2）：加号是值输入框右侧的内联后缀，
+                 不再作为行尾独立按钮，窄屏（is-compact）下也不会多挤出一列。 -->
+            <span class="sov-value" :class="{ 'has-add': index === conditions.length - 1 && canAddCondition }">
+              <textarea
+                :value="sourceCondNeedsValue(row.op) ? row.value : ''"
+                :class="{ 'sov-multiline-ids': row.field === 'sourceIds' && row.value.includes('\n') }"
+                rows="1"
+                data-testid="source-overview-search-text"
+                :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
+                :disabled="!sourceCondNeedsValue(row.op)"
+                @input="onConditionInput(row, ($event.target as HTMLTextAreaElement).value)"
+                @keydown.enter="onConditionKeydown(row, $event)"
+              ></textarea>
+              <button
+                v-if="index === conditions.length - 1 && canAddCondition"
+                type="button"
+                class="sov-cond-btn add sov-value-add"
+                data-testid="source-overview-condition-add"
+                title="添加条件（与已有条件同时满足）"
+                aria-label="添加条件"
+                @click="addCondition"
+              >+</button>
+            </span>
             <button
               v-if="conditions.length > 1 || sourceCondActive(row)"
               type="button"
@@ -1661,15 +1739,6 @@ defineExpose({ openLaunch, clearSelection, refresh })
               :aria-label="conditions.length > 1 ? '删除这个条件' : '清空这个条件'"
               @click="removeCondition(row)"
             >×</button>
-            <button
-              v-if="index === conditions.length - 1 && canAddCondition"
-              type="button"
-              class="sov-cond-btn add"
-              data-testid="source-overview-condition-add"
-              title="添加条件（与已有条件同时满足）"
-              aria-label="添加条件"
-              @click="addCondition"
-            >+</button>
           </div>
         </div>
       </div>
@@ -1686,7 +1755,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <!-- 来源组筛选（1008-04）：只在源列表视图（groupOps）出现；不含「未归组」。
            1105 用户要求跟「网站」一样支持模糊搜索（组上百个，原生 select 只能滚）：
            换成 ElSelect + filterable，样式沿用网站那个下拉（sov-site-select）。 -->
-      <label v-if="crossSite && groupOps" class="sov-fl-group"><span class="sov-label-text">来源组</span>
+      <label v-if="crossSite && groupOps && !groupFilterInSidebar" class="sov-fl-group"><span class="sov-label-text">来源组</span>
         <ElSelect v-model="sourceGroupFilter" class="sov-site-select" data-testid="source-overview-group" aria-label="来源组" filterable placeholder="全部来源组" no-match-text="没有匹配的来源组" @visible-change="(open: boolean) => { if (open) void loadSourceGroupOptions() }" @change="search">
           <ElOption label="全部来源组" value="" />
           <ElOption v-for="g in sourceGroupOptions" :key="g.sourceGroupId" :label="g.name" :value="g.sourceGroupId" :disabled="g.state !== 'ACTIVE'" />
@@ -1737,6 +1806,13 @@ defineExpose({ openLaunch, clearSelection, refresh })
       </div>
     </div>
 
+    <div v-if="groupFilterInSidebar && sourceGroupFilter" class="sov-active-scope" data-testid="source-group-active-filter">
+      <span>已选条件</span>
+      <span class="sov-scope-chip" :title="sourceGroupNameById.get(sourceGroupFilter) || `组 #${sourceGroupFilter}`">
+        来源组：{{ sourceGroupNameById.get(sourceGroupFilter) || `组 #${sourceGroupFilter}` }}
+        <button type="button" aria-label="清除来源组筛选" @click="clearSourceGroupFilter">×</button>
+      </span>
+    </div>
     <SourceWebsiteCards
       v-if="cardQuery"
       v-show="websiteCards"
@@ -1765,6 +1841,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
         <slot name="selection-actions" :ids="selectedIds" />
+        <button v-if="auth.role === 'admin'" class="sov-btn" type="button" data-testid="batch-bind-flows" @click="openBatchBindFlows">绑定流程</button>
         <div ref="markAnchorRef" class="sov-mark-anchor">
           <button class="sov-btn sov-mark-btn" type="button" data-testid="batch-mark" :aria-expanded="markOpen" @click="toggleMarkPopover">添加标记</button>
           <SourceMarkPopover
@@ -1867,6 +1944,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
             <th v-if="showCol('lastTask')"><button class="sov-sort" :class="sortClass('LAST_RUN')" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('lastSuccess')"><button class="sov-sort" :class="sortClass('LAST_SUCCESS')" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('state')">状态</th><th v-if="showCol('remark')">备注</th>
+            <th v-if="showCol('rowActions')" class="sov-actions-head">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -1998,8 +2076,31 @@ defineExpose({ openLaunch, clearSelection, refresh })
                 @click="openMarkEditor(source)"
               >{{ source.remark || '—' }}</button>
             </td>
+            <!-- 操作列（2026-11-09）：对齐旧平台源列表最右侧的「操作」列——默认只露一个 ⋯，
+                 点开才给出该行的操作项。当前只有「保存时JSON」（旧平台行内「查询 → 保存时Json」）。
+                 做成下拉而不是直接铺按钮：源列表一行信息已经很多，低频调试入口不该常驻占位。 -->
+            <td v-if="showCol('rowActions')" class="sov-actions-cell">
+              <el-dropdown trigger="click" @command="onRowActionsCommand($event, source)">
+                <button
+                  class="sov-more"
+                  type="button"
+                  title="操作"
+                  aria-haspopup="menu"
+                  :aria-label="`源 ${source.sourceId} 的操作`"
+                  :data-testid="`source-actions-${source.sourceId}`"
+                >⋯</button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      command="json-snapshot"
+                      data-testid="source-action-json-snapshot"
+                    >保存时JSON</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 16 : 15) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -2049,6 +2150,16 @@ defineExpose({ openLaunch, clearSelection, refresh })
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
     <SourceCodeTasksDrawer v-if="codeTasksOpen" v-model="codeTasksOpen" :sources="rows.filter(row => selectedIds.includes(row.sourceId))" />
     <!-- 1008-04 来源组批量操作弹窗 / 抽屉 -->
+    <FlowPickerDialog
+      v-if="batchBindPickerOpen"
+      :selected="[]"
+      :site-flow-counts="{}"
+      hide-site-usage
+      :scope-hint="`将为勾选的 ${batchBindTargetIds.length} 个源绑定流程`"
+      @close="batchBindPickerOpen = false"
+      @confirm="onBatchBindFlowsPicked"
+    />
+    <BatchBindFlowsDialog v-if="batchFlowSourceIds.length" :source-ids="batchFlowSourceIds" :initial-flows="batchInitialFlows" @close="onBatchBindFlowsClose" @saved="onBatchFlowsSaved" />
     <SourceFlowConfigDrawer
       v-if="flowConfigOpen && flowConfigSource"
       :source="flowConfigSource"
@@ -2076,6 +2187,7 @@ defineExpose({ openLaunch, clearSelection, refresh })
     />
     <SourceDataCleanupDialog v-if="cleanupOpen" v-model="cleanupOpen" :source-ids="selectedIds" @cleaned="loadSources" />
     <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
+    <JsonSnapshotDrawer v-if="jsonSource" :source="jsonSource" @close="jsonSource = null" />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
     <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
   </section>
@@ -2100,6 +2212,12 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter .sov-search select.sov-op { min-width: 0; width: 72px; }
 .sov-filter .sov-search textarea { min-width: 190px; padding: 6px 8px; resize: none; overflow: hidden; white-space: nowrap; font-family: inherit; line-height: 16px; }
 .sov-filter .sov-search textarea.sov-multiline-ids:focus { height: 72px; overflow: auto; white-space: pre-wrap; }
+/* 值输入框：加号是框内右侧的后缀（1105 方案 T2「＋条件移入输入框」），不再作为行尾独立按钮占一列 */
+.sov-filter .sov-search .sov-value { position: relative; display: flex; flex: 1 1 190px; min-width: 190px; }
+.sov-filter .sov-search .sov-value > textarea { flex: 1 1 auto; width: 100%; min-width: 0; }
+.sov-filter .sov-search .sov-value.has-add > textarea { padding-right: 26px; }
+.sov-filter .sov-search .sov-value-add { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: #fff; }
+.sov-filter .sov-search .sov-value-add:hover { background: var(--rc-primary-bg); }
 .sov-cond-btn {
   flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 22px; cursor: pointer;
@@ -2139,6 +2257,10 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-filter.is-compact .sov-search select { width: 76px; flex: none; }
 .sov-filter.is-compact .sov-search select.sov-op { width: 60px; }
 .sov-filter.is-compact .sov-search textarea { width: 64px; flex: 1 1 64px; min-width: 64px; }
+/* 加号收进输入框后，窄屏压的是框本身，不再多出一列按钮 */
+.sov-filter.is-compact .sov-search .sov-value { flex: 1 1 64px; min-width: 64px; }
+.sov-filter.is-compact .sov-search .sov-value > textarea { flex: 1 1 auto; width: 100%; min-width: 0; }
+.sov-filter.is-compact .sov-search .sov-value-add { right: 6px; }
 /* 下限 = 基准（刚好读全：「全部网站」约 88px），有余量时放大到上限 */
 .sov-filter.is-compact .sov-fl-site { flex: 1 1 88px; min-width: 88px; max-width: 120px; }
 .sov-filter.is-compact .sov-site-select { width: 100%; min-width: 0; }
@@ -2161,6 +2283,9 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-progress { color: var(--rc-muted); font-size: 11px; }
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }
 .sov-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--rc-text-2); font-size: 12px; }
+.sov-active-scope { display: flex; align-items: center; gap: 8px; color: var(--rc-faint); font-size: 12px; }
+.sov-scope-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 6px; border: 1px solid var(--rc-border); border-radius: 4px; background: var(--el-color-primary-light-9); color: var(--rc-primary); overflow-wrap: anywhere; }
+.sov-scope-chip button { flex: none; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; }
 .sov-summary b { color: var(--rc-text); }
 /* 源管理（跨网站）：勾选操作和右侧按钮保持一排，不折行 */
 .sov-summary.one-row { flex-wrap: nowrap; white-space: nowrap; }
@@ -2180,6 +2305,10 @@ defineExpose({ openLaunch, clearSelection, refresh })
 .sov-extra { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text-2); font-size: 12px; }
 .sov-original-dir { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .sov-default-flow .sov-link { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; text-align: left; }
+.sov-actions-head { width: 64px; text-align: center; }
+.sov-actions-cell { text-align: center; }
+.sov-more { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 1; cursor: pointer; }
+.sov-more:hover { border-color: var(--rc-border-soft); background: #f1f5f9; color: var(--rc-text-2); }
 .sov-group .sov-link { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .sov-source-link { display: block; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url-head, .sov-url { width: var(--sov-url-width); min-width: var(--sov-url-width); max-width: var(--sov-url-width); box-sizing: border-box; }

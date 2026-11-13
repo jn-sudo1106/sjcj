@@ -2,10 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import SiteFileView from './SiteFileView.vue'
+// 版式契约（单排 no-wrap / 1200 档位 min-width）只能从样式表本身守，测试里取源码原文断言
+import siteFileViewSource from './SiteFileView.vue?raw'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
-import { dataApi, fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
+import { dataApi, fileApi, siteApi, sourceApi, type FileResourceRecord, type Source } from '@/api'
 
 // 动态列现在由表字段定义生成（对齐旧 FileList2 的 columns()），所以这里得给全字段——
 // 旧实现把「文件名-K1 … 文本大小-K10」十列写死在模板里，fields 空着也能渲染。
@@ -37,6 +39,11 @@ function file(sourceId: string, dataId: string, fileName: string): FileResourceR
 // @keyup.enter 不过滤 isComposing，绑了等于打字打到一半就把半截条件查出去。
 async function clickQuery(wrapper: { findAll: (s: string) => { text: () => string; trigger: (e: string) => Promise<void> }[] }) {
   await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+}
+
+/** 方案 A：自定义 SQL / 历史 / 全屏都在「高级」浮层里，默认收起，先展开再操作 SQL 输入 */
+async function openAdvanced(wrapper: { get: (s: string) => { trigger: (e: string) => Promise<void> } }) {
+  await wrapper.get('[data-testid="site-file-advanced"]').trigger('click')
 }
 
 afterEach(() => localStorage.clear())
@@ -77,6 +84,7 @@ describe('SiteFileView', () => {
       global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
+    await openAdvanced(wrapper)
     await wrapper.get('input[aria-label="自定义SQL"]').setValue('K1 IS NULL')
     query.mockImplementation(async ({ sourceId }) => {
       if (sourceId === 's2') throw new Error('SQL syntax')
@@ -332,7 +340,9 @@ describe('SiteFileView', () => {
     await flushPromises()
     const callsAfterMount = rows.mock.calls.length
 
-    const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
+    expect(wrapper.find('[data-testid="site-file-advanced-panel"]').exists()).toBe(false)
+    await openAdvanced(wrapper)
+    const sqlInput = wrapper.get('[data-testid="site-file-advanced-panel"] input[aria-label="自定义SQL"]')
     expect(sqlInput.attributes('placeholder')).toBe('自定义SQL, 如 K1 IS NULL')
 
     // 逐字符打字不触发查询——与 fileName/ext 一样要求 Enter 或点「查询」才发出去，
@@ -362,6 +372,7 @@ describe('SiteFileView', () => {
       global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
+    await openAdvanced(wrapper)
     const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
     await clickQuery(wrapper)
     await sqlInput.setValue('K1 IS NULL')
@@ -481,5 +492,197 @@ describe('SiteFileView 流程产出的文件表', () => {
 
     expect(wrapper.text()).not.toContain('加载文件资源表失败')
     expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource' }))
+  })
+
+  it('目录范围透传给全局源选择器：目录内只能选到该目录的源', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 0, list: [] })
+    // 挂载时 sourceScopeDirId 的越界校验会跑一次（immediate），目录内的源要能查到
+    const scopeSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source('s1', '源一')] })
+    const gssStub = { name: 'GlobalSourceSelect', props: ['modelValue', 'directoryDirId'], template: '<div />' }
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined, initialSourceId: 's1', sourceScopeDirId: 'dir-1' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true, GlobalSourceSelect: gssStub } },
+    })
+    await flushPromises()
+
+    const gss = wrapper.findComponent(gssStub)
+    expect(gss.props('modelValue')).toBe('s1')
+    expect(gss.props('directoryDirId')).toBe('dir-1')
+    // 未选网站 + 指定源 = 单源直查（不按网站全部源归并），total 由接口给
+    const rows = vi.mocked(fileApi.resourceRows)
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 's1', page: 1, size: 20 }))
+    expect(scopeSpy).not.toHaveBeenCalledWith(expect.objectContaining({ keyword: expect.anything() }))
+  })
+
+  it('切换目录后当前源不在该目录范围时清空源选择', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (query) => {
+      const directory = (query as { directory?: { selections?: { id?: string }[] } } | undefined)?.directory
+      return directory?.selections?.[0]?.id === 'dir-1' ? { total: 1, list: [source('s1', '源一')] } : { total: 0, list: [] }
+    })
+    const gssStub = { name: 'GlobalSourceSelect', props: ['modelValue', 'directoryDirId'], template: '<div />' }
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined, initialSourceId: 's1', sourceScopeDirId: 'dir-1' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true, GlobalSourceSelect: gssStub } },
+    })
+    await flushPromises()
+
+    await wrapper.setProps({ sourceScopeDirId: 'dir-2' })
+    await flushPromises()
+
+    expect(sourceApi.sourcePaged).toHaveBeenCalledWith({
+      page: 1,
+      size: 1,
+      sourceIds: ['s1'],
+      directory: { kind: 'biz', mode: 'selected', selections: [{ id: 'dir-2', includeDescendants: true }] },
+    })
+    expect(wrapper.findComponent(gssStub).props('modelValue')).toBe('')
+  })
+
+  it('切换目录后源仍在范围内则保留；校验接口失败也不吞掉用户选择', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 0, list: [] })
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source('s1', '源一')] })
+    const gssStub = { name: 'GlobalSourceSelect', props: ['modelValue', 'directoryDirId'], template: '<div />' }
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined, initialSourceId: 's1', sourceScopeDirId: 'dir-1' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true, GlobalSourceSelect: gssStub } },
+    })
+    await flushPromises()
+
+    await wrapper.setProps({ sourceScopeDirId: 'dir-9' })
+    await flushPromises()
+    expect(wrapper.findComponent(gssStub).props('modelValue')).toBe('s1')
+
+    paged.mockRejectedValueOnce(new Error('网络错误'))
+    await wrapper.setProps({ sourceScopeDirId: 'dir-8' })
+    await flushPromises()
+    expect(wrapper.findComponent(gssStub).props('modelValue')).toBe('s1')
+  })
+})
+
+// 方案 A（2026-11-08 用户拍板）：筛选区从 3 行压成 1 行 no-wrap，SQL/历史/全屏收进「高级」浮层。
+// 这一组用例专门守版式契约，避免后续加控件又悄悄换行成 2 行。
+describe('SiteFileView 方案 A 单排筛选区', () => {
+  beforeEach(() => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+  })
+
+  function mountView(props: Record<string, unknown> = {}) {
+    return shallowMount(SiteFileView, {
+      props,
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
+    })
+  }
+
+  it('源/表/文件名/类型/状态/高级/查询/清空都在同一个 nowrap 容器里，SQL 默认不在筛选行内', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const toolbar = wrapper.get('[data-testid="site-file-filters"]')
+    expect(toolbar.classes()).toContain('sfv-toolbar')
+    // 同一个父容器：每个控件都是筛选行的直接子元素（单排结构，没有包一层行）
+    const inline = [
+      wrapper.get('input[aria-label="文件名"]'),
+      wrapper.get('input[aria-label="文件类型"]'),
+      wrapper.get('select[aria-label="状态"]'),
+      wrapper.get('.sfv-adv-wrap'),
+      wrapper.findAll('button').find((button) => button.text() === '查询')!,
+      wrapper.findAll('button').find((button) => button.text() === '清空')!,
+    ]
+    // 「高级」按钮本身在 .sfv-adv-wrap 里（浮层锚点），锚点必须是筛选行的直接子元素
+    expect(wrapper.get('[data-testid="site-file-advanced"]').element.parentElement)
+      .toBe(wrapper.get('.sfv-adv-wrap').element)
+    for (const control of inline) expect(control.element.parentElement).toBe(toolbar.element)
+    // 源选择器也在同一行（包在 .sfv-adv-wrap 之外的第一个子元素）
+    expect(wrapper.get('.sfv-ctl-src').element.parentElement).toBe(toolbar.element)
+    expect(toolbar.find('.sfv-toolbar-gap').exists()).toBe(true)
+    // 弹性收窄的宽度档位挂在控件上，对应样式表里的 flex/min-width
+    expect(wrapper.get('input[aria-label="文件名"]').classes()).toContain('sfv-ctl-name')
+    expect(wrapper.get('input[aria-label="文件类型"]').classes()).toContain('sfv-ctl-ext')
+    expect(wrapper.get('select[aria-label="状态"]').classes()).toContain('sfv-ctl-state')
+    // 自定义 SQL 收进「高级」，默认不占筛选行
+    expect(wrapper.find('input[aria-label="自定义SQL"]').exists()).toBe(false)
+  })
+
+  it('筛选行样式是 flex-nowrap 且 1200px 档位的最小宽度齐全（源150/表140/文件名100/类型88/状态84）', async () => {
+    const css = siteFileViewSource
+    const toolbar = css.match(/\.sfv-toolbar\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(toolbar).toContain('display: flex')
+    expect(toolbar).toContain('flex-wrap: nowrap')
+    expect(toolbar).toContain('min-width: 0')
+    for (const rule of ['.sfv-ctl-src', '.sfv-ctl-tbl', '.sfv-ctl-name', '.sfv-ctl-ext', '.sfv-ctl-state']) {
+      expect(css).toContain(rule)
+    }
+    for (const width of ['min-width: 150px', 'min-width: 140px', 'min-width: 100px', 'min-width: 88px', 'min-width: 84px']) {
+      expect(css).toContain(width)
+    }
+    // 折行只由「容器宽度」决定：文件中心满宽右栏 ≈930px 保持单排；
+    // 流程画布抽屉等 ≤860px 的容器才允许折两行（否则按钮会被裁掉）
+    expect(css).toContain('container-type: inline-size')
+    expect(css).toContain('@container (max-width: 860px)')
+  })
+
+  it('「高级」浮层默认收起，展开后 SQL 参与查询，再点收起', async () => {
+    const rows = vi.mocked(fileApi.resourceRows)
+    rows.mockResolvedValue({ total: 1, list: [file('s1', '1', 'one.html')] })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="site-file-advanced"]')
+    expect(button.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[data-testid="site-file-advanced-panel"]').exists()).toBe(false)
+
+    await openAdvanced(wrapper)
+    expect(button.attributes('aria-expanded')).toBe('true')
+    expect(button.classes()).toContain('on')
+    const panel = wrapper.get('[data-testid="site-file-advanced-panel"]')
+    expect(panel.text()).toContain('自定义 SQL')
+    expect(panel.text()).toContain('历史条件与全屏编辑在输入框右侧')
+
+    await panel.get('input[aria-label="自定义SQL"]').setValue('K1 IS NULL')
+    await clickQuery(wrapper)
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL' }))
+
+    await button.trigger('click')
+    expect(wrapper.find('[data-testid="site-file-advanced-panel"]').exists()).toBe(false)
+  })
+
+  it('表头显示「目录：X ·」并在未选源时提示「未选源 → 整表全量」，选了源就隐藏提示', async () => {
+    const wrapper = mountView({ sourceScopeDirId: 'dir-1', scopeLabel: '股票数据 / 财务数据' })
+    await flushPromises()
+
+    const head = wrapper.get('.sfv-tablehead')
+    expect(head.get('[data-testid="site-file-scope-label"]').text()).toContain('目录：')
+    expect(head.get('[data-testid="site-file-scope-label"]').text()).toContain('股票数据 / 财务数据')
+    expect(head.get('[data-testid="site-file-scope-note"]').text()).toBe('未选源 → 整表全量')
+    // 目录范围同时传给源选择器（只能搜到目录内的源）
+    expect(wrapper.findComponent(GlobalSourceSelect).props('directoryDirId')).toBe('dir-1')
+
+    wrapper.findComponent(GlobalSourceSelect).vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-file-scope-note"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-file-scope-label"]').exists()).toBe(true)
+  })
+
+  it('没有目录范围时不渲染目录前缀与整表提示', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-file-scope-label"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-file-scope-note"]').exists()).toBe(false)
   })
 })

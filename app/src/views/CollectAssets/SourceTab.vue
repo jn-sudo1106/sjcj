@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
-import { blankSourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import { blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import { computed, nextTick, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -25,7 +25,7 @@ import BizDirMoveDialog from './BizDirMoveDialog.vue'
 import BizTemplateImportDialog from './BizTemplateImportDialog.vue'
 import ChangeSiteDialog from './ChangeSiteDialog.vue'
 import CategoryScheduleModal from '@/views/AuxiliaryTool/scheduleConfig/CategoryScheduleModal.vue'
-import { BIZ_DIR_ROOT_ID, bizMembership, expandDirIds, loadDirChildren, dirPath } from '@/api/sourceDirs'
+import { BIZ_DIR_ROOT_ID, bizMembership, expandDirIds, loadDirChildren, loadDirPath, dirPath } from '@/api/sourceDirs'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -434,7 +434,9 @@ function openSiteFromList(siteId: string) {
 }
 // ---- 系统目录 / 业务目录（2026-10-21，原型 设计稿/原型设计/源管理_系统目录与业务目录_原型_2026-10-21.html）----
 // 左侧传原始目录选择，网站和源列表都由业务后端解析；查询前不展开树、不枚举成员。
-const dirCollapsed = ref(true)
+const dirCollapsed = ref(false)
+const directoryTab = ref<'sys' | 'biz' | 'group'>('biz')
+const sourceGroupFilter = ref('')
 const showDirPanel = computed(() => props.scope === 'all')
 const dirPanelRef = ref<InstanceType<typeof SourceDirPanel>>()
 const dirScope = ref<DirScope>({ kind: 'biz', dirIds: [], labels: [] })
@@ -450,8 +452,10 @@ watch([() => route.query.sourceSearchReturn, dirPanelRef], ([id, panel]) => {
   if (props.scope !== 'all') return
   if (!saved?.directoryScope) return
   dirScope.value = JSON.parse(JSON.stringify(saved.directoryScope))
-  dirCollapsed.value = saved.directoryCollapsed ?? true
-  panel?.restore(dirScope.value)
+  dirCollapsed.value = saved.directoryCollapsed ?? false
+  directoryTab.value = saved.directoryTab ?? dirScope.value.kind
+  sourceGroupFilter.value = context.viewState.sourceGroup
+  panel?.restore(dirScope.value, directoryTab.value)
 }, { immediate: true, flush: 'sync' })
 const dirActive = computed(() => showDirPanel.value && (dirScope.value.directory ? dirScope.value.directory.mode !== 'none' : dirScope.value.all || dirScope.value.dirIds.length > 0))
 const bizActive = computed(() => dirActive.value && dirScope.value.kind === 'biz')
@@ -464,8 +468,10 @@ const listDirectory = computed<SourceDirectoryScope | undefined>(() => {
   const scope = dirScope.value
   return scope.directory ?? { kind: scope.kind, mode: scope.all ? 'all' : scope.dirIds.length ? 'selected' : 'none', selections: scope.all ? [] : scope.dirIds.map(id => ({ id, includeDescendants: scope.labels.find(label => label.id === id)?.hasKids ?? false })) }
 })
+const directoryJumpViewState = ref<SourceListViewState>()
 const routeSourceViewState = computed(() => {
-  if (props.scope !== 'all' || stateFilter.value !== 'error') return undefined
+  if (props.scope !== 'all') return undefined
+  if (stateFilter.value !== 'error') return directoryJumpViewState.value
   return { ...blankSourceListViewState(), status: 'E' as const }
 })
 // Legacy bulk operations resolve IDs only when explicitly invoked, never before displaying cards.
@@ -522,7 +528,18 @@ async function loadBizMembership() {
     bizMembershipState.value = 'error'
   }
 }
-const bizNames = (sourceId: string) => (bizOf.get(sourceId) ?? []).map((id) => dirPath(id).join(' / ') || `#${id}`)
+const bizDirs = (sourceId: string) => (bizOf.get(sourceId) ?? []).map((id) => ({ id, path: dirPath(id).join(' / ') || `#${id}` }))
+const bizNames = (sourceId: string) => bizDirs(sourceId).map((dir) => dir.path)
+/**
+ * 点「业务目录」列里的路径（2026-11-11）：左侧切到业务目录、选中这一个目录，列表只剩它下面的源，
+ * 点的那条源就在结果里（同点行内来源组名跳走的口径，只是不用换页）。
+ * 目录在树里查不到时（已被删除）SourceDirPanel.revealDir 保持原范围，用户能看出点的人没反应。
+ */
+function focusBizDir(dirId: string) {
+  dirCollapsed.value = false
+  directoryTab.value = 'biz'
+  void dirPanelRef.value?.revealDir(dirId)
+}
 /**
  * 「业务目录」列给导出用的文本（1104）：表格里这一列是 `extra-cell` 槽位渲染的标签，
  * 导出拿不到，所以按同一口径拼成一段文字（多个目录用顿号相连）。
@@ -540,6 +557,40 @@ watch(() => ui.sourceListRevision, () => {
 
 // 按目录：发送 = 复用源列表的「发任务」（不勾选 = 按当前筛选范围，已含目录范围）；定时 = 按范围统一定时弹窗
 const overviewRef = ref<InstanceType<typeof SourceOverviewView>>()
+const directoryReturn = computed(() => {
+  const value = route.query.directoryReturn
+  return typeof value === 'string' && value.startsWith('/canvas?') ? value : ''
+})
+let directoryJumpSeq = 0
+watch([() => route.path, () => route.query.bizDirId, dirPanelRef], async ([path, rawId, panel]) => {
+  const seq = ++directoryJumpSeq
+  if (path !== '/collect' || props.scope !== 'all' || route.query.tab !== 'source' || typeof rawId !== 'string' || !rawId.trim()) return
+  const id = rawId.trim()
+  ui.setAssetView('table')
+  dirCollapsed.value = false
+  directoryTab.value = 'biz'
+  keyword.value = ''
+  categoryFilter.value = []
+  tagFilter.value = ''
+  stateFilter.value = 'all'
+  sourceGroupFilter.value = ''
+  directoryJumpViewState.value = blankSourceListViewState()
+  // 先固定目录范围，避免异步展开树期间短暂查出全站源。
+  dirScope.value = { kind: 'biz', dirIds: [id], labels: [{ id, path: `#${id}`, hasKids: false }], directory: { kind: 'biz', mode: 'selected', selections: [{ id, includeDescendants: false }] } }
+  if (!panel) return
+  panel.restore(dirScope.value, 'biz')
+  try {
+    await loadDirPath(id)
+    if (seq !== directoryJumpSeq) return
+    await panel.revealDir(id)
+    if (seq !== directoryJumpSeq) return
+    const query = { ...route.query }
+    delete query.bizDirId
+    void router.replace({ path: route.path, query })
+  } catch (error) {
+    if (seq === directoryJumpSeq) ElMessage.error(`目录定位失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}, { immediate: true, flush: 'post' })
 const scheduleRef = ref<InstanceType<typeof CategoryScheduleModal>>()
 async function onDirCommand(command: 'send' | 'schedule') {
   if (command === 'send') {
@@ -886,7 +937,7 @@ onUnmounted(() => {
 
     <!-- 源列表视图（0924-06）：一行一个源，复用网站详情的「源视图」，不限网站 -->
     <div v-else class="ca-dir-layout" :class="{ 'with-dir': showDirPanel, collapsed: dirCollapsed }">
-    <SourceDirPanel v-if="showDirPanel" ref="dirPanelRef" v-model:collapsed="dirCollapsed" class="ca-dir-panel" @change="onDirScope" />
+    <SourceDirPanel v-if="showDirPanel" ref="dirPanelRef" v-model:collapsed="dirCollapsed" v-model:active-tab="directoryTab" v-model:source-group-id="sourceGroupFilter" class="ca-dir-panel" :class="{ 'group-navigation': directoryTab === 'group' && !dirCollapsed }" @change="onDirScope" />
     <SourceOverviewView
       ref="overviewRef"
       class="ca-source-list"
@@ -903,9 +954,11 @@ onUnmounted(() => {
       :show-original-directory="scope === 'all'"
       :quick-edit="scope === 'all'"
       :group-ops="scope === 'all'"
+      v-model:source-group-id="sourceGroupFilter"
+      :group-filter-in-sidebar="showDirPanel"
       :website-cards="scope === 'all' && view === 'card'"
       :include-empty-site-ids="includedEmptySiteIds"
-      :search-navigation="{ returnTo: route.fullPath, label: props.scope === 'all' ? '系统目录' : props.scope === 'favorite' ? '我的收藏' : '最近打开', restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { directoryScope: dirScope, directoryCollapsed: dirCollapsed } }"
+      :search-navigation="{ returnTo: route.fullPath, label: props.scope === 'all' ? '系统目录' : props.scope === 'favorite' ? '我的收藏' : '最近打开', restoreId: String(route.query.sourceSearchReturn ?? ''), listState: { directoryScope: dirScope, directoryCollapsed: dirCollapsed, directoryTab } }"
       @search-restored="finishSourceSearchReturn(router, route)"
       @edit-site="openSiteEditor"
       @delete-site="onDeleteSite"
@@ -922,6 +975,7 @@ onUnmounted(() => {
         <button class="ca-save-view sm danger" type="button" data-testid="source-batch-delete" title="永久删除选中的源，不可恢复" @click="onBatchDeleteSources(ids)">删除</button>
       </template>
       <template v-if="scope === 'all'" #summary-extra>
+        <button v-if="directoryReturn" class="ca-save-view sm" type="button" data-testid="directory-return" @click="router.push(directoryReturn)">返回网站源视图</button>
         <span v-if="dirActive" class="ca-dir-scope" :class="{ biz: dirScope.kind === 'biz' }" :title="dirLabelTip" data-testid="dir-scope">
           · {{ dirKindLabel }}：<b>{{ dirLabelText }}</b><template v-if="dirWithSub">（含子级）</template>
           <button class="ca-dir-clear" type="button" data-testid="dir-scope-clear" title="清除目录范围" aria-label="清除目录范围" @click="dirPanelRef?.clear()">×</button>
@@ -953,9 +1007,18 @@ onUnmounted(() => {
       <template v-if="scope === 'all'" #extra-cell="{ source }">
         <span v-if="bizMembershipState === 'error'" class="ca-muted">加载失败</span>
         <template v-else>
-          <span v-for="name in bizNames(source.sourceId)" :key="name" class="ca-biz-tag" :title="name">{{ name }}</span>
-          <span v-if="bizMembershipState === 'loading' && !bizNames(source.sourceId).length" class="ca-muted" title="正在读取这个源的业务目录归属">…</span>
-          <span v-else-if="!bizNames(source.sourceId).length" class="ca-muted">未归类</span>
+          <button
+            v-for="dir in bizDirs(source.sourceId)"
+            :key="dir.id"
+            class="ca-biz-tag"
+            type="button"
+            :title="dir.path"
+            :aria-label="`只看业务目录 ${dir.path} 下的源`"
+            :data-testid="`biz-dir-${dir.id}`"
+            @click.stop="focusBizDir(dir.id)"
+          >{{ dir.path }}</button>
+          <span v-if="bizMembershipState === 'loading' && !bizDirs(source.sourceId).length" class="ca-muted" title="正在读取这个源的业务目录归属">…</span>
+          <span v-else-if="!bizDirs(source.sourceId).length" class="ca-muted">未归类</span>
         </template>
       </template>
       <template #filter-extra>
@@ -1045,6 +1108,7 @@ onUnmounted(() => {
 .ca-dir-layout.with-dir { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 12px; align-items: stretch; }
 .ca-dir-layout.with-dir.collapsed { grid-template-columns: 36px minmax(0, 1fr); }
 .ca-dir-panel { min-height: 0; max-height: 100%; align-self: start; }
+.ca-dir-panel.group-navigation { align-self: stretch; overflow: hidden; }
 .ca-dir-layout > .ca-source-list { min-width: 0; min-height: 0; }
 .ca-dir-scope { display: inline-flex; align-items: center; min-width: 0; color: var(--rc-text-2); font-size: 13px; }
 /* 摘要行一排放不下时先缩目录名（悬停看全称） */
@@ -1053,6 +1117,10 @@ onUnmounted(() => {
 .ca-dir-clear { flex: none; width: 18px; height: 18px; margin-left: 4px; border: 0; border-radius: 50%; background: none; padding: 0; color: var(--rc-faint); font-size: 15px; line-height: 18px; cursor: pointer; }
 .ca-dir-clear:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
 .ca-biz-tag { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 4px 2px 0; padding: 0 6px; border-radius: 4px; background: #f5f3ff; color: #7c3aed; font-size: 12px; line-height: 18px; }
+/* 业务目录标签可点（2026-11-11）：点了在左栏选中这个目录，列表只剩它下面的源 */
+button.ca-biz-tag { display: block; border: 0; text-align: left; font-family: inherit; cursor: pointer; }
+button.ca-biz-tag:hover { background: #ede9fe; text-decoration: underline; }
+button.ca-biz-tag:focus-visible { outline: 2px solid #7c3aed; outline-offset: 1px; }
 .ca-muted { color: var(--rc-faint); }
 @media (max-width: 900px) {
   .ca-dir-layout.with-dir, .ca-dir-layout.with-dir.collapsed { grid-template-columns: 1fr; }

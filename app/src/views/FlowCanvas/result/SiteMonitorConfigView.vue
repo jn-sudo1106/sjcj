@@ -1,251 +1,339 @@
 <script setup lang="ts">
-// 监控视图「监控配置」Tab（0916 起是配置编辑页；**2026-09-18 改版**）：
-//   · 页面主体改成 ck_source 的**分页列表**（样式与「监控结果」Tab 的列表一致：
-//     smv-toolbar / smv-summary / rc-data-table / el-pagination 同一套）；
-//   · 「新增配置」打开居中弹窗，弹窗内容就是改版前这个 Tab 的整页编辑器
-//     （MonitorConfigEditor.vue：按源选数据监控节点 + 编排/告警配置）；
-//   · 行上「编辑」用该行的 sourceId 打开同一个弹窗；保存后弹窗留着（1105 会议：保存完还要接着生成、测试脚本），列表在后面刷新。
+// 检查项面板（源内监控视图的主体内容，1110 §3.1 / 1110 原型说明 §四·一）。
 //
-// 列表数据走 ck_source 分页接口（/api/source/page，2026-09-18 后端新增，
-// /api/source/list 的分页版）；监控结果那张列表是 sourceCheck 的旧监控表，别混。
-//
-// 2026-10-16 新增「＋ 新增监控」入口：迁移旧平台 data-view 的「加监控」——
-// 旧 `page/config/SourceList.vue` 的铃铛 → `MonitorModal.vue`（监控列表弹窗，内嵌 MonitorList）
-// → 弹窗里点「加监控」→ `MonitorList.handleAdd()` 用它拿到的 sourceId 预填 → `CheckAdd.vue`
-// → `POST /v1/source/check/add`。
-// 这套在新平台早已迁好：`api/monitor.ts` + `Monitor/sourceCheck/CheckEditDialog.vue`
-// （1:1 迁 CheckAdd.vue）+ `Monitor/sourceCheck/index.vue`（1:1 迁 MonitorList）。
-// 唯独缺 MonitorModal 那层壳——列表要用它带进来的 sourceId 过滤、并作为「加监控」的数据源；
-// 少了它「数据源」就没值可提交。壳已补在 `Monitor/sourceCheck/SourceMonitorDialog.vue`，这里直接调它。
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ckSourceApi, type CkSourceRecord } from '@/api'
+// 一页 = 一个源：源由上层 props 传入，这里不提供换源下拉；新增/编辑都锁死 sourceId。
+// 列表由容器统一加载（listMonitorsOfSource），本组件只负责展示与触发编辑/开关/运行记录，
+// 编辑成功后 emit('saved') 让容器重新拉取，保证与「最差事实」「最近运行」同一份数据。
+import { computed, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
+import type { MonitorRecordView } from '@/api/types/monitorCenter'
+import { EXEC_TEXT } from '@/utils/monitor/record'
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
-import SourceMonitorDialog from '@/views/Monitor/sourceCheck/SourceMonitorDialog.vue'
+import { checkSummary, dataText, kindText, planText, planTitle, toneClass } from './monitor-site/monitorFacts'
 
-// siteId 只在模板里传给弹窗里的编辑器（编辑器要按它列源候选），脚本侧用不到。
-// sourceId 是可选过滤：网站视图（全部）不传、翻整表；画布「监控视图」按当前源进来说，
-// 传当前 sourceId，列表就只显示这一个源的配置。
-const props = defineProps<{ siteId: string; sourceId?: string }>()
+const props = defineProps<{
+  siteId: string
+  sourceId: string
+  monitors: MonitorRecordView[]
+  loading?: boolean
+  error?: string
+  /** 正在请求启停的检查项 id（避免连点） */
+  togglingId?: string
+}>()
 
-const filters = reactive({ name: '' })
-const rows = ref<CkSourceRecord[]>([])
-const total = ref(0)
-const page = ref(1)
-const PAGE_SIZE = 10
-const loading = ref(false)
-const error = ref('')
+const emit = defineEmits<{
+  /** 编辑器回读到的记录（回读不到时 null）；容器据此刷新检查项与最近运行 */
+  saved: [record: MonitorRecordView | null]
+  toggle: [monitor: MonitorRecordView, enabled: boolean]
+  runs: [monitor: MonitorRecordView]
+  retry: []
+}>()
 
-/** 新增/编辑弹窗：open 控制显隐，sourceId 是编辑器起步的源（新增时取当前源，没有则为 ''） */
-const dialog = reactive({ open: false, sourceId: '', mode: 'add' as 'add' | 'edit' })
+const dialogVisible = ref(false)
+const editing = ref<MonitorRecordView | null>(null)
+const editorRef = ref<InstanceType<typeof MonitorConfigEditor>>()
 
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await ckSourceApi.page({
-      pageNum: page.value,
-      pageSize: PAGE_SIZE,
-      ...(props.sourceId ? { sourceId: props.sourceId } : {}),
-      ...(filters.name.trim() ? { name: filters.name.trim() } : {}),
-    })
-    rows.value = result.list
-    total.value = result.total
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '监控配置列表加载失败'
-    rows.value = []
-    total.value = 0
-  } finally {
-    loading.value = false
+const total = computed(() => props.monitors.length)
+const enabledCount = computed(() => props.monitors.filter((m) => m.enabled).length)
+
+/** 检查摘要、数据结论的悬浮提示：把执行、时间、条数一次说清，列本身保持窄。 */
+function dataTitle(monitor: MonitorRecordView): string {
+  const parts = [
+    `执行：${EXEC_TEXT[monitor.exec] ?? monitor.exec}`,
+    `最近检查：${monitor.lastCheckAt || '—'}`,
+    `条数：${monitor.count || '—'}`,
+  ]
+  if (monitor.exec === 'failed' || monitor.exec === 'timeout' || monitor.exec === 'cancelled') {
+    parts.push('执行失败时数据结论统一为「待判断」')
   }
+  return parts.join('｜')
 }
 
-function runQuery() {
-  page.value = 1
-  void load()
-}
-function clearFilters() {
-  filters.name = ''
-  runQuery()
-}
-
-// 1105 会议：新增时没有默认源，用户直接点「生成脚本」就报错。当前已锁定某个源（画布进来、
-// 或在「监控结果」里选过源）时带上它；网站「全部」视图没有源，仍从「全部源」起步。
 function openAdd() {
-  dialog.sourceId = props.sourceId ?? ''
-  dialog.mode = 'add'
-  dialog.open = true
-}
-function openEdit(row: CkSourceRecord) {
-  dialog.sourceId = String(row.sourceId)
-  dialog.mode = 'edit'
-  dialog.open = true
-}
-const dialogTitle = computed(() => {
-  if (dialog.mode === 'edit') return `编辑监控配置（源 ${dialog.sourceId}）`
-  return dialog.sourceId ? `新增监控配置（源 ${dialog.sourceId}）` : '新增监控配置'
-})
-/**
- * 编辑器里保存成功后只刷新列表、不关弹窗（1105 会议）：生成脚本后要先「保存配置」落库，
- * 之前一保存就关窗，用户没法接着测试脚本或改告警，只能重新打开。关窗交给弹窗右上角。
- */
-function onSaved() {
-  void load()
+  editing.value = null
+  dialogVisible.value = true
 }
 
-// ---- 「＋ 新增监控」（sourceCheck，与上面的 ck_source 配置弹窗是两码事） ----
-// 对齐旧 `SourceList.vue:523` 的铃铛：`showMonitorModal(scope.row)` → `monitorModal.showModal(row)`
-// → `MonitorModal` 把 `row.sourceId` 交给 MonitorList。这里把当前源的 sourceId 交给弹窗，
-// 弹窗内列表按它过滤，列表里的「加监控」再拿它预填表单的「数据源」——这才是「数据源」值的来源。
-// 没带源时不拦：列表会不带过滤地全量展示，用户在弹窗里选好源再点「加监控」即可。
-const monitorDialogRef = ref<InstanceType<typeof SourceMonitorDialog>>()
-function openAddMonitor() {
-  monitorDialogRef.value?.showModal(props.sourceId)
+function openEdit(monitor: MonitorRecordView) {
+  editing.value = monitor
+  dialogVisible.value = true
 }
 
-onMounted(() => {
-  void load()
-})
+async function beforeClose(done: () => void) {
+  if (editorRef.value?.isBusy()) return
+  if (editorRef.value?.isDirty()) {
+    try {
+      await ElMessageBox.confirm('编辑器里还有未保存的改动，确定放弃并关闭？', '放弃修改', {
+        confirmButtonText: '放弃修改',
+        cancelButtonText: '继续编辑',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  done()
+}
 
-// 画布换源（同一监控视图组件实例不重挂）时回到第一页按新源重查。
-watch(() => props.sourceId, () => {
-  page.value = 1
-  void load()
-})
+// 1109/1110 规格：保存后弹窗保留，编辑器内部已按回读重置基线；这里把当前记录切到回读结果，
+// 保证「新增后再保存」命中 update 而不是重复新增，容器同时刷新底层检查项与最近运行。
+function onSaved(record: MonitorRecordView | null) {
+  if (record) editing.value = record
+  emit('saved', record)
+}
+
+// 编辑器已经自己做过未保存改动确认，这里只负责弹窗归宿：关窗并清掉当前记录，
+// 免得下次「＋ 加监控」还带着上一次的 record 打开。
+function onCancel() {
+  editing.value = null
+  dialogVisible.value = false
+}
 </script>
 
 <template>
-  <div class="smc-shell">
-    <div class="smv-toolbar">
-      <div class="smv-action-wrap">
-        <input v-model="filters.name" class="smv-input" placeholder="名称" aria-label="名称" />
-        <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
-        <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+  <section class="smc" data-testid="site-monitor-checks">
+    <header class="smc-head">
+      <div class="smc-title">
+        <strong>检查项</strong>
+        <span class="smc-count" data-testid="site-monitor-checks-count">
+          {{ enabledCount }} 启用 ／ 共 {{ total }} 项
+        </span>
+        <span class="smc-hint">当前源锁定，不支持在此切换源</span>
       </div>
-      <div class="smv-action-wrap">
-        <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-config-add" @click="openAdd">＋ 新增配置</button>
-        <!-- 「＋ 新增监控」= 旧平台 SourceList 铃铛那条链路（sourceCheck 告警），与左侧的 ck_source 配置不同源。
-             testid 不能也叫 site-monitor-config-add：测试里那个名字指的是「＋ 新增配置」，
-             两个同名会让 wrapper.get() 直接抛 "found multiple elements"。 -->
-        <button class="rc-btn primary smc-add" type="button" data-testid="site-monitor-check-add" @click="openAddMonitor">＋ 新增监控</button>
-      </div>
-    </div>
+      <button class="smc-add" type="button" data-testid="site-monitor-add-monitor" @click="openAdd">＋ 加监控</button>
+    </header>
 
-    <div v-if="error" class="smv-empty">{{ error }}</div>
-    <template v-else>
-      <div class="smv-summary">
-        <span class="smv-count">共 {{ total.toLocaleString() }} 条监控配置</span>
-      </div>
+    <p v-if="error" class="smc-error" data-testid="site-monitor-checks-error">
+      {{ error }}
+      <button type="button" class="smc-link" @click="emit('retry')">重试</button>
+    </p>
+    <p v-else-if="loading" class="smc-empty" data-testid="site-monitor-checks-loading">加载检查项…</p>
+    <p v-else-if="!monitors.length" class="smc-empty" data-testid="site-monitor-checks-empty">
+      该源还没有监控检查项，可直接在右上角「＋ 加监控」新增；新增后运行记录按检查项归档。
+    </p>
 
-      <div class="smv-table-wrap">
-        <table class="rc-data-table smv-table" v-loading="loading">
-          <thead>
-            <tr>
-              <th style="width:180px">名称</th>
-              <th style="width:110px">源 ID</th>
-              <th style="min-width:220px">执行结果</th>
-              <th style="width:180px">表</th>
-              <th style="width:150px">定时</th>
-              <th style="width:120px">上次</th>
-              <th style="width:90px">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in rows" :key="row.id">
-              <td :title="row.name">{{ row.name }}</td>
-              <td :title="String(row.sourceId)">{{ row.sourceId }}</td>
-              <td class="smv-msg" :title="row.lastMsg">{{ row.lastMsg || '—' }}</td>
-              <td :title="row.tableName">{{ row.tableName || '—' }}</td>
-              <td :title="`cron ${row.schedule || '—'}｜下次 ${row.nextRun || '—'}`">{{ row.schedule || '—' }}</td>
-              <td>{{ row.lastRun || '—' }}</td>
-              <td class="smv-ops">
-                <button type="button" class="smv-link" data-testid="site-monitor-config-edit" @click="openEdit(row)">编辑</button>
-              </td>
-            </tr>
-            <tr v-if="!rows.length && !loading">
-              <td colspan="7" class="smv-empty-cell">暂无监控配置，点右上角「＋ 新增配置」开始配置</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <table v-else class="smc-table" data-testid="site-monitor-checks-table">
+      <colgroup>
+        <col class="c-name" />
+        <col class="c-kind" />
+        <col class="c-summary" />
+        <col class="c-enabled" />
+        <col class="c-data" />
+        <col class="c-plan" />
+        <col class="c-edit" />
+        <col class="c-runs" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>方式</th>
+          <th>检查摘要</th>
+          <th>启用</th>
+          <th>最近数据结论</th>
+          <th>计划</th>
+          <th>编辑</th>
+          <th>运行记录</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="monitor in monitors" :key="monitor.id" data-testid="site-monitor-check-row" :data-id="monitor.id">
+          <td class="c-name">
+            <span class="smc-name" :title="monitor.name">{{ monitor.name || '未命名检查项' }}</span>
+            <span v-if="monitor.publishStatus === 'draft'" class="smc-tag" title="草稿未发布，不会执行">未生效</span>
+            <span v-else-if="monitor.publishStatus === 'pending'" class="smc-tag">待生效</span>
+            <span v-else-if="monitor.publishStatus === 'failed'" class="smc-tag smc-tag-bad">发布失败</span>
+          </td>
+          <td class="c-kind">{{ kindText(monitor) }}</td>
+          <td class="c-summary" :title="checkSummary(monitor)">{{ checkSummary(monitor) }}</td>
+          <td class="c-enabled">
+            <div class="smc-enable">
+              <el-switch
+                size="small"
+                :model-value="monitor.enabled"
+                :loading="togglingId === monitor.id"
+                :disabled="!!togglingId && togglingId !== monitor.id"
+                data-testid="site-monitor-check-toggle"
+                @change="(value: string | number | boolean) => emit('toggle', monitor, Boolean(value))"
+              />
+              <span class="smc-enable-text" :class="monitor.enabled ? 'is-on' : 'is-off'">
+                {{ monitor.enabled ? '启用' : '停用' }}
+              </span>
+            </div>
+          </td>
+          <td class="c-data" :title="dataTitle(monitor)">
+            <span class="smc-data" :class="toneClass(monitor.data === 'normal' ? 'good' : monitor.data === 'abnormal' ? 'bad' : 'unknown')">
+              {{ dataText(monitor) }}
+            </span>
+          </td>
+          <td class="c-plan" :title="planTitle(monitor)">
+            <span class="smc-plan">{{ planText(monitor) }}</span>
+          </td>
+          <td class="c-edit">
+            <button type="button" class="smc-link" data-testid="site-monitor-check-edit" @click="openEdit(monitor)">编辑</button>
+          </td>
+          <td class="c-runs">
+            <button type="button" class="smc-link" data-testid="site-monitor-check-runs" @click="emit('runs', monitor)">
+              记录
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
 
-      <div class="smv-pager">
-        <el-pagination
-          v-model:current-page="page"
-          :page-size="PAGE_SIZE"
-          :total="total"
-          layout="total, prev, pager, next, jumper"
-          background
-          size="small"
-          :disabled="loading"
-          @current-change="load"
-        />
-      </div>
-    </template>
-
-    <!-- 新增/编辑配置弹窗：内容 = 改版前这个 Tab 的整页编辑器。
-         key 带 sourceId：新增（''）与编辑不同行时整块重挂，编辑器内部的节点/编排状态回到初值；
-         destroy-on-close 保证关掉弹窗后不残留上一份编辑状态。 -->
     <el-dialog
-      v-model="dialog.open"
-      class="smc-dialog"
-      data-testid="site-monitor-config-dialog"
-      :title="dialogTitle"
-      width="min(1080px, 94vw)"
-      top="5vh"
+      class="monitor-editor-dialog"
+      v-model="dialogVisible"
+      title="监控配置"
+      :width="'min(1080px, calc(100vw - 32px))'"
       append-to-body
       destroy-on-close
+      :before-close="beforeClose"
+      data-testid="site-monitor-editor-dialog"
     >
-      <div class="smc-dialog-body">
-        <MonitorConfigEditor
-          :key="dialog.sourceId || 'new'"
-          :site-id="siteId"
-          :source-id="dialog.sourceId || undefined"
-          @saved="onSaved"
-        />
-      </div>
+      <MonitorConfigEditor
+        ref="editorRef"
+        :site-id="siteId"
+        :source-id="sourceId"
+        :record="editing"
+        :source-locked="true"
+        @saved="onSaved"
+        @cancel="onCancel"
+      />
     </el-dialog>
-
-    <!-- 新增监控弹窗：复刻旧平台 `MonitorModal.vue`（监控列表弹窗，内嵌 MonitorList）。
-         入口只把当前源的 sourceId 交给它，弹窗内的列表按该源过滤，
-         列表里的「加监控」再拿这个 sourceId 去预填表单的「数据源」——数据源字段就是这么来的。 -->
-    <SourceMonitorDialog ref="monitorDialogRef" />
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.smc-shell { display: flex; flex-direction: column; min-height: 0; flex: 1; background: #fff; }
-/* 列表骨架沿用「监控结果」Tab 的同一套样式语义（smv-toolbar/smv-summary/smv-table/smv-pager） */
-.smv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; justify-content: space-between; }
-.smv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); font-size: 12px; outline: none; min-width: 110px; background: #fff; }
-.smv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.smv-toolbar .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
-/* 右侧操作区整体靠右。这行必须在 wrap 上、不能落在每个 .smc-add 按钮上：
-   两个按钮各带一个 margin-left:auto 时，Flex 会把剩余空间平分给两个 auto，
-   两个按钮之间被凭空撑开一段。 */
-.smv-toolbar .smv-action-wrap:last-child { margin-left: auto; }
-.smv-action-wrap {
-  display: flex;
-  gap: 10px;
+.smc {
+  min-width: 0;
 }
-
-.smv-summary { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; font-size: 12px; }
-.smv-count { color: var(--rc-text-2); font-weight: 700; }
-
-.smv-table-wrap { flex: 1; min-height: 0; overflow: auto; }
-.smv-table td { font-size: 12px; }
-.smv-msg { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-text-2); }
-/* 操作列钉在右边（同监控结果列表）：窄屏横向滚动时「编辑」不会滚出视野 */
-.smv-table th:last-child,
-.smv-table td:last-child { position: sticky; right: 0; background: #fff; box-shadow: -8px 0 8px -8px rgba(15, 23, 42, 0.18); }
-.smv-table thead th:last-child { background: #f8fafc; }
-.smv-ops { white-space: nowrap; }
-.smv-link { border: 0; background: none; padding: 0 6px 0 0; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
-.smv-link:hover { text-decoration: underline; }
-.smv-empty { padding: 40px 24px; text-align: center; color: var(--rc-faint); font-size: 13px; }
-.smv-empty-cell { padding: 32px; text-align: center; color: var(--rc-faint); font-size: 12px; }
-.smv-pager { display: flex; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); }
-
-/* 弹窗：编辑器是整屏式布局，撑满弹窗主体高度；外层滚动交给编辑器自己的 .smc-body */
-.smc-dialog-body { display: flex; flex-direction: column; height: 72vh; min-height: 420px; }
-.smc-dialog-body > :deep(.smc-shell) { border: 1px solid var(--rc-border-soft); border-radius: 8px; overflow: hidden; }
+.smc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 4px 6px;
+  white-space: nowrap;
+}
+.smc-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.smc-title strong {
+  color: var(--rc-text-1, #1f2937);
+  font-size: 13px;
+}
+.smc-count {
+  color: var(--rc-text-2, #5b667a);
+  font-size: 12px;
+}
+.smc-hint {
+  color: var(--rc-text-3, #8a94a6);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.smc-add {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rc-border, #d8dee9);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--rc-text-1, #1f2937);
+  font-size: 12px;
+  cursor: pointer;
+}
+.smc-add:hover {
+  border-color: var(--rc-primary, #2563eb);
+  color: var(--rc-primary, #2563eb);
+}
+.smc-empty,
+.smc-error {
+  margin: 0;
+  padding: 18px 8px;
+  color: var(--rc-text-3, #8a94a6);
+  font-size: 12px;
+  text-align: center;
+}
+.smc-error {
+  color: var(--rc-danger, #dc2626);
+}
+.smc-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.smc-table .c-name { width: 17%; }
+.smc-table .c-kind { width: 9%; }
+.smc-table .c-summary { width: 27%; }
+.smc-table .c-enabled { width: 11%; }
+.smc-table .c-data { width: 12%; }
+.smc-table .c-plan { width: 14%; }
+.smc-table .c-edit { width: 5%; }
+.smc-table .c-runs { width: 5%; }
+.smc-table th,
+.smc-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rc-border-soft, #eef1f5);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.smc-table th {
+  color: var(--rc-text-3, #8a94a6);
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--rc-bg-muted, #f7f9fc);
+}
+.smc-name {
+  font-weight: 500;
+  color: var(--rc-text-1, #1f2937);
+}
+.smc-tag {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--rc-bg-muted, #f1f4f8);
+  color: var(--rc-text-3, #8a94a6);
+  font-size: 10.5px;
+}
+.smc-tag-bad {
+  color: var(--rc-danger, #dc2626);
+}
+.smc-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.smc-enable-text {
+  font-size: 11.5px;
+}
+.smc-enable-text.is-on { color: var(--rc-primary, #2563eb); }
+.smc-enable-text.is-off { color: var(--rc-text-3, #8a94a6); }
+.smc-data.tone-good { color: var(--rc-success, #16a34a); }
+.smc-data.tone-bad { color: var(--rc-danger, #dc2626); }
+.smc-data.tone-unknown { color: var(--rc-text-2, #5b667a); }
+.smc-plan {
+  font-family: var(--rc-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--rc-text-2, #5b667a);
+}
+.smc-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--rc-primary, #2563eb);
+  font-size: 12px;
+  cursor: pointer;
+}
+.smc-link:hover {
+  text-decoration: underline;
+}
 </style>

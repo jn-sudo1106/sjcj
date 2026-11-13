@@ -15,7 +15,13 @@
 // 调用方在恰当时机（挂载完成/切表/切源/路由深链）显式调用 expose 出去的 search()/refresh()。
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { isMissingTableError, MISSING_TABLE_HINT } from '@/utils/data/missingTable'
+import {
+  MISSING_TABLE_HINT,
+  PHYSICAL_TABLE_MISSING_LABEL,
+  PHYSICAL_TABLE_OK_LABEL,
+  PHYSICAL_TABLE_UNKNOWN_LABEL,
+  isMissingTableError,
+} from '@/utils/data/missingTable'
 import { ArrowDown, ArrowUp, Coin, Filter, Warning } from '@element-plus/icons-vue'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
@@ -181,10 +187,25 @@ const appliedConditions = computed(() => {
   if (filter.startTime || filter.endTime) conditions.push(`时间：${filter.startTime || '不限'} 至 ${filter.endTime || '不限'}`)
   return conditions
 })
+// 1106 设计方案 §10.1：物理表状态分档。前端在没有后端状态快照接口前只按「结构化信号 + 查询结果」推进：
+// 查询成功 → 物理表正常（能查就说明物理表存在）；结构化缺表信号 → 物理表不存在；
+// 其余（未查询 / 超时 / 无权限 / 其他 SQL 错误）→ 状态待检查，不猜缺表、也不猜正常。
+const physicalState = computed<'unknown' | 'missing' | 'ok'>(() => {
+  if (missingTable.value) return 'missing'
+  if (hasQueried.value && !queryError.value) return 'ok'
+  return 'unknown'
+})
+const physicalStateLabel = computed(() => {
+  if (physicalState.value === 'missing') return PHYSICAL_TABLE_MISSING_LABEL
+  if (physicalState.value === 'ok') return PHYSICAL_TABLE_OK_LABEL
+  return PHYSICAL_TABLE_UNKNOWN_LABEL
+})
+const PHYSICAL_TABLE_STATE_TIP =
+  '按结构化状态分档（§10.1）：查询成功 → 物理表正常；结构化缺表错误 → 物理表不存在；其余（超时/无权限/其他 SQL 错误）→ 状态待检查。等后端表状态快照接口后再改为读快照。'
 const emptyTitle = computed(() => {
   if (props.contextError) return '数据表暂不可用'
   if (!props.tableId) return '请从左侧选择数据表'
-  if (missingTable.value) return '实体表不存在'
+  if (missingTable.value) return PHYSICAL_TABLE_MISSING_LABEL
   if (queryError.value) return '查询失败，请重试'
   if (!hasQueried.value) return '选择条件后点击查询'
   return appliedConditions.value.length ? '没有符合筛选条件的数据' : '这张表暂无数据'
@@ -256,8 +277,10 @@ async function loadRows(preserveSelection = false) {
   } catch (error) {
     if (requestId !== rowRequest) return
     const message = String(error instanceof Error ? error.message : error)
-    missingTable.value = isMissingTableError(message)
-    queryError.value = missingTable.value ? MISSING_TABLE_HINT : message.slice(0, 100)
+    // §10.1 / §10.2：缺表只认结构化信号（cause.body.code 1146 / UNKNOWN_TABLE / missingTable / tableState=missing）。
+    // 其余错误（超时、无权限、其他 SQL 错误）按**真实错误**展示，不替换成「缺表」话术、也不隐藏重试入口。
+    missingTable.value = isMissingTableError(error)
+    queryError.value = message.slice(0, 160)
     rows.value = []
     total.value = 0
     emit('update:selectedKeys', [])
@@ -470,7 +493,12 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
       </SqlConditionEditor>
     </div>
 
-    <div v-if="workspaceLayout" class="dqp-result-heading" aria-live="polite"><strong>查询结果</strong><span>{{ loading ? '查询中…' : `共 ${total} 条` }}</span></div>
+    <div v-if="workspaceLayout" class="dqp-result-heading" aria-live="polite">
+      <strong>查询结果</strong>
+      <!-- §8.3：查询失败/缺表时数量未知，显示「—」而不是「共 0 条」 -->
+      <span data-testid="data-query-count">{{ loading ? '查询中…' : queryError ? '数量 —' : `共 ${total} 条` }}</span>
+      <span class="dqp-physical-state" :class="`is-${physicalState}`" :title="PHYSICAL_TABLE_STATE_TIP" data-testid="data-query-physical-state">物理表：{{ physicalStateLabel }}</span>
+    </div>
     <div class="dqp-table-tools" :data-testid="workspaceLayout ? 'data-result-toolbar' : undefined">
       <div v-if="workspaceLayout" class="dqp-result-actions"><slot name="actions" :total="total" :rows="rows" /></div>
       <div v-else class="dqp-table-tools-main"><slot name="toolbar" :total="total" :rows="rows" /></div>
@@ -502,9 +530,17 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
             <el-icon :size="30"><Warning v-if="queryError || contextError" /><Filter v-else-if="appliedConditions.length" /><Coin v-else /></el-icon>
             <strong>{{ emptyTitle }}</strong>
             <span v-if="queryError">{{ queryError }}</span>
+            <!-- 结构化缺表命中：数量未知按「—」，并说明是物理表缺失（不是数据为空），不写「暂无数据可查」 -->
+            <span v-if="missingTable" class="dqp-empty-hint" data-testid="data-query-missing-hint">{{ MISSING_TABLE_HINT }}（数量：—）</span>
             <span v-else-if="!contextError && appliedConditions.length" class="dqp-empty-conditions">当前条件：{{ appliedConditions.join('；') }}</span>
-            <button v-if="contextError" class="rc-btn" type="button" @click="emit('retry-context')">重新加载数据表</button>
-            <button v-else-if="queryError && !missingTable" class="rc-btn" type="button" @click="search()">重新查询</button>
+            <div v-if="contextError" class="dqp-empty-actions">
+              <button class="rc-btn" type="button" @click="emit('retry-context')">重新加载数据表</button>
+            </div>
+            <!-- 「重新查询」始终保留；缺表时额外给单次「刷新状态」（不自动循环重试） -->
+            <div v-else-if="queryError" class="dqp-empty-actions">
+              <button v-if="missingTable" class="rc-btn primary" type="button" data-testid="data-query-refresh-state" @click="search()">刷新状态</button>
+              <button class="rc-btn" type="button" data-testid="data-query-retry" @click="search()">重新查询</button>
+            </div>
             <button v-else-if="appliedConditions.length" class="rc-btn" type="button" @click="clearFilters">清空筛选</button>
           </div>
         </template>
@@ -661,11 +697,16 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
 .is-workspace .dqp-query-row { padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .dqp-result-heading { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0; font-size: 12px; }
 .dqp-result-heading span { color: var(--rc-muted); }
+/* §10.1 物理表状态分档：未知/缺失只是状态标签，不用告警红（§7.3 不能把固定状态码当数据异常） */
+.dqp-result-heading .dqp-physical-state { padding: 1px 6px; border-radius: 8px; border: 1px solid var(--rc-border-soft); color: var(--rc-muted); background: var(--rc-bg-soft, #f8fafc); }
+.dqp-result-heading .dqp-physical-state.is-missing { color: var(--rc-text-2); border-style: dashed; }
 .is-workspace .dqp-table-tools { flex-wrap: wrap; padding: 10px 12px; }
 .dqp-result-actions { display: flex; align-items: center; gap: 6px; flex: 1; flex-wrap: wrap; min-width: 0; }
 .dqp-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 260px; padding: 28px 20px; line-height: 1.5; }
 .dqp-empty strong { color: var(--rc-text); font-size: 14px; }
 .dqp-empty-conditions { max-width: 600px; overflow-wrap: anywhere; white-space: normal; color: var(--rc-muted); }
+.dqp-empty-hint { max-width: 600px; overflow-wrap: anywhere; white-space: normal; color: var(--rc-muted); }
+.dqp-empty-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
 .is-workspace .dqp-table :deep(.el-table__empty-text) { width: 100%; line-height: 1.5; }
 .is-workspace .dqp-pager { flex-wrap: wrap; padding: 10px 12px; }
 .is-workspace .dqp-pager :deep(.el-pagination) { flex-wrap: wrap; justify-content: flex-end; row-gap: 8px; }

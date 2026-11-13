@@ -9,6 +9,11 @@ function source(id: string, name: string): Source {
   return { sourceId: id, name, url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
 }
 
+/** 真实源接口会带 siteName（未关联网站时为空），源名跨网站可能重名，展示时要带网站前缀 */
+function siteSource(id: string, name: string, siteName: string): Source {
+  return { sourceId: id, name, siteName, url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
+}
+
 async function mountSelect(modelValue = '') {
   const wrapper = mount(GlobalSourceSelect, { props: { modelValue } })
   await flushPromises()
@@ -155,5 +160,53 @@ describe('GlobalSourceSelect（对齐旧平台 FileList2.vue 的"源ID"选择器
 
     expect(wrapper.find('[data-testid="global-source-select-option"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('输入源 ID 或名称搜索')
+  })
+
+  it('目录范围：名称搜索与 ID 精确查询都带上业务目录条件，选项显示「网站 · 源名」前缀', async () => {
+    vi.useFakeTimers()
+    const search = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [siteSource('391008010', '运力指标', '马士基')],
+    })
+    const wrapper = mount(GlobalSourceSelect, { props: { modelValue: '', directoryDirId: 'dir-1' } })
+    const input = wrapper.get('[data-testid="global-source-select-input"]')
+    await input.trigger('focus')
+    await input.setValue('391008010')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    const directory = { kind: 'biz', mode: 'selected', selections: [{ id: 'dir-1', includeDescendants: true }] }
+    expect(search).toHaveBeenCalledWith({ sourceIds: ['391008010'], size: 1, directory })
+    expect(search).toHaveBeenCalledWith({ keyword: '391008010', size: 30, directory })
+    expect(wrapper.get('[data-testid="global-source-select-option"]').text()).toContain('马士基 · 运力指标')
+  })
+
+  it('不传目录范围时查询参数不变（多选场景 RunRecords 等零影响）', async () => {
+    vi.useFakeTimers()
+    const search = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [siteSource('s1', '源一', '网站 A')] })
+    const wrapper = mount(GlobalSourceSelect, { props: { modelValue: [], multiple: true } })
+    const input = wrapper.get('[data-testid="global-source-select-input"]')
+    await input.trigger('focus')
+    await input.setValue('源')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    expect(search).toHaveBeenCalledTimes(1)
+    expect(search).toHaveBeenCalledWith({ keyword: '源', size: 30 })
+    expect(wrapper.get('[data-testid="global-source-select-option"]').text()).toContain('网站 A · 源一')
+  })
+})
+
+describe('GlobalSourceSelect 目录范围 placeholder', () => {
+  it('没有目录范围时沿用「全部源（按源 ID 或名称搜索）」', () => {
+    const wrapper = mount(GlobalSourceSelect, { props: { modelValue: '' } })
+    expect(wrapper.get('[data-testid="global-source-select-input"]').attributes('placeholder')).toBe('全部源（按源 ID 或名称搜索）')
+  })
+
+  it('有目录范围时提示「全部源（目录内）」，多选场景不受影响', () => {
+    const single = mount(GlobalSourceSelect, { props: { modelValue: '', directoryDirId: 'dir-1' } })
+    expect(single.get('[data-testid="global-source-select-input"]').attributes('placeholder')).toBe('全部源（目录内）')
+    const multi = mount(GlobalSourceSelect, { props: { modelValue: [], multiple: true } })
+    expect(multi.get('[data-testid="global-source-select-input"]').attributes('placeholder')).toBe('按源 ID 或名称搜索，可多选')
   })
 })

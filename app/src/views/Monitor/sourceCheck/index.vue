@@ -1,586 +1,1013 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { checkCountOf } from '@/utils/monitor/checkCount'
-import { ElMessage } from 'element-plus'
+// 监控中心 · 源维度列表（1110 §3.2 / 1111）。
+//
+// 一行 = 一个源，检查项在行内展开（同一时刻只展开当前源），运行结果一律走右侧抽屉。
+// 页面只读 MonitorRecordView / MonitorSourceRow，不解释旧接口的 state / isDelete；
+// 无 C07 的维度显示「—（需服务端聚合）」，不按时隙推算、不把本页数量当全站。
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Refresh } from '@element-plus/icons-vue'
+import type { MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
 import {
-  Search,
-  Plus,
-  Document,
-  Edit,
-  View,
-  VideoPlay,
-  Delete,
-} from '@element-plus/icons-vue'
-import { type SourceCheck } from '@/api'
-import {
-  pagedSourceCheck,
-  changeSourceCheckEnable,
-  handleRunNow,
-  deleteSourceCheck,
-} from '@/api/monitor'
-import SourceSelect from './SourceSelect.vue'
-import StatusTag from '@/components/StatusTag.vue'
+  MonitorQueryLimitError,
+  listMonitors,
+  listMonitorsOfSource,
+  listSourceOptions,
+  runMonitorsNow,
+  setMonitorsEnabled,
+  type MonitorSourceOption,
+} from '@/api/monitorCenter'
+import { deleteSourceCheck } from '@/api/monitor'
+import { summarizeSources } from '@/utils/monitor/sourceSummary'
 import { confirmDanger } from '@/utils/confirmDanger'
-import CheckEditDialog from './CheckEditDialog.vue'
-import CheckLogsDrawer from './CheckLogsDrawer.vue'
+import SourceSelect from './SourceSelect.vue'
+import MonitorBatchDialog from './MonitorBatchDialog.vue'
+import MonitorWatchDrawer from './MonitorWatchDrawer.vue'
+import MonitorConfigEditor from '@/views/FlowCanvas/result/MonitorConfigEditor.vue'
+import RunsDrawer from '@/views/FlowCanvas/result/monitor-runs/RunsDrawer.vue'
+import {
+  ENABLE_OPTIONS,
+  STATUS_OPTIONS,
+  checkCoverageOf,
+  coverageOf,
+  dataHintOf,
+  dataPillOf,
+  execNotifyOf,
+  filterSourceRows,
+  lastCheckOf,
+  monitorDataOf,
+  monitorExecOf,
+  monitorKindText,
+  monitorPlanOf,
+  monitorPublishText,
+  monitorSummaryOf,
+  sourceStats,
+  type SourceListQuery,
+} from './sourceRows'
 
 defineOptions({ name: 'SourceCheck' })
 
-/** 嵌入形态：外层弹窗包裹时用——只去掉卡片壳（边框 / 圆角），**筛选表单保持完整**。
- *  旧平台 MonitorModal 里的 MonitorList 就是完整渲染的（在用 / 告警状态 / 源ID / 名称全在），
- *  传进来的 sourceId 只是筛选与「加监控」的**初值**，用户仍可在「源ID」里改选。 */
-const props = withDefaults(defineProps<{ embedded?: boolean; sourceId?: string }>(), { embedded: false, sourceId: '' })
+const props = withDefaults(
+  defineProps<{
+    /** 嵌入弹窗（网站配置弹窗 / 源内视图）时去掉卡片壳，筛选保持完整 */
+    embedded?: boolean
+    /** 源上下文：锁定到当前源，不再加载整份源目录 */
+    sourceId?: string
+    /** 网站上下文：源目录按网站取，列表只保留该网站的源；不传则监控中心全局 */
+    siteId?: string
+    siteName?: string
+  }>(),
+  { embedded: false, sourceId: '', siteId: '', siteName: '' },
+)
 
-// ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求；与 TaskView 对齐）----
-/** 「在用」「告警状态」两个下拉的「全部」各用一个 UI 哨兵（值相同，分开命名便于阅读）。el-select 里
- *  `hasModelValue = !isEmptyValue(modelValue)`，空串会被判成「没选」、`selectedLabel` 回退到
- *  placeholder —— 选中「全部」时输入框里看不到「全部」两个字。到 `load()` 里由 `toApiValue()`
- *  还原成 ''（旧口径：不带该条件），接口参数不变。 */
-const ENABLE_ALL = '-1'
-const STATE_ALL = '-1'
-const toApiValue = (value: string): string => (value === ENABLE_ALL ? '' : value)
+const PAGE_SIZES = [10, 30, 100, 200]
 
-const form = reactive({
-  enable: ENABLE_ALL as string, // 全部 / '0' 在用 / '1' 停用
-  state: STATE_ALL as string,   // 全部 / 'E' 告警 / 'C' 正常
-  sourceId: props.sourceId || '',
-  name: '',
+const loading = ref(false)
+const records = ref<MonitorRecordView[]>([])
+const directory = ref<MonitorSourceOption[]>([])
+/** 源目录可用时才能列出「未配置检查的源」；不可用时降级为「仅已配置源 + 提示」 */
+const directoryReady = ref(false)
+const loadError = ref('')
+const directoryError = ref('')
+let refreshToken = 0
+
+const draft = reactive<SourceListQuery>({
+  sourceId: props.sourceId,
+  enable: 'all',
+  status: 'all',
+  keyword: '',
 })
-/** 已「执行」的筛选条件（点查询 / 切下拉 / 换源后同步自 form）。分页单独管，不放进来——
- *  旧版 pagedSourceCheck 只发 sourceId/enable/state/name + page/limit，多带一个 size 就是多余参数。 */
-const filters = reactive<{
-  enable: string
-  state: string
-  sourceId: string
-  name: string
-}>({
-  enable: ENABLE_ALL,
-  state: STATE_ALL,
-  sourceId: props.sourceId || '',
-  name: '',
+/** 已生效的筛选：刷新时用它，避免把输入到一半的草稿当成查询条件 */
+const applied = reactive<SourceListQuery>({ ...draft })
+
+const page = ref(1)
+const pageSize = ref(30)
+const expandedKeys = ref<string[]>([])
+const expandedSourceId = ref('')
+const selectedMonitors = ref<MonitorRecordView[]>([])
+
+// 统一编辑器：新建默认 AI 检查，规则检查在同一弹窗里保留旧能力。
+// 编辑时必须传 record（记录身份），否则会拿 blank 草稿保存成一条重复记录。
+const editingSourceId = ref('')
+const editorVisible = ref(false)
+const editingRecord = ref<MonitorRecordView | null>(null)
+const editorRef = ref<InstanceType<typeof MonitorConfigEditor>>()
+// 统一运行抽屉（fe-runs 的 RunsDrawer）：列表层 → 单次详情层自带返回。
+// monitorId 优先；只有源时按源范围列该源全部检查项的正式运行。
+const runsOpen = ref(false)
+const runsSourceId = ref<string>()
+const runsMonitorId = ref<string>()
+const runsTitle = ref<string>()
+
+const editingLockSource = ref(true)
+const batchVisible = ref(false)
+const watchVisible = ref(false)
+
+const scopeKind = computed<'global' | 'site' | 'source'>(() => {
+  if (props.sourceId) return 'source'
+  if (props.siteId) return 'site'
+  return 'global'
 })
+
+const sourceNameById = computed(() => new Map(directory.value.map((item) => [item.sourceId, item.name])))
+
+const scopeText = computed(() => {
+  if (scopeKind.value === 'source') {
+    const name =
+      records.value.find((row) => row.sourceId === props.sourceId)?.sourceName ||
+      sourceNameById.value.get(props.sourceId) ||
+      ''
+    return name ? `${name}（${props.sourceId}）` : `源：${props.sourceId}`
+  }
+  if (scopeKind.value === 'site') {
+    const name = props.siteName || directory.value[0]?.siteName || ''
+    return name ? `网站：${name}` : `网站：${props.siteId}`
+  }
+  return '权限内全局'
+})
+
+const scopeHint = computed(() => {
+  if (scopeKind.value === 'source') return '已锁定到当前源，不能切换到其他源'
+  if (scopeKind.value === 'site') return '已锁定到当前网站，只展示该网站下的源'
+  return '一行一个源，展开查看检查项，运行结果在右侧抽屉查看'
+})
+
+const scopedRecords = computed(() => {
+  if (scopeKind.value === 'source') return records.value.filter((row) => row.sourceId === props.sourceId)
+  if (scopeKind.value === 'site') {
+    // 网站上下文只能靠源目录收敛范围：目录不可用时不展示，避免串出其他网站的源
+    const ids = new Set(directory.value.map((item) => item.sourceId))
+    return records.value.filter((row) => ids.has(row.sourceId))
+  }
+  return records.value
+})
+
+const allRows = computed<MonitorSourceRow[]>(() => {
+  if (scopeKind.value === 'source') {
+    const monitors = scopedRecords.value
+    return summarizeSources(monitors, [
+      { id: props.sourceId, name: monitors[0]?.sourceName || sourceNameById.value.get(props.sourceId), siteId: props.siteId || undefined, siteName: props.siteName || undefined },
+    ])
+  }
+  if (scopeKind.value === 'global' && !directoryReady.value) {
+    // 降级：源目录拿不到（超限/失败）时只列已配置源，页面顶部另有提示，不把分页结果拼成「全量」
+    return summarizeSources(records.value)
+  }
+  const sources = directory.value.map((item) => ({
+    id: item.sourceId,
+    name: item.name,
+    siteId: item.siteId,
+    siteName: item.siteName,
+  }))
+  return summarizeSources(scopedRecords.value, sources)
+})
+
+const filteredRows = computed(() => filterSourceRows(allRows.value, applied))
+const pagedRows = computed(() =>
+  filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
+)
+/** 统计只算本页：无 C07 时不能把全站异常数说成已知 */
+const stats = computed(() => sourceStats(pagedRows.value))
+const configuredCount = computed(() => filteredRows.value.filter((row) => row.monitorTotal > 0).length)
+
 watch(
-  () => props.sourceId,
-  (v) => {
-    form.sourceId = v || ''
-    filters.sourceId = v || ''
+  () => filteredRows.value.length,
+  (length) => {
+    const pages = Math.max(1, Math.ceil(length / pageSize.value))
+    if (page.value > pages) page.value = pages
   },
 )
 
-// ---- 列表状态 ----
-const rows = ref<SourceCheck[]>([])
-const total = ref(0)
-const loading = ref(false)
-const selected = ref<string[]>([])
-const page = ref(1)
-const size = ref(10)
+watch(
+  () => [props.sourceId, props.siteId] as const,
+  ([sourceId]) => {
+    draft.sourceId = sourceId || ''
+    applied.sourceId = sourceId || ''
+    page.value = 1
+    void refresh()
+  },
+)
 
-async function load() {
+function readableError(err: unknown, fallback: string): string {
+  if (err instanceof MonitorQueryLimitError) return err.message
+  if (err instanceof Error && err.message) return err.message
+  return fallback
+}
+
+async function loadRecords(request: number): Promise<void> {
+  loadError.value = ''
+  try {
+    // 源上下文只需要这一个源的记录：走单源查询，避免整表 4000+ 条上限把页面卡在限制错误上
+    const loaded =
+      scopeKind.value === 'source'
+        ? await listMonitorsOfSource(props.sourceId)
+        : await listMonitors(applied.sourceId ? { sourceId: applied.sourceId } : {})
+    if (request === refreshToken) records.value = loaded
+  } catch (err) {
+    if (request !== refreshToken) return
+    records.value = []
+    loadError.value = readableError(err, '监控记录加载失败')
+  }
+}
+
+async function loadDirectory(request: number): Promise<void> {
+  directoryError.value = ''
+  directoryReady.value = false
+  if (scopeKind.value === 'source') return
+  try {
+    const loaded = await listSourceOptions(props.siteId ? { siteId: props.siteId } : {})
+    if (request !== refreshToken) return
+    directory.value = loaded
+    directoryReady.value = true
+  } catch (err) {
+    if (request !== refreshToken) return
+    directory.value = []
+    directoryError.value = readableError(err, '源目录加载失败')
+  }
+}
+
+async function refreshData(): Promise<void> {
+  const request = ++refreshToken
   loading.value = true
   try {
-    // 入参逐字段对齐旧 api/monitor.js 的 pagedSourceCheck（page/limit，不是 pageNo/pageSize/size）
-    const res = await pagedSourceCheck({
-      sourceId: filters.sourceId,
-      enable: toApiValue(filters.enable),
-      state: toApiValue(filters.state),
-      name: filters.name,
-      page: page.value,
-      limit: size.value,
-    })
-    rows.value = res.list
-    total.value = res.total
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '加载监控列表失败')
-    rows.value = []
-    total.value = 0
+    await Promise.all([loadRecords(request), loadDirectory(request)])
   } finally {
-    loading.value = false
-  }
-}
-function runQuery() {
-  filters.enable = form.enable
-  filters.state = form.state
-  filters.sourceId = form.sourceId
-  filters.name = form.name.trim()
-  page.value = 1
-  void load()
-}
-
-// ---- 行内开关（el-switch size=small，文案「启用/停用」）----
-/** 从后端 isDelete 推出"当前是否启用"：0=在用→true */
-function isEnabled(row: SourceCheck): boolean {
-  return row.isDelete === 0
-}
-/** 切换开关：想启用(newEnabled=true)→传 0，想停用→传 1（与后端 changeEnable 口径一致） */
-async function toggleEnable(row: SourceCheck, newEnabled: boolean) {
-  const prevIsDelete = row.isDelete // 0 或 1
-  row.isDelete = newEnabled ? 0 : 1 // 先乐观更新
-  try {
-    await changeSourceCheckEnable([row.id], newEnabled)
-    ElMessage.success(newEnabled ? '已启用' : '已停用')
-  } catch {
-    row.isDelete = prevIsDelete // 失败回滚
+    if (request === refreshToken) {
+      loading.value = false
+      selectedMonitors.value = []
+    }
   }
 }
 
-// ---- 批量操作 ----
-function onSelectionChange(keys: string[]) {
-  selected.value = keys
-}
-async function batchEnable(enable: boolean) {
-  if (!selected.value.length) return
-  await confirmDanger(
-    enable ? '批量启用' : '批量停用',
-    `将${enable ? '启用' : '停用'}选中的 ${selected.value.length} 条监控，确认执行？`,
-    () => changeSourceCheckEnable(selected.value, enable) as Promise<{ message?: string }>,
-  )
-  void load()
-}
-async function batchRunNow() {
-  if (!selected.value.length) return
-  await confirmDanger(
-    '批量重跑',
-    `立即触发选中的 ${selected.value.length} 条监控的校验？`,
-    () => handleRunNow(selected.value) as Promise<{ message?: string }>,
-  )
-  void load()
-}
-async function batchDelete() {
-  if (!selected.value.length) return
-  await confirmDanger(
-    '批量删除',
-    `将永久删除选中的 ${selected.value.length} 条监控配置，不可恢复。确认执行？`,
-    () => deleteSourceCheck(selected.value) as Promise<{ message?: string }>,
-  )
-  selected.value = []
-  void load()
+/** 紧凑刷新：保留已生效筛选与分页大小，不重置到第一页 */
+async function refresh(): Promise<void> {
+  await refreshData()
 }
 
-// ---- 行操作 ----
-async function rowRunNow(row: SourceCheck) {
-  await confirmDanger(
-    '立即运行',
-    `立即触发这条监控的校验？`,
-    () => handleRunNow([row.id]) as Promise<{ message?: string }>,
-  )
-  void load()
-}
-async function rowDelete(row: SourceCheck) {
-  await confirmDanger(
-    '删除',
-    `将永久删除这条监控配置，不可恢复。确认执行？`,
-    () => deleteSourceCheck([row.id]) as Promise<{ message?: string }>,
-  )
-  void load()
-}
-
-// ---- 详情抽屉 ----
-const detailVisible = ref(false)
-const detailRecord = ref<SourceCheck | null>(null)
-function openDetail(row: SourceCheck) {
-  detailRecord.value = row
-  detailVisible.value = true
-}
-
-// ---- 辅助：剥 lastMsg 时间戳前缀 ----
-// 旧形态: "2026-09-09 11:00:46---[X]:xxx-异常, 数量:0" → 展示 "---" 之后的文本
-const MSG_TS_PREFIX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}---/
-function stripTimestamp(msg: string | undefined): string {
-  if (!msg) return ''
-  return msg.replace(MSG_TS_PREFIX, '')
-}
-
-// ---- 分页 ----
-function onPageChange(p: number) {
-  page.value = p
-  void load()
-}
-function onSizeChange(s: number) {
-  size.value = s
+function applyFilters(): void {
+  const sourceChanged = applied.sourceId !== draft.sourceId
+  applied.sourceId = scopeKind.value === 'source' ? props.sourceId : draft.sourceId
+  applied.enable = draft.enable
+  applied.status = draft.status
+  applied.keyword = draft.keyword.trim()
   page.value = 1
-  void load()
+  collapseExpanded()
+  if (sourceChanged) void refresh()
 }
 
-onMounted(() => void load())
+function resetFilters(): void {
+  draft.sourceId = scopeKind.value === 'source' ? props.sourceId : ''
+  draft.enable = 'all'
+  draft.status = 'all'
+  draft.keyword = ''
+  applyFilters()
+}
 
-// ---- 子组件 ref ----
-// 当前生效的源：筛选草稿优先（旧版 queryParam.sourceId 是下拉的即时值），再退回已执行的筛选 / 内嵌传入的源
-const activeSourceId = computed(() => form.sourceId || filters.sourceId || props.sourceId || '')
+function onSizeChange(): void {
+  page.value = 1
+}
 
-const editDialogRef = ref<InstanceType<typeof CheckEditDialog>>()
-const logsDrawerRef = ref<InstanceType<typeof CheckLogsDrawer>>()
-function openAddDialog() {
-  // 旧 MonitorList.handleAdd：未选源时 $message.error('请先选择源') 并 return
-  if (!activeSourceId.value) {
-    ElMessage.error('请先选择源')
+function collapseExpanded(): void {
+  expandedKeys.value = []
+  expandedSourceId.value = ''
+  selectedMonitors.value = []
+}
+
+function expandSource(sourceId: string): void {
+  expandedKeys.value = [sourceId]
+  expandedSourceId.value = sourceId
+  selectedMonitors.value = []
+}
+
+function toggleExpand(row: MonitorSourceRow): void {
+  if (expandedKeys.value.includes(row.sourceId)) collapseExpanded()
+  else expandSource(row.sourceId)
+}
+
+/**
+ * el-table 允许多行同时展开，而页面要求「只展开当前源」：
+ * 保留最后触发的那个源，其余立即折叠（写入 expand-row-keys 由 el-table 同步）。
+ */
+function onExpandChange(row: MonitorSourceRow, expanded: unknown): void {
+  const opened = Array.isArray(expanded)
+    ? expanded.some((item) => item?.sourceId === row.sourceId)
+    : Boolean(expanded)
+  if (opened) {
+    expandSource(row.sourceId)
     return
   }
-  editDialogRef.value?.openDialog(null)
-}
-function openEditDialog(row: SourceCheck) {
-  editDialogRef.value?.openDialog(row)
-}
-function openLogs(row: SourceCheck) {
-  // 旧 MonitorList.handleLogs：showModal(queryParam.sourceId, record.jobId)
-  // —— 传的是**任务的 jobId**（不是检查记录自身的 id），后端未给 jobId 时退化为只按 sourceId 过滤。
-  logsDrawerRef.value?.show(activeSourceId.value || row.sourceId, row.jobId, row.name)
-}
-function onEditSaved() {
-  void load()
+  if (expandedSourceId.value === row.sourceId) collapseExpanded()
 }
 
-// ---- 源选择变更后自动查询 ----
-function onSourceChange() {
-  runQuery()
+function onInnerSelectionChange(rows: MonitorRecordView[]): void {
+  selectedMonitors.value = rows
 }
+
+/**
+ * 新增监控直接进编辑器，源在编辑器里选（原型就是这么做的）。
+ * 不再多一层「先选择源」弹窗：那一层既不进原型，也让「选源」和「填检查项」被切成两步。
+ * 从某一行「加监控」或源内视图进来时带 sourceId 并锁源；全局入口 source 可搜索。
+ */
+function openAddDialog(): void {
+  void openAddFor(props.sourceId)
+}
+
+async function openAddFor(sourceId: string): Promise<void> {
+  editingSourceId.value = sourceId
+  editingLockSource.value = !!sourceId
+  editingRecord.value = null
+  await nextTick()
+  editorVisible.value = true
+}
+
+async function openEdit(row: MonitorSourceRow, monitor: MonitorRecordView): Promise<void> {
+  editingSourceId.value = row.sourceId
+  // 传视图记录而不是「原始行」：编辑器按 monitorId 保存、锁源、回读同一条记录
+  editingRecord.value = monitor
+  editingLockSource.value = true
+  await nextTick()
+  editorVisible.value = true
+}
+
+async function beforeEditorClose(done: () => void): Promise<void> {
+  if (editorRef.value?.isBusy()) return
+  if (editorRef.value?.isDirty()) {
+    try {
+      await ElMessageBox.confirm('编辑器里还有未保存的改动，确定放弃并关闭？', '放弃修改', {
+        confirmButtonText: '放弃修改',
+        cancelButtonText: '继续编辑',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  done()
+}
+
+function onEditorSaved(record: MonitorRecordView | null): void {
+  // 回读不确定时保留候选；成功后也留在同一记录，避免再次保存变成重复新增。
+  if (record) editingRecord.value = record
+  void refresh()
+}
+
+function onEditorCancel(): void {
+  editorVisible.value = false
+  editingRecord.value = null
+}
+
+function openLogs(row: MonitorSourceRow, monitor?: MonitorRecordView): void {
+  // 旧日志的 jobId 存的是监控记录 id（ckSource.id），不是采集调度 jobId；
+  // RunsDrawer 内部按 monitorId 查，这里不再自己拼 jobId。
+  runsSourceId.value = row.sourceId
+  runsMonitorId.value = monitor?.id
+  runsTitle.value = monitor?.name
+  runsOpen.value = true
+}
+
+async function toggleMonitor(monitor: MonitorRecordView, next: boolean): Promise<void> {
+  try {
+    await setMonitorsEnabled([monitor.id], next)
+    ElMessage.success(next ? '已启用' : '已停用')
+  } catch (err) {
+    ElMessage.error(readableError(err, '启停失败，请重试'))
+  } finally {
+    await refresh()
+  }
+}
+
+async function runMonitor(monitor: MonitorRecordView): Promise<void> {
+  try {
+    await runMonitorsNow([monitor.id])
+    ElMessage.success('已提交执行（受理不代表执行成功）')
+  } catch (err) {
+    ElMessage.error(readableError(err, '提交执行失败'))
+  } finally {
+    await refresh()
+  }
+}
+
+const selectedIds = computed(() => selectedMonitors.value.map((monitor) => monitor.id))
+
+async function batchRun(): Promise<void> {
+  if (!selectedIds.value.length) return
+  const ids = [...selectedIds.value]
+  try {
+    await runMonitorsNow(ids)
+    ElMessage.success(`已提交 ${ids.length} 项执行`)
+  } catch (err) {
+    ElMessage.error(readableError(err, '提交执行失败'))
+  } finally {
+    await refresh()
+  }
+}
+
+async function batchDelete(): Promise<void> {
+  if (!selectedIds.value.length) return
+  const ids = [...selectedIds.value]
+  await confirmDanger(
+    '删除所选检查',
+    `将删除选中的 ${ids.length} 项检查，删除后不可恢复。`,
+    async () => {
+      await deleteSourceCheck(ids)
+      await refresh()
+      return { message: `已删除 ${ids.length} 项` }
+    },
+  )
+}
+
+async function batchEnable(enabled: boolean): Promise<void> {
+  if (!selectedIds.value.length) return
+  const ids = [...selectedIds.value]
+  const run = async () => {
+    await setMonitorsEnabled(ids, enabled)
+    await refresh()
+    return { message: enabled ? `已启用 ${ids.length} 项` : `已停用 ${ids.length} 项` }
+  }
+  if (enabled) {
+    try {
+      const res = await run()
+      ElMessage.success(res.message)
+    } catch (err) {
+      ElMessage.error(readableError(err, '启停失败，请重试'))
+    }
+    return
+  }
+  await confirmDanger(
+    '停用所选检查',
+    `将停用选中的 ${ids.length} 项检查。停用后不再执行，列表也不再显示这些检查的数据结论。`,
+    run,
+  )
+}
+
+onMounted(() => {
+  void refreshData()
+})
 </script>
 
 <template>
-  <div class="sc-shell" :class="{ 'sc-embedded': embedded }" v-loading="loading">
-    <!-- 嵌入形态：外层由父组件弹窗包裹，这里直接渲染内容；独立形态：自己做卡片壳 -->
-    <!-- <div class="sc-head" v-if="!embedded">
-      <div class="sc-title">数据源告警</div>
-      <div class="sc-sub">查看和管理各源的数据校验监控，可按源、状态、在用筛选。</div>
-    </div> -->
+  <div class="sc-shell" :class="{ 'sc-embedded': embedded }">
+    <header class="sc-scope">
+      <div class="sc-heading"><h2>数据质量监控</h2><span class="sc-scope-tag">{{ scopeText }}</span></div>
+      <p class="sc-scope-hint">{{ scopeHint }}</p>
+    </header>
 
-    <!-- 筛选表单（对齐旧项目 a-form layout="inline" + a-row 栅格） -->
-    <el-form :inline="true" class="sc-filter-form">
-      <el-row :gutter="8" class="sc-filter-row">
-        <el-col :md="4" :sm="24">
-          <el-form-item label="在用">
-            <el-select v-model="form.enable" placeholder="全部" @change="runQuery">
-              <el-option label="全部" :value="ENABLE_ALL" />
-              <el-option label="在用" value="0" />
-              <el-option label="停用" value="1" />
-            </el-select>
-          </el-form-item>
-        </el-col>
-        <el-col :md="4" :sm="24">
-          <el-form-item label="告警状态">
-            <el-select v-model="form.state" placeholder="全部" @change="runQuery">
-              <el-option label="全部" :value="STATE_ALL" />
-              <el-option label="告警" value="E" />
-              <el-option label="正常" value="C" />
-            </el-select>
-          </el-form-item>
-        </el-col>
-        <el-col :md="4" :sm="24">
-          <el-form-item label="源ID">
-            <SourceSelect v-model="form.sourceId" @change="onSourceChange" />
-          </el-form-item>
-        </el-col>
-        <el-col :md="3" :sm="24">
-          <el-form-item label="名称">
-            <el-input v-model="form.name" placeholder="名称" @keyup.enter="runQuery" />
-          </el-form-item>
-        </el-col>
-        <el-col :md="4" :sm="24">
-          <el-form-item>
-            <el-button type="primary" :icon="Search" @click="runQuery">查询</el-button>
-            <!-- 旧版不置灰，未选源时点「加监控」弹「请先选择源」（openAddDialog 内拦截） -->
-            <el-button type="primary" :icon="Plus" @click="openAddDialog">加监控</el-button>
-          </el-form-item>
-        </el-col>
-      </el-row>
-    </el-form>
-
-    <!-- 批量操作条（勾选态） -->
-    <div v-if="selected.length" class="sc-batch-bar">
-      <span>已选 <b>{{ selected.length }}</b> 条</span>
-      <button class="rc-btn" type="button" @click="batchRunNow">批量重跑</button>
-      <button class="rc-btn" type="button" @click="batchEnable(false)">批量停用</button>
-      <button class="rc-btn" type="button" @click="batchEnable(true)">批量启用</button>
-      <button class="rc-btn danger" type="button" @click="batchDelete">批量删除</button>
-      <button class="rc-btn ghost" type="button" @click="selected = []">清除勾选</button>
+    <div v-if="loadError" class="sc-hint sc-hint-error">
+      <span>监控记录加载失败：{{ loadError }}</span>
+      <button type="button" class="sc-link" @click="refresh()">重试</button>
+    </div>
+    <div v-else-if="directoryError" class="sc-hint">
+      <span v-if="scopeKind === 'site'">
+        网站源目录加载失败：{{ directoryError }}。为避免串出其他网站的数据，当前不展示列表。
+      </span>
+      <span v-else>
+        源目录加载失败：{{ directoryError }}。当前只列出已配置监控的源，未配置检查的源暂不出现。
+      </span>
+      <button type="button" class="sc-link" @click="refresh()">重试</button>
     </div>
 
-    <!-- 表格 -->
-    <!-- 不设 default-sort：旧版列上的 sorter:true 是**服务端**排序（由后端决定整集顺序），
-         而 s-table 转发的 sortField/sortOrder 又被旧 pagedSourceCheck 丢掉了，等于后端顺序直显。
-         el-table 的 sortable/default-sort 只排当前页，会让人误以为整集已排序，反而不如照旧直显。 -->
+    <div class="sc-filter-row">
+      <template v-if="scopeKind === 'global'">
+        <SourceSelect v-model="draft.sourceId" class="sc-filter-source" />
+      </template>
+      <el-select
+        v-else-if="scopeKind === 'site'"
+        v-model="draft.sourceId"
+        class="sc-filter-source"
+        filterable
+        clearable
+        placeholder="源（限当前网站）"
+      >
+        <el-option
+          v-for="item in directory"
+          :key="item.sourceId"
+          :value="item.sourceId"
+          :label="`[${item.sourceId}]${item.name}`"
+        />
+      </el-select>
+
+      <label class="sc-filter-field"><span>启停状态</span><el-select v-model="draft.enable" class="sc-filter-select" aria-label="启停状态" placeholder="启停状态">
+        <el-option v-for="item in ENABLE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+      </el-select></label>
+      <label class="sc-filter-field"><span>数据情况</span><el-select v-model="draft.status" class="sc-filter-select" aria-label="数据情况" placeholder="数据情况">
+        <el-option v-for="item in STATUS_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+      </el-select></label>
+      <el-input
+        v-model="draft.keyword"
+        class="sc-filter-keyword"
+        aria-label="筛选已加载源的名称或 ID"
+        clearable
+        placeholder="筛选已加载源名称 / ID"
+        @keyup.enter="applyFilters"
+      />
+      <el-button type="primary" @click="applyFilters">查询</el-button>
+      <el-button @click="resetFilters">重置</el-button>
+
+      <div class="sc-headbar">
+        <span class="sc-count">共 {{ filteredRows.length }} 个源 · 已配置 {{ configuredCount }}</span>
+        <el-button
+          :icon="Refresh"
+          circle
+          size="small"
+          title="保留当前筛选与分页大小重新查询"
+          @click="refresh()"
+        />
+        <el-button type="primary" :icon="Plus" @click="openAddDialog">新增监控</el-button>
+        <el-button @click="batchVisible = true">批量补齐入库监控</el-button>
+      </div>
+    </div>
+
+    <div class="sc-stats">
+      <span class="sc-stat">本页数据异常源 <b :class="{ 'is-bad': stats.abnormal > 0 }">{{ stats.abnormal }}</b></span>
+      <span class="sc-stat">本页执行失败源 <b :class="{ 'is-bad': stats.execFailed > 0 }">{{ stats.execFailed }}</b></span>
+      <span class="sc-stat">本页源数 <b>{{ stats.total }}</b></span>
+      <span class="sc-stat-note" title="分项不互斥，同一源可同时计入数据异常与执行失败；计划覆盖和漏跑等待服务端汇总。">仅统计本页 · 计划覆盖暂未取得</span>
+      <button type="button" class="sc-link sc-watch-link" @click="watchVisible = true">
+        独立巡检（队列与漏跑）
+      </button>
+    </div>
+
     <el-table
-      :data="rows"
-      border
-      stripe
+      v-loading="loading"
+      :data="pagedRows"
+      row-key="sourceId"
+      :expand-row-keys="expandedKeys"
       size="small"
-      :row-key="(r: SourceCheck) => r.id"
-      @selection-change="onSelectionChange"
+      class="sc-table"
+      @expand-change="onExpandChange"
     >
-      <el-table-column type="selection" width="40" />
-      <!-- 在用：开关 + 状态文字 -->
-      <el-table-column label="在用" width="100" align="center">
+      <el-table-column type="expand" width="34">
         <template #default="{ row }">
-          <el-switch
-            size="small"
-            :model-value="isEnabled(row)"
-            inline-prompt
-            active-text="启用"
-            inactive-text="停用"
-            @change="(v: string | number | boolean) => toggleEnable(row, !!v)"
-          />
+          <section class="sc-inner">
+            <div class="sc-inner-head">
+              <span class="sc-inner-title">{{ row.sourceName || row.sourceId }}</span>
+              <span class="subline">· {{ row.monitorTotal }} 项检查 · 各自独立记录身份、启停和通知</span>
+              <template v-if="selectedMonitors.length">
+                <span class="sc-selected">已选 {{ selectedMonitors.length }} 项</span>
+                <el-button size="small" @click="batchRun">重跑所选</el-button>
+                <el-button size="small" @click="batchEnable(true)">启用所选</el-button>
+                <el-button size="small" @click="batchEnable(false)">停用所选</el-button>
+                <el-button size="small" type="danger" plain @click="batchDelete">删除所选</el-button>
+              </template>
+              <span class="sc-inner-spacer"></span>
+              <button type="button" class="sc-link" @click="openLogs(row)">查看运行记录</button>
+              <button type="button" class="sc-link" @click="openAddFor(row.sourceId)">加监控</button>
+            </div>
+
+            <el-table
+              :data="row.monitors"
+              row-key="id"
+              size="small"
+              class="sc-inner-table"
+              @selection-change="onInnerSelectionChange"
+            >
+              <el-table-column type="selection" width="34" />
+              <el-table-column label="检查项" min-width="150">
+                <template #default="{ row: monitor }">
+                  <span class="sc-name" :title="monitor.name" @click="openEdit(row, monitor)">
+                    {{ monitor.name || '未命名' }}
+                  </span>
+                  <div class="subline">#{{ monitor.id }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="方式" min-width="86">
+                <template #default="{ row: monitor }">
+                  <span class="rc-status" :class="monitor.kind === 'ai' ? 'run' : 'muted'">
+                    {{ monitorKindText(monitor.kind) }}
+                  </span>
+                  <div class="subline">{{ monitorPublishText(monitor.publishStatus, monitor.effectiveVersion) }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="检查摘要" min-width="160">
+                <template #default="{ row: monitor }">
+                  <span class="sc-ellipsis" :title="monitorSummaryOf(monitor)">{{ monitorSummaryOf(monitor) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="执行计划" min-width="130">
+                <template #default="{ row: monitor }">
+                  <span class="sc-ellipsis" :title="monitorPlanOf(monitor).plan">{{ monitorPlanOf(monitor).plan }}</span>
+                  <div class="subline">下次 {{ monitorPlanOf(monitor).next }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="启用" width="80">
+                <template #default="{ row: monitor }">
+                  <el-switch
+                    :model-value="monitor.enabled"
+                    :aria-label="`${monitor.name}：${monitor.enabled ? '已启用' : '已停用'}`"
+                    size="small"
+                    @change="toggleMonitor(monitor, Boolean($event))"
+                  />
+                  <span class="subline">{{ monitor.enabled ? '启用' : '停用' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="最近数据结论" min-width="112">
+                <template #default="{ row: monitor }">
+                  <span class="rc-status" :class="monitorDataOf(monitor).tone" :title="monitorDataOf(monitor).title">
+                    {{ monitorDataOf(monitor).text }}
+                  </span>
+                  <div class="subline">{{ monitorExecOf(monitor).text }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" min-width="132">
+                <template #default="{ row: monitor }">
+                  <div class="sc-ops">
+                    <button type="button" class="sc-link" @click="openEdit(row, monitor)">编辑</button>
+                    <button type="button" class="sc-link" @click="runMonitor(monitor)">立即运行</button>
+                    <button type="button" class="sc-link" @click="openLogs(row, monitor)">记录</button>
+                  </div>
+                </template>
+              </el-table-column>
+              <template #empty>
+                <div class="sc-inner-empty">
+                  该源尚未配置监控。可直接「加监控」，不需要先在画布上添加监控节点。
+                </div>
+              </template>
+            </el-table>
+
+            <div class="sc-inner-note">
+              一个源可配置多项检查；源行上的「数据情况」只是该源最差事实的汇总，不把一项通过当整源正常，也不把各项数据量相加。
+            </div>
+          </section>
         </template>
       </el-table-column>
-      <!-- 状态 -->
-      <el-table-column label="状态" width="90" align="center" prop="state">
+
+      <el-table-column label="源与网站" min-width="158">
         <template #default="{ row }">
-          <StatusTag
-            :text="row.state === 'E' ? '告警' : row.state === 'C' ? '正常' : row.state"
-            :tone="row.state === 'E' ? 'err' : row.state === 'C' ? 'ok' : 'muted'"
-          />
-        </template>
-      </el-table-column>
-      <!-- 条数从执行结果文字里取（1105 会议：一眼看到查出多少条），后端给独立字段后改读字段 -->
-      <el-table-column label="条数" width="90" align="right">
-        <template #default="{ row }">
-          <b v-if="checkCountOf(row.lastMsg)" class="sc-count" :class="{ alarm: row.state === 'E' }" data-testid="check-result-count">{{ checkCountOf(row.lastMsg) }}</b>
-          <span v-else class="sc-count-none">—</span>
-        </template>
-      </el-table-column>
-      <!-- 执行结果：剥时间戳前缀，超长省略 -->
-      <el-table-column label="执行结果" min-width="200" prop="lastMsg" show-overflow-tooltip>
-        <template #default="{ row }">
-          <span>{{ stripTimestamp(row.lastMsg) }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="名称" width="150" prop="name" show-overflow-tooltip />
-      <el-table-column label="表" min-width="180" prop="tableName" show-overflow-tooltip />
-      <el-table-column label="cron" width="130" prop="schedule" class-name="mono-cell" />
-      <el-table-column label="下次" width="160" prop="nextRun" />
-      <el-table-column label="上次" width="160" prop="lastRun" />
-      <el-table-column label="源" width="110" prop="sourceId" class-name="mono-cell" />
-      <!-- 操作：日志 / 编辑 / 详情 / 立即运行 / 删除，全部图标化，悬浮 tooltip 说明 -->
-      <el-table-column label="操作" width="200" fixed="right" align="center">
-        <template #default="{ row }">
-          <div class="sc-op-bar">
-            <el-tooltip content="日志" placement="top">
-              <span class="sc-op-icon" @click="openLogs(row)"><el-icon :size="15"><Document /></el-icon></span>
-            </el-tooltip>
-            <el-tooltip content="编辑" placement="top">
-              <span class="sc-op-icon" @click="openEditDialog(row)"><el-icon :size="15"><Edit /></el-icon></span>
-            </el-tooltip>
-            <el-tooltip content="详情" placement="top">
-              <span class="sc-op-icon" @click="openDetail(row)"><el-icon :size="15"><View /></el-icon></span>
-            </el-tooltip>
-            <el-tooltip content="立即运行" placement="top">
-              <span class="sc-op-icon" @click="rowRunNow(row)"><el-icon :size="15"><VideoPlay /></el-icon></span>
-            </el-tooltip>
-            <el-tooltip content="删除" placement="top">
-              <span class="sc-op-icon sc-op-danger" @click="rowDelete(row)"><el-icon :size="15"><Delete /></el-icon></span>
-            </el-tooltip>
+          <span class="sc-name" :title="row.sourceName || row.sourceId" @click="toggleExpand(row)">
+            {{ row.sourceName || row.sourceId }}
+          </span>
+          <div class="subline" :title="`${row.sourceId} · ${row.siteName || '网站未回显'}`">
+            {{ row.sourceId }} · {{ row.siteName || '—' }}
           </div>
         </template>
       </el-table-column>
+
+      <el-table-column label="检查覆盖" min-width="118">
+        <template #default="{ row }">
+          <div class="sc-ellipsis">{{ checkCoverageOf(row).main }}</div>
+          <div class="subline">{{ checkCoverageOf(row).sub }}</div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="计划覆盖" min-width="128">
+        <template #default="{ row }">
+          <div class="sc-ellipsis" :title="coverageOf(row).title">{{ coverageOf(row).main }}</div>
+          <div class="subline">{{ coverageOf(row).sub }}</div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="数据情况" min-width="122">
+        <template #default="{ row }">
+          <span class="rc-status" :class="dataPillOf(row).tone">{{ dataPillOf(row).text }}</span>
+          <div class="subline" :title="dataHintOf(row)">{{ dataHintOf(row) }}</div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="执行与通知" min-width="124">
+        <template #default="{ row }">
+          <div :title="execNotifyOf(row).execTitle" :class="`sc-exec is-${execNotifyOf(row).execTone}`">
+            {{ execNotifyOf(row).exec }}
+          </div>
+          <div :title="execNotifyOf(row).notifyTitle" :class="`subline is-${execNotifyOf(row).notifyTone}`">
+            {{ execNotifyOf(row).notify }}
+          </div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="最近检查" min-width="120">
+        <template #default="{ row }">
+          <div class="sc-ellipsis" :title="lastCheckOf(row).title">{{ lastCheckOf(row).main }}</div>
+          <div class="subline">{{ lastCheckOf(row).sub }}</div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="操作" min-width="142">
+        <template #default="{ row }">
+          <div class="sc-ops">
+            <button type="button" class="sc-link" @click="toggleExpand(row)">
+              {{ expandedKeys.includes(row.sourceId) ? '收起检查' : '展开检查' }}
+            </button>
+            <button type="button" class="sc-link" @click="openAddFor(row.sourceId)">加监控</button>
+            <button type="button" class="sc-link" @click="openLogs(row)">结果</button>
+          </div>
+        </template>
+      </el-table-column>
+
+      <template #empty>
+        <div class="sc-empty">
+          <template v-if="scopeKind === 'site' && directoryError">
+            网站源目录加载失败，暂不展示列表；请重试，或回到全局视图按源缩小范围。
+          </template>
+          <template v-else-if="!records.length">
+            暂无监控记录。可直接点击「新增监控」开始配置。
+          </template>
+          <template v-else>
+            没有符合筛选条件的源。
+            <button type="button" class="sc-link" @click="resetFilters">重置筛选</button>
+          </template>
+        </div>
+      </template>
     </el-table>
 
-    <!-- 分页 -->
-    <div class="sc-pager">
+    <div v-if="filteredRows.length" class="sc-pager">
       <el-pagination
-        :current-page="page"
-        :page-size="size"
-        :total="total"
-        :page-sizes="[10, 30, 100, 200]"
-        layout="total, sizes, prev, pager, next, jumper"
-        background
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="PAGE_SIZES"
+        :total="filteredRows.length"
         size="small"
-        @current-change="onPageChange"
+        background
+        layout="total, sizes, prev, pager, next"
         @size-change="onSizeChange"
       />
     </div>
 
-    <!-- 详情抽屉 -->
-    <el-drawer
-      v-model="detailVisible"
-      title="监控详情"
-      direction="rtl"
-      size="70%"
-      class-name="rc-drawer"
-      v-if="detailRecord"
+    <el-dialog
+      class="monitor-editor-dialog"
+      v-model="editorVisible"
+      title="监控配置"
+      :width="'min(1080px, calc(100vw - 32px))'"
+      append-to-body
+      destroy-on-close
+      :before-close="beforeEditorClose"
+      data-testid="source-check-editor-dialog"
     >
-      <el-descriptions border size="default" :column="1">
-        <el-descriptions-item label="ID"><span class="mono">{{ detailRecord.id }}</span></el-descriptions-item>
-        <el-descriptions-item label="源"><span class="mono">{{ detailRecord.sourceId }}</span></el-descriptions-item>
-        <el-descriptions-item label="在用">
-          <StatusTag :state="isEnabled(detailRecord) ? 'enabled' : 'disabled'" />
-        </el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <StatusTag
-            :text="detailRecord.state === 'E' ? '告警' : detailRecord.state === 'C' ? '正常' : detailRecord.state"
-            :tone="detailRecord.state === 'E' ? 'err' : detailRecord.state === 'C' ? 'ok' : 'muted'"
-          />
-        </el-descriptions-item>
-        <el-descriptions-item label="名称">{{ detailRecord.name }}</el-descriptions-item>
-        <el-descriptions-item label="表">{{ detailRecord.tableName }}</el-descriptions-item>
-        <el-descriptions-item label="cron"><span class="mono">{{ detailRecord.schedule }}</span></el-descriptions-item>
-        <el-descriptions-item label="下次">{{ detailRecord.nextRun }}</el-descriptions-item>
-        <el-descriptions-item label="上次">{{ detailRecord.lastRun }}</el-descriptions-item>
-        <el-descriptions-item label="执行结果">
-          <pre class="sc-pre">{{ detailRecord.lastMsg || '—' }}</pre>
-        </el-descriptions-item>
-        <el-descriptions-item label="校验详情">
-          <pre class="sc-pre">{{ detailRecord.checkConf || '—' }}</pre>
-        </el-descriptions-item>
-      </el-descriptions>
-    </el-drawer>
+      <MonitorConfigEditor
+        ref="editorRef"
+        :source-id="editingSourceId"
+        :record="editingRecord"
+        :source-locked="editingLockSource"
+        @saved="onEditorSaved"
+        @cancel="onEditorCancel"
+      />
+    </el-dialog>
+    <MonitorBatchDialog v-model="batchVisible" :site-id="siteId || undefined" @changed="refresh" />
+    <MonitorWatchDrawer :open="watchVisible" @close="watchVisible = false" />
+    <RunsDrawer
+      :open="runsOpen"
+      :source-id="runsSourceId"
+      :monitor-id="runsMonitorId"
+      :title="runsTitle"
+      @close="runsOpen = false"
+    />
 
-    <!-- 子组件挂载：新增/编辑弹窗 + 校验日志抽屉 -->
-    <CheckEditDialog ref="editDialogRef" :source-id="activeSourceId" @saved="onEditSaved" />
-    <CheckLogsDrawer ref="logsDrawerRef" :source-id="activeSourceId" />
   </div>
 </template>
 
 <style scoped>
-/* 表头文字颜色统一 */
-.sc-shell :deep(.el-table__header th) {
-  color: var(--rc-text-2);
-}
-/* 项目共享令牌缺失时回退值（与 TaskView 同口径） */
 .sc-shell {
   display: flex;
   flex-direction: column;
+  gap: 8px;
   height: fit-content;
-  gap: 10px;
-  padding: 12px;
+  padding: 0;
   background: #fff;
   border: 1px solid var(--rc-border, #e2e8f0);
-  border-radius: var(--rc-radius, 8px);
+  border-radius: 8px;
   overflow: hidden;
 }
-.sc-shell.sc-embedded {
+/* 嵌入弹窗时外层已有卡片，去掉重复壳 */
+.sc-embedded {
+  padding: 4px;
   border: 0;
   border-radius: 0;
-  padding: 4px;
 }
-.sc-head {
-  margin-bottom: 2px;
-}
-.sc-title {
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--rc-text, #0f172a);
-}
-.sc-sub {
-  margin-top: 4px;
-  color: var(--rc-muted, #64748b);
+.sc-scope { padding: 14px 14px 10px; border-bottom: 1px solid var(--rc-border-soft); }
+.sc-heading { display: flex; align-items: center; gap: 8px; }
+.sc-heading h2 { margin: 0; font-size: 13px; font-weight: 700; color: var(--rc-text); }
+.sc-scope-tag { padding: 2px 6px; background: var(--rc-bg); border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--rc-muted); }
+.sc-scope-hint { margin: 5px 0 0; font-size: 11px; color: var(--rc-muted); }
+.sc-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--rc-border-soft, #e2e8f0);
+  border-left: 3px solid var(--rc-warn, #c2410c);
+  border-radius: var(--rc-radius-sm, 6px);
+  background: #fffdf8;
   font-size: 12px;
+  color: var(--rc-text-2, #475569);
 }
-/* 筛选列随可用宽度换行，避免固定栅格容不下控件和操作按钮。 */
-.sc-filter-form {
-  margin-bottom: 4px;
+.sc-hint-error {
+  border-left-color: var(--rc-error, #dc2626);
+  background: var(--rc-error-bg, #fef2f2);
 }
 .sc-filter-row {
-  width: 100%;
-}
-.sc-filter-row > .el-col {
-  flex: 1 1 200px;
-  max-width: none;
-}
-.sc-filter-row > .el-col:last-child {
-  flex: 0 0 auto;
-}
-/* el-col gutter 让列间距统一为 8px，但内部 form-item 默认 margin-right 会叠加，清零 */
-.sc-filter-form :deep(.el-form-item) {
-  margin-bottom: 8px;
-  margin-right: 0;
-  width: 100%;
-}
-.sc-filter-form :deep(.el-form-item__content) {
-  min-width: 0;
-}
-/* 控件宽度跟随所在列，源选择器内给详情按钮保留空间。 */
-.sc-filter-form :deep(.el-select),
-.sc-filter-form :deep(.el-input),
-.sc-filter-form :deep(.el-input-number),
-.sc-filter-form :deep(.ss-wrap) {
-  width: 100%;
-}
-.sc-filter-form :deep(.ss-wrap > .el-select) {
-  flex: 1;
-  min-width: 0;
-}
-.sc-filter-form :deep(.el-form-item__label) {
-  font-size: 12px;
-}
-/* 两个按钮始终同行，空间不足时由整列换行。 */
-.sc-filter-form .el-col:last-child :deep(.el-form-item) {
-  width: auto;
-}
-.sc-filter-form .el-col:last-child :deep(.el-form-item__content) {
-  flex-wrap: nowrap;
+  padding: 2px 12px 0;
+  display: flex;
+  align-items: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
 }
-.sc-filter-form .el-col:last-child :deep(.el-button + .el-button) {
-  margin-left: 0;
+.sc-filter-field { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--rc-muted); }
+.sc-filter-row :deep(.el-button + .el-button) { margin-left: 0; }
+.sc-filter-source {
+  width: 190px;
 }
-.sc-batch-bar {
+.sc-filter-source :deep(.el-select) { width: 158px !important; }
+.sc-filter-select {
+  width: 96px;
+}
+.sc-filter-keyword {
+  width: 154px;
+}
+.sc-headbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  background: var(--rc-primary-bg, #eff6ff);
-  border: 1px solid var(--rc-border-soft, #e2e8f0);
-  border-radius: 6px;
+  margin-left: auto;
+}
+.sc-count {
   font-size: 12px;
-  color: var(--rc-primary-ink, #1d4ed8);
+  color: var(--rc-muted, #64748b);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.sc-batch-bar b {
-  font-size: 14px;
-}
-.sc-op-bar {
+.sc-stats {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 0 12px;
+  padding: 7px 0;
+  border-top: 1px solid var(--rc-border-soft);
+  font-size: 11px;
+  color: var(--rc-text-2, #475569);
 }
-.sc-op-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  /* color: var(--rc-primary, #2563eb); */
+.sc-stat b {
+  font-variant-numeric: tabular-nums;
+}
+.sc-stat b.is-bad {
+  color: var(--rc-error, #dc2626);
+}
+.sc-watch-link {
+  margin-left: auto;
+  font-size: 12px;
+}
+.sc-stat-note {
+  margin-left: auto;
+  color: var(--rc-faint, #94a3b8);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.sc-table {
+  width: 100%;
+  font-size: 12px;
+}
+.sc-table :deep(.el-table__header th) {
+  color: var(--rc-text-2, #475569);
+  font-weight: 700;
+  background: #f8fafc;
+}
+.sc-table :deep(.el-table__expanded-cell) {
+  padding: 0;
+  background: #fbfdff;
+}
+.sc-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--rc-primary);
   cursor: pointer;
-  transition: background-color 0.2s, color 0.2s;
 }
-.sc-op-icon:hover {
-  background: var(--rc-primary-bg, #eff6ff);
+.sc-name:hover {
   color: var(--rc-primary, #2563eb);
 }
-.sc-op-icon.sc-op-danger {
-  color: var(--rc-danger, #dc2626);
+.sc-ellipsis {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.sc-op-icon.sc-op-danger:hover {
-  background: var(--rc-danger-bg, #fef2f2);
-  color: var(--rc-danger, #dc2626);
+.subline {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--rc-muted, #64748b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subline.is-err {
+  color: var(--rc-error, #dc2626);
+}
+.sc-exec {
+  font-size: 12px;
+  font-weight: 600;
+}
+.sc-exec.is-err {
+  color: var(--rc-error, #dc2626);
+}
+.sc-exec.is-run {
+  color: var(--rc-primary, #2563eb);
+}
+.sc-exec.is-muted {
+  color: var(--rc-muted, #64748b);
+}
+/* rc-status 由全局 tokens.css 提供，这里只补偿尺寸（表格内一行放得下） */
+.sc-table .rc-status {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-ops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sc-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--rc-primary, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sc-link:hover {
+  text-decoration: underline;
 }
 .sc-pager {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 0 2px;
+  padding: 8px 12px 12px;
 }
-.mono-cell {
-  font-family: var(--rc-mono, monospace);
+.sc-empty {
+  padding: 22px 12px;
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+}
+.sc-inner {
+  margin: 0 10px 10px;
+  background: #fff;
+  border: 1px solid #dbe6f6;
+  border-radius: var(--rc-radius-sm, 6px);
+  overflow: hidden;
+}
+.sc-inner-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rc-border-soft, #e2e8f0);
+  background: #fbfdff;
+}
+.sc-inner-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--rc-text, #1e293b);
+}
+.sc-selected {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
   font-size: 11px;
+  font-weight: 700;
 }
-.mono {
-  font-family: var(--rc-mono, monospace);
+.sc-inner-spacer {
+  flex: 1 1 auto;
+}
+.sc-inner-table {
+  width: 100%;
   font-size: 12px;
 }
-.sc-pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 260px;
-  overflow: auto;
-  margin: 0;
-  padding: 6px 8px;
-  background: var(--rc-border-soft, #f1f5f9);
-  border-radius: 4px;
-  font-family: var(--rc-mono, monospace);
-  font-size: 12px;
-  line-height: 1.55;
+.sc-inner-table :deep(.el-table__header th) {
+  color: var(--rc-text-2, #475569);
+  font-weight: 700;
+  background: #f8fafc;
 }
-/* 与 TaskView 同款 rc-btn / tv-icon-btn：rc-btn 由全局 tokens.css 注入，这里不重写 */
-.sc-count { font-variant-numeric: tabular-nums; color: var(--rc-text); }
-.sc-count.alarm { color: var(--rc-error); }
-.sc-count-none { color: var(--rc-faint); }
+.sc-inner-empty {
+  padding: 18px 10px;
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+}
+.sc-inner-note {
+  padding: 7px 10px;
+  border-top: 1px solid var(--rc-border-soft, #e2e8f0);
+  background: #fbfcfe;
+  color: var(--rc-muted, #64748b);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.sc-add-tip {
+  margin-bottom: 10px;
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+}
+.sc-table :deep(.el-table__cell) { padding: 12px 0; border-color: #eaf0f8; }
+.sc-table :deep(.el-table__header th) { padding: 9px 0; font-weight: 600; }
+.sc-table :deep(.cell) { padding-inline: 10px; line-height: 1.6; }
+.sc-ops { gap: 10px; flex-wrap: nowrap; white-space: nowrap; }
+.sc-filter-row > .el-button { margin-left: 0; }
+@media (max-width: 1100px) {
+  .sc-headbar { width: 100%; justify-content: flex-end; }
+  .sc-count { margin-right: auto; }
+}
 </style>

@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import TaskView from './TaskView.vue'
 import RailResizeHandle from './RailResizeHandle.vue'
+import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import TaskViewSource from './TaskView.vue?raw'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import { dataApi, siteApi, sourceApi, type TaskInst } from '@/api'
@@ -179,6 +180,47 @@ describe('TaskView', () => {
     auth.roles = ['read']
     await flushPromises()
     expect(wrapper.find('[data-testid="task-resend"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  // 2026-11-10（钉钉反馈「看保存json还要返回源列表」）：任务行直接开「保存时 JSON」，
+  // 按该任务 ID 预填（完整列表不再只列 5 份）；源列表 ⋯ 的入口保留，供按源巡检。
+  it('任务中心任务行有「JSON」，按该任务打开保存时 JSON 抽屉；read 角色只读可见', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+      total: 1,
+      list: [{ taskId: '74111', state: 'C', typeName: '浏览器抓取', taskName: '公众号列表', sourceId: '391007768', updatedAt: '2026-10-22 18:30' }],
+    })
+
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    const btn = wrapper.get('[data-testid="task-json-btn"]')
+    expect(btn.text()).toBe('JSON')
+    await btn.trigger('click')
+    await flushPromises()
+
+    const drawer = wrapper.findComponent(JsonSnapshotDrawer)
+    expect(drawer.exists()).toBe(true)
+    expect(drawer.props('source')).toMatchObject({ sourceId: '391007768' })
+    expect(drawer.props('taskId')).toBe('74111')
+
+    drawer.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.findComponent(JsonSnapshotDrawer).exists()).toBe(false)
+
+    // 「JSON」是读操作，read 角色没有「重发」也照样能看
+    auth.roles = ['read']
+    await flushPromises()
+    expect(wrapper.find('[data-testid="task-resend"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="task-json-btn"]').exists()).toBe(true)
 
     wrapper.unmount()
   })

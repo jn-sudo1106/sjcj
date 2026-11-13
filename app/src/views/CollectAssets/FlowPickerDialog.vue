@@ -21,6 +21,8 @@ const props = defineProps<{
   siteFlowCounts: Record<string, number>
   /** 不是从源打开（如来源组流程配置）：不显示「本网站在用」筛选和列 */
   hideSiteUsage?: boolean
+  /** 本次目标范围提示（如「将为勾选的 12 个源绑定流程」），批量入口用来告诉用户选择结果会落到谁身上 */
+  scopeHint?: string
 }>()
 const emit = defineEmits<{ close: []; confirm: [flows: FlowRecord[]] }>()
 
@@ -123,6 +125,7 @@ void load()
     @close="emit('close')"
   >
     <p class="fp-hint">关联后流程由使用它的源共用，修改流程可能影响其他源。</p>
+    <p v-if="scopeHint" class="fp-hint fp-scope-hint" data-testid="flow-picker-scope-hint">{{ scopeHint }}</p>
     <div class="fp-toolbar">
       <input v-model="keyword" class="fp-input" placeholder="流程 ID / 名称" aria-label="搜索流程" data-testid="flow-picker-search" @keyup.enter="search" />
       <button class="rc-btn primary" type="button" data-testid="flow-picker-query" @click="search">查询</button>
@@ -176,7 +179,7 @@ void load()
     <template #right>
     <div class="fp-preview-wrap">
       <div v-if="previewFlow" class="fp-preview-actions">
-        <el-checkbox :model-value="picked.has(previewFlow.id)" :disabled="previewFlow.disabled" data-testid="flow-picker-preview-check" @change="toggle(previewFlow)">选择这个流程</el-checkbox>
+        <!-- 2026-11-10：选中统一走左列表行首勾选框；预览面板不再重复一个「选择这个流程」复选框 -->
         <a class="fp-link" :href="flowCenterHref(previewFlow.id)" target="_blank" rel="noopener">在流程中心查看 ↗</a>
       </div>
       <FlowReadonlyPreview class="fp-preview" :flow="previewFlow" />
@@ -196,6 +199,7 @@ void load()
 
 <style scoped>
 .fp-hint { margin:0 0 8px; color:var(--rc-text-2); font-size:12px; }
+.fp-scope-hint { color:var(--rc-primary); }
 .fp-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 /* 原来用的 --rc-line 项目里没有定义，边框整个丢了（10-31 截图里搜索框看不出是输入框）；改成与目录搜索框同一套边框 */
 .fp-input { box-sizing: border-box; height: 30px; width: 300px; max-width: 100%; padding: 0 10px; border: 1px solid #dbe3ee; border-radius: 7px; font-size: 13px; outline: none; }

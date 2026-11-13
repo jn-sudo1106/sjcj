@@ -545,6 +545,8 @@ export interface CodeRepositoryUploadResult {
 
 type Method = 'GET' | 'POST' | 'DELETE'
 
+export { request as requestRunnerManagement }
+
 async function checkBusinessSession(response: Response): Promise<void> {
   if (response.status !== 401) return
   // Runner 独立部署，认证目标可能与当前业务环境不同；仅业务身份接口确认失效才全局登出。

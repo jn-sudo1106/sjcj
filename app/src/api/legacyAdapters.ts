@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   Config,
   ConfigActionLog,
   ConfigParamBinding,
@@ -1360,32 +1360,62 @@ export function siteSourceFromLegacy(input: unknown): Source {
  * `reject_` 表示被该节点的进入条件拒绝（2026-08-18 测试环境实测确认，见方案 §12.1B）。
  * 无法解析出任何分组时（如全部 ID 无效："本次发送:0 条, 结果:"）entries 为空数组，
  * 调用方按 submitted 兜底展示。
+ *
+ * 1109-R01 补充（`skipCond=1` 强制跳过条件模式，InfoSourceController:2400-2423 核对源码）：
+ * 同一个接口在强制模式下换了一套文案——`共处理:N 条, 强制跳过条件发送:X 条, 因已执行跳过:Y 条`
+ * （没有"本次发送"），分组里还会出现 `skip_<itemConfig>`（因已执行跳过，幂等检查仍生效）。
+ * `condError_<itemConfig>` 来自 ItemConfigService:607 的条件表达式异常分支，普通模式和强制模式都可能出现。
+ * 这三种都不是 `ok`：不识别就会把"没发出去"显示成成功，所以统一解析。
  */
 export interface NextStepReceiptEntry {
-  status: 'ok' | 'reject'
+  status: 'ok' | 'reject' | 'skip' | 'condError'
   nodeId: string
   count: number
 }
 
 export interface NextStepReceipt {
+  /** 提交条数：普通回执是「本次发送:N 条」，强制跳过条件回执是「共处理:N 条」 */
   submitted: number
   entries: NextStepReceiptEntry[]
   okCount: number
   rejectCount: number
+  /** 因已执行跳过（`skip_` 分组；强制模式另有同值文案，取分组口径避免重复计数） */
+  skipCount: number
+  /** 条件表达式异常（`condError_` 分组）——既没发出去也不属于"被条件拒绝"，必须单独提示 */
+  condErrorCount: number
+  /** 强制跳过条件实际发送条数（「强制跳过条件发送:N 条」）；0 表示本次不是强制模式 */
+  forceSkipped: number
   raw: string
 }
 
 export function parseNextStepReceipt(message: string): NextStepReceipt {
-  const submittedMatch = message.match(/本次发送[:：]\s*(\d+)\s*条/)
+  // 1109-R01：强制模式没有「本次发送」，统计口径是「共处理」（InfoSourceController:2411-2412）
+  const submittedMatch = message.match(/(?:本次发送|共处理)[:：]\s*(\d+)\s*条/)
   const submitted = submittedMatch ? Number(submittedMatch[1]) : 0
+  const forceMatch = message.match(/强制跳过条件发送[:：]\s*(\d+)\s*条/)
+  const forceSkipped = forceMatch ? Number(forceMatch[1]) : 0
   const entries: NextStepReceiptEntry[] = []
-  const entryPattern = /(ok|reject)_([^:\s]+)\s*:\s*\[(\d+)\s*条\]/g
+  const entryPattern = /(ok|reject|skip|condError)_([^:\s]+)\s*:\s*\[(\d+)\s*条\]/g
   let match: RegExpExecArray | null
   while ((match = entryPattern.exec(message))) {
-    entries.push({ status: match[1] as 'ok' | 'reject', nodeId: match[2], count: Number(match[3]) })
+    entries.push({
+      status: match[1] as NextStepReceiptEntry['status'],
+      nodeId: match[2],
+      count: Number(match[3]),
+    })
   }
-  const sum = (status: 'ok' | 'reject') => entries.filter((e) => e.status === status).reduce((s, e) => s + e.count, 0)
-  return { submitted, entries, okCount: sum('ok'), rejectCount: sum('reject'), raw: message }
+  const sum = (status: NextStepReceiptEntry['status']) =>
+    entries.filter((e) => e.status === status).reduce((s, e) => s + e.count, 0)
+  return {
+    submitted,
+    entries,
+    okCount: sum('ok'),
+    rejectCount: sum('reject'),
+    skipCount: sum('skip'),
+    condErrorCount: sum('condError'),
+    forceSkipped,
+    raw: message,
+  }
 }
 
 /* ────────────── flow 流程（cs_flow，2026-09-02 接真实后端） ────────────── */

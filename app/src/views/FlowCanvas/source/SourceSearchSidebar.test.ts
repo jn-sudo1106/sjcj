@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { sourceApi, type Source } from '@/api'
+import { sourceApi, sourceGroupApi, type Source, type SourceGroup } from '@/api'
 import { useSourceSearchStore, type SourceSearchOrigin } from '@/stores/sourceSearch'
 import { blankSourceListViewState } from '../result/sourceListViewState'
 import SourceSearchSidebar from './SourceSearchSidebar.vue'
@@ -115,6 +115,91 @@ describe('搜索结果侧栏', () => {
 
     expect(del).toHaveBeenCalledWith(['1'])
     expect(router.currentRoute.value.query).toEqual({ tab: 'views', viewId: '8', sourceSearchReturn: id })
+    wrapper.unmount()
+  })
+
+  // 2026-11-09：用户在截图里指「左下角的源编辑没了」——恢复站点侧栏那块「源详情 + 编辑」
+  it('左下角显示当前源的「源详情」，可折叠，编辑按钮打开编辑弹窗', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    const { wrapper } = await setup()
+    // 当前打开的是 '1'，结果里只有 '2' → 没有源详情
+    expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(false)
+
+    await wrapper.setProps({ activeKey: '2' })
+    expect(wrapper.get('[data-testid="active-source-detail"]').text()).toContain('跨网站的公告')
+    expect(wrapper.get('[data-testid="active-source-full-id"]').text()).toBe('2')
+    await wrapper.get('[data-testid="edit-source"]').trigger('click')
+    expect(wrapper.getComponent({ name: 'EditSourceDialog' }).props('open')).toBe(true)
+
+    await wrapper.get('.sdp-header').trigger('click')
+    expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('当前源不在本次结果里时用父级 activeSource 兜底，编辑保存只抛给画布、不重取整表', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    const { wrapper } = await setup()
+    const outside = { sourceId: '9', name: '不在结果里的源', siteId: '10' } as Source
+    await wrapper.setProps({ activeKey: '9', activeSource: outside })
+    expect(wrapper.text()).toContain('当前源不在本页结果中')
+    expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe('不在结果里的源')
+    paged.mockClear()
+
+    const dialog = wrapper.getComponent({ name: 'EditSourceDialog' })
+    dialog.vm.$emit('saved', { ...outside, name: '改过的源' })
+    await flushPromises()
+
+    expect(wrapper.emitted('edited')?.at(-1)).toEqual([expect.objectContaining({ sourceId: '9', name: '改过的源' })])
+    // 就地改行即可，整表重取会重置列表滚动位置
+    expect(paged).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('结果内源搜索', () => {
+  const GROUPS = [
+    { sourceGroupId: '3', sourceGroupCode: 'G3', sourceGroupName: '财经来源组', state: 'ACTIVE', flowIds: [], revision: 1 },
+    { sourceGroupId: '7', sourceGroupCode: 'G7', sourceGroupName: '政务来源组', state: 'ACTIVE', flowIds: [], revision: 1 },
+  ] as SourceGroup[]
+  const wait = () => new Promise((resolve) => setTimeout(resolve, 350))
+
+  it('关键词叠加到本次条件上，原条件不变；来源组收窄后可清除回原结果', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(sourceGroupApi, 'list').mockResolvedValue(GROUPS)
+    const { wrapper, store, id } = await setup()
+    const input = wrapper.get('[data-testid="result-search-input"]')
+    expect(input.attributes('placeholder')).toBe('搜索源 / 来源组')
+    expect(wrapper.get('[data-testid="result-search-group"]').findAll('option').map((option) => option.text()))
+      .toEqual(['全部来源组', '财经来源组', '政务来源组'])
+
+    await input.setValue('巨潮'); await wait(); await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith({ name: '巨潮', count: 0, viewCategoryId: '10', field: 'SOURCE_ID', type: 'DESC', page: 1, size: 200 })
+    expect(wrapper.text()).toContain('关键词：巨潮')
+
+    await wrapper.get('[data-testid="result-search-group"]').setValue('3'); await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ name: '巨潮', sourceGroupId: '3' }))
+
+    await wrapper.get('[data-testid="result-search-clear"]').trigger('click'); await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith({ name: '公告', count: 0, viewCategoryId: '10', field: 'SOURCE_ID', type: 'DESC', page: 1, size: 200 })
+    // 只是侧栏内筛选，原查询条件不被改写：回到搜索列表看到的还是原来那次查询
+    expect(store.get(id)!.query).toEqual({ name: '公告', count: 0, viewCategoryId: '10', field: 'SOURCE_ID', type: 'DESC' })
+    wrapper.unmount()
+  })
+
+  it('纯数字按源 ID 精确查，并丢弃原 name 条件；不在本次 sourceIds 范围里时直接判无匹配', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(sourceGroupApi, 'list').mockResolvedValue(GROUPS)
+    const { wrapper } = await setup({ query: { name: '公告', sourceIds: '1,2', count: 0, field: 'SOURCE_ID', type: 'DESC' } })
+    const input = wrapper.get('[data-testid="result-search-input"]')
+
+    await input.setValue('2'); await wait(); await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith({ sourceIds: '2', count: 0, field: 'SOURCE_ID', type: 'DESC', page: 1, size: 200 })
+    expect(wrapper.text()).toContain('关键词：2')
+
+    paged.mockClear()
+    await input.setValue('999'); await wait(); await flushPromises()
+    expect(paged).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('本次结果里没有匹配的源')
     wrapper.unmount()
   })
 })

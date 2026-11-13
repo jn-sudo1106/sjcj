@@ -1864,6 +1864,30 @@ class Handler(BaseHTTPRequestHandler):
         file_read = (method == 'POST' and re.fullmatch(r'/code-servers/[0-9a-f-]+/files', sub)
                      and body.get('action') in ('list', 'read', 'export', 'download', 'logs'))
         admin_identity = app.authenticate_admin(self.headers, self.client_address[0], write=(method != "GET" and not file_read) or sub.startswith('/runner-file-requests/'))
+        if sub == '/monitor-batches' and method == 'POST':
+            from .monitor_batches import create
+            return create(app, body, self.headers, admin_identity)
+        if sub == '/monitor-batches' and method == 'GET':
+            from .monitor_batches import listing
+            return listing(app, admin_identity)
+        monitor_batch = re.fullmatch(r'/monitor-batches/([0-9a-f]{32})', sub)
+        if monitor_batch and method in ('GET', 'POST'):
+            from .monitor_batches import command, view
+            if method == 'POST':
+                return command(app, monitor_batch.group(1), body, self.headers, admin_identity)
+            try:
+                batch_page = int((query.get('page') or ['1'])[0])
+            except ValueError:
+                raise ApiError('分页参数无效')
+            if batch_page < 1:
+                raise ApiError('分页参数无效')
+            return view(app, monitor_batch.group(1), admin_identity, batch_page)
+        if sub == '/monitor-watch' and method == 'GET':
+            from .monitor_watch import status as monitor_watch_status
+            return monitor_watch_status(app)
+        if sub == '/monitor-watch/scan' and method == 'POST':
+            from .monitor_watch import run_scan as run_monitor_watch
+            return run_monitor_watch(app)
         runner_files = re.fullmatch(r'/runners/([0-9a-f-]{36})/files', sub)
         if runner_files and method == 'POST':
             from .runner_files import create
@@ -2410,6 +2434,10 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
         lan_thread = threading.Thread(target=lan_server.serve_forever, name='runner-lan-listener', daemon=True)
         lan_thread.start()
     stopped = threading.Event()
+    from .monitor_delivery import start as start_monitor_delivery
+    monitor_delivery_worker = start_monitor_delivery(application, stopped)
+    from .monitor_watch import start as start_monitor_watch
+    monitor_watch_worker = start_monitor_watch(application, stopped)
 
     def sweep() -> None:
         last_cleanup = 0

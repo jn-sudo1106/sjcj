@@ -575,7 +575,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'file/filePaged', desc: '已废弃：旧原始文件分页兼容 mock', impl: true },
   { path: 'file/fileStats', desc: '已废弃：新平台自造统计端点，无旧平台契约', impl: true },
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
-  { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
+  // 2026-11-09 接回（0828 差异清单里「保存时 Json」标了"无对应物"）：旧端点还在，这里 1:1 补上。
+  // 逻辑键 file/fileJsonPaged → 真实 GET /api/v1/fileJsonPaged（旧 OrifileController:252），
+  // 参数 page/limit/sourceId/taskId/state/title，返回 { code:0, count, data:[OrifileResource] }。
+  { path: 'file/fileJsonPaged', desc: '保存时 JSON 快照分页（映射 GET fileJsonPaged，旧 OrifileController）', impl: true, live: true },
+  { path: 'fileJsonPaged', desc: '真实地址：GET /api/v1/fileJsonPaged?page=&limit=&sourceId=&taskId=&state=（tb_orifile_resource）', impl: true, live: true },
   // 2026-09-10：规则脚本工作区「保存脚本」对接，POST /api/file/upload，
   // JSON body={"fileId":"<脚本路径>","body":"<脚本内容>"}。
   { path: 'file/upload', desc: '上传/保存脚本文件（POST /api/file/upload，JSON body=fileId + 内容）', danger: true, impl: true, live: true },

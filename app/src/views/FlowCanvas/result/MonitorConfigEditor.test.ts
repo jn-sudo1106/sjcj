@@ -1,362 +1,690 @@
 // @vitest-environment jsdom
-// 监控配置编辑器（0916/0917 是「监控配置」Tab 本体，2026-09-18 改版后搬进「新增/编辑配置」弹窗）。
+// 监控编辑弹窗（1111 规格 fe-editor 验收）。
 //
-// **本文件测的是这个编辑器**：按源拼种子、只列数据监控节点、以及它 provide 给编排 Tab 的那个
-// 编辑上下文（读写落在本地种子上）、还有两条保存通路的分工。
-// 编排 Tab 本身（监控方法/描述/模型/生成脚本/告警面板）的字段级行为在
-// inspector/tabs/RuleOrchestrationTab.test.ts 里测——这里把它换成读取上下文的桩，
-// 这样"编辑器给了 Tab 什么"是一眼可见的，不用连带 mock 一整套模型/提示词接口。
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h } from 'vue'
+// 与旧测试的差异（旧断言锁的缺陷，按本轮产品语义改写）：
+// 1. 旧编辑器「无源时也能编辑草稿节点、保存按钮只按告警 dirty 判断」→ 新语义必须先有源/名称/方法；
+// 2. 旧编辑器按 sourceId 整包写 ck_source（保存只返回影响行数）→ 新语义按记录身份 saveMonitor + 回读；
+// 3. 旧编辑器生成脚本后只标「脚本已生成，未保存」且仍走旧保存链路 → 新语义生成只更新页面候选，
+//    保存回执必须区分「已生效 vN」/「草稿未生效」/「描述改了但没重新生成」；
+// 4. 旧断言不覆盖「打开已有记录能看到生效脚本正文」（T01），这里补上。
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ElMessage } from 'element-plus'
-import MonitorConfigEditor from './MonitorConfigEditor.vue'
-import { useNodeEditorContext } from '@/views/FlowCanvas/inspector/nodeEditorContext'
-import type { MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { ckSourceApi, entryApi, sourceApi, type Source, type Step } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import type { EntryType } from '@/api/types/collect'
+import type { EntryTypeGroup } from '@/api/types/data'
+import type { SourceCheck } from '@/api/types/monitor'
+import type { MonitorCheckConf, MonitorRecordView } from '@/api/types/monitorCenter'
+import type { Source, Step } from '@/api/types/source'
 
-const SOURCE: Source = {
-  sourceId: '1400995', name: '沐言社媒', url: 'https://example.com', configId: 'cfg-1',
-  mainTable: 'sense_data.tb_my', owner: 'admin', state: 'C',
+const mocks = vi.hoisted(() => ({
+  saveMonitor: vi.fn(),
+  listMonitorsOfSource: vi.fn(),
+  checkOneManual: vi.fn(),
+  fetchModelProviders: vi.fn(),
+  fetchDefaultModels: vi.fn(),
+  resolveGenerationContext: vi.fn(),
+}))
+
+vi.mock('@/api/monitorCenter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/monitorCenter')>()
+  return {
+    ...actual,
+    saveMonitor: mocks.saveMonitor,
+    listMonitorsOfSource: mocks.listMonitorsOfSource,
+  }
+})
+
+vi.mock('@/api/monitor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/monitor')>()
+  return { ...actual, checkOneManual: mocks.checkOneManual }
+})
+
+vi.mock('@/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api')>()
+  return {
+    ...actual,
+    fetchModelProviders: mocks.fetchModelProviders,
+    fetchDefaultModels: mocks.fetchDefaultModels,
+  }
+})
+
+// 生成上下文解析依赖画布种子映射，属于 generation.ts 自己的单元；这里只验编辑器把上下文交给它
+vi.mock('./monitor-editor/generation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./monitor-editor/generation')>()
+  return { ...actual, resolveMonitorGenerationContext: mocks.resolveGenerationContext }
+})
+
+import MonitorConfigEditor from './MonitorConfigEditor.vue'
+import { dataApi, entryApi, ruleApi, sourceApi } from '@/api'
+
+const SOURCE = {
+  sourceId: '1400995',
+  name: '沐言社媒',
+  url: 'https://example.com',
+  configId: 'cfg-1',
+  mainTable: 'sense_data.tb_my',
+  owner: 'admin',
+  state: 'C',
+} as unknown as Source
+
+const TABLE: EntryType = {
+  tableId: 't1',
+  tableName: 'sense_data.TB_RAW',
+  name: '原始数据',
+  fields: [
+    { prop: 'title', desc: '标题', type: 'string', required: false },
+    { prop: 'publish_time', desc: '发布时间', type: 'date', required: false },
+  ],
 }
 
-/** 一个采集步骤 + 一个数据监控步骤：只有后者该出现在节点下拉里。 */
-function steps(sourceId = SOURCE.sourceId): Step[] {
+const GROUP: EntryTypeGroup = { main: TABLE.tableId, list1: [TABLE], list2: [], list3: [] }
+
+const GENERATION_CONTEXT = {
+  configId: 701,
+  sourceTable: 'sense_data.TB_RAW',
+  targetTable: 'sense_data.TB_RAW',
+  inputFields: [],
+  outputFields: [],
+  inputFieldOptions: [
+    { itemCode: 'title', itemName: '标题' },
+    { itemCode: 'publish_time', itemName: '发布时间' },
+  ],
+  outputFieldOptions: [],
+}
+
+function steps(): Step[] {
   return [
-    { stepId: 'st1', sourceId, name: '抓取列表页', outputTable: 'TB_RAW', enabled: true },
-    { stepId: 'st2', sourceId, name: '数据监控', nodeType: 'monitor', inputTable: 'TB_RAW', outputTable: 'TB_RAW', enabled: true },
+    { stepId: 'st1', sourceId: SOURCE.sourceId, name: '抓取列表页', outputTable: 'sense_data.TB_RAW', enabled: true },
+    { stepId: 'st2', sourceId: SOURCE.sourceId, name: '数据监控', nodeType: 'monitor', inputTable: 'sense_data.TB_RAW', enabled: true },
   ]
 }
 
-const DEFAULT_SNAPSHOT: MonitorAlertConfig = {
-  enabled: true,
-  policies: [{
-    name: '数据延迟超过阈值', metric: 'delay_minutes', operator: 'gt', threshold: '30',
-    consecutiveCount: 3, repeatMinutes: 30, recoveryNotify: true, enabled: true, channelTypes: ['email'],
-  }],
-  channels: [{ type: 'email', enabled: true, target: 'ops@example.com' }],
-}
-const EDITED_SNAPSHOT: MonitorAlertConfig = {
-  ...DEFAULT_SNAPSHOT,
-  policies: [{ ...DEFAULT_SNAPSHOT.policies[0], threshold: '120' }],
+function sourceRaw(id: string, jobId: string): SourceCheck {
+  return {
+    id,
+    isDelete: 0,
+    state: 'E',
+    lastMsg: '',
+    name: id,
+    tableName: 'sense_data.TB_RAW',
+    schedule: DEFAULT_SCHEDULE_TEXT,
+    sourceId: SOURCE.sourceId,
+    checkConf: '{}',
+    jobId,
+  } as unknown as SourceCheck
 }
 
-/** 编排 Tab 桩：只做一件事——把注入到的编辑上下文暴露出来按需驱动。 */
-const RuleOrchestrationTabStub = defineComponent({
-  name: 'RuleOrchestrationTab',
-  setup() {
-    const ctx = useNodeEditorContext()
-    return { ctx }
-  },
-  render() {
-    return h('div', { 'data-testid': 'orch-tab' }, [
-      h('span', { 'data-testid': 'orch-node' }, this.ctx.id.value),
-      h('button', { 'data-testid': 'orch-patch', onClick: () => this.ctx.patch({ describe: '拍了拍描述' }) }),
-      h('button', { 'data-testid': 'orch-methods', onClick: () => this.ctx.setMonitorMethods(['当日数据是否正常入库']) }),
-      h('button', { 'data-testid': 'orch-alert', onClick: () => this.ctx.setMonitorAlertConfig(DEFAULT_SNAPSHOT) }),
-      h('button', { 'data-testid': 'orch-generated', onClick: () => { this.ctx.patch({ script: 'def main(): pass', scriptPath: '/code01/m.py' }); this.ctx.onScriptGenerated?.() } }),
-    ])
-  },
+function aiRecord(overrides: Partial<MonitorRecordView> = {}): MonitorRecordView {
+  const conf: MonitorCheckConf = {
+    kind: 'ai',
+    methods: ['today_landed'],
+    desc: '检查今日是否有数据落地',
+    version: 'v3',
+    script: 'print("检查今日落地")',
+    scriptPath: '/code/monitor_20261110.py',
+    notifyOn: 'error',
+    channels: ['mail'],
+    nullPolicy: 'abnormal',
+    noDataPolicy: 'no_data',
+  }
+  return {
+    id: 'mon-1001',
+    sourceId: SOURCE.sourceId,
+    sourceName: SOURCE.name,
+    name: '沐言社媒-日增量',
+    tableName: 'sense_data.TB_RAW',
+    kind: 'ai',
+    enabled: true,
+    schedule: '0 0 6-22 * * ?',
+    publishStatus: 'ready',
+    effectiveVersion: 'v3',
+    exec: 'succeeded',
+    data: 'normal',
+    notify: 'unknown',
+    count: '',
+    conf,
+    raw: sourceRaw('mon-1001', 'job-9'),
+    ...overrides,
+  }
+}
+
+function ruleRecord(overrides: Partial<MonitorRecordView> = {}): MonitorRecordView {
+  const conf: MonitorCheckConf = {
+    kind: 'rule',
+    timeType: 'C',
+    minSize: 1,
+    maxSize: 100,
+    notifyOn: 'error',
+    notifyType: 'mail',
+    version: 'v2',
+  }
+  return {
+    id: 'mon-2001',
+    sourceId: SOURCE.sourceId,
+    sourceName: SOURCE.name,
+    name: '沐言社媒-规则检查',
+    tableName: 'sense_data.TB_RAW',
+    kind: 'rule',
+    enabled: true,
+    schedule: DEFAULT_SCHEDULE_TEXT,
+    publishStatus: 'ready',
+    effectiveVersion: 'v2',
+    exec: 'none',
+    data: 'unknown',
+    notify: 'none',
+    count: '',
+    conf,
+    raw: sourceRaw('mon-2001', 'job-3'),
+    ...overrides,
+  }
+}
+
+const DEFAULT_SCHEDULE_TEXT = '0 0 6-22 * * ?'
+
+function mountEditor(props: Record<string, unknown> = {}) {
+  return mount(MonitorConfigEditor, {
+    props: { siteId: '', sourceId: '', record: null, sourceLocked: false, ...props },
+    global: {
+      stubs: {
+        SiteSourceSelect: { template: '<div data-testid="mc-site-source-select" />' },
+      },
+    },
+  })
+}
+
+async function settle(): Promise<void> {
+  await flushPromises()
+  await flushPromises()
+  await flushPromises()
+}
+
+beforeEach(() => {
+  vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+  vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
+  vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(GROUP)
+  vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(TABLE)
+  vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({ script: 'print("新脚本")', scriptPath: '/code/new.py' })
+  vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, message: '检查通过' })
+  vi.spyOn(ElMessage, 'success')
+  vi.spyOn(ElMessage, 'warning')
+  vi.spyOn(ElMessage, 'error')
+  vi.spyOn(ElMessage, 'info')
+
+  mocks.saveMonitor.mockResolvedValue({ created: false, raw: {} })
+  mocks.listMonitorsOfSource.mockResolvedValue([])
+  mocks.checkOneManual.mockResolvedValue({ success: true, message: '规则校验通过' })
+  mocks.fetchModelProviders.mockResolvedValue([{ providerCode: 'deepseek', providerName: 'DeepSeek' }])
+  mocks.fetchDefaultModels.mockResolvedValue([{ modelCode: 'deepseek-chat', modelName: 'deepseek-chat' }])
+  mocks.resolveGenerationContext.mockResolvedValue(GENERATION_CONTEXT)
 })
 
-const stubs = {
-  SiteSourceSelect: { name: 'SiteSourceSelect', props: ['modelValue'], template: '<div />', emits: ['update:modelValue'] },
-  RuleOrchestrationTab: RuleOrchestrationTabStub,
-}
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.clearAllMocks()
+})
 
-function mountEditor(sourceId = '') {
-  return mount(MonitorConfigEditor, {
-    props: { siteId: 'site-4', sourceId },
-    global: { stubs },
-  })
-}
-
-/** 选择源＝子组件 emit；编辑器把选择留在自己的本地状态里（弹窗内的源与监控结果无关） */
-async function pickSource(wrapper: ReturnType<typeof mountEditor>, sourceId = SOURCE.sourceId) {
-  await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', sourceId)
-  await flushPromises()
-}
-
-/** 点桩上的按钮＝走一遍注入上下文的写回通路 */
-async function driveContext(wrapper: ReturnType<typeof mountEditor>, testid: string) {
-  await wrapper.get(`[data-testid="${testid}"]`).trigger('click')
-  await flushPromises()
-}
-
-afterEach(() => vi.restoreAllMocks())
-
-describe('MonitorConfigEditor', () => {
-  it('网站里没有源可挑时也给全套控件（草稿节点），不去拉源详情', async () => {
-    const detail = vi.spyOn(sourceApi, 'sourceDetail')
+describe('MonitorConfigEditor 四区结构与默认值', () => {
+  it('四区 Tab + 底部只有一个取消/保存，内容区是主滚动容器', async () => {
     const wrapper = mountEditor()
-    await flushPromises()
+    await settle()
 
-    expect(wrapper.find('[data-testid="orch-tab"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="site-monitor-draft-note"]').text()).toContain('选个源')
-    // 没有源就没有落库目标，保存按钮只做展示
-    expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
-    expect(detail).not.toHaveBeenCalled()
+    const tabs = wrapper.findAll('[role="tab"]')
+    expect(tabs.map((tab) => tab.text())).toEqual(['基本信息', '检查方式', '执行计划', '通知'])
+    expect(wrapper.find('[data-testid="mc-content"]').exists()).toBe(true)
+    const footerButtons = wrapper.findAll('footer button')
+    expect(footerButtons).toHaveLength(2)
+    expect(footerButtons[0].text()).toBe('取消')
+    expect(footerButtons[1].text()).toBe('保存为草稿')
+    expect(wrapper.find('[data-testid="mc-save"]').attributes('data-testid')).toBe('mc-save')
   })
 
-  it('进来默认停在「全部源」，照样给全套控件（草稿节点），不自动预置某个源', async () => {
-    const plain: Source = { ...SOURCE, sourceId: '111', name: '纯采集源' }
-    const monitorSource: Source = { ...SOURCE, sourceId: '222', name: '有监控的源' }
-    const detail = vi.spyOn(sourceApi, 'sourceDetail').mockImplementation(async (id: string) => (id === '222' ? monitorSource : plain))
-    vi.spyOn(sourceApi, 'sourceSteps').mockImplementation(async (id: string) => (id === '222'
-      ? steps(id)
-      : [{ stepId: 's1', sourceId: id, name: '抓取列表页', outputTable: 'TB_RAW', enabled: true }]))
-    const wrapper = mountEditor()
-    await flushPromises()
-    await flushPromises()
+  it('新建默认 AI 检查，监控方法按 8 类分组多选', async () => {
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
 
-    // 下拉框保持"全部源"：不替用户选源，也不去读任何源的详情
-    expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).props('modelValue')).toBe('')
-    expect(detail).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="orch-tab"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="site-monitor-draft-note"]').text()).toContain('选个源')
-    // 没选源就没有落库目标，保存按钮只做展示
-    expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="mc-kind-ai"]').classes()).toContain('active')
+    expect(wrapper.findAll('[data-testid^="mc-method-group-"]')).toHaveLength(8)
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    expect(wrapper.find('[data-testid="mc-method-count"]').text()).toContain('已选 1 项')
+    expect(wrapper.find('[data-testid="mc-method-chips"]').text()).toContain('当日正常入库')
   })
 
-  it('源上有数据监控节点时用真实节点，不显示草稿提示', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
+  it('默认描述只在空白表单时填入；用户改过后切换方法不覆盖', async () => {
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
 
-    const options = wrapper.findAll('select[aria-label="数据监控节点"] option')
-    expect(options.map((o) => o.text())).toEqual(['数据监控'])
-    // 编辑上下文（编排 Tab 拿到的那个）指向真实节点——Tab 里所有读写都由它决定落点
-    expect(wrapper.find('[data-testid="orch-tab"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="orch-node"]').text()).toBe('st2')
-    expect(wrapper.find('[data-testid="site-monitor-draft-note"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await settle()
+    const firstDesc = (wrapper.find('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement).value
+    expect(firstDesc).toContain('检查')
+
+    await wrapper.find('[data-testid="mc-desc-input"]').setValue('用户写的业务描述')
+    await wrapper.find('[data-testid="mc-method-daily_count"]').setValue(true)
+    await settle()
+    const desc = (wrapper.find('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement).value
+    expect(desc).toBe('用户写的业务描述')
   })
 
-  it('源上没有数据监控节点也用草稿节点把控件铺出来（没有节点也能配监控）', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
-      { stepId: 'st1', sourceId: SOURCE.sourceId, name: '抓取列表页', outputTable: 'TB_RAW', enabled: true },
-    ])
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
+  it('关联表为空表单自动带出唯一表，不误报未保存', async () => {
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    const select = wrapper.find('[data-testid="mc-table-select"]').element as HTMLSelectElement
+    expect(select.value).toBe('sense_data.TB_RAW')
+    expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(false)
+  })
+})
 
-    expect(wrapper.find('[data-testid="orch-tab"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="orch-node"]').text()).toBe('__draft_monitor__')
-    expect(wrapper.get('[data-testid="site-monitor-draft-note"]').text()).toContain('还没有数据监控节点')
-    expect(wrapper.findAll('select[aria-label="数据监控节点"] option').map((o) => o.text())).toEqual(['数据监控'])
+describe('MonitorConfigEditor 校验反馈', () => {
+  it('未选源 / 未填名称 / 未选方法分别给出明确提示', async () => {
+    const noSource = mountEditor()
+    await settle()
+    await noSource.find('[data-testid="mc-save"]').trigger('click')
+    expect(ElMessage.warning).toHaveBeenCalledWith('请先选择被监控源')
+    noSource.unmount()
+
+    const withSource = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await withSource.find('[data-testid="mc-save"]').trigger('click')
+    expect(ElMessage.warning).toHaveBeenCalledWith('请填写监控名称')
+
+    await withSource.find('[data-testid="mc-name-input"]').setValue('新监控')
+    await withSource.find('[data-testid="mc-save"]').trigger('click')
+    expect(ElMessage.warning).toHaveBeenCalledWith('AI 检查至少选择一个监控方法')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+  })
+})
+
+describe('MonitorConfigEditor 已有记录与脚本正文', () => {
+  it('已有 AI 记录打开时显示生效脚本正文，不出现「还没有脚本」，测试可用', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('检查今日落地')
+    expect(wrapper.find('[data-testid="mc-script-version"]').text()).toContain('生效中的脚本 v3')
+    expect(wrapper.text()).not.toContain('还没有脚本')
+    expect(wrapper.find('[data-testid="mc-test"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('草稿态保存只合入告警字段，不拿草稿默认值覆盖线上真实的监控方法与脚本', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
-      { stepId: 'st1', sourceId: SOURCE.sourceId, name: '抓取列表页', outputTable: 'TB_RAW', enabled: true },
-    ])
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{
-      id: 3,
-      sourceId: 1400995,
-      checkConf: JSON.stringify({
-        monitorMethods: ['当日数据是否正常入库'],
-        orchestration: { inputTable: 'TB_RAW', scriptPath: '/code01/real.py' },
-        minSize: '1',
-      }),
-    }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
-
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
-    await driveContext(wrapper, 'orch-methods')
-    await driveContext(wrapper, 'orch-alert')
-    const ctx = wrapper.findComponent(RuleOrchestrationTabStub).vm.ctx
-    ctx.setMonitorAlertConfig(EDITED_SNAPSHOT)
-    await flushPromises()
-
-    await wrapper.get('[data-testid="site-monitor-config-save"]').trigger('click')
-    await flushPromises()
-
-    expect(update).toHaveBeenCalledTimes(1)
-    const conf = JSON.parse(update.mock.calls[0][0].checkConf ?? '{}')
-    expect(conf.minSize).toBe('120')
-    // 线上原有的监控方法与脚本路径原样保留——草稿里的默认值不能盖上去
-    expect(conf.monitorMethods).toEqual(['当日数据是否正常入库'])
-    expect(conf.orchestration.scriptPath).toBe('/code01/real.py')
-  })
-
-  it('监控配置编辑器不出现「上传 Excel」入口，生成脚本 / 测试脚本照旧（0917 产品口径）', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    // 真实 Tab 挂载时会自己去拉模型/提示词（画布上也是它自己拉），这里把 fetch 兜住，
-    // 免得 jsdom 里发不出请求留下一串 unhandled rejection
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ data: [] }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }))
-    // 这条要挂**真实**的编排 Tab（其余用例都把它换成桩），才能验到按钮真的不在界面上
-    const wrapper = mount(MonitorConfigEditor, {
-      props: { siteId: 'site-4', sourceId: SOURCE.sourceId },
-      global: {
-        stubs: {
-          SiteSourceSelect: { name: 'SiteSourceSelect', props: ['modelValue'], template: '<div />', emits: ['update:modelValue'] },
-        },
-      },
+  it('没有脚本的 AI 记录：不显示脚本正文，测试按钮禁用', async () => {
+    const record = aiRecord({
+      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', notifyOn: 'error', version: 'v1' },
+      effectiveVersion: 'v1',
+      publishStatus: 'draft',
     })
-    await flushPromises()
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
 
-    expect(wrapper.find('[data-testid="main-upload-excel"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="main-excel-file-input"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="main-generate-script"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="main-test-script"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mc-script-body"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mc-script-empty"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('还没有脚本')
+    expect(wrapper.find('[data-testid="mc-test"]').attributes('disabled')).toBeDefined()
   })
 
-  it('源加载失败时给出错误与重试', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(null)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
+  it('只有脚本路径（旧记录不回读正文）时展示路径，不显示「还没有脚本」', async () => {
+    const record = aiRecord({ conf: { kind: 'ai', methods: ['today_landed'], desc: '检查', scriptPath: '/code/monitor_v3.py', version: 'v3' } })
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
 
-    expect(wrapper.text()).toContain('源不存在或加载失败')
-    expect(wrapper.get('.smc-empty button.rc-btn').text()).toContain('重试')
+    expect(wrapper.find('[data-testid="mc-script-path"]').text()).toContain('/code/monitor_v3.py')
+    expect(wrapper.text()).not.toContain('还没有脚本')
+  })
+})
+
+describe('MonitorConfigEditor 生成脚本', () => {
+  it('换源或清空源后清掉原源候选脚本与测试回显', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.get('[data-testid="mc-method-dir-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="mc-method-today_landed"]').setValue(true)
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="mc-script-pending"]').exists()).toBe(true)
+    wrapper.findComponent({ name: 'SourcePickerRemote' }).vm.$emit('update:modelValue', '', '')
+    await settle()
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="mc-script-pending"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mc-script-body"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
-  it('面板一挂载就交给我们的默认策略不算改动，保存按钮保持禁用', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    const update = vi.spyOn(ckSourceApi, 'update')
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
+  it('生成只更新页面候选，不自动保存，并标「新生成，尚未保存」', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
 
-    await driveContext(wrapper, 'orch-alert')
-    await flushPromises()
-
-    const save = wrapper.get('[data-testid="site-monitor-config-save"]')
-    expect(save.attributes('disabled')).toBeDefined()
-    await save.trigger('click')
-    expect(update).not.toHaveBeenCalled()
+    expect(mocks.resolveGenerationContext).toHaveBeenCalledWith(SOURCE.sourceId, {
+      tableName: expect.any(String),
+      tableId: expect.any(String),
+    })
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalledTimes(1)
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="mc-script-pending"]').text()).toContain('新生成，尚未保存')
+    expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('新脚本')
+    expect(ElMessage.success).toHaveBeenCalledWith('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
   })
 
-  it('只动告警：保存只把告警相关的键合进 checkConf，保留监控方法与编排', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{
-      id: 3,
-      sourceId: 1400995,
-      checkConf: JSON.stringify({
-        monitorMethods: ['当日数据是否正常入库'],
-        orchestration: { inputTable: 'TB_RAW', scriptPath: '/code01/real.py' },
-        minSize: '1',
-        cond: 'old cond',
-      }),
-    }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+  it('源没有流程时按主表生成独立监控（configId=0）并提示未关联画布节点', async () => {
+    mocks.resolveGenerationContext.mockResolvedValueOnce({
+      ...GENERATION_CONTEXT,
+      contextMode: 'table',
+      configId: 0,
+      sourceTable: 'sense_data.TB_RAW',
+    })
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
 
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
-    await driveContext(wrapper, 'orch-alert')
-    // 第一次是挂载快照，第二次才是用户改动
-    const ctx = wrapper.findComponent(RuleOrchestrationTabStub).vm.ctx
-    ctx.setMonitorAlertConfig(EDITED_SNAPSHOT)
-    await flushPromises()
-
-    const save = wrapper.get('[data-testid="site-monitor-config-save"]')
-    expect(save.attributes('disabled')).toBeUndefined()
-    await save.trigger('click')
-    await flushPromises()
-
-    expect(update).toHaveBeenCalledTimes(1)
-    const payload = update.mock.calls[0][0]
-    expect(payload.sourceId).toBe(1400995)
-    const conf = JSON.parse(payload.checkConf ?? '{}')
-    expect(conf.minSize).toBe('120')
-    expect(conf.monitorMethods).toEqual(['当日数据是否正常入库'])
-    expect(conf.orchestration.scriptPath).toBe('/code01/real.py')
-    // 存过之后又回到干净态，避免同一次改动重复写
-    expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
+    // 表单把「主表物理名 + 表 ID」交给上下文解析，源无流程时由它退回 table 模式
+    expect(mocks.resolveGenerationContext).toHaveBeenCalledWith(SOURCE.sourceId, {
+      tableName: 'sense_data.TB_RAW',
+      tableId: 't1',
+    })
+    // 生成请求带 configId=0（不借别源/别节点的 configId）
+    const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0][0] as { configId: number }
+    expect(payload.configId).toBe(0)
+    const note = wrapper.get('[data-testid="mc-generate-note"]')
+    expect(note.text()).toContain('还没有绑定流程')
+    expect(note.text()).toContain('不关联画布节点')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
-  it('动过编排字段（监控方法/描述）：整包写 ck_source，监控方法跟着走', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    // 步骤里只有输入表 ID，整包保存时要按 ID 回查一次物理表名（syncMonitorCkSource 里的老口径）
-    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 'TB_RAW', tableName: 'sense_data.TB_RAW', fields: [] } as never)
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+  it('系统提示词被清空时用默认提示词兜底，不发空串（后端会报 text cannot be null or empty）', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-system-prompt"]').setValue('')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
 
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
-    await driveContext(wrapper, 'orch-methods')
-    await driveContext(wrapper, 'orch-patch')
-
-    await wrapper.get('[data-testid="site-monitor-config-save"]').trigger('click')
-    await flushPromises()
-
-    expect(update).toHaveBeenCalledTimes(1)
-    const payload = update.mock.calls[0][0]
-    expect(payload.tableName).toBe('sense_data.TB_RAW')
-    const conf = JSON.parse(payload.checkConf ?? '{}')
-    expect(conf.monitorMethods).toEqual(['当日数据是否正常入库'])
-    expect(conf.orchestration.describe).toBe('拍了拍描述')
-    // 告警面板没动过：不把面板里那份演示默认策略写上线，告警键仍留给 ck_source 原值
-    expect(conf.minSize).toBeUndefined()
+    const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0][0] as { systemPrompt: string }
+    expect(payload.systemPrompt.trim().length).toBeGreaterThan(0)
+    expect(payload.systemPrompt).toContain('只读')
   })
 
-  it('换源时清掉上一个源的改动，不会把它的修改写进新源', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+  it('生成失败保留原正文（生效脚本不被清空）', async () => {
+    vi.mocked(mocks.resolveGenerationContext).mockRejectedValueOnce(new Error('当前节点缺少可执行上下文'))
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
 
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
-    await driveContext(wrapper, 'orch-alert')
-    const ctx = wrapper.findComponent(RuleOrchestrationTabStub).vm.ctx
-    ctx.setMonitorAlertConfig(EDITED_SNAPSHOT)
-    await flushPromises()
-    await pickSource(wrapper, 'other-source')
-    await flushPromises()
+    expect(wrapper.find('[data-testid="mc-generate-error"]').text()).toContain('缺少可执行上下文')
+    expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('检查今日落地')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+  })
+})
 
-    expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-testid="site-monitor-config-save"]').trigger('click')
-    expect(update).not.toHaveBeenCalled()
+describe('MonitorConfigEditor 测试脚本', () => {
+  it('测试生效脚本：标「测试，未通知」、注明测的是哪个脚本，不写记录', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-test"]').trigger('click')
+    await settle()
+
+    expect(ruleApi.executeCode).toHaveBeenCalledWith({ codePath: '/code/monitor_20261110.py', timeout: 60 })
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    expect(result).toContain('测试，未通知')
+    expect(result).toContain('生效 v3 的脚本')
+    expect(result).toContain('未发送业务通知')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    expect(mocks.listMonitorsOfSource).not.toHaveBeenCalled()
   })
 
-  it('保存成功往外抛 saved，父级（列表页）据此刷新列表', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
-    vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
-    // 整包保存会按输入表 ID 回查物理表名；不 mock 的话走 mock 适配器的 120ms 延时，
-    // flushPromises 推不完定时器，保存链路会一直悬着
-    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 'TB_RAW', tableName: 'sense_data.TB_RAW', fields: [] } as never)
-    // 裸挂载（没装 Element Plus）下 ElMessage 会往 body 挂自己的实例，jsdom 里容易炸；
-    // 这里只看 saved 这条接线，把提示收掉。
-    vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
-    vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => {} }) as never)
+  it('测试新生成但未保存的脚本时，注明测的是候选', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-testid="mc-test"]').trigger('click')
+    await settle()
 
-    const wrapper = mountEditor()
-    await pickSource(wrapper)
-    await driveContext(wrapper, 'orch-methods')
+    expect(ruleApi.executeCode).toHaveBeenCalledWith({ codePath: '/code/new.py', timeout: 60 })
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    expect(result).toContain('新生成、尚未保存的脚本')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+  })
+})
 
-    await wrapper.get('[data-testid="site-monitor-config-save"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.emitted('saved')).toHaveLength(1)
+describe('MonitorConfigEditor 保存', () => {
+  it('模型选择随定义保存，重新打开优先使用本次选择而非旧编排模型', async () => {
+    const record = aiRecord({ conf: { ...aiRecord().conf, modelProviderCode: 'new-provider', modelCode: 'new-model', orchestration: { modelProviderCode: 'old-provider', modelCode: 'old-model' } } })
+    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+    expect(mocks.saveMonitor.mock.calls[0][0].conf).toMatchObject({ modelProviderCode: 'new-provider', modelCode: 'new-model' })
   })
 
-  it('生成脚本成功后自动保存，不用再手点「保存配置」（1105 会议）', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 3, sourceId: 1400995, checkConf: '{}' }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
-    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: 'TB_RAW', tableName: 'sense_data.TB_RAW', fields: [] } as never)
-    const success = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: () => {} }) as never)
+  it('清空执行计划会显式提交空串，不能回退旧计划', async () => {
+    const record = aiRecord()
+    mocks.listMonitorsOfSource.mockResolvedValue([record])
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.get('[data-testid="mc-tab-plan"]').trigger('click')
+    await wrapper.get('[data-testid="mc-schedule-clear"]').trigger('click')
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+    expect(mocks.saveMonitor.mock.calls[0][0].schedule).toBe('')
+  })
 
+  it('只有新脚本路径时仍保存候选路径，清掉旧正文并推进版本', async () => {
+    vi.mocked(ruleApi.dataProcessGenerate).mockResolvedValue({ script: '', scriptPath: '/code/path-only.py' })
+    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord()])
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    await settle()
+    expect(mocks.saveMonitor.mock.calls[0][0].conf).toMatchObject({ script: '', scriptPath: '/code/path-only.py', version: 'v4' })
+  })
+
+  it('生成尚未结束时不允许保存旧候选', async () => {
+    let complete!: (value: { script: string; scriptPath: string }) => void
+    vi.mocked(ruleApi.dataProcessGenerate).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mc-save"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('fieldset').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    complete({ script: 'print(1)', scriptPath: '/code/new.py' })
+    await settle()
+    expect(wrapper.get('[data-testid="mc-save"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('源上下文加载期间的手动编辑仍保持 dirty，旧源迟到响应不能覆盖新源', async () => {
+    let oldDetail!: (value: Source) => void
+    vi.mocked(sourceApi.sourceDetail).mockImplementationOnce(() => new Promise((resolve) => { oldDetail = resolve }))
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await wrapper.get('[data-testid="mc-name-input"]').setValue('用户输入')
+    await wrapper.setProps({ sourceId: 'new-source' })
+    await settle()
+    oldDetail({ ...SOURCE, name: '旧源迟到响应' })
+    await settle()
+    expect(wrapper.text()).not.toContain('旧源迟到响应')
+    expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('已生成 → 按记录身份 saveMonitor，回执「已保存并生效 v4」，并以回读为新基线', async () => {
+    const readback = aiRecord({
+      effectiveVersion: 'v4',
+      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日是否有数据落地', version: 'v4', script: 'print("新脚本")', scriptPath: '/code/new.py' },
+    })
+    mocks.listMonitorsOfSource.mockResolvedValue([readback])
+
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    const saved = mocks.saveMonitor.mock.calls[0][0] as { record: MonitorRecordView; conf: MonitorCheckConf; sourceId: string }
+    // 记录身份必须整体透传，isDelete/state/jobId 由 saveMonitor 从 record.raw 保留
+    expect(saved.record.id).toBe('mon-1001')
+    expect(saved.record.raw).toMatchObject({ isDelete: 0, state: 'E', jobId: 'job-9' })
+    expect(saved.sourceId).toBe(SOURCE.sourceId)
+    expect(saved.conf.script).toBe('print("新脚本")')
+    expect(saved.conf.version).toBe('v4')
+    expect(String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])).toContain('已保存并生效 v4')
+    expect(wrapper.find('[data-testid="mc-script-pending"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mc-script-version"]').text()).toContain('v4')
+  })
+
+  it('AI 未生成过脚本 → 回执「已保存草稿，未生效，不执行」', async () => {
+    const draft = aiRecord({
+      id: 'mon-3001',
+      name: '新监控',
+      effectiveVersion: undefined,
+      publishStatus: 'draft',
+      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: 'v1' },
+    })
+    mocks.saveMonitor.mockResolvedValue({ created: true, raw: {} })
+    mocks.listMonitorsOfSource.mockResolvedValueOnce([]).mockResolvedValueOnce([draft])
+
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-name-input"]').setValue('新监控')
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await settle()
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    const message = String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])
+    expect(message).toContain('已保存草稿')
+    expect(message).toContain('未生效')
+    expect(message).toContain('不执行')
+  })
+
+  it('描述改过但没重新生成 → 回执说明检查逻辑仍是 v3，需重新生成', async () => {
+    mocks.listMonitorsOfSource.mockResolvedValue([aiRecord()])
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-desc-input"]').setValue('改过的描述：检查数量与时效')
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    const message = String(vi.mocked(ElMessage.success).mock.calls.at(-1)?.[0])
+    expect(message).toContain('检查逻辑仍是 v3')
+    expect(message).toContain('需重新生成脚本')
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+  })
+
+  it('保存后回读不到记录 → 提示「已提交，未回读到记录」，不猜 ID', async () => {
+    mocks.listMonitorsOfSource.mockResolvedValue([])
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+
+    expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('已提交，未回读到记录'))
+    expect(wrapper.emitted('saved')?.[0]).toEqual([null])
+  })
+})
+
+describe('MonitorConfigEditor 源与检查方式', () => {
+  it('编辑已有记录锁源：不渲染选源控件，显示只读「当前源：名称（ID）」', async () => {
+    const wrapper = mountEditor({ record: aiRecord(), sourceLocked: true })
+    await settle()
+
+    expect(wrapper.find('[data-testid="mc-site-source-select"]').exists()).toBe(false)
+    const locked = wrapper.find('[data-testid="mc-source-locked"]')
+    expect(locked.exists()).toBe(true)
+    expect(locked.text()).toContain('沐言社媒')
+    expect(locked.text()).toContain(SOURCE.sourceId)
+  })
+
+  it('sourceLocked=true 的新建也不渲染选源控件，但仍校验源必填', async () => {
+    const wrapper = mountEditor({ sourceLocked: true })
+    await settle()
+
+    expect(wrapper.find('[data-testid="mc-site-source-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mc-source-locked"]').text()).toContain('未指定')
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    expect(ElMessage.warning).toHaveBeenCalledWith('请先选择被监控源')
+  })
+
+  it('全局上下文（无 siteId、未锁源）使用可搜索的远程源下拉', async () => {
     const wrapper = mountEditor()
-    await pickSource(wrapper)
-    await driveContext(wrapper, 'orch-generated')
+    await settle()
+    expect(wrapper.find('[data-testid="mc-source-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mc-site-source-select"]').exists()).toBe(false)
+  })
 
-    expect(update).toHaveBeenCalledTimes(1)
-    expect(update.mock.calls[0][0].checkConf).toContain('/code01/m.py')
-    expect(success).toHaveBeenCalledWith('脚本已生成，监控配置已自动保存')
-    expect(wrapper.emitted('saved')).toHaveLength(1)
-    expect(wrapper.get('[data-testid="site-monitor-config-save"]').attributes('disabled')).toBeDefined()
+  it('规则检查保留旧面板字段，并回显旧值', async () => {
+    const wrapper = mountEditor({ record: ruleRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="mc-kind-rule"]').classes()).toContain('active')
+    expect((wrapper.find('[data-testid="mc-rule-minSize"]').element as HTMLInputElement).value).toBe('1')
+    expect((wrapper.find('[data-testid="mc-rule-maxSize"]').element as HTMLInputElement).value).toBe('100')
+    expect(wrapper.find('[data-testid="mc-rule-timeType"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mc-method-today_landed"]').exists()).toBe(false)
+  })
+
+  it('规则检查「验证」走 check-one 并标「测试，未通知」', async () => {
+    const wrapper = mountEditor({ record: ruleRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-rule-verify"]').trigger('click')
+    await settle()
+
+    expect(mocks.checkOneManual).toHaveBeenCalledTimes(1)
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    expect(result).toContain('测试，未通知')
+    expect(result).toContain('未发送业务通知')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+  })
+})
+describe('MonitorConfigEditor 取消', () => {
+  it('无未保存改动时直接 emit cancel（弹窗由宿主关闭）', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-cancel"]').trigger('click')
+    await settle()
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+  })
+
+  it('有未保存改动时必须确认：继续编辑不发 cancel，放弃修改才发', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-name-input"]').setValue('改过的名称')
+
+    confirm.mockRejectedValueOnce(new Error('cancel'))
+    await wrapper.find('[data-testid="mc-cancel"]').trigger('click')
+    await settle()
+    expect(wrapper.emitted('cancel')).toBeUndefined()
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await wrapper.find('[data-testid="mc-cancel"]').trigger('click')
+    await settle()
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
   })
 })

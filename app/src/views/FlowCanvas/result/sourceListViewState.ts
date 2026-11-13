@@ -61,6 +61,7 @@ export const HIDEABLE_SOURCE_COLUMNS: { key: string; label: string; groupOps?: t
   { key: 'lastSuccess', label: '最近成功' },
   { key: 'state', label: '状态' },
   { key: 'remark', label: '备注' },
+  { key: 'rowActions', label: '操作' },
 ]
 
 export const SOURCE_SORT_FIELDS: { value: string; label: string }[] = [

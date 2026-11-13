@@ -1,0 +1,9 @@
+{
+  // .vue 的语言服务：没有它，编辑器根本不会对 <script setup> 做 TS 诊断，
+  // 未使用的变量/函数只能等 `npm run build` 的 `vue-tsc -b` 报出来。
+  "recommendations": [
+    "Vue.volar",
+    // 项目已有 eslint 配置（@typescript-eslint/no-unused-vars: warn），装上可实时看到
+    "dbaeumer.vscode-eslint"
+  ]
+}

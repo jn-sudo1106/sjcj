@@ -13,7 +13,7 @@ const FLOWS = [
 
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 
-async function mountPicker(siteFlowCounts: Record<string, number> = {}, selected: string[] = []) {
+async function mountPicker(siteFlowCounts: Record<string, number> = {}, selected: string[] = [], scopeHint?: string) {
   vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, publishId: null, draftId: null, versions: [] } as never)
   const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: FLOWS.length, list: FLOWS })
   vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{}, {}] as never)
@@ -21,7 +21,7 @@ async function mountPicker(siteFlowCounts: Record<string, number> = {}, selected
   vi.spyOn(configApi, 'configDetail').mockResolvedValue(null as never)
   vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(null as never)
   const wrapper = mount(FlowPickerDialog, {
-    props: { selected, siteFlowCounts },
+    props: scopeHint ? { selected, siteFlowCounts, scopeHint } : { selected, siteFlowCounts },
     global: { plugins: [ElementPlus], directives: { loading: {} }, },
     attachTo: document.body,
   })
@@ -31,6 +31,16 @@ async function mountPicker(siteFlowCounts: Record<string, number> = {}, selected
 const rows = () => [...document.querySelectorAll('[data-testid="flow-picker-row"]')] as HTMLElement[]
 
 describe('关联流程选择器', () => {
+  it('批量入口传入范围提示时，选择器明确告诉用户流程会绑到哪些源', async () => {
+    const { wrapper } = await mountPicker({}, [], '将为勾选的 12 个源绑定流程')
+    // 弹窗 append-to-body：内容在 document.body 里
+    expect(document.querySelector('[data-testid="flow-picker-scope-hint"]')?.textContent).toBe('将为勾选的 12 个源绑定流程')
+    wrapper.unmount()
+    const plain = await mountPicker({})
+    expect(document.querySelector('[data-testid="flow-picker-scope-hint"]')).toBeNull()
+    plain.wrapper.unmount()
+  })
+
   it('本网站有在用流程时默认只看这些流程，并显示在用源数和节点数', async () => {
     const { wrapper, paged } = await mountPicker({ '11': 3 })
     expect(paged).toHaveBeenCalledWith(expect.objectContaining({ flowIds: ['11'], field: 'sourceCnt' }))

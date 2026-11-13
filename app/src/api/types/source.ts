@@ -639,6 +639,46 @@ export interface FileResourceQuery extends PageQuery {
   configId?: string
 }
 
+/**
+ * 保存时 JSON 快照（旧平台「保存时Json」，`tb_orifile_resource` 的一条记录）。
+ *
+ * 跟 FileResourceRecord 不是同一份数据：文件资源是「产出的文件」（file_resource 实体表，
+ * 按 K0..K10 存列），这里是**每一次入库保存的原始 JSON 快照**（旧端点 /v1/fileJsonPaged），
+ * 按 taskId 能对上「哪个任务把哪份 JSON 存进了哪张表」，是排查抓取/解析的最后一手证据。
+ * 字段名保持旧平台 camelCase（OrifileBase），不做重命名。
+ */
+export interface JsonSnapshotRecord {
+  /** 旧 `resourceId`，同时是 readJson 的 `id` 参数 */
+  id: string
+  sourceId: string
+  taskId?: string
+  /** 产出该快照的采集配置 ID（旧 CONFIG_ID） */
+  configId?: string
+  fileId?: string
+  parentId?: string
+  /** 表名/展示名（旧 realName），排查时用来确认落进了哪张表 */
+  realName?: string
+  showName?: string
+  /** 快照文件在文件服务上的路径（列表里显示为「原始 JSON」链接文案） */
+  storePath?: string
+  fileSize?: number
+  state?: string
+  md5?: string
+  extName?: string
+  encode?: string
+  createDt?: string
+  updateDt?: string
+  remarks?: string
+}
+
+export interface JsonSnapshotQuery extends PageQuery {
+  sourceId?: string
+  taskId?: string
+  state?: string
+  /** 旧端点 `title`：按 storePath/showName 模糊 */
+  title?: string
+}
+
 /** @deprecated 仅保留旧演示 mock 的数据形状，业务文件视图已迁移到 FileResourceRecord。 */
 export interface RawFile {
   attachId: string

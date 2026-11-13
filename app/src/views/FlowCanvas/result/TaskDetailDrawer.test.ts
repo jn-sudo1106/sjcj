@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import TaskDetailDrawer from './TaskDetailDrawer.vue'
-import type { TaskInst } from '@/api'
+import { fileApi, type TaskInst } from '@/api'
 import * as clipboard from '@/utils/clipboard'
 
 const ElDrawerStub = {
@@ -174,6 +174,58 @@ describe('TaskDetailDrawer', () => {
     await bizLink.trigger('click')
     expect(wrapper.emitted('locateData')).toHaveLength(1)
     expect(wrapper.emitted('locateData')![0]).toEqual([task])
+
+    wrapper.unmount()
+  })
+
+  // 2026-11-09：旧平台只能在源列表「查询 → 保存时Json」里翻快照，任务详情看不到该步骤存了什么（钉钉反馈）。
+  // 这里按当前任务 ID 直接查一次 fileJsonPaged，抽屉里给最近 5 份直链。
+  it('保存时 JSON：按任务 ID 查快照，给出 readJson 直链与超量提示', async () => {
+    const snapshots = [{
+      id: '7400100', sourceId: 'src_1001', taskId: '88801', realName: 'news_main',
+      showName: 'snap-7400100.json', storePath: '/sense-data/json/snap-7400100.json',
+      fileSize: 2048, state: 'C', createDt: '2026-11-09 10:00:00',
+    }]
+    const jsonPaged = vi.spyOn(fileApi, 'jsonPaged').mockResolvedValue({ list: snapshots, total: 7 })
+
+    const task = mockTask()
+    const wrapper = mount(TaskDetailDrawer, {
+      props: { modelValue: true, task },
+      global: { stubs: { ElDrawer: ElDrawerStub } },
+    })
+    await flushPromises()
+
+    expect(jsonPaged).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: 'src_1001', taskId: '88801', page: 1, size: 5 }),
+    )
+    expect(wrapper.find('[data-testid="task-snapshots"]').exists()).toBe(true)
+    const links = wrapper.findAll('[data-testid="task-snapshot-open"]')
+    expect(links).toHaveLength(1)
+    expect(links[0]!.attributes('href')).toContain('readJson?id=7400100')
+    expect(links[0]!.attributes('href')).toContain('sourceId=src_1001')
+    expect(wrapper.text()).toContain('共 7 份')
+    // 抽屉里只列最近几份，超量由「查看全部」打开完整抽屉（2026-11-10：不再让人回源列表）
+    const hint = wrapper.find('[data-testid="task-snapshot-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('点「查看全部」打开完整列表')
+
+    await wrapper.get('[data-testid="task-snapshot-all"]').trigger('click')
+    expect(wrapper.emitted('openSnapshots')).toHaveLength(1)
+    expect(wrapper.emitted('openSnapshots')![0]).toEqual([task])
+
+    wrapper.unmount()
+  })
+
+  it('保存时 JSON：查询失败只显示一行提示，不影响详情其余内容', async () => {
+    vi.spyOn(fileApi, 'jsonPaged').mockRejectedValue(new Error('接口 502'))
+    const wrapper = mount(TaskDetailDrawer, {
+      props: { modelValue: true, task: mockTask() },
+      global: { stubs: { ElDrawer: ElDrawerStub } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="task-snapshots"]').text()).toContain('接口 502')
+    expect(wrapper.find('[data-testid="task-result-content"]').exists()).toBe(true)
 
     wrapper.unmount()
   })

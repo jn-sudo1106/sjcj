@@ -25,6 +25,7 @@ import StepDrawer from './StepDrawer.vue'
 import TableDetailDialog from './TableDetailDialog.vue'
 import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
+import SourceSearchPicker from './SourceSearchPicker.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import AddDataMenu from '@/components/ResultToolbar/AddDataMenu.vue'
 import ExportMenu from '@/components/ResultToolbar/ExportMenu.vue'
@@ -76,7 +77,8 @@ const sourceOptions = ref<SourceOption[]>([])
 const tableSourceIds = ref<string[]>([])
 const sourceLoading = ref(false)
 const sourceId = ref('')
-const sourceSelectRef = ref<{ blur: () => void } | null>(null)
+// 已选源名称：源搜索框收起时显示「源 ID 源名」，不再单独请求
+const selectedSourceName = computed(() => sourceOptions.value.find((item) => item.sourceId === sourceId.value)?.name || '')
 
 // 缓存当前表，源范围重新分组后仍保留导航中的名称与类型。
 const pickedTable = ref<EntryType | null>(null)
@@ -175,7 +177,6 @@ function clearTableSelection() {
   sourceOptions.value = []
   tableSourceIds.value = []
   ++sourceScopeRequest
-  ++sourceSearchRequest
   sourceLoading.value = false
   pickedTable.value = null
   selectedRowKeys.value = []
@@ -212,7 +213,6 @@ function openSourceDetailForRow(sid: string) {
 // ---- 下拉内搜索表 / 更多源 ----
 const moreSourcesOpen = ref(false)
 function openMoreSources() {
-  sourceSelectRef.value?.blur()
   moreSourcesOpen.value = true
 }
 async function onSourcePicked(source: Source) {
@@ -239,12 +239,22 @@ async function onSourcePicked(source: Source) {
   }
   panelRef.value?.search()
 }
+// 源搜索框选中：只换源、不切表（新表还没数据时可以直接给当前表录首条数据）；
+// 要连表一起切走是「按源搜索（可跨表）」弹窗的行为
+function onSourcePickedBySearch(source: { sourceId: string; name: string } | null) {
+  if (!source) {
+    sourceId.value = ''
+    void onSourceChange()
+    return
+  }
+  sourceId.value = source.sourceId
+  if (!sourceOptions.value.some((option) => option.sourceId === source.sourceId)) {
+    sourceOptions.value = [{ sourceId: source.sourceId, name: source.name }, ...sourceOptions.value]
+  }
+  void onSourceChange()
+}
 const SOURCE_PREVIEW_SIZE = 50
-const SOURCE_LOOKUP_CHUNK = 150
-let sourceSearchTimer: ReturnType<typeof setTimeout> | undefined
-const sourceSearchKeyword = ref('')
 let sourceScopeRequest = 0
-let sourceSearchRequest = 0
 
 async function sourceOptionsForIds(ids: string[], name?: string): Promise<SourceOption[]> {
   if (!ids.length) return []
@@ -254,8 +264,6 @@ async function sourceOptionsForIds(ids: string[], name?: string): Promise<Source
 
 async function loadSources() {
   const requestId = ++sourceScopeRequest
-  ++sourceSearchRequest
-  if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
   const selectedTable = tableId.value
   sourceOptions.value = []
   tableSourceIds.value = []
@@ -282,9 +290,6 @@ async function loadSources() {
       previewIds.push(sourceId.value)
     }
     sourceOptions.value = await sourceOptionsForIds(previewIds)
-    if (requestId === sourceScopeRequest && sourceSearchKeyword.value.trim()) {
-      await searchSources(sourceSearchKeyword.value)
-    }
   } catch (error) {
     if (requestId === sourceScopeRequest) ElMessage.warning(`加载当前表的源失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
@@ -292,58 +297,6 @@ async function loadSources() {
   }
 }
 
-async function searchSources(keyword: string) {
-  const requestId = ++sourceSearchRequest
-  const ids = tableSourceIds.value
-  if (!keyword.trim()) {
-    sourceLoading.value = true
-    try {
-      const previewIds = ids.slice(0, SOURCE_PREVIEW_SIZE)
-      if (sourceId.value && !previewIds.includes(sourceId.value)) previewIds.push(sourceId.value)
-      const options = await sourceOptionsForIds(previewIds)
-      if (requestId === sourceSearchRequest) sourceOptions.value = options
-    } finally {
-      if (requestId === sourceSearchRequest) sourceLoading.value = false
-    }
-    return
-  }
-  sourceLoading.value = true
-  try {
-    const query = keyword.trim()
-    let options: SourceOption[] = []
-    const idMatches = ids.filter((id) => id.includes(query))
-    if (idMatches.length) {
-      options = await sourceOptionsForIds(idMatches.slice(0, SOURCE_PREVIEW_SIZE))
-    } else if (!/^\d+$/.test(query)) {
-      // 名称检索由后端在表的源 ID 分块内执行，避免先全局分页再取交集漏掉本表的源。
-      for (let i = 0; i < ids.length && options.length < SOURCE_PREVIEW_SIZE; i += SOURCE_LOOKUP_CHUNK * 4) {
-        const batch = Array.from({ length: 4 }, (_, n) => ids.slice(i + n * SOURCE_LOOKUP_CHUNK, i + (n + 1) * SOURCE_LOOKUP_CHUNK)).filter((part) => part.length)
-        const found = await Promise.all(batch.map((part) => sourceOptionsForIds(part, query)))
-        if (requestId !== sourceSearchRequest) return
-        options = [...options, ...found.flat()].slice(0, SOURCE_PREVIEW_SIZE)
-      }
-    }
-    // 新表尚无 SOURCE_ID；允许显式搜索其他源，为当前表录入首条数据，不切到源的默认表。
-    if (!options.length && requestId === sourceSearchRequest) {
-      if (/^\d+$/.test(query)) {
-        options = (await sourceOptionsForIds([query])).filter(source => source.sourceId === query)
-      } else {
-        const result = await sourceApi.sourcePaged({ name: query, page: 1, size: SOURCE_PREVIEW_SIZE })
-        options = result.list.map(source => ({ sourceId: source.sourceId, name: source.name }))
-      }
-    }
-    if (requestId === sourceSearchRequest) sourceOptions.value = options
-  } catch (error) {
-    if (requestId === sourceSearchRequest) ElMessage.warning(`搜索源失败：${error instanceof Error ? error.message : String(error)}`)
-  } finally {
-    if (requestId === sourceSearchRequest) sourceLoading.value = false
-  }
-}
-function onSourceSearch(keyword: string) {
-  sourceSearchKeyword.value = keyword
-  if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
-  sourceSearchTimer = setTimeout(() => void searchSources(keyword), 300)
-}
 let metaRequest = 0
 async function loadTableMeta() {
   const requestId = ++metaRequest
@@ -1106,8 +1059,6 @@ onUnmounted(() => {
   ++metaRequest
   ++tableChangeRequest
   ++sourceScopeRequest
-  ++sourceSearchRequest
-  if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
   window.removeEventListener('keydown', onFullscreenKey)
 })
 </script>
@@ -1157,14 +1108,18 @@ onUnmounted(() => {
       @row-click="onRowClickDetail"
     >
       <template #context>
-      <el-select ref="sourceSelectRef" v-model="sourceId" filterable remote clearable :remote-method="onSourceSearch" :loading="sourceLoading" placeholder="选择源（ID或名称）" class="dv-source-select" style="width: 220px" @change="onSourceChange">
-        <el-option v-for="s in sourceOptions" :key="s.sourceId" :value="s.sourceId" :label="`${s.sourceId} ${s.name}`" />
-        <template #footer>
-          <span class="dv-link" @click.stop="openMoreSources">
-            <el-icon><Plus /></el-icon>按源搜索（可跨表）...
-          </span>
-        </template>
-      </el-select>
+      <!-- 源搜索（1111）：跟网站数据视图左栏「源列表」一样，输入源名/源 ID 或按来源组搜，选中即切到该源看查询结果 -->
+      <SourceSearchPicker
+        v-model="sourceId"
+        :model-label="selectedSourceName"
+        :preview="sourceOptions"
+        :preview-loading="sourceLoading"
+        :current-table="tableId"
+        @picked="onSourcePickedBySearch"
+      />
+      <button class="dv-link dv-source-more" type="button" title="打开更多源的筛选弹窗（可跨表）" data-testid="data-source-more" @click="openMoreSources">
+        <el-icon><Plus /></el-icon>按源搜索（可跨表）...
+      </button>
       <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
@@ -1553,7 +1508,6 @@ onUnmounted(() => {
 .dv-query-workspace :deep(.dqp-col-btn) { height: 30px; border-color: transparent; background: transparent; color: var(--rc-muted); }
 .dv-fullscreen-btn { margin-left: auto; }
 .dv-table-error { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: var(--rc-danger, #dc2626); font-size: 12px; }
-.dv-source-select { max-width: 100%; }
 @media (max-width: 1100px) { .dv-data-workspace { grid-template-columns: 208px minmax(0, 1fr); } }
 @media (max-width: 760px) { .dv-data-workspace { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .dv-data-workspace :deep(.dt-sidebar) { max-height: 240px; } .dv-query-workspace { min-height: 440px; } }
 /* 全屏（1008-07）：同一份 DOM 铺满视口，不复制模板也不套弹层；z-index 与源数据视图的全屏同值（60） */
@@ -1613,6 +1567,9 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
 .dv-link:hover {
   color: var(--rc-primary-ink);
 }
+.dv-source-more { display: inline-flex; flex: none; align-items: center; gap: 2px; height: 28px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.dv-source-more:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.dv-source-more :deep(svg) { width: 12px; height: 12px; }
 .et-caret {
   margin-left: 4px;
   font-size: 12px;

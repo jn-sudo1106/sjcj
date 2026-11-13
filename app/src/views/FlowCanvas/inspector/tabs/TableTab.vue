@@ -245,7 +245,12 @@ const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTab
 // 2026-11-08 确认口径：输入表 == 输出表时按「更新父表」处理（isMulti=2，落库推导见
 // utils/flow/nodeConfigPayload.ts），界面只写这一张表并给一句提示。
 // 多表输出（副表 / 回写父表）整块已在用户确认后删除（2026-11-08 晚），这里只保留同表提示。
-const outputTableSameAsInput = computed(() => !!nodeTableId.value && effectiveInputTableId.value === nodeTableId.value)
+// 表 ID 在 store / 报文里可能是 number 也可能是 string（后端返回 number），一律按字符串比较。
+const outputTableSameAsInput = computed(() => {
+  const out = String(nodeTableId.value || '')
+  const inp = String(effectiveInputTableId.value || '')
+  return !!out && out === inp
+})
 const currentDedupMode = computed<'source' | 'table'>(() => cc.value?.dedupMode || cfg.value?.dedupMode || 'source')
 
 // 去重列（0828 D11）：会上指出「去重列丢了，要加回来」。
@@ -276,7 +281,7 @@ const DEFAULT_PRESET_TABLES = [
 ]
 const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
-// 输出字段选择（2026-10-10 恢复）：就是旧平台步骤编辑里的「出参列 (OutContext)」，
+// 输出字段（主表，2026-10-10 恢复）：就是旧平台步骤编辑里的「出参列 (OutContext)」，
 // 落 taskCfg.outColumns → 步骤 outContext，作为统一编辑入口；任务配置不再重复提供出参列。
 // 口径跟旧平台：空 = 默认全部字段。后端存物理列名（K1…），这里按字段展示：
 // 读时列名 / 字段名都认，写时换回列名（表里没有列名才写字段名）。
@@ -319,7 +324,9 @@ function clearOutputFields() {
 const showFillConfig = computed(() => !!cc.value && !isRuleLike.value
   && nodeCapability.value?.kind !== 'login' && nodeCapability.value?.kind !== 'file_download')
 const fillTableSearch = useTableSearch()
-const fillTableId = computed(() => cfg.value?.taskCfg?.fillTable ?? '')
+// null = 没有输出父表（单表）；'' = 已切到多表但还没选表（见 setMultiTableMode）
+const fillTableRaw = computed<string | null>(() => cfg.value?.taskCfg?.fillTable ?? null)
+const fillTableId = computed(() => fillTableRaw.value ?? '')
 const fillTableOptions = computed(() => withCurrentOption(fillTableSearch.results.value, fillTableId.value, '当前配置'))
 watch([fillTableId, showFillConfig], ([tid, show]) => { if (show) void ensureTableFields(tid) }, { immediate: true })
 const fillFields = computed(() => fillTableId.value
@@ -355,26 +362,38 @@ function selectAllFillColumns() {
   flow.patchTaskConfig(id.value, { fillColumns: next })
 }
 /**
- * 回填开关（1109 收敛）：勾选 = 本步骤在主输出表之外再写一张表，默认写回入参表。
- * 不额外存布尔位，勾选态一律由持久化字段推导——这样历史「有字段无目标表」的不完整配置
- * 也会显示成已勾选，用户能直接看到并补表，而不是被界面藏起来。
+ * 单表 / 多表（1109 恢复）：单表 = 只写输出表；多表 = 再写一张「输出父表」（输出字段（回填））。
+ * 不额外存布尔位，多表态一律由持久化字段推导——这样历史「有字段无目标表」的不完整配置
+ * 也会显示成多表，用户能直接看到并补表，而不是被界面藏起来。
  */
-const fillEnabled = computed(() => !!fillTableId.value || fillColumns.value.length > 0)
-function setFillEnabled(enabled: boolean) {
-  if (!enabled) {
-    // 取消必须整体清空：fillTable=null 才让保存链路发 clearFill，只清字段会留下孤儿目标表。
+const fillEnabled = computed(() => fillTableRaw.value !== null || fillColumns.value.length > 0)
+// 输入表 == 输出表时按后端「更新父表」处理（isMulti=2），只写这一张表：锁死单表、多表不可选，
+// 输出父表 / 输出字段（回填）整块隐藏（即使该步骤历史上存过回填字段也不显示）。
+// 输入表 != 输出表时才需要用户在单表/多表之间做选择。
+const canChooseMultiTable = computed(() => !outputTableSameAsInput.value)
+const multiTableMode = computed<'single' | 'multi'>(() => (
+  !outputTableSameAsInput.value && fillEnabled.value ? 'multi' : 'single'
+))
+function setMultiTableMode(mode: 'single' | 'multi') {
+  if (mode === 'multi' && !canChooseMultiTable.value) return
+  if (mode === multiTableMode.value) return
+  if (mode === 'single') {
+    // 回到单表必须整体清空：fillTable=null 才让保存链路发 clearFill，只清字段会留下孤儿目标表。
     flow.patchTaskConfig(id.value, { fillTable: null, fillColumns: [] })
     return
   }
-  // 已手选过目标表就保留，只在为空时落到默认入参表。
-  if (fillTableId.value) return
-  const defaultTable = inputTableId.value
-  if (!defaultTable) {
-    ElMessage.info('请先选择输入表，再启用输出字段二（回填数据）')
-    return
-  }
-  flow.patchTaskConfig(id.value, { fillTable: defaultTable, fillColumns: [] })
+  // 已配过输出父表就保留，只在为空时落到默认入参表；没有入参表先留空，等用户手选。
+  if (fillTableRaw.value !== null) return
+  flow.patchTaskConfig(id.value, { fillTable: inputTableId.value || '', fillColumns: [] })
 }
+
+// 同表 = 只写这一张表：历史存过的回填配置在数据上也一并清掉，避免「界面隐藏、保存却仍带回填」。
+// 打开节点时先归一（immediate），清成 fillTable=null 后保存链路会发 clearFill。
+watch(outputTableSameAsInput, (same) => {
+  if (!same || !id.value) return
+  if (fillTableRaw.value === null && fillColumns.value.length === 0) return
+  flow.patchTaskConfig(id.value, { fillTable: null, fillColumns: [] })
+}, { immediate: true })
 
 function selectPresetTable(tableId: string) {
   if (nodeCapability.value?.outputMode === 'fixed') return
@@ -504,6 +523,26 @@ async function onTableSaved(tableId: string) {
     <div class="rc-field">
       <div class="rc-field-header">
         <label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
+        <!-- 单表 / 多表（1109 恢复）：贴输出表右侧，不单独占行。输入表与输出表相同时只能多表（回填父表）。 -->
+        <div v-if="showFillConfig && !props.templateDefaults" class="rc-field-actions" data-testid="table-mode-field">
+          <div class="rc-segment" data-testid="table-mode-segment">
+            <button
+              type="button"
+              :class="{ active: multiTableMode === 'single' }"
+              title="单表：只写这张输出表"
+              data-testid="table-mode-single"
+              @click="setMultiTableMode('single')"
+            >单表</button>
+            <button
+              type="button"
+              :class="{ active: multiTableMode === 'multi' }"
+              :disabled="!canChooseMultiTable"
+              :title="canChooseMultiTable ? '多表：再指定一张「输出父表」，把勾选的字段回填进去' : '输入表与输出表相同：按「更新父表」处理，只写这一张表'"
+              data-testid="table-mode-multi"
+              @click="setMultiTableMode('multi')"
+            >多表</button>
+          </div>
+        </div>
       </div>
       <div class="rc-input-group" data-testid="output-table-field">
         <el-select
@@ -538,13 +577,13 @@ async function onTableSaved(tableId: string) {
         </button>
       </div>
       <div v-if="outputTableSameAsInput" class="rc-help" data-testid="output-table-same-as-input">
-        输入表与输出表相同：按「更新父表」处理，只写这一张表。
+        输入表与输出表相同：按「更新父表」处理，只写这一张表（单表）。
       </div>
     </div>
-    <!-- 输出字段选择 = 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。 -->
+    <!-- 输出字段（主表）= 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。 -->
     <div v-if="outputTableFields.length" class="rc-field">
       <div class="rc-field-header">
-        <label>输出字段选择（已选中 {{ selectedOutputFieldProps.length }} / {{ outputTableFields.length }} 个字段，不选默认全部字段）</label>
+        <label>输出字段（主表）（已选中 {{ selectedOutputFieldProps.length }} / {{ outputTableFields.length }} 个字段，不选默认全部字段）</label>
         <div class="rc-field-actions">
           <button type="button" class="rc-text-btn" data-testid="select-all-fields" @click="selectAllOutputFields">全选</button>
           <button type="button" class="rc-text-btn" data-testid="clear-all-fields" @click="clearOutputFields">清空</button>
@@ -564,57 +603,51 @@ async function onTableSaved(tableId: string) {
       </div>
       <div class="rc-help">即旧平台的「出参列 (OutContext)」：勾选的字段传给后续步骤；不选默认全部字段。</div>
     </div>
-    <!-- 输出字段二（回填数据，1109 收敛）：开关控制，勾选后默认写回入参表，字段按物理列名勾选。 -->
-    <div v-if="showFillConfig && !props.templateDefaults" class="rc-field" data-testid="fill-config-field">
-      <label class="rc-fill-toggle" data-testid="fill-enabled-toggle">
-        <input
-          type="checkbox"
-          :checked="fillEnabled"
-          aria-label="输出字段二（回填数据）"
-          @change="setFillEnabled(($event.target as HTMLInputElement).checked)"
-        />
-        <span>输出字段二（回填数据）</span>
-      </label>
-      <template v-if="fillEnabled">
-        <div data-testid="fill-table-field">
-          <el-select
-            class="rc-table-select"
-            :model-value="fillTableId || undefined"
-            filterable remote clearable
-            :remote-method="fillTableSearch.debouncedSearch"
-            :loading="fillTableSearch.loading.value"
-            placeholder="选择回填数据表（默认入参表）"
-            @update:model-value="onFillTableId"
-            @visible-change="onFillTableVisible"
-          >
-            <el-option v-for="t in fillTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
-          </el-select>
-          <div class="rc-help">默认写回入参表，可改选其他表；字段值按物理列名同名映射。取消勾选即取消本步骤回填。</div>
+    <!-- 多表：输出父表 + 输出字段（回填）。默认写回入参表，字段按物理列名勾选；切回单表即取消。 -->
+    <div v-if="showFillConfig && !props.templateDefaults && multiTableMode === 'multi'" class="rc-field" data-testid="fill-config-field">
+      <div class="rc-field-header">
+        <label>输出父表</label>
+      </div>
+      <div data-testid="fill-table-field">
+        <el-select
+          class="rc-table-select"
+          :model-value="fillTableId || undefined"
+          filterable remote clearable
+          :remote-method="fillTableSearch.debouncedSearch"
+          :loading="fillTableSearch.loading.value"
+          placeholder="选择输出父表（默认入参表）"
+          @update:model-value="onFillTableId"
+          @visible-change="onFillTableVisible"
+        >
+          <el-option v-for="t in fillTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+        </el-select>
+        <div class="rc-help">默认写回入参表，可改选其他表；字段值按物理列名同名映射。切回单表即取消本步骤回填。</div>
+        <div v-if="!fillTableId" class="rc-help input-field-warning" data-testid="fill-table-missing-hint">
+          {{ fillColumns.length ? '已有输出字段（回填），但未选择输出父表，请先选择表。' : '未选择输出父表，本步骤只写输出表。' }}
         </div>
-        <div v-if="fillTableId || fillColumns.length">
-          <div class="rc-field-header">
-            <label>回填字段（已配置 {{ fillColumns.length }} 个）</label>
-            <div class="rc-field-actions">
-              <button v-if="fillFields.length" type="button" class="rc-text-btn" data-testid="select-all-fill-fields" @click="selectAllFillColumns">全选</button>
-              <button type="button" class="rc-text-btn" data-testid="clear-fill-fields" @click="flow.patchTaskConfig(id, { fillColumns: [] })">清空字段</button>
-            </div>
-          </div>
-          <div v-if="fillFields.length" class="rc-tag-row" data-testid="fill-fields-list">
-            <label v-for="f in fillFields" :key="f.prop" class="rc-tag" :class="{ on: fillColumns.includes(f.columnName || f.prop) }">
-              <input type="checkbox" class="rc-tag-check" :checked="fillColumns.includes(f.columnName || f.prop)" :aria-label="`选择回填字段 ${f.desc || f.prop}`" @change="toggleFillColumn(f.columnName || f.prop)" />
-              <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
-            </label>
-          </div>
-          <div v-if="!fillTableId && fillColumns.length" class="rc-help input-field-warning">已有回填字段，但未配置回填数据表，请先选择表。</div>
-          <div v-else-if="!fillFields.length" class="rc-help">暂无可选字段，请检查目标表结构是否已加载。</div>
-          <div v-if="unknownFillColumns.length" class="rc-help" data-testid="unknown-fill-fields">
-            未解析的回填字段（保存时保留）：
-            <span v-for="col in unknownFillColumns" :key="col" class="unknown-input-field">{{ col }}
-              <button type="button" class="rc-text-btn" :aria-label="`移除回填字段 ${col}`" @click="toggleFillColumn(col)">移除</button>
-            </span>
+      </div>
+      <div v-if="fillTableId || fillColumns.length">
+        <div class="rc-field-header">
+          <label>输出字段（回填）（已配置 {{ fillColumns.length }} 个）</label>
+          <div class="rc-field-actions">
+            <button v-if="fillFields.length" type="button" class="rc-text-btn" data-testid="select-all-fill-fields" @click="selectAllFillColumns">全选</button>
+            <button type="button" class="rc-text-btn" data-testid="clear-fill-fields" @click="flow.patchTaskConfig(id, { fillColumns: [] })">清空字段</button>
           </div>
         </div>
-      </template>
+        <div v-if="fillFields.length" class="rc-tag-row" data-testid="fill-fields-list">
+          <label v-for="f in fillFields" :key="f.prop" class="rc-tag" :class="{ on: fillColumns.includes(f.columnName || f.prop) }">
+            <input type="checkbox" class="rc-tag-check" :checked="fillColumns.includes(f.columnName || f.prop)" :aria-label="`选择输出字段（回填） ${f.desc || f.prop}`" @change="toggleFillColumn(f.columnName || f.prop)" />
+            <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
+          </label>
+        </div>
+        <div v-if="fillTableId && !fillFields.length" class="rc-help">暂无可选字段，请检查输出父表结构是否已加载。</div>
+        <div v-if="unknownFillColumns.length" class="rc-help" data-testid="unknown-fill-fields">
+          未解析的输出字段（回填）（保存时保留）：
+          <span v-for="col in unknownFillColumns" :key="col" class="unknown-input-field">{{ col }}
+            <button type="button" class="rc-text-btn" :aria-label="`移除输出字段（回填） ${col}`" @click="toggleFillColumn(col)">移除</button>
+          </span>
+        </div>
+      </div>
     </div>
     <div class="rc-field">
       <label>去重方式</label>
@@ -673,9 +706,6 @@ async function onTableSaved(tableId: string) {
    四个 Tab 各自 scoped 覆盖了同一份规则（ConfigTab / TableTab / TaskTab / RuleOrchestrationTab），改这里记得同步。 */
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 14px; }
 .rc-field label { display: block; color: #334155; font-size: 12px; font-weight: 600; margin-bottom: 6px; letter-spacing: .01em; }
-/* 输出字段二（回填数据）开关：沿用字段小标题字号，但作为一个可点的整行 */
-.rc-field label.rc-fill-toggle { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; }
-.rc-fill-toggle input { margin: 0; width: 13px; height: 13px; accent-color: var(--rc-primary); cursor: pointer; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; font-family: inherit; resize: vertical; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-input[disabled] { background: #f8fafc; color: var(--rc-faint); }
@@ -698,11 +728,11 @@ async function onTableSaved(tableId: string) {
 .rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-left: 0; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .rc-input-btn:last-child { border-radius: 0 7px 7px 0; }
 .rc-input-btn:hover { background: var(--rc-primary-bg); }
-.rc-mini-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.rc-mini-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .rc-mini-table th { text-align: left; color: var(--rc-muted); font-weight: 600; padding: 6px 5px; border-bottom: 1px solid #eef2f7; }
 .rc-mini-table td { padding: 7px 5px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text-2); }
 .rc-edit-table th:last-child, .rc-edit-table td:last-child { width: 26px; padding: 4px 2px; }
-.rc-cell-input { width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 4px 5px; outline: none; }
+.rc-cell-input { width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 12px; padding: 4px 5px; outline: none; }
 .rc-cell-input:hover { border-color: #dbe3ee; }
 .rc-cell-input:focus { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 2px #dbeafe; }
 .rc-row-del { width: 20px; height: 20px; border: 0; background: transparent; color: var(--rc-faint); font-size: 12px; cursor: pointer; border-radius: 4px; }
@@ -715,19 +745,20 @@ async function onTableSaved(tableId: string) {
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
 /* 回写父表（输入表）面板：写入方式 / 定位键 / 字段映射 */
+.rc-segment button:disabled { opacity: 0.45; cursor: not-allowed; }
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
-.rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 5px 12px; cursor: pointer; }
+.rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 12px; padding: 5px 12px; cursor: pointer; }
 .rc-segment button.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }
 
 .rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
-.rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }
+.rc-preset-label { font-size: 12px; color: var(--rc-muted); font-weight: 600; }
 .rc-preset-chip {
   padding: 3px 8px;
   border: 1px solid #d5e2f2;
   border-radius: 5px;
   background: #f8fafc;
   color: var(--rc-text-2);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s ease;
@@ -753,13 +784,13 @@ async function onTableSaved(tableId: string) {
 .rc-field-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .rc-field-header label { margin-bottom: 0; }
 .rc-field-actions { display: flex; gap: 8px; }
-.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; }
 .rc-text-btn:hover { text-decoration: underline; }
 .rc-tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
+.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
 .rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
 .rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
-.rc-field label.rc-tag { display: inline-flex; margin-bottom: 0; font-size: 11px; font-weight: 500; }
+.rc-field label.rc-tag { display: inline-flex; margin-bottom: 0; font-size: 12px; font-weight: 500; }
 .rc-field label.rc-tag.on { font-weight: 700; }
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 .input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }

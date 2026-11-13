@@ -9,13 +9,36 @@
 // 这里定位是"查文件时收窄范围"，不是"源管理"，旧版那两个功能服务于后者，本组件只做搜索选源。
 import { computed, ref, watch } from 'vue'
 import { sourceApi, type Source } from '@/api'
+import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
+
+/**
+ * 1106 §9.2 / 用户 11-08 拍板（文件中心「目录 → 源」）：文件中心只允许在该业务目录范围内选源，
+ * 否则用户能在下拉里跳到目录外的源、与左栏目录范围矛盾。
+ * `directoryDirId` 可选——RunRecords / TaskView 等其它调用方不传即完全无感。
+ */
+const props = withDefaults(defineProps<{
+  modelValue: string | string[]
+  multiple?: boolean
+  directoryDirId?: string
+}>(), { multiple: false, directoryDirId: '' })
+
+/** 目录范围由后端解析（业务目录 = SOURCE_ID IN cfg_category_source_bind 的 ACTIVE 绑定），不在前端枚举源 ID */
+const directoryScope = computed<SourceDirectoryScope | undefined>(() => (
+  props.directoryDirId
+    ? { kind: 'biz', mode: 'selected', selections: [{ id: props.directoryDirId, includeDescendants: true }] }
+    : undefined
+))
+
+/** 选项/回显统一带网站前缀：文件中心里同名源跨网站很常见，只显示源名分不清是哪个网站的 */
+function sourceLabel(source: Source): string {
+  return source.siteName ? `${source.siteName} · ${source.name}` : source.name
+}
 
 /**
  * 0903 Y8-10：加**可选**的多选模式（流程中心「关联到源」要一次关联 N 个）。
  * 默认仍是单选，`modelValue: string`——文件中心那两处调用方零改动。
  * 多选时 `modelValue` 是 `string[]`，已选项以标签展示、可逐个移除，另给「全选本页结果」。
  */
-const props = withDefaults(defineProps<{ modelValue: string | string[]; multiple?: boolean }>(), { multiple: false })
 const emit = defineEmits<{ 'update:modelValue': [value: string | string[]] }>()
 
 /** 单选态的 id；多选时恒为 ''，模板里凡是判"当前选中"的地方都要走它而不是 modelValue */
@@ -46,11 +69,12 @@ const pickedLabels = computed(() => pickedIds.value.map((id) => ({
  *（名称里恰好带这串数字的源也不丢；表下拉 entryApi.searchTables 同一做法）。
  */
 async function searchSources(q: string): Promise<Source[]> {
-  const byName = sourceApi.sourcePaged({ keyword: q, size: RESULT_SIZE }).then((r) => r.list)
+  const scope = directoryScope.value
+  const byName = sourceApi.sourcePaged({ keyword: q, size: RESULT_SIZE, ...(scope ? { directory: scope } : {}) }).then((r) => r.list)
   const ids = q.split(/[,，\s]+/).filter(Boolean)
   if (!ids.length || !ids.every((part) => /^\d+$/.test(part))) return byName
   const [idHits, nameHits] = await Promise.all([
-    sourceApi.sourcePaged({ sourceIds: ids, size: ids.length }).then((r) => r.list).catch(() => [] as Source[]),
+    sourceApi.sourcePaged({ sourceIds: ids, size: ids.length, ...(scope ? { directory: scope } : {}) }).then((r) => r.list).catch(() => [] as Source[]),
     byName.catch(() => [] as Source[]),
   ])
   const seen = new Set<string>()
@@ -173,7 +197,7 @@ function onBlur() {
         data-testid="global-source-select-input"
         :placeholder="multiple
           ? (pickedIds.length ? `已选 ${pickedIds.length} 个，继续搜索可再加` : '按源 ID 或名称搜索，可多选')
-          : (selected ? `[${selected.sourceId}] ${selected.name}` : (singleId ? `[${singleId}]` : '全部源（按源 ID 或名称搜索）'))"
+          : (selected ? `[${selected.sourceId}] ${sourceLabel(selected)}` : (singleId ? `[${singleId}]` : (directoryDirId ? '全部源（目录内）' : '全部源（按源 ID 或名称搜索）')))"
         @focus="onFocus"
         @mousedown="onMousedown"
         @blur="onBlur"
@@ -211,7 +235,7 @@ function onBlur() {
           :class="{ active: multiple ? pickedIds.includes(s.sourceId) : s.sourceId === singleId }"
           @mousedown.prevent="pick(s)"
         >
-          <span class="gss-option-name">{{ s.name }}</span>
+          <span class="gss-option-name">{{ sourceLabel(s) }}</span>
           <span class="gss-option-id">{{ s.sourceId }}</span>
         </button>
       </template>

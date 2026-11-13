@@ -766,17 +766,20 @@ function stateMeta(s?: string) {
 
 <style scoped>
 .dg-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.dg-toolbar { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fbfdff; }
+.dg-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fbfdff; }
 /* 插槽内容不换行、放不下横向滚动：换行会让这条横条随窗口变窄一路长高，又把数据区挤回去。 */
 .dg-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px 10px; flex-wrap: nowrap; overflow-x: auto; }
 /* 常驻区：flex:none 不被压缩、不参与 .dg-head 的横向滚动，永远够得着 */
 .dg-toolbar.dg-toolbar-external { padding: 0; border: 0; background: transparent; gap: 6px; }
-.dg-head-right { flex: none; display: flex; align-items: center; gap: 8px; }
+.dg-head-right { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 8px; }
 /* 表格下方横条：跟 .dg-toolbar 同一套内边距与底色，视觉上把表格夹在中间 */
 .dg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 5px 12px; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; }
 .dg-head > * { flex-shrink: 0; }
 .dg-cols-menu { flex: none; display: flex; align-items: center; gap: 6px; }
-.dg-col-btn { height: 24px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
+/* 2026-11-09 用户："这一排按钮优化下"——「列/下一步字段」原来 24px 高、11px 字，
+   跟左边 .ctx-summary 里 28px/12px 的「跳转条件/发后续/代码生成」一排并排时高矮不齐，
+   像是两套控件。统一到 28px/12px，横向间距也跟 .dg-toolbar 的 gap 对齐。 */
+.dg-col-btn { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .dg-col-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .dg-col-btn.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .dg-scroll { flex: 1; overflow: auto; }

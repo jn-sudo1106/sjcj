@@ -1,0 +1,137 @@
+﻿// 采集配置域（P1-3 拆 8 域 · collect 域）
+// 包含 Config（采集配置）/ ConfigParamBinding（参数绑定）/ ConfigActionLog（操作日志）/
+//       EntryType（实体表）/ EntryField（表字段）
+// 跨域被引用：source 域 Site.params: ConfigParamBinding[]
+// 跨域引用：无（自包含）
+// 无外部 import。
+
+/** 配置 Config(configId) */
+export interface Config {
+  configId: string
+  name: string
+  topic?: string // 主题(队列)
+  policy?: string // 运行策略
+  sourceId?: string
+  enabled: boolean
+  sourceCount?: number // 绑定源数
+  paramRefs?: string[] // 绑定参数
+  isDetail?: boolean // 详情类配置
+  isLogin?: boolean // 登陆类配置
+  owner?: string
+  updatedAt?: string
+  url?: string
+  entryTypeId?: string
+  /** 入参表（旧 inEntryType）：节点的输入表绑定，与 entryTypeId（输出表）成对 */
+  inEntryTypeId?: string
+  domain?: string
+  remark?: string
+  proxyConf?: string
+  coreParam?: string
+  runPolicy?: string
+  snatchConf?: string
+  downConf?: string
+  contentRule?: string
+  codeRule?: string
+  dedupType?: string
+  templateCode?: string
+  multiMode?: number
+  configType?: string
+  deleted?: boolean
+  params?: ConfigParamBinding[]
+}
+
+/**
+ * 抓取类型字典项（旧 `/v1/config/sourceTypes`）。
+ * **节点类型 = 抓取类型 = `Config.configType`**（2026-08-28 确认）。
+ * 形如 `{ sourceType: '90', typeName: '网页抓取' }`，旧平台下拉展示成 `[90] - 网页抓取`。
+ */
+export interface SourceTypeDict {
+  sourceType: string
+  typeName: string
+}
+
+/**
+ * 节点类型完整记录（0924-04，系统设置 → 节点类型）。旧平台叫「源类型」，表 cfg_source_type。
+ * 字段名沿用后端；`procType` / `params` 旧页面没展示，只读透传。
+ */
+export interface NodeType {
+  sourceType: string
+  typeName: string
+  /** 分组名称，如采集类、规则类；旧记录为空，分类不影响执行协议。 */
+  typeGroup?: string
+  /** 配置队列（旧列名「配置队列」），如 source-config / source-config-mail */
+  downType: string
+  /** 默认消息队列 */
+  topic: string
+  /** 排序 */
+  seq: number | null
+  notes: string
+  procType: string
+  params: string
+}
+
+/**
+ * 新建时 sourceType 可不填（后端取 max+1）；修改时只传要改的字段（后端增量更新，2026-09-24 实测）。
+ *
+ * 2026-10-16：**去掉对 `procType` / `params` 的排除**。旧平台「源类型」的新建/编辑弹窗
+ * （`column.config.js` 的 `SOURCE_TYPE.other`）本来就有「处理类型」与「参数(JSON)」两项，
+ * 新端当时把它们挡在类型外、表单里也没渲染，属于漏迁；现补齐。
+ */
+export type NodeTypeInput = Partial<NodeType>
+
+export interface ConfigParamBinding {
+  id: string
+  paramId: string
+  paramName: string
+  valueShow?: string
+}
+
+export interface ConfigActionLog {
+  actionId: string
+  configId: string
+  action: string
+  target: string
+  result: string
+  remark?: string
+  actionTime?: string
+}
+
+/** 实体/表 EntryType */
+export interface EntryType {
+  tableId: string
+  tableName: string // 如 sense_data.TB_ZFB_COMMENT（物理表名）
+  /** 表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路，写入始终在 MySQL */
+  dsKind?: 'MYSQL' | 'CK'
+  name?: string // 表显示名（业务名）
+  remark?: string // 备注
+  fields: EntryField[]
+  rowCount?: number
+  sourceId?: string
+  owner?: string
+  updatedAt?: string
+  keyField?: string
+  /** 去重方式：'source' 源内去重 / 'table' 表内去重 */
+  dedupMode?: 'source' | 'table'
+  state?: string
+  recFlag?: string | number
+  checkFlag?: string | number
+  checkRule?: string
+  coreParam?: string
+  /** AI 综合描述：由 AI 结合真实数据样本提炼的业务画像描述 */
+  aiComment?: string
+  aiCommont?: string
+}
+
+export interface EntryField {
+  prop: string // 属性(api json key)，如 feed_id-K1
+  desc: string // 中文描述
+  type: 'string' | 'text' | 'longtext' | 'url' | 'number' | 'date' | 'json'
+  required: boolean
+  width?: number
+  preprocess?: string // 预处理清洗函数
+  dedup?: boolean // 去重列
+  itemId?: string
+  columnName?: string
+  checkRule?: string
+  seq?: number
+}

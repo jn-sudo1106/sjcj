@@ -499,8 +499,9 @@ function closeShared(choice: 'cancel' | 'copy' | 'save') {
 async function askShared(action: SharedFlowAction, carry?: CarryConfigs): Promise<boolean> {
   const row = activeRow.value
   if (!row) return true
-  // 页签刚加载时可能还没查到源数：先补查一次，独占的流程不弹窗
-  if (userCounts.value[row.workflowId] == null) await loadUserCounts()
+  // 1105-S1（2026-11-10）：保存链路不 await「使用源数」查询——网络慢时点保存会像没反应。
+  // 没查到就后台补查，这次按「共用」处理（弹窗文案已覆盖「在用的源数没查到」并只问这一次）。
+  if (userCounts.value[row.workflowId] == null) void loadUserCounts()
   const users = userCounts.value[row.workflowId] ?? null
   if (users !== null && users <= 1) return true
   if (sharedDlg.resolve) return false

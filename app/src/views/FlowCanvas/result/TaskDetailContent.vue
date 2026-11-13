@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { TaskInst } from '@/api'
+import { computed, ref, watch } from 'vue'
+import { fileApi, type JsonSnapshotRecord, type TaskInst } from '@/api'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { copyToClipboard } from '@/utils/clipboard'
 // 数据 ID = parentId、父任务 ID = vars.pTaskId，口径见 taskIds.ts
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   close: []
   locateData: [task: TaskInst]
   openSource: [task: TaskInst]
+  openSnapshots: [task: TaskInst]
 }>()
 
 function textOf(value: unknown): string {
@@ -101,6 +102,10 @@ function onLocateData() {
   }
 }
 
+function onOpenSnapshots() {
+  if (props.task) emit('openSnapshots', props.task)
+}
+
 function onOpenSource() {
   if (props.task?.sourceId) {
     emit('openSource', props.task)
@@ -111,6 +116,52 @@ function copyField(text: string, label: string) {
   if (!text || text === '—') return
   void copyToClipboard(text, label)
 }
+
+// 保存时 JSON（2026-11-09）：旧平台上只能从源列表行内的「查询 → 保存时Json」翻，任务里看不到，
+// 钉钉上反馈过「任务看没有该步骤保存的内容」。这里按当前任务 ID 直接查一次快照，
+// 让"这条任务到底往表里存了什么"在任务详情里就能回答；失败不打断详情（只显示一行提示）。
+const SNAPSHOT_LIMIT = 5
+const snapshots = ref<JsonSnapshotRecord[]>([])
+const snapshotTotal = ref(0)
+const snapshotsLoading = ref(false)
+const snapshotError = ref('')
+
+function formatSnapshotSize(bytes?: number): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+async function loadSnapshots(task: TaskInst | null) {
+  const taskId = task?.taskId ? String(task.taskId) : ''
+  if (!taskId) {
+    snapshots.value = []
+    snapshotTotal.value = 0
+    snapshotError.value = ''
+    return
+  }
+  snapshotsLoading.value = true
+  snapshotError.value = ''
+  try {
+    const result = await fileApi.jsonPaged({
+      sourceId: task?.sourceId || undefined,
+      taskId,
+      page: 1,
+      size: SNAPSHOT_LIMIT,
+    })
+    snapshots.value = result.list
+    snapshotTotal.value = result.total
+  } catch (e) {
+    snapshots.value = []
+    snapshotTotal.value = 0
+    snapshotError.value = (e as Error).message || '查询保存时 JSON 失败'
+  } finally {
+    snapshotsLoading.value = false
+  }
+}
+
+watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { immediate: true })
 </script>
 
 <template>
@@ -244,6 +295,43 @@ function copyField(text: string, label: string) {
         <div v-else class="tdd-empty">—</div>
       </div>
     </div>
+
+    <div class="ffd-section">保存时 JSON</div>
+    <div class="tdd-block" data-testid="task-snapshots">
+      <div class="tdd-block-head">
+        <span class="tdd-block-title">本任务入库保存的原始 JSON</span>
+        <span class="tdd-block-right">
+          <span v-if="snapshotTotal" class="tdd-snapshot-count">共 {{ snapshotTotal }} 份</span>
+          <button
+            class="tdd-block-more"
+            type="button"
+            data-testid="task-snapshot-all"
+            @click="onOpenSnapshots"
+          >查看全部</button>
+        </span>
+      </div>
+      <div v-if="snapshotsLoading" class="tdd-empty">加载中…</div>
+      <div v-else-if="snapshotError" class="tdd-empty">{{ snapshotError }}</div>
+      <div v-else-if="!snapshots.length" class="tdd-empty">本任务没有保存 JSON 快照</div>
+      <ul v-else class="tdd-snapshots">
+        <li v-for="row in snapshots" :key="row.id" class="tdd-snapshot-row">
+          <a
+            class="ffd-link"
+            :href="fileApi.jsonReadUrl(row)"
+            target="_blank"
+            rel="noopener noreferrer"
+            :title="row.storePath || row.showName || row.id"
+            data-testid="task-snapshot-open"
+          >{{ row.showName || row.storePath || `快照 #${row.id}` }}</a>
+          <span class="tdd-snapshot-meta">
+            {{ row.realName || '—' }} · {{ formatSnapshotSize(row.fileSize) }} · {{ row.createDt || '—' }}
+          </span>
+        </li>
+      </ul>
+      <p v-if="snapshotTotal > snapshots.length" class="tdd-snapshot-hint" data-testid="task-snapshot-hint">
+        此处只列最近 {{ snapshots.length }} 份；点「查看全部」打开完整列表（可按任务 ID / 状态筛选）。
+      </p>
+    </div>
   </div>
 </template>
 
@@ -284,6 +372,14 @@ function copyField(text: string, label: string) {
   overflow-y: auto;
 }
 .tdd-empty { color: var(--rc-faint); font-size: 12px; }
+.tdd-snapshot-count { color: var(--rc-faint); font-size: 11px; }
+.tdd-block-right { display: flex; align-items: center; gap: 8px; }
+.tdd-block-more { padding: 0; border: none; background: none; color: #3b82f6; font-size: 11px; cursor: pointer; }
+.tdd-block-more:hover { text-decoration: underline; }
+.tdd-snapshots { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tdd-snapshot-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #f8fafc; }
+.tdd-snapshot-meta { color: var(--rc-faint); font-size: 11px; word-break: break-all; }
+.tdd-snapshot-hint { margin: 6px 0 0; color: var(--rc-faint); font-size: 11px; line-height: 1.6; }
 .rc-btn.ghost { border-color: var(--rc-border); background: transparent; color: var(--rc-text-2); }
 .tv-spin { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: tv-spin 0.7s linear infinite; vertical-align: -1px; }
 @keyframes tv-spin { to { transform: rotate(360deg); } }

@@ -10,6 +10,7 @@ import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { useSourceSearchStore } from '@/stores/sourceSearch'
 
 // 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
 // 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
@@ -26,6 +27,70 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('目录跳转快照保留筛选和页码，返回网站源视图时恢复', async () => {
+    const query = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 40, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current', scopeSourceGroupId: '3' }, global: { components: { ElPagination } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-overview-state"]').setValue('E')
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('update:current-page', 2)
+    await flushPromises()
+    const id = wrapper.vm.captureListReturn('/canvas?siteId=site-current&view=source&sourceGroupId=3', '网站源视图')
+    expect(useSourceSearchStore().get(id)?.page).toBe(2)
+    wrapper.unmount()
+    const restored = shallowMount(SourceOverviewView, { props: {
+      currentSiteId: 'site-current', scopeSourceGroupId: '3',
+      searchNavigation: { returnTo: '/canvas?siteId=site-current&view=source&sourceGroupId=3', label: '网站源视图', restoreId: id },
+    } })
+    await flushPromises()
+    expect(restored.get('[data-testid="source-overview-state"]').element).toHaveProperty('value', 'E')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, state: 'E', siteIds: 'site-current', sourceGroupId: '3' }))
+    expect(restored.emitted('searchRestored')).toHaveLength(1)
+    restored.unmount()
+  })
+
+  it('勾选后直接从操作栏批量绑定流程，成功项取消勾选、失败项保留并刷新当前列表', async () => {
+    useAuthStore().roles = ['admin']
+    const second = { ...source, sourceId: 'src-2', name: '第二个源' }
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [source, second] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="batch-bind-flows"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-bind-flows"]').trigger('click')
+    // 1110 §10.1：点「绑定流程」直接进流程选择，不再先开空白弹窗
+    const picker = wrapper.findComponent({ name: 'FlowPickerDialog' })
+    expect(picker.exists()).toBe(true)
+    expect(picker.props('scopeHint')).toContain('2 个源')
+    const flows = [{ id: '20', name: '流程二' }]
+    picker.vm.$emit('confirm', flows)
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'BatchBindFlowsDialog' })
+    expect(dialog.props('sourceIds')).toEqual(['src-1', 'src-2'])
+    expect(dialog.props('initialFlows')).toEqual(flows)
+    const before = page.mock.calls.length
+    dialog.vm.$emit('saved', ['src-1'])
+    await flushPromises()
+    expect(page.mock.calls.length).toBeGreaterThan(before)
+    expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('1')
+    expect((wrapper.get('[data-testid="source-check-src-2"]').element as HTMLInputElement).checked).toBe(true)
+    expect(dialog.props('sourceIds')).toEqual(['src-1', 'src-2'])
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'BatchBindFlowsDialog' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('非管理员勾选源后不显示批量绑定入口', async () => {
+    useAuthStore().roles = ['viewer']
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    expect(wrapper.find('[data-testid="batch-bind-flows"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('多选源后从操作栏登记问题，向弹窗传入所选源，不增加行内问题图标', async () => {
     useAuthStore().roles = ['admin']
     const second = { ...source, sourceId: 'src-2', name: '第二个源' }
@@ -74,6 +139,7 @@ describe('SourceOverviewView', () => {
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', showOriginalDirectory: true, extraColumnLabel: '业务目录' } })
     await flushPromises()
     const labels = wrapper.findAll('th').map(th => th.text())
+    expect(labels.indexOf('业务目录')).toBe(labels.indexOf('源名称') + 1)
     expect(labels.indexOf('原始目录')).toBe(labels.indexOf('业务目录') + 1)
     expect(wrapper.findAll('[data-testid="source-overview-original-directory"]').map(cell => cell.text())).toEqual(['财经 / 行业 / 原材料', '系统目录 #101', '—'])
     wrapper.unmount()
@@ -225,7 +291,8 @@ describe('SourceOverviewView', () => {
     await wrapper.get('[data-testid="source-overview-search-text"]').setValue('src-1, src-2')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: 'src-1,src-2' }))
-    expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('操作')
+    // 2026-11-09：源列表最右侧补了「操作」列（⋯ 菜单 → 保存时JSON），此处从「不含操作列」改为「含操作列」
+    expect(wrapper.findAll('th').map((th) => th.text())).toContain('操作')
 
     await wrapper.get('[data-testid="source-overview-source-link"]').trigger('click')
     expect(wrapper.emitted('openSource')?.[0]).toEqual([source])
@@ -1403,6 +1470,22 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），1104 加了「配置 ID」（configId），字段数 8
     expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
+  })
+
+  // 1105 方案 T2「＋条件移入输入框」：不再有独立加号按钮，加号是值输入框内的后缀
+  it('「＋条件」在值输入框内，不独立成行尾按钮', async () => {
+    const { wrapper } = await mountWithSpy()
+    const addBtn = wrapper.get('[data-testid="source-overview-condition-add"]')
+    const value = addBtn.element.parentElement as HTMLElement
+    expect(value.classList.contains('sov-value')).toBe(true)
+    expect(value.classList.contains('has-add')).toBe(true)
+    expect(value.querySelector('[data-testid="source-overview-search-text"]')).not.toBeNull()
+    // 加号在 .sov-value 里，它的父级仍是条件行 .sov-search，不与「×」并列成独立按钮列
+    expect((value.parentElement as HTMLElement).classList.contains('sov-search')).toBe(true)
+    await add(wrapper)
+    const adds = wrapper.findAll('[data-testid="source-overview-condition-add"]')
+    expect(adds).toHaveLength(1)
+    expect((adds[0]!.element.parentElement as HTMLElement).classList.contains('sov-value')).toBe(true)
   })
 
   // 0930-15（会后 Leon：「可以根据流程查有哪些源」）

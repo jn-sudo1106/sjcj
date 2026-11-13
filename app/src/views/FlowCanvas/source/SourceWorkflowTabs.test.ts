@@ -556,6 +556,22 @@ describe('SourceWorkflowTabs · 共用流程保存提示（10-29）', () => {
     expect(sharedBtn('shared-flow-save')).toBeNull()
   })
 
+  it('使用源数查询没返回时不阻塞保存：按共用处理并立即弹确认（1105-S1）', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    // 永远不返回：模拟接口慢/卡住。以前 askShared 会 await 这次查询，用户点保存像没反应。
+    vi.spyOn(sourceApi, 'sourcePaged').mockReturnValue(new Promise(() => {}) as never)
+    const { wrapper } = await mountTabs(dialogStub)
+    mounted.push(wrapper)
+    document.body.appendChild(wrapper.element)
+
+    const asked = confirmSharedFlowWrite('save')
+    await flushPromises()
+    // 查询没回来也能走到确认弹窗（文案明确说明「在用的源数没查到」）
+    expect(document.body.textContent).toContain('在用的源数没查到')
+    sharedBtn('shared-flow-save')!.click()
+    expect(await asked).toBe(true)
+  })
+
   it('多个源在用：标签标「3 源共用」；点保存弹窗，选「保存」后放行，同一页不再问', async () => {
     vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 3 } as never)

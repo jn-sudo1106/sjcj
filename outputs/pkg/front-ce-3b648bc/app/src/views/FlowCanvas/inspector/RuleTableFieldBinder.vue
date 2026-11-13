@@ -1,0 +1,460 @@
+<script setup lang="ts">
+// 规则处理节点「新增业务规则」表/字段绑定（0801 方案 §6.3/§7.2）。
+// 0805 改判（推翻 0803 的 vrule 单租户搜索）：用户指出采集中心自己的 entryType 和 vrule 那边其实是
+// 同一份底层表注册表（entryTypeId/itemCode 编号空间共享，真机核对过 TB_NEWS_TAGS 两边 tableId 都是
+// 2101991），两套查询没必要——改回跟其他节点表配置同源的 entryApi.entryPaged/entryDetail，
+// 输入即搜索（按 name 关键字），不再依赖父级预加载的 tables 列表。
+// 字段列表（入参/出参）仍由父级 RuleOrchestrationTab 传入——它同时要给「查看业务编排」的只读摘要显示字段名，
+// 缓存逻辑放父级更省一次重复请求。
+// 0804 拍板：所属库固定为采集库（不再可选，见 RULE_DATA_SOURCE）；命名沿用节点标题，
+// 不再单独输入，「引用已有规则」能力一并砍掉（复用需求交给模板功能承接）。
+// 入参字段默认全选；出参字段由用户明确勾选，避免新规则无意输出全部字段。
+import { computed, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { entryApi, type EntryType, type RuleFieldOption, type RuleOrchestration } from '@/api'
+import { DEFAULT_SYSTEM_FIELDS, isSystemField } from '@/utils/flow/ruleOrchestration'
+import { usePresetTables } from '@/composables/usePresetTables'
+import TableEditDialog from './TableEditDialog.vue'
+
+type BinderModel = Pick<
+  RuleOrchestration,
+  'inputTable' | 'inputTableId' | 'outputTable' | 'outputTableId' | 'inputFields' | 'outputFields'
+>
+
+const props = defineProps<{
+  modelValue: BinderModel
+  inputFieldOptions: RuleFieldOption[]
+  outputFieldOptions: RuleFieldOption[]
+  /** 数据监控节点（2026-09-01）：隐藏「输出表」「出参字段」区块——monitor 不落表、不出参，只绑输入表/入参。 */
+  hideOutput?: boolean
+}>()
+const emit = defineEmits<{ 'update:modelValue': [Partial<BinderModel>] }>()
+
+// 常用默认表快捷选择（同事 e1f9290 加的，跟本文件其余的 0805 改造无关）。
+// 0903 欠账 A2：原来这四个 ID（2103330/2101001/2102157/2103300）**在真实后端一个都不存在**
+// ——它们是 mock 里的 ID，这功能从来只在 mock 下成立。点一下会把输出表设成无效 ID、
+// 出参变「共 0 个可选」，界面还不报错。2026-09-05 换成下面这四张真实表。
+//
+// 名单仍是硬编码，所以**校验没有撤掉**（composables/usePresetTables.ts）：渲染前逐个问
+// 后端这张表在不在，只留存在的，一个不剩就整行不显示。换个环境这些 ID 同样可能失效，
+// 有校验兜着就不会再出现"点了没反应还不报错"。
+const DEFAULT_PRESET_TABLES = [
+  // 前两张按实际用量定（2026-09-05 抽 11998 个源统计 entryTypeId）：
+  // 通用新闻表 6481 个源、公众号文章 5439 个，两张占 99.3%，断层明显。
+  // 后两张是业务指定的资源表（用户 2026-09-05 点名）。四张都已逐个校验存在且有字段。
+  { name: '通用新闻表', tableId: '900' },
+  { name: '公众号文章', tableId: '6200029' },
+  { name: '附件资源表', tableId: '6200020' },
+  { name: '图片资源文件表', tableId: '6200005' },
+]
+const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
+
+// 只发真正改动的字段，不拿 props.modelValue 兜底铺满整个对象；父级会把 patch 合并到当前 store 状态。
+function patch(p: Partial<BinderModel>) {
+  emit('update:modelValue', p)
+}
+
+/**
+ * 完整字段候选列表（含底层标准系统字段）：
+ * 真实后端许多表（如 900 通用新闻表）在 entryDetail 定义里只登记了业务字段（K1～K25），未登记物理底层的
+ * ENTRY_ID、SOURCE_ID、PARENT_ID、CREATE_DT、UPDATE_DT。当表自身未包含对应系统字段时，
+ * 补充底层通用系统字段，并标记为系统字段（默认折叠，用户点「显示系统字段」时才展示）。
+ */
+function resolveEffectiveFields(options: RuleFieldOption[]): RuleFieldOption[] {
+  if (!options?.length) return []
+  const existingCodes = new Set(options.map((f) => (f.itemCode || f.columnName || '').toUpperCase()))
+  const missingDefaults = DEFAULT_SYSTEM_FIELDS.filter(
+    (df) => !existingCodes.has(df.itemCode.toUpperCase()) && !existingCodes.has((df.columnName ?? '').toUpperCase()),
+  )
+  return missingDefaults.length ? [...options, ...missingDefaults] : options
+}
+const effectiveInputOptions = computed(() => resolveEffectiveFields(props.inputFieldOptions))
+const effectiveOutputOptions = computed(() => resolveEffectiveFields(props.outputFieldOptions))
+
+// 系统固定字段（seq < 0 或常见系统列）默认不进可选池；已选中的仍保留在已选 tag，避免静默丢字段
+const showSystemFields = ref(false)
+function toggleSystemFields() {
+  showSystemFields.value = !showSystemFields.value
+  // 展开系统字段时，自动取消「只看已选」，确保新放开的系统字段能立即呈现在勾选墙上供查看和勾选
+  if (showSystemFields.value) {
+    onlySelected.input = false
+  }
+}
+function selectableFields(all: RuleFieldOption[]): RuleFieldOption[] {
+  if (showSystemFields.value) return all
+  return all.filter((f) => !isSystemField(f))
+}
+const inputFieldPool = computed(() => selectableFields(effectiveInputOptions.value))
+const outputFieldPool = computed(() => selectableFields(effectiveOutputOptions.value))
+
+/**
+ * 勾选墙上显示哪些字段（2026-09-23 起入参 / 出参统一成网页抓取那种「代码 · 中文名」勾选墙，
+ * 右上角全选 / 清空；此前是已选标签 + 「▸ 已选 x/N 个」展开器，两类节点的表配置长得不一样）。
+ * 系统字段默认藏起来，但**已经选上的**照样显示——否则它被勾着、界面上却看不见也取消不了。
+ */
+function wallFields(all: RuleFieldOption[], pool: RuleFieldOption[], selected: string[] | undefined) {
+  const inPool = new Set(pool.map((f) => f.itemCode))
+  const chosen = new Set(selected ?? [])
+  return all.filter((f) => inPool.has(f.itemCode) || chosen.has(f.itemCode))
+}
+/**
+ * 只看已选（2026-09-23，用户：「字段确实有点多」）。默认开：墙上只铺已选字段。
+ * 一个没选时自动显示全部（出参默认不勾，新节点一进来就得看到全部可选项）；
+ * 全选时两种模式一样，切换按钮不出现。
+ */
+const onlySelected = reactive({ input: true, output: true })
+function partiallySelected(selected: string[] | undefined, pool: RuleFieldOption[]) {
+  const n = selected?.length ?? 0
+  return n > 0 && pool.some((f) => !selected!.includes(f.itemCode))
+}
+const inputPartial = computed(() => partiallySelected(props.modelValue.inputFields, inputFieldPool.value))
+const outputPartial = computed(() => partiallySelected(props.modelValue.outputFields, outputFieldPool.value))
+function narrow(wall: RuleFieldOption[], selected: string[] | undefined, on: boolean, partial: boolean) {
+  return on && partial ? wall.filter((f) => selected?.includes(f.itemCode)) : wall
+}
+const inputWall = computed(() => narrow(
+  wallFields(effectiveInputOptions.value, inputFieldPool.value, props.modelValue.inputFields),
+  props.modelValue.inputFields, onlySelected.input, inputPartial.value))
+const outputWall = computed(() => narrow(
+  wallFields(effectiveOutputOptions.value, outputFieldPool.value, props.modelValue.outputFields),
+  props.modelValue.outputFields, onlySelected.output, outputPartial.value))
+/** 与数据视图对齐的「中文-K」格式（如「标题-K1」）；无中文或与物理列相同时仅显示物理列（如「ENTRY_ID」） */
+function fieldLabel(f: RuleFieldOption): string {
+  const physical = f.columnName || f.itemCode
+  return f.itemName && f.itemName !== physical ? `${f.itemName}-${physical}` : physical
+}
+/** 全选 = 当前可选池全勾上，已选的系统字段保留（不因为池里藏着它就被静默取消） */
+function selectAllFields(kind: 'input' | 'output') {
+  const key = kind === 'input' ? 'inputFields' : 'outputFields'
+  const pool = kind === 'input' ? inputFieldPool.value : outputFieldPool.value
+  patch({ [key]: [...new Set([...(props.modelValue[key] ?? []), ...pool.map((f) => f.itemCode)])] } as Partial<BinderModel>)
+}
+function clearFields(kind: 'input' | 'output') {
+  patch({ [kind === 'input' ? 'inputFields' : 'outputFields']: [] } as Partial<BinderModel>)
+}
+
+// 入参字段默认全选（0804 拍板）：表选完、字段异步加载完成后自动勾满非系统字段，用户可以再手动取消。
+// 触发条件只看"字段池非空 + 当前未选任何字段"，不额外记"是不是刚选的表"——
+// 字段池一旦拉到手（父级按 tableId 缓存），这个 watch 源引用不再变化，之后用户清空选择也不会被重新勾上；
+// 回读历史流程（inputFields 已有值）同样不会被覆盖，因为条件直接不成立。
+watch(() => props.inputFieldOptions, (options) => {
+  if (!options.length || props.modelValue.inputFields?.length) return
+  const codes = selectableFields(options).map((f) => f.itemCode)
+  if (codes.length) patch({ inputFields: codes })
+})
+
+function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return (...args: A) => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), ms)
+  }
+}
+
+// 表搜索：输入表/输出表各自独立的搜索态，避免共用一份状态时互相打断。
+// entryApi.entryPaged 不支持外部 AbortSignal（跟其他节点表配置共用同一个内部 20s 超时的 request()），
+// 用 requestSeq 丢弃过期结果即可防止旧搜索覆盖新结果——不是真正中断网络请求，但已足够安全。
+function useTableSearch() {
+  const results = ref<EntryType[]>([])
+  const loading = ref(false)
+  const selected = ref<EntryType | null>(null)
+  let requestSeq = 0
+  async function runSearch(keyword: string) {
+    const seq = ++requestSeq
+    loading.value = true
+    try {
+      // 支持按表 ID 搜（纯数字时 ID + 名称两路合并），见 entryApi.searchTables
+      const list = await entryApi.searchTables(keyword, 20)
+      if (seq !== requestSeq) return // 有更新的搜索已发出，丢弃这次的结果
+      results.value = list
+    } catch (e) {
+      if (seq !== requestSeq) return
+      ElMessage.error(`搜索表失败：${(e as Error)?.message ?? String(e)}`)
+    } finally {
+      if (seq === requestSeq) loading.value = false
+    }
+  }
+  const debouncedSearch = debounce(runSearch, 300)
+  // 渲染用列表：把当前已选项也并进去，保证下拉重新打开、或搜索结果不包含已选项时控件仍能正确回显 label
+  const renderOptions = computed(() => {
+    if (!selected.value) return results.value
+    if (results.value.some((t) => t.tableId === selected.value!.tableId)) return results.value
+    return [selected.value, ...results.value]
+  })
+  return { results, loading, selected, runSearch, debouncedSearch, renderOptions }
+}
+const inputTableSearch = useTableSearch()
+const outputTableSearch = useTableSearch()
+
+// 回读历史流程：modelValue 里已经有 inputTableId/outputTableId，但 renderOptions 只认
+// 「用户在这次会话里搜过/选过」的表——回显时 selected 还是初始的 null，el-select 找不到
+// 对应 el-option 的 label，只能把裸 tableId 显示出来（就是「输入表」框里出现一串数字的原因）。
+// 先用 modelValue 自带的物理表名兜底垫上，再异步查 entryDetail 换成带业务名的完整 label；
+// 查询失败不影响可用性，兜底的物理表名已经比裸 ID 可读。
+//
+// 实测坑（2026-09-01）：只做上面这步还是会卡在兜底文案不动——tableId 没变时 <el-option> 的
+// :key 不变，Vue 复用同一个 vnode，el-select 内部缓存的"当前选中项 label"不会跟着 label 属性的
+// 新值重新取；下面两处 <el-option> 的 key 必须把 label 一起编进去，label 变了才会强制换新 vnode。
+async function hydrateSelected(search: ReturnType<typeof useTableSearch>, tableId: string | undefined, fallbackName: string | undefined) {
+  if (!tableId) {
+    search.selected.value = null
+    return
+  }
+  if (search.selected.value?.tableId === tableId) return
+  search.selected.value = { tableId, tableName: fallbackName || tableId, fields: [] }
+  try {
+    const detail = await entryApi.entryDetail(tableId)
+    if (detail && search.selected.value?.tableId === tableId) search.selected.value = detail
+  } catch {
+    // 保底的物理表名已经够用，查详情失败不打断编辑
+  }
+}
+watch(() => props.modelValue.inputTableId, (id) => { void hydrateSelected(inputTableSearch, id, props.modelValue.inputTable) }, { immediate: true })
+watch(() => props.modelValue.outputTableId, (id) => { void hydrateSelected(outputTableSearch, id, props.modelValue.outputTable) }, { immediate: true })
+
+function onInputTableFilter(query: string) {
+  inputTableSearch.debouncedSearch(query)
+}
+function onInputTableVisible(open: boolean) {
+  if (open && !inputTableSearch.results.value.length) void inputTableSearch.runSearch('')
+}
+function onOutputTableFilter(query: string) {
+  outputTableSearch.debouncedSearch(query)
+}
+function onOutputTableVisible(open: boolean) {
+  if (open && !outputTableSearch.results.value.length) void outputTableSearch.runSearch('')
+}
+/** 与网页抓取等节点的表配置统一成「ID · 库.表」（2026-09-23），表下拉也支持按 ID 搜 */
+function tableOptionLabel(t: EntryType) {
+  return `${t.tableId} · ${t.tableName}`
+}
+
+// 未显式选输出表时，占位文字直接展示会兑现成哪张表（跟 effectiveOutputTable 的口径一致），
+// 而不是一句不指名道姓的说明——不然用户看不出"默认"具体指的是哪张表。
+const outputTablePlaceholder = computed(() => {
+  const input = inputTableSearch.selected.value
+  return input ? `默认 = ${tableOptionLabel(input)}` : '默认 = 输入表；可输入筛选'
+})
+
+function onInputTableId(tableId: string | undefined | null) {
+  const id = tableId ?? ''
+  const table = inputTableSearch.renderOptions.value.find((t) => t.tableId === id)
+  inputTableSearch.selected.value = table ?? null
+  patch({ inputTableId: id, inputTable: table?.tableName ?? '', inputFields: [] })
+}
+function onOutputTableId(tableId: string | undefined | null) {
+  const id = tableId ?? ''
+  const table = outputTableSearch.renderOptions.value.find((t) => t.tableId === id)
+  outputTableSearch.selected.value = table ?? null
+  patch({ outputTableId: id, outputTable: table?.tableName ?? '', outputFields: [] })
+}
+
+// 新建表仅用于输出表：规则输入表必须选择已有表，避免在规则节点内创建孤立输入表。
+// 建表本身走通用的实体表注册（entrySave），跟表配置共用同一个 TableEditDialog；
+// 新表存进搜索结果并选中，不依赖下一次搜索能不能马上查到它。
+const newTableDialog = reactive<{ open: boolean }>({ open: false })
+function openNewTable() {
+  newTableDialog.open = true
+}
+function injectCreatedTable(search: typeof outputTableSearch, entry: EntryType) {
+  if (!search.results.value.some((t) => t.tableId === entry.tableId)) {
+    search.results.value = [entry, ...search.results.value]
+  }
+}
+async function onNewTableSaved(tableId: string) {
+  const entry = await entryApi.entryDetail(tableId)
+  injectCreatedTable(outputTableSearch, entry)
+  onOutputTableId(tableId)
+}
+
+function toggleField(kind: 'input' | 'output', code: string) {
+  const key = kind === 'input' ? 'inputFields' : 'outputFields'
+  const current = props.modelValue[key] ?? []
+  const next = current.includes(code) ? current.filter((c) => c !== code) : [...current, code]
+  patch({ [key]: next } as Partial<BinderModel>)
+}
+
+</script>
+
+<template>
+  <div class="rc-field"><label>输入表 *</label>
+    <div class="rc-select-row">
+      <el-select
+        class="rc-table-select"
+        :model-value="modelValue.inputTableId || undefined"
+        filterable
+        remote
+        clearable
+        :remote-method="onInputTableFilter"
+        :loading="inputTableSearch.loading.value"
+        placeholder="输入表名或表 ID 搜索，如 YOUTUBE、2101720"
+        @update:model-value="onInputTableId"
+        @visible-change="onInputTableVisible"
+      >
+        <el-option
+          v-for="t in inputTableSearch.renderOptions.value"
+          :key="`${t.tableId}:${tableOptionLabel(t)}`"
+          :label="tableOptionLabel(t)"
+          :value="t.tableId"
+        />
+      </el-select>
+    </div>
+  </div>
+
+  <div class="rc-field">
+    <div class="rc-field-header">
+      <label>入参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.inputFields?.length ?? 0 }} / {{ inputFieldPool.length }} 个，默认全选）</template></label>
+      <div v-if="modelValue.inputTableId" class="rc-field-actions">
+        <button v-if="inputPartial" type="button" class="rc-text-btn" data-testid="rule-input-only-selected" @click="onlySelected.input = !onlySelected.input">{{ onlySelected.input ? `显示全部 ${inputFieldPool.length} 个` : '只看已选' }}</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-input-select-all" @click="selectAllFields('input')">全选</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-input-clear" @click="clearFields('input')">清空</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-input-toggle-system" @click="toggleSystemFields">{{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}</button>
+      </div>
+    </div>
+    <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
+    <div v-else class="rc-tag-row" data-testid="rule-input-fields">
+      <span
+        v-for="f in inputWall" :key="f.itemCode"
+        class="rc-tag" :class="{ on: modelValue.inputFields?.includes(f.itemCode) }"
+        @click="toggleField('input', f.itemCode)"
+      >
+        <input type="checkbox" class="rc-tag-check" :checked="modelValue.inputFields?.includes(f.itemCode)" @click.stop="toggleField('input', f.itemCode)" />
+        <span>{{ fieldLabel(f) }}</span>
+      </span>
+    </div>
+  </div>
+
+  <div v-if="!hideOutput" class="rc-field"><label>输出表（可选，默认使用输入表）</label>
+    <div class="rc-select-row">
+      <el-select
+        class="rc-table-select"
+        :model-value="modelValue.outputTableId || undefined"
+        filterable
+        remote
+        clearable
+        :remote-method="onOutputTableFilter"
+        :loading="outputTableSearch.loading.value"
+        :placeholder="outputTablePlaceholder"
+        @update:model-value="onOutputTableId"
+        @visible-change="onOutputTableVisible"
+      >
+        <el-option
+          v-for="t in outputTableSearch.renderOptions.value"
+          :key="`${t.tableId}:${tableOptionLabel(t)}`"
+          :label="tableOptionLabel(t)"
+          :value="t.tableId"
+        />
+      </el-select>
+      <button class="rc-input-btn" type="button" @click="openNewTable">＋ 新建表</button>
+    </div>
+    <div v-if="availablePresets.length" class="rc-preset-tables" data-testid="rule-table-presets">
+      <span class="rc-preset-label">常用默认表：</span>
+      <button
+        v-for="preset in availablePresets"
+        :key="preset.tableId"
+        type="button"
+        class="rc-preset-chip"
+        :class="{ active: modelValue.outputTableId === preset.tableId }"
+        @click="onOutputTableId(preset.tableId)"
+      >
+        {{ preset.name }} ({{ preset.tableId }})
+      </button>
+    </div>
+  </div>
+
+  <div v-if="!hideOutput" class="rc-field">
+    <div class="rc-field-header">
+      <label>出参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.outputFields?.length ?? 0 }} / {{ outputFieldPool.length }} 个）</template></label>
+      <div v-if="modelValue.inputTableId" class="rc-field-actions">
+        <button v-if="outputPartial" type="button" class="rc-text-btn" data-testid="rule-output-only-selected" @click="onlySelected.output = !onlySelected.output">{{ onlySelected.output ? `显示全部 ${outputFieldPool.length} 个` : '只看已选' }}</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-output-select-all" @click="selectAllFields('output')">全选</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-output-clear" @click="clearFields('output')">清空</button>
+      </div>
+    </div>
+    <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
+    <template v-else>
+      <!-- 空态必须说清后果（0903）：出参字段默认不勾（会上口径「出参肯定就两三个，让他自己勾」），
+           而保存节点配置时它是必填。两者相加 = 新建规则节点第一次保存**必然**被拦，
+           而拦下来只有一个 3 秒就消失的 toast + 静默跳 tab，用户以为存上了、离开、节点就没了。
+           在字段本身写明"不选就存不了"，比事后弹一次提示有用得多。 -->
+      <div v-if="!modelValue.outputFields?.length" class="rc-tag-required">未选择 · 至少选 1 个才能保存</div>
+      <div class="rc-tag-row" data-testid="rule-output-fields">
+        <span
+          v-for="f in outputWall" :key="f.itemCode"
+          class="rc-tag" :class="{ on: modelValue.outputFields?.includes(f.itemCode) }"
+          @click="toggleField('output', f.itemCode)"
+        >
+          <input type="checkbox" class="rc-tag-check" :checked="modelValue.outputFields?.includes(f.itemCode)" @click.stop="toggleField('output', f.itemCode)" />
+          <span>{{ fieldLabel(f) }}</span>
+        </span>
+      </div>
+    </template>
+  </div>
+
+  <TableEditDialog v-model:open="newTableDialog.open" @saved="onNewTableSaved" />
+</template>
+
+<style scoped>
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
+.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
+.rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; }
+.rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.rc-table-select { width: 100%; }
+.rc-table-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px #dbe3ee inset;
+  font-size: 12px;
+}
+.rc-table-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 3px #dbeafe;
+}
+.rc-select-row { display: flex; align-items: stretch; gap: 8px; }
+.rc-select-row .rc-table-select { flex: 1; }
+.rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
+.rc-input-btn:hover { background: var(--rc-primary-bg); }
+.rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
+/* 勾选墙：与 TableTab（网页抓取等节点）的「输入字段选择」同一套样式（2026-09-23 统一） */
+.rc-field-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.rc-field-header label { margin-bottom: 0; }
+.rc-field-actions { display: flex; gap: 8px; flex: none; }
+.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+.rc-text-btn:hover { text-decoration: underline; }
+.rc-tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.rc-tag-required { margin-top: 2px; color: #b91c1c; font-size: 11px; }
+.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
+.rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
+.rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
+.rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
+
+.rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }
+.rc-preset-chip {
+  padding: 3px 8px;
+  border: 1px solid #d5e2f2;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+}
+.rc-preset-chip:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: var(--rc-primary-ink);
+}
+.rc-preset-chip.active {
+  border-color: var(--rc-primary);
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--rc-primary);
+}
+.rc-preset-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>
