@@ -31,11 +31,13 @@ let loadRequest = 0
 const entryTypeIdFilter = ref('')
 const nameFilter = ref('')
 const dsKindFilter = ref<EntryType['dsKind'] | ''>('')
+const opTypeFilter = ref<EntryType['opType'] | ''>('')
+const storageEngineFilter = ref('')
 const enableFilter = ref<string | undefined>('0')
 const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
 const editor = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
-const extractDialog = reactive<{ visible: boolean; text: string; count: number }>({ visible: false, text: '', count: 0 })
+const extractDialog = reactive<{ visible: boolean; text: string; count: number; isCk?: boolean }>({ visible: false, text: '', count: 0, isCk: false })
 // 快速同步到 CK：同步服务走同源 /api/sync-platform 代理，任何业务后端环境都能用；
 // 不再按后端主机门控（原 133 门控在 186/217 下恒 false，入口整体消失）
 const quickCk = reactive<{ visible: boolean; entry: EntryType | null }>({ visible: false, entry: null })
@@ -104,6 +106,8 @@ function currentFilters() {
     name: nameFilter.value.trim() || undefined,
     enable: enableFilter.value,
     dsKind: dsKindFilter.value || undefined,
+    opType: opTypeFilter.value || undefined,
+    storageEngine: storageEngineFilter.value.trim() || undefined,
   }
 }
 
@@ -172,6 +176,8 @@ function onReset() {
   entryTypeIdFilter.value = ''
   nameFilter.value = ''
   dsKindFilter.value = ''
+  opTypeFilter.value = ''
+  storageEngineFilter.value = ''
   selected.value = []
   enableFilter.value = undefined
   page.value = 1
@@ -353,9 +359,13 @@ async function onCheckTable(e: EntryType) {
  * 成功后 load() 读后端新统计快照，失败时列表保留上次成功值（不清零，§10.3）。
  */
 async function onCalc(e: EntryType) {
+  const isCk = e.dsKind === 'CK'
+  const tip = isCk
+    ? `将直接从 ClickHouse 库统计该表的最新数据量并更新统计快照: ${e.tableId}`
+    : `将按源数据强制重新统计该表的数据量（用于手动删表数据等导致的不一致）: ${e.tableId}`
   try {
     await ElMessageBox.confirm(
-      `将按源数据强制重新统计该表的数据量（用于手动删表数据等导致的不一致）: ${e.tableId}`,
+      tip,
       '重新计算数据量',
       { type: 'warning', confirmButtonText: '确认重算', cancelButtonText: '取消' },
     )
@@ -372,9 +382,12 @@ async function onCalc(e: EntryType) {
   }
 }
 function onRebuildIndex(e: EntryType) {
+  const isCk = e.dsKind === 'CK'
   confirmDanger(
-    '重建去重索引(谨慎使用!!）',
-    `如变更去重字段后，本次将重新计算历史数据的去重索引: ${e.tableId}`,
+    isCk ? '执行去重合并 (ClickHouse)' : '重建去重索引(谨慎使用!!）',
+    isCk
+      ? `该表存储于 ClickHouse，将下发 OPTIMIZE TABLE FINAL 强制触发 ReplacingMergeTree 数据合并去重: ${e.tableId}`
+      : `如变更去重字段后，本次将重新计算历史数据的去重索引: ${e.tableId}`,
     () => entryApi.rebuildIndex(e.tableId),
   )
 }
@@ -391,6 +404,7 @@ async function onExtractFields(e: EntryType) {
   try {
     const detail = await entryApi.entryDetail(e.tableId)
     extractDialog.count = detail.fields.length
+    extractDialog.isCk = e.dsKind === 'CK'
     extractDialog.text = detail.fields
       .map((f) => `${f.prop}:${f.desc}:${getEffectiveWidth(f.width)}`)
       .join('\n')
@@ -398,6 +412,18 @@ async function onExtractFields(e: EntryType) {
   } catch (error) {
     ElMessage.error(`加载字段失败：${error instanceof Error ? error.message : String(error)}`)
   }
+}
+function copyCkColsText() {
+  if (!extractDialog.text) return
+  const lines = extractDialog.text.split('\n').filter(Boolean)
+  const ckCols = lines.map((line) => {
+    const parts = line.split(':')
+    const prop = parts[0]?.trim() || ''
+    const desc = parts[1]?.trim() || prop
+    return `\`${prop}\` Nullable(String) COMMENT '${desc}'`
+  }).join(',\n  ')
+  void copyToClipboard(ckCols)
+  ElMessage.success('已复制 ClickHouse 字段定义')
 }
 // 同 SiteSourceSwitcher：原先自造的 navigator.clipboard 在 http 部署站上必然失败
 // （非安全上下文不暴露这个 API），且没有 execCommand 兜底。统一走 utils/clipboard。
@@ -539,6 +565,19 @@ const onEnterSearch = withoutComposition(() => onSearch())
         <el-option label="CK" value="CK" />
         <el-option label="MYSQL" value="MYSQL" />
       </el-select>
+      <el-select v-model="opTypeFilter" aria-label="读写类型" data-testid="entry-op-type-filter" style="width: 115px" @change="onSearch">
+        <template #prefix><span>读写</span></template>
+        <el-option label="全部" value="" />
+        <el-option label="读写" value="wr" />
+        <el-option label="只读" value="r" />
+      </el-select>
+      <el-select v-model="storageEngineFilter" aria-label="存储引擎" data-testid="entry-storage-engine-filter" style="width: 130px" @change="onSearch">
+        <template #prefix><span>引擎</span></template>
+        <el-option label="全部" value="" />
+        <el-option label="InnoDB" value="InnoDB" />
+        <el-option label="ReplacingMergeTree" value="ReplacingMergeTree" />
+        <el-option label="MergeTree" value="MergeTree" />
+      </el-select>
       <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" inputmode="numeric" aria-label="表 ID，仅支持数字" title="表 ID 仅支持数字，按名称查询请使用右侧表名称框" style="width: 150px" @keyup.enter="onEnterSearch" />
       <el-input v-model="nameFilter" clearable placeholder="表名称" style="width: 190px" @keyup.enter="onEnterSearch" />
       <button class="rc-btn" type="button" @click="onSearch">查询</button>
@@ -636,7 +675,17 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td class="et-row-count" data-testid="entry-row-count">{{ e.rowCount == null ? '—' : e.rowCount.toLocaleString('zh-CN') }}</td>
             <!-- §10.1：无后端物理表状态快照字段，统一「状态待检查」，不猜缺表也不猜正常 -->
             <td class="et-physical-state" data-testid="entry-physical-state">{{ PHYSICAL_TABLE_UNKNOWN_LABEL }}</td>
-            <td>{{ e.dsKind ?? 'MYSQL' }}</td>
+            <td>
+              <div>
+                <span>{{ e.dsKind ?? 'MYSQL' }}</span>
+                <span :style="{ marginLeft: '4px', fontSize: '11px', padding: '1px 5px', borderRadius: '3px', background: e.opType === 'r' ? '#fef3c7' : '#e0f2fe', color: e.opType === 'r' ? '#92400e' : '#0369a1', display: 'inline-block' }">
+                  {{ e.opType === 'r' ? '只读' : '读写' }}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: var(--rc-muted); margin-top: 2px">
+                {{ e.storageEngine || (e.dsKind === 'CK' ? 'ReplacingMergeTree' : 'InnoDB') }}
+              </div>
+            </td>
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
             <td>{{ e.remark || '—' }}</td>
@@ -715,6 +764,12 @@ const onEnterSearch = withoutComposition(() => onSearch())
         <dt>表名称</dt><dd>{{ drawer.entry.name || '—' }}</dd>
         <dt>物理表名</dt><dd>{{ drawer.entry.tableName }}</dd>
         <dt>数据源</dt><dd>{{ drawer.entry.dsKind ?? 'MYSQL' }}</dd>
+        <dt>读写类型</dt><dd>{{ drawer.entry.opType === 'r' ? '只读 (r)' : '读写 (wr)' }}</dd>
+        <dt>存储引擎</dt><dd>{{ drawer.entry.storageEngine || (drawer.entry.dsKind === 'CK' ? 'ReplacingMergeTree' : 'InnoDB') }}</dd>
+        <template v-if="drawer.entry.dsKind === 'CK'">
+          <dt>排序列</dt><dd>{{ drawer.entry.sorted || 'entry_id' }}</dd>
+          <dt v-if="drawer.entry.partColumn">分区字段</dt><dd v-if="drawer.entry.partColumn">{{ drawer.entry.partColumn }}</dd>
+        </template>
         <dt>去重字段</dt><dd>{{ drawer.entry.keyField || '—' }}</dd>
         <dt>去重方式</dt><dd>{{ drawer.entry.dedupMode === 'table' ? '表内去重' : '源内去重' }}</dd>
         <dt>状态</dt><dd>{{ drawer.entry.state || '—' }}</dd>
@@ -757,10 +812,13 @@ const onEnterSearch = withoutComposition(() => onSearch())
     </div>
   </el-drawer>
 
-  <el-dialog v-model="extractDialog.visible" title="提取表字段" width="600px" append-to-body>
+  <el-dialog v-model="extractDialog.visible" :title="`提取表字段${extractDialog.isCk ? ' [ClickHouse]' : ''}`" width="600px" append-to-body>
     <div class="et-extract-head">
       <span class="muted">格式：<code>字段编码:展示名:列宽</code> · 共 <b class="et-extract-count">{{ extractDialog.count }}</b> 个字段</span>
-      <button class="rc-btn sm" type="button" @click="copyExtractText"><el-icon><CopyDocument /></el-icon>复制</button>
+      <div style="display: flex; gap: 8px;">
+        <button v-if="extractDialog.isCk" class="rc-btn sm" type="button" @click="copyCkColsText"><el-icon><CopyDocument /></el-icon>复制CK列定义</button>
+        <button class="rc-btn sm" type="button" @click="copyExtractText"><el-icon><CopyDocument /></el-icon>复制</button>
+      </div>
     </div>
     <textarea class="et-extract-textarea" :value="extractDialog.text" rows="14" readonly />
   </el-dialog>

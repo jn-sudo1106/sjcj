@@ -36,6 +36,10 @@ vi.mock('@/api/aiChat', () => ({
     { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
   ]),
   submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
+  streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
+    onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
+    onEvent({ type: 'done' })
+  }),
 }))
 
 function mountView() {

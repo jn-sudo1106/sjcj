@@ -355,18 +355,92 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect((body().find('select[data-testid="entry-ds-kind"]').element as HTMLSelectElement).value).toBe('MYSQL')
   })
 
-  it('保存 payload 含 dsKind（切换 CK 随 modifyEntryType 落库）', async () => {
+  it('编辑态：数据源类型、读写类型、存储引擎不可修改（disabled 为 true 且带提示），新建态可编辑', async () => {
+    // 1. 编辑态：disabled 且不允许修改
     const entry: EntryType = {
-      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+      tableId: 't1',
+      tableName: 'tb_a',
+      name: '表A',
+      dsKind: 'CK',
+      opType: 'r',
+      storageEngine: 'ReplacingMergeTree',
+      sorted: 'entry_id',
+      partColumn: 'toYYYYMM(UPDATE_DT)',
+      fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    }
+    await mountEditor(entry)
+    const dsSel = body().find('select[data-testid="entry-ds-kind"]')
+    const opSel = body().find('select[data-testid="entry-op-type"]')
+    const engineSel = body().find('select[data-testid="entry-storage-engine"]')
+    const sortedInput = body().find('input[data-testid="entry-sorted"]')
+    const partInput = body().find('input[data-testid="entry-part-column"]')
+
+    expect((dsSel.element as HTMLSelectElement).disabled).toBe(true)
+    expect((opSel.element as HTMLSelectElement).disabled).toBe(true)
+    expect((engineSel.element as HTMLSelectElement).disabled).toBe(true)
+    expect((sortedInput.element as HTMLInputElement).disabled).toBe(true)
+    expect((partInput.element as HTMLInputElement).disabled).toBe(true)
+    expect(dsSel.attributes('title')).toContain('不允许修改')
+    expect(opSel.attributes('title')).toContain('不允许修改')
+    expect(engineSel.attributes('title')).toContain('不允许修改')
+
+    // 2. 新建态：可自由配置与修改
+    wrapper.unmount()
+    await mountEditor(null)
+    const newDsSel = body().find('select[data-testid="entry-ds-kind"]')
+    const newOpSel = body().find('select[data-testid="entry-op-type"]')
+    const newEngineSel = body().find('select[data-testid="entry-storage-engine"]')
+
+    expect((newDsSel.element as HTMLSelectElement).disabled).toBe(false)
+    expect((newOpSel.element as HTMLSelectElement).disabled).toBe(false)
+    expect((newEngineSel.element as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('编辑保存时原样保留已有表的 dsKind、opType、storageEngine', async () => {
+    const entry: EntryType = {
+      tableId: 't1',
+      tableName: 'tb_a',
+      name: '表A',
+      dsKind: 'CK',
+      opType: 'r',
+      storageEngine: 'ReplacingMergeTree',
+      sorted: 'entry_id',
+      partColumn: 'toYYYYMM(UPDATE_DT)',
+      fields: [
         { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
       ],
     }
     const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: 't1' })
     await mountEditor(entry)
-    await body().find('select[data-testid="entry-ds-kind"]').setValue('CK')
     await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
     await flushPromises()
 
-    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', dsKind: 'CK' }))
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({
+      tableId: 't1',
+      dsKind: 'CK',
+      opType: 'r',
+      storageEngine: 'ReplacingMergeTree',
+    }))
+  })
+
+  it('新建表选择 CK 时读写类型默认为 wr（读写均走 CK 库）', async () => {
+    await mountEditor(null)
+    const dsSel = body().find('select[data-testid="entry-ds-kind"]')
+    const opSel = body().find('select[data-testid="entry-op-type"]')
+    expect((opSel.element as HTMLSelectElement).value).toBe('wr')
+
+    await dsSel.setValue('CK')
+    await flushPromises()
+
+    // 新建选择 CK 后读写类型保持 wr（读写）
+    expect((opSel.element as HTMLSelectElement).value).toBe('wr')
+    const engineSel = body().find('select[data-testid="entry-storage-engine"]')
+    expect((engineSel.element as HTMLSelectElement).value).toBe('ReplacingMergeTree')
+    const sortedInput = body().find('input[data-testid="entry-sorted"]')
+    expect((sortedInput.element as HTMLInputElement).value).toBe('entry_id')
+    const partInput = body().find('input[data-testid="entry-part-column"]')
+    expect(partInput.exists()).toBe(true)
   })
 })

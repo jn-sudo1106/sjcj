@@ -124,6 +124,14 @@ function reset() {
     state: entry?.state ?? 'C',
     // 数据源类型：MYSQL（默认）/ CK；老记录后端未返回时归一 MYSQL（与 legacyAdapters 归一口径一致）
     dsKind: entry?.dsKind ?? 'MYSQL',
+    // 读写操作类型：新建表（无论选 MySQL 还是 CK）默认为 wr（读写，表示读写均直接面向该库）；编辑已有表时沿用 entry.opType（未配置时历史 CK 回退 r，其余回退 wr）
+    opType: entry ? (entry.opType ?? (entry.dsKind === 'CK' ? 'r' : 'wr')) : 'wr',
+    // 存储引擎：MySQL 默认为 InnoDB，CK 为 ReplacingMergeTree
+    storageEngine: entry?.storageEngine ?? (entry?.dsKind === 'CK' ? 'ReplacingMergeTree' : 'InnoDB'),
+    // CK 排序列：默认 ENTRY_ID
+    sorted: entry?.sorted ?? (entry?.dsKind === 'CK' ? 'ENTRY_ID' : ''),
+    // CK 分区字段/表达式：可选，如 toYYYYMM(UPDATE_DT)
+    partColumn: entry?.partColumn ?? '',
     // null/undefined → ''：与 el-option value="" "请选择" 对齐，提交时透传空串 = 未配置（避免 String(null)='null'）
     recFlag: entry?.recFlag == null ? '' : String(entry.recFlag),
     checkFlag: entry?.checkFlag == null ? '' : String(entry.checkFlag),
@@ -224,6 +232,25 @@ function onItemCodeBlur(field: EntryField) {
   if (!field.desc?.trim() && field.prop?.trim()) field.desc = field.prop.trim()
 }
 
+function onDsKindChange() {
+  if (!isEdit.value) {
+    // 新建表选择 CK 或 MYSQL，读写类型均默认为 wr（读写，表示读写均直接面向该库）
+    form.opType = 'wr'
+    if (form.dsKind === 'CK') {
+      if (!form.storageEngine || form.storageEngine === 'InnoDB') {
+        form.storageEngine = 'ReplacingMergeTree'
+      }
+      if (!form.sorted) {
+        form.sorted = 'ENTRY_ID'
+      }
+    } else {
+      if (!form.storageEngine || form.storageEngine === 'ReplacingMergeTree') {
+        form.storageEngine = 'InnoDB'
+      }
+    }
+  }
+}
+
 // 导入字段（0828 D13，原「批量加」）。会上定的交互：**既能粘文本，也能选文件；
 // 选了文件就把内容读进同一个文本框再点确定**——原话「他选一个文件，然后可以把它文件展出来，
 // 就直接上面贴，然后点确定」。不做独立的文件解析分支，用户能看见解析成什么样。
@@ -289,10 +316,24 @@ async function submit() {
     return
   }
   try {
+    const isCk = form.dsKind === 'CK'
+    const engineVal = form.storageEngine?.trim() || (isCk ? 'ReplacingMergeTree' : 'InnoDB')
+    const sortedVal = isCk ? (form.sorted?.trim() || 'ENTRY_ID') : form.sorted
+    const partColumnVal = isCk ? (form.partColumn?.trim() || undefined) : undefined
+    const tableConfigJson = JSON.stringify({
+      storageEngine: engineVal,
+      sorted: sortedVal || '',
+      partColumn: partColumnVal || '',
+    })
+
     const result = await entryApi.entrySave({
       ...form,
       name: form.name.trim(),
       tableName: form.tableName.trim(),
+      storageEngine: engineVal,
+      sorted: sortedVal,
+      partColumn: partColumnVal,
+      tableConfig: tableConfigJson,
       fields: form.fields.map((field, index) => ({ ...field, prop: field.prop.trim(), desc: field.desc.trim(), seq: index + 1 })),
     })
     ElMessage.success(result.message || '处理成功')
@@ -318,11 +359,38 @@ async function submit() {
         </select>
       </div>
       <div class="rc-field"><label>数据源类型</label>
-        <!-- 切换只改 cfg_entry_type.DS_KIND（查询链路标记），不迁数据；写入始终在 MySQL -->
-        <select v-model="form.dsKind" class="rc-input" data-testid="entry-ds-kind">
+        <select v-model="form.dsKind" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改数据源类型' : ''" data-testid="entry-ds-kind" @change="onDsKindChange">
           <option value="MYSQL">MYSQL</option>
           <option value="CK">CK</option>
         </select>
+      </div>
+      <div class="rc-field"><label title="新建表选择 CK 时默认为读写 (wr)，表示读写均直接面向 CK 库；只读 (r) 表示仅用于查询分析">读写类型</label>
+        <select v-model="form.opType" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改读写类型' : ''" data-testid="entry-op-type">
+          <option value="wr">读写 (wr)</option>
+          <option value="r">只读 (r)</option>
+        </select>
+      </div>
+      <div class="rc-field"><label>存储引擎</label>
+        <select v-if="form.dsKind === 'CK'" v-model="form.storageEngine" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改存储引擎' : ''" data-testid="entry-storage-engine">
+          <option value="ReplacingMergeTree">ReplacingMergeTree（推荐，按版本去重）</option>
+          <option value="MergeTree">MergeTree（基础明细）</option>
+          <option value="SummingMergeTree">SummingMergeTree（数值汇总）</option>
+          <option value="AggregatingMergeTree">AggregatingMergeTree（物化聚合）</option>
+          <option value="VersionedCollapsingMergeTree">VersionedCollapsingMergeTree（折叠树）</option>
+        </select>
+        <select v-else v-model="form.storageEngine" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改存储引擎' : ''" data-testid="entry-storage-engine">
+          <option value="InnoDB">InnoDB（默认）</option>
+          <option value="MyISAM">MyISAM</option>
+          <option value="MEMORY">MEMORY</option>
+        </select>
+      </div>
+      <div v-if="form.dsKind === 'CK'" class="rc-field">
+        <label title="ClickHouse MergeTree 系列物理排序列（ORDER BY），默认 ENTRY_ID">排序列 (ORDER BY)</label>
+        <input v-model="form.sorted" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改排序列' : ''" data-testid="entry-sorted" placeholder="例如 ENTRY_ID 或 SOURCE_ID, ENTRY_ID" />
+      </div>
+      <div v-if="form.dsKind === 'CK'" class="rc-field">
+        <label title="ClickHouse 表分区表达式（PARTITION BY），可选，例如 toYYYYMM(UPDATE_DT) 或 toYYYYMMDD(CREATE_DT)">分区字段 (PARTITION BY)</label>
+        <input v-model="form.partColumn" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改分区字段' : ''" data-testid="entry-part-column" placeholder="例如 toYYYYMM(UPDATE_DT)（可选，留空则不分区）" />
       </div>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>
       <div v-if="isEdit" class="rc-field ete-wide" style="margin-top: 4px;">
@@ -449,6 +517,7 @@ async function submit() {
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; margin-bottom: 12px; }
 .rc-field label { display: block; margin-bottom: 4px; color: var(--rc-muted); font-size: 11px; }
 .rc-input, .rc-select { width: 100%; box-sizing: border-box; border: 1px solid #dbe3ee; border-radius: 6px; padding: 6px 8px; background: #fff; color: var(--rc-text); font-size: 12px; }
+.rc-input:disabled, .rc-select:disabled { background: #f8fafc; color: var(--rc-muted, #64748b); cursor: not-allowed; }
 /* 1013 字段必填：编码/展示名列头红星 + 空值输入框红框提示 */
 .ete-required { color: #f5222d; margin-left: 2px; }
 .rc-input.is-invalid { border-color: #f5222d; background: #fff7f7; }

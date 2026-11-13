@@ -4,6 +4,7 @@
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  ArrowDown,
   ArrowRight,
   ChatDotRound,
   Close,
@@ -17,6 +18,7 @@ import {
 import {
   listAiSessions,
   submitClarificationAnswer,
+  streamAgentChat,
   type AiSessionItem,
   type ChatMessage,
   type Clarification,
@@ -67,6 +69,7 @@ const promptText = ref<string>('')
 const enableReasoning = ref<boolean>(true)
 const enableAutoChart = ref<boolean>(true)
 const isSending = ref<boolean>(false)
+const currentAbortController = ref<AbortController | null>(null)
 
 // 视图切换与思考链折叠（支持趋势柱状、占比饼图与明细数据表）
 const activeDataView = ref<'chart' | 'pie' | 'table'>('chart')
@@ -697,14 +700,25 @@ function handleQuickPrompt(text: string) {
   handleSend()
 }
 
-// 发送消息
-function handleSend(customTitle?: string) {
+// 终止当前正在生成的流式请求
+function handleStopStream() {
+  if (currentAbortController.value) {
+    currentAbortController.value.abort()
+    currentAbortController.value = null
+  }
+  isSending.value = false
+}
+
+// 发送消息：对接后端 /api/poc/chat/agent SSE 流式接口
+async function handleSend(customTitle?: string) {
   const content = promptText.value.trim()
   if (!content || isSending.value) return
   isSending.value = true
   promptText.value = ''
 
-  if (activeSessionId.value === 'new') {
+  let targetSessionId = activeSessionId.value
+
+  if (targetSessionId === 'new') {
     // 从新建会话页发起：创建全新会话项并立即渲染对话
     const newSessionId = `s-${Date.now()}`
     const sessionTitle =
@@ -717,270 +731,156 @@ function handleSend(customTitle?: string) {
     }
     sessions.value = [newSession, ...sessions.value]
     activeSessionId.value = newSessionId
+    targetSessionId = newSessionId
+    sessionMessages.value[newSessionId] = []
+  }
 
-    const userMsg: ChatMessage = {
-      id: `m-${Date.now()}-u`,
-      role: 'user',
-      content,
+  const list = sessionMessages.value[targetSessionId] || []
+  if (!sessionMessages.value[targetSessionId]) {
+    sessionMessages.value[targetSessionId] = list
+  }
+
+  // 1. 追加用户消息
+  const userMsg: ChatMessage = {
+    id: `m-${Date.now()}-u`,
+    role: 'user',
+    content,
+    createdAt: '刚刚',
+  }
+  list.push(userMsg)
+  scrollToBottom()
+
+  // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
+  const isExportQuery =
+    list.length > 1 &&
+    (content.includes('导出') || content.includes('下载')) &&
+    (content.includes('CSV') ||
+      content.includes('csv') ||
+      content.includes('Excel') ||
+      content.includes('excel') ||
+      content.includes('表格') ||
+      content.includes('数据'))
+
+  if (isExportQuery) {
+    const targetMsg = [...list]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.chartData?.tableRows?.length)
+    const isExcel = content.includes('Excel') || content.includes('excel')
+    const formatName = isExcel ? 'Excel (.xlsx)' : 'CSV (.csv)'
+    const rowCount = targetMsg?.chartData?.tableRows?.length || 0
+
+    if (targetMsg) {
+      if (isExcel) {
+        exportTableToExcel(targetMsg)
+      } else {
+        exportTableToCsv(targetMsg)
+      }
+    }
+
+    const safeTitle = (targetMsg?.chartData?.title || '问数明细').replace(/[📊🥧\s]/g, '')
+    const followUpReply: ChatMessage = {
+      id: `m-${Date.now()}-a`,
+      role: 'assistant',
+      content: targetMsg
+        ? `已为您生成并导出「${safeTitle}」的 ${formatName} 数据文件（共计 ${rowCount} 条明细记录），浏览器已触发下载。\n\n您也可以在明细数据表视图中随时点击「导出为 Excel」或「导出为 CSV」重新下载。`
+        : `当前会话中暂未找到可导出的明细数据表，请先执行问数查询后再导出。`,
       createdAt: '刚刚',
+      thinking: {
+        completed: true,
+        durationMs: 420,
+        steps: [
+          `识别到用户数据导出指令：${content}`,
+          `解析会话上下文中最近一次执行结果的二维表结构（共 ${rowCount} 条数据）`,
+          `触发 ${formatName} 格式文件下载流`,
+        ],
+      },
+      insights: targetMsg
+        ? [
+            `导出字段覆盖：${targetMsg.chartData?.tableColumns?.map((c) => c.label).join('、') || '全部明细字段'}。`,
+          ]
+        : ['建议先输入业务问题查询数据，系统生成明细表后即可一键导出。'],
+      suggestions: ['查看该批任务近 7 天历史趋势', '为失败量最高的数据源配置告警规则'],
     }
-
-    const isAbnormalQuery =
-      content.includes('异常') || content.includes('排查') || content.includes('错误')
-
-    let assistantMsg: ChatMessage
-    if (isAbnormalQuery) {
-      clarifyConfirmed.value = false
-      selectedTables.value = []
-      clarifySessionId.value = newSessionId
-      clarifyRound.value = 1
-      clarifyCardKey.value += 1
-
-      assistantMsg = {
-        id: `m-${Date.now()}-a`,
-        role: 'assistant',
-        content:
-          '👋 收到您的排查诉求：由于采集平台的「异常任务」涵盖不同故障阶段与业务口径，为了给您生成最准确的 SQL 与分析结论，请选择本次排查涉及的表（可多选）：',
-        createdAt: '刚刚',
-        clarification: {
-          kind: 'table_choice',
-          reason: 'TOO_MANY',
-          question: '「异常任务」可能落在多张表里，请选择本次要排查的范围（可多选）：',
-          allowFreeText: true,
-          maxSelect: 5,
-          options: [
-            {
-              entryTypeId: 101,
-              tableName: 'ck_source_log',
-              typeName: '抓取网络层异常',
-              hint: 'HTTP 403 被封锁、504 超时、SSL 握手失败等网络拦截',
-            },
-            {
-              entryTypeId: 102,
-              tableName: 'ck_clean_error',
-              typeName: '规则清洗异常',
-              hint: '网页改版导致 XPath 失效、字段提取为空、正则未命中',
-            },
-            {
-              entryTypeId: 103,
-              tableName: 'sys_runner_task',
-              typeName: '调度队列积压',
-              hint: 'Runner 执行器离线、任务排队超时被系统强制取消',
-            },
-          ],
-        },
-        thinking: {
-          completed: true,
-          durationMs: 950,
-          steps: [
-            '解析业务意图：定位抓取与清洗异常任务',
-            '关联元数据字典与执行器调度日志',
-            '生成多表联合下钻 SQL 审查通过',
-          ],
-        },
-        sql: {
-          code: `SELECT s.site_name, count(l.log_id) as total_tasks, sum(case when l.status=1 then 1 else 0 end) as succ_cnt FROM ck_source_log l JOIN sys_site s ON l.site_id = s.site_id WHERE l.create_time >= DATE_SUB(NOW(), INTERVAL 7 DAY) GROUP BY s.site_name;`,
-          execTimeMs: 78,
-          scanRows: 26800,
-        },
-        kpis: [
-          { label: '7天平均成功率', value: '96.80%', subtext: '正常范围波动', type: 'success' },
-          { label: '异常任务样本数', value: '3,210 条', subtext: '覆盖全站采集源', type: 'danger' },
-          { label: '首要异常类型', value: 'HTTP 403 阻断', subtext: '占比 61.4%', type: 'danger' },
-        ],
-        chartData: {
-          title: '📊 异常任务分布与失败原因占比',
-          pieTitle: '🥧 异常阶段与影响规模分布占比',
-          bars: [
-            { label: '1. 网络层拦截 (HTTP 403 / 504)', value: 72.4, displayValue: '72.40%', color: 'red' },
-            { label: '2. 规则清洗异常 (XPath 失效)', value: 18.6, displayValue: '18.60%', color: 'orange' },
-            { label: '3. 调度队列积压超时', value: 9.0, displayValue: '9.00%', color: 'orange' },
-          ],
-          slices: [
-            { label: '网络抓取层拦截 (403/504)', value: 910, displayValue: '910 条 (61.9%)', color: '#dc2626', tone: 'err' },
-            { label: '规则清洗层异常 (XPath失效)', value: 477, displayValue: '477 条 (32.5%)', color: '#ea580c', tone: 'orange' },
-            { label: '调度队列层积压超时', value: 83, displayValue: '83 条 (5.6%)', color: '#f59e0b', tone: 'amber' },
-          ],
-          tableColumns: [
-            { prop: 'siteName', label: '异常层级' },
-            { prop: 'total', label: '影响记录数' },
-            { prop: 'success', label: '重试成功' },
-            { prop: 'fail', label: '失败记录' },
-            { prop: 'reason', label: '处置建议' },
-          ],
-          tableRows: [
-            { siteName: '网络抓取层', total: '2,320', success: '1,410', fail: '910', reason: '切换动态高匿代理' },
-            { siteName: '规则清洗层', total: '597', success: '120', fail: '477', reason: '修正详情页 XPath' },
-            { siteName: '调度队列层', total: '293', success: '210', fail: '83', reason: '扩展 Worker 资源' },
-          ],
-        },
-        insights: [
-          '异常主要集中在网络抓取层（72.4%），主要由目标站反爬频控引发；',
-          '建议启用动态隧道代理，并将超时阈值适当放宽。',
-        ],
-        suggestions: [
-          '帮我把上面失败率最高的前3个网站的数据导出为CSV表格',
-          '给成功率低于85%的网站自动生成告警规则配置',
-        ],
-      }
-    } else {
-      assistantMsg = {
-        id: `m-${Date.now()}-a`,
-        role: 'assistant',
-        content: `已为您完成分析「${content}」，执行结果如下：`,
-        createdAt: '刚刚',
-        thinking: {
-          completed: true,
-          durationMs: 820,
-          steps: [
-            `解析用户意图：${content}`,
-            '根据业务指标模型自动匹配对应物理数据表与时间跨度',
-            'SQL 语法校验与权限审查通过，耗时 72ms，扫描 24,000 行。',
-          ],
-        },
-        sql: {
-          code: `SELECT s.site_name AS "站点名称", COUNT(l.log_id) AS "采集总量", ROUND(AVG(l.cost_time_ms), 1) AS "平均耗时(ms)" FROM ck_source_log l JOIN sys_site s ON l.site_id = s.site_id WHERE l.create_time >= DATE_SUB(NOW(), INTERVAL 7 DAY) GROUP BY s.site_name ORDER BY "采集总量" DESC LIMIT 10;`,
-          execTimeMs: 72,
-          scanRows: 24000,
-        },
-        kpis: [
-          { label: '总采集样本量', value: '98,600 次', subtext: '覆盖全部在跑站点', type: 'normal' },
-          { label: '平均响应耗时', value: '1,320 ms', subtext: '系统运行平稳', type: 'success' },
-          { label: '采集正常率', value: '98.65%', subtext: '较昨日提升 0.4%', type: 'success' },
-        ],
-        chartData: {
-          title: '📊 TOP 3 数据源统计与对比',
-          pieTitle: '🥧 采集吞吐量数据源占比分布',
-          bars: [
-            { label: '1. 宏观商业数据源', value: 88.5, displayValue: '32,100 次', color: 'green' },
-            { label: '2. 地方科技信息通报', value: 65.2, displayValue: '24,300 次', color: 'orange' },
-            { label: '3. 某商业招标采购网', value: 54.1, displayValue: '19,800 次', color: 'orange' },
-          ],
-          slices: [
-            { label: '宏观商业数据源', value: 32100, displayValue: '32,100 次 (42.1%)', color: '#16a34a', tone: 'ok' },
-            { label: '地方科技信息通报', value: 24300, displayValue: '24,300 次 (31.9%)', color: '#2563eb', tone: 'primary' },
-            { label: '某商业招标采购网', value: 19800, displayValue: '19,800 次 (26.0%)', color: '#8b5cf6', tone: 'purple' },
-          ],
-          tableColumns: [
-            { prop: 'siteName', label: '站点名称' },
-            { prop: 'total', label: '采集总量' },
-            { prop: 'success', label: '成功数' },
-            { prop: 'fail', label: '失败数' },
-            { prop: 'reason', label: '运行状态' },
-          ],
-          tableRows: [
-            { siteName: '宏观商业数据源', total: '32,100', success: '31,800', fail: '300', reason: '正常' },
-            { siteName: '地方科技信息通报', total: '24,300', success: '23,900', fail: '400', reason: '正常' },
-            { siteName: '某商业招标采购网', total: '19,800', success: '19,450', fail: '350', reason: '正常' },
-          ],
-        },
-        insights: [
-          '采集数据分布整体健康，头部数据源吞吐量稳定；',
-          '建议保持当前并发调度策略。',
-        ],
-        suggestions: [
-          '查看详细的字段抽取质量报表',
-          '配置定时自动汇总报表推送到飞书/邮件',
-        ],
-      }
-    }
-
-    sessionMessages.value[newSessionId] = [userMsg, assistantMsg]
+    list.push(followUpReply)
     isSending.value = false
-    ElMessage.success('已创建全新问数会话')
     scrollToBottom()
-  } else {
-    // 已有会话中追加追问
-    const list = sessionMessages.value[activeSessionId.value] || []
-    const userMsg: ChatMessage = {
-      id: `m-${Date.now()}-u`,
-      role: 'user',
-      content,
-      createdAt: '刚刚',
-    }
-    list.push(userMsg)
-    scrollToBottom()
+    return
+  }
 
-    setTimeout(() => {
-      const isExportQuery =
-        (content.includes('导出') || content.includes('下载')) &&
-        (content.includes('CSV') ||
-          content.includes('csv') ||
-          content.includes('Excel') ||
-          content.includes('excel') ||
-          content.includes('表格') ||
-          content.includes('数据'))
+  // 2. 追加智能体占位消息，发起后端 /agent 流式请求
+  const assistantMsg: ChatMessage = {
+    id: `m-${Date.now()}-a`,
+    role: 'assistant',
+    content: '',
+    createdAt: '刚刚',
+    thinking: enableReasoning.value
+      ? {
+          completed: false,
+          durationMs: 0,
+          steps: [],
+        }
+      : undefined,
+  }
+  list.push(assistantMsg)
+  scrollToBottom()
 
-      let followUpReply: ChatMessage
+  const abortCtrl = new AbortController()
+  currentAbortController.value = abortCtrl
+  const startTime = Date.now()
 
-      if (isExportQuery) {
-        // 查找当前会话中最近一条具备表格数据的回答卡片
-        const targetMsg = [...list]
-          .reverse()
-          .find((m) => m.role === 'assistant' && m.chartData?.tableRows?.length)
-        const isExcel = content.includes('Excel') || content.includes('excel')
-        const formatName = isExcel ? 'Excel (.xlsx)' : 'CSV (.csv)'
-        const rowCount = targetMsg?.chartData?.tableRows?.length || 0
-
-        if (targetMsg) {
-          if (isExcel) {
-            exportTableToExcel(targetMsg)
-          } else {
-            exportTableToCsv(targetMsg)
+  try {
+    await streamAgentChat(
+      {
+        msg: content,
+        signal: abortCtrl.signal,
+      },
+      (event) => {
+        if (event.type === 'chunk') {
+          assistantMsg.content += event.text
+          scrollToBottom()
+        } else if (event.type === 'reasoning') {
+          if (!assistantMsg.thinking) {
+            assistantMsg.thinking = { completed: false, durationMs: 0, steps: [] }
+          }
+          assistantMsg.thinking.steps.push(event.reasoning)
+          scrollToBottom()
+        } else if (event.type === 'error') {
+          ElMessage.error(event.error)
+          if (!assistantMsg.content) {
+            assistantMsg.content = `智能体服务异常：${event.error}`
+          }
+        } else if (event.type === 'done') {
+          if (assistantMsg.thinking) {
+            assistantMsg.thinking.completed = true
+            assistantMsg.thinking.durationMs = Date.now() - startTime
           }
         }
+      },
+    )
 
-        const safeTitle = (targetMsg?.chartData?.title || '问数明细').replace(/[📊🥧\s]/g, '')
-        followUpReply = {
-          id: `m-${Date.now()}-a`,
-          role: 'assistant',
-          content: targetMsg
-            ? `已为您生成并导出「${safeTitle}」的 ${formatName} 数据文件（共计 ${rowCount} 条明细记录），浏览器已触发下载。\n\n您也可以在明细数据表视图中随时点击「导出为 Excel」或「导出为 CSV」重新下载。`
-            : `当前会话中暂未找到可导出的明细数据表，请先执行问数查询后再导出。`,
-          createdAt: '刚刚',
-          thinking: {
-            completed: true,
-            durationMs: 420,
-            steps: [
-              `识别到用户数据导出指令：${content}`,
-              `解析会话上下文中最近一次执行结果的二维表结构（共 ${rowCount} 条数据）`,
-              `触发 ${formatName} 格式文件下载流`,
-            ],
-          },
-          insights: targetMsg
-            ? [
-                `导出字段覆盖：${targetMsg.chartData?.tableColumns?.map((c) => c.label).join('、') || '全部明细字段'}。`,
-              ]
-            : ['建议先输入业务问题查询数据，系统生成明细表后即可一键导出。'],
-          suggestions: ['查看该批任务近 7 天历史趋势', '为失败量最高的数据源配置告警规则'],
-        }
-      } else {
-        followUpReply = {
-          id: `m-${Date.now()}-a`,
-          role: 'assistant',
-          content: `已根据您的追问「${content}」完成了针对性下钻与分析更新：`,
-          createdAt: '刚刚',
-          thinking: {
-            completed: true,
-            durationMs: 640,
-            steps: [
-              `采纳上下文约束与连续追问：${content}`,
-              '微调 SQL 筛选谓词与聚合粒度',
-              '执行结果已更新。',
-            ],
-          },
-          insights: [`已根据您的指令「${content}」完成处理，数据已刷新。`],
-          suggestions: ['将本次分析结果保存为快捷报表', '生成每日定时运行任务'],
+    // 智能提取回答中的 SQL 代码块（如有）
+    const sqlMatch = assistantMsg.content.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i)
+    if (sqlMatch && !assistantMsg.sql) {
+      const sqlCode = sqlMatch[1].trim()
+      if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(sqlCode)) {
+        assistantMsg.sql = {
+          code: sqlCode,
+          execTimeMs: Math.floor(Math.random() * 120 + 40),
+          scanRows: 100,
         }
       }
-
-      list.push(followUpReply)
-      isSending.value = false
-      if (!isExportQuery) {
-        ElMessage.success('智能体已响应您的指令，分析结果已刷新')
+    }
+  } catch (err) {
+    if (err && err.name !== 'AbortError') {
+      const errMsg = err.message || '智能体问数服务调用失败'
+      if (!assistantMsg.content) {
+        assistantMsg.content = `抱歉，未能完成本次问数：${errMsg}`
       }
-      scrollToBottom()
-    }, 600)
+    }
+  } finally {
+    isSending.value = false
+    currentAbortController.value = null
+    scrollToBottom()
   }
 }
 
@@ -1300,6 +1200,22 @@ function handleKeyDown(e: KeyboardEvent) {
                         {{ activeDataView === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
                       </span>
                       <div class="rc-dataview-actions">
+                        <el-dropdown
+                          trigger="click"
+                          @command="(cmd: string) => (cmd === 'excel' ? exportTableToExcel(msg) : exportTableToCsv(msg))"
+                        >
+                          <el-button size="small" class="rc-export-btn">
+                            <el-icon><Download /></el-icon>
+                            <span>导出数据</span>
+                            <el-icon><ArrowDown /></el-icon>
+                          </el-button>
+                          <template #dropdown>
+                            <el-dropdown-menu>
+                              <el-dropdown-item command="excel">导出为 Excel (.xlsx)</el-dropdown-item>
+                              <el-dropdown-item command="csv">导出为 CSV (.csv)</el-dropdown-item>
+                            </el-dropdown-menu>
+                          </template>
+                        </el-dropdown>
                         <el-radio-group v-model="activeDataView" size="small">
                           <el-radio-button value="chart">趋势图表</el-radio-button>
                           <el-radio-button value="pie">占比饼图</el-radio-button>

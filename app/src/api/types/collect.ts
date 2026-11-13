@@ -96,12 +96,30 @@ export interface ConfigActionLog {
   actionTime?: string
 }
 
+/** 表扩展配置：包含存储引擎、分区字段、排序等，兼容 MySQL 与 CK */
+export interface TableConfig {
+  storageEngine?: string
+  partColumn?: string
+  sorted?: string
+  [key: string]: unknown
+}
+
 /** 实体/表 EntryType */
 export interface EntryType {
   tableId: string
   tableName: string // 如 sense_data.TB_ZFB_COMMENT（物理表名）
   /** 表数据存储位置：MYSQL（默认）/ CK，仅影响查询走哪条链路，写入始终在 MySQL */
   dsKind?: 'MYSQL' | 'CK'
+  /** 表操作类型：wr 读写（默认） / r 只读 */
+  opType?: 'wr' | 'r'
+  /** 存储引擎：MySQL 默认 InnoDB，CK 如 ReplacingMergeTree / MergeTree 等 */
+  storageEngine?: string
+  /** 排序列 / 排序键：CK MergeTree 系列必填，默认 entry_id */
+  sorted?: string
+  /** 分区字段 / 表达式：CK 表可选分区，如 toYYYYMM(UPDATE_DT) */
+  partColumn?: string
+  /** 表扩展配置：包含存储引擎、分区字段、排序等，兼容 MySQL 与 CK */
+  tableConfig?: TableConfig | string
   name?: string // 表显示名（业务名）
   remark?: string // 备注
   fields: EntryField[]
