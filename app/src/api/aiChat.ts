@@ -123,6 +123,144 @@ export async function listAiAgents(): Promise<AiAgentOption[]> {
   }
 }
 
+/** 智能体问数流式调用入参 */
+export interface AgentChatParams {
+  msg: string
+  signal?: AbortSignal
+}
+
+/** 智能体问数流式事件 */
+export type AgentChatEvent =
+  | { type: 'chunk'; text: string }
+  | { type: 'reasoning'; reasoning: string }
+  | { type: 'error'; error: string }
+  | { type: 'done' }
+
+/**
+ * 智能体问数：对接后端 POST /api/poc/chat/agent
+ * 后端 AgentService 接收 { msg } 并以 SSE (text/event-stream) 格式原样透传智能体流式响应。
+ */
+export async function streamAgentChat(
+  params: AgentChatParams,
+  onEvent: (event: AgentChatEvent) => void,
+): Promise<void> {
+  const response = await fetch('/api/poc/chat/agent', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({ msg: params.msg }),
+    signal: params.signal,
+  })
+
+  if (!response.ok) {
+    let detail = ''
+    try {
+      const errJson = await response.json()
+      detail = errJson.message || errJson.msg || ''
+    } catch {
+      detail = await response.text().catch(() => '')
+    }
+    const errMsg = `智能体服务请求失败(HTTP ${response.status})${detail ? ': ' + detail : ''}`
+    onEvent({ type: 'error', error: errMsg })
+    throw new Error(errMsg)
+  }
+
+  if (!response.body) {
+    const errMsg = '浏览器未提供流式响应体'
+    onEvent({ type: 'error', error: errMsg })
+    throw new Error(errMsg)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  let completed = false
+
+  function consumeLine(line: string) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith(':')) return
+
+    let dataStr = trimmed
+    if (dataStr.startsWith('data:')) {
+      dataStr = dataStr.slice(5).trim()
+    }
+
+    if (dataStr === '[DONE]') {
+      completed = true
+      onEvent({ type: 'done' })
+      return
+    }
+
+    try {
+      const payload = JSON.parse(dataStr)
+      if (payload && typeof payload === 'object') {
+        if (payload.error) {
+          const errText =
+            typeof payload.error === 'object'
+              ? payload.error.message || JSON.stringify(payload.error)
+              : String(payload.error)
+          onEvent({ type: 'error', error: errText })
+          return
+        }
+
+        // OpenAI 兼容 choices 结构: { choices: [{ delta: { content, reasoning_content } }] }
+        if (Array.isArray(payload.choices) && payload.choices.length > 0) {
+          const delta = payload.choices[0]?.delta
+          if (delta) {
+            if (delta.reasoning_content) {
+              onEvent({ type: 'reasoning', reasoning: String(delta.reasoning_content) })
+            }
+            if (delta.content) {
+              onEvent({ type: 'chunk', text: String(delta.content) })
+            }
+          }
+          return
+        }
+
+        if (typeof payload.content === 'string') {
+          onEvent({ type: 'chunk', text: payload.content })
+          return
+        }
+        if (typeof payload.reply === 'string') {
+          onEvent({ type: 'chunk', text: payload.reply })
+          return
+        }
+        if (typeof payload.text === 'string') {
+          onEvent({ type: 'chunk', text: payload.text })
+          return
+        }
+      }
+    } catch {
+      onEvent({ type: 'chunk', text: dataStr })
+    }
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      pending += decoder.decode(value, { stream: !done })
+      let newline: number
+      while ((newline = pending.indexOf('\n')) >= 0) {
+        consumeLine(pending.slice(0, newline))
+        pending = pending.slice(newline + 1)
+      }
+      if (done) break
+    }
+    if (pending.trim()) {
+      consumeLine(pending)
+    }
+    if (!completed) {
+      onEvent({ type: 'done' })
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+}
+
 /**
  * 回传多选表/指标澄清的答案（entryTypeId 列表 + 自由补充）。
  *

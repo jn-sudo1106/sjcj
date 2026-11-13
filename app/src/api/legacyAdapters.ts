@@ -411,11 +411,59 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
   const items = Array.isArray(record.items) ? record.items : []
   const keyField = record.keyField == null ? undefined : String(record.keyField)
   const keySet = new Set((keyField ?? '').split(',').map((s) => s.trim()).filter(Boolean))
+
+  let parsedConfig: Record<string, unknown> | undefined = undefined
+  const rawTableConfig = record.tableConfig ?? record.table_config
+  if (rawTableConfig) {
+    if (typeof rawTableConfig === 'object') {
+      parsedConfig = rawTableConfig as Record<string, unknown>
+    } else if (typeof rawTableConfig === 'string') {
+      try {
+        parsedConfig = JSON.parse(rawTableConfig)
+      } catch {}
+    }
+  }
+
+  const dsKindVal = record.dsKind == null ? 'MYSQL' : (String(record.dsKind) as EntryType['dsKind'])
+  const storageEngineVal = record.storageEngine != null
+    ? String(record.storageEngine)
+    : (parsedConfig?.storageEngine != null
+        ? String(parsedConfig.storageEngine)
+        : (record.engine != null ? String(record.engine) : (dsKindVal === 'CK' ? 'ReplacingMergeTree' : 'InnoDB')))
+
+  const sortedVal = record.sorted != null
+    ? String(record.sorted)
+    : (parsedConfig?.sorted != null
+        ? String(parsedConfig.sorted)
+        : (dsKindVal === 'CK' ? 'ENTRY_ID' : undefined))
+
+  const partColumnVal = record.partColumn != null
+    ? String(record.partColumn)
+    : (parsedConfig?.partColumn != null
+        ? String(parsedConfig.partColumn)
+        : (record.part_column != null ? String(record.part_column) : undefined))
+
+  const tableConfigObj = parsedConfig ?? {
+    storageEngine: storageEngineVal,
+    partColumn: partColumnVal,
+    sorted: sortedVal,
+  }
+
   return {
     tableId: String(record.entryTypeId ?? ''),
     tableName: String(record.tableName ?? ''),
     // DS_KIND 老记录可能为 NULL：统一归一 MYSQL（与 DB 默认一致），不向 UI 暴露「未知」态
-    dsKind: record.dsKind == null ? 'MYSQL' : String(record.dsKind) as EntryType['dsKind'],
+    dsKind: dsKindVal,
+    // 操作读写类型：默认 wr，若 DS_KIND 为 CK 默认为 r
+    opType: record.opType == null ? (record.dsKind === 'CK' ? 'r' : 'wr') : String(record.opType).toLowerCase() as EntryType['opType'],
+    // 存储引擎：MySQL 默认 InnoDB，CK 默认为 ReplacingMergeTree
+    storageEngine: storageEngineVal,
+    // 排序列：默认 entry_id
+    sorted: sortedVal,
+    // 分区字段/表达式
+    partColumn: partColumnVal,
+    // 表配置JSON
+    tableConfig: tableConfigObj,
     name: record.typeName == null ? undefined : String(record.typeName),
     remark: record.remark == null ? undefined : String(record.remark),
     fields: items.map((item, index) => entryFieldFromLegacy(item, index, keySet)),
@@ -445,6 +493,10 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     typeName: input.name,
     tableName: input.tableName,
     dsKind: input.dsKind,
+    opType: input.opType,
+    storageEngine: input.storageEngine,
+    sorted: input.sorted,
+    partColumn: input.partColumn,
     keyField: input.keyField,
     state: input.state,
     remark: input.remark,

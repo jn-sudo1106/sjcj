@@ -376,6 +376,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/system/page-config/update', desc: '页面配置修改 → POST /api/poc/system/page-config/update（body 带 id）', danger: true, impl: true, live: true },
   { path: 'poc/system/page-config/status', desc: '页面配置启停 → POST /api/poc/system/page-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
 
+  // AI 智能问数（对话工作台对接后端 /api/poc/chat/agent SSE 流式接口，原样透传端到端问数智能体响应）
+  { path: 'poc/chat/agent', desc: '智能体问数 SSE 流式对话 → POST /api/poc/chat/agent（body: {msg}）', impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },

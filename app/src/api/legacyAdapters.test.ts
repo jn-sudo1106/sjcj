@@ -550,9 +550,51 @@ describe('旧平台实体表模型适配', () => {
     expect(entry.dsKind).toBe('CK')
   })
 
-  it('entryTypeToLegacy 输出含 dsKind（编辑保存落 cfg_entry_type.DS_KIND）', () => {
-    const legacy = entryTypeToLegacy({ tableId: 't1', tableName: 'tb_a', dsKind: 'CK', fields: [] })
+  it('opType 与 storageEngine 默认与透传逻辑正确', () => {
+    // 默认 MySQL：opType 默认为 wr，storageEngine 默认为 InnoDB
+    const mysqlEntry = entryTypeFromLegacy({ entryTypeId: 2102157, tableName: 't', items: [] })
+    expect(mysqlEntry.opType).toBe('wr')
+    expect(mysqlEntry.storageEngine).toBe('InnoDB')
+
+    // 默认 CK：opType 默认为 r，storageEngine 默认为 ReplacingMergeTree，sorted 默认为 ENTRY_ID
+    const ckEntry = entryTypeFromLegacy({ entryTypeId: 2101020, tableName: 't', dsKind: 'CK', items: [] })
+    expect(ckEntry.opType).toBe('r')
+    expect(ckEntry.storageEngine).toBe('ReplacingMergeTree')
+    expect(ckEntry.sorted).toBe('ENTRY_ID')
+
+    // 自定义指定
+    const custom = entryTypeFromLegacy({
+      entryTypeId: 2101021,
+      tableName: 't',
+      dsKind: 'CK',
+      opType: 'r',
+      storageEngine: 'ReplacingMergeTree',
+      sorted: 'source_id, entry_id',
+      partColumn: 'toYYYYMM(UPDATE_DT)',
+      items: [],
+    })
+    expect(custom.opType).toBe('r')
+    expect(custom.storageEngine).toBe('ReplacingMergeTree')
+    expect(custom.sorted).toBe('source_id, entry_id')
+    expect(custom.partColumn).toBe('toYYYYMM(UPDATE_DT)')
+  })
+
+  it('entryTypeToLegacy 输出含 dsKind、opType、storageEngine、sorted、partColumn', () => {
+    const legacy = entryTypeToLegacy({
+      tableId: 't1',
+      tableName: 'tb_a',
+      dsKind: 'CK',
+      opType: 'r',
+      storageEngine: 'ReplacingMergeTree',
+      sorted: 'entry_id',
+      partColumn: 'toYYYYMM(UPDATE_DT)',
+      fields: [],
+    })
     expect(legacy.dsKind).toBe('CK')
+    expect(legacy.opType).toBe('r')
+    expect(legacy.storageEngine).toBe('ReplacingMergeTree')
+    expect(legacy.sorted).toBe('entry_id')
+    expect(legacy.partColumn).toBe('toYYYYMM(UPDATE_DT)')
   })
 })
 
