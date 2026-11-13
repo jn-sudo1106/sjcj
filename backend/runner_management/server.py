@@ -1740,8 +1740,11 @@ def monitor_runner_connect(cfg):
 
 
 def monitor_runner_execute(*, apply: bool = False, limit: int = MONITOR_RUNNER_WORKER_LIMIT,
-                           monitor_ids=None, force: bool = False) -> list:
-    """打开业务库执行一轮到点检查；配置/库不可用时抛 RunnerUnavailable。"""
+                           monitor_ids=None, force: bool = False, app=None) -> list:
+    """打开业务库执行一轮到点检查；配置/库不可用时抛 RunnerUnavailable。
+
+    ``app`` 只用于 apply 成功后记录异常事件；CLI/纯执行入口可以不传。
+    """
     from . import monitor_runner
     cfg = monitor_runner.load_config()
     if not (cfg.get("db") or {}).get("database"):
@@ -1756,7 +1759,7 @@ def monitor_runner_execute(*, apply: bool = False, limit: int = MONITOR_RUNNER_W
         # 同一时刻只允许一轮执行，避免手动扫描和后台线程重复跑同一批检查。
         with MONITOR_RUNNER_LOCK:
             return list(monitor_runner.run_due(conn, cfg, apply=apply, limit=limit,
-                                               monitor_ids=monitor_ids, force=force))
+                                               monitor_ids=monitor_ids, force=force, app=app))
     finally:
         try:
             conn.close()
@@ -1764,7 +1767,7 @@ def monitor_runner_execute(*, apply: bool = False, limit: int = MONITOR_RUNNER_W
             pass
 
 
-def monitor_runner_scan(payload: dict) -> dict:
+def monitor_runner_scan(payload: dict, app=None) -> dict:
     """手动扫描：默认 apply=false（只执行检查、不写库）。"""
     payload = payload or {}
     apply = payload.get("apply", False)
@@ -1793,7 +1796,7 @@ def monitor_runner_scan(payload: dict) -> dict:
     else:
         raise ApiError("monitorIds 必须是整数数组")
     items = monitor_runner_execute(apply=apply, limit=limit,
-                                   monitor_ids=monitor_ids, force=force)
+                                   monitor_ids=monitor_ids, force=force, app=app)
     return {"applied": apply, "count": len(items), "items": items}
 
 
@@ -1802,7 +1805,7 @@ def monitor_runner_round(app) -> dict:
     from . import monitor_batches as batches
     at = now()
     try:
-        items = monitor_runner_execute(apply=True, limit=MONITOR_RUNNER_WORKER_LIMIT)
+        items = monitor_runner_execute(apply=True, limit=MONITOR_RUNNER_WORKER_LIMIT, app=app)
     except Exception as exc:
         state = monitor_runner_state(app)
         state.update(lastRunAt=at, count=0, applied=0, lastError=f"执行失败：{exc}")
@@ -1872,7 +1875,10 @@ class Handler(BaseHTTPRequestHandler):
             upload = re.fullmatch(r"/api/runner-management/settings/code-repos/[0-9a-f]{32}/files", path)
             code_files = re.fullmatch(r'/api/runner-management/code-servers/[0-9a-f-]+/files', path)
             limit = MAX_UPLOAD_JSON if upload or code_files else MAX_SCRIPT_JSON if path == '/api/runner-management/site-scripts/publish' else MAX_JSON
-            body = self.json_body(limit) if method == "POST" else None
+            # 无请求体的 POST（例如「重试投递」这类只靠路径表达意图的动作）按 {} 处理：
+            # 强制带 application/json 只会让调用方为了通过校验而伪造一个空对象。
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = (self.json_body(limit) if length > 0 else {}) if method == "POST" else None
             # Empty since explicitly means all time. Do not silently restore the 24h default.
             keep_empty = path == '/api/runner-management/runtime-operations'
             result = self.route(method, path, body, parse_qs(parsed.query, keep_blank_values=keep_empty))
@@ -2147,10 +2153,23 @@ class Handler(BaseHTTPRequestHandler):
             except monitor_runner.RunnerUnavailable as exc:
                 self.respond(503, {"error": str(exc)})
                 return RESPONSE_SENT
+        if sub == '/monitor-runner/notifications' and method == 'GET':
+            from . import monitor_events
+            items = monitor_events.listing(
+                app,
+                monitor_id=(query.get('monitorId') or [''])[0],
+                run_id=(query.get('runId') or [''])[0],
+                limit=(query.get('limit') or [''])[0] or monitor_events.DEFAULT_LIMIT,
+            )
+            return {'count': len(items), 'items': items}
+        event_retry = re.fullmatch(r'/monitor-runner/notifications/([A-Za-z0-9_-]{1,120})/retry', sub)
+        if event_retry and method == 'POST':
+            from . import monitor_events
+            return {'event': monitor_events.retry(app, event_retry.group(1))}
         if sub == '/monitor-runner/scan' and method == 'POST':
             from . import monitor_runner
             try:
-                return monitor_runner_scan(body)
+                return monitor_runner_scan(body, app)
             except monitor_runner.RunnerUnavailable as exc:
                 # 库连不上/配置缺失返回 503，不伪装成成功。
                 self.respond(503, {"error": str(exc)})
@@ -2695,6 +2714,8 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
     from .monitor_watch import start as start_monitor_watch
     monitor_watch_worker = start_monitor_watch(application, stopped)
     monitor_runner_thread = monitor_runner_start(application, stopped)
+    from .monitor_events import start as start_monitor_events
+    monitor_events_worker = start_monitor_events(application, stopped)
 
     def sweep() -> None:
         last_cleanup = 0
@@ -2731,6 +2752,7 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
         deployment_worker.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
         monitor_delivery_worker.join(timeout=1)
         monitor_watch_worker.join(timeout=1)
+        monitor_events_worker.join(timeout=1)
         if monitor_runner_thread:
             monitor_runner_thread.join(timeout=1)
 

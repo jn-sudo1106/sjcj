@@ -45,6 +45,8 @@ DEFAULT_DB_PORT = 3306
 PARKED_NEXT_RUN = "2027-01-01 08:00:00"
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 MAX_CANDIDATES = 200
+# 每页读取的源记录数：翻页读而不是一次 LIMIT 200，让 ID 靠后的检查也能进候选。
+CANDIDATE_PAGE = 500
 
 # ``ck_job_log.REMARKS`` 在老库里是 VARCHAR(100)，结构化 JSON 会被拦腰截断；
 # 迁移（V3.6.4）把它扩到 1000，这里再做一层长度保护：超长先丢可选字段，
@@ -199,8 +201,14 @@ def parse_cron(expr: str) -> List[Optional[set]]:
 
 
 def next_run_at(schedule: str, after: Optional[_dt.datetime] = None) -> Optional[str]:
-    """返回 ``after`` 之后（不含）最近一次触发时间，格式 ``YYYY-MM-DD HH:MM:SS``。"""
+    """返回 ``after`` 之后（不含）最近一次触发时间，格式 ``YYYY-MM-DD HH:MM:SS``。
 
+    空计划表示「只有手动触发」，返回 ``None`` 而不是抛错：检查已经执行完才走到这里，
+    因为没填 cron 让整次运行回滚/报 400，会把「检查跑过了」这件事一起吞掉。
+    """
+
+    if not (schedule or "").strip():
+        return None
     fields = parse_cron(schedule)
     # 监控计划都是分钟级：秒段只要包含 0 即在整分触发。
     sec, minute, hour, dom, month, dow = fields
@@ -246,6 +254,53 @@ def is_ai_check(conf: Dict[str, Any]) -> bool:
 def due_at(conf: Dict[str, Any], fallback: Optional[str] = None) -> Optional[str]:
     state = schedule_state(conf)
     return state.get("next") or fallback
+
+
+def row_due_at(conf: Dict[str, Any], row: Dict[str, Any], now: Optional[_dt.datetime] = None) -> Optional[str]:
+    """这一条检查下一次该跑的时间（按 ``check_conf.schedule.next`` 或 cron 推算）。
+
+    只认 ``schedule.next`` 会让「刚设计划、还没跑过第一次」的检查永远等不到执行：
+    保存只写 ``ck_source.SCHEDULE``，``schedule.next`` 要等执行器回写才有，而
+    ``NEXT_RUN`` 被停在远期用来防止 Java 任务抢跑。所以没有 next 时，用 cron 从
+    「上次运行时间」（没有就从当前时间）往后推一次。
+    """
+
+    state = schedule_state(conf)
+    if state.get("next"):
+        return state["next"]
+    cron = str(row.get("schedule") or "").strip()
+    if not cron:
+        return None
+    base = None
+    # 上次运行时间是首选基准；从没跑过就用创建时间，再没有就当「刚刚到期」处理。
+    # 不能用 now 当基准：next_run_at 取的是 now 之后的整分边界，每轮扫描都往后
+    # 推一分钟，这条检查就永远不会到期。
+    for key in ("last_run", "create_dt"):
+        value = row.get(key)
+        if not value:
+            continue
+        try:
+            base = _dt.datetime.strptime(str(value)[:19], "%Y-%m-%d %H:%M:%S")
+            break
+        except ValueError:
+            continue
+    if base is None:
+        base = (now or business_now()) - _dt.timedelta(minutes=1)
+    try:
+        return next_run_at(cron, base)
+    except ValueError:
+        return None
+
+
+def is_row_due(conf: Dict[str, Any], row: Dict[str, Any], now: Optional[_dt.datetime] = None) -> bool:
+    due = row_due_at(conf, row, now)
+    if not due:
+        return False
+    try:
+        stamp = _dt.datetime.strptime(str(due)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return stamp <= (now or business_now())
 
 
 def is_due(conf: Dict[str, Any], now: Optional[_dt.datetime] = None, fallback: Optional[str] = None) -> bool:
@@ -488,8 +543,13 @@ def run_due(
     monitor_ids: Optional[Iterable[int]] = None,
     force: bool = False,
     now: Optional[_dt.datetime] = None,
+    app: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
-    """执行到点的 AI 检查。``apply=False`` 时只执行不写库。"""
+    """执行到点的 AI 检查。``apply=False`` 时只执行不写库。
+
+    ``app`` 只在 HTTP/后台服务里传：apply 成功后用它落异常事件；
+    CLI dry-run（无 app）不碰事件存储。
+    """
 
     wanted = {int(value) for value in (monitor_ids or [])}
     candidates = fetch_candidates(conn, wanted)
@@ -503,7 +563,7 @@ def run_due(
         monitor_id = int(row["id"])
         if wanted and monitor_id not in wanted:
             continue
-        if not force and not is_due(conf, moment, row.get("next_run")):
+        if not force and not is_row_due(conf, row, moment):
             continue
         if not _acquire_local(monitor_id):
             results.append(skipped_item(row, "同一条检查已在本进程执行中，本轮跳过"))
@@ -542,7 +602,7 @@ def run_due(
                 "applied": False,
             }
             if apply:
-                apply_result(conn, row, conf, outcome, item, cfg)
+                apply_result(conn, row, conf, outcome, item, cfg, app)
                 item["applied"] = True
             results.append(item)
         finally:
@@ -605,28 +665,42 @@ def release(conn, monitor_id: int) -> None:
 
 
 def fetch_candidates(conn, wanted: Optional[set] = None) -> List[Dict[str, Any]]:
-    sql = (
-        "SELECT ID, NAME, SOURCE_ID, TABLE_NAME, CHECK_CONF, SCHEDULE, NEXT_RUN, LAST_RUN, GROUP_ID "
-        "FROM ck_source WHERE IS_DELETE=0"
-    )
-    params: List[Any] = []
-    if wanted:
-        sql += " AND ID IN (%s)" % ",".join(["%s"] * len(wanted))
-        params.extend(sorted(wanted))
-    sql += " ORDER BY ID ASC LIMIT %s"
-    params.append(MAX_CANDIDATES)
+    """读出候选 AI 检查（按 ID 翻页，避免 ID 靠后的检查被 LIMIT 截掉）。
+
+    旧实现一条 ``LIMIT MAX_CANDIDATES`` 的查询：共享库里 ``ck_source`` 行数远超
+    200 时，ID 靠后的 AI 检查根本进不了候选，界面看着「有计划」却永远不执行。
+    """
+
     rows: List[Dict[str, Any]] = []
-    with conn.cursor() as cur:
-        cur.execute(sql, tuple(params))
-        for row in cur.fetchall():
+    last_id = 0
+    while len(rows) < MAX_CANDIDATES:
+        sql = (
+            "SELECT ID, NAME, SOURCE_ID, TABLE_NAME, CHECK_CONF, SCHEDULE, NEXT_RUN, LAST_RUN, GROUP_ID, CREATE_DT "
+            "FROM ck_source WHERE IS_DELETE=0 AND ID > %s"
+        )
+        params: List[Any] = [last_id]
+        if wanted:
+            sql += " AND ID IN (%s)" % ",".join(["%s"] * len(wanted))
+            params.extend(sorted(wanted))
+        sql += " ORDER BY ID ASC LIMIT %s"
+        params.append(CANDIDATE_PAGE)
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            batch = cur.fetchall() or []
+        if not batch:
+            break
+        for row in batch:
             if isinstance(row, dict):
                 item = dict(row)
             else:
-                item = dict(zip(("id", "name", "source_id", "table_name", "check_conf", "schedule", "next_run", "last_run", "group_id"), row))
+                item = dict(zip(("id", "name", "source_id", "table_name", "check_conf", "schedule", "next_run", "last_run", "group_id", "create_dt"), row))
             conf = _parse_conf(item.get("check_conf"))
             item["conf"] = conf
             if is_ai_check(conf):
                 rows.append(item)
+        last_id = int(batch[-1]["id"] if isinstance(batch[-1], dict) else batch[-1][0])
+        if len(batch) < CANDIDATE_PAGE:
+            break
     return rows
 
 
@@ -680,6 +754,7 @@ def apply_result(
     outcome: Dict[str, Any],
     item: Dict[str, Any],
     cfg: Optional[Dict[str, Any]] = None,
+    app: Optional[Any] = None,
 ) -> None:
     now = business_now()
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -687,7 +762,12 @@ def apply_result(
     state = "E" if outcome["status"] != STATUS_NORMAL else "C"
     schedule = dict(conf.get("schedule") or {})
     schedule["last"] = stamp
-    schedule["next"] = next_run_at(str(row.get("schedule") or ""), now)
+    try:
+        schedule["next"] = next_run_at(str(row.get("schedule") or ""), now)
+    except ValueError as exc:
+        # 计划填错也不该丢掉这次已经跑完的结果：记下原因，等下次保存修正。
+        schedule["next"] = None
+        schedule["cronError"] = str(exc)
     conf = dict(conf)
     conf["schedule"] = schedule
     with conn.cursor() as cur:
@@ -717,6 +797,14 @@ def apply_result(
                 row.get("group_id"),
             ),
         )
+    if app is not None:
+        # 事件存储是 Runner 自己的 settings 表，失败不能回滚已经落库的检查结果，
+        # 但也不能静默吞掉——通知没发出去必须能从 stderr 追到原因。
+        from . import monitor_events
+        try:
+            monitor_events.record(app, item, conf, outcome)
+        except Exception as exc:
+            print("记录监控异常事件失败：%s" % exc, file=sys.stderr, flush=True)
 
 
 # ------------------------------------------------------------------------ CLI
