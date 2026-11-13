@@ -274,6 +274,7 @@ const storagePath = computed(() => {
 })
 const currentSourceFile = computed(() => recentSourceFiles.value.find(file =>
   file.repoId === repositoryId.value && file.filePath === storagePath.value))
+const deploymentArchiveId = computed(() => currentSourceFile.value?.archiveId || (archive.value?.status === 'committed' ? archive.value.archiveId : undefined))
 const otherSourceFiles = computed(() => recentSourceFiles.value.filter(file => file !== currentSourceFile.value))
 const absoluteStoragePath = computed(() => {
   const root = selectedRepository.value?.path || loadedVersion.value?.repoPath || ''
@@ -431,7 +432,7 @@ async function initialize() {
   taskConfigReady = false
   savingTaskConfig.value = false
   const session = ++sessionId
-  const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
+  const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}\n${props.sourceId || ''}\n${props.flowId || ''}\n${props.stepId || ''}`
   const newContext = openedFor !== context
   if (newContext) {
     hasNodeGenerationPrompts = false
@@ -459,7 +460,7 @@ async function initialize() {
     props.configId && props.queueName ? runnerManagementApi.siteCodeVersions(props.configId, props.queueName) : Promise.resolve([] as SiteCodeVersion[]),
     props.configType && nodePromptsAvailable() ? nodePromptApi.list({ sourceType: props.configType, templateUse: 'script' }) : Promise.resolve([]),
     loadModels(),
-    props.configId ? runnerManagementApi.generatedCodeState(props.configId) : Promise.resolve({ autoCommit: true, archive: null }),
+    props.configId ? runnerManagementApi.generatedCodeState(props.configId, props.sourceId && props.flowId && props.stepId ? { sourceId: props.sourceId, flowId: props.flowId, stepId: props.stepId } : undefined) : Promise.resolve({ autoCommit: true, archive: null }),
     props.configId ? runnerManagementApi.nodeGenerationSettings(props.configId) : Promise.resolve(null),
     props.configId ? runnerManagementApi.resolveGenerationDestination({ configId: props.configId, queueName: props.queueName, configType: props.configType }) : Promise.resolve(null),
   ])
@@ -538,7 +539,7 @@ async function initialize() {
   }
 }
 
-watch(() => [props.configId, props.queueName, props.initialUrl, props.configType] as const, () => {
+watch(() => [props.configId, props.queueName, props.initialUrl, props.configType, props.sourceId, props.flowId, props.stepId] as const, () => {
   cancelGenerate()
   initialization = initialize()
 }, { immediate: true })
@@ -604,7 +605,7 @@ watch(directoryId, () => {
   if (fileChooserOpen.value && selectedDirectory.value && !directoriesLoading.value) void loadRepositoryFiles(1)
 }, { flush: 'sync' })
 watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId.value, directoryId.value, generationConfigType.value, props.queueName, systemPrompt.value, prompt.value, url.value, fileNameMode.value, destinationMode.value, outputSubdirectory.value, selectedPromptId.value, referenceFiles.value]), () => {
-  const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}`
+  const context = `${props.configId || ''}\n${props.queueName || ''}\n${props.initialUrl}\n${props.configType || ''}\n${props.sourceId || ''}\n${props.flowId || ''}\n${props.stepId || ''}`
   if (!taskConfigReady || loading.value || taskConfigContext !== context) return
   if (taskConfigTimer) clearTimeout(taskConfigTimer)
   pendingTaskConfig = null
@@ -992,7 +993,7 @@ function download() {
       <div v-if="sourceFilePath"><span>来源文件</span><button type="button" class="site-script-file-link" :disabled="busy || !savedSourceAssociation" :title="savedSourceAssociation ? sourceFilePath : '保存后可查看关联版本'" @click="previewAssociatedFile('source')" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</button><el-button link :disabled="busy" data-testid="site-script-unlink-source" @click="changeAssociatedFile('source', 'unlink')">取消关联</el-button><el-button v-if="savedSourceAssociation" link type="danger" :disabled="busy" data-testid="site-script-delete-source" @click="changeAssociatedFile('source', 'delete')">删除文件</el-button></div>
     </div>
     <p v-if="error && !open" class="site-script-error" role="alert">{{ error }}</p>
-    <NodeDeploymentPanel v-if="configId && sourceId && flowId && stepId" :source-id="sourceId" :flow-id="flowId" :step-id="stepId" :config-id="configId" :config-type="generationConfigType" :queue-name="queueName" :archive-id="archive?.status === 'committed' ? archive.archiveId : undefined" />
+    <NodeDeploymentPanel v-if="configId && sourceId && flowId && stepId" :source-id="sourceId" :flow-id="flowId" :step-id="stepId" :config-id="configId" :config-type="generationConfigType" :queue-name="queueName" :archive-id="deploymentArchiveId" />
     <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">代码生成</el-button>
   </section>
   <AiCodeWorkspaceDialog v-model="open" data-testid="site-script-dialog">

@@ -21,6 +21,8 @@ def prepare(app, task_id):
     record = read(app, task_id)
     snapshot = record.get('input')
     if not isinstance(snapshot, dict): raise ApiError('历史任务缺少生成配置快照，无法重新生成', 409)
+    from .generation_prompt_context import bind_source_url
+    snapshot = bind_source_url(snapshot)
     with app.store.connect() as db:
         saved = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key(record['configId']),)).fetchone()
     return {'taskId': task_id, 'generation': {field: snapshot[field] for field in FIELDS if field in snapshot},

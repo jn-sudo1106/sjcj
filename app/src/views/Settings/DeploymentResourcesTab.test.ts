@@ -32,7 +32,7 @@ async function setup(query: Record<string, string> = {}, admin = true) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
   await router.push({ path: '/settings', query }); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = [admin ? 'admin' : 'read']
-  const w = mount(DeploymentResourcesTab, { global: { plugins: [pinia, router, ElementPlus], stubs: { DeploymentRuntimeActions: true, RunnerFilesDrawer: true } }, attachTo: document.body })
+  const w = mount(DeploymentResourcesTab, { global: { plugins: [pinia, router, ElementPlus], stubs: { DeploymentRuntimeActions: true, RunnerFilesDrawer: true, DeploymentFilesDrawer: true } }, attachTo: document.body })
   wrappers.push(w); await flushPromises(); return w
 }
 it('配置链接进入部署记录，已完成记录仅提供程序与日志操作', async () => {
@@ -140,6 +140,13 @@ it('环境部署目录可点击并将实际目录和所属Runner交给文件面�
   expect(browser.exists()).toBe(true)
   expect(browser.props('runner').runnerId).toBe('r1')
   expect(browser.props('directory')).toContain('test')
+})
+
+it('部署记录可直接查看本次文件，查看账号也可用且不打开详情', async () => {
+  const w = await setup({ configId: '1401218' }, false)
+  await w.get('[data-testid="open-deployment-files"]').trigger('click'); await flushPromises()
+  expect(w.findComponent({ name: 'DeploymentFilesDrawer' }).props('job').jobId).toBe(job.jobId)
+  expect(document.body.querySelector('.dr-details')).toBeNull()
 })
 
 it('部署记录打开实际落盘目录，点击目录不打开部署详情', async () => {

@@ -47,6 +47,40 @@ class DeploymentResourcesTest(unittest.TestCase):
             from backend.runner_management.deployment_configuration import configurations
             self.assertEqual(configurations(self.app, db)[current['deploymentId']]['entryPoint'], 'main.py')
 
+    def test_task_scope_keeps_earlier_sources_and_ignores_unrelated_git_changes_without_a_running_process(self):
+        import copy
+        self.fixture(); original = self.archive(); self.save_rules(self.runner)
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        for index, name in enumerate(('first.example.com.py', 'second.example.com.py')):
+            uploaded = self.app.upload_repository_files(self.repo['repoId'], {'directoryId': 'default', 'uploadType': 'folder', 'overwrite': True,
+                'files': [{'name': 'main.py', 'relativePath': '1401218/main.py', 'data': base64.b64encode(b'UNRELATED=999\n').decode()},
+                          {'name': 'helper.py', 'relativePath': '1401218/lib/helper.py', 'data': base64.b64encode(b'UNRELATED_HELPER=999\n').decode()},
+                          {'name': 'demo.py', 'relativePath': '1401218/demo.py', 'data': base64.b64encode(b'REFERENCE=True\n').decode()},
+                          {'name': name, 'relativePath': '1401218/sites/' + name, 'data': base64.b64encode(b'VALUE=2\n').decode()}]}, owner_config_id='1401218')
+            record = copy.deepcopy(original)
+            record.update(archiveId='scoped-' + str(index), taskId='scoped-' + str(index), createdAt=f'2026-11-06T0{index}:00:00Z',
+                          gitCommit=uploaded['gitCommit'], repositoryPrefix='1401218/sites',
+                          files=[file for file in uploaded['files'] if file['path'].endswith('/' + name)])
+            record['sourceContext']['sourceId'] = str(430024911 + index)
+            generated_archives.store(self.app, record)
+            resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+            current = next(job for job in self.jobs() if job['archiveId'] == record['archiveId'])
+            self.assertEqual(current['status'], 'success', current)
+            self.assertEqual(current['selectedPaths'], ['sites/' + name])
+        root = self.runner.directory / 'test/default/1401218'
+        self.assertEqual((root / 'main.py').read_bytes(), b'VALUE = 1\n')
+        self.assertEqual((root / 'lib/helper.py').read_bytes(), b'HELPER = True\n')
+        self.assertTrue((root / 'sites/first.example.com.py').is_file())
+        self.assertTrue((root / 'sites/second.example.com.py').is_file())
+        self.assertFalse((root / 'demo.py').exists())
+        from backend.runner_management.directory_layout import snapshot_files
+        from backend.runner_management.deployment_configuration import configurations
+        with self.app.store.connect() as db:
+            saved = configurations(self.app, db)[current['deploymentId']]
+            files, _, _ = snapshot_files(self.app, saved, db)
+        self.assertEqual(files['main.py'], b'VALUE = 1\n')
+        self.assertEqual(files['lib/helper.py'], b'HELPER = True\n')
+
     def tearDown(self):
         if getattr(self, 'other', None): self.other.close()
         baseline.ManagementIntegrationTest.tearDown(self)

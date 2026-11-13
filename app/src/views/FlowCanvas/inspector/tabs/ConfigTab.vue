@@ -54,6 +54,7 @@ const runtimeSettings = computed<CollectorRuntimeSettings>(() => {
   const s = flow.sourceCfg
   return {
     useProxy: cc.value?.useProxy ?? s?.useProxy,
+    proxyDetail: cc.value?.proxyDetail,
     resume: cc.value?.resume ?? s?.resume,
     needLogin: cc.value?.needLogin ?? s?.needLogin,
     loginUrl: cc.value?.loginUrl ?? s?.loginUrl,
@@ -496,7 +497,7 @@ watch(
       />
     </details>
     <!-- 运行设置（0711 R5）：只保留代理/断点续爬；定时策略紧挨在它上方。 -->
-    <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
+    <CollectorSettings :key="`${id}:${flow.sourceCfg?.sourceId || ''}`" :model-value="runtimeSettings" :config-id="cfg?.configId" :persistent="!templateDefaults" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
   </template>
 
   <!-- 运行策略（config.runPolicy）已迁到 RuntimePolicySummary.vue，2026-08-31 先不在节点配置展示。 -->

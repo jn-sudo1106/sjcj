@@ -16,7 +16,7 @@ export function agentInterfaceKey(row: ModelInterface): string {
 }
 
 // Windows quoting keeps JSON path backslashes unless they precede a quote.
-function curlCommands(text: string): string[][] {
+export function curlCommands(text: string): string[][] {
   const commands: string[][] = []
   let args: string[] = [], word = '', started = false, quote = '', windows = false
   function finishWord() {

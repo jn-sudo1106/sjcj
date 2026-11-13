@@ -41,6 +41,7 @@ async function toggleEnabled(row: ModelInterface): Promise<boolean> {
 }
 const kinds = { agent: 'Agent 代码生成', 'gemini-agent': 'Gemini Agent', 'gemini-chat': 'Gemini Chat', chat: 'Chat 对话生成', 'site-script': '现有代码生成服务' }
 const isAgent = (kind: ModelInterface['kind']) => kind === 'agent' || kind === 'gemini-agent'
+const interfaceType = (kind: ModelInterface['kind']) => isAgent(kind) ? 'Agent' : kind === 'chat' || kind === 'gemini-chat' ? 'Chat' : '代码生成'
 const needsModel = (kind: ModelInterface['kind']) => kind === 'agent' || kind === 'chat' || kind === 'gemini-chat'
 const supportsCdp = (kind: ModelInterface['kind']) => kind === 'agent' || kind === 'chat'
 const usesQueryAddress = (config: ModelInterface) => modelRequestMethod(config) === 'GET'
@@ -284,6 +285,7 @@ async function load() {
 function edit(row?: ModelInterface) {
   if (statusSavingId.value) return
   Object.assign(form, empty(), row ? { ...row, prjDir: modelWorkspace(row) } : {})
+  if (!row && !settings.value.items.length) form.isDefault = true
   if (form.cdpPort === undefined) form.cdpPort = defaultCdpPort(form.kind)
   if (props.embedded && props.server && !row?.id) {
     form.generationServerMode = 'manual'; form.generationServerId = props.server.serverId
@@ -303,6 +305,22 @@ function duplicate(row: ModelInterface) {
     name = row.name.slice(0, 100 - suffix.length) + suffix; index++
   } while (names.has(name))
   edit({ ...row, id: '', name, isDefault: false })
+}
+async function remove(row: ModelInterface) {
+  if (!canWrite.value || saving.value || loading.value || statusSavingId.value || testing.value || promptSaving.value) return
+  const items = settings.value.items.filter(item => item.id !== row.id).map(item => ({ ...item }))
+  const replacement = row.isDefault ? items.find(item => item.enabled) : undefined
+  if (row.isDefault && items.length && !replacement) { error.value = '请先启用一个可替代的默认接口，再删除当前默认接口'; return }
+  saving.value = true; error.value = ''
+  try {
+    try {
+      await ElMessageBox.confirm(`确定删除智能体接口「${row.name}」？${replacement ? `删除后默认接口改为「${replacement.name}」。` : ''}历史任务记录会保留。`, '删除智能体接口', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+    } catch { return }
+    if (replacement) replacement.isDefault = true
+    settings.value = await runnerManagementApi.saveModelInterfaces({ items, revision: settings.value.revision })
+    emit('changed'); ElMessage.success('智能体接口已删除')
+  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { saving.value = false }
 }
 function changeKind() {
   form.cdpPort = defaultCdpPort(form.kind)
@@ -364,14 +382,14 @@ defineExpose({ beforeLeave })
     <div class="mi-toolbar"><el-select v-if="embedded" v-model="scope" aria-label="智能体接口范围" class="mi-scope" data-testid="model-scope"><el-option v-if="server" value="server" label="当前服务器" /><el-option value="all" label="全部接口" /><el-option value="unassigned" label="未关联接口" /></el-select><el-input v-model="keyword" placeholder="搜索名称、模型或接口地址" clearable class="mi-search" /><el-button v-if="canWrite" type="primary" :disabled="loading" data-testid="model-add" @click="edit()">新增接口</el-button><el-button v-if="canWrite" :disabled="loading || saving || !!statusSavingId || testing || promptSaving" data-testid="model-import" @click="openImport">导入智能体</el-button><el-button :disabled="loading || saving" @click="load">刷新</el-button></div>
     <p v-if="error && !drawer" class="mi-error" role="alert">{{ error }}</p>
     <el-table :data="rows" class="mi-table" empty-text="暂无匹配的智能体接口">
-      <el-table-column label="名称" :min-width="embedded ? 130 : 160"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">{{ row.name }}</el-button><el-tag v-if="row.isDefault" size="small">默认</el-tag><small v-if="embedded" class="mi-row-model">{{ kinds[row.kind as keyof typeof kinds] }} · {{ row.model || '服务端配置' }}</small></template></el-table-column>
-      <el-table-column v-if="!embedded" label="类型" width="150"><template #default="{ row }">{{ kinds[row.kind as keyof typeof kinds] }}</template></el-table-column>
+      <el-table-column label="名称" :min-width="embedded ? 130 : 160"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">{{ row.name }}</el-button><el-tag v-if="row.isDefault" size="small">默认</el-tag><small v-if="embedded" class="mi-row-model">{{ row.model || '服务端配置' }}</small></template></el-table-column>
+      <el-table-column label="类型" width="90"><template #default="{ row }"><span :title="kinds[row.kind as keyof typeof kinds]" :data-testid="`model-type-${row.id}`">{{ interfaceType(row.kind) }}</span></template></el-table-column>
       <el-table-column v-if="!embedded" prop="model" label="模型" width="110"><template #default="{ row }">{{ row.model || '服务端配置' }}</template></el-table-column>
       <el-table-column label="智能体端口" width="100"><template #default="{ row }"><span :data-testid="'model-port-' + row.id">{{ supportsCdp(row.kind) ? row.cdpPort === null ? '—' : row.cdpPort ?? defaultCdpPort(row.kind) : '—' }}</span></template></el-table-column>
       <el-table-column label="接口地址 / 生成机器" :min-width="embedded ? 170 : 240"><template #default="{row}"><div class="mi-endpoint" :title="row.endpoint">{{ row.endpoint }}</div><small>{{ generationServerText(row) }}</small></template></el-table-column>
       <el-table-column label="状态" :width="embedded ? 95 : 125"><template #default="{ row }"><div class="mi-status"><el-switch :model-value="row.enabled" :loading="statusSavingId === row.id" :disabled="!canWrite || loading || !!statusSavingId || saving || promptSaving || testing" :before-change="() => toggleEnabled(row)" :aria-label="`${row.name}启用状态`" :data-testid="`model-toggle-${row.id}`" /><span>{{ row.enabled ? '启用' : '停用' }}</span></div></template></el-table-column>
       <el-table-column label="运行状态" width="90"><template #default="{ row }"><span :data-testid="`model-runtime-${row.id}`">{{ agentStatusLabel(row) }}</span></template></el-table-column>
-      <el-table-column label="操作" :width="embedded ? 180 : 280"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ usesQueryAddress(row) ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button></div></template></el-table-column>
+      <el-table-column label="操作" :width="embedded ? 190 : 330"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ usesQueryAddress(row) ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button><el-button v-if="canWrite" link type="danger" :disabled="loading || saving || !!statusSavingId || testing || promptSaving || row.runtimeStatus === 'busy'" :data-testid="`model-delete-${row.id}`" @click="remove(row)">删除</el-button></div></template></el-table-column>
     </el-table>
     <el-dialog v-model="importOpen" title="导入智能体接口" width="min(960px, 96vw)" top="5vh" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving" data-testid="model-import-dialog">
       <div class="mi-import-body">

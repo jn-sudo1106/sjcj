@@ -20,6 +20,24 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.runtimeLogPolicy).mockResolvedValue({ directory: 'E:\\ce\\runner-logs', retentionDays: 30, quotaMb: 1024, hasLogs: true })
 })
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); vi.unstubAllGlobals() })
+it('opens exact business task record and stream from its first output batch instead of latest tail', async () => {
+  const targetStream = 'c'.repeat(32)
+  vi.mocked(runnerManagementApi.runtimeLogDetail).mockResolvedValue({ ...details, streams: [
+    ...details.streams, { streamId: targetStream, lastSeq: 100, byteCount: 1000, updatedAt: '2026-10-11T00:00:00Z' },
+  ] })
+  const { wrapper } = await setup({ tab: 'runtime-logs', recordId: record.recordId, runnerId: record.runnerId,
+    streamId: targetStream, logView: 'output', logSeq: '1', businessTaskId: '123' })
+  expect(runnerManagementApi.runtimeLogs).toHaveBeenCalledWith(expect.objectContaining({ recordId: record.recordId, since: '' }))
+  expect(runnerManagementApi.runtimeLogEntries).toHaveBeenCalledWith(targetStream, 0, 0, 1)
+  expect(wrapper.get('#log-tab-output').attributes('aria-selected')).toBe('true')
+  expect(wrapper.text()).toContain('任务 123 的程序输出')
+  wrapper.unmount()
+})
+it('does not open another record when a linked task record is no longer available', async () => {
+  const { wrapper } = await setup({ tab: 'runtime-logs', recordId: 'missing' })
+  expect(runnerManagementApi.runtimeLogDetail).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
 async function setup(query: Record<string, string> = { tab: 'runtime-logs', runtimeId: 'binding1' }, keepAlive = false) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
   await router.push({ path: '/settings', query }); await router.isReady()
@@ -165,12 +183,12 @@ it('当前进程可展开同一 Runner 的全部日志，保留实例筛选并�
   expect(vi.mocked(runnerManagementApi.runtimeLogs).mock.lastCall![0]).not.toHaveProperty('processPid')
   wrapper.unmount()
 })
-it('筛选结果不包含链接中的旧记录时，详情只展示筛选内记录；空结果不读取旧详情', async () => {
+it('筛选结果不包含链接中的记录时不展示其他任务的详情；空结果不读取旧详情', async () => {
   const next = { ...record, recordId: 'c'.repeat(32), runnerId: 'r2' }
   vi.mocked(runnerManagementApi.runtimeLogs).mockResolvedValue({ items: [next], total: 1, page: 1, pageSize: 20 })
   vi.mocked(runnerManagementApi.runtimeLogDetail).mockResolvedValue({ ...details, ...next })
   const { wrapper } = await setup({ tab: 'runtime-logs', recordId: record.recordId, runnerId: 'r2' })
-  expect(runnerManagementApi.runtimeLogDetail).toHaveBeenLastCalledWith(next.recordId)
+  expect(runnerManagementApi.runtimeLogDetail).not.toHaveBeenCalled()
   vi.mocked(runnerManagementApi.runtimeLogs).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 })
   vi.mocked(runnerManagementApi.runtimeLogDetail).mockClear()
   await wrapper.get('[aria-label="查询运行日志"]').trigger('click'); await flushPromises()

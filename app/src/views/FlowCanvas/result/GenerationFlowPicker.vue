@@ -4,7 +4,7 @@ import type { Source, Step } from '@/api'
 import { buildHorizontalLayout, buildSourceSeed, nodeTaskQueue } from '../canvas/flowModel'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 
-const props = defineProps<{ source: Source; nodes: Step[]; modelValue: string[]; disabled?: boolean; completedIds?: string[] }>()
+const props = defineProps<{ source: Source; sourceIds?: string[]; nodes: Step[]; modelValue: string[]; disabled?: boolean; completedIds?: string[] }>()
 const emit = defineEmits<{ 'update:modelValue': [ids: string[]] }>()
 const steps = computed(() => Object.fromEntries(props.nodes.map(node => [node.stepId, node])))
 const layout = computed(() => {
@@ -13,7 +13,7 @@ const layout = computed(() => {
 })
 function selectable(id: string) {
   const step = steps.value[id]
-  return !props.disabled && !props.completedIds?.includes(id) && !!step && step.enabled !== false && /^[1-9]\d*$/.test(step.configId || '') && (!step.sourceId || ['0', '-1', props.source.sourceId].includes(step.sourceId))
+  return !props.disabled && !props.completedIds?.includes(id) && !!step && step.enabled !== false && /^[1-9]\d*$/.test(step.configId || '') && (!step.sourceId || ['0', '-1', ...(props.sourceIds || [props.source.sourceId])].includes(step.sourceId))
 }
 function select(ids: string[]) { emit('update:modelValue', ids.filter(selectable)) }
 </script>

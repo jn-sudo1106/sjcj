@@ -27,6 +27,25 @@ beforeEach(() => {
   })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); document.body.innerHTML = '' })
+it('删除需确认，可删除最后一个接口且历史任务不受影响，取消删除不保存', async () => {
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm' as never)
+  const w = await setup()
+  await w.get('[data-testid="model-delete-legacy"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+  await w.get('[data-testid="model-delete-legacy"]').trigger('click'); await flushPromises()
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('历史任务记录会保留'), '删除智能体接口', expect.any(Object))
+  expect(runnerManagementApi.saveModelInterfaces).toHaveBeenCalledWith({ items: [], revision: 3 })
+  expect(w.find('[data-testid="model-delete-legacy"]').exists()).toBe(false)
+})
+
+it('删除默认接口明确提示替代默认项，保留其他服务器的配置', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items: [fixture.items[0]!, { ...fixture.items[0]!, id: 'other', name: '其他接口', isDefault: false }] })
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  const w = await setup()
+  await w.get('[data-testid="model-delete-legacy"]').trigger('click'); await flushPromises()
+  expect(confirm.mock.calls[0]![0]).toContain('默认接口改为「其他接口」')
+  expect(runnerManagementApi.saveModelInterfaces).toHaveBeenCalledWith({ revision: 3, items: [expect.objectContaining({ id: 'other', isDefault: true })] })
+})
 it('自动匹配模型显示关联机器，配置支持自动和直接连接两种选择', async () => {
   vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 3, items: [{ ...fixture.items[0]!, generationServerMode: 'auto', generationServerId: 'server-1', generationServerMatch: 'matched' }] })
   vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'server-1', name: 'home171', ipAddress: '192.168.1.171', endpoint: '', workspace: '', installDirectory: '', osType: '', osVersion: '', version: '', lastHeartbeat: '', status: 'online' }] })
@@ -153,6 +172,7 @@ it('在服务器内按当前、全部、未关联筛选接口，选择其他服�
   const { second } = scopedFixtures()
   const w = await setup('admin', { server: scopedServer, embedded: true })
   expect(w.get('.mi-table').text()).toContain('A 的模型')
+  expect(w.get('[data-testid="model-type-model-a"]').text()).toBe('Chat')
   expect(w.get('.mi-table').text()).not.toContain('B 的模型')
   const scope = w.findAllComponents({ name: 'ElSelect' }).find(item => item.attributes('data-testid') === 'model-scope')!
   scope.vm.$emit('update:modelValue', 'unassigned'); await flushPromises()

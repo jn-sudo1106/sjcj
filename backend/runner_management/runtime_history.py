@@ -433,7 +433,7 @@ def list_records(app, query):
     except ValueError:
         raise ApiError('日志分页无效')
     where, args = [], []
-    for name, column in (('runnerId', 'runner_id'), ('runtimeId', 'runtime_id'), ('assignmentId', 'assignment_id'), ('kind', 'kind')):
+    for name, column in (('recordId', 'record_id'), ('runnerId', 'runner_id'), ('runtimeId', 'runtime_id'), ('assignmentId', 'assignment_id'), ('kind', 'kind')):
         if one(name):
             where.append(column + '=?'); args.append(one(name))
     process = []
@@ -512,6 +512,7 @@ def read_entries(app, identifier, query):
     try:
         cursor = int((query.get('cursor') or ['0'])[0])
         before = int((query.get('before') or ['0'])[0])
+        from_seq = int((query.get('fromSeq') or ['0'])[0])
     except ValueError:
         raise ApiError('日志游标无效')
     with app.store.connect() as db:
@@ -526,6 +527,8 @@ def read_entries(app, identifier, query):
         files = [p for p in files if cursor < int(p.stem) <= last][:8]
     elif before > 0:
         files = [p for p in files if int(p.stem) < before][-8:]
+    elif from_seq > 0:
+        files = [p for p in files if int(p.stem) >= from_seq][:8]
     else:
         files = [p for p in files if int(p.stem) <= last][-8:]
     entries = []

@@ -5,6 +5,16 @@ from backend.runner_management.server import ApiError
 
 
 class GenerationPromptContextTest(unittest.TestCase):
+    def test_target_url_binding_corrects_reused_labels_and_leaves_history_and_other_links_unchanged(self):
+        original = {'url': 'https://www.lygend.com/news', 'userPrompt': '- 目标新闻列表 URL：`http://www.unikit.com.cn/news/1/`\n参考：https://reference.example/demo',
+                    'systemPrompt': '以 {{url}} 为入口', 'prompt': '新闻列表地址：http://www.unikit.com.cn/news/1/'}
+        fixed = context.bind_source_url(original)
+        self.assertIn('`https://www.lygend.com/news`', fixed['userPrompt'])
+        self.assertIn('https://reference.example/demo', fixed['userPrompt'])
+        self.assertEqual(fixed['prompt'], '新闻列表地址：https://www.lygend.com/news')
+        self.assertEqual(fixed['systemPrompt'], original['systemPrompt'])
+        self.assertIn('www.unikit.com.cn', original['userPrompt'])
+
     def setUp(self):
         self.body = {'url':'https://www.mkky.cn/news','configId':'1401218','queueName':'auto_snatch_web_link','taskId':'task-1'}
         self.service = SimpleNamespace(file_name_for_url=lambda url: 'www.mkky.cn.py')

@@ -42,11 +42,22 @@ def preference_key(owner):
     return 'node-generation-preference:' + hashlib.sha256(owner.encode('utf8')).hexdigest()
 
 
-def state(app, owner):
+def state(app, owner, context=None):
     owner = config_id(owner)
+    from .source_code_relations import source_context, OWNER_WHERE
+    expected = source_context(context) if context is not None else None
     with app.store.connect() as db:
         preference = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (preference_key(owner),)).fetchone()
         items = [item for item in records(db) if item['configId'] == owner]
+        if expected:
+            legacy = {row['archive_id'] for row in db.execute('SELECT archive_id FROM source_code_relations WHERE ' + OWNER_WHERE,
+                       (expected['sourceId'], expected['flowId'], expected['stepId'], owner)).fetchall()}
+            tasks = db.execute('SELECT task_id,payload FROM generation_jobs WHERE config_id=? AND source_id=? AND flow_id=?',
+                               (owner, expected['sourceId'], expected['flowId'])).fetchall()
+            task_ids = {row['task_id'] for row in tasks if str(json.loads(row['payload']).get('stepId', '')) == expected['stepId']}
+            items = [item for item in items if (
+                all(str(item['sourceContext'].get(key, '')) == expected[key] for key in ('sourceId', 'flowId', 'stepId'))
+                if item.get('sourceContext') else item['archiveId'] in legacy or item.get('taskId') in task_ids)]
     latest = max(items, key=lambda item: item['createdAt']) if items else None
     return {'autoCommit': json.loads(preference['setting_value'])['autoCommit'] if preference else True,
             'archive': public(latest) if latest else None}
@@ -112,7 +123,7 @@ def relative_workspace_path(app, server_id, path):
 def create(app, selected, workspace, target):
     record = {**target, 'archiveId': uuid.uuid4().hex, 'serverId': selected['generationServerId'],
               'taskId': workspace['taskId'], 'codeDirectory': relative_workspace_path(app, selected['generationServerId'], workspace['codeDir']),
-              'workspace': workspace, 'startedAt': selected.get('_generationStartedAt', ''),
+              'workspace': selected.get('_publishedWorkspace', workspace), 'startedAt': selected.get('_generationStartedAt', ''),
               'beforeCodeFiles': selected.get('_beforeCodeFiles'),
               'createdAt': datetime.now(timezone.utc).isoformat(timespec='microseconds'), 'status': 'pending',
               'message': '', 'files': [], 'gitCommit': '', 'pushed': False}
@@ -134,6 +145,10 @@ def changed_files(record, files):
             relative = relative.removeprefix(prefix + '/')
         if before.get(code_dir + relative) != item['sha256']:
             result.append(item)
+    if any(item.get('relativePath', '').endswith('.py') for item in result):
+        selected = {item['path'] for item in result}
+        result += [item for item in files if item.get('relativePath', '').split('/')[-1] == 'requirements.txt'
+                   and item['path'] not in selected]
     return result
 
 
@@ -185,7 +200,39 @@ def collect(app, record):
         destination = (record['repositoryPrefix'] + '/' if record.get('repositoryPrefix') else '') + relative
         files.append({'relativePath': destination, 'sourceRelativePath': relative, 'data': item['data'], 'sha256': digest,
                       'size': len(data), 'path': record['directoryPath'] + '/' + destination})
-    files = changed_files(record, files)
+    changed = changed_files(record, files)
+    scripts = [item for item in changed if item['sourceRelativePath'].endswith('.py')]
+    if scripts:
+        from .python_dependency_contract import imports, merge_requirements
+        modules = set()
+        for item in scripts:
+            try:
+                modules.update(imports(base64.b64decode(item['data']).decode('utf-8-sig')))
+            except UnicodeError:
+                continue
+        local_modules = {item['sourceRelativePath'].split('/')[0].removesuffix('.py') for item in files
+                         if item['sourceRelativePath'].endswith('.py')}
+        modules -= local_modules
+        requirement = next((item for item in files if item['sourceRelativePath'] == 'requirements.txt'), None)
+        previous = base64.b64decode(requirement['data']).decode('utf-8-sig') if requirement else ''
+        merged = merge_requirements(previous, modules)
+        if merged != previous:
+            data = merged.encode('utf-8')
+            encoded = base64.b64encode(data).decode('ascii')
+            operation(app, record['serverId'], {'action': 'upload', 'overwrite': True, 'files': [{
+                'path': prefix + 'requirements.txt', 'data': encoded}]})
+            destination = (record.get('repositoryPrefix', '') + '/').lstrip('/') + 'requirements.txt'
+            replacement = {'sourceRelativePath': 'requirements.txt', 'relativePath': destination,
+                           'path': record['directoryPath'] + '/' + destination, 'data': encoded,
+                           'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
+            files = [item for item in files if item is not requirement] + [replacement]
+        # Include declared companions even when the model reused them unchanged.
+        # Task-scoped deployment must not omit a required dependency manifest.
+        changed = changed_files(record, files)
+        selected = {item['path'] for item in changed}
+        changed += [item for item in files if item['sourceRelativePath'].split('/')[-1] == 'requirements.txt'
+                    and item['path'] not in selected]
+    files = changed
     if not files:
         raise ApiError('本次没有新增或修改代码文件，请检查生成服务输出')
     return sorted(files, key=lambda item: item['relativePath'])
@@ -234,7 +281,7 @@ def commit(app, archive_id):
             files = collect(app, record)
             manifest = [{key: item[key] for key in ('path', 'relativePath', 'sha256', 'size')} for item in files]
             original_files = changed_files(record, record.get('sourceFiles', record['files']))
-            if original_files and original_files != manifest:
+            if original_files and sorted(original_files, key=lambda item: item['path']) != manifest:
                 raise ApiError('生成文件在上次提交后发生变化，不能沿用原结果重试，请重新生成或手工保存', 409)
             record['files'] = manifest
             record['sourceFiles'] = manifest
@@ -264,13 +311,23 @@ def commit(app, archive_id):
 
 
 def finish(app, selected, target, text, filename, service):
+    from .generation_parallel import publishing
+    from .server import GIT_LOCK
+    with publishing(selected), LOCK, GIT_LOCK:
+        return _finish(app, selected, target, text, filename, service)
+
+
+def _finish(app, selected, target, text, filename, service):
     from .code_servers import operation
     record = create(app, selected, selected['_workspace'], target)
     preview, preview_path, warnings = '', '', []
     try:
         operation(app, record['serverId'], {'action': 'mkdir', 'path': record['codeDirectory']})
         fallback_code(app, record, text, filename, service)
+        from .generation_parallel import merge_dependencies, publish_files
+        merge_dependencies(app, selected, record)
         files = collect(app, record)
+        publish_files(app, selected, files)
         record['files'] = [{key: item[key] for key in ('path', 'relativePath', 'sha256', 'size')} for item in files]
         record['sourceFiles'] = record['files']
         store(app, record)
@@ -291,4 +348,4 @@ def finish(app, selected, target, text, filename, service):
         store(app, record)
         archive = public(record)
     return {'fileName': filename, 'code': preview, 'previewPath': preview_path, 'warnings': warnings, 'archive': archive,
-            'workspace': selected['_workspace'], 'interfaceId': selected['id'], 'model': selected['model']}
+            'workspace': selected.get('_publishedWorkspace', selected['_workspace']), 'interfaceId': selected['id'], 'model': selected['model']}

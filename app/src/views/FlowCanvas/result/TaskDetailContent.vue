@@ -5,6 +5,7 @@ import { toExternalHref } from '@/utils/url/externalUrl'
 import { copyToClipboard } from '@/utils/clipboard'
 // 数据 ID = parentId、父任务 ID = vars.pTaskId，口径见 taskIds.ts
 import { taskDataId, taskParentTaskId } from './taskIds'
+import TaskExecutionLinks from './TaskExecutionLinks.vue'
 
 // 任务详情正文：画布里由 TaskDetailDrawer 包成右侧抽屉，任务中心（1105 会议）直接放在列表右侧常驻显示
 const props = withDefaults(defineProps<{
@@ -188,6 +189,8 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
       </div>
       <button v-if="closable" class="rc-btn ghost ffd-close" type="button" @click="close">关闭</button>
     </div>
+
+    <TaskExecutionLinks :task-id="task.taskId" :topic="task.topic" />
 
     <section class="tdd-result" data-testid="task-detail-result" aria-label="执行结果">
       <div class="tdd-block-head">

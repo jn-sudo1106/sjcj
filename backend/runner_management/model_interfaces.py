@@ -103,8 +103,8 @@ def listing(app, servers=None):
 
 def save(app, body, update_test_prompts=False):
     from .server import ApiError
-    if not isinstance(body, dict) or not isinstance(body.get('items'), list) or not 1 <= len(body['items']) <= 50:
-        raise ApiError('请配置 1–50 个模型接口')
+    if not isinstance(body, dict) or not isinstance(body.get('items'), list) or not 0 <= len(body['items']) <= 50:
+        raise ApiError('最多配置 50 个模型接口')
     rows, ids, names = [], set(), set()
     existing_ids = {item['id'] for item in listing(app)['items']} if not update_test_prompts else set()
     for raw in body['items']:
@@ -169,12 +169,13 @@ def save(app, body, update_test_prompts=False):
         if row['isDefault'] and not row['enabled']:
             raise ApiError('默认模型接口必须启用')
         rows.append(row)
-    if sum(row['isDefault'] for row in rows) != 1:
+    if rows and sum(row['isDefault'] for row in rows) != 1:
         raise ApiError('请选择一个默认模型接口')
     with LOCK:
         current = listing(app)
         if type(body.get('revision')) is not int or current['revision'] != body['revision']:
             raise ApiError('模型接口配置已更新，请刷新后重试', 409)
+        check_removed(app, [item for item in current['items'] if item['id'] not in ids])
         existing = {item['id']: item for item in current['items']}
         for row in rows:
             for field in ('testSystemPrompt', 'testUserPrompt'):
@@ -186,6 +187,32 @@ def save(app, body, update_test_prompts=False):
             db.execute('INSERT INTO settings (setting_key,setting_value) VALUES (?,?)',
                        (KEY, json.dumps(result, ensure_ascii=False)))
     return listing(app)
+
+
+def check_removed(app, removed):
+    """Only current usage blocks deletion; task history retains its own snapshot."""
+    from .server import ApiError
+    if not removed:
+        return
+    ids = {item['id'] for item in removed}
+    if any(item.get('runtimeStatus') == 'busy' for item in removed):
+        raise ApiError('接口或同端口智能体正在使用，请等待任务结束后删除', 409)
+    with app.store.connect() as db:
+        from .agent_pool import resource_key
+        for item in removed:
+            lease = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (resource_key(item),)).fetchone()
+            if lease and json.loads(lease['setting_value']).get('until', 0) > time.time():
+                raise ApiError('接口或同端口智能体正在使用，请等待任务结束后删除', 409)
+        jobs = db.execute("SELECT task_id,interface_id,payload FROM generation_jobs WHERE status IN ('queued','claimed','running')").fetchall()
+        for job in jobs:
+            actual = json.loads(job['payload']).get('input', {}).get('interfaceId')
+            if job['interface_id'] in ids or actual in ids:
+                raise ApiError('接口仍被未完成的任务引用，请先处理任务：' + job['task_id'], 409)
+        from .generation_tasks import CONFIG_PREFIX
+        for row in db.execute('SELECT setting_value FROM settings WHERE setting_key LIKE ?', (CONFIG_PREFIX + '%',)).fetchall():
+            config = json.loads(row['setting_value'])
+            if (config.get('generation') or {}).get('interfaceId') in ids:
+                raise ApiError('接口仍被节点配置 ' + str(config.get('configId', '')) + ' 引用，请先更换该配置的智能体', 409)
 
 
 def save_test_prompts(app, body):
@@ -502,9 +529,11 @@ def stream_generate(handler, app, body):
     return RESPONSE_SENT
 
 
-def generate(app, body, emit=None, *, _lease_owner=None, _reference_snapshot=None):
+def generate(app, body, emit=None, *, _lease_owner=None, _reference_snapshot=None, _parallel_task=False):
     from .agent_pool import ALL, KINDS, acquire, hold
     from .server import ApiError
+    from .generation_prompt_context import bind_source_url
+    body = bind_source_url(body)
     from .generation_references import snapshot
     references = snapshot(app, body.get('referenceFiles', [])) if _reference_snapshot is None else _reference_snapshot
     body = {**body, '_referenceSnapshot': references}
@@ -524,11 +553,11 @@ def generate(app, body, emit=None, *, _lease_owner=None, _reference_snapshot=Non
         owner = _lease_owner or uuid.uuid4().hex
         if not acquire(app, item, owner, renew=_lease_owner is not None): continue
         with hold(app, item, owner):
-            return _generate_reserved(app, {**body, 'interfaceId': item['id']}, emit)
+            return _generate_reserved(app, {**body, 'interfaceId': item['id']}, emit, parallel_task=_parallel_task)
     raise ApiError('暂无空闲且在线的智能体，请使用任务方式等待资源', 409)
 
 
-def _generate_reserved(app, body, emit=None):
+def _generate_reserved(app, body, emit=None, *, parallel_task=False):
     from .server import ApiError
     selected = next((row for row in listing(app)['items'] if row['id'] == body.get('interfaceId')), None)
     if not selected or not selected['enabled']:
@@ -561,16 +590,25 @@ def _generate_reserved(app, body, emit=None):
     # the shared directory. A browser disconnect cannot skip the Git submission.
     if body.get('configId'):
         body.update(autoCommit=True, deferCommit=False)
+    published_workspace = workspace
+    if parallel_task and body.get('configId'):
+        from .generation_parallel import isolate, bind_paths
+        isolate(selected, workspace)
+        workspace = agent_directories(selected, workspace['taskId'])
+        body = bind_paths(body, published_workspace, workspace)
     with workspaces.serialized_paths(selected['generationServerId'], [workspace['prjDir'], workspace['codeDir']], selected['timeoutSeconds']):
         if emit: emit('progress',message='正在准备代码生成工作空间…')
         started = workspaces.stamp()
         selected['_generationStartedAt'] = started
         common = {'configId': body.get('configId', ''), 'queueName': body.get('queueName', ''), 'startedAt': started}
-        workspaces.receipt(app, selected['generationServerId'], workspace, **common, status='running')
+        workspaces.receipt(app, selected['generationServerId'], published_workspace, **common, status='running')
         try:
             from .code_servers import operation
             from .generated_archives import relative_workspace_path
             from .generation_references import sync
+            if selected.get('_publishedWorkspace'):
+                from .generation_parallel import clear_slot
+                clear_slot(app, selected, workspace)
             sync(app, selected['generationServerId'], workspace, body.get('_referenceSnapshot', []), emit)
             code_path = relative_workspace_path(app, selected['generationServerId'], workspace['codeDir'])
             operation(app, selected['generationServerId'], {'action': 'mkdir', 'path': code_path})
@@ -578,14 +616,14 @@ def _generate_reserved(app, body, emit=None):
                 app, selected['generationServerId'], {'action': 'export', 'paths': [code_path]})['files']}
             result = _generate(app, body, selected)
             archive = result.get('archive', {})
-            workspaces.receipt(app, selected['generationServerId'], workspace, **common,
+            workspaces.receipt(app, selected['generationServerId'], published_workspace, **common,
                                status='failed' if archive.get('status') == 'failed' else 'succeeded', finishedAt=workspaces.stamp(),
                                files=archive.get('files', []), gitCommit=archive.get('gitCommit', ''), pushed=archive.get('pushed', False),
                                message=archive.get('message', ''))
             return result
         except Exception as error:
             try:
-                workspaces.receipt(app, selected['generationServerId'], workspace, **common,
+                workspaces.receipt(app, selected['generationServerId'], published_workspace, **common,
                                    status='failed', finishedAt=workspaces.stamp(), message=str(error)[:1500])
             except Exception:
                 pass
