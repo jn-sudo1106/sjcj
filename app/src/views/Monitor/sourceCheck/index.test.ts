@@ -9,7 +9,15 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import type { MonitorRecordView } from '@/api/types/monitorCenter'
 import { deleteSourceCheck } from '@/api/monitor'
 import type { MonitorSourceOption } from '@/api/monitorCenter'
-import { MonitorQueryLimitError, listMonitors, listMonitorsOfSource, listSourceOptions, runMonitorsNow, setMonitorsEnabled } from '@/api/monitorCenter'
+import {
+  listMonitors,
+  listMonitorsOfSource,
+  listSourceNames,
+  listSourceOptions,
+  listSourceSummary,
+  runMonitorsNow,
+  setMonitorsEnabled,
+} from '@/api/monitorCenter'
 import SourceCheckPage from './index.vue'
 
 // Element Plus 的表格内部用 ResizeObserver 量宽，jsdom 没有
@@ -38,6 +46,9 @@ vi.mock('@/api/monitorCenter', async (importOriginal) => {
     listMonitors: vi.fn(),
     listMonitorsOfSource: vi.fn(),
     listSourceOptions: vi.fn(),
+    listSourceNames: vi.fn(),
+    // C07 首期聚合：默认「服务端未部署」，测试按需覆盖
+    listSourceSummary: vi.fn(),
     setMonitorsEnabled: vi.fn(),
     runMonitorsNow: vi.fn(),
   }
@@ -46,6 +57,8 @@ vi.mock('@/api/monitorCenter', async (importOriginal) => {
 const mockedListMonitors = vi.mocked(listMonitors)
 const mockedListOfSource = vi.mocked(listMonitorsOfSource)
 const mockedListSources = vi.mocked(listSourceOptions)
+const mockedListNames = vi.mocked(listSourceNames)
+const mockedSummary = vi.mocked(listSourceSummary)
 const mockedSetEnabled = vi.mocked(setMonitorsEnabled)
 const mockedRunNow = vi.mocked(runMonitorsNow)
 const mockedDelete = vi.mocked(deleteSourceCheck)
@@ -169,8 +182,10 @@ beforeEach(() => {
   mockedListMonitors.mockResolvedValue([rec()])
   mockedListOfSource.mockResolvedValue([rec()])
   mockedListSources.mockResolvedValue(directory)
+  mockedListNames.mockResolvedValue([])
+  mockedSummary.mockResolvedValue({ total: 0, rows: [], unavailable: true })
   mockedSetEnabled.mockResolvedValue(undefined)
-  mockedRunNow.mockResolvedValue(undefined)
+  mockedRunNow.mockResolvedValue({ viaRunner: 0, viaLegacy: 1, runnerSkipped: 0, runnerRunIds: [] })
   mockedDelete.mockResolvedValue(undefined)
 })
 
@@ -179,20 +194,77 @@ afterEach(() => {
 })
 
 describe('一行一源与源目录', () => {
-  it('传入源目录时，未配置检查的源也出行且不显示绿色正常', async () => {
-    const wrapper = await mountPage()
+  it('网站上下文传入源目录时，未配置检查的源也出行且不显示绿色正常', async () => {
+    const wrapper = await mountPage({ siteId: 'site-1', siteName: '站A' })
     expect(wrapper.text()).toContain('未配置源')
     expect(wrapper.text()).toContain('未配置检查')
     expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
     expect(wrapper.text()).toMatch(/已配置\s*1/)
   })
 
-  it('源目录超限时降级为「仅已配置源」并给出可读提示', async () => {
-    mockedListSources.mockRejectedValue(new MonitorQueryLimitError(20))
+  it('全局视图不拉全量源目录（避免 20 次串行请求），按已配置源展示并说明', async () => {
     const wrapper = await mountPage()
-    expect(wrapper.text()).toContain('监控记录超过 20 页')
-    expect(wrapper.text()).toContain('当前只列出已配置监控的源')
-    expect(wrapper.text()).not.toContain('未配置源')
+    expect(mockedListSources).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('按已配置监控的源展示')
+    expect(wrapper.text()).toContain('C07')
+  })
+
+  it('按源 ID 批量取名，主标题不退化成 ID', async () => {
+    mockedListMonitors.mockResolvedValue([rec({ sourceName: undefined })])
+    mockedListNames.mockResolvedValue([
+      { sourceId: 's1', name: '上市公司新闻', siteName: '财经资讯站', tableName: 'sense_data.news_main' },
+    ])
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('上市公司新闻')
+    expect(wrapper.text()).toContain('财经资讯站 · sense_data.news_main')
+    expect(wrapper.text()).not.toContain('源 s1')
+  })
+
+  it('服务端聚合可用时，未配置检查的源也出行并标注未配置', async () => {
+    mockedSummary.mockResolvedValue({
+      total: 2,
+      unavailable: false,
+      rows: [
+        {
+          sourceId: 's1',
+          sourceName: '上市公司新闻',
+          tableName: 'sense_data.news_main',
+          siteName: '财经资讯站',
+          monitorTotal: 1,
+          monitorEnabled: 1,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'normal' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          lastCheckAt: '2026-11-12 09:00:00',
+          label: '数据正常',
+          tone: 'good' as const,
+          monitors: [],
+          unconfigured: false,
+        },
+        {
+          sourceId: 's2',
+          sourceName: '港口吞吐量',
+          monitorTotal: 0,
+          monitorEnabled: 0,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'unknown' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          label: '未配置检查',
+          tone: 'muted' as const,
+          monitors: [],
+          unconfigured: true,
+        },
+      ],
+    })
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('物流吞吐量'.slice(0, 0) + '港口吞吐量')
+    expect(wrapper.text()).toContain('未配置检查')
+    expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
   })
 
   it('监控记录加载失败时给出错误与重试', async () => {
@@ -240,7 +312,7 @@ describe('筛选与刷新', () => {
     const wrapper = await mountPage()
 
     selectByPlaceholder(wrapper, '数据情况').vm.$emit('update:modelValue', 'failed')
-    const keyword = wrapper.find('input[placeholder="筛选已加载源名称 / ID"]')
+    const keyword = wrapper.find('input[placeholder="源名称 / ID / 主表"]')
     await keyword.setValue('未配置')
     await buttonByText(wrapper, '查询').trigger('click')
     await flushPromises()

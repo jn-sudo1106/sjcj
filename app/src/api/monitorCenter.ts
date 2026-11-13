@@ -453,34 +453,42 @@ function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
  * 拉服务端源聚合（C07 首期）。
  * 不可用时返回 `unavailable: true`，页面回落到「只列已配置源」的老路径——**不要**用前端拼全量源目录顶替。
  */
+export interface SourceSummaryQuery {
+  siteId?: string
+  keyword?: string
+  /** yes=有在用检查；no=有检查但全部停用；空=不限 */
+  enabled?: 'yes' | 'no'
+  /** none/disabled/unknown/abnormal/normal */
+  dataState?: string
+  /** today / never / not-today */
+  checkDate?: string
+  page?: number
+  size?: number
+}
+
+/**
+ * 服务端源聚合（C07）：**单页**请求，筛选与分页都由服务端执行。
+ * 源总数可达十几万，禁止前端再翻十页拼「假全量」——想看更多就翻页或收窄筛选。
+ */
 export async function listSourceSummary(
-  options: { siteId?: string; keyword?: string; maxPages?: number } = {},
+  options: SourceSummaryQuery = {},
 ): Promise<{ total: number; rows: MonitorSourceRow[]; unavailable: boolean }> {
-  const maxPages = options.maxPages ?? 10
-  const query = (page: number) =>
-    pagedSourceSummary({
-      page,
-      limit: MONITOR_PAGE_SIZE,
+  try {
+    const res = await pagedSourceSummary({
+      page: options.page ?? 1,
+      limit: options.size ?? 30,
       siteId: options.siteId,
       keyword: options.keyword,
+      enabled: options.enabled,
+      dataState: options.dataState,
+      checkDate: options.checkDate,
     })
-
-  try {
-    const first = await query(1)
-    const firstList = Array.isArray(first?.list) ? (first.list as SourceSummaryPayload[]) : []
-    const total = Number(first?.total ?? firstList.length)
-    const rows = firstList.map(toSourceSummaryRow)
-    if (!firstList.length || firstList.length >= total) return { total, rows, unavailable: false }
-
-    const pageSize = firstList.length || MONITOR_PAGE_SIZE
-    const pages = Math.min(Math.ceil(total / pageSize), maxPages)
-    const rest = await Promise.all(
-      Array.from({ length: Math.max(0, pages - 1) }, (_, index) =>
-        query(index + 2).then((res) => (Array.isArray(res?.list) ? (res.list as SourceSummaryPayload[]) : [])),
-      ),
-    )
-    for (const list of rest) rows.push(...list.map(toSourceSummaryRow))
-    return { total, rows, unavailable: false }
+    const list = Array.isArray(res?.list) ? (res.list as SourceSummaryPayload[]) : []
+    return {
+      total: Number(res?.total ?? list.length),
+      rows: list.map(toSourceSummaryRow),
+      unavailable: false,
+    }
   } catch {
     return { total: 0, rows: [], unavailable: true }
   }

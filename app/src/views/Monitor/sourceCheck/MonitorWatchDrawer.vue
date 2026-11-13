@@ -24,7 +24,9 @@ const QUEUE_TEXT: Record<MonitorWatchQueueStatus, string> = {
 const queueProblems = computed(() => (snapshot.value?.queue.items || []).filter((item) => item.status !== 'ok'))
 const healthy = computed(() => snapshot.value?.summary.healthy === true)
 const unsettled = computed(() => !snapshot.value
+  || !!error.value
   || !snapshot.value.queue.reachable
+  || !!snapshot.value.queue.error
   || !snapshot.value.monitors.available)
 
 function toneOf(status: MonitorWatchQueueStatus) {
@@ -89,12 +91,12 @@ watch(() => props.open, (open) => {
         <section class="mw-section">
           <header class="mw-section-head">
             <span>队列健康</span>
-            <span v-if="snapshot.queue.reachable" class="mw-count">
+            <span v-if="snapshot.queue.reachable && !snapshot.queue.error" class="mw-count">
               {{ snapshot.queue.summary.total }} 个启用队列 · 异常 {{ snapshot.queue.summary.problems }}
             </span>
             <span v-else class="mw-count">不可取得</span>
           </header>
-          <p v-if="!snapshot.queue.reachable" class="mw-warn">
+          <p v-if="!snapshot.queue.reachable || snapshot.queue.error" class="mw-warn">
             队列指标不可取得：{{ snapshot.queue.error || '未知原因' }}。当前不能判断队列是否正常。
           </p>
           <p v-else-if="!queueProblems.length" class="mw-ok-note">启用的队列都在阈值内。</p>

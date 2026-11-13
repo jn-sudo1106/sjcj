@@ -191,10 +191,24 @@ const allRows = computed<MonitorSourceRow[]>(() => {
   return summarizeSources(scopedRecords.value, sourceLikes.value)
 })
 
-const filteredRows = computed(() => filterSourceRows(allRows.value, applied))
-const pagedRows = computed(() =>
-  filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
+/** 服务端聚合模式：筛选与分页都在服务端，客户端不再二次切片（否则每页只剩几条） */
+const summaryMode = computed(() => scopeKind.value !== 'source' && !!summaryRows.value)
+/** 服务端不认的筛选（执行失败/未生效/待判断）只能在当前页内过滤，避免翻页后「筛了个寂寞」 */
+const summaryUnsupported = computed(
+  () => summaryMode.value && ['failed', 'draft', 'pending'].includes(applied.status),
 )
+const filteredRows = computed(() => {
+  if (!summaryMode.value) return filterSourceRows(allRows.value, applied)
+  if (!summaryUnsupported.value) return summaryRows.value ?? []
+  return filterSourceRows(summaryRows.value ?? [], { ...applied, enable: 'all', checkDate: 'all' })
+})
+const pagedRows = computed(() =>
+  summaryMode.value
+    ? filteredRows.value
+    : filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
+)
+/** 分页总数：服务端模式用后端 total，否则用本地筛选后的条数 */
+const pagerTotal = computed(() => (summaryMode.value ? summaryTotal.value : filteredRows.value.length))
 /** 统计只算本页：无 C07 时不能把全站异常数说成已知 */
 const stats = computed(() => sourceStats(pagedRows.value))
 const configuredCount = computed(() => filteredRows.value.filter((row) => row.monitorTotal > 0).length)
@@ -288,17 +302,43 @@ async function loadSourceNames(request: number): Promise<void> {
  * 失败/未部署时保持 null，页面继续用老的「已配置源 + 按 ID 取名」路径，不假装聚合成功。
  */
 async function loadSummary(request: number): Promise<void> {
-  summaryRows.value = null
-  summaryTotal.value = 0
   if (scopeKind.value === 'source') return
-  const result = await listSourceSummary(props.siteId ? { siteId: props.siteId } : {})
+  const result = await listSourceSummary({
+    siteId: props.siteId || undefined,
+    keyword: applied.keyword || undefined,
+    enabled: summaryEnabledParam.value,
+    dataState: summaryDataStateParam.value,
+    checkDate: applied.checkDate && applied.checkDate !== 'all' ? applied.checkDate : undefined,
+    page: page.value,
+    size: pageSize.value,
+  })
   if (request !== refreshToken) return
-  if (result.unavailable) return
-  summaryRows.value = result.rows
-  summaryTotal.value = result.total
+  if (result.unavailable) {
+    summaryRows.value = null
+    summaryTotal.value = 0
+    return
+  }
   summaryRows.value = result.rows
   summaryTotal.value = result.total
 }
+
+/** 启停筛选 → 服务端 enabled 参数（未配置走 dataState=none） */
+const summaryEnabledParam = computed<'yes' | 'no' | undefined>(() => {
+  if (applied.enable === 'enabled') return 'yes'
+  if (applied.enable === 'disabled') return 'no'
+  return undefined
+})
+/** 数据情况筛选 → 服务端 dataState 参数；执行失败/未生效/待判断服务端暂无对应口径 */
+const summaryDataStateParam = computed<string | undefined>(() => {
+  if (applied.enable === 'unconfigured') return 'none'
+  const map: Record<string, string> = {
+    abnormal: 'abnormal',
+    normal: 'normal',
+    disabled: 'disabled',
+    unchecked: 'unknown',
+  }
+  return map[applied.status]
+})
 
 async function refreshData(): Promise<void> {
   const request = ++refreshToken
@@ -328,7 +368,9 @@ function applyFilters(): void {
   applied.keyword = draft.keyword.trim()
   page.value = 1
   collapseExpanded()
-  if (sourceChanged) void refresh()
+  if (sourceChanged || summaryMode.value) {
+    void refresh()
+  }
 }
 
 function resetFilters(): void {
@@ -342,6 +384,12 @@ function resetFilters(): void {
 
 function onSizeChange(): void {
   page.value = 1
+  if (summaryMode.value) void loadSummary(refreshToken)
+}
+
+function onPageChange(next: number): void {
+  page.value = next
+  if (summaryMode.value) void loadSummary(refreshToken)
 }
 
 function collapseExpanded(): void {
@@ -555,9 +603,9 @@ onMounted(() => {
     </div>
     <div v-if="summaryRows" data-testid="sc-summary-hint" class="sc-hint sc-hint-muted">
       <span>
-        服务端按源聚合：本组共 {{ summaryTotal }} 个源（含未配置检查的源），当前加载
-        {{ summaryRows.length }} 个（已配置的排在最前）。计划覆盖仍需服务端按时隙聚合，暂显示「—」；
-        找某个源请用上面的关键词。
+        服务端按源聚合：共 {{ summaryTotal }} 个源（含未配置检查的源），已配置的排在最前。
+        筛选与翻页都由服务端执行；「执行失败 / 未生效 / 待判断」当前只能在当前页内过滤。
+        计划覆盖仍需服务端按时隙聚合，暂显示「—」。
       </span>
     </div>
     <div v-else-if="directorySkipped && scopeKind === 'global'" class="sc-hint sc-hint-muted">
@@ -604,7 +652,10 @@ onMounted(() => {
       <el-button @click="resetFilters">重置</el-button>
 
       <div class="sc-headbar">
-        <span class="sc-count">共 {{ filteredRows.length }} 个源 · 已配置 {{ configuredCount }}</span>
+        <span class="sc-count">
+          共 {{ pagerTotal }} 个源<template v-if="summaryMode"> · 本页已配置 {{ configuredCount }}</template>
+          <template v-else> · 已配置 {{ configuredCount }}</template>
+        </span>
         <el-button
           :icon="Refresh"
           circle
@@ -809,16 +860,17 @@ onMounted(() => {
       </template>
     </el-table>
 
-    <div v-if="filteredRows.length" class="sc-pager">
+    <div v-if="pagerTotal" class="sc-pager">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :page-sizes="PAGE_SIZES"
-        :total="filteredRows.length"
+        :total="pagerTotal"
         size="small"
         background
         layout="total, sizes, prev, pager, next"
         @size-change="onSizeChange"
+        @current-change="onPageChange"
       />
     </div>
 
