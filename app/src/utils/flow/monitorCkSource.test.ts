@@ -101,6 +101,26 @@ describe('syncMonitorCkSource', () => {
     expect(conf.orchestration).toMatchObject({ scriptPath: '/code01/184.py' })
   })
 
+  it('关闭告警写后端认得的静音策略 none，而不是 disabled', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{
+      id: 7,
+      ver: 9001,
+      sourceId: 430016501,
+      name: '旧监控',
+      checkConf: JSON.stringify({ kind: 'source_result', notifyOn: 'error' }),
+    }])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
+    const node = makeMonitorNode()
+    const alertConfig = { ...node.alertConfig!, enabled: false }
+
+    await syncMonitorAlertConfig('430016501', node, alertConfig)
+
+    const conf = JSON.parse(String(update.mock.calls[0][0].checkConf ?? '{}'))
+    // 后端 NOTIFY_POLICIES 只有 none/error/ok/all，非法值会被归一成 error；
+    // 写 disabled 等于「用户关了告警，异常照旧发邮件」（2026-11-13 修复）。
+    expect(conf.notifyOn).toBe('none')
+  })
+
   it('同源已有多个检查项时拒绝覆盖，不再按 sourceId 整包更新', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
       { id: 7, sourceId: 430016501, name: '检查项A', checkConf: '{}' },
@@ -253,7 +273,7 @@ describe('syncMonitorAlertConfig', () => {
     expect(conf.orchestration.scriptPath).toBe('/code01/real.py')
   })
 
-  it('告警总开关关掉时写 notifyOn=disabled', async () => {
+  it('告警总开关关掉时写静音策略 notifyOn=none', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, ver: 9001, sourceId: 430016501, checkConf: '{}' }])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
 
@@ -261,7 +281,8 @@ describe('syncMonitorAlertConfig', () => {
     await syncMonitorAlertConfig('430016501', node, { ...node.alertConfig!, enabled: false })
 
     const conf = JSON.parse(String(update.mock.calls[0][0].checkConf ?? '{}'))
-    expect(conf.notifyOn).toBe('disabled')
+    // 必须是后端白名单里的 none；写 disabled 会被归一成 error，等于没静音。
+    expect(conf.notifyOn).toBe('none')
     expect(conf.scopeType).toBe('node_input')
   })
 
@@ -445,8 +466,8 @@ describe('syncMonitorAlertConfig · C12 绑定认领', () => {
     const payload = update.mock.calls[0][0] as Record<string, unknown>
     expect(payload).toMatchObject({ id: 8, ver: 12 })
     const conf = JSON.parse(String(payload.checkConf ?? '{}'))
-    // 告警面板只合入告警键，脚本/绑定原样保留
-    expect(conf.notifyOn).toBe('disabled')
+    // 告警面板只合入告警键，脚本/绑定原样保留；关掉告警即静音 none
+    expect(conf.notifyOn).toBe('none')
     expect(conf.script).toBe('/code01/keep.py')
     expect(conf.binding).toMatchObject({ nodeKey: 'web-list-1' })
   })

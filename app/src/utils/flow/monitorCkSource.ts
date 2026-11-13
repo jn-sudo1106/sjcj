@@ -250,7 +250,9 @@ function alertCheckConfOf(alertConfig: MonitorAlertConfig | undefined, previous:
       firstPolicy.threshold,
       `连续${firstPolicy.consecutiveCount}次`,
     ].filter(Boolean).join(' ')
-    result.notifyOn = alertConfig?.enabled === false ? 'disabled' : 'error'
+    // 关闭告警必须写后端认得的静音策略 `none`：历史写 `disabled` 会被后端当非法值
+    // 归一成 `error`，用户关了告警异常照旧发邮件（2026-11-13 修）。
+    result.notifyOn = alertConfig?.enabled === false ? 'none' : 'error'
   }
   const notifyType = notifyTypeOf(alertConfig, previous.notifyType)
   if (notifyType) result.notifyType = notifyType

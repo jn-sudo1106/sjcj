@@ -188,19 +188,27 @@ class MonitorEventsTest(unittest.TestCase):
         self.assertIsNone(batches.read(self.app, events.INDEX_KEY))
 
     def test_notify_on_error_is_default_for_missing_and_invalid(self):
-        # 缺键、空字符串、非法值、历史脏值 'disabled' 都按 error：异常建、正常不建。
-        confs = ({}, {'kind': 'ai'}, {'notifyOn': ''}, {'notifyOn': 'bogus'},
-                 {'notifyOn': 'disabled'}, None)
+        # 缺键、空字符串、非法值按 error：异常建、正常不建。
+        confs = ({}, {'kind': 'ai'}, {'notifyOn': ''}, {'notifyOn': 'bogus'}, None)
         for index, conf in enumerate(confs):
             self.assertIsNone(events.record(self.app, self.item(
                 'NORMAL', runId='run-1104-2026111211%02d00' % index), conf))
-        for index, conf in enumerate([{}, {'notifyOn': ''}, {'notifyOn': 'bogus'},
-                                      {'notifyOn': 'disabled'}]):
+        for index, conf in enumerate([{}, {'notifyOn': ''}, {'notifyOn': 'bogus'}]):
             row = events.record(self.app, self.item(
                 'ABNORMAL', runId='run-1104-2026111212%02d00' % index), conf)
             self.assertIsNotNone(row)
             self.assertEqual(row['notifyOn'], 'error')
-        self.assertEqual(len(events.listing(self.app)), 4)
+        self.assertEqual(len(events.listing(self.app)), 3)
+
+    def test_notify_on_legacy_disabled_means_mute(self):
+        # 2026-11-13 修复：旧前端把「关闭告警」写成 disabled/off/false，此前被当非法值
+        # 归一成 error —— 用户关了告警，异常照旧发邮件。历史值必须等价于 none。
+        for index, legacy in enumerate(('disabled', 'off', 'false', 'Disabled', ' OFF ', 'Off')):
+            conf = {'notifyOn': legacy}
+            self.assertEqual(events.notify_policy(conf), 'none')
+            self.assertIsNone(events.record(self.app, self.item(
+                'ABNORMAL', runId='run-1104-2026111300%02d00' % index), conf))
+        self.assertEqual(events.listing(self.app), [])
 
     def test_notify_on_ok_only_records_normal(self):
         self.assertIsNone(events.record(self.app, self.item('ABNORMAL'), {'notifyOn': 'ok'}))

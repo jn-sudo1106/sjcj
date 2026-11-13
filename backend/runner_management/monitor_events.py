@@ -62,6 +62,9 @@ MAX_LIMIT = 200
 
 NOTIFY_POLICIES = ('none', 'error', 'ok', 'all')
 DEFAULT_NOTIFY_POLICY = 'error'
+# 历史值兼容：旧前端把「关闭告警」写成 disabled/off/false。这些必须等价于 none，
+# 否则会被当成非法值归一成 error —— 用户明明关了告警，异常却照旧发邮件（2026-11-13 修复）。
+NOTIFY_LEGACY_ALIASES = {'disabled': 'none', 'off': 'none', 'false': 'none'}
 # 渠道枚举的历史差异：新配置写 mail，旧值里也出现过 email。
 MAIL_CHANNELS = ('mail', 'email')
 CHANNEL_DISABLED_REASON = '该检查项未开启邮件渠道'
@@ -106,9 +109,14 @@ def _conf_dict(conf):
 
 
 def notify_policy(conf=None):
-    """``conf.notifyOn`` 归一成 none/error/ok/all；缺键与非法值一律按 error。"""
+    """``conf.notifyOn`` 归一成 none/error/ok/all。
+
+    缺键与非法值按 error；历史遗留的 disabled/off/false 一律视同 none（关闭告警＝静音），
+    不能再被当成非法值归一成 error。
+    """
     value = _conf_dict(conf).get('notifyOn')
     policy = str(value or '').strip().lower()
+    policy = NOTIFY_LEGACY_ALIASES.get(policy, policy)
     return policy if policy in NOTIFY_POLICIES else DEFAULT_NOTIFY_POLICY
 
 
