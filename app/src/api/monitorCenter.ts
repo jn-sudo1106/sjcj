@@ -287,6 +287,79 @@ export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: 
   return { total: Number(res?.total ?? logs.length), list: logs.map((log) => toMonitorRun(log)) }
 }
 
+/** 通知事件的一次投递回执（执行器 `monitor_events` 的 delivery 字段）。 */
+export interface MonitorNotificationDelivery {
+  /** 投递状态机；老事件缺字段时后端按 pending 兜底 */
+  state: 'pending' | 'sending' | 'sent' | 'failed' | 'not-configured' | string
+  attempts?: number
+  lastAttemptAt?: string | null
+  nextAttemptAt?: string | null
+  error?: string | null
+  reason?: string | null
+}
+
+/** 异常 / 执行失败生成的通知事件（NORMAL 不建事件，正常跑完不会有回执）。 */
+export interface MonitorNotificationEvent {
+  eventId: string
+  monitorId?: number | string
+  sourceId?: string
+  name?: string
+  runId?: string
+  /** NORMAL / ABNORMAL / ERROR；NORMAL 仅作防御，正常结果不产生事件 */
+  status?: string
+  checkedCount?: number
+  abnormalCount?: number
+  tableName?: string
+  window?: { start?: string; end?: string }
+  reason?: string
+  createdAt?: string
+  /** 历次投递记录（事件详情用）；列表回执以 delivery 为准 */
+  deliveries?: MonitorNotificationDelivery[]
+  delivery?: MonitorNotificationDelivery
+}
+
+export interface MonitorNotificationsResult {
+  count: number
+  items: MonitorNotificationEvent[]
+}
+
+/**
+ * 通知回执列表（执行器 `/monitor-runner/notifications`）。
+ *
+ * monitorId 为空时**不拼该参数**：空串会被后端当成 `monitorId=""` 过滤掉全部事件。
+ * 路径与 `runScriptMonitorsNow` 一样走 runner-management 的裸路径，不进 ENDPOINTS 的 /v1 契约清单。
+ */
+export async function listNotifications(
+  options: { monitorId?: string; runId?: string; limit?: number } = {},
+): Promise<MonitorNotificationsResult> {
+  const params = new URLSearchParams()
+  const monitorId = String(options.monitorId ?? '').trim()
+  if (monitorId) params.set('monitorId', monitorId)
+  const runId = String(options.runId ?? '').trim()
+  if (runId) params.set('runId', runId)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  const res = await requestRunnerManagement<MonitorNotificationsResult>(
+    `/monitor-runner/notifications${query ? `?${query}` : ''}`,
+  )
+  const items = Array.isArray(res?.items) ? res.items : []
+  return { count: Number(res?.count ?? items.length), items }
+}
+
+/** 手动重试一次投递。未知 eventId 由服务端返回 404（错误信息「事件不存在」）。 */
+export async function retryNotification(eventId: string): Promise<MonitorNotificationEvent> {
+  const res = await requestRunnerManagement<{ event?: MonitorNotificationEvent }>(
+    `/monitor-runner/notifications/${encodeURIComponent(eventId)}/retry`,
+    'POST',
+  )
+  if (res?.event) return res.event
+  // 防御：服务端若直接返回事件本体（没有再包一层 event），不当成失败
+  if (res && typeof (res as MonitorNotificationEvent).eventId === 'string') {
+    return res as unknown as MonitorNotificationEvent
+  }
+  throw new Error('重试投递的返回结果里没有事件信息')
+}
+
 /** 从旧行直接拿 checkConf（页面需要原始 JSON 时用，不经过视图）。 */
 export function rawCheckConf(row: SourceCheck): MonitorCheckConf {
   return parseCheckConf(row.checkConf)

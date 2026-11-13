@@ -29,7 +29,7 @@ vi.mock('./runnerManagement', () => ({
   requestRunnerManagement: (...args: unknown[]) => runnerRequest(...args),
 }))
 
-const { listMonitorRows, listRuns, saveMonitor, listSourceNames, runMonitorsNow, MONITOR_PAGE_SIZE } = await import('./monitorCenter')
+const { listMonitorRows, listRuns, listNotifications, retryNotification, saveMonitor, listSourceNames, runMonitorsNow, MONITOR_PAGE_SIZE } = await import('./monitorCenter')
 const { updateSourceCheck, handleRunNow } = await import('./monitor')
 const { toMonitorRecord } = await import('../utils/monitor/record')
 
@@ -105,6 +105,46 @@ describe('listSourceNames 按 ID 批量取名', () => {
   it('没有 ID 时不发请求', async () => {
     expect(await listSourceNames([])).toEqual([])
     expect(sourcePaged).not.toHaveBeenCalled()
+  })
+})
+
+describe('通知回执接口', () => {
+  beforeEach(() => {
+    runnerRequest.mockReset()
+  })
+
+  it('monitorId 为空时只拼 limit，不把空串带给后端', async () => {
+    runnerRequest.mockResolvedValueOnce({ count: 0, items: [] })
+    await listNotifications({ monitorId: '  ', limit: 50 })
+    expect(runnerRequest).toHaveBeenCalledWith('/monitor-runner/notifications?limit=50')
+  })
+
+  it('monitorId / runId / limit 按 query string 拼', async () => {
+    runnerRequest.mockResolvedValueOnce({ count: 1, items: [{ eventId: 'e1' }] })
+    const result = await listNotifications({ monitorId: '1104', runId: 'run-1104-2026', limit: 20 })
+    expect(runnerRequest).toHaveBeenCalledWith(
+      '/monitor-runner/notifications?monitorId=1104&runId=run-1104-2026&limit=20',
+    )
+    expect(result).toEqual({ count: 1, items: [{ eventId: 'e1' }] })
+  })
+
+  it('count 缺失时按 items 长度兜底，items 非数组时给空列表', async () => {
+    runnerRequest.mockResolvedValueOnce({ items: [{ eventId: 'e1' }, { eventId: 'e2' }] })
+    expect((await listNotifications({ monitorId: '1104' })).count).toBe(2)
+    runnerRequest.mockResolvedValueOnce({})
+    expect(await listNotifications({ monitorId: '1104' })).toEqual({ count: 0, items: [] })
+  })
+
+  it('重试走 POST（无 body），eventId 做 URL 编码', async () => {
+    runnerRequest.mockResolvedValueOnce({ event: { eventId: 'evt 1' } })
+    const event = await retryNotification('evt 1')
+    expect(runnerRequest).toHaveBeenCalledWith('/monitor-runner/notifications/evt%201/retry', 'POST')
+    expect(event.eventId).toBe('evt 1')
+  })
+
+  it('服务端 404 的「事件不存在」原样抛出，不会伪装成功', async () => {
+    runnerRequest.mockRejectedValueOnce(new Error('事件不存在'))
+    await expect(retryNotification('evt-x')).rejects.toThrow('事件不存在')
   })
 })
 

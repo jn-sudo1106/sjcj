@@ -207,6 +207,10 @@ export interface MonitorRunView {
   runId?: string
   /** 本次检查记录数（结构化）；未知缺省，页面显示「—」 */
   checkedCount?: number
+  /** 脚本检查耗时（毫秒，remarks.durationMs）；旧记录没有结构化结果时缺省 */
+  durationMs?: number
+  /** 执行器给出的原因（remarks.reason：数据异常说明 / 执行失败主因）；旧记录缺省 */
+  reason?: string
   /** 旧日志从文本里抠出来的条数（仅展示，不参与判定，与 checkedCount 不要混用） */
   legacyCount?: string
   /** 逐方法逐表结果；旧日志没有，页面显示「未记录逐项结果」 */

@@ -151,6 +151,9 @@ describe('toMonitorRun', () => {
     expect(run.count).toBe('7')
     expect(run.window).toEqual({ start: '2026-11-12 00:00:00', end: '2026-11-12 16:48:40' })
     expect(run.summary).toBe('异常数超过阈值')
+    // 运行记录抽屉的「耗时」「原因」列直接读这两个字段，不能只留在 summary 里
+    expect(run.durationMs).toBe(311)
+    expect(run.reason).toBe('异常数超过阈值')
   })
 
   it('REMARKS 非法或只有部分字段时按未知处理，不补 0', () => {

@@ -64,6 +64,8 @@ const mockedRunNow = vi.mocked(runMonitorsNow)
 const mockedDelete = vi.mocked(deleteSourceCheck)
 
 const editorDirty = vi.fn(() => false)
+// 通知回执抽屉走 ref.show(sourceId, monitorId, monitorName)，只记录调用参数
+const notifyCalls: string[] = []
 
 const ElDialogStub = defineComponent({
   name: 'ElDialog',
@@ -126,6 +128,18 @@ const stubs = {
       return () => (props.open ? h('div', { class: 'stub-runs' }, `${props.sourceId}|${props.monitorId}|${props.title}`) : null)
     },
   }),
+  // 通知回执抽屉：只断言「打开时带了哪个范围」，不依赖其内部实现
+  CheckNotificationsDrawer: defineComponent({
+    name: 'CheckNotificationsDrawer',
+    setup(_props, { expose }) {
+      expose({
+        show: (sourceId: string, jobId?: string, monitorName?: string) => {
+          notifyCalls.push(`${sourceId}|${jobId ?? ''}|${monitorName ?? ''}`)
+        },
+      })
+      return () => h('div', { class: 'stub-notify' })
+    },
+  }),
 }
 
 function rec(patch: Partial<MonitorRecordView> = {}): MonitorRecordView {
@@ -178,6 +192,7 @@ function selectByPlaceholder(wrapper: VueWrapper, placeholder: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  notifyCalls.length = 0
   editorDirty.mockReturnValue(false)
   mockedListMonitors.mockResolvedValue([rec()])
   mockedListOfSource.mockResolvedValue([rec()])
@@ -410,6 +425,13 @@ describe('行内展开与批量', () => {
     await nextTick()
     // 源级入口只带 sourceId，不带 monitorId，也不沿用上一条检查项名
     expect(wrapper.find('.stub-runs').text()).toBe('s1||')
+  })
+
+  it('通知入口与「记录」同样按监控记录 id 打开回执抽屉', async () => {
+    const wrapper = await mountExpanded()
+    await buttonByText(wrapper, '通知').trigger('click')
+    await nextTick()
+    expect(notifyCalls.at(-1)).toBe('s1|m1|检查项A')
   })
 })
 

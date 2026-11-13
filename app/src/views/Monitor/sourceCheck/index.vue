@@ -28,6 +28,7 @@ import MonitorBatchDialog from './MonitorBatchDialog.vue'
 import MonitorWatchDrawer from './MonitorWatchDrawer.vue'
 import MonitorConfigEditor from '@/views/FlowCanvas/result/MonitorConfigEditor.vue'
 import RunsDrawer from '@/views/FlowCanvas/result/monitor-runs/RunsDrawer.vue'
+import CheckNotificationsDrawer from './CheckNotificationsDrawer.vue'
 import {
   CHECK_DATE_OPTIONS,
   ENABLE_OPTIONS,
@@ -115,6 +116,8 @@ const runsOpen = ref(false)
 const runsSourceId = ref<string>()
 const runsMonitorId = ref<string>()
 const runsTitle = ref<string>()
+// 通知回执抽屉：执行器只为异常/失败建事件，入口与「记录」一致（按 monitorId 查）。
+const notifyRef = ref<InstanceType<typeof CheckNotificationsDrawer>>()
 
 const editingLockSource = ref(true)
 const batchVisible = ref(false)
@@ -505,6 +508,11 @@ function openLogs(row: MonitorSourceRow, monitor?: MonitorRecordView): void {
   runsOpen.value = true
 }
 
+function openNotifications(row: MonitorSourceRow, monitor?: MonitorRecordView): void {
+  // 事件挂在监控记录（ckSource.id）上；源级入口没有 monitorId，抽屉内提示无法查询，不伪造来源。
+  notifyRef.value?.show(row.sourceId, monitor?.id, monitor?.name)
+}
+
 async function toggleMonitor(monitor: MonitorRecordView, next: boolean): Promise<void> {
   try {
     await setMonitorsEnabled([monitor.id], next)
@@ -778,12 +786,13 @@ onMounted(() => {
                   <div class="subline">{{ monitorExecOf(monitor).text }}</div>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" min-width="132">
+              <el-table-column label="操作" min-width="176">
                 <template #default="{ row: monitor }">
                   <div class="sc-ops">
                     <button type="button" class="sc-link" @click="openEdit(row, monitor)">编辑</button>
                     <button type="button" class="sc-link" @click="runMonitor(monitor)">立即运行</button>
                     <button type="button" class="sc-link" @click="openLogs(row, monitor)">记录</button>
+                    <button type="button" class="sc-link" @click="openNotifications(row, monitor)">通知</button>
                   </div>
                 </template>
               </el-table-column>
@@ -921,6 +930,7 @@ onMounted(() => {
       :title="runsTitle"
       @close="runsOpen = false"
     />
+    <CheckNotificationsDrawer ref="notifyRef" />
 
   </div>
 </template>
