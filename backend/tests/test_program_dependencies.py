@@ -21,6 +21,19 @@ from backend.runner_management.runtime_logs import LogQueue
 
 
 class ProgramDependenciesTest(unittest.TestCase):
+    def test_entry_scope_excludes_unreferenced_template_but_checks_sites_and_imported_helpers(self):
+        (self.snapshot / 'newslink.py').write_text('import helper\n')
+        (self.snapshot / 'helper.py').write_text('import json\n')
+        (self.snapshot / 'demo.py').write_text('import basetest\n')
+        (self.snapshot / 'sites').mkdir()
+        (self.snapshot / 'sites/site.py').write_text('from bs4 import BeautifulSoup\ndef scrape(url): return []\n')
+        selected = {path.relative_to(self.snapshot).as_posix() for path in deps.runtime_scripts(self.snapshot, 'newslink.py')}
+        self.assertEqual(selected, {'newslink.py', 'helper.py', 'sites/site.py'})
+        with patch.object(deps.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='[]')) as probe:
+            deps.check_imports(sys.executable, self.snapshot, 'newslink.py')
+        self.assertNotIn('basetest', probe.call_args.args[0][-1])
+        self.assertIn('bs4', probe.call_args.args[0][-1])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -58,18 +71,18 @@ class ProgramDependenciesTest(unittest.TestCase):
             python = deps.dependency_python(self.runner, self.snapshot, self.working, self.manifest, self.info)
             self.assertNotEqual(python, Path(sys.executable))
             self.assertTrue(python.is_relative_to(self.runner.directory))
-            self.assertEqual(install.call_count, 2)
+            self.assertEqual(install.call_count, 3)
             result = subprocess.run([str(python), '-c', 'import runner_test_dependency; print(runner_test_dependency.VALUE)'],
                                     env=deps.clean_environment(), capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), 'installed')
             self.assertEqual(deps.dependency_python(self.runner, self.snapshot, self.working, self.manifest, self.info), python)
-            self.assertEqual(install.call_count, 2)
+            self.assertEqual(install.call_count, 4)
             for root in (self.snapshot, self.working):
                 with (root / 'requirements.txt').open('a', encoding='utf-8') as output:
                     output.write('# changed dependency declaration\n')
             deps.dependency_python(self.runner, self.snapshot, self.working, self.manifest, self.info)
-            self.assertEqual(install.call_count, 4)
+            self.assertEqual(install.call_count, 7)
         marker = next((self.runner.directory / '.runtime/program-env').glob('*/requirements-state.json'))
         self.assertIn('requirements.txt', json.loads(marker.read_text())['files'])
         saved = ''.join(path.read_text(encoding='utf-8') for path in self.runner.logs.root.glob('programs/*/*/*.log'))
@@ -82,6 +95,26 @@ class ProgramDependenciesTest(unittest.TestCase):
         with patch.object(deps, 'run_install') as install, self.assertRaisesRegex(ValueError, '与配置不一致'):
             deps.dependency_python(self.runner, self.snapshot, self.working, self.manifest, self.info)
         install.assert_not_called()
+
+    def test_nested_site_requirements_are_installed_and_missing_imports_block_start(self):
+        self.write_wheel()
+        (self.snapshot / 'sites').mkdir()
+        (self.snapshot / 'sites/requirements.txt').write_text('# Site dependencies\n')
+        shutil.copytree(self.snapshot, self.working, dirs_exist_ok=True)
+        with patch.object(deps, 'run_install', wraps=deps.run_install) as install:
+            python = deps.dependency_python(self.runner, self.snapshot, self.working, self.manifest, self.info)
+            command = install.call_args_list[1].args[1]
+            self.assertIn(str(self.snapshot / 'sites/requirements.txt'), command)
+            (self.snapshot / 'sites/site.py').write_text('from bs4 import BeautifulSoup\n')
+            # The dedicated environment contains only our offline wheel, no bs4.
+            with self.assertRaisesRegex(RuntimeError, 'bs4.*beautifulsoup4'):
+                deps.check_imports(python, self.snapshot)
+
+    def test_missing_import_is_checked_when_no_requirements_exist(self):
+        (self.snapshot / 'site.py').write_text('from bs4 import BeautifulSoup\n')
+        with patch.object(deps.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='["bs4"]')):
+            with self.assertRaisesRegex(RuntimeError, 'requirements.txt'):
+                deps.dependency_python(self.runner, self.snapshot, self.working, self.manifest, self.info)
 
     def test_runner_upgrade_seeds_missing_pip_settings_without_overwriting_custom_config(self):
         from backend.runner_management.runner import Runner

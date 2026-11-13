@@ -37,12 +37,16 @@ class LiveGeneratedDeploymentTest(unittest.TestCase):
         pid=child.pid; target=self.runner.directory/'test/default/1401218'; inode=target.stat().st_ino
         modified=(target/'main.py').stat().st_mtime_ns
         site_path = '1401218/sites/www.mkky.cn.py'
-        uploaded = self.app.upload_repository_files(self.repo['repoId'],{'directoryId':'default','uploadType':'folder','files':[
-            {'name':'www.mkky.cn.py','relativePath':site_path,'data':base64.b64encode(b'VALUE=2\n').decode()}]},owner_config_id='1401218')
+        uploaded = self.app.upload_repository_files(self.repo['repoId'],{'directoryId':'default','uploadType':'folder','overwrite':True,'files':[
+            {'name':'www.mkky.cn.py','relativePath':site_path,'data':base64.b64encode(b'VALUE=2\n').decode()},
+            {'name':'existing.example.py','relativePath':'1401218/sites/existing.example.py','data':base64.b64encode(b'VALUE=999\n').decode()},
+            {'name':'main.py','relativePath':'1401218/main.py','data':base64.b64encode(b'UNRELATED_EDIT=True\n').decode()},
+            {'name':'demo.py','relativePath':'1401218/demo.py','data':base64.b64encode(b'REFERENCE_ONLY=True\n').decode()},
+        ]},owner_config_id='1401218')
         newer=copy.deepcopy(archive)
         newer.update(archiveId='new-source',taskId='new-source',gitCommit=uploaded['gitCommit'])
         newer['sourceContext']['sourceId']='430024909'
-        newer['files'].append({'path':'default/'+site_path,'relativePath':site_path,'sha256':hashlib.sha256(b'VALUE=2\n').hexdigest(),'size':8})
+        newer['files'] = [{'path':'default/'+site_path,'relativePath':site_path,'sha256':hashlib.sha256(b'VALUE=2\n').hexdigest(),'size':8}]
         heartbeat = self.runner.heartbeat_payload()
         self.runner.post('/api/runners/me/heartbeat', {**heartbeat, 'liveFileDeploymentSchema': 1})
         generated_archives.store(self.app,newer); resources.dispatch(self.app)
@@ -55,9 +59,14 @@ class LiveGeneratedDeploymentTest(unittest.TestCase):
         new=self.jobs()[0]
         self.assertEqual(new['status'],'delivering',new)
         self.assertEqual(new['deploymentId'],old['deploymentId'])
+        self.assertEqual(new['deploymentScope'], 'task-files')
+        self.assertEqual(new['selectedPaths'], ['sites/www.mkky.cn.py'])
         self.runner.deliver_pending(); resources.dispatch(self.app)
         self.assertEqual(self.jobs()[0]['status'],'success')
         self.assertEqual((target/'sites/www.mkky.cn.py').read_bytes(),b'VALUE=2\n')
+        self.assertEqual((target/'sites/existing.example.py').read_bytes(),b'VALUE=1\n')
+        self.assertEqual((target/'main.py').read_bytes(),source)
+        self.assertFalse((target/'demo.py').exists())
         self.assertEqual(target.stat().st_ino,inode);self.assertEqual((target/'main.py').stat().st_mtime_ns,modified)
         self.assertIsNone(child.poll());self.assertEqual(child.pid,pid)
         with self.app.store.connect() as db:

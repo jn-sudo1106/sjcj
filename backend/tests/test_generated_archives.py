@@ -12,6 +12,43 @@ from backend.runner_management.server import ApiError
 
 
 class GeneratedArchivesTest(unittest.TestCase):
+    def test_generation_state_is_scoped_to_source_flow_and_node_not_shared_config_latest(self):
+        _, _, _, payload, _ = self.fixture()
+        first = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'source-a',
+            'sourceContext': {'sourceId': '1', 'flowId': '20', 'stepId': '30'}})['archive']
+        second = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'source-b',
+            'sourceContext': {'sourceId': '2', 'flowId': '20', 'stepId': '30'}})['archive']
+        route = '/api/runner-management/site-scripts/generation-state?configId=101'
+        self.assertEqual(self.request(route)['archive']['archiveId'], second['archiveId'])
+        scoped = route + '&sourceId=1&flowId=20&stepId=30'
+        self.assertEqual(self.request(scoped)['archive']['archiveId'], first['archiveId'])
+        self.assertIsNone(self.request(route + '&sourceId=3&flowId=20&stepId=30')['archive'])
+        self.assertIsNone(self.request(route + '&sourceId=1&flowId=20&stepId=31')['archive'])
+        # Old receipts without sourceContext can still be resolved from provenance.
+        with self.app.store.connect() as db:
+            key = 'generated-code-result:' + first['archiveId']
+            record = json.loads(db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key,)).fetchone()['setting_value'])
+            record.pop('sourceContext')
+            db.execute('UPDATE settings SET setting_value=? WHERE setting_key=?', (json.dumps(record), key))
+        self.assertEqual(self.request(scoped)['archive']['archiveId'], first['archiveId'])
+
+    def test_site_imports_add_install_distribution_and_retain_unchanged_manifest(self):
+        service, repo, origin, payload, calls = self.fixture({
+            'site.py': 'from bs4 import BeautifulSoup\n',
+            'requirements.txt': '# Existing pin\nrequests>=2.31,<3\n'})
+        first = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'deps-1'})
+        self.assertEqual(first['archive']['status'], 'committed', first['archive'])
+        contents = self.app.git(origin, 'show', 'main:default/requirements.txt')
+        self.assertIn('requests>=2.31,<3', contents)
+        self.assertIn('beautifulsoup4', contents)
+        # The fixture rewrites its old manifest; completion repairs it again,
+        # producing the same requirements hash but a newly changed newslink.py.
+        path = Path(calls[0]['code_dir']) / 'requirements.txt'
+        self.assertIn('beautifulsoup4', path.read_text())
+        second = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'deps-2'})
+        self.assertEqual(second['archive']['status'], 'committed', second['archive'])
+        self.assertIn('default/requirements.txt', [item['path'] for item in second['archive']['files']])
+
     def test_public_paths_keep_repository_prefix_out_of_source_machine_path(self):
         from backend.runner_management.generated_archives import public
         record = {'workspace': {'codeDir': r'D:\codeserver\workspace\1401218\code'}, 'repositoryPrefix': '1401218',
@@ -26,7 +63,7 @@ class GeneratedArchivesTest(unittest.TestCase):
     request = code_server_tests.CodeServerTest.request
     start_remote = code_server_tests.CodeServerTest.start_remote
 
-    def fixture(self, extra_files=None, text_only=False):
+    def fixture(self, extra_files=None, text_only=False, main_filename='newslink.py'):
         service, endpoint, identity, _ = self.start_remote()
         calls = []
         class Model(BaseHTTPRequestHandler):
@@ -36,7 +73,7 @@ class GeneratedArchivesTest(unittest.TestCase):
                 calls.append(body)
                 root = Path(body['code_dir']); root.mkdir(parents=True, exist_ok=True)
                 if not text_only:
-                    (root / 'newslink.py').write_text('VALUE = ' + str(len(calls)), encoding='utf8')
+                    (root / main_filename).write_text('VALUE = ' + str(len(calls)), encoding='utf8')
                     (root / 'lib').mkdir(exist_ok=True)
                     (root / 'lib/helper.py').write_text('def helper(): return 1\n', encoding='utf8')
                 for path, content in (extra_files or {}).items():
@@ -63,8 +100,16 @@ class GeneratedArchivesTest(unittest.TestCase):
         self.app.configure_repository_git(repo['repoId'], origin.as_uri(), 'main')
         payload = {'interfaceId': agent['id'], 'configId': '101', 'configType': '95', 'queueName': 'download',
                    'repositoryId': repo['repoId'], 'directoryId': 'default', 'autoCommit': True,
-                   'fileName': 'newslink.py', 'prompt': '生成处理程序', 'url': 'https://example.com/news', 'sampleId': 'www.realcan.cn.py'}
+                   'fileName': main_filename, 'prompt': '生成处理程序', 'url': 'https://example.com/news', 'sampleId': 'www.realcan.cn.py'}
         return service, repo, origin, payload, calls
+
+    def test_unchanged_requirement_companion_does_not_fail_due_to_file_order(self):
+        _, _, _, payload, _ = self.fixture({'requirements.txt': 'beautifulsoup4\n'}, main_filename='www.example.py')
+        first = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'order-1'})
+        self.assertEqual(first['archive']['status'], 'committed')
+        second = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'order-2'})
+        self.assertEqual(second['archive']['status'], 'committed', second['archive'])
+        self.assertEqual({item['path'] for item in second['archive']['files']}, {'default/requirements.txt', 'default/www.example.py'})
 
     def test_multiple_files_auto_commit_flatten_prefix_owned_updates_and_references(self):
         service, repo, origin, payload, calls = self.fixture()

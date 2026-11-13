@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -47,6 +48,25 @@ class DatabaseGenerationTest(unittest.TestCase):
                 self.assertEqual(generation_tasks.read_config(self.app, '101')['generation']['promptTemplateId'], template_id)
         self.assertFalse(calls)
 
+    def test_batch_task_rebinds_previous_source_url_in_node_prompt_and_actual_request(self):
+        service, origin, body, calls = self.configured()
+        generation = generation_tasks.read_config(self.app, '101')['generation']
+        previous = 'http://www.unikit.com.cn/news/1/'
+        current = 'https://www.lygend.com/news'
+        generation.update(url=previous, userPrompt='- 需求描述：\n- 目标新闻列表 URL：' + previous + '\n参考 https://reference.example/demo')
+        generation_tasks.save_config(self.app, {'configId': '101', 'generation': generation})
+        # The batch form submits the saved prompt and a freshly resolved source URL.
+        job = tasks.create(self.app, {**body, 'generation': {**generation, 'url': current}})['job']
+        saved = tasks.read(self.app, job['taskId'])
+        self.assertIn('- 目标新闻列表 URL：' + current, saved['input']['userPrompt'])
+        self.assertNotIn(previous, saved['input']['userPrompt'])
+        self.assertIn('https://reference.example/demo', saved['input']['userPrompt'])
+        server = code_servers.read(self.app, service.identity['serverId'])
+        tasks.claim(self.app, server); tasks.execute(self.handler(), self.app, server, job['taskId'])
+        self.assertEqual(tasks.read(self.app, job['taskId'])['status'], 'succeeded')
+        self.assertIn('- 目标新闻列表 URL：' + current, calls[0]['prompt'])
+        self.assertNotIn(previous, calls[0]['prompt'])
+
     def test_task_prompt_variables_use_executing_machine_and_queue_filename(self):
         service, origin, body, calls = self.configured()
         job = tasks.create(self.app, {**body, 'generation': {'fileNameMode':'queue',
@@ -57,7 +77,8 @@ class DatabaseGenerationTest(unittest.TestCase):
         request = calls[0]
         self.assertIn('生成文件名：download.py',request['prompt'])
         self.assertIn('代码保存目录：'+request['code_dir'],request['prompt'])
-        self.assertIn(str(service.workspace.root/'101'/'code'/'download.py'),request['prompt'])
+        self.assertIn(str(Path(request['code_dir'])/'download.py'),request['prompt'])
+        self.assertIn('/.agents/',request['code_dir'].replace('\\','/'))
         self.assertNotIn('{{file_name}}',request['prompt']);self.assertNotIn('{{code_dir}}',request['prompt'])
         self.assertTrue(request['prompt'].endswith('【MQ 主题结束】'))
 
@@ -71,7 +92,8 @@ class DatabaseGenerationTest(unittest.TestCase):
         tasks.execute(self.handler(), self.app, server, job['taskId'])
         saved = tasks.read(self.app, job['taskId'])
         self.assertEqual(saved['status'], 'succeeded')
-        self.assertEqual(calls[0]['code_dir'], str(service.workspace.root / '101/code/sites'))
+        self.assertTrue(calls[0]['code_dir'].endswith(str(Path('code/sites'))))
+        self.assertEqual(saved['result']['workspace']['codeDir'], str(service.workspace.root / '101/code/sites'))
         self.assertIn(calls[0]['code_dir'], calls[0]['prompt'])
         paths = self.app.git(origin, 'ls-tree', '-r', '--name-only', 'main').splitlines()
         self.assertTrue(paths)

@@ -1,10 +1,64 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import { runnerManagementApi as api } from '@/api/runnerManagement'
 import CollectorSettings from './CollectorSettings.vue'
 import { COLLECTOR_CAPABILITIES } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠）', () => {
+  it('保存代理实际调用接口，切换源后重新打开同一配置能回读，不串到其他配置', async () => {
+    let saved = { configId: '1401218', configured: false, revision: 0, useProxy: false }
+    const load = vi.spyOn(api, 'nodeProxySettings').mockImplementation(async id => id === saved.configId ? saved : { configId: id, configured: false, revision: 0, useProxy: false })
+    const save = vi.spyOn(api, 'saveNodeProxySettings').mockImplementation(async input => { saved = { ...input, configured: true, revision: 1 }; return saved })
+    const props = { modelValue: { useProxy: false }, configId: '1401218', persistent: true, capability: COLLECTOR_CAPABILITIES.web }
+    const first = mount(CollectorSettings, { props }); await flushPromises()
+    await first.get('.cs-toggle').trigger('click')
+    await first.get('input[type="checkbox"]').setValue(true)
+    await first.get('[data-testid="proxy-curl-open"]').trigger('click')
+    await first.get('[data-testid="proxy-curl-input"]').setValue('curl -x proxy.example.com:31100 -U "user:secret" cip.cc')
+    await first.get('[data-testid="proxy-curl-apply"]').trigger('click'); await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ configId: '1401218', revision: 0, proxyDetail: expect.objectContaining({ ip: 'proxy.example.com', password: 'secret' }) }))
+    expect(first.get('[role="status"]').text()).toContain('代理已保存')
+    first.unmount()
+    const second = mount(CollectorSettings, { props }); await flushPromises()
+    await second.get('.cs-toggle').trigger('click')
+    expect(second.get('input[type="password"]').element).toHaveProperty('value', 'secret')
+    await second.setProps({ configId: '1401219' }); await flushPromises()
+    expect(second.find('input[type="password"]').exists()).toBe(false)
+    second.unmount(); load.mockRestore(); save.mockRestore()
+  })
+  it('勾选使用代理后才能导入，保存代理填入配置并清空原始命令', async () => {
+    const wrapper = mount(CollectorSettings, { props: { modelValue: { useProxy: false }, capability: COLLECTOR_CAPABILITIES.web } })
+    await wrapper.get('.cs-toggle').trigger('click')
+    expect(wrapper.find('[data-testid="proxy-curl-open"]').exists()).toBe(false)
+    await wrapper.setProps({ modelValue: { useProxy: true } })
+    await wrapper.get('[data-testid="proxy-curl-open"]').trigger('click')
+    await wrapper.get('[data-testid="proxy-curl-input"]').setValue('curl -x proxy.example.com:31100 -U "test-user:test-secret" cip.cc')
+    expect(wrapper.get('[data-testid="proxy-curl-apply"]').text()).toBe('保存代理')
+    await wrapper.get('[data-testid="proxy-curl-apply"]').trigger('click')
+    const patch = wrapper.emitted('update:modelValue')![0]![0]
+    expect(patch).toEqual({ useProxy: true, proxyDetail: { ip: 'proxy.example.com', port: 31100, account: 'test-user', password: 'test-secret' } })
+    expect(wrapper.find('[data-testid="proxy-curl-input"]').exists()).toBe(false)
+    await wrapper.setProps({ modelValue: patch as never })
+    expect(wrapper.get('input[type="password"]').element).toHaveProperty('value', 'test-secret')
+    await wrapper.get('[data-testid="proxy-curl-open"]').trigger('click')
+    expect(wrapper.get('[data-testid="proxy-curl-input"]').element).toHaveProperty('value', '')
+    await wrapper.setProps({ modelValue: { useProxy: false } })
+    expect(wrapper.find('[data-testid="proxy-curl-open"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="proxy-curl-input"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('导入无效 cURL 只显示错误，不修改原来的代理设置', async () => {
+    const wrapper = mount(CollectorSettings, { props: { modelValue: { useProxy: true, proxyDetail: { ip: 'old.proxy', port: 8080 } }, capability: COLLECTOR_CAPABILITIES.web } })
+    await wrapper.get('.cs-toggle').trigger('click')
+    await wrapper.get('[data-testid="proxy-curl-open"]').trigger('click')
+    await wrapper.get('[data-testid="proxy-curl-input"]').setValue('curl cip.cc')
+    await wrapper.get('[data-testid="proxy-curl-apply"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('缺少 -x')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
+  })
   it('capability 未传或不支持任何能力时不渲染任何内容', () => {
     const wrapper = mount(CollectorSettings, { props: { modelValue: {} } })
     expect(wrapper.find('.cs-wrap').exists()).toBe(false)

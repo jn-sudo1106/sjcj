@@ -9,6 +9,7 @@ import { runnerManagementApi, type DeploymentResourceRule, type GeneratedDeploym
 import { deploymentStatuses } from '@/utils/deploymentStatus'
 import DeploymentRuntimeActions from './DeploymentRuntimeActions.vue'
 import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
+import DeploymentFilesDrawer from './DeploymentFilesDrawer.vue'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
 
 const route = useRoute(), auth = useAuthStore()
@@ -22,6 +23,8 @@ const loading = ref(false), saving = ref(false), error = ref(''), formError = re
 const draft = ref<DeploymentResourceRule | null>(null), editing = ref(-1), busyJob = ref(''), selected = ref<GeneratedDeploymentJob | null>(null)
 const editingResourceId = ref('')
 const browsing = ref<{ runner: RunnerInstance; directory: string } | null>(null)
+const fileJob = ref<GeneratedDeploymentJob | null>(null)
+function showDeploymentFiles(job: GeneratedDeploymentJob) { selected.value = null; browsing.value = null; fileJob.value = job }
 const entryPicker = ref<{ runner: RunnerInstance; directory: string; row: DeploymentResourceRule } | null>(null)
 function chooseEntry(row: DeploymentResourceRule) {
   const runner = machine(row.runnerId)
@@ -209,16 +212,18 @@ onDeactivated(stop); onUnmounted(stop)
         <el-table-column label="Git 目录" min-width="180"><template #default="{ row }"><RouterLink v-if="row.repositoryId && row.gitDirectory" :to="repositoryDirectoryLink(row)" class="dr-git-directory" data-testid="browse-deployment-git-directory" @click.stop>📁 {{ row.gitDirectory }}</RouterLink><code v-else>{{ row.gitDirectory || '未记录' }}</code><small>{{ row.repositoryName || row.repositoryId }}</small></template></el-table-column>
         <el-table-column label="Git 版本" width="120"><template #default="{ row }"><code>{{ row.gitCommit.slice(0, 12) }}</code></template></el-table-column>
         <el-table-column label="更新时间" width="165"><template #default="{ row }">{{ formatRunnerDateTime(row.updatedAt) }}</template></el-table-column>
-        <el-table-column label="操作" min-width="255"><template #default="{ row }"><DeploymentRuntimeActions :job="row" :current-runtime="runtimes.find(item => item.runtimeId === row.runtimeId) || null" /><template v-if="canWrite"><el-button v-if="row.status === 'success'" link :disabled="!!busyJob" data-testid="sync-deployment-git" @click.stop="act(row, 'sync-git')">同步 Git 代码</el-button><el-button v-if="['waiting_resource','queued','failed'].includes(row.status)" link :disabled="!!busyJob" @click.stop="act(row, 'retry')">重试</el-button></template></template></el-table-column>
+        <el-table-column label="操作" min-width="255"><template #default="{ row }"><el-button v-if="row.status === 'success'" link type="primary" data-testid="open-deployment-files" @click.stop="showDeploymentFiles(row)">部署文件</el-button><DeploymentRuntimeActions :job="row" :current-runtime="runtimes.find(item => item.runtimeId === row.runtimeId) || null" /><template v-if="canWrite"><el-button v-if="row.status === 'success'" link :disabled="!!busyJob" data-testid="sync-deployment-git" @click.stop="act(row, 'sync-git')">同步 Git 代码</el-button><el-button v-if="['waiting_resource','queued','failed'].includes(row.status)" link :disabled="!!busyJob" @click.stop="act(row, 'retry')">重试</el-button></template></template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="page" :total="total" :page-size="20" layout="total, prev, pager, next" @current-change="load" />
     </template>
+    <DeploymentFilesDrawer v-if="fileJob" :job="fileJob" @close="fileJob = null" />
     <RunnerFilesDrawer v-if="browsing" :runner="browsing.runner" :directory="browsing.directory" @close="browsing = null" />
     <RunnerFilesDrawer v-if="entryPicker" :runner="entryPicker.runner" :directory="entryPicker.directory" select-file @selected="selectEntry" @close="entryPicker = null" />
     <el-drawer :model-value="!!selected" title="部署详情" size="min(620px, 92vw)" @close="selected = null">
       <template v-if="selected"><dl class="dr-details">
         <dt>部署 ID</dt><dd><code>{{ selected.deploymentId || '未分配' }}</code></dd>
         <dt>部署任务 ID</dt><dd><code>{{ selected.jobId }}</code></dd>
+        <dt v-if="selected.status === 'success'">部署文件</dt><dd v-if="selected.status === 'success'"><el-button link type="primary" data-testid="open-deployment-detail-files" @click="showDeploymentFiles(selected)">查看本次部署文件</el-button></dd>
         <template v-for="field in [{label:'状态',value:deploymentStatuses[selected.status]}, {label:'说明',value:selected.message}, {label:'源 / 流程 / 节点',value:`${selected.sourceId} / ${selected.flowId} / ${selected.stepId}`}, {label:'配置 ID',value:selected.configId}, {label:'生成任务',value:selected.taskId}, {label:'Git 仓库',value:selected.repositoryName || selected.repositoryId}, {label:'Git 目录',value:selected.gitDirectory}, {label:'Git 版本',value:selected.gitCommit}, {label:'Runner 实例',value:selected.runnerId}, {label:'实例目录',value:selected.instanceDirectory}, {label:'环境部署目录',value:selected.resourceDirectory}, {label:'部署目录',value:selected.installedPath || selected.targetPath}, {label:'更新时间',value:formatRunnerDateTime(selected.updatedAt)}]" :key="field.label"><dt>{{ field.label }}</dt><dd><RouterLink v-if="field.label === 'Git 目录' && selected.repositoryId && selected.gitDirectory" :to="repositoryDirectoryLink(selected)" class="dr-git-directory" data-testid="browse-deployment-detail-git-directory">📁 {{ field.value }}</RouterLink><el-button v-else-if="canWrite && machine(selected.runnerId) && field.value && ['实例目录','环境部署目录','部署目录'].includes(field.label)" link type="primary" class="dr-job-directory" :data-testid="field.label === '部署目录' ? 'browse-deployment-detail-directory' : undefined" @click="browseDeployment(selected, field.value)">📁 {{ field.value }}</el-button><template v-else>{{ field.value || '—' }}</template></dd></template></dl>
         <DeploymentRuntimeActions :job="selected" :current-runtime="runtimes.find(item => item.runtimeId === selected?.runtimeId) || null" />
         <RouterLink v-if="selected.deploymentId" :to="{path:'/settings',query:{tab:'directory-layout',deploymentId:selected.deploymentId}}" target="_blank">查看部署配置</RouterLink>

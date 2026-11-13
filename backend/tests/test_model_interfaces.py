@@ -13,6 +13,43 @@ from backend.runner_management import model_interfaces as models
 
 
 class ModelInterfacesTest(unittest.TestCase):
+    def test_delete_idle_interface_and_last_interface_preserves_empty_configuration(self):
+        current = models.listing(self.app)
+        removed = current['items'][1]['id']
+        saved = models.save(self.app, {'items': [item for item in current['items'] if item['id'] != removed], 'revision': current['revision']})
+        self.assertNotIn(removed, {item['id'] for item in saved['items']})
+        empty = models.save(self.app, {'items': [], 'revision': saved['revision']})
+        self.assertEqual(empty['items'], [])
+        self.assertEqual(models.listing(self.app)['items'], [])
+
+    def test_delete_rejects_busy_port_and_current_node_reference(self):
+        from backend.runner_management import agent_pool, generation_tasks
+        from backend.runner_management.server import ApiError
+        current = models.listing(self.app); agent = current['items'][1]
+        body = {'items': [item for item in current['items'] if item['id'] != agent['id']], 'revision': current['revision']}
+        self.assertTrue(agent_pool.acquire(self.app, agent, 'active-test'))
+        try:
+            with self.assertRaisesRegex(ApiError, '正在使用'): models.save(self.app, body)
+        finally:
+            agent_pool.release(self.app, agent, 'active-test')
+        with self.app.store.connect() as db:
+            db.execute('INSERT INTO settings VALUES (?,?)', (generation_tasks.key('101'), json.dumps({'configId': '101', 'generation': {'interfaceId': agent['id']}})))
+        with self.assertRaisesRegex(ApiError, '节点配置 101'): models.save(self.app, body)
+        self.assertEqual(models.listing(self.app)['revision'], current['revision'])
+
+    def test_delete_blocks_pending_task_but_keeps_completed_history(self):
+        from backend.runner_management.server import ApiError
+        current = models.listing(self.app); agent = current['items'][1]
+        body = {'items': [item for item in current['items'] if item['id'] != agent['id']], 'revision': current['revision']}
+        with self.app.store.connect() as db:
+            db.execute('INSERT INTO generation_jobs (task_id,source_id,flow_id,config_id,interface_id,server_id,status,created_at,lease_until,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                       ('1' * 32, '1', '1', '101', agent['id'], '', 'queued', '2026-11-13', 0, json.dumps({'input': {'interfaceId': agent['id']}})))
+        with self.assertRaisesRegex(ApiError, '未完成的任务'): models.save(self.app, body)
+        with self.app.store.connect() as db: db.execute("UPDATE generation_jobs SET status='succeeded'")
+        saved = models.save(self.app, body)
+        self.assertNotIn(agent['id'], {item['id'] for item in saved['items']})
+        with self.app.store.connect() as db: self.assertEqual(db.execute('SELECT COUNT(*) total FROM generation_jobs').fetchone()['total'], 1)
+
     setUp = baseline.ManagementIntegrationTest.setUp
     tearDown = baseline.ManagementIntegrationTest.tearDown
     request = baseline.ManagementIntegrationTest.request

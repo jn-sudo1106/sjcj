@@ -509,19 +509,27 @@ def prepare(app, db, job, rule, runner):
     if current:
         job['deploymentId'] = deployment_id
     archive = job['archive']
-    if mapped_paths:
+    repo = app.repository(db, archive['repoId'])
+    from .directory_delivery import baseline
+    digest, before, old_manifest = baseline(app, 'deployment', deployment_id, runner['runner_id'], root, db)
+    scoped = bool(digest and not job.get('gitSync') and not job.get('rollback'))
+    if scoped:
+        from .generation_deployment_scope import merge_nodes
+        nodes, paths = merge_nodes(app, db, archive, mapped_paths['sourceBase'], before, old_manifest)
+        job.update(deploymentScope='task-files', selectedPaths=paths)
+    else:
         # Deploy the configuration's complete Git folder at the pinned commit,
-        # including manually maintained dependencies, without touching sibling configurations.
+        # only for initial setup, explicit Git synchronization or rollback.
         from .directory_layout import git_files
         from .delivery_ignore import ignored_paths
         from .python_cache import is_python_cache
-        repo = app.repository(db, archive['repoId'])
         tree = git_files(app, repo, archive['gitCommit'])
         excluded = ignored_paths(repo, archive['gitCommit'], tree)
         prefix = mapped_paths['sourceBase'].rstrip('/') + '/'
         archive = {**archive, 'files': [{'path': path} for path in sorted(tree) if path.startswith(prefix)
                                       and path not in excluded and not is_python_cache(path)]}
-    nodes = layout_nodes(archive, mapped_paths['sourceBase'] if mapped_paths else None)
+        nodes = layout_nodes(archive, mapped_paths['sourceBase'])
+        job.update(deploymentScope='configuration', selectedPaths=[])
     payload = {'name': '配置 ' + job['configId'] + (' · 测试' if job['environment'] == 'test' else ' · 生产'),
                'directoryTemplate': root, 'configId': job['configId'], 'queueName': job['archive'].get('queueName', ''),
                'pathStyle': 'config', 'nodes': nodes, 'entryPoint': '', 'revision': current['revision'] if current else '',
@@ -529,12 +537,10 @@ def prepare(app, db, job, rule, runner):
                               'nodeName': job['stepId'], 'configId': job['configId']}}
     if processes:
         from .live_deployment import validate, server_programs
-        from .directory_delivery import baseline
         from .directory_layout import snapshot_files
         try:
             if any(kind(process['workingDirectory']) != absolute for process in processes):
                 raise ValueError('父级或子级目录中有程序运行，请先停止后部署')
-            digest, before, old_manifest = baseline(app, 'deployment', deployment_id, runner['runner_id'], root, db)
             if not digest: raise ValueError('无法确认当前目录已下发的文件，请先停止处理程序')
             after, _, directories = snapshot_files(app, payload, db)
             adds_site_script = validate(before, after, server_programs(app, db, processes))
@@ -600,6 +606,7 @@ def prepare(app, db, job, rule, runner):
                 'runnerName': runner['name'], 'installDirectory': runner['install_directory'], 'directoryTemplate': root,
                 'releaseDigest': delivery['artifactDigest'], 'sourceNode': layout['sourceNode'],
                 'environment': job['environment'], 'generationTaskId': job['taskId'], 'gitCommit': job['gitCommit'],
+                'deploymentScope': job['deploymentScope'], 'selectedPaths': job['selectedPaths'],
                 **git_details(job['archive']),
                 'sources': [{key: node.get(key, '') for key in ('repoId', 'sourcePath', 'gitCommit', 'name')} for node in nodes if node.get('repoId')]}
         insert_record(db, delivery['deliveryId'], runtime, 'delivery', data)

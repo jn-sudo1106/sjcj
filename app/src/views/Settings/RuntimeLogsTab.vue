@@ -36,7 +36,7 @@ const runtimeId = computed(() => typeof route.query.runtimeId === 'string' ? rou
 const queryText = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : ''
 const processContext = computed(() => !!queryText('processPid'))
 const programContext = computed(() => processContext.value || (!!runtimeId.value && !queryText('recordId')))
-const scopeKey = computed(() => JSON.stringify(['runtimeId', 'recordId', 'runnerId', 'assignmentId', 'processPid', 'processSlot', 'kind', 'serverId'].map(queryText)))
+const scopeKey = computed(() => JSON.stringify(['runtimeId', 'recordId', 'runnerId', 'assignmentId', 'processPid', 'processSlot', 'kind', 'serverId', 'streamId', 'logView', 'logSeq', 'businessTaskId'].map(queryText)))
 let loadedScope = ''
 const programError = computed(() => {
   if (!detail.value || !(detail.value.status === 'failed' || detail.value.status === 'paused' || (detail.value.run?.exit_code ?? 0) !== 0)) return ''
@@ -72,13 +72,13 @@ async function load(background = false) {
   if (!background) { loading.value = true; error.value = '' }
   try {
     const since = filters.period && filters.period !== 'all' ? new Date(Date.now() - Number(filters.period) * 3600000).toISOString() : ''
-    const result = await runnerManagementApi.runtimeLogs({ keyword: filters.keyword, runnerId: filters.runnerId, kind: filters.kind, status: filters.status, page: filters.page, runtimeId: runtimeId.value || undefined,
+    const result = await runnerManagementApi.runtimeLogs({ recordId: queryText('recordId') || undefined, keyword: filters.keyword, runnerId: filters.runnerId, kind: filters.kind, status: filters.status, page: filters.page, runtimeId: runtimeId.value || undefined,
       ...(processContext.value ? { assignmentId: queryText('assignmentId'), processPid: Number(queryText('processPid')), processSlot: Number(queryText('processSlot')) } : {}), since, pageSize: 20 })
     if (!active || seq !== listSeq) return
     rows.value = result.items; total.value = result.total; error.value = ''
     const requested = typeof route.query.recordId === 'string' ? route.query.recordId : ''
     const requestedRecord = result.items.find(row => row.recordId === requested)?.recordId
-    if (!selected.value && (requestedRecord || result.items[0])) await select(requestedRecord || result.items[0]!.recordId)
+    if (!selected.value && (requestedRecord || (!requested && result.items[0]))) await select(requestedRecord || result.items[0]!.recordId)
     else if (selected.value) await loadDetail(selected.value, background)
   } catch (e) { if (active && seq === listSeq) error.value = problem(e) }
   finally { if (seq === listSeq) loading.value = false }
@@ -93,12 +93,12 @@ async function query() { filters.page = 1; resetSelection(); await refresh() }
 function applyScope() {
   loadedScope = scopeKey.value
   search.value = ''; errorsOnly.value = false; follow.value = true
-  Object.assign(filters, { keyword: '', runnerId: queryText('runnerId'), kind: queryText('kind') === 'code-server' ? 'code-server' : programContext.value ? 'run' : '', status: '', period: programContext.value ? 'all' : '24', page: 1 })
+  Object.assign(filters, { keyword: '', runnerId: queryText('runnerId'), kind: queryText('kind') === 'code-server' ? 'code-server' : programContext.value ? 'run' : '', status: '', period: programContext.value || queryText('recordId') ? 'all' : '24', page: 1 })
   resetSelection()
 }
 async function select(id: string) {
   selected.value = id; detail.value = null; streamId.value = ''; streamChosenManually.value = false; lines.value = []; cursor.value = 0; firstCursor.value = 0
-  ++outputSeq; detailError.value = ''; outputError.value = ''; outputNotice.value = ''; hasEarlier.value = false; follow.value = true; tab.value = programContext.value ? 'output' : 'events'; scrollTop.value = 0
+  ++outputSeq; detailError.value = ''; outputError.value = ''; outputNotice.value = ''; hasEarlier.value = false; follow.value = !queryText('logSeq'); tab.value = programContext.value || queryText('logView') === 'output' ? 'output' : 'events'; scrollTop.value = 0
   await loadDetail(id)
 }
 async function loadDetail(id: string, background = false) {
@@ -109,7 +109,9 @@ async function loadDetail(id: string, background = false) {
     if (!active || seq !== detailSeq || selected.value !== id) return
     detail.value = item; detailError.value = ''
     if (!item.streams.some(stream => stream.streamId === streamId.value)) streamChosenManually.value = false
-    const nextStream = streamChosenManually.value ? streamId.value : sortedStreams.value[0]?.streamId || ''
+    const requestedStream = selected.value === queryText('recordId') ? queryText('streamId') : ''
+    const linkedStream = item.streams.find(stream => stream.streamId === requestedStream)?.streamId
+    const nextStream = streamChosenManually.value ? streamId.value : requestedStream ? linkedStream || '' : sortedStreams.value[0]?.streamId || ''
     if (nextStream !== streamId.value) await switchStream(nextStream)
     else if ((!background || follow.value) && streamId.value) await output()
   } catch (e) { if (active && seq === detailSeq && selected.value === id) detailError.value = problem(e) }
@@ -131,7 +133,10 @@ async function output(earlier = false) {
   const id = streamId.value, seq = ++outputSeq
   outputLoading.value = true
   try {
-    const result = await runnerManagementApi.runtimeLogEntries(id, earlier ? 0 : cursor.value, earlier ? firstCursor.value : 0)
+    const fromSeq = !earlier && !cursor.value && selected.value === queryText('recordId') && id === queryText('streamId') ? Number(queryText('logSeq')) : 0
+    const result = fromSeq > 0
+      ? await runnerManagementApi.runtimeLogEntries(id, 0, 0, fromSeq)
+      : await runnerManagementApi.runtimeLogEntries(id, earlier ? 0 : cursor.value, earlier ? firstCursor.value : 0)
     if (!active || id !== streamId.value || seq !== outputSeq) return
     const joined = earlier ? [...result.entries, ...lines.value] : [...lines.value, ...result.entries]
     const seen = new Set<string>()
@@ -142,6 +147,10 @@ async function output(earlier = false) {
     outputNotice.value = result.expired ? '程序输出已按日志保留期限清理。' : (result.earliestSeq || 0) > 1 ? '较早输出已按日志保留期限清理。' : ''
     outputError.value = ''
     await nextTick()
+    if (fromSeq > 0 && queryText('businessTaskId')) {
+      const position = lines.value.findIndex(line => line.seq === fromSeq && line.text.includes(`任务 ${queryText('businessTaskId')}`))
+      if (position >= 0) { scrollTop.value = position * 24; if (consoleBox.value) consoleBox.value.scrollTop = scrollTop.value }
+    }
     if (follow.value && !earlier && consoleBox.value) consoleBox.value.scrollTop = consoleBox.value.scrollHeight
   } catch (e) { if (active && id === streamId.value && seq === outputSeq) outputError.value = problem(e) }
   finally { if (seq === outputSeq) outputLoading.value = false }
@@ -215,6 +224,7 @@ onUnmounted(() => { active = false; stopPoll(); ++listSeq; ++detailSeq; ++output
     </div>
     <div v-if="processContext" class="rl-context" data-testid="process-log-context">当前进程：PID {{ queryText('processPid') }} · 并发 {{ Number(queryText('processSlot')) + 1 }} · 实例 ID：{{ queryText('runnerId') }}<el-button link @click="changeInstance(queryText('runnerId'))">查看实例日志</el-button><el-button link @click="clearBinding">查看全部日志</el-button></div>
     <div v-else-if="runtimeId" class="rl-context">当前绑定：{{ detail?.snapshot.name || runtimeId }}<el-button link @click="clearBinding">查看全部绑定</el-button></div>
+    <div v-if="queryText('businessTaskId')" class="rl-context">任务 {{ queryText('businessTaskId') }} 的程序输出<el-button link @click="clearBinding">查看全部日志</el-button></div>
     <el-alert v-if="error" :title="`日志查询失败：${error}`" type="error" :closable="false" show-icon />
     <CodeServerLogsPanel v-if="codeServerMode" />
     <div v-else class="rl-workspace">

@@ -373,6 +373,13 @@ export interface GeneratedDeploymentQuery {
   sourceId?: string; flowId?: string; stepId?: string; configId?: string
   environment?: DeploymentEnvironment; status?: string; page?: number; size?: number
 }
+export interface DeploymentFileSnapshot {
+  jobId: string; deliveryId: string; artifactDigest: string; gitCommit: string; directory: string
+  files: { path: string; size: number; sha256: string; taskFile: boolean }[]
+}
+export interface DeploymentFileContent extends Omit<DeploymentFileSnapshot, 'files'> {
+  path: string; size: number; sha256: string; content: string
+}
 
 export interface RuntimeLogRecord {
   recordId: string
@@ -406,7 +413,12 @@ export interface RuntimeLogDetail extends RuntimeLogRecord {
   } | null
   logAvailable?: boolean
 }
+export interface BusinessTaskExecution {
+  recordId: string; runnerId: string; streamId: string; pid: number | null; entry: string
+  machine: string; instanceDirectory: string; status: string; time: string; seq: number; index: number
+}
 export interface RuntimeLogFilters {
+  recordId?: string
   assignmentId?: string; processPid?: number; processSlot?: number
   runnerId?: string; runtimeId?: string; keyword?: string; kind?: string; status?: string
   since?: string; until?: string; page?: number; pageSize?: number
@@ -648,6 +660,11 @@ export interface ModelInterfaceTestResult {
   ok: boolean; status: number; contentType: string; responseText: string; durationMs: number
 }
 
+export interface NodeProxySettings {
+  configId: string; configured: boolean; revision: number; useProxy: boolean
+  proxyDetail?: { ip?: string; port?: number; account?: string; password?: string }
+}
+
 export const runnerManagementApi = {
   requestRunnerFiles: (id: string, body: { action: 'list' | 'read'; path: string }) => request<{ requestId: string }>(`/runners/${encodeURIComponent(id)}/files`, 'POST', body),
   runnerFileResult: (id: string) => request<{ status: 'pending' | 'success' | 'failed'; error?: string; result?: { path: string; items?: RemoteCodeFile[]; truncated?: boolean; content?: string; sha256?: string } }>(`/runner-file-requests/${encodeURIComponent(id)}`),
@@ -660,6 +677,8 @@ export const runnerManagementApi = {
   saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
   saveDeploymentResources: (body: { items: DeploymentResourceRule[]; revision: string }) => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources', 'POST', body),
   generatedDeployments: (query: GeneratedDeploymentQuery = {}) => request<{ items: GeneratedDeploymentJob[]; total: number }>('/deployment-jobs?' + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))),
+  deploymentFiles: (jobId: string) => request<DeploymentFileSnapshot>(`/deployment-jobs/${encodeURIComponent(jobId)}/files`),
+  deploymentFileContent: (jobId: string, path: string) => request<DeploymentFileContent>(`/deployment-jobs/${encodeURIComponent(jobId)}/files?path=${encodeURIComponent(path)}`),
   deployGeneratedArchive: (body: { archiveId: string; configId: string; sourceId: string; flowId: string; stepId: string }) => request<GeneratedDeploymentJob>('/deployment-jobs', 'POST', body),
   generatedDeploymentAction: (jobId: string, action: 'publish' | 'retry' | 'rollback' | 'sync-git') => request<GeneratedDeploymentJob>(`/deployment-jobs/${encodeURIComponent(jobId)}/${action}`, 'POST', {}),
   codeGenerationTasks: async (query: { configId?: string; sourceId?: string; taskId?: string; state?: string; page: number; size: number }) => {
@@ -674,7 +693,7 @@ export const runnerManagementApi = {
   deleteCodeGenerationTasks: (taskIds: string[], configId: string) => request<{ items: { taskId: string; ok: boolean; message: string }[]; deletedCount: number; failedCount: number }>('/code-generation/tasks/delete-batch', 'POST', { taskIds, configId }),
   mqCodeJobSummaries: (taskIds: string[]) => request<{ items: (Pick<MqCodeJob, 'taskId' | 'serverId' | 'configId' | 'queue' | 'status' | 'callbackSent' | 'message'> & { finishedAt?: string; modelCall?: GenerationModelCall; archive?: GenerationRepositoryResult })[] }>(`/code-generation/tasks/summaries?taskIds=${encodeURIComponent(taskIds.join(','))}`),
   mqCodeJob: (taskId: string) => request<{ job: MqCodeJob | null }>(`/code-generation/tasks/detail?taskId=${encodeURIComponent(taskId)}`),
-  generatedCodeState: (configId: string) => request<{ autoCommit: boolean; archive: GeneratedCodeArchive | null }>(`/site-scripts/generation-state?configId=${encodeURIComponent(configId)}`),
+  generatedCodeState: (configId: string, context?: { sourceId: string; flowId: string; stepId: string }) => request<{ autoCommit: boolean; archive: GeneratedCodeArchive | null }>('/site-scripts/generation-state?' + new URLSearchParams({ configId, ...context })),
   nodeGenerationSettings: (configId: string) => request<NodeGenerationSettings>(`/site-scripts/task-config?configId=${encodeURIComponent(configId)}`),
   resolveGenerationDestination: (body: { configId?: string; queueName?: string; configType?: string }) => request<GenerationDestination>('/site-scripts/generation-destination?' + new URLSearchParams(Object.entries(body).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))),
   setGenerationTypeDefault: (repoId: string, directoryId: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}/generation-default`, 'POST', {}),
@@ -717,6 +736,8 @@ export const runnerManagementApi = {
     return response.blob()
   },
   streamModelInterfaceTest,
+  nodeProxySettings: (configId: string) => request<NodeProxySettings>('/node-proxy-settings?' + new URLSearchParams({ configId })),
+  saveNodeProxySettings: (input: { configId: string; revision: number; useProxy: boolean; proxyDetail?: { ip?: string; port?: number; account?: string; password?: string } }) => request<NodeProxySettings>('/node-proxy-settings', 'POST', input),
   modelInterfaces: () => request<ModelInterfaceSettings>('/settings/model-interfaces'),
   saveModelInterfaces: (input: ModelInterfaceSettings) => request<ModelInterfaceSettings>('/settings/model-interfaces', 'POST', input),
   saveModelTestPrompts: (input: { interfaceId: string; systemPrompt: string; userPrompt: string; revision: number }) => request<ModelInterfaceSettings>('/settings/model-interfaces/test-prompts', 'POST', input),
@@ -726,9 +747,10 @@ export const runnerManagementApi = {
     request<ProcessStopRequest>(`/runners/${encodeURIComponent(process.runnerId)}/processes/stop`, 'POST', { assignmentId: process.assignmentId, slot: process.slot, pid: process.pid, generation: process.generation }),
   runtimeLogPolicy: () => request<RuntimeLogPolicy>('/log-settings'),
   saveRuntimeLogPolicy: (input: RuntimeLogPolicy) => request<RuntimeLogPolicy>('/log-settings', 'POST', input),
+  businessTaskExecutions: (taskId: string, topic = '', configId = '') => request<{ taskId: string; items: BusinessTaskExecution[]; truncated: boolean }>(`/business-task-executions?${new URLSearchParams({ taskId, topic, configId })}`),
   runtimeLogs: (filters: RuntimeLogFilters = {}) => request<{ items: RuntimeLogRecord[]; total: number; page: number; pageSize: number }>(`/runtime-operations?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))}`),
   runtimeLogDetail: (id: string) => request<RuntimeLogDetail>(`/runtime-operations/${encodeURIComponent(id)}`),
-  runtimeLogEntries: (id: string, cursor = 0, before = 0) => request<RuntimeLogEntries>(`/log-streams/${encodeURIComponent(id)}/entries?cursor=${cursor}&before=${before}`),
+  runtimeLogEntries: (id: string, cursor = 0, before = 0, fromSeq = 0) => request<RuntimeLogEntries>(`/log-streams/${encodeURIComponent(id)}/entries?cursor=${cursor}&before=${before}&fromSeq=${fromSeq}`),
   downloadRuntimeLog: (id: string) => request<{ name: string; content: string }>(`/log-streams/${encodeURIComponent(id)}/download`),
   deploymentConfigurations: (keyword = '') => list<DeploymentConfiguration>(`/deployment-configurations?keyword=${encodeURIComponent(keyword)}`),
   deploymentConfiguration: (id: string) => request<DeploymentConfiguration>(`/deployment-configurations/${encodeURIComponent(id)}`),

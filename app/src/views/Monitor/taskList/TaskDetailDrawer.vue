@@ -20,6 +20,7 @@
 import { computed } from 'vue'
 import type { TaskRow } from '@/api/taskList'
 import { detailColumns, stateText, type TaskColumn } from './columns'
+import TaskExecutionLinks from '@/views/FlowCanvas/result/TaskExecutionLinks.vue'
 
 defineOptions({ name: 'TaskDetailDrawer' })
 
@@ -49,6 +50,7 @@ function display(col: TaskColumn): string {
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <div v-if="record" class="tld-body">
+      <TaskExecutionLinks v-if="modelValue" :task-id="record.taskId" :topic="record.taskTopic" :config-id="record.configId" />
       <el-descriptions border :column="4" class="tld-desc">
         <el-descriptions-item
           v-for="col in columns"

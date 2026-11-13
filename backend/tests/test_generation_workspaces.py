@@ -5,6 +5,15 @@ from backend.runner_management.server import ApiError
 
 
 class StableWorkspacesTest(unittest.TestCase):
+    def test_parallel_paths_rebind_cached_prompts_in_one_pass_without_changing_saved_body(self):
+        from backend.runner_management.generation_parallel import bind_paths
+        canonical = {'prjDir': '/work/101', 'codeDir': '/work/101/code/sites', 'inputFileDir': '/work/101/input', 'outputFileDir': '/work/101/output'}
+        execution = {key: value.replace('/work/101', '/work/101/.agents/slot') for key, value in canonical.items()}
+        body = {'userPrompt': '/work/101/code/sites/a.py /work/101/input/demo.py {{code_dir}} /work/1010/demo.py'}
+        updated = bind_paths(body, canonical, execution)
+        self.assertEqual(updated['userPrompt'], '/work/101/.agents/slot/code/sites/a.py /work/101/.agents/slot/input/demo.py {{code_dir}} /work/1010/demo.py')
+        self.assertNotIn('.agents', body['userPrompt'])
+
     def test_output_subdirectory_keeps_root_and_updates_windows_and_unix_code_paths(self):
         from backend.runner_management.model_interfaces import agent_directories
         for root, expected in [(r'D:\workspace', r'D:\workspace\101\code\sites'), ('/data/workspace', '/data/workspace/101/code/sites')]:

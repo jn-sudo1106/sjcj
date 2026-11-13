@@ -30,6 +30,18 @@ class GenerationRegenerationTest(unittest.TestCase):
     def submit(self, body):
         return self.request('/api/runner-management/code-generation/tasks/regeneration', body)['job']
 
+    def test_regeneration_repairs_stale_target_url_without_rewriting_parent_history(self):
+        service, origin, parent, snapshot, body, calls = self.setup_task()
+        original = tasks.read(self.app, parent['taskId'])
+        original['input'].update(url='https://www.lygend.com/news', userPrompt='- 目标新闻列表 URL：http://www.unikit.com.cn/news/1/')
+        tasks.put(self.app, original)
+        prepared = self.request('/api/runner-management/code-generation/tasks/regeneration?taskId=' + parent['taskId'])
+        self.assertEqual(prepared['generation']['userPrompt'], '- 目标新闻列表 URL：https://www.lygend.com/news')
+        self.assertIn('www.unikit.com.cn', tasks.read(self.app, parent['taskId'])['input']['userPrompt'])
+        child = self.submit({**body, 'userPrompt': prepared['generation']['userPrompt']})
+        self.assertNotIn('www.unikit.com.cn', tasks.read(self.app, child['taskId'])['input']['userPrompt'])
+        self.assertFalse(calls)
+
     def test_snapshot_retry_lineage_idempotency_and_no_mq_or_node_overwrite(self):
         service, origin, parent, snapshot, body, calls = self.setup_task()
         defaults = copy.deepcopy(generation_tasks.read_config(self.app, parent['configId']))

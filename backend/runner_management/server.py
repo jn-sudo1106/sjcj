@@ -2000,6 +2000,10 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/deployment-jobs' and method == 'POST':
             from .deployment_resources import deploy_existing
             return deploy_existing(app, body)
+        deployment_files = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})/files', sub)
+        if deployment_files and method == 'GET':
+            from .deployment_files import read
+            return read(app, deployment_files.group(1), (query.get('path') or [None])[0])
         deployment_action = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})/(publish|retry|rollback|sync-git)', sub)
         if deployment_action and method == 'POST':
             from .deployment_resources import action
@@ -2010,9 +2014,13 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/site-scripts/task-config' and method in ('GET', 'POST'):
             from .generation_tasks import read_config, save_config
             return read_config(app, (query.get('configId') or [''])[0]) if method == 'GET' else save_config(app, body)
+        if sub == '/node-proxy-settings' and method in ('GET', 'POST'):
+            from .node_proxy_settings import read, save
+            return read(app, (query.get('configId') or [''])[0]) if method == 'GET' else save(app, body)
         if sub == '/site-scripts/generation-state' and method == 'GET':
             from .generated_archives import state
-            return state(app, (query.get('configId') or [''])[0])
+            context = {key: (query.get(key) or [''])[0] for key in ('sourceId', 'flowId', 'stepId')}
+            return state(app, (query.get('configId') or [''])[0], context if any(context.values()) else None)
         if sub == '/site-scripts/generation-settings' and method == 'POST':
             from .generated_archives import preference
             return preference(app, body)
@@ -2049,6 +2057,9 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/log-settings' and method in ('GET', 'POST'):
             from .runtime_history import policy
             return policy(app, body if method == 'POST' else None)
+        if method == 'GET' and sub == '/business-task-executions':
+            from .business_task_logs import executions
+            return executions(app, query)
         if method == 'GET' and sub == '/runtime-operations':
             from .runtime_history import list_records
             app.expire_stale_runners()
@@ -2423,6 +2434,15 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
                 print(f"代码部署调度失败：{exc}", file=sys.stderr, flush=True)
     deployment_worker = threading.Thread(target=deployment_sweep, name='generated-code-deployment', daemon=True)
     deployment_worker.start()
+    def generation_sweep() -> None:
+        from .generation_dispatcher import dispatch
+        while not stopped.wait(2):
+            try:
+                dispatch(application)
+            except Exception as exc:
+                print(f'智能体任务调度失败：{exc}', file=sys.stderr, flush=True)
+    generation_worker = threading.Thread(target=generation_sweep, name='agent-task-dispatcher', daemon=True)
+    generation_worker.start()
     try:
         server.serve_forever()
     finally:
@@ -2433,6 +2453,7 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
             lan_thread.join(timeout=5)
         sweeper.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
         deployment_worker.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
+        generation_worker.join(timeout=3)
 
 
 if __name__ == "__main__":

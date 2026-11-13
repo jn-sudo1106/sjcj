@@ -73,6 +73,8 @@ def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
         url = urlsplit(data.get('url', ''))
         if url.scheme not in ('https', 'http') or not url.hostname or url.username or url.password: raise ValueError()
     except ValueError: raise ApiError('源 URL 无效')
+    from .generation_prompt_context import bind_source_url
+    data = bind_source_url(data, saved.get('url', ''))
     entries = body.get('entryIds') or []
     if not isinstance(entries, list) or len(entries) > 1000 or any(not re.fullmatch(r'[1-9][0-9]{0,19}', str(value)) for value in entries):
         raise ApiError('任务数据 ID 无效')
@@ -264,7 +266,7 @@ def execute(handler, app, server, task_id):
             try: handler.wfile.write((json.dumps({'type': kind, **fields}, ensure_ascii=False) + '\n').encode()); handler.wfile.flush()
             except OSError: connected = False
     try:
-        result = generate(app, record['input'], emit, _lease_owner=task_id, _reference_snapshot=record['input'].get('referenceFiles', []))
+        result = generate(app, record['input'], emit, _lease_owner=task_id, _reference_snapshot=record['input'].get('referenceFiles', []), _parallel_task=True)
         if not result.get('archive'):
             result['archive'] = archive_text(app, record, result)
         archive = result.get('archive') or {}

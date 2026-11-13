@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import os
 from pathlib import Path
@@ -62,8 +63,68 @@ def requirement_files(snapshot: Path) -> dict[str, str]:
             if not reference:
                 raise ValueError('依赖清单引用不能为空')
             visit(path.parent / reference)
-    visit(root / 'requirements.txt')
+    for path in sorted(root.rglob('requirements.txt')):
+        visit(path)
     return files
+
+
+def runtime_scripts(snapshot, entry=None):
+    """Do not treat unreferenced examples/test templates as runtime modules."""
+    files = {path.relative_to(snapshot).as_posix(): path for path in snapshot.rglob('*.py')}
+    if not entry:
+        return list(files.values())
+    from .python_dependency_contract import imports
+    selected, pending = set(), [entry]
+    for name, path in files.items():
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8-sig'))
+        except (UnicodeError, SyntaxError, ValueError):
+            continue
+        if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == 'scrape' for node in tree.body):
+            pending.append(name)
+    while pending:
+        name = pending.pop()
+        if name in selected or name not in files:
+            continue
+        selected.add(name)
+        path = files[name]
+        try:
+            modules = imports(path.read_text(encoding='utf-8-sig'), known_only=False)
+        except UnicodeError:
+            continue
+        for module in modules:
+            for parent in (path.parent, snapshot):
+                relative = (parent / module).relative_to(snapshot).as_posix()
+                pending.extend(candidate for candidate in files if candidate == relative + '.py' or candidate.startswith(relative + '/'))
+    return [files[name] for name in sorted(selected)]
+
+
+def check_imports(python, snapshot, entry=None):
+    """Probe static required imports without executing generated website code."""
+    from .python_dependency_contract import imports, IMPORT_DISTRIBUTIONS
+    modules = set()
+    local_modules = set()
+    for path in runtime_scripts(snapshot, entry):
+        local_modules.add(path.stem)
+        if path.name == '__init__.py':
+            local_modules.add(path.parent.name)
+        if path.stat().st_size <= 1024 * 1024:
+            try:
+                modules.update(imports(path.read_text(encoding='utf-8-sig'), known_only=False))
+            except UnicodeError:
+                pass
+    modules = sorted(modules - local_modules)
+    probe = ('import importlib.util,json; '
+             f'print(json.dumps([m for m in {modules!r} if importlib.util.find_spec(m) is None]))')
+    result = subprocess.run([str(python), '-c', probe], env=clean_environment(),
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise RuntimeError('无法检查处理程序的 Python 依赖环境，请检查解释器是否有效')
+    missing = json.loads(result.stdout)
+    if missing:
+        names = ', '.join(f'{name}（安装包 {IMPORT_DISTRIBUTIONS[name]}）' if name in IMPORT_DISTRIBUTIONS
+                          else f'{name}（请确认其实际安装包名或项目文件）' for name in missing)
+        raise RuntimeError(f'处理程序缺少依赖：{names}；请将安装包加入 requirements.txt 并下发后重新启动')
 
 
 def clean_environment():
@@ -171,7 +232,8 @@ def run_install(runner, command, working_dir, info):
 
 
 def dependency_python(runner, snapshot: Path, working_dir: Path, manifest: dict, info: dict) -> Path:
-    if not (snapshot / 'requirements.txt').is_file():
+    if not any(snapshot.rglob('requirements.txt')):
+        check_imports(sys.executable, snapshot, manifest.get('entry'))
         return Path(sys.executable)
     def stage(name, message):
         runner.logs.event(info['runId'], 'stage', message, stage=name)
@@ -199,16 +261,29 @@ def dependency_python(runner, snapshot: Path, working_dir: Path, manifest: dict,
         installed = json.loads(marker.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         installed = {}
-    if python.is_file() and installed.get('fingerprint') == fingerprint:
-        stage('dependency-ready', '依赖清单未变化，复用已安装的独立环境')
-        return python
+    reuse = python.is_file() and installed.get('fingerprint') == fingerprint
+    if reuse:
+        try:
+            check_imports(python, snapshot, manifest.get('entry'))
+        except RuntimeError:
+            reuse = False
+        else:
+            run_install(runner, [str(python), '-m', 'pip', 'check'], working_dir, info)
+            stage('dependency-ready', '依赖清单及静态导入检查通过，复用独立环境')
+            return python
     stage('dependency-env', '准备处理程序独立 Python 环境')
     run_install(runner, [sys.executable, '-m', 'venv', '--copies', str(environment)], working_dir, info)
     install_env = installation_environment(runner.directory)
     source_host = urlsplit(install_env['PIP_INDEX_URL']).hostname
     connection = '使用实例 pip.json 指定代理' if install_env.get('PIP_PROXY') else '直接连接，不继承机器代理'
     stage('dependency-install', f'按 requirements.txt 安装依赖；默认源 {source_host}；{connection}。清单内指定的软件源优先，安装输出见本次运行日志')
-    run_install(runner, [str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '-r', str(snapshot / 'requirements.txt')], snapshot, info)
+    requirements = [str(path) for path in sorted(snapshot.rglob('requirements.txt'))]
+    command = [str(python), '-m', 'pip', 'install', '--disable-pip-version-check']
+    for path in requirements:
+        command.extend(['-r', path])
+    run_install(runner, command, snapshot, info)
+    run_install(runner, [str(python), '-m', 'pip', 'check'], working_dir, info)
+    check_imports(python, snapshot, manifest.get('entry'))
     temporary = marker.with_suffix('.tmp')
     temporary.write_text(json.dumps({'fingerprint': fingerprint, 'files': files}, sort_keys=True), encoding='utf-8')
     os.replace(temporary, marker)
