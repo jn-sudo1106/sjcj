@@ -1,0 +1,594 @@
+# 监控中心查询/运行契约补齐：C01 detail、C05 run、C06 runs、C07 flowId+execState（2026-11-13）
+#
+# 目的（1111 后端契约 + 1113 §6 组 2）：
+#   1. C01 `GET /api/v1/source/check/detail?monitorId=`：按主键读单条，返回解析后的 checkConf、
+#      scopeType 与 revision（ck_source.VER）。旧能力只能按 sourceId 拉全量再按名字差集猜，
+#      同源多条时保存后回读必然错行。
+#   2. C06 `GET /api/v1/source/check/runs`（分页）与 `GET /api/v1/source/check/run/{runId}`：
+#      服务端解析 REMARKS / JOB_CONF，返回 runId、status、checkedCount、abnormalCount、
+#      durationMs、window、reason、overdue、configSnapshot；解析失败的旧行标 legacy=true，
+#      字段留 null，**不补默认值**。
+#   3. C05 `POST /api/v1/source/check/run`：统一「立即运行」。规则检查走 runNow（Java 调度器），
+#      AI 检查转交本机 Python 执行器 `/monitor-runner/scan`；逐条回执 ok/message/runId，
+#      明确「受理不等于执行成功」。
+#   4. C07 `sourceSummary`：补 `flowId`（cs_source.FLOW_ID，null/0 = 未关联流程）与
+#      `execState`（none/unknown/succeeded/failed，按该源启用中检查项的最近一次运行判定，
+#      失败优先；算不出给 unknown，不默认成功）。
+#
+# 新增配置（AI 检查的立即运行需要，缺失时只影响 C05 的 AI 分支）：
+#   monitor:
+#     runner:
+#       base-url: http://127.0.0.1:8092/api/runner-management
+#       token: <RUNNER_ADMIN_TOKEN>
+#   186 已写入 `/data/app/config/application-prod.yml`（改前备份
+#   `application-prod.yml.bak-monitor-runner-*`）；217 上若未部署执行器，保持 token 为空，
+#   接口会明确回「本环境未配置监控执行器」，不假装受理。
+#
+# 合入方式：目标环境 Java 源码（bee-base + bee-config）里 `git apply` 后重新构建 bee-config.jar。
+# 只把补丁推到前端仓库不会改变运行产物。
+#
+# 186 部署记录（2026-11-13 18:31，构建脚本 /tmp/build_c14.sh、部署 /tmp/deploy_c14.sh）：
+#   jar 备份 `/data/app/backend/bee-config.jar.bak-c14-20261113-183154`；
+#   回滚：`cp -p <备份> /data/app/backend/bee-config.jar` 后 `bash /tmp/restart_be.sh`。
+#
+# 验证边界：这些接口都挂在 Shiro 会话鉴权后面，未登录一律 302；186 的登录验证码暂无法自动识别，
+# 因此本次只验证了「jar 能起、Mapper 语句能绑定（启动无异常）」与单测，页面级验收需登录后点按。
+#
+--- a/bee-base/src/main/java/com/vanv/bee/dao/mapper/CkSourceMapper.java
++++ b/bee-base/src/main/java/com/vanv/bee/dao/mapper/CkSourceMapper.java
+@@ -25,6 +25,9 @@
+                                                   @Param("offset") int offset,
+                                                   @Param("limit") int limit);
+ 
++    /** 每个检查项最近一次运行的状态（C07 执行结论）：返回 jobId / state / logDt */
++    List<Map<String, Object>> selectLatestLogState(@Param("ids") java.util.List<Integer> ids);
++
+     /** 按检查项统计时间窗内的日志条数（运行次数）：返回 jobId / cnt */
+     List<Map<String, Object>> selectLogCountByMonitor(@Param("ids") java.util.List<Integer> ids,
+                                                       @Param("from") java.util.Date from,
+--- a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
++++ b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
+@@ -133,16 +133,31 @@
+ 
+     @Override
+     public int updateObject(CkSource object, ActionEnum action, String remark) {
+-        log.warn("更新CkSource, id:{}, 更新部分:{}", object.getId(), JSON.toJSONString(object));
++        log.warn("更新CkSource, id:{}, ver:{}, 更新部分:{}",
++                object.getId(), object.getVer(), JSON.toJSONString(object));
++        if (object.getId() == null) {
++            throw new ServiceException("缺少检查项 id，无法定位要更新的记录");
++        }
+         object.setUpdateDt(null);
+-        CkSource m1 = ckSourceMapper.selectById(object.getId());
+-        if (m1 == null) {
+-            throw new ServiceException("未找到原始queueId:" + m1.getId());
++        // 按主键取当前行：更新只命中这一条，不会因为同源有多条检查而互相覆盖。
++        CkSource current = ckSourceMapper.selectById(object.getId());
++        if (current == null) {
++            throw new ServiceException("未找到检查记录，id:" + object.getId());
++        }
++        // 乐观锁（revision CAS）：只有调用方带 ver 时才比较；不带 ver 的老调用保持原行为，
++        // 但版本号仍然递增，保证下一次 CAS 能区分「改过」和「没改」。
++        Long expected = object.getVer();
++        Long actual = current.getVer();
++        if (expected != null && !expected.equals(actual)) {
++            throw new ServiceException("该检查项已被其他修改更新（提交基于 ver=" + expected
++                    + "，当前 ver=" + actual + "），请刷新后重新保存");
+         }
+         if (object.getSchedule() != null) {
+             Date nextRun = calcNextDate(object);
+             object.setNextRun(nextRun);
+         }
++        long now = System.currentTimeMillis();
++        object.setVer(actual != null && actual >= now ? actual + 1 : now);
+         int result = ckSourceMapper.updateById(object);
+         return result;
+     }
+@@ -250,6 +265,13 @@
+ 
+     public Date calcNextDate(CkSource ckSource) {
+         String cron = ckSource.getSchedule();
++        // 空计划（仅手动 / AI 草稿）不能交给 CronSequenceGenerator，否则会抛
++        // "Cron expression must consist of 6 fields (found 0 in \"\")"，保存直接 500。
++        // 没有 cron 的检查只能停在远期等手动或执行器排期，这里按 10 年停放，与 parkScriptCheck 口径一致。
++        if (StringUtils.isEmpty(cron) || cron.trim().isEmpty()) {
++            return new Date(System.currentTimeMillis() + 10L * 365 * 24 * 3600 * 1000);
++        }
++        cron = cron.trim();
+         if (cron.toUpperCase().startsWith("AFTER-")) {
+             int after = Integer.parseInt(cron.toUpperCase(Locale.ROOT).replace("AFTER-", ""));
+             return calcSourceJobDate(ckSource, after);
+@@ -364,7 +386,54 @@
+         return ckSourceMapper.countSourceSummary(groupId, siteId, keyword, enabled, dataState, checkDate);
+     }
+ 
++    /** C01：按主键读单条检查记录。找不到返回 null，调用方给「记录已不存在」，不拿同源第一条顶替。 */
++    public CkSource detailOf(Integer id) {
++        if (id == null) return null;
++        return ckSourceMapper.selectById(id);
++    }
++
+     /**
++     * C07 执行结论：按源汇总「启用中检查项最近一次运行」的结果。
++     *
++     * 失败优先（任一启用项最近一次是 E → failed），全部有结果且无失败 → succeeded；
++     * 一条都没跑过 → unknown（不能默认成功）。停用的检查项不参与，避免一条历史失败记录把整源长期标红。
++     */
++    public Map<Long, String> execStateForSources(List<Long> sourceIds) {
++        Map<Long, String> result = new HashMap<>();
++        if (sourceIds == null || sourceIds.isEmpty()) return result;
++        QueryWrapper<CkSource> qw = new QueryWrapper<>();
++        qw.in("SOURCE_ID", sourceIds);
++        qw.eq("IS_DELETE", 0);
++        List<CkSource> monitors = ckSourceMapper.selectList(qw);
++        List<Integer> ids = new ArrayList<>();
++        for (CkSource m : monitors) {
++            if (m.getId() != null) ids.add(m.getId());
++        }
++        Map<Integer, String> latest = new HashMap<>();
++        if (!ids.isEmpty()) {
++            for (Map<String, Object> row : ckSourceMapper.selectLatestLogState(ids)) {
++                Object jobId = row.get("jobId");
++                if (jobId == null) continue;
++                Object state = row.get("state");
++                latest.put((int) toLongStatic(jobId), state == null ? null : String.valueOf(state));
++            }
++        }
++        for (CkSource m : monitors) {
++            if (m.getSourceId() == null) continue;
++            String current = result.get(m.getSourceId());
++            String state = latest.get(m.getId());
++            if (state == null) {
++                if (current == null) result.put(m.getSourceId(), "unknown");
++            } else if ("E".equals(state)) {
++                result.put(m.getSourceId(), "failed");
++            } else if (!"failed".equals(current)) {
++                result.put(m.getSourceId(), "succeeded");
++            }
++        }
++        return result;
++    }
++
++    /**
+      * 计划覆盖（C07 首期）：按「今天应该跑几次 / 实际跑了几次 / 漏了几次」算。
+      *
+      * 口径与《1111 全源AI数据体检》§0.2 一致：
+--- a/bee-base/src/main/resources/mybatis/mapper/CkSourceMapper.xml
++++ b/bee-base/src/main/resources/mybatis/mapper/CkSourceMapper.xml
+@@ -78,6 +78,7 @@
+     SELECT s.SOURCE_ID          AS sourceId,
+            s.SOURCE_NAME        AS sourceName,
+            s.SITE_ID            AS siteId,
++           s.FLOW_ID            AS flowId,
+            t.SITE_NAME          AS siteName,
+            e.TABLE_NAME         AS tableName,
+            s.ENTRY_TYPE_ID      AS entryTypeId,
+@@ -115,6 +116,20 @@
+     <include refid="sourceSummaryScopeWhere"/>
+   </select>
+ 
++  <!-- 每个检查项最近一次运行的状态（C07 执行结论）。JOB_ID 存的是 ck_source.ID。 -->
++  <select id="selectLatestLogState" resultType="java.util.LinkedHashMap">
++    SELECT JOB_ID AS jobId, STATE AS state, LOG_DT AS logDt
++      FROM ck_job_log
++     WHERE JOB_ID IN
++     <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
++       AND LOG_ID IN (
++           SELECT MAX(LOG_ID) FROM ck_job_log
++            WHERE JOB_ID IN
++            <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
++            GROUP BY JOB_ID
++       )
++  </select>
++
+   <select id="selectLogCountByMonitor" resultType="java.util.LinkedHashMap">
+     SELECT JOB_ID AS jobId, COUNT(*) AS cnt
+       FROM ck_job_log
+--- a/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
++++ b/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
+@@ -16,9 +16,16 @@
+ import com.vanv.util.StringUtils;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.stereotype.Controller;
+ import org.springframework.web.bind.annotation.*;
+ 
++import java.io.BufferedReader;
++import java.io.InputStreamReader;
++import java.io.OutputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.nio.charset.StandardCharsets;
+ import java.util.ArrayList;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+@@ -38,6 +45,17 @@
+     @Autowired
+     CkJobLogService ckJobLogService;
+ 
++    /**
++     * 监控执行器（Python monitor-runner）的地址：C05「立即运行」把 AI 检查转交给它。
++     * 未配置 token 时明确报错「本环境未配置执行器」，不假装受理——186 与 217 的差别在这里，
++     * 页面不该靠猜「为什么点了没反应」。
++     */
++    @Value("${monitor.runner.base-url:http://127.0.0.1:8092/api/runner-management}")
++    private String runnerBaseUrl;
++
++    @Value("${monitor.runner.token:}")
++    private String runnerToken;
++
+     @RequestMapping(value = "/paged", method = RequestMethod.GET)
+     @ResponseBody
+     public Paged<CkSource> pagedObject(Integer page, Integer limit,
+@@ -173,6 +191,8 @@
+             Map<String, Object> item = new LinkedHashMap<>();
+             item.put("sourceId", row.get("sourceId"));
+             item.put("sourceName", row.get("sourceName"));
++            // 流程归属：null/0 表示「未关联流程」，页面据此显示标签（不等于「不能生成检查」）。
++            item.put("flowId", row.get("flowId"));
+             item.put("siteId", row.get("siteId"));
+             item.put("siteName", row.get("siteName"));
+             item.put("tableName", row.get("tableName"));
+@@ -190,8 +210,9 @@
+             } else {
+                 item.put("dataState", hasAlarm > 0 ? "abnormal" : "normal");
+             }
+-            // 执行结论（失败/未取得）首期不在本接口算：需要 run 表，留 null 让前端显示「未知」。
+-            item.put("execState", null);
++            // 执行结论：按该源启用中检查项的「最近一次运行」判定（C07）。
++            // 没启用的检查项不参与；没跑过的给 unknown，不能默认成功。
++            item.put("execState", monitorEnabled == 0 ? "none" : null);
+             item.put("coverage", null);
+             item.put("coverageUnavailable", true);
+             list.add(item);
+@@ -216,13 +237,339 @@
+             item.put("coverageUnavailable", Boolean.TRUE.equals(cov.get("unavailable")));
+             if (Boolean.TRUE.equals(cov.get("unavailable"))) anyUnavailable = true;
+         }
++        // 执行结论：服务端按最近一次运行状态汇总（失败优先），算不出给 unknown 而不是「正常」。
++        java.util.Map<Long, String> execStates = ckSourceService.execStateForSources(sourceIds);
++        for (Map<String, Object> item : list) {
++            if (item.get("execState") == null) {
++                String exec = execStates.get(toLong(item.get("sourceId")));
++                item.put("execState", exec == null ? "unknown" : exec);
++            }
++        }
+         Map<String, Object> data = new LinkedHashMap<>();
+         data.put("total", total);
+         data.put("list", list);
+         data.put("coverageUnavailable", anyUnavailable);
++        return RspResult.getSuccessResult().setData(data);
++    }
++
++    /**
++     * C01：按 monitorId 读**单条**检查项。
++     *
++     * 旧能力只有 `/paged?sourceId=`：保存后想拿回刚写的那条，只能按源拉全量再按名字差集猜，
++     * 同源多条时必然猜错（1109 §5.3 / 1113 §7.9）。这里按主键直读，并给出解析后的 checkConf、
++     * 归属（scopeType）与 revision（ver），前端不再自己拆 JSON 猜记录。
++     */
++    @RequestMapping(value = "/detail", method = RequestMethod.GET)
++    @ResponseBody
++    public RspResult detail(@RequestParam("monitorId") Integer monitorId) {
++        CkSource monitor = ckSourceService.detailOf(monitorId);
++        if (monitor == null) {
++            return RspResult.getFailtResult("未找到检查记录，id:" + monitorId);
++        }
++        Map<String, Object> conf = parseJsonObject(monitor.getCheckConf());
++        Object scopeType = conf == null ? null : conf.get("scopeType");
++        Map<String, Object> data = new LinkedHashMap<>();
++        data.put("monitor", monitor);
++        data.put("checkConf", conf);
++        data.put("scopeType", scopeType);
++        data.put("revision", monitor.getVer());
++        return RspResult.getSuccessResult().setData(data);
++    }
++
++    /**
++     * C06：运行记录（结构化）。
++     *
++     * 旧 `/paged-logs` 只返回 ck_job_log 原始行：REMARKS 是 JSON 串、JOB_CONF 是范围快照，
++     * 每个调用方各自 parse 一遍必然口径不一致（还有 JOB_CONF 被 varchar(1000) 截断的历史行）。
++     * 这里统一解析成视图：解析失败的旧行标 `legacy=true`，**不补默认值**。
++     */
++    @RequestMapping(value = "/runs", method = RequestMethod.GET)
++    @ResponseBody
++    public RspResult runs(Integer page, Integer limit,
++                          @RequestParam(value = "monitorId", required = false) String monitorId,
++                          @RequestParam(value = "sourceId", required = false) Long sourceId,
++                          @RequestParam(value = "state", required = false) String state) {
++        int pageNo = page == null || page < 1 ? 1 : page;
++        int size = limit == null || limit < 1 ? 20 : Math.min(limit, 200);
++        QueryWrapper<CkJobLog> cond = new QueryWrapper<>();
++        if (sourceId != null) {
++            cond.eq("source_id", sourceId);
++        }
++        if (StringUtils.isNotEmpty(state)) {
++            cond.eq("state", state);
++        }
++        if (StringUtils.isNotEmpty(monitorId)) {
++            cond.eq("job_id", monitorId);
++        }
++        Integer groupId = AuthCenter.getGroupId();
++        if (groupId != null) {
++            cond.eq("group_id", groupId);
++        }
++        cond.orderByDesc("LOG_ID");
++        PageInfo<CkJobLog> pageInfo = ckJobLogService.pagedObject(pageNo, size, cond);
++        List<Map<String, Object>> items = new ArrayList<>();
++        for (CkJobLog log : pageInfo.getList()) {
++            items.add(toRunItem(log));
++        }
++        Map<String, Object> data = new LinkedHashMap<>();
++        data.put("page", pageNo);
++        data.put("limit", size);
++        data.put("total", pageInfo.getTotal());
++        data.put("items", items);
+         return RspResult.getSuccessResult().setData(data);
+     }
+ 
++    /**
++     * C06：单次运行详情（按 runId 或 logId 定位）。
++     *
++     * runId 存在 REMARKS 里（`run-<monitorId>-<时间戳>`），旧数据里可能没有：
++     * 传 logId 时按主键精确取，传 runId 时按 monitorId 收窄后匹配 REMARKS。
++     */
++    @RequestMapping(value = "/run/{runId}", method = RequestMethod.GET)
++    @ResponseBody
++    public RspResult run(@PathVariable("runId") String runId,
++                         @RequestParam(value = "monitorId", required = false) String monitorId,
++                         @RequestParam(value = "logId", required = false) Long logId) {
++        QueryWrapper<CkJobLog> cond = new QueryWrapper<>();
++        if (logId != null) {
++            cond.eq("LOG_ID", logId);
++        } else {
++            cond.like("REMARKS", runId);
++        }
++        if (StringUtils.isNotEmpty(monitorId)) {
++            cond.eq("job_id", monitorId);
++        }
++        Integer groupId = AuthCenter.getGroupId();
++        if (groupId != null) {
++            cond.eq("group_id", groupId);
++        }
++        cond.orderByDesc("LOG_ID");
++        PageInfo<CkJobLog> pageInfo = ckJobLogService.pagedObject(1, 1, cond);
++        if (pageInfo.getList() == null || pageInfo.getList().isEmpty()) {
++            return RspResult.getFailtResult("未找到运行记录：" + runId);
++        }
++        return RspResult.getSuccessResult().setData(toRunItem(pageInfo.getList().get(0)));
++    }
++
++    /**
++     * C05：立即运行（统一入口）。
++     *
++     * 旧 `/runNow` 只对 Java 调度器有效；AI 脚本检查由 Python 执行器执行，Java 调度器完全跳过它，
++     * 前端因此必须自己按 kind 分流。这里把分流收进服务端：规则检查走 runNow，AI 检查转交执行器，
++     * 回执里逐条说明「谁受理了、产生了哪个 runId」，避免页面把「受理」当「成功」。
++     */
++    @RequestMapping(value = "/run", method = RequestMethod.POST)
++    @ResponseBody
++    public RspResult runNowByIds(@RequestBody Map<String, Object> body) {
++        List<Integer> ids = new ArrayList<>();
++        Object rawIds = body == null ? null : body.get("ids");
++        if (rawIds instanceof List) {
++            for (Object raw : (List<?>) rawIds) {
++                long id = toLong(raw);
++                if (id > 0) ids.add((int) id);
++            }
++        }
++        if (ids.isEmpty()) {
++            return RspResult.getFailtResult("缺少要运行的检查项 ids");
++        }
++        boolean apply = !Boolean.FALSE.equals(body.get("apply"));
++        List<Integer> ruleIds = new ArrayList<>();
++        List<Integer> aiIds = new ArrayList<>();
++        Map<Integer, String> kindOf = new LinkedHashMap<>();
++        for (Integer id : ids) {
++            CkSource monitor = ckSourceService.detailOf(id);
++            if (monitor == null) {
++                kindOf.put(id, "missing");
++                continue;
++            }
++            Map<String, Object> conf = parseJsonObject(monitor.getCheckConf());
++            boolean ai = conf != null
++                    && ("ai".equals(String.valueOf(conf.get("kind")))
++                        || StringUtils.isNotEmpty(String.valueOf(conf.get("script"))));
++            kindOf.put(id, ai ? "ai" : "rule");
++            if (ai) aiIds.add(id);
++            else ruleIds.add(id);
++        }
++
++        List<Map<String, Object>> results = new ArrayList<>();
++        int accepted = 0;
++        int failed = 0;
++        for (Integer id : ruleIds) {
++            Map<String, Object> item = new LinkedHashMap<>();
++            item.put("id", id);
++            item.put("kind", "rule");
++            try {
++                int affected = ckSourceService.runNow(id);
++                item.put("ok", affected > 0);
++                item.put("message", affected > 0
++                        ? "已交给 Java 调度器（受理不等于执行成功，结果看运行记录）"
++                        : "未受理：记录可能已被删除");
++                if (affected > 0) accepted++; else failed++;
++            } catch (Exception e) {
++                log.error("runNow check id {} failed", id, e);
++                item.put("ok", false);
++                item.put("message", "受理失败：" + e.getMessage());
++                failed++;
++            }
++            results.add(item);
++        }
++        for (Integer id : ids) {
++            if (!"missing".equals(kindOf.get(id))) continue;
++            Map<String, Object> item = new LinkedHashMap<>();
++            item.put("id", id);
++            item.put("kind", "missing");
++            item.put("ok", false);
++            item.put("message", "检查项不存在或已删除");
++            results.add(item);
++            failed++;
++        }
++        if (!aiIds.isEmpty()) {
++            if (StringUtils.isEmpty(runnerToken)) {
++                for (Integer id : aiIds) {
++                    Map<String, Object> item = new LinkedHashMap<>();
++                    item.put("id", id);
++                    item.put("kind", "ai");
++                    item.put("ok", false);
++                    item.put("message", "本环境未配置监控执行器（monitor.runner.token 为空），AI 检查无法立即运行");
++                    results.add(item);
++                    failed++;
++                }
++            } else {
++                Map<String, Object> scan = invokeRunnerScan(aiIds, apply);
++                boolean ok = Boolean.TRUE.equals(scan.get("ok"));
++                List<?> runnerItems = scan.get("items") instanceof List ? (List<?>) scan.get("items") : new ArrayList<>();
++                Map<Integer, Map<String, Object>> byId = new LinkedHashMap<>();
++                for (Object raw : runnerItems) {
++                    if (!(raw instanceof Map)) continue;
++                    Map<?, ?> map = (Map<?, ?>) raw;
++                    byId.put((int) toLong(map.get("monitorId")), castMap(map));
++                }
++                for (Integer id : aiIds) {
++                    Map<String, Object> item = new LinkedHashMap<>();
++                    item.put("id", id);
++                    item.put("kind", "ai");
++                    Map<String, Object> runnerItem = byId.get(id);
++                    item.put("ok", ok && runnerItem != null);
++                    if (runnerItem != null) {
++                        item.put("runId", runnerItem.get("runId"));
++                        item.put("status", runnerItem.get("status"));
++                        item.put("message", runnerItem.get("message"));
++                    } else {
++                        item.put("message", ok ? "执行器未返回该检查项的结果" : String.valueOf(scan.get("message")));
++                    }
++                    item.put("message", item.get("message"));
++                    results.add(item);
++                    if (ok && runnerItem != null) accepted++; else failed++;
++                }
++            }
++        }
++        Map<String, Object> data = new LinkedHashMap<>();
++        data.put("accepted", accepted);
++        data.put("failed", failed);
++        data.put("results", results);
++        data.put("acceptedAt", new java.util.Date());
++        String msg = "已受理 " + accepted + " 条，失败 " + failed + " 条；受理不等于执行成功，结果以运行记录为准";
++        return RspResult.getSuccessResult().setMsg(msg).setData(data);
++    }
++
++    /** 把 AI 检查交给本机执行器（`/monitor-runner/scan`），失败时返回 ok=false 与原因。 */
++    private Map<String, Object> invokeRunnerScan(List<Integer> ids, boolean apply) {
++        Map<String, Object> result = new LinkedHashMap<>();
++        String url = runnerBaseUrl.replaceAll("/+$", "") + "/monitor-runner/scan";
++        HttpURLConnection conn = null;
++        try {
++            Map<String, Object> payload = new LinkedHashMap<>();
++            payload.put("monitorIds", ids);
++            payload.put("apply", apply);
++            payload.put("force", true);
++            byte[] bytes = JSON.toJSONString(payload).getBytes(StandardCharsets.UTF_8);
++            conn = (HttpURLConnection) new URL(url).openConnection();
++            conn.setRequestMethod("POST");
++            conn.setConnectTimeout(3000);
++            conn.setReadTimeout(120000);
++            conn.setDoOutput(true);
++            conn.setRequestProperty("Content-Type", "application/json;charset=UTF-8");
++            conn.setRequestProperty("Access-Token", runnerToken);
++            try (OutputStream os = conn.getOutputStream()) {
++                os.write(bytes);
++            }
++            int status = conn.getResponseCode();
++            java.io.InputStream is = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream();
++            StringBuilder sb = new StringBuilder();
++            if (is != null) {
++                try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
++                    String line;
++                    while ((line = reader.readLine()) != null) sb.append(line);
++                }
++            }
++            if (status < 200 || status >= 300) {
++                result.put("ok", false);
++                result.put("message", "执行器返回 HTTP " + status + "：" + sb);
++                return result;
++            }
++            Map<String, Object> parsed = parseJsonObject(sb.toString());
++            result.put("ok", parsed != null);
++            result.put("items", parsed == null ? null : parsed.get("items"));
++            result.put("count", parsed == null ? null : parsed.get("count"));
++            result.put("message", parsed == null ? "执行器返回无法解析：" + sb : "执行器已返回结果");
++            return result;
++        } catch (Exception e) {
++            log.error("调用监控执行器失败: {}", url, e);
++            result.put("ok", false);
++            result.put("message", "调用监控执行器失败：" + e.getMessage());
++            return result;
++        } finally {
++            if (conn != null) conn.disconnect();
++        }
++    }
++
++    /** ck_job_log 一行 → 结构化运行视图。旧行（REMARKS 不是 JSON）标 legacy，字段留 null 不补默认值。 */
++    private Map<String, Object> toRunItem(CkJobLog log) {
++        Map<String, Object> item = new LinkedHashMap<>();
++        item.put("logId", log.getLogId());
++        item.put("monitorId", log.getJobId());
++        item.put("sourceId", log.getSourceId());
++        item.put("name", log.getName());
++        item.put("tableName", log.getTableName());
++        item.put("state", log.getState());
++        item.put("logDt", log.getLogDt());
++        item.put("createDt", log.getCreateDt());
++        item.put("message", log.getLogMsg());
++        Map<String, Object> remarks = parseJsonObject(log.getRemarks());
++        item.put("legacy", remarks == null);
++        item.put("runId", remarks == null ? null : remarks.get("runId"));
++        item.put("status", remarks == null ? null : remarks.get("status"));
++        item.put("checkedCount", remarks == null ? null : remarks.get("checkedCount"));
++        item.put("abnormalCount", remarks == null ? null : remarks.get("abnormalCount"));
++        item.put("durationMs", remarks == null ? null : remarks.get("durationMs"));
++        item.put("window", remarks == null ? null : remarks.get("window"));
++        item.put("reason", remarks == null ? null : remarks.get("reason"));
++        item.put("scriptPath", remarks == null ? null : remarks.get("scriptPath"));
++        item.put("overdue", remarks == null ? null : remarks.get("overdue"));
++        // 本次检查范围快照：JOB_CONF 扩容成 LONGTEXT 后才是完整 JSON；老行会被截断，解析失败给 null。
++        item.put("configSnapshot", parseJsonObject(log.getJobConf()));
++        return item;
++    }
++
++    private static Map<String, Object> parseJsonObject(String raw) {
++        if (StringUtils.isEmpty(raw)) return null;
++        String text = raw.trim();
++        if (!text.startsWith("{") || !text.endsWith("}")) return null;
++        try {
++            return JSON.parseObject(text);
++        } catch (Exception e) {
++            return null;
++        }
++    }
++
++    private static Map<String, Object> castMap(Map<?, ?> raw) {
++        Map<String, Object> out = new LinkedHashMap<>();
++        for (Map.Entry<?, ?> entry : raw.entrySet()) {
++            out.put(String.valueOf(entry.getKey()), entry.getValue());
++        }
++        return out;
++    }
++
+     private static long toLong(Object value) {
+         if (value instanceof Number) {
+             return ((Number) value).longValue();
+@@ -264,7 +611,9 @@
+         int i = ckSourceService.updateObject(ckSource, ActionEnum.WEB_UPDATE, "从页面更新");
+         Map<String, Object> data = new LinkedHashMap<>();
+         data.put("id", ckSource.getId());
++        data.put("ver", ckSource.getVer());
+         data.put("affected", i);
++        // 回执带上最新 ver，前端保存后直接用它作为下一次 CAS 的基线，不必再回查。
+         return RspResult.getSuccessResult().setMsg("更新成功，影响 " + i + " 条记录").setData(data);
+     }
+ 
