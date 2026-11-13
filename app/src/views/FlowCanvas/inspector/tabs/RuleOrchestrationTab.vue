@@ -37,7 +37,7 @@ import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload, buildDocumentExtractPayload } from '@/utils/flow/dataProcess'
-import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { describeCkSourceConflictRows, MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
 import { confirmSharedFlowWrite } from '@/utils/flow/sharedFlowGuard'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
@@ -1566,6 +1566,33 @@ const codeTestResult = ref('')
 const codeTestError = ref('')
 const monitorCodeTestVisible = ref(false)
 
+/**
+ * 同源多条检查项：画布保存按 sourceId 整体覆盖，会改到该源所有检查项，syncMonitorCkSource 已停下写入。
+ * 列出冲突记录并给「去监控中心」出口（监控中心只认 sourceCheck 页签，不认 query.sourceId）。
+ */
+function alertCkSourceConflict(error: MultipleCkSourceRowsError) {
+  void ElMessageBox.alert(
+    [
+      '画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。',
+      '',
+      ...describeCkSourceConflictRows(error.rows),
+      '',
+      '请到监控中心按检查项逐条编辑或删除重复项。',
+    ].join('\n'),
+    '同源有多条检查项，画布未写入',
+    {
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    },
+  ).then(() => {
+    void router.push({ path: '/monitor', query: { tab: 'sourceCheck' } })
+  }).catch(() => {
+    // 取消 / 关闭提示框：留在当前页继续编辑，不额外提示
+  })
+}
+
 async function onSaveScript() {
   if (!orchCfg.value.script?.trim()) {
     ElMessage.warning(isRule.value ? '请先生成脚本' : '请先生成配置')
@@ -1601,7 +1628,11 @@ async function onSaveScript() {
       try {
         await syncMonitorCkSource(promptSourceId.value, cfg.value, sourceSchedule.value)
       } catch (e) {
-        ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+        if (e instanceof MultipleCkSourceRowsError) {
+          alertCkSourceConflict(e)
+        } else {
+          ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+        }
       }
     }
     ElMessage.success(res.message || (isRule.value ? '规则脚本已保存' : '抓取配置已保存'))

@@ -9,7 +9,7 @@ import {
   type MonitorAlertConfig,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import type { CkSourcePayload, RuleOrchestration } from '@/api'
+import type { CkSourcePayload, CkSourceRecord, RuleOrchestration } from '@/api'
 import { nodeScheduleCron } from './scheduleCron'
 
 /**
@@ -35,10 +35,50 @@ const CK_SOURCE_VER = 12
  * 由用户到监控中心按记录（monitorId）编辑。单条记录时仍可同步，行为与旧版一致。
  */
 export class MultipleCkSourceRowsError extends Error {
-  constructor(sourceId: string, count: number) {
-    super(`该源在监控记录里已有 ${count} 条检查项，画布保存不再按源覆盖；请到监控中心按检查项编辑（sourceId=${sourceId}）`)
+  /** 冲突的源 ID（调用方直接展示用，message 里也带了一份） */
+  readonly sourceId: string
+  /** 冲突的 ck_source 行；UI 用它列出「是哪几条」 */
+  readonly rows: CkSourceRecord[]
+
+  constructor(sourceId: string, rows: CkSourceRecord[]) {
+    super(`该源在监控记录里已有 ${rows.length} 条检查项，画布保存不再按源覆盖；请到监控中心按检查项编辑（sourceId=${sourceId}）`)
     this.name = 'MultipleCkSourceRowsError'
+    this.sourceId = sourceId
+    this.rows = rows
   }
+
+  get count(): number {
+    return this.rows.length
+  }
+}
+
+/**
+ * 把冲突的 ck_source 行整理成逐条清单，供保存失败的提示直接展示：
+ * `检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00`
+ *
+ * 字段口径（见 api/types/rule.ts 的 CkSourceRecord）：name 为空写「未命名检查项」；tableName
+ * 为空省略「表=…」；state 只有 'E' 算启用（这张表用 1 表示停用/逻辑删除，见文件头 IS_DELETE 说明）；
+ * updateDt 是后端 LocalDateTime 的 ISO 串，这里转成 `YYYY-MM-DD HH:mm` 展示，缺省时省略该段。
+ */
+export function describeCkSourceConflictRows(rows: CkSourceRecord[]): string[] {
+  return rows.map((row) => {
+    const parts = [row.name?.trim() || '未命名检查项']
+    parts.push(`id=${row.id}`)
+    const tableName = row.tableName?.trim()
+    if (tableName) parts.push(`表=${tableName}`)
+    parts.push(row.state === 'E' ? '已启用' : '已停用')
+    const updatedAt = formatConflictUpdateDt(row.updateDt)
+    if (updatedAt) parts.push(`更新 ${updatedAt}`)
+    return parts.join('｜')
+  })
+}
+
+/** ck_source.UPDATE_DT（ISO-8601 本地时间）→ `YYYY-MM-DD HH:mm`；格式不认得时原样展示。 */
+function formatConflictUpdateDt(value: string | undefined): string {
+  const raw = value?.trim()
+  if (!raw) return ''
+  const matched = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec(raw)
+  return matched ? `${matched[1]} ${matched[2]}` : raw
 }
 
 /**
@@ -171,7 +211,7 @@ export async function syncMonitorAlertConfig(
     await syncMonitorCkSource(trimmed, node ? { ...node, alertConfig } : undefined)
     return
   }
-  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing.length)
+  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
   const previousConf = parseCheckConf(existing[0]?.checkConf)
   const updated = await ckSourceApi.update({
     sourceId: Number(trimmed),
@@ -216,7 +256,7 @@ export async function syncMonitorCkSource(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 解构剔除这两个键：ck_source 不落提示词与脚本体
   const { systemPrompt: _omitPrompt, script: _omitScript, ...orchestration } = orchCfg
   const existing = await ckSourceApi.list(trimmed)
-  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing.length)
+  if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
   const previousConf = parseCheckConf(existing[0]?.checkConf)
   // update 只提交「定义」字段：name / schedule / tableName / checkConf。
   // state（启用状态）、isDelete（逻辑删除）、createDt、ver 属于运行/生命周期字段，

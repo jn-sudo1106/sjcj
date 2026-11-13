@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ckSourceApi, entryApi } from '@/api'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { syncMonitorAlertConfig, syncMonitorCkSource } from './monitorCkSource'
+import { describeCkSourceConflictRows, MultipleCkSourceRowsError, syncMonitorAlertConfig, syncMonitorCkSource } from './monitorCkSource'
 
 function makeMonitorNode(patch: Partial<NodeConfig> = {}): NodeConfig {
   const node: NodeConfig = {
@@ -100,8 +100,12 @@ describe('syncMonitorCkSource', () => {
     const update = vi.spyOn(ckSourceApi, 'update')
     const insert = vi.spyOn(ckSourceApi, 'insert')
 
-    await expect(syncMonitorCkSource('430016501', makeMonitorNode()))
-      .rejects.toThrow(/已有 2 条检查项/)
+    const error = await syncMonitorCkSource('430016501', makeMonitorNode()).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(MultipleCkSourceRowsError)
+    // message 保持旧文案（既有调用方/测试都按这句断言），同时把冲突行带出来给 UI 列清单。
+    expect((error as Error).message).toMatch(/已有 2 条检查项/)
+    expect((error as MultipleCkSourceRowsError).count).toBe(2)
+    expect((error as MultipleCkSourceRowsError).rows.map((row) => row.id)).toEqual([7, 8])
     expect(update).not.toHaveBeenCalled()
     expect(insert).not.toHaveBeenCalled()
   })
@@ -256,5 +260,45 @@ describe('syncMonitorAlertConfig', () => {
     await expect(syncMonitorAlertConfig('  ', makeMonitorNode(), undefined)).rejects.toThrow('缺少源 ID')
     expect(list).not.toHaveBeenCalled()
     expect(insert).not.toHaveBeenCalled()
+  })
+})
+
+// 冲突清单给保存失败提示直接用：用户在画布上要知道「到底是哪几条」，才能去监控中心处理。
+describe('describeCkSourceConflictRows', () => {
+  const base = { sourceId: 430016501 }
+
+  it('逐条列出名称｜id｜表｜启停｜更新时间', () => {
+    expect(describeCkSourceConflictRows([
+      { ...base, id: 7, name: '检查项A', tableName: 'sense_data.TB_X', state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { ...base, id: 8, name: '检查项B', tableName: 'sense_data.TB_Y', state: 'D', updateDt: '2026-09-19T03:05:09' },
+    ])).toEqual([
+      '检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00',
+      '检查项B｜id=8｜表=sense_data.TB_Y｜已停用｜更新 2026-09-19 03:05',
+    ])
+  })
+
+  it('name 为空时写「未命名检查项」', () => {
+    expect(describeCkSourceConflictRows([
+      { ...base, id: 7, name: '   ', tableName: 'sense_data.TB_X', state: 'E' },
+    ])).toEqual(['未命名检查项｜id=7｜表=sense_data.TB_X｜已启用'])
+  })
+
+  it('tableName 为空时省略「表=…」', () => {
+    expect(describeCkSourceConflictRows([
+      { ...base, id: 7, name: '检查项A', tableName: '', state: 'E' },
+    ])).toEqual(['检查项A｜id=7｜已启用'])
+  })
+
+  it('state 非 E（含空值）一律记「已停用」', () => {
+    expect(describeCkSourceConflictRows([
+      { ...base, id: 7, name: '检查项A', state: 'D' },
+      { ...base, id: 8, name: '检查项B' },
+    ])).toEqual(['检查项A｜id=7｜已停用', '检查项B｜id=8｜已停用'])
+  })
+
+  it('updateDt 缺省时省略「更新 …」', () => {
+    expect(describeCkSourceConflictRows([
+      { ...base, id: 7, name: '检查项A', state: 'E', updateDt: '  ' },
+    ])).toEqual(['检查项A｜id=7｜已启用'])
   })
 })

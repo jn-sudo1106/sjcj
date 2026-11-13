@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox, ElSelect } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
@@ -1713,6 +1713,45 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(updatePayload).not.toHaveProperty('isDelete')
     expect(updatePayload).not.toHaveProperty('createDt')
     expect(updatePayload).not.toHaveProperty('ver')
+  })
+
+  // 一源多检查项（2026-11-12）：/api/source/update 只按 sourceId 匹配，同步层已拒绝整包覆盖。
+  // 手动保存要把冲突清单交给用户，并给「去监控中心」的出口（那里按检查项逐条编辑）。
+  it('同源多条检查项：保存脚本不写 ck_source，弹带清单的确认框并可跳监控中心', async () => {
+    mockAssets()
+    const { wrapper } = setupMonitorSave()
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { id: 8, sourceId: 430016501, name: '检查项B', state: 'D' },
+    ])
+    const insert = vi.spyOn(ckSourceApi, 'insert')
+    const update = vi.spyOn(ckSourceApi, 'update')
+    const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error')
+    routerPush.mockClear()
+    await flushPromises()
+
+    await triggerWorkbenchSave(wrapper)
+
+    expect(alert).toHaveBeenCalledTimes(1)
+    const [message, title, options] = alert.mock.calls[0] as unknown as [string, string, Record<string, unknown>]
+    expect(title).toBe('同源有多条检查项，画布未写入')
+    expect(message).toContain('画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。')
+    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00')
+    expect(message).toContain('检查项B｜id=8｜已停用')
+    expect(message).toContain('请到监控中心按检查项逐条编辑或删除重复项。')
+    expect(options).toMatchObject({
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    })
+    expect(insert).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    // 不再用一句「监控源配置同步失败：…」打发用户
+    expect(error.mock.calls.some((call) => String(call[0]).includes('监控源配置同步失败'))).toBe(false)
+    expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
+    wrapper.unmount()
   })
 
   it('流程未绑源（无 sourceId）时保存脚本不同步 ck_source', async () => {

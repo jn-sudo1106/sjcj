@@ -9,11 +9,23 @@ import { useSourceStore } from '@/stores/source'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { useFlowVersionStore } from '@/stores/flowVersion'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
+import { MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { resetNodeConfigAutosave } from './nodeConfigAutosave'
 
 vi.mock('@/utils/flow/nodeDeployment', () => ({ syncNodeDeployment: vi.fn(async () => null) }))
+// 同源多条检查项：把同步本身 mock 掉，直接抛「带冲突记录」的错误，只验证提示与跳转。
+vi.mock('@/utils/flow/monitorCkSource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/flow/monitorCkSource')>()
+  return { ...actual, syncMonitorCkSource: vi.fn() }
+})
+const routerPush = vi.hoisted(() => vi.fn())
+vi.mock('vue-router', () => ({
+  RouterLink: { props: ['to'], template: '<a><slot /></a>' },
+  useRouter: () => ({ push: routerPush }),
+  useRoute: () => ({ query: {} }),
+}))
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -1151,5 +1163,68 @@ describe('NodeInspector 保存 = 整张画布一起保存（2026-10-26）', () =
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('尚未配置'))
     expect(flow.selectedId).toBe('41520')
     w.unmount()
+  })
+})
+
+// 一源多检查项（2026-11-12）：/api/source/update 只按 sourceId 匹配，画布保存无法只改其中一条，
+// 同步层已拒绝写入。手动保存必须把「是哪几条」列出来并给出口，不能只丢一句长错误。
+describe('数据监控节点保存：同源多条检查项', () => {
+  it('停下写入并弹出带清单的确认框，确认后跳监控中心数据源监控页签', async () => {
+    mockAssets(); setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const node = cloneConfig(NODE_CONFIGS['rule'])
+    node.template = 'monitor'
+    node.title = '库存监控'
+    node.configId = '1401088'
+    node.configName = '库存监控'
+    node.ruleCfg = {
+      mode: 'ref',
+      describe: '库存监控',
+      inputTable: 'sense_data.TB_JD_SKU_BASE',
+      inputTableId: '2102154',
+      inputFields: ['sku_id'],
+      outputFields: [],
+      scriptPath: '/code01/184.py',
+    }
+    flow.configs['monitor-1'] = node
+    flow.select('monitor-1'); flow.setActiveTab('orchestration')
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ configId: '1401088' })
+    vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1401088', name: '库存监控' } as never)
+    vi.mocked(syncMonitorCkSource).mockRejectedValue(new MultipleCkSourceRowsError('430016501', [
+      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { id: 8, sourceId: 430016501, name: '检查项B', state: 'D' },
+    ]))
+    const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error')
+    // 数据监控节点会加载提示词模板（fetch 相对 URL 在 jsdom 下解析不了），返回空列表即可。
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    routerPush.mockClear()
+
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } }); await flushPromises()
+    flow.setDedupMode('monitor-1', 'table'); await flushPromises()
+    await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises(); await flushPromises()
+
+    expect(alert).toHaveBeenCalledTimes(1)
+    const [message, title, options] = alert.mock.calls[0] as unknown as [string, string, Record<string, unknown>]
+    expect(title).toBe('同源有多条检查项，画布未写入')
+    expect(message).toContain('画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。')
+    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜已启用｜更新 2026-09-18 10:00')
+    expect(message).toContain('检查项B｜id=8｜已停用')
+    expect(message).toContain('请到监控中心按检查项逐条编辑或删除重复项。')
+    expect(options).toMatchObject({
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    })
+    // 不再用一句「监控源配置同步失败：…」打发用户
+    expect(error.mock.calls.some((call) => String(call[0]).includes('监控源配置同步失败'))).toBe(false)
+    expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
+    wrapper.unmount()
+    vi.mocked(syncMonitorCkSource).mockReset()
   })
 })

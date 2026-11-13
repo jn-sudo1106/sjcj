@@ -6,7 +6,8 @@
 // isRule 会随选中节点变化，不能只在 onMounted 判断一次——否则打开画布时没选中规则节点就永远拉不到规则数据
 // （见 NodeInspector.test.ts「规则数据懒加载」）。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
@@ -24,7 +25,7 @@ import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
-import { MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { describeCkSourceConflictRows, MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import { enqueueConfigSave, isActiveNodeConfigFlusher, registerNodeConfigFlusher } from './nodeConfigAutosave'
@@ -39,6 +40,7 @@ import { shortTime, versionCutoff } from '@/views/FlowCenter/flowVersionHistory'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean; templateDefaults?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
+const router = useRouter()
 // 只读（2026-10-10，10-11 起 217 发布版可直接改、首次保存自动生成草稿）：217 的锁定草稿，以及 leo 版本状态
 // 里的已发布版。只读也要能滚动、
 // 切页签、展开收起查看——原来外层整块 pointer-events: none，连滚动条都拖不动（用户反馈）。
@@ -275,6 +277,34 @@ async function onSaveNodeConfig() {
   }
 }
 
+/**
+ * 同源多条检查项：画布保存按 sourceId 整体覆盖，会改到该源所有检查项，syncMonitorCkSource 已停下写入。
+ * 这里把「到底是哪几条」列出来，并给一个去监控中心逐条处理的出口——监控中心只认 sourceCheck
+ * 页签，不认 query.sourceId（列表自己带筛选），所以只带 tab。
+ */
+function alertCkSourceConflict(error: MultipleCkSourceRowsError) {
+  void ElMessageBox.alert(
+    [
+      '画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。',
+      '',
+      ...describeCkSourceConflictRows(error.rows),
+      '',
+      '请到监控中心按检查项逐条编辑或删除重复项。',
+    ].join('\n'),
+    '同源有多条检查项，画布未写入',
+    {
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    },
+  ).then(() => {
+    void router.push({ path: '/monitor', query: { tab: 'sourceCheck' } })
+  }).catch(() => {
+    // 取消 / 关闭提示框：留在画布继续编辑，不额外提示
+  })
+}
+
 /** 保存当前节点配置的实际实现（onSaveNodeConfig 只负责成功提示合并这一层）。 */
 async function saveNodeConfigNow(node: NodeConfig) {
   const savedNodeId = id.value, savedTab = tab.value
@@ -306,7 +336,11 @@ async function saveNodeConfigNow(node: NodeConfig) {
     try {
       await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
     } catch (e) {
-      ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      if (e instanceof MultipleCkSourceRowsError) {
+        alertCkSourceConflict(e)
+      } else {
+        ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      }
     }
   }
   if (saved) await syncSourceCron(node, id.value)
