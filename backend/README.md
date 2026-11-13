@@ -21,6 +21,8 @@ AI 监控脚本的业务库由 `RUNNER_MONITOR_RUNNER_CONFIG` 指向的私有 JS
 监控发布须同时检查前端、Python Runner 和 Java 业务后端。保存链路另有一个 Java 侧补丁 `java_patches/source_check_revision_cas.patch`（2026-11-13）：`/api/v1/source/check/update` 按主键单行更新，带 `ver` 时做乐观锁（不一致拒绝并提示「已被其他修改更新」），回执返回最新 `ver`。缺这个补丁时接口仍按行更新，但不会拦并发覆盖；前端会把记录上的 `ver` 一并提交，后端未实现时该字段被忽略，不报错。同一天还补了 `java_patches/ai_monitor_empty_schedule_update.patch`：`CkSourceService.calcNextDate` 对空 cron 直接返回 10 年后的时间，否则「仅手动」的 AI 检查在监控中心保存时会因 `Cron expression must consist of 6 fields (found 0 in "")` 报 500。两个补丁都已在 186 上编译部署（`/tmp/build_c13.sh` + `/tmp/deploy_c13.sh` 流程，jar 备份 `bee-config.jar.bak-c13-*`）。
 监控发布须同时检查前端、Python Runner 和 Java 业务后端。空计划 AI 草稿保存依赖 `java_patches/ai_monitor_empty_schedule.patch`：需在目标环境对应的 Java 源码中合入并构建；仅把此补丁文件推送到前端仓库不会修改 Java 运行产物。上线前以目标环境表结构重新核对脚本时间字段，不能把 186 的脚本或字段选择直接视为 217 已验证；至少验收草稿保存、脚本试跑、保存后关闭弹窗及失败回执一致性。
 
+运行详情的「冻结配置快照」依赖 `ck_job_log.JOB_CONF` 能放下完整 `CHECK_CONF`。AI 检查的 conf 含生成脚本（186 上约 12KB），该列原本是 `varchar(1000)` 且库的 `sql_mode` 为空，写入会被静默截断成半截 JSON，页面只能显示「未记录」。186 已于 2026-11-13 扩容为 `LONGTEXT`（脚本 `backend/sql/20261113_ck_job_log_job_conf_longtext.sql`）；其他环境部署前端前要先执行该脚本，否则运行详情继续显示「未记录」。历史日志里的半截数据不回填，解析失败按无快照处理。
+
 字段候选由同一执行器的 `POST /api/runner-management/monitor-runner/table-fields` 查询业务库 `information_schema.COLUMNS`。接口缺失或查询失败时不回退到平台登记的业务字段；业务字段名可能实际映射到 `K1…K20`。执行器在试跑和正式执行前校验所选时间列，并注入 `DQ_TABLE_NAME`、`DQ_TIME_COLUMN`、`DQ_SOURCE_ID`、`DQ_START_DATE`、`DQ_END_DATE`。生成脚本应使用这些参数；有 `SOURCE_ID` 的共享表必须限定当前源。217 发布时需要同步部署此字段查询接口和新版前端；历史脚本不会因更改下拉框自动改写，必须重新生成并试跑。
 
 默认使用本地 SQLite。需要临时 MySQL 时，先设置 `RUNNER_DB_HOST`、`RUNNER_DB_NAME`、`RUNNER_DB_USER`、`RUNNER_DB_PASSWORD` 环境变量再启动服务；MySQL 端口默认是 **8102**，如需更改可设置 `RUNNER_DB_PORT`。程序会创建六张 `ce_runner_` 前缀的表。不要把密码写进代码或仓库。
