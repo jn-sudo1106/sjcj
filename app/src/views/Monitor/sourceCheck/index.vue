@@ -268,6 +268,43 @@ function checkCountTextOf(row: MonitorSourceRow): string {
   return `已筛选 ${visibleMonitorsOf(row).length} / 共 ${row.monitorTotal} 项检查`
 }
 
+/** 「未关联流程」标签的 title：缺流程只影响是否随流程触发，不影响配置/生成检查。 */
+const FLOW_UNBOUND_TITLE =
+  '该源没有绑定流程：检查只能按自己的计划或手动运行，不会随采集流程触发；不影响生成检查'
+
+type ExecBadgeTone = 'ok' | 'err' | 'muted'
+interface ExecBadge {
+  text: string
+  tone: ExecBadgeTone
+  title: string
+}
+
+/** 源级「执行结论」口径：该源启用中检查项最近一次运行的结论。 */
+const EXEC_BADGE_TITLE = '按该源启用中检查项最近一次运行判定'
+
+/**
+ * 「执行结论」徽标（1113）。
+ * none = 该源没有启用中的检查项，不显示；queued/running/timeout 等是单条运行中的中间态，
+ * 不在源级 exec 契约（none / unknown / succeeded / failed）内，同样不猜结论。
+ */
+const EXEC_BADGES: Partial<Record<MonitorSourceRow['exec'], ExecBadge>> = {
+  failed: { text: '执行失败', tone: 'err', title: EXEC_BADGE_TITLE },
+  succeeded: { text: '执行正常', tone: 'ok', title: EXEC_BADGE_TITLE },
+  unknown: { text: '未执行', tone: 'muted', title: EXEC_BADGE_TITLE },
+}
+
+function execBadgeOf(row: MonitorSourceRow): ExecBadge | undefined {
+  return EXEC_BADGES[row.exec]
+}
+
+/**
+ * 「未关联流程」标签只在服务端聚合行上出现：C07 的 flowId 缺省就是「未关联流程」；
+ * 本地聚合（C07 不可用 / 源内视图）拿不到 flowId，不能把「不知道」说成「未关联」。
+ */
+function showFlowUnbound(row: MonitorSourceRow): boolean {
+  return scopeKind.value !== 'source' && !row.flowId && !!summaryRows.value
+}
+
 const filteredRows = computed(() => {
   let rows: MonitorSourceRow[]
   if (!summaryMode.value) rows = filterSourceRows(allRows.value, applied)
@@ -961,9 +998,19 @@ onMounted(() => {
 
       <el-table-column label="源与网站" min-width="158">
         <template #default="{ row }">
-          <span class="sc-name" :title="sourceHintOf(row)" @click="toggleExpand(row)">
-            {{ sourceTitleOf(row) }}
-          </span>
+          <div class="sc-source-line">
+            <span class="sc-name" :title="sourceHintOf(row)" @click="toggleExpand(row)">
+              {{ sourceTitleOf(row) }}
+            </span>
+            <span
+              v-if="showFlowUnbound(row)"
+              class="sc-flow-tag"
+              data-testid="sc-flow-unbound-tag"
+              :title="FLOW_UNBOUND_TITLE"
+            >
+              未关联流程
+            </span>
+          </div>
           <div class="subline" :title="sourceHintOf(row)">
             {{ sourceSubtitleOf(row) }}
           </div>
@@ -986,7 +1033,18 @@ onMounted(() => {
 
       <el-table-column label="数据情况" min-width="122">
         <template #default="{ row }">
-          <span class="rc-status" :class="dataPillOf(row).tone">{{ dataPillOf(row).text }}</span>
+          <div class="sc-data-line">
+            <span class="rc-status" :class="dataPillOf(row).tone">{{ dataPillOf(row).text }}</span>
+            <span
+              v-if="execBadgeOf(row)"
+              class="sc-exec-badge"
+              :class="`is-${execBadgeOf(row)?.tone}`"
+              data-testid="sc-exec-badge"
+              :title="execBadgeOf(row)?.title"
+            >
+              {{ execBadgeOf(row)?.text }}
+            </span>
+          </div>
           <div class="subline" :title="dataHintOf(row)">{{ dataHintOf(row) }}</div>
         </template>
       </el-table-column>
@@ -1209,6 +1267,8 @@ onMounted(() => {
 }
 .sc-name {
   display: block;
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1218,6 +1278,59 @@ onMounted(() => {
 }
 .sc-name:hover {
   color: var(--rc-primary, #2563eb);
+}
+/* 源名 + 「未关联流程」标签同一行；标签是中性分类信息，不用错误/告警色 */
+.sc-source-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.sc-flow-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px dashed var(--rc-border, #e2e8f0);
+  border-radius: 4px;
+  background: var(--rc-bg, #f8fafc);
+  color: var(--rc-muted, #64748b);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* 数据情况：结论 pill + 执行结论小徽标，同一行放得下，不新增列 */
+.sc-data-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.sc-exec-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.sc-exec-badge.is-ok {
+  background: var(--rc-ok-bg, #f0fdf4);
+  color: var(--rc-ok, #15803d);
+}
+.sc-exec-badge.is-err {
+  background: var(--rc-error-bg, #fef2f2);
+  color: var(--rc-error, #dc2626);
+}
+.sc-exec-badge.is-muted {
+  background: #f1f5f9;
+  color: var(--rc-muted, #64748b);
 }
 .sc-ellipsis {
   display: block;

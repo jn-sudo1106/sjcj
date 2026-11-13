@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, nextTick } from 'vue'
 import ElementPlus, { ElMessageBox } from 'element-plus'
-import type { MonitorRecordView } from '@/api/types/monitorCenter'
+import type { MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
 import { deleteSourceCheck } from '@/api/monitor'
 import type { MonitorSourceOption } from '@/api/monitorCenter'
 import {
@@ -675,5 +675,89 @@ describe('新增监控', () => {
     expect(editor.exists()).toBe(true)
     expect(editor.props('sourceId')).toBe('s1')
     expect(editor.props('record')).toBeNull()
+  })
+})
+
+describe('源行流程关联与执行结论（1113）', () => {
+  /** 服务端聚合行：只覆盖本组断言用到的字段，其余按接口契约给默认值 */
+  function sourceRow(patch: Partial<MonitorSourceRow> & { sourceId: string }): MonitorSourceRow {
+    return {
+      sourceName: '上市公司新闻',
+      tableName: 'sense_data.news_main',
+      siteName: '财经资讯站',
+      monitorTotal: 1,
+      monitorEnabled: 1,
+      coverage: null,
+      coverageUnavailable: true,
+      data: 'normal',
+      exec: 'unknown',
+      notifyFailures: 0,
+      label: '数据正常',
+      tone: 'good',
+      monitors: [],
+      unconfigured: false,
+      ...patch,
+    }
+  }
+
+  it('flowId 缺省时显示「未关联流程」：title 说明只影响触发方式，不影响生成检查', async () => {
+    mockedSummary.mockResolvedValue({ total: 1, unavailable: false, rows: [sourceRow({ sourceId: 's1' })] })
+    const wrapper = await mountPage()
+
+    const tag = wrapper.get('[data-testid="sc-flow-unbound-tag"]')
+    expect(tag.text()).toBe('未关联流程')
+    const title = tag.attributes('title') ?? ''
+    expect(title).toContain('不会随采集流程触发')
+    expect(title).toContain('不影响生成检查')
+    // 轻量分类信息，不能用错误色
+    expect(tag.classes()).not.toContain('is-err')
+    wrapper.unmount()
+  })
+
+  it('有 flowId 时不显示「未关联流程」', async () => {
+    mockedSummary.mockResolvedValue({
+      total: 1,
+      unavailable: false,
+      rows: [sourceRow({ sourceId: 's1', flowId: 'flow-9' })],
+    })
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-flow-unbound-tag"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('本地聚合拿不到 flowId 时不臆造「未关联流程」', async () => {
+    // 默认 listSourceSummary 返回 unavailable → 回到 summarizeSources，行上没有 flowId 字段
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-flow-unbound-tag"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('执行结论徽标：failed/succeeded/unknown 出徽标、none 不渲染，title 写清判定口径', async () => {
+    mockedSummary.mockResolvedValue({
+      total: 4,
+      unavailable: false,
+      rows: [
+        sourceRow({ sourceId: 's1', exec: 'failed' }),
+        sourceRow({ sourceId: 's2', exec: 'succeeded' }),
+        sourceRow({ sourceId: 's3', exec: 'unknown' }),
+        sourceRow({ sourceId: 's4', exec: 'none' }),
+      ],
+    })
+    const wrapper = await mountPage()
+
+    const badges = wrapper.findAll('[data-testid="sc-exec-badge"]')
+    // none（没有启用中的检查项）不渲染；其余三种各一条
+    expect(badges).toHaveLength(3)
+    expect(badges.map((badge) => badge.text())).toEqual(['执行失败', '执行正常', '未执行'])
+    expect(badges[0].classes()).toContain('is-err')
+    expect(badges[1].classes()).toContain('is-ok')
+    expect(badges[2].classes()).toContain('is-muted')
+    for (const badge of badges) {
+      expect(badge.attributes('title')).toContain('按该源启用中检查项最近一次运行判定')
+    }
+    // 原有的数据结论（label/tone）照旧展示，不因徽标被替换
+    expect(wrapper.text()).toContain('数据正常')
+    expect(wrapper.text()).toMatch(/共\s*4\s*个源/)
+    wrapper.unmount()
   })
 })
