@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ckSourceApi, entryApi } from '@/api'
+import * as monitorApi from '@/api/monitor'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { describeCkSourceConflictRows, MultipleCkSourceRowsError, syncMonitorAlertConfig, syncMonitorCkSource } from './monitorCkSource'
 
@@ -51,6 +52,7 @@ describe('syncMonitorCkSource', () => {
   it('已有记录 update 时保留旧 checkConf 字段，并合入告警配置字段', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{
       id: 7,
+      ver: 9001,
       sourceId: 430016501,
       name: '旧监控',
       checkConf: JSON.stringify({
@@ -62,7 +64,7 @@ describe('syncMonitorCkSource', () => {
         notifyType: 'dingtalk',
       }),
     }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     const insert = vi.spyOn(ckSourceApi, 'insert')
 
     await syncMonitorCkSource('430016501', makeMonitorNode())
@@ -80,8 +82,9 @@ describe('syncMonitorCkSource', () => {
     expect(payload).not.toHaveProperty('state')
     expect(payload).not.toHaveProperty('isDelete')
     expect(payload).not.toHaveProperty('createDt')
-    expect(payload).not.toHaveProperty('ver')
-    const conf = JSON.parse(payload.checkConf ?? '{}')
+    // 更新走 C01 按主键：带上 id 与当前 ver（乐观锁基线），不再按 sourceId 整包覆盖。
+    expect(payload).toMatchObject({ id: 7, ver: 9001 })
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
     expect(conf.customKeep).toBe('keep-me')
     expect(conf.minSize).toBe('30')
     expect(conf.startDt).toBe('DATE_SUB(CURDATE(), INTERVAL 7 DAY)')
@@ -97,7 +100,7 @@ describe('syncMonitorCkSource', () => {
       { id: 7, sourceId: 430016501, name: '检查项A', checkConf: '{}' },
       { id: 8, sourceId: 430016501, name: '检查项B', checkConf: '{}' },
     ])
-    const update = vi.spyOn(ckSourceApi, 'update')
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck')
     const insert = vi.spyOn(ckSourceApi, 'insert')
 
     const error = await syncMonitorCkSource('430016501', makeMonitorNode()).catch((e: unknown) => e)
@@ -120,7 +123,7 @@ describe('syncMonitorCkSource', () => {
     expect(payload).toMatchObject({ state: 'E', isDelete: 0, ver: 12 })
     // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
     expect(String(payload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
-    const conf = JSON.parse(payload.checkConf ?? '{}')
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
     expect(conf.minSize).toBe('30')
     expect(conf.startDt).toBe('DATE_SUB(CURDATE(), INTERVAL 1 DAY)')
     expect(conf.notifyOn).toBe('error')
@@ -199,6 +202,7 @@ describe('syncMonitorAlertConfig', () => {
   it('已有记录只改告警字段，监控方法与编排原样保留', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{
       id: 7,
+      ver: 9001,
       sourceId: 430016501,
       name: '库存监控',
       checkConf: JSON.stringify({
@@ -212,7 +216,7 @@ describe('syncMonitorAlertConfig', () => {
         orchestration: { inputTable: 'sense_data.TB_JD_SKU_BASE', scriptPath: '/code01/real.py' },
       }),
     }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     const insert = vi.spyOn(ckSourceApi, 'insert')
 
     const node = makeMonitorNode()
@@ -221,8 +225,13 @@ describe('syncMonitorAlertConfig', () => {
     expect(insert).not.toHaveBeenCalled()
     const payload = update.mock.calls[0][0]
     // 只带 checkConf：name/schedule/tableName 交给节点保存那条通路，这里不碰
-    expect(payload).toEqual({ sourceId: 430016501, checkConf: expect.any(String) })
-    const conf = JSON.parse(payload.checkConf ?? '{}')
+    expect(payload).toEqual({
+      id: 7,
+      ver: 9001,
+      sourceId: 430016501,
+      checkConf: expect.any(String),
+    })
+    const conf = JSON.parse(String(payload.checkConf ?? '{}'))
     expect(conf.customKeep).toBe('keep-me')
     expect(conf.minSize).toBe('30')
     expect(conf.cond).toContain('数据延迟超过阈值')
@@ -234,13 +243,13 @@ describe('syncMonitorAlertConfig', () => {
   })
 
   it('告警总开关关掉时写 notifyOn=disabled', async () => {
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, sourceId: 430016501, checkConf: '{}' }])
-    const update = vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, ver: 9001, sourceId: 430016501, checkConf: '{}' }])
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
 
     const node = makeMonitorNode()
     await syncMonitorAlertConfig('430016501', node, { ...node.alertConfig!, enabled: false })
 
-    expect(JSON.parse(update.mock.calls[0][0].checkConf ?? '{}').notifyOn).toBe('disabled')
+    expect(JSON.parse(String(update.mock.calls[0][0].checkConf ?? '{}')).notifyOn).toBe('disabled')
   })
 
   it('该源还没有 ck_source 行时按节点建行，不静默失败', async () => {

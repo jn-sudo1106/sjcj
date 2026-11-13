@@ -80,6 +80,14 @@ export interface SourceCheck {
   /** 旧平台 /v1/source/check/paged 返回里可能带的额外时间字段（编辑提交前要剔除） */
   createDt?: string
   updateDt?: string
+  /**
+   * 配置版本号（对应 ck_source.VER，后端 CkSource.ver，paged 直接返回实体所以一直都有）。
+   *
+   * 保存（`/api/v1/source/check/update`）时原样回传它做**乐观锁**：后端比较不一致就拒绝并提示
+   * 「已被其他修改更新」，而不是后保存者静默覆盖前一个。缺省（历史记录/旧接口）时不校验，
+   * 后端仍会递增版本号，保证下一次保存能参与比较。
+   */
+  ver?: number
 }
 
 /** 一条校验历史日志，来自 /v1/source/check/paged-logs */

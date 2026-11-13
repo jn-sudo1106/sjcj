@@ -3,6 +3,7 @@
 // 无则 insert、有则 update。NodeInspector 底部「保存」（编排配置 Tab）与
 // RuleOrchestrationTab「保存脚本」两条保存路径共用，抽在这里保证 payload 口径一致。
 import { ckSourceApi, entryApi } from '@/api'
+import { updateSourceCheck } from '@/api/monitor'
 import {
   makeDefaultRuleOrchestration,
   type CollectorSchedule,
@@ -29,10 +30,10 @@ const CK_SOURCE_VER = 12
 /**
  * 一个源在 ck_source 里有多条记录时，画布同步必须停手（2026-11-12 最小保护）。
  *
- * /api/source/update 只按 sourceId 匹配，一条 payload 会命中该源**所有**行；而监控中心
- * 的模型已经是「一源多检查项、各自独立记录」，靠 sourceId 整包覆盖会把别的检查项
- * 的配置、启停一起改掉。同一份 payload 又无法表达「只改其中一条」，因此这里不猜、直接拒绝，
- * 由用户到监控中心按记录（monitorId）编辑。单条记录时仍可同步，行为与旧版一致。
+ * 监控中心的模型是「一源多检查项、各自独立记录」，而画布节点只有一个 sourceId、没有绑定
+ * 到具体某个检查项（C12 显式绑定尚未落地）。**单条**记录时按主键更新（带 ver 乐观锁），
+ * 这是唯一能确定「改哪一条」的情况；多条时无法从画布侧判断用户想改哪条，因此这里不猜、
+ * 直接拒绝，由用户到监控中心按记录（monitorId）编辑。
  */
 export class MultipleCkSourceRowsError extends Error {
   /** 冲突的源 ID（调用方直接展示用，message 里也带了一份） */
@@ -195,9 +196,9 @@ function buildCheckConf(
  * 其余字段原样保留；该源还没有 ck_source 行时退回 syncMonitorCkSource 的建行口径
  *（没有旧配置可覆盖，按节点信息建一行是对的）。失败向上抛，由调用方决定提示策略。
  *
- * ⚠️ 写入范围仍是**整个 sourceId**：/api/source/update 只按 sourceId 匹配，命中多行就一起改
- *（2026-09-16 实测：一个带数据监控节点的源在 ck_source 里有 4 行同名记录）。这一点与
- * syncMonitorCkSource 完全一致——告警配置在这套模型里是源级的，本来就不按行区分。
+ * ⚠️ 只在该源恰好一条 ck_source 时按主键更新（2026-11-13 起带 ver 乐观锁）；多条时同样抛
+ * MultipleCkSourceRowsError——告警配置虽然概念上是源级的，但落库是按检查项一行，没有「改哪一条」
+ * 的依据就不能整包覆盖（2026-09-16 实测：一个带数据监控节点的源在 ck_source 里有 4 行同名记录）。
  */
 export async function syncMonitorAlertConfig(
   sourceId: string | undefined,
@@ -212,12 +213,16 @@ export async function syncMonitorAlertConfig(
     return
   }
   if (existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
-  const previousConf = parseCheckConf(existing[0]?.checkConf)
-  const updated = await ckSourceApi.update({
+  const current = existing[0]
+  const previousConf = parseCheckConf(current.checkConf)
+  // 按主键（C01）而不是按 sourceId 更新：只命中这一条，且带上 ver 做乐观锁——
+  // 页面读到记录后别人又改过时，后端会拒绝而不是静默覆盖。
+  await updateSourceCheck({
+    id: current.id,
+    ver: current.ver,
     sourceId: Number(trimmed),
     checkConf: JSON.stringify({ ...previousConf, ...alertCheckConfOf(alertConfig, previousConf) }),
   })
-  if (!updated) throw new Error('按 sourceId 未命中任何行')
 }
 
 /**
@@ -232,11 +237,13 @@ export async function syncMonitorAlertConfig(
  *   tableName=**表配置 Tab 选中的输入表**物理名（只有表 ID 时回查一次表详情）、
  *   checkConf=监控方法+编排配置序列化的 JSON。
  *
- * 写入边界（2026-11-12 最小保护）：
+ * 写入边界：
  *   - **新建**才补 state/isDelete/createDt/ver（新记录要能进调度）；
- *   - **更新**只写上面四个定义字段，不碰 state/isDelete/createDt/ver——画布保存不能重新启用
- *     已停用的检查项，也不能改别人的创建时间；
- *   - 该源在 ck_source 里已有多条记录时直接抛 MultipleCkSourceRowsError，不再按 sourceId 整包覆盖。
+ *   - **更新**走 C01 按主键 `/api/v1/source/check/update`，只写上面四个定义字段 + id/ver
+ *     （ver 是乐观锁基线，由后端比较并递增）——画布保存不能重新启用已停用的检查项，
+ *     也不能改别人的创建时间；
+ *   - 该源在 ck_source 里已有多条记录时直接抛 MultipleCkSourceRowsError（画布无法表达「改哪一条」），
+ *     不再按 sourceId 整包覆盖。
  *
  * `sourceSchedule` 传画布当前源（flow.sourceCfg）：节点没配过定时时，节点配置 Tab 显示的就是
  * 源上的定时，保存就该写同一个值，否则出现「界面有 cron、落库是空」。
@@ -269,8 +276,14 @@ export async function syncMonitorCkSource(
     checkConf: buildCheckConf(node, orchestration, previousConf),
   }
   if (existing.length) {
-    const updated = await ckSourceApi.update(definition)
-    if (!updated) throw new Error('按 sourceId 未命中任何行')
+    const current = existing[0]
+    // 单条记录：按主键更新（C01 /api/v1/source/check/update），并带 ver 做乐观锁。
+    // 旧 /api/source/update 只认 sourceId，一条 payload 命中该源所有行，才有多行时只能拒绝的问题。
+    await updateSourceCheck({
+      ...definition,
+      id: current.id,
+      ver: current.ver,
+    })
     return
   }
   // 只有新建才补生命周期字段：新记录直接进入可调度状态（2026-09-07 约定）。
