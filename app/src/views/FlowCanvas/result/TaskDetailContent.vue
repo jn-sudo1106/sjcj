@@ -190,8 +190,6 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
       <button v-if="closable" class="rc-btn ghost ffd-close" type="button" @click="close">关闭</button>
     </div>
 
-    <TaskExecutionLinks :task-id="task.taskId" :topic="task.topic" />
-
     <section class="tdd-result" data-testid="task-detail-result" aria-label="执行结果">
       <div class="tdd-block-head">
         <span class="tdd-block-title">执行结果</span>
@@ -212,6 +210,8 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
       </template>
       <div v-else class="tdd-empty" data-testid="task-result-empty">{{ task.state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果' }}</div>
     </section>
+
+    <TaskExecutionLinks :task-id="task.taskId" :topic="task.topic" />
 
     <div class="ffd-section">标识信息</div>
     <div class="ffd-id-grid" data-testid="task-detail-identity">
