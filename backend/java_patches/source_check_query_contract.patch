@@ -27,16 +27,27 @@
 # 合入方式：目标环境 Java 源码（bee-base + bee-config）里 `git apply` 后重新构建 bee-config.jar。
 # 只把补丁推到前端仓库不会改变运行产物。
 #
-# 186 部署记录（2026-11-13 18:31，构建脚本 /tmp/build_c14.sh、部署 /tmp/deploy_c14.sh）：
-#   jar 备份 `/data/app/backend/bee-config.jar.bak-c14-20261113-183154`；
-#   回滚：`cp -p <备份> /data/app/backend/bee-config.jar` 后 `bash /tmp/restart_be.sh`。
 #
 # 验证边界：这些接口都挂在 Shiro 会话鉴权后面，未登录一律 302；186 的登录验证码暂无法自动识别，
 # 因此本次只验证了「jar 能起、Mapper 语句能绑定（启动无异常）」与单测，页面级验收需登录后点按。
 #
+#
+# 合入状态（2026-11-13 21:40 更新）：本补丁已合入后端仓 dev1，commit
+#   `15d6157 feat(source-check): 补齐 C01/C05/C06/C07 查询与运行契约`。
+#   本文档仅作变更说明与回滚参考；重建 jar 请直接用 dev1 源码，不要再用本补丁叠加。
+#
+# 注意（c14 遗留回归，本补丁已修正）：补丁初版把 `pagedLogs` 的组过滤改成了
+#   `if (groupId != null)`，会让管理员（组 0）只能看到组 0 的日志 —— 已恢复为
+#   `groupId != null && groupId != 0`，新接口 /runs、/run/{runId} 同口径。
+#
+# 186 部署记录（2026-11-13 21:38，源码来自 dev1，构建 /tmp/build_c15.sh、部署 /tmp/deploy_c15.sh）：
+#   jar 备份 `/data/app/backend/bee-config.jar.bak-c15-20261113-2138*`；
+#   回滚：`cp -p <备份> /data/app/backend/bee-config.jar` 后 `bash /tmp/restart_be.sh`。
+diff --git a/bee-base/src/main/java/com/vanv/bee/dao/mapper/CkSourceMapper.java b/bee-base/src/main/java/com/vanv/bee/dao/mapper/CkSourceMapper.java
+index 4f9fb4c..1eb25ea 100644
 --- a/bee-base/src/main/java/com/vanv/bee/dao/mapper/CkSourceMapper.java
 +++ b/bee-base/src/main/java/com/vanv/bee/dao/mapper/CkSourceMapper.java
-@@ -25,6 +25,9 @@
+@@ -25,6 +25,9 @@ public interface CkSourceMapper extends BaseMapper<CkSource> {
                                                    @Param("offset") int offset,
                                                    @Param("limit") int limit);
  
@@ -46,59 +57,11 @@
      /** 按检查项统计时间窗内的日志条数（运行次数）：返回 jobId / cnt */
      List<Map<String, Object>> selectLogCountByMonitor(@Param("ids") java.util.List<Integer> ids,
                                                        @Param("from") java.util.Date from,
+diff --git a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
+index e4ac2b1..04c082b 100644
 --- a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
 +++ b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
-@@ -133,16 +133,31 @@
- 
-     @Override
-     public int updateObject(CkSource object, ActionEnum action, String remark) {
--        log.warn("更新CkSource, id:{}, 更新部分:{}", object.getId(), JSON.toJSONString(object));
-+        log.warn("更新CkSource, id:{}, ver:{}, 更新部分:{}",
-+                object.getId(), object.getVer(), JSON.toJSONString(object));
-+        if (object.getId() == null) {
-+            throw new ServiceException("缺少检查项 id，无法定位要更新的记录");
-+        }
-         object.setUpdateDt(null);
--        CkSource m1 = ckSourceMapper.selectById(object.getId());
--        if (m1 == null) {
--            throw new ServiceException("未找到原始queueId:" + m1.getId());
-+        // 按主键取当前行：更新只命中这一条，不会因为同源有多条检查而互相覆盖。
-+        CkSource current = ckSourceMapper.selectById(object.getId());
-+        if (current == null) {
-+            throw new ServiceException("未找到检查记录，id:" + object.getId());
-+        }
-+        // 乐观锁（revision CAS）：只有调用方带 ver 时才比较；不带 ver 的老调用保持原行为，
-+        // 但版本号仍然递增，保证下一次 CAS 能区分「改过」和「没改」。
-+        Long expected = object.getVer();
-+        Long actual = current.getVer();
-+        if (expected != null && !expected.equals(actual)) {
-+            throw new ServiceException("该检查项已被其他修改更新（提交基于 ver=" + expected
-+                    + "，当前 ver=" + actual + "），请刷新后重新保存");
-         }
-         if (object.getSchedule() != null) {
-             Date nextRun = calcNextDate(object);
-             object.setNextRun(nextRun);
-         }
-+        long now = System.currentTimeMillis();
-+        object.setVer(actual != null && actual >= now ? actual + 1 : now);
-         int result = ckSourceMapper.updateById(object);
-         return result;
-     }
-@@ -250,6 +265,13 @@
- 
-     public Date calcNextDate(CkSource ckSource) {
-         String cron = ckSource.getSchedule();
-+        // 空计划（仅手动 / AI 草稿）不能交给 CronSequenceGenerator，否则会抛
-+        // "Cron expression must consist of 6 fields (found 0 in \"\")"，保存直接 500。
-+        // 没有 cron 的检查只能停在远期等手动或执行器排期，这里按 10 年停放，与 parkScriptCheck 口径一致。
-+        if (StringUtils.isEmpty(cron) || cron.trim().isEmpty()) {
-+            return new Date(System.currentTimeMillis() + 10L * 365 * 24 * 3600 * 1000);
-+        }
-+        cron = cron.trim();
-         if (cron.toUpperCase().startsWith("AFTER-")) {
-             int after = Integer.parseInt(cron.toUpperCase(Locale.ROOT).replace("AFTER-", ""));
-             return calcSourceJobDate(ckSource, after);
-@@ -364,7 +386,54 @@
+@@ -386,6 +386,53 @@ public class CkSourceService implements IService<CkSource, QueryWrapper<CkSource
          return ckSourceMapper.countSourceSummary(groupId, siteId, keyword, enabled, dataState, checkDate);
      }
  
@@ -108,7 +71,7 @@
 +        return ckSourceMapper.selectById(id);
 +    }
 +
-     /**
++    /**
 +     * C07 执行结论：按源汇总「启用中检查项最近一次运行」的结果。
 +     *
 +     * 失败优先（任一启用项最近一次是 E → failed），全部有结果且无失败 → succeeded；
@@ -149,10 +112,11 @@
 +        return result;
 +    }
 +
-+    /**
+     /**
       * 计划覆盖（C07 首期）：按「今天应该跑几次 / 实际跑了几次 / 漏了几次」算。
       *
-      * 口径与《1111 全源AI数据体检》§0.2 一致：
+diff --git a/bee-base/src/main/resources/mybatis/mapper/CkSourceMapper.xml b/bee-base/src/main/resources/mybatis/mapper/CkSourceMapper.xml
+index a926fc9..fe1e81d 100644
 --- a/bee-base/src/main/resources/mybatis/mapper/CkSourceMapper.xml
 +++ b/bee-base/src/main/resources/mybatis/mapper/CkSourceMapper.xml
 @@ -78,6 +78,7 @@
@@ -184,9 +148,11 @@
    <select id="selectLogCountByMonitor" resultType="java.util.LinkedHashMap">
      SELECT JOB_ID AS jobId, COUNT(*) AS cnt
        FROM ck_job_log
+diff --git a/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java b/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
+index 42fce31..00fbb09 100644
 --- a/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
 +++ b/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
-@@ -16,9 +16,16 @@
+@@ -16,9 +16,16 @@ import com.vanv.util.RspResult;
  import com.vanv.util.StringUtils;
  import lombok.extern.slf4j.Slf4j;
  import org.springframework.beans.factory.annotation.Autowired;
@@ -203,7 +169,7 @@
  import java.util.ArrayList;
  import java.util.LinkedHashMap;
  import java.util.List;
-@@ -38,6 +45,17 @@
+@@ -38,6 +45,17 @@ public class SourceCheckController {
      @Autowired
      CkJobLogService ckJobLogService;
  
@@ -221,7 +187,7 @@
      @RequestMapping(value = "/paged", method = RequestMethod.GET)
      @ResponseBody
      public Paged<CkSource> pagedObject(Integer page, Integer limit,
-@@ -173,6 +191,8 @@
+@@ -173,6 +191,8 @@ public class SourceCheckController {
              Map<String, Object> item = new LinkedHashMap<>();
              item.put("sourceId", row.get("sourceId"));
              item.put("sourceName", row.get("sourceName"));
@@ -230,7 +196,7 @@
              item.put("siteId", row.get("siteId"));
              item.put("siteName", row.get("siteName"));
              item.put("tableName", row.get("tableName"));
-@@ -190,8 +210,9 @@
+@@ -190,8 +210,9 @@ public class SourceCheckController {
              } else {
                  item.put("dataState", hasAlarm > 0 ? "abnormal" : "normal");
              }
@@ -242,7 +208,7 @@
              item.put("coverage", null);
              item.put("coverageUnavailable", true);
              list.add(item);
-@@ -216,13 +237,339 @@
+@@ -216,6 +237,14 @@ public class SourceCheckController {
              item.put("coverageUnavailable", Boolean.TRUE.equals(cov.get("unavailable")));
              if (Boolean.TRUE.equals(cov.get("unavailable"))) anyUnavailable = true;
          }
@@ -257,10 +223,10 @@
          Map<String, Object> data = new LinkedHashMap<>();
          data.put("total", total);
          data.put("list", list);
-         data.put("coverageUnavailable", anyUnavailable);
-+        return RspResult.getSuccessResult().setData(data);
-+    }
-+
+@@ -223,6 +252,326 @@ public class SourceCheckController {
+         return RspResult.getSuccessResult().setData(data);
+     }
+ 
 +    /**
 +     * C01：按 monitorId 读**单条**检查项。
 +     *
@@ -311,7 +277,8 @@
 +            cond.eq("job_id", monitorId);
 +        }
 +        Integer groupId = AuthCenter.getGroupId();
-+        if (groupId != null) {
++        // 组 0 是管理员：看全部，不按组过滤（与 paged-logs 口径一致）。
++        if (groupId != null && groupId != 0) {
 +            cond.eq("group_id", groupId);
 +        }
 +        cond.orderByDesc("LOG_ID");
@@ -325,9 +292,9 @@
 +        data.put("limit", size);
 +        data.put("total", pageInfo.getTotal());
 +        data.put("items", items);
-         return RspResult.getSuccessResult().setData(data);
-     }
- 
++        return RspResult.getSuccessResult().setData(data);
++    }
++
 +    /**
 +     * C06：单次运行详情（按 runId 或 logId 定位）。
 +     *
@@ -349,7 +316,8 @@
 +            cond.eq("job_id", monitorId);
 +        }
 +        Integer groupId = AuthCenter.getGroupId();
-+        if (groupId != null) {
++        // 组 0 是管理员：看全部，不按组过滤（与 paged-logs 口径一致）。
++        if (groupId != null && groupId != 0) {
 +            cond.eq("group_id", groupId);
 +        }
 +        cond.orderByDesc("LOG_ID");
@@ -582,13 +550,11 @@
      private static long toLong(Object value) {
          if (value instanceof Number) {
              return ((Number) value).longValue();
-@@ -264,7 +611,9 @@
-         int i = ckSourceService.updateObject(ckSource, ActionEnum.WEB_UPDATE, "从页面更新");
-         Map<String, Object> data = new LinkedHashMap<>();
-         data.put("id", ckSource.getId());
-+        data.put("ver", ckSource.getVer());
-         data.put("affected", i);
-+        // 回执带上最新 ver，前端保存后直接用它作为下一次 CAS 的基线，不必再回查。
-         return RspResult.getSuccessResult().setMsg("更新成功，影响 " + i + " 条记录").setData(data);
-     }
- 
+@@ -398,6 +747,7 @@ public class SourceCheckController {
+             cond.eq("job_id", monitorId);
+         }
+         Integer groupId = AuthCenter.getGroupId();
++        // 组 0 是管理员：看全部，不按组过滤（与 paged-logs 口径一致）。
+         if (groupId != null && groupId != 0) {
+             cond.eq("group_id", groupId);
+         }
