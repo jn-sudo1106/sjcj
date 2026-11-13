@@ -1,0 +1,12 @@
+diff --git a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
+index 9815ed7..b6cea6b 100644
+--- a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
++++ b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java
+@@ -252,2 +252,7 @@ public class CkSourceService implements IService<CkSource, QueryWrapper<CkSource
+         String cron = ckSource.getSchedule();
++        // AI drafts/manual-only checks have no cron. Keep them out of the SQL
++        // scheduler without inventing a schedule; the script runner owns execution.
++        if (isScriptCheck(ckSource) && (cron == null || cron.trim().isEmpty())) {
++            return new Date(System.currentTimeMillis() + 10L * 365 * 24 * 3600 * 1000);
++        }
+         if (cron.toUpperCase().startsWith("AFTER-")) {

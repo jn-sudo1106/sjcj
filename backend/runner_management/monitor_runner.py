@@ -31,6 +31,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -142,6 +143,9 @@ def load_config() -> Dict[str, Any]:
     if db["database"]:
         env["DQ_DB_NAME"] = str(db["database"])
     env.update({k: str(v) for k, v in (cfg.get("env") or {}).items()})
+    # 兼容已生成的 DB_* 脚本，连接目标与执行器的 DQ_DB_* 配置保持一致。
+    for suffix in ("HOST", "PORT", "USER", "PASSWORD", "NAME"):
+        env["DB_" + suffix] = env.get("DQ_DB_" + suffix, "")
     cfg["env"] = env
     cfg["timeout"] = int(cfg.get("timeout") or DEFAULT_TIMEOUT)
     return cfg
@@ -317,12 +321,55 @@ def parse_report(stdout: str) -> Optional[Dict[str, Any]]:
     return best
 
 
+def table_fields(table: str, cfg: Dict[str, Any]) -> List[str]:
+    """查询当前执行环境的物理字段，不使用平台登记字段推测表结构。"""
+    import pymysql
+    db = cfg.get("db") or {}
+    parts = table.split(".")
+    if len(parts) == 1:
+        parts.insert(0, str(db.get("database") or ""))
+    if len(parts) != 2 or any(not re.fullmatch(r"[A-Za-z0-9_$]+", part) for part in parts):
+        raise ValueError("请选择有效的数据库表名")
+    conn = pymysql.connect(host=db.get("host"), port=int(db.get("port") or 3306),
+                           user=db.get("user"), password=db.get("password"),
+                           database=db.get("database") or None, connect_timeout=5, read_timeout=10)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                           "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION", tuple(parts))
+            fields = [row[0] for row in cursor.fetchall()]
+        if not fields:
+            raise ValueError("表 %s 不存在或当前账号无权读取字段" % table)
+        return fields
+    finally:
+        conn.close()
+
+
+def report_reason(report: Dict[str, Any]) -> str:
+    reasons = report.get("abnormalReasons")
+    return str(report.get("reason") or report.get("error") or
+               ("；".join(str(item) for item in reasons) if isinstance(reasons, list) else reasons) or "")
+
+
 def execute(script: str, conf: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
     """子进程执行脚本；返回 ``{status, report, exitCode, durationMs, stderr, error}``。"""
 
     started = _dt.datetime.now()
     window = window_for(conf, business_now())
+    table = str(conf.get("tableName") or conf.get("table") or "").strip()
+    column = str(conf.get("timeColumn") or conf.get("dateColumn") or "").strip()
+    if table:
+        try:
+            fields = table_fields(table, cfg)
+            if column and column not in fields:
+                raise ValueError("表 %s 中不存在入库时间字段 %s，请重新选择并生成脚本" % (table, column))
+        except Exception as exc:
+            return {"status": STATUS_ERROR, "report": None, "exitCode": None,
+                    "durationMs": 0, "stderr": "", "error": "执行前字段校验失败：%s" % exc}
     env = dict(cfg.get("env") or {})
+    env["DQ_TABLE_NAME"] = table
+    env["DQ_TIME_COLUMN"] = column
+    env["DQ_SOURCE_ID"] = str(conf.get("sourceId") or "")
     env["DQ_START_DATE"] = window["start"]
     env["DQ_END_DATE"] = window["end"]
     handle = tempfile.NamedTemporaryFile("w", suffix=".monitor.py", delete=False, encoding="utf-8")
@@ -373,6 +420,7 @@ def execute(script: str, conf: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str,
                 "durationMs": duration,
             }
         raw_status = str(report.get("status") or "").upper()
+        report["reason"] = report_reason(report)
         if raw_status in (STATUS_ABNORMAL, "ABNORMAL"):
             status = STATUS_ABNORMAL
         elif raw_status in (STATUS_NORMAL, "NORMAL", "OK", "PASS"):
@@ -391,7 +439,7 @@ def execute(script: str, conf: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str,
             "status": status,
             "report": report,
             "exitCode": completed.returncode,
-            "error": None,
+            "error": report["reason"] if status == STATUS_ERROR else None,
             "stdout": completed.stdout,
             "stderr": completed.stderr,
             "durationMs": duration,
@@ -472,7 +520,9 @@ def run_due(
                     )
                     continue
                 claimed = True
-            outcome = execute(conf.get("script") or "", conf, cfg)
+            execution_conf = dict(conf, tableName=row.get("table_name") or conf.get("tableName") or "",
+                                  sourceId=row.get("source_id"))
+            outcome = execute(conf.get("script") or "", execution_conf, cfg)
             run_id = "run-%s-%s" % (monitor_id, moment.strftime("%Y%m%d%H%M%S"))
             item = {
                 "runId": run_id,

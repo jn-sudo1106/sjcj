@@ -5,10 +5,46 @@ import json
 import os
 import sys
 import unittest
+from unittest.mock import mock_open, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from backend.runner_management import monitor_runner as runner  # noqa: E402
+
+
+class DatabaseEnvironmentTest(unittest.TestCase):
+    def test_invalid_column_stops_before_script_execution(self):
+        with patch.object(runner, "table_fields", return_value=["CREATE_DT"]), \
+                patch.object(runner.subprocess, "run") as run:
+            result = runner.execute("print('should not run')", {"tableName": "sense_data.T", "timeColumn": "msg_time"}, {})
+        self.assertEqual(result["status"], runner.STATUS_ERROR)
+        self.assertIn("不存在入库时间字段 msg_time", result["error"])
+        run.assert_not_called()
+
+    def test_execution_receives_table_column_and_window(self):
+        import types
+        report = {"status": "ERROR", "abnormalReasons": ["具体失败原因"]}
+        with patch.object(runner, "table_fields", return_value=["CREATE_DT"]), \
+                patch.object(runner.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(report), stderr="", returncode=0)) as run:
+            result = runner.execute("pass", {"tableName": "sense_data.T", "timeColumn": "CREATE_DT"}, {"timeout": 10})
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["DQ_TABLE_NAME"], "sense_data.T")
+        self.assertEqual(env["DQ_TIME_COLUMN"], "CREATE_DT")
+        self.assertIn("DQ_START_DATE", env)
+        self.assertEqual(result["report"]["reason"], "具体失败原因")
+
+    def test_legacy_and_dq_scripts_use_same_configured_database(self):
+        config = {
+            "db": {"host": "test-db", "port": 9907, "user": "reader", "password": "test-only", "database": "sense_db"},
+            "env": {"DQ_DB_HOST": "configured-db", "DB_PORT": "3306"},
+        }
+        with patch.dict(os.environ, {"RUNNER_MONITOR_RUNNER_CONFIG": "/config.json", "DB_HOST": "old-db"}, clear=True), \
+                patch("builtins.open", mock_open(read_data=json.dumps(config))):
+            cfg = runner.load_config()
+        for suffix in ("HOST", "PORT", "USER", "PASSWORD", "NAME"):
+            self.assertEqual(cfg["env"]["DB_" + suffix], cfg["env"]["DQ_DB_" + suffix])
+        self.assertEqual(cfg["env"]["DB_PORT"], "9907")
+        self.assertEqual(cfg["env"]["DB_HOST"], "configured-db")
 
 
 class CronTest(unittest.TestCase):

@@ -180,7 +180,12 @@ const sourceLikes = computed(() =>
 
 const allRows = computed<MonitorSourceRow[]>(() => {
   // 服务端聚合可用时直接用它：一行一个源、含未配置检查的源，且分组权限由后端保证。
-  if (scopeKind.value !== 'source' && summaryRows.value) return summaryRows.value
+  if (scopeKind.value !== 'source' && summaryRows.value) {
+    return summaryRows.value.map((row) => ({
+      ...row,
+      monitors: records.value.filter((monitor) => monitor.sourceId === row.sourceId),
+    }))
+  }
   if (scopeKind.value === 'source') {
     const monitors = scopedRecords.value
     return summarizeSources(monitors, [
@@ -203,8 +208,8 @@ const summaryUnsupported = computed(
 )
 const filteredRows = computed(() => {
   if (!summaryMode.value) return filterSourceRows(allRows.value, applied)
-  if (!summaryUnsupported.value) return summaryRows.value ?? []
-  return filterSourceRows(summaryRows.value ?? [], { ...applied, enable: 'all', checkDate: 'all' })
+  if (!summaryUnsupported.value) return allRows.value
+  return filterSourceRows(allRows.value, { ...applied, enable: 'all', checkDate: 'all' })
 })
 const pagedRows = computed(() =>
   summaryMode.value
@@ -481,8 +486,8 @@ async function beforeEditorClose(done: () => void): Promise<void> {
 }
 
 function onEditorSaved(record: MonitorRecordView | null): void {
-  // 回读不确定时保留候选；成功后也留在同一记录，避免再次保存变成重复新增。
-  if (record) editingRecord.value = record
+  // 回读不确定时保留编辑内容；确认保存成功后关闭弹窗。
+  if (record) onEditorCancel()
   void refresh()
 }
 

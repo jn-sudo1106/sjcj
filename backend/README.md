@@ -12,6 +12,16 @@ python -m backend.runner_management.server
 
 `RUNNER_AUTH_URL` 必须填写真实的 JSON 身份接口，例如 `http://118.25.96.217:9999/api/user-info.htm`；不可漏掉 `/api`，否则可能取得 HTML 页面。认证服务连接或响应格式异常返回 502；只有确认会话无效才返回 401，避免误清除用户登录状态。
 
+186 同机部署使用 `RUNNER_AUTH_URL=http://127.0.0.1:9100/api/user-info.htm`；217 管理服务使用其同环境业务后端的 `/api/user-info.htm`，不要使用 `/api/v1/user/info` 或连接到 186。Nginx 只转发原始 `Cookie` / `Access-Token`，并清空 `X-Runner-Gateway`；该头不再授予登录身份或管理员权限。业务账号身份保留原始用户 ID，写操作仍要求 `roles` 数组包含 `admin`。`RUNNER_ADMIN_TOKEN` 仅用于受控运维调用，不得注入每个浏览器请求。部署验收须包含匿名 401、普通用户写操作 403、管理员操作成功，以及不同账号的批次隔离。
+
+批量监控另需配置同环境的 `RUNNER_NODE_TYPE_BACKEND`：186 同机为 `http://127.0.0.1:9100`，217 按其实际业务后端设置（如 `http://118.25.96.217:9999`）。该配置不含 `/api` 后缀，必须与认证接口属于同一环境；否则即使登录验证通过，预检仍会报“尚未配置现有业务后台地址”。部署 nginx 时还应确认服务器级 `root` 与前端目录一致，避免精确匹配的 `/index.html` 继承默认欢迎页目录。
+
+AI 监控脚本的业务库由 `RUNNER_MONITOR_RUNNER_CONFIG` 指向的私有 JSON 配置提供，连接字段为 `db.host/port/user/password/database`，脚本环境使用 `DQ_DB_*`（可通过配置的 `env` 覆盖）。执行器同时派生一致的 `DB_*` 别名，兼容已生成的脚本。186 当前业务库端口为 9907，这个端口没有写死在代码中；部署 217 必须配置其自己的业务库，不复制 186 的数据库配置或凭据。此处与下面 Runner 管理数据的 `RUNNER_DB_*` 是两套配置。
+
+监控发布须同时检查前端、Python Runner 和 Java 业务后端。空计划 AI 草稿保存依赖 `java_patches/ai_monitor_empty_schedule.patch`：需在目标环境对应的 Java 源码中合入并构建；仅把此补丁文件推送到前端仓库不会修改 Java 运行产物。上线前以目标环境表结构重新核对脚本时间字段，不能把 186 的脚本或字段选择直接视为 217 已验证；至少验收草稿保存、脚本试跑、保存后关闭弹窗及失败回执一致性。
+
+字段候选由同一执行器的 `POST /api/runner-management/monitor-runner/table-fields` 查询业务库 `information_schema.COLUMNS`。接口缺失或查询失败时不回退到平台登记的业务字段；业务字段名可能实际映射到 `K1…K20`。执行器在试跑和正式执行前校验所选时间列，并注入 `DQ_TABLE_NAME`、`DQ_TIME_COLUMN`、`DQ_SOURCE_ID`、`DQ_START_DATE`、`DQ_END_DATE`。生成脚本应使用这些参数；有 `SOURCE_ID` 的共享表必须限定当前源。217 发布时需要同步部署此字段查询接口和新版前端；历史脚本不会因更改下拉框自动改写，必须重新生成并试跑。
+
 默认使用本地 SQLite。需要临时 MySQL 时，先设置 `RUNNER_DB_HOST`、`RUNNER_DB_NAME`、`RUNNER_DB_USER`、`RUNNER_DB_PASSWORD` 环境变量再启动服务；MySQL 端口默认是 **8102**，如需更改可设置 `RUNNER_DB_PORT`。程序会创建六张 `ce_runner_` 前缀的表。不要把密码写进代码或仓库。
 
 本机已恢复原 MySQL 连接，并保存于被 Git 忽略的 `backend/.runtime/runner-management.local.json`。后续仍在 `E:\ce` 执行 `python -m backend.runner_management.server`：未显式设置 MySQL 环境变量时，会自动读取该文件。密码使用 Windows DPAPI 加密，仅原 Windows 用户可解密；复制到其他机器需要重新配置连接或使用环境变量。配置损坏或无法解密时停止启动，不会悄悄改连空 SQLite。完整的 MySQL 环境变量优先于本机配置。

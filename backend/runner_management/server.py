@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .artifacts import ArtifactStore
 from .store import MySqlStore, create_store
@@ -47,6 +47,16 @@ RESPONSE_SENT = object()
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """管理服务登录校验：3xx 表示会话失效（跳登录/登出页），不能当成服务故障。"""
+
+    def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+        return None
+
+
+_AUTH_OPENER = build_opener(_NoRedirect)
 
 
 class ApiError(Exception):
@@ -1156,24 +1166,38 @@ class Application:
         auth_url = os.getenv("RUNNER_AUTH_URL", "")
         if auth_url:
             forwarded = {key: headers[key] for key in ("Cookie", "Access-Token") if headers.get(key)}
-            if not forwarded:
+            forwarded.setdefault("X-Requested-With", "XMLHttpRequest")
+            forwarded.setdefault("Accept", "application/json")
+            if not forwarded.get("Cookie") and not forwarded.get("Access-Token"):
                 raise ApiError("请先登录", 401)
             try:
-                with urlopen(Request(auth_url, headers=forwarded), timeout=5) as response:
-                    payload = json.load(response)
+                with _AUTH_OPENER.open(Request(auth_url, headers=forwarded), timeout=5) as response:
+                    raw = response.read(65537)
+                    if len(raw) > 65536:
+                        raise ValueError('identity response too large')
+                    payload = json.loads(raw)
             except HTTPError as exc:
-                if exc.code in (401, 403):
+                # 网关/加签失败、会话过期都可能以 3xx 跳登录页或 401/403 返回：
+                # 跳转与鉴权失败是「没登录」，不是「认证服务坏了」，必须分开报。
+                if exc.code in (401, 403) or 300 <= exc.code < 400:
                     raise ApiError("登录状态验证失败", 401) from exc
-                raise ApiError("认证服务请求失败，请检查管理服务的登录校验配置", 502) from exc
+                raise ApiError(
+                    "认证服务请求失败（HTTP %s），请检查管理服务的登录校验配置" % exc.code, 502
+                ) from exc
             except (URLError, TimeoutError, OSError, ValueError) as exc:
                 raise ApiError("认证服务不可用或返回格式错误，请检查登录校验地址", 502) from exc
             if not isinstance(payload, dict):
                 raise ApiError("认证服务返回格式错误，请检查登录校验地址", 502)
-            if str(payload.get("code")) != "0" or not payload.get("data"):
+            if payload.get('success') is False or str(payload.get("code")) != "0" or not payload.get("data"):
                 raise ApiError("请先登录", 401)
             if not isinstance(payload["data"], dict):
                 raise ApiError("认证服务返回的用户信息格式错误", 502)
             roles = payload["data"].get("roles", [])
+            if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles):
+                raise ApiError("认证服务返回的角色格式错误", 502)
+            identity = payload['data']
+            if not any(identity.get(key) for key in ('userLoginName', 'userName', 'id')):
+                raise ApiError("认证服务未返回用户标识，请检查登录校验地址", 502)
             if write and "admin" not in roles:
                 raise ApiError("需要管理员权限", 403)
             return payload['data']
@@ -1670,6 +1694,39 @@ def monitor_runner_status(app) -> dict:
     return status
 
 
+def monitor_runner_test_script(payload: dict) -> dict:
+    """试跑一段候选脚本（编辑器「测试脚本」）：不落库、不发通知，只返回结构化结论。
+
+    走和执行器完全相同的能力（Python 子进程 + DQ_* 环境变量），
+    避免依赖 186 上并不存在的 vrule 服务。
+    """
+    from . import monitor_runner
+    script = str(payload.get("script") or "")
+    if not script.strip():
+        raise ApiError("缺少脚本正文，无法测试", 400)
+    cfg = monitor_runner.load_config()
+    conf = {
+        "kind": "ai",
+        "tableName": str(payload.get("tableName") or ""),
+        "timeColumn": str(payload.get("timeColumn") or ""),
+        "sourceId": str(payload.get("sourceId") or ""),
+        "window": payload.get("window") or {"type": "today"},
+        "schedule": {},
+    }
+    outcome = monitor_runner.execute(script, conf, cfg)
+    report = outcome.get("report") or {}
+    return {
+        "success": outcome.get("status") != monitor_runner.STATUS_ERROR,
+        "status": outcome.get("status"),
+        "checkedCount": report.get("checkedCount"),
+        "abnormalCount": report.get("abnormalCount"),
+        "reason": report.get("reason") or outcome.get("error"),
+        "window": report.get("window"),
+        "durationMs": outcome.get("durationMs"),
+        "stderr": (outcome.get("stderr") or "")[-500:],
+    }
+
+
 def monitor_runner_connect(cfg):
     """按执行器配置连接业务库；pymysql 延迟导入，未安装时按不可用处理。"""
     import pymysql
@@ -2077,6 +2134,19 @@ class Handler(BaseHTTPRequestHandler):
             return run_monitor_watch(app)
         if sub == '/monitor-runner/status' and method == 'GET':
             return monitor_runner_status(app)
+        if sub == '/monitor-runner/table-fields' and method == 'POST':
+            from . import monitor_runner
+            try:
+                return {"fields": monitor_runner.table_fields(str((body or {}).get('tableName') or ''), monitor_runner.load_config())}
+            except Exception as exc:
+                raise ApiError("读取实际表结构失败：%s" % exc, 503) from exc
+        if sub == '/monitor-runner/test-script' and method == 'POST':
+            from . import monitor_runner
+            try:
+                return monitor_runner_test_script(body or {})
+            except monitor_runner.RunnerUnavailable as exc:
+                self.respond(503, {"error": str(exc)})
+                return RESPONSE_SENT
         if sub == '/monitor-runner/scan' and method == 'POST':
             from . import monitor_runner
             try:

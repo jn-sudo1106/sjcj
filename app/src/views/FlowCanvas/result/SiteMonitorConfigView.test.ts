@@ -191,7 +191,7 @@ describe('SiteMonitorConfigView · 新增/编辑锁源', () => {
     expect(editor.props('sourceLocked')).toBe(true)
   })
 
-  it('编辑器保存后弹窗保留、记录切到回读结果，并通知容器刷新（不在这里自己拉列表）', async () => {
+  it('编辑器保存后关闭弹窗，并通知容器刷新，再次新增不带旧记录', async () => {
     const wrapper = mountView()
     await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
     const saved = monitor({ id: 'm-new', name: '新建检查项' })
@@ -199,12 +199,12 @@ describe('SiteMonitorConfigView · 新增/编辑锁源', () => {
     await wrapper.findComponent(EditorStub).vm.$emit('saved', saved)
     await flushPromises()
 
-    // 规格：保存后不关窗（可继续编辑/测试），并把当前记录换成回读结果，避免再次保存变成重复新增。
-    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(true)
-    expect(wrapper.findComponent(EditorStub).props('record')).toMatchObject({ id: 'm-new' })
+    expect(wrapper.find('[data-testid="site-monitor-editor-dialog"]').exists()).toBe(false)
     const events = wrapper.emitted('saved')!
     expect(events).toHaveLength(1)
     expect((events[0]![0] as MonitorRecordView).id).toBe('m-new')
+    await wrapper.get('[data-testid="site-monitor-add-monitor"]').trigger('click')
+    expect(wrapper.findComponent(EditorStub).props('record')).toBeNull()
   })
 
   it('保存后回读不到记录时保留弹窗并原样告诉容器（由容器/编辑器提示未回读）', async () => {

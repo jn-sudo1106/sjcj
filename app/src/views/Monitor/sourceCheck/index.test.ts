@@ -199,6 +199,9 @@ describe('一行一源与源目录', () => {
     expect(wrapper.text()).toContain('未配置源')
     expect(wrapper.text()).toContain('未配置检查')
     expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
+    await buttonByText(wrapper, '展开检查').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(rec().name)
     expect(wrapper.text()).toMatch(/已配置\s*1/)
   })
 
@@ -262,6 +265,9 @@ describe('一行一源与源目录', () => {
     })
     const wrapper = await mountPage()
     expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(true)
+    await buttonByText(wrapper, '展开检查').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(rec().name)
     expect(wrapper.text()).toContain('物流吞吐量'.slice(0, 0) + '港口吞吐量')
     expect(wrapper.text()).toContain('未配置检查')
     expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
@@ -408,7 +414,7 @@ describe('行内展开与批量', () => {
 })
 
 describe('新增监控', () => {
-  it('保存回读未知时保留候选，回读成功后后续编辑沿用该记录身份', async () => {
+  it('保存回读未知时保留候选，回读成功后关闭且新增不带旧记录', async () => {
     const wrapper = await mountPage()
     await buttonByText(wrapper, '新增监控').trigger('click')
     await flushPromises()
@@ -418,7 +424,10 @@ describe('新增监控', () => {
     expect(wrapper.find('.stub-editor').exists()).toBe(true)
     editor.vm.$emit('saved', rec({ id: 'new-monitor' }))
     await flushPromises()
-    expect(wrapper.getComponent({ name: 'MonitorConfigEditor' }).props('record')).toMatchObject({ id: 'new-monitor' })
+    expect(wrapper.find('.stub-editor').exists()).toBe(false)
+    await buttonByText(wrapper, '新增监控').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'MonitorConfigEditor' }).props('record')).toBeNull()
     wrapper.unmount()
   })
 

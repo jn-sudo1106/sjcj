@@ -28,6 +28,7 @@ import {
   timeColumnOptionsOf,
   validateForm,
   versionOf,
+  windowOfForm,
 } from './monitor-editor/model'
 import './monitor-editor/dialog.css'
 import { EXEC_TEXT } from '@/utils/monitor/record'
@@ -39,6 +40,7 @@ import {
   resolveMonitorTableFields,
   summarizeExecutionResult,
   testMonitorScript,
+  testMonitorScriptWithRunner,
 } from './monitor-editor/generation'
 
 /**
@@ -91,8 +93,7 @@ const descTouched = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const tableOptions = ref<Array<{ tableId: string; tableName: string; label: string }>>([])
-/** 目录里已带回的真实字段（tableName → prop 列表）：优先用它出「入库时间字段」候选，省一次请求 */
-const tableFieldsByName = ref<Record<string, string[]>>({})
+/** 执行环境返回的物理字段，不能用目录中的业务字段别名替代。 */
 const timeColumnFields = ref<string[]>([])
 const providerOptions = ref<ModelProviderOption[]>([])
 const modelOptions = ref<ModelOption[]>([])
@@ -205,8 +206,11 @@ const saveHint = computed(() =>
     : '生成与测试不改变生效版本；保存即生效',
 )
 
-/** 入库时间字段候选：真实字段里像时间列的；拿不到字段清单时退回固定候选（让用户手选，不猜） */
-const timeColumnOptions = computed(() => timeColumnOptionsOf(timeColumnFields.value, form.timeColumn))
+/** 仅展示执行环境真实存在的时间列；旧配置仍保留，但缺失字段需重新选择。 */
+const timeColumnOptions = computed(() => timeColumnFields.value.length
+  ? timeColumnOptionsOf(timeColumnFields.value).filter((field) => timeColumnFields.value.includes(field))
+  : [])
+const timeColumnError = ref('')
 /** 「上一个周期」的窗口长度 = 当前执行计划间隔（算不出来按 24 小时） */
 const windowPeriodHours = computed(() => scheduleIntervalHours(form.schedule))
 const windowHint = computed(() => {
@@ -340,18 +344,14 @@ function applyTimeColumnFields(fields: readonly string[]): void {
   if (candidates.length === 1) form.timeColumn = candidates[0]!
 }
 
-/** 换表/读源后刷新候选：目录里有字段直接用，否则按表 ID/物理名补一次（与脚本生成同一条解析链） */
+/** 换表/读源后向执行器查询实际物理字段。 */
 function syncTimeColumnFields(): void {
   const tableName = form.tableName.trim()
   if (!tableName) {
     timeColumnFields.value = []
     return
   }
-  const fromCatalog = tableFieldsByName.value[tableName]
-  if (fromCatalog?.length) {
-    applyTimeColumnFields(fromCatalog)
-    return
-  }
+  timeColumnFields.value = []
   void loadTimeColumnFields()
 }
 
@@ -363,18 +363,18 @@ async function loadTimeColumnFields(): Promise<void> {
     return
   }
   const tableId = tableOptions.value.find((table) => table.tableName === tableName)?.tableId ?? ''
-  const signature = formSignature(form)
-  const wasClean = signature === baseline.value
+  timeColumnError.value = ''
   try {
     const fields = await resolveMonitorTableFields({ tableName, tableId })
     if (request !== timeColumnRequest || form.tableName.trim() !== tableName) return
-    const untouched = formSignature(form) === signature
+    const wasClean = formSignature(form) === baseline.value
     applyTimeColumnFields(fields)
     // 异步带出的唯一候选属于系统补全，不算用户改动（同「唯一关联表」的处理）
-    if (wasClean && untouched) baseline.value = formSignature(form)
-  } catch {
+    if (wasClean) baseline.value = formSignature(form)
+  } catch (error) {
     if (request !== timeColumnRequest) return
     applyTimeColumnFields([])
+    timeColumnError.value = errorText(error)
   }
 }
 
@@ -382,22 +382,15 @@ function mergeTableOptions(group: EntryTypeGroup | null): void {
   const merged: EntryType[] = [...(group?.list2 ?? []), ...(group?.list1 ?? []), ...(group?.list3 ?? [])]
   const seen = new Set<string>()
   const options: Array<{ tableId: string; tableName: string; label: string }> = []
-  const fieldsByName: Record<string, string[]> = {}
   for (const table of merged) {
     if (!table?.tableId || seen.has(table.tableId)) continue
     seen.add(table.tableId)
     options.push({ tableId: table.tableId, tableName: table.tableName, label: table.name || table.tableName })
-    const fields = (table.fields ?? [])
-      .filter((field) => !!field.prop)
-      .map((field) => field.prop.trim())
-      .filter(Boolean)
-    if (fields.length) fieldsByName[table.tableName] = fields
   }
   if (form.tableName && !options.some((table) => table.tableName === form.tableName)) {
     options.unshift({ tableId: form.tableName, tableName: form.tableName, label: '当前关联表' })
   }
   tableOptions.value = options
-  tableFieldsByName.value = fieldsByName
 }
 
 async function loadSourceContext(): Promise<void> {
@@ -595,6 +588,11 @@ async function onGenerate(): Promise<void> {
   try {
     // 源没绑定流程时退回「按表单选定的主表」生成独立监控脚本（configId=0），不再直接报错
     const tableId = tableOptions.value.find((table) => table.tableName === form.tableName)?.tableId ?? ''
+    const fields = await resolveMonitorTableFields({ tableName: form.tableName, tableId })
+    applyTimeColumnFields(fields)
+    if (!form.timeColumn || !fields.includes(form.timeColumn)) {
+      throw new Error(`请选择当前表实际存在的入库时间字段（当前：${form.timeColumn || '未选择'}），然后重新生成脚本`)
+    }
     const context = await resolveMonitorGenerationContext(form.sourceId, {
       tableName: form.tableName,
       tableId,
@@ -607,7 +605,7 @@ async function onGenerate(): Promise<void> {
       // 再追加主表真实字段与入库时间列，避免模型自己发明列名（实测失败原因之一）
       systemPrompt: augmentMonitorSystemPrompt(
         form.systemPrompt.trim() || defaultSystemPrompt(),
-        timeColumnFields.value,
+        fields,
         form.timeColumn,
       ),
       providerCode: form.providerCode,
@@ -658,22 +656,41 @@ async function onTest(): Promise<void> {
   const target = pending.value
     ? '新生成、尚未保存的脚本（候选）'
     : `生效 ${form.version || versionOf(recordState.value?.conf) || '当前'} 的脚本`
+  const scriptText = displayedScript.value.trim()
   const path = activePath.value.trim()
-  if (!path) {
-    ElMessage.warning('当前只有脚本正文，没有可执行的文件路径：请重新生成脚本，或稍后重试')
+  if (!scriptText && !path) {
+    ElMessage.warning('还没有可测试的脚本：先生成脚本')
     return
   }
   testing.value = true
   try {
-    const outcome = await testMonitorScript(path)
+    // 优先用数据监控执行器试跑正文：186 这类环境没有 vrule 执行器，旧端点会 404/504。
+    const viaRunner = scriptText
+      ? await testMonitorScriptWithRunner({
+          script: scriptText,
+          sourceId: form.sourceId,
+          tableName: form.tableName,
+          timeColumn: form.timeColumn,
+          window: windowOfForm(form),
+        })
+      : null
+    if (!viaRunner && !path) throw new Error('执行器不可用，且脚本没有文件路径，无法测试')
+    const outcome = viaRunner ?? await testMonitorScript(path)
     testResult.value = {
-      label: '测试，未通知',
+      label: outcome.ok ? '测试，未通知' : '测试失败，未通知',
       target,
       summary: outcome.summary,
       note: '未发送业务通知，未更新正式最近结果与启停状态',
       at: stamp(),
     }
-    ElMessage.success('测试完成：未发送业务通知，未更新正式结果')
+    const message = `${outcome.summary}；未发送业务通知，未更新正式结果`
+    if (!outcome.ok) {
+      ElMessage.error(message)
+    } else if (outcome.raw && typeof outcome.raw === 'object' && 'status' in outcome.raw && outcome.raw.status === 'ABNORMAL') {
+      ElMessage.warning(message)
+    } else {
+      ElMessage.success(message)
+    }
   } catch (error) {
     testResult.value = {
       label: '测试失败，未通知',
@@ -1014,6 +1031,10 @@ defineExpose({
                       <option v-for="column in timeColumnOptions" :key="column" :value="column">{{ column }}</option>
                     </select>
                     <p class="mc-hint">脚本按这一列统计；不确定时选表的入库时间列</p>
+                    <p v-if="timeColumnError" class="mc-hint">{{ timeColumnError }}</p>
+                    <p v-else-if="form.timeColumn && timeColumnFields.length && !timeColumnFields.includes(form.timeColumn)" class="mc-hint">
+                      当前表不存在字段 {{ form.timeColumn }}，请重新选择并生成脚本。
+                    </p>
                   </div>
                   <div class="mc-field">
                     <label class="mc-label" for="mc-null-policy">字段值为空时</label>

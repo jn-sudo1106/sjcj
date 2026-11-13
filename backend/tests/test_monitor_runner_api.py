@@ -11,6 +11,7 @@ import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 
 from backend.tests import test_monitor_batches as batch_tests
@@ -33,6 +34,19 @@ ITEM = {
     "abnormalCount": 0, "reason": "", "message": "", "durationMs": 12,
     "exitCode": 0, "error": "", "window": {}, "applied": False,
 }
+
+
+class ScriptTestContract(unittest.TestCase):
+    def test_source_and_physical_column_reach_executor_and_reason_is_returned(self):
+        outcome = {"status": "ERROR", "report": {"reason": "不存在字段 msg_time"}}
+        with patch.object(monitor_runner, "load_config", return_value=CFG), \
+                patch.object(monitor_runner, "execute", return_value=outcome) as execute:
+            result = server.monitor_runner_test_script({"script": "pass", "tableName": "sense_data.T",
+                                                        "timeColumn": "CREATE_DT", "sourceId": "123"})
+        self.assertEqual(execute.call_args.args[1]["sourceId"], "123")
+        self.assertEqual(execute.call_args.args[1]["timeColumn"], "CREATE_DT")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "不存在字段 msg_time")
 
 
 class _Result:
@@ -383,6 +397,57 @@ class MonitorRunnerRouteTest(unittest.TestCase):
         self.assertEqual(json.load(caught.exception), {"message": "limit 无效"})
         caught.exception.close()
 
+
+class AuthRedirectTest(unittest.TestCase):
+    """管理服务登录校验：3xx 跳登录页 = 会话失效（401），不是认证服务故障（502）。"""
+
+    class _Handler(BaseHTTPRequestHandler):
+        mode = "redirect"
+
+        def do_GET(self):  # noqa: N802
+            if self.mode == "redirect":
+                self.send_response(302)
+                self.send_header("Location", "http://127.0.0.1:%d/api/logout.htm" % self.server.server_port)
+                self.end_headers()
+            else:
+                self.send_response(500)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    def setUp(self):
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._Handler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.url = "http://127.0.0.1:%d/api/v1/user/info" % self.httpd.server_port
+        self.patches = [
+            patch.dict(os.environ, {"RUNNER_AUTH_URL": self.url, "RUNNER_ADMIN_TOKEN": ""}, clear=False),
+        ]
+        for item in self.patches:
+            item.start()
+        self.app = server.Application.__new__(server.Application)
+
+    def tearDown(self):
+        for item in self.patches:
+            item.stop()
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def test_redirect_to_login_means_not_logged_in(self):
+        with self.assertRaises(server.ApiError) as ctx:
+            self.app.authenticate_admin({"Cookie": "EADMIN_SESSION=x"}, "127.0.0.1")
+        self.assertEqual(ctx.exception.status, 401)
+        self.assertIn("登录状态验证失败", str(ctx.exception))
+
+    def test_server_error_still_reports_auth_service_failure(self):
+        self._Handler.mode = "error"
+        try:
+            with self.assertRaises(server.ApiError) as ctx:
+                self.app.authenticate_admin({"Cookie": "EADMIN_SESSION=x"}, "127.0.0.1")
+            self.assertEqual(ctx.exception.status, 502)
+        finally:
+            self._Handler.mode = "redirect"
 
 if __name__ == "__main__":
     unittest.main()

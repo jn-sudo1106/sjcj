@@ -76,16 +76,18 @@ async function entryWithFields(tableId: string | undefined, tableName: string): 
 }
 
 /**
- * 主表字段清单（prop/itemCode 口径）。
- *
- * 与脚本生成共用同一条解析链（tableId → entryDetail，缺失时按「库.表」物理名精确找一次），
- * 保证「入库时间字段」下拉里出现的就是生成时能看到的真实列，不会出现两套口径。
- * 拿不到字段时返回空数组，调用方退回固定候选，不臆造列名。
+ * 从脚本执行器所在环境读取主表物理字段。接口缺失或读取失败时明确报错，
+ * 不用登记字段冒充物理列；登记字段可能是 K1 等存储列对应的业务别名。
  */
 export async function resolveMonitorTableFields(fallback?: GenerationFallback): Promise<string[]> {
-  const entry = await entryWithFields(fallback?.tableId, (fallback?.tableName ?? '').trim())
-  if (!entry || !Array.isArray(entry.fields)) return []
-  return entry.fields.map((field) => (field.prop || '').trim()).filter(Boolean)
+  const response = await fetch('/api/runner-management/monitor-runner/table-fields', {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tableName: fallback?.tableName ?? '' }),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(payload?.error || '读取实际表结构失败，请确认当前环境已部署字段查询接口')
+  if (!Array.isArray(payload?.fields) || !payload.fields.length) throw new Error('实际表字段清单为空')
+  return payload.fields
 }
 
 /** 提示词里最多列多少个真实字段（够模型写脚本，又不至于把上下文撑爆） */
@@ -105,11 +107,11 @@ export function augmentMonitorSystemPrompt(
 ): string {
   const columns = [...new Set(fields.map((field) => (field || '').trim()).filter(Boolean))].slice(0, MAX_PROMPT_COLUMNS)
   const extras: string[] = []
+  extras.push('执行参数契约：数据库连接只读取 DQ_DB_HOST、DQ_DB_PORT、DQ_DB_USER、DQ_DB_PASSWORD、DQ_DB_NAME 环境变量；不得写死连接地址或凭据。表名读取 DQ_TABLE_NAME，入库时间字段读取 DQ_TIME_COLUMN，源 ID 读取 DQ_SOURCE_ID（物理表有 SOURCE_ID 时必须参数化过滤当前源），检查窗口读取 DQ_START_DATE / DQ_END_DATE；不得把表名、时间字段或窗口写死在 SQL。环境变量缺失时返回 status=ERROR 和 reason，不使用猜测的默认字段。动态标识符必须校验并使用反引号引用。兼容执行器传入的 --format json、--table、--time-column 参数。')
   if (columns.length) extras.push(`该表真实字段：${columns.join(', ')}（只能用这些列名，不要臆造）`)
   const column = (timeColumn || '').trim()
   if (column) extras.push(`按 ${column} 统计入库时间`)
   const prompt = (basePrompt || '').trim()
-  if (!extras.length) return prompt
   return prompt ? `${prompt}\n\n${extras.join('\n')}` : extras.join('\n')
 }
 
@@ -354,6 +356,62 @@ export function summarizeExecutionResult(raw: unknown): string {
     return parts.join('；')
   }
   return truncate(String(raw))
+}
+
+/** 试跑候选脚本用的入参（编辑器「测试脚本」）。 */
+export interface MonitorScriptTestInput {
+  script: string
+  sourceId?: string
+  tableName?: string
+  timeColumn?: string
+  window?: Record<string, unknown>
+}
+
+/**
+ * 用数据监控执行器试跑脚本（186 等没有 vrule 执行器的环境）。
+ * 返回 null 表示执行器端点不存在（404/501），调用方应回退到旧执行端点。
+ */
+export async function testMonitorScriptWithRunner(
+  input: MonitorScriptTestInput,
+): Promise<MonitorTestOutcome | null> {
+  const script = (input.script ?? '').trim()
+  if (!script) throw new Error('还没有脚本正文：先生成脚本再测试')
+  let response: Response
+  try {
+    response = await fetch('/api/runner-management/monitor-runner/test-script', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        script,
+        sourceId: input.sourceId ?? '',
+        tableName: input.tableName ?? '',
+        timeColumn: input.timeColumn ?? '',
+        window: input.window ?? { type: 'today' },
+      }),
+    })
+  } catch {
+    throw new Error('执行器不可达：请确认 monitor-runner 服务已启动')
+  }
+  if (response.status === 404 || response.status === 501) return null
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object' && 'error' in payload
+      ? String(payload.error)
+      : `执行器请求失败（HTTP ${response.status}）`
+    throw new Error(message)
+  }
+  const ok = payload?.success === true
+  const parts: string[] = []
+  parts.push(ok ? '执行成功' : '执行失败')
+  const status = typeof payload?.status === 'string' ? payload.status : ''
+  if (status) parts.push(status === 'ABNORMAL' ? '数据异常' : status === 'NORMAL' ? '数据正常' : status === 'NO_DATA' ? '无待检数据' : status)
+  if (typeof payload?.checkedCount === 'number') parts.push(`检查 ${payload.checkedCount} 条`)
+  if (typeof payload?.abnormalCount === 'number') parts.push(`异常 ${payload.abnormalCount} 条`)
+  const reason = typeof payload?.reason === 'string' ? payload.reason.trim() : ''
+  if (reason) parts.push(truncate(reason))
+  if (typeof payload?.durationMs === 'number') parts.push(`${payload.durationMs}ms`)
+  return { ok, summary: parts.join('；'), raw: payload }
 }
 
 /**

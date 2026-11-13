@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   fetchModelProviders: vi.fn(),
   fetchDefaultModels: vi.fn(),
   resolveGenerationContext: vi.fn(),
+  resolveTableFields: vi.fn(),
 }))
 
 vi.mock('@/api/monitorCenter', async (importOriginal) => {
@@ -51,7 +52,7 @@ vi.mock('@/api', async (importOriginal) => {
 // 生成上下文解析依赖画布种子映射，属于 generation.ts 自己的单元；这里只验编辑器把上下文交给它
 vi.mock('./monitor-editor/generation', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./monitor-editor/generation')>()
-  return { ...actual, resolveMonitorGenerationContext: mocks.resolveGenerationContext }
+  return { ...actual, resolveMonitorGenerationContext: mocks.resolveGenerationContext, resolveMonitorTableFields: mocks.resolveTableFields }
 })
 
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
@@ -199,6 +200,10 @@ async function settle(): Promise<void> {
 }
 
 beforeEach(() => {
+  mocks.resolveTableFields.mockImplementation(async () => {
+    const group = await dataApi.entryTypesGroup('t1')
+    return group.list1[0]?.fields.map((field) => field.prop) ?? []
+  })
   vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
   vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
   vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(GROUP)
@@ -429,7 +434,36 @@ describe('MonitorConfigEditor 生成脚本', () => {
 })
 
 describe('MonitorConfigEditor 测试脚本', () => {
+  it.each([
+    { success: false, status: 'ERROR', messageType: 'error' as const, text: '执行失败' },
+    { success: true, status: 'ABNORMAL', messageType: 'warning' as const, text: '数据异常' },
+    { success: true, status: 'NORMAL', messageType: 'success' as const, text: '数据正常' },
+  ])('测试回执 $status 的弹出提示与结果区一致', async ({ success, status, messageType, text }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success, status, checkedCount: 0, abnormalCount: 0, durationMs: 87,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-test"]').trigger('click')
+    await settle()
+
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    const message = String(vi.mocked(ElMessage[messageType]).mock.calls.at(-1)?.[0])
+    expect(result).toContain(text)
+    expect(message).toContain(text)
+    expect(message).toContain('检查 0 条；异常 0 条；87ms')
+    expect(result).toContain('检查 0 条；异常 0 条；87ms')
+    if (!success) {
+      expect(result).toContain('测试失败，未通知')
+      expect(ElMessage.success).not.toHaveBeenCalled()
+    }
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('测试生效脚本：标「测试，未通知」、注明测的是哪个脚本，不写记录', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -445,7 +479,35 @@ describe('MonitorConfigEditor 测试脚本', () => {
     expect(mocks.listMonitorsOfSource).not.toHaveBeenCalled()
   })
 
+  it('测试脚本优先走数据监控执行器（不依赖 vrule 执行端点）', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      status: 'ABNORMAL',
+      checkedCount: 63,
+      abnormalCount: 2,
+      reason: '2 行标题不符合约定',
+      durationMs: 812,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-test"]').trigger('click')
+    await settle()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/runner-management/monitor-runner/test-script',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(ruleApi.executeCode).not.toHaveBeenCalled()
+    const result = wrapper.find('[data-testid="mc-test-result"]').text()
+    expect(result).toContain('测试，未通知')
+    expect(result).toContain('检查 63 条')
+    expect(result).toContain('异常 2 条')
+  })
+
   it('测试新生成但未保存的脚本时，注明测的是候选', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
@@ -778,14 +840,15 @@ function timeColumnRecord(): MonitorRecordView {
 }
 
 describe('MonitorConfigEditor 入库时间字段', () => {
-  it('打开已有记录时回填 timeColumn（不在真实候选里的旧列也保留可选）', async () => {
+  it('旧字段不存在时保留配置并提示，不加入真实字段候选', async () => {
     const wrapper = mountEditor({ record: timeColumnRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
 
-    expect(timeColumnValue(wrapper)).toBe('CREATE_DT')
+    expect(timeColumnValue(wrapper)).toBe('')
     const options = wrapper.findAll('[data-testid="mc-time-column"] option').map((option) => option.text())
-    expect(options).toEqual(['请选择', 'CREATE_DT', 'publish_time'])
+    expect(options).toEqual(['请选择', 'publish_time'])
+    expect(wrapper.text()).toContain('当前表不存在字段 CREATE_DT')
     expect(wrapper.find('[data-testid="mc-time-column"]').element.parentElement?.textContent).toContain(
       '脚本按这一列统计；不确定时选表的入库时间列',
     )
@@ -816,7 +879,7 @@ describe('MonitorConfigEditor 入库时间字段', () => {
     expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(false)
   })
 
-  it('字段清单拿不到时退回固定候选；保存只提示不阻断，且不伪造列名', async () => {
+  it('字段清单拿不到时不提供猜测的候选；草稿仍可保存', async () => {
     vi.mocked(dataApi.entryTypesGroup).mockResolvedValue(groupWithFields([]))
     vi.mocked(entryApi.entryDetail).mockRejectedValue(new Error('字段清单不可用'))
     vi.spyOn(entryApi, 'searchTables').mockResolvedValue([])
@@ -828,7 +891,7 @@ describe('MonitorConfigEditor 入库时间字段', () => {
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
 
     const options = wrapper.findAll('[data-testid="mc-time-column"] option').map((option) => option.text())
-    expect(options).toEqual(['请选择', 'CREATE_DT', 'UPDATE_DT', 'MODIFY_DT', 'publish_time', 'time'])
+    expect(options).toEqual(['请选择'])
     expect(timeColumnValue(wrapper)).toBe('')
 
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
@@ -918,6 +981,7 @@ describe('MonitorConfigEditor 检查窗口', () => {
 
 describe('MonitorConfigEditor 生成提示词注入真实列', () => {
   it('把主表真实字段与入库时间列拼进 systemPrompt，避免模型臆造列名', async () => {
+    mocks.resolveTableFields.mockResolvedValue(['title', 'publish_time', 'CREATE_DT'])
     const record = aiRecord({ conf: { ...aiRecord().conf, timeColumn: 'CREATE_DT' } })
     const wrapper = mountEditor({ record })
     await settle()
@@ -926,7 +990,7 @@ describe('MonitorConfigEditor 生成提示词注入真实列', () => {
     await settle()
 
     const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0]![0] as { systemPrompt: string }
-    expect(payload.systemPrompt).toContain('该表真实字段：title, publish_time（只能用这些列名，不要臆造）')
+    expect(payload.systemPrompt).toContain('该表真实字段：title, publish_time, CREATE_DT（只能用这些列名，不要臆造）')
     expect(payload.systemPrompt).toContain('按 CREATE_DT 统计入库时间')
   })
 })

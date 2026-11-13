@@ -33,6 +33,7 @@ const ENTRY = {
 describe('resolveMonitorGenerationContext 兜底', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
     mocks.entryDetail.mockResolvedValue(ENTRY)
     mocks.searchTables.mockResolvedValue([])
   })
@@ -94,45 +95,41 @@ describe('resolveMonitorTableFields 字段清单（与生成同一条解析链�
     mocks.searchTables.mockResolvedValue([])
   })
 
-  it('按表 ID 取真实字段（prop 口径），过滤空值', async () => {
+  it('优先使用执行环境实际字段，不被旧登记字段覆盖', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ fields: ['CREATE_DT'] }), { status: 200 })))
     mocks.entryDetail.mockResolvedValue(ENTRY)
-    await expect(resolveMonitorTableFields({ tableName: 'sense_data.TB_ZJH', tableId: '2100157' })).resolves.toEqual([
-      'content',
-      'publish_time',
-    ])
+    await expect(resolveMonitorTableFields({ tableName: 'sense_data.T' })).resolves.toEqual(['CREATE_DT'])
+    expect(mocks.entryDetail).not.toHaveBeenCalled()
   })
 
-  it('表 ID 拿不到字段时按「库.表」物理名精确兜底一次', async () => {
-    mocks.entryDetail.mockResolvedValue(null)
-    mocks.searchTables.mockResolvedValue([{ ...ENTRY, tableId: '2100158', fields: [] }])
-    mocks.entryDetail.mockImplementation(async (tableId: string) => (tableId === '2100158' ? ENTRY : null))
-    await expect(resolveMonitorTableFields({ tableName: 'sense_data.TB_ZJH' })).resolves.toEqual(['content', 'publish_time'])
-    expect(mocks.entryDetail).toHaveBeenCalledWith('2100158')
+  it('实际字段接口失败时不退回旧清单掩盖问题', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: '目标库不可达' }), { status: 503 })))
+    await expect(resolveMonitorTableFields({ tableName: 'sense_data.T' })).rejects.toThrow('目标库不可达')
   })
 
-  it('拿不到字段清单时返回空数组，不编造列名', async () => {
-    mocks.entryDetail.mockResolvedValue(null)
-    await expect(resolveMonitorTableFields({})).resolves.toEqual([])
+  it('旧环境缺少接口时明确报错，不使用登记字段冒充真实字段', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
+    await expect(resolveMonitorTableFields({ tableName: 'sense_data.T' })).rejects.toThrow('当前环境已部署字段查询接口')
   })
+
 })
 
 describe('augmentMonitorSystemPrompt 提示词注入真实列', () => {
   it('追加真实字段清单与入库时间列', () => {
     const prompt = augmentMonitorSystemPrompt('基础提示词', ['title', 'publish_time'], 'CREATE_DT')
-    expect(prompt).toBe(
-      '基础提示词\n\n该表真实字段：title, publish_time（只能用这些列名，不要臆造）\n按 CREATE_DT 统计入库时间',
-    )
+    expect(prompt).toContain('该表真实字段：title, publish_time（只能用这些列名，不要臆造）\n按 CREATE_DT 统计入库时间')
+    expect(prompt).toContain('DQ_TIME_COLUMN')
   })
 
   it('字段去重并最多列 MAX_PROMPT_COLUMNS 个', () => {
     const fields = ['title', 'title', ...Array.from({ length: 60 }, (_, index) => `col_${index}`)]
     const prompt = augmentMonitorSystemPrompt('', fields)
     expect(prompt).toContain('该表真实字段：title, col_0')
-    expect(prompt.split('（只能用这些列名，不要臆造）')[0]!.split(', ')).toHaveLength(MAX_PROMPT_COLUMNS)
+    expect(prompt.split('该表真实字段：')[1]!.split('（只能用这些列名，不要臆造）')[0]!.split(', ')).toHaveLength(MAX_PROMPT_COLUMNS)
   })
 
   it('拿不到字段清单时跳过该段、保留原提示词；只有 timeColumn 也能单独追加', () => {
-    expect(augmentMonitorSystemPrompt('基础提示词')).toBe('基础提示词')
-    expect(augmentMonitorSystemPrompt('基础提示词', [], 'CREATE_DT')).toBe('基础提示词\n\n按 CREATE_DT 统计入库时间')
+    expect(augmentMonitorSystemPrompt('基础提示词')).toContain('DQ_DB_HOST')
+    expect(augmentMonitorSystemPrompt('基础提示词', [], 'CREATE_DT')).toContain('按 CREATE_DT 统计入库时间')
   })
 })
