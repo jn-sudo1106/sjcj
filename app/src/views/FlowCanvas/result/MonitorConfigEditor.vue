@@ -253,6 +253,26 @@ const needsRegenerateNotice = computed(() => {
   return `${reasons.join('、')}有改动：保存后计划/通知会生效，但检查逻辑仍是 ${form.version || '当前版本'}，需重新生成脚本才会改变`
 })
 
+/** 生成候选时的检查范围；表/时间列之后被改，就说明候选可能对不上当前范围 */
+const candidateScope = ref<{ tableName: string; timeColumn: string } | null>(null)
+
+const candidateStale = computed(() => {
+  const scope = candidateScope.value
+  if (!pending.value || !scope) return false
+  return scope.tableName !== form.tableName.trim() || scope.timeColumn !== form.timeColumn.trim()
+})
+
+/**
+ * 候选脚本按旧范围生成时的提示。这里不直接作废：用户可能只是想换个表看看，
+ * 真到保存（会把脚本按新表发布）时再确认一次，给他重新生成的机会。
+ */
+const candidateStaleNotice = computed(() => {
+  const scope = candidateScope.value
+  if (!candidateStale.value || !scope) return ''
+  const now = [form.tableName, form.timeColumn].filter(Boolean).join(' · ') || '未选表'
+  return `候选脚本是按「${scope.tableName || '未选表'}」生成的；当前范围已改为「${now}」。保存前请重新生成，或确认仍按旧脚本发布。`
+})
+
 const importHint = computed(() => (form.kind === 'ai' ? 'AI 脚本检查' : '规则检查'))
 
 function stamp(): string {
@@ -263,6 +283,17 @@ function stamp(): string {
  * 试跑回执里的检查范围：表 + 入库时间字段。生成、试跑、保存、正式运行必须回显同一份范围
  *（1113 修订稿 §7.9），所以试跑结果不能只说「生效 v3 的脚本」。
  */
+/** 试跑对象的描述：候选过期时把「按哪张表生成」也写出来，避免看错范围 */
+function testTarget(): string {
+  if (pending.value) {
+    const scope = candidateScope.value
+    const stale = candidateStale.value && scope ? ` · 按「${scope.tableName || '未选表'}」生成` : ''
+    return `新生成、尚未保存的脚本（候选）${stale}${scopeText()}`
+  }
+  const version = form.version || versionOf(recordState.value?.conf) || '当前'
+  return `生效 ${version} 的脚本${scopeText()}`
+}
+
 function scopeText(): string {
   const parts: string[] = []
   if (form.tableName.trim()) parts.push(`表 ${form.tableName.trim()}`)
@@ -286,6 +317,7 @@ function applyRecord(record: MonitorRecordView): void {
   descTouched.value = !!next.desc.trim()
   candidate.script = ''
   candidate.scriptPath = ''
+  candidateScope.value = null
   pending.value = false
   generationError.value = ''
   generatingPreview.value = ''
@@ -480,14 +512,8 @@ function onProviderChange(): void {
 }
 
 function onTableChange(): void {
-  // 候选脚本的列名/时间列是按生成时的表写死的：换表后留着它，保存就会把旧表范围的脚本发布出去
-  if (pending.value || candidate.script.trim() || candidate.scriptPath.trim()) {
-    candidate.script = ''
-    candidate.scriptPath = ''
-    pending.value = false
-    testResult.value = null
-    ElMessage.warning('检查表已改：原候选脚本按旧表生成，已作废，请重新生成')
-  }
+  // 候选本身保留（candidateStale 会标出来，保存时再确认）；但按旧表跑出来的试跑结果已无意义
+  if (pending.value) testResult.value = null
   if (!form.tableName) {
     timeColumnFields.value = []
     form.timeColumn = ''
@@ -519,6 +545,7 @@ async function onSourceChanged(sourceId: string): Promise<void> {
   if (!(await confirmDiscard('监控源'))) return
   candidate.script = ''
   candidate.scriptPath = ''
+  candidateScope.value = null
   pending.value = false
   testResult.value = null
   generationError.value = ''
@@ -536,6 +563,7 @@ async function onSourcePicked(sourceId: string, name: string): Promise<void> {
   if (!(await confirmDiscard('监控源'))) return
   candidate.script = ''
   candidate.scriptPath = ''
+  candidateScope.value = null
   pending.value = false
   testResult.value = null
   generationError.value = ''
@@ -640,6 +668,7 @@ async function onGenerate(): Promise<void> {
     }
     candidate.script = result.script
     candidate.scriptPath = result.scriptPath
+    candidateScope.value = { tableName: form.tableName.trim(), timeColumn: form.timeColumn.trim() }
     pending.value = true
     testResult.value = null
     ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
@@ -648,6 +677,7 @@ async function onGenerate(): Promise<void> {
     candidate.script = previous.script
     candidate.scriptPath = previous.scriptPath
     pending.value = !!previous.script || !!previous.scriptPath
+    if (!pending.value) candidateScope.value = null
     generationError.value = errorText(error)
     ElMessage.error(`生成脚本失败：${generationError.value}`)
   } finally {
@@ -664,9 +694,7 @@ async function onTest(): Promise<void> {
     await verifyRule()
     return
   }
-  const target = `${pending.value
-    ? '新生成、尚未保存的脚本（候选）'
-    : `生效 ${form.version || versionOf(recordState.value?.conf) || '当前'} 的脚本`}${scopeText()}`
+  const target = testTarget()
   const scriptText = displayedScript.value.trim()
   const path = activePath.value.trim()
   if (!scriptText && !path) {
@@ -785,6 +813,18 @@ async function onSave(): Promise<void> {
     }
     const baseConf: MonitorCheckConf = recordState.value?.conf ?? {}
     const generated = pending.value && !!(candidate.script.trim() || candidate.scriptPath.trim())
+    // 候选是按旧表/旧时间列生成的：脚本列名写死，直接发布会把旧范围套到新表上
+    if (generated && candidateStale.value && candidateScope.value) {
+      try {
+        await ElMessageBox.confirm(
+          `候选脚本是按「${candidateScope.value.tableName || '未选表'}」生成的，当前检查范围是「${[form.tableName, form.timeColumn].filter(Boolean).join(' · ') || '未选表'}」。继续保存会按新范围发布这份旧表脚本，是否仍然保存？`,
+          '候选脚本与当前检查范围不一致',
+          { type: 'warning', confirmButtonText: '仍然保存', cancelButtonText: '取消，先重新生成' },
+        )
+      } catch {
+        return
+      }
+    }
     const baseVersion = versionOf(baseConf) || form.version
     const savedVersion = form.kind === 'ai' ? (generated ? nextVersionOf(baseVersion) : baseVersion) : ''
     const regenerate = needsRegenerate(form, committedForm.value)
@@ -1232,6 +1272,9 @@ defineExpose({
                   {{ testing ? '测试中…' : '测试脚本' }}
                 </button>
               </div>
+            <p v-if="candidateStaleNotice" class="mc-notice mc-notice-warn" data-testid="mc-candidate-stale">
+              {{ candidateStaleNotice }}
+            </p>
             <p class="mc-hint">生成失败保留原脚本；保存成功后生效，不会自动运行检查。</p>
             <div v-if="testResult" class="mc-test-result" data-testid="mc-test-result">
               <div class="mc-test-head">
