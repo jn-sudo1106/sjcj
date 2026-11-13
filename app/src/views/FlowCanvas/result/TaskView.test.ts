@@ -26,6 +26,44 @@ vi.mock('./resultLayoutPref', async (importOriginal) => ({
 describe('TaskView', () => {
   afterEach(() => { vi.restoreAllMocks(); railDefault.open = true })
 
+  it.each([false, true])('执行结果摘要：源视图/任务中心均可查看原文，空结果按状态提示（global=%s）', async (global) => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+    const tasks: TaskInst[] = [
+      { taskId: 'result-1', state: 'C', typeName: '抓取', taskName: '有结果', sourceId: source.sourceId, updatedAt: '', taskResult: '{"error":"仅为结果内容"}' },
+      { taskId: 'result-2', state: 'L', typeName: '抓取', taskName: '运行中', sourceId: source.sourceId, updatedAt: '', taskResult: '  ' },
+      { taskId: 'result-3', state: 'E', typeName: '抓取', taskName: '异常', sourceId: source.sourceId, updatedAt: '' },
+    ]
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: tasks.length, list: tasks })
+    const wrapper = shallowMount(TaskView, {
+      props: { global },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    const summaries = wrapper.findAll('[data-testid="task-result-summary"]')
+    expect(summaries.map((item) => item.text())).toEqual([
+      '{"error":"仅为结果内容"}', '执行中，结果尚未返回', '后端未返回执行结果',
+    ])
+    if (!global) {
+      const headers = wrapper.findAll('thead th').map((th) => th.text())
+      const resultIndex = headers.indexOf('执行结果')
+      expect(resultIndex).toBe(headers.indexOf('状态') + 1)
+      const cells = wrapper.find('tbody tr').findAll('td')
+      expect(cells[resultIndex]!.text()).toBe('{"error":"仅为结果内容"}')
+      expect(cells[headers.indexOf('任务名称')]!.text()).toBe('有结果')
+      expect(wrapper.findAll('[data-testid="task-result-cell"]')).toHaveLength(tasks.length)
+    }
+    // 结果中的 error 字样不改变接口返回的完成状态。
+    expect(summaries[0]!.element.closest('tr')!.textContent).toContain('完成')
+    await summaries[2]!.trigger('click')
+    await flushPromises()
+    const detail = wrapper.findComponent({ name: global ? 'TaskDetailContent' : 'TaskDetailDrawer' })
+    expect(detail.props('task')).toMatchObject({ taskId: 'result-3', state: 'E' })
+    wrapper.unmount()
+  })
+
   it('0930-02：具体源下流程图区默认收起，有节点下拉（首项全部节点），点「流程图」展开', async () => {
     railDefault.open = false
     setActivePinia(createPinia())
@@ -1160,7 +1198,7 @@ describe('TaskView', () => {
     // `filters.sourceId = props.siteWide ? '' : sourceId.value`），所以**源态收起这一列**——
     // 整列每行都是同一个源名，130px 纯浪费。0917-02 要的「所属源可点」是网站态的事
     //（覆盖见上面那条满额用例），不需要把这个条件改成恒真。
-    it('源态收起「所属源」列（每行同源，纯冗余），空态 colspan 跟着变 10', async () => {
+    it('源态收起「所属源」列，新增执行结果列后空态 colspan 为 11', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -1176,7 +1214,7 @@ describe('TaskView', () => {
 
       expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('所属源')
       expect(wrapper.find('[data-testid="task-source-link"]').exists()).toBe(false)
-      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('10')
+      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('11')
 
       wrapper.unmount()
     })
