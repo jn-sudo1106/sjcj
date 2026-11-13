@@ -17,6 +17,7 @@ import {
   MAX_PROMPT_COLUMNS,
   MonitorGenerationContextError,
   augmentMonitorSystemPrompt,
+  describeTableFallback,
   resolveMonitorGenerationContext,
   resolveMonitorTableFields,
 } from './generation'
@@ -64,6 +65,7 @@ describe('resolveMonitorGenerationContext 兜底', () => {
     })
 
     expect(context.contextMode).toBe('table')
+    expect(context.fallbackReason).toBe('no-monitor-node')
     expect(context.sourceTable).toBe('sense_data.TB_ZJH')
   })
 
@@ -87,6 +89,99 @@ describe('resolveMonitorGenerationContext 兜底', () => {
   it('未选择被监控源时不发任何请求', async () => {
     await expect(resolveMonitorGenerationContext('', { tableName: 'sense_data.TB_ZJH' })).rejects.toThrow(/被监控源/)
     expect(mocks.sourceDetail).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveMonitorGenerationContext 流程节点识别', () => {
+  const SOURCE = { id: '301069515', name: '证监会公告' }
+  const fallback = { tableName: 'sense_data.TB_ZJH', tableId: '2100157' }
+
+  const listStep = {
+    stepId: '1', sourceId: '301069515', name: '列表抓取', configId: '1001',
+    inputTable: '-', outputTable: '2100157', enabled: true,
+  }
+  const monitorStep = (overrides: Record<string, unknown> = {}) => ({
+    stepId: '2', sourceId: '301069515', name: '数据监控', nodeType: 'monitor',
+    configId: '2001', inputTable: '2100157', dependsOn: ['1'], enabled: true,
+    ...overrides,
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
+    mocks.entryDetail.mockResolvedValue(ENTRY)
+    mocks.searchTables.mockResolvedValue([])
+    mocks.sourceDetail.mockResolvedValue(SOURCE)
+  })
+
+  it('主链上的监控节点走 flow 上下文', async () => {
+    mocks.sourceSteps.mockResolvedValue([listStep, monitorStep()])
+
+    const context = await resolveMonitorGenerationContext('301069515', fallback)
+
+    expect(context.contextMode).toBe('flow')
+    expect(context.configId).toBe(2001)
+    expect(context.sourceTable).toBe('sense_data.TB_ZJH')
+  })
+
+  it('监控节点在分叉下游的分支上也能识别（不再误报没有绑定流程）', async () => {
+    // 1 有两个后继（2 详情、3 分类）→ 主链在 1 处中断，4（监控）挂在 3 的分支链上
+    mocks.sourceSteps.mockResolvedValue([
+      listStep,
+      { stepId: '2', sourceId: '301069515', name: '详情解析', configId: '1002', inputTable: '2100157', outputTable: '2100158', dependsOn: ['1'], enabled: true },
+      { stepId: '3', sourceId: '301069515', name: '分类提取', configId: '1003', inputTable: '2100157', outputTable: '2100159', dependsOn: ['1'], enabled: true },
+      monitorStep({ stepId: '4', configId: '2002', dependsOn: ['3'] }),
+    ])
+
+    const context = await resolveMonitorGenerationContext('301069515', fallback)
+
+    expect(context.contextMode).toBe('flow')
+    expect(context.configId).toBe(2002)
+  })
+
+  it('节点没有保存出 configId 时提示节点未保存，而不是说没有绑定流程', async () => {
+    mocks.sourceSteps.mockResolvedValue([listStep, monitorStep({ configId: undefined })])
+
+    const context = await resolveMonitorGenerationContext('301069515', fallback)
+
+    expect(context.contextMode).toBe('table')
+    expect(context.fallbackReason).toBe('node-not-saved')
+  })
+
+  it('节点没有绑定输入表时给出对应原因', async () => {
+    mocks.sourceSteps.mockResolvedValue([listStep, monitorStep({ inputTable: '-' })])
+
+    const context = await resolveMonitorGenerationContext('301069515', fallback)
+
+    expect(context.contextMode).toBe('table')
+    expect(context.fallbackReason).toBe('node-no-input-table')
+  })
+})
+
+describe('describeTableFallback 独立监控提示', () => {
+  const base = {
+    contextMode: 'table' as const, configId: 0, sourceTable: 'sense_data.TB_ZJH',
+    targetTable: 'sense_data.TB_ZJH', inputFields: [], outputFields: [],
+    inputFieldOptions: [], outputFieldOptions: [],
+  }
+
+  it('有流程但没监控节点：说清没有节点，并指出怎么才能随流程触发', () => {
+    const text = describeTableFallback({ ...base, fallbackReason: 'no-monitor-node' })
+    expect(text).toContain('没有数据监控节点')
+    expect(text).toContain('sense_data.TB_ZJH')
+    expect(text).toContain('添加数据监控节点')
+    expect(text).not.toContain('没有绑定流程')
+  })
+
+  it('节点未保存 / 未绑表：分别指向保存节点与选表', () => {
+    expect(describeTableFallback({ ...base, fallbackReason: 'node-not-saved' })).toContain('还没有保存')
+    expect(describeTableFallback({ ...base, fallbackReason: 'node-no-input-table' })).toContain('没有绑定输入表')
+  })
+
+  it('读不到流程时注明独立监控按自己的执行计划运行', () => {
+    const text = describeTableFallback({ ...base, fallbackReason: 'flow-unavailable' })
+    expect(text).toContain('没有读到该源的可用流程')
+    expect(text).toContain('按自己的执行计划运行')
   })
 })
 describe('resolveMonitorTableFields 字段清单（与生成同一条解析链）', () => {
