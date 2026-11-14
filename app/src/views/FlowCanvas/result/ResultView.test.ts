@@ -1193,10 +1193,14 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('已选 0 条')
+    expect(wrapper.text()).toContain('请先勾选表格数据')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeDefined()
 
     await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
     await flushPromises()
+    expect(wrapper.text()).toContain('已选 2 条')
+    expect(wrapper.text()).not.toContain('请先勾选表格数据')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 

@@ -2098,7 +2098,7 @@ async function onTestScript() {
         </span>
         <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
         <span class="rv-data-ops">
-          <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
+          <span v-if="canPickRows" class="muted">{{ (execMode === 'input' || execMode === 'upstream') && !selectedRowIds.length ? '请先勾选表格数据' : `已选 ${selectedRowIds.length} 条` }}</span>
           <!-- 什么都做不了时给出原因，别让工具栏空着——见 noExecReason 的说明 -->
           <span
             v-if="noExecReason"
@@ -2153,7 +2153,7 @@ async function onTestScript() {
           </el-popover>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
             <button
-              class="rc-btn primary"
+              class="rc-btn primary rv-exec-btn"
               type="button"
               data-testid="data-exec-btn"
               :disabled="!canExecute"
@@ -2709,6 +2709,7 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rc-btn-group :deep(.el-dropdown) { display: inline-flex; }
 .rc-btn-group .rv-split-arrow { height: 28px; padding: 0 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, 0.35); display: inline-flex; align-items: center; justify-content: center; }
 .rc-btn-group .rv-split-arrow:disabled { opacity: 0.6; cursor: not-allowed; }
+.rc-btn.primary.rv-exec-btn:disabled { background: var(--rc-bg-soft); border-color: var(--rc-border); color: var(--rc-faint); box-shadow: none; cursor: not-allowed; }
 
 /* 表头内容现在渲染在 DataGrid 的 #head 插槽里（那条横条由 .dg-toolbar 负责排版），
    这里只留下内容本身的样式，不再有独立的 .rv-tablehead / .rv-pager 横条。 */
