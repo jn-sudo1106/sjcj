@@ -143,7 +143,7 @@ class Runner:
             "code": code, "installDirectory": str(self.directory),
             "hostName": socket.gethostname(),
             "ipAddress": ip or self.ip_address,
-            "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy", "file-browser"],
+            "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy", "file-browser", "large-bundles"],
             **self.os_info,
         }
         result = json_request(self.server, "/api/runners/enroll", payload=payload)
@@ -179,6 +179,7 @@ class Runner:
         return json_request(self.server, path, self.identity["token"], payload)
 
     def prepare(self, digest: str) -> tuple[Path, dict]:
+        from .package_limits import MAX_ARCHIVE_BYTES, DOWNLOAD_TIMEOUT
         if not digest.startswith("sha256:"):
             raise ValueError("制品摘要无效")
         release_dir = self.directory / "versions" / digest[7:]
@@ -191,9 +192,11 @@ class Runner:
         else:
             request = Request(self.server + "/api/artifacts/" + digest,
                               headers={"Authorization": f"Bearer {self.identity['token']}"})
-            with urlopen(request, timeout=30) as response:
-                data = response.read()
+            with urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
+                data = response.read(MAX_ARCHIVE_BYTES + 1)
                 signature = response.headers.get("X-Artifact-Signature", "")
+            if len(data) > MAX_ARCHIVE_BYTES:
+                raise ValueError('处理程序压缩包超过大小限制')
         verify_artifact(data, digest, signature, self.identity["publicKey"])
         if manifest_file.is_file():
             return release_dir, verify_extracted(data, release_dir)
@@ -396,6 +399,7 @@ class Runner:
         return {
             'ipAddress': self.ip_address,
             'fileBrowserSchema': 1,
+            'largeBundleSchema': 1,
             'liveFileDeploymentSchema': 2,
             'hostName': socket.gethostname(),
             **self.os_info,

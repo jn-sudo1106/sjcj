@@ -11,7 +11,7 @@ from .python_cache import is_python_cache
 # can explicitly retain resources. Never guess runtime requirements by extension.
 DEFAULT_RULES = '''
 __pycache__/
-*.py[cod]
+*.py[co]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

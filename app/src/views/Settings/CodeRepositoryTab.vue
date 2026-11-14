@@ -20,6 +20,8 @@ const error = ref('')
 const formError = ref('')
 const busyId = ref('')
 const verifyingId = ref('')
+const syncingId = ref('')
+const syncFeedback = reactive<Record<string, { message: string; failed: boolean }>>({})
 const verification = reactive<Record<string, CodeRepositoryVerification>>({})
 const uploadOpen = ref(false)
 const uploadRepo = ref<CodeRepository | null>(null)
@@ -160,6 +162,19 @@ async function verify(repo: CodeRepository) {
     verification[repo.repoId] = { repoId: repo.repoId, status: 'error', checkedAt: new Date().toISOString(),
       checks: [{ name: 'service', status: 'error', message: message(e) }] }
   } finally { verifyingId.value = '' }
+}
+async function syncRemote(repo: CodeRepository) {
+  if (syncingId.value) return
+  syncingId.value = repo.repoId
+  delete syncFeedback[repo.repoId]
+  try {
+    const result = await runnerManagementApi.syncCodeRepository(repo.repoId)
+    syncFeedback[repo.repoId] = { message: `${result.message} · ${result.gitCommit.slice(0, 12)}`, failed: false }
+    if (selectedRepoId.value === repo.repoId) await loadFiles(filePage.value)
+    ElMessage.success(result.message)
+  } catch (e) {
+    syncFeedback[repo.repoId] = { message: message(e), failed: true }
+  } finally { syncingId.value = '' }
 }
 function openUpload(repo: CodeRepository, type: 'files' | 'folder' = 'files') {
   uploadRepo.value = repo
@@ -429,8 +444,11 @@ onMounted(() => { void load() })
               <td class="crp-ellipsis" :title="repo.remoteUrl">{{ repo.remoteUrl || '仅本地' }}</td>
               <td>{{ repo.branch }}</td><td>{{ repo.codeCount }}</td>
               <td><span class="crp-status" @click.stop><el-switch size="small" :model-value="repo.status === 'ACTIVE'" :disabled="!canWrite || repo.isDefault || busyId === repo.repoId" @change="(value: string | number | boolean) => status(repo, Boolean(value))" /><span :class="repo.status === 'ACTIVE' ? 'crp-on' : 'crp-off'">{{ repo.status === 'ACTIVE' ? '启用' : '停用' }}</span></span></td>
-              <td><el-button v-if="canWrite" link type="primary" :loading="verifyingId === repo.repoId" :disabled="!!verifyingId" :data-testid="`code-repo-verify-${repo.repoId}`" @click.stop="verify(repo)">验证</el-button><el-button v-if="canWrite" link type="primary" @click.stop="edit(repo)">编辑</el-button><el-button v-if="canWrite && !repo.isDefault && !repo.configType && repo.status === 'ACTIVE'" link type="primary" @click.stop="makeDefault(repo)">设为默认</el-button></td>
+              <td><el-button v-if="canWrite" link type="primary" :loading="syncingId === repo.repoId" :disabled="!!syncingId || !repo.remoteUrl || repo.status !== 'ACTIVE'" :data-testid="`code-repo-sync-${repo.repoId}`" @click.stop="syncRemote(repo)">同步远端</el-button><el-button v-if="canWrite" link type="primary" :loading="verifyingId === repo.repoId" :disabled="!!verifyingId" :data-testid="`code-repo-verify-${repo.repoId}`" @click.stop="verify(repo)">验证</el-button><el-button v-if="canWrite" link type="primary" @click.stop="edit(repo)">编辑</el-button><el-button v-if="canWrite && !repo.isDefault && !repo.configType && repo.status === 'ACTIVE'" link type="primary" @click.stop="makeDefault(repo)">设为默认</el-button></td>
             </template>
+          </tr>
+          <tr v-if="syncFeedback[repo.repoId]" class="crp-sync-feedback" :data-testid="`code-repo-sync-result-${repo.repoId}`">
+            <td colspan="8" :class="{ 'crp-error': syncFeedback[repo.repoId].failed }" :role="syncFeedback[repo.repoId].failed ? 'alert' : 'status'">{{ syncFeedback[repo.repoId].message }}</td>
           </tr>
           <tr v-if="verification[repo.repoId]" class="crp-verification" :data-testid="`code-repo-verification-${repo.repoId}`">
             <td colspan="8">
@@ -550,6 +568,7 @@ onMounted(() => { void load() })
 .crp-files-table .crp-file-time { width:158px; white-space:nowrap; font-size:12px; font-variant-numeric:tabular-nums; }
 .crp-file-link:hover { text-decoration: underline; }.crp-file-row { cursor: pointer; }.crp-file-row:hover, .crp-file-selected { background: var(--rc-primary-bg); }
 .crp-preview-detail { height: 100%; overflow: auto; }.crp-preview-code { margin: 0; padding: 12px; overflow: auto; font-size: 12px; line-height: 1.6; white-space: pre; }.crp-preview-empty { margin: auto; color: var(--rc-muted); font-size: 12px; }
+.crp-sync-feedback td { white-space: normal !important; overflow-wrap: anywhere; }
 .crp-scroll { max-height: 34vh; min-height: 0; overflow: auto; }.crp-table td { white-space: nowrap; }.crp-table tbody tr:not(.crp-verification) { cursor: pointer; }.crp-repo-selected { background: var(--rc-primary-bg); }
 .crp-ellipsis { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .crp-input { box-sizing: border-box; width: 120px; padding: 5px 7px; border: 1px solid var(--rc-border); border-radius: 5px; background: var(--rc-card); color: var(--rc-text); font-size: 12px; }

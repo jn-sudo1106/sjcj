@@ -1627,7 +1627,9 @@ class Handler(BaseHTTPRequestHandler):
             path = unquote(parsed.path)
             upload = re.fullmatch(r"/api/runner-management/settings/code-repos/[0-9a-f]{32}/files", path)
             code_files = re.fullmatch(r'/api/runner-management/code-servers/[0-9a-f-]+/files', path)
-            limit = MAX_UPLOAD_JSON if upload or code_files else MAX_SCRIPT_JSON if path == '/api/runner-management/site-scripts/publish' else MAX_JSON
+            from .package_limits import MAX_MANIFEST_BYTES as MAX_LAYOUT_JSON
+            layout_request = path.startswith('/api/runner-management/directory-layouts/') or re.fullmatch(r'/api/runner-management/deployment-configurations(?:/[0-9a-f]{32})?', path)
+            limit = MAX_UPLOAD_JSON if upload or code_files else MAX_LAYOUT_JSON if layout_request else MAX_SCRIPT_JSON if path == '/api/runner-management/site-scripts/publish' else MAX_JSON
             body = self.json_body(limit) if method == "POST" else None
             # Empty since explicitly means all time. Do not silently restore the 24h default.
             keep_empty = path == '/api/runner-management/runtime-operations'
@@ -1734,6 +1736,9 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(launcher_version, str) and 0 < len(launcher_version) <= 80:
                         db.execute('UPDATE runners SET launcher_version=? WHERE runner_id=?', (launcher_version, runner['runner_id']))
                     capabilities = json.loads(runner['capabilities'])
+                    capabilities = [value for value in capabilities if value != 'large-bundles']
+                    if body.get('largeBundleSchema') == 1:
+                        capabilities.append('large-bundles')
                     capabilities = [value for value in capabilities if value != 'file-browser']
                     if body.get('fileBrowserSchema') == 1:
                         capabilities.append('file-browser')
@@ -2247,7 +2252,7 @@ class Handler(BaseHTTPRequestHandler):
                                              (query.get('view') or ['paths'])[0], (query.get('folder') or [''])[0], (query.get('sort') or ['updated-desc'])[0])
         if repo_files and method == "DELETE":
             return app.delete_repository_file(repo_files.group(1), (query.get("path") or [""])[0])
-        repo_action = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})(/path|/default|/verify|/files)?", sub)
+        repo_action = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})(/path|/default|/verify|/sync|/files)?", sub)
         if method == "POST" and repo_action:
             repo_id, action = repo_action.groups()
             if action == "/path":
@@ -2256,6 +2261,9 @@ class Handler(BaseHTTPRequestHandler):
                 return app.set_default_repository(repo_id)
             if action == "/verify":
                 return app.verify_repository(repo_id)
+            if action == '/sync':
+                from .repository_sync import synchronize
+                return synchronize(app, repo_id)
             if action == "/files":
                 return app.upload_repository_files(repo_id, body)
             return app.update_repository(repo_id, body, self.headers)

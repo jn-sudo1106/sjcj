@@ -1,7 +1,7 @@
 import { isDataValidationNode, isRuleNode, rendersAsRuleNode, isMonitorNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 
-export type NodeInspectorTab = 'config' | 'table' | 'orchestration' | 'task' | 'ai'
+export type NodeInspectorTab = 'config' | 'table' | 'orchestration' | 'deployment' | 'task' | 'ai'
 /** 第三个元素是禁用原因（悬浮提示文案）；不存在 = 可用 */
 export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
 
@@ -22,6 +22,7 @@ export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boole
     ['config', '节点配置'],
     ['table', '表配置'],
     ['orchestration', '编排配置'],
+    ['deployment', '部署配置'],
     ['task', '任务配置'],
     ...(options.includeAi === false ? [] : [['ai', 'AI 对话'] as NodeInspectorTabItem]),
   ]
