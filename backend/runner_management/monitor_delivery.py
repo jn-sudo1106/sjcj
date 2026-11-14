@@ -3,6 +3,7 @@
 The business database is read only. SMTP secrets stay in an operator-owned file;
 the durable settings contain recipients, event identities and delivery receipts.
 """
+import base64
 import json
 import os
 import re
@@ -54,6 +55,57 @@ def snapshots(config, monitor_ids):
     return result
 
 
+def _open(smtp, context):
+    """建立 SMTP 连接并完成 EHLO/STARTTLS；ssl 与 starttls 两条路径都显式 EHLO。"""
+    if smtp['tls'] == 'ssl':
+        client = smtplib.SMTP_SSL(smtp['host'], int(smtp['port']), timeout=15, context=context)
+        client.ehlo()
+        return client
+    client = smtplib.SMTP(smtp['host'], int(smtp['port']), timeout=15)
+    client.ehlo()
+    if smtp['tls'] == 'starttls':
+        client.starttls(context=context)
+        client.ehlo()
+    return client
+
+
+def _authenticate(client, smtp, context):
+    """登录；服务端「直接断开」时换成带原因的认证失败。
+
+    QQ 邮箱在 AUTH LOGIN 失败时会直接关闭连接，smtplib 只能抛出
+    ``SMTPServerDisconnected``，回执里就变成没有信息量的「Connection unexpectedly
+    closed」。这里换 AUTH PLAIN 再连一次——PLAIN 上服务端会正常回 535 和原因，
+    「授权码错误 / SMTP 服务未开启 / 登录频率受限」才能被运维直接看到。
+    """
+    try:
+        client.login(smtp['user'], smtp['password'])
+        return client
+    except smtplib.SMTPServerDisconnected:
+        pass
+    try:
+        client.close()
+    except Exception:
+        pass
+    fresh = _open(smtp, context)
+    token = base64.b64encode(('\0%s\0%s' % (smtp['user'], smtp['password'])).encode('utf-8')).decode('ascii')
+    try:
+        code, response = fresh.docmd('AUTH', 'PLAIN ' + token)
+    except Exception as exc:
+        try:
+            fresh.close()
+        except Exception:
+            pass
+        raise smtplib.SMTPServerDisconnected('认证时连接被断开（AUTH PLAIN 重试也失败：%s）' % exc)
+    if code == 235:
+        # AUTH PLAIN 成功说明凭据本身没问题，保留新连接继续发信。
+        return fresh
+    try:
+        fresh.close()
+    except Exception:
+        pass
+    raise smtplib.SMTPAuthenticationError(code, response)
+
+
 def send(config, event):
     smtp = config['smtp']
     message = EmailMessage()
@@ -63,13 +115,8 @@ def send(config, event):
     message['Message-ID'] = event['messageId']
     message.set_content(event['body'])
     context = ssl.create_default_context()
-    if smtp['tls'] == 'ssl':
-        client = smtplib.SMTP_SSL(smtp['host'], int(smtp['port']), timeout=15, context=context)
-    else:
-        client = smtplib.SMTP(smtp['host'], int(smtp['port']), timeout=15)
+    client = _authenticate(_open(smtp, context), smtp, context)
     try:
-        if smtp['tls'] == 'starttls': client.starttls(context=context)
-        client.login(smtp['user'], smtp['password'])
         refused = client.send_message(message, from_addr=smtp['from'], to_addrs=[event['recipient']])
         if refused: raise smtplib.SMTPRecipientsRefused(refused)
     finally:

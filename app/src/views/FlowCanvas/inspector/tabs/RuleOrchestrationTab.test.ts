@@ -6,13 +6,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox, ElSelect } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT, NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, paramApi, ruleApi, ckSourceApi, sourceApi } from '@/api'
+import * as monitorApi from '@/api/monitor'
 import { translateSampleOf } from '@/api/translate'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
@@ -1659,7 +1660,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     mockAssets()
     const { wrapper } = setupMonitorSave()
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     const updateSpy = vi.spyOn(ckSourceApi, 'update')
     await flushPromises()
 
@@ -1667,14 +1668,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
     expect(ckSourceApi.list).toHaveBeenCalledWith('430016501')
     expect(updateSpy).not.toHaveBeenCalled()
-    expect(ckSourceApi.insert).toHaveBeenCalledWith(expect.objectContaining({
+    // 2026-11-13：新建走 C01 /api/v1/source/check/add，生命周期字段由后端补
+    //（createDt / state / isDelete / nextRun），前端不再传 state。
+    expect(monitorApi.addSourceCheck).toHaveBeenCalledWith(expect.objectContaining({
       sourceId: 430016501,
       name: '库存监控',
       schedule: '0 0 8 * * ?',
       tableName: 'sense_data.TB_JD_SKU_BASE',
-      state: 'E', // insert 默认启用（2026-09-07）
     }))
-    const payload = (ckSourceApi.insert as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { checkConf: string }
+    const payload = (monitorApi.addSourceCheck as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { checkConf: string }
     const conf = JSON.parse(payload.checkConf)
     expect(conf.monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
     expect(conf.minSize).toBe('30')
@@ -1691,19 +1693,22 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
   it('数据监控节点保存脚本：ck_source 已有记录时 update，不 insert', async () => {
     mockAssets()
     const { wrapper } = setupMonitorSave()
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, sourceId: 430016501, name: '旧名' }])
-    const insertSpy = vi.spyOn(ckSourceApi, 'insert')
-    vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, ver: 9001, sourceId: 430016501, name: '旧名' }])
+    const insertSpy = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
+    const updateSpy = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     await flushPromises()
 
     await triggerWorkbenchSave(wrapper)
 
     expect(insertSpy).not.toHaveBeenCalled()
-    // 2026-11-12 最小保护：update 只写定义字段（schedule 取节点配置 Tab 的 cron、
-    // tableName 取表配置 Tab 的输入表），不再带 state/isDelete/createDt/ver——
+    // 2026-11-12 最小保护：只写定义字段（schedule 取节点配置 Tab 的 cron、
+    // tableName 取表配置 Tab 的输入表），不带 state/isDelete/createDt——
     // 画布保存不能重新启用已停用的检查项，也不能改创建时间。
-    const updatePayload = (ckSourceApi.update as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>
+    // 2026-11-13：改为 C01 按主键更新，payload 带 id 与当前 ver（乐观锁基线）。
+    const updatePayload = (updateSpy as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>
     expect(updatePayload).toMatchObject({
+      id: 7,
+      ver: 9001,
       sourceId: 430016501,
       name: '库存监控',
       schedule: '0 0 8 * * ?',
@@ -1712,7 +1717,45 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(updatePayload).not.toHaveProperty('state')
     expect(updatePayload).not.toHaveProperty('isDelete')
     expect(updatePayload).not.toHaveProperty('createDt')
-    expect(updatePayload).not.toHaveProperty('ver')
+  })
+
+  // 一源多检查项（2026-11-12）：/api/source/update 只按 sourceId 匹配，同步层已拒绝整包覆盖。
+  // 手动保存要把冲突清单交给用户，并给「去监控中心」的出口（那里按检查项逐条编辑）。
+  it('同源多条检查项：保存脚本不写 ck_source，弹带清单的确认框并可跳监控中心', async () => {
+    mockAssets()
+    const { wrapper } = setupMonitorSave()
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
+      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', isDelete: 0, state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { id: 8, sourceId: 430016501, name: '检查项B', isDelete: 1, state: 'D' },
+    ])
+    const insert = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck')
+    const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error')
+    routerPush.mockClear()
+    await flushPromises()
+
+    await triggerWorkbenchSave(wrapper)
+
+    expect(alert).toHaveBeenCalledTimes(1)
+    const [message, title, options] = alert.mock.calls[0] as unknown as [string, string, Record<string, unknown>]
+    expect(title).toBe('同源有多条检查项，画布未写入')
+    expect(message).toContain('画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。')
+    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜在用｜更新 2026-09-18 10:00')
+    expect(message).toContain('检查项B｜id=8｜已停用')
+    expect(message).toContain('请到监控中心按检查项逐条编辑或删除重复项。')
+    expect(options).toMatchObject({
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    })
+    expect(insert).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    // 不再用一句「监控源配置同步失败：…」打发用户
+    expect(error.mock.calls.some((call) => String(call[0]).includes('监控源配置同步失败'))).toBe(false)
+    expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
+    wrapper.unmount()
   })
 
   it('流程未绑源（无 sourceId）时保存脚本不同步 ck_source', async () => {
@@ -1738,7 +1781,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1400998', updatedAt: '2026-10-13 12:00:00' } as never)
     const updateConfig = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
-    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const insert = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
     await flushPromises()
 
     const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
@@ -1772,9 +1815,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
     vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1400998', updatedAt: '2026-10-13 12:00:00' } as never)
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
-    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, sourceId: 430016501, name: '旧名' }])
-    const insertSpy = vi.spyOn(ckSourceApi, 'insert')
-    vi.spyOn(ckSourceApi, 'update').mockResolvedValue(true)
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, ver: 9001, sourceId: 430016501, name: '旧名' }])
+    const insertSpy = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 101, ver: null })
+    const updateSpy = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     await flushPromises()
 
     const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
@@ -1783,7 +1826,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     expect(insertSpy).not.toHaveBeenCalled()
-    expect(ckSourceApi.update).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 430016501, name: '库存监控' }))
+    expect(updateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7, ver: 9001, sourceId: 430016501, name: '库存监控' }),
+    )
   })
 
   it('表配置 Tab 点底部「保存」：不触发 ck_source 同步（需求口径：仅编排配置 Tab）', async () => {
@@ -1793,7 +1838,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     flow.setActiveTab('table')
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
-    const listSpy = vi.spyOn(ckSourceApi, 'list')
+    // 注：ckSourceApi.list 现在被「检查项绑定只读展示」用来读该源的检查项（打开检查器就会读一次），
+    // 不能用它判定「有没有同步写库」；这里改锁真正的写接口。
+    const insertSpy = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({})
+    const updateSpy = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     await flushPromises()
 
     const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
@@ -1801,7 +1849,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(listSpy).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 
   it('数据监控节点显示描述输入框', async () => {

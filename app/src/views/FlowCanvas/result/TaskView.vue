@@ -25,6 +25,10 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
 import { taskDataId } from './taskIds'
 
+function taskResultPreview(task: TaskInst): string {
+  return task.taskResult?.trim() || (task.state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果')
+}
+
 // 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
 const railHeight = ref(readResultRailHeight())
 // 流程图区默认收起（0930-02，会上：视图展开后空间不够），每次进来都收起、不记住展开。
@@ -887,6 +891,13 @@ const nextStepHints = computed(() => {
               </td>
               <td>
                 <div class="tv-ellipsis" :title="task.taskName">{{ task.taskName || '—' }}</div>
+                <button
+                  class="tv-result-summary"
+                  type="button"
+                  data-testid="task-result-summary"
+                  :aria-label="`查看任务 ${task.taskId} 的执行结果：${taskResultPreview(task)}`"
+                  @click.stop="openDetail(task)"
+                >{{ taskResultPreview(task) }}</button>
                 <div class="tv-sub">
                   数据 ID
                   <a
@@ -940,6 +951,7 @@ const nextStepHints = computed(() => {
             <col style="width: 180px" />
             <col style="width: 80px" />
             <col style="width: 80px" />
+            <col style="width: 220px" />
             <col style="width: 140px" />
             <col style="width: 110px" />
           </colgroup>
@@ -954,6 +966,7 @@ const nextStepHints = computed(() => {
               <th>队列</th>
               <th>类型</th>
               <th>状态</th>
+              <th>执行结果</th>
               <th>创建时间</th>
               <th>操作</th>
             </tr>
@@ -989,7 +1002,7 @@ const nextStepHints = computed(() => {
                 <div v-if="task.sourceId && sourceNames[task.sourceId]" class="tv-source-id" data-testid="task-source-id">{{ task.sourceId }}</div>
               </td>
               <td>{{ nodeName(task) }}</td>
-              <td>{{ task.taskName }}</td>
+              <td>{{ task.taskName || '—' }}</td>
               <td>
                 <!-- 数据 ID 取 parentId（触发这条任务的数据），不是 bizId（运行上下文 ID），见 taskIds.ts -->
                 <a
@@ -1030,13 +1043,22 @@ const nextStepHints = computed(() => {
                   <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
                 </span>
               </td>
+              <td class="tv-result-cell" data-testid="task-result-cell">
+                <button
+                  class="tv-result-summary"
+                  type="button"
+                  data-testid="task-result-summary"
+                  :aria-label="`查看任务 ${task.taskId} 的执行结果：${taskResultPreview(task)}`"
+                  @click="openDetail(task)"
+                >{{ taskResultPreview(task) }}</button>
+              </td>
               <td class="tv-time">{{ task.createdAt || '—' }}</td>
               <td class="tv-actions-cell">
                 <button class="tv-action-btn" type="button" data-testid="task-detail-btn" @click="openDetail(task)">详情</button>
                 <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
               </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 11 : 10" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 12 : 11" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
           </tbody>
         </table>
         <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
@@ -1139,6 +1161,29 @@ const nextStepHints = computed(() => {
 .tv-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .tv-dirty { margin: -4px 0 10px; color: var(--rc-warning, #b45309); font-size: 12px; }
 .tv-slow { margin: -4px 0 10px; color: var(--rc-muted); font-size: 12px; }
+.tv-result-summary {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  width: 100%;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rc-primary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.tv-result-summary:hover { text-decoration: underline; }
+.tv-result-summary:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 2px; }
+.tv-result-cell { min-width: 220px; max-width: 220px; }
+.tv-result-cell .tv-result-summary { margin-top: 0; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }

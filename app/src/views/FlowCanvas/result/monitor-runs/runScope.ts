@@ -174,10 +174,15 @@ export function anyFilterActive(filters: RunFilters): boolean {
 /**
  * 条数只认运行记录里的结构化值（共享层用 checkCountOf 解析，含旧日志文本兜底）；
  * 未知显示「—」，绝不补 0。
+ *
+ * 新 /runs 的旧日志行按契约「count 只放 checkedCount、未知保持空」，从日志文本抠出的数
+ * 单独放在 `legacyCount`（仅展示、不参与判定），这里作为展示兜底，避免旧日志条数列退化成「—」。
  */
 export function runCountText(run: MonitorRunView): string {
   const text = String(run.count ?? '').trim()
-  return text || '—'
+  if (text) return text
+  const legacy = String(run.legacyCount ?? '').trim()
+  return legacy || '—'
 }
 
 /**

@@ -9,6 +9,9 @@ import {
   dataPillOf,
   execNotifyOf,
   filterSourceRows,
+  matchCheckDate,
+  businessDateOf,
+  todayOf,
   formatAt,
   lastCheckOf,
   monitorDataOf,
@@ -18,7 +21,10 @@ import {
   monitorPublishText,
   monitorSummaryOf,
   sourceBucket,
+  sourceHintOf,
   sourceStats,
+  sourceSubtitleOf,
+  sourceTitleOf,
 } from './sourceRows'
 
 function rec(patch: Partial<MonitorRecordView> = {}): MonitorRecordView {
@@ -40,9 +46,47 @@ function rec(patch: Partial<MonitorRecordView> = {}): MonitorRecordView {
   }
 }
 
-function row(monitors: MonitorRecordView[], source: { id: string; name?: string } = { id: 's1', name: '源一' }): MonitorSourceRow {
-  return summarizeSource(source.id, monitors, { id: source.id, name: source.name ?? source.id })
+function row(
+  monitors: MonitorRecordView[],
+  source: { id: string; name?: string; tableName?: string } = { id: 's1', name: '源一' },
+): MonitorSourceRow {
+  return summarizeSource(source.id, monitors, { id: source.id, name: source.name ?? source.id, tableName: source.tableName })
 }
+
+describe('最近检查日期筛选', () => {
+  const now = new Date('2026-11-12T04:30:00Z') // 北京时间 12:30，同一天
+  const today = todayOf(now)
+
+  it('业务时区切日：UTC 深夜算北京时间次日', () => {
+    expect(businessDateOf('2026-11-11T16:30:00Z')).toBe('2026-11-12')
+    expect(businessDateOf('2026-11-11T15:30:00Z')).toBe('2026-11-11')
+  })
+
+  it('今天已检查只留业务时区今天有检查记录的源', () => {
+    const checked = row([rec({ lastCheckAt: '2026-11-12T01:00:00Z' })])
+    const yesterday = row([rec({ lastCheckAt: '2026-11-11T01:00:00Z' })])
+    const never = row([rec({ lastCheckAt: undefined })])
+    expect(matchCheckDate(checked, 'today', now)).toBe(true)
+    expect(matchCheckDate(yesterday, 'today', now)).toBe(false)
+    expect(matchCheckDate(never, 'today', now)).toBe(false)
+    expect(today).toBe('2026-11-12')
+  })
+
+  it('今天未检查包含从未检查过的源', () => {
+    expect(matchCheckDate(row([rec({ lastCheckAt: '2026-11-11T01:00:00Z' })]), 'not-today', now)).toBe(true)
+    expect(matchCheckDate(row([rec({ lastCheckAt: undefined })]), 'not-today', now)).toBe(true)
+    expect(matchCheckDate(row([rec({ lastCheckAt: '2026-11-12T01:00:00Z' })]), 'not-today', now)).toBe(false)
+  })
+
+  it('filterSourceRows 组合筛选时保留全部语义', () => {
+    const rows = [
+      row([rec({ lastCheckAt: '2026-11-12T01:00:00Z' })]),
+      row([rec({ lastCheckAt: '2026-11-11T01:00:00Z' })]),
+    ]
+    const filtered = filterSourceRows(rows, { sourceId: '', enable: 'all', status: 'all', keyword: '', checkDate: 'today' }, now)
+    expect(filtered).toHaveLength(1)
+  })
+})
 
 describe('dataPillOf', () => {
   it('未配置检查不显示绿色', () => {
@@ -102,7 +146,7 @@ describe('dataPillOf', () => {
 describe('sourceBucket 与筛选', () => {
   const rows = [
     row([rec({ data: 'abnormal' })], { id: 's-abnormal', name: '异常源' }),
-    row([rec({ exec: 'timeout', data: 'unknown' })], { id: 's-failed', name: '失败源' }),
+    row([rec({ exec: 'timeout', data: 'unknown' })], { id: 's-failed', name: '失败源', tableName: 'sense_data.detail_main' }),
     row([rec({ publishStatus: 'draft', exec: 'none', data: 'unknown' })], { id: 's-draft', name: '草稿源' }),
     row([rec({ exec: 'none', data: 'unknown' })], { id: 's-unchecked', name: '未检查源' }),
     row([rec({ exec: 'succeeded', data: 'unknown' })], { id: 's-pending', name: '待判断源' }),
@@ -141,6 +185,11 @@ describe('sourceBucket 与筛选', () => {
     expect(byName.map((item) => item.sourceId)).toEqual(['s-empty'])
     const byId = filterSourceRows(rows, { sourceId: '', enable: 'all', status: 'all', keyword: 'S-FAILED' })
     expect(byId.map((item) => item.sourceId)).toEqual(['s-failed'])
+  })
+
+  it('关键词也匹配主表（列表只有一个源筛选框）', () => {
+    const byTable = filterSourceRows(rows, { sourceId: '', enable: 'all', status: 'all', keyword: 'detail' })
+    expect(byTable.map((item) => item.sourceId)).toEqual(['s-failed'])
   })
 
   it('源筛选锁定单个源，空白关键词不影响结果', () => {
@@ -186,18 +235,18 @@ describe('coverageOf', () => {
     expect(coverageOf(row([]))).toMatchObject({ main: '—', sub: '尚未配置检查' })
   })
 
-  it('无 C07 显示「—（需服务端聚合）」并说明不推算', () => {
+  it('无 C07 显示「—（计划不可推算）」并说明不推算', () => {
     const coverage = coverageOf(row([rec()]))
-    expect(coverage.main).toBe('—（需服务端聚合）')
+    expect(coverage.main).toBe('—（计划不可推算）')
     expect(coverage.sub).toBe('本页不推算漏跑')
     expect(coverage.title).toContain('C07')
     expect(coverage.title).toContain('不按时隙推算')
   })
 
-  it('有聚合数据时才显示已完成 / 应到期', () => {
+  it('有聚合数据时显示「应 N · 完成 M」与漏跑', () => {
     const source = row([rec()])
     source.coverage = { status: 'completed', due: 4, finished: 3, succeeded: 3, failed: 0, missed: 0 }
-    expect(coverageOf(source).main).toBe('3 / 4')
+    expect(coverageOf(source).main).toBe('应 4 · 完成 3')
   })
 })
 
@@ -312,6 +361,21 @@ describe('展开行文案', () => {
     expect(monitorPlanOf({ schedule: '' })).toEqual({ plan: '—', next: '—' })
   })
 
+  it('下次执行优先取执行器排期（AI 记录的 NEXT_RUN 停在远期）', () => {
+    expect(
+      monitorPlanOf({
+        schedule: '0 0 8 * * ?',
+        nextRun: '2027-01-01T08:00:00',
+        conf: { schedule: { next: '2026-11-13 08:00:00' } },
+      }),
+    ).toEqual({ plan: '0 0 8 * * ?', next: '11-13 08:00' })
+    // 没有执行器排期时仍回落旧字段
+    expect(monitorPlanOf({ schedule: '0 0 8 * * ?', nextRun: '2026-11-13T08:00:00', conf: {} })).toEqual({
+      plan: '0 0 8 * * ?',
+      next: '11-13 08:00',
+    })
+  })
+
   it('停用项不显示数据结论', () => {
     expect(monitorDataOf({ enabled: false, data: 'abnormal' })).toEqual({
       text: '—',
@@ -326,5 +390,35 @@ describe('展开行文案', () => {
     expect(monitorExecOf({ exec: 'failed' })).toEqual({ text: '执行失败', tone: 'err' })
     expect(monitorExecOf({ exec: 'running' })).toEqual({ text: '执行中', tone: 'run' })
     expect(monitorExecOf({ exec: 'succeeded' })).toEqual({ text: '执行成功', tone: 'muted' })
+  })
+})
+describe('sourceTitleOf / sourceSubtitleOf / sourceHintOf', () => {
+  it('主标题优先用源名称，不展示裸 ID', () => {
+    expect(sourceTitleOf({ sourceId: '301236115', sourceName: '上市公司新闻' })).toBe('上市公司新闻')
+  })
+
+  it('拿不到名称时才退回「源 <ID>」，并明确标注', () => {
+    expect(sourceTitleOf({ sourceId: '301236115' })).toBe('源 301236115')
+    expect(sourceTitleOf({ sourceId: '301236115', sourceName: '   ' })).toBe('源 301236115')
+  })
+
+  it('副标题是网站 + 主表，不含源 ID', () => {
+    const text = sourceSubtitleOf({ siteName: '财经资讯站', tableName: 'news_main' })
+    expect(text).toBe('财经资讯站 · news_main')
+    expect(text).not.toContain('301236115')
+  })
+
+  it('副标题字段缺失时给出可读的未回显提示，而不是留空或补 ID', () => {
+    expect(sourceSubtitleOf({})).toBe('—')
+    expect(sourceSubtitleOf({ siteName: '站A' })).toBe('站A')
+    expect(sourceSubtitleOf({ tableName: 'sense_data.news_main' })).toBe('sense_data.news_main')
+    expect(sourceSubtitleOf({ siteName: '站A', tableName: 'sense_data.news_main' })).toBe('站A · sense_data.news_main')
+  })
+
+  it('悬停提示里保留源 ID，便于排查', () => {
+    const hint = sourceHintOf({ sourceId: '301236115', sourceName: '上市公司新闻', siteName: '财经资讯站', tableName: 'news_main' })
+    expect(hint).toContain('上市公司新闻')
+    expect(hint).toContain('源 ID 301236115')
+    expect(hint).toContain('news_main')
   })
 })

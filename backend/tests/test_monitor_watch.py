@@ -56,6 +56,28 @@ class MonitorWatchTest(unittest.TestCase):
         self.assertIn('业务数据库', snapshot['monitors']['error'])
         self.assertFalse(snapshot['summary']['healthy'])
 
+    def test_unreadable_queue_definitions_are_unknown_even_when_broker_is_reachable(self):
+        with patch.object(watch, 'fetch_queues', return_value=[queue('q1')]), \
+             patch.object(watch, 'read_defined_queues', side_effect=watch.WatchUnavailable('权限不足')), \
+             patch.object(watch, 'read_overdue', return_value={'graceMinutes': 15, 'items': []}):
+            result = watch.scan(self.app, config())
+        self.assertTrue(result['queue']['reachable'])
+        self.assertEqual(result['summary']['queueUnobservable'], 1)
+        self.assertFalse(result['summary']['healthy'])
+        self.assertNotEqual(watch.signature_of(result), 'ok')
+
+    def test_failed_notification_retries_same_problem_and_success_clears_error(self):
+        cfg = config(notify={'enabled': True, 'recipient': 'ops@example.com'})
+        with patch.object(watch, 'fetch_queues', side_effect=watch.WatchUnavailable('连接被拒绝')), \
+             patch.object(watch, 'read_overdue', return_value={'graceMinutes': 15, 'items': []}), \
+             patch.object(watch, 'send_digest', side_effect=[watch.WatchUnavailable('SMTP 登录失败'), True]) as sender:
+            watch.scan(self.app, cfg)
+            self.assertIn('SMTP 登录失败', batches.read(self.app, watch.STATE)['lastError'])
+            watch.scan(self.app, cfg)
+            watch.scan(self.app, cfg)
+            self.assertEqual(sender.call_count, 2)
+            self.assertEqual(batches.read(self.app, watch.STATE).get('lastError'), '')
+
     def test_threshold_order_matches_old_platform(self):
         rules = {'name': 'q', 'maxSize': 500, 'minSize': 10, 'minRate': 5,
                  'maxRate': 100, 'minConsumer': 2}

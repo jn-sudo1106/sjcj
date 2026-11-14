@@ -35,6 +35,9 @@ __pycache__/
 *.pyc
 # Backend source only; instances, credentials, builds and deployment state stay local.
 backend/*
+!backend/java_patches/
+!backend/sql/
+!backend/sql/*.sql
 !backend/README.md
 !backend/start-flow-local.ps1
 !backend/runner_management/

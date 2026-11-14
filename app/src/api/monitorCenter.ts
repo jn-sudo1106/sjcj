@@ -7,20 +7,45 @@
 //   3. 保存时以原始行为底做**受控合并**：只写定义字段，启停/运行回执/未识别键原样带去，
 //      避免「保存一次就把启用改成停用、把 state 重置成 C」（1109 §3 问题 4）。
 //
-// 尚未就绪的服务端能力（C01 保存回执 / C06 运行列表 / C07 源聚合 / C08 通知回执）在这里
-// 保持缺席：页面按 C07 缺失显示「—（需服务端聚合）」，不要自己算全站数字。
+// 运行链路（C01 单条详情 / C05 立即运行 / C06 运行记录）优先走新接口，旧后端（217）不支持时
+// 自动降级到原实现（paged-logs + 执行器/runNow 分流），页面拿到的仍是同一套视图。
+//
+// 其余尚未就绪的服务端能力（C07 源聚合 / C08 通知回执）在这里保持缺席：
+// 页面按 C07 缺失显示「—（需服务端聚合）」，不要自己算全站数字。
 
 import {
   addSourceCheck,
   changeSourceCheckEnable,
+  getCheckRun,
+  getSourceCheckDetail,
   handleRunNow,
   pagedCheckJobLogs,
+  pagedCheckRuns,
   pagedSourceCheck,
+  pagedSourceSummary,
+  pagedSourceSummaryStats,
+  runChecksNow,
   updateSourceCheck,
 } from './monitor'
-import type { SourceCheck, SourceCheckLog } from './types/monitor'
-import type { MonitorCheckConf, MonitorKind, MonitorRecordView, MonitorRunView } from './types/monitorCenter'
-import { parseCheckConf, serializeCheckConf, toMonitorRecord, toMonitorRun } from '../utils/monitor/record'
+import type { SourceCheck, SourceCheckLog, SourceCheckRunItem } from './types/monitor'
+import type {
+  MonitorCheckConf,
+  MonitorCoverage,
+  MonitorDataStatus,
+  MonitorDetail,
+  MonitorKind,
+  MonitorRecordView,
+  MonitorRunView,
+  MonitorSourceRow,
+} from './types/monitorCenter'
+import { requestRunnerManagement } from './runnerManagement'
+import {
+  parseCheckConf,
+  serializeCheckConf,
+  toMonitorRecord,
+  toMonitorRun,
+  toMonitorRunItem,
+} from '../utils/monitor/record'
 
 /** 单页大小：旧接口按 page/limit 分页 */
 export const MONITOR_PAGE_SIZE = 200
@@ -45,12 +70,59 @@ interface ListOptions {
   maxPages?: number
 }
 
-/** 按旧 paged 接口翻页拉全量原始行（不自动去重，保存时以最后一次读到的为准）。 */
+/* ---------------- 新接口（C01/C05/C06）与旧后端降级判据 ---------------- */
+
+/** 从 client/ApiError 链上取 HTTP 状态码：非 2xx 时 client 会带上，业务/网络异常没有。 */
+function httpStatusOf(error: unknown): number | undefined {
+  const direct = (error as { status?: unknown } | null)?.status
+  if (typeof direct === 'number') return direct
+  const cause = (error as { cause?: { status?: unknown } } | null)?.cause
+  return cause && typeof cause.status === 'number' ? cause.status : undefined
+}
+
+/** 顺着 `cause` 链取最内层错误（client 会在外层包一层 ApiError）。 */
+function rootCauseOf(error: unknown): unknown {
+  let current: unknown = error
+  for (let depth = 0; depth < 4; depth += 1) {
+    const cause = (current as { cause?: unknown } | null)?.cause
+    if (!cause) return current
+    current = cause
+  }
+  return current
+}
+
+/** 网络层失败（断网/超时/连接被拒）：和「记录不存在」区分，前者必须抛给页面提示重试。 */
+function isNetworkFailure(error: unknown): boolean {
+  const root = rootCauseOf(error)
+  if (typeof TypeError !== 'undefined' && root instanceof TypeError) return true
+  const message = root instanceof Error ? root.message : String(root ?? '')
+  return /failed to fetch|networkerror|network error|load failed|connection refused|econnrefused|timed?\s?out/i.test(
+    message,
+  )
+}
+
+/**
+ * 「这条记录不存在」：404，或信封 `success:false`（client 解包时已 reject，且不带 status）。
+ * 命中时调用方返回 undefined 并提示「记录已不存在」，不要抛错、也不要拿同源第一条顶上。
+ */
+function isRecordMissing(error: unknown): boolean {
+  if (isNetworkFailure(error)) return false
+  const status = httpStatusOf(error)
+  if (status !== undefined) return status === 404
+  // 没有状态码 = client 解包信封失败（code 非 0：success:false / 记录不存在等），按不存在处理
+  return true
+}
+
+/**
+ * 按旧 paged 接口翻页拉全量原始行（不自动去重，保存时以最后一次读到的为准）。
+ *
+ * 首页拿到 total 后，其余页并发取——串行翻页在真机上是「首屏慢」的主要来源之一
+ * （首页 300ms、每多一页多一个往返，用户看到的就是白屏越等越久）。
+ */
 export async function listMonitorRows(options: ListOptions = {}): Promise<SourceCheck[]> {
   const maxPages = options.maxPages ?? MONITOR_MAX_PAGES
-  const rows: SourceCheck[] = []
-  for (let page = 1; page <= maxPages; page += 1) {
-    const res = await pagedSourceCheck({
+  const query = (page: number) =>
+    pagedSourceCheck({
       page,
       // 契约是 page/limit；adaptPage 只认 pageNo/pageSize，传 size 会被当未知字段带上、
       // 而 limit 仍是 undefined，真实后端按默认 10 条返回（fe-list 报的坑）。
@@ -58,12 +130,23 @@ export async function listMonitorRows(options: ListOptions = {}): Promise<Source
       sourceId: options.sourceId,
       name: options.name,
     } as never)
-    const list = Array.isArray(res?.list) ? res.list : []
-    rows.push(...list)
-    const total = Number(res?.total ?? 0)
-    if (!list.length || rows.length >= total) return rows
+
+  const first = await query(1)
+  const firstList = Array.isArray(first?.list) ? first.list : []
+  const total = Number(first?.total ?? 0)
+  if (!firstList.length || firstList.length >= total) return firstList
+
+  // 后端可能按自己的上限给页大小（例如历史接口默认 10 条）：按首页实际条数推算页数，
+  // 否则 total 对了也会漏取后半段。
+  const pageSize = firstList.length || MONITOR_PAGE_SIZE
+  const pages = Math.ceil(total / pageSize)
+  if (pages > maxPages) throw new MonitorQueryLimitError(maxPages)
+  const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, index) => query(index + 2)))
+  const rows = [...firstList]
+  for (const res of rest) {
+    if (Array.isArray(res?.list)) rows.push(...res.list)
   }
-  throw new MonitorQueryLimitError(maxPages)
+  return rows
 }
 
 /** 列表视图：一行一条监控记录（按记录身份，不是按源）。 */
@@ -114,6 +197,9 @@ export async function saveMonitor(input: SaveMonitorInput): Promise<{ created: b
   const conf: MonitorCheckConf = {
     ...input.conf,
     kind: input.kind,
+    // 1113 设计修订：监控中心入口保存的记录属于「源结果检查」。
+    // 显式传入的值优先（例如从画布节点检查转过来的记录不能被改写），旧记录首次保存时归类。
+    scopeType: input.conf.scopeType ?? 'source_result',
     ...(input.schedule !== undefined ? { cron: input.schedule } : {}),
   }
   if (input.record) {
@@ -146,9 +232,117 @@ export async function setMonitorsEnabled(ids: string[], enabled: boolean): Promi
   return changeSourceCheckEnable(ids, enabled)
 }
 
-/** 立即运行：返回的是旧接口回执（无 runId），页面必须区分「已受理」与「执行成功」。 */
-export async function runMonitorsNow(ids: string[]): Promise<unknown> {
-  return handleRunNow(ids)
+export interface MonitorRunnerItem {
+  runId?: string
+  monitorId?: number | string
+  status?: string
+  checkedCount?: number
+  abnormalCount?: number
+  message?: string
+  error?: string | null
+  /** 没抢到占位锁（另一实例正在执行同一条检查）时为 true，此时既没跑脚本也没写库。 */
+  skipped?: boolean
+  reason?: string
+}
+
+export interface MonitorRunnerScanResult {
+  applied?: boolean
+  count?: number
+  items?: MonitorRunnerItem[]
+}
+
+/**
+ * 触发「脚本检查（AI）」的执行器立即运行。
+ *
+ * 和旧 `runNow` 的区别：旧接口只是把 `next_run` 置为 now，等 Java 调度器捡起；
+ * 而脚本检查不由 Java 执行（`lockForDeal` 已经排除 `kind=ai`），必须走执行器才有真实结论。
+ * 返回的 runId 才是「这次运行」的身份，`accepted` 只代表已受理。
+ */
+export async function runScriptMonitorsNow(
+  ids: string[],
+  options: { apply?: boolean; force?: boolean } = {},
+): Promise<MonitorRunnerScanResult> {
+  const monitorIds = ids.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+  return requestRunnerManagement<MonitorRunnerScanResult>('/monitor-runner/scan', 'POST', {
+    apply: options.apply ?? true,
+    force: options.force ?? true,
+    monitorIds,
+  })
+}
+
+export interface RunNowResult {
+  /** 走执行器的（AI 脚本检查） */
+  viaRunner: number
+  /** 走旧 Java 调度器的（SQL 规则检查） */
+  viaLegacy: number
+  /** 执行器里因「另一实例正在执行」被跳过的条数（不是失败，也不是已执行） */
+  runnerSkipped: number
+  /** 执行器本次真正产生的运行编号（用于提示「本次运行是 run-…」） */
+  runnerRunIds: string[]
+  runner?: MonitorRunnerScanResult
+}
+
+/** 执行器返回项里哪些是「跳过」：显式 skipped，或 status=SKIPPED（兼容旧字段）。 */
+export function countRunnerSkipped(result?: MonitorRunnerScanResult): number {
+  return (result?.items ?? []).filter((item) => item.skipped === true || item.status === 'SKIPPED').length
+}
+
+/** 执行器本次产生的 runId（跳过项没有 runId，不能混进来）。 */
+export function runnerRunIdsOf(result?: MonitorRunnerScanResult): string[] {
+  return (result?.items ?? [])
+    .filter((item) => !item.skipped && item.status !== 'SKIPPED' && typeof item.runId === 'string')
+    .map((item) => String(item.runId))
+}
+
+/** 旧实现：按检查方式分流（ai → 执行器 / 其余 → 旧 runNow）。新 `/run` 不可用时的降级路径，逻辑保持原样。 */
+async function runMonitorsNowLegacy(ids: string[], kinds: Record<string, MonitorKind>): Promise<RunNowResult> {
+  const scriptIds = ids.filter((id) => kinds[id] === 'ai')
+  const legacyIds = ids.filter((id) => kinds[id] !== 'ai')
+  if (!scriptIds.length) {
+    await handleRunNow(legacyIds.length ? legacyIds : ids)
+    return { viaRunner: 0, viaLegacy: legacyIds.length || ids.length, runnerSkipped: 0, runnerRunIds: [] }
+  }
+  const runner = await runScriptMonitorsNow(scriptIds)
+  if (legacyIds.length) await handleRunNow(legacyIds)
+  return {
+    viaRunner: scriptIds.length,
+    viaLegacy: legacyIds.length,
+    runnerSkipped: countRunnerSkipped(runner),
+    runnerRunIds: runnerRunIdsOf(runner),
+    runner,
+  }
+}
+
+/**
+ * 立即运行。优先走 C05 `POST /source/check/run`：一次带上全部 ids，由服务端按检查方式分流
+ * （rule → Java 调度器 / ai → 执行器），前端不再自己拆两半、也不再依赖页面传的 kind 表。
+ *
+ * 旧后端（217）没有该端点 → 404 / 非 2xx / 信封 `success:false` 时降级到
+ * `runMonitorsNowLegacy`（执行器 + 旧 runNow 分流，行为与历史一致）。
+ * 两种都只代表「已受理」，执行结果以运行记录为准。
+ */
+export async function runMonitorsNow(ids: string[], kinds: Record<string, MonitorKind> = {}): Promise<RunNowResult> {
+  if (!ids.length) return runMonitorsNowLegacy(ids, kinds)
+  try {
+    const accepted = await runChecksNow(ids)
+    // 形状防御：旧后端可能 200 + success:false（client 已 reject），网关也可能回一段不是回执的 JSON
+    if (!accepted || !Array.isArray(accepted.results)) throw new Error('运行受理响应缺少 results')
+    const results = accepted.results
+    return {
+      // 只统计真正成功的项：ok=false 是失败/未受理，页面另有失败提示，不能算「已提交」
+      viaRunner: results.filter((item) => item.kind === 'ai' && item.ok).length,
+      viaLegacy: results.filter((item) => item.kind === 'rule' && item.ok).length,
+      // 与执行器分支同口径：AI 项里因「另一实例正在执行」被跳过的数量
+      runnerSkipped: results.filter(
+        (item) => item.kind === 'ai' && !item.ok && String(item.status ?? '').toUpperCase() === 'SKIPPED',
+      ).length,
+      runnerRunIds: results
+        .map((item) => item.runId)
+        .filter((runId): runId is string => typeof runId === 'string' && runId.length > 0),
+    }
+  } catch {
+    return runMonitorsNowLegacy(ids, kinds)
+  }
 }
 
 export interface ListRunsOptions {
@@ -161,12 +355,8 @@ export interface ListRunsOptions {
   size?: number
 }
 
-/**
- * 运行记录。
- * 传 monitorId 时按 `jobId=monitorId` 查——这是旧后端 `CkJobLogService.saveLog` 的真实口径；
- * 不要传采集任务的 jobId，也不要传日志行序号，两者都查不到。
- */
-export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: number; list: MonitorRunView[] }> {
+/** 旧实现：`paged-logs` + `toMonitorRun`。新 `/runs` 不可用时的降级路径，逻辑保持原样。 */
+async function listRunsLegacy(options: ListRunsOptions = {}): Promise<{ total: number; list: MonitorRunView[] }> {
   const res = await pagedCheckJobLogs({
     page: options.page ?? 1,
     // 同上：旧日志接口也只认 page/limit
@@ -178,6 +368,172 @@ export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: 
   } as never)
   const logs: SourceCheckLog[] = Array.isArray(res?.list) ? res.list : []
   return { total: Number(res?.total ?? logs.length), list: logs.map((log) => toMonitorRun(log)) }
+}
+
+/**
+ * 运行记录。优先 C06 `GET /source/check/runs`（REMARKS 已在服务端结构化，条数/耗时/窗口/快照直接可用），
+ * 旧后端（217）没有该端点 → 404 / 非 2xx / 信封 `success:false` 时降级回旧 `paged-logs`。
+ * 两个分支返回同一个 `{ total, list }` 形状，页面不需要知道走的是哪条路。
+ *
+ * 传 monitorId 时旧日志按 `jobId=monitorId` 查——这是旧后端 `CkJobLogService.saveLog` 的真实口径；
+ * 不要传采集任务的 jobId，也不要传日志行序号，两者都查不到。
+ */
+export async function listRuns(options: ListRunsOptions = {}): Promise<{ total: number; list: MonitorRunView[] }> {
+  try {
+    const res = await pagedCheckRuns({
+      monitorId: options.monitorId,
+      sourceId: options.sourceId,
+      state: options.state,
+      page: options.page ?? 1,
+      limit: options.size ?? 50,
+    })
+    if (!res || !Array.isArray(res.items)) throw new Error('运行记录响应缺少 items')
+    const items: SourceCheckRunItem[] = res.items
+    return { total: Number(res.total ?? items.length), list: items.map((item) => toMonitorRunItem(item)) }
+  } catch {
+    return listRunsLegacy(options)
+  }
+}
+
+/**
+ * C01 单条检查项详情（monitor 行 + 服务端解析后的 checkConf + 当前有效版本）。
+ * 记录不存在（404 / 信封 success:false）返回 undefined；只有网络异常才抛出。
+ */
+export async function loadMonitorDetail(monitorId: string): Promise<MonitorDetail | undefined> {
+  let payload
+  try {
+    payload = await getSourceCheckDetail(monitorId)
+  } catch (error) {
+    if (isRecordMissing(error)) return undefined
+    throw error
+  }
+  const monitor = payload?.monitor
+  if (!monitor || typeof monitor !== 'object' || !monitor.id) return undefined
+  // 服务端解析 checkConf 失败时给 null：用原始行兜底解析，**不要用空对象**（空对象会被当成「配置被清空」）
+  const checkConf: MonitorCheckConf = payload.checkConf
+    ? parseCheckConf(payload.checkConf)
+    : parseCheckConf(monitor.checkConf)
+  return {
+    monitor,
+    checkConf,
+    scopeType: payload.scopeType ?? checkConf.scopeType,
+    revision: payload.revision ?? monitor.ver,
+  }
+}
+
+/**
+ * C01 单条读 → 规范化记录视图（保存后回读：编辑时已知 id，新建时取 `/add` 回执里的 data.id）。
+ * 找不到返回 undefined，调用方提示「记录已不存在」，**不要用同源第一条顶上**；只有网络异常才抛出。
+ */
+export async function loadMonitorRecord(monitorId: string): Promise<MonitorRecordView | undefined> {
+  let payload
+  try {
+    payload = await getSourceCheckDetail(monitorId)
+  } catch (error) {
+    if (isRecordMissing(error)) return undefined
+    throw error
+  }
+  const monitor = payload?.monitor
+  if (!monitor || typeof monitor !== 'object' || !monitor.id) return undefined
+  return toMonitorRecord(monitor)
+}
+
+/**
+ * C06 单次运行详情。优先 `GET /source/check/run/{runId}`；
+ * 找不到（404 / 信封 success:false / 旧日志只有 logId）返回 undefined，调用方保留列表行兜底。
+ */
+export async function getRunDetail(
+  runId: string,
+  options: { monitorId?: string; logId?: string } = {},
+): Promise<MonitorRunView | undefined> {
+  const key = runId.trim()
+  if (!key) return undefined
+  let item: SourceCheckRunItem
+  try {
+    item = await getCheckRun(key, { monitorId: options.monitorId, logId: options.logId })
+  } catch (error) {
+    if (isRecordMissing(error)) return undefined
+    throw error
+  }
+  // 结构化运行可能没有日志行（logId 为 null），此时能认的是 runId；两者都没有才当找不到
+  if (!item || typeof item !== 'object') return undefined
+  const hasLogId = item.logId !== null && item.logId !== undefined && String(item.logId) !== ''
+  const hasRunId = typeof item.runId === 'string' && item.runId.trim() !== ''
+  if (!hasLogId && !hasRunId) return undefined
+  return toMonitorRunItem(item)
+}
+
+/** 通知事件的一次投递回执（执行器 `monitor_events` 的 delivery 字段）。 */
+export interface MonitorNotificationDelivery {
+  /** 投递状态机；老事件缺字段时后端按 pending 兜底 */
+  state: 'pending' | 'sending' | 'sent' | 'failed' | 'not-configured' | string
+  attempts?: number
+  lastAttemptAt?: string | null
+  nextAttemptAt?: string | null
+  error?: string | null
+  reason?: string | null
+}
+
+/** 异常 / 执行失败生成的通知事件（NORMAL 不建事件，正常跑完不会有回执）。 */
+export interface MonitorNotificationEvent {
+  eventId: string
+  monitorId?: number | string
+  sourceId?: string
+  name?: string
+  runId?: string
+  /** NORMAL / ABNORMAL / ERROR；NORMAL 仅作防御，正常结果不产生事件 */
+  status?: string
+  checkedCount?: number
+  abnormalCount?: number
+  tableName?: string
+  window?: { start?: string; end?: string }
+  reason?: string
+  createdAt?: string
+  /** 历次投递记录（事件详情用）；列表回执以 delivery 为准 */
+  deliveries?: MonitorNotificationDelivery[]
+  delivery?: MonitorNotificationDelivery
+}
+
+export interface MonitorNotificationsResult {
+  count: number
+  items: MonitorNotificationEvent[]
+}
+
+/**
+ * 通知回执列表（执行器 `/monitor-runner/notifications`）。
+ *
+ * monitorId 为空时**不拼该参数**：空串会被后端当成 `monitorId=""` 过滤掉全部事件。
+ * 路径与 `runScriptMonitorsNow` 一样走 runner-management 的裸路径，不进 ENDPOINTS 的 /v1 契约清单。
+ */
+export async function listNotifications(
+  options: { monitorId?: string; runId?: string; limit?: number } = {},
+): Promise<MonitorNotificationsResult> {
+  const params = new URLSearchParams()
+  const monitorId = String(options.monitorId ?? '').trim()
+  if (monitorId) params.set('monitorId', monitorId)
+  const runId = String(options.runId ?? '').trim()
+  if (runId) params.set('runId', runId)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  const res = await requestRunnerManagement<MonitorNotificationsResult>(
+    `/monitor-runner/notifications${query ? `?${query}` : ''}`,
+  )
+  const items = Array.isArray(res?.items) ? res.items : []
+  return { count: Number(res?.count ?? items.length), items }
+}
+
+/** 手动重试一次投递。未知 eventId 由服务端返回 404（错误信息「事件不存在」）。 */
+export async function retryNotification(eventId: string): Promise<MonitorNotificationEvent> {
+  const res = await requestRunnerManagement<{ event?: MonitorNotificationEvent }>(
+    `/monitor-runner/notifications/${encodeURIComponent(eventId)}/retry`,
+    'POST',
+  )
+  if (res?.event) return res.event
+  // 防御：服务端若直接返回事件本体（没有再包一层 event），不当成失败
+  if (res && typeof (res as MonitorNotificationEvent).eventId === 'string') {
+    return res as unknown as MonitorNotificationEvent
+  }
+  throw new Error('重试投递的返回结果里没有事件信息')
 }
 
 /** 从旧行直接拿 checkConf（页面需要原始 JSON 时用，不经过视图）。 */
@@ -231,6 +587,9 @@ export async function listSourceOptions(options: { siteId?: string } = {}): Prom
   const collected = new Map<string, MonitorSourceOption>()
   for (let page = 1; page <= SOURCE_MAX_PAGES; page += 1) {
     const res = await sourceApi.sourcePaged({ page, size: SOURCE_PAGE_SIZE })
+    // 首页就能看出总量超不超上限：超了立刻失败，不要一页一页翻满 20 次再报错
+    // （真机 24 万源，20 次串行请求要等十几秒，页面看起来像卡死）。
+    if (page === 1) assertSourceCountWithinLimit(Number(res?.total ?? 0))
     const list = Array.isArray(res?.list) ? res.list : []
     for (const source of list) {
       if (!source?.sourceId || collected.has(source.sourceId)) continue
@@ -240,7 +599,239 @@ export async function listSourceOptions(options: { siteId?: string } = {}): Prom
       return [...collected.values()]
     }
   }
-  // 源目录和监控记录不是一回事：这里超限说明「源太多、一次列不全」，
-  // 不能复用 MonitorQueryLimitError 的「监控记录超过 N 页」，否则排查会被引到错的地方。
-  throw new Error(`源数量超过 ${SOURCE_MAX_PAGES * SOURCE_PAGE_SIZE} 个，无法一次列全；请按网站查看，或直接用名称/ID 搜索`)
+  // 翻满上限还没取完（total 在翻页过程中变大）：同样按「源太多」处理。
+  throw new Error(sourceTooManyMessage())
+}
+
+function sourceTooManyMessage(): string {
+  return `源数量超过 ${SOURCE_MAX_PAGES * SOURCE_PAGE_SIZE} 个，无法一次列全；请按网站查看，或直接用名称/ID 搜索`
+}
+
+/** 源目录一次拉全的上限：超了直接失败，不做无意义的翻页。 */
+function assertSourceCountWithinLimit(total: number): void {
+  if (Number.isFinite(total) && total > SOURCE_MAX_PAGES * SOURCE_PAGE_SIZE) {
+    throw new Error(sourceTooManyMessage())
+  }
+}
+
+/**
+ * 按源 ID 批量取名称（列表回显用）。
+ *
+ * 生产有 24 万+ 源，`listSourceOptions` 拉全量必然触顶；但列表其实只需要「本页出现过的那些源」
+ * 的名字。后端 `source/sourcePaged` 支持 `ids`（逗号分隔），按 200 个一批取，373 条监控只要 2 次请求。
+ * 取不到的源仍按 `源 <ID>` 兜底，不编造名称。
+ */
+export async function listSourceNames(sourceIds: string[]): Promise<MonitorSourceOption[]> {
+  const ids = [...new Set(sourceIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+  if (!ids.length) return []
+  const { sourceApi } = await import('./index')
+  const collected = new Map<string, MonitorSourceOption>()
+  for (let start = 0; start < ids.length; start += SOURCE_PAGE_SIZE) {
+    const chunk = ids.slice(start, start + SOURCE_PAGE_SIZE)
+    const res = await sourceApi.sourcePaged({ ids: chunk.join(','), page: 1, size: chunk.length })
+    const list = Array.isArray(res?.list) ? res.list : []
+    for (const source of list) {
+      if (!source?.sourceId || collected.has(source.sourceId)) continue
+      collected.set(source.sourceId, toSourceOption(source))
+    }
+  }
+  return [...collected.values()]
+}
+
+/** 服务端源聚合返回的一行（C07 首期）。字段名与后端 `source/check/sourceSummary` 对齐。 */
+interface SourceSummaryPayload {
+  sourceId?: number | string
+  sourceName?: string
+  siteId?: number | string | null
+  siteName?: string
+  tableName?: string
+  monitorTotal?: number
+  monitorEnabled?: number
+  lastCheckAt?: string | null
+  /** none 未配置 / disabled 全停用 / unknown 有启用但没跑过 / abnormal 有告警 / normal 正常 */
+  dataState?: string
+  /** 计划覆盖：{due, finished, missed, unavailable} */
+  coverage?: { due?: number; finished?: number; missed?: number; unavailable?: boolean } | null
+  coverageUnavailable?: boolean
+  /** 源关联的流程（cs_source.FLOW_ID）；null/0 表示未关联流程，不等于「不能配置检查」 */
+  flowId?: number | string | null
+  /** 执行结论（C07）：none 无启用检查 / unknown 没跑过 / succeeded / failed */
+  execState?: string
+}
+
+function execOfState(state: string | undefined): MonitorSourceRow['exec'] {
+  switch (state) {
+    case 'failed':
+      return 'failed'
+    case 'succeeded':
+      return 'succeeded'
+    case 'none':
+      return 'none'
+    default:
+      return 'unknown'
+  }
+}
+
+function dataOfState(state: string | undefined): MonitorDataStatus {
+  if (state === 'abnormal') return 'abnormal'
+  if (state === 'normal') return 'normal'
+  return 'unknown'
+}
+
+function labelOfState(state: string | undefined): { label: string; tone: MonitorSourceRow['tone'] } {
+  switch (state) {
+    case 'abnormal':
+      return { label: '数据异常', tone: 'bad' }
+    case 'normal':
+      return { label: '数据正常', tone: 'good' }
+    case 'disabled':
+      return { label: '已停用', tone: 'muted' }
+    case 'none':
+      return { label: '未配置检查', tone: 'muted' }
+    default:
+      return { label: '尚未检查', tone: 'unknown' }
+  }
+}
+
+function toCoverageOf(raw: unknown): MonitorCoverage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  const num = (key: string) => {
+    const parsed = Number(value[key])
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  const due = num('due')
+  const missed = num('missed')
+  return {
+    status: missed > 0 ? 'missed' : due > 0 ? 'completed' : 'not_due',
+    due,
+    finished: num('finished'),
+    succeeded: 0,
+    failed: 0,
+    missed: num('missed'),
+  }
+}
+
+function toSourceSummaryRow(item: SourceSummaryPayload): MonitorSourceRow {
+  const total = Number(item.monitorTotal ?? 0)
+  const enabled = Number(item.monitorEnabled ?? 0)
+  const state = item.dataState
+  const { label, tone } = labelOfState(state)
+  return {
+    sourceId: String(item.sourceId ?? ''),
+    sourceName: item.sourceName || undefined,
+    tableName: item.tableName || undefined,
+    siteId: item.siteId == null ? undefined : String(item.siteId),
+    siteName: item.siteName || undefined,
+    monitorTotal: total,
+    monitorEnabled: enabled,
+    // 计划覆盖：服务端按 cron 时隙算「应执行 / 已完成 / 漏跑」；AFTER 类计划标 unavailable。
+    coverage: toCoverageOf(item.coverage),
+    coverageUnavailable: item.coverageUnavailable !== false,
+    data: total === 0 ? 'unknown' : dataOfState(state),
+    // 服务端按「最近一次运行」给执行结论；拿不到才是 unknown（不要默认成功）
+    exec: execOfState(item.execState),
+    notifyFailures: 0,
+    flowId: item.flowId == null || String(item.flowId) === '0' ? undefined : String(item.flowId),
+    lastCheckAt: item.lastCheckAt || undefined,
+    label,
+    tone,
+    monitors: [],
+    unconfigured: total === 0,
+  }
+}
+
+/**
+ * 拉服务端源聚合（C07 首期）。
+ * 不可用时返回 `unavailable: true`，页面回落到「只列已配置源」的老路径——**不要**用前端拼全量源目录顶替。
+ */
+export interface SourceSummaryStats {
+  available: boolean
+  totalSources: number
+  configuredSources: number
+  enabledSources: number
+  abnormalSources: number
+  uncheckedSources: number
+  notConfiguredSources: number
+}
+
+/**
+ * 全站/本组统计（C07）：与分页列表同一范围口径（siteId + keyword），不吃页内筛选。
+ * 取不到时 available=false，页面显示「—」，绝不填 0 冒充「没有异常」。
+ */
+export async function loadSourceSummaryStats(
+  options: { siteId?: string; keyword?: string } = {},
+): Promise<SourceSummaryStats> {
+  const empty: SourceSummaryStats = {
+    available: false,
+    totalSources: 0,
+    configuredSources: 0,
+    enabledSources: 0,
+    abnormalSources: 0,
+    uncheckedSources: 0,
+    notConfiguredSources: 0,
+  }
+  try {
+    const res = (await pagedSourceSummaryStats({
+      siteId: options.siteId,
+      keyword: options.keyword,
+    })) as Record<string, unknown> | undefined
+    if (!res) return empty
+    const num = (key: string) => {
+      const value = Number(res[key])
+      return Number.isFinite(value) ? value : 0
+    }
+    return {
+      available: true,
+      totalSources: num('totalSources'),
+      configuredSources: num('configuredSources'),
+      enabledSources: num('enabledSources'),
+      abnormalSources: num('abnormalSources'),
+      uncheckedSources: num('uncheckedSources'),
+      notConfiguredSources: num('notConfiguredSources'),
+    }
+  } catch {
+    return empty
+  }
+}
+
+export interface SourceSummaryQuery {
+  siteId?: string
+  keyword?: string
+  /** yes=有在用检查；no=有检查但全部停用；空=不限 */
+  enabled?: 'yes' | 'no'
+  /** none/disabled/unknown/abnormal/normal */
+  dataState?: string
+  /** today / never / not-today */
+  checkDate?: string
+  page?: number
+  size?: number
+}
+
+/**
+ * 服务端源聚合（C07）：**单页**请求，筛选与分页都由服务端执行。
+ * 源总数可达十几万，禁止前端再翻十页拼「假全量」——想看更多就翻页或收窄筛选。
+ */
+export async function listSourceSummary(
+  options: SourceSummaryQuery = {},
+): Promise<{ total: number; rows: MonitorSourceRow[]; unavailable: boolean }> {
+  try {
+    const res = await pagedSourceSummary({
+      page: options.page ?? 1,
+      limit: options.size ?? 30,
+      siteId: options.siteId,
+      keyword: options.keyword,
+      enabled: options.enabled,
+      dataState: options.dataState,
+      checkDate: options.checkDate,
+    })
+    const list = Array.isArray(res?.list) ? (res.list as SourceSummaryPayload[]) : []
+    return {
+      total: Number(res?.total ?? list.length),
+      rows: list.map(toSourceSummaryRow),
+      unavailable: false,
+    }
+  } catch {
+    return { total: 0, rows: [], unavailable: true }
+  }
 }

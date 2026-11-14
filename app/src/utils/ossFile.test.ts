@@ -106,6 +106,25 @@ describe('ossPublicUrl（2026-09-09：html 走新窗口打开的独立 origin，
     expect(url.startsWith('/oss')).toBe(false)
   })
 
+  it('构建时可用 VITE_OSS_PUBLIC_TARGET 单独指定 OSS origin（业务后端与 OSS 不同机）', () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://192.168.1.30:9999')
+    vi.stubEnv('VITE_OSS_PUBLIC_TARGET', 'http://192.168.1.80:9102')
+    expect(ossPublicUrl('/a/b.html')).toBe('http://192.168.1.80:9102/api/oss/download?fileId=/a/b.html')
+    vi.unstubAllEnvs()
+  })
+
+  it('VITE_OSS_PUBLIC_TARGET 没写端口时补 9102，末尾斜杠丢掉', () => {
+    vi.stubEnv('VITE_OSS_PUBLIC_TARGET', 'http://192.168.1.80/')
+    expect(ossPublicUrl('/a.xlsx')).toBe('http://192.168.1.80:9102/api/oss/download?fileId=/a.xlsx')
+    vi.unstubAllEnvs()
+  })
+
+  it('没配 VITE_OSS_PUBLIC_TARGET 时仍按业务后端同机 9102 推导', () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    expect(ossPublicUrl('/a.xlsx')).toBe('http://115.227.21.133:9102/api/oss/download?fileId=/a.xlsx')
+    vi.unstubAllEnvs()
+  })
+
   it('与同源取数地址是两条路：fetch 仍走 /oss（跨源读字节会被 CORS 拒），新窗口才走绝对地址', () => {
     const path = '/qinlong/a.html'
     expect(ossFileUrl(path)).toBe('/oss/api/oss/download?fileId=/qinlong/a.html')

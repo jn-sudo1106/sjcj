@@ -7,13 +7,25 @@ import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDial
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { ckSourceApi, configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { useFlowVersionStore } from '@/stores/flowVersion'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
+import { MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { resetNodeConfigAutosave } from './nodeConfigAutosave'
 
 vi.mock('@/utils/flow/nodeDeployment', () => ({ syncNodeDeployment: vi.fn(async () => null) }))
+// 同源多条检查项：把同步本身 mock 掉，直接抛「带冲突记录」的错误，只验证提示与跳转。
+vi.mock('@/utils/flow/monitorCkSource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/flow/monitorCkSource')>()
+  return { ...actual, syncMonitorCkSource: vi.fn() }
+})
+const routerPush = vi.hoisted(() => vi.fn())
+vi.mock('vue-router', () => ({
+  RouterLink: { props: ['to'], template: '<a><slot /></a>' },
+  useRouter: () => ({ push: routerPush }),
+  useRoute: () => ({ query: {} }),
+}))
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -21,6 +33,8 @@ function mockAssets() {
   vi.spyOn(ruleApi, 'ruleGroups').mockResolvedValue([])
   vi.spyOn(ruleApi, 'rulePaged').mockResolvedValue({ total: 0, list: [] })
   vi.spyOn(ruleApi, 'sharedConfigs').mockResolvedValue([])
+  // C12 绑定展示：非监控节点不发请求；监控节点用例再按需覆盖返回值。
+  vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
 }
 
 // review 0723 #9 修正：文档原描述（onMounted 无条件加载 6 个 API）已经不成立，当前代码已有 isRule 判断；
@@ -1151,5 +1165,154 @@ describe('NodeInspector 保存 = 整张画布一起保存（2026-10-26）', () =
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('尚未配置'))
     expect(flow.selectedId).toBe('41520')
     w.unmount()
+  })
+})
+
+// 一源多检查项（2026-11-12）：/api/source/update 只按 sourceId 匹配，画布保存无法只改其中一条，
+// 同步层已拒绝写入。手动保存必须把「是哪几条」列出来并给出口，不能只丢一句长错误。
+describe('数据监控节点保存：同源多条检查项', () => {
+  it('停下写入并弹出带清单的确认框，确认后跳监控中心数据源监控页签', async () => {
+    mockAssets(); setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const node = cloneConfig(NODE_CONFIGS['rule'])
+    node.template = 'monitor'
+    node.title = '库存监控'
+    node.configId = '1401088'
+    node.configName = '库存监控'
+    node.ruleCfg = {
+      mode: 'ref',
+      describe: '库存监控',
+      inputTable: 'sense_data.TB_JD_SKU_BASE',
+      inputTableId: '2102154',
+      inputFields: ['sku_id'],
+      outputFields: [],
+      scriptPath: '/code01/184.py',
+    }
+    flow.configs['monitor-1'] = node
+    flow.select('monitor-1'); flow.setActiveTab('orchestration')
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ configId: '1401088' })
+    vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1401088', name: '库存监控' } as never)
+    vi.mocked(syncMonitorCkSource).mockRejectedValue(new MultipleCkSourceRowsError('430016501', [
+      { id: 7, sourceId: 430016501, name: '检查项A', tableName: 'sense_data.TB_X', isDelete: 0, state: 'E', updateDt: '2026-09-18T10:00:00' },
+      { id: 8, sourceId: 430016501, name: '检查项B', isDelete: 1, state: 'D' },
+    ]))
+    const alert = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error')
+    // 数据监控节点会加载提示词模板（fetch 相对 URL 在 jsdom 下解析不了），返回空列表即可。
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    routerPush.mockClear()
+
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } }); await flushPromises()
+    flow.setDedupMode('monitor-1', 'table'); await flushPromises()
+    await wrapper.get('[data-testid="node-config-save"]').trigger('click'); await flushPromises(); await flushPromises()
+
+    expect(alert).toHaveBeenCalledTimes(1)
+    const [message, title, options] = alert.mock.calls[0] as unknown as [string, string, Record<string, unknown>]
+    expect(title).toBe('同源有多条检查项，画布未写入')
+    expect(message).toContain('画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。')
+    expect(message).toContain('检查项A｜id=7｜表=sense_data.TB_X｜在用｜更新 2026-09-18 10:00')
+    expect(message).toContain('检查项B｜id=8｜已停用')
+    expect(message).toContain('请到监控中心按检查项逐条编辑或删除重复项。')
+    expect(options).toMatchObject({
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    })
+    // 不再用一句「监控源配置同步失败：…」打发用户
+    expect(error.mock.calls.some((call) => String(call[0]).includes('监控源配置同步失败'))).toBe(false)
+    expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
+    wrapper.unmount()
+    vi.mocked(syncMonitorCkSource).mockReset()
+  })
+})
+
+// C12 前端半的「读」这一侧（2026-11-13）：画布保存会把 check_conf.binding 写到 ck_source，
+// 检查器要把「本节点绑到哪条检查项」显式展示出来。只读回读，不许触发同步 / 写库。
+describe('数据监控节点：检查项显式绑定展示（C12）', () => {
+  type CkRows = Awaited<ReturnType<typeof ckSourceApi.list>>
+
+  async function mountMonitor(rows: CkRows | Error) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    // flowId 用于和 binding.workflowId 对齐（canvasFlowIdOf 读 sourceCfg.flowId）
+    flow.sourceCfg = {
+      sourceId: '430016501', name: '某源', url: 'http://x', configId: 'c-0',
+      mainTable: 'T1', owner: 'admin', state: 'C', flowId: '451',
+    } as never
+    const node = cloneConfig(NODE_CONFIGS['rule'])
+    node.template = 'monitor'
+    node.title = '库存监控'
+    node.configId = '1401088'
+    node.configName = '库存监控'
+    flow.configs['monitor-1'] = node
+    flow.main = ['monitor-1']
+    flow.select('monitor-1')
+    // 数据监控节点会加载提示词模板（fetch 相对 URL 在 jsdom 下解析不了），返回空列表即可。
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    const list = vi.spyOn(ckSourceApi, 'list')
+    if (rows instanceof Error) list.mockRejectedValue(rows)
+    else list.mockResolvedValue(rows)
+    const wrapper = mount(NodeInspector, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    return { wrapper, flow, list }
+  }
+
+  it('已绑定：显示检查项 ID、绑定版本、同步时间与名称', async () => {
+    const { wrapper } = await mountMonitor([
+      {
+        id: 7, sourceId: 430016501, name: '库存检查项',
+        checkConf: JSON.stringify({
+          binding: { workflowId: '451', nodeKey: 'monitor-1', bindingVersion: 2, boundAt: '2026-11-13 10:00' },
+        }),
+      },
+    ])
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('已绑定检查项 #7')
+    expect(block.text()).toContain('绑定版本 v2')
+    expect(block.text()).toContain('同步于 2026-11-13 10:00')
+    expect(block.text()).toContain('库存检查项')
+    expect(block.find('[data-testid="ni-monitor-open"]').attributes('title'))
+      .toBe('跳转到监控中心（需手动定位该检查项）')
+    wrapper.unmount()
+  })
+
+  it('旧记录（check_conf 没有 binding）显示未绑定，不误报成已绑定', async () => {
+    const { wrapper } = await mountMonitor([
+      { id: 9, sourceId: 430016501, name: '旧检查项', checkConf: JSON.stringify({ minSize: 0, cond: 'id > 0' }) },
+    ])
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('尚未绑定检查项：在监控中心生成并保存一次，或直接在此节点保存检查配置')
+    expect(block.find('[data-testid="ni-monitor-open"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('接口失败：显示「绑定信息读取失败」，不静默成未绑定', async () => {
+    const { wrapper } = await mountMonitor(new Error('接口 502'))
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('绑定信息读取失败')
+    expect(block.text()).not.toContain('尚未绑定检查项')
+    wrapper.unmount()
+  })
+
+  it('已绑定时点「在监控中心查看」→ 跳转 /monitor（sourceCheck 页签）', async () => {
+    const { wrapper } = await mountMonitor([
+      {
+        id: 11, sourceId: 430016501, name: '库存检查项',
+        checkConf: JSON.stringify({ binding: { nodeKey: 'monitor-1', bindingVersion: 1, boundAt: '2026-11-13 10:00' } }),
+      },
+    ])
+    routerPush.mockClear()
+    await wrapper.get('[data-testid="ni-monitor-open"]').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/monitor', query: { tab: 'sourceCheck' } })
+    wrapper.unmount()
   })
 })

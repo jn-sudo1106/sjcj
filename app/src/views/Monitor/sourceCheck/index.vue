@@ -7,28 +7,42 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import type { MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
+import type {
+  MonitorKind,
+  MonitorRecordView,
+  MonitorScopeType,
+  MonitorSourceRow,
+} from '@/api/types/monitorCenter'
 import {
   MonitorQueryLimitError,
   listMonitors,
   listMonitorsOfSource,
+  listSourceSummary,
+  loadSourceSummaryStats,
+  listSourceNames,
   listSourceOptions,
   runMonitorsNow,
   setMonitorsEnabled,
   type MonitorSourceOption,
+  type SourceSummaryStats,
 } from '@/api/monitorCenter'
 import { deleteSourceCheck } from '@/api/monitor'
+import { monitorScopeOf } from '@/utils/monitor/record'
 import { summarizeSources } from '@/utils/monitor/sourceSummary'
 import { confirmDanger } from '@/utils/confirmDanger'
-import SourceSelect from './SourceSelect.vue'
 import MonitorBatchDialog from './MonitorBatchDialog.vue'
 import MonitorWatchDrawer from './MonitorWatchDrawer.vue'
 import MonitorConfigEditor from '@/views/FlowCanvas/result/MonitorConfigEditor.vue'
 import RunsDrawer from '@/views/FlowCanvas/result/monitor-runs/RunsDrawer.vue'
+import CheckNotificationsDrawer from './CheckNotificationsDrawer.vue'
 import {
+  CHECK_DATE_OPTIONS,
   ENABLE_OPTIONS,
   STATUS_OPTIONS,
   checkCoverageOf,
+  sourceHintOf,
+  sourceSubtitleOf,
+  sourceTitleOf,
   coverageOf,
   dataHintOf,
   dataPillOf,
@@ -62,11 +76,38 @@ const props = withDefaults(
 
 const PAGE_SIZES = [10, 30, 100, 200]
 
+/**
+ * 检查对象筛选（1113 §3）：全部 / 源结果检查 / 节点环节检查 / 未分类。
+ * 这是**检查项**属性而不是源属性，所以不能塞进 `SourceListQuery`（源级筛选会被服务端按源分页）；
+ * 旧记录 `scopeType` 缺省时只归入「未分类」，不推断成源结果。
+ */
+type ScopeFilter = 'all' | MonitorScopeType | 'unclassified'
+
+const SCOPE_OPTIONS: ReadonlyArray<{ value: ScopeFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'source_result', label: '源结果检查' },
+  { value: 'node_input', label: '节点环节检查' },
+  { value: 'unclassified', label: '未分类' },
+]
+
+function scopeLabelOf(filter: ScopeFilter): string {
+  return SCOPE_OPTIONS.find((item) => item.value === filter)?.label ?? '全部'
+}
+
 const loading = ref(false)
 const records = ref<MonitorRecordView[]>([])
 const directory = ref<MonitorSourceOption[]>([])
+/** 按需取到的源名称（目录超限时仍能显示名字，而不是只剩 ID） */
+const nameIndex = ref<MonitorSourceOption[]>([])
 /** 源目录可用时才能列出「未配置检查的源」；不可用时降级为「仅已配置源 + 提示」 */
 const directoryReady = ref(false)
+/** 全局视图不再尝试拉全量源目录（24 万源必然超限，20 次串行请求只会让首屏变慢） */
+const directorySkipped = ref(false)
+/** 服务端源聚合（C07 首期）结果；null 表示不可用，页面回落到「只列已配置源」 */
+const summaryRows = ref<MonitorSourceRow[] | null>(null)
+const summaryTotal = ref(0)
+/** 全站/本组统计（C07）：与分页同一范围口径；available=false 时显示「—」 */
+const summaryStats = ref<SourceSummaryStats | null>(null)
 const loadError = ref('')
 const directoryError = ref('')
 let refreshToken = 0
@@ -76,9 +117,13 @@ const draft = reactive<SourceListQuery>({
   enable: 'all',
   status: 'all',
   keyword: '',
+  checkDate: 'all',
 })
 /** 已生效的筛选：刷新时用它，避免把输入到一半的草稿当成查询条件 */
 const applied = reactive<SourceListQuery>({ ...draft })
+/** 检查对象草稿 / 已生效值：与源级筛选一样先「查询」再生效 */
+const draftScope = ref<ScopeFilter>('all')
+const appliedScope = ref<ScopeFilter>('all')
 
 const page = ref(1)
 const pageSize = ref(30)
@@ -98,6 +143,8 @@ const runsOpen = ref(false)
 const runsSourceId = ref<string>()
 const runsMonitorId = ref<string>()
 const runsTitle = ref<string>()
+// 通知回执抽屉：执行器只为异常/失败建事件，入口与「记录」一致（按 monitorId 查）。
+const notifyRef = ref<InstanceType<typeof CheckNotificationsDrawer>>()
 
 const editingLockSource = ref(true)
 const batchVisible = ref(false)
@@ -142,7 +189,33 @@ const scopedRecords = computed(() => {
   return records.value
 })
 
+/** 名称来源：目录优先，其次是按 ID 批量取回的那批 */
+const sourceCatalog = computed<MonitorSourceOption[]>(() => {
+  const map = new Map<string, MonitorSourceOption>()
+  for (const item of nameIndex.value) map.set(item.sourceId, item)
+  for (const item of directory.value) map.set(item.sourceId, item)
+  return [...map.values()]
+})
+
+/** 传给聚合函数的源描述（id/name/siteId/siteName 四个字段） */
+const sourceLikes = computed(() =>
+  sourceCatalog.value.map((item) => ({
+    id: item.sourceId,
+    name: item.name,
+    siteId: item.siteId,
+    siteName: item.siteName,
+    tableName: item.tableName,
+  })),
+)
+
 const allRows = computed<MonitorSourceRow[]>(() => {
+  // 服务端聚合可用时直接用它：一行一个源、含未配置检查的源，且分组权限由后端保证。
+  if (scopeKind.value !== 'source' && summaryRows.value) {
+    return summaryRows.value.map((row) => ({
+      ...row,
+      monitors: records.value.filter((monitor) => monitor.sourceId === row.sourceId),
+    }))
+  }
   if (scopeKind.value === 'source') {
     const monitors = scopedRecords.value
     return summarizeSources(monitors, [
@@ -150,22 +223,104 @@ const allRows = computed<MonitorSourceRow[]>(() => {
     ])
   }
   if (scopeKind.value === 'global' && !directoryReady.value) {
-    // 降级：源目录拿不到（超限/失败）时只列已配置源，页面顶部另有提示，不把分页结果拼成「全量」
-    return summarizeSources(records.value)
+    // 降级：源目录拿不到（超限/失败）时只列已配置源，页面顶部另有提示，不把分页结果拼成「全量」。
+    // 名称仍走「按 ID 取回」的那批，别退化成只剩 ID。
+    return summarizeSources(records.value, sourceLikes.value)
   }
-  const sources = directory.value.map((item) => ({
-    id: item.sourceId,
-    name: item.name,
-    siteId: item.siteId,
-    siteName: item.siteName,
-  }))
-  return summarizeSources(scopedRecords.value, sources)
+  return summarizeSources(scopedRecords.value, sourceLikes.value)
 })
 
-const filteredRows = computed(() => filterSourceRows(allRows.value, applied))
-const pagedRows = computed(() =>
-  filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
+/**
+ * 检查对象筛选是否生效。
+ * 生效时按检查项过滤，并让源列表退回本地分页：服务端按源聚合只认源级条件，
+ * 不认「检查项属于哪一类」，若继续用服务端分页，会出现「当前页被隐藏一半、总数还是全站」的错乱。
+ */
+const scopeFilterActive = computed(() => appliedScope.value !== 'all')
+
+/**
+ * 服务端聚合模式：筛选与分页都在服务端，客户端不再二次切片（否则每页只剩几条）。
+ * 检查对象筛选期间强制关闭：那个维度只能按检查项在本地过滤，翻页与计数也必须跟着本地走。
+ */
+const summaryMode = computed(
+  () => scopeKind.value !== 'source' && !!summaryRows.value && !scopeFilterActive.value,
 )
+/** 服务端不认的筛选（执行失败/未生效/待判断）只能在当前页内过滤，避免翻页后「筛了个寂寞」 */
+const summaryUnsupported = computed(
+  () => summaryMode.value && ['failed', 'draft', 'pending'].includes(applied.status),
+)
+/** 检查项是否命中当前的检查对象筛选；旧记录缺省 scopeType 只命中「未分类」 */
+function matchScope(monitor: MonitorRecordView, filter: ScopeFilter): boolean {
+  if (filter === 'all') return true
+  const scope = monitorScopeOf(monitor.conf)
+  if (filter === 'unclassified') return scope === undefined
+  return scope === filter
+}
+
+/** 展开行内实际展示的检查项：筛选生效时只留命中的那一类 */
+function visibleMonitorsOf(row: MonitorSourceRow): MonitorRecordView[] {
+  if (!scopeFilterActive.value) return row.monitors
+  return row.monitors.filter((monitor) => matchScope(monitor, appliedScope.value))
+}
+
+/** 行内检查项数口径：筛选时写清「已筛选 N / 共 M」，避免把过滤后的数量误读成总数变了 */
+function checkCountTextOf(row: MonitorSourceRow): string {
+  if (!scopeFilterActive.value) return `${row.monitorTotal} 项检查`
+  return `已筛选 ${visibleMonitorsOf(row).length} / 共 ${row.monitorTotal} 项检查`
+}
+
+/** 「未关联流程」标签的 title：缺流程只影响是否随流程触发，不影响配置/生成检查。 */
+const FLOW_UNBOUND_TITLE =
+  '该源没有绑定流程：检查只能按自己的计划或手动运行，不会随采集流程触发；不影响生成检查'
+
+type ExecBadgeTone = 'ok' | 'err' | 'muted'
+interface ExecBadge {
+  text: string
+  tone: ExecBadgeTone
+  title: string
+}
+
+/** 源级「执行结论」口径：该源启用中检查项最近一次运行的结论。 */
+const EXEC_BADGE_TITLE = '按该源启用中检查项最近一次运行判定'
+
+/**
+ * 「执行结论」徽标（1113）。
+ * none = 该源没有启用中的检查项，不显示；queued/running/timeout 等是单条运行中的中间态，
+ * 不在源级 exec 契约（none / unknown / succeeded / failed）内，同样不猜结论。
+ */
+const EXEC_BADGES: Partial<Record<MonitorSourceRow['exec'], ExecBadge>> = {
+  failed: { text: '执行失败', tone: 'err', title: EXEC_BADGE_TITLE },
+  succeeded: { text: '执行正常', tone: 'ok', title: EXEC_BADGE_TITLE },
+  unknown: { text: '未执行', tone: 'muted', title: EXEC_BADGE_TITLE },
+}
+
+function execBadgeOf(row: MonitorSourceRow): ExecBadge | undefined {
+  return EXEC_BADGES[row.exec]
+}
+
+/**
+ * 「未关联流程」标签只在服务端聚合行上出现：C07 的 flowId 缺省就是「未关联流程」；
+ * 本地聚合（C07 不可用 / 源内视图）拿不到 flowId，不能把「不知道」说成「未关联」。
+ */
+function showFlowUnbound(row: MonitorSourceRow): boolean {
+  return scopeKind.value !== 'source' && !row.flowId && !!summaryRows.value
+}
+
+const filteredRows = computed(() => {
+  let rows: MonitorSourceRow[]
+  if (!summaryMode.value) rows = filterSourceRows(allRows.value, applied)
+  else if (!summaryUnsupported.value) rows = allRows.value
+  else rows = filterSourceRows(allRows.value, { ...applied, enable: 'all', checkDate: 'all' })
+  if (!scopeFilterActive.value) return rows
+  // 整行隐藏：该源下没有任何命中检查项的源不出行（无检查项的源自然不参与）
+  return rows.filter((row) => row.monitors.some((monitor) => matchScope(monitor, appliedScope.value)))
+})
+const pagedRows = computed(() =>
+  summaryMode.value
+    ? filteredRows.value
+    : filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
+)
+/** 分页总数：服务端模式用后端 total，否则用本地筛选后的条数 */
+const pagerTotal = computed(() => (summaryMode.value ? summaryTotal.value : filteredRows.value.length))
 /** 统计只算本页：无 C07 时不能把全站异常数说成已知 */
 const stats = computed(() => sourceStats(pagedRows.value))
 const configuredCount = computed(() => filteredRows.value.filter((row) => row.monitorTotal > 0).length)
@@ -213,7 +368,15 @@ async function loadRecords(request: number): Promise<void> {
 async function loadDirectory(request: number): Promise<void> {
   directoryError.value = ''
   directoryReady.value = false
+  directorySkipped.value = false
   if (scopeKind.value === 'source') return
+  if (scopeKind.value === 'global') {
+    // 真机源 24 万条，`source/sourcePaged` 一页 200 拉满 20 页也取不完。
+    // 与其串行打完 20 个请求再报错（首屏等十几秒），不如直接按「仅已配置源」出数据，
+    // 名称走 `listSourceNames` 按 ID 批量取（2 个请求）。
+    directorySkipped.value = true
+    return
+  }
   try {
     const loaded = await listSourceOptions(props.siteId ? { siteId: props.siteId } : {})
     if (request !== refreshToken) return
@@ -226,11 +389,81 @@ async function loadDirectory(request: number): Promise<void> {
   }
 }
 
+/**
+ * 记录拿到后按 sourceId 批量补名称。
+ * 源目录 24 万+ 拉不全（全局会提示「源数量超过 4000」），但列表只需要这些源的名字。
+ */
+async function loadSourceNames(request: number): Promise<void> {
+  const ids = [...new Set(records.value.map((row) => row.sourceId))]
+  if (!ids.length) {
+    nameIndex.value = []
+    return
+  }
+  try {
+    const loaded = await listSourceNames(ids)
+    if (request !== refreshToken) return
+    nameIndex.value = loaded
+  } catch {
+    if (request !== refreshToken) return
+    nameIndex.value = []
+  }
+}
+
+/**
+ * 服务端源聚合（C07 首期）：真正把「未配置检查的源」列出来，并由后端按分组过滤。
+ * 失败/未部署时保持 null，页面继续用老的「已配置源 + 按 ID 取名」路径，不假装聚合成功。
+ */
+async function loadSummary(request: number): Promise<void> {
+  if (scopeKind.value === 'source') return
+  const result = await listSourceSummary({
+    siteId: props.siteId || undefined,
+    keyword: applied.keyword || undefined,
+    enabled: summaryEnabledParam.value,
+    dataState: summaryDataStateParam.value,
+    checkDate: applied.checkDate && applied.checkDate !== 'all' ? applied.checkDate : undefined,
+    page: page.value,
+    size: pageSize.value,
+  })
+  if (request !== refreshToken) return
+  if (result.unavailable) {
+    summaryRows.value = null
+    summaryTotal.value = 0
+    return
+  }
+  summaryRows.value = result.rows
+  summaryTotal.value = result.total
+  const stats = await loadSourceSummaryStats({
+    siteId: props.siteId || undefined,
+    keyword: applied.keyword || undefined,
+  })
+  if (request !== refreshToken) return
+  summaryStats.value = stats.available ? stats : null
+}
+
+/** 启停筛选 → 服务端 enabled 参数（未配置走 dataState=none） */
+const summaryEnabledParam = computed<'yes' | 'no' | undefined>(() => {
+  if (applied.enable === 'enabled') return 'yes'
+  if (applied.enable === 'disabled') return 'no'
+  return undefined
+})
+/** 数据情况筛选 → 服务端 dataState 参数；执行失败/未生效/待判断服务端暂无对应口径 */
+const summaryDataStateParam = computed<string | undefined>(() => {
+  if (applied.enable === 'unconfigured') return 'none'
+  const map: Record<string, string> = {
+    abnormal: 'abnormal',
+    normal: 'normal',
+    disabled: 'disabled',
+    unchecked: 'unknown',
+  }
+  return map[applied.status]
+})
+
 async function refreshData(): Promise<void> {
   const request = ++refreshToken
   loading.value = true
   try {
-    await Promise.all([loadRecords(request), loadDirectory(request)])
+    await Promise.all([loadRecords(request), loadDirectory(request), loadSummary(request)])
+    await loadSourceNames(request)
   } finally {
     if (request === refreshToken) {
       loading.value = false
@@ -246,25 +479,40 @@ async function refresh(): Promise<void> {
 
 function applyFilters(): void {
   const sourceChanged = applied.sourceId !== draft.sourceId
+  // 记录应用前的分页口径：检查对象的生效/失效会在「服务端按源分页」和「本地分页」之间切换，
+  // 切换时必须重新取一次数据，否则会拿旧分页结果当新口径渲染。
+  const wasSummary = summaryMode.value
   applied.sourceId = scopeKind.value === 'source' ? props.sourceId : draft.sourceId
   applied.enable = draft.enable
   applied.status = draft.status
+  applied.checkDate = draft.checkDate ?? 'all'
   applied.keyword = draft.keyword.trim()
+  appliedScope.value = draftScope.value
   page.value = 1
   collapseExpanded()
-  if (sourceChanged) void refresh()
+  if (sourceChanged || wasSummary || summaryMode.value) {
+    void refresh()
+  }
 }
 
 function resetFilters(): void {
   draft.sourceId = scopeKind.value === 'source' ? props.sourceId : ''
   draft.enable = 'all'
   draft.status = 'all'
+  draft.checkDate = 'all'
   draft.keyword = ''
+  draftScope.value = 'all'
   applyFilters()
 }
 
 function onSizeChange(): void {
   page.value = 1
+  if (summaryMode.value) void loadSummary(refreshToken)
+}
+
+function onPageChange(next: number): void {
+  page.value = next
+  if (summaryMode.value) void loadSummary(refreshToken)
 }
 
 function collapseExpanded(): void {
@@ -346,8 +594,8 @@ async function beforeEditorClose(done: () => void): Promise<void> {
 }
 
 function onEditorSaved(record: MonitorRecordView | null): void {
-  // 回读不确定时保留候选；成功后也留在同一记录，避免再次保存变成重复新增。
-  if (record) editingRecord.value = record
+  // 回读不确定时保留编辑内容；确认保存成功后关闭弹窗。
+  if (record) onEditorCancel()
   void refresh()
 }
 
@@ -365,6 +613,11 @@ function openLogs(row: MonitorSourceRow, monitor?: MonitorRecordView): void {
   runsOpen.value = true
 }
 
+function openNotifications(row: MonitorSourceRow, monitor?: MonitorRecordView): void {
+  // 事件挂在监控记录（ckSource.id）上；源级入口没有 monitorId，抽屉内提示无法查询，不伪造来源。
+  notifyRef.value?.show(row.sourceId, monitor?.id, monitor?.name)
+}
+
 async function toggleMonitor(monitor: MonitorRecordView, next: boolean): Promise<void> {
   try {
     await setMonitorsEnabled([monitor.id], next)
@@ -376,10 +629,61 @@ async function toggleMonitor(monitor: MonitorRecordView, next: boolean): Promise
   }
 }
 
+/**
+ * 检查对象归属（1113 §3）：源结果 / 节点环节 / 未分类。
+ * 旧记录没有 scopeType 键时必须显示「未分类」，不推断成源结果；
+ * 未分类用中性灰，不给误导性的语义色。
+ */
+function scopeMetaOf(monitor: MonitorRecordView): { text: string; cls: string; title: string } {
+  const scope = monitorScopeOf(monitor.conf)
+  if (scope === 'source_result') {
+    return { text: '源结果', cls: 'is-source', title: '源结果检查：监控中心入口，检查最终落库表的结果' }
+  }
+  if (scope === 'node_input') {
+    return { text: '节点环节', cls: 'is-node', title: '节点环节检查：画布数据监控节点，检查该节点输入是否准确' }
+  }
+  return { text: '未分类', cls: 'is-none', title: '旧记录未标注检查对象归属，不推断为源结果' }
+}
+
+/**
+ * 超期无新增策略（1113 §5）：`conf.overduePolicy.expectEveryMinutes` 是「预期多久更新一次」，
+ * 执行器在窗口内没有新增数据时用「预期周期 + 宽限」判定断流。
+ *
+ * 只在配了预期周期时出徽标：没配的旧记录行为完全不变，页面上不能凭空给一个周期，
+ * 否则会让人以为这条检查已经被超期判定覆盖。宽限只放进 title，不占正文宽度。
+ */
+function overdueOf(monitor: MonitorRecordView): { text: string; title: string } {
+  const policy = monitor.conf?.overduePolicy
+  const expect = policy?.expectEveryMinutes
+  if (typeof expect !== 'number' || !Number.isFinite(expect) || expect <= 0) {
+    return { text: '', title: '' }
+  }
+  const grace = policy?.graceMinutes
+  const hasGrace = typeof grace === 'number' && Number.isFinite(grace) && grace > 0
+  return {
+    text: `每 ${expect} 分钟`,
+    title: hasGrace
+      ? `超期无新增：预期每 ${expect} 分钟更新一次，宽限 ${grace} 分钟`
+      : `超期无新增：预期每 ${expect} 分钟更新一次，未配置宽限`,
+  }
+}
+
+/** 检查方式决定立即运行走哪条链路：脚本检查走执行器，规则检查走旧调度器。 */
+const kindIndex = computed<Record<string, MonitorKind>>(() =>
+  Object.fromEntries(records.value.map((row) => [row.id, row.kind])),
+)
+
 async function runMonitor(monitor: MonitorRecordView): Promise<void> {
   try {
-    await runMonitorsNow([monitor.id])
-    ElMessage.success('已提交执行（受理不代表执行成功）')
+    const result = await runMonitorsNow([monitor.id], kindIndex.value)
+    if (result.runnerSkipped) {
+      // 没抢到占位锁：既没跑脚本也没写库，不能用「已提交」误导。
+      ElMessage.warning('这条检查正在另一个执行实例运行，本次已跳过（没有产生新的运行记录）')
+    } else if (result.runnerRunIds?.length) {
+      ElMessage.success(`已提交执行 · ${result.runnerRunIds[0]}（受理不代表执行成功，结果见运行记录）`)
+    } else {
+      ElMessage.success('已提交执行（受理不代表执行成功）')
+    }
   } catch (err) {
     ElMessage.error(readableError(err, '提交执行失败'))
   } finally {
@@ -393,8 +697,16 @@ async function batchRun(): Promise<void> {
   if (!selectedIds.value.length) return
   const ids = [...selectedIds.value]
   try {
-    await runMonitorsNow(ids)
-    ElMessage.success(`已提交 ${ids.length} 项执行`)
+    const result = await runMonitorsNow(ids, kindIndex.value)
+    const parts: string[] = []
+    if (result.viaRunner) parts.push(`${result.viaRunner} 项脚本检查走执行器`)
+    if (result.viaLegacy) parts.push(`${result.viaLegacy} 项规则检查走调度器`)
+    const head = parts.length ? `已提交 ${ids.length} 项：${parts.join('、')}` : `已提交 ${ids.length} 项执行`
+    if (result.runnerSkipped) {
+      ElMessage.warning(`${head}；另有 ${result.runnerSkipped} 项因另一实例正在运行而跳过`)
+    } else {
+      ElMessage.success(head)
+    }
   } catch (err) {
     ElMessage.error(readableError(err, '提交执行失败'))
   } finally {
@@ -456,6 +768,30 @@ onMounted(() => {
       <span>监控记录加载失败：{{ loadError }}</span>
       <button type="button" class="sc-link" @click="refresh()">重试</button>
     </div>
+    <div v-if="scopeFilterActive" data-testid="sc-scope-filter-hint" class="sc-hint sc-hint-muted">
+      <span>
+        已按检查对象筛选（{{ scopeLabelOf(appliedScope) }}）：只显示含该类检查项的源，展开后也只列该类检查项；
+        「共 N 个源」与翻页按筛选后的结果计算。检查对象是检查项属性，服务端源聚合不认这个维度，
+        因此筛选期间未配置检查的源不参与。
+      </span>
+    </div>
+    <div v-else-if="summaryMode" data-testid="sc-summary-hint" class="sc-hint sc-hint-muted">
+      <span>
+        服务端按源聚合：<template v-if="summaryStats">
+          共 {{ summaryStats.totalSources }} 个源 · 已配置 {{ summaryStats.configuredSources }}（启用
+          {{ summaryStats.enabledSources }}）· 数据异常 {{ summaryStats.abnormalSources }} · 未配置检查
+          {{ summaryStats.notConfiguredSources }}
+        </template><template v-else>共 {{ summaryTotal }} 个源（全站统计暂不可用，显示「—」）</template>。
+        已配置的排在最前；筛选与翻页都由服务端执行，「执行失败 / 未生效 / 待判断」当前只能在当前页内过滤。
+        计划覆盖仍需服务端按时隙聚合，暂显示「—」。
+      </span>
+    </div>
+    <div v-else-if="directorySkipped && scopeKind === 'global'" class="sc-hint sc-hint-muted">
+      <span>
+        按已配置监控的源展示。未配置检查的源、以及全站汇总，需服务端聚合（C07）后再出行；
+        找不到源时用上面的关键词按名称 / ID / 主表筛选。
+      </span>
+    </div>
     <div v-else-if="directoryError" class="sc-hint">
       <span v-if="scopeKind === 'site'">
         网站源目录加载失败：{{ directoryError }}。为避免串出其他网站的数据，当前不展示列表。
@@ -467,24 +803,11 @@ onMounted(() => {
     </div>
 
     <div class="sc-filter-row">
-      <template v-if="scopeKind === 'global'">
-        <SourceSelect v-model="draft.sourceId" class="sc-filter-source" />
-      </template>
-      <el-select
-        v-else-if="scopeKind === 'site'"
-        v-model="draft.sourceId"
-        class="sc-filter-source"
-        filterable
-        clearable
-        placeholder="源（限当前网站）"
-      >
-        <el-option
-          v-for="item in directory"
-          :key="item.sourceId"
-          :value="item.sourceId"
-          :label="`[${item.sourceId}]${item.name}`"
-        />
-      </el-select>
+      <!--
+        只有一个源筛选框：源目录在 24 万源的环境里拉不全，「源 ID 下拉」实际选不到东西，
+        而它和下面的关键词框又都在做「找某个源」，两个框并排只会让人猜哪个生效。
+        这里统一成关键词（名称 / ID / 主表，客户端过滤已加载行），源ID 精确匹配也在其中。
+      -->
 
       <label class="sc-filter-field"><span>启停状态</span><el-select v-model="draft.enable" class="sc-filter-select" aria-label="启停状态" placeholder="启停状态">
         <el-option v-for="item in ENABLE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
@@ -492,19 +815,36 @@ onMounted(() => {
       <label class="sc-filter-field"><span>数据情况</span><el-select v-model="draft.status" class="sc-filter-select" aria-label="数据情况" placeholder="数据情况">
         <el-option v-for="item in STATUS_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
       </el-select></label>
+      <label class="sc-filter-field"><span>最近检查</span><el-select v-model="draft.checkDate" class="sc-filter-select" aria-label="最近检查日期" placeholder="最近检查">
+        <el-option v-for="item in CHECK_DATE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+      </el-select></label>
+      <label class="sc-filter-field"><span>检查对象</span>
+        <el-select
+          v-model="draftScope"
+          class="sc-filter-scope"
+          aria-label="检查对象"
+          placeholder="检查对象"
+          data-testid="sc-scope-filter"
+        >
+          <el-option v-for="item in SCOPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+        </el-select>
+      </label>
       <el-input
         v-model="draft.keyword"
         class="sc-filter-keyword"
-        aria-label="筛选已加载源的名称或 ID"
+        aria-label="按源名称、源 ID 或主表筛选已加载的源"
         clearable
-        placeholder="筛选已加载源名称 / ID"
+        placeholder="源名称 / ID / 主表"
         @keyup.enter="applyFilters"
       />
       <el-button type="primary" @click="applyFilters">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
 
       <div class="sc-headbar">
-        <span class="sc-count">共 {{ filteredRows.length }} 个源 · 已配置 {{ configuredCount }}</span>
+        <span class="sc-count">
+          共 {{ pagerTotal }} 个源<template v-if="summaryMode"> · 本页已配置 {{ configuredCount }}</template>
+          <template v-else> · 已配置 {{ configuredCount }}</template>
+        </span>
         <el-button
           :icon="Refresh"
           circle
@@ -541,7 +881,10 @@ onMounted(() => {
           <section class="sc-inner">
             <div class="sc-inner-head">
               <span class="sc-inner-title">{{ row.sourceName || row.sourceId }}</span>
-              <span class="subline">· {{ row.monitorTotal }} 项检查 · 各自独立记录身份、启停和通知</span>
+              <span class="subline">
+                · <span data-testid="sc-scope-count">{{ checkCountTextOf(row) }}</span>
+                · 各自独立记录身份、启停和通知
+              </span>
               <template v-if="selectedMonitors.length">
                 <span class="sc-selected">已选 {{ selectedMonitors.length }} 项</span>
                 <el-button size="small" @click="batchRun">重跑所选</el-button>
@@ -555,7 +898,7 @@ onMounted(() => {
             </div>
 
             <el-table
-              :data="row.monitors"
+              :data="visibleMonitorsOf(row)"
               row-key="id"
               size="small"
               class="sc-inner-table"
@@ -578,6 +921,17 @@ onMounted(() => {
                   <div class="subline">{{ monitorPublishText(monitor.publishStatus, monitor.effectiveVersion) }}</div>
                 </template>
               </el-table-column>
+              <el-table-column label="检查对象" width="84">
+                <template #default="{ row: monitor }">
+                  <span
+                    class="sc-object-tag"
+                    :class="scopeMetaOf(monitor).cls"
+                    :title="scopeMetaOf(monitor).title"
+                  >
+                    {{ scopeMetaOf(monitor).text }}
+                  </span>
+                </template>
+              </el-table-column>
               <el-table-column label="检查摘要" min-width="160">
                 <template #default="{ row: monitor }">
                   <span class="sc-ellipsis" :title="monitorSummaryOf(monitor)">{{ monitorSummaryOf(monitor) }}</span>
@@ -585,7 +939,17 @@ onMounted(() => {
               </el-table-column>
               <el-table-column label="执行计划" min-width="130">
                 <template #default="{ row: monitor }">
-                  <span class="sc-ellipsis" :title="monitorPlanOf(monitor).plan">{{ monitorPlanOf(monitor).plan }}</span>
+                  <div class="sc-plan-line">
+                    <span class="sc-ellipsis" :title="monitorPlanOf(monitor).plan">{{ monitorPlanOf(monitor).plan }}</span>
+                    <span
+                      v-if="overdueOf(monitor).text"
+                      class="sc-overdue-tag"
+                      data-testid="sc-overdue-tag"
+                      :title="overdueOf(monitor).title"
+                    >
+                      {{ overdueOf(monitor).text }}
+                    </span>
+                  </div>
                   <div class="subline">下次 {{ monitorPlanOf(monitor).next }}</div>
                 </template>
               </el-table-column>
@@ -608,12 +972,13 @@ onMounted(() => {
                   <div class="subline">{{ monitorExecOf(monitor).text }}</div>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" min-width="132">
+              <el-table-column label="操作" min-width="176">
                 <template #default="{ row: monitor }">
                   <div class="sc-ops">
                     <button type="button" class="sc-link" @click="openEdit(row, monitor)">编辑</button>
                     <button type="button" class="sc-link" @click="runMonitor(monitor)">立即运行</button>
                     <button type="button" class="sc-link" @click="openLogs(row, monitor)">记录</button>
+                    <button type="button" class="sc-link" @click="openNotifications(row, monitor)">通知</button>
                   </div>
                 </template>
               </el-table-column>
@@ -633,11 +998,21 @@ onMounted(() => {
 
       <el-table-column label="源与网站" min-width="158">
         <template #default="{ row }">
-          <span class="sc-name" :title="row.sourceName || row.sourceId" @click="toggleExpand(row)">
-            {{ row.sourceName || row.sourceId }}
-          </span>
-          <div class="subline" :title="`${row.sourceId} · ${row.siteName || '网站未回显'}`">
-            {{ row.sourceId }} · {{ row.siteName || '—' }}
+          <div class="sc-source-line">
+            <span class="sc-name" :title="sourceHintOf(row)" @click="toggleExpand(row)">
+              {{ sourceTitleOf(row) }}
+            </span>
+            <span
+              v-if="showFlowUnbound(row)"
+              class="sc-flow-tag"
+              data-testid="sc-flow-unbound-tag"
+              :title="FLOW_UNBOUND_TITLE"
+            >
+              未关联流程
+            </span>
+          </div>
+          <div class="subline" :title="sourceHintOf(row)">
+            {{ sourceSubtitleOf(row) }}
           </div>
         </template>
       </el-table-column>
@@ -658,7 +1033,18 @@ onMounted(() => {
 
       <el-table-column label="数据情况" min-width="122">
         <template #default="{ row }">
-          <span class="rc-status" :class="dataPillOf(row).tone">{{ dataPillOf(row).text }}</span>
+          <div class="sc-data-line">
+            <span class="rc-status" :class="dataPillOf(row).tone">{{ dataPillOf(row).text }}</span>
+            <span
+              v-if="execBadgeOf(row)"
+              class="sc-exec-badge"
+              :class="`is-${execBadgeOf(row)?.tone}`"
+              data-testid="sc-exec-badge"
+              :title="execBadgeOf(row)?.title"
+            >
+              {{ execBadgeOf(row)?.text }}
+            </span>
+          </div>
           <div class="subline" :title="dataHintOf(row)">{{ dataHintOf(row) }}</div>
         </template>
       </el-table-column>
@@ -702,23 +1088,25 @@ onMounted(() => {
             暂无监控记录。可直接点击「新增监控」开始配置。
           </template>
           <template v-else>
-            没有符合筛选条件的源。
+            <template v-if="scopeFilterActive">没有含「{{ scopeLabelOf(appliedScope) }}」检查项的源。</template>
+            <template v-else>没有符合筛选条件的源。</template>
             <button type="button" class="sc-link" @click="resetFilters">重置筛选</button>
           </template>
         </div>
       </template>
     </el-table>
 
-    <div v-if="filteredRows.length" class="sc-pager">
+    <div v-if="pagerTotal" class="sc-pager">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :page-sizes="PAGE_SIZES"
-        :total="filteredRows.length"
+        :total="pagerTotal"
         size="small"
         background
         layout="total, sizes, prev, pager, next"
         @size-change="onSizeChange"
+        @current-change="onPageChange"
       />
     </div>
 
@@ -750,6 +1138,7 @@ onMounted(() => {
       :title="runsTitle"
       @close="runsOpen = false"
     />
+    <CheckNotificationsDrawer ref="notifyRef" />
 
   </div>
 </template>
@@ -795,6 +1184,12 @@ onMounted(() => {
   border-left-color: var(--rc-error, #dc2626);
   background: var(--rc-error-bg, #fef2f2);
 }
+/* 说明性提示（不是错误）：全局视图按已配置源展示 */
+.sc-hint-muted {
+  border-left-color: var(--rc-border, #e2e8f0);
+  background: var(--rc-bg, #f8fafc);
+  color: var(--rc-muted, #64748b);
+}
 .sc-filter-row {
   padding: 2px 12px 0;
   display: flex;
@@ -810,6 +1205,10 @@ onMounted(() => {
 .sc-filter-source :deep(.el-select) { width: 158px !important; }
 .sc-filter-select {
   width: 96px;
+}
+/* 「源结果检查」等选项比既有下拉长，给到能完整读出、又不挤占关键词框的宽度 */
+.sc-filter-scope {
+  width: 112px;
 }
 .sc-filter-keyword {
   width: 154px;
@@ -868,6 +1267,8 @@ onMounted(() => {
 }
 .sc-name {
   display: block;
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -877,6 +1278,59 @@ onMounted(() => {
 }
 .sc-name:hover {
   color: var(--rc-primary, #2563eb);
+}
+/* 源名 + 「未关联流程」标签同一行；标签是中性分类信息，不用错误/告警色 */
+.sc-source-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.sc-flow-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px dashed var(--rc-border, #e2e8f0);
+  border-radius: 4px;
+  background: var(--rc-bg, #f8fafc);
+  color: var(--rc-muted, #64748b);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* 数据情况：结论 pill + 执行结论小徽标，同一行放得下，不新增列 */
+.sc-data-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.sc-exec-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.sc-exec-badge.is-ok {
+  background: var(--rc-ok-bg, #f0fdf4);
+  color: var(--rc-ok, #15803d);
+}
+.sc-exec-badge.is-err {
+  background: var(--rc-error-bg, #fef2f2);
+  color: var(--rc-error, #dc2626);
+}
+.sc-exec-badge.is-muted {
+  background: #f1f5f9;
+  color: var(--rc-muted, #64748b);
 }
 .sc-ellipsis {
   display: block;
@@ -987,6 +1441,54 @@ onMounted(() => {
   padding: 18px 10px;
   color: var(--rc-muted, #64748b);
   font-size: 12px;
+}
+/* 检查对象归属标签（1113）：分类标签，不用健康/异常语义色；未分类保持中性灰 */
+.sc-object-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: var(--rc-text-2, #475569);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sc-object-tag.is-source {
+  background: var(--rc-primary-bg, #eff6ff);
+  color: var(--rc-primary, #2563eb);
+}
+.sc-object-tag.is-none {
+  background: var(--rc-bg, #f8fafc);
+  border: 1px dashed var(--rc-border, #e2e8f0);
+  color: var(--rc-faint, #94a3b8);
+}
+/* 超期无新增规格：轻量 tag 跟在执行计划后，不新增大列把 13.6 寸挤爆 */
+.sc-plan-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.sc-plan-line .sc-ellipsis {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sc-overdue-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--rc-border, #e2e8f0);
+  border-radius: 4px;
+  background: var(--rc-bg, #f8fafc);
+  color: var(--rc-text-2, #475569);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 .sc-inner-note {
   padding: 7px 10px;

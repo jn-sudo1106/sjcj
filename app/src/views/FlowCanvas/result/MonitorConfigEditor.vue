@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { dataApi, fetchDefaultModels, fetchModelProviders, sourceApi } from '@/api'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
+import { dataApi, fetchDefaultModels, fetchModelProviders, ruleApi, sourceApi } from '@/api'
 import type { EntryType } from '@/api/types/collect'
 import type { EntryTypeGroup } from '@/api/types/data'
 import type { MonitorCheckConf, MonitorKind, MonitorRecordView } from '@/api/types/monitorCenter'
 import type { ModelOption, ModelProviderOption } from '@/api/types/rule'
-import { listMonitorsOfSource, saveMonitor } from '@/api/monitorCenter'
+import { loadMonitorRecord, saveMonitor } from '@/api/monitorCenter'
 import { checkOneManual } from '@/api/monitor'
 import { defaultDescription, defaultSystemPrompt } from '@/utils/monitor/methods'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -23,17 +23,25 @@ import {
   formSignature,
   needsRegenerate,
   nextVersionOf,
+  normalizeWindowHours,
+  regenerateReasons,
+  scheduleIntervalHours,
+  timeColumnOptionsOf,
   validateForm,
   versionOf,
+  windowOfForm,
 } from './monitor-editor/model'
 import './monitor-editor/dialog.css'
 import { EXEC_TEXT } from '@/utils/monitor/record'
 import type { MonitorEditorForm } from './monitor-editor/model'
 import {
+  augmentMonitorSystemPrompt,
   generateMonitorScript,
-  resolveMonitorGenerationContext,
+  resolveMonitorTableFields,
+  resolveSourceResultContext,
   summarizeExecutionResult,
   testMonitorScript,
+  testMonitorScriptWithRunner,
 } from './monitor-editor/generation'
 
 /**
@@ -86,22 +94,80 @@ const descTouched = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const tableOptions = ref<Array<{ tableId: string; tableName: string; label: string }>>([])
+/** 执行环境返回的物理字段，不能用目录中的业务字段别名替代。 */
+const timeColumnFields = ref<string[]>([])
 const providerOptions = ref<ModelProviderOption[]>([])
 const modelOptions = ref<ModelOption[]>([])
 const saving = ref(false)
 const busy = computed(() => saving.value || generating.value || testing.value)
 let sourceRequest = 0
 let modelRequest = 0
-onBeforeUnmount(() => { sourceRequest += 1; modelRequest += 1 })
+let timeColumnRequest = 0
+onBeforeUnmount(() => { sourceRequest += 1; modelRequest += 1; timeColumnRequest += 1; stopElapsedTimer() })
 
 /** 页面候选脚本：只存在内存里，保存成功后才进入记录（生成不自动保存） */
 const candidate = reactive({ script: '', scriptPath: '' })
 const pending = ref(false)
 const generating = ref(false)
 const generatingPreview = ref('')
+/** 生成过程中的思考文本（vibecoding 式过程展示，只保留最新片段） */
+const generatingThinking = ref('')
+const generatingElapsed = ref(0)
+const streamRef = ref<HTMLElement | null>(null)
+/** 脚本正文默认折叠到固定高度，避免长脚本把弹窗撑爆 */
+const scriptExpanded = ref(false)
+let elapsedTimer: number | undefined
+
+function startElapsedTimer(): void {
+  generatingElapsed.value = 0
+  const startedAt = Date.now()
+  window.clearInterval(elapsedTimer)
+  elapsedTimer = window.setInterval(() => {
+    generatingElapsed.value = (Date.now() - startedAt) / 1000
+  }, 200)
+}
+
+function stopElapsedTimer(): void {
+  window.clearInterval(elapsedTimer)
+  elapsedTimer = undefined
+}
+
+async function scrollStreamToEnd(): Promise<void> {
+  await nextTick()
+  const el = streamRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+/**
+ * 思考内容是**增量**推送的（generation.ts 透传每个 delta）。
+ * 之前误当成全量、只取最后 160 字，界面上就只剩孤零零一个词，看着像坏了。
+ * 这里累积全文，超长只保留尾部，交给 `<pre>` 自己滚动。
+ */
+const THINKING_LIMIT = 6000
+
+function appendThinking(prev: string, delta: string): string {
+  const text = `${prev}${delta}`
+  return text.length > THINKING_LIMIT ? `…${text.slice(-THINKING_LIMIT)}` : text
+}
+
+async function onCopyScript(): Promise<void> {
+  const text = displayedScript.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(`已复制脚本（${text.length} 字）`)
+  } catch {
+    const area = document.createElement('textarea')
+    area.value = text
+    document.body.appendChild(area)
+    area.select()
+    document.execCommand('copy')
+    document.body.removeChild(area)
+    ElMessage.success(`已复制脚本（${text.length} 字）`)
+  }
+}
+
 const generationError = ref('')
-/** 生成上下文降级说明（源未绑定流程、按主表生成独立监控时提示） */
-const generationNote = ref('')
 const testing = ref(false)
 const testResult = ref<null | {
   label: string
@@ -127,17 +193,107 @@ const activePath = computed(() => (pending.value ? candidate.scriptPath : effect
 const hasAnyScript = computed(() => !!displayedScript.value.trim() || !!activePath.value.trim())
 const canTest = computed(() => hasAnyScript.value)
 
-/** 底部主按钮：AI 检查有脚本才是「保存并生效」，否则保存为草稿（原型底部按钮语义）。 */
+interface ScriptFileView { name: string; path: string; body: string; label: string }
+const scriptFile = computed<ScriptFileView>(() => {
+  const path = activePath.value.trim()
+  const name = path.split(/[\\/]/).pop() || `monitor-${recordState.value?.id || form.sourceId || 'draft'}-${pending.value ? 'candidate' : form.version || 'draft'}.py`
+  return {
+    name: name.endsWith('.py') ? name : `${name}.py`, path, body: displayedScript.value,
+    label: pending.value ? '待保存候选' : '已保存脚本',
+  }
+})
+const filePreviewOpen = ref(false)
+const previewFile = ref<ScriptFileView | null>(null)
+const filePreviewError = ref('')
+const filePreviewLoading = ref(false)
+const downloadingScript = ref(false)
+let filePreviewRequest = 0
+onBeforeUnmount(() => { filePreviewRequest += 1 })
+
+async function readScriptFile(file: ScriptFileView): Promise<string> {
+  const body = file.body.trim() ? file.body : await ruleApi.fileDownloadScript(file.path)
+  if (!body.trim()) throw new Error('脚本文件为空，暂时无法预览或下载')
+  return body
+}
+
+async function onPreviewScript(): Promise<void> {
+  const file = { ...scriptFile.value }
+  const request = ++filePreviewRequest
+  previewFile.value = file
+  filePreviewError.value = ''
+  filePreviewOpen.value = true
+  filePreviewLoading.value = true
+  try {
+    const body = await readScriptFile(file)
+    if (request === filePreviewRequest) previewFile.value = { ...file, body }
+  } catch (error) {
+    if (request === filePreviewRequest) filePreviewError.value = errorText(error)
+  } finally {
+    if (request === filePreviewRequest) filePreviewLoading.value = false
+  }
+}
+
+async function onDownloadScript(file: ScriptFileView = scriptFile.value): Promise<void> {
+  if (downloadingScript.value) return
+  downloadingScript.value = true
+  try {
+    const body = await readScriptFile(file)
+    const url = URL.createObjectURL(new Blob([body], { type: 'text/x-python;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = file.name
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  } catch (error) {
+    ElMessage.error(`下载脚本失败：${errorText(error)}`)
+  } finally {
+    downloadingScript.value = false
+  }
+}
+
+/**
+ * 底部主按钮：AI 检查有脚本才可能「生效」，没脚本只能是草稿；
+ * 有脚本但计划为空时保存后不会自动跑，按钮明确写「仅手动」。
+ * 规则检查切过来时会自动补 DEFAULT_SCHEDULE（见 switchKind），保持「保存并生效」。
+ */
 const saveLabel = computed(() => {
-  if (form.kind === 'ai') return hasAnyScript.value ? '保存并生效' : '保存为草稿'
-  return '保存并生效'
+  if (form.kind !== 'ai') return '保存并生效'
+  if (!hasAnyScript.value) return '保存为草稿'
+  return form.schedule.trim() ? '保存并生效' : '保存（仅手动）'
 })
 
-const saveHint = computed(() =>
-  form.kind === 'ai' && !hasAnyScript.value
-    ? '没有可执行脚本：保存后为草稿，启用也不会执行'
-    : '生成与测试不改变生效版本；保存即生效',
-)
+const saveHint = computed(() => {
+  if (form.kind === 'ai') {
+    if (!hasAnyScript.value) return '没有可执行脚本：保存后为草稿，启用也不会执行'
+    if (!form.schedule.trim()) return '有脚本但未设执行计划：保存后只能手动运行；需要定时请填写执行计划'
+  }
+  return '生成与测试不改变生效版本；保存即生效'
+})
+
+/** 仅展示执行环境真实存在的时间列；旧配置仍保留，但缺失字段需重新选择。 */
+const timeColumnOptions = computed(() => timeColumnFields.value.length
+  ? timeColumnOptionsOf(timeColumnFields.value).filter((field) => timeColumnFields.value.includes(field))
+  : [])
+const timeColumnError = ref('')
+/** 「上一个周期」的窗口长度 = 当前执行计划间隔（算不出来按 24 小时） */
+const windowPeriodHours = computed(() => scheduleIntervalHours(form.schedule))
+const windowHint = computed(() => {
+  if (form.windowType === 'hours') {
+    return `执行器按最近 ${normalizeWindowHours(form.windowHours)} 小时算好 DQ_START_DATE / DQ_END_DATE 再跑脚本`
+  }
+  if (form.windowType === 'period') {
+    return `按当前计划间隔约 ${windowPeriodHours.value} 小时取上一个周期（算不出间隔时按 24 小时）`
+  }
+  return '按业务时区 Asia/Shanghai，从当日 00:00 到执行时刻'
+})
+/** 写进业务描述里的窗口口径（要具体，不能留占位符） */
+const descriptionWindow = computed(() => {
+  if (form.windowType === 'hours') return `最近 ${normalizeWindowHours(form.windowHours)} 小时（Asia/Shanghai 业务时区）`
+  if (form.windowType === 'period') return `上一个检查周期（约 ${windowPeriodHours.value} 小时，Asia/Shanghai 业务时区）`
+  return '当日 00:00 至当前（Asia/Shanghai 业务时区）'
+})
 
 const versionText = computed(() => {
   const current = form.version || versionOf(recordState.value?.conf)
@@ -159,15 +315,57 @@ const recordStatusText = computed(() => {
 const needsRegenerateNotice = computed(() => {
   if (form.kind !== 'ai' || pending.value) return ''
   if (!hasAnyScript.value) return ''
-  return needsRegenerate(form, committedForm.value)
-    ? `描述或方法有改动：保存后计划/通知会生效，但检查逻辑仍是 ${form.version || '当前版本'}，需重新生成脚本才会改变`
-    : ''
+  const reasons = regenerateReasons(form, committedForm.value)
+  if (!reasons.length) return ''
+  return `${reasons.join('、')}有改动：保存后计划/通知会生效，但检查逻辑仍是 ${form.version || '当前版本'}，需重新生成脚本才会改变`
+})
+
+/** 生成候选时的检查范围；表/时间列之后被改，就说明候选可能对不上当前范围 */
+const candidateScope = ref<{ tableName: string; timeColumn: string } | null>(null)
+
+const candidateStale = computed(() => {
+  const scope = candidateScope.value
+  if (!pending.value || !scope) return false
+  return scope.tableName !== form.tableName.trim() || scope.timeColumn !== form.timeColumn.trim()
+})
+
+/**
+ * 候选脚本按旧范围生成时的提示。这里不直接作废：用户可能只是想换个表看看，
+ * 真到保存（会把脚本按新表发布）时再确认一次，给他重新生成的机会。
+ */
+const candidateStaleNotice = computed(() => {
+  const scope = candidateScope.value
+  if (!candidateStale.value || !scope) return ''
+  const now = [form.tableName, form.timeColumn].filter(Boolean).join(' · ') || '未选表'
+  return `候选脚本是按「${scope.tableName || '未选表'}」生成的；当前范围已改为「${now}」。保存前请重新生成，或确认仍按旧脚本发布。`
 })
 
 const importHint = computed(() => (form.kind === 'ai' ? 'AI 脚本检查' : '规则检查'))
 
 function stamp(): string {
   return new Date().toLocaleString('zh-CN', { hour12: false })
+}
+
+/**
+ * 试跑回执里的检查范围：表 + 入库时间字段。生成、试跑、保存、正式运行必须回显同一份范围
+ *（1113 修订稿 §7.9），所以试跑结果不能只说「生效 v3 的脚本」。
+ */
+/** 试跑对象的描述：候选过期时把「按哪张表生成」也写出来，避免看错范围 */
+function testTarget(): string {
+  if (pending.value) {
+    const scope = candidateScope.value
+    const stale = candidateStale.value && scope ? ` · 按「${scope.tableName || '未选表'}」生成` : ''
+    return `新生成、尚未保存的脚本（候选）${stale}${scopeText()}`
+  }
+  const version = form.version || versionOf(recordState.value?.conf) || '当前'
+  return `生效 ${version} 的脚本${scopeText()}`
+}
+
+function scopeText(): string {
+  const parts: string[] = []
+  if (form.tableName.trim()) parts.push(`表 ${form.tableName.trim()}`)
+  if (form.timeColumn.trim()) parts.push(`时间列 ${form.timeColumn.trim()}`)
+  return parts.length ? ` · ${parts.join(' · ')}` : ''
 }
 
 function errorText(error: unknown): string {
@@ -186,9 +384,9 @@ function applyRecord(record: MonitorRecordView): void {
   descTouched.value = !!next.desc.trim()
   candidate.script = ''
   candidate.scriptPath = ''
+  candidateScope.value = null
   pending.value = false
   generationError.value = ''
-  generationNote.value = ''
   generatingPreview.value = ''
   syncCommitted()
   void loadSourceContext()
@@ -234,10 +432,59 @@ watch(
       sourceName: form.sourceName,
       tableName: form.tableName,
       methods: [...form.methods],
+      window: descriptionWindow.value,
+      nullPolicy: form.nullPolicy,
+      noDataPolicy: form.noDataPolicy,
     })
   },
   { deep: true },
 )
+
+/**
+ * 字段清单 → 入库时间字段候选。
+ * 只在「当前没选」且真实清单只有一个像时间列的字段时自动选中；多个候选不猜
+ * （脚本会自报「无法自动识别入库时间列」，由用户确认，不偷偷填假列名）。
+ */
+function applyTimeColumnFields(fields: readonly string[]): void {
+  timeColumnFields.value = fields.map((field) => (field || '').trim()).filter(Boolean)
+  if (form.timeColumn.trim() || !timeColumnFields.value.length) return
+  const candidates = timeColumnOptionsOf(timeColumnFields.value)
+  if (candidates.length === 1) form.timeColumn = candidates[0]!
+}
+
+/** 换表/读源后向执行器查询实际物理字段。 */
+function syncTimeColumnFields(): void {
+  const tableName = form.tableName.trim()
+  if (!tableName) {
+    timeColumnFields.value = []
+    return
+  }
+  timeColumnFields.value = []
+  void loadTimeColumnFields()
+}
+
+async function loadTimeColumnFields(): Promise<void> {
+  const request = ++timeColumnRequest
+  const tableName = form.tableName.trim()
+  if (!tableName) {
+    timeColumnFields.value = []
+    return
+  }
+  const tableId = tableOptions.value.find((table) => table.tableName === tableName)?.tableId ?? ''
+  timeColumnError.value = ''
+  try {
+    const fields = await resolveMonitorTableFields({ tableName, tableId })
+    if (request !== timeColumnRequest || form.tableName.trim() !== tableName) return
+    const wasClean = formSignature(form) === baseline.value
+    applyTimeColumnFields(fields)
+    // 异步带出的唯一候选属于系统补全，不算用户改动（同「唯一关联表」的处理）
+    if (wasClean) baseline.value = formSignature(form)
+  } catch (error) {
+    if (request !== timeColumnRequest) return
+    applyTimeColumnFields([])
+    timeColumnError.value = errorText(error)
+  }
+}
 
 function mergeTableOptions(group: EntryTypeGroup | null): void {
   const merged: EntryType[] = [...(group?.list2 ?? []), ...(group?.list1 ?? []), ...(group?.list3 ?? [])]
@@ -275,7 +522,14 @@ async function loadSourceContext(): Promise<void> {
     const stillClean = wasClean && formSignature(form) === baseline.value
     if (detail?.name) form.sourceName = detail.name
     mergeTableOptions(group)
+    // 新建时默认带出源的最终落库主表（1113 修订 §4.1.1）；主表不在可选清单里才退回「唯一表」
+    if (!form.tableName && detail?.mainTable) {
+      const landed = tableOptions.value.find((table) => table.tableName === detail.mainTable)
+      if (landed) form.tableName = landed.tableName
+    }
     if (!form.tableName && tableOptions.value.length === 1) form.tableName = tableOptions.value[0].tableName
+    // 关联表定下来后再出「入库时间字段」候选（唯一候选的自动选中同样算系统补全）
+    syncTimeColumnFields()
     // 异步带出的源名/唯一关联表是系统补全，不算用户改动；
     // 否则打开已有记录/新建表单会立刻显示「未保存」，关窗还要多一次无意义确认。
     if (stillClean) baseline.value = formSignature(form)
@@ -325,7 +579,17 @@ function onProviderChange(): void {
 }
 
 function onTableChange(): void {
-  if (!form.tableName) return
+  // 候选本身保留（candidateStale 会标出来，保存时再确认）；但按旧表跑出来的试跑结果已无意义
+  if (pending.value) testResult.value = null
+  if (!form.tableName) {
+    timeColumnFields.value = []
+    form.timeColumn = ''
+    return
+  }
+  // 换表后旧表的时间列可能不存在：清空再由新表字段重新给候选（唯一候选自动选中）
+  form.timeColumn = ''
+  timeColumnFields.value = []
+  syncTimeColumnFields()
 }
 
 async function confirmDiscard(what: string): Promise<boolean> {
@@ -348,13 +612,15 @@ async function onSourceChanged(sourceId: string): Promise<void> {
   if (!(await confirmDiscard('监控源'))) return
   candidate.script = ''
   candidate.scriptPath = ''
+  candidateScope.value = null
   pending.value = false
   testResult.value = null
   generationError.value = ''
-  generationNote.value = ''
   form.sourceId = sourceId
   form.sourceName = ''
   form.tableName = ''
+  form.timeColumn = ''
+  timeColumnFields.value = []
   await loadSourceContext()
 }
 
@@ -364,13 +630,15 @@ async function onSourcePicked(sourceId: string, name: string): Promise<void> {
   if (!(await confirmDiscard('监控源'))) return
   candidate.script = ''
   candidate.scriptPath = ''
+  candidateScope.value = null
   pending.value = false
   testResult.value = null
   generationError.value = ''
-  generationNote.value = ''
   form.sourceId = sourceId
   form.sourceName = name
   form.tableName = ''
+  form.timeColumn = ''
+  timeColumnFields.value = []
   await loadSourceContext()
 }
 
@@ -387,6 +655,9 @@ function fillDescription(): void {
     sourceName: form.sourceName,
     tableName: form.tableName,
     methods: [...form.methods],
+    window: descriptionWindow.value,
+    nullPolicy: form.nullPolicy,
+    noDataPolicy: form.noDataPolicy,
   })
 }
 
@@ -424,25 +695,39 @@ async function onGenerate(): Promise<void> {
   generating.value = true
   generationError.value = ''
   generatingPreview.value = ''
-  generationNote.value = ''
+  generatingThinking.value = ''
+  scriptExpanded.value = false
+  startElapsedTimer()
   const previous = { script: candidate.script, scriptPath: candidate.scriptPath }
   try {
-    // 源没绑定流程时退回「按表单选定的主表」生成独立监控脚本（configId=0），不再直接报错
+    // 源结果检查只读本条检查选定的表：不读源流程、不借任何监控节点的 configId/输入表
     const tableId = tableOptions.value.find((table) => table.tableName === form.tableName)?.tableId ?? ''
-    const context = await resolveMonitorGenerationContext(form.sourceId, {
-      tableName: form.tableName,
-      tableId,
-    })
+    const fields = await resolveMonitorTableFields({ tableName: form.tableName, tableId })
+    applyTimeColumnFields(fields)
+    if (!form.timeColumn || !fields.includes(form.timeColumn)) {
+      throw new Error(`请选择当前表实际存在的入库时间字段（当前：${form.timeColumn || '未选择'}），然后重新生成脚本`)
+    }
+    const context = await resolveSourceResultContext({ tableName: form.tableName, tableId })
     const result = await generateMonitorScript({
       context,
       description: form.desc,
       methods: [...form.methods],
-      // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底
-      systemPrompt: form.systemPrompt.trim() || defaultSystemPrompt(),
+      // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底；
+      // 再追加主表真实字段与入库时间列，避免模型自己发明列名（实测失败原因之一）
+      systemPrompt: augmentMonitorSystemPrompt(
+        form.systemPrompt.trim() || defaultSystemPrompt(),
+        fields,
+        form.timeColumn,
+      ),
       providerCode: form.providerCode,
       modelCode: form.modelCode,
       onContent: (scriptSoFar) => {
         generatingPreview.value = scriptSoFar
+        void scrollStreamToEnd()
+      },
+      onThinking: (text) => {
+        generatingThinking.value = appendThinking(generatingThinking.value, text)
+        void scrollStreamToEnd()
       },
     })
     if (!result.script.trim() && !result.scriptPath.trim()) {
@@ -450,24 +735,23 @@ async function onGenerate(): Promise<void> {
     }
     candidate.script = result.script
     candidate.scriptPath = result.scriptPath
+    candidateScope.value = { tableName: form.tableName.trim(), timeColumn: form.timeColumn.trim() }
     pending.value = true
     testResult.value = null
-    if (context.contextMode === 'table') {
-      generationNote.value = `该源还没有绑定流程，本次按主表 ${context.sourceTable} 生成独立监控脚本（不关联画布节点）`
-      ElMessage.warning('脚本已生成（按主表生成，未关联画布节点）：保存后才会生效')
-    } else {
-      ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
-    }
+    ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
   } catch (error) {
     // 失败保留原正文：不吃掉已有的生效脚本/上一次候选，也不落库
     candidate.script = previous.script
     candidate.scriptPath = previous.scriptPath
     pending.value = !!previous.script || !!previous.scriptPath
+    if (!pending.value) candidateScope.value = null
     generationError.value = errorText(error)
     ElMessage.error(`生成脚本失败：${generationError.value}`)
   } finally {
+    stopElapsedTimer()
     generating.value = false
     generatingPreview.value = ''
+    generatingThinking.value = ''
   }
 }
 
@@ -477,25 +761,42 @@ async function onTest(): Promise<void> {
     await verifyRule()
     return
   }
-  const target = pending.value
-    ? '新生成、尚未保存的脚本（候选）'
-    : `生效 ${form.version || versionOf(recordState.value?.conf) || '当前'} 的脚本`
+  const target = testTarget()
+  const scriptText = displayedScript.value.trim()
   const path = activePath.value.trim()
-  if (!path) {
-    ElMessage.warning('当前只有脚本正文，没有可执行的文件路径：请重新生成脚本，或稍后重试')
+  if (!scriptText && !path) {
+    ElMessage.warning('还没有可测试的脚本：先生成脚本')
     return
   }
   testing.value = true
   try {
-    const outcome = await testMonitorScript(path)
+    // 优先用数据监控执行器试跑正文：186 这类环境没有 vrule 执行器，旧端点会 404/504。
+    const viaRunner = scriptText
+      ? await testMonitorScriptWithRunner({
+          script: scriptText,
+          sourceId: form.sourceId,
+          tableName: form.tableName,
+          timeColumn: form.timeColumn,
+          window: windowOfForm(form),
+        })
+      : null
+    if (!viaRunner && !path) throw new Error('执行器不可用，且脚本没有文件路径，无法测试')
+    const outcome = viaRunner ?? await testMonitorScript(path)
     testResult.value = {
-      label: '测试，未通知',
+      label: outcome.ok ? '测试，未通知' : '测试失败，未通知',
       target,
       summary: outcome.summary,
       note: '未发送业务通知，未更新正式最近结果与启停状态',
       at: stamp(),
     }
-    ElMessage.success('测试完成：未发送业务通知，未更新正式结果')
+    const message = `${outcome.summary}；未发送业务通知，未更新正式结果`
+    if (!outcome.ok) {
+      ElMessage.error(message)
+    } else if (outcome.raw && typeof outcome.raw === 'object' && 'status' in outcome.raw && outcome.raw.status === 'ABNORMAL') {
+      ElMessage.warning(message)
+    } else {
+      ElMessage.success(message)
+    }
   } catch (error) {
     testResult.value = {
       label: '测试失败，未通知',
@@ -531,7 +832,7 @@ async function verifyRule(): Promise<void> {
     })
     testResult.value = {
       label: '测试，未通知',
-      target: '规则检查配置（未保存校验）',
+      target: `规则检查配置（未保存校验）${scopeText()}`,
       summary: summarizeExecutionResult(raw),
       note: '未发送业务通知，未更新正式最近结果与启停状态',
       at: stamp(),
@@ -540,7 +841,7 @@ async function verifyRule(): Promise<void> {
   } catch (error) {
     testResult.value = {
       label: '测试失败，未通知',
-      target: '规则检查配置（未保存校验）',
+      target: `规则检查配置（未保存校验）${scopeText()}`,
       summary: errorText(error),
       note: '未写入正式结果',
       at: stamp(),
@@ -551,45 +852,66 @@ async function verifyRule(): Promise<void> {
   }
 }
 
-function pickReadback(monitors: MonitorRecordView[] | null, beforeIds: string[] | null): MonitorRecordView | null {
-  if (!monitors) return null
-  const current = recordState.value
-  if (current) return monitors.find((item) => item.id === current.id) ?? null
-  // 新建记录没有 id 回执时按「保存前不存在的 id + 同名」定位；定位不到宁可不猜（不把旧记录当新记录）
-  if (!beforeIds) return null
-  const before = new Set(beforeIds)
-  const created = monitors.filter((item) => !before.has(item.id) && item.name === form.name.trim())
-  return created.length === 1 ? created[0]! : null
+/** 保存回执里的记录 id：`/add` 与 `/update` 都带 `data.id`，两种保存都能拿到确切主键。 */
+function savedIdOf(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return ''
+  const id = (raw as Record<string, unknown>).id
+  return id == null || id === '' ? '' : String(id)
+}
+
+/**
+ * 保存后回读。
+ *
+ * 1109 §5.3 时期没有单条读接口，只能按源拉全量再按「保存前不存在的 id + 同名」猜是哪条；
+ * C01 `/source/check/detail` 上线后改成按主键单条读：同源多条检查、名字重复、并发新增都不会错行。
+ * 读不到（接口失败或记录已被删）返回 null，由调用方提示刷新，不拿同源其它记录顶上。
+ */
+async function readbackAfterSave(raw: unknown): Promise<MonitorRecordView | null> {
+  const monitorId = recordState.value?.id || savedIdOf(raw)
+  if (!monitorId) return null
+  return (await loadMonitorRecord(monitorId).catch(() => undefined)) ?? null
 }
 
 async function onSave(): Promise<void> {
   if (busy.value) return
   const invalid = validateForm(form)
   if (invalid) {
-    activeTab.value = invalid.key === 'methods' ? 'check' : 'basic'
+    activeTab.value = invalid.key === 'methods' || invalid.key === 'overdue' ? 'check' : 'basic'
     ElMessage.warning(invalid.message)
     return
   }
   saving.value = true
   try {
+    // 不阻断：执行器不传 --time-column 时脚本会自报「无法自动识别入库时间列」并退出，
+    // 比页面偷偷填一个假列名再跑错要好
+    if (form.kind === 'ai' && !form.timeColumn.trim()) {
+      ElMessage.warning('未选择入库时间字段：表里有多个时间列时脚本会自报错，本次仍会保存')
+    }
     const baseConf: MonitorCheckConf = recordState.value?.conf ?? {}
     const generated = pending.value && !!(candidate.script.trim() || candidate.scriptPath.trim())
+    // 候选是按旧表/旧时间列生成的：脚本列名写死，直接发布会把旧范围套到新表上
+    if (generated && candidateStale.value && candidateScope.value) {
+      try {
+        await ElMessageBox.confirm(
+          `候选脚本是按「${candidateScope.value.tableName || '未选表'}」生成的，当前检查范围是「${[form.tableName, form.timeColumn].filter(Boolean).join(' · ') || '未选表'}」。继续保存会按新范围发布这份旧表脚本，是否仍然保存？`,
+          '候选脚本与当前检查范围不一致',
+          { type: 'warning', confirmButtonText: '仍然保存', cancelButtonText: '取消，先重新生成' },
+        )
+      } catch {
+        return
+      }
+    }
     const baseVersion = versionOf(baseConf) || form.version
     const savedVersion = form.kind === 'ai' ? (generated ? nextVersionOf(baseVersion) : baseVersion) : ''
     const regenerate = needsRegenerate(form, committedForm.value)
+    const regenerateReasonsOf = regenerate ? regenerateReasons(form, committedForm.value) : []
     const conf = confFromForm(form, baseConf, {
       script: generated ? candidate.script : undefined,
       scriptPath: generated ? candidate.scriptPath : undefined,
     })
     if (form.kind === 'ai') conf.version = savedVersion || undefined
 
-    let beforeIds: string[] | null = null
-    if (!recordState.value) {
-      const before = await listMonitorsOfSource(form.sourceId.trim()).catch(() => null)
-      beforeIds = before?.map((item) => item.id) ?? null
-    }
-
-    await saveMonitor({
+    const saved = await saveMonitor({
       record: recordState.value ?? undefined,
       sourceId: form.sourceId.trim(),
       name: form.name.trim(),
@@ -599,9 +921,8 @@ async function onSave(): Promise<void> {
       schedule: form.schedule.trim(),
     })
 
-    // 保存回执不含完整记录（C01 未就绪）：按源回读，把回读结果当新基线；读不到就不猜 ID
-    const monitors = await listMonitorsOfSource(form.sourceId.trim()).catch(() => null)
-    const readback = pickReadback(monitors, beforeIds)
+    // 保存回执只带 id/ver：按主键回读完整记录当新基线；读不到就不猜 ID
+    const readback = await readbackAfterSave(saved.raw)
     if (!readback) {
       ElMessage.warning('已提交，未回读到记录：请刷新列表确认，本次不标记为已生效')
       emit('saved', null)
@@ -611,6 +932,9 @@ async function onSave(): Promise<void> {
       kind: form.kind,
       generated,
       needsRegenerate: regenerate,
+      regenerateReasons: regenerateReasonsOf,
+      // 用本次提交的计划判定（服务端回读只作展示）：空计划 = 保存后只能手动运行
+      scheduleEmpty: form.kind === 'ai' && !form.schedule.trim(),
     })
     applyRecord(readback)
     ElMessage.success(feedback)
@@ -654,7 +978,7 @@ defineExpose({
         </span>
         <span v-if="isDirty" class="mc-badge mc-badge-warn" data-testid="mc-dirty">有未保存修改</span>
         <span class="mc-head-meta" :title="lockedSourceLabel">
-          <template v-if="form.sourceId">源「{{ form.sourceName || form.sourceId }}」 · {{ form.tableName || '未关联表' }} · </template>
+          <template v-if="form.sourceId">源结果检查 · 源「{{ form.sourceName || form.sourceId }}」 · 检查表：{{ form.tableName || '未选择' }} · {{ form.schedule ? '独立定时' : '仅手动' }} · </template>
           <template v-if="isEditing">
             记录 {{ recordState?.id || '' }} · {{ importHint }} ·
             {{ recordState?.enabled ? '已启用' : '已停用（保存不改启停）' }}
@@ -724,7 +1048,7 @@ defineExpose({
           <label
             class="mc-label"
             for="mc-table-select"
-            title="关联表只决定检查范围；生成脚本仍以源流程「数据监控」节点绑定的输入表为准"
+            title="本条检查的数据范围：生成、试跑和正式运行都读取这张表，不随源流程的监控节点变化"
           >
             {{ form.kind === 'ai' ? '关联表（数据范围）' : '表名' }}
           </label>
@@ -820,9 +1144,21 @@ defineExpose({
                     <div class="mc-readonly" data-testid="mc-range-table">{{ form.tableName || '—' }}</div>
                   </div>
                   <div class="mc-field">
-                    <span class="mc-label">时间范围</span>
-                    <div class="mc-readonly">当日 00:00 → 当前</div>
-                    <p class="mc-hint">按业务时区 Asia/Shanghai 切日</p>
+                    <label class="mc-label" for="mc-time-column">入库时间字段</label>
+                    <select
+                      id="mc-time-column"
+                      v-model="form.timeColumn"
+                      class="mc-input"
+                      data-testid="mc-time-column"
+                    >
+                      <option value="">请选择</option>
+                      <option v-for="column in timeColumnOptions" :key="column" :value="column">{{ column }}</option>
+                    </select>
+                    <p class="mc-hint">脚本按这一列统计；不确定时选表的入库时间列</p>
+                    <p v-if="timeColumnError" class="mc-hint">{{ timeColumnError }}</p>
+                    <p v-else-if="form.timeColumn && timeColumnFields.length && !timeColumnFields.includes(form.timeColumn)" class="mc-hint">
+                      当前表不存在字段 {{ form.timeColumn }}，请重新选择并生成脚本。
+                    </p>
                   </div>
                   <div class="mc-field">
                     <label class="mc-label" for="mc-null-policy">字段值为空时</label>
@@ -841,6 +1177,77 @@ defineExpose({
                     </select>
                   </div>
                 </div>
+                <div class="mc-field mc-window-field">
+                  <span class="mc-label">检查窗口</span>
+                  <div class="mc-segment mc-window-segment">
+                    <button
+                      type="button"
+                      class="mc-segment-item"
+                      :class="{ active: form.windowType === 'today' }"
+                      data-testid="mc-window-today"
+                      @click="form.windowType = 'today'"
+                    >当日（00:00 → 现在）</button>
+                    <button
+                      type="button"
+                      class="mc-segment-item"
+                      :class="{ active: form.windowType === 'hours' }"
+                      data-testid="mc-window-hours"
+                      @click="form.windowType = 'hours'"
+                    >最近 N 小时</button>
+                    <button
+                      type="button"
+                      class="mc-segment-item"
+                      :class="{ active: form.windowType === 'period' }"
+                      data-testid="mc-window-period"
+                      @click="form.windowType = 'period'"
+                    >上一个周期</button>
+                  </div>
+                  <div v-if="form.windowType === 'hours'" class="mc-inline mc-window-hours">
+                    <span class="mc-label">小时数</span>
+                    <input
+                      id="mc-window-hours"
+                      v-model="form.windowHours"
+                      class="mc-input"
+                      type="number"
+                      min="1"
+                      max="720"
+                      step="1"
+                      data-testid="mc-window-hours-input"
+                    />
+                  </div>
+                  <p class="mc-hint" data-testid="mc-window-hint">{{ windowHint }}</p>
+                </div>
+                <div class="mc-grid mc-overdue-grid">
+                  <div class="mc-field">
+                    <label class="mc-label" for="mc-overdue-minutes">超期无新增（分钟）</label>
+                    <input
+                      id="mc-overdue-minutes"
+                      v-model="form.overdueMinutes"
+                      class="mc-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      placeholder="留空不判定"
+                      data-testid="mc-overdue-minutes"
+                    />
+                  </div>
+                  <div class="mc-field">
+                    <label class="mc-label" for="mc-overdue-grace">宽限（分钟）</label>
+                    <input
+                      id="mc-overdue-grace"
+                      v-model="form.overdueGrace"
+                      class="mc-input"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                      data-testid="mc-overdue-grace"
+                    />
+                  </div>
+                </div>
+                <p class="mc-hint" data-testid="mc-overdue-hint">
+                  按「距上次有新增数据过了多久」判断流：超过更新周期 + 宽限仍没有新增，判为超期异常（窗口内没数据不再一律按「无待检记录」放过）。留空只按上面的「本次无待检记录时」处理，不判超期。
+                </p>
                 <div class="mc-grid">
                   <div class="mc-field">
                     <label class="mc-label" for="mc-provider">模型供应商</label>
@@ -898,18 +1305,73 @@ defineExpose({
               {{ needsRegenerateNotice }}
             </p>
 
-            <details v-if="displayedScript.trim()" class="mc-script-details">
-              <summary>查看脚本正文（{{ displayedScript.length }} 字 · {{ pending ? '待保存' : '生效中' }}）</summary>
-              <pre class="mc-script-body" data-testid="mc-script-body">{{ displayedScript }}</pre>
-            </details>
-            <p v-else-if="activePath.trim()" class="mc-script-path" data-testid="mc-script-path">
-              生效脚本文件：{{ activePath }}（暂未取得正文）
-            </p>
+            <div v-if="hasAnyScript" class="mc-script-file" data-testid="mc-script-file">
+              <span class="mc-file-icon" aria-hidden="true">PY</span>
+              <div class="mc-file-info">
+                <strong :title="scriptFile.name" data-testid="mc-script-filename">{{ scriptFile.name }}</strong>
+                <span class="mc-faint">Python · {{ scriptFile.label }} · {{ displayedScript.length ? `${displayedScript.length} 字` : '正文待读取' }}</span>
+              </div>
+              <div class="mc-file-actions">
+                <button type="button" class="mc-linkbtn" data-testid="mc-script-file-preview" @click="onPreviewScript">预览</button>
+                <button type="button" class="mc-linkbtn" :disabled="downloadingScript" data-testid="mc-script-download" @click="onDownloadScript()">{{ downloadingScript ? '下载中…' : '下载' }}</button>
+              </div>
+              <p class="mc-file-location" data-testid="mc-script-path">{{ activePath || '仅保存脚本正文，下载时导出为 .py 文件' }}</p>
+            </div>
 
-            <p v-if="generatingPreview" class="mc-hint" data-testid="mc-generating">生成中，已收到 {{ generatingPreview.length }} 字符…</p>
-            <p v-if="generationNote" class="mc-notice mc-notice-warn" data-testid="mc-generate-note">
-              {{ generationNote }}
-            </p>
+            <div v-if="displayedScript.trim()" class="mc-script-preview" data-testid="mc-script-preview">
+              <div class="mc-script-preview-head">
+                <strong>脚本正文</strong>
+                <span class="mc-faint">{{ displayedScript.length }} 字 · {{ pending ? '待保存' : '生效中' }}</span>
+                <span class="mc-script-preview-ops">
+                  <button type="button" class="mc-linkbtn" data-testid="mc-script-copy" @click="onCopyScript">复制</button>
+                  <button
+                    v-if="displayedScript.length > 600"
+                    type="button"
+                    class="mc-linkbtn"
+                    data-testid="mc-script-toggle"
+                    @click="scriptExpanded = !scriptExpanded"
+                  >
+                    {{ scriptExpanded ? '收起' : '展开全部' }}
+                  </button>
+                </span>
+              </div>
+              <pre
+                class="mc-script-body"
+                :class="{ 'is-expanded': scriptExpanded }"
+                data-testid="mc-script-body"
+              >{{ displayedScript }}</pre>
+            </div>
+
+            <div v-if="generating" class="mc-stream" data-testid="mc-stream">
+              <div class="mc-stream-head">
+                <strong>
+                  <span class="mc-stream-dot" />
+                  {{ generatingPreview ? '模型正在生成代码' : '模型正在思考' }}
+                </strong>
+                <span class="mc-faint">
+                  {{ generatingElapsed.toFixed(1) }}s
+                  <template v-if="generatingPreview"> · 已接收 {{ generatingPreview.length }} 字</template>
+                  <template v-else-if="generatingThinking"> · 已思考 {{ generatingThinking.length }} 字</template>
+                </span>
+              </div>
+
+              <!-- 代码开始输出后，思考过程收进折叠区，把空间让给正文 -->
+              <template v-if="generatingPreview">
+                <details v-if="generatingThinking" class="mc-stream-think">
+                  <summary>思考过程（{{ generatingThinking.length }} 字）</summary>
+                  <pre class="mc-stream-think-body" data-testid="mc-stream-thinking">{{ generatingThinking }}</pre>
+                </details>
+                <pre ref="streamRef" class="mc-script-body mc-stream-body" data-testid="mc-generating">{{ generatingPreview }}</pre>
+              </template>
+
+              <!-- 思考阶段：模型只推 thinking，代码在思考结束后才开始 -->
+              <template v-else>
+                <p class="mc-stream-note">
+                  模型先思考、再输出代码；这一段不会出现代码，代码会在思考结束后逐字出现。
+                </p>
+                <pre ref="streamRef" class="mc-stream-think-body is-live" data-testid="mc-stream-thinking">{{ generatingThinking || '正在连接模型…' }}</pre>
+              </template>
+            </div>
             <p v-if="generationError" class="mc-error" data-testid="mc-generate-error">
               生成失败：{{ generationError }}（已保留原正文）
             </p>
@@ -922,6 +1384,9 @@ defineExpose({
                   {{ testing ? '测试中…' : '测试脚本' }}
                 </button>
               </div>
+            <p v-if="candidateStaleNotice" class="mc-notice mc-notice-warn" data-testid="mc-candidate-stale">
+              {{ candidateStaleNotice }}
+            </p>
             <p class="mc-hint">生成失败保留原脚本；保存成功后生效，不会自动运行检查。</p>
             <div v-if="testResult" class="mc-test-result" data-testid="mc-test-result">
               <div class="mc-test-head">
@@ -1108,6 +1573,25 @@ defineExpose({
       </div>
     </footer>
   </div>
+  <el-drawer
+    v-model="filePreviewOpen"
+    :title="`脚本预览 · ${previewFile?.name || ''}`"
+    size="min(760px, calc(100vw - 24px))"
+    append-to-body
+    class="mc-file-preview-drawer"
+    @close="filePreviewRequest += 1; filePreviewLoading = false"
+  >
+    <div v-if="previewFile" class="mc-file-preview-content">
+      <div class="mc-file-preview-toolbar">
+        <span class="mc-faint">{{ previewFile.label }} · 只读预览</span>
+        <button type="button" class="mc-btn" :disabled="filePreviewLoading || downloadingScript || !!filePreviewError" data-testid="mc-preview-download" @click="onDownloadScript(previewFile)">下载 .py</button>
+      </div>
+      <p class="mc-file-location">{{ previewFile.path || previewFile.name }}</p>
+      <p v-if="filePreviewLoading" class="mc-hint">正在读取脚本文件…</p>
+      <p v-else-if="filePreviewError" class="mc-error" role="alert">{{ filePreviewError }}</p>
+      <pre v-else class="mc-file-full-code" data-testid="mc-file-full-code">{{ previewFile.body }}</pre>
+    </div>
+  </el-drawer>
 </template>
 
 <style scoped>
@@ -1158,6 +1642,10 @@ defineExpose({
 .mc-segment { display: inline-flex; padding: 2px; border: 1px solid #cbd8ed; border-radius: 6px; background: var(--rc-bg); }
 .mc-segment-item { height: 26px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: var(--rc-text-2); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .mc-segment-item.active { background: var(--rc-primary); color: #fff; }
+.mc-window-field { margin-top: 12px; }
+.mc-window-segment { align-self: flex-start; flex-wrap: wrap; }
+.mc-window-hours { align-self: flex-start; }
+.mc-window-hours .mc-input { flex: none; width: 96px; }
 .mc-split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .mc-col-script { position: sticky; top: 0; }
 .mc-pane { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #dce5f3; border-radius: 8px; background: var(--rc-surface); }
@@ -1172,10 +1660,38 @@ defineExpose({
 .mc-script-title h4 { margin: 0 0 12px; font-size: 12px; }
 .mc-script-title p { margin: 0; }
 .mc-script-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.mc-script-details { min-width: 0; }
-.mc-script-details summary { color: var(--rc-primary); cursor: pointer; font-weight: 600; line-height: 1.6; }
-.mc-script-body { margin: 8px 0 0; padding: 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); color: var(--rc-text-2); font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.mc-script-path { margin: 0; padding: 8px 10px; background: var(--rc-bg); border-radius: 6px; color: var(--rc-text-2); overflow-wrap: anywhere; }
+.mc-script-preview { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mc-script-preview-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--rc-text); }
+.mc-script-preview-ops { margin-left: auto; display: inline-flex; gap: 10px; }
+.mc-linkbtn { padding: 0; border: 0; background: none; color: var(--rc-primary); font-size: 12px; font-weight: 600; cursor: pointer; }
+.mc-linkbtn:hover { text-decoration: underline; }
+.mc-script-body { margin: 0; padding: 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); color: var(--rc-text-2); font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.mc-script-body.is-expanded { max-height: none; overflow: visible; }
+.mc-stream { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--rc-primary); border-radius: 8px; background: rgba(37, 99, 235, 0.03); min-width: 0; }
+.mc-stream-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--rc-text); }
+.mc-stream-head strong { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+/* 呼吸点：告诉用户“还在跑”，而不是卡住了 */
+.mc-stream-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rc-primary); animation: mc-pulse 1.2s ease-in-out infinite; }
+@keyframes mc-pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+.mc-stream-note { margin: 0; color: var(--rc-muted); font-size: 11.5px; line-height: 1.6; }
+/* 思考正文：等宽 + 自动滚到底，避免像一行乱码 */
+.mc-stream-think-body { margin: 0; padding: 8px 10px; max-height: 180px; overflow: auto; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.mc-stream-think-body.is-live { max-height: 220px; }
+/* 代码开始输出后，思考收进折叠区 */
+.mc-stream-think { border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #fff; }
+.mc-stream-think > summary { padding: 6px 10px; cursor: pointer; color: var(--rc-muted); font-size: 11.5px; user-select: none; }
+.mc-stream-think > summary:hover { color: var(--rc-primary); }
+.mc-stream-think > .mc-stream-think-body { border-radius: 0 0 6px 6px; max-height: 140px; background: #f8fafc; }
+.mc-stream-body { max-height: 280px; }
+.mc-script-file { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; border: 1px solid var(--rc-border); border-radius: 6px; padding: 10px; background: var(--rc-bg); }
+.mc-file-icon { display: grid; place-items: center; width: 34px; height: 38px; border: 1px solid var(--rc-border); border-radius: 5px; color: var(--rc-primary); background: var(--rc-surface); font-size: 11px; font-weight: 700; }
+.mc-file-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mc-file-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.mc-file-actions { display: flex; gap: 12px; }
+.mc-file-location { grid-column: 1 / -1; margin: 0; color: var(--rc-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.mc-file-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mc-file-preview-content { display: flex; flex-direction: column; gap: 12px; }
+.mc-file-full-code { margin: 0; padding: 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); color: var(--rc-text-2); font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mc-test-result { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-bg); min-width: 0; }
 .mc-test-head { display: flex; flex-wrap: wrap; gap: 6px; }
 .mc-test-line { color: var(--rc-text-2); overflow-wrap: anywhere; white-space: pre-wrap; }

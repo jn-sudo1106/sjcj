@@ -4,14 +4,15 @@
 // 对外接口（Lead 约定，集成时源维度列表 / 源内视图直接挂这个）：
 //   props: { open, sourceId?, monitorId?, title? }
 //   emits: ['close']
-// 数据只走 listRuns：monitorId 优先，其次 sourceId；不读旧 paged-logs、不拿当前定义补历史。
+// 数据只走 listRuns（优先 C06 /runs，旧后端降级 paged-logs）：monitorId 优先，其次 sourceId；
+// 不拿当前定义补历史、不读旧来源以外的数据。
 //
 // 服务端 listRuns 没有执行/数据/通知三维筛选，客户端只在已加载记录上筛；
 // 因此按 200/页、最多 5 页加载，超出时底部显式提示「已加载 N / 共 M」，不静默截断。
 
 import { computed, ref, watch } from 'vue'
 import type { MonitorRunView } from '@/api/types/monitorCenter'
-import { listRuns } from '@/api/monitorCenter'
+import { getRunDetail, listRuns } from '@/api/monitorCenter'
 import RunDetailPane from './RunDetailPane.vue'
 import RunListPane from './RunListPane.vue'
 import { SCOPE_NOTE, hasRunScope, runListQuery, type RunScope } from './runScope'
@@ -93,9 +94,31 @@ async function load() {
 
 function openRun(run: MonitorRunView) {
   detail.value = run
+  void loadRunDetail(run)
+}
+
+// 详情优先走 C06 `GET /source/check/run/{runId}`（逐项结果/耗时/缺失字段只有它给）；
+// 拿不到（旧后端 404 / 旧日志只有 logId）就保留列表行的结构化字段，不整页报错。
+let detailToken = 0
+
+async function loadRunDetail(run: MonitorRunView) {
+  const token = ++detailToken
+  const key = (run.runId ?? '').trim() || (run.id ?? '').trim()
+  if (!key) return
+  try {
+    const full = await getRunDetail(key, {
+      monitorId: run.monitorId,
+      // 旧日志没有 runId，id 就是 job-log 的 logId：带上让服务端按日志定位
+      logId: run.legacy ? run.id : undefined,
+    })
+    if (token === detailToken && full) detail.value = full
+  } catch {
+    // 详情接口失败不影响列表行展示：列表里的条数/状态仍是新接口给的
+  }
 }
 
 function backToList() {
+  detailToken += 1
   detail.value = null
 }
 
@@ -106,9 +129,12 @@ function onVisibleChange(visible: boolean) {
 watch(
   () => [props.open, props.sourceId, props.monitorId] as const,
   ([open]) => {
-    if (!open) { loadToken += 1; loading.value = false; return }
+    if (!open) { loadToken += 1; detailToken += 1; loading.value = false; return }
     // 每次打开都回到列表层并重新拉取：运行记录会持续增长，留上次的详情/翻页没有意义。
     detail.value = props.initialRun ?? null
+    detailToken += 1
+    // 「最近运行」入口带的是列表行：同样优先用 C06 详情补全逐项结论
+    if (props.initialRun) void loadRunDetail(props.initialRun)
     void load()
   },
   { immediate: true },

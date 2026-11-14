@@ -90,6 +90,8 @@ function formatJsonOrText(raw?: string): string {
 
 const paramsFormatted = computed(() => formatJsonOrText(props.task?.params))
 const taskResultFormatted = computed(() => formatJsonOrText(props.task?.taskResult))
+const resultIsLong = computed(() => taskResultFormatted.value.length > 600 || taskResultFormatted.value.split('\n').length > 8)
+const resultPreview = computed(() => taskResultFormatted.value.split('\n').slice(0, 8).join('\n').slice(0, 600))
 const varsFormatted = computed(() => formatJsonOrText(props.task?.vars))
 
 function close() {
@@ -183,11 +185,34 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
             >{{ sourceName }}</button>
           </template>
         </div>
+        <div class="tdd-state"><span class="rc-status" :class="stateClass(task.state)"><span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}</span></div>
       </div>
       <button v-if="closable" class="rc-btn ghost ffd-close" type="button" @click="close">关闭</button>
     </div>
 
+    <section class="tdd-result" data-testid="task-detail-result" aria-label="执行结果">
+      <div class="tdd-block-head">
+        <span class="tdd-block-title">执行结果</span>
+        <button v-if="taskResultFormatted" class="ffd-link" type="button" data-testid="copy-task-result" @click="copyField(taskResultFormatted, '执行结果')">复制</button>
+      </div>
+      <template v-if="taskResultFormatted">
+        <template v-if="resultIsLong">
+          <details class="tdd-result-expand" :key="task.taskId">
+            <summary>
+              <span class="tdd-code tdd-result-code tdd-result-preview" data-testid="task-result-preview">{{ resultPreview }}…</span>
+              <span class="tdd-expand-label">展开完整结果</span>
+              <span class="tdd-collapse-label">收起完整结果</span>
+            </summary>
+            <pre class="tdd-code tdd-result-code" data-testid="task-result-content"><code>{{ taskResultFormatted }}</code></pre>
+          </details>
+        </template>
+        <pre v-else class="tdd-code tdd-result-code" data-testid="task-result-content"><code>{{ taskResultFormatted }}</code></pre>
+      </template>
+      <div v-else class="tdd-empty" data-testid="task-result-empty">{{ task.state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果' }}</div>
+    </section>
+
     <TaskExecutionLinks :task-id="task.taskId" :topic="task.topic" />
+
     <div class="ffd-section">标识信息</div>
     <div class="ffd-id-grid" data-testid="task-detail-identity">
       <div v-for="item in identityItems" :key="item.key" class="ffd-id-item">
@@ -250,21 +275,6 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
 
     <div class="ffd-section">排错详情</div>
     <div class="tdd-blocks" data-testid="task-detail-debug">
-      <div class="tdd-block">
-        <div class="tdd-block-head">
-          <span class="tdd-block-title">执行结果 (taskResult)</span>
-          <button
-            v-if="taskResultFormatted"
-            class="ffd-link"
-            type="button"
-            data-testid="copy-task-result"
-            @click="copyField(taskResultFormatted, '执行结果')"
-          >复制</button>
-        </div>
-        <pre v-if="taskResultFormatted" class="tdd-code" data-testid="task-result-content"><code>{{ taskResultFormatted }}</code></pre>
-        <div v-else class="tdd-empty">—</div>
-      </div>
-
       <div class="tdd-block">
         <div class="tdd-block-head">
           <span class="tdd-block-title">入参 (params)</span>
@@ -371,6 +381,16 @@ watch(() => props.task?.taskId, () => { void loadSnapshots(props.task) }, { imme
   max-height: 220px;
   overflow-y: auto;
 }
+.tdd-state { margin-top: 6px; }
+.tdd-result { margin-bottom: 14px; }
+.tdd-result-code { max-height: none; overflow: visible; }
+.tdd-result-preview { display: block; }
+.tdd-result-expand summary { color: var(--rc-primary); font-size: 12px; cursor: pointer; list-style: none; }
+.tdd-result-expand summary::-webkit-details-marker { display: none; }
+.tdd-expand-label, .tdd-collapse-label { display: inline-block; margin: 6px 0; }
+.tdd-result-expand:not([open]) .tdd-collapse-label,
+.tdd-result-expand[open] .tdd-expand-label,
+.tdd-result-expand[open] .tdd-result-preview { display: none; }
 .tdd-empty { color: var(--rc-faint); font-size: 12px; }
 .tdd-snapshot-count { color: var(--rc-faint); font-size: 11px; }
 .tdd-block-right { display: flex; align-items: center; gap: 8px; }

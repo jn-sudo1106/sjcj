@@ -49,11 +49,17 @@ const TARGETS = {
     remoteDir: '/home/leo/sjcj-docker', image: 'sjcj-gateway',
     testPort: '8086', prodPort: '806', publicPort: '2806',
     backend: 'http://118.25.96.217:9999',
+    oss: 'http://118.25.96.217:9102',
   },
   133: {
     remoteDir: '/home/leo/sjcj-docker-133', image: 'sjcj-gateway-133',
     testPort: '8087', prodPort: '807', publicPort: '2807',
-    backend: 'http://115.227.21.133:9999',
+    // 2026-11-12 用户要求「2807 的后端直接改成 192.168.1.30」：133 业务后端走内网 192.168.1.30:9999
+    //（公网 115.227.21.133:9999 同一套应用、仍可用但慢约 8 倍；前端守卫/徽标按这个主机判定）。
+    // OSS 单独指定（2026-11-12 用户要求「oss 换成 192.168.1.80」）：业务后端在 .30，OSS 在 .80:9102
+    //（`.30:9102` 不通；公网 115.227.21.133:9102 仍是同一套 OSS 的旧入口，保留不用）。
+    backend: 'http://192.168.1.30:9999',
+    oss: 'http://192.168.1.80:9102',
   },
 }
 const targetName = process.env.SJCJ_TARGET || 'prod'
@@ -272,6 +278,7 @@ async function doTest(conn) {
     --build-arg RUNTIME_IMAGE=\${RUNTIME_IMAGE:-nginx:alpine} \
     --build-arg VITE_BASE=/sjcj/ \
     --build-arg BACKEND_TARGET=${cfg.backend} \
+    --build-arg OSS_TARGET=${cfg.oss} \
     -t ${CANDIDATE} .`)
 
   info(`在 ${cfg.testPort} 启动测试容器 ${TEST_CONTAINER}...`)
@@ -310,7 +317,7 @@ async function doTest(conn) {
 async function swapGateway(conn, imageRef) {
   await sshExec(conn, `docker tag ${imageRef} ${IMAGE}:latest`)
   await sshExec(conn, `docker rm -f ${IMAGE} >/dev/null 2>&1 || true`)
-  await sshExec(conn, `cd ${cfg.remoteDir} && BACKEND_TARGET=${cfg.backend} GATEWAY_NAME=${IMAGE} GATEWAY_PORT=${cfg.prodPort} docker-compose up -d --no-build`)
+  await sshExec(conn, `cd ${cfg.remoteDir} && BACKEND_TARGET=${cfg.backend} OSS_TARGET=${cfg.oss} GATEWAY_NAME=${IMAGE} GATEWAY_PORT=${cfg.prodPort} docker-compose up -d --no-build`)
 }
 
 async function doRelease(conn) {
@@ -471,7 +478,7 @@ async function main() {
   if (targetName !== 'prod' && ['cutover', 'rollback'].includes(action)) {
     die(`${action} 会动 WAN 与 806，只对 prod 开放；SJCJ_TARGET=${targetName} 只支持 deploy / test / release / status`)
   }
-  info(`部署目标：${targetName}（后端 ${cfg.backend}，端口 ${cfg.prodPort} / 公网 ${cfg.publicPort}，容器 ${IMAGE}）`)
+  info(`部署目标：${targetName}（后端 ${cfg.backend} · OSS ${cfg.oss}，端口 ${cfg.prodPort} / 公网 ${cfg.publicPort}，容器 ${IMAGE}）`)
   if (['deploy', 'test'].includes(action)) await checkLocalCode()
   info(`连接远程服务器 ${cfg.host}:${cfg.port}...`)
   const conn = await getSshClient()

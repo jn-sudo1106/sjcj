@@ -17,6 +17,7 @@ import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { planSkipCondSend } from '@/utils/flow/skipCondPlan'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
+import { ApiError } from '@/api/client'
 import { confirmDanger, confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
@@ -1031,6 +1032,17 @@ async function onSendAllUnderFilter() {
 // 与数据中心一致的门禁：仅测试表可删（方案 §1.4-4）。
 const isTestTable = computed(() => meta.value?.state === 'C')
 
+const deleteError = ref<{ tableId: string; message: string; detail: string } | null>(null)
+
+function reportDeleteError(err: unknown, tableId: string) {
+  const cause = err instanceof ApiError ? err.cause : err
+  const reason = cause instanceof Error ? cause.message : '操作失败，请重试'
+  const message = reason.includes('当前账号无该表删除权限')
+    ? `删除失败：当前账号无表 ${tableId} 的删除权限`
+    : `删除失败：${reason.replace(/^错误信息[:：]\s*运行时异常[:：]?\s*/, '')}`
+  deleteError.value = { tableId, message, detail: err instanceof Error ? err.message : String(err) }
+}
+
 /** 删除后统一回到第 1 页重查：删掉的行可能横跨当前页，留在原页会看到空洞或错位的分页。 */
 function afterDelete() {
   selectedRowIds.value = []
@@ -1041,6 +1053,7 @@ function onDeleteSelected() {
   if (!selectedRowIds.value.length || !selectedTable.value) return
   const tableId = selectedTable.value
   const ids = [...selectedRowIds.value]
+  deleteError.value = null
   void confirmDanger(
     '警告',
     `[实验性]，批量删除选中的数据,共[${ids.length} ] 条记录? 表:${tableId}`,
@@ -1053,6 +1066,7 @@ function onDeleteSelected() {
       ElMessage.success(res?.message || '删除成功')
       afterDelete()
     },
+    (err) => reportDeleteError(err, tableId),
   )
 }
 
@@ -1062,6 +1076,7 @@ function onDeleteByRange(all: 0 | 1) {
   const tableId = selectedTable.value
   const sid = sourceId.value
   const rangeText = all === 1 ? '所有' : '当天'
+  deleteError.value = null
   void confirmDanger(
     '确认删除',
     `确认删除该源【${rangeText}】数据，源[${source.value?.name || sid}], 表:${tableId}，注意删除后无法恢复`,
@@ -1074,12 +1089,14 @@ function onDeleteByRange(all: 0 | 1) {
       ElMessage.success(res?.message || '删除成功')
       afterDelete()
     },
+    (err) => reportDeleteError(err, tableId),
   )
 }
 
 function onDeleteOne(row: DataRow) {
   if (!selectedTable.value) return
   const tableId = selectedTable.value
+  deleteError.value = null
   void confirmDanger(
     '确认删除',
     `确认删除一条:${row.dataId} / 是否确认删除数据？ 【删除后无法恢复】`,
@@ -1092,6 +1109,7 @@ function onDeleteOne(row: DataRow) {
       ElMessage.success(res?.message || '删除成功')
       afterDelete()
     },
+    (err) => reportDeleteError(err, tableId),
   )
 }
 
@@ -2169,6 +2187,18 @@ async function onTestScript() {
         <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>
       </template>
 
+      <div v-if="deleteError && deleteError.tableId === selectedTable" class="rv-notice error rv-delete-error" role="alert" data-testid="data-delete-error">
+        <div class="rv-delete-error-head">
+          <span data-testid="data-delete-error-message">{{ deleteError.message }}</span>
+          <button class="rc-btn tiny ghost" type="button" @click="deleteError = null">关闭</button>
+        </div>
+        <details>
+          <summary>技术详情</summary>
+          <pre data-testid="data-delete-error-detail">{{ deleteError.detail }}</pre>
+          <button class="rc-btn tiny ghost" type="button" @click="copyToClipboard(deleteError.detail, '错误详情')">复制详情</button>
+        </details>
+      </div>
+
       <!-- 列控制挂到上方查询工具栏，表格不再额外占用一行工具栏。 -->
       <DataGrid
         class="rv-grid"
@@ -2456,6 +2486,11 @@ async function onTestScript() {
 </template>
 
 <style scoped>
+.rv-delete-error-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rv-delete-error details { margin-top: 4px; }
+.rv-delete-error summary { cursor: pointer; }
+.rv-delete-error pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+
 .rv-table-context { display: flex; align-items: center; gap: 5px; min-width: 100px; max-width: 190px; flex: 0 1 190px; flex-wrap: nowrap; overflow: hidden; }
 .rv-table-context .rv-tablename { min-width: 0; max-width: 105px; }
 .rv-view-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }

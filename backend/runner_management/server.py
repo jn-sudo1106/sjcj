@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .artifacts import ArtifactStore
 from .store import MySqlStore, create_store
@@ -47,6 +47,16 @@ RESPONSE_SENT = object()
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """管理服务登录校验：3xx 表示会话失效（跳登录/登出页），不能当成服务故障。"""
+
+    def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+        return None
+
+
+_AUTH_OPENER = build_opener(_NoRedirect)
 
 
 class ApiError(Exception):
@@ -1156,24 +1166,38 @@ class Application:
         auth_url = os.getenv("RUNNER_AUTH_URL", "")
         if auth_url:
             forwarded = {key: headers[key] for key in ("Cookie", "Access-Token") if headers.get(key)}
-            if not forwarded:
+            forwarded.setdefault("X-Requested-With", "XMLHttpRequest")
+            forwarded.setdefault("Accept", "application/json")
+            if not forwarded.get("Cookie") and not forwarded.get("Access-Token"):
                 raise ApiError("请先登录", 401)
             try:
-                with urlopen(Request(auth_url, headers=forwarded), timeout=5) as response:
-                    payload = json.load(response)
+                with _AUTH_OPENER.open(Request(auth_url, headers=forwarded), timeout=5) as response:
+                    raw = response.read(65537)
+                    if len(raw) > 65536:
+                        raise ValueError('identity response too large')
+                    payload = json.loads(raw)
             except HTTPError as exc:
-                if exc.code in (401, 403):
+                # 网关/加签失败、会话过期都可能以 3xx 跳登录页或 401/403 返回：
+                # 跳转与鉴权失败是「没登录」，不是「认证服务坏了」，必须分开报。
+                if exc.code in (401, 403) or 300 <= exc.code < 400:
                     raise ApiError("登录状态验证失败", 401) from exc
-                raise ApiError("认证服务请求失败，请检查管理服务的登录校验配置", 502) from exc
+                raise ApiError(
+                    "认证服务请求失败（HTTP %s），请检查管理服务的登录校验配置" % exc.code, 502
+                ) from exc
             except (URLError, TimeoutError, OSError, ValueError) as exc:
                 raise ApiError("认证服务不可用或返回格式错误，请检查登录校验地址", 502) from exc
             if not isinstance(payload, dict):
                 raise ApiError("认证服务返回格式错误，请检查登录校验地址", 502)
-            if str(payload.get("code")) != "0" or not payload.get("data"):
+            if payload.get('success') is False or str(payload.get("code")) != "0" or not payload.get("data"):
                 raise ApiError("请先登录", 401)
             if not isinstance(payload["data"], dict):
                 raise ApiError("认证服务返回的用户信息格式错误", 502)
             roles = payload["data"].get("roles", [])
+            if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles):
+                raise ApiError("认证服务返回的角色格式错误", 502)
+            identity = payload['data']
+            if not any(identity.get(key) for key in ('userLoginName', 'userName', 'id')):
+                raise ApiError("认证服务未返回用户标识，请检查登录校验地址", 502)
             if write and "admin" not in roles:
                 raise ApiError("需要管理员权限", 403)
             return payload['data']
@@ -1598,6 +1622,229 @@ class Application:
         return {"digest": digest, "signature": signature, "created": inserted.rowcount > 0}
 
 
+# ---- AI 数据监控执行器（monitor-runner）：状态 / 手动扫描 / 后台轮询 ----
+MONITOR_RUNNER_STATE_KEY = "monitor-runner:state"
+MONITOR_RUNNER_DEFAULT_SECONDS = 60
+MONITOR_RUNNER_MIN_SECONDS = 10
+MONITOR_RUNNER_DEFAULT_LIMIT = 5
+MONITOR_RUNNER_MAX_LIMIT = 50
+MONITOR_RUNNER_WORKER_LIMIT = 20
+MONITOR_RUNNER_LOCK = threading.RLock()
+MONITOR_RUNNER_WORKER = None
+
+
+def monitor_runner_enabled() -> bool:
+    """执行器总开关：未配置时默认开启，0/false/no/off 视为关闭。"""
+    value = (os.getenv("RUNNER_MONITOR_RUNNER_ENABLED") or "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
+def monitor_runner_interval() -> int:
+    """后台轮询间隔（秒）：默认 60，最小 10。"""
+    raw = (os.getenv("RUNNER_MONITOR_RUNNER_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else MONITOR_RUNNER_DEFAULT_SECONDS
+    except ValueError:
+        value = MONITOR_RUNNER_DEFAULT_SECONDS
+    return max(MONITOR_RUNNER_MIN_SECONDS, value)
+
+
+def monitor_runner_state(app) -> dict:
+    """读取持久化状态；没有跑过时返回空 dict。"""
+    from . import monitor_batches as batches
+    return batches.read(app, MONITOR_RUNNER_STATE_KEY) or {}
+
+
+def monitor_runner_status(app) -> dict:
+    """执行器状态：enabled/running/interval + 最近一轮结果。
+
+    配置缺失或配置里没有业务库时明确返回 available=false 与原因，
+    不拿 0 计数冒充正常；这里不做连库探测（前端会轮询状态，避免每次探测阻塞），
+    连接失败由 scan 的 503 和后台线程的 lastError 暴露。
+    """
+    from . import monitor_runner
+    state = monitor_runner_state(app)
+    worker = MONITOR_RUNNER_WORKER
+    status = {
+        "enabled": monitor_runner_enabled(),
+        "running": bool(worker is not None and worker.is_alive()),
+        "intervalSeconds": monitor_runner_interval(),
+        "lastRunAt": state.get("lastRunAt"),
+        "lastError": state.get("lastError"),
+        "lastResult": None,
+    }
+    if state.get("lastRunAt"):
+        status["lastResult"] = {
+            "count": int(state.get("count") or 0),
+            "applied": int(state.get("applied") or 0),
+            "at": state["lastRunAt"],
+        }
+    try:
+        cfg = monitor_runner.load_config()
+    except monitor_runner.RunnerUnavailable as exc:
+        status.update(available=False, reason=str(exc))
+        return status
+    except Exception as exc:
+        status.update(available=False, reason=f"执行器配置不可读：{exc}")
+        return status
+    if not (cfg.get("db") or {}).get("database"):
+        status.update(available=False, reason="未配置业务数据库（db.database 为空），无法执行 AI 检查")
+        return status
+    status.update(available=True, reason=None)
+    return status
+
+
+def monitor_runner_test_script(payload: dict) -> dict:
+    """试跑一段候选脚本（编辑器「测试脚本」）：不落库、不发通知，只返回结构化结论。
+
+    走和执行器完全相同的能力（Python 子进程 + DQ_* 环境变量），
+    避免依赖 186 上并不存在的 vrule 服务。
+    """
+    from . import monitor_runner
+    script = str(payload.get("script") or "")
+    if not script.strip():
+        raise ApiError("缺少脚本正文，无法测试", 400)
+    cfg = monitor_runner.load_config()
+    conf = {
+        "kind": "ai",
+        "tableName": str(payload.get("tableName") or ""),
+        "timeColumn": str(payload.get("timeColumn") or ""),
+        "sourceId": str(payload.get("sourceId") or ""),
+        "window": payload.get("window") or {"type": "today"},
+        "schedule": {},
+    }
+    outcome = monitor_runner.execute(script, conf, cfg)
+    report = outcome.get("report") or {}
+    return {
+        "success": outcome.get("status") != monitor_runner.STATUS_ERROR,
+        "status": outcome.get("status"),
+        "checkedCount": report.get("checkedCount"),
+        "abnormalCount": report.get("abnormalCount"),
+        "reason": report.get("reason") or outcome.get("error"),
+        "window": report.get("window"),
+        "durationMs": outcome.get("durationMs"),
+        "stderr": (outcome.get("stderr") or "")[-500:],
+    }
+
+
+def monitor_runner_connect(cfg):
+    """按执行器配置连接业务库；pymysql 延迟导入，未安装时按不可用处理。"""
+    import pymysql
+    db = cfg.get("db") or {}
+    return pymysql.connect(
+        host=db.get("host"), port=int(db.get("port") or 3306),
+        user=db.get("user") or "", password=db.get("password") or "",
+        database=db.get("database") or None, charset="utf8mb4",
+        autocommit=True, connect_timeout=5,
+    )
+
+
+def monitor_runner_execute(*, apply: bool = False, limit: int = MONITOR_RUNNER_WORKER_LIMIT,
+                           monitor_ids=None, force: bool = False, app=None) -> list:
+    """打开业务库执行一轮到点检查；配置/库不可用时抛 RunnerUnavailable。
+
+    ``app`` 只用于 apply 成功后记录异常事件；CLI/纯执行入口可以不传。
+    """
+    from . import monitor_runner
+    cfg = monitor_runner.load_config()
+    if not (cfg.get("db") or {}).get("database"):
+        raise monitor_runner.RunnerUnavailable("未配置业务数据库（db.database 为空），无法执行 AI 检查")
+    try:
+        conn = monitor_runner_connect(cfg)
+    except monitor_runner.RunnerUnavailable:
+        raise
+    except Exception as exc:
+        raise monitor_runner.RunnerUnavailable(f"无法连接监控库：{exc}") from exc
+    try:
+        # 同一时刻只允许一轮执行，避免手动扫描和后台线程重复跑同一批检查。
+        with MONITOR_RUNNER_LOCK:
+            return list(monitor_runner.run_due(conn, cfg, apply=apply, limit=limit,
+                                               monitor_ids=monitor_ids, force=force, app=app))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def monitor_runner_scan(payload: dict, app=None) -> dict:
+    """手动扫描：默认 apply=false（只执行检查、不写库）。"""
+    payload = payload or {}
+    apply = payload.get("apply", False)
+    if not isinstance(apply, bool):
+        raise ApiError("apply 必须是布尔值")
+    force = payload.get("force", False)
+    if not isinstance(force, bool):
+        raise ApiError("force 必须是布尔值")
+    raw_limit = payload.get("limit")
+    if raw_limit in (None, ""):
+        limit = MONITOR_RUNNER_DEFAULT_LIMIT
+    else:
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            raise ApiError("limit 无效")
+    limit = max(1, min(limit, MONITOR_RUNNER_MAX_LIMIT))
+    raw_ids = payload.get("monitorIds")
+    if raw_ids in (None, ""):
+        monitor_ids = []
+    elif isinstance(raw_ids, list):
+        try:
+            monitor_ids = [int(value) for value in raw_ids]
+        except (TypeError, ValueError):
+            raise ApiError("monitorIds 必须是整数数组")
+    else:
+        raise ApiError("monitorIds 必须是整数数组")
+    items = monitor_runner_execute(apply=apply, limit=limit,
+                                   monitor_ids=monitor_ids, force=force, app=app)
+    return {"applied": apply, "count": len(items), "items": items}
+
+
+def monitor_runner_round(app) -> dict:
+    """后台一轮：执行检查并把结果落到 monitor-runner:state。"""
+    from . import monitor_batches as batches
+    at = now()
+    try:
+        items = monitor_runner_execute(apply=True, limit=MONITOR_RUNNER_WORKER_LIMIT, app=app)
+    except Exception as exc:
+        state = monitor_runner_state(app)
+        state.update(lastRunAt=at, count=0, applied=0, lastError=f"执行失败：{exc}")
+        batches.write(app, MONITOR_RUNNER_STATE_KEY, state)
+        raise
+    state = monitor_runner_state(app)
+    state.update(
+        lastRunAt=at,
+        count=len(items),
+        applied=sum(1 for item in items if item.get("applied")),
+        lastError=None,
+    )
+    batches.write(app, MONITOR_RUNNER_STATE_KEY, state)
+    return state
+
+
+def monitor_runner_worker(app, stopped) -> None:
+    """后台线程主体：按间隔执行；单轮异常只记 lastError，线程不能死。"""
+    while not stopped.is_set():
+        try:
+            monitor_runner_round(app)
+        except Exception as exc:
+            print(f"AI 数据监控执行失败：{exc}", file=sys.stderr, flush=True)
+        if stopped.wait(monitor_runner_interval()):
+            return
+
+
+def monitor_runner_start(app, stopped):
+    """总开关打开时启动后台线程，返回线程对象；关闭时返回 None。"""
+    global MONITOR_RUNNER_WORKER
+    if not monitor_runner_enabled():
+        return None
+    worker = threading.Thread(target=monitor_runner_worker, args=(app, stopped),
+                              name="monitor-runner", daemon=True)
+    worker.start()
+    MONITOR_RUNNER_WORKER = worker
+    return worker
+
+
 class Handler(BaseHTTPRequestHandler):
     application: Application
 
@@ -1893,6 +2140,42 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/monitor-watch/scan' and method == 'POST':
             from .monitor_watch import run_scan as run_monitor_watch
             return run_monitor_watch(app)
+        if sub == '/monitor-runner/status' and method == 'GET':
+            return monitor_runner_status(app)
+        if sub == '/monitor-runner/table-fields' and method == 'POST':
+            from . import monitor_runner
+            try:
+                return {"fields": monitor_runner.table_fields(str((body or {}).get('tableName') or ''), monitor_runner.load_config())}
+            except Exception as exc:
+                raise ApiError("读取实际表结构失败：%s" % exc, 503) from exc
+        if sub == '/monitor-runner/test-script' and method == 'POST':
+            from . import monitor_runner
+            try:
+                return monitor_runner_test_script(body or {})
+            except monitor_runner.RunnerUnavailable as exc:
+                self.respond(503, {"error": str(exc)})
+                return RESPONSE_SENT
+        if sub == '/monitor-runner/notifications' and method == 'GET':
+            from . import monitor_events
+            items = monitor_events.listing(
+                app,
+                monitor_id=(query.get('monitorId') or [''])[0],
+                run_id=(query.get('runId') or [''])[0],
+                limit=(query.get('limit') or [''])[0] or monitor_events.DEFAULT_LIMIT,
+            )
+            return {'count': len(items), 'items': items}
+        event_retry = re.fullmatch(r'/monitor-runner/notifications/([A-Za-z0-9_-]{1,120})/retry', sub)
+        if event_retry and method == 'POST':
+            from . import monitor_events
+            return {'event': monitor_events.retry(app, event_retry.group(1))}
+        if sub == '/monitor-runner/scan' and method == 'POST':
+            from . import monitor_runner
+            try:
+                return monitor_runner_scan(body, app)
+            except monitor_runner.RunnerUnavailable as exc:
+                # 库连不上/配置缺失返回 503，不伪装成成功。
+                self.respond(503, {"error": str(exc)})
+                return RESPONSE_SENT
         runner_files = re.fullmatch(r'/runners/([0-9a-f-]{36})/files', sub)
         if runner_files and method == 'POST':
             from .runner_files import create
@@ -2446,6 +2729,9 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
     monitor_delivery_worker = start_monitor_delivery(application, stopped)
     from .monitor_watch import start as start_monitor_watch
     monitor_watch_worker = start_monitor_watch(application, stopped)
+    monitor_runner_thread = monitor_runner_start(application, stopped)
+    from .monitor_events import start as start_monitor_events
+    monitor_events_worker = start_monitor_events(application, stopped)
 
     def sweep() -> None:
         last_cleanup = 0
@@ -2489,6 +2775,11 @@ def serve(host: str = "127.0.0.1", port: int = 8092, data_dir: Path = RUNTIME):
             lan_thread.join(timeout=5)
         sweeper.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
         deployment_worker.join(timeout=RUNNER_SWEEP_INTERVAL_SECONDS + 1)
+        monitor_delivery_worker.join(timeout=1)
+        monitor_watch_worker.join(timeout=1)
+        monitor_events_worker.join(timeout=1)
+        if monitor_runner_thread:
+            monitor_runner_thread.join(timeout=1)
         generation_worker.join(timeout=3)
 
 

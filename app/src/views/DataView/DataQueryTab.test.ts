@@ -5,7 +5,6 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
-import SourceSearchPicker from './SourceSearchPicker.vue'
 import DataTableSidebar from '@/components/DataTableSidebar.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import RowEditDialog from './RowEditDialog.vue'
@@ -13,7 +12,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { UserInfo } from '@/api/auth'
-import { dataApi, sourceApi, sourceGroupApi, entryApi, favoriteApi, logReportApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
+import { dataApi, sourceApi, entryApi, favoriteApi, logReportApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
 import { downloadCsv } from '@/utils/format/csvExport'
 
 // 当前页 CSV 导出会触发浏览器下载，jsdom 里换成桩，只断言传给它的文件名和内容
@@ -170,17 +169,14 @@ describe('数据中心 · 数据查询 tab', () => {
     const add = vi.spyOn(dataApi, 'rowAdd').mockResolvedValue({ message: '新增成功' })
     await mountPage()
     await waitForLoad()
-    const picker = wrapper.findComponent(SourceSearchPicker)
-    const input = picker.get('[data-testid="data-source-search-input"]')
-    await input.trigger('focus')
-    await input.setValue('391008025')
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    select.props('remoteMethod')('391008025')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
-    // 纯数字先按源 ID 精确命中（随后仍会按名称再查一次，覆盖名称里带数字的源）
-    expect(sources).toHaveBeenCalledWith(expect.objectContaining({ sourceIds: ['391008025'] }))
-    const option = picker.findAll('[data-testid="data-source-search-option"]')[0]
-    expect(option.text()).toContain('391008025')
-    await option.trigger('mousedown')
+    expect(sources).toHaveBeenLastCalledWith({ sourceIds: ['391008025'], page: 1, size: 1 })
+    expect(select.findAllComponents({ name: 'ElOption' }).map(option => option.props('value'))).toContain('391008025')
+    select.vm.$emit('update:modelValue', '391008025')
+    select.vm.$emit('change', '391008025')
     await flushPromises()
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', sourceId: '391008025' }))
     const menu = await openResultMenu('data-add')
@@ -203,13 +199,12 @@ describe('数据中心 · 数据查询 tab', () => {
     const imported = vi.spyOn(dataApi, 'importData').mockResolvedValue({ success: true })
     await mountPage()
     await waitForLoad()
-    const picker = wrapper.findComponent(SourceSearchPicker)
-    const searchInput = picker.get('[data-testid="data-source-search-input"]')
-    await searchInput.trigger('focus')
-    await searchInput.setValue('391008025')
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    select.props('remoteMethod')('391008025')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
-    await picker.findAll('[data-testid="data-source-search-option"]')[0].trigger('mousedown')
+    select.vm.$emit('update:modelValue', '391008025')
+    select.vm.$emit('change', '391008025')
     await flushPromises()
     const menu = await openResultMenu('data-add')
     await clickMenuItem(menu, 'Excel 导入')
@@ -231,24 +226,23 @@ describe('数据中心 · 数据查询 tab', () => {
     const sources = vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [source] })
     await mountPage()
     await waitForLoad()
-    const picker = wrapper.findComponent(SourceSearchPicker)
-    const input = picker.get('[data-testid="data-source-search-input"]')
-    await input.trigger('focus')
-    await input.setValue('企业客户')
+    const select = wrapper.getComponent({ name: 'ElSelect' })
+    select.props('remoteMethod')('企业客户')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
-    expect(sources).toHaveBeenLastCalledWith(expect.objectContaining({ name: '企业客户' }))
-    await picker.findAll('[data-testid="data-source-search-option"]')[0].trigger('mousedown')
+    expect(sources).toHaveBeenLastCalledWith({ name: '企业客户', page: 1, size: 50 })
+    select.vm.$emit('update:modelValue', '391008025')
+    select.vm.$emit('change', '391008025')
     await flushPromises()
-    // 收起后重新聚焦 = 清空搜索词，已选源仍在候选里（不把输入当成新源）
-    await input.trigger('focus')
+    select.props('remoteMethod')('')
+    await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
-    expect(picker.findAll('[data-testid="data-source-search-option"]').map(option => option.text()).join(' ')).toContain('391008025')
+    expect(select.findAllComponents({ name: 'ElOption' }).map(option => option.props('value'))).toContain('391008025')
     sources.mockResolvedValue({ total: 0, list: [] })
-    await input.setValue('999999999')
+    select.props('remoteMethod')('999999999')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
-    expect(picker.findAll('[data-testid="data-source-search-option"]')).toHaveLength(0)
+    expect(select.findAllComponents({ name: 'ElOption' })).toHaveLength(0)
   })
 
   it('查询：输入数据 ID 点查询，rowQueryPaged 带上 dataId 且页码归 1', async () => {
@@ -1279,7 +1273,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    const link = wrapper.findAll('.dv-link').find((el) => el.text().includes('按源搜索'))
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('按源搜索'))
     await link!.trigger('click')
     await flushPromises()
 
@@ -1296,35 +1290,5 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(dataApi.entryTypesGroup).toHaveBeenLastCalledWith('src-9')
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'src-9' }))
-  })
-
-  it('源搜索：按来源组搜到源后选中，查询带上该 sourceId，但不切换当前表', async () => {
-    vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
-      { sourceGroupId: '3', sourceGroupCode: 'G3', sourceGroupName: '财经来源组', state: 'ACTIVE', flowIds: [], revision: 1 },
-    ])
-    const sourceSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
-      total: 1,
-      // 命中的源主表是 t2：空表 / 跨表源也能直接选中给当前表录首条数据，不切表
-      list: [{ sourceId: 'src-1', name: '财经源', url: '', configId: 'c1', mainTable: 't2', owner: 'dev', state: 'C', sourceGroupId: '3' }],
-    })
-    await mountPage()
-    await waitForLoad()
-
-    const picker = wrapper.findComponent(SourceSearchPicker)
-    const input = picker.get('[data-testid="data-source-search-input"]')
-    await input.trigger('focus')
-    await picker.get('[data-testid="data-source-search-group"]').setValue('3')
-    await flushPromises()
-
-    expect(sourceSpy).toHaveBeenLastCalledWith(expect.objectContaining({ sourceGroupId: '3' }))
-    const option = picker.findAll('[data-testid="data-source-search-option"]')[0]
-    expect(option.text()).toContain('财经源')
-    expect(option.text()).toContain('主表 t2')
-    await option.trigger('mousedown')
-    await flushPromises()
-
-    expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
-    expect(dataApi.entryTypesGroup).toHaveBeenLastCalledWith('src-1')
-    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', sourceId: 'src-1' }))
   })
 })

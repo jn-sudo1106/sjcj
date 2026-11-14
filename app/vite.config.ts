@@ -25,13 +25,18 @@ export default defineConfig(({ command, mode }) => {
   const syncPlatformProxyTarget =
     env.VITE_SYNC_PLATFORM_PROXY_TARGET || (useTestBackend ? TEST_SYNC_PLATFORM_PROXY_TARGET : DEFAULT_SYNC_PLATFORM_PROXY_TARGET)
   const pocProxyTarget = env.VITE_POC_PROXY_TARGET || DEFAULT_POC_PROXY_TARGET
+  // OSS 下载服务地址（9102）：默认与业务后端同机，可用 VITE_OSS_PROXY_TARGET 单独指定
+  //（2026-11-12：133 业务后端 192.168.1.30、OSS 192.168.1.80）。
+  const ossProxyTarget = env.VITE_OSS_PROXY_TARGET || proxyTarget.replace(/:\d+$/, ':9102')
   // 没有 .env 时，前端 isProductionBackend 也要读到同一地址，不能只改了 proxy 而守卫仍当「未连生产」。
   if (!env.VITE_API_PROXY_TARGET) process.env.VITE_API_PROXY_TARGET = proxyTarget
   // /api/poc 的目的地同样要透给前端：client.ts 按它判定生产写守卫（POC 服务不是 217，不该被拦）。
   if (!env.VITE_POC_PROXY_TARGET) process.env.VITE_POC_PROXY_TARGET = pocProxyTarget
+  // 前端「新窗口打开」用 ossPublicUrl 的绝对地址，没显式配置时与 /oss 代理目标保持一致。
+  if (!env.VITE_OSS_PUBLIC_TARGET) process.env.VITE_OSS_PUBLIC_TARGET = ossProxyTarget
   if (command === 'serve') {
     console.log(
-      `[dev] 后端环境 ${useTestBackend ? 'test' : 'local'}：业务 ${proxyTarget} · sync-platform ${syncPlatformProxyTarget} · poc ${pocProxyTarget}`,
+      `[dev] 后端环境 ${useTestBackend ? 'test' : 'local'}：业务 ${proxyTarget} · sync-platform ${syncPlatformProxyTarget} · oss ${ossProxyTarget} · poc ${pocProxyTarget}`,
     )
   }
   return {
@@ -182,18 +187,18 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           autoRewrite: true,
         },
-        // 文件预览（0819 N2）：OSS 下载服务在同机的 **9102** 端口，与业务后端（9999）不同源。
+        // 文件预览（0819 N2）：OSS 下载服务在 **9102** 端口（默认与业务后端同机，见 ossProxyTarget），与业务后端（9999）不同源。
         // 浏览器不允许页面跨源读取内容——「新窗口打开/下载」不受限，但站内预览必须 fetch 到
         // 字节流才能渲染（Excel 要解析、PDF 要喂给 iframe），跨源直取会被 CORS 拒（实测
         // Failed to fetch）。故按 /api、/rest、/vrule 同款做法收进同源。
         // 真实路径形如 /oss/api/oss/download?fileId=/qinlong/xxx.xlsx，转发时去掉 /oss 前缀。
         '/oss': {
-          target: proxyTarget.replace(/:\d+$/, ':9102'),
+          target: ossProxyTarget,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/oss/, ''),
         },
         '/vrule/fastapi/execute/code': {
-          target: 'http://127.0.0.1:8000',
+          target: env.VITE_SCRIPT_EXECUTOR_PROXY_TARGET || 'http://127.0.0.1:8000',
           changeOrigin: true,
         },
         // 规则编排 Sprint 4：saveMeta/test/saveScript 直连同机 vrule（0801 方案 §8.1）

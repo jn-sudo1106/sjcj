@@ -99,6 +99,38 @@ class MonitorDeliveryTest(unittest.TestCase):
         self.assertIsNone(message['Cc'])
         self.assertEqual(client.send_message.call_args.kwargs['to_addrs'], ['jiangnan@wanvs.com'])
 
+    def test_disconnect_on_login_is_retried_with_auth_plain_to_keep_server_reason(self):
+        # QQ 邮箱 AUTH LOGIN 失败后直接断开：不能只留一句 Connection closed，
+        # 要换 AUTH PLAIN 拿到 535 和服务端原因。
+        broken = Mock()
+        broken.login.side_effect = smtplib.SMTPServerDisconnected('Connection unexpectedly closed')
+        plain = Mock()
+        plain.docmd.return_value = (535, b'Login fail. Account is abnormal, service is not open')
+        config = {'smtp': {'tls': 'ssl', 'host': 'smtp.qq.com', 'port': 465, 'from': 'a@qq.com',
+                           'user': 'a@qq.com', 'password': 'x' * 16}}
+        event = {'recipient': 'a@qq.com', 'subject': '测试', 'body': '正文', 'messageId': '<t@monitor.local>'}
+        with patch.object(delivery.smtplib, 'SMTP_SSL', side_effect=[broken, plain]):
+            with self.assertRaises(smtplib.SMTPAuthenticationError) as caught:
+                delivery.send(config, event)
+        self.assertEqual(caught.exception.smtp_code, 535)
+        self.assertIn(b'Account is abnormal', caught.exception.smtp_error)
+        plain.docmd.assert_called_once()
+        self.assertEqual(plain.docmd.call_args.args[0], 'AUTH')
+        self.assertTrue(plain.docmd.call_args.args[1].startswith('PLAIN '))
+
+    def test_disconnect_on_login_succeeds_when_auth_plain_is_accepted(self):
+        broken = Mock()
+        broken.login.side_effect = smtplib.SMTPServerDisconnected('closed')
+        plain = Mock()
+        plain.docmd.return_value = (235, b'Authentication successful')
+        plain.send_message.return_value = {}
+        config = {'smtp': {'tls': 'ssl', 'host': 'smtp.qq.com', 'port': 465, 'from': 'a@qq.com',
+                           'user': 'a@qq.com', 'password': 'x' * 16}}
+        event = {'recipient': 'a@qq.com', 'subject': '测试', 'body': '正文', 'messageId': '<t@monitor.local>'}
+        with patch.object(delivery.smtplib, 'SMTP_SSL', side_effect=[broken, plain]):
+            delivery.send(config, event)
+        plain.send_message.assert_called_once()
+
     def test_smtp_auth_error_keeps_server_code(self):
         batch_id = self.subscription()
         error = smtplib.SMTPAuthenticationError(550, b'User has no permission')

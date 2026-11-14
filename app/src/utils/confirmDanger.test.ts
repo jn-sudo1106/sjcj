@@ -57,6 +57,18 @@ describe('confirmDanger', () => {
     expect(ElMessage.success).not.toHaveBeenCalled()
   })
 
+  it('允许调用方展示分层错误，保留原始异常且不重复弹错误 toast', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const error = new Error('当前账号无该表删除权限900')
+    const onSuccess = vi.fn()
+    const onError = vi.fn()
+    await confirmDanger('删除', '正文', vi.fn().mockRejectedValue(error), onSuccess, onError)
+    expect(onError).toHaveBeenCalledWith(error)
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+  })
+
   it('run 抛非 Error 值时用通用错误文案兜底', async () => {
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     const run = vi.fn().mockRejectedValue('boom')

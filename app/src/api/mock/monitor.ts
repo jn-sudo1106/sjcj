@@ -115,7 +115,6 @@ export function mockCkSourceUpdate(params?: Record<string, unknown>): boolean {
 // `时间---[X]:文本` 的前缀，好验证视图有没有把重复的时间戳剥掉。
 //
 // 内存表：所有写操作都落这里，刷新 paged 能看到变更。
-let ckNextId = 100
 const CHECKS: SourceCheck[] = [
   {
     id: 'ck-1', isDelete: 0, state: 'E', name: '日增量监控',
@@ -150,6 +149,62 @@ export function mockSourceCheckPaged(params?: Record<string, unknown>): Paged<So
   return { total: list.length, list }
 }
 
+/**
+ * 源维度聚合（C07 首期）：演示口径，一行一个源，含未配置检查的源。
+ * 真实字段口径见 `source/check/sourceSummary`；这里只保证结构一致，方便 mock 模式看页面。
+ */
+export function mockSourceCheckSummary(params?: Record<string, unknown>): Record<string, unknown> {
+  const keyword = String(params?.keyword ?? '')
+  const rows = [
+    {
+      sourceId: 301236115,
+      sourceName: '上市公司新闻',
+      siteId: 25,
+      siteName: '财经资讯站',
+      tableName: 'sense_data.news_main',
+      monitorTotal: 2,
+      monitorEnabled: 2,
+      lastCheckAt: '2026-11-12 09:00:00',
+      dataState: 'abnormal',
+    },
+    {
+      sourceId: 301276575,
+      sourceName: '支付宝-基金评论',
+      siteId: 25,
+      siteName: '财经资讯站',
+      tableName: 'sense_data.TB_ZFB_COMMENT',
+      monitorTotal: 1,
+      monitorEnabled: 1,
+      lastCheckAt: '2026-11-12 08:00:00',
+      dataState: 'normal',
+    },
+    {
+      sourceId: 390000019,
+      sourceName: '港口吞吐量',
+      siteId: 25,
+      siteName: '财经资讯站',
+      tableName: 'sense_data.TB_PORT',
+      monitorTotal: 0,
+      monitorEnabled: 0,
+      lastCheckAt: null,
+      dataState: 'none',
+    },
+  ].filter((row) => !keyword || row.sourceName.includes(keyword) || String(row.sourceId).includes(keyword))
+  return { total: rows.length, list: rows }
+}
+
+/** 源维度聚合统计（C07）：演示口径，只用于 mock 模式页面不至于空白。 */
+export function mockSourceSummaryStats(): Record<string, unknown> {
+  return {
+    totalSources: 140730,
+    configuredSources: 754,
+    enabledSources: 282,
+    abnormalSources: 236,
+    uncheckedSources: 0,
+    notConfiguredSources: 139976,
+  }
+}
+
 /** 变更启停（真实改内存表）。enable: 0=启用 → isDelete=0；1=停用 → isDelete=1 */
 export function mockSourceCheckChangeEnable(params?: Record<string, unknown>) {
   const ids = String(params?.ids ?? '').split(',').filter(Boolean)
@@ -167,29 +222,54 @@ export function mockSourceCheckRunNow() {
   return { ok: true, demo: true, message: '已触发校验（演示）' }
 }
 
-export function mockSourceCheckAdd(params?: Record<string, unknown>) {
-  const id = `ck-${ckNextId++}`
+/** 本地时间 ISO 串（CkSourcePayload.createDt 契约是 'YYYY-MM-DDTHH:mm:ss'，不带时区） */
+function localIsoNow(): string {
   const now = new Date()
-  const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-  const row: SourceCheck = {
-    id,
-    isDelete: 0,
-    state: 'C',
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
+}
+
+/**
+ * 新增源检查（mock）→ 写 `CK_SOURCE_STORE`。
+ *
+ * 画布 / 源视图查的是 CK_SOURCE_STORE（`monitor/ckSourceList`），而这里以前写旧演示表 CHECKS：
+ * 两边不是同一份数据，`syncMonitorCkSource` 每次都查不到、每次都新增，同一源重复建行。
+ * 改成写 CK_SOURCE_STORE，并用与 `mockCkSourceInsert` 相同的自增主键，后续 update 才能按 id 回写。
+ */
+export function mockSourceCheckAdd(params?: Record<string, unknown>) {
+  const row: CkSourceRecord = {
+    id: ckSourceNextId++,
+    sourceId: Number(params?.sourceId ?? 0),
     name: String(params?.name ?? '新建监控'),
-    lastMsg: `${fmt(now)}---正常, 数量:0`,
-    tableName: String(params?.tableName ?? ''),
     schedule: String(params?.schedule ?? '0 0 6-22 * * ?'),
-    nextRun: '—',
-    lastRun: fmt(now),
-    sourceId: String(params?.sourceId ?? ''),
+    tableName: String(params?.tableName ?? ''),
     checkConf: String(params?.checkConf ?? '{}'),
+    // 后端新增语义：强制启用（state=C、isDelete=0），createDt 由服务端补
+    state: 'C',
+    isDelete: 0,
+    createDt: localIsoNow(),
+    nextRun: '—',
+    ver: 1,
   }
-  CHECKS.push(row)
-  return { ok: true, id, message: '新增成功（演示）' }
+  CK_SOURCE_STORE.push(row)
+  return { ok: true, id: row.id, message: '新增成功（演示）' }
 }
 
 export function mockSourceCheckUpdate(params?: Record<string, unknown>) {
   const id = String(params?.id ?? '')
+  // 新建的行落 CK_SOURCE_STORE（见 mockSourceCheckAdd），演示行仍在 CHECKS：两处都按 id 查，
+  // 命中哪边改哪边，绝不再新增一行。
+  const ckRow = CK_SOURCE_STORE.find((row) => String(row.id) === id)
+  if (ckRow) {
+    if (params?.name != null) ckRow.name = String(params.name)
+    if (params?.tableName != null) ckRow.tableName = String(params.tableName)
+    if (params?.schedule != null) ckRow.schedule = String(params.schedule)
+    if (params?.checkConf != null) ckRow.checkConf = String(params.checkConf)
+    if (params?.isDelete != null) ckRow.isDelete = Number(params.isDelete)
+    // 后端 update 递增 VER（乐观锁）：版本必须往前走，下一次保存才不会拿旧 ver 和自己比。
+    ckRow.ver = Number(params?.ver ?? ckRow.ver ?? 0) + 1
+    return { ok: true, message: '修改成功（演示）' }
+  }
   const row = CHECKS.find((c) => c.id === id)
   if (!row) return { ok: false, message: '未找到要修改的记录' }
   if (params?.name != null) row.name = String(params.name)

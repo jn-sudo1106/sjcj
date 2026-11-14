@@ -75,10 +75,9 @@ async function beforeClose(done: () => void) {
   done()
 }
 
-// 1109/1110 规格：保存后弹窗保留，编辑器内部已按回读重置基线；这里把当前记录切到回读结果，
-// 保证「新增后再保存」命中 update 而不是重复新增，容器同时刷新底层检查项与最近运行。
+// 确认保存成功后关闭弹窗；回读未知时保留编辑内容供核对。
 function onSaved(record: MonitorRecordView | null) {
-  if (record) editing.value = record
+  if (record) onCancel()
   emit('saved', record)
 }
 
@@ -167,6 +166,7 @@ function onCancel() {
           </td>
           <td class="c-plan" :title="planTitle(monitor)">
             <span class="smc-plan">{{ planText(monitor) }}</span>
+            <span v-if="!monitor.schedule" class="smc-tag" title="没有执行计划：不会自动运行，只能在检查项里手动执行">仅手动</span>
           </td>
           <td class="c-edit">
             <button type="button" class="smc-link" data-testid="site-monitor-check-edit" @click="openEdit(monitor)">编辑</button>

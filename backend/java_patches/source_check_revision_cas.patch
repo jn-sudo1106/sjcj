@@ -1,0 +1,79 @@
+# 源检查保存改为「按主键单行更新 + revision CAS」（2026-11-13）
+#
+# 目的（1113 修订稿 §6 P0 第 2 条的前置）：
+#   1. 单行更新：`/api/v1/source/check/update` 一直按主键 updateById，本次把空指针 bug
+#      （m1==null 时用 m1.getId() 拼消息）与缺 id 的情况改成明确报错；
+#   2. revision CAS：请求体带 `ver` 时与当前 `ck_source.VER` 比较，不一致直接拒绝，
+#      避免两处页面（监控中心 / 画布）互相覆盖却没有任何提示；不带 ver 的老调用保持可写，
+#      但版本号照样递增（毫秒时间戳，与 Python 执行器写口径一致），下一次保存即可参与比较；
+#   3. 更新回执带 `ver`，前端保存后可直接用它作为下一次 CAS 的基线。
+#
+# 合入方式：目标环境的 Java 源码（bee-base + bee-config）里 `git apply` 此补丁后重新构建
+# bee-config.jar。只把补丁推到前端仓库不会改变运行产物。
+#
+# 186 已按「解 jar → javac → 回写 nested bee-base.jar → jar uf0」流程打过（2026-11-13 16:33），
+# 备份 `/data/app/backend/bee-config.jar.bak-c12-20261113-163304`；
+# 回滚：`cp -p <备份> /data/app/backend/bee-config.jar` 后 `bash /tmp/restart_be.sh`。
+#
+--- a/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java	2026-11-13 14:26:13
++++ b/bee-base/src/main/java/com/vanv/bee/service/check/CkSourceService.java	2026-11-13 21:38:20
+@@ -130,22 +130,37 @@
+             log.error("auto add monitor error: {}", sourceId,  e);
+         }
+     }
+ 
+     @Override
+     public int updateObject(CkSource object, ActionEnum action, String remark) {
+-        log.warn("更新CkSource, id:{}, 更新部分:{}", object.getId(), JSON.toJSONString(object));
++        log.warn("更新CkSource, id:{}, ver:{}, 更新部分:{}",
++                object.getId(), object.getVer(), JSON.toJSONString(object));
++        if (object.getId() == null) {
++            throw new ServiceException("缺少检查项 id，无法定位要更新的记录");
++        }
+         object.setUpdateDt(null);
+-        CkSource m1 = ckSourceMapper.selectById(object.getId());
+-        if (m1 == null) {
+-            throw new ServiceException("未找到原始queueId:" + m1.getId());
++        // 按主键取当前行：更新只命中这一条，不会因为同源有多条检查而互相覆盖。
++        CkSource current = ckSourceMapper.selectById(object.getId());
++        if (current == null) {
++            throw new ServiceException("未找到检查记录，id:" + object.getId());
+         }
++        // 乐观锁（revision CAS）：只有调用方带 ver 时才比较；不带 ver 的老调用保持原行为，
++        // 但版本号仍然递增，保证下一次 CAS 能区分「改过」和「没改」。
++        Long expected = object.getVer();
++        Long actual = current.getVer();
++        if (expected != null && !expected.equals(actual)) {
++            throw new ServiceException("该检查项已被其他修改更新（提交基于 ver=" + expected
++                    + "，当前 ver=" + actual + "），请刷新后重新保存");
++        }
+         if (object.getSchedule() != null) {
+             Date nextRun = calcNextDate(object);
+             object.setNextRun(nextRun);
+         }
++        long now = System.currentTimeMillis();
++        object.setVer(actual != null && actual >= now ? actual + 1 : now);
+         int result = ckSourceMapper.updateById(object);
+         return result;
+     }
+ 
+     @Override
+     public int deleteObject(Integer id, String userName) {
+--- a/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java	2026-11-13 14:26:25
++++ b/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java	2026-11-13 21:38:20
+@@ -261,13 +261,15 @@
+     @ResponseBody
+     public RspResult update(@RequestBody CkSource ckSource) {
+         log.warn("update source-check changed : new {}", JSON.toJSONString(ckSource));
+         int i = ckSourceService.updateObject(ckSource, ActionEnum.WEB_UPDATE, "从页面更新");
+         Map<String, Object> data = new LinkedHashMap<>();
+         data.put("id", ckSource.getId());
++        data.put("ver", ckSource.getVer());
+         data.put("affected", i);
++        // 回执带上最新 ver，前端保存后直接用它作为下一次 CAS 的基线，不必再回查。
+         return RspResult.getSuccessResult().setMsg("更新成功，影响 " + i + " 条记录").setData(data);
+     }
+ 
+     /**
+      * 更新配置
+      * @return

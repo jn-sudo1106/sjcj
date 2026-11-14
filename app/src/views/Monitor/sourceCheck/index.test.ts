@@ -6,10 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, nextTick } from 'vue'
 import ElementPlus, { ElMessageBox } from 'element-plus'
-import type { MonitorRecordView } from '@/api/types/monitorCenter'
+import type { MonitorRecordView, MonitorSourceRow } from '@/api/types/monitorCenter'
 import { deleteSourceCheck } from '@/api/monitor'
 import type { MonitorSourceOption } from '@/api/monitorCenter'
-import { MonitorQueryLimitError, listMonitors, listMonitorsOfSource, listSourceOptions, runMonitorsNow, setMonitorsEnabled } from '@/api/monitorCenter'
+import {
+  listMonitors,
+  listMonitorsOfSource,
+  listSourceNames,
+  listSourceOptions,
+  listSourceSummary,
+  runMonitorsNow,
+  setMonitorsEnabled,
+} from '@/api/monitorCenter'
 import SourceCheckPage from './index.vue'
 
 // Element Plus 的表格内部用 ResizeObserver 量宽，jsdom 没有
@@ -38,6 +46,9 @@ vi.mock('@/api/monitorCenter', async (importOriginal) => {
     listMonitors: vi.fn(),
     listMonitorsOfSource: vi.fn(),
     listSourceOptions: vi.fn(),
+    listSourceNames: vi.fn(),
+    // C07 首期聚合：默认「服务端未部署」，测试按需覆盖
+    listSourceSummary: vi.fn(),
     setMonitorsEnabled: vi.fn(),
     runMonitorsNow: vi.fn(),
   }
@@ -46,11 +57,15 @@ vi.mock('@/api/monitorCenter', async (importOriginal) => {
 const mockedListMonitors = vi.mocked(listMonitors)
 const mockedListOfSource = vi.mocked(listMonitorsOfSource)
 const mockedListSources = vi.mocked(listSourceOptions)
+const mockedListNames = vi.mocked(listSourceNames)
+const mockedSummary = vi.mocked(listSourceSummary)
 const mockedSetEnabled = vi.mocked(setMonitorsEnabled)
 const mockedRunNow = vi.mocked(runMonitorsNow)
 const mockedDelete = vi.mocked(deleteSourceCheck)
 
 const editorDirty = vi.fn(() => false)
+// 通知回执抽屉走 ref.show(sourceId, monitorId, monitorName)，只记录调用参数
+const notifyCalls: string[] = []
 
 const ElDialogStub = defineComponent({
   name: 'ElDialog',
@@ -113,6 +128,18 @@ const stubs = {
       return () => (props.open ? h('div', { class: 'stub-runs' }, `${props.sourceId}|${props.monitorId}|${props.title}`) : null)
     },
   }),
+  // 通知回执抽屉：只断言「打开时带了哪个范围」，不依赖其内部实现
+  CheckNotificationsDrawer: defineComponent({
+    name: 'CheckNotificationsDrawer',
+    setup(_props, { expose }) {
+      expose({
+        show: (sourceId: string, jobId?: string, monitorName?: string) => {
+          notifyCalls.push(`${sourceId}|${jobId ?? ''}|${monitorName ?? ''}`)
+        },
+      })
+      return () => h('div', { class: 'stub-notify' })
+    },
+  }),
 }
 
 function rec(patch: Partial<MonitorRecordView> = {}): MonitorRecordView {
@@ -165,12 +192,15 @@ function selectByPlaceholder(wrapper: VueWrapper, placeholder: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  notifyCalls.length = 0
   editorDirty.mockReturnValue(false)
   mockedListMonitors.mockResolvedValue([rec()])
   mockedListOfSource.mockResolvedValue([rec()])
   mockedListSources.mockResolvedValue(directory)
+  mockedListNames.mockResolvedValue([])
+  mockedSummary.mockResolvedValue({ total: 0, rows: [], unavailable: true })
   mockedSetEnabled.mockResolvedValue(undefined)
-  mockedRunNow.mockResolvedValue(undefined)
+  mockedRunNow.mockResolvedValue({ viaRunner: 0, viaLegacy: 1, runnerSkipped: 0, runnerRunIds: [] })
   mockedDelete.mockResolvedValue(undefined)
 })
 
@@ -179,20 +209,83 @@ afterEach(() => {
 })
 
 describe('一行一源与源目录', () => {
-  it('传入源目录时，未配置检查的源也出行且不显示绿色正常', async () => {
-    const wrapper = await mountPage()
+  it('网站上下文传入源目录时，未配置检查的源也出行且不显示绿色正常', async () => {
+    const wrapper = await mountPage({ siteId: 'site-1', siteName: '站A' })
     expect(wrapper.text()).toContain('未配置源')
     expect(wrapper.text()).toContain('未配置检查')
     expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
+    await buttonByText(wrapper, '展开检查').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(rec().name)
     expect(wrapper.text()).toMatch(/已配置\s*1/)
   })
 
-  it('源目录超限时降级为「仅已配置源」并给出可读提示', async () => {
-    mockedListSources.mockRejectedValue(new MonitorQueryLimitError(20))
+  it('全局视图不拉全量源目录（避免 20 次串行请求），按已配置源展示并说明', async () => {
     const wrapper = await mountPage()
-    expect(wrapper.text()).toContain('监控记录超过 20 页')
-    expect(wrapper.text()).toContain('当前只列出已配置监控的源')
-    expect(wrapper.text()).not.toContain('未配置源')
+    expect(mockedListSources).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('按已配置监控的源展示')
+    expect(wrapper.text()).toContain('C07')
+  })
+
+  it('按源 ID 批量取名，主标题不退化成 ID', async () => {
+    mockedListMonitors.mockResolvedValue([rec({ sourceName: undefined })])
+    mockedListNames.mockResolvedValue([
+      { sourceId: 's1', name: '上市公司新闻', siteName: '财经资讯站', tableName: 'sense_data.news_main' },
+    ])
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('上市公司新闻')
+    expect(wrapper.text()).toContain('财经资讯站 · sense_data.news_main')
+    expect(wrapper.text()).not.toContain('源 s1')
+  })
+
+  it('服务端聚合可用时，未配置检查的源也出行并标注未配置', async () => {
+    mockedSummary.mockResolvedValue({
+      total: 2,
+      unavailable: false,
+      rows: [
+        {
+          sourceId: 's1',
+          sourceName: '上市公司新闻',
+          tableName: 'sense_data.news_main',
+          siteName: '财经资讯站',
+          monitorTotal: 1,
+          monitorEnabled: 1,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'normal' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          lastCheckAt: '2026-11-12 09:00:00',
+          label: '数据正常',
+          tone: 'good' as const,
+          monitors: [],
+          unconfigured: false,
+        },
+        {
+          sourceId: 's2',
+          sourceName: '港口吞吐量',
+          monitorTotal: 0,
+          monitorEnabled: 0,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'unknown' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          label: '未配置检查',
+          tone: 'muted' as const,
+          monitors: [],
+          unconfigured: true,
+        },
+      ],
+    })
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(true)
+    await buttonByText(wrapper, '展开检查').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(rec().name)
+    expect(wrapper.text()).toContain('物流吞吐量'.slice(0, 0) + '港口吞吐量')
+    expect(wrapper.text()).toContain('未配置检查')
+    expect(wrapper.text()).toMatch(/共\s*2\s*个源/)
   })
 
   it('监控记录加载失败时给出错误与重试', async () => {
@@ -202,9 +295,9 @@ describe('一行一源与源目录', () => {
     expect(wrapper.text()).toContain('重试')
   })
 
-  it('计划覆盖无 C07 显示「—（需服务端聚合）」且不按时隙推算', async () => {
+  it('计划覆盖无聚合数据时显示「—（计划不可推算）」且不按时隙推算', async () => {
     const wrapper = await mountPage()
-    expect(wrapper.text()).toContain('—（需服务端聚合）')
+    expect(wrapper.text()).toContain('—（计划不可推算）')
     expect(wrapper.text()).toContain('本页不推算漏跑')
   })
 
@@ -240,7 +333,7 @@ describe('筛选与刷新', () => {
     const wrapper = await mountPage()
 
     selectByPlaceholder(wrapper, '数据情况').vm.$emit('update:modelValue', 'failed')
-    const keyword = wrapper.find('input[placeholder="筛选已加载源名称 / ID"]')
+    const keyword = wrapper.find('input[placeholder="源名称 / ID / 主表"]')
     await keyword.setValue('未配置')
     await buttonByText(wrapper, '查询').trigger('click')
     await flushPromises()
@@ -290,6 +383,26 @@ describe('行内展开与批量', () => {
     expect(wrapper.text()).not.toContain('检查项A')
   })
 
+  it('检查对象列按 scopeType 显示：源结果 / 节点环节 / 未分类（缺键不推断）', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec({ id: 'm1', name: '源结果检查', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm2', name: '节点检查', conf: { scopeType: 'node_input' } }),
+      rec({ id: 'm3', name: '旧记录检查', conf: {} }),
+    ])
+    mockedListSources.mockResolvedValue([{ sourceId: 's1', name: '源一' }])
+    const wrapper = await mountPage()
+    await wrapper.findAll('.el-table__expand-icon')[0].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('检查对象')
+    const tags = wrapper.findAll('.sc-object-tag')
+    expect(tags.map((item) => item.text())).toEqual(['源结果', '节点环节', '未分类'])
+    // 未分类必须是中性灰（is-none），不能用源结果/节点环节的样式
+    expect(tags[2].classes()).toContain('is-none')
+    expect(tags[0].classes()).toContain('is-source')
+    expect(tags[1].classes()).toContain('is-node')
+  })
+
   it('编辑打开时带记录身份并锁源（否则会另存成重复记录）', async () => {
     const wrapper = await mountExpanded()
     await buttonByText(wrapper, '编辑').trigger('click')
@@ -333,10 +446,182 @@ describe('行内展开与批量', () => {
     // 源级入口只带 sourceId，不带 monitorId，也不沿用上一条检查项名
     expect(wrapper.find('.stub-runs').text()).toBe('s1||')
   })
+
+  it('通知入口与「记录」同样按监控记录 id 打开回执抽屉', async () => {
+    const wrapper = await mountExpanded()
+    await buttonByText(wrapper, '通知').trigger('click')
+    await nextTick()
+    expect(notifyCalls.at(-1)).toBe('s1|m1|检查项A')
+  })
+})
+
+describe('检查对象筛选', () => {
+  /** 一个源 5 项检查：2 源结果 + 2 节点环节 + 1 旧记录（未分类）；另一个源只有 1 项节点环节 */
+  function scopeRecords(): MonitorRecordView[] {
+    return [
+      rec({ id: 'm1', sourceId: 's1', sourceName: '源一', name: '源结果甲', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm2', sourceId: 's1', sourceName: '源一', name: '源结果乙', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm3', sourceId: 's1', sourceName: '源一', name: '节点甲', conf: { scopeType: 'node_input' } }),
+      rec({ id: 'm4', sourceId: 's1', sourceName: '源一', name: '节点乙', conf: { scopeType: 'node_input' } }),
+      rec({ id: 'm5', sourceId: 's1', sourceName: '源一', name: '旧记录', conf: {} }),
+      rec({ id: 'm6', sourceId: 's2', sourceName: '源二', name: '源二节点', conf: { scopeType: 'node_input' } }),
+    ]
+  }
+
+  function outerRows(wrapper: VueWrapper): Array<{ sourceId: string }> {
+    const table = wrapper.findAllComponents({ name: 'ElTable' })[0]
+    return table.props('data') as Array<{ sourceId: string }>
+  }
+
+  async function applyScope(wrapper: VueWrapper, value: string): Promise<void> {
+    selectByPlaceholder(wrapper, '检查对象').vm.$emit('update:modelValue', value)
+    await buttonByText(wrapper, '查询').trigger('click')
+    await flushPromises()
+  }
+
+  async function expandFirst(wrapper: VueWrapper): Promise<void> {
+    await wrapper.findAll('.el-table__expand-icon')[0].trigger('click')
+    await flushPromises()
+  }
+
+  function innerNames(wrapper: VueWrapper): string[] {
+    return wrapper.findAll('.sc-inner-table .sc-name').map((item) => item.text())
+  }
+
+  it('四态筛选：只列命中检查项，无匹配源整行隐藏，行内计数写清「已筛选 N / 共 M」', async () => {
+    const cases = [
+      {
+        value: 'all',
+        rows: ['s1', 's2'],
+        items: ['源结果甲', '源结果乙', '节点甲', '节点乙', '旧记录'],
+        count: '5 项检查',
+      },
+      {
+        value: 'source_result',
+        // 源二只有节点环节检查：整行隐藏
+        rows: ['s1'],
+        items: ['源结果甲', '源结果乙'],
+        count: '已筛选 2 / 共 5 项检查',
+      },
+      {
+        value: 'node_input',
+        rows: ['s1', 's2'],
+        items: ['节点甲', '节点乙'],
+        count: '已筛选 2 / 共 5 项检查',
+      },
+      {
+        // 旧记录 scopeType 缺省：只在「未分类」里出现，不被推断成源结果
+        value: 'unclassified',
+        rows: ['s1'],
+        items: ['旧记录'],
+        count: '已筛选 1 / 共 5 项检查',
+      },
+    ]
+
+    for (const item of cases) {
+      mockedListMonitors.mockResolvedValue(scopeRecords())
+      const wrapper = await mountPage()
+      if (item.value !== 'all') {
+        await applyScope(wrapper, item.value)
+      }
+      expect(outerRows(wrapper).map((row) => row.sourceId)).toEqual(item.rows)
+
+      await expandFirst(wrapper)
+      expect(innerNames(wrapper)).toEqual(item.items)
+      expect(wrapper.get('[data-testid="sc-scope-count"]').text()).toBe(item.count)
+      // 源级计数按筛选后的源数走，不能还显示全站/未过滤的源数
+      expect(wrapper.text()).toMatch(new RegExp(`共\\s*${item.rows.length}\\s*个源`))
+      wrapper.unmount()
+    }
+  })
+
+  it('筛选生效时给出说明，且不再显示「服务端按源聚合」提示', async () => {
+    mockedListMonitors.mockResolvedValue(scopeRecords())
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-scope-filter-hint"]').exists()).toBe(false)
+
+    await applyScope(wrapper, 'source_result')
+    expect(wrapper.find('[data-testid="sc-scope-filter-hint"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('只显示含该类检查项的源')
+    expect(wrapper.text()).toContain('源结果检查')
+  })
+
+  it('服务端聚合可用时按检查对象筛选：退回本地过滤，计数与展示行一致（不拿服务端总数冒充）', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec({ id: 'm1', sourceId: 's1', sourceName: '源一', conf: { scopeType: 'source_result' } }),
+      rec({ id: 'm2', sourceId: 's2', sourceName: '源二', conf: { scopeType: 'node_input' } }),
+    ])
+    mockedSummary.mockResolvedValue({
+      total: 2,
+      unavailable: false,
+      rows: [
+        {
+          sourceId: 's1',
+          sourceName: '源一',
+          monitorTotal: 1,
+          monitorEnabled: 1,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'normal' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          label: '数据正常',
+          tone: 'good' as const,
+          monitors: [],
+          unconfigured: false,
+        },
+        {
+          sourceId: 's2',
+          sourceName: '源二',
+          monitorTotal: 1,
+          monitorEnabled: 1,
+          coverage: null,
+          coverageUnavailable: true,
+          data: 'unknown' as const,
+          exec: 'unknown' as const,
+          notifyFailures: 0,
+          label: '尚未检查',
+          tone: 'unknown' as const,
+          monitors: [],
+          unconfigured: false,
+        },
+      ],
+    })
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(true)
+
+    await applyScope(wrapper, 'source_result')
+    // 检查对象是检查项属性，服务端按源聚合装不下：筛选期间回到本地分页，计数才能和展示行一致
+    expect(wrapper.find('[data-testid="sc-summary-hint"]').exists()).toBe(false)
+    expect(outerRows(wrapper).map((row) => row.sourceId)).toEqual(['s1'])
+    expect(wrapper.text()).toMatch(/共\s*1\s*个源/)
+  })
+
+  it('超期策略：配了预期周期才渲染「每 N 分钟」，宽限只写在 title 里', async () => {
+    mockedListMonitors.mockResolvedValue([
+      rec({
+        id: 'm1',
+        name: '配宽限',
+        conf: { overduePolicy: { expectEveryMinutes: 60, graceMinutes: 10 } },
+      }),
+      rec({ id: 'm2', name: '只有周期', conf: { overduePolicy: { expectEveryMinutes: 30 } } }),
+      // 没配 overduePolicy / 周期非正数：都不出徽标，不凭空给周期
+      rec({ id: 'm3', name: '没配', conf: {} }),
+      rec({ id: 'm4', name: '周期非法', conf: { overduePolicy: { expectEveryMinutes: 0 } } }),
+    ])
+    const wrapper = await mountPage()
+    await expandFirst(wrapper)
+
+    const tags = wrapper.findAll('[data-testid="sc-overdue-tag"]')
+    expect(tags.map((tag) => tag.text())).toEqual(['每 60 分钟', '每 30 分钟'])
+    expect(tags[0].attributes('title')).toBe('超期无新增：预期每 60 分钟更新一次，宽限 10 分钟')
+    expect(tags[1].attributes('title')).toBe('超期无新增：预期每 30 分钟更新一次，未配置宽限')
+    expect(wrapper.text()).not.toContain('每 0 分钟')
+  })
 })
 
 describe('新增监控', () => {
-  it('保存回读未知时保留候选，回读成功后后续编辑沿用该记录身份', async () => {
+  it('保存回读未知时保留候选，回读成功后关闭且新增不带旧记录', async () => {
     const wrapper = await mountPage()
     await buttonByText(wrapper, '新增监控').trigger('click')
     await flushPromises()
@@ -346,7 +631,10 @@ describe('新增监控', () => {
     expect(wrapper.find('.stub-editor').exists()).toBe(true)
     editor.vm.$emit('saved', rec({ id: 'new-monitor' }))
     await flushPromises()
-    expect(wrapper.getComponent({ name: 'MonitorConfigEditor' }).props('record')).toMatchObject({ id: 'new-monitor' })
+    expect(wrapper.find('.stub-editor').exists()).toBe(false)
+    await buttonByText(wrapper, '新增监控').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'MonitorConfigEditor' }).props('record')).toBeNull()
     wrapper.unmount()
   })
 
@@ -387,5 +675,89 @@ describe('新增监控', () => {
     expect(editor.exists()).toBe(true)
     expect(editor.props('sourceId')).toBe('s1')
     expect(editor.props('record')).toBeNull()
+  })
+})
+
+describe('源行流程关联与执行结论（1113）', () => {
+  /** 服务端聚合行：只覆盖本组断言用到的字段，其余按接口契约给默认值 */
+  function sourceRow(patch: Partial<MonitorSourceRow> & { sourceId: string }): MonitorSourceRow {
+    return {
+      sourceName: '上市公司新闻',
+      tableName: 'sense_data.news_main',
+      siteName: '财经资讯站',
+      monitorTotal: 1,
+      monitorEnabled: 1,
+      coverage: null,
+      coverageUnavailable: true,
+      data: 'normal',
+      exec: 'unknown',
+      notifyFailures: 0,
+      label: '数据正常',
+      tone: 'good',
+      monitors: [],
+      unconfigured: false,
+      ...patch,
+    }
+  }
+
+  it('flowId 缺省时显示「未关联流程」：title 说明只影响触发方式，不影响生成检查', async () => {
+    mockedSummary.mockResolvedValue({ total: 1, unavailable: false, rows: [sourceRow({ sourceId: 's1' })] })
+    const wrapper = await mountPage()
+
+    const tag = wrapper.get('[data-testid="sc-flow-unbound-tag"]')
+    expect(tag.text()).toBe('未关联流程')
+    const title = tag.attributes('title') ?? ''
+    expect(title).toContain('不会随采集流程触发')
+    expect(title).toContain('不影响生成检查')
+    // 轻量分类信息，不能用错误色
+    expect(tag.classes()).not.toContain('is-err')
+    wrapper.unmount()
+  })
+
+  it('有 flowId 时不显示「未关联流程」', async () => {
+    mockedSummary.mockResolvedValue({
+      total: 1,
+      unavailable: false,
+      rows: [sourceRow({ sourceId: 's1', flowId: 'flow-9' })],
+    })
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-flow-unbound-tag"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('本地聚合拿不到 flowId 时不臆造「未关联流程」', async () => {
+    // 默认 listSourceSummary 返回 unavailable → 回到 summarizeSources，行上没有 flowId 字段
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="sc-flow-unbound-tag"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('执行结论徽标：failed/succeeded/unknown 出徽标、none 不渲染，title 写清判定口径', async () => {
+    mockedSummary.mockResolvedValue({
+      total: 4,
+      unavailable: false,
+      rows: [
+        sourceRow({ sourceId: 's1', exec: 'failed' }),
+        sourceRow({ sourceId: 's2', exec: 'succeeded' }),
+        sourceRow({ sourceId: 's3', exec: 'unknown' }),
+        sourceRow({ sourceId: 's4', exec: 'none' }),
+      ],
+    })
+    const wrapper = await mountPage()
+
+    const badges = wrapper.findAll('[data-testid="sc-exec-badge"]')
+    // none（没有启用中的检查项）不渲染；其余三种各一条
+    expect(badges).toHaveLength(3)
+    expect(badges.map((badge) => badge.text())).toEqual(['执行失败', '执行正常', '未执行'])
+    expect(badges[0].classes()).toContain('is-err')
+    expect(badges[1].classes()).toContain('is-ok')
+    expect(badges[2].classes()).toContain('is-muted')
+    for (const badge of badges) {
+      expect(badge.attributes('title')).toContain('按该源启用中检查项最近一次运行判定')
+    }
+    // 原有的数据结论（label/tone）照旧展示，不因徽标被替换
+    expect(wrapper.text()).toContain('数据正常')
+    expect(wrapper.text()).toMatch(/共\s*4\s*个源/)
+    wrapper.unmount()
   })
 })

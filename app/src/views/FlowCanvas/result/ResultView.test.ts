@@ -4,6 +4,8 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
+import { ApiError } from '@/api/client'
+import * as clipboard from '@/utils/clipboard'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import { fetchNextStepConfig, type ResolvedNextStepConfig } from '@/utils/flow/nextStepConfig'
 import ProcessNodeRail from './ProcessNodeRail.vue'
@@ -2175,6 +2177,46 @@ describe('ResultView · 删除数据', () => {
 
     expect(batch).toHaveBeenCalledWith('T2', ['e1', 'e2'])
     expect(grid.props('selectedIds')).toEqual([])
+  })
+
+  it('删除权限不足：保留勾选与当前数据，主提示说明权限，技术详情保留接口和原始原因', async () => {
+    const { wrapper } = await mountForDelete()
+    const error = new ApiError('data/rowDeleteBatch', new Error('错误信息:运行时异常： 当前账号无该表删除权限T2'))
+    vi.spyOn(dataApi, 'rowDeleteBatch').mockRejectedValueOnce(error).mockResolvedValueOnce({ success: 2, all: 2, not_found: 0 })
+    const copy = vi.spyOn(clipboard, 'copyToClipboard').mockResolvedValue(true)
+    const query = vi.spyOn(dataApi, 'rowQueryPaged')
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    await grid.vm.$emit('update:selectedIds', ['e1', 'e2'])
+    await flushPromises()
+    query.mockClear()
+    vi.mocked(ElMessage.error).mockClear()
+    vi.mocked(ElMessage.success).mockClear()
+    await menuItem(wrapper, '删除选中的数据').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="data-delete-error-message"]').text()).toBe('删除失败：当前账号无表 T2 的删除权限')
+    expect(wrapper.get('[data-testid="data-delete-error-detail"]').text()).toBe(error.message)
+    expect((wrapper.get('[data-testid="data-delete-error"] details').element as HTMLDetailsElement).open).toBe(false)
+    expect(grid.props('selectedIds')).toEqual(['e1', 'e2'])
+    expect(query).not.toHaveBeenCalled()
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="data-delete-error"] details button').trigger('click')
+    expect(copy).toHaveBeenCalledWith(error.message, '错误详情')
+    await menuItem(wrapper, '删除选中的数据').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="data-delete-error"]').exists()).toBe(false)
+    expect(grid.props('selectedIds')).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('按源删除的网络异常仍显示真实原因并保留可复制详情', async () => {
+    const { wrapper } = await mountForDelete()
+    vi.spyOn(dataApi, 'rowDelete').mockRejectedValue(new Error('网络连接中断'))
+    await menuItem(wrapper, '删除该源-所有数据').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="data-delete-error-message"]').text()).toBe('删除失败：网络连接中断')
+    expect(wrapper.get('[data-testid="data-delete-error-detail"]').text()).toBe('网络连接中断')
+    wrapper.unmount()
   })
 
   it('删除返回 success=0（超 14 天或找不到 ID）弹 warning，不能只报成功', async () => {

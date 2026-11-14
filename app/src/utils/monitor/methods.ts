@@ -128,11 +128,17 @@ export function isKnownMethod(value: string): boolean {
  * 所以新建表单预填一份，生成时再兜底一次：用户清空了也不至于发一个必然失败的请求。
  */
 export function defaultSystemPrompt(): string {
+  // 输出契约必须写死：实测模型（deepseek-v4-flash）在只给「写个脚本」时会回 markdown 说明+表格，
+  // 而不是可执行代码；明确要求「唯一一个 python 代码块 + def main」后才稳定出脚本。
   return [
     '你是采集平台的数据质量检查脚本生成助手。',
     '按业务描述和给定表结构生成只读脚本：只做查询与统计，不做任何写操作。',
     '输出检查总数 checkedCount、异常数 abnormalCount、异常原因和有限样例。',
     '时间范围按业务时区 Asia/Shanghai 计算，空值与无数据分别按给定政策判定。',
+    '输出格式要求（必须遵守）：只输出一个 python 代码块（以 ```python 开头、以 ``` 结尾），'
+      + '代码内必须有 def main(): 函数，并在文件末尾用 if __name__ == "__main__": 调用；'
+      + 'main() 里把结果以 JSON 打印到标准输出。',
+    '不要在代码块之外写任何解释、标题、表格或步骤说明。',
   ].join('')
 }
 
@@ -145,14 +151,31 @@ export function defaultDescription(input: {
   tableName?: string
   methods?: string[]
   window?: string
+  nullPolicy?: string
+  noDataPolicy?: string
 }): string {
   const labels = (input.methods ?? []).map(methodLabel).filter(Boolean)
   const scope = [input.sourceName, input.tableName].filter(Boolean).join(' / ') || '当前数据表'
   const methodText = labels.length ? labels.join('、') : '数据质量'
+  // 只写定性口径，不按方法名编造阈值；也不留【】占位符——
+  // 模型看到未填的占位符会改写成「说明 + 片段」而不是完整脚本（实测生成失败原因）。
+  const nullText =
+    input.nullPolicy === 'allow'
+      ? '字段值为空按允许处理、不计为异常'
+      : input.nullPolicy === 'skip'
+        ? '字段值为空的记录跳过、不计入检查数'
+        : '字段值为空计为异常'
+  const noDataText =
+    input.noDataPolicy === 'alarm'
+      ? '本次没有待检记录时判为异常并告警'
+      : input.noDataPolicy === 'unknown'
+        ? '本次没有待检记录时结论记为未知、不判为正常'
+        : '本次没有待检记录时按无数据处理、不报警'
   return [
-    `检查【${scope}】，范围是【${input.window || '当日 00:00 至当前'}】。`,
-    `检查内容：${methodText}。正常标准为【业务约定】，异常条件为【业务约定】。`,
-    '空值按【空值政策】处理；只检查【生效起点】之后的数据。',
-    '返回检查总数、异常数、原因和有限样例，不修改源数据。',
+    `检查源 ${scope}，范围是 ${input.window || '当日 00:00 至当前（Asia/Shanghai 业务时区）'}。`,
+    `检查内容：${methodText}。`,
+    '正常标准：所选检查方法的通用含义下，数据存在且时效、分布符合平时规律即为正常；异常标准：缺少数据、超出时效或分布明显偏离即为异常。',
+    `${nullText}；${noDataText}。`,
+    '返回检查总数 checkedCount、异常数 abnormalCount、异常原因和有限样例；只读查询，不修改源数据。',
   ].join('\n')
 }

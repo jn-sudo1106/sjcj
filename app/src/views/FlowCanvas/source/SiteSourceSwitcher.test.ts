@@ -1294,7 +1294,7 @@ it('右键发采集代码打开独立表单，关闭源菜单后点击表单仍�
   await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
   await wrapper.get('[data-testid="source-menu-code"]').trigger('click'); await flushPromises()
   expect(wrapper.find('[data-testid="source-menu-code"]').exists()).toBe(false)
-  expect(wrapper.find('.source-generation-panel').text()).toContain('勾选需要生成代码的配置节点')
+  expect(wrapper.find('.source-generation-panel').text()).toContain('同一流程只需勾选一次节点')
   window.dispatchEvent(new MouseEvent('click')); await flushPromises()
   expect(wrapper.find('.source-generation-panel').exists()).toBe(true)
   expect(sourceApi.sendSnatchWithParam).not.toHaveBeenCalled()

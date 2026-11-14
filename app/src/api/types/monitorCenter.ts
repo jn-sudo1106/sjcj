@@ -39,6 +39,34 @@ export interface MonitorCoverage {
 }
 
 /**
+ * 检查对象归属（1113 §3）：
+ * - `source_result`：源结果检查（监控中心入口，检查最终落库表的结果）
+ * - `node_input`：节点环节检查（画布数据监控节点，检查该节点的输入是否准确）
+ *
+ * 旧记录没有这个键，按「未分类（legacy）」处理——不推断、不默认，避免把两类检查混成一种。
+ */
+export type MonitorScopeType = 'source_result' | 'node_input'
+
+/**
+ * 画布节点与检查项的显式绑定（C12 前端半，2026-11-13）。
+ *
+ * 画布同步过去只能按 `sourceId` 查行数：0 条建、1 条改、多条拒绝——节点本身没有身份，
+ * 所以「一个源两个监控节点」「复制节点」「检查项删了重建」都无从表达（见 1113 §3 补充）。
+ * 绑定写在 `check_conf.binding` 里，Java 侧原样存文本，不需要改表：
+ *
+ * - `nodeKey`：画布节点 id（还原时就是后端 `stepId`，同一流程内稳定；复制节点会得到新 id）
+ * - `workflowId`：流程 id，防止跨流程 / 模板复制时串号
+ * - `bindingVersion`：节点侧检查范围（表 / 时间列）变化时递增，用于「范围变了要不要重新生成」的复核提示
+ * - `boundAt`：最近一次写入绑定的时间（服务端无关，前端本地时间串，仅用于展示）
+ */
+export interface MonitorCheckBinding {
+  workflowId?: string
+  nodeKey?: string
+  bindingVersion?: number
+  boundAt?: string
+}
+
+/**
  * 监控定义里 `checkConf` 的结构化视图。
  * 旧平台把整套配置塞在一个 JSON 串里，键名与语义见 1109 §2.1；这里只挑页面会读的键，
  * 其余键通过索引签名原样保留——保存时必须整包回写，不能因为不认识就丢掉（1110 §8.1）。
@@ -64,6 +92,18 @@ export interface MonitorCheckConf {
   /** 任务后延时：旧前端写 `AFTER:30`，旧后端识别 `AFTER-30`（1109 §5.3⑦） */
   after?: string
   kind?: MonitorKind
+  /** 检查对象归属；旧记录缺省（未分类） */
+  scopeType?: MonitorScopeType
+  /** 画布节点显式绑定（仅 `node_input` 检查有）；旧记录缺省，保存时按「唯一一条」收养 */
+  binding?: MonitorCheckBinding
+  /**
+   * 超期无新增策略（1113 §5）：检查窗口内没有新增数据时，用「预期更新周期 + 宽限」判断是否断流。
+   *
+   * 由执行器在每次跑完后判定（`backend/runner_management/monitor_overdue.py`），
+   * 没配这个键的旧记录行为完全不变（窗口内无数据仍按 `noDataPolicy` 处理）。
+   * `expectEveryMinutes` 必须为正整数；`graceMinutes` 缺省 0。
+   */
+  overduePolicy?: { expectEveryMinutes?: number; graceMinutes?: number }
   /** 24 个通用方法里选中的那些（AI 检查） */
   methods?: string[]
   desc?: string
@@ -75,6 +115,21 @@ export interface MonitorCheckConf {
   noDataPolicy?: 'no_data' | 'alarm' | 'unknown'
   /** 已生效版本号（如 v3）；旧记录没有 */
   version?: string
+  /** 生成脚本里实际使用的入库时间列（脚本自动探测不到时需要显式传入） */
+  timeColumn?: string
+  /**
+   * 本次检查覆盖的时间窗口。不填按「当日 00:00 → 现在」。
+   * 执行器把它换算成 `DQ_START_DATE/DQ_END_DATE` 传进脚本——窗口必须有边界，
+   * 否则停更的表会被算出「连续几百天异常」。
+   */
+  window?: { type?: 'today' | 'hours' | 'period'; hours?: number; periodHours?: number }
+  /**
+   * 脚本检查自己的计划状态。
+   *
+   * Java 调度器会把 `NEXT_RUN` 为空或到期的行全部捡走（`CkSourceMapper.lockForDeal`），
+   * 所以 AI 记录的 `ck_source.NEXT_RUN` 停在远期、由执行器把真正的「上次/下次」写在这里。
+   */
+  schedule?: { last?: string; next?: string }
   /** 未识别键必须保留 */
   [key: string]: unknown
 }
@@ -89,9 +144,34 @@ export interface MonitorRunConfig {
   plan?: { cron?: string; text?: string }
   notifyOn?: string
   channels?: string[]
+  receivers?: string[]
   nullPolicy?: string
   noDataPolicy?: string
   script?: string
+  /** 检查对象归属（1113 §3）；旧快照没有 */
+  scopeType?: MonitorScopeType
+  /** 本次检查读的物理表与入库时间列（源结果检查改造后由本条检查自己选定） */
+  tableName?: string
+  timeColumn?: string
+  timeType?: string
+  /** 覆盖的时间窗口；执行器按它换算 DQ_START_DATE/DQ_END_DATE */
+  window?: { type?: string; hours?: number; periodHours?: number; start?: string; end?: string }
+  /** 超期无新增策略（快照口径，不回查当前定义） */
+  overduePolicy?: { expectEveryMinutes?: number; graceMinutes?: number }
+}
+
+/**
+ * C01：单条检查项详情（`GET /api/v1/source/check/detail?monitorId=`）。
+ *
+ * 旧能力只有按 sourceId 拉全量再猜：同源多条时保存后回读必然错行（1109 §5.3）。
+ * `revision` 就是 `ck_source.VER`，保存时原样带回做 CAS。
+ */
+export interface MonitorDetail {
+  monitor: SourceCheck
+  /** 服务端解析后的 checkConf；解析失败为 null，调用方自己再 parse（不要用空对象顶上） */
+  checkConf: MonitorCheckConf | null
+  scopeType?: MonitorScopeType
+  revision?: number
 }
 
 /** 一次通知投递。重试只增加 attempt，不新建 run（1110 §9.3 / C08）。 */
@@ -192,6 +272,10 @@ export interface MonitorRunView {
   runId?: string
   /** 本次检查记录数（结构化）；未知缺省，页面显示「—」 */
   checkedCount?: number
+  /** 脚本检查耗时（毫秒，remarks.durationMs）；旧记录没有结构化结果时缺省 */
+  durationMs?: number
+  /** 执行器给出的原因（remarks.reason：数据异常说明 / 执行失败主因）；旧记录缺省 */
+  reason?: string
   /** 旧日志从文本里抠出来的条数（仅展示，不参与判定，与 checkedCount 不要混用） */
   legacyCount?: string
   /** 逐方法逐表结果；旧日志没有，页面显示「未记录逐项结果」 */
@@ -213,6 +297,8 @@ export interface MonitorRunView {
 export interface MonitorSourceRow {
   sourceId: string
   sourceName?: string
+  /** 主表物理名；列表副标题用它代替源 ID，便于业务辨认 */
+  tableName?: string
   siteId?: string
   siteName?: string
   monitorTotal: number
@@ -225,6 +311,8 @@ export interface MonitorSourceRow {
   coverageDetail?: string
   data: MonitorDataStatus
   exec: MonitorExecStatus
+  /** 源关联的流程（cs_source.FLOW_ID）；缺省 = 未关联流程（只影响「是否随流程触发」，不影响能否生成检查） */
+  flowId?: string
   notifyFailures: number
   lastCheckAt?: string
   /** 最差事实的展示文案与色调，由 summary 统一算，页面不再各自判断 */

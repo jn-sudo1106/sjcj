@@ -95,7 +95,7 @@ describe('Runner 管理接口', () => {
     await runnerManagementApi.downloadRuntimeLog('stream1')
     expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
       '/api/runner-management/runtime-operations?runtimeId=binding1&keyword=%E6%8A%93%E5%8F%96&page=2&since=',
-      '/api/runner-management/runtime-operations/run1', '/api/runner-management/log-streams/stream1/entries?cursor=9&before=0',
+      '/api/runner-management/runtime-operations/run1', '/api/runner-management/log-streams/stream1/entries?cursor=9&before=0&fromSeq=0',
       '/api/runner-management/log-streams/stream1/download',
     ])
   })

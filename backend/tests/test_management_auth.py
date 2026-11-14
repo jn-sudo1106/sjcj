@@ -17,7 +17,7 @@ class ManagementAuthTest(unittest.TestCase):
 
     def test_valid_identity_keeps_cookie_and_token_and_enforces_admin(self):
         for roles, write, allowed in [(['viewer'], False, True), (['viewer'], True, False), (['admin'], True, True)]:
-            with patch('backend.runner_management.server.urlopen', return_value=io.BytesIO(json.dumps({'code': '0', 'data': {'roles': roles}}).encode())) as upstream:
+            with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(json.dumps({'code': '0', 'data': {'roles': roles, 'id': 'user-1'}}).encode())) as upstream:
                 if allowed:
                     self.app.authenticate_admin(self.headers, '192.168.1.36', write=write)
                 else:
@@ -31,24 +31,51 @@ class ManagementAuthTest(unittest.TestCase):
 
     def test_wrong_html_path_or_network_error_does_not_expire_user_session(self):
         for failure in (ValueError('HTML is not JSON'), URLError('offline'), TimeoutError(), HTTPError('http://business.test', 500, 'error', {}, None)):
-            with patch('backend.runner_management.server.urlopen', side_effect=failure), self.assertRaises(ApiError) as failed:
+            with patch('backend.runner_management.server._AUTH_OPENER.open', side_effect=failure), self.assertRaises(ApiError) as failed:
                 self.app.authenticate_admin(self.headers, '192.168.1.36')
             self.assertEqual(failed.exception.status, 502)
         for payload in (b'<html>login</html>', b'[]', b'{"code":"0","data":"wrong"}'):
-            with patch('backend.runner_management.server.urlopen', return_value=io.BytesIO(payload)), self.assertRaises(ApiError) as failed:
+            with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(payload)), self.assertRaises(ApiError) as failed:
                 self.app.authenticate_admin(self.headers, '192.168.1.36')
             self.assertEqual(failed.exception.status, 502)
 
     def test_real_expired_session_still_returns_401(self):
-        with patch('backend.runner_management.server.urlopen', return_value=io.BytesIO(b'{"code":"-1","data":null}')), self.assertRaises(ApiError) as denied:
+        with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(b'{"code":"-1","data":null}')), self.assertRaises(ApiError) as denied:
             self.app.authenticate_admin(self.headers, '192.168.1.36')
         self.assertEqual(denied.exception.status, 401)
 
-        with patch('backend.runner_management.server.urlopen', side_effect=HTTPError('http://business.test', 401, 'unauthorized', {}, None)), self.assertRaises(ApiError) as denied:
+        with patch('backend.runner_management.server._AUTH_OPENER.open', side_effect=HTTPError('http://business.test', 401, 'unauthorized', {}, None)), self.assertRaises(ApiError) as denied:
             self.app.authenticate_admin(self.headers, '192.168.1.36')
         self.assertEqual(denied.exception.status, 401)
 
     def test_admin_role_works_for_non_admin_login_name_and_returns_audit_identity(self):
         user = {'roles':['admin'], 'userLoginName':'muyan'}
-        with patch('backend.runner_management.server.urlopen', return_value=io.BytesIO(json.dumps({'code':'0','data':user}).encode())):
+        with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(json.dumps({'code':'0','data':user}).encode())):
             self.assertEqual(self.app.authenticate_admin(self.headers,'192.168.1.36',write=True), user)
+
+    def test_gateway_header_cannot_authenticate_anonymous_or_grant_admin(self):
+        with patch.dict(os.environ, {'RUNNER_GATEWAY_SECRET': 'test-only-secret'}):
+            with self.assertRaises(ApiError) as denied:
+                self.app.authenticate_admin({'X-Runner-Gateway': 'test-only-secret'}, '127.0.0.1', write=True)
+            self.assertEqual(denied.exception.status, 401)
+            with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(
+                    json.dumps({'code': 0, 'data': {'id': 'viewer', 'roles': ['viewer']}}).encode())):
+                with self.assertRaises(ApiError) as denied:
+                    self.app.authenticate_admin({**self.headers, 'X-Runner-Gateway': 'test-only-secret'}, '127.0.0.1', write=True)
+                self.assertEqual(denied.exception.status, 403)
+
+    def test_two_accounts_keep_distinct_owners(self):
+        from backend.runner_management.monitor_batches import owner
+        users = []
+        for user_id in ('account-a', 'account-b'):
+            user = {'id': user_id, 'name': user_id, 'roles': ['admin']}
+            with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(json.dumps({'code': 0, 'data': user}).encode())):
+                users.append(self.app.authenticate_admin(self.headers, '127.0.0.1', write=True))
+        self.assertNotEqual(owner(users[0]), owner(users[1]))
+
+    def test_invalid_role_or_missing_identity_fails_closed(self):
+        for user in ({'id': 'viewer', 'roles': 'admin'}, {'roles': ['admin']}):
+            with patch('backend.runner_management.server._AUTH_OPENER.open', return_value=io.BytesIO(json.dumps({'code': 0, 'data': user}).encode())):
+                with self.assertRaises(ApiError) as denied:
+                    self.app.authenticate_admin(self.headers, '127.0.0.1', write=True)
+                self.assertEqual(denied.exception.status, 502)

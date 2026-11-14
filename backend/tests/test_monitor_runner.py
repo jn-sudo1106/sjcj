@@ -5,10 +5,46 @@ import json
 import os
 import sys
 import unittest
+from unittest.mock import mock_open, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from backend.runner_management import monitor_runner as runner  # noqa: E402
+
+
+class DatabaseEnvironmentTest(unittest.TestCase):
+    def test_invalid_column_stops_before_script_execution(self):
+        with patch.object(runner, "table_fields", return_value=["CREATE_DT"]), \
+                patch.object(runner.subprocess, "run") as run:
+            result = runner.execute("print('should not run')", {"tableName": "sense_data.T", "timeColumn": "msg_time"}, {})
+        self.assertEqual(result["status"], runner.STATUS_ERROR)
+        self.assertIn("不存在入库时间字段 msg_time", result["error"])
+        run.assert_not_called()
+
+    def test_execution_receives_table_column_and_window(self):
+        import types
+        report = {"status": "ERROR", "abnormalReasons": ["具体失败原因"]}
+        with patch.object(runner, "table_fields", return_value=["CREATE_DT"]), \
+                patch.object(runner.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(report), stderr="", returncode=0)) as run:
+            result = runner.execute("pass", {"tableName": "sense_data.T", "timeColumn": "CREATE_DT"}, {"timeout": 10})
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["DQ_TABLE_NAME"], "sense_data.T")
+        self.assertEqual(env["DQ_TIME_COLUMN"], "CREATE_DT")
+        self.assertIn("DQ_START_DATE", env)
+        self.assertEqual(result["report"]["reason"], "具体失败原因")
+
+    def test_legacy_and_dq_scripts_use_same_configured_database(self):
+        config = {
+            "db": {"host": "test-db", "port": 9907, "user": "reader", "password": "test-only", "database": "sense_db"},
+            "env": {"DQ_DB_HOST": "configured-db", "DB_PORT": "3306"},
+        }
+        with patch.dict(os.environ, {"RUNNER_MONITOR_RUNNER_CONFIG": "/config.json", "DB_HOST": "old-db"}, clear=True), \
+                patch("builtins.open", mock_open(read_data=json.dumps(config))):
+            cfg = runner.load_config()
+        for suffix in ("HOST", "PORT", "USER", "PASSWORD", "NAME"):
+            self.assertEqual(cfg["env"]["DB_" + suffix], cfg["env"]["DQ_DB_" + suffix])
+        self.assertEqual(cfg["env"]["DB_PORT"], "9907")
+        self.assertEqual(cfg["env"]["DB_HOST"], "configured-db")
 
 
 class CronTest(unittest.TestCase):
@@ -33,6 +69,12 @@ class CronTest(unittest.TestCase):
     def test_invalid(self):
         with self.assertRaises(ValueError):
             runner.next_run_at("0 0 8", dt.datetime(2026, 11, 12, 9, 0, 0))
+
+    def test_blank_means_manual(self):
+        # 空计划 = 仅手动：调用方在执行完之后才计算下一次时间，这里抛错会连结果一起丢。
+        after = dt.datetime(2026, 11, 12, 9, 0, 0)
+        self.assertIsNone(runner.next_run_at("", after))
+        self.assertIsNone(runner.next_run_at("   ", after))
 
 
 class ParseReportTest(unittest.TestCase):
@@ -63,6 +105,32 @@ class DueTest(unittest.TestCase):
         now = dt.datetime(2026, 11, 12, 9, 0, 0)
         self.assertFalse(runner.is_due(conf, now, "2027-01-01 08:00:00"))
         self.assertTrue(runner.is_due(conf, now, "2026-11-12 08:00:00"))
+
+    def test_cron_derives_first_run_when_next_missing(self):
+        # 刚保存的检查只有 ck_source.SCHEDULE，没有 check_conf.schedule.next；
+        # 不按 cron 推下一次，它就一直等不到第一次执行。
+        row = {"schedule": "0 */1 * * * ?", "last_run": None, "create_dt": "2026-11-13 15:40:10"}
+        now = dt.datetime(2026, 11, 13, 15, 40, 30)
+        self.assertEqual(runner.row_due_at({}, row, now), "2026-11-13 15:41:00")
+        self.assertFalse(runner.is_row_due({}, row, now))
+        self.assertTrue(runner.is_row_due({}, row, dt.datetime(2026, 11, 13, 15, 41, 0)))
+
+    def test_never_run_without_create_time_is_due_now(self):
+        # 没有 last_run / create_dt 时按「刚刚到期」处理，避免每轮把下一次往后推。
+        row = {"schedule": "0 */10 * * * ?", "last_run": None}
+        now = dt.datetime(2026, 11, 13, 15, 40, 30)
+        self.assertEqual(runner.row_due_at({}, row, now), "2026-11-13 15:40:00")
+        self.assertTrue(runner.is_row_due({}, row, now))
+
+    def test_cron_derives_from_last_run(self):
+        row = {"schedule": "0 */10 * * * ?", "last_run": "2026-11-13 15:03:12"}
+        now = dt.datetime(2026, 11, 13, 15, 5, 0)
+        self.assertEqual(runner.row_due_at({}, row, now), "2026-11-13 15:10:00")
+
+    def test_no_cron_means_manual_only(self):
+        row = {"schedule": "", "last_run": "2026-11-13 15:00:00"}
+        self.assertIsNone(runner.row_due_at({}, row, dt.datetime(2026, 11, 13, 15, 40, 0)))
+        self.assertFalse(runner.is_row_due({}, row, dt.datetime(2026, 11, 13, 15, 40, 0)))
 
     def test_rule_or_scriptless_is_not_ai_check(self):
         self.assertFalse(runner.is_ai_check({"kind": "rule", "script": "x"}))
@@ -170,6 +238,65 @@ class FakeConn(object):
         return FakeCursor(self.store)
 
 
+class PagedCursor(object):
+    """按 `ID > %s` 翻页的假游标，用来验证候选读取不会被第一批截断。"""
+
+    def __init__(self, store):
+        self.store = store
+        self.result = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=None):
+        self.store.setdefault("statements", []).append((sql, params))
+        if sql.startswith("SELECT"):
+            after = params[0]
+            limit = params[-1]
+            self.result = [r for r in self.store["candidates"] if r[0] > after][:limit]
+        else:
+            self.result = []
+
+    def fetchall(self):
+        return self.result
+
+    def fetchone(self):
+        return self.result[0] if self.result else None
+
+    @property
+    def rowcount(self):
+        return 1
+
+
+class PagedConn(object):
+    def __init__(self, candidates):
+        self.store = {"candidates": candidates}
+
+    def cursor(self):
+        return PagedCursor(self.store)
+
+
+class CandidateFetchTest(unittest.TestCase):
+    def test_pages_past_first_batch(self):
+        ai = json.dumps({"kind": "ai", "script": "x"})
+        candidates = [(i, "n%d" % i, 1, "t", json.dumps({}), "", None, None, 1) for i in range(1, 7)]
+        candidates.append((9, "AI", 1, "sense_data.T", ai, "0 0 8 * * ?", None, None, 1))
+        original = runner.CANDIDATE_PAGE
+        runner.CANDIDATE_PAGE = 2
+        conn = PagedConn(candidates)
+        try:
+            rows = runner.fetch_candidates(conn)
+        finally:
+            runner.CANDIDATE_PAGE = original
+        self.assertEqual([row["id"] for row in rows], [9])
+        selects = [sql for sql, _ in conn.store["statements"]]
+        self.assertIn("ID > %s", selects[0])
+        self.assertGreater(len(selects), 1)
+
+
 class RunDueTest(unittest.TestCase):
     def test_dry_run_skips_write(self):
         conf = {"kind": "ai", "script": "print('{}')", "schedule": {"next": "2026-11-12 08:00:00"}}
@@ -208,6 +335,48 @@ class RunDueTest(unittest.TestCase):
         self.assertEqual(insert_params[4], "E")
         next_conf = json.loads(update_params[3])
         self.assertIsNotNone(next_conf["schedule"]["next"])
+
+    def test_apply_without_schedule_keeps_result(self):
+        # 186 实测：SCHEDULE='' 的 AI 检查手动运行，执行成功却在算下一次时间时抛
+        # ValueError，接口回 400「请求参数无效」，结果整条丢掉。
+        conf = {"kind": "ai", "script": "x"}
+        conn = FakeConn([(1109, "测试AI脚本", 391004089, "sense_data.T", json.dumps(conf), "", None, None, 200)])
+        original = runner.execute
+        runner.execute = lambda script, conf, cfg: {
+            "status": runner.STATUS_NORMAL, "report": {"checkedCount": 0, "abnormalCount": 0},
+            "exitCode": 0, "error": None, "durationMs": 5,
+        }
+        try:
+            results = runner.run_due(
+                conn, {"python": "x", "timeout": 5, "env": {}}, apply=True, force=True,
+                now=dt.datetime(2026, 11, 13, 15, 34, 24),
+            )
+        finally:
+            runner.execute = original
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["applied"])
+        update_sql, update_params = [
+            p for p in conn.store["statements"]
+            if p[0].startswith("UPDATE ck_source") and "CHECK_CONF" in p[0]
+        ][0]
+        saved = json.loads(update_params[3])
+        self.assertIsNone(saved["schedule"]["next"])
+        self.assertRegex(saved["schedule"]["last"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertTrue([p for p in conn.store["statements"] if p[0].startswith("INSERT INTO ck_job_log")])
+
+    def test_invalid_cron_keeps_result_and_records_error(self):
+        conf = {"kind": "ai", "script": "x"}
+        conn = FakeConn([(1104, "示例", 301, "sense_data.T", json.dumps(conf), "0 0 8", None, None, 200)])
+        row = runner.fetch_candidates(conn)[0]
+        item = {"message": "m", "status": runner.STATUS_NORMAL}
+        runner.apply_result(conn, row, conf, {"status": runner.STATUS_NORMAL, "report": {}}, item)
+        update_sql, update_params = [
+            p for p in conn.store["statements"]
+            if p[0].startswith("UPDATE ck_source") and "CHECK_CONF" in p[0]
+        ][0]
+        saved = json.loads(update_params[3])
+        self.assertIsNone(saved["schedule"]["next"])
+        self.assertIn("cron 需要 5 或 6 段", saved["schedule"]["cronError"])
 
     def test_not_due_is_skipped(self):
         conf = {"kind": "ai", "script": "x", "schedule": {"next": "2099-01-01 00:00:00"}}

@@ -6,6 +6,7 @@
 
 import { computed, reactive } from 'vue'
 import type { MonitorRunView } from '@/api/types/monitorCenter'
+import { countTextOf } from './runDetail'
 import {
   RUN_DATA_OPTIONS,
   RUN_EXEC_OPTIONS,
@@ -50,6 +51,21 @@ const countText = computed(() => {
 const emptyText = computed(() =>
   filterActive.value ? '没有符合筛选条件的运行记录' : '该范围内还没有正式运行记录',
 )
+
+/** 新执行器写结构化结论；旧日志两个字段都没有，列表回退到 run.count。 */
+function hasStructuredCount(run: MonitorRunView): boolean {
+  return run.checkedCount != null || run.abnormalCount != null
+}
+
+/** 异常数 > 0 用错误色，= 0（或未知）用中性色。 */
+function abnormalTone(run: MonitorRunView): string {
+  return run.abnormalCount != null && run.abnormalCount > 0 ? 'is-err' : 'is-muted'
+}
+
+/** 结构化条数完整文案：同时作为单元格 title，超长数字被省略号裁剪时仍可悬停查看。 */
+function structuredCountText(run: MonitorRunView): string {
+  return `检查 ${countTextOf(run.checkedCount)} 条 · 异常 ${countTextOf(run.abnormalCount)} 条`
+}
 
 function resetFilters() {
   Object.assign(filters, emptyRunFilters())
@@ -118,13 +134,13 @@ function resetFilters() {
     <table v-else class="rc-data-table mr-table">
       <thead>
         <tr>
-          <th style="width: 16%">时间</th>
-          <th style="width: 24%">检查项</th>
-          <th style="width: 13%">执行状态</th>
-          <th style="width: 13%">数据结论</th>
-          <th style="width: 8%; text-align: right">条数</th>
-          <th style="width: 19%">通知</th>
-          <th style="width: 7%">详情</th>
+          <th style="width: 15%">时间</th>
+          <th style="width: 19%">检查项</th>
+          <th style="width: 12%">执行状态</th>
+          <th style="width: 12%">数据结论</th>
+          <th style="width: 21%; text-align: right">条数</th>
+          <th style="width: 15%">通知</th>
+          <th style="width: 6%">详情</th>
         </tr>
       </thead>
       <tbody>
@@ -151,7 +167,20 @@ function resetFilters() {
                 {{ dataTextOf(run.data) }}
               </span>
             </td>
-            <td class="mr-count" data-testid="run-count">{{ runCountText(run) }}</td>
+            <td
+              class="mr-count"
+              data-testid="run-count"
+              :title="hasStructuredCount(run) ? structuredCountText(run) : runCountText(run)"
+            >
+              <template v-if="hasStructuredCount(run)">
+                检查 {{ countTextOf(run.checkedCount) }} 条 · <span
+                  class="mr-count-abnormal"
+                  :class="abnormalTone(run)"
+                  data-testid="run-count-abnormal"
+                >异常 {{ countTextOf(run.abnormalCount) }} 条</span>
+              </template>
+              <template v-else>{{ runCountText(run) }}</template>
+            </td>
             <td>
               <span
                 class="rc-status"
@@ -215,7 +244,9 @@ function resetFilters() {
   background: #f3f4f6; border: 1px solid #e5e7eb; color: #6b7280;
   font-size: 10.5px; line-height: 16px; white-space: nowrap; vertical-align: middle;
 }
-.mr-count { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mr-count { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mr-count-abnormal.is-err { color: var(--rc-error); }
+.mr-count-abnormal.is-muted { color: var(--rc-muted); }
 .mr-empty-cell { padding: 36px 12px; text-align: center; color: var(--rc-faint); font-size: 12.5px; }
 .mr-link {
   border: none; background: none; padding: 0; cursor: pointer;

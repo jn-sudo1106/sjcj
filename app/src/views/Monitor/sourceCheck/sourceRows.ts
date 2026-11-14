@@ -23,13 +23,23 @@ export type StatusFilter =
   | 'disabled'
   | 'unconfigured'
 
+/** 最近检查日期筛选：24 万源里「今天到底哪些源查过」是日常最常用的一个视角 */
+export type CheckDateFilter = 'all' | 'today' | 'not-today'
+
 export interface SourceListQuery {
   /** 源上下文时锁到该源；全局/网站上下文由源选择器给值 */
   sourceId: string
   enable: EnableFilter
   status: StatusFilter
   keyword: string
+  checkDate?: CheckDateFilter
 }
+
+export const CHECK_DATE_OPTIONS: Array<{ value: CheckDateFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'today', label: '今天已检查' },
+  { value: 'not-today', label: '今天未检查' },
+]
 
 export interface SourceStats {
   /** 本页源数（按源维度，不是监控记录数） */
@@ -116,17 +126,50 @@ export function matchEnable(row: MonitorSourceRow, filter: EnableFilter): boolea
 }
 
 /** 关键词只匹配源名与源 ID（原型文案：搜索源名称或 ID），不做全字段模糊。 */
+/**
+ * 关键词匹配：源名称 / 源 ID / 主表。
+ * 列表只有一个源筛选框（两个框并排会让人猜哪个生效），所以这里覆盖业务实际会用来找源的三样。
+ */
 export function matchKeyword(row: MonitorSourceRow, keyword: string): boolean {
   const kw = keyword.trim().toLowerCase()
   if (!kw) return true
-  return (row.sourceName ?? '').toLowerCase().includes(kw) || row.sourceId.toLowerCase().includes(kw)
+  return (
+    (row.sourceName ?? '').toLowerCase().includes(kw) ||
+    row.sourceId.toLowerCase().includes(kw) ||
+    (row.tableName ?? '').toLowerCase().includes(kw)
+  )
 }
 
-export function filterSourceRows(rows: MonitorSourceRow[], query: SourceListQuery): MonitorSourceRow[] {
+/**
+ * 「最近检查」按业务时区（Asia/Shanghai）切日：后端时间戳可能是 ISO 带时区，
+ * 直接截字符串会把 UTC 晚上算成第二天。
+ */
+export function businessDateOf(value: string | undefined): string {
+  if (!value) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(parsed)
+}
+
+export function todayOf(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(now)
+}
+
+export function matchCheckDate(row: MonitorSourceRow, filter: CheckDateFilter, now: Date = new Date()): boolean {
+  if (!filter || filter === 'all') return true
+  const checkedOn = businessDateOf(row.lastCheckAt)
+  const today = todayOf(now)
+  // 没有任何检查记录 = 今天没检查过（不算「今天查过」）
+  if (filter === 'today') return checkedOn === today
+  return checkedOn !== today
+}
+
+export function filterSourceRows(rows: MonitorSourceRow[], query: SourceListQuery, now: Date = new Date()): MonitorSourceRow[] {
   return rows.filter((row) => {
     if (query.sourceId && row.sourceId !== query.sourceId) return false
     if (!matchEnable(row, query.enable)) return false
     if (query.status !== 'all' && sourceBucket(row) !== query.status) return false
+    if (!matchCheckDate(row, query.checkDate ?? 'all', now)) return false
     return matchKeyword(row, query.keyword)
   })
 }
@@ -134,7 +177,10 @@ export function filterSourceRows(rows: MonitorSourceRow[], query: SourceListQuer
 export function sourceStats(rows: MonitorSourceRow[]): SourceStats {
   return {
     total: rows.length,
-    abnormal: rows.filter((row) => row.monitors.some((m) => m.data === 'abnormal')).length,
+    // 服务端聚合行没有逐条 monitors，只有整源 data；两种来源都要算，否则聚合模式下永远显示 0
+    abnormal: rows.filter(
+      (row) => row.data === 'abnormal' || row.monitors.some((m) => m.data === 'abnormal'),
+    ).length,
     execFailed: rows.filter((row) => row.monitors.some((m) => m.enabled && FAILED_EXECS.has(m.exec))).length,
   }
 }
@@ -163,15 +209,20 @@ export function coverageOf(row: MonitorSourceRow): { main: string; sub: string; 
   if (row.monitorTotal === 0) {
     return { main: '—', sub: '尚未配置检查', title: '该源还没有监控记录，配置后才会有计划覆盖' }
   }
-  if (row.coverage) {
+  if (row.monitorEnabled === 0) {
+    return { main: '—', sub: '全部停用，不排期', title: '该源的检查项全部停用，服务端不为其安排时隙，因此不算漏跑' }
+  }
+  if (row.coverage && !row.coverageUnavailable) {
+    const { due, finished, missed } = row.coverage
     return {
-      main: `${row.coverage.finished} / ${row.coverage.due}`,
-      sub: '已完成 / 应到期',
-      title: '所选日期内的覆盖计数由服务端聚合（C07）',
+      main: `应 ${due} · 完成 ${finished}`,
+      sub: missed > 0 ? `漏 ${missed}` : '无漏跑',
+      title: `今天按时隙应执行 ${due} 次，已完成 ${finished} 次${missed > 0 ? `，漏跑 ${missed} 次` : ''}`
+        + '（按 cron 时隙计算，本月早于宽限期的时隙不算漏跑）',
     }
   }
   return {
-    main: '—（需服务端聚合）',
+    main: '—（计划不可推算）',
     sub: '本页不推算漏跑',
     title: '计划覆盖需要服务端按时隙聚合（C07），当前接口未就绪；本页不按时隙推算，也不把本页数量当全站',
   }
@@ -312,13 +363,23 @@ export function monitorSummaryOf(record: {
   return `新增量 · ${range(record.conf?.minSize)}—${range(record.conf?.maxSize)} 条`
 }
 
-/** 执行计划：cron 与下次时间分两行，方便在窄列里扫。 */
-export function monitorPlanOf(record: { schedule: string; nextRun?: string; conf?: { cron?: string } }): {
+/**
+ * 执行计划：cron 与下次时间分两行，方便在窄列里扫。
+ *
+ * `next` 优先取 `checkConf.schedule.next`：AI 检查由执行器排期，`ck_source.NEXT_RUN`
+ * 为了避开 Java 调度器停在远期，直接展示会显示成 2027 年。
+ */
+export function monitorPlanOf(record: {
+  schedule: string
+  nextRun?: string
+  conf?: { cron?: string; schedule?: { next?: string } }
+}): {
   plan: string
   next: string
 } {
   const plan = record.schedule || record.conf?.cron || ''
-  return { plan: plan || '—', next: record.nextRun ? formatAt(record.nextRun) : '—' }
+  const next = record.conf?.schedule?.next || record.nextRun
+  return { plan: plan || '—', next: next ? formatAt(next) : '—' }
 }
 
 /** 展开行里的「最近数据结论」：停用项不显示数据结论（旧接口停用后 state 会留着旧值）。 */
@@ -332,4 +393,32 @@ export function monitorExecOf(record: { exec: MonitorExecStatus }): { text: stri
   if (FAILED_EXECS.has(record.exec)) return { text, tone: 'err' }
   if (record.exec === 'running' || record.exec === 'queued') return { text, tone: 'run' }
   return { text, tone: 'muted' }
+}
+/**
+ * 源列的主标题：业务上认名字，不认 ID。
+ * 只有拿不到名字（目录未加载 / 已删除）时才退回 ID，并明确标注「源 <ID>」，
+ * 避免把裸 ID 当成名称展示（2026-11-12 反馈）。
+ */
+export function sourceTitleOf(row: Pick<MonitorSourceRow, 'sourceId' | 'sourceName'>): string {
+  const name = (row.sourceName ?? '').trim()
+  return name || `源 ${row.sourceId}`
+}
+
+/**
+ * 源列的副标题：网站 + 主表，业务看得懂的两项。
+ * 源 ID 不再出现在正文里，只留在 title 提示中备查。
+ * 拿不到的部分直接省掉（「网站未回显 · 主表未回显」这种占位文字占地方又没信息量），
+ * 两项都没有时给一个短横。
+ */
+export function sourceSubtitleOf(row: Pick<MonitorSourceRow, 'siteName' | 'tableName'>): string {
+  const parts = [(row.siteName ?? '').trim(), (row.tableName ?? '').trim()].filter(Boolean)
+  return parts.length ? parts.join(' · ') : '—'
+}
+
+/** 悬停提示：ID 放这里，排查时能看到，又不占正文。 */
+export function sourceHintOf(
+  row: Pick<MonitorSourceRow, 'sourceId' | 'sourceName' | 'siteName' | 'tableName'>,
+): string {
+  const name = (row.sourceName ?? '').trim() || '未命名源'
+  return `${name}｜源 ID ${row.sourceId}｜网站 ${row.siteName || '未回显'}｜主表 ${row.tableName || '未回显'}`
 }

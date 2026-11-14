@@ -158,6 +158,39 @@ describe('TaskDetailDrawer', () => {
     wrapper.unmount()
   })
 
+  it.each(['L', 'E', 'C'] as const)('结果为空时区分执行中与未返回结果，状态 %s 保持接口原值', (state) => {
+    const wrapper = mount(TaskDetailDrawer, {
+      props: { modelValue: true, task: mockTask({ state, taskResult: '  ' }) },
+      global: { stubs: { ElDrawer: ElDrawerStub } },
+    })
+    expect(wrapper.get('[data-testid="task-result-empty"]').text()).toBe(
+      state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果',
+    )
+    expect(wrapper.find('[data-testid="copy-task-result"]').exists()).toBe(false)
+    const sections = wrapper.find('[data-testid="task-detail-drawer"]').element.children
+    expect(sections[1]!.getAttribute('data-testid')).toBe('task-detail-result')
+    wrapper.unmount()
+  })
+
+  it('长结果默认折叠，完整原文可展开和复制；切换任务重置折叠状态', async () => {
+    const copySpy = vi.spyOn(clipboard, 'copyToClipboard').mockResolvedValue(true)
+    const raw = '执行失败详情\n'.repeat(120) + '原文结尾'
+    const wrapper = mount(TaskDetailDrawer, {
+      props: { modelValue: true, task: mockTask({ taskResult: raw }) },
+      global: { stubs: { ElDrawer: ElDrawerStub } },
+    })
+    expect(wrapper.get('[data-testid="task-result-preview"]').text()).not.toContain('原文结尾')
+    const details = wrapper.get('details')
+    expect((details.element as HTMLDetailsElement).open).toBe(false)
+    ;(details.element as HTMLDetailsElement).open = true
+    expect(wrapper.get('[data-testid="task-result-content"]').text()).toBe(raw)
+    await wrapper.get('[data-testid="copy-task-result"]').trigger('click')
+    expect(copySpy).toHaveBeenCalledWith(raw, '执行结果')
+    await wrapper.setProps({ task: mockTask({ taskId: 'next-task', taskResult: raw }) })
+    expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(false)
+    wrapper.unmount()
+  })
+
   it('点击数据 ID 触发 locateData 事件', async () => {
     const task = mockTask()
     const wrapper = mount(TaskDetailDrawer, {

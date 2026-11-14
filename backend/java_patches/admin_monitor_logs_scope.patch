@@ -1,0 +1,9 @@
+diff --git a/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java b/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
+index 8efa0b9..10b6391 100644
+--- a/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
++++ b/bee-config/src/main/java/com/vanv/bee/controller/SourceCheckController.java
+@@ -398,3 +398,3 @@ public class SourceCheckController {
+         Integer groupId = AuthCenter.getGroupId();
+-        if (groupId != null) {
++        if (groupId != null && groupId != 0) {
+             cond.eq("group_id", groupId);

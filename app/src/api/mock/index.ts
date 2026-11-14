@@ -73,7 +73,7 @@ import {
   handleMockCleanLegacy,
 } from './sysMenu'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
-import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
+import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckSummary, mockSourceSummaryStats, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import {
   mockMqCheckPaged,
   mockMqCheckAdd,
@@ -197,6 +197,18 @@ import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLo
 import { mockEntryPaged, mockEntryDetail, mockEntrySetDsKind, mockGenerateAiCommont, mockBatchGenerateAiCommont, mockSaveEntryType } from './entries'
 import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
 import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows, mockJsonPaged } from './files'
+import {
+  mockFlowCenterAssignUnclassified,
+  mockFlowCenterBatchJob,
+  mockFlowCenterCreateDraft,
+  mockFlowCenterDiff,
+  mockFlowCenterInstancePaged,
+  mockFlowCenterScopePreview,
+  mockFlowCenterSetUnclassifiedStatus,
+  mockFlowCenterStartBatch,
+  mockFlowCenterTemplateMetas,
+  mockFlowCenterUnclassified,
+} from './flowCenterCenter'
 
 // mock 注册表：key = 真实 /v1 端点路径，value = 处理函数。
 // 真接入时这张表整体被 http 请求取代，端点字符串不变。
@@ -224,6 +236,19 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/sourceCopy': mockSourceCopy,
   'source/updateSource': mockSourceUpdate,
   'source/bindSite': mockBindSite,
+
+  // 流程中心「模板 → 实例」（1109 方案；后端未落地，先按原型出图，见 endpoints.ts 同段注释）
+  'flow-center/templateMetas': mockFlowCenterTemplateMetas,
+  'flow-center/instancePaged': mockFlowCenterInstancePaged,
+  'flow-center/scopePreview': mockFlowCenterScopePreview,
+  'flow-center/instanceDraft': mockFlowCenterCreateDraft,
+  'flow-center/instanceActivate': mockFlowCenterStartBatch,
+  'flow-center/bindFlowsByScope': mockFlowCenterStartBatch,
+  'flow-center/batchJob': mockFlowCenterBatchJob,
+  'flow-center/instanceDiff': mockFlowCenterDiff,
+  'flow-center/unclassified': mockFlowCenterUnclassified,
+  'flow-center/unclassifiedAssign': mockFlowCenterAssignUnclassified,
+  'flow-center/unclassifiedStatus': mockFlowCenterSetUnclassifiedStatus,
   'source/changeSite': mockChangeSite,
   'source/nodeRunStats': mockSourceNodeRuns,
   'source/sendSnatch': mockAck,
@@ -485,6 +510,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'comm-job/run': mockCommJobRun,
   // 源监控（数据源告警，0910 迁入；内存表让写操作在 mock 下也能真落库）
   'source/check/paged': mockSourceCheckPaged,
+  'source/check/sourceSummary': mockSourceCheckSummary,
+  'source/check/sourceSummaryStats': mockSourceSummaryStats,
   'source/check/paged-logs': mockSourceCheckLogs,
   'source/check/add': mockSourceCheckAdd,
   'source/check/update': mockSourceCheckUpdate,

@@ -80,6 +80,14 @@ export interface SourceCheck {
   /** 旧平台 /v1/source/check/paged 返回里可能带的额外时间字段（编辑提交前要剔除） */
   createDt?: string
   updateDt?: string
+  /**
+   * 配置版本号（对应 ck_source.VER，后端 CkSource.ver，paged 直接返回实体所以一直都有）。
+   *
+   * 保存（`/api/v1/source/check/update`）时原样回传它做**乐观锁**：后端比较不一致就拒绝并提示
+   * 「已被其他修改更新」，而不是后保存者静默覆盖前一个。缺省（历史记录/旧接口）时不校验，
+   * 后端仍会递增版本号，保证下一次保存能参与比较。
+   */
+  ver?: number
 }
 
 /** 一条校验历史日志，来自 /v1/source/check/paged-logs */
@@ -92,6 +100,20 @@ export interface SourceCheckLog {
   logType: string
   tableName: string
   sourceId: string
+  /** 旧平台没有；脚本执行器把结构化结论写在这里（JSON 串） */
+  remarks?: string
+  /**
+   * 本次执行的冻结配置快照（JSON 串，来自后端 `ck_job_log.JOB_CONF`）。
+   *
+   * Java 的 `CkJobLogService.saveLog` 写的是当时的 `ck_source.CHECK_CONF`（**超过 999 字符会被截断**），
+   * 脚本执行器写的是回写后的整包 conf；旧数据可能是空串或截断后的非法 JSON，所以只当可选数据读，
+   * 解析失败按「没有快照」处理（见 `utils/monitor/record.ts` 的 `parseRunConfig`）。
+   */
+  jobConf?: string
+  logCode?: string
+  logDt?: string
+  jobId?: number | string
+  groupId?: number
 }
 
 /** 监控列表查询入参 */
@@ -108,6 +130,86 @@ export interface SourceCheckLogQuery extends PageQuery {
   jobId?: string
   state?: string
   name?: string
+}
+
+// ---------- C06 运行记录 / C01 单条详情（结构化新接口） ----------
+
+/** 运行窗口（RunItem.window）。后端按 JSON 原样透传，未记录的项可能缺失 */
+export interface SourceCheckRunWindow {
+  start?: string
+  end?: string
+  timezone?: string
+  [key: string]: unknown
+}
+
+/**
+ * 一条运行记录（GET /source/check/runs、GET /source/check/run 的行）。
+ *
+ * 后端把 `ck_job_log.REMARKS` 解析成结构化字段；`legacy:true` 表示 REMARKS 不是合法 JSON（老日志），
+ * 此时 runId/status/checkedCount/abnormalCount/durationMs/window/... 全为 null。
+ * **不要补默认值/零值**：页面按「旧日志」展示，缺失就是缺失（契约：缺字段一律 null）。
+ */
+export interface SourceCheckRunItem {
+  /** 旧日志行主键；结构化运行可能还没有对应日志行（null，此时靠 runId 定位） */
+  logId: string | number | null
+  monitorId: string | number
+  sourceId: string | number
+  name: string | null
+  tableName: string | null
+  /** ck_source 口径：C=完成 / E=异常/失败 */
+  state: string | null
+  logDt: string | null
+  createDt: string | null
+  /** 旧平台日志正文（logMsg）；旧日志的条数只存在于这段文本里 */
+  message: string | null
+  legacy: boolean
+  runId: string | null
+  status: string | null
+  checkedCount: number | null
+  abnormalCount: number | null
+  durationMs: number | null
+  window: SourceCheckRunWindow | null
+  reason: string | null
+  scriptPath: string | null
+  overdue: boolean | null
+  /** `ck_job_log.JOB_CONF` 的解析结果（对象或 null），给运行详情的「本次检查范围」用 */
+  configSnapshot: Record<string, unknown> | null
+}
+
+/** GET /source/check/runs 的分页回执（不包 RunItem 的信封） */
+export interface SourceCheckRunPage {
+  page: number
+  limit: number
+  total: number
+  items: SourceCheckRunItem[]
+}
+
+/** 单条检查项详情（GET /source/check/detail） */
+export interface SourceCheckDetailPayload {
+  monitor: SourceCheck
+  /** 服务端解析后的 checkConf；为 null 时调用方用 `monitor.checkConf` 兜底（不要用空对象） */
+  checkConf: Record<string, unknown> | null
+  scopeType: 'source_result' | 'node_input' | null
+  /** 当前有效配置版本（对应 ck_source.VER） */
+  revision: number | null
+}
+
+/** POST /source/check/run 的单条分流结果 */
+export interface SourceCheckRunResult {
+  id: number
+  kind: 'rule' | 'ai' | 'missing'
+  ok: boolean
+  runId?: string | null
+  status?: string | null
+  message: string | null
+}
+
+/** POST /source/check/run 的受理回执 */
+export interface SourceCheckRunAccepted {
+  accepted: number
+  failed: number
+  results: SourceCheckRunResult[]
+  acceptedAt: string | null
 }
 
 // ---------- 队列告警（1013 从旧平台 page/config/QueueCheck.vue 迁入） ----------

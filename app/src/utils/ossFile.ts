@@ -21,15 +21,35 @@ export function ossFileUrl(path: string): string {
 /**
  * OSS 路径 → **独立 origin 的绝对地址**，只用于「新窗口打开」，不能用于 fetch（跨源会被 CORS 拒）。
  *
- * 端口规则跟 vite.config.ts 的 `/oss` 代理同源同宗：OSS 服务在业务后端同机的 9102 端口。
+ * 端口规则跟 vite.config.ts 的 `/oss` 代理同源同宗：OSS 服务默认在业务后端同机的 9102 端口；
+ * 与后端不同机时用 `VITE_OSS_PUBLIC_TARGET` 覆盖（见 ossOrigin）。
  * 这里不复用 `ossFileUrl` 的同源前缀是刻意的——同源恰恰是问题所在：
  * 采集回来的页面在我们自己的 origin 下打开，它的脚本就能读 localStorage 里的登录 token。
  * 旧平台（EntryList2.vue 的 `<a target="_blank">`）打开的是 9102 这个**独立 origin**，
  * 与它的前端（9999）天然隔离，页面脚本正常跑、正文正常显示，又碰不到主应用。这里照搬。
  */
 export function ossPublicUrl(path: string): string {
-  const target = import.meta.env.VITE_API_PROXY_TARGET || DEFAULT_API_PROXY_TARGET
-  return `${String(target).replace(/:\d+$/, ':9102')}/api/oss/download?fileId=${path}`
+  return `${ossOrigin()}/api/oss/download?fileId=${path}`
+}
+
+/**
+ * OSS 服务的 origin（含 9102 端口）。
+ *
+ * 默认仍按「与业务后端同机、把后端端口换成 9102」推导；但 2026-11-12 起 OSS 可能与业务后端不同机
+ *（133 业务后端 192.168.1.30、OSS 192.168.1.80），所以构建时用 `VITE_OSS_PUBLIC_TARGET` 覆盖
+ *（Dockerfile 里由 `--build-arg OSS_TARGET` 注入）。
+ */
+/** 去掉末尾斜杠；没写端口就补 9102（OSS 固定在这个端口）。 */
+function withOssPort(origin: string): string {
+  const trimmed = origin.trim().replace(/\/+$/, '')
+  return /:\d+$/.test(trimmed) ? trimmed : `${trimmed}:9102`
+}
+
+function ossOrigin(): string {
+  const explicit = import.meta.env.VITE_OSS_PUBLIC_TARGET
+  if (explicit) return withOssPort(String(explicit))
+  // 未显式指定时沿用老规则：业务后端主机 + 9102
+  return withOssPort(String(import.meta.env.VITE_API_PROXY_TARGET || DEFAULT_API_PROXY_TARGET).replace(/:\d+$/, ':9102'))
 }
 
 /**

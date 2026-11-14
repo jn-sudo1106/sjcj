@@ -50,12 +50,37 @@ afterEach(() => {
  * 报 `Unable to get [data-testid="create-flow-name"]`——看着像组件坏了，其实只是没等够
  * （2026-09-12 实测：单跑 48/48 全过，全量跑偶发这一条）。
  */
-async function openCreateForm(w: { find: (s: string) => { exists: () => boolean } }) {
-  useUiStore().fireAction('新建流程')
-  await flushPromises()
-  await vi.waitFor(() => {
-    if (!w.find('[data-testid="create-flow-name"]').exists()) throw new Error('新建流程表单还没挂上')
-  }, { timeout: 5000, interval: 20 })
+async function openCreateForm(w: {
+  find: (s: string) => { exists: () => boolean; trigger: (event: string) => Promise<unknown> }
+}) {
+  const ui = useUiStore()
+  const opened = async (timeout: number) => {
+    await flushPromises()
+    await vi.waitFor(() => {
+      if (!w.find('[data-testid="create-flow-name"]').exists()) throw new Error('新建流程表单还没挂上')
+    }, { timeout, interval: 20 })
+  }
+  // 页面默认落「流程模板」视图后，动作注册在 onMounted 之后，而上一个实例的
+  // ui.clearActions()（onUnmounted）可能在本实例注册之后才跑到——满负载并行跑整个
+  // 文件时会偶发一次 fire 落空。用户真实点按钮时不存在这个问题，这里优先点旧视图里
+  // 真实存在的「从此模板新建」按钮，点不到再退回 fireAction。
+  const tryOpen = async () => {
+    const button = w.find('[data-testid="flow-group-create"]')
+    if (button.exists()) await button.trigger('click')
+    else ui.fireAction('新建流程')
+  }
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await tryOpen()
+    try {
+      await opened(2000)
+      lastError = null
+      break
+    } catch (error) {
+      lastError = error
+    }
+  }
+  if (lastError) throw lastError
   await (w as Awaited<ReturnType<typeof mountCenter>>).get('[data-testid="create-flow-template"]').setValue('template-1')
 }
 
@@ -130,6 +155,10 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       },
     },
   })
+  await flushPromises()
+  // 页面默认落「流程模板」视图（1109 方案 + 交互原型 1:1）。本文件的历史用例都针对
+  // 「全部流程」那套界面，统一先切过去（等价于用户点一下 seg-all），再断言。
+  await wrapper.get('[data-testid="seg-all"]').trigger('click')
   await flushPromises()
   mountedWrappers.push(wrapper)
   return wrapper
@@ -450,7 +479,13 @@ describe('流程中心 · 自动刷新', () => {
   it('工具条没有刷新按钮', async () => {
     const w = await mountCenter()
     const labels = w.get('.fc-toolbar').findAll('button').map((b) => b.text())
-    expect(labels).toEqual(['新建模板', '归集到模板', '查询', '清空'])
+    expect(labels).toEqual(['归集到模板', '查询', '清空'])
+    expect(w.find('.fc-page-head [data-testid="new-structure-template"]').exists()).toBe(true)
+    // 视图切换共用同一导航；进入全部流程后仍可回到模板，不再切成无返回入口的旧页。
+    await w.get('[data-testid="seg-template"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="flow-center-prototype"]').exists()).toBe(true)
+    expect(w.findAll('[data-testid="seg-all"]')).toHaveLength(1)
   })
 
   // 0904 I17（Z7-5）：新建从 prompt 单输入框换成小表单（名称/分类/标签/描述），

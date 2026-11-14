@@ -6,7 +6,8 @@
 // isRule 会随选中节点变化，不能只在 onMounted 判断一次——否则打开画布时没选中规则节点就永远拉不到规则数据
 // （见 NodeInspector.test.ts「规则数据懒加载」）。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
@@ -17,14 +18,21 @@ import { isSyntheticRootId, isWritableStepId, outputTableMissing, persistableNod
 import { nodeStatusOf } from '@/views/FlowCanvas/canvas/nodeStatus'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
-import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { ckSourceApi, configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { parseCheckConf } from '@/utils/monitor/record'
+import type { MonitorCheckConf } from '@/api/types/monitorCenter'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { syncNodeDeployment } from '@/utils/flow/nodeDeployment'
 import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
-import { MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import {
+  bindingMatches,
+  describeCkSourceConflictRows,
+  MultipleCkSourceRowsError,
+  syncMonitorCkSource,
+} from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import { enqueueConfigSave, isActiveNodeConfigFlusher, registerNodeConfigFlusher } from './nodeConfigAutosave'
@@ -40,6 +48,7 @@ import { shortTime, versionCutoff } from '@/views/FlowCenter/flowVersionHistory'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean; templateDefaults?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
+const router = useRouter()
 // 只读（2026-10-10，10-11 起 217 发布版可直接改、首次保存自动生成草稿）：217 的锁定草稿，以及 leo 版本状态
 // 里的已发布版。只读也要能滚动、
 // 切页签、展开收起查看——原来外层整块 pointer-events: none，连滚动条都拖不动（用户反馈）。
@@ -143,6 +152,80 @@ const configOriginText = computed(() => {
   if (!configId.value) return '新建配置 · 未保存'
   return isInitialSourceConfig.value ? '新建配置' : '已有配置'
 })
+
+// ---- C12 显式绑定展示（前端半的「读」这一侧，2026-11-13）----
+// 画布保存时由 utils/flow/monitorCkSource.ts 在 check_conf.binding 里写
+// { workflowId, nodeKey, bindingVersion, boundAt }，nodeKey 就是画布节点 id（后端 stepId）。
+// 这里只按 sourceId 把该源的全部检查项读回来、挑出 binding 指向本节点的那条做只读展示，
+// **不触发同步、不写库**——展示与写入分成两条路径，避免「打开检查器」这种浏览动作产生落库。
+type MonitorBindingState =
+  | { status: 'loading' }
+  | { status: 'unbound' }
+  | { status: 'error' }
+  | { status: 'bound'; checkId: number; name?: string; version?: number; boundAt?: string }
+
+const monitorBinding = ref<MonitorBindingState>({ status: 'unbound' })
+// 模板默认值编辑态没有源，也不该出现「去监控中心」的出口；只读展示不参与模板保存。
+const monitorBindingVisible = computed(() => !props.templateDefaults && isMonitorNode(cfg.value))
+const monitorSourceId = computed(() => String(flow.sourceCfg?.sourceId ?? '').trim())
+
+/** 展示侧复用写入侧的匹配口径（`bindingMatches`），避免两处规则漂移。 */
+function bindingMatchesNode(conf: MonitorCheckConf, workflowId: string, nodeKey: string): boolean {
+  return bindingMatches(conf.binding, workflowId, nodeKey)
+}
+
+/** 只读回读：按 sourceId 拉全部检查项，找 binding 指向当前节点的那条。失败明确报错，不静默成「未绑定」。 */
+let monitorBindingSeq = 0
+async function loadMonitorBinding() {
+  const seq = ++monitorBindingSeq
+  const nodeKey = id.value
+  const sourceId = monitorSourceId.value
+  // 不是监控节点 / 源还没落库（草稿态）：没有可查的检查项，按未绑定展示，不发请求。
+  if (!monitorBindingVisible.value || !nodeKey || !sourceId) {
+    monitorBinding.value = { status: 'unbound' }
+    return
+  }
+  monitorBinding.value = { status: 'loading' }
+  try {
+    const rows = await ckSourceApi.list(sourceId)
+    if (seq !== monitorBindingSeq) return // 期间已切节点 / 换源：丢弃这次结果，别把上一条的绑定显示到当前节点
+    const workflowId = String(canvasFlowIdOf(flow) ?? '').trim()
+    const hit = rows.find((row) => bindingMatchesNode(parseCheckConf(row.checkConf), workflowId, nodeKey))
+    if (!hit) {
+      monitorBinding.value = { status: 'unbound' }
+      return
+    }
+    const binding = parseCheckConf(hit.checkConf).binding
+    const version = Math.trunc(Number(binding?.bindingVersion))
+    const boundAt = String(binding?.boundAt ?? '').trim()
+    monitorBinding.value = {
+      status: 'bound',
+      checkId: hit.id,
+      name: hit.name?.trim() || undefined,
+      version: Number.isFinite(version) && version > 0 ? version : undefined,
+      boundAt: boundAt || undefined,
+    }
+  } catch {
+    if (seq !== monitorBindingSeq) return
+    monitorBinding.value = { status: 'error' }
+  }
+}
+// 切节点 / 换源都要重读（节点 id 与 sourceId 任一变化后，上一条的绑定不再属于当前节点）。
+watch([id, monitorSourceId, monitorBindingVisible], () => { void loadMonitorBinding() }, { immediate: true })
+
+const monitorBindingSummary = computed(() => {
+  const state = monitorBinding.value
+  if (state.status !== 'bound') return ''
+  const parts = [`已绑定检查项 #${state.checkId}`]
+  if (state.version) parts.push(`绑定版本 v${state.version}`)
+  if (state.boundAt) parts.push(`同步于 ${state.boundAt}`)
+  if (state.name) parts.push(state.name)
+  return parts.join(' · ')
+})
+/** 监控中心目前不读 sourceId query（列表自带筛选），所以只跳转、不承诺定位到具体检查项。 */
+function openMonitorCenter() {
+  void router.push({ path: '/monitor', query: { tab: 'sourceCheck' } })
+}
 
 // 0929 F2：复制流程/套用模板时配置复制失败、仍与来源共享的配置——常驻提示 + 保存前知情确认。
 // 场景口径：直接改共享配置 = 所有使用者一起变（默认意图）；复制出来的流程必须互不影响（红线），
@@ -276,6 +359,34 @@ async function onSaveNodeConfig() {
   }
 }
 
+/**
+ * 同源多条检查项：画布保存按 sourceId 整体覆盖，会改到该源所有检查项，syncMonitorCkSource 已停下写入。
+ * 这里把「到底是哪几条」列出来，并给一个去监控中心逐条处理的出口——监控中心只认 sourceCheck
+ * 页签，不认 query.sourceId（列表自己带筛选），所以只带 tab。
+ */
+function alertCkSourceConflict(error: MultipleCkSourceRowsError) {
+  void ElMessageBox.alert(
+    [
+      '画布保存按源整体覆盖，会改到该源所有检查项，因此已停止写入。',
+      '',
+      ...describeCkSourceConflictRows(error.rows),
+      '',
+      '请到监控中心按检查项逐条编辑或删除重复项。',
+    ].join('\n'),
+    '同源有多条检查项，画布未写入',
+    {
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '去监控中心',
+      cancelButtonText: '知道了',
+    },
+  ).then(() => {
+    void router.push({ path: '/monitor', query: { tab: 'sourceCheck' } })
+  }).catch(() => {
+    // 取消 / 关闭提示框：留在画布继续编辑，不额外提示
+  })
+}
+
 /** 保存当前节点配置的实际实现（onSaveNodeConfig 只负责成功提示合并这一层）。 */
 async function saveNodeConfigNow(node: NodeConfig) {
   const savedNodeId = id.value, savedTab = tab.value
@@ -305,9 +416,15 @@ async function saveNodeConfigNow(node: NodeConfig) {
   // 源一并传进去：节点没配过定时时，节点配置 Tab 展示的就是源上的 cron，落库要用同一个值。
   if (saved && tab.value === 'orchestration' && isMonitorNode(node)) {
     try {
-      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
+      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg, { workflowId: canvasFlowIdOf(flow), nodeKey: id.value })
+      // 刚写完绑定：把展示块刷新到刚落库的 bindingVersion / boundAt，不用切节点才看到。
+      void loadMonitorBinding()
     } catch (e) {
-      ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      if (e instanceof MultipleCkSourceRowsError) {
+        alertCkSourceConflict(e)
+      } else {
+        ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      }
     }
   }
   if (saved) await syncSourceCron(node, id.value)
@@ -590,7 +707,8 @@ async function autosaveNode(nodeId: string | undefined, atTab: string) {
   if (!saved) return
   if (atTab === 'orchestration' && isMonitorNode(node)) {
     try {
-      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
+      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg, { workflowId: canvasFlowIdOf(flow), nodeKey: id.value })
+      void loadMonitorBinding()
     } catch (e) {
       // 同源多条检查项时同步会被拒绝：这是浏览触发的自动保存，不能再弹错误打断用户切换；
       // 真正要落库请到监控中心按记录编辑（手动点保存时会给明确提示）。
@@ -725,6 +843,27 @@ onMounted(async () => {
         <span class="ni-note-text"><b>输出表未选择</b>：{{ outputTableWarningText }}</span>
       </div>
 
+      <!-- C12（2026-11-13）：数据监控节点 ↔ 监控检查项的显式绑定，只读回读展示。
+           写入在保存路径（utils/flow/monitorCkSource.ts），这里不触发同步、不写库。 -->
+      <div v-if="monitorBindingVisible" class="ni-note ni-note-info" data-testid="ni-monitor-binding">
+        <span class="ni-note-mark" aria-hidden="true">i</span>
+        <span class="ni-note-text">
+          <template v-if="monitorBinding.status === 'bound'">
+            <span data-testid="ni-monitor-binding-text">{{ monitorBindingSummary }}</span>
+            <button
+              class="ni-binding-link"
+              type="button"
+              data-testid="ni-monitor-open"
+              title="跳转到监控中心（需手动定位该检查项）"
+              @click="openMonitorCenter"
+            >在监控中心查看</button>
+          </template>
+          <template v-else-if="monitorBinding.status === 'error'">绑定信息读取失败</template>
+          <template v-else-if="monitorBinding.status === 'loading'">正在读取检查项绑定…</template>
+          <template v-else>尚未绑定检查项：在监控中心生成并保存一次，或直接在此节点保存检查配置</template>
+        </span>
+      </div>
+
       <!-- 顶层 Tab：节点配置 / 表配置 / 编排配置 / 任务配置；普通画布可按需保留 AI 对话。 -->
       <div class="rc-top-tabs">
         <button
@@ -828,6 +967,9 @@ onMounted(async () => {
 .ni-note-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ni-note-text.is-one-line { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .ni-note-text b { font-weight: 700; }
+/* C12 绑定展示：在主行文案后面跟一个小号次要按钮，只跳转、不写库 */
+.ni-binding-link { margin-left: 8px; border: 1px solid #d5e2f2; background: #fff; color: var(--rc-primary-ink); border-radius: 6px; font-size: 11px; line-height: 1.5; padding: 0 6px; cursor: pointer; white-space: nowrap; }
+.ni-binding-link:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); }
 .cb-label { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }
 .cb-name { font-size: 11px; font-weight: 600; color: var(--rc-text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-id { font-size: 11px; font-weight: 600; color: var(--rc-text); font-variant-numeric: tabular-nums; }

@@ -1,6 +1,15 @@
 import { request } from './client'
 import type { Paged } from './types/common'
-import type { SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery } from './types/monitor'
+import type {
+  SourceCheck,
+  SourceCheckDetailPayload,
+  SourceCheckLog,
+  SourceCheckLogQuery,
+  SourceCheckQuery,
+  SourceCheckRunAccepted,
+  SourceCheckRunItem,
+  SourceCheckRunPage,
+} from './types/monitor'
 
 // ---- 端点路径：相对 client.ts BASE_URL (/api/v1/) ----
 const EP = {
@@ -13,6 +22,14 @@ const EP = {
   checkOne: 'source/check/check-one',
   pagedLogs: 'source/check/paged-logs',
   lastRun: 'source/lastRun',
+  /** C07 首期：源维度聚合（服务端按源分页，含未配置检查的源） */
+  sourceSummary: 'source/check/sourceSummary',
+  sourceSummaryStats: 'source/check/sourceSummaryStats',
+  /** C01 单条检查项详情（monitor + 解析后的 checkConf + 有效版本） */
+  detail: 'source/check/detail',
+  /** C06 运行记录分页 / 单次运行详情 / 手动运行受理 */
+  runs: 'source/check/runs',
+  run: 'source/check/run',
 } as const
 
 // ---- 入参适配：旧平台用 pageNo/pageSize，新平台 mock + client.ts 契约统一 page/limit ----
@@ -32,6 +49,19 @@ function adaptPage(q: Record<string, unknown>): Record<string, unknown> {
 /** 分页查询源检查列表 */
 export function pagedSourceCheck(query: SourceCheckQuery): Promise<Paged<SourceCheck>> {
   return request<Paged<SourceCheck>>(EP.paged, adaptPage(query), { method: 'GET' })
+}
+
+/** 源维度聚合（C07 首期）。
+ * 与 `paged` 的区别：行是「源」不是「检查记录」，未配置检查的源也会返回，
+ * 由服务端按登录用户分组过滤（不要在前端拼全量源目录代替）。
+ */
+export function pagedSourceSummary(query: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(EP.sourceSummary, adaptPage(query), { method: 'GET' })
+}
+
+/** 源维度聚合的全站/本组统计（不分页，只按 siteId+keyword 收范围） */
+export function pagedSourceSummaryStats(query: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(EP.sourceSummaryStats, adaptPage(query), { method: 'GET' })
 }
 
 /** 分页查询源检查历史日志 */
@@ -86,4 +116,57 @@ export function handleRunNow(ids: string[]): Promise<unknown> {
  */
 export function checkCron(cron: string): Promise<string[]> {
   return request<string[]>(EP.lastRun, { cron }, { method: 'GET' })
+}
+
+// ---------- C01 / C05 / C06 结构化接口 ----------
+//
+// 后端新加的单条详情 / 运行记录 / 手动运行端点，尚未登记进 `api/endpoints.ts` 的契约清单
+// （该文件不在本次改动范围）。不登记时 mock 模式会直接抛「端点不在契约清单」，
+// 所以这里按调用强制 `mode: 'http'`，与 sourceIssues / sourceViews 的做法一致：
+// 契约不完整时按调用走真实，而不是把端点硬塞进清单。
+
+/** 运行记录查询入参（GET /source/check/runs；monitorId / sourceId 至少给一个） */
+export interface CheckRunsQuery {
+  monitorId?: string
+  sourceId?: string
+  /** ck_source 口径：C=完成 / E=异常 */
+  state?: string
+  page?: number
+  limit?: number
+}
+
+/** 单次运行详情的定位参数（GET /source/check/run/{runId}） */
+export interface CheckRunLookup {
+  monitorId?: string
+  /** 旧日志用 job-log 的 logId 兜底定位 */
+  logId?: string
+}
+
+/** C01 单条检查项详情：monitor 行 + 服务端解析后的 checkConf + 当前有效版本 */
+export function getSourceCheckDetail(monitorId: string): Promise<SourceCheckDetailPayload> {
+  return request<SourceCheckDetailPayload>(EP.detail, { monitorId }, { method: 'GET', mode: 'http' })
+}
+
+/** C06 运行记录分页（代替旧的 paged-logs：REMARKS 已在服务端结构化） */
+export function pagedCheckRuns(params: CheckRunsQuery): Promise<SourceCheckRunPage> {
+  return request<SourceCheckRunPage>(EP.runs, { ...params }, { method: 'GET', mode: 'http' })
+}
+
+/** C06 单次运行详情；找不到时后端回 success:false（client 解包成 reject） */
+export function getCheckRun(runId: string, params: CheckRunLookup = {}): Promise<SourceCheckRunItem> {
+  return request<SourceCheckRunItem>(`${EP.run}/${encodeURIComponent(runId)}`, { ...params }, {
+    method: 'GET',
+    mode: 'http',
+  })
+}
+
+/**
+ * C05 手动运行：一次带上全部 ids，由服务端按配置分流（rule 走旧规则引擎 / ai 走执行器）。
+ * `apply=false` 只预览不落库。
+ */
+export function runChecksNow(ids: Array<string | number>, apply?: boolean): Promise<SourceCheckRunAccepted> {
+  const monitorIds = ids.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+  const body: { ids: number[]; apply?: boolean } = { ids: monitorIds }
+  if (apply !== undefined) body.apply = apply
+  return request<SourceCheckRunAccepted>(EP.run, body, { method: 'POST', mode: 'http' })
 }

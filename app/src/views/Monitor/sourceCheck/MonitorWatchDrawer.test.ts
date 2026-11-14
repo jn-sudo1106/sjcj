@@ -89,4 +89,20 @@ describe('MonitorWatchDrawer', () => {
     expect(wrapper.text()).toContain('漏跑核对失败')
     expect(wrapper.text()).not.toContain('没有超过宽限期仍未执行的检查项')
   })
+
+  it('MQ 可达但队列配置读取失败时显示未知，不显示阈值正常', async () => {
+    vi.spyOn(monitorWatchApi, 'status').mockResolvedValue({
+      latest: snapshot({
+        queue: { reachable: true, error: '读取队列配置失败：权限不足', items: [], summary: { total: 0, problems: 0 } },
+        summary: { queueProblems: 0, queueUnobservable: 1, overdueMonitors: 0, healthy: false },
+      }),
+      configured: { mq: true, db: true, notify: false },
+    })
+    const wrapper = mountDrawer()
+    await flushPromises()
+    expect(wrapper.text()).toContain('未知')
+    expect(wrapper.text()).toContain('权限不足')
+    expect(wrapper.text()).not.toContain('启用的队列都在阈值内')
+    wrapper.unmount()
+  })
 })
