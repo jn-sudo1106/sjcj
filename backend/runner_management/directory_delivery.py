@@ -8,6 +8,7 @@ from .directory_bindings import owner_key, owner_layout
 from .directory_layout import normalize, safe_path, snapshot_files
 from .snapshot_reader import read_snapshot
 from .python_cache import is_python_cache
+from .package_limits import MAX_CODE_BYTES, MAX_CODE_FILES, LEGACY_CODE_BYTES, LEGACY_CODE_FILES
 
 
 def as_delivery(row):
@@ -166,8 +167,8 @@ def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=Non
             retained = {name: origin for name, origin in old_manifest.get('fileOrigins', {}).items() if name not in selected}
             combined = {name: data for name, data in old_files.items() if name in retained}
             combined.update(selected)
-            if len(combined) > 2000 or sum(map(len, combined.values())) > 10 * 1024 * 1024:
-                raise ApiError('合并后的代码超过 10 MB 或 2000 个文件', 413)
+            if len(combined) > MAX_CODE_FILES or sum(map(len, combined.values())) > MAX_CODE_BYTES:
+                raise ApiError(f'合并后的代码超过 {MAX_CODE_BYTES // 1024 // 1024} MB 或 {MAX_CODE_FILES} 个文件', 413)
             directories = sorted(set(old_manifest.get('directories', [])) | selected_dirs)
             # A partial update may not silently replace an unselected file with a folder (or vice versa).
             folded = {name.casefold() for name in combined}
@@ -181,6 +182,11 @@ def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=Non
                        'baseDigest': base_digest, 'retainedFiles': retained}
         else:
             combined = files
+        if len(combined) > LEGACY_CODE_FILES or sum(map(len, combined.values())) > LEGACY_CODE_BYTES:
+            runner = db.execute('SELECT capabilities FROM runners WHERE runner_id=?', (runner_id,)).fetchone()
+            import json
+            if not runner or 'large-bundles' not in json.loads(runner['capabilities']):
+                raise ApiError('此运行环境包需要支持大文件部署的 Runner，请先升级该实例再重试', 409)
         # Every scope transfers only paths whose content differs. Retained
         # origins point directly to signed physical files, never to delta chains.
         files = {name: data for name, data in files.items() if name not in old_files

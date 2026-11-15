@@ -13,7 +13,6 @@ import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVari
 import GenerationReferenceFiles from '@/components/GenerationReferenceFiles.vue'
 import type { GenerationReferenceFile } from '@/api/runnerManagement'
 import AiCodeWorkspaceDialog from '@/components/AiCodeWorkspaceDialog.vue'
-import NodeDeploymentPanel from './NodeDeploymentPanel.vue'
 import { createGenerationTaskId, matchingGenerationGitBinding, modelRequestMethod, nodeGenerationCodeDirectory, nodeGenerationInputDirectory } from '@/utils/generationWorkspace'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
 import { withSiteScriptOutputFields, withSiteScriptQueuePrompt, type SiteScriptOutputField } from '@/utils/flow/siteScriptOutputPrompt'
@@ -274,7 +273,6 @@ const storagePath = computed(() => {
 })
 const currentSourceFile = computed(() => recentSourceFiles.value.find(file =>
   file.repoId === repositoryId.value && file.filePath === storagePath.value))
-const deploymentArchiveId = computed(() => currentSourceFile.value?.archiveId || (archive.value?.status === 'committed' ? archive.value.archiveId : undefined))
 const otherSourceFiles = computed(() => recentSourceFiles.value.filter(file => file !== currentSourceFile.value))
 const absoluteStoragePath = computed(() => {
   const root = selectedRepository.value?.path || loadedVersion.value?.repoPath || ''
@@ -993,7 +991,6 @@ function download() {
       <div v-if="sourceFilePath"><span>来源文件</span><button type="button" class="site-script-file-link" :disabled="busy || !savedSourceAssociation" :title="savedSourceAssociation ? sourceFilePath : '保存后可查看关联版本'" @click="previewAssociatedFile('source')" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</button><el-button link :disabled="busy" data-testid="site-script-unlink-source" @click="changeAssociatedFile('source', 'unlink')">取消关联</el-button><el-button v-if="savedSourceAssociation" link type="danger" :disabled="busy" data-testid="site-script-delete-source" @click="changeAssociatedFile('source', 'delete')">删除文件</el-button></div>
     </div>
     <p v-if="error && !open" class="site-script-error" role="alert">{{ error }}</p>
-    <NodeDeploymentPanel v-if="configId && sourceId && flowId && stepId" :source-id="sourceId" :flow-id="flowId" :step-id="stepId" :config-id="configId" :config-type="generationConfigType" :queue-name="queueName" :archive-id="deploymentArchiveId" />
     <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">代码生成</el-button>
   </section>
   <AiCodeWorkspaceDialog v-model="open" data-testid="site-script-dialog">

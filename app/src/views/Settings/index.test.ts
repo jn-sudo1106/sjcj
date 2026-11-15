@@ -63,7 +63,7 @@ describe('系统设置 · tab 壳', () => {
   it('旧节点代码书签跳转到服务器页面，保留筛选上下文', async () => {
     const { wrapper, router } = await mountAt({ tab: 'site-code', configId: '123' })
     expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('节点代码')
-    expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('部署资源')
     expect(router.currentRoute.value.query).toEqual({ tab: 'runners', configId: '123' })
     expect(wrapper.find('[data-testid="settings-server-workspace"]').exists()).toBe(true)
     wrapper.unmount()
@@ -71,7 +71,7 @@ describe('系统设置 · tab 壳', () => {
   it('旧机器配置链接合并到服务器并保留实例和配置筛选', async () => {
     const { wrapper, router } = await mountAt({ tab: 'assignments', runnerId: 'r-2', configId: '123' })
     expect(router.currentRoute.value.query).toEqual({ tab: 'runners', runnerId: 'r-2', configId: '123' })
-    expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('部署资源')
     expect(wrapper.find('[data-testid="settings-runtime-bindings"]').exists()).toBe(true)
     expect(wrapper.findAll('.st-tab-link').map(button => button.text())).not.toContain('机器配置')
     wrapper.unmount()
@@ -79,7 +79,7 @@ describe('系统设置 · tab 壳', () => {
   it('系统设置只剩机器与目录类 tab（来源组已迁回源管理，人与权限类已迁到用户权限设置）', async () => {
     const { wrapper } = await mountAt()
 
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '智能体资源', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '智能体资源', '部署资源', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })
@@ -103,8 +103,8 @@ describe('系统设置 · tab 壳', () => {
   it('部署构建同样展示全部设置入口，直达服务器页签不回落', async () => {
     vi.stubEnv('DEV', false)
     const { wrapper, router } = await mountAt({ tab: 'runners' })
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '智能体资源', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
-    expect(wrapper.find('.st-tab-link.active').text()).toBe('服务器')
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '智能体资源', '部署资源', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('部署资源')
     expect(router.currentRoute.value.query).toEqual({ tab: 'runners' })
   })
 
@@ -135,7 +135,7 @@ describe('系统设置 · tab 壳', () => {
 
   it('admin 的旧用户管理书签跳到用户权限设置，系统设置不再展示重复入口', async () => {
     const { wrapper, router } = await mountAt({ tab: 'users' }, ['admin'])
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '智能体资源', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '智能体资源', '部署资源', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
     expect(router.currentRoute.value.path).toBe('/user-permission')
     expect(router.currentRoute.value.query).toEqual({ tab: 'users' })
     expect(wrapper.find('[data-testid="settings-user-management"]').exists()).toBe(false)
@@ -165,7 +165,7 @@ describe('系统设置 · tab 壳', () => {
     expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型（后端）', '运行日志（后端）'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型（后端）')
     // 本地 fallback 有、后端没下发的入口（服务器 / 程序版本…）不再出现
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).not.toContain('服务器')
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).not.toContain('部署资源')
     wrapper.unmount()
   })
 })

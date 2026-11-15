@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from .artifacts import verify_artifact
 from .bundle_install import cache_bundle, install_bundle, linked, safe_relative
 from .snapshot_reader import read_snapshot
+from .package_limits import MAX_ARCHIVE_BYTES, DOWNLOAD_TIMEOUT
 
 
 def install_delivery(runner, job):
@@ -39,11 +40,11 @@ def install_delivery(runner, job):
         request = Request(runner.server + '/api/artifacts/' + value,
                           headers={'Authorization': 'Bearer ' + runner.identity['token']})
         stage('download', '开始下载代码制品 ' + value)
-        with urlopen(request, timeout=30) as response:
-            archive = response.read(12 * 1024 * 1024 + 1)
+        with urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
+            archive = response.read(MAX_ARCHIVE_BYTES + 1)
             signature = response.headers.get('X-Artifact-Signature', '')
-        if len(archive) > 12 * 1024 * 1024:
-            raise ValueError('下发代码包超过 12 MB')
+        if len(archive) > MAX_ARCHIVE_BYTES:
+            raise ValueError(f'下发压缩包超过 {MAX_ARCHIVE_BYTES // 1024 // 1024} MB')
         stage('verify', '校验代码摘要和签名')
         verify_artifact(archive, value, signature, runner.identity['publicKey'])
         cache_bundle(cache, value, archive, signature)

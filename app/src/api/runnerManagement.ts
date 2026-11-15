@@ -356,11 +356,14 @@ export interface NodeDeploymentContext {
   queueName?: string; archiveId?: string
 }
 export interface NodeDeploymentResource extends NodeDeploymentContext {
+  resourceIds?: string[]; useDefault?: boolean; effectiveResourceIds?: string[]
+  targets?: { resourceId: string; runnerId: string; targetPath?: string; deploymentDirectory?: string; pathError?: string }[]
   resourceId: string; revision: string; defaultResourceId: string; effectiveResourceId: string
   resources: DeploymentResourceRule[]
   targetPath?: string; deploymentDirectory?: string; resourceDirectory?: string; pathError?: string
 }
 export interface GeneratedDeploymentJob {
+  targetResourceId?: string; resourceId?: string
   jobId: string; sourceId: string; flowId: string; stepId: string; configId: string; configType: string
   environment: DeploymentEnvironment; archiveId: string; taskId: string; gitCommit: string
   status: 'waiting_resource' | 'queued' | 'delivering' | 'success' | 'failed' | 'superseded'
@@ -676,12 +679,12 @@ export const runnerManagementApi = {
   deletePromptTemplate: (body: { promptId: number; sourceType: string; nodeTypeName: string; templateUse: 'config' | 'script'; revision: string }) => request<{ deleted: boolean; promptId: number }>('/node-prompt-templates/delete', 'POST', body),
   deploymentResources: () => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources'),
   nodeDeploymentResource: (context: NodeDeploymentContext) => request<NodeDeploymentResource>('/node-deployment-resource?' + new URLSearchParams(Object.entries(context).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))),
-  saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
+  saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; resourceIds?: string[]; useDefault?: boolean; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
   saveDeploymentResources: (body: { items: DeploymentResourceRule[]; revision: string }) => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources', 'POST', body),
   generatedDeployments: (query: GeneratedDeploymentQuery = {}) => request<{ items: GeneratedDeploymentJob[]; total: number }>('/deployment-jobs?' + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))),
   deploymentFiles: (jobId: string) => request<DeploymentFileSnapshot>(`/deployment-jobs/${encodeURIComponent(jobId)}/files`),
   deploymentFileContent: (jobId: string, path: string) => request<DeploymentFileContent>(`/deployment-jobs/${encodeURIComponent(jobId)}/files?path=${encodeURIComponent(path)}`),
-  deployGeneratedArchive: (body: { archiveId: string; configId: string; sourceId: string; flowId: string; stepId: string }) => request<GeneratedDeploymentJob>('/deployment-jobs', 'POST', body),
+  deployGeneratedArchive: (body: { archiveId: string; configId: string; sourceId: string; flowId: string; stepId: string; configType?: string; environment?: DeploymentEnvironment; resourceIds?: string[]; targetRevision?: string }) => request<GeneratedDeploymentJob & { items?: GeneratedDeploymentJob[] }>('/deployment-jobs', 'POST', body),
   generatedDeploymentAction: (jobId: string, action: 'publish' | 'retry' | 'rollback' | 'sync-git') => request<GeneratedDeploymentJob>(`/deployment-jobs/${encodeURIComponent(jobId)}/${action}`, 'POST', {}),
   codeGenerationTasks: async (query: { configId?: string; sourceId?: string; taskId?: string; state?: string; page: number; size: number }) => {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))
@@ -794,6 +797,7 @@ export const runnerManagementApi = {
   moveCodeRepository: (repoId: string, path: string) => request<CodeRepository>(`/settings/code-repos/${encodeURIComponent(repoId)}/path`, 'POST', { path }),
   setDefaultCodeRepository: (repoId: string) => request<CodeRepository>(`/settings/code-repos/${encodeURIComponent(repoId)}/default`, 'POST', {}),
   verifyCodeRepository: (repoId: string) => request<CodeRepositoryVerification>(`/settings/code-repos/${encodeURIComponent(repoId)}/verify`, 'POST', {}),
+  syncCodeRepository: (repoId: string) => request<{ repoId: string; branch: string; changed: boolean; mode: string; receivedCommits: number; gitCommit: string; message: string }>(`/settings/code-repos/${encodeURIComponent(repoId)}/sync`, 'POST', {}),
   codeRepositoryDirectories: (repoId: string) => list<CodeRepositoryDirectory>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories`),
   saveCodeRepositoryDirectory: (repoId: string, input: CodeRepositoryDirectoryInput, directoryId?: string) => request<CodeRepositoryDirectory>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories${directoryId ? '/' + encodeURIComponent(directoryId) : ''}`, 'POST', input),
   removeCodeRepositoryDirectory: (repoId: string, directoryId: string, revision: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}?revision=${encodeURIComponent(revision)}`, 'DELETE'),
