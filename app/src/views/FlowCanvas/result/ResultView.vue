@@ -2511,6 +2511,7 @@ async function onTestScript() {
       top="4vh"
       :style="{ maxWidth: '1180px' }"
       append-to-body
+      destroy-on-close
     >
       <FilePreview
         :path="filePreview.path"

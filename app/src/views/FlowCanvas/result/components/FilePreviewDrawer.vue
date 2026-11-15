@@ -38,6 +38,7 @@ const preview = computed(() => ({
     :model-value="modelValue"
     :with-header="false"
     size="60%"
+    destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div v-if="file" class="fpd-body" data-testid="file-preview-drawer">
