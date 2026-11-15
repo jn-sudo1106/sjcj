@@ -4369,6 +4369,21 @@ export const itemApi = {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
+  /** 流程入口（ROOT）改名（2026-11-15）。与 rootConfigUpdate 同走后端 ROOT 更新分支，只交
+   *  `{ itemConfig, flowId, isRoot: 1, name }` 最小集，其余字段 selective update 保持库中值。
+   *  186 实测（测试流程 15730948，测完已删）：不带草稿版本会被拒「请先进入流程草稿编辑…」；
+   *  带草稿 versionId/ver 后根行 name 更新、cs_flow.flowName 不受影响、type/stepType/flowCode 原样。
+   *  反过来 saveFlow 改流程名**不会**同步根节点名称——两者是独立的两个字段。 */
+  rootNameUpdate: (stepId: string, name: string, flowId?: string, ref?: FlowVersionRef | null) => request<Ack>('item/next/stepModify', {
+    itemConfig: Number(stepId),
+    ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
+    isRoot: 1,
+    name,
+    ...versionRefParams(ref),
+  }, {
+    method: 'POST',
+    httpEndpoint: 'item/next/stepModify',
+  }),
   /** 启停步骤。GET `id` + `state`。state：`'0'` 启用 / `'1'` 停用，与 isDelete 同口径。
    *  后端操作日志文案可能写反，以 isDelete / enabled 为准。 */
   enable: (stepId: string, state: string, ref?: FlowVersionRef | null) => request<Ack>('item/next/enable', { id: stepId, state }, {

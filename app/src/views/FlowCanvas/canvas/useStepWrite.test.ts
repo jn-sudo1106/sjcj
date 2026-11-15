@@ -776,7 +776,7 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(modify).toHaveBeenCalledTimes(1)
   })
 
-  it('根节点改名被拒绝：不调 stepModify，画布名称不动（流程根名称由流程管理维护）', async () => {
+  it('根节点改名：走 ROOT 最小集 rootNameUpdate（带流程 ID），不走普通整包 stepModify', async () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     const source = useSourceStore()
@@ -791,11 +791,35 @@ describe('useStepWrite.persistFlowSteps', () => {
     source.rememberSteps([rootStep], 'replace')
 
     const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const rename = vi.spyOn(itemApi, 'rootNameUpdate').mockResolvedValue({ ok: true, message: 'ok' })
     const { persistNodeName } = useStepWrite()
     await persistNodeName('41352', '改个新名')
 
     expect(modify).not.toHaveBeenCalled()
+    expect(rename).toHaveBeenCalledTimes(1)
+    expect(rename.mock.calls[0].slice(0, 3)).toEqual(['41352', '改个新名', '1400935'])
+    expect(flow.configs['41352'].title).toBe('改个新名')
+    expect(source.stepSnapshots['41352'].name).toBe('改个新名')
+  })
+
+  it('根节点改名失败：画布名称回滚并抛错', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41352', name: '流程入口', isRoot: true,
+      dependsOn: undefined, mainConfig: '1400935', flowId: '1400935',
+    }
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [rootStep],
+    )
+    source.rememberSteps([rootStep], 'replace')
+    vi.spyOn(itemApi, 'rootNameUpdate').mockResolvedValue({ ok: false, message: '请先进入流程草稿编辑并重新加载版本信息' })
+    const { persistNodeName } = useStepWrite()
+    await expect(persistNodeName('41352', '改个新名')).rejects.toThrow('草稿')
     expect(flow.configs['41352'].title).toBe('流程入口')
+    expect(source.stepSnapshots['41352'].name).toBe('流程入口')
   })
 
   it('根节点删除被拦截：不调 deleteStep，返回 false', async () => {
