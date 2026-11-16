@@ -465,6 +465,17 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(url).toContain('entryTypeId=1042')
   })
 
+  it.each([1, 0] as const)('nextStep 多节点忽略条件按旧接口透传 skipCond=%s', async (skipCond) => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已提交', data: null }))
+    const { dataApi } = await import('./index')
+    await dataApi.nextStep('430016304', '2100249', ['5066418'], { itemConfig: '41936,41937', skipCond })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const params = new URL(url, 'http://localhost').searchParams
+    expect(init.method).toBe('GET')
+    expect(params.get('itemConfig')).toBe('41936,41937')
+    expect(params.get('skipCond')).toBe(skipCond === 1 ? '1' : null)
+  })
+
   it('nextStepBatch 用 POST + AES，超时设为 180s', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已提交', data: null }))
     const { dataApi } = await import('./index')

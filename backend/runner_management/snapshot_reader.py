@@ -1,6 +1,7 @@
 """Verify full snapshots and sparse snapshots with direct signed file origins."""
 import base64
 import hashlib
+from .package_limits import MAX_CODE_BYTES, MAX_CODE_FILES, MAX_MANIFEST_BYTES, MAX_SNAPSHOT_BYTES, MAX_ARCHIVE_BYTES
 import io
 import json
 import re
@@ -28,17 +29,18 @@ def read_snapshot(read_bundle, digest, public_key):
         if value not in raw_cache:
             data, signature = read_bundle(value)
             actual = hashlib.sha256(data).hexdigest()
-            if len(data) > 12 * 1024 * 1024 or value != 'sha256:' + actual:
+            if len(data) > MAX_ARCHIVE_BYTES or value != 'sha256:' + actual:
                 raise ValueError('版本缓存摘要校验失败')
             key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key, validate=True))
             key.verify(base64.b64decode(signature, validate=True), bytes.fromhex(actual))
             files, folded, total = {}, set(), 0
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                if len(archive.infolist()) > 2001:
+                if len(archive.infolist()) > MAX_CODE_FILES + 1:
                     raise ValueError('版本缓存文件数量过多')
                 for info in archive.infolist():
                     total += info.file_size
-                    if (not safe_relative(info.filename) or info.is_dir() or total > 12 * 1024 * 1024
+                    if (not safe_relative(info.filename) or info.is_dir() or total > MAX_SNAPSHOT_BYTES
+                            or info.filename == 'manifest.json' and info.file_size > MAX_MANIFEST_BYTES
                             or info.filename.casefold() in folded
                             or (info.external_attr >> 16) & 0o170000 == 0o120000):
                         raise ValueError('版本缓存包含非法文件')
@@ -56,7 +58,7 @@ def read_snapshot(read_bundle, digest, public_key):
     origins = {name: {'digest': digest, 'path': name, 'sha256': hashlib.sha256(data).hexdigest()}
                for name, data in physical.items() if name != 'manifest.json'}
     retained = manifest.get('retainedFiles', {})
-    if not isinstance(retained, dict) or len(retained) > 2000:
+    if not isinstance(retained, dict) or len(retained) > MAX_CODE_FILES:
         raise ValueError('保留文件清单无效')
     if retained and (manifest.get('deliverySchema') != 2 or manifest.get('deliveryScope') != 'selected'):
         raise ValueError('保留文件只能用于部分下发')
@@ -74,7 +76,7 @@ def read_snapshot(read_bundle, digest, public_key):
         files[name] = data
         origins[name] = origin
         folded.add(name.casefold())
-    if len(files) > 2001 or sum(map(len, files.values())) > 12 * 1024 * 1024:
+    if len(files) > MAX_CODE_FILES + 1 or sum(len(data) for name, data in files.items() if name != 'manifest.json') > MAX_CODE_BYTES:
         raise ValueError('合并后的代码包超过文件数量或大小限制')
     names = {name.casefold() for name in files}
     if any('/'.join(name.split('/')[:i]).casefold() in names

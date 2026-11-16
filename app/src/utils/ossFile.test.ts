@@ -89,7 +89,7 @@ describe('fetchOssFile', () => {
     const buf = await fetchOssFile('/qinlong/a.xlsx')
 
     expect(buf.byteLength).toBe(8)
-    expect(fetchMock).toHaveBeenCalledWith('/oss/api/oss/download?fileId=/qinlong/a.xlsx', { credentials: 'omit' })
+    expect(fetchMock).toHaveBeenCalledWith('/oss/api/oss/download?fileId=/qinlong/a.xlsx', { credentials: 'omit', cache: 'no-store' })
   })
 
   it('失败时带上状态码抛出，不静默返回空内容', async () => {

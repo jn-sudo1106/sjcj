@@ -27,6 +27,7 @@ describe('nodeInspectorTabs', () => {
       ['config', '节点配置'],
       ['table', '表配置'],
       ['orchestration', '编排配置'],
+      ['deployment', '部署配置'],
       ['task', '任务配置'],
       ['ai', 'AI 对话'],
     ])
@@ -34,7 +35,7 @@ describe('nodeInspectorTabs', () => {
 
   it('can hide AI for the flow-center workspace', () => {
     expect(nodeInspectorTabs(ordinaryNode, { includeAi: false }).map(([key]) => key)).toEqual([
-      'config', 'table', 'orchestration', 'task',
+      'config', 'table', 'orchestration', 'deployment', 'task',
     ])
   })
 
@@ -124,7 +125,7 @@ describe('nodeInspectorTabs', () => {
       title: '翻译助手', kind: 'node', template: 'translate', sub: '[800] 翻译助手 · 文本翻译',
     } as unknown as NodeConfig
     const tabs = nodeInspectorTabs(translate)
-    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'deployment', 'task', 'ai'])
     const orchestration = tabs.find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBeUndefined()
   })
@@ -135,7 +136,7 @@ describe('nodeInspectorTabs', () => {
       title: '文章打标签', kind: 'node', template: 'article-tag', sub: '[730] 文章打标签 · 舆情多维标注',
     } as unknown as NodeConfig
     const tabs = nodeInspectorTabs(tag)
-    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'deployment', 'task', 'ai'])
     const orchestration = tabs.find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBeUndefined()
   })
@@ -150,7 +151,7 @@ describe('nodeInspectorTabs', () => {
   ])('%s 节点：与规则处理同 tab 结构（无参数配置），编排 Tab 不因未绑表禁用', (template, sub) => {
     const node = { title: template, kind: 'node', template, sub } as unknown as NodeConfig
     const tabs = nodeInspectorTabs(node)
-    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'deployment', 'task', 'ai'])
     const orchestration = tabs.find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBeUndefined()
   })

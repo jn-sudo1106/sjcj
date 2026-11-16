@@ -157,18 +157,45 @@ def node_choice(app, body, *, save=False):
         options = [item for item in rules(db)['items'] if item['configType'] == kind and supports(item, context['environment'])]
         if save:
             if body.get('revision') != current['revision']: raise ApiError('节点部署资源已被修改，请刷新后再选择', 409)
-            resource_id = body.get('resourceId', '')
-            if not isinstance(resource_id, str) or (resource_id and not any(item['resourceId'] == resource_id and item['enabled'] for item in options)):
-                raise ApiError('所选资源不属于当前节点类型和环境，或已经停用', 409)
-            current = {**context, 'resourceId': resource_id}
+            if 'resourceIds' in body:
+                resource_ids = validate_targets(body['resourceIds'], options)
+                use_default = body.get('useDefault', False)
+                if type(use_default) is not bool or use_default and resource_ids:
+                    raise ApiError('默认资源与指定部署机器不能同时选择')
+                current = {**context, 'resourceId': resource_ids[0] if resource_ids else '',
+                           'resourceIds': resource_ids, 'useDefault': use_default}
+            else:
+                resource_id = body.get('resourceId', '')
+                if not isinstance(resource_id, str): raise ApiError('所选部署资源无效')
+                validate_targets([resource_id] if resource_id else [], options)
+                current = {**context, 'resourceId': resource_id}
             store_layout(db, choice_key(context), current)
             current = read_choice(db, context)
         default = next((item for item in options if item['enabled'] and item['isDefault']), None)
-        effective_id = current.get('resourceId') or (default['resourceId'] if default else '')
+        use_default = current.get('useDefault', not bool(current.get('resourceId')))
+        ids = current.get('resourceIds', [current['resourceId']] if current.get('resourceId') else [])
+        effective_ids = [default['resourceId']] if use_default and default else ([] if use_default else ids)
+        effective_id = effective_ids[0] if effective_ids else ''
         selected = next((item for item in options if item['enabled'] and item['resourceId'] == effective_id), None)
         # Returning the stored selection prevents a disabled/deleted explicit choice from silently falling back.
         return {**current, 'configType': kind, 'resources': options, 'defaultResourceId': default['resourceId'] if default else '',
+                'resourceIds': ids, 'useDefault': use_default, 'effectiveResourceIds': effective_ids,
+                'targets': [{**deployment_path(app, db, item, context, body), 'resourceId': item['resourceId'], 'runnerId': item['runnerId']}
+                            for item in options if item['enabled'] and item['resourceId'] in effective_ids],
                 'effectiveResourceId': effective_id, **deployment_path(app, db, selected, context, body)}
+
+
+def validate_targets(ids, options):
+    from .server import ApiError
+    if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(value, str) for value in ids) or len(set(ids)) != len(ids):
+        raise ApiError('请选择不超过 50 个互不重复的部署资源')
+    available = {item['resourceId'] for item in options if item['enabled']}
+    if any(value not in available for value in ids):
+        raise ApiError('所选资源不属于当前节点类型和环境，或已经停用', 409)
+    runners = [item['runnerId'] for item in options if item['resourceId'] in ids]
+    if len(runners) != len(set(runners)):
+        raise ApiError('同一 Runner 实例只能选择一个部署资源，请选择不同实例')
+    return ids
 
 
 def deployment_path(app, db, rule, context, body):
@@ -215,7 +242,9 @@ def deployment_path(app, db, rule, context, body):
 def selected_resource(db, job):
     choice = read_choice(db, job)
     available = [item for item in rules(db)['items'] if item['configType'] == job['configType'] and supports(item, job['environment'])]
-    explicit = choice.get('resourceId')
+    if 'resourceIds' in choice and not choice.get('useDefault') and not choice['resourceIds'] and not job.get('targetResourceId'):
+        return None, True
+    explicit = job.get('targetResourceId') or choice.get('resourceId')
     rule = next((item for item in available if item['enabled'] and
                  (item['resourceId'] == explicit if explicit else item['isDefault'])), None)
     return rule, bool(explicit)
@@ -223,6 +252,10 @@ def selected_resource(db, job):
 
 def owner(job):
     return tuple(job[key] for key in ('sourceId', 'flowId', 'stepId', 'configId', 'environment'))
+
+
+def same_target(left, right):
+    return left.get('targetResourceId', '') == right.get('targetResourceId', '')
 
 
 def git_details(archive):
@@ -248,17 +281,29 @@ def enqueue_archive(db, archive):
     # A configured remote must have been pushed successfully before deployment.
     repo = db.execute('SELECT remote_url FROM code_repositories WHERE repo_id=?', (archive['repoId'],)).fetchone()
     if repo and repo['remote_url'] and not archive.get('pushed'): return None
+    context = {**archive['sourceContext'], 'configId': archive['configId'], 'environment': 'test'}
+    choice = read_choice(db, context)
+    if 'resourceIds' in choice and not choice.get('useDefault'):
+        ids = choice['resourceIds']
+        # Removed targets must not leave older queued automatic deliveries behind.
+        for row in db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?', owner(context)).fetchall():
+            old = json.loads(row['payload'])
+            if old.get('automatic') and old['status'] in WAITING and old.get('targetResourceId') not in ids:
+                old.update(status='superseded', message='节点部署目标已更新，本次不再部署到此机器'); persist(db, old)
+        jobs = [enqueue(db, archive, 'test', automatic=True, target_resource_id=value) for value in ids]
+        return jobs[0] if jobs else None
     return enqueue(db, archive, 'test', automatic=True)
 
 
-def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False):
+def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False, target_resource_id=''):
     from .server import ApiError
     from .source_code_relations import source_context, task_stamp
     context = source_context(archive.get('sourceContext'))
     if not context: raise ApiError('生成结果缺少源和流程节点关联，不能自动部署', 422)
     if not re.fullmatch(r'[0-9a-f]{40}', archive.get('gitCommit', '')):
         raise ApiError('生成结果缺少固定 Git 提交版本', 422)
-    identifier = uuid.uuid4().hex if rollback else uuid.uuid5(uuid.NAMESPACE_URL, 'ce:generated-deploy:' + archive['archiveId'] + ':' + env).hex
+    identity = 'ce:generated-deploy:' + archive['archiveId'] + ':' + env + (':' + target_resource_id if target_resource_id else '')
+    identifier = uuid.uuid4().hex if rollback else uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
     existing = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (identifier,)).fetchone()
     if existing: return json.loads(existing['payload'])
     origin = db.execute('SELECT created_at FROM generation_jobs WHERE task_id=?', (archive.get('taskId', ''),)).fetchone()
@@ -272,12 +317,13 @@ def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False):
            'archive': archive, **git_details(archive)}
     repository = db.execute('SELECT name FROM code_repositories WHERE repo_id=?', (archive.get('repoId', ''),)).fetchone()
     job['repositoryName'] = repository['name'] if repository else ''
+    if target_resource_id: job['targetResourceId'] = target_resource_id
     if automatic:
         others = db.execute("SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?",
                             owner(job)).fetchall()
         for row in others:
             old = json.loads(row['payload'])
-            if not old.get('automatic'): continue
+            if not old.get('automatic') or not same_target(old, job): continue
             if (old.get('taskCreatedAt', ''), old['taskId']) > (job['taskCreatedAt'], job['taskId']):
                 job.update(status='superseded', message='已有更新的生成任务结果，本次不覆盖新代码')
             elif old['status'] in WAITING:
@@ -339,13 +385,23 @@ def deploy_existing(app, body):
         repo = db.execute('SELECT remote_url FROM code_repositories WHERE repo_id=?', (archive['repoId'],)).fetchone()
         if not repo or repo['remote_url'] and not archive.get('pushed'):
             raise ApiError('生成代码尚未成功推送远程仓库', 409)
-        return view(manual_enqueue(db, archive, 'test'))
+        env = environment(body.get('environment', 'test'))
+        if 'resourceIds' in body:
+            choice = node_choice(app, {**body, 'environment': env})
+            if body.get('targetRevision') != choice['revision']:
+                raise ApiError('部署目标已更新，请刷新后再部署', 409)
+            ids = validate_targets(body['resourceIds'], choice['resources'])
+            if not ids: raise ApiError('请至少选择一台部署机器')
+            jobs = [view(manual_enqueue(db, archive, env, target_resource_id=value)) for value in ids]
+            return {**jobs[0], 'items': jobs}
+        return view(manual_enqueue(db, archive, env))
 
 
-def manual_enqueue(db, archive, env, parent=''):
+def manual_enqueue(db, archive, env, parent='', target_resource_id=''):
     """An explicit deployment may move the same code to a newly selected resource."""
-    latest = db.execute('SELECT payload FROM deployment_jobs WHERE archive_id=? AND environment=? ORDER BY created_at DESC,job_id DESC LIMIT 1',
-                        (archive['archiveId'], env)).fetchone()
+    candidates = db.execute('SELECT payload FROM deployment_jobs WHERE archive_id=? AND environment=? ORDER BY created_at DESC,job_id DESC',
+                            (archive['archiveId'], env)).fetchall()
+    latest = next((row for row in candidates if json.loads(row['payload']).get('targetResourceId', '') == target_resource_id), None)
     if latest:
         previous = json.loads(latest['payload'])
         if previous['status'] in (*WAITING, 'delivering', 'failed'):
@@ -354,8 +410,8 @@ def manual_enqueue(db, archive, env, parent=''):
         runner = db.execute('SELECT install_directory FROM runners WHERE runner_id=?', (rule['runnerId'],)).fetchone() if rule else None
         if previous['status'] == 'success' and rule and runner and previous['runnerId'] == rule['runnerId'] and previous['targetPath'] == target(rule, previous, runner):
             return previous
-        return enqueue(db, archive, env, parent=parent or previous['jobId'], rollback=True)
-    return enqueue(db, archive, env, parent=parent)
+        return enqueue(db, archive, env, parent=parent or previous['jobId'], rollback=True, target_resource_id=target_resource_id)
+    return enqueue(db, archive, env, parent=parent, target_resource_id=target_resource_id)
 
 
 def action(app, identifier, operation):
@@ -369,20 +425,20 @@ def action(app, identifier, operation):
         if operation == 'publish':
             if job['environment'] != 'test' or job['status'] != 'success':
                 raise ApiError('请先完成该版本的测试环境部署，再发布生产', 409)
-            return view(manual_enqueue(db, job['archive'], 'production', parent=identifier))
+            return view(manual_enqueue(db, job['archive'], 'production', parent=identifier, target_resource_id=job.get('targetResourceId', '')))
         if operation == 'rollback':
             if job['status'] != 'success': raise ApiError('只能重新部署曾经成功的版本', 409)
             active = db.execute("SELECT payload FROM deployment_jobs WHERE config_id=? AND environment=? AND status IN ('waiting_resource','queued','delivering')",
                                 (job['configId'], job['environment'])).fetchall()
-            if any(owner(json.loads(row['payload'])) == owner(job) for row in active):
+            if any(owner(json.loads(row['payload'])) == owner(job) and same_target(json.loads(row['payload']), job) for row in active):
                 raise ApiError('该节点环境已有部署任务，请等待完成后再回滚', 409)
-            return view(enqueue(db, job['archive'], job['environment'], parent=identifier, rollback=True))
+            return view(enqueue(db, job['archive'], job['environment'], parent=identifier, rollback=True, target_resource_id=job.get('targetResourceId', '')))
         if operation == 'retry':
             if job['status'] not in ('failed', 'waiting_resource', 'queued'):
                 raise ApiError('当前部署状态不能重试', 409)
             if job.get('automatic'):
                 others = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?', owner(job)).fetchall()
-                if any(other.get('automatic') and (other.get('taskCreatedAt', ''), other['taskId']) > (job.get('taskCreatedAt', ''), job['taskId'])
+                if any(other.get('automatic') and same_target(other, job) and (other.get('taskCreatedAt', ''), other['taskId']) > (job.get('taskCreatedAt', ''), job['taskId'])
                        for other in (json.loads(row['payload']) for row in others)):
                     raise ApiError('该任务已被更新的生成结果替代，请在历史部署记录中明确选择部署此版本', 409)
             job.update(status='waiting_resource', runnerId='', deploymentId='', deliveryId='', runtimeId='', message='等待重新匹配默认部署资源')
@@ -419,6 +475,7 @@ def sync_git(app, db, job):
     files = [{'path': path} for path in sorted(tree) if path.startswith(prefix) and path not in excluded and not is_python_cache(path)]
     if not files: raise ApiError('仓库对应配置目录没有可部署文件', 409)
     rows = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=? ORDER BY created_at DESC,job_id DESC', owner(job)).fetchall()
+    rows = [row for row in rows if same_target(json.loads(row['payload']), job)]
     for row in rows:
         previous = json.loads(row['payload'])
         if previous['status'] in (*WAITING, 'delivering'):
@@ -429,7 +486,7 @@ def sync_git(app, db, job):
     if latest['status'] == 'success' and latest['gitCommit'] == commit:
         return latest
     archive.update(gitCommit=commit, files=files, pushed=bool(repo['remote_url']))
-    synced = enqueue(db, archive, job['environment'], parent=job['jobId'], rollback=True)
+    synced = enqueue(db, archive, job['environment'], parent=job['jobId'], rollback=True, target_resource_id=job.get('targetResourceId', ''))
     synced.update(rollback=False, gitSync=True, message='已锁定最新 Git 版本，等待部署')
     persist(db, synced)
     return synced
@@ -487,7 +544,7 @@ def prepare(app, db, job, rule, runner):
     job.update(runnerId=runner['runner_id'], runnerName=runner['name'], runnerIp=runner['ip_address'],
                instanceDirectory=runner['install_directory'], targetPath=root,
                resourceDirectory=str(kind(runner['install_directory']) / mapped_paths['resourceRoot']))
-    identity = owner(job)
+    identity = (*owner(job), job['targetResourceId']) if job.get('targetResourceId') else owner(job)
     deployment_id = uuid.uuid5(uuid.NAMESPACE_URL, 'ce:auto-deployment:' + json.dumps(identity)).hex
     layouts = configurations(app, db)
     # Sources using the same node configuration share one physical directory and

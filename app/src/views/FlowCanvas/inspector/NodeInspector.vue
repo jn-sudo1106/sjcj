@@ -42,6 +42,7 @@ import NodeConfigSelect from './NodeConfigSelect.vue'
 import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
 import ConfigTab from './tabs/ConfigTab.vue'
+import DeploymentTab from './tabs/DeploymentTab.vue'
 import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 import { shortTime, versionCutoff } from '@/views/FlowCenter/flowVersionHistory'
 
@@ -882,6 +883,7 @@ onMounted(async () => {
         <TaskTab v-else-if="tab === 'task'" :template-defaults="props.templateDefaults" />
         <TableTab v-else-if="tab === 'table'" :template-defaults="props.templateDefaults" />
         <RuleOrchestrationTab v-else-if="tab === 'orchestration'" :template-defaults="props.templateDefaults" />
+        <DeploymentTab v-else-if="tab === 'deployment'" :template-defaults="props.templateDefaults" />
         <ConfigTab v-else :template-defaults="props.templateDefaults" />
       </div>
 
@@ -890,7 +892,7 @@ onMounted(async () => {
       <div v-if="props.templateDefaults" class="rc-insp-foot">
         <span class="foot-note">这些是新流程的默认值，点击工作区下方的「保存模板」一并保存。</span>
       </div>
-      <div v-else-if="tab !== 'ai'" class="rc-insp-foot">
+      <div v-else-if="tab !== 'ai' && tab !== 'deployment'" class="rc-insp-foot">
         <span class="foot-note">
           <i v-if="nodeConfigDirty && !readonly" class="foot-dot" />{{ footNote }}
         </span>

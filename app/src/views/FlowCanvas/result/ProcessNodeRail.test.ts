@@ -6,6 +6,19 @@ import { entryApi } from '@/api'
 import { buildHorizontalLayout, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('ProcessNodeRail', () => {
+  it('多个节点同步显示忽略条件样式和角标，排除节点优先显示本次不发', async () => {
+    const layout = buildHorizontalLayout(['start', 'web-list', 'web-detail', 'end'], [], NODE_CONFIGS, [], { includeTerminals: false })
+    const wrapper = mount(ProcessNodeRail, { props: { layout, selectedIds: ['web-list', 'web-detail'], ignoredConditions: ['web-list', 'web-detail'] } })
+    expect(wrapper.findAll('.condition-ignored')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="rail-node-ignore-badge"]')).toHaveLength(2)
+    await wrapper.setProps({ selectedIds: ['web-list'], skipped: ['web-detail'] })
+    const excluded = wrapper.get('[data-node-id="web-detail"]')
+    expect(excluded.classes()).toContain('skipped')
+    expect(excluded.classes()).not.toContain('condition-ignored')
+    expect(excluded.find('[data-testid="rail-node-ignore-badge"]').exists()).toBe(false)
+    expect(excluded.text()).toContain('本次不发')
+    wrapper.unmount()
+  })
   it('多选模式显示勾选状态并切换节点，不触发原来的单选导航', async () => {
     const layout = buildHorizontalLayout(['start', 'web-list', 'web-detail', 'end'], [], NODE_CONFIGS, [], { includeTerminals: false })
     const wrapper = mount(ProcessNodeRail, { props: { layout, selectedIds: ['web-list'], selectable: () => true } })

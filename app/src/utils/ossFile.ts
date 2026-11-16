@@ -55,6 +55,10 @@ function ossOrigin(): string {
 /**
  * 取文件字节流。
  *
+ * `cache: 'no-store'`（2026-11-15）：采集流水线会**就地重写**同一路径的 OSS 对象
+ *（例如 content.txt 先写正文、稍后再追加 `<WWFILE>` 附件行），任何一层缓存都会让用户看到半成品。
+ * 同类问题的另一半在调用方：预览弹窗必须 destroy-on-close，否则同一路径重开不会重新取数。
+ *
  * **必须不带凭据**：OSS 服务本身无鉴权，收到 sjcj 的会话 Cookie 反而返回 500
  * （2026-08-21 生产实测：带 Cookie 500、不带 201）。这也是不能把 URL 直接交给
  * 第三方预览组件的原因——组件内部自己发请求会带上 Cookie。
@@ -63,7 +67,7 @@ export async function fetchOssFile(
   path: string,
   onProgress?: (received: number, total: number) => void,
 ): Promise<ArrayBuffer> {
-  const res = await fetch(ossFileUrl(path), { credentials: 'omit' })
+  const res = await fetch(ossFileUrl(path), { credentials: 'omit', cache: 'no-store' })
   // OSS 成功时返回 201 Created 而不是 200，别只认 200
   if (!res.ok) throw new Error(`取文件失败（HTTP ${res.status}）`)
   if (!onProgress || !res.body) return res.arrayBuffer()
@@ -94,7 +98,7 @@ export async function fetchOssFile(
  * 若按整份下载，正常文章会被下两遍（探测一次、iframe 再一次）。
  */
 export async function fetchOssFileHead(path: string, maxBytes: number): Promise<ArrayBuffer> {
-  const res = await fetch(ossFileUrl(path), { credentials: 'omit' })
+  const res = await fetch(ossFileUrl(path), { credentials: 'omit', cache: 'no-store' })
   if (!res.ok) throw new Error(`取文件失败（HTTP ${res.status}）`)
   if (!res.body) return (await res.arrayBuffer()).slice(0, maxBytes)
   const reader = res.body.getReader()

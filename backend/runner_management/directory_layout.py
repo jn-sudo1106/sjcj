@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from .package_limits import MAX_CODE_BYTES, MAX_CODE_FILES, MAX_LAYOUT_NODES, MAX_REPOSITORY_FILES
 
 
 def safe_path(value: str, *, template: bool = False) -> str:
@@ -44,8 +45,8 @@ def git_files(app, repo, commit: str) -> dict[str, tuple[str, int]]:
         mode, kind, _, size = info.decode('ascii').split()
         path = name.decode('utf-8')
         files[path] = (mode if kind == 'blob' else 'submodule', int(size) if size != '-' else 0)
-    if len(files) > 5000:
-        raise ApiError("仓库超过 5000 个文件，请使用专用代码仓库", 413)
+    if len(files) > MAX_REPOSITORY_FILES:
+        raise ApiError(f"仓库超过 {MAX_REPOSITORY_FILES} 个文件，请使用专用代码仓库", 413)
     return files
 
 
@@ -89,8 +90,8 @@ def normalize(app, code_id: str, payload: dict, db, *, standalone: bool = False)
     if entry and not entry.lower().endswith('.py'):
         raise ApiError("入口必须是 Python 文件")
     raw_nodes = payload.get('nodes')
-    if not isinstance(raw_nodes, list) or not (0 if standalone else 1) <= len(raw_nodes) <= 200:
-        raise ApiError("目录或文件不能超过 200 个" if standalone else "请配置 1 至 200 个目录或文件")
+    if not isinstance(raw_nodes, list) or not (0 if standalone else 1) <= len(raw_nodes) <= MAX_LAYOUT_NODES:
+        raise ApiError(f"目录或文件不能超过 {MAX_LAYOUT_NODES} 个" if standalone else f"请配置 1 至 {MAX_LAYOUT_NODES} 个目录或文件")
     nodes, ids = [], set()
     for raw in raw_nodes:
         if not isinstance(raw, dict):
@@ -462,8 +463,8 @@ def snapshot_files(app, layout: dict, db) -> tuple[dict, list, list]:
             if target.casefold() in {p.casefold() for p in files}:
                 raise ApiError(f"多个仓库代码映射到相同位置：{target}", 409)
             total_size += size
-            if total_size > 10 * 1024 * 1024 or len(files) >= 2000:
-                raise ApiError("代码包超过 10 MB 或 2000 个文件", 413)
+            if total_size > MAX_CODE_BYTES or len(files) >= MAX_CODE_FILES:
+                raise ApiError(f"代码包超过 {MAX_CODE_BYTES // 1024 // 1024} MB 或 {MAX_CODE_FILES} 个文件", 413)
             result = subprocess.run(['git', 'show', f"{node['gitCommit']}:{name}"], cwd=Path(repo['local_path']),
                                     capture_output=True, timeout=20, check=False)
             if result.returncode:

@@ -558,8 +558,8 @@ function stateMeta(s?: string) {
       <table class="dg-table dg-sticky-table">
         <thead>
           <tr>
-            <th v-if="showSelectCol" class="dg-sticky-head" style="width:36px" @click.stop>
-              <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
+            <th v-if="showSelectCol" class="dg-sticky-head dg-select-head" style="width:36px" @click.stop>
+              <input type="checkbox" aria-label="选择本页数据" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
             <th
               v-if="showSourceCol"
@@ -610,7 +610,7 @@ function stateMeta(s?: string) {
         <tbody>
           <tr v-for="r in rows" :key="r.dataId" :class="{ active: selectedId === r.dataId }" @click="emit('row-click', r)">
             <td v-if="showSelectCol" class="dg-select" @click.stop>
-              <input type="checkbox" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
+              <input type="checkbox" :aria-label="`选择数据 ${r.dataId}`" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
             </td>
             <td
               v-if="showSourceCol"
@@ -858,7 +858,10 @@ function stateMeta(s?: string) {
 .dg-empty, .dg-empty-cell { padding: 24px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 .dg-th-action { width: 100px; min-width: 100px; text-align: center; }
 .dg-actions { padding: 4px 6px; text-align: center; white-space: nowrap; }
-.dg-select { color: var(--rc-primary); }
+.dg-table .dg-select, .dg-table .dg-select-head { position: sticky; left: 0; z-index: 1; min-width: 36px; color: var(--rc-primary); background: #fff; box-shadow: 1px 0 0 var(--rc-border-soft); }
+.dg-table th.dg-select-head { z-index: 3; background: #f8fafc; }
+.dg-table tbody tr:hover .dg-select { background: #f8fbff; }
+.dg-table tbody tr.active .dg-select { background: #eff6ff; }
 .dg-select input, .dg-table th input[type="checkbox"] { cursor: pointer; }
 .dg-actions-cell {
   display: inline-flex;

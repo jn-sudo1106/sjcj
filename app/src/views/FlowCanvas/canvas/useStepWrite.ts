@@ -358,10 +358,28 @@ export function useStepWrite() {
   async function persistNodeName(nodeId: string, name: string): Promise<void> {
     const trimmed = name.trim()
     if (!trimmed) throw new Error('节点名称不能为空')
-    // 0925：流程根节点名称由流程生命周期（cs_flow）管理，不能通过步骤接口改（后端校验
-    // type/sourceId/lastStep 合规），画布也不改，避免"画布改了、库里没动"的误导。
+    // 根节点（isRoot=1 真实根行）改名走 ROOT 最小集，不走普通整包（会撞 validateRootUpdate）。
+    // 2026-11-15 186 实测推翻 0925 的「只能到流程管理改」：saveFlow 改流程名根本不会同步根节点
+    // 名称；根行 name 要在流程草稿里用 ROOT 分支单独改，且不影响流程名。
     if (isRootStepStepId(nodeId)) {
-      ElMessage.warning('流程根节点名称由「流程管理」维护，请到流程管理中修改')
+      const snapshot = sourceStore.stepSnapshots[nodeId]
+      if (trimmed === (snapshot?.name ?? flow.configs[nodeId]?.title ?? '')) {
+        flow.setTitle(nodeId, trimmed)
+        ElMessage.success('节点名称已保存')
+        return
+      }
+      const rootFlowId = validFlowIdOf(snapshot?.flowId) || flowIdOf()
+      const prev = flow.configs[nodeId]?.title ?? ''
+      flow.setTitle(nodeId, trimmed)
+      try {
+        const ack = await version.withDraft(rootFlowId, (ref) => itemApi.rootNameUpdate(nodeId, trimmed, rootFlowId, ref))
+        assertOk(ack, '修改根节点名称失败')
+      } catch (e) {
+        flow.setTitle(nodeId, prev)
+        throw e
+      }
+      if (snapshot) sourceStore.rememberSteps([{ ...snapshot, name: trimmed }], 'merge')
+      ElMessage.success('节点名称已保存')
       return
     }
     if (!isWritableStepId(nodeId)) {

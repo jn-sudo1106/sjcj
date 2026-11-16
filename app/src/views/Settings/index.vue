@@ -32,7 +32,7 @@ const fallbackTabs = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', order: 1 },
   { key: 'category', label: '分类目录', permission: 'settings:category', order: 2 },
   { key: 'code-servers', label: '智能体资源', permission: 'settings:nodeType', order: 3 },
-  { key: 'runners', label: '服务器', permission: 'settings:runners', order: 4 },
+  { key: 'runners', label: '部署资源', permission: 'settings:runners', order: 4 },
   { key: 'processors', label: '处理机', permission: 'settings:assignments', order: 5 },
   { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', order: 6 },
   { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', order: 7 },
@@ -105,7 +105,7 @@ const SELF_FRAMED_TABS = new Set(['node-type', 'runners', 'code-repos'])
         type="button"
         @click="selectTab(t.key)"
       >
-        {{ t.key === 'code-servers' ? '智能体资源' : t.label }}
+        {{ t.key === 'code-servers' ? '智能体资源' : t.key === 'runners' ? '部署资源' : t.label }}
       </button>
     </div>
     <div class="st-content" :class="{ 'is-framed': activeTab && !SELF_FRAMED_TABS.has(activeTab.key) }">

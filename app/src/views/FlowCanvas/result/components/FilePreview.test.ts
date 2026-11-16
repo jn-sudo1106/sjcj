@@ -383,3 +383,41 @@ describe('FilePreview · TXT / HTML 切换（0920-02）', () => {
   })
 })
 
+
+// 2026-11-15 线上 217（源 430016304 / 行 5066418）：流水线先写 content.txt 正文、稍后才追加 <WWFILE> 行。
+// 用户先打开看到半成品，查询几次再打开同一行仍是旧正文——弹窗复用同一个 FilePreview，路径没变就不重取。
+// 调用方的预览弹窗必须 destroy-on-close：关掉再开 = 重新挂载 = 重新取数。
+describe('FilePreview · 同一行关掉再打开要重新取数', () => {
+  it('el-dialog destroy-on-close 下重开同一路径会再取一次，拿到最新正文', async () => {
+    const { defineComponent, h, ref, nextTick } = await import('vue')
+    const { ElDialog } = await import('element-plus')
+    const fetchOss = vi.spyOn(ossFile, 'fetchOssFile')
+      .mockResolvedValueOnce(bufOf('正文'))
+      .mockResolvedValueOnce(bufOf('正文\n<WWFILE>https://x/a.pdf<\\WWFILE>'))
+    const visible = ref(true)
+    const Host = defineComponent({
+      setup: () => () => h(
+        // 与 ResultView / SiteDataView / DataQueryTab 的预览弹窗同配置
+        ElDialog,
+        { modelValue: visible.value, 'onUpdate:modelValue': (v: boolean) => { visible.value = v }, destroyOnClose: true, appendToBody: false },
+        () => h(FilePreview, { path: '/qinlong/dds/x/content.txt', name: 'content.txt' }),
+      ),
+    })
+    const wrapper = mount(Host, { attachTo: document.body, global: { stubs: { transition: false } } })
+    await flushPromises()
+    const textEl = () => document.body.querySelector('[data-testid="file-preview-text"]')?.textContent ?? ''
+    expect(textEl()).toContain('正文')
+    expect(textEl()).not.toContain('WWFILE')
+
+    visible.value = false
+    await nextTick(); await flushPromises()
+    // el-dialog 关闭动画结束（afterLeave）才销毁内容；jsdom 无动画，手动等一拍
+    await new Promise((r) => setTimeout(r, 400)); await flushPromises()
+    visible.value = true
+    await nextTick(); await flushPromises()
+
+    expect(fetchOss).toHaveBeenCalledTimes(2)
+    expect(textEl()).toContain('WWFILE')
+    wrapper.unmount()
+  })
+})

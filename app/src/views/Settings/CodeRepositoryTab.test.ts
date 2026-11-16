@@ -9,7 +9,7 @@ import CodeRepositoryTab from './CodeRepositoryTab.vue'
 
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   codeRepositories: vi.fn(), createCodeRepository: vi.fn(), updateCodeRepository: vi.fn(),
-  moveCodeRepository: vi.fn(), setDefaultCodeRepository: vi.fn(), verifyCodeRepository: vi.fn(), uploadCodeRepositoryFiles: vi.fn(), createCodeRepositoryFolder: vi.fn(),
+  moveCodeRepository: vi.fn(), setDefaultCodeRepository: vi.fn(), verifyCodeRepository: vi.fn(), syncCodeRepository: vi.fn(), uploadCodeRepositoryFiles: vi.fn(), createCodeRepositoryFolder: vi.fn(),
   codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(), deleteCodeRepositoryFile: vi.fn(),
   codeRepositoryDirectories: vi.fn(), saveCodeRepositoryDirectory: vi.fn(), removeCodeRepositoryDirectory: vi.fn(),
   codeRepositoryFileReferences: vi.fn(),
@@ -50,6 +50,28 @@ async function mountTab() {
   await flushPromises()
   return wrapper
 }
+it('同步远端后保留当前目录并刷新文件；未配置远端不能同步', async () => {
+  const wrapper = await mountTab()
+  expect(wrapper.get('[data-testid="code-repo-sync-repo-default"]').attributes('disabled')).toBeDefined()
+  await wrapper.get('[data-testid="code-repo-repo-web"]').trigger('click'); await flushPromises()
+  vi.mocked(runnerManagementApi.syncCodeRepository).mockResolvedValue({ repoId: web.repoId, branch: 'main', changed: true, mode: 'fast-forward', receivedCommits: 2, gitCommit: 'a'.repeat(40), message: '已同步远端 main，合入 2 个提交' })
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockClear()
+  await wrapper.get('[data-testid="code-repo-sync-repo-web"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.syncCodeRepository).toHaveBeenCalledWith(web.repoId)
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith(web.repoId, '', 1, undefined, '', 'updated-desc')
+  expect(wrapper.get('[data-testid="code-repo-sync-result-repo-web"]').text()).toContain('合入 2 个提交')
+  wrapper.unmount()
+})
+it('同步冲突显示具体文件，保留当前文件列表', async () => {
+  vi.mocked(runnerManagementApi.syncCodeRepository).mockRejectedValue(new Error('存在冲突：newslink.py'))
+  const wrapper = await mountTab()
+  await wrapper.get('[data-testid="code-repo-repo-web"]').trigger('click'); await flushPromises()
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockClear()
+  await wrapper.get('[data-testid="code-repo-sync-repo-web"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-sync-result-repo-web"]').text()).toContain('存在冲突：newslink.py')
+  expect(runnerManagementApi.codeRepositoryFiles).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
 it('在当前文件夹新建目录，上传目标也保持当前文件夹', async () => {
   vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default',
     total: 1, page: 1, pageSize: 50, items: [{ path: 'links/1401218', kind: 'directory', size: null, managed: false, canDelete: false, gitUrl: '' }] })
