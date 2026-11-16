@@ -66,6 +66,7 @@ export interface ChatMessage {
     completed: boolean
     durationMs: number
     steps: string[]
+    text?: string
   }
   sql?: {
     code: string
@@ -203,15 +204,37 @@ export async function streamAgentChat(
 
         // OpenAI 兼容 choices 结构: { choices: [{ delta: { content, reasoning_content } }] }
         if (Array.isArray(payload.choices) && payload.choices.length > 0) {
-          const delta = payload.choices[0]?.delta
+          const choice = payload.choices[0]
+          const delta = choice?.delta || choice?.message
           if (delta) {
-            if (delta.reasoning_content) {
-              onEvent({ type: 'reasoning', reasoning: String(delta.reasoning_content) })
+            const reasoning = delta.reasoning_content ?? delta.reasoning ?? delta.thought
+            if (reasoning) {
+              onEvent({ type: 'reasoning', reasoning: String(reasoning) })
             }
-            if (delta.content) {
-              onEvent({ type: 'chunk', text: String(delta.content) })
+            let text = ''
+            if (typeof delta.content === 'string') {
+              text = delta.content
+            } else if (Array.isArray(delta.content)) {
+              text = delta.content
+                .map((item: unknown) =>
+                  typeof item === 'string'
+                    ? item
+                    : (item as { text?: string })?.text || ''
+                )
+                .join('')
+            } else if (typeof delta.text === 'string') {
+              text = delta.text
+            }
+            if (text) {
+              onEvent({ type: 'chunk', text })
             }
           }
+          return
+        }
+
+        const topReasoning = payload.reasoning_content ?? payload.reasoning
+        if (typeof topReasoning === 'string') {
+          onEvent({ type: 'reasoning', reasoning: topReasoning })
           return
         }
 
