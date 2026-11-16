@@ -59,9 +59,19 @@ const starterPrompts: StarterPrompt[] = [
   },
 ]
 
+interface Props {
+  initialSessions?: AiSessionItem[]
+  initialMessages?: Record<string, ChatMessage[]>
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  initialSessions: () => [],
+  initialMessages: () => ({}),
+})
+
 // 会话列表与当前活动会话（'new' 代表进入新建会话页面）
 const sessions = ref<AiSessionItem[]>([])
-const activeSessionId = ref<string>('s1')
+const activeSessionId = ref<string>('new')
 const searchSessionKeyword = ref<string>('')
 
 // 输入框与发送参数
@@ -215,345 +225,8 @@ const clarifySessionId = ref<string>('s1')
 const clarifyRound = ref<number>(1)
 const clarifyCardKey = ref<number>(0)
 
-// 静态会话消息库
-const sessionMessages = ref<Record<string, ChatMessage[]>>({
-  s1: [
-    {
-      id: 'm1-1',
-      role: 'user',
-      content: '帮我排查一下最近的异常任务数据。',
-      createdAt: '今天 15:35',
-    },
-    {
-      id: 'm1-2',
-      role: 'assistant',
-      content:
-        '👋 收到您的排查诉求：由于采集平台的「异常任务」涵盖不同故障阶段与业务口径，为了给您生成最准确的 SQL 与分析结论，请选择本次排查涉及的表（可多选）：',
-      createdAt: '今天 15:35',
-      clarification: {
-        kind: 'table_choice',
-        reason: 'TOO_MANY',
-        question: '「异常任务」可能落在多张表里，请选择本次要排查的范围（可多选）：',
-        allowFreeText: true,
-        maxSelect: 5,
-        options: [
-          {
-            entryTypeId: 101,
-            tableName: 'ck_source_log',
-            typeName: '抓取网络层异常',
-            hint: 'HTTP 403 被封锁、504 超时、SSL 握手失败等网络拦截',
-          },
-          {
-            entryTypeId: 102,
-            tableName: 'ck_clean_error',
-            typeName: '规则清洗异常',
-            hint: '网页改版导致 XPath 失效、字段提取为空、正则未命中',
-          },
-          {
-            entryTypeId: 103,
-            tableName: 'sys_runner_task',
-            typeName: '调度队列积压',
-            hint: 'Runner 执行器离线、任务排队超时被系统强制取消',
-          },
-        ],
-      },
-      thinking: {
-        completed: true,
-        durationMs: 1100,
-        steps: [
-          '采纳用户澄清口径：抓取网络层异常，聚合时段 = NOW() - INTERVAL 7 DAY',
-          '定位数据表：ck_source_log (记录失败原因)，关联 sys_site 提取站点名称',
-          'SQL 审查通过，执行耗时 82ms，扫描 32,450 行数据。',
-        ],
-      },
-      sql: {
-        code: `SELECT 
-    s.site_name AS "网站名称",
-    COUNT(l.log_id) AS "总采集任务数",
-    SUM(CASE WHEN l.status = 1 THEN 1 ELSE 0 END) AS "成功数",
-    ROUND(SUM(CASE WHEN l.status = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(l.log_id), 2) AS "采集成功率(%)"
-FROM ck_source_log l
-LEFT JOIN sys_site s ON l.site_id = s.site_id
-WHERE l.create_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-GROUP BY s.site_id, s.site_name
-ORDER BY "采集成功率(%)" ASC
-LIMIT 10;`,
-        execTimeMs: 82,
-        scanRows: 32450,
-      },
-      kpis: [
-        { label: '7天平均成功率', value: '97.45%', subtext: '↑ 较上周提升 +1.2%', type: 'success' },
-        { label: '总采集样本量', value: '142,580 次', subtext: '覆盖全站 26 个源', type: 'normal' },
-        { label: '网络异常最多网站', value: '行业资讯网', subtext: '成功率仅 68.20% (失败 412 次)', type: 'danger' },
-      ],
-      chartData: {
-        title: '📊 网络层失败率最高 TOP 3 网站对比',
-        pieTitle: '🥧 异常任务网络故障成因占比分布',
-        bars: [
-          { label: '1. 行业资讯网 (主要报错: HTTP 403 触发 IP 防火墙)', value: 68.2, displayValue: '68.20%', color: 'red' },
-          { label: '2. 地方科技信息通报 (主要报错: Read timed out 响应超时)', value: 81.5, displayValue: '81.50%', color: 'orange' },
-          { label: '3. 某商业招标采购网 (主要报错: Connection reset 连接重置)', value: 87.3, displayValue: '87.30%', color: 'orange' },
-        ],
-        slices: [
-          { label: '行业资讯网 (403阻断)', value: 412, displayValue: '412 次 (32.8%)', color: '#dc2626', tone: 'err' },
-          { label: '某商业招标采购网 (连接重置)', value: 447, displayValue: '447 次 (35.6%)', color: '#ea580c', tone: 'orange' },
-          { label: '地方科技信息通报 (响应超时)', value: 396, displayValue: '396 次 (31.6%)', color: '#f59e0b', tone: 'amber' },
-        ],
-        tableColumns: [
-          { prop: 'siteName', label: '网站名称' },
-          { prop: 'total', label: '总任务数' },
-          { prop: 'success', label: '成功数' },
-          { prop: 'fail', label: '失败数' },
-          { prop: 'reason', label: '主要异常码' },
-        ],
-        tableRows: [
-          { siteName: '行业资讯网', total: '1,296', success: '884', fail: '412', reason: 'HTTP 403 Forbidden' },
-          { siteName: '地方科技信息通报', total: '2,140', success: '1,744', fail: '396', reason: 'SocketTimeoutException' },
-          { siteName: '某商业招标采购网', total: '3,520', success: '3,073', fail: '447', reason: 'ConnectionReset' },
-        ],
-      },
-      insights: [
-        '针对 行业资讯网：集中在每日上午 09:00~11:00 触发 403，建议启用动态隧道代理并设置随机延时（3~8秒）；',
-        '针对 地方科技信息通报：超时集中在详情页长文本抓取，建议将超时阈值从 15s 调宽至 30s。',
-      ],
-      suggestions: [
-        '帮我把上面失败率最高的前3个网站的数据导出为CSV表格',
-        '给成功率低于85%的网站自动生成告警规则配置',
-      ],
-    },
-  ],
-  s2: [
-    {
-      id: 'm2-1',
-      role: 'user',
-      content: '统计各网站近 3 天平均抓取耗时与并发量分布情况',
-      createdAt: '3天前 11:15',
-    },
-    {
-      id: 'm2-2',
-      role: 'assistant',
-      content: '已完成各网站响应延时、并发 Worker 负载与 P95/P99 耗时计算：',
-      createdAt: '3天前 11:15',
-      thinking: {
-        completed: true,
-        durationMs: 780,
-        steps: [
-          '计算近 3 天日志表 ck_source_log 的响应耗时指标：AVG、P95',
-          '按站点维度聚合统计，并关联调度集群统计实时运行 Worker 数',
-          '标记耗时超过 15 秒的慢请求站点',
-        ],
-      },
-      sql: {
-        code: `SELECT 
-    s.site_name AS "站点名称",
-    ROUND(AVG(l.cost_time_ms), 1) AS "平均耗时(ms)",
-    ROUND(quantile(0.95)(l.cost_time_ms), 1) AS "P95耗时(ms)",
-    MAX(l.cost_time_ms) AS "最大耗时(ms)"
-FROM ck_source_log l
-JOIN sys_site s ON l.site_id = s.site_id
-WHERE l.create_time >= DATE_SUB(NOW(), INTERVAL 3 DAY)
-GROUP BY s.site_name
-ORDER BY "平均耗时(ms)" DESC
-LIMIT 10;`,
-        execTimeMs: 112,
-        scanRows: 48900,
-      },
-      kpis: [
-        { label: '全网平均响应耗时', value: '1,420 ms', subtext: '处于正常响应区间', type: 'success' },
-        { label: '最慢响应站点', value: '科技政策公开网', subtext: '平均耗时 18.6 秒', type: 'danger' },
-        { label: '峰值并发 Worker 数', value: '64 节点', subtext: '集群资源利用率 72%', type: 'normal' },
-      ],
-      chartData: {
-        title: '📊 响应耗时最长 TOP 3 网站对比',
-        pieTitle: '🥧 慢请求站点耗时与超时重试占比',
-        bars: [
-          { label: '1. 科技政策公开网 (平均 18.6s)', value: 92, displayValue: '18,600 ms', color: 'red' },
-          { label: '2. 产经统计公报网 (平均 12.4s)', value: 68, displayValue: '12,400 ms', color: 'orange' },
-          { label: '3. 地方企业信用公示 (平均 8.1s)', value: 45, displayValue: '8,100 ms', color: 'orange' },
-        ],
-        slices: [
-          { label: '科技政策公开网 (>15s)', value: 190, displayValue: '190 次 (44.2%)', color: '#dc2626', tone: 'err' },
-          { label: '产经统计公报网 (JS延迟)', value: 120, displayValue: '120 次 (27.9%)', color: '#ea580c', tone: 'orange' },
-          { label: '地方企业信用公示 (验证码)', value: 120, displayValue: '120 次 (27.9%)', color: '#f59e0b', tone: 'amber' },
-        ],
-        tableColumns: [
-          { prop: 'siteName', label: '网站名称' },
-          { prop: 'total', label: '总请求量' },
-          { prop: 'success', label: '正常响应' },
-          { prop: 'fail', label: '超时重试' },
-          { prop: 'reason', label: '延迟成因' },
-        ],
-        tableRows: [
-          { siteName: '科技政策公开网', total: '3,200', success: '3,010', fail: '190', reason: '页面加载过大(超15MB)' },
-          { siteName: '产经统计公报网', total: '4,100', success: '3,980', fail: '120', reason: '动态JS渲染迟缓' },
-          { siteName: '地方企业信用公示', total: '2,900', success: '2,810', fail: '90', reason: '验证码加载延迟' },
-        ],
-      },
-      insights: [
-        '慢响应主要由于目标站点采用了无分页的超大 HTML 页面返回，建议开启按需流式解析模式；',
-        '建议针对耗时大于 15s 的站点调整单任务超时阈值，避免占用过多 Worker 连接。',
-      ],
-      suggestions: [
-        '将科技政策公开网抓取超时时间调整为 30s',
-        '启用 Headless 浏览器资源加载拦截规则',
-      ],
-    },
-  ],
-  s3: [
-    {
-      id: 'm3-1',
-      role: 'user',
-      content: '分析昨日异常抓取任务 TOP 10 网站分布及主要错误类型',
-      createdAt: '昨天 17:20',
-    },
-    {
-      id: 'm3-2',
-      role: 'assistant',
-      content: '已为您提取昨日全站采集异常日志，完成错误分类聚合与排序下钻：',
-      createdAt: '昨天 17:20',
-      thinking: {
-        completed: true,
-        durationMs: 850,
-        steps: [
-          '时间范围对齐：昨日 00:00:00 至 23:59:59',
-          '按 site_name 聚合失败日志，统计各站点主要错误码分布',
-          '过滤心跳探测任务，按失败数降序取 TOP 10 异常站点',
-        ],
-      },
-      sql: {
-        code: `SELECT 
-    s.site_name AS "站点名称",
-    COUNT(l.log_id) AS "失败总次数",
-    l.err_code AS "主要报错原因",
-    ROUND(COUNT(l.log_id) * 100.0 / SUM(COUNT(l.log_id)) OVER(), 2) AS "全站占比(%)"
-FROM ck_source_log l
-JOIN sys_site s ON l.site_id = s.site_id
-WHERE l.status = 0 AND l.create_time >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)
-GROUP BY s.site_name, l.err_code
-ORDER BY "失败总次数" DESC
-LIMIT 10;`,
-        execTimeMs: 65,
-        scanRows: 18200,
-      },
-      kpis: [
-        { label: '昨日抓取失败总量', value: '3,428 次', subtext: '全站失败率 2.4%', type: 'danger' },
-        { label: '高频异常站点数', value: '10 个', subtext: '覆盖财经资讯与招标公示', type: 'normal' },
-        { label: '首要故障原因', value: 'HTTP 403 阻断', subtext: '单日触发 1,980 次 (57.7%)', type: 'danger' },
-      ],
-      chartData: {
-        title: '📊 昨日异常抓取任务 TOP 3 网站失败量对比',
-        pieTitle: '🥧 昨日主要故障原因与失败量占比',
-        bars: [
-          { label: '1. 宏观商业智库 (HTTP 403 反爬拦截)', value: 890, displayValue: '890 次', color: 'red' },
-          { label: '2. 地方招投标公示台 (Gateway 504 超时)', value: 654, displayValue: '654 次', color: 'orange' },
-          { label: '3. 医药信息技术网 (SSL 握手拒绝)', value: 432, displayValue: '432 次', color: 'orange' },
-        ],
-        slices: [
-          { label: '宏观商业智库 (403反爬)', value: 890, displayValue: '890 次 (45.0%)', color: '#dc2626', tone: 'err' },
-          { label: '地方招投标公示台 (504超时)', value: 654, displayValue: '654 次 (33.1%)', color: '#ea580c', tone: 'orange' },
-          { label: '医药信息技术网 (SSL拒绝)', value: 432, displayValue: '432 次 (21.9%)', color: '#f59e0b', tone: 'amber' },
-        ],
-        tableColumns: [
-          { prop: 'siteName', label: '网站名称' },
-          { prop: 'total', label: '总任务数' },
-          { prop: 'success', label: '成功数' },
-          { prop: 'fail', label: '失败数' },
-          { prop: 'reason', label: '主要异常码' },
-        ],
-        tableRows: [
-          { siteName: '宏观商业智库', total: '1,200', success: '310', fail: '890', reason: 'HTTP 403 Forbidden' },
-          { siteName: '地方招投标公示台', total: '1,500', success: '846', fail: '654', reason: 'Gateway Timeout (504)' },
-          { siteName: '医药信息技术网', total: '800', success: '368', fail: '432', reason: 'SSL Handshake Failed' },
-        ],
-      },
-      insights: [
-        '昨日异常主要集中于 08:30~10:00 早高峰期，「宏观商业智库」开启了严格 IP 频控，建议调配商业高匿代理池；',
-        '「地方招投标公示台」由于详情页并发下载过载导致 504，建议限制单站点并发 Worker 数为 2。',
-      ],
-      suggestions: [
-        '一键将宏观商业智库切换为专属代理通道',
-        '为地方招投标公示台调整任务并发上限至 2',
-      ],
-    },
-  ],
-  s4: [
-    {
-      id: 'm4-1',
-      role: 'user',
-      content: '查看清洗规则命中率与 XPath 提取失败率报表',
-      createdAt: '5天前 09:30',
-    },
-    {
-      id: 'm4-2',
-      role: 'assistant',
-      content: '已为您汇总清洗规则执行记录与字段提取质量审计结果：',
-      createdAt: '5天前 09:30',
-      thinking: {
-        completed: true,
-        durationMs: 760,
-        steps: [
-          '扫描清洗日志表 ck_clean_error 与规则执行明细',
-          '计算字段级命中率 = (总提取数 - 字段为空数) / 总提取数',
-          '按照规则模板维度聚合展示提取质量',
-        ],
-      },
-      sql: {
-        code: `SELECT 
-    r.rule_name AS "规则名称",
-    COUNT(c.clean_id) AS "清洗总次数",
-    SUM(CASE WHEN c.field_val IS NOT NULL AND c.field_val != '' THEN 1 ELSE 0 END) AS "有效提取数",
-    ROUND(SUM(CASE WHEN c.field_val IS NOT NULL AND c.field_val != '' THEN 1 ELSE 0 END) * 100.0 / COUNT(c.clean_id), 2) AS "规则命中率(%)"
-FROM sys_clean_log c
-JOIN sys_rule r ON c.rule_id = r.rule_id
-WHERE c.create_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-GROUP BY r.rule_name
-ORDER BY "规则命中率(%)" ASC
-LIMIT 10;`,
-        execTimeMs: 76,
-        scanRows: 24100,
-      },
-      kpis: [
-        { label: '规则总体命中率', value: '98.20%', subtext: '较昨日持平', type: 'success' },
-        { label: '清洗空值异常数', value: '182 条', subtext: '主要影响作者与发布时间字段', type: 'danger' },
-        { label: '涉及改版模板数', value: '2 个', subtext: '建议进入规则中心核验 XPath', type: 'normal' },
-      ],
-      chartData: {
-        title: '📊 提取命中率较低的规则 TOP 3 对比',
-        pieTitle: '🥧 清洗空值异常成因分布占比',
-        bars: [
-          { label: '1. 财经新闻正文抽取 (命中率 84.5%)', value: 84.5, displayValue: '84.50%', color: 'orange' },
-          { label: '2. 标讯发布时间解析 (命中率 88.2%)', value: 88.2, displayValue: '88.20%', color: 'orange' },
-          { label: '3. 附件下载链接抽取 (命中率 96.0%)', value: 96.0, displayValue: '96.00%', color: 'green' },
-        ],
-        slices: [
-          { label: 'DOM 结构变更/class改名', value: 868, displayValue: '868 条 (58.4%)', color: '#dc2626', tone: 'err' },
-          { label: '日期格式变更包含周几', value: 449, displayValue: '449 条 (30.2%)', color: '#ea580c', tone: 'orange' },
-          { label: '详情页无附件标签', value: 168, displayValue: '168 条 (11.4%)', color: '#16a34a', tone: 'ok' },
-        ],
-        tableColumns: [
-          { prop: 'siteName', label: '规则/模板名称' },
-          { prop: 'total', label: '总执行数' },
-          { prop: 'success', label: '有效提取' },
-          { prop: 'fail', label: '空值异常' },
-          { prop: 'reason', label: '失效成因' },
-        ],
-        tableRows: [
-          { siteName: '财经新闻正文抽取', total: '5,600', success: '4,732', fail: '868', reason: 'DOM 结构变更，class 改名' },
-          { siteName: '标讯发布时间解析', total: '3,800', success: '3,351', fail: '449', reason: '日期格式变更包含周几' },
-          { siteName: '附件下载链接抽取', total: '4,200', success: '4,032', fail: '168', reason: '部分详情页无附件标签' },
-        ],
-      },
-      insights: [
-        '「财经新闻正文抽取」模板由于目标网站上周升级为单页前端应用导致特定类名消失，建议使用通用正文提取算法；',
-        '「标讯发布时间解析」建议增加对「2026年11月10日 星期二」格式的兼容正则。',
-      ],
-      suggestions: [
-        '一键跳转到规则资产配置页面修正 XPath',
-        '重跑近 24 小时清洗失败的数据记录',
-      ],
-    },
-  ],
-})
+// 会话消息库（由用户交互动态生成并按会话 ID 隔离，支持 props 注入测试消息）
+const sessionMessages = ref<Record<string, ChatMessage[]>>({ ...props.initialMessages })
 
 // 当前会话的消息列表
 const currentMessages = computed(() => {
@@ -588,10 +261,16 @@ const weekSessions = computed(() =>
 )
 
 onMounted(async () => {
-  const res = await listAiSessions()
-  sessions.value = [...res]
+  if (props.initialSessions && props.initialSessions.length > 0) {
+    sessions.value = [...props.initialSessions]
+  } else {
+    const res = await listAiSessions()
+    sessions.value = [...res]
+  }
   if (sessions.value.length > 0) {
-    activeSessionId.value = 's1'
+    activeSessionId.value = sessions.value[0].id
+  } else {
+    activeSessionId.value = 'new'
   }
 })
 
@@ -823,6 +502,7 @@ async function handleSend(customTitle?: string) {
     await streamAgentChat(
       {
         msg: content,
+        thread_id: targetSessionId,
         signal: abortCtrl.signal,
       },
       (event) => {
@@ -1106,7 +786,7 @@ function handleKeyDown(e: KeyboardEvent) {
               <ClarificationCard
                 v-if="msg.clarification"
                 :key="clarifyCardKey"
-                :clarification="currentClarification"
+                :clarification="msg.clarification || currentClarification"
                 :confirmed="clarifyConfirmed"
                 @confirm="handleConfirmClarify"
               />

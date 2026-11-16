@@ -101,13 +101,7 @@ export async function listAiSessions(): Promise<AiSessionItem[]> {
   try {
     return await request<AiSessionItem[]>(EP.sessions, {}, { method: 'GET' })
   } catch {
-    // 降级兜底预置会话
-    return [
-      { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' },
-      { id: 's2', title: '昨日异常抓取任务TOP10分析', updatedAt: '2小时前', group: 'today' },
-      { id: 's3', title: '各网站抓取平均耗时与并发量', updatedAt: '3天前', group: 'week' },
-      { id: 's4', title: '字段清洗规则命中率统计报表', updatedAt: '5天前', group: 'week' },
-    ]
+    return []
   }
 }
 
@@ -115,17 +109,14 @@ export async function listAiAgents(): Promise<AiAgentOption[]> {
   try {
     return await request<AiAgentOption[]>(EP.agents, {}, { method: 'GET' })
   } catch {
-    return [
-      { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '意图拆解、SQL取数与可视化图表生成', icon: 'Histogram' },
-      { id: 'sql-expert', name: 'Text-to-SQL 专家', desc: '精准只读 SQL 生成与优化建议', icon: 'Document' },
-      { id: 'monitor-advisor', name: '采集监控与诊断助手', desc: '抓取异常诊断与反爬建议', icon: 'Monitor' },
-    ]
+    return []
   }
 }
 
 /** 智能体问数流式调用入参 */
 export interface AgentChatParams {
   msg: string
+  thread_id?: string
   signal?: AbortSignal
 }
 
@@ -138,12 +129,16 @@ export type AgentChatEvent =
 
 /**
  * 智能体问数：对接后端 POST /api/poc/chat/agent
- * 后端 AgentService 接收 { msg } 并以 SSE (text/event-stream) 格式原样透传智能体流式响应。
+ * 后端 AgentService 接收 { msg, thread_id } 并以 SSE (text/event-stream) 格式原样透传智能体流式响应。
  */
 export async function streamAgentChat(
   params: AgentChatParams,
   onEvent: (event: AgentChatEvent) => void,
 ): Promise<void> {
+  const payload: Record<string, unknown> = { msg: params.msg }
+  if (params.thread_id) {
+    payload.thread_id = params.thread_id
+  }
   const response = await fetch('/api/poc/chat/agent', {
     method: 'POST',
     credentials: 'include',
@@ -151,7 +146,7 @@ export async function streamAgentChat(
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
     },
-    body: JSON.stringify({ msg: params.msg }),
+    body: JSON.stringify(payload),
     signal: params.signal,
   })
 

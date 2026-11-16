@@ -51,4 +51,4 @@ export const SYNC_PLATFORM_BACKEND_HOSTS = ['124.223.180.186', '115.227.21.133',
 export const POC_API_PREFIX = '/api/poc'
 
 /** /api/poc 默认目标：186 本地开发环境的 POC 服务（实测 2026-10-13 分页接口免鉴权可通）。 */
-export const DEFAULT_POC_PROXY_TARGET = 'http://124.223.180.186:9093'
+export const DEFAULT_POC_PROXY_TARGET = 'http://124.223.180.186:9999'

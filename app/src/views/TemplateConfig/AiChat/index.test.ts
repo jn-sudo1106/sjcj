@@ -26,12 +26,7 @@ vi.mock('@/utils/format/xlsxExport', async (importOriginal) => {
 })
 
 vi.mock('@/api/aiChat', () => ({
-  listAiSessions: vi.fn().mockImplementation(() =>
-    Promise.resolve([
-      { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' },
-      { id: 's2', title: '各网站抓取平均耗时与并发量', updatedAt: '3天前', group: 'week' },
-    ])
-  ),
+  listAiSessions: vi.fn().mockResolvedValue([]),
   listAiAgents: vi.fn().mockResolvedValue([
     { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
   ]),
@@ -42,8 +37,97 @@ vi.mock('@/api/aiChat', () => ({
   }),
 }))
 
-function mountView() {
+const mockSessions = [
+  { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' as const },
+  { id: 's2', title: '各网站抓取平均耗时与并发量', updatedAt: '3天前', group: 'week' as const },
+]
+
+const mockSessionMessages = {
+  s1: [
+    {
+      id: 'm1-1',
+      role: 'user' as const,
+      content: '帮我排查一下最近的异常任务数据。',
+      createdAt: '今天 15:35',
+    },
+    {
+      id: 'm1-2',
+      role: 'assistant' as const,
+      content: '收到排查诉求，请选择表：',
+      createdAt: '今天 15:35',
+      clarification: {
+        kind: 'table_choice' as const,
+        reason: 'TOO_MANY' as const,
+        question: '「异常任务」可能落在多张表里，请选择本次要排查的范围（可多选）：',
+        allowFreeText: true,
+        maxSelect: 5,
+        options: [
+          { entryTypeId: 101, tableName: 'ck_source_log', typeName: '抓取网络层异常', hint: 'HTTP 403' },
+          { entryTypeId: 102, tableName: 'ck_clean_error', typeName: '规则清洗异常', hint: 'XPath失效' },
+          { entryTypeId: 103, tableName: 'sys_runner_task', typeName: '调度队列积压', hint: '任务排队' },
+        ],
+      },
+      thinking: {
+        completed: true,
+        durationMs: 1100,
+        steps: ['定位数据表：ck_source_log'],
+      },
+      sql: {
+        code: 'SELECT site_name FROM ck_source_log LIMIT 10;',
+        execTimeMs: 82,
+        scanRows: 32450,
+      },
+      kpis: [
+        { label: '7天平均成功率', value: '97.45%', subtext: '正常', type: 'success' as const },
+      ],
+      chartData: {
+        title: '📊 网络层失败率最高 TOP 3 网站对比',
+        pieTitle: '🥧 异常任务网络故障成因占比分布',
+        bars: [
+          { label: '1. 行业资讯网', value: 68.2, displayValue: '68.20%', color: 'red' },
+        ],
+        slices: [
+          { label: '行业资讯网', value: 412, displayValue: '412 次', color: '#dc2626', tone: 'err' as const },
+        ],
+        tableColumns: [
+          { prop: 'siteName', label: '网站名称' },
+          { prop: 'total', label: '总任务数' },
+          { prop: 'success', label: '成功数' },
+          { prop: 'fail', label: '失败数' },
+          { prop: 'reason', label: '主要异常码' },
+        ],
+        tableRows: [
+          { siteName: '行业资讯网', total: '1,296', success: '884', fail: '412', reason: 'HTTP 403 Forbidden' },
+        ],
+      },
+      insights: ['建议启用动态隧道代理'],
+      suggestions: ['帮我把上面失败率最高的前3个网站的数据导出为CSV表格'],
+    },
+  ],
+  s2: [
+    {
+      id: 'm2-1',
+      role: 'user' as const,
+      content: '统计各网站近 3 天平均抓取耗时与并发量分布情况',
+      createdAt: '3天前 11:15',
+    },
+    {
+      id: 'm2-2',
+      role: 'assistant' as const,
+      content: '已完成各网站响应延时计算：',
+      createdAt: '3天前 11:15',
+    },
+  ],
+}
+
+function mountView(withMockData = true) {
   return mount(AiChatView, {
+    props: withMockData
+      ? {
+          initialSessions: mockSessions,
+          initialMessages: mockSessionMessages,
+        }
+      : {},
     global: {
       plugins: [ElementPlus],
     },
@@ -64,7 +148,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('正确渲染左侧会话历史、顶部智能体与中间对话流', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     expect(wrapper.find('.rc-aichat-brand').text()).toContain('AI 智能问数')
@@ -73,7 +157,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('多选表澄清卡片：选项来自候选，支持多选与取消', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     const options = wrapper.findAll('[data-testid^="clarification-option-"]')
@@ -92,7 +176,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('确认后锁定卡片、按 entryTypeId 回传并展开执行结果', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     expect(wrapper.find('.rc-confirmed-result').exists()).toBe(false)
@@ -106,13 +190,13 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(submitClarificationAnswer).toHaveBeenCalledWith(expect.objectContaining({
       selectedEntryTypeIds: [101, 102],
     }))
-    // 思考链里回显用户选中的表，而不是写死的演示文案
+    // 思考链里回显用户选中的表
     expect(wrapper.text()).toContain('抓取网络层异常')
   })
 
   it('回传失败时如实标注演示数据，不再提示“已完成”', async () => {
     vi.mocked(submitClarificationAnswer).mockRejectedValueOnce(new Error('[mock] 端点不在契约清单: ai/chat/clarification'))
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     await confirmWithTables(wrapper, [101])
@@ -120,12 +204,11 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(submitClarificationAnswer).toHaveBeenCalled()
     expect(wrapper.find('[data-testid="aichat-demo-badge"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="aichat-demo-badge"]').text()).toContain('问数网关未接通')
-    // 结果区照常展示，但卡片仍锁定为已采纳，不回到未确认状态
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
   })
 
   it('支持在趋势图表、占比饼图与明细数据表之间切换视图', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
@@ -174,11 +257,10 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('支持在明细数据表视图快捷导出 Excel 与 CSV', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
-    // 切换到明细表格视图
     const tableRadio = wrapper
       .findAll('.el-radio-button')
       .find((btn) => btn.text().includes('明细数据表'))
@@ -187,14 +269,12 @@ describe('AI 智能问数 · AiChatView', () => {
 
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
 
-    // 点击表格上方快捷「导出 Excel」按钮
     await wrapper.find('[data-testid="rc-table-export-excel"]').trigger('click')
     expect(downloadXlsx).toHaveBeenCalledTimes(1)
     const [xlsxFileName, xlsxRows] = vi.mocked(downloadXlsx).mock.calls[0]
     expect(xlsxFileName).toContain('20261111')
     expect(xlsxRows[0]).toEqual(['网站名称', '总任务数', '成功数', '失败数', '主要异常码'])
 
-    // 点击表格上方快捷「导出 CSV」按钮
     await wrapper.find('[data-testid="rc-table-export-csv"]').trigger('click')
     expect(downloadCsv).toHaveBeenCalledTimes(1)
     const [csvFileName, csvContent] = vi.mocked(downloadCsv).mock.calls[0]
@@ -203,7 +283,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('支持通过卡片顶部的导出下拉菜单导出 Excel 与 CSV', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
@@ -213,12 +293,10 @@ describe('AI 智能问数 · AiChatView', () => {
     const dropdown = wrapper.findComponent({ name: 'ElDropdown' })
     expect(dropdown.exists()).toBe(true)
 
-    // 触发 Excel 导出命令
     dropdown.vm.$emit('command', 'excel')
     await wrapper.vm.$nextTick()
     expect(downloadXlsx).toHaveBeenCalledTimes(1)
 
-    // 触发 CSV 导出命令
     dropdown.vm.$emit('command', 'csv')
     await wrapper.vm.$nextTick()
     expect(downloadCsv).toHaveBeenCalledTimes(1)
@@ -226,7 +304,7 @@ describe('AI 智能问数 · AiChatView', () => {
 
   it('输入包含导出的自然语言指令时，能识别意图并自动触发对应文件下载', async () => {
     vi.useFakeTimers()
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
@@ -246,7 +324,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语与推荐场景卡片', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     // 初始在 s1 会话中，不应存在新会话页面
@@ -263,12 +341,13 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
   })
 
-  it('在新建会话页面点击推荐卡片可发起新问数会话', async () => {
-    const wrapper = mountView()
+  it('生产无预置会话时，初始直接进入新建会话页面，点击推荐卡片发起真实流式问数', async () => {
+    const wrapper = mountView(false)
     await flushPromises()
 
-    await wrapper.find('.rc-newchat-btn').trigger('click')
-    await wrapper.vm.$nextTick()
+    // 生产无会话时，初始就是新建会话页面
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+    expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
 
     const starterCards = wrapper.findAll('.rc-starter-card')
     expect(starterCards.length).toBeGreaterThan(0)
@@ -284,7 +363,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('在左侧会话列表中点击不同会话可切换会话内容', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     // 初始渲染 s1
@@ -307,7 +386,7 @@ describe('AI 智能问数 · AiChatView', () => {
   })
 
   it('支持删除单条会话与清空所有会话', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(true)
     await flushPromises()
 
     const deleteBtns = wrapper.findAll('.rc-session-delete')
