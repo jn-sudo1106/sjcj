@@ -6,6 +6,9 @@ import ElementPlus, { ElMessage, ElMessageBox, ElPagination } from 'element-plus
 import SourceOverviewView from './SourceOverviewView.vue'
 import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
+import { clearSourceOutputCache } from '@/composables/useSourceOutput'
+import { blankSourceListViewState } from './sourceListViewState'
+import * as sourceDirs from '@/api/sourceDirs'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
@@ -20,6 +23,9 @@ beforeEach(() => {
   // 组件挂载时会拉源收藏（0924-08）。不 mock 的话真请求挂着不回，模块里"同一时刻只跑一次"
   // 的加载会一直复用这个挂起的 Promise，后面的用例拿不到自己 mock 的收藏
   vi.spyOn(favoriteApi, 'listIds').mockResolvedValue([])
+  // 1114「产出」列：每页行回来就会取输出表统计；默认没有输出表，需要的用例自己覆盖
+  clearSourceOutputCache()
+  vi.spyOn(sourceApi, 'queryStepDetail').mockResolvedValue([])
 })
 
 const source: Source = {
@@ -2244,6 +2250,10 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
     vi.spyOn(dataApi, 'tables').mockResolvedValue([{ tableId: 'TB_1', name: '财经主表' }] as never)
     // loadDirPath 有模块级缓存，用别的用例没碰过的目录 ID，免得读到别人的缓存路径
     vi.spyOn(sourceApi, 'categoryById').mockResolvedValue({ id: '9911041', name: '新闻', parentId: '0' } as never)
+    vi.spyOn(sourceApi, 'queryStepDetail').mockImplementation(async (id) => (id === '391000500' ? [
+      { entryTypeId: '6200023', entryTypeName: '源码表', tableName: 'tb_source_code', dataCount: 12, lastInsertAt: '2026-11-01 10:00:00', steps: [{ stepId: '1', stepName: '下载' }] },
+      { entryTypeId: '6200005', entryTypeName: '详情表', tableName: 'tb_csxxdt', dataCount: 5, lastInsertAt: '2026-10-30 04:11:00', steps: [{ stepId: '2', stepName: '解析' }] },
+    ] : []))
     const download = vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
     const wrapper = mount(SourceOverviewView, {
       props: {
@@ -2264,16 +2274,16 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
     const rows = await exportRows({})
     expect(rows[0]).toEqual([
       '源 ID', '源名称', '业务目录', '原始目录', '所属网站', '来源组', '默认流程', 'URL', '主表',
-      '标签', '数据量', '新入', '成功', '最近任务', '最近成功', '状态', '备注',
+      '标签', '数据量', '新入', '详情表', '详情最近入库', '最近任务', '最近成功', '状态', '备注',
     ])
     expect(rows[1]).toEqual([
       '391000500', '组内源', '财经 / 公告', '新闻', '公众号采集-测试', 'twitter1', '抓取流程 · 14010130',
       'https://a.example.com', '财经主表 · TB_1', '#财经、#重复', '12',
-      '2026-11-01 10:00:00', '2026-11-01 09:00:00', '2026-11-01 08:00:00', '2026-11-01 09:00:00', '正常', '备注 A',
+      '2026-11-01 10:00:00', '详情表（tb_csxxdt）', '2026-10-30 04:11:00', '2026-11-01 08:00:00', '2026-11-01 09:00:00', '正常', '备注 A',
     ])
     // 没关联网站 / 没入组 / 没默认流程 / 没主表 / 没目录 的兜底文案
     expect(rows[2]).toEqual([
-      '430024667', '独立源', '未归类', '—', '未关联', '未分组', '未设置默认流程', '', '', '', '', '', '', '', '', '异常', '',
+      '430024667', '独立源', '未归类', '—', '未关联', '未分组', '未设置默认流程', '', '', '', '', '', '', '无详情表', '', '', '异常', '',
     ])
   })
 
@@ -2296,5 +2306,248 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
     const head = rows[0] ?? []
     expect(head).toContain('配置 ID')
     expect(rows[1]?.[head.indexOf('配置 ID')]).toBe('cfg-1')
+  })
+})
+
+// 1114 源产出监控 一期 A（方案 §3.1 / §3.2）：「成功」换「产出」= 详情表最近入库；源 ID 左侧 ▸ 展开按输出表看统计
+describe('SourceOverviewView · 产出列与展开行（1114）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const recent = new Date(Date.now() - 3 * 3600_000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const recentText = `${recent.getFullYear()}-${pad(recent.getMonth() + 1)}-${pad(recent.getDate())} ${pad(recent.getHours())}:${pad(recent.getMinutes())}:00`
+  const tables = [
+    { entryTypeId: '6200023', entryTypeName: '源码表', tableName: 'tb_source_code', dataCount: 4049, lastInsertAt: '2026-11-16 09:11:00', lastUpdateAt: '2026-11-16 09:11:00', steps: [{ stepId: '101', stepName: '浏览器源码下载' }] },
+    { entryTypeId: '6200005', entryTypeName: '详情表', tableName: 'tb_csxxdt', dataCount: 158, lastInsertAt: recentText, lastUpdateAt: recentText, steps: [{ stepId: '102', stepName: '列表解析' }, { stepId: '103', stepName: '详情解析' }] },
+    { entryTypeId: '6200099', entryTypeName: '指标表', tableName: 'tb_metric', dataCount: -1, steps: [{ stepId: '104', stepName: '指标' }] },
+  ]
+  const a = { ...source, sourceId: '700001', name: '源 A' }
+  const b = { ...source, sourceId: '700002', name: '源 B' }
+
+  async function mountList(list: Source[] = [a, b], props: Record<string, unknown> = {}) {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: list.length, list })
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current', ...props }, attachTo: document.body })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('「产出」列显示详情表最近入库（源码表不算），表头不再有「成功」', async () => {
+    vi.spyOn(sourceApi, 'queryStepDetail').mockImplementation(async (id) => (id === '700001' ? tables : []))
+    const wrapper = await mountList()
+    const heads = wrapper.findAll('thead th').map((th) => th.text())
+    expect(heads).toContain('产出')
+    expect(heads).not.toContain('成功')
+    const cellA = wrapper.get('[data-testid="source-output-700001"]')
+    expect(cellA.text()).toBe('3 小时前')
+    expect(cellA.attributes('title')).toContain('详情表（tb_csxxdt） 最近入库')
+    expect(wrapper.get('[data-testid="source-output-700002"]').text()).toBe('无详情表')
+    wrapper.unmount()
+  })
+
+  it('▸ 展开按输出表列出统计，跨全部可见列；同一个源只取一次（列与展开共用结果）', async () => {
+    const detail = vi.spyOn(sourceApi, 'queryStepDetail').mockImplementation(async (id) => (id === '700001' ? tables : []))
+    const wrapper = await mountList()
+    await wrapper.get('[data-testid="source-expand-700001"]').trigger('click')
+    await flushPromises()
+    const row = wrapper.get('[data-testid="source-expand-row-700001"]')
+    const headCount = wrapper.findAll('thead th').length
+    expect(row.get('td').attributes('colspan')).toBe(String(headCount))
+    const lines = row.findAll('[data-testid="source-output-table-row"]')
+    expect(lines).toHaveLength(3)
+    expect(lines[1]!.classes()).toContain('judged')
+    expect(lines[1]!.text()).toContain('列表解析 等 2 个')
+    expect(lines[2]!.text()).toContain('统计异常')
+    expect(lines[0]!.classes()).not.toContain('judged')
+    expect(detail.mock.calls.filter(([id]) => id === '700001')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="source-expand-700001"]').attributes('aria-expanded')).toBe('true')
+    // 再点收起
+    await wrapper.get('[data-testid="source-expand-700001"]').trigger('click')
+    expect(wrapper.find('[data-testid="source-expand-row-700001"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('展开行 colspan 随「显示设置」隐藏列变化；内容 sticky 贴左、宽度走容器可见宽度变量', async () => {
+    vi.spyOn(sourceApi, 'queryStepDetail').mockResolvedValue(tables)
+    const wrapper = await mountList([a])
+    await wrapper.get('[data-testid="source-expand-700001"]').trigger('click')
+    await flushPromises()
+    const before = Number(wrapper.get('[data-testid="source-expand-row-700001"] td').attributes('colspan'))
+    // 同一个源还在列表里（只是改了显示设置重查）：保持展开
+    await wrapper.setProps({ viewState: { ...blankSourceListViewState(), hiddenColumns: ['url', 'tags'] } })
+    await flushPromises()
+    const after = Number(wrapper.get('[data-testid="source-expand-row-700001"] td').attributes('colspan'))
+    expect(after).toBe(before - 2)
+    expect(after).toBe(wrapper.findAll('thead th').length)
+    expect(wrapper.find('[data-testid="source-expand-row-700001"] .sov-expand-inner').exists()).toBe(true)
+    expect(wrapper.get('table.sov-table').attributes('style')).toContain('--sov-wrap-width')
+    wrapper.unmount()
+  })
+
+  it('主表不是源码表时「产出」看主表，展开行高亮主表', async () => {
+    vi.spyOn(sourceApi, 'queryStepDetail').mockResolvedValue(tables)
+    const wrapper = await mountList([{ ...a, mainTable: '6200099' }, { ...b, mainTable: '6200023' }])
+    // 700001 主表是指标表（统计异常）：如实报异常，不退回更新的详情表
+    expect(wrapper.get('[data-testid="source-output-700001"]').text()).toBe('统计异常')
+    expect(wrapper.get('[data-testid="source-output-700001"]').attributes('title')).toContain('主表 指标表')
+    // 700002 主表是源码表：退回看其余输出表最晚的一张
+    expect(wrapper.get('[data-testid="source-output-700002"]').text()).toBe('3 小时前')
+    await wrapper.get('[data-testid="source-expand-700001"]').trigger('click')
+    await flushPromises()
+    const lines = wrapper.findAll('[data-testid="source-expand-row-700001"] [data-testid="source-output-table-row"]')
+    expect(lines[2]!.classes()).toContain('judged')
+    expect(lines[1]!.classes()).not.toContain('judged')
+    wrapper.unmount()
+  })
+
+  it('旧视图里隐藏的「成功」迁移为隐藏「产出」', async () => {
+    const wrapper = await mountList([a], { viewState: { ...blankSourceListViewState(), hiddenColumns: ['success'] } })
+    expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('产出')
+    expect(wrapper.find('[data-testid="source-output-700001"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('换页 / 换条件后列表里没有的源自动收起', async () => {
+    vi.spyOn(sourceApi, 'queryStepDetail').mockResolvedValue(tables)
+    const wrapper = await mountList([a])
+    await wrapper.get('[data-testid="source-expand-700001"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-expand-row-700001"]').exists()).toBe(true)
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [b] })
+    await wrapper.setProps({ viewState: { ...blankSourceListViewState() } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid^="source-expand-row-"]').exists()).toBe(false)
+    vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [a] })
+    await wrapper.setProps({ viewState: { ...blankSourceListViewState(), pageSize: 50 } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-expand-row-700001"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('统计失败：列上标「统计失败」，展开行内提示并可重试', async () => {
+    // 列上失败一次；点开展开时会再取一次（失败的不算缓存），仍失败才在行内给「重试」
+    const detail = vi.spyOn(sourceApi, 'queryStepDetail')
+      .mockRejectedValueOnce(new Error('网关超时'))
+      .mockRejectedValueOnce(new Error('网关超时'))
+      .mockResolvedValue(tables)
+    const wrapper = await mountList([a])
+    expect(wrapper.get('[data-testid="source-output-700001"]').text()).toBe('统计失败')
+    await wrapper.get('[data-testid="source-expand-700001"]').trigger('click')
+    await flushPromises()
+    const row = wrapper.get('[data-testid="source-expand-row-700001"]')
+    expect(row.text()).toContain('网关超时')
+    await row.get('[data-testid="source-expand-retry-700001"]').trigger('click')
+    await flushPromises()
+    expect(detail).toHaveBeenCalledTimes(3)
+    expect(wrapper.findAll('[data-testid="source-expand-row-700001"] [data-testid="source-output-table-row"]')).toHaveLength(3)
+    expect(wrapper.get('[data-testid="source-output-700001"]').text()).toBe('3 小时前')
+    wrapper.unmount()
+  })
+})
+
+// 1114 一期 B：产出结论标签 + 按结论筛选 / 计数
+describe('SourceOverviewView · 产出结论（1114 一期 B）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const stamp = (hours: number) => {
+    const d = new Date(Date.now() - hours * 3600_000)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`
+  }
+  const detail = (hours: number) => [
+    { entryTypeId: '6200005', entryTypeName: '详情表', tableName: 'tb_csxxdt', dataCount: 10, lastInsertAt: stamp(hours), steps: [{ stepId: '2', stepName: '解析' }] },
+  ]
+  const fresh = { ...source, sourceId: '800001', name: '正常源', mainTable: '6200023' }
+  const stale = { ...source, sourceId: '800002', name: '停更源', mainTable: '6200023' }
+  const loose = { ...source, sourceId: '800003', name: '没周期的源', mainTable: '6200023' }
+  const HOURS: Record<string, number> = { '800001': 3, '800002': 72, '800003': 500 }
+
+  const option = (wrapper: VueWrapper, value: string) => wrapper.get(`[data-testid="source-output-filter"] option[value="${value}"]`)
+
+  function mockOutputs() {
+    vi.spyOn(sourceApi, 'queryStepDetail').mockImplementation(async (id) => detail(HOURS[id] ?? 1))
+    vi.spyOn(sourceDirs, 'bizSourceCycles').mockResolvedValue(new Map([['800001', 24], ['800002', 24]]))
+    vi.spyOn(dataApi, 'tables').mockResolvedValue([])
+  }
+
+  it('有周期的源打「正常 / 停更 N 天」标签，没周期的只显示时间；当前页计数与过滤', async () => {
+    mockOutputs()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [fresh, stale, loose] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-output-tag-800001"]').text()).toBe('正常')
+    expect(wrapper.get('[data-testid="source-output-tag-800002"]').text()).toBe('停更 3 天')
+    expect(wrapper.find('[data-testid="source-output-tag-800003"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="source-output-800003"]').text()).toBe('20 天前')
+    expect(wrapper.get('[data-testid="source-output-800002"]').attributes('title')).toContain('预期周期 1 天（宽限 6 小时）')
+    expect(wrapper.get('[data-testid="source-output-800003"]').attributes('title')).toContain('没有设置预期周期')
+
+    expect(option(wrapper, '').text()).toBe('全部产出 3')
+    expect(option(wrapper, '__scope').text()).toBe('统计范围：仅当前页')
+    expect(option(wrapper, 'stale').text()).toBe('详情停更 1')
+    expect(option(wrapper, 'unconfigured').text()).toBe('未配置周期 1')
+    expect(option(wrapper, 'none').attributes('disabled')).toBeDefined()
+
+    const pagedCalls = vi.mocked(sourceApi.sourcePaged).mock.calls.length
+    await wrapper.get('[data-testid="source-output-filter"]').setValue('stale')
+    expect(wrapper.findAll('[data-testid^="source-check-8"]').map((el) => el.attributes('data-testid'))).toEqual(['source-check-800002'])
+    // 只统计当前页时筛选不重查
+    expect(vi.mocked(sourceApi.sourcePaged).mock.calls.length).toBe(pagedCalls)
+    await wrapper.get('[data-testid="source-output-filter"]').setValue('')
+    expect(wrapper.findAll('[data-testid^="source-check-8"]')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
+  it('选中业务目录：自动统计全目录，选结论时把命中源 ID 和目录一起交给 sourcePaged；条件变了筛选清空', async () => {
+    mockOutputs()
+    const directory = { kind: 'biz' as const, mode: 'selected' as const, selections: [{ id: '9009570', includeDescendants: true }] }
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => {
+      const all = [fresh, stale, loose]
+      const ids = q?.sourceIds ? String(q.sourceIds).split(',') : undefined
+      const list = ids ? all.filter((s) => ids.includes(s.sourceId)) : all
+      // 列表一页只给 1 条（模拟多页），收集请求给全部
+      return { total: list.length, list: (q?.size ?? 20) >= 500 ? list : list.slice(0, 1) }
+    })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', scopeDirectory: directory }, attachTo: document.body })
+    await flushPromises()
+    await flushPromises()
+    expect(option(wrapper, '__scope').text()).toBe('统计范围：全部 3 个源')
+    expect(option(wrapper, 'stale').text()).toBe('详情停更 1')
+    expect(option(wrapper, 'ok').text()).toBe('正常 1')
+
+    await wrapper.get('[data-testid="source-output-filter"]').setValue('stale')
+    await flushPromises()
+    const listCall = paged.mock.calls.filter(([q]) => (q?.size ?? 20) < 500).at(-1)?.[0]
+    expect(listCall).toEqual(expect.objectContaining({ sourceIds: '800002', directory, page: 1 }))
+    expect(wrapper.findAll('[data-testid^="source-check-8"]').map((el) => el.attributes('data-testid'))).toEqual(['source-check-800002'])
+    expect((wrapper.get('[data-testid="source-output-filter"]').element as HTMLSelectElement).value).toBe('stale')
+
+    // 换条件重查：统计作废、筛选清空，重新统计
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('源')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    expect((wrapper.get('[data-testid="source-output-filter"]').element as HTMLSelectElement).value).toBe('')
+    const lastList = paged.mock.calls.filter(([q]) => (q?.size ?? 20) < 500).at(-1)?.[0]
+    expect(lastList?.sourceIds).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('未选业务目录、命中多于一页：给「统计全部」按钮，点了才全量统计', async () => {
+    mockOutputs()
+    vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => ({ total: 3, list: (q?.size ?? 20) >= 500 ? [fresh, stale, loose] : [fresh] }))
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    expect(option(wrapper, '').text()).toBe('全部产出 1')
+    expect(option(wrapper, '__scope').text()).toBe('统计范围：仅当前页')
+    expect(option(wrapper, '__run_all').text()).toBe('统计全部 3 个源…')
+    await wrapper.get('[data-testid="source-output-filter"]').setValue('__run_all')
+    await flushPromises()
+    await flushPromises()
+    // 「统计全部」只是动作，筛选仍是全部
+    expect((wrapper.get('[data-testid="source-output-filter"]').element as HTMLSelectElement).value).toBe('')
+    expect(option(wrapper, '__scope').text()).toBe('统计范围：全部 3 个源')
+    expect(wrapper.find('[data-testid="source-output-filter"] option[value="__run_all"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })

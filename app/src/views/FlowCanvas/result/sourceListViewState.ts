@@ -56,7 +56,8 @@ export const HIDEABLE_SOURCE_COLUMNS: { key: string; label: string; groupOps?: t
   { key: 'tags', label: '标签' },
   { key: 'dataCount', label: '数据' },
   { key: 'newIn', label: '新入' },
-  { key: 'success', label: '成功' },
+  // 1114：「成功」（任意表最近写入，看不出详情停更）换成「产出」（详情表最近入库）；旧视图里的 success 由 migrateHiddenColumns 转成 output
+  { key: 'output', label: '产出' },
   { key: 'lastTask', label: '最近任务' },
   { key: 'lastSuccess', label: '最近成功' },
   { key: 'state', label: '状态' },

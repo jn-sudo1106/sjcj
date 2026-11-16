@@ -38,6 +38,13 @@ export interface ViewDisplay {
   sortDirection: 'asc' | 'desc'
   pageSize: number
 }
+/** 已保存视图里隐藏列的旧 key → 新 key（1114「成功」列换成「产出」） */
+const RENAMED_COLUMNS: Record<string, string> = { success: 'output' }
+
+export function migrateHiddenColumns(keys: string[]): string[] {
+  return [...new Set(keys.map((key) => RENAMED_COLUMNS[key] ?? key))]
+}
+
 export const defaultDisplay = (): ViewDisplay => ({ hiddenColumns: [], sortField: '', sortDirection: 'asc', pageSize: 20 })
 
 /** 目录上从来源组排除的源（真实接口暂存 queryJson，按分类 ID） */
@@ -90,7 +97,7 @@ export function displayFromJson(displayJson: unknown, legacyQuery?: unknown): Vi
   const merged = { ...parseObject(legacyQuery), ...parseObject(displayJson) } as Partial<ViewDisplay>
   const d = defaultDisplay()
   return {
-    hiddenColumns: Array.isArray(merged.hiddenColumns) ? merged.hiddenColumns.map(String) : d.hiddenColumns,
+    hiddenColumns: Array.isArray(merged.hiddenColumns) ? migrateHiddenColumns(merged.hiddenColumns.map(String)) : d.hiddenColumns,
     sortField: typeof merged.sortField === 'string' ? merged.sortField : d.sortField,
     sortDirection: merged.sortDirection === 'desc' ? 'desc' : 'asc',
     pageSize: Number(merged.pageSize) > 0 ? Number(merged.pageSize) : d.pageSize,

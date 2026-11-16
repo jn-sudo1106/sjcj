@@ -63,6 +63,7 @@ import {
   sourceFromLegacy,
   sourceOptionFromLegacy,
   sourcePageFromLegacy,
+  sourceOutputTablesFromLegacy,
   flowFromLegacy,
   flowPageFromLegacy,
   flowToLegacy,
@@ -550,6 +551,18 @@ export const sourceApi = {
       },
     })
     return sourcePageFromLegacy(result)
+  },
+  /**
+   * 源的输出表产出统计（1114 源产出监控 一期 A；旧平台源列表展开行同一接口）。
+   * 后端按「源 + 表」统计并缓存 2 分钟；这里只读，结果按表去重。
+   */
+  queryStepDetail: async (sourceId: string) => {
+    const result = await request<unknown>('source/queryStepDetail', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'source/queryStepDetail',
+      httpParams: { sourceId },
+    })
+    return sourceOutputTablesFromLegacy(result)
   },
   sourceDetailScoped: async (sourceId: string) => {
     const result = await request<unknown>('source/sourceDetailScoped', { sourceId }, { method: 'GET', mode: 'http' })
@@ -4465,6 +4478,22 @@ export const categoryApi = {
         ...(params.seq !== undefined ? { seq: params.seq } : {}),
         ...(params.remark !== undefined ? { remark: params.remark } : {}),
       },
+    })
+  },
+
+  /**
+   * 设置业务目录预期产出周期（1114 源产出监控一期 C）。独立端点，`hours = 0` 清空；
+   * 后端只收整数小时 0～8784，只允许 -2 下的业务目录（根 -2、系统目录、视图目录都会拒绝）。
+   * 不复用 update：它是 form 绑定，「没传」与「清空」分不开，改名会误清周期。
+   */
+  updateExpectCycle: async (categoryId: string | number, hours: number): Promise<unknown> => {
+    if (!Number.isInteger(hours) || hours < 0) throw new Error('预期周期必须是非负整数小时')
+    clearCategoryCache()
+    return request('category/updateExpectCycle', { categoryId, expectCycleHours: hours }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/updateExpectCycle',
+      httpParams: { categoryId, expectCycleHours: hours },
     })
   },
 

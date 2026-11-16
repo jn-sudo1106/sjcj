@@ -15,6 +15,7 @@ import type {
 } from '@/api/types/monitorCenter'
 import {
   MonitorQueryLimitError,
+  MonitorRunUncertainError,
   listMonitors,
   listMonitorsOfSource,
   listSourceSummary,
@@ -673,6 +674,12 @@ const kindIndex = computed<Record<string, MonitorKind>>(() =>
   Object.fromEntries(records.value.map((row) => [row.id, row.kind])),
 )
 
+/** 立即运行失败提示：结果未确认（可能已受理）用警告，提醒先看运行记录，别马上重复提交。 */
+function reportRunError(err: unknown): void {
+  if (err instanceof MonitorRunUncertainError) ElMessage.warning(err.message)
+  else ElMessage.error(readableError(err, '提交执行失败'))
+}
+
 async function runMonitor(monitor: MonitorRecordView): Promise<void> {
   try {
     const result = await runMonitorsNow([monitor.id], kindIndex.value)
@@ -685,7 +692,7 @@ async function runMonitor(monitor: MonitorRecordView): Promise<void> {
       ElMessage.success('已提交执行（受理不代表执行成功）')
     }
   } catch (err) {
-    ElMessage.error(readableError(err, '提交执行失败'))
+    reportRunError(err)
   } finally {
     await refresh()
   }
@@ -708,7 +715,7 @@ async function batchRun(): Promise<void> {
       ElMessage.success(head)
     }
   } catch (err) {
-    ElMessage.error(readableError(err, '提交执行失败'))
+    reportRunError(err)
   } finally {
     await refresh()
   }

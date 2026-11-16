@@ -327,6 +327,8 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'category/add',
   'category/addBatch',
   'category/update',
+  // 1114 源产出监控：业务目录预期周期，只改 cfg_category 一列，与 update 同级（不加进来 217 上保存会被 ProductionWriteBlockedError 拦下）
+  'category/updateExpectCycle',
   'category/delete',
   // 2026-09-10：按需求放开规则脚本/抓取配置保存，直接写入文件服务。
   '/api/file/upload',
