@@ -5,7 +5,7 @@
 // 2. 采集资产的「源列表视图」（0924-06，表格视图改为源列表）：currentSiteId 传空 = 不限网站，
 //    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch, type Ref } from 'vue'
 import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type SourceOutputTable, type Site } from '@/api'
@@ -47,7 +47,9 @@ import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/pa
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 import { timeAgo } from '@/utils/format/relativeTime'
 import { fetchSourceOutput, runPool, SOURCE_OUTPUT_CONCURRENCY, useSourceOutput } from '@/composables/useSourceOutput'
-import { outputCountText, shortDateTime, stepsText, summarizeSourceOutput, type SourceOutputSummary } from '@/utils/sourceOutput'
+import { durationText, judgeSourceOutput, OUTPUT_VERDICT_LABEL, outputCountText, shortDateTime, stepsText, summarizeSourceOutput, type OutputJudgement, type OutputVerdict, type SourceOutputSummary } from '@/utils/sourceOutput'
+import { expectCycleText } from '@/utils/expectCycle'
+import { bizSourceCycles } from '@/api/sourceDirs'
 import { migrateHiddenColumns } from '@/api/sourceViews'
 import { readColumnPrefs, writeColumnPrefs } from '@/utils/table/columnPrefs'
 import { isFavoriteSource, loadFavoriteSources, toggleFavoriteSource } from '@/utils/sourceFavorites'
@@ -589,7 +591,7 @@ const scopeEmpty = computed(() => (crossSite.value && !!props.scopeSiteIds && pr
   || (props.scopeSourceGroupId != null && props.scopeSourceGroupId === ''))
 /** 当前条件在范围内必然一个都查不到：列表、导出、按条件发任务都不能发请求，否则会变成"不限" */
 const noScopeMatch = computed(() => scopeEmpty.value
-  || scopedSourceIds(props.scopeSourceIds, sourceConditionParams(conditions.value).sourceIds) === '')
+  || scopedSourceIds(scopeIdsWithOutput(), sourceConditionParams(conditions.value).sourceIds) === '')
 /** 实际发给后端的 siteIds（逗号分隔）。当前网站 > 网站筛选 > 页签范围 > 不限 */
 function effectiveSiteIds(): string | undefined {
   if (props.currentSiteId) return props.currentSiteId
@@ -675,7 +677,7 @@ function toggleSourceExpand(sourceId: string) {
   expandedSources.value = next
 }
 /** 当前页源的主表 ID：主表不是源码表时「产出」只看主表 */
-const mainTableBySource = computed(() => new Map(rows.value.map((source) => [source.sourceId, source.mainTable])))
+const mainTableBySource = computed(() => new Map([...(outputStats.value?.sources ?? []), ...rows.value].map((source) => [source.sourceId, source.mainTable])))
 function mainTableOf(sourceId: string): string | undefined {
   return mainTableBySource.value.get(sourceId) || undefined
 }
@@ -688,26 +690,64 @@ function isOutputTable(sourceId: string, table: SourceOutputTable): boolean {
   const summary = outputSummaryOf(sourceId)
   return !!summary && summary.kind !== 'none' && summary.table === table
 }
+/*
+ * 产出结论（1114 一期 B，方案 §3.3）：详情最近入库 vs 源所在业务目录的预期周期（多目录取最短、子目录继承上级）。
+ * 周期由 bizSourceCycles 给（2 分钟缓存）；没有周期的源只显示一期 A 的时间，不下结论。
+ */
+const sourceCycles = shallowRef(new Map<string, number>())
+let cycleLoad: Promise<void> | null = null
+function refreshCycles(): Promise<void> {
+  if (cycleLoad) return cycleLoad
+  cycleLoad = bizSourceCycles()
+    .then((map) => { sourceCycles.value = map })
+    .catch(() => {})
+    .finally(() => { cycleLoad = null })
+  return cycleLoad
+}
+/** undefined = 还在取产出统计 */
+function judgementOf(sourceId: string): OutputJudgement | undefined {
+  const entry = sourceOutput.entryOf(sourceId)
+  if (!entry || entry.status === 'loading') return undefined
+  const summary = entry.status === 'ok' ? summarizeSourceOutput(entry.tables, mainTableOf(sourceId)) : undefined
+  return judgeSourceOutput(summary, sourceCycles.value.get(sourceId))
+}
+/** 结论标签：停更 / 正常 / 统计异常才有；未配置周期、无详情表只显示文字 */
+function outputTag(sourceId: string): { text: string; tone: string } | null {
+  const judgement = judgementOf(sourceId)
+  if (!judgement) return null
+  if (judgement.verdict === 'stale') {
+    return { text: judgement.staleHours === undefined ? '停更 · 无数据' : `停更 ${durationText(judgement.staleHours)}`, tone: 'stale' }
+  }
+  if (judgement.verdict === 'ok') return { text: '正常', tone: 'ok' }
+  if (judgement.verdict === 'error') return { text: '统计异常', tone: 'warn' }
+  return null
+}
+/** 标签后面的时间文字（一期 A 口径：详情最近入库的相对时间） */
 function outputCellText(sourceId: string): string {
   const entry = sourceOutput.entryOf(sourceId)
   if (!entry || entry.status === 'loading') return '…'
-  if (entry.status === 'error') return '统计失败'
+  const judgement = judgementOf(sourceId)
+  if (entry.status === 'error') return judgement?.verdict === 'error' ? '' : '统计失败'
   const summary = summarizeSourceOutput(entry.tables, mainTableOf(sourceId))
   if (summary.kind === 'none') return '无详情表'
-  if (summary.kind === 'error') return '统计异常'
-  if (summary.kind === 'never') return '未入库'
+  if (summary.kind === 'error') return judgement?.verdict === 'error' ? '' : '统计异常'
+  if (summary.kind === 'never') return judgement?.verdict === 'stale' ? '' : '无数据'
   return timeAgo(summary.lastInsertAt)
 }
 function outputCellTitle(sourceId: string): string {
   const entry = sourceOutput.entryOf(sourceId)
   if (!entry || entry.status === 'loading') return '正在统计产出'
-  if (entry.status === 'error') return `产出统计失败：${entry.error}`
+  const judgement = judgementOf(sourceId)
+  const cycle = judgement?.cycleHours
+    ? `预期周期 ${expectCycleText(judgement.cycleHours)}（宽限 ${durationText(judgement.graceHours ?? 0)}）`
+    : '所在业务目录没有设置预期周期，不判停更（系统设置 → 分类目录）'
+  if (entry.status === 'error') return `产出统计失败：${entry.error}\n${cycle}`
   const summary = summarizeSourceOutput(entry.tables, mainTableOf(sourceId))
-  if (summary.kind === 'none') return '流程里除源码表、附件表外没有输出表'
+  if (summary.kind === 'none') return `流程里除源码表、附件表外没有输出表\n${cycle}`
   const table = `${summary.basis === 'main' ? '主表 ' : ''}${summary.table.entryTypeName}（${summary.table.tableName || summary.table.entryTypeId}）`
-  if (summary.kind === 'error') return `${table} 统计异常`
-  if (summary.kind === 'never') return `${table} 还没有入库数据`
-  return `${table} 最近入库 ${summary.lastInsertAt}\n点源 ID 左侧 ▸ 看全部输出表`
+  if (summary.kind === 'error') return `${table} 统计异常\n${cycle}`
+  if (summary.kind === 'never') return `${table} 里没有这个源的数据（「数据」列是累计写入计数，表里的数据可能已被清理）\n${cycle}`
+  return `${table} 最近入库 ${summary.lastInsertAt}\n${cycle}\n点源 ID 左侧 ▸ 看全部输出表`
 }
 function outputCellTone(sourceId: string): string {
   const entry = sourceOutput.entryOf(sourceId)
@@ -715,6 +755,117 @@ function outputCellTone(sourceId: string): string {
   const summary = outputSummaryOf(sourceId)
   if (!summary || summary.kind === 'none') return 'muted'
   return summary.kind === 'error' ? 'warn' : ''
+}
+
+/*
+ * 按结论筛选与计数（1114 一期 B，方案 §3.4）。
+ * - 选中业务目录且命中 ≤ OUTPUT_STATS_AUTO 个源：自动把全部命中的源取出来统计（全目录计数）；
+ *   选中某个结论时，把命中的源 ID 交给 sourcePaged（与目录 / 条件取交集，后端同一个 Criteria 上 AND）。
+ * - 其他情况只统计当前页（「仅当前页」），筛选也只在当前页里过滤；命中 ≤ OUTPUT_STATS_MAX 时给「统计全部」按钮。
+ *   不对任意查询自动全量：每次查询都会多一次分页收集和最多几百次 queryStepDetail。
+ * - 条件、目录变了统计作废、筛选清空；翻页 / 选结论不重算。
+ */
+const OUTPUT_STATS_AUTO = 500
+const OUTPUT_STATS_MAX = 2000
+const outputFilter = ref<OutputVerdict | ''>('')
+const outputStats = shallowRef<{ key: string; status: 'running' | 'done' | 'error'; sources: Source[]; error?: string } | null>(null)
+let outputStatsSeq = 0
+const outputFullMode = computed(() => outputStats.value?.status === 'done')
+const OUTPUT_VERDICTS: OutputVerdict[] = ['stale', 'error', 'ok', 'unconfigured', 'none']
+const RUN_ALL_OPTION = '__run_all'
+
+/** 统计口径下的源：全量统计中 / 完成用统计的源，否则用当前页 */
+const outputCountSources = computed(() => (outputStats.value && outputStats.value.status !== 'error' ? outputStats.value.sources : rows.value))
+const outputCounts = computed(() => {
+  const counts: Record<string, number> = { '': outputCountSources.value.length }
+  let pending = 0
+  for (const source of outputCountSources.value) {
+    const judgement = judgementOf(source.sourceId)
+    if (!judgement) { pending++; continue }
+    counts[judgement.verdict] = (counts[judgement.verdict] ?? 0) + 1
+  }
+  return { counts, pending }
+})
+const outputScopeHint = computed(() => {
+  const stats = outputStats.value
+  const { pending } = outputCounts.value
+  if (stats?.status === 'running') {
+    return stats.sources.length ? `统计中 ${stats.sources.length - pending} / ${stats.sources.length}` : '正在收集源…'
+  }
+  if (stats?.status === 'error') return `统计失败：${stats.error}`
+  if (stats?.status === 'done') return pending ? `统计中 ${stats.sources.length - pending} / ${stats.sources.length}` : `全部 ${stats.sources.length} 个源`
+  return '仅当前页'
+})
+const canRunFullOutputStats = computed(() => !outputStats.value && total.value > rows.value.length && total.value <= OUTPUT_STATS_MAX)
+/** 选中了业务目录（方案 §3.4：业务目录下统计全目录） */
+const bizDirectoryScoped = computed(() => props.scopeDirectory?.kind === 'biz' && props.scopeDirectory.mode !== 'none')
+/** 全量统计下选中结论时交给后端的源 ID；null = 不按结论限定 */
+const outputFilterIds = computed<string[] | null>(() => {
+  if (!outputFilter.value || !outputFullMode.value) return null
+  return outputStats.value!.sources
+    .filter((source) => judgementOf(source.sourceId)?.verdict === outputFilter.value)
+    .map((source) => source.sourceId)
+})
+/** 页签范围 ∩ 结论筛选 */
+function scopeIdsWithOutput(): string[] | undefined {
+  const ids = outputFilterIds.value
+  if (!ids) return props.scopeSourceIds
+  if (!props.scopeSourceIds) return ids
+  const allowed = new Set(props.scopeSourceIds)
+  return ids.filter((id) => allowed.has(id))
+}
+/** 表格实际渲染的行：只统计当前页时，结论筛选在当前页里过滤 */
+const displayRows = computed(() => (outputFilter.value && !outputFullMode.value
+  ? rows.value.filter((source) => judgementOf(source.sourceId)?.verdict === outputFilter.value)
+  : rows.value))
+
+function outputBaseKey(): string {
+  return JSON.stringify(currentQuery(false))
+}
+function resetOutputStats() {
+  outputStatsSeq++
+  outputStats.value = null
+  outputFilter.value = ''
+}
+async function runOutputStats() {
+  const seq = ++outputStatsSeq
+  const key = outputBaseKey()
+  outputStats.value = { key, status: 'running', sources: [] }
+  try {
+    const query = currentQuery(false)
+    const [sources] = await Promise.all([
+      query.sourceIds === '' ? Promise.resolve([] as Source[]) : collectAllUnderQuery(query, { fetchPage: fetchSourcePage, max: OUTPUT_STATS_MAX }),
+      refreshCycles(),
+    ])
+    if (seq !== outputStatsSeq) return
+    outputStats.value = { key, status: 'running', sources }
+    await sourceOutput.load(sources.map((source) => source.sourceId))
+    if (seq !== outputStatsSeq) return
+    outputStats.value = { key, status: 'done', sources }
+  } catch (error) {
+    if (seq !== outputStatsSeq) return
+    outputStats.value = { key, status: 'error', sources: [], error: error instanceof Error ? error.message : String(error) }
+  }
+}
+function onOutputSelect(event: Event) {
+  const select = event.target as HTMLSelectElement
+  if (select.value === RUN_ALL_OPTION) {
+    // 「统计全部」只是动作：下拉回到当前筛选
+    select.value = outputFilter.value
+    void runOutputStats()
+    return
+  }
+  setOutputFilter(select.value as OutputVerdict | '')
+}
+function setOutputFilter(verdict: OutputVerdict | '') {
+  if (outputFilter.value === verdict) return
+  outputFilter.value = verdict
+  // 全量统计：交给后端按源 ID 重查；只统计当前页：displayRows 就地过滤
+  if (outputFullMode.value) {
+    page.value = 1
+    clearSelection()
+    void loadSources()
+  }
 }
 function stepsTitle(steps: { stepId: string; stepName: string }[]): string {
   return steps.map((step) => `[${step.stepId}] ${step.stepName}`).join('\n')
@@ -725,7 +876,10 @@ watch(rows, (list) => {
   if ([...expandedSources.value].some((id) => !ids.has(id))) {
     expandedSources.value = new Set([...expandedSources.value].filter((id) => ids.has(id)))
   }
-  if (showCol('output')) void sourceOutput.load(list.map((source) => source.sourceId))
+  if (showCol('output')) {
+    void refreshCycles()
+    void sourceOutput.load(list.map((source) => source.sourceId))
+  }
 })
 watch(() => showCol('output'), (show) => {
   if (show) void sourceOutput.load(rows.value.map((source) => source.sourceId))
@@ -784,14 +938,15 @@ watch(() => props.viewState, (state) => {
   void loadSources()
 })
 
-function currentQuery(): SourceFilter {
+/** withOutputFilter=false：不带「按结论筛选」的源 ID 范围（统计结论本身要用不带它的条件） */
+function currentQuery(withOutputFilter = true): SourceFilter {
   const base = viewStateFilter(currentViewState.value)
   const cond = sourceConditionParams(conditions.value)
   return {
     ...base,
     // 当前网站 > 网站筛选 > 页签范围；源 ID 与页签的固定源范围取交集
     siteIds: effectiveSiteIds(),
-    sourceIds: scopedSourceIds(props.scopeSourceIds, cond.sourceIds),
+    sourceIds: scopedSourceIds(withOutputFilter ? scopeIdsWithOutput() : props.scopeSourceIds, cond.sourceIds),
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
     sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
     ...(props.scopeViewCategoryId ? { viewCategoryId: props.scopeViewCategoryId } : {}),
@@ -807,6 +962,8 @@ async function fetchSourcePage(query: SourceFilter & { page: number; size: numbe
 
 async function loadSources() {
   const requestId = ++sourceRequestSeq
+  // 条件 / 目录变了：结论统计作废、结论筛选清空（必须在算本次请求条件之前）
+  if (outputStats.value && outputStats.value.key !== outputBaseKey()) resetOutputStats()
   const navigation = props.searchNavigation
   const requestOrigin: SourceSearchOrigin | null = navigation ? JSON.parse(JSON.stringify({
     query: currentQuery(), empty: noScopeMatch.value, viewState: currentViewState.value,
@@ -851,6 +1008,9 @@ async function loadSources() {
     urlFallback.value = guess ? { key: guess.key, keyword: guess.value.trim() } : null
     // 行已经回来了，再去补「默认流程」「主表」这些只影响列文字的全量候选
     loadRowLookups()
+    // 选中业务目录且命中不多：自动统计全目录的结论
+    if (showCol('output') && bizDirectoryScoped.value && !outputStats.value && !outputFilter.value
+      && result.total > 0 && result.total <= OUTPUT_STATS_AUTO) void runOutputStats()
   } catch (error) {
     if (requestId !== sourceRequestSeq) return
     rows.value = []
@@ -1340,7 +1500,7 @@ function exportOutputText(sourceId: string, field: 'table' | 'time'): string {
   if (summary.kind === 'none') return field === 'table' ? '' : '无详情表'
   if (field === 'table') return `${summary.table.entryTypeName}（${summary.table.tableName || summary.table.entryTypeId}）`
   if (summary.kind === 'error') return '统计异常'
-  if (summary.kind === 'never') return '未入库'
+  if (summary.kind === 'never') return '无数据'
   return summary.lastInsertAt
 }
 async function collectExportOutputs(sources: Source[], signal: AbortSignal): Promise<boolean> {
@@ -1912,6 +2072,27 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
           <option v-for="tag in tagCandidates" :key="tag" :value="tag">{{ tag }}</option>
         </select>
       </label>
+      <!-- 按产出结论筛选（1114 一期 B）：跟「状态 / 标签」同一套原生下拉。选中业务目录且 ≤ 500 个源时自动统计全目录，
+           否则只统计当前页（第一项写明统计范围）；「统计全部」是下拉里的一项，选了只触发统计、筛选不变 -->
+      <label v-if="showCol('output')" class="sov-fl-output"><span class="sov-label-text">产出</span>
+        <select
+          :value="outputFilter"
+          data-testid="source-output-filter"
+          :title="`产出结论筛选（统计范围：${outputScopeHint}）`"
+          @change="onOutputSelect"
+        >
+          <option value="">全部产出 {{ outputCounts.counts[''] }}</option>
+          <option
+            v-for="key in OUTPUT_VERDICTS"
+            :key="key"
+            :value="key"
+            :disabled="!outputCounts.counts[key] && outputFilter !== key"
+          >{{ OUTPUT_VERDICT_LABEL[key] }} {{ outputCounts.counts[key] ?? 0 }}</option>
+          <option v-if="canRunFullOutputStats" :value="RUN_ALL_OPTION">统计全部 {{ total }} 个源…</option>
+          <option v-else-if="!outputStats && total > OUTPUT_STATS_MAX" disabled value="__too_many">源超过 {{ OUTPUT_STATS_MAX }} 个，先选业务目录再统计全部</option>
+          <option disabled value="__scope">统计范围：{{ outputScopeHint }}</option>
+        </select>
+      </label>
       <!-- 「≤」不是「<」：后端 count 的语义含等于（2026-09-20 实测，count=5 的结果里有 47 行正好是 5） -->
       <label class="sov-fl-count"><span class="sov-label-text">数据量 ≤</span>
         <input
@@ -2082,7 +2263,7 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
           </tr>
         </thead>
         <tbody>
-          <template v-for="source in rows" :key="source.sourceId">
+          <template v-for="source in displayRows" :key="source.sourceId">
           <tr :class="{ picked: selectedSet.has(source.sourceId), expanded: expandedSources.has(source.sourceId) }">
             <td class="sov-check-col">
               <input
@@ -2213,7 +2394,12 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
               :class="outputCellTone(source.sourceId)"
               :title="outputCellTitle(source.sourceId)"
               :data-testid="`source-output-${source.sourceId}`"
-            >{{ outputCellText(source.sourceId) }}</td>
+            ><span
+                v-if="outputTag(source.sourceId)"
+                class="sov-verdict"
+                :class="outputTag(source.sourceId)!.tone"
+                :data-testid="`source-output-tag-${source.sourceId}`"
+              >{{ outputTag(source.sourceId)!.text }}</span>{{ outputCellText(source.sourceId) }}</td>
             <td v-if="showCol('lastTask')">{{ source.lastTaskAt || '—' }}</td>
             <td v-if="showCol('lastSuccess')">{{ source.lastSuccessAt || '—' }}</td>
             <td v-if="showCol('state')"><span class="sov-state" :class="{ error: source.state === 'E' && !source.disabled, muted: source.disabled }">{{ sourceState(source) }}</span></td>
@@ -2287,7 +2473,7 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
             </td>
           </tr>
           </template>
-          <tr v-if="!loading && !rows.length"><td :colspan="visibleColumnCount" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !displayRows.length"><td :colspan="visibleColumnCount" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || (outputFilter ? `没有「${OUTPUT_VERDICT_LABEL[outputFilter]}」的源` : '暂无符合条件的源') }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -2455,6 +2641,9 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
 .sov-filter.is-compact .sov-fl-group { flex: 1 1 94px; min-width: 94px; max-width: 120px; }
 .sov-filter.is-compact .sov-fl-state { flex: 1 1 84px; min-width: 84px; max-width: 100px; }
 .sov-filter.is-compact .sov-fl-tag { flex: 1 1 84px; min-width: 84px; max-width: 110px; }
+/* 产出下拉与标签同宽；统计范围放在菜单末项和悬停提示里，不占选中项文字 */
+.sov-filter.is-compact .sov-fl-output { flex: 1 1 84px; min-width: 84px; max-width: 110px; }
+.sov-filter.is-compact .sov-fl-output select { width: 100%; min-width: 0; }
 /* 数据量这格是**唯一**靠 placeholder 说明自己的（紧凑态把 label 小标题藏了，其余几格是下拉，选项文字自带含义）。
    原来 80px：扣掉左右内边距 16 + 边框 2，再被 Chrome 数字框的步进条吃掉约 15px，只剩约 47px 给文字，
    「数据量 ≤」约 51px 被截成「数据量」（2026-10-16 用户截图反馈）。
@@ -2541,6 +2730,12 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
 .sov-output-name small { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .sov-output-name em { flex: none; padding: 0 5px; border-radius: 3px; background: var(--rc-primary); color: #fff; font-size: 10px; font-style: normal; }
 .sov-output-row .warn, .sov-output-cell.warn { color: #b45309; }
+/* 1114 一期 B：产出结论标签与筛选 */
+.sov-verdict { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; line-height: 18px; font-weight: 600; }
+.sov-verdict.stale { background: #fef2f2; color: #dc2626; }
+.sov-verdict.ok { background: #f0fdf4; color: #15803d; }
+.sov-verdict.warn { background: #fffbeb; color: #b45309; }
+.sov-fl-output select { min-width: 116px; }
 .sov-output-row .muted, .sov-output-cell.muted { color: var(--rc-faint); }
 .sov-table tbody tr.picked { background: var(--rc-primary-bg); }
 .sov-batch-count { font-weight: 700; color: var(--rc-primary-ink); }

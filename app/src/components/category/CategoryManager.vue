@@ -7,7 +7,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Top, Bottom, Clock } from '@element-plus/icons-vue'
 import { sourceApi, categoryApi, clearCategoryCache, type SourceCategory } from '@/api'
-import { BIZ_DIR_ROOT_ID, dirKindOf } from '@/api/sourceDirs'
+import { BIZ_DIR_ROOT_ID, dirKindOf, invalidateBizCycles } from '@/api/sourceDirs'
 import { EXPECT_CYCLE_MAX_HOURS, EXPECT_CYCLE_PRESETS, expectCycleText } from '@/utils/expectCycle'
 
 const emit = defineEmits<{
@@ -404,6 +404,7 @@ async function submitCycle() {
     // 清空也传 0（后端约定：不传 / 空串会被拒绝）
     await categoryApi.updateExpectCycle(target.id, hours)
     applyCycleLocally(String(target.id), hours)
+    invalidateBizCycles()
     ElMessage.success(hours ? `已设置预期产出周期：${expectCycleText(hours)}` : '已清除预期产出周期')
     cycleDialogVisible.value = false
     emit('refresh')
@@ -795,7 +796,7 @@ async function handleDelete(node: { id: string; name: string }) {
               <span>小时</span>
             </div>
             <div class="text-[11px] text-slate-400 mt-1 leading-tight">
-              目录下的源超过这个时间没有新的详情数据，会被判为「详情停更」。源在多个业务目录时取最短的周期；子目录不继承父目录。
+              目录下的源超过这个时间没有新的详情数据，会被判为「详情停更」。子目录没设时沿用最近一个上级目录的周期；源在多个业务目录时取最短的。
             </div>
           </div>
         </el-form-item>

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SourceOutputTable } from '@/api'
 import { sourceOutputTablesFromLegacy } from '@/api/legacyAdapters'
 import { migrateHiddenColumns } from '@/api/sourceViews'
-import { isDetailTable, outputCountText, shortDateTime, stepsText, summarizeSourceOutput } from './sourceOutput'
+import { durationText, graceHours, isDetailTable, judgeSourceOutput, outputCountText, shortDateTime, stepsText, summarizeSourceOutput } from './sourceOutput'
 
 const table = (patch: Partial<SourceOutputTable>): SourceOutputTable => ({
   entryTypeId: '1', entryTypeName: '表', tableName: 'tb_x', dataCount: 0, steps: [], ...patch,
@@ -95,5 +95,45 @@ describe('summarizeSourceOutput（详情表认定）', () => {
 describe('migrateHiddenColumns', () => {
   it('旧视图隐藏的「成功」→「产出」，去重，其它不动', () => {
     expect(migrateHiddenColumns(['url', 'success', 'output'])).toEqual(['url', 'output'])
+  })
+})
+
+describe('judgeSourceOutput（产出结论，1114 一期 B）', () => {
+  const now = new Date(2026, 10, 16, 12, 0, 0).getTime()
+  const hoursAgo = (h: number) => {
+    const d = new Date(now - h * 3_600_000)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  }
+  const ok = (h: number) => summarizeSourceOutput([table({ entryTypeId: 'd', dataCount: 1, lastInsertAt: hoursAgo(h) })])
+
+  it('宽限：周期 ≤ 1 天给 6 小时，否则 25%', () => {
+    expect(graceHours(24)).toBe(6)
+    expect(graceHours(12)).toBe(6)
+    expect(graceHours(168)).toBe(42)
+  })
+
+  it('优先级：未配置周期 > 无详情表 > 统计异常 > 停更 > 正常', () => {
+    expect(judgeSourceOutput(ok(100), undefined, now).verdict).toBe('unconfigured')
+    expect(judgeSourceOutput({ kind: 'none' }, 24, now).verdict).toBe('none')
+    expect(judgeSourceOutput(undefined, 24, now).verdict).toBe('error')
+    expect(judgeSourceOutput(summarizeSourceOutput([table({ entryTypeId: 'd', dataCount: -1 })]), 24, now).verdict).toBe('error')
+    const never = judgeSourceOutput(summarizeSourceOutput([table({ entryTypeId: 'd', dataCount: 0 })]), 24, now)
+    expect(never.verdict).toBe('stale')
+    expect(never.staleHours).toBeUndefined()
+  })
+
+  it('周期 1 天：29 小时内正常，超过 30 小时停更', () => {
+    expect(judgeSourceOutput(ok(29), 24, now).verdict).toBe('ok')
+    const stale = judgeSourceOutput(ok(31), 24, now)
+    expect(stale.verdict).toBe('stale')
+    expect(stale.staleHours).toBeCloseTo(31)
+    expect(stale).toMatchObject({ cycleHours: 24, graceHours: 6 })
+  })
+
+  it('停更时长文字', () => {
+    expect(durationText(31)).toBe('1 天')
+    expect(durationText(5.5)).toBe('5 小时')
+    expect(durationText(0.2)).toBe('1 小时')
   })
 })

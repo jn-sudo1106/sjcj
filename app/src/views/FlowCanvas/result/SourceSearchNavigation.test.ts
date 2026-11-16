@@ -64,7 +64,9 @@ describe('源列表进入搜索工作区', () => {
     wrapper.unmount()
     const restored = mountList(id)
     await flushPromises()
-    expect(sourceApi.sourcePaged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, name: '公告', sourceGroupId: '88', directory }))
+    // 业务目录范围下会自动统计产出结论（1114 一期 B，多一次 size=500 的收集请求），这里只看列表本身的请求
+    const listCalls = vi.mocked(sourceApi.sourcePaged).mock.calls.filter(([q]) => q?.size !== 500)
+    expect(listCalls.at(-1)?.[0]).toEqual(expect.objectContaining({ page: 2, name: '公告', sourceGroupId: '88', directory }))
     expect((restored.get('.sov-table-wrap').element as HTMLElement).scrollTop).toBe(244)
     expect((restored.get('.sov-table-wrap').element as HTMLElement).scrollLeft).toBe(72)
     expect((restored.get('[data-testid="source-check-1"]').element as HTMLInputElement).checked).toBe(false)

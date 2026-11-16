@@ -84,3 +84,52 @@ export function stepsText(steps: SourceOutputTable['steps']): string {
   if (!steps.length) return '—'
   return steps.length === 1 ? steps[0].stepName || steps[0].stepId : `${steps[0].stepName || steps[0].stepId} 等 ${steps.length} 个`
 }
+
+// ---------------- 产出结论（1114 一期 B，方案 §3.3） ----------------
+
+/** 结论：停更 / 统计异常 / 正常 / 未配置周期 / 无详情表 */
+export type OutputVerdict = 'stale' | 'error' | 'ok' | 'unconfigured' | 'none'
+
+export const OUTPUT_VERDICT_LABEL: Record<OutputVerdict, string> = {
+  stale: '详情停更',
+  error: '统计异常',
+  ok: '正常',
+  unconfigured: '未配置周期',
+  none: '无详情表',
+}
+
+/** 宽限：周期 ≤ 1 天给 6 小时，否则给周期的 25%（方案 §3.3，后续可配） */
+export function graceHours(cycleHours: number): number {
+  return cycleHours <= 24 ? 6 : cycleHours * 0.25
+}
+
+export interface OutputJudgement {
+  verdict: OutputVerdict
+  /** 停更时：距最近入库多少小时（从未入库为 undefined） */
+  staleHours?: number
+  cycleHours?: number
+  graceHours?: number
+}
+
+/**
+ * 结论按优先级判（方案 §3.3）：未配置周期 > 无详情表 > 统计异常（含接口失败）> 详情停更 > 正常。
+ * `summary` 为 undefined 表示接口失败；`cycleHours` 为 undefined 表示源所在业务目录都没设周期。
+ * 从未入库 = 停更（有周期却一条没有）。
+ */
+export function judgeSourceOutput(summary: SourceOutputSummary | undefined, cycleHours: number | undefined, now = Date.now()): OutputJudgement {
+  if (!cycleHours) return { verdict: 'unconfigured' }
+  const grace = graceHours(cycleHours)
+  if (summary?.kind === 'none') return { verdict: 'none', cycleHours, graceHours: grace }
+  if (!summary || summary.kind === 'error') return { verdict: 'error', cycleHours, graceHours: grace }
+  if (summary.kind === 'never') return { verdict: 'stale', cycleHours, graceHours: grace }
+  const gap = (now - timeOf(summary.lastInsertAt)) / 3_600_000
+  return gap > cycleHours + grace
+    ? { verdict: 'stale', staleHours: gap, cycleHours, graceHours: grace }
+    : { verdict: 'ok', cycleHours, graceHours: grace }
+}
+
+/** 「3 天」「5 小时」：停更时长，按天取整，不足 1 天按小时 */
+export function durationText(hours: number): string {
+  if (hours >= 24) return `${Math.floor(hours / 24)} 天`
+  return `${Math.max(1, Math.floor(hours))} 小时`
+}
