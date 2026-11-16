@@ -407,6 +407,68 @@ describe('extractChartDataFromText 业务数据表格自动解析为图表与明
     expect(chartData.title).toContain('建筑面积(m²)')
   })
 
+  it('用户问数返回的最新价格数据（编号/日期/价格）正确解析为明细列表与趋势图，且不被误判为选表澄清', () => {
+    const priceTableText = `为您查询到南京二手房最新价格记录如下：
+
+| 编号 | 日期 | 价格 |
+| --- | --- | --- |
+| 1 | 2026-10-18 | 5,557 |
+| 2 | 2026-10-18 | 17,574 |
+| 3 | 2026-10-18 | 13,297 |
+| 4 | 2026-10-18 | 9,502 |
+| 5 | 2026-10-18 | 9,046 |
+| 6 | 2026-10-18 | 12,946 |
+| 7 | 2026-10-18 | 15,238 |
+| 8 | 2026-10-18 | 9,634 |
+`
+    // 1. 验证坚决不被误判为待选物理表澄清卡片
+    const clarification = extractClarificationFromText(priceTableText)
+    expect(clarification).toBeNull()
+
+    // 2. 验证正确解析为业务数据图表与明细数据
+    const chartData = extractChartDataFromText(priceTableText)
+    expect(chartData).not.toBeNull()
+    if (!chartData) return
+
+    expect(chartData.tableColumns).toEqual([
+      { prop: 'col_0', label: '编号' },
+      { prop: 'col_1', label: '日期' },
+      { prop: 'col_2', label: '价格' },
+    ])
+    expect(chartData.tableRows).toHaveLength(8)
+    expect(chartData.tableRows[0]).toEqual({
+      col_0: 1,
+      col_1: '2026-10-18',
+      col_2: 5557,
+    })
+    expect(chartData.tableRows[1].col_2).toBe(17574)
+
+    // 验证柱状图生成：自动排除「编号」，选择「价格」作为度量，「日期」作为标签
+    expect(chartData.bars).toHaveLength(8)
+    expect(chartData.bars?.[0].displayValue).toBe('5,557')
+    expect(chartData.bars?.[1].displayValue).toBe('17,574')
+    expect(chartData.bars?.[1].value).toBe(100) // 最大值为 17,574，归一化占比 100%
+
+    // 验证饼图切片生成
+    expect(chartData.slices).toHaveLength(8)
+    expect(chartData.title).toContain('价格')
+  })
+
+  it('即使表格包含表名/说明列头，若每行内容为日期与纯数值，仍判定为业务数据而非选表澄清', () => {
+    const rawTableText = `| 编号 | 表名 | 说明 |
+| --- | --- | --- |
+| 1 | 2026-10-18 | 5,557 |
+| 2 | 2026-10-18 | 17,574 |
+| 3 | 2026-10-18 | 13,297 |
+`
+    const clarification = extractClarificationFromText(rawTableText)
+    expect(clarification).toBeNull()
+
+    const chartData = extractChartDataFromText(rawTableText)
+    expect(chartData).not.toBeNull()
+    expect(chartData?.tableRows).toHaveLength(3)
+  })
+
   it('对候选表澄清指引表格返回 null，避免与待确认项卡片混淆', () => {
     const clarifyTable = `| 编号 | 表名 | 说明 |
 | --- | --- | --- |

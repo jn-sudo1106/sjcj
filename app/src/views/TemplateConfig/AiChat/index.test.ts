@@ -217,6 +217,19 @@ describe('AI 智能问数 · AiChatView', () => {
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
+    // 默认展示用户要求的明细数据表（列表）视图
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
+
+    // 切换到「趋势图表」视图
+    const chartRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('趋势图表'))
+    expect(chartRadio).toBeTruthy()
+    await chartRadio!.find('input').setValue('chart')
+    await wrapper.vm.$nextTick()
+
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
     expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
     expect(wrapper.find('.rc-table-view').exists()).toBe(false)
@@ -236,7 +249,7 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
     expect(wrapper.find('.rc-table-view').exists()).toBe(false)
 
-    // 切换到「明细数据表」视图
+    // 切换回「明细数据表」视图
     const tableRadio = wrapper
       .findAll('.el-radio-button')
       .find((btn) => btn.text().includes('明细数据表'))
@@ -247,18 +260,6 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
     expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
     expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
-
-    // 切换回「趋势图表」视图
-    const chartRadio = wrapper
-      .findAll('.el-radio-button')
-      .find((btn) => btn.text().includes('趋势图表'))
-    expect(chartRadio).toBeTruthy()
-    await chartRadio!.find('input').setValue('chart')
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
-    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
-    expect(wrapper.find('.rc-table-view').exists()).toBe(false)
   })
 
   it('支持在明细数据表视图快捷导出 Excel 与 CSV', async () => {
@@ -740,32 +741,111 @@ describe('AI 智能问数 · AiChatView', () => {
     // 标题包含度量指标
     expect(wrapper.find('.rc-dataview-title').text()).toContain('建筑面积(m²)')
 
-    // 2. 默认呈现趋势柱状图视图
-    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
-    expect(wrapper.text()).toContain('1. 创维文汇苑')
-    expect(wrapper.text()).toContain('100.7')
-
-    // 3. 切换到明细数据表视图并验证表格行与一键导出
-    const radioButtons = wrapper.findAll('.el-radio-button')
-    await radioButtons[2].find('input').trigger('change')
-    await flushPromises()
-
+    // 2. 默认呈现用户要求的明细数据表（列表）视图
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
     expect(wrapper.text()).toContain('共 4 条明细记录')
     expect(wrapper.text()).toContain('创维文汇苑')
-    expect(wrapper.text()).toContain('105.41')
+    expect(wrapper.text()).toContain('100.7')
 
-    // 4. 点击明细表顶部的「导出 Excel」按钮触发下载
+    // 3. 点击明细表顶部的「导出 Excel」按钮触发下载
     const exportExcelBtn = wrapper.find('[data-testid="rc-table-export-excel"]')
     expect(exportExcelBtn.exists()).toBe(true)
     await exportExcelBtn.trigger('click')
     expect(downloadXlsx).toHaveBeenCalled()
 
-    // 5. 点击「导出 CSV」按钮触发下载
+    // 4. 点击「导出 CSV」按钮触发下载
     const exportCsvBtn = wrapper.find('[data-testid="rc-table-export-csv"]')
     expect(exportCsvBtn.exists()).toBe(true)
     await exportCsvBtn.trigger('click')
     expect(downloadCsv).toHaveBeenCalled()
+
+    // 5. 切换到趋势柱状图视图
+    const radioButtons = wrapper.findAll('.el-radio-button')
+    await radioButtons[0].find('input').trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('1. 创维文汇苑')
+    expect(wrapper.text()).toContain('100.7')
+  })
+
+  it('返回的日期与最新价格数据展示为明细列表，支持行勾选、导出选中行与切换趋势图/饼图，不渲染选表澄清卡片', async () => {
+    const testSession = [
+      { id: 's-nj-price', title: '南京二手房最新价格', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const priceMarkdown = `为您查询到南京二手房最新价格记录如下：
+
+| 编号 | 日期 | 价格 |
+| --- | --- | --- |
+| 1 | 2026-10-18 | 5,557 |
+| 2 | 2026-10-18 | 17,574 |
+| 3 | 2026-10-18 | 13,297 |
+| 4 | 2026-10-18 | 9,502 |
+| 5 | 2026-10-18 | 9,046 |
+| 6 | 2026-10-18 | 12,946 |
+| 7 | 2026-10-18 | 15,238 |
+| 8 | 2026-10-18 | 9,634 |
+`
+    const testMessages = {
+      's-nj-price': [
+        { id: 'm-u1', role: 'user' as const, content: '查询下南京二手房最新的价格', createdAt: '刚刚' },
+        { id: 'm-a1', role: 'assistant' as const, content: priceMarkdown, createdAt: '刚刚' },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialActiveSessionId: 's-nj-price',
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 验证坚决不渲染 ClarificationCard 选表卡片
+    expect(wrapper.find('[data-testid="clarification-card"]').exists()).toBe(false)
+    expect(wrapper.find('.cc-interactive-table').exists()).toBe(false)
+
+    // 2. 验证渲染了 rc-dataview-card，且默认呈现明细数据表（列表）
+    expect(wrapper.find('.rc-dataview-card').exists()).toBe(true)
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('共 8 条明细记录')
+    expect(wrapper.text()).toContain('5557')
+    expect(wrapper.text()).toContain('17574')
+
+    // 3. 验证表格行勾选交互：勾选第 1 行与第 2 行
+    const rows = wrapper.findAll('.rc-preview-table tbody tr')
+    expect(rows).toHaveLength(8)
+    await rows[0].trigger('click')
+    await rows[1].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选 2 条')
+    expect(rows[0].classes()).toContain('row-selected')
+    expect(rows[1].classes()).toContain('row-selected')
+
+    // 4. 点击「导出已选 (2) Excel」按钮，验证仅导出选中行
+    const exportExcelBtn = wrapper.find('[data-testid="rc-table-export-excel"]')
+    expect(exportExcelBtn.text()).toContain('导出已选 (2) Excel')
+    await exportExcelBtn.trigger('click')
+    expect(downloadXlsx).toHaveBeenCalled()
+
+    // 5. 切换到「趋势图表」视图
+    const chartRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('趋势图表'))
+    expect(chartRadio).toBeTruthy()
+    await chartRadio!.find('input').setValue('chart')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+
+    // 6. 切换到「占比饼图」视图
+    const pieRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('占比饼图'))
+    expect(pieRadio).toBeTruthy()
+    await pieRadio!.find('input').setValue('pie')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
   })
 
   it('用户输入「做成图表形式」或「把结果导出成 Excel」等自然语言指令时，能智能响应图表切换与即时下载', async () => {

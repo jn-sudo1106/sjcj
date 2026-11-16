@@ -226,13 +226,24 @@ export function extractClarificationFromText(text: string): Clarification | null
     if (headerCells.length < 2) continue
 
     const idColIdx = headerCells.findIndex((h) => /(?:编号|序号|id|index|no)/i.test(h))
-    const tableColIdx = headerCells.findIndex((h) => /(?:表名|表|table|候选|数据表|物理表)/i.test(h))
+    const tableColIdx = headerCells.findIndex((h) => {
+      const clean = h.replace(/[`*]/g, '').trim()
+      // 坚决排除常规业务报表列名（如“价格表”、“数据列表”、“明细表”、“统计表”）
+      if (/(?:列表|统计表|价格表|明细表|报表|对比表|数据表查询)/.test(clean)) return false
+      return (
+        /^(?:表名|物理表(?:名)?|候选表(?:名)?|table_name|待选表)$/i.test(clean) ||
+        /(?:物理表|候选表|table_name)/i.test(clean)
+      )
+    })
     const descColIdx = headerCells.findIndex((h) => /(?:说明|描述|含义|备注|注释|desc|comment|业务)/i.test(h))
 
-    // 必须有明确的待确认候选表特征，避免误将常规业务数据表格（如房屋明细、指标对比表）识别为澄清选项
+    // 必须有明确的待确认候选表意图（例如“请问你希望用哪张表”、“存在多种数据源候选”），坚决避免将常规业务数据表格误识别为澄清选项
+    const hasTableChoiceIntent =
+      /(?:请问你?希望用哪张表|用哪张表|用哪个来源|用哪个数据源|需要您确认用哪个|请确认.*表|请选择要(?:分析|使用)的(?:表|数据源)|候选表[：:]|回复["“]?\d+["”]?.*(?:表|销售价格|成交信息))/i.test(text)
+
     const isCandidateTable =
-      tableColIdx !== -1 ||
-      (idColIdx !== -1 && descColIdx !== -1 && /(?:请问|希望用哪|用哪张|哪张表|哪个来源|需要您确认|请确认|请选择|候选表)/i.test(text))
+      hasTableChoiceIntent &&
+      (tableColIdx !== -1 || (idColIdx !== -1 && descColIdx !== -1))
     if (!isCandidateTable) continue
 
     const effTableCol = tableColIdx !== -1 ? tableColIdx : (headerCells.length > 2 ? 1 : 0)
@@ -240,6 +251,7 @@ export function extractClarificationFromText(text: string): Clarification | null
     const effIdCol = idColIdx !== -1 ? idColIdx : (tableColIdx > 0 ? 0 : -1)
 
     const tableOptions: ClarificationOption[] = []
+    let containsBusinessData = false
     let j = i + 2
     while (j < lines.length) {
       const rowLine = lines[j].trim()
@@ -263,6 +275,17 @@ export function extractClarificationFromText(text: string): Clarification | null
         const numId = parseInt(rawId.replace(/\D/g, ''), 10)
         const entryTypeId = !isNaN(numId) && numId > 0 ? numId : tableOptions.length + 1
 
+        // 强校验：如果候选项列值是日期（如 2026-10-18）或纯数值（如 5,557），或者包含户型面积等度量，直接判定为业务数据结果，一票否决
+        const isDateLike = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(cleanTable)
+        const isNumLike = /^-?[\d,]+(?:\.\d+)?$/.test(cleanTable)
+        const isDescNumeric = /^-?[\d,]+(?:\.\d+)?$/.test(cleanDesc)
+        const isPropertyUnit = /(?:m²|㎡|室|厅|套|元)/.test(cleanTable) || /(?:m²|㎡|室|厅)/.test(cleanDesc)
+
+        if (isDateLike || isNumLike || isPropertyUnit || (isDateLike && isDescNumeric)) {
+          containsBusinessData = true
+          break
+        }
+
         if (cleanTable) {
           tableOptions.push({
             entryTypeId,
@@ -273,6 +296,11 @@ export function extractClarificationFromText(text: string): Clarification | null
         }
       }
       j++
+    }
+
+    // 若检测到属于业务数据（如各日期的房屋价格、成交套数），绝不作为澄清选项
+    if (containsBusinessData) {
+      continue
     }
 
     if (tableOptions.length >= 2) {
@@ -403,17 +431,22 @@ function parseNumericCell(val: string): { isNum: boolean; numVal: number; displa
  * 权重评估：度量指标列（数值列优先级）
  */
 function scoreMetricColumn(header: string): number {
+  const norm = header.replace(/[`*]/g, '').trim()
+  // 序号/编号列绝不作为数值度量
+  if (/^(?:编号|序号|id|index|no)$/i.test(norm)) {
+    return -100
+  }
   let score = 1
-  if (/(价格|均价|单价|总价|金额|销售额|收入|利润|成本|price|amount|revenue|cost)/i.test(header)) {
+  if (/(价格|均价|单价|总价|金额|销售额|收入|利润|成本|price|amount|revenue|cost)/i.test(norm)) {
     score += 10
   }
-  if (/(数量|套数|人数|次数|任务数|失败数|成功数|总量|总数|count|cnt|total|num)/i.test(header)) {
+  if (/(数量|套数|人数|次数|任务数|失败数|成功数|总量|总数|count|cnt|total|num)/i.test(norm)) {
     score += 8
   }
-  if (/(面积|耗时|时长|延时|时间|area|duration|time)/i.test(header)) {
+  if (/(面积|耗时|时长|延时|时间|area|duration|time)/i.test(norm)) {
     score += 6
   }
-  if (/(率|占比|比例|百分比|rate|ratio|percent|pct)/i.test(header)) {
+  if (/(率|占比|比例|百分比|rate|ratio|percent|pct)/i.test(norm)) {
     score += 4
   }
   return score
@@ -423,15 +456,19 @@ function scoreMetricColumn(header: string): number {
  * 权重评估：维度标签列（分类/实体列优先级）
  */
 function scoreLabelColumn(header: string): number {
+  const norm = header.replace(/[`*]/g, '').trim()
+  if (/^(?:编号|序号|id|index|no)$/i.test(norm)) {
+    return -50
+  }
   let score = 1
-  if (/(小区|网站|名称|项目|机构|客户|商品|产品|人员|姓名|城市|省份|地区|区域|板块|site|name|title|product|item|city|region)/i.test(header)) {
+  if (/(小区|网站|名称|项目|机构|客户|商品|产品|人员|姓名|城市|省份|地区|区域|板块|site|name|title|product|item|city|region)/i.test(norm)) {
     score += 10
   }
-  if (/(类型|类别|户型|分类|渠道|来源|状态|维度|type|category|status|channel)/i.test(header)) {
-    score += 6
+  if (/(日期|月份|年份|时间|季度|周|date|month|year|day)/i.test(norm)) {
+    score += 8
   }
-  if (/(日期|月份|年份|时间|季度|周|date|month|year|day)/i.test(header)) {
-    score += 4
+  if (/(类型|类别|户型|分类|渠道|来源|状态|维度|type|category|status|channel)/i.test(norm)) {
+    score += 6
   }
   return score
 }
@@ -492,12 +529,24 @@ export function extractChartDataFromText(text: string): NonNullable<ChatMessage[
   const headers = rawHeaders.filter((h) => h.length > 0)
   if (headers.length < 2) return null
 
-  // 判定是否为候选表澄清引导
-  const isCandidateTable =
+  // 判定是否为真正的候选表澄清引导（仅当明确为选表提问且内容为表名元数据而非业务数据行时才跳过）
+  if (
     hasChoiceIntent &&
-    headers.some((h) => /(表名|物理表|候选表)/.test(h)) &&
-    headers.some((h) => /(编号|序号|id)/i.test(h))
-  if (isCandidateTable) return null
+    headers.some((h) => /^(?:表名|物理表(?:名)?|候选表(?:名)?|table_name)$/i.test(h.replace(/[`*]/g, '').trim())) &&
+    headers.some((h) => /(?:编号|序号|id)/i.test(h.replace(/[`*]/g, '').trim()))
+  ) {
+    let looksLikeData = false
+    for (let r = separatorIndex + 1; r < Math.min(lines.length, separatorIndex + 5); r++) {
+      const rowLine = lines[r].trim()
+      if (!rowLine.includes('|')) break
+      const cells = parseCells(rowLine)
+      if (cells.some((c) => /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(c) || /(?:m²|㎡|室|厅)/.test(c))) {
+        looksLikeData = true
+        break
+      }
+    }
+    if (!looksLikeData) return null
+  }
 
   // 提取数据行
   const rows: string[][] = []
