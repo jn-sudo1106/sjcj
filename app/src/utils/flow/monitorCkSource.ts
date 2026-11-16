@@ -15,6 +15,7 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import type { CkSourcePayload, CkSourceRecord, RuleOrchestration } from '@/api'
 import { nodeScheduleCron } from './scheduleCron'
+import { isWritableStepId } from './stepPersist'
 
 /**
  * 一个源在 ck_source 里有多条记录时，画布同步必须停手（2026-11-12 最小保护）。
@@ -120,6 +121,19 @@ function parseCheckConf(value: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * 本页会话标识：草稿 key 的绑定只在写下它的这一页会话里有效（见 MonitorCheckBinding.draftSession）。
+ * 每次加载页面重新生成，不持久化。
+ */
+const DRAFT_SESSION = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+  ? crypto.randomUUID()
+  : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+
+/** 画布草稿 key：步骤还没落库（落库后换成后端分配的数字 itemConfig，见 flow.rebindNodeId）。 */
+function isDraftNodeKey(nodeKey: string): boolean {
+  return !isWritableStepId(nodeKey)
+}
+
 /** check_conf.binding → 结构化绑定；没有这个键（旧记录）或结构不对时返回 undefined。 */
 function bindingOf(conf: Record<string, unknown>): MonitorCheckBinding | undefined {
   const raw = conf.binding
@@ -134,6 +148,8 @@ function bindingOf(conf: Record<string, unknown>): MonitorCheckBinding | undefin
   if (Number.isFinite(version) && version > 0) binding.bindingVersion = version
   const boundAt = typeof value.boundAt === 'string' ? value.boundAt.trim() : ''
   if (boundAt) binding.boundAt = boundAt
+  const draftSession = typeof value.draftSession === 'string' ? value.draftSession.trim() : ''
+  if (draftSession) binding.draftSession = draftSession
   return Object.keys(binding).length ? binding : undefined
 }
 
@@ -149,6 +165,8 @@ export function bindingMatches(
   nodeKey: string | undefined,
 ): boolean {
   if (!binding?.nodeKey || !nodeKey || binding.nodeKey !== nodeKey) return false
+  // 草稿 key 刷新页面后会被新节点复用：只认本页会话写下的草稿绑定（2026-11-16）。
+  if (isDraftNodeKey(nodeKey) && binding.draftSession !== DRAFT_SESSION) return false
   if (workflowId && binding.workflowId) return binding.workflowId === workflowId
   return true
 }
@@ -248,6 +266,7 @@ function withBinding(
     nodeKey,
     bindingVersion: version,
     boundAt: versionChanged || !previous?.boundAt ? nowStamp() : previous.boundAt,
+    ...(isDraftNodeKey(nodeKey) ? { draftSession: DRAFT_SESSION } : {}),
   }
   return { ...conf, binding }
 }
@@ -358,6 +377,36 @@ export async function syncMonitorAlertConfig(
     sourceId: Number(trimmed),
     checkConf: JSON.stringify(withNodeInputScope({ ...previousConf, ...alertCheckConfOf(alertConfig, previousConf) })),
   })
+}
+
+/**
+ * 草稿节点落库换 ID 后，把它的检查项绑定从草稿 key 迁到数字步骤 ID（2026-11-16）。
+ *
+ * 节点在步骤落库前就可能保存过监控（绑定写的是 `monitor-5` 这类草稿 key），随后自动保存把节点换成
+ * 后端分配的 itemConfig。不迁的话下次保存按新 ID 认领不到，会另建一条、旧那条变成孤儿。
+ * 只改 checkConf.binding（nodeKey 换新、去掉 draftSession），其余键与定义字段原样不动，带 ver 乐观锁。
+ * 返回是否改了记录；没有对应记录（节点没保存过监控）返回 false。失败向上抛，由调用方提示。
+ */
+export async function rebindMonitorCkSource(
+  sourceId: string | undefined,
+  workflowId: string | undefined,
+  fromKey: string,
+  toKey: string,
+): Promise<boolean> {
+  const trimmed = sourceId?.trim()
+  if (!trimmed || !fromKey || !toKey || fromKey === toKey) return false
+  const rows = await ckSourceApi.list(trimmed)
+  const row = pickBoundRow(rows, workflowId?.trim() || undefined, fromKey)
+  if (!row) return false
+  const conf = parseCheckConf(row.checkConf)
+  const { draftSession: _dropSession, ...binding } = bindingOf(conf) ?? {} // eslint-disable-line @typescript-eslint/no-unused-vars -- 落库后不再需要会话标识
+  await updateSourceCheck({
+    id: row.id,
+    ver: row.ver,
+    sourceId: Number(trimmed),
+    checkConf: JSON.stringify({ ...conf, binding: { ...binding, nodeKey: toKey } }),
+  })
+  return true
 }
 
 /**

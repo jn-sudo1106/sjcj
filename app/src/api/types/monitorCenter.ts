@@ -64,6 +64,12 @@ export interface MonitorCheckBinding {
   nodeKey?: string
   bindingVersion?: number
   boundAt?: string
+  /**
+   * 画布草稿 key（`monitor-5` 这类，节点步骤还没落库）写入时附带的本页会话标识（2026-11-16）。
+   * 草稿 key 的序号刷新页面后会从 1 重排，必然被别的新节点复用；只有同一页会话写下的草稿绑定
+   * 才算本节点，刷新后的新节点不能认领上一轮遗留的检查项。步骤落库换成数字 ID 后去掉此键。
+   */
+  draftSession?: string
 }
 
 /**

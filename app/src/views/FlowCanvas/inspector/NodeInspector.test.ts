@@ -1236,7 +1236,7 @@ describe('数据监控节点保存：同源多条检查项', () => {
 describe('数据监控节点：检查项显式绑定展示（C12）', () => {
   type CkRows = Awaited<ReturnType<typeof ckSourceApi.list>>
 
-  async function mountMonitor(rows: CkRows | Error) {
+  async function mountMonitor(rows: CkRows | Error, nodeKey = '20001') {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -1250,9 +1250,10 @@ describe('数据监控节点：检查项显式绑定展示（C12）', () => {
     node.title = '库存监控'
     node.configId = '1401088'
     node.configName = '库存监控'
-    flow.configs['monitor-1'] = node
-    flow.main = ['monitor-1']
-    flow.select('monitor-1')
+    // 已落库节点：key 是后端分配的数字步骤 ID（草稿 key 的绑定只在本页会话内有效）
+    flow.configs[nodeKey] = node
+    flow.main = [nodeKey]
+    flow.select(nodeKey)
     // 数据监控节点会加载提示词模板（fetch 相对 URL 在 jsdom 下解析不了），返回空列表即可。
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
       JSON.stringify({ data: [] }),
@@ -1271,7 +1272,7 @@ describe('数据监控节点：检查项显式绑定展示（C12）', () => {
       {
         id: 7, sourceId: 430016501, name: '库存检查项',
         checkConf: JSON.stringify({
-          binding: { workflowId: '451', nodeKey: 'monitor-1', bindingVersion: 2, boundAt: '2026-11-13 10:00' },
+          binding: { workflowId: '451', nodeKey: '20001', bindingVersion: 2, boundAt: '2026-11-13 10:00' },
         }),
       },
     ])
@@ -1295,6 +1296,19 @@ describe('数据监控节点：检查项显式绑定展示（C12）', () => {
     wrapper.unmount()
   })
 
+  it('草稿节点（步骤未落库）遇到上一轮会话遗留的同名草稿绑定：显示未绑定，不认领', async () => {
+    const { wrapper } = await mountMonitor([
+      {
+        id: 12, sourceId: 430016501, name: '别人遗留的检查项',
+        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'monitor-1', bindingVersion: 1, draftSession: 'old-session' } }),
+      },
+    ], 'monitor-1')
+    const block = wrapper.get('[data-testid="ni-monitor-binding"]')
+    expect(block.text()).toContain('尚未绑定检查项')
+    expect(block.text()).not.toContain('#12')
+    wrapper.unmount()
+  })
+
   it('接口失败：显示「绑定信息读取失败」，不静默成未绑定', async () => {
     const { wrapper } = await mountMonitor(new Error('接口 502'))
     const block = wrapper.get('[data-testid="ni-monitor-binding"]')
@@ -1307,7 +1321,7 @@ describe('数据监控节点：检查项显式绑定展示（C12）', () => {
     const { wrapper } = await mountMonitor([
       {
         id: 11, sourceId: 430016501, name: '库存检查项',
-        checkConf: JSON.stringify({ binding: { nodeKey: 'monitor-1', bindingVersion: 1, boundAt: '2026-11-13 10:00' } }),
+        checkConf: JSON.stringify({ binding: { nodeKey: '20001', bindingVersion: 1, boundAt: '2026-11-13 10:00' } }),
       },
     ])
     routerPush.mockClear()

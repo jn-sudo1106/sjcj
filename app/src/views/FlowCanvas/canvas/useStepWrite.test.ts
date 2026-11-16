@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { entryApi, flowCenterApi, flowVersionApi, itemApi, sourceApi } from '@/api'
+import { ckSourceApi, entryApi, flowCenterApi, flowVersionApi, itemApi, sourceApi } from '@/api'
 import { stepFromLegacy, stepToSaveItemConfigPayload, stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
@@ -275,6 +275,60 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(itemApi.enable).toHaveBeenCalledWith('40601', '0')
     expect(flow.configs['40601']).toBeTruthy()
     expect(flow.configs[localId]).toBeUndefined()
+  })
+
+  // 2026-11-16：草稿节点保存过监控（绑定写的是草稿 key），落库换成步骤 ID 后检查项绑定要跟着迁，
+  // 否则下次保存按新 ID 认领不到、另建一条。
+  function newLocalNode(template?: string) {
+    setActivePinia(createPinia())
+    const { flow } = loadTestSource()
+    flow.insertAfter('40600', 'web')
+    const localId = flow.selectedId
+    flow.configs[localId].configId = '1400999'
+    flow.configs[localId].outputTable = '6200026'
+    flow.configs[localId].title = '新详情'
+    if (template) flow.configs[localId].template = template
+    vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '40601', name: '新详情', configId: '1400999', enabled: false },
+    ])
+    return { flow, localId }
+  }
+
+  it('数据监控节点落库换 ID：检查项绑定从草稿 key 迁到步骤 ID', async () => {
+    const { flow, localId } = newLocalNode('monitor')
+    // 这里只验接线（换 ID 后按 源 / 流程 / 旧 key → 新 key 调迁移）；迁移本身见 monitorCkSource.test.ts
+    const sync = await import('@/utils/flow/monitorCkSource')
+    const rebind = vi.spyOn(sync, 'rebindMonitorCkSource').mockResolvedValue(true)
+
+    await useStepWrite().persistFlowSteps()
+
+    expect(flow.configs['40601']).toBeTruthy()
+    expect(rebind).toHaveBeenCalledWith('430016398', '', localId, '40601')
+  })
+
+  it('数据监控节点迁绑定失败：步骤照常换 ID，只提示不抛错', async () => {
+    const { flow } = newLocalNode('monitor')
+    vi.spyOn(ckSourceApi, 'list').mockRejectedValue(new Error('接口 502'))
+    const { ElMessage } = await import('element-plus')
+
+    const result = await useStepWrite().persistFlowSteps()
+
+    expect(result.created).toBe(1)
+    expect(flow.configs['40601']).toBeTruthy()
+    expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('监控检查项的节点绑定未能更新'))
+  })
+
+  it('非监控节点落库换 ID：不查检查项', async () => {
+    newLocalNode()
+    const list = vi.spyOn(ckSourceApi, 'list')
+
+    await useStepWrite().persistFlowSteps()
+
+    expect(list).not.toHaveBeenCalled()
   })
 
   // 0927 H1：非文件节点输出表未就绪（已绑配置但没选输出表）——提交必被后端

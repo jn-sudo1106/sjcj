@@ -24,7 +24,9 @@ import {
   outputTableMissing,
   validFlowIdOf,
 } from '@/utils/flow/stepPersist'
-import { isRuleLikeNode, isPdfNode, effectiveOutputTable, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isRuleLikeNode, isPdfNode, isMonitorNode, effectiveOutputTable, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { rebindMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { canvasFlowIdOf } from '@/stores/flowVersion'
 
 function assertOk(ack: Ack | null | undefined, fallback: string) {
   if (ack && 'ok' in ack && ack.ok === false) throw new Error(ack.message || fallback)
@@ -350,6 +352,15 @@ export function useStepWrite() {
     }
     if (!flow.rebindNodeId(nodeId, created.stepId)) {
       throw new Error(`步骤已创建（#${created.stepId}），但画布节点未能换成新 ID`)
+    }
+    // 数据监控节点：检查项绑定跟着从草稿 key 迁到步骤 ID，否则下次保存认领不到、另建一条（2026-11-16）。
+    // 迁移失败不回滚步骤，只提示；节点再保存时会按新 ID 另建，旧那条需到监控中心清理。
+    if (isMonitorNode(flow.configs[created.stepId])) {
+      try {
+        await rebindMonitorCkSource(sourceIdOf(), canvasFlowIdOf(flow), nodeId, created.stepId)
+      } catch (e) {
+        ElMessage.warning(`步骤已创建（#${created.stepId}），但监控检查项的节点绑定未能更新：${errorMessage(e)}`)
+      }
     }
     return created.stepId
   }
