@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
-import { submitClarificationAnswer, listRecommendedQuestions } from '@/api/aiChat'
+import { submitClarificationAnswer, listRecommendedQuestions, streamAgentChat } from '@/api/aiChat'
 import { downloadCsv } from '@/utils/csv'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 
@@ -25,18 +25,22 @@ vi.mock('@/utils/format/xlsxExport', async (importOriginal) => {
   }
 })
 
-vi.mock('@/api/aiChat', () => ({
-  listAiSessions: vi.fn().mockResolvedValue([]),
-  listAiAgents: vi.fn().mockResolvedValue([
-    { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
-  ]),
-  listRecommendedQuestions: vi.fn().mockResolvedValue([]),
-  submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
-  streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
-    onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
-    onEvent({ type: 'done' })
-  }),
-}))
+vi.mock('@/api/aiChat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/aiChat')>()
+  return {
+    ...actual,
+    listAiSessions: vi.fn().mockResolvedValue([]),
+    listAiAgents: vi.fn().mockResolvedValue([
+      { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
+    ]),
+    listRecommendedQuestions: vi.fn().mockResolvedValue([]),
+    submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
+    streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
+      onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
+      onEvent({ type: 'done' })
+    }),
+  }
+})
 
 const mockSessions = [
   { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' as const },
@@ -685,5 +689,324 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 对话流中自动发出单项指令，无需用户手动在输入框敲字
     expect(wrapper.text()).toContain('6（贝壳二手房成交信息）')
+  })
+
+  it('当智能体返回 Markdown 业务数据表格时，自动生成图表与明细数据卡片，支持多视图切换与一键导出', async () => {
+    const testSession = [
+      { id: 's-data', title: '查询南京二手房成交记录', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-data': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: `为您检索到南京二手房最新成交记录如下：
+
+| 小区 | 成交日期 | 户型 | 建筑面积(m²) |
+| --- | --- | --- | --- |
+| 创维文汇苑 | 2026-10-18 | 3室2厅 | 100.7 |
+| 雍澜和府 | 2026-10-18 | 3室2厅 | 105.41 |
+| 欧陆经典花园 | 2026-10-18 | 2室2厅 | 89.55 |
+| 威尼斯水城第十四街区 | 2026-10-18 | 2室2厅 | 91.27 |`,
+          createdAt: '刚刚',
+          thinking: {
+            completed: true,
+            durationMs: 850,
+            steps: ['执行 SQL 检索二手房明细数据'],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 数据视图卡片自动渲染
+    expect(wrapper.find('.rc-dataview-card').exists()).toBe(true)
+    // 标题包含度量指标
+    expect(wrapper.find('.rc-dataview-title').text()).toContain('建筑面积(m²)')
+
+    // 2. 默认呈现趋势柱状图视图
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('1. 创维文汇苑')
+    expect(wrapper.text()).toContain('100.7')
+
+    // 3. 切换到明细数据表视图并验证表格行与一键导出
+    const radioButtons = wrapper.findAll('.el-radio-button')
+    await radioButtons[2].find('input').trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('共 4 条明细记录')
+    expect(wrapper.text()).toContain('创维文汇苑')
+    expect(wrapper.text()).toContain('105.41')
+
+    // 4. 点击明细表顶部的「导出 Excel」按钮触发下载
+    const exportExcelBtn = wrapper.find('[data-testid="rc-table-export-excel"]')
+    expect(exportExcelBtn.exists()).toBe(true)
+    await exportExcelBtn.trigger('click')
+    expect(downloadXlsx).toHaveBeenCalled()
+
+    // 5. 点击「导出 CSV」按钮触发下载
+    const exportCsvBtn = wrapper.find('[data-testid="rc-table-export-csv"]')
+    expect(exportCsvBtn.exists()).toBe(true)
+    await exportCsvBtn.trigger('click')
+    expect(downloadCsv).toHaveBeenCalled()
+  })
+
+  it('用户输入「做成图表形式」或「把结果导出成 Excel」等自然语言指令时，能智能响应图表切换与即时下载', async () => {
+    const testSession = [
+      { id: 's-cmd', title: '二手房数据分析', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-cmd': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: `| 小区 | 建筑面积(m²) |\n| --- | --- |\n| 创维文汇苑 | 100.7 |\n| 雍澜和府 | 105.41 |`,
+          createdAt: '刚刚',
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 用户先切换到表格视图
+    const radioButtons = wrapper.findAll('.el-radio-button')
+    await radioButtons[2].find('input').trigger('change')
+    await flushPromises()
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+
+    // 2. 用户在输入框中输入「做成图表形式」并回车
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('做成图表形式')
+    await textarea.trigger('keydown', { key: 'Enter', shiftKey: false })
+    await flushPromises()
+
+    // 应自动识别为图表转换指令，将视图切回图表，且回复确认文案
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('已为您将查询结果转换为「趋势柱状图」展示')
+
+    // 3. 用户在输入框中输入「把结果导出成 Excel」并发送
+    await textarea.setValue('把结果导出成 Excel')
+    await textarea.trigger('keydown', { key: 'Enter', shiftKey: false })
+    await flushPromises()
+
+    // 触发 Excel 导出
+    expect(downloadXlsx).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('已为您生成并导出')
+  })
+
+  it('对话发起之后，处于响应中时显示停止按钮，点击停止按钮可中断对话', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params, onEvent) => {
+      capturedSignal = params.signal
+      onEvent({ type: 'reasoning', reasoning: '正在读取表结构与元数据...' })
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('分析昨日抓取成功率')
+
+    const sendBtn = wrapper.find('[data-testid="send-btn"]')
+    expect(sendBtn.exists()).toBe(true)
+
+    // 发起对话
+    await sendBtn.trigger('click')
+    await flushPromises()
+
+    // 发起后处于发送中：发送按钮被替换为停止响应按钮，浮动停止按钮也显现
+    const stopBtn = wrapper.find('[data-testid="stop-btn"]')
+    expect(stopBtn.exists()).toBe(true)
+    expect(stopBtn.text()).toContain('停止响应')
+
+    const floatStopBtn = wrapper.find('[data-testid="float-stop-btn"]')
+    expect(floatStopBtn.exists()).toBe(true)
+    expect(floatStopBtn.text()).toContain('停止生成')
+
+    expect(capturedSignal?.aborted).toBe(false)
+
+    // 点击停止响应按钮
+    await stopBtn.trigger('click')
+    await flushPromises()
+
+    // 确认信号已被 abort
+    expect(capturedSignal?.aborted).toBe(true)
+
+    // 中断后，停止按钮消失，发送按钮恢复
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="send-btn"]').exists()).toBe(true)
+
+    // 界面展示中断提示
+    expect(wrapper.find('[data-testid="interrupted-notice"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('问数对话已中断')
+    expect(wrapper.text()).toContain('思考已中断')
+  })
+
+  it('支持点击居中浮动的「停止生成」按钮中断对话', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+      capturedSignal = params.signal
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('查询近7天异常任务')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    const floatStopBtn = wrapper.find('[data-testid="float-stop-btn"]')
+    expect(floatStopBtn.exists()).toBe(true)
+
+    await floatStopBtn.trigger('click')
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="float-stop-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="send-btn"]').exists()).toBe(true)
+  })
+
+  it('对话响应中支持通过 Esc 按键中断生成', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+      capturedSignal = params.signal
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('排查响应超时')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(true)
+
+    // 按下 Esc 键
+    await textarea.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="send-btn"]').exists()).toBe(true)
+  })
+
+  it('流式已有部分文本输出时中断，保留已输出内容并展示本次回答已中断标识', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params, onEvent) => {
+      capturedSignal = params.signal
+      onEvent({ type: 'chunk', text: '根据数据统计，当前网络层异常主要集中在' })
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('输出网络层异常分析')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    // 此时已有部分文本在页面上
+    expect(wrapper.text()).toContain('根据数据统计，当前网络层异常主要集中在')
+
+    // 触发中断
+    await wrapper.find('[data-testid="stop-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(true)
+    // 已输出的文本依然保留
+    expect(wrapper.text()).toContain('根据数据统计，当前网络层异常主要集中在')
+    // 渲染中断标签
+    expect(wrapper.find('[data-testid="interrupted-tag"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('本次回答已中断')
+  })
+
+  it('对话响应中点击新建会话或切换会话时，自动中断上一次流式会话', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+      capturedSignal = params.signal
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('长文本分析')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(false)
+
+    // 点击新建问数会话按钮
+    const newChatBtn = wrapper.find('.rc-newchat-btn')
+    await newChatBtn.trigger('click')
+    await flushPromises()
+
+    // 旧流式请求被成功 abort
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
   })
 })

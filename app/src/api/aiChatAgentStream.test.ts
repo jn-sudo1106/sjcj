@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   streamAgentChat,
   extractClarificationFromText,
+  extractChartDataFromText,
   listRecommendedQuestions,
   type AgentChatEvent,
 } from './aiChat'
@@ -312,5 +313,85 @@ describe('listRecommendedQuestions 推荐问数场景获取', () => {
     vi.spyOn(clientModule, 'request').mockRejectedValue(new Error('Network error'))
     const list = await listRecommendedQuestions()
     expect(list).toEqual([])
+  })
+})
+
+describe('extractChartDataFromText 业务数据表格自动解析为图表与明细数据', () => {
+  const nanjingEsfTableText = `区、户型、建筑面积等基础信息。因此无法给出南京二手房的实际价格数值。
+
+| 小区 | 成交日期 | 户型 | 建筑面积(m²) |
+| --- | --- | --- | --- |
+| 创维文汇苑 | 2026-10-18 | 3室2厅 | 100.7 |
+| 雍澜和府 | 2026-10-18 | 3室2厅 | 105.41 |
+| 欧陆经典花园 | 2026-10-18 | 2室2厅 | 89.55 |
+| 威尼斯水城第十四街区 | 2026-10-18 | 2室2厅 | 91.27 |
+| 天润城第八街区 | 2026-10-18 | 2室2厅 | 79.75 |
+| 三牌楼大街 | 2026-10-18 | 3室1厅 | 76.5 |
+| 托乐嘉贵邻居 | 2026-10-18 | 1室1厅 | 40.04 |
+| 天润城第十三街区 | 2026-10-18 | 3室1厅 | 85.99 |`
+
+  it('能精准解析 Markdown 数据表格为包含列结构、行数据与柱/饼图的 chartData', () => {
+    const chartData = extractChartDataFromText(nanjingEsfTableText)
+    expect(chartData).not.toBeNull()
+    if (!chartData) return
+
+    expect(chartData.tableColumns).toEqual([
+      { prop: 'col_0', label: '小区' },
+      { prop: 'col_1', label: '成交日期' },
+      { prop: 'col_2', label: '户型' },
+      { prop: 'col_3', label: '建筑面积(m²)' },
+    ])
+    expect(chartData.tableRows).toHaveLength(8)
+    expect(chartData.tableRows[0]).toEqual({
+      col_0: '创维文汇苑',
+      col_1: '2026-10-18',
+      col_2: '3室2厅',
+      col_3: 100.7,
+    })
+    expect(chartData.tableRows[1].col_3).toBe(105.41)
+
+    // 验证柱状图生成：自动选取「建筑面积(m²)」作为数值度量，以「小区」作为分类标签
+    expect(chartData.bars).toHaveLength(8)
+    expect(chartData.bars?.[0].label).toBe('1. 创维文汇苑')
+    expect(chartData.bars?.[0].displayValue).toBe('100.7')
+    expect(chartData.bars?.[1].value).toBe(100) // 最大值为 105.41，占比 100%
+
+    // 验证饼图生成：前 7 项 + 第 8 项汇总为「其他」
+    expect(chartData.slices).toHaveLength(8)
+    expect(chartData.slices?.[0].label).toBe('创维文汇苑')
+    expect(chartData.slices?.[0].value).toBe(100.7)
+    expect(chartData.slices?.[7].label).toBe('其他')
+    expect(chartData.slices?.[7].value).toBe(85.99)
+    expect(chartData.title).toContain('建筑面积(m²)')
+  })
+
+  it('对候选表澄清指引表格返回 null，避免与待确认项卡片混淆', () => {
+    const clarifyTable = `| 编号 | 表名 | 说明 |
+| --- | --- | --- |
+| 1 | TB_ZZ_MONTH_OLD_PRICE | 中指-二手房销售价格 |
+| 2 | TB_ZZ_MONTH_OLD_CNT | 中指-二手房销售套数 |
+
+请问你希望用哪张表？例如回复"3"或"6"。`
+    const chartData = extractChartDataFromText(clarifyTable)
+    expect(chartData).toBeNull()
+  })
+
+  it('对无数值度量列的纯分类表格，自动按频次汇总生成分类图表', () => {
+    const categoryTable = `| 小区名称 | 区域 |
+| --- | --- |
+| 创维文汇苑 | 江宁 |
+| 雍澜和府 | 江宁 |
+| 欧陆经典花园 | 鼓楼 |`
+    const chartData = extractChartDataFromText(categoryTable)
+    expect(chartData).not.toBeNull()
+    if (!chartData) return
+    expect(chartData.tableColumns).toHaveLength(2)
+    expect(chartData.bars?.length).toBeGreaterThan(0)
+    expect(chartData.slices?.some((s) => s.label === '江宁' && s.value === 2)).toBe(true)
+  })
+
+  it('空文本或无表格文本返回 null', () => {
+    expect(extractChartDataFromText('')).toBeNull()
+    expect(extractChartDataFromText('普通的文本说明，没有任何表格')).toBeNull()
   })
 })
