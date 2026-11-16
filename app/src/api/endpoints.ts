@@ -131,6 +131,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'category/add', desc: '新增分类', danger: true, live: true },
   { path: 'category/addBatch', desc: '批量新增分类', danger: true, live: true },
   { path: 'category/update', desc: '修改分类', danger: true, live: true },
+  // 1114 源产出监控一期 C：业务目录预期产出周期（独立端点，不走 category/update：后者 form 绑定，没传的字段也是 null）。
+  // 186 实测 2026-11-16：expectCycleHours 必填（0 = 清空）、整数小时 0～8784；只允许 -2 下的业务目录，根 -2 / 系统 / 视图目录拒绝。
+  { path: 'category/updateExpectCycle', desc: '设置业务目录预期产出周期（categoryId + expectCycleHours 小时，0 = 清空）', danger: true, impl: true, live: true },
   { path: 'category/delete', desc: '删除分类', danger: true, live: true },
   // 2026-10-14「我的视图」目录：视图目录 = 带 rootViewId 的分类（categoryPaged / add / update 加 rootViewId，一级 parentId=-1）。
   // 前端按调用强制走真实（mode: 'http'），与 source-view/* 同口径，不标 live。

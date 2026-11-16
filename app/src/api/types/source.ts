@@ -818,6 +818,8 @@ export interface SourceCategory {
   parentId?: string // 父级分类 ID
   path?: string // 祖先 ID 链
   remark?: string // 备注（旧 CATEGORY 列「备注」，分类目录维护/详情用）
+  /** 业务目录预期产出周期（小时）；未配置时不带（1114 源产出监控一期 C，cfg_category.EXPECT_CYCLE_HOURS） */
+  expectCycleHours?: number
   children?: SourceCategory[]
 }
 

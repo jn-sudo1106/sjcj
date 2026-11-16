@@ -224,6 +224,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'category/add': mockAck,
   'category/addBatch': mockAck,
   'category/update': mockAck,
+  'category/updateExpectCycle': mockAck,
   'category/delete': mockAck,
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,

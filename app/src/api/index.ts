@@ -4468,6 +4468,22 @@ export const categoryApi = {
     })
   },
 
+  /**
+   * 设置业务目录预期产出周期（1114 源产出监控一期 C）。独立端点，`hours = 0` 清空；
+   * 后端只收整数小时 0～8784，只允许 -2 下的业务目录（根 -2、系统目录、视图目录都会拒绝）。
+   * 不复用 update：它是 form 绑定，「没传」与「清空」分不开，改名会误清周期。
+   */
+  updateExpectCycle: async (categoryId: string | number, hours: number): Promise<unknown> => {
+    if (!Number.isInteger(hours) || hours < 0) throw new Error('预期周期必须是非负整数小时')
+    clearCategoryCache()
+    return request('category/updateExpectCycle', { categoryId, expectCycleHours: hours }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/updateExpectCycle',
+      httpParams: { categoryId, expectCycleHours: hours },
+    })
+  },
+
   delete: async (id: string | number): Promise<unknown> => {
     clearCategoryCache()
     return request('category/delete', { id }, {

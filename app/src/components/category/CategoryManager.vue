@@ -5,8 +5,10 @@
 // 改完分类后采集资产那边的分类树缓存由 clearCategoryCache 清掉，切回去时静默重拉即可看到。
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Top, Bottom } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Top, Bottom, Clock } from '@element-plus/icons-vue'
 import { sourceApi, categoryApi, clearCategoryCache, type SourceCategory } from '@/api'
+import { BIZ_DIR_ROOT_ID, dirKindOf } from '@/api/sourceDirs'
+import { EXPECT_CYCLE_MAX_HOURS, EXPECT_CYCLE_PRESETS, expectCycleText } from '@/utils/expectCycle'
 
 const emit = defineEmits<{
   /** 分类有增删改 / 排序变化，调用方需要刷新自己手里的分类数据时监听 */
@@ -340,6 +342,78 @@ async function submitForm() {
   }
 }
 
+// ---- 业务目录预期产出周期（1114 源产出监控一期 C） ----
+// 只有业务目录（-2 下，不含 -2 本身）能设；后端同样拦截系统目录、视图目录和根 -2。
+// 判定沿 el-tree 的父节点往上找 -2（PATH 存量格式不一致，孙级目录的 PATH 里不一定有 -2）；
+// 搜索结果树只有命中项，往上找不到时退回 dirKindOf（看 parentId / path）。
+interface TreeNodeLike { data?: unknown; parent?: TreeNodeLike | null }
+function isBizDirNode(node: TreeNodeLike | undefined, data: SourceCategory): boolean {
+  if (String(data.id) === BIZ_DIR_ROOT_ID) return false
+  for (let p = node?.parent; p; p = p.parent) {
+    const parentData = p.data as SourceCategory | undefined
+    if (!parentData || Array.isArray(parentData)) break
+    const id = String(parentData.id)
+    if (id === BIZ_DIR_ROOT_ID) return true
+    if (id === '-1' || id === '0') return false
+  }
+  return dirKindOf({ id: String(data.id), parentId: data.parentId, path: data.path }) === 'biz'
+}
+
+const cycleDialogVisible = ref(false)
+const cycleSaving = ref(false)
+const cycleTarget = ref<SourceCategory | null>(null)
+/** 预设小时数（字符串）/ 'custom' 自定义 / 'none' 不设置 */
+const cycleMode = ref<string>('24')
+const cycleCustomHours = ref<number>(24)
+
+function openCycle(data: SourceCategory) {
+  cycleTarget.value = data
+  const hours = data.expectCycleHours
+  if (!hours) cycleMode.value = 'none'
+  else if (EXPECT_CYCLE_PRESETS.some((p) => p.hours === hours)) cycleMode.value = String(hours)
+  else cycleMode.value = 'custom'
+  cycleCustomHours.value = hours || 24
+  cycleDialogVisible.value = true
+}
+
+/** 保存后就地改两棵树里的节点（整树重拉太重，展开状态也会抖） */
+function applyCycleLocally(id: string, hours: number) {
+  for (const tree of [fullTreeData.value, searchTreeData.value]) {
+    const node = findInTree(tree, id)
+    if (!node) continue
+    if (hours) node.expectCycleHours = hours
+    else delete node.expectCycleHours
+  }
+}
+
+async function submitCycle() {
+  const target = cycleTarget.value
+  if (!target) return
+  let hours = 0
+  if (cycleMode.value === 'custom') {
+    hours = Number(cycleCustomHours.value)
+    if (!Number.isInteger(hours) || hours < 1 || hours > EXPECT_CYCLE_MAX_HOURS) {
+      ElMessage.warning(`请输入 1～${EXPECT_CYCLE_MAX_HOURS} 的整数小时`)
+      return
+    }
+  } else if (cycleMode.value !== 'none') {
+    hours = Number(cycleMode.value)
+  }
+  cycleSaving.value = true
+  try {
+    // 清空也传 0（后端约定：不传 / 空串会被拒绝）
+    await categoryApi.updateExpectCycle(target.id, hours)
+    applyCycleLocally(String(target.id), hours)
+    ElMessage.success(hours ? `已设置预期产出周期：${expectCycleText(hours)}` : '已清除预期产出周期')
+    cycleDialogVisible.value = false
+    emit('refresh')
+  } catch (err) {
+    ElMessage.error(`设置失败：${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    cycleSaving.value = false
+  }
+}
+
 // ---- 批量新增分类弹窗 ----
 const batchDialogVisible = ref(false)
 const batchParentId = ref('0')
@@ -440,6 +514,7 @@ async function handleDelete(node: { id: string; name: string }) {
       <div class="ca-col ca-col-name">分类名称</div>
       <div class="ca-col ca-col-id">分类 ID</div>
       <div class="ca-col ca-col-seq">排序</div>
+      <div class="ca-col ca-col-cycle" title="业务目录下的源预期多久有一次新数据（源产出监控用）；只有业务目录可设">产出周期</div>
       <div class="ca-col ca-col-actions">操作</div>
     </div>
 
@@ -471,8 +546,25 @@ async function handleDelete(node: { id: string; name: string }) {
             </div>
             <div class="ca-col ca-col-id">#{{ data.id }}</div>
             <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
+            <div class="ca-col ca-col-cycle" :data-testid="`category-cycle-${data.id}`">
+              <template v-if="isBizDirNode(node, data)">
+                <span v-if="data.expectCycleHours" class="ca-cycle-tag">{{ expectCycleText(data.expectCycleHours) }}</span>
+                <span v-else class="ca-cycle-none">未设置</span>
+              </template>
+            </div>
             <div class="ca-col ca-col-actions">
               <div class="ca-node-actions">
+                <el-tooltip v-if="isBizDirNode(node, data)" content="设置预期产出周期" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="warning"
+                    size="small"
+                    :icon="Clock"
+                    aria-label="设置预期产出周期"
+                    :data-testid="`category-cycle-edit-${data.id}`"
+                    @click.stop="openCycle(data)"
+                  />
+                </el-tooltip>
                 <el-tooltip content="修改分类" placement="top" :show-after="120">
                   <el-button
                     link
@@ -543,8 +635,25 @@ async function handleDelete(node: { id: string; name: string }) {
             </div>
             <div class="ca-col ca-col-id">#{{ data.id }}</div>
             <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
+            <div class="ca-col ca-col-cycle" :data-testid="`category-cycle-${data.id}`">
+              <template v-if="isBizDirNode(node, data)">
+                <span v-if="data.expectCycleHours" class="ca-cycle-tag">{{ expectCycleText(data.expectCycleHours) }}</span>
+                <span v-else class="ca-cycle-none">未设置</span>
+              </template>
+            </div>
             <div class="ca-col ca-col-actions">
               <div class="ca-node-actions">
+                <el-tooltip v-if="isBizDirNode(node, data)" content="设置预期产出周期" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="warning"
+                    size="small"
+                    :icon="Clock"
+                    aria-label="设置预期产出周期"
+                    :data-testid="`category-cycle-edit-${data.id}`"
+                    @click.stop="openCycle(data)"
+                  />
+                </el-tooltip>
                 <el-tooltip :content="isFirstSibling(node) ? '已在最顶部' : '上移'" placement="top" :show-after="120">
                   <span class="ca-btn-wrap">
                     <el-button
@@ -649,6 +758,53 @@ async function handleDelete(node: { id: string; name: string }) {
           <el-button size="small" @click="editDialogVisible = false">取消</el-button>
           <el-button size="small" type="primary" :loading="submitting" @click="submitForm">
             确定保存
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 预期产出周期（1114 一期 C）：短流程编辑，居中弹窗 -->
+    <el-dialog
+      v-model="cycleDialogVisible"
+      title="预期产出周期"
+      width="440px"
+      append-to-body
+      destroy-on-close
+    >
+      <el-form label-width="85px" size="small" class="ca-dialog-form">
+        <el-form-item label="业务目录">
+          <el-input :model-value="cycleTarget ? `${cycleTarget.name} (#${cycleTarget.id})` : ''" disabled />
+        </el-form-item>
+        <el-form-item label="预期周期">
+          <div class="w-full">
+            <el-radio-group v-model="cycleMode" data-testid="category-cycle-mode">
+              <el-radio-button v-for="p in EXPECT_CYCLE_PRESETS" :key="p.hours" :value="String(p.hours)">{{ p.label }}</el-radio-button>
+              <el-radio-button value="custom">自定义</el-radio-button>
+              <el-radio-button value="none">不设置</el-radio-button>
+            </el-radio-group>
+            <div v-if="cycleMode === 'custom'" class="ca-cycle-custom">
+              <el-input-number
+                v-model="cycleCustomHours"
+                :min="1"
+                :max="EXPECT_CYCLE_MAX_HOURS"
+                :step="1"
+                :precision="0"
+                controls-position="right"
+                data-testid="category-cycle-hours"
+              />
+              <span>小时</span>
+            </div>
+            <div class="text-[11px] text-slate-400 mt-1 leading-tight">
+              目录下的源超过这个时间没有新的详情数据，会被判为「详情停更」。源在多个业务目录时取最短的周期；子目录不继承父目录。
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="ca-dialog-footer">
+          <el-button size="small" @click="cycleDialogVisible = false">取消</el-button>
+          <el-button size="small" type="primary" :loading="cycleSaving" data-testid="category-cycle-save" @click="submitCycle">
+            保存
           </el-button>
         </div>
       </template>
@@ -893,8 +1049,34 @@ async function handleDelete(node: { id: string; name: string }) {
   color: #64748b;
 }
 
+.ca-col-cycle {
+  width: 84px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+}
+.ca-cycle-tag {
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  line-height: 18px;
+  font-weight: 500;
+}
+.ca-cycle-none {
+  color: #cbd5e1;
+}
+.ca-cycle-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #64748b;
+}
+
 .ca-col-actions {
-  width: 190px;
+  width: 214px;
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
