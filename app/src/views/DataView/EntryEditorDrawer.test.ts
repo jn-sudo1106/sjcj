@@ -355,47 +355,52 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect((body().find('select[data-testid="entry-ds-kind"]').element as HTMLSelectElement).value).toBe('MYSQL')
   })
 
-  it('编辑态：数据源类型、读写类型、存储引擎不可修改（disabled 为 true 且带提示），新建态可编辑', async () => {
-    // 1. 编辑态：disabled 且不允许修改
+  it('编辑态：数据源类型、读写类型、存储引擎可自由编辑修改并提交保存', async () => {
     const entry: EntryType = {
       tableId: 't1',
       tableName: 'tb_a',
       name: '表A',
-      dsKind: 'CK',
-      opType: 'r',
-      storageEngine: 'ReplacingMergeTree',
-      sorted: 'entry_id',
-      partColumn: 'toYYYYMM(UPDATE_DT)',
+      dsKind: 'MYSQL',
+      opType: 'wr',
+      storageEngine: 'InnoDB',
       fields: [
         { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
       ],
     }
+    const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: 't1' })
     await mountEditor(entry)
     const dsSel = body().find('select[data-testid="entry-ds-kind"]')
     const opSel = body().find('select[data-testid="entry-op-type"]')
     const engineSel = body().find('select[data-testid="entry-storage-engine"]')
-    const sortedInput = body().find('input[data-testid="entry-sorted"]')
-    const partInput = body().find('input[data-testid="entry-part-column"]')
 
-    expect((dsSel.element as HTMLSelectElement).disabled).toBe(true)
-    expect((opSel.element as HTMLSelectElement).disabled).toBe(true)
-    expect((engineSel.element as HTMLSelectElement).disabled).toBe(true)
-    expect((sortedInput.element as HTMLInputElement).disabled).toBe(true)
-    expect((partInput.element as HTMLInputElement).disabled).toBe(true)
-    expect(dsSel.attributes('title')).toContain('不允许修改')
-    expect(opSel.attributes('title')).toContain('不允许修改')
-    expect(engineSel.attributes('title')).toContain('不允许修改')
+    // 均可编辑（非 disabled）
+    expect((dsSel.element as HTMLSelectElement).disabled).toBe(false)
+    expect((opSel.element as HTMLSelectElement).disabled).toBe(false)
+    expect((engineSel.element as HTMLSelectElement).disabled).toBe(false)
 
-    // 2. 新建态：可自由配置与修改
-    wrapper.unmount()
-    await mountEditor(null)
-    const newDsSel = body().find('select[data-testid="entry-ds-kind"]')
-    const newOpSel = body().find('select[data-testid="entry-op-type"]')
-    const newEngineSel = body().find('select[data-testid="entry-storage-engine"]')
+    // 修改为 CK
+    await dsSel.setValue('CK')
+    await flushPromises()
 
-    expect((newDsSel.element as HTMLSelectElement).disabled).toBe(false)
-    expect((newOpSel.element as HTMLSelectElement).disabled).toBe(false)
-    expect((newEngineSel.element as HTMLSelectElement).disabled).toBe(false)
+    const ckEngineSel = body().find('select[data-testid="entry-storage-engine"]')
+    expect((ckEngineSel.element as HTMLSelectElement).value).toBe('ReplacingMergeTree')
+    expect((ckEngineSel.element as HTMLSelectElement).disabled).toBe(false)
+
+    // 修改存储引擎为 MergeTree，读写类型为 r
+    await ckEngineSel.setValue('MergeTree')
+    await opSel.setValue('r')
+    await flushPromises()
+
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({
+      tableId: 't1',
+      dsKind: 'CK',
+      opType: 'r',
+      storageEngine: 'MergeTree',
+      sorted: 'ENTRY_ID',
+    }))
   })
 
   it('编辑保存时原样保留已有表的 dsKind、opType、storageEngine', async () => {
