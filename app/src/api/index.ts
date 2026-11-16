@@ -3263,12 +3263,25 @@ export const entryApi = {
   entrySave: async (entry: EntryType) => {
     const endpoint = entry.tableId ? 'config/modifyEntryType' : 'config/entryTypeAddAll'
     const result = await request<unknown>(endpoint, { entry }, { method: 'POST', httpParams: entryTypeToLegacy(entry) })
-    if (result && typeof result === 'object' && 'tableId' in result) {
-      return result as { tableId: string; message?: string }
+    let tableId = entry.tableId || ''
+    let msg = ''
+    if (result != null) {
+      if (typeof result === 'number' || typeof result === 'string') {
+        tableId = String(result)
+      } else if (typeof result === 'object') {
+        const obj = result as Record<string, unknown>
+        if (obj.tableId != null) tableId = String(obj.tableId)
+        else if (obj.data != null && (typeof obj.data === 'number' || typeof obj.data === 'string')) tableId = String(obj.data)
+        if (obj.message != null) msg = String(obj.message)
+        else if (obj.msg != null) msg = String(obj.msg)
+      }
     }
-    // 旧 EntryTypeEdit.handleSubmit 提示文案「处理成功, 后端返回:{msg}」，真实后端不带 tableId 时也要透传 msg
-    const msg = result && typeof result === 'object' && 'message' in result ? String((result as { message?: string }).message ?? '') : ''
-    return { tableId: entry.tableId || '', message: msg ? `处理成功, 后端返回:${msg}` : '实体表已保存' }
+    // 若返回信息中带了形如 "新增成功，id:12345"，也可备选提取 tableId
+    if (!tableId && msg) {
+      const match = /id:\s*(\d+)/i.exec(msg)
+      if (match) tableId = match[1]
+    }
+    return { tableId, message: msg ? `处理成功, 后端返回:${msg}` : '实体表已保存' }
   },
   rebuildTable: (tableIds: string[] | string) => {
     const ids = Array.isArray(tableIds) ? tableIds : [tableIds]

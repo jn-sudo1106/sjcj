@@ -233,20 +233,16 @@ function onItemCodeBlur(field: EntryField) {
 }
 
 function onDsKindChange() {
-  if (!isEdit.value) {
-    // 新建表选择 CK 或 MYSQL，读写类型均默认为 wr（读写，表示读写均直接面向该库）
-    form.opType = 'wr'
-    if (form.dsKind === 'CK') {
-      if (!form.storageEngine || form.storageEngine === 'InnoDB') {
-        form.storageEngine = 'ReplacingMergeTree'
-      }
-      if (!form.sorted) {
-        form.sorted = 'ENTRY_ID'
-      }
-    } else {
-      if (!form.storageEngine || form.storageEngine === 'ReplacingMergeTree') {
-        form.storageEngine = 'InnoDB'
-      }
+  if (form.dsKind === 'CK') {
+    if (!form.storageEngine || form.storageEngine === 'InnoDB' || form.storageEngine === 'MyISAM' || form.storageEngine === 'MEMORY') {
+      form.storageEngine = 'ReplacingMergeTree'
+    }
+    if (!form.sorted) {
+      form.sorted = 'ENTRY_ID'
+    }
+  } else {
+    if (!form.storageEngine || form.storageEngine === 'ReplacingMergeTree' || form.storageEngine === 'MergeTree' || form.storageEngine === 'SummingMergeTree' || form.storageEngine === 'AggregatingMergeTree' || form.storageEngine === 'VersionedCollapsingMergeTree') {
+      form.storageEngine = 'InnoDB'
     }
   }
 }
@@ -359,26 +355,26 @@ async function submit() {
         </select>
       </div>
       <div class="rc-field"><label>数据源类型</label>
-        <select v-model="form.dsKind" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改数据源类型' : ''" data-testid="entry-ds-kind" @change="onDsKindChange">
+        <select v-model="form.dsKind" class="rc-input" data-testid="entry-ds-kind" @change="onDsKindChange">
           <option value="MYSQL">MYSQL</option>
           <option value="CK">CK</option>
         </select>
       </div>
-      <div class="rc-field"><label title="新建表选择 CK 时默认为读写 (wr)，表示读写均直接面向 CK 库；只读 (r) 表示仅用于查询分析">读写类型</label>
-        <select v-model="form.opType" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改读写类型' : ''" data-testid="entry-op-type">
+      <div class="rc-field"><label title="选择 CK 时默认为读写 (wr)，表示读写均直接面向 CK 库；只读 (r) 表示仅用于查询分析">读写类型</label>
+        <select v-model="form.opType" class="rc-input" data-testid="entry-op-type">
           <option value="wr">读写 (wr)</option>
           <option value="r">只读 (r)</option>
         </select>
       </div>
       <div class="rc-field"><label>存储引擎</label>
-        <select v-if="form.dsKind === 'CK'" v-model="form.storageEngine" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改存储引擎' : ''" data-testid="entry-storage-engine">
+        <select v-if="form.dsKind === 'CK'" v-model="form.storageEngine" class="rc-input" data-testid="entry-storage-engine">
           <option value="ReplacingMergeTree">ReplacingMergeTree（推荐，按版本去重）</option>
           <option value="MergeTree">MergeTree（基础明细）</option>
           <option value="SummingMergeTree">SummingMergeTree（数值汇总）</option>
           <option value="AggregatingMergeTree">AggregatingMergeTree（物化聚合）</option>
           <option value="VersionedCollapsingMergeTree">VersionedCollapsingMergeTree（折叠树）</option>
         </select>
-        <select v-else v-model="form.storageEngine" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改存储引擎' : ''" data-testid="entry-storage-engine">
+        <select v-else v-model="form.storageEngine" class="rc-input" data-testid="entry-storage-engine">
           <option value="InnoDB">InnoDB（默认）</option>
           <option value="MyISAM">MyISAM</option>
           <option value="MEMORY">MEMORY</option>
@@ -386,11 +382,11 @@ async function submit() {
       </div>
       <div v-if="form.dsKind === 'CK'" class="rc-field">
         <label title="ClickHouse MergeTree 系列物理排序列（ORDER BY），默认 ENTRY_ID">排序列 (ORDER BY)</label>
-        <input v-model="form.sorted" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改排序列' : ''" data-testid="entry-sorted" placeholder="例如 ENTRY_ID 或 SOURCE_ID, ENTRY_ID" />
+        <input v-model="form.sorted" class="rc-input" data-testid="entry-sorted" placeholder="例如 ENTRY_ID 或 SOURCE_ID, ENTRY_ID" />
       </div>
       <div v-if="form.dsKind === 'CK'" class="rc-field">
         <label title="ClickHouse 表分区表达式（PARTITION BY），可选，例如 toYYYYMM(UPDATE_DT) 或 toYYYYMMDD(CREATE_DT)">分区字段 (PARTITION BY)</label>
-        <input v-model="form.partColumn" class="rc-input" :disabled="isEdit" :title="isEdit ? '已落库实体表不允许修改分区字段' : ''" data-testid="entry-part-column" placeholder="例如 toYYYYMM(UPDATE_DT)（可选，留空则不分区）" />
+        <input v-model="form.partColumn" class="rc-input" data-testid="entry-part-column" placeholder="例如 toYYYYMM(UPDATE_DT)（可选，留空则不分区）" />
       </div>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>
       <div v-if="isEdit" class="rc-field ete-wide" style="margin-top: 4px;">

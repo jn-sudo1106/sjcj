@@ -408,9 +408,6 @@ function entryFieldFromLegacy(input: unknown, index: number, keySet: Set<string>
 export function entryTypeFromLegacy(input: unknown): EntryType {
   const record = asRecord(input)
   if ('tableId' in record && 'fields' in record) return record as unknown as EntryType
-  const items = Array.isArray(record.items) ? record.items : []
-  const keyField = record.keyField == null ? undefined : String(record.keyField)
-  const keySet = new Set((keyField ?? '').split(',').map((s) => s.trim()).filter(Boolean))
 
   let parsedConfig: Record<string, unknown> | undefined = undefined
   const rawTableConfig = record.tableConfig ?? record.table_config
@@ -424,54 +421,64 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
     }
   }
 
-  const dsKindVal = record.dsKind == null ? 'MYSQL' : (String(record.dsKind) as EntryType['dsKind'])
-  const storageEngineVal = record.storageEngine != null
-    ? String(record.storageEngine)
-    : (parsedConfig?.storageEngine != null
-        ? String(parsedConfig.storageEngine)
-        : (record.engine != null ? String(record.engine) : (dsKindVal === 'CK' ? 'ReplacingMergeTree' : 'InnoDB')))
+  const rawDsKind = record.dsKind ?? record.ds_kind ?? record.DS_KIND ?? parsedConfig?.dsKind ?? parsedConfig?.ds_kind
+  const dsKindUpper = rawDsKind ? String(rawDsKind).trim().toUpperCase() : ''
+  const dsKindVal: EntryType['dsKind'] = dsKindUpper === 'CK' ? 'CK' : 'MYSQL'
 
-  const sortedVal = record.sorted != null
-    ? String(record.sorted)
-    : (parsedConfig?.sorted != null
-        ? String(parsedConfig.sorted)
-        : (dsKindVal === 'CK' ? 'ENTRY_ID' : undefined))
+  const rawEngine = record.storageEngine ?? record.storage_engine ?? record.STORAGE_ENGINE ?? parsedConfig?.storageEngine ?? parsedConfig?.storage_engine ?? record.engine
+  const storageEngineVal = rawEngine != null && String(rawEngine).trim() !== ''
+    ? String(rawEngine).trim()
+    : (dsKindVal === 'CK' ? 'ReplacingMergeTree' : 'InnoDB')
 
-  const partColumnVal = record.partColumn != null
-    ? String(record.partColumn)
-    : (parsedConfig?.partColumn != null
-        ? String(parsedConfig.partColumn)
-        : (record.part_column != null ? String(record.part_column) : undefined))
+  const rawSorted = record.sorted ?? record.SORTED ?? parsedConfig?.sorted ?? parsedConfig?.sort
+  const sortedVal = rawSorted != null && String(rawSorted).trim() !== ''
+    ? String(rawSorted).trim()
+    : (dsKindVal === 'CK' ? 'ENTRY_ID' : undefined)
 
-  const tableConfigObj = parsedConfig ?? {
+  const rawPartColumn = record.partColumn ?? record.part_column ?? record.PART_COLUMN ?? parsedConfig?.partColumn ?? parsedConfig?.part_column
+  const partColumnVal = rawPartColumn != null && String(rawPartColumn).trim() !== ''
+    ? String(rawPartColumn).trim()
+    : undefined
+
+  const rawOpType = record.opType ?? record.op_type ?? record.OP_TYPE ?? parsedConfig?.opType
+  const opTypeVal: EntryType['opType'] = rawOpType == null
+    ? (dsKindVal === 'CK' ? 'r' : 'wr')
+    : (String(rawOpType).trim().toLowerCase() === 'r' ? 'r' : 'wr')
+
+  const tableConfigObj = {
     storageEngine: storageEngineVal,
-    partColumn: partColumnVal,
-    sorted: sortedVal,
+    partColumn: partColumnVal || '',
+    sorted: sortedVal || '',
+    ...(parsedConfig || {}),
   }
 
+  const items = Array.isArray(record.items) ? record.items : []
+  const keyField = record.keyField == null ? undefined : String(record.keyField)
+  const keySet = new Set((keyField ?? '').split(',').map((s) => s.trim()).filter(Boolean))
+
   return {
-    tableId: String(record.entryTypeId ?? ''),
-    tableName: String(record.tableName ?? ''),
+    tableId: String(record.entryTypeId ?? record.tableId ?? ''),
+    tableName: String(record.tableName ?? record.table_name ?? ''),
     // DS_KIND 老记录可能为 NULL：统一归一 MYSQL（与 DB 默认一致），不向 UI 暴露「未知」态
     dsKind: dsKindVal,
-    // 操作读写类型：默认 wr，若 DS_KIND 为 CK 默认为 r
-    opType: record.opType == null ? (record.dsKind === 'CK' ? 'r' : 'wr') : String(record.opType).toLowerCase() as EntryType['opType'],
+    // 操作读写类型：默认 wr
+    opType: opTypeVal,
     // 存储引擎：MySQL 默认 InnoDB，CK 默认为 ReplacingMergeTree
     storageEngine: storageEngineVal,
-    // 排序列：默认 entry_id
+    // 排序列：默认 ENTRY_ID
     sorted: sortedVal,
     // 分区字段/表达式
     partColumn: partColumnVal,
     // 表配置JSON
     tableConfig: tableConfigObj,
-    name: record.typeName == null ? undefined : String(record.typeName),
+    name: (record.typeName ?? record.name) == null ? undefined : String(record.typeName ?? record.name),
     remark: record.remark == null ? undefined : String(record.remark),
     fields: items.map((item, index) => entryFieldFromLegacy(item, index, keySet)),
     rowCount: record.dataCnt == null
       ? (record.estimatedRowCount == null ? undefined : Number(record.estimatedRowCount))
       : Number(record.dataCnt),
     estimatedRowCount: record.estimatedRowCount == null ? undefined : Number(record.estimatedRowCount),
-    updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
+    updatedAt: (record.updateDt ?? record.updatedAt) == null ? undefined : String(record.updateDt ?? record.updatedAt),
     keyField,
     state: record.state == null ? undefined : String(record.state),
     recFlag: record.recFlag as string | number | undefined,
@@ -506,6 +513,9 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     coreParam: input.coreParam,
     aiComment: input.aiComment ?? input.aiCommont,
     aiCommont: input.aiComment ?? input.aiCommont,
+    tableConfig: typeof input.tableConfig === 'string'
+      ? input.tableConfig
+      : (input.tableConfig ? JSON.stringify(input.tableConfig) : undefined),
     items: input.fields.map((field, index) => ({
       itemId: field.itemId,
       itemCode: field.prop,
