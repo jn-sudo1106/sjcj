@@ -19,6 +19,7 @@ import {
   listAiSessions,
   submitClarificationAnswer,
   streamAgentChat,
+  extractClarificationFromText,
   type AiSessionItem,
   type ChatMessage,
   type Clarification,
@@ -114,6 +115,22 @@ function isThinkingOpen(msg: ChatMessage): boolean {
 
 function toggleThinking(msgId: string, currentOpen: boolean) {
   thinkingExpandedMap[msgId] = !currentOpen
+}
+
+function isMsgClarifyConfirmed(msg: ChatMessage): boolean {
+  if (msg.clarification?.confirmed !== undefined) {
+    return msg.clarification.confirmed
+  }
+  return clarifyConfirmed.value
+}
+
+function getMsgSelectedTableNames(msg: ChatMessage): string[] {
+  if (msg.clarification?.options && msg.clarification.selectedEntryTypeIds?.length) {
+    return msg.clarification.options
+      .filter((o) => msg.clarification!.selectedEntryTypeIds!.includes(o.entryTypeId))
+      .map((o) => o.typeName || o.tableName)
+  }
+  return []
 }
 
 // 提取消息中的切片数据，若未显式提供则从柱状数据智能转换
@@ -255,8 +272,17 @@ const clarifySessionId = ref<string>('s1')
 const clarifyRound = ref<number>(1)
 const clarifyCardKey = ref<number>(0)
 
+function cloneInitialMessages(raw?: Record<string, ChatMessage[]>): Record<string, ChatMessage[]> {
+  if (!raw) return {}
+  try {
+    return JSON.parse(JSON.stringify(raw))
+  } catch {
+    return { ...raw }
+  }
+}
+
 // 会话消息库（由用户交互动态生成并按会话 ID 隔离，支持 props 注入测试消息）
-const sessionMessages = ref<Record<string, ChatMessage[]>>({ ...props.initialMessages })
+const sessionMessages = ref<Record<string, ChatMessage[]>>(cloneInitialMessages(props.initialMessages))
 
 // 当前会话的消息列表
 const currentMessages = computed(() => {
@@ -368,13 +394,26 @@ function handleSelectStarter(starter: StarterPrompt) {
   handleSend(starter.title)
 }
 
-// 确认澄清：锁定卡片，把「选了哪几张表」按 entryTypeId 回传给智能体会话
-async function handleConfirmClarify(payload: { selectedEntryTypeIds: number[]; freeText: string }) {
-  if (clarifyConfirmed.value) return
+// 确认澄清/待确认项：锁定卡片，把用户勾选的项回传给智能体会话推进下一轮分析
+async function handleConfirmClarify(
+  payload: { selectedEntryTypeIds: number[]; freeText: string },
+  msg?: ChatMessage
+) {
+  const targetMsg = msg || currentMessages.value.find((m) => m.clarification)
+  const clarification = targetMsg?.clarification || currentClarification.value
+
+  if (targetMsg?.clarification) {
+    if (targetMsg.clarification.confirmed) return
+    targetMsg.clarification.confirmed = true
+    targetMsg.clarification.selectedEntryTypeIds = payload.selectedEntryTypeIds
+  }
   clarifyConfirmed.value = true
-  selectedTables.value = currentClarification.value.options
-    .filter((option) => payload.selectedEntryTypeIds.includes(option.entryTypeId))
-    .map((option) => option.typeName || option.tableName)
+
+  const selectedOptions = clarification.options.filter((option) =>
+    payload.selectedEntryTypeIds.includes(option.entryTypeId)
+  )
+  const names = selectedOptions.map((option) => option.typeName || option.tableName)
+  selectedTables.value = names
 
   try {
     await submitClarificationAnswer({
@@ -392,6 +431,24 @@ async function handleConfirmClarify(payload: { selectedEntryTypeIds: number[]; f
     clarifyDelivered.value = false
     ElMessage.warning('问数网关尚未接通，当前展示为本地演示结果，所选口径暂未回传')
   }
+
+  // 核心交互：若该消息是动态智能体问答（未预置静态 SQL / KPI），将用户的确认选择作为新一轮对话发送给智能体继续推进
+  if (!targetMsg?.sql && !targetMsg?.chartData) {
+    const textParts: string[] = []
+    if (names.length) {
+      textParts.push(`已确认选择：${names.join('、')}`)
+    }
+    if (payload.freeText) {
+      textParts.push(`补充要求：${payload.freeText}`)
+    }
+    const followUpText = textParts.join('；')
+    if (followUpText) {
+      promptText.value = followUpText
+      await handleSend()
+      return
+    }
+  }
+
   scrollToBottom()
 }
 
@@ -550,6 +607,9 @@ async function handleSend(customTitle?: string) {
           }
           assistantMsg.thinking.text = (assistantMsg.thinking.text || '') + event.reasoning
           scrollToBottom()
+        } else if (event.type === 'clarification') {
+          assistantMsg.clarification = event.clarification
+          scrollToBottom()
         } else if (event.type === 'error') {
           ElMessage.error(event.error)
           if (!assistantMsg.content) {
@@ -584,6 +644,14 @@ async function handleSend(customTitle?: string) {
           execTimeMs: Math.floor(Math.random() * 120 + 40),
           scanRows: 100,
         }
+      }
+    }
+
+    // 若未通过结构化事件拿到 clarification，尝试从回答正文中解析待确认项（如 Task List 复选框或候选选项）
+    if (!assistantMsg.clarification && assistantMsg.content) {
+      const parsedClarification = extractClarificationFromText(assistantMsg.content)
+      if (parsedClarification) {
+        assistantMsg.clarification = parsedClarification
       }
     }
 
@@ -728,11 +796,6 @@ function handleKeyDown(e: KeyboardEvent) {
             / {{ currentSessionTitle }}
           </span>
         </div>
-        <div class="rc-topbar-right">
-          <el-tag size="small" type="info" effect="light" class="rc-mode-tag">
-            智能体：只读数据分析专家 (ClickHouse & MySQL)
-          </el-tag>
-        </div>
         <!-- 问数网关未接通时，结果区必须标明是本地演示，不能让用户当成真实查询 -->
         <el-tag
           v-if="clarifyDelivered === false"
@@ -830,24 +893,24 @@ function handleKeyDown(e: KeyboardEvent) {
             </div>
 
             <div class="rc-msg-bubble assistant">
-              <!-- 引导/说明文字：仅在包含澄清卡片时展示引导文案 -->
+              <!-- 引导/说明文字：仅在包含待确认卡片且有说明文案时展示 -->
               <div v-if="msg.clarification && msg.content" class="rc-clarify-intro">
-                {{ msg.content }}
+                <MarkdownOutput :content="msg.content" />
               </div>
 
-              <!-- 多选表澄清卡片：仅在包含澄清配置的会话轮次展示 -->
+              <!-- 待确认项交互勾选卡片：支持多选/单选与自由补充，确认后锁定并推进会话 -->
               <ClarificationCard
                 v-if="msg.clarification"
-                :key="clarifyCardKey"
+                :key="msg.id + '-' + (isMsgClarifyConfirmed(msg) ? 'confirmed' : 'pending')"
                 :clarification="msg.clarification || currentClarification"
-                :confirmed="clarifyConfirmed"
-                @confirm="handleConfirmClarify"
+                :confirmed="isMsgClarifyConfirmed(msg)"
+                @confirm="(payload) => handleConfirmClarify(payload, msg)"
               />
 
               <!-- 用户确认后或无需澄清时的执行结果呈现区 -->
               <transition name="el-fade-in-linear">
                 <div
-                  v-if="!msg.clarification || clarifyConfirmed"
+                  v-if="!msg.clarification || isMsgClarifyConfirmed(msg)"
                   class="rc-confirmed-result"
                 >
                   <!-- 思考过程面板 -->
@@ -859,13 +922,13 @@ function handleKeyDown(e: KeyboardEvent) {
                       <div class="rc-thinking-title">
                         <span class="rc-live-dot" :class="msg.thinking.completed ? 'green' : 'pulsing'"></span>
                         <span v-if="!msg.thinking.completed">深度思考中... (已思考 {{ Math.max(1, Math.floor(thinkingElapsedSeconds)) }}s)</span>
-                        <span v-else>思考过程 · {{ selectedTables.length ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? '已生成并执行 SQL' : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)</span>
+                        <span v-else>思考过程 · {{ (getMsgSelectedTableNames(msg).length || selectedTables.length) ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? '已生成并执行 SQL' : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)</span>
                       </div>
                       <span class="rc-toggle-arrow" :class="{ collapsed: !isThinkingOpen(msg) }">▼</span>
                     </div>
                     <div v-if="isThinkingOpen(msg)" class="rc-thinking-body">
-                      <div v-if="selectedTables.length">
-                        ✓ 1. 采纳用户澄清口径：<strong>{{ selectedTables.join('、') }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code>
+                      <div v-if="getMsgSelectedTableNames(msg).length || selectedTables.length">
+                        ✓ 1. 采纳用户澄清口径：<strong>{{ (getMsgSelectedTableNames(msg).length ? getMsgSelectedTableNames(msg) : selectedTables).join('、') }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code>
                       </div>
                       <div v-if="msg.thinking.text" class="rc-thinking-text">
                         {{ msg.thinking.text }}

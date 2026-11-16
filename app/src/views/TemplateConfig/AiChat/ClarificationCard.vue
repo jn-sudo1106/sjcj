@@ -47,6 +47,10 @@ function toggleOption(entryTypeId: number): void {
     selectedIds.value.splice(index, 1)
     return
   }
+  if (props.clarification.maxSelect === 1) {
+    selectedIds.value = [entryTypeId]
+    return
+  }
   if (selectedIds.value.length < props.clarification.maxSelect) {
     selectedIds.value.push(entryTypeId)
   }
@@ -83,12 +87,24 @@ function handleConfirm(): void {
           disabled: confirmed || (reachedMax && !isSelected(option.entryTypeId)),
         }"
         :data-testid="`clarification-option-${option.entryTypeId}`"
+        role="checkbox"
+        :aria-checked="isSelected(option.entryTypeId)"
+        :tabindex="confirmed ? -1 : 0"
         @click="toggleOption(option.entryTypeId)"
+        @keydown.space.prevent="toggleOption(option.entryTypeId)"
+        @keydown.enter.prevent="toggleOption(option.entryTypeId)"
       >
-        <span class="cc-check">{{ isSelected(option.entryTypeId) ? '●' : '○' }}</span>
+        <span class="cc-check" :class="{ checked: isSelected(option.entryTypeId) }">
+          <span v-if="isSelected(option.entryTypeId)" class="cc-check-mark">✓</span>
+        </span>
         <div class="cc-option-body">
           <div class="cc-option-name">{{ option.typeName || option.tableName }}</div>
-          <div class="cc-option-table">{{ option.tableName }}</div>
+          <div
+            v-if="option.tableName && option.tableName !== option.typeName"
+            class="cc-option-table"
+          >
+            {{ option.tableName }}
+          </div>
           <div v-if="option.hint" class="cc-option-hint">{{ option.hint }}</div>
         </div>
       </div>
@@ -212,9 +228,36 @@ function handleConfirm(): void {
 }
 
 .cc-check {
-  color: #3b82f6;
-  font-size: 12px;
-  line-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1.5px solid #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: transparent;
+  background-color: #ffffff;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.cc-option:hover:not(.disabled) .cc-check {
+  border-color: #3b82f6;
+}
+
+.cc-option.selected .cc-check {
+  border-color: #3b82f6;
+  background-color: #3b82f6;
+  color: #ffffff;
+}
+
+.cc-check-mark {
+  display: block;
+  line-height: 1;
 }
 
 .cc-option-body {

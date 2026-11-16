@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { streamAgentChat, type AgentChatEvent } from './aiChat'
+import { streamAgentChat, extractClarificationFromText, type AgentChatEvent } from './aiChat'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -115,5 +115,133 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     expect(events).toContainEqual({
       type: 'done',
     })
+  })
+
+  it('流中返回 clarification 结构化载荷时派发 clarification 事件', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    )
+
+    const events: AgentChatEvent[] = []
+    const encoder = new TextEncoder()
+
+    const streamPromise = streamAgentChat({ msg: '查询南京二手房' }, (e) => events.push(e))
+
+    const clarifyPayload = {
+      clarification: {
+        kind: 'table_choice',
+        reason: 'TOO_MANY',
+        question: '查询到多个待确认候选表，请勾选需要分析的表：',
+        allowFreeText: true,
+        maxSelect: 3,
+        options: [
+          {
+            entryTypeId: 201,
+            tableName: 'sense_data.tb_ke_com_chengjia_esf_detail',
+            typeName: '南京链家成交明细表',
+            hint: '成交周期与真实成交价',
+          },
+          {
+            entryTypeId: 202,
+            tableName: 'sense_data.tb_anjuke_esf_summary',
+            typeName: '南京安居客二手房均价表',
+            hint: '挂牌均价统计',
+          },
+        ],
+      },
+    }
+
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(clarifyPayload)}\n\n`))
+    controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+    controller.close()
+
+    await streamPromise
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'clarification',
+        clarification: expect.objectContaining({
+          kind: 'table_choice',
+          question: '查询到多个待确认候选表，请勾选需要分析的表：',
+          maxSelect: 3,
+          options: expect.arrayContaining([
+            expect.objectContaining({
+              entryTypeId: 201,
+              tableName: 'sense_data.tb_ke_com_chengjia_esf_detail',
+              typeName: '南京链家成交明细表',
+            }),
+            expect.objectContaining({
+              entryTypeId: 202,
+              tableName: 'sense_data.tb_anjuke_esf_summary',
+              typeName: '南京安居客二手房均价表',
+            }),
+          ]),
+        }),
+      })
+    )
+  })
+
+  it('extractClarificationFromText 正确从 Markdown Task List 中提取待确认勾选项', () => {
+    const markdown = `
+查询南京二手房最新记录时，匹配到以下待确认的候选表，请勾选需要分析的项：
+- [ ] sense_data.tb_ke_com_chengjia_esf_detail (南京链家二手房成交明细)
+- [ ] sense_data.tb_anjuke_esf_summary (南京安居客二手房挂牌均价汇总)
+`
+    const result = extractClarificationFromText(markdown)
+    expect(result).not.toBeNull()
+    expect(result?.options).toHaveLength(2)
+    expect(result?.options[0]).toEqual({
+      entryTypeId: 1,
+      tableName: 'sense_data.tb_ke_com_chengjia_esf_detail',
+      typeName: 'sense_data.tb_ke_com_chengjia_esf_detail',
+      hint: '南京链家二手房成交明细',
+    })
+    expect(result?.options[1]).toEqual({
+      entryTypeId: 2,
+      tableName: 'sense_data.tb_anjuke_esf_summary',
+      typeName: 'sense_data.tb_anjuke_esf_summary',
+      hint: '南京安居客二手房挂牌均价汇总',
+    })
+  })
+
+  it('extractClarificationFromText 正确解析代码块中嵌入的 JSON clarification', () => {
+    const content = `
+以下为待确认的分析表范围：
+\`\`\`json
+{
+  "clarification": {
+    "question": "请选择要查询的表：",
+    "options": [
+      { "entryTypeId": 11, "tableName": "t_sales", "typeName": "销售订单表", "hint": "按日汇总" }
+    ]
+  }
+}
+\`\`\`
+`
+    const result = extractClarificationFromText(content)
+    expect(result).not.toBeNull()
+    expect(result?.question).toBe('请选择要查询的表：')
+    expect(result?.options[0]).toEqual({
+      entryTypeId: 11,
+      tableName: 't_sales',
+      typeName: '销售订单表',
+      hint: '按日汇总',
+    })
+  })
+
+  it('extractClarificationFromText 在普通文本无待确认项时返回 null', () => {
+    const normalText = '根据查询结果，南京二手房均价为 28,500 元/㎡。近7天成交120套。'
+    expect(extractClarificationFromText(normalText)).toBeNull()
+    expect(extractClarificationFromText('')).toBeNull()
   })
 })

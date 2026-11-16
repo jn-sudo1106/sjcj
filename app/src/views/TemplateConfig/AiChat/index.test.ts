@@ -503,4 +503,85 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('正在检索上游表元数据...')
     expect(wrapper.text()).toContain('上游服务超时未响应，无法生成 SQL')
   })
+
+  it('智能体回答中包含待确认项时，自动渲染勾选卡片并支持用户交互勾选与确认推进', async () => {
+    const testSession = [{ id: 'test_clarify', title: '二手房选表待确认', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      test_clarify: [
+        {
+          id: 'u-clarify',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'a-clarify',
+          role: 'assistant' as const,
+          content: '为您检索到以下待确认的候选表，请勾选需要分析的项：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请勾选需要分析的表：',
+            allowFreeText: true,
+            maxSelect: 5,
+            options: [
+              {
+                entryTypeId: 301,
+                tableName: 'sense_data.tb_ke_com_chengjia_esf_detail',
+                typeName: '南京链家二手房成交明细',
+                hint: '含单价与成交走势',
+              },
+              {
+                entryTypeId: 302,
+                tableName: 'sense_data.tb_anjuke_esf_summary',
+                typeName: '南京安居客二手房挂牌均价',
+                hint: '各区挂牌均价汇总',
+              },
+            ],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 待确认勾选卡片应存在
+    const card = wrapper.find('[data-testid="clarification-card"]')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('最多 5 张')
+
+    // 勾选第 1 个选项
+    const opt1 = wrapper.find('[data-testid="clarification-option-301"]')
+    expect(opt1.exists()).toBe(true)
+    await opt1.trigger('click')
+    expect(opt1.classes()).toContain('selected')
+
+    // 勾选第 2 个选项
+    const opt2 = wrapper.find('[data-testid="clarification-option-302"]')
+    expect(opt2.exists()).toBe(true)
+    await opt2.trigger('click')
+    expect(opt2.classes()).toContain('selected')
+
+    // 点击确认选择
+    const confirmBtn = wrapper.find('[data-testid="clarification-confirm"]')
+    expect(confirmBtn.exists()).toBe(true)
+    await confirmBtn.trigger('click')
+    await flushPromises()
+
+    // 确认后卡片锁定并展示已采纳状态
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+
+    // 智能体对话自动推进，将勾选的项作为新轮次发送给会话
+    expect(wrapper.text()).toContain('已确认选择：南京链家二手房成交明细、南京安居客二手房挂牌均价')
+  })
 })

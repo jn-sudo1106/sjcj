@@ -125,8 +125,127 @@ export interface AgentChatParams {
 export type AgentChatEvent =
   | { type: 'chunk'; text: string }
   | { type: 'reasoning'; reasoning: string }
+  | { type: 'clarification'; clarification: Clarification }
   | { type: 'error'; error: string }
   | { type: 'done' }
+
+/**
+ * 从文本或 Markdown 回答中提取待确认项与候选（支持 Markdown Task List 复选框与 JSON 块）。
+ */
+export function extractClarificationFromText(text: string): Clarification | null {
+  if (!text || typeof text !== 'string') return null
+
+  // 1. 尝试匹配代码块中的 JSON clarification
+  const jsonBlockRegex = /```(?:json|clarification)?\s*([\s\S]*?\{[\s\S]*?"(?:options|clarification)"[\s\S]*?\})\s*```/i
+  const jsonMatch = text.match(jsonBlockRegex)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1])
+      const data = parsed.clarification || parsed
+      if (Array.isArray(data.options) && data.options.length > 0) {
+        return {
+          kind: data.kind || 'table_choice',
+          reason: data.reason || 'AMBIGUOUS',
+          question: data.question || '请确认需要分析的表或口径：',
+          allowFreeText: data.allowFreeText ?? true,
+          maxSelect: typeof data.maxSelect === 'number' ? data.maxSelect : 5,
+          options: data.options.map((opt: Record<string, unknown>, idx: number) => ({
+            entryTypeId: Number(opt.entryTypeId ?? opt.id ?? idx + 1),
+            tableName: String(opt.tableName || opt.name || opt.table || `table_${idx + 1}`),
+            typeName: String(opt.typeName || opt.label || opt.title || opt.tableName || `候选 ${idx + 1}`),
+            hint: opt.hint ? String(opt.hint) : (opt.description ? String(opt.description) : null),
+          })),
+        }
+      }
+    } catch {}
+  }
+
+  // 2. 匹配 Markdown Task List 复选框列表：- [ ] 或 * [ ] 或 - [x]
+  const taskListRegex = /^\s*[-*]\s*\[([ xX])\]\s*(.+)$/gm
+  const taskMatches = [...text.matchAll(taskListRegex)]
+  if (taskMatches.length > 0) {
+    const questionMatch = text.match(/(?:请确认|待确认|请勾选|请选择|候选|可选范围)[^:\n：]*[：:]?/i)
+    const question = questionMatch ? questionMatch[0] : '请勾选需要确认的项：'
+
+    const options: ClarificationOption[] = taskMatches.map((m, idx) => {
+      const lineText = m[2].trim()
+      const tableMatch = lineText.match(/`?([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+|[a-zA-Z0-9_]+_[a-zA-Z0-9_]+)`?/)
+      const hintMatch = lineText.match(/[(（]([^)）]+)[)）]/)
+
+      let cleanName = lineText
+        .replace(/[(（][^)）]+[)）]/g, '')
+        .replace(/^\d+[\.、\s]*/, '')
+        .replace(/[`*]/g, '')
+        .trim()
+      if (cleanName.includes('：')) cleanName = cleanName.split('：')[1].trim()
+      if (cleanName.includes(':')) cleanName = cleanName.split(':')[1].trim()
+
+      const tableName = tableMatch ? tableMatch[1] : (cleanName || `item_${idx + 1}`)
+      const typeName = cleanName || tableName
+
+      return {
+        entryTypeId: idx + 1,
+        tableName,
+        typeName,
+        hint: hintMatch ? hintMatch[1].trim() : null,
+      }
+    })
+
+    return {
+      kind: 'table_choice',
+      reason: 'AMBIGUOUS',
+      question,
+      allowFreeText: true,
+      maxSelect: Math.max(5, options.length),
+      options,
+    }
+  }
+
+  // 3. 匹配明确包含“待确认/请确认/请选择候选表”语境下的编号候选列表（1. xxx 2. yyy）
+  const hasClarifyKeyword = /(?:待确认|请确认|请选择|候选表如下|可选表清单|需要您确认)/.test(text)
+  if (hasClarifyKeyword) {
+    const numberedListRegex = /^\s*\d+[\.、]\s*([^\n]+)$/gm
+    const numberedMatches = [...text.matchAll(numberedListRegex)]
+    if (numberedMatches.length >= 2) {
+      const questionMatch = text.match(/(?:待确认|请确认|请选择|候选表)[^:\n：]*[：:]?/i)
+      const question = questionMatch ? questionMatch[0] : '请勾选需要确认的项：'
+
+      const options: ClarificationOption[] = numberedMatches.map((m, idx) => {
+        const lineText = m[1].trim()
+        const tableMatch = lineText.match(/`?([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+|[a-zA-Z0-9_]+_[a-zA-Z0-9_]+)`?/)
+        const hintMatch = lineText.match(/[(（]([^)）]+)[)）]/)
+
+        let cleanName = lineText
+          .replace(/[(（][^)）]+[)）]/g, '')
+          .replace(/[`*]/g, '')
+          .trim()
+        if (cleanName.includes('：')) cleanName = cleanName.split('：')[1].trim()
+        if (cleanName.includes('-')) cleanName = cleanName.split('-')[1].trim()
+
+        const tableName = tableMatch ? tableMatch[1] : (cleanName || `item_${idx + 1}`)
+        const typeName = cleanName || tableName
+
+        return {
+          entryTypeId: idx + 1,
+          tableName,
+          typeName,
+          hint: hintMatch ? hintMatch[1].trim() : null,
+        }
+      })
+
+      return {
+        kind: 'table_choice',
+        reason: 'AMBIGUOUS',
+        question,
+        allowFreeText: true,
+        maxSelect: Math.max(5, options.length),
+        options,
+      }
+    }
+  }
+
+  return null
+}
 
 /**
  * 智能体问数：对接后端 POST /api/poc/chat/agent
@@ -200,6 +319,40 @@ export async function streamAgentChat(
               : String(payload.error)
           onEvent({ type: 'error', error: errText })
           return
+        }
+
+        // 检查是否有待确认/澄清载荷 (Clarification)
+        const choice = Array.isArray(payload.choices) && payload.choices.length > 0 ? payload.choices[0] : null
+        const delta = choice?.delta || choice?.message
+        const rawClarification =
+          payload.clarification ||
+          payload.data?.clarification ||
+          delta?.clarification ||
+          (payload.type === 'clarification' ? (payload.data || payload) : null)
+
+        if (
+          rawClarification &&
+          typeof rawClarification === 'object' &&
+          (Array.isArray(rawClarification.options) || rawClarification.kind === 'free_text' || rawClarification.question)
+        ) {
+          const kind: ClarificationKind = rawClarification.kind || 'table_choice'
+          const options: ClarificationOption[] = Array.isArray(rawClarification.options)
+            ? rawClarification.options.map((opt: Record<string, unknown>, idx: number) => ({
+                entryTypeId: Number(opt.entryTypeId ?? opt.id ?? idx + 1),
+                tableName: String(opt.tableName || opt.name || opt.table || `table_${idx + 1}`),
+                typeName: String(opt.typeName || opt.label || opt.title || opt.tableName || `候选 ${idx + 1}`),
+                hint: opt.hint ? String(opt.hint) : (opt.description ? String(opt.description) : null),
+              }))
+            : []
+          const clarificationObj: Clarification = {
+            kind,
+            reason: rawClarification.reason || 'AMBIGUOUS',
+            question: rawClarification.question || '请确认需要分析的表或口径：',
+            allowFreeText: rawClarification.allowFreeText ?? true,
+            maxSelect: typeof rawClarification.maxSelect === 'number' ? rawClarification.maxSelect : 5,
+            options,
+          }
+          onEvent({ type: 'clarification', clarification: clarificationObj })
         }
 
         // OpenAI 兼容 choices 结构: { choices: [{ delta: { content, reasoning_content } }] }
