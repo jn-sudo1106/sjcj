@@ -1308,3 +1308,41 @@ describe('MonitorConfigEditor 生成提示词注入真实列', () => {
     expect(payload.systemPrompt).toContain('按 CREATE_DT 统计入库时间')
   })
 })
+
+describe('MonitorConfigEditor 通知渠道：钉钉暂不支持', () => {
+  it('新建时钉钉禁用并标「暂不支持」，提示只支持邮件', async () => {
+    const wrapper = mountEditor()
+    await settle()
+
+    const ding = wrapper.get('[data-testid="mc-channel-dingtalk"]')
+    expect(ding.attributes('disabled')).toBeDefined()
+    expect((ding.element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.get('[data-testid="mc-panel-notify"]').text()).toContain('暂不支持')
+    expect(wrapper.get('[data-testid="mc-panel-notify"]').text()).toContain('目前只支持邮件通知')
+    expect(wrapper.find('[data-testid="mc-dingtalk-warn"]').exists()).toBe(false)
+  })
+
+  it('历史记录只勾了钉钉：可取消勾选，并提示收不到任何通知；取消后不能再选回', async () => {
+    const record = aiRecord()
+    record.conf = { ...record.conf, channels: ['dingtalk'] }
+    const wrapper = mountEditor({ record })
+    await settle()
+
+    const ding = wrapper.get('[data-testid="mc-channel-dingtalk"]')
+    expect(ding.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="mc-dingtalk-warn"]').text()).toContain('不会收到任何通知')
+
+    await ding.setValue(false)
+    expect(wrapper.find('[data-testid="mc-dingtalk-warn"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mc-channel-dingtalk"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('历史记录同时勾了邮件和钉钉：提示只会发邮件', async () => {
+    const record = aiRecord()
+    record.conf = { ...record.conf, channels: ['mail', 'ding'] }
+    const wrapper = mountEditor({ record })
+    await settle()
+
+    expect(wrapper.get('[data-testid="mc-dingtalk-warn"]').text()).toContain('只会发邮件')
+  })
+})

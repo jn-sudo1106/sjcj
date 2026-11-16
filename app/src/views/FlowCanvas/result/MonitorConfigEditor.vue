@@ -87,6 +87,8 @@ const NOTIFY_OPTIONS = [
 
 const activeTab = ref<TabKey>('basic')
 const form = reactive<MonitorEditorForm>(emptyForm())
+/** 历史记录可能已勾钉钉：只有这种情况下允许操作该复选框（用于取消），并提示收不到 */
+const dingtalkSelected = computed(() => form.channels.includes('dingtalk'))
 const recordState = ref<MonitorRecordView | null>(props.record ?? null)
 const committedForm = ref<MonitorEditorForm>({ ...emptyForm() })
 const baseline = ref(formSignature(form))
@@ -1530,9 +1532,29 @@ defineExpose({
           <label class="mc-label">通知渠道</label>
           <div class="mc-inline">
             <label class="mc-check"><input v-model="form.channels" type="checkbox" value="mail" data-testid="mc-channel-mail"> 邮件</label>
-            <label class="mc-check"><input v-model="form.channels" type="checkbox" value="dingtalk" data-testid="mc-channel-dingtalk"> 钉钉</label>
+            <!--
+              钉钉暂不支持：AI 检查的执行器只投邮件（monitor_events.MAIL_CHANNELS），规则检查走 Java 时
+              也不按所选渠道分发。勾选只会让人以为能收到，所以新选禁用；历史记录已勾的允许取消。
+            -->
+            <label
+              class="mc-check"
+              :class="{ 'is-disabled': !dingtalkSelected }"
+              title="钉钉通知暂未接入，选了也收不到，请使用邮件"
+            >
+              <input
+                v-model="form.channels"
+                type="checkbox"
+                value="dingtalk"
+                :disabled="!dingtalkSelected"
+                data-testid="mc-channel-dingtalk"
+              >
+              钉钉<span class="mc-faint">（暂不支持）</span>
+            </label>
           </div>
-          <p class="mc-hint">通知将发送至所选渠道。</p>
+          <p v-if="dingtalkSelected" class="mc-notice-warn mc-channel-warn" data-testid="mc-dingtalk-warn">
+            这条记录勾选了钉钉，但钉钉通知暂未接入，不会收到{{ form.channels.includes('mail') ? '钉钉消息，只会发邮件' : '任何通知；请改勾邮件' }}。取消勾选后不能再选回。
+          </p>
+          <p v-else class="mc-hint">目前只支持邮件通知，钉钉暂未接入。</p>
         </div>
 
         <div class="mc-field">
@@ -1702,6 +1724,8 @@ defineExpose({
 .mc-error { margin: 0; padding: 8px 0; color: var(--rc-error); overflow-wrap: anywhere; }
 .mc-radio-list { display: flex; flex-direction: column; gap: 12px; }
 .mc-radio, .mc-check { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
+.mc-check.is-disabled { cursor: not-allowed; color: var(--rc-muted); }
+.mc-channel-warn { margin: 6px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; }
 .mc-radio span { display: flex; gap: 6px; flex-wrap: wrap; }
 .mc-quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mc-btn, .mc-mini { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-surface); color: var(--rc-text-2); font: inherit; cursor: pointer; white-space: nowrap; }
