@@ -20,6 +20,7 @@ import {
   submitClarificationAnswer,
   streamAgentChat,
   extractClarificationFromText,
+  listRecommendedQuestions,
   type AiSessionItem,
   type ChatMessage,
   type Clarification,
@@ -37,8 +38,8 @@ interface StarterPrompt {
   prompt: string
 }
 
-// 推荐问数快捷场景卡片
-const starterPrompts: StarterPrompt[] = [
+// 默认推荐问数快捷场景卡片（当后端未配置或拉取失败时兜底使用）
+const DEFAULT_STARTER_PROMPTS: StarterPrompt[] = [
   {
     tag: '多表下钻 · 故障定位',
     title: '排查近期异常任务与根因',
@@ -60,6 +61,20 @@ const starterPrompts: StarterPrompt[] = [
     prompt: '统计核心业务表字段清洗规则命中率，列出未匹配到有效内容的任务与字段。',
   },
 ]
+
+// 推荐问数卡片：优先读取后端 sys_page_config 配置的问句，未配置时回退默认预置卡片
+const starterPrompts = ref<StarterPrompt[]>(DEFAULT_STARTER_PROMPTS)
+
+function mapQuestionsToStarters(questions: string[]): StarterPrompt[] {
+  return questions.map((q, idx) => {
+    const trimmed = q.trim()
+    return {
+      tag: `推荐场景 ${String(idx + 1).padStart(2, '0')}`,
+      title: trimmed,
+      prompt: trimmed,
+    }
+  })
+}
 
 interface Props {
   initialSessions?: AiSessionItem[]
@@ -129,6 +144,21 @@ function getMsgSelectedTableNames(msg: ChatMessage): string[] {
       .map((o) => o.typeName || o.tableName)
   }
   return []
+}
+
+function formatClarifyIntro(content: string, hasClarification = false): string {
+  if (!content) return ''
+  if (!hasClarification) return content
+
+  // 若该消息已成功提取并渲染了待确认卡片/表格，则从正文中移除冗余的静态 Markdown 表格，保留引导提问与前后说明
+  const cleaned = content
+    .replace(
+      /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
+      '\n'
+    )
+    .trim()
+
+  return cleaned || content
 }
 
 // 提取消息中的切片数据，若未显式提供则从柱状数据智能转换
@@ -326,6 +356,16 @@ onMounted(async () => {
   } else {
     activeSessionId.value = 'new'
   }
+
+  // 动态获取后端配置的推荐问数场景（配置于 sys_page_config，对应 /api/poc/chat/help/question）
+  try {
+    const questions = await listRecommendedQuestions()
+    if (questions && questions.length > 0) {
+      starterPrompts.value = mapQuestionsToStarters(questions)
+    }
+  } catch (err) {
+    console.warn('[AiChat] 加载后端推荐问数场景失败，保留默认推荐:', err)
+  }
 })
 
 // 滚动到底部
@@ -434,7 +474,12 @@ async function handleConfirmClarify(
   if (!targetMsg?.sql && !targetMsg?.chartData) {
     const textParts: string[] = []
     if (names.length) {
-      textParts.push(`已确认选择：${names.join('、')}`)
+      if (names.length === 1 && selectedOptions.length === 1) {
+        const opt = selectedOptions[0]
+        textParts.push(`${opt.entryTypeId}（${opt.typeName || opt.tableName}）`)
+      } else {
+        textParts.push(`已确认选择：${names.join('、')}`)
+      }
     }
     if (payload.freeText) {
       textParts.push(`补充要求：${payload.freeText}`)
@@ -891,7 +936,7 @@ function handleKeyDown(e: KeyboardEvent) {
             <div class="rc-msg-bubble assistant">
               <!-- 引导/说明文字：仅在包含待确认卡片且有说明文案时展示 -->
               <div v-if="msg.clarification && msg.content" class="rc-clarify-intro">
-                <MarkdownOutput :content="msg.content" />
+                <MarkdownOutput :content="formatClarifyIntro(msg.content, !!msg.clarification)" />
               </div>
 
               <!-- 待确认项交互勾选卡片：支持多选/单选与自由补充，确认后锁定并推进会话 -->

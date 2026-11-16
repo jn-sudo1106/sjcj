@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
-import { submitClarificationAnswer } from '@/api/aiChat'
+import { submitClarificationAnswer, listRecommendedQuestions } from '@/api/aiChat'
 import { downloadCsv } from '@/utils/csv'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 
@@ -30,6 +30,7 @@ vi.mock('@/api/aiChat', () => ({
   listAiAgents: vi.fn().mockResolvedValue([
     { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
   ]),
+  listRecommendedQuestions: vi.fn().mockResolvedValue([]),
   submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
   streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
     onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
@@ -362,6 +363,32 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('昨日各站点抓取成功率 TOP 10')
   })
 
+  it('当后端配置推荐问数场景（sys_page_config）时，动态加载并渲染后端配置的卡片', async () => {
+    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
+      '近7天抓取异常最多的前5个网站',
+      '统计各业务库的数据同步延时分布',
+    ])
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    const cards = wrapper.findAll('.rc-starter-card')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].find('.rc-starter-badge').text()).toBe('推荐场景 01')
+    expect(cards[0].find('.rc-starter-name').text()).toBe('近7天抓取异常最多的前5个网站')
+    expect(cards[0].find('.rc-starter-desc').text()).toBe('近7天抓取异常最多的前5个网站')
+
+    expect(cards[1].find('.rc-starter-badge').text()).toBe('推荐场景 02')
+    expect(cards[1].find('.rc-starter-name').text()).toBe('统计各业务库的数据同步延时分布')
+
+    // 点击第一个动态推荐卡片能够正常发起流式对话
+    await cards[0].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
+    expect(wrapper.text()).toContain('近7天抓取异常最多的前5个网站')
+  })
+
   it('在左侧会话列表中点击不同会话可切换会话内容', async () => {
     const wrapper = mountView(true)
     await flushPromises()
@@ -583,5 +610,80 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 智能体对话自动推进，将勾选的项作为新轮次发送给会话
     expect(wrapper.text()).toContain('已确认选择：南京链家二手房成交明细、南京安居客二手房挂牌均价')
+  })
+
+  it('智能体返回 Markdown 候选表表格时，自动渲染成交互表格并支持点击「直接使用」一键推进会话', async () => {
+    const tableContent = `
+| 编号 | 表名 | 说明 |
+| --- | --- | --- |
+| 1 | \`TB_ZZ_MONTH_OLD_PRICE\` | 中指-二手房销售价格 |
+| 6 | \`tb_ke_com_chengjiao_esf\` | 贝壳二手房成交信息 |
+
+请问你希望用哪张表？例如回复"6"（贝壳二手房成交信息）。
+`
+    const testSession = [{ id: 'test_table_click', title: '点击选表测试', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      test_table_click: [
+        {
+          id: 'u-table',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'a-table',
+          role: 'assistant' as const,
+          content: tableContent,
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请问你希望用哪张表？例如回复"6"（贝壳二手房成交信息）。',
+            allowFreeText: true,
+            maxSelect: 5,
+            options: [
+              {
+                entryTypeId: 1,
+                tableName: 'TB_ZZ_MONTH_OLD_PRICE',
+                typeName: '中指-二手房销售价格',
+                hint: '编号: 1',
+              },
+              {
+                entryTypeId: 6,
+                tableName: 'tb_ke_com_chengjiao_esf',
+                typeName: '贝壳二手房成交信息',
+                hint: '编号: 6',
+              },
+            ],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 交互表格应存在
+    expect(wrapper.find('[data-testid="clarification-table"]').exists()).toBe(true)
+
+    // 点击编号 6 行的「直接使用」按钮
+    const directBtn6 = wrapper.find('[data-testid="clarification-direct-6"]')
+    expect(directBtn6.exists()).toBe(true)
+    await directBtn6.trigger('click')
+    await flushPromises()
+
+    // 确认状态呈现
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+
+    // 对话流中自动发出单项指令，无需用户手动在输入框敲字
+    expect(wrapper.text()).toContain('6（贝壳二手房成交信息）')
   })
 })

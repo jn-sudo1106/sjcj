@@ -1,5 +1,6 @@
 // AI 智能问数（ChatBI / Agent 交互）API 封装
 import { request } from './client'
+import { POC_API_PREFIX } from '@/constants/backend'
 
 export interface AiSessionItem {
   id: string
@@ -201,7 +202,88 @@ export function extractClarificationFromText(text: string): Clarification | null
     }
   }
 
-  // 3. 匹配明确包含“待确认/请确认/请选择候选表”语境下的编号候选列表（1. xxx 2. yyy）
+  // 3. 匹配 Markdown 表格形式的待确认候选表清单（如 | 编号 | 表名 | 说明 |）
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length - 2; i++) {
+    const headerLine = lines[i].trim()
+    if (!headerLine.includes('|')) continue
+    const sepLine = lines[i + 1]?.trim() || ''
+    if (!/^\s*\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/.test(sepLine)) {
+      continue
+    }
+
+    const headerCells = headerLine
+      .split('|')
+      .map((c) => c.trim())
+      .filter((c, idx, arr) => {
+        if (idx === 0 && headerLine.startsWith('|') && c === '') return false
+        if (idx === arr.length - 1 && headerLine.endsWith('|') && c === '') return false
+        return true
+      })
+
+    if (headerCells.length < 2) continue
+
+    const idColIdx = headerCells.findIndex((h) => /(?:编号|序号|id|index|no)/i.test(h))
+    const tableColIdx = headerCells.findIndex((h) => /(?:表名|表|table|候选|数据表|物理表)/i.test(h))
+    const descColIdx = headerCells.findIndex((h) => /(?:说明|描述|含义|备注|注释|desc|comment|业务)/i.test(h))
+
+    const effTableCol = tableColIdx !== -1 ? tableColIdx : (headerCells.length > 2 ? 1 : 0)
+    const effDescCol = descColIdx !== -1 ? descColIdx : (headerCells.length > 2 ? 2 : 1)
+    const effIdCol = idColIdx !== -1 ? idColIdx : (tableColIdx > 0 ? 0 : -1)
+
+    const tableOptions: ClarificationOption[] = []
+    let j = i + 2
+    while (j < lines.length) {
+      const rowLine = lines[j].trim()
+      if (!rowLine.includes('|')) break
+      const cells = rowLine
+        .split('|')
+        .map((c) => c.trim())
+        .filter((c, idx, arr) => {
+          if (idx === 0 && rowLine.startsWith('|') && c === '') return false
+          if (idx === arr.length - 1 && rowLine.endsWith('|') && c === '') return false
+          return true
+        })
+
+      if (cells.length >= 2) {
+        const rawTable = cells[effTableCol] || cells[0] || ''
+        const rawDesc = effDescCol !== -1 && cells[effDescCol] ? cells[effDescCol] : ''
+        const rawId = effIdCol !== -1 && cells[effIdCol] ? cells[effIdCol] : String(tableOptions.length + 1)
+
+        const cleanTable = rawTable.replace(/[`*]/g, '').trim()
+        const cleanDesc = rawDesc.replace(/[`*]/g, '').trim()
+        const numId = parseInt(rawId.replace(/\D/g, ''), 10)
+        const entryTypeId = !isNaN(numId) && numId > 0 ? numId : tableOptions.length + 1
+
+        if (cleanTable) {
+          tableOptions.push({
+            entryTypeId,
+            tableName: cleanTable,
+            typeName: cleanDesc || cleanTable,
+            hint: cleanDesc && cleanDesc !== cleanTable ? `编号: ${entryTypeId}` : null,
+          })
+        }
+      }
+      j++
+    }
+
+    if (tableOptions.length >= 2) {
+      const remainingText = lines.slice(j).join('\n') + '\n' + lines.slice(0, i).join('\n')
+      const questionMatch = remainingText.match(/(?:请问|请确认|待确认|请选择|您希望)[^\n]*(?:[?？]|：|:|\n|$)/)
+      const question = questionMatch ? questionMatch[0].trim() : '请选择要使用的表（可直接点击「直接使用」，或勾选多项）：'
+
+      return {
+        kind: 'table_choice',
+        reason: 'TOO_MANY',
+        question,
+        allowFreeText: true,
+        maxSelect: Math.max(5, tableOptions.length),
+        options: tableOptions,
+      }
+    }
+  }
+
+  // 4. 匹配明确包含“待确认/请确认/请选择候选表”语境下的编号候选列表（1. xxx 2. yyy）
   const hasClarifyKeyword = /(?:待确认|请确认|请选择|候选表如下|可选表清单|需要您确认)/.test(text)
   if (hasClarifyKeyword) {
     const numberedListRegex = /^\s*\d+[\.、]\s*([^\n]+)$/gm
@@ -440,4 +522,33 @@ export async function streamAgentChat(
  */
 export async function submitClarificationAnswer(answer: ClarificationAnswer): Promise<void> {
   await request<unknown>(EP.clarification, { ...answer }, { method: 'POST' })
+}
+
+/**
+ * 获取推荐问数场景（配置于页面配置 sys_page_config，对应后端 GET /api/poc/chat/help/question）。
+ * 返回问句文本列表，若未配置或异常时返回空数组由前端回退到默认卡片。
+ */
+export async function listRecommendedQuestions(): Promise<string[]> {
+  try {
+    const res = await request<string[] | { data?: string[] } | null>(
+      'poc/chat/help/question',
+      undefined,
+      {
+        method: 'GET',
+        httpEndpoint: `${POC_API_PREFIX}/chat/help/question`,
+      },
+    )
+    if (Array.isArray(res)) {
+      return res.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    }
+    if (res && Array.isArray((res as { data?: unknown[] }).data)) {
+      return (res as { data: unknown[] }).data.filter(
+        (item): item is string => typeof item === 'string' && item.trim().length > 0,
+      )
+    }
+    return []
+  } catch (error) {
+    console.warn('[listRecommendedQuestions] 获取推荐问句失败，使用默认卡片:', error)
+    return []
+  }
 }

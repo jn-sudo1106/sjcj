@@ -3,7 +3,7 @@
 // 支持 1~maxSelect 张多选 + 自由补充；确认后锁定并回传 entryTypeId 列表。
 // 数据来源契约见 @/api/aiChat 的 Clarification。
 import { computed, ref, watch } from 'vue'
-import type { Clarification } from '@/api/aiChat'
+import type { Clarification, ClarificationOption } from '@/api/aiChat'
 
 const props = withDefaults(defineProps<{
   clarification: Clarification
@@ -63,6 +63,15 @@ function handleConfirm(): void {
     freeText: freeText.value.trim(),
   })
 }
+
+function handleDirectSelect(option: ClarificationOption): void {
+  if (props.confirmed) return
+  selectedIds.value = [option.entryTypeId]
+  emit('confirm', {
+    selectedEntryTypeIds: [option.entryTypeId],
+    freeText: freeText.value.trim(),
+  })
+}
 </script>
 
 <template>
@@ -70,44 +79,76 @@ function handleConfirm(): void {
     <div class="cc-head">
       <span class="cc-title">
         <span class="cc-dot"></span>
-        {{ isTableChoice ? '请选择要分析的表（可多选）：' : '请补充要分析的口径：' }}
+        {{ isTableChoice ? '请选择要分析的表（可直接点击「直接使用」或勾选多项）：' : '请补充要分析的口径：' }}
       </span>
       <span class="cc-hint">最多 {{ clarification.maxSelect }} 张 · 已选 {{ selectedIds.length }}</span>
     </div>
 
     <p v-if="clarification.question" class="cc-question">{{ clarification.question }}</p>
 
-    <div v-if="isTableChoice && clarification.options.length" class="cc-options">
-      <div
-        v-for="option in clarification.options"
-        :key="option.entryTypeId"
-        class="cc-option"
-        :class="{
-          selected: isSelected(option.entryTypeId),
-          disabled: confirmed || (reachedMax && !isSelected(option.entryTypeId)),
-        }"
-        :data-testid="`clarification-option-${option.entryTypeId}`"
-        role="checkbox"
-        :aria-checked="isSelected(option.entryTypeId)"
-        :tabindex="confirmed ? -1 : 0"
-        @click="toggleOption(option.entryTypeId)"
-        @keydown.space.prevent="toggleOption(option.entryTypeId)"
-        @keydown.enter.prevent="toggleOption(option.entryTypeId)"
-      >
-        <span class="cc-check" :class="{ checked: isSelected(option.entryTypeId) }">
-          <span v-if="isSelected(option.entryTypeId)" class="cc-check-mark">✓</span>
-        </span>
-        <div class="cc-option-body">
-          <div class="cc-option-name">{{ option.typeName || option.tableName }}</div>
-          <div
-            v-if="option.tableName && option.tableName !== option.typeName"
-            class="cc-option-table"
+    <!-- 交互式候选选项表格：支持勾选多选与单行直接点击使用 -->
+    <div v-if="isTableChoice && clarification.options.length" class="cc-table-wrapper">
+      <table class="cc-interactive-table" data-testid="clarification-table">
+        <thead>
+          <tr>
+            <th class="th-check">选择</th>
+            <th class="th-no">编号</th>
+            <th class="th-name">表名</th>
+            <th class="th-desc">说明</th>
+            <th v-if="!confirmed" class="th-action">快捷操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="option in clarification.options"
+            :key="option.entryTypeId"
+            class="cc-option cc-tr"
+            :class="{
+              selected: isSelected(option.entryTypeId),
+              disabled: confirmed || (reachedMax && !isSelected(option.entryTypeId)),
+            }"
+            :data-testid="`clarification-option-${option.entryTypeId}`"
+            role="checkbox"
+            :aria-checked="isSelected(option.entryTypeId)"
+            :tabindex="confirmed ? -1 : 0"
+            @click="toggleOption(option.entryTypeId)"
+            @keydown.space.prevent="toggleOption(option.entryTypeId)"
+            @keydown.enter.prevent="toggleOption(option.entryTypeId)"
           >
-            {{ option.tableName }}
-          </div>
-          <div v-if="option.hint" class="cc-option-hint">{{ option.hint }}</div>
-        </div>
-      </div>
+            <td class="td-check" @click.stop="toggleOption(option.entryTypeId)">
+              <span class="cc-check" :class="{ checked: isSelected(option.entryTypeId) }">
+                <span v-if="isSelected(option.entryTypeId)" class="cc-check-mark">✓</span>
+              </span>
+            </td>
+            <td class="td-no">
+              <span class="cc-num-badge">{{ option.entryTypeId }}</span>
+            </td>
+            <td class="td-name">
+              <code class="cc-table-code">{{ option.tableName }}</code>
+            </td>
+            <td class="td-desc">
+              <div class="cc-option-name">{{ option.typeName || option.tableName }}</div>
+              <div
+                v-if="option.hint && !option.hint.startsWith('编号')"
+                class="cc-option-hint"
+              >
+                {{ option.hint }}
+              </div>
+            </td>
+            <td v-if="!confirmed" class="td-action" @click.stop>
+              <el-button
+                type="primary"
+                size="small"
+                class="cc-direct-btn"
+                :data-testid="`clarification-direct-${option.entryTypeId}`"
+                @click="handleDirectSelect(option)"
+              >
+                直接使用
+              </el-button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <div v-if="clarification.allowFreeText" class="cc-free">
@@ -194,37 +235,112 @@ function handleConfirm(): void {
   color: #475569;
 }
 
-.cc-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
-}
-
-.cc-option {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  border: 1px solid #e2e8f0;
+.cc-table-wrapper {
+  overflow-x: auto;
   border-radius: 8px;
+  border: 1px solid #e2e8f0;
   background: #ffffff;
+}
+
+.cc-interactive-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.cc-interactive-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
   padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.cc-tr {
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease;
+  border-bottom: 1px solid #f1f5f9;
 }
 
-.cc-option:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.08);
+.cc-tr:last-child {
+  border-bottom: none;
 }
 
-.cc-option.selected {
-  border-color: #3b82f6;
+.cc-tr:hover:not(.disabled) {
+  background: #f0f7ff;
+}
+
+.cc-tr.selected {
   background: #eff6ff;
 }
 
-.cc-option.disabled {
+.cc-tr.disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.cc-interactive-table td {
+  padding: 9px 12px;
+  vertical-align: middle;
+}
+
+.th-check,
+.td-check {
+  width: 44px;
+  text-align: center;
+}
+
+.th-no,
+.td-no {
+  width: 56px;
+  text-align: center;
+}
+
+.cc-num-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cc-tr.selected .cc-num-badge {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+.th-name {
+  width: 28%;
+}
+
+.cc-table-code {
+  font: 12px/1.4 Consolas, Menlo, Monaco, monospace;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  display: inline-block;
+  word-break: break-all;
+}
+
+.th-action,
+.td-action {
+  width: 90px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cc-direct-btn {
+  font-size: 12px;
+  padding: 4px 8px;
 }
 
 .cc-check {

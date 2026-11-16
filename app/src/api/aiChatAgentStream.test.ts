@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { streamAgentChat, extractClarificationFromText, type AgentChatEvent } from './aiChat'
+import {
+  streamAgentChat,
+  extractClarificationFromText,
+  listRecommendedQuestions,
+  type AgentChatEvent,
+} from './aiChat'
+import * as clientModule from './client'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -239,9 +245,72 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     })
   })
 
+  it('extractClarificationFromText 正确解析 Markdown 表格形式的待确认候选表列表', () => {
+    const tableText = `
+| 编号 | 表名 | 说明 |
+| --- | --- | --- |
+| 1 | \`TB_ZZ_MONTH_OLD_PRICE\` | 中指-二手房销售价格 |
+| 2 | \`TB_ZZ_MONTH_OLD_CNT\` | 中指-二手房销售套数 |
+| 3 | \`TB_ZZ_MONTH_OLD_SUM\` | 中指-二手房销售额 |
+| 4 | \`TB_ZZ_MONTH_OLD_AREA\` | 中指-二手房销售面积 |
+| 5 | \`TB_RS_ESFYTJ\` | RS_二手房预统计 |
+| 6 | \`tb_ke_com_chengjiao_esf\` | 贝壳二手房成交信息 |
+| 7 | \`tb_ke_com_chengjiao_esf_detail\` | 贝壳二手房成交信息(新增详情字段) |
+| 8 | \`TB_ke_com_ershoufang_sale\` | 贝壳二手房_在售 |
+| 9 | \`tb_chengjiao_test\` | 贝壳二手房成交信息_copy |
+| 10 | \`TB_creprice_forsale_supply\` | 全国房价行情平台_二手房_供给量 |
+
+请问你希望用哪张表？例如回复"3"（中指-二手房销售价格）或"6"（贝壳二手房成交信息）。
+`
+    const result = extractClarificationFromText(tableText)
+    expect(result).not.toBeNull()
+    expect(result?.options).toHaveLength(10)
+    expect(result?.question).toContain('请问你希望用哪张表')
+
+    expect(result?.options[0]).toEqual({
+      entryTypeId: 1,
+      tableName: 'TB_ZZ_MONTH_OLD_PRICE',
+      typeName: '中指-二手房销售价格',
+      hint: '编号: 1',
+    })
+
+    expect(result?.options[5]).toEqual({
+      entryTypeId: 6,
+      tableName: 'tb_ke_com_chengjiao_esf',
+      typeName: '贝壳二手房成交信息',
+      hint: '编号: 6',
+    })
+  })
+
   it('extractClarificationFromText 在普通文本无待确认项时返回 null', () => {
     const normalText = '根据查询结果，南京二手房均价为 28,500 元/㎡。近7天成交120套。'
     expect(extractClarificationFromText(normalText)).toBeNull()
     expect(extractClarificationFromText('')).toBeNull()
+  })
+})
+
+describe('listRecommendedQuestions 推荐问数场景获取', () => {
+  it('正确解析直接返回的 string 数组并过滤空串', async () => {
+    const spy = vi.spyOn(clientModule, 'request').mockResolvedValue(['近7天异常任务分析', '', '   ', '各源采集成功率 TOP 10'] as never)
+    const list = await listRecommendedQuestions()
+    expect(spy).toHaveBeenCalledWith('poc/chat/help/question', undefined, {
+      method: 'GET',
+      httpEndpoint: '/api/poc/chat/help/question',
+    })
+    expect(list).toEqual(['近7天异常任务分析', '各源采集成功率 TOP 10'])
+  })
+
+  it('支持带有 { data: [...] } 包装的响应结构', async () => {
+    vi.spyOn(clientModule, 'request').mockResolvedValue({
+      data: ['规则清洗未命中排查'],
+    } as never)
+    const list = await listRecommendedQuestions()
+    expect(list).toEqual(['规则清洗未命中排查'])
+  })
+
+  it('请求发生异常时静默降级返回空数组，不向外抛出异常', async () => {
+    vi.spyOn(clientModule, 'request').mockRejectedValue(new Error('Network error'))
+    const list = await listRecommendedQuestions()
+    expect(list).toEqual([])
   })
 })
