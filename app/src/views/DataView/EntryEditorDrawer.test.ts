@@ -439,8 +439,46 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     const engineSel = body().find('select[data-testid="entry-storage-engine"]')
     expect((engineSel.element as HTMLSelectElement).value).toBe('ReplacingMergeTree')
     const sortedInput = body().find('input[data-testid="entry-sorted"]')
-    expect((sortedInput.element as HTMLInputElement).value).toBe('entry_id')
+    expect((sortedInput.element as HTMLInputElement).value).toBe('ENTRY_ID')
     const partInput = body().find('input[data-testid="entry-part-column"]')
     expect(partInput.exists()).toBe(true)
+  })
+
+  it('新建表选择 CK 并提交：entrySave 接收到完整的 CK 配置与 tableConfig', async () => {
+    const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: '999' })
+    await mountEditor(null)
+
+    // 填写必填项
+    const inputs = body().findAll('input.rc-input')
+    // 第一个输入框是 name
+    await inputs[0].setValue('测试CK表')
+    await body().find('input[data-testid="entry-table-name"]').setValue('tb_test_ck')
+
+    // 选择 CK
+    const dsSel = body().find('select[data-testid="entry-ds-kind"]')
+    await dsSel.setValue('CK')
+    await flushPromises()
+
+    // 填写属性编码和展示名
+    const reqInputs = body().findAll('input[placeholder="必填"]')
+    if (reqInputs.length >= 2) {
+      await reqInputs[0].setValue('title')
+      await reqInputs[1].setValue('标题')
+    }
+
+    // 点击保存
+    const submitBtn = body().findAll('button').find((b) => b.text() === '保存')
+    expect(submitBtn).toBeDefined()
+    await submitBtn!.trigger('click')
+    await flushPromises()
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({
+      name: '测试CK表',
+      tableName: 'tb_test_ck',
+      dsKind: 'CK',
+      opType: 'wr',
+      storageEngine: 'ReplacingMergeTree',
+      sorted: 'ENTRY_ID',
+    }))
   })
 })
