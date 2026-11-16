@@ -2533,6 +2533,15 @@ describe('SourceOverviewView · 产出结论（1114 一期 B）', () => {
     wrapper.unmount()
   })
 
+  it('网站卡片视图不显示「产出」下拉（卡片视图没有行，计数全是 0 会误导）', async () => {
+    mockOutputs()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [fresh, stale, loose] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', websiteCards: true }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-output-filter"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('未选业务目录、命中多于一页：给「统计全部」按钮，点了才全量统计', async () => {
     mockOutputs()
     vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => ({ total: 3, list: (q?.size ?? 20) >= 500 ? [fresh, stale, loose] : [fresh] }))

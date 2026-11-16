@@ -62,7 +62,7 @@ describe('AlertConfigPanel', () => {
     expect(wrapper.get('[data-testid="alert-policy-toggle"]').attributes('aria-pressed')).toBe('false')
   })
 
-  it('新增策略时可编辑阈值、通知渠道和恢复通知', async () => {
+  it('新增策略时可编辑阈值；钉钉与恢复通知暂不支持，不能新勾', async () => {
     const wrapper = mountPanel()
 
     await wrapper.get('[data-testid="alert-add-policy"]').trigger('click')
@@ -76,15 +76,48 @@ describe('AlertConfigPanel', () => {
     threshold.dispatchEvent(new Event('input', { bubbles: true }))
     await flushPromises()
 
-    const dingtalk = document.body.querySelector('[data-testid="alert-channel-option-dingtalk"]') as HTMLInputElement
-    dingtalk.click()
-    const recovery = document.body.querySelector('[data-testid="alert-recovery-toggle"]') as HTMLInputElement
-    recovery.click()
-    document.body.querySelector('[data-testid="alert-save-policy"]')?.dispatchEvent(new Event('click', { bubbles: true }))
+    const dingtalk = lastInput('alert-channel-option-dingtalk')
+    expect(dingtalk.disabled).toBe(true)
+    expect(dingtalk.checked).toBe(false)
+    const recovery = lastInput('alert-recovery-toggle')
+    expect(recovery.disabled).toBe(true)
+    expect(recovery.checked).toBe(false)
+    expect(document.body.textContent).toContain('（暂不支持）')
+    lastElement('alert-save-policy').dispatchEvent(new Event('click', { bubbles: true }))
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="alert-policy-row"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('入库数量为零')
+    const saved = wrapper.emitted('update:alert-config')?.at(-1)?.[0] as { policies: Array<{ name: string, channelTypes: string[], recoveryNotify: boolean }> }
+    expect(saved.policies.find((policy) => policy.name === '入库数量为零')).toMatchObject({ channelTypes: ['email'], recoveryNotify: false })
+  })
+
+  it('已配过钉钉和恢复通知的旧策略：标「暂不支持」，可以取消，取消后不能再勾回', async () => {
+    const wrapper = mountPanel()
+    expect(wrapper.get('[data-testid="alert-channel-dingtalk"]').text()).toContain('暂不支持')
+    expect(wrapper.get('[data-testid="alert-policy-row"]').text()).toContain('恢复通知（暂不支持）')
+
+    await wrapper.findAll('.alert-policy-actions .alert-link')[0].trigger('click')
+    await flushPromises()
+    const dingtalk = lastInput('alert-channel-option-dingtalk')
+    const recovery = lastInput('alert-recovery-toggle')
+    expect(dingtalk.checked).toBe(true)
+    expect(dingtalk.disabled).toBe(false)
+    expect(recovery.checked).toBe(true)
+    expect(recovery.disabled).toBe(false)
+
+    dingtalk.click()
+    recovery.click()
+    await flushPromises()
+    expect(lastInput('alert-channel-option-dingtalk').disabled).toBe(true)
+    expect(lastInput('alert-recovery-toggle').disabled).toBe(true)
+  })
+
+  it('没有渠道时只能加邮件渠道，钉钉按钮禁用', async () => {
+    const wrapper = mountPanel(null)
+    expect(wrapper.get('[data-testid="alert-add-channel-dingtalk"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="alert-add-channel-dingtalk"]').text()).toContain('暂不支持')
+    expect(wrapper.get('[data-testid="alert-add-channel-email"]').attributes('disabled')).toBeUndefined()
   })
 
   it('可配置邮件收件人并在渠道卡片回显', async () => {
@@ -107,6 +140,7 @@ describe('AlertConfigPanel', () => {
 
     await wrapper.get('[data-testid="alert-channel-edit-dingtalk"]').trigger('click')
     expect(document.body.textContent).toContain('配置钉钉渠道')
+    expect(lastElement('alert-dingtalk-unsupported').textContent).toContain('不会发送')
 
     const webhook = document.body.querySelector('[data-testid="alert-dingtalk-webhook"]') as HTMLInputElement
     webhook.value = 'https://oapi.dingtalk.com/robot/send?access_token=demo'
