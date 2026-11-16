@@ -78,8 +78,6 @@ const searchSessionKeyword = ref<string>('')
 
 // 输入框与发送参数
 const promptText = ref<string>('')
-const enableReasoning = ref<boolean>(true)
-const enableAutoChart = ref<boolean>(true)
 const isSending = ref<boolean>(false)
 const currentAbortController = ref<AbortController | null>(null)
 
@@ -570,13 +568,11 @@ async function handleSend(customTitle?: string) {
     role: 'assistant',
     content: '',
     createdAt: '刚刚',
-    thinking: enableReasoning.value
-      ? {
-          completed: false,
-          durationMs: 0,
-          steps: [],
-        }
-      : undefined,
+    thinking: {
+      completed: false,
+      durationMs: 0,
+      steps: [],
+    },
   }
   list.push(assistantMsg)
   scrollToBottom()
@@ -1174,8 +1170,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
           <div class="rc-input-toolbar">
             <div class="rc-toolbar-left">
-              <el-checkbox v-model="enableReasoning" label="深度思维(Reasoning)" size="small" />
-              <el-checkbox v-model="enableAutoChart" label="自动生成图表" size="small" />
+              <span class="rc-input-tip">按 Enter 发送，Shift + Enter 换行</span>
             </div>
 
             <el-button
@@ -2114,7 +2109,14 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .rc-toolbar-left {
   display: flex;
+  align-items: center;
   gap: 12px;
+}
+
+.rc-input-tip {
+  font-size: 12px;
+  color: var(--rc-muted);
+  user-select: none;
 }
 
 .rc-footer-caption {
