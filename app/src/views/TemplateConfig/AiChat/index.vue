@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // AI 智能问数（Agent 交互对话工作台）
 // 位于「问数配置」分组，支持 Text-to-SQL、多轮主动澄清与问答、思考链展示、KPI指标卡片、图表与明细切换
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   ArrowDown,
@@ -28,6 +28,7 @@ import { downloadCsv, toCsv, csvDateTag, type CsvCell } from '@/utils/csv'
 import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
 import ClarificationCard from './ClarificationCard.vue'
 import AiPieChart from './AiPieChart.vue'
+import MarkdownOutput from '@/components/MarkdownOutput.vue'
 
 interface StarterPrompt {
   tag: string
@@ -85,6 +86,35 @@ const currentAbortController = ref<AbortController | null>(null)
 const activeDataView = ref<'chart' | 'pie' | 'table'>('chart')
 const isThinkingExpanded = ref<boolean>(true)
 const chatContainerRef = ref<HTMLElement | null>(null)
+
+// 每条消息独立的思考链展开状态映射（按 msg.id 记录）
+const thinkingExpandedMap = reactive<Record<string, boolean>>({})
+const thinkingElapsedSeconds = ref(0)
+let thinkingTimer: ReturnType<typeof setInterval> | null = null
+
+function isThinkingOpen(msg: ChatMessage): boolean {
+  if (thinkingExpandedMap[msg.id] !== undefined) {
+    return thinkingExpandedMap[msg.id]
+  }
+  // 正在思考时自动展开
+  if (msg.thinking && !msg.thinking.completed) {
+    return true
+  }
+  // 思考已完成但无正文回复时自动展开，方便用户查看排查步骤与思考日志
+  if (msg.thinking?.completed && !msg.content) {
+    return true
+  }
+  // 澄清卡片场景继承原默认值
+  if (msg.clarification) {
+    return isThinkingExpanded.value
+  }
+  // 有最终回答时默认收起
+  return false
+}
+
+function toggleThinking(msgId: string, currentOpen: boolean) {
+  thinkingExpandedMap[msgId] = !currentOpen
+}
 
 // 提取消息中的切片数据，若未显式提供则从柱状数据智能转换
 function getMsgSlices(msg: ChatMessage): PieSlice[] {
@@ -497,6 +527,11 @@ async function handleSend(customTitle?: string) {
   const abortCtrl = new AbortController()
   currentAbortController.value = abortCtrl
   const startTime = Date.now()
+  thinkingElapsedSeconds.value = 0
+  if (thinkingTimer) clearInterval(thinkingTimer)
+  thinkingTimer = setInterval(() => {
+    thinkingElapsedSeconds.value = Math.floor((Date.now() - startTime) / 1000)
+  }, 500)
 
   try {
     await streamAgentChat(
@@ -511,9 +546,9 @@ async function handleSend(customTitle?: string) {
           scrollToBottom()
         } else if (event.type === 'reasoning') {
           if (!assistantMsg.thinking) {
-            assistantMsg.thinking = { completed: false, durationMs: 0, steps: [] }
+            assistantMsg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
           }
-          assistantMsg.thinking.steps.push(event.reasoning)
+          assistantMsg.thinking.text = (assistantMsg.thinking.text || '') + event.reasoning
           scrollToBottom()
         } else if (event.type === 'error') {
           ElMessage.error(event.error)
@@ -524,6 +559,16 @@ async function handleSend(customTitle?: string) {
           if (assistantMsg.thinking) {
             assistantMsg.thinking.completed = true
             assistantMsg.thinking.durationMs = Date.now() - startTime
+            if (
+              (!assistantMsg.thinking.steps || assistantMsg.thinking.steps.length === 0) &&
+              assistantMsg.thinking.text
+            ) {
+              const lines = assistantMsg.thinking.text
+                .split('\n')
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0)
+              assistantMsg.thinking.steps = lines.length > 0 ? lines : [assistantMsg.thinking.text]
+            }
           }
         }
       },
@@ -541,6 +586,10 @@ async function handleSend(customTitle?: string) {
         }
       }
     }
+
+    if (!assistantMsg.content.trim() && !assistantMsg.sql && !assistantMsg.clarification) {
+      thinkingExpandedMap[assistantMsg.id] = true
+    }
   } catch (err) {
     const failure = err as { name?: string; message?: string }
     if (failure.name !== 'AbortError') {
@@ -550,6 +599,10 @@ async function handleSend(customTitle?: string) {
       }
     }
   } finally {
+    if (thinkingTimer) {
+      clearInterval(thinkingTimer)
+      thinkingTimer = null
+    }
     isSending.value = false
     currentAbortController.value = null
     scrollToBottom()
@@ -777,8 +830,8 @@ function handleKeyDown(e: KeyboardEvent) {
             </div>
 
             <div class="rc-msg-bubble assistant">
-              <!-- 引导/说明文字 -->
-              <div v-if="msg.content" class="rc-clarify-intro">
+              <!-- 引导/说明文字：仅在包含澄清卡片时展示引导文案 -->
+              <div v-if="msg.clarification && msg.content" class="rc-clarify-intro">
                 {{ msg.content }}
               </div>
 
@@ -801,22 +854,43 @@ function handleKeyDown(e: KeyboardEvent) {
                   <div v-if="msg.thinking" class="rc-thinking-box">
                     <div
                       class="rc-thinking-header"
-                      @click="isThinkingExpanded = !isThinkingExpanded"
+                      @click="toggleThinking(msg.id, isThinkingOpen(msg))"
                     >
                       <div class="rc-thinking-title">
-                        <span class="rc-live-dot green"></span>
-                        <span>思考过程 · 已根据所选口径对齐并执行 SQL (耗时 {{ msg.thinking.durationMs / 1000 }}s)</span>
+                        <span class="rc-live-dot" :class="msg.thinking.completed ? 'green' : 'pulsing'"></span>
+                        <span v-if="!msg.thinking.completed">深度思考中... (已思考 {{ Math.max(1, Math.floor(thinkingElapsedSeconds)) }}s)</span>
+                        <span v-else>思考过程 · {{ selectedTables.length ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? '已生成并执行 SQL' : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)</span>
                       </div>
-                      <span class="rc-toggle-arrow" :class="{ collapsed: !isThinkingExpanded }">▼</span>
+                      <span class="rc-toggle-arrow" :class="{ collapsed: !isThinkingOpen(msg) }">▼</span>
                     </div>
-                    <div v-if="isThinkingExpanded" class="rc-thinking-body">
+                    <div v-if="isThinkingOpen(msg)" class="rc-thinking-body">
                       <div v-if="selectedTables.length">
                         ✓ 1. 采纳用户澄清口径：<strong>{{ selectedTables.join('、') }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code>
                       </div>
-                      <div v-for="(step, idx) in msg.thinking.steps" :key="idx">
-                        ✓ {{ idx + (selectedTables.length ? 2 : 1) }}. {{ step }}
+                      <div v-if="msg.thinking.text" class="rc-thinking-text">
+                        {{ msg.thinking.text }}
+                      </div>
+                      <div v-else-if="msg.thinking.steps && msg.thinking.steps.length">
+                        <div v-for="(step, idx) in msg.thinking.steps" :key="idx">
+                          ✓ {{ idx + (selectedTables.length ? 2 : 1) }}. {{ step }}
+                        </div>
                       </div>
                     </div>
+                  </div>
+
+                  <!-- 智能体最终回答正文（支持 Markdown 渲染） -->
+                  <div v-if="!msg.clarification && msg.content" class="rc-answer-markdown">
+                    <MarkdownOutput :content="msg.content" />
+                  </div>
+                  <!-- 思考已完成但上游未输出任何回答内容或 SQL 时的兜底状态提示 -->
+                  <div v-else-if="!msg.clarification && msg.thinking?.completed && !msg.content && !msg.sql" class="rc-empty-fallback-hint">
+                    <el-alert
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      title="思考分析已完成，但未返回最终回答内容"
+                      description="上游模型或数据检索接口可能未生成文本回复。您可以展开上方「思考过程」卡片查看详细分析步骤与日志。"
+                    />
                   </div>
 
                   <!-- 生成的 SQL 卡片 -->
@@ -1546,6 +1620,18 @@ function handleKeyDown(e: KeyboardEvent) {
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
 }
 
+.rc-live-dot.pulsing {
+  background: var(--rc-primary);
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.6);
+  animation: rc-pulse 1.5s infinite;
+}
+
+@keyframes rc-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
 .rc-toggle-arrow {
   font-size: 10px;
   transition: transform 0.2s;
@@ -1561,6 +1647,36 @@ function handleKeyDown(e: KeyboardEvent) {
   font-size: 12px;
   color: var(--rc-muted);
   line-height: 1.6;
+}
+
+.rc-thinking-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--rc-muted);
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.rc-answer-markdown {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.rc-answer-markdown :deep(.markdown-output) {
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.rc-empty-fallback-hint {
+  width: 100%;
 }
 
 /* SQL 卡片 */

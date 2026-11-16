@@ -404,4 +404,103 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.findAll('.rc-session-item')).toHaveLength(0)
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
   })
+
+  it('智能体问答支持 Markdown 渲染与思考过程折叠展开', async () => {
+    const testSession = [{ id: 'test_s1', title: '二手房价格查询', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      test_s1: [
+        {
+          id: 'u-1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'a-1',
+          role: 'assistant' as const,
+          content: '根据数据查询，**南京二手房最新均价为 28,500 元/㎡**。\n- 近7天成交：120 套\n- 环比变动：+0.5%',
+          createdAt: '刚刚',
+          thinking: {
+            completed: true,
+            durationMs: 3200,
+            steps: ['解析意图：南京 二手房 最新价格', '定位主表：tb_ke_com_chengjiao_esf_detail', '执行只读聚合查询'],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 验证 Markdown 内容正常渲染
+    expect(wrapper.find('.rc-answer-markdown').exists()).toBe(true)
+    expect(wrapper.text()).toContain('南京二手房最新均价为 28,500 元/㎡')
+    expect(wrapper.text()).toContain('近7天成交：120 套')
+
+    // 验证思考过程卡片
+    expect(wrapper.find('.rc-thinking-box').exists()).toBe(true)
+    expect(wrapper.find('.rc-thinking-title').text()).toContain('耗时 3.2s')
+
+    // 默认折叠（有 content 回复时默认折叠）
+    expect(wrapper.find('.rc-thinking-body').exists()).toBe(false)
+
+    // 点击展开思考过程
+    await wrapper.find('.rc-thinking-header').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.rc-thinking-body').exists()).toBe(true)
+    expect(wrapper.text()).toContain('解析意图：南京 二手房 最新价格')
+  })
+
+  it('当思考完成但未返回任何正文时，自动展开思考过程并展示兜底提示', async () => {
+    const testSession = [{ id: 'test_empty', title: '无结果测试', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      test_empty: [
+        {
+          id: 'u-2',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'a-2',
+          role: 'assistant' as const,
+          content: '',
+          createdAt: '刚刚',
+          thinking: {
+            completed: true,
+            durationMs: 14423,
+            steps: ['正在检索上游表元数据...', '上游服务超时未响应，无法生成 SQL'],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 自动展示兜底状态提示
+    expect(wrapper.find('.rc-empty-fallback-hint').exists()).toBe(true)
+    expect(wrapper.find('.rc-empty-fallback-hint').text()).toContain('思考分析已完成，但未返回最终回答内容')
+
+    // 思考过程自动展开呈现，日志可见
+    expect(wrapper.find('.rc-thinking-body').exists()).toBe(true)
+    expect(wrapper.text()).toContain('正在检索上游表元数据...')
+    expect(wrapper.text()).toContain('上游服务超时未响应，无法生成 SQL')
+  })
 })
