@@ -2074,7 +2074,7 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
       </label>
       <!-- 按产出结论筛选（1114 一期 B）：跟「状态 / 标签」同一套原生下拉。选中业务目录且 ≤ 500 个源时自动统计全目录，
            否则只统计当前页（第一项写明统计范围）；「统计全部」是下拉里的一项，选了只触发统计、筛选不变 -->
-      <label v-if="showCol('output')" class="sov-fl-output"><span class="sov-label-text">产出</span>
+      <label v-if="showCol('output') && !websiteCards" class="sov-fl-output"><span class="sov-label-text">产出</span>
         <select
           :value="outputFilter"
           data-testid="source-output-filter"
