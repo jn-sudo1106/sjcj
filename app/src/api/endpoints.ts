@@ -64,7 +64,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 186 实测：不带 configId 报 not present、`configId=` 正常；flowId 未关联的源整批拒绝不建。
   { path: 'source/createJobs', desc: '给源新建定时（**只新建**，改已有的要用 job/updateJob）', danger: true, live: true },
   { path: 'source/clear', desc: '清源缓存', danger: true },
-  { path: 'source/queryStepDetail', desc: '查询子步骤详情' },
+  { path: 'source/queryStepDetail', desc: '源的输出表产出统计（按步骤返回，1114 源列表展开行 / 产出列）', impl: true, live: true },
   { path: 'source/nextStep', desc: '手动后续处理', danger: true, live: true },
   // nextStep2（发全部/大量后续）2026-08-19 起真实接线（M3-0G 复议，见方案；前端已加数量上限
   // 校验）；但这条请求路径本身从未真实调用过（AES 载荷形状、后端真实响应仅凭读源码推断），

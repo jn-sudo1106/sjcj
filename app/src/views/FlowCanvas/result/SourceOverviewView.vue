@@ -8,7 +8,7 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus'
 import { EditPen, Star, StarFilled } from '@element-plus/icons-vue'
-import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type Site } from '@/api'
+import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source, type SourceOutputTable, type Site } from '@/api'
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
 import SourceWebsiteCards from '@/views/CollectAssets/SourceWebsiteCards.vue'
 import { clearSiteCardQueryCache } from '@/views/CollectAssets/siteCardQuery'
@@ -46,6 +46,9 @@ import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 import { timeAgo } from '@/utils/format/relativeTime'
+import { fetchSourceOutput, runPool, SOURCE_OUTPUT_CONCURRENCY, useSourceOutput } from '@/composables/useSourceOutput'
+import { outputCountText, shortDateTime, stepsText, summarizeSourceOutput, type SourceOutputSummary } from '@/utils/sourceOutput'
+import { migrateHiddenColumns } from '@/api/sourceViews'
 import { readColumnPrefs, writeColumnPrefs } from '@/utils/table/columnPrefs'
 import { isFavoriteSource, loadFavoriteSources, toggleFavoriteSource } from '@/utils/sourceFavorites'
 import {
@@ -652,6 +655,95 @@ const showConfigCol = computed(() => !!props.scopeSourceGroupId)
 /** 实际隐藏掉的列数（空态行 colspan 用）：网站列只在不限网站时有，来源组两列只在 groupOps 时有 */
 const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
   && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
+/** 当前可见列数（空态行、展开行的 colspan）：勾选 / 收藏 / 源 ID / 源名称 4 列固定，其余随条件与「显示设置」 */
+const visibleColumnCount = computed(() => (crossSite.value ? 16 : 15) + (crossSite.value && props.groupOps ? 2 : 0)
+  - hiddenColumnCount.value + (props.extraColumnLabel ? 1 : 0) + (props.showOriginalDirectory ? 1 : 0) + (showConfigCol.value ? 1 : 0))
+
+/*
+ * 源产出（1114 一期 A，方案 §3.1 / §3.2）：「产出」列 = 详情表最近入库；源 ID 左侧 ▸ 展开按输出表列出
+ * 数据量 / 新入 / 更新（恢复旧平台源列表的展开行）。两处共用 useSourceOutput 的一份结果。
+ */
+const sourceOutput = useSourceOutput()
+const expandedSources = ref(new Set<string>())
+function toggleSourceExpand(sourceId: string) {
+  const next = new Set(expandedSources.value)
+  if (next.has(sourceId)) next.delete(sourceId)
+  else {
+    next.add(sourceId)
+    void sourceOutput.load([sourceId])
+  }
+  expandedSources.value = next
+}
+/** 当前页源的主表 ID：主表不是源码表时「产出」只看主表 */
+const mainTableBySource = computed(() => new Map(rows.value.map((source) => [source.sourceId, source.mainTable])))
+function mainTableOf(sourceId: string): string | undefined {
+  return mainTableBySource.value.get(sourceId) || undefined
+}
+function outputSummaryOf(sourceId: string): SourceOutputSummary | undefined {
+  const entry = sourceOutput.entryOf(sourceId)
+  return entry?.status === 'ok' ? summarizeSourceOutput(entry.tables, mainTableOf(sourceId)) : undefined
+}
+/** 这张表是不是「产出」列所依据的那张（展开行里高亮） */
+function isOutputTable(sourceId: string, table: SourceOutputTable): boolean {
+  const summary = outputSummaryOf(sourceId)
+  return !!summary && summary.kind !== 'none' && summary.table === table
+}
+function outputCellText(sourceId: string): string {
+  const entry = sourceOutput.entryOf(sourceId)
+  if (!entry || entry.status === 'loading') return '…'
+  if (entry.status === 'error') return '统计失败'
+  const summary = summarizeSourceOutput(entry.tables, mainTableOf(sourceId))
+  if (summary.kind === 'none') return '无详情表'
+  if (summary.kind === 'error') return '统计异常'
+  if (summary.kind === 'never') return '未入库'
+  return timeAgo(summary.lastInsertAt)
+}
+function outputCellTitle(sourceId: string): string {
+  const entry = sourceOutput.entryOf(sourceId)
+  if (!entry || entry.status === 'loading') return '正在统计产出'
+  if (entry.status === 'error') return `产出统计失败：${entry.error}`
+  const summary = summarizeSourceOutput(entry.tables, mainTableOf(sourceId))
+  if (summary.kind === 'none') return '流程里除源码表、附件表外没有输出表'
+  const table = `${summary.basis === 'main' ? '主表 ' : ''}${summary.table.entryTypeName}（${summary.table.tableName || summary.table.entryTypeId}）`
+  if (summary.kind === 'error') return `${table} 统计异常`
+  if (summary.kind === 'never') return `${table} 还没有入库数据`
+  return `${table} 最近入库 ${summary.lastInsertAt}\n点源 ID 左侧 ▸ 看全部输出表`
+}
+function outputCellTone(sourceId: string): string {
+  const entry = sourceOutput.entryOf(sourceId)
+  if (entry?.status === 'error') return 'warn'
+  const summary = outputSummaryOf(sourceId)
+  if (!summary || summary.kind === 'none') return 'muted'
+  return summary.kind === 'error' ? 'warn' : ''
+}
+function stepsTitle(steps: { stepId: string; stepName: string }[]): string {
+  return steps.map((step) => `[${step.stepId}] ${step.stepName}`).join('\n')
+}
+watch(rows, (list) => {
+  // 翻页、换条件、切目录后不在列表里的源自动收起；同一个源还在（如编辑后刷新）就保持展开
+  const ids = new Set(list.map((source) => source.sourceId))
+  if ([...expandedSources.value].some((id) => !ids.has(id))) {
+    expandedSources.value = new Set([...expandedSources.value].filter((id) => ids.has(id)))
+  }
+  if (showCol('output')) void sourceOutput.load(list.map((source) => source.sourceId))
+})
+watch(() => showCol('output'), (show) => {
+  if (show) void sourceOutput.load(rows.value.map((source) => source.sourceId))
+})
+
+/** 表格容器可见宽度：展开行内容 sticky 贴左，宽度跟可见区走，横向滚到最右展开也在眼前 */
+const tableWrapWidth = ref(0)
+let tableWrapObserver: ResizeObserver | undefined
+watch(tableElement, (element) => {
+  tableWrapObserver?.disconnect()
+  tableWrapObserver = undefined
+  if (!element) return
+  tableWrapWidth.value = element.clientWidth
+  if (typeof ResizeObserver === 'undefined') return
+  tableWrapObserver = new ResizeObserver(() => { tableWrapWidth.value = element.clientWidth })
+  tableWrapObserver.observe(element)
+}, { flush: 'post' })
+onBeforeUnmount(() => tableWrapObserver?.disconnect())
 
 /** 当前视图状态：查询条件 + 排序 + 每页条数 + 隐藏列 */
 const currentViewState = computed<SourceListViewState>(() => ({
@@ -681,7 +773,7 @@ function applyViewState(state: SourceListViewState) {
   sortField.value = state.sortField
   sortDirection.value = state.sortDirection
   size.value = state.pageSize || 20
-  hiddenColumns.value = [...state.hiddenColumns]
+  hiddenColumns.value = migrateHiddenColumns(state.hiddenColumns)
   page.value = 1
 }
 if (props.viewState) applyViewState(props.viewState)
@@ -1213,7 +1305,11 @@ const exportColumns = computed<SourceExportColumn[]>(() => {
   if (showCol('dataCount')) cols.push({ label: '数据量', value: (s) => (s.dataCount == null ? '' : String(s.dataCount)) })
   // 「新入 / 成功」= 最近入库 / 最近成功时间（对齐旧平台；导出留精确时间戳而非「N 天前」）
   if (showCol('newIn')) cols.push({ label: '新入', value: (s) => s.lastInsertAt || '' })
-  if (showCol('success')) cols.push({ label: '成功', value: (s) => s.lastSuccessAt || '' })
+  // 1114：「成功」换成「产出」，导出详情表与它的最近入库时间（exportOutputs 由导出前统计填好）
+  if (showCol('output')) {
+    cols.push({ label: '详情表', value: (s) => exportOutputText(s.sourceId, 'table') })
+    cols.push({ label: '详情最近入库', value: (s) => exportOutputText(s.sourceId, 'time') })
+  }
   if (showCol('lastTask')) cols.push({ label: '最近任务', value: (s) => s.lastTaskAt || '' })
   if (showCol('lastSuccess')) cols.push({ label: '最近成功', value: (s) => s.lastSuccessAt || '' })
   if (showCol('state')) cols.push({ label: '状态', value: sourceStatusLabel })
@@ -1230,6 +1326,41 @@ const exportColumns = computed<SourceExportColumn[]>(() => {
  * 这个动作挂在网络上——导出的主体是已经收齐的源列表，名称只是锦上添花。
  */
 const EXPORT_LOOKUP_TIMEOUT_MS = 2500
+
+/**
+ * 导出的「产出」列：每个源要单独调一次 queryStepDetail，全量导出（上万个源）逐个统计要十几分钟，
+ * 所以只在源数不超过 EXPORT_OUTPUT_LIMIT 时统计（8 并发，217 实测 65 个源 3.6 s），超过就填「未统计」并提示。
+ */
+const EXPORT_OUTPUT_LIMIT = 500
+let exportOutputs = new Map<string, SourceOutputSummary | 'failed'>()
+function exportOutputText(sourceId: string, field: 'table' | 'time'): string {
+  const summary = exportOutputs.get(sourceId)
+  if (!summary) return '未统计'
+  if (summary === 'failed') return '统计失败'
+  if (summary.kind === 'none') return field === 'table' ? '' : '无详情表'
+  if (field === 'table') return `${summary.table.entryTypeName}（${summary.table.tableName || summary.table.entryTypeId}）`
+  if (summary.kind === 'error') return '统计异常'
+  if (summary.kind === 'never') return '未入库'
+  return summary.lastInsertAt
+}
+async function collectExportOutputs(sources: Source[], signal: AbortSignal): Promise<boolean> {
+  exportOutputs = new Map()
+  if (!showCol('output')) return true
+  if (sources.length > EXPORT_OUTPUT_LIMIT) return false
+  let done = 0
+  await runPool(sources, SOURCE_OUTPUT_CONCURRENCY, async ({ sourceId, mainTable }) => {
+    if (signal.aborted) return
+    try {
+      exportOutputs.set(sourceId, summarizeSourceOutput(await fetchSourceOutput(sourceId), mainTable))
+    } catch {
+      exportOutputs.set(sourceId, 'failed')
+    }
+    done++
+    collectProgress.value = `正在统计产出 ${done} / ${sources.length}`
+  })
+  if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+  return true
+}
 
 function withTimeout(task: Promise<unknown>, ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -1293,13 +1424,15 @@ async function exportSources() {
       ElMessage.warning('当前查询条件没有命中任何源')
       return
     }
+    const outputCounted = await collectExportOutputs(sources, collectAbort.signal)
     collectProgress.value = '正在整理导出字段…'
     await ensureExportLookups(sources)
     const cols = exportColumns.value
     const rows = [cols.map((col) => col.label), ...sources.map((source) => cols.map((col) => col.value(source)))]
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     downloadXlsx(`源列表_${props.currentSiteId || '全部网站'}_${date}.xlsx`, rows, '源列表')
-    ElMessage.success(`已按当前查询条件导出 ${sources.length} 个源`)
+    if (outputCounted) ElMessage.success(`已按当前查询条件导出 ${sources.length} 个源`)
+    else ElMessage.warning(`已导出 ${sources.length} 个源；超过 ${EXPORT_OUTPUT_LIMIT} 个源时不统计产出，「详情最近入库」填「未统计」，可缩小范围后再导出`)
   } catch (error) {
     if ((error as { name?: string }).name === 'AbortError') return
     if (error instanceof CollectLimitError) {
@@ -1883,7 +2016,7 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
       </span>
     </div>
     <div v-if="!websiteCards" ref="tableElement" class="sov-table-wrap" :class="{ loading }">
-      <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px`, '--sov-name-width': `${nameColumnWidth}px` }">
+      <table class="sov-table" :style="{ '--sov-url-width': `${urlColumnWidth}px`, '--sov-name-width': `${nameColumnWidth}px`, '--sov-wrap-width': tableWrapWidth ? `${tableWrapWidth}px` : '100%' }">
         <thead>
           <tr>
             <th class="sov-check-col">
@@ -1939,8 +2072,9 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
               />
             </th><th v-if="showCol('mainTable')">主表</th><th v-if="showConfigCol"><button class="sov-sort" :class="sortClass('CONFIG_ID')" type="button" data-testid="sort-config-id" :title="sortLabel('CONFIG_ID')" @click="toggleSort('CONFIG_ID')">配置 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('tags')">标签</th>
-            <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
-            <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>
+            <th v-if="showCol('dataCount')" title="主表累计写入条数（每批入库累加，去重、删除不扣减，不等于表里实际条数；实际条数点源 ID 左侧 ▸ 看）"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
+            <th v-if="showCol('newIn')" title="主表最近入库时间">新入</th>
+            <th v-if="showCol('output')" title="详情表最近入库时间：主表不是源码表时看主表；主表是源码表时看其余输出表（去掉附件表）里最晚的一张。点源 ID 左侧 ▸ 看每张输出表">产出</th>
             <th v-if="showCol('lastTask')"><button class="sov-sort" :class="sortClass('LAST_RUN')" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('lastSuccess')"><button class="sov-sort" :class="sortClass('LAST_SUCCESS')" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th v-if="showCol('state')">状态</th><th v-if="showCol('remark')">备注</th>
@@ -1948,7 +2082,8 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
           </tr>
         </thead>
         <tbody>
-          <tr v-for="source in rows" :key="source.sourceId" :class="{ picked: selectedSet.has(source.sourceId) }">
+          <template v-for="source in rows" :key="source.sourceId">
+          <tr :class="{ picked: selectedSet.has(source.sourceId), expanded: expandedSources.has(source.sourceId) }">
             <td class="sov-check-col">
               <input
                 type="checkbox"
@@ -1975,7 +2110,16 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
             <!-- 源 ID 与源名称走同一个入口（2026-09-09）：两列指的是同一个源，
                  名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
-            <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="openSourceResult(source)">{{ source.sourceId }}</button></td>
+            <td class="sov-id-cell"><button
+                class="sov-expand-toggle"
+                :class="{ open: expandedSources.has(source.sourceId) }"
+                type="button"
+                :data-testid="`source-expand-${source.sourceId}`"
+                :aria-expanded="expandedSources.has(source.sourceId)"
+                :aria-label="`${expandedSources.has(source.sourceId) ? '收起' : '展开'}源 ${source.sourceId} 的输出表`"
+                :title="expandedSources.has(source.sourceId) ? '收起输出表' : '展开看每张输出表的数据量和入库时间'"
+                @click="toggleSourceExpand(source.sourceId)"
+              >▸</button><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="openSourceResult(source)">{{ source.sourceId }}</button></td>
             <td class="sov-name" :title="source.name"><div class="sov-name-content"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="openSourceResult(source)">{{ source.name }}</button><button v-if="quickEdit" class="sov-quick-edit" type="button" :data-testid="`source-quick-edit-${source.sourceId}`" :aria-label="`快捷编辑源 ${source.sourceId}`" title="编辑" @click="quickEditSource = source"><el-icon :size="13"><EditPen /></el-icon></button></div></td>
             <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
             <td v-if="showOriginalDirectory" class="sov-original-dir" :title="originalDirectoryOf(source)" data-testid="source-overview-original-directory">
@@ -2060,10 +2204,16 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
               >{{ source.dataCount }}</button>
               <template v-else>{{ source.dataCount ?? '—' }}</template>
             </td>
-            <!-- 「新入 / 成功」对齐旧平台：显示最近入库 / 最近成功时间的相对描述（旧平台就是「N 天前」），
-                 hover 看精确时间。右侧「最近任务 / 最近成功」保留绝对时间。 -->
+            <!-- 「新入」对齐旧平台：主表最近入库的相对描述，hover 看精确时间。
+                 「产出」（1114，替换原「成功」）：详情表最近入库，源码表天天刷新也遮不住详情停更。 -->
             <td v-if="showCol('newIn')" :title="source.lastInsertAt || ''">{{ timeAgo(source.lastInsertAt) }}</td>
-            <td v-if="showCol('success')" :title="source.lastSuccessAt || ''">{{ timeAgo(source.lastSuccessAt) }}</td>
+            <td
+              v-if="showCol('output')"
+              class="sov-output-cell"
+              :class="outputCellTone(source.sourceId)"
+              :title="outputCellTitle(source.sourceId)"
+              :data-testid="`source-output-${source.sourceId}`"
+            >{{ outputCellText(source.sourceId) }}</td>
             <td v-if="showCol('lastTask')">{{ source.lastTaskAt || '—' }}</td>
             <td v-if="showCol('lastSuccess')">{{ source.lastSuccessAt || '—' }}</td>
             <td v-if="showCol('state')"><span class="sov-state" :class="{ error: source.state === 'E' && !source.disabled, muted: source.disabled }">{{ sourceState(source) }}</span></td>
@@ -2100,7 +2250,44 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
               </el-dropdown>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 16 : 15) + (crossSite && groupOps ? 2 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0) + (showOriginalDirectory ? 1 : 0) + (showConfigCol ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <!-- 展开行（1114 一期 A，方案 §3.2）：横跨全部可见列；内容 sticky 贴可视区左侧，不出现嵌套滚动 -->
+          <tr v-if="expandedSources.has(source.sourceId)" class="sov-expand-row" :data-testid="`source-expand-row-${source.sourceId}`">
+            <td :colspan="visibleColumnCount" class="sov-expand-cell">
+              <div class="sov-expand-inner">
+                <template v-for="(entry, entryIndex) in [sourceOutput.entryOf(source.sourceId)]" :key="entryIndex">
+                  <div v-if="!entry || entry.status === 'loading'" class="sov-expand-note">加载中…</div>
+                  <div v-else-if="entry.status === 'error'" class="sov-expand-note warn">
+                    输出表统计加载失败：{{ entry.error }}
+                    <button class="sov-link" type="button" :data-testid="`source-expand-retry-${source.sourceId}`" @click="sourceOutput.retry(source.sourceId)">重试</button>
+                  </div>
+                  <div v-else-if="!entry.tables.length" class="sov-expand-note">这个源的流程没有输出表</div>
+                  <div v-else class="sov-output-grid" role="table" :aria-label="`源 ${source.sourceId} 的输出表`">
+                    <div class="sov-output-row head" role="row">
+                      <span role="columnheader">输出表</span><span role="columnheader">数据量</span><span role="columnheader">新入</span><span role="columnheader">更新</span><span role="columnheader">写入步骤</span>
+                    </div>
+                    <div
+                      v-for="table in entry.tables"
+                      :key="table.entryTypeId"
+                      class="sov-output-row"
+                      :class="{ judged: isOutputTable(source.sourceId, table) }"
+                      role="row"
+                      data-testid="source-output-table-row"
+                    >
+                      <span role="cell" class="sov-output-name" :title="`表 ID ${table.entryTypeId}${table.tableName ? ` · ${table.tableName}` : ''}`">
+                        <b>{{ table.entryTypeName }}</b><em v-if="isOutputTable(source.sourceId, table)" title="「产出」列依据这张表">产出</em><small>{{ table.tableName || table.entryTypeId }}</small>
+                      </span>
+                      <span role="cell" :class="{ warn: table.dataCount === -1, muted: table.dataCount === -2 }">{{ outputCountText(table.dataCount) }}</span>
+                      <span role="cell" :title="table.lastInsertAt || ''">{{ shortDateTime(table.lastInsertAt) }}</span>
+                      <span role="cell" :title="table.lastUpdateAt || ''">{{ shortDateTime(table.lastUpdateAt) }}</span>
+                      <span role="cell" class="sov-output-steps" :title="stepsTitle(table.steps)">{{ stepsText(table.steps) }}</span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </td>
+          </tr>
+          </template>
+          <tr v-if="!loading && !rows.length"><td :colspan="visibleColumnCount" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -2334,6 +2521,27 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
 .sov-fav.on:hover { color: #d97706; }
 .sov-count-link { font-weight: 600; }
 .sov-id-link { padding: 0; font-family: var(--rc-mono, monospace); }
+/* 1114 展开行：▸ 在源 ID 左侧；展开内容 sticky 贴可视区左侧、宽度 = 容器可见宽度，子表限宽 700px 不出现自己的滚动条 */
+.sov-expand-toggle { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-right: 4px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-muted); font-size: 13px; line-height: 1; cursor: pointer; vertical-align: middle; transition: transform .15s ease; }
+.sov-expand-toggle:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.sov-expand-toggle:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
+.sov-expand-toggle.open { transform: rotate(90deg); color: var(--rc-primary); }
+.sov-table tbody tr.expanded > td { border-bottom-color: transparent; }
+.sov-table td.sov-expand-cell { padding: 0; background: #f8fafc; white-space: normal; }
+.sov-expand-inner { position: sticky; left: 0; box-sizing: border-box; width: var(--sov-wrap-width); padding: 6px 12px 10px 64px; }
+.sov-expand-note { color: var(--rc-muted); font-size: 12px; }
+.sov-expand-note.warn { color: #b45309; }
+.sov-output-grid { display: grid; max-width: 700px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #fff; }
+.sov-output-row { display: grid; grid-template-columns: minmax(200px, 1.7fr) 72px 84px 84px minmax(110px, 1fr); align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid #edf2f7; color: var(--rc-text-2); }
+.sov-output-row.head { border-top: 0; color: var(--rc-muted); font-weight: 700; }
+.sov-output-row.judged { background: var(--rc-primary-bg); }
+.sov-output-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sov-output-row > span.sov-output-name { display: flex; align-items: center; gap: 6px; }
+.sov-output-name b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text); font-weight: 600; }
+.sov-output-name small { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
+.sov-output-name em { flex: none; padding: 0 5px; border-radius: 3px; background: var(--rc-primary); color: #fff; font-size: 10px; font-style: normal; }
+.sov-output-row .warn, .sov-output-cell.warn { color: #b45309; }
+.sov-output-row .muted, .sov-output-cell.muted { color: var(--rc-faint); }
 .sov-table tbody tr.picked { background: var(--rc-primary-bg); }
 .sov-batch-count { font-weight: 700; color: var(--rc-primary-ink); }
 .sov-mark-anchor { position: relative; }

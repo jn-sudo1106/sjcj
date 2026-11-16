@@ -31,7 +31,7 @@ import type {
   SummaryRow,
   TaskInst,
 } from './types'
-import type { CreateJobsInput, FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
+import type { CreateJobsInput, FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, SourceOutputTable } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
@@ -1159,6 +1159,64 @@ export function sourceCoreToLegacyParams(sourceId: string, patch: { name?: strin
 }
 
 /** 旧平台 sourcePaged 的分页结构适配。 */
+/** 后端日期可能是「2026-11-14 04:11:22」字符串，也可能是毫秒时间戳；统一成字符串 */
+function legacyDateText(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const d = new Date(value)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  }
+  return String(value)
+}
+
+/**
+ * `GET /v1/source/queryStepDetail` → 按输出表去重的产出统计（1114 源产出监控 一期 A）。
+ *
+ * 后端逐步骤返回 `outEntry / tableName / entryTypeName / dataCnt / lastInsert / lastUpdate`，统计按「源 + 表」算，
+ * 写同一张表的步骤值相同，所以这里按 outEntry 合并、步骤收进 steps。只跳过没有输出表的步骤和旧平台的虚拟根
+ *（stepId 0，旧 SourceList.vue 展开行同样滤掉）。**真实 ROOT（isRoot=1）带 outEntry 时照常计入**：新平台 ROOT
+ * 权威方案下单步流程就是入口步骤直接写主表（186 实测 391007760 只有一条 isRoot=1 的步骤），滤掉会误判「无详情表」。
+ * 表的顺序按首个写入步骤的 ID（流程里越靠前的表越靠前）。
+ */
+export function sourceOutputTablesFromLegacy(input: unknown): SourceOutputTable[] {
+  const record = asRecord(input)
+  const list = Array.isArray(input) ? input : Array.isArray(record.list) ? record.list : Array.isArray(record.data) ? record.data : []
+  const byTable = new Map<string, SourceOutputTable & { firstStep: number }>()
+  for (const raw of list) {
+    const step = asRecord(raw)
+    const stepId = legacyNumber(step.stepId)
+    if (stepId === 0) continue
+    if (step.outEntry === undefined || step.outEntry === null || step.outEntry === '') continue
+    const entryTypeId = String(step.outEntry)
+    const stepRef = { stepId: stepId == null ? '' : String(stepId), stepName: step.stepName == null ? '' : String(step.stepName) }
+    const existing = byTable.get(entryTypeId)
+    if (existing) {
+      existing.steps.push(stepRef)
+      if (stepId != null && stepId < existing.firstStep) existing.firstStep = stepId
+      continue
+    }
+    const count = legacyNumber(step.dataCnt)
+    byTable.set(entryTypeId, {
+      entryTypeId,
+      entryTypeName: step.entryTypeName == null ? `表:${entryTypeId}` : String(step.entryTypeName),
+      tableName: step.tableName == null ? '' : String(step.tableName).replace(/^sense_data\./i, ''),
+      // 后端没填 dataCnt（_fillDataCount 查不到统计行）按 0 条处理，与旧平台显示「-」一致
+      dataCount: count ?? 0,
+      lastInsertAt: legacyDateText(step.lastInsert),
+      lastUpdateAt: legacyDateText(step.lastUpdate),
+      steps: [stepRef],
+      firstStep: stepId ?? Number.MAX_SAFE_INTEGER,
+    })
+  }
+  return [...byTable.values()]
+    .sort((a, b) => a.firstStep - b.firstStep)
+    .map(({ firstStep: _firstStep, ...table }) => ({
+      ...table,
+      steps: [...table.steps].sort((a, b) => Number(a.stepId) - Number(b.stepId)),
+    }))
+}
+
 export function sourcePageFromLegacy(input: unknown): Paged<Source> {
   const record = asRecord(input)
   const list = Array.isArray(input)

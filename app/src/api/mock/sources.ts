@@ -702,3 +702,20 @@ export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<Tas
   const start = (page - 1) * size
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
+
+// 源产出统计（queryStepDetail，旧平台逐步骤口径）：源码表 + 详情表，详情停更 3 天，便于本地看展开行与「产出」列
+export function mockSourceStepDetail(params?: Record<string, unknown>): unknown[] {
+  const sourceId = String(params?.sourceId ?? '')
+  if (!SOURCES.some((s) => s.sourceId === sourceId)) return []
+  const ago = (hours: number) => {
+    const d = new Date(Date.now() - hours * 3600_000)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  }
+  return [
+    { stepId: 0, stepName: '流程入口', isRoot: 1, outEntry: null, dataCnt: -2 },
+    { stepId: 101, stepName: '浏览器源码下载', outEntry: 6200023, tableName: 'sense_data.tb_source_code', entryTypeName: '源码表', dataCnt: 4049, lastInsert: ago(0.05), lastUpdate: ago(0.05) },
+    { stepId: 102, stepName: '列表解析', outEntry: 6200005, tableName: 'sense_data.tb_csxxdt', entryTypeName: '详情表', dataCnt: 158, lastInsert: ago(72), lastUpdate: ago(71) },
+    { stepId: 103, stepName: '详情解析', outEntry: 6200005, tableName: 'sense_data.tb_csxxdt', entryTypeName: '详情表', dataCnt: 158, lastInsert: ago(72), lastUpdate: ago(71) },
+  ]
+}

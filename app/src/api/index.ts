@@ -63,6 +63,7 @@ import {
   sourceFromLegacy,
   sourceOptionFromLegacy,
   sourcePageFromLegacy,
+  sourceOutputTablesFromLegacy,
   flowFromLegacy,
   flowPageFromLegacy,
   flowToLegacy,
@@ -550,6 +551,18 @@ export const sourceApi = {
       },
     })
     return sourcePageFromLegacy(result)
+  },
+  /**
+   * 源的输出表产出统计（1114 源产出监控 一期 A；旧平台源列表展开行同一接口）。
+   * 后端按「源 + 表」统计并缓存 2 分钟；这里只读，结果按表去重。
+   */
+  queryStepDetail: async (sourceId: string) => {
+    const result = await request<unknown>('source/queryStepDetail', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'source/queryStepDetail',
+      httpParams: { sourceId },
+    })
+    return sourceOutputTablesFromLegacy(result)
   },
   sourceDetailScoped: async (sourceId: string) => {
     const result = await request<unknown>('source/sourceDetailScoped', { sourceId }, { method: 'GET', mode: 'http' })
