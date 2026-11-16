@@ -25,7 +25,12 @@ const isSearching = computed(() => !!keyword.value.trim())
 
 // 记录展开的节点 key，以便刷新或移动时不丢失展开上下文
 const expandedKeySet = reactive(new Set<string>())
-const expandedKeys = computed(() => Array.from(expandedKeySet))
+/**
+ * 传给 el-tree 的 default-expanded-keys：**只在刷新重建树时取一次快照**，不跟着 expandedKeySet 实时变。
+ * el-tree 会 watch 这个 prop，每次变化都把列表里的节点连同上级（autoExpandParent）重新展开一遍——
+ * 实时绑定时，展开「广发」会把之前收起的「业务分类」下残留的展开子目录连带上级一起再打开（2026-11-16 用户报）。
+ */
+const restoreExpandedKeys = ref<string[]>([])
 
 function onNodeExpand(data: SourceCategory) {
   if (!data?.id) return
@@ -36,7 +41,15 @@ function onNodeExpand(data: SourceCategory) {
 }
 
 function onNodeCollapse(data: SourceCategory) {
-  if (data?.id) expandedKeySet.delete(String(data.id))
+  if (!data?.id) return
+  // 连同子孙一起忘掉：否则刷新时残留的子目录 key 会经 autoExpandParent 把已收起的上级重新打开
+  const node = findInTree(fullTreeData.value, String(data.id)) ?? data
+  const stack: SourceCategory[] = [node]
+  while (stack.length) {
+    const cur = stack.pop()!
+    expandedKeySet.delete(String(cur.id))
+    if (cur.children?.length) stack.push(...cur.children)
+  }
 }
 
 // 缓存根分类列表以便快速计算新增权重及搜索兜底
@@ -163,6 +176,7 @@ async function doSearch() {
 // 重新加载树
 function reloadTree() {
   clearCategoryCache()
+  restoreExpandedKeys.value = Array.from(expandedKeySet)
   treeKey.value++
   if (isSearching.value) {
     void doSearch()
@@ -619,7 +633,7 @@ async function handleDelete(node: { id: string; name: string }) {
         :data="fullTreeData"
         :props="{ label: 'name', children: 'children' }"
         node-key="id"
-        :default-expanded-keys="expandedKeys"
+        :default-expanded-keys="restoreExpandedKeys"
         class="ca-category-tree"
         @node-expand="onNodeExpand"
         @node-collapse="onNodeCollapse"

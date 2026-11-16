@@ -354,3 +354,45 @@ describe('CategoryManager · 业务目录预期产出周期', () => {
     expect(wrapper.find('.el-dialog-mock').exists()).toBe(true)
   })
 })
+
+// 2026-11-16 用户报：展开「广发」时「业务分类」也被打开。
+// 原因：default-expanded-keys 实时绑定展开集合，el-tree 每次变化都把集合里的节点连同上级重新展开，
+// 收起「业务分类」后残留的「另类数据」key 就把它又顶开了。用真实 el-tree 复现。
+describe('CategoryManager · 展开状态不串（真实 el-tree）', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('收起「业务分类」后展开「广发」，「业务分类」保持收起', async () => {
+    const ElementPlusModule = await import('element-plus')
+    const tree: Record<string, { id: string; name: string; parentId?: string }[]> = {
+      '': [{ id: '-2', name: '业务分类' }, { id: '9008935', name: '广发' }],
+      '-2': [{ id: '9011552', name: '另类数据', parentId: '-2' }],
+      '9011552': [{ id: '9011553', name: '招投标', parentId: '9011552' }],
+      '9008935': [{ id: '9008936', name: '广发子目录', parentId: '9008935' }],
+      '9011553': [],
+      '9008936': [],
+    }
+    vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (pid?: string) => (tree[pid ?? ''] ?? []) as never)
+    const wrapper = mount(CategoryManager, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlusModule.default], stubs: { ElTooltip: { template: '<slot />' }, transition: false } },
+    })
+    await flushPromises()
+
+    const nodeEl = (key: string) => wrapper.get(`.el-tree-node[data-key="${key}"]`)
+    const expand = async (key: string) => {
+      await nodeEl(key).get('.el-tree-node__content').trigger('click')
+      await flushPromises()
+    }
+    await expand('-2')
+    await expand('9011552')
+    expect(nodeEl('-2').classes()).toContain('is-expanded')
+    expect(nodeEl('9011552').classes()).toContain('is-expanded')
+    await expand('-2') // 收起业务分类
+    expect(nodeEl('-2').classes()).not.toContain('is-expanded')
+
+    await expand('9008935') // 展开广发
+    expect(nodeEl('9008935').classes()).toContain('is-expanded')
+    expect(nodeEl('-2').classes()).not.toContain('is-expanded')
+    wrapper.unmount()
+  })
+})
