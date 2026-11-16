@@ -1041,10 +1041,11 @@ async function confirmApply() {
 // - 流程模板：新模型（C02 契约 + mock 演示数据），结构只读、实例列表按模板分页；
 // - 全部流程：沿用原来的流程管理界面，功能不丢（原型未覆盖这个视图）；
 // - 未归类：只读核对清单（C10），单条归集，不做批量。
-// 默认落「流程模板」——这是本次要交付的主视图；方案 §5.2 约定的「首次进入落全部流程」
-// 属实现侧待改项（复核报告第三条实现缺口），等后端 C02 就绪后再改默认值。
+// 默认落「全部流程」（2026-11-17 用户要求，与方案 §5.2「首次进入落全部流程」一致）：
+// 「流程模板 / 未归类」依赖的 flow-center/* 端点后端尚未落地、未标 live，部署环境里返回的是
+// mock 原型数据；作为默认页会让用户误以为是真实模板。模板数据改为切到该视图时才读取。
 // ─────────────────────────────────────────────────────────────────────────────
-const viewMode = ref<'template' | 'all' | 'unclassified'>('template')
+const viewMode = ref<'template' | 'all' | 'unclassified'>('all')
 const templateMetas = ref<TemplateMeta[]>([])
 const templatesLoading = ref(false)
 const templatesError = ref('')
@@ -1222,10 +1223,6 @@ function onStructureGuardAction(action: string) {
 function onUnclassifiedGoFlow(id: string) {
   openFlow({ id, name: id } as FlowRecord)
 }
-
-onMounted(() => {
-  void loadTemplateMetas()
-})
 </script>
 
 <template>
