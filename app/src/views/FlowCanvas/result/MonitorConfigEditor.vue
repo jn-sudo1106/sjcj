@@ -80,7 +80,8 @@ type TabKey = typeof TABS[number]['key']
 
 const NOTIFY_OPTIONS = [
   { value: 'error', label: '仅异常时', hint: '（默认）检查不通过才通知' },
-  { value: 'ok', label: '仅正常时', hint: '恢复或正常时通知' },
+  // 执行器 should_notify：ok = 每次结论正常都建通知事件，没有「异常转正常只发一次」的恢复语义。
+  { value: 'ok', label: '仅正常时', hint: '每次检查通过都通知（不是只在恢复时发一次）' },
   { value: 'all', label: '每次运行', hint: '每次结果都通知，噪音大' },
   { value: 'none', label: '静默', hint: '只记录结果，不发送通知' },
 ] as const
@@ -1574,9 +1575,10 @@ defineExpose({
             <span class="mc-k">通知投递</span>
             <span class="mc-v" data-testid="mc-delivery">未取得回执</span>
           </div>
+          <!-- 执行器 monitor_events.py 还没有 recovery 事件（2026-11-16 核对），不能写成「开启后会通知」。 -->
           <div class="mc-card-row">
             <span class="mc-k">恢复通知</span>
-            <span class="mc-v">开启后，异常转正常会单独通知；执行失败不算恢复</span>
+            <span class="mc-v" data-testid="mc-recovery">暂不支持：异常转正常时不会单独发「已恢复」通知</span>
           </div>
         </div>
         <p class="mc-hint">通知失败只影响投递，不改变数据结论与执行状态；测试脚本不会发送业务通知。</p>

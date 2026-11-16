@@ -196,8 +196,13 @@ function channelIcon(type: ChannelType): string {
   return type === 'email' ? '✉' : '钉'
 }
 
+// 钉钉暂不支持（2026-11-16）：这里的渠道只换算成 ck_source 的 notifyType，Webhook 不出流程 JSON，
+// 执行器也只发邮件，所以钉钉渠道/恢复通知都收不到。已配过的可以取消，不能新选。
+const DINGTALK_UNSUPPORTED = '钉钉通知暂未接入，选了也收不到，请使用邮件'
+const RECOVERY_UNSUPPORTED = '恢复通知暂未接入：异常转正常时不会单独发「已恢复」通知'
+
 function channelText(type: ChannelType): string {
-  return type === 'email' ? '邮件' : '钉钉'
+  return type === 'email' ? '邮件' : '钉钉（暂不支持）'
 }
 
 function operatorText(operator: AlertOperator): string {
@@ -219,6 +224,11 @@ function channelNames(policy: AlertPolicy): string {
     .join('、') || '未配置渠道'
 }
 
+/** 钉钉选项只允许取消已勾选的旧配置，不能新勾。 */
+function optionLocked(channel: AlertChannel): boolean {
+  return channel.type === 'dingtalk' && !policyDraft.channelIds.includes(channel.id)
+}
+
 function resetDraft(policy?: AlertPolicy) {
   editingPolicyId.value = policy?.id ?? ''
   Object.assign(policyDraft, {
@@ -229,7 +239,7 @@ function resetDraft(policy?: AlertPolicy) {
     threshold: policy?.threshold ?? '30',
     consecutiveCount: policy?.consecutiveCount ?? 3,
     repeatMinutes: policy?.repeatMinutes ?? 30,
-    recoveryNotify: policy?.recoveryNotify ?? true,
+    recoveryNotify: policy?.recoveryNotify ?? false,
     channelIds: [...(policy?.channelIds ?? ['email'])],
   })
 }
@@ -386,7 +396,7 @@ function saveChannel() {
           <div class="alert-policy-summary">{{ policySummary(policy) }}</div>
           <div class="alert-policy-meta">
             <span>通知：{{ channelNames(policy) }}</span>
-            <span>{{ policy.recoveryNotify ? '恢复时通知' : '不发送恢复通知' }}</span>
+            <span :title="policy.recoveryNotify ? RECOVERY_UNSUPPORTED : undefined">{{ policy.recoveryNotify ? '恢复通知（暂不支持）' : '不发送恢复通知' }}</span>
             <span>重复间隔 {{ policy.repeatMinutes }} 分钟</span>
           </div>
         </div>
@@ -411,12 +421,12 @@ function saveChannel() {
       <div class="alert-subhead">
         <div>
           <strong>通知渠道</strong>
-          <span>策略可同时发送到邮件和钉钉</span>
+          <span>目前只支持邮件，钉钉暂未接入</span>
         </div>
         <span class="alert-demo-tag">演示配置</span>
       </div>
       <div v-if="!channels.length" class="alert-empty">
-        还没有通知渠道。先添加邮件或钉钉渠道，再保存策略。
+        还没有通知渠道。先添加邮件渠道，再保存策略。
       </div>
       <div v-else class="alert-channel-grid">
         <div v-for="channel in channels" :key="channel.id" class="alert-channel" :data-testid="`alert-channel-${channel.type}`">
@@ -435,7 +445,13 @@ function saveChannel() {
 
     <div v-if="!channels.length" class="alert-panel-actions alert-channel-add">
       <button class="rc-btn compact" type="button" data-testid="alert-add-channel-email" @click="addChannel('email')">＋ 邮件渠道</button>
-      <button class="rc-btn compact" type="button" data-testid="alert-add-channel-dingtalk" @click="addChannel('dingtalk')">＋ 钉钉渠道</button>
+      <button
+        class="rc-btn compact"
+        type="button"
+        disabled
+        :title="DINGTALK_UNSUPPORTED"
+        data-testid="alert-add-channel-dingtalk"
+      >＋ 钉钉渠道（暂不支持）</button>
     </div>
 
     <el-dialog
@@ -461,6 +477,7 @@ function saveChannel() {
           </label>
         </template>
         <template v-else>
+          <p class="alert-unsupported" data-testid="alert-dingtalk-unsupported">{{ DINGTALK_UNSUPPORTED }}；这里的配置只保存，不会发送。</p>
           <label class="alert-form-field wide">
             <span>Webhook 地址</span>
             <input v-model="channelDraft.webhook" data-testid="alert-dingtalk-webhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." />
@@ -541,9 +558,16 @@ function saveChannel() {
         <div class="alert-form-field wide">
           <span>通知渠道</span>
           <div class="alert-channel-options">
-            <label v-for="channel in channels" :key="channel.id" class="alert-channel-option" :class="{ 'is-selected': policyDraft.channelIds.includes(channel.id) }">
+            <label
+              v-for="channel in channels"
+              :key="channel.id"
+              class="alert-channel-option"
+              :class="{ 'is-selected': policyDraft.channelIds.includes(channel.id), 'is-disabled': optionLocked(channel) }"
+              :title="channel.type === 'dingtalk' ? DINGTALK_UNSUPPORTED : undefined"
+            >
               <input
                 :checked="policyDraft.channelIds.includes(channel.id)"
+                :disabled="optionLocked(channel)"
                 type="checkbox"
                 :data-testid="`alert-channel-option-${channel.type}`"
                 @change="policyDraft.channelIds = policyDraft.channelIds.includes(channel.id)
@@ -557,9 +581,14 @@ function saveChannel() {
           </div>
         </div>
 
-        <label class="alert-recovery">
-          <input v-model="policyDraft.recoveryNotify" type="checkbox" data-testid="alert-recovery-toggle" />
-          <span>条件恢复后发送恢复通知</span>
+        <label class="alert-recovery" :class="{ 'is-disabled': !policyDraft.recoveryNotify }" :title="RECOVERY_UNSUPPORTED">
+          <input
+            v-model="policyDraft.recoveryNotify"
+            :disabled="!policyDraft.recoveryNotify"
+            type="checkbox"
+            data-testid="alert-recovery-toggle"
+          />
+          <span>条件恢复后发送恢复通知<small class="alert-faint">（暂不支持）</small></span>
         </label>
       </div>
       <template #footer>
@@ -630,6 +659,9 @@ function saveChannel() {
 .alert-channel-option b { color: var(--rc-text-2); font-size: 11px; }
 .alert-channel-option small { grid-column: 2 / -1; overflow: hidden; color: var(--rc-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .alert-recovery { display: inline-flex; align-items: center; gap: 7px; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
+.alert-channel-option.is-disabled, .alert-recovery.is-disabled { color: var(--rc-muted); cursor: not-allowed; }
+.alert-faint { margin-left: 2px; color: var(--rc-muted); font-size: 10px; }
+.alert-unsupported { grid-column: 1 / -1; margin: 0; padding: 6px 10px; border: 1px solid #fed7aa; border-radius: 6px; background: var(--rc-warn-bg); color: var(--rc-warn); font-size: 11px; line-height: 1.6; }
 .alert-secret-hint { padding: 9px 10px; border: 1px solid #bfdbfe; border-radius: 6px; background: #eff6ff; color: #1d4ed8; font-size: 11px; line-height: 1.5; }
 @media (max-width: 720px) {
   .alert-panel-head, .alert-policy-row { align-items: flex-start; flex-direction: column; }

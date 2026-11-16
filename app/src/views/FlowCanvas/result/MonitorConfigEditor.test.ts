@@ -1322,6 +1322,14 @@ describe('MonitorConfigEditor 通知渠道：钉钉暂不支持', () => {
     expect(wrapper.find('[data-testid="mc-dingtalk-warn"]').exists()).toBe(false)
   })
 
+  it('恢复通知标「暂不支持」，「仅正常时」说明是每次通过都通知', async () => {
+    const wrapper = mountEditor()
+    await settle()
+    expect(wrapper.get('[data-testid="mc-recovery"]').text()).toContain('暂不支持')
+    expect(wrapper.text()).toContain('每次检查通过都通知')
+    expect(wrapper.text()).not.toContain('恢复或正常时通知')
+  })
+
   it('历史记录只勾了钉钉：可取消勾选，并提示收不到任何通知；取消后不能再选回', async () => {
     const record = aiRecord()
     record.conf = { ...record.conf, channels: ['dingtalk'] }
