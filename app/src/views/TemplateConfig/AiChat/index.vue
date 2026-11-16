@@ -152,15 +152,22 @@ function formatClarifyIntro(content: string, hasClarification = false): string {
   if (!content) return ''
   if (!hasClarification) return content
 
-  // 若该消息已成功提取并渲染了待确认卡片/表格，则从正文中移除冗余的静态 Markdown 表格，保留引导提问与前后说明
-  const cleaned = content
+  // 1. 若该消息已成功提取并渲染了待确认卡片/表格，从正文中移除冗余的静态 Markdown 表格
+  let cleaned = content
     .replace(
       /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
       '\n'
     )
-    .trim()
 
-  return cleaned || content
+  // 2. 移除冗余的静态候选列表项（由 ClarificationCard 交互勾选表格承载）
+  cleaned = cleaned.replace(
+    /(?:^|\n)(?:\s*(?:[-*+•]|\d+[\.、]|\(\d+\)|\d+\))\s+[^\n]+(?:\n|$))+/g,
+    '\n'
+  )
+
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim()
+
+  return cleaned
 }
 
 function formatMarkdownContent(msg: ChatMessage): string {
@@ -325,9 +332,15 @@ function cloneInitialMessages(raw?: Record<string, ChatMessage[]>): Record<strin
   } catch {
     result = { ...raw }
   }
-  // 遍历历史消息，若有包含业务数据表格但未预置 chartData 的消息，自动补充解析
+  // 遍历历史消息，若有包含待确认项或业务数据表格但未预置结构的消息，自动补充解析
   for (const key of Object.keys(result)) {
     for (const msg of result[key]) {
+      if (msg.role === 'assistant' && !msg.clarification && msg.content) {
+        const parsedClarify = extractClarificationFromText(msg.content)
+        if (parsedClarify) {
+          msg.clarification = parsedClarify
+        }
+      }
       if (msg.role === 'assistant' && !msg.chartData && !msg.clarification && msg.content) {
         const parsed = extractChartDataFromText(msg.content)
         if (parsed) {
@@ -1072,7 +1085,7 @@ onUnmounted(() => {
 
             <div class="rc-msg-bubble assistant">
               <!-- 引导/说明文字：仅在包含待确认卡片且有说明文案时展示 -->
-              <div v-if="msg.clarification && msg.content" class="rc-clarify-intro">
+              <div v-if="msg.clarification && formatClarifyIntro(msg.content, !!msg.clarification)" class="rc-clarify-intro">
                 <MarkdownOutput :content="formatClarifyIntro(msg.content, !!msg.clarification)" />
               </div>
 
@@ -1418,9 +1431,6 @@ onUnmounted(() => {
               发送
             </el-button>
           </div>
-        </div>
-        <div class="rc-footer-caption">
-          支持自然语言智能取数、图表生成、多轮口径交互澄清与业务诊断 · 基于 Agent SSE 流式接口驱动
         </div>
       </footer>
     </main>

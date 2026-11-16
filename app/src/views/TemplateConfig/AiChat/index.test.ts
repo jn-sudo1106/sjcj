@@ -826,6 +826,80 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('已为您生成并导出')
   })
 
+  it('智能体返回无序列表候选数据源时，自动渲染勾选列表卡片，勾选后点击确认直接发送答案', async () => {
+    const testSession = [
+      { id: 's-clarify-bullet', title: '南京二手房价格查询', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-clarify-bullet': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: `南京二手房最新价格查询
+
+查询"南京二手房最新价格"存在多种数据源候选，需要您确认用哪个来源的数据：
+
+* 贝壳二手房成交信息（sense_data.tb_ke_com_chengjiao_esf_detail）—— 含城市维度，可查南京成交价
+* 贝壳二手房_在售（sense_data.TB_ke_com_ershoufang_sale）—— 在售挂牌价
+* 中指-二手房销售价格（sense_data.TB_ZZ_MONTH_OLD_PRICE）—— 月度均价
+* 南京网上房地产（sense_data.TB_NJWSFDC）—— 南京本地官方数据
+
+请问您希望用哪个数据源？另外"最新价格"是指成交均价还是挂牌价？`,
+          createdAt: '刚刚',
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 验证渲染了待确认交互卡片，而不是让用户看静态列表自己手动打字
+    expect(wrapper.find('[data-testid="clarification-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="clarification-table"]').exists()).toBe(true)
+
+    // 2. 验证选项列表已提取
+    expect(wrapper.text()).toContain('贝壳二手房成交信息')
+    expect(wrapper.text()).toContain('sense_data.tb_ke_com_chengjiao_esf_detail')
+    expect(wrapper.text()).toContain('含城市维度，可查南京成交价')
+    expect(wrapper.text()).toContain('南京网上房地产')
+
+    // 3. 用户直接勾选第 1 项（贝壳二手房成交信息）
+    const option1 = wrapper.find('[data-testid="clarification-option-1"]')
+    expect(option1.exists()).toBe(true)
+    await option1.trigger('click')
+    await flushPromises()
+
+    // 验证勾选框变为已选状态
+    expect(option1.find('.cc-check').classes()).toContain('checked')
+    expect(wrapper.text()).toContain('已选 1/5：贝壳二手房成交信息')
+
+    // 4. 用户点击「确认选择并开始分析」按钮，答案自动发出并推进下一轮流式问数
+    const confirmBtn = wrapper.find('[data-testid="clarification-confirm"]')
+    expect(confirmBtn.attributes('disabled')).toBeUndefined()
+
+    await confirmBtn.trigger('click')
+    await flushPromises()
+
+    // 确认状态呈现
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+    // 对话流中自动发送所选项，无需用户在输入框敲字
+    expect(wrapper.text()).toContain('1（贝壳二手房成交信息）')
+  })
+
   it('对话发起之后，处于响应中时显示停止按钮，点击停止按钮可中断对话', async () => {
     let capturedSignal: AbortSignal | undefined
 

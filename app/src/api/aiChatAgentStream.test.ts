@@ -283,6 +283,48 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     })
   })
 
+  it('extractClarificationFromText 正确解析无序列表候选数据源（如 * 贝壳二手房成交信息...）', () => {
+    const listText = `南京二手房最新价格查询
+
+查询"南京二手房最新价格"存在多种数据源候选，需要您确认用哪个来源的数据：
+
+* 贝壳二手房成交信息（sense_data.tb_ke_com_chengjiao_esf_detail）—— 含城市维度，可查南京成交价
+* 贝壳二手房_在售（sense_data.TB_ke_com_ershoufang_sale）—— 在售挂牌价
+* 中指-二手房销售价格（sense_data.TB_ZZ_MONTH_OLD_PRICE）—— 月度均价
+* 南京网上房地产（sense_data.TB_NJWSFDC）—— 南京本地官方数据
+
+请问您希望用哪个数据源？另外"最新价格"是指成交均价还是挂牌价？`
+
+    const result = extractClarificationFromText(listText)
+    expect(result).not.toBeNull()
+    expect(result?.options).toHaveLength(4)
+    expect(result?.question).toContain('请问您希望用哪个数据源')
+    expect(result?.options[0]).toEqual({
+      entryTypeId: 1,
+      tableName: 'sense_data.tb_ke_com_chengjiao_esf_detail',
+      typeName: '贝壳二手房成交信息',
+      hint: '含城市维度，可查南京成交价',
+    })
+    expect(result?.options[1]).toEqual({
+      entryTypeId: 2,
+      tableName: 'sense_data.TB_ke_com_ershoufang_sale',
+      typeName: '贝壳二手房_在售',
+      hint: '在售挂牌价',
+    })
+    expect(result?.options[2]).toEqual({
+      entryTypeId: 3,
+      tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE',
+      typeName: '中指-二手房销售价格',
+      hint: '月度均价',
+    })
+    expect(result?.options[3]).toEqual({
+      entryTypeId: 4,
+      tableName: 'sense_data.TB_NJWSFDC',
+      typeName: '南京网上房地产',
+      hint: '南京本地官方数据',
+    })
+  })
+
   it('extractClarificationFromText 在普通文本无待确认项时返回 null', () => {
     const normalText = '根据查询结果，南京二手房均价为 28,500 元/㎡。近7天成交120套。'
     expect(extractClarificationFromText(normalText)).toBeNull()

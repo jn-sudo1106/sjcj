@@ -79,7 +79,7 @@ function handleDirectSelect(option: ClarificationOption): void {
     <div class="cc-head">
       <span class="cc-title">
         <span class="cc-dot"></span>
-        {{ isTableChoice ? '请选择要分析的表（可直接点击「直接使用」或勾选多项）：' : '请补充要分析的口径：' }}
+        {{ isTableChoice ? '待确认项：请勾选要分析的数据源或表（勾选后点击下方确认即可发送，支持快捷「直接使用」）：' : '请补充要分析的口径：' }}
       </span>
       <span class="cc-hint">最多 {{ clarification.maxSelect }} 张 · 已选 {{ selectedIds.length }}</span>
     </div>
@@ -91,10 +91,10 @@ function handleDirectSelect(option: ClarificationOption): void {
       <table class="cc-interactive-table" data-testid="clarification-table">
         <thead>
           <tr>
-            <th class="th-check">选择</th>
+            <th class="th-check">勾选</th>
             <th class="th-no">编号</th>
-            <th class="th-name">表名</th>
-            <th class="th-desc">说明</th>
+            <th class="th-name">数据源 / 表名</th>
+            <th class="th-desc">业务说明</th>
             <th v-if="!confirmed" class="th-action">快捷操作</th>
           </tr>
         </thead>
@@ -162,10 +162,7 @@ function handleDirectSelect(option: ClarificationOption): void {
     </div>
 
     <div class="cc-foot">
-      <span class="cc-selected">
-        已选 {{ selectedIds.length }}/{{ clarification.maxSelect }}
-        <template v-if="selectedNames.length">：{{ selectedNames.join('、') }}</template>
-      </span>
+      <span class="cc-selected">已选 {{ selectedIds.length }}/{{ clarification.maxSelect }}<template v-if="selectedNames.length">：{{ selectedNames.join('、') }}</template></span>
       <el-button
         v-if="!confirmed"
         type="primary"

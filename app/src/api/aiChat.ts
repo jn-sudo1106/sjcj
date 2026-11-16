@@ -229,6 +229,12 @@ export function extractClarificationFromText(text: string): Clarification | null
     const tableColIdx = headerCells.findIndex((h) => /(?:表名|表|table|候选|数据表|物理表)/i.test(h))
     const descColIdx = headerCells.findIndex((h) => /(?:说明|描述|含义|备注|注释|desc|comment|业务)/i.test(h))
 
+    // 必须有明确的待确认候选表特征，避免误将常规业务数据表格（如房屋明细、指标对比表）识别为澄清选项
+    const isCandidateTable =
+      tableColIdx !== -1 ||
+      (idColIdx !== -1 && descColIdx !== -1 && /(?:请问|希望用哪|用哪张|哪张表|哪个来源|需要您确认|请确认|请选择|候选表)/i.test(text))
+    if (!isCandidateTable) continue
+
     const effTableCol = tableColIdx !== -1 ? tableColIdx : (headerCells.length > 2 ? 1 : 0)
     const effDescCol = descColIdx !== -1 ? descColIdx : (headerCells.length > 2 ? 2 : 1)
     const effIdCol = idColIdx !== -1 ? idColIdx : (tableColIdx > 0 ? 0 : -1)
@@ -285,35 +291,58 @@ export function extractClarificationFromText(text: string): Clarification | null
     }
   }
 
-  // 4. 匹配明确包含“待确认/请确认/请选择候选表”语境下的编号候选列表（1. xxx 2. yyy）
-  const hasClarifyKeyword = /(?:待确认|请确认|请选择|候选表如下|可选表清单|需要您确认)/.test(text)
+  // 4. 匹配明确包含待确认语境下的有序/无序候选列表（* xxx、1. yyy、- zzz）
+  const hasClarifyKeyword =
+    /(?:待确认|请确认|请选择|候选表|可选表|数据源候选|需要您确认|需要确认|希望用哪个|用哪个来源|用哪张表|选择哪个|选择哪项|选择范围|哪个数据源|哪张表|回复.*编号|选择.*数据源)/i.test(text)
   if (hasClarifyKeyword) {
-    const numberedListRegex = /^\s*\d+[\.、]\s*([^\n]+)$/gm
-    const numberedMatches = [...text.matchAll(numberedListRegex)]
-    if (numberedMatches.length >= 2) {
-      const questionMatch = text.match(/(?:待确认|请确认|请选择|候选表)[^:\n：]*[：:]?/i)
-      const question = questionMatch ? questionMatch[0] : '请勾选需要确认的项：'
+    const listLineRegex = /^\s*(?:[-*+•]|\d+[\.、]|\(\d+\)|\d+\))\s+([^\n]+)$/gm
+    const listMatches = [...text.matchAll(listLineRegex)]
+    if (listMatches.length >= 2) {
+      // 提取提问语（优先匹配“请问您希望用哪个...？”或“待确认...：”）
+      const trailingQuestionMatch = text.match(/(?:请问|您希望|另外)[^\n]*(?:用哪个|哪张|哪个来源|成交均价|还是|？|\?)[^\n]*/i)
+      const leadingQuestionMatch = text.match(/(?:存在多种[^\n]*候选[^\n]*：|需要您确认[^\n]*：|待确认[^\n]*：|请确认[^\n]*：|请选择[^\n]*：)/i)
+      const question = trailingQuestionMatch
+        ? trailingQuestionMatch[0].trim()
+        : (leadingQuestionMatch ? leadingQuestionMatch[0].trim() : '请勾选需要分析的数据源或表（支持多选，勾选后点击下方确认即可发送）：')
 
-      const options: ClarificationOption[] = numberedMatches.map((m, idx) => {
+      const options: ClarificationOption[] = listMatches.map((m, idx) => {
         const lineText = m[1].trim()
+        // 查找物理表名特征（如 sense_data.xxx 或 tb_xxx 或 TB_xxx）
         const tableMatch = lineText.match(/`?([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+|[a-zA-Z0-9_]+_[a-zA-Z0-9_]+)`?/)
-        const hintMatch = lineText.match(/[(（]([^)）]+)[)）]/)
+        const rawTable = tableMatch ? tableMatch[1].replace(/[`*]/g, '').trim() : ''
 
-        let cleanName = lineText
-          .replace(/[(（][^)）]+[)）]/g, '')
+        // 提取说明/备注 (在 ——、—、--、:、：之后)
+        let hint = ''
+        const dashSplit = lineText.split(/(?:——|—|--|：|:\s+)/)
+        if (dashSplit.length > 1) {
+          hint = dashSplit.slice(1).join('——').replace(/[`*]/g, '').trim()
+        }
+
+        // 提取业务名称 (在括注或破折号之前)
+        let cleanName = dashSplit[0]
+          .replace(/[(（][^)）]*[)）]/g, '')
           .replace(/[`*]/g, '')
           .trim()
-        if (cleanName.includes('：')) cleanName = cleanName.split('：')[1].trim()
-        if (cleanName.includes('-')) cleanName = cleanName.split('-')[1].trim()
 
-        const tableName = tableMatch ? tableMatch[1] : (cleanName || `item_${idx + 1}`)
-        const typeName = cleanName || tableName
+        // 如果没有从破折号拿到 hint，尝试从括号中拿说明
+        if (!hint) {
+          const parenMatch = lineText.match(/[(（]([^)）]+)[)）]/)
+          if (parenMatch) {
+            const parenContent = parenMatch[1].replace(/[`*]/g, '').trim()
+            if (parenContent !== rawTable) {
+              hint = parenContent
+            }
+          }
+        }
+
+        const typeName = cleanName || rawTable || `数据源 ${idx + 1}`
+        const tableName = rawTable || cleanName || `table_${idx + 1}`
 
         return {
           entryTypeId: idx + 1,
           tableName,
           typeName,
-          hint: hintMatch ? hintMatch[1].trim() : null,
+          hint: hint && hint !== typeName ? hint : null,
         }
       })
 
