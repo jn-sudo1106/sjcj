@@ -50,6 +50,7 @@ const {
   loadMonitorRecord,
   getRunDetail,
   MONITOR_PAGE_SIZE,
+  MonitorRunUncertainError,
 } = await import('./monitorCenter')
 const { updateSourceCheck, addSourceCheck, handleRunNow } = await import('./monitor')
 const { toMonitorRecord } = await import('../utils/monitor/record')
@@ -531,6 +532,14 @@ describe('C01 单条读 loadMonitorDetail / loadMonitorRecord', () => {
 
     getSourceCheckDetail.mockRejectedValueOnce(offlineError())
     await expect(loadMonitorDetail('1109')).rejects.toThrow('Failed to fetch')
+
+    // client 超时是中文文案 + name=TimeoutError，不能被当成「记录不存在」
+    getSourceCheckDetail.mockRejectedValueOnce(
+      Object.assign(new Error('请求异常 [source/check/detail]: 请求超时（20 秒）'), {
+        cause: Object.assign(new Error('请求超时（20 秒）'), { name: 'TimeoutError' }),
+      }),
+    )
+    await expect(loadMonitorDetail('1109')).rejects.toThrow('请求超时')
   })
 
   it('loadMonitorRecord 用 detail.monitor 映射规范化记录视图，找不到返回 undefined', async () => {
@@ -603,6 +612,53 @@ describe('立即运行优先走 C05 POST /run（失败降级按 kind 分流）',
     })
     expect(handleRunNow).toHaveBeenCalledWith(['135'])
     expect(result).toMatchObject({ viaRunner: 1, viaLegacy: 1, runnerRunIds: ['run-1104-x'] })
+  })
+
+  it.each([405, 501])('/run %i（端点不可用）同样降级', async (status) => {
+    runChecksNow.mockRejectedValueOnce(notFoundError(status))
+    vi.mocked(handleRunNow).mockResolvedValue({ ok: true })
+    const result = await runMonitorsNow(['135'], { '135': 'rule' })
+    expect(handleRunNow).toHaveBeenCalledWith(['135'])
+    expect(result).toMatchObject({ viaLegacy: 1 })
+  })
+
+  it('信封 success:false（无状态码，服务端明确拒绝）降级，保持 217 兼容', async () => {
+    runChecksNow.mockRejectedValueOnce(new Error('接口不存在'))
+    vi.mocked(handleRunNow).mockResolvedValue({ ok: true })
+    await runMonitorsNow(['135'], { '135': 'rule' })
+    expect(handleRunNow).toHaveBeenCalledWith(['135'])
+  })
+
+  it.each([
+    ['断网', () => offlineError()],
+    [
+      '超时',
+      () =>
+        Object.assign(new Error('请求异常 [source/check/run]: 请求超时（20 秒）'), {
+          cause: Object.assign(new Error('请求超时（20 秒），后端未及时响应，请稍后重试'), { name: 'TimeoutError' }),
+        }),
+    ],
+    ['500', () => notFoundError(500)],
+    ['504', () => notFoundError(504)],
+  ])('/run %s 时结果未确认：不降级、不重复提交，抛 MonitorRunUncertainError', async (_label, makeError) => {
+    const cause = makeError()
+    runChecksNow.mockRejectedValueOnce(cause)
+
+    const error = await runMonitorsNow(['1104', '135'], { '1104': 'ai', '135': 'rule' }).catch((err) => err)
+
+    expect(error).toBeInstanceOf(MonitorRunUncertainError)
+    expect(error.message).toContain('请先查看运行记录')
+    expect(error.cause).toBe(cause)
+    expect(runnerRequest).not.toHaveBeenCalled()
+    expect(handleRunNow).not.toHaveBeenCalled()
+  })
+
+  it.each([401, 403, 400])('/run %i 照原错误抛出，不降级', async (status) => {
+    const cause = notFoundError(status)
+    runChecksNow.mockRejectedValueOnce(cause)
+    await expect(runMonitorsNow(['135'], { '135': 'rule' })).rejects.toBe(cause)
+    expect(runnerRequest).not.toHaveBeenCalled()
+    expect(handleRunNow).not.toHaveBeenCalled()
   })
 
   it('回执形状不对（信封被抹平/空 data）也降级，不把「未知」当成全部失败', async () => {
