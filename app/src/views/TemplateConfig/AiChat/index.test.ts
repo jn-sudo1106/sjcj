@@ -167,7 +167,7 @@ describe('AI 智能问数 · AiChatView', () => {
 
     const options = wrapper.findAll('[data-testid^="clarification-option-"]')
     expect(options).toHaveLength(3)
-    expect(wrapper.find('[data-testid="clarification-card"]').text()).toContain('最多 5 张')
+    expect(wrapper.find('[data-testid="clarification-card"]').text()).toContain('最多 3 张')
 
     await options[0].trigger('click')
     await options[2].trigger('click')
@@ -329,7 +329,7 @@ describe('AI 智能问数 · AiChatView', () => {
     vi.useRealTimers()
   })
 
-  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语与推荐场景卡片', async () => {
+  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；无后端推荐数据时不展示推荐卡片', async () => {
     const wrapper = mountView(true)
     await flushPromises()
 
@@ -343,11 +343,17 @@ describe('AI 智能问数 · AiChatView', () => {
     // 应该显示新会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-hero-title').text()).toContain('AI 智能问数助手')
-    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(4)
+    // 后端无配置时不渲染推荐卡片区域
+    expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
+    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
   })
 
-  it('生产无预置会话时，初始直接进入新建会话页面，点击推荐卡片发起真实流式问数', async () => {
+  it('生产无预置会话且后端配置推荐场景时，展示后端卡片，点击推荐卡片发起真实流式问数', async () => {
+    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
+      '排查近期异常任务与根因',
+      '昨日各站点抓取成功率 TOP 10',
+    ])
     const wrapper = mountView(false)
     await flushPromises()
 
@@ -356,7 +362,7 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
 
     const starterCards = wrapper.findAll('.rc-starter-card')
-    expect(starterCards.length).toBeGreaterThan(0)
+    expect(starterCards).toHaveLength(2)
 
     // 点击第二个推荐场景卡片（昨日各站点抓取成功率 TOP 10）
     await starterCards[1].trigger('click')
@@ -366,6 +372,16 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
     expect(wrapper.text()).toContain('昨日各站点抓取成功率 TOP 10')
+  })
+
+  it('后端未配置推荐问数场景（返回空列表）时，整块推荐问数场景不展示', async () => {
+    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([])
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+    expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
+    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
   })
 
   it('当后端配置推荐问数场景（sys_page_config）时，动态加载并渲染后端配置的卡片', async () => {
@@ -590,7 +606,7 @@ describe('AI 智能问数 · AiChatView', () => {
     // 待确认勾选卡片应存在
     const card = wrapper.find('[data-testid="clarification-card"]')
     expect(card.exists()).toBe(true)
-    expect(card.text()).toContain('最多 5 张')
+    expect(card.text()).toContain('最多 2 张')
 
     // 勾选第 1 个选项
     const opt1 = wrapper.find('[data-testid="clarification-option-301"]')
@@ -769,7 +785,7 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('100.7')
   })
 
-  it('返回的日期与最新价格数据展示为明细列表，支持行勾选、导出选中行与切换趋势图/饼图，不渲染选表澄清卡片', async () => {
+  it('返回的日期与最新价格数据展示为明细列表，无勾选框，支持直接导出与切换趋势图/饼图，不渲染选表澄清卡片', async () => {
     const testSession = [
       { id: 's-nj-price', title: '南京二手房最新价格', updatedAt: '刚刚', group: 'today' as const },
     ]
@@ -816,20 +832,16 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('5557')
     expect(wrapper.text()).toContain('17574')
 
-    // 3. 验证表格行勾选交互：勾选第 1 行与第 2 行
+    // 3. 验证明细表格无多选勾选框，第一列直接为业务列
+    expect(wrapper.find('.rc-row-checkbox').exists()).toBe(false)
+    expect(wrapper.find('.th-row-select').exists()).toBe(false)
     const rows = wrapper.findAll('.rc-preview-table tbody tr')
     expect(rows).toHaveLength(8)
-    await rows[0].trigger('click')
-    await rows[1].trigger('click')
-    await flushPromises()
 
-    expect(wrapper.text()).toContain('已选 2 条')
-    expect(rows[0].classes()).toContain('row-selected')
-    expect(rows[1].classes()).toContain('row-selected')
-
-    // 4. 点击「导出已选 (2) Excel」按钮，验证仅导出选中行
+    // 4. 点击「导出 Excel」按钮，验证直接导出全量数据
     const exportExcelBtn = wrapper.find('[data-testid="rc-table-export-excel"]')
-    expect(exportExcelBtn.text()).toContain('导出已选 (2) Excel')
+    expect(exportExcelBtn.text()).toContain('导出 Excel')
+    expect(exportExcelBtn.text()).not.toContain('已选')
     await exportExcelBtn.trigger('click')
     expect(downloadXlsx).toHaveBeenCalled()
 
@@ -965,7 +977,7 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 验证勾选框变为已选状态
     expect(option1.find('.cc-check').classes()).toContain('checked')
-    expect(wrapper.text()).toContain('已选 1/5：贝壳二手房成交信息')
+    expect(wrapper.text()).toContain('已选 1/4：贝壳二手房成交信息')
 
     // 4. 用户点击「确认选择并开始分析」按钮，答案自动发出并推进下一轮流式问数
     const confirmBtn = wrapper.find('[data-testid="clarification-confirm"]')
@@ -978,6 +990,98 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
     // 对话流中自动发送所选项，无需用户在输入框敲字
     expect(wrapper.text()).toContain('1（贝壳二手房成交信息）')
+  })
+
+  it('多轮对话中第二轮返回新的选表卡片时，不会被第一轮确认状态锁定，仍可正常勾选与确认', async () => {
+    const testSession = [
+      { id: 's-multi-clarify', title: '多轮选表测试', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-multi-clarify': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查二手房数据',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: '第一轮待确认：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请选择城市数据源：',
+            allowFreeText: true,
+            maxSelect: 2,
+            confirmed: true,
+            selectedEntryTypeIds: [1],
+            options: [
+              { entryTypeId: 1, tableName: 't_city_1', typeName: '南京二手房' },
+              { entryTypeId: 2, tableName: 't_city_2', typeName: '苏州二手房' },
+            ],
+          },
+        },
+        {
+          id: 'm-u2',
+          role: 'user' as const,
+          content: '已确认选择：南京二手房',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a2',
+          role: 'assistant' as const,
+          content: '第二轮待确认：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请选择具体指标明细表：',
+            allowFreeText: true,
+            maxSelect: 3,
+            options: [
+              { entryTypeId: 10, tableName: 't_detail_1', typeName: '成交均价明细' },
+              { entryTypeId: 20, tableName: 't_detail_2', typeName: '成交面积明细' },
+              { entryTypeId: 30, tableName: 't_detail_3', typeName: '挂牌量明细' },
+            ],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 应该渲染 2 张澄清卡片
+    const cards = wrapper.findAll('[data-testid="clarification-card"]')
+    expect(cards).toHaveLength(2)
+
+    // 第一张卡片是已采纳状态
+    expect(cards[0].classes()).toContain('confirmed')
+
+    // 第二张卡片绝不能被第一张卡片的状态锁定（未确认）
+    expect(cards[1].classes()).not.toContain('confirmed')
+    expect(cards[1].find('[data-testid="clarification-confirmed"]').exists()).toBe(false)
+    expect(cards[1].find('[data-testid="clarification-confirm"]').exists()).toBe(true)
+
+    // 第二张卡片可以正常交互勾选
+    const opt10 = cards[1].find('[data-testid="clarification-option-10"]')
+    expect(opt10.exists()).toBe(true)
+    await opt10.trigger('click')
+    expect(opt10.classes()).toContain('selected')
+
+    // 快捷「直接使用」按钮在第二轮中依然正常可用
+    const directBtn20 = cards[1].find('[data-testid="clarification-direct-20"]')
+    expect(directBtn20.exists()).toBe(true)
   })
 
   it('对话发起之后，处于响应中时显示停止按钮，点击停止按钮可中断对话', async () => {

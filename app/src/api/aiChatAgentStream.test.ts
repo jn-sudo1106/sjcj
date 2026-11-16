@@ -5,6 +5,11 @@ import {
   extractClarificationFromText,
   extractChartDataFromText,
   listRecommendedQuestions,
+  listAiSessions,
+  deleteAiSession,
+  getAiChatHistory,
+  convertChatLogsToMessages,
+  formatSessionGroupAndDate,
   type AgentChatEvent,
 } from './aiChat'
 import * as clientModule from './client'
@@ -497,5 +502,157 @@ describe('extractChartDataFromText 业务数据表格自动解析为图表与明
   it('空文本或无表格文本返回 null', () => {
     expect(extractChartDataFromText('')).toBeNull()
     expect(extractChartDataFromText('普通的文本说明，没有任何表格')).toBeNull()
+  })
+})
+
+describe('问数会话管理与历史记录持久化对接', () => {
+  it('listAiSessions 将后端 ChatSession 映射为 AiSessionItem 并按时间分组', async () => {
+    const today = new Date().toISOString()
+    const mockData = [
+      { id: 1, uuid: 'sess_1', name: '今日问数', updateTime: today },
+      { id: 2, uuid: 'sess_2', name: '旧会话', updateTime: '2020-01-01 10:00:00' },
+    ]
+    vi.spyOn(clientModule, 'request').mockResolvedValue(mockData as any)
+
+    const list = await listAiSessions()
+    expect(list).toHaveLength(2)
+    expect(list[0].id).toBe('1')
+    expect(list[0].uuid).toBe('sess_1')
+    expect(list[0].title).toBe('今日问数')
+    expect(list[0].group).toBe('today')
+
+    expect(list[1].id).toBe('2')
+    expect(list[1].uuid).toBe('sess_2')
+    expect(list[1].group).toBe('earlier')
+  })
+
+  it('deleteAiSession 发起后端会话软删除', async () => {
+    const requestSpy = vi.spyOn(clientModule, 'request').mockResolvedValue(undefined as any)
+    const success = await deleteAiSession('123')
+    expect(success).toBe(true)
+    expect(requestSpy).toHaveBeenCalledWith(
+      'poc/session/stop',
+      undefined,
+      expect.objectContaining({
+        method: 'POST',
+        query: { id: '123' },
+      })
+    )
+  })
+
+  it('convertChatLogsToMessages 正确还原问答、SQL、思考过程与中断标记', () => {
+    const rawLogs = [
+      {
+        id: 10,
+        sessionId: 1,
+        msg: '统计昨日成功率',
+        modelMsg: '查询完成：\n```sql\nSELECT site, rate FROM t_stat\n```',
+        status: 'SUCCESS',
+        data: JSON.stringify({
+          thinking: { completed: true, durationMs: 500, text: '思考中...' },
+          sql: { code: 'SELECT site, rate FROM t_stat', execTimeMs: 40, scanRows: 50 },
+        }),
+        createTime: '2026-11-16 10:00:00',
+      },
+      {
+        id: 11,
+        sessionId: 1,
+        msg: '排查慢请求',
+        modelMsg: '正在排查...',
+        status: 'INTERRUPTED',
+        data: JSON.stringify({
+          interrupted: true,
+          thinking: { completed: true, durationMs: 200, interrupted: true, text: '解析中' },
+        }),
+        createTime: '2026-11-16 10:05:00',
+      },
+    ]
+
+    const messages = convertChatLogsToMessages(rawLogs as any)
+    expect(messages).toHaveLength(4)
+
+    // 第一轮用户消息
+    expect(messages[0].role).toBe('user')
+    expect(messages[0].content).toBe('统计昨日成功率')
+
+    // 第一轮助手回复
+    expect(messages[1].role).toBe('assistant')
+    expect(messages[1].content).toContain('SELECT site')
+    expect(messages[1].sql?.code).toBe('SELECT site, rate FROM t_stat')
+    expect(messages[1].thinking?.completed).toBe(true)
+    expect(messages[1].thinking?.text).toBe('思考中...')
+    expect(messages[1].interrupted).toBe(false)
+
+    // 第二轮助手回复中断状态
+    expect(messages[3].role).toBe('assistant')
+    expect(messages[3].interrupted).toBe(true)
+    expect(messages[3].thinking?.interrupted).toBe(true)
+  })
+
+  it('getAiChatHistory 从后端拉取日志并返回转换后的 ChatMessage 列表', async () => {
+    const rawLogs = [
+      {
+        id: 99,
+        sessionId: 88,
+        msg: '测试历史消息',
+        modelMsg: '历史回复',
+        status: 'SUCCESS',
+        createTime: '2026-11-16 11:00:00',
+      },
+    ]
+    vi.spyOn(clientModule, 'request').mockResolvedValue(rawLogs as any)
+
+    const history = await getAiChatHistory(88)
+    expect(history).toHaveLength(2)
+    expect(history[0].role).toBe('user')
+    expect(history[0].content).toBe('测试历史消息')
+    expect(history[1].role).toBe('assistant')
+    expect(history[1].content).toBe('历史回复')
+  })
+
+  it('formatSessionGroupAndDate 正确区分今天、近7天与更早会话', () => {
+    const now = new Date()
+    expect(formatSessionGroupAndDate(now).group).toBe('today')
+
+    const fourDaysAgo = new Date(Date.now() - 4 * 24 * 3600 * 1000)
+    expect(formatSessionGroupAndDate(fourDaysAgo).group).toBe('week')
+
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 3600 * 1000)
+    expect(formatSessionGroupAndDate(tenDaysAgo).group).toBe('earlier')
+  })
+
+  it('streamAgentChat 从响应头读取 X-Session-Id 与 X-Thread-Id 并分发 session_assigned 事件', async () => {
+    const headers = new Headers()
+    headers.set('Content-Type', 'text/event-stream')
+    headers.set('X-Session-Id', '888')
+    headers.set('X-Thread-Id', 'sess_custom_888')
+
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        c.close()
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers,
+      })
+    )
+
+    const events: AgentChatEvent[] = []
+    await streamAgentChat(
+      { msg: '新会话提问', session_id: 'new' },
+      (e) => events.push(e)
+    )
+
+    const assignedEvent = events.find((e) => e.type === 'session_assigned')
+    expect(assignedEvent).toBeDefined()
+    expect(assignedEvent).toEqual({
+      type: 'session_assigned',
+      sessionId: '888',
+      threadId: 'sess_custom_888',
+    })
   })
 })

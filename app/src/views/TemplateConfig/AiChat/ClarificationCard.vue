@@ -22,7 +22,12 @@ const selectedIds = ref<number[]>([])
 const freeText = ref('')
 
 const isTableChoice = computed(() => props.clarification.kind !== 'free_text')
-const reachedMax = computed(() => selectedIds.value.length >= props.clarification.maxSelect)
+const effectiveMaxSelect = computed(() => {
+  const optionsCount = props.clarification.options?.length ?? 0
+  const max = props.clarification.maxSelect ?? 5
+  return optionsCount > 0 ? Math.min(max, optionsCount) : max
+})
+const reachedMax = computed(() => selectedIds.value.length >= effectiveMaxSelect.value)
 const canSubmit = computed(() =>
   selectedIds.value.length > 0
   || (props.clarification.allowFreeText && freeText.value.trim().length > 0))
@@ -30,6 +35,17 @@ const selectedNames = computed(() =>
   props.clarification.options
     .filter((option) => selectedIds.value.includes(option.entryTypeId))
     .map((option) => option.typeName || option.tableName))
+
+function isRedundantQuestion(q?: string): boolean {
+  if (!q) return true
+  const trimmed = q.trim()
+  return (
+    trimmed === '请勾选需要分析的数据源或表（支持多选，勾选后点击下方确认即可发送）：' ||
+    trimmed === '请勾选需要分析的数据源或表（勾选后点击下方确认即可发送，支持快捷「直接使用」）：' ||
+    trimmed === '请选择要使用的表（可直接点击「直接使用」，或勾选多项）：' ||
+    trimmed === '请确认需要分析的表或口径：'
+  )
+}
 
 watch(() => props.clarification, () => {
   selectedIds.value = []
@@ -47,11 +63,11 @@ function toggleOption(entryTypeId: number): void {
     selectedIds.value.splice(index, 1)
     return
   }
-  if (props.clarification.maxSelect === 1) {
+  if (effectiveMaxSelect.value === 1) {
     selectedIds.value = [entryTypeId]
     return
   }
-  if (selectedIds.value.length < props.clarification.maxSelect) {
+  if (selectedIds.value.length < effectiveMaxSelect.value) {
     selectedIds.value.push(entryTypeId)
   }
 }
@@ -79,12 +95,12 @@ function handleDirectSelect(option: ClarificationOption): void {
     <div class="cc-head">
       <span class="cc-title">
         <span class="cc-dot"></span>
-        {{ isTableChoice ? '待确认项：请勾选要分析的数据源或表（勾选后点击下方确认即可发送，支持快捷「直接使用」）：' : '请补充要分析的口径：' }}
+        {{ isTableChoice ? '待确认项：请选择要分析的数据源或表（支持快捷「直接使用」）：' : '请补充要分析的口径：' }}
       </span>
-      <span class="cc-hint">最多 {{ clarification.maxSelect }} 张 · 已选 {{ selectedIds.length }}</span>
+      <span class="cc-hint">最多 {{ effectiveMaxSelect }} 张 · 已选 {{ selectedIds.length }}</span>
     </div>
 
-    <p v-if="clarification.question" class="cc-question">{{ clarification.question }}</p>
+    <p v-if="clarification.question && !isRedundantQuestion(clarification.question)" class="cc-question">{{ clarification.question }}</p>
 
     <!-- 交互式候选选项表格：支持勾选多选与单行直接点击使用 -->
     <div v-if="isTableChoice && clarification.options.length" class="cc-table-wrapper">
@@ -162,7 +178,7 @@ function handleDirectSelect(option: ClarificationOption): void {
     </div>
 
     <div class="cc-foot">
-      <span class="cc-selected">已选 {{ selectedIds.length }}/{{ clarification.maxSelect }}<template v-if="selectedNames.length">：{{ selectedNames.join('、') }}</template></span>
+      <span class="cc-selected">已选 {{ selectedIds.length }}/{{ effectiveMaxSelect }}<template v-if="selectedNames.length">：{{ selectedNames.join('、') }}</template></span>
       <el-button
         v-if="!confirmed"
         type="primary"

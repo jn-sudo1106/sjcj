@@ -18,6 +18,8 @@ import {
 } from '@element-plus/icons-vue'
 import {
   listAiSessions,
+  deleteAiSession,
+  getAiChatHistory,
   submitClarificationAnswer,
   streamAgentChat,
   extractClarificationFromText,
@@ -40,42 +42,20 @@ interface StarterPrompt {
   prompt: string
 }
 
-// 默认推荐问数快捷场景卡片（当后端未配置或拉取失败时兜底使用）
-const DEFAULT_STARTER_PROMPTS: StarterPrompt[] = [
-  {
-    tag: '多表下钻 · 故障定位',
-    title: '排查近期异常任务与根因',
-    prompt: '帮我排查一下最近的异常任务数据，重点分析网络层 403 与规则清洗异常。',
-  },
-  {
-    tag: '质量分析 · KPI 报表',
-    title: '昨日各站点抓取成功率 TOP 10',
-    prompt: '统计昨日各数据源的采集成功率，对比总任务量与失败量前 10 个网站。',
-  },
-  {
-    tag: '性能监控 · 延时瓶颈',
-    title: '各网站平均抓取耗时与并发量',
-    prompt: '分析近 3 天各网站的平均抓取耗时分布，排查耗时超过 15 秒的慢请求源。',
-  },
-  {
-    tag: '规则审计 · 异常清洗',
-    title: '清洗规则与 XPath 命中率审计',
-    prompt: '统计核心业务表字段清洗规则命中率，列出未匹配到有效内容的任务与字段。',
-  },
-]
-
-// 推荐问数卡片：优先读取后端 sys_page_config 配置的问句，未配置时回退默认预置卡片
-const starterPrompts = ref<StarterPrompt[]>(DEFAULT_STARTER_PROMPTS)
+// 推荐问数卡片：纯动态从后端接口（/api/poc/chat/help/question）获取，后端无数据时不展示
+const starterPrompts = ref<StarterPrompt[]>([])
 
 function mapQuestionsToStarters(questions: string[]): StarterPrompt[] {
-  return questions.map((q, idx) => {
-    const trimmed = q.trim()
-    return {
-      tag: `推荐场景 ${String(idx + 1).padStart(2, '0')}`,
-      title: trimmed,
-      prompt: trimmed,
-    }
-  })
+  return questions
+    .filter((q) => typeof q === 'string' && q.trim().length > 0)
+    .map((q, idx) => {
+      const trimmed = q.trim()
+      return {
+        tag: `推荐场景 ${String(idx + 1).padStart(2, '0')}`,
+        title: trimmed,
+        prompt: trimmed,
+      }
+    })
 }
 
 interface Props {
@@ -102,54 +82,6 @@ const currentAbortController = ref<AbortController | null>(null)
 const activeDataView = ref<'chart' | 'pie' | 'table'>('table')
 const isThinkingExpanded = ref<boolean>(true)
 const chatContainerRef = ref<HTMLElement | null>(null)
-
-// 明细数据表格行勾选状态映射（按 msg.id 记录勾选的行索引列表）
-const selectedRowIndicesMap = ref<Record<string, number[]>>({})
-
-function getSelectedRowIndices(msg: ChatMessage): number[] {
-  return selectedRowIndicesMap.value[msg.id] || []
-}
-
-function getSelectedRowCount(msg: ChatMessage): number {
-  return getSelectedRowIndices(msg).length
-}
-
-function isRowSelected(msg: ChatMessage, ridx: number): boolean {
-  return getSelectedRowIndices(msg).includes(ridx)
-}
-
-function isAllRowsSelected(msg: ChatMessage): boolean {
-  const total = msg.chartData?.tableRows?.length || 0
-  if (total === 0) return false
-  return getSelectedRowCount(msg) === total
-}
-
-function isSomeRowsSelected(msg: ChatMessage): boolean {
-  const count = getSelectedRowCount(msg)
-  const total = msg.chartData?.tableRows?.length || 0
-  return count > 0 && count < total
-}
-
-function toggleSelectRow(msg: ChatMessage, ridx: number): void {
-  const current = [...getSelectedRowIndices(msg)]
-  const idx = current.indexOf(ridx)
-  if (idx >= 0) {
-    current.splice(idx, 1)
-  } else {
-    current.push(ridx)
-  }
-  selectedRowIndicesMap.value[msg.id] = current
-}
-
-function toggleSelectAllRows(msg: ChatMessage): void {
-  const total = msg.chartData?.tableRows?.length || 0
-  if (total === 0) return
-  if (isAllRowsSelected(msg)) {
-    selectedRowIndicesMap.value[msg.id] = []
-  } else {
-    selectedRowIndicesMap.value[msg.id] = Array.from({ length: total }, (_, i) => i)
-  }
-}
 
 // 每条消息独立的思考链展开状态映射（按 msg.id 记录）
 const thinkingExpandedMap = reactive<Record<string, boolean>>({})
@@ -181,8 +113,8 @@ function toggleThinking(msgId: string, currentOpen: boolean) {
 }
 
 function isMsgClarifyConfirmed(msg: ChatMessage): boolean {
-  if (msg.clarification?.confirmed !== undefined) {
-    return msg.clarification.confirmed
+  if (msg.clarification) {
+    return Boolean(msg.clarification.confirmed)
   }
   return clarifyConfirmed.value
 }
@@ -293,18 +225,14 @@ function getSafeExportFileName(title: string, defaultName = '问数明细数据'
   return clean || defaultName
 }
 
-// 导出明细表格数据为 Excel (.xlsx)（支持全量导出与仅导出勾选行）
+// 导出明细表格数据为 Excel (.xlsx)（全量导出）
 function exportTableToExcel(msg: ChatMessage) {
   if (!msg.chartData?.tableColumns?.length || !msg.chartData?.tableRows?.length) {
     ElMessage.warning('当前暂无可导出的明细数据')
     return
   }
   const cols = msg.chartData.tableColumns
-  const selectedIndices = getSelectedRowIndices(msg)
-  const rows =
-    selectedIndices.length > 0
-      ? msg.chartData.tableRows.filter((_, idx) => selectedIndices.includes(idx))
-      : msg.chartData.tableRows
+  const rows = msg.chartData.tableRows
 
   const headerRow: XlsxCell[] = cols.map((c) => c.label)
   const dataRows: XlsxCell[][] = rows.map((r) =>
@@ -314,24 +242,19 @@ function exportTableToExcel(msg: ChatMessage) {
     })
   )
   const baseName = getSafeExportFileName(msg.chartData.title || '', '问数明细报表')
-  const countTag = selectedIndices.length > 0 ? `_已选${rows.length}条` : ''
-  const fileName = `${baseName}${countTag}_${exportDateTag()}`
+  const fileName = `${baseName}_${exportDateTag()}`
   downloadXlsx(fileName, [headerRow, ...dataRows], baseName.slice(0, 31))
   ElMessage.success(`已成功导出 ${rows.length} 条数据为 Excel 文件：${fileName}.xlsx`)
 }
 
-// 导出明细表格数据为 CSV (.csv)（支持全量导出与仅导出勾选行）
+// 导出明细表格数据为 CSV (.csv)（全量导出）
 function exportTableToCsv(msg: ChatMessage) {
   if (!msg.chartData?.tableColumns?.length || !msg.chartData?.tableRows?.length) {
     ElMessage.warning('当前暂无可导出的明细数据')
     return
   }
   const cols = msg.chartData.tableColumns
-  const selectedIndices = getSelectedRowIndices(msg)
-  const rows =
-    selectedIndices.length > 0
-      ? msg.chartData.tableRows.filter((_, idx) => selectedIndices.includes(idx))
-      : msg.chartData.tableRows
+  const rows = msg.chartData.tableRows
 
   const headers = cols.map((c) => c.label)
   const dataRows: CsvCell[][] = rows.map((r) =>
@@ -341,8 +264,7 @@ function exportTableToCsv(msg: ChatMessage) {
     })
   )
   const baseName = getSafeExportFileName(msg.chartData.title || '', '问数明细数据')
-  const countTag = selectedIndices.length > 0 ? `_已选${rows.length}条` : ''
-  const fileName = `${baseName}${countTag}_${csvDateTag()}`
+  const fileName = `${baseName}_${csvDateTag()}`
   const csvContent = toCsv(headers, dataRows)
   downloadCsv(fileName, csvContent)
   ElMessage.success(`已成功导出 ${rows.length} 条数据为 CSV 文件：${fileName}.csv`)
@@ -447,6 +369,27 @@ const weekSessions = computed(() =>
   )
 )
 
+// 异步加载指定会话的历史消息（如果内存中尚未加载）
+async function loadSessionHistoryIfNeeded(id: string) {
+  if (!id || id === 'new') return
+  // 如果当前会话尚无消息且不在 props.initialMessages 中显式提供，尝试向后端拉取
+  if (!sessionMessages.value[id] || sessionMessages.value[id].length === 0) {
+    try {
+      const history = await getAiChatHistory(id)
+      if (history && history.length > 0) {
+        sessionMessages.value[id] = history
+      } else if (!sessionMessages.value[id]) {
+        sessionMessages.value[id] = []
+      }
+    } catch (e) {
+      console.warn('[loadSessionHistoryIfNeeded] 加载会话历史失败:', e)
+      if (!sessionMessages.value[id]) {
+        sessionMessages.value[id] = []
+      }
+    }
+  }
+}
+
 onMounted(async () => {
   if (props.initialSessions && props.initialSessions.length > 0) {
     sessions.value = [...props.initialSessions]
@@ -456,18 +399,23 @@ onMounted(async () => {
   }
   if (sessions.value.length > 0) {
     activeSessionId.value = sessions.value[0].id
+    await loadSessionHistoryIfNeeded(activeSessionId.value)
+    scrollToBottom()
   } else {
     activeSessionId.value = 'new'
   }
 
-  // 动态获取后端配置的推荐问数场景（配置于 sys_page_config，对应 /api/poc/chat/help/question）
+  // 动态获取后端配置的推荐问数场景（配置于 sys_page_config，对应 /api/poc/chat/help/question），没有则不展示
   try {
     const questions = await listRecommendedQuestions()
     if (questions && questions.length > 0) {
       starterPrompts.value = mapQuestionsToStarters(questions)
+    } else {
+      starterPrompts.value = []
     }
   } catch (err) {
-    console.warn('[AiChat] 加载后端推荐问数场景失败，保留默认推荐:', err)
+    console.warn('[AiChat] 加载后端推荐问数场景失败，不展示推荐场景:', err)
+    starterPrompts.value = []
   }
 })
 
@@ -496,11 +444,12 @@ function handleStop() {
 }
 
 // 切换会话
-function handleSelectSession(id: string) {
+async function handleSelectSession(id: string) {
   if (isSending.value) {
     handleStop()
   }
   activeSessionId.value = id
+  await loadSessionHistoryIfNeeded(id)
   scrollToBottom()
 }
 
@@ -509,6 +458,7 @@ function handleDeleteSession(id: string) {
   if (activeSessionId.value === id && isSending.value) {
     handleStop()
   }
+
   sessions.value = sessions.value.filter((s) => s.id !== id)
   const clone = { ...sessionMessages.value }
   delete clone[id]
@@ -517,11 +467,17 @@ function handleDeleteSession(id: string) {
   if (activeSessionId.value === id) {
     if (sessions.value.length > 0) {
       activeSessionId.value = sessions.value[0].id
+      loadSessionHistoryIfNeeded(activeSessionId.value)
     } else {
       activeSessionId.value = 'new'
     }
   }
   ElMessage.info('已删除会话')
+
+  // 异步通知后端软删除（不阻塞前端响应）
+  deleteAiSession(id).catch((err) => {
+    console.warn('[handleDeleteSession] 后端会话软删除失败:', err)
+  })
 }
 
 // 清空所有历史会话
@@ -529,9 +485,13 @@ function handleClearSessions() {
   if (isSending.value) {
     handleStop()
   }
+  const currentList = [...sessions.value]
   sessions.value = []
+  sessionMessages.value = {}
   activeSessionId.value = 'new'
   ElMessage.info('已清空历史会话')
+
+  Promise.allSettled(currentList.map((s) => deleteAiSession(s.id))).catch(() => {})
 }
 
 // 点击「新建问数会话」按钮 -> 进入全新的会话页面
@@ -560,15 +520,16 @@ async function handleConfirmClarify(
   payload: { selectedEntryTypeIds: number[]; freeText: string },
   msg?: ChatMessage
 ) {
-  const targetMsg = msg || currentMessages.value.find((m) => m.clarification)
+  const targetMsg = msg || currentMessages.value.find((m) => m.clarification && !m.clarification.confirmed) || currentMessages.value.find((m) => m.clarification)
   const clarification = targetMsg?.clarification || currentClarification.value
 
   if (targetMsg?.clarification) {
     if (targetMsg.clarification.confirmed) return
     targetMsg.clarification.confirmed = true
     targetMsg.clarification.selectedEntryTypeIds = payload.selectedEntryTypeIds
+  } else {
+    clarifyConfirmed.value = true
   }
-  clarifyConfirmed.value = true
 
   const selectedOptions = clarification.options.filter((option) =>
     payload.selectedEntryTypeIds.includes(option.entryTypeId)
@@ -814,14 +775,39 @@ async function handleSend(customTitle?: string) {
   }, 500)
 
   try {
+    const currentSessionObj = sessions.value.find((s) => s.id === targetSessionId)
+    const sessionIdParam = /^\d+$/.test(targetSessionId) ? Number(targetSessionId) : undefined
+    const threadIdParam = currentSessionObj?.uuid || (sessionIdParam ? undefined : targetSessionId)
+
     await streamAgentChat(
       {
         msg: content,
-        thread_id: targetSessionId,
+        session_id: sessionIdParam,
+        thread_id: threadIdParam,
         signal: abortCtrl.signal,
       },
       (event) => {
-        if (event.type === 'chunk') {
+        if (event.type === 'session_assigned') {
+          if (event.sessionId) {
+            const oldId = targetSessionId
+            const newId = event.sessionId
+            if (oldId !== newId) {
+              const target = sessions.value.find((s) => s.id === oldId)
+              if (target) {
+                target.id = newId
+                if (event.threadId) {
+                  target.uuid = event.threadId
+                }
+              }
+              sessionMessages.value[newId] = sessionMessages.value[oldId] || list
+              delete sessionMessages.value[oldId]
+              if (activeSessionId.value === oldId) {
+                activeSessionId.value = newId
+              }
+              targetSessionId = newId
+            }
+          }
+        } else if (event.type === 'chunk') {
           assistantMsg.content += event.text
           scrollToBottom()
         } else if (event.type === 'reasoning') {
@@ -831,7 +817,7 @@ async function handleSend(customTitle?: string) {
           assistantMsg.thinking.text = (assistantMsg.thinking.text || '') + event.reasoning
           scrollToBottom()
         } else if (event.type === 'clarification') {
-          assistantMsg.clarification = event.clarification
+          assistantMsg.clarification = { ...event.clarification, confirmed: false }
           scrollToBottom()
         } else if (event.type === 'error') {
           ElMessage.error(event.error)
@@ -874,7 +860,7 @@ async function handleSend(customTitle?: string) {
     if (!assistantMsg.clarification && assistantMsg.content) {
       const parsedClarification = extractClarificationFromText(assistantMsg.content)
       if (parsedClarification) {
-        assistantMsg.clarification = parsedClarification
+        assistantMsg.clarification = { ...parsedClarification, confirmed: false }
       }
     }
 
@@ -888,6 +874,11 @@ async function handleSend(customTitle?: string) {
 
     if (!assistantMsg.content.trim() && !assistantMsg.sql && !assistantMsg.clarification && !assistantMsg.chartData) {
       thinkingExpandedMap[assistantMsg.id] = true
+    }
+
+    const currentSession = sessions.value.find((s) => s.id === targetSessionId)
+    if (currentSession) {
+      currentSession.updatedAt = '刚刚'
     }
   } catch (err) {
     const failure = err as { name?: string; message?: string }
@@ -1347,12 +1338,6 @@ onUnmounted(() => {
                       <div class="rc-table-meta-bar">
                         <span class="rc-table-records-count">
                           共 {{ msg.chartData.tableRows ? msg.chartData.tableRows.length : 0 }} 条明细记录
-                          <span
-                            v-if="getSelectedRowCount(msg) > 0"
-                            class="rc-table-selected-badge"
-                          >
-                            已选 {{ getSelectedRowCount(msg) }} 条
-                          </span>
                         </span>
                         <div class="rc-table-quick-export">
                           <el-button
@@ -1363,7 +1348,7 @@ onUnmounted(() => {
                             @click="exportTableToExcel(msg)"
                           >
                             <el-icon><Download /></el-icon>
-                            {{ getSelectedRowCount(msg) > 0 ? `导出已选 (${getSelectedRowCount(msg)}) Excel` : '导出 Excel' }}
+                            导出 Excel
                           </el-button>
                           <span class="rc-table-divider">|</span>
                           <el-button
@@ -1374,7 +1359,7 @@ onUnmounted(() => {
                             @click="exportTableToCsv(msg)"
                           >
                             <el-icon><Download /></el-icon>
-                            {{ getSelectedRowCount(msg) > 0 ? `导出已选 (${getSelectedRowCount(msg)}) CSV` : '导出 CSV' }}
+                            导出 CSV
                           </el-button>
                         </div>
                       </div>
@@ -1382,15 +1367,6 @@ onUnmounted(() => {
                         <table class="rc-preview-table" data-testid="rc-preview-table">
                           <thead>
                             <tr>
-                              <th class="th-row-select" title="全选 / 取消全选">
-                                <input
-                                  type="checkbox"
-                                  class="rc-row-checkbox"
-                                  :checked="isAllRowsSelected(msg)"
-                                  :indeterminate="isSomeRowsSelected(msg)"
-                                  @change="toggleSelectAllRows(msg)"
-                                />
-                              </th>
                               <th
                                 v-for="col in msg.chartData.tableColumns"
                                 :key="col.prop"
@@ -1403,17 +1379,7 @@ onUnmounted(() => {
                             <tr
                               v-for="(row, ridx) in msg.chartData.tableRows"
                               :key="ridx"
-                              :class="{ 'row-selected': isRowSelected(msg, ridx) }"
-                              @click="toggleSelectRow(msg, ridx)"
                             >
-                              <td class="td-row-select" @click.stop>
-                                <input
-                                  type="checkbox"
-                                  class="rc-row-checkbox"
-                                  :checked="isRowSelected(msg, ridx)"
-                                  @change="toggleSelectRow(msg, ridx)"
-                                />
-                              </td>
                               <td
                                 v-for="col in msg.chartData.tableColumns"
                                 :key="col.prop"
@@ -2409,34 +2375,12 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.th-row-select,
-.td-row-select {
-  width: 36px;
-  min-width: 36px;
-  max-width: 36px;
-  text-align: center !important;
-  vertical-align: middle;
-}
-
-.rc-row-checkbox {
-  cursor: pointer;
-  accent-color: var(--el-color-primary, #2563eb);
-  width: 15px;
-  height: 15px;
-  vertical-align: middle;
-}
-
 .rc-preview-table tbody tr {
-  cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .rc-preview-table tbody tr:hover {
   background: var(--rc-bg, rgba(0, 0, 0, 0.02));
-}
-
-.rc-preview-table tbody tr.row-selected {
-  background: rgba(37, 99, 235, 0.08);
 }
 
 .text-red {

@@ -7,6 +7,30 @@ export interface AiSessionItem {
   title: string
   updatedAt: string
   group: 'today' | 'week' | 'earlier'
+  uuid?: string
+}
+
+export interface BackendChatSession {
+  id: number | string
+  uuid?: string
+  name?: string
+  userId?: number | string | null
+  createTime?: string
+  updateTime?: string
+  delFlag?: string
+}
+
+export interface BackendChatLog {
+  id: number | string
+  sessionId: number | string
+  userId?: number | string | null
+  msg: string
+  modelMsg?: string
+  result?: string
+  status?: string
+  data?: string
+  createTime?: string
+  updateTime?: string
 }
 
 export interface AiAgentOption {
@@ -101,10 +125,225 @@ const EP = {
   clarification: 'ai/chat/clarification',
 } as const
 
-export async function listAiSessions(): Promise<AiSessionItem[]> {
+export function formatSessionGroupAndDate(dateStr?: string | Date): {
+  group: 'today' | 'week' | 'earlier'
+  updatedAt: string
+} {
+  if (!dateStr) {
+    return { group: 'today', updatedAt: '刚刚' }
+  }
+  const date = typeof dateStr === 'string' ? new Date(dateStr.replace(/-/g, '/')) : dateStr
+  if (isNaN(date.getTime())) {
+    return { group: 'today', updatedAt: '刚刚' }
+  }
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const weekStart = todayStart - 6 * 24 * 3600 * 1000
+  const time = date.getTime()
+
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  if (time >= todayStart) {
+    return { group: 'today', updatedAt: `${hh}:${mm}` }
+  } else if (time >= weekStart) {
+    return { group: 'week', updatedAt: `${month}-${day}` }
+  } else {
+    return { group: 'earlier', updatedAt: `${date.getFullYear()}-${month}-${day}` }
+  }
+}
+
+export function formatMessageTime(dateStr?: string | Date): string {
+  if (!dateStr) return '刚刚'
+  const date = typeof dateStr === 'string' ? new Date(dateStr.replace(/-/g, '/')) : dateStr
+  if (isNaN(date.getTime())) return '刚刚'
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  if (date.getTime() >= todayStart) {
+    return `今天 ${hh}:${mm}`
+  }
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${month}-${day} ${hh}:${mm}`
+}
+
+export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[] {
+  const result: ChatMessage[] = []
+  if (!Array.isArray(logs)) return result
+
+  for (const log of logs) {
+    if (!log) continue
+    const createdAt = formatMessageTime(log.createTime)
+
+    // 用户提问消息
+    result.push({
+      id: `m-${log.id}-u`,
+      role: 'user',
+      content: log.msg || '',
+      createdAt,
+    })
+
+    // 智能体回复消息
+    const assistantMsg: ChatMessage = {
+      id: `m-${log.id}-a`,
+      role: 'assistant',
+      content: log.modelMsg || '',
+      createdAt,
+      interrupted: log.status === 'INTERRUPTED',
+    }
+
+    // 解析结构化扩展载荷 (data)
+    if (log.data) {
+      try {
+        const dataObj = typeof log.data === 'string' ? JSON.parse(log.data) : log.data
+        if (dataObj && typeof dataObj === 'object') {
+          if (dataObj.interrupted) {
+            assistantMsg.interrupted = true
+          }
+          if (dataObj.thinking) {
+            const th = dataObj.thinking
+            const text = th.text || ''
+            assistantMsg.thinking = {
+              completed: th.completed ?? (log.status === 'SUCCESS'),
+              durationMs: typeof th.durationMs === 'number' ? th.durationMs : 0,
+              text,
+              interrupted: th.interrupted ?? (log.status === 'INTERRUPTED'),
+              steps: text
+                ? text.split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0)
+                : [],
+            }
+          }
+          if (dataObj.clarification) {
+            assistantMsg.clarification = dataObj.clarification
+          }
+          if (dataObj.sql) {
+            assistantMsg.sql = dataObj.sql
+          }
+        }
+      } catch (err) {
+        console.warn('[convertChatLogsToMessages] 解析 log.data 失败:', err)
+      }
+    }
+
+    // 若未预置 SQL，尝试从 log.result 或 modelMsg 提取
+    if (!assistantMsg.sql) {
+      const sqlCandidate = log.result || log.modelMsg || ''
+      const sqlMatch = sqlCandidate.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i)
+      const cleanSql = (sqlMatch ? sqlMatch[1] : sqlCandidate).trim()
+      if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(cleanSql)) {
+        assistantMsg.sql = {
+          code: cleanSql,
+          execTimeMs: 85,
+          scanRows: 100,
+        }
+      }
+    }
+
+    // 若未有澄清选项，尝试从回答文本提取
+    if (!assistantMsg.clarification && assistantMsg.content) {
+      const parsedClarification = extractClarificationFromText(assistantMsg.content)
+      if (parsedClarification) {
+        assistantMsg.clarification = parsedClarification
+      }
+    }
+
+    // 若未有图表数据，尝试从回答文本表格提取
+    if (!assistantMsg.chartData && assistantMsg.content) {
+      const parsedChartData = extractChartDataFromText(assistantMsg.content)
+      if (parsedChartData) {
+        assistantMsg.chartData = parsedChartData
+      }
+    }
+
+    result.push(assistantMsg)
+  }
+
+  return result
+}
+
+export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> {
   try {
-    return await request<AiSessionItem[]>(EP.sessions, {}, { method: 'GET' })
-  } catch {
+    const res = await request<BackendChatSession[] | { data?: BackendChatSession[]; records?: BackendChatSession[] }>(
+      'poc/session/list',
+      userId ? { userId } : undefined,
+      {
+        method: 'GET',
+        httpEndpoint: `${POC_API_PREFIX}/session/list`,
+      },
+    )
+    const list: BackendChatSession[] = Array.isArray(res)
+      ? res
+      : Array.isArray((res as any)?.data)
+        ? (res as any).data
+        : Array.isArray((res as any)?.records)
+          ? (res as any).records
+          : []
+    return list.map((item) => {
+      const { group, updatedAt } = formatSessionGroupAndDate(item.updateTime || item.createTime)
+      return {
+        id: String(item.id),
+        uuid: item.uuid,
+        title: item.name || '问数会话',
+        updatedAt,
+        group,
+      }
+    })
+  } catch (err) {
+    console.warn('[listAiSessions] 获取后端会话列表失败，尝试旧接口或返回空:', err)
+    try {
+      return await request<AiSessionItem[]>(EP.sessions, {}, { method: 'GET' })
+    } catch {
+      return []
+    }
+  }
+}
+
+export async function deleteAiSession(sessionId: string | number): Promise<boolean> {
+  try {
+    await request<unknown>(
+      'poc/session/stop',
+      undefined,
+      {
+        method: 'POST',
+        httpEndpoint: `${POC_API_PREFIX}/session/stop`,
+        query: { id: String(sessionId) },
+      },
+    )
+    return true
+  } catch (err) {
+    console.warn('[deleteAiSession] 删除会话失败:', err)
+    return false
+  }
+}
+
+export async function getAiChatHistory(sessionId: string | number): Promise<ChatMessage[]> {
+  try {
+    const res = await request<BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[] }>(
+      'poc/chat-log/history',
+      {
+        sessionId: String(sessionId),
+        pageNo: 1,
+        pageSize: 100,
+      },
+      {
+        method: 'POST',
+        httpEndpoint: `${POC_API_PREFIX}/chat-log/history`,
+      },
+    )
+    const list: BackendChatLog[] = Array.isArray(res)
+      ? res
+      : Array.isArray((res as any)?.data)
+        ? (res as any).data
+        : Array.isArray((res as any)?.records)
+          ? (res as any).records
+          : []
+    return convertChatLogsToMessages(list)
+  } catch (err) {
+    console.warn('[getAiChatHistory] 获取会话历史记录失败:', err)
     return []
   }
 }
@@ -121,6 +360,8 @@ export async function listAiAgents(): Promise<AiAgentOption[]> {
 export interface AgentChatParams {
   msg: string
   thread_id?: string
+  session_id?: string | number
+  user_id?: string | number
   signal?: AbortSignal
 }
 
@@ -129,6 +370,7 @@ export type AgentChatEvent =
   | { type: 'chunk'; text: string }
   | { type: 'reasoning'; reasoning: string }
   | { type: 'clarification'; clarification: Clarification }
+  | { type: 'session_assigned'; sessionId: string; threadId: string }
   | { type: 'error'; error: string }
   | { type: 'done' }
 
@@ -151,7 +393,9 @@ export function extractClarificationFromText(text: string): Clarification | null
           reason: data.reason || 'AMBIGUOUS',
           question: data.question || '请确认需要分析的表或口径：',
           allowFreeText: data.allowFreeText ?? true,
-          maxSelect: typeof data.maxSelect === 'number' ? data.maxSelect : 5,
+          maxSelect: typeof data.maxSelect === 'number'
+            ? Math.min(data.maxSelect, data.options.length)
+            : Math.min(5, data.options.length),
           options: data.options.map((opt: Record<string, unknown>, idx: number) => ({
             entryTypeId: Number(opt.entryTypeId ?? opt.id ?? idx + 1),
             tableName: String(opt.tableName || opt.name || opt.table || `table_${idx + 1}`),
@@ -199,7 +443,7 @@ export function extractClarificationFromText(text: string): Clarification | null
       reason: 'AMBIGUOUS',
       question,
       allowFreeText: true,
-      maxSelect: Math.max(5, options.length),
+      maxSelect: Math.min(5, options.length),
       options,
     }
   }
@@ -313,7 +557,7 @@ export function extractClarificationFromText(text: string): Clarification | null
         reason: 'TOO_MANY',
         question,
         allowFreeText: true,
-        maxSelect: Math.max(5, tableOptions.length),
+        maxSelect: Math.min(5, tableOptions.length),
         options: tableOptions,
       }
     }
@@ -347,7 +591,7 @@ export function extractClarificationFromText(text: string): Clarification | null
         }
 
         // 提取业务名称 (在括注或破折号之前)
-        let cleanName = dashSplit[0]
+        const cleanName = dashSplit[0]
           .replace(/[(（][^)）]*[)）]/g, '')
           .replace(/[`*]/g, '')
           .trim()
@@ -379,7 +623,7 @@ export function extractClarificationFromText(text: string): Clarification | null
         reason: 'AMBIGUOUS',
         question,
         allowFreeText: true,
-        maxSelect: Math.max(5, options.length),
+        maxSelect: Math.min(5, options.length),
         options,
       }
     }
@@ -741,6 +985,12 @@ export async function streamAgentChat(
   if (params.thread_id) {
     payload.thread_id = params.thread_id
   }
+  if (params.session_id !== undefined && params.session_id !== null && params.session_id !== 'new') {
+    payload.session_id = params.session_id
+  }
+  if (params.user_id !== undefined && params.user_id !== null) {
+    payload.user_id = params.user_id
+  }
   const response = await fetch('/api/poc/chat/agent', {
     method: 'POST',
     credentials: 'include',
@@ -763,6 +1013,16 @@ export async function streamAgentChat(
     const errMsg = `智能体服务请求失败(HTTP ${response.status})${detail ? ': ' + detail : ''}`
     onEvent({ type: 'error', error: errMsg })
     throw new Error(errMsg)
+  }
+
+  const headerSessionId = response.headers?.get ? response.headers.get('X-Session-Id') : null
+  const headerThreadId = response.headers?.get ? response.headers.get('X-Thread-Id') : null
+  if (headerSessionId || headerThreadId) {
+    onEvent({
+      type: 'session_assigned',
+      sessionId: headerSessionId || '',
+      threadId: headerThreadId || '',
+    })
   }
 
   if (!response.body) {
