@@ -245,7 +245,7 @@ export const wordSegmentApi: WordSegmentApi = {
 }
 
 /**
- * 真实后端（124.223.180.186:9093 实测）这两个 /poc/database GET 端点的信封固定带 `count: null`，
+ * 真实后端（124.223.180.186:9999 实测）这两个 /poc/database GET 端点的信封固定带 `count: null`，
  * 而 client.ts 的分页判定是按 key 存在与否（`'count' in envelope`，client.ts:421），不看值，
  * 所以裸数组会被包成 {list,total}。旧页面读的是 res.data，没有这一层，这里统一还原成数组。
  */

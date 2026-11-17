@@ -15,6 +15,7 @@ import {
   listSourceNames,
   listSourceOptions,
   listSourceSummary,
+  loadSourceSummaryStats,
   runMonitorsNow,
   setMonitorsEnabled,
 } from '@/api/monitorCenter'
@@ -49,6 +50,8 @@ vi.mock('@/api/monitorCenter', async (importOriginal) => {
     listSourceNames: vi.fn(),
     // C07 首期聚合：默认「服务端未部署」，测试按需覆盖
     listSourceSummary: vi.fn(),
+    // 统计不 mock 时走真实请求，在 jsdom 里一直挂起，加载态永远收不起来
+    loadSourceSummaryStats: vi.fn(),
     setMonitorsEnabled: vi.fn(),
     runMonitorsNow: vi.fn(),
   }
@@ -199,6 +202,10 @@ beforeEach(() => {
   mockedListSources.mockResolvedValue(directory)
   mockedListNames.mockResolvedValue([])
   mockedSummary.mockResolvedValue({ total: 0, rows: [], unavailable: true })
+  vi.mocked(loadSourceSummaryStats).mockResolvedValue({
+    available: false, totalSources: 0, configuredSources: 0, enabledSources: 0,
+    abnormalSources: 0, uncheckedSources: 0, notConfiguredSources: 0,
+  })
   mockedSetEnabled.mockResolvedValue(undefined)
   mockedRunNow.mockResolvedValue({ viaRunner: 0, viaLegacy: 1, runnerSkipped: 0, runnerRunIds: [] })
   mockedDelete.mockResolvedValue(undefined)
@@ -699,6 +706,80 @@ describe('源行流程关联与执行结论（1113）', () => {
       ...patch,
     }
   }
+
+  // 翻页竞态（2026-11-16）：翻页只重取聚合，不能沿用同一序号——快速翻页时慢的旧页回来不能盖掉新页
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+  type SummaryResult = Awaited<ReturnType<typeof listSourceSummary>>
+  // el-loading 的遮罩在 jsdom 里等不到过渡结束不会移除，直接读页面的加载态
+  const busy = (wrapper: VueWrapper) => {
+    const vm = wrapper.vm as unknown as { loading: boolean, pageLoading: boolean }
+    return vm.loading || vm.pageLoading
+  }
+  const pageOf = (name: string): SummaryResult => ({ total: 90, unavailable: false, rows: [sourceRow({ sourceId: name, sourceName: name })] })
+
+  it('快速翻页：第 2 页慢、第 3 页先回，最终表格停在第 3 页', async () => {
+    mockedSummary.mockResolvedValue(pageOf('第一页源'))
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('第一页源')
+
+    const page2 = deferred<SummaryResult>()
+    const page3 = deferred<SummaryResult>()
+    mockedSummary.mockReturnValueOnce(page2.promise).mockReturnValueOnce(page3.promise)
+    const pager = wrapper.findComponent({ name: 'ElPagination' })
+    pager.vm.$emit('current-change', 2)
+    pager.vm.$emit('current-change', 3)
+    expect(mockedSummary.mock.calls.at(-2)?.[0]).toMatchObject({ page: 2 })
+    expect(mockedSummary.mock.calls.at(-1)?.[0]).toMatchObject({ page: 3 })
+
+    page3.resolve(pageOf('第三页源'))
+    await flushPromises()
+    page2.resolve(pageOf('第二页源'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第三页源')
+    expect(wrapper.text()).not.toContain('第二页源')
+    wrapper.unmount()
+  })
+
+  it('翻页期间表格显示加载态，最新一页回来后收起', async () => {
+    mockedSummary.mockResolvedValue(pageOf('第一页源'))
+    const wrapper = await mountPage()
+    const next = deferred<SummaryResult>()
+    mockedSummary.mockReturnValueOnce(next.promise)
+
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('current-change', 2)
+    await nextTick()
+    expect(busy(wrapper)).toBe(true)
+    expect(wrapper.find('.el-loading-mask').exists()).toBe(true)
+
+    next.resolve(pageOf('第二页源'))
+    await flushPromises()
+    expect(busy(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('第二页源')
+    wrapper.unmount()
+  })
+
+  it('翻页后整体刷新：旧的翻页响应晚回也不能覆盖刷新结果', async () => {
+    mockedSummary.mockResolvedValue(pageOf('第一页源'))
+    const wrapper = await mountPage()
+    const slowPage = deferred<SummaryResult>()
+    mockedSummary.mockReturnValueOnce(slowPage.promise).mockResolvedValueOnce(pageOf('刷新后的源'))
+
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('current-change', 2)
+    await wrapper.find('button[title="保留当前筛选与分页大小重新查询"]').trigger('click')
+    await flushPromises()
+    slowPage.resolve(pageOf('迟到的旧页'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('刷新后的源')
+    expect(wrapper.text()).not.toContain('迟到的旧页')
+    expect(busy(wrapper)).toBe(false)
+    wrapper.unmount()
+  })
 
   it('flowId 缺省时显示「未关联流程」：title 说明只影响触发方式，不影响生成检查', async () => {
     mockedSummary.mockResolvedValue({ total: 1, unavailable: false, rows: [sourceRow({ sourceId: 's1' })] })

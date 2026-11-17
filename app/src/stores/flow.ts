@@ -996,8 +996,8 @@ export const useFlowStore = defineStore('flow', () => {
         if (!ruleCfg || !c.configId) {
           errs.push(`「${c.title}」请先保存表配置`)
         } else {
-          if (!ruleCfg.inputFields?.length) errs.push(`「${c.title}」缺少入参字段`)
-          if (!isMonitorNode(c) && !isDataValidationNode(c) && !ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少出参字段`)
+          if (!ruleCfg.inputFields?.length) errs.push(`「${c.title}」缺少输入字段`)
+          if (!isMonitorNode(c) && !isDataValidationNode(c) && !ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少输出字段`)
           if (!ruleCfg.script?.trim()) errs.push(`「${c.title}」尚未生成规则脚本`)
         }
       } else if (!c.disabled && isDataNode(c) && !c.outputTable) {

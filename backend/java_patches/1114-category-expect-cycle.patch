@@ -1,0 +1,429 @@
+# 业务目录预期更新周期 + 源步骤批量查询（2026-11-16）
+#
+# 对应 1114 源产出监控计划 §4.1 与 §4.2，含两次提交：61479a2、786a622（CNB dev1）。
+#
+# 一、§4.1 业务目录预期更新周期
+#   1. cfg_category 新增 EXPECT_CYCLE_HOURS INT NULL：业务目录（根 -2 下的分类）的预期更新周期，
+#      NULL 表示未配置，前端据此判定「未配置周期」；
+#   2. category/scopeTree 与 category/categoryPaged 返回 expectCycleHours（后者直接返回实体，自动带出）；
+#   3. 新增独立端点 POST /api/v1/category/updateExpectCycle（form 参数 categoryId、expectCycleHours），
+#      只对业务目录生效：沿 parentId 链向上找 -2（遇 0 / -1 / 空停），不依赖 PATH 前缀格式；
+#   4. 参数语义（按 2026-11-16 验收意见收紧）：
+#      - 不传 / 空串 → 报错「expectCycleHours 必填，清空请传 0」，不静默清空；
+#      - 只有显式传 0 才清空（库里写 NULL）；
+#      - 1.5 / abc 返回「预期周期必须是整数小时」，不再是 Spring 类型转换 500；
+#      - categoryId=-2 报「业务目录根节点不能设置预期周期」，-1 等视图目录报「视图目录不能设置预期周期」。
+#      拆独立端点而不用 /update：/update 是 form 绑定 CfgCategory，改分类名/seq 也会走它，
+#      在那里处理周期会导致「改个名字就把周期清掉」。
+#
+# 二、§4.2 源步骤批量查询
+#   5. 新增 POST /api/v1/source/queryStepDetailBatch，body {"sourceIds":[1,2]}，
+#      返回 RspResult.data = { "<sourceId>": StepInfo[] }；未配置流程/源不存在返回空数组；
+#   6. 服务端去重、丢弃空值与 ≤0，单次上限 500（超限报「单次最多查询 500 个源，请分批调用」）；
+#      统计复用 _fillDataCount 的 2 分钟 dataCache，同步串行，前端建议按 100~200 一批；
+#   7. 单源逻辑抽成 buildStepDetails(Source)，queryStepDetail 与批量接口共用，返回结构一致。
+#
+# 合入方式：目标环境 Java 源码（bee-base + bee-config）里 `git apply` 后重新构建 bee-config.jar。
+# 迁移号取 V3.6.8：运行侧已有 Java 迁移 V3_6_4 与 SQL 3.6.5~3.6.7，本地旧源码树的 3.6.4 已撞号。
+# 只把补丁推到前端仓库不会改变运行产物。
+#
+# 186 已构建并部署（2026-11-16，三版 jar）：
+#   - 14:34 首版 120222035，备份 bee-config.jar.bak-expect-20261116-143446；
+#     启动日志 3.6.7 → Migrating 3.6.8 → Successfully applied 1 migration，
+#     information_schema 已见 EXPECT_CYCLE_HOURS int(11) NULL，flyway_schema_history 3.6.8 SUCCESS=1；
+#   - 15:08 参数语义修正版 120222301，备份 bee-config.jar.bak-expect2-20261116-150825；
+#   - 16:54 批量接口版 120223903，备份 bee-config.jar.bak-expect3-*；Flyway 校验 58 条、schema 3.6.8。
+# 回滚：`cp -p <备份> /data/app/backend/bee-config.jar` 后 `bash /tmp/restart_be_expect.sh`；
+# 注意 186 的 /tmp/password%0052etry%0043ache.data 属主是 root，重启脚本必须带
+# `-Djava.io.tmpdir=/data/app/backend/tmp`，否则旧 restart_be.sh 会因权限启动失败。
+#
+# 遗留说明：CfgCategoryMapper 是 MBG 风格遗留 mapper，本次按计划继续用专用 XML 语句
+# （AGENTS.md 要求新代码走 MyBatis-Plus，属例外，迁移时再统一）。
+#
+# 鉴权：/api/v1/**/update* 已在 ShiroConfiguration 中要求 roles[admin]，updateExpectCycle 天然受控；
+# 批量查询为只读接口，与 queryStepDetail 同为登录态可见。
+# 前端需同时把 category/updateExpectCycle 登记到 api/endpoints.ts（danger）与
+# api/client.ts 的 PRODUCTION_CREATE_ENDPOINTS，否则 217 上会被写保护拦下。
+#
+diff --git a/bee-base/src/main/java/com/vanv/bee/bean/CfgCategory.java b/bee-base/src/main/java/com/vanv/bee/bean/CfgCategory.java
+index 0ae779c..751e234 100644
+--- a/bee-base/src/main/java/com/vanv/bee/bean/CfgCategory.java
++++ b/bee-base/src/main/java/com/vanv/bee/bean/CfgCategory.java
+@@ -37,6 +37,9 @@ public class CfgCategory {
+ 
+     private Long rootViewId;
+ 
++    /** 预期更新周期（小时），NULL=未配置；见 category/updateExpectCycle */
++    private Integer expectCycleHours;
++
+     public Long getRootViewId() {
+         return rootViewId;
+     }
+@@ -172,4 +175,18 @@ public class CfgCategory {
+     public void setConfig(String config) {
+         this.config = config == null ? null : config.trim();
+     }
++
++    /**
++     * 预期更新周期（小时），NULL = 未配置。
++     *
++     * <p>只有业务目录（根 -2 子树下）会写这个字段；写入走 category/updateExpectCycle
++     * 的专用 mapper 语句，不走 updateByPrimaryKeySelective（那里 0 会被当成有效值写成 0）。
++     */
++    public Integer getExpectCycleHours() {
++        return expectCycleHours;
++    }
++
++    public void setExpectCycleHours(Integer expectCycleHours) {
++        this.expectCycleHours = expectCycleHours;
++    }
+ }
+diff --git a/bee-base/src/main/java/com/vanv/bee/bean/dto/CategoryScopeNode.java b/bee-base/src/main/java/com/vanv/bee/bean/dto/CategoryScopeNode.java
+index e1b3082..1c0913e 100644
+--- a/bee-base/src/main/java/com/vanv/bee/bean/dto/CategoryScopeNode.java
++++ b/bee-base/src/main/java/com/vanv/bee/bean/dto/CategoryScopeNode.java
+@@ -32,4 +32,7 @@ public class CategoryScopeNode {
+ 
+     /** 是否有子目录（前端据此决定是否画展开箭头） */
+     private boolean hasChildren;
++
++    /** cfg_category.EXPECT_CYCLE_HOURS：预期更新周期（小时），null=未配置；仅业务目录有值 */
++    private Integer expectCycleHours;
+ }
+diff --git a/bee-base/src/main/java/com/vanv/bee/bean/dto/SourceStepDetailReq.java b/bee-base/src/main/java/com/vanv/bee/bean/dto/SourceStepDetailReq.java
+new file mode 100644
+index 0000000..cc76e17
+--- /dev/null
++++ b/bee-base/src/main/java/com/vanv/bee/bean/dto/SourceStepDetailReq.java
+@@ -0,0 +1,18 @@
++package com.vanv.bee.bean.dto;
++
++import lombok.Data;
++
++import java.util.List;
++
++/**
++ * 批量查询源步骤详情（含各输出表统计）的请求体。
++ *
++ * <p>用于「源产出监控」全目录计数：一次传一批 sourceId，服务端复用 queryStepDetail
++ * 的 2 分钟统计缓存，避免前端按源逐个发请求。
++ */
++@Data
++public class SourceStepDetailReq {
++
++    /** 源 ID 列表；服务端会去重、丢弃空值，单次上限见 Controller 常量 */
++    private List<Long> sourceIds;
++}
+\ No newline at end of file
+diff --git a/bee-base/src/main/java/com/vanv/bee/dao/mapper/CfgCategoryMapper.java b/bee-base/src/main/java/com/vanv/bee/dao/mapper/CfgCategoryMapper.java
+index 168abb6..66e0d44 100644
+--- a/bee-base/src/main/java/com/vanv/bee/dao/mapper/CfgCategoryMapper.java
++++ b/bee-base/src/main/java/com/vanv/bee/dao/mapper/CfgCategoryMapper.java
+@@ -3,6 +3,7 @@ package com.vanv.bee.dao.mapper;
+ import com.vanv.bee.bean.CfgCategory;
+ import com.vanv.bee.bean.CfgCategoryExample;
+ import org.apache.ibatis.annotations.Mapper;
++import org.apache.ibatis.annotations.Param;
+ 
+ import java.util.List;
+ 
+@@ -27,4 +28,12 @@ public interface CfgCategoryMapper {
+     int updateByPrimaryKey(CfgCategory record);
+ 
+     int genNextCategoryId();
++
++    /**
++     * 只更新预期更新周期；hours == null 时显式写 NULL（清空）。
++     *
++     * <p>不能用 updateByPrimaryKeySelective 代替：它只跳过 null，传 0 会真写成 0，
++     * 而 0 在前端语义里是「清空」。
++     */
++    int updateExpectCycleHours(@Param("categoryId") Integer categoryId, @Param("hours") Integer hours);
+ }
+diff --git a/bee-base/src/main/java/com/vanv/bee/service/CategoryService.java b/bee-base/src/main/java/com/vanv/bee/service/CategoryService.java
+index 999866c..97bebf3 100644
+--- a/bee-base/src/main/java/com/vanv/bee/service/CategoryService.java
++++ b/bee-base/src/main/java/com/vanv/bee/service/CategoryService.java
+@@ -80,6 +80,18 @@ public class CategoryService {
+         return categoryMapper.updateByPrimaryKeySelective(category);
+     }
+ 
++    /**
++     * 设置业务目录的预期更新周期（小时）；hours == null 表示清空。
++     *
++     * <p>不能复用 {@link #updateCateory(CfgCategory)}：那是 selective update，只跳过 null，
++     * 传 0 会真写成 0；而「0 = 清空」是前端约定，所以走专用语句显式 SET NULL。
++     * {@code @CacheEvict} 的 SpEL 按形参名取值，形参名改成 hours2/category 之类会运行时报错。
++     */
++    @CacheEvict(value = "category", key = "'cate:' + #categoryId")
++    public int updateExpectCycleHours(Integer categoryId, Integer hours) {
++        return categoryMapper.updateExpectCycleHours(categoryId, hours);
++    }
++
+ 
+     public int addCategory(CfgCategory category) {
+         category.setCreateDt(new Date());
+@@ -149,6 +161,7 @@ public class CategoryService {
+             node.setParentId(c.getParentId());
+             node.setLevel(c.getLevel());
+             node.setDirectCount(direct.getOrDefault(c.getCategoryId(), 0));
++            node.setExpectCycleHours(c.getExpectCycleHours());
+             byId.put(c.getCategoryId(), node);
+             if (c.getParentId() != null && c.getParentId() != 0) {
+                 childIds.computeIfAbsent(c.getParentId(), k -> new ArrayList<>()).add(c.getCategoryId());
+diff --git a/bee-base/src/main/resources/mybatis/mapper/CfgCategoryMapper.xml b/bee-base/src/main/resources/mybatis/mapper/CfgCategoryMapper.xml
+index 746d712..3c82a1f 100644
+--- a/bee-base/src/main/resources/mybatis/mapper/CfgCategoryMapper.xml
++++ b/bee-base/src/main/resources/mybatis/mapper/CfgCategoryMapper.xml
+@@ -17,6 +17,7 @@
+     <result column="SEQ" property="seq" jdbcType="INTEGER" />
+     <result column="ENTRY_TYPE_ID" property="entryTypeId" jdbcType="INTEGER" />
+     <result column="ROOT_VIEW_ID" property="rootViewId" jdbcType="BIGINT" />
++    <result column="EXPECT_CYCLE_HOURS" property="expectCycleHours" jdbcType="INTEGER" />
+   </resultMap>
+   <resultMap id="ResultMapWithBLOBs" type="com.vanv.bee.bean.CfgCategory" extends="BaseResultMap" >
+     <result column="CONFIG" property="config" jdbcType="LONGVARCHAR" />
+@@ -52,7 +53,7 @@
+   </sql>
+   <sql id="Base_Column_List" >
+     CATEGORY_ID, STATE, UPDATE_DT, CREATE_DT, CATEGORY_NAME, PARENT_ID, PATH, LEVEL,
+-    OWNER, GROUP_ID, IS_DELETE, REMARK, SEQ, ENTRY_TYPE_ID, ROOT_VIEW_ID
++    OWNER, GROUP_ID, IS_DELETE, REMARK, SEQ, ENTRY_TYPE_ID, ROOT_VIEW_ID, EXPECT_CYCLE_HOURS
+   </sql>
+   <sql id="Blob_Column_List" >
+     CONFIG
+@@ -173,6 +174,9 @@
+       <if test="rootViewId != null" >
+         ROOT_VIEW_ID,
+       </if>
++      <if test="expectCycleHours != null" >
++        EXPECT_CYCLE_HOURS,
++      </if>
+       <if test="config != null" >
+         CONFIG,
+       </if>
+@@ -223,6 +227,9 @@
+       <if test="rootViewId != null" >
+         #{rootViewId,jdbcType=BIGINT},
+       </if>
++      <if test="expectCycleHours != null" >
++        #{expectCycleHours,jdbcType=INTEGER},
++      </if>
+       <if test="config != null" >
+         #{config,jdbcType=LONGVARCHAR},
+       </if>
+@@ -264,6 +271,9 @@
+       <if test="remark != null" >
+         REMARK = #{remark,jdbcType=VARCHAR},
+       </if>
++      <if test="expectCycleHours != null" >
++        EXPECT_CYCLE_HOURS = #{expectCycleHours,jdbcType=INTEGER},
++      </if>
+       <if test="seq != null" >
+         SEQ = #{seq,jdbcType=INTEGER},
+       </if>
+@@ -316,4 +326,14 @@
+       ROOT_VIEW_ID = #{rootViewId,jdbcType=BIGINT}
+     where CATEGORY_ID = #{categoryId,jdbcType=INTEGER}
+   </update>
++  <!--
++    只更新预期更新周期。hours == null 时显式写 NULL：updateByPrimaryKeySelective 会跳过 null，
++    而前端「清空」传的是 0，选择性更新会把 0 写进库里，所以这里单独一条语句。
++  -->
++  <update id="updateExpectCycleHours" >
++    update cfg_category
++    set EXPECT_CYCLE_HOURS = #{hours,jdbcType=INTEGER},
++        UPDATE_DT = now()
++    where CATEGORY_ID = #{categoryId,jdbcType=INTEGER}
++  </update>
+ </mapper>
+diff --git a/bee-config/src/main/java/com/vanv/bee/controller/CategoryController.java b/bee-config/src/main/java/com/vanv/bee/controller/CategoryController.java
+index 75751be..46de701 100644
+--- a/bee-config/src/main/java/com/vanv/bee/controller/CategoryController.java
++++ b/bee-config/src/main/java/com/vanv/bee/controller/CategoryController.java
+@@ -248,6 +248,97 @@ public class CategoryController {
+         return RspResult.getSuccessResult();
+     }
+ 
++    /** 预期更新周期的上限：366 天，防止把「小时」当「天」填出天文数字 */
++    private static final int MAX_EXPECT_CYCLE_HOURS = 24 * 366;
++
++    /** 业务目录根（cfg_category 里「业务目录」这棵树的根） */
++    private static final int BIZ_ROOT_ID = -2;
++
++    /** 「我的视图」根，挂在业务目录下面也不允许设周期 */
++    private static final int VIEW_ROOT_ID = -1;
++
++    /**
++     * 设置业务目录的预期更新周期（小时）；显式传 0 = 清空。
++     *
++     * <p>必须是独立端点、不能塞进 /update：上面那个是 form 绑定（CfgCategory 参数），
++     * 没传的字段一律是 null，无法区分「没传」和「传 0」——而改分类名、调 seq 都会走 /update，
++     * 一旦在那里处理周期，改个名字就会把周期清掉。
++     *
++     * <p>参数用 String 接收再手工解析，图两件事：① 「没传 / 空串」能与「传 0」区分开，
++     * 缺参直接报错而不是悄悄清空；② 1.5、abc 这类输入返回业务提示，不落到 Spring 类型转换的 500。
++     */
++    @RequestMapping(value = "/updateExpectCycle", method = RequestMethod.POST)
++    @ResponseBody
++    public RspResult updateExpectCycle(
++            @RequestParam(value = "categoryId", required = false) Integer categoryId,
++            @RequestParam(value = "expectCycleHours", required = false) String expectCycleHours) {
++        if (categoryId == null || categoryId == 0) {
++            return RspResult.getFailtResult("categoryId 不能为空");
++        }
++        if (categoryId == BIZ_ROOT_ID) {
++            return RspResult.getFailtResult("业务目录根节点不能设置预期周期，请在具体目录上设置");
++        }
++        if (categoryId < 0) {
++            return RspResult.getFailtResult("视图目录不能设置预期周期");
++        }
++        // 必填：不传或空串都按参数错误处理，避免调用方漏参数时把已有周期悄悄清掉；清空必须显式传 0
++        if (expectCycleHours == null || expectCycleHours.trim().isEmpty()) {
++            return RspResult.getFailtResult("expectCycleHours 必填，清空请传 0");
++        }
++        int hours;
++        try {
++            hours = Integer.parseInt(expectCycleHours.trim());
++        } catch (NumberFormatException e) {
++            return RspResult.getFailtResult("预期周期必须是整数小时");
++        }
++        if (hours < 0) {
++            return RspResult.getFailtResult("预期周期不能为负数");
++        }
++        if (hours > MAX_EXPECT_CYCLE_HOURS) {
++            return RspResult.getFailtResult("预期周期不能超过 " + MAX_EXPECT_CYCLE_HOURS + " 小时");
++        }
++        CfgCategory category = categoryService.queryCategoryById(categoryId);
++        if (category == null || category.getIsDelete() == null
++                || category.getIsDelete() != DeleteEnum.ENABLE.val()) {
++            return RspResult.getFailtResult("目录不存在或已删除");
++        }
++        if (!isBizCategory(category)) {
++            return RspResult.getFailtResult("只有业务目录（根 -2 下）可以设置预期周期");
++        }
++        // 只有显式 0 才清空；库里只存 NULL，避免「0 小时」参与停更判定
++        Integer stored = hours == 0 ? null : hours;
++        log.info("updateExpectCycle: categoryId={}, hours={}", categoryId, stored);
++        categoryService.updateExpectCycleHours(categoryId, stored);
++        return RspResult.getSuccessResult();
++    }
++
++    /**
++     * 是否是「业务目录根 -2」子树下的目录。
++     *
++     * <p>按 parentId 链向上找 -2；遇到 0 / -1（视图根）立即判否，防止视图目录挂到业务目录下被误判。
++     * 不用 PATH 前缀判定：存量 PATH 格式不一致（-2 是 "0,"，孙级是 "0,9006333,9006442," 不带 -2）。
++     */
++    private boolean isBizCategory(CfgCategory category) {
++        Integer id = category.getCategoryId();
++        if (id != null && id == BIZ_ROOT_ID) {
++            // 根本身不是可设置周期的目录
++            return false;
++        }
++        Set<Integer> visited = new HashSet<>();
++        CfgCategory cur = category;
++        while (cur != null && cur.getCategoryId() != null && visited.add(cur.getCategoryId())) {
++            Integer parentId = cur.getParentId();
++            if (parentId == null || parentId == 0 || parentId == VIEW_ROOT_ID) {
++                return false;
++            }
++            if (parentId == BIZ_ROOT_ID) {
++                return true;
++            }
++            cur = categoryService.queryCategoryById(parentId);
++        }
++        return false;
++    }
++
+     @RequestMapping(value = "/listSources", method = RequestMethod.GET)
+     @ResponseBody
+     public RspResult listSources(@RequestParam("categoryId") Integer categoryId) {
+diff --git a/bee-config/src/main/java/com/vanv/bee/controller/InfoSourceController.java b/bee-config/src/main/java/com/vanv/bee/controller/InfoSourceController.java
+index d4d29bf..9882ae2 100644
+--- a/bee-config/src/main/java/com/vanv/bee/controller/InfoSourceController.java
++++ b/bee-config/src/main/java/com/vanv/bee/controller/InfoSourceController.java
+@@ -182,6 +182,59 @@ public class InfoSourceController {
+             // 展示口径仅按 FLOW_ID：源不存在或无流程归属时无步骤可展示
+             return result;
+         }
++        List<StepInfo> ret = buildStepDetails(source);
++        result.setCode(0);
++        result.setCount(ret.size());
++        result.setData(ret);
++        return result;
++    }
++
++    /**
++     * 批量查询多个源的步骤详情（源产出监控全目录计数用）。
++     *
++     * <p>每个源的结果与 {@link #queryStepDetail(Long)} 一致；统计仍走 {@link #_fillDataCount} 的
++     * 2 分钟 dataCache，所以同一批里重复源、以及与单源接口的交叉调用都能命中缓存。
++     * 请求是同步串行的：500 源 × 每源若干输出表，首次冷启动会偏慢，前端按 100~200 一批分批调用即可。
++     */
++    @RequestMapping(value = {"/queryStepDetailBatch"}, method = RequestMethod.POST)
++    @ResponseBody
++    public RspResult queryStepDetailBatch(@RequestBody SourceStepDetailReq req) {
++        List<Long> ids = req == null ? null : req.getSourceIds();
++        if (ids == null || ids.isEmpty()) {
++            return RspResult.getFailtResult("sourceIds 不能为空");
++        }
++        Set<Long> uniq = new LinkedHashSet<>();
++        for (Long id : ids) {
++            if (id != null && id > 0) {
++                uniq.add(id);
++            }
++        }
++        if (uniq.isEmpty()) {
++            return RspResult.getFailtResult("sourceIds 不能为空");
++        }
++        if (uniq.size() > MAX_BATCH_SOURCES) {
++            return RspResult.getFailtResult("单次最多查询 " + MAX_BATCH_SOURCES + " 个源，请分批调用");
++        }
++        Map<String, List<StepInfo>> data = new LinkedHashMap<>();
++        for (Long id : uniq) {
++            Source source = sourceCache.getFromDb(id);
++            List<StepInfo> steps = (source == null || source.getDefaultFlowId() == null)
++                    ? new ArrayList<>() : buildStepDetails(source);
++            data.put(String.valueOf(id), steps);
++        }
++        return RspResult.getSuccessResult().setData(data);
++    }
++
++    /** 单次批量查询的源数量上限（前端分批调用，避免一次请求把线程占满） */
++    private static final int MAX_BATCH_SOURCES = 500;
++
++    /**
++     * 按源拼装步骤详情（含输出表统计）；queryStepDetail 与批量接口共用。
++     *
++     * <p>调用方需保证 source 非空且 defaultFlowId 非空。
++     */
++    private List<StepInfo> buildStepDetails(Source source) {
++        Long sourceId = source.getSourceId();
+         // 展示口径：仅按 FLOW_ID 返回流程定义内的步骤（含真实 ROOT），同流程所有源一致；
+         // 不按 cs_item_config.SOURCE_ID 归属过滤。执行候选仍走 queryItemConfigBySource（未改动）。
+         List<ItemConfig> list = itemConfigService.getSteps(source.getDefaultFlowId());
+@@ -230,10 +283,7 @@ public class InfoSourceController {
+             ret.add(stepInfo);
+         }
+         ret.sort(Comparator.comparing(StepInfo::getStepId));
+-        result.setCode(0);
+-        result.setCount(ret.size());
+-        result.setData(ret);
+-        return result;
++        return ret;
+     }
+ 
+     // 补充统计数量
+diff --git a/bee-config/src/main/resources/db/migration/V3.6.8__ddl_cfg_category_expect_cycle_hours.sql b/bee-config/src/main/resources/db/migration/V3.6.8__ddl_cfg_category_expect_cycle_hours.sql
+new file mode 100644
+index 0000000..f84e9d5
+--- /dev/null
++++ b/bee-config/src/main/resources/db/migration/V3.6.8__ddl_cfg_category_expect_cycle_hours.sql
+@@ -0,0 +1,5 @@
++-- 业务目录的「预期更新周期」，用于源产出监控判定「详情表停更」。
++-- NULL = 未配置（前端显示「未配置周期」，不参与停更判定）。
++-- 0 不落库：前端清空周期统一传 0，由 category/updateExpectCycle 转成 NULL。
++ALTER TABLE cfg_category
++    ADD COLUMN EXPECT_CYCLE_HOURS INT NULL COMMENT '预期更新周期（小时），NULL=未配置';
+\ No newline at end of file

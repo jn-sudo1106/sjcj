@@ -32,6 +32,29 @@ describe('旧数据同步契约', () => {
     expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/sync-platform/task-config/sink-detail?taskId=4')
   })
 
+  it('任务日志、统计日志与文件同步列表分页请求契约正确', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response([{ id: 10, taskName: '任务A' }], 1))
+      .mockResolvedValueOnce(response([{ id: 20, taskName: '任务B' }], 2))
+      .mockResolvedValueOnce(response([{ id: 30, fileName: 'test.pdf' }], 3))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const logsRes = await syncApi.logs({ pageNo: 1, pageSize: 10, status: '2' })
+    expect(logsRes).toEqual({ list: [{ id: 10, taskName: '任务A' }], total: 1 })
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/sync-platform/task-log/log-page')
+    expect(fetchSpy.mock.calls[0]?.[1].method).toBe('POST')
+
+    const statsRes = await syncApi.statistics({ pageNo: 1, pageSize: 10 })
+    expect(statsRes).toEqual({ list: [{ id: 20, taskName: '任务B' }], total: 2 })
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/sync-platform/task-log/statistic-page')
+
+    const fileLogsRes = await syncApi.fileLogs({ pageNo: 1, pageSize: 10, clientId: 5 })
+    expect(fileLogsRes).toEqual({ list: [{ id: 30, fileName: 'test.pdf' }], total: 3 })
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/sync-platform/task-log/file-record-log-page')
+    expect(fetchSpy.mock.calls[2]?.[1].method).toBe('POST')
+    expect(JSON.parse(fetchSpy.mock.calls[2]?.[1].body)).toEqual({ pageNo: 1, pageSize: 10, clientId: 5 })
+  })
+
   it('非分页列表带 count:null 时仍返回数组（同步服务真实响应形状）', async () => {
     const list = [{ entryTypeId: 900, tableName: 'sense_data.TB_CNEWS', typeName: '新闻' }]
     const fetchSpy = vi.fn().mockImplementation(async () => response(list, null as unknown as number))

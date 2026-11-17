@@ -1,6 +1,7 @@
 import {
   mockSourcePaged,
   mockSourceDetail,
+  mockSourceStepDetail,
   mockSourceSame,
   mockSourceCategories,
   mockCategoryQuery,
@@ -175,6 +176,7 @@ import {
   mockPageConfigChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
+import { mockAiChatAgent, mockAiChatHelpQuestion, mockAiSessionList, mockAiSessionStop, mockAiSessionName, mockAiChatLogHistory } from './aiChat'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
 import {
@@ -216,12 +218,14 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 采集资产 · 源（M2）
   'source/sourcePaged': mockSourcePaged,
   'source/sourceDetail': mockSourceDetail,
+  'source/queryStepDetail': mockSourceStepDetail,
   'source/sourceSame': mockSourceSame,
   'source/categoryTree': mockSourceCategories,
   'category/categoryQuery': mockCategoryQuery,
   'category/add': mockAck,
   'category/addBatch': mockAck,
   'category/update': mockAck,
+  'category/updateExpectCycle': mockAck,
   'category/delete': mockAck,
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,
@@ -593,6 +597,16 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/match-table-config': mockMatchTableConfigSave,
   'poc/match-table-config/status': mockMatchTableConfigChangeStatus,
   'poc/match-table-config/delete': mockMatchTableConfigDelete,
+
+  // 智能问数（对话工作台）：会话列表/删除/改名 + 推荐问句 + 历史分页。
+  // poc/chat/agent 是 SSE 流式端点，streamAgentChat fetch 直连、不走本管线，
+  // handler 只登记契约并显式拒绝误用（见 mock/aiChat.ts）。
+  'poc/chat/agent': mockAiChatAgent,
+  'poc/chat/help/question': mockAiChatHelpQuestion,
+  'poc/session/list': mockAiSessionList,
+  'poc/session/stop': mockAiSessionStop,
+  'poc/session/name': mockAiSessionName,
+  'poc/chat-log/history': mockAiChatLogHistory,
 
   // 表改写管理（1015 迁入「基础配置」，旧「基础配置 → 表改写管理」，端点域 /poc/replace-table-config）：
   // 比选表规则配置还少一个端点 —— 旧域只有 page / 根（新增与编辑同一个）/ status（**query** 传参），

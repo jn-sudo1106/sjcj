@@ -91,7 +91,7 @@ describe('表模板配置 · /api/poc HTTP 契约', () => {
   })
 
   it('entry-list / table-info：真实信封带 count:null，client 会误判成分页结果，接口层要还原回数组', async () => {
-    // 2026-10-15 真实后端（124.223.180.186:9093）实测 {code:0,msg:'请求成功',count:null,data:[...]}，
+    // 2026-10-15 真实后端（124.223.180.186:9999）实测 {code:0,msg:'请求成功',count:null,data:[...]}，
     // normalizeHttpPayload 的判定是 `'count' in envelope`（不看值），裸数组会被包成 {list,total}，
     // 「选择表」下拉因此一个选项都渲染不出来
     const envelope = { code: 0, msg: '请求成功', count: null, data: ENVELOPE_LIST.data }

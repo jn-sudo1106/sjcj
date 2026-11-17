@@ -36,6 +36,8 @@ const props = withDefaults(defineProps<{
   tableNames?: Record<string, string | undefined>
   /** 本次不发后续的节点（0917-06）：半透明 + 角标，一眼看出这次不跑哪些 */
   skipped?: string[]
+  /** 本次仍发送、但忽略进入条件的节点。 */
+  ignoredConditions?: string[]
 }>(), {
   modelValue: '',
   selectable: () => true,
@@ -43,6 +45,7 @@ const props = withDefaults(defineProps<{
   nodeQueues: () => ({}),
   tableNames: () => ({}),
   skipped: () => [],
+  ignoredConditions: () => [],
 })
 const emit = defineEmits<{
   'update:modelValue': [nodeId: string]
@@ -55,6 +58,7 @@ const emit = defineEmits<{
   'node-menu': [payload: { nodeId: string; x: number; y: number }]
 }>()
 const isSkipped = (nodeId: string) => props.skipped.includes(nodeId)
+const isConditionIgnored = (nodeId: string) => !isSkipped(nodeId) && props.ignoredConditions.includes(nodeId)
 function onNodeMenu(ev: MouseEvent, nodeId: string) {
   ev.preventDefault()
   ev.stopPropagation()
@@ -199,7 +203,7 @@ function nodeTitle(node: RailNode): string {
       v-for="node in layout.nodes"
       :key="node.id"
       class="pnr-node"
-      :class="{ active: selectedIds !== undefined ? selectedIds.includes(node.id) : modelValue === node.id, disabled: !selectable(node.id), skipped: isSkipped(node.id) }"
+      :class="{ active: selectedIds !== undefined ? selectedIds.includes(node.id) : modelValue === node.id, disabled: !selectable(node.id), skipped: isSkipped(node.id), 'condition-ignored': isConditionIgnored(node.id) }"
       type="button"
       :role="selectedIds !== undefined ? 'checkbox' : undefined"
       :aria-checked="selectedIds !== undefined ? selectedIds.includes(node.id) : undefined"
@@ -225,6 +229,7 @@ function nodeTitle(node: RailNode): string {
       <span v-if="selectedIds === undefined && node.id === finalNodeId" class="pnr-node-final">最终结果</span>
       <!-- 本次不发：角标而不是把节点整个灰掉——灰掉会跟「已停用」（落库的那个）看着一样 -->
       <span v-if="isSkipped(node.id)" class="pnr-node-skip" data-testid="rail-node-skip-badge" title="本次不发后续任务（右键可恢复）">本次不发</span>
+      <span v-else-if="isConditionIgnored(node.id)" class="pnr-node-ignore" data-testid="rail-node-ignore-badge" title="仅本次忽略进入条件，节点仍会收到任务">忽略条件</span>
     </button>
   </div>
 </template>
@@ -246,6 +251,8 @@ function nodeTitle(node: RailNode): string {
 .pnr-node.skipped { border-style: dashed; border-color: #f59e0b; background: #fffbeb; }
 .pnr-node.skipped .pnr-node-text { opacity: .6; }
 .pnr-node-skip { position: absolute; top: -8px; left: 8px; padding: 0 5px; border-radius: 4px; background: #f59e0b; color: #fff; font-size: 10px; line-height: 15px; white-space: nowrap; }
+.pnr-node.condition-ignored { border-color: var(--rc-primary, #2563eb); background: var(--rc-primary-bg, #eff6ff); box-shadow: inset 3px 0 0 var(--rc-primary, #2563eb); }
+.pnr-node-ignore { position: absolute; bottom: -7px; right: 7px; padding: 0 5px; border-radius: 4px; background: var(--rc-primary, #2563eb); color: #fff; font-size: 10px; line-height: 15px; white-space: nowrap; }
 .pnr-node-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 28px; width: auto; max-width: 58px; padding: 0 4px; box-sizing: border-box; height: 28px; border-radius: 7px; background: #eff6ff; color: #2563eb; font-size: 11px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pnr-node-text { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; line-height: 1.25; justify-content: center; }
 .pnr-node b, .pnr-node small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

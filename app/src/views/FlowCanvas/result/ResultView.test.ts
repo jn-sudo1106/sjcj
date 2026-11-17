@@ -430,6 +430,112 @@ describe('ResultView', () => {
     })
   })
 
+  it('测试脚本传参去掉字段编码的「-K列号」后缀，与生成时的入参名一致', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202611/1794896520582.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', inputFields: ['INDICATOR-K1'], outputFields: [] },
+    })
+    const row = {
+      dataId: 'row-1', sourceId: current.sourceId, title: '测试行', summary: '',
+      acceptState: 'pending' as const, values: { K1: '海外净资产', K2: '2025年底' },
+    }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      tableId: 'T2',
+      fields: [
+        { prop: 'INDICATOR-K1', type: 'string', desc: '指标名称', columnName: 'K1' },
+        { prop: 'PERIOD-K2', type: 'string', desc: '时间', columnName: 'K2' },
+      ],
+    })
+    const execSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, outputs: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', row)
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(execSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202611/1794896520582.py',
+      params: { INDICATOR: '海外净资产' },
+      timeout: 300,
+    })
+  })
+
+  it('未打开表配置（ruleCfg.inputFields 为空）时按步骤 contextMap 的列取测试入参', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202611/1794896520582.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', inputFields: [], outputFields: [] },
+      taskCfg: { queue: '', urlRule: '', contextMap: ['K1'] },
+    })
+    const row = {
+      dataId: 'row-1', sourceId: current.sourceId, title: '测试行', summary: '',
+      acceptState: 'pending' as const, values: { K1: '海外净资产', K2: '2025年底' },
+    }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      tableId: 'T2',
+      fields: [
+        { prop: 'INDICATOR-K1', type: 'string', desc: '指标名称', columnName: 'K1' },
+        { prop: 'PERIOD-K2', type: 'string', desc: '时间', columnName: 'K2' },
+      ],
+    })
+    const execSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, outputs: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', row)
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(execSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202611/1794896520582.py',
+      params: { INDICATOR: '海外净资产' },
+      timeout: 300,
+    })
+  })
+
+  it('带 scriptPath 打开输入≠输出的规则节点时默认看输入表', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202611/1794896520582.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      outputTable: 'T3',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', outputTableId: 'T3', inputFields: ['code'], outputFields: ['result'] },
+    })
+    const rowSpy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, tableId: 'T2', fields: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await flushPromises()
+
+    expect(rowSpy.mock.calls.at(-1)?.[0]).toMatchObject({ tableId: 'T2' })
+  })
+
   it('表结构接口异常时不阻断数据查询，并提示已回退到演示数据', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
@@ -1193,10 +1299,14 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('已选 0 条')
+    expect(wrapper.text()).toContain('请先勾选表格数据')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeDefined()
 
     await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
     await flushPromises()
+    expect(wrapper.text()).toContain('已选 2 条')
+    expect(wrapper.text()).not.toContain('请先勾选表格数据')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 
@@ -2760,7 +2870,7 @@ describe('ResultView · 本次发送范围契约', () => {
       { stepId: '41758', configId: '220', name: '摘要', condition: '' },
     ],
   } as unknown as ResolvedNextStepConfig
-  async function setupRange() {
+  async function setupRange(info = downstream) {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -2770,9 +2880,10 @@ describe('ResultView · 本次发送范围契约', () => {
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [{ dataId: 'd1', sourceId: current.sourceId, title: '', summary: '', acceptState: 'pending' }] })
-    vi.mocked(fetchNextStepConfig).mockResolvedValue(downstream)
+    vi.mocked(fetchNextStepConfig).mockResolvedValue(info)
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     const send = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交' })
+    send.mockClear()
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'first')
@@ -2786,6 +2897,74 @@ describe('ResultView · 本次发送范围契约', () => {
     await flushPromises()
     return wrapper.get('[data-testid="rail-node-menu"]')
   }
+  it('发送范围支持多个节点忽略条件，正常节点保持条件判断，成功后清空覆盖', async () => {
+    const { wrapper, send } = await setupRange({ ...downstream, downstreamSteps: [
+      ...downstream.downstreamSteps,
+      { stepId: '41759', configId: '230', name: '分类', condition: 'K2 != nil' } as Step,
+    ] })
+    expect(wrapper.get('[data-testid="send-range-ignore-41758"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="send-range-ignore-41756"]').setValue(true)
+    expect(wrapper.get('[data-testid="send-range-ignore-all"]').element).toHaveProperty('indeterminate', true)
+    await wrapper.get('[data-testid="send-range-ignore-all"]').setValue(true)
+    expect(wrapper.get('[data-testid="send-range-ignore-41759"]').element).toHaveProperty('checked', true)
+    expect(wrapper.get('[data-testid="data-send-settings"]').text()).toContain('忽略条件 2')
+    expect(wrapper.findComponent(ProcessNodeRail).props('ignoredConditions')).toEqual(['mid', '41759'])
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(send.mock.calls[0][3]).toMatchObject({ itemConfig: '41756,41759', skipCond: 1 })
+    expect(send.mock.calls[1][3]).toMatchObject({ itemConfig: '41758' })
+    expect(send.mock.calls[1][3]).not.toHaveProperty('skipCond')
+    expect(wrapper.findComponent(ProcessNodeRail).props('ignoredConditions')).toEqual([])
+    wrapper.unmount()
+  })
+  it('搜索后批量忽略只影响匹配的已选节点，取消发送清除覆盖，重新勾选不继承', async () => {
+    const { wrapper, send } = await setupRange({ ...downstream, downstreamSteps: downstream.downstreamSteps.map(s => ({ ...s, condition: 'K1 != nil' })) })
+    await wrapper.get('input[aria-label="搜索发送节点"]').setValue('41756')
+    await wrapper.get('[data-testid="send-range-ignore-all"]').setValue(true)
+    await wrapper.get('input[aria-label="搜索发送节点"]').setValue('')
+    expect(wrapper.get('[data-testid="send-range-ignore-41758"]').element).toHaveProperty('checked', false)
+    await wrapper.get('[data-testid="send-range-41756"]').setValue(false)
+    expect(wrapper.get('[data-testid="send-range-ignore-41756"]').element).toHaveProperty('checked', false)
+    expect(wrapper.get('[data-testid="send-range-ignore-41756"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="send-range-41756"]').setValue(true)
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.mock.calls[0][3]).not.toHaveProperty('skipCond')
+    wrapper.unmount()
+  })
+  it('流程图多选保留当前数据节点与数据勾选，同步范围、条件覆盖，失败可重试', async () => {
+    const { wrapper, send } = await setupRange()
+    await wrapper.get('[data-testid="send-range-41756"]').setValue(false)
+    await wrapper.get('[data-testid="send-range-rail-select"]').trigger('click')
+    await flushPromises()
+    const rail = wrapper.findComponent(ProcessNodeRail)
+    expect(rail.props('modelValue')).toBe('first')
+    expect(rail.props('selectedIds')).toEqual(['mid2'])
+    expect(rail.props('selectable')!('first')).toBe(false)
+    rail.vm.$emit('update:selectedIds', ['mid', 'mid2'])
+    await flushPromises()
+    expect(rail.props('selectedIds')).toEqual(['mid', 'mid2'])
+    expect(rail.props('modelValue')).toBe('first')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectedIds')).toEqual(['d1'])
+    await wrapper.get('[data-testid="rail-ignore-selected"]').setValue(true)
+    expect(rail.props('ignoredConditions')).toEqual(['mid'])
+    rail.vm.$emit('update:selectedIds', ['mid'])
+    await flushPromises()
+    expect(rail.props('skipped')).toEqual(['mid2'])
+    send.mockRejectedValueOnce(new Error('网络异常'))
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(rail.props('selectedIds')).toEqual(['mid'])
+    expect(rail.props('ignoredConditions')).toEqual(['mid'])
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    expect(send.mock.calls[1][3]).toMatchObject({ itemConfig: '41756', skipCond: 1 })
+    expect(rail.props('selectedIds')).toBeUndefined()
+    expect(rail.props('ignoredConditions')).toEqual([])
+    expect(rail.props('skipped')).toEqual([])
+    wrapper.unmount()
+  })
   it('按步骤 ID 搜索只操作匹配项，关闭重开保持当前发送范围', async () => {
     const { wrapper } = await setupRange()
     await wrapper.get('input[aria-label="搜索发送节点"]').setValue('41756')

@@ -260,3 +260,139 @@ describe('CategoryManager 分类目录', () => {
     }
   })
 })
+
+// 1114 源产出监控一期 C：业务目录预期产出周期
+describe('CategoryManager · 业务目录预期产出周期', () => {
+  const radioStubs = {
+    ElRadioGroup: {
+      name: 'ElRadioGroup',
+      props: ['modelValue'],
+      emits: ['update:modelValue'],
+      setup(props: any, { emit, slots }: any) {
+        return () => h('div', { class: 'radio-group-mock', 'data-value': props.modelValue }, slots.default?.({ pick: (v: string) => emit('update:modelValue', v) }))
+      },
+    },
+    ElRadioButton: {
+      props: ['value'],
+      template: '<button type="button" class="radio-mock" :data-radio="value" @click="$parent.$emit(\'update:modelValue\', value)"><slot /></button>',
+    },
+  }
+  // 原 ElTree 桩只在 setup 时读一次 data（挂载时还是空，就退回固定的两条假节点）；这里每次渲染都读 props.data
+  const ReactiveTree = {
+    name: 'ElTree',
+    props: ['data', 'props'],
+    setup(props: any, { slots }: any) {
+      return () => h('div', { class: 'el-tree-mock' }, (props.data ?? []).map((d: any) =>
+        slots.default?.({ node: { data: d, expanded: false, parent: { level: 0, childNodes: [] } }, data: d })))
+    },
+  }
+  const allStubs = { ...stubs, ...radioStubs, ElTree: ReactiveTree }
+
+  async function mountWith(roots: Record<string, unknown>[]) {
+    vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (pid?: string) => (pid ? [] : roots) as never)
+    const wrapper = mount(CategoryManager, { global: { stubs: allStubs } })
+    await flushPromises()
+    return wrapper
+  }
+
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('只有业务目录有周期列内容和设置入口；系统目录、根 -2 都没有', async () => {
+    const wrapper = await mountWith([
+      { id: '9011553', name: '招投标', parentId: '-2', expectCycleHours: 24 },
+      { id: '9011554', name: '学术研究', parentId: '-2' },
+      { id: '9008989', name: 'ctrip' },
+      { id: '-2', name: '业务分类' },
+    ])
+    expect(wrapper.find('.ca-table-head').text()).toContain('产出周期')
+    expect(wrapper.get('[data-testid="category-cycle-9011553"]').text()).toBe('1 天')
+    expect(wrapper.get('[data-testid="category-cycle-9011554"]').text()).toBe('未设置')
+    expect(wrapper.get('[data-testid="category-cycle-9008989"]').text()).toBe('')
+    expect(wrapper.get('[data-testid="category-cycle--2"]').text()).toBe('')
+    expect(wrapper.find('[data-testid="category-cycle-edit-9011553"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="category-cycle-edit-9008989"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="category-cycle-edit--2"]').exists()).toBe(false)
+  })
+
+  it('自定义 36 小时保存后就地显示；清空传 0；非法小时不发请求', async () => {
+    const save = vi.spyOn(categoryApi, 'updateExpectCycle').mockResolvedValue({ ok: true })
+    const wrapper = await mountWith([{ id: '9011553', name: '招投标', parentId: '-2', expectCycleHours: 24 }])
+    await wrapper.get('[data-testid="category-cycle-edit-9011553"]').trigger('click')
+    expect(wrapper.get('.radio-group-mock').attributes('data-value')).toBe('24')
+
+    await wrapper.get('[data-radio="custom"]').trigger('click')
+    const hoursInput = wrapper.get('[data-testid="category-cycle-hours"]')
+    await hoursInput.setValue('0')
+    await wrapper.get('[data-testid="category-cycle-save"]').trigger('click')
+    expect(save).not.toHaveBeenCalled()
+
+    await hoursInput.setValue('36')
+    await wrapper.get('[data-testid="category-cycle-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenLastCalledWith('9011553', 36)
+    expect(wrapper.get('[data-testid="category-cycle-9011553"]').text()).toBe('36 小时')
+
+    await wrapper.get('[data-testid="category-cycle-edit-9011553"]').trigger('click')
+    expect(wrapper.get('.radio-group-mock').attributes('data-value')).toBe('custom')
+    await wrapper.get('[data-radio="none"]').trigger('click')
+    await wrapper.get('[data-testid="category-cycle-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenLastCalledWith('9011553', 0)
+    expect(wrapper.get('[data-testid="category-cycle-9011553"]').text()).toBe('未设置')
+  })
+
+  it('选预设「7 天」传 168；后端拒绝时提示错误、不改显示', async () => {
+    const save = vi.spyOn(categoryApi, 'updateExpectCycle').mockRejectedValueOnce(new Error('只有业务目录（根 -2 下）可以设置预期周期'))
+    const wrapper = await mountWith([{ id: '9011554', name: '学术研究', parentId: '-2' }])
+    await wrapper.get('[data-testid="category-cycle-edit-9011554"]').trigger('click')
+    expect(wrapper.get('.radio-group-mock').attributes('data-value')).toBe('none')
+    await wrapper.get('[data-radio="168"]').trigger('click')
+    await wrapper.get('[data-testid="category-cycle-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith('9011554', 168)
+    expect(wrapper.get('[data-testid="category-cycle-9011554"]').text()).toBe('未设置')
+    expect(wrapper.find('.el-dialog-mock').exists()).toBe(true)
+  })
+})
+
+// 2026-11-16 用户报：展开「广发」时「业务分类」也被打开。
+// 原因：default-expanded-keys 实时绑定展开集合，el-tree 每次变化都把集合里的节点连同上级重新展开，
+// 收起「业务分类」后残留的「另类数据」key 就把它又顶开了。用真实 el-tree 复现。
+describe('CategoryManager · 展开状态不串（真实 el-tree）', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('收起「业务分类」后展开「广发」，「业务分类」保持收起', async () => {
+    const ElementPlusModule = await import('element-plus')
+    const tree: Record<string, { id: string; name: string; parentId?: string }[]> = {
+      '': [{ id: '-2', name: '业务分类' }, { id: '9008935', name: '广发' }],
+      '-2': [{ id: '9011552', name: '另类数据', parentId: '-2' }],
+      '9011552': [{ id: '9011553', name: '招投标', parentId: '9011552' }],
+      '9008935': [{ id: '9008936', name: '广发子目录', parentId: '9008935' }],
+      '9011553': [],
+      '9008936': [],
+    }
+    vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (pid?: string) => (tree[pid ?? ''] ?? []) as never)
+    const wrapper = mount(CategoryManager, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlusModule.default], stubs: { ElTooltip: { template: '<slot />' }, transition: false } },
+    })
+    await flushPromises()
+
+    const nodeEl = (key: string) => wrapper.get(`.el-tree-node[data-key="${key}"]`)
+    const expand = async (key: string) => {
+      await nodeEl(key).get('.el-tree-node__content').trigger('click')
+      await flushPromises()
+    }
+    await expand('-2')
+    await expand('9011552')
+    expect(nodeEl('-2').classes()).toContain('is-expanded')
+    expect(nodeEl('9011552').classes()).toContain('is-expanded')
+    await expand('-2') // 收起业务分类
+    expect(nodeEl('-2').classes()).not.toContain('is-expanded')
+
+    await expand('9008935') // 展开广发
+    expect(nodeEl('9008935').classes()).toContain('is-expanded')
+    expect(nodeEl('-2').classes()).not.toContain('is-expanded')
+    wrapper.unmount()
+  })
+})

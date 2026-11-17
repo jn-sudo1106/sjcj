@@ -80,13 +80,16 @@ type TabKey = typeof TABS[number]['key']
 
 const NOTIFY_OPTIONS = [
   { value: 'error', label: '仅异常时', hint: '（默认）检查不通过才通知' },
-  { value: 'ok', label: '仅正常时', hint: '恢复或正常时通知' },
+  // 执行器 should_notify：ok = 每次结论正常都建通知事件，没有「异常转正常只发一次」的恢复语义。
+  { value: 'ok', label: '仅正常时', hint: '每次检查通过都通知（不是只在恢复时发一次）' },
   { value: 'all', label: '每次运行', hint: '每次结果都通知，噪音大' },
   { value: 'none', label: '静默', hint: '只记录结果，不发送通知' },
 ] as const
 
 const activeTab = ref<TabKey>('basic')
 const form = reactive<MonitorEditorForm>(emptyForm())
+/** 历史记录可能已勾钉钉：只有这种情况下允许操作该复选框（用于取消），并提示收不到 */
+const dingtalkSelected = computed(() => form.channels.includes('dingtalk'))
 const recordState = ref<MonitorRecordView | null>(props.record ?? null)
 const committedForm = ref<MonitorEditorForm>({ ...emptyForm() })
 const baseline = ref(formSignature(form))
@@ -1530,9 +1533,29 @@ defineExpose({
           <label class="mc-label">通知渠道</label>
           <div class="mc-inline">
             <label class="mc-check"><input v-model="form.channels" type="checkbox" value="mail" data-testid="mc-channel-mail"> 邮件</label>
-            <label class="mc-check"><input v-model="form.channels" type="checkbox" value="dingtalk" data-testid="mc-channel-dingtalk"> 钉钉</label>
+            <!--
+              钉钉暂不支持：AI 检查的执行器只投邮件（monitor_events.MAIL_CHANNELS），规则检查走 Java 时
+              也不按所选渠道分发。勾选只会让人以为能收到，所以新选禁用；历史记录已勾的允许取消。
+            -->
+            <label
+              class="mc-check"
+              :class="{ 'is-disabled': !dingtalkSelected }"
+              title="钉钉通知暂未接入，选了也收不到，请使用邮件"
+            >
+              <input
+                v-model="form.channels"
+                type="checkbox"
+                value="dingtalk"
+                :disabled="!dingtalkSelected"
+                data-testid="mc-channel-dingtalk"
+              >
+              钉钉<span class="mc-faint">（暂不支持）</span>
+            </label>
           </div>
-          <p class="mc-hint">通知将发送至所选渠道。</p>
+          <p v-if="dingtalkSelected" class="mc-notice-warn mc-channel-warn" data-testid="mc-dingtalk-warn">
+            这条记录勾选了钉钉，但钉钉通知暂未接入，不会收到{{ form.channels.includes('mail') ? '钉钉消息，只会发邮件' : '任何通知；请改勾邮件' }}。取消勾选后不能再选回。
+          </p>
+          <p v-else class="mc-hint">目前只支持邮件通知，钉钉暂未接入。</p>
         </div>
 
         <div class="mc-field">
@@ -1552,9 +1575,10 @@ defineExpose({
             <span class="mc-k">通知投递</span>
             <span class="mc-v" data-testid="mc-delivery">未取得回执</span>
           </div>
+          <!-- 执行器 monitor_events.py 还没有 recovery 事件（2026-11-16 核对），不能写成「开启后会通知」。 -->
           <div class="mc-card-row">
             <span class="mc-k">恢复通知</span>
-            <span class="mc-v">开启后，异常转正常会单独通知；执行失败不算恢复</span>
+            <span class="mc-v" data-testid="mc-recovery">暂不支持：异常转正常时不会单独发「已恢复」通知</span>
           </div>
         </div>
         <p class="mc-hint">通知失败只影响投递，不改变数据结论与执行状态；测试脚本不会发送业务通知。</p>
@@ -1702,6 +1726,8 @@ defineExpose({
 .mc-error { margin: 0; padding: 8px 0; color: var(--rc-error); overflow-wrap: anywhere; }
 .mc-radio-list { display: flex; flex-direction: column; gap: 12px; }
 .mc-radio, .mc-check { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
+.mc-check.is-disabled { cursor: not-allowed; color: var(--rc-muted); }
+.mc-channel-warn { margin: 6px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; }
 .mc-radio span { display: flex; gap: 6px; flex-wrap: wrap; }
 .mc-quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mc-btn, .mc-mini { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-surface); color: var(--rc-text-2); font: inherit; cursor: pointer; white-space: nowrap; }

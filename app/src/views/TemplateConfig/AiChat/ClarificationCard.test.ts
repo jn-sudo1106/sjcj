@@ -89,4 +89,36 @@ describe('多选表澄清卡片 · ClarificationCard', () => {
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="clarification-confirm"]').exists()).toBe(false)
   })
+
+  it('当候选表只有 3 张而配置上限为 5 时，显示与限制收敛为实际的最多 3 张', async () => {
+    const wrapper = mountCard({
+      clarification: {
+        kind: 'table_choice',
+        reason: 'TOO_MANY',
+        question: '请勾选需要分析的数据源或表（支持多选，勾选后点击下方确认即可发送）：',
+        allowFreeText: true,
+        maxSelect: 5,
+        options: [
+          { entryTypeId: 1, tableName: 'sense_data.t1', typeName: '表1' },
+          { entryTypeId: 2, tableName: 'sense_data.t2', typeName: '表2' },
+          { entryTypeId: 3, tableName: 'sense_data.t3', typeName: '表3' },
+        ],
+      },
+    })
+
+    // 头部显示收敛为最多 3 张，而不是死板显示 5 张
+    expect(wrapper.find('.cc-hint').text()).toBe('最多 3 张 · 已选 0')
+    expect(wrapper.find('.cc-selected').text()).toBe('已选 0/3')
+
+    // 模板标题不重复输出套娃冗余文本
+    expect(wrapper.findAll('.cc-question')).toHaveLength(0)
+
+    // 勾选全部 3 项后达到上限
+    const options = wrapper.findAll('[data-testid^="clarification-option-"]')
+    await options[0].trigger('click')
+    await options[1].trigger('click')
+    await options[2].trigger('click')
+    expect(wrapper.findAll('.cc-option.selected')).toHaveLength(3)
+    expect(wrapper.find('.cc-selected').text()).toContain('已选 3/3')
+  })
 })

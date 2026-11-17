@@ -15,6 +15,7 @@ import type {
 } from '@/api/types/monitorCenter'
 import {
   MonitorQueryLimitError,
+  MonitorRunUncertainError,
   listMonitors,
   listMonitorsOfSource,
   listSourceSummary,
@@ -111,6 +112,14 @@ const summaryStats = ref<SourceSummaryStats | null>(null)
 const loadError = ref('')
 const directoryError = ref('')
 let refreshToken = 0
+/**
+ * 源聚合（C07）单独的请求序号：翻页 / 改分页大小只重取聚合，不能递增 refreshToken——那会把同一轮
+ * 整体刷新里还在路上的记录/目录结果作废。聚合结果同时核对两个序号：被更新的整体刷新或更新的翻页
+ * 取代的旧响应都丢弃，避免快速翻页时慢的旧页回来盖掉新页（2026-11-16）。
+ */
+let summaryToken = 0
+/** 翻页时的加载态（整体刷新仍用 loading） */
+const pageLoading = ref(false)
 
 const draft = reactive<SourceListQuery>({
   sourceId: props.sourceId,
@@ -415,6 +424,17 @@ async function loadSourceNames(request: number): Promise<void> {
  */
 async function loadSummary(request: number): Promise<void> {
   if (scopeKind.value === 'source') return
+  const mine = ++summaryToken
+  try {
+    await loadSummaryOnce(request, mine)
+  } finally {
+    // 只有最新一次聚合请求结束才收起翻页加载态（整体刷新后发起的也算最新）
+    if (mine === summaryToken) pageLoading.value = false
+  }
+}
+
+async function loadSummaryOnce(request: number, mine: number): Promise<void> {
+  const stale = () => request !== refreshToken || mine !== summaryToken
   const result = await listSourceSummary({
     siteId: props.siteId || undefined,
     keyword: applied.keyword || undefined,
@@ -424,7 +444,7 @@ async function loadSummary(request: number): Promise<void> {
     page: page.value,
     size: pageSize.value,
   })
-  if (request !== refreshToken) return
+  if (stale()) return
   if (result.unavailable) {
     summaryRows.value = null
     summaryTotal.value = 0
@@ -436,7 +456,7 @@ async function loadSummary(request: number): Promise<void> {
     siteId: props.siteId || undefined,
     keyword: applied.keyword || undefined,
   })
-  if (request !== refreshToken) return
+  if (stale()) return
   summaryStats.value = stats.available ? stats : null
 }
 
@@ -505,14 +525,22 @@ function resetFilters(): void {
   applyFilters()
 }
 
+/** 服务端分页时重取当前页：只有最新一次翻页的结果会落到表格上，期间显示加载态并清空跨页勾选 */
+async function reloadSummaryPage(): Promise<void> {
+  if (!summaryMode.value) return
+  pageLoading.value = true
+  collapseExpanded()
+  await loadSummary(refreshToken)
+}
+
 function onSizeChange(): void {
   page.value = 1
-  if (summaryMode.value) void loadSummary(refreshToken)
+  void reloadSummaryPage()
 }
 
 function onPageChange(next: number): void {
   page.value = next
-  if (summaryMode.value) void loadSummary(refreshToken)
+  void reloadSummaryPage()
 }
 
 function collapseExpanded(): void {
@@ -673,6 +701,12 @@ const kindIndex = computed<Record<string, MonitorKind>>(() =>
   Object.fromEntries(records.value.map((row) => [row.id, row.kind])),
 )
 
+/** 立即运行失败提示：结果未确认（可能已受理）用警告，提醒先看运行记录，别马上重复提交。 */
+function reportRunError(err: unknown): void {
+  if (err instanceof MonitorRunUncertainError) ElMessage.warning(err.message)
+  else ElMessage.error(readableError(err, '提交执行失败'))
+}
+
 async function runMonitor(monitor: MonitorRecordView): Promise<void> {
   try {
     const result = await runMonitorsNow([monitor.id], kindIndex.value)
@@ -685,7 +719,7 @@ async function runMonitor(monitor: MonitorRecordView): Promise<void> {
       ElMessage.success('已提交执行（受理不代表执行成功）')
     }
   } catch (err) {
-    ElMessage.error(readableError(err, '提交执行失败'))
+    reportRunError(err)
   } finally {
     await refresh()
   }
@@ -708,7 +742,7 @@ async function batchRun(): Promise<void> {
       ElMessage.success(head)
     }
   } catch (err) {
-    ElMessage.error(readableError(err, '提交执行失败'))
+    reportRunError(err)
   } finally {
     await refresh()
   }
@@ -868,7 +902,7 @@ onMounted(() => {
     </div>
 
     <el-table
-      v-loading="loading"
+      v-loading="loading || pageLoading"
       :data="pagedRows"
       row-key="sourceId"
       :expand-row-keys="expandedKeys"

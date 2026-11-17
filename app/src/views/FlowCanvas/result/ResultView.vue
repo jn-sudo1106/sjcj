@@ -14,6 +14,7 @@ import {
   isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { scriptParamName } from '@/utils/flow/dataProcess'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { planSkipCondSend } from '@/utils/flow/skipCondPlan'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
@@ -190,7 +191,11 @@ const bothScopesAvailable = computed(() => !!(inputTableId.value && outputTableI
 // 合并成一个 tab，这张表两个身份都占，不需要切换（M3-0C，2026-08-15 定案）。
 const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value && inputTableId.value === outputTableId.value)
 const scopeSwitchable = computed(() => bothScopesAvailable.value && !sameTable.value)
+// 「测试脚本」带 scriptPath 进来时，脚本要吃的是规则节点的**输入**行；输入≠输出时默认停在输入表，
+// 否则打开就是空的输出表，测试拿不到行（2026-11-17 186 走查：规则节点输出表 6910003 为空）。
+const scriptTestOnInput = computed(() => !!queryScriptPath.value && !!selectedCfg.value?.ruleCfg && !!inputTableId.value)
 function defaultScope(): 'output' | 'input' {
+  if (scriptTestOnInput.value) return 'input'
   return outputTableId.value ? 'output' : 'input'
 }
 const selectedTable = computed(() => browseMode.value === 'table' ? tableChoice.value : (scope.value === 'output' ? outputTableId.value : inputTableId.value))
@@ -453,6 +458,7 @@ const sendSettingLoading = ref(false)
 const sendSettingError = ref('')
 const sendSettingOptions = ref<SendSettingOption[]>([])
 const sendSettingSearch = ref('')
+const sendNodeSelection = ref(false)
 let sendSettingRequest = 0
 const sendSettingBadge = computed(() => skipCondStepIds.value.length + skippedNodeIds.value.length)
 const sendSettingMatches = computed(() => {
@@ -464,6 +470,11 @@ function sendSettingModeOf(opt: SendSettingOption): SendSettingMode {
   return skipCondStepIds.value.includes(opt.stepId) ? 'skipCond' : 'normal'
 }
 const sendSettingSelectedCount = computed(() => sendSettingOptions.value.filter(opt => sendSettingModeOf(opt) !== 'mute').length)
+const sendSelectedNodeIds = computed(() => sendSettingOptions.value.filter(opt => !isNodeSkipped(opt.nodeId)).map(opt => opt.nodeId))
+const ignoreConditionNodeIds = computed(() => skipCondStepIds.value.map(nodeIdOfStepId).filter(Boolean))
+const sendConditionOptions = computed(() => sendSettingMatches.value.filter(opt => opt.condition && !isNodeSkipped(opt.nodeId)))
+const sendConditionCount = computed(() => sendConditionOptions.value.filter(opt => skipCondStepIds.value.includes(opt.stepId)).length)
+const allSendConditionsIgnored = computed(() => sendConditionOptions.value.length > 0 && sendConditionCount.value === sendConditionOptions.value.length)
 const sendSettingRangeLabel = computed(() => {
   if (sendSettingOptions.value.length && sendSettingSelectedCount.value < sendSettingOptions.value.length) {
     return `${sendSettingSelectedCount.value}/${sendSettingOptions.value.length}`
@@ -662,6 +673,24 @@ function setSendTargets(options: SendSettingOption[], selected: boolean) {
     forceSkipCond.value = skipCondStepIds.value.length > 0
   }
 }
+function setSendConditions(ignored: boolean) {
+  for (const opt of sendConditionOptions.value) setSendSettingMode(opt, ignored ? 'skipCond' : 'normal')
+}
+async function startSendNodeSelection() {
+  await loadSendSettings()
+  if (!canSkipCondThisSend.value || sendSettingLoading.value || sendSettingError.value || !sendSettingOptions.value.length) return
+  sendSettingVisible.value = false
+  sendSettingSearch.value = ''
+  railOpen.value = true
+  sendNodeSelection.value = true
+}
+function canSelectSendNode(nodeId: string) {
+  return !sendNodeSelection.value || sendSettingOptions.value.some(opt => opt.nodeId === nodeId)
+}
+function setRailSendTargets(nodeIds: string[]) {
+  setSendTargets(sendSettingOptions.value.filter(opt => nodeIds.includes(opt.nodeId)), true)
+  setSendTargets(sendSettingOptions.value.filter(opt => !nodeIds.includes(opt.nodeId)), false)
+}
 /** 仅受理成功或切换发送上下文后恢复默认，失败重试保留设置。 */
 function clearSendSettings() {
   ++sendSettingRequest
@@ -673,6 +702,7 @@ function clearSendSettings() {
   sendSettingLoading.value = false
   sendSettingError.value = ''
   sendSettingSearch.value = ''
+  sendNodeSelection.value = false
 }
 
 function runNextStep(
@@ -1847,13 +1877,21 @@ const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; o
 })
 function buildCodeParams(row: { values?: Record<string, unknown> } | null): Record<string, string> {
   const inputFields = selectedCfg.value?.ruleCfg?.inputFields ?? []
-  if (!inputFields.length) return {}
+  // ruleCfg.inputFields 只在打开「表配置」时由 contextMap 还原；直接从数据视图进来（刷新后）是空数组，
+  // 这时用已落库的步骤入参列（taskCfg.contextMap，K 列名）匹配（2026-11-17 186 复测：参数全空）。
+  const contextColumns = selectedCfg.value?.taskCfg?.contextMap ?? []
+  if (!inputFields.length && !contextColumns.length) return {}
 
   const params: Record<string, unknown> = {}
   for (const field of meta.value?.fields ?? []) {
-    if (!inputFields.includes(field.prop) && !inputFields.includes(field.columnName ?? '')) continue
+    const column = field.columnName ?? ''
+    const picked = inputFields.length
+      ? inputFields.includes(field.prop) || inputFields.includes(column)
+      : !!column && contextColumns.includes(column)
+    if (!picked) continue
     const raw = row?.values?.[field.columnName ?? field.prop]
-    params[field.prop] = raw == null ? '' : String(raw)
+    // 入参名与生成时告诉模型的一致：去掉「-K列号」（scriptParamName），否则 INDICATOR-K1 不是合法参数名。
+    params[scriptParamName(field.prop)] = raw == null ? '' : String(raw)
   }
   return params as Record<string, string>
 }
@@ -1866,6 +1904,12 @@ function stringifyCodeResult(value: unknown): string {
   }
 }
 async function onTestScript() {
+  // 停在输出表时行不是脚本的输入（输入≠输出），先切到输入表再让用户选行。
+  if (scriptTestOnInput.value && scope.value === 'output' && scopeSwitchable.value) {
+    onScopeChange('input')
+    ElMessage.info('已切换到输入表，请选择要测试的行后再点「测试脚本」')
+    return
+  }
   // 工具条触发时未打开行详情，回退到选中行第一行，再回退到本页第一行
   const row = detailRow.value
     ?? (selectedRowIds.value.length ? rows.value.find((r) => selectedRowIds.value.includes(r.dataId)) : null)
@@ -1916,12 +1960,26 @@ async function onTestScript() {
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
     <div v-if="browseMode === 'step' && selectedNodeId && railOpen" class="rv-railbox">
+      <button v-if="canSkipCondThisSend && !sendNodeSelection" class="rc-btn rv-rail-select-send" type="button" data-testid="rail-select-send-nodes" @click="startSendNodeSelection">多选发送节点</button>
+      <div v-if="sendNodeSelection" class="rv-rail-send-controls" data-testid="rail-send-controls">
+        <strong>选择发送节点</strong><span>已选 {{ sendSettingSelectedCount }} 个</span>
+        <button type="button" @click="setSendTargets(sendSettingOptions, true)">全选</button>
+        <button type="button" @click="setSendTargets(sendSettingOptions, false)">清空</button>
+        <label><input type="checkbox" data-testid="rail-ignore-selected" :checked="allSendConditionsIgnored"
+          :indeterminate="sendConditionCount > 0 && !allSendConditionsIgnored" :disabled="!sendConditionOptions.length"
+          @change="setSendConditions(($event.target as HTMLInputElement).checked)" />忽略已选节点条件</label>
+        <button class="rc-btn" type="button" data-testid="rail-send-done" @click="sendNodeSelection = false">完成</button>
+      </div>
       <div class="rv-bar" data-testid="data-process-rail" :style="{ maxHeight: `${railHeight}px` }">
         <ProcessNodeRail
           :model-value="selectedNodeId"
           :layout="processLayout"
           :skipped="skippedNodeIds"
+          :selected-ids="sendNodeSelection ? sendSelectedNodeIds : undefined"
+          :selectable="canSelectSendNode"
+          :ignored-conditions="ignoreConditionNodeIds"
           @update:model-value="onSelectNode"
+          @update:selected-ids="setRailSendTargets"
           @node-menu="openNodeMenu"
         />
         <div v-if="!allNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
@@ -2059,7 +2117,7 @@ async function onTestScript() {
         </span>
         <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
         <span class="rv-data-ops">
-          <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
+          <span v-if="canPickRows" class="muted">{{ (execMode === 'input' || execMode === 'upstream') && !selectedRowIds.length ? '请先勾选表格数据' : `已选 ${selectedRowIds.length} 条` }}</span>
           <!-- 什么都做不了时给出原因，别让工具栏空着——见 noExecReason 的说明 -->
           <span
             v-if="noExecReason"
@@ -2078,7 +2136,7 @@ async function onTestScript() {
               <button class="rc-btn rv-send-setting-btn" type="button" data-testid="data-send-settings"
                 :class="{ 'is-on': sendSettingBadge > 0 }"
                 title="本次发送范围，默认全部发送；仅对勾选数据的发后续生效"
-              >发送范围：{{ sendSettingRangeLabel }}<el-icon><ArrowDown /></el-icon></button>
+              >发送范围：{{ sendSettingRangeLabel }}<span v-if="skipCondStepIds.length"> · 忽略条件 {{ skipCondStepIds.length }}</span><el-icon><ArrowDown /></el-icon></button>
             </template>
             <section v-if="sendSettingVisible" class="rv-send-range" role="dialog" aria-label="本次发送范围" data-testid="send-range-panel">
               <header><strong>本次发送范围</strong><span>仅本次</span></header>
@@ -2088,20 +2146,33 @@ async function onTestScript() {
               <template v-else>
                 <div class="rv-send-range-ops"><span>已选 <b>{{ sendSettingSelectedCount }}</b> / {{ sendSettingOptions.length }} 个节点</span><button type="button" data-testid="send-range-all" @click="setSendTargets(sendSettingOptions, true)">全选</button><button type="button" data-testid="send-range-clear" @click="setSendTargets(sendSettingOptions, false)">清空</button></div>
                 <div v-if="sendSettingSearch.trim()" class="rv-send-range-filter-ops"><span>匹配 {{ sendSettingMatches.length }} 个</span><button type="button" :disabled="!sendSettingMatches.length" @click="setSendTargets(sendSettingMatches, true)">勾选搜索结果</button><button type="button" :disabled="!sendSettingMatches.length" @click="setSendTargets(sendSettingMatches, false)">取消搜索结果</button></div>
+                <label class="rv-send-condition-all" title="仅对当前列表中已选发送且有进入条件的节点生效">
+                  <input type="checkbox" data-testid="send-range-ignore-all" :checked="allSendConditionsIgnored"
+                    :indeterminate="sendConditionCount > 0 && !allSendConditionsIgnored" :disabled="!sendConditionOptions.length"
+                    @change="setSendConditions(($event.target as HTMLInputElement).checked)" />
+                  {{ sendSettingSearch.trim() ? '忽略搜索结果中已选节点条件' : '忽略已选节点条件' }}
+                </label>
                 <div class="rv-send-range-list">
-                  <label v-for="opt in sendSettingMatches" :key="opt.stepId" class="rv-send-range-row" :title="opt.name">
+                  <div v-for="opt in sendSettingMatches" :key="opt.stepId" class="rv-send-range-row" :class="{ 'is-ignored': sendSettingModeOf(opt) === 'skipCond' }">
+                    <label class="rv-send-range-target" :title="opt.name">
                     <input type="checkbox" :checked="sendSettingModeOf(opt) !== 'mute'" :aria-label="`发送到${opt.name}`" :data-testid="`send-range-${opt.stepId}`" @change="setSendTargets([opt], ($event.target as HTMLInputElement).checked)" />
                     <span>{{ opt.name }}</span><small>#{{ opt.stepId }}</small>
-                  </label>
+                    </label>
+                    <label class="rv-send-range-condition" :title="isNodeSkipped(opt.nodeId) ? '请先选择发送到此节点' : opt.condition || '此节点没有进入条件'">
+                      <input type="checkbox" :checked="sendSettingModeOf(opt) === 'skipCond'" :disabled="!opt.condition || isNodeSkipped(opt.nodeId)"
+                        :aria-label="`忽略${opt.name}进入条件`" :data-testid="`send-range-ignore-${opt.stepId}`"
+                        @change="setSendSettingMode(opt, ($event.target as HTMLInputElement).checked ? 'skipCond' : 'normal')" />忽略条件
+                    </label>
+                  </div>
                   <p v-if="!sendSettingMatches.length" class="rv-send-range-empty">没有匹配的节点</p>
                 </div>
               </template>
-              <footer><span>{{ sendSettingOptions.length && !sendSettingSelectedCount ? '请至少选择一个节点' : '发送成功后恢复全部发送' }}</span><button class="rc-btn" type="button" data-testid="send-range-done" @click="sendSettingVisible = false">完成</button></footer>
+              <footer><span>{{ sendSettingOptions.length && !sendSettingSelectedCount ? '请至少选择一个节点' : '仅本次，发送成功后恢复默认' }}</span><button v-if="browseMode === 'step'" class="rc-btn" type="button" data-testid="send-range-rail-select" :disabled="sendSettingLoading || !!sendSettingError" @click="startSendNodeSelection">流程图多选</button><button class="rc-btn" type="button" data-testid="send-range-done" @click="sendSettingVisible = false">完成</button></footer>
             </section>
           </el-popover>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
             <button
-              class="rc-btn primary"
+              class="rc-btn primary rv-exec-btn"
               type="button"
               data-testid="data-exec-btn"
               :disabled="!canExecute"
@@ -2459,6 +2530,7 @@ async function onTestScript() {
       top="4vh"
       :style="{ maxWidth: '1180px' }"
       append-to-body
+      destroy-on-close
     >
       <FilePreview
         :path="filePreview.path"
@@ -2507,8 +2579,7 @@ async function onTestScript() {
    会跟着一起进全屏。 */
 .rv-shell.is-fullscreen { position: fixed; inset: 0; z-index: 60; height: 100vh; border: 0; border-radius: 0; }
 
-/* 轨道容器：控件浮在轨道右上角（.rv-bar 自己会横向滚动，控件必须放在滚动容器外面，
-   否则会跟着内容滚走）。收起流程按钮合并在轨道区右上角，不额外占用一行的空间。 */
+/* 轨道容器：多选入口在左上角、收起在右上角；控件放在滚动容器外，不随流程图滚走。 */
 .rv-railbox { position: relative; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
 /* 节点右键菜单：视觉对齐源侧栏的 .ssw-row-menu（全站第 5 处右键菜单，样式刻意一致） */
 .rv-node-menu-mask { position: fixed; z-index: 91; inset: 0; }
@@ -2528,6 +2599,7 @@ async function onTestScript() {
 .rv-node-send-option.disabled { color: var(--rc-faint); cursor: default; }
 .rv-node-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rv-rail-ctl { position: absolute; top: 6px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
+.rv-rail-select-send { position: absolute; top: 6px; left: 10px; z-index: 2; }
 .rv-rail-icon-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); cursor: pointer; transition: all 0.15s ease; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
 .rv-rail-icon-btn:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); background: var(--rc-primary-bg); }
 
@@ -2657,6 +2729,7 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rc-btn-group :deep(.el-dropdown) { display: inline-flex; }
 .rc-btn-group .rv-split-arrow { height: 28px; padding: 0 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, 0.35); display: inline-flex; align-items: center; justify-content: center; }
 .rc-btn-group .rv-split-arrow:disabled { opacity: 0.6; cursor: not-allowed; }
+.rc-btn.primary.rv-exec-btn:disabled { background: var(--rc-bg-soft); border-color: var(--rc-border); color: var(--rc-faint); box-shadow: none; cursor: not-allowed; }
 
 /* 表头内容现在渲染在 DataGrid 的 #head 插槽里（那条横条由 .dg-toolbar 负责排版），
    这里只留下内容本身的样式，不再有独立的 .rv-tablehead / .rv-pager 横条。 */
@@ -2747,7 +2820,11 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
   background: currentColor;
 }
 
-/* 本次发送范围：单一勾选列表，条件设置留在节点菜单。 */
+/* 本次发送范围与条件覆盖共用状态，并同步到流程图多选。 */
+.rv-rail-send-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 42px 8px 10px; color: var(--rc-text-2); font-size: 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.rv-rail-send-controls > button:not(.rc-btn) { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; font-size: 12px; }
+.rv-rail-send-controls label, .rv-send-condition-all { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; }
+.rv-rail-send-controls input, .rv-send-range input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--rc-primary); }
 .rv-send-range { display: flex; flex-direction: column; gap: 10px; color: var(--rc-text-2); font-size: 12px; }
 .rv-send-range header { display: flex; align-items: center; gap: 8px; }
 .rv-send-range header strong { color: var(--rc-text); font-size: 13px; }
@@ -2761,11 +2838,14 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-send-range-ops button, .rv-send-range-filter-ops button, .rv-send-setting-error button { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; font-size: 11px; }
 .rv-send-range-filter-ops button:disabled { opacity: .45; cursor: default; }
 .rv-send-range-list { max-height: min(280px, 38vh); overflow: auto; border-block: 1px solid var(--rc-border-soft); }
-.rv-send-range-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 4px; cursor: pointer; }
+.rv-send-range-row { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 8px 4px; }
 .rv-send-range-row + .rv-send-range-row { border-top: 1px solid var(--rc-border-soft); }
 .rv-send-range-row:hover { background: var(--rc-primary-bg); }
-.rv-send-range-row input { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--rc-primary); }
-.rv-send-range-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-send-range-row.is-ignored { background: var(--rc-primary-bg); }
+.rv-send-range-target { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; cursor: pointer; }
+.rv-send-range-target > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-send-range-condition { display: flex; flex: none; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
+.rv-send-range-condition:has(input:disabled), .rv-send-condition-all:has(input:disabled) { color: var(--rc-faint); cursor: default; }
 .rv-send-range-row small { margin-left: auto; flex: none; color: var(--rc-faint); font-size: 10px; }
 .rv-send-range-empty, .rv-send-setting-loading, .rv-send-setting-error { margin: 0; padding: 18px 0; text-align: center; color: var(--rc-muted); font-size: 12px; }
 .rv-send-setting-error { color: var(--rc-error); }

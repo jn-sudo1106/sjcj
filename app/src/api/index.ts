@@ -63,6 +63,7 @@ import {
   sourceFromLegacy,
   sourceOptionFromLegacy,
   sourcePageFromLegacy,
+  sourceOutputTablesFromLegacy,
   flowFromLegacy,
   flowPageFromLegacy,
   flowToLegacy,
@@ -550,6 +551,18 @@ export const sourceApi = {
       },
     })
     return sourcePageFromLegacy(result)
+  },
+  /**
+   * 源的输出表产出统计（1114 源产出监控 一期 A；旧平台源列表展开行同一接口）。
+   * 后端按「源 + 表」统计并缓存 2 分钟；这里只读，结果按表去重。
+   */
+  queryStepDetail: async (sourceId: string) => {
+    const result = await request<unknown>('source/queryStepDetail', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'source/queryStepDetail',
+      httpParams: { sourceId },
+    })
+    return sourceOutputTablesFromLegacy(result)
   },
   sourceDetailScoped: async (sourceId: string) => {
     const result = await request<unknown>('source/sourceDetailScoped', { sourceId }, { method: 'GET', mode: 'http' })
@@ -3250,12 +3263,25 @@ export const entryApi = {
   entrySave: async (entry: EntryType) => {
     const endpoint = entry.tableId ? 'config/modifyEntryType' : 'config/entryTypeAddAll'
     const result = await request<unknown>(endpoint, { entry }, { method: 'POST', httpParams: entryTypeToLegacy(entry) })
-    if (result && typeof result === 'object' && 'tableId' in result) {
-      return result as { tableId: string; message?: string }
+    let tableId = entry.tableId || ''
+    let msg = ''
+    if (result != null) {
+      if (typeof result === 'number' || typeof result === 'string') {
+        tableId = String(result)
+      } else if (typeof result === 'object') {
+        const obj = result as Record<string, unknown>
+        if (obj.tableId != null) tableId = String(obj.tableId)
+        else if (obj.data != null && (typeof obj.data === 'number' || typeof obj.data === 'string')) tableId = String(obj.data)
+        if (obj.message != null) msg = String(obj.message)
+        else if (obj.msg != null) msg = String(obj.msg)
+      }
     }
-    // 旧 EntryTypeEdit.handleSubmit 提示文案「处理成功, 后端返回:{msg}」，真实后端不带 tableId 时也要透传 msg
-    const msg = result && typeof result === 'object' && 'message' in result ? String((result as { message?: string }).message ?? '') : ''
-    return { tableId: entry.tableId || '', message: msg ? `处理成功, 后端返回:${msg}` : '实体表已保存' }
+    // 若返回信息中带了形如 "新增成功，id:12345"，也可备选提取 tableId
+    if (!tableId && msg) {
+      const match = /id:\s*(\d+)/i.exec(msg)
+      if (match) tableId = match[1]
+    }
+    return { tableId, message: msg ? `处理成功, 后端返回:${msg}` : '实体表已保存' }
   },
   rebuildTable: (tableIds: string[] | string) => {
     const ids = Array.isArray(tableIds) ? tableIds : [tableIds]
@@ -4369,6 +4395,21 @@ export const itemApi = {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
+  /** 流程入口（ROOT）改名（2026-11-15）。与 rootConfigUpdate 同走后端 ROOT 更新分支，只交
+   *  `{ itemConfig, flowId, isRoot: 1, name }` 最小集，其余字段 selective update 保持库中值。
+   *  186 实测（测试流程 15730948，测完已删）：不带草稿版本会被拒「请先进入流程草稿编辑…」；
+   *  带草稿 versionId/ver 后根行 name 更新、cs_flow.flowName 不受影响、type/stepType/flowCode 原样。
+   *  反过来 saveFlow 改流程名**不会**同步根节点名称——两者是独立的两个字段。 */
+  rootNameUpdate: (stepId: string, name: string, flowId?: string, ref?: FlowVersionRef | null) => request<Ack>('item/next/stepModify', {
+    itemConfig: Number(stepId),
+    ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
+    isRoot: 1,
+    name,
+    ...versionRefParams(ref),
+  }, {
+    method: 'POST',
+    httpEndpoint: 'item/next/stepModify',
+  }),
   /** 启停步骤。GET `id` + `state`。state：`'0'` 启用 / `'1'` 停用，与 isDelete 同口径。
    *  后端操作日志文案可能写反，以 isDelete / enabled 为准。 */
   enable: (stepId: string, state: string, ref?: FlowVersionRef | null) => request<Ack>('item/next/enable', { id: stepId, state }, {
@@ -4437,6 +4478,22 @@ export const categoryApi = {
         ...(params.seq !== undefined ? { seq: params.seq } : {}),
         ...(params.remark !== undefined ? { remark: params.remark } : {}),
       },
+    })
+  },
+
+  /**
+   * 设置业务目录预期产出周期（1114 源产出监控一期 C）。独立端点，`hours = 0` 清空；
+   * 后端只收整数小时 0～8784，只允许 -2 下的业务目录（根 -2、系统目录、视图目录都会拒绝）。
+   * 不复用 update：它是 form 绑定，「没传」与「清空」分不开，改名会误清周期。
+   */
+  updateExpectCycle: async (categoryId: string | number, hours: number): Promise<unknown> => {
+    if (!Number.isInteger(hours) || hours < 0) throw new Error('预期周期必须是非负整数小时')
+    clearCategoryCache()
+    return request('category/updateExpectCycle', { categoryId, expectCycleHours: hours }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/updateExpectCycle',
+      httpParams: { categoryId, expectCycleHours: hours },
     })
   },
 

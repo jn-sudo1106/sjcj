@@ -85,22 +85,22 @@
   padding-bottom: 10px;
   border-bottom: 1px solid var(--rc-border-soft);
 }
-.fc-root .fc-legacy-view {
+.fc-root .fc-main {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
 }
-.fc-root .fc-legacy-view .fc-group-layout {
+.fc-root .fc-main .fc-group-layout {
   grid-template-columns: 216px minmax(0, 1fr);
 }
-.fc-root .fc-legacy-view .fc-table-wrap { overflow-x: auto; }
-.fc-root .fc-legacy-view .fc-template-groups {
+.fc-root .fc-main .fc-table-wrap { overflow-x: auto; }
+.fc-root .fc-main .fc-template-groups {
   padding: 8px;
   border-color: var(--rc-border);
   box-shadow: var(--rc-shadow);
 }
-.fc-root .fc-legacy-view .fc-template-group.active {
+.fc-root .fc-main .fc-template-group.active {
   background: var(--rc-active-fill);
   box-shadow: inset 3px 0 0 var(--rc-primary);
 }

@@ -10,6 +10,7 @@ import { flowCenterApi, sourceApi, sourceGroupApi, workflowBindingApi, type Sour
 import {
   addSourcesToBizDir, bizDirGroupIds, bizDirTables, bizMembership, bizScopeSourceIds, dirKindOf, expandDirIds, loadDirChildren, loadDirPath,
   importFromTemplateToBizDir, moveSourcesInBiz, removeSourcesFromBizDirs, resetSourceDirCache, searchDirs,
+  bizSourceCycles, effectiveBizCycles, invalidateBizCycles,
 } from './sourceDirs'
 import type { Source, SourceFlowsView } from './types'
 import { describeFilters } from '@/views/FlowCanvas/result/useSourceLaunch'
@@ -426,5 +427,45 @@ describe('bizDirGroupIds', () => {
     paged.mockResolvedValue({ total: 1, list: [] as Source[] })
     await bizDirGroupIds('9011494')
     expect(paged).toHaveBeenCalledTimes(5)
+  })
+})
+
+// 1114 一期 B：源 → 预期周期（子目录继承最近设了周期的上级；源在多个目录取最短）
+describe('sourceDirs · 业务目录预期周期', () => {
+  const rows = [
+    { id: '-2', name: '业务分类', parentId: '0' },
+    { id: '9011494', name: '股票数据', parentId: '-2', expectCycleHours: 72 },
+    { id: '9011495', name: '基本资料', parentId: '9011494' },
+    { id: '9011496', name: '股票行情', parentId: '9011494', expectCycleHours: 24 },
+    { id: '9011515', name: '宏观数据', parentId: '-2' },
+    { id: '9008989', name: 'ctrip', parentId: '0', expectCycleHours: 24 },
+  ]
+
+  it('生效周期：自己设了用自己的，没设继承上级，-2 外的目录不算', () => {
+    const cycles = effectiveBizCycles(rows)
+    expect(Object.fromEntries(cycles)).toEqual({ '9011494': 72, '9011495': 72, '9011496': 24 })
+  })
+
+  it('源取所在目录里最短的生效周期；不在任何设了周期的目录里 = 不出现；2 分钟内复用，invalidate 后重读', async () => {
+    requestMock.mockImplementation(async (endpoint: string, body: Record<string, unknown>) => {
+      if (endpoint === 'category/scopeTree') return rows
+      if (endpoint === 'category/listSources') return { sourceIds: DIR_SOURCES[String(body.categoryId)] ?? [], sourceGroupIds: [] }
+      return null
+    })
+    const map = await bizSourceCycles()
+    // 1 在 9011495（继承 72）和 9011496（24）→ 24；2、3 在 9011496 → 24；4 只在宏观数据（没设）→ 不出现
+    expect(Object.fromEntries(map)).toEqual({ '1': 24, '2': 24, '3': 24 })
+    // 宏观数据没有生效周期，不去取它的源
+    expect(requestMock.mock.calls.some(([ep, body]) => ep === 'category/listSources' && body.categoryId === '9011515')).toBe(false)
+    await bizSourceCycles()
+    expect(requestMock.mock.calls.filter(([ep]) => ep === 'category/scopeTree')).toHaveLength(1)
+    invalidateBizCycles()
+    await bizSourceCycles()
+    expect(requestMock.mock.calls.filter(([ep]) => ep === 'category/scopeTree')).toHaveLength(2)
+  })
+
+  it('拿不到 scopeTree：全部未配置（空表）', async () => {
+    requestMock.mockImplementation(async () => { throw new Error('404') })
+    expect((await bizSourceCycles()).size).toBe(0)
   })
 })

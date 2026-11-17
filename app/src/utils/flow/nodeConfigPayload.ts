@@ -21,6 +21,8 @@ import {
   isPdfNode,
   isRuleNode,
   isTranslateNode,
+  nodeInputTable,
+  nodeOutputTable,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -365,8 +367,11 @@ export function buildConfigPayload(
     configName: cfg.configName ?? '',
     // 配置自己的 URL。绝不用 collectCfg.url（那是源 URL 的显示副本）。
     ...(cfg.configUrl !== undefined ? { configUrl: cfg.configUrl } : {}),
-    entryTypeId: (cc?.outputTable ?? cfg.outputTable) || undefined,
-    inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
+    // 用 nodeOutputTable / nodeInputTable 的 `||` 口径：PDF 等节点带 collectCfg（outputTable 为空串），
+    // 表配置却写在顶层 outputTable/inputTable；`??` 遇空串不回退，2026-11-17 在 186 实测 PDF 节点
+    // 选了输入/输出表，配置 1910015 的 entryTypeId/inEntryType 仍为空，抽取结果入库与导入都对不上表。
+    entryTypeId: nodeOutputTable(cfg) || undefined,
+    inEntryType: nodeInputTable(cfg) || undefined,
     isMulti: isOcrNode(cfg) ? ocrMultiModeFor(cfg) : resolveMultiMode(cfg, opts.effectiveInputTableId),
     // 节点类型（0828 W0-7）：此前**完全没写**，导致复制出来的配置类型永远停在被复制那份上。
     configType: configTypeForSave(cfg, base),

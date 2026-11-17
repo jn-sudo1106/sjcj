@@ -31,7 +31,7 @@ import type {
   SummaryRow,
   TaskInst,
 } from './types'
-import type { CreateJobsInput, FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
+import type { CreateJobsInput, FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, SourceOutputTable } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
@@ -408,9 +408,6 @@ function entryFieldFromLegacy(input: unknown, index: number, keySet: Set<string>
 export function entryTypeFromLegacy(input: unknown): EntryType {
   const record = asRecord(input)
   if ('tableId' in record && 'fields' in record) return record as unknown as EntryType
-  const items = Array.isArray(record.items) ? record.items : []
-  const keyField = record.keyField == null ? undefined : String(record.keyField)
-  const keySet = new Set((keyField ?? '').split(',').map((s) => s.trim()).filter(Boolean))
 
   let parsedConfig: Record<string, unknown> | undefined = undefined
   const rawTableConfig = record.tableConfig ?? record.table_config
@@ -424,54 +421,64 @@ export function entryTypeFromLegacy(input: unknown): EntryType {
     }
   }
 
-  const dsKindVal = record.dsKind == null ? 'MYSQL' : (String(record.dsKind) as EntryType['dsKind'])
-  const storageEngineVal = record.storageEngine != null
-    ? String(record.storageEngine)
-    : (parsedConfig?.storageEngine != null
-        ? String(parsedConfig.storageEngine)
-        : (record.engine != null ? String(record.engine) : (dsKindVal === 'CK' ? 'ReplacingMergeTree' : 'InnoDB')))
+  const rawDsKind = record.dsKind ?? record.ds_kind ?? record.DS_KIND ?? parsedConfig?.dsKind ?? parsedConfig?.ds_kind
+  const dsKindUpper = rawDsKind ? String(rawDsKind).trim().toUpperCase() : ''
+  const dsKindVal: EntryType['dsKind'] = dsKindUpper === 'CK' ? 'CK' : 'MYSQL'
 
-  const sortedVal = record.sorted != null
-    ? String(record.sorted)
-    : (parsedConfig?.sorted != null
-        ? String(parsedConfig.sorted)
-        : (dsKindVal === 'CK' ? 'ENTRY_ID' : undefined))
+  const rawEngine = record.storageEngine ?? record.storage_engine ?? record.STORAGE_ENGINE ?? parsedConfig?.storageEngine ?? parsedConfig?.storage_engine ?? record.engine
+  const storageEngineVal = rawEngine != null && String(rawEngine).trim() !== ''
+    ? String(rawEngine).trim()
+    : (dsKindVal === 'CK' ? 'ReplacingMergeTree' : 'InnoDB')
 
-  const partColumnVal = record.partColumn != null
-    ? String(record.partColumn)
-    : (parsedConfig?.partColumn != null
-        ? String(parsedConfig.partColumn)
-        : (record.part_column != null ? String(record.part_column) : undefined))
+  const rawSorted = record.sorted ?? record.SORTED ?? parsedConfig?.sorted ?? parsedConfig?.sort
+  const sortedVal = rawSorted != null && String(rawSorted).trim() !== ''
+    ? String(rawSorted).trim()
+    : (dsKindVal === 'CK' ? 'ENTRY_ID' : undefined)
 
-  const tableConfigObj = parsedConfig ?? {
+  const rawPartColumn = record.partColumn ?? record.part_column ?? record.PART_COLUMN ?? parsedConfig?.partColumn ?? parsedConfig?.part_column
+  const partColumnVal = rawPartColumn != null && String(rawPartColumn).trim() !== ''
+    ? String(rawPartColumn).trim()
+    : undefined
+
+  const rawOpType = record.opType ?? record.op_type ?? record.OP_TYPE ?? parsedConfig?.opType
+  const opTypeVal: EntryType['opType'] = rawOpType == null
+    ? (dsKindVal === 'CK' ? 'r' : 'wr')
+    : (String(rawOpType).trim().toLowerCase() === 'r' ? 'r' : 'wr')
+
+  const tableConfigObj = {
     storageEngine: storageEngineVal,
-    partColumn: partColumnVal,
-    sorted: sortedVal,
+    partColumn: partColumnVal || '',
+    sorted: sortedVal || '',
+    ...(parsedConfig || {}),
   }
 
+  const items = Array.isArray(record.items) ? record.items : []
+  const keyField = record.keyField == null ? undefined : String(record.keyField)
+  const keySet = new Set((keyField ?? '').split(',').map((s) => s.trim()).filter(Boolean))
+
   return {
-    tableId: String(record.entryTypeId ?? ''),
-    tableName: String(record.tableName ?? ''),
+    tableId: String(record.entryTypeId ?? record.tableId ?? ''),
+    tableName: String(record.tableName ?? record.table_name ?? ''),
     // DS_KIND 老记录可能为 NULL：统一归一 MYSQL（与 DB 默认一致），不向 UI 暴露「未知」态
     dsKind: dsKindVal,
-    // 操作读写类型：默认 wr，若 DS_KIND 为 CK 默认为 r
-    opType: record.opType == null ? (record.dsKind === 'CK' ? 'r' : 'wr') : String(record.opType).toLowerCase() as EntryType['opType'],
+    // 操作读写类型：默认 wr
+    opType: opTypeVal,
     // 存储引擎：MySQL 默认 InnoDB，CK 默认为 ReplacingMergeTree
     storageEngine: storageEngineVal,
-    // 排序列：默认 entry_id
+    // 排序列：默认 ENTRY_ID
     sorted: sortedVal,
     // 分区字段/表达式
     partColumn: partColumnVal,
     // 表配置JSON
     tableConfig: tableConfigObj,
-    name: record.typeName == null ? undefined : String(record.typeName),
+    name: (record.typeName ?? record.name) == null ? undefined : String(record.typeName ?? record.name),
     remark: record.remark == null ? undefined : String(record.remark),
     fields: items.map((item, index) => entryFieldFromLegacy(item, index, keySet)),
     rowCount: record.dataCnt == null
       ? (record.estimatedRowCount == null ? undefined : Number(record.estimatedRowCount))
       : Number(record.dataCnt),
     estimatedRowCount: record.estimatedRowCount == null ? undefined : Number(record.estimatedRowCount),
-    updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
+    updatedAt: (record.updateDt ?? record.updatedAt) == null ? undefined : String(record.updateDt ?? record.updatedAt),
     keyField,
     state: record.state == null ? undefined : String(record.state),
     recFlag: record.recFlag as string | number | undefined,
@@ -506,6 +513,9 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
     coreParam: input.coreParam,
     aiComment: input.aiComment ?? input.aiCommont,
     aiCommont: input.aiComment ?? input.aiCommont,
+    tableConfig: typeof input.tableConfig === 'string'
+      ? input.tableConfig
+      : (input.tableConfig ? JSON.stringify(input.tableConfig) : undefined),
     items: input.fields.map((field, index) => ({
       itemId: field.itemId,
       itemCode: field.prop,
@@ -1159,6 +1169,64 @@ export function sourceCoreToLegacyParams(sourceId: string, patch: { name?: strin
 }
 
 /** 旧平台 sourcePaged 的分页结构适配。 */
+/** 后端日期可能是「2026-11-14 04:11:22」字符串，也可能是毫秒时间戳；统一成字符串 */
+function legacyDateText(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const d = new Date(value)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  }
+  return String(value)
+}
+
+/**
+ * `GET /v1/source/queryStepDetail` → 按输出表去重的产出统计（1114 源产出监控 一期 A）。
+ *
+ * 后端逐步骤返回 `outEntry / tableName / entryTypeName / dataCnt / lastInsert / lastUpdate`，统计按「源 + 表」算，
+ * 写同一张表的步骤值相同，所以这里按 outEntry 合并、步骤收进 steps。只跳过没有输出表的步骤和旧平台的虚拟根
+ *（stepId 0，旧 SourceList.vue 展开行同样滤掉）。**真实 ROOT（isRoot=1）带 outEntry 时照常计入**：新平台 ROOT
+ * 权威方案下单步流程就是入口步骤直接写主表（186 实测 391007760 只有一条 isRoot=1 的步骤），滤掉会误判「无详情表」。
+ * 表的顺序按首个写入步骤的 ID（流程里越靠前的表越靠前）。
+ */
+export function sourceOutputTablesFromLegacy(input: unknown): SourceOutputTable[] {
+  const record = asRecord(input)
+  const list = Array.isArray(input) ? input : Array.isArray(record.list) ? record.list : Array.isArray(record.data) ? record.data : []
+  const byTable = new Map<string, SourceOutputTable & { firstStep: number }>()
+  for (const raw of list) {
+    const step = asRecord(raw)
+    const stepId = legacyNumber(step.stepId)
+    if (stepId === 0) continue
+    if (step.outEntry === undefined || step.outEntry === null || step.outEntry === '') continue
+    const entryTypeId = String(step.outEntry)
+    const stepRef = { stepId: stepId == null ? '' : String(stepId), stepName: step.stepName == null ? '' : String(step.stepName) }
+    const existing = byTable.get(entryTypeId)
+    if (existing) {
+      existing.steps.push(stepRef)
+      if (stepId != null && stepId < existing.firstStep) existing.firstStep = stepId
+      continue
+    }
+    const count = legacyNumber(step.dataCnt)
+    byTable.set(entryTypeId, {
+      entryTypeId,
+      entryTypeName: step.entryTypeName == null ? `表:${entryTypeId}` : String(step.entryTypeName),
+      tableName: step.tableName == null ? '' : String(step.tableName).replace(/^sense_data\./i, ''),
+      // 后端没填 dataCnt（_fillDataCount 查不到统计行）按 0 条处理，与旧平台显示「-」一致
+      dataCount: count ?? 0,
+      lastInsertAt: legacyDateText(step.lastInsert),
+      lastUpdateAt: legacyDateText(step.lastUpdate),
+      steps: [stepRef],
+      firstStep: stepId ?? Number.MAX_SAFE_INTEGER,
+    })
+  }
+  return [...byTable.values()]
+    .sort((a, b) => a.firstStep - b.firstStep)
+    .map(({ firstStep: _firstStep, ...table }) => ({
+      ...table,
+      steps: [...table.steps].sort((a, b) => Number(a.stepId) - Number(b.stepId)),
+    }))
+}
+
 export function sourcePageFromLegacy(input: unknown): Paged<Source> {
   const record = asRecord(input)
   const list = Array.isArray(input)
@@ -1338,6 +1406,7 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     const seq = row.seq != null ? Number(row.seq) : undefined
     // 后端返回 null 的 remark 不要落成 ''，否则「填了空值」与「本来没备注」分不开
     const remark = row.remark == null ? undefined : String(row.remark)
+    const expectCycleHours = legacyNumber(row.expectCycleHours)
     return {
       id: String(row.categoryId ?? row.id ?? ''),
       name: String(row.categoryName ?? row.name ?? ''),
@@ -1345,6 +1414,7 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
       count,
       seq,
       remark,
+      expectCycleHours,
     }
   }).filter((node) => node.id && node.name)
   const byId = new Map<string, SourceCategory>()
@@ -1357,6 +1427,8 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     // 2026-10-16 补：remark 以前没被映射，导致树节点拿不到备注——
     // `CategoryManager.openEdit()` 读 `node.remark` 回填编辑表单，于是「备注」永远显示为空。
     ...(node.remark == null ? {} : { remark: node.remark }),
+    // 0 / null 都是未配置（后端 0 = 清空写成 NULL）
+    ...(node.expectCycleHours ? { expectCycleHours: node.expectCycleHours } : {}),
   }))
   const roots: SourceCategory[] = []
   nodes.forEach((node) => {

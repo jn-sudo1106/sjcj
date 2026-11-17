@@ -267,8 +267,21 @@ function openCreate() {
   editor.entry = null
   editor.visible = true
 }
-async function onEntrySaved() {
-  await load()
+async function onEntrySaved(savedTableId?: string) {
+  const isCreate = !editor.entry?.tableId
+  if (isCreate) {
+    // 新建表场景：清空可能导致新表被过滤的筛选条件（如之前选了 MySQL 或 InnoDB 引擎），重置为第 1 页，确保新表排在第一行清晰可见
+    entryTypeIdFilter.value = ''
+    nameFilter.value = ''
+    dsKindFilter.value = ''
+    opTypeFilter.value = ''
+    storageEngineFilter.value = ''
+    page.value = 1
+    if (savedTableId) {
+      selected.value = [String(savedTableId)]
+    }
+  }
+  await load(true)
 }
 const isCkSink = (e: EntryType) => (e.dsKind ?? 'MYSQL') === 'CK'
 function openQuickCk(e: EntryType) {
@@ -577,6 +590,9 @@ const onEnterSearch = withoutComposition(() => onSearch())
         <el-option label="InnoDB" value="InnoDB" />
         <el-option label="ReplacingMergeTree" value="ReplacingMergeTree" />
         <el-option label="MergeTree" value="MergeTree" />
+        <el-option label="SummingMergeTree" value="SummingMergeTree" />
+        <el-option label="AggregatingMergeTree" value="AggregatingMergeTree" />
+        <el-option label="VersionedCollapsingMergeTree" value="VersionedCollapsingMergeTree" />
       </el-select>
       <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" inputmode="numeric" aria-label="表 ID，仅支持数字" title="表 ID 仅支持数字，按名称查询请使用右侧表名称框" style="width: 150px" @keyup.enter="onEnterSearch" />
       <el-input v-model="nameFilter" clearable placeholder="表名称" style="width: 190px" @keyup.enter="onEnterSearch" />

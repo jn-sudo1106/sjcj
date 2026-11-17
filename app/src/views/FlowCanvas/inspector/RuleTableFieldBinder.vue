@@ -303,7 +303,7 @@ function toggleField(kind: 'input' | 'output', code: string) {
 
   <div class="rc-field">
     <div class="rc-field-header">
-      <label>入参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.inputFields?.length ?? 0 }} / {{ inputFieldPool.length }} 个，默认全选）</template></label>
+      <label>输入字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.inputFields?.length ?? 0 }} / {{ inputFieldPool.length }} 个，默认全选）</template></label>
       <div v-if="modelValue.inputTableId" class="rc-field-actions">
         <button v-if="inputPartial" type="button" class="rc-text-btn" data-testid="rule-input-only-selected" @click="onlySelected.input = !onlySelected.input">{{ onlySelected.input ? `显示全部 ${inputFieldPool.length} 个` : '只看已选' }}</button>
         <button type="button" class="rc-text-btn" data-testid="rule-input-select-all" @click="selectAllFields('input')">全选</button>
@@ -364,7 +364,7 @@ function toggleField(kind: 'input' | 'output', code: string) {
 
   <div v-if="!hideOutput" class="rc-field">
     <div class="rc-field-header">
-      <label>出参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.outputFields?.length ?? 0 }} / {{ outputFieldPool.length }} 个）</template></label>
+      <label>输出字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.outputFields?.length ?? 0 }} / {{ outputFieldPool.length }} 个）</template></label>
       <div v-if="modelValue.inputTableId" class="rc-field-actions">
         <button v-if="outputPartial" type="button" class="rc-text-btn" data-testid="rule-output-only-selected" @click="onlySelected.output = !onlySelected.output">{{ onlySelected.output ? `显示全部 ${outputFieldPool.length} 个` : '只看已选' }}</button>
         <button type="button" class="rc-text-btn" data-testid="rule-output-select-all" @click="selectAllFields('output')">全选</button>

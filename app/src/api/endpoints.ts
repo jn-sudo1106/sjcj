@@ -64,7 +64,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 186 实测：不带 configId 报 not present、`configId=` 正常；flowId 未关联的源整批拒绝不建。
   { path: 'source/createJobs', desc: '给源新建定时（**只新建**，改已有的要用 job/updateJob）', danger: true, live: true },
   { path: 'source/clear', desc: '清源缓存', danger: true },
-  { path: 'source/queryStepDetail', desc: '查询子步骤详情' },
+  { path: 'source/queryStepDetail', desc: '源的输出表产出统计（按步骤返回，1114 源列表展开行 / 产出列）', impl: true, live: true },
   { path: 'source/nextStep', desc: '手动后续处理', danger: true, live: true },
   // nextStep2（发全部/大量后续）2026-08-19 起真实接线（M3-0G 复议，见方案；前端已加数量上限
   // 校验）；但这条请求路径本身从未真实调用过（AES 载荷形状、后端真实响应仅凭读源码推断），
@@ -131,6 +131,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'category/add', desc: '新增分类', danger: true, live: true },
   { path: 'category/addBatch', desc: '批量新增分类', danger: true, live: true },
   { path: 'category/update', desc: '修改分类', danger: true, live: true },
+  // 1114 源产出监控一期 C：业务目录预期产出周期（独立端点，不走 category/update：后者 form 绑定，没传的字段也是 null）。
+  // 186 实测 2026-11-16：expectCycleHours 必填（0 = 清空）、整数小时 0～8784；只允许 -2 下的业务目录，根 -2 / 系统 / 视图目录拒绝。
+  { path: 'category/updateExpectCycle', desc: '设置业务目录预期产出周期（categoryId + expectCycleHours 小时，0 = 清空）', danger: true, impl: true, live: true },
   { path: 'category/delete', desc: '删除分类', danger: true, live: true },
   // 2026-10-14「我的视图」目录：视图目录 = 带 rootViewId 的分类（categoryPaged / add / update 加 rootViewId，一级 parentId=-1）。
   // 前端按调用强制走真实（mode: 'http'），与 source-view/* 同口径，不标 live。
@@ -378,6 +381,11 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   // AI 智能问数（对话工作台对接后端 /api/poc/chat/agent SSE 流式接口，原样透传端到端问数智能体响应）
   { path: 'poc/chat/agent', desc: '智能体问数 SSE 流式对话 → POST /api/poc/chat/agent（body: {msg}）', impl: true, live: true },
+  { path: 'poc/chat/help/question', desc: '推荐问数场景/问句列表 → GET /api/poc/chat/help/question', impl: true, live: true },
+  { path: 'poc/session/list', desc: '问数会话列表 → GET /api/poc/session/list', impl: true, live: true },
+  { path: 'poc/session/stop', desc: '问数会话删除 → POST /api/poc/session/stop?id=', danger: true, impl: true, live: true },
+  { path: 'poc/session/name', desc: '问数会话改名 → POST /api/poc/session/name', danger: true, impl: true, live: true },
+  { path: 'poc/chat-log/history', desc: '问数会话问答历史 → POST /api/poc/chat-log/history', impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },

@@ -57,9 +57,9 @@ export function validateTableBinding(
   options: { requireOutput?: boolean } = {},
 ): string | undefined {
   if (!cfg.inputTableId) return '请选择输入表'
-  if (!cfg.inputFields?.length) return '请至少选择 1 个入参字段'
+  if (!cfg.inputFields?.length) return '请至少选择 1 个输入字段'
   // 数据监控节点（monitor）不落表、不出参，跳过出参字段校验（2026-09-01）
-  if (options.requireOutput !== false && !cfg.outputFields?.length) return '请至少选择 1 个出参字段'
+  if (options.requireOutput !== false && !cfg.outputFields?.length) return '请至少选择 1 个输出字段'
   return undefined
 }
 

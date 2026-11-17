@@ -151,6 +151,27 @@ export interface Source {
   paramRefs?: { paramId: string; group?: string | null }[]
 }
 
+/**
+ * 源的一张输出表的产出统计（1114 源产出监控 一期 A）：来自旧平台 `GET /v1/source/queryStepDetail`，
+ * 后端按「源 + 表」统计，同一张表的多个步骤值相同，适配器按表去重后把步骤收进 `steps`。
+ */
+export interface SourceOutputTable {
+  /** 输出表 ID（步骤的 outEntry） */
+  entryTypeId: string
+  /** 表类型名，如「详情表」；后端查不到表定义时为「表:ID」 */
+  entryTypeName: string
+  /** 物理表名，已去掉 `sense_data.` 前缀 */
+  tableName: string
+  /** 条数；`-1` 统计异常（含物理表不存在），`-2` 没有表定义（后端哨兵值原样保留，展示层转文字） */
+  dataCount: number
+  /** 最近入库（max(CREATE_DT)） */
+  lastInsertAt?: string
+  /** 最近更新 */
+  lastUpdateAt?: string
+  /** 写这张表的步骤，按步骤 ID 升序 */
+  steps: { stepId: string; stepName: string }[]
+}
+
 export type WorkflowBindingRole = 'MAIN' | 'BACKFILL' | 'AUX'
 export type WorkflowVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
 
@@ -797,6 +818,8 @@ export interface SourceCategory {
   parentId?: string // 父级分类 ID
   path?: string // 祖先 ID 链
   remark?: string // 备注（旧 CATEGORY 列「备注」，分类目录维护/详情用）
+  /** 业务目录预期产出周期（小时）；未配置时不带（1114 源产出监控一期 C，cfg_category.EXPECT_CYCLE_HOURS） */
+  expectCycleHours?: number
   children?: SourceCategory[]
 }
 

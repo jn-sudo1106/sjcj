@@ -196,6 +196,8 @@ interface ScopeTreeRow {
   id: string
   name: string
   parentId: string
+  /** 业务目录预期产出周期（小时）；未配置 / 0 不带（1114 一期 C） */
+  expectCycleHours?: number
 }
 
 /**
@@ -223,7 +225,11 @@ async function readScopeTree(): Promise<ScopeTreeRow[] | null> {
     const id = rec.id == null ? '' : String(rec.id)
     const name = rec.name == null ? '' : String(rec.name)
     if (!id || !name) continue
-    parsed.push({ id, name, parentId: rec.parentId == null ? '' : String(rec.parentId) })
+    const hours = Number(rec.expectCycleHours)
+    parsed.push({
+      id, name, parentId: rec.parentId == null ? '' : String(rec.parentId),
+      ...(Number.isFinite(hours) && hours > 0 ? { expectCycleHours: hours } : {}),
+    })
   }
   return parsed
 }
@@ -484,6 +490,7 @@ export function resetBizDirGroupCache() {
 
 function invalidateBizSources(categoryIds: string[]) {
   categoryIds.forEach((id) => dirSourcesCache.delete(id))
+  bizCycleTask = null
   // 按祖先目录缓存（含子目录），子目录变动也会影响上层，整体作废
   dirGroupCache.clear()
   membershipTask = null
@@ -691,12 +698,81 @@ function sameFlows(a: SourceFlowsView, b: SourceFlowsView) {
     && a.ownFlowIds.every((id) => b.ownFlowIds.includes(id))
 }
 
+// ---------------- 业务目录预期产出周期 → 源（1114 源产出监控一期 B） ----------------
+
+/**
+ * 每个业务目录的生效周期：自己设了用自己的，没设继承**最近一个设了周期的上级**（到 -2 为止）。
+ * 2026-11-16 定继承：业务只在「重点智库」这类上层目录设一次，子目录不必逐个设。
+ * 只返回生效周期有值的目录。
+ */
+export function effectiveBizCycles(rows: ScopeTreeRow[]): Map<string, number> {
+  const children = scopeRowsByParent(rows)
+  const result = new Map<string, number>()
+  const queue: { id: string; inherited?: number }[] = [{ id: BIZ_DIR_ROOT_ID }]
+  const seen = new Set<string>([BIZ_DIR_ROOT_ID])
+  while (queue.length) {
+    const { id, inherited } = queue.shift()!
+    for (const child of children.get(id) ?? []) {
+      if (seen.has(child.id)) continue
+      seen.add(child.id)
+      const own = child.expectCycleHours
+      const effective = own ?? inherited
+      if (effective) result.set(child.id, effective)
+      queue.push({ id: child.id, inherited: effective })
+    }
+  }
+  return result
+}
+
+const BIZ_CYCLE_TTL_MS = 120_000
+let bizCycleTask: { at: number; task: Promise<Map<string, number>> } | null = null
+
+/**
+ * 源 → 预期周期（小时）：源所在的业务目录里生效周期**最短**的一个（方案 §3.3「多目录取最短」）。
+ * 不在任何设了周期的目录（含继承）里的源不出现在结果里 = 未配置周期。
+ *
+ * 只枚举生效周期有值的那些目录的直属源（`category/listSources`，有缓存），不走 bizMembership 的整树枚举
+ *（生产上要几十秒）。目录周期每次都从 scopeTree 现读（不用会话缓存的 scopeTreeRows，那份不会刷新），
+ * 结果缓存 2 分钟；分类目录页改周期后调 invalidateBizCycles。拿不到 scopeTree 时返回空表（全部未配置）。
+ */
+export function bizSourceCycles(): Promise<Map<string, number>> {
+  if (bizCycleTask && Date.now() - bizCycleTask.at < BIZ_CYCLE_TTL_MS) return bizCycleTask.task
+  const task = (async () => {
+    const rows = await readScopeTree()
+    if (!rows) return new Map<string, number>()
+    const dirCycles = effectiveBizCycles(rows)
+    const bySource = new Map<string, number>()
+    const dirs = [...dirCycles.keys()]
+    for (let i = 0; i < dirs.length; i += MEMBERSHIP_CONCURRENCY) {
+      const batch = dirs.slice(i, i + MEMBERSHIP_CONCURRENCY)
+      const lists = await Promise.all(batch.map((id) => bizDirSourceIds(id).catch(() => [] as string[])))
+      lists.forEach((sourceIds, k) => {
+        const hours = dirCycles.get(batch[k]!)!
+        for (const sid of sourceIds) {
+          const prev = bySource.get(sid)
+          if (prev === undefined || hours < prev) bySource.set(sid, hours)
+        }
+      })
+    }
+    return bySource
+  })()
+  bizCycleTask = { at: Date.now(), task }
+  task.catch(() => { if (bizCycleTask?.task === task) bizCycleTask = null })
+  return task
+}
+
+/** 目录周期改了 / 业务目录成员变了：下次重新读 */
+export function invalidateBizCycles() {
+  bizCycleTask = null
+}
+
 /** 测试用：清掉模块级缓存 */
 export function resetSourceDirCache() {
   childrenCache.clear()
   nodeIndex.clear()
   dirSourcesCache.clear()
   dirGroupCache.clear()
+  bizCycleTask = null
   membershipTask = null
   bizTreeTask = null
   scopeTreeTask = null

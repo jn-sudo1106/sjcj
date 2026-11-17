@@ -138,4 +138,10 @@ describe('augmentMonitorSystemPrompt 提示词注入真实列', () => {
     expect(augmentMonitorSystemPrompt('基础提示词')).toContain('DQ_DB_HOST')
     expect(augmentMonitorSystemPrompt('基础提示词', [], 'CREATE_DT')).toContain('按 CREATE_DT 统计入库时间')
   })
+
+  it('明确要求列别名反引号包裹并避开保留字（delayed 实测 1064）', () => {
+    const prompt = augmentMonitorSystemPrompt('基础提示词')
+    expect(prompt).toContain('列别名同样必须反引号包裹')
+    expect(prompt).toContain('delayed')
+  })
 })

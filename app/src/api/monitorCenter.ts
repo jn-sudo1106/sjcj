@@ -95,6 +95,9 @@ function rootCauseOf(error: unknown): unknown {
 function isNetworkFailure(error: unknown): boolean {
   const root = rootCauseOf(error)
   if (typeof TypeError !== 'undefined' && root instanceof TypeError) return true
+  // client 的超时/取消抛的是带 name 的 Error，文案是中文（「请求超时（20 秒）…」），正则匹配不到
+  const name = (root as { name?: unknown } | null)?.name
+  if (name === 'TimeoutError' || name === 'AbortError') return true
   const message = root instanceof Error ? root.message : String(root ?? '')
   return /failed to fetch|networkerror|network error|load failed|connection refused|econnrefused|timed?\s?out/i.test(
     message,
@@ -313,35 +316,73 @@ async function runMonitorsNowLegacy(ids: string[], kinds: Record<string, Monitor
   }
 }
 
+/** 「端点不存在」的 HTTP 状态：旧后端（217）没有 `/run` 时的真实表现，此时请求肯定没被受理。 */
+const RUN_ENDPOINT_MISSING_STATUSES = new Set([404, 405, 501])
+
+/**
+ * 立即运行提交后结果未确认（断网 / 超时 / 5xx）：请求可能已经被服务端受理。
+ * 页面据此提示「先看运行记录」，而不是让用户马上再点一次。
+ */
+export class MonitorRunUncertainError extends Error {
+  override readonly cause?: unknown
+
+  constructor(cause: unknown) {
+    super('提交执行的结果未确认（网络异常、超时或服务异常），可能已经受理；请先查看运行记录，不要立即重复提交')
+    this.name = 'MonitorRunUncertainError'
+    this.cause = cause
+  }
+}
+
+/**
+ * `/run` 失败后能不能降级到旧分流。只有确定「这次请求没被受理」时才降级，否则会把同一批检查再提交一遍：
+ *   - 404 / 405 / 501：端点不存在（旧后端）→ 降级；
+ *   - 无状态码且不是网络异常：client 解包信封失败（`success:false`），服务端明确拒绝 → 降级（217 兼容）；
+ *   - 断网 / 超时 / 取消 / 5xx：请求可能已到服务端 → 不降级，抛 `MonitorRunUncertainError`；
+ *   - 其余 4xx（401/403/400…）：照原错误抛出，换旧端点也不会成功。
+ */
+function runFallbackDecisionOf(error: unknown): 'fallback' | 'uncertain' | 'rethrow' {
+  if (isNetworkFailure(error)) return 'uncertain'
+  const status = httpStatusOf(error)
+  if (status === undefined) return 'fallback'
+  if (RUN_ENDPOINT_MISSING_STATUSES.has(status)) return 'fallback'
+  if (status >= 500) return 'uncertain'
+  return 'rethrow'
+}
+
 /**
  * 立即运行。优先走 C05 `POST /source/check/run`：一次带上全部 ids，由服务端按检查方式分流
  * （rule → Java 调度器 / ai → 执行器），前端不再自己拆两半、也不再依赖页面传的 kind 表。
  *
- * 旧后端（217）没有该端点 → 404 / 非 2xx / 信封 `success:false` 时降级到
+ * 旧后端（217）没有该端点 → 404/405/501 或信封 `success:false` 时降级到
  * `runMonitorsNowLegacy`（执行器 + 旧 runNow 分流，行为与历史一致）。
+ * 断网 / 超时 / 5xx **不降级**：那时请求可能已被受理，再走旧路径会重复触发同一批检查。
  * 两种都只代表「已受理」，执行结果以运行记录为准。
  */
 export async function runMonitorsNow(ids: string[], kinds: Record<string, MonitorKind> = {}): Promise<RunNowResult> {
   if (!ids.length) return runMonitorsNowLegacy(ids, kinds)
+  let accepted: Awaited<ReturnType<typeof runChecksNow>>
   try {
-    const accepted = await runChecksNow(ids)
-    // 形状防御：旧后端可能 200 + success:false（client 已 reject），网关也可能回一段不是回执的 JSON
-    if (!accepted || !Array.isArray(accepted.results)) throw new Error('运行受理响应缺少 results')
-    const results = accepted.results
-    return {
-      // 只统计真正成功的项：ok=false 是失败/未受理，页面另有失败提示，不能算「已提交」
-      viaRunner: results.filter((item) => item.kind === 'ai' && item.ok).length,
-      viaLegacy: results.filter((item) => item.kind === 'rule' && item.ok).length,
-      // 与执行器分支同口径：AI 项里因「另一实例正在执行」被跳过的数量
-      runnerSkipped: results.filter(
-        (item) => item.kind === 'ai' && !item.ok && String(item.status ?? '').toUpperCase() === 'SKIPPED',
-      ).length,
-      runnerRunIds: results
-        .map((item) => item.runId)
-        .filter((runId): runId is string => typeof runId === 'string' && runId.length > 0),
-    }
-  } catch {
-    return runMonitorsNowLegacy(ids, kinds)
+    accepted = await runChecksNow(ids)
+  } catch (error) {
+    const decision = runFallbackDecisionOf(error)
+    if (decision === 'fallback') return runMonitorsNowLegacy(ids, kinds)
+    if (decision === 'uncertain') throw new MonitorRunUncertainError(error)
+    throw error
+  }
+  // 形状防御：2xx 但不是回执（信封被抹平 / 空 data）。服务端没给出任何受理项，按旧路径提交
+  if (!accepted || !Array.isArray(accepted.results)) return runMonitorsNowLegacy(ids, kinds)
+  const results = accepted.results
+  return {
+    // 只统计真正成功的项：ok=false 是失败/未受理，页面另有失败提示，不能算「已提交」
+    viaRunner: results.filter((item) => item.kind === 'ai' && item.ok).length,
+    viaLegacy: results.filter((item) => item.kind === 'rule' && item.ok).length,
+    // 与执行器分支同口径：AI 项里因「另一实例正在执行」被跳过的数量
+    runnerSkipped: results.filter(
+      (item) => item.kind === 'ai' && !item.ok && String(item.status ?? '').toUpperCase() === 'SKIPPED',
+    ).length,
+    runnerRunIds: results
+      .map((item) => item.runId)
+      .filter((runId): runId is string => typeof runId === 'string' && runId.length > 0),
   }
 }
 

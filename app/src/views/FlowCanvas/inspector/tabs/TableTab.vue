@@ -490,7 +490,7 @@ async function onTableSaved(tableId: string) {
       </div>
       <div v-if="inputTableFields.length" class="rc-field">
         <div class="rc-field-header">
-          <label>输入字段选择（{{ inputSelection.specified ? `已选中 ${selectedInputFieldProps.length} / ${inputTableFields.length} 个字段` : '未指定' }}）</label>
+          <label>输入字段（{{ inputSelection.specified ? `已选中 ${selectedInputFieldProps.length} / ${inputTableFields.length} 个字段` : '未指定' }}）</label>
           <div class="rc-field-actions">
             <button v-if="inputPartiallySelected" type="button" class="rc-text-btn" data-testid="toggle-only-selected-input-fields" @click="inputOnlySelected = !inputOnlySelected">{{ inputOnlySelected ? `显示全部 ${inputTableFields.length} 个` : '只看已选' }}</button>
             <button type="button" class="rc-text-btn" data-testid="select-all-input-fields" @click="selectAllInputFields">全选</button>
@@ -615,13 +615,13 @@ async function onTableSaved(tableId: string) {
           filterable remote clearable
           :remote-method="fillTableSearch.debouncedSearch"
           :loading="fillTableSearch.loading.value"
-          placeholder="选择输出父表（默认入参表）"
+          placeholder="选择输出父表（默认输入表）"
           @update:model-value="onFillTableId"
           @visible-change="onFillTableVisible"
         >
           <el-option v-for="t in fillTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
         </el-select>
-        <div class="rc-help">默认写回入参表，可改选其他表；字段值按物理列名同名映射。切回单表即取消本步骤回填。</div>
+        <div class="rc-help">默认写回输入表，可改选其他表；字段值按物理列名同名映射。切回单表即取消本步骤回填。</div>
         <div v-if="!fillTableId" class="rc-help input-field-warning" data-testid="fill-table-missing-hint">
           {{ fillColumns.length ? '已有输出字段（回填），但未选择输出父表，请先选择表。' : '未选择输出父表，本步骤只写输出表。' }}
         </div>

@@ -1331,6 +1331,61 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main(sku_id)')
   })
 
+  it('生成结果带 ```python 围栏时清理成纯代码并原地覆盖写回（1117 186 实测断点）', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '标题去空白', script: '', scriptPath: '' })
+    await flushPromises()
+    const fenced = '```python\ndef main(TITLE=None):\n    return {"TITLE": str(TITLE).strip()}\n```'
+    const clean = 'def main(TITLE=None):\n    return {"TITLE": str(TITLE).strip()}'
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onContent?.(fenced)
+      options?.onDone?.({ message: '# 当前文件已保存到/code01/202611/1794831302887.py' })
+      return { script: fenced, scriptPath: '' }
+    })
+    const upload = vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true } as never)
+    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue(clean)
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(upload).toHaveBeenCalledWith('/code01/202611/1794831302887.py', clean)
+    expect(flow.configs['rule-1'].ruleCfg?.script).toBe(clean)
+    expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/code01/202611/1794831302887.py')
+  })
+
+  it('清理后回读不一致：按生成失败处理，还原原有脚本和路径', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', {
+      describe: '标题去空白',
+      script: 'def main():\n    return {}\n',
+      scriptPath: '/rules/saved/orch-173.py',
+    })
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({ script: '```python\ndef main():\n    return {"a": 1}\n```', scriptPath: '/code01/new.py' } as never)
+    vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true } as never)
+    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('```python\nstale\n```')
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg?.script).toBe('def main():\n    return {}\n')
+    expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/rules/saved/orch-173.py')
+  })
+
+  it('生成结果无围栏时不重复上传', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '标题去空白', script: '', scriptPath: '' })
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({ script: 'def main():\n    return {}\n', scriptPath: '/code01/plain.py' } as never)
+    const upload = vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true } as never)
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(upload).not.toHaveBeenCalled()
+    expect(flow.configs['rule-1'].ruleCfg?.script).toBe('def main():\n    return {}\n')
+  })
+
   it('主面板生成中点击取消：中断请求并保留已输出的脚本', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
