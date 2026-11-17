@@ -119,7 +119,12 @@ let streamStartTime = 0
 const askChat = useAskChat({
   onChunkFlush: (text) => {
     if (!activeAssistantMsg) return
+    const isFirstChunk = !activeAssistantMsg.content
     activeAssistantMsg.content += text
+    // 正文一开始就把思考过程收起：等答完再收起会把下方回答整体顶上去一大截
+    // （实测 160px+ 的位移，看起来就是「答完抖一下」）；在正文还空的时候收，位移最小。
+    // 用户仍可点头部展开回看，历史消息沿用默认收起逻辑。
+    if (isFirstChunk) thinkingExpandedMap[activeAssistantMsg.id] = false
     followScroll()
   },
   onReasoning: (text) => {
@@ -255,9 +260,45 @@ function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interr
 const isFollowingScroll = ref(true)
 const unreadBelowCount = ref(0)
 
+// 自己写 scrollTop 触发的 scroll 事件不能当成「用户上翻」：
+// rAF 里读到的高度可能已经落后于最新内容（大 chunk 一到就差出几十~上百 px），
+// 旧逻辑会把这种滚动判成用户离开底部 → 自动跟随被关掉、内容卡住，收尾时再一下跳到底。
+let ignoreOwnScrollEvents = 0
+let ignoreOwnScrollTimer: number | null = null
+let lastProgrammaticTop = -1
+
+function markOwnScrollEvent() {
+  ignoreOwnScrollEvents += 1
+  if (ignoreOwnScrollTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(ignoreOwnScrollTimer)
+  }
+  ignoreOwnScrollTimer =
+    typeof window !== 'undefined'
+      ? window.setTimeout(() => {
+          ignoreOwnScrollEvents = 0
+          ignoreOwnScrollTimer = null
+        }, 400)
+      : null
+}
+
+function scrollThreadToBottom(el: HTMLElement) {
+  const target = el.scrollHeight
+  // 值没变就不会派发 scroll 事件，不能预先记账，否则会把下一次真实滚动吃掉
+  if (Math.abs(el.scrollTop - target) > 1) {
+    markOwnScrollEvent()
+    lastProgrammaticTop = target
+  }
+  el.scrollTop = target
+}
+
 function handleThreadScroll() {
   const el = chatContainerRef.value
   if (!el) return
+  // 只忽略「停在我们自己刚写进去的位置」的那次滚动；用户在同一帧里往上拖走就不是这个位置了
+  if (ignoreOwnScrollEvents > 0 && Math.abs(el.scrollTop - lastProgrammaticTop) <= 1) {
+    ignoreOwnScrollEvents -= 1
+    return
+  }
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
   isFollowingScroll.value = distance <= 80
   if (isFollowingScroll.value) unreadBelowCount.value = 0
@@ -683,11 +724,11 @@ function scrollToBottom(force = false) {
       scrollRafId = window.requestAnimationFrame(() => {
         scrollRafId = null
         if (chatContainerRef.value) {
-          chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
+          scrollThreadToBottom(chatContainerRef.value)
         }
       })
     } else {
-      chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
+      scrollThreadToBottom(chatContainerRef.value)
     }
   })
 }
@@ -984,7 +1025,7 @@ async function handleSend(customTitle?: string) {
         role: 'assistant',
         localAction: true,
         status: 'done',
-        content: `已为您将查询结果转换为「${viewLabel}」展示。\n\n您也可以在上方卡片右上角自由切换「趋势图表」、「占比饼图」与「明细数据表」，或点击「导出数据」导出为 Excel / CSV 文件。`,
+        content: `已为您将查询结果转换为「${viewLabel}」展示。\n\n您也可以在上方卡片右上角自由切换「趋势图表」、「占比饼图」与「明细数据表」，或在明细表上方点击「导出 Excel」「导出 CSV」下载数据。`,
         createdAt: '刚刚',
         suggestions: ['把结果导出成 Excel', '导出为 CSV 表格'],
       }
@@ -1082,6 +1123,8 @@ async function handleRetry(msg: ChatMessage) {
   msg.chartData = undefined
   msg.question = question
   msg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
+  // 上一轮正文开始时把思考面板收起了（见 onChunkFlush），重试要恢复「思考中自动展开」
+  delete thinkingExpandedMap[msg.id]
   scrollToBottom(true)
   await beginStream(msg, activeSessionId.value, question, { bypassDebounce: true })
 }
@@ -1165,6 +1208,10 @@ onUnmounted(() => {
   if (scrollRafId !== null && typeof window !== 'undefined') {
     window.cancelAnimationFrame(scrollRafId)
     scrollRafId = null
+  }
+  if (ignoreOwnScrollTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(ignoreOwnScrollTimer)
+    ignoreOwnScrollTimer = null
   }
 })
 </script>
@@ -2126,6 +2173,11 @@ onUnmounted(() => {
   min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 流式追加内容时不让浏览器做滚动锚定：跟随逻辑自己管滚动，
+     锚定会在追加瞬间改 scrollTop，看起来像「自己往上跳」 */
+  overflow-anchor: none;
+  /* 出现/收起滚动条时不再挤压内容宽度（否则每次越过一屏都会整体重排一下） */
+  scrollbar-gutter: stable;
   padding: 20px 24px;
   display: flex;
   flex-direction: column;
@@ -2458,12 +2510,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.rc-export-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .rc-chart-view {
