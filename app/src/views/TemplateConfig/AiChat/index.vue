@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // AI 智能问数（Agent 交互对话工作台）
 // 位于「问数配置」分组，支持 Text-to-SQL、多轮主动澄清与问答、思考链展示、KPI指标卡片、图表与明细切换
-import { ref, reactive, computed, nextTick, onMounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   ArrowDown,
@@ -14,11 +14,17 @@ import {
   Plus,
   Search,
   TrendCharts,
+  VideoPause,
 } from '@element-plus/icons-vue'
 import {
   listAiSessions,
+  deleteAiSession,
+  getAiChatHistory,
   submitClarificationAnswer,
   streamAgentChat,
+  extractClarificationFromText,
+  extractChartDataFromText,
+  listRecommendedQuestions,
   type AiSessionItem,
   type ChatMessage,
   type Clarification,
@@ -36,29 +42,21 @@ interface StarterPrompt {
   prompt: string
 }
 
-// 推荐问数快捷场景卡片
-const starterPrompts: StarterPrompt[] = [
-  {
-    tag: '多表下钻 · 故障定位',
-    title: '排查近期异常任务与根因',
-    prompt: '帮我排查一下最近的异常任务数据，重点分析网络层 403 与规则清洗异常。',
-  },
-  {
-    tag: '质量分析 · KPI 报表',
-    title: '昨日各站点抓取成功率 TOP 10',
-    prompt: '统计昨日各数据源的采集成功率，对比总任务量与失败量前 10 个网站。',
-  },
-  {
-    tag: '性能监控 · 延时瓶颈',
-    title: '各网站平均抓取耗时与并发量',
-    prompt: '分析近 3 天各网站的平均抓取耗时分布，排查耗时超过 15 秒的慢请求源。',
-  },
-  {
-    tag: '规则审计 · 异常清洗',
-    title: '清洗规则与 XPath 命中率审计',
-    prompt: '统计核心业务表字段清洗规则命中率，列出未匹配到有效内容的任务与字段。',
-  },
-]
+// 推荐问数卡片：纯动态从后端接口（/api/poc/chat/help/question）获取，后端无数据时不展示
+const starterPrompts = ref<StarterPrompt[]>([])
+
+function mapQuestionsToStarters(questions: string[]): StarterPrompt[] {
+  return questions
+    .filter((q) => typeof q === 'string' && q.trim().length > 0)
+    .map((q, idx) => {
+      const trimmed = q.trim()
+      return {
+        tag: `推荐场景 ${String(idx + 1).padStart(2, '0')}`,
+        title: trimmed,
+        prompt: trimmed,
+      }
+    })
+}
 
 interface Props {
   initialSessions?: AiSessionItem[]
@@ -77,13 +75,27 @@ const searchSessionKeyword = ref<string>('')
 
 // 输入框与发送参数
 const promptText = ref<string>('')
-const enableReasoning = ref<boolean>(true)
-const enableAutoChart = ref<boolean>(true)
 const isSending = ref<boolean>(false)
 const currentAbortController = ref<AbortController | null>(null)
 
-// 视图切换与思考链折叠（支持趋势柱状、占比饼图与明细数据表）
-const activeDataView = ref<'chart' | 'pie' | 'table'>('chart')
+// 视图切换与思考链折叠（支持趋势柱状、占比饼图与明细数据表；按用户需求默认展示明细列表）
+const activeDataView = ref<'chart' | 'pie' | 'table'>('table')
+const dataViewMap = reactive<Record<string, 'chart' | 'pie' | 'table'>>({})
+
+function getMsgDataView(msg: ChatMessage): 'chart' | 'pie' | 'table' {
+  return dataViewMap[msg.id] ?? activeDataView.value
+}
+
+function setMsgDataView(msg: ChatMessage, view: 'chart' | 'pie' | 'table') {
+  dataViewMap[msg.id] = view
+  activeDataView.value = view
+}
+
+let msgIdCounter = 0
+function nextMsgId(suffix: string): string {
+  return `m-${Date.now()}-${++msgIdCounter}-${suffix}`
+}
+
 const isThinkingExpanded = ref<boolean>(true)
 const chatContainerRef = ref<HTMLElement | null>(null)
 
@@ -91,6 +103,7 @@ const chatContainerRef = ref<HTMLElement | null>(null)
 const thinkingExpandedMap = reactive<Record<string, boolean>>({})
 const thinkingElapsedSeconds = ref(0)
 let thinkingTimer: ReturnType<typeof setInterval> | null = null
+let scrollRafId: number | null = null
 
 function isThinkingOpen(msg: ChatMessage): boolean {
   if (thinkingExpandedMap[msg.id] !== undefined) {
@@ -114,6 +127,59 @@ function isThinkingOpen(msg: ChatMessage): boolean {
 
 function toggleThinking(msgId: string, currentOpen: boolean) {
   thinkingExpandedMap[msgId] = !currentOpen
+}
+
+function isMsgClarifyConfirmed(msg: ChatMessage): boolean {
+  if (msg.clarification) {
+    return Boolean(msg.clarification.confirmed)
+  }
+  return clarifyConfirmed.value
+}
+
+function getMsgSelectedTableNames(msg: ChatMessage): string[] {
+  if (msg.clarification?.options && msg.clarification.selectedEntryTypeIds?.length) {
+    return msg.clarification.options
+      .filter((o) => msg.clarification!.selectedEntryTypeIds!.includes(o.entryTypeId))
+      .map((o) => o.typeName || o.tableName)
+  }
+  return []
+}
+
+function formatClarifyIntro(content: string, hasClarification = false): string {
+  if (!content) return ''
+  if (!hasClarification) return content
+
+  // 1. 若该消息已成功提取并渲染了待确认卡片/表格，从正文中移除冗余的静态 Markdown 表格
+  let cleaned = content
+    .replace(
+      /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
+      '\n'
+    )
+
+  // 2. 移除冗余的静态候选列表项（由 ClarificationCard 交互勾选表格承载）
+  cleaned = cleaned.replace(
+    /(?:^|\n)(?:\s*(?:[-*+•]|\d+[\.、]|\(\d+\)|\d+\))\s+[^\n]+(?:\n|$))+/g,
+    '\n'
+  )
+
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim()
+
+  return cleaned
+}
+
+function formatMarkdownContent(msg: ChatMessage): string {
+  if (!msg.content) return ''
+  // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由 rc-dataview-card 统一承载图表与表格及导出交互
+  if (msg.chartData) {
+    const cleaned = msg.content
+      .replace(
+        /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
+        '\n'
+      )
+      .trim()
+    return cleaned
+  }
+  return msg.content
 }
 
 // 提取消息中的切片数据，若未显式提供则从柱状数据智能转换
@@ -176,7 +242,7 @@ function getSafeExportFileName(title: string, defaultName = '问数明细数据'
   return clean || defaultName
 }
 
-// 导出明细表格数据为 Excel (.xlsx)
+// 导出明细表格数据为 Excel (.xlsx)（全量导出）
 function exportTableToExcel(msg: ChatMessage) {
   if (!msg.chartData?.tableColumns?.length || !msg.chartData?.tableRows?.length) {
     ElMessage.warning('当前暂无可导出的明细数据')
@@ -184,6 +250,7 @@ function exportTableToExcel(msg: ChatMessage) {
   }
   const cols = msg.chartData.tableColumns
   const rows = msg.chartData.tableRows
+
   const headerRow: XlsxCell[] = cols.map((c) => c.label)
   const dataRows: XlsxCell[][] = rows.map((r) =>
     cols.map((c) => {
@@ -194,10 +261,10 @@ function exportTableToExcel(msg: ChatMessage) {
   const baseName = getSafeExportFileName(msg.chartData.title || '', '问数明细报表')
   const fileName = `${baseName}_${exportDateTag()}`
   downloadXlsx(fileName, [headerRow, ...dataRows], baseName.slice(0, 31))
-  ElMessage.success(`已成功导出 Excel 文件：${fileName}.xlsx`)
+  ElMessage.success(`已成功导出 ${rows.length} 条数据为 Excel 文件：${fileName}.xlsx`)
 }
 
-// 导出明细表格数据为 CSV (.csv)
+// 导出明细表格数据为 CSV (.csv)（全量导出）
 function exportTableToCsv(msg: ChatMessage) {
   if (!msg.chartData?.tableColumns?.length || !msg.chartData?.tableRows?.length) {
     ElMessage.warning('当前暂无可导出的明细数据')
@@ -205,6 +272,7 @@ function exportTableToCsv(msg: ChatMessage) {
   }
   const cols = msg.chartData.tableColumns
   const rows = msg.chartData.tableRows
+
   const headers = cols.map((c) => c.label)
   const dataRows: CsvCell[][] = rows.map((r) =>
     cols.map((c) => {
@@ -216,7 +284,7 @@ function exportTableToCsv(msg: ChatMessage) {
   const fileName = `${baseName}_${csvDateTag()}`
   const csvContent = toCsv(headers, dataRows)
   downloadCsv(fileName, csvContent)
-  ElMessage.success(`已成功导出 CSV 文件：${fileName}.csv`)
+  ElMessage.success(`已成功导出 ${rows.length} 条数据为 CSV 文件：${fileName}.csv`)
 }
 
 // 交互澄清卡片：载荷结构与 MCP 的 clarification 一致
@@ -255,8 +323,36 @@ const clarifySessionId = ref<string>('s1')
 const clarifyRound = ref<number>(1)
 const clarifyCardKey = ref<number>(0)
 
+function cloneInitialMessages(raw?: Record<string, ChatMessage[]>): Record<string, ChatMessage[]> {
+  if (!raw) return {}
+  let result: Record<string, ChatMessage[]> = {}
+  try {
+    result = JSON.parse(JSON.stringify(raw))
+  } catch {
+    result = { ...raw }
+  }
+  // 遍历历史消息，若有包含待确认项或业务数据表格但未预置结构的消息，自动补充解析
+  for (const key of Object.keys(result)) {
+    for (const msg of result[key]) {
+      if (msg.role === 'assistant' && !msg.clarification && msg.content) {
+        const parsedClarify = extractClarificationFromText(msg.content)
+        if (parsedClarify) {
+          msg.clarification = parsedClarify
+        }
+      }
+      if (msg.role === 'assistant' && !msg.chartData && !msg.clarification && msg.content) {
+        const parsed = extractChartDataFromText(msg.content)
+        if (parsed) {
+          msg.chartData = parsed
+        }
+      }
+    }
+  }
+  return result
+}
+
 // 会话消息库（由用户交互动态生成并按会话 ID 隔离，支持 props 注入测试消息）
-const sessionMessages = ref<Record<string, ChatMessage[]>>({ ...props.initialMessages })
+const sessionMessages = ref<Record<string, ChatMessage[]>>(cloneInitialMessages(props.initialMessages))
 
 // 当前会话的消息列表
 const currentMessages = computed(() => {
@@ -290,6 +386,35 @@ const weekSessions = computed(() =>
   )
 )
 
+const earlierSessions = computed(() =>
+  sessions.value.filter(
+    (s) =>
+      s.group === 'earlier' &&
+      (!searchSessionKeyword.value || s.title.includes(searchSessionKeyword.value))
+  )
+)
+
+// 异步加载指定会话的历史消息（如果内存中尚未加载）
+async function loadSessionHistoryIfNeeded(id: string) {
+  if (!id || id === 'new') return
+  // 如果当前会话尚无消息且不在 props.initialMessages 中显式提供，尝试向后端拉取
+  if (!sessionMessages.value[id] || sessionMessages.value[id].length === 0) {
+    try {
+      const history = await getAiChatHistory(id)
+      if (history && history.length > 0) {
+        sessionMessages.value[id] = history
+      } else if (!sessionMessages.value[id]) {
+        sessionMessages.value[id] = []
+      }
+    } catch (e) {
+      console.warn('[loadSessionHistoryIfNeeded] 加载会话历史失败:', e)
+      if (!sessionMessages.value[id]) {
+        sessionMessages.value[id] = []
+      }
+    }
+  }
+}
+
 onMounted(async () => {
   if (props.initialSessions && props.initialSessions.length > 0) {
     sessions.value = [...props.initialSessions]
@@ -299,35 +424,77 @@ onMounted(async () => {
   }
   if (sessions.value.length > 0) {
     activeSessionId.value = sessions.value[0].id
+    clarifySessionId.value = sessions.value[0].id
+    await loadSessionHistoryIfNeeded(activeSessionId.value)
+    scrollToBottom()
   } else {
     activeSessionId.value = 'new'
+  }
+
+  // 动态获取后端配置的推荐问数场景（配置于 sys_page_config，对应 /api/poc/chat/help/question），没有则不展示
+  try {
+    const questions = await listRecommendedQuestions()
+    if (questions && questions.length > 0) {
+      starterPrompts.value = mapQuestionsToStarters(questions)
+    } else {
+      starterPrompts.value = []
+    }
+  } catch (err) {
+    console.warn('[AiChat] 加载后端推荐问数场景失败，不展示推荐场景:', err)
+    starterPrompts.value = []
   }
 })
 
 // 滚动到底部
-function scrollToBottom() {
+function scrollToBottom(smooth = false) {
   nextTick(() => {
-    if (chatContainerRef.value) {
-      if (typeof chatContainerRef.value.scrollTo === 'function') {
-        chatContainerRef.value.scrollTo({
-          top: chatContainerRef.value.scrollHeight,
-          behavior: 'smooth',
-        })
-      } else {
-        chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
-      }
+    if (!chatContainerRef.value) return
+    if (smooth && typeof chatContainerRef.value.scrollTo === 'function') {
+      chatContainerRef.value.scrollTo({
+        top: chatContainerRef.value.scrollHeight,
+        behavior: 'smooth',
+      })
+      return
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      if (scrollRafId !== null) return
+      scrollRafId = window.requestAnimationFrame(() => {
+        scrollRafId = null
+        if (chatContainerRef.value) {
+          chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
+        }
+      })
+    } else {
+      chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
     }
   })
 }
 
+// 中断当前正在进行的问数会话
+function handleStop() {
+  if (!isSending.value) return
+  if (currentAbortController.value) {
+    currentAbortController.value.abort()
+  }
+}
+
 // 切换会话
-function handleSelectSession(id: string) {
+async function handleSelectSession(id: string) {
+  if (isSending.value) {
+    handleStop()
+  }
   activeSessionId.value = id
+  clarifySessionId.value = id
+  await loadSessionHistoryIfNeeded(id)
   scrollToBottom()
 }
 
 // 删除单个会话
 function handleDeleteSession(id: string) {
+  if (activeSessionId.value === id && isSending.value) {
+    handleStop()
+  }
+
   sessions.value = sessions.value.filter((s) => s.id !== id)
   const clone = { ...sessionMessages.value }
   delete clone[id]
@@ -336,23 +503,43 @@ function handleDeleteSession(id: string) {
   if (activeSessionId.value === id) {
     if (sessions.value.length > 0) {
       activeSessionId.value = sessions.value[0].id
+      clarifySessionId.value = sessions.value[0].id
+      loadSessionHistoryIfNeeded(activeSessionId.value)
     } else {
       activeSessionId.value = 'new'
+      clarifySessionId.value = 'new'
     }
   }
   ElMessage.info('已删除会话')
+
+  // 异步通知后端软删除（不阻塞前端响应）
+  deleteAiSession(id).catch((err) => {
+    console.warn('[handleDeleteSession] 后端会话软删除失败:', err)
+  })
 }
 
 // 清空所有历史会话
 function handleClearSessions() {
+  if (isSending.value) {
+    handleStop()
+  }
+  const currentList = [...sessions.value]
   sessions.value = []
+  sessionMessages.value = {}
   activeSessionId.value = 'new'
+  clarifySessionId.value = 'new'
   ElMessage.info('已清空历史会话')
+
+  Promise.allSettled(currentList.map((s) => deleteAiSession(s.id))).catch(() => {})
 }
 
 // 点击「新建问数会话」按钮 -> 进入全新的会话页面
 function handleNewChat() {
+  if (isSending.value) {
+    handleStop()
+  }
   activeSessionId.value = 'new'
+  clarifySessionId.value = 'new'
   promptText.value = ''
   clarifyConfirmed.value = false
   clarifyDelivered.value = null
@@ -368,17 +555,35 @@ function handleSelectStarter(starter: StarterPrompt) {
   handleSend(starter.title)
 }
 
-// 确认澄清：锁定卡片，把「选了哪几张表」按 entryTypeId 回传给智能体会话
-async function handleConfirmClarify(payload: { selectedEntryTypeIds: number[]; freeText: string }) {
-  if (clarifyConfirmed.value) return
-  clarifyConfirmed.value = true
-  selectedTables.value = currentClarification.value.options
-    .filter((option) => payload.selectedEntryTypeIds.includes(option.entryTypeId))
-    .map((option) => option.typeName || option.tableName)
+// 确认澄清/待确认项：锁定卡片，把用户勾选的项回传给智能体会话推进下一轮分析
+async function handleConfirmClarify(
+  payload: { selectedEntryTypeIds: number[]; freeText: string },
+  msg?: ChatMessage
+) {
+  const targetMsg = msg || currentMessages.value.find((m) => m.clarification && !m.clarification.confirmed) || currentMessages.value.find((m) => m.clarification)
+  const clarification = targetMsg?.clarification || currentClarification.value
+
+  if (targetMsg?.clarification) {
+    if (targetMsg.clarification.confirmed) return
+    targetMsg.clarification.confirmed = true
+    targetMsg.clarification.selectedEntryTypeIds = payload.selectedEntryTypeIds
+  } else {
+    clarifyConfirmed.value = true
+  }
+
+  const selectedOptions = clarification.options.filter((option) =>
+    payload.selectedEntryTypeIds.includes(option.entryTypeId)
+  )
+  const names = selectedOptions.map((option) => option.typeName || option.tableName)
+  selectedTables.value = names
+
+  const targetSessionId = (activeSessionId.value && activeSessionId.value !== 'new')
+    ? activeSessionId.value
+    : clarifySessionId.value
 
   try {
     await submitClarificationAnswer({
-      sessionId: clarifySessionId.value,
+      sessionId: targetSessionId,
       round: clarifyRound.value,
       selectedEntryTypeIds: payload.selectedEntryTypeIds,
       freeText: payload.freeText || undefined,
@@ -392,15 +597,56 @@ async function handleConfirmClarify(payload: { selectedEntryTypeIds: number[]; f
     clarifyDelivered.value = false
     ElMessage.warning('问数网关尚未接通，当前展示为本地演示结果，所选口径暂未回传')
   }
+
+  // 核心交互：若该消息是动态智能体问答（未预置静态 SQL / KPI），将用户的确认选择作为新一轮对话发送给智能体继续推进
+  if (!targetMsg?.sql && !targetMsg?.chartData) {
+    const textParts: string[] = []
+    if (names.length) {
+      if (names.length === 1 && selectedOptions.length === 1) {
+        const opt = selectedOptions[0]
+        textParts.push(`${opt.entryTypeId}（${opt.typeName || opt.tableName}）`)
+      } else {
+        textParts.push(`已确认选择：${names.join('、')}`)
+      }
+    }
+    if (payload.freeText) {
+      textParts.push(`补充要求：${payload.freeText}`)
+    }
+    const followUpText = textParts.join('；')
+    if (followUpText) {
+      promptText.value = followUpText
+      await handleSend()
+      return
+    }
+  }
+
   scrollToBottom()
 }
 
 // 复制 SQL
-function handleCopySql(code: string) {
-  if (navigator?.clipboard?.writeText) {
-    navigator.clipboard.writeText(code)
+async function handleCopySql(code: string) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(code)
+      ElMessage.success('SQL 已成功复制到剪贴板')
+      return
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = code
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const successful = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    if (successful) {
+      ElMessage.success('SQL 已成功复制到剪贴板')
+    } else {
+      ElMessage.warning('复制失败，请手动选中 SQL 并复制')
+    }
+  } catch {
+    ElMessage.warning('复制失败，请手动选中 SQL 并复制')
   }
-  ElMessage.success('SQL 已成功复制到剪贴板')
 }
 
 // 快捷追问
@@ -442,7 +688,7 @@ async function handleSend(customTitle?: string) {
 
   // 1. 追加用户消息
   const userMsg: ChatMessage = {
-    id: `m-${Date.now()}-u`,
+    id: nextMsgId('u'),
     role: 'user',
     content,
     createdAt: '刚刚',
@@ -451,23 +697,23 @@ async function handleSend(customTitle?: string) {
   scrollToBottom()
 
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
+  const lowerContent = content.toLowerCase()
   const isExportQuery =
     list.length > 1 &&
     (content.includes('导出') || content.includes('下载')) &&
-    (content.includes('CSV') ||
-      content.includes('csv') ||
-      content.includes('Excel') ||
-      content.includes('excel') ||
+    (lowerContent.includes('csv') ||
+      lowerContent.includes('excel') ||
+      lowerContent.includes('xlsx') ||
       content.includes('表格') ||
       content.includes('数据'))
 
   if (isExportQuery) {
     const targetMsg = [...list]
       .reverse()
-      .find((m) => m.role === 'assistant' && m.chartData?.tableRows?.length)
-    const isExcel = content.includes('Excel') || content.includes('excel')
+      .find((m) => m.role === 'assistant' && (m.chartData?.tableRows?.length || m.chartData?.bars?.length))
+    const isExcel = lowerContent.includes('excel') || lowerContent.includes('xlsx') || !lowerContent.includes('csv')
     const formatName = isExcel ? 'Excel (.xlsx)' : 'CSV (.csv)'
-    const rowCount = targetMsg?.chartData?.tableRows?.length || 0
+    const rowCount = targetMsg?.chartData?.tableRows?.length || targetMsg?.chartData?.bars?.length || 0
 
     if (targetMsg) {
       if (isExcel) {
@@ -479,7 +725,7 @@ async function handleSend(customTitle?: string) {
 
     const safeTitle = (targetMsg?.chartData?.title || '问数明细').replace(/[📊🥧\s]/g, '')
     const followUpReply: ChatMessage = {
-      id: `m-${Date.now()}-a`,
+      id: nextMsgId('a'),
       role: 'assistant',
       content: targetMsg
         ? `已为您生成并导出「${safeTitle}」的 ${formatName} 数据文件（共计 ${rowCount} 条明细记录），浏览器已触发下载。\n\n您也可以在明细数据表视图中随时点击「导出为 Excel」或「导出为 CSV」重新下载。`
@@ -499,7 +745,7 @@ async function handleSend(customTitle?: string) {
             `导出字段覆盖：${targetMsg.chartData?.tableColumns?.map((c) => c.label).join('、') || '全部明细字段'}。`,
           ]
         : ['建议先输入业务问题查询数据，系统生成明细表后即可一键导出。'],
-      suggestions: ['查看该批任务近 7 天历史趋势', '为失败量最高的数据源配置告警规则'],
+      suggestions: ['查看该批任务近 7 天历史趋势', '把结果导出成 Excel', '导出为 CSV 表格'],
     }
     list.push(followUpReply)
     isSending.value = false
@@ -507,19 +753,77 @@ async function handleSend(customTitle?: string) {
     return
   }
 
+  // 快捷图表形态转换指令识别（若会话中已有表格且用户指令要求做成图表/饼图/明细表）
+  const isChartViewQuery =
+    list.length > 1 &&
+    (content.includes('图表') ||
+      content.includes('柱状图') ||
+      content.includes('趋势') ||
+      content.includes('饼图') ||
+      content.includes('明细表') ||
+      content.includes('表格形式')) &&
+    (content.includes('做成') ||
+      content.includes('生成') ||
+      content.includes('切换') ||
+      content.includes('查看') ||
+      content.includes('显示') ||
+      content.includes('变成') ||
+      content.includes('转为') ||
+      content.includes('形式'))
+
+  if (isChartViewQuery) {
+    const targetMsg = [...list]
+      .reverse()
+      .find((m) => m.role === 'assistant' && (m.chartData?.tableRows?.length || m.chartData?.bars?.length))
+    if (targetMsg) {
+      if (content.includes('饼图')) {
+        setMsgDataView(targetMsg, 'pie')
+      } else if (content.includes('明细') || content.includes('表格')) {
+        setMsgDataView(targetMsg, 'table')
+      } else {
+        setMsgDataView(targetMsg, 'chart')
+      }
+      const currentView = getMsgDataView(targetMsg)
+      const viewLabel =
+        currentView === 'chart'
+          ? '趋势柱状图'
+          : currentView === 'pie'
+            ? '占比饼图'
+            : '明细数据表'
+      const followUpReply: ChatMessage = {
+        id: nextMsgId('a'),
+        role: 'assistant',
+        content: `已为您将查询结果转换为「${viewLabel}」展示。\n\n您也可以在上方卡片右上角自由切换「趋势图表」、「占比饼图」与「明细数据表」，或点击「导出数据」导出为 Excel / CSV 文件。`,
+        createdAt: '刚刚',
+        thinking: {
+          completed: true,
+          durationMs: 260,
+          steps: [
+            `识别到图表形态转换指令：${content}`,
+            `解析当前明细数据维度与度量分布`,
+            `自动切换激活视图为：${viewLabel}`,
+          ],
+        },
+        suggestions: ['把结果导出成 Excel', '导出为 CSV 表格'],
+      }
+      list.push(followUpReply)
+      isSending.value = false
+      scrollToBottom()
+      return
+    }
+  }
+
   // 2. 追加智能体占位消息，发起后端 /agent 流式请求
   const assistantMsg: ChatMessage = {
-    id: `m-${Date.now()}-a`,
+    id: nextMsgId('a'),
     role: 'assistant',
     content: '',
     createdAt: '刚刚',
-    thinking: enableReasoning.value
-      ? {
-          completed: false,
-          durationMs: 0,
-          steps: [],
-        }
-      : undefined,
+    thinking: {
+      completed: false,
+      durationMs: 0,
+      steps: [],
+    },
   }
   list.push(assistantMsg)
   scrollToBottom()
@@ -534,14 +838,39 @@ async function handleSend(customTitle?: string) {
   }, 500)
 
   try {
+    const currentSessionObj = sessions.value.find((s) => s.id === targetSessionId)
+    const sessionIdParam = /^\d+$/.test(targetSessionId) ? Number(targetSessionId) : undefined
+    const threadIdParam = currentSessionObj?.uuid || (sessionIdParam ? undefined : targetSessionId)
+
     await streamAgentChat(
       {
         msg: content,
-        thread_id: targetSessionId,
+        session_id: sessionIdParam,
+        thread_id: threadIdParam,
         signal: abortCtrl.signal,
       },
       (event) => {
-        if (event.type === 'chunk') {
+        if (event.type === 'session_assigned') {
+          if (event.sessionId) {
+            const oldId = targetSessionId
+            const newId = event.sessionId
+            if (oldId !== newId) {
+              const target = sessions.value.find((s) => s.id === oldId)
+              if (target) {
+                target.id = newId
+                if (event.threadId) {
+                  target.uuid = event.threadId
+                }
+              }
+              sessionMessages.value[newId] = sessionMessages.value[oldId] || list
+              delete sessionMessages.value[oldId]
+              if (activeSessionId.value === oldId) {
+                activeSessionId.value = newId
+              }
+              targetSessionId = newId
+            }
+          }
+        } else if (event.type === 'chunk') {
           assistantMsg.content += event.text
           scrollToBottom()
         } else if (event.type === 'reasoning') {
@@ -549,6 +878,9 @@ async function handleSend(customTitle?: string) {
             assistantMsg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
           }
           assistantMsg.thinking.text = (assistantMsg.thinking.text || '') + event.reasoning
+          scrollToBottom()
+        } else if (event.type === 'clarification') {
+          assistantMsg.clarification = { ...event.clarification, confirmed: false }
           scrollToBottom()
         } else if (event.type === 'error') {
           ElMessage.error(event.error)
@@ -581,18 +913,49 @@ async function handleSend(customTitle?: string) {
       if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(sqlCode)) {
         assistantMsg.sql = {
           code: sqlCode,
-          execTimeMs: Math.floor(Math.random() * 120 + 40),
-          scanRows: 100,
+          execTimeMs: 0,
+          scanRows: 0,
+          estimated: true,
         }
       }
     }
 
-    if (!assistantMsg.content.trim() && !assistantMsg.sql && !assistantMsg.clarification) {
+    // 若未通过结构化事件拿到 clarification，尝试从回答正文中解析待确认项（如 Task List 复选框或候选选项）
+    if (!assistantMsg.clarification && assistantMsg.content) {
+      const parsedClarification = extractClarificationFromText(assistantMsg.content)
+      if (parsedClarification) {
+        assistantMsg.clarification = { ...parsedClarification, confirmed: false }
+      }
+    }
+
+    // 若未预置 chartData，尝试从回答正文中的 Markdown 表格解析图表与导出数据结构
+    if (!assistantMsg.clarification && !assistantMsg.chartData && assistantMsg.content) {
+      const parsedChartData = extractChartDataFromText(assistantMsg.content)
+      if (parsedChartData) {
+        assistantMsg.chartData = parsedChartData
+      }
+    }
+
+    if (!assistantMsg.content.trim() && !assistantMsg.sql && !assistantMsg.clarification && !assistantMsg.chartData) {
       thinkingExpandedMap[assistantMsg.id] = true
+    }
+
+    const currentSession = sessions.value.find((s) => s.id === targetSessionId)
+    if (currentSession) {
+      currentSession.updatedAt = '刚刚'
     }
   } catch (err) {
     const failure = err as { name?: string; message?: string }
-    if (failure.name !== 'AbortError') {
+    const isAborted = failure.name === 'AbortError' || abortCtrl.signal.aborted
+    if (isAborted) {
+      assistantMsg.interrupted = true
+      if (assistantMsg.thinking && !assistantMsg.thinking.completed) {
+        assistantMsg.thinking.completed = true
+        assistantMsg.thinking.durationMs = Date.now() - startTime
+        assistantMsg.thinking.interrupted = true
+      }
+      ElMessage.info('已中断问数响应')
+    } else {
       const errMsg = failure.message || '智能体问数服务调用失败'
       if (!assistantMsg.content) {
         assistantMsg.content = `抱歉，未能完成本次问数：${errMsg}`
@@ -609,13 +972,33 @@ async function handleSend(customTitle?: string) {
   }
 }
 
-// 快捷键发送
+// 快捷键发送与中断：按 Enter 发送，按 Esc 中断
 function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && isSending.value) {
+    e.preventDefault()
+    handleStop()
+    return
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSend()
   }
 }
+
+// 组件卸载时安全终止未完成的流式任务与定时器
+onUnmounted(() => {
+  if (isSending.value) {
+    handleStop()
+  }
+  if (thinkingTimer) {
+    clearInterval(thinkingTimer)
+    thinkingTimer = null
+  }
+  if (scrollRafId !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(scrollRafId)
+    scrollRafId = null
+  }
+})
 </script>
 
 <template>
@@ -693,6 +1076,31 @@ function handleKeyDown(e: KeyboardEvent) {
             />
           </div>
         </div>
+
+        <div v-if="earlierSessions.length" class="rc-session-group">
+          <div class="rc-session-group-title">更早</div>
+          <div
+            v-for="s in earlierSessions"
+            :key="s.id"
+            class="rc-session-item"
+            :class="{ active: activeSessionId === s.id }"
+            @click="handleSelectSession(s.id)"
+          >
+            <div class="rc-session-item-main">
+              <el-icon class="rc-session-icon"><ChatDotRound /></el-icon>
+              <span class="rc-session-title" :title="s.title">{{ s.title }}</span>
+            </div>
+            <el-button
+              class="rc-session-delete"
+              link
+              type="info"
+              :icon="Close"
+              size="small"
+              title="删除会话"
+              @click.stop="handleDeleteSession(s.id)"
+            />
+          </div>
+        </div>
       </div>
 
       <div class="rc-sidebar-footer">
@@ -728,11 +1136,6 @@ function handleKeyDown(e: KeyboardEvent) {
             / {{ currentSessionTitle }}
           </span>
         </div>
-        <div class="rc-topbar-right">
-          <el-tag size="small" type="info" effect="light" class="rc-mode-tag">
-            智能体：只读数据分析专家 (ClickHouse & MySQL)
-          </el-tag>
-        </div>
         <!-- 问数网关未接通时，结果区必须标明是本地演示，不能让用户当成真实查询 -->
         <el-tag
           v-if="clarifyDelivered === false"
@@ -757,10 +1160,9 @@ function handleKeyDown(e: KeyboardEvent) {
         </div>
 
         <!-- 推荐快捷问数场景 -->
-        <div class="rc-starters-section">
+        <div class="rc-starters-section" v-if="starterPrompts && starterPrompts.length > 0">
           <div class="rc-starters-header">
-            <span class="rc-starters-title">💡 推荐问数场景（点击一键提问）</span>
-            <span class="rc-starters-hint">支持对采集日志、规则审计、耗时性能进行下钻分析</span>
+            <span class="rc-starters-title">💡 推荐问数场景（点击一键提问）</span> 
           </div>
           <div class="rc-starter-grid">
             <div
@@ -830,24 +1232,24 @@ function handleKeyDown(e: KeyboardEvent) {
             </div>
 
             <div class="rc-msg-bubble assistant">
-              <!-- 引导/说明文字：仅在包含澄清卡片时展示引导文案 -->
-              <div v-if="msg.clarification && msg.content" class="rc-clarify-intro">
-                {{ msg.content }}
+              <!-- 引导/说明文字：仅在包含待确认卡片且有说明文案时展示 -->
+              <div v-if="msg.clarification && formatClarifyIntro(msg.content, !!msg.clarification)" class="rc-clarify-intro">
+                <MarkdownOutput :content="formatClarifyIntro(msg.content, !!msg.clarification)" />
               </div>
 
-              <!-- 多选表澄清卡片：仅在包含澄清配置的会话轮次展示 -->
+              <!-- 待确认项交互勾选卡片：支持多选/单选与自由补充，确认后锁定并推进会话 -->
               <ClarificationCard
                 v-if="msg.clarification"
-                :key="clarifyCardKey"
+                :key="msg.id + '-' + (isMsgClarifyConfirmed(msg) ? 'confirmed' : 'pending')"
                 :clarification="msg.clarification || currentClarification"
-                :confirmed="clarifyConfirmed"
-                @confirm="handleConfirmClarify"
+                :confirmed="isMsgClarifyConfirmed(msg)"
+                @confirm="(payload) => handleConfirmClarify(payload, msg)"
               />
 
               <!-- 用户确认后或无需澄清时的执行结果呈现区 -->
               <transition name="el-fade-in-linear">
                 <div
-                  v-if="!msg.clarification || clarifyConfirmed"
+                  v-if="!msg.clarification || isMsgClarifyConfirmed(msg)"
                   class="rc-confirmed-result"
                 >
                   <!-- 思考过程面板 -->
@@ -857,15 +1259,25 @@ function handleKeyDown(e: KeyboardEvent) {
                       @click="toggleThinking(msg.id, isThinkingOpen(msg))"
                     >
                       <div class="rc-thinking-title">
-                        <span class="rc-live-dot" :class="msg.thinking.completed ? 'green' : 'pulsing'"></span>
-                        <span v-if="!msg.thinking.completed">深度思考中... (已思考 {{ Math.max(1, Math.floor(thinkingElapsedSeconds)) }}s)</span>
-                        <span v-else>思考过程 · {{ selectedTables.length ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? '已生成并执行 SQL' : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)</span>
+                        <span
+                          class="rc-live-dot"
+                          :class="msg.thinking?.interrupted ? 'amber' : (msg.thinking?.completed ? 'green' : 'pulsing')"
+                        ></span>
+                        <span v-if="msg.thinking?.interrupted">
+                          思考已中断 (已思考 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)
+                        </span>
+                        <span v-else-if="!msg.thinking?.completed">
+                          深度思考中... (已思考 {{ Math.max(1, Math.floor(thinkingElapsedSeconds)) }}s)
+                        </span>
+                        <span v-else>
+                          思考过程 · {{ (getMsgSelectedTableNames(msg).length || selectedTables.length) ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? '已生成并执行 SQL' : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)
+                        </span>
                       </div>
                       <span class="rc-toggle-arrow" :class="{ collapsed: !isThinkingOpen(msg) }">▼</span>
                     </div>
                     <div v-if="isThinkingOpen(msg)" class="rc-thinking-body">
-                      <div v-if="selectedTables.length">
-                        ✓ 1. 采纳用户澄清口径：<strong>{{ selectedTables.join('、') }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code>
+                      <div v-if="getMsgSelectedTableNames(msg).length || selectedTables.length">
+                        ✓ 1. 采纳用户澄清口径：<strong>{{ (getMsgSelectedTableNames(msg).length ? getMsgSelectedTableNames(msg) : selectedTables).join('、') }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code>
                       </div>
                       <div v-if="msg.thinking.text" class="rc-thinking-text">
                         {{ msg.thinking.text }}
@@ -879,11 +1291,25 @@ function handleKeyDown(e: KeyboardEvent) {
                   </div>
 
                   <!-- 智能体最终回答正文（支持 Markdown 渲染） -->
-                  <div v-if="!msg.clarification && msg.content" class="rc-answer-markdown">
-                    <MarkdownOutput :content="msg.content" />
+                  <div v-if="!msg.clarification && formatMarkdownContent(msg)" class="rc-answer-markdown">
+                    <MarkdownOutput :content="formatMarkdownContent(msg)" />
+                    <div v-if="msg.interrupted" class="rc-interrupted-tag" data-testid="interrupted-tag">
+                      <span class="rc-stop-square-small">■</span>
+                      <span>本次回答已中断</span>
+                    </div>
+                  </div>
+                  <!-- 中途已中断且尚未输出回答正文时的状态提示 -->
+                  <div v-else-if="msg.interrupted && !msg.clarification && !msg.content && !msg.sql && !msg.chartData" class="rc-interrupted-notice" data-testid="interrupted-notice">
+                    <el-alert
+                      type="warning"
+                      :closable="false"
+                      show-icon
+                      title="问数对话已中断"
+                      description="您已手动停止本次问数响应。如需重新分析，可调整问题后再次提问。"
+                    />
                   </div>
                   <!-- 思考已完成但上游未输出任何回答内容或 SQL 时的兜底状态提示 -->
-                  <div v-else-if="!msg.clarification && msg.thinking?.completed && !msg.content && !msg.sql" class="rc-empty-fallback-hint">
+                  <div v-else-if="!msg.clarification && msg.thinking?.completed && !msg.content && !msg.sql && !msg.chartData" class="rc-empty-fallback-hint">
                     <el-alert
                       type="info"
                       :closable="false"
@@ -898,8 +1324,11 @@ function handleKeyDown(e: KeyboardEvent) {
                     <div class="rc-sql-head">
                       <div class="rc-sql-badge">
                         <span class="rc-sql-label">SQL QUERY</span>
-                        <span class="rc-sql-meta">
-                          执行成功 · 扫描 {{ msg.sql.scanRows.toLocaleString() }} 行 · 耗时 {{ msg.sql.execTimeMs }}ms
+                        <span v-if="msg.sql.estimated" class="rc-sql-meta">
+                          SQL 由 AI 生成（待执行）
+                        </span>
+                        <span v-else class="rc-sql-meta">
+                          执行成功 · 扫描 {{ (msg.sql.scanRows || 0).toLocaleString() }} 行 · 耗时 {{ msg.sql.execTimeMs || 0 }}ms
                         </span>
                       </div>
                       <el-button
@@ -943,7 +1372,7 @@ function handleKeyDown(e: KeyboardEvent) {
                   <div v-if="msg.chartData" class="rc-dataview-card">
                     <div class="rc-dataview-head">
                       <span class="rc-dataview-title">
-                        {{ activeDataView === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
+                        {{ getMsgDataView(msg) === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
                       </span>
                       <div class="rc-dataview-actions">
                         <el-dropdown
@@ -962,7 +1391,12 @@ function handleKeyDown(e: KeyboardEvent) {
                             </el-dropdown-menu>
                           </template>
                         </el-dropdown>
-                        <el-radio-group v-model="activeDataView" size="small">
+                        <el-radio-group
+                          :model-value="getMsgDataView(msg)"
+                          size="small"
+                          @update:model-value="(val: any) => setMsgDataView(msg, val)"
+                          @change="(val: any) => setMsgDataView(msg, val)"
+                        >
                           <el-radio-button value="chart">趋势图表</el-radio-button>
                           <el-radio-button value="pie">占比饼图</el-radio-button>
                           <el-radio-button value="table">明细数据表</el-radio-button>
@@ -971,7 +1405,7 @@ function handleKeyDown(e: KeyboardEvent) {
                     </div>
 
                     <!-- 趋势柱状视图 -->
-                    <div v-if="activeDataView === 'chart'" class="rc-chart-view">
+                    <div v-if="getMsgDataView(msg) === 'chart'" class="rc-chart-view">
                       <div
                         v-for="(bar, bidx) in msg.chartData.bars"
                         :key="bidx"
@@ -996,7 +1430,7 @@ function handleKeyDown(e: KeyboardEvent) {
                     </div>
 
                     <!-- 占比饼图视图 -->
-                    <div v-else-if="activeDataView === 'pie'" class="rc-pie-view">
+                    <div v-else-if="getMsgDataView(msg) === 'pie'" class="rc-pie-view">
                       <AiPieChart
                         :slices="getMsgSlices(msg)"
                         :center-label="getMsgPieCenter(msg).label"
@@ -1018,7 +1452,8 @@ function handleKeyDown(e: KeyboardEvent) {
                             data-testid="rc-table-export-excel"
                             @click="exportTableToExcel(msg)"
                           >
-                            <el-icon><Download /></el-icon> 导出 Excel
+                            <el-icon><Download /></el-icon>
+                            导出 Excel
                           </el-button>
                           <span class="rc-table-divider">|</span>
                           <el-button
@@ -1028,39 +1463,42 @@ function handleKeyDown(e: KeyboardEvent) {
                             data-testid="rc-table-export-csv"
                             @click="exportTableToCsv(msg)"
                           >
-                            <el-icon><Download /></el-icon> 导出 CSV
+                            <el-icon><Download /></el-icon>
+                            导出 CSV
                           </el-button>
                         </div>
                       </div>
-                      <table class="rc-preview-table">
-                        <thead>
-                          <tr>
-                            <th
-                              v-for="col in msg.chartData.tableColumns"
-                              :key="col.prop"
+                      <div class="rc-table-scroll-wrapper">
+                        <table class="rc-preview-table" data-testid="rc-preview-table">
+                          <thead>
+                            <tr>
+                              <th
+                                v-for="col in msg.chartData.tableColumns"
+                                :key="col.prop"
+                              >
+                                {{ col.label }}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr
+                              v-for="(row, ridx) in msg.chartData.tableRows"
+                              :key="ridx"
                             >
-                              {{ col.label }}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            v-for="(row, ridx) in msg.chartData.tableRows"
-                            :key="ridx"
-                          >
-                            <td
-                              v-for="col in msg.chartData.tableColumns"
-                              :key="col.prop"
-                              :class="{
-                                'text-red': col.prop === 'fail',
-                                'text-warn': col.prop === 'reason',
-                              }"
-                            >
-                              {{ row[col.prop] }}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+                              <td
+                                v-for="col in msg.chartData.tableColumns"
+                                :key="col.prop"
+                                :class="{
+                                  'text-red': col.prop === 'fail',
+                                  'text-warn': col.prop === 'reason',
+                                }"
+                              >
+                                {{ row[col.prop] }}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   </div>
 
@@ -1100,6 +1538,21 @@ function handleKeyDown(e: KeyboardEvent) {
 
       <!-- 底部输入停靠区 -->
       <footer class="rc-aichat-footer">
+        <!-- 浮动停止响应按钮：处于流式响应中时居中浮现 -->
+        <transition name="el-fade-in-linear">
+          <div v-if="isSending" class="rc-stop-float-bar">
+            <button
+              type="button"
+              class="rc-stop-float-btn"
+              data-testid="float-stop-btn"
+              @click="handleStop"
+            >
+              <span class="rc-stop-square">■</span>
+              <span>停止生成 (Esc)</span>
+            </button>
+          </div>
+        </transition>
+
         <div class="rc-input-box">
           <textarea
             v-model="promptText"
@@ -1111,23 +1564,33 @@ function handleKeyDown(e: KeyboardEvent) {
 
           <div class="rc-input-toolbar">
             <div class="rc-toolbar-left">
-              <el-checkbox v-model="enableReasoning" label="深度思维(Reasoning)" size="small" />
-              <el-checkbox v-model="enableAutoChart" label="自动生成图表" size="small" />
+              <span class="rc-input-tip">{{ isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
             </div>
 
             <el-button
+              v-if="isSending"
+              type="danger"
+              plain
+              size="small"
+              class="rc-stop-btn"
+              data-testid="stop-btn"
+              @click="handleStop"
+            >
+              <el-icon class="rc-stop-icon"><VideoPause /></el-icon>
+              <span>停止响应</span>
+            </el-button>
+            <el-button
+              v-else
               type="primary"
               size="small"
-              :loading="isSending"
               class="rc-send-btn"
+              data-testid="send-btn"
+              :disabled="!promptText.trim()"
               @click="handleSend"
             >
               发送
             </el-button>
           </div>
-        </div>
-        <div class="rc-footer-caption">
-          支持自然语言智能取数、图表生成、多轮口径交互澄清与业务诊断 · 基于 Agent SSE 流式接口驱动
         </div>
       </footer>
     </main>
@@ -1620,6 +2083,11 @@ function handleKeyDown(e: KeyboardEvent) {
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
 }
 
+.rc-live-dot.amber {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+}
+
 .rc-live-dot.pulsing {
   background: var(--rc-primary);
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.6);
@@ -1864,6 +2332,30 @@ function handleKeyDown(e: KeyboardEvent) {
   font-weight: 600;
 }
 
+.rc-bar-title.cyan,
+.rc-bar-val.cyan {
+  color: #0891b2;
+  font-weight: 600;
+}
+
+.rc-bar-title.indigo,
+.rc-bar-val.indigo {
+  color: #4f46e5;
+  font-weight: 600;
+}
+
+.rc-bar-title.primary,
+.rc-bar-val.primary {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.rc-bar-title.purple,
+.rc-bar-val.purple {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
 .rc-bar-track {
   width: 100%;
   height: 8px;
@@ -1875,6 +2367,7 @@ function handleKeyDown(e: KeyboardEvent) {
 .rc-bar-fill {
   height: 100%;
   border-radius: 4px;
+  background: var(--rc-primary, #3b82f6);
 }
 
 .rc-bar-fill.red {
@@ -1887,6 +2380,22 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .rc-bar-fill.green {
   background: #10b981;
+}
+
+.rc-bar-fill.cyan {
+  background: #06b6d4;
+}
+
+.rc-bar-fill.indigo {
+  background: #6366f1;
+}
+
+.rc-bar-fill.primary {
+  background: #2563eb;
+}
+
+.rc-bar-fill.purple {
+  background: #8b5cf6;
 }
 
 .rc-pie-view {
@@ -1915,6 +2424,18 @@ function handleKeyDown(e: KeyboardEvent) {
 .rc-table-records-count {
   color: var(--rc-muted, #64748b);
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.rc-table-selected-badge {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--el-color-primary, #2563eb);
+  font-weight: 500;
 }
 
 .rc-table-quick-export {
@@ -1926,6 +2447,14 @@ function handleKeyDown(e: KeyboardEvent) {
 .rc-table-divider {
   color: var(--rc-border, #cbd5e1);
   font-size: 11px;
+}
+
+.rc-table-scroll-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--rc-border-soft, #e2e8f0);
 }
 
 .rc-preview-table {
@@ -1940,6 +2469,7 @@ function handleKeyDown(e: KeyboardEvent) {
   text-align: left;
   border-bottom: 1px solid var(--rc-border);
   color: var(--rc-muted);
+  white-space: nowrap;
 }
 
 .rc-preview-table td {
@@ -1947,6 +2477,15 @@ function handleKeyDown(e: KeyboardEvent) {
   border-bottom: 1px solid var(--rc-border-soft);
   color: var(--rc-text);
   font-family: monospace;
+  white-space: nowrap;
+}
+
+.rc-preview-table tbody tr {
+  transition: background 0.15s ease;
+}
+
+.rc-preview-table tbody tr:hover {
+  background: var(--rc-bg, rgba(0, 0, 0, 0.02));
 }
 
 .text-red {
@@ -2001,6 +2540,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
 /* 底部输入框 */
 .rc-aichat-footer {
+  position: relative;
   border-top: 1px solid var(--rc-border);
   background: var(--rc-surface);
   padding: 12px 24px;
@@ -2051,7 +2591,14 @@ function handleKeyDown(e: KeyboardEvent) {
 
 .rc-toolbar-left {
   display: flex;
+  align-items: center;
   gap: 12px;
+}
+
+.rc-input-tip {
+  font-size: 12px;
+  color: var(--rc-muted);
+  user-select: none;
 }
 
 .rc-footer-caption {
@@ -2061,5 +2608,81 @@ function handleKeyDown(e: KeyboardEvent) {
   text-align: center;
   font-size: 11px;
   color: var(--rc-faint);
+}
+
+/* 中断状态与控制按钮 */
+.rc-interrupted-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid #fee2e2;
+}
+
+.rc-stop-square-small {
+  font-size: 8px;
+  line-height: 1;
+}
+
+.rc-interrupted-notice {
+  margin-top: 8px;
+}
+
+.rc-stop-float-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: absolute;
+  top: -42px;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.rc-stop-float-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  background: var(--rc-surface, #ffffff);
+  border: 1px solid var(--rc-border, #e2e8f0);
+  border-radius: 9999px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  font-weight: 500;
+  color: #ef4444;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.rc-stop-float-btn:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(239, 68, 68, 0.15);
+}
+
+.rc-stop-square {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.rc-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rc-stop-icon {
+  font-size: 14px;
 }
 </style>

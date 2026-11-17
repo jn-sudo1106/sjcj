@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
-import { submitClarificationAnswer } from '@/api/aiChat'
+import { submitClarificationAnswer, listRecommendedQuestions, streamAgentChat } from '@/api/aiChat'
 import { downloadCsv } from '@/utils/csv'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 
@@ -25,17 +25,22 @@ vi.mock('@/utils/format/xlsxExport', async (importOriginal) => {
   }
 })
 
-vi.mock('@/api/aiChat', () => ({
-  listAiSessions: vi.fn().mockResolvedValue([]),
-  listAiAgents: vi.fn().mockResolvedValue([
-    { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
-  ]),
-  submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
-  streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
-    onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
-    onEvent({ type: 'done' })
-  }),
-}))
+vi.mock('@/api/aiChat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/aiChat')>()
+  return {
+    ...actual,
+    listAiSessions: vi.fn().mockResolvedValue([]),
+    listAiAgents: vi.fn().mockResolvedValue([
+      { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
+    ]),
+    listRecommendedQuestions: vi.fn().mockResolvedValue([]),
+    submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
+    streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
+      onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
+      onEvent({ type: 'done' })
+    }),
+  }
+})
 
 const mockSessions = [
   { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' as const },
@@ -162,7 +167,7 @@ describe('AI 智能问数 · AiChatView', () => {
 
     const options = wrapper.findAll('[data-testid^="clarification-option-"]')
     expect(options).toHaveLength(3)
-    expect(wrapper.find('[data-testid="clarification-card"]').text()).toContain('最多 5 张')
+    expect(wrapper.find('[data-testid="clarification-card"]').text()).toContain('最多 3 张')
 
     await options[0].trigger('click')
     await options[2].trigger('click')
@@ -212,6 +217,19 @@ describe('AI 智能问数 · AiChatView', () => {
     await flushPromises()
     await confirmWithTables(wrapper, [101])
 
+    // 默认展示用户要求的明细数据表（列表）视图
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
+
+    // 切换到「趋势图表」视图
+    const chartRadio = wrapper
+      .findAll('.el-radio-button')
+      .find((btn) => btn.text().includes('趋势图表'))
+    expect(chartRadio).toBeTruthy()
+    await chartRadio!.find('input').setValue('chart')
+    await wrapper.vm.$nextTick()
+
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
     expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
     expect(wrapper.find('.rc-table-view').exists()).toBe(false)
@@ -231,7 +249,7 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
     expect(wrapper.find('.rc-table-view').exists()).toBe(false)
 
-    // 切换到「明细数据表」视图
+    // 切换回「明细数据表」视图
     const tableRadio = wrapper
       .findAll('.el-radio-button')
       .find((btn) => btn.text().includes('明细数据表'))
@@ -242,18 +260,6 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
     expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
     expect(wrapper.find('.rc-chart-view').exists()).toBe(false)
-
-    // 切换回「趋势图表」视图
-    const chartRadio = wrapper
-      .findAll('.el-radio-button')
-      .find((btn) => btn.text().includes('趋势图表'))
-    expect(chartRadio).toBeTruthy()
-    await chartRadio!.find('input').setValue('chart')
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
-    expect(wrapper.find('.rc-pie-view').exists()).toBe(false)
-    expect(wrapper.find('.rc-table-view').exists()).toBe(false)
   })
 
   it('支持在明细数据表视图快捷导出 Excel 与 CSV', async () => {
@@ -323,7 +329,7 @@ describe('AI 智能问数 · AiChatView', () => {
     vi.useRealTimers()
   })
 
-  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语与推荐场景卡片', async () => {
+  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；无后端推荐数据时不展示推荐卡片', async () => {
     const wrapper = mountView(true)
     await flushPromises()
 
@@ -337,11 +343,17 @@ describe('AI 智能问数 · AiChatView', () => {
     // 应该显示新会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-hero-title').text()).toContain('AI 智能问数助手')
-    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(4)
+    // 后端无配置时不渲染推荐卡片区域
+    expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
+    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
   })
 
-  it('生产无预置会话时，初始直接进入新建会话页面，点击推荐卡片发起真实流式问数', async () => {
+  it('生产无预置会话且后端配置推荐场景时，展示后端卡片，点击推荐卡片发起真实流式问数', async () => {
+    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
+      '排查近期异常任务与根因',
+      '昨日各站点抓取成功率 TOP 10',
+    ])
     const wrapper = mountView(false)
     await flushPromises()
 
@@ -350,7 +362,7 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
 
     const starterCards = wrapper.findAll('.rc-starter-card')
-    expect(starterCards.length).toBeGreaterThan(0)
+    expect(starterCards).toHaveLength(2)
 
     // 点击第二个推荐场景卡片（昨日各站点抓取成功率 TOP 10）
     await starterCards[1].trigger('click')
@@ -360,6 +372,42 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
     expect(wrapper.text()).toContain('昨日各站点抓取成功率 TOP 10')
+  })
+
+  it('后端未配置推荐问数场景（返回空列表）时，整块推荐问数场景不展示', async () => {
+    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([])
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+    expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
+    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
+  })
+
+  it('当后端配置推荐问数场景（sys_page_config）时，动态加载并渲染后端配置的卡片', async () => {
+    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
+      '近7天抓取异常最多的前5个网站',
+      '统计各业务库的数据同步延时分布',
+    ])
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    const cards = wrapper.findAll('.rc-starter-card')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].find('.rc-starter-badge').text()).toBe('推荐场景 01')
+    expect(cards[0].find('.rc-starter-name').text()).toBe('近7天抓取异常最多的前5个网站')
+    expect(cards[0].find('.rc-starter-desc').text()).toBe('近7天抓取异常最多的前5个网站')
+
+    expect(cards[1].find('.rc-starter-badge').text()).toBe('推荐场景 02')
+    expect(cards[1].find('.rc-starter-name').text()).toBe('统计各业务库的数据同步延时分布')
+
+    // 点击第一个动态推荐卡片能够正常发起流式对话
+    await cards[0].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
+    expect(wrapper.text()).toContain('近7天抓取异常最多的前5个网站')
   })
 
   it('在左侧会话列表中点击不同会话可切换会话内容', async () => {
@@ -502,5 +550,774 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('.rc-thinking-body').exists()).toBe(true)
     expect(wrapper.text()).toContain('正在检索上游表元数据...')
     expect(wrapper.text()).toContain('上游服务超时未响应，无法生成 SQL')
+  })
+
+  it('智能体回答中包含待确认项时，自动渲染勾选卡片并支持用户交互勾选与确认推进', async () => {
+    const testSession = [{ id: 'test_clarify', title: '二手房选表待确认', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      test_clarify: [
+        {
+          id: 'u-clarify',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'a-clarify',
+          role: 'assistant' as const,
+          content: '为您检索到以下待确认的候选表，请勾选需要分析的项：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请勾选需要分析的表：',
+            allowFreeText: true,
+            maxSelect: 5,
+            options: [
+              {
+                entryTypeId: 301,
+                tableName: 'sense_data.tb_ke_com_chengjia_esf_detail',
+                typeName: '南京链家二手房成交明细',
+                hint: '含单价与成交走势',
+              },
+              {
+                entryTypeId: 302,
+                tableName: 'sense_data.tb_anjuke_esf_summary',
+                typeName: '南京安居客二手房挂牌均价',
+                hint: '各区挂牌均价汇总',
+              },
+            ],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 待确认勾选卡片应存在
+    const card = wrapper.find('[data-testid="clarification-card"]')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('最多 2 张')
+
+    // 勾选第 1 个选项
+    const opt1 = wrapper.find('[data-testid="clarification-option-301"]')
+    expect(opt1.exists()).toBe(true)
+    await opt1.trigger('click')
+    expect(opt1.classes()).toContain('selected')
+
+    // 勾选第 2 个选项
+    const opt2 = wrapper.find('[data-testid="clarification-option-302"]')
+    expect(opt2.exists()).toBe(true)
+    await opt2.trigger('click')
+    expect(opt2.classes()).toContain('selected')
+
+    // 点击确认选择
+    const confirmBtn = wrapper.find('[data-testid="clarification-confirm"]')
+    expect(confirmBtn.exists()).toBe(true)
+    await confirmBtn.trigger('click')
+    await flushPromises()
+
+    // 确认后卡片锁定并展示已采纳状态
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+
+    // 智能体对话自动推进，将勾选的项作为新轮次发送给会话
+    expect(wrapper.text()).toContain('已确认选择：南京链家二手房成交明细、南京安居客二手房挂牌均价')
+  })
+
+  it('智能体返回 Markdown 候选表表格时，自动渲染成交互表格并支持点击「直接使用」一键推进会话', async () => {
+    const tableContent = `
+| 编号 | 表名 | 说明 |
+| --- | --- | --- |
+| 1 | \`TB_ZZ_MONTH_OLD_PRICE\` | 中指-二手房销售价格 |
+| 6 | \`tb_ke_com_chengjiao_esf\` | 贝壳二手房成交信息 |
+
+请问你希望用哪张表？例如回复"6"（贝壳二手房成交信息）。
+`
+    const testSession = [{ id: 'test_table_click', title: '点击选表测试', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      test_table_click: [
+        {
+          id: 'u-table',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'a-table',
+          role: 'assistant' as const,
+          content: tableContent,
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请问你希望用哪张表？例如回复"6"（贝壳二手房成交信息）。',
+            allowFreeText: true,
+            maxSelect: 5,
+            options: [
+              {
+                entryTypeId: 1,
+                tableName: 'TB_ZZ_MONTH_OLD_PRICE',
+                typeName: '中指-二手房销售价格',
+                hint: '编号: 1',
+              },
+              {
+                entryTypeId: 6,
+                tableName: 'tb_ke_com_chengjiao_esf',
+                typeName: '贝壳二手房成交信息',
+                hint: '编号: 6',
+              },
+            ],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 交互表格应存在
+    expect(wrapper.find('[data-testid="clarification-table"]').exists()).toBe(true)
+
+    // 点击编号 6 行的「直接使用」按钮
+    const directBtn6 = wrapper.find('[data-testid="clarification-direct-6"]')
+    expect(directBtn6.exists()).toBe(true)
+    await directBtn6.trigger('click')
+    await flushPromises()
+
+    // 确认状态呈现
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+
+    // 对话流中自动发出单项指令，无需用户手动在输入框敲字
+    expect(wrapper.text()).toContain('6（贝壳二手房成交信息）')
+  })
+
+  it('当智能体返回 Markdown 业务数据表格时，自动生成图表与明细数据卡片，支持多视图切换与一键导出', async () => {
+    const testSession = [
+      { id: 's-data', title: '查询南京二手房成交记录', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-data': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: `为您检索到南京二手房最新成交记录如下：
+
+| 小区 | 成交日期 | 户型 | 建筑面积(m²) |
+| --- | --- | --- | --- |
+| 创维文汇苑 | 2026-10-18 | 3室2厅 | 100.7 |
+| 雍澜和府 | 2026-10-18 | 3室2厅 | 105.41 |
+| 欧陆经典花园 | 2026-10-18 | 2室2厅 | 89.55 |
+| 威尼斯水城第十四街区 | 2026-10-18 | 2室2厅 | 91.27 |`,
+          createdAt: '刚刚',
+          thinking: {
+            completed: true,
+            durationMs: 850,
+            steps: ['执行 SQL 检索二手房明细数据'],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 数据视图卡片自动渲染
+    expect(wrapper.find('.rc-dataview-card').exists()).toBe(true)
+    // 标题包含度量指标
+    expect(wrapper.find('.rc-dataview-title').text()).toContain('建筑面积(m²)')
+
+    // 2. 默认呈现用户要求的明细数据表（列表）视图
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('共 4 条明细记录')
+    expect(wrapper.text()).toContain('创维文汇苑')
+    expect(wrapper.text()).toContain('100.7')
+
+    // 3. 点击明细表顶部的「导出 Excel」按钮触发下载
+    const exportExcelBtn = wrapper.find('[data-testid="rc-table-export-excel"]')
+    expect(exportExcelBtn.exists()).toBe(true)
+    await exportExcelBtn.trigger('click')
+    expect(downloadXlsx).toHaveBeenCalled()
+
+    // 4. 点击「导出 CSV」按钮触发下载
+    const exportCsvBtn = wrapper.find('[data-testid="rc-table-export-csv"]')
+    expect(exportCsvBtn.exists()).toBe(true)
+    await exportCsvBtn.trigger('click')
+    expect(downloadCsv).toHaveBeenCalled()
+
+    // 5. 切换到趋势柱状图视图
+    const radioButtons = wrapper.findAll('.el-radio-button')
+    await radioButtons[0].find('input').trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('1. 创维文汇苑')
+    expect(wrapper.text()).toContain('100.7')
+  })
+
+  it('返回的日期与最新价格数据展示为明细列表，无勾选框，支持直接导出与切换趋势图/饼图，不渲染选表澄清卡片', async () => {
+    const testSession = [
+      { id: 's-nj-price', title: '南京二手房最新价格', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const priceMarkdown = `为您查询到南京二手房最新价格记录如下：
+
+| 编号 | 日期 | 价格 |
+| --- | --- | --- |
+| 1 | 2026-10-18 | 5,557 |
+| 2 | 2026-10-18 | 17,574 |
+| 3 | 2026-10-18 | 13,297 |
+| 4 | 2026-10-18 | 9,502 |
+| 5 | 2026-10-18 | 9,046 |
+| 6 | 2026-10-18 | 12,946 |
+| 7 | 2026-10-18 | 15,238 |
+| 8 | 2026-10-18 | 9,634 |
+`
+    const testMessages = {
+      's-nj-price': [
+        { id: 'm-u1', role: 'user' as const, content: '查询下南京二手房最新的价格', createdAt: '刚刚' },
+        { id: 'm-a1', role: 'assistant' as const, content: priceMarkdown, createdAt: '刚刚' },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialActiveSessionId: 's-nj-price',
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 验证坚决不渲染 ClarificationCard 选表卡片
+    expect(wrapper.find('[data-testid="clarification-card"]').exists()).toBe(false)
+    expect(wrapper.find('.cc-interactive-table').exists()).toBe(false)
+
+    // 2. 验证渲染了 rc-dataview-card，且默认呈现明细数据表（列表）
+    expect(wrapper.find('.rc-dataview-card').exists()).toBe(true)
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('共 8 条明细记录')
+    expect(wrapper.text()).toContain('5557')
+    expect(wrapper.text()).toContain('17574')
+
+    // 3. 验证明细表格无多选勾选框，第一列直接为业务列
+    expect(wrapper.find('.rc-row-checkbox').exists()).toBe(false)
+    expect(wrapper.find('.th-row-select').exists()).toBe(false)
+    const rows = wrapper.findAll('.rc-preview-table tbody tr')
+    expect(rows).toHaveLength(8)
+
+    // 4. 点击「导出 Excel」按钮，验证直接导出全量数据
+    const exportExcelBtn = wrapper.find('[data-testid="rc-table-export-excel"]')
+    expect(exportExcelBtn.text()).toContain('导出 Excel')
+    expect(exportExcelBtn.text()).not.toContain('已选')
+    await exportExcelBtn.trigger('click')
+    expect(downloadXlsx).toHaveBeenCalled()
+
+    // 5. 切换到「趋势图表」视图
+    const chartRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('趋势图表'))
+    expect(chartRadio).toBeTruthy()
+    await chartRadio!.find('input').setValue('chart')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+
+    // 6. 切换到「占比饼图」视图
+    const pieRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('占比饼图'))
+    expect(pieRadio).toBeTruthy()
+    await pieRadio!.find('input').setValue('pie')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
+  })
+
+  it('用户输入「做成图表形式」或「把结果导出成 Excel」等自然语言指令时，能智能响应图表切换与即时下载', async () => {
+    const testSession = [
+      { id: 's-cmd', title: '二手房数据分析', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-cmd': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: `| 小区 | 建筑面积(m²) |\n| --- | --- |\n| 创维文汇苑 | 100.7 |\n| 雍澜和府 | 105.41 |`,
+          createdAt: '刚刚',
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 用户先切换到表格视图
+    const radioButtons = wrapper.findAll('.el-radio-button')
+    await radioButtons[2].find('input').trigger('change')
+    await flushPromises()
+    expect(wrapper.find('.rc-table-view').exists()).toBe(true)
+
+    // 2. 用户在输入框中输入「做成图表形式」并回车
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('做成图表形式')
+    await textarea.trigger('keydown', { key: 'Enter', shiftKey: false })
+    await flushPromises()
+
+    // 应自动识别为图表转换指令，将视图切回图表，且回复确认文案
+    expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
+    expect(wrapper.text()).toContain('已为您将查询结果转换为「趋势柱状图」展示')
+
+    // 3. 用户在输入框中输入「把结果导出成 Excel」并发送
+    await textarea.setValue('把结果导出成 Excel')
+    await textarea.trigger('keydown', { key: 'Enter', shiftKey: false })
+    await flushPromises()
+
+    // 触发 Excel 导出
+    expect(downloadXlsx).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('已为您生成并导出')
+  })
+
+  it('智能体返回无序列表候选数据源时，自动渲染勾选列表卡片，勾选后点击确认直接发送答案', async () => {
+    const testSession = [
+      { id: 's-clarify-bullet', title: '南京二手房价格查询', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-clarify-bullet': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查询下南京二手房最新的价格',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: `南京二手房最新价格查询
+
+查询"南京二手房最新价格"存在多种数据源候选，需要您确认用哪个来源的数据：
+
+* 贝壳二手房成交信息（sense_data.tb_ke_com_chengjiao_esf_detail）—— 含城市维度，可查南京成交价
+* 贝壳二手房_在售（sense_data.TB_ke_com_ershoufang_sale）—— 在售挂牌价
+* 中指-二手房销售价格（sense_data.TB_ZZ_MONTH_OLD_PRICE）—— 月度均价
+* 南京网上房地产（sense_data.TB_NJWSFDC）—— 南京本地官方数据
+
+请问您希望用哪个数据源？另外"最新价格"是指成交均价还是挂牌价？`,
+          createdAt: '刚刚',
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 1. 验证渲染了待确认交互卡片，而不是让用户看静态列表自己手动打字
+    expect(wrapper.find('[data-testid="clarification-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="clarification-table"]').exists()).toBe(true)
+
+    // 2. 验证选项列表已提取
+    expect(wrapper.text()).toContain('贝壳二手房成交信息')
+    expect(wrapper.text()).toContain('sense_data.tb_ke_com_chengjiao_esf_detail')
+    expect(wrapper.text()).toContain('含城市维度，可查南京成交价')
+    expect(wrapper.text()).toContain('南京网上房地产')
+
+    // 3. 用户直接勾选第 1 项（贝壳二手房成交信息）
+    const option1 = wrapper.find('[data-testid="clarification-option-1"]')
+    expect(option1.exists()).toBe(true)
+    await option1.trigger('click')
+    await flushPromises()
+
+    // 验证勾选框变为已选状态
+    expect(option1.find('.cc-check').classes()).toContain('checked')
+    expect(wrapper.text()).toContain('已选 1/4：贝壳二手房成交信息')
+
+    // 4. 用户点击「确认选择并开始分析」按钮，答案自动发出并推进下一轮流式问数
+    const confirmBtn = wrapper.find('[data-testid="clarification-confirm"]')
+    expect(confirmBtn.attributes('disabled')).toBeUndefined()
+
+    await confirmBtn.trigger('click')
+    await flushPromises()
+
+    // 确认状态呈现
+    expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+    // 对话流中自动发送所选项，无需用户在输入框敲字
+    expect(wrapper.text()).toContain('1（贝壳二手房成交信息）')
+  })
+
+  it('多轮对话中第二轮返回新的选表卡片时，不会被第一轮确认状态锁定，仍可正常勾选与确认', async () => {
+    const testSession = [
+      { id: 's-multi-clarify', title: '多轮选表测试', updatedAt: '刚刚', group: 'today' as const },
+    ]
+    const testMessages = {
+      's-multi-clarify': [
+        {
+          id: 'm-u1',
+          role: 'user' as const,
+          content: '查二手房数据',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a1',
+          role: 'assistant' as const,
+          content: '第一轮待确认：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请选择城市数据源：',
+            allowFreeText: true,
+            maxSelect: 2,
+            confirmed: true,
+            selectedEntryTypeIds: [1],
+            options: [
+              { entryTypeId: 1, tableName: 't_city_1', typeName: '南京二手房' },
+              { entryTypeId: 2, tableName: 't_city_2', typeName: '苏州二手房' },
+            ],
+          },
+        },
+        {
+          id: 'm-u2',
+          role: 'user' as const,
+          content: '已确认选择：南京二手房',
+          createdAt: '刚刚',
+        },
+        {
+          id: 'm-a2',
+          role: 'assistant' as const,
+          content: '第二轮待确认：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请选择具体指标明细表：',
+            allowFreeText: true,
+            maxSelect: 3,
+            options: [
+              { entryTypeId: 10, tableName: 't_detail_1', typeName: '成交均价明细' },
+              { entryTypeId: 20, tableName: 't_detail_2', typeName: '成交面积明细' },
+              { entryTypeId: 30, tableName: 't_detail_3', typeName: '挂牌量明细' },
+            ],
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    // 应该渲染 2 张澄清卡片
+    const cards = wrapper.findAll('[data-testid="clarification-card"]')
+    expect(cards).toHaveLength(2)
+
+    // 第一张卡片是已采纳状态
+    expect(cards[0].classes()).toContain('confirmed')
+
+    // 第二张卡片绝不能被第一张卡片的状态锁定（未确认）
+    expect(cards[1].classes()).not.toContain('confirmed')
+    expect(cards[1].find('[data-testid="clarification-confirmed"]').exists()).toBe(false)
+    expect(cards[1].find('[data-testid="clarification-confirm"]').exists()).toBe(true)
+
+    // 第二张卡片可以正常交互勾选
+    const opt10 = cards[1].find('[data-testid="clarification-option-10"]')
+    expect(opt10.exists()).toBe(true)
+    await opt10.trigger('click')
+    expect(opt10.classes()).toContain('selected')
+
+    // 快捷「直接使用」按钮在第二轮中依然正常可用
+    const directBtn20 = cards[1].find('[data-testid="clarification-direct-20"]')
+    expect(directBtn20.exists()).toBe(true)
+  })
+
+  it('对话发起之后，处于响应中时显示停止按钮，点击停止按钮可中断对话', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params, onEvent) => {
+      capturedSignal = params.signal
+      onEvent({ type: 'reasoning', reasoning: '正在读取表结构与元数据...' })
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('分析昨日抓取成功率')
+
+    const sendBtn = wrapper.find('[data-testid="send-btn"]')
+    expect(sendBtn.exists()).toBe(true)
+
+    // 发起对话
+    await sendBtn.trigger('click')
+    await flushPromises()
+
+    // 发起后处于发送中：发送按钮被替换为停止响应按钮，浮动停止按钮也显现
+    const stopBtn = wrapper.find('[data-testid="stop-btn"]')
+    expect(stopBtn.exists()).toBe(true)
+    expect(stopBtn.text()).toContain('停止响应')
+
+    const floatStopBtn = wrapper.find('[data-testid="float-stop-btn"]')
+    expect(floatStopBtn.exists()).toBe(true)
+    expect(floatStopBtn.text()).toContain('停止生成')
+
+    expect(capturedSignal?.aborted).toBe(false)
+
+    // 点击停止响应按钮
+    await stopBtn.trigger('click')
+    await flushPromises()
+
+    // 确认信号已被 abort
+    expect(capturedSignal?.aborted).toBe(true)
+
+    // 中断后，停止按钮消失，发送按钮恢复
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="send-btn"]').exists()).toBe(true)
+
+    // 界面展示中断提示
+    expect(wrapper.find('[data-testid="interrupted-notice"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('问数对话已中断')
+    expect(wrapper.text()).toContain('思考已中断')
+  })
+
+  it('支持点击居中浮动的「停止生成」按钮中断对话', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+      capturedSignal = params.signal
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('查询近7天异常任务')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    const floatStopBtn = wrapper.find('[data-testid="float-stop-btn"]')
+    expect(floatStopBtn.exists()).toBe(true)
+
+    await floatStopBtn.trigger('click')
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="float-stop-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="send-btn"]').exists()).toBe(true)
+  })
+
+  it('对话响应中支持通过 Esc 按键中断生成', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+      capturedSignal = params.signal
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('排查响应超时')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(true)
+
+    // 按下 Esc 键
+    await textarea.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="send-btn"]').exists()).toBe(true)
+  })
+
+  it('流式已有部分文本输出时中断，保留已输出内容并展示本次回答已中断标识', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params, onEvent) => {
+      capturedSignal = params.signal
+      onEvent({ type: 'chunk', text: '根据数据统计，当前网络层异常主要集中在' })
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('输出网络层异常分析')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    // 此时已有部分文本在页面上
+    expect(wrapper.text()).toContain('根据数据统计，当前网络层异常主要集中在')
+
+    // 触发中断
+    await wrapper.find('[data-testid="stop-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(true)
+    // 已输出的文本依然保留
+    expect(wrapper.text()).toContain('根据数据统计，当前网络层异常主要集中在')
+    // 渲染中断标签
+    expect(wrapper.find('[data-testid="interrupted-tag"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('本次回答已中断')
+  })
+
+  it('对话响应中点击新建会话或切换会话时，自动中断上一次流式会话', async () => {
+    let capturedSignal: AbortSignal | undefined
+
+    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+      capturedSignal = params.signal
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('长文本分析')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(capturedSignal?.aborted).toBe(false)
+
+    // 点击新建问数会话按钮
+    const newChatBtn = wrapper.find('.rc-newchat-btn')
+    await newChatBtn.trigger('click')
+    await flushPromises()
+
+    // 旧流式请求被成功 abort
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
+  })
+
+  it('正确渲染更早 (earlier) 分组的历史会话', async () => {
+    const sessionsWithEarlier = [
+      { id: 's-today', title: '今日会话', updatedAt: '刚刚', group: 'today' as const },
+      { id: 's-earlier', title: '一个月前的历史会话', updatedAt: '2026-10-01', group: 'earlier' as const },
+    ]
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: sessionsWithEarlier,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('更早')
+    expect(wrapper.text()).toContain('一个月前的历史会话')
+  })
+
+  it('从回答中提取的 SQL 正确展示待执行标识而不是伪造的执行耗时', async () => {
+    const testSession = [{ id: 's-sql', title: 'SQL测试', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      's-sql': [
+        { id: 'u1', role: 'user' as const, content: '查看SQL', createdAt: '刚刚' },
+        {
+          id: 'a1',
+          role: 'assistant' as const,
+          content: '以下为生成的查询语句：\n```sql\nSELECT * FROM test_table LIMIT 10;\n```',
+          createdAt: '刚刚',
+          sql: {
+            code: 'SELECT * FROM test_table LIMIT 10;',
+            execTimeMs: 0,
+            scanRows: 0,
+            estimated: true,
+          },
+        },
+      ],
+    }
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.rc-sql-meta').text()).toContain('SQL 由 AI 生成（待执行）')
+    expect(wrapper.find('.rc-sql-meta').text()).not.toContain('执行成功')
   })
 })

@@ -381,6 +381,11 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   // AI 智能问数（对话工作台对接后端 /api/poc/chat/agent SSE 流式接口，原样透传端到端问数智能体响应）
   { path: 'poc/chat/agent', desc: '智能体问数 SSE 流式对话 → POST /api/poc/chat/agent（body: {msg}）', impl: true, live: true },
+  { path: 'poc/chat/help/question', desc: '推荐问数场景/问句列表 → GET /api/poc/chat/help/question', impl: true, live: true },
+  { path: 'poc/session/list', desc: '问数会话列表 → GET /api/poc/session/list', impl: true, live: true },
+  { path: 'poc/session/stop', desc: '问数会话删除 → POST /api/poc/session/stop?id=', danger: true, impl: true, live: true },
+  { path: 'poc/session/name', desc: '问数会话改名 → POST /api/poc/session/name', danger: true, impl: true, live: true },
+  { path: 'poc/chat-log/history', desc: '问数会话问答历史 → POST /api/poc/chat-log/history', impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },

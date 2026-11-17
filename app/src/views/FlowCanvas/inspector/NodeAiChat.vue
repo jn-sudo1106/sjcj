@@ -40,6 +40,8 @@ async function send(text?: string) {
       disabled: cfg.value.disabled,
     })
     messages.value.push({ role: 'ai', text: res?.reply || '（无回复）' })
+  } catch {
+    messages.value.push({ role: 'ai', text: '抱歉，节点助手服务响应失败，请稍后重试。' })
   } finally {
     sending.value = false
     scrollToBottom()

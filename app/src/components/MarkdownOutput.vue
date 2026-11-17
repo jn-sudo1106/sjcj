@@ -7,8 +7,8 @@ const props = defineProps<{ content: string }>()
 const markdown = new Marked({ gfm: true, breaks: true })
 const rendered = computed(() => DOMPurify.sanitize(markdown.parse(props.content, { async: false }), {
   ALLOWED_TAGS: ['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 's', 'del',
-    'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a'],
-  ALLOWED_ATTR: ['href', 'title', 'class', 'align', 'start'],
+    'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'input'],
+  ALLOWED_ATTR: ['href', 'title', 'class', 'align', 'start', 'type', 'checked', 'disabled'],
   ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
 }))
 </script>
@@ -29,4 +29,6 @@ const rendered = computed(() => DOMPurify.sanitize(markdown.parse(props.content,
 .markdown-output :deep(pre code) { padding: 0; background: transparent; }
 .markdown-output :deep(table) { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 12px 0; }.markdown-output :deep(th), .markdown-output :deep(td) { padding: 8px 10px; border: 1px solid var(--el-border-color); overflow-wrap: anywhere; }.markdown-output :deep(th) { background: var(--el-fill-color); font-weight: 600; }
 .markdown-output :deep(hr) { border: 0; border-top: 1px solid var(--el-border-color); margin: 20px 0; }.markdown-output :deep(a) { color: var(--el-color-primary); }
+.markdown-output :deep(input[type="checkbox"]) { margin-right: 6px; vertical-align: middle; accent-color: var(--el-color-primary); }
+.markdown-output :deep(li.task-list-item) { list-style-type: none; margin-left: -18px; }
 </style>
