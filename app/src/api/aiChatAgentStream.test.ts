@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   streamAgentChat,
   extractClarificationFromText,
+  extractClarificationFromReasoning,
   extractChartDataFromText,
   listRecommendedQuestions,
   listAiSessions,
@@ -203,6 +204,164 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     )
   })
 
+  it('思考链里的 MCP 工具结果能恢复带主键的选表澄清（模型只回一句话、不列候选时仍可渲染选项）', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    )
+
+    const events: AgentChatEvent[] = []
+    const encoder = new TextEncoder()
+    const streamPromise = streamAgentChat({ msg: '南京二手房最新价格' }, (e) => events.push(e))
+
+    // 现场实测的原样形态：两张中文名完全相同的表，模型只回一句「需要你确认查哪一张」，
+    // 候选与真实主键只存在于 reasoning 的工具结果 JSON 里
+    const toolResult = {
+      sessionId: '175973c9ce8b4cdeafb755ab1e04ace2',
+      status: 'needs_clarification',
+      outcome: 'NEEDS_CLARIFICATION',
+      round: 2,
+      total: 2,
+      truncated: false,
+      candidates: [
+        { entryTypeId: 6399962, tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+        { entryTypeId: 6399961, tableName: 'sense_data.TBC_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+      ],
+      clarification: {
+        kind: 'table_choice',
+        reason: 'AMBIGUOUS',
+        question: '命中两张中文名相同的表，需要你确认查哪一张。',
+        allowFreeText: true,
+        maxSelect: 2,
+        options: [
+          { entryTypeId: 6399962, tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+          { entryTypeId: 6399961, tableName: 'sense_data.TBC_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+        ],
+      },
+    }
+    // 实测上游会把 reasoning 里的工具结果截断（约 2KB 后以 ... 结尾）：
+    // candidates 完整、clarification 只剩半截 —— 必须按 candidates 恢复选项
+    const fullJson = JSON.stringify(toolResult, null, 2)
+    const truncatedJson = `${fullJson.slice(0, fullJson.indexOf('"question"') + 30)}...`
+    expect(truncatedJson).not.toContain('"maxSelect"')
+    const reasoningText =
+      '[工具调用] data-ask-mcp_submit_table_selection({"question":"南京二手房最新价格"})' +
+      `[工具结果] data-ask-mcp_submit_table_selection: ${truncatedJson}`
+
+    // 切三段推送：前两段 JSON 未闭合，解析必须安静跳过，只有收全后才派发一次
+    const cutA = Math.floor(reasoningText.length / 3)
+    const cutB = Math.floor((reasoningText.length * 2) / 3)
+    for (const part of [reasoningText.slice(0, cutA), reasoningText.slice(cutA, cutB), reasoningText.slice(cutB)]) {
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: part } }] })}\n\n`)
+      )
+    }
+
+    const shortReply = '南京二手房最新价格候选表较多，我提交选表会话让服务端收敛。命中两张"中指-二手房销售价格"表，需要你确认查哪一张。'
+    controller.enqueue(
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: shortReply } }] })}\n\n`)
+    )
+    controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+    controller.close()
+
+    await streamPromise
+
+    // 正文本身不含任何候选表单，纯文本兜底一定拿不到选项 —— 这正是页面上「没有可选项」的原因
+    expect(extractClarificationFromText(shortReply)).toBeNull()
+
+    const clarifications = events.filter((e) => e.type === 'clarification')
+    expect(clarifications).toHaveLength(1)
+    const payload = clarifications[0] as Extract<AgentChatEvent, { type: 'clarification' }>
+    expect(payload.clarification.kind).toBe('table_choice')
+    expect(payload.clarification.maxSelect).toBe(2)
+    expect(payload.clarification.options).toEqual([
+      expect.objectContaining({
+        entryTypeId: 6399962,
+        tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE',
+        typeName: '中指-二手房销售价格',
+      }),
+      expect.objectContaining({
+        entryTypeId: 6399961,
+        tableName: 'sense_data.TBC_ZZ_MONTH_OLD_PRICE',
+        typeName: '中指-二手房销售价格',
+      }),
+    ])
+    // 结构化澄清必须早于 done 派发，否则状态机会停在 awaiting_clarification 收不了尾
+    const clarifyIndex = events.findIndex((e) => e.type === 'clarification')
+    const doneIndex = events.findIndex((e) => e.type === 'done')
+    expect(clarifyIndex).toBeGreaterThanOrEqual(0)
+    expect(clarifyIndex).toBeLessThan(doneIndex)
+  })
+
+  it('convertChatLogsToMessages 从落库思考链恢复选表澄清，刷新后选项不丢', () => {
+    const reasoningText =
+      '[工具结果] data-ask-mcp_submit_table_selection: ' +
+      JSON.stringify({
+        sessionId: 'sess-1',
+        status: 'needs_clarification',
+        clarification: {
+          kind: 'table_choice',
+          reason: 'TOO_MANY',
+          question: '命中的表超过 5 张，请补充限定条件。',
+          maxSelect: 5,
+          options: [
+            { entryTypeId: 6399962, tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+            { entryTypeId: 6399964, tableName: 'sense_data.TB_ZZ_MONTH_OLD_CNT', typeName: '中指-二手房销售套数' },
+          ],
+        },
+      })
+
+    const messages = convertChatLogsToMessages([
+      {
+        id: 8001,
+        sessionId: 3001,
+        msg: '南京二手房最新价格',
+        modelMsg: '南京二手房最新价格候选表较多，我提交选表会话让服务端收敛。',
+        status: 'SUCCESS',
+        data: JSON.stringify({
+          thinking: { completed: true, durationMs: 26100, text: reasoningText },
+        }),
+        createTime: '2026-11-17 13:20:00',
+      },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0].role).toBe('user')
+    expect(messages[1].clarification).toEqual({
+      kind: 'table_choice',
+      reason: 'TOO_MANY',
+      question: '命中的表超过 5 张，请补充限定条件。',
+      allowFreeText: true,
+      maxSelect: 5,
+      options: [
+        { entryTypeId: 6399962, ordinal: 1, tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格', hint: null },
+        { entryTypeId: 6399964, ordinal: 2, tableName: 'sense_data.TB_ZZ_MONTH_OLD_CNT', typeName: '中指-二手房销售套数', hint: null },
+      ],
+    })
+  })
+
+  it('extractClarificationFromReasoning 对未闭合 JSON、无澄清载荷的工具结果返回 null', () => {
+    expect(extractClarificationFromReasoning('')).toBeNull()
+    expect(
+      extractClarificationFromReasoning('[工具结果] data-ask-mcp_submit_table_selection: {"sessionId":"x","status":"rea')
+    ).toBeNull()
+    expect(
+      extractClarificationFromReasoning(
+        '[工具结果] data-ask-mcp_search_tables: {"total":2,"candidates":[{"entryTypeId":1,"tableName":"t_a"}]}'
+      )
+    ).toBeNull()
+  })
+
+
   it('extractClarificationFromText 正确从 Markdown Task List 中提取待确认勾选项', () => {
     const markdown = `
 查询南京二手房最新记录时，匹配到以下待确认的候选表，请勾选需要分析的项：
@@ -212,14 +371,17 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     const result = extractClarificationFromText(markdown)
     expect(result).not.toBeNull()
     expect(result?.options).toHaveLength(2)
+    // 文本提取的候选项没有真实主键：entryTypeId 必须为 null，用 ordinal 作本地展示/勾选序号
     expect(result?.options[0]).toEqual({
-      entryTypeId: 1,
+      entryTypeId: null,
+      ordinal: 1,
       tableName: 'sense_data.tb_ke_com_chengjia_esf_detail',
       typeName: 'sense_data.tb_ke_com_chengjia_esf_detail',
       hint: '南京链家二手房成交明细',
     })
     expect(result?.options[1]).toEqual({
-      entryTypeId: 2,
+      entryTypeId: null,
+      ordinal: 2,
       tableName: 'sense_data.tb_anjuke_esf_summary',
       typeName: 'sense_data.tb_anjuke_esf_summary',
       hint: '南京安居客二手房挂牌均价汇总',
@@ -245,6 +407,7 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     expect(result?.question).toBe('请选择要查询的表：')
     expect(result?.options[0]).toEqual({
       entryTypeId: 11,
+      ordinal: 1,
       tableName: 't_sales',
       typeName: '销售订单表',
       hint: '按日汇总',
@@ -274,14 +437,16 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     expect(result?.question).toContain('请问你希望用哪张表')
 
     expect(result?.options[0]).toEqual({
-      entryTypeId: 1,
+      entryTypeId: null,
+      ordinal: 1,
       tableName: 'TB_ZZ_MONTH_OLD_PRICE',
       typeName: '中指-二手房销售价格',
       hint: '编号: 1',
     })
 
     expect(result?.options[5]).toEqual({
-      entryTypeId: 6,
+      entryTypeId: null,
+      ordinal: 6,
       tableName: 'tb_ke_com_chengjiao_esf',
       typeName: '贝壳二手房成交信息',
       hint: '编号: 6',
@@ -305,25 +470,29 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     expect(result?.options).toHaveLength(4)
     expect(result?.question).toContain('请问您希望用哪个数据源')
     expect(result?.options[0]).toEqual({
-      entryTypeId: 1,
+      entryTypeId: null,
+      ordinal: 1,
       tableName: 'sense_data.tb_ke_com_chengjiao_esf_detail',
       typeName: '贝壳二手房成交信息',
       hint: '含城市维度，可查南京成交价',
     })
     expect(result?.options[1]).toEqual({
-      entryTypeId: 2,
+      entryTypeId: null,
+      ordinal: 2,
       tableName: 'sense_data.TB_ke_com_ershoufang_sale',
       typeName: '贝壳二手房_在售',
       hint: '在售挂牌价',
     })
     expect(result?.options[2]).toEqual({
-      entryTypeId: 3,
+      entryTypeId: null,
+      ordinal: 3,
       tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE',
       typeName: '中指-二手房销售价格',
       hint: '月度均价',
     })
     expect(result?.options[3]).toEqual({
-      entryTypeId: 4,
+      entryTypeId: null,
+      ordinal: 4,
       tableName: 'sense_data.TB_NJWSFDC',
       typeName: '南京网上房地产',
       hint: '南京本地官方数据',

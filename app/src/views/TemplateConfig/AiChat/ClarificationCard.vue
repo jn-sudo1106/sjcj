@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // 多选表澄清卡片：直接消费服务端 clarification（options 全部来自真实候选），
-// 支持 1~maxSelect 张多选 + 自由补充；确认后锁定并回传 entryTypeId 列表。
+// 支持 1~maxSelect 张多选 + 自由补充；确认后锁定并回传所选键列表。
+// 文本提取的候选 entryTypeId 为 null（拿不到主键不伪造），选择键退回展示序号 ordinal。
 // 数据来源契约见 @/api/aiChat 的 Clarification。
 import { computed, ref, watch } from 'vue'
-import type { Clarification, ClarificationOption } from '@/api/aiChat'
+import { clarificationOptionKey, type Clarification } from '@/api/aiChat'
 
 const props = withDefaults(defineProps<{
   clarification: Clarification
@@ -21,6 +22,13 @@ const emit = defineEmits<{
 const selectedIds = ref<number[]>([])
 const freeText = ref('')
 
+const keyedOptions = computed(() =>
+  props.clarification.options.map((option, index) => ({
+    option,
+    key: clarificationOptionKey(option, index),
+  })),
+)
+
 const isTableChoice = computed(() => props.clarification.kind !== 'free_text')
 const effectiveMaxSelect = computed(() => {
   const optionsCount = props.clarification.options?.length ?? 0
@@ -32,9 +40,9 @@ const canSubmit = computed(() =>
   selectedIds.value.length > 0
   || (props.clarification.allowFreeText && freeText.value.trim().length > 0))
 const selectedNames = computed(() =>
-  props.clarification.options
-    .filter((option) => selectedIds.value.includes(option.entryTypeId))
-    .map((option) => option.typeName || option.tableName))
+  keyedOptions.value
+    .filter(({ key }) => selectedIds.value.includes(key))
+    .map(({ option }) => option.typeName || option.tableName))
 
 function isRedundantQuestion(q?: string): boolean {
   if (!q) return true
@@ -52,23 +60,23 @@ watch(() => props.clarification, () => {
   freeText.value = ''
 })
 
-function isSelected(entryTypeId: number): boolean {
-  return selectedIds.value.includes(entryTypeId)
+function isSelected(key: number): boolean {
+  return selectedIds.value.includes(key)
 }
 
-function toggleOption(entryTypeId: number): void {
+function toggleOption(key: number): void {
   if (props.confirmed) return
-  const index = selectedIds.value.indexOf(entryTypeId)
+  const index = selectedIds.value.indexOf(key)
   if (index >= 0) {
     selectedIds.value.splice(index, 1)
     return
   }
   if (effectiveMaxSelect.value === 1) {
-    selectedIds.value = [entryTypeId]
+    selectedIds.value = [key]
     return
   }
   if (selectedIds.value.length < effectiveMaxSelect.value) {
-    selectedIds.value.push(entryTypeId)
+    selectedIds.value.push(key)
   }
 }
 
@@ -79,15 +87,6 @@ function handleConfirm(): void {
     freeText: freeText.value.trim(),
   })
 }
-
-function handleDirectSelect(option: ClarificationOption): void {
-  if (props.confirmed) return
-  selectedIds.value = [option.entryTypeId]
-  emit('confirm', {
-    selectedEntryTypeIds: [option.entryTypeId],
-    freeText: freeText.value.trim(),
-  })
-}
 </script>
 
 <template>
@@ -95,14 +94,14 @@ function handleDirectSelect(option: ClarificationOption): void {
     <div class="cc-head">
       <span class="cc-title">
         <span class="cc-dot"></span>
-        {{ isTableChoice ? '待确认项：请选择要分析的数据源或表（支持快捷「直接使用」）：' : '请补充要分析的口径：' }}
+        {{ isTableChoice ? '待确认项：请选择要分析的数据源或表：' : '请补充要分析的口径：' }}
       </span>
       <span class="cc-hint">最多 {{ effectiveMaxSelect }} 张 · 已选 {{ selectedIds.length }}</span>
     </div>
 
     <p v-if="clarification.question && !isRedundantQuestion(clarification.question)" class="cc-question">{{ clarification.question }}</p>
 
-    <!-- 交互式候选选项表格：支持勾选多选与单行直接点击使用 -->
+    <!-- 交互式候选选项表格：勾选后点击下方「确认选择」推进会话 -->
     <div v-if="isTableChoice && clarification.options.length" class="cc-table-wrapper">
       <table class="cc-interactive-table" data-testid="clarification-table">
         <thead>
@@ -111,33 +110,32 @@ function handleDirectSelect(option: ClarificationOption): void {
             <th class="th-no">编号</th>
             <th class="th-name">数据源 / 表名</th>
             <th class="th-desc">业务说明</th>
-            <th v-if="!confirmed" class="th-action">快捷操作</th>
           </tr>
         </thead>
         <tbody>
           <tr
-            v-for="option in clarification.options"
-            :key="option.entryTypeId"
+            v-for="({ option, key }, index) in keyedOptions"
+            :key="key"
             class="cc-option cc-tr"
             :class="{
-              selected: isSelected(option.entryTypeId),
-              disabled: confirmed || (reachedMax && !isSelected(option.entryTypeId)),
+              selected: isSelected(key),
+              disabled: confirmed || (reachedMax && !isSelected(key)),
             }"
-            :data-testid="`clarification-option-${option.entryTypeId}`"
+            :data-testid="`clarification-option-${key}`"
             role="checkbox"
-            :aria-checked="isSelected(option.entryTypeId)"
+            :aria-checked="isSelected(key)"
             :tabindex="confirmed ? -1 : 0"
-            @click="toggleOption(option.entryTypeId)"
-            @keydown.space.prevent="toggleOption(option.entryTypeId)"
-            @keydown.enter.prevent="toggleOption(option.entryTypeId)"
+            @click="toggleOption(key)"
+            @keydown.space.prevent="toggleOption(key)"
+            @keydown.enter.prevent="toggleOption(key)"
           >
-            <td class="td-check" @click.stop="toggleOption(option.entryTypeId)">
-              <span class="cc-check" :class="{ checked: isSelected(option.entryTypeId) }">
-                <span v-if="isSelected(option.entryTypeId)" class="cc-check-mark">✓</span>
+            <td class="td-check" @click.stop="toggleOption(key)">
+              <span class="cc-check" :class="{ checked: isSelected(key) }">
+                <span v-if="isSelected(key)" class="cc-check-mark">✓</span>
               </span>
             </td>
             <td class="td-no">
-              <span class="cc-num-badge">{{ option.entryTypeId }}</span>
+              <span class="cc-num-badge">{{ index + 1 }}</span>
             </td>
             <td class="td-name">
               <code class="cc-table-code">{{ option.tableName }}</code>
@@ -150,17 +148,6 @@ function handleDirectSelect(option: ClarificationOption): void {
               >
                 {{ option.hint }}
               </div>
-            </td>
-            <td v-if="!confirmed" class="td-action" @click.stop>
-              <el-button
-                type="primary"
-                size="small"
-                class="cc-direct-btn"
-                :data-testid="`clarification-direct-${option.entryTypeId}`"
-                @click="handleDirectSelect(option)"
-              >
-                直接使用
-              </el-button>
             </td>
           </tr>
         </tbody>
@@ -342,18 +329,6 @@ function handleDirectSelect(option: ClarificationOption): void {
   border: 1px solid #e2e8f0;
   display: inline-block;
   word-break: break-all;
-}
-
-.th-action,
-.td-action {
-  width: 90px;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.cc-direct-btn {
-  font-size: 12px;
-  padding: 4px 8px;
 }
 
 .cc-check {
