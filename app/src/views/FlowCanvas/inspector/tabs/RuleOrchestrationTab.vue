@@ -1272,12 +1272,12 @@ async function onGenerateScript(
     return
   }
   if (isRule.value && !isMonitor.value && !isDataValidation.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
-    ElMessage.warning('请先在「表配置」完成入参/出参字段绑定')
+    ElMessage.warning('请先在「表配置」完成输入/输出字段绑定')
     return
   }
   // 数据监控节点无出参字段，只校验入参，跳过出参校验（2026-09-01）
   if ((isMonitor.value || isDataValidation.value) && !orchCfg.value.inputFields?.length) {
-    ElMessage.warning('请先在「表配置」完成入参字段绑定')
+    ElMessage.warning('请先在「表配置」完成输入字段绑定')
     return
   }
   generateAbort.value?.abort()

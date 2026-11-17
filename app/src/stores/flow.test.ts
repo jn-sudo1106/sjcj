@@ -974,8 +974,8 @@ describe('validateFlow：规则处理节点发布门禁（0801 方案 §9.1）',
     f.configs.rule.configId = '1400998'
     f.patchRuleConfig('rule', { mode: 'ref', inputFields: [], outputFields: [], script: '' })
     const errs = f.validateFlow()
-    expect(errs).toContain('「规则引擎处理」缺少入参字段')
-    expect(errs).toContain('「规则引擎处理」缺少出参字段')
+    expect(errs).toContain('「规则引擎处理」缺少输入字段')
+    expect(errs).toContain('「规则引擎处理」缺少输出字段')
     expect(errs).toContain('「规则引擎处理」尚未生成规则脚本')
     expect(errs).not.toContain('「规则引擎处理」请先保存表配置')
   })

@@ -41,13 +41,13 @@ describe('validateTableBinding（2026-09-01 加 requireOutput，供数据监控�
   const boundNoOutput = { inputTableId: '2102154', inputFields: ['sku_id'], outputFields: [] as string[] }
 
   it('默认要求出参：缺出参字段时报错', () => {
-    expect(validateTableBinding(boundNoOutput)).toBe('请至少选择 1 个出参字段')
+    expect(validateTableBinding(boundNoOutput)).toBe('请至少选择 1 个输出字段')
   })
   it('requireOutput=false：跳过出参校验', () => {
     expect(validateTableBinding(boundNoOutput, { requireOutput: false })).toBeUndefined()
   })
   it('requireOutput=false 仍校验输入表与入参字段', () => {
     expect(validateTableBinding({ inputTableId: '', inputFields: ['a'], outputFields: [] }, { requireOutput: false })).toBe('请选择输入表')
-    expect(validateTableBinding({ inputTableId: '2102154', inputFields: [], outputFields: [] }, { requireOutput: false })).toBe('请至少选择 1 个入参字段')
+    expect(validateTableBinding({ inputTableId: '2102154', inputFields: [], outputFields: [] }, { requireOutput: false })).toBe('请至少选择 1 个输入字段')
   })
 })

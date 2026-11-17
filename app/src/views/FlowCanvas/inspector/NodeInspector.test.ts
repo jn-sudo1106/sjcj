@@ -710,7 +710,7 @@ describe('规则节点保存前校验', () => {
     await wrapper.get('.rc-insp-foot .rc-btn.primary').trigger('click')
     await flushPromises()
 
-    expect(warning).toHaveBeenCalledWith('请至少选择 1 个出参字段')
+    expect(warning).toHaveBeenCalledWith('请至少选择 1 个输出字段')
     expect(flow.activeTab).toBe('table')
     expect(create).not.toHaveBeenCalled()
     wrapper.unmount()
