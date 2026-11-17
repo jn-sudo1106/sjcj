@@ -335,26 +335,6 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(csvContent).toContain('网站名称,总任务数,成功数,失败数,主要异常码')
   })
 
-  it('支持通过卡片顶部的导出下拉菜单导出 Excel 与 CSV', async () => {
-    const wrapper = mountView(true)
-    await flushPromises()
-    await confirmWithTables(wrapper, [101])
-
-    vi.mocked(downloadXlsx).mockClear()
-    vi.mocked(downloadCsv).mockClear()
-
-    const dropdown = wrapper.findComponent({ name: 'ElDropdown' })
-    expect(dropdown.exists()).toBe(true)
-
-    dropdown.vm.$emit('command', 'excel')
-    await wrapper.vm.$nextTick()
-    expect(downloadXlsx).toHaveBeenCalledTimes(1)
-
-    dropdown.vm.$emit('command', 'csv')
-    await wrapper.vm.$nextTick()
-    expect(downloadCsv).toHaveBeenCalledTimes(1)
-  })
-
   it('输入包含导出的自然语言指令时，能识别意图并自动触发对应文件下载', async () => {
     vi.useFakeTimers()
     const wrapper = mountView(true)

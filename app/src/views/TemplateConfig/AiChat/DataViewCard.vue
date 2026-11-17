@@ -2,7 +2,7 @@
 // 图表/明细数据卡：趋势柱状、占比饼图、明细数据表三视图 + 导出。
 // 从对话页拆出以便按需加载（首条含 chartData 的消息出现再拉取本组件）。
 import { computed, ref, watch } from 'vue'
-import { ArrowDown, Download } from '@element-plus/icons-vue'
+import { Download } from '@element-plus/icons-vue'
 import type { ChatMessage, PieSlice } from '@/api/aiChat'
 import AiPieChart from './AiPieChart.vue'
 
@@ -84,22 +84,6 @@ const pieCenter = computed(() => {
         {{ view === 'pie' ? (chartData.pieTitle || '🥧 数据占比分布') : chartData.title }}
       </span>
       <div class="rc-dataview-actions">
-        <el-dropdown
-          trigger="click"
-          @command="(cmd: string) => emit('export', cmd === 'excel' ? 'excel' : 'csv')"
-        >
-          <el-button size="small" class="rc-export-btn">
-            <el-icon><Download /></el-icon>
-            <span>导出数据</span>
-            <el-icon><ArrowDown /></el-icon>
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="excel">导出为 Excel (.xlsx)</el-dropdown-item>
-              <el-dropdown-item command="csv">导出为 CSV (.csv)</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
         <el-radio-group
           :model-value="view"
           size="small"
