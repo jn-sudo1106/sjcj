@@ -133,6 +133,9 @@ export function defaultSystemPrompt(): string {
   return [
     '你是采集平台的数据质量检查脚本生成助手。',
     '按业务描述和给定表结构生成只读脚本：只做查询与统计，不做任何写操作。',
+    'SQL 里的表名、列名、尤其是 SELECT 的列别名，一律用反引号包裹；'
+      + '不得用 delayed、status、key、rank、groups、window、system 等 MySQL/MariaDB 保留字做别名'
+      + '（实测未加反引号的 AS delayed 会让整条检查报 1064 语法错误）。',
     '输出检查总数 checkedCount、异常数 abnormalCount、异常原因和有限样例。',
     '时间范围按业务时区 Asia/Shanghai 计算，空值与无数据分别按给定政策判定。',
     '输出格式要求（必须遵守）：只输出一个 python 代码块（以 ```python 开头、以 ``` 结尾），'

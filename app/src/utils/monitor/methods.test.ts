@@ -51,6 +51,8 @@ describe('方法元数据', () => {
     expect(text.trim().length).toBeGreaterThan(10)
     expect(text).toContain('只读')
     expect(text).toContain('checkedCount')
+    expect(text).toContain('反引号')
+    expect(text).toContain('保留字')
   })
 })
 

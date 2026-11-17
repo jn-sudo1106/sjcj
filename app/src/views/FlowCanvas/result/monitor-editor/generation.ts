@@ -121,7 +121,7 @@ export function augmentMonitorSystemPrompt(
 ): string {
   const columns = [...new Set(fields.map((field) => (field || '').trim()).filter(Boolean))].slice(0, MAX_PROMPT_COLUMNS)
   const extras: string[] = []
-  extras.push('执行参数契约：数据库连接只读取 DQ_DB_HOST、DQ_DB_PORT、DQ_DB_USER、DQ_DB_PASSWORD、DQ_DB_NAME 环境变量；不得写死连接地址或凭据。表名读取 DQ_TABLE_NAME，入库时间字段读取 DQ_TIME_COLUMN，源 ID 读取 DQ_SOURCE_ID（物理表有 SOURCE_ID 时必须参数化过滤当前源），检查窗口读取 DQ_START_DATE / DQ_END_DATE；不得把表名、时间字段或窗口写死在 SQL。环境变量缺失时返回 status=ERROR 和 reason，不使用猜测的默认字段。动态标识符必须校验并使用反引号引用。兼容执行器传入的 --format json、--table、--time-column 参数。')
+  extras.push('执行参数契约：数据库连接只读取 DQ_DB_HOST、DQ_DB_PORT、DQ_DB_USER、DQ_DB_PASSWORD、DQ_DB_NAME 环境变量；不得写死连接地址或凭据。表名读取 DQ_TABLE_NAME，入库时间字段读取 DQ_TIME_COLUMN，源 ID 读取 DQ_SOURCE_ID（物理表有 SOURCE_ID 时必须参数化过滤当前源），检查窗口读取 DQ_START_DATE / DQ_END_DATE；不得把表名、时间字段或窗口写死在 SQL。环境变量缺失时返回 status=ERROR 和 reason，不使用猜测的默认字段。动态标识符必须校验并使用反引号引用；所有 SELECT 列别名同样必须反引号包裹，不得使用 delayed、status、key、rank、groups、window、system 等保留字。兼容执行器传入的 --format json、--table、--time-column 参数。')
   if (columns.length) extras.push(`该表真实字段：${columns.join(', ')}（只能用这些列名，不要臆造）`)
   const column = (timeColumn || '').trim()
   if (column) extras.push(`按 ${column} 统计入库时间`)
