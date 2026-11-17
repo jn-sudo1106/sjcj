@@ -1320,6 +1320,7 @@ async function onGenerateScript(
         outputFieldOptions: outputFieldOptions.value,
         systemPrompt: genCfg.systemPrompt ?? '',
         checkRule: isMonitor.value ? (cfg.value?.monitorMethods ?? []).join(',') || undefined : undefined,
+        scriptParamNames: !isMonitor.value && !isDataValidation.value,
       }), {
         // 1005「分开」口径：PDF 节点的样本只喂「解析内容」，点「生成脚本」不带附件。
         file: isPdf.value ? undefined : (selectedSampleFile.value ?? undefined),

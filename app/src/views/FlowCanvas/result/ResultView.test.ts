@@ -430,6 +430,112 @@ describe('ResultView', () => {
     })
   })
 
+  it('测试脚本传参去掉字段编码的「-K列号」后缀，与生成时的入参名一致', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202611/1794896520582.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', inputFields: ['INDICATOR-K1'], outputFields: [] },
+    })
+    const row = {
+      dataId: 'row-1', sourceId: current.sourceId, title: '测试行', summary: '',
+      acceptState: 'pending' as const, values: { K1: '海外净资产', K2: '2025年底' },
+    }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      tableId: 'T2',
+      fields: [
+        { prop: 'INDICATOR-K1', type: 'string', desc: '指标名称', columnName: 'K1' },
+        { prop: 'PERIOD-K2', type: 'string', desc: '时间', columnName: 'K2' },
+      ],
+    })
+    const execSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, outputs: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', row)
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(execSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202611/1794896520582.py',
+      params: { INDICATOR: '海外净资产' },
+      timeout: 300,
+    })
+  })
+
+  it('未打开表配置（ruleCfg.inputFields 为空）时按步骤 contextMap 的列取测试入参', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202611/1794896520582.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', inputFields: [], outputFields: [] },
+      taskCfg: { queue: '', urlRule: '', contextMap: ['K1'] },
+    })
+    const row = {
+      dataId: 'row-1', sourceId: current.sourceId, title: '测试行', summary: '',
+      acceptState: 'pending' as const, values: { K1: '海外净资产', K2: '2025年底' },
+    }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      tableId: 'T2',
+      fields: [
+        { prop: 'INDICATOR-K1', type: 'string', desc: '指标名称', columnName: 'K1' },
+        { prop: 'PERIOD-K2', type: 'string', desc: '时间', columnName: 'K2' },
+      ],
+    })
+    const execSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, outputs: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', row)
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(execSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202611/1794896520582.py',
+      params: { INDICATOR: '海外净资产' },
+      timeout: 300,
+    })
+  })
+
+  it('带 scriptPath 打开输入≠输出的规则节点时默认看输入表', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202611/1794896520582.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      outputTable: 'T3',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', outputTableId: 'T3', inputFields: ['code'], outputFields: ['result'] },
+    })
+    const rowSpy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, tableId: 'T2', fields: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await flushPromises()
+
+    expect(rowSpy.mock.calls.at(-1)?.[0]).toMatchObject({ tableId: 'T2' })
+  })
+
   it('表结构接口异常时不阻断数据查询，并提示已回退到演示数据', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!

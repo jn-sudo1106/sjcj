@@ -34,6 +34,8 @@ export interface DataProcessGenerateInput {
   systemPrompt: string
   /** 数据监控方法拼接（逗号分隔），仅 monitor 节点传入 */
   checkRule?: string
+  /** 规则处理节点：入参编码按 scriptParamName 去掉「-K列号」，与测试/执行传参一致。监控类节点不传（脚本按列查表）。 */
+  scriptParamNames?: boolean
 }
 
 function selectFields(selected: string[], options: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]): DataProcessFieldOption[] {
@@ -46,8 +48,21 @@ function joinPairs(fields: DataProcessFieldOption[]): string {
   return fields.map((field) => `${field.itemName}:${field.itemCode}`).join(',')
 }
 
+/**
+ * 规则脚本 `main` 的入参名：字段编码去掉旧平台的「-K列号」后缀（`INDICATOR-K1` → `INDICATOR`）。
+ * 新建表的字段编码按旧约定存成「编码-列号」，带横杠不是合法的 Python 参数名；
+ * 生成时告诉模型的入参名和测试/执行时传的参数名都必须走这一个函数，两边才对得上
+ * （2026-11-17 186 实测：生成用 INDICATOR，测试传 INDICATOR-K1，执行端点报 unexpected keyword argument）。
+ */
+export function scriptParamName(itemCode: string): string {
+  return itemCode.replace(/-K\d+$/, '')
+}
+
 export function buildDataProcessGeneratePayload(input: DataProcessGenerateInput): DataProcessGeneratePayload {
-  const inputFields = selectFields(input.inputFields, input.inputFieldOptions)
+  const selectedInputs = selectFields(input.inputFields, input.inputFieldOptions)
+  const inputFields = input.scriptParamNames
+    ? selectedInputs.map((field) => ({ ...field, itemCode: scriptParamName(field.itemCode) }))
+    : selectedInputs
   const outputFields = selectFields(input.outputFields, input.outputFieldOptions.length ? input.outputFieldOptions : input.inputFieldOptions)
   return {
     description: input.description,

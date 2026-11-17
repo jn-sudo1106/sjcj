@@ -14,6 +14,7 @@ import {
   isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { scriptParamName } from '@/utils/flow/dataProcess'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { planSkipCondSend } from '@/utils/flow/skipCondPlan'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
@@ -190,7 +191,11 @@ const bothScopesAvailable = computed(() => !!(inputTableId.value && outputTableI
 // 合并成一个 tab，这张表两个身份都占，不需要切换（M3-0C，2026-08-15 定案）。
 const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value && inputTableId.value === outputTableId.value)
 const scopeSwitchable = computed(() => bothScopesAvailable.value && !sameTable.value)
+// 「测试脚本」带 scriptPath 进来时，脚本要吃的是规则节点的**输入**行；输入≠输出时默认停在输入表，
+// 否则打开就是空的输出表，测试拿不到行（2026-11-17 186 走查：规则节点输出表 6910003 为空）。
+const scriptTestOnInput = computed(() => !!queryScriptPath.value && !!selectedCfg.value?.ruleCfg && !!inputTableId.value)
 function defaultScope(): 'output' | 'input' {
+  if (scriptTestOnInput.value) return 'input'
   return outputTableId.value ? 'output' : 'input'
 }
 const selectedTable = computed(() => browseMode.value === 'table' ? tableChoice.value : (scope.value === 'output' ? outputTableId.value : inputTableId.value))
@@ -1872,13 +1877,21 @@ const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; o
 })
 function buildCodeParams(row: { values?: Record<string, unknown> } | null): Record<string, string> {
   const inputFields = selectedCfg.value?.ruleCfg?.inputFields ?? []
-  if (!inputFields.length) return {}
+  // ruleCfg.inputFields 只在打开「表配置」时由 contextMap 还原；直接从数据视图进来（刷新后）是空数组，
+  // 这时用已落库的步骤入参列（taskCfg.contextMap，K 列名）匹配（2026-11-17 186 复测：参数全空）。
+  const contextColumns = selectedCfg.value?.taskCfg?.contextMap ?? []
+  if (!inputFields.length && !contextColumns.length) return {}
 
   const params: Record<string, unknown> = {}
   for (const field of meta.value?.fields ?? []) {
-    if (!inputFields.includes(field.prop) && !inputFields.includes(field.columnName ?? '')) continue
+    const column = field.columnName ?? ''
+    const picked = inputFields.length
+      ? inputFields.includes(field.prop) || inputFields.includes(column)
+      : !!column && contextColumns.includes(column)
+    if (!picked) continue
     const raw = row?.values?.[field.columnName ?? field.prop]
-    params[field.prop] = raw == null ? '' : String(raw)
+    // 入参名与生成时告诉模型的一致：去掉「-K列号」（scriptParamName），否则 INDICATOR-K1 不是合法参数名。
+    params[scriptParamName(field.prop)] = raw == null ? '' : String(raw)
   }
   return params as Record<string, string>
 }
@@ -1891,6 +1904,12 @@ function stringifyCodeResult(value: unknown): string {
   }
 }
 async function onTestScript() {
+  // 停在输出表时行不是脚本的输入（输入≠输出），先切到输入表再让用户选行。
+  if (scriptTestOnInput.value && scope.value === 'output' && scopeSwitchable.value) {
+    onScopeChange('input')
+    ElMessage.info('已切换到输入表，请选择要测试的行后再点「测试脚本」')
+    return
+  }
   // 工具条触发时未打开行详情，回退到选中行第一行，再回退到本页第一行
   const row = detailRow.value
     ?? (selectedRowIds.value.length ? rows.value.find((r) => selectedRowIds.value.includes(r.dataId)) : null)

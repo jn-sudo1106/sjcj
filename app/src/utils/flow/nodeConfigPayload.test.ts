@@ -654,3 +654,29 @@ describe('coreParam（PDF 抓取：保存时把业务规则描述与模型选择
     expect(buildConfigPayload(cfg, { configType: 130 }).configType).toBe(130)
   })
 })
+
+describe('PDF 抓取节点的表绑定写进配置', () => {
+  it('collectCfg 里表为空串时取顶层 inputTable/outputTable（2026-11-17 配置 1910015 入出表丢失）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    if (cfg.collectCfg) {
+      cfg.collectCfg.inputTable = ''
+      cfg.collectCfg.outputTable = ''
+    }
+    cfg.inputTable = '2101867'
+    cfg.outputTable = '6910002'
+    expect(cfg.collectCfg).toBeDefined()
+    const payload = buildConfigPayload(cfg, { configId: 1910015 })
+    expect(payload.entryTypeId).toBe('6910002')
+    expect(payload.inEntryType).toBe('2101867')
+  })
+
+  it('采集节点 collectCfg 有表时仍以 collectCfg 为准', () => {
+    const cfg = node()
+    cfg.collectCfg!.outputTable = '900'
+    cfg.collectCfg!.inputTable = '901'
+    cfg.outputTable = 'stale'
+    const payload = buildConfigPayload(cfg, {})
+    expect(payload.entryTypeId).toBe('900')
+    expect(payload.inEntryType).toBe('901')
+  })
+})
