@@ -2,6 +2,7 @@ import { entryApi, ruleApi } from '@/api'
 import { ACCESS_TOKEN_HEADER, readStoredToken } from '@/api/auth'
 import type { EntryType } from '@/api/types/collect'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import { cleanGeneratedPython } from '@/utils/flow/generatedScript'
 
 /**
  * 生成脚本的输入上下文（2026-11-13 按「源级结果检查 / 节点环节检查」修订）。
@@ -231,45 +232,9 @@ export async function generateMonitorScript(input: GenerateScriptInput): Promise
 
 /**
  * 模型回复里可能夹着说明文字、多个围栏、甚至只有片段。
- * 目标：能拿出一个像 Python 脚本的正文就接受；实在拿不到才报错，并把收到的内容写进错误里便于定位。
+ * 清理口径与规则处理节点共用，实现在 utils/flow/generatedScript.ts。
  */
-export function cleanMonitorPython(raw: string): string {
-  const text = (raw || '').trim()
-  if (!text) throw new Error('生成结果为空：模型没有返回任何内容，未保存候选文件')
-
-  // 没有围栏：沿用旧行为，直接当正文（老模型/兜底纯文本流就是这样）
-  if (!text.includes('```')) return text
-
-  const blocks = [...text.matchAll(/```(?:python|py)?[ \t]*\r?\n([\s\S]*?)```/gi)]
-    .map((m) => (m[1] || '').trim())
-    .filter(Boolean)
-
-  if (!blocks.length) {
-    // 只有开围栏没有闭围栏 —— 通常是生成被截断
-    const hint = describeIncompleteReply(text)
-    throw new Error(`生成结果不完整：代码围栏没有闭合，可能被截断了，未保存候选文件（${hint}）`)
-  }
-  if (blocks.length === 1) return blocks[0]!
-
-  // 多个代码块：只在「恰好一个带 def main」时才敢取，否则不猜
-  const withMain = blocks.filter((code) => /def\s+main\s*\(/.test(code))
-  if (withMain.length === 1) return withMain[0]!
-  const hint = describeIncompleteReply(text)
-  throw new Error(`生成结果包含多个代码块，无法确定哪个是正式脚本：未保存候选文件（${hint}）`)
-}
-
-/** 把「收到的内容大概长什么样」压成一句，便于用户/我们判断是模型跑偏还是被截断 */
-function describeIncompleteReply(text: string): string {
-  const fences = (text.match(/```/g) || []).length
-  const head = text.replace(/\s+/g, ' ').slice(0, 60)
-  const tail = text.replace(/\s+/g, ' ').slice(-60)
-  const flags = [
-    fences ? `围栏 ${fences} 个` : '没有代码围栏',
-    /def\s+main\s*\(/.test(text) ? '含 def main(' : '没有 def main(',
-    `共 ${text.length} 字`,
-  ].join('、')
-  return `${flags}。开头：${head}… 结尾：…${tail}`
-}
+export const cleanMonitorPython = cleanGeneratedPython
 
 /**
  * 业务描述里的【】占位符会让模型改写成「说明 + 片段」而不是完整脚本。

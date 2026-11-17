@@ -136,12 +136,12 @@ describe('TableTab · 任务输入字段选择', () => {
     const { flow, wrapper } = await open(undefined)
     const hint = () => wrapper.get('[data-testid="input-fields-state-hint"]').text()
     expect(hint()).toContain('未指定输入字段')
-    expect(wrapper.text()).toContain('输入字段选择（未指定）')
+    expect(wrapper.text()).toContain('输入字段（未指定）')
 
     await wrapper.get('[data-testid="clear-all-input-fields"]').trigger('click')
     expect(flow.configs['8914101'].taskCfg?.contextMap).toEqual([])
     expect(hint()).toContain('已清空输入字段')
-    expect(wrapper.text()).toContain('输入字段选择（已选中 0 / 2 个字段）')
+    expect(wrapper.text()).toContain('输入字段（已选中 0 / 2 个字段）')
     wrapper.unmount()
   })
 
@@ -195,7 +195,7 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
-    expect(wrapper.text()).toContain('入参字段')
+    expect(wrapper.text()).toContain('输入字段 *')
     expect(wrapper.text()).not.toContain('保存并配置编排')
   })
 
@@ -211,7 +211,7 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
-    expect(wrapper.text()).toContain('入参字段')
+    expect(wrapper.text()).toContain('输入字段 *')
     expect(wrapper.text()).not.toContain('修改表字段')
     expect(wrapper.text()).not.toContain('保存并配置编排')
   })
@@ -309,7 +309,7 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     flow.patchCollect('web-1', { inputTable: INPUT_TABLE.tableId })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('输入字段选择')
+    expect(wrapper.text()).toContain('输入字段（')
     expect(flow.configs['web-1'].inputFields).toBeUndefined()
     await wrapper.find('[data-testid="clear-all-input-fields"]').trigger('click')
     expect(flow.configs['web-1'].inputFields).toEqual([])
@@ -513,8 +513,8 @@ describe('TableTab · 数据监控节点（不落表/不出参）', () => {
     const { wrapper } = mountOnMonitorNode()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('入参字段')
-    expect(wrapper.text()).not.toContain('出参字段')
+    expect(wrapper.text()).toContain('输入字段 *')
+    expect(wrapper.text()).not.toContain('输出字段')
     expect(wrapper.text()).not.toContain('输出表')
     expect(wrapper.text()).not.toContain('监控方法')
     expect(wrapper.find('[data-testid="monitor-methods-field"]').exists()).toBe(false)
@@ -604,8 +604,8 @@ describe('TableTab · 翻译助手（与规则处理同一套绑定）', () => {
     const { wrapper } = mountOnTranslateNode()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('入参字段')
-    expect(wrapper.text()).toContain('出参字段')
+    expect(wrapper.text()).toContain('输入字段 *')
+    expect(wrapper.text()).toContain('输出字段 *')
     expect(wrapper.text()).not.toContain('结构化配置')
     expect(wrapper.text()).not.toContain('正文规则')
     expect(wrapper.text()).not.toContain('去重方式')
@@ -672,8 +672,8 @@ describe('TableTab · 文章打标签（与规则处理同一套绑定）', () =
     const { wrapper } = mountOnTagNode()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('入参字段')
-    expect(wrapper.text()).toContain('出参字段')
+    expect(wrapper.text()).toContain('输入字段 *')
+    expect(wrapper.text()).toContain('输出字段 *')
     expect(wrapper.text()).not.toContain('结构化配置')
     expect(wrapper.text()).not.toContain('正文规则')
     expect(wrapper.text()).not.toContain('去重方式')
@@ -741,8 +741,8 @@ describe('TableTab · 摘要/音视频/OCR 处理节点（与规则处理同一�
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('入参字段')
-    expect(wrapper.text()).toContain('出参字段')
+    expect(wrapper.text()).toContain('输入字段 *')
+    expect(wrapper.text()).toContain('输出字段 *')
     expect(wrapper.text()).not.toContain('结构化配置')
     expect(wrapper.text()).not.toContain('去重方式')
 

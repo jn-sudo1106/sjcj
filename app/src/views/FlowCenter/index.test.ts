@@ -156,10 +156,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
     },
   })
   await flushPromises()
-  // 页面默认落「流程模板」视图（1109 方案 + 交互原型 1:1）。本文件的历史用例都针对
-  // 「全部流程」那套界面，统一先切过去（等价于用户点一下 seg-all），再断言。
-  await wrapper.get('[data-testid="seg-all"]').trigger('click')
-  await flushPromises()
+  // 页面默认落「全部流程」（2026-11-17 起）；本文件的历史用例都针对这套界面。
   mountedWrappers.push(wrapper)
   return wrapper
 }
@@ -476,6 +473,17 @@ describe('流程中心 · 列表', () => {
 
 // 0902：增删改之后列表自动重查，不再让用户去点「刷新」（那个按钮也删了）。
 describe('流程中心 · 自动刷新', () => {
+  it('默认进入全部流程，不预读模板视图的 mock 数据', async () => {
+    const metas = vi.spyOn(await import('@/api/flowCenterCenter'), 'fetchTemplateMetas')
+    const w = await mountCenter()
+    expect(w.find('[data-testid="flow-center-legacy-view"]').exists()).toBe(true)
+    expect(w.get('[data-testid="seg-all"]').attributes('aria-selected')).toBe('true')
+    expect(metas).not.toHaveBeenCalled()
+    await w.get('[data-testid="seg-template"]').trigger('click')
+    await flushPromises()
+    expect(metas).toHaveBeenCalledTimes(1)
+  })
+
   it('工具条没有刷新按钮', async () => {
     const w = await mountCenter()
     const labels = w.get('.fc-toolbar').findAll('button').map((b) => b.text())
@@ -1295,7 +1303,7 @@ describe('流程模板结构与归集', () => {
       const workspace = w.get('[aria-label="流程工作区"]')
       await workspace.get('input[aria-label="URL"]').setValue('https://example.com/list?page=1')
       expect(workspace.get('[aria-label="节点设置"]').findAll('.rc-top-tab').map(tab => tab.text()))
-        .toEqual(['节点配置', '表配置', '编排配置', '任务配置'])
+        .toEqual(['节点配置', '表配置', '编排配置', '部署配置', '任务配置'])
       await workspace.get('[data-testid="node-library-toggle"]').trigger('click')
       const download = workspace.findAll('.anp-item').find(item => item.text().includes('文件下载'))
       expect(download).toBeDefined()

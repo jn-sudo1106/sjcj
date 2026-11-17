@@ -37,6 +37,7 @@ import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload, buildDocumentExtractPayload } from '@/utils/flow/dataProcess'
+import { cleanGeneratedPython, needsPythonCleanup } from '@/utils/flow/generatedScript'
 import { describeCkSourceConflictRows, MultipleCkSourceRowsError, syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
 import { confirmSharedFlowWrite } from '@/utils/flow/sharedFlowGuard'
@@ -1271,12 +1272,12 @@ async function onGenerateScript(
     return
   }
   if (isRule.value && !isMonitor.value && !isDataValidation.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
-    ElMessage.warning('请先在「表配置」完成入参/出参字段绑定')
+    ElMessage.warning('请先在「表配置」完成输入/输出字段绑定')
     return
   }
   // 数据监控节点无出参字段，只校验入参，跳过出参校验（2026-09-01）
   if ((isMonitor.value || isDataValidation.value) && !orchCfg.value.inputFields?.length) {
-    ElMessage.warning('请先在「表配置」完成入参字段绑定')
+    ElMessage.warning('请先在「表配置」完成输入字段绑定')
     return
   }
   generateAbort.value?.abort()
@@ -1349,6 +1350,9 @@ async function onGenerateScript(
     // 流式分支的 scriptPath 由 onDone 从提示文本提取并 patch，res.scriptPath 为空——
     // 这里只有 res.scriptPath 有值时才覆盖，避免把流式提取到的路径清空
     patch({ script: res.script, ...(res.scriptPath ? { scriptPath: res.scriptPath } : {}) })
+    // 生成服务把带 ```python 围栏的整段回复存进了 scriptPath（配置 codeRule 也指向它），
+    // 执行端点会报第 1 行语法错误。原地覆盖成纯代码，路径不变，codeRule 仍然有效。
+    if (isRule.value) await publishCleanRuleScript()
     if (isRule.value) {
       generationState.value = 'done'
       generationMessage.value = generationMessage.value || '保存完成'
@@ -1593,7 +1597,29 @@ function alertCkSourceConflict(error: MultipleCkSourceRowsError) {
   })
 }
 
+/** 生成后把带围栏的脚本清理成纯 Python，覆盖写回同一路径并回读确认 */
+async function publishCleanRuleScript() {
+  const raw = orchCfg.value.script ?? ''
+  const path = orchCfg.value.scriptPath?.trim() ?? ''
+  if (!needsPythonCleanup(raw, path)) return
+  const clean = cleanGeneratedPython(raw)
+  await ruleApi.fileUploadScript(path, clean)
+  if ((await ruleApi.fileDownloadScript(path)).trim() !== clean.trim()) {
+    throw new Error('清理后的脚本回读不一致，请重新生成')
+  }
+  patch({ script: clean })
+}
+
 async function onSaveScript() {
+  // 手动改过的脚本也可能带着围栏（复制粘贴模型回复），保存前同样清理，避免写进不可执行的文件
+  if (needsPythonCleanup(orchCfg.value.script ?? '', orchCfg.value.scriptPath ?? '')) {
+    try {
+      patch({ script: cleanGeneratedPython(orchCfg.value.script ?? '') })
+    } catch (e) {
+      ElMessage.error(`脚本无法保存：${(e as Error)?.message ?? String(e)}`)
+      return
+    }
+  }
   if (!orchCfg.value.script?.trim()) {
     ElMessage.warning(isRule.value ? '请先生成脚本' : '请先生成配置')
     return

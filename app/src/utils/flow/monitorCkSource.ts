@@ -15,6 +15,7 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import type { CkSourcePayload, CkSourceRecord, RuleOrchestration } from '@/api'
 import { nodeScheduleCron } from './scheduleCron'
+import { isWritableStepId } from './stepPersist'
 
 /**
  * 一个源在 ck_source 里有多条记录时，画布同步必须停手（2026-11-12 最小保护）。
@@ -120,6 +121,19 @@ function parseCheckConf(value: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * 本页会话标识：草稿 key 的绑定只在写下它的这一页会话里有效（见 MonitorCheckBinding.draftSession）。
+ * 每次加载页面重新生成，不持久化。
+ */
+const DRAFT_SESSION = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+  ? crypto.randomUUID()
+  : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+
+/** 画布草稿 key：步骤还没落库（落库后换成后端分配的数字 itemConfig，见 flow.rebindNodeId）。 */
+function isDraftNodeKey(nodeKey: string): boolean {
+  return !isWritableStepId(nodeKey)
+}
+
 /** check_conf.binding → 结构化绑定；没有这个键（旧记录）或结构不对时返回 undefined。 */
 function bindingOf(conf: Record<string, unknown>): MonitorCheckBinding | undefined {
   const raw = conf.binding
@@ -134,6 +148,8 @@ function bindingOf(conf: Record<string, unknown>): MonitorCheckBinding | undefin
   if (Number.isFinite(version) && version > 0) binding.bindingVersion = version
   const boundAt = typeof value.boundAt === 'string' ? value.boundAt.trim() : ''
   if (boundAt) binding.boundAt = boundAt
+  const draftSession = typeof value.draftSession === 'string' ? value.draftSession.trim() : ''
+  if (draftSession) binding.draftSession = draftSession
   return Object.keys(binding).length ? binding : undefined
 }
 
@@ -149,6 +165,8 @@ export function bindingMatches(
   nodeKey: string | undefined,
 ): boolean {
   if (!binding?.nodeKey || !nodeKey || binding.nodeKey !== nodeKey) return false
+  // 草稿 key 刷新页面后会被新节点复用：只认本页会话写下的草稿绑定（2026-11-16）。
+  if (isDraftNodeKey(nodeKey) && binding.draftSession !== DRAFT_SESSION) return false
   if (workflowId && binding.workflowId) return binding.workflowId === workflowId
   return true
 }
@@ -161,6 +179,31 @@ function pickBoundRow(
 ): CkSourceRecord | undefined {
   if (!nodeKey) return undefined
   return rows.find((row) => bindingMatches(bindingOf(parseCheckConf(row.checkConf)), workflowId, nodeKey))
+}
+
+/**
+ * 本节点保存时该改哪一条（undefined = 新建一条）。两条写入路径（节点保存 / 告警面板）共用同一口径：
+ *   - 有绑定到本节点的那条 → 改它；
+ *   - 一条都没有 → 新建；
+ *   - 只有一条：没绑定（旧记录）→ 收养；绑定的是别的节点 → 新建；
+ *   - 多条且**全都绑定了别的节点**（同源第 3 个节点、第 3 个共享该源的流程）→ 新建；
+ *   - 多条里还有没绑定的旧记录 → 无法判断收养哪条，抛 MultipleCkSourceRowsError 交监控中心处理。
+ * 已绑定别的节点的记录在任何情况下都不收养（2026-11-16 场景测试补：此前同源超过两条即拒绝、
+ * 告警面板还会直接改 existing[0]）。
+ */
+function claimRow(
+  existing: CkSourceRecord[],
+  sourceId: string,
+  workflowId: string | undefined,
+  nodeKey: string | undefined,
+): CkSourceRecord | undefined {
+  const bound = pickBoundRow(existing, workflowId, nodeKey)
+  if (bound) return bound
+  if (!existing.length) return undefined
+  const isBound = (row: CkSourceRecord) => !!bindingOf(parseCheckConf(row.checkConf))
+  if (existing.length === 1) return isBound(existing[0]) ? undefined : existing[0]
+  if (nodeKey && existing.every(isBound)) return undefined
+  throw new MultipleCkSourceRowsError(sourceId, existing)
 }
 
 /**
@@ -223,6 +266,7 @@ function withBinding(
     nodeKey,
     bindingVersion: version,
     boundAt: versionChanged || !previous?.boundAt ? nowStamp() : previous.boundAt,
+    ...(isDraftNodeKey(nodeKey) ? { draftSession: DRAFT_SESSION } : {}),
   }
   return { ...conf, binding }
 }
@@ -302,9 +346,10 @@ function buildCheckConf(
  * 其余字段原样保留；该源还没有 ck_source 行时退回 syncMonitorCkSource 的建行口径
  *（没有旧配置可覆盖，按节点信息建一行是对的）。失败向上抛，由调用方决定提示策略。
  *
- * ⚠️ 只在该源恰好一条 ck_source 时按主键更新（2026-11-13 起带 ver 乐观锁）；多条时同样抛
- * MultipleCkSourceRowsError——告警配置虽然概念上是源级的，但落库是按检查项一行，没有「改哪一条」
- * 的依据就不能整包覆盖（2026-09-16 实测：一个带数据监控节点的源在 ck_source 里有 4 行同名记录）。
+ * ⚠️ 改哪一条按 claimRow 认领（与节点保存同口径），按主键更新并带 ver 乐观锁；本节点还没有记录时新建，
+ * 不改绑定到别的节点的记录；多条里有无法判断归属的旧记录时抛 MultipleCkSourceRowsError——
+ * 告警配置落库是按检查项一行，没有「改哪一条」的依据就不能整包覆盖
+ *（2026-09-16 实测：一个带数据监控节点的源在 ck_source 里有 4 行同名记录）。
  */
 export async function syncMonitorAlertConfig(
   sourceId: string | undefined,
@@ -315,14 +360,13 @@ export async function syncMonitorAlertConfig(
   const trimmed = sourceId?.trim()
   if (!trimmed) throw new Error('缺少源 ID')
   const existing = await ckSourceApi.list(trimmed)
-  if (!existing.length) {
+  // C12：按 claimRow 认领本节点那条；认领不到（本节点还没有记录）就按节点信息新建，
+  // 绝不改绑定到别的节点的记录。
+  const current = claimRow(existing, trimmed, options?.workflowId?.trim() || undefined, options?.nodeKey?.trim() || undefined)
+  if (!current) {
     await syncMonitorCkSource(trimmed, node ? { ...node, alertConfig } : undefined, undefined, options)
     return
   }
-  // C12：优先认领「绑定到本节点」的那条；没有绑定才退回旧口径（唯一一条可改、多条拒绝）。
-  const bound = pickBoundRow(existing, options?.workflowId, options?.nodeKey?.trim() || undefined)
-  if (!bound && existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
-  const current = bound ?? existing[0]
   const previousConf = parseCheckConf(current.checkConf)
   // 按主键（C01）而不是按 sourceId 更新：只命中这一条，且带上 ver 做乐观锁——
   // 页面读到记录后别人又改过时，后端会拒绝而不是静默覆盖。
@@ -333,6 +377,36 @@ export async function syncMonitorAlertConfig(
     sourceId: Number(trimmed),
     checkConf: JSON.stringify(withNodeInputScope({ ...previousConf, ...alertCheckConfOf(alertConfig, previousConf) })),
   })
+}
+
+/**
+ * 草稿节点落库换 ID 后，把它的检查项绑定从草稿 key 迁到数字步骤 ID（2026-11-16）。
+ *
+ * 节点在步骤落库前就可能保存过监控（绑定写的是 `monitor-5` 这类草稿 key），随后自动保存把节点换成
+ * 后端分配的 itemConfig。不迁的话下次保存按新 ID 认领不到，会另建一条、旧那条变成孤儿。
+ * 只改 checkConf.binding（nodeKey 换新、去掉 draftSession），其余键与定义字段原样不动，带 ver 乐观锁。
+ * 返回是否改了记录；没有对应记录（节点没保存过监控）返回 false。失败向上抛，由调用方提示。
+ */
+export async function rebindMonitorCkSource(
+  sourceId: string | undefined,
+  workflowId: string | undefined,
+  fromKey: string,
+  toKey: string,
+): Promise<boolean> {
+  const trimmed = sourceId?.trim()
+  if (!trimmed || !fromKey || !toKey || fromKey === toKey) return false
+  const rows = await ckSourceApi.list(trimmed)
+  const row = pickBoundRow(rows, workflowId?.trim() || undefined, fromKey)
+  if (!row) return false
+  const conf = parseCheckConf(row.checkConf)
+  const { draftSession: _dropSession, ...binding } = bindingOf(conf) ?? {} // eslint-disable-line @typescript-eslint/no-unused-vars -- 落库后不再需要会话标识
+  await updateSourceCheck({
+    id: row.id,
+    ver: row.ver,
+    sourceId: Number(trimmed),
+    checkConf: JSON.stringify({ ...conf, binding: { ...binding, nodeKey: toKey } }),
+  })
+  return true
 }
 
 /**
@@ -383,12 +457,9 @@ export async function syncMonitorCkSource(
   const nodeKey = options?.nodeKey?.trim() || undefined
   // C12（2026-11-13 前端半）：先按 check_conf.binding 认领本节点的检查项。
   // 认领到 → 只改这一条，同源多节点/复制节点不再互相覆盖，也不再因为「该源有多行」被迫停手。
-  const bound = pickBoundRow(existing, workflowId, nodeKey)
-  if (!bound && existing.length > 1) throw new MultipleCkSourceRowsError(trimmed, existing)
-  // 没有绑定时退回旧口径：零条 → 建行；唯一一条且**没有绑定**（旧记录）→ 收养并补写绑定。
-  // 唯一一条但绑定到别的节点 → 不收养，按本节点另建一条（这正是「一个源两个监控节点」的目标形态）。
-  const adoptTarget = bound
-    ?? (existing.length === 1 && !bindingOf(parseCheckConf(existing[0].checkConf)) ? existing[0] : undefined)
+  // 认领口径见 claimRow：绑定到本节点 → 改；唯一一条旧记录（无绑定）→ 收养并补写绑定；
+  // 其余记录都绑定了别的节点 → 按本节点另建一条（「一个源多个监控节点 / 多流程共享源」的目标形态）。
+  const adoptTarget = claimRow(existing, trimmed, workflowId, nodeKey)
   const previousConf = parseCheckConf(adoptTarget?.checkConf)
   const previousBinding = bindingOf(previousConf)
   const tableName = await resolveInputTableName(node, orchCfg)

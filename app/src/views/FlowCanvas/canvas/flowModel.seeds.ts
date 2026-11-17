@@ -71,8 +71,10 @@ export function collectorCapabilityOf(cfg: NodeConfig): CollectorCapability | un
 }
 
 // ---------- 规则编排 ----------
+// 「main 必须第一个定义」：186 实测（2026-11-17）脚本执行端点带参数调用时取的是文件里第一个定义的函数，
+// 辅助函数写在 main 前面会被当成入口（报 unexpected keyword argument）。执行器改为显式调 main 前靠提示词规避。
 export const DEFAULT_RULE_SYSTEM_PROMPT =
-  '生成 Python 规则脚本：入口函数名为 main，参数为指定入参字段列表，返回包含指定出参字段的 JSON 对象；只做字段转换与判断，禁止访问未授权外部网络或本地文件。'
+  '生成 Python 规则脚本：入口函数名为 main，参数为指定入参字段列表，返回包含指定出参字段的 JSON 对象；main 必须是脚本中第一个定义的函数，辅助函数和常量写在 main 之后；只做字段转换与判断，禁止访问未授权外部网络或本地文件。'
 
 export function makeDefaultRuleOrchestration(): RuleOrchestration {
   return {

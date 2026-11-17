@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ckSourceApi, entryApi } from '@/api'
 import * as monitorApi from '@/api/monitor'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { describeCkSourceConflictRows, MultipleCkSourceRowsError, syncMonitorAlertConfig, syncMonitorCkSource } from './monitorCkSource'
+import { describeCkSourceConflictRows, MultipleCkSourceRowsError, rebindMonitorCkSource, syncMonitorAlertConfig, syncMonitorCkSource } from './monitorCkSource'
 
 function makeMonitorNode(patch: Partial<NodeConfig> = {}): NodeConfig {
   const node: NodeConfig = {
@@ -350,12 +350,12 @@ describe('describeCkSourceConflictRows', () => {
 })
 
 describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）', () => {
-  const options = { workflowId: '451', nodeKey: 'web-list-1' }
+  const options = { workflowId: '451', nodeKey: '20001' }
 
   it('同源多条时按 nodeKey 认领本节点那条：只更新它，不再因「多条」停手', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
-      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-2', bindingVersion: 1 } }) },
-      { id: 8, ver: 12, sourceId: 430016501, name: '本节点', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 } }) },
+      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20002', bindingVersion: 1 } }) },
+      { id: 8, ver: 12, sourceId: 430016501, name: '本节点', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20001', bindingVersion: 1 } }) },
     ])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     const add = vi.spyOn(monitorApi, 'addSourceCheck')
@@ -366,7 +366,7 @@ describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）'
     const payload = update.mock.calls[0][0] as Record<string, unknown>
     expect(payload).toMatchObject({ id: 8, ver: 12 })
     const conf = JSON.parse(String(payload.checkConf ?? '{}'))
-    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 })
+    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: '20001', bindingVersion: 1 })
     // 范围没变：boundAt 沿用旧值语义（此处旧记录没有 boundAt，首次补齐即可）
     expect(typeof conf.binding.boundAt).toBe('string')
   })
@@ -385,12 +385,12 @@ describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）'
     expect(payload).toMatchObject({ id: 7, ver: 11 })
     const conf = JSON.parse(String(payload.checkConf ?? '{}'))
     expect(conf.customKeep).toBe('keep-me')
-    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 })
+    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: '20001', bindingVersion: 1 })
   })
 
   it('唯一一条但绑定的是别的节点时另建一条（一个源两个监控节点不再互相覆盖）', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
-      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-2', bindingVersion: 1 } }) },
+      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20002', bindingVersion: 1 } }) },
     ])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck')
     const add = vi.spyOn(monitorApi, 'addSourceCheck').mockResolvedValue({ id: 102, ver: null })
@@ -400,7 +400,7 @@ describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）'
     expect(update).not.toHaveBeenCalled()
     const payload = add.mock.calls[0][0] as Record<string, unknown>
     const conf = JSON.parse(String(payload.checkConf ?? '{}'))
-    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 })
+    expect(conf.binding).toMatchObject({ workflowId: '451', nodeKey: '20001', bindingVersion: 1 })
   })
 
   it('检查范围（输入表）变了才递增 bindingVersion，名称变化不递增', async () => {
@@ -411,7 +411,7 @@ describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）'
         sourceId: 430016501,
         name: '本节点',
         tableName: 'sense_data.TB_OLD',
-        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 3 } }),
+        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20001', bindingVersion: 3 } }),
       },
     ])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
@@ -430,7 +430,7 @@ describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）'
         sourceId: 430016501,
         name: '本节点',
         tableName: 'sense_data.TB_JD_SKU_BASE',
-        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 4 } }),
+        checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20001', bindingVersion: 4 } }),
       },
     ])
     await syncMonitorCkSource('430016501', makeMonitorNode({ title: '改了名字' }), undefined, options)
@@ -455,13 +455,13 @@ describe('syncMonitorCkSource · C12 节点显式绑定（check_conf.binding）'
 describe('syncMonitorAlertConfig · C12 绑定认领', () => {
   it('同源多条时只更新绑定到本节点那条，告警配置不再被「多条」挡住', async () => {
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([
-      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-2', bindingVersion: 1 } }) },
-      { id: 8, ver: 12, sourceId: 430016501, name: '本节点', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'web-list-1', bindingVersion: 1 }, script: '/code01/keep.py' }) },
+      { id: 7, ver: 11, sourceId: 430016501, name: '别的节点', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20002', bindingVersion: 1 } }) },
+      { id: 8, ver: 12, sourceId: 430016501, name: '本节点', tableName: 'sense_data.TB_JD_SKU_BASE', checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '20001', bindingVersion: 1 }, script: '/code01/keep.py' }) },
     ])
     const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockResolvedValue({})
     const node = makeMonitorNode()
 
-    await syncMonitorAlertConfig('430016501', node, { ...node.alertConfig!, enabled: false }, { workflowId: '451', nodeKey: 'web-list-1' })
+    await syncMonitorAlertConfig('430016501', node, { ...node.alertConfig!, enabled: false }, { workflowId: '451', nodeKey: '20001' })
 
     const payload = update.mock.calls[0][0] as Record<string, unknown>
     expect(payload).toMatchObject({ id: 8, ver: 12 })
@@ -469,6 +469,217 @@ describe('syncMonitorAlertConfig · C12 绑定认领', () => {
     // 告警面板只合入告警键，脚本/绑定原样保留；关掉告警即静音 none
     expect(conf.notifyOn).toBe('none')
     expect(conf.script).toBe('/code01/keep.py')
-    expect(conf.binding).toMatchObject({ nodeKey: 'web-list-1' })
+    expect(conf.binding).toMatchObject({ nodeKey: '20001' })
+  })
+})
+
+/**
+ * C12 四个场景（1113 清单 §1「还缺 · 场景验证」）：用内存版 ck_source 串起多次保存，
+ * 断言最终表里每个节点各自一条、互不覆盖。add/update/list 都打到同一个 rows 数组上。
+ */
+describe('C12 场景验证：节点绑定在多次保存下不串行', () => {
+  type Row = { id: number, ver: number, sourceId: number, name: string, tableName?: string, checkConf: string }
+  const SOURCE = '430016501'
+
+  function fakeCkSource(initial: Row[] = []) {
+    const rows: Row[] = initial.map((row) => ({ ...row }))
+    let nextId = 100
+    vi.spyOn(ckSourceApi, 'list').mockImplementation(async () => rows.map((row) => ({ ...row })))
+    const add = vi.spyOn(monitorApi, 'addSourceCheck').mockImplementation(async (param) => {
+      const row: Row = {
+        id: nextId++,
+        ver: 1,
+        sourceId: Number(param.sourceId),
+        name: String(param.name ?? ''),
+        tableName: param.tableName as string | undefined,
+        checkConf: String(param.checkConf ?? '{}'),
+      }
+      rows.push(row)
+      return { id: row.id, ver: row.ver }
+    })
+    const update = vi.spyOn(monitorApi, 'updateSourceCheck').mockImplementation(async (param) => {
+      const row = rows.find((item) => item.id === param.id)
+      if (!row) throw new Error(`no row ${String(param.id)}`)
+      if (param.ver !== row.ver) throw new Error('ver conflict')
+      Object.assign(row, {
+        name: param.name ?? row.name,
+        tableName: param.tableName ?? row.tableName,
+        checkConf: param.checkConf ?? row.checkConf,
+        ver: row.ver + 1,
+      })
+      return {}
+    })
+    const bindingOfRow = (row: Row) => JSON.parse(row.checkConf).binding as { workflowId?: string, nodeKey: string, bindingVersion: number } | undefined
+    const rowOf = (workflowId: string, nodeKey: string) =>
+      rows.filter((row) => bindingOfRow(row)?.nodeKey === nodeKey && bindingOfRow(row)?.workflowId === workflowId)
+    return { rows, add, update, rowOf, bindingOfRow, remove: (id: number) => rows.splice(rows.findIndex((row) => row.id === id), 1) }
+  }
+
+  const save = (title: string, workflowId: string, nodeKey: string, patch: Partial<NodeConfig> = {}) =>
+    syncMonitorCkSource(SOURCE, makeMonitorNode({ title, ...patch }), undefined, { workflowId, nodeKey })
+
+  it('场景 1 · 一个源两个监控节点：各建各的，再次保存只改自己那条', async () => {
+    const db = fakeCkSource()
+
+    await save('入库量监控', '451', 'monitor-1')
+    await save('延迟监控', '451', 'monitor-2')
+    expect(db.rows).toHaveLength(2)
+
+    await save('入库量监控-改名', '451', 'monitor-1')
+    await save('延迟监控-改名', '451', 'monitor-2')
+    expect(db.rows).toHaveLength(2)
+    expect(db.rowOf('451', 'monitor-1')).toEqual([expect.objectContaining({ name: '入库量监控-改名' })])
+    expect(db.rowOf('451', 'monitor-2')).toEqual([expect.objectContaining({ name: '延迟监控-改名' })])
+  })
+
+  it('场景 1 · 第三个监控节点：前两条都已绑定别的节点时应另建，而不是报「多条无法判断」', async () => {
+    const db = fakeCkSource()
+    await save('A', '451', 'monitor-1')
+    await save('B', '451', 'monitor-2')
+
+    await save('C', '451', 'monitor-3')
+
+    expect(db.rows).toHaveLength(3)
+    expect(db.rowOf('451', 'monitor-3')).toHaveLength(1)
+  })
+
+  it('场景 1 · 第二个节点还没建行时改告警，不能改到第一个节点那条', async () => {
+    const db = fakeCkSource()
+    await save('A', '451', 'monitor-1')
+    const before = db.rows[0].checkConf
+    const node = makeMonitorNode({ title: 'B' })
+
+    await syncMonitorAlertConfig(SOURCE, node, { ...node.alertConfig!, enabled: false }, { workflowId: '451', nodeKey: 'monitor-2' })
+
+    expect(db.rowOf('451', 'monitor-1')[0].checkConf).toBe(before)
+    expect(db.rowOf('451', 'monitor-2')).toHaveLength(1)
+    expect(JSON.parse(db.rowOf('451', 'monitor-2')[0].checkConf).notifyOn).toBe('none')
+  })
+
+  it('场景 2 · 两个流程共享同一个源、节点 key 相同：按 workflowId 区分，各自一条', async () => {
+    const db = fakeCkSource()
+
+    await save('流程甲监控', '451', 'monitor-1')
+    await save('流程乙监控', '452', 'monitor-1')
+    await save('流程甲监控-改', '451', 'monitor-1')
+    await save('流程乙监控-改', '452', 'monitor-1')
+
+    expect(db.rows).toHaveLength(2)
+    expect(db.rowOf('451', 'monitor-1')).toEqual([expect.objectContaining({ name: '流程甲监控-改' })])
+    expect(db.rowOf('452', 'monitor-1')).toEqual([expect.objectContaining({ name: '流程乙监控-改' })])
+  })
+
+  it('场景 2 · 第三个流程共享同一个源：同样应另建', async () => {
+    const db = fakeCkSource()
+    await save('甲', '451', 'monitor-1')
+    await save('乙', '452', 'monitor-1')
+
+    await save('丙', '453', 'monitor-1')
+
+    expect(db.rows).toHaveLength(3)
+    expect(db.rowOf('453', 'monitor-1')).toHaveLength(1)
+  })
+
+  it('场景 3 · 复制节点：副本（新 key）保存时另建一条，原节点那条不变', async () => {
+    const db = fakeCkSource()
+    await save('入库量监控', '451', 'monitor-3')
+    const original = { ...db.rows[0] }
+
+    // flow.duplicate 的副本 key 形如 `${id}-copy-${seq}`，标题追加「（复制）」，节点配置原样克隆
+    await save('入库量监控（复制）', '451', 'monitor-3-copy-4')
+
+    expect(db.rows).toHaveLength(2)
+    expect(db.rows.find((row) => row.id === original.id)).toEqual(original)
+    expect(db.rowOf('451', 'monitor-3-copy-4')).toEqual([expect.objectContaining({ name: '入库量监控（复制）' })])
+    expect(db.bindingOfRow(db.rowOf('451', 'monitor-3-copy-4')[0])?.bindingVersion).toBe(1)
+  })
+
+  it('场景 4 · 检查项在监控中心删了：节点再保存重建一条，绑定版本从 1 开始', async () => {
+    const db = fakeCkSource()
+    await save('入库量监控', '451', 'monitor-1')
+    await save('入库量监控', '451', 'monitor-1', { ruleCfg: { mode: 'ref', scriptPath: '/code01/184.py', inputTable: 'sense_data.TB_OTHER', describe: '' } })
+    expect(db.bindingOfRow(db.rows[0])?.bindingVersion).toBe(2)
+    db.remove(db.rows[0].id)
+
+    await save('入库量监控', '451', 'monitor-1')
+
+    expect(db.rows).toHaveLength(1)
+    expect(db.bindingOfRow(db.rows[0])?.bindingVersion).toBe(1)
+  })
+
+  // 草稿 key（`monitor-1` 这类）刷新页面后从 1 重排，必然被别的新节点复用（2026-11-16）
+  it('草稿 key 复用：上一轮会话遗留的 monitor-1 检查项不被新的 monitor-1 认领，另建一条', async () => {
+    const db = fakeCkSource([{
+      id: 50, ver: 1, sourceId: Number(SOURCE), name: '已删节点遗留',
+      checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: 'monitor-1', bindingVersion: 1, draftSession: 'old-session' } }),
+    }])
+    const stale = { ...db.rows[0] }
+
+    await save('新节点', '451', 'monitor-1')
+
+    expect(db.rows).toHaveLength(2)
+    expect(db.rows.find((row) => row.id === 50)).toEqual(stale)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('草稿 key 在同一页会话里多次保存：认领的仍是自己那条，不重复建', async () => {
+    const db = fakeCkSource()
+    await save('新节点', '451', 'monitor-1')
+    await save('新节点-改名', '451', 'monitor-1')
+
+    expect(db.rows).toHaveLength(1)
+    expect(db.rows[0].name).toBe('新节点-改名')
+    expect(db.bindingOfRow(db.rows[0])).toHaveProperty('draftSession')
+  })
+
+  it('已落库节点（数字步骤 ID）不写会话标识', async () => {
+    const db = fakeCkSource()
+    await save('落库节点', '451', '40601')
+    expect(db.bindingOfRow(db.rows[0])).not.toHaveProperty('draftSession')
+  })
+
+  it('草稿保存 → 落库换 ID 迁绑定 → 按新 ID 再保存：始终只有一条', async () => {
+    const db = fakeCkSource([{
+      id: 60, ver: 1, sourceId: Number(SOURCE), name: '别的节点',
+      checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '30001', bindingVersion: 1 } }),
+    }])
+    await save('新监控', '451', 'monitor-7')
+    const mine = db.rowOf('451', 'monitor-7')[0]
+    const keep = JSON.parse(mine.checkConf).orchestration
+
+    expect(await rebindMonitorCkSource(SOURCE, '451', 'monitor-7', '40601')).toBe(true)
+    const migrated = db.rows.find((row) => row.id === mine.id)!
+    expect(db.bindingOfRow(migrated)).toMatchObject({ workflowId: '451', nodeKey: '40601', bindingVersion: 1 })
+    expect(db.bindingOfRow(migrated)).not.toHaveProperty('draftSession')
+    expect(JSON.parse(migrated.checkConf).orchestration).toEqual(keep)
+
+    await save('新监控-改名', '451', '40601')
+    expect(db.rows).toHaveLength(2)
+    expect(db.rowOf('451', '40601')).toEqual([expect.objectContaining({ id: mine.id, name: '新监控-改名' })])
+    expect(db.rows.find((row) => row.id === 60)?.checkConf).toContain('30001')
+  })
+
+  it('迁绑定：节点没保存过监控（找不到草稿绑定）时不写库', async () => {
+    const db = fakeCkSource([{
+      id: 61, ver: 1, sourceId: Number(SOURCE), name: '别的节点',
+      checkConf: JSON.stringify({ binding: { workflowId: '451', nodeKey: '30001', bindingVersion: 1 } }),
+    }])
+
+    expect(await rebindMonitorCkSource(SOURCE, '451', 'monitor-9', '40602')).toBe(false)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('场景 4 · 同源还有别的节点那条时删了重建：只重建自己的，不收养别人的', async () => {
+    const db = fakeCkSource()
+    await save('A', '451', 'monitor-1')
+    await save('B', '451', 'monitor-2')
+    db.remove(db.rowOf('451', 'monitor-1')[0].id)
+    const other = { ...db.rows[0] }
+
+    await save('A', '451', 'monitor-1')
+
+    expect(db.rows).toHaveLength(2)
+    expect(db.rows.find((row) => row.id === other.id)).toEqual(other)
+    expect(db.rowOf('451', 'monitor-1')).toHaveLength(1)
   })
 })
