@@ -152,7 +152,7 @@ export interface FlowNodeIssue {
   title: string
   /** unsaved：新节点还没保存过节点配置（没有配置、也没进草稿）；outputTableMissing：需要输出表的步骤尚未选表；
    *  tableMismatch：输入表与上游输出表不一致（只提示） */
-  reason: 'unsaved' | 'outputTableMissing' | 'tableMismatch'
+  reason: 'unsaved' | 'outputTableMissing' | 'tableMismatch' | 'rootConfigMissing'
   message: string
 }
 
@@ -167,11 +167,23 @@ export function collectFlowIssues(
   snapshots: Record<string, Step> = {},
 ): FlowNodeIssue[] {
   const issues: FlowNodeIssue[] = []
+  // 流程入口（ROOT）：主链第一个真实节点；画布合成的虚拟起点（source:…）由源配置兜底，不在这里查。
+  const entryId = main.find((id) => id !== 'start' && id !== 'end' && id !== '0')
+  const rootIds = new Set([
+    ...(entryId && !isSyntheticRootId(entryId) ? [entryId] : []),
+    ...Object.keys(snapshots).filter((id) => snapshots[id]?.isRoot),
+  ])
   for (const id of persistableNodeIds(main, branchGroups)) {
     if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id)) continue
     const cfg = configs[id]
     if (!cfg) continue
     const title = cfg.title || id
+    // 已落库的 ROOT 步骤没有配置时，后端发布报「ROOT未配置有效入口配置」；之前因为 id 可写、又按 ROOT 跳过，
+    // 前端一路放行（2026-11-17 186：模板自带的「采集」节点未配置，流程 15730950 发布失败）。
+    if (rootIds.has(id) && !cfg.configId) {
+      issues.push({ nodeId: id, title, reason: 'rootConfigMissing', message: '是流程入口但没有配置，请在右侧保存节点配置，或删除该节点让下一个节点做入口' })
+      continue
+    }
     if (!isWritableStepId(id) && !cfg.configId) {
       issues.push({ nodeId: id, title, reason: 'unsaved', message: '尚未保存，请在右侧保存节点配置' })
       continue
