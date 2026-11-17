@@ -696,8 +696,28 @@ function readRawTextField(value: unknown, keys: string[]): string {
   return ''
 }
 
-function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: string; scriptPath: string; script: string } {
+/**
+ * core_param 里的 describe（PDF抓取保存时 pdfStructuredFor 写在这里）。不能用 readRawTextField：
+ * 它在 JSON 里找不到键时会把整段 JSON 原文当值返回，`{"providerCode":...}` 就成了描述。
+ */
+function readCoreParamDescribe(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim().startsWith('{')) return ''
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return ''
+    return String((parsed as Record<string, unknown>).describe ?? '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: string; scriptPath: string; script: string; systemPrompt: string } {
+  // PDF抓取的描述保存在 core_param.describe（2026-11-17：之前只读 snatchConf，刷新后描述为空，
+  // 再保存一次就用空描述把 core_param 重写、后端原值也被抹掉）。
   const describe = readRawTextField(raw.snatchConf, ['description', 'describe', 'nlDescribe'])
+    || (isPdf.value ? readCoreParamDescribe(raw.coreParam) : '')
+  // PDF抓取的系统提示词随节点保存落 cs_config.prompt（见 nodeConfigPayload promptForConfig），这里读回。
+  const systemPrompt = isPdf.value && typeof raw.prompt === 'string' ? raw.prompt : ''
   const codeRuleValue = raw.codeRule
   const codeRuleText = readRawTextField(codeRuleValue, ['scriptPath', 'codePath', 'codeFileName', 'path'])
   const scriptText = (codeRuleValue && typeof codeRuleValue === 'object' && !Array.isArray(codeRuleValue))
@@ -705,7 +725,7 @@ function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: s
     : ''
   const codeRuleRaw = String(codeRuleValue ?? '').trim()
   const scriptPath = codeRuleText || (/^[^\n]+\.[a-z0-9]+$/i.test(codeRuleRaw) ? codeRuleRaw : '')
-  return { describe, scriptPath, script: scriptText }
+  return { describe, scriptPath, script: scriptText, systemPrompt: systemPrompt.trim() ? systemPrompt : '' }
 }
 
 watch(id, () => {
@@ -871,9 +891,14 @@ watch(
       try {
         const raw = await configApi.configDetailRaw(configId)
         if (configDetailPrefillToken.value === token) return
-        const prefill = raw ? resolveConfigDetailPrefill(raw) : { describe: '', scriptPath: '', script: '' }
+        const prefill = raw ? resolveConfigDetailPrefill(raw) : { describe: '', scriptPath: '', script: '', systemPrompt: '' }
         const next: Partial<RuleOrchestration> = {}
         if (prefill.describe) next.describe = prefill.describe
+        // 已保存的提示词视同用户手改：置位后模板自动拼接不再覆盖它（本轮已手改过的不动）。
+        if (prefill.systemPrompt && !promptTouched.value) {
+          promptTouched.value = true
+          next.systemPrompt = prefill.systemPrompt
+        }
         if (prefill.scriptPath) next.scriptPath = prefill.scriptPath
         if (prefill.script) next.script = prefill.script
         if (Object.keys(next).length) patchAuto(next)

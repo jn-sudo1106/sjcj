@@ -12,6 +12,7 @@
 import type { Config } from '@/api'
 import { engineCodeOf } from '@/api/translate'
 import {
+  DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT,
   applyFileDownloadType,
   defaultMultiMode,
   isArticleSummaryNode,
@@ -214,11 +215,15 @@ export interface BuildConfigOptions {
 function promptForConfig(cfg: NodeConfig): string | undefined {
   const orch = isRuleNode(cfg)
     ? cfg.ruleCfg
-    : isArticleSummaryNode(cfg) || isArticleTagNode(cfg) || isTranslateNode(cfg)
+    : isArticleSummaryNode(cfg) || isArticleTagNode(cfg) || isTranslateNode(cfg) || isPdfNode(cfg)
       ? cfg.execCfg
       : undefined
   const prompt = orch?.systemPrompt
-  return prompt?.trim() ? prompt : undefined
+  if (!prompt?.trim()) return undefined
+  // PDF抓取（2026-11-17）：抽取提示词只在前端内存里，刷新即丢、换人看不到。改为随节点保存落 prompt；
+  // 但它的种子默认值是抓取 XML 那段提示词，原样写进去就是上面说的污染，所以默认值不落。
+  if (isPdfNode(cfg) && prompt.trim() === DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT.trim()) return undefined
+  return prompt
 }
 
 /**

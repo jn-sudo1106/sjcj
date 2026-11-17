@@ -3240,6 +3240,35 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
     wrapper.unmount()
   })
 
+  it('刷新后从配置详情还原已保存的抽取提示词（prompt）与描述（core_param.describe）', async () => {
+    // 2026-11-17 186 实测：提示词和描述保存后刷新即丢，节点回落到抓取 XML 默认提示词
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      prompt: '你是研究报告数据抽取助手',
+      coreParam: '{"describe":"从研报 PDF 抽取国际收支数据点","providerCode":"DeepSeek","model":"deepseek-v4-flash"}',
+    })
+    const { flow, wrapper } = mountOnPdfNode()
+    flow.patchExecConfig('pdf-1', { describe: '', systemPrompt: DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT })
+    await flushPromises()
+    await flushPromises()
+
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe('你是研究报告数据抽取助手')
+    expect(flow.configs['pdf-1'].execCfg?.describe).toBe('从研报 PDF 抽取国际收支数据点')
+    wrapper.unmount()
+  })
+
+  it('core_param 没有 describe 时不把整段 JSON 当描述', async () => {
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      coreParam: '{"providerCode":"DeepSeek","model":"deepseek-v4-flash"}',
+    })
+    const { flow, wrapper } = mountOnPdfNode()
+    await flushPromises()
+    await flushPromises()
+
+    expect(flow.configs['pdf-1'].execCfg?.describe).toBe('从 PDF 抽取合同金额与签署日期')
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe('按出参抽取 PDF 正文')
+    wrapper.unmount()
+  })
+
   it('进 Tab 就把供应商/模型/描述拼进系统提示词（{{provider_code}} / {{model}} / {{describe}}）', async () => {
     const { flow } = mountOnPdfNode(true)
     await flushPromises()

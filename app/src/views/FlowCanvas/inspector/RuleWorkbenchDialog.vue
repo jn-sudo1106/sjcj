@@ -251,7 +251,8 @@ async function savePrompt() {
   emit('update:promptTemplateId', selectedPromptId.value || undefined)
   emit('update:modelProviderCode', modelProviderDraft.value)
   emit('update:modelCode', modelDraft.value)
-  ElMessage.success('系统提示词已保存')
+  // 这里只回写节点草稿（模板选择除外），真正落库要等节点「保存」——2026-11-17 PDF 节点实测按「已保存」理解后刷新丢失。
+  ElMessage.success('系统提示词已更新，保存节点后生效')
 }
 async function savePromptPreview() { if (await persistPromptChoice()) emit('save-prompt-preview', promptDraft.value) }
 
