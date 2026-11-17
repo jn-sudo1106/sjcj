@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // AI 智能问数（Agent 交互对话工作台）
 // 位于「问数配置」分组，支持 Text-to-SQL、多轮主动澄清与问答、思考链展示、KPI指标卡片、图表与明细切换
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import { ElMessage } from 'element-plus'
+import { getActivePinia } from 'pinia'
 import {
   ArrowDown,
   ArrowRight,
@@ -10,8 +11,8 @@ import {
   Close,
   CopyDocument,
   Delete,
-  Download,
   Plus,
+  RefreshRight,
   Search,
   TrendCharts,
   VideoPause,
@@ -19,22 +20,28 @@ import {
 import {
   listAiSessions,
   deleteAiSession,
-  getAiChatHistory,
-  submitClarificationAnswer,
-  streamAgentChat,
+  getAiChatHistoryPage,
+  clarificationOptionKey,
   extractClarificationFromText,
   extractChartDataFromText,
   listRecommendedQuestions,
   type AiSessionItem,
+  type AskErrorCode,
   type ChatMessage,
   type Clarification,
-  type PieSlice,
 } from '@/api/aiChat'
 import { downloadCsv, toCsv, csvDateTag, type CsvCell } from '@/utils/csv'
 import { downloadXlsx, exportDateTag, type XlsxCell } from '@/utils/format/xlsxExport'
-import ClarificationCard from './ClarificationCard.vue'
-import AiPieChart from './AiPieChart.vue'
-import MarkdownOutput from '@/components/MarkdownOutput.vue'
+import { saveColdMessages, loadColdMessages, dropColdMessages } from '@/utils/chatColdCache'
+import { copyToClipboard } from '@/utils/clipboard'
+import { useAuthStore } from '@/stores/auth'
+import { useAskChat, ASK_PHASE_LABELS } from './useAskChat'
+
+// 富渲染器按需加载：首屏 chunk 只留会话侧栏/输入框/消息骨架，
+// marked+dompurify、澄清卡片、图表数据卡在首次出现对应消息时再拉取
+const MarkdownOutput = defineAsyncComponent(() => import('@/components/MarkdownOutput.vue'))
+const ClarificationCard = defineAsyncComponent(() => import('./ClarificationCard.vue'))
+const DataViewCard = defineAsyncComponent(() => import('./DataViewCard.vue'))
 
 interface StarterPrompt {
   tag: string
@@ -73,10 +80,9 @@ const sessions = ref<AiSessionItem[]>([])
 const activeSessionId = ref<string>('new')
 const searchSessionKeyword = ref<string>('')
 
-// 输入框与发送参数
+// 输入框与发送参数（流式生命周期由 useAskChat 状态机统一管理）
 const promptText = ref<string>('')
-const isSending = ref<boolean>(false)
-const currentAbortController = ref<AbortController | null>(null)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // 视图切换与思考链折叠（支持趋势柱状、占比饼图与明细数据表；按用户需求默认展示明细列表）
 const activeDataView = ref<'chart' | 'pie' | 'table'>('table')
@@ -104,6 +110,172 @@ const thinkingExpandedMap = reactive<Record<string, boolean>>({})
 const thinkingElapsedSeconds = ref(0)
 let thinkingTimer: ReturnType<typeof setInterval> | null = null
 let scrollRafId: number | null = null
+
+// ===== 流式状态机（useAskChat）=====
+let activeAssistantMsg: ChatMessage | null = null
+let streamSessionId = ''
+let streamStartTime = 0
+
+const askChat = useAskChat({
+  onChunkFlush: (text) => {
+    if (!activeAssistantMsg) return
+    activeAssistantMsg.content += text
+    followScroll()
+  },
+  onReasoning: (text) => {
+    if (!activeAssistantMsg) return
+    if (!activeAssistantMsg.thinking) {
+      activeAssistantMsg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
+    }
+    activeAssistantMsg.thinking.text = (activeAssistantMsg.thinking.text || '') + text
+    followScroll()
+  },
+  onClarification: (clarification) => {
+    if (!activeAssistantMsg) return
+    activeAssistantMsg.clarification = { ...clarification, confirmed: false }
+    followScroll()
+  },
+  onSessionAssigned: (sessionId, threadId) => {
+    if (!sessionId) return
+    const oldId = streamSessionId
+    if (oldId === sessionId) return
+    const target = sessions.value.find((s) => s.id === oldId)
+    if (target) {
+      target.id = sessionId
+      if (threadId) target.uuid = threadId
+    }
+    sessionMessages.value[sessionId] = sessionMessages.value[oldId] || []
+    delete sessionMessages.value[oldId]
+    if (historyMeta[oldId]) {
+      historyMeta[sessionId] = historyMeta[oldId]
+      delete historyMeta[oldId]
+    }
+    if (activeSessionId.value === oldId) {
+      activeSessionId.value = sessionId
+    }
+    streamSessionId = sessionId
+  },
+  onError: (info) => {
+    if (activeAssistantMsg) {
+      activeAssistantMsg.status = 'failed'
+      activeAssistantMsg.errorInfo = info
+    }
+    ElMessage.error(info.message)
+  },
+  onFinished: ({ state }) => {
+    finalizeActiveMessage(state)
+  },
+})
+const isSending = computed(() => askChat.isBusy.value)
+const askState = askChat.state
+const askPhase = askChat.phase
+
+function startThinkingTimer() {
+  thinkingElapsedSeconds.value = 0
+  if (thinkingTimer) clearInterval(thinkingTimer)
+  thinkingTimer = setInterval(() => {
+    thinkingElapsedSeconds.value = Math.floor((Date.now() - streamStartTime) / 1000)
+  }, 500)
+}
+
+function stopThinkingTimer() {
+  if (thinkingTimer) {
+    clearInterval(thinkingTimer)
+    thinkingTimer = null
+  }
+}
+
+// 流结束/中断/失败：定稿思考链、提取富卡片、落消息状态
+function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interrupted') {
+  const msg = activeAssistantMsg
+  activeAssistantMsg = null
+  stopThinkingTimer()
+  if (!msg) return
+
+  if (msg.thinking) {
+    msg.thinking.completed = true
+    msg.thinking.durationMs = Date.now() - streamStartTime
+    if (state === 'interrupted') msg.thinking.interrupted = true
+    if (
+      (!msg.thinking.steps || msg.thinking.steps.length === 0) &&
+      msg.thinking.text
+    ) {
+      const lines = msg.thinking.text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+      msg.thinking.steps = lines.length > 0 ? lines : [msg.thinking.text]
+    }
+  }
+
+  if (state === 'interrupted') {
+    msg.interrupted = true
+    msg.status = 'interrupted'
+    ElMessage.info('已中断问数响应')
+  } else if (state === 'failed') {
+    msg.status = 'failed'
+  } else {
+    // 智能提取回答中的 SQL 代码块（如有）；指标未知 → 标注待执行口径，不造假
+    const sqlMatch = msg.content.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i)
+    if (sqlMatch && !msg.sql) {
+      const sqlCode = sqlMatch[1].trim()
+      if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(sqlCode)) {
+        msg.sql = { code: sqlCode, estimated: true }
+      }
+    }
+    if (!msg.clarification && msg.content) {
+      const parsedClarification = extractClarificationFromText(msg.content)
+      if (parsedClarification) {
+        msg.clarification = { ...parsedClarification, confirmed: false }
+      }
+    }
+    if (!msg.clarification && !msg.chartData && msg.content) {
+      const parsedChartData = extractChartDataFromText(msg.content)
+      if (parsedChartData) {
+        msg.chartData = parsedChartData
+      }
+    }
+    const hasBody = Boolean(
+      msg.content.trim() || msg.sql || msg.clarification || msg.chartData,
+    )
+    msg.status = hasBody ? 'done' : 'empty'
+    if (!hasBody) {
+      thinkingExpandedMap[msg.id] = true
+    }
+  }
+
+  const currentSession = sessions.value.find((s) => s.id === streamSessionId)
+  if (currentSession) {
+    currentSession.updatedAt = '刚刚'
+  }
+  followScroll()
+}
+
+// ===== 滚动跟随：距底 ≤80px 才自动拉底，上翻时不打断用户 =====
+const isFollowingScroll = ref(true)
+const unreadBelowCount = ref(0)
+
+function handleThreadScroll() {
+  const el = chatContainerRef.value
+  if (!el) return
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  isFollowingScroll.value = distance <= 80
+  if (isFollowingScroll.value) unreadBelowCount.value = 0
+}
+
+function followScroll() {
+  if (isFollowingScroll.value) {
+    scrollToBottom()
+  } else {
+    unreadBelowCount.value += 1
+  }
+}
+
+function backToBottom() {
+  isFollowingScroll.value = true
+  unreadBelowCount.value = 0
+  scrollToBottom(true)
+}
 
 function isThinkingOpen(msg: ChatMessage): boolean {
   if (thinkingExpandedMap[msg.id] !== undefined) {
@@ -139,7 +311,9 @@ function isMsgClarifyConfirmed(msg: ChatMessage): boolean {
 function getMsgSelectedTableNames(msg: ChatMessage): string[] {
   if (msg.clarification?.options && msg.clarification.selectedEntryTypeIds?.length) {
     return msg.clarification.options
-      .filter((o) => msg.clarification!.selectedEntryTypeIds!.includes(o.entryTypeId))
+      .filter((o, i) =>
+        msg.clarification!.selectedEntryTypeIds!.includes(clarificationOptionKey(o, i))
+      )
       .map((o) => o.typeName || o.tableName)
   }
   return []
@@ -167,70 +341,27 @@ function formatClarifyIntro(content: string, hasClarification = false): string {
   return cleaned
 }
 
+// 正文清洗结果按消息缓存：流式合帧后只有正在输出的那条会失效，
+// 避免长对话里每次渲染对全部历史消息重跑全文正则
+const markdownContentCache = new Map<string, { src: string; out: string }>()
+
 function formatMarkdownContent(msg: ChatMessage): string {
   if (!msg.content) return ''
-  // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由 rc-dataview-card 统一承载图表与表格及导出交互
+  const hit = markdownContentCache.get(msg.id)
+  if (hit && hit.src === msg.content) return hit.out
+  let out = msg.content
+  // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由数据卡统一承载图表与表格及导出交互
   if (msg.chartData) {
-    const cleaned = msg.content
+    out = msg.content
       .replace(
         /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
         '\n'
       )
       .trim()
-    return cleaned
   }
-  return msg.content
-}
-
-// 提取消息中的切片数据，若未显式提供则从柱状数据智能转换
-function getMsgSlices(msg: ChatMessage): PieSlice[] {
-  if (!msg.chartData) return []
-  if (msg.chartData.slices && msg.chartData.slices.length > 0) {
-    return msg.chartData.slices
-  }
-  if (!msg.chartData.bars || msg.chartData.bars.length === 0) {
-    return []
-  }
-  return msg.chartData.bars.map((bar) => {
-    const cleanLabel = bar.label.replace(/^\d+\.\s*/, '').split('(')[0].trim() || bar.label
-    return {
-      label: cleanLabel,
-      value: bar.value,
-      displayValue: bar.displayValue,
-      color:
-        bar.color === 'red'
-          ? '#dc2626'
-          : bar.color === 'orange'
-            ? '#ea580c'
-            : bar.color === 'green'
-              ? '#16a34a'
-              : '#2563eb',
-      tone:
-        bar.color === 'red'
-          ? 'err'
-          : bar.color === 'green'
-            ? 'ok'
-            : bar.color === 'orange'
-              ? 'amber'
-              : 'primary',
-    }
-  })
-}
-
-// 提取饼图中心摘要数据
-function getMsgPieCenter(msg: ChatMessage) {
-  if (msg.kpis && msg.kpis.length > 0) {
-    return {
-      value: msg.kpis[0].value,
-      label: msg.kpis[0].label,
-    }
-  }
-  const slices = getMsgSlices(msg)
-  const sum = slices.reduce((acc, s) => acc + (Number(s.value) || 0), 0)
-  return {
-    value: sum > 0 ? (sum >= 1000 ? sum.toLocaleString() : String(sum)) : '',
-    label: '样本总计',
-  }
+  if (markdownContentCache.size > 300) markdownContentCache.clear()
+  markdownContentCache.set(msg.id, { src: msg.content, out })
+  return out
 }
 
 // 清理导出文件名，去除特殊符号与表情
@@ -316,11 +447,8 @@ const currentClarification = ref<Clarification>({
   ],
 })
 const clarifyConfirmed = ref<boolean>(false)
-// 澄清答案是否真的回传成功：null=未提交、false=问数网关未接通（只展示本地演示结果）
-const clarifyDelivered = ref<boolean | null>(null)
 const selectedTables = ref<string[]>([])
 const clarifySessionId = ref<string>('s1')
-const clarifyRound = ref<number>(1)
 const clarifyCardKey = ref<number>(0)
 
 function cloneInitialMessages(raw?: Record<string, ChatMessage[]>): Record<string, ChatMessage[]> {
@@ -360,6 +488,63 @@ const currentMessages = computed(() => {
   return sessionMessages.value[activeSessionId.value] || []
 })
 
+// ===== 渲染窗口：长对话只挂载尾部 N 条，向上翻页逐步揭示 =====
+const RENDER_WINDOW = 60
+const extraRevealed = ref(0)
+const visibleMessages = computed(() => {
+  const all = currentMessages.value
+  const limit = RENDER_WINDOW + extraRevealed.value
+  if (all.length <= limit) return all
+  return all.slice(all.length - limit)
+})
+const hasHiddenEarlier = computed(() => {
+  const meta = historyMeta[activeSessionId.value]
+  const hiddenInMemory = currentMessages.value.length - visibleMessages.value.length
+  const hiddenOnServer = meta ? (meta.loadedPageNo - 1) * meta.pageSize : 0
+  return hiddenInMemory > 0 || hiddenOnServer > 0
+})
+
+// ===== 会话内存 LRU：只保留最近使用的会话消息在内存，其余下沉 IndexedDB 冷缓存 =====
+// 智能体上下文由 thread_id 承载（后端只转发当前问题），前端驱逐本地消息不影响 AI 记忆
+const SESSION_LRU = 3
+const sessionUsageOrder: string[] = []
+
+function touchSession(id: string) {
+  if (!id || id === 'new') return
+  const idx = sessionUsageOrder.indexOf(id)
+  if (idx >= 0) sessionUsageOrder.splice(idx, 1)
+  sessionUsageOrder.push(id)
+  while (sessionUsageOrder.length > SESSION_LRU) {
+    const evictId = sessionUsageOrder.shift()!
+    const msgs = sessionMessages.value[evictId]
+    if (msgs && msgs.length > 0 && evictId !== streamSessionId) {
+      void saveColdMessages(evictId, msgs)
+      delete sessionMessages.value[evictId]
+      delete historyMeta[evictId]
+    }
+  }
+}
+
+// 堆内存告警阈值：超过即把非当前会话消息全部下沉冷缓存
+const HEAP_SOFT_LIMIT = 350 * 1024 * 1024
+function checkMemoryPressure() {
+  const used = (performance as { memory?: { usedJSHeapSize?: number } }).memory?.usedJSHeapSize
+  if (!used || used < HEAP_SOFT_LIMIT) return
+  for (const id of Object.keys(sessionMessages.value)) {
+    if (id === activeSessionId.value || id === streamSessionId) continue
+    const msgs = sessionMessages.value[id]
+    if (msgs && msgs.length > 0) void saveColdMessages(id, msgs)
+    delete sessionMessages.value[id]
+    delete historyMeta[id]
+    const idx = sessionUsageOrder.indexOf(id)
+    if (idx >= 0) sessionUsageOrder.splice(idx, 1)
+  }
+}
+
+// ===== 历史分页元信息：后端 chat_log 按 id 升序分页，pageNo=1 是最旧一页 =====
+const historyMeta = reactive<Record<string, { loadedPageNo: number; total: number; pageSize: number }>>({})
+const loadingEarlier = ref(false)
+
 // 是否处于新建问数会话页面
 const isNewSession = computed(() => activeSessionId.value === 'new')
 
@@ -395,23 +580,60 @@ const earlierSessions = computed(() =>
 )
 
 // 异步加载指定会话的历史消息（如果内存中尚未加载）
+// 冷缓存（IndexedDB）只是加速层，缺件回源后端 chat_log；首屏只取最新一页
 async function loadSessionHistoryIfNeeded(id: string) {
   if (!id || id === 'new') return
-  // 如果当前会话尚无消息且不在 props.initialMessages 中显式提供，尝试向后端拉取
-  if (!sessionMessages.value[id] || sessionMessages.value[id].length === 0) {
-    try {
-      const history = await getAiChatHistory(id)
-      if (history && history.length > 0) {
-        sessionMessages.value[id] = history
-      } else if (!sessionMessages.value[id]) {
-        sessionMessages.value[id] = []
-      }
-    } catch (e) {
-      console.warn('[loadSessionHistoryIfNeeded] 加载会话历史失败:', e)
-      if (!sessionMessages.value[id]) {
-        sessionMessages.value[id] = []
-      }
+  if (sessionMessages.value[id]?.length || historyMeta[id]) return
+  const cold = await loadColdMessages(id)
+  if (cold && cold.length > 0) {
+    sessionMessages.value[id] = cold
+    return
+  }
+  try {
+    const pageSize = 100
+    let page = await getAiChatHistoryPage(id, 1, pageSize)
+    if (page.total > pageSize) {
+      page = await getAiChatHistoryPage(id, Math.ceil(page.total / pageSize), pageSize)
     }
+    sessionMessages.value[id] = page.messages
+    historyMeta[id] = { loadedPageNo: page.pageNo, total: page.total, pageSize }
+  } catch (e) {
+    console.warn('[loadSessionHistoryIfNeeded] 加载会话历史失败:', e)
+    if (!sessionMessages.value[id]) {
+      sessionMessages.value[id] = []
+    }
+  }
+}
+
+// 向上翻更早的历史：先揭示内存中被窗口隐藏的部分，再向服务端要上一页，并保持滚动锚点
+async function handleLoadEarlier() {
+  const id = activeSessionId.value
+  if (id === 'new' || loadingEarlier.value) return
+  const all = currentMessages.value
+  if (all.length > visibleMessages.value.length) {
+    extraRevealed.value += RENDER_WINDOW
+    return
+  }
+  const meta = historyMeta[id]
+  if (!meta || meta.loadedPageNo <= 1) return
+  loadingEarlier.value = true
+  const el = chatContainerRef.value
+  const prevHeight = el?.scrollHeight ?? 0
+  const prevTop = el?.scrollTop ?? 0
+  try {
+    const page = await getAiChatHistoryPage(id, meta.loadedPageNo - 1, meta.pageSize)
+    const known = new Set(all.map((m) => m.id))
+    const fresh = page.messages.filter((m) => !known.has(m.id))
+    sessionMessages.value[id] = [...fresh, ...all]
+    meta.loadedPageNo = page.pageNo
+    meta.total = page.total
+    await nextTick()
+    if (el) el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
+  } catch (e) {
+    console.warn('[handleLoadEarlier] 加载更早消息失败:', e)
+    ElMessage.warning('加载更早消息失败，请稍后重试')
+  } finally {
+    loadingEarlier.value = false
   }
 }
 
@@ -419,12 +641,15 @@ onMounted(async () => {
   if (props.initialSessions && props.initialSessions.length > 0) {
     sessions.value = [...props.initialSessions]
   } else {
-    const res = await listAiSessions()
+    // 测试环境可能未安装 Pinia：仅在存在活跃 store 时携带用户过滤
+    const userId = getActivePinia() ? useAuthStore().info?.id : undefined
+    const res = await listAiSessions(userId)
     sessions.value = [...res]
   }
   if (sessions.value.length > 0) {
     activeSessionId.value = sessions.value[0].id
     clarifySessionId.value = sessions.value[0].id
+    touchSession(activeSessionId.value)
     await loadSessionHistoryIfNeeded(activeSessionId.value)
     scrollToBottom()
   } else {
@@ -445,17 +670,14 @@ onMounted(async () => {
   }
 })
 
-// 滚动到底部
-function scrollToBottom(smooth = false) {
+// 滚动到底部；force=true 时同时恢复自动跟随并清零未读
+function scrollToBottom(force = false) {
+  if (force) {
+    isFollowingScroll.value = true
+    unreadBelowCount.value = 0
+  }
   nextTick(() => {
     if (!chatContainerRef.value) return
-    if (smooth && typeof chatContainerRef.value.scrollTo === 'function') {
-      chatContainerRef.value.scrollTo({
-        top: chatContainerRef.value.scrollHeight,
-        behavior: 'smooth',
-      })
-      return
-    }
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
       if (scrollRafId !== null) return
       scrollRafId = window.requestAnimationFrame(() => {
@@ -473,9 +695,7 @@ function scrollToBottom(smooth = false) {
 // 中断当前正在进行的问数会话
 function handleStop() {
   if (!isSending.value) return
-  if (currentAbortController.value) {
-    currentAbortController.value.abort()
-  }
+  askChat.stop()
 }
 
 // 切换会话
@@ -485,8 +705,11 @@ async function handleSelectSession(id: string) {
   }
   activeSessionId.value = id
   clarifySessionId.value = id
+  extraRevealed.value = 0
+  touchSession(id)
   await loadSessionHistoryIfNeeded(id)
-  scrollToBottom()
+  checkMemoryPressure()
+  scrollToBottom(true)
 }
 
 // 删除单个会话
@@ -499,11 +722,16 @@ function handleDeleteSession(id: string) {
   const clone = { ...sessionMessages.value }
   delete clone[id]
   sessionMessages.value = clone
+  delete historyMeta[id]
+  void dropColdMessages(id)
+  const usageIdx = sessionUsageOrder.indexOf(id)
+  if (usageIdx >= 0) sessionUsageOrder.splice(usageIdx, 1)
 
   if (activeSessionId.value === id) {
     if (sessions.value.length > 0) {
       activeSessionId.value = sessions.value[0].id
       clarifySessionId.value = sessions.value[0].id
+      touchSession(activeSessionId.value)
       loadSessionHistoryIfNeeded(activeSessionId.value)
     } else {
       activeSessionId.value = 'new'
@@ -526,6 +754,9 @@ function handleClearSessions() {
   const currentList = [...sessions.value]
   sessions.value = []
   sessionMessages.value = {}
+  for (const key of Object.keys(historyMeta)) delete historyMeta[key]
+  sessionUsageOrder.length = 0
+  for (const s of currentList) void dropColdMessages(s.id)
   activeSessionId.value = 'new'
   clarifySessionId.value = 'new'
   ElMessage.info('已清空历史会话')
@@ -542,9 +773,8 @@ function handleNewChat() {
   clarifySessionId.value = 'new'
   promptText.value = ''
   clarifyConfirmed.value = false
-  clarifyDelivered.value = null
   selectedTables.value = []
-  clarifyRound.value = 1
+  extraRevealed.value = 0
   clarifyCardKey.value += 1
   ElMessage.info('已进入新会话页面')
 }
@@ -571,42 +801,29 @@ async function handleConfirmClarify(
     clarifyConfirmed.value = true
   }
 
-  const selectedOptions = clarification.options.filter((option) =>
-    payload.selectedEntryTypeIds.includes(option.entryTypeId)
+  const selectedOptions = clarification.options.filter((option, index) =>
+    payload.selectedEntryTypeIds.includes(clarificationOptionKey(option, index))
   )
   const names = selectedOptions.map((option) => option.typeName || option.tableName)
   selectedTables.value = names
 
-  const targetSessionId = (activeSessionId.value && activeSessionId.value !== 'new')
-    ? activeSessionId.value
-    : clarifySessionId.value
-
-  try {
-    await submitClarificationAnswer({
-      sessionId: targetSessionId,
-      round: clarifyRound.value,
-      selectedEntryTypeIds: payload.selectedEntryTypeIds,
-      freeText: payload.freeText || undefined,
-    })
-    clarifyDelivered.value = true
-    clarifyRound.value += 1
-    ElMessage.success('已采纳您选择的分析口径，已回传智能体继续分析')
-  } catch {
-    // 问数网关（ai/chat/*）尚未接入本项目后端：如实告知走的是本地演示，
-    // 不能吞掉错误再提示“已完成”，否则用户会以为结果来自真实查询。
-    clarifyDelivered.value = false
-    ElMessage.warning('问数网关尚未接通，当前展示为本地演示结果，所选口径暂未回传')
-  }
-
-  // 核心交互：若该消息是动态智能体问答（未预置静态 SQL / KPI），将用户的确认选择作为新一轮对话发送给智能体继续推进
+  // 澄清答案走文本通道回传智能体（唯一通道）：把勾选结果拼成下一轮用户消息，
+  // 由智能体在 thread 上下文中继续分析；不再调用独立的澄清提交端点。
+  // 文本里带上物理表名：中文名完全相同的两张表只有表名能区分，
+  // 也是智能体 submit_table_selection(locked_tables=[...]) 的锁定依据。
   if (!targetMsg?.sql && !targetMsg?.chartData) {
+    const describeOption = (option: Clarification['options'][number]) => {
+      const display = option.typeName || option.tableName
+      return option.tableName && option.tableName !== display
+        ? `${display}（${option.tableName}）`
+        : display
+    }
     const textParts: string[] = []
-    if (names.length) {
-      if (names.length === 1 && selectedOptions.length === 1) {
-        const opt = selectedOptions[0]
-        textParts.push(`${opt.entryTypeId}（${opt.typeName || opt.tableName}）`)
+    if (selectedOptions.length) {
+      if (selectedOptions.length === 1) {
+        textParts.push(describeOption(selectedOptions[0]))
       } else {
-        textParts.push(`已确认选择：${names.join('、')}`)
+        textParts.push(`已确认选择：${selectedOptions.map(describeOption).join('、')}`)
       }
     }
     if (payload.freeText) {
@@ -614,6 +831,7 @@ async function handleConfirmClarify(
     }
     const followUpText = textParts.join('；')
     if (followUpText) {
+      ElMessage.success('已采纳所选口径，正在继续分析')
       promptText.value = followUpText
       await handleSend()
       return
@@ -623,30 +841,9 @@ async function handleConfirmClarify(
   scrollToBottom()
 }
 
-// 复制 SQL
+// 复制 SQL（统一走 utils/clipboard：http 部署站没有 navigator.clipboard，兜底与手动复制弹窗都在那里）
 async function handleCopySql(code: string) {
-  try {
-    if (navigator?.clipboard?.writeText) {
-      await navigator.clipboard.writeText(code)
-      ElMessage.success('SQL 已成功复制到剪贴板')
-      return
-    }
-    const textarea = document.createElement('textarea')
-    textarea.value = code
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    const successful = document.execCommand('copy')
-    document.body.removeChild(textarea)
-    if (successful) {
-      ElMessage.success('SQL 已成功复制到剪贴板')
-    } else {
-      ElMessage.warning('复制失败，请手动选中 SQL 并复制')
-    }
-  } catch {
-    ElMessage.warning('复制失败，请手动选中 SQL 并复制')
-  }
+  await copyToClipboard(code, 'SQL')
 }
 
 // 快捷追问
@@ -655,11 +852,10 @@ function handleQuickPrompt(text: string) {
   handleSend()
 }
 
-// 发送消息：对接后端 /api/poc/chat/agent SSE 流式接口
+// 发送消息：经 useAskChat 状态机对接后端 /api/poc/chat/agent SSE 流式接口
 async function handleSend(customTitle?: string) {
   const content = promptText.value.trim()
   if (!content || isSending.value) return
-  isSending.value = true
   promptText.value = ''
 
   let targetSessionId = activeSessionId.value
@@ -724,22 +920,16 @@ async function handleSend(customTitle?: string) {
     }
 
     const safeTitle = (targetMsg?.chartData?.title || '问数明细').replace(/[📊🥧\s]/g, '')
+    // 本地快捷指令回执：不是智能体产出，不伪造思考链与执行耗时
     const followUpReply: ChatMessage = {
       id: nextMsgId('a'),
       role: 'assistant',
+      localAction: true,
+      status: 'done',
       content: targetMsg
         ? `已为您生成并导出「${safeTitle}」的 ${formatName} 数据文件（共计 ${rowCount} 条明细记录），浏览器已触发下载。\n\n您也可以在明细数据表视图中随时点击「导出为 Excel」或「导出为 CSV」重新下载。`
         : `当前会话中暂未找到可导出的明细数据表，请先执行问数查询后再导出。`,
       createdAt: '刚刚',
-      thinking: {
-        completed: true,
-        durationMs: 420,
-        steps: [
-          `识别到用户数据导出指令：${content}`,
-          `解析会话上下文中最近一次执行结果的二维表结构（共 ${rowCount} 条数据）`,
-          `触发 ${formatName} 格式文件下载流`,
-        ],
-      },
       insights: targetMsg
         ? [
             `导出字段覆盖：${targetMsg.chartData?.tableColumns?.map((c) => c.label).join('、') || '全部明细字段'}。`,
@@ -748,8 +938,7 @@ async function handleSend(customTitle?: string) {
       suggestions: ['查看该批任务近 7 天历史趋势', '把结果导出成 Excel', '导出为 CSV 表格'],
     }
     list.push(followUpReply)
-    isSending.value = false
-    scrollToBottom()
+    scrollToBottom(true)
     return
   }
 
@@ -793,32 +982,26 @@ async function handleSend(customTitle?: string) {
       const followUpReply: ChatMessage = {
         id: nextMsgId('a'),
         role: 'assistant',
+        localAction: true,
+        status: 'done',
         content: `已为您将查询结果转换为「${viewLabel}」展示。\n\n您也可以在上方卡片右上角自由切换「趋势图表」、「占比饼图」与「明细数据表」，或点击「导出数据」导出为 Excel / CSV 文件。`,
         createdAt: '刚刚',
-        thinking: {
-          completed: true,
-          durationMs: 260,
-          steps: [
-            `识别到图表形态转换指令：${content}`,
-            `解析当前明细数据维度与度量分布`,
-            `自动切换激活视图为：${viewLabel}`,
-          ],
-        },
         suggestions: ['把结果导出成 Excel', '导出为 CSV 表格'],
       }
       list.push(followUpReply)
-      isSending.value = false
-      scrollToBottom()
+      scrollToBottom(true)
       return
     }
   }
 
-  // 2. 追加智能体占位消息，发起后端 /agent 流式请求
+  // 2. 追加智能体占位消息，经状态机发起流式请求
   const assistantMsg: ChatMessage = {
     id: nextMsgId('a'),
     role: 'assistant',
     content: '',
     createdAt: '刚刚',
+    question: content,
+    status: 'streaming',
     thinking: {
       completed: false,
       durationMs: 0,
@@ -826,150 +1009,135 @@ async function handleSend(customTitle?: string) {
     },
   }
   list.push(assistantMsg)
-  scrollToBottom()
+  touchSession(targetSessionId)
+  scrollToBottom(true)
+  await beginStream(assistantMsg, targetSessionId, content)
+}
 
-  const abortCtrl = new AbortController()
-  currentAbortController.value = abortCtrl
-  const startTime = Date.now()
-  thinkingElapsedSeconds.value = 0
-  if (thinkingTimer) clearInterval(thinkingTimer)
-  thinkingTimer = setInterval(() => {
-    thinkingElapsedSeconds.value = Math.floor((Date.now() - startTime) / 1000)
-  }, 500)
+// 绑定当前流式目标消息并交给 useAskChat；回调统一写 activeAssistantMsg
+async function beginStream(
+  msg: ChatMessage,
+  sessionId: string,
+  question: string,
+  opts?: { bypassDebounce?: boolean },
+) {
+  // 必须绑定响应式代理而不是 push 前的原始对象：
+  // 直接改原始对象不会触发视图更新，流式正文会“写进去了但看不见”
+  const ownerList = sessionMessages.value[sessionId]
+  const idx = ownerList ? ownerList.indexOf(msg) : -1
+  activeAssistantMsg = idx >= 0 ? ownerList![idx] : msg
+  streamSessionId = sessionId
+  streamStartTime = Date.now()
+  startThinkingTimer()
 
-  try {
-    const currentSessionObj = sessions.value.find((s) => s.id === targetSessionId)
-    const sessionIdParam = /^\d+$/.test(targetSessionId) ? Number(targetSessionId) : undefined
-    const threadIdParam = currentSessionObj?.uuid || (sessionIdParam ? undefined : targetSessionId)
+  const currentSessionObj = sessions.value.find((s) => s.id === sessionId)
+  const sessionIdParam = /^\d+$/.test(sessionId) ? Number(sessionId) : undefined
+  const threadIdParam = currentSessionObj?.uuid || (sessionIdParam ? undefined : sessionId)
 
-    await streamAgentChat(
-      {
-        msg: content,
-        session_id: sessionIdParam,
-        thread_id: threadIdParam,
-        signal: abortCtrl.signal,
-      },
-      (event) => {
-        if (event.type === 'session_assigned') {
-          if (event.sessionId) {
-            const oldId = targetSessionId
-            const newId = event.sessionId
-            if (oldId !== newId) {
-              const target = sessions.value.find((s) => s.id === oldId)
-              if (target) {
-                target.id = newId
-                if (event.threadId) {
-                  target.uuid = event.threadId
-                }
-              }
-              sessionMessages.value[newId] = sessionMessages.value[oldId] || list
-              delete sessionMessages.value[oldId]
-              if (activeSessionId.value === oldId) {
-                activeSessionId.value = newId
-              }
-              targetSessionId = newId
-            }
-          }
-        } else if (event.type === 'chunk') {
-          assistantMsg.content += event.text
-          scrollToBottom()
-        } else if (event.type === 'reasoning') {
-          if (!assistantMsg.thinking) {
-            assistantMsg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
-          }
-          assistantMsg.thinking.text = (assistantMsg.thinking.text || '') + event.reasoning
-          scrollToBottom()
-        } else if (event.type === 'clarification') {
-          assistantMsg.clarification = { ...event.clarification, confirmed: false }
-          scrollToBottom()
-        } else if (event.type === 'error') {
-          ElMessage.error(event.error)
-          if (!assistantMsg.content) {
-            assistantMsg.content = `智能体服务异常：${event.error}`
-          }
-        } else if (event.type === 'done') {
-          if (assistantMsg.thinking) {
-            assistantMsg.thinking.completed = true
-            assistantMsg.thinking.durationMs = Date.now() - startTime
-            if (
-              (!assistantMsg.thinking.steps || assistantMsg.thinking.steps.length === 0) &&
-              assistantMsg.thinking.text
-            ) {
-              const lines = assistantMsg.thinking.text
-                .split('\n')
-                .map((l) => l.trim())
-                .filter((l) => l.length > 0)
-              assistantMsg.thinking.steps = lines.length > 0 ? lines : [assistantMsg.thinking.text]
-            }
-          }
-        }
-      },
-    )
-
-    // 智能提取回答中的 SQL 代码块（如有）
-    const sqlMatch = assistantMsg.content.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i)
-    if (sqlMatch && !assistantMsg.sql) {
-      const sqlCode = sqlMatch[1].trim()
-      if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(sqlCode)) {
-        assistantMsg.sql = {
-          code: sqlCode,
-          execTimeMs: 0,
-          scanRows: 0,
-          estimated: true,
-        }
-      }
+  const started = await askChat.send(
+    {
+      msg: question,
+      session_id: sessionIdParam,
+      thread_id: threadIdParam,
+    },
+    opts,
+  )
+  if (!started) {
+    // 状态机拒发（忙/防抖）：回收占位消息，避免留下永远转圈的空气泡
+    activeAssistantMsg = null
+    stopThinkingTimer()
+    const list = sessionMessages.value[streamSessionId]
+    if (list) {
+      const idx = list.indexOf(msg)
+      if (idx >= 0) list.splice(idx, 1)
     }
-
-    // 若未通过结构化事件拿到 clarification，尝试从回答正文中解析待确认项（如 Task List 复选框或候选选项）
-    if (!assistantMsg.clarification && assistantMsg.content) {
-      const parsedClarification = extractClarificationFromText(assistantMsg.content)
-      if (parsedClarification) {
-        assistantMsg.clarification = { ...parsedClarification, confirmed: false }
-      }
-    }
-
-    // 若未预置 chartData，尝试从回答正文中的 Markdown 表格解析图表与导出数据结构
-    if (!assistantMsg.clarification && !assistantMsg.chartData && assistantMsg.content) {
-      const parsedChartData = extractChartDataFromText(assistantMsg.content)
-      if (parsedChartData) {
-        assistantMsg.chartData = parsedChartData
-      }
-    }
-
-    if (!assistantMsg.content.trim() && !assistantMsg.sql && !assistantMsg.clarification && !assistantMsg.chartData) {
-      thinkingExpandedMap[assistantMsg.id] = true
-    }
-
-    const currentSession = sessions.value.find((s) => s.id === targetSessionId)
-    if (currentSession) {
-      currentSession.updatedAt = '刚刚'
-    }
-  } catch (err) {
-    const failure = err as { name?: string; message?: string }
-    const isAborted = failure.name === 'AbortError' || abortCtrl.signal.aborted
-    if (isAborted) {
-      assistantMsg.interrupted = true
-      if (assistantMsg.thinking && !assistantMsg.thinking.completed) {
-        assistantMsg.thinking.completed = true
-        assistantMsg.thinking.durationMs = Date.now() - startTime
-        assistantMsg.thinking.interrupted = true
-      }
-      ElMessage.info('已中断问数响应')
-    } else {
-      const errMsg = failure.message || '智能体问数服务调用失败'
-      if (!assistantMsg.content) {
-        assistantMsg.content = `抱歉，未能完成本次问数：${errMsg}`
-      }
-    }
-  } finally {
-    if (thinkingTimer) {
-      clearInterval(thinkingTimer)
-      thinkingTimer = null
-    }
-    isSending.value = false
-    currentAbortController.value = null
-    scrollToBottom()
   }
+}
+
+// ===== 失败/中断/空回答的可恢复操作 =====
+function findQuestionForMsg(msg: ChatMessage): string {
+  if (msg.question) return msg.question
+  const list = currentMessages.value
+  const idx = list.indexOf(msg)
+  for (let i = idx - 1; i >= 0; i--) {
+    if (list[i].role === 'user' && !list[i].localAction) return list[i].content
+  }
+  return ''
+}
+
+// 重试：原位重置失败的助手消息重发同一问题，不追加重复的用户气泡
+async function handleRetry(msg: ChatMessage) {
+  if (isSending.value) return
+  const question = findQuestionForMsg(msg)
+  if (!question) {
+    ElMessage.warning('未找到本次提问内容，请重新输入问题')
+    return
+  }
+  msg.content = ''
+  msg.status = 'streaming'
+  msg.errorInfo = undefined
+  msg.interrupted = false
+  msg.sql = undefined
+  msg.clarification = undefined
+  msg.chartData = undefined
+  msg.question = question
+  msg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
+  scrollToBottom(true)
+  await beginStream(msg, activeSessionId.value, question, { bypassDebounce: true })
+}
+
+// 重新生成：保留原回答，追加新一轮问答
+async function handleRegenerate(msg: ChatMessage) {
+  if (isSending.value) return
+  const question = findQuestionForMsg(msg)
+  if (!question) {
+    ElMessage.warning('未找到本次提问内容，请重新输入问题')
+    return
+  }
+  promptText.value = question
+  await handleSend()
+}
+
+// 继续输出：中断/截断后让智能体接着上文继续
+async function handleContinue() {
+  if (isSending.value) return
+  promptText.value = '继续'
+  await handleSend()
+}
+
+// 补充说明：把原问题带回输入框，让用户补口径后再发
+function handleSupplement(msg: ChatMessage) {
+  const question = findQuestionForMsg(msg)
+  promptText.value = question ? `${question}，补充说明：` : ''
+  nextTick(() => textareaRef.value?.focus())
+}
+
+async function handleCopyQuestion(msg: ChatMessage) {
+  const question = findQuestionForMsg(msg)
+  if (!question) return
+  await copyToClipboard(question, '提问内容')
+}
+
+// 消息操作条形态：本地回执与待澄清消息不出操作条；未标注 status 的历史注入消息不出操作条
+function msgActionKind(msg: ChatMessage): 'failed' | 'interrupted' | 'empty' | 'done' | null {
+  if (msg.role !== 'assistant' || msg.localAction) return null
+  if (msg.clarification && !msg.clarification.confirmed) return null
+  if (msg.status === 'failed') return 'failed'
+  if (msg.status === 'interrupted') return 'interrupted'
+  if (msg.status === 'empty') return 'empty'
+  if (msg.status === 'done') return 'done'
+  return null
+}
+
+const ASK_ERROR_TITLES: Record<AskErrorCode, string> = {
+  NETWORK: '网络连接异常',
+  UPSTREAM_ERROR: '智能体服务异常',
+  PARAM_MISSING: '提问信息不完整',
+  TOOL_FAILED: '数据查询失败',
+  EMPTY_RESULT: '未查询到数据',
+  PERMISSION_DENIED: '无权限访问该数据',
+  CONTEXT_LOST: '会话上下文已失效',
+  UNKNOWN: '本次问数未完成',
 }
 
 // 快捷键发送与中断：按 Enter 发送，按 Esc 中断
@@ -1136,15 +1304,6 @@ onUnmounted(() => {
             / {{ currentSessionTitle }}
           </span>
         </div>
-        <!-- 问数网关未接通时，结果区必须标明是本地演示，不能让用户当成真实查询 -->
-        <el-tag
-          v-if="clarifyDelivered === false"
-          size="small"
-          type="warning"
-          effect="plain"
-          class="rc-badge-tag"
-          data-testid="aichat-demo-badge"
-        >演示数据 · 问数网关未接通</el-tag>
       </header>
 
       <!-- A. 新建问数会话页面（静态引导页） -->
@@ -1208,13 +1367,31 @@ onUnmounted(() => {
       </div>
 
       <!-- B. 已有会话消息交互流容器 -->
-      <div v-else ref="chatContainerRef" class="rc-chat-thread">
-        <!-- 默认或动态会话的消息呈现 -->
+      <div v-else ref="chatContainerRef" class="rc-chat-thread" @scroll.passive="handleThreadScroll">
+        <!-- 更早历史：内存窗口隐藏或服务端未加载分页时可见 -->
+        <div v-if="hasHiddenEarlier" class="rc-load-earlier">
+          <el-button
+            size="small"
+            link
+            type="primary"
+            :loading="loadingEarlier"
+            data-testid="load-earlier-btn"
+            @click="handleLoadEarlier"
+          >
+            加载更早的消息
+          </el-button>
+        </div>
+        <!-- 默认或动态会话的消息呈现（长对话仅挂载渲染窗口内的尾部消息） -->
         <div
-          v-for="msg in currentMessages"
+          v-for="msg in visibleMessages"
           :key="msg.id"
           class="rc-msg-row"
-          :class="msg.role"
+          :class="[msg.role, {
+            'is-local-action': msg.localAction,
+            'is-failed': msg.status === 'failed',
+            'is-interrupted': msg.status === 'interrupted',
+            'is-clarification': !!msg.clarification,
+          }]"
         >
           <!-- 用户消息 -->
           <template v-if="msg.role === 'user'">
@@ -1234,7 +1411,7 @@ onUnmounted(() => {
             <div class="rc-msg-bubble assistant">
               <!-- 引导/说明文字：仅在包含待确认卡片且有说明文案时展示 -->
               <div v-if="msg.clarification && formatClarifyIntro(msg.content, !!msg.clarification)" class="rc-clarify-intro">
-                <MarkdownOutput :content="formatClarifyIntro(msg.content, !!msg.clarification)" />
+                <MarkdownOutput :content="formatClarifyIntro(msg.content, !!msg.clarification)" :streaming="msg.status === 'streaming'" />
               </div>
 
               <!-- 待确认项交互勾选卡片：支持多选/单选与自由补充，确认后锁定并推进会话 -->
@@ -1252,6 +1429,27 @@ onUnmounted(() => {
                   v-if="!msg.clarification || isMsgClarifyConfirmed(msg)"
                   class="rc-confirmed-result"
                 >
+                  <!-- 阶段感知条：由 reasoning 关键词推断（SSE 暂无工具事件契约），如实标注推断态 -->
+                  <div v-if="msg.status === 'streaming'" class="rc-phase-bar" data-testid="phase-bar">
+                    <span class="rc-live-dot pulsing"></span>
+                    <span v-if="askState === 'stalled'" class="rc-phase-stalled" data-testid="stalled-banner">
+                      上游长时间未返回新内容，仍在等待…可随时停止后重试
+                    </span>
+                    <template v-else>
+                      <span>{{ askPhase ? ASK_PHASE_LABELS[askPhase] : '正在连接智能体' }}</span>
+                      <el-tag v-if="askPhase" size="small" type="info" effect="plain" class="rc-phase-infer-tag">推断</el-tag>
+                    </template>
+                  </div>
+
+                  <!-- 失败信息卡：明确错误类别 + 可恢复指引，配合下方重试操作 -->
+                  <div v-if="msg.status === 'failed' && msg.errorInfo" class="rc-error-card" data-testid="error-card">
+                    <div class="rc-error-title">{{ ASK_ERROR_TITLES[msg.errorInfo.code] || '本次问数未完成' }}</div>
+                    <div class="rc-error-detail">{{ msg.errorInfo.message }}</div>
+                    <div class="rc-error-hint">
+                      {{ msg.errorInfo.retryable ? '可直接重试；若反复失败，请补充口径后重新提问。' : '请调整提问口径或确认数据权限后再试。' }}
+                    </div>
+                  </div>
+
                   <!-- 思考过程面板 -->
                   <div v-if="msg.thinking" class="rc-thinking-box">
                     <div
@@ -1270,14 +1468,14 @@ onUnmounted(() => {
                           深度思考中... (已思考 {{ Math.max(1, Math.floor(thinkingElapsedSeconds)) }}s)
                         </span>
                         <span v-else>
-                          思考过程 · {{ (getMsgSelectedTableNames(msg).length || selectedTables.length) ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? '已生成并执行 SQL' : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)
+                          思考过程 · {{ (getMsgSelectedTableNames(msg).length || selectedTables.length) ? '已根据所选口径对齐并执行 SQL' : (msg.sql ? (msg.sql.estimated ? '已生成 SQL（待执行）' : '已生成并执行 SQL') : '已完成分析') }} (耗时 {{ (msg.thinking.durationMs / 1000).toFixed(1) }}s)
                         </span>
                       </div>
                       <span class="rc-toggle-arrow" :class="{ collapsed: !isThinkingOpen(msg) }">▼</span>
                     </div>
                     <div v-if="isThinkingOpen(msg)" class="rc-thinking-body">
                       <div v-if="getMsgSelectedTableNames(msg).length || selectedTables.length">
-                        ✓ 1. 采纳用户澄清口径：<strong>{{ (getMsgSelectedTableNames(msg).length ? getMsgSelectedTableNames(msg) : selectedTables).join('、') }}</strong>，聚合时段 = <code>NOW() - INTERVAL 7 DAY</code>
+                        ✓ 1. 采纳用户澄清口径：<strong>{{ (getMsgSelectedTableNames(msg).length ? getMsgSelectedTableNames(msg) : selectedTables).join('、') }}</strong>
                       </div>
                       <div v-if="msg.thinking.text" class="rc-thinking-text">
                         {{ msg.thinking.text }}
@@ -1290,9 +1488,9 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- 智能体最终回答正文（支持 Markdown 渲染） -->
+                  <!-- 智能体最终回答正文（支持 Markdown 渲染；流式期按块增量渲染，不整体替换 DOM） -->
                   <div v-if="!msg.clarification && formatMarkdownContent(msg)" class="rc-answer-markdown">
-                    <MarkdownOutput :content="formatMarkdownContent(msg)" />
+                    <MarkdownOutput :content="formatMarkdownContent(msg)" :streaming="msg.status === 'streaming'" />
                     <div v-if="msg.interrupted" class="rc-interrupted-tag" data-testid="interrupted-tag">
                       <span class="rc-stop-square-small">■</span>
                       <span>本次回答已中断</span>
@@ -1327,8 +1525,11 @@ onUnmounted(() => {
                         <span v-if="msg.sql.estimated" class="rc-sql-meta">
                           SQL 由 AI 生成（待执行）
                         </span>
+                        <span v-else-if="msg.sql.execTimeMs != null || msg.sql.scanRows != null" class="rc-sql-meta">
+                          执行成功<template v-if="msg.sql.scanRows != null"> · 扫描 {{ msg.sql.scanRows.toLocaleString() }} 行</template><template v-if="msg.sql.execTimeMs != null"> · 耗时 {{ msg.sql.execTimeMs }}ms</template>
+                        </span>
                         <span v-else class="rc-sql-meta">
-                          执行成功 · 扫描 {{ (msg.sql.scanRows || 0).toLocaleString() }} 行 · 耗时 {{ msg.sql.execTimeMs || 0 }}ms
+                          已执行（耗时指标未回传）
                         </span>
                       </div>
                       <el-button
@@ -1368,139 +1569,15 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- 图表/明细视图切换 -->
-                  <div v-if="msg.chartData" class="rc-dataview-card">
-                    <div class="rc-dataview-head">
-                      <span class="rc-dataview-title">
-                        {{ getMsgDataView(msg) === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
-                      </span>
-                      <div class="rc-dataview-actions">
-                        <el-dropdown
-                          trigger="click"
-                          @command="(cmd: string) => (cmd === 'excel' ? exportTableToExcel(msg) : exportTableToCsv(msg))"
-                        >
-                          <el-button size="small" class="rc-export-btn">
-                            <el-icon><Download /></el-icon>
-                            <span>导出数据</span>
-                            <el-icon><ArrowDown /></el-icon>
-                          </el-button>
-                          <template #dropdown>
-                            <el-dropdown-menu>
-                              <el-dropdown-item command="excel">导出为 Excel (.xlsx)</el-dropdown-item>
-                              <el-dropdown-item command="csv">导出为 CSV (.csv)</el-dropdown-item>
-                            </el-dropdown-menu>
-                          </template>
-                        </el-dropdown>
-                        <el-radio-group
-                          :model-value="getMsgDataView(msg)"
-                          size="small"
-                          @update:model-value="(val: any) => setMsgDataView(msg, val)"
-                          @change="(val: any) => setMsgDataView(msg, val)"
-                        >
-                          <el-radio-button value="chart">趋势图表</el-radio-button>
-                          <el-radio-button value="pie">占比饼图</el-radio-button>
-                          <el-radio-button value="table">明细数据表</el-radio-button>
-                        </el-radio-group>
-                      </div>
-                    </div>
-
-                    <!-- 趋势柱状视图 -->
-                    <div v-if="getMsgDataView(msg) === 'chart'" class="rc-chart-view">
-                      <div
-                        v-for="(bar, bidx) in msg.chartData.bars"
-                        :key="bidx"
-                        class="rc-chart-item"
-                      >
-                        <div class="rc-bar-header">
-                          <span class="rc-bar-title" :class="bar.color || 'warn'">
-                            {{ bar.label }}
-                          </span>
-                          <span class="rc-bar-val" :class="bar.color || 'warn'">
-                            {{ bar.displayValue }}
-                          </span>
-                        </div>
-                        <div class="rc-bar-track">
-                          <div
-                            class="rc-bar-fill"
-                            :class="bar.color || 'orange'"
-                            :style="{ width: `${Math.min(100, bar.value)}%` }"
-                          ></div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <!-- 占比饼图视图 -->
-                    <div v-else-if="getMsgDataView(msg) === 'pie'" class="rc-pie-view">
-                      <AiPieChart
-                        :slices="getMsgSlices(msg)"
-                        :center-label="getMsgPieCenter(msg).label"
-                        :center-value="getMsgPieCenter(msg).value"
-                      />
-                    </div>
-
-                    <!-- 明细表格视图 -->
-                    <div v-else class="rc-table-view">
-                      <div class="rc-table-meta-bar">
-                        <span class="rc-table-records-count">
-                          共 {{ msg.chartData.tableRows ? msg.chartData.tableRows.length : 0 }} 条明细记录
-                        </span>
-                        <div class="rc-table-quick-export">
-                          <el-button
-                            size="small"
-                            link
-                            type="primary"
-                            data-testid="rc-table-export-excel"
-                            @click="exportTableToExcel(msg)"
-                          >
-                            <el-icon><Download /></el-icon>
-                            导出 Excel
-                          </el-button>
-                          <span class="rc-table-divider">|</span>
-                          <el-button
-                            size="small"
-                            link
-                            type="primary"
-                            data-testid="rc-table-export-csv"
-                            @click="exportTableToCsv(msg)"
-                          >
-                            <el-icon><Download /></el-icon>
-                            导出 CSV
-                          </el-button>
-                        </div>
-                      </div>
-                      <div class="rc-table-scroll-wrapper">
-                        <table class="rc-preview-table" data-testid="rc-preview-table">
-                          <thead>
-                            <tr>
-                              <th
-                                v-for="col in msg.chartData.tableColumns"
-                                :key="col.prop"
-                              >
-                                {{ col.label }}
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr
-                              v-for="(row, ridx) in msg.chartData.tableRows"
-                              :key="ridx"
-                            >
-                              <td
-                                v-for="col in msg.chartData.tableColumns"
-                                :key="col.prop"
-                                :class="{
-                                  'text-red': col.prop === 'fail',
-                                  'text-warn': col.prop === 'reason',
-                                }"
-                              >
-                                {{ row[col.prop] }}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
+                  <!-- 图表/饼图/明细数据卡（按需加载子组件，内含视图切换、分页与导出） -->
+                  <DataViewCard
+                    v-if="msg.chartData"
+                    :chart-data="msg.chartData"
+                    :kpis="msg.kpis"
+                    :view="getMsgDataView(msg)"
+                    @update:view="(v: 'chart' | 'pie' | 'table') => setMsgDataView(msg, v)"
+                    @export="(fmt: 'excel' | 'csv') => (fmt === 'excel' ? exportTableToExcel(msg) : exportTableToCsv(msg))"
+                  />
 
                   <!-- 专家诊断与建议 -->
                   <div v-if="msg.insights && msg.insights.length" class="rc-insight-card">
@@ -1529,12 +1606,107 @@ onUnmounted(() => {
                       {{ sug }}
                     </el-button>
                   </div>
+
+                  <!-- 消息操作条：失败重试 / 中断续写 / 空回答重试 / 正常重新生成 -->
+                  <div
+                    v-if="msgActionKind(msg)"
+                    class="rc-msg-actions"
+                    :data-testid="`msg-actions-${msgActionKind(msg)}`"
+                  >
+                    <template v-if="msgActionKind(msg) === 'failed' || msgActionKind(msg) === 'empty'">
+                      <el-button
+                        size="small"
+                        type="primary"
+                        plain
+                        :icon="RefreshRight"
+                        :disabled="isSending"
+                        data-testid="retry-btn"
+                        @click="handleRetry(msg)"
+                      >
+                        重试
+                      </el-button>
+                      <el-button
+                        size="small"
+                        plain
+                        data-testid="supplement-btn"
+                        @click="handleSupplement(msg)"
+                      >
+                        补充说明
+                      </el-button>
+                      <el-button
+                        size="small"
+                        link
+                        :icon="CopyDocument"
+                        data-testid="copy-question-btn"
+                        @click="handleCopyQuestion(msg)"
+                      >
+                        复制提问
+                      </el-button>
+                    </template>
+                    <template v-else-if="msgActionKind(msg) === 'interrupted'">
+                      <el-button
+                        size="small"
+                        type="primary"
+                        plain
+                        :disabled="isSending"
+                        data-testid="continue-btn"
+                        @click="handleContinue"
+                      >
+                        继续输出
+                      </el-button>
+                      <el-button
+                        size="small"
+                        plain
+                        :icon="RefreshRight"
+                        :disabled="isSending"
+                        data-testid="retry-btn"
+                        @click="handleRetry(msg)"
+                      >
+                        重新提问
+                      </el-button>
+                    </template>
+                    <template v-else>
+                      <el-button
+                        size="small"
+                        link
+                        :icon="RefreshRight"
+                        :disabled="isSending"
+                        data-testid="regenerate-btn"
+                        @click="handleRegenerate(msg)"
+                      >
+                        重新生成
+                      </el-button>
+                      <el-button
+                        size="small"
+                        link
+                        :icon="CopyDocument"
+                        data-testid="copy-question-btn"
+                        @click="handleCopyQuestion(msg)"
+                      >
+                        复制提问
+                      </el-button>
+                    </template>
+                  </div>
                 </div>
               </transition>
             </div>
           </template>
         </div>
       </div>
+
+      <!-- 回到底部：用户上翻阅读时不打断，仅提示有新内容 -->
+      <transition name="el-fade-in-linear">
+        <button
+          v-if="!isNewSession && !isFollowingScroll"
+          type="button"
+          class="rc-back-to-bottom"
+          data-testid="back-to-bottom"
+          @click="backToBottom"
+        >
+          <el-icon><ArrowDown /></el-icon>
+          <span>{{ unreadBelowCount > 0 ? `${unreadBelowCount} 条新内容` : '回到底部' }}</span>
+        </button>
+      </transition>
 
       <!-- 底部输入停靠区 -->
       <footer class="rc-aichat-footer">
@@ -1555,6 +1727,7 @@ onUnmounted(() => {
 
         <div class="rc-input-box">
           <textarea
+            ref="textareaRef"
             v-model="promptText"
             rows="2"
             placeholder="向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）..."
@@ -1728,6 +1901,7 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   background: var(--rc-bg);
+  position: relative;
 }
 
 /* 顶部控制栏 */
@@ -2684,5 +2858,121 @@ onUnmounted(() => {
 
 .rc-stop-icon {
   font-size: 14px;
+}
+
+/* ===== 1117 优化：滚动条 / 阶段条 / 错误卡 / 操作条 / 回到底部 / 更早历史 ===== */
+.rc-chat-thread::-webkit-scrollbar {
+  width: 8px;
+}
+
+.rc-chat-thread::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rc-chat-thread::-webkit-scrollbar-thumb {
+  background: var(--rc-border);
+  border-radius: 4px;
+}
+
+.rc-chat-thread::-webkit-scrollbar-thumb:hover {
+  background: var(--rc-primary);
+}
+
+.rc-load-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 6px;
+}
+
+.rc-phase-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: var(--rc-radius-sm);
+  background: var(--rc-primary-bg);
+  font-size: 12px;
+  color: var(--rc-primary);
+}
+
+.rc-phase-infer-tag {
+  flex-shrink: 0;
+}
+
+.rc-phase-stalled {
+  color: #b45309;
+}
+
+.rc-error-card {
+  border: 1px solid #fecaca;
+  border-left: 3px solid #ef4444;
+  border-radius: var(--rc-radius-sm);
+  background: #fef2f2;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.rc-error-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #b91c1c;
+  margin-bottom: 4px;
+}
+
+.rc-error-detail {
+  font-size: 12px;
+  color: #7f1d1d;
+  overflow-wrap: anywhere;
+  margin-bottom: 4px;
+}
+
+.rc-error-hint {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.rc-msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rc-border-soft);
+}
+
+.rc-msg-actions .el-button + .el-button {
+  margin-left: 4px;
+}
+
+.rc-msg-row.is-local-action .rc-msg-bubble.assistant {
+  border-style: dashed;
+}
+
+.rc-back-to-bottom {
+  position: absolute;
+  right: 28px;
+  bottom: 128px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--rc-border);
+  background: var(--rc-surface);
+  color: var(--rc-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  transition: all 0.2s ease;
+}
+
+.rc-back-to-bottom:hover {
+  border-color: var(--rc-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.18);
 }
 </style>

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
-import { submitClarificationAnswer, listRecommendedQuestions, streamAgentChat } from '@/api/aiChat'
+import { listAiSessions, listRecommendedQuestions, streamAgentChat, getAiChatHistoryPage } from '@/api/aiChat'
 import { downloadCsv } from '@/utils/csv'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 
@@ -30,11 +30,8 @@ vi.mock('@/api/aiChat', async (importOriginal) => {
   return {
     ...actual,
     listAiSessions: vi.fn().mockResolvedValue([]),
-    listAiAgents: vi.fn().mockResolvedValue([
-      { id: 'data-analyst', name: '数据分析智能体 (ChatBI)', desc: '分析测试', icon: 'Histogram' },
-    ]),
     listRecommendedQuestions: vi.fn().mockResolvedValue([]),
-    submitClarificationAnswer: vi.fn().mockResolvedValue(undefined),
+    getAiChatHistoryPage: vi.fn().mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 }),
     streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
       onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
       onEvent({ type: 'done' })
@@ -148,8 +145,32 @@ async function confirmWithTables(wrapper: ReturnType<typeof mount>, ids: number[
 }
 
 describe('AI 智能问数 · AiChatView', () => {
+  // 页面按需加载富渲染子组件；测试先把模块拉进缓存，
+  // 让 defineAsyncComponent 的 loader 在单个 flushPromises 内落地（不改变生产的懒加载行为）
+  beforeAll(async () => {
+    await Promise.all([
+      import('./ClarificationCard.vue'),
+      import('./DataViewCard.vue'),
+      import('@/components/MarkdownOutput.vue'),
+    ])
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
+    // clearAllMocks 只清调用记录：显式恢复默认实现，防止上一个用例的
+    // mockImplementation（如挂起等待 abort 的流）泄漏到后续用例
+    vi.mocked(listAiSessions).mockResolvedValue([])
+    vi.mocked(listRecommendedQuestions).mockResolvedValue([])
+    vi.mocked(getAiChatHistoryPage).mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 })
+    vi.mocked(streamAgentChat).mockImplementation(async (_params, onEvent) => {
+      onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
+      onEvent({ type: 'done' })
+    })
+  })
+
+  afterEach(() => {
+    // 用例中途断言失败时也不能把假计时器泄漏给下一个用例
+    vi.useRealTimers()
   })
 
   it('正确渲染左侧会话历史、顶部智能体与中间对话流', async () => {
@@ -180,7 +201,7 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(options[0].classes()).not.toContain('selected')
   })
 
-  it('确认后锁定卡片、按 entryTypeId 回传并展开执行结果', async () => {
+  it('确认后锁定卡片、按 entryTypeId 记录采纳项并展开执行结果（已有结果不再重复发问）', async () => {
     const wrapper = mountView(true)
     await flushPromises()
 
@@ -192,24 +213,50 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
     expect(wrapper.find('.rc-sql-code').text()).toContain('SELECT')
     expect(wrapper.find('.rc-kpi-grid').exists()).toBe(true)
-    expect(submitClarificationAnswer).toHaveBeenCalledWith(expect.objectContaining({
-      selectedEntryTypeIds: [101, 102],
-    }))
+    // 该消息已预置 SQL 与图表结果：确认只锁定口径，不再触发新一轮问数
+    expect(streamAgentChat).not.toHaveBeenCalled()
     // 思考链里回显用户选中的表
     expect(wrapper.text()).toContain('抓取网络层异常')
   })
 
-  it('回传失败时如实标注演示数据，不再提示“已完成”', async () => {
-    vi.mocked(submitClarificationAnswer).mockRejectedValueOnce(new Error('[mock] 端点不在契约清单: ai/chat/clarification'))
-    const wrapper = mountView(true)
+  it('澄清答案仅经文本通道回传：确认后以用户消息发给智能体，无独立提交端点与演示标记', async () => {
+    const testSession = [{ id: 's-text-channel', title: '文本通道澄清', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      's-text-channel': [
+        { id: 'u1', role: 'user' as const, content: '排查异常任务', createdAt: '刚刚' },
+        {
+          id: 'a1',
+          role: 'assistant' as const,
+          content: '请选择要排查的表：',
+          createdAt: '刚刚',
+          clarification: {
+            kind: 'table_choice' as const,
+            reason: 'TOO_MANY' as const,
+            question: '请选择要排查的表：',
+            allowFreeText: true,
+            maxSelect: 3,
+            options: [
+              { entryTypeId: 101, tableName: 'ck_source_log', typeName: '抓取网络层异常' },
+              { entryTypeId: 102, tableName: 'ck_clean_error', typeName: '规则清洗异常' },
+            ],
+          },
+        },
+      ],
+    }
+    const wrapper = mount(AiChatView, {
+      props: { initialSessions: testSession, initialMessages: testMessages },
+      global: { plugins: [ElementPlus] },
+    })
     await flushPromises()
 
-    await confirmWithTables(wrapper, [101])
+    await confirmWithTables(wrapper, [101, 102])
 
-    expect(submitClarificationAnswer).toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="aichat-demo-badge"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="aichat-demo-badge"]').text()).toContain('问数网关未接通')
+    // 唯一回传通道：勾选结果拼成下一轮用户消息走 /agent 流式接口
+    expect(streamAgentChat).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(streamAgentChat).mock.calls[0][0].msg).toBe('已确认选择：抓取网络层异常（ck_source_log）、规则清洗异常（ck_clean_error）')
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="aichat-demo-badge"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已确认选择：抓取网络层异常（ck_source_log）、规则清洗异常（ck_clean_error）')
   })
 
   it('支持在趋势图表、占比饼图与明细数据表之间切换视图', async () => {
@@ -630,10 +677,60 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
 
     // 智能体对话自动推进，将勾选的项作为新轮次发送给会话
-    expect(wrapper.text()).toContain('已确认选择：南京链家二手房成交明细、南京安居客二手房挂牌均价')
+    expect(wrapper.text()).toContain('已确认选择：南京链家二手房成交明细（sense_data.tb_ke_com_chengjia_esf_detail）、南京安居客二手房挂牌均价（sense_data.tb_anjuke_esf_summary）')
   })
 
-  it('智能体返回 Markdown 候选表表格时，自动渲染成交互表格并支持点击「直接使用」一键推进会话', async () => {
+  it('模型只说「命中两张同名表」而不列候选时，结构化澄清事件仍渲染出可选项，同名表靠物理表名区分', async () => {
+    vi.mocked(streamAgentChat).mockImplementation(async (_params, onEvent) => {
+      onEvent({
+        type: 'chunk',
+        text: '南京二手房最新价格候选表较多，我提交选表会话让服务端收敛。命中两张"中指-二手房销售价格"表，需要你确认查哪一张。',
+      })
+      onEvent({
+        type: 'clarification',
+        clarification: {
+          kind: 'table_choice',
+          reason: 'AMBIGUOUS',
+          question: '命中两张中文名相同的表，需要你确认查哪一张。',
+          allowFreeText: true,
+          maxSelect: 2,
+          options: [
+            { entryTypeId: 6399962, tableName: 'sense_data.TB_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+            { entryTypeId: 6399961, tableName: 'sense_data.TBC_ZZ_MONTH_OLD_PRICE', typeName: '中指-二手房销售价格' },
+          ],
+        },
+      })
+      onEvent({ type: 'done' })
+    })
+
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('南京二手房最新价格')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    const card = wrapper.find('[data-testid="clarification-card"]')
+    expect(card.exists()).toBe(true)
+    // 两张表中文名完全一样，物理表名必须逐条露出，否则用户没有区分依据
+    expect(card.text()).toContain('sense_data.TB_ZZ_MONTH_OLD_PRICE')
+    expect(card.text()).toContain('sense_data.TBC_ZZ_MONTH_OLD_PRICE')
+    // 编号列展示 1/2，不把数据库主键当勾选序号砸到界面上
+    expect(wrapper.findAll('.cc-num-badge').map((n) => n.text())).toEqual(['1', '2'])
+    // 已有可选项时不再露出「重新生成」操作条
+    expect(wrapper.find('[data-testid="regenerate-btn"]').exists()).toBe(false)
+
+    // 勾选第 2 张并确认：回传文本带物理表名，智能体才能 locked_tables 精准锁定
+    await wrapper.find('[data-testid="clarification-option-6399961"]').trigger('click')
+    await wrapper.find('[data-testid="clarification-confirm"]').trigger('click')
+    await flushPromises()
+    expect(vi.mocked(streamAgentChat).mock.calls.at(-1)?.[0].msg).toBe(
+      '中指-二手房销售价格（sense_data.TBC_ZZ_MONTH_OLD_PRICE）'
+    )
+  })
+
+  it('智能体返回 Markdown 候选表表格时，自动渲染成交互表格，勾选后统一确认推进会话', async () => {
     const tableContent = `
 | 编号 | 表名 | 说明 |
 | --- | --- | --- |
@@ -692,20 +789,24 @@ describe('AI 智能问数 · AiChatView', () => {
     })
     await flushPromises()
 
-    // 交互表格应存在
+    // 交互表格应存在，且不再有「快捷操作 / 直接使用」列
     expect(wrapper.find('[data-testid="clarification-table"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="clarification-direct-6"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('快捷操作')
+    expect(wrapper.text()).not.toContain('直接使用')
 
-    // 点击编号 6 行的「直接使用」按钮
-    const directBtn6 = wrapper.find('[data-testid="clarification-direct-6"]')
-    expect(directBtn6.exists()).toBe(true)
-    await directBtn6.trigger('click')
+    // 勾选编号 6 的行，再点统一确认
+    const option6 = wrapper.find('[data-testid="clarification-option-6"]')
+    expect(option6.exists()).toBe(true)
+    await option6.trigger('click')
+    await wrapper.find('[data-testid="clarification-confirm"]').trigger('click')
     await flushPromises()
 
     // 确认状态呈现
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
 
     // 对话流中自动发出单项指令，无需用户手动在输入框敲字
-    expect(wrapper.text()).toContain('6（贝壳二手房成交信息）')
+    expect(wrapper.text()).toContain('贝壳二手房成交信息（tb_ke_com_chengjiao_esf）')
   })
 
   it('当智能体返回 Markdown 业务数据表格时，自动生成图表与明细数据卡片，支持多视图切换与一键导出', async () => {
@@ -989,7 +1090,7 @@ describe('AI 智能问数 · AiChatView', () => {
     // 确认状态呈现
     expect(wrapper.find('[data-testid="clarification-confirmed"]').exists()).toBe(true)
     // 对话流中自动发送所选项，无需用户在输入框敲字
-    expect(wrapper.text()).toContain('1（贝壳二手房成交信息）')
+    expect(wrapper.text()).toContain('贝壳二手房成交信息（sense_data.tb_ke_com_chengjiao_esf_detail）')
   })
 
   it('多轮对话中第二轮返回新的选表卡片时，不会被第一轮确认状态锁定，仍可正常勾选与确认', async () => {
@@ -1079,9 +1180,8 @@ describe('AI 智能问数 · AiChatView', () => {
     await opt10.trigger('click')
     expect(opt10.classes()).toContain('selected')
 
-    // 快捷「直接使用」按钮在第二轮中依然正常可用
-    const directBtn20 = cards[1].find('[data-testid="clarification-direct-20"]')
-    expect(directBtn20.exists()).toBe(true)
+    // 候选表统一走「勾选 + 确认」，不再有快捷操作按钮
+    expect(cards[1].find('[data-testid="clarification-direct-20"]').exists()).toBe(false)
   })
 
   it('对话发起之后，处于响应中时显示停止按钮，点击停止按钮可中断对话', async () => {
@@ -1220,6 +1320,8 @@ describe('AI 智能问数 · AiChatView', () => {
     await textarea.setValue('输出网络层异常分析')
     await wrapper.find('[data-testid="send-btn"]').trigger('click')
     await flushPromises()
+    // chunk 合帧窗口 ≤80ms：等一次合帧落盘再断言正文
+    await new Promise((resolve) => setTimeout(resolve, 120))
 
     // 此时已有部分文本在页面上
     expect(wrapper.text()).toContain('根据数据统计，当前网络层异常主要集中在')
@@ -1319,5 +1421,150 @@ describe('AI 智能问数 · AiChatView', () => {
 
     expect(wrapper.find('.rc-sql-meta').text()).toContain('SQL 由 AI 生成（待执行）')
     expect(wrapper.find('.rc-sql-meta').text()).not.toContain('执行成功')
+  })
+
+  it('失败时展示错误卡与重试入口，重试原位重发不追加重复用户气泡', async () => {
+    vi.mocked(streamAgentChat).mockImplementationOnce(async (_params, onEvent) => {
+      onEvent({ type: 'error', error: '智能体服务请求失败(HTTP 502): 上游服务不可用' })
+      onEvent({ type: 'done' })
+    })
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('分析昨日抓取成功率')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    const errorCard = wrapper.find('[data-testid="error-card"]')
+    expect(errorCard.exists()).toBe(true)
+    expect(errorCard.text()).toContain('智能体服务异常')
+    expect(errorCard.text()).toContain('HTTP 502')
+    expect(wrapper.find('[data-testid="retry-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="supplement-btn"]').exists()).toBe(true)
+
+    const userBubblesBefore = wrapper.findAll('.rc-msg-row.user').length
+
+    // 重试走默认 mock（chunk + done），原位重置失败消息
+    await wrapper.find('[data-testid="retry-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.rc-msg-row.user').length).toBe(userBubblesBefore)
+    expect(wrapper.find('[data-testid="error-card"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('智能体已响应问数请求。')
+    expect(vi.mocked(streamAgentChat).mock.calls.at(-1)?.[0].msg).toBe('分析昨日抓取成功率')
+  })
+
+  it('补充说明把原问题带回输入框；正常完成的消息提供重新生成入口', async () => {
+    vi.mocked(streamAgentChat).mockImplementationOnce(async (_params, onEvent) => {
+      onEvent({ type: 'error', error: 'failed to fetch' })
+      onEvent({ type: 'done' })
+    })
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('统计各站点成功率')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="supplement-btn"]').trigger('click')
+    await flushPromises()
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('统计各站点成功率，补充说明：')
+
+    // 重新发问成功后，完成态消息出现「重新生成」
+    await textarea.setValue('统计各站点成功率（近7天）')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="regenerate-btn"]').exists()).toBe(true)
+  })
+
+  it('上翻阅读时流式输出不打断滚动，出现回到底部按钮，点击恢复跟随', async () => {
+    let emitEvent: ((event: { type: string; text?: string }) => void) | undefined
+    vi.mocked(streamAgentChat).mockImplementationOnce(async (params, onEvent) => {
+      emitEvent = onEvent as typeof emitEvent
+      return new Promise((_, reject) => {
+        params.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        })
+      })
+    })
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('长回答滚动测试')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+    // 发送触发的首次自动拉底走 rAF：先等它落地，再模拟用户上翻，避免竞态
+    await new Promise((resolve) => setTimeout(resolve, 40))
+
+    const thread = wrapper.find('.rc-chat-thread')
+    const el = thread.element as HTMLElement
+    Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 400, configurable: true })
+    el.scrollTop = 100
+    await thread.trigger('scroll')
+
+    // 距底 500px > 80px：脱离跟随，出现回到底部按钮
+    const backBtn = wrapper.find('[data-testid="back-to-bottom"]')
+    expect(backBtn.exists()).toBe(true)
+
+    emitEvent?.({ type: 'chunk', text: '上翻期间到达的新内容' })
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    // 不强制拉底，仅累计未读提示
+    expect(el.scrollTop).toBe(100)
+    expect(wrapper.find('[data-testid="back-to-bottom"]').text()).toContain('条新内容')
+    expect(wrapper.text()).toContain('上翻期间到达的新内容')
+
+    await wrapper.find('[data-testid="back-to-bottom"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(wrapper.find('[data-testid="back-to-bottom"]').exists()).toBe(false)
+    expect(el.scrollTop).toBe(1000)
+
+    wrapper.unmount()
+  })
+
+  it('长会话首屏只拉最新一页，点击「加载更早」先向服务端翻页再揭示内存窗口', async () => {
+    const all = Array.from({ length: 150 }, (_, i) => ({
+      id: `h-${i}`,
+      role: (i % 2 ? 'assistant' : 'user') as 'assistant' | 'user',
+      content: `消息 ${i}`,
+      createdAt: '昨天',
+    }))
+    vi.mocked(getAiChatHistoryPage).mockImplementation(async (_id, pageNo = 1, pageSize = 100) => {
+      const start = (pageNo - 1) * pageSize
+      return { messages: all.slice(start, start + pageSize), total: all.length, pageNo, pageSize }
+    })
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: [{ id: '9', title: '长会话', updatedAt: '昨天', group: 'earlier' as const }],
+      },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    // 首屏先探测第 1 页拿 total，再取最后一页（最新 50 条）
+    expect(getAiChatHistoryPage).toHaveBeenCalledWith('9', 1, 100)
+    expect(getAiChatHistoryPage).toHaveBeenCalledWith('9', 2, 100)
+    expect(wrapper.findAll('.rc-msg-row')).toHaveLength(50)
+    expect(wrapper.text()).toContain('消息 149')
+    expect(wrapper.text()).not.toContain('消息 99')
+    expect(wrapper.find('[data-testid="load-earlier-btn"]').exists()).toBe(true)
+
+    // 第一次点击：向服务端要第 1 页并前置拼接，渲染窗口仍只挂尾部 60 条
+    await wrapper.find('[data-testid="load-earlier-btn"]').trigger('click')
+    await flushPromises()
+    expect(getAiChatHistoryPage).toHaveBeenCalledTimes(3)
+    expect(wrapper.findAll('.rc-msg-row')).toHaveLength(60)
+    expect(wrapper.text()).toContain('消息 90')
+
+    // 第二次点击：服务端已到头，改为揭示内存中被窗口隐藏的部分
+    await wrapper.find('[data-testid="load-earlier-btn"]').trigger('click')
+    await flushPromises()
+    expect(getAiChatHistoryPage).toHaveBeenCalledTimes(3)
+    expect(wrapper.findAll('.rc-msg-row')).toHaveLength(120)
+    expect(wrapper.text()).toContain('消息 30')
   })
 })

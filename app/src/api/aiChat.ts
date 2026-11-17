@@ -33,20 +33,183 @@ export interface BackendChatLog {
   updateTime?: string
 }
 
-export interface AiAgentOption {
-  id: string
-  name: string
-  desc: string
-  icon: string
-}
-
 export interface ClarificationOption {
-  /** cfg_entry_type 主键：回传时用它锁定，不按表名匹配 */
-  entryTypeId: number
+  /**
+   * cfg_entry_type 主键：仅结构化澄清事件/显式 JSON 载荷才携带真实主键。
+   * 从 Markdown 文本提取的候选拿不到主键，置 null，只允许按表名文本回传，
+   * 不得伪造序号冒充主键（否则结构化回传接通后会锁错表）。
+   */
+  entryTypeId: number | null
+  /** 展示/文本回传用的序号（候选列表编号或行序），不是数据库主键 */
+  ordinal?: number
   tableName: string
   typeName?: string | null
   /** 区分点（明细/汇总、来源网站等） */
   hint?: string | null
+}
+
+/** 卡片内选项的本地选择键：真实主键优先，文本提取候选退回展示序号 */
+export function clarificationOptionKey(option: ClarificationOption, index: number): number {
+  return option.entryTypeId ?? option.ordinal ?? index + 1
+}
+
+/**
+ * 统一归一化澄清载荷：SSE 顶层 clarification、chat_log.data.clarification、
+ * 以及 reasoning 里 MCP 工具结果中的 clarification 走同一个映射，
+ * 只有结构化载荷才携带真实 entryTypeId（文本提取的候选始终为 null）。
+ */
+export function normalizeClarificationPayload(raw: unknown): Clarification | null {
+  if (!raw || typeof raw !== 'object') return null
+  const source = raw as Record<string, unknown>
+  const rawOptions = Array.isArray(source.options) ? source.options : []
+  const kind = (source.kind as ClarificationKind) || 'table_choice'
+  if (!rawOptions.length && kind !== 'free_text' && !source.question) return null
+
+  const options: ClarificationOption[] = rawOptions.map((item, idx) => {
+    const opt = (item ?? {}) as Record<string, unknown>
+    const rawId = opt.entryTypeId ?? opt.id
+    const numericId = rawId != null && rawId !== '' ? Number(rawId) : null
+    const ordinal = Number(opt.ordinal)
+    return {
+      entryTypeId: numericId != null && Number.isFinite(numericId) ? numericId : null,
+      ordinal: Number.isFinite(ordinal) && ordinal > 0 ? ordinal : idx + 1,
+      tableName: String(opt.tableName || opt.name || opt.table || `table_${idx + 1}`),
+      typeName: String(opt.typeName || opt.label || opt.title || opt.tableName || `候选 ${idx + 1}`),
+      hint: opt.hint ? String(opt.hint) : (opt.description ? String(opt.description) : null),
+    }
+  })
+
+  return {
+    kind,
+    reason: (source.reason as Clarification['reason']) || 'AMBIGUOUS',
+    question: source.question ? String(source.question) : '请确认需要分析的表或口径：',
+    allowFreeText: typeof source.allowFreeText === 'boolean' ? source.allowFreeText : true,
+    maxSelect:
+      typeof source.maxSelect === 'number' && source.maxSelect > 0
+        ? source.maxSelect
+        : Math.min(5, Math.max(1, options.length)),
+    options,
+  }
+}
+
+/** 从 start 处的开括号起做括号配平（跳过字符串与转义），返回完整 JSON 文本；未闭合返回 null。 */
+export function sliceBalancedJson(
+  text: string,
+  start: number,
+  open: '{' | '[',
+  close: '}' | ']',
+): string | null {
+  if (text[start] !== open) return null
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === open) depth++
+    else if (ch === close) {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
+/** 取 `"key": [ ... ]` 的数组 JSON（容忍数组之后的内容被截断）。 */
+function sliceArrayAfterKey(text: string, key: string): string | null {
+  const match = new RegExp(`"${key}"\\s*:\\s*\\[`).exec(text)
+  if (!match) return null
+  return sliceBalancedJson(text, match.index + match[0].length - 1, '[', ']')
+}
+
+/** 取 `"key": "字符串"` 的值（字符串未闭合时返回 null），并做 JSON 反转义。 */
+function readJsonStringField(text: string, key: string): string | null {
+  const match = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text)
+  if (!match) return null
+  try {
+    return JSON.parse(`"${match[1]}"`) as string
+  } catch {
+    return match[1]
+  }
+}
+
+const TOOL_RESULT_MARKER = /\[工具结果\]\s*([^\s:：]+)\s*[:：]\s*(?=\{)/g
+
+/**
+ * 从思考链（reasoning_content）里恢复 MCP 结构化澄清。
+ *
+ * 外部智能体把每次工具调用写成 reasoning 文本：`[工具结果] <tool>: {json}`。
+ * `submit_table_selection` 命中多候选时，这段 JSON 里的 `clarification` / `candidates` 是
+ * **唯一带真实 entryTypeId 的选项来源**（正文 Markdown 表格/列表只有中文名，且模型经常
+ * 只回一句「命中两张同名表，请确认查哪一张」而根本不列候选 → 页面上没有任何可选项）。
+ *
+ * 注意：实测上游会把 reasoning 里的工具结果**截断**（约 2KB 后以 `...` 结尾），
+ * 完整 JSON 常常解析不到，此时退回按 `candidates` 数组恢复（数组在截断点之前且完整）。
+ */
+export function extractClarificationFromReasoning(reasoning: string): Clarification | null {
+  if (!reasoning || typeof reasoning !== 'string') return null
+
+  let found: Clarification | null = null
+  TOOL_RESULT_MARKER.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = TOOL_RESULT_MARKER.exec(reasoning)) !== null) {
+    const toolName = match[1]
+    const objStart = match.index + match[0].length
+    const segment = reasoning.slice(objStart)
+    const fullJson = sliceBalancedJson(reasoning, objStart, '{', '}')
+    if (fullJson) {
+      try {
+        const payload = JSON.parse(fullJson) as Record<string, unknown>
+        const normalized = normalizeClarificationPayload(payload?.clarification)
+        // 多轮追问时以最后一轮的澄清为准
+        if (normalized && normalized.options.length > 0) found = normalized
+      } catch {
+        // 不是 JSON：跳过
+      }
+      continue
+    }
+
+    // 截断兜底：只认选表提交工具，且必须是「需要澄清」的裁决
+    if (!/submit_table_selection/i.test(toolName)) continue
+    const status =
+      readJsonStringField(segment, 'status') ?? readJsonStringField(segment, 'outcome') ?? ''
+    const hasClarificationField = /"clarification"\s*:\s*\{/.test(segment)
+    if (!hasClarificationField && !/needs_clarification/i.test(status)) continue
+
+    const candidatesJson = sliceArrayAfterKey(segment, 'candidates')
+    if (!candidatesJson) continue
+    let rawCandidates: unknown
+    try {
+      rawCandidates = JSON.parse(candidatesJson)
+    } catch {
+      continue
+    }
+    if (!Array.isArray(rawCandidates) || rawCandidates.length === 0) continue
+
+    const normalized = normalizeClarificationPayload({
+      kind: 'table_choice',
+      reason: /"reason"\s*:\s*"([A-Z_]+)"/.exec(segment)?.[1]
+        ?? (/"truncated"\s*:\s*true/.test(segment) ? 'TOO_MANY' : 'AMBIGUOUS'),
+      question: readJsonStringField(segment, 'question')
+        ?? readJsonStringField(segment, 'tip')
+        ?? '',
+      allowFreeText: true,
+      options: rawCandidates,
+    })
+    if (!normalized || normalized.options.length === 0) continue
+    // tip 往往很长（含候选枚举），只留一句能放在卡片头部的追问
+    if (!normalized.question || normalized.question.length > 160) {
+      normalized.question = `命中 ${normalized.options.length} 张候选表，请选择要分析的表（可多选）：`
+    }
+    found = normalized
+  }
+  return found
 }
 
 export type ClarificationKind = 'table_choice' | 'metric_choice' | 'free_text'
@@ -61,14 +224,6 @@ export interface Clarification {
   options: ClarificationOption[]
 }
 
-/** 用户在卡片上确认后回传给智能体的结构化答案。 */
-export interface ClarificationAnswer {
-  sessionId: string
-  round: number
-  selectedEntryTypeIds: number[]
-  freeText?: string
-}
-
 export interface PieSlice {
   label: string
   value: number
@@ -77,12 +232,77 @@ export interface PieSlice {
   tone?: 'primary' | 'cyan' | 'indigo' | 'amber' | 'ok' | 'err' | 'muted' | 'orange' | 'purple'
 }
 
+/** 问数失败分类：前端据此给出不同的可操作入口（重试/补充条件/重新提问） */
+export type AskErrorCode =
+  | 'NETWORK'
+  | 'UPSTREAM_ERROR'
+  | 'PARAM_MISSING'
+  | 'TOOL_FAILED'
+  | 'EMPTY_RESULT'
+  | 'PERMISSION_DENIED'
+  | 'CONTEXT_LOST'
+  | 'UNKNOWN'
+
+export interface AskErrorInfo {
+  code: AskErrorCode
+  message: string
+  retryable: boolean
+}
+
+/**
+ * 把原始错误（fetch 异常 / SSE error 文本 / HTTP 状态）归一化为分类 + 友好文案。
+ * 不向用户暴露堆栈与连接串；技术原文只保留摘要。
+ */
+export function normalizeAskError(raw: unknown): AskErrorInfo {
+  const text =
+    raw instanceof Error ? raw.message : typeof raw === 'string' ? raw : String(raw ?? '')
+  const lower = text.toLowerCase()
+
+  if (/abort/i.test((raw as { name?: string })?.name || '') || /aborted/i.test(text)) {
+    return { code: 'NETWORK', message: '连接已中断', retryable: true }
+  }
+  if (/failed to fetch|networkerror|network error|load failed|err_connection|err_network|err_internet/i.test(text)) {
+    return { code: 'NETWORK', message: '网络连接中断，已保留你的问题，可重试', retryable: true }
+  }
+  if (/参数不合法|参数缺失|缺少必要|missing required|invalid param|param_invalid/i.test(text)) {
+    return { code: 'PARAM_MISSING', message: '缺少必要的查询条件，请补充时间范围或指标口径后重试', retryable: true }
+  }
+  if (/上下文不成立|上下文已过期|context_lost|会话上下文|选表会话/i.test(text)) {
+    return { code: 'CONTEXT_LOST', message: '会话上下文已过期，请重新提问', retryable: true }
+  }
+  if (/权限|无权|permission|denied|forbidden|403/i.test(text)) {
+    return { code: 'PERMISSION_DENIED', message: '无权访问该数据范围，请联系管理员', retryable: false }
+  }
+  if (/上游失败|upstream|工具执行|tool_failed|execute_sql|sql.*失败/i.test(text)) {
+    return { code: 'TOOL_FAILED', message: '数据查询工具执行失败，可重试或换个问法', retryable: true }
+  }
+  if (/http\s*(4\d\d|5\d\d)|智能体服务请求失败/i.test(text)) {
+    const statusMatch = text.match(/HTTP\s*(\d{3})/i)
+    return {
+      code: 'UPSTREAM_ERROR',
+      message: `智能体服务暂时不可用${statusMatch ? `（HTTP ${statusMatch[1]}）` : ''}，请稍后重试`,
+      retryable: true,
+    }
+  }
+  if (/timeout|超时|timed out/i.test(lower)) {
+    return { code: 'UPSTREAM_ERROR', message: '智能体响应超时，可重试或缩小查询范围', retryable: true }
+  }
+  return { code: 'UNKNOWN', message: '本次问数未能完成，可重试或换个问法', retryable: true }
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   createdAt: string
   interrupted?: boolean
+  /** 消息生命周期状态（流式/完成/失败/中断/空回答），失败与中断态驱动操作条 */
+  status?: 'streaming' | 'done' | 'failed' | 'interrupted' | 'empty'
+  errorInfo?: AskErrorInfo
+  /** assistant 消息冗余存原始问题：重试/重新生成时原问原会话重发 */
+  question?: string
+  /** 导出/图表切换等本地操作回执，与 AI 回答区分，不伪造思考过程 */
+  localAction?: boolean
   // 智能体交互与富文本卡片扩展
   clarification?: Clarification & {
     confirmed?: boolean
@@ -97,8 +317,9 @@ export interface ChatMessage {
   }
   sql?: {
     code: string
-    execTimeMs: number
-    scanRows: number
+    /** 真实执行耗时/扫描行数：拿不到就不写，绝不造假 */
+    execTimeMs?: number
+    scanRows?: number
     estimated?: boolean
   }
   kpis?: Array<{
@@ -118,13 +339,6 @@ export interface ChatMessage {
   insights?: string[]
   suggestions?: string[]
 }
-
-const EP = {
-  sessions: 'ai/chat/sessions',
-  agents: 'ai/chat/agents',
-  completion: 'ai/chat/completion',
-  clarification: 'ai/chat/clarification',
-} as const
 
 export function formatSessionGroupAndDate(dateStr?: string | Date): {
   group: 'today' | 'week' | 'earlier'
@@ -195,6 +409,13 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       content: log.modelMsg || '',
       createdAt,
       interrupted: log.status === 'INTERRUPTED',
+      question: log.msg || '',
+      status:
+        log.status === 'INTERRUPTED'
+          ? 'interrupted'
+          : log.status === 'ERROR'
+            ? 'failed'
+            : 'done',
     }
 
     // 解析结构化扩展载荷 (data)
@@ -224,13 +445,27 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
           if (dataObj.sql) {
             assistantMsg.sql = dataObj.sql
           }
+          // schemaVersion>=2：富卡片直接回放，不再从文本正则重猜
+          if (dataObj.schemaVersion >= 2) {
+            if (dataObj.chartData) assistantMsg.chartData = dataObj.chartData
+            if (Array.isArray(dataObj.kpis)) assistantMsg.kpis = dataObj.kpis
+          }
+          if (dataObj.error && assistantMsg.status === 'failed') {
+            assistantMsg.errorInfo = normalizeAskError(
+              typeof dataObj.error === 'object' ? dataObj.error.message : dataObj.error,
+            )
+          }
         }
       } catch (err) {
         console.warn('[convertChatLogsToMessages] 解析 log.data 失败:', err)
       }
     }
 
-    // 若未预置 SQL，尝试从 log.result 或 modelMsg 提取
+    if (assistantMsg.status === 'failed' && !assistantMsg.errorInfo) {
+      assistantMsg.errorInfo = normalizeAskError(log.result || '上游服务异常')
+    }
+
+    // 若未预置 SQL，尝试从 log.result 或 modelMsg 提取（仅能拿到语句本身，指标未知 → 标注待执行口径）
     if (!assistantMsg.sql) {
       const sqlCandidate = log.result || log.modelMsg || ''
       const sqlMatch = sqlCandidate.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i)
@@ -238,9 +473,17 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(cleanSql)) {
         assistantMsg.sql = {
           code: cleanSql,
-          execTimeMs: 85,
-          scanRows: 100,
+          estimated: true,
         }
+      }
+    }
+
+    // 若未有澄清选项，先从思考链里的 MCP 工具结果恢复结构化候选（带真实主键），
+    // 再退回回答文本提取（模型没把候选写进正文时这条兜底会落空，只能靠前者）
+    if (!assistantMsg.clarification && assistantMsg.thinking?.text) {
+      const parsedFromReasoning = extractClarificationFromReasoning(assistantMsg.thinking.text)
+      if (parsedFromReasoning) {
+        assistantMsg.clarification = parsedFromReasoning
       }
     }
 
@@ -294,12 +537,8 @@ export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> 
       }
     })
   } catch (err) {
-    console.warn('[listAiSessions] 获取后端会话列表失败，尝试旧接口或返回空:', err)
-    try {
-      return await request<AiSessionItem[]>(EP.sessions, {}, { method: 'GET' })
-    } catch {
-      return []
-    }
+    console.warn('[listAiSessions] 获取后端会话列表失败:', err)
+    return []
   }
 }
 
@@ -321,14 +560,32 @@ export async function deleteAiSession(sessionId: string | number): Promise<boole
   }
 }
 
-export async function getAiChatHistory(sessionId: string | number): Promise<ChatMessage[]> {
+export interface AiChatHistoryPage {
+  messages: ChatMessage[]
+  /** 后端日志总条数（一条日志=一轮问答）；响应未带 count 时退化为当页条数 */
+  total: number
+  pageNo: number
+  pageSize: number
+}
+
+/**
+ * 分页拉取会话历史（后端 /chat-log/history 按 id 升序分页并回 count）。
+ * pageNo=1 是最早的一页；向上翻页 = pageNo 递减。
+ */
+export async function getAiChatHistoryPage(
+  sessionId: string | number,
+  pageNo = 1,
+  pageSize = 100,
+): Promise<AiChatHistoryPage> {
   try {
-    const res = await request<BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[] }>(
+    const res = await request<
+      BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[]; count?: number }
+    >(
       'poc/chat-log/history',
       {
         sessionId: String(sessionId),
-        pageNo: 1,
-        pageSize: 100,
+        pageNo,
+        pageSize,
       },
       {
         method: 'POST',
@@ -342,19 +599,28 @@ export async function getAiChatHistory(sessionId: string | number): Promise<Chat
         : Array.isArray((res as any)?.records)
           ? (res as any).records
           : []
-    return convertChatLogsToMessages(list)
+    const count = !Array.isArray(res) && typeof (res as any)?.count === 'number' ? (res as any).count : list.length
+    return {
+      messages: convertChatLogsToMessages(list),
+      total: count,
+      pageNo,
+      pageSize,
+    }
   } catch (err) {
-    console.warn('[getAiChatHistory] 获取会话历史记录失败:', err)
-    return []
+    console.warn('[getAiChatHistoryPage] 获取会话历史记录失败:', err)
+    return { messages: [], total: 0, pageNo, pageSize }
   }
 }
 
-export async function listAiAgents(): Promise<AiAgentOption[]> {
-  try {
-    return await request<AiAgentOption[]>(EP.agents, {}, { method: 'GET' })
-  } catch {
-    return []
+/** 拉取会话最近的历史消息（超过一页时取最新一页，更早的由页面按需向上翻页） */
+export async function getAiChatHistory(sessionId: string | number): Promise<ChatMessage[]> {
+  const first = await getAiChatHistoryPage(sessionId, 1, 100)
+  if (first.total > first.pageSize) {
+    const lastPageNo = Math.ceil(first.total / first.pageSize)
+    const last = await getAiChatHistoryPage(sessionId, lastPageNo, first.pageSize)
+    return last.messages
   }
+  return first.messages
 }
 
 /** 智能体问数流式调用入参 */
@@ -398,7 +664,9 @@ export function extractClarificationFromText(text: string): Clarification | null
             ? Math.min(data.maxSelect, data.options.length)
             : Math.min(5, data.options.length),
           options: data.options.map((opt: Record<string, unknown>, idx: number) => ({
-            entryTypeId: Number(opt.entryTypeId ?? opt.id ?? idx + 1),
+            entryTypeId:
+              opt.entryTypeId != null || opt.id != null ? Number(opt.entryTypeId ?? opt.id) : null,
+            ordinal: idx + 1,
             tableName: String(opt.tableName || opt.name || opt.table || `table_${idx + 1}`),
             typeName: String(opt.typeName || opt.label || opt.title || opt.tableName || `候选 ${idx + 1}`),
             hint: opt.hint ? String(opt.hint) : (opt.description ? String(opt.description) : null),
@@ -432,7 +700,8 @@ export function extractClarificationFromText(text: string): Clarification | null
       const typeName = cleanName || tableName
 
       return {
-        entryTypeId: idx + 1,
+        entryTypeId: null,
+        ordinal: idx + 1,
         tableName,
         typeName,
         hint: hintMatch ? hintMatch[1].trim() : null,
@@ -518,7 +787,8 @@ export function extractClarificationFromText(text: string): Clarification | null
         const cleanTable = rawTable.replace(/[`*]/g, '').trim()
         const cleanDesc = rawDesc.replace(/[`*]/g, '').trim()
         const numId = parseInt(rawId.replace(/\D/g, ''), 10)
-        const entryTypeId = !isNaN(numId) && numId > 0 ? numId : tableOptions.length + 1
+        // 表格里的「编号」只是展示序号，不是 cfg_entry_type 主键
+        const ordinal = !isNaN(numId) && numId > 0 ? numId : tableOptions.length + 1
 
         // 强校验：如果候选项列值是日期（如 2026-10-18）或纯数值（如 5,557），或者包含户型面积等度量，直接判定为业务数据结果，一票否决
         const isDateLike = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(cleanTable)
@@ -533,10 +803,11 @@ export function extractClarificationFromText(text: string): Clarification | null
 
         if (cleanTable) {
           tableOptions.push({
-            entryTypeId,
+            entryTypeId: null,
+            ordinal,
             tableName: cleanTable,
             typeName: cleanDesc || cleanTable,
-            hint: cleanDesc && cleanDesc !== cleanTable ? `编号: ${entryTypeId}` : null,
+            hint: cleanDesc && cleanDesc !== cleanTable ? `编号: ${ordinal}` : null,
           })
         }
       }
@@ -612,7 +883,8 @@ export function extractClarificationFromText(text: string): Clarification | null
         const tableName = rawTable || cleanName || `table_${idx + 1}`
 
         return {
-          entryTypeId: idx + 1,
+          entryTypeId: null,
+          ordinal: idx + 1,
           tableName,
           typeName,
           hint: hint && hint !== typeName ? hint : null,
@@ -1048,6 +1320,31 @@ export async function streamAgentChat(
     params.signal.addEventListener('abort', abortListener, { once: true })
   }
 
+  // 思考链累积 + 结构化澄清下发：外部智能体把 MCP 工具结果写进 reasoning，
+  // 选表命中多候选时只有这段 JSON 带真实 entryTypeId（正文可能一个字都没列）。
+  let reasoningBuffer = ''
+  let emittedClarificationSignature = ''
+
+  function emitStructuredClarification(clarification: Clarification) {
+    const signature = JSON.stringify(clarification)
+    if (signature === emittedClarificationSignature) return
+    emittedClarificationSignature = signature
+    onEvent({ type: 'clarification', clarification })
+  }
+
+  function tryEmitClarificationFromReasoning() {
+    const fromReasoning = extractClarificationFromReasoning(reasoningBuffer)
+    if (fromReasoning) emitStructuredClarification(fromReasoning)
+  }
+
+  /** 追加思考链；只有出现 `}`/`]`（可能收全一段工具结果 JSON）时才重新扫描，避免逐 token 全量重解析 */
+  function appendReasoning(text: string) {
+    reasoningBuffer = (reasoningBuffer + text).slice(-400_000)
+    if (!reasoningBuffer.includes('[工具结果]')) return
+    if (!/[}\]]/.test(text)) return
+    tryEmitClarificationFromReasoning()
+  }
+
   function consumeLine(line: string) {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith(':')) return
@@ -1059,6 +1356,7 @@ export async function streamAgentChat(
 
     if (dataStr === '[DONE]') {
       completed = true
+      tryEmitClarificationFromReasoning()
       onEvent({ type: 'done' })
       return
     }
@@ -1089,24 +1387,8 @@ export async function streamAgentChat(
           typeof rawClarification === 'object' &&
           (Array.isArray(rawClarification.options) || rawClarification.kind === 'free_text' || rawClarification.question)
         ) {
-          const kind: ClarificationKind = rawClarification.kind || 'table_choice'
-          const options: ClarificationOption[] = Array.isArray(rawClarification.options)
-            ? rawClarification.options.map((opt: Record<string, unknown>, idx: number) => ({
-                entryTypeId: Number(opt.entryTypeId ?? opt.id ?? idx + 1),
-                tableName: String(opt.tableName || opt.name || opt.table || `table_${idx + 1}`),
-                typeName: String(opt.typeName || opt.label || opt.title || opt.tableName || `候选 ${idx + 1}`),
-                hint: opt.hint ? String(opt.hint) : (opt.description ? String(opt.description) : null),
-              }))
-            : []
-          const clarificationObj: Clarification = {
-            kind,
-            reason: rawClarification.reason || 'AMBIGUOUS',
-            question: rawClarification.question || '请确认需要分析的表或口径：',
-            allowFreeText: rawClarification.allowFreeText ?? true,
-            maxSelect: typeof rawClarification.maxSelect === 'number' ? rawClarification.maxSelect : 5,
-            options,
-          }
-          onEvent({ type: 'clarification', clarification: clarificationObj })
+          const clarificationObj = normalizeClarificationPayload(rawClarification)
+          if (clarificationObj) emitStructuredClarification(clarificationObj)
         }
 
         // OpenAI 兼容 choices 结构: { choices: [{ delta: { content, reasoning_content } }] }
@@ -1116,7 +1398,9 @@ export async function streamAgentChat(
           if (delta) {
             const reasoning = delta.reasoning_content ?? delta.reasoning ?? delta.thought
             if (reasoning) {
-              onEvent({ type: 'reasoning', reasoning: String(reasoning) })
+              const reasoningText = String(reasoning)
+              onEvent({ type: 'reasoning', reasoning: reasoningText })
+              appendReasoning(reasoningText)
             }
             let text = ''
             if (typeof delta.content === 'string') {
@@ -1142,6 +1426,7 @@ export async function streamAgentChat(
         const topReasoning = payload.reasoning_content ?? payload.reasoning
         if (typeof topReasoning === 'string') {
           onEvent({ type: 'reasoning', reasoning: topReasoning })
+          appendReasoning(topReasoning)
           return
         }
 
@@ -1184,6 +1469,7 @@ export async function streamAgentChat(
       consumeLine(pending)
     }
     if (!completed) {
+      tryEmitClarificationFromReasoning()
       onEvent({ type: 'done' })
     }
   } finally {
@@ -1193,16 +1479,6 @@ export async function streamAgentChat(
     await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
-}
-
-/**
- * 回传多选表/指标澄清的答案（entryTypeId 列表 + 自由补充）。
- *
- * 网关侧按 { sessionId, round, selectedEntryTypeIds, freeText } 交给智能体，
- * 由它用 submit_table_selection(selected_entry_type_ids=...) 推进同一会话。
- */
-export async function submitClarificationAnswer(answer: ClarificationAnswer): Promise<void> {
-  await request<unknown>(EP.clarification, { ...answer }, { method: 'POST' })
 }
 
 /**
