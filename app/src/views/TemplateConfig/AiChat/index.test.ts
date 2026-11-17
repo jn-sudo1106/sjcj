@@ -1267,4 +1267,57 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(capturedSignal?.aborted).toBe(true)
     expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
   })
+
+  it('正确渲染更早 (earlier) 分组的历史会话', async () => {
+    const sessionsWithEarlier = [
+      { id: 's-today', title: '今日会话', updatedAt: '刚刚', group: 'today' as const },
+      { id: 's-earlier', title: '一个月前的历史会话', updatedAt: '2026-10-01', group: 'earlier' as const },
+    ]
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: sessionsWithEarlier,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('更早')
+    expect(wrapper.text()).toContain('一个月前的历史会话')
+  })
+
+  it('从回答中提取的 SQL 正确展示待执行标识而不是伪造的执行耗时', async () => {
+    const testSession = [{ id: 's-sql', title: 'SQL测试', updatedAt: '刚刚', group: 'today' as const }]
+    const testMessages = {
+      's-sql': [
+        { id: 'u1', role: 'user' as const, content: '查看SQL', createdAt: '刚刚' },
+        {
+          id: 'a1',
+          role: 'assistant' as const,
+          content: '以下为生成的查询语句：\n```sql\nSELECT * FROM test_table LIMIT 10;\n```',
+          createdAt: '刚刚',
+          sql: {
+            code: 'SELECT * FROM test_table LIMIT 10;',
+            execTimeMs: 0,
+            scanRows: 0,
+            estimated: true,
+          },
+        },
+      ],
+    }
+    const wrapper = mount(AiChatView, {
+      props: {
+        initialSessions: testSession,
+        initialMessages: testMessages,
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.rc-sql-meta').text()).toContain('SQL 由 AI 生成（待执行）')
+    expect(wrapper.find('.rc-sql-meta').text()).not.toContain('执行成功')
+  })
 })

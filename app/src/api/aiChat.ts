@@ -99,6 +99,7 @@ export interface ChatMessage {
     code: string
     execTimeMs: number
     scanRows: number
+    estimated?: boolean
   }
   kpis?: Array<{
     label: string

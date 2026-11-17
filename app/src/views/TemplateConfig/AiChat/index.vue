@@ -80,6 +80,22 @@ const currentAbortController = ref<AbortController | null>(null)
 
 // 视图切换与思考链折叠（支持趋势柱状、占比饼图与明细数据表；按用户需求默认展示明细列表）
 const activeDataView = ref<'chart' | 'pie' | 'table'>('table')
+const dataViewMap = reactive<Record<string, 'chart' | 'pie' | 'table'>>({})
+
+function getMsgDataView(msg: ChatMessage): 'chart' | 'pie' | 'table' {
+  return dataViewMap[msg.id] ?? activeDataView.value
+}
+
+function setMsgDataView(msg: ChatMessage, view: 'chart' | 'pie' | 'table') {
+  dataViewMap[msg.id] = view
+  activeDataView.value = view
+}
+
+let msgIdCounter = 0
+function nextMsgId(suffix: string): string {
+  return `m-${Date.now()}-${++msgIdCounter}-${suffix}`
+}
+
 const isThinkingExpanded = ref<boolean>(true)
 const chatContainerRef = ref<HTMLElement | null>(null)
 
@@ -87,6 +103,7 @@ const chatContainerRef = ref<HTMLElement | null>(null)
 const thinkingExpandedMap = reactive<Record<string, boolean>>({})
 const thinkingElapsedSeconds = ref(0)
 let thinkingTimer: ReturnType<typeof setInterval> | null = null
+let scrollRafId: number | null = null
 
 function isThinkingOpen(msg: ChatMessage): boolean {
   if (thinkingExpandedMap[msg.id] !== undefined) {
@@ -369,6 +386,14 @@ const weekSessions = computed(() =>
   )
 )
 
+const earlierSessions = computed(() =>
+  sessions.value.filter(
+    (s) =>
+      s.group === 'earlier' &&
+      (!searchSessionKeyword.value || s.title.includes(searchSessionKeyword.value))
+  )
+)
+
 // 异步加载指定会话的历史消息（如果内存中尚未加载）
 async function loadSessionHistoryIfNeeded(id: string) {
   if (!id || id === 'new') return
@@ -399,6 +424,7 @@ onMounted(async () => {
   }
   if (sessions.value.length > 0) {
     activeSessionId.value = sessions.value[0].id
+    clarifySessionId.value = sessions.value[0].id
     await loadSessionHistoryIfNeeded(activeSessionId.value)
     scrollToBottom()
   } else {
@@ -420,17 +446,26 @@ onMounted(async () => {
 })
 
 // 滚动到底部
-function scrollToBottom() {
+function scrollToBottom(smooth = false) {
   nextTick(() => {
-    if (chatContainerRef.value) {
-      if (typeof chatContainerRef.value.scrollTo === 'function') {
-        chatContainerRef.value.scrollTo({
-          top: chatContainerRef.value.scrollHeight,
-          behavior: 'smooth',
-        })
-      } else {
-        chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
-      }
+    if (!chatContainerRef.value) return
+    if (smooth && typeof chatContainerRef.value.scrollTo === 'function') {
+      chatContainerRef.value.scrollTo({
+        top: chatContainerRef.value.scrollHeight,
+        behavior: 'smooth',
+      })
+      return
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      if (scrollRafId !== null) return
+      scrollRafId = window.requestAnimationFrame(() => {
+        scrollRafId = null
+        if (chatContainerRef.value) {
+          chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
+        }
+      })
+    } else {
+      chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
     }
   })
 }
@@ -449,6 +484,7 @@ async function handleSelectSession(id: string) {
     handleStop()
   }
   activeSessionId.value = id
+  clarifySessionId.value = id
   await loadSessionHistoryIfNeeded(id)
   scrollToBottom()
 }
@@ -467,9 +503,11 @@ function handleDeleteSession(id: string) {
   if (activeSessionId.value === id) {
     if (sessions.value.length > 0) {
       activeSessionId.value = sessions.value[0].id
+      clarifySessionId.value = sessions.value[0].id
       loadSessionHistoryIfNeeded(activeSessionId.value)
     } else {
       activeSessionId.value = 'new'
+      clarifySessionId.value = 'new'
     }
   }
   ElMessage.info('已删除会话')
@@ -489,6 +527,7 @@ function handleClearSessions() {
   sessions.value = []
   sessionMessages.value = {}
   activeSessionId.value = 'new'
+  clarifySessionId.value = 'new'
   ElMessage.info('已清空历史会话')
 
   Promise.allSettled(currentList.map((s) => deleteAiSession(s.id))).catch(() => {})
@@ -500,6 +539,7 @@ function handleNewChat() {
     handleStop()
   }
   activeSessionId.value = 'new'
+  clarifySessionId.value = 'new'
   promptText.value = ''
   clarifyConfirmed.value = false
   clarifyDelivered.value = null
@@ -537,9 +577,13 @@ async function handleConfirmClarify(
   const names = selectedOptions.map((option) => option.typeName || option.tableName)
   selectedTables.value = names
 
+  const targetSessionId = (activeSessionId.value && activeSessionId.value !== 'new')
+    ? activeSessionId.value
+    : clarifySessionId.value
+
   try {
     await submitClarificationAnswer({
-      sessionId: clarifySessionId.value,
+      sessionId: targetSessionId,
       round: clarifyRound.value,
       selectedEntryTypeIds: payload.selectedEntryTypeIds,
       freeText: payload.freeText || undefined,
@@ -580,11 +624,29 @@ async function handleConfirmClarify(
 }
 
 // 复制 SQL
-function handleCopySql(code: string) {
-  if (navigator?.clipboard?.writeText) {
-    navigator.clipboard.writeText(code)
+async function handleCopySql(code: string) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(code)
+      ElMessage.success('SQL 已成功复制到剪贴板')
+      return
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = code
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const successful = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    if (successful) {
+      ElMessage.success('SQL 已成功复制到剪贴板')
+    } else {
+      ElMessage.warning('复制失败，请手动选中 SQL 并复制')
+    }
+  } catch {
+    ElMessage.warning('复制失败，请手动选中 SQL 并复制')
   }
-  ElMessage.success('SQL 已成功复制到剪贴板')
 }
 
 // 快捷追问
@@ -626,7 +688,7 @@ async function handleSend(customTitle?: string) {
 
   // 1. 追加用户消息
   const userMsg: ChatMessage = {
-    id: `m-${Date.now()}-u`,
+    id: nextMsgId('u'),
     role: 'user',
     content,
     createdAt: '刚刚',
@@ -663,7 +725,7 @@ async function handleSend(customTitle?: string) {
 
     const safeTitle = (targetMsg?.chartData?.title || '问数明细').replace(/[📊🥧\s]/g, '')
     const followUpReply: ChatMessage = {
-      id: `m-${Date.now()}-a`,
+      id: nextMsgId('a'),
       role: 'assistant',
       content: targetMsg
         ? `已为您生成并导出「${safeTitle}」的 ${formatName} 数据文件（共计 ${rowCount} 条明细记录），浏览器已触发下载。\n\n您也可以在明细数据表视图中随时点击「导出为 Excel」或「导出为 CSV」重新下载。`
@@ -715,20 +777,21 @@ async function handleSend(customTitle?: string) {
       .find((m) => m.role === 'assistant' && (m.chartData?.tableRows?.length || m.chartData?.bars?.length))
     if (targetMsg) {
       if (content.includes('饼图')) {
-        activeDataView.value = 'pie'
+        setMsgDataView(targetMsg, 'pie')
       } else if (content.includes('明细') || content.includes('表格')) {
-        activeDataView.value = 'table'
+        setMsgDataView(targetMsg, 'table')
       } else {
-        activeDataView.value = 'chart'
+        setMsgDataView(targetMsg, 'chart')
       }
+      const currentView = getMsgDataView(targetMsg)
       const viewLabel =
-        activeDataView.value === 'chart'
+        currentView === 'chart'
           ? '趋势柱状图'
-          : activeDataView.value === 'pie'
+          : currentView === 'pie'
             ? '占比饼图'
             : '明细数据表'
       const followUpReply: ChatMessage = {
-        id: `m-${Date.now()}-a`,
+        id: nextMsgId('a'),
         role: 'assistant',
         content: `已为您将查询结果转换为「${viewLabel}」展示。\n\n您也可以在上方卡片右上角自由切换「趋势图表」、「占比饼图」与「明细数据表」，或点击「导出数据」导出为 Excel / CSV 文件。`,
         createdAt: '刚刚',
@@ -752,7 +815,7 @@ async function handleSend(customTitle?: string) {
 
   // 2. 追加智能体占位消息，发起后端 /agent 流式请求
   const assistantMsg: ChatMessage = {
-    id: `m-${Date.now()}-a`,
+    id: nextMsgId('a'),
     role: 'assistant',
     content: '',
     createdAt: '刚刚',
@@ -850,8 +913,9 @@ async function handleSend(customTitle?: string) {
       if (/^(?:SELECT|WITH|SHOW|DESC|EXPLAIN)\b/i.test(sqlCode)) {
         assistantMsg.sql = {
           code: sqlCode,
-          execTimeMs: Math.floor(Math.random() * 120 + 40),
-          scanRows: 100,
+          execTimeMs: 0,
+          scanRows: 0,
+          estimated: true,
         }
       }
     }
@@ -921,10 +985,18 @@ function handleKeyDown(e: KeyboardEvent) {
   }
 }
 
-// 组件卸载时安全终止未完成的流式任务
+// 组件卸载时安全终止未完成的流式任务与定时器
 onUnmounted(() => {
   if (isSending.value) {
     handleStop()
+  }
+  if (thinkingTimer) {
+    clearInterval(thinkingTimer)
+    thinkingTimer = null
+  }
+  if (scrollRafId !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(scrollRafId)
+    scrollRafId = null
   }
 })
 </script>
@@ -984,6 +1056,31 @@ onUnmounted(() => {
           <div class="rc-session-group-title">近 7 天</div>
           <div
             v-for="s in weekSessions"
+            :key="s.id"
+            class="rc-session-item"
+            :class="{ active: activeSessionId === s.id }"
+            @click="handleSelectSession(s.id)"
+          >
+            <div class="rc-session-item-main">
+              <el-icon class="rc-session-icon"><ChatDotRound /></el-icon>
+              <span class="rc-session-title" :title="s.title">{{ s.title }}</span>
+            </div>
+            <el-button
+              class="rc-session-delete"
+              link
+              type="info"
+              :icon="Close"
+              size="small"
+              title="删除会话"
+              @click.stop="handleDeleteSession(s.id)"
+            />
+          </div>
+        </div>
+
+        <div v-if="earlierSessions.length" class="rc-session-group">
+          <div class="rc-session-group-title">更早</div>
+          <div
+            v-for="s in earlierSessions"
             :key="s.id"
             class="rc-session-item"
             :class="{ active: activeSessionId === s.id }"
@@ -1227,8 +1324,11 @@ onUnmounted(() => {
                     <div class="rc-sql-head">
                       <div class="rc-sql-badge">
                         <span class="rc-sql-label">SQL QUERY</span>
-                        <span class="rc-sql-meta">
-                          执行成功 · 扫描 {{ msg.sql.scanRows.toLocaleString() }} 行 · 耗时 {{ msg.sql.execTimeMs }}ms
+                        <span v-if="msg.sql.estimated" class="rc-sql-meta">
+                          SQL 由 AI 生成（待执行）
+                        </span>
+                        <span v-else class="rc-sql-meta">
+                          执行成功 · 扫描 {{ (msg.sql.scanRows || 0).toLocaleString() }} 行 · 耗时 {{ msg.sql.execTimeMs || 0 }}ms
                         </span>
                       </div>
                       <el-button
@@ -1272,7 +1372,7 @@ onUnmounted(() => {
                   <div v-if="msg.chartData" class="rc-dataview-card">
                     <div class="rc-dataview-head">
                       <span class="rc-dataview-title">
-                        {{ activeDataView === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
+                        {{ getMsgDataView(msg) === 'pie' ? (msg.chartData.pieTitle || '🥧 数据占比分布') : msg.chartData.title }}
                       </span>
                       <div class="rc-dataview-actions">
                         <el-dropdown
@@ -1291,7 +1391,12 @@ onUnmounted(() => {
                             </el-dropdown-menu>
                           </template>
                         </el-dropdown>
-                        <el-radio-group v-model="activeDataView" size="small">
+                        <el-radio-group
+                          :model-value="getMsgDataView(msg)"
+                          size="small"
+                          @update:model-value="(val: any) => setMsgDataView(msg, val)"
+                          @change="(val: any) => setMsgDataView(msg, val)"
+                        >
                           <el-radio-button value="chart">趋势图表</el-radio-button>
                           <el-radio-button value="pie">占比饼图</el-radio-button>
                           <el-radio-button value="table">明细数据表</el-radio-button>
@@ -1300,7 +1405,7 @@ onUnmounted(() => {
                     </div>
 
                     <!-- 趋势柱状视图 -->
-                    <div v-if="activeDataView === 'chart'" class="rc-chart-view">
+                    <div v-if="getMsgDataView(msg) === 'chart'" class="rc-chart-view">
                       <div
                         v-for="(bar, bidx) in msg.chartData.bars"
                         :key="bidx"
@@ -1325,7 +1430,7 @@ onUnmounted(() => {
                     </div>
 
                     <!-- 占比饼图视图 -->
-                    <div v-else-if="activeDataView === 'pie'" class="rc-pie-view">
+                    <div v-else-if="getMsgDataView(msg) === 'pie'" class="rc-pie-view">
                       <AiPieChart
                         :slices="getMsgSlices(msg)"
                         :center-label="getMsgPieCenter(msg).label"
