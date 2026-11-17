@@ -24,6 +24,7 @@ export interface SiteScriptGenerateInput {
 }
 
 export interface SiteScriptGenerateResult {
+  interfaceId?: string
   workspace?: { codeDir?: string; prjDir?: string }
   archive?: import('./runnerManagement').GeneratedCodeArchive
   previewPath?: string

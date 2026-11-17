@@ -18,6 +18,26 @@ class DeploymentResourcesTest(unittest.TestCase):
     request = baseline.ManagementIntegrationTest.request
     route = '/api/runner-management/deployment-resources'
 
+    def test_runtime_listing_is_read_only_and_background_sweep_expires_deliveries(self):
+        from backend.runner_management.deployment_configuration import runtime_rows
+        self.fixture(); self.archive(); self.save_rules(self.runner)
+        resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        job = self.jobs()[0]
+        with self.app.store.connect() as db:
+            db.execute("UPDATE directory_deliveries SET status='running',started_at=?,finished_at=NULL WHERE delivery_id=?",
+                       ('2000-01-01T00:00:00+00:00', job['deliveryId']))
+        with self.app.store.connect() as db:
+            db.execute('PRAGMA query_only=ON')
+            rows = runtime_rows(self.app, db)
+            row = next(item for item in rows if item['runtimeId'] == job['runtimeId'])
+            self.assertEqual(row['binding']['delivery']['status'], 'failed')
+            self.assertEqual(db.execute('SELECT status FROM directory_deliveries WHERE delivery_id=?', (job['deliveryId'],)).fetchone()['status'], 'running')
+        resources.dispatch(self.app)
+        with self.app.store.connect() as db:
+            delivery = db.execute('SELECT status,error FROM directory_deliveries WHERE delivery_id=?', (job['deliveryId'],)).fetchone()
+        self.assertEqual(delivery['status'], 'failed')
+        self.assertIn('下发超时', delivery['error'])
+
     def test_site_subdirectory_reuses_parent_deployment_and_keeps_listener(self):
         import copy
         self.fixture()
@@ -205,11 +225,11 @@ class DeploymentResourcesTest(unittest.TestCase):
         self.assertEqual(len(saved['items']), 1)
         for env in ('test', 'production'):
             selected = self.choice(environment=env)
-            self.assertEqual(selected['effectiveResourceId'], item['resourceId'])
+            self.assertEqual(selected['effectiveResourceId'], self.runner.identity['runnerId'])
             self.assertEqual(len(selected['resources']), 1)
             with self.app.store.connect() as db:
                 resolved, explicit = resources.selected_resource(db, self.context(environment=env))
-                self.assertEqual(resolved['resourceId'], item['resourceId'])
+                self.assertEqual(resolved['resourceId'], self.runner.identity['runnerId'])
         with self.assertRaises(HTTPError) as error:
             self.request(self.route, {**saved, 'items': [item, {**item, 'resourceId': '7' * 32, 'runnerId': self.other.identity['runnerId'], 'environment': 'production'}]})
         self.assertEqual(error.exception.code, 400)
@@ -429,14 +449,14 @@ class DeploymentResourcesTest(unittest.TestCase):
         other = self.fixture(); rules = self.pool(other)
         initial = self.choice()
         self.assertEqual(initial['resourceId'], '')
-        self.assertEqual(initial['effectiveResourceId'], '1' * 32)
-        self.assertEqual({item['resourceId'] for item in initial['resources']}, {'1' * 32, '2' * 32})
+        self.assertEqual(initial['effectiveResourceId'], self.runner.identity['runnerId'])
+        self.assertEqual({item['resourceId'] for item in initial['resources']}, {self.runner.identity['runnerId'], other.identity['runnerId']})
         for wrong in ('3' * 32, '4' * 32, 'missing'):
             with self.assertRaises(HTTPError) as bad: self.choose(wrong)
             self.assertEqual(bad.exception.code, 409)
         saved = self.choose('2' * 32)
-        self.assertEqual(saved['effectiveResourceId'], '2' * 32)
-        self.assertEqual(self.choice()['resourceId'], '2' * 32)
+        self.assertEqual(saved['effectiveResourceId'], other.identity['runnerId'])
+        self.assertEqual(self.choice()['resourceId'], other.identity['runnerId'])
         self.assertEqual(self.choice(environment='production')['resourceId'], '')
         self.assertEqual(self.choice(stepId='41896')['resourceId'], '')
         with self.assertRaises(HTTPError) as conflict:
@@ -455,15 +475,15 @@ class DeploymentResourcesTest(unittest.TestCase):
         other = self.fixture(); rules = self.pool(other)
         rules['items'][0]['isDefault'] = False; rules['items'][1]['isDefault'] = True
         rules = self.request(self.route, rules)
-        self.assertEqual(self.choice()['effectiveResourceId'], '2' * 32)
+        self.assertEqual(self.choice()['effectiveResourceId'], other.identity['runnerId'])
         self.choose('1' * 32)
-        self.assertEqual(self.choice()['effectiveResourceId'], '1' * 32)
+        self.assertEqual(self.choice()['effectiveResourceId'], self.runner.identity['runnerId'])
         rules['items'][0]['enabled'] = False
         self.request(self.route, rules)
         self.archive(); resources.dispatch(self.app)
         job = self.jobs()[0]
         self.assertEqual(job['status'], 'waiting_resource'); self.assertIn('已停用', job['message'])
-        self.assertEqual(self.choice()['resourceId'], '1' * 32)
+        self.assertEqual(self.choice()['resourceId'], self.runner.identity['runnerId'])
         self.choose(''); resources.dispatch(self.app)
         self.assertEqual(self.jobs()[0]['runnerId'], other.identity['runnerId'])
 
@@ -496,21 +516,20 @@ class DeploymentResourcesTest(unittest.TestCase):
             self.request(self.route, {**first, 'items': [*first['items'], {**legacy, 'runnerId': other.identity['runnerId'], 'isDefault': True}]})
         self.assertEqual(self.request(self.route), first)
 
-    def test_resource_name_is_editable_without_changing_node_binding(self):
+    def test_resource_name_follows_runner_without_changing_node_binding(self):
         other = self.fixture(); rules = self.pool(other)
         self.choose('2' * 32)
         original_revision = self.choice()['revision']
-        rules['items'][1]['resourceName'] = '  网页抓取备用测试机  '
+        original_name = rules['items'][1]['resourceName']
+        rules['items'][1]['resourceName'] = 'independent names are ignored'
         saved = self.request(self.route, rules)
-        self.assertEqual(saved['items'][1]['resourceName'], '网页抓取备用测试机')
+        self.assertEqual(saved['items'][1]['resourceName'], original_name)
+        with self.app.store.connect() as db:
+            db.execute('UPDATE runners SET name=? WHERE runner_id=?', ('Renamed Runner', other.identity['runnerId']))
         current = self.choice()
         self.assertEqual(current['revision'], original_revision)
-        self.assertEqual(current['resourceId'], '2' * 32)
-        self.assertEqual(next(item for item in current['resources'] if item['resourceId'] == current['resourceId'])['resourceName'], '网页抓取备用测试机')
-        for invalid in ('a' * 101, '名称\n换行'):
-            with self.assertRaises(HTTPError):
-                self.request(self.route, {**saved, 'items': [{**item, 'resourceName': invalid} if item['resourceId'] == '2' * 32 else item for item in saved['items']]})
-        self.assertEqual(self.request(self.route), saved)
+        self.assertEqual(current['resourceId'], other.identity['runnerId'])
+        self.assertEqual(next(item for item in current['resources'] if item['resourceId'] == current['resourceId'])['resourceName'], 'Renamed Runner')
 
     def test_preview_directory_matches_dispatch_rule_for_windows_linux_and_queue(self):
         other = self.fixture(); rules = self.pool(other)
@@ -552,7 +571,7 @@ class DeploymentResourcesTest(unittest.TestCase):
         self.assertEqual(self.jobs()[0]['status'], 'success', self.jobs()[0])
         self.assertEqual((self.runner.directory / 'test/links/default/1401218/main.py').read_bytes(), b'VALUE = 1\n')
         self.assertTrue((self.runner.directory / 'test/links/default/1401218/lib/helper.py').is_file())
-        self.assertTrue((self.runner.directory / 'test/links/default/1401218/manual_dependency.py').is_file())
+        self.assertFalse((self.runner.directory / 'test/links/default/1401218/manual_dependency.py').exists())
         self.assertFalse((self.runner.directory / 'test/links/main.py').exists())
         # Changing the fixed target can deploy the same pinned code again; runtime metadata follows it.
         saved['items'][0]['deploymentDirectory'] = 'test/new-location'

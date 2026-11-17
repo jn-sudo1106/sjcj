@@ -1,4 +1,6 @@
 import json
+import base64
+import hashlib
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
@@ -33,6 +35,86 @@ class RunnerFilesTest(unittest.TestCase):
         files.poll(self.runner)
         response = self.request('/api/runner-management/runner-file-requests/' + read['requestId'])
         self.assertEqual(response['result']['content'], 'print("hello")')
+
+    def operation(self, route, body):
+        created = self.request(route, body)
+        state = '/api/runner-management/runner-file-requests/' + created['requestId']
+        self.assertNotIn('files', self.request(state))
+        files.poll(self.runner)
+        return self.request(state)
+
+    def test_mkdir_upload_delete_round_trip_changes_only_selected_instance(self):
+        route = self.fixture()
+        result = self.operation(route, {'action': 'mkdir', 'path': 'links/1401218/uploads'})
+        self.assertEqual(result['status'], 'success', result)
+        content = b'\x00\xffbinary upload\n'
+        uploaded = self.operation(route, {'action': 'upload', 'path': 'links/1401218/uploads', 'files': [
+            {'path': 'links/1401218/uploads/sample.bin', 'data': base64.b64encode(content).decode()}]})
+        self.assertEqual(uploaded['status'], 'success', uploaded)
+        target = self.runner.directory / 'links/1401218/uploads/sample.bin'
+        self.assertEqual(target.read_bytes(), content)
+        deleted = self.operation(route, {'action': 'delete', 'path': 'links/1401218/uploads/sample.bin',
+                                       'expectedHash': hashlib.sha256(content).hexdigest()})
+        self.assertEqual(deleted['status'], 'success', deleted)
+        self.assertFalse(target.exists())
+        deleted_folder = self.operation(route, {'action': 'delete', 'path': 'links/1401218/uploads'})
+        self.assertEqual(deleted_folder['status'], 'success', deleted_folder)
+        self.assertFalse(target.parent.exists())
+        self.assertEqual((self.runner.directory / 'links/1401218/main.py').read_text(), 'print("hello")')
+
+    def test_existing_upload_changed_file_and_nonempty_folder_are_not_removed(self):
+        route = self.fixture()
+        path = 'links/1401218/main.py'
+        digest = hashlib.sha256((self.runner.directory / path).read_bytes()).hexdigest()
+        result = self.operation(route, {'action': 'upload', 'path': 'links/1401218', 'files': [
+            {'path': path, 'data': base64.b64encode(b'overwrite').decode()}]})
+        self.assertEqual(result['status'], 'failed')
+        (self.runner.directory / path).write_bytes(b'changed externally')
+        result = self.operation(route, {'action': 'delete', 'path': path, 'expectedHash': digest})
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('文件已变化', result['error'])
+        result = self.operation(route, {'action': 'delete', 'path': 'links/1401218'})
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('目录仍有内容', result['error'])
+        self.assertEqual((self.runner.directory / path).read_bytes(), b'changed externally')
+
+    def test_mutations_reject_private_paths_traversal_and_invalid_uploads(self):
+        route = self.fixture()
+        for body in (
+            {'action': 'mkdir', 'path': ''}, {'action': 'delete', 'path': 'identity.json'},
+            {'action': 'mkdir', 'path': '../outside'},
+            {'action': 'upload', 'files': [{'path': 'logs/private', 'data': ''}]},
+            {'action': 'upload', 'path': 'links', 'files': [{'path': 'outside.py', 'data': ''}]},
+            {'action': 'upload', 'files': [{'path': 'links/bad.bin', 'data': 'invalid==base64'}]},
+        ):
+            with self.subTest(body=body), self.assertRaises(HTTPError): self.request(route, body)
+        from backend.runner_management.runner_file_operations import mutate
+        with patch('backend.runner_management.bundle_install.linked', return_value=True), self.assertRaises(ValueError):
+            mutate(self.runner.directory, {'action': 'mkdir', 'path': 'links/new'})
+        with self.assertRaises(ValueError): mutate(self.runner.directory, {'action': 'mkdir', 'path': 'links/NUL'})
+
+    def test_browse_only_runner_cannot_receive_mutations(self):
+        route = self.fixture()
+        payload = self.runner.heartbeat_payload(); payload.pop('fileManagementSchema')
+        self.runner.post('/api/runners/me/heartbeat', payload)
+        self.assertIn('requestId', self.request(route, {'action': 'list', 'path': ''}))
+        with self.assertRaises(HTTPError) as error: self.request(route, {'action': 'mkdir', 'path': 'new'})
+        self.assertEqual(error.exception.code, 409)
+        self.assertIn('升级', json.load(error.exception)['message'])
+
+    def test_upload_uses_file_body_limit_and_mutations_require_admin(self):
+        route = self.fixture()
+        data = b'x' * (1024 * 1024)
+        result = self.operation(route, {'action': 'upload', 'files': [
+            {'path': 'large-upload.bin', 'data': base64.b64encode(data).decode()}]})
+        self.assertEqual(result['status'], 'success', result)
+        self.assertEqual((self.runner.directory / 'large-upload.bin').read_bytes(), data)
+        from backend.runner_management.server import ApiError
+        with patch.object(self.app, 'authenticate_admin', side_effect=ApiError('需要管理员权限', 403)) as auth:
+            with self.assertRaises(HTTPError) as denied: self.request(route, {'action': 'delete', 'path': 'large-upload.bin'})
+            self.assertEqual(denied.exception.code, 403)
+            self.assertTrue(auth.call_args.kwargs['write'])
+        self.assertTrue((self.runner.directory / 'large-upload.bin').is_file())
 
     def test_runner_private_files_and_traversal_are_never_browsable(self):
         self.fixture()

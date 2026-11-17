@@ -1,0 +1,18 @@
+export const CODE_GENERATION_PROMPT_VARIABLES = [
+  ['url', '当前源的目标列表 URL'],
+  ['file_name', '本次生成的主代码文件名，按当前文件命名方式确定'],
+  ['code_dir', '实际生成服务器的代码保存目录（Agent）'],
+  ['code_file_path', '主代码文件的完整保存路径（Agent）'],
+  ['code_save_requirement', '本次文件命名、保存目录和返回结果要求'],
+  ['prj_dir', '本次生成工作空间（Agent）'],
+  ['input_file_dir', '本次输入目录（Agent）'],
+  ['reference_files', '本次参考文件的完整路径'],
+  ['output_file_dir', '本次输出目录（Agent）'],
+  ['config_id', '节点配置 ID'], ['queue_name', '节点 MQ 主题'], ['task_id', '本次生成任务 ID'],
+  ['use_proxy', '节点是否启用代理，值为 true 或 false'],
+  ['proxy_ip', '代理域名或 IP，未启用时为空'],
+  ['proxy_port', '代理端口，未启用时为空'],
+  ['proxy_account', '代理认证账号，未设置或未启用时为空'],
+  ['proxy_password', '代理认证密码，未设置或未启用时为空'],
+  ['proxy_url', '完整 HTTP 代理 URL，包含已编码的认证信息；未启用时为空'],
+] as const

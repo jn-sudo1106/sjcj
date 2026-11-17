@@ -2,7 +2,7 @@ import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './a
 import type { ModelInterfaceTestInput } from './runnerManagement'
 
 export type ModelTestEvent =
-  | { type: 'connecting'; durationMs: number }
+  | { type: 'connecting'; durationMs: number; interfaceId?: string; interfaceName?: string }
   | { type: 'headers'; durationMs: number; status: number; ok: boolean; contentType: string }
   | { type: 'chunk'; durationMs: number; text: string }
   | { type: 'done'; durationMs: number }
@@ -32,16 +32,33 @@ export function formatModelTestOutput(raw: string, receiving = false): string {
 }
 
 export async function streamModelInterfaceTest(input: ModelInterfaceTestInput, onEvent: (event: ModelTestEvent) => void, signal?: AbortSignal): Promise<void> {
+  return streamModelEvents('/model-interfaces/test', { ...input, responseStream: true }, onEvent, signal)
+}
+
+export interface PromptEditChatInput {
+  interfaceId?: string
+  automatic?: boolean
+  basePrompt: string
+  promptType?: 'system' | 'user'
+  variableCatalog?: { name: string; description: string }[]
+  messages: { role: 'user' | 'assistant'; content: string }[]
+}
+
+export async function streamPromptEditChat(input: PromptEditChatInput, onEvent: (event: ModelTestEvent) => void, signal?: AbortSignal): Promise<void> {
+  return streamModelEvents('/prompt-edits/chat', input, onEvent, signal)
+}
+
+async function streamModelEvents(path: string, input: unknown, onEvent: (event: ModelTestEvent) => void, signal?: AbortSignal): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }
   const token = readStoredToken()
   if (token) headers[ACCESS_TOKEN_HEADER] = token
-  const response = await fetch('/api/runner-management/model-interfaces/test', {
-    method: 'POST', credentials: 'include', headers, body: JSON.stringify({ ...input, responseStream: true }), signal,
+  const response = await fetch('/api/runner-management' + path, {
+    method: 'POST', credentials: 'include', headers, body: JSON.stringify(input), signal,
   })
   if (response.status === 401) triggerSessionExpired()
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
-    throw new Error(payload.message || `接口测试失败（HTTP ${response.status}）`)
+    throw new Error(payload.message || `接口请求失败（HTTP ${response.status}）`)
   }
   if (!response.body) throw new Error('浏览器未提供流式响应')
   const reader = response.body.getReader(), decoder = new TextDecoder()

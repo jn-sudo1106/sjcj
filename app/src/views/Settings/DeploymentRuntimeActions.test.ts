@@ -35,9 +35,26 @@ it('旧部署记录不提供启动，防止误启动后来部署的代码', asyn
   const w = await setup({ ...runtime, binding: { ...runtime.binding!, delivery: { ...runtime.binding!.delivery!, deliveryId: 'new-delivery' } } })
   expect(w.text()).toContain('已有更新部署'); expect(w.findAll('button')).toHaveLength(0)
 })
+it('部署任务隐藏停止操作并保留日志和停止后的启动入口', async () => {
+  const w = await setup({ ...runtime, assignment: { ...runtime.assignment!, enabled: true } })
+  await w.setProps({ allowStop: false })
+  expect(w.findAll('button')).toHaveLength(0)
+  expect(w.findAll('a')).toHaveLength(2)
+  expect(runnerManagementApi.stopRuntimeProgram).not.toHaveBeenCalled()
+  await w.setProps({ currentRuntime: runtime })
+  expect(w.get('button').text()).toBe('启动程序')
+})
 it('只读用户可查看日志，不能启动停止', async () => {
   const w = await setup(runtime, false)
   expect(w.findAll('button')).toHaveLength(0); expect(w.findAll('a')).toHaveLength(2)
+})
+it('部署任务可只保留部署日志，运行日志由运行实例入口提供', async () => {
+  const w = await setup(runtime, false)
+  await w.setProps({ showRuntimeLog: false })
+  expect(w.text()).not.toContain('运行日志')
+  expect(w.text()).toContain('部署日志')
+  expect(w.findAll('a')).toHaveLength(1)
+  expect(w.get('a').attributes('href')).toContain('recordId=delivery1')
 })
 it('单文件先采用入口，再使用返回的修订号启动', async () => {
   const w = await setup({ ...runtime, assignment: null })

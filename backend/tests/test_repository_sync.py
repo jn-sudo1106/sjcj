@@ -2,12 +2,27 @@ import subprocess
 from pathlib import Path
 import unittest
 from urllib.error import HTTPError
+from unittest.mock import patch
 from backend.tests import test_runner_management as fixture
 
 
 class RepositorySyncTest(unittest.TestCase):
     request = fixture.ManagementIntegrationTest.request
     tearDown = fixture.ManagementIntegrationTest.tearDown
+
+    def test_git_object_permission_error_is_reported_without_exposing_git_credentials(self):
+        real_run = subprocess.run
+        def run(args, **kwargs):
+            if args[:2] == ['git', 'fetch']:
+                return subprocess.CompletedProcess(args, 128, '', 'insufficient permission for adding an object to repository database .git/objects https://user:private-secret@example.com/repo.git')
+            return real_run(args, **kwargs)
+        with patch('backend.runner_management.repository_sync.subprocess.run', side_effect=run):
+            with self.assertRaises(HTTPError) as failure:
+                self.request(self.route, {})
+        body = failure.exception.read().decode()
+        self.assertEqual(failure.exception.code, 503)
+        self.assertIn('无写入权限', body)
+        self.assertNotIn('private-secret', body)
 
     def git(self, folder, *args):
         result = subprocess.run(['git', *args], cwd=folder, capture_output=True, text=True, encoding='utf8', timeout=15)

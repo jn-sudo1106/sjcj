@@ -84,7 +84,7 @@ async function deployExisting() {
     <div class="nd-status"><span :title="current?.message">{{ current ? deploymentStatuses[current.status] : environment === 'test' ? '生成并提交成功后自动部署测试' : '选择生产部署资源' }}</span><code v-if="current" :title="current.gitCommit">{{ current.gitCommit.slice(0, 12) }}</code>
       <el-button v-if="auth.role === 'admin' && environment === 'test' && archiveId && needsDeployment" link type="primary" :disabled="savingResource" :loading="busy" @click="deployExisting">部署已有代码</el-button>
       <el-button v-if="auth.role === 'admin' && current && ['failed','waiting_resource','queued'].includes(current.status)" link :loading="busy" @click="act(current, 'retry')">重试部署</el-button>
-      <RouterLink :to="{path:'/settings',query:{tab:'deployment-resources',configId}}" target="_blank" rel="noopener">部署记录</RouterLink>
+      <RouterLink :to="{path:'/tasks',query:{tab:'deployment',configId}}" target="_blank" rel="noopener">部署任务</RouterLink>
       <RouterLink v-if="current?.deliveryId" :to="{path:'/settings',query:{tab:'runtime-logs',recordId:current.deliveryId,runnerId:current.runnerId}}" target="_blank" rel="noopener">日志</RouterLink>
     </div>
     <p v-if="current?.installedPath && (current.installedPath !== selection?.deploymentDirectory || current.runnerId !== rule?.runnerId)" class="nd-path">上次部署：{{ current.runnerIp ? `${current.runnerIp} · ` : '' }}{{ current.installedPath }}</p>

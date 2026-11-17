@@ -134,7 +134,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       directives: { loading: {} },
       stubs: {
         FlowBoard: realBoard ? false : { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
-        NodeInspector: realBoard ? false : { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 任务配置</div>' },
+        NodeInspector: realBoard ? false : { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 智能体配置 任务配置</div>' },
         // 选源弹窗：真组件在 FlowSourcePickerDialog.test.ts 单独测。这里只关心 confirmApply
         // 的分批 / changeFlowBatch / 错误处理，stub 出「设 modelValue + 触发 confirm」两个口子。
         FlowSourcePickerDialog: {
@@ -1295,7 +1295,7 @@ describe('流程模板结构与归集', () => {
       const workspace = w.get('[aria-label="流程工作区"]')
       await workspace.get('input[aria-label="URL"]').setValue('https://example.com/list?page=1')
       expect(workspace.get('[aria-label="节点设置"]').findAll('.rc-top-tab').map(tab => tab.text()))
-        .toEqual(['节点配置', '表配置', '编排配置', '任务配置'])
+        .toEqual(['节点配置', '表配置', '智能体配置', '部署配置', '任务配置'])
       await workspace.get('[data-testid="node-library-toggle"]').trigger('click')
       const download = workspace.findAll('.anp-item').find(item => item.text().includes('文件下载'))
       expect(download).toBeDefined()

@@ -120,6 +120,9 @@ def remove_configuration(app, identifier, expected_revision):
         item = get_configuration(app, identifier, db)
         if expected_revision != item['revision']:
             raise ApiError('部署配置已更新，请刷新列表后再删除', 409)
+        if any(value['deploymentId'] != identifier and value.get('entryConfigurationId') == identifier
+               for value in configurations(app, db).values()):
+            raise ApiError('此部署配置的入口仍被其他部署目标引用，请先调整关联配置', 409)
         if (any(doc.get('deploymentId') == identifier for doc in documents(db))
                 or db.execute('SELECT 1 FROM directory_runner_bindings WHERE binding_type=? AND owner_id=?', ('deployment', identifier)).fetchone()
                 or any(row.get('deploymentId') == identifier for row in runtime_rows(app, db))):
@@ -178,7 +181,7 @@ def with_source_nodes(db, items):
     return items
 
 
-def save_configuration(app, payload, identifier='', *, _db=None):
+def save_configuration(app, payload, identifier='', *, _db=None, _share_entry=False):
     from .server import ApiError, GIT_LOCK, required_text, now
     with (nullcontext() if _db is not None else GIT_LOCK), (nullcontext(_db) if _db is not None else app.store.connect()) as db:
         current = get_configuration(app, identifier, db) if identifier else None
@@ -245,7 +248,7 @@ def save_configuration(app, payload, identifier='', *, _db=None):
                     raise ApiError('关联代码必须属于来源节点配置')
                 item['codeId'] = code_id
         if current:
-            for key in ('managedBy', 'deploymentEnvironment'):
+            for key in ('managedBy', 'deploymentEnvironment', 'entryConfigurationId', 'entrySource', 'entrySelectedAt'):
                 if key in current:
                     item[key] = current[key]
             for key in ('legacyType', 'legacyOwner'):
@@ -255,8 +258,15 @@ def save_configuration(app, payload, identifier='', *, _db=None):
                 item['codeId'] = current.get('codeId', '')
         item['registryKey'] = current['registryKey'] if current else '@deployment:' + identifier
         item['updatedAt'] = now()
+        from .deployment_entries import apply_choice, publish_choice
+        if not current:
+            apply_choice(db, item)
+        if payload.get('entryConfigurationId'):
+            item['entryConfigurationId'] = payload['entryConfigurationId']
         item['revision'] = revision(item)
         store_layout(db, DEPLOYMENT_PREFIX + identifier, item)
+        if _share_entry and any(node.get('repoId') for node in item['nodes']):
+            return next(value for value in publish_choice(app, db, item) if value['deploymentId'] == identifier)
         return item
 
 
@@ -352,6 +362,26 @@ def documents(db):
         'SELECT * FROM settings WHERE setting_key LIKE ?', (RUNTIME_PREFIX + '%',)).fetchall()]
 
 
+def runtime_source_contexts(db):
+    """Recover the creating source from the first real delivery of each binding.
+
+    Source identity comes from a deployment receipt, never from sources that
+    merely happen to share a config ID. Read metadata only; do not load archives.
+    """
+    result = {}
+    rows = db.execute('SELECT j.job_id,j.source_id,j.flow_id,j.step_id,j.config_id,j.deployment_id,j.runner_id '
+                      'FROM deployment_jobs j JOIN directory_deliveries d ON j.delivery_id=d.delivery_id '
+                      'AND j.deployment_id=d.owner_id AND j.runner_id=d.runner_id '
+                      "WHERE d.binding_type='deployment' ORDER BY d.requested_at,j.created_at,j.job_id").fetchall()
+    for row in rows:
+        if not row['source_id']:
+            continue
+        result.setdefault((row['deployment_id'], row['runner_id']), {
+            'sourceId': row['source_id'], 'flowId': row['flow_id'], 'stepId': row['step_id'],
+            'configId': row['config_id'], 'deploymentJobId': row['job_id']})
+    return result
+
+
 def delivery_compatibility(app, delivery, doc, assignment, layout, db, latest_snapshots):
     """Compare executable files, not configuration metadata or entry selection.
 
@@ -419,13 +449,14 @@ def delivery_compatibility(app, delivery, doc, assignment, layout, db, latest_sn
     return result
 
 
-def runtime_rows(app, db):
+def runtime_rows(app, db, *, verify=True):
     from .directory_bindings import list_bindings
     from .server import ASSIGNMENT_SELECT, as_assignment
     layouts = configurations(app, db)
     assignments = {row['assignment_id']: as_assignment(row) for row in db.execute(ASSIGNMENT_SELECT).fetchall()}
     bindings = list_bindings(app, db)
     docs = documents(db)
+    source_contexts = runtime_source_contexts(db)
     used_assignments, used_bindings, rows = set(), set(), []
     if not hasattr(app, '_deployment_content_hashes'):
         app._deployment_content_hashes = {}
@@ -453,8 +484,16 @@ def runtime_rows(app, db):
                 'directoryTemplate': doc.get('executionDirectory', layout['directoryTemplate']),
                 'layoutRevision': layout['revision'],
                 'binding': binding, 'assignment': assignment}
-        item.update(delivery_compatibility(app, (binding or {}).get('delivery'), doc, assignment, layout, db, latest_snapshots))
+        # Optimistic concurrency describes saved state, independent of whether
+        # this request performs expensive executable-content verification.
         item['revision'] = revision(item)
+        source_context = source_contexts.get((doc['deploymentId'], doc['runnerId']))
+        if source_context:
+            item['sourceContext'] = source_context
+        if verify is True or verify == doc['runtimeId']:
+            item.update(delivery_compatibility(app, (binding or {}).get('delivery'), doc, assignment, layout, db, latest_snapshots))
+        else:
+            item['codeVerificationPending'] = True
         rows.append(item)
 
     for doc in docs:
@@ -511,7 +550,9 @@ def runtime_rows(app, db):
 
 def list_runtimes(app):
     with app.store.connect() as db:
-        return runtime_rows(app, db)
+        # Listing must only read configuration and execution receipts. Signed
+        # bundles/Git contents are checked at delivery/adoption/start boundaries.
+        return runtime_rows(app, db, verify=False)
 
 
 def program_snapshot(app, layout, db):
@@ -520,12 +561,17 @@ def program_snapshot(app, layout, db):
     from .directory_delivery import target_path
     files, sources, directories = snapshot_files(app, layout, db)
     entry = layout['entryPoint']
-    if not entry.lower().endswith('.py') or entry not in files:
-        raise ApiError('请在部署目录中选择已关联仓库的 Python 启动文件', 422)
+    from .entry_types import entry_kind, executable_image
     try:
-        ast.parse(files[entry].decode('utf-8-sig'))
+        kind = entry_kind(entry)
+        if entry not in files:
+            raise ValueError('请在部署目录中选择已关联仓库的 Python 或 EXE 启动文件')
+        if kind == 'python': ast.parse(files[entry].decode('utf-8-sig'))
+        else: executable_image(files[entry])
     except (UnicodeError, SyntaxError) as exc:
         raise ApiError('启动文件不是有效的 Python 代码', 422) from exc
+    except ValueError as exc:
+        raise ApiError(str(exc), 422) from exc
     primary = next(source for source in sources if entry == source['targetPath'] or
                    source['sourceType'] == 'directory' and entry.startswith(source['targetPath'] + '/'))
     manifest = {'kind': 'processor', 'processorType': 'deployment-entry', 'entry': entry,
@@ -535,9 +581,11 @@ def program_snapshot(app, layout, db):
                 'siteHost': layout['siteHost'], 'codeId': layout.get('codeId', ''),
                 'registryKey': registry_key(layout), 'layoutSchema': 2, 'versionFile': 'version.json',
                 'directories': directories, 'sources': sources}
+    if kind == 'executable':
+        manifest.update(entryType='executable', platform='win32')
     digest, signature = app.artifacts.publish(files, manifest)
     db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',
-               (digest, 'processor', 'deployment-entry', 'any', primary['gitCommit'],
+               (digest, 'processor', 'deployment-entry', 'win32' if kind == 'executable' else 'any', primary['gitCommit'],
                 'published', now(), signature, entry, 'deployment:' + layout['deploymentId']))
     return digest
 
@@ -547,7 +595,7 @@ def save_runtime(app, payload, *, _db=None):
     from .directory_bindings import owner_key
     from .directory_delivery import target_path
     with (nullcontext() if _db is not None else GIT_LOCK), (nullcontext(_db) if _db is not None else app.store.connect()) as db:
-        rows = runtime_rows(app, db)
+        rows = runtime_rows(app, db, verify=False)
         old = next((row for row in rows if row['runtimeId'] == payload.get('runtimeId')), None)
         if payload.get('runtimeId') and not old:
             raise ApiError('运行配置不存在，请刷新', 404)
@@ -595,6 +643,10 @@ def save_runtime(app, payload, *, _db=None):
                 raise ApiError('原有队列运行信息无效，请刷新')
             db.execute('UPDATE assignments SET concurrency=?,environment=? WHERE assignment_id=?', (concurrency, environment, assignment_id))
         elif layout.get('entryPoint'):
+            if layout['entryPoint'].lower().endswith('.exe'):
+                from .entry_types import executable_runner
+                try: executable_runner(runner)
+                except ValueError as exc: raise ApiError(str(exc), 422) from exc
             if code_id:
                 code = db.execute('SELECT * FROM code_assets WHERE code_id=?', (code_id,)).fetchone()
                 if not code:
@@ -638,18 +690,37 @@ def save_runtime(app, payload, *, _db=None):
         if old and old.get('deploymentId') and old['deploymentId'] != identifier:
             if not any(item['deploymentId'] == old['deploymentId'] and item['runnerId'] == runner_id for item in documents(db)):
                 db.execute('DELETE FROM directory_runner_bindings WHERE binding_type=? AND owner_key=? AND runner_id=?', ('deployment', owner_key(old['deploymentId']), runner_id))
-        return next(row for row in runtime_rows(app, db) if row['runtimeId'] == runtime_id)
+        return next(row for row in runtime_rows(app, db, verify=runtime_id) if row['runtimeId'] == runtime_id)
 
 
 def control_runtime(app, runtime_id, expected_revision, enabled):
     """Set desired worker state; heartbeat remains the evidence of actual state."""
     from .server import ApiError, GIT_LOCK
     with GIT_LOCK, app.store.connect() as db:
-        row = next((item for item in runtime_rows(app, db) if item['runtimeId'] == runtime_id), None)
+        row = next((item for item in runtime_rows(app, db, verify=runtime_id) if item['runtimeId'] == runtime_id), None)
         if not row:
             raise ApiError('机器配置不存在，请刷新', 404)
         if expected_revision != row['revision']:
             raise ApiError('机器配置已更新，请刷新后重试', 409)
+        if enabled and row.get('deploymentId') and not (row.get('assignment') or {}).get('enabled'):
+            from .deployment_entries import read_choice, target_entry
+            layout = get_configuration(app, row['deploymentId'], db)
+            choice = read_choice(db, layout)
+            if choice is not None:
+                desired = target_entry(layout, choice) if choice.get('path') else ''
+                if not desired:
+                    raise ApiError('部署配置尚未设置入口，请在 Git 源目录选择入口程序', 422)
+                if not row.get('assignment') or row.get('entryPoint') != desired:
+                    if layout['entryPoint'] != desired:
+                        layout['entryPoint'] = desired
+                        layout['revision'] = revision(layout)
+                        store_layout(db, DEPLOYMENT_PREFIX + layout['deploymentId'], layout)
+                    row = next(item for item in runtime_rows(app, db, verify=False) if item['runtimeId'] == runtime_id)
+                    save_runtime(app, {'runtimeId': row['runtimeId'], 'revision': row['revision'],
+                        'deploymentId': layout['deploymentId'], 'layoutRevision': layout['revision'], 'runnerId': row['runnerId'],
+                        'environment': layout.get('deploymentEnvironment') or (row.get('assignment') or {}).get('environment', 'test'),
+                        'concurrency': (row.get('assignment') or {}).get('concurrency', 1), 'retryPolicy': row.get('retryPolicy')}, _db=db)
+                    row = next(item for item in runtime_rows(app, db, verify=runtime_id) if item['runtimeId'] == runtime_id)
         assignment = row.get('assignment')
         if enabled and row.get('deploymentId') and (not assignment or
                 assignment['processorType'] == 'deployment-entry' and not row.get('entryPoint')):
@@ -658,7 +729,7 @@ def control_runtime(app, runtime_id, expected_revision, enabled):
                 raise ApiError('机器配置尚未采用启动文件「' + layout['entryPoint'] +
                                '」。请点击「编辑 → 保存配置」采用入口；已下发且代码未变化时可直接启动。', 422)
             raise ApiError('部署配置「' + layout['name'] +
-                           '」未设置启动文件。请在「部署配置」中选择 Python 文件并设为执行入口，保存后再编辑保存机器配置。', 422)
+                           '」未设置启动文件。请在「部署配置」中选择 Python 或 EXE 文件并设为执行入口，保存后再编辑保存机器配置。', 422)
         if not assignment:
             raise ApiError('此绑定仅用于下发目录，没有可启动的节点处理程序', 422)
         if enabled and row['retryPolicy'] != DEFAULT_RETRY_POLICY:
@@ -666,6 +737,11 @@ def control_runtime(app, runtime_id, expected_revision, enabled):
             if not machine or 'retry-policy' not in json.loads(machine['capabilities']):
                 raise ApiError('此 Runner 尚不支持自定义重试策略，请先升级 Runner', 422)
         if enabled and assignment['processorType'] == 'deployment-entry':
+            if row['entryPoint'].lower().endswith('.exe'):
+                from .entry_types import executable_runner
+                target_runner = db.execute('SELECT platform,capabilities FROM runners WHERE runner_id=?', (row['runnerId'],)).fetchone()
+                try: executable_runner(target_runner)
+                except ValueError as exc: raise ApiError(str(exc), 422) from exc
             runner = db.execute('SELECT capabilities FROM runners WHERE runner_id=?', (row['runnerId'],)).fetchone()
             if not runner or 'deployment-entry' not in json.loads(runner['capabilities']):
                 raise ApiError('此 Runner 尚不支持按配置入口启动，请先升级 Runner', 422)
@@ -717,7 +793,7 @@ def control_runtime(app, runtime_id, expected_revision, enabled):
         if enabled:
             from .process_control import new_start
             new_start(db, assignment['assignmentId'])
-        return next(item for item in runtime_rows(app, db) if item['runtimeId'] == runtime_id)
+        return next(item for item in runtime_rows(app, db, verify=runtime_id) if item['runtimeId'] == runtime_id)
 
 
 def remove_runtime(app, runtime_id, expected_revision):

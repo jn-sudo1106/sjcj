@@ -50,3 +50,18 @@ class GenerationPromptContextTest(unittest.TestCase):
     def test_template_replacement_is_single_pass_and_preserves_unknown_tokens(self):
         self.assertEqual(context.fill('{{ url }} / {{unknown}}',{'url':'https://example.com/{{file_name}}'}),
                          'https://example.com/{{file_name}} / {{unknown}}')
+
+    def test_proxy_variables_encode_authentication_and_clear_disabled_credentials(self):
+        settings = {'useProxy': True, 'proxyDetail': {'ip': 'proxy.example.com', 'port': 31100,
+                    'account': 'user@company', 'password': 'p:a/ss# word'}}
+        values = context.variables(self.body, 'site.py', proxy_settings=settings)
+        self.assertEqual(values['use_proxy'], 'true')
+        self.assertEqual(values['proxy_url'], 'http://user%40company:p%3Aa%2Fss%23%20word@proxy.example.com:31100')
+        self.assertEqual(context.fill('{{proxy_ip}}:{{proxy_port}} {{proxy_account}} {{proxy_password}}', values),
+                         'proxy.example.com:31100 user@company p:a/ss# word')
+        for disabled in (None, {**settings, 'useProxy': False}):
+            values = context.variables(self.body, 'site.py', proxy_settings=disabled)
+            self.assertEqual(values['use_proxy'], 'false')
+            self.assertTrue(all(values[key] == '' for key in ('proxy_ip', 'proxy_port', 'proxy_account', 'proxy_password', 'proxy_url')))
+        values = context.proxy_variables({'useProxy': True, 'proxyDetail': {'ip': '[::1]', 'port': 8080}})
+        self.assertEqual(values['proxy_url'], 'http://[::1]:8080')

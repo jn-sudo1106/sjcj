@@ -1,18 +1,32 @@
 <script setup lang="ts">
 import TaskView from '@/views/FlowCanvas/result/TaskView.vue'
 import CodeGenerationTasks from './CodeGenerationTasks.vue'
-import { useRoute } from 'vue-router'
+import DeploymentTasks from './DeploymentTasks.vue'
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useDynamicTabs } from '@/composables/useDynamicTabs'
-const route = useRoute()
+const route = useRoute(), router = useRouter()
 
 // 任务类型页签由后端菜单下发（sys_menu menu_type=2：collection / code-generation），
 // 本地这份兜底只在菜单接口没下发时生效。
-const { tabs, activeTab, selectTab } = useDynamicTabs({
+const { tabs: configuredTabs, activeTab, selectTab } = useDynamicTabs({
+  componentMap: { collection: TaskView, 'code-generation': CodeGenerationTasks, deployment: DeploymentTasks },
+  autoNormalizeQuery: false,
   fallbackTabs: [
     { key: 'collection', label: '采集任务', order: 1 },
     { key: 'code-generation', label: '智能体任务', order: 2 },
+    { key: 'deployment', label: '部署任务', order: 3 },
   ],
 })
+// 兼容尚未下发新页签的菜单，任务中心统一提供部署任务入口。
+const tabs = computed(() => configuredTabs.value.some(tab => tab.key === 'deployment')
+  ? configuredTabs.value
+  : [...configuredTabs.value, { key: 'deployment', label: '部署任务', order: 3 }])
+const selectedTab = computed(() => route.query.tab === 'deployment' ? 'deployment' : activeTab.value?.key)
+function chooseTab(key: string) {
+  if (key === 'deployment') void router.replace({ path: '/tasks', query: { tab: 'deployment' } })
+  else selectTab(key)
+}
 
 // AppShell 的 KeepAlive 按这个名字缓存任务中心：从任务点进源再返回，不用再等一次十几秒的查询
 defineOptions({ name: 'TaskCenter' })
@@ -26,14 +40,15 @@ defineOptions({ name: 'TaskCenter' })
         v-for="t in tabs"
         :key="t.key"
         class="ra-tab-link"
-        :class="{ active: activeTab?.key === t.key }"
-        @click="selectTab(t.key)"
+        :class="{ active: selectedTab === t.key }"
+        @click="chooseTab(t.key)"
       >
         {{ t.key === 'code-generation' ? '智能体任务' : t.label }}
       </button>
     </nav>
+    <DeploymentTasks v-if="selectedTab === 'deployment'" class="task-content" />
     <CodeGenerationTasks
-      v-if="activeTab?.key === 'code-generation'"
+      v-else-if="selectedTab === 'code-generation'"
       :initial-config-id="typeof route.query.codeConfigId === 'string' ? route.query.codeConfigId : ''"
       :initial-task-id="typeof route.query.codeTaskId === 'string' ? route.query.codeTaskId : ''"
       class="task-content"

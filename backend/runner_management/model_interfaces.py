@@ -354,15 +354,15 @@ def generation_request_details(request):
             'body':json.loads(request.data.decode('utf8')) if request.data else None}
 
 
-def prepare_test(app, body):
+def prepare_test(app, body, *, prompt_limit=12000):
     """Send only explicit test parameters; never mutate the saved interface."""
     from .server import ApiError
     selected = next((dict(row) for row in listing(app)['items'] if row['id'] == body.get('interfaceId')), None)
     if not selected or not selected['enabled']:
         raise ApiError('所选模型接口不存在或已停用')
     prompt = body.get('prompt')
-    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 12000:
-        raise ApiError('请填写 1–12000 字的提示词')
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > prompt_limit:
+        raise ApiError(f'请填写 1–{prompt_limit} 字的提示词')
     prompt = prompt.strip()
     if selected['kind'] == 'site-script':
         service = script_service()
@@ -460,7 +460,7 @@ def _stream_test(handler, app, body, prepared):
         handler.wfile.flush()
 
     try:
-        emit('connecting')
+        emit('connecting', interfaceId=selected['id'], interfaceName=selected['name'])
         try:
             response = urlopen(request, timeout=selected['timeoutSeconds'])
         except HTTPError as error:
@@ -654,7 +654,10 @@ def _generate(app, body, selected):
     task_id = body.get('taskId')
     workspace = agent_directories(selected, task_id) if selected['kind'] in ('agent', 'gemini-agent') else None
     if workspace: task_id = workspace['taskId']
-    values = variables(body, file_name, workspace)
+    from .node_proxy_settings import read as read_proxy
+    config_id = str(body.get('configId') or '')
+    proxy_settings = read_proxy(app, config_id) if re.fullmatch(r'[1-9][0-9]{0,19}', config_id) else None
+    values = variables(body, file_name, workspace, proxy_settings=proxy_settings)
     if selected['kind'] == 'site-script':
         payload.update(systemPrompt=fill(system, values), userPrompt=fill(user, values), prompt=fill(user, values))
         request = Request(selected['endpoint'], data=json.dumps(payload, ensure_ascii=False).encode('utf8'),

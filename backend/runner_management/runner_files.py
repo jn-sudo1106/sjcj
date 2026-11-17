@@ -1,4 +1,4 @@
-"""Read-only instance browsing through the Runner's authenticated polling channel."""
+"""Deployment file management through the Runner's authenticated polling channel."""
 import hashlib
 import json
 import re
@@ -17,7 +17,7 @@ def relative(value, action='list'):
     if value.startswith('/') or ':' in value or any(part in ('.', '..') for part in value.split('/')): raise ValueError('路径必须位于 Runner 实例目录内')
     value = value.rstrip('/')
     if value and (value.split('/')[0].casefold() in INTERNAL or any(part.casefold() in ('.git', '__pycache__') for part in value.split('/'))): raise ValueError('Runner 内部文件不提供浏览，请选择部署目录')
-    if not value and action != 'list': raise ValueError('请选择文件')
+    if not value and action not in ('list', 'upload'): raise ValueError('请选择文件')
     return value
 
 
@@ -65,15 +65,17 @@ def local(root, action, value):
 def create(app, runner_id, body):
     from .server import ApiError, GIT_LOCK
     from .directory_layout import store_layout
-    action = body.get('action')
-    if action not in ('list', 'read'): raise ApiError('仅支持浏览目录和预览文件')
-    try: path = relative(body.get('path', ''), action)
+    from .runner_file_operations import parameters, MUTATIONS
+    try: operation = parameters(body)
     except ValueError as error: raise ApiError(str(error)) from error
+    action = operation['action']
     with GIT_LOCK, app.store.connect() as db:
         runner = db.execute('SELECT status,capabilities FROM runners WHERE runner_id=?', (runner_id,)).fetchone()
         if not runner: raise ApiError('Runner 实例不存在', 404)
         if runner['status'] == 'offline': raise ApiError('Runner 离线，暂时无法浏览目录', 409)
         if 'file-browser' not in json.loads(runner['capabilities']): raise ApiError('此 Runner 尚不支持目录浏览，请先升级 Runner', 409)
+        if action in MUTATIONS and 'file-management' not in json.loads(runner['capabilities']):
+            raise ApiError('此 Runner 尚不支持部署空间文件管理，请先升级 Runner', 409)
         records = db.execute('SELECT setting_key,setting_value FROM settings WHERE setting_key LIKE ?', (PREFIX + '%',)).fetchall()
         count = 0
         for raw in records:
@@ -81,7 +83,7 @@ def create(app, runner_id, body):
             if row['expiresAt'] < time.time(): db.execute('DELETE FROM settings WHERE setting_key=?', (raw['setting_key'],))
             elif row['runnerId'] == runner_id and row['status'] == 'pending': count += 1
         if count >= 10: raise ApiError('目录请求较多，请稍后重试', 429)
-        request = {'requestId': uuid.uuid4().hex, 'runnerId': runner_id, 'action': action, 'path': path, 'status': 'pending', 'expiresAt': time.time() + 60}
+        request = {'requestId': uuid.uuid4().hex, 'runnerId': runner_id, **operation, 'status': 'pending', 'expiresAt': time.time() + 60}
         store_layout(db, PREFIX + request['requestId'], request)
         return {'requestId': request['requestId']}
 
@@ -112,12 +114,20 @@ def complete(app, runner_id, identifier, body):
         if row['status'] != 'pending': return {'ok': True}
         if not isinstance(body.get('result'), dict) or len(json.dumps(body).encode()) > 220000: raise ApiError('文件响应格式无效或过大')
         row.update(status='failed' if body.get('error') else 'success', result=body['result'], error=str(body.get('error') or '')[:500])
+        row.pop('files', None)
         with app.store.connect() as db: store_layout(db, PREFIX + identifier, row)
     return {'ok': True}
 
 
 def poll(runner):
     for request in runner.get('/api/runners/me/file-requests'):
-        try: response = {'result': local(runner.directory, request['action'], request['path'])}
+        try:
+            from .runner_file_operations import mutate, MUTATIONS
+            if request['action'] in MUTATIONS:
+                from contextlib import nullcontext
+                with getattr(runner, 'program_lock', nullcontext()):
+                    response = {'result': mutate(runner.directory, request)}
+            else:
+                response = {'result': local(runner.directory, request['action'], request['path'])}
         except (ValueError, OSError) as error: response = {'result': {}, 'error': str(error)}
         runner.post('/api/runners/me/file-requests/' + request['requestId'] + '/result', response)

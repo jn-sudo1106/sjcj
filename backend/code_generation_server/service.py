@@ -35,7 +35,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
-VERSION = '2026.10.31.1'
+VERSION = '2026.11.14.3'
 MAX_FILE = 5 * 1024 * 1024
 MAX_TOTAL = 10 * 1024 * 1024
 MAX_JSON = 15 * 1024 * 1024
@@ -325,7 +325,10 @@ class Service:
                 'osType': platform.system(), 'osVersion': platform.platform(), 'version': VERSION, 'pid': os.getpid(),
                 'upgradeSchema': 1 if os.getenv('CODESERVER_SUPERVISED') == '1' else 0, 'mqWorkerSchema': 1,
                 'actualDigest': os.getenv('CODESERVER_RELEASE_DIGEST', 'source-local'),
-                'launcherVersion': os.getenv('PROGRAM_LAUNCHER_VERSION', '')}
+                'launcherVersion': os.getenv('PROGRAM_LAUNCHER_VERSION', ''),
+                'launcherDigest': os.getenv('CODESERVER_LAUNCHER_DIGEST', 'source-local'),
+                'launcherBootId': os.getenv('CODESERVER_LAUNCHER_BOOT_ID', ''),
+                'launcherSchema': 1 if os.getenv('CODESERVER_LAUNCHER_BOOT_ID') else 0}
 
     def control(self, action):
         with self.request_lock:
@@ -338,7 +341,8 @@ class Service:
             return {'activeRequests': self.active_requests, 'draining': self.draining,
                     'runUser': self.run_user,
                     'idleSeconds': time.monotonic() - self.last_activity,
-                    'actualDigest': os.getenv('CODESERVER_RELEASE_DIGEST', 'source-local'), 'pid': os.getpid()}
+                    'actualDigest': os.getenv('CODESERVER_RELEASE_DIGEST', 'source-local'), 'pid': os.getpid(),
+                    'launcherBootId': os.getenv('CODESERVER_LAUNCHER_BOOT_ID', '')}
 
     def platform_request(self, path, body, token=''):
         request = Request(self.config['platform'].rstrip('/') + path, data=json.dumps(body).encode('utf8'),
@@ -364,6 +368,9 @@ class Service:
                     self.logger.info('已登记代码生成服务器：%s · 版本：%s', self.identity['serverId'], VERSION)
                     self.console_title()
                 self.platform_request('/api/code-servers/me/heartbeat', {**payload, 'serverId': self.identity['serverId']}, self.identity['token'])
+                if os.getenv('CODESERVER_SUPERVISED') == '1' and not os.getenv('CODESERVER_LAUNCHER_BOOT_ID'):
+                    from .launcher_bridge import check_legacy
+                    check_legacy(self)
             except Exception as error:
                 # Never log credentials, prompt bodies or URL query parameters.
                 self.logger.error('登记/心跳失败：%s%s', type(error).__name__, f' HTTP {error.code}' if isinstance(error, HTTPError) else '')
@@ -461,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/files':
                 if body.get('action') == 'logs':
                     kind=body.get('kind','service')
-                    if kind not in ('service','launcher','worker'):
+                    if kind not in ('service','launcher','worker','launcher-migration','launcher-host','launcher-worker','launcher-restart'):
                         raise ServiceError('日志类型无效')
                     file=service.directory/'logs'/(kind+'.log')
                     data = file.read_bytes()[-65536:].decode('utf8', errors='replace') if file.exists() else ''

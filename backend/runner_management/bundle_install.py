@@ -144,23 +144,24 @@ def live_journal(target, cache):
 
 def recover_live_update(target, cache):
     from .live_deployment import site_script_path
+    from .package_limits import MAX_SNAPSHOT_BYTES
 
     journal = live_journal(target, cache)
     if not journal.exists(): return
-    if linked(journal) or journal.stat().st_size > 30 * 1024 * 1024: raise ValueError('在线更新恢复记录无效')
+    if linked(journal) or journal.stat().st_size > max(30 * 1024 * 1024, MAX_SNAPSHOT_BYTES * 4 // 3 + 24 * 1024 * 1024): raise ValueError('在线更新恢复记录无效')
     record = json.loads(journal.read_text(encoding='utf8'))
     if record.get('target') != str(target.resolve()): raise ValueError('在线更新恢复目录不匹配')
     entries = record.get('files')
-    if not isinstance(entries, dict) or any(not safe_relative(name) or ('/' in name and not site_script_path(name)) for name in entries): raise ValueError('在线更新恢复路径无效')
+    if not isinstance(entries, dict) or any(not safe_relative(name) or ('/' in name and not site_script_path(name) and record.get('fileSchema') != 2) for name in entries): raise ValueError('在线更新恢复路径无效')
     committed = read_registry(target)['current'].get(record['key']) == record['digest']
     for name, item in entries.items():
         path = target / name
-        if linked(path.parent) or not path.resolve().is_relative_to(target.resolve()):
+        if any(linked(parent) for parent in path.parents if parent != target and parent.is_relative_to(target)) or not path.resolve().is_relative_to(target.resolve()):
             raise ValueError('在线更新恢复路径无效')
         if linked(path) or path.exists() and not path.is_file(): raise ValueError('在线更新恢复文件无效')
         current = path.read_bytes() if path.exists() else None
         previous = base64.b64decode(item['before'], validate=True) if item['before'] is not None else None
-        matches_new = current is not None and hashlib.sha256(current).hexdigest() == item['after']
+        matches_new = current is None if item['after'] is None else current is not None and hashlib.sha256(current).hexdigest() == item['after']
         if committed:
             if not matches_new: raise ValueError('在线更新提交后的文件已被修改：' + name)
         elif not matches_new and current != previous:
@@ -169,30 +170,44 @@ def recover_live_update(target, cache):
         for name, item in entries.items():
             path = target / name
             if item['before'] is None: path.unlink(missing_ok=True)
-            else: atomic_write(path, base64.b64decode(item['before'], validate=True))
+            else:
+                previous = base64.b64decode(item['before'], validate=True)
+                if not path.exists() or path.read_bytes() != previous: atomic_write(path, previous)
         old = record.get('registry')
         if old is None: (target / 'version.json').unlink(missing_ok=True)
-        else: atomic_write(target / 'version.json', base64.b64decode(old, validate=True))
+        else:
+            previous = base64.b64decode(old, validate=True)
+            path = target / 'version.json'
+            if not path.exists() or path.read_bytes() != previous: atomic_write(path, previous)
     journal.unlink()
 
 
-def install_live(target, mapped, registry, key, digest, cache):
+def install_live(target, mapped, registry, key, digest, cache, *, allow_nested=False, remove_files=(), obsolete_directories=()):
     updates = {name: data for name, data in mapped.items() if not (target / name).is_file() or (target / name).read_bytes() != data}
+    updates.update({name: None for name in remove_files})
     registry_path = target / 'version.json'
     record = {'target': str(target.resolve()), 'key': key, 'digest': digest,
+              'fileSchema': 2 if allow_nested else 1,
               'registry': base64.b64encode(registry_path.read_bytes()).decode() if registry_path.exists() else None,
               'files': {name: {'before': base64.b64encode((target / name).read_bytes()).decode() if (target / name).exists() else None,
-                               'after': hashlib.sha256(data).hexdigest()} for name, data in updates.items()}}
+                               'after': hashlib.sha256(data).hexdigest() if data is not None else None} for name, data in updates.items()}}
     journal = live_journal(target, cache)
     atomic_write(journal, json.dumps(record).encode())
     try:
-        for name, data in updates.items(): atomic_write(target / name, data)
+        for name, data in updates.items():
+            if data is None: (target / name).unlink(missing_ok=True)
+            else: atomic_write(target / name, data)
         registry['current'][key] = digest
         atomic_write(registry_path, registry_bytes(registry))
     except Exception:
         recover_live_update(target, cache)
         raise
     journal.unlink()
+    # Only prune emptied folders formerly owned by this configuration. Keep
+    # runtime files, other owners and directory handles outside this update.
+    for name in sorted(obsolete_directories, key=lambda value: len(value.split('/')), reverse=True):
+        try: (target / name).rmdir()
+        except OSError: pass
     return registry
 
 
@@ -293,6 +308,15 @@ def install_bundle(target, files, manifest, digest, cache, public_key, make_curr
                     or any(not (target / name).parent.is_dir() for name in mapped)):
                 raise ValueError('公共目录结构发生变化，请先停止处理程序')
             return install_live(target, mapped, registry, key, digest, cache)
+        if (protected_programs is not None and own_files and not missing_directories
+                and all(not (target / name).exists() or (target / name).is_file() for name in mapped)
+                and all((target / name).parent.is_dir() for name in mapped)
+                and all((target / directory).is_dir() for directory in directories)):
+            # Stopped programs may leave browser/file handles on Windows. A
+            # signed file-only update needs no rename of the deployment root.
+            return install_live(target, mapped, registry, key, digest, cache, allow_nested=True,
+                                remove_files={name for name in own_files - mapped.keys() if name.casefold() not in owned},
+                                obsolete_directories={name for name in own_directories - set(directories) if name.casefold() not in other_directories})
         temporary = Path(tempfile.mkdtemp(prefix='.' + target.name + '.incoming-', dir=target.parent))
         try:
             if target.exists():

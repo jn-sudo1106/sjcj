@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Folder, List } from '@element-plus/icons-vue'
+import { RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useDictStore } from '@/stores/dict'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type CodeRepositoryInput, type CodeRepositoryVerification } from '@/api/runnerManagement'
@@ -9,7 +10,15 @@ import RepositoryDirectoriesPanel from './RepositoryDirectoriesPanel.vue'
 import RepositoryFileReferencesDrawer from './RepositoryFileReferencesDrawer.vue'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
 
-const props = defineProps<{ repositoryId?: string; repositoryFilePath?: string; repositoryFolderPath?: string; repositoryDirectoryId?: string }>()
+const props = defineProps<{ repositoryId?: string; repositoryFilePath?: string; repositoryFolderPath?: string; repositoryDirectoryId?: string; repositoryReturnTo?: string }>()
+const deploymentReturnTarget = computed(() => {
+  if (!props.repositoryReturnTo) return null
+  try {
+    const url = new URL(props.repositoryReturnTo, 'http://internal.invalid')
+    if (url.origin !== 'http://internal.invalid' || url.pathname !== '/settings' || !['runners', 'assignments', 'site-code'].includes(url.searchParams.get('tab') || '')) return null
+    return { path: '/settings', query: Object.fromEntries(url.searchParams) }
+  } catch { return null }
+})
 
 const canWrite = computed(() => useAuthStore().role === 'admin')
 const dict = useDictStore()
@@ -405,6 +414,7 @@ onMounted(() => { void load() })
 <template>
   <div class="rc-card crp-main" data-testid="settings-code-repos">
     <div class="crp-head">
+      <RouterLink v-if="deploymentReturnTarget" :to="deploymentReturnTarget" class="crp-return-deployment" data-testid="return-deployment-config">← 返回部署配置</RouterLink>
       <b>仓库配置</b>
       <el-input v-model="filter" clearable placeholder="搜索名称、配置类型、路径、Git 地址、分支或状态" class="crp-filter" data-testid="code-repo-query" />
       <span class="crp-count">共 {{ visible.length }} 个仓库</span>
@@ -547,6 +557,7 @@ onMounted(() => { void load() })
 .crp-main { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 10px; padding: 14px 16px; }
 .crp-head { display: flex; align-items: center; gap: 8px; }
 .crp-head b { font-size: 13px; white-space: nowrap; }
+.crp-return-deployment{color:var(--el-color-primary);font-size:12px;text-decoration:none;white-space:nowrap}
 .crp-filter { width: min(390px, 44vw); }.crp-count { color: var(--rc-muted); font-size: 12px; white-space: nowrap; }.crp-head-spacer { flex: 1; }
 .crp-code-head { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; min-width: 0; padding: 7px 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-card); font-size: 12px; }
 .crp-code-head > b { flex-shrink: 0; font-size: 13px; white-space: nowrap; }

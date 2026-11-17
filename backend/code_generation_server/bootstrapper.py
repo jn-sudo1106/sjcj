@@ -18,12 +18,12 @@ from .service import Service
 
 
 class LauncherLogs:
-    def __init__(self, root):
-        self.logger = logging.getLogger('code-server-launcher.' + str(root))
+    def __init__(self, root, filename='launcher.log'):
+        self.logger = logging.getLogger('code-server-launcher.' + str(root) + '.' + filename)
         self.logger.setLevel(logging.INFO)
         (root / 'logs').mkdir(exist_ok=True)
         if not self.logger.handlers:
-            handler = RotatingFileHandler(root / 'logs/launcher.log', maxBytes=2*1024*1024, backupCount=3, encoding='utf8')
+            handler = RotatingFileHandler(root / 'logs' / filename, maxBytes=2*1024*1024, backupCount=3, encoding='utf8')
             handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
             self.logger.addHandler(handler)
 
@@ -37,8 +37,8 @@ class LauncherLogs:
 
 class WorkerOutput:
     """Bounded process output, closed after the supervised child exits."""
-    def __init__(self, root):
-        self.handler = RotatingFileHandler(root / 'logs/worker.log', maxBytes=2*1024*1024, backupCount=3, encoding='utf8')
+    def __init__(self, root, filename='worker.log'):
+        self.handler = RotatingFileHandler(root / 'logs' / filename, maxBytes=2*1024*1024, backupCount=3, encoding='utf8')
         self.handler.setFormatter(logging.Formatter('%(message)s'))
         self.thread = None
 
@@ -70,6 +70,8 @@ class CodeServerClient:
         self.request_id = None
         self.waiting_request = None
         self.on_request = lambda: None
+        self.on_stop = lambda: None
+        self.ready = lambda: True
         if not self.service.identity:
             registered = self.service.platform_request('/api/code-servers/enroll', {
                 **self.service.report(), 'code': config.get('enrollCode', '')})
@@ -100,7 +102,15 @@ class CodeServerClient:
 
     def get(self, path):
         if path.endswith('/desired-runner'):
+            stop_file = self.directory / '.launcher-child-stop.json'
+            if os.getenv('CODESERVER_LAUNCHER_BOOT_ID') and stop_file.is_file():
+                requested = json.loads(stop_file.read_text('utf8'))
+                if requested.get('bootId') == os.getenv('CODESERVER_LAUNCHER_BOOT_ID'):
+                    self.on_stop()
+                    return {'digest': None}
             result = self.call('/api/code-servers/me/desired')
+            if result.get('digest') and not self.ready():
+                return {**result, 'digest': None, 'waiting': True}
             if result.get('requestId') and result['requestId'] != self.request_id:
                 self.request_id = result['requestId']
                 self.on_request()
@@ -141,6 +151,16 @@ class CodeServerBootstrapper(ProgramLauncher):
         client = CodeServerClient(directory.resolve(), config)
         super().__init__(directory, client.server, client=client)
         client.on_request = lambda: setattr(self, 'failed_digest', None)
+        client.on_stop = lambda: setattr(self, 'running', False)
+        client.ready = self.ready_for_upgrade
+
+    def ready_for_upgrade(self):
+        if not self.current_digest or not self.process:
+            return True
+        try:
+            return self.client.control('status').get('actualDigest') == self.current_digest
+        except Exception:
+            return False
 
     def artifact_url(self, digest):
         return self.client.server + '/api/code-servers/me/artifacts/' + digest
@@ -151,7 +171,7 @@ class CodeServerBootstrapper(ProgramLauncher):
                    PYTHONIOENCODING='utf-8', PYTHONUNBUFFERED='1')
         worker_python = self.python_executable(stdlib_only=True)
         if digest == 'source-local':
-            command = [worker_python, str(Path(__file__).with_name('service.py'))]
+            command = [worker_python, '-B', str(Path(__file__).with_name('service.py'))]
         else:
             target, _manifest = self.download(digest)
             env['PYTHONPATH'] = str(target)

@@ -61,11 +61,15 @@ def runtime_slots(db, rows):
 
 def listing(app):
     from .server import as_runner, as_assignment, ASSIGNMENT_SELECT
-    from .runtime_history import assignment_contexts
+    from .deployment_configuration import runtime_rows
     app.expire_stale_runners()
     with app.store.connect() as db:
         runners = [as_runner(row) for row in db.execute('SELECT * FROM runners ORDER BY ip_address,install_directory')]
-        contexts = assignment_contexts(app, db, [as_assignment(row) for row in db.execute(ASSIGNMENT_SELECT)])
+        # Process browsing uses heartbeat receipts, not executable validation or
+        # log snapshot packages. Keep the control/start boundaries separate.
+        runtimes = {row.get('assignmentId'): row['runtimeId'] for row in runtime_rows(app, db, verify=False) if row.get('assignmentId')}
+        contexts = attach(db, [{**as_assignment(row), 'runtimeId': runtimes.get(row['assignment_id'], '')}
+                               for row in db.execute(ASSIGNMENT_SELECT)])
         by_assignment = {row['assignmentId']: row for row in contexts}
         stops = commands(db)
         items = []

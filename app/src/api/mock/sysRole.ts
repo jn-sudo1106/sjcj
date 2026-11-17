@@ -245,6 +245,7 @@ export function mockUserNav(): UserNavData {
             tabs: [
               { id: 5101, key: 'collection', label: '采集任务', permission: 'tasks', order: 1, componentPath: 'views/FlowCanvas/result/TaskView.vue' },
               { id: 5102, key: 'code-generation', label: '智能体任务', permission: 'tasks', order: 2, componentPath: 'views/RunRecords/CodeGenerationTasks.vue' },
+              { id: 5103, key: 'deployment', label: '部署任务', permission: 'tasks', order: 3, componentPath: 'views/RunRecords/DeploymentTasks.vue' },
             ],
           },
           {

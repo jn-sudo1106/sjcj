@@ -143,7 +143,7 @@ class Runner:
             "code": code, "installDirectory": str(self.directory),
             "hostName": socket.gethostname(),
             "ipAddress": ip or self.ip_address,
-            "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy", "file-browser", "large-bundles"],
+            "platform": sys.platform, "capabilities": ["python", "deployment-entry", "retry-policy", "file-browser", "large-bundles", *(['executable-entry'] if os.name == 'nt' else [])],
             **self.os_info,
         }
         result = json_request(self.server, "/api/runners/enroll", payload=payload)
@@ -254,9 +254,16 @@ class Runner:
         if manifest.get("processorType") != assignment["processorType"]:
             raise ValueError("队列分配与处理程序类型不匹配")
         direct_entry = manifest.get('executionSchema') == 2
+        from .entry_types import entry_kind, executable_image
+        executable = direct_entry and entry_kind(manifest['entry']) == 'executable'
+        if executable and os.name != 'nt':
+            raise ValueError('EXE 入口仅支持 Windows Runner')
         working_dir = self.program_directory(release_dir, manifest) if direct_entry else release_dir
         info = self.run_info[assignment_id]
-        if direct_entry:
+        python = None
+        if executable:
+            executable_image((release_dir / manifest['entry']).read_bytes())
+        elif direct_entry:
             from .program_dependencies import dependency_python
             python = dependency_python(self, release_dir, working_dir, manifest, info)
             working_dir = self.program_directory(release_dir, manifest)
@@ -275,8 +282,9 @@ class Runner:
             # Do not read potentially stale bytecode shipped in old deployments.
             # A unique, unwritten cache prefix makes imports compile verified
             # sources in memory, without racing other concurrent workers.
-            env['PYTHONDONTWRITEBYTECODE'] = '1'
-            env['PYTHONPYCACHEPREFIX'] = str(self.directory / '.runtime' / 'python-cache' / info['runId'])
+            if not executable:
+                env['PYTHONDONTWRITEBYTECODE'] = '1'
+                env['PYTHONPYCACHEPREFIX'] = str(self.directory / '.runtime' / 'python-cache' / info['runId'])
         env["RUNNER_ENVIRONMENT"] = "prd" if assignment["environment"] == "production" else "test"
         if manifest.get('executionSchema') != 2:
             env["NEWS_NOURL_QUEUE"] = assignment["queue"]
@@ -287,11 +295,12 @@ class Runner:
         env["RUNNER_INSTANCE_DIR"] = str(self.directory)
         env["PYTHONUNBUFFERED"] = "1"
         env['PYTHONIOENCODING'] = 'utf-8'
-        if python != Path(sys.executable):
+        if executable or python != Path(sys.executable):
             env.pop('PYTHONHOME', None)
             env.pop('PYTHONPATH', None)
         try:
-            child = subprocess.Popen([str(python), str(working_dir / manifest["entry"])], cwd=working_dir, env=env,
+            command = [str(working_dir / manifest['entry'])] if executable else [str(python), str(working_dir / manifest['entry'])]
+            child = subprocess.Popen(command, cwd=working_dir, env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                      creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
         except Exception:
@@ -313,7 +322,7 @@ class Runner:
             'entry': str(working_dir / manifest['entry']), 'workingDirectory': str(working_dir),
         }
         self.logs.event(info['runId'], 'started', '程序已启动；进程存活不代表任务处理成功', pid=child.pid,
-                        entry=str(working_dir / manifest['entry']), workingDirectory=str(working_dir), interpreter=str(python))
+                        entry=str(working_dir / manifest['entry']), workingDirectory=str(working_dir), interpreter='Windows executable' if executable else str(python))
         self.logs.pump()
 
     def program_directory(self, release_dir: Path, manifest: dict) -> Path:
@@ -399,6 +408,8 @@ class Runner:
         return {
             'ipAddress': self.ip_address,
             'fileBrowserSchema': 1,
+            'fileManagementSchema': 1,
+            'executableEntrySchema': 1 if os.name == 'nt' else 0,
             'largeBundleSchema': 1,
             'liveFileDeploymentSchema': 2,
             'hostName': socket.gethostname(),

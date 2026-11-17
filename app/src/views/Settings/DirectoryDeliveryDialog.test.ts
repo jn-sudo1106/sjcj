@@ -5,7 +5,7 @@ import ElementPlus, { ElMessage } from 'element-plus'
 import { runnerManagementApi, type DirectoryDelivery, type DirectoryDeliveryPreview } from '@/api/runnerManagement'
 import DirectoryDeliveryDialog from './DirectoryDeliveryDialog.vue'
 
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn(), instances: vi.fn() } }))
 vi.mock('element-plus', async (importOriginal) => ({ ...await importOriginal<typeof import('element-plus')>(), ElMessage: { success: vi.fn(), info: vi.fn() } }))
 const binding = { bindingType: 'custom' as const, ownerId: 'shared', runnerId: 'r1', directoryTemplate: 'shared', entryPoint: '', createdAt: '' }
 const preview: DirectoryDeliveryPreview = { revision: 'layout1', baselineDigest: 'sha256:base', targetPath: 'shared', items: [
@@ -15,6 +15,7 @@ const preview: DirectoryDeliveryPreview = { revision: 'layout1', baselineDigest:
 const delivery: DirectoryDelivery = { deliveryId: 'd1', bindingType: 'custom', ownerId: 'shared', runnerId: 'r1', status: 'pending',
   layoutRevision: 'layout1', artifactDigest: 'sha256:delta', targetPath: 'shared', installedPath: '', requestedAt: '', startedAt: null, finishedAt: null, error: '', transferredFileCount: 1, unchangedFileCount: 1 }
 beforeEach(() => {
+  vi.mocked(runnerManagementApi.instances).mockResolvedValue([])
   vi.mocked(runnerManagementApi.directoryDeliveryPreview).mockResolvedValue(structuredClone(preview))
   vi.mocked(runnerManagementApi.deliverDirectoryBinding).mockResolvedValue(structuredClone(delivery))
 })
@@ -52,6 +53,17 @@ it('未变文件不默认勾选，整个目录返回未变化时显示无需下�
   expect(ElMessage.info).toHaveBeenCalledWith('文件 hash 未变化，无需下发')
   expect(ElMessage.success).not.toHaveBeenCalled()
   expect(wrapper.emitted('delivered')?.[0]?.[0]).toMatchObject({ unchanged: true })
+  wrapper.unmount()
+})
+it('展示关联 Git 目录并将预览来源版本带入下发，防止提交不同版本', async () => {
+  vi.mocked(runnerManagementApi.directoryDeliveryPreview).mockResolvedValue({ ...preview, sourceMode: 'current-git', sourceRevision: 'current-source',
+    gitSources: [{ repoId: 'repo', path: 'links/1401218', gitCommit: 'new-commit' }] })
+  const wrapper = await setup()
+  expect(wrapper.text()).toContain('Git 目录')
+  expect(wrapper.text()).toContain('links/1401218')
+  expect(wrapper.text()).toContain('当前版本与此实例上次成功下发的内容')
+  await wrapper.get('[data-testid="delivery-submit"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.deliverDirectoryBinding).toHaveBeenCalledWith(expect.objectContaining({ sourceMode: 'current-git', sourceRevision: 'current-source' }))
   wrapper.unmount()
 })
 it('变更视图仅保留变化文件及祖先目录，勾选文件夹不会选中隐藏的未变文件', async () => {

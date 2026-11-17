@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Folder, Document, Plus, Refresh, ArrowLeft, Link, Delete } from '@element-plus/icons-vue'
+import { Folder, Document, Plus, Refresh, ArrowLeft, Link, Delete, Search } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { configApi } from '@/api'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryFileMetadata, type DirectoryBindingType, type DeploymentConfiguration, type DeploymentSourceNode, type DirectoryMappingNode, type RepositoryTree, type RuntimeConfiguration, type SiteCodeVersion } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryFileMetadata, type DirectoryBindingType, type DeploymentConfiguration, type DeploymentSourceNode, type DirectoryMappingNode, type RepositoryTree, type RuntimeConfiguration, type RunnerInstance, type SiteCodeVersion } from '@/api/runnerManagement'
 import DeploymentNodePicker from './DeploymentNodePicker.vue'
-import DeploymentConfigurationList from './DeploymentConfigurationList.vue'
+import { isProgramEntry } from '@/utils/programEntry'
 import DeploymentConfigDrawer from './DeploymentConfigDrawer.vue'
-import { descendants, directoryBindingOptions, directoryTemplatePresets, queueDirectoryTemplatePresets, websiteDirectoryTemplatePresets, directoryTypeOf, moveTarget, sourceTree, targetPath, targetTree, withDirectoryType, type DirectoryType, type SourceTreeNode } from './directoryLayout'
+import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
+import { descendants, deploymentSourceHome, directoryBindingOptions, directoryTemplatePresets, queueDirectoryTemplatePresets, websiteDirectoryTemplatePresets, directoryTypeOf, moveTarget, sourceTree, targetPath, targetTree, withDirectoryType, type DirectoryType, type SourceTreeNode } from './directoryLayout'
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
 const configDetails = ref<InstanceType<typeof DeploymentConfigDrawer>>()
@@ -18,12 +19,66 @@ const catalog = ref<SiteCodeVersion[]>([]), repositories = ref<CodeRepository[]>
 const repoId = ref(''), layout = ref<DeploymentConfiguration | null>(null)
 const saved = ref(''), selectedId = ref(''), source = ref<SourceTreeNode | null>(null), repository = ref<RepositoryTree | null>(null)
 const keyword = ref(''), loading = ref(false), treeLoading = ref(false), busy = ref(false), error = ref(''), treeError = ref('')
+const targetKeyword = ref('')
+const targetQuery = computed(() => targetKeyword.value.trim().replaceAll('\\', '/').toLowerCase())
 const fileMetadata = ref<CodeRepositoryFileMetadata | null>(null), fileMetadataLoading = ref(false), fileMetadataError = ref('')
-const targetTreeRef = ref<{ $el: HTMLElement; setCurrentKey: (key: string | null) => void }>()
+const targetTreeRef = ref<{ $el: HTMLElement; setCurrentKey: (key: string | null) => void; filter: (value: string) => void }>()
+const sourceTreeRef = ref<{ $el: HTMLElement; setCurrentKey: (key: string | null) => void }>()
+const sourceFolder = ref('')
+const sourceExpandedKeys = computed(() => sourceFolder.value.split('/').filter(Boolean).map((_, index, parts) => parts.slice(0, index + 1).join('/')))
 const environment = ref<'test' | 'prd'>('test'), preview = ref(false)
 const nodePickerOpen = ref(false), nodePickerError = ref('')
-const runtimes = ref<RuntimeConfiguration[] | null>(null), bindingError = ref(''), listFailed = ref(false)
-const deletingId = ref('')
+const runtimes = ref<RuntimeConfiguration[] | null>(null), bindingError = ref('')
+const contextRunnerId = computed(() => route.query.returnTab === 'runners' && typeof route.query.runnerId === 'string' ? route.query.runnerId : '')
+const machineView = ref(false), machines = ref<RunnerInstance[]>([]), machineLoading = ref(false), machineError = ref(''), machineRuntimeId = ref('')
+const machineRuntimes = computed(() => (runtimes.value || []).filter(item => item.deploymentId === layout.value?.deploymentId
+  && (!contextRunnerId.value || item.runnerId === contextRunnerId.value)))
+const machineRuntime = computed(() => machineRuntimes.value.find(item => item.runtimeId === machineRuntimeId.value) || machineRuntimes.value[0])
+const machine = computed(() => machines.value.find(item => item.runnerId === machineRuntime.value?.runnerId))
+const machineDirectory = computed(() => {
+  const runtime = machineRuntime.value, instance = machine.value
+  if (!runtime || !instance) return ''
+  const delivered = runtime.binding?.delivery
+  if (delivered?.installedPath) return delivered.installedPath
+  const template = delivered?.targetPath || runtime.directoryTemplate
+  const directory = template.replaceAll('{configId}', layout.value?.configId || '').replaceAll('{queue}', layout.value?.queueName || '')
+    .replaceAll('{website}', layout.value?.siteHost || '').replaceAll('{environment}', runtime.assignment?.environment === 'production' ? 'prod' : 'test')
+  if (!directory || /[{}]/.test(directory)) return ''
+  const separator = instance.installDirectory.includes('\\') ? '\\' : '/'
+  return instance.installDirectory.replace(/[\\/]+$/, '') + separator + directory.replace(/[\\/]/g, separator)
+})
+let machineSequence = 0, contentSequence = 0
+const filePreview = ref<{ path: string; content: string; error: string; loading: boolean } | null>(null)
+async function showMachineDirectory() {
+  machineView.value = true; machineLoading.value = true; machineError.value = ''
+  const requestId = ++machineSequence
+  try {
+    const result = await runnerManagementApi.instances()
+    if (requestId !== machineSequence) return
+    machines.value = result
+    if (!machineRuntimes.value.some(item => item.runtimeId === machineRuntimeId.value)) {
+      machineRuntimeId.value = machineRuntimes.value.find(item => item.runtimeId === route.query.runtimeId)?.runtimeId || machineRuntimes.value[0]?.runtimeId || ''
+    }
+  } catch (e) { if (requestId === machineSequence) machineError.value = problem(e) }
+  finally { if (requestId === machineSequence) machineLoading.value = false }
+}
+function closeFilePreview() { ++contentSequence; filePreview.value = null }
+async function previewGitFile(id: string, path: string, commit: string) {
+  const requestId = ++contentSequence
+  filePreview.value = { path, content: '', error: '', loading: true }
+  try {
+    const result = await runnerManagementApi.browseCodeRepository(id, commit, path, 'read')
+    if (requestId !== contentSequence || !filePreview.value) return
+    if (result.path !== path || result.gitCommit !== commit || typeof result.content !== 'string') throw new Error('Git 文件响应不完整，请刷新后重试')
+    filePreview.value.content = result.content
+  } catch (e) { if (requestId === contentSequence && filePreview.value) filePreview.value.error = problem(e) }
+  finally { if (requestId === contentSequence && filePreview.value) filePreview.value.loading = false }
+}
+watch(() => layout.value?.deploymentId, () => {
+  ++machineSequence; machineView.value = false; machineLoading.value = false; machineError.value = ''; machineRuntimeId.value = ''; targetKeyword.value = ''; closeFilePreview()
+})
+const needsMachineBinding = computed(() => !!contextRunnerId.value && !!layout.value?.deploymentId && runtimes.value !== null
+  && !runtimes.value.some(item => item.runnerId === contextRunnerId.value && item.deploymentId === layout.value?.deploymentId))
 let loadId = 0, treeId = 0, fileMetadataId = 0, initialized = false
 const codes = computed(() => [...new Map(catalog.value.map(row => [row.codeId, row])).values()])
 const configs = computed(() => [...new Set(codes.value.map(row => row.configId))])
@@ -44,6 +99,13 @@ const destinationPath = computed(() => {
   return id ? targetPath(layout.value.nodes, id) : ''
 })
 const mappingCount = computed(() => layout.value?.nodes.filter(node => node.repoId).length || 0)
+const sourceEntryTargets = computed(() => {
+  const file = source.value, current = layout.value
+  if (!file || file.kind !== 'file' || !isProgramEntry(file.name) || !current) return []
+  return [...new Set(current.nodes.filter(node => node.repoId === repoId.value && node.sourcePath
+    && (node.sourceType === 'directory' ? file.path.startsWith(node.sourcePath + '/') : file.path === node.sourcePath))
+    .map(node => targetPath(current.nodes, node.id) + (node.sourceType === 'directory' ? file.path.slice(node.sourcePath!.length) : '')))]
+})
 const directoryType = computed<DirectoryType>({ get: () => directoryTypeOf(layout.value?.directoryTemplate || '', environment.value), set: type => {
   if (!layout.value) return
   layout.value.directoryTemplate = withDirectoryType(layout.value.directoryTemplate, type, bindingType.value, layout.value.directoryTemplate || 'default')
@@ -54,6 +116,24 @@ const suggestTemplates = (_query: string, callback: (items: { value: string }[])
   custom: ['default', 'shared/python', 'shared/python/prod', 'shared/python/test'],
 }[bindingType.value]).map(value => ({ value })))
 const renderedRoot = computed(() => layout.value?.directoryTemplate.replaceAll('{configId}', layout.value.configId).replaceAll('{queue}', layout.value.queueName).replaceAll('{website}', layout.value.siteHost).replaceAll('{environment}', environment.value) || '')
+const targetSearchPaths = computed(() => {
+  const paths = new Map<string, string>()
+  function visit(nodes: ReturnType<typeof targetTree>, parent: string) {
+    for (const node of nodes) {
+      const path = parent ? `${parent}/${node.name}` : node.name
+      paths.set(node.id, path.replaceAll('\\', '/').toLowerCase())
+      visit(node.children, path)
+    }
+  }
+  visit(targetNodes.value, renderedRoot.value)
+  return paths
+})
+const filterTargetNode = (query: string, node: DirectoryMappingNode) => !query || !!targetSearchPaths.value.get(node.id)?.includes(query)
+const showVersionFile = computed(() => !targetQuery.value || `${renderedRoot.value}/version.json`.replaceAll('\\', '/').toLowerCase().includes(targetQuery.value))
+watch([targetQuery, targetSearchPaths, machineView], async () => {
+  await nextTick()
+  targetTreeRef.value?.filter(targetQuery.value)
+}, { flush: 'post' })
 const repoName = (id?: string) => repositories.value.find(repo => repo.repoId === id)?.name || id || ''
 const problem = (e: unknown) => e instanceof Error ? e.message : String(e)
 const fileTime = (value?: string) => {
@@ -73,7 +153,8 @@ async function loadFileMetadata() {
   finally { if (requestId === fileMetadataId) fileMetadataLoading.value = false }
 }
 watch([() => source.value?.path, () => source.value?.kind, repoId, () => repository.value?.gitCommit, () => !!layout.value], () => { void loadFileMetadata() })
-onBeforeUnmount(() => { ++fileMetadataId })
+onBeforeUnmount(() => { ++fileMetadataId; ++machineSequence; ++contentSequence })
+onDeactivated(() => { closeFilePreview(); ++machineSequence; machineLoading.value = false; machineView.value = false })
 watch([selectedId, targetNodes], async () => {
   await nextTick()
   const element = [...(targetTreeRef.value?.$el.querySelectorAll<HTMLElement>('.el-tree-node') || [])].find(item => item.dataset.key === selectedId.value)
@@ -97,26 +178,18 @@ async function chooseConfiguration(id: string) {
 }
 async function newConfiguration() {
   if (busy.value || loading.value || !await acceptSwitch()) return
-  nodePickerError.value = ''; nodePickerOpen.value = true
+  loading.value = true
+  try {
+    await loadEditorResources()
+    layout.value = { deploymentId: '', name: '新建部署', pathStyle: 'custom', codeId: '', configId: '', queueName: '', siteHost: '', directoryTemplate: 'custom/program', entryPoint: '', nodes: [], revision: '' }
+    saved.value = ''; selectedId.value = ''; preview.value = false
+  } catch (e) { error.value = problem(e) }
+  finally { loading.value = false }
 }
 async function backToList() {
   if (busy.value || loading.value || !await acceptSwitch()) return
-  layout.value = null; saved.value = ''; error.value = ''; selectedId.value = ''; preview.value = false
-  const query = { ...route.query }
-  for (const key of ['deploymentId', 'configId', 'codeId', 'queue', 'website', 'directory']) delete query[key]
-  await router.replace({ query })
-}
-async function deleteConfiguration(item: DeploymentConfiguration) {
-  if (!canWrite.value || busy.value || loading.value) return
-  busy.value = true; deletingId.value = item.deploymentId; error.value = ''
-  try {
-    try { await ElMessageBox.confirm(`删除部署配置「${item.name}」？仓库代码和机器上已下发的文件会保留。`, '删除部署配置', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) }
-    catch { return }
-    await runnerManagementApi.deleteDeploymentConfiguration(item.deploymentId, item.revision)
-    configurations.value = configurations.value.filter(row => row.deploymentId !== item.deploymentId)
-    ElMessage.success('部署配置已删除')
-  } catch (e) { error.value = problem(e) }
-  finally { busy.value = false; deletingId.value = '' }
+  const runnerId = typeof route.query.runnerId === 'string' ? route.query.runnerId : ''
+  await router.replace({ path: '/settings', query: { tab: 'runners', runnerId: runnerId || undefined } })
 }
 async function loadEditorResources() {
   const [rows, repos] = await Promise.all([runnerManagementApi.siteCodeCatalog(), runnerManagementApi.codeRepositories()])
@@ -162,11 +235,34 @@ async function loadRepository() {
   source.value = null; repository.value = null; treeError.value = ''
   if (!id) return
   treeLoading.value = true
-  try { const result = await runnerManagementApi.codeRepositoryTree(id); if (requestId === treeId) repository.value = result }
+  try {
+    const result = await runnerManagementApi.codeRepositoryTree(id)
+    if (requestId !== treeId) return
+    repository.value = result
+    await nextTick()
+    const find = (nodes: SourceTreeNode[]): SourceTreeNode | undefined => {
+      for (const node of nodes) { if (node.path === sourceFolder.value) return node; const child = find(node.children); if (child) return child }
+    }
+    const folder = find(sourceNodes.value)
+    if (folder) {
+      source.value = folder; sourceTreeRef.value?.setCurrentKey(folder.id)
+      await nextTick()
+      if (requestId !== treeId) return
+      const element = [...(sourceTreeRef.value?.$el.querySelectorAll<HTMLElement>('.el-tree-node') || [])].find(item => item.dataset.key === folder.id)
+      element?.scrollIntoView?.({ block: 'nearest' })
+    }
+  }
   catch (e) { if (requestId === treeId) treeError.value = problem(e) }
   finally { if (requestId === treeId) treeLoading.value = false }
 }
 watch(repoId, () => { void loadRepository() })
+watch(() => layout.value?.deploymentId, () => {
+  const home = layout.value ? deploymentSourceHome(layout.value) : null
+  sourceFolder.value = home?.folder || ''; keyword.value = ''
+  if (!home) return
+  if (repoId.value !== home.repoId) repoId.value = home.repoId
+  else void loadRepository()
+})
 function requestedConfiguration() {
   if (typeof route.query.deploymentId === 'string') return configurations.value.find(item => item.deploymentId === route.query.deploymentId)
   const kind = route.query.website ? 'website' : route.query.directory ? 'custom' : route.query.queue ? 'queue' : 'config'
@@ -174,6 +270,9 @@ function requestedConfiguration() {
   return configurations.value.find(item => item.legacyType === kind && item.legacyOwner === owner || kind === 'config' && owner && item.configId === owner)
 }
 async function init(preferredId?: string) {
+  if (!preferredId && !['deploymentId', 'configId', 'codeId', 'queue', 'website', 'directory', 'create'].some(key => route.query[key])) {
+    await router.replace({ path: '/settings', query: { tab: 'runners', runnerId: contextRunnerId.value || undefined } }); return
+  }
   const requestId = ++loadId
   loading.value = true; error.value = ''; bindingError.value = ''
   try {
@@ -181,7 +280,6 @@ async function init(preferredId?: string) {
     if (requestId !== loadId) return
     if (bindings.status === 'fulfilled') runtimes.value = bindings.value
     else { runtimes.value = null; bindingError.value = '绑定机器数加载失败，请刷新列表重试' }
-    listFailed.value = list.status === 'rejected'
     if (list.status === 'rejected') throw list.reason
     const items = list.value
     configurations.value = items
@@ -191,12 +289,18 @@ async function init(preferredId?: string) {
     layout.value = item ? JSON.parse(JSON.stringify(item)) : null; saved.value = JSON.stringify(layout.value); selectedId.value = ''; preview.value = false
   } catch (e) { error.value = problem(e) }
   finally { loading.value = false; initialized = true }
+  if (!error.value && !layout.value && route.query.create === '1') await newConfiguration()
 }
 async function refreshLayout() { if (await acceptSwitch()) await init(layout.value?.deploymentId) }
 onMounted(() => { void init() })
-function openRequestedOwner() { const item = requestedConfiguration(); if (initialized && item && route.query.tab === 'directory-layout') void chooseConfiguration(item.deploymentId) }
+function openRequestedOwner() {
+  if (!initialized || route.query.tab !== 'directory-layout') return
+  const item = requestedConfiguration()
+  if (item) void chooseConfiguration(item.deploymentId)
+  else if (route.query.create === '1' && layout.value?.deploymentId) void newConfiguration()
+}
 onActivated(() => { if (initialized && !loading.value && !layout.value) void init(); else openRequestedOwner() })
-watch([() => route.query.deploymentId, () => route.query.configId, () => route.query.codeId, () => route.query.queue, () => route.query.website, () => route.query.directory], openRequestedOwner)
+watch([() => route.query.deploymentId, () => route.query.configId, () => route.query.codeId, () => route.query.queue, () => route.query.website, () => route.query.directory, () => route.query.create], openRequestedOwner)
 
 function addFolder() {
   if (!layout.value) return
@@ -280,13 +384,29 @@ async function remove() {
 async function save() {
   if (!layout.value || busy.value || loading.value || !needsSave.value) return
   if (!layout.value.name.trim()) { ElMessage.warning('请填写配置名称'); return }
+  const newlyCreated = !layout.value.deploymentId
   busy.value = true; error.value = ''
   try {
     const result = await runnerManagementApi.saveDeploymentConfiguration(layout.value)
     layout.value = result; saved.value = JSON.stringify(result)
+    if (newlyCreated && contextRunnerId.value) await bindCurrentRunner()
     configurations.value = [...configurations.value.filter(item => item.deploymentId !== result.deploymentId), result]
-    ElMessage.success('部署配置已保存，可在机器配置中选择绑定')
+    ElMessage.success(newlyCreated && contextRunnerId.value ? '部署配置已保存并关联当前机器，可手动下发代码' : '部署配置已保存，可在机器配置中选择绑定')
   } catch (e) { error.value = problem(e) }
+  finally { busy.value = false }
+}
+async function bindCurrentRunner() {
+  if (!layout.value?.deploymentId || !contextRunnerId.value) return
+  const result = await runnerManagementApi.saveRuntimeConfiguration({ deploymentId: layout.value.deploymentId,
+    layoutRevision: layout.value.revision, runnerId: contextRunnerId.value,
+    environment: directoryType.value === 'prd' ? 'production' : 'test', concurrency: 1 })
+  runtimes.value = [...(runtimes.value || []).filter(item => item.runtimeId !== result.runtimeId), result]
+}
+async function bindSavedConfiguration() {
+  if (busy.value || !needsMachineBinding.value) return
+  busy.value = true; error.value = ''
+  try { await bindCurrentRunner(); ElMessage.success('已加入当前机器的部署配置') }
+  catch (e) { error.value = problem(e) }
   finally { busy.value = false }
 }
 const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).map(node => ({ ...node, target: targetPath(layout.value!.nodes, node.id) })) || [])
@@ -294,6 +414,7 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
 
 <template>
   <div class="dl-page" data-testid="settings-directory-layout">
+    <div v-if="!layout && contextRunnerId" class="dl-toolbar"><el-button :icon="ArrowLeft" :disabled="loading || busy" @click="backToList">返回部署配置</el-button><strong>手工部署</strong><span>新建的目录方案保存后会关联到当前机器。</span></div>
     <div v-if="layout" class="dl-toolbar">
       <el-button :icon="ArrowLeft" :disabled="loading || busy" data-testid="deployment-back" @click="backToList">返回列表</el-button>
       <strong class="dl-editor-title">{{ layout.deploymentId ? layout.name : '新建部署' }}</strong>
@@ -302,12 +423,13 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <el-alert v-if="bindingError && !layout" :title="bindingError" type="warning" :closable="false" show-icon />
     <DeploymentConfigDrawer ref="configDetails" />
-    <DeploymentConfigurationList v-show="!layout" :items="configurations" :runtimes="runtimes" :loading="loading || busy" :can-write="canWrite" :failed="listFailed" :deleting-id="deletingId" @open="chooseConfiguration" @create="newConfiguration" @refresh="refreshLayout" @open-config="item => configDetails?.open(item)" @remove="deleteConfiguration" />
+    <el-button v-if="layout && needsMachineBinding && canWrite" :disabled="busy || loading || needsSave" @click="bindSavedConfiguration">加入当前机器的部署配置</el-button>
     <section v-if="layout" class="dl-configuration" aria-label="部署配置设置" data-testid="layout-settings">
       <div class="dl-identity-fields">
         <label>配置名称<el-input v-model="layout.name" :readonly="!canWrite || preview" :disabled="busy || loading" placeholder="如：新闻列表抓取生产配置" aria-label="配置名称" data-testid="deployment-name" /></label>
         <div class="dl-config-id"><span>部署配置 ID</span><code>{{ layout.deploymentId || '保存后生成' }}</code></div>
       </div>
+      <el-button v-if="canWrite && !layout.deploymentId" link type="primary" data-testid="deployment-import-node" :disabled="busy || loading" @click="nodePickerOpen = true">从流程节点带入配置</el-button>
       <div v-if="layout.sourceNode" class="dl-origin" data-testid="deployment-origin"><span>来源节点</span><strong>{{ layout.sourceNode.flowName }} / {{ layout.sourceNode.nodeName }}</strong><el-button link type="primary" data-testid="deployment-editor-config" @click="configDetails?.open(layout)">configId: {{ layout.sourceNode.configId }}</el-button><span>任务队列：{{ layout.queueName || '未设置' }}</span></div>
       <div v-else-if="layout.configId" class="dl-origin"><span>节点配置</span><el-button link type="primary" data-testid="deployment-editor-config" @click="configDetails?.open(layout)">{{ layout.configId }} · 查看配置与关联源</el-button></div>
       <div class="dl-path-fields">
@@ -323,22 +445,35 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
     <DeploymentNodePicker v-model="nodePickerOpen" :busy="busy" :error="nodePickerError" @select="useSourceNode" />
     <div v-if="layout" v-loading="loading" class="dl-workspace" :class="{ 'is-preview': preview }">
       <section class="dl-panel dl-target">
-        <header><div><strong>目标目录</strong><span>{{ mappingCount }} 项仓库映射 · 选择目录后添加代码</span></div><el-button v-if="canWrite && !preview" :icon="Plus" size="small" :disabled="busy" data-testid="layout-add-folder" @click="addFolder">新建文件夹</el-button></header>
-        <div class="dl-tree-scroll" data-testid="layout-target-tree">
+        <header><div><strong>目标目录</strong><span>{{ machineView ? '目标机器实时返回的文件，仅供查看' : `${mappingCount} 项仓库映射 · 选择目录后添加代码` }}</span></div><div class="dl-target-views"><template v-if="layout.deploymentId"><el-button size="small" :type="!machineView ? 'primary' : 'default'" data-testid="layout-view-mapping" @click="machineView = false">配置映射</el-button><el-button size="small" :type="machineView ? 'primary' : 'default'" :disabled="busy" data-testid="layout-view-machine" @click="showMachineDirectory">机器文件</el-button></template><el-button v-if="canWrite && !preview && !machineView" :icon="Plus" size="small" :disabled="busy" data-testid="layout-add-folder" @click="addFolder">新建文件夹</el-button></div></header>
+        <div v-if="!machineView" class="dl-target-search"><el-input v-model="targetKeyword" :prefix-icon="Search" clearable placeholder="搜索文件名或目录路径" aria-label="搜索目标目录" data-testid="layout-target-search" /></div>
+        <div v-if="machineView" v-loading="machineLoading" class="dl-tree-scroll dl-machine-files" data-testid="layout-machine-files">
+          <el-alert v-if="machineError" :title="machineError" type="error" :closable="false" />
+          <el-alert v-else-if="runtimes === null" title="机器绑定信息加载失败，请刷新当前配置后重试" type="error" :closable="false" />
+          <el-empty v-else-if="!machineRuntimes.length" description="此部署配置尚未绑定运行机器" :image-size="64" />
+          <template v-else-if="!machineLoading">
+            <el-select v-if="machineRuntimes.length > 1" v-model="machineRuntimeId" aria-label="选择实际文件所在机器" class="dl-machine-select"><el-option v-for="item in machineRuntimes" :key="item.runtimeId" :value="item.runtimeId" :label="`${machines.find(instance => instance.runnerId === item.runnerId)?.ipAddress || item.runnerId} · ${machines.find(instance => instance.runnerId === item.runnerId)?.installDirectory || ''}`" /></el-select>
+            <el-alert v-if="!machine" title="未找到此绑定的 Runner 实例，请刷新当前配置" type="error" :closable="false" />
+            <el-alert v-else-if="machine.status === 'offline'" title="Runner 实例离线，暂时无法浏览机器真实文件" type="info" :closable="false" />
+            <RunnerFilesDrawer v-else-if="machineDirectory" :key="machine.runnerId + ':' + machineDirectory" :runner="machine" :directory="machineDirectory" embedded />
+            <el-alert v-else title="尚未确定实际部署目录，请先保存配置并下发代码" type="info" :closable="false" />
+          </template>
+        </div>
+        <div v-else class="dl-tree-scroll" data-testid="layout-target-tree">
           <button type="button" class="dl-tree-root" :class="{ 'is-selected': !selected }" :title="renderedRoot" data-testid="layout-select-root" @click="selectRoot"><el-icon class="folder-icon"><Folder /></el-icon><strong>{{ renderedRoot || '根目录' }}</strong><small>根目录</small></button>
           <div class="dl-root-children">
-          <div class="dl-system-file" title="由 Runner 自动维护当前版本、历史记录和仓库提交，不能关联或移动"><el-icon><Document /></el-icon><span>version.json</span><small>版本记录 · 系统维护</small></div>
-          <el-tree ref="targetTreeRef" :data="targetNodes" node-key="id" :props="{ label: 'name', children: 'children' }" default-expand-all highlight-current :current-node-key="selectedId" :draggable="canWrite && !preview && !busy" :allow-drop="allowDrop" :expand-on-click-node="false" empty-text="从右侧添加代码，或新建文件夹" @node-click="(node: DirectoryMappingNode) => selectedId = node.id" @node-drop="drop">
+          <div v-show="showVersionFile" class="dl-system-file" title="由 Runner 自动维护当前版本、历史记录和仓库提交，不能关联或移动"><el-icon><Document /></el-icon><span>version.json</span><small>版本记录 · 系统维护</small></div>
+          <el-tree ref="targetTreeRef" :data="targetNodes" :filter-node-method="filterTargetNode" node-key="id" :props="{ label: 'name', children: 'children' }" default-expand-all highlight-current :current-node-key="selectedId" :draggable="canWrite && !preview && !busy && !targetQuery" :allow-drop="allowDrop" :expand-on-click-node="false" :empty-text="targetQuery ? '没有匹配的文件或目录' : '从右侧添加代码，或新建文件夹'" @node-click="(node: DirectoryMappingNode) => selectedId = node.id" @node-drop="drop">
             <template #default="{ data }"><span class="dl-tree-row" :title="targetPath(layout.nodes, data.id)"><el-icon :class="data.kind === 'folder' ? 'folder-icon' : ''"><Folder v-if="data.kind === 'folder'" /><Document v-else /></el-icon><span class="dl-tree-name">{{ data.name }}</span><el-icon v-if="data.repoId" class="dl-linked"><Link /></el-icon><small v-if="data.sourceType === 'directory'">整目录</small><span v-if="layout.entryPoint === targetPath(layout.nodes, data.id)" class="dl-entry">入口</span></span></template>
           </el-tree>
           </div>
         </div>
-        <div v-if="selected && !preview" class="dl-selected" data-testid="layout-node-settings">
+        <div v-if="selected && !preview && !machineView" class="dl-selected" data-testid="layout-node-settings">
           <div class="dl-selection-title"><strong :title="selectedPath">{{ selectedPath }}</strong><span v-if="layout.entryPoint === selectedPath" class="dl-entry">执行入口</span><el-button v-if="canWrite" link type="danger" :icon="Delete" :disabled="busy" @click="remove">移除映射</el-button></div>
           <div class="dl-fields"><label>名称<el-input :model-value="selected.name" :readonly="!canWrite" :disabled="busy" data-testid="layout-node-name" @update:model-value="rename" /></label><label>移动到<el-select :model-value="selected.parentId" placeholder="选择目标目录" :disabled="!canWrite || busy" @update:model-value="move"><el-option label="根目录" value="" /><el-option v-for="folder in folders" :key="folder.id" :label="targetPath(layout.nodes, folder.id)" :value="folder.id" /></el-select></label></div>
           <div v-if="selected.repoId" class="dl-source-ref"><el-icon><Link /></el-icon><span :title="`${repoName(selected.repoId)} / ${selected.sourcePath}`">{{ repoName(selected.repoId) }} / {{ selected.sourcePath }}</span><code :title="selected.gitCommit">{{ selected.gitCommit?.slice(0, 12) }}</code></div>
           <p v-else class="dl-source-ref">空文件夹，可添加仓库代码，或将文件移入此目录。</p>
-          <div class="dl-node-actions"><el-button v-if="canWrite && selected.kind === 'file' && selected.name.endsWith('.py') && layout.entryPoint !== selectedPath" link type="primary" :disabled="busy" @click="layout.entryPoint = selectedPath">设为执行入口</el-button><el-button v-if="canWrite && selected.sourceType === 'directory'" link type="primary" :disabled="busy" data-testid="layout-expand-mapping" @click="expandMapping">展开为独立文件</el-button></div>
+          <div class="dl-node-actions"><el-button v-if="selected.kind === 'file' && selected.repoId && selected.sourcePath && selected.gitCommit" link type="primary" data-testid="layout-preview-mapped-file" @click="previewGitFile(selected.repoId, selected.sourcePath, selected.gitCommit)">预览文件</el-button><el-button v-if="canWrite && selected.kind === 'file' && isProgramEntry(selected.name) && layout.entryPoint !== selectedPath" link type="primary" :disabled="busy" @click="layout.entryPoint = selectedPath">设为执行入口</el-button><el-button v-if="canWrite && selected.sourceType === 'directory'" link type="primary" :disabled="busy" data-testid="layout-expand-mapping" @click="expandMapping">展开为独立文件</el-button></div>
         </div>
         <footer class="dl-target-actions">
           <div class="dl-save-state"><span class="dl-status">{{ dirty ? '有未保存修改' : layout.deploymentId ? '已保存' : '新部署配置' }}</span><span class="dl-current-entry" :title="layout.entryPoint || '未设置启动文件'" data-testid="layout-current-entry">启动文件：{{ layout.entryPoint || '未设置' }}</span></div>
@@ -353,7 +488,7 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
         <div class="dl-repository"><div class="dl-repository-controls"><el-select v-model="repoId" filterable :disabled="busy" placeholder="选择仓库" aria-label="代码仓库" data-testid="layout-repo-select"><el-option v-for="repo in repositories.filter(r => r.status === 'ACTIVE')" :key="repo.repoId" :label="repo.name" :value="repo.repoId" /></el-select><el-input v-model="keyword" clearable placeholder="查找目录或代码文件" aria-label="查找仓库代码" /></div><small>当前提交 <code>{{ repository?.gitCommit.slice(0, 12) || '—' }}</code></small></div>
         <el-alert v-if="treeError" :title="treeError" type="error" :closable="false" />
         <div v-loading="treeLoading" class="dl-tree-scroll">
-          <el-tree :key="`${repoId}-${keyword}`" :data="sourceNodes" node-key="id" :props="{ label: 'name', children: 'children' }" :default-expand-all="!!keyword" highlight-current :expand-on-click-node="false" empty-text="当前仓库暂无可选代码" @node-click="(node: SourceTreeNode) => source = node">
+          <el-tree ref="sourceTreeRef" :key="`${repoId}-${keyword}-${sourceFolder}`" :data="sourceNodes" node-key="id" :props="{ label: 'name', children: 'children' }" :default-expanded-keys="sourceExpandedKeys" :current-node-key="sourceFolder" :default-expand-all="!!keyword" highlight-current :expand-on-click-node="false" empty-text="当前仓库暂无可选代码" @node-click="(node: SourceTreeNode) => source = node">
             <template #default="{ data }"><span class="dl-tree-row" :title="data.path"><el-icon :class="data.kind === 'directory' ? 'folder-icon' : ''"><Folder v-if="data.kind === 'directory'" /><Document v-else /></el-icon><span class="dl-tree-name">{{ data.name }}</span><small v-if="!data.selectable">不可下发</small></span></template>
           </el-tree>
         </div>
@@ -362,14 +497,19 @@ const mappings = computed(() => layout.value?.nodes.filter(node => node.repoId).
           <template v-else-if="fileMetadataError"><span class="dl-file-metadata-error" role="alert">文件信息加载失败：{{ fileMetadataError }}</span><el-button link type="primary" size="small" data-testid="layout-file-metadata-retry" @click="loadFileMetadata">重试</el-button></template>
           <template v-else-if="fileMetadata"><span title="文件首次提交到 Git 的时间">创建时间 <time :datetime="fileMetadata.createdAt" data-testid="layout-file-created-at">{{ fileTime(fileMetadata.createdAt) }}</time></span><span>版本 <code :title="`该文件最近一次变更的 Git 提交：${fileMetadata.fileCommit}`" data-testid="layout-file-version">{{ fileMetadata.fileCommit.slice(0, 12) }}</code></span></template>
         </div>
-        <footer class="dl-add"><div class="dl-add-context"><strong :title="source?.path">{{ source?.name || '选择仓库文件或文件夹' }}</strong><small :title="destinationPath" data-testid="layout-add-destination">添加到：{{ destinationPath || '根目录' }}</small></div><div class="dl-add-actions"><el-button v-if="canWrite" :icon="ArrowLeft" type="primary" :disabled="!source?.selectable || busy" data-testid="layout-add-source" @click="addSource">关联到目录</el-button><el-button v-if="canWrite && selected" link type="primary" :disabled="!source?.selectable || busy" @click="replaceSource">替换关联</el-button></div></footer>
+        <footer class="dl-add"><div class="dl-add-context"><strong :title="source?.path">{{ source?.name || '选择仓库文件或文件夹' }}</strong><small :title="destinationPath" data-testid="layout-add-destination">添加到：{{ destinationPath || '根目录' }}</small></div><div class="dl-add-actions"><el-button v-if="source?.kind === 'file' && repository" link type="primary" :disabled="busy" data-testid="layout-preview-source-file" @click="previewGitFile(repository.repoId, source.path, repository.gitCommit)">预览文件</el-button><el-button v-for="entry in canWrite ? sourceEntryTargets : []" :key="entry" link type="primary" :title="entry" :disabled="busy || layout.entryPoint === entry" data-testid="layout-source-set-entry" @click="layout.entryPoint = entry">{{ layout.entryPoint === entry ? '当前入口' : '设为入口' }}</el-button><el-button v-if="canWrite" :icon="ArrowLeft" type="primary" :disabled="!source?.selectable || busy" data-testid="layout-add-source" @click="addSource">关联到目录</el-button><el-button v-if="canWrite && selected" link type="primary" :disabled="!source?.selectable || busy" @click="replaceSource">替换关联</el-button></div></footer>
       </section>
       <section v-else class="dl-panel dl-preview"><header><div><strong>下发映射预览</strong><span>已关联各仓库的固定 Git 提交</span></div></header><div class="dl-tree-scroll"><div class="dl-mapping"><strong>version.json</strong><p>系统维护当前版本、历史版本和各仓库提交</p></div><div v-for="item in mappings" :key="item.id" class="dl-mapping"><strong>{{ item.target }}{{ item.sourceType === 'directory' ? '/' : '' }}</strong><p>{{ repoName(item.repoId) }} / {{ item.sourcePath }}</p><code>{{ item.gitCommit }}</code></div><div v-if="!mappings.length" class="dl-empty">尚未关联仓库代码</div></div><footer><small>实际路径：Runner / {{ renderedRoot }} / 目标路径。版本信息记录在 version.json；执行中的任务使用临时副本。</small></footer></section>
     </div>
+    <el-drawer :model-value="!!filePreview" :title="filePreview?.path || '文件预览'" size="min(800px, 94vw)" append-to-body @close="closeFilePreview">
+      <p v-if="filePreview?.loading" role="status">正在读取文件内容…</p><el-alert v-else-if="filePreview?.error" :title="filePreview.error" type="error" :closable="false" /><pre v-else class="dl-file-content" data-testid="layout-file-content">{{ filePreview?.content }}</pre>
+    </el-drawer>
   </div>
 </template>
 
 <style scoped>
+.dl-target-views { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; }.dl-target-views .el-button { margin:0; }.dl-target > header { flex-wrap:wrap; gap:10px; }.dl-machine-select { width:100%; margin-bottom:12px; }.dl-file-content { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.6; }.dl-machine-files { padding:12px; }.dl-source .dl-add { flex-wrap:wrap; }.dl-source .dl-add-actions { flex-wrap:wrap; }
+.dl-target-search { padding:8px 12px; border-bottom:1px solid var(--el-border-color-light); flex-shrink:0; }
 .dl-page { display:flex; flex-direction:column; gap:12px; flex:1; min-height:0; color:var(--rc-text,#334155); }
 .dl-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex-shrink:0; }
 .dl-editor-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }

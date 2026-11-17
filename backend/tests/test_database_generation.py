@@ -19,8 +19,8 @@ class DatabaseGenerationTest(unittest.TestCase):
     fixture = archive_tests.GeneratedArchivesTest.fixture
     start_remote = archive_tests.GeneratedArchivesTest.start_remote
 
-    def configured(self):
-        service, repo, origin, payload, calls = self.fixture()
+    def configured(self, **fixture_options):
+        service, repo, origin, payload, calls = self.fixture(**fixture_options)
         self.request('/api/code-servers/me/heartbeat', {**service.report(), 'serverId': service.identity['serverId'],
                      'endpoint': code_servers.read(self.app, service.identity['serverId'])['endpoint']}, service.identity['token'])
         generation = {key: payload[key] for key in ('interfaceId', 'repositoryId', 'directoryId', 'configType', 'queueName', 'url')}
@@ -33,6 +33,24 @@ class DatabaseGenerationTest(unittest.TestCase):
     def handler(self):
         return SimpleNamespace(send_response=lambda *args: None, send_header=lambda *args: None,
                                end_headers=lambda: None, wfile=io.BytesIO())
+
+    def test_refused_generation_does_not_publish_merged_requirements_as_success(self):
+        service, _, body, calls = self.configured(text_only=True,
+            response_text='不能给出代码：目标 URL 返回 403，无法验证真实新闻数据。')
+        canonical = service.workspace.root / '101/code'; canonical.mkdir(parents=True, exist_ok=True)
+        (canonical / 'requirements.txt').write_text('requests\nbeautifulsoup4\n')
+        (canonical / 'other-site.py').write_text('OLD = 1\n')
+        job = tasks.create(self.app, body)['job']
+        server = code_servers.read(self.app, service.identity['serverId'])
+        self.assertIsNotNone(tasks.claim(self.app, server)['job'])
+        tasks.execute(self.handler(), self.app, server, job['taskId'])
+        saved = tasks.read(self.app, job['taskId'])
+        self.assertEqual(saved['status'], 'failed')
+        self.assertIn('未生成主脚本', saved['message'])
+        self.assertEqual(saved['result']['archive']['status'], 'failed')
+        self.assertEqual(saved['result']['archive']['gitCommit'], '')
+        self.assertFalse((Path(calls[0]['code_dir']) / 'requirements.txt').exists())
+        self.assertEqual((canonical / 'other-site.py').read_text(), 'OLD = 1\n')
 
     def test_saved_template_selection_does_not_invalidate_task_prompt_snapshot(self):
         service, origin, body, calls = self.configured()
@@ -149,11 +167,12 @@ class DatabaseGenerationTest(unittest.TestCase):
             file.pop('serverPath', None)
         tasks.put(self.app, saved)
         recovered = tasks.read(self.app, job['taskId'])['result']['archive']
-        output = next(file for file in recovered['files'] if file['path'].endswith('/newslink.py'))
-        self.assertEqual(output['serverPath'], str(service.workspace.root / '101' / 'code' / 'newslink.py'))
+        expected_name = saved['result']['fileName']
+        output = next(file for file in recovered['files'] if file['path'].endswith('/' + expected_name))
+        self.assertEqual(output['serverPath'], str(service.workspace.root / '101' / 'code' / expected_name))
         self.assertEqual(len(calls), 1)
         self.assertIn('"type": "request"', handler.wfile.getvalue().decode())
-        self.assertEqual(self.app.git(origin, 'show', 'main:default/101/newslink.py').strip(), 'VALUE = 1')
+        self.assertEqual(self.app.git(origin, 'show', 'main:default/101/' + expected_name).strip(), 'VALUE = 1')
         with self.assertRaises(ApiError): tasks.execute(self.handler(), self.app, server, job['taskId'])
         self.assertEqual(len(calls), 1)
 

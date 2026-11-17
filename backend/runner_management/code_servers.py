@@ -22,7 +22,7 @@ from urllib.request import Request, urlopen
 LOCK = threading.Lock()
 PREFIX = 'code-server:'
 MAX_RESULT = 15 * 1024 * 1024
-PACKAGE_FILES = ('start.py', 'start.cmd', '__init__.py', 'service.py', 'bootstrapper.py', 'mq_worker.py', 'requirements.txt')
+PACKAGE_FILES = ('start.py', 'start.cmd', '__init__.py', 'service.py', 'bootstrapper.py', 'launcher_host.py', 'launcher_bridge.py', 'mq_worker.py', 'requirements.txt')
 PACKAGE_SUPPORT_FILES = ('__init__.py', 'artifacts.py', 'bootstrapper.py', 'program_launcher.py', 'runner.py')
 
 
@@ -131,6 +131,11 @@ def listing(app):
         from .generation_git_bindings import describe
         item['generationGitBindings'] = describe(app, item)
         item['upgrade']=upgrade(app,item['serverId'])
+        from .code_server_upgrades import LAUNCHER_PREFIX
+        with app.store.connect() as db:
+            saved=db.execute('SELECT setting_value FROM settings WHERE setting_key=?',(LAUNCHER_PREFIX+item['serverId'],)).fetchone()
+        item['launcherUpgrade']=json.loads(saved['setting_value']) if saved else None
+        item['autoUpdate']=bool(item.get('upgradeCapable'))
         item['supportedModels'] = [{key: model.get(key) for key in ('id', 'name', 'model', 'kind', 'endpoint', 'enabled', 'generationServerMode')}
                                    for model in interfaces if model.get('generationServerId') == item['serverId']]
     return {'items': sorted(items, key=lambda x: (x['name'], x['serverId']))}
@@ -203,6 +208,15 @@ def heartbeat(app, headers, body):
         if not isinstance(digest,str) or digest!='source-local' and not re.fullmatch(r'sha256:[a-f0-9]{64}',digest):
             raise ApiError('CodeServer 版本摘要无效')
         row.update(actualDigest=digest,upgradeCapable=type(body.get('upgradeSchema')) is int and body.get('upgradeSchema')==1)
+        launcher_digest=body.get('launcherDigest','source-local')
+        if launcher_digest!='source-local' and (not isinstance(launcher_digest,str) or not re.fullmatch(r'sha256:[a-f0-9]{64}',launcher_digest)):
+            raise ApiError('启动器版本摘要无效')
+        row['launcherDigest']=launcher_digest
+        boot_id=body.get('launcherBootId','')
+        if not isinstance(boot_id,str) or len(boot_id)>64:
+            raise ApiError('启动器启动标识无效')
+        row['launcherBootId']=boot_id
+        row['launcherAutoUpdate']=body.get('launcherSchema')==1
         row['mqCapable']=type(body.get('mqWorkerSchema')) is int and body.get('mqWorkerSchema')==1
         with app.store.connect() as db:
             write(db, row)
@@ -294,6 +308,10 @@ def package(app, platform, existing=False, digest=''):
         from .artifacts import verify_artifact
         release_data=app.artifacts.read(digest)
         verify_artifact(release_data,digest,pinned['signature'],app.artifacts.public_key)
+    from .code_server_upgrades import publish_launcher
+    launcher_digest=publish_launcher(app,activate=False)
+    with app.store.connect() as db:
+        launcher=db.execute('SELECT signature FROM releases WHERE digest=?',(launcher_digest,)).fetchone()
     code = enrollment_code(app)
     data = io.BytesIO()
     source = Path(__file__).resolve().parents[1] / 'code_generation_server'
@@ -309,6 +327,10 @@ def package(app, platform, existing=False, digest=''):
         for name in PACKAGE_SUPPORT_FILES:
             archive.write(support/name,'runner_management/'+name)
         archive.writestr('package-version.json', json.dumps(package_info(app), ensure_ascii=False, indent=2))
+        stem='code-server-launchers/'+launcher_digest[7:]
+        archive.writestr(stem+'.zip',app.artifacts.read(launcher_digest))
+        archive.writestr(stem+'.sig',launcher['signature'])
+        archive.writestr('launcher-current.json',json.dumps({'digest':launcher_digest}))
         if pinned:
             stem='code-server-versions/'+digest[7:]
             archive.writestr(stem+'.zip',release_data)
@@ -329,5 +351,6 @@ def package(app, platform, existing=False, digest=''):
             '8. 多网卡可配置 advertiseUrl，例如 http://192.168.1.171:8093。\n'
             '9. 服务日志：logs/service.log；启动及升级日志：logs/launcher.log、logs/worker.log。\n'
             '10. 启动器更新包携带 config.package.json，启动时把下载时填写的管理服务地址及新登记码合并到 config.json，保留已有工作空间、监听端口和 identity.json。停止旧程序后覆盖解压并运行 start.cmd。\n'
-            '11. 正常升级等待模型调用及文件操作完成；版本签名或健康检查失败自动保留/恢复旧版本。\n')
+            '11. 首次安装后，服务和启动器自动跟随平台已发布版本更新，无需逐台下载、覆盖或点击升级；正在执行的任务结束后再更新，失败自动恢复上一版本。\n'
+            '12. 启动器更新包仅用于修复无法正常接入或离线的旧实例；正常在线实例会自动接入后续更新。\n')
     return data.getvalue()

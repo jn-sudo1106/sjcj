@@ -10,8 +10,11 @@ import { nodePromptApi, defaultNodePrompt, fillNodePrompt, type NodePromptTempla
 import { nodePromptsAvailable } from '@/constants/deployGates'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
 import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVariables.vue'
+import PromptAiEditor from '@/components/PromptAiEditor.vue'
 import GenerationReferenceFiles from '@/components/GenerationReferenceFiles.vue'
 import type { GenerationReferenceFile } from '@/api/runnerManagement'
+import type { NodeProxySettings } from '@/api/runnerManagement'
+import { hasProxyPromptVariables, renderProxyPrompt } from '@/utils/promptProxyVariables'
 import AiCodeWorkspaceDialog from '@/components/AiCodeWorkspaceDialog.vue'
 import { createGenerationTaskId, matchingGenerationGitBinding, modelRequestMethod, nodeGenerationCodeDirectory, nodeGenerationInputDirectory } from '@/utils/generationWorkspace'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
@@ -29,6 +32,40 @@ const emit = defineEmits<{ saved: [version: PublishedScript, configId: string, q
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
 const prompt = ref('')
+const promptProxy = ref<NodeProxySettings | null>(null), promptProxyLoading = ref(false), promptProxyError = ref('')
+let promptProxyRequest = 0
+const usesProxyVariables = computed(() => hasProxyPromptVariables(prompt.value) || hasProxyPromptVariables(systemPrompt.value))
+const renderedUserPrompt = computed(() => promptProxy.value ? renderProxyPrompt(prompt.value, promptProxy.value) : prompt.value)
+const proxyPreviewUnavailable = computed(() => usesProxyVariables.value && (promptProxyLoading.value || !!promptProxyError.value || !promptProxy.value))
+async function loadPromptProxy() {
+  const request = ++promptProxyRequest, configId = props.configId || ''
+  promptProxy.value = null; promptProxyError.value = ''; promptProxyLoading.value = false
+  if (!/^[1-9][0-9]{0,19}$/.test(configId)) {
+    promptProxy.value = { configId, configured: false, revision: 0, useProxy: false }
+    return
+  }
+  promptProxyLoading.value = true
+  try {
+    const result = await runnerManagementApi.nodeProxySettings(configId)
+    if (request !== promptProxyRequest || !open.value || props.configId !== configId) return
+    if (result.configId !== configId || typeof result.useProxy !== 'boolean') throw new Error('代理配置响应不完整，请重新读取')
+    promptProxy.value = result
+  } catch (e) { if (request === promptProxyRequest) promptProxyError.value = '代理配置读取失败：' + message(e) }
+  finally { if (request === promptProxyRequest) promptProxyLoading.value = false }
+}
+watch([open, () => props.configId], ([visible]) => {
+  if (visible) void loadPromptProxy()
+  else { ++promptProxyRequest; promptProxy.value = null; promptProxyError.value = ''; promptProxyLoading.value = false }
+}, { immediate: true })
+const promptTab = ref<'system' | 'user'>('user')
+function applyPromptEdit(value: string) {
+  prompt.value = outputPrompt(value)
+  selectedPromptId.value = 0
+}
+function applyCurrentPromptEdit(value: string) {
+  if (promptTab.value === 'system') { systemPrompt.value = value; selectedPromptId.value = 0 }
+  else applyPromptEdit(value)
+}
 const systemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT)
 const defaultSystemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT), defaultUserPrompt = ref(DEFAULT_PROMPT)
 const templateError = ref('')
@@ -624,7 +661,7 @@ watch(() => JSON.stringify([props.configId, modelInterfaceId.value, repositoryId
 watch([() => props.outputFields, () => props.outputTable], () => {
   if (!loading.value) syncOutputPrompt()
 }, { deep: true })
-onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++; filePreviewSequence++; sourceRepositoryRequest++ })
+onBeforeUnmount(() => { flushTaskConfig(); controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++; filePreviewSequence++; sourceRepositoryRequest++; promptProxyRequest++ })
 
 async function previewAssociatedFile(target: 'saved' | 'source') {
   const version = associatedVersion.value
@@ -741,6 +778,7 @@ function cancelGenerate() {
 
 async function generate() {
   if (busy.value) return
+  if (proxyPreviewUnavailable.value) { error.value = promptProxyError.value || '正在读取节点代理配置，请稍后再生成'; return }
   if (selectedPromptId.value && templateError.value) { error.value = templateError.value; return }
   if (!subdirectoryValid.value) { error.value = '生成子目录须为相对目录，例如 sites'; return }
   syncOutputPrompt()
@@ -772,6 +810,7 @@ async function generate() {
     const selectedInterface = selectedModel.value
     const interfaceUrl = selectedInterface?.endpoint ? new URL(selectedInterface.endpoint) : undefined
     const input: SiteScriptGenerateInput = { ...(referenceFiles.value.length ? { referenceFiles: referenceFiles.value } : {}), taskId: createGenerationTaskId(), interfaceId: modelInterfaceId.value, prompt: prompt.value.trim(), userPrompt: prompt.value.trim(), systemPrompt: systemPrompt.value.trim(), url: url.value.trim(), sampleId: 'www.realcan.cn.py',
+      ...(props.configId && /^[1-9][0-9]{0,19}$/.test(props.configId) ? { configId: props.configId } : {}),
       ...(outputSubdirectory.value ? { outputSubdirectory: outputSubdirectory.value } : {}),
       ...(props.sourceId && props.flowId && props.stepId ? { sourceContext: { sourceId: props.sourceId, flowId: props.flowId, stepId: props.stepId } } : {}),
       ...(taskGeneration.value && selectedInterface && interfaceUrl ? { modelCall: {
@@ -991,7 +1030,7 @@ function download() {
       <div v-if="sourceFilePath"><span>来源文件</span><button type="button" class="site-script-file-link" :disabled="busy || !savedSourceAssociation" :title="savedSourceAssociation ? sourceFilePath : '保存后可查看关联版本'" @click="previewAssociatedFile('source')" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</button><el-button link :disabled="busy" data-testid="site-script-unlink-source" @click="changeAssociatedFile('source', 'unlink')">取消关联</el-button><el-button v-if="savedSourceAssociation" link type="danger" :disabled="busy" data-testid="site-script-delete-source" @click="changeAssociatedFile('source', 'delete')">删除文件</el-button></div>
     </div>
     <p v-if="error && !open" class="site-script-error" role="alert">{{ error }}</p>
-    <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">代码生成</el-button>
+    <el-button type="primary" class="site-script-open-button" :disabled="busy" data-testid="open-site-script-generator" @click="open = true">生成脚本</el-button>
   </section>
   <AiCodeWorkspaceDialog v-model="open" data-testid="site-script-dialog">
     <div v-loading="loading" class="site-script-workspace" :class="{ 'is-task': taskGeneration }">
@@ -1005,18 +1044,23 @@ function download() {
         </div>
         <CodeGenerationPromptVariables />
         <div class="site-script-prompts">
-        <section class="site-script-prompt-group">
+        <div class="site-script-prompt-left">
+        <nav class="site-script-prompt-tabs" aria-label="选择提示词类型"><el-button :type="promptTab === 'system' ? 'primary' : 'default'" data-testid="prompt-tab-system" @click="promptTab = 'system'">系统提示词</el-button><el-button :type="promptTab === 'user' ? 'primary' : 'default'" data-testid="prompt-tab-user" @click="promptTab = 'user'">用户提示词</el-button></nav>
+        <section v-show="promptTab === 'system'" class="site-script-prompt-group">
           <div class="site-script-panel-head"><label for="site-script-system-prompt"><b>系统提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-system-prompt" @click="restoreSystemPrompt">恢复默认</el-button></div>
           <div class="site-script-prompt-field"><textarea id="site-script-system-prompt" v-model="systemPrompt" @input="selectedPromptId = 0" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-system-prompt" placeholder="定义模型角色、代码规范和输出要求" /></div>
         </section>
-        <section class="site-script-prompt-group">
+        <section v-show="promptTab === 'user'" class="site-script-prompt-group">
           <div class="site-script-panel-head"><label for="site-script-prompt"><b>用户提示词</b></label><el-button link type="primary" :disabled="busy" data-testid="site-script-reset-prompt" @click="restorePrompt">恢复默认</el-button></div>
-          <div class="site-script-prompt-field"><textarea id="site-script-prompt" v-model="prompt" @input="selectedPromptId = 0" :disabled="busy" maxlength="12000" class="site-script-prompt" data-testid="site-script-prompt" placeholder="说明本次抓取需求、列表页结构、提取字段及详情页要求" /></div>
+          <p v-if="usesProxyVariables" class="site-script-help" data-testid="site-script-proxy-status"><template v-if="promptProxyLoading">正在读取节点代理配置…</template><template v-else-if="promptProxyError"><span role="alert">{{ promptProxyError }}</span> <el-button link type="primary" @click="loadPromptProxy">重新读取</el-button></template><template v-else>代理{{ promptProxy?.useProxy ? '已启用' : '未启用' }}，下方已填入当前配置值；保存时保留模板变量。</template></p>
+          <div class="site-script-prompt-field"><textarea id="site-script-prompt" :value="renderedUserPrompt" readonly :disabled="busy || promptProxyLoading" class="site-script-prompt" data-testid="site-script-prompt" placeholder="通过 AI 修改调整用户提示词" /></div>
         </section>
+        </div>
+        <section class="site-script-ai-pane"><PromptAiEditor v-if="open" :key="`${configId || ''}:${sourceId || ''}:${promptTab}`" embedded :prompt-type="promptTab" :prompt="promptTab === 'system' ? systemPrompt : prompt" :disabled="busy" @apply="applyCurrentPromptEdit" /></section>
         </div>
         <p v-if="taskGeneration && error" class="site-script-error" role="alert" data-testid="site-script-error">{{ error }}</p>
         <p v-if="taskGeneration && submittedTask" class="site-script-task-receipt" role="status" data-testid="generation-task-status">任务 {{ submittedTask.taskId }} · 已保存到数据库，等待机器领取 <RouterLink :to="{path:'/tasks',query:{tab:'code-generation',codeTaskId:submittedTask.taskId}}" target="_blank">到任务中心查看</RouterLink></p>
-        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || templatesLoading || (!taskGeneration && codeLoading) || publishing || directoriesLoading || modelsLoading || !!modelError || !selectedModel" data-testid="site-script-generate" @click="generate">{{ taskGeneration ? '提交生成任务' : code ? '重新生成' : '生成代码' }}</el-button><el-button v-if="generating && !publishing && !taskGeneration" @click="cancelGenerate">取消生成</el-button><span v-else>{{ taskGeneration ? '提交后在任务中心查看执行情况' : publishing ? '正在提交 Git…' : remoteGeneration ? '生成完成后自动提交 Git' : '生成后可在右侧编辑、保存' }}</span></div>
+        <div class="site-script-generation"><el-button type="primary" :loading="generating" :disabled="loading || templatesLoading || (!taskGeneration && codeLoading) || publishing || directoriesLoading || modelsLoading || !!modelError || !selectedModel || proxyPreviewUnavailable" data-testid="site-script-generate" @click="generate">{{ taskGeneration ? '提交生成任务' : code ? '重新生成' : '生成脚本' }}</el-button><el-button v-if="generating && !publishing && !taskGeneration" @click="cancelGenerate">取消生成</el-button><span v-else>{{ taskGeneration ? '提交后在任务中心查看执行情况' : publishing ? '正在提交 Git…' : remoteGeneration ? '生成完成后自动提交 Git' : '生成后可在下方编辑、保存' }}</span></div>
       </section>
       <section v-if="!taskGeneration" v-loading="codeLoading" class="site-script-editor-panel" data-testid="site-script-code-panel">
         <div class="site-script-panel-head">
@@ -1071,6 +1115,7 @@ function download() {
 </template>
 
 <style scoped>
+.site-script-prompt-left { display:flex; flex-direction:column; gap:10px; min-width:0; min-height:0; padding:12px; border:1px solid var(--el-border-color-light); border-radius:8px; background:var(--el-bg-color); }.site-script-prompt-left>.site-script-prompt-group { flex:1; min-height:0; }.site-script-prompt-tabs { display:flex; gap:8px; }.site-script-prompt-tabs .el-button { margin:0; }.site-script-ai-pane { display:flex; min-width:0; min-height:0; overflow:hidden; padding:12px; border:1px solid var(--el-border-color-light); border-radius:8px; background:var(--el-bg-color); }
 .site-script-output-tabs{display:flex;gap:6px}.site-script-output-tabs button{padding:6px 10px;border:0;background:transparent;cursor:pointer;color:var(--el-text-color-secondary)}.site-script-output-tabs button.active{color:var(--el-color-primary);box-shadow:inset 0 -2px var(--el-color-primary)}
 .site-script-process{display:flex;flex:1;min-height:0;flex-direction:column;gap:10px}.site-script-process-tools{display:flex;gap:12px;align-items:center;font-size:12px}.site-script-process-stages{margin:0;padding-left:20px;font-size:12px;line-height:1.7;color:var(--el-text-color-secondary)}.site-script-process-console{flex:1;min-height:100px;overflow:auto;margin:0;padding:12px;border-radius:6px;background:var(--el-fill-color-light);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7}
 .site-script-task-config { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--rc-muted); }
@@ -1087,8 +1132,8 @@ function download() {
 .site-script-destination-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 10px; }
 .site-script-select-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-naming { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--rc-muted); }.site-script-naming > span { flex: 0 0 auto; white-space: nowrap; }.site-script-naming code { min-width: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
-.site-script-workspace { display: grid; grid-template-columns: minmax(360px, 1.15fr) minmax(0, 1.4fr); gap: 16px; height: min(760px, calc(100dvh - 160px)); min-height: 0; }
-.site-script-workspace.is-task { grid-template-columns: minmax(0, 1fr); }
+.site-script-workspace { display: grid; grid-template-columns: minmax(0, 1fr); align-content:start; gap: 16px; height: min(760px, calc(100dvh - 160px)); min-height: 0; overflow:auto; }
+.site-script-workspace.is-task { grid-template-columns: minmax(0, 1fr); grid-template-rows:minmax(0,1fr); align-content:stretch; }
 .site-script-controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .is-task .site-script-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; align-items: center; }
 .is-task .site-script-controls > .site-script-error { grid-column: 1 / -1; }
@@ -1096,13 +1141,14 @@ function download() {
 .site-script-model-select { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
 .site-script-model-select > span { flex-shrink: 0; }
 .site-script-model-select :deep(.el-select) { flex: 1; min-width: 0; }
-.site-script-prompts { display: grid; grid-template-rows: repeat(2, minmax(150px, 1fr)); gap: 16px; flex: 1; min-height: 320px; }
-.is-task .site-script-prompts { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(240px, 1fr); min-height: 240px; }
+.site-script-prompts { display: grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:stretch; gap: 16px; min-height:360px; }
+.is-task .site-script-prompts { flex:1; min-height:300px; }
+.site-script-prompt-left { align-self:stretch; }
 .site-script-task-receipt { margin: 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .site-script-task-receipt a { margin-left: 12px; color: var(--rc-primary); }
 .site-script-auto-commit,.site-script-archive { display:flex; flex-direction:column; gap:6px; font-size:12px; }.site-script-auto-commit small { color:var(--el-text-color-secondary); }.site-script-archive { padding:10px; border:1px solid var(--el-border-color); border-radius:6px; overflow-wrap:anywhere; }.site-script-archive a { color:var(--el-color-primary); }
 .site-script-settings, .site-script-editor-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 12px; padding: 16px; border: 1px solid var(--rc-border); border-radius: 10px; }
-.site-script-settings { background: var(--rc-primary-bg); overflow-y: auto; }.site-script-settings > :not(.site-script-prompts) { flex-shrink: 0; }.site-script-editor-panel { background: var(--rc-card); }
+.site-script-settings { background: var(--rc-primary-bg); }.site-script-settings > :not(.site-script-prompts) { flex-shrink: 0; }.site-script-editor-panel { background: var(--rc-card); min-height:440px; }
 .site-script-panel-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }.site-script-panel-head b { flex-shrink: 0; font-size: 13px; }.site-script-panel-head > span { margin-left: auto; color: var(--rc-muted); font-size: 11px; }.site-script-panel-head > .el-button { margin-left: auto; }
 .site-script-field { display: grid; gap: 6px; color: var(--rc-text); font-size: 12px; font-weight: 600; }
 .site-script-directory-label { display: flex; align-items: center; justify-content: space-between; }.site-script-directory-label :deep(.el-button) { padding: 0; font-size: 11px; }
@@ -1123,5 +1169,5 @@ function download() {
 .site-script-error { margin: 0; color: var(--rc-error); font-size: 12px; line-height: 1.5; }.site-script-warning { margin: 0; color: #b45309; font-size: 12px; }
 .site-script-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }.site-script-footer :deep(.el-button + .el-button) { margin-left: 0; }
 .site-script-file-search, .site-script-file-pager { display: flex; align-items: center; gap: 8px; }.site-script-file-search input { flex: 1; }.site-script-file-pager span { flex: 1; color: var(--rc-muted); font-size: 12px; }.site-script-file-list { display: grid; gap: 6px; max-height: 48vh; overflow: auto; margin-top: 12px; }.site-script-file-option { display: flex; justify-content: space-between; gap: 10px; padding: 10px; border: 0; border-radius: 5px; background: var(--rc-primary-bg); color: var(--rc-primary); text-align: left; overflow-wrap: anywhere; cursor: pointer; }.site-script-file-option:hover { filter: brightness(.97); }.site-script-file-option small { flex-shrink: 0; color: var(--rc-muted); }
-@media (max-width: 760px) { .site-script-workspace { grid-template-columns: 1fr; height: auto; max-height: calc(100dvh - 180px); overflow: auto; min-height: 0; }.site-script-settings { min-height: 400px; overflow: visible; }.is-task .site-script-controls { grid-template-columns: 1fr; }.is-task .site-script-prompts { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(220px, 1fr)); min-height: 456px; }.site-script-editor-panel { min-height: 440px; }.site-script-editor-toolbar { flex-wrap: wrap; } }
+@media (max-width: 760px) { .site-script-workspace { grid-template-columns: 1fr; height: auto; max-height: calc(100dvh - 180px); overflow: auto; min-height: 0; }.site-script-settings { min-height: 400px; overflow: visible; }.is-task .site-script-controls { grid-template-columns: 1fr; }.site-script-prompts { grid-template-columns: 1fr; grid-template-rows:auto auto; }.is-task .site-script-prompts { min-height:680px; flex:none; }.site-script-prompt-left,.site-script-ai-pane { min-height:320px; }.site-script-editor-panel { min-height: 440px; }.site-script-editor-toolbar { flex-wrap: wrap; } }
 </style>

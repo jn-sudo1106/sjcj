@@ -9,6 +9,7 @@ import { siteScriptOutputBlock, withSiteScriptQueuePrompt } from '@/utils/flow/s
 import CodeGenerationPromptVariables from '@/components/CodeGenerationPromptVariables.vue'
 import AiCodeWorkspaceDialog from '@/components/AiCodeWorkspaceDialog.vue'
 import PromptTemplatePicker from '@/views/FlowCanvas/inspector/PromptTemplatePicker.vue'
+import PromptAiEditor from '@/components/PromptAiEditor.vue'
 
 const props = defineProps<{ job: MqCodeJob }>()
 const emit = defineEmits<{ created: [job: MqCodeJob]; cancel: [] }>()
@@ -19,6 +20,8 @@ const rightTab = ref('result')
 const open = ref(true), showPrevious = ref(false)
 const templates = ref<NodePromptTemplate[]>([]), templatesLoading = ref(false), templateError = ref('')
 const selectedTemplateId = ref(0)
+const promptTab = ref<'system' | 'user'>('user')
+function applyPrompt(value: string) { if (promptTab.value === 'system') systemPrompt.value = value; else userPrompt.value = value; selectedTemplateId.value = 0 }
 const promptText = computed(() => JSON.stringify([systemPrompt.value, userPrompt.value]))
 let appliedPromptText = ''
 let requestId = newRequestId(), submittedBody = '', alive = true
@@ -78,7 +81,8 @@ onMounted(async () => {
     const [snapshot, settings] = await Promise.all([api.prepareCodeRegeneration(props.job.taskId), api.modelInterfaces()])
     if (!alive) return
     prepared.value = snapshot; models.value = settings.items.filter(model => model.enabled && isAgentInterface(model))
-    systemPrompt.value = snapshot.generation.systemPrompt || ''; userPrompt.value = snapshot.generation.userPrompt || ''; interfaceId.value = snapshot.generation.interfaceId || ''
+    systemPrompt.value = snapshot.generation.systemPrompt || ''; userPrompt.value = snapshot.generation.userPrompt || ''
+    interfaceId.value = props.job.result?.interfaceId || props.job.modelCall?.interfaceId || snapshot.generation.interfaceId || ''
     appliedPromptText = promptText.value
     void loadTemplates(snapshot)
   } catch (e) { if (alive) error.value = e instanceof Error ? e.message : String(e) }
@@ -110,14 +114,18 @@ async function submit() {
       <div class="regeneration-columns">
       <form class="regeneration-form" @submit.prevent="submit">
         <div class="regeneration-mode">任务方式<span>提交后创建新任务，原任务记录保留</span></div>
+        <div class="regeneration-controls">
         <PromptTemplatePicker :items="templates" :model-value="selectedTemplateId" :loading="templatesLoading" :disabled="loading || submitting" test-id="regeneration-prompt-template" @select="selectTemplate" />
         <el-alert v-if="templateError" :title="`提示词模板加载失败：${templateError}`" type="warning" :closable="false" />
         <el-alert v-if="missingTemplateFields" title="原任务没有记录输出字段，请在提示词中补全字段名和字段 ID" type="warning" :closable="false" />
         <label>智能体接口<el-select v-model="interfaceId" aria-label="重新生成智能体接口" :disabled="submitting || loading" filterable><el-option :value="ALL_AGENTS" label="全选 · 任意空闲智能体" /><el-option v-if="modelMissing" :value="interfaceId" :label="`${interfaceId}（已停用或不存在）`" disabled /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'} · ${agentStatusLabel(model)}`" /></el-select></label>
+        </div>
         <CodeGenerationPromptVariables />
         <div class="regeneration-prompts">
-          <label>系统提示词<el-input v-model="systemPrompt" aria-label="重新生成系统提示词" type="textarea" :rows="12" maxlength="12000" :disabled="submitting || loading" /></label>
-          <label>用户提示词<el-input v-model="userPrompt" aria-label="重新生成用户提示词" type="textarea" :rows="12" maxlength="12000" :disabled="submitting || loading" /></label>
+          <div class="regeneration-prompt-left"><nav aria-label="选择提示词类型"><el-button :type="promptTab === 'system' ? 'primary' : 'default'" data-testid="regeneration-system-tab" @click="promptTab = 'system'">系统提示词</el-button><el-button :type="promptTab === 'user' ? 'primary' : 'default'" data-testid="regeneration-user-tab" @click="promptTab = 'user'">用户提示词</el-button></nav>
+          <label v-show="promptTab === 'system'">系统提示词<el-input v-model="systemPrompt" aria-label="重新生成系统提示词" type="textarea" :rows="12" maxlength="12000" :disabled="submitting || loading" /></label>
+          <label v-show="promptTab === 'user'">用户提示词<el-input v-model="userPrompt" aria-label="重新生成用户提示词" type="textarea" :rows="12" maxlength="12000" readonly :disabled="submitting || loading" /></label></div>
+          <section class="regeneration-prompt-chat"><PromptAiEditor v-if="!loading && prepared" :key="promptTab" embedded :prompt-type="promptTab" :prompt="promptTab === 'system' ? systemPrompt : userPrompt" :disabled="submitting" @apply="applyPrompt" /></section>
         </div>
         <label>本次修正要求<el-input v-model="correction" aria-label="本次修正要求" type="textarea" :rows="3" maxlength="12000" :disabled="submitting || loading" placeholder="如：发布日期取错了，请使用列表中的日期" /></label>
         <div class="regeneration-submit"><el-checkbox v-model="updateNodePrompts" aria-label="同时更新节点提示词" :disabled="submitting || !prepared?.canUpdateNode">同时更新节点提示词</el-checkbox><el-button type="primary" native-type="submit" :loading="submitting" :disabled="!ready || submitting" data-testid="submit-regeneration">提交生成任务</el-button></div>
@@ -138,5 +146,8 @@ async function submit() {
 </template>
 
 <style scoped>
-.regeneration{display:flex;flex-direction:column;gap:10px;min-width:0;height:min(760px,calc(100dvh - 160px));min-height:0}.regeneration-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.regeneration-context{margin:0;color:var(--el-text-color-secondary);font-size:12px;overflow-wrap:anywhere}.regeneration-columns{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0;flex:1;min-height:0}.has-previous .regeneration-columns{grid-template-columns:minmax(360px,1.15fr) minmax(0,1.4fr)}.regeneration-form{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow-y:auto;padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:8px;background:var(--rc-primary-bg,var(--el-color-primary-light-9))}.regeneration-form> :not(.regeneration-prompts){flex-shrink:0}.regeneration-form label{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}.regeneration-form .el-select{width:100%}.regeneration-mode{font-size:13px;color:var(--el-color-primary);font-weight:600}.regeneration-mode span{font-size:12px;color:var(--el-text-color-secondary);margin-left:14px;font-weight:400}.regeneration-prompts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;flex:1;min-height:240px}.regeneration-prompts :deep(.el-textarea){flex:1;min-height:0}.regeneration-prompts :deep(.el-textarea__inner){height:100%;resize:none}.has-previous .regeneration-prompts{grid-template-columns:1fr;grid-template-rows:repeat(2,minmax(150px,1fr));min-height:320px}.regeneration-submit{display:flex;align-items:center;justify-content:space-between;gap:12px}.regeneration-previous{min-width:0;min-height:0;overflow-y:auto;padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:8px;font-size:12px;overflow-wrap:anywhere}.regeneration-previous pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--el-fill-color-light);border-radius:6px}.regeneration-previous ul{padding-left:16px}.regeneration-previous a{color:var(--el-color-primary)}@media(max-width:760px){.regeneration{height:auto;max-height:calc(100dvh - 180px);overflow:auto}.has-previous .regeneration-columns{grid-template-columns:1fr}.regeneration-form,.regeneration-previous{overflow:visible}.regeneration-prompts{grid-template-columns:1fr;grid-template-rows:repeat(2,minmax(220px,1fr));min-height:456px}.regeneration-submit{flex-wrap:wrap}}
+.regeneration:not(.has-previous) .regeneration-columns{grid-template-rows:minmax(0,1fr)}.regeneration-prompt-left{padding:12px;border:1px solid var(--el-border-color-light);border-radius:8px;background:var(--el-bg-color)}.regeneration-prompt-chat{display:flex;min-height:0;overflow:hidden}.regeneration .regeneration-prompts{flex:1;align-items:stretch}
+.regeneration-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:end; gap:12px; }.regeneration-controls>.el-alert { grid-column:1/-1; }@media(max-width:760px){.regeneration-controls{grid-template-columns:1fr}}
+.regeneration-prompt-left { display:flex; flex-direction:column; min-width:0; gap:10px; min-height:360px; align-self:stretch; }.regeneration-prompt-left nav { display:flex; gap:8px; }.regeneration-prompt-left nav .el-button { margin:0; }.regeneration-prompt-left label { flex:1; }.regeneration-prompt-chat { min-width:0; padding:12px; border:1px solid var(--el-border-color-light); border-radius:8px; background:var(--el-bg-color); }
+.regeneration{display:flex;flex-direction:column;gap:10px;min-width:0;height:min(760px,calc(100dvh - 160px));min-height:0;overflow:auto}.regeneration-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.regeneration-context{margin:0;color:var(--el-text-color-secondary);font-size:12px;overflow-wrap:anywhere}.regeneration-columns{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0;flex:1;min-height:0}.regeneration-form{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:8px;background:var(--rc-primary-bg,var(--el-color-primary-light-9))}.regeneration-form> :not(.regeneration-prompts){flex-shrink:0}.regeneration-form label{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}.regeneration-form .el-select{width:100%}.regeneration-mode{font-size:13px;color:var(--el-color-primary);font-weight:600}.regeneration-mode span{font-size:12px;color:var(--el-text-color-secondary);margin-left:14px;font-weight:400}.regeneration-prompts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;min-height:360px}.regeneration-prompts :deep(.el-textarea){flex:1;min-height:0}.regeneration-prompts :deep(.el-textarea__inner){height:100%;resize:none}.regeneration-submit{display:flex;align-items:center;justify-content:space-between;gap:12px}.regeneration-previous{min-width:0;min-height:0;padding:14px;border:1px solid var(--el-border-color-lighter);border-radius:8px;font-size:12px;overflow-wrap:anywhere}.regeneration-previous pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--el-fill-color-light);border-radius:6px}.regeneration-previous ul{padding-left:16px}.regeneration-previous a{color:var(--el-color-primary)}@media(max-width:760px){.regeneration{height:auto;max-height:calc(100dvh - 180px);overflow:auto}.has-previous .regeneration-columns{grid-template-columns:1fr}.regeneration-form,.regeneration-previous{overflow:visible}.regeneration-prompts{grid-template-columns:1fr;min-height:360px}.regeneration-submit{flex-wrap:wrap}}
 </style>

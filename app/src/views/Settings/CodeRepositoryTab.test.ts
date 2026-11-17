@@ -24,7 +24,7 @@ const web: CodeRepository = {
   remoteUrl: 'https://git.example.com/code-web.git', isDefault: false, codeCount: 1,
 }
 const stubs = {
-  RouterLink: { props: ['to'], template: '<a><slot /></a>' },
+  RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' },
   ElButton: { props: ['disabled'], template: '<button type="button" :disabled="disabled"><slot /></button>' },
   ElDropdown: { template: '<div><slot /><slot name="dropdown" /></div>' },
   ElDropdownMenu: { template: '<div><slot /></div>' },
@@ -50,6 +50,19 @@ async function mountTab() {
   await flushPromises()
   return wrapper
 }
+it('从部署配置进入 Git 目录后可返回原机器和配置范围，浏览仓库时保留返回入口', async () => {
+  const wrapper = await mountTab()
+  expect(wrapper.find('[data-testid="return-deployment-config"]').exists()).toBe(false)
+  await wrapper.setProps({ repositoryReturnTo: '/settings?tab=runners&runnerId=r1&configId=1401218' })
+  expect(wrapper.getComponent({ name: 'RouterLink' }).props('to')).toEqual({ path: '/settings', query: {
+    tab: 'runners', runnerId: 'r1', configId: '1401218',
+  } })
+  await wrapper.get('[data-testid="code-repo-repo-web"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="return-deployment-config"]').text()).toContain('返回部署配置')
+  await wrapper.setProps({ repositoryReturnTo: 'https://untrusted.example/settings?tab=runners' })
+  expect(wrapper.find('[data-testid="return-deployment-config"]').exists()).toBe(false)
+  wrapper.unmount()
+})
 it('同步远端后保留当前目录并刷新文件；未配置远端不能同步', async () => {
   const wrapper = await mountTab()
   expect(wrapper.get('[data-testid="code-repo-sync-repo-default"]').attributes('disabled')).toBeDefined()

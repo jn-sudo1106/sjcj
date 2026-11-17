@@ -11,6 +11,55 @@ from . import code_servers
 from .directory_layout import store_layout
 
 PREFIX = 'code-server-upgrade:'
+LAUNCHER_PREFIX = 'code-server-launcher-upgrade:'
+
+
+def updating(app, server_id):
+    with app.store.connect() as db:
+        rows=db.execute('SELECT setting_value FROM settings WHERE setting_key IN (?,?)',
+                        (PREFIX+server_id, LAUNCHER_PREFIX+server_id)).fetchall()
+    return any(json.loads(row['setting_value']).get('status') in ('pending','waiting','upgrading') for row in rows)
+
+
+def launcher_files():
+    source = Path(__file__).resolve().parents[1] / 'code_generation_server'
+    support = Path(__file__).resolve().parent
+    files = {'code_generation_server/' + name: (source / name).read_bytes() for name in code_servers.PACKAGE_FILES}
+    files.update({'runner_management/' + name: (support / name).read_bytes() for name in code_servers.PACKAGE_SUPPORT_FILES})
+    return files
+
+
+def publish_launcher(app, activate=True):
+    from .server import now
+    digest, signature = app.artifacts.publish(launcher_files(), {'kind': 'code-server-launcher', 'entryModule': 'code_generation_server.start'})
+    with app.store.connect() as db:
+        db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',
+                   (digest, 'code-server-launcher', digest[7:19], 'any', 'local-source', 'published', now(), signature, 'code_generation_server.start', 'local-source'))
+        if activate:
+            store_layout(db, 'code-server-latest-launcher', {'digest': digest})
+    return digest
+
+
+def automatic(app, row, launcher=False):
+    """Assign each instance the published target; never retry the same failed digest in a loop."""
+    from .server import now
+    prefix = LAUNCHER_PREFIX if launcher else PREFIX
+    setting = 'code-server-latest-launcher' if launcher else 'code-server-latest-service'
+    with code_servers.LOCK, app.store.connect() as db:
+        saved = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (setting,)).fetchone()
+        old = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (prefix + row['serverId'],)).fetchone()
+        previous = json.loads(old['setting_value']) if old else None
+        if not saved:
+            return previous
+        digest = json.loads(saved['setting_value'])['digest']
+        actual = row.get('launcherDigest' if launcher else 'actualDigest', 'source-local')
+        if actual == digest or previous and (previous['status'] in ('pending', 'waiting', 'upgrading') or previous['digest'] == digest):
+            return previous
+        item = {'serverId': row['serverId'], 'digest': digest, 'previousDigest': actual,
+                'requestId': uuid.uuid4().hex, 'automatic': True, 'status': 'pending',
+                'message': '等待空闲后自动更新' + ('启动器' if launcher else '服务程序'), 'requestedAt': now(), 'updatedAt': now()}
+        store_layout(db, prefix + row['serverId'], item)
+        return item
 
 
 def releases(app):
@@ -27,10 +76,15 @@ def publish(app):
                    if isinstance(node, ast.Assign) and any(isinstance(name, ast.Name) and name.id=='VERSION' for name in node.targets))
     files = {'code_generation_server/service.py': (source / 'service.py').read_bytes(), 'code_generation_server/__init__.py': b''}
     files['code_generation_server/mq_worker.py']=(source/'mq_worker.py').read_bytes()
+    files['code_generation_server/launcher_bridge.py']=(source/'launcher_bridge.py').read_bytes()
+    files['runner_management/__init__.py'] = b''
+    files['runner_management/artifacts.py'] = (Path(__file__).with_name('artifacts.py')).read_bytes()
     digest, signature = app.artifacts.publish(files, {'kind': 'code-server', 'entryModule': 'code_generation_server.service', 'version': version})
     with app.store.connect() as db:
         inserted = db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',
                               (digest,'code-server',version,'any','local-source','published',now(),signature,'code_generation_server.service','local-source'))
+        store_layout(db, 'code-server-latest-service', {'digest': digest})
+    publish_launcher(app)
     return {'digest': digest, 'version': version, 'created': inserted.rowcount > 0}
 
 
@@ -87,7 +141,7 @@ def observe_heartbeat(app, row):
     from .server import now
     upgrade=read(app,row['serverId'])
     if (upgrade and upgrade['status'] in ('pending','waiting') and row.get('upgradeCapable')
-            and upgrade.get('previousDigest')==upgrade['digest']==row.get('actualDigest')):
+            and upgrade['digest']==row.get('actualDigest')):
         upgrade.update(status='succeeded',message='实例已恢复在线并运行目标版本',updatedAt=now())
         with app.store.connect() as db:
             store_layout(db,PREFIX+row['serverId'],upgrade)
@@ -105,13 +159,39 @@ def personal(handler,app,method,path,body):
     upgrade=read(app,server_id)
     if method=='GET' and path=='/api/code-servers/me/status':
         return {'status':code_servers.public(row)['status'],'actualDigest':row.get('actualDigest','source-local'),
-                'pid':row.get('pid'),'publicKey':app.artifacts.public_key,'upgrade':upgrade}
+                'pid':row.get('pid'),'publicKey':app.artifacts.public_key,'upgrade':upgrade,
+                'launcherDigest':row.get('launcherDigest','source-local'), 'launcherBootId':row.get('launcherBootId','')}
     if method=='GET' and path=='/api/code-servers/me/desired':
         from .generation_workspaces import server_busy
+        upgrade=automatic(app,row)
         active=bool(upgrade and upgrade['status'] not in ('failed','succeeded'))
         busy=server_busy(server_id)
         return {'digest':upgrade['digest'] if active and not busy else None,
                 'requestId':upgrade['requestId'] if upgrade else None, 'waiting':active and busy}
+    if method=='GET' and path=='/api/code-servers/me/launcher-desired':
+        from .generation_workspaces import server_busy
+        item=automatic(app,row,launcher=True)
+        active=bool(item and item['status'] not in ('failed','succeeded'))
+        busy=server_busy(server_id) or bool(upgrade and upgrade['status'] in ('pending','waiting','upgrading'))
+        return {'digest':item['digest'] if active and not busy else None,
+                'requestId':item['requestId'] if item else None, 'waiting':active and busy}
+    if method=='POST' and path=='/api/code-servers/me/launcher-result':
+        with code_servers.LOCK,app.store.connect() as db:
+            saved=db.execute('SELECT setting_value FROM settings WHERE setting_key=?',(LAUNCHER_PREFIX+server_id,)).fetchone()
+            item=json.loads(saved['setting_value']) if saved else None
+            if not item or body.get('requestId')!=item['requestId']:
+                raise ApiError('启动器升级指令已变化',409)
+            status=body.get('status')
+            if status not in ('waiting','upgrading','succeeded','failed'):
+                raise ApiError('升级状态无效')
+            if status=='succeeded' and (row.get('launcherDigest')!=item['digest'] or code_servers.public(row)['status']!='online'):
+                raise ApiError('启动器目标版本尚未通过心跳校验',409)
+            message=body.get('message','')
+            if not isinstance(message,str) or len(message)>1500:
+                raise ApiError('升级状态说明无效')
+            item.update(status=status,message=message,updatedAt=now())
+            store_layout(db,LAUNCHER_PREFIX+server_id,item)
+        return {'ok':True}
     if method=='POST' and path=='/api/code-servers/me/upgrade-result':
         with code_servers.LOCK:
             upgrade=read(app,server_id)
@@ -136,7 +216,12 @@ def personal(handler,app,method,path,body):
         if upgrade:
             allowed.update((upgrade['digest'],upgrade.get('previousDigest')))
         with app.store.connect() as db:
-            release=db.execute("SELECT signature FROM releases WHERE digest=? AND kind='code-server' AND status='published'",(digest,)).fetchone()
+            saved=db.execute('SELECT setting_value FROM settings WHERE setting_key=?',(LAUNCHER_PREFIX+server_id,)).fetchone()
+        if saved:
+            launcher=json.loads(saved['setting_value']);allowed.update((launcher['digest'],launcher.get('previousDigest')))
+        allowed.add(row.get('launcherDigest'))
+        with app.store.connect() as db:
+            release=db.execute("SELECT signature FROM releases WHERE digest=? AND kind IN ('code-server','code-server-launcher') AND status='published'",(digest,)).fetchone()
         if digest not in allowed or not release:
             raise ApiError('无权下载该 CodeServer 制品',403)
         data=app.artifacts.read(digest)

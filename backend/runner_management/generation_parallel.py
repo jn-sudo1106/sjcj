@@ -50,6 +50,9 @@ def merge_dependencies(app, selected, record):
     files = operation(app, server, {'action': 'export', 'paths': [target]})['files']
     previous = next((item for item in files if item['path'] == target + '/requirements.txt'), None)
     generated = operation(app, server, {'action': 'export', 'paths': [record['codeDirectory']]})['files']
+    expected = record.get('expectedFileName')
+    if expected and not any(item['path'] == record['codeDirectory'] + '/' + expected for item in generated):
+        return  # A refused/incomplete generation must not become a dependency-only result.
     current = next((item for item in generated if item['path'] == record['codeDirectory'] + '/requirements.txt'), None)
     existing = base64.b64decode(previous['data']).decode('utf-8-sig') if previous else ''
     # Other servers publish into the same Git configuration directory. Preserve

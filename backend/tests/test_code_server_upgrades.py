@@ -213,7 +213,11 @@ class CodeServerUpgradeTest(unittest.TestCase):
             self.assertTrue((root/'identity.json').is_file())
         finally:
             if child.poll() is None:
-                child.send_signal(signal.CTRL_BREAK_EVENT if os.name=='nt' else signal.SIGTERM)
+                if (root/'.launcher-host-state.json').exists():
+                    from backend.code_generation_server.launcher_bridge import request_shutdown
+                    request_shutdown(root)
+                else:
+                    child.send_signal(signal.CTRL_BREAK_EVENT if os.name=='nt' else signal.SIGTERM)
                 try:child.wait(timeout=20)
                 except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
             log.close()

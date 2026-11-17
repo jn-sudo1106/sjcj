@@ -263,12 +263,17 @@ export interface DirectoryDeliveryPreview {
   targetPath: string
   baselineDigest: string | null
   items: DirectoryDeliveryItem[]
+  sourceMode?: 'current-git'
+  sourceRevision?: string
+  gitSources?: { repoId: string; path: string; gitCommit: string }[]
 }
 export interface DirectoryDeliveryInput extends DirectoryRunnerBindingInput {
   revision: string
   scope?: 'all' | 'selected'
   paths?: string[]
   baselineDigest?: string | null
+  sourceMode?: 'current-git'
+  sourceRevision?: string
 }
 export interface DirectoryLayout {
   /** 旧配置视图未提供此字段时，按 config 处理。 */
@@ -295,6 +300,8 @@ export interface DeploymentSourceNode {
   configId: string
 }
 export interface DeploymentConfiguration extends DirectoryLayout {
+  entryConfigurationId?: string
+  managedBy?: string
   deploymentId: string
   name: string
   pathStyle: DirectoryBindingType
@@ -312,6 +319,8 @@ export interface RunnerRetryPolicy {
   delaysSeconds: number[]
 }
 export interface RuntimeConfiguration {
+  /** 创建此机器配置的部署回执中记录的源；共享配置的其他源不作为来源。 */
+  sourceContext?: { sourceId: string; flowId: string; stepId: string; configId: string; deploymentJobId: string }
   /** 已确认手工关闭的并发序号，成功手动启动后清空。 */
   stoppedProcessSlots?: number[]
   runtimeId: string
@@ -323,6 +332,7 @@ export interface RuntimeConfiguration {
   layoutRevision: string
   deliveredCodeMatches?: boolean
   latestCodeMatchesDelivery?: boolean
+  codeVerificationPending?: boolean
   revision: string
   directoryTemplate: string
   entryPoint: string
@@ -356,13 +366,23 @@ export interface NodeDeploymentContext {
   queueName?: string; archiveId?: string
 }
 export interface NodeDeploymentResource extends NodeDeploymentContext {
+  deploymentSettings?: NodeDeploymentSettings
+  generatedFiles?: string[]
+  entryPoint?: string; entryConfigurationId?: string
+  repositoryId?: string; gitDirectory?: string
   resourceIds?: string[]; useDefault?: boolean; effectiveResourceIds?: string[]
   targets?: { resourceId: string; runnerId: string; targetPath?: string; deploymentDirectory?: string; pathError?: string }[]
   resourceId: string; revision: string; defaultResourceId: string; effectiveResourceId: string
   resources: DeploymentResourceRule[]
   targetPath?: string; deploymentDirectory?: string; resourceDirectory?: string; pathError?: string
 }
+export interface NodeDeploymentSettings {
+  repositoryId: string
+  sourceDirectory: string
+  deploymentDirectory: string
+}
 export interface GeneratedDeploymentJob {
+  configurationId?: string
   targetResourceId?: string; resourceId?: string
   jobId: string; sourceId: string; flowId: string; stepId: string; configId: string; configType: string
   environment: DeploymentEnvironment; archiveId: string; taskId: string; gitCommit: string
@@ -375,6 +395,11 @@ export interface GeneratedDeploymentJob {
 export interface GeneratedDeploymentQuery {
   sourceId?: string; flowId?: string; stepId?: string; configId?: string
   environment?: DeploymentEnvironment; status?: string; page?: number; size?: number
+}
+export interface DeploymentTaskDetail extends GeneratedDeploymentJob {
+  historyAvailable: boolean
+  finishedAt: string | null
+  events: { eventId: string; time: string; stage: string; level: string; message: string; detail: string }[]
 }
 export interface DeploymentFileSnapshot {
   jobId: string; deliveryId: string; artifactDigest: string; gitCommit: string; directory: string
@@ -642,6 +667,8 @@ export interface CodeGenerationServer {
   mqCapable?: boolean
   mqGeneration?: { configId: string; queue: string; name: string } | null
   launcherVersion?: string
+  autoUpdate?: boolean; launcherAutoUpdate?: boolean; launcherDigest?: string
+  launcherUpgrade?: { digest: string; requestId: string; status: 'pending' | 'waiting' | 'upgrading' | 'succeeded' | 'failed'; message: string } | null
   serverId: string; name: string; endpoint: string; workspace: string; installDirectory: string
   generationRoot?: string; runUser?: string
   ipAddress: string; osType: string; osVersion: string; version: string; pid?: number
@@ -671,7 +698,7 @@ export interface NodeProxySettings {
 }
 
 export const runnerManagementApi = {
-  requestRunnerFiles: (id: string, body: { action: 'list' | 'read'; path: string }) => request<{ requestId: string }>(`/runners/${encodeURIComponent(id)}/files`, 'POST', body),
+  requestRunnerFiles: (id: string, body: { action: 'list' | 'read' | 'mkdir' | 'upload' | 'delete'; path: string; files?: { path: string; data: string }[]; expectedHash?: string; expectedSize?: number | null; expectedModifiedAt?: string }) => request<{ requestId: string }>(`/runners/${encodeURIComponent(id)}/files`, 'POST', body),
   runnerFileResult: (id: string) => request<{ status: 'pending' | 'success' | 'failed'; error?: string; result?: { path: string; items?: RemoteCodeFile[]; truncated?: boolean; content?: string; sha256?: string } }>(`/runner-file-requests/${encodeURIComponent(id)}`),
   nodePromptTemplates: (params: { sourceType?: string; nodeTypeName?: string; category?: string; templateUse: 'config' | 'script' }) => request<import('./nodePrompts').NodePromptTemplate[]>('/node-prompt-templates?' + new URLSearchParams(Object.entries(params).filter(([,value]) => value !== undefined) as [string,string][])),
   saveNodePromptTemplate: (body: Partial<import('./nodePrompts').NodePromptTemplate> & { sourceType: string }) => request<import('./nodePrompts').NodePromptTemplate>('/node-prompt-templates/save', 'POST', body),
@@ -679,7 +706,9 @@ export const runnerManagementApi = {
   deletePromptTemplate: (body: { promptId: number; sourceType: string; nodeTypeName: string; templateUse: 'config' | 'script'; revision: string }) => request<{ deleted: boolean; promptId: number }>('/node-prompt-templates/delete', 'POST', body),
   deploymentResources: () => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources'),
   nodeDeploymentResource: (context: NodeDeploymentContext) => request<NodeDeploymentResource>('/node-deployment-resource?' + new URLSearchParams(Object.entries(context).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))),
-  saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; resourceIds?: string[]; useDefault?: boolean; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
+  deploymentTaskDetail: (jobId: string) => request<DeploymentTaskDetail>(`/deployment-jobs/${encodeURIComponent(jobId)}`),
+  previewNodeDeploymentResource: (context: NodeDeploymentContext, settings: NodeDeploymentSettings) => request<NodeDeploymentResource>('/node-deployment-resource?' + new URLSearchParams(Object.entries({ ...context, ...settings, preview: '1' }).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))),
+  saveNodeDeploymentResource: (body: NodeDeploymentContext & { resourceId: string; resourceIds?: string[]; useDefault?: boolean; deploymentSettings?: NodeDeploymentSettings; revision: string }) => request<NodeDeploymentResource>('/node-deployment-resource', 'POST', body),
   saveDeploymentResources: (body: { items: DeploymentResourceRule[]; revision: string }) => request<{ items: DeploymentResourceRule[]; revision: string }>('/deployment-resources', 'POST', body),
   generatedDeployments: (query: GeneratedDeploymentQuery = {}) => request<{ items: GeneratedDeploymentJob[]; total: number }>('/deployment-jobs?' + new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))),
   deploymentFiles: (jobId: string) => request<DeploymentFileSnapshot>(`/deployment-jobs/${encodeURIComponent(jobId)}/files`),
@@ -759,7 +788,8 @@ export const runnerManagementApi = {
   downloadRuntimeLog: (id: string) => request<{ name: string; content: string }>(`/log-streams/${encodeURIComponent(id)}/download`),
   deploymentConfigurations: (keyword = '') => list<DeploymentConfiguration>(`/deployment-configurations?keyword=${encodeURIComponent(keyword)}`),
   deploymentConfiguration: (id: string) => request<DeploymentConfiguration>(`/deployment-configurations/${encodeURIComponent(id)}`),
-  saveDeploymentConfiguration: (layout: DeploymentConfiguration) => request<DeploymentConfiguration>(layout.deploymentId ? `/deployment-configurations/${encodeURIComponent(layout.deploymentId)}` : '/deployment-configurations', 'POST', layout),
+  saveDeploymentConfiguration: (layout: DeploymentConfiguration) => request<DeploymentConfiguration>(layout.deploymentId ? `/deployment-configurations/${encodeURIComponent(layout.deploymentId)}` : '/deployment-configurations', 'POST', { ...layout, shareEntry: layout.nodes.some(node => !!node.repoId) }),
+  saveDeploymentEntry: (id: string, body: { entryPoint: string; revision: string }) => request<{ items: DeploymentConfiguration[] }>(`/deployment-configurations/${encodeURIComponent(id)}/entry`, 'POST', body),
   deleteDeploymentConfiguration: (id: string, revision: string) => request<{ ok: true }>(`/deployment-configurations/${encodeURIComponent(id)}?revision=${encodeURIComponent(revision)}`, 'DELETE'),
   ensureNodeDeployment: (input: { sourceNode: DeploymentSourceNode; queueName: string; scriptDigest?: string }) => request<DeploymentConfiguration>('/deployment-configurations/from-node', 'POST', input),
   runtimeConfigurations: () => list<RuntimeConfiguration>('/runtime-configurations'),
@@ -777,7 +807,7 @@ export const runnerManagementApi = {
   directoryBindings: () => request<DirectoryRunnerBinding[]>('/directory-bindings'),
   createDirectoryBinding: (input: DirectoryRunnerBindingInput) => request<DirectoryRunnerBinding>('/directory-bindings', 'POST', input),
   removeDirectoryBinding: (input: DirectoryRunnerBindingInput) => request<{ ok: true }>(`/directory-bindings/${input.bindingType}/${encodeURIComponent(input.ownerId)}/${encodeURIComponent(input.runnerId)}`, 'DELETE'),
-  directoryDeliveryPreview: (input: DirectoryRunnerBindingInput) => request<DirectoryDeliveryPreview>(`/directory-bindings/${input.bindingType}/${encodeURIComponent(input.ownerId)}/${encodeURIComponent(input.runnerId)}/delivery-preview`),
+  directoryDeliveryPreview: (input: DirectoryRunnerBindingInput) => request<DirectoryDeliveryPreview>(`/directory-bindings/${input.bindingType}/${encodeURIComponent(input.ownerId)}/${encodeURIComponent(input.runnerId)}/delivery-preview${input.bindingType === 'deployment' ? '?source=current-git' : ''}`),
   deliverDirectoryBinding: (input: DirectoryDeliveryInput) => {
     const { bindingType, ownerId, runnerId, ...payload } = input
     return request<DirectoryDelivery>(`/directory-bindings/${bindingType}/${encodeURIComponent(ownerId)}/${encodeURIComponent(runnerId)}/deliver`, 'POST', payload)
@@ -809,6 +839,8 @@ export const runnerManagementApi = {
     request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}${folder !== undefined ? '&view=directory&folder=' + encodeURIComponent(folder) : ''}&sort=${sort}`),
   codeRepositoryFileContent: (repoId: string, path: string) =>
     request<CodeRepositoryFileContent>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/content?path=${encodeURIComponent(path)}`),
+  browseCodeRepository: (repoId: string, commit: string, path: string, action: 'list' | 'read' = 'list') =>
+    request<{ path: string; gitCommit: string; items?: Omit<RemoteCodeFile, 'modifiedAt'>[]; truncated?: boolean; content?: string; size?: number; sha256?: string }>(`/settings/code-repos/${encodeURIComponent(repoId)}/browse?commit=${encodeURIComponent(commit)}&path=${encodeURIComponent(path)}&action=${action}`),
   codeRepositoryFileReferences: (repoId: string, path: string) => request<RepositoryFileReferences>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/references?path=${encodeURIComponent(path)}`),
   codeRepositoryFileMetadata: (repoId: string, path: string, commit?: string) =>
     request<CodeRepositoryFileMetadata>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/metadata?path=${encodeURIComponent(path)}${commit ? '&commit=' + encodeURIComponent(commit) : ''}`),
@@ -825,7 +857,7 @@ export const runnerManagementApi = {
   publishProcessor: (processorType: 'probe' | 'newslink_nourl') => request<{ digest: string }>('/releases/processors', 'POST', { processorType }),
   publishRunner: () => request<{ digest: string; created: boolean }>('/releases/runners', 'POST', {}),
   runnerPackageInfo: () => request<RunnerPackageInfo>('/runner-package'),
-  downloadRunnerPackage: async (input: { server: string; digest: string }) => {
+  downloadRunnerPackage: async (input: { server: string; digest: string; includeEnrollmentCode?: boolean }) => {
     const token = readStoredToken()
     let response: Response
     try {

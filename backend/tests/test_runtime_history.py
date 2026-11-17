@@ -141,6 +141,65 @@ class RuntimeHistoryTest(unittest.TestCase):
                 self.request('/api/runner-management/runtime-operations?' + query)
             self.assertEqual(error.exception.code, 400)
 
+    def test_current_version_logs_detach_obsolete_start_and_keep_business_output(self):
+        self.fixture(concurrency=1)
+        from backend.runner_management.server import as_assignment
+        from backend.runner_management.runtime_history import assignment_contexts
+        with self.app.store.connect() as db:
+            assignment = as_assignment(db.execute('SELECT * FROM assignments WHERE assignment_id=?', (self.runtime['assignmentId'],)).fetchone())
+            context = assignment_contexts(self.app, db, [assignment])[0]
+        previous, record, stream = (uuid.uuid4().hex for _ in range(3))
+        old_snapshot = {**context['logSnapshot'], 'releaseDigest': 'sha256:' + 'a' * 64}
+        with self.app.store.connect() as db:
+            insert_record(db, previous, {'runnerId': self.runner.identity['runnerId'], 'assignmentId': context['assignmentId']},
+                          'start', old_snapshot)
+        with self.app.store.connect() as db:
+            refreshed = assignment_contexts(self.app, db, [assignment])[0]
+        self.assertEqual(refreshed['operationId'], '')
+        ingest_event(self.app, self.runner.identity['runnerId'], {'eventId': uuid.uuid4().hex, 'recordId': record,
+            'action': 'created', 'assignmentId': context['assignmentId'], 'operationId': previous,
+            'releaseDigest': context['releaseDigest'], 'slot': 0, 'retryPolicy': context['retryPolicy']})
+        ingest_event(self.app, self.runner.identity['runnerId'], {'eventId': uuid.uuid4().hex, 'recordId': record,
+            'action': 'started', 'pid': 17924, 'entry': 'newslink.exe', 'workingDirectory': 'program'})
+        from backend.runner_management.runtime_history import ingest_logs
+        ingest_logs(self.app, self.runner.identity['runnerId'], {'recordId': record, 'streamId': stream, 'seq': 1, 'entries': [
+            {'time': datetime.now(timezone.utc).isoformat(), 'source': 'console', 'text': 'INFO 任务 73504445 完成：1 条'}]})
+        detail = self.request('/api/runner-management/runtime-operations/' + record)
+        self.assertEqual(detail['run']['pid'], 17924)
+        self.assertEqual(detail['parentId'], '')
+        with self.app.store.connect() as db:
+            saved = db.execute('SELECT status,snapshot_json FROM runtime_operations WHERE record_id=?', (previous,)).fetchone()
+            self.assertEqual(saved['status'], 'pending')
+            self.assertEqual(json.loads(saved['snapshot_json']), old_snapshot)
+        found = self.request('/api/runner-management/business-task-executions?taskId=73504445')
+        self.assertEqual(found['items'][0]['pid'], 17924)
+        self.assertEqual(found['items'][0]['status'], 'completed')
+
+    def test_rejected_creation_recovers_only_matching_live_pid_and_signed_version(self):
+        self.fixture(concurrency=1)
+        with self.app.store.connect() as db:
+            assignment = db.execute('SELECT * FROM assignments WHERE assignment_id=?', (self.runtime['assignmentId'],)).fetchone()
+        payload = self.runner.heartbeat_payload()
+        payload.update(workerDigests=assignment['release_digest'], workerProcesses=[{
+            'assignmentId': assignment['assignment_id'], 'pid': 17924, 'slot': 0, 'queue': assignment['queue'],
+            'entry': 'D:/program/newslink.exe', 'workingDirectory': 'D:/program'}])
+        self.runner.post('/api/runners/me/heartbeat', payload)
+        from backend.runner_management.server import ApiError
+        event = {'eventId': uuid.uuid4().hex, 'recordId': uuid.uuid4().hex, 'action': 'started',
+                 'pid': 17924, 'entry': 'D:/program/newslink.exe', 'workingDirectory': 'D:/program'}
+        with self.assertRaises(ApiError) as missing:
+            ingest_event(self.app, self.runner.identity['runnerId'], {**event, 'pid': 17925})
+        self.assertEqual(missing.exception.status, 409)
+        payload['workerDigests'] = 'sha256:' + 'f' * 64
+        self.runner.post('/api/runners/me/heartbeat', payload)
+        with self.assertRaises(ApiError): ingest_event(self.app, self.runner.identity['runnerId'], event)
+        payload['workerDigests'] = assignment['release_digest']
+        self.runner.post('/api/runners/me/heartbeat', payload)
+        ingest_event(self.app, self.runner.identity['runnerId'], event)
+        recovered = self.request('/api/runner-management/runtime-operations/' + event['recordId'])
+        self.assertEqual(recovered['status'], 'running')
+        self.assertEqual(recovered['run']['pid'], 17924)
+
     def test_log_upload_orders_equal_timestamps_by_batch_sequence(self):
         sent = []
         def online(endpoint, body):

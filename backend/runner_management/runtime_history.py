@@ -129,12 +129,14 @@ def control(app, runtime_id, revision, enabled):
 
 def assignment_contexts(app, db, assignments):
     from .deployment_configuration import runtime_rows
-    by_assignment = {row.get('assignmentId'): row for row in runtime_rows(app, db) if row.get('assignmentId')}
+    by_assignment = {row.get('assignmentId'): row for row in runtime_rows(app, db, verify=False) if row.get('assignmentId')}
     output = []
     for assignment in assignments:
         runtime = by_assignment.get(assignment['assignmentId'])
         if runtime:
-            latest = db.execute("SELECT record_id FROM runtime_operations WHERE assignment_id=? AND kind='start' ORDER BY requested_at DESC LIMIT 1", (assignment['assignmentId'],)).fetchone()
+            latest = db.execute("SELECT record_id,snapshot_json FROM runtime_operations WHERE assignment_id=? AND kind='start' ORDER BY requested_at DESC LIMIT 1", (assignment['assignmentId'],)).fetchone()
+            if latest and json.loads(latest['snapshot_json']).get('releaseDigest') != assignment['releaseDigest']:
+                latest = None
             output.append({**assignment, 'runtimeId': runtime['runtimeId'], 'retryPolicy': runtime['retryPolicy'], 'operationId': latest['record_id'] if latest else '',
                            'logSnapshot': snapshot(app, db, runtime)})
         else:
@@ -190,6 +192,30 @@ def delivery_result(app, result, action):
                       'error' if status == 'failed' else 'info')
 
 
+def recover_started_record(app, runner_id, payload):
+    """Recover a rejected creation only for a currently reported native process."""
+    identifier = check_id(payload.get('recordId'))
+    with app.store.connect() as db:
+        if db.execute('SELECT 1 FROM runtime_operations WHERE record_id=?', (identifier,)).fetchone():
+            return
+        machine = db.execute('SELECT worker_processes,worker_digests FROM runners WHERE runner_id=?', (runner_id,)).fetchone()
+        if not machine: return
+        workers = json.loads(machine['worker_processes'] or '[]')
+        worker = next((item for item in workers if item.get('pid') == payload.get('pid')
+                       and item.get('entry') == payload.get('entry') and item.get('workingDirectory') == payload.get('workingDirectory')), None)
+        if not worker: return
+        assignment = db.execute('SELECT * FROM assignments WHERE assignment_id=? AND runner_id=?', (worker.get('assignmentId'), runner_id)).fetchone()
+        if not assignment or assignment['release_digest'] not in (machine['worker_digests'] or '').split(','):
+            return
+        from .server import as_assignment
+        context = assignment_contexts(app, db, [as_assignment(assignment)])[0]
+    ingest_event(app, runner_id, {'eventId': uuid.uuid5(uuid.NAMESPACE_URL, 'ce:recover-start:' + identifier).hex,
+        'recordId': identifier, 'action': 'created', 'assignmentId': worker['assignmentId'],
+        'releaseDigest': context['releaseDigest'], 'operationId': context.get('operationId', ''),
+        'slot': worker['slot'], 'retryPolicy': context.get('retryPolicy'),
+        'occurredAt': payload.get('occurredAt'), 'message': '根据当前实例心跳恢复缺失的启动日志关联'})
+
+
 def ingest_event(app, runner_id, payload):
     from .server import ApiError
     event_id, identifier = check_id(payload.get('eventId')), check_id(payload.get('recordId'))
@@ -202,6 +228,8 @@ def ingest_event(app, runner_id, payload):
             raise ValueError()
     except ValueError:
         raise ApiError('日志时间无效')
+    if action == 'started':
+        recover_started_record(app, runner_id, payload)
     with LOCK, app.store.connect() as db:
         old_event = db.execute('SELECT * FROM runtime_events WHERE event_id=?', (event_id,)).fetchone()
         record = db.execute('SELECT * FROM runtime_operations WHERE record_id=?', (identifier,)).fetchone()
@@ -241,7 +269,13 @@ def ingest_event(app, runner_id, payload):
                     raise ApiError('启动操作归属无效', 403)
                 data = json.loads(owner['snapshot_json'])
                 if data.get('releaseDigest') != payload.get('releaseDigest'):
-                    raise ApiError('启动操作版本与实际代码不一致', 403)
+                    if not assignment or assignment['release_digest'] != payload.get('releaseDigest'):
+                        raise ApiError('启动操作版本与实际代码不一致', 403)
+                    # A new entry may have been adopted while this old start was
+                    # still pending. Accept the authenticated current assignment's
+                    # buffered output without rewriting the historical operation.
+                    parent, owner = '', None
+                    data = context.get('logSnapshot') or {}
             try:
                 actual_policy = retry_policy(payload.get('retryPolicy', context.get('retryPolicy', data.get('retryPolicy'))))
             except ValueError as exc:
