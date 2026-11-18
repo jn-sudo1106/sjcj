@@ -5,7 +5,7 @@ import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
 
 const props = defineProps<{ job: GeneratedDeploymentJob }>()
 const detail = ref<DeploymentTaskDetail | null>(null), loading = ref(false), error = ref('')
-const activeTab = ref('info')
+const activeTab = defineModel<string>('tab', { default: 'info' })
 const stages: Record<string, string> = { created: '创建任务', waiting_resource: '等待资源', queued: '等待下发', resource: '匹配资源', baseline: '读取已有版本', source: '读取 Git 代码', scope: '确定下发范围', package: '打包与检查', packaged: '制品就绪', delivering: '下发代码', requested: '提交下发', received: 'Runner 接收', 'directory-check': '目录检查', download: '下载代码', verify: '摘要和签名校验', install: '写入目录', installed: '写入完成', finished: '下发回执', success: '部署成功', failed: '执行失败', superseded: '已被替代', retry: '重试任务' }
 const output = computed(() => detail.value?.events.map(event =>
   `[${formatRunnerDateTime(event.time)}] [${event.level.toUpperCase()}] ${stages[event.stage] || event.stage}：${event.message}${event.detail ? '\n' + event.detail : ''}`).join('\n\n') || '暂无过程输出')
@@ -53,6 +53,7 @@ defineExpose({ refresh })
       </template>
     </el-tab-pane>
     <el-tab-pane label="过程输出" name="output"><pre class="deployment-process-output" data-testid="deployment-process-output">{{ output }}</pre></el-tab-pane>
+    <el-tab-pane v-if="$slots.files" label="部署文件" name="files" lazy><slot name="files" /></el-tab-pane>
     </el-tabs>
   </section>
 </template>

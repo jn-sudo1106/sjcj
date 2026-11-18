@@ -48,6 +48,15 @@ function canUpgrade(row: CodeGenerationServer) {
     && (row.actualDigest !== latestRelease.value.digest || row.upgrade?.status === 'failed')
 }
 const loading = ref(false), busy = ref(false), folder = ref(''), files = ref<RemoteCodeFile[]>([]), selection = ref<RemoteCodeFile[]>([])
+const fileKeyword = ref(''), fileType = ref<'all' | 'files' | 'folders'>('all')
+const filesTable = ref<{ clearSelection: () => void }>()
+const visibleFiles = computed(() => {
+  const query = fileKeyword.value.trim().toLocaleLowerCase()
+  return files.value.filter(file => (!query || file.name.toLocaleLowerCase().includes(query))
+    && (fileType.value === 'all' || (fileType.value === 'folders' ? file.isDirectory : !file.isDirectory)))
+})
+function resetFileSearch() { fileKeyword.value = ''; fileType.value = 'all' }
+watch([fileKeyword, fileType], () => { selection.value = []; filesTable.value?.clearSelection() })
 const selected = computed(() => servers.value.find(row => row.serverId === selectedId.value))
 const workspaceEditingId = ref(''), workspaceDraft = ref('')
 function editWorkspace(row: CodeGenerationServer) {
@@ -70,7 +79,7 @@ watch([rows, busy], () => {
   if (!busy.value && requestedTarget.value && linkedTargetKey !== requestedTarget.value.key) { void openLinkedTarget(); return }
   if (busy.value || rows.value.some(row => row.serverId === selectedId.value)) return
   if (rows.value[0]) void choose(rows.value[0])
-  else { selectedId.value = ''; files.value = []; folder.value = ''; selection.value = []; bindingOpen.value = false; ++fileSequence }
+  else { selectedId.value = ''; files.value = []; folder.value = ''; selection.value = []; resetFileSearch(); bindingOpen.value = false; ++fileSequence }
 })
 const crumbs = computed(() => folder.value.split('/').filter(Boolean))
 let timer: ReturnType<typeof setInterval> | undefined, fileSequence = 0
@@ -136,7 +145,7 @@ onActivated(startPolling); onDeactivated(stopPolling); onBeforeUnmount(stopPolli
 async function choose(row: CodeGenerationServer) {
   if (busy.value || !await beforeServerNavigation()) return
   if (requestedTarget.value) linkedTargetKey = requestedTarget.value.key
-  selectedId.value = row.serverId; files.value = []; folder.value = ''; selection.value = []
+  selectedId.value = row.serverId; files.value = []; folder.value = ''; selection.value = []; resetFileSearch()
   bindingOpen.value = false; ++bindingSequence
   if (detailView.value === 'files' && row.status === 'online') await browse('')
 }
@@ -149,7 +158,7 @@ async function openLinkedTarget() {
   if (!server) { selectedId.value = target.id; error.value = '任务对应的智能体资源不存在或已删除'; return }
   linkedTargetKey = target.key
   detailView.value = target.view
-  keyword.value = ''; selectedId.value = server.serverId; files.value = []; selection.value = []; detail.value = false
+  keyword.value = ''; selectedId.value = server.serverId; files.value = []; selection.value = []; detail.value = false; resetFileSearch()
   bindingOpen.value = false; ++bindingSequence; ++fileSequence
   if (target.view === 'models') { error.value = ''; return }
   const raw = target.folder.replaceAll('\\', '/')
@@ -180,6 +189,7 @@ async function browse(path = folder.value) {
   try {
     const result = await api.remoteCodeFiles(id, { action: 'list', path })
     if (sequence !== fileSequence || id !== selectedId.value) return
+    if (path !== folder.value) resetFileSearch()
     files.value = result.items; folder.value = path
   } catch (e) { if (sequence === fileSequence) { files.value = []; error.value = message(e) } }
   finally { if (sequence === fileSequence) busy.value = false }
@@ -349,6 +359,11 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
           <el-button :disabled="busy || !selection.length" @click="download">下载所选</el-button><el-button :disabled="busy || selected.status !== 'online'" @click="browse()">刷新</el-button>
         </div>
       </div>
+      <div class="cg-file-search" data-testid="workspace-file-search">
+        <el-input v-model="fileKeyword" clearable :disabled="busy" placeholder="搜索当前目录的文件或文件夹" aria-label="搜索文件或文件夹" data-testid="workspace-file-keyword" />
+        <el-select v-model="fileType" :disabled="busy" aria-label="搜索文件类型" data-testid="workspace-file-type"><el-option value="all" label="文件和文件夹" /><el-option value="folders" label="仅文件夹" /><el-option value="files" label="仅文件" /></el-select>
+        <span>{{ visibleFiles.length }} / {{ files.length }} 项</span>
+      </div>
       <div class="cg-git-binding" data-testid="generation-git-binding">
         <span>目录 Git 绑定：{{ currentGitBinding ? `${currentGitBinding.repoName || currentGitBinding.repositoryId} / ${currentGitBinding.directoryPath || currentGitBinding.directoryId}` : '按配置类型自动提交，可在节点中自定义仓库目录' }}</span>
         <small v-if="currentGitBinding">{{ currentGitBinding.remoteUrl || '未配置远程地址，仅本地提交' }} · {{ currentGitBinding.branch }} · 绑定目录：{{ currentGitBinding.path || '工作空间根目录' }}</small>
@@ -364,7 +379,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
         <el-button type="primary" :disabled="busy || !bindingRepoId || !bindingDirectoryId" data-testid="save-generation-git-binding" @click="saveGitBinding()">保存绑定</el-button><el-button :disabled="busy" @click="bindingOpen=false">取消</el-button>
         <small>{{ bindingRepository?.remoteUrl || '请在代码仓库中配置 Git 远程地址' }} · {{ bindingRepository?.branch }}。子目录优先采用最近的目录绑定，生成代码的内部结构会保留。</small>
       </div>
-      <el-table v-loading="busy" :data="files" row-key="path" @selection-change="selection = $event" @row-dblclick="openFile" empty-text="当前目录没有文件" class="cg-files">
+      <el-table ref="filesTable" v-loading="busy" :data="visibleFiles" row-key="path" @selection-change="selection = $event" @row-dblclick="openFile" :empty-text="fileKeyword.trim() || fileType !== 'all' ? '当前目录没有匹配的文件或文件夹' : '当前目录没有文件'" class="cg-files">
         <el-table-column type="selection" width="45" /><el-table-column label="文件 / 目录" min-width="200"><template #default="{ row }"><el-button link type="primary" @click="openFile(row)">{{ row.isDirectory ? '📁' : '📄' }} {{ row.name }}</el-button><span v-if="row.accessError" :title="row.accessError" class="cg-binding-error" data-testid="remote-file-access-error"> · 无法读取</span></template></el-table-column>
         <el-table-column label="大小" width="80"><template #default="{ row }">{{ row.isDirectory || row.size == null ? '—' : `${(row.size / 1024).toFixed(1)} KB` }}</template></el-table-column>
         <el-table-column label="修改时间" width="160"><template #default="{ row }">{{ row.modifiedAt ? new Date(row.modifiedAt).toLocaleString('zh-CN', { hour12: false }) : '—' }}</template></el-table-column>
@@ -401,6 +416,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
 .cg-workspace-path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cg-file-actions { display:flex; gap:8px; flex-wrap:wrap; margin-left:auto; }
 .cg-file-actions .el-button + .el-button { margin-left:0; }
+.cg-file-search { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }.cg-file-search .el-input { width:320px; max-width:100%; }.cg-file-search .el-select { width:150px; }.cg-file-search > span { color:var(--el-text-color-secondary); font-size:12px; }
 .cg-files { flex-shrink:0; }
 .cg-git-binding { display:flex; gap:6px 12px; align-items:center; flex-wrap:wrap; font-size:12px; }.cg-git-binding small,.cg-git-editor small { color:var(--el-text-color-secondary); overflow-wrap:anywhere; }.cg-binding-error { color:var(--el-color-danger); }
 .cg-git-editor { display:flex; align-items:end; gap:8px; flex-wrap:wrap; padding:12px; border:1px solid var(--el-border-color-lighter); border-radius:6px; }.cg-git-editor label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:180px; font-size:12px; }.cg-git-editor small { flex-basis:100%; line-height:1.5; }

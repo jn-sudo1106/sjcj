@@ -28,7 +28,7 @@ async function ask(text: string) {
 }
 it('后台自动选择空闲 Chat 智能体并显示名称，多轮对话保留上下文，确认后才应用完整提示词', async () => {
   vi.mocked(streamPromptEditChat).mockImplementation(async (_, event) => {
-    event({ type: 'connecting', durationMs: 0, interfaceId: 'chat', interfaceName: 'WB Chat' })
+    event({ type: 'connecting', durationMs: 0, interfaceId: 'chat', interfaceName: 'WB Chat', serverName: 'DESKTOP-9VUUUUF', serverAddress: '192.168.1.173' })
     event({ type: 'chunk', durationMs: 1, text: JSON.stringify({ reply: '已按要求修改', userPrompt: '只采集当前页 {{url}}' }) })
     event({ type: 'done', durationMs: 2 })
   })
@@ -38,7 +38,7 @@ it('后台自动选择空闲 Chat 智能体并显示名称，多轮对话保留�
   expect(runnerManagementApi.modelInterfaces).not.toHaveBeenCalled()
   await ask('不要翻页')
   expect(streamPromptEditChat).toHaveBeenCalledWith(expect.objectContaining({ automatic: true, basePrompt: '原要求 {{url}}', messages: [{ role: 'user', content: '不要翻页' }] }), expect.any(Function), expect.any(AbortSignal))
-  expect(document.querySelector('[data-testid="prompt-edit-current-agent"]')!.textContent).toBe('当前对话：WB Chat')
+  expect(document.querySelector('[data-testid="prompt-edit-current-agent"]')!.textContent).toBe('当前对话：WB Chat · DESKTOP-9VUUUUF · 192.168.1.173')
   expect(vi.mocked(streamPromptEditChat).mock.lastCall![0].variableCatalog).toEqual(expect.arrayContaining([
     { name: 'use_proxy', description: expect.any(String) }, { name: 'proxy_url', description: expect.any(String) },
     { name: 'proxy_password', description: expect.any(String) }, { name: 'code_file_path', description: expect.any(String) },

@@ -10,7 +10,7 @@ const emit = defineEmits<{ close: []; apply: [prompt: string] }>()
 interface Message { role: 'user' | 'assistant'; text: string; content: string; failed?: boolean }
 const base = ref(props.prompt)
 const promptLabel = computed(() => props.promptType === 'system' ? '系统提示词' : '用户提示词')
-const selected = ref(''), selectedName = ref(''), sending = ref(false)
+const selected = ref(''), selectedName = ref(''), selectedMachine = ref(''), sending = ref(false)
 const question = ref(''), messages = ref<Message[]>([]), candidate = ref<string | null>(null), error = ref(''), stale = ref(false)
 const resultEl = ref<HTMLElement>()
 const canApply = computed(() => !props.disabled && !sending.value && !stale.value && candidate.value !== null && candidate.value !== base.value && !validatePromptEdit(base.value, candidate.value))
@@ -36,7 +36,10 @@ async function send() {
       ...(props.promptType ? { promptType: props.promptType } : {}),
       variableCatalog: CODE_GENERATION_PROMPT_VARIABLES.map(([name, description]) => ({ name, description })) }, event => {
       if (request !== session || stopped) return
-      if (event.type === 'connecting' && event.interfaceId) { selected.value = event.interfaceId; selectedName.value = event.interfaceName || event.interfaceId }
+      if (event.type === 'connecting' && event.interfaceId) {
+        selected.value = event.interfaceId; selectedName.value = event.interfaceName || event.interfaceId
+        selectedMachine.value = [event.serverName, event.serverAddress].filter(Boolean).join(' · ')
+      }
       if (event.type === 'headers' && !event.ok) throw new Error(`Chat 接口返回 HTTP ${event.status}`)
       if (event.type === 'chunk') {
         raw += event.text
@@ -79,13 +82,13 @@ onBeforeUnmount(() => { stopped = true; cancel() })
 <template>
   <component :is="embedded ? 'section' : 'el-drawer'" :class="{ 'pa-embedded': embedded }" v-bind="embedded ? {} : { modelValue: true, title: `AI 修改${promptLabel}`, size: 'min(880px, 94vw)', appendToBody: true }" @close="emit('close')">
     <div class="prompt-ai-editor">
-      <p class="pa-current-model" data-testid="prompt-edit-current-agent">{{ selectedName ? `当前对话：${selectedName}` : sending ? '正在分配空闲智能体…' : '发送后自动分配空闲智能体' }}</p>
+      <p class="pa-current-model" data-testid="prompt-edit-current-agent">{{ selectedName ? `当前对话：${selectedName}${selectedMachine ? ` · ${selectedMachine}` : ''}` : sending ? '正在分配空闲智能体…' : '发送后自动分配空闲智能体' }}</p>
       <b v-if="embedded">AI 修改{{ promptLabel }}</b>
       <details v-if="!embedded"><summary>查看当前{{ promptLabel }}</summary><pre>{{ base }}</pre></details>
-      <CodeGenerationPromptVariables />
+      <CodeGenerationPromptVariables v-if="!embedded" />
       <p class="pa-note">描述你希望调整的内容，可以连续对话；确认应用后才会替换当前{{ promptLabel }}。</p>
       <section v-for="(message, index) in messages" :key="index" class="pa-message" :class="message.role"><b>{{ message.role === 'user' ? '你' : 'AI' }}</b><p>{{ message.text }}</p></section>
-      <div class="pa-input"><el-input v-model="question" type="textarea" :rows="3" maxlength="2000" show-word-limit :disabled="disabled || sending || stale" placeholder="例如：只采集当前列表页，不进入详情页；失败时只返回简短原因" aria-label="提示词修改要求" /><el-button type="primary" :loading="sending" :disabled="disabled || !question.trim() || stale" data-testid="prompt-edit-send" @click="send">发送</el-button><el-button v-if="sending" @click="cancel">取消本轮</el-button></div>
+      <div class="pa-input"><el-input v-model="question" type="textarea" :rows="8" resize="vertical" maxlength="2000" show-word-limit :disabled="disabled || sending || stale" placeholder="例如：只采集当前列表页，不进入详情页；失败时只返回简短原因" aria-label="提示词修改要求" /><el-button type="primary" :loading="sending" :disabled="disabled || !question.trim() || stale" data-testid="prompt-edit-send" @click="send">发送</el-button><el-button v-if="sending" @click="cancel">取消本轮</el-button></div>
       <el-alert v-if="error" :title="error" type="error" :closable="false" />
       <el-button v-if="embedded && stale" @click="rebase">使用最新提示词重新对话</el-button>
       <section v-if="candidate !== null" ref="resultEl" class="pa-result" data-testid="prompt-edit-preview"><b>修改后的完整{{ promptLabel }}</b><pre>{{ candidate }}</pre></section>
@@ -96,6 +99,6 @@ onBeforeUnmount(() => { stopped = true; cancel() })
 </template>
 
 <style scoped>
-.pa-embedded{display:flex;flex:1;min-width:0;min-height:0}.pa-embedded .prompt-ai-editor{flex:1;overflow:auto;min-height:0}.pa-embedded .prompt-ai-editor>*{flex-shrink:0}.pa-embedded .pa-input{margin-top:auto}.pa-current-model{margin:0;color:var(--el-text-color-secondary);font-size:12px}
+.pa-embedded{display:flex;flex:1;min-width:0;min-height:0}.pa-embedded .prompt-ai-editor{flex:1;overflow:auto;min-height:0}.pa-embedded .prompt-ai-editor>*{flex-shrink:0}.pa-embedded .pa-input{flex:1;min-height:180px;align-items:stretch}.pa-embedded .pa-input>.el-button{align-self:flex-end}.pa-embedded .pa-input :deep(.el-textarea__inner){height:100%;min-height:180px}.pa-current-model{margin:0;color:var(--el-text-color-secondary);font-size:12px}
 .prompt-ai-editor{display:flex;flex-direction:column;gap:12px;min-width:0;font-size:13px}.pa-model{display:flex;align-items:center;gap:8px}.pa-model .el-select{flex:1;min-width:0}.pa-model>span{white-space:nowrap}pre{margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6}.pa-note,summary{color:var(--el-text-color-secondary)}summary{cursor:pointer}.pa-message{padding:10px 12px;border-radius:6px;background:var(--el-fill-color-light)}.pa-message.user{background:var(--el-color-primary-light-9)}.pa-message p{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}.pa-input{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}.pa-input .el-textarea{flex:1;min-width:240px}.pa-input .el-button+.el-button{margin-left:0}.pa-result{padding:12px;border:1px solid var(--el-border-color-light);border-radius:6px}
 </style>

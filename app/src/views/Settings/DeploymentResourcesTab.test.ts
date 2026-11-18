@@ -271,6 +271,27 @@ it('部署记录可直接查看本次文件，查看账号也可用且不打开�
   expect(document.body.querySelector('.dr-details')).toBeNull()
 })
 
+it('列表显示本次文件，点击在右侧打开对应文件，多文件可查看更多', async () => {
+  vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ items: [{ ...job,
+    fileSummary: { paths: ['sites/example.py', 'sites/requirements.txt'], total: 3, scope: 'task-files' },
+  }], total: 1 })
+  const w = await setup({}, false, true)
+  const preview = w.get('[data-testid="deployment-file-preview"]')
+  expect(preview.text()).toContain('example.py')
+  expect(preview.findAll('[data-testid="deployment-file-link"]')).toHaveLength(1)
+  expect(w.findComponent({ name: 'DeploymentFilesDrawer' }).exists()).toBe(false)
+  await preview.findAll('[data-testid="deployment-file-link"]')[0]!.trigger('click'); await flushPromises()
+  const panel = w.get('[data-testid="deployment-task-detail-panel"]')
+  const viewer = panel.getComponent({ name: 'DeploymentFilesDrawer' })
+  expect(viewer.props()).toMatchObject({ embedded: true, initialPath: 'sites/example.py', job: { jobId: job.jobId } })
+  expect(w.findComponent({ name: 'DeploymentTaskProcess' }).props('tab')).toBe('files')
+  await preview.get('[data-testid="deployment-more-files"]').trigger('click'); await flushPromises()
+  expect(viewer.props('initialPath')).toBe('')
+  expect(preview.get('[data-testid="deployment-more-files"]').text()).toContain('共 3 个')
+  await w.get('[data-testid="deployment-view-detail"]').trigger('click'); await flushPromises()
+  expect(w.findComponent({ name: 'DeploymentTaskProcess' }).props('tab')).toBe('info')
+})
+
 it('部署记录打开实际落盘目录，点击目录不打开部署详情', async () => {
   const installedPath = 'D:\\Runner1\\instance\\test\\links\\1401218'
   vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ items: [{ ...job, installedPath }], total: 1 })

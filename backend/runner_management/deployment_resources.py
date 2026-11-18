@@ -450,7 +450,8 @@ def listing(app, query):
 
 
 def view(job):
-    return {**git_details(job.get('archive') or {}), **{key: value for key, value in job.items() if key not in ('archive', 'executionEvents', 'deliveryHistory')}}
+    from .deployment_file_summary import for_job
+    return {**git_details(job.get('archive') or {}), **{key: value for key, value in job.items() if key not in ('archive', 'executionEvents', 'deliveryHistory')}, 'fileSummary': for_job(job)}
 
 
 def deploy_existing(app, body):
@@ -697,6 +698,10 @@ def prepare(app, db, job, rule, runner):
                                       and path not in excluded and not is_python_cache(path)]}
         nodes = layout_nodes(archive, mapped_paths['sourceBase'])
         job.update(deploymentScope='configuration', selectedPaths=[])
+    from .deployment_file_summary import summarize
+    prefix = mapped_paths['sourceBase'].rstrip('/') + '/'
+    paths = job['selectedPaths'] if scoped else [file['path'][len(prefix):] for file in archive['files'] if file['path'].startswith(prefix)]
+    job['fileSummary'] = summarize(paths, job['deploymentScope'])
     payload = {'name': '配置 ' + job['configId'] + (' · 测试' if job['environment'] == 'test' else ' · 生产'),
                'directoryTemplate': root, 'configId': job['configId'], 'queueName': job['archive'].get('queueName', ''),
                'pathStyle': 'config', 'nodes': nodes, 'entryPoint': '', 'revision': current['revision'] if current else '',

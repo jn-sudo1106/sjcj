@@ -434,6 +434,8 @@ def ingest_logs(app, runner_id, payload):
             db.execute('UPDATE runtime_log_streams SET last_seq=?,byte_count=byte_count+?,updated_at=? WHERE stream_id=?', (seq, len(encoded), stamp(), stream_id))
         else:
             db.execute('INSERT INTO runtime_log_streams VALUES (?,?,?,?,?,?)', (stream_id, record_id, runner_id, seq, len(encoded), stamp()))
+        from .business_task_index import index_batch
+        index_batch(db, record, stream_id, seq, cleaned)
     return {'ack': seq}
 
 
@@ -614,6 +616,7 @@ def cleanup(app):
         ids = db.execute("SELECT record_id FROM runtime_operations WHERE updated_at<? AND status NOT IN ('pending','running','checking') "
                          "AND NOT EXISTS (SELECT 1 FROM runtime_log_streams s WHERE s.record_id=runtime_operations.record_id AND s.byte_count>0)", (old,)).fetchall()
         for row in ids:
+            db.execute('DELETE FROM business_task_executions WHERE record_id=?', (row['record_id'],))
             db.execute('DELETE FROM runtime_log_streams WHERE record_id=? AND byte_count=0', (row['record_id'],))
             db.execute('DELETE FROM runtime_events WHERE record_id=?', (row['record_id'],))
             db.execute('DELETE FROM program_runs WHERE run_id=?', (row['record_id'],))

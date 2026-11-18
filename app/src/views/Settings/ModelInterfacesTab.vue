@@ -8,6 +8,7 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT } from '@/api/siteScript'
 import { formatModelTestOutput } from '@/api/modelInterfaceStream'
 import MarkdownOutput from '@/components/MarkdownOutput.vue'
+import ModelInterfaceCallsDrawer from './ModelInterfaceCallsDrawer.vue'
 import { agentInterfaceKey, parseAgentCurls, type AgentCurlImportType } from '@/utils/agentCurlImport'
 import { createGenerationTaskId, DEFAULT_CHAT_CDP_PORT, generationWorkspace, modelRequestMethod } from '@/utils/generationWorkspace'
 
@@ -17,6 +18,7 @@ const scope = ref<'server' | 'all' | 'unassigned'>(props.server ? 'server' : 'al
 watch(() => props.server?.serverId, id => { scope.value = id ? 'server' : 'all' })
 const auth = useAuthStore(), canWrite = computed(() => auth.role === 'admin')
 const settings = ref<ModelInterfaceSettings>({ items: [], revision: 0 })
+const callsModel = ref<ModelInterface | null>(null)
 const generationServers = ref<CodeGenerationServer[]>([])
 const serverLoadError = ref('')
 async function loadServers() {
@@ -370,7 +372,7 @@ async function beforeLeave(): Promise<boolean> {
     try { await ElMessageBox.confirm('智能体接口有未保存的修改，放弃修改并切换？', '未保存的接口配置', { type: 'warning', confirmButtonText: '放弃修改', cancelButtonText: '继续编辑' }) }
     catch { return false }
   }
-  drawer.value = false; testOpen.value = false; importOpen.value = false
+  drawer.value = false; testOpen.value = false; importOpen.value = false; callsModel.value = null
   return true
 }
 defineExpose({ beforeLeave })
@@ -389,8 +391,9 @@ defineExpose({ beforeLeave })
       <el-table-column label="接口地址 / 生成机器" :min-width="embedded ? 170 : 240"><template #default="{row}"><div class="mi-endpoint" :title="row.endpoint">{{ row.endpoint }}</div><small>{{ generationServerText(row) }}</small></template></el-table-column>
       <el-table-column label="状态" :width="embedded ? 95 : 125"><template #default="{ row }"><div class="mi-status"><el-switch :model-value="row.enabled" :loading="statusSavingId === row.id" :disabled="!canWrite || loading || !!statusSavingId || saving || promptSaving || testing" :before-change="() => toggleEnabled(row)" :aria-label="`${row.name}启用状态`" :data-testid="`model-toggle-${row.id}`" /><span>{{ row.enabled ? '启用' : '停用' }}</span></div></template></el-table-column>
       <el-table-column label="运行状态" width="90"><template #default="{ row }"><span :data-testid="`model-runtime-${row.id}`">{{ agentStatusLabel(row) }}</span></template></el-table-column>
-      <el-table-column label="操作" :width="embedded ? 190 : 330"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" @click="copySample(row)">{{ usesQueryAddress(row) ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button><el-button v-if="canWrite" link type="danger" :disabled="loading || saving || !!statusSavingId || testing || promptSaving || row.runtimeStatus === 'busy'" :data-testid="`model-delete-${row.id}`" @click="remove(row)">删除</el-button></div></template></el-table-column>
+      <el-table-column label="操作" :width="embedded ? 190 : 350"><template #default="{ row }"><div class="mi-actions"><el-button link type="primary" :data-testid="`model-calls-${row.id}`" @click="callsModel = row">调用记录</el-button><el-button link type="primary" @click="copySample(row)">{{ usesQueryAddress(row) ? '复制地址' : '复制请求' }}</el-button><el-button link type="primary" :disabled="testing" @click="openTest(row)">测试</el-button><el-button v-if="canWrite" link type="primary" :disabled="!!statusSavingId || saving" :data-testid="`model-duplicate-${row.id}`" @click="duplicate(row)">复制配置</el-button><el-button link type="primary" @click="edit(row)">{{ canWrite ? '编辑' : '查看' }}</el-button><el-button v-if="canWrite" link type="danger" :disabled="loading || saving || !!statusSavingId || testing || promptSaving || row.runtimeStatus === 'busy'" :data-testid="`model-delete-${row.id}`" @click="remove(row)">删除</el-button></div></template></el-table-column>
     </el-table>
+    <ModelInterfaceCallsDrawer v-if="callsModel" :model="callsModel" @close="callsModel = null" />
     <el-dialog v-model="importOpen" title="导入智能体接口" width="min(960px, 96vw)" top="5vh" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving" data-testid="model-import-dialog">
       <div class="mi-import-body">
         <el-radio-group v-model="importType" :disabled="saving" size="small" aria-label="导入接口类型" data-testid="model-import-type"><el-radio-button value="auto">自动识别</el-radio-button><el-radio-button value="chat">Chat 接口</el-radio-button><el-radio-button value="agent">Agent 接口</el-radio-button></el-radio-group>

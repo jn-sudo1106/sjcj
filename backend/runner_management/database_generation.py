@@ -60,6 +60,9 @@ def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
     if not data.get('systemPrompt', '').strip() or not data.get('userPrompt', '').strip(): raise ApiError('请填写系统和用户提示词')
     from .generation_references import snapshot
     data['referenceFiles'] = snapshot(app, override.get('referenceFiles', references))
+    if _lineage and _lineage.get('_continuationContext'):
+        data['_continuationContext'] = _lineage['_continuationContext']
+        _lineage = {key: value for key, value in _lineage.items() if key != '_continuationContext'}
     selected = next((item for item in listing(app)['items'] if item['id'] == data.get('interfaceId') and item['enabled']), None)
     from .agent_pool import ALL
     if not selected and data.get('interfaceId') != ALL: raise ApiError('所选模型不存在或已禁用')

@@ -102,5 +102,24 @@ class PromptEditingTest(unittest.TestCase):
             agent_pool.release(self.app, chat, 'occupied')
             agent_pool.release(self.app, other, 'available-after-chat')
 
+    def test_stream_identifies_real_relay_machine_without_exposing_server_credentials(self):
+        from backend.runner_management import code_servers
+        chat, _ = self.models()
+        chat['generationServerId'] = 'machine-173'
+        class Handler:
+            wfile = io.BytesIO()
+            def send_response(self, status): pass
+            def send_header(self, name, value): pass
+            def end_headers(self): pass
+        handler = Handler()
+        upstream = io.BytesIO(b'{}'); upstream.code = 200; upstream.headers = {'Content-Type': 'application/json'}
+        with patch.object(code_servers, 'read', return_value={'name': 'home173', 'ipAddress': '192.168.1.173', 'token': 'private-token'}), patch.object(model_interfaces, 'urlopen', return_value=upstream):
+            model_interfaces._stream_test(handler, self.app, {}, (chat, Request(chat['endpoint'])))
+        events = [json.loads(line) for line in handler.wfile.getvalue().decode().splitlines()]
+        self.assertEqual(events[0]['serverId'], 'machine-173')
+        self.assertEqual(events[0]['serverName'], 'home173')
+        self.assertEqual(events[0]['serverAddress'], '192.168.1.173')
+        self.assertNotIn('private-token', handler.wfile.getvalue().decode())
+
 
 del fixtures

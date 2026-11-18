@@ -28,7 +28,10 @@ def prepare(app, task_id):
     generation = {field: snapshot[field] for field in FIELDS if field in snapshot}
     executed = (record.get('result') or {}).get('interfaceId') or (record.get('modelCall') or {}).get('interfaceId')
     if executed: generation['interfaceId'] = executed
+    from .generation_continuation import history
+    turns = history(app, record)
     return {'taskId': task_id, 'generation': generation,
+            'continuation': {'mode': 'context', 'turns': turns, 'hasPreviousCode': bool((record.get('result') or {}).get('code'))},
             'context': {field: record.get(field, '') for field in ('sourceId', 'sourceName', 'flowId', 'flowVersionId', 'stepId', 'configId', 'nodeName')},
             'nodePromptRevision': revision(saved['setting_value'] if saved else ''),
             'canUpdateNode': bool(saved and (json.loads(saved['setting_value']).get('generation')))}
@@ -81,5 +84,9 @@ def submit(app, task_id, body):
         lineage = {'parentTaskId': task_id, 'rootTaskId': original.get('rootTaskId') or task_id,
                    'attempt': int(original.get('attempt') or 1) + 1, 'correction': correction,
                    'regenerationFingerprint': fingerprint, 'nodePromptsUpdated': bool(node_update)}
+        from .generation_continuation import render
+        turns = prepared['continuation']['turns']
+        lineage.update(_continuationContext=render(turns, (original.get('result') or {}).get('code') or ''),
+                       continuation={'mode': 'context', 'parentTaskId': task_id, 'turnCount': len(turns)})
         return tasks.create(app, {**prepared['context'], 'entryIds': original.get('entryIds', []), 'generation': generation},
                             _task_id=identifier, _lineage=lineage, _node_update=node_update)

@@ -6,6 +6,8 @@ import { sourceApi, sourceCheckApi, sourceGroupApi, type TaskInst, type SourceCh
 import { useFlowStore } from '@/stores/flow'
 import type { SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import CanvasHeader from '../shared/CanvasHeader.vue'
+import TaskExecutionResourceCell from './TaskExecutionResourceCell.vue'
+import { useTaskExecutions } from './useTaskExecutions'
 
 const flow = useFlowStore()
 const route = useRoute()
@@ -23,6 +25,7 @@ watch(() => source.value?.sourceGroupId, async (id) => {
   }
 }, { immediate: true })
 const tasks = ref<TaskInst[]>([])
+const { executions: taskExecutions, loading: executionsLoading, error: executionsError } = useTaskExecutions(tasks)
 const alerts = ref<SourceCheck[]>([])
 const taskTotal = ref<number | null>(null)
 const alertTotal = ref<number | null>(null)
@@ -103,7 +106,7 @@ onBeforeUnmount(() => { sequence += 1 })
           <h3>任务摘要 <button type="button" @click="open('task')">查看全部任务 →</button></h3>
           <p v-if="taskError" role="alert" class="summary-error">{{ taskError }}<button type="button" @click="load">重试</button></p>
           <p v-else-if="loading">正在加载任务…</p><p v-else-if="!tasks.length">暂无任务记录</p>
-          <ul v-else><li v-for="task in tasks" :key="task.taskId"><strong>{{ task.taskName || task.taskId }}</strong><span>{{ stateLabel(task.state) }}</span><small>{{ task.updatedAt || task.createdAt || '—' }}</small></li></ul>
+          <ul v-else><li v-for="task in tasks" :key="task.taskId"><strong>{{ task.taskName || task.taskId }}</strong><span>{{ stateLabel(task.state) }}</span><small>{{ task.updatedAt || task.createdAt || '—' }}</small><small>部署资源</small><TaskExecutionResourceCell :task-id="task.taskId" :state="task.state" :items="taskExecutions[task.taskId]" :loading="executionsLoading" :error="executionsError" /></li></ul>
           <small>展示任务列表前 5 条；完整记录及执行详情请进入任务视图。</small>
         </article>
         <article class="summary-panel" :aria-busy="loading">
