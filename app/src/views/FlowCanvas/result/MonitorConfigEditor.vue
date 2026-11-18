@@ -8,7 +8,9 @@ import type { MonitorCheckConf, MonitorKind, MonitorRecordView } from '@/api/typ
 import type { ModelOption, ModelProviderOption } from '@/api/types/rule'
 import { loadMonitorRecord, saveMonitor } from '@/api/monitorCenter'
 import { checkOneManual } from '@/api/monitor'
-import { defaultDescription, defaultSystemPrompt } from '@/utils/monitor/methods'
+import { defaultSystemPrompt } from '@/utils/monitor/methods'
+import type { NodePromptTemplate } from '@/api/nodePrompts'
+import { loadMonitorPromptTemplate, monitorUserPrompt, templateSystemPrompt, type MonitorPromptInput } from './monitor-editor/promptTemplate'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import AiMethodsField from './monitor-editor/AiMethodsField.vue'
 import SourcePickerRemote from './monitor-editor/SourcePickerRemote.vue'
@@ -67,6 +69,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   saved: [record: MonitorRecordView | null]
+  /** 新建监控生成脚本前先存的草稿（拿监控 ID）：容器只刷新列表，不关编辑器 */
+  'draft-saved': [record: MonitorRecordView]
   cancel: []
 }>()
 
@@ -94,6 +98,15 @@ const recordState = ref<MonitorRecordView | null>(props.record ?? null)
 const committedForm = ref<MonitorEditorForm>({ ...emptyForm() })
 const baseline = ref(formSignature(form))
 const descTouched = ref(false)
+/**
+ * 数据监控提示词模板（节点类型 610，1117 前端修改清单 1.1）。取不到（未配置 / Runner 服务不可用）时
+ * 系统提示词与业务描述都退回内置默认，不阻断；界面提示来源。
+ */
+const promptTemplate = ref<NodePromptTemplate | null>(null)
+const promptTemplateError = ref('')
+const promptTemplateLoaded = ref(false)
+/** 系统提示词被手改过就不再跟着模板 / 表单联动覆盖 */
+const systemTouched = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const tableOptions = ref<Array<{ tableId: string; tableName: string; label: string }>>([])
@@ -395,6 +408,65 @@ function applyRecord(record: MonitorRecordView): void {
   void loadSourceContext()
 }
 
+function promptInput(): MonitorPromptInput {
+  return {
+    sourceId: form.sourceId,
+    sourceName: form.sourceName,
+    tableName: form.tableName,
+    timeColumn: form.timeColumn,
+    methods: [...form.methods],
+    window: descriptionWindow.value,
+    nullPolicy: form.nullPolicy,
+    noDataPolicy: form.noDataPolicy,
+  }
+}
+
+/** 按模板（没有则内置默认）算出的系统提示词 */
+function templateSystemText(): string {
+  return templateSystemPrompt(promptTemplate.value, promptInput()) ?? defaultSystemPrompt()
+}
+
+/** 新建且未手改：系统提示词跟着模板 / 表单联动。编辑已有记录保留它保存过的提示词。 */
+function syncSystemPrompt(): void {
+  if (recordState.value || systemTouched.value || form.kind !== 'ai') return
+  const next = templateSystemText()
+  if (form.systemPrompt === next) return
+  const wasClean = formSignature(form) === baseline.value
+  form.systemPrompt = next
+  // 自动填充不算用户改动，否则新建后什么都没动也会提示「未保存」
+  if (wasClean) baseline.value = formSignature(form)
+}
+
+async function loadPromptTemplate(): Promise<void> {
+  const { template, error } = await loadMonitorPromptTemplate()
+  promptTemplate.value = template
+  promptTemplateError.value = error
+  promptTemplateLoaded.value = true
+  syncSystemPrompt()
+  // 模板晚于表单就绪：业务描述还是自动填的（没手改）就按模板重算一次
+  if (!descTouched.value && form.desc.trim() && form.methods.length) {
+    const wasClean = formSignature(form) === baseline.value
+    form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
+    if (wasClean) baseline.value = formSignature(form)
+  }
+}
+
+function onSystemPromptInput(): void {
+  systemTouched.value = true
+}
+
+function restoreSystemPrompt(): void {
+  form.systemPrompt = templateSystemText()
+  systemTouched.value = false
+}
+
+const promptSourceText = computed(() => {
+  if (!promptTemplateLoaded.value) return '正在读取数据监控提示词模板…'
+  if (promptTemplate.value) return `来自节点提示词模板「${promptTemplate.value.promptName || promptTemplate.value.promptId}」`
+  if (promptTemplateError.value) return `提示词模板读取失败（${promptTemplateError.value}），使用内置默认`
+  return '未配置数据监控（610）提示词模板，使用内置默认'
+})
+
 function initialize(): void {
   const record = props.record
   if (record) {
@@ -409,6 +481,7 @@ function initialize(): void {
     void loadSourceContext()
   }
   void loadModels()
+  void loadPromptTemplate()
 }
 
 onMounted(initialize)
@@ -431,15 +504,15 @@ watch(
     if (descTouched.value) return
     if (form.desc.trim()) return
     if (!form.methods.length) return
-    form.desc = defaultDescription({
-      sourceName: form.sourceName,
-      tableName: form.tableName,
-      methods: [...form.methods],
-      window: descriptionWindow.value,
-      nullPolicy: form.nullPolicy,
-      noDataPolicy: form.noDataPolicy,
-    })
+    form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
   },
+  { deep: true },
+)
+
+// 系统提示词里的变量（表名、时间列、检查方法…）随表单联动，仅新建且未手改时
+watch(
+  () => [form.methods.slice(), form.tableName, form.sourceName, form.sourceId, form.timeColumn, descriptionWindow.value],
+  () => syncSystemPrompt(),
   { deep: true },
 )
 
@@ -654,14 +727,7 @@ function fillDescription(): void {
     ElMessage.info('业务描述已有内容，未自动覆盖')
     return
   }
-  form.desc = defaultDescription({
-    sourceName: form.sourceName,
-    tableName: form.tableName,
-    methods: [...form.methods],
-    window: descriptionWindow.value,
-    nullPolicy: form.nullPolicy,
-    noDataPolicy: form.noDataPolicy,
-  })
+  form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
 }
 
 function switchKind(kind: MonitorKind): void {
@@ -671,6 +737,60 @@ function switchKind(kind: MonitorKind): void {
   if (kind === 'rule' && !form.schedule.trim()) form.schedule = DEFAULT_SCHEDULE
   if (kind === 'ai' && !form.methods.length && form.desc.trim()) {
     ElMessage.info('已切换到 AI 检查：还需要勾选监控方法')
+  }
+}
+
+/**
+ * 脚本按监控 ID 命名（1117 契约 3：monitor/<sourceId>/<监控ID>.py），新建监控还没有 ID。
+ * 生成前先按草稿保存（无脚本 = 草稿，不执行），回读拿到 ID 再继续；用户取消则不生成。
+ */
+const monitorId = computed(() => recordState.value?.id ? String(recordState.value.id) : '')
+const targetScriptPath = computed(() =>
+  monitorId.value && form.sourceId.trim() ? `monitor/${form.sourceId.trim()}/${monitorId.value}.py` : '')
+
+async function ensureMonitorId(): Promise<boolean> {
+  if (monitorId.value) return true
+  const invalid = validateForm(form)
+  if (invalid) {
+    activeTab.value = invalid.key === 'methods' || invalid.key === 'overdue' ? 'check' : 'basic'
+    ElMessage.warning(invalid.message)
+    return false
+  }
+  try {
+    await ElMessageBox.confirm(
+      '脚本要按监控 ID 命名，新建监控需要先保存为草稿（没有脚本，不会执行），保存后继续生成。',
+      '先保存草稿',
+      { type: 'info', confirmButtonText: '保存草稿并生成', cancelButtonText: '取消' },
+    )
+  } catch {
+    return false
+  }
+  saving.value = true
+  try {
+    const conf = confFromForm(form, {}, {})
+    const saved = await saveMonitor({
+      record: undefined,
+      sourceId: form.sourceId.trim(),
+      name: form.name.trim(),
+      kind: form.kind,
+      conf,
+      tableName: form.tableName.trim(),
+      schedule: form.schedule.trim(),
+    })
+    const readback = await readbackAfterSave(saved.raw)
+    if (!readback?.id) {
+      ElMessage.warning('草稿已提交，但没回读到监控 ID：请刷新列表后在该草稿上继续生成')
+      return false
+    }
+    applyRecord(readback)
+    emit('draft-saved', readback)
+    ElMessage.success(`已保存草稿（监控 ID ${readback.id}），继续生成脚本`)
+    return true
+  } catch (error) {
+    ElMessage.error(`保存草稿失败：${errorText(error)}`)
+    return false
+  } finally {
+    saving.value = false
   }
 }
 
@@ -695,6 +815,7 @@ async function onGenerate(): Promise<void> {
     ElMessage.warning('请先选择模型供应商与模型')
     return
   }
+  if (!(await ensureMonitorId())) return
   generating.value = true
   generationError.value = ''
   generatingPreview.value = ''
@@ -1120,7 +1241,7 @@ defineExpose({
             <div class="mc-col">
               <section class="mc-pane">
                 <div class="mc-pane-head">
-                  <h4>业务描述 <em>*</em></h4>
+                  <h4>业务描述 <em>*</em><small class="mc-h4-note">（用户提示词）</small></h4>
                   <button type="button" class="mc-mini" data-testid="mc-desc-template" @click="fillDescription">按模板填充</button>
                 </div>
                 <textarea
@@ -1272,7 +1393,10 @@ defineExpose({
                   </div>
                 </div>
                 <div class="mc-field">
-                  <label class="mc-label" for="mc-system-prompt">系统提示词</label>
+                  <div class="mc-label-row">
+                    <label class="mc-label" for="mc-system-prompt">系统提示词</label>
+                    <button type="button" class="mc-mini" data-testid="mc-system-prompt-restore" @click="restoreSystemPrompt">恢复模板</button>
+                  </div>
                   <textarea
                     id="mc-system-prompt"
                     v-model="form.systemPrompt"
@@ -1280,7 +1404,9 @@ defineExpose({
                     rows="3"
                     placeholder="留空则使用默认提示词"
                     data-testid="mc-system-prompt"
+                    @input="onSystemPromptInput"
                   />
+                  <p class="mc-hint" data-testid="mc-prompt-source">{{ promptSourceText }}</p>
                 </div>
                 <p class="mc-hint">生成与测试不改变生效版本；保存即生效。</p>
               </section>
@@ -1293,6 +1419,10 @@ defineExpose({
               <div class="mc-script-title">
                 <h4>脚本</h4>
                 <p class="mc-hint" data-testid="mc-script-version">{{ versionText }}</p>
+                <!-- 1117 契约 3：脚本按 monitor/<sourceId>/<监控ID>.py 存 Git；智能体生成接入前只预览，生成仍走现有接口 -->
+                <p v-if="form.kind === 'ai'" class="mc-hint mc-target-path" data-testid="mc-target-path" :title="targetScriptPath || undefined">
+                  Git 目标路径：<code v-if="targetScriptPath">{{ targetScriptPath }}</code><template v-else>新建监控生成前先保存草稿，拿到监控 ID 后确定</template>
+                </p>
               </div>
               <span v-if="hasAnyScript" class="mc-badge" :class="pending ? 'mc-badge-warn' : 'mc-badge-ok'">{{ pending ? '待保存' : '已生效' }}</span>
 
@@ -1732,6 +1862,10 @@ defineExpose({
 .mc-quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mc-btn, .mc-mini { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-surface); color: var(--rc-text-2); font: inherit; cursor: pointer; white-space: nowrap; }
 .mc-mini { height: 25px; padding: 0 9px; font-size: 11px; }
+.mc-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.mc-label-row .mc-label { margin-bottom: 0; }
+.mc-target-path code { font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-text-2); word-break: break-all; }
+.mc-h4-note { margin-left: 4px; color: var(--rc-faint); font-size: 11px; font-weight: 400; }
 .mc-btn:hover:not(:disabled), .mc-mini:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary); }
 .mc-btn-primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; font-weight: 600; }
 .mc-btn-primary:hover:not(:disabled) { background: var(--rc-primary-ink); color: #fff; }

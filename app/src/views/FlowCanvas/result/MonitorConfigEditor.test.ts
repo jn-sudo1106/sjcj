@@ -59,6 +59,8 @@ vi.mock('./monitor-editor/generation', async (importOriginal) => {
 
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
 import { dataApi, entryApi, ruleApi, sourceApi } from '@/api'
+import { nodePromptApi, type NodePromptTemplate } from '@/api/nodePrompts'
+import { defaultSystemPrompt } from '@/utils/monitor/methods'
 
 const SOURCE = {
   sourceId: '1400995',
@@ -430,21 +432,27 @@ describe('MonitorConfigEditor 脚本文件', () => {
 })
 
 describe('MonitorConfigEditor 生成脚本', () => {
-  it('换源或清空源后清掉原源候选脚本与测试回显', async () => {
+  // 1117 起新建监控生成前先存草稿（拿监控 ID），存完即锁源：候选脚本不可能被带到别的源上。
+  // 原用例「生成后换源清候选」的场景因此不再存在，改为验证锁源。
+  it('新建监控生成后源已锁定（先存草稿），候选脚本不会被带到别的源', async () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3201 } })
+    mocks.loadMonitorRecord.mockResolvedValue(aiRecord({
+      id: '3201', name: '锁源', effectiveVersion: undefined, publishStatus: 'draft',
+      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: '', modelProviderCode: 'deepseek', modelCode: 'deepseek-chat' },
+    }))
     const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
     await settle()
+    await wrapper.get('[data-testid="mc-name-input"]').setValue('锁源')
     await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
     await wrapper.get('[data-testid="mc-method-dir-toggle"]').trigger('click')
     await wrapper.get('[data-testid="mc-method-today_landed"]').setValue(true)
     await wrapper.get('[data-testid="mc-generate"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-testid="mc-script-pending"]').exists()).toBe(true)
-    wrapper.findComponent({ name: 'SourcePickerRemote' }).vm.$emit('update:modelValue', '', '')
-    await settle()
-    expect(ElMessageBox.confirm).toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="mc-script-pending"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="mc-script-body"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="mc-tab-basic"]').trigger('click')
+    expect(wrapper.find('[data-testid="mc-source-locked"]').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'SourcePickerRemote' }).exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -1107,6 +1115,117 @@ describe('MonitorConfigEditor 源与检查方式', () => {
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
   })
 })
+// 1117 前端修改清单 1.1–1.4：提示词读节点提示词模板（610）、新建先存草稿拿 ID、目标路径预览
+const MONITOR_TEMPLATE = {
+  promptId: 61,
+  promptName: '数据监控默认',
+  nodeType: '610',
+  nodeTypeName: '数据监控',
+  category: '',
+  templateUse: 'script',
+  revision: '1',
+  isActive: 1,
+  isDefault: 1,
+  systemPrompt: '模板系统提示词：检查表 {{table_name}}',
+  userPromptTemplate: '请检查 {{source_name}} 的 {{table_name}}：{{methods}}',
+} as unknown as NodePromptTemplate
+
+describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
+  it('新建：系统提示词与业务描述按 610 模板填充，并注明来源', async () => {
+    const list = vi.spyOn(nodePromptApi, 'list').mockResolvedValue([MONITOR_TEMPLATE])
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await settle()
+
+    expect(list).toHaveBeenCalledWith({ sourceType: '610', templateUse: 'script' })
+    const system = wrapper.find('[data-testid="mc-system-prompt"]').element as HTMLTextAreaElement
+    expect(system.value).toBe('模板系统提示词：检查表 sense_data.TB_RAW')
+    const desc = wrapper.find('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement
+    expect(desc.value).toContain('请检查 沐言社媒 的 sense_data.TB_RAW：')
+    expect(wrapper.find('[data-testid="mc-prompt-source"]').text()).toContain('数据监控默认')
+  })
+
+  it('模板读取失败：退回内置默认提示词，提示原因，不阻断', async () => {
+    vi.spyOn(nodePromptApi, 'list').mockRejectedValue(new Error('请先登录'))
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+
+    expect((wrapper.find('[data-testid="mc-system-prompt"]').element as HTMLTextAreaElement).value).toBe(defaultSystemPrompt())
+    expect(wrapper.find('[data-testid="mc-prompt-source"]').text()).toContain('使用内置默认')
+  })
+
+  it('已有记录：保留保存过的系统提示词，不被模板覆盖；「恢复模板」才换成模板', async () => {
+    vi.spyOn(nodePromptApi, 'list').mockResolvedValue([MONITOR_TEMPLATE])
+    const record = aiRecord()
+    record.conf = { ...record.conf, systemPrompt: '已保存的提示词' }
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    const system = () => (wrapper.find('[data-testid="mc-system-prompt"]').element as HTMLTextAreaElement).value
+
+    expect(system()).toBe('已保存的提示词')
+    await wrapper.find('[data-testid="mc-system-prompt-restore"]').trigger('click')
+    expect(system()).toBe('模板系统提示词：检查表 sense_data.TB_RAW')
+  })
+
+  it('已有记录显示 Git 目标路径 monitor/<sourceId>/<监控ID>.py', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain(`monitor/${SOURCE.sourceId}/mon-1001.py`)
+  })
+
+  it('新建监控生成前先存草稿拿 ID：确认后保存（无脚本）再生成，不关编辑器', async () => {
+    const draft = aiRecord({
+      id: '3101',
+      name: '先存草稿',
+      effectiveVersion: undefined,
+      publishStatus: 'draft',
+      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: '', modelProviderCode: 'deepseek', modelCode: 'deepseek-chat' },
+    })
+    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3101 } })
+    mocks.loadMonitorRecord.mockResolvedValue(draft)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-name-input"]').setValue('先存草稿')
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await settle()
+    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain('先保存草稿')
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    const savedConf = mocks.saveMonitor.mock.calls[0][0].conf as MonitorCheckConf
+    expect(savedConf.script).toBeUndefined()
+    expect(wrapper.emitted('draft-saved')?.[0]?.[0]).toMatchObject({ id: '3101' })
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain(`monitor/${SOURCE.sourceId}/3101.py`)
+  })
+
+  it('新建监控生成时取消「先存草稿」：不保存也不生成', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-name-input"]').setValue('不存')
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await settle()
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
+  })
+})
+
 describe('MonitorConfigEditor 取消', () => {
   it('无未保存改动时直接 emit cancel（弹窗由宿主关闭）', async () => {
     const wrapper = mountEditor({ record: aiRecord() })

@@ -212,7 +212,11 @@ export type NodeConfigSeed = Omit<NodeConfig, 'inmap' | 'params' | 'output'> & {
 
 // 节点库分组类型（seeds 用，外部通过 flowModel 也能访问）
 export type Pill = 'p1' | 'p2' | 'plan'
-export interface LibItem { template: string; code: string; badge?: string; name: string; desc: string; pill: Pill; planned?: boolean }
+export interface LibItem {
+  template: string; code: string; badge?: string; name: string; desc: string; pill: Pill; planned?: boolean
+  /** 不在「添加步骤」选单里出现，但保留定义：历史节点的名称、种子映射仍要用（如 1117 起的数据监控） */
+  hiddenInPicker?: boolean
+}
 export interface LibGroup { title: string; items: LibItem[] }
 
 /** 条件操作符（0701 问题十·方案B「节点进入条件」） */

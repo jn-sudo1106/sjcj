@@ -1,4 +1,5 @@
 import { entryApi, ruleApi } from '@/api'
+import { parseTaskResult } from '@/utils/flow/taskResult'
 import { ACCESS_TOKEN_HEADER, readStoredToken } from '@/api/auth'
 import type { EntryType } from '@/api/types/collect'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
@@ -269,9 +270,17 @@ export function summarizeExecutionResult(raw: unknown): string {
     const record = raw as Record<string, unknown>
     const parts: string[] = []
     const success = record.success ?? record.ok
-    if (typeof success === 'boolean') parts.push(success ? '执行成功' : '执行失败')
-    const message = record.message ?? record.msg ?? record.lastMsg
-    if (typeof message === 'string' && message.trim()) parts.push(truncate(message))
+    if (typeof success === 'boolean') {
+      parts.push(success ? '执行成功' : '执行失败')
+      const message = record.message ?? record.msg ?? record.lastMsg
+      if (typeof message === 'string' && message.trim()) parts.push(truncate(message))
+    } else {
+      // 执行端回写格式（{"IsSuccess","ErrorMessage"} 等）与任务列表「执行结果」同一套解析（utils/flow/taskResult）
+      const parsed = parseTaskResult(JSON.stringify(raw))
+      if (parsed.status !== 'unknown') parts.push(parsed.status === 'success' ? '执行成功' : '执行失败')
+      const message = parsed.message || record.message || record.msg || record.lastMsg
+      if (typeof message === 'string' && message.trim()) parts.push(truncate(message))
+    }
     const rows = record.rows ?? record.data ?? record.result
     if (Array.isArray(rows)) parts.push(`返回 ${rows.length} 条`)
     if (!parts.length) parts.push(truncate(JSON.stringify(raw)))
