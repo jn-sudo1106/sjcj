@@ -29,6 +29,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { configApi } from '@/api'
 import { SNATCH_TYPES, TEMPLATE_TO_SNATCH } from '@/views/FlowCanvas/canvas/flowModel'
+import { setLiveConfigTypes } from '@/utils/flow/liveConfigTypes'
 
 function toOption(row: { sourceType: unknown; typeName: unknown }): string | null {
   const code = String(row.sourceType ?? '').trim()
@@ -69,6 +70,13 @@ export const useDictStore = defineStore('dict', () => {
         console.warn('[dict] config/sourceTypes 全部条目格式不合法，保持本地快照')
         return
       }
+      // 注册实时编号，供 configTypeFrom() / 新建节点默认队列按当前环境解析。
+      // 186 的 1105 迁移后「规则处理」是 910、没有 600，写死快照会把类型和队列都写错。
+      setLiveConfigTypes(
+        remote
+          .map((row) => ({ code: String(row.sourceType ?? '').trim(), name: String(row.typeName ?? '').trim() }))
+          .filter((row) => row.code && row.name),
+      )
 
       const snapshot = new Set(SNATCH_TYPES)
       const live = new Set(formatted)

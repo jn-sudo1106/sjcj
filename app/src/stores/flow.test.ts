@@ -5,6 +5,7 @@ import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
 import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, isDataValidationNode, iconFor, nodeClassFor, nodeTypeLabel } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
+import { setLiveConfigTypes } from '@/utils/flow/liveConfigTypes'
 import type { Source, Step } from '../api'
 
 describe('flow store 编辑动作', () => {
@@ -1468,6 +1469,23 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
     useDictStore().nodeTypeTopics = NODE_TYPE_TOPICS
     const id = f.insertAfter('start', template)
     expect(f.configs[id].taskCfg?.queue).toBe(expectedQueue)
+  })
+
+  it('字典把规则处理改到 910 时（186）：新节点展示串与默认队列都跟 910 走', () => {
+    const dict = useDictStore()
+    dict.snatchTypes = ['[90] - 网页抓取', '[910] - 规则处理']
+    dict.nodeTypeTopics = { '910': 'dev_web_rulehandle' }
+    setLiveConfigTypes([
+      { code: '90', name: '网页抓取' },
+      { code: '910', name: '规则处理' },
+    ])
+    try {
+      const id = f.insertAfter('start', 'rule')
+      // 规则节点没有 collectCfg（类型展示走模板），这里锁默认队列按 910 取
+      expect(f.configs[id].taskCfg?.queue).toBe('dev_web_rulehandle')
+    } finally {
+      setLiveConfigTypes(null)
+    }
   })
 
   it.each([

@@ -5,6 +5,7 @@ import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useDictStore } from '@/stores/dict'
 import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
+import { resolveLiveConfigCode } from '@/utils/flow/liveConfigTypes'
 import { applyStepSourceDefault, hasRealBranches } from '@/utils/flow/stepPersist'
 import { inheritInputTable, nodeTablesSnapshot, tableForDownstream, propagateOutputChange, retargetFollowers, writeNodeOutputTable, type TableTopology } from '@/utils/flow/tableSync'
 import {
@@ -262,8 +263,11 @@ export const useFlowStore = defineStore('flow', () => {
 
   /** 优先用后端 sourceType 字典里的展示串；找不到时回退到静态 TEMPLATE_TO_SNATCH。 */
   function sourceTypeDisplayForTemplate(template: string, fallback: string): string {
-    const code = /^\[(\d+)\]/.exec(TEMPLATE_TO_SNATCH[template] ?? '')?.[1]
-    if (!code) return fallback
+    const staticCode = /^\[(\d+)\]/.exec(TEMPLATE_TO_SNATCH[template] ?? '')?.[1]
+    if (!staticCode) return fallback
+    // 编号可能被后端字典迁移改过（186：规则处理 600→910），先纠偏再找展示串，
+    // 否则界面仍显示 [600]，而后端拿到的是 910（或反过来），排查时对不上。
+    const code = resolveLiveConfigCode(staticCode, template)
     return useDictStore().snatchTypes.find((display) => /^\[(\d+)\]/.exec(display)?.[1] === code) ?? fallback
   }
 
@@ -306,7 +310,10 @@ export const useFlowStore = defineStore('flow', () => {
     // 默认队列取系统设置 → 节点类型的「默认消息队列」（topic），按节点类型编号查；没配就留空，用户可在任务配置里改。
     // 浏览器/公众号/登录仍按 90 落库；文件下载优先取字典里的 95。固定队列的节点（浏览器抓取）保留种子里的固定值。
     if (collectorCapabilityOf(cfg)?.queueMode !== 'fixed') {
-      const code = /^\[(\d+)\]/.exec(sourceTypeDisplayForTemplate(template, TEMPLATE_TO_SNATCH[template] ?? ''))?.[1]
+      const staticCode = /^\[(\d+)\]/.exec(sourceTypeDisplayForTemplate(template, TEMPLATE_TO_SNATCH[template] ?? ''))?.[1]
+      // 编号可能被后端字典迁移改过（186 的 1105：规则处理 600→910），默认队列按实时编号查，
+      // 否则新规则节点 queue 为空，后端按未知类型回退 dev_web_snatch_admin（没人消费）。
+      const code = staticCode ? resolveLiveConfigCode(staticCode, template) : undefined
       cfg.taskCfg = {
         ...(cfg.taskCfg ?? { urlRule: '' }),
         queue: (code && useDictStore().nodeTypeTopics[code]) || '',
