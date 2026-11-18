@@ -115,6 +115,13 @@ export interface MonitorCheckConf {
   desc?: string
   systemPrompt?: string
   script?: string
+  /**
+   * 1117：AI 脚本生成方式。builtin = 现有 data-process 接口（脚本存文件服务）；
+   * agent = 智能体生成并提交 Git `monitor/<sourceId>/<监控ID>.py`（依赖后端监控上下文，契约 7）。
+   */
+  generation?: { mode?: 'builtin' | 'agent'; interfaceId?: string; repoId?: string; directoryId?: string }
+  /** 智能体生成的归档 ID（契约 4 建议：check_conf 存 scriptPath + archiveId，按 archiveId 取 Git 信息） */
+  archiveId?: string
   /** 字段值为空怎么判 */
   nullPolicy?: 'abnormal' | 'allow' | 'skip'
   /** 本次无待检记录怎么判（与「字段为空」是两件事，R04） */

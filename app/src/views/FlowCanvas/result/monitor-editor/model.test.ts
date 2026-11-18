@@ -339,3 +339,38 @@ describe('超期无新增策略（overduePolicy）', () => {
     expect(formSignature({ ...base, overdueGrace: '5' })).not.toBe(formSignature(base))
   })
 })
+
+// 1117 第 2 批：生成方式与 Git 归档字段随 check_conf 往返
+describe('生成方式字段', () => {
+  function recordWith(conf: MonitorCheckConf): MonitorRecordView {
+    return { id: '3101', sourceId: '1', sourceName: 's', name: 'n', kind: 'ai', enabled: true, conf } as unknown as MonitorRecordView
+  }
+
+  it('新建默认智能体；旧记录没有 generation 键时打开为内置接口，保存也不写', () => {
+    expect(emptyForm().generationMode).toBe('agent')
+    const form = formFromRecord(recordWith({ kind: 'ai', methods: ['today_landed'] }))
+    expect(form.generationMode).toBe('builtin')
+    expect(confFromForm(form, { kind: 'ai' })).not.toHaveProperty('generation')
+  })
+
+  it('智能体模式：读回智能体 / 仓库 / 目录 / 归档 ID，保存原样写回', () => {
+    const conf: MonitorCheckConf = { kind: 'ai', generation: { mode: 'agent', interfaceId: 'all', repoId: 'r1', directoryId: 'd1' }, archiveId: 'a'.repeat(32) }
+    const form = formFromRecord(recordWith(conf))
+    expect(form).toMatchObject({ generationMode: 'agent', agentInterfaceId: 'all', repoId: 'r1', directoryId: 'd1', archiveId: 'a'.repeat(32) })
+    const saved = confFromForm(form, conf)
+    expect(saved.generation).toEqual({ mode: 'agent', interfaceId: 'all', repoId: 'r1', directoryId: 'd1' })
+    expect(saved.archiveId).toBe('a'.repeat(32))
+  })
+
+  it('从智能体切回内置：generation 只留 mode=builtin', () => {
+    const conf: MonitorCheckConf = { kind: 'ai', generation: { mode: 'agent', interfaceId: 'all', repoId: 'r1', directoryId: 'd1' } }
+    const form = { ...formFromRecord(recordWith(conf)), generationMode: 'builtin' as const }
+    expect(confFromForm(form, conf).generation).toEqual({ mode: 'builtin' })
+  })
+
+  it('生成方式与仓库目录变化计入未保存判定', () => {
+    const base = emptyForm()
+    expect(formSignature({ ...base, generationMode: 'builtin' })).not.toBe(formSignature(base))
+    expect(formSignature({ ...base, directoryId: 'd2' })).not.toBe(formSignature(base))
+  })
+})

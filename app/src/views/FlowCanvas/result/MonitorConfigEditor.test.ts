@@ -25,6 +25,9 @@ const mocks = vi.hoisted(() => ({
   fetchDefaultModels: vi.fn(),
   resolveSourceResultContext: vi.fn(),
   resolveTableFields: vi.fn(),
+  generateWithAgent: vi.fn(),
+  loadAgentOptions: vi.fn(),
+  loadDirectories: vi.fn(),
 }))
 
 vi.mock('@/api/monitorCenter', async (importOriginal) => {
@@ -55,6 +58,17 @@ vi.mock('@/api', async (importOriginal) => {
 vi.mock('./monitor-editor/generation', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./monitor-editor/generation')>()
   return { ...actual, resolveSourceResultContext: mocks.resolveSourceResultContext, resolveMonitorTableFields: mocks.resolveTableFields }
+})
+
+// 智能体生成走 Runner 接口，编辑器只验「选项加载 → 交参 → 候选与归档展示 → 保存字段」
+vi.mock('./monitor-editor/agentGeneration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./monitor-editor/agentGeneration')>()
+  return {
+    ...actual,
+    generateMonitorScriptWithAgent: mocks.generateWithAgent,
+    loadAgentGenerationOptions: mocks.loadAgentOptions,
+    loadMonitorDirectories: mocks.loadDirectories,
+  }
 })
 
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
@@ -229,6 +243,9 @@ beforeEach(() => {
   mocks.fetchModelProviders.mockResolvedValue([{ providerCode: 'deepseek', providerName: 'DeepSeek' }])
   mocks.fetchDefaultModels.mockResolvedValue([{ modelCode: 'deepseek-chat', modelName: 'deepseek-chat' }])
   mocks.resolveSourceResultContext.mockResolvedValue(GENERATION_CONTEXT)
+  // 新建默认智能体模式会在打开时加载选项；默认给空选项，智能体用例里再覆盖
+  mocks.loadAgentOptions.mockResolvedValue({ agents: [], repos: [], agentError: '', repoError: '' })
+  mocks.loadDirectories.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -445,6 +462,8 @@ describe('MonitorConfigEditor 生成脚本', () => {
     await settle()
     await wrapper.get('[data-testid="mc-name-input"]').setValue('锁源')
     await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    // 这条验「先存草稿」流程本身，与生成方式无关；用内置接口免去智能体选项
+    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
     await wrapper.get('[data-testid="mc-method-dir-toggle"]').trigger('click')
     await wrapper.get('[data-testid="mc-method-today_landed"]').setValue(true)
     await wrapper.get('[data-testid="mc-generate"]').trigger('click')
@@ -1194,6 +1213,8 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     await settle()
     await wrapper.find('[data-testid="mc-name-input"]').setValue('先存草稿')
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    // 这条验「先存草稿」流程本身，与生成方式无关；用内置接口免去智能体选项
+    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
     await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
     await settle()
     expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain('先保存草稿')
@@ -1216,6 +1237,8 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     await settle()
     await wrapper.find('[data-testid="mc-name-input"]').setValue('不存')
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    // 这条验「先存草稿」流程本身，与生成方式无关；用内置接口免去智能体选项
+    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
     await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
     await settle()
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
@@ -1223,6 +1246,101 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
 
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
     expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
+  })
+})
+
+// 1117 第 2 批：生成方式「智能体 · 提交 Git」的页面字段
+describe('MonitorConfigEditor 智能体生成', () => {
+  beforeEach(() => {
+    mocks.loadAgentOptions.mockResolvedValue({
+      agents: [{ id: 'all', name: '全选 · 任意空闲智能体', model: '' }, { id: 'a1', name: '智能体一', model: 'codex' }],
+      repos: [{ repoId: 'shared', name: '通用仓库', configType: '' }, { repoId: 'mon', name: '监控仓库', configType: '610' }],
+      agentError: '',
+      repoError: '',
+    })
+    mocks.loadDirectories.mockResolvedValue([{ directoryId: 'd-mon', name: '数据监控', path: 'monitor', configType: '610', status: 'ACTIVE' }])
+  })
+
+  it('新建监控默认「智能体 · 提交 Git」，打开即加载选项并带出默认值', async () => {
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    expect(wrapper.find('[data-testid="mc-gen-agent"]').classes()).toContain('active')
+    expect(wrapper.find('[data-testid="mc-provider"]').exists()).toBe(false)
+    expect(mocks.loadAgentOptions).toHaveBeenCalledTimes(1)
+    expect((wrapper.find('[data-testid="mc-repo"]').element as HTMLSelectElement).value).toBe('mon')
+    expect(wrapper.find('[data-testid="mc-mode"]').text()).not.toContain('有未保存')
+  })
+
+  it('旧记录（没有生成方式）打开仍是内置接口；切到智能体后加载智能体 / 仓库 / 目录并带出默认值，隐藏供应商与模型', async () => {
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    expect(wrapper.find('[data-testid="mc-gen-builtin"]').classes()).toContain('active')
+    expect(wrapper.find('[data-testid="mc-provider"]').exists()).toBe(true)
+    expect(mocks.loadAgentOptions).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-testid="mc-gen-agent"]').trigger('click')
+    await settle()
+    expect(mocks.loadAgentOptions).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="mc-provider"]').exists()).toBe(false)
+    expect((wrapper.find('[data-testid="mc-agent"]').element as HTMLSelectElement).value).toBe('all')
+    expect((wrapper.find('[data-testid="mc-repo"]').element as HTMLSelectElement).value).toBe('mon')
+    expect(mocks.loadDirectories).toHaveBeenCalledWith('mon')
+    expect((wrapper.find('[data-testid="mc-directory"]').element as HTMLSelectElement).value).toBe('d-mon')
+  })
+
+  it('智能体生成：按监控上下文交参，候选脚本与 Git 提交状态展示；保存写入生成方式与归档 ID', async () => {
+    const archive = { archiveId: 'b'.repeat(32), status: 'committed', gitCommit: 'fedcba9876', pushed: true, files: [{ path: `monitor/${SOURCE.sourceId}/mon-1001.py` }] }
+    mocks.generateWithAgent.mockResolvedValue({ script: 'def main():\n    print("智能体脚本")', scriptPath: `monitor/${SOURCE.sourceId}/mon-1001.py`, archive })
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-gen-agent"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+
+    expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
+    expect(mocks.generateWithAgent.mock.calls[0]![0]).toMatchObject({
+      sourceId: SOURCE.sourceId, monitorId: 'mon-1001', interfaceId: 'all', repoId: 'mon', directoryId: 'd-mon',
+    })
+    expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('智能体脚本')
+    expect(wrapper.find('[data-testid="mc-archive-status"]').text()).toContain('commit fedcba98 · 已推送到远程')
+
+    await wrapper.find('[data-testid="mc-save"]').trigger('click')
+    await settle()
+    const conf = mocks.saveMonitor.mock.calls.at(-1)![0].conf as MonitorCheckConf
+    expect(conf.generation).toEqual({ mode: 'agent', interfaceId: 'all', repoId: 'mon', directoryId: 'd-mon' })
+    expect(conf.archiveId).toBe('b'.repeat(32))
+    expect(conf.scriptPath).toBe(`monitor/${SOURCE.sourceId}/mon-1001.py`)
+  })
+
+  it('智能体生成被后端拒绝：保留原脚本，提示可切回内置接口', async () => {
+    mocks.generateWithAgent.mockRejectedValue(new Error('请先保存源、流程、步骤和配置'))
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-gen-agent"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+
+    const message = String(vi.mocked(ElMessage.error).mock.calls.at(-1)?.[0])
+    expect(message).toContain('请先保存源、流程、步骤和配置')
+    expect(message).toContain('切回「内置接口」')
+    expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('检查今日落地')
+    expect(wrapper.find('[data-testid="mc-archive-status"]').exists()).toBe(false)
+  })
+
+  it('选项加载失败在字段下方给出原因', async () => {
+    mocks.loadAgentOptions.mockResolvedValue({ agents: [], repos: [], agentError: '认证服务不可用', repoError: '' })
+    const wrapper = mountEditor({ record: aiRecord() })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.find('[data-testid="mc-gen-agent"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="mc-agent-error"]').text()).toContain('智能体加载失败：认证服务不可用')
   })
 })
 
