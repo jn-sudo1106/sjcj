@@ -48,8 +48,11 @@ ARG OSS_TARGET
 RUN sed -i -e "s#http://118.25.96.217:9999#${BACKEND_TARGET}#g" \
            -e "s#http://118.25.96.217:9102#${OSS_TARGET}#g" /etc/nginx/conf.d/default.conf
 # Runner 管理服务只认 217 的登录，非 prod 目标去掉这条路由（否则 401 会把用户踢回登录页）
+# 问数配置的 POC 服务（/api/poc/ → 192.168.1.32:9094，2026-11-18）同理只挂给 prod：
+# 133 等环境没有对应实例，留着会把问数页面的请求打到别人的库上，删掉后回落通用 /api/（原行为）。
 RUN if [ "${BACKEND_TARGET}" != "http://118.25.96.217:9999" ]; then \
-      sed -i '/# BEGIN runner-management/,/# END runner-management/d' /etc/nginx/conf.d/default.conf; \
+      sed -i -e '/# BEGIN runner-management/,/# END runner-management/d' \
+             -e '/# BEGIN poc-api/,/# END poc-api/d' /etc/nginx/conf.d/default.conf; \
     fi
 
 # 构建产物落到 nginx 默认站点下的 sjcj/ 子目录
