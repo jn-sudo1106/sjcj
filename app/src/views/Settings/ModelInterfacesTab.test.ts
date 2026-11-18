@@ -7,6 +7,7 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import { runnerManagementApi, type ModelInterfaceSettings, type CodeGenerationServer } from '@/api/runnerManagement'
 import ModelInterfacesTab from './ModelInterfacesTab.vue'
+import ModelInterfaceCallsDrawer from './ModelInterfaceCallsDrawer.vue'
 vi.mock('@/utils/clipboard', () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }))
 
 const fixture: ModelInterfaceSettings = { revision: 3, items: [{ id: 'legacy', name: '默认模型', kind: 'chat', model: 'hy3',
@@ -14,6 +15,7 @@ const fixture: ModelInterfaceSettings = { revision: 3, items: [{ id: 'legacy', n
   inputFileDir: '', codeDir: '', outputFileDir: '' }] }
 const wrappers: ReturnType<typeof mount>[] = []
 beforeEach(() => {
+  vi.spyOn(runnerManagementApi, 'modelInterfaceCalls').mockImplementation(async interfaceId => ({ interfaceId, items: [], total: 0 }))
   vi.spyOn(runnerManagementApi, 'codeGenerationServers').mockResolvedValue({ items: [] })
   vi.spyOn(runnerManagementApi, 'modelInterfaces').mockResolvedValue(structuredClone(fixture))
   vi.spyOn(runnerManagementApi, 'saveModelInterfaces').mockImplementation(async input => ({ ...input, revision: input.revision + 1 }))
@@ -27,6 +29,14 @@ beforeEach(() => {
   })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); document.body.innerHTML = '' })
+it('每条接口操作栏可只读打开本接口的最近调用记录', async () => {
+  const w = await setup('viewer')
+  await w.get('[data-testid="model-calls-legacy"]').trigger('click'); await flushPromises()
+  expect(w.findComponent(ModelInterfaceCallsDrawer).props('model').id).toBe('legacy')
+  expect(runnerManagementApi.modelInterfaceCalls).toHaveBeenCalledWith('legacy', 1)
+  expect(document.body.textContent).toContain('暂无调用记录')
+  expect(runnerManagementApi.saveModelInterfaces).not.toHaveBeenCalled()
+})
 it('删除需确认，可删除最后一个接口且历史任务不受影响，取消删除不保存', async () => {
   const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm' as never)
   const w = await setup()

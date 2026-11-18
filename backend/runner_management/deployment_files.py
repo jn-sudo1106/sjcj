@@ -40,7 +40,9 @@ def read(app, identifier, path=None):
             except UnicodeDecodeError as error: raise ApiError('文件不是支持的文本编码', 415) from error
         return {**result, 'path': path, 'content': content, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
     selected = set(job.get('selectedPaths') or [])
-    if not selected and job.get('archive', {}).get('files'):
+    if job.get('deploymentScope') == 'configuration':
+        selected = set(files)
+    elif not selected and job.get('archive', {}).get('files'):
         archive = job['archive']
         prefix = mapping({'deploymentDirectory': '.'}, archive, {'install_directory': job.get('instanceDirectory') or '/'})['sourceBase'] + '/'
         selected = {file['path'][len(prefix):] for file in archive['files'] if file['path'].startswith(prefix)}

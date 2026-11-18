@@ -76,9 +76,10 @@ def fill(text, values):
                   lambda match: values.get(match.group(1) or match.group(2), match.group()), text)
 
 
-def compose(system, user, values):
+def compose(system, user, values, continuation=''):
     context = (f'【本次代码生成配置】\n目标列表 URL：{values["url"]}\n生成文件名：{values["file_name"]}\n'
                + (f'代码保存目录：{values["code_dir"]}\n' if values['code_dir'] else '')
                + (f'输入参考文件：\n{values["reference_files"]}\n' if values.get('reference_files') else '')
                + f'代码保存要求：{values["code_save_requirement"]}\n【代码生成配置结束】')
-    return f'{context}\n\n系统要求：\n{fill(system.strip(), values)}\n\n用户要求：\n{fill(user.strip(), values)}'
+    previous = '\n\n' + continuation if continuation else ''
+    return f'{context}\n\n系统要求：\n{fill(system.strip(), values)}{previous}\n\n用户要求：\n{fill(user.strip(), values)}'

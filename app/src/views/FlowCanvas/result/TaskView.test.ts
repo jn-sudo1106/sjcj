@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -13,6 +13,8 @@ import { dataApi, siteApi, sourceApi, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { runnerManagementApi } from '@/api/runnerManagement'
+import TaskExecutionResourceCell from './TaskExecutionResourceCell.vue'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
@@ -24,7 +26,27 @@ vi.mock('./resultLayoutPref', async (importOriginal) => ({
 }))
 
 describe('TaskView', () => {
+  beforeEach(() => { vi.spyOn(runnerManagementApi, 'businessTaskExecutionBatch').mockResolvedValue({ items: {} }) })
   afterEach(() => { vi.restoreAllMocks(); railDefault.open = true })
+
+  it.each([false, true])('源与任务中心列表显示逐任务的真实部署资源，整页只批量读取一次（global=%s）', async global => {
+    setActivePinia(createPinia()); await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+    const tasks = [{ taskId: '73864132', state: 'C', topic: 'news', sourceId: source.sourceId }, { taskId: '73864133', state: 'L', topic: 'news', sourceId: source.sourceId }] as TaskInst[]
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 2, list: tasks })
+    const resource = { runnerId: 'runner173', machine: '192.168.1.173' }
+    vi.mocked(runnerManagementApi.businessTaskExecutionBatch).mockResolvedValue({ items: { '73864132': [resource], '73864133': [] } } as never)
+    const wrapper = shallowMount(TaskView, { props: { global }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } } })
+    await flushPromises()
+    expect(runnerManagementApi.businessTaskExecutionBatch).toHaveBeenCalledTimes(1)
+    const cells = wrapper.findAllComponents(TaskExecutionResourceCell)
+    expect(cells).toHaveLength(2)
+    expect(cells[0]!.props()).toMatchObject({ taskId: '73864132', items: [resource], loading: false, error: '' })
+    expect(cells[1]!.props()).toMatchObject({ taskId: '73864133', items: [] })
+    expect(wrapper.get('thead').text()).toContain('部署资源')
+    wrapper.unmount()
+  })
 
   it.each([false, true])('执行结果摘要：源视图/任务中心均可查看原文，空结果按状态提示（global=%s）', async (global) => {
     setActivePinia(createPinia())
@@ -1208,7 +1230,7 @@ describe('TaskView', () => {
     // `filters.sourceId = props.siteWide ? '' : sourceId.value`），所以**源态收起这一列**——
     // 整列每行都是同一个源名，130px 纯浪费。0917-02 要的「所属源可点」是网站态的事
     //（覆盖见上面那条满额用例），不需要把这个条件改成恒真。
-    it('源态收起「所属源」列，空态 colspan 为 11', async () => {
+it('源态收起「所属源」列，执行结果与部署资源列均计入空态 colspan', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -1224,7 +1246,7 @@ describe('TaskView', () => {
 
       expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('所属源')
       expect(wrapper.find('[data-testid="task-source-link"]').exists()).toBe(false)
-      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('11')
+      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('12')
 
       wrapper.unmount()
     })

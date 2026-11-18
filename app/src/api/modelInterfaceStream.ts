@@ -2,7 +2,7 @@ import { ACCESS_TOKEN_HEADER, readStoredToken, triggerSessionExpired } from './a
 import type { ModelInterfaceTestInput } from './runnerManagement'
 
 export type ModelTestEvent =
-  | { type: 'connecting'; durationMs: number; interfaceId?: string; interfaceName?: string }
+  | { type: 'connecting'; durationMs: number; interfaceId?: string; interfaceName?: string; serverId?: string; serverName?: string; serverAddress?: string }
   | { type: 'headers'; durationMs: number; status: number; ok: boolean; contentType: string }
   | { type: 'chunk'; durationMs: number; text: string }
   | { type: 'done'; durationMs: number }

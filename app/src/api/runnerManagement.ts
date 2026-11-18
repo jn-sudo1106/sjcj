@@ -382,6 +382,7 @@ export interface NodeDeploymentSettings {
   deploymentDirectory: string
 }
 export interface GeneratedDeploymentJob {
+  fileSummary?: { paths: string[]; total: number | null; scope: 'task-files' | 'configuration' } | null
   configurationId?: string
   targetResourceId?: string; resourceId?: string
   jobId: string; sourceId: string; flowId: string; stepId: string; configId: string; configType: string
@@ -444,6 +445,7 @@ export interface RuntimeLogDetail extends RuntimeLogRecord {
 export interface BusinessTaskExecution {
   recordId: string; runnerId: string; streamId: string; pid: number | null; entry: string
   machine: string; instanceDirectory: string; status: string; time: string; seq: number; index: number
+  runnerName?: string; runtimeId?: string; deploymentId?: string
 }
 export interface RuntimeLogFilters {
   recordId?: string
@@ -657,6 +659,12 @@ export interface RepositoryFileReferences {
   repoId: string; repoName: string; path: string; protectionReasons: string[]; items: RepositoryFileReference[]
 }
 export interface ModelInterfaceSettings { items: ModelInterface[]; revision: number }
+export interface ModelInterfaceCall {
+  callId: string; interfaceId: string; interfaceName: string; kind: string; model: string; endpoint: string
+  cdpPort?: number | null; serverId: string; serverAddress: string; purpose: 'generation' | 'test' | 'prompt-edit'
+  status: 'running' | 'succeeded' | 'failed' | 'interrupted'; taskId: string; configId: string; startedAt: string; finishedAt: string
+  durationMs: number | null; httpStatus: number | null; message: string; historical?: boolean; taskRecorded?: boolean
+}
 export interface GenerationGitBinding {
   path: string; repositoryId: string; directoryId: string
   repoName?: string; remoteUrl?: string; branch?: string; directoryPath?: string; error?: string
@@ -727,7 +735,7 @@ export const runnerManagementApi = {
    */
   createMonitorGenerationTask: (body: { sourceId: string; monitorId: string; configType: string; sourceName?: string; monitorName?: string; generation?: Record<string, unknown> }) => request<{ job: MqCodeJob }>('/code-generation/tasks', 'POST', body),
   createCodeGenerationTask: (body: { sourceId: string; flowId: string; stepId: string; configId: string; sourceName?: string; nodeName?: string; flowVersionId?: string; entryIds?: string[]; generation?: Record<string, unknown> }) => request<{ job: MqCodeJob }>('/code-generation/tasks', 'POST', body),
-  prepareCodeRegeneration: (taskId: string) => request<{ taskId: string; generation: Record<string, string>; context: Record<string, string>; nodePromptRevision: string; canUpdateNode: boolean }>(`/code-generation/tasks/regeneration?taskId=${encodeURIComponent(taskId)}`),
+  prepareCodeRegeneration: (taskId: string) => request<{ taskId: string; generation: Record<string, string>; context: Record<string, string>; continuation?: { mode: 'context'; hasPreviousCode: boolean; turns: { taskId: string; attempt: number; user: string; assistant: string; status: string }[] }; nodePromptRevision: string; canUpdateNode: boolean }>(`/code-generation/tasks/regeneration?taskId=${encodeURIComponent(taskId)}`),
   regenerateCodeTask: (body: { taskId: string; requestId: string; systemPrompt: string; userPrompt: string; correction: string; interfaceId: string; updateNodePrompts: boolean; nodePromptRevision: string }) => request<{ job: MqCodeJob }>('/code-generation/tasks/regeneration', 'POST', body),
   deleteCodeGenerationTask: (taskId: string, configId: string) => request<{ ok: true; message: string }>('/code-generation/tasks/delete', 'POST', { taskId, configId }),
   deleteCodeGenerationTasks: (taskIds: string[], configId: string) => request<{ items: { taskId: string; ok: boolean; message: string }[]; deletedCount: number; failedCount: number }>('/code-generation/tasks/delete-batch', 'POST', { taskIds, configId }),
@@ -788,6 +796,8 @@ export const runnerManagementApi = {
   runtimeLogPolicy: () => request<RuntimeLogPolicy>('/log-settings'),
   saveRuntimeLogPolicy: (input: RuntimeLogPolicy) => request<RuntimeLogPolicy>('/log-settings', 'POST', input),
   businessTaskExecutions: (taskId: string, topic = '', configId = '') => request<{ taskId: string; items: BusinessTaskExecution[]; truncated: boolean }>(`/business-task-executions?${new URLSearchParams({ taskId, topic, configId })}`),
+  businessTaskExecutionBatch: (tasks: { taskId: string; topic?: string }[]) => request<{ items: Record<string, BusinessTaskExecution[]> }>('/business-task-executions/batch', 'POST', { tasks }),
+  modelInterfaceCalls: (interfaceId: string, page = 1, pageSize = 20) => request<{ interfaceId: string; items: ModelInterfaceCall[]; total: number }>(`/model-interfaces/${encodeURIComponent(interfaceId)}/calls?${new URLSearchParams({ page: String(page), pageSize: String(pageSize) })}`),
   runtimeLogs: (filters: RuntimeLogFilters = {}) => request<{ items: RuntimeLogRecord[]; total: number; page: number; pageSize: number }>(`/runtime-operations?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))}`),
   runtimeLogDetail: (id: string) => request<RuntimeLogDetail>(`/runtime-operations/${encodeURIComponent(id)}`),
   runtimeLogEntries: (id: string, cursor = 0, before = 0, fromSeq = 0) => request<RuntimeLogEntries>(`/log-streams/${encodeURIComponent(id)}/entries?cursor=${cursor}&before=${before}&fromSeq=${fromSeq}`),

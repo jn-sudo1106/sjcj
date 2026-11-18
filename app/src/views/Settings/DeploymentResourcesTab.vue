@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElDrawer, ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { RouterLink, useRoute } from 'vue-router'
@@ -48,7 +48,18 @@ const draft = ref<DeploymentResourceRule | null>(null), editing = ref(-1), busyJ
 const editingResourceId = ref('')
 const browsing = ref<{ runner: RunnerInstance; directory: string } | null>(null)
 const fileJob = ref<GeneratedDeploymentJob | null>(null)
-function showDeploymentFiles(job: GeneratedDeploymentJob) { selected.value = null; browsing.value = null; fileJob.value = job }
+const detailTab = ref('info'), selectedFilePath = ref('')
+const detailPanel = ref<HTMLElement>()
+function viewDetail(job: GeneratedDeploymentJob) { detailTab.value = 'info'; selectedFilePath.value = ''; selected.value = job }
+function showDeploymentFiles(job: GeneratedDeploymentJob, path = '') {
+  browsing.value = null
+  if (props.tasksOnly) {
+    selectedFilePath.value = path; detailTab.value = 'files'; selected.value = job
+    void nextTick(() => detailPanel.value?.scrollTo?.({ top: 0 }))
+  }
+  else { selected.value = null; fileJob.value = job }
+}
+const deploymentFileName = (path: string) => path.split('/').pop() || path
 const resourceKey = (row: DeploymentResourceRule) => String(resources.value.indexOf(row))
 const inlineEditing = computed(() => !!editingResourceId.value)
 const committedResources = ref<DeploymentResourceRule[]>([])
@@ -70,7 +81,6 @@ const deploymentInstanceLink = (row: GeneratedDeploymentJob) => ({ path: '/setti
 const deploymentInstanceIp = (row: GeneratedDeploymentJob) => row.runnerIp || machine(row.runnerId)?.ipAddress || row.runnerId
 const deploymentInstanceName = (row: GeneratedDeploymentJob) => row.runnerName || machine(row.runnerId)?.name || row.runnerId
 const deploymentInstanceDirectory = (row: GeneratedDeploymentJob) => row.instanceDirectory || machine(row.runnerId)?.installDirectory || ''
-const deploymentInstanceTitle = (row: GeneratedDeploymentJob) => [deploymentInstanceIp(row), deploymentInstanceName(row), row.runnerId, deploymentInstanceDirectory(row)].filter(Boolean).join('\n')
 const instanceStatusLabels = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常' }
 const nodeLink = (row: GeneratedDeploymentJob, deployment = false) => ({ path: '/canvas', query: {
   sourceId: row.sourceId, view: 'flow', ...(row.flowId ? { flowId: row.flowId } : {}),
@@ -244,8 +254,8 @@ onUnmounted(() => emit('busy', false))
       </el-table>
     </template>
     <template v-else>
-      <el-table row-key="jobId" :height="tasksOnly ? '100%' : undefined" :current-row-key="selected?.jobId" :data="jobs" highlight-current-row @row-click="selected = $event" empty-text="暂无部署任务">
-        <el-table-column :label="tasksOnly ? '任务信息 / 状态' : '任务 ID'" min-width="155" show-overflow-tooltip><template #default="{ row }"><el-button link type="primary" @click.stop="selected = row">{{ row.jobId }}</el-button><template v-if="tasksOnly"><div class="dr-task-status" :class="`is-${row.status}`">{{ deploymentStatuses[row.status] || row.status }}</div><small>{{ row.environment === 'test' ? '测试' : '生产' }} · {{ formatRunnerDateTime(row.updatedAt) }}</small></template></template></el-table-column>
+      <el-table row-key="jobId" :height="tasksOnly ? '100%' : undefined" :current-row-key="selected?.jobId" :data="jobs" highlight-current-row @row-click="viewDetail" empty-text="暂无部署任务">
+        <el-table-column :label="tasksOnly ? '任务信息 / 状态' : '任务 ID'" min-width="155" show-overflow-tooltip><template #default="{ row }"><el-button link type="primary" @click.stop="viewDetail(row)">{{ row.jobId }}</el-button><template v-if="tasksOnly"><div class="dr-task-status" :class="`is-${row.status}`">{{ deploymentStatuses[row.status] || row.status }}</div><small>{{ row.environment === 'test' ? '测试' : '生产' }} · {{ formatRunnerDateTime(row.updatedAt) }}</small></template></template></el-table-column>
         <el-table-column label="所属源 / 流程节点" min-width="200"><template #default="{ row }"><RouterLink v-if="row.sourceId" :to="nodeLink(row)" class="dr-node-link dr-source-name" :title="sourceNames[row.sourceId] || row.sourceId" data-testid="deployment-source-link" @click.stop>{{ sourceNames[row.sourceId] || row.sourceId }}</RouterLink><span v-else>未记录源</span><small>源 {{ row.sourceId || '—' }}</small><div class="dr-flow-node" :title="`${flowNames[row.flowId] || row.flowId} / ${nodeNames[`${row.flowId}:${row.stepId}`] || row.stepId}`">{{ flowNames[row.flowId] || row.flowId || '未记录流程' }} / {{ nodeNames[`${row.flowId}:${row.stepId}`] || row.stepId || '未记录节点' }}</div><small><RouterLink v-if="row.sourceId && row.flowId && row.stepId && row.configId" :to="nodeLink(row, true)" class="dr-node-link dr-config-id" data-testid="deployment-config-link" @click.stop>配置 {{ row.configId }}</RouterLink><span v-else>配置 {{ row.configId || '—' }}</span></small></template></el-table-column>
         <el-table-column v-if="!tasksOnly" label="环境" width="75"><template #default="{ row }">{{ row.environment === 'test' ? '测试' : '生产' }}</template></el-table-column>
         <el-table-column v-if="!tasksOnly" label="部署状态" min-width="125">
@@ -256,38 +266,45 @@ onUnmounted(() => emit('busy', false))
         </el-table-column>
         <el-table-column label="部署实例 / 目录" min-width="190">
           <template #default="{ row }">
-            <RouterLink v-if="row.runnerId" :to="deploymentInstanceLink(row)" :title="deploymentInstanceTitle(row)" class="dr-instance-link" data-testid="deployment-instance-link" @click.stop>
+            <RouterLink v-if="row.runnerId" :to="deploymentInstanceLink(row)" class="dr-instance-link" data-testid="deployment-instance-link" @click.stop>
               <span class="dr-instance-heading"><strong>{{ deploymentInstanceIp(row) }}</strong><span v-if="machine(row.runnerId)" class="dr-instance-status" :class="`is-${machine(row.runnerId)!.status}`">{{ instanceStatusLabels[machine(row.runnerId)!.status] }}</span></span>
               <span class="dr-instance-name">{{ deploymentInstanceName(row) }}</span>
               <span class="dr-instance-directory">{{ deploymentInstanceDirectory(row) || '实例目录未记录' }}</span>
             </RouterLink>
             <span v-else>{{ row.status === 'superseded' ? '无需分配' : '待分配' }}</span>
             <small><el-button v-if="canWrite && machine(row.runnerId) && (row.installedPath || row.targetPath)" link type="primary" class="dr-job-directory" data-testid="browse-deployment-directory" :title="row.installedPath || row.targetPath" @click.stop="browseDeployment(row)">📁 {{ row.installedPath || row.targetPath }}</el-button><template v-else>{{ row.installedPath || row.targetPath || row.message }}</template></small>
+            <div v-if="row.status === 'success'" class="dr-file-list" data-testid="deployment-file-preview">
+              <small>本次部署文件</small>
+              <el-button v-for="path in (row.fileSummary?.paths || []).slice(0, 1)" :key="path" link type="primary" class="dr-file-name" :aria-label="`查看部署文件 ${path}`" data-testid="deployment-file-link" @click.stop="showDeploymentFiles(row, path)">{{ deploymentFileName(path) }}</el-button>
+              <el-button v-if="row.fileSummary?.total == null || row.fileSummary.total > 1 || row.fileSummary.paths.length > 1" link type="primary" data-testid="deployment-more-files" @click.stop="showDeploymentFiles(row)">{{ row.fileSummary?.paths.length ? '查看更多' : '查看部署文件' }}{{ row.fileSummary?.total != null ? `（共 ${row.fileSummary.total} 个）` : '' }}</el-button>
+              <small v-else-if="!row.fileSummary.total">本次没有部署文件</small>
+            </div>
           </template>
         </el-table-column>
         <el-table-column v-if="!tasksOnly" label="Git 目录" min-width="180"><template #default="{ row }"><RouterLink v-if="row.repositoryId && row.gitDirectory" :to="repositoryDirectoryLink(row)" class="dr-git-directory" data-testid="browse-deployment-git-directory" @click.stop>📁 {{ row.gitDirectory }}</RouterLink><code v-else>{{ row.gitDirectory || '未记录' }}</code><small>{{ row.repositoryName || row.repositoryId }}</small></template></el-table-column>
         <el-table-column v-if="!tasksOnly" label="Git 版本" width="120"><template #default="{ row }"><code>{{ row.gitCommit.slice(0, 12) }}</code></template></el-table-column>
         <el-table-column v-if="!tasksOnly" label="更新时间" width="165"><template #default="{ row }">{{ formatRunnerDateTime(row.updatedAt) }}</template></el-table-column>
-        <el-table-column v-if="tasksOnly" label="操作" width="120" fixed="right"><template #default="{ row }"><div class="dr-task-actions"><el-button link type="primary" data-testid="deployment-view-detail" @click.stop="selected = row">查看详情</el-button><RouterLink v-if="row.runnerId" :to="instanceLink(row)" data-testid="deployment-open-instance" @click.stop>查看运行实例</RouterLink></div></template></el-table-column><el-table-column v-else label="操作" min-width="255"><template #default="{ row }"><el-button v-if="row.status === 'success'" link type="primary" data-testid="open-deployment-files" @click.stop="showDeploymentFiles(row)">部署文件</el-button><RouterLink v-if="row.runnerId" :to="instanceLink(row)" data-testid="deployment-open-instance" @click.stop>查看运行实例</RouterLink><RouterLink v-if="row.deliveryId" :to="{ path: '/settings', query: { tab: 'runtime-logs', recordId: row.deliveryId, runnerId: row.runnerId } }" target="_blank">部署日志</RouterLink><template v-if="canWrite"><el-button v-if="row.status === 'success'" link :disabled="!!busyJob" data-testid="sync-deployment-git" @click.stop="act(row, 'sync-git')">同步 Git 代码</el-button><el-button v-if="['waiting_resource','queued','failed'].includes(row.status)" link :disabled="!!busyJob" @click.stop="act(row, 'retry')">重试</el-button></template></template></el-table-column>
+        <el-table-column v-if="tasksOnly" label="操作" width="120" fixed="right"><template #default="{ row }"><div class="dr-task-actions"><el-button link type="primary" data-testid="deployment-view-detail" @click.stop="viewDetail(row)">查看详情</el-button><RouterLink v-if="row.runnerId" :to="instanceLink(row)" data-testid="deployment-open-instance" @click.stop>查看运行实例</RouterLink></div></template></el-table-column><el-table-column v-else label="操作" min-width="255"><template #default="{ row }"><el-button v-if="row.status === 'success'" link type="primary" data-testid="open-deployment-files" @click.stop="showDeploymentFiles(row)">部署文件</el-button><RouterLink v-if="row.runnerId" :to="instanceLink(row)" data-testid="deployment-open-instance" @click.stop>查看运行实例</RouterLink><RouterLink v-if="row.deliveryId" :to="{ path: '/settings', query: { tab: 'runtime-logs', recordId: row.deliveryId, runnerId: row.runnerId } }" target="_blank">部署日志</RouterLink><template v-if="canWrite"><el-button v-if="row.status === 'success'" link :disabled="!!busyJob" data-testid="sync-deployment-git" @click.stop="act(row, 'sync-git')">同步 Git 代码</el-button><el-button v-if="['waiting_resource','queued','failed'].includes(row.status)" link :disabled="!!busyJob" @click.stop="act(row, 'retry')">重试</el-button></template></template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="page" :total="total" :page-size="20" layout="total, prev, pager, next" @current-change="load" />
     </template>
     </section>
     <DeploymentFilesDrawer v-if="fileJob" :job="fileJob" @close="fileJob = null" />
     <RunnerFilesDrawer v-if="browsing" :runner="browsing.runner" :directory="browsing.directory" @close="browsing = null" />
-    <component :is="tasksOnly ? 'section' : ElDrawer" v-bind="tasksOnly ? { class: 'dr-detail-panel', 'aria-label': '部署任务详情', 'data-testid': 'deployment-task-detail-panel' } : { modelValue: !!selected, title: '部署任务详情', size: 'min(620px, 92vw)' }" @close="selected = null">
+    <component ref="detailPanel" :is="tasksOnly ? 'section' : ElDrawer" v-bind="tasksOnly ? { class: 'dr-detail-panel', 'aria-label': '部署任务详情', 'data-testid': 'deployment-task-detail-panel' } : { modelValue: !!selected, title: '部署任务详情', size: 'min(620px, 92vw)' }" @close="selected = null">
       <div v-if="tasksOnly" class="dr-detail-heading"><b>任务详情<span v-if="selected"> · {{ selected.jobId }}</span></b><el-button v-if="selected" :icon="Refresh" :loading="loading" @click="refresh">刷新</el-button></div>
       <template v-if="tasksOnly && selected">
         <div class="dr-detail-summary"><div>部署状态：{{ deploymentStatuses[selected.status] || selected.status }}</div><div>环境：{{ selected.environment === 'test' ? '测试' : '生产' }}</div><div>所属源：<RouterLink :to="nodeLink(selected)">{{ sourceNames[selected.sourceId] || selected.sourceId || '未记录' }}</RouterLink></div><div>节点配置：<RouterLink :to="nodeLink(selected, true)">{{ selected.configId }}</RouterLink></div><div>来源流程：{{ flowNames[selected.flowId] || selected.flowId || '未记录' }}</div><div>流程节点：{{ nodeNames[`${selected.flowId}:${selected.stepId}`] || selected.stepId || '未记录' }}</div><div>执行机器：<RouterLink v-if="selected.runnerId" :to="instanceLink(selected)" data-testid="deployment-machine-instance-link" title="查看该机器的运行实例">{{ selected.runnerIp || selected.runnerId }}</RouterLink><span v-else>待分配</span></div><div>更新时间：{{ formatRunnerDateTime(selected.updatedAt) }}</div></div>
         <el-alert :title="deploymentStatuses[selected.status] || selected.status" :description="selected.message" :type="selected.status === 'failed' ? 'error' : selected.status === 'success' ? 'success' : 'info'" :closable="false" />
       </template>
-      <template v-if="selected"><DeploymentTaskProcess :key="selected.jobId" ref="taskProcess" :job="selected"><dl class="dr-details">
+      <template v-if="selected"><DeploymentTaskProcess :key="selected.jobId" ref="taskProcess" v-model:tab="detailTab" :job="selected"><dl class="dr-details">
         <dt>部署 ID</dt><dd><code>{{ selected.deploymentId || '未分配' }}</code></dd>
         <dt>部署任务 ID</dt><dd><code>{{ selected.jobId }}</code></dd>
         <dt v-if="selected.status === 'success'">部署文件</dt><dd v-if="selected.status === 'success'"><el-button link type="primary" data-testid="open-deployment-detail-files" @click="showDeploymentFiles(selected)">查看本次部署文件</el-button></dd>
         <template v-for="field in [{label:'状态',value:deploymentStatuses[selected.status]}, {label:'说明',value:selected.message}, {label:'源 / 流程 / 节点',value:`${selected.sourceId} / ${selected.flowId} / ${selected.stepId}`}, {label:'配置 ID',value:selected.configId}, {label:'生成任务',value:selected.taskId}, {label:'Git 仓库',value:selected.repositoryName || selected.repositoryId}, {label:'Git 目录',value:selected.gitDirectory}, {label:'Git 版本',value:selected.gitCommit}, {label:'Runner 实例',value:selected.runnerId}, {label:'实例目录',value:selected.instanceDirectory}, {label:'环境部署目录',value:selected.resourceDirectory}, {label:'部署目录',value:selected.installedPath || selected.targetPath}, {label:'更新时间',value:formatRunnerDateTime(selected.updatedAt)}]" :key="field.label"><dt>{{ field.label }}</dt><dd><RouterLink v-if="field.label === '源 / 流程 / 节点' && selected.sourceId" :to="nodeLink(selected)">{{ field.value }}</RouterLink><RouterLink v-else-if="field.label === '配置 ID' && selected.sourceId && selected.flowId && selected.stepId && selected.configId" :to="nodeLink(selected, true)">{{ field.value }}</RouterLink><RouterLink v-else-if="field.label === 'Git 目录' && selected.repositoryId && selected.gitDirectory" :to="repositoryDirectoryLink(selected)" class="dr-git-directory" data-testid="browse-deployment-detail-git-directory">📁 {{ field.value }}</RouterLink><el-button v-else-if="canWrite && machine(selected.runnerId) && field.value && ['实例目录','环境部署目录','部署目录'].includes(field.label)" link type="primary" class="dr-job-directory" :data-testid="field.label === '部署目录' ? 'browse-deployment-detail-directory' : undefined" @click="browseDeployment(selected, field.value)">📁 {{ field.value }}</el-button><template v-else>{{ field.value || '—' }}</template></dd></template></dl>
         <RouterLink v-if="selected.deliveryId" :to="{ path: '/settings', query: { tab: 'runtime-logs', recordId: selected.deliveryId, runnerId: selected.runnerId } }" target="_blank">部署日志</RouterLink>
         <el-button v-if="tasksOnly && canWrite && ['waiting_resource','queued','failed'].includes(selected.status)" link type="primary" :loading="busyJob === selected.jobId" :disabled="!!busyJob" @click="act(selected, 'retry')">重试部署</el-button>
+        <template v-if="tasksOnly && selected.status === 'success'" #files><DeploymentFilesDrawer v-if="detailTab === 'files'" :job="selected" :initial-path="selectedFilePath" embedded /></template>
         </DeploymentTaskProcess>
       </template>
       <div v-else-if="tasksOnly" class="dr-detail-empty">请选择左侧任务查看详情</div>
@@ -321,7 +338,8 @@ onUnmounted(() => emit('busy', false))
 .dr-row-actions .el-button{margin:0}
 .dr-directory-link{min-width:0;max-width:100%;padding-left:12px}.dr-directory-link :deep(span){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dr-job-directory{max-width:100%;height:auto;white-space:normal;text-align:left}.dr-job-directory :deep(span){min-width:0;overflow-wrap:anywhere}
-.dr-instance-link{display:flex;flex-direction:column;gap:3px;min-width:0;padding:8px 10px;border:1px solid var(--el-border-color-light);border-radius:8px;background:var(--el-color-primary-light-9);color:var(--el-text-color-primary);text-decoration:none}.dr-instance-link:hover,.dr-instance-link:focus-visible{border-color:var(--el-color-primary)}.dr-instance-heading{display:flex;align-items:center;gap:8px}.dr-instance-heading strong{font-size:12px}.dr-instance-status{margin-left:auto;font-size:11px;color:var(--el-text-color-secondary)}.dr-instance-status.is-online{color:var(--el-color-success)}.dr-instance-status.is-error{color:var(--el-color-danger)}.dr-instance-name,.dr-instance-directory{font-size:11px;line-height:1.6;overflow-wrap:anywhere}.dr-task-actions{display:flex;flex-direction:column;align-items:flex-start;gap:6px}.dr-task-actions a{color:var(--el-color-primary);text-decoration:none;white-space:nowrap}.dr-task-actions a:hover{text-decoration:underline}
+.dr-file-list{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-top:8px;min-width:0}.dr-file-list .el-button{margin:0;height:auto;font-size:12px;max-width:100%}.dr-file-name :deep(span){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dr-instance-link{display:flex;flex-direction:column;gap:3px;min-width:0;color:var(--el-color-primary);text-decoration:none}.dr-instance-link:hover{text-decoration:underline}.dr-instance-heading{display:flex;align-items:center;gap:8px}.dr-instance-heading strong{font-size:12px}.dr-instance-status{margin-left:auto;font-size:11px;color:var(--el-text-color-secondary)}.dr-instance-status.is-online{color:var(--el-color-success)}.dr-instance-status.is-error{color:var(--el-color-danger)}.dr-instance-name,.dr-instance-directory{font-size:11px;line-height:1.6;overflow-wrap:anywhere}.dr-task-actions{display:flex;flex-direction:column;align-items:flex-start;gap:6px}.dr-task-actions a{color:var(--el-color-primary);text-decoration:none;white-space:nowrap}.dr-task-actions a:hover{text-decoration:underline}
 .dr-git-directory{color:var(--el-color-primary);text-decoration:none;overflow-wrap:anywhere}.dr-git-directory:hover{text-decoration:underline}
 .dr-node-link{color:var(--el-color-primary);text-decoration:none;overflow-wrap:anywhere}.dr-node-link:hover{text-decoration:underline}
 .dr-source-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dr-flow-node{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:4px}.dr-config-id{color:var(--el-text-color-secondary)}

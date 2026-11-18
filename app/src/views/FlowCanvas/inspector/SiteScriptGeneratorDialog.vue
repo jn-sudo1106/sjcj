@@ -1036,10 +1036,10 @@ function download() {
     <div v-loading="loading" class="site-script-workspace" :class="{ 'is-task': taskGeneration }">
       <section class="site-script-settings" data-testid="site-script-prompt-panel">
         <nav v-if="taskContextAvailable" class="site-script-output-tabs" aria-label="生成方式"><button type="button" data-testid="generation-mode-task" :disabled="busy" :class="{active:generationMode==='task'}" @click="generationMode='task'">任务方式</button><button type="button" data-testid="generation-mode-direct" :disabled="busy" :class="{active:generationMode==='direct'}" @click="generationMode='direct'">调用接口</button></nav>
-        <div class="site-script-controls">
+        <div class="site-script-controls" :class="{ 'has-machine': taskContextAvailable && !allAgentsSelected }">
         <PromptTemplatePicker :items="promptTemplates" :model-value="selectedPromptId" :loading="templatesLoading" :disabled="busy" test-id="script-prompt-template" @select="selectPromptTemplate" />
 
-        <p v-if="taskContextAvailable" class="site-script-machine" data-testid="generation-machine">{{ machineMessage }}</p>
+        <p v-if="taskContextAvailable && !allAgentsSelected" class="site-script-machine" data-testid="generation-machine">{{ machineMessage }}</p>
         <div v-if="remoteGeneration && !taskGeneration" class="site-script-auto-commit"><small>生成完成后自动提交到节点选择的 Git 目录；input、code、output 目录固定复用，任务记录保存在 tasks/任务ID.json。</small></div>
         </div>
         <CodeGenerationPromptVariables />
@@ -1134,8 +1134,10 @@ function download() {
 .site-script-naming { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--rc-muted); }.site-script-naming > span { flex: 0 0 auto; white-space: nowrap; }.site-script-naming code { min-width: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
 .site-script-workspace { display: grid; grid-template-columns: minmax(0, 1fr); align-content:start; gap: 16px; height: min(760px, calc(100dvh - 160px)); min-height: 0; overflow:auto; }
 .site-script-workspace.is-task { grid-template-columns: minmax(0, 1fr); grid-template-rows:minmax(0,1fr); align-content:stretch; }
+.site-script-workspace:not(.is-task) { grid-auto-rows:max-content; }
 .site-script-controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.is-task .site-script-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; align-items: center; }
+.is-task .site-script-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px 24px; align-items: center; }
+.is-task .site-script-controls.has-machine { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .is-task .site-script-controls > .site-script-error { grid-column: 1 / -1; }
 .site-script-machine { margin: 0; font-size: 12px; line-height: 1.6; color: var(--rc-muted); }
 .site-script-model-select { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }

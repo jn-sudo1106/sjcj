@@ -314,11 +314,8 @@ function openDetail(task: TaskInst) {
   void loadDetail()
 }
 async function regenerated(created: MqCodeJob) {
-  closeRegeneration(); taskId.value = ''; state.value = ''; configId.value = created.configId; page.value = 1
+  taskId.value = ''; state.value = ''; configId.value = created.configId; page.value = 1
   await load()
-  const row = rows.value.find(item => item.taskId === created.taskId)
-  if (row) { openDetail(row); detailTab.value = 'output' }
-  ElMessage.success('新任务已提交，等待匹配智能体资源')
 }
 onMounted(loadConfigs)
 onActivated(() => { active = true; if (detailOpen.value) void loadDetail() })
@@ -414,7 +411,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
       <div v-else class="detail-empty">选择左侧任务，查看模型调用、过程输出和生成结果</div>
     </section>
     </div>
-    <CodeTaskRegeneration v-if="revising && regenerationJob && canDelete" :key="regenerationJob.taskId" :job="regenerationJob" @created="regenerated" @cancel="closeRegeneration" />
+    <CodeTaskRegeneration v-if="revising && regenerationJob && canDelete" :key="regenerationJob.taskId" :job="regenerationJob" @created="regenerated" @updated="regenerated" @cancel="closeRegeneration" />
   </section>
 </template>
 

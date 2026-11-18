@@ -413,6 +413,15 @@ def test_interface(app, body):
 
 
 def _test_interface(app, body, prepared):
+    from .model_call_history import track
+    with track(app, prepared[0], body, 'test') as call:
+        result = _test_interface_impl(app, body, prepared)
+        call.result(result)
+        return result
+
+
+def _test_interface_impl(app, body, prepared):
+    from .server import ApiError
     selected, request = prepared
     started = time.monotonic()
     try:
@@ -442,6 +451,13 @@ def stream_test(handler, app, body):
 
 
 def _stream_test(handler, app, body, prepared):
+    from .model_call_history import track
+    purpose = 'prompt-edit' if 'messages' in body and 'basePrompt' in body else 'test'
+    with track(app, prepared[0], body, purpose) as call:
+        return _stream_test_impl(handler, app, body, prepared, call)
+
+
+def _stream_test_impl(handler, app, body, prepared, call):
     """Relay upstream bytes as they arrive, without buffering the whole response."""
     from .server import RESPONSE_SENT
     selected, request = prepared
@@ -455,12 +471,21 @@ def _stream_test(handler, app, body, prepared):
     handler.close_connection = True
 
     def emit(kind, **fields):
+        call.event(kind, fields)
         payload = {'type': kind, 'durationMs': round((time.monotonic() - started) * 1000), **fields}
         handler.wfile.write((json.dumps(payload, ensure_ascii=False) + '\n').encode('utf8'))
         handler.wfile.flush()
 
     try:
-        emit('connecting', interfaceId=selected['id'], interfaceName=selected['name'])
+        server_id = selected.get('generationServerId') or ''
+        if server_id:
+            from .code_servers import read
+            machine = read(app, server_id)
+        else:
+            machine = {}
+        address = machine.get('ipAddress') or urlsplit(selected['endpoint']).hostname or ''
+        emit('connecting', interfaceId=selected['id'], interfaceName=selected['name'],
+             serverId=server_id, serverName=machine.get('name', ''), serverAddress=address)
         try:
             response = urlopen(request, timeout=selected['timeoutSeconds'])
         except HTTPError as error:
@@ -486,7 +511,7 @@ def _stream_test(handler, app, body, prepared):
                 emit('chunk', text=tail)
             emit('done')
     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-        pass
+        call.fail('客户端连接中断')
     except (URLError, TimeoutError, OSError):
         try:
             emit('error', message=f'{selected["name"]} 测试连接失败或超时，已收到的内容保留')
@@ -631,6 +656,14 @@ def _generate_reserved(app, body, emit=None, *, parallel_task=False):
 
 
 def _generate(app, body, selected):
+    from .model_call_history import track
+    with track(app, selected, body, 'generation') as call:
+        result = _generate_impl(app, body, selected, call)
+        call.result(result)
+        return result
+
+
+def _generate_impl(app, body, selected, call):
     from .server import ApiError
     service = script_service()
     remote_target = None
@@ -665,7 +698,7 @@ def _generate(app, body, selected):
     else:
         # Required execution context precedes user text; no fixed sample and no
         # hidden suffix after the user's final MQ/context block.
-        request = workbuddy_request(selected, compose(system, user, values), task_id)
+        request = workbuddy_request(selected, compose(system, user, values, body.get('_continuationContext', '')), task_id)
     from .code_servers import model_request
     selected['_workspace'] = getattr(request, 'generation_workspace', None)
     emit = selected.get('_emit')
@@ -675,6 +708,7 @@ def _generate(app, body, selected):
     try:
         if emit: emit('progress',message='正在连接模型服务，等待过程输出…')
         with urlopen(request, timeout=selected['timeoutSeconds']) as response:
+            call.data['httpStatus'] = getattr(response, 'code', None)
             if emit:
                 decoder = codecs.getincrementaldecoder('utf-8-sig')(errors='replace')
                 parts, size = [], 0
@@ -703,6 +737,7 @@ def _generate(app, body, selected):
     except service.GenerationError as exc:
         raise ApiError(f'{selected["name"]}：{exc}', exc.status) from exc
     except HTTPError as exc:
+        call.data['httpStatus'] = exc.code
         raise ApiError(f'{selected["name"]} 请求失败（HTTP {exc.code}）', 502) from exc
     except (URLError, TimeoutError, OSError) as exc:
         raise ApiError(f'{selected["name"]} 连接失败或超时，请检查接口地址和模型服务', 502) from exc

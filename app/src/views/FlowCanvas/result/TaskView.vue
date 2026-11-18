@@ -25,6 +25,8 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
 import { taskDataId } from './taskIds'
 import { parseTaskResult, TASK_RESULT_STATUS_TEXT } from '@/utils/flow/taskResult'
+import TaskExecutionResourceCell from './TaskExecutionResourceCell.vue'
+import { useTaskExecutions } from './useTaskExecutions'
 
 function taskResultPreview(task: TaskInst): string {
   return task.taskResult?.trim() || (task.state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果')
@@ -92,6 +94,7 @@ const globalSourceNames = ref<Record<string, string>>({})
 const stepsBySource = ref<Record<string, Step[]>>({})
 const nodeRunsBySource = ref<Record<string, NodeRunStat[]>>({})
 const rows = ref<TaskInst[]>([])
+const { executions: taskExecutions, loading: executionsLoading, error: executionsError } = useTaskExecutions(rows)
 const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
@@ -864,7 +867,7 @@ const nextStepHints = computed(() => {
             <tr>
               <th>任务 / 状态</th>
               <th>{{ showSourceColumn ? '所属源 / 节点' : '流程节点' }}</th>
-              <th>任务名称 / 数据</th>
+              <th>任务名称 / 数据 / 部署资源</th>
               <th>队列 / 创建时间</th>
               <th>操作</th>
             </tr>
@@ -939,6 +942,7 @@ const nextStepHints = computed(() => {
                   data-testid="task-url-link"
                   @click.stop
                 >{{ task.taskUrl }}</a>
+                <div class="tv-task-resource"><small class="tv-sub">部署资源</small><TaskExecutionResourceCell :task-id="task.taskId" :state="task.state" :items="taskExecutions[task.taskId]" :loading="executionsLoading" :error="executionsError" /></div>
               </td>
               <td>
                 <div
@@ -968,7 +972,8 @@ const nextStepHints = computed(() => {
             <col style="width: 180px" />
             <col style="width: 80px" />
             <col style="width: 80px" />
-            <col style="width: 200px" />
+<col style="width: 200px" />
+            <col style="width: 170px" />
             <col style="width: 140px" />
             <col style="width: 110px" />
           </colgroup>
@@ -984,6 +989,7 @@ const nextStepHints = computed(() => {
               <th>类型</th>
               <th>状态</th>
               <th>执行结果</th>
+              <th>部署资源</th>
               <th>创建时间</th>
               <th>操作</th>
             </tr>
@@ -1072,13 +1078,14 @@ const nextStepHints = computed(() => {
                   @click="openDetail(task)"
                 >{{ resultMessage(task) }}</button>
               </td>
+              <td><TaskExecutionResourceCell :task-id="task.taskId" :state="task.state" :items="taskExecutions[task.taskId]" :loading="executionsLoading" :error="executionsError" /></td>
               <td class="tv-time">{{ task.createdAt || '—' }}</td>
               <td class="tv-actions-cell">
                 <button class="tv-action-btn" type="button" data-testid="task-detail-btn" @click="openDetail(task)">详情</button>
                 <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
               </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 12 : 11" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 13 : 12" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
           </tbody>
         </table>
         <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
@@ -1146,6 +1153,7 @@ const nextStepHints = computed(() => {
 .tv-detail-empty { padding: 48px 16px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .tv-compact-table { table-layout: fixed; }
 .tv-compact-table td { vertical-align: top; }
+.tv-task-resource { margin-top:8px; padding-top:6px; border-top:1px solid var(--rc-border-soft); }
 .tv-row { cursor: pointer; }
 .tv-row:hover td { background: #f8fafc; }
 .tv-row.is-selected td { background: var(--rc-primary-bg); }

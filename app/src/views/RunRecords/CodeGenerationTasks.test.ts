@@ -35,7 +35,7 @@ describe('智能体任务', () => {
     expect(runnerManagementApi.codeGenerationTasks).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: '430024910' }))
     wrapper.unmount()
   })
-  it('从列表操作直接打开AI修正工作区，保留详情布局，提交后查看新任务', async () => {
+  it('从列表打开智能体修正对话，提交后刷新任务列表但保留对话窗口', async () => {
     const childRow = { ...task, taskId: 'child', configId: 'node-3' }
     const parent = { taskId: task.taskId, configId: 'node-3', status: 'succeeded', callbackSent: true, stages: [], output: '', message: '', serverId: '', queue: '', createdAt: '' } as const
     vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [task, childRow], total: 2 })
@@ -48,9 +48,9 @@ describe('智能体任务', () => {
     const editor = w.findComponent({ name: 'CodeTaskRegeneration' })
     expect(editor.props('job').taskId).toBe(task.taskId)
     editor.vm.$emit('created', { ...parent, taskId: 'child', status: 'queued' }); await flushPromises()
-    expect(runnerManagementApi.mqCodeJob).toHaveBeenLastCalledWith('child')
-    expect(w.findComponent({ name: 'CodeTaskRegeneration' }).exists()).toBe(false)
-    expect(w.get('[data-testid="code-task-detail-panel"]').text()).toContain('任务 ID：child')
+    expect(w.findComponent({ name: 'CodeTaskRegeneration' }).exists()).toBe(true)
+    expect(w.findComponent({ name: 'CodeTaskRegeneration' }).props('job').taskId).toBe(task.taskId)
+    expect(runnerManagementApi.codeGenerationTasks).toHaveBeenCalledWith(expect.objectContaining({ configId: 'node-3' }))
     w.unmount()
   })
   it('列表状态过期时重新查询执行状态，运行中的任务不能打开重新生成', async () => {

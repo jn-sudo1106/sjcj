@@ -222,6 +222,8 @@ class Application:
     def __init__(self, data_dir: Path = RUNTIME, site_script_repo: Path | None = None):
         self.data_dir = data_dir
         self.store = create_store(data_dir / "runner.sqlite3")
+        from .model_call_history import recover_interrupted
+        recover_interrupted(self)
         self.artifacts = ArtifactStore(data_dir / "artifacts")
         self.default_site_script_repo = Path(os.getenv(
             "RUNNER_SITE_SCRIPT_REPO", str(ROOT.parent / "site-scripts"))).resolve()
@@ -2127,7 +2129,8 @@ class Handler(BaseHTTPRequestHandler):
         sub = path[len(prefix):]
         file_read = (method == 'POST' and re.fullmatch(r'/code-servers/[0-9a-f-]+/files', sub)
                      and body.get('action') in ('list', 'read', 'export', 'download', 'logs'))
-        admin_identity = app.authenticate_admin(self.headers, self.client_address[0], write=(method != "GET" and not file_read) or sub.startswith('/runner-file-requests/'))
+        batch_read = method == 'POST' and sub == '/business-task-executions/batch'
+        admin_identity = app.authenticate_admin(self.headers, self.client_address[0], write=(method != "GET" and not file_read and not batch_read) or sub.startswith('/runner-file-requests/'))
         if sub == '/monitor-batches' and method == 'POST':
             from .monitor_batches import create
             return create(app, body, self.headers, admin_identity)
@@ -2391,6 +2394,13 @@ class Handler(BaseHTTPRequestHandler):
         if method == 'GET' and sub == '/business-task-executions':
             from .business_task_logs import executions
             return executions(app, query)
+        if method == 'POST' and sub == '/business-task-executions/batch':
+            from .business_task_index import listing
+            return listing(app, body)
+        model_calls = re.fullmatch(r'/model-interfaces/([A-Za-z0-9_-]+)/calls', sub)
+        if method == 'GET' and model_calls:
+            from .model_call_history import listing
+            return listing(app, model_calls.group(1), query)
         if method == 'GET' and sub == '/runtime-operations':
             from .runtime_history import list_records
             app.expire_stale_runners()

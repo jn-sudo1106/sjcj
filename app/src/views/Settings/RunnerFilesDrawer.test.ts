@@ -20,6 +20,45 @@ async function setup() {
   wrapper = mount(RunnerFilesDrawer,{ props:{runner,directory:'D:\\Runner2\\instance\\links\\1401218'},global:{plugins:[ElementPlus]},attachTo:document.body })
   await flushPromises(); return wrapper
 }
+it('部署空间支持搜索文件和文件夹及类型筛选，不额外下发 Runner 命令', async () => {
+  vi.mocked(api.requestRunnerFiles).mockResolvedValue({ requestId: 'search' })
+  vi.mocked(api.runnerFileResult).mockResolvedValue({ status: 'success', result: { path: 'links', items: [
+    { name: 'Sites', path: 'links/Sites', isDirectory: true, size: 0, modifiedAt: '' },
+    { name: 'site.py', path: 'links/site.py', isDirectory: false, size: 10, modifiedAt: '' },
+    { name: 'newslink.exe', path: 'links/newslink.exe', isDirectory: false, size: 20, modifiedAt: '' },
+  ] } })
+  wrapper = mount(RunnerFilesDrawer, { props: { runner, directory: 'links', embedded: true, workspace: true }, global: { plugins: [ElementPlus] } })
+  await flushPromises()
+  await wrapper.get('[aria-label="搜索部署文件或文件夹"]').setValue('  SITE  '); await flushPromises()
+  const table = () => wrapper!.findComponent({ name: 'ElTable' })
+  expect(table().props('data').map((file: { name: string }) => file.name)).toEqual(['Sites', 'site.py'])
+  const type = wrapper.getComponent({ name: 'ElSelect' })
+  type.vm.$emit('update:modelValue', 'files'); await flushPromises()
+  expect(table().props('data').map((file: { name: string }) => file.name)).toEqual(['site.py'])
+  type.vm.$emit('update:modelValue', 'folders'); await flushPromises()
+  expect(table().props('data').map((file: { name: string }) => file.name)).toEqual(['Sites'])
+  await wrapper.get('[aria-label="搜索部署文件或文件夹"]').setValue('not-found'); await flushPromises()
+  expect(wrapper.text()).toContain('当前目录没有匹配的文件或文件夹')
+  expect(wrapper.get('[data-testid="deployment-file-search"]').text()).toContain('0 / 3 项')
+  expect(api.requestRunnerFiles).toHaveBeenCalledTimes(1)
+})
+it('刷新和心跳保留部署搜索，打开文件后可返回结果，切换实例清空旧搜索', async () => {
+  const w = await managementSetup(false)
+  const search = () => w.get<HTMLInputElement>('[aria-label="搜索部署文件或文件夹"]')
+  await search().setValue('MAIN'); await flushPromises()
+  await w.get('[aria-label="刷新部署目录"]').trigger('click'); await flushPromises()
+  expect(search().element.value).toBe('MAIN')
+  await w.setProps({ runner: { ...runner, status: 'online', lastHeartbeat: '2026-11-18T01:00:00Z' } }); await flushPromises()
+  expect(search().element.value).toBe('MAIN')
+  vi.mocked(api.runnerFileResult).mockResolvedValueOnce({ status: 'success', result: { path: 'links/main.py', content: 'print(1)' } })
+  await w.findAll('button').find(button => button.text().includes('main.py'))!.trigger('click'); await flushPromises()
+  expect(w.find('[data-testid="deployment-file-search"]').exists()).toBe(false)
+  await w.findAll('button').find(button => button.text() === '返回文件列表')!.trigger('click'); await flushPromises()
+  expect(search().element.value).toBe('MAIN')
+  await w.setProps({ runner: { ...runner, runnerId: 'runner2' } }); await flushPromises()
+  expect(search().element.value).toBe('')
+  expect(api.requestRunnerFiles).toHaveBeenLastCalledWith('runner2', { action: 'list', path: 'links' })
+})
 it('打开实际部署目录，点击文件查看内容，目录使用实例内相对路径', async () => {
   vi.mocked(api.requestRunnerFiles).mockResolvedValue({requestId:'r1'})
   vi.mocked(api.runnerFileResult).mockResolvedValueOnce({status:'success',result:{path:'links/1401218',items:[{name:'main.py',path:'links/1401218/main.py',isDirectory:false,size:10,modifiedAt:'2026-11-03T00:00:00Z',sha256:'hash'}]}})

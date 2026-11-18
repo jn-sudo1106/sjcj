@@ -30,6 +30,31 @@ class GenerationRegenerationTest(unittest.TestCase):
     def submit(self, body):
         return self.request('/api/runner-management/code-generation/tasks/regeneration', body)['job']
 
+    def test_regeneration_continues_saved_agent_dialogue_and_code_without_polluting_node_prompts(self):
+        service, origin, parent, _, body, calls = self.setup_task()
+        previous_code = 'PREVIOUS_CODE = "keep existing parsing"\n'
+        parent.update(output=json.dumps({'reply': '上次已经定位到真实接口'}, ensure_ascii=False), result={'code': previous_code})
+        tasks.put(self.app, parent)
+        prepared = self.request('/api/runner-management/code-generation/tasks/regeneration?taskId=' + parent['taskId'])
+        self.assertTrue(prepared['continuation']['hasPreviousCode'])
+        self.assertEqual(prepared['continuation']['turns'][0]['assistant'], parent['output'])
+        child = self.submit(body)
+        saved = tasks.read(self.app, child['taskId'])
+        context = saved['input']['_continuationContext']
+        self.assertIn(previous_code, context)
+        self.assertIn('上次已经定位到真实接口', context)
+        self.assertNotIn('_continuationContext', child)
+        self.assertEqual(child['continuation']['mode'], 'context')
+        self.assertNotIn('PREVIOUS_CODE', saved['input']['userPrompt'])
+        server = __import__('backend.runner_management.code_servers', fromlist=['read']).read(self.app, service.identity['serverId'])
+        tasks.claim(self.app, server)
+        tasks.execute(self.handler(), self.app, server, child['taskId'])
+        self.assertIn(previous_code, calls[-1]['prompt'])
+        self.assertIn('修正发布日期', calls[-1]['prompt'])
+        self.assertLess(calls[-1]['prompt'].index('历史上下文结束'), calls[-1]['prompt'].rindex('本次修正要求'))
+        next_prepared = self.request('/api/runner-management/code-generation/tasks/regeneration?taskId=' + child['taskId'])
+        self.assertEqual([turn['taskId'] for turn in next_prepared['continuation']['turns']], [parent['taskId'], child['taskId']])
+
     def test_prepare_prefers_actual_previous_interface_over_pool_selection(self):
         _, _, parent, _, _, _ = self.setup_task()
         parent['input']['interfaceId'] = 'all'

@@ -44,6 +44,40 @@ it('自动按模型领取数据库任务，不再配置消费队列',async()=>{
   expect(api.bindCodeServerMq).not.toHaveBeenCalled()
 })
 
+it('工作空间按名称即时搜索文件和文件夹，可切换类型，筛选不重复请求服务器', async () => {
+  const w = await setup()
+  const table = () => w.get('.cg-files')
+  const calls = vi.mocked(api.remoteCodeFiles).mock.calls.length
+  await w.get('[aria-label="搜索文件或文件夹"]').setValue('  NeW  '); await flushPromises()
+  expect(table().text()).toContain('news')
+  expect(table().text()).not.toContain('client.py')
+  expect(w.get('[data-testid="workspace-file-search"]').text()).toContain('1 / 2 项')
+  const type = w.findAllComponents({ name: 'ElSelect' }).find(item => item.attributes('data-testid') === 'workspace-file-type')!
+  type.vm.$emit('update:modelValue', 'files'); await flushPromises()
+  expect(table().text()).toContain('当前目录没有匹配的文件或文件夹')
+  await w.get('[aria-label="搜索文件或文件夹"]').setValue(''); await flushPromises()
+  expect(table().text()).toContain('client.py')
+  expect(table().text()).not.toContain('news')
+  expect(api.remoteCodeFiles).toHaveBeenCalledTimes(calls)
+})
+
+it('搜索条件变更清除勾选，避免下载隐藏项；进入目录清除搜索，刷新保留当前条件', async () => {
+  const w = await setup()
+  const table = w.findAllComponents({ name: 'ElTable' }).at(-1)!
+  table.vm.$emit('selection-change', [file]); await flushPromises()
+  const download = () => w.get('.cg-file-actions').findAll('button').find(button => button.text() === '下载所选')!
+  expect(download().attributes('disabled')).toBeUndefined()
+  await w.get('[aria-label="搜索文件或文件夹"]').setValue('news'); await flushPromises()
+  expect(download().attributes('disabled')).toBeDefined()
+  await w.get('.cg-files').findAll('button').find(button => button.text().includes('news'))!.trigger('click'); await flushPromises()
+  expect(w.get<HTMLInputElement>('[aria-label="搜索文件或文件夹"]').element.value).toBe('')
+  expect(api.remoteCodeFiles).toHaveBeenLastCalledWith(server.serverId, { action: 'list', path: 'news' })
+  await w.get('[aria-label="搜索文件或文件夹"]').setValue('client')
+  await w.get('.cg-file-actions').findAll('button').find(button => button.text() === '刷新')!.trigger('click'); await flushPromises()
+  expect(w.get<HTMLInputElement>('[aria-label="搜索文件或文件夹"]').element.value).toBe('client')
+  expect(w.get('.cg-files').text()).toContain('client.py')
+})
+
 it('当前目录可绑定Git仓库和路径，已绑定目录可直接编辑和解除', async () => {
   const w = await setup()
   await w.get('[data-testid="edit-generation-git-binding"]').trigger('click'); await flushPromises()

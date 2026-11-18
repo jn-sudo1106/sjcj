@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { runnerManagementApi as api, type DeploymentFileContent, type DeploymentFileSnapshot, type GeneratedDeploymentJob } from '@/api/runnerManagement'
 
-const props = defineProps<{ job: GeneratedDeploymentJob }>()
+const props = defineProps<{ job: GeneratedDeploymentJob; embedded?: boolean; initialPath?: string }>()
 const emit = defineEmits<{ close: [] }>()
 const snapshot = ref<DeploymentFileSnapshot | null>(null), content = ref<DeploymentFileContent | null>(null)
 const allFiles = ref(false), path = ref(''), loading = ref(false), reading = ref(false), error = ref('')
@@ -21,6 +21,14 @@ function selectScope() {
   if (!visibleFiles.value.some(file => file.path === path.value)) path.value = visibleFiles.value[0]?.path || ''
   void readFile()
 }
+function selectRequestedFile() {
+  const requested = props.initialPath
+  if (requested) {
+    if (!snapshot.value?.files.some(file => file.path === requested)) throw new Error('本次部署版本中不存在该文件')
+    if (!visibleFiles.value.some(file => file.path === requested)) allFiles.value = true
+  }
+  path.value = requested || visibleFiles.value[0]?.path || ''
+}
 async function load() {
   const request = ++listSequence; fileSequence++
   loading.value = true; error.value = ''; snapshot.value = null; content.value = null; path.value = ''; reading.value = false
@@ -28,17 +36,22 @@ async function load() {
     const result = await api.deploymentFiles(props.job.jobId)
     if (request !== listSequence) return
     snapshot.value = result; allFiles.value = !result.files.some(file => file.taskFile)
-    path.value = visibleFiles.value[0]?.path || ''
+    selectRequestedFile()
     await readFile()
   } catch (e) { if (request === listSequence) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (request === listSequence) loading.value = false }
 }
 watch(() => props.job.jobId, () => void load(), { immediate: true })
+watch(() => props.initialPath, () => {
+  if (loading.value || !snapshot.value || snapshot.value.jobId !== props.job.jobId) return
+  try { selectRequestedFile(); void readFile() }
+  catch (e) { fileSequence++; path.value = ''; content.value = null; error.value = e instanceof Error ? e.message : String(e) }
+})
 onBeforeUnmount(() => { listSequence++; fileSequence++ })
 </script>
 
 <template>
-  <el-drawer :model-value="true" title="部署文件" size="min(1050px, 96vw)" @close="emit('close')">
+  <component :is="embedded ? 'section' : 'el-drawer'" v-bind="embedded ? { class: 'deployment-files-embedded' } : { modelValue: true, title: '部署文件', size: 'min(1050px, 96vw)' }" @close="emit('close')">
     <section class="deployment-files">
       <div class="deployment-files-meta"><span>配置 {{ job.configId }} · {{ job.environment === 'test' ? '测试' : '生产' }}</span><code>Git {{ job.gitCommit.slice(0, 12) }}</code><el-button :disabled="loading || reading" @click="load">刷新</el-button></div>
       <small>查看这条记录已确认部署的签名版本；服务器上的实时文件仍可从部署目录打开。</small>
@@ -49,7 +62,7 @@ onBeforeUnmount(() => { listSequence++; fileSequence++ })
       <template v-else-if="content"><div class="deployment-file-summary"><b>{{ content.path }}</b><span>{{ (content.size / 1024).toFixed(1) }} KB</span><code :title="content.sha256">SHA-256 {{ content.sha256.slice(0, 16) }}</code></div><pre class="deployment-file-code" data-testid="deployment-file-content">{{ content.content }}</pre></template>
       <el-empty v-else-if="!error && !loading" description="该部署记录没有可查看的文件" />
     </section>
-  </el-drawer>
+  </component>
 </template>
 
 <style scoped>
