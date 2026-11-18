@@ -22,20 +22,24 @@ beforeEach(() => {
   vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{})
 })
 afterEach(() => {wrappers.splice(0).forEach(w=>w.unmount());document.body.innerHTML='';vi.restoreAllMocks();vi.unstubAllGlobals()})
-async function setup(program='runner',role='admin') {
+async function setup(program='runner',role='admin',codeServerOnly=false) {
   const pinia=createPinia();setActivePinia(pinia);useAuthStore().roles=[role]
   const router=createRouter({history:createMemoryHistory(),routes:[{path:'/settings',component:{template:'<div />'}}]})
   await router.push({path:'/settings',query:{tab:'releases',program}});await router.isReady()
-  const w=mount(ProgramVersionsTab,{attachTo:document.body,global:{plugins:[pinia,router,ElementPlus]}})
+  const w=mount(ProgramVersionsTab,{props:{codeServerOnly},attachTo:document.body,global:{plugins:[pinia,router,ElementPlus]}})
   wrappers.push(w);await flushPromises();return {w,router}
 }
-it('旧版本入口默认 Runner，同页切换 CodeServer 并集中发布，重复发布复用版本',async()=>{
-  const {w,router}=await setup()
+it('程序版本保留Runner，智能体资源嵌入安装包并支持发布',async()=>{
+  const {w}=await setup()
   expect(w.get('[data-testid="runner-releases"]').text()).toBe('Runner releases')
-  await w.findAll('nav button')[1]!.trigger('click');await flushPromises()
-  expect(router.currentRoute.value.query.program).toBe('code-server')
-  expect(w.text()).toContain('2026.10.29.2')
-  await w.get('[data-testid="publish-code-server"]').trigger('click');await flushPromises()
+  expect(w.findAll('nav button')).toHaveLength(1)
+  const {w:packages}=await setup('runner','admin',true)
+  expect(packages.find('nav').exists()).toBe(false)
+  expect(packages.text()).toContain('智能体当前下载包')
+  expect(packages.get('[data-testid="publish-code-server"]').text()).toBe('发布智能体服务版本')
+  expect(packages.text()).not.toContain('CodeServer')
+  expect(packages.text()).toContain('2026.10.29.2')
+  await packages.get('[data-testid="publish-code-server"]').trigger('click');await flushPromises()
   expect(api.publishCodeServer).toHaveBeenCalledOnce()
 })
 it('按所选 CodeServer 版本下载包，默认平台地址来自服务端而不是 localhost',async()=>{

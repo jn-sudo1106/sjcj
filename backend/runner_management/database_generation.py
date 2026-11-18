@@ -191,6 +191,8 @@ def summaries(app, ids):
 
 
 def claim(app, server):
+    from .code_server_upgrades import updating
+    if updating(app, server['serverId']): return {'job': None}
     from .model_interfaces import listing
     from .code_servers import registry
     machine = next((row for row in registry(app) if row['serverId'] == server['serverId']), None)

@@ -17,13 +17,23 @@ beforeEach(() => {
   vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as Awaited<ReturnType<typeof ElMessageBox.confirm>>)
 })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks() })
-async function setup() {
+async function setup(runnerId?: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
   await router.push('/settings?tab=processors'); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = ['admin']
-  const wrapper = mount(ProcessorProcessesTab, { global: { plugins: [ElementPlus, pinia, router] } }); await flushPromises()
+  const wrapper = mount(ProcessorProcessesTab, { props: { runnerId }, global: { plugins: [ElementPlus, pinia, router] } }); await flushPromises()
   return { wrapper, router }
 }
+it('并入部署资源后只展示所选机器的运行实例，切换机器同步变化', async () => {
+  const { wrapper } = await setup('one')
+  expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false)
+  expect(wrapper.find('[data-testid="processor-100"]').exists()).toBe(true)
+  expect(wrapper.find('[data-testid="processor-101"]').exists()).toBe(false)
+  await wrapper.setProps({ runnerId: 'two' })
+  expect(wrapper.find('[data-testid="processor-100"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="processor-101"]').exists()).toBe(true)
+  wrapper.unmount()
+})
 it('同 IP 的独立目录实例可筛选，进程搜索与日志跳转对应当前进程', async () => {
   const { wrapper, router } = await setup()
   expect(wrapper.findAll('tbody tr')).toHaveLength(2)

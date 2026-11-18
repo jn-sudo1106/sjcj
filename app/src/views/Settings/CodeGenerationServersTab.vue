@@ -7,10 +7,16 @@ import { runnerManagementApi as api, type CodeGenerationServer, type CodeServerR
 import { copyToClipboard } from '@/utils/clipboard'
 import { matchingGenerationGitBinding } from '@/utils/generationWorkspace'
 import ModelInterfacesTab from './ModelInterfacesTab.vue'
+import ProgramVersionsTab from './ProgramVersionsTab.vue'
 
 const canWrite = computed(() => useAuthStore().role === 'admin')
 const router = useRouter()
 const route = useRoute()
+const packageView = computed(() => route.query.view === 'packages')
+async function selectResourceView(packages: boolean) {
+  if (busy.value || !await beforeServerNavigation()) return
+  void router.replace({ path: '/settings', query: { ...route.query, tab: 'code-servers', program: undefined, view: packages ? 'packages' : detailView.value } })
+}
 const requestedTarget = computed(() => route.path === '/settings' && route.query.tab === 'code-servers' && typeof route.query.serverId === 'string'
   ? { id: route.query.serverId, folder: typeof route.query.serverFolder === 'string' ? route.query.serverFolder : '',
     view: route.query.view === 'models' ? 'models' as const : typeof route.query.serverFolder === 'string' || route.query.view === 'files' ? 'files' as const : 'models' as const,
@@ -268,7 +274,7 @@ async function importCode() {
 async function showLogs() {
   await router.push({ path: '/settings', query: { tab: 'runtime-logs', kind: 'code-server', serverId: selectedId.value } })
 }
-function manageVersions() { void router.push({ path: '/settings', query: { tab: 'releases', program: 'code-server' } }) }
+function manageVersions() { void selectResourceView(true) }
 async function copyCode() {
   await run(async () => { const result = await api.codeServerEnrollmentCode(); await copyToClipboard(result.code, '登记码'); ElMessage.info('登记码有效期 24 小时，仅可使用一次') })
 }
@@ -284,7 +290,10 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
 
 <template>
   <section class="cg-page" v-loading="loading">
-    <div class="cg-toolbar cg-page-actions"><el-button v-if="canWrite" :disabled="busy" data-testid="manage-program-versions" @click="manageVersions">程序版本</el-button><el-button v-if="canWrite" @click="copyCode">获取登记码</el-button><el-button @click="refresh()">刷新</el-button></div>
+    <nav class="cg-toolbar" aria-label="智能体资源视图"><el-button :type="packageView ? 'default' : 'primary'" :disabled="busy || navigating" data-testid="agent-resource-management" @click="selectResourceView(false)">资源管理</el-button><el-button :type="packageView ? 'primary' : 'default'" :disabled="busy || navigating" data-testid="agent-resource-packages" @click="selectResourceView(true)">智能体资源安装包</el-button></nav>
+    <ProgramVersionsTab v-if="packageView" code-server-only />
+    <template v-else>
+    <div class="cg-toolbar cg-page-actions"><el-button v-if="canWrite" @click="copyCode">获取登记码</el-button><el-button @click="refresh()">刷新</el-button></div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <div class="cg-layout" data-testid="code-server-split-layout">
       <aside class="cg-sidebar" aria-label="智能体资源">
@@ -319,6 +328,8 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
         <span>{{ selected.ipAddress }}</span><span :title="selected.osVersion">{{ selected.osType }} · {{ selected.version }}</span>
         <span v-if="selected.runUser">运行账户 {{ selected.runUser }}</span>
         <span>心跳 {{ new Date(selected.lastHeartbeat).toLocaleString('zh-CN', { hour12: false }) }}</span>
+        <span v-if="selected.autoUpdate" data-testid="code-server-auto-update">{{ selected.launcherAutoUpdate ? '服务和启动器自动更新 · 任务结束后生效' : '服务自动更新 · 启动器自动接入中' }}</span>
+        <el-tag v-if="selected.launcherUpgrade" :type="selected.launcherUpgrade.status === 'failed' ? 'danger' : selected.launcherUpgrade.status === 'succeeded' ? 'success' : 'info'" size="small" :title="selected.launcherUpgrade.message">启动器：{{ upgradeLabels[selected.launcherUpgrade.status] }}</el-tag>
         <el-tag v-if="selected.upgrade" :type="selected.upgrade.status === 'failed' ? 'danger' : selected.upgrade.status === 'succeeded' ? 'success' : 'info'" size="small" :title="selected.upgrade.message">{{ upgradeLabels[selected.upgrade.status as keyof typeof upgradeLabels] }}</el-tag>
         <template v-if="canWrite"><el-button v-if="selected.upgradeCapable" link type="primary" :disabled="busy || !canUpgrade(selected)" @click="upgradeInstances([selected])">{{ selected.upgrade?.status === 'failed' ? '重试升级' : '升级到最新' }}</el-button><el-button v-else link type="warning" :disabled="busy" title="此旧版本需要一次性接入，之后支持自动升级" data-testid="code-server-migration-package" @click="manageVersions">下载升级接入包</el-button></template>
       </div>
@@ -367,6 +378,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
     <el-drawer v-model="detail" :title="current?.path" size="min(900px, 94vw)" :before-close="closeDetail" :close-on-click-modal="false"><div class="cg-file-meta">{{ selected?.name }} · SHA-256：{{ current?.sha256 }}</div><el-input v-model="content" type="textarea" :autosize="{ minRows: 20 }" :readonly="!canWrite" spellcheck="false" class="cg-editor" /><template #footer><el-button v-if="canWrite" type="primary" :loading="busy" :disabled="content === original" @click="saveFile">保存文件</el-button></template></el-drawer>
     <el-dialog v-model="importOpen" title="保存到代码仓库" width="min(540px, 94vw)" :close-on-click-modal="false"><el-form label-position="top"><el-form-item label="仓库"><el-select v-model="repositoryId" @change="loadDirectories"><el-option v-for="repo in repositories" :key="repo.repoId" :label="repo.name" :value="repo.repoId" /></el-select></el-form-item><el-form-item label="配置目录"><el-select v-model="directoryId"><el-option v-for="directory in directories" :key="directory.directoryId" :label="`${directory.name} · ${directory.path}`" :value="directory.directoryId" /></el-select></el-form-item><el-form-item label="同名文件"><el-switch v-model="overwrite" active-text="覆盖" inactive-text="不覆盖" /></el-form-item></el-form><p>将所选文件及目录保存到配置目录，保留工作空间相对路径，并按仓库设置自动提交、推送。</p><template #footer><el-button :disabled="busy" @click="importOpen = false">取消</el-button><el-button type="primary" :disabled="!repositoryId || !directoryId" :loading="busy" @click="importCode">保存并提交</el-button></template></el-dialog>
 
+    </template>
   </section>
 </template>
 

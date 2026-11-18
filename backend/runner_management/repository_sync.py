@@ -56,6 +56,9 @@ def synchronize(app, repo_id):
         fetched = run('fetch', '--no-tags', 'origin', 'refs/heads/' + branch + ':' + ref, timeout=45)
         if fetched.returncode:
             # Git stderr can include credential-bearing URLs. Never reflect it.
+            details = fetched.stderr.lower()
+            if 'insufficient permission' in details or 'permission denied' in details and '.git' in details:
+                raise ApiError('服务器 Git 仓库无写入权限，请检查后台运行账号对仓库目录的权限', 503)
             raise ApiError('拉取远端失败，请检查网络、Git 凭据及配置分支是否存在', 502)
         remote = value('rev-parse', '--verify', ref + '^{commit}')
         count = int(value('rev-list', '--count', before + '..' + remote))

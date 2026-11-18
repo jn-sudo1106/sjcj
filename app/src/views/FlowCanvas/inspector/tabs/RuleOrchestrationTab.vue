@@ -1412,7 +1412,7 @@ async function onSiteScriptSaved(version: PublishedScript, configId: string, que
     const deployment = await syncNodeDeployment(node, nodeId, version.scriptDigest, queueName)
     if (deployment) ElMessage.success('代码已关联到对应流程节点的部署配置')
   } catch (e) {
-    ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存编排配置重试`)
+    ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存智能体配置重试`)
   }
 }
 const hasSiteScriptMode = computed(() => !props.templateDefaults && !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value)

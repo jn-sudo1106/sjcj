@@ -4,6 +4,7 @@ import { useFlowStore } from '@/stores/flow'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import TaskView from './TaskView.vue'
 import CodeGenerationTasks from '@/views/RunRecords/CodeGenerationTasks.vue'
+import DeploymentTasks from '@/views/RunRecords/DeploymentTasks.vue'
 
 const flow = useFlowStore()
 const sourceId = computed(() => flow.sourceCtx?.sourceId || '')
@@ -16,9 +17,11 @@ const tab = ref('collection')
     <nav class="source-task-tabs" aria-label="源任务类型">
       <button type="button" :class="{ active: tab === 'collection' }" @click="tab = 'collection'">采集任务</button>
       <button type="button" :class="{ active: tab === 'code-generation' }" @click="tab = 'code-generation'">智能体任务</button>
+      <button type="button" :class="{ active: tab === 'deployment' }" @click="tab = 'deployment'">部署任务</button>
     </nav>
     <CodeGenerationTasks v-if="tab === 'code-generation' && sourceId" :key="sourceId" :source-scope-id="sourceId" class="source-task-content" />
-    <TaskView v-else hide-header class="source-task-content" />
+    <DeploymentTasks v-else-if="tab === 'deployment' && sourceId" :key="sourceId" :source-scope-id="sourceId" class="source-task-content" />
+    <TaskView v-else-if="tab === 'collection'" hide-header class="source-task-content" />
   </section>
 </template>
 

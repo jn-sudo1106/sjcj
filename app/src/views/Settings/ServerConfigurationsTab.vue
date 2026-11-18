@@ -7,12 +7,15 @@ import { formatRunnerDateTime, formatRunnerHeartbeat } from '@/utils/format/runn
 import type { ArtifactRelease, RunnerInstance } from '@/api/runnerManagement'
 import RunnerManagementTab from './RunnerManagementTab.vue'
 import RunnerBindingTab from './RunnerBindingTab.vue'
+import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
+import DeploymentResourcesTab from './DeploymentResourcesTab.vue'
+import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
 
 const route = useRoute(), router = useRouter()
 const auth = useAuthStore()
 const serverManager = ref<InstanceType<typeof RunnerManagementTab> | null>(null)
+const bindingPanel = ref<InstanceType<typeof RunnerBindingTab> | null>(null)
 const releases = ref<ArtifactRelease[]>([])
-const infoExpanded = ref(false)
 const instances = ref<RunnerInstance[]>([])
 const visibleInstances = ref<RunnerInstance[]>([])
 const visibleIds = computed(() => visibleInstances.value.map(item => item.runnerId))
@@ -22,6 +25,12 @@ const isServerRoute = computed(() => route.path === '/settings' && ['runners', '
 const runnerId = computed(() => typeof route.query.runnerId === 'string' ? route.query.runnerId : '')
 const selected = computed(() => instances.value.find(item => item.runnerId === runnerId.value))
 const canViewBindings = computed(() => canAccess('settings:assignments'))
+const detailView = computed(() => route.query.view === 'files' ? 'files' : ['runner', 'resources'].includes(String(route.query.view)) ? 'runner' : route.query.view === 'instances' ? 'instances' : 'configurations')
+function selectView(view: string) {
+  if (busy.value) return
+  if (view === 'configurations') bindingPanel.value?.resetFilters()
+  void router.replace({ path: '/settings', query: { ...route.query, tab: 'runners', configId: view === 'configurations' ? undefined : route.query.configId, view: view === 'configurations' ? undefined : view } })
+}
 const statusLabels = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常' }
 function versionInfo(digest: string | null | undefined, empty: string) {
   return !digest ? empty : digest === 'source-local' ? '本地源码（source-local）' : digest
@@ -52,10 +61,12 @@ const machineInformation = computed(() => {
     { label: '最近异常', value: item.lastError || '无', span: 3, error: !!item.lastError },
   ]
 })
-watch(runnerId, () => { infoExpanded.value = false })
-function selectRunner(value: string) {
+function selectRunner(value: string, showAll = false) {
   if (busy.value || !isServerRoute.value) return
-  void router.replace({ path: '/settings', query: { ...route.query, tab: 'runners', runnerId: value || undefined } })
+  if (showAll) bindingPanel.value?.resetFilters()
+  void router.replace({ path: '/settings', query: showAll
+    ? { tab: 'runners', runnerId: value || undefined, ...(['runner', 'files'].includes(detailView.value) ? { view: detailView.value } : {}) }
+    : { ...route.query, tab: 'runners', runnerId: value || undefined } })
 }
 function reconcileSelection() {
   // KeepAlive 中仍可能收到后台刷新结果，只能在服务器页自动选择机器。
@@ -76,22 +87,41 @@ onActivated(reconcileSelection)
 
 <template>
   <section class="server-workspace" data-testid="settings-server-workspace">
-    <RunnerManagementTab ref="serverManager" section="runners" compact :selectable="canViewBindings" :selected-runner-id="runnerId" :selection-disabled="busy" class="server-sidebar" @select-runner="selectRunner" @instances-change="instances = $event" @visible-instances-change="visibleInstancesChanged" @releases-change="releases = $event" />
-    <section class="server-main rc-card" :class="{ 'is-expanded': infoExpanded }">
+    <RunnerManagementTab ref="serverManager" section="runners" compact :selectable="canViewBindings" :selected-runner-id="runnerId" :selection-disabled="busy" class="server-sidebar" @select-runner="selectRunner($event, true)" @instances-change="instances = $event" @visible-instances-change="visibleInstancesChanged" @releases-change="releases = $event" />
+    <section class="server-main rc-card" :class="{ 'is-expanded': detailView === 'runner' }">
       <header v-if="runnerId && canViewBindings" class="server-context">
-        <div class="server-heading"><strong>{{ selected?.name || '服务器实例' }}</strong><span v-if="selected" class="server-status">{{ statusLabels[selected.status] }}</span><span v-if="selected" class="server-address">{{ selected.ipAddress }}</span><div v-if="selected" class="server-info-actions"><el-button v-if="auth.role === 'admin'" link type="primary" :disabled="busy" data-testid="server-set-version" @click="serverManager?.editInstanceVersion(runnerId)">升级 Runner</el-button><el-button link type="primary" data-testid="server-open-detail" @click="serverManager?.openInstanceDetails(runnerId)">详情 / 进程</el-button><el-button link data-testid="server-toggle-info" @click="infoExpanded = !infoExpanded">{{ infoExpanded ? '收起更多' : '更多信息' }}</el-button></div></div>
-        <div v-if="selected" class="server-summary" data-testid="server-machine-summary"><span class="server-summary-directory" :title="selected.installDirectory"><span>目录</span><code>{{ selected.installDirectory }}</code></span><span>PID {{ selected.runnerPid || '未上报' }}</span><span>进程 {{ selected.workerProcesses == null ? '未上报' : selected.workerProcesses.length }}</span><span :title="`${versionInfo(selected.actualDigest, '未上报')}\n${versionDate(selected.actualDigest)}`">Runner {{ shortVersion(selected.actualDigest) }}</span><span :title="'北京时间：' + formatRunnerHeartbeat(selected.lastHeartbeat)">心跳 {{ formatRunnerHeartbeat(selected.lastHeartbeat) }}</span></div>
-        <p v-if="selected?.lastError && !infoExpanded" class="server-summary-error" :title="selected.lastError">异常：{{ selected.lastError }}</p>
-        <dl v-if="selected && infoExpanded" class="server-information" data-testid="server-machine-information"><div v-for="field in machineInformation" :key="field.label" class="server-information-field" :class="{ 'span-two': field.span === 2, 'span-three': field.span === 3, 'is-error': field.error }"><dt>{{ field.label }}</dt><dd :class="{ 'is-code': field.code }">{{ field.value }}<small v-if="field.description">{{ field.description }}</small></dd></div></dl>
+        <div class="server-heading"><strong>{{ selected?.name || '服务器实例' }}</strong><span v-if="selected" class="server-status">{{ statusLabels[selected.status] }}</span><span v-if="selected" class="server-address">{{ selected.ipAddress }}</span></div>
         <div v-if="!selected" class="server-identity">实例 ID：{{ runnerId }}（尚未加载或已不存在）</div><div v-else-if="!visibleIds.includes(runnerId)" class="server-identity">当前实例不在左侧筛选结果中</div>
       </header>
-      <RunnerBindingTab v-if="runnerId && canViewBindings" :key="runnerId" :runner-id="runnerId" class="server-content" @busy="busy = $event" />
+      <nav v-if="runnerId && canViewBindings" class="server-view-tabs" aria-label="部署资源视图">
+        <el-button :type="detailView === 'runner' ? 'primary' : 'default'" :disabled="busy" data-testid="runner-instance-info" @click="selectView('runner')">Runner 实例</el-button>
+        <el-button :type="detailView === 'configurations' ? 'primary' : 'default'" :disabled="busy" @click="selectView('configurations')">部署配置</el-button>
+        <el-button :type="detailView === 'instances' ? 'primary' : 'default'" :disabled="busy" data-testid="deployment-running-instances" @click="selectView('instances')">运行实例</el-button>
+        <el-button :type="detailView === 'files' ? 'primary' : 'default'" :disabled="busy" data-testid="deployment-workspace" @click="selectView('files')">部署空间</el-button>
+      </nav>
+      <section v-if="runnerId && canViewBindings && detailView === 'runner'" class="server-runner-information" data-testid="runner-instance-tab">
+        <div class="server-runner-toolbar"><strong>Runner 实例</strong><div v-if="selected" class="server-info-actions"><el-button v-if="auth.role === 'admin'" link type="primary" :disabled="busy" data-testid="server-set-version" @click="serverManager?.editInstanceVersion(runnerId)">升级 Runner</el-button><el-button link type="primary" data-testid="server-open-detail" @click="serverManager?.openInstanceDetails(runnerId)">详情 / 进程</el-button></div></div>
+        <div v-if="selected" class="server-summary" data-testid="server-machine-summary"><span class="server-summary-directory" :title="selected.installDirectory"><span>目录</span><code>{{ selected.installDirectory }}</code></span><span>PID {{ selected.runnerPid || '未上报' }}</span><span>进程 {{ selected.workerProcesses == null ? '未上报' : selected.workerProcesses.length }}</span><span :title="`${versionInfo(selected.actualDigest, '未上报')}\n${versionDate(selected.actualDigest)}`">Runner {{ shortVersion(selected.actualDigest) }}</span><span :title="'北京时间：' + formatRunnerHeartbeat(selected.lastHeartbeat)">心跳 {{ formatRunnerHeartbeat(selected.lastHeartbeat) }}</span></div>
+        <p v-if="selected?.lastError" class="server-summary-error" :title="selected.lastError">异常：{{ selected.lastError }}</p>
+        <dl v-if="selected" class="server-information" data-testid="server-machine-information"><div v-for="field in machineInformation" :key="field.label" class="server-information-field" :class="{ 'span-two': field.span === 2, 'span-three': field.span === 3, 'is-error': field.error }"><dt>{{ field.label }}</dt><dd :class="{ 'is-code': field.code }">{{ field.value }}<small v-if="field.description">{{ field.description }}</small></dd></div></dl>
+        <DeploymentResourcesTab :key="'resources-' + runnerId" resources-only :runner-id="runnerId" class="server-resource-settings" @busy="busy = $event" />
+      </section>
+      <ProcessorProcessesTab v-else-if="runnerId && canViewBindings && detailView === 'instances'" :key="'instances-' + runnerId" :runner-id="runnerId" class="server-content" />
+      <section v-else-if="runnerId && canViewBindings && detailView === 'files'" class="server-content server-files" data-testid="deployment-workspace-panel">
+        <el-alert v-if="selected && selected.status !== 'online'" title="Runner 实例离线，暂时无法浏览部署空间" type="info" :closable="false" />
+        <RunnerFilesDrawer v-else-if="selected" :key="'files-' + runnerId" :runner="selected" directory="" embedded workspace :editable="auth.role === 'admin'" />
+        <el-empty v-else description="正在加载所选 Runner 实例" />
+      </section>
+      <RunnerBindingTab v-else-if="runnerId && canViewBindings" ref="bindingPanel" :key="runnerId" :runner-id="runnerId" class="server-content" @busy="busy = $event" />
       <div v-else class="server-empty"><el-empty :description="!canViewBindings ? '没有机器配置查看权限' : hasMachineFilters && !visibleInstances.length ? '没有符合筛选条件的机器，请调整左侧筛选' : '选择左侧服务器实例，查看对应配置'" /></div>
     </section>
   </section>
 </template>
 
 <style scoped>
+.server-view-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 12px; border-bottom:1px solid var(--rc-border-soft); }
+.server-files { overflow:auto; padding:12px; }
+.server-resource-settings{padding:12px 0 0;min-width:0;overflow:visible}
 .server-workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-items: stretch; flex: 1; min-width: 0; min-height: 0; gap: 14px; }
 .server-sidebar { min-width: 0; min-height: 0; margin: 0; animation: none; transform: none; }
 .server-main { display: flex; flex-direction: column; gap: 0; min-width: 0; min-height: 0; margin: 0; overflow: hidden; animation: none; }.server-main.is-expanded { overflow-y: auto; }
@@ -111,4 +141,5 @@ onActivated(reconcileSelection)
 .server-empty { display: grid; place-items: center; flex: 1; }
 @media (max-width: 1100px) { .server-workspace { grid-template-columns: 240px minmax(0, 1fr); gap: 10px; }.server-information { grid-template-columns: repeat(2, minmax(0, 1fr)); }.server-information-field.span-three { grid-column: span 2; } }
 @media (max-width: 760px) { .server-workspace { grid-template-columns: 1fr; grid-template-rows: 260px minmax(360px, 1fr); overflow-y: auto; } }
+.server-main.is-expanded{overflow:hidden}.server-runner-information{padding:16px;overflow-y:auto;min-height:0}.server-runner-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 </style>

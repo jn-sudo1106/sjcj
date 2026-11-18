@@ -25,7 +25,10 @@ def prepare(app, task_id):
     snapshot = bind_source_url(snapshot)
     with app.store.connect() as db:
         saved = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key(record['configId']),)).fetchone()
-    return {'taskId': task_id, 'generation': {field: snapshot[field] for field in FIELDS if field in snapshot},
+    generation = {field: snapshot[field] for field in FIELDS if field in snapshot}
+    executed = (record.get('result') or {}).get('interfaceId') or (record.get('modelCall') or {}).get('interfaceId')
+    if executed: generation['interfaceId'] = executed
+    return {'taskId': task_id, 'generation': generation,
             'context': {field: record.get(field, '') for field in ('sourceId', 'sourceName', 'flowId', 'flowVersionId', 'stepId', 'configId', 'nodeName')},
             'nodePromptRevision': revision(saved['setting_value'] if saved else ''),
             'canUpdateNode': bool(saved and (json.loads(saved['setting_value']).get('generation')))}

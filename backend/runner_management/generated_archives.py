@@ -28,7 +28,7 @@ def store(app, record):
         from .source_code_relations import sync_archive
         sync_archive(db, record)
         from .deployment_resources import enqueue_archive
-        enqueue_archive(db, record)
+        enqueue_archive(db, record, app)
 
 
 def config_id(value):
@@ -149,6 +149,13 @@ def changed_files(record, files):
         selected = {item['path'] for item in result}
         result += [item for item in files if item.get('relativePath', '').split('/')[-1] == 'requirements.txt'
                    and item['path'] not in selected]
+    # A dependency-only change still belongs to its existing main script.
+    # Include that exact companion, never an unrelated site's old script.
+    expected = record.get('expectedFileName')
+    if result and expected:
+        relative = '/'.join(part for part in (prefix, expected) if part)
+        selected = {item['path'] for item in result}
+        result += [item for item in files if item.get('relativePath') == relative and item['path'] not in selected]
     return result
 
 
@@ -200,6 +207,17 @@ def collect(app, record):
         destination = (record['repositoryPrefix'] + '/' if record.get('repositoryPrefix') else '') + relative
         files.append({'relativePath': destination, 'sourceRelativePath': relative, 'data': item['data'], 'sha256': digest,
                       'size': len(data), 'path': record['directoryPath'] + '/' + destination})
+    expected = record.get('expectedFileName')
+    if expected:
+        primary = next((item for item in files if item['sourceRelativePath'] == expected), None)
+        if not primary:
+            raise ApiError('未生成主脚本 ' + expected + '，不能把 requirements.txt 等辅助文件当作生成成功。请查看过程输出中的失败原因', 422)
+        try:
+            tree = ast.parse(base64.b64decode(primary['data']).decode('utf-8-sig'))
+            valid = any(not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str) for node in tree.body)
+            if not valid: raise ValueError('empty script')
+        except (UnicodeError, SyntaxError, ValueError) as error:
+            raise ApiError('主脚本 ' + expected + ' 为空或不是有效的 UTF-8 Python 代码，生成未完成', 422) from error
     changed = changed_files(record, files)
     scripts = [item for item in changed if item['sourceRelativePath'].endswith('.py')]
     if scripts:
@@ -250,14 +268,12 @@ def fallback_code(app, record, text, filename, service):
             return
     except (ValueError, SyntaxError):
         return
-    existing = operation(app, record['serverId'], {'action': 'list', 'path': record['codeDirectory']})
-    if existing['items']:
-        if record.get('beforeCodeFiles') is None:
-            return
-        current = {item['path']: item['sha256'] for item in operation(
-            app, record['serverId'], {'action': 'export', 'paths': [record['codeDirectory']]})['files']}
-        if current != record['beforeCodeFiles']:
-            return
+    current = {item['path']: item['sha256'] for item in operation(
+        app, record['serverId'], {'action': 'export', 'paths': [record['codeDirectory']]})['files']}
+    destination = record['codeDirectory'] + '/' + filename
+    if destination in current:
+        before = record.get('beforeCodeFiles')
+        if not isinstance(before, dict) or current[destination] != before.get(destination): return
     operation(app, record['serverId'], {'action': 'upload', 'overwrite': True, 'files': [{
         'path': record['codeDirectory'] + '/' + filename, 'data': base64.b64encode(code.encode('utf8')).decode('ascii')}]})
 
@@ -319,7 +335,7 @@ def finish(app, selected, target, text, filename, service):
 
 def _finish(app, selected, target, text, filename, service):
     from .code_servers import operation
-    record = create(app, selected, selected['_workspace'], target)
+    record = create(app, selected, selected['_workspace'], {**target, 'expectedFileName': filename})
     preview, preview_path, warnings = '', '', []
     try:
         operation(app, record['serverId'], {'action': 'mkdir', 'path': record['codeDirectory']})

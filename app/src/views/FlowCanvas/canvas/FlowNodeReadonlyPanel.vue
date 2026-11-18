@@ -33,7 +33,7 @@ type Tab = 'node' | 'table' | 'task' | 'rule'
 const tab = ref<Tab>('node')
 const hasRule = computed(() => !!(props.cfg.ruleCfg || props.cfg.execCfg))
 const tabs = computed<[Tab, string][]>(() => [
-  ['node', '节点配置'], ['table', '表配置'], ['task', '任务配置'], ...(hasRule.value ? [['rule', '编排配置'] as [Tab, string]] : []),
+  ['node', '节点配置'], ['table', '表配置'], ['task', '任务配置'], ...(hasRule.value ? [['rule', '智能体配置'] as [Tab, string]] : []),
 ])
 // 换节点时回到「节点配置」；当前节点没有编排配置时也退回去
 watch(() => props.nodeId, () => { tab.value = 'node' })

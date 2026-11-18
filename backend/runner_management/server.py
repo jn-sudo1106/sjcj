@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -1243,7 +1244,10 @@ class Application:
             if package_token:
                 authorization = db.execute("SELECT setting_value FROM settings WHERE setting_key=?", (
                     "portable-enroll:" + hashlib.sha256(package_token.encode()).hexdigest(),)).fetchone()
-                if not authorization or json.loads(authorization['setting_value'])['expiresAt'] < now():
+                grant = json.loads(authorization['setting_value']) if authorization else {}
+                expiry = grant.get('expiresAt')
+                automatic = grant.get('mode') == 'automatic' and expiry is None
+                if not automatic and (not isinstance(expiry, str) or expiry < now()):
                     raise ApiError("包内登记码无效或已过期，请重新下载 Runner 包或使用远程接入码", 403)
             elif code:
                 row = db.execute("SELECT * FROM enrollment_codes WHERE code_hash=?", (hashlib.sha256(code.encode()).hexdigest(),)).fetchone()
@@ -1874,9 +1878,10 @@ class Handler(BaseHTTPRequestHandler):
             path = unquote(parsed.path)
             upload = re.fullmatch(r"/api/runner-management/settings/code-repos/[0-9a-f]{32}/files", path)
             code_files = re.fullmatch(r'/api/runner-management/code-servers/[0-9a-f-]+/files', path)
+            runner_files = re.fullmatch(r'/api/runner-management/runners/[0-9a-f-]+/files', path)
             from .package_limits import MAX_MANIFEST_BYTES as MAX_LAYOUT_JSON
             layout_request = path.startswith('/api/runner-management/directory-layouts/') or re.fullmatch(r'/api/runner-management/deployment-configurations(?:/[0-9a-f]{32})?', path)
-            limit = MAX_UPLOAD_JSON if upload or code_files else MAX_LAYOUT_JSON if layout_request else MAX_SCRIPT_JSON if path == '/api/runner-management/site-scripts/publish' else MAX_JSON
+            limit = MAX_UPLOAD_JSON if upload or code_files or runner_files else MAX_LAYOUT_JSON if layout_request else MAX_SCRIPT_JSON if path in ('/api/runner-management/site-scripts/publish', '/api/runner-management/prompt-edits/chat') else MAX_JSON
             body = self.json_body(limit) if method == "POST" else None
             # Empty since explicitly means all time. Do not silently restore the 24h default.
             keep_empty = path == '/api/runner-management/runtime-operations'
@@ -1888,6 +1893,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.respond(400, {"message": "请求参数无效"})
         except Exception:
+            logging.exception('Runner management request failed: %s %s', method, path)
             self.respond(500, {"message": "Runner 管理服务内部错误"})
 
     def do_GET(self):
@@ -1989,6 +1995,9 @@ class Handler(BaseHTTPRequestHandler):
                     capabilities = [value for value in capabilities if value != 'file-browser']
                     if body.get('fileBrowserSchema') == 1:
                         capabilities.append('file-browser')
+                    capabilities = [value for value in capabilities if value != 'file-management']
+                    if body.get('fileManagementSchema') == 1:
+                        capabilities.append('file-management')
                     capabilities = [value for value in capabilities if value not in ('live-file-deployment', 'live-site-deployment')]
                     if body.get('liveFileDeploymentSchema') in (1, 2):
                         capabilities.append('live-file-deployment')
@@ -1997,6 +2006,9 @@ class Handler(BaseHTTPRequestHandler):
                     capabilities = [value for value in capabilities if value != 'deployment-entry']
                     if body.get('executionSchema') == 2:
                         capabilities.append('deployment-entry')
+                    capabilities = [value for value in capabilities if value != 'executable-entry']
+                    if body.get('executableEntrySchema') == 1 and runner['platform'].lower().startswith('win'):
+                        capabilities.append('executable-entry')
                     capabilities = [value for value in capabilities if value != 'runtime-logs']
                     if body.get('logSchema') == 1:
                         capabilities.append('runtime-logs')
@@ -2183,7 +2195,7 @@ class Handler(BaseHTTPRequestHandler):
         file_request = re.fullmatch(r'/runner-file-requests/([0-9a-f]{32})', sub)
         if file_request and method == 'GET':
             from .runner_files import result
-            return result(app, file_request.group(1))
+            return {key: value for key, value in result(app, file_request.group(1)).items() if key != 'files'}
         if sub == '/code-servers' and method == 'GET':
             from .code_servers import listing
             return listing(app)
@@ -2312,6 +2324,10 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/deployment-jobs' and method == 'POST':
             from .deployment_resources import deploy_existing
             return deploy_existing(app, body)
+        deployment_detail = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})', sub)
+        if deployment_detail and method == 'GET':
+            from .deployment_history import detail
+            return detail(app, deployment_detail.group(1))
         deployment_files = re.fullmatch(r'/deployment-jobs/([0-9a-f]{32})/files', sub)
         if deployment_files and method == 'GET':
             from .deployment_files import read
@@ -2343,6 +2359,9 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/model-interfaces/test' and method == 'POST':
             from .model_interfaces import test_interface, stream_test
             return stream_test(self, app, body) if body.get('responseStream') is True else test_interface(app, body)
+        if sub == '/prompt-edits/chat' and method == 'POST':
+            from .prompt_editing import stream_chat
+            return stream_chat(self, app, body)
         if method == 'GET' and sub == '/runner-package':
             from .portable_package import package_info
             from .runner import machine_ip
@@ -2392,15 +2411,19 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'GET':
                 return list_configurations(app, (query.get('keyword') or [''])[0])
             if method == 'POST':
-                return save_configuration(app, body)
+                return save_configuration(app, body, _share_entry=body.get('shareEntry') is True)
         deployment_route = re.fullmatch(r'/deployment-configurations/([0-9a-f]{32})', sub)
+        deployment_entry = re.fullmatch(r'/deployment-configurations/([0-9a-f]{32})/entry', sub)
+        if deployment_entry and method == 'POST':
+            from .deployment_entries import select
+            return select(app, deployment_entry.group(1), body)
         if deployment_route:
             from .deployment_configuration import get_configuration, save_configuration, with_source_nodes
             if method == 'GET':
                 with app.store.connect() as db:
                     return with_source_nodes(db, [get_configuration(app, deployment_route.group(1), db)])[0]
             if method == 'POST':
-                return save_configuration(app, body, deployment_route.group(1))
+                return save_configuration(app, body, deployment_route.group(1), _share_entry=body.get('shareEntry') is True)
             if method == 'DELETE':
                 from .deployment_configuration import remove_configuration
                 return remove_configuration(app, deployment_route.group(1), (query.get('revision') or [''])[0])
@@ -2435,7 +2458,7 @@ class Handler(BaseHTTPRequestHandler):
         preview_route = re.fullmatch(r"/directory-bindings/(config|queue|website|custom|deployment)/(.+)/([A-Za-z0-9_-]{1,80})/delivery-preview", sub)
         if preview_route and method == "GET":
             from .directory_delivery import delivery_preview
-            return delivery_preview(app, *preview_route.groups())
+            return delivery_preview(app, *preview_route.groups(), source_mode=(query.get('source') or ['pinned'])[0])
         directory_binding_route = re.fullmatch(r"/directory-bindings/(config|queue|website|custom|deployment)/(.+)/([A-Za-z0-9_-]{1,80})", sub)
         if directory_binding_route and method == "DELETE":
             from .directory_bindings import remove_binding
@@ -2516,6 +2539,11 @@ class Handler(BaseHTTPRequestHandler):
         repo_folder = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/folders', sub)
         if repo_folder and method == 'POST':
             return app.create_repository_folder(repo_folder.group(1), body)
+        repo_tree = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/browse', sub)
+        if repo_tree and method == 'GET':
+            from .repository_tree import browse
+            return browse(app, repo_tree.group(1), (query.get('commit') or [''])[0],
+                          (query.get('path') or [''])[0], (query.get('action') or ['list'])[0])
         repo_files = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files", sub)
         repo_metadata = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files/metadata", sub)
         repo_references = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/files/references', sub)

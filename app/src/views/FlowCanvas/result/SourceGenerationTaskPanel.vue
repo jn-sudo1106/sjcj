@@ -108,7 +108,7 @@ async function submit() {
       const result: typeof results.value[number] = { key, label: `${source.name} / ${node.name} · 配置 ${node.configId}` }
       try {
         const settings = await api.nodeGenerationSettings(node.configId!)
-        if (!settings.generation) throw new Error('此节点尚未配置生成参数，请先在编排配置中配置提示词和仓库')
+        if (!settings.generation) throw new Error('此节点尚未配置生成参数，请先在智能体配置中配置提示词和仓库')
         const receipt = await api.createCodeGenerationTask({ sourceId: source.sourceId, sourceName: source.name, flowId, stepId: node.stepId,
           configId: node.configId!, nodeName: node.name, generation: { ...settings.generation, interfaceId: chosen, url: source.url } })
         result.taskId = receipt.job.taskId; completed.add(key)

@@ -1,5 +1,7 @@
 # 本地 Runner 服务
 
+新闻采集入口统一在独立项目 `E:\qinlongclaw\newslink.py` 维护，不在本仓库保留 `backend/queue_processors/newslink.py` 副本。打包使用 `E:\qinlongclaw\packaging\build_newslink.py`，部署通过代码仓库下发打包产物；目标机器不依赖开发机的绝对路径。入口的回归测试在 `E:\qinlongclaw` 中运行 `python -m unittest test_newslink_error_feedback -q`。
+
 在 `E:\ce` 目录执行以下命令。需要 Python 3.11+、Git，以及 `cryptography`、`pymysql`。前端开发服务将 `/api/runner-management` 代理到本地 8092 端口。
 
 ```powershell

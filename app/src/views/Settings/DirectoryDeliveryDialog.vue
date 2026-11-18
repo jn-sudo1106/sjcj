@@ -2,12 +2,14 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, type ElTree } from 'element-plus'
 import { Document, Folder, Refresh } from '@element-plus/icons-vue'
+import { prepareDeploymentProcesses } from '@/utils/deploymentProcesses'
 import { runnerManagementApi, type DirectoryDelivery, type DirectoryDeliveryItem, type DirectoryDeliveryPreview, type DirectoryRunnerBinding } from '@/api/runnerManagement'
 
 const props = defineProps<{ binding: DirectoryRunnerBinding; runnerName: string }>()
 const emit = defineEmits<{ close: []; delivered: [delivery: DirectoryDelivery] }>()
 const preview = ref<DirectoryDeliveryPreview | null>(null), loading = ref(false), submitting = ref(false), error = ref('')
 const mode = ref<'changes' | 'selected' | 'all'>('changes')
+const processStatus = ref('')
 const tree = ref<InstanceType<typeof ElTree>>(), checked = ref<string[]>([])
 let request = 0, active = true
 const input = () => ({ bindingType: props.binding.bindingType, ownerId: props.binding.ownerId, runnerId: props.binding.runnerId })
@@ -71,16 +73,24 @@ async function submit() {
   if (loading.value || submitting.value || error.value || !preview.value || !checked.value.length) return
   submitting.value = true; error.value = ''
   const data = preview.value
+  const binding = input()
+  const current = () => active && props.binding.runnerId === binding.runnerId && props.binding.ownerId === binding.ownerId && props.binding.bindingType === binding.bindingType
+  let closedCount = 0
   try {
-    const delivery = await runnerManagementApi.deliverDirectoryBinding({ ...input(), revision: data.revision,
+    const preparation = await prepareDeploymentProcesses([{ runnerId: binding.runnerId, directory: data.targetPath }], current,
+      text => { processStatus.value = text })
+    if (!preparation.proceed || !current()) return
+    closedCount = preparation.stoppedCount; processStatus.value = '正在提交下发任务…'
+    const delivery = await runnerManagementApi.deliverDirectoryBinding({ ...binding, revision: data.revision,
       scope: mode.value === 'all' ? 'all' : 'selected', paths: mode.value === 'all' ? undefined : checked.value,
-      baselineDigest: data.baselineDigest })
+      baselineDigest: data.baselineDigest,
+      ...(data.sourceMode ? { sourceMode: data.sourceMode, sourceRevision: data.sourceRevision } : {}) })
     if (active) {
       emit('delivered', delivery)
       if (delivery.unchanged) ElMessage.info('文件 hash 未变化，无需下发')
       else ElMessage.success(`下发任务已提交${delivery.transferredFileCount === undefined ? '' : `，传输 ${delivery.transferredFileCount} 个变更文件`}，等待 Runner 完成`)
     }
-  } catch (e) { if (active) error.value = e instanceof Error ? e.message : String(e) }
+  } catch (e) { if (active) error.value = (e instanceof Error ? e.message : String(e)) + (closedCount ? '；相关进程已关闭，请到运行实例查看状态' : '') }
   finally { submitting.value = false }
 }
 onMounted(() => { void load() })
@@ -89,15 +99,16 @@ onUnmounted(() => { active = false; ++request })
 
 <template>
   <el-dialog :model-value="true" title="选择下发范围" width="900px" top="7vh" class="delivery-dialog" :close-on-click-modal="false" :close-on-press-escape="!submitting" :show-close="!submitting" @close="emit('close')">
-    <div class="dd-target"><span>运行机器</span><strong :title="runnerName">{{ runnerName }}</strong><span>目标目录</span><code>{{ preview?.targetPath || binding.directoryTemplate }}</code></div>
+    <div class="dd-target"><span>运行机器</span><strong :title="runnerName">{{ runnerName }}</strong><span>目标目录</span><code>{{ preview?.targetPath || binding.directoryTemplate }}</code><template v-if="preview?.gitSources?.length"><span>Git 目录</span><code>{{ [...new Set(preview.gitSources.map(source => source.path))].join('、') }}</code></template></div>
     <div class="dd-toolbar">
       <el-radio-group :model-value="mode" :disabled="loading || submitting || !preview" aria-label="下发范围" data-testid="delivery-scope" @update:model-value="changeMode">
         <el-radio-button value="changes">变更文件</el-radio-button><el-radio-button value="selected">指定范围</el-radio-button><el-radio-button value="all">全部代码</el-radio-button>
       </el-radio-group>
       <el-button :icon="Refresh" circle :disabled="loading || submitting" aria-label="刷新下发范围" @click="load" />
     </div>
-    <p class="dd-help">按文件 SHA-256 比较，未变化的文件自动跳过。{{ mode === 'all' ? '同步整个目录，并清理此配置原来托管、现在已移除的文件。' : '勾选文件夹可选择其中全部文件；未选中的文件和文件夹会保留。' }}</p>
+    <p class="dd-help">{{ preview?.sourceMode === 'current-git' ? '比较关联 Git 目录的当前版本与此实例上次成功下发的内容，按文件 SHA-256 识别变更。' : '按文件 SHA-256 比较，未变化的文件自动跳过。' }}{{ mode === 'all' ? '同步整个目录，并清理此配置原来托管、现在已移除的文件。' : '勾选文件夹可选择其中全部文件；未选中的文件和文件夹会保留。' }}</p>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon data-testid="delivery-error" />
+    <p v-if="submitting" role="status">{{ processStatus }}</p>
     <div v-loading="loading" class="dd-tree" data-testid="delivery-tree">
       <el-tree v-if="nodes.length" ref="tree" :data="nodes" node-key="path" show-checkbox :props="{ label: 'label', children: 'children', disabled: () => submitting }" :expand-on-click-node="false" @check="onCheck">
         <template #default="{ data }"><div class="dd-node" :data-path="data.path"><el-icon><Folder v-if="data.kind === 'folder'" /><Document v-else /></el-icon><span class="dd-name" :title="data.path">{{ data.label }}</span><code v-if="data.kind === 'file'" class="dd-hash" :title="data.sha256 ? `SHA-256：${data.sha256}${data.previousSha256 ? `\n上次：${data.previousSha256}` : ''}` : '暂无文件摘要'" data-testid="delivery-file-hash">{{ data.sha256?.slice(0, 12) || '—' }}</code><el-tag v-if="mode !== 'changes' || data.status !== 'unchanged'" size="small" :type="data.status === 'added' ? 'success' : data.status === 'modified' ? 'warning' : 'info'">{{ statusLabel(data.status) }}</el-tag><span class="dd-size">{{ data.kind === 'file' ? sizeLabel(data.size) : '文件夹' }}</span></div></template>

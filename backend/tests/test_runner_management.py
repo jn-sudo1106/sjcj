@@ -522,6 +522,8 @@ class ManagementIntegrationTest(unittest.TestCase):
         _, _, mapped, _ = self.directory_fixture()
         repo = self.request('/api/runner-management/settings/code-repos')[0]
         root = Path(repo['path'])
+        # Keep this command fixture self contained; its entry uses helper.py.
+        (root / 'processor/main.py').unlink()
         (root / 'processor/run.py').write_text(
             'import os, sys, time\nfrom pathlib import Path\nfrom helper import value\n'
             'Path("started-" + str(os.getpid())).write_text(value + "|" + os.getcwd() + "|" + sys.executable)\n'

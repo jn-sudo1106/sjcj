@@ -60,8 +60,10 @@ def list_bindings(app, db=None, runner_id: str | None = None) -> list[dict]:
             continue
         layout = owner_layout(app, row['binding_type'], row['owner_id'], db)
         rows.append(as_binding(row['binding_type'], row['owner_id'], row['runner_id'], row['created_at'], layout))
-    from .directory_delivery import as_delivery, expire_deliveries
-    expire_deliveries(db)
+    # Listing must stay read-only: expiring deliveries here holds UPDATE locks
+    # throughout runtime snapshot verification and blocks concurrent readers.
+    # The deployment sweeper and delivery mutation paths perform expiration.
+    from .directory_delivery import as_delivery
     deliveries = {}
     for delivery in db.execute('SELECT * FROM directory_deliveries ORDER BY requested_at,delivery_id').fetchall():
         deliveries[(delivery['binding_type'], delivery['owner_key'], delivery['runner_id'])] = delivery

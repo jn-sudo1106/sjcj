@@ -30,6 +30,19 @@ class GenerationRegenerationTest(unittest.TestCase):
     def submit(self, body):
         return self.request('/api/runner-management/code-generation/tasks/regeneration', body)['job']
 
+    def test_prepare_prefers_actual_previous_interface_over_pool_selection(self):
+        _, _, parent, _, _, _ = self.setup_task()
+        parent['input']['interfaceId'] = 'all'
+        parent['result'] = {'interfaceId': 'previous-agent'}
+        parent['modelCall'] = {'interfaceId': 'fallback-agent'}
+        tasks.put(self.app, parent)
+        path = '/api/runner-management/code-generation/tasks/regeneration?taskId=' + parent['taskId']
+        self.assertEqual(self.request(path)['generation']['interfaceId'], 'previous-agent')
+        parent['result'] = {}
+        tasks.put(self.app, parent)
+        self.assertEqual(self.request(path)['generation']['interfaceId'], 'fallback-agent')
+        self.assertEqual(tasks.read(self.app, parent['taskId'])['input']['interfaceId'], 'all')
+
     def test_regeneration_repairs_stale_target_url_without_rewriting_parent_history(self):
         service, origin, parent, snapshot, body, calls = self.setup_task()
         original = tasks.read(self.app, parent['taskId'])

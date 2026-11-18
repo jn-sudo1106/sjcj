@@ -87,8 +87,10 @@ def normalize(app, code_id: str, payload: dict, db, *, standalone: bool = False)
         raise ApiError("执行入口格式无效")
     if entry or not standalone:
         entry = safe_path(entry)
-    if entry and not entry.lower().endswith('.py'):
-        raise ApiError("入口必须是 Python 文件")
+    if entry:
+        from .entry_types import entry_kind
+        try: entry_kind(entry)
+        except ValueError as exc: raise ApiError(str(exc)) from exc
     raw_nodes = payload.get('nodes')
     if not isinstance(raw_nodes, list) or not (0 if standalone else 1) <= len(raw_nodes) <= MAX_LAYOUT_NODES:
         raise ApiError(f"目录或文件不能超过 {MAX_LAYOUT_NODES} 个" if standalone else f"请配置 1 至 {MAX_LAYOUT_NODES} 个目录或文件")

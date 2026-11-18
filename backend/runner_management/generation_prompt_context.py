@@ -1,6 +1,7 @@
 """Late-bound generation variables and the explicit file/output contract."""
 import re
 from pathlib import PurePosixPath, PureWindowsPath
+from urllib.parse import quote
 
 
 def bind_source_url(body, previous_url=''):
@@ -33,7 +34,22 @@ def filename(body, service):
     return name
 
 
-def variables(body, name, workspace=None):
+def proxy_variables(settings=None):
+    settings = settings or {}
+    enabled = bool(settings.get('useProxy'))
+    details = (settings.get('proxyDetail') or {}) if enabled else {}
+    host = str(details.get('ip') or '')
+    port = str(details.get('port') or '')
+    account = str(details.get('account') or '')
+    password = str(details.get('password') or '')
+    address = '[' + host + ']' if ':' in host and not host.startswith('[') else host
+    auth = quote(account, safe='') + ':' + quote(password, safe='') + '@' if account or password else ''
+    return {'use_proxy': 'true' if enabled else 'false', 'proxy_ip': host, 'proxy_port': port,
+            'proxy_account': account, 'proxy_password': password,
+            'proxy_url': f'http://{auth}{address}:{port}' if enabled and host and port else ''}
+
+
+def variables(body, name, workspace=None, *, proxy_settings=None):
     workspace = workspace or {}
     code_dir = workspace.get('codeDir', '')
     kind = PureWindowsPath if PureWindowsPath(code_dir).drive or '\\' in code_dir else PurePosixPath
@@ -49,6 +65,7 @@ def variables(body, name, workspace=None):
               'output_file_dir': workspace.get('outputFileDir', ''), 'config_id': str(body.get('configId') or ''),
               'queue_name': str(body.get('queueName') or ''), 'task_id': str(workspace.get('taskId') or body.get('taskId') or '')}
     result['reference_files'] = '\n'.join(str(kind(workspace.get('inputFileDir', '')) / PurePosixPath(item['path']).name) for item in body.get('_referenceSnapshot', []))
+    result.update(proxy_variables(proxy_settings))
     for alias, key in {'sourceUrl':'url','fileName':'file_name','codeDir':'code_dir','codeFilePath':'code_file_path',
                        'configId':'config_id','queueName':'queue_name','taskId':'task_id'}.items(): result[alias] = result[key]
     return result

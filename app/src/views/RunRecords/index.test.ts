@@ -17,6 +17,24 @@ const router = createRouter({
 describe('全局任务中心', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('旧菜单未配置部署页签时也可直达部署任务，并保留源节点筛选', async () => {
+    router.getRoutes().find(route => route.path === '/tasks')!.meta.tabs = [
+      { id: 5101, key: 'collection', label: '采集任务', order: 1 },
+      { id: 5102, key: 'code-generation', label: '智能体任务', order: 2 },
+    ]
+    await router.push('/tasks?tab=deployment&configId=1401218&sourceId=430024901&stepId=41895')
+    const wrapper = mount(RunRecords, { global: { plugins: [router], stubs: { TaskView: true, CodeGenerationTasks: true, DeploymentTasks: true } } })
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'DeploymentTasks' }).exists()).toBe(true)
+    expect(wrapper.get('.ra-tab-link.active').text()).toBe('部署任务')
+    expect(router.currentRoute.value.query).toMatchObject({ tab: 'deployment', configId: '1401218', sourceId: '430024901', stepId: '41895' })
+    await wrapper.get('nav button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'TaskView' }).exists()).toBe(true)
+    wrapper.unmount()
+    router.getRoutes().find(route => route.path === '/tasks')!.meta.tabs = undefined
+  })
+
   it('支持从链接进入代码生成页签，并能切回采集任务', async () => {
     await router.push('/tasks?tab=code-generation')
     const wrapper = mount(RunRecords, { global: { plugins: [router], stubs: { TaskView: true, CodeGenerationTasks: true } } })

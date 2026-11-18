@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import threading
 import unittest
@@ -13,6 +14,30 @@ from backend.runner_management import model_interfaces as models
 
 
 class ModelInterfacesTest(unittest.TestCase):
+    def test_generation_substitutes_current_saved_node_proxy_and_clears_disabled_proxy(self):
+        from backend.runner_management import node_proxy_settings
+        settings = node_proxy_settings.save(self.app, {'configId': '1401218', 'revision': 0, 'useProxy': True,
+            'proxyDetail': {'ip': 'proxy.example.com', 'port': 31100, 'account': 'user@org', 'password': 'test:secret'}})
+        body = {'interfaceId': 'workbuddy-chat-hy3', 'configId': '1401218', 'url': 'https://example.com/news',
+                'sampleId': 'www.realcan.cn.py', 'systemPrompt': '代理 {{use_proxy}}，{{proxy_ip}}:{{proxy_port}}',
+                'userPrompt': '采集 {{url}}，请求代理 {{proxy_url}}'}
+        requests = []
+        def response(request, **_):
+            requests.append(json.loads(request.data))
+            result = io.BytesIO(b'def scrape(url):\n    return []\n')
+            result.headers = {'Content-Type': 'text/plain'}
+            return result
+        with patch.object(models, 'urlopen', side_effect=response):
+            models._generate_reserved(self.app, body)
+        self.assertIn('代理 true，proxy.example.com:31100', requests[-1]['prompt'])
+        self.assertIn('http://user%40org:test%3Asecret@proxy.example.com:31100', requests[-1]['prompt'])
+        node_proxy_settings.save(self.app, {'configId': '1401218', 'revision': settings['revision'], 'useProxy': False})
+        with patch.object(models, 'urlopen', side_effect=response):
+            models._generate_reserved(self.app, body)
+        self.assertIn('代理 false，:', requests[-1]['prompt'])
+        self.assertNotIn('test:secret', requests[-1]['prompt'])
+        self.assertNotIn('{{proxy_', requests[-1]['prompt'])
+
     def test_delete_idle_interface_and_last_interface_preserves_empty_configuration(self):
         current = models.listing(self.app)
         removed = current['items'][1]['id']

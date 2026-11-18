@@ -8,7 +8,7 @@ import subprocess
 import sys
 import uuid
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(os.getenv('CODESERVER_INSTANCE_DIR', str(Path(__file__).resolve().parent))).resolve()
 if __package__:
     from .service import Service, Handler, Workspace, ServiceError, require_user_account
 else:
@@ -79,11 +79,14 @@ def main():
         raise SystemExit(str(error)) from error
     config = load_configuration()
     ensure_verifier()
+    child = os.getenv('CODESERVER_LAUNCHER_CHILD') == '1'
     if __package__:
         from .bootstrapper import CodeServerBootstrapper
+        from .launcher_host import LauncherHost
     else:
         from code_generation_server.bootstrapper import CodeServerBootstrapper
-    lock = (HERE / '.supervisor.lock').open('a+b')
+        from code_generation_server.launcher_host import LauncherHost
+    lock = (HERE / ('.supervisor.lock' if child else '.launcher-host.lock')).open('a+b')
     try:
         if os.name == 'nt':
             import msvcrt
@@ -99,7 +102,7 @@ def main():
         raise SystemExit('此实例目录的 CodeServer 已在运行')
     supervisor = None
     try:
-        supervisor = CodeServerBootstrapper(HERE, config)
+        supervisor = CodeServerBootstrapper(HERE, config) if child else LauncherHost(HERE, config)
         signal.signal(signal.SIGTERM, lambda *_: setattr(supervisor, 'running', False))
         if hasattr(signal, 'SIGBREAK'):
             signal.signal(signal.SIGBREAK, lambda *_: setattr(supervisor, 'running', False))

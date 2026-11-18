@@ -15,55 +15,86 @@ async function setup(query: Record<string, string> = {}, role = 'admin') {
     RunnerManagementTab: { name: 'RunnerManagementTab', props: { compact: Boolean, selectionDisabled: Boolean, selectedRunnerId: String }, emits: ['selectRunner', 'instancesChange', 'visibleInstancesChange', 'releasesChange', 'openDetails', 'editVersion'], data: () => ({ keyword: '', instances }), mounted() { this.$emit('instancesChange', this.instances); this.$emit('visibleInstancesChange', this.instances); this.$emit('releasesChange', [{ digest: this.instances[0]!.actualDigest, kind: 'runner', publishedAt: '2026-10-28T10:00:00Z' }]) },
       methods: { openInstanceDetails(id: string) { this.$emit('openDetails', id) }, editInstanceVersion(id: string) { this.$emit('editVersion', id) } },
       template: '<div class="server-manager"><input v-model="keyword" data-testid="server-search" /><button :disabled="selectionDisabled" @click="$emit(\'selectRunner\',\'runner-2\')">选择第二个实例</button></div>' },
-    RunnerBindingTab: { name: 'RunnerBindingTab', props: ['runnerId'], emits: ['busy'], template: '<div class="bindings">{{ runnerId }}</div>' },
+    RunnerBindingTab: { name: 'RunnerBindingTab', props: ['runnerId'], emits: ['busy', 'resetFilters'], methods: { resetFilters() { this.$emit('resetFilters') } }, template: '<div class="bindings">{{ runnerId }}</div>' },
+    ProcessorProcessesTab: { name: 'ProcessorProcessesTab', props: ['runnerId'], template: '<div class="running-instances">{{ runnerId }}</div>' },
+    DeploymentResourcesTab: { name: 'DeploymentResourcesTab', props: { runnerId: String, resourcesOnly: Boolean }, emits: ['busy'], template: '<div class="resource-settings">{{ runnerId }}</div>' },
+    RunnerFilesDrawer: { name: 'RunnerFilesDrawer', props: { runner: Object, directory: String, embedded: Boolean, workspace: Boolean, editable: Boolean }, template: '<div class="deployment-files">{{ runner.runnerId }}</div>' },
     ElButton: { props: ['disabled'], template: '<button :disabled="disabled"><slot /></button>' },
     ElSelect: { name: 'ElSelect', props: ['modelValue', 'disabled'], emits: ['update:modelValue'], template: '<div><slot /></div>' },
     ElOption: true,
     ElEmpty: true,
+    ElAlert: true,
   } } })
   await flushPromises()
   return { wrapper, router }
 }
 describe('服务器与机器配置统一页面', () => {
-  it('默认显示紧凑摘要，按需展开完整信息，切换机器保持紧凑且操作针对当前实例', async () => {
-    const { wrapper } = await setup()
-    const information = () => wrapper.get('[data-testid="server-machine-information"]').text()
-    expect(wrapper.find('[data-testid="server-machine-information"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="server-machine-summary"]').text()).toContain('7001')
-    expect(wrapper.get('[data-testid="server-machine-summary"]').text()).not.toContain(instances[0]!.actualDigest)
-    await wrapper.get('[data-testid="server-toggle-info"]').trigger('click')
-    expect(information()).toContain('runner-1')
-    expect(information()).toContain('E:/runner-1')
-    expect(information()).toContain('Windows 11-1')
-    expect(information()).toContain('7001')
-    expect(information()).toContain(instances[0]!.actualDigest)
-    expect(information()).toContain('2026-10-29 19:00:00')
-    expect(information()).toContain('发布时间：2026-10-28 18:00:00')
+  it('部署空间浏览当前实例根目录，切换机器仍保留部署空间，不提供机器侧入口设置', async () => {
+    const { wrapper, router } = await setup()
+    await wrapper.get('[data-testid="deployment-workspace"]').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.view).toBe('files')
+    expect(wrapper.getComponent({ name: 'RunnerFilesDrawer' }).props()).toMatchObject({ runner: instances[0], directory: '', embedded: true, workspace: true, editable: true })
+    expect(wrapper.getComponent({ name: 'RunnerFilesDrawer' }).attributes('allow-set-entry')).toBeUndefined()
     await wrapper.get('.server-manager button').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ runnerId: 'runner-2', view: 'files' })
+    expect(wrapper.get('.deployment-files').text()).toBe('runner-2')
+    expect(wrapper.find('.bindings').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('资源配置并入机器详情，编辑时锁定切换，完成后可切换实例', async () => {
+    const { wrapper, router } = await setup()
+    await wrapper.get('[data-testid="runner-instance-info"]').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ tab: 'runners', view: 'runner' })
+    expect(wrapper.find('[data-testid="deployment-resource-settings"]').exists()).toBe(false)
+    const resources = wrapper.findComponent({ name: 'DeploymentResourcesTab' })
+    expect(resources.props()).toMatchObject({ runnerId: 'runner-1', resourcesOnly: true })
+    resources.vm.$emit('busy', true); await flushPromises()
+    expect(wrapper.get('.server-manager button').attributes('disabled')).toBeDefined()
+    resources.vm.$emit('busy', false); await flushPromises()
+    await wrapper.get('.server-manager button').trigger('click'); await flushPromises()
+    expect(wrapper.get('.resource-settings').text()).toBe('runner-2')
+    expect(router.currentRoute.value.query).toEqual({ tab: 'runners', runnerId: 'runner-2', view: 'runner' })
+    wrapper.unmount()
+  })
+  it('部署资源可切换运行实例，实例列表随当前机器切换', async () => {
+    const { wrapper, router } = await setup()
+    await wrapper.get('[data-testid="deployment-running-instances"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ tab: 'runners', view: 'instances' })
+    expect(wrapper.get('.running-instances').text()).toBe('runner-1')
+    expect(wrapper.find('.bindings').exists()).toBe(false)
+    await wrapper.get('.server-manager button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.bindings').text()).toBe('runner-2')
+    expect(router.currentRoute.value.query).toEqual({ tab: 'runners', runnerId: 'runner-2' })
+    wrapper.unmount()
+  })
+  it('Runner 实例页签集中展示基础信息和升级操作，切换机器仍停留在该页签', async () => {
+    const { wrapper, router } = await setup()
     expect(wrapper.find('[data-testid="server-machine-information"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="server-machine-summary"]').text()).toContain('7002')
-    expect(wrapper.get('.server-summary-error').text()).toContain('测试进程异常')
-    await wrapper.get('[data-testid="server-toggle-info"]').trigger('click')
-    expect(information()).toContain('runner-2')
-    expect(information()).toContain('Windows 11-2')
-    expect(information()).toContain('测试进程异常')
-    expect(information()).not.toContain(instances[0]!.actualDigest)
+    expect(wrapper.find('[data-testid="server-machine-summary"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="runner-instance-info"]').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.view).toBe('runner')
+    const information = () => wrapper.get('[data-testid="server-machine-information"]').text()
+    expect(information()).toContain('runner-1'); expect(information()).toContain('E:/runner-1')
+    expect(information()).toContain(instances[0]!.actualDigest)
+    expect(wrapper.find('.bindings').exists()).toBe(false)
+    await wrapper.get('.server-manager button').trigger('click'); await flushPromises()
+    expect(information()).toContain('runner-2'); expect(information()).toContain('测试进程异常')
+    expect(router.currentRoute.value.query.view).toBe('runner')
     await wrapper.get('[data-testid="server-open-detail"]').trigger('click')
     await wrapper.get('[data-testid="server-set-version"]').trigger('click')
     const manager = wrapper.findComponent({ name: 'RunnerManagementTab' })
     expect(manager.emitted('openDetails')).toEqual([['runner-2']])
     expect(manager.emitted('editVersion')).toEqual([['runner-2']])
-    await wrapper.get('[data-testid="server-toggle-info"]').trigger('click')
+    await wrapper.findAll('button').find(item => item.text() === '部署配置')!.trigger('click'); await flushPromises()
     expect(wrapper.find('[data-testid="server-machine-information"]').exists()).toBe(false)
-    manager.vm.$emit('selectRunner', 'runner-1'); await flushPromises()
-    expect(wrapper.find('[data-testid="server-machine-information"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="server-machine-summary"]').text()).toContain('E:/runner-1')
+    expect(wrapper.get('.bindings').text()).toBe('runner-2')
     wrapper.unmount()
   })
-  it('只读账号可以查看机器信息，不能设置Runner版本', async () => {
+  it('只读账号在Runner实例页签可查看信息，不能升级', async () => {
     const { wrapper } = await setup({}, 'read')
-    expect(wrapper.find('[data-testid="server-machine-summary"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="server-toggle-info"]').trigger('click')
+    await wrapper.get('[data-testid="runner-instance-info"]').trigger('click'); await flushPromises()
     expect(wrapper.find('[data-testid="server-machine-information"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="server-open-detail"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="server-set-version"]').exists()).toBe(false)
@@ -76,7 +107,7 @@ describe('服务器与机器配置统一页面', () => {
     expect(wrapper.find('.server-main').exists()).toBe(true)
     await wrapper.get('[data-testid="server-search"]').setValue('10.0.0.8')
     await wrapper.get('.server-manager button').trigger('click'); await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ tab: 'runners', configId: '123', runnerId: 'runner-2' })
+    expect(router.currentRoute.value.query).toEqual({ tab: 'runners', runnerId: 'runner-2' })
     expect(wrapper.get('.bindings').text()).toBe('runner-2')
     expect(wrapper.get('.server-manager').isVisible()).toBe(true)
     expect(wrapper.get('[data-testid="server-search"]').element).toHaveProperty('value', '10.0.0.8')

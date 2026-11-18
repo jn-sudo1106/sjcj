@@ -279,6 +279,9 @@ def package_info(app, default_server):
 
 def build_package(app, payload):
     from .server import ApiError
+    include_code = payload.get('includeEnrollmentCode', True)
+    if type(include_code) is not bool:
+        raise ApiError('是否携带接入码须为布尔值', 422)
     server = validate_server(payload.get('server'))
     digest = payload.get('digest')
     if not isinstance(digest, str) or len(digest) != 71 or not digest.startswith('sha256:'):
@@ -297,11 +300,24 @@ def build_package(app, payload):
     if 'runner_management/start.py' not in sources:
         raise ApiError('此旧版本缺少文件夹启动入口，请选择较新的 Runner 版本', 422)
     runtime = runtime_archive(app)
+    config = {'server': server, 'ipAddress': ''}
+    readme = README
     code = secrets.token_urlsafe(24)
-    expiry = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec='seconds')
+    expiry = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec='seconds') if include_code else None
+    authorization = {'expiresAt': expiry, 'digest': digest}
+    if not include_code: authorization['mode'] = 'automatic'
     with app.store.connect() as db:
         db.execute('INSERT INTO settings (setting_key,setting_value) VALUES (?,?)', (
-            'portable-enroll:' + hashlib.sha256(code.encode()).hexdigest(), json.dumps({'expiresAt': expiry, 'digest': digest})))
+            'portable-enroll:' + hashlib.sha256(code.encode()).hexdigest(), json.dumps(authorization)))
+    # Automatic packages retain a private installation authorization, rather
+    # than allowing anonymous enrollment on the management endpoint.
+    config.update(packageToken=code)
+    if include_code:
+        config['enrollExpiresAt'] = expiry
+    else:
+        config['autoEnroll'] = True
+        readme = README[:README.index('4. 首次启动')] + ('4. 本包支持免接入码启动：双击“启动Runner.cmd”即可自动登记并启动，不需要填写接入码，也不受临时接入码 15 分钟有效期限制。\n'
+            '   同一个包可复制到多个目录，分别启动为独立实例。包内携带自动登记授权，请只向获准接入的机器分发；已登记实例会沿用身份文件。\n') + README[README.index('5. 登记后'):]
     content = io.BytesIO()
     with zipfile.ZipFile(content, 'w', zipfile.ZIP_DEFLATED) as archive:
         with zipfile.ZipFile(runtime) as library:
@@ -309,8 +325,8 @@ def build_package(app, payload):
                 archive.writestr(ArtifactStore._zip_info('Runner/runtime/' + name), library.read(name))
         for name, body in sources.items():
             archive.writestr(ArtifactStore._zip_info('Runner/' + name), body)
-        extras = {'start.py': LAUNCHER.encode('utf-8'), '启动Runner.cmd': START_CMD.encode('utf-8'), '使用说明.txt': README.encode('utf-8-sig'),
-                  'runner.json': json.dumps({'server': server, 'packageToken': code, 'enrollExpiresAt': expiry, 'ipAddress': ''}, ensure_ascii=False, indent=2).encode('utf-8'),
+        extras = {'start.py': LAUNCHER.encode('utf-8'), '启动Runner.cmd': START_CMD.encode('utf-8'), '使用说明.txt': readme.encode('utf-8-sig'),
+                  'runner.json': json.dumps(config, ensure_ascii=False, indent=2).encode('utf-8'),
                   'package.json': json.dumps({'runnerDigest': digest, 'publishedAt': row['published_at'], 'pythonVersion': runtime_version(),
                                               'platform': 'windows-x64', 'publicKey': app.artifacts.public_key}).encode('utf-8'),
                   'instance/current.json': json.dumps({'digest': digest}).encode('utf-8'),

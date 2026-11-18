@@ -20,9 +20,36 @@ vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   generatedCodeState: vi.fn(), saveGenerationPreference: vi.fn(), commitGeneratedCode: vi.fn(),
   sourceCodeRelations: vi.fn(),
   nodeGenerationSettings: vi.fn(), saveNodeGenerationSettings: vi.fn(),
+  nodeProxySettings: vi.fn(),
   codeGenerationServers: vi.fn(),
   resolveGenerationDestination: vi.fn(),
 } }))
+
+async function applyUserPrompt(wrapper: VueWrapper, text: string) {
+  expect(wrapper.get('[data-testid="site-script-prompt"]').attributes('readonly')).toBeDefined()
+  await wrapper.get('[data-testid="prompt-tab-user"]').trigger('click')
+  await flushPromises()
+  wrapper.getComponent({ name: 'PromptAiEditor' }).vm.$emit('apply', text)
+  await flushPromises()
+}
+
+it('提示词左侧按类型切换，右侧内嵌 AI 修改对应提示词', async () => {
+  const w = await mountDialog({ initialPrompt: '原用户要求' })
+  const editor = () => w.getComponent({ name: 'PromptAiEditor' })
+  expect(editor().props()).toMatchObject({ embedded: true, promptType: 'user' })
+  const originalUser = (w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value
+  await w.get('[data-testid="prompt-tab-system"]').trigger('click'); await flushPromises()
+  expect(editor().props('promptType')).toBe('system')
+  expect(w.get('[data-testid="site-script-system-prompt"]').isVisible()).toBe(true)
+  expect(w.get('[data-testid="site-script-prompt"]').isVisible()).toBe(false)
+  editor().vm.$emit('apply', '新的系统规范'); await flushPromises()
+  expect((w.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe('新的系统规范')
+  await w.get('[data-testid="prompt-tab-user"]').trigger('click'); await flushPromises()
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toBe(originalUser)
+  editor().vm.$emit('apply', '新的用户要求'); await flushPromises()
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('新的用户要求')
+  w.unmount()
+})
 
 const defaultRepo: CodeRepository = { repoId: 'repo-default', name: '默认仓库', configType: '', configTypeName: '',
   uploadDirectory: 'default', path: 'E:/ce/site-scripts', remoteUrl: '', branch: 'main',
@@ -71,6 +98,7 @@ const mountDialog = async (props: Partial<InstanceType<typeof SiteScriptGenerato
 }
 
 beforeEach(() => {
+  vi.mocked(runnerManagementApi.nodeProxySettings).mockImplementation(async configId => ({ configId, configured: false, revision: 0, useProxy: false }))
   vi.mocked(runnerManagementApi.resolveGenerationDestination).mockResolvedValue({ repositoryId: defaultRepo.repoId, directoryId: 'default', directoryPath: 'default', repoName: defaultRepo.name, remoteUrl: '', branch: 'main', configType: '90', matchedBy: 'default' })
   vi.mocked(submitSiteScriptTask).mockResolvedValue({ taskId: '501', queue: 'code_mq' })
   vi.spyOn(sourceApi, 'codeConfigOptions').mockResolvedValue([{ configId: '201001', name: '代码生成', topic: 'code_mq', entryTypeId: null }])
@@ -88,6 +116,76 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([])
 })
 afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllEnvs() })
+
+it('打开生成脚本即显示已保存代理实际值，AI 编辑和节点保存仍保留变量模板', async () => {
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: sampleCode, warnings: [] })
+  const template = '代理：{{use_proxy}} / {{proxy_url}} / {{proxy_ip}} / {{proxy_port}} / {{proxy_account}} / {{proxy_password}}；路径：{{code_dir}}'
+  vi.mocked(runnerManagementApi.nodeProxySettings).mockResolvedValue({ configId: '1401218', configured: true, revision: 1, useProxy: true,
+    proxyDetail: { ip: 'proxy.example.test', port: 31100, account: 'test@account', password: 'test!pass:word' } })
+  const w = await mountDialog({ configId: '1401218', initialPrompt: template })
+  const shown = (w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value
+  expect(runnerManagementApi.nodeProxySettings).toHaveBeenCalledWith('1401218')
+  expect(shown).toContain('true / http://test%40account:test%21pass%3Aword@proxy.example.test:31100')
+  expect(shown).toContain('proxy.example.test / 31100 / test@account / test!pass:word')
+  expect(shown).not.toContain('{{proxy_')
+  expect(shown).toContain('{{code_dir}}')
+  await w.get('[data-testid="prompt-tab-user"]').trigger('click'); await flushPromises()
+  expect(w.getComponent({ name: 'PromptAiEditor' }).props('prompt')).toContain('{{proxy_url}}')
+  expect(w.getComponent({ name: 'PromptAiEditor' }).props('prompt')).not.toContain('test!pass:word')
+  w.getComponent({ name: 'PromptAiEditor' }).vm.$emit('apply', template + '\n仅采集当前页'); await flushPromises()
+  await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
+  const sent = vi.mocked(generateSiteScript).mock.calls[0]?.[0]
+  expect(sent?.configId).toBe('1401218')
+  expect(sent?.userPrompt).toContain('{{proxy_url}}')
+  expect(sent?.userPrompt).not.toContain('test!pass:word')
+  w.unmount(); await flushPromises()
+  const saved = vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mock.calls
+  expect(saved.length).toBeGreaterThan(0)
+  expect(saved.at(-1)?.[0].generation?.userPrompt).toContain('{{proxy_url}}')
+  expect(saved.at(-1)?.[0].generation?.userPrompt).not.toContain('test!pass:word')
+})
+
+it('重新打开读取最新代理，停用后清空真实地址与凭证而不是沿用旧值', async () => {
+  vi.mocked(runnerManagementApi.nodeProxySettings).mockResolvedValueOnce({ configId: '1401218', configured: true, revision: 1, useProxy: true,
+    proxyDetail: { ip: 'old.proxy.test', port: 31100, account: 'old-account', password: 'old-password' } })
+    .mockResolvedValueOnce({ configId: '1401218', configured: true, revision: 2, useProxy: false,
+      proxyDetail: { ip: 'old.proxy.test', port: 31100, account: 'old-account', password: 'old-password' } })
+  const w = await mountDialog({ configId: '1401218', initialPrompt: '启用={{use_proxy}}；地址={{proxy_url}}；账号={{proxy_account}}；密码={{proxy_password}}' })
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('old.proxy.test')
+  await w.setProps({ open: false }); await flushPromises()
+  await w.setProps({ open: true }); await flushPromises()
+  const shown = (w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value
+  expect(runnerManagementApi.nodeProxySettings).toHaveBeenCalledTimes(2)
+  expect(shown).toContain('启用=false；地址=；账号=；密码=')
+  expect(shown).not.toContain('old.proxy.test')
+  expect(shown).not.toContain('old-password')
+  w.unmount()
+})
+
+it('代理读取失败时显示错误并允许重新读取，不把失败当成未启用代理', async () => {
+  vi.mocked(runnerManagementApi.nodeProxySettings).mockRejectedValueOnce(new Error('暂时无法连接'))
+    .mockResolvedValueOnce({ configId: '1401218', configured: true, revision: 1, useProxy: true, proxyDetail: { ip: 'restored.proxy.test', port: 80 } })
+  const w = await mountDialog({ configId: '1401218', initialPrompt: '{{use_proxy}} {{proxy_url}}' })
+  expect(w.get('[data-testid="site-script-proxy-status"]').text()).toContain('代理配置读取失败：暂时无法连接')
+  expect(w.get('[data-testid="site-script-generate"]').attributes('disabled')).toBeDefined()
+  await w.get('[data-testid="site-script-proxy-status"] button').trigger('click'); await flushPromises()
+  expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('true http://restored.proxy.test:80')
+  expect(w.get('[data-testid="site-script-proxy-status"]').text()).not.toContain('读取失败')
+  w.unmount()
+})
+
+it('切换节点时旧代理响应不会覆盖新节点的真实值', async () => {
+  let finish!: (value: Awaited<ReturnType<typeof runnerManagementApi.nodeProxySettings>>) => void
+  vi.mocked(runnerManagementApi.nodeProxySettings).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    .mockResolvedValueOnce({ configId: '1401219', configured: true, revision: 1, useProxy: true, proxyDetail: { ip: 'new.proxy.test', port: 80 } })
+  const w = await mountDialog({ configId: '1401218', initialPrompt: '{{proxy_url}}' })
+  await w.setProps({ configId: '1401219' }); await flushPromises()
+  finish({ configId: '1401218', configured: true, revision: 1, useProxy: true, proxyDetail: { ip: 'old.proxy.test', port: 80 } }); await flushPromises()
+  const shown = (w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value
+  expect(shown).toContain('new.proxy.test')
+  expect(shown).not.toContain('old.proxy.test')
+  w.unmount()
+})
 
 it('编排配置外部选择智能体，默认全选，不提前展示某台机器的参考文件位置', async () => {
   const model = (await runnerManagementApi.modelInterfaces()).items[0]!
@@ -166,7 +264,7 @@ it.each(['task', 'direct'] as const)('%s 生成的用户提示词包含输出字
   const w = await mountDialog({ sourceId: '1', flowId: '2', stepId: '3', outputFields, outputTable: 'sense_data.TB_NEWS' })
   await flushPromises()
   expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('字段名：新闻标题；字段 ID：12001')
-  await w.get('[data-testid="site-script-prompt"]').setValue('仅采集当前页，不要翻页')
+  await applyUserPrompt(w, '仅采集当前页，不要翻页')
   if (mode === 'direct') await w.get('[data-testid="generation-mode-direct"]').trigger('click')
   await w.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   const input = vi.mocked(mode === 'task' ? submitSiteScriptTask : generateSiteScript).mock.calls[0]![0]
@@ -182,7 +280,7 @@ it.each(['task', 'direct'] as const)('%s 生成的用户提示词包含输出字
 it('字段异步加载和重新选择时更新提示词字段段落，不覆盖用户输入', async () => {
   const w = await mountDialog()
   await flushPromises()
-  await w.get('[data-testid="site-script-prompt"]').setValue('保留的采集要求')
+  await applyUserPrompt(w, '保留的采集要求')
   await w.setProps({ outputFields: [{ prop: 'title', desc: '标题', itemId: '100' }] })
   expect((w.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('字段 ID：100')
   await w.setProps({ outputFields: [{ prop: 'url', desc: '链接', itemId: '101' }] })
@@ -262,7 +360,7 @@ it('任务提交携带所选模型配置快照，接口查询凭据不进入任�
 it('切换方式保留提示词和已有代码，重新打开默认任务方式', async () => {
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
   const wrapper = await mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
-  await wrapper.get('[data-testid="site-script-prompt"]').setValue('保留这份用户提示词')
+  await applyUserPrompt(wrapper, '保留这份用户提示词')
   await wrapper.get('[data-testid="generation-mode-direct"]').trigger('click')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[aria-label="可编辑 Python 代码"]').element).toHaveProperty('value', sampleCode)
@@ -407,7 +505,7 @@ it('修改生成配置后自动保存，关闭工作区立即提交待保存内�
   const w = await mountDialog(); await flushPromises()
   expect(w.find('[data-testid="save-generation-config"]').exists()).toBe(false)
   expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
-  await w.get('[data-testid="site-script-prompt"]').setValue('新的抓取提示词')
+  await applyUserPrompt(w, '新的抓取提示词')
   expect(runnerManagementApi.saveNodeGenerationSettings).not.toHaveBeenCalled()
   w.unmount(); await flushPromises()
   expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', generation: expect.objectContaining({ interfaceId: 'legacy', userPrompt: expect.any(String), systemPrompt: DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, repositoryId: defaultRepo.repoId, directoryId: 'default' }) }))
@@ -431,8 +529,8 @@ it('重新进入 AI 工作区恢复节点保存的模型和提示词', async () 
 it('连续编辑提示词合并为一次自动保存，保存失败明确显示', async () => {
   vi.mocked(runnerManagementApi.saveNodeGenerationSettings).mockRejectedValue(new Error('网络断开'))
   const w = await mountDialog(); await flushPromises()
-  await w.get('[data-testid="site-script-prompt"]').setValue('第一次修改')
-  await w.get('[data-testid="site-script-prompt"]').setValue('最终修改')
+  await applyUserPrompt(w, '第一次修改')
+  await applyUserPrompt(w, '最终修改')
   await new Promise(resolve => setTimeout(resolve, 750)); await flushPromises()
   expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledOnce()
   expect(runnerManagementApi.saveNodeGenerationSettings).toHaveBeenCalledWith(expect.objectContaining({ generation: expect.objectContaining({ userPrompt: promptWithQueue('最终修改') }) }))
@@ -596,7 +694,7 @@ it('每次打开都重新读取选中模板，手工编辑后作为自定义保�
   vi.mocked(nodePromptApi.list).mockResolvedValue([template])
   const w = await mountDialog({ open: false }); await flushPromises()
   await w.setProps({ open: true }); await flushPromises()
-  expect(w.get('[data-testid="open-site-script-generator"]').text()).toBe('代码生成')
+  expect(w.get('[data-testid="open-site-script-generator"]').text()).toBe('生成脚本')
   expect(w.get('[data-testid="site-script-system-prompt"]').element).toHaveProperty('value', '旧系统要求')
   await w.setProps({ open: false }); await flushPromises()
   const previousCalls = vi.mocked(nodePromptApi.list).mock.calls.length
@@ -928,7 +1026,7 @@ it('按类型筛选仓库并默认选中默认仓库，提供可恢复的默认�
   expect(selector.text()).not.toContain('OCR 代码')
   expect(selector.findAll('option').map((option) => option.attributes('value'))).not.toContain('repo-off')
   expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('scrape(url)')
-  await wrapper.get('[data-testid="site-script-prompt"]').setValue('自定义要求')
+  await applyUserPrompt(wrapper, '自定义要求')
   await wrapper.get('[data-testid="site-script-reset-prompt"]').trigger('click')
   expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('title、date、url、summary、content')
   expect(wrapper.get('[data-testid="site-script-storage-path"]').text()).toContain(defaultRepo.path)
@@ -941,7 +1039,7 @@ it('系统和用户提示词独立编辑，生成及保存均提交两份内容�
   vi.mocked(runnerManagementApi.publishScript).mockResolvedValue({ ...oldVersion, repoId: defaultRepo.repoId, storagePath: 'default/www.realcan.cn.py' })
   const wrapper = await mountDialog(); await flushPromises()
   await wrapper.get('[data-testid="site-script-system-prompt"]').setValue('系统：保留指定函数接口')
-  await wrapper.get('[data-testid="site-script-prompt"]').setValue('用户：抓取标题和发布日期')
+  await applyUserPrompt(wrapper, '用户：抓取标题和发布日期')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   expect(generateSiteScript).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: '系统：保留指定函数接口', userPrompt: promptWithQueue('用户：抓取标题和发布日期'), prompt: promptWithQueue('用户：抓取标题和发布日期') }), expect.any(AbortSignal), expect.any(Function))
   await wrapper.get('[data-testid="site-script-publish"]').trigger('click'); await flushPromises()

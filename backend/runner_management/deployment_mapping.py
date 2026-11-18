@@ -45,6 +45,10 @@ def mapping(rule, archive, runner):
         source = directory + '/' + safe_path(owner)
     elif owner and directory.split('/')[-1] == owner:
         source = directory
+    elif owner and not (archive.get('deploymentSettings') or {}).get('repositoryId') and owner in directory.split('/'):
+        parts = directory.split('/')
+        source = '/'.join(parts[:parts.index(owner) + 1])
     root = relative_directory(rule.get('deploymentDirectory', ''), runner)
-    destination = PurePosixPath(root) / source
+    configured = (archive.get('deploymentSettings') or {}).get('deploymentDirectory')
+    destination = PurePosixPath(relative_directory(configured, runner)) if configured else PurePosixPath(root) / source
     return {'targetPath': safe_path(destination.as_posix(), template=True), 'sourceBase': source, 'resourceRoot': root}

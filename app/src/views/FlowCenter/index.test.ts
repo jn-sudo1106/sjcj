@@ -132,7 +132,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       directives: { loading: {} },
       stubs: {
         FlowBoard: realBoard ? false : { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
-        NodeInspector: realBoard ? false : { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 任务配置</div>' },
+        NodeInspector: realBoard ? false : { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 智能体配置 任务配置</div>' },
         // 选源弹窗：真组件在 FlowSourcePickerDialog.test.ts 单独测。这里只关心 confirmApply
         // 的分批 / changeFlowBatch / 错误处理，stub 出「设 modelValue + 触发 confirm」两个口子。
         FlowSourcePickerDialog: {
@@ -222,8 +222,8 @@ describe('流程中心 · 列表', () => {
     vi.stubGlobal('IntersectionObserver', class {
       constructor(cb: IntersectionObserverCallback) { callback = cb }
       observe(el: Element) { observed.push(el) }
-      unobserve() {}
-      disconnect() {}
+      unobserve() { }
+      disconnect() { }
     })
     try {
       const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([{}, {}] as never)
@@ -1069,7 +1069,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
         if (c && typeof c === 'object' && !Array.isArray(c) && 'default' in c) return find((c as { default: () => unknown }).default())
         return find(c)
       }
-      ;(find((msg as (p: unknown) => unknown)({}))!.props!['onUpdate:modelValue'] as (v: string) => void)('reuse')
+        ; (find((msg as (p: unknown) => unknown)({}))!.props!['onUpdate:modelValue'] as (v: string) => void)('reuse')
       return 'confirm'
     }) as never)
     const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
@@ -1284,7 +1284,7 @@ describe('流程模板结构与归集', () => {
   })
 
   it('在流程工作区的节点库添加下载并调整顺序，只保存模板结构', async () => {
-    class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
+    class ResizeObserverStub { observe() { } unobserve() { } disconnect() { } }
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ list: [], total: 0 })
@@ -1297,7 +1297,7 @@ describe('流程模板结构与归集', () => {
       const workspace = w.get('[aria-label="流程工作区"]')
       await workspace.get('input[aria-label="URL"]').setValue('https://example.com/list?page=1')
       expect(workspace.get('[aria-label="节点设置"]').findAll('.rc-top-tab').map(tab => tab.text()))
-        .toEqual(['节点配置', '表配置', '编排配置', '部署配置', '任务配置'])
+        .toEqual(['节点配置', '表配置', '智能体配置', '部署配置', '任务配置'])
       await workspace.get('[data-testid="node-library-toggle"]').trigger('click')
       const download = workspace.findAll('.anp-item').find(item => item.text().includes('文件下载'))
       expect(download).toBeDefined()
@@ -1381,28 +1381,28 @@ describe('按模板分组展示', () => {
       { id: 'detail', name: '列表 + 详情', structure: '列表采集 → 详情采集', flowCount: 40, disabled: false },
       { id: 'unassigned', name: '未归类', structure: '尚未选择流程模板', flowCount: 9, disabled: false },
     ])
-    const w=await mountCenter(FLOWS,120)
+    const w = await mountCenter(FLOWS, 120)
     expect(w.get('[data-testid="flow-template-group-all"]').attributes('aria-pressed')).toBe('true')
     expect(w.get('[data-testid="flow-template-group-all"]').text()).toContain('169')
     expect(w.get('[data-testid="flow-template-group-single"]').attributes('aria-pressed')).toBe('false')
     expect(w.get('[data-testid="flow-template-group-single"]').text()).toContain('120')
-    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page:1,templateId:undefined,unassignedTemplate:false,onlyTemplate:false }))
+    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: undefined, unassignedTemplate: false, onlyTemplate: false }))
     // 左栏顺序：全部流程 → 各模板 → 未归类
     const order = w.get('[data-testid="flow-template-groups"]').findAll('.fc-template-group').map(b => b.attributes('data-testid'))
-    expect(order).toEqual(['flow-template-group-all','flow-template-group-single','flow-template-group-detail','flow-template-group-unassigned'])
+    expect(order).toEqual(['flow-template-group-all', 'flow-template-group-single', 'flow-template-group-detail', 'flow-template-group-unassigned'])
     await w.get('[data-testid="flow-template-group-single"]').trigger('click')
     await flushPromises()
     expect(w.get('[data-testid="flow-group-heading"]').text()).toContain('单节点采集')
-    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page:1,templateId:'single',onlyTemplate:false }))
-    // 模板详情读不回来时，标题下退回分组的文字版结构
+    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: 'single', onlyTemplate: false }))
+    // 模板详情读不回来时，标题下退回分组的文字版结构（1117 二期结构预览）
     vi.spyOn(flowCenterApi, 'detail').mockRejectedValue(new Error('网络错误'))
     await w.get('[data-testid="flow-template-group-detail"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="flow-group-structure"]').exists()).toBe(false)
     expect(w.get('[data-testid="flow-group-heading"]').text()).toContain('列表采集 → 详情采集')
-    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page:1,templateId:'detail' }))
+    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: 'detail' }))
     await w.get('[data-testid="flow-template-group-unassigned"]').trigger('click')
-    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page:1,templateId:undefined,unassignedTemplate:true }))
+    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: undefined, unassignedTemplate: true }))
   })
 
   it('选中模板时标题下按模板定义出只读节点链（1117 二期结构预览），全部流程 / 未归类不出', async () => {
@@ -1443,14 +1443,14 @@ describe('按模板分组展示', () => {
   })
   it('没有已归类流程时也不自动跳到未归类，零数量分组仍保留', async () => {
     vi.spyOn(flowCenterApi, 'templateGroups').mockResolvedValue([
-      { id:'empty',name:'空模板',structure:'采集',flowCount:0,disabled:false },
-      { id:'unassigned',name:'未归类',structure:'尚未选择流程模板',flowCount:21,disabled:false },
+      { id: 'empty', name: '空模板', structure: '采集', flowCount: 0, disabled: false },
+      { id: 'unassigned', name: '未归类', structure: '尚未选择流程模板', flowCount: 21, disabled: false },
     ])
-    const w=await mountCenter()
+    const w = await mountCenter()
     expect(w.get('[data-testid="flow-template-group-empty"]').text()).toContain('0')
     expect(w.get('[data-testid="flow-template-group-unassigned"]').attributes('aria-pressed')).toBe('false')
     expect(w.get('[data-testid="flow-template-group-all"]').attributes('aria-pressed')).toBe('true')
-    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ unassignedTemplate:false }))
+    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ unassignedTemplate: false }))
     expect(w.find('[data-testid="flow-group-edit"]').exists()).toBe(false)
   })
   it('没有归集流程的模板也可以从分组直接打开编辑器', async () => {
@@ -1505,11 +1505,11 @@ describe('按模板分组展示', () => {
     expect(confirm).toHaveBeenCalledTimes(1)
   })
   it('停用模板仍可查看成员并编辑', async () => {
-    vi.spyOn(flowCenterApi,'templateGroups').mockResolvedValue([
-      { id:'old',name:'停用模板',structure:'列表 → 详情',flowCount:50,disabled:true },
-      { id:'unassigned',name:'未归类',structure:'尚未选择流程模板',flowCount:0,disabled:false },
+    vi.spyOn(flowCenterApi, 'templateGroups').mockResolvedValue([
+      { id: 'old', name: '停用模板', structure: '列表 → 详情', flowCount: 50, disabled: true },
+      { id: 'unassigned', name: '未归类', structure: '尚未选择流程模板', flowCount: 0, disabled: false },
     ])
-    const w=await mountCenter()
+    const w = await mountCenter()
     await w.get('[data-testid="flow-template-group-old"]').trigger('click')
     await flushPromises()
     expect(w.get('[data-testid="flow-group-heading"]').text()).toContain('停用模板')
@@ -1517,23 +1517,23 @@ describe('按模板分组展示', () => {
     expect(w.find('[data-testid="flow-group-edit"]').exists()).toBe(true)
   })
   it('列表详情预置生成两个网页节点，详情节点保留详情身份', async () => {
-    const save=vi.spyOn(flowCenterApi,'save').mockResolvedValue({ ...FLOWS[0],isTemplate:true })
-    const w=await mountCenter()
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOWS[0], isTemplate: true })
+    const w = await mountCenter()
     await w.get('[data-testid="new-structure-template"]').trigger('click')
     await w.get('[data-testid="structure-preset-detail"]').trigger('click')
     await w.get('[data-testid="structure-template-save"]').trigger('click')
     await flushPromises()
-    const definition=save.mock.calls[0]![0].definition
+    const definition = save.mock.calls[0]![0].definition
     expect(definition.configs['node-1']!.title).toBe('列表采集')
     expect(definition.configs['node-2']!.title).toBe('详情采集')
     expect(definition.configs['node-2']!.configType).toBe('90')
     expect(definition.configs['node-2']!.collectCfg?.isDetail).toBe(true)
   })
   it('分组加载失败时显示真实错误并允许重试', async () => {
-    vi.spyOn(flowCenterApi,'templateGroups').mockRejectedValueOnce(new Error('分组接口未就绪')).mockResolvedValue([
-      { id:'unassigned',name:'未归类',structure:'尚未选择流程模板',flowCount:0,disabled:false },
+    vi.spyOn(flowCenterApi, 'templateGroups').mockRejectedValueOnce(new Error('分组接口未就绪')).mockResolvedValue([
+      { id: 'unassigned', name: '未归类', structure: '尚未选择流程模板', flowCount: 0, disabled: false },
     ])
-    const w=await mountCenter()
+    const w = await mountCenter()
     expect(w.get('[role="alert"]').text()).toContain('分组接口未就绪')
     await w.get('[role="alert"] button').trigger('click')
     await flushPromises()
@@ -1542,12 +1542,12 @@ describe('按模板分组展示', () => {
   })
 })
 
-describe('模板SEQ排序',()=>{
-  it('编辑模板回填SEQ，保存零值不丢失', async()=>{
-    const template={...FLOWS[0],id:'template-1',seq:30,isTemplate:true,definition:makeStructureTemplate(['web-list'])}
-    vi.spyOn(flowCenterApi,'detail').mockResolvedValue(template)
-    const save=vi.spyOn(flowCenterApi,'save').mockResolvedValue({...template,seq:0})
-    const w=await mountCenter([template])
+describe('模板SEQ排序', () => {
+  it('编辑模板回填SEQ，保存零值不丢失', async () => {
+    const template = { ...FLOWS[0], id: 'template-1', seq: 30, isTemplate: true, definition: makeStructureTemplate(['web-list']) }
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(template)
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...template, seq: 0 })
+    const w = await mountCenter([template])
     vi.mocked(flowCenterApi.steps).mockClear()
     await w.get('[data-testid="flow-center-row"]').trigger('click')
     await flushPromises()
@@ -1557,38 +1557,38 @@ describe('模板SEQ排序',()=>{
     await w.get('[data-testid="flow-meta-seq"]').setValue('0')
     await w.get('[data-testid="structure-template-save"]').trigger('click')
     await flushPromises()
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({id:'template-1',seq:0,isTemplate:true}))
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: 'template-1', seq: 0, isTemplate: true }))
   })
-  it('无效模板SEQ不提交', async()=>{
-    const save=vi.spyOn(flowCenterApi,'save')
-    const w=await mountCenter()
+  it('无效模板SEQ不提交', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save')
+    const w = await mountCenter()
     await w.get('[data-testid="new-structure-template"]').trigger('click')
     await w.get('[data-testid="flow-meta-seq"]').setValue('-1')
     await w.get('[data-testid="structure-template-save"]').trigger('click')
     await flushPromises()
     expect(save).not.toHaveBeenCalled()
   })
-  it('多分类合并排序也按SEQ和流程ID排序，不退化成更新时间排序', async()=>{
-    const flows=[
-      {...FLOWS[0],id:'10',seq:20,categoryId:'c1'},
-      {...FLOWS[0],id:'3',seq:0,categoryId:'c2'},
-      {...FLOWS[0],id:'2',seq:0,categoryId:'c1'},
+  it('多分类合并排序也按SEQ和流程ID排序，不退化成更新时间排序', async () => {
+    const flows = [
+      { ...FLOWS[0], id: '10', seq: 20, categoryId: 'c1' },
+      { ...FLOWS[0], id: '3', seq: 0, categoryId: 'c2' },
+      { ...FLOWS[0], id: '2', seq: 0, categoryId: 'c1' },
     ] as FlowRecord[]
-    const w=await mountCenter(flows)
+    const w = await mountCenter(flows)
     await w.get('[data-testid="flow-template-manage"]').trigger('click')
     await flushPromises()
-    const setup=(w.vm.$ as unknown as {setupState:{onFilterCategoryChange:(v:string[])=>void}}).setupState
-    setup.onFilterCategoryChange(['c1','c2'])
+    const setup = (w.vm.$ as unknown as { setupState: { onFilterCategoryChange: (v: string[]) => void } }).setupState
+    setup.onFilterCategoryChange(['c1', 'c2'])
     await flushPromises()
-    const ids=rows(w).map(row=>row.find('small').text())
-    expect(ids).toEqual(['2 · v1','3 · v1','10 · v1'])
-    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({field:'seq',order:'asc'}))
+    const ids = rows(w).map(row => row.find('small').text())
+    expect(ids).toEqual(['2 · v1', '3 · v1', '10 · v1'])
+    expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ field: 'seq', order: 'asc' }))
   })
 })
 
-it('模板管理列表默认按SEQ升序展示',async()=>{
-  const w=await mountCenter()
+it('模板管理列表默认按SEQ升序展示', async () => {
+  const w = await mountCenter()
   await w.get('[data-testid="flow-template-manage"]').trigger('click')
   await flushPromises()
-  expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({onlyTemplate:true,field:'seq',order:'asc'}))
+  expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ onlyTemplate: true, field: 'seq', order: 'asc' }))
 })

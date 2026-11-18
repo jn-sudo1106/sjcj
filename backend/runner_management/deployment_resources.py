@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath, PureWindowsPath
 from .deployment_mapping import mapping, relative_directory, archive_root
+from .deployment_history import record as record_stage
 
 RULE_KEY = 'deployment-resource-rules'
 CHOICE_PREFIX = 'node-deployment-resource:'
@@ -35,24 +36,36 @@ def rules(db):
     from .directory_layout import revision
     row = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (RULE_KEY,)).fetchone()
     items = json.loads(row['setting_value']) if row else []
+    runners = {row['runner_id']: row['name'] for row in db.execute('SELECT runner_id,name FROM runners').fetchall()}
     # Existing one-resource rules remain the default without a data rewrite.
     items = [{**{key: item.get(key) for key in ('configType', 'configTypeName', 'environment', 'runnerId', 'enabled')},
               'deploymentDirectory': item.get('deploymentDirectory') or '',
               'entryPoint': item.get('entryPoint') or '',
-              'resourceId': item.get('resourceId') or uuid.uuid5(uuid.NAMESPACE_URL,
-               'ce:deployment-resource:' + json.dumps([item['configType'], item['environment'], item['runnerId']])).hex,
-              'isDefault': item.get('isDefault', True), 'resourceName': item.get('resourceName', '')} for item in items]
+              'resourceId': item['runnerId'],
+              'legacyResourceIds': sorted(set(item.get('legacyResourceIds', []) + [item.get('resourceId') or uuid.uuid5(uuid.NAMESPACE_URL,
+               'ce:deployment-resource:' + json.dumps([item['configType'], item['environment'], item['runnerId']])).hex]) - {item['runnerId']}),
+              'isDefault': item.get('isDefault', True), 'resourceName': runners.get(item['runnerId'], item['runnerId'])} for item in items]
     return {'items': items, 'revision': revision({'items': items})}
+
+
+def resource_aliases(db):
+    return {alias: item['runnerId'] for item in rules(db)['items']
+            for alias in [item['runnerId'], *item['legacyResourceIds']]}
+
+
+def canonical_id(db, value):
+    return resource_aliases(db).get(value, value) if value else value
 
 
 def entry_names(db, result):
     """Display adopted runtime entries without making them resource defaults."""
     from .deployment_configuration import RUNTIME_PREFIX
     entries = {item['resourceId']: set() for item in result['items']}
-    by_id = {item['resourceId']: item for item in result['items']}
+    by_id = {(item['resourceId'], item['configType'], env): item for item in result['items'] for env in rule_environments(item['environment'])}
+    aliases = {alias: item['resourceId'] for item in result['items'] for alias in item['legacyResourceIds']}
     for row in db.execute('SELECT payload FROM deployment_jobs').fetchall():
         job = json.loads(row['payload'])
-        rule = by_id.get(job.get('resourceId'))
+        rule = by_id.get((aliases.get(job.get('resourceId'), job.get('resourceId')), job.get('configType'), job.get('environment')))
         if not rule or rule['runnerId'] != job.get('runnerId') or rule['configType'] != job.get('configType') or not supports(rule, job.get('environment')):
             continue
         stored = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (RUNTIME_PREFIX + job.get('runtimeId', ''),)).fetchone()
@@ -71,7 +84,9 @@ def save_rules(app, body, headers=None):
     with GIT_LOCK, app.store.connect() as db:
         if body.get('revision') != rules(db)['revision']:
             raise ApiError('默认部署资源已修改，请刷新后再保存', 409)
-        items, keys, identifiers, defaults, destinations = [], set(), set(), set(), []
+        current_rules = rules(db)['items']
+        alias_owners = {alias: item['runnerId'] for item in current_rules for alias in item['legacyResourceIds']}
+        items, keys, defaults, destinations = [], set(), set(), []
         for item in raw:
             if not isinstance(item, dict): raise ApiError('部署资源配置无效')
             kind = app.valid_config_type(item.get('configType'))
@@ -86,25 +101,31 @@ def save_rules(app, body, headers=None):
             from .directory_layout import safe_path
             entry = item.get('entryPoint', '')
             if not isinstance(entry, str):
-                raise ApiError('入口文件须为部署目录内的相对 Python 文件路径')
+                raise ApiError('入口文件须为部署目录内的相对 Python 或 EXE 文件路径')
             entry = safe_path(entry.strip().replace('\\', '/')) if entry.strip() else ''
-            if entry and not entry.lower().endswith('.py'):
-                raise ApiError('入口文件必须是 Python 文件')
+            if entry:
+                from .entry_types import entry_kind
+                try: entry_kind(entry)
+                except ValueError as exc: raise ApiError(str(exc)) from exc
             relative = relative_directory(directory, runner)
             normalized = relative.casefold() if PureWindowsPath(runner['install_directory']).drive else relative
-            identity = (kind, env, runner_id, normalized)
-            if identity in keys: raise ApiError('相同的部署资源映射不能重复添加')
-            keys.add(identity)
-            resource_id = item.get('resourceId') or uuid.uuid5(uuid.NAMESPACE_URL,
-                'ce:deployment-resource:' + json.dumps(list(identity))).hex
-            if not isinstance(resource_id, str) or not re.fullmatch(r'[0-9a-f]{32}', resource_id) or resource_id in identifiers:
+            scopes = {(kind, target_env, runner_id) for target_env in environments}
+            if scopes & keys: raise ApiError('相同 Runner 的节点类型和环境不能重复配置')
+            keys.update(scopes)
+            supplied_id = item.get('resourceId') or runner_id
+            if not isinstance(supplied_id, str) or (supplied_id != runner_id and not re.fullmatch(r'[0-9a-f]{32}', supplied_id)):
                 raise ApiError('部署资源标识无效或重复')
-            identifiers.add(resource_id)
+            aliases = {alias for previous in current_rules if previous['runnerId'] == runner_id for alias in previous['legacyResourceIds']}
+            if supplied_id != runner_id:
+                if alias_owners.get(supplied_id, runner_id) != runner_id: raise ApiError('部署资源标识已属于其他 Runner')
+                alias_owners[supplied_id] = runner_id
+                aliases.add(supplied_id)
+            resource_id = runner_id
             enabled = item.get('enabled', True)
             if type(enabled) is not bool: raise ApiError('启用状态无效')
             is_default = item.get('isDefault', True)
             if type(is_default) is not bool: raise ApiError('默认资源标记无效')
-            resource_name = item.get('resourceName', '')
+            resource_name = runner['name']
             if not isinstance(resource_name, str) or len(resource_name) > 100 or any(ord(char) < 32 for char in resource_name):
                 raise ApiError('资源名称须为不超过 100 字的单行文本')
             if is_default and enabled:
@@ -118,6 +139,7 @@ def save_rules(app, body, headers=None):
                 destinations.append((runner_id, env, normalized))
             name = app.repository_type_name(db, kind, str(item.get('configTypeName') or kind), headers)
             items.append({'resourceId': resource_id, 'configType': kind, 'configTypeName': name, 'environment': env, 'runnerId': runner_id,
+                          'legacyResourceIds': sorted(aliases),
                           'deploymentDirectory': '' if relative == '.' else directory.strip(), 'entryPoint': entry,
                           'enabled': enabled, 'isDefault': is_default, 'resourceName': resource_name.strip()})
         if any(item['enabled'] and (item['configType'], env) not in defaults for item in items for env in rule_environments(item['environment'])):
@@ -136,7 +158,10 @@ def read_choice(db, context):
     item = json.loads(row['setting_value']) if row else {
         **{key: context.get(key, '') for key in ('sourceId', 'flowId', 'stepId', 'flowVersionId', 'configId', 'configType', 'environment')},
         'resourceId': ''}
-    return {**item, 'revision': revision(item)}
+    aliases = resource_aliases(db) if item.get('resourceId') or item.get('resourceIds') else {}
+    result = {**item, 'resourceId': aliases.get(item.get('resourceId', ''), item.get('resourceId', '')), 'revision': revision(item)}
+    if 'resourceIds' in item: result['resourceIds'] = list(dict.fromkeys(aliases.get(value, value) for value in item['resourceIds']))
+    return result
 
 
 def node_choice(app, body, *, save=False):
@@ -155,6 +180,13 @@ def node_choice(app, body, *, save=False):
         context['configType'] = kind
         current = read_choice(db, context)
         options = [item for item in rules(db)['items'] if item['configType'] == kind and supports(item, context['environment'])]
+        if not save and body.get('preview') == '1':
+            from .node_deployment_settings import validate
+            ids = current.get('resourceIds', [current['resourceId']] if current.get('resourceId') else [])
+            following = current.get('useDefault', not bool(current.get('resourceId')))
+            targets = [item for item in options if item['enabled'] and (item['isDefault'] if following else item['resourceId'] in ids)]
+            preview_settings = validate(app, db, {key: body.get(key, '') for key in ('repositoryId', 'sourceDirectory', 'deploymentDirectory')}, targets, verify_source=False)
+            body = {**body, '_deploymentSettings': preview_settings}
         if save:
             if body.get('revision') != current['revision']: raise ApiError('节点部署资源已被修改，请刷新后再选择', 409)
             if 'resourceIds' in body:
@@ -169,6 +201,12 @@ def node_choice(app, body, *, save=False):
                 if not isinstance(resource_id, str): raise ApiError('所选部署资源无效')
                 validate_targets([resource_id] if resource_id else [], options)
                 current = {**context, 'resourceId': resource_id}
+            from .node_deployment_settings import validate
+            settings = body.get('deploymentSettings', read_choice(db, context).get('deploymentSettings') or {})
+            selected_ids = current.get('resourceIds', [current['resourceId']] if current.get('resourceId') else [])
+            following = current.get('useDefault', not bool(current.get('resourceId')))
+            targets = [item for item in options if item['enabled'] and (item['isDefault'] if following else item['resourceId'] in selected_ids)]
+            current['deploymentSettings'] = validate(app, db, settings, targets)
             store_layout(db, choice_key(context), current)
             current = read_choice(db, context)
         default = next((item for item in options if item['enabled'] and item['isDefault']), None)
@@ -189,6 +227,9 @@ def validate_targets(ids, options):
     from .server import ApiError
     if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(value, str) for value in ids) or len(set(ids)) != len(ids):
         raise ApiError('请选择不超过 50 个互不重复的部署资源')
+    aliases = {alias: item['resourceId'] for item in options for alias in item.get('legacyResourceIds', [])}
+    ids = [aliases.get(value, value) for value in ids]
+    if len(set(ids)) != len(ids): raise ApiError('同一 Runner 实例只能选择一次')
     available = {item['resourceId'] for item in options if item['enabled']}
     if any(value not in available for value in ids):
         raise ApiError('所选资源不属于当前节点类型和环境，或已经停用', 409)
@@ -203,7 +244,7 @@ def deployment_path(app, db, rule, context, body):
     from .server import ApiError
     from .generation_tasks import read_config
     from .generated_archives import PREFIX
-    result = {'targetPath': '', 'deploymentDirectory': '', 'resourceDirectory': '', 'pathError': ''}
+    result = {'targetPath': '', 'deploymentDirectory': '', 'resourceDirectory': '', 'pathError': '', 'generatedFiles': []}
     if not rule:
         result['pathError'] = '待选择可用部署资源'
         return result
@@ -219,24 +260,63 @@ def deployment_path(app, db, rule, context, body):
         if isinstance(archive_id, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,80}', archive_id):
             row = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (PREFIX + archive_id,)).fetchone()
             archive = json.loads(row['setting_value']) if row else {}
-            if archive.get('configId') == context['configId']:
+            if archive.get('configId') == context['configId'] and all(
+                    (archive.get('sourceContext') or {}).get(key, '') == context.get(key, '')
+                    for key in ('sourceId', 'flowId', 'stepId')):
                 # Deploying existing code retains the generation archive's queue snapshot.
                 queue = archive.get('queueName', queue)
+            else:
+                archive = {}
         if not isinstance(queue, str) or len(queue) > 120:
             raise ApiError('节点 MQ 主题无效，无法计算部署目录')
         if archive.get('configId') != context['configId']:
             from .generated_archives import destination
             archive = destination(app, {**generation, 'configId': context['configId'], 'configType': context['configType'],
                                          'queueName': queue, 'destinationMode': generation.get('destinationMode') or 'type'})
+        from .node_deployment_settings import apply
+        archive = {**archive, 'sourceContext': context, 'configId': context['configId']}
+        archive = apply(app, db, archive, context['environment'], preview=True, options=body.get('_deploymentSettings'))
+        if not (archive.get('deploymentSettings') or {}).get('repositoryId'):
+            result['generatedFiles'] = [item['path'] for item in archive.get('files', [])]
         mapped_paths = mapping(rule, archive, runner)
         relative = mapped_paths['targetPath']
         root = runner['install_directory']
         kind = PureWindowsPath if PureWindowsPath(root).drive else PurePosixPath
         result.update(targetPath=relative, deploymentDirectory=str(kind(root) / relative),
                       resourceDirectory=str(kind(root) / mapped_paths['resourceRoot']), **git_details(archive))
+        result.update(configured_entry(app, db, context['configId'], archive['repoId'], mapped_paths['sourceBase'], rule['runnerId'], relative))
     except ApiError as error:
         result['pathError'] = str(error)
     return result
+
+
+def configured_entry(app, db, config_id, repo_id, source_base, runner_id, target):
+    """Read configured entries without inspecting Git files or the remote machine."""
+    from .deployment_configuration import configurations
+    from .directory_delivery import target_path
+    layouts = list(configurations(app, db).values())
+    # An explicit shared Git entry is the configuration default. Older machine
+    # layouts may still contain the generated site file as their local entry.
+    choices = [item for item in layouts if item.get('configId') == config_id
+               and (item.get('entrySource') or {}).get('repoId') == repo_id
+               and item['entrySource'].get('path', '').startswith(source_base.rstrip('/') + '/')]
+    if len(choices) == 1:
+        item = choices[0]
+        return {'entryPoint': item['entrySource']['path'][len(source_base.rstrip('/')) + 1:],
+                'entryConfigurationId': item['deploymentId']}
+    for item in layouts:
+        if (item.get('configId') != config_id or not item.get('entryPoint') or not any(node.get('repoId') == repo_id for node in item['nodes'])
+                or target_path(item).replace('\\', '/').lower() != target.replace('\\', '/').lower()):
+            continue
+        if db.execute('SELECT 1 FROM directory_runner_bindings WHERE owner_id=? AND runner_id=?', (item['deploymentId'], runner_id)).fetchone():
+            return {'entryPoint': item.get('entryPoint', ''), 'entryConfigurationId': item.get('entryConfigurationId') or item['deploymentId']}
+    configured = [item for item in layouts if item.get('configId') == config_id and item.get('entryPoint')
+                  and any(node.get('repoId') == repo_id for node in item['nodes'])]
+    entries = {item['entryPoint'] for item in configured}
+    if len(entries) == 1:
+        item = configured[0]
+        return {'entryPoint': item['entryPoint'], 'entryConfigurationId': item.get('entryConfigurationId') or item['deploymentId']}
+    return {'entryPoint': '', 'entryConfigurationId': ''}
 
 
 def selected_resource(db, job):
@@ -244,7 +324,7 @@ def selected_resource(db, job):
     available = [item for item in rules(db)['items'] if item['configType'] == job['configType'] and supports(item, job['environment'])]
     if 'resourceIds' in choice and not choice.get('useDefault') and not choice['resourceIds'] and not job.get('targetResourceId'):
         return None, True
-    explicit = job.get('targetResourceId') or choice.get('resourceId')
+    explicit = canonical_id(db, job.get('targetResourceId') or choice.get('resourceId'))
     rule = next((item for item in available if item['enabled'] and
                  (item['resourceId'] == explicit if explicit else item['isDefault'])), None)
     return rule, bool(explicit)
@@ -254,8 +334,12 @@ def owner(job):
     return tuple(job[key] for key in ('sourceId', 'flowId', 'stepId', 'configId', 'environment'))
 
 
-def same_target(left, right):
-    return left.get('targetResourceId', '') == right.get('targetResourceId', '')
+def same_target(left, right, db=None):
+    first, second = left.get('targetResourceId', ''), right.get('targetResourceId', '')
+    if first == second: return True
+    if db is None: return False
+    aliases = resource_aliases(db)
+    return aliases.get(first, first) == aliases.get(second, second)
 
 
 def git_details(archive):
@@ -263,6 +347,7 @@ def git_details(archive):
 
 
 def persist(db, job, *, insert=False):
+    record_stage(job, job['status'], job.get('message') or job['status'], level='error' if job['status'] == 'failed' else 'info')
     job['updatedAt'] = stamp()
     values = tuple(job[key] for key in ('sourceId', 'flowId', 'stepId', 'configId', 'configType', 'environment',
                                       'archiveId', 'taskId', 'gitCommit', 'status', 'runnerId', 'deploymentId', 'deliveryId', 'createdAt', 'updatedAt'))
@@ -274,7 +359,7 @@ def persist(db, job, *, insert=False):
                    (job['status'], job['runnerId'], job['deploymentId'], job['deliveryId'], job['updatedAt'], json.dumps(job, ensure_ascii=False), job['jobId']))
 
 
-def enqueue_archive(db, archive):
+def enqueue_archive(db, archive, app=None):
     """Atomic outbox with the successful Git receipt; never deploy unknown sources."""
     if archive.get('status') != 'committed' or not archive.get('sourceContext') or not archive.get('files'):
         return None
@@ -283,16 +368,30 @@ def enqueue_archive(db, archive):
     if repo and repo['remote_url'] and not archive.get('pushed'): return None
     context = {**archive['sourceContext'], 'configId': archive['configId'], 'environment': 'test'}
     choice = read_choice(db, context)
+    disabled = 'resourceIds' in choice and not choice.get('useDefault') and not choice['resourceIds']
+    configuration_error = ''
+    if app is not None and not disabled:
+        from .node_deployment_settings import apply
+        try:
+            archive = apply(app, db, archive, 'test')
+        except Exception as exc:
+            # A deployment source failure must not roll back successful code generation.
+            configuration_error = '部署任务配置不可用：' + str(exc)[:1200]
+    def create(target_resource_id=''):
+        job = enqueue(db, archive, 'test', automatic=True, target_resource_id=target_resource_id)
+        if configuration_error and job['status'] in WAITING:
+            job.update(status='failed', message=configuration_error); persist(db, job)
+        return job
     if 'resourceIds' in choice and not choice.get('useDefault'):
         ids = choice['resourceIds']
         # Removed targets must not leave older queued automatic deliveries behind.
         for row in db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?', owner(context)).fetchall():
             old = json.loads(row['payload'])
-            if old.get('automatic') and old['status'] in WAITING and old.get('targetResourceId') not in ids:
+            if old.get('automatic') and old['status'] in WAITING and canonical_id(db, old.get('targetResourceId')) not in ids:
                 old.update(status='superseded', message='节点部署目标已更新，本次不再部署到此机器'); persist(db, old)
-        jobs = [enqueue(db, archive, 'test', automatic=True, target_resource_id=value) for value in ids]
+        jobs = [create(value) for value in ids]
         return jobs[0] if jobs else None
-    return enqueue(db, archive, 'test', automatic=True)
+    return create()
 
 
 def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False, target_resource_id=''):
@@ -323,11 +422,12 @@ def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False, tar
                             owner(job)).fetchall()
         for row in others:
             old = json.loads(row['payload'])
-            if not old.get('automatic') or not same_target(old, job): continue
+            if not old.get('automatic') or not same_target(old, job, db): continue
             if (old.get('taskCreatedAt', ''), old['taskId']) > (job['taskCreatedAt'], job['taskId']):
                 job.update(status='superseded', message='已有更新的生成任务结果，本次不覆盖新代码')
             elif old['status'] in WAITING:
                 old.update(status='superseded', message='已由更新的生成结果替代'); persist(db, old)
+    record_stage(job, 'created', '创建部署任务，锁定 Git 版本 ' + job['gitCommit'], date=created)
     persist(db, job, insert=True)
     return job
 
@@ -350,7 +450,7 @@ def listing(app, query):
 
 
 def view(job):
-    return {**git_details(job.get('archive') or {}), **{key: value for key, value in job.items() if key != 'archive'}}
+    return {**git_details(job.get('archive') or {}), **{key: value for key, value in job.items() if key not in ('archive', 'executionEvents', 'deliveryHistory')}}
 
 
 def deploy_existing(app, body):
@@ -386,6 +486,8 @@ def deploy_existing(app, body):
         if not repo or repo['remote_url'] and not archive.get('pushed'):
             raise ApiError('生成代码尚未成功推送远程仓库', 409)
         env = environment(body.get('environment', 'test'))
+        from .node_deployment_settings import apply
+        archive = apply(app, db, archive, env)
         if 'resourceIds' in body:
             choice = node_choice(app, {**body, 'environment': env})
             if body.get('targetRevision') != choice['revision']:
@@ -401,7 +503,7 @@ def manual_enqueue(db, archive, env, parent='', target_resource_id=''):
     """An explicit deployment may move the same code to a newly selected resource."""
     candidates = db.execute('SELECT payload FROM deployment_jobs WHERE archive_id=? AND environment=? ORDER BY created_at DESC,job_id DESC',
                             (archive['archiveId'], env)).fetchall()
-    latest = next((row for row in candidates if json.loads(row['payload']).get('targetResourceId', '') == target_resource_id), None)
+    latest = next((row for row in candidates if canonical_id(db, json.loads(row['payload']).get('targetResourceId', '')) == canonical_id(db, target_resource_id)), None)
     if latest:
         previous = json.loads(latest['payload'])
         if previous['status'] in (*WAITING, 'delivering', 'failed'):
@@ -430,7 +532,7 @@ def action(app, identifier, operation):
             if job['status'] != 'success': raise ApiError('只能重新部署曾经成功的版本', 409)
             active = db.execute("SELECT payload FROM deployment_jobs WHERE config_id=? AND environment=? AND status IN ('waiting_resource','queued','delivering')",
                                 (job['configId'], job['environment'])).fetchall()
-            if any(owner(json.loads(row['payload'])) == owner(job) and same_target(json.loads(row['payload']), job) for row in active):
+            if any(owner(json.loads(row['payload'])) == owner(job) and same_target(json.loads(row['payload']), job, db) for row in active):
                 raise ApiError('该节点环境已有部署任务，请等待完成后再回滚', 409)
             return view(enqueue(db, job['archive'], job['environment'], parent=identifier, rollback=True, target_resource_id=job.get('targetResourceId', '')))
         if operation == 'retry':
@@ -438,9 +540,12 @@ def action(app, identifier, operation):
                 raise ApiError('当前部署状态不能重试', 409)
             if job.get('automatic'):
                 others = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?', owner(job)).fetchall()
-                if any(other.get('automatic') and same_target(other, job) and (other.get('taskCreatedAt', ''), other['taskId']) > (job.get('taskCreatedAt', ''), job['taskId'])
+                if any(other.get('automatic') and same_target(other, job, db) and (other.get('taskCreatedAt', ''), other['taskId']) > (job.get('taskCreatedAt', ''), job['taskId'])
                        for other in (json.loads(row['payload']) for row in others)):
                     raise ApiError('该任务已被更新的生成结果替代，请在历史部署记录中明确选择部署此版本', 409)
+            if job.get('deliveryId'):
+                job['deliveryHistory'] = list(dict.fromkeys([*(job.get('deliveryHistory') or []), job['deliveryId']]))
+            record_stage(job, 'retry', '重新执行部署任务')
             job.update(status='waiting_resource', runnerId='', deploymentId='', deliveryId='', runtimeId='', message='等待重新匹配默认部署资源')
             persist(db, job)
             return view(job)
@@ -459,8 +564,9 @@ def sync_git(app, db, job):
     archive = dict(job['archive'])
     repo = app.repository(db, archive['repoId'])
     if repo['status'] != 'ACTIVE': raise ApiError('代码仓库已停用', 409)
-    directory = get_directory(app, db, archive['repoId'], archive['directoryId'], config_type=archive['configType'])
-    if directory['path'] != archive['directoryPath']: raise ApiError('仓库配置目录已变更，请先更新节点的仓库关联', 409)
+    if not (archive.get('deploymentSettings') or {}).get('repositoryId'):
+        directory = get_directory(app, db, archive['repoId'], archive['directoryId'], config_type=archive['configType'])
+        if directory['path'] != archive['directoryPath']: raise ApiError('仓库配置目录已变更，请先更新节点的仓库关联', 409)
     root = Path(repo['local_path'])
     if repo['remote_url']:
         # Fetch only the configured branch; leave the server worktree untouched.
@@ -475,7 +581,7 @@ def sync_git(app, db, job):
     files = [{'path': path} for path in sorted(tree) if path.startswith(prefix) and path not in excluded and not is_python_cache(path)]
     if not files: raise ApiError('仓库对应配置目录没有可部署文件', 409)
     rows = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=? ORDER BY created_at DESC,job_id DESC', owner(job)).fetchall()
-    rows = [row for row in rows if same_target(json.loads(row['payload']), job)]
+    rows = [row for row in rows if same_target(json.loads(row['payload']), job, db)]
     for row in rows:
         previous = json.loads(row['payload'])
         if previous['status'] in (*WAITING, 'delivering'):
@@ -532,6 +638,7 @@ def prepare(app, db, job, rule, runner):
     from .directory_bindings import owner_key
     from .directory_delivery import request_delivery, target_path
     from .runtime_history import insert_record, add_event
+    record_stage(job, 'resource', '已匹配部署资源：' + runner['ip_address'] + ' · ' + rule.get('resourceName', ''))
     mapped_paths = mapping(rule, job['archive'], runner)
     root = mapped_paths['targetPath']
     kind = PureWindowsPath if PureWindowsPath(runner['install_directory']).drive else PurePosixPath
@@ -568,15 +675,18 @@ def prepare(app, db, job, rule, runner):
     archive = job['archive']
     repo = app.repository(db, archive['repoId'])
     from .directory_delivery import baseline
+    record_stage(job, 'baseline', '读取本次部署的已有文件和版本记录', detail='目标目录：' + str(absolute))
     digest, before, old_manifest = baseline(app, 'deployment', deployment_id, runner['runner_id'], root, db)
-    scoped = bool(digest and not job.get('gitSync') and not job.get('rollback'))
+    scoped = bool(not job.get('gitSync') and not job.get('rollback')
+                  and not (job['archive'].get('deploymentSettings') or {}).get('repositoryId'))
+    record_stage(job, 'source', '读取固定 Git 版本并确定本次下发文件', detail=archive['gitCommit'])
     if scoped:
         from .generation_deployment_scope import merge_nodes
         nodes, paths = merge_nodes(app, db, archive, mapped_paths['sourceBase'], before, old_manifest)
         job.update(deploymentScope='task-files', selectedPaths=paths)
     else:
-        # Deploy the configuration's complete Git folder at the pinned commit,
-        # only for initial setup, explicit Git synchronization or rollback.
+        # A full folder requires an explicit source, Git sync or rollback.
+        # First-time generated deployments use the same task-file scope as updates.
         from .directory_layout import git_files
         from .delivery_ignore import ignored_paths
         from .python_cache import is_python_cache
@@ -592,6 +702,7 @@ def prepare(app, db, job, rule, runner):
                'pathStyle': 'config', 'nodes': nodes, 'entryPoint': '', 'revision': current['revision'] if current else '',
                'sourceNode': {'flowId': job['flowId'], 'flowName': job['flowId'], 'stepId': job['stepId'],
                               'nodeName': job['stepId'], 'configId': job['configId']}}
+    record_stage(job, 'scope', '已确定下发范围：' + ('本次任务文件' if scoped else '配置目录'), detail='文件映射数：' + str(sum(node['kind'] == 'file' for node in nodes)))
     if processes:
         from .live_deployment import validate, server_programs
         from .directory_layout import snapshot_files
@@ -610,7 +721,11 @@ def prepare(app, db, job, rule, runner):
                 raise ValueError('仅独立脚本发生变化；请先升级 Runner 以支持程序运行时增量下发')
         except ValueError as error:
             job.update(status='queued', message=str(error)); return
-    if rule.get('entryPoint'):
+    from .deployment_entries import apply_choice
+    configured_entry = apply_choice(db, payload)
+    if configured_entry:
+        job['configurationId'] = payload['entryConfigurationId']
+    elif rule.get('entryPoint'):
         from .runtime_entry import candidates
         entry = rule['entryPoint']
         # File picker stores paths relative to the resource directory. Legacy
@@ -634,6 +749,7 @@ def prepare(app, db, job, rule, runner):
         layout['deploymentId'] = deployment_id; layout['registryKey'] = '@deployment:' + deployment_id
     from .directory_layout import revision
     layout.update(managedBy='generated-code', deploymentEnvironment=job['environment'])
+    job['configurationId'] = layout.get('entryConfigurationId') or layout['deploymentId']
     layout['revision'] = revision(layout)
     store_layout(db, 'deployment-config:' + deployment_id, layout)
     runner_id = runner['runner_id']
@@ -656,8 +772,10 @@ def prepare(app, db, job, rule, runner):
             'environment': job['environment'], 'concurrency': (row.get('assignment') or {}).get('concurrency', 1),
             'retryPolicy': row.get('retryPolicy')}, _db=db)
         runtime['assignmentId'] = adopted['assignmentId']
+    record_stage(job, 'package', '打包代码并生成签名，检查下发内容和目标目录')
     delivery = request_delivery(app, 'deployment', deployment_id, runner_id,
                                 {'revision': layout['revision'], 'scope': 'all'}, _db=db)
+    record_stage(job, 'packaged', '代码包已准备完成，文件一致性与下发规则检查通过', detail='制品摘要：' + delivery['artifactDigest'])
     if not delivery.get('unchanged'):
         data = {'name': layout['name'], 'configId': job['configId'], 'ipAddress': runner['ip_address'],
                 'runnerName': runner['name'], 'installDirectory': runner['install_directory'], 'directoryTemplate': root,
@@ -685,6 +803,7 @@ def dispatch(app):
         expire_deliveries(db)
         rows = db.execute("SELECT job_id FROM deployment_jobs WHERE status IN ('waiting_resource','queued','delivering') ORDER BY created_at,job_id").fetchall()
     for row in rows:
+        job = None
         # Separate transaction per job; a corrupt/unavailable repository cannot starve other nodes.
         try:
             with GIT_LOCK, app.store.connect() as db:
@@ -710,4 +829,7 @@ def dispatch(app):
         except Exception as exc:
             with app.store.connect() as db:
                 saved = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (row['job_id'],)).fetchone()
-                job = json.loads(saved['payload']); job.update(status='failed', message=str(exc)[:1500]); persist(db, job)
+                failed = json.loads(saved['payload'])
+                if job and job.get('executionEvents'):
+                    failed['executionEvents'] = job['executionEvents']
+                failed.update(status='failed', message=str(exc)[:1500]); persist(db, failed)

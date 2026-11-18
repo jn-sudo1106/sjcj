@@ -12,12 +12,19 @@ from .package_limits import MAX_CODE_BYTES, MAX_CODE_FILES, LEGACY_CODE_BYTES, L
 
 
 def as_delivery(row):
-    return {'deliveryId': row['delivery_id'], 'bindingType': row['binding_type'],
+    item = {'deliveryId': row['delivery_id'], 'bindingType': row['binding_type'],
             'ownerId': row['owner_id'], 'runnerId': row['runner_id'],
             'status': row['status'], 'layoutRevision': row['layout_revision'],
             'artifactDigest': row['artifact_digest'], 'targetPath': row['target_path'],
             'installedPath': row['installed_path'], 'requestedAt': row['requested_at'],
             'startedAt': row['started_at'], 'finishedAt': row['finished_at'], 'error': row['error']}
+    # Show an expired lease immediately without issuing an UPDATE from a GET.
+    # The sweeper/mutation paths persist the same timeout before retry/claim.
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec='seconds')
+    if item['status'] == 'running' and item['startedAt'] and item['startedAt'] < cutoff:
+        from .server import now
+        item.update(status='failed', finishedAt=now(), error='Runner 下发超时，请检查实例后重新下发')
+    return item
 
 
 def expire_deliveries(db):
@@ -105,15 +112,25 @@ def preview_items(files, directories, old_files, old_manifest):
                for name, data in sorted(files.items())])
 
 
-def delivery_preview(app, binding_type, owner_id, runner_id):
+def delivery_preview(app, binding_type, owner_id, runner_id, source_mode='pinned'):
     from .server import GIT_LOCK
     with GIT_LOCK, app.store.connect() as db:
         layout, owner_id = bound_layout(app, binding_type, owner_id, runner_id, db)
+        source = {}
+        if source_mode == 'current-git' and binding_type == 'deployment':
+            from .manual_delivery_source import current_layout, source_directories
+            current = current_layout(app, layout, db)
+            source = {'sourceMode': source_mode, 'sourceRevision': current['revision'], 'gitSources': source_directories(current)}
+        elif source_mode != 'pinned':
+            from .server import ApiError
+            raise ApiError('下发代码来源无效')
+        else:
+            current = layout
         root = target_path(layout)
-        files, _, directories = snapshot_files(app, layout, db)
+        files, _, directories = snapshot_files(app, current, db)
         digest, old_files, manifest = baseline(app, binding_type, owner_id, runner_id, root, db)
         return {'revision': layout['revision'], 'targetPath': root, 'baselineDigest': digest,
-                'items': preview_items(files, directories, old_files, manifest)}
+                'items': preview_items(files, directories, old_files, manifest), **source}
 
 
 def file_sources(names, sources):
@@ -136,6 +153,14 @@ def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=Non
         layout, owner_id = bound_layout(app, binding_type, owner_id, runner_id, db)
         if payload.get('revision') != layout['revision']:
             raise ApiError('目录视图已更新，请刷新运行绑定后再下发', 409)
+        source_mode = payload.get('sourceMode', 'pinned')
+        if source_mode == 'current-git' and binding_type == 'deployment':
+            from .manual_delivery_source import current_layout
+            layout = current_layout(app, layout, db)
+            if payload.get('sourceRevision') != layout['revision']:
+                raise ApiError('Git 目录已更新，请刷新变更文件后再下发', 409)
+        elif source_mode != 'pinned':
+            raise ApiError('下发代码来源无效')
         key = (binding_type, owner_key(owner_id), runner_id)
         if db.execute("SELECT 1 FROM directory_deliveries WHERE binding_type=? AND owner_key=? AND runner_id=? "
                       "AND status IN ('pending','running')", key).fetchone():
@@ -211,6 +236,15 @@ def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=Non
             raise ApiError('入口文件未关联到仓库代码，请先修改目录视图', 422)
         if entry not in combined:
             entry = ''  # First partial delivery can consist solely of shared code.
+        if source_mode == 'current-git':
+            from .manual_delivery_source import installed_layout
+            from .directory_layout import store_layout
+            layout = installed_layout(layout, combined, sources, directories)
+            saved = {key: value for key, value in layout.items() if key not in ('ownerId', 'bindingType')}
+            from .directory_layout import revision
+            saved['revision'] = revision(saved)
+            layout['revision'] = saved['revision']
+            store_layout(db, 'deployment-config:' + owner_id, saved)
         asset = db.execute('SELECT * FROM code_assets WHERE code_id=?', (layout['codeId'],)).fetchone() if layout['codeId'] else None
         # Keep version.json compatible with existing queue workers. Standalone
         # public folders get their own stable namespace instead of a code node.

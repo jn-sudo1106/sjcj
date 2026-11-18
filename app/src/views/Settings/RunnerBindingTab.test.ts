@@ -6,15 +6,19 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { runnerManagementApi, type DeploymentConfiguration, type DirectoryDelivery, type RuntimeConfiguration } from '@/api/runnerManagement'
 import { useAuthStore } from '@/stores/auth'
+import { flowCenterApi, sourceApi } from '@/api'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { runtimeEntry: vi.fn(), saveRuntimeEntry: vi.fn(), runtimeConfigurations: vi.fn(), deploymentConfigurations: vi.fn(), instances: vi.fn(), saveRuntimeConfiguration: vi.fn(), startRuntimeProgram: vi.fn(), stopRuntimeProgram: vi.fn(), removeRuntimeConfiguration: vi.fn(), directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { codeRepositories: vi.fn(), runtimeEntry: vi.fn(), saveRuntimeEntry: vi.fn(), runtimeConfigurations: vi.fn(), deploymentConfigurations: vi.fn(), instances: vi.fn(), deleteDeploymentConfiguration: vi.fn(), saveRuntimeConfiguration: vi.fn(), startRuntimeProgram: vi.fn(), stopRuntimeProgram: vi.fn(), removeRuntimeConfiguration: vi.fn(), requestRunnerFiles: vi.fn(), runnerFileResult: vi.fn(), browseCodeRepository: vi.fn(), directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
 const configuration: DeploymentConfiguration = { deploymentId: 'a'.repeat(32), name: '新闻生产配置', pathStyle: 'config', codeId: '', configId: '123', queueName: 'news_list', siteHost: '', directoryTemplate: '{configId}/prod', entryPoint: 'main.py', nodes: [], revision: 'layout-v1',
   sourceNode: { flowId: 'flow-88', flowName: '财经新闻采集流程', stepId: 'step-7', nodeName: '网页列表抓取', configId: '123' } }
 const existing: RuntimeConfiguration = { runtimeId: 'runtime-1', deploymentId: configuration.deploymentId, name: configuration.name, runnerId: 'r-1', assignmentId: 'assignment-1', appliedRevision: 'layout-v1', layoutRevision: 'layout-v1', revision: 'runtime-v1', directoryTemplate: configuration.directoryTemplate, entryPoint: 'main.py',
   binding: { bindingType: 'deployment', ownerId: configuration.deploymentId, runnerId: 'r-1', directoryTemplate: configuration.directoryTemplate, entryPoint: 'main.py', createdAt: '', layoutRevision: 'layout-v1' },
   assignment: { assignmentId: 'assignment-1', runnerId: 'r-1', queue: 'news_list', codeId: 'code1', configId: '123', concurrency: 2, environment: 'production', enabled: true, processorType: 'newslink_nourl', releaseDigest: 'sha256:p' } }
 beforeEach(() => {
+  vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 0 } as never)
+  vi.mocked(runnerManagementApi.codeRepositories).mockResolvedValue([{ repoId: 'repo1', name: '默认仓库', remoteUrl: 'http://192.168.1.105/root/aigencode.git', branch: 'main', status: 'ACTIVE' }] as never)
+  vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ name: '智能采集' } as never)
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([structuredClone(existing)])
   vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([structuredClone(configuration)])
   const runner = { runnerId: 'r-1', name: '一号处理机', ipAddress: '10.0.0.8', installDirectory: 'E:\\runner-one', platform: 'win32', capabilities: [], status: 'online' as const, lastHeartbeat: null, desiredDigest: null, actualDigest: null, assignmentCount: 1 }
@@ -23,9 +27,47 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.removeRuntimeConfiguration).mockResolvedValue({ ok: true })
   vi.mocked(runnerManagementApi.directoryDeliveryPreview).mockResolvedValue({ revision: 'layout-v1', targetPath: '123/prod', baselineDigest: null, items: [{ path: 'main.py', kind: 'file', size: 32, status: 'added' }] })
 })
+it('列表仅展示源目录，省略 Git 仓库地址、分支和固定版本', async () => {
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, nodes: [
+    { id: 'root', parentId: '', name: 'sites', kind: 'folder' },
+    { id: 'main', parentId: '', name: 'newslink.py', kind: 'file', repoId: 'repo1', sourcePath: 'links/1401218/newslink.py', gitCommit: 'a'.repeat(40) },
+    { id: 'site', parentId: 'root', name: 'site.py', kind: 'file', repoId: 'repo1', sourcePath: 'links/1401218/sites/site.py', gitCommit: 'a'.repeat(40) },
+  ] }])
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.find('[data-testid="binding-git-address"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="binding-git-repository"]').exists()).toBe(false)
+  const panel = wrapper.get('[data-testid="binding-git-sources"]')
+  expect(panel.text()).not.toContain('分支：main'); expect(panel.text()).not.toContain('固定版本')
+  expect(wrapper.findAll('[data-testid="binding-git-directory"]')).toHaveLength(1)
+  const link = wrapper.get('[data-testid="binding-git-directory"]')
+  expect(link.text()).toBe('Git 目录：links/1401218')
+  const url = new URL(link.attributes('href')!, 'http://localhost')
+  expect(Object.fromEntries(url.searchParams)).toMatchObject({ tab: 'code-repos', repoId: 'repo1', folderPath: 'links/1401218' })
+  expect(url.searchParams.get('returnTo')).toContain('/settings?')
+  const back = new URL(url.searchParams.get('returnTo')!, 'http://localhost')
+  expect(Object.fromEntries(back.searchParams)).toMatchObject({ tab: 'runners', runnerId: 'r-1' })
+  await wrapper.get('[aria-label="搜索机器配置"]').setValue('aigencode.git')
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
+  wrapper.unmount()
+})
+it('Git 地址读取失败时提示错误并保留实例配置', async () => {
+  vi.mocked(runnerManagementApi.codeRepositories).mockRejectedValue(new Error('仓库接口不可用'))
+  const { wrapper } = await setup()
+  expect(wrapper.text()).toContain('Git 仓库信息加载失败：仓库接口不可用')
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
+  wrapper.unmount()
+})
+it('自动部署仅保存流程ID时补查真实名称，并明确展示流程ID', async () => {
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, sourceNode: { ...configuration.sourceNode!, flowId: '21000040', flowName: '21000040' } }])
+  const { wrapper } = await setup()
+  expect(flowCenterApi.detail).toHaveBeenCalledWith('21000040')
+  expect(wrapper.get('[data-testid="binding-flow"]').text()).toBe('智能采集')
+  expect(wrapper.get('[data-testid="binding-flow-id"]').text()).toBe('流程 ID：21000040')
+  wrapper.unmount()
+})
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); document.body.innerHTML = '' })
 async function setup(admin = true, runnerId?: string) {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }, { path: '/canvas', component: { template: '<div />' } }] })
   await router.push({ path: '/settings', query: { tab: 'assignments', mode: 'versions' } }); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = [admin ? 'admin' : 'viewer']
   const wrapper = mount(RunnerBindingTab, { props: { runnerId }, global: { plugins: [pinia, router, ElementPlus] }, attachTo: document.body }); await flushPromises()
@@ -56,6 +98,18 @@ it('没有配置的实例不回退显示其他机器的配置', async () => {
   expect(wrapper.find('[data-testid="binding-create"]').exists()).toBe(false)
   wrapper.unmount()
 })
+it('查看机器全部配置时清除旧配置ID筛选，保留当前机器范围', async () => {
+  const another = { ...configuration, deploymentId: 'b'.repeat(32), configId: '456', name: '另一份部署配置', sourceNode: { ...configuration.sourceNode!, configId: '456' } }
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([configuration, another])
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([existing, { ...existing, runtimeId: 'runtime-2', deploymentId: another.deploymentId, name: another.name }, { ...existing, runtimeId: 'other-machine', runnerId: 'r-2' }])
+  const { wrapper, router } = await setup(true, 'r-1')
+  await router.replace({ path: '/settings', query: { tab: 'runners', runnerId: 'r-1', configId: '123' } }); await flushPromises()
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
+  wrapper.vm.resetFilters(); await flushPromises()
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(2)
+  expect(wrapper.text()).toContain('另一份部署配置')
+  wrapper.unmount()
+})
 it('直接启动使用机器已采用的目录和入口，显示实例数量及 PID', async () => {
   const direct = { ...existing, directoryTemplate: 'adopted/program', entryPoint: 'app/run.py',
     assignment: { ...existing.assignment!, processorType: 'deployment-entry', queue: '@deployment:abc' } }
@@ -69,11 +123,9 @@ it('直接启动使用机器已采用的目录和入口，显示实例数量及 
   vi.mocked(runnerManagementApi.instances).mockResolvedValue(machines)
   const { wrapper } = await setup()
   expect(wrapper.get('[data-testid="binding-directory"]').text()).toBe('adopted/program')
-  expect(wrapper.get('[data-testid="binding-row"]').text()).toContain('启动文件：app/run.py')
+  expect(wrapper.get('[data-testid="binding-row"]').text()).toContain('运行入口：app/run.py')
   expect(wrapper.get('[data-testid="binding-program-status"]').text()).toContain('实例：2/2 · PID：1230、1231')
   expect(wrapper.get('[data-testid="binding-row"]').text()).not.toContain('@deployment:abc')
-  expect(wrapper.get('[data-testid="binding-node-mq"]').text()).toBe('news_list')
-  expect(wrapper.get('[data-testid="binding-node-mq"]').attributes('title')).not.toContain('运行环境')
   wrapper.unmount()
 })
 
@@ -82,13 +134,11 @@ it('机器配置显示所属流程、节点和 MQ，可按来源信息及运行�
   expect(wrapper.find('[data-testid="binding-mode"]').exists()).toBe(false)
   expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
   expect(wrapper.text()).toContain(configuration.name)
-  expect(wrapper.text()).toContain('news_list')
-  expect(wrapper.findAll('th').map(item => item.text())).toEqual(['运行机器', '流程 / 配置节点', '节点 MQ', '运行目录', '程序与下发', '操作'])
+  expect(wrapper.findAll('th').map(item => item.text())).toEqual(['运行机器', '流程 / 配置节点', '运行目录', '程序与下发', '操作'])
   expect(wrapper.get('[data-testid="binding-flow"]').text()).toBe('财经新闻采集流程')
   expect(wrapper.get('[data-testid="binding-node"]').text()).toBe('节点：网页列表抓取')
-  expect(wrapper.get('[data-testid="binding-node-mq"]').text()).toBe('news_list')
   expect(wrapper.get('[data-testid="binding-directory"]').text()).toBe('123/prod')
-  expect(wrapper.get('[data-testid="binding-full-path"]').text()).toBe('目标：E:\\runner-one\\123\\prod')
+  expect(wrapper.find('[data-testid="binding-full-path"]').exists()).toBe(false)
   expect(wrapper.text()).toContain('在线')
   expect(wrapper.text()).toContain('已采用')
   for (const keyword of ['财经新闻采集流程', 'flow-88', '网页列表抓取', 'step-7', 'news_list', '123', 'E:\\runner-one\\123']) {
@@ -102,8 +152,6 @@ it('机器配置显示所属流程、节点和 MQ，可按来源信息及运行�
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[data-testid="binding-flow-node"]').text()).toContain('历史配置 · 未记录来源节点')
   expect(wrapper.find('[data-testid="binding-flow"]').exists()).toBe(false)
-  expect(wrapper.get('[data-testid="binding-node-mq"]').text()).toBe('未绑定节点')
-  expect(wrapper.get('[data-testid="binding-runtime-mq"]').text()).toBe('运行 MQ：news_list')
   wrapper.unmount()
 })
 it('启动指令提交后等待心跳，只有对应子进程上报才显示运行中', async () => {
@@ -175,8 +223,8 @@ it('启停失败保留原状态，离线和旧 Runner 不推测进程状态，�
   expect(wrapper.get('[data-testid="binding-program-status"]').text()).toContain('运行状态未知')
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, assignment: null, assignmentId: '' }])
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
-  expect(wrapper.get('[data-testid="binding-program-status"]').text()).toBe('仅下发目录')
-  expect(wrapper.find('[data-testid="binding-start"]').exists()).toBe(false)
+  expect(wrapper.get('[data-testid="binding-program-status"]').text()).toContain('待启动')
+  expect(wrapper.find('[data-testid="binding-start"]').exists()).toBe(true)
   expect(wrapper.find('[data-testid="binding-stop"]').exists()).toBe(false)
   wrapper.unmount()
 })
@@ -240,8 +288,6 @@ it('公共配置不选择队列也能绑定，失败保留当前表单', async (
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, assignment: null, assignmentId: '', entryPoint: '' }])
   const { wrapper } = await setup()
   expect(wrapper.get('[data-testid="binding-flow-node"]').text()).toContain('公共目录 · 未绑定流程节点')
-  expect(wrapper.get('[data-testid="binding-node-mq"]').text()).toBe('未绑定节点')
-  expect(wrapper.find('[data-testid="binding-runtime-mq"]').exists()).toBe(false)
   await wrapper.get('[data-testid="binding-create"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[data-testid="binding-execution-summary"]').text()).not.toContain('节点 MQ')
   const select = wrapper.findAllComponents({ name: 'ElSelect' }).find(item => item.attributes('data-testid') === 'binding-runner')!
@@ -274,8 +320,9 @@ it('目录跳转按部署 ID 定位，下发仍可选择范围', async () => {
   const { wrapper, router } = await setup()
   await wrapper.get('[data-testid="binding-logs"]').trigger('click'); await flushPromises()
   expect(router.currentRoute.value.query).toEqual({ tab: 'runtime-logs', runtimeId: existing.runtimeId })
-  await wrapper.findAll('button').find(item => item.text() === '部署配置')!.trigger('click'); await flushPromises()
-  expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', deploymentId: configuration.deploymentId })
+  expect(wrapper.findAll('button').some(item => item.text() === '目录详情')).toBe(false)
+  await wrapper.get('[data-testid="binding-edit-directory"]').trigger('click'); await flushPromises()
+  expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', deploymentId: configuration.deploymentId, runnerId: 'r-1', runtimeId: existing.runtimeId, returnTab: 'runners' })
   await wrapper.get('[data-testid="binding-deliver"]').trigger('click'); await flushPromises()
   expect(runnerManagementApi.directoryDeliveryPreview).toHaveBeenCalledWith({ bindingType: 'deployment', ownerId: configuration.deploymentId, runnerId: 'r-1' })
   expect(document.body.textContent).toContain('选择下发范围')
@@ -329,16 +376,12 @@ it('目录取部署配置变量，区分当前目标与上次落盘位置，不�
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, appliedRevision: 'old', assignment: { ...existing.assignment!, configId: '999', queue: 'another_queue' }, binding: { ...existing.binding!, delivery: delivered } }])
   const { wrapper } = await setup()
   expect(wrapper.get('[data-testid="binding-directory"]').text()).toBe('123/news_list/example.com')
-  expect(wrapper.get('[data-testid="binding-full-path"]').text()).toBe('目标：E:\\runner-one\\123\\news_list\\example.com')
-  expect(wrapper.get('[data-testid="binding-installed-path"]').text()).toContain('E:\\runner-one\\old\\path')
-  expect(wrapper.get('[data-testid="binding-node-mq"]').text()).toBe('news_list')
-  expect(wrapper.get('[data-testid="binding-runtime-mq"]').text()).toBe('运行 MQ：another_queue')
+  expect(wrapper.find('[data-testid="binding-full-path"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="binding-installed-path"]').exists()).toBe(false)
   expect(wrapper.text()).toContain('配置有更新')
   expect(wrapper.text()).toContain('目录有更新，待重新下发')
   vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, queueName: '', directoryTemplate: 'shared/python' }])
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
-  expect(wrapper.get('[data-testid="binding-node-mq"]').text()).toBe('未设置')
-  expect(wrapper.get('[data-testid="binding-runtime-mq"]').text()).toBe('运行 MQ：another_queue')
   wrapper.unmount()
 })
 
@@ -406,7 +449,7 @@ it('自定义目录支持 Linux 路径，缺失变量不展示伪造的实际目
   vi.mocked(runnerManagementApi.instances).mockResolvedValue(machines)
   vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, directoryTemplate: 'shared/python', pathStyle: 'custom' }])
   const { wrapper } = await setup()
-  expect(wrapper.get('[data-testid="binding-full-path"]').text()).toBe('目标：/opt/runner/shared/python')
+  expect(wrapper.find('[data-testid="binding-full-path"]').exists()).toBe(false)
   vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, directoryTemplate: '{website}/test', siteHost: '' }])
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[data-testid="binding-directory"]').text()).toBe('待完善目录模板')
@@ -435,27 +478,122 @@ it('自动刷新机器心跳状态，编辑期间暂停刷新，分页后查询�
   wrapper.unmount()
 })
 
-it('单个启动文件自动保存入口后展示启动按钮，不自动启动进程', async () => {
+it('设置入口进入统一编辑目录，保留当前机器和配置，不自动生成入口或启动程序', async () => {
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, assignment: null, assignmentId: '', entryPoint: '' }])
-  vi.mocked(runnerManagementApi.runtimeEntry).mockResolvedValue({ files: ['run.py'], entryPoint: 'run.py', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
-  vi.mocked(runnerManagementApi.saveRuntimeEntry).mockResolvedValue({ ...existing, entryPoint: 'run.py', assignment: { ...existing.assignment!, enabled: false } })
-  const { wrapper } = await setup()
+  const { wrapper, router } = await setup()
   await wrapper.get('[data-testid="binding-entry"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.saveRuntimeEntry).toHaveBeenCalledWith('runtime-1', { entryPoint: 'run.py', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
-  expect(wrapper.find('[data-testid="binding-start"]').exists()).toBe(true)
+  expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', deploymentId: configuration.deploymentId, runnerId: 'r-1', runtimeId: existing.runtimeId, returnTab: 'runners' })
+  expect(wrapper.findComponent({ name: 'DeploymentDirectoryDrawer' }).exists()).toBe(false)
+  expect(runnerManagementApi.runtimeEntry).not.toHaveBeenCalled()
+  expect(runnerManagementApi.saveRuntimeEntry).not.toHaveBeenCalled()
+  expect(wrapper.findAllComponents({ name: 'ElSelect' }).some(item => item.props('ariaLabel') === '选择启动文件')).toBe(false)
   expect(runnerManagementApi.startRuntimeProgram).not.toHaveBeenCalled()
   wrapper.unmount()
 })
-it('多个文件在当前列表选择入口后保存', async () => {
-  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, assignment: null, assignmentId: '', entryPoint: '' }])
-  vi.mocked(runnerManagementApi.runtimeEntry).mockResolvedValue({ files: ['one.py', 'two.py'], entryPoint: '', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
-  vi.mocked(runnerManagementApi.saveRuntimeEntry).mockResolvedValue({ ...existing, entryPoint: 'two.py', assignment: { ...existing.assignment!, enabled: false } })
-  const { wrapper } = await setup()
-  await wrapper.get('[data-testid="binding-entry"]').trigger('click'); await flushPromises()
-  expect(runnerManagementApi.saveRuntimeEntry).not.toHaveBeenCalled()
-  const picker = wrapper.findAllComponents({ name: 'ElSelect' }).find(item => item.props('ariaLabel') === '选择启动文件')!
-  picker.vm.$emit('update:modelValue', 'two.py'); await flushPromises()
-  await wrapper.findAll('button').find(item => item.text() === '保存入口')!.trigger('click'); await flushPromises()
-  expect(runnerManagementApi.saveRuntimeEntry).toHaveBeenCalledWith('runtime-1', { entryPoint: 'two.py', revision: 'runtime-v1', layoutRevision: 'layout-v1' })
+
+it('未绑定的旧方案合并到部署配置，同一流程节点的历史重复定义不再次列出', async () => {
+  const pending = { ...configuration, deploymentId: 'b'.repeat(32), configId: '456', name: '待部署的公共方案', sourceNode: undefined }
+  const duplicate = { ...configuration, deploymentId: 'c'.repeat(32), name: '旧节点部署定义' }
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([configuration, pending, duplicate])
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(2)
+  expect(wrapper.text()).toContain('待部署的公共方案')
+  expect(wrapper.text()).not.toContain('旧节点部署定义')
+  expect(wrapper.text()).toContain('未绑定实例')
+  await wrapper.get('[data-testid="binding-unbound"]').trigger('click'); await flushPromises()
+  await wrapper.get('[data-testid="binding-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveRuntimeConfiguration).toHaveBeenCalledWith(expect.objectContaining({ deploymentId: pending.deploymentId, runnerId: 'r-1' }))
+  expect(runnerManagementApi.saveRuntimeConfiguration).toHaveBeenCalledWith(expect.not.objectContaining({ runtimeId: expect.any(String) }))
+  wrapper.unmount()
+})
+it('手工新建直达新建表单而非旧列表，列表不执行代码核验也不误报必须重新下发', async () => {
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, codeVerificationPending: true,
+    assignment: { ...existing.assignment!, processorType: 'deployment-entry' },
+    binding: { ...existing.binding!, delivery: { status: 'success', layoutRevision: 'older' } as DirectoryDelivery } }])
+  const { wrapper, router } = await setup(true, 'r-1')
+  expect(wrapper.text()).toContain('配置版本有变化，启动时将校验代码与入口')
+  expect(wrapper.text()).not.toContain('版本不一致')
+  await wrapper.get('[data-testid="binding-manual-deployment"]').trigger('click'); await flushPromises()
+  expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', create: '1', returnTab: 'runners', runnerId: 'r-1' })
+  wrapper.unmount()
+})
+
+it('合并的历史方案保留全部关联流程，并在确认后按修订号删除未绑定配置', async () => {
+  const pending = { ...configuration, deploymentId: 'b'.repeat(32), configId: '456', name: '旧公共方案', sourceNode: undefined,
+    relatedSourceNodes: [{ flowId: 'f1', flowName: '季度报告流程', stepId: 's1', nodeName: '报告节点', configId: '456' }, { flowId: 'f2', flowName: '季度报告草稿', stepId: 's2', nodeName: '草稿节点', configId: '456' }] }
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([configuration, pending])
+  vi.mocked(runnerManagementApi.deleteDeploymentConfiguration).mockResolvedValue({ ok: true })
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.text()).toContain('季度报告流程')
+  expect(wrapper.get('[data-testid="binding-related-node"]').text()).toContain('季度报告草稿')
+  const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm' as never)
+  await wrapper.get('[data-testid="binding-delete-configuration"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.deleteDeploymentConfiguration).not.toHaveBeenCalled()
+  await wrapper.get('[data-testid="binding-delete-configuration"]').trigger('click'); await flushPromises()
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(runnerManagementApi.deleteDeploymentConfiguration).toHaveBeenCalledWith(pending.deploymentId, pending.revision)
+  expect(wrapper.text()).not.toContain('旧公共方案')
+  wrapper.unmount()
+})
+
+it('只显示创建部署配置时的源，直接跳转并带上原始流程节点，不展示关联源列表', async () => {
+  const sourceContext = { sourceId: '430024901', flowId: '21000040', stepId: '41895', configId: '123', deploymentJobId: 'original-job' }
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, sourceContext }])
+  vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ list: [{ sourceId: '430024901', name: '电科思仪新闻源' }, { sourceId: 'other-source', name: '共享配置的其他源' }], total: 2 } as never)
+  const { wrapper, router } = await setup(true, 'r-1')
+  expect(sourceApi.sourcePaged).toHaveBeenCalledWith({ sourceIds: ['430024901'], size: 100 })
+  const link = wrapper.get('[data-testid="binding-original-source"]')
+  expect(link.text()).toBe('电科思仪新闻源')
+  const target = new URL(link.attributes('href')!, 'http://localhost')
+  expect(Object.fromEntries(target.searchParams)).toEqual({ sourceId: '430024901', view: 'flow', flowId: '21000040', nodeId: '41895' })
+  expect(wrapper.text()).not.toContain('共享配置的其他源')
+  expect(wrapper.find('[data-testid="deployment-view-sources"]').exists()).toBe(false)
+  await link.trigger('click'); await flushPromises()
+  expect(router.currentRoute.value.query.sourceId).toBe('430024901')
+  wrapper.unmount()
+})
+it('名称查询失败仍以保存的源 ID 直接跳转；未记录来源的旧配置不会猜测源', async () => {
+  const sourceContext = { sourceId: '430024901', flowId: '21000040', stepId: '41895', configId: '123', deploymentJobId: 'original-job' }
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, sourceContext }])
+  vi.mocked(sourceApi.sourcePaged).mockRejectedValue(new Error('unavailable'))
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.get('[data-testid="binding-original-source"]').text()).toBe('源 430024901')
+  wrapper.unmount()
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([existing])
+  vi.mocked(sourceApi.sourcePaged).mockClear()
+  const previous = await setup(true, 'r-1')
+  expect(previous.wrapper.find('[data-testid="binding-original-source"]').exists()).toBe(false)
+  expect(sourceApi.sourcePaged).not.toHaveBeenCalled()
+  previous.wrapper.unmount()
+})
+
+it('列表只显示相对目录，点击后打开该行服务器的实际目录和完整路径', async () => {
+  const delivered: DirectoryDelivery = { deliveryId: 'd1', bindingType: 'deployment', ownerId: configuration.deploymentId,
+    runnerId: 'r-2', status: 'success', layoutRevision: 'older', artifactDigest: '', targetPath: 'old/landing',
+    installedPath: 'E:\\runner-two\\old\\landing', requestedAt: '', startedAt: null, finishedAt: '', error: '' }
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([{ ...existing, runnerId: 'r-2', binding: { ...existing.binding!, runnerId: 'r-2', delivery: delivered } }])
+  vi.mocked(runnerManagementApi.requestRunnerFiles).mockImplementation(async (_id, body) => ({ requestId: body.path }))
+  vi.mocked(runnerManagementApi.runnerFileResult).mockImplementation(async path => ({ status: 'success', result: { path, items: [] } }))
+  const { wrapper } = await setup(true, 'r-2')
+  for (const [selector, directory, relative] of [
+    ['binding-directory', 'E:\\runner-two\\123\\prod', '123/prod'],
+  ]) {
+    await wrapper.get(`[data-testid="${selector}"]`).trigger('click'); await flushPromises()
+    const browser = wrapper.getComponent({ name: 'RunnerFilesDrawer' })
+    expect(browser.props('runner').runnerId).toBe('r-2')
+    expect(browser.props('directory')).toBe(directory)
+    expect(document.body.textContent).toContain(directory)
+    expect(runnerManagementApi.requestRunnerFiles).toHaveBeenLastCalledWith('r-2', { action: 'list', path: relative })
+    browser.vm.$emit('close'); await flushPromises()
+  }
+  expect(runnerManagementApi.browseCodeRepository).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('运行目录无法解析时禁用浏览，不向 Runner 请求占位目录', async () => {
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, directoryTemplate: '{missing}/program' }])
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.get('[data-testid="binding-directory"]').attributes('disabled')).toBeDefined()
+  expect(wrapper.find('[data-testid="binding-browse-target"]').exists()).toBe(false)
+  expect(runnerManagementApi.requestRunnerFiles).not.toHaveBeenCalled()
   wrapper.unmount()
 })

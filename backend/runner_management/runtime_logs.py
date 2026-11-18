@@ -1,6 +1,7 @@
 """Durable asynchronous uploads; logs never travel in heartbeat requests."""
 from __future__ import annotations
 from datetime import datetime, timezone
+import codecs
 import json
 import os
 from pathlib import Path
@@ -10,9 +11,23 @@ import uuid
 
 from .runtime_history import redact
 
+CONSOLE_ENCODINGS = ('utf-8', 'gb18030')
+
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='microseconds')
+
+
+def decode_console_output(data, *, final=True):
+    """Prefer UTF-8, accept legacy GBK/GB18030, and retain split characters."""
+    for encoding in CONSOLE_ENCODINGS:
+        decoder = codecs.getincrementaldecoder(encoding)(errors='strict')
+        try:
+            text = decoder.decode(data, final=final)
+            return text, decoder.getstate()[0]
+        except UnicodeDecodeError:
+            continue
+    return data.decode('utf-8', errors='replace'), b''
 
 
 class LogQueue:
@@ -227,11 +242,15 @@ class ConsoleCapture:
         def read():
             try:
                 # Bounded fragments handle programs that emit no newline.
+                pending = b''
                 while True:
                     data = pipe.readline(12000)
-                    if not data:
+                    if not data and not pending:
                         break
-                    text = data.decode('utf-8', errors='replace').rstrip('\r\n')
+                    text, pending = decode_console_output(pending + data, final=not data or data.endswith(b'\n'))
+                    if not text:
+                        continue
+                    text = text.rstrip('\r\n')
                     safe = redact(text)
                     length = len(safe.encode('utf-8')) + 1
                     if self.size + length > 10 * 1024 * 1024:

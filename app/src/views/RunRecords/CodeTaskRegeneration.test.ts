@@ -16,8 +16,8 @@ beforeEach(() => {
   vi.spyOn(api, 'regenerateCodeTask').mockResolvedValue({ job: { ...job, taskId: 'child', status: 'queued' } })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks() })
-async function setup() {
-  const w = mount(CodeTaskRegeneration, { props: { job }, global: { plugins: [ElementPlus], stubs: {
+async function setup(currentJob = job) {
+  const w = mount(CodeTaskRegeneration, { props: { job: currentJob }, global: { plugins: [ElementPlus], stubs: {
     ElDialog: { name: 'ElDialog', props: ['modelValue', 'title', 'width', 'top'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
     RouterLink: { props: ['to'], template: '<a><slot /></a>' },
   } } })
@@ -83,4 +83,24 @@ it('历史模型停用时不能提交，避免默默换成其他模型', async (
   expect(w.get('[data-testid="submit-regeneration"]').attributes('disabled')).toBeDefined()
   await w.get('form').trigger('submit'); await flushPromises()
   expect(api.regenerateCodeTask).not.toHaveBeenCalled()
+})
+it('从智能体池执行的任务默认选中上次实际执行的智能体', async () => {
+  vi.mocked(api.prepareCodeRegeneration).mockResolvedValue({ ...snapshot, generation: { ...snapshot.generation, interfaceId: 'all' } })
+  const w = await setup({ ...job, result: { ...job.result!, interfaceId: 'model' } })
+  await w.get('form').trigger('submit'); await flushPromises()
+  expect(api.regenerateCodeTask).toHaveBeenCalledWith(expect.objectContaining({ interfaceId: 'model' }))
+})
+it('左右布局中切换系统与用户提示词，AI 应用只改变当前类型', async () => {
+  const w = await setup()
+  const editor = () => w.getComponent({ name: 'PromptAiEditor' })
+  expect(editor().props()).toMatchObject({ embedded: true, promptType: 'user', prompt: '原用户提示词' })
+  await w.get('[data-testid="regeneration-system-tab"]').trigger('click'); await flushPromises()
+  expect(editor().props('promptType')).toBe('system')
+  editor().vm.$emit('apply', 'AI 修改系统提示词'); await flushPromises()
+  expect(input(w, '重新生成系统提示词').props('modelValue')).toBe('AI 修改系统提示词')
+  expect(input(w, '重新生成用户提示词').props('modelValue')).toBe('原用户提示词')
+  await w.get('[data-testid="regeneration-user-tab"]').trigger('click'); await flushPromises()
+  editor().vm.$emit('apply', 'AI 修改用户提示词'); await flushPromises()
+  await w.get('form').trigger('submit'); await flushPromises()
+  expect(api.regenerateCodeTask).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: 'AI 修改系统提示词', userPrompt: 'AI 修改用户提示词' }))
 })

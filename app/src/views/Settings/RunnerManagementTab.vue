@@ -45,6 +45,7 @@ const saving = ref(false)
 const packageOpen = ref(false), packageLoading = ref(false), packageDownloading = ref(false), packageError = ref('')
 const packageInfo = ref<RunnerPackageInfo | null>(null)
 const packageForm = reactive({ server: '', digest: '' })
+const packageWithoutCode = ref(false)
 const formError = ref('')
 const form = reactive({ runnerId: '', scriptDigest: '', concurrency: 1, environment: 'test' as 'production' | 'test' })
 let loaded = false
@@ -220,6 +221,7 @@ async function publishRunner() {
 
 async function openPackage() {
   packageOpen.value = true; packageLoading.value = true; packageError.value = ''; packageInfo.value = null
+  packageWithoutCode.value = false
   try {
     const info = await runnerManagementApi.runnerPackageInfo()
     packageInfo.value = info
@@ -231,7 +233,7 @@ async function downloadPackage() {
   if (packageDownloading.value || !packageForm.digest || !packageForm.server || !packageInfo.value?.ready) return
   packageDownloading.value = true; packageError.value = ''
   try {
-    const result = await runnerManagementApi.downloadRunnerPackage({ ...packageForm })
+    const result = await runnerManagementApi.downloadRunnerPackage({ ...packageForm, includeEnrollmentCode: !packageWithoutCode.value })
     const url = URL.createObjectURL(result.blob)
     try {
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = result.name; anchor.click()
@@ -467,8 +469,9 @@ function detailEntries() {
         <el-form label-position="top">
           <el-form-item label="管理服务地址"><el-input v-model="packageForm.server" :disabled="packageLoading || packageDownloading" aria-label="Runner 包管理服务地址" placeholder="http://目标机器能访问的地址:8092" /></el-form-item>
           <el-form-item label="Runner 版本"><el-select v-model="packageForm.digest" :disabled="packageLoading || packageDownloading" filterable style="width:100%" aria-label="Runner 包版本"><el-option v-for="row in packageInfo?.releases || []" :key="row.digest" :label="releaseLabel(row)" :value="row.digest" /></el-select></el-form-item>
+          <el-form-item label="接入方式"><el-checkbox v-model="packageWithoutCode" :disabled="packageLoading || packageDownloading" data-testid="runner-package-without-code">免接入码，直接启动</el-checkbox></el-form-item>
         </el-form>
-        <p v-if="packageInfo" class="rm-package-description">Python {{ packageInfo.pythonVersion }} · 同一包可复制到多个目录，分别启动为独立实例，无需修改端口。包内接入凭据有效期 {{ packageInfo.enrollmentMinutes }} 分钟，已登记实例重启不受影响。</p>
+        <p v-if="packageInfo" class="rm-package-description">Python {{ packageInfo.pythonVersion }} · 同一包可复制到多个目录，分别启动为独立实例，无需修改端口。<template v-if="packageWithoutCode">解压后双击启动，自动完成首次登记，无需输入接入码，不受临时接入码有效期限制。包内携带自动登记授权。</template><template v-else>包内接入凭据有效期 {{ packageInfo.enrollmentMinutes }} 分钟，已登记实例重启不受影响。</template></p>
         <p v-if="packageInfo && !packageInfo.releases.length" class="rm-form-error">暂无可下载版本，请先在 Runner 版本中生成版本。</p>
       </div>
       <template #footer><el-button :disabled="packageDownloading" @click="packageOpen = false">取消</el-button><el-button type="primary" :loading="packageDownloading" :disabled="packageLoading || !packageInfo?.ready || !packageForm.server || !packageForm.digest" @click="downloadPackage">下载 ZIP 包</el-button></template>

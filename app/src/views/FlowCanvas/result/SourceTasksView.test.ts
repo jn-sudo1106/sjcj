@@ -18,6 +18,9 @@ describe('源任务页', () => {
     flow.sourceCtx = { ...flow.sourceCtx!, sourceId: '430024910' }
     await wrapper.vm.$nextTick()
     expect(wrapper.findComponent({ name: 'CodeGenerationTasks' }).props('sourceScopeId')).toBe('430024910')
+    await wrapper.findAll('button')[2]!.trigger('click')
+    expect(wrapper.findComponent({ name: 'DeploymentTasks' }).props('sourceScopeId')).toBe('430024910')
+    expect(wrapper.findComponent({ name: 'CodeGenerationTasks' }).exists()).toBe(false)
     await wrapper.findAll('button')[0]!.trigger('click')
     expect(wrapper.findComponent({ name: 'TaskView' }).exists()).toBe(true)
     wrapper.unmount()

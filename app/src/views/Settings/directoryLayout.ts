@@ -64,6 +64,20 @@ export function targetPath(nodes: DirectoryMappingNode[], id: string): string {
   }
   return parts.join('/')
 }
+
+export function deploymentSourceHome(layout: DirectoryLayout): { repoId: string; folder: string } | null {
+  const mapped = layout.nodes.filter(node => node.repoId && node.sourcePath)
+  const node = mapped.find(item => {
+    const target = targetPath(layout.nodes, item.id)
+    return target === layout.entryPoint || item.sourceType === 'directory' && layout.entryPoint.startsWith(target + '/')
+  }) || mapped[0]
+  if (!node?.repoId || !node.sourcePath) return null
+  const target = targetPath(layout.nodes, node.id)
+  const folder = node.sourceType === 'directory' ? node.sourcePath
+    : target && node.sourcePath.endsWith('/' + target) ? node.sourcePath.slice(0, -target.length - 1)
+      : node.sourcePath.split('/').slice(0, -1).join('/')
+  return { repoId: node.repoId, folder }
+}
 export function descendants(nodes: DirectoryMappingNode[], id: string): Set<string> {
   const result = new Set([id])
   for (let changed = true; changed;) {

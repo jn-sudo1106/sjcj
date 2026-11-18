@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Refresh, Folder, Document } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { runnerManagementApi as api, type RunnerInstance, type RemoteCodeFile } from '@/api/runnerManagement'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
-const props = defineProps<{ runner: RunnerInstance; directory: string; selectFile?: boolean }>()
-const emit = defineEmits<{ close: []; selected: [path: string] }>()
+import { isProgramEntry } from '@/utils/programEntry'
+const props = defineProps<{ runner: RunnerInstance; directory: string; selectFile?: boolean; embedded?: boolean; workspace?: boolean; editable?: boolean; allowSetEntry?: boolean; entryPoint?: string; entrySaving?: boolean; entryFilter?: (path: string) => boolean }>()
+const emit = defineEmits<{ close: []; selected: [path: string]; setEntry: [path: string] }>()
+const mutating = ref(false), upload = ref<HTMLInputElement>()
+const canManage = computed(() => props.workspace && props.editable)
+const managementReady = computed(() => props.runner.status === 'online' && props.runner.capabilities?.includes('file-management'))
 const selectionScope = ref('')
 const path = ref(''), files = ref<RemoteCodeFile[]>([]), content = ref<string | null>(null), filePath = ref(''), loading = ref(false), error = ref(''), truncated = ref(false)
 const crumbs = computed(() => path.value.split('/').filter(Boolean))
@@ -13,37 +18,91 @@ const fullPath = computed(() => props.runner.installDirectory.replace(/[\\/]+$/,
 let sequence = 0, stopped = false, timer: ReturnType<typeof setTimeout> | undefined, releaseWait: (() => void) | undefined
 function cancelWait() { if (timer) clearTimeout(timer); releaseWait?.(); releaseWait = undefined }
 async function pause() { await new Promise<void>(resolve => { releaseWait = resolve; timer = setTimeout(resolve, 1000) }); releaseWait = undefined }
+type FileRequest = Parameters<typeof api.requestRunnerFiles>[1]
+async function perform(body: FileRequest, runnerId: string, seq: number) {
+  const job = await api.requestRunnerFiles(runnerId, body)
+  for (let attempt = 0; attempt < 45 && seq === sequence && !stopped; attempt++) {
+    const response = await api.runnerFileResult(job.requestId)
+    if (seq !== sequence || stopped) return
+    if (response.status === 'failed') throw new Error(response.error || 'Runner 文件操作失败')
+    if (response.status === 'success') {
+      if (!response.result) throw new Error('Runner 返回的数据不完整')
+      return response.result
+    }
+    await pause()
+  }
+  if (seq === sequence && !stopped) throw new Error('等待 Runner 返回文件超时，请确认实例在线后刷新')
+}
 async function request(action: 'list' | 'read', target: string) {
+  if (mutating.value) return
   cancelWait(); const seq = ++sequence
   loading.value = true; error.value = ''
   try {
-    const job = await api.requestRunnerFiles(props.runner.runnerId, { action, path: target })
-    for (let attempt = 0; attempt < 45 && seq === sequence && !stopped; attempt++) {
-      const response = await api.runnerFileResult(job.requestId)
-      if (seq !== sequence || stopped) return
-      if (response.status === 'failed') throw new Error(response.error || '读取 Runner 目录失败')
-      if (response.status === 'success') {
-        if (!response.result) throw new Error('Runner 返回的数据不完整')
-        if (action === 'list') { path.value = response.result.path; files.value = response.result.items || []; truncated.value = !!response.result.truncated; content.value = null }
-        else { filePath.value = response.result.path; content.value = response.result.content ?? '' }
-        return
-      }
-      await pause()
-    }
-    if (seq === sequence && !stopped) throw new Error('等待 Runner 返回文件超时，请确认实例在线后刷新')
+    const response = await perform({ action, path: target }, props.runner.runnerId, seq)
+    if (!response || seq !== sequence || stopped) return
+    if (action === 'list') { path.value = response.path; files.value = response.items || []; truncated.value = !!response.truncated; content.value = null }
+    else { filePath.value = response.path; content.value = response.content ?? '' }
   } catch (e) { if (seq === sequence && !stopped) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (seq === sequence) loading.value = false }
 }
+async function mutation(makeBody: () => Promise<FileRequest | undefined>) {
+  if (!canManage.value || !managementReady.value || loading.value || mutating.value) return
+  cancelWait(); const seq = ++sequence, runnerId = props.runner.runnerId, current = path.value
+  mutating.value = true; error.value = ''
+  try {
+    const body = await makeBody()
+    if (!body || seq !== sequence || stopped) return
+    const response = await perform(body, runnerId, seq)
+    if (!response || seq !== sequence || stopped) return
+    ElMessage.success(body.action === 'upload' ? '上传完成' : body.action === 'mkdir' ? '文件夹已创建' : '已删除')
+    mutating.value = false
+    await request('list', current)
+  } catch (e) {
+    if (seq === sequence && !stopped && e !== 'cancel' && e !== 'close') error.value = e instanceof Error ? e.message : String(e)
+  } finally { if (seq === sequence) mutating.value = false }
+}
+async function createFolder() {
+  await mutation(async () => {
+    const response = await ElMessageBox.prompt('请输入文件夹名称', '新建文件夹', { inputValidator: value => !!value?.trim() && !/[\\/:*?"<>|]/.test(value) && !['.', '..'].includes(value.trim()) || '请输入有效的文件夹名称' })
+    return { action: 'mkdir', path: [path.value, response.value.trim()].filter(Boolean).join('/') }
+  })
+}
+async function remove(file: RemoteCodeFile) {
+  await mutation(async () => {
+    await ElMessageBox.confirm(`确认删除${file.isDirectory ? '文件夹' : '文件'} ${file.path}？`, '删除', { type: 'warning' })
+    return { action: 'delete', path: file.path, expectedHash: file.sha256 || '', expectedSize: file.size, expectedModifiedAt: file.modifiedAt }
+  })
+}
+async function uploadFiles(event: Event) {
+  const input = event.target as HTMLInputElement, incoming = [...(input.files || [])]; input.value = ''
+  if (!incoming.length) return
+  await mutation(async () => {
+    if (incoming.length > 2000 || incoming.some(file => file.size > 5 * 1024 * 1024) || incoming.reduce((sum, file) => sum + file.size, 0) > 10 * 1024 * 1024) throw new Error('单文件最多 5 MB，单次最多 2000 个文件、合计 10 MB')
+    const entries = await Promise.all(incoming.map(async file => {
+      const bytes = new Uint8Array(await file.arrayBuffer()); let raw = ''
+      for (let index = 0; index < bytes.length; index += 8192) raw += String.fromCharCode(...bytes.subarray(index, index + 8192))
+      return { path: [path.value, file.name].filter(Boolean).join('/'), data: btoa(raw) }
+    }))
+    return { action: 'upload', path: path.value, files: entries }
+  })
+}
 function open(file: RemoteCodeFile) {
-  if (loading.value || file.accessError) return
+  if (loading.value || mutating.value || file.accessError) return
   if (props.selectFile && !file.isDirectory) {
     const prefix = selectionScope.value ? selectionScope.value + '/' : ''
-    if (!file.path.startsWith(prefix) || !file.path.endsWith('.py')) return
+    if (!file.path.startsWith(prefix) || !isProgramEntry(file.path)) return
     emit('selected', file.path.slice(prefix.length)); return
   }
   void request(file.isDirectory ? 'list' : 'read', file.path)
 }
-watch(() => [props.runner.runnerId, props.directory], () => {
+function entryRelative(target: string) {
+  const prefix = selectionScope.value ? selectionScope.value + '/' : ''
+  if (!target.startsWith(prefix)) return ''
+  const relative = target.slice(prefix.length)
+  return isProgramEntry(relative) && (!props.entryFilter || props.entryFilter(relative)) ? relative : ''
+}
+watch([() => props.runner.runnerId, () => props.runner.installDirectory, () => props.directory], () => {
+  mutating.value = false
   content.value = null; files.value = []; path.value = ''
   const root = props.runner.installDirectory.replaceAll('\\', '/').replace(/\/+$/, ''), directory = props.directory.replaceAll('\\', '/').replace(/\/+$/, '')
   const windows = /^[A-Za-z]:/.test(root), comparable = windows ? directory.toLowerCase() : directory, prefix = windows ? root.toLowerCase() : root
@@ -55,26 +114,37 @@ onBeforeUnmount(() => { stopped = true; sequence++; cancelWait() })
 </script>
 
 <template>
-  <el-drawer :model-value="true" :title="selectFile ? '选择入口文件' : '部署目录'" size="min(960px, 94vw)" @close="emit('close')">
-    <div class="runner-files">
-      <header><b>{{ runner.ipAddress }} · {{ runner.installDirectory }}</b><el-button :icon="Refresh" :loading="loading" aria-label="刷新部署目录" @click="request('list', path)" /></header>
-      <el-breadcrumb v-if="selectFile" separator="/"><el-breadcrumb-item><a @click="request('list', selectionScope)">部署目录</a></el-breadcrumb-item><el-breadcrumb-item v-for="(part, index) in pickerCrumbs" :key="index"><a @click="request('list', [selectionScope, ...pickerCrumbs.slice(0,index+1)].filter(Boolean).join('/'))">{{ part }}</a></el-breadcrumb-item></el-breadcrumb>
+  <component :is="embedded ? 'section' : 'el-drawer'" v-bind="embedded ? {} : { modelValue: true, title: selectFile ? '选择入口文件' : '部署目录', size: 'min(960px, 94vw)' }" @close="emit('close')">
+    <div class="runner-files" :class="{ 'is-workspace': workspace }">
+      <header v-if="!workspace"><b>{{ runner.ipAddress }} · {{ runner.installDirectory }}</b><el-button :icon="Refresh" :loading="loading" aria-label="刷新部署目录" @click="request('list', path)" /></header>
+      <div v-if="selectFile || embedded" class="runner-files-toolbar">
+        <el-breadcrumb separator="/"><el-breadcrumb-item><a :title="runner.installDirectory" @click="request('list', selectionScope)">{{ workspace ? '部署空间' : '部署目录' }}</a></el-breadcrumb-item><el-breadcrumb-item v-for="(part, index) in pickerCrumbs" :key="index"><a @click="request('list', [selectionScope, ...pickerCrumbs.slice(0,index+1)].filter(Boolean).join('/'))">{{ part }}</a></el-breadcrumb-item></el-breadcrumb>
+        <div v-if="workspace" class="runner-files-actions">
+          <template v-if="canManage"><el-button :disabled="loading || mutating || !managementReady" data-testid="deployment-create-folder" @click="createFolder">新建文件夹</el-button><el-button :disabled="loading || mutating || !managementReady" data-testid="deployment-upload" @click="upload?.click()">上传文件</el-button></template>
+          <el-button :loading="loading" :disabled="mutating" aria-label="刷新部署目录" @click="request('list', path)">刷新</el-button>
+        </div>
+      </div>
       <el-breadcrumb v-else separator="/"><el-breadcrumb-item><a @click="request('list', '')">实例目录</a></el-breadcrumb-item><el-breadcrumb-item v-for="(part, index) in crumbs" :key="index"><a @click="request('list', crumbs.slice(0,index+1).join('/'))">{{ part }}</a></el-breadcrumb-item></el-breadcrumb>
-      <code class="full-path">{{ fullPath }}</code>
+      <small v-if="canManage && !managementReady" class="muted">当前 Runner 尚未就绪或需要升级，文件管理就绪后可上传、新建和删除。</small>
+      <code v-if="!workspace" class="full-path">{{ fullPath }}</code>
       <el-alert v-if="error" :title="error" type="error" :closable="false" />
       <p v-if="loading" class="muted">等待 Runner 返回目录或文件内容…</p>
+      <p v-if="mutating" class="muted">正在执行文件操作，请稍候…</p>
       <el-alert v-if="truncated" title="当前目录文件较多，仅展示前 200 项或响应大小允许的范围" type="info" :closable="false" />
-      <template v-if="content !== null"><div class="preview-title"><b>{{ filePath }}</b><el-button link :disabled="loading" @click="content = null">返回文件列表</el-button></div><pre class="file-content">{{ content }}</pre></template>
-      <el-table v-else :data="files" row-key="path" empty-text="当前目录没有可浏览文件" @row-dblclick="open">
-        <el-table-column label="文件 / 目录" min-width="180"><template #default="{ row }"><el-button link type="primary" :disabled="loading || row.accessError || (selectFile && !row.isDirectory && !row.path.endsWith('.py'))" @click="open(row)"><el-icon><Folder v-if="row.isDirectory" /><Document v-else /></el-icon>{{ row.name }}</el-button><span v-if="row.accessError">无法读取</span></template></el-table-column>
-        <el-table-column label="大小" width="90"><template #default="{ row }">{{ row.isDirectory || row.size == null ? '—' : `${(row.size/1024).toFixed(1)} KB` }}</template></el-table-column>
-        <el-table-column label="修改时间" width="165"><template #default="{ row }">{{ formatRunnerDateTime(row.modifiedAt) }}</template></el-table-column>
-        <el-table-column prop="sha256" label="SHA-256" min-width="130" show-overflow-tooltip />
+      <template v-if="content !== null"><div class="preview-title"><b>{{ filePath }}</b><el-button v-if="allowSetEntry && entryRelative(filePath)" link type="primary" :disabled="entrySaving || entryPoint === entryRelative(filePath)" @click="emit('setEntry', entryRelative(filePath))">{{ entryPoint === entryRelative(filePath) ? '当前入口' : '设为入口' }}</el-button><el-button link :disabled="loading" @click="content = null">返回文件列表</el-button></div><pre class="file-content">{{ content }}</pre></template>
+      <el-table v-else-if="!loading || files.length" :data="files" row-key="path" :empty-text="error ? '目录读取失败' : '当前目录没有可浏览文件'" @row-dblclick="open">
+        <el-table-column label="文件 / 目录" :min-width="workspace ? 200 : 180"><template #default="{ row }"><el-button link type="primary" :disabled="loading || mutating || row.accessError || (selectFile && !row.isDirectory && !isProgramEntry(row.path))" @click="open(row)"><span class="runner-file-icon" aria-hidden="true">{{ row.isDirectory ? '📁' : '📄' }}</span>{{ row.name }}</el-button><span v-if="row.accessError" class="runner-file-error"> · 无法读取</span></template></el-table-column>
+        <el-table-column label="大小" :width="workspace ? 80 : 90"><template #default="{ row }">{{ row.isDirectory || row.size == null ? '—' : `${(row.size/1024).toFixed(1)} KB` }}</template></el-table-column>
+        <el-table-column v-if="allowSetEntry" label="入口程序" width="105"><template #default="{ row }"><el-button v-if="!row.isDirectory && !row.accessError && entryRelative(row.path)" link type="primary" :disabled="entrySaving || entryPoint === entryRelative(row.path)" data-testid="runner-set-entry" @click.stop="emit('setEntry', entryRelative(row.path))">{{ entryPoint === entryRelative(row.path) ? '当前入口' : '设为入口' }}</el-button></template></el-table-column>
+        <el-table-column v-if="!embedded || workspace" label="修改时间" :width="workspace ? 160 : 165"><template #default="{ row }">{{ workspace ? formatRunnerDateTime(row.modifiedAt, '—').replaceAll('-', '/') : formatRunnerDateTime(row.modifiedAt) }}</template></el-table-column>
+        <el-table-column v-if="!embedded || workspace" prop="sha256" label="SHA-256" :min-width="workspace ? 100 : 130" show-overflow-tooltip />
+        <el-table-column v-if="canManage" label="操作" width="70"><template #default="{ row }"><el-button link type="danger" :disabled="loading || mutating || !managementReady || row.accessError" data-testid="deployment-delete-file" @click.stop="remove(row)">删除</el-button></template></el-table-column>
       </el-table>
+      <input v-if="canManage" ref="upload" type="file" multiple hidden data-testid="deployment-upload-input" @change="uploadFiles" />
     </div>
-  </el-drawer>
+  </component>
 </template>
 
 <style scoped>
-.runner-files{display:flex;flex-direction:column;gap:12px;min-width:0}header,.preview-title{display:flex;align-items:center;justify-content:space-between;gap:12px}header b,.preview-title b,.full-path{overflow-wrap:anywhere;min-width:0}.full-path,.muted{font-size:12px;color:var(--el-text-color-secondary)}a{cursor:pointer;color:var(--el-color-primary)}.file-content{margin:0;padding:12px;background:var(--el-fill-color-light);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.el-button .el-icon{margin-right:5px}
+.runner-files{display:flex;flex-direction:column;gap:12px;min-width:0}header,.preview-title{display:flex;align-items:center;justify-content:space-between;gap:12px}header b,.preview-title b,.full-path{overflow-wrap:anywhere;min-width:0}.full-path,.muted{font-size:12px;color:var(--el-text-color-secondary)}a{cursor:pointer;color:var(--el-color-primary)}.file-content{margin:0;padding:12px;background:var(--el-fill-color-light);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.runner-file-icon{margin-right:5px}.runner-file-error{color:var(--el-color-danger)}.runner-files-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.runner-files-actions{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}.runner-files-actions .el-button+.el-button{margin-left:0}.is-workspace{gap:10px}
 </style>

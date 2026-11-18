@@ -2,24 +2,73 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, Plus, Refresh, Search } from '@element-plus/icons-vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
-import { runnerManagementApi, type DeploymentConfiguration, type DirectoryDelivery, type DirectoryRunnerBinding, type RunnerInstance, type RuntimeConfiguration, type RuntimeConfigurationInput, type RunnerRetryPolicy } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type DeploymentConfiguration, type DirectoryDelivery, type DirectoryRunnerBinding, type RunnerInstance, type RuntimeConfiguration, type RuntimeConfigurationInput, type RunnerRetryPolicy } from '@/api/runnerManagement'
+import { flowCenterApi, sourceApi } from '@/api'
 import DirectoryDeliveryDialog from './DirectoryDeliveryDialog.vue'
+import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
+import { targetPath } from './directoryLayout'
 
 const props = defineProps<{ runnerId?: string }>()
 const emit = defineEmits<{ busy: [value: boolean] }>()
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
+const deploymentReturnPath = computed(() => router.resolve({ path: '/settings', query: {
+  ...route.query, tab: 'runners', runnerId: props.runnerId || route.query.runnerId, view: undefined, returnTo: undefined,
+} }).fullPath)
 const canWrite = computed(() => auth.role === 'admin')
 const rows = ref<RuntimeConfiguration[]>([]), configurations = ref<DeploymentConfiguration[]>([]), runners = ref<RunnerInstance[]>([])
+const repositories = ref<CodeRepository[]>([]), repositoryError = ref('')
+const sourceNames = ref<Record<string, string>>({})
+function originalSourceLink(row: RuntimeConfiguration) {
+  const source = row.sourceContext!
+  return { path: '/canvas', query: { sourceId: source.sourceId, view: 'flow', flowId: source.flowId, nodeId: source.stepId } }
+}
+async function loadSourceNames(items: RuntimeConfiguration[], seq: number) {
+  const ids = [...new Set(items.map(row => row.sourceContext?.sourceId).filter((id): id is string => !!id && !sourceNames.value[id]))]
+  for (let index = 0; index < ids.length; index += 100) {
+    try {
+      const result = await sourceApi.sourcePaged({ sourceIds: ids.slice(index, index + 100), size: 100 })
+      if (seq !== request || !active) return
+      for (const source of result.list) sourceNames.value[source.sourceId] = source.name
+    } catch { return } // The saved source ID remains a working link if its name cannot be read.
+  }
+}
+const gitSources = computed(() => {
+  const repos = new Map(repositories.value.map(repo => [repo.repoId, repo]))
+  return new Map(configurations.value.map(layout => {
+    const sources = new Map<string, { repoId: string; name: string; address: string; branch: string; directories: Set<string>; commits: Set<string> }>()
+    for (const node of layout.nodes) {
+      if (!node.repoId || !node.sourcePath) continue
+      const repo = repos.get(node.repoId)
+      let source = sources.get(node.repoId)
+      if (!source) {
+        source = { repoId: node.repoId, name: repo?.name || node.repoId, address: repo?.remoteUrl || repo?.path || '仓库地址未取得', branch: repo?.branch || '', directories: new Set(), commits: new Set() }
+        sources.set(node.repoId, source)
+      }
+      const relative = targetPath(layout.nodes, node.id)
+      const base = node.sourceType === 'directory' ? node.sourcePath
+        : relative && node.sourcePath.endsWith('/' + relative) ? node.sourcePath.slice(0, -relative.length - 1)
+          : node.sourcePath.split('/').slice(0, -1).join('/')
+      source.directories.add(base)
+      if (node.gitCommit) source.commits.add(node.gitCommit)
+    }
+    return [layout.deploymentId, [...sources.values()].map(source => ({ ...source, directories: [...source.directories], commits: [...source.commits] }))]
+  }))
+})
 const keyword = ref(typeof route.query.configId === 'string' ? route.query.configId : '')
 const machineFilter = ref(''), deliveryFilter = ref(''), page = ref(1), pageSize = ref(20)
+function resetFilters() { keyword.value = ''; machineFilter.value = ''; deliveryFilter.value = ''; page.value = 1 }
+defineExpose({ resetFilters })
+watch(() => route.query.configId, value => {
+  if (route.path === '/settings' && route.query.tab === 'runners') keyword.value = typeof value === 'string' ? value : ''
+})
 const loading = ref(false), saving = ref(false), error = ref(''), formError = ref('')
 const editing = ref(false), editingRow = ref<RuntimeConfiguration | null>(null)
 const controlling = ref(''), programErrors = ref<Record<string, string>>({})
-const entryRow = ref<RuntimeConfiguration | null>(null), entryFiles = ref<string[]>([]), selectedEntry = ref(''), entryRevision = ref(''), entryLayoutRevision = ref('')
+const browsing = ref<{ runner: RunnerInstance; directory: string } | null>(null)
 const defaultRetryPolicy = (): RunnerRetryPolicy => ({ enabled: true, maxAttempts: 5, windowSeconds: 300, delaysSeconds: [5, 15, 30, 60] })
 const form = reactive<Omit<RuntimeConfigurationInput, 'environment' | 'retryPolicy'> & { retryPolicy: RunnerRetryPolicy }>({ deploymentId: '', layoutRevision: '', runnerId: '', concurrency: 1, retryPolicy: defaultRetryPolicy() })
 const retryWindowMinutes = ref(5), retryDelays = ref('5, 15, 30, 60')
@@ -32,7 +81,21 @@ const executionQueue = computed(() => {
   return queue.startsWith('@deployment:') ? '' : queue
 })
 const hasExecution = computed(() => !!existingTask.value || !!selectedConfiguration.value?.entryPoint)
-const scopedRows = computed(() => rows.value.filter(item => !props.runnerId || item.runnerId === props.runnerId))
+function unbound(row: RuntimeConfiguration) { return row.runtimeId.startsWith('unbound-') }
+const scopedRows = computed(() => {
+  const bound = rows.value.filter(item => !props.runnerId || item.runnerId === props.runnerId)
+  const pending = configurations.value.filter(layout => !rows.value.some(row => {
+    if (row.deploymentId === layout.deploymentId) return true
+    const other = configurationMap.value.get(row.deploymentId)
+    // A legacy definition for the same saved node is already represented by
+    // its generated deployment. Keep its data; avoid a duplicate list entry.
+    return !!layout.configId && other?.configId === layout.configId
+      && !!layout.sourceNode && other.sourceNode?.flowId === layout.sourceNode.flowId && other.sourceNode?.stepId === layout.sourceNode.stepId
+  })).map(layout => ({ runtimeId: 'unbound-' + layout.deploymentId, deploymentId: layout.deploymentId,
+    name: layout.name, runnerId: props.runnerId || '', assignmentId: '', appliedRevision: '', layoutRevision: layout.revision,
+    revision: '', directoryTemplate: layout.directoryTemplate, entryPoint: layout.entryPoint, binding: null, assignment: null } as RuntimeConfiguration))
+  return [...bound, ...pending]
+})
 const filteredRows = computed(() => {
   const search = keyword.value.trim().toLowerCase()
   return scopedRows.value.filter(item => {
@@ -40,16 +103,17 @@ const filteredRows = computed(() => {
     return (!machineFilter.value || machineState(item.runnerId) === machineFilter.value) &&
       (!deliveryFilter.value || (item.binding?.delivery?.status || 'none') === deliveryFilter.value) &&
       [item.name, item.deploymentId, item.directoryTemplate, configurationId(item), configuration?.sourceNode?.nodeName || '',
-        configuration?.sourceNode?.flowName || '', configuration?.sourceNode?.flowId || '', configuration?.sourceNode?.stepId || '',
-        runtimeQueue(item), nodeQueue(item), runnerLabel(item.runnerId), directoryPath(item), fullPath(item.runnerId, directoryPath(item))]
+        sourceNode(item)?.flowName || '', configuration?.sourceNode?.flowId || '', configuration?.sourceNode?.stepId || '',
+        ...sourceNodes(item).flatMap(node => [node.flowName, node.flowId, node.nodeName, node.stepId]), runtimeQueue(item), nodeQueue(item), runnerLabel(item.runnerId), directoryPath(item), fullPath(item.runnerId, directoryPath(item)),
+        ...(gitSources.value.get(item.deploymentId) || []).flatMap(source => [source.name, source.address, source.branch, ...source.directories])]
         .some(value => value.toLowerCase().includes(search))
   })
 })
 const visibleRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
-const boundMachines = computed(() => new Set(scopedRows.value.map(row => row.runnerId)))
+const boundMachines = computed(() => new Set(scopedRows.value.filter(row => !unbound(row)).map(row => row.runnerId)))
 const onlineMachines = computed(() => [...boundMachines.value].filter(id => machineState(id) === 'online').length)
 const deliveryRow = ref<RuntimeConfiguration | null>(null)
-watch(() => editing.value || !!entryRow.value || saving.value || !!controlling.value || !!deliveryRow.value, value => emit('busy', value), { immediate: true })
+watch(() => editing.value || saving.value || !!controlling.value || !!deliveryRow.value, value => emit('busy', value), { immediate: true })
 const deliveryBinding = computed<DirectoryRunnerBinding | null>(() => deliveryRow.value?.binding || null)
 const machineStates = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常', unknown: '状态未知' }
 const deliveryStates = { none: '未下发', pending: '等待下发', running: '下发中', success: '已下发', failed: '下发失败' }
@@ -61,7 +125,26 @@ function runnerLabel(id: string) {
   const item = machineMap.value.get(id)
   return item ? `${item.name} · ${item.ipAddress} · ${item.installDirectory}` : id
 }
-const sourceNode = (row: RuntimeConfiguration) => configurationMap.value.get(row.deploymentId)?.sourceNode
+const flowNames = ref<Record<string, string>>({}), flowNameError = ref('')
+const sourceNodes = (row: RuntimeConfiguration) => {
+  const layout = configurationMap.value.get(row.deploymentId)
+  return (layout?.sourceNode ? [layout.sourceNode] : layout?.relatedSourceNodes || [])
+    .map(source => ({ ...source, flowName: flowNames.value[source.flowId] || source.flowName }))
+}
+const sourceNode = (row: RuntimeConfiguration) => sourceNodes(row)[0]
+async function loadFlowNames(layouts: DeploymentConfiguration[], seq: number) {
+  const ids = [...new Set(layouts.flatMap(item => item.sourceNode ? [item.sourceNode] : item.relatedSourceNodes || [])
+    .filter(node => node.flowId && (!node.flowName || node.flowName === node.flowId) && !flowNames.value[node.flowId]).map(node => node.flowId))]
+  const failures: string[] = []
+  for (let i = 0; i < ids.length; i += 4) await Promise.all(ids.slice(i, i + 4).map(async id => {
+    try {
+      const flow = await flowCenterApi.detail(id)
+      if (seq === request && active && flow) flowNames.value[id] = flow.name
+      if (!flow) failures.push(`流程 ${id} 不存在`)
+    } catch (e) { failures.push(`流程 ${id} 名称加载失败：${problem(e)}`) }
+  }))
+  if (seq === request && active) flowNameError.value = failures.join('；')
+}
 const configurationId = (row: RuntimeConfiguration) => sourceNode(row)?.configId || configurationMap.value.get(row.deploymentId)?.configId || row.assignment?.configId || ''
 function showConfigurationId(row: RuntimeConfiguration) {
   const id = configurationId(row)
@@ -93,6 +176,7 @@ const directoryPath = (row: RuntimeConfiguration) => row.assignment?.processorTy
 function fullPath(runnerId: string, relative: string) {
   const machine = machineMap.value.get(runnerId)
   if (!relative || !machine?.installDirectory) return ''
+  if (/^(?:[a-z]:[\\/]|[\\/])/i.test(relative)) return relative
   const separator = machine.platform.toLowerCase().startsWith('win') || /^[a-z]:[\\/]/i.test(machine.installDirectory) || machine.installDirectory.startsWith('\\\\') ? '\\' : '/'
   return machine.installDirectory.replace(/[\\/]+$/, '') + separator + relative.replaceAll('/', separator)
 }
@@ -106,10 +190,13 @@ function deliveryTime(row: RuntimeConfiguration) {
   return item ? `${item.finishedAt ? '完成' : '提交'}于 ${time(item.finishedAt || item.requestedAt)}` : '尚未手动下发'
 }
 function deliveryMismatch(row: RuntimeConfiguration) {
+  if (row.codeVerificationPending) return false
   return row.assignment?.processorType === 'deployment-entry' && row.binding?.delivery?.status === 'success'
     && (row.deliveredCodeMatches === undefined ? row.binding.delivery.layoutRevision !== row.appliedRevision : !row.deliveredCodeMatches)
 }
 function deliveryAdvice(row: RuntimeConfiguration) {
+  if (row.codeVerificationPending) return row.binding?.delivery?.status === 'success' && (row.binding.delivery.layoutRevision !== row.layoutRevision || row.appliedRevision !== row.layoutRevision)
+    ? '配置版本有变化，启动时将校验代码与入口' : ''
   if (row.binding?.delivery?.status === 'success' && row.latestCodeMatchesDelivery) {
     return row.appliedRevision !== row.layoutRevision || !row.assignment ? '代码已就绪，编辑保存采用启动配置即可，无需重新下发' : ''
   }
@@ -126,8 +213,9 @@ function canRestoreProcesses(row: RuntimeConfiguration) {
     && machine.workerProcesses.filter(item => item.assignmentId === row.assignment!.assignmentId).length < row.assignment.concurrency
 }
 function programState(row: RuntimeConfiguration): { label: string; type: 'info' | 'success' | 'warning' | 'danger'; detail: string; waiting?: boolean } {
+  if (unbound(row)) return { label: '未绑定实例', type: 'info', detail: '选择部署实例并保存绑定后下发' }
   const assignment = row.assignment, machine = machineMap.value.get(row.runnerId)
-  if (!assignment) return { label: '仅下发目录', type: 'info', detail: '' }
+  if (!assignment) return { label: configuredEntry(row) ? '待启动' : '仅下发目录', type: 'info', detail: configuredEntry(row) ? '启动时采用部署配置中的入口' : '' }
   if (!machine || machine.status === 'offline') return { label: '运行状态未知', type: 'info', detail: `机器离线 · ${assignment.enabled ? '已请求启动' : '已请求停止'}` }
   if (machine.workerProcesses == null) return { label: '进程未上报', type: 'info', detail: assignment.enabled ? '已请求启动，等待进程上报' : '已请求停止，等待进程上报' }
   const processes = machine.workerProcesses.filter(item => item.assignmentId === assignment.assignmentId)
@@ -139,7 +227,7 @@ function programState(row: RuntimeConfiguration): { label: string; type: 'info' 
   return { label: '等待启动', type: 'warning', detail: '等待 Runner 启动并上报进程', waiting: true }
 }
 async function controlProgram(row: RuntimeConfiguration, start: boolean) {
-  if (!canWrite.value || controlling.value || !row.assignment) return
+  if (!canWrite.value || controlling.value || (!row.assignment && !configuredEntry(row))) return
   controlling.value = row.runtimeId; delete programErrors.value[row.runtimeId]; stopPoll(); ++request
   try {
     const item = await (start ? runnerManagementApi.startRuntimeProgram : runnerManagementApi.stopRuntimeProgram)(row.runtimeId, row.revision)
@@ -148,50 +236,32 @@ async function controlProgram(row: RuntimeConfiguration, start: boolean) {
   } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
   finally { controlling.value = ''; poll() }
 }
-async function configureEntry(row: RuntimeConfiguration) {
-  if (!canWrite.value || controlling.value) return
-  controlling.value = row.runtimeId; stopPoll(); ++request
-  try {
-    const result = await runnerManagementApi.runtimeEntry(row.runtimeId)
-    if (!result.files.length) throw new Error('此部署配置没有可启动的 Python 文件')
-    entryRow.value = row; entryFiles.value = result.files; selectedEntry.value = result.entryPoint
-    entryRevision.value = result.revision; entryLayoutRevision.value = result.layoutRevision
-    if (result.files.length === 1) await applyEntry()
-  } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
-  finally { controlling.value = ''; poll() }
-}
-async function applyEntry() {
-  if (!entryRow.value || !selectedEntry.value || saving.value) return
-  const row = entryRow.value
-  saving.value = true
-  try {
-    const item = await runnerManagementApi.saveRuntimeEntry(row.runtimeId, { entryPoint: selectedEntry.value, revision: entryRevision.value, layoutRevision: entryLayoutRevision.value })
-    rows.value = rows.value.map(value => value.runtimeId === item.runtimeId ? item : value)
-    configurations.value = configurations.value.map(value => value.deploymentId === item.deploymentId ? { ...value, entryPoint: selectedEntry.value, revision: item.layoutRevision } : value)
-    entryRow.value = null; delete programErrors.value[row.runtimeId]; ElMessage.success('启动文件已保存，可点击启动')
-  } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
-  finally { saving.value = false; poll() }
-}
+function configuredEntry(row: RuntimeConfiguration) { return configurationMap.value.get(row.deploymentId)?.entryPoint ?? row.entryPoint }
 function stopPoll() { clearTimeout(timer); timer = undefined }
 function poll() {
   stopPoll()
-  if (active && initialized && !editing.value && !entryRow.value && !loading.value && !controlling.value) timer = setTimeout(() => { void refreshRows() }, rows.value.some(row => inFlight(row) || programState(row).waiting) ? 3000 : 15000)
+  if (active && initialized && !editing.value && !browsing.value && !loading.value && !controlling.value) timer = setTimeout(() => { void refreshRows() }, rows.value.some(row => inFlight(row) || programState(row).waiting) ? 3000 : 15000)
 }
 async function refreshRows() {
   const seq = ++request
   try {
-    const [items, layouts, machines] = await Promise.all([runnerManagementApi.runtimeConfigurations(), runnerManagementApi.deploymentConfigurations(), runnerManagementApi.instances()])
-    if (seq === request && active) { rows.value = items; configurations.value = layouts; runners.value = machines; error.value = '' }
+    const [items, layouts, machines, repos] = await readRows()
+    if (seq === request && active) { rows.value = items; configurations.value = layouts; runners.value = machines; repositories.value = repos.items; repositoryError.value = repos.error; error.value = ''; void loadFlowNames(layouts, seq); void loadSourceNames(items, seq) }
   } catch (e) { if (seq === request && active) error.value = problem(e) }
   finally { poll() }
+}
+function readRows() {
+  return Promise.all([runnerManagementApi.runtimeConfigurations(), runnerManagementApi.deploymentConfigurations(), runnerManagementApi.instances(),
+    runnerManagementApi.codeRepositories().then(items => ({ items, error: '' }), e => ({ items: [] as CodeRepository[], error: problem(e) }))])
 }
 async function load() {
   const seq = ++request
   stopPoll(); loading.value = true; error.value = ''
   try {
-    const [items, layouts, machines] = await Promise.all([runnerManagementApi.runtimeConfigurations(), runnerManagementApi.deploymentConfigurations(), runnerManagementApi.instances()])
+    const [items, layouts, machines, repos] = await readRows()
     if (seq !== request) return
-    rows.value = items; configurations.value = layouts; runners.value = machines
+    rows.value = items; configurations.value = layouts; runners.value = machines; repositories.value = repos.items; repositoryError.value = repos.error
+    void loadFlowNames(layouts, seq); void loadSourceNames(items, seq)
   } catch (e) { if (seq === request) error.value = problem(e) }
   finally { if (seq === request) loading.value = false; initialized = true; poll() }
 }
@@ -243,7 +313,30 @@ async function remove(row: RuntimeConfiguration) {
     rows.value = rows.value.filter(item => item.runtimeId !== row.runtimeId); ElMessage.success('已移除机器配置')
   } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(problem(e)) }
 }
-function editDirectory(row: RuntimeConfiguration) { void router.replace({ path: '/settings', query: { tab: 'directory-layout', deploymentId: row.deploymentId } }) }
+function browseDirectory(row: RuntimeConfiguration, directory: string) {
+  const runner = machineMap.value.get(row.runnerId)
+  if (!runner || !directory) return
+  stopPoll(); ++request; browsing.value = { runner, directory }
+}
+function closeBrowser() { browsing.value = null; poll() }
+function bindConfiguration(row: RuntimeConfiguration) {
+  open()
+  Object.assign(form, { deploymentId: row.deploymentId, layoutRevision: row.layoutRevision })
+}
+function editMapping(row: RuntimeConfiguration) { void router.replace({ path: '/settings', query: { tab: 'directory-layout', deploymentId: row.deploymentId, returnTab: 'runners', runnerId: row.runnerId || props.runnerId || undefined, runtimeId: unbound(row) ? undefined : row.runtimeId } }) }
+async function deleteUnbound(row: RuntimeConfiguration) {
+  if (!canWrite.value || !unbound(row) || controlling.value) return
+  const layout = configurationMap.value.get(row.deploymentId)
+  if (!layout) return
+  try {
+    await ElMessageBox.confirm(`删除部署配置「${layout.name}」？仓库代码和机器上已下发的文件会保留。`, '删除部署配置', { type: 'warning' })
+    controlling.value = row.runtimeId; stopPoll()
+    await runnerManagementApi.deleteDeploymentConfiguration(layout.deploymentId, layout.revision)
+    configurations.value = configurations.value.filter(item => item.deploymentId !== layout.deploymentId)
+    ElMessage.success('部署配置已删除')
+  } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(problem(e)) }
+  finally { controlling.value = ''; poll() }
+}
 function viewLogs(row: RuntimeConfiguration) { void router.replace({ path: '/settings', query: { tab: 'runtime-logs', runtimeId: row.runtimeId } }) }
 function deliver(row: RuntimeConfiguration) { if (canWrite.value && row.binding && !inFlight(row)) deliveryRow.value = row }
 function delivered(item: DirectoryDelivery) {
@@ -254,8 +347,8 @@ function delivered(item: DirectoryDelivery) {
 watch([keyword, machineFilter, deliveryFilter, pageSize], () => { page.value = 1 })
 watch(() => filteredRows.value.length, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize.value))) })
 onMounted(() => { void load() })
-onActivated(() => { active = true; if (initialized && !loading.value && !editing.value && !entryRow.value) void load() })
-onDeactivated(() => { active = false; stopPoll() })
+onActivated(() => { active = true; if (initialized && !loading.value && !editing.value) void load() })
+onDeactivated(() => { active = false; browsing.value = null; stopPoll() })
 onUnmounted(() => { active = false; ++request; stopPoll() })
 </script>
 
@@ -270,16 +363,18 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
     <div class="rb-card">
       <header class="rb-toolbar">
         <div><strong>{{ runnerId ? '当前实例的机器配置' : '机器与流程节点绑定' }}</strong><span>{{ scopedRows.length }} 项配置 · {{ boundMachines.size }} 个实例 · {{ onlineMachines }} 个在线</span></div>
-        <div><el-button :icon="Refresh" circle :disabled="loading || saving || editing || !!controlling" aria-label="刷新机器配置" @click="load" /><el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="loading || saving || editing || !!controlling || !!error" data-testid="binding-create" @click="open()">新增绑定</el-button></div>
+        <div><el-button :icon="Refresh" circle :disabled="loading || saving || editing || !!controlling" aria-label="刷新机器配置" @click="load" /><el-button v-if="canWrite && runnerId" :disabled="loading || editing || saving || !!controlling" data-testid="binding-manual-deployment" @click="router.replace({ path: '/settings', query: { tab: 'directory-layout', create: '1', returnTab: 'runners', runnerId } })">手工新建</el-button><el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="loading || saving || editing || !!controlling || !!error" data-testid="binding-create" @click="open()">新增绑定</el-button></div>
       </header>
       <el-alert v-if="error" :title="`机器配置加载失败：${error}`" description="当前信息可能已过期，请刷新重试。" type="error" :closable="false" show-icon class="rb-error" />
+      <el-alert v-if="flowNameError" :title="flowNameError" type="warning" :closable="false" show-icon />
+      <el-alert v-if="repositoryError" :title="`Git 仓库信息加载失败：${repositoryError}`" type="warning" :closable="false" show-icon />
       <div v-loading="loading" class="rb-table">
         <table class="rc-data-table">
-          <colgroup><col v-if="!runnerId" class="rb-col-machine"><col class="rb-col-config"><col class="rb-col-mq"><col class="rb-col-directory"><col class="rb-col-state"><col class="rb-col-actions"></colgroup>
-          <thead><tr><th v-if="!runnerId">运行机器</th><th>流程 / 配置节点</th><th>节点 MQ</th><th>运行目录</th><th>程序与下发</th><th>操作</th></tr></thead>
+          <colgroup><col v-if="!runnerId" class="rb-col-machine"><col class="rb-col-config"><col class="rb-col-directory"><col class="rb-col-state"><col class="rb-col-actions"></colgroup>
+          <thead><tr><th v-if="!runnerId">运行机器</th><th>流程 / 配置节点</th><th>运行目录</th><th>程序与下发</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-if="editing" class="rb-draft" data-testid="binding-new-row">
-              <td :colspan="runnerId ? 5 : 6">
+              <td :colspan="runnerId ? 4 : 5">
                 <div class="rb-editor">
                   <div class="rb-editor-title"><strong>{{ editingRow ? '编辑机器配置' : '新增机器配置' }}</strong><span>选择机器和部署配置，保存后可手动下发代码</span></div>
                   <div class="rb-editor-fields">
@@ -311,55 +406,59 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
               </td>
               <td data-testid="binding-flow-node">
                 <template v-if="sourceNode(row)">
-                  <strong :title="`流程：${sourceNode(row)?.flowName}\n流程 ID：${sourceNode(row)?.flowId}`" data-testid="binding-flow">{{ sourceNode(row)?.flowName || sourceNode(row)?.flowId }}</strong>
+                  <strong :title="`流程：${sourceNode(row)?.flowName}\n流程 ID：${sourceNode(row)?.flowId}`" data-testid="binding-flow">{{ sourceNode(row)?.flowName && sourceNode(row)?.flowName !== sourceNode(row)?.flowId ? sourceNode(row)?.flowName : '流程名称未获取' }}</strong>
+                  <small data-testid="binding-flow-id">流程 ID：{{ sourceNode(row)?.flowId || '未记录' }}</small>
                   <small class="rb-node-name" :title="`配置节点：${sourceNode(row)?.nodeName}\n步骤 ID：${sourceNode(row)?.stepId}`" data-testid="binding-node">节点：{{ sourceNode(row)?.nodeName }}</small>
+                  <small v-for="node in sourceNodes(row).slice(1)" :key="`${node.flowId}:${node.stepId}`" class="rb-node-name" data-testid="binding-related-node">{{ node.flowName }} · 流程 {{ node.flowId }} · 节点 {{ node.nodeName }}（{{ node.stepId }}）</small>
                   <small :title="`${row.name}\n部署 ID：${row.deploymentId}`">部署：{{ row.name }}</small>
                 </template>
                 <template v-else>
                   <strong :title="`${row.name}\n部署 ID：${row.deploymentId || '未绑定'}`">{{ row.name }}</strong>
                   <small>{{ configurationId(row) ? '历史配置 · 未记录来源节点' : row.deploymentId ? '公共目录 · 未绑定流程节点' : '未关联部署配置' }}</small>
                 </template>
+                <RouterLink v-if="row.sourceContext?.sourceId" :to="originalSourceLink(row)" class="rb-original-source" data-testid="binding-original-source" :title="`源 ${row.sourceContext.sourceId}`">{{ sourceNames[row.sourceContext.sourceId] || `源 ${row.sourceContext.sourceId}` }}</RouterLink>
                 <small v-if="showConfigurationId(row)" :title="configurationId(row)">配置 ID：{{ configurationId(row) }}</small>
               </td>
               <td>
-                <strong :title="`${sourceNode(row) ? nodeQueue(row) || '节点未设置 MQ 队列' : '未绑定流程节点，无节点 MQ'}${row.assignment ? `\n${row.assignment.concurrency} 并发` : ''}`" data-testid="binding-node-mq">{{ sourceNode(row) ? nodeQueue(row) || '未设置' : '未绑定节点' }}</strong>
-                <small v-if="runtimeQueue(row) && runtimeQueue(row) !== nodeQueue(row)" :title="runtimeQueue(row)" data-testid="binding-runtime-mq">运行 MQ：{{ runtimeQueue(row) }}</small>
-              </td>
-              <td>
-                <div class="rb-directory-title"><el-icon><Folder /></el-icon><strong :title="directoryPath(row) || row.directoryTemplate" data-testid="binding-directory">{{ directoryPath(row) || (row.deploymentId ? '待完善目录模板' : '待选择部署配置') }}</strong></div>
-                <small v-if="fullPath(row.runnerId, directoryPath(row))" :title="fullPath(row.runnerId, directoryPath(row))" data-testid="binding-full-path">目标：{{ fullPath(row.runnerId, directoryPath(row)) }}</small>
-                <small v-if="row.entryPoint" :title="row.entryPoint">启动文件：{{ row.entryPoint }}</small>
-                <div v-if="entryRow?.runtimeId === row.runtimeId" class="rb-entry-picker"><el-select v-model="selectedEntry" aria-label="选择启动文件" placeholder="选择一个 Python 启动文件" filterable :disabled="saving"><el-option v-for="file in entryFiles" :key="file" :value="file" :label="file" /></el-select><el-button link type="primary" :disabled="!selectedEntry" :loading="saving" @click="applyEntry">保存入口</el-button><el-button link :disabled="saving" @click="entryRow = null; poll()">取消</el-button></div>
+                <div class="rb-directory-title"><el-button link type="primary" :icon="Folder" :disabled="!fullPath(row.runnerId, directoryPath(row))" :title="directoryPath(row) || row.directoryTemplate" data-testid="binding-directory" @click="browseDirectory(row, fullPath(row.runnerId, directoryPath(row)))">{{ directoryPath(row) || (row.deploymentId ? '待完善目录模板' : '待选择部署配置') }}</el-button></div>
+                <small :title="configuredEntry(row)" data-testid="binding-configured-entry">入口程序：{{ configuredEntry(row) || '未设置（仅下发文件）' }}</small>
+                <small v-if="row.assignment && row.entryPoint && row.entryPoint !== configuredEntry(row)" :title="row.entryPoint" data-testid="binding-adopted-entry">{{ row.assignment.enabled ? '运行入口' : '已采用入口' }}：{{ row.entryPoint }}</small>
                 <small v-if="row.assignment && row.assignment.processorType !== 'deployment-entry' && row.entryPoint" class="rb-inline-error">旧启动方式，请编辑保存后采用所选文件</small>
-                <small v-if="row.binding?.delivery?.status === 'success' && row.binding.delivery.installedPath" :title="row.binding.delivery.installedPath" data-testid="binding-installed-path">上次落盘：{{ row.binding.delivery.installedPath }}</small>
+                <div class="rb-git-sources" data-testid="binding-git-sources">
+                  <div v-for="source in gitSources.get(row.deploymentId) || []" :key="source.repoId" class="rb-git-source">
+                    <RouterLink v-for="directory in source.directories" :key="directory" :to="{ path: '/settings', query: { tab: 'code-repos', repoId: source.repoId, folderPath: directory, returnTo: deploymentReturnPath } }" class="rb-git-directory" data-testid="binding-git-directory">Git 目录：{{ directory || '仓库根目录' }}</RouterLink>
+                  </div>
+                  <small v-if="!gitSources.get(row.deploymentId)?.length">未关联 Git 代码</small>
+                </div>
               </td>
               <td>
                 <div class="rb-program-status" data-testid="binding-program-status"><el-tag size="small" :type="programState(row).type">{{ programState(row).label }}</el-tag><small v-if="programState(row).detail" :title="programState(row).detail">{{ programState(row).detail }}</small></div>
                 <div class="rb-statuses"><el-tag size="small" :type="row.appliedRevision && row.appliedRevision === row.layoutRevision ? 'success' : 'info'">{{ row.appliedRevision ? row.appliedRevision === row.layoutRevision ? '已采用' : '配置有更新' : '原有配置' }}</el-tag><el-tag size="small" :type="row.binding?.delivery?.status === 'failed' ? 'danger' : deliveryMismatch(row) ? 'warning' : row.binding?.delivery?.status === 'success' ? 'success' : 'info'" data-testid="binding-delivery-status">{{ deliveryMismatch(row) ? row.latestCodeMatchesDelivery ? '配置待采用' : '版本不一致' : deliveryStates[row.binding?.delivery?.status || 'none'] }}</el-tag></div>
                 <small :title="deliveryTime(row)">{{ deliveryTime(row) }}</small>
                 <small v-if="row.appliedRevision && row.appliedRevision !== row.layoutRevision">编辑保存以采用新配置</small>
-                <small v-if="!row.assignment && row.entryPoint" class="rb-code-advice">已设置入口，编辑保存后可启动</small>
+                <small v-if="!row.assignment && configuredEntry(row)" class="rb-code-advice">入口来自部署配置，启动时自动采用</small>
                 <small v-if="deliveryAdvice(row)" class="rb-code-advice" :title="deliveryAdvice(row)" data-testid="binding-delivery-advice">{{ deliveryAdvice(row) }}</small>
                 <small v-if="row.binding?.delivery?.error" class="rb-inline-error" :title="row.binding.delivery.error">{{ row.binding.delivery.error }}</small>
                 <small v-if="programErrors[row.runtimeId]" role="alert" class="rb-inline-error rb-program-error" :title="programErrors[row.runtimeId]" data-testid="binding-program-error">{{ programErrors[row.runtimeId] }}</small>
               </td>
-              <td><div class="rb-actions">
+              <td><div v-if="unbound(row)" class="rb-actions"><el-button v-if="canWrite" link type="primary" data-testid="binding-unbound" :disabled="loading || editing || saving" @click="bindConfiguration(row)">新增绑定</el-button><el-button v-if="canWrite" link type="primary" @click="editMapping(row)">编辑配置</el-button><el-button v-if="canWrite" link type="danger" data-testid="binding-delete-configuration" :disabled="loading || editing || saving || !!controlling" @click="deleteUnbound(row)">删除配置</el-button></div><div v-else class="rb-actions">
                 <el-button link type="primary" data-testid="binding-logs" @click="viewLogs(row)">日志</el-button>
-                <el-button v-if="canWrite && row.deploymentId && !row.assignment?.enabled" link type="primary" :disabled="loading || editing || saving || !!controlling || inFlight(row)" data-testid="binding-entry" @click="configureEntry(row)">{{ row.entryPoint ? '更换入口' : '设置入口' }}</el-button>
-                <el-button v-if="canWrite && row.assignment" link type="primary" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row) || (row.assignment.enabled && !canRestoreProcesses(row)) || machineState(row.runnerId) !== 'online'" :loading="controlling === row.runtimeId && (!row.assignment.enabled || canRestoreProcesses(row))" data-testid="binding-start" @click="controlProgram(row, true)">{{ canRestoreProcesses(row) ? '恢复进程' : '启动' }}</el-button>
+                <el-button v-if="canWrite && row.deploymentId" link type="primary" :disabled="loading || editing || saving || !!controlling || inFlight(row)" data-testid="binding-entry" @click="editMapping(row)">{{ configuredEntry(row) ? '更换入口' : '设置入口' }}</el-button>
+                <el-button v-if="canWrite && (row.assignment || configuredEntry(row))" link type="primary" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row) || (row.assignment?.enabled && !canRestoreProcesses(row)) || machineState(row.runnerId) !== 'online'" :loading="controlling === row.runtimeId && (!row.assignment?.enabled || canRestoreProcesses(row))" data-testid="binding-start" @click="controlProgram(row, true)">{{ canRestoreProcesses(row) ? '恢复进程' : '启动' }}</el-button>
                 <el-button v-if="canWrite && row.assignment" link type="danger" :disabled="loading || !!error || editing || saving || !!controlling || !row.assignment.enabled" :loading="controlling === row.runtimeId && row.assignment.enabled" data-testid="binding-stop" @click="controlProgram(row, false)">停止</el-button>
                 <el-button v-if="canWrite" link type="primary" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row)" @click="open(row)">编辑</el-button>
                 <el-button v-if="canWrite" link type="primary" :disabled="loading || !!error || !row.binding || inFlight(row) || editing || saving || !!controlling" data-testid="binding-deliver" @click="deliver(row)">下发代码</el-button>
-                <el-button link type="primary" :disabled="!row.deploymentId || !!controlling" @click="editDirectory(row)">部署配置</el-button>
+                <el-button v-if="row.deploymentId" link type="primary" :disabled="loading || editing || saving || !!controlling" data-testid="binding-edit-directory" @click="editMapping(row)">{{ canWrite ? '编辑目录' : '查看目录' }}</el-button>
                 <el-button v-if="canWrite" link type="danger" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row)" @click="remove(row)">移除</el-button>
               </div></td>
             </tr>
-            <tr v-if="!loading && !visibleRows.length && !editing"><td :colspan="runnerId ? 5 : 6" class="rb-empty">{{ error ? '服务不可用，请刷新重试' : scopedRows.length ? '没有匹配的机器配置' : runnerId ? '当前实例暂无机器配置，可新增绑定' : '暂无机器配置，先保存部署配置，再新增绑定' }}</td></tr>
+            <tr v-if="!loading && !visibleRows.length && !editing"><td :colspan="runnerId ? 4 : 5" class="rb-empty">{{ error ? '服务不可用，请刷新重试' : scopedRows.length ? '没有匹配的机器配置' : runnerId ? '当前实例暂无机器配置，可新增绑定' : '暂无机器配置，先保存部署配置，再新增绑定' }}</td></tr>
           </tbody>
         </table>
       </div>
       <footer class="rb-footer"><span>同一 IP 下的不同 Runner 目录为独立实例</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" :total="filteredRows.length" :disabled="editing || loading" /></footer>
     </div>
+    <RunnerFilesDrawer v-if="browsing" :runner="browsing.runner" :directory="browsing.directory" @close="closeBrowser" />
     <DirectoryDeliveryDialog v-if="deliveryBinding" :binding="deliveryBinding" :runner-name="runnerLabel(deliveryBinding.runnerId)" @close="deliveryRow = null" @delivered="delivered" />
   </section>
 </template>
@@ -367,7 +466,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
 <style scoped>
 .rb-scoped .rb-filter-note, .rb-scoped .rb-footer > span { display: none; }
 .rb-scoped .rb-filters { gap: 10px; padding: 8px 12px; align-items: center; }.rb-scoped .rb-filters .rb-search { flex: 1; width: auto; min-width: 180px; }.rb-scoped .rb-filters label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }.rb-scoped .rb-filters label:not(.rb-search) { width: 200px; }.rb-scoped .rb-filters .el-input, .rb-scoped .rb-filters .el-select { margin-top: 0; flex: 1; min-width: 0; }
-.rb-scoped .rb-table table { min-width: 740px; }.rb-scoped .rb-col-config { width: 25%; }.rb-scoped .rb-col-mq { width: 12%; }.rb-scoped .rb-col-directory { width: 24%; }.rb-scoped .rb-col-state { width: 23%; }.rb-scoped .rb-col-actions { width: 110px; }
+.rb-scoped .rb-table table { min-width: 740px; }.rb-scoped .rb-col-config { width: 28%; }.rb-scoped .rb-col-directory { width: 30%; }.rb-scoped .rb-col-state { width: 23%; }.rb-scoped .rb-col-actions { width: 110px; }
 .rb-scoped .rb-table td { padding: 8px; }.rb-scoped .rb-table small { margin-top: 3px; line-height: 1.35; }.rb-scoped .rb-actions { gap: 4px 8px; }.rb-scoped .rb-actions .el-button { font-size: 11px; }.rb-scoped .rb-toolbar, .rb-scoped .rb-footer { padding: 8px 12px; }.rb-scoped .rb-program-status { margin-bottom: 5px; }.rb-scoped .rb-editor-fields { grid-template-columns: 1fr 1fr; }.rb-scoped .rb-path-preview { grid-column: 1 / -1; }.rb-page.rb-scoped { gap: 8px; }
 .rb-page { display:flex; flex:1; flex-direction:column; min-height:0; gap:12px; }
 .rb-filters { display:flex; align-items:end; gap:16px; padding:14px 16px; border:1px solid var(--el-border-color-light); border-radius:12px; background:var(--el-bg-color); }
@@ -384,14 +483,22 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
 .rb-error { margin:0 12px 8px; width:auto; }
 .rb-table { flex:1; min-height:0; overflow:auto; }
 .rb-table table { table-layout:fixed; min-width:960px; }
-.rb-col-machine { width:17%; }.rb-col-config { width:21%; }.rb-col-mq { width:12%; }.rb-col-directory { width:21%; }.rb-col-state { width:16%; }.rb-col-actions { width:140px; }
+.rb-col-machine { width:17%; }.rb-col-config { width:25%; }.rb-col-directory { width:25%; }.rb-col-state { width:16%; }.rb-col-actions { width:140px; }
 .rb-table th { position:sticky; top:0; z-index:1; }.rb-table td { vertical-align:top; padding:16px 12px; white-space:normal; }
 .rb-table strong { display:block; min-width:0; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .rb-table small { display:block; color:var(--rc-muted); font-size:11px; margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rb-original-source { display:block; margin-top:6px; font-size:12px; color:var(--el-color-primary); text-decoration:none; overflow-wrap:anywhere; }.rb-original-source:hover { text-decoration:underline; }
 .rb-table .rb-node-name { color:var(--rc-text); font-size:12px; }
 .rb-machine-title, .rb-directory-title { display:flex; align-items:center; gap:8px; min-height:20px; }
 .rb-machine-state { flex-shrink:0; color:var(--el-text-color-secondary); font-size:11px; }.rb-machine-state::before { content:''; display:inline-block; width:5px; height:5px; margin:0 4px 1px 0; border-radius:50%; background:currentColor; }.rb-machine-state.is-online { color:var(--el-color-success); }.rb-machine-state.is-error { color:var(--el-color-danger); }.rb-machine-state.is-upgrading { color:var(--el-color-primary); }
+.rb-directory-title .el-button { min-width:0; max-width:100%; justify-content:flex-start; font-size:12px; }.rb-directory-title .el-button :deep(span) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.rb-table small .el-button { max-width:100%; height:auto; padding:0; font-size:inherit; vertical-align:baseline; }.rb-table small .el-button :deep(span) { white-space:normal; overflow-wrap:anywhere; text-align:left; }
 .rb-directory-title .el-icon { color:var(--el-color-primary); flex-shrink:0; font-size:16px; }
+.rb-git-sources { display:grid; gap:8px; margin-top:8px; padding-top:6px; border-top:1px solid var(--el-border-color-lighter); }
+.rb-git-source { display:grid; gap:3px; font-size:11px; }
+.rb-git-source a { color:var(--el-color-primary); text-decoration:none; overflow-wrap:anywhere; }
+.rb-git-source a:hover { text-decoration:underline; }
+.rb-git-address { font-family:inherit; white-space:normal; overflow-wrap:anywhere; user-select:text; }
+.rb-table .rb-git-source small { margin-top:0; white-space:normal; overflow-wrap:anywhere; }
 .rb-statuses { display:flex; flex-wrap:wrap; gap:5px; }.rb-program-status { margin-bottom:10px; }
 .rb-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px 8px; justify-items:start; }.rb-actions .el-button { margin:0; font-size:12px; }
 .rb-table .rb-empty { padding:56px 12px; text-align:center; color:var(--rc-muted); }
@@ -407,5 +514,4 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
 .rb-editor-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; border-top:1px solid var(--el-border-color-lighter); margin-top:16px; padding-top:12px; }.rb-editor-footer > span { color:var(--rc-muted); font-size:12px; }
 .rb-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-top:1px solid var(--el-border-color-lighter); }.rb-footer > span { font-size:12px; color:var(--rc-muted); }
 @media (max-width:1100px) { .rb-filter-note, .rb-footer > span { display:none; }.rb-footer { justify-content:flex-end; }.rb-filters .rb-search { flex:1; width:auto; } }
-.rb-entry-picker{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}.rb-entry-picker .el-select{width:100%;max-width:320px}
 </style>

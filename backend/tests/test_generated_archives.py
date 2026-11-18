@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -63,7 +64,7 @@ class GeneratedArchivesTest(unittest.TestCase):
     request = code_server_tests.CodeServerTest.request
     start_remote = code_server_tests.CodeServerTest.start_remote
 
-    def fixture(self, extra_files=None, text_only=False, main_filename='newslink.py'):
+    def fixture(self, extra_files=None, text_only=False, main_filename='newslink.py', response_text=None):
         service, endpoint, identity, _ = self.start_remote()
         calls = []
         class Model(BaseHTTPRequestHandler):
@@ -73,7 +74,9 @@ class GeneratedArchivesTest(unittest.TestCase):
                 calls.append(body)
                 root = Path(body['code_dir']); root.mkdir(parents=True, exist_ok=True)
                 if not text_only:
-                    (root / main_filename).write_text('VALUE = ' + str(len(calls)), encoding='utf8')
+                    requested = re.search(r'生成文件名：([^\r\n]+)', body.get('prompt', ''))
+                    filename = requested.group(1).strip() if requested else main_filename
+                    (root / filename).write_text('VALUE = ' + str(len(calls)), encoding='utf8')
                     (root / 'lib').mkdir(exist_ok=True)
                     (root / 'lib/helper.py').write_text('def helper(): return 1\n', encoding='utf8')
                 for path, content in (extra_files or {}).items():
@@ -82,7 +85,7 @@ class GeneratedArchivesTest(unittest.TestCase):
                 (Path(body['input_file_dir']) / 'private.txt').write_text('input is not code')
                 (Path(body['output_file_dir']) / 'report.txt').write_text('output is not code')
                 self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
-                self.wfile.write(json.dumps({'content': 'VALUE = ' + str(len(calls)) if text_only else '已生成文件'}).encode())
+                self.wfile.write(json.dumps({'content': response_text if response_text is not None else 'VALUE = ' + str(len(calls)) if text_only else '已生成文件'}).encode())
         upstream = ThreadingHTTPServer(('127.0.0.1', 0), Model)
         threading.Thread(target=upstream.serve_forever, daemon=True).start()
         self.addCleanup(upstream.server_close); self.addCleanup(upstream.shutdown)
@@ -102,6 +105,36 @@ class GeneratedArchivesTest(unittest.TestCase):
                    'repositoryId': repo['repoId'], 'directoryId': 'default', 'autoCommit': True,
                    'fileName': main_filename, 'prompt': '生成处理程序', 'url': 'https://example.com/news', 'sampleId': 'www.realcan.cn.py'}
         return service, repo, origin, payload, calls
+
+    def test_refusal_with_only_requirements_fails_without_committing_auxiliary_files(self):
+        _, repo, origin, payload, _ = self.fixture({'requirements.txt': 'requests\n'}, text_only=True,
+            response_text='不能给出代码：目标列表地址返回 HTTP 403，无法核实列表数据。')
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'refused'})
+        self.assertEqual(result['archive']['status'], 'failed')
+        self.assertIn('未生成主脚本 newslink.py', result['archive']['message'])
+        self.assertEqual(result['code'], '')
+        self.assertEqual(self.app.git(Path(repo['path']), 'ls-files').strip(), '')
+        self.assertEqual(result['archive']['gitCommit'], '')
+
+    def test_text_fallback_saves_the_requested_script_even_if_dependencies_were_written_first(self):
+        _, _, origin, payload, _ = self.fixture({'requirements.txt': 'requests\n'}, text_only=True)
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'text-and-requirements'})
+        self.assertEqual(result['archive']['status'], 'committed', result['archive']['message'])
+        self.assertEqual(self.app.git(origin, 'show', 'main:default/newslink.py').strip(), 'VALUE = 1')
+        self.assertTrue(result['code'].strip())
+        self.assertIn('default/newslink.py', [item['path'] for item in result['archive']['files']])
+
+    def test_other_python_file_does_not_substitute_for_the_missing_requested_script(self):
+        _, _, _, payload, _ = self.fixture({'other-site.py': 'OLD = 1\n'}, text_only=True, response_text='不能给出代码：没有验证到新闻数据。')
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'unrelated-script'})
+        self.assertEqual(result['archive']['status'], 'failed')
+        self.assertIn('未生成主脚本 newslink.py', result['archive']['message'])
+
+    def test_comment_only_main_script_is_not_a_successful_generation(self):
+        _, _, _, payload, _ = self.fixture({'newslink.py': '# Cannot provide code\n'})
+        result = self.request('/api/runner-management/model-interfaces/generate', {**payload, 'taskId': 'empty-script'})
+        self.assertEqual(result['archive']['status'], 'failed')
+        self.assertIn('为空或不是有效', result['archive']['message'])
 
     def test_unchanged_requirement_companion_does_not_fail_due_to_file_order(self):
         _, _, _, payload, _ = self.fixture({'requirements.txt': 'beautifulsoup4\n'}, main_filename='www.example.py')

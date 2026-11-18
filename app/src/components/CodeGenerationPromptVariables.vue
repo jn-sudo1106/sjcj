@@ -1,16 +1,5 @@
 <script setup lang="ts">
-const variables = [
-  ['url', '当前源的目标列表 URL'],
-  ['file_name', '本次生成的主代码文件名，按当前文件命名方式确定'],
-  ['code_dir', '实际生成服务器的代码保存目录（Agent）'],
-  ['code_file_path', '主代码文件的完整保存路径（Agent）'],
-  ['code_save_requirement', '本次文件命名、保存目录和返回结果要求'],
-  ['prj_dir', '本次生成工作空间（Agent）'],
-  ['input_file_dir', '本次输入目录（Agent）'],
-  ['reference_files', '本次参考文件的完整路径'],
-  ['output_file_dir', '本次输出目录（Agent）'],
-  ['config_id', '节点配置 ID'], ['queue_name', '节点 MQ 主题'], ['task_id', '本次生成任务 ID'],
-] as const
+import { CODE_GENERATION_PROMPT_VARIABLES as variables } from '@/utils/codeGenerationPromptVariables'
 const token = (name: string) => '{{' + name + '}}'
 </script>
 
@@ -20,6 +9,7 @@ const token = (name: string) => '{{' + name + '}}'
     <p>可放入系统或用户提示词，执行时填入实际值。目标 URL、文件名和保存要求也会在请求开头单独列出。</p>
     <dl><template v-for="[name, description] in variables" :key="name"><dt><code>{{ token(name) }}</code></dt><dd>{{ description }}</dd></template></dl>
     <p v-pre>例如：主脚本命名为 {{file_name}}，保存到 {{code_file_path}}。{{code_save_requirement}}</p>
+    <p v-pre>代理取自“节点配置 → 使用代理”的已保存设置，生成时替换。例如：是否启用代理 {{use_proxy}}，代理地址 {{proxy_url}}。</p>
   </details>
 </template>
 

@@ -8,15 +8,17 @@ import { formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
 import { runnerManagementApi, type ProcessorProcess, type RunnerInstance } from '@/api/runnerManagement'
 
 const router = useRouter()
+const props = defineProps<{ runnerId?: string }>()
 const canWrite = computed(() => useAuthStore().role === 'admin')
 const runners = ref<RunnerInstance[]>([]), processes = ref<ProcessorProcess[]>([])
-const runnerId = ref(''), keyword = ref(''), loading = ref(false), error = ref(''), busy = ref('')
+const runnerFilter = ref(''), keyword = ref(''), loading = ref(false), error = ref(''), busy = ref('')
 let active = true, initialized = false, sequence = 0, timer: ReturnType<typeof setTimeout> | undefined
 const identity = (process: ProcessorProcess) => `${process.runnerId}:${process.assignmentId}:${process.slot}:${process.pid}`
 const machine = (id: string) => runners.value.find(row => row.runnerId === id)
 const label = (row: RunnerInstance) => `${row.ipAddress} · ${row.installDirectory}`
-const visibleRunners = computed(() => runners.value.filter(row => !runnerId.value || row.runnerId === runnerId.value))
-const visibleProcesses = computed(() => processes.value.filter(row => (!runnerId.value || row.runnerId === runnerId.value)
+const scopedRunnerId = computed(() => props.runnerId || runnerFilter.value)
+const visibleRunners = computed(() => runners.value.filter(row => !scopedRunnerId.value || row.runnerId === scopedRunnerId.value))
+const visibleProcesses = computed(() => processes.value.filter(row => (!scopedRunnerId.value || row.runnerId === scopedRunnerId.value)
   && [row.entry, row.workingDirectory, row.queue, String(row.pid), machine(row.runnerId)?.installDirectory, machine(row.runnerId)?.ipAddress]
     .some(value => value?.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
 const unsupported = computed(() => visibleRunners.value.filter(row => !row.capabilities.includes('process-control')
@@ -66,7 +68,7 @@ function logs(row: ProcessorProcess) {
 }
 function upgrade() { void router.replace({ path: '/settings', query: { tab: 'runners' } }) }
 onMounted(() => { void refresh() })
-onActivated(() => { active = true; if (initialized) void refresh() })
+onActivated(() => { active = true; if (initialized && !loading.value && !busy.value) void refresh() })
 onDeactivated(() => { active = false; stopPolling(); ++sequence })
 onUnmounted(() => { active = false; stopPolling(); ++sequence })
 </script>
@@ -74,9 +76,9 @@ onUnmounted(() => { active = false; stopPolling(); ++sequence })
 <template>
   <section class="pp-page" data-testid="settings-processors">
     <div class="pp-toolbar">
-      <el-select v-model="runnerId" filterable clearable placeholder="全部 Runner 实例" aria-label="筛选处理机实例"><el-option v-for="row in runners" :key="row.runnerId" :value="row.runnerId" :label="label(row)" /></el-select>
+      <el-select v-if="!props.runnerId" v-model="runnerFilter" filterable clearable placeholder="全部 Runner 实例" aria-label="筛选处理机实例"><el-option v-for="row in runners" :key="row.runnerId" :value="row.runnerId" :label="label(row)" /></el-select>
       <el-input v-model="keyword" clearable :prefix-icon="Search" placeholder="搜索入口、队列、PID 或目录" aria-label="搜索处理进程" />
-      <span class="pp-count">{{ visibleRunners.length }} 个实例 · {{ visibleProcesses.length }} 个处理进程</span>
+      <span class="pp-count">{{ loading ? '正在读取运行实例…' : `${visibleProcesses.length} 个运行实例` }}</span>
       <el-button :icon="Refresh" circle :loading="loading" :disabled="!!busy" aria-label="刷新处理进程" @click="refresh" />
     </div>
     <el-alert v-if="error" :title="`处理进程请求失败：${error}`" type="error" :closable="false" show-icon />
@@ -91,7 +93,8 @@ onUnmounted(() => { active = false; stopPolling(); ++sequence })
           <td><el-tag size="small" :type="machine(row.runnerId)?.status === 'offline' ? 'info' : row.stopStatus === 'pending' || row.stopStatus === 'applied' ? 'warning' : 'success'">{{ status(row) }}</el-tag><small :title="`${formatRunnerHeartbeat(machine(row.runnerId)?.lastHeartbeat)}（北京时间）`">心跳：{{ formatRunnerHeartbeat(machine(row.runnerId)?.lastHeartbeat) }}</small><small v-if="row.stopError" class="pp-error">{{ row.stopError }}</small></td>
           <td><div class="pp-actions"><el-button link type="primary" @click="logs(row)">日志</el-button><el-button v-if="canWrite" link type="danger" :disabled="!stoppable(row) || !!busy" :loading="busy === identity(row)" :data-testid="`processor-stop-${row.pid}`" @click="closeProcess(row)">关闭进程</el-button></div><small v-if="canWrite && stopReason(row)" :title="stopReason(row)">{{ stopReason(row) }}</small></td>
         </tr>
-        <tr v-if="!loading && !visibleProcesses.length"><td colspan="7" class="pp-empty">{{ error ? '进程列表暂不可用，请刷新重试' : '当前筛选范围没有已上报的处理进程' }}</td></tr>
+        <tr v-if="loading && !visibleProcesses.length"><td colspan="7" class="pp-empty" role="status">正在读取 Runner 已上报的进程…</td></tr>
+        <tr v-else-if="!visibleProcesses.length"><td colspan="7" class="pp-empty">{{ error ? '进程列表暂不可用，请刷新重试' : '当前筛选范围没有已上报的处理进程' }}</td></tr>
       </tbody></table>
     </div>
     <p class="pp-note">每 3 秒刷新心跳结果。关闭操作只针对选中的处理进程，Runner 主进程保持运行；关闭后到机器配置手动启动可恢复。</p>

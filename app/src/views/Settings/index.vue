@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 系统设置（0924-02）：一级菜单，页内 tab 分节点类型 / 分类目录等。
 // 动态 Tab 架构改造：使用 useDynamicTabs 接入后端动态资源配置与权限过滤，保留本地 fallbackTabs 兜底。
-import { watch, type Component } from 'vue'
+import { computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import NodeTypeTab from './NodeTypeTab.vue'
@@ -55,11 +55,28 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
   },
 })
 
+// 部署从流程节点进入；保留旧详情链接，避免已保存的部署记录链接失效。
+const navigationTabs = computed(() => tabs.value.filter(tab => !['directory-layout', 'processors', 'deployment-resources'].includes(tab.key)))
+
 // 非法 / 无权限 / 跨路由跳转历史兼容处理
 watch(
   () => route.query?.tab,
   (tab) => {
     if (route.path !== '/settings') return
+    if (tab === 'releases' && route.query.program === 'code-server') {
+      void router.replace({ path: '/settings', query: { ...route.query, tab: 'code-servers', program: undefined, view: 'packages' } })
+      return
+    }
+    if (tab === 'deployment-resources') {
+      void router.replace(route.query.configId
+        ? { path: '/tasks', query: { ...route.query, tab: 'deployment' } }
+        : { path: '/settings', query: { ...route.query, tab: 'runners', view: 'resources' } })
+      return
+    }
+    if (tab === 'processors') {
+      void router.replace({ path: '/settings', query: { ...route.query, tab: 'runners', view: 'instances' } })
+      return
+    }
     if (tab === 'model-interfaces') {
       void router.replace({ path: '/settings', query: { ...(route.query || {}), tab: 'code-servers', view: 'models' } })
       return
@@ -98,7 +115,7 @@ const SELF_FRAMED_TABS = new Set(['node-type', 'runners', 'code-repos'])
   <div class="st-page">
     <div class="st-tabs-inner">
       <button
-        v-for="t in tabs"
+        v-for="t in navigationTabs"
         :key="t.key"
         class="st-tab-link"
         :class="{ active: activeTab?.key === t.key }"
@@ -119,6 +136,7 @@ const SELF_FRAMED_TABS = new Set(['node-type', 'runners', 'code-repos'])
           :repository-file-path="typeof route.query.filePath === 'string' ? route.query.filePath : ''"
           :repository-folder-path="typeof route.query.folderPath === 'string' ? route.query.folderPath : undefined"
           :repository-directory-id="typeof route.query.directoryId === 'string' ? route.query.directoryId : ''"
+          :repository-return-to="typeof route.query.returnTo === 'string' ? route.query.returnTo : ''"
           @edit-directory="editDirectory"
         />
       </KeepAlive>

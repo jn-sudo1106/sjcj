@@ -543,7 +543,7 @@ describe('TableTab · 回读时按 context/outContext 还原入出参勾选', ()
     expect(flow.configs['rule-1'].ruleCfg!.inputFields).toEqual(['sku_id', 'sku_name'])
     expect(flow.configs['rule-1'].ruleCfg!.outputFields).toEqual(['sku_name'])
 
-    const orchestration = wrapper.findAll('.rc-top-tab').find((b) => b.text() === '编排配置')!
+    const orchestration = wrapper.findAll('.rc-top-tab').find((b) => b.text() === '智能体配置')!
     expect((orchestration.element as HTMLButtonElement).disabled).toBe(false)
   })
 

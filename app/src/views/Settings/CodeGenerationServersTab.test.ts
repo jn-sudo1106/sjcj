@@ -167,8 +167,8 @@ it('移除批量升级，保留单实例重试与版本管理跳转', async () =
   await w.findAll('button').find(button => button.text() === '重试升级')!.trigger('click'); await flushPromises()
   expect(api.upgradeCodeServers).toHaveBeenCalledWith([server.serverId], 'sha256:' + 'a'.repeat(64))
   expect(w.find('[data-testid="publish-code-server"]').exists()).toBe(false)
-  await w.get('[data-testid="manage-program-versions"]').trigger('click'); await flushPromises()
-  expect(w.vm.$router.currentRoute.value.query).toMatchObject({ tab: 'releases', program: 'code-server' })
+  await w.get('[data-testid="agent-resource-packages"]').trigger('click'); await flushPromises()
+  expect(w.vm.$router.currentRoute.value.query).toMatchObject({ tab: 'code-servers', view: 'packages' })
 })
 
 it('旧实例提供保留配置和身份的升级接入包，只读用户不能升级', async () => {
@@ -288,7 +288,7 @@ it('只读用户可查看文件，不提供编辑、上传及服务接入操作'
 })
 it('服务包与启动器下载入口统一跳转程序版本管理', async () => {
   const w = await setup()
-  await w.get('[data-testid="manage-program-versions"]').trigger('click'); await flushPromises()
-  expect(w.vm.$router.currentRoute.value.query).toMatchObject({ tab: 'releases', program: 'code-server' })
-  expect(w.find('[data-testid="publish-code-server"]').exists()).toBe(false)
+  await w.get('[data-testid="agent-resource-packages"]').trigger('click'); await flushPromises()
+  expect(w.vm.$router.currentRoute.value.query).toMatchObject({ tab: 'code-servers', view: 'packages' })
+  expect(w.find('[data-testid="publish-code-server"]').exists()).toBe(true)
 })

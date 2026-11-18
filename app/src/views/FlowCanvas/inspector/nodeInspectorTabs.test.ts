@@ -26,7 +26,7 @@ describe('nodeInspectorTabs', () => {
     expect(nodeInspectorTabs(ordinaryNode)).toEqual([
       ['config', '节点配置'],
       ['table', '表配置'],
-      ['orchestration', '编排配置'],
+      ['orchestration', '智能体配置'],
       ['deployment', '部署配置'],
       ['task', '任务配置'],
       ['ai', 'AI 对话'],
