@@ -50,15 +50,16 @@ describe('TaskView', () => {
       ])
       expect(summaries[0]!.find('[data-testid="task-result-status"]').text()).toBe('失败')
     } else {
-      // 表格态（1117 会议）：执行结果拆成「结果状态」「错误消息」两列，紧跟在任务状态后
+      // 表格态（1117 会议）：执行结果一列，显示结果状态；失败有错误消息时同格展示消息
       const headers = wrapper.findAll('thead th').map((th) => th.text())
-      const statusIndex = headers.indexOf('结果状态')
-      expect(statusIndex).toBe(headers.indexOf('状态') + 1)
-      expect(headers[statusIndex + 1]).toBe('错误消息')
-      expect(headers).not.toContain('执行结果')
+      const resultIndex = headers.indexOf('执行结果')
+      expect(resultIndex).toBe(headers.indexOf('状态') + 1)
+      expect(headers).not.toContain('结果状态')
+      expect(headers).not.toContain('错误消息')
       const rowsText = wrapper.findAll('tbody tr').map((tr) => tr.findAll('td'))
-      expect(rowsText.map((cells) => cells[statusIndex]!.text())).toEqual(['失败', '执行中', '—'])
-      expect(rowsText.map((cells) => cells[statusIndex + 1]!.text())).toEqual(['仅为结果内容', '—', '—'])
+      expect(rowsText.map((cells) => cells[resultIndex]!.find('[data-testid="task-result-status"]').text())).toEqual(['失败', '执行中', '—'])
+      expect(summaries.map((item) => item.text())).toEqual(['仅为结果内容'])
+      expect(rowsText[0]![resultIndex]!.find('[data-testid="task-result-summary"]').exists()).toBe(true)
       expect(rowsText[0]![headers.indexOf('任务名称')]!.text()).toBe('有结果')
       expect(wrapper.findAll('[data-testid="task-result-cell"]')).toHaveLength(tasks.length)
       // 原文保留在悬停提示里
@@ -1207,7 +1208,7 @@ describe('TaskView', () => {
     // `filters.sourceId = props.siteWide ? '' : sourceId.value`），所以**源态收起这一列**——
     // 整列每行都是同一个源名，130px 纯浪费。0917-02 要的「所属源可点」是网站态的事
     //（覆盖见上面那条满额用例），不需要把这个条件改成恒真。
-    it('源态收起「所属源」列，结果状态/错误消息两列后空态 colspan 为 12', async () => {
+    it('源态收起「所属源」列，空态 colspan 为 11', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -1223,7 +1224,7 @@ describe('TaskView', () => {
 
       expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('所属源')
       expect(wrapper.find('[data-testid="task-source-link"]').exists()).toBe(false)
-      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('12')
+      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('11')
 
       wrapper.unmount()
     })

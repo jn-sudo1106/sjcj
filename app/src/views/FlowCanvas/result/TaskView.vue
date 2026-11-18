@@ -30,7 +30,7 @@ function taskResultPreview(task: TaskInst): string {
   return task.taskResult?.trim() || (task.state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果')
 }
 
-// 1117 会议：执行结果拆成「结果状态」+「错误消息」两项，原文留在悬停提示和详情抽屉里。
+// 1117 会议：执行结果显示「结果状态」，失败且有错误消息时同格展示消息；原文留在悬停提示和详情抽屉里。
 function resultStatusText(task: TaskInst): string {
   const summary = parseTaskResult(task.taskResult)
   if (!summary.raw) return task.state === 'L' ? '执行中' : '—'
@@ -968,7 +968,6 @@ const nextStepHints = computed(() => {
             <col style="width: 180px" />
             <col style="width: 80px" />
             <col style="width: 80px" />
-            <col style="width: 80px" />
             <col style="width: 200px" />
             <col style="width: 140px" />
             <col style="width: 110px" />
@@ -984,8 +983,7 @@ const nextStepHints = computed(() => {
               <th>队列</th>
               <th>类型</th>
               <th>状态</th>
-              <th>结果状态</th>
-              <th>错误消息</th>
+              <th>执行结果</th>
               <th>创建时间</th>
               <th>操作</th>
             </tr>
@@ -1062,10 +1060,8 @@ const nextStepHints = computed(() => {
                   <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
                 </span>
               </td>
-              <td data-testid="task-result-status-cell">
-                <span class="tv-result-status" :class="`is-${resultStatusClass(task)}`" data-testid="task-result-status" :title="taskResultPreview(task)">{{ resultStatusText(task) }}</span>
-              </td>
               <td class="tv-result-cell" data-testid="task-result-cell">
+                <span class="tv-result-status" :class="`is-${resultStatusClass(task)}`" data-testid="task-result-status" :title="taskResultPreview(task)">{{ resultStatusText(task) }}</span>
                 <button
                   v-if="resultMessage(task)"
                   class="tv-result-summary"
@@ -1075,7 +1071,6 @@ const nextStepHints = computed(() => {
                   :aria-label="`查看任务 ${task.taskId} 的执行结果：${taskResultPreview(task)}`"
                   @click="openDetail(task)"
                 >{{ resultMessage(task) }}</button>
-                <span v-else class="muted">—</span>
               </td>
               <td class="tv-time">{{ task.createdAt || '—' }}</td>
               <td class="tv-actions-cell">
@@ -1083,7 +1078,7 @@ const nextStepHints = computed(() => {
                 <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
               </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 13 : 12" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 12 : 11" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
           </tbody>
         </table>
         <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
@@ -1215,7 +1210,7 @@ const nextStepHints = computed(() => {
 .tv-result-status.is-muted { color: var(--rc-faint); background: transparent; padding: 0; }
 .tv-result-msg { margin-left: 4px; color: var(--rc-danger, #b91c1c); }
 .tv-result-empty { color: var(--rc-faint); }
-.tv-result-cell .tv-result-summary { margin-top: 0; }
+.tv-result-cell .tv-result-summary { margin-top: 2px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }
