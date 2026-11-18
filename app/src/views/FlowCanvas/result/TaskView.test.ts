@@ -43,24 +43,33 @@ describe('TaskView', () => {
     })
     await flushPromises()
     const summaries = wrapper.findAll('[data-testid="task-result-summary"]')
-    expect(summaries.map((item) => item.text())).toEqual([
-      '{"error":"仅为结果内容"}', '执行中，结果尚未返回', '后端未返回执行结果',
-    ])
-    if (!global) {
+    if (global) {
+      // 卡片态：有结果显示「状态 + 错误消息」，空结果按任务状态提示
+      expect(summaries.map((item) => item.text())).toEqual([
+        '失败仅为结果内容', '执行中，结果尚未返回', '后端未返回执行结果',
+      ])
+      expect(summaries[0]!.find('[data-testid="task-result-status"]').text()).toBe('失败')
+    } else {
+      // 表格态（1117 会议）：执行结果拆成「结果状态」「错误消息」两列，紧跟在任务状态后
       const headers = wrapper.findAll('thead th').map((th) => th.text())
-      const resultIndex = headers.indexOf('执行结果')
-      expect(resultIndex).toBe(headers.indexOf('状态') + 1)
-      const cells = wrapper.find('tbody tr').findAll('td')
-      expect(cells[resultIndex]!.text()).toBe('{"error":"仅为结果内容"}')
-      expect(cells[headers.indexOf('任务名称')]!.text()).toBe('有结果')
+      const statusIndex = headers.indexOf('结果状态')
+      expect(statusIndex).toBe(headers.indexOf('状态') + 1)
+      expect(headers[statusIndex + 1]).toBe('错误消息')
+      expect(headers).not.toContain('执行结果')
+      const rowsText = wrapper.findAll('tbody tr').map((tr) => tr.findAll('td'))
+      expect(rowsText.map((cells) => cells[statusIndex]!.text())).toEqual(['失败', '执行中', '—'])
+      expect(rowsText.map((cells) => cells[statusIndex + 1]!.text())).toEqual(['仅为结果内容', '—', '—'])
+      expect(rowsText[0]![headers.indexOf('任务名称')]!.text()).toBe('有结果')
       expect(wrapper.findAll('[data-testid="task-result-cell"]')).toHaveLength(tasks.length)
+      // 原文保留在悬停提示里
+      expect(wrapper.find('[data-testid="task-result-status"]').attributes('title')).toBe('{"error":"仅为结果内容"}')
     }
     // 结果中的 error 字样不改变接口返回的完成状态。
     expect(summaries[0]!.element.closest('tr')!.textContent).toContain('完成')
-    await summaries[2]!.trigger('click')
+    await summaries[0]!.trigger('click')
     await flushPromises()
     const detail = wrapper.findComponent({ name: global ? 'TaskDetailContent' : 'TaskDetailDrawer' })
-    expect(detail.props('task')).toMatchObject({ taskId: 'result-3', state: 'E' })
+    expect(detail.props('task')).toMatchObject({ taskId: 'result-1', state: 'C' })
     wrapper.unmount()
   })
 
@@ -1198,7 +1207,7 @@ describe('TaskView', () => {
     // `filters.sourceId = props.siteWide ? '' : sourceId.value`），所以**源态收起这一列**——
     // 整列每行都是同一个源名，130px 纯浪费。0917-02 要的「所属源可点」是网站态的事
     //（覆盖见上面那条满额用例），不需要把这个条件改成恒真。
-    it('源态收起「所属源」列，新增执行结果列后空态 colspan 为 11', async () => {
+    it('源态收起「所属源」列，结果状态/错误消息两列后空态 colspan 为 12', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -1214,7 +1223,7 @@ describe('TaskView', () => {
 
       expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('所属源')
       expect(wrapper.find('[data-testid="task-source-link"]').exists()).toBe(false)
-      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('11')
+      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('12')
 
       wrapper.unmount()
     })
