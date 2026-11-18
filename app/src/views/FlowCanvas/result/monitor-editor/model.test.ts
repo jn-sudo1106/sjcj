@@ -362,6 +362,16 @@ describe('生成方式字段', () => {
     expect(saved.archiveId).toBe('a'.repeat(32))
   })
 
+  it('智能体模式保存新脚本：只留 scriptPath，不存也不保留正文；内置接口照常存正文', () => {
+    const conf: MonitorCheckConf = { kind: 'ai', script: 'print("旧内置脚本")', scriptPath: '/code01/old.py' }
+    const agentForm = { ...formFromRecord(recordWith(conf)), generationMode: 'agent' as const }
+    const saved = confFromForm(agentForm, conf, { scriptPath: 'monitor/1/3101.py' })
+    expect(saved.scriptPath).toBe('monitor/1/3101.py')
+    expect(saved).not.toHaveProperty('script')
+    const builtin = confFromForm(formFromRecord(recordWith(conf)), conf, { script: 'print("新")', scriptPath: '/code01/new.py' })
+    expect(builtin.script).toBe('print("新")')
+  })
+
   it('从智能体切回内置：generation 只留 mode=builtin', () => {
     const conf: MonitorCheckConf = { kind: 'ai', generation: { mode: 'agent', interfaceId: 'all', repoId: 'r1', directoryId: 'd1' } }
     const form = { ...formFromRecord(recordWith(conf)), generationMode: 'builtin' as const }

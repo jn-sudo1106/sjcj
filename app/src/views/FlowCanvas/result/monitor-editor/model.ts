@@ -442,6 +442,8 @@ export function confFromForm(
     }
     if (extra.script !== undefined) conf.script = extra.script
     if (extra.scriptPath !== undefined) conf.scriptPath = extra.scriptPath
+    // 智能体生成：脚本以 Git（scriptPath + archiveId）为准，不留正文；也清掉旧的内置接口正文，免得执行端拿到旧脚本
+    if (form.generationMode === 'agent' && extra.scriptPath !== undefined) delete conf.script
   } else {
     conf.timeType = form.timeType || 'C'
     conf.minSize = parseNumberOrKeep(form.minSize)

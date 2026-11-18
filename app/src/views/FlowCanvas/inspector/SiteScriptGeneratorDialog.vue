@@ -27,7 +27,11 @@ const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL
 保持样例的函数接口和返回结构，根据目标网站调整页面选择器，不照搬样例站点的域名。
 只生成抓取代码，不包含 MQ、数据库、流程调度逻辑；导入模块时不要发起网络请求。`
 
-const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string>; sourceId?: string; flowId?: string; stepId?: string; outputFields?: SiteScriptOutputField[]; outputTable?: string }>()
+const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string; templateVariables?: Record<string, string>; sourceId?: string; flowId?: string; stepId?: string; outputFields?: SiteScriptOutputField[]; outputTable?: string
+  /** 没有节点提示词模板时的兜底提示词；不传按网页抓取（scrape(url)）口径。规则处理节点传规则脚本口径（1117） */
+  fallbackSystemPrompt?: string; fallbackUserPrompt?: string }>()
+function fallbackSystem() { return props.fallbackSystemPrompt?.trim() || DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT }
+function fallbackUser() { return props.fallbackUserPrompt?.trim() || DEFAULT_PROMPT }
 const emit = defineEmits<{ saved: [version: PublishedScript, configId: string, queueName: string] }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
@@ -66,8 +70,8 @@ function applyCurrentPromptEdit(value: string) {
   if (promptTab.value === 'system') { systemPrompt.value = value; selectedPromptId.value = 0 }
   else applyPromptEdit(value)
 }
-const systemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT)
-const defaultSystemPrompt = ref(DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT), defaultUserPrompt = ref(DEFAULT_PROMPT)
+const systemPrompt = ref(fallbackSystem())
+const defaultSystemPrompt = ref(fallbackSystem()), defaultUserPrompt = ref(fallbackUser())
 const templateError = ref('')
 const promptTemplates = ref<NodePromptTemplate[]>([]), selectedPromptId = ref(0), promptSnapshot = ref('')
 const templatesLoading = ref(false)
@@ -419,8 +423,8 @@ function clearDraft() {
 
 function syncPromptDefaults(template?: NodePromptTemplate) {
   const variables = { ...props.templateVariables, url: props.initialUrl, describe: props.initialPrompt, config_id: props.configId || '', queue_name: props.queueName || '' }
-  defaultSystemPrompt.value = template ? fillNodePrompt(template.systemPrompt, variables) : DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
-  defaultUserPrompt.value = outputPrompt(template ? fillNodePrompt(template.userPromptTemplate || DEFAULT_PROMPT, variables) : DEFAULT_PROMPT)
+  defaultSystemPrompt.value = template ? fillNodePrompt(template.systemPrompt, variables) : fallbackSystem()
+  defaultUserPrompt.value = outputPrompt(template ? fillNodePrompt(template.userPromptTemplate || fallbackUser(), variables) : fallbackUser())
 }
 
 function applySelectedPromptTemplate() {
@@ -479,10 +483,10 @@ async function initialize() {
     outputSubdirectory.value = ''
     referenceFiles.value = []
     destinationMode.value = 'type'; automaticDestination.value = null; destinationLookupError.value = ''
-    prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
-    systemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
-    defaultSystemPrompt.value = DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT
-    defaultUserPrompt.value = DEFAULT_PROMPT
+    prompt.value = props.initialPrompt.trim() || fallbackUser()
+    systemPrompt.value = fallbackSystem()
+    defaultSystemPrompt.value = fallbackSystem()
+    defaultUserPrompt.value = fallbackUser()
   }
   openedFor = context
   url.value = props.initialUrl
@@ -974,41 +978,94 @@ function download() {
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
+
+/**
+ * 面板加载类错误合并展示（1118）：Runner 服务不可用时生成配置 / 提交位置 / 目录 / 归档 / 智能体等会同时报同一个原因，
+ * 逐条红字铺满面板。按「失败原因」分组，同因的合成一条；只有一条时保持原文案。
+ */
+const loadErrorLines = computed(() => {
+  const raw = [
+    taskConfigError.value,
+    archiveGeneration.value && destinationMode.value === 'type' && !directoryGitBinding.value && destinationLookupError.value ? `自动提交位置查询失败：${destinationLookupError.value}` : '',
+    loadedVersion.value?.repoId && !selectedRepository.value ? '原仓库已停用或与节点类型不匹配，请重新选择保存位置。' : '',
+    directoriesError.value ? `目录加载失败：${directoriesError.value}` : '',
+    archiveError.value,
+    repositoriesError.value ? `仓库加载失败：${repositoriesError.value}` : '',
+    templateError.value,
+    modelError.value,
+  ].filter(Boolean)
+  const groups = new Map<string, string[]>()
+  for (const text of raw) {
+    const at = text.indexOf('：')
+    const label = at > 0 ? text.slice(0, at) : ''
+    const cause = at > 0 ? text.slice(at + 1) : text
+    groups.set(cause, [...(groups.get(cause) ?? []), label || text])
+  }
+  return [...groups.entries()].map(([cause, labels]) => (labels.length === 1
+    ? (labels[0] === cause ? cause : `${labels[0]}：${cause}`)
+    : `${labels.map(label => label.replace(/(读取|查询|加载)?失败$/, '')).join('、')}加载失败：${cause}`))
+})
 </script>
 
 <template>
   <section v-loading="loading" class="site-script-configuration" data-testid="site-script-configuration">
-    <div class="site-script-task-config" role="status" data-testid="generation-config-status">{{ taskConfigStatus }}</div>
-    <p v-if="taskConfigError" class="site-script-error" role="alert">{{ taskConfigError }}</p>
-    <div class="site-script-context"><span v-if="configType" data-testid="site-script-node-type">节点类型 [{{ configType }}] {{ nodeTypeName }}</span><span :title="queueName">队列 {{ queueName || '未配置' }}</span></div>
-    <div v-if="archiveGeneration" class="site-script-naming"><span>提交位置</span><el-radio-group v-model="destinationMode" :disabled="busy" size="small" data-testid="generation-destination-mode"><el-radio-button value="type">按配置类型</el-radio-button><el-radio-button value="custom">自定义仓库目录</el-radio-button></el-radio-group><span v-if="destinationMode === 'type' && automaticDestination && !directoryGitBinding">{{ automaticDestination.repoName }} / {{ automaticDestination.directoryPath }}/</span></div>
-    <p v-if="archiveGeneration && destinationMode === 'type' && !directoryGitBinding && destinationLookupError" class="site-script-error">自动提交位置查询失败：{{ destinationLookupError }}</p>
-    <div class="site-script-destination-fields">
-      <label class="site-script-field">保存仓库
-        <el-select v-model="repositoryId" size="small" :disabled="busy || (archiveGeneration && destinationMode === 'type')" data-testid="site-script-repository" placeholder="请选择仓库">
-          <template #label="{ label }"><span class="site-script-select-label" :title="label">{{ selectedRepository?.name || label }}</span></template>
-          <el-option v-if="loadedVersion?.repoId && !availableRepositories.some(repo => repo.repoId === loadedVersion?.repoId)" :value="loadedVersion.repoId" :label="`${loadedVersion.repoName || '原仓库'}（已停用或类型不匹配，请重新选择）`" disabled />
-          <el-option v-for="repo in availableRepositories" :key="repo.repoId" :label="repositoryLabel(repo)" :value="repo.repoId" />
-        </el-select>
-      </label>
-      <div class="site-script-field"><div class="site-script-directory-label"><span>仓库目录</span><el-button link type="primary" :disabled="busy" data-testid="site-script-refresh-directories" @click="loadDirectories">刷新</el-button></div>
-        <el-select v-model="directoryId" size="small" :disabled="busy || (archiveGeneration && destinationMode === 'type')" data-testid="site-script-directory" aria-label="仓库目录" placeholder="选择仓库目录">
-          <template #label="{ label }"><span class="site-script-select-label" :title="label">{{ selectedDirectory?.name || label }}</span></template>
-          <el-option v-if="loadedVersion?.directoryId && loadedVersion.repoId === repositoryId && !availableDirectories.some(row => row.directoryId === loadedVersion?.directoryId)" :value="loadedVersion.directoryId" label="原目录已停用或不可用，请重新选择" disabled />
-          <el-option v-for="directory in availableDirectories" :key="directory.directoryId" :value="directory.directoryId" :label="`${directory.name} · ${directory.configTypeName || '通用'} · ${directory.path}/`" />
-        </el-select>
-      </div>
+    <!-- 1118：样式向检查器其它页签看齐——字段名在上（11px 灰）、分组标题、同因的加载错误合并成一条提示 -->
+    <div class="ssc-head">
+      <div class="site-script-context"><span v-if="configType" data-testid="site-script-node-type">节点类型 [{{ configType }}] {{ nodeTypeName }}</span><span :title="queueName">队列 {{ queueName || '未配置' }}</span></div>
+      <div class="site-script-task-config" role="status" data-testid="generation-config-status">{{ taskConfigStatus }}</div>
     </div>
-    <p v-if="loadedVersion?.repoId && !selectedRepository" class="site-script-error" role="alert">原仓库已停用或与节点类型不匹配，请重新选择保存位置。</p>
-    <p v-if="directoriesError" class="site-script-error" role="alert">目录加载失败：{{ directoriesError }}</p>
-    <p v-if="archiveError" class="site-script-error" role="alert">{{ archiveError }}</p>
-    <p v-if="repositoriesError" class="site-script-error" role="alert">仓库加载失败：{{ repositoriesError }}</p>
-    <p v-if="templateError" class="site-script-error" role="alert">{{ templateError }}</p>
-    <div class="site-script-naming"><span>文件命名方式</span><el-select v-model="fileNameMode" size="small" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select><code :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code></div>
-    <div v-if="archiveGeneration" class="site-script-naming"><span>生成子目录</span><el-input v-model="outputSubdirectory" size="small" :disabled="busy" placeholder="如 sites" style="width: 140px; flex: 0 0 140px" data-testid="site-script-output-subdirectory" /><code :title="workspacePreview" data-testid="site-script-output-directory">{{ workspacePreview }}</code></div>
-    <p v-if="directoryGitBinding" :class="directoryBindingError ? 'site-script-error' : 'site-script-hint'" data-testid="generation-directory-git-target">目录 Git 绑定：{{ directoryGitBinding.repoName || directoryGitBinding.repositoryId }} / {{ directoryGitBinding.directoryPath || directoryGitBinding.directoryId }} · {{ directoryGitBinding.remoteUrl || '仅本地提交' }} · {{ directoryGitBinding.branch }}{{ directoryBindingError ? ` · ${directoryBindingError}` : '' }}</p>
-    <div class="site-script-model"><label>智能体</label><el-checkbox v-model="allAgentsSelected" :disabled="busy || modelsLoading" data-testid="site-script-all-agents">全选</el-checkbox><el-select v-model="modelInterfaceId" :disabled="busy || modelsLoading || allAgentsSelected" :placeholder="allAgentsSelected ? '自动分配空闲智能体' : '选择智能体'" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''} · ${agentStatusLabel(item)}`" /></el-select><el-button link :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button><RouterLink :to="{ path: '/settings', query: { tab: 'code-servers', view: 'models', ...(selectedModel?.generationServerId ? { serverId: selectedModel.generationServerId } : {}) } }" target="_blank" rel="noopener">配置</RouterLink></div>
-    <p v-if="modelError" class="site-script-error" role="alert">{{ modelError }}</p>
+    <div v-if="loadErrorLines.length" class="ssc-alert" role="alert" data-testid="site-script-load-errors">
+      <p v-for="line in loadErrorLines" :key="line">{{ line }}</p>
+    </div>
+
+    <div class="ssc-group">
+      <div class="ssc-group-title">代码保存位置</div>
+      <div v-if="archiveGeneration" class="ssc-field">
+        <label>提交位置</label>
+        <el-radio-group v-model="destinationMode" :disabled="busy" size="small" data-testid="generation-destination-mode"><el-radio-button value="type">按配置类型</el-radio-button><el-radio-button value="custom">自定义仓库目录</el-radio-button></el-radio-group>
+        <p v-if="destinationMode === 'type' && automaticDestination && !directoryGitBinding" class="ssc-help">自动提交到 {{ automaticDestination.repoName }} / {{ automaticDestination.directoryPath }}/</p>
+      </div>
+      <div class="site-script-destination-fields">
+        <div class="ssc-field"><label>保存仓库</label>
+          <el-select v-model="repositoryId" size="small" :disabled="busy || (archiveGeneration && destinationMode === 'type')" data-testid="site-script-repository" placeholder="请选择仓库">
+            <template #label="{ label }"><span class="site-script-select-label" :title="label">{{ selectedRepository?.name || label }}</span></template>
+            <el-option v-if="loadedVersion?.repoId && !availableRepositories.some(repo => repo.repoId === loadedVersion?.repoId)" :value="loadedVersion.repoId" :label="`${loadedVersion.repoName || '原仓库'}（已停用或类型不匹配，请重新选择）`" disabled />
+            <el-option v-for="repo in availableRepositories" :key="repo.repoId" :label="repositoryLabel(repo)" :value="repo.repoId" />
+          </el-select>
+        </div>
+        <div class="ssc-field"><div class="ssc-label-row"><label>仓库目录</label><el-button link type="primary" :disabled="busy" data-testid="site-script-refresh-directories" @click="loadDirectories">刷新</el-button></div>
+          <el-select v-model="directoryId" size="small" :disabled="busy || (archiveGeneration && destinationMode === 'type')" data-testid="site-script-directory" aria-label="仓库目录" placeholder="选择仓库目录">
+            <template #label="{ label }"><span class="site-script-select-label" :title="label">{{ selectedDirectory?.name || label }}</span></template>
+            <el-option v-if="loadedVersion?.directoryId && loadedVersion.repoId === repositoryId && !availableDirectories.some(row => row.directoryId === loadedVersion?.directoryId)" :value="loadedVersion.directoryId" label="原目录已停用或不可用，请重新选择" disabled />
+            <el-option v-for="directory in availableDirectories" :key="directory.directoryId" :value="directory.directoryId" :label="`${directory.name} · ${directory.configTypeName || '通用'} · ${directory.path}/`" />
+          </el-select>
+        </div>
+      </div>
+      <div class="site-script-destination-fields">
+        <div class="ssc-field"><label>文件命名方式</label>
+          <el-select v-model="fileNameMode" size="small" :disabled="busy" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select>
+          <code class="ssc-preview" :title="fileName" data-testid="site-script-file-name">{{ fileName }}</code>
+        </div>
+        <div v-if="archiveGeneration" class="ssc-field"><label>生成子目录</label>
+          <el-input v-model="outputSubdirectory" size="small" :disabled="busy" placeholder="如 sites" data-testid="site-script-output-subdirectory" />
+          <code class="ssc-preview" :title="workspacePreview" data-testid="site-script-output-directory">{{ workspacePreview }}</code>
+        </div>
+      </div>
+      <p v-if="directoryGitBinding" :class="directoryBindingError ? 'site-script-error' : 'ssc-help'" data-testid="generation-directory-git-target">目录 Git 绑定：{{ directoryGitBinding.repoName || directoryGitBinding.repositoryId }} / {{ directoryGitBinding.directoryPath || directoryGitBinding.directoryId }} · {{ directoryGitBinding.remoteUrl || '仅本地提交' }} · {{ directoryGitBinding.branch }}{{ directoryBindingError ? ` · ${directoryBindingError}` : '' }}</p>
+    </div>
+
+    <div class="ssc-group">
+      <div class="ssc-label-row ssc-group-title-row">
+        <span class="ssc-group-title">智能体</span>
+        <span class="ssc-actions">
+          <el-checkbox v-model="allAgentsSelected" size="small" :disabled="busy || modelsLoading" data-testid="site-script-all-agents">全选</el-checkbox>
+          <el-button link type="primary" :disabled="busy || modelsLoading" @click="loadModels">刷新</el-button>
+          <RouterLink class="ssc-link" :to="{ path: '/settings', query: { tab: 'code-servers', view: 'models', ...(selectedModel?.generationServerId ? { serverId: selectedModel.generationServerId } : {}) } }" target="_blank" rel="noopener">配置</RouterLink>
+        </span>
+      </div>
+      <div class="site-script-model"><el-select v-model="modelInterfaceId" size="small" :disabled="busy || modelsLoading || allAgentsSelected" :placeholder="allAgentsSelected ? '自动分配空闲智能体' : '选择智能体'" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''} · ${agentStatusLabel(item)}`" /></el-select></div>
+    </div>
+
     <GenerationReferenceFiles :key="configId" v-model="referenceFiles" :repositories="repositories" :default-repository-id="repositoryId" :disabled="busy" :input-locations="referenceInputLocations" :location-hint="referenceLocationHint" />
     <div class="site-script-paths" data-testid="site-script-source-repository">
       <div v-if="taskContextAvailable && configId">
@@ -1120,16 +1177,34 @@ function download() {
 .site-script-process{display:flex;flex:1;min-height:0;flex-direction:column;gap:10px}.site-script-process-tools{display:flex;gap:12px;align-items:center;font-size:12px}.site-script-process-stages{margin:0;padding-left:20px;font-size:12px;line-height:1.7;color:var(--el-text-color-secondary)}.site-script-process-console{flex:1;min-height:100px;overflow:auto;margin:0;padding:12px;border-radius:6px;background:var(--el-fill-color-light);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7}
 .site-script-task-config { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--rc-muted); }
 .site-script-model { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.site-script-model > label { flex: 0 0 42px; }
 .site-script-model :deep(.el-select) { flex: 1; min-width: 0; }
-.site-script-model > a { color: var(--el-color-primary); text-decoration: none; }
-.site-script-configuration { display: grid; min-width: 0; gap: 10px; background: var(--rc-card); }
+.site-script-configuration { display: grid; min-width: 0; gap: 12px; background: var(--rc-card); }
+/* 1118 面板样式：与检查器其它页签一致——字段名在上、11px 灰；分组之间细分隔线；加载错误合并成一块浅色提示 */
+.ssc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.ssc-head .site-script-task-config { margin: 0; flex-shrink: 0; }
+.ssc-alert { padding: 8px 10px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2; color: var(--rc-error, #b91c1c); font-size: 12px; line-height: 1.6; }
+.ssc-alert p { margin: 0; overflow-wrap: anywhere; }
+.ssc-group { display: grid; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--rc-border-soft); }
+.ssc-group-title { color: var(--rc-text); font-size: 12px; font-weight: 600; }
+.ssc-field { display: grid; gap: 4px; min-width: 0; }
+.ssc-field > label, .ssc-label-row > label { color: var(--rc-muted); font-size: 11px; }
+.ssc-field :deep(.el-select), .ssc-field :deep(.el-input) { width: 100%; }
+.ssc-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.ssc-label-row :deep(.el-button) { padding: 0; font-size: 11px; }
+.ssc-actions { display: inline-flex; align-items: center; gap: 10px; }
+.ssc-actions :deep(.el-button) { margin-left: 0; }
+.ssc-actions :deep(.el-checkbox) { height: auto; margin-right: 0; }
+.ssc-actions :deep(.el-checkbox__label) { padding-left: 4px; color: var(--rc-muted); font-size: 11px; }
+.ssc-link { color: var(--rc-primary); font-size: 11px; text-decoration: none; }
+.ssc-link:hover { text-decoration: underline; }
+.ssc-help { margin: 0; color: var(--rc-faint); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.ssc-preview { overflow: hidden; color: var(--rc-faint); font-family: inherit; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-repository-link { min-width: 0; color: var(--rc-primary); font-size: 12px; text-decoration: none; }
 .site-script-repository-link:hover { text-decoration: underline; }
 .site-script-paths .site-script-repository-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-open-button { width: 100%; margin: 0; }
 .site-script-context { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--rc-muted); font-size: 11px; }.site-script-context span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.site-script-destination-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 10px; }
+.site-script-destination-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 10px; }
 .site-script-select-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-script-naming { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--rc-muted); }.site-script-naming > span { flex: 0 0 auto; white-space: nowrap; }.site-script-naming code { min-width: 0; color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
 .site-script-workspace { display: grid; grid-template-columns: minmax(0, 1fr); align-content:start; gap: 16px; height: min(760px, calc(100dvh - 160px)); min-height: 0; overflow:auto; }
@@ -1161,7 +1236,7 @@ function download() {
 .site-script-prompt-group { display:flex; flex:1; min-height:0; flex-direction:column; gap:6px; }
 .site-script-generation { display: flex; align-items: center; gap: 10px; }.site-script-generation span { color: var(--rc-muted); font-size: 11px; }
 .site-script-version-select { flex: 1; min-width: 0; margin-left: 12px; }
-.site-script-paths { display: grid; gap: 5px; padding: 10px 12px; border-radius: 6px; background: var(--rc-primary-bg); }.site-script-paths div { display: flex; gap: 8px; min-width: 0; font-size: 11px; }.site-script-paths span { flex: 0 0 56px; color: var(--rc-muted); }.site-script-paths code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
+.site-script-paths { display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: var(--rc-bg, #f8fafc); }.site-script-paths div { display: flex; gap: 8px; min-width: 0; font-size: 11px; }.site-script-paths span { flex: 0 0 56px; color: var(--rc-muted); }.site-script-paths code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
 .site-script-editor-toolbar { display: flex; align-items: center; gap: 8px; }.site-script-type-select { flex: 0 0 125px; }.site-script-toolbar-spacer { flex: 1; }.site-script-editor-toolbar :deep(.el-button + .el-button) { margin-left: 0; }
 .site-script-file-link { border:0; padding:0; background:none; color:var(--rc-primary); cursor:pointer; font:inherit; text-align:left; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.site-script-file-link:disabled { cursor:default; opacity:.6; }.site-script-paths :deep(.el-button) { padding:0; font-size:11px; flex-shrink:0; margin-left:0; }.site-script-file-preview { font-size:12px; overflow-wrap:anywhere; }.site-script-file-preview pre { white-space:pre-wrap; overflow-wrap:anywhere; background:var(--rc-card); padding:12px; border-radius:6px; }
 .site-script-result-tabs { display: flex; align-items: center; gap: 8px; }.site-script-result-tabs button:not(.el-button) { border: 0; padding: 5px 9px; border-radius: 5px; background: transparent; color: var(--rc-muted); cursor: pointer; font-size: 12px; }.site-script-result-tabs button.active { background: var(--rc-primary-bg); color: var(--rc-primary); }.site-script-result-tabs .el-button { margin-left: auto; }

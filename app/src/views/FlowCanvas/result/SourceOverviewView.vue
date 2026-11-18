@@ -1465,10 +1465,9 @@ const exportColumns = computed<SourceExportColumn[]>(() => {
   if (showCol('dataCount')) cols.push({ label: '数据量', value: (s) => (s.dataCount == null ? '' : String(s.dataCount)) })
   // 「新入 / 成功」= 最近入库 / 最近成功时间（对齐旧平台；导出留精确时间戳而非「N 天前」）
   if (showCol('newIn')) cols.push({ label: '新入', value: (s) => s.lastInsertAt || '' })
-  // 1114：「成功」换成「产出」，导出详情表与它的最近入库时间（exportOutputs 由导出前统计填好）
+  // 1114：「成功」换成「产出」，导出与列表单元格同一段文字（exportOutputs / sourceCycles 由导出前统计填好）
   if (showCol('output')) {
-    cols.push({ label: '详情表', value: (s) => exportOutputText(s.sourceId, 'table') })
-    cols.push({ label: '详情最近入库', value: (s) => exportOutputText(s.sourceId, 'time') })
+    cols.push({ label: '产出', value: (s) => exportOutputCellText(s.sourceId) })
   }
   if (showCol('lastTask')) cols.push({ label: '最近任务', value: (s) => s.lastTaskAt || '' })
   if (showCol('lastSuccess')) cols.push({ label: '最近成功', value: (s) => s.lastSuccessAt || '' })
@@ -1488,20 +1487,34 @@ const exportColumns = computed<SourceExportColumn[]>(() => {
 const EXPORT_LOOKUP_TIMEOUT_MS = 2500
 
 /**
- * 导出的「产出」列：每个源要单独调一次 queryStepDetail，全量导出（上万个源）逐个统计要十几分钟，
+ * 导出的「产出」列：与列表单元格同一段文字（结论标签 + 详情最近入库），不额外拆字段。
+ * 每个源要单独调一次 queryStepDetail，全量导出（上万个源）逐个统计要十几分钟，
  * 所以只在源数不超过 EXPORT_OUTPUT_LIMIT 时统计（8 并发，217 实测 65 个源 3.6 s），超过就填「未统计」并提示。
  */
 const EXPORT_OUTPUT_LIMIT = 500
+/** 结论要跟目录周期比：没缓存过就现取，最多等这么久；取不到就只给时间，与列表当时的样子一致 */
+const EXPORT_CYCLE_TIMEOUT_MS = 15000
 let exportOutputs = new Map<string, SourceOutputSummary | 'failed'>()
-function exportOutputText(sourceId: string, field: 'table' | 'time'): string {
+/**
+ * 导出单元格：`[停更 3 天] [20 天前]` / `正常 2 小时前` / `无详情表` / `统计异常`，
+ * 判定、标签、文案都复用列表那一套，避免导出与页面两套口径。
+ * 没统计（超出 EXPORT_OUTPUT_LIMIT）填「未统计」，接口失败的填「统计异常」。
+ */
+function exportOutputCellText(sourceId: string): string {
   const summary = exportOutputs.get(sourceId)
   if (!summary) return '未统计'
-  if (summary === 'failed') return '统计失败'
-  if (summary.kind === 'none') return field === 'table' ? '' : '无详情表'
-  if (field === 'table') return `${summary.table.entryTypeName}（${summary.table.tableName || summary.table.entryTypeId}）`
-  if (summary.kind === 'error') return '统计异常'
-  if (summary.kind === 'never') return '无数据'
-  return summary.lastInsertAt
+  if (summary === 'failed') return OUTPUT_VERDICT_LABEL.error
+  const judgement = judgeSourceOutput(summary, sourceCycles.value.get(sourceId))
+  let tag = ''
+  if (judgement.verdict === 'stale') tag = judgement.staleHours === undefined ? '停更 · 无数据' : `停更 ${durationText(judgement.staleHours)}`
+  else if (judgement.verdict === 'ok') tag = '正常'
+  else if (judgement.verdict === 'error') tag = '统计异常'
+  let text = ''
+  if (summary.kind === 'none') text = '无详情表'
+  else if (summary.kind === 'error') text = judgement.verdict === 'error' ? '' : '统计异常'
+  else if (summary.kind === 'never') text = judgement.verdict === 'stale' ? '' : '无数据'
+  else text = timeAgo(summary.lastInsertAt)
+  return [tag, text].filter(Boolean).join(' ')
 }
 async function collectExportOutputs(sources: Source[], signal: AbortSignal): Promise<boolean> {
   exportOutputs = new Map()
@@ -1585,6 +1598,11 @@ async function exportSources() {
       return
     }
     const outputCounted = await collectExportOutputs(sources, collectAbort.signal)
+    if (outputCounted && showCol('output')) {
+      collectProgress.value = '正在获取目录预期周期…'
+      // 结论依赖目录周期；这里不无限等——取不到就填「未统计」，导出本身不挂在网络上
+      await withTimeout(refreshCycles(), EXPORT_CYCLE_TIMEOUT_MS)
+    }
     collectProgress.value = '正在整理导出字段…'
     await ensureExportLookups(sources)
     const cols = exportColumns.value
@@ -1592,7 +1610,7 @@ async function exportSources() {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     downloadXlsx(`源列表_${props.currentSiteId || '全部网站'}_${date}.xlsx`, rows, '源列表')
     if (outputCounted) ElMessage.success(`已按当前查询条件导出 ${sources.length} 个源`)
-    else ElMessage.warning(`已导出 ${sources.length} 个源；超过 ${EXPORT_OUTPUT_LIMIT} 个源时不统计产出，「详情最近入库」填「未统计」，可缩小范围后再导出`)
+    else ElMessage.warning(`已导出 ${sources.length} 个源；超过 ${EXPORT_OUTPUT_LIMIT} 个源时不统计产出，「产出」列填「未统计」，可缩小范围后再导出`)
   } catch (error) {
     if ((error as { name?: string }).name === 'AbortError') return
     if (error instanceof CollectLimitError) {

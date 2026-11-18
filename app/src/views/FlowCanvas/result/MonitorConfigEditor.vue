@@ -1147,7 +1147,8 @@ async function onSave(): Promise<void> {
     const regenerate = needsRegenerate(form, committedForm.value)
     const regenerateReasonsOf = regenerate ? regenerateReasons(form, committedForm.value) : []
     const conf = confFromForm(form, baseConf, {
-      script: generated ? candidate.script : undefined,
+      // 智能体模式脚本只在 Git（执行从 Git 取），不存正文；内置接口仍按原样存正文
+      script: generated && form.generationMode !== 'agent' ? candidate.script : undefined,
       scriptPath: generated ? candidate.scriptPath : undefined,
     })
     if (form.kind === 'ai') conf.version = savedVersion || undefined

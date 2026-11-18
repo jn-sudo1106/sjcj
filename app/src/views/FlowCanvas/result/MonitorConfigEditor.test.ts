@@ -1314,6 +1314,8 @@ describe('MonitorConfigEditor 智能体生成', () => {
     expect(conf.generation).toEqual({ mode: 'agent', interfaceId: 'all', repoId: 'mon', directoryId: 'd-mon' })
     expect(conf.archiveId).toBe('b'.repeat(32))
     expect(conf.scriptPath).toBe(`monitor/${SOURCE.sourceId}/mon-1001.py`)
+    // 执行从 Git 取：智能体模式不存正文，旧的内置接口正文也清掉
+    expect(conf).not.toHaveProperty('script')
   })
 
   it('智能体生成被后端拒绝：保留原脚本，提示可切回内置接口', async () => {
