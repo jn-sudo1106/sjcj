@@ -67,11 +67,21 @@ describe('generateMonitorScriptWithAgent', () => {
     expect(archiveStatusText(result.archive)).toBe('commit abcdef12 · 已推送到远程')
   })
 
+  it('归档回执没带文件路径时按所选目录拼预期路径', async () => {
+    mocks.generateSiteScript.mockResolvedValue({ code: 'def main():\n    pass', fileName: '3101.py', warnings: [] })
+    const result = await generateMonitorScriptWithAgent({
+      sourceId: '391006829', monitorId: '3101', interfaceId: 'all', repoId: 'r1', directoryId: 'd1', directoryPath: 'dataMonitor', systemPrompt: '系统', userPrompt: '用户',
+    })
+    expect(result.scriptPath).toBe('dataMonitor/391006829/3101.py')
+  })
+
   it('归档状态文案', () => {
     expect(archiveStatusText(null)).toBe('')
     expect(archiveStatusText({ status: 'pending' } as GeneratedCodeArchive)).toBe('已生成，待提交 Git')
     expect(archiveStatusText({ status: 'failed', message: '无权限' } as GeneratedCodeArchive)).toBe('提交失败：无权限')
     expect(archiveStatusText({ status: 'committed', gitCommit: '1234567890', pushed: false } as GeneratedCodeArchive)).toBe('commit 12345678 · 仅本地提交（仓库未配置远程）')
-    expect(monitorScriptPath('1', '')).toBe('')
+    expect(monitorScriptPath('dataMonitor', '1', '')).toBe('')
+    expect(monitorScriptPath('', '1', '2')).toBe('')
+    expect(monitorScriptPath('/dataMonitor/', '391006829', '3101')).toBe('dataMonitor/391006829/3101.py')
   })
 })

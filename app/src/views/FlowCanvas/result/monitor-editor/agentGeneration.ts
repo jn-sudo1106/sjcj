@@ -2,7 +2,7 @@
 //
 // 复用网页抓取「智能体配置」用的同一组 Runner 接口（智能体接口、代码仓库 / 目录、代码生成任务），
 // 但不复用那个 1100+ 行的弹窗：监控只需要「智能体 + 仓库 + 目录」，文件名与子目录是固定规则
-// `monitor/<sourceId>/<监控ID>.py`，没有网站命名、代理、发布到文件服务这些概念。
+// `<仓库目录>/<sourceId>/<监控ID>.py`（目录取所选的数据监控目录，2806 上是 dataMonitor），没有网站命名、代理、发布到文件服务这些概念。
 //
 // ⚠️ 生成任务依赖后端「监控上下文」（契约 7）以及按节点类型区分的代码校验（现在一律要求 scrape(url)）。
 // 后端未支持前，生成会被后端拒绝；编辑器把后端原因原样显示，并保留「内置接口」作为默认生成方式。
@@ -56,8 +56,10 @@ export function defaultMonitorDirectory(rows: CodeRepositoryDirectory[]): string
   return (marked.find((row) => row.generationDefault) ?? rows[0])?.directoryId ?? ''
 }
 
-export function monitorScriptPath(sourceId: string, monitorId: string): string {
-  return sourceId && monitorId ? `monitor/${sourceId}/${monitorId}.py` : ''
+/** 仓库内路径：所选目录 + 源 ID + 监控 ID；任一缺失返回空串（界面提示缺什么，不拼半截路径） */
+export function monitorScriptPath(directoryPath: string, sourceId: string, monitorId: string): string {
+  const dir = directoryPath.trim().replace(/^\/+|\/+$/g, '')
+  return dir && sourceId && monitorId ? `${dir}/${sourceId}/${monitorId}.py` : ''
 }
 
 export interface AgentGenerateInput {
@@ -68,6 +70,8 @@ export interface AgentGenerateInput {
   interfaceId: string
   repoId: string
   directoryId: string
+  /** 所选目录在仓库里的路径，归档回执没带文件路径时用它拼预期路径 */
+  directoryPath?: string
   systemPrompt: string
   userPrompt: string
   onEvent?: (event: SiteScriptGenerationEvent) => void
@@ -101,7 +105,7 @@ export async function generateMonitorScriptWithAgent(input: AgentGenerateInput):
   }, input.signal, input.onEvent)
   const archive = result.archive ?? null
   const script = cleanMonitorPython(result.code)
-  const filePath = archive?.files?.[0]?.path || monitorScriptPath(input.sourceId, input.monitorId)
+  const filePath = archive?.files?.[0]?.path || monitorScriptPath(input.directoryPath ?? '', input.sourceId, input.monitorId)
   return { script, scriptPath: filePath, archive }
 }
 

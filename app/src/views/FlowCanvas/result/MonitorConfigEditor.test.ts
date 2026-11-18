@@ -1190,11 +1190,30 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     expect(system()).toBe('模板系统提示词：检查表 sense_data.TB_RAW')
   })
 
-  it('已有记录显示 Git 目标路径 monitor/<sourceId>/<监控ID>.py', async () => {
-    const wrapper = mountEditor({ record: aiRecord() })
+  // 目录取所选的数据监控目录（2806 上是 dataMonitor），不写死 monitor；内置接口模式不显示 Git 路径
+  it('智能体模式按所选目录显示 Git 目标路径 <目录>/<sourceId>/<监控ID>.py；内置接口不显示', async () => {
+    mocks.loadAgentOptions.mockResolvedValue({ agents: [{ id: 'all', name: '全选', model: '' }], repos: [{ repoId: 'r1', name: '默认仓库', configType: '' }], agentError: '', repoError: '' })
+    mocks.loadDirectories.mockResolvedValue([{ directoryId: 'd-dm', name: '数据监控', path: 'dataMonitor', configType: '610', status: 'ACTIVE' }])
+    const record = aiRecord()
+    record.conf = { ...record.conf, generation: { mode: 'agent', interfaceId: 'all', repoId: 'r1', directoryId: 'd-dm' } }
+    const wrapper = mountEditor({ record })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
-    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain(`monitor/${SOURCE.sourceId}/mon-1001.py`)
+    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain(`dataMonitor/${SOURCE.sourceId}/mon-1001.py`)
+    expect(wrapper.find('[data-testid="mc-target-path"]').text()).not.toContain('monitor/')
+
+    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
+    expect(wrapper.find('[data-testid="mc-target-path"]').exists()).toBe(false)
+  })
+
+  it('智能体模式未选目录时提示先选目录，不拼半截路径', async () => {
+    mocks.loadAgentOptions.mockResolvedValue({ agents: [], repos: [], agentError: '', repoError: '' })
+    const record = aiRecord()
+    record.conf = { ...record.conf, generation: { mode: 'agent', interfaceId: '', repoId: '', directoryId: '' } }
+    const wrapper = mountEditor({ record })
+    await settle()
+    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
+    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain('请先选择仓库目录')
   })
 
   it('新建监控生成前先存草稿拿 ID：确认后保存（无脚本）再生成，不关编辑器', async () => {
@@ -1217,7 +1236,6 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
     await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
     await settle()
-    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain('先保存草稿')
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
     await settle()
 
@@ -1228,7 +1246,8 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     expect(wrapper.emitted('draft-saved')?.[0]?.[0]).toMatchObject({ id: '3101' })
     expect(wrapper.emitted('saved')).toBeUndefined()
     expect(ruleApi.dataProcessGenerate).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain(`monitor/${SOURCE.sourceId}/3101.py`)
+    // 内置接口模式不显示 Git 路径
+    expect(wrapper.find('[data-testid="mc-target-path"]').exists()).toBe(false)
   })
 
   it('新建监控生成时取消「先存草稿」：不保存也不生成', async () => {

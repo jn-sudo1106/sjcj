@@ -18,6 +18,7 @@ import {
   generateMonitorScriptWithAgent,
   loadAgentGenerationOptions,
   loadMonitorDirectories,
+  monitorScriptPath,
 } from './monitor-editor/agentGeneration'
 import type { CodeRepository, CodeRepositoryDirectory, GeneratedCodeArchive, ModelInterface } from '@/api/runnerManagement'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -821,12 +822,19 @@ function switchKind(kind: MonitorKind): void {
 }
 
 /**
- * 脚本按监控 ID 命名（1117 契约 3：monitor/<sourceId>/<监控ID>.py），新建监控还没有 ID。
+ * 脚本按监控 ID 命名（1117 契约 3：<仓库目录>/<sourceId>/<监控ID>.py），新建监控还没有 ID。
  * 生成前先按草稿保存（无脚本 = 草稿，不执行），回读拿到 ID 再继续；用户取消则不生成。
  */
 const monitorId = computed(() => recordState.value?.id ? String(recordState.value.id) : '')
+const selectedDirectory = computed(() => directoryOptions.value.find((row) => row.directoryId === form.directoryId))
+/** 只在智能体模式有意义；目录取所选的数据监控目录（2806 上是 dataMonitor，不写死 monitor） */
 const targetScriptPath = computed(() =>
-  monitorId.value && form.sourceId.trim() ? `monitor/${form.sourceId.trim()}/${monitorId.value}.py` : '')
+  monitorScriptPath(selectedDirectory.value?.path ?? '', form.sourceId.trim(), monitorId.value))
+const targetPathHint = computed(() => {
+  if (!monitorId.value) return '新建监控生成前先保存草稿，拿到监控 ID 后确定'
+  if (!form.directoryId) return '请先选择仓库目录'
+  return '目录信息加载中…'
+})
 
 async function ensureMonitorId(): Promise<boolean> {
   if (monitorId.value) return true
@@ -926,7 +934,7 @@ async function onGenerate(): Promise<void> {
     )
     let result: { script: string; scriptPath: string }
     if (form.generationMode === 'agent') {
-      // 智能体生成：任务方式，产物提交 Git monitor/<sourceId>/<监控ID>.py（依赖后端监控上下文，契约 7）
+      // 智能体生成：任务方式，产物提交 Git <仓库目录>/<sourceId>/<监控ID>.py（依赖后端监控上下文，契约 7）
       const agentResult = await generateMonitorScriptWithAgent({
         sourceId: form.sourceId.trim(),
         monitorId: monitorId.value,
@@ -935,6 +943,7 @@ async function onGenerate(): Promise<void> {
         interfaceId: form.agentInterfaceId,
         repoId: form.repoId,
         directoryId: form.directoryId,
+        directoryPath: selectedDirectory.value?.path,
         systemPrompt,
         userPrompt: form.desc,
         onEvent: (event) => {
@@ -1589,9 +1598,9 @@ defineExpose({
               <div class="mc-script-title">
                 <h4>脚本</h4>
                 <p class="mc-hint" data-testid="mc-script-version">{{ versionText }}</p>
-                <!-- 1117 契约 3：脚本按 monitor/<sourceId>/<监控ID>.py 存 Git；智能体生成接入前只预览，生成仍走现有接口 -->
-                <p v-if="form.kind === 'ai'" class="mc-hint mc-target-path" data-testid="mc-target-path" :title="targetScriptPath || undefined">
-                  Git 目标路径：<code v-if="targetScriptPath">{{ targetScriptPath }}</code><template v-else>新建监控生成前先保存草稿，拿到监控 ID 后确定</template>
+                <!-- 1117 契约 3：脚本按 <仓库目录>/<sourceId>/<监控ID>.py 存 Git；只在智能体模式显示（内置接口存文件服务） -->
+                <p v-if="form.kind === 'ai' && form.generationMode === 'agent'" class="mc-hint mc-target-path" data-testid="mc-target-path" :title="targetScriptPath || undefined">
+                  Git 目标路径：<code v-if="targetScriptPath">{{ targetScriptPath }}</code><template v-else>{{ targetPathHint }}</template>
                 </p>
                 <p v-if="form.kind === 'ai' && archiveText" class="mc-hint" data-testid="mc-archive-status">Git：{{ archiveText }}</p>
               </div>
