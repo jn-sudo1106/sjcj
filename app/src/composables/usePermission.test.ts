@@ -105,7 +105,9 @@ describe('菜单权限接线', () => {
     await router.isReady()
     const wrapper = mount(Settings, { global: { plugins: [router, ElementPlus] } })
     await flushPromises()
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['分类目录', '服务器', '处理机', '代码仓库', '部署配置', '部署资源', '运行日志', '程序版本'])
+    // 当前有意行为：settings:nodeType 被拒后 节点类型/智能体资源/MCP 服务 一并隐藏；
+    // 处理机/部署配置/deployment-resources 走 navigationTabs 过滤不渲染；runners 标签覆写为「部署资源」。
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['分类目录', '部署资源', '代码仓库', '运行日志', '程序版本'])
     expect(wrapper.find('[data-testid="settings-category"]').exists()).toBe(true)
     expect(router.currentRoute.value.query).toEqual({})
   })

@@ -12,6 +12,7 @@ import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
+import McpServersTab from './McpServersTab.vue'
 import ProgramVersionsTab from './ProgramVersionsTab.vue'
 import DeploymentResourcesTab from './DeploymentResourcesTab.vue'
 
@@ -19,6 +20,7 @@ const componentMap: Record<string, Component> = {
   'node-type': NodeTypeTab,
   category: CategoryTab,
   'code-servers': CodeGenerationServersTab,
+  'mcp-servers': McpServersTab,
   runners: ServerConfigurationsTab,
   processors: ProcessorProcessesTab,
   'code-repos': CodeRepositoryTab,
@@ -32,13 +34,15 @@ const fallbackTabs = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', order: 1 },
   { key: 'category', label: '分类目录', permission: 'settings:category', order: 2 },
   { key: 'code-servers', label: '智能体资源', permission: 'settings:nodeType', order: 3 },
-  { key: 'runners', label: '部署资源', permission: 'settings:runners', order: 4 },
-  { key: 'processors', label: '处理机', permission: 'settings:assignments', order: 5 },
-  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', order: 6 },
-  { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', order: 7 },
-  { key: 'deployment-resources', label: '部署资源', permission: 'settings:assignments', order: 8 },
-  { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', order: 9 },
-  { key: 'releases', label: '程序版本', permission: 'settings:releases', order: 10 },
+  // MCP 是智能体调用外部工具的基础设施配置，紧跟智能体资源；权限码沿用相邻 tab（新码会导致非超管看不到，1118）
+  { key: 'mcp-servers', label: 'MCP 服务', permission: 'settings:nodeType', order: 4 },
+  { key: 'runners', label: '部署资源', permission: 'settings:runners', order: 5 },
+  { key: 'processors', label: '处理机', permission: 'settings:assignments', order: 6 },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', order: 7 },
+  { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', order: 8 },
+  { key: 'deployment-resources', label: '部署资源', permission: 'settings:assignments', order: 9 },
+  { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', order: 10 },
+  { key: 'releases', label: '程序版本', permission: 'settings:releases', order: 11 },
 ]
 
 const route = useRoute()
