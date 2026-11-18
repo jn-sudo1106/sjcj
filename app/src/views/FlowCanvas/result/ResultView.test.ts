@@ -146,6 +146,33 @@ describe('ResultView', () => {
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ siteId: current.siteId, sourceId: current.sourceId }))
   })
 
+  // 1117：输出 / 输入块只留标签，表看紧跟着的物理表名；悬停标签显示表 ID 与物理表名，取不到表信息只显示表 ID
+  it('输出块只显示标签，不再并排表 ID / 表名称；title 带表 ID 与物理表名', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, name: '评论表', tableName: 'sense_data.TB_COMMENT', dsKind: 'CK' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    for (const chip of wrapper.findAll('[data-testid="data-output-table"]')) {
+      expect(chip.text()).toBe('输出')
+      expect(chip.attributes('title')).toMatch(/^表 ID：\S+ · sense_data\.TB_COMMENT$/)
+    }
+    expect(wrapper.text()).not.toContain('评论表')
+    wrapper.unmount()
+
+    setActivePinia(createPinia())
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('表未注册'))
+    const failed = mountResultView()
+    await flushPromises()
+    for (const chip of failed.findAll('[data-testid="data-output-table"]')) {
+      expect(chip.attributes('title')).toMatch(/^表 ID：\S+$/)
+    }
+  })
+
   it('带 scriptPath 进入数据视图时不会自动打开文件预览', async () => {
     setActivePinia(createPinia())
     mockRouteQuery.scriptPath = '/code01/202609/1788326374508.py'

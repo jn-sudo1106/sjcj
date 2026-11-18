@@ -32,6 +32,10 @@ function onExportFields() {
         <dd>{{ tableMeta.name || '—' }}</dd>
         <dt>物理表名</dt>
         <dd>{{ tableMeta.tableName }}</dd>
+        <!-- 1117：数据在 MySQL 还是 ClickHouse（源数据视图点物理表名进来看这里）；
+             和其余字段一样纯文本，老记录没返回 dsKind 按 MYSQL -->
+        <dt>库类型</dt>
+        <dd data-testid="table-detail-ds-kind">{{ tableMeta.dsKind ?? 'MYSQL' }}</dd>
         <dt>状态</dt>
         <dd>{{ tableMeta.state || '—' }}</dd>
         <dt>去重字段</dt>

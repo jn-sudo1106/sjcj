@@ -69,7 +69,7 @@ describe('MoreTablesDialog · 表详情', () => {
 
   it('表级字段对齐旧平台详情：没有「数据量」一项', async () => {
     const kv = await openDetail(DETAIL)
-    expect(Object.keys(pairs(kv))).toEqual(['表 ID', '表名称', '物理表名', '状态', '去重字段', '备注', '更新时间', '记录变更', '校验标识', '校验规则', '核心参数'])
+    expect(Object.keys(pairs(kv))).toEqual(['表 ID', '表名称', '物理表名', '库类型', '状态', '去重字段', '备注', '更新时间', '记录变更', '校验标识', '校验规则', '核心参数'])
   })
 
   it('接口没返回的可选字段仍显示「—」', async () => {

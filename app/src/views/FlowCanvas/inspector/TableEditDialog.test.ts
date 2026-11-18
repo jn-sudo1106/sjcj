@@ -218,3 +218,52 @@ describe('TableEditDialog · 迁移欠账补齐', () => {
     await flushPromises()
   })
 })
+
+// 1117：源上「新建表」与数据中心「数据表编辑」共用存储设置（utils/data/entryStorage），走同一个 entrySave
+describe('TableEditDialog · 存储设置（CK / MySQL）', () => {
+  it('新建选 CK：引擎切 ReplacingMergeTree、排序列 ENTRY_ID，提交带上完整 CK 配置', async () => {
+    const save = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ tableId: '999', message: 'ok' })
+    const w = mount(TableEditDialog, { props: { open: true }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const ds = w.get('[data-testid="ted-ds-kind"]')
+    expect((ds.element as HTMLSelectElement).value).toBe('MYSQL')
+    expect((ds.element as HTMLSelectElement).disabled).toBe(false)
+    expect(w.get('[data-testid="ted-storage-summary"]').text()).toBe('读写 · InnoDB')
+
+    await ds.setValue('CK')
+    expect(w.get('[data-testid="ted-storage-summary"]').text()).toBe('读写 · ReplacingMergeTree · ORDER BY ENTRY_ID')
+    await w.get('[data-testid="ted-adv-toggle"]').trigger('click')
+    await w.get('[data-testid="ted-part-column"]').setValue('toYYYYMM(UPDATE_DT)')
+
+    const inputs = w.findAll('input.ted-input')
+    await inputs[0].setValue('CK测试表')
+    await clickAdd(w)
+    const cells = w.findAll('input.ted-cell')
+    await cells[0]!.setValue('title')
+    await cells[1]!.setValue('标题')
+    await clickOk(w)
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      dsKind: 'CK',
+      opType: 'wr',
+      storageEngine: 'ReplacingMergeTree',
+      sorted: 'ENTRY_ID',
+      partColumn: 'toYYYYMM(UPDATE_DT)',
+      tableConfig: JSON.stringify({ storageEngine: 'ReplacingMergeTree', sorted: 'ENTRY_ID', partColumn: 'toYYYYMM(UPDATE_DT)' }),
+    }))
+  })
+
+  it('编辑已有 CK 表：库类型只读，保存原样带回存储配置（不被冲成 MySQL）', async () => {
+    const save = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ tableId: '2103330', message: 'ok' })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ ...TABLE, dsKind: 'CK', opType: 'r', storageEngine: 'MergeTree', sorted: 'SOURCE_ID, ENTRY_ID' })
+    const w = mount(TableEditDialog, { props: { open: true, tableId: '2103330' }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const ds = w.get('[data-testid="ted-ds-kind"]')
+    expect((ds.element as HTMLSelectElement).value).toBe('CK')
+    expect((ds.element as HTMLSelectElement).disabled).toBe(true)
+    await clickOk(w)
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      tableId: '2103330', dsKind: 'CK', opType: 'r', storageEngine: 'MergeTree', sorted: 'SOURCE_ID, ENTRY_ID',
+    }))
+  })
+})

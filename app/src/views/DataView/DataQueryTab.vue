@@ -13,6 +13,7 @@ import {
 import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
 import DataTableSidebar from '@/components/DataTableSidebar.vue'
+import StorageKindTag from '@/components/StorageKindTag.vue'
 import { favoriteEntryIds, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
@@ -1127,7 +1128,7 @@ onUnmounted(() => {
             <button v-if="sidebarCollapsed" class="dv-nav-expand" type="button" title="展开数据表导航" aria-label="展开数据表导航" @click="sidebarCollapsed = false"><el-icon><DArrowRight /></el-icon></button>
             <BrowseModeToggle v-model="browseMode" />
             <strong :title="currentTableName">{{ currentTableName }}</strong>
-            <el-tag v-if="currentTable" class="dv-engine-tag" size="small" effect="plain">{{ currentTable.dsKind ?? 'MYSQL' }}</el-tag>
+            <StorageKindTag v-if="currentTable" class="dv-engine-tag" :kind="currentTable.dsKind" />
             <span v-if="tableId" class="dv-table-id">表 ID：{{ tableId }}</span>
             <button v-if="tableId" class="dv-favorite" type="button" :aria-label="favoriteEntryIds.has(tableId) ? '取消收藏当前表' : '收藏当前表'" :aria-pressed="favoriteEntryIds.has(tableId)" :disabled="!tableMeta" @click="toggleFavoriteEntry(tableId)"><el-icon><StarFilled v-if="favoriteEntryIds.has(tableId)" /><Star v-else /></el-icon></button>
           </div>
@@ -1530,7 +1531,7 @@ onUnmounted(() => {
 .dv-table-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 1; }
 .dv-table-context strong { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .dv-table-id { color: var(--rc-muted); font-size: 12px; }
-.dv-engine-tag { border-color: var(--rc-border-soft); background: var(--rc-bg); color: var(--rc-muted); font-size: 11px; }
+.dv-engine-tag { flex: none; }
 .dv-nav-expand, .dv-favorite { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--rc-radius-sm); background: transparent; color: var(--rc-muted); cursor: pointer; }
 .dv-nav-expand:hover, .dv-favorite:not(:disabled):hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .dv-nav-expand:focus-visible, .dv-favorite:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }

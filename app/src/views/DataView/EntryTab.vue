@@ -13,6 +13,7 @@ import { withoutComposition } from '@/utils/enterKey'
 import { copyToClipboard } from '@/utils/clipboard'
 import { favoriteEntryIds, isFavoriteEntry, loadFavoriteEntries, toggleFavoriteEntry } from '@/utils/entryFavorites'
 import { PHYSICAL_TABLE_UNKNOWN_LABEL } from '@/utils/data/missingTable'
+import StorageKindTag from '@/components/StorageKindTag.vue'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
 const auth = useAuthStore()
@@ -693,7 +694,7 @@ const onEnterSearch = withoutComposition(() => onSearch())
             <td class="et-physical-state" data-testid="entry-physical-state">{{ PHYSICAL_TABLE_UNKNOWN_LABEL }}</td>
             <td>
               <div>
-                <span>{{ e.dsKind ?? 'MYSQL' }}</span>
+                <StorageKindTag :kind="e.dsKind" />
                 <span :style="{ marginLeft: '4px', fontSize: '11px', padding: '1px 5px', borderRadius: '3px', background: e.opType === 'r' ? '#fef3c7' : '#e0f2fe', color: e.opType === 'r' ? '#92400e' : '#0369a1', display: 'inline-block' }">
                   {{ e.opType === 'r' ? '只读' : '读写' }}
                 </span>
