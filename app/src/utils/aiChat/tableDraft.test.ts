@@ -24,8 +24,8 @@ function draft(overrides: Partial<TableDraft> = {}): TableDraft {
     remark: '统计局月度指标',
     fields: [
       { code: 'indicator', desc: '指标名称', type: 'string', dedup: true },
-      { code: 'period', desc: '时间', type: 'date', dedup: true },
-      { code: 'value', desc: '数值', type: 'number', dedup: false },
+      { code: 'period', desc: '时间', type: 'string', dedup: true },
+      { code: 'value', desc: '数值', type: 'string', dedup: false },
     ],
     ...overrides,
   }
@@ -44,16 +44,24 @@ const ANSWER = `按指标+时间去重。
 确认后即可创建。`
 
 describe('建表草稿 · 解析', () => {
-  it('从正文 table-draft 代码块提取，类型别名归一', () => {
+  it('从正文 table-draft 代码块提取，类型按数据表编辑的 string/text/longtext 归一', () => {
     const result = extractTableDraftFromText(ANSWER)
-    expect(result).toMatchObject({ name: '统计局指标', tableName: 'TB_TJJZB', dsKind: 'CK' })
-    expect(result!.fields.map((f) => [f.type, f.dedup])).toEqual([['string', true], ['date', true], ['number', false]])
+    expect(result).toMatchObject({ name: '统计局指标', tableName: 'TB_TJJZB', dsKind: 'CK', dedupMode: 'source' })
+    expect(result!.fields.map((f) => [f.type, f.dedup])).toEqual([['string', true], ['string', true], ['string', false]])
+    expect(normalizeTableDraft({ name: 'A', dedupMode: '表内去重', fields: [{ code: 'u', type: 'url' }, { code: 'j', type: 'json' }, { code: 't', type: 'text' }] }))
+      .toMatchObject({ dedupMode: 'table', fields: [{ type: 'string' }, { type: 'longtext' }, { type: 'text' }] })
   })
 
   it('没有代码块、JSON 不合法、未闭合时都不出草稿', () => {
     expect(extractTableDraftFromText('普通回答')).toBeNull()
     expect(extractTableDraftFromText('```table-draft\n{坏的}\n```')).toBeNull()
     expect(extractTableDraftFromText('```table-draft\n{"name":"a","fields":[')).toBeNull()
+  })
+
+  it('模型手写 JSON 括号错位、尾逗号也能认（186 实测：fields 数组用 } 收尾）', () => {
+    const broken = '```table-draft\n{"name":"招聘岗位测试","dsKind":"MYSQL","fields":[\n  {"code":"job_url","desc":"岗位链接","type":"url","dedup":true},\n  }\n}\n```'
+    expect(extractTableDraftFromText(broken)).toMatchObject({ name: '招聘岗位测试', fields: [{ code: 'job_url', dedup: true }] })
+    expect(extractTableDraftFromText('```table-draft\n{"name":"A{]","fields":[{"code":"a","desc":"x"}]\n```')).toMatchObject({ name: 'A{]' })
   })
 
   it('正文渲染去掉代码块，流式未闭合的半截也藏掉', () => {
@@ -106,6 +114,7 @@ describe('建表草稿 · 校验与落库组装', () => {
       sorted: 'ENTRY_ID',
     })
     expect(tableDraftToEntry(draft({ dsKind: 'MYSQL' }))).toMatchObject({ dsKind: 'MYSQL', storageEngine: 'InnoDB' })
+    expect(tableDraftToEntry(draft({ dedupMode: 'table' }))).toMatchObject({ dedupMode: 'table' })
   })
 
   it('createTableFromDraft：校验不过不发请求；没拿到表 ID 视为失败', async () => {
@@ -154,5 +163,17 @@ describe('建表模式 · 提示词与结果回传', () => {
     // 对建表结果的回复里复述的字段表是表结构，不渲染成统计图
     expect(messages[3].chartData).toBeUndefined()
     expect(messages[5].tableDraft).toMatchObject({ status: 'pending' })
+  })
+
+  it('历史回放：草稿没给物理表名（卡片按名称生成）时，认它之后第一条建表结果，不跨到下一份草稿', () => {
+    const noName = ANSWER.replace('"tableName":"TB_TJJZB",', '')
+    const logs: BackendChatLog[] = [
+      { id: 1, sessionId: 9, msg: '建统计局指标表', modelMsg: noName, status: 'SUCCESS' },
+      { id: 2, sessionId: 9, msg: formatTableCreatedMessage(draft({ tableName: 'TB_TJJZB_V2' }), '2102000'), modelMsg: '好的', status: 'SUCCESS' },
+      { id: 3, sessionId: 9, msg: '再建一张', modelMsg: noName, status: 'SUCCESS' },
+    ]
+    const messages = convertChatLogsToMessages(logs)
+    expect(messages[1].tableDraft).toMatchObject({ status: 'created', tableId: '2102000', draft: { tableName: 'TB_TJJZB_V2' } })
+    expect(messages[5].tableDraft).toMatchObject({ status: 'pending', draft: { tableName: '' } })
   })
 })

@@ -2,7 +2,7 @@
 import { CK_ENGINE_OPTIONS, MYSQL_ENGINE_OPTIONS, applyDsKindDefaults, storageFromEntry, storagePayload, storageSummary as entryStorageSummary } from '@/utils/data/entryStorage'
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { pinyin } from 'pinyin-pro'
+import { tableNameFromEntryName } from '@/utils/data/entryTableName'
 import { RefreshRight } from '@element-plus/icons-vue'
 import { entryApi, type EntryField, type EntryType } from '../../api'
 import {
@@ -71,8 +71,7 @@ const batchDialog = reactive<{ visible: boolean; text: string }>({ visible: fals
 const tableNameTouched = ref(false)
 function onNameInput() {
   if (isEdit.value || tableNameTouched.value) return
-  const letters = pinyin(form.name || '', { pattern: 'first', toneType: 'none', type: 'array' }).join('')
-  form.tableName = letters ? `TB_${letters.toUpperCase()}` : ''
+  form.tableName = tableNameFromEntryName(form.name)
 }
 function onTableNameInput() { tableNameTouched.value = true }
 

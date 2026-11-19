@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { entryApi, type EntryType, type EntryField } from '@/api'
-import { pinyin } from 'pinyin-pro'
+import { tableNameFromEntryName } from '@/utils/data/entryTableName'
 import { ENTRY_PREPROCESS_PRESETS, ENTRY_CHECK_RULE_PRESETS, entryCheckRuleLabel } from '@/constants/entry'
 import { CK_ENGINE_OPTIONS, MYSQL_ENGINE_OPTIONS, applyDsKindDefaults, storageFromEntry, storagePayload, storageSummary } from '@/utils/data/entryStorage'
 
@@ -64,8 +64,7 @@ const keyField = computed(() => form.fields.filter((f) => f.dedup && f.dbColumn)
 const tableNameTouched = ref(false)
 function onNameInput() {
   if (isEdit.value || tableNameTouched.value) return
-  const letters = pinyin(form.name || '', { pattern: 'first', toneType: 'none', type: 'array' }).join('')
-  form.tableName = letters ? `TB_${letters.toUpperCase()}` : ''
+  form.tableName = tableNameFromEntryName(form.name)
 }
 function onTableNameInput() { tableNameTouched.value = true }
 

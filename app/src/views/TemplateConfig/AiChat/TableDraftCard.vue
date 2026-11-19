@@ -9,6 +9,8 @@ import {
   type TableDraft,
   type TableDraftState,
 } from '@/utils/aiChat/tableDraft'
+import { tableNameFromEntryName } from '@/utils/data/entryTableName'
+import { storageSummary } from '@/utils/data/entryStorage'
 
 const props = withDefaults(defineProps<{
   state: TableDraftState
@@ -23,23 +25,34 @@ const emit = defineEmits<{
   (e: 'cancel'): void
 }>()
 
-const TYPE_LABELS: Record<string, string> = {
-  string: '字符串',
-  text: '文本',
-  longtext: '长文本',
-  url: '链接',
-  number: '数值',
-  date: '日期',
-  json: 'JSON',
-}
-
-const form = ref<TableDraft>(cloneDraft(props.state.draft))
+/**
+ * 物理表名与数据中心「数据表编辑」同口径：智能体没给就按名称生成 `TB_` + 拼音首字母，
+ * 改名称时跟着变；用户手改过物理表名（或智能体本来就给了）就不再覆盖。
+ */
+const tableNameTouched = ref(false)
+const form = ref<TableDraft>(initForm(props.state.draft))
 const touched = ref(false)
 
 watch(() => props.state.draft, (draft) => {
-  form.value = cloneDraft(draft)
+  form.value = initForm(draft)
   touched.value = false
 })
+
+function initForm(draft: TableDraft): TableDraft {
+  const next = cloneDraft(draft)
+  next.dedupMode = next.dedupMode === 'table' ? 'table' : 'source'
+  tableNameTouched.value = !!next.tableName.trim()
+  if (!tableNameTouched.value) next.tableName = tableNameFromEntryName(next.name)
+  return next
+}
+
+function onNameInput() {
+  if (!tableNameTouched.value) form.value.tableName = tableNameFromEntryName(form.value.name)
+}
+
+function onTableNameInput() {
+  tableNameTouched.value = true
+}
 
 function cloneDraft(draft: TableDraft): TableDraft {
   return { ...draft, fields: draft.fields.map((f) => ({ ...f })) }
@@ -48,6 +61,9 @@ function cloneDraft(draft: TableDraft): TableDraft {
 const editable = computed(() => props.state.status === 'pending' || props.state.status === 'failed')
 const errors = computed(() => validateTableDraft(form.value))
 const dedupCount = computed(() => form.value.fields.filter((f) => f.dedup).length)
+/** 与「数据表编辑」同口径：物理列按字段顺序 K1…Kn，去重列由勾选派生，存储取新建默认值 */
+const keyField = computed(() => form.value.fields.map((f, i) => (f.dedup ? `K${i + 1}` : '')).filter(Boolean).join(','))
+const storageText = computed(() => storageSummary({ dsKind: form.value.dsKind }))
 
 function addField() {
   form.value.fields.push({ code: '', desc: '', type: 'string', dedup: false })
@@ -75,24 +91,40 @@ function onConfirm() {
       <span v-else class="td-status muted">已取消</span>
     </div>
 
+    <!-- 叫法、取值与数据中心「数据表编辑」一致；校验 / 预处理 / 必填 / 列宽等建好后到数据中心调整 -->
     <div class="td-grid">
       <label class="td-field">
-        <span>表名称</span>
-        <el-input v-model="form.name" size="small" :disabled="!editable" data-testid="table-draft-name" />
+        <span>名称</span>
+        <el-input v-model="form.name" size="small" :disabled="!editable" data-testid="table-draft-name" @input="onNameInput" />
       </label>
       <label class="td-field">
-        <span>物理表名</span>
-        <el-input v-model="form.tableName" size="small" :disabled="!editable" data-testid="table-draft-table-name" />
+        <span>物理表</span>
+        <el-input v-model="form.tableName" size="small" :disabled="!editable" placeholder="按名称自动生成" data-testid="table-draft-table-name" @input="onTableNameInput" />
       </label>
+      <div class="td-field">
+        <span>去重列</span>
+        <div class="td-readonly" data-testid="table-draft-key-field">{{ keyField || '—' }}</div>
+      </div>
       <label class="td-field">
-        <span>存储类型</span>
-        <el-select v-model="form.dsKind" size="small" :disabled="!editable" data-testid="table-draft-ds-kind">
-          <el-option label="MySQL" value="MYSQL" />
-          <el-option label="ClickHouse（CK）" value="CK" />
+        <span>去重方式</span>
+        <el-select v-model="form.dedupMode" size="small" :disabled="!editable" data-testid="table-draft-dedup-mode">
+          <el-option label="源内去重" value="source" />
+          <el-option label="表内去重" value="table" />
         </el-select>
       </label>
+      <label class="td-field">
+        <span>数据源类型</span>
+        <el-select v-model="form.dsKind" size="small" :disabled="!editable" data-testid="table-draft-ds-kind">
+          <el-option label="MYSQL" value="MYSQL" />
+          <el-option label="CK" value="CK" />
+        </el-select>
+      </label>
+      <div class="td-field">
+        <span>存储设置</span>
+        <div class="td-readonly" data-testid="table-draft-storage">{{ storageText }}</div>
+      </div>
       <label class="td-field td-wide">
-        <span>说明</span>
+        <span>备注</span>
         <el-input v-model="form.remark" size="small" :disabled="!editable" />
       </label>
     </div>
@@ -101,12 +133,13 @@ function onConfirm() {
       <table class="td-table">
         <thead>
           <tr>
-            <th class="td-col-idx">#</th>
-            <th>字段编码</th>
+            <th class="td-col-idx">序号</th>
+            <th>编码</th>
             <th>展示名</th>
+            <th class="td-col-col">数据库列</th>
             <th class="td-col-type">类型</th>
             <th class="td-col-dedup">去重</th>
-            <th v-if="editable" class="td-col-op" />
+            <th v-if="editable" class="td-col-op">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -114,9 +147,10 @@ function onConfirm() {
             <td class="td-col-idx">{{ index + 1 }}</td>
             <td><el-input v-model="field.code" size="small" :disabled="!editable" /></td>
             <td><el-input v-model="field.desc" size="small" :disabled="!editable" /></td>
+            <td class="td-col-col" data-testid="table-draft-column">K{{ index + 1 }}</td>
             <td class="td-col-type">
               <el-select v-model="field.type" size="small" :disabled="!editable">
-                <el-option v-for="t in TABLE_DRAFT_FIELD_TYPES" :key="t" :label="TYPE_LABELS[t]" :value="t" />
+                <el-option v-for="t in TABLE_DRAFT_FIELD_TYPES" :key="t" :label="t" :value="t" />
               </el-select>
             </td>
             <td class="td-col-dedup"><el-checkbox v-model="field.dedup" :disabled="!editable" /></td>
@@ -130,7 +164,7 @@ function onConfirm() {
 
     <div v-if="editable" class="td-row-actions">
       <el-button link size="small" type="primary" data-testid="table-draft-add-field" @click="addField">+ 添加字段</el-button>
-      <span class="td-hint">共 {{ form.fields.length }} 个字段，去重字段 {{ dedupCount }} 个；物理列按 K1、K2… 顺序分配</span>
+      <span class="td-hint">共 {{ form.fields.length }} 个字段，去重字段 {{ dedupCount }} 个；校验、预处理、必填、列宽建表后可在数据中心调整</span>
     </div>
 
     <ul v-if="editable && touched && errors.length" class="td-errors" data-testid="table-draft-errors">
@@ -184,7 +218,8 @@ function onConfirm() {
 .td-status.err { color: #dc2626; }
 .td-status.muted { color: #94a3b8; }
 
-.td-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+.td-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.td-readonly { height: 24px; line-height: 24px; padding: 0 8px; border: 1px solid #e2e8f0; border-radius: 4px; background: #f1f5f9; color: #475569; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .td-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #64748b; min-width: 0; }
 .td-wide { grid-column: 1 / -1; }
 
@@ -195,6 +230,7 @@ function onConfirm() {
 .td-table tr:last-child td { border-bottom: none; }
 .td-col-idx { width: 32px; color: #94a3b8; }
 .td-col-type { width: 110px; }
+.td-col-col { width: 64px; color: #64748b; }
 .td-col-dedup { width: 48px; text-align: center; }
 .td-col-op { width: 52px; }
 

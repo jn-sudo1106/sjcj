@@ -165,6 +165,7 @@ export function extractClarificationFromReasoning(reasoning: string): Clarificat
   if (!reasoning || typeof reasoning !== 'string') return null
 
   let found: Clarification | null = null
+  let foundAt = -1
   TOOL_RESULT_MARKER.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = TOOL_RESULT_MARKER.exec(reasoning)) !== null) {
@@ -177,7 +178,10 @@ export function extractClarificationFromReasoning(reasoning: string): Clarificat
         const payload = JSON.parse(fullJson) as Record<string, unknown>
         const normalized = normalizeClarificationPayload(payload?.clarification)
         // 多轮追问时以最后一轮的澄清为准
-        if (normalized && normalized.options.length > 0) found = normalized
+        if (normalized && normalized.options.length > 0) {
+          found = normalized
+          foundAt = match.index
+        }
       } catch {
         // 不是 JSON：跳过
       }
@@ -217,8 +221,76 @@ export function extractClarificationFromReasoning(reasoning: string): Clarificat
       normalized.question = `命中 ${normalized.options.length} 张候选表，请选择要分析的表（可多选）：`
     }
     found = normalized
+    foundAt = match.index
   }
+
+  // 纯文本的 ask_clarification 结果（编号选项）：多轮时以最后出现的为准
+  const textual = extractTextClarificationFromReasoning(reasoning)
+  if (textual && textual.at > foundAt) found = textual.clarification
   return found
+}
+
+const ASK_CLARIFICATION_TEXT_MARKER = /\[工具结果\]\s*ask_clarification\s*[:：]\s*(?!\{)/g
+const NUMBERED_OPTION = /^\s*(\d{1,2})[.、)）]\s*(.+?)\s*$/
+const OTHER_OPTION = /^其他|^其它|请说明|自定义/
+/** 选项末尾括号里的物理表名：`贝壳二手房成交价（tb_ke_com_chengjiao_esf_detail）` */
+const OPTION_TABLE = /^(.*?)\s*[（(]\s*((?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z][A-Za-z0-9_]*)\s*[)）]\s*$/
+
+/**
+ * 智能体 ask_clarification 工具的结果是给人看的纯文本（2026-11-19 186 实测）：
+ * `[工具结果] ask_clarification: 🤔 系统中有多张…\n\n您想查询哪种…？\n\n1. 贝壳二手房成交价（tb_ke_…）\n…\n4. 其他（请说明）`。
+ * 正文往往只剩一句「需要先确认您要查哪一类」，不解析的话页面上没有可选项。
+ * 选项带物理表名时按选表卡片处理（回传「中文名（表名）」）；「其他（请说明）」并入补充说明输入框。
+ */
+function extractTextClarificationFromReasoning(reasoning: string): { at: number; clarification: Clarification } | null {
+  let result: { at: number; clarification: Clarification } | null = null
+  ASK_CLARIFICATION_TEXT_MARKER.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = ASK_CLARIFICATION_TEXT_MARKER.exec(reasoning)) !== null) {
+    const start = match.index + match[0].length
+    const rest = reasoning.slice(start)
+    const end = rest.search(/\[工具(?:调用|结果)\]/)
+    const segment = end >= 0 ? rest.slice(0, end) : rest
+
+    const questionLines: string[] = []
+    const options: ClarificationOption[] = []
+    for (const line of segment.split(/\r?\n/)) {
+      const numbered = NUMBERED_OPTION.exec(line)
+      if (numbered) {
+        const label = numbered[2].replace(/\*\*/g, '').trim()
+        if (OTHER_OPTION.test(label)) continue
+        const table = OPTION_TABLE.exec(label)
+        const typeName = (table ? table[1] : label).trim() || label
+        options.push({
+          entryTypeId: null,
+          ordinal: Number(numbered[1]),
+          tableName: table ? table[2] : typeName,
+          typeName,
+          hint: null,
+        })
+      } else if (!options.length && line.trim()) {
+        questionLines.push(line.trim())
+      }
+    }
+    if (!options.length) continue
+
+    // 追问取最后一句问句，太长时退回通用文案；去掉行首表情
+    const questionCandidate = [...questionLines].reverse().find((l) => /[？?：:]$/.test(l)) ?? questionLines[questionLines.length - 1] ?? ''
+    const question = questionCandidate.replace(/^[^\p{L}\p{N}"“「(（]+/u, '').trim()
+    const hasTables = options.some((o) => o.tableName !== o.typeName)
+    result = {
+      at: match.index,
+      clarification: {
+        kind: hasTables ? 'table_choice' : 'metric_choice',
+        reason: 'AMBIGUOUS',
+        question: question && question.length <= 160 ? question : '请确认需要分析的表或口径：',
+        allowFreeText: true,
+        maxSelect: Math.min(5, options.length),
+        options,
+      },
+    }
+  }
+  return result
 }
 
 export type ClarificationKind = 'table_choice' | 'metric_choice' | 'free_text'
@@ -539,12 +611,17 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
 export function markCreatedTableDrafts(messages: ChatMessage[]): void {
   messages.forEach((msg, index) => {
     if (msg.role !== 'assistant' || !msg.tableDraft || msg.tableDraft.status !== 'pending') return
+    // 智能体没给物理表名时由卡片按名称生成、用户还可能改过，正文草稿里没有可比对的表名：
+    // 认它之后、下一份草稿之前的第一条建表结果
+    const draftTableName = msg.tableDraft.draft.tableName.trim().toLowerCase()
     for (let i = index + 1; i < messages.length; i++) {
+      if (!draftTableName && messages[i].role === 'assistant' && messages[i].tableDraft) return
       const created = messages[i].role === 'user' ? parseTableCreatedMessage(messages[i].content) : null
-      if (created && created.tableName.toLowerCase() === msg.tableDraft.draft.tableName.toLowerCase()) {
-        // 卡片显示真实落库的名称与存储类型（用户可能在卡片里改过，正文草稿是改之前的）
+      if (created && (!draftTableName || created.tableName.toLowerCase() === draftTableName)) {
+        // 卡片显示真实落库的名称、物理表名与存储类型（用户可能在卡片里改过，正文草稿是改之前的）
         const draft = {
           ...msg.tableDraft.draft,
+          tableName: created.tableName,
           ...(created.name ? { name: created.name } : {}),
           ...(created.dsKind ? { dsKind: created.dsKind } : {}),
         }

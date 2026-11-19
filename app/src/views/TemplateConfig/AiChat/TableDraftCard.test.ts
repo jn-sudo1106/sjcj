@@ -14,7 +14,7 @@ function state(overrides: Partial<TableDraftState> = {}): TableDraftState {
       remark: '',
       fields: [
         { code: 'indicator', desc: '指标名称', type: 'string', dedup: true },
-        { code: 'value', desc: '数值', type: 'number', dedup: false },
+        { code: 'value', desc: '数值', type: 'string', dedup: false },
       ],
     },
     status: 'pending',
@@ -54,6 +54,39 @@ describe('建表草稿卡片 · TableDraftCard', () => {
     expect(emitted.fields.map((f) => f.code)).toEqual(['indicator', 'value', 'unit'])
     expect(original.draft.name).toBe('统计局指标')
     expect(original.draft.fields).toHaveLength(2)
+  })
+
+  it('智能体没给物理表名：按名称生成 TB_拼音首字母，改名称跟着变，手改后不再覆盖', async () => {
+    const base = state()
+    const wrapper = mountCard({ state: { ...base, draft: { ...base.draft, tableName: '' } } })
+    expect((inputOf(wrapper, 'table-draft-table-name').element as HTMLInputElement).value).toBe('TB_TJJZB')
+
+    await inputOf(wrapper, 'table-draft-name').setValue('商品价格')
+    expect((inputOf(wrapper, 'table-draft-table-name').element as HTMLInputElement).value).toBe('TB_SPJG')
+
+    await inputOf(wrapper, 'table-draft-table-name').setValue('TB_GOODS_PRICE')
+    await inputOf(wrapper, 'table-draft-name').setValue('商品价格监测')
+    await wrapper.find('[data-testid="table-draft-confirm"]').trigger('click')
+    expect((wrapper.emitted('confirm')![0][0] as TableDraftState['draft']).tableName).toBe('TB_GOODS_PRICE')
+  })
+
+  it('智能体给了物理表名：改名称不覆盖', async () => {
+    const wrapper = mountCard({ state: state() })
+    await inputOf(wrapper, 'table-draft-name').setValue('商品价格')
+    expect((inputOf(wrapper, 'table-draft-table-name').element as HTMLInputElement).value).toBe('TB_TJJZB')
+  })
+
+  it('与数据表编辑同口径：数据库列 K 序、去重列派生、去重方式默认源内、存储设置随数据源类型', async () => {
+    const wrapper = mountCard({ state: state() })
+    expect(wrapper.findAll('[data-testid="table-draft-column"]').map((c) => c.text())).toEqual(['K1', 'K2'])
+    expect(wrapper.find('[data-testid="table-draft-key-field"]').text()).toBe('K1')
+    expect(wrapper.find('[data-testid="table-draft-storage"]').text()).toBe('读写 · ReplacingMergeTree · ORDER BY ENTRY_ID')
+
+    await wrapper.findAll('[data-testid="table-draft-field-row"]')[1].find('input[type="checkbox"]').setValue(true)
+    expect(wrapper.find('[data-testid="table-draft-key-field"]').text()).toBe('K1,K2')
+
+    await wrapper.find('[data-testid="table-draft-confirm"]').trigger('click')
+    expect((wrapper.emitted('confirm')![0][0] as TableDraftState['draft']).dedupMode).toBe('source')
   })
 
   it('校验不过不发确认，并列出问题', async () => {

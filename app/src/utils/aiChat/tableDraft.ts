@@ -11,7 +11,11 @@ import { entryApi, type EntryField, type EntryType } from '@/api'
 import { ENTRY_FIELD_DEFAULT_WIDTH } from '@/constants/entry'
 import { storagePayload } from '@/utils/data/entryStorage'
 
-export const TABLE_DRAFT_FIELD_TYPES = ['string', 'text', 'longtext', 'url', 'number', 'date', 'json'] as const
+/**
+ * 与数据中心「数据表编辑」一致：旧平台 dataType 只有这三种（0828 表编辑迁移核对订正，
+ * 自造的 url/number/date/json 已去掉）。智能体给的其他类型在归一化时映射进来。
+ */
+export const TABLE_DRAFT_FIELD_TYPES = ['string', 'text', 'longtext'] as const
 export type TableDraftFieldType = (typeof TABLE_DRAFT_FIELD_TYPES)[number]
 
 export interface TableDraftField {
@@ -30,6 +34,8 @@ export interface TableDraft {
   /** 物理表名 */
   tableName: string
   dsKind: 'MYSQL' | 'CK'
+  /** 去重方式：源内 / 表内（同「数据表编辑」），缺省源内 */
+  dedupMode?: 'source' | 'table'
   remark: string
   fields: TableDraftField[]
 }
@@ -44,15 +50,16 @@ export interface TableDraftState {
   error?: string
 }
 
+/** 链接 / 数值 / 日期在旧平台都按 string 存；JSON、大段正文归 longtext */
 const TYPE_ALIASES: Record<string, TableDraftFieldType> = {
   string: 'string', varchar: 'string', char: 'string', str: 'string', 字符串: 'string', 文本: 'string',
+  url: 'string', link: 'string', 链接: 'string',
+  number: 'string', int: 'string', integer: 'string', bigint: 'string', float: 'string', double: 'string',
+  decimal: 'string', numeric: 'string', 数值: 'string', 数字: 'string',
+  date: 'string', datetime: 'string', timestamp: 'string', time: 'string', 日期: 'string', 时间: 'string',
   text: 'text', 长文本: 'text',
-  longtext: 'longtext', mediumtext: 'longtext', 大文本: 'longtext',
-  url: 'url', link: 'url', 链接: 'url',
-  number: 'number', int: 'number', integer: 'number', bigint: 'number', float: 'number', double: 'number',
-  decimal: 'number', numeric: 'number', 数值: 'number', 数字: 'number',
-  date: 'date', datetime: 'date', timestamp: 'date', time: 'date', 日期: 'date', 时间: 'date',
-  json: 'json', object: 'json', array: 'json',
+  longtext: 'longtext', mediumtext: 'longtext', 大文本: 'longtext', 正文: 'longtext',
+  json: 'longtext', object: 'longtext', array: 'longtext',
 }
 
 function str(value: unknown): string {
@@ -95,6 +102,7 @@ export function normalizeTableDraft(raw: unknown): TableDraft | null {
     name: str(src.name ?? src.typeName ?? src.label ?? src.title),
     tableName: str(src.tableName ?? src.physicalTable ?? src.table_name),
     dsKind,
+    dedupMode: /^(table|表内(去重)?)$/i.test(str(src.dedupMode ?? src.dedup_mode)) ? 'table' : 'source',
     remark: str(src.remark ?? src.description ?? src.comment),
     fields,
   }
@@ -107,14 +115,59 @@ export function extractTableDraftFromText(text: string): TableDraft | null {
   if (!text || !/```table-draft/i.test(text)) return null
   const all = [...text.matchAll(new RegExp(DRAFT_FENCE.source, 'gi'))]
   for (let i = all.length - 1; i >= 0; i--) {
-    try {
-      const draft = normalizeTableDraft(JSON.parse(all[i][1]))
-      if (draft) return draft
-    } catch {
-      // 不是合法 JSON：继续找上一个
-    }
+    const draft = normalizeTableDraft(parseDraftJson(all[i][1]))
+    if (draft) return draft
   }
   return null
+}
+
+/** 先按标准 JSON 解析，失败再修一次括号；仍不行返回 null（继续找上一个代码块） */
+function parseDraftJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    try {
+      return JSON.parse(repairJsonBrackets(raw))
+    } catch {
+      return null
+    }
+  }
+}
+
+/**
+ * 修模型手写 JSON 里常见的括号错位：数组用 `}` 收尾（186 实测：fields 数组写成 `  }\n}`）、
+ * 去掉尾逗号、末尾缺的括号补齐。只动字符串之外的括号，字段内容不改。
+ */
+export function repairJsonBrackets(raw: string): string {
+  const stack: string[] = []
+  let out = ''
+  let inString = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    if (inString) {
+      out += ch
+      if (ch === '\\') {
+        out += raw[++i] ?? ''
+      } else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      out += ch
+    } else if (ch === '{' || ch === '[') {
+      stack.push(ch === '{' ? '}' : ']')
+      out += ch
+    } else if (ch === '}' || ch === ']') {
+      // 错位的收尾括号按栈顶期望的来；多余的收尾括号丢掉
+      if (stack.length) out += stack.pop()
+    } else {
+      out += ch
+    }
+  }
+  while (stack.length) out += stack.pop()
+  return out.replace(/,(\s*[}\]])/g, '$1')
 }
 
 /** 渲染正文时去掉草稿代码块（由卡片承载）；流式中未闭合的块也一起藏掉，避免闪 JSON */
@@ -180,7 +233,7 @@ export function tableDraftToEntry(draft: TableDraft): EntryType {
     name: draft.name.trim(),
     tableName: draft.tableName.trim(),
     remark: draft.remark.trim(),
-    dedupMode: 'source',
+    dedupMode: draft.dedupMode === 'table' ? 'table' : 'source',
     state: 'C',
     keyField: fields.filter((f) => f.dedup).map((f) => f.columnName).join(','),
     ...storagePayload({ dsKind: draft.dsKind }),
@@ -212,8 +265,8 @@ ${TABLE_DRAFT_INSTRUCTION_MARKER}
 【建表模式】请根据上面的需求设计一张采集数据表。只输出草稿，不要执行 SQL、不要查询数据、不要实际建表。
 可以先用检索表的工具确认库里没有用途相同的表；如果已有，请在说明里指出表名。
 先用一两句话说明设计思路，然后输出一个 \`\`\`table-draft 代码块，内容是一个 JSON 对象：
-{"name":"表中文名","tableName":"物理表名，TB_ 开头的大写英文或拼音首字母","dsKind":"MYSQL 或 CK（用户提到 ClickHouse、CK、大数据量分析时用 CK，否则 MYSQL）","remark":"用途说明","fields":[{"code":"小写英文编码","desc":"中文名","type":"string|text|longtext|url|number|date|json","dedup":false}]}
-要求：fields 不含 ENTRY_ID、创建时间等系统字段；code 只用小写字母、数字、下划线且不重复；能唯一标识一条数据的字段 dedup 设为 true（至少一个）。`
+{"name":"表中文名","tableName":"物理表名，TB_ 开头的大写英文或拼音首字母","dsKind":"MYSQL 或 CK（用户提到 ClickHouse、CK、大数据量分析时用 CK，否则 MYSQL）","remark":"用途说明","fields":[{"code":"小写英文编码","desc":"中文名","type":"string|text|longtext","dedup":false}]}
+要求：fields 不含 ENTRY_ID、创建时间等系统字段；code 只用小写字母、数字、下划线且不重复；能唯一标识一条数据的字段 dedup 设为 true（至少一个）；type 只有 string（短文本，链接/数值/日期也用它）、text、longtext（正文、JSON）三种。`
 }
 
 /** 历史回放：去掉建表模式追加的格式要求，只显示用户原文 */

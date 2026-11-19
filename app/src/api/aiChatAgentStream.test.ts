@@ -350,6 +350,30 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     })
   })
 
+  it('extractClarificationFromReasoning 识别 ask_clarification 纯文本编号选项（186 实测：二手房价格多口径）', () => {
+    const reasoning = `[工具结果] search_tables: {"candidates":[{"entryTypeId":2101750,"tableName":"sense_data.TB_creprice_forsale_supply","typeName":"全国房价行情平台_二手房_供给量"}],"truncated":true}[工具调用] ask_clarification({})[工具结果] ask_clarification: 🤔 系统中有多张二手房相关表，价格口径不同：贝壳（成交价/在售价）、中指（月度销售均价）、全国房价行情平台（供给量）等。
+
+您想查询哪种"二手房价格"？请选择数据源和价格口径：
+
+  1. 贝壳二手房成交价（tb_ke_com_chengjiao_esf_detail）
+  2. 贝壳二手房在售价（TB_ke_com_ershoufang_sale）
+  3. 中指-二手房月度销售均价（TB_ZZ_MONTH_OLD_PRICE）
+  4. 其他（请说明）`
+    const clarification = extractClarificationFromReasoning(reasoning)
+    expect(clarification).toMatchObject({ kind: 'table_choice', allowFreeText: true, question: '您想查询哪种"二手房价格"？请选择数据源和价格口径：' })
+    expect(clarification!.options.map((o) => [o.ordinal, o.typeName, o.tableName, o.entryTypeId])).toEqual([
+      [1, '贝壳二手房成交价', 'tb_ke_com_chengjiao_esf_detail', null],
+      [2, '贝壳二手房在售价', 'TB_ke_com_ershoufang_sale', null],
+      [3, '中指-二手房月度销售均价', 'TB_ZZ_MONTH_OLD_PRICE', null],
+    ])
+
+    // 不带表名的口径选项：按口径选择处理，回传选项原文
+    const metric = extractClarificationFromReasoning('[工具结果] ask_clarification: 请选择统计口径：\n1. 按月\n2. 按季度')
+    expect(metric).toMatchObject({ kind: 'metric_choice', options: [{ typeName: '按月', tableName: '按月' }, { typeName: '按季度' }] })
+    // 只有提问没有选项：不出卡片
+    expect(extractClarificationFromReasoning('[工具结果] ask_clarification: 您想查哪个城市？')).toBeNull()
+  })
+
   it('extractClarificationFromReasoning 对未闭合 JSON、无澄清载荷的工具结果返回 null', () => {
     expect(extractClarificationFromReasoning('')).toBeNull()
     expect(
