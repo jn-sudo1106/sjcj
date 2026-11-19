@@ -3,7 +3,7 @@
 // 2. 请求有界：触到上限时 `truncated: true` 且 **不给 total**，绝不把已知下限当总数；
 // 3. 信封格式异常要报错，不能把"接口返回不认识的结构"渲染成"暂无数据"；
 // 4. 最近访问按类型+ID 去重保留最近一次，表的埋点同时取 ENTER/CLICK；
-// 5. 我负责的源 / 我的告警显式抛 WorkbenchUnavailableError，绝不回退成全平台数据；
+// 5. 我负责的源 / 我的告警调用 workbench/my-sources 与 my-alarms，绝不回退成全平台数据；
 // 6. 取消收藏只在后端回执成功后同步本地收藏集合。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -29,7 +29,6 @@ vi.mock('../utils/sourceFavorites', () => ({ favoriteSourceIds: sourceFavoriteId
 vi.mock('../utils/entryFavorites', () => ({ favoriteEntryIds: entryFavoriteIds }))
 
 import {
-  isWorkbenchUnavailableError,
   loadAlarms,
   loadCollections,
   loadRecents,
@@ -37,7 +36,6 @@ import {
   personalWorkbenchApi,
   removeFavorite,
   WORKBENCH_CAPABILITIES,
-  WorkbenchUnavailableError,
 } from './personalWorkbench'
 import type { EntryType } from './types/collect'
 import type { Site, Source } from './types/source'
@@ -219,6 +217,30 @@ describe('loadCollections', () => {
     sitePaged.mockResolvedValue(null)
     await expect(loadCollections()).rejects.toThrow('网站列表返回格式异常')
   })
+
+  it('优先使用 workbench/resolve-items 批量解析端点，不触发单独反查', async () => {
+    requestMock.mockImplementation(async (endpoint: string, params?: Record<string, unknown>) => {
+      if (endpoint === 'favorite/list') {
+        const list = (params?.itemType === 'SITE') ? [{ itemId: 11, createDt: '2026-11-10 10:00:00' }]
+          : (params?.itemType === 'SOURCE') ? [{ itemId: 501, createDt: '2026-11-08 18:30:00' }] : []
+        return { list, total: list.length }
+      }
+      if (endpoint === 'workbench/resolve-items') {
+        return [
+          { kind: 'SITE', id: 11, exists: true, name: '国家统计局', subtitle: '财经资讯' },
+          { kind: 'SOURCE', id: 501, exists: true, name: '沪深行情快照', subtitle: '东方财富网', siteId: 12 },
+        ]
+      }
+      throw new Error(`unexpected endpoint: ${endpoint}`)
+    })
+
+    const page = await loadCollections()
+    expect(page.list).toHaveLength(2)
+    expect(page.list[0].name).toBe('国家统计局')
+    expect(page.list[1].name).toBe('沪深行情快照')
+    expect(sitePaged).not.toHaveBeenCalled()
+    expect(sourcePaged).not.toHaveBeenCalled()
+  })
 })
 
 describe('loadRecents', () => {
@@ -312,19 +334,109 @@ describe('loadRecents', () => {
   })
 })
 
-describe('缺失能力', () => {
-  it('resources / alarms 抛 typed unavailable（文案简洁，不含后端内部细节），不发请求也不回退空列表', async () => {
-    await expect(loadResources()).rejects.toMatchObject({
-      code: 'WORKBENCH_UNAVAILABLE',
-      capability: 'resources',
-      message: expect.stringMatching(/暂不支持/),
+describe('loadResources', () => {
+  it('请求 workbench/my-sources 并映射为源列表', async () => {
+    requestMock.mockImplementation(async (endpoint: string) => {
+      if (endpoint === 'workbench/my-sources') {
+        return {
+          list: [
+            { sourceId: 101, sourceName: '源1', state: 'C', alarmLevel: null, siteId: 2, siteName: '网站A', updateDt: '2026-11-19 12:00:00' },
+            { sourceId: 102, sourceName: '源2', state: 'E', alarmLevel: 'fail', siteId: 2, entryTypeName: '表B', updateDt: '2026-11-19 13:00:00' },
+          ],
+          total: 2,
+        }
+      }
+      throw new Error(`unexpected endpoint: ${endpoint}`)
     })
-    const error = await loadAlarms().catch((reason: unknown) => reason)
-    expect(isWorkbenchUnavailableError(error)).toBe(true)
-    expect((error as WorkbenchUnavailableError).capability).toBe('alarms')
-    expect((error as WorkbenchUnavailableError).message).toMatch(/暂不支持/)
-    expect(requestMock).not.toHaveBeenCalled()
-    expect(WORKBENCH_CAPABILITIES).toEqual({ collections: true, recents: true, resources: false, alarms: false })
+
+    const result = await loadResources({ page: 1, limit: 20 })
+    expect(result.truncated).toBe(false)
+    expect(result.total).toBe(2)
+    expect(result.list).toHaveLength(2)
+    expect(result.list[0]).toEqual({
+      id: '101',
+      kind: 'SOURCE',
+      name: '源1',
+      subtitle: '网站A',
+      at: '2026-11-19 12:00:00',
+      siteId: '2',
+      state: 'ok',
+      alarmLevel: null,
+    })
+    expect(result.list[1]).toEqual({
+      id: '102',
+      kind: 'SOURCE',
+      name: '源2',
+      subtitle: '表B',
+      at: '2026-11-19 13:00:00',
+      siteId: '2',
+      state: 'error',
+      alarmLevel: 'fail',
+    })
+    expect(requestMock).toHaveBeenCalledWith('workbench/my-sources', { page: 1, limit: 20 }, {
+      method: 'GET',
+      httpParams: { page: 1, limit: 20, state: undefined, keyword: undefined },
+    })
+  })
+
+  it('列表非数组时报错', async () => {
+    requestMock.mockResolvedValue({})
+    await expect(loadResources()).rejects.toThrow('我负责的源列表返回格式异常')
+  })
+})
+
+describe('loadAlarms', () => {
+  it('请求 workbench/my-alarms 并映射为告警列表', async () => {
+    requestMock.mockImplementation(async (endpoint: string) => {
+      if (endpoint === 'workbench/my-alarms') {
+        return {
+          list: [
+            { alarmId: '1', targetId: '101', targetName: '源1', title: '采集失败', level: 'fail', occurDt: '2026-11-19 12:00:00' },
+            { alarmId: '2', targetId: '102', targetName: '源2', title: '恢复采集', level: 'recover', occurDt: '2026-11-19 12:10:00' },
+          ],
+          total: 2,
+        }
+      }
+      throw new Error(`unexpected endpoint: ${endpoint}`)
+    })
+
+    const result = await loadAlarms('all', 10)
+    expect(result.truncated).toBe(false)
+    expect(result.total).toBe(2)
+    expect(result.list).toHaveLength(2)
+    expect(result.list[0]).toEqual({
+      id: '1',
+      sourceId: '101',
+      name: '源1',
+      description: '采集失败',
+      level: 'fail',
+      at: '2026-11-19 12:00:00',
+      resolved: false,
+    })
+    expect(result.list[1]).toEqual({
+      id: '2',
+      sourceId: '102',
+      name: '源2',
+      description: '恢复采集',
+      level: 'recover',
+      at: '2026-11-19 12:10:00',
+      resolved: true,
+    })
+    expect(requestMock).toHaveBeenCalledWith('workbench/my-alarms', { scope: 'all', limit: 10 }, {
+      method: 'GET',
+      httpParams: { scope: 'all', page: 1, limit: 10 },
+    })
+  })
+
+  it('列表非数组时报错', async () => {
+    requestMock.mockResolvedValue({})
+    await expect(loadAlarms()).rejects.toThrow('我的相关告警返回格式异常')
+  })
+})
+
+describe('WORKBENCH_CAPABILITIES', () => {
+  it('四大能力均已就绪', () => {
+    expect(WORKBENCH_CAPABILITIES).toEqual({ collections: true, recents: true, resources: true, alarms: true })
   })
 })
 

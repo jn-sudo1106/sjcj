@@ -117,8 +117,8 @@ export function isWorkbenchUnavailableError(value: unknown): value is WorkbenchU
 export const WORKBENCH_CAPABILITIES = {
   collections: true,
   recents: true,
-  resources: false,
-  alarms: false,
+  resources: true,
+  alarms: true,
 } as const
 
 // ---- 有界请求参数 ----
@@ -336,10 +336,56 @@ function byAtDesc(a: { at?: string }, b: { at?: string }): number {
   return right.localeCompare(left)
 }
 
-/** 三类资源并行反查（各自带截断标记）。 */
+/** 三类资源并行反查（优先使用 W11 批量名称解析端点，异常时平滑降级）。 */
 async function resolveAll(wantedByKind: Record<ResourceKind, Set<string>>): Promise<Record<ResourceKind, ResolveResult>> {
   const kinds: ResourceKind[] = ['SITE', 'SOURCE', 'ENTRY_TYPE']
-  const resolved = {} as Record<ResourceKind, ResolveResult>
+  const resolved = {
+    SITE: { items: new Map<string, WorkbenchItem>(), truncated: false },
+    SOURCE: { items: new Map<string, WorkbenchItem>(), truncated: false },
+    ENTRY_TYPE: { items: new Map<string, WorkbenchItem>(), truncated: false },
+  } as Record<ResourceKind, ResolveResult>
+
+  const allItems: { kind: ResourceKind; id: number }[] = []
+  for (const kind of kinds) {
+    for (const idStr of wantedByKind[kind]) {
+      const num = Number(idStr)
+      if (Number.isFinite(num) && num > 0) allItems.push({ kind, id: num })
+    }
+  }
+
+  if (allItems.length > 0 && allItems.length <= 200) {
+    try {
+      const resp = await request<Array<{
+        kind: ResourceKind
+        id: number | string
+        exists: boolean
+        name?: string
+        subtitle?: string
+        siteId?: number | string
+      }>>('workbench/resolve-items', { items: allItems }, {
+        method: 'POST',
+      })
+      if (Array.isArray(resp)) {
+        for (const item of resp) {
+          if (!item.exists || !item.name) continue
+          const id = String(item.id)
+          const kind = item.kind
+          if (!resolved[kind]) continue
+          resolved[kind].items.set(id, {
+            id,
+            kind,
+            name: item.name,
+            subtitle: item.subtitle,
+            siteId: item.siteId != null ? String(item.siteId) : undefined,
+          })
+        }
+        return resolved
+      }
+    } catch {
+      // 批量接口未响应或在单元测试 mock 场景下，走单类并行反查
+    }
+  }
+
   await Promise.all(
     kinds.map(async (kind) => {
       resolved[kind] = await RESOLVERS[kind](wantedByKind[kind])
@@ -443,23 +489,65 @@ export async function loadRecents(limit = DEFAULT_RECENTS): Promise<WorkbenchPag
 }
 
 /**
- * 「我负责的源」：显式不支持。
- *
- * 依据：`cs_source.AUTHOR` 是负责人（复制源会被覆盖），`CfgSite` / `CfgEntryType` 无创建人字段；
- * 也没有按创建人/负责人筛选的列表口径。任何"回退成全平台源列表"的实现都会把别人的资源算给当前用户。
+ * 「我负责的源」（对接 W8 GET /api/v1/workbench/my-sources）。
  */
-export async function loadResources(): Promise<WorkbenchPage<WorkbenchSource>> {
-  throw new WorkbenchUnavailableError('resources', '「我负责的源」暂不支持：后端暂无按负责人/创建人过滤的口径')
+export async function loadResources(params: { page?: number; limit?: number; state?: string; keyword?: string } = {}): Promise<WorkbenchPage<WorkbenchSource>> {
+  const result = await request<{ list?: unknown; total?: number }>('workbench/my-sources', params, {
+    method: 'GET',
+    httpParams: { page: params.page ?? 1, limit: params.limit ?? 20, state: params.state, keyword: params.keyword },
+  })
+  const rawList = asList<Record<string, unknown>>(result?.list, '我负责的源列表')
+  const list: WorkbenchSource[] = rawList.map((row) => {
+    const id = String(row.sourceId ?? '').trim()
+    const stateVal = String(row.state ?? '')
+    const siteName = typeof row.siteName === 'string' ? row.siteName.trim() : ''
+    const entryTypeName = typeof row.entryTypeName === 'string' ? row.entryTypeName.trim() : ''
+    return {
+      id,
+      kind: 'SOURCE',
+      name: String(row.sourceName ?? id).trim(),
+      subtitle: siteName || entryTypeName || undefined,
+      at: typeof row.updateDt === 'string' ? row.updateDt.trim() : undefined,
+      siteId: row.siteId != null ? String(row.siteId) : undefined,
+      state: stateVal === '0' || stateVal === 'C' ? 'ok' : 'error',
+      alarmLevel: (row.alarmLevel as 'error' | 'fail' | null) ?? null,
+    }
+  })
+  return {
+    list,
+    total: typeof result?.total === 'number' ? result.total : list.length,
+    truncated: false,
+  }
 }
 
 /**
- * 「我的相关告警」：显式不支持。
- *
- * 依据：`ck_source` 只有 groupId（全组维度），没有 siteId / 级别 / 负责人；`source/check` 只有
- * state(E/C) + lastRun；`monitor/alarmPaged` 仍是 mock 且零调用。只能聚出全组告警，不能冒充"我的"。
+ * 「我的相关告警」（对接 W9 GET /api/v1/workbench/my-alarms）。
  */
-export async function loadAlarms(): Promise<WorkbenchPage<WorkbenchAlarm>> {
-  throw new WorkbenchUnavailableError('alarms', '「我的相关告警」暂不支持：后端暂无个人维度的告警接口')
+export async function loadAlarms(scope: 'open' | 'all' = 'all', limit = 20): Promise<WorkbenchPage<WorkbenchAlarm>> {
+  const result = await request<{ list?: unknown; total?: number }>('workbench/my-alarms', { scope, limit }, {
+    method: 'GET',
+    httpParams: { scope, page: 1, limit },
+  })
+  const rawList = asList<Record<string, unknown>>(result?.list, '我的相关告警')
+  const list: WorkbenchAlarm[] = rawList.map((row) => {
+    const id = String(row.alarmId ?? '').trim()
+    const sourceId = String(row.targetId ?? '').trim()
+    const level = (row.level as WorkbenchAlarmLevel) || 'fail'
+    return {
+      id,
+      sourceId,
+      name: String(row.targetName ?? sourceId).trim(),
+      description: typeof row.title === 'string' ? row.title.trim() : undefined,
+      level,
+      at: typeof row.occurDt === 'string' ? row.occurDt.trim() : undefined,
+      resolved: level === 'recover',
+    }
+  })
+  return {
+    list,
+    total: typeof result?.total === 'number' ? result.total : list.length,
+    truncated: false,
+  }
 }
 
 /**

@@ -916,6 +916,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mcp/server/status', desc: '启用/停用 MCP 服务（?id=&enabled=；停用被引用服务需 confirmed=true 二次确认）', danger: true, live: true },
   { path: 'mcp/server/probe', desc: '连通测试单个 MCP 服务（?id=；成功自动 tools/list 同步工具清单）', live: true },
   { path: 'mcp/server/probe-all', desc: '批量连通测试全部 MCP 服务', live: true },
+  // 我的工作台扩展接口（2026-11-19，1119-我的工作台与MCP服务_后端接口文档）
+  { path: 'workbench/my-sources', desc: '我负责的源（按当前登录用户负责人过滤）', live: true },
+  { path: 'workbench/my-alarms', desc: '我的相关告警（未恢复/全部告警）', live: true },
+  { path: 'workbench/resolve-items', desc: '批量名称解析（网站/源/表批量反查）', live: true },
+  { path: 'workbench/prefs', desc: '工作台偏好设置', live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */
