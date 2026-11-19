@@ -35,7 +35,6 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import { useAskChat, ASK_PHASE_LABELS } from './useAskChat'
 import {
-  buildTableDraftPrompt,
   createTableFromDraft,
   extractTableDraftFromText,
   formatTableCreatedMessage,
@@ -870,16 +869,7 @@ async function handleConfirmClarify(
 }
 
 // ===== 智能体对话建表 =====
-// 输入框「建表模式」开关：开启后提问会附带草稿格式要求，回答里的草稿渲染成确认卡片
-const tableDraftMode = ref(false)
-
-function toggleTableDraftMode() {
-  tableDraftMode.value = !tableDraftMode.value
-  if (tableDraftMode.value && !promptText.value.trim()) {
-    promptText.value = '帮我建一张表，用来存：'
-  }
-  nextTick(() => textareaRef.value?.focus())
-}
+// 由智能体 table-draft skill 识别建表意图并输出草稿，回答里的草稿渲染成确认卡片（输入框不再设开关）
 
 // 确认草稿：真实建表（entrySave → config/entryTypeAddAll），成功后把结果回传智能体
 async function handleConfirmTableDraft(msg: ChatMessage, draft: TableDraft) {
@@ -901,7 +891,7 @@ async function handleConfirmTableDraft(msg: ChatMessage, draft: TableDraft) {
   }
   // 结果回传：让智能体知道表已建好、可继续追问；也是刷新后把草稿判为「已创建」的依据
   promptText.value = formatTableCreatedMessage(draft, state.tableId!)
-  await handleSend(undefined, { draftMode: false })
+  await handleSend()
 }
 
 function handleCancelTableDraft(msg: ChatMessage) {
@@ -920,12 +910,10 @@ function handleQuickPrompt(text: string) {
 }
 
 // 发送消息：经 useAskChat 状态机对接后端 /api/poc/chat/agent SSE 流式接口
-async function handleSend(customTitle?: string, opts?: { draftMode?: boolean }) {
+async function handleSend(customTitle?: string) {
   const content = promptText.value.trim()
   if (!content || isSending.value) return
   promptText.value = ''
-  // 建表模式：显式传入优先（重新生成沿用原消息的模式、建表结果回传强制普通模式），否则跟随输入框开关
-  const useTableDraft = opts?.draftMode ?? tableDraftMode.value
 
   let targetSessionId = activeSessionId.value
 
@@ -960,6 +948,9 @@ async function handleSend(customTitle?: string, opts?: { draftMode?: boolean }) 
   }
   list.push(userMsg)
   scrollToBottom()
+
+  // 建表意图交给智能体（table-draft skill）处理，不走下面的本地快捷导出 / 图表转换
+  const useTableDraft = /建(一张|个|一个)?[^，。,.\s]{0,8}表|创建.{0,8}表|新建.{0,8}表/.test(content)
 
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
   const lowerContent = content.toLowerCase()
@@ -1073,7 +1064,6 @@ async function handleSend(customTitle?: string, opts?: { draftMode?: boolean }) 
     createdAt: '刚刚',
     question: content,
     status: 'streaming',
-    ...(useTableDraft ? { draftMode: 'table' as const } : {}),
     thinking: {
       completed: false,
       durationMs: 0,
@@ -1108,8 +1098,7 @@ async function beginStream(
 
   const started = await askChat.send(
     {
-      // 建表模式：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
-      msg: msg.draftMode === 'table' ? buildTableDraftPrompt(question) : question,
+      msg: question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
     },
@@ -1171,7 +1160,7 @@ async function handleRegenerate(msg: ChatMessage) {
     return
   }
   promptText.value = question
-  await handleSend(undefined, { draftMode: msg.draftMode === 'table' })
+  await handleSend()
 }
 
 // 继续输出：中断/截断后让智能体接着上文继续
@@ -1811,25 +1800,13 @@ onUnmounted(() => {
             ref="textareaRef"
             v-model="promptText"
             rows="2"
-            :placeholder="tableDraftMode ? '描述要建的表：存什么数据、有哪些字段、是否用 CK 存储…（确认草稿后才会真正建表）' : '向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）...'"
+            :placeholder="'向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）...'"
             class="rc-textarea"
             @keydown="handleKeyDown"
           ></textarea>
 
           <div class="rc-input-toolbar">
             <div class="rc-toolbar-left">
-              <button
-                type="button"
-                class="rc-mode-chip"
-                :class="{ active: tableDraftMode }"
-                :aria-pressed="tableDraftMode"
-                :disabled="isSending"
-                data-testid="table-draft-mode-toggle"
-                title="开启后，智能体会把你的需求整理成建表草稿，确认后才真正建表"
-                @click="toggleTableDraftMode"
-              >
-                <span class="rc-mode-dot" />对话建表
-              </button>
               <span class="rc-input-tip">{{ isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
             </div>
 
@@ -3010,54 +2987,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.rc-mode-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--rc-border, #e2e8f0);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--rc-muted, #64748b);
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
-}
-
-.rc-mode-chip:hover:not(:disabled) {
-  border-color: var(--el-color-primary);
-  color: var(--el-color-primary);
-}
-
-.rc-mode-chip:focus-visible {
-  outline: 2px solid var(--el-color-primary-light-5);
-  outline-offset: 1px;
-}
-
-.rc-mode-chip:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.rc-mode-chip.active {
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-}
-
-.rc-mode-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.5;
-}
-
-.rc-mode-chip.active .rc-mode-dot {
-  opacity: 1;
 }
 
 .rc-input-tip {
