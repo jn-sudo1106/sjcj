@@ -143,7 +143,7 @@ describe('建表模式 · 提示词与结果回传', () => {
     const logs: BackendChatLog[] = [
       { id: 1, sessionId: 9, msg: buildTableDraftPrompt('建统计局指标表'), modelMsg: ANSWER, status: 'SUCCESS' },
       // 用户在卡片里把 CK 改成 MySQL 后建表：回放时卡片按回传结果显示 MySQL
-      { id: 2, sessionId: 9, msg: formatTableCreatedMessage(draft({ dsKind: 'MYSQL' }), '2101999'), modelMsg: '好的', status: 'SUCCESS' },
+      { id: 2, sessionId: 9, msg: formatTableCreatedMessage(draft({ dsKind: 'MYSQL' }), '2101999'), modelMsg: '已确认：\n\n| 字段 | 中文名 | 去重 |\n|---|---|---|\n| indicator | 指标名称 | 是 |\n| period | 时间 | 是 |\n| value | 数值 | 否 |', status: 'SUCCESS' },
       { id: 3, sessionId: 9, msg: buildTableDraftPrompt('再建一张'), modelMsg: ANSWER.replace(/TB_TJJZB/g, 'TB_OTHER'), status: 'SUCCESS' },
     ]
     const messages = convertChatLogsToMessages(logs)
@@ -151,6 +151,8 @@ describe('建表模式 · 提示词与结果回传', () => {
     expect(messages[1]).toMatchObject({ draftMode: 'table', question: '建统计局指标表' })
     expect(messages[1].tableDraft).toMatchObject({ status: 'created', tableId: '2101999', draft: { dsKind: 'MYSQL' } })
     expect(messages[1].chartData).toBeUndefined()
+    // 对建表结果的回复里复述的字段表是表结构，不渲染成统计图
+    expect(messages[3].chartData).toBeUndefined()
     expect(messages[5].tableDraft).toMatchObject({ status: 'pending' })
   })
 })

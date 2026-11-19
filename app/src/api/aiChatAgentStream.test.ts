@@ -7,6 +7,7 @@ import {
   extractChartDataFromText,
   listRecommendedQuestions,
   listAiSessions,
+  getAiChatHistoryPage,
   deleteAiSession,
   getAiChatHistory,
   convertChatLogsToMessages,
@@ -693,6 +694,19 @@ describe('问数会话管理与历史记录持久化对接', () => {
     expect(list[1].id).toBe('2')
     expect(list[1].uuid).toBe('sess_2')
     expect(list[1].group).toBe('earlier')
+  })
+
+  it('后端信封带 count 时 client 归一成 { list, total }，会话列表与历史都能取到', async () => {
+    vi.spyOn(clientModule, 'request').mockResolvedValueOnce({ list: [{ id: 7, name: '建表会话' }], total: 0 } as any)
+    expect((await listAiSessions()).map((s) => s.id)).toEqual(['7'])
+
+    vi.spyOn(clientModule, 'request').mockResolvedValueOnce({
+      list: [{ id: 1, sessionId: 7, msg: '你好', modelMsg: '你好！', status: 'SUCCESS' }],
+      total: 0,
+    } as any)
+    const page = await getAiChatHistoryPage(7)
+    expect(page.total).toBe(1)
+    expect(page.messages.map((m) => m.content)).toEqual(['你好', '你好！'])
   })
 
   it('deleteAiSession 发起后端会话软删除', async () => {

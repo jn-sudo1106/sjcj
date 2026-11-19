@@ -521,7 +521,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     }
 
     // 若未有图表数据，尝试从回答文本表格提取
-    if (!assistantMsg.chartData && !assistantMsg.tableDraft && assistantMsg.content) {
+    if (!assistantMsg.chartData && !assistantMsg.tableDraft && assistantMsg.content && !parseTableCreatedMessage(log.msg || '')) {
       const parsedChartData = extractChartDataFromText(assistantMsg.content)
       if (parsedChartData) {
         assistantMsg.chartData = parsedChartData
@@ -555,9 +555,25 @@ export function markCreatedTableDrafts(messages: ChatMessage[]): void {
   })
 }
 
+/**
+ * 列表载荷兼容：后端信封带 count（哪怕是 null）时 client 会归一成 `{ list, total }`，
+ * 否则直接是数组或 `{ data / records }`。2026-11-19 186 后端会话列表开始带 `count: null`，
+ * 只认 data/records 时会话列表整页为空。
+ */
+function pickListPayload<T>(res: unknown): T[] {
+  if (Array.isArray(res)) return res as T[]
+  const obj = res as Record<string, unknown> | null | undefined
+  for (const key of ['list', 'data', 'records'] as const) {
+    if (Array.isArray(obj?.[key])) return obj![key] as T[]
+  }
+  return []
+}
+
 export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> {
   try {
-    const res = await request<BackendChatSession[] | { data?: BackendChatSession[]; records?: BackendChatSession[] }>(
+    const res = await request<
+      BackendChatSession[] | { data?: BackendChatSession[]; records?: BackendChatSession[]; list?: BackendChatSession[] }
+    >(
       'poc/session/list',
       userId ? { userId } : undefined,
       {
@@ -565,13 +581,7 @@ export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> 
         httpEndpoint: `${POC_API_PREFIX}/session/list`,
       },
     )
-    const list: BackendChatSession[] = Array.isArray(res)
-      ? res
-      : Array.isArray((res as any)?.data)
-        ? (res as any).data
-        : Array.isArray((res as any)?.records)
-          ? (res as any).records
-          : []
+    const list = pickListPayload<BackendChatSession>(res)
     return list.map((item) => {
       const { group, updatedAt } = formatSessionGroupAndDate(item.updateTime || item.createTime)
       return {
@@ -625,7 +635,7 @@ export async function getAiChatHistoryPage(
 ): Promise<AiChatHistoryPage> {
   try {
     const res = await request<
-      BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[]; count?: number }
+      BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[]; list?: BackendChatLog[]; count?: number; total?: number }
     >(
       'poc/chat-log/history',
       {
@@ -638,14 +648,9 @@ export async function getAiChatHistoryPage(
         httpEndpoint: `${POC_API_PREFIX}/chat-log/history`,
       },
     )
-    const list: BackendChatLog[] = Array.isArray(res)
-      ? res
-      : Array.isArray((res as any)?.data)
-        ? (res as any).data
-        : Array.isArray((res as any)?.records)
-          ? (res as any).records
-          : []
-    const count = !Array.isArray(res) && typeof (res as any)?.count === 'number' ? (res as any).count : list.length
+    const list = pickListPayload<BackendChatLog>(res)
+    const rawTotal = Array.isArray(res) ? undefined : ((res as any)?.count ?? (res as any)?.total)
+    const count = typeof rawTotal === 'number' && rawTotal > 0 ? rawTotal : list.length
     return {
       messages: convertChatLogsToMessages(list),
       total: count,
