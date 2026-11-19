@@ -2076,9 +2076,21 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-/* 空状态内容统一限宽 780（原型设计说明 ②） */
+/* 空状态内容统一限宽 780（原型设计说明 ②），大屏放宽 */
 .rc-new-session-view > * {
   max-width: 780px;
+}
+
+@media (min-width: 1600px) {
+  .rc-new-session-view > * {
+    max-width: 1100px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-new-session-view > * {
+    max-width: min(1100px, 65%);
+  }
 }
 
 .rc-hero-section {
@@ -2086,6 +2098,18 @@ onUnmounted(() => {
   margin-bottom: 28px;
   width: 100%;
   max-width: 780px;
+}
+
+@media (min-width: 1600px) {
+  .rc-hero-section {
+    max-width: 1100px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-hero-section {
+    max-width: min(1100px, 65%);
+  }
 }
 
 /* 品牌渐变统一：hero 与智能体头像同一套渐变（原型设计说明 ①） */
@@ -2220,6 +2244,18 @@ onUnmounted(() => {
   border-top: 1px solid var(--rc-border-soft);
 }
 
+@media (min-width: 1600px) {
+  .rc-features-bar {
+    max-width: 1100px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-features-bar {
+    max-width: min(1100px, 65%);
+  }
+}
+
 .rc-feature-item {
   display: flex;
   align-items: center;
@@ -2279,13 +2315,25 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-/* 对话流内容限宽 860 居中（原型设计说明 ⑤） */
+/* 对话流内容限宽 860 居中（原型设计说明 ⑤），大屏放宽至 70% / 最大 1200px */
 .rc-chat-thread > * {
   width: 100%;
   max-width: 860px;
   margin-left: auto;
   margin-right: auto;
   box-sizing: border-box;
+}
+
+@media (min-width: 1600px) {
+  .rc-chat-thread > * {
+    max-width: 1200px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-chat-thread > * {
+    max-width: min(1200px, 70%);
+  }
 }
 
 .rc-msg-row {
@@ -2898,6 +2946,18 @@ onUnmounted(() => {
   box-shadow: var(--rc-shadow-soft);
   transition: border-color 0.2s;
   box-sizing: border-box;
+}
+
+@media (min-width: 1600px) {
+  .rc-input-box {
+    max-width: 1248px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-input-box {
+    max-width: min(1248px, calc(70% + 48px));
+  }
 }
 
 .rc-input-box:focus-within {

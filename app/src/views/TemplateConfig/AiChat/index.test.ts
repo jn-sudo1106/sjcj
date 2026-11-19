@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import AiChatView from './index.vue'
-import { listAiSessions, listRecommendedQuestions, streamAgentChat, getAiChatHistoryPage } from '@/api/aiChat'
+import { listAiSessions, streamAgentChat, getAiChatHistoryPage } from '@/api/aiChat'
 import { downloadCsv } from '@/utils/csv'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 
@@ -30,7 +30,6 @@ vi.mock('@/api/aiChat', async (importOriginal) => {
   return {
     ...actual,
     listAiSessions: vi.fn().mockResolvedValue([]),
-    listRecommendedQuestions: vi.fn().mockResolvedValue([]),
     getAiChatHistoryPage: vi.fn().mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 }),
     streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
       onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
@@ -160,7 +159,6 @@ describe('AI 智能问数 · AiChatView', () => {
     // clearAllMocks 只清调用记录：显式恢复默认实现，防止上一个用例的
     // mockImplementation（如挂起等待 abort 的流）泄漏到后续用例
     vi.mocked(listAiSessions).mockResolvedValue([])
-    vi.mocked(listRecommendedQuestions).mockResolvedValue([])
     vi.mocked(getAiChatHistoryPage).mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 })
     vi.mocked(streamAgentChat).mockImplementation(async (_params, onEvent) => {
       onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
@@ -271,10 +269,10 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 切换到「趋势图表」视图
     const chartRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('趋势图表'))
     expect(chartRadio).toBeTruthy()
-    await chartRadio!.find('input').setValue('chart')
+    await chartRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
@@ -283,10 +281,10 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 切换到「占比饼图」视图
     const pieRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('占比饼图'))
     expect(pieRadio).toBeTruthy()
-    await pieRadio!.find('input').setValue('pie')
+    await pieRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
@@ -298,10 +296,10 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 切换回「明细数据表」视图
     const tableRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('明细数据表'))
     expect(tableRadio).toBeTruthy()
-    await tableRadio!.find('input').setValue('table')
+    await tableRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
@@ -315,9 +313,9 @@ describe('AI 智能问数 · AiChatView', () => {
     await confirmWithTables(wrapper, [101])
 
     const tableRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('明细数据表'))
-    await tableRadio!.find('input').setValue('table')
+    await tableRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
@@ -356,7 +354,7 @@ describe('AI 智能问数 · AiChatView', () => {
     vi.useRealTimers()
   })
 
-  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；无后端推荐数据时不展示推荐卡片', async () => {
+  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；推荐场景已按 2026-11-19 要求隐藏', async () => {
     const wrapper = mountView(true)
     await flushPromises()
 
@@ -370,71 +368,22 @@ describe('AI 智能问数 · AiChatView', () => {
     // 应该显示新会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-hero-title').text()).toContain('AI 智能问数助手')
-    // 后端无配置时不渲染推荐卡片区域
+    // 推荐问数场景按 2026-11-19 要求隐藏（场景内容未定下来）
     expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
     expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
   })
 
-  it('生产无预置会话且后端配置推荐场景时，展示后端卡片，点击推荐卡片发起真实流式问数', async () => {
-    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
-      '排查近期异常任务与根因',
-      '昨日各站点抓取成功率 TOP 10',
-    ])
+  it('生产无预置会话时初始进入新建会话页面；推荐场景隐藏', async () => {
     const wrapper = mountView(false)
     await flushPromises()
 
     // 生产无会话时，初始就是新建会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
-
-    const starterCards = wrapper.findAll('.rc-starter-card')
-    expect(starterCards).toHaveLength(2)
-
-    // 点击第二个推荐场景卡片（昨日各站点抓取成功率 TOP 10）
-    await starterCards[1].trigger('click')
-    await flushPromises()
-
-    // 新会话已创建，进入对话流，新会话欢迎页隐藏
-    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
-    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
-    expect(wrapper.text()).toContain('昨日各站点抓取成功率 TOP 10')
-  })
-
-  it('后端未配置推荐问数场景（返回空列表）时，整块推荐问数场景不展示', async () => {
-    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([])
-    const wrapper = mountView(false)
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+    // 推荐问数场景隐藏
     expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
     expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
-  })
-
-  it('当后端配置推荐问数场景（sys_page_config）时，动态加载并渲染后端配置的卡片', async () => {
-    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
-      '近7天抓取异常最多的前5个网站',
-      '统计各业务库的数据同步延时分布',
-    ])
-    const wrapper = mountView(false)
-    await flushPromises()
-
-    const cards = wrapper.findAll('.rc-starter-card')
-    expect(cards).toHaveLength(2)
-    expect(cards[0].find('.rc-starter-badge').text()).toBe('推荐场景 01')
-    expect(cards[0].find('.rc-starter-name').text()).toBe('近7天抓取异常最多的前5个网站')
-    expect(cards[0].find('.rc-starter-desc').text()).toBe('近7天抓取异常最多的前5个网站')
-
-    expect(cards[1].find('.rc-starter-badge').text()).toBe('推荐场景 02')
-    expect(cards[1].find('.rc-starter-name').text()).toBe('统计各业务库的数据同步延时分布')
-
-    // 点击第一个动态推荐卡片能够正常发起流式对话
-    await cards[0].trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
-    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
-    expect(wrapper.text()).toContain('近7天抓取异常最多的前5个网站')
   })
 
   it('在左侧会话列表中点击不同会话可切换会话内容', async () => {
@@ -857,8 +806,8 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(downloadCsv).toHaveBeenCalled()
 
     // 5. 切换到趋势柱状图视图
-    const radioButtons = wrapper.findAll('.el-radio-button')
-    await radioButtons[0].find('input').trigger('change')
+    const radioButtons = wrapper.findAll('.rc-segmented-item')
+    await radioButtons[0].trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
@@ -927,16 +876,16 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(downloadXlsx).toHaveBeenCalled()
 
     // 5. 切换到「趋势图表」视图
-    const chartRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('趋势图表'))
+    const chartRadio = wrapper.findAll('.rc-segmented-item').find((btn) => btn.text().includes('趋势图表'))
     expect(chartRadio).toBeTruthy()
-    await chartRadio!.find('input').setValue('chart')
+    await chartRadio!.trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
 
     // 6. 切换到「占比饼图」视图
-    const pieRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('占比饼图'))
+    const pieRadio = wrapper.findAll('.rc-segmented-item').find((btn) => btn.text().includes('占比饼图'))
     expect(pieRadio).toBeTruthy()
-    await pieRadio!.find('input').setValue('pie')
+    await pieRadio!.trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
   })
@@ -974,8 +923,8 @@ describe('AI 智能问数 · AiChatView', () => {
     await flushPromises()
 
     // 1. 用户先切换到表格视图
-    const radioButtons = wrapper.findAll('.el-radio-button')
-    await radioButtons[2].find('input').trigger('change')
+    const radioButtons = wrapper.findAll('.rc-segmented-item')
+    await radioButtons[2].trigger('click')
     await flushPromises()
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
 
