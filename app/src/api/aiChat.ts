@@ -1,6 +1,15 @@
 // AI 智能问数（ChatBI / Agent 交互）API 封装
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
+import {
+  extractTableDraftFromText,
+  isTableDraftPrompt,
+  parseTableCreatedMessage,
+  stripTableDraftPrompt,
+  tableDraftFromPayload,
+  type TableDraft,
+  type TableDraftState,
+} from '@/utils/aiChat/tableDraft'
 
 export interface AiSessionItem {
   id: string
@@ -338,6 +347,10 @@ export interface ChatMessage {
   }
   insights?: string[]
   suggestions?: string[]
+  /** 智能体对话建表草稿（确认后走 entrySave 落库），见 utils/aiChat/tableDraft */
+  tableDraft?: TableDraftState
+  /** 本条回答是在「建表模式」下提问的：重试/重新生成时要带上同样的格式要求 */
+  draftMode?: 'table'
 }
 
 export function formatSessionGroupAndDate(dateStr?: string | Date): {
@@ -398,7 +411,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     result.push({
       id: `m-${log.id}-u`,
       role: 'user',
-      content: log.msg || '',
+      content: stripTableDraftPrompt(log.msg || ''),
       createdAt,
     })
 
@@ -409,7 +422,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       content: log.modelMsg || '',
       createdAt,
       interrupted: log.status === 'INTERRUPTED',
-      question: log.msg || '',
+      question: stripTableDraftPrompt(log.msg || ''),
       status:
         log.status === 'INTERRUPTED'
           ? 'interrupted'
@@ -495,8 +508,20 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       }
     }
 
+    // 建表草稿：正文 ```table-draft 代码块；后续某条用户消息是「建表结果」回传且物理表名一致即视为已建，
+    // 避免刷新后草稿卡又变成可确认、被重复建表（见下方回放循环之后的标记）
+    if (isTableDraftPrompt(log.msg || '')) assistantMsg.draftMode = 'table'
+    if (assistantMsg.content && (assistantMsg.draftMode || /```table-draft/i.test(assistantMsg.content))) {
+      const draft = extractTableDraftFromText(assistantMsg.content)
+      if (draft) {
+        assistantMsg.tableDraft = { draft, status: 'pending' }
+        // 建表回答里出现的表名不是选表候选：不要被当成澄清卡片
+        assistantMsg.clarification = undefined
+      }
+    }
+
     // 若未有图表数据，尝试从回答文本表格提取
-    if (!assistantMsg.chartData && assistantMsg.content) {
+    if (!assistantMsg.chartData && !assistantMsg.tableDraft && assistantMsg.content) {
       const parsedChartData = extractChartDataFromText(assistantMsg.content)
       if (parsedChartData) {
         assistantMsg.chartData = parsedChartData
@@ -506,7 +531,28 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     result.push(assistantMsg)
   }
 
+  markCreatedTableDrafts(result)
   return result
+}
+
+/** 历史回放：按「建表结果」回传消息把对应草稿标成已建（按物理表名匹配，取其后最近的一条） */
+export function markCreatedTableDrafts(messages: ChatMessage[]): void {
+  messages.forEach((msg, index) => {
+    if (msg.role !== 'assistant' || !msg.tableDraft || msg.tableDraft.status !== 'pending') return
+    for (let i = index + 1; i < messages.length; i++) {
+      const created = messages[i].role === 'user' ? parseTableCreatedMessage(messages[i].content) : null
+      if (created && created.tableName.toLowerCase() === msg.tableDraft.draft.tableName.toLowerCase()) {
+        // 卡片显示真实落库的名称与存储类型（用户可能在卡片里改过，正文草稿是改之前的）
+        const draft = {
+          ...msg.tableDraft.draft,
+          ...(created.name ? { name: created.name } : {}),
+          ...(created.dsKind ? { dsKind: created.dsKind } : {}),
+        }
+        msg.tableDraft = { ...msg.tableDraft, draft, status: 'created', tableId: created.tableId }
+        return
+      }
+    }
+  })
 }
 
 export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> {
@@ -637,6 +683,7 @@ export type AgentChatEvent =
   | { type: 'chunk'; text: string }
   | { type: 'reasoning'; reasoning: string }
   | { type: 'clarification'; clarification: Clarification }
+  | { type: 'table_draft'; draft: TableDraft }
   | { type: 'session_assigned'; sessionId: string; threadId: string }
   | { type: 'error'; error: string }
   | { type: 'done' }
@@ -1381,6 +1428,9 @@ export async function streamAgentChat(
           payload.data?.clarification ||
           delta?.clarification ||
           (payload.type === 'clarification' ? (payload.data || payload) : null)
+
+        const structuredDraft = tableDraftFromPayload(payload) ?? tableDraftFromPayload(payload.data)
+        if (structuredDraft) onEvent({ type: 'table_draft', draft: structuredDraft })
 
         if (
           rawClarification &&

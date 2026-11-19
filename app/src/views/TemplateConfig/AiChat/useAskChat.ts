@@ -10,6 +10,7 @@ import {
   type AskErrorInfo,
   type Clarification,
 } from '@/api/aiChat'
+import type { TableDraft } from '@/utils/aiChat/tableDraft'
 
 export type AskChatState =
   | 'idle'
@@ -78,6 +79,8 @@ export interface UseAskChatOptions {
   onChunkFlush: (text: string) => void
   onReasoning?: (text: string) => void
   onClarification?: (clarification: Clarification) => void
+  /** 后端结构化建表草稿（SSE 顶层 tableDraft / proposal.table）；正文代码块由页面在定稿时提取 */
+  onTableDraft?: (draft: TableDraft) => void
   onSessionAssigned?: (sessionId: string, threadId: string) => void
   onError?: (info: AskErrorInfo) => void
   onFinished?: (info: AskChatFinishInfo) => void
@@ -207,6 +210,10 @@ export function useAskChat(options: UseAskChatOptions) {
         gotClarification = true
         options.onClarification?.(event.clarification)
         setState('awaiting_clarification')
+        break
+      case 'table_draft':
+        gotClarification = true
+        options.onTableDraft?.(event.draft)
         break
       case 'error':
         error.value = normalizeAskError(event.error)

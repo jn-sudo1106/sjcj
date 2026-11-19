@@ -36,12 +36,21 @@ import { saveColdMessages, loadColdMessages, dropColdMessages } from '@/utils/ch
 import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import { useAskChat, ASK_PHASE_LABELS } from './useAskChat'
+import {
+  buildTableDraftPrompt,
+  createTableFromDraft,
+  extractTableDraftFromText,
+  formatTableCreatedMessage,
+  stripTableDraftBlock,
+  type TableDraft,
+} from '@/utils/aiChat/tableDraft'
 
 // 富渲染器按需加载：首屏 chunk 只留会话侧栏/输入框/消息骨架，
 // marked+dompurify、澄清卡片、图表数据卡在首次出现对应消息时再拉取
 const MarkdownOutput = defineAsyncComponent(() => import('@/components/MarkdownOutput.vue'))
 const ClarificationCard = defineAsyncComponent(() => import('./ClarificationCard.vue'))
 const DataViewCard = defineAsyncComponent(() => import('./DataViewCard.vue'))
+const TableDraftCard = defineAsyncComponent(() => import('./TableDraftCard.vue'))
 
 interface StarterPrompt {
   tag: string
@@ -137,7 +146,15 @@ const askChat = useAskChat({
   },
   onClarification: (clarification) => {
     if (!activeAssistantMsg) return
+    // 建表模式下智能体检索已有表的结果不是选表澄清，不出勾选卡片
+    if (activeAssistantMsg.draftMode === 'table') return
     activeAssistantMsg.clarification = { ...clarification, confirmed: false }
+    followScroll()
+  },
+  onTableDraft: (draft) => {
+    if (!activeAssistantMsg) return
+    activeAssistantMsg.tableDraft = { draft, status: 'pending' }
+    activeAssistantMsg.clarification = undefined
     followScroll()
   },
   onSessionAssigned: (sessionId, threadId) => {
@@ -228,20 +245,25 @@ function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interr
         msg.sql = { code: sqlCode, estimated: true }
       }
     }
-    if (!msg.clarification && msg.content) {
+    if (!msg.tableDraft && msg.content) {
+      const draft = extractTableDraftFromText(msg.content)
+      if (draft) msg.tableDraft = { draft, status: 'pending' }
+    }
+    if (msg.tableDraft) msg.clarification = undefined
+    if (!msg.clarification && !msg.tableDraft && msg.content) {
       const parsedClarification = extractClarificationFromText(msg.content)
       if (parsedClarification) {
         msg.clarification = { ...parsedClarification, confirmed: false }
       }
     }
-    if (!msg.clarification && !msg.chartData && msg.content) {
+    if (!msg.clarification && !msg.chartData && !msg.tableDraft && msg.content) {
       const parsedChartData = extractChartDataFromText(msg.content)
       if (parsedChartData) {
         msg.chartData = parsedChartData
       }
     }
     const hasBody = Boolean(
-      msg.content.trim() || msg.sql || msg.clarification || msg.chartData,
+      msg.content.trim() || msg.sql || msg.clarification || msg.chartData || msg.tableDraft,
     )
     msg.status = hasBody ? 'done' : 'empty'
     if (!hasBody) {
@@ -390,10 +412,11 @@ function formatMarkdownContent(msg: ChatMessage): string {
   if (!msg.content) return ''
   const hit = markdownContentCache.get(msg.id)
   if (hit && hit.src === msg.content) return hit.out
-  let out = msg.content
+  // 建表草稿代码块由草稿卡片承载，正文里只留说明文字
+  let out = /```table-draft/i.test(msg.content) ? stripTableDraftBlock(msg.content) : msg.content
   // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由数据卡统一承载图表与表格及导出交互
   if (msg.chartData) {
-    out = msg.content
+    out = out
       .replace(
         /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
         '\n'
@@ -882,6 +905,45 @@ async function handleConfirmClarify(
   scrollToBottom()
 }
 
+// ===== 智能体对话建表 =====
+// 输入框「建表模式」开关：开启后提问会附带草稿格式要求，回答里的草稿渲染成确认卡片
+const tableDraftMode = ref(false)
+
+function toggleTableDraftMode() {
+  tableDraftMode.value = !tableDraftMode.value
+  if (tableDraftMode.value && !promptText.value.trim()) {
+    promptText.value = '帮我建一张表，用来存：'
+  }
+  nextTick(() => textareaRef.value?.focus())
+}
+
+// 确认草稿：真实建表（entrySave → config/entryTypeAddAll），成功后把结果回传智能体
+async function handleConfirmTableDraft(msg: ChatMessage, draft: TableDraft) {
+  const state = msg.tableDraft
+  if (!state || state.status === 'creating' || state.status === 'created') return
+  state.draft = draft
+  state.status = 'creating'
+  state.error = undefined
+  try {
+    const { tableId } = await createTableFromDraft(draft)
+    state.status = 'created'
+    state.tableId = tableId
+    ElMessage.success(`数据表「${draft.name}」已创建，表 ID ${tableId}`)
+  } catch (error) {
+    state.status = 'failed'
+    state.error = error instanceof Error ? error.message : String(error)
+    ElMessage.error(`建表失败：${state.error}`)
+    return
+  }
+  // 结果回传：让智能体知道表已建好、可继续追问；也是刷新后把草稿判为「已创建」的依据
+  promptText.value = formatTableCreatedMessage(draft, state.tableId!)
+  await handleSend(undefined, { draftMode: false })
+}
+
+function handleCancelTableDraft(msg: ChatMessage) {
+  if (msg.tableDraft && msg.tableDraft.status !== 'created') msg.tableDraft.status = 'cancelled'
+}
+
 // 复制 SQL（统一走 utils/clipboard：http 部署站没有 navigator.clipboard，兜底与手动复制弹窗都在那里）
 async function handleCopySql(code: string) {
   await copyToClipboard(code, 'SQL')
@@ -894,10 +956,12 @@ function handleQuickPrompt(text: string) {
 }
 
 // 发送消息：经 useAskChat 状态机对接后端 /api/poc/chat/agent SSE 流式接口
-async function handleSend(customTitle?: string) {
+async function handleSend(customTitle?: string, opts?: { draftMode?: boolean }) {
   const content = promptText.value.trim()
   if (!content || isSending.value) return
   promptText.value = ''
+  // 建表模式：显式传入优先（重新生成沿用原消息的模式、建表结果回传强制普通模式），否则跟随输入框开关
+  const useTableDraft = opts?.draftMode ?? tableDraftMode.value
 
   let targetSessionId = activeSessionId.value
 
@@ -936,6 +1000,7 @@ async function handleSend(customTitle?: string) {
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
   const lowerContent = content.toLowerCase()
   const isExportQuery =
+    !useTableDraft &&
     list.length > 1 &&
     (content.includes('导出') || content.includes('下载')) &&
     (lowerContent.includes('csv') ||
@@ -985,6 +1050,7 @@ async function handleSend(customTitle?: string) {
 
   // 快捷图表形态转换指令识别（若会话中已有表格且用户指令要求做成图表/饼图/明细表）
   const isChartViewQuery =
+    !useTableDraft &&
     list.length > 1 &&
     (content.includes('图表') ||
       content.includes('柱状图') ||
@@ -1043,6 +1109,7 @@ async function handleSend(customTitle?: string) {
     createdAt: '刚刚',
     question: content,
     status: 'streaming',
+    ...(useTableDraft ? { draftMode: 'table' as const } : {}),
     thinking: {
       completed: false,
       durationMs: 0,
@@ -1077,7 +1144,8 @@ async function beginStream(
 
   const started = await askChat.send(
     {
-      msg: question,
+      // 建表模式：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
+      msg: msg.draftMode === 'table' ? buildTableDraftPrompt(question) : question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
     },
@@ -1121,6 +1189,7 @@ async function handleRetry(msg: ChatMessage) {
   msg.sql = undefined
   msg.clarification = undefined
   msg.chartData = undefined
+  msg.tableDraft = undefined
   msg.question = question
   msg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
   // 上一轮正文开始时把思考面板收起了（见 onChunkFlush），重试要恢复「思考中自动展开」
@@ -1138,7 +1207,7 @@ async function handleRegenerate(msg: ChatMessage) {
     return
   }
   promptText.value = question
-  await handleSend()
+  await handleSend(undefined, { draftMode: msg.draftMode === 'table' })
 }
 
 // 继续输出：中断/截断后让智能体接着上文继续
@@ -1564,6 +1633,15 @@ onUnmounted(() => {
                     />
                   </div>
 
+                  <!-- 智能体对话建表：草稿确认卡片（确认后才真实建表） -->
+                  <TableDraftCard
+                    v-if="msg.tableDraft"
+                    :state="msg.tableDraft"
+                    :disabled="isSending"
+                    @confirm="(draft: TableDraft) => handleConfirmTableDraft(msg, draft)"
+                    @cancel="handleCancelTableDraft(msg)"
+                  />
+
                   <!-- 生成的 SQL 卡片 -->
                   <div v-if="msg.sql" class="rc-sql-card">
                     <div class="rc-sql-head">
@@ -1777,13 +1855,25 @@ onUnmounted(() => {
             ref="textareaRef"
             v-model="promptText"
             rows="2"
-            placeholder="向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）..."
+            :placeholder="tableDraftMode ? '描述要建的表：存什么数据、有哪些字段、是否用 CK 存储…（确认草稿后才会真正建表）' : '向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）...'"
             class="rc-textarea"
             @keydown="handleKeyDown"
           ></textarea>
 
           <div class="rc-input-toolbar">
             <div class="rc-toolbar-left">
+              <button
+                type="button"
+                class="rc-mode-chip"
+                :class="{ active: tableDraftMode }"
+                :aria-pressed="tableDraftMode"
+                :disabled="isSending"
+                data-testid="table-draft-mode-toggle"
+                title="开启后，智能体会把你的需求整理成建表草稿，确认后才真正建表"
+                @click="toggleTableDraftMode"
+              >
+                <span class="rc-mode-dot" />对话建表
+              </button>
               <span class="rc-input-tip">{{ isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
             </div>
 
@@ -2813,6 +2903,54 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.rc-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--rc-border, #e2e8f0);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.rc-mode-chip:hover:not(:disabled) {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+
+.rc-mode-chip:focus-visible {
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 1px;
+}
+
+.rc-mode-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.rc-mode-chip.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.rc-mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.rc-mode-chip.active .rc-mode-dot {
+  opacity: 1;
 }
 
 .rc-input-tip {
