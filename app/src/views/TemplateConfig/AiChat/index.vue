@@ -36,7 +36,9 @@ import { useAuthStore } from '@/stores/auth'
 import { useAskChat, ASK_PHASE_LABELS } from './useAskChat'
 import {
   createTableFromDraft,
+  buildTableDraftPrompt,
   extractTableDraftFromText,
+  isCreateTableIntent,
   formatTableCreatedMessage,
   parseTableCreatedMessage,
   stripTableDraftBlock,
@@ -949,8 +951,8 @@ async function handleSend(customTitle?: string) {
   list.push(userMsg)
   scrollToBottom()
 
-  // 建表意图交给智能体（table-draft skill）处理，不走下面的本地快捷导出 / 图表转换
-  const useTableDraft = /建(一张|个|一个)?[^，。,.\s]{0,8}表|创建.{0,8}表|新建.{0,8}表/.test(content)
+  // 建表意图：不走下面的本地快捷导出 / 图表转换，发给智能体时自动追加草稿格式要求（智能体路由不稳定，可能误走只读查询）
+  const useTableDraft = isCreateTableIntent(content)
 
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
   const lowerContent = content.toLowerCase()
@@ -1064,6 +1066,7 @@ async function handleSend(customTitle?: string) {
     createdAt: '刚刚',
     question: content,
     status: 'streaming',
+    ...(useTableDraft ? { draftMode: 'table' as const } : {}),
     thinking: {
       completed: false,
       durationMs: 0,
@@ -1098,7 +1101,8 @@ async function beginStream(
 
   const started = await askChat.send(
     {
-      msg: question,
+      // 建表意图：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
+      msg: msg.draftMode === 'table' ? buildTableDraftPrompt(question) : question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
     },

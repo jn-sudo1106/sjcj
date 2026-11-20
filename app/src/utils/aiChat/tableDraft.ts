@@ -269,6 +269,17 @@ ${TABLE_DRAFT_INSTRUCTION_MARKER}
 要求：fields 不含 ENTRY_ID、创建时间等系统字段；code 只用小写字母、数字、下划线且不重复；能唯一标识一条数据的字段 dedup 设为 true（至少一个）；type 只有 string（短文本，链接/数值/日期也用它）、text、longtext（正文、JSON）三种。`
 }
 
+/**
+ * 用户消息是否明确要新建数据表（「建一张…表」「新建…表」「创建…表」）。
+ * 智能体对建表意图的路由不稳定，可能走只读查询工具；命中时前端自动追加草稿格式要求兜底。
+ * 排除建表结果回传，以及「新建的表 / 创建了哪些表」这类查询说法。
+ */
+export function isCreateTableIntent(text: string): boolean {
+  const content = (text || '').trim()
+  if (!content || content.startsWith(CREATED_PREFIX)) return false
+  return /(新建|创建|建)(一张|一个|个|张)?[^，。,.\s的了过]{0,10}表/.test(content)
+}
+
 /** 历史回放：去掉建表模式追加的格式要求，只显示用户原文 */
 export function stripTableDraftPrompt(text: string): string {
   if (!text) return text

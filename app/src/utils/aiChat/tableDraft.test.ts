@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildTableDraftPrompt,
+  isCreateTableIntent,
   createTableFromDraft,
   extractTableDraftFromText,
   formatTableCreatedMessage,
@@ -175,5 +176,18 @@ describe('建表模式 · 提示词与结果回传', () => {
     const messages = convertChatLogsToMessages(logs)
     expect(messages[1].tableDraft).toMatchObject({ status: 'created', tableId: '2102000', draft: { tableName: 'TB_TJJZB_V2' } })
     expect(messages[5].tableDraft).toMatchObject({ status: 'pending', draft: { tableName: '' } })
+  })
+})
+
+describe('isCreateTableIntent', () => {
+  it('明确要新建表时命中', () => {
+    for (const t of ['我要建一张表去存南京二手房的信息', '帮我建个表存商品价格', '新建一张CK表', '创建统计局指标表', '建表：存招聘信息']) {
+      expect(isCreateTableIntent(t), t).toBe(true)
+    }
+  })
+  it('查询类说法、建表结果回传不命中', () => {
+    for (const t of ['最近新建的表有哪些', '创建了哪些表', '查一下二手房表的数据', '【建表结果】已创建数据表「南京二手房」，物理表 TB_NJESF，表 ID 1', '']) {
+      expect(isCreateTableIntent(t), t).toBe(false)
+    }
   })
 })
