@@ -1172,6 +1172,8 @@ async function beginStream(
   const currentSessionObj = sessions.value.find((s) => s.id === sessionId)
   const sessionIdParam = /^\d+$/.test(sessionId) ? Number(sessionId) : undefined
   const threadIdParam = currentSessionObj?.uuid || (sessionIdParam ? undefined : sessionId)
+  // 缺 user_id 时后端兜底写 userId=1，会话挂错属主后按登录用户过滤的列表查不到
+  const userId = getActivePinia() ? useAuthStore().info?.id : undefined
 
   const started = await askChat.send(
     {
@@ -1181,6 +1183,7 @@ async function beginStream(
         : msg.draftMode === 'source' ? buildSourceDraftPrompt(question) : question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
+      user_id: userId,
     },
     opts,
   )
