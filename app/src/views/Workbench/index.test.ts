@@ -51,6 +51,16 @@ describe('PersonalWorkbench', () => {
     expect(wrapper.text()).not.toContain('沪深行情快照')
     wrapper.unmount()
   })
+  it('最近访问超过一页时指标显示「N+」而不是不可用', async () => {
+    vi.mocked(personalWorkbenchApi.recents).mockResolvedValue({
+      list: Array.from({ length: 8 }, (_, i) => ({ ...item, id: `9${i}` })),
+      truncated: true,
+    })
+    const { wrapper } = await setup()
+    expect(wrapper.findAll('.num').map(x => x.text())[1]).toBe('8+')
+    expect(wrapper.text()).toContain('最近访问的部分记录')
+    wrapper.unmount()
+  })
   it('alert tabs read count per scope and refetch the list on switch', async () => {
     const { wrapper } = await setup()
     const tabs = wrapper.findAll('.seg button')

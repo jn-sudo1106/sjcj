@@ -43,6 +43,13 @@ export interface RequestOptions {
    * 但可以为空（如 source/createJobs 的 `configId=`，不带直接报 not present）。默认空串一律跳过。
    */
   keepEmptyParams?: string[]
+  /**
+   * 保留后端原始信封（`{success, code, msg, data}` / `Paged{code, count, data}`）不做解包。
+   * 默认 `request()` 会把信封拆成 `data`（列表信封再转成 `{list,total}`），适合绝大多数调用方；
+   * 但埋点类接口（`log-report/report|recent|page`）的调用方要判 `success`/`code`，必须拿原始信封。
+   * 业务失败（`code !== 0`）仍按原逻辑抛错，不会因为保留信封而吞掉。
+   */
+  keepEnvelope?: boolean
 }
 
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
@@ -427,7 +434,7 @@ function formEncode(params: Record<string, unknown> | undefined): string {
   return form.toString()
 }
 
-function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
+function normalizeHttpPayload(endpoint: string, payload: unknown, keepEnvelope = false): unknown {
   if (!payload || typeof payload !== 'object') return payload
   const envelope = payload as Record<string, unknown>
   if (!('code' in envelope)) return payload
@@ -445,6 +452,7 @@ function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
     throw err
   }
 
+  if (keepEnvelope) return payload
   const data = envelope.data
   // 实测修正（2026-07-17 T3 真实联调）：旧平台文档/脚手架注释写的是 totalCount，
   // 但实际 s-table 组件读的是 r.count（components/table/index.js:160），真实后端分页响应也是 count，
@@ -626,7 +634,7 @@ export async function request<T>(
         body = JSON.parse(bodyText)
       }
     }
-    return normalizeHttpPayload(httpEndpoint, body) as T
+    return normalizeHttpPayload(httpEndpoint, body, options.keepEnvelope === true) as T
   } catch (e) {
     throw new ApiError(endpoint, e)
   }

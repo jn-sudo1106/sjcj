@@ -149,7 +149,8 @@ export const logReportApi = {
    * ENTER → 取 `data.visitId`；EXIT → 取 `data.closed`；其它事件 `data` 为 `{}`。
    */
   report(params: LogReportParams): Promise<RspResult<LogReportAck>> {
-    return request<RspResult<LogReportAck>>(EP.report, { ...params }, { method: 'POST' })
+    // 埋点接口的调用方要判 success/visitId，必须拿原始信封（2026-11-20 联调：默认解包后只剩 data）
+    return request<RspResult<LogReportAck>>(EP.report, { ...params }, { method: 'POST', keepEnvelope: true })
   },
 
   /**
@@ -157,7 +158,7 @@ export const logReportApi = {
    * （比如本地已有数据，失败要保留现状、不能当成空列表冲掉）。
    */
   recentRaw(query: RecentLogQuery): Promise<RspResult<RecentLogItem[]>> {
-    return request<RspResult<RecentLogItem[]>>(EP.recent, { ...query }, { method: 'GET' })
+    return request<RspResult<RecentLogItem[]>>(EP.recent, { ...query }, { method: 'GET', keepEnvelope: true })
   },
 
   /**
@@ -174,7 +175,7 @@ export const logReportApi = {
 
   /** 行为明细分页（原始 `Paged`：调用方用 `code === 0` 判成功，注意参数非法时是 1） */
   page(query: LogPageQuery = {}): Promise<LogPaged<LogRecord>> {
-    return request<LogPaged<LogRecord>>(EP.page, { ...query }, { method: 'GET' })
+    return request<LogPaged<LogRecord>>(EP.page, { ...query }, { method: 'GET', keepEnvelope: true })
   },
 
   /**

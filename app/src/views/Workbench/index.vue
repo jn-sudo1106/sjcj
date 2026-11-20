@@ -52,9 +52,16 @@ const alarmCapNote = computed(() => {
   return `仅展示最近 ${alarms.list.length} 条，共 ${total} 条`
 })
 const greeting = computed(() => { const hour = new Date().getHours(); return hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好' })
+// 最近访问按类型各取一页，超过一页时拿不到精确总数（truncated）；此时给「已读到的条数+」而不是「—」，
+// 免得列表里明明有数据、指标却显示成不可用。
+const recentNum = computed(() => {
+  if (recents.loading || recents.error) return '—'
+  if (recents.truncated) return `${recents.list.length}+`
+  return String(recents.total ?? recents.list.length)
+})
 const stats = computed(() => [
   { label: '我的收藏', num: count(collections), note: collections.error ? '收藏暂不可用' : '当前可访问的收藏', icon: 'star', color: 'blue' },
-  { label: '最近访问', num: count(recents), note: recents.error ? '访问记录暂不可用' : '最近访问的可见资源', icon: 'clock', color: 'cyan' },
+  { label: '最近访问', num: recentNum.value, note: recents.error ? '访问记录暂不可用' : recents.truncated ? '最近访问的部分记录' : '最近访问的可见资源', icon: 'clock', color: 'cyan' },
   { label: '未恢复告警', num: alarmNum.value, note: alarms.error ? '告警数据暂不可用' : '与我相关的未恢复告警', icon: 'alert', color: 'red' },
 ])
 const requests = new WeakMap<object, number>()

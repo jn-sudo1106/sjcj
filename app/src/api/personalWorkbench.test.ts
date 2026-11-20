@@ -245,7 +245,7 @@ describe('loadCollections', () => {
 })
 
 describe('loadRecents', () => {
-  it('用资源列表重解析真实名称与权限，不展示埋点旧 contentTitle；表同时取 ENTER/CLICK', async () => {
+  it('用资源列表重解析真实名称与权限，不展示埋点旧 contentTitle；源与表都取 ENTER/CLICK', async () => {
     requestMock.mockImplementation(async (endpoint: string, params?: Record<string, unknown>) => {
       if (endpoint !== 'log-report/recent') throw new Error(`unexpected endpoint: ${endpoint}`)
       const byType: Record<string, { contentId: string; contentTitle: string; createDt: string }[]> = {
@@ -276,12 +276,18 @@ describe('loadRecents', () => {
     expect(requestMock).toHaveBeenCalledWith(
       'log-report/recent',
       { contentType: 'SITE', action: 'ENTER', limit: 5 },
-      { method: 'GET' },
+      { method: 'GET', keepEnvelope: true },
+    )
+    // 源在 186 的埋点记的是 CLICK（2026-11-20 实测），因此要 ENTER,CLICK 一起取
+    expect(requestMock).toHaveBeenCalledWith(
+      'log-report/recent',
+      { contentType: 'SOURCE', action: 'ENTER,CLICK', limit: 5 },
+      { method: 'GET', keepEnvelope: true },
     )
     expect(requestMock).toHaveBeenCalledWith(
       'log-report/recent',
       { contentType: 'ENTRY_TYPE', action: 'ENTER,CLICK', limit: 5 },
-      { method: 'GET' },
+      { method: 'GET', keepEnvelope: true },
     )
   })
 
