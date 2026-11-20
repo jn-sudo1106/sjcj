@@ -659,6 +659,51 @@ describe('AI 智能问数 · AiChatView', () => {
     )
   })
 
+  it('零行回答里建议换表时，渲染「可以改查」胶囊，点击即以新一轮提问发出', async () => {
+    const zeroRowAnswer = [
+      '您再次确认的是同一张表 中指-二手房销售价格（`sense_data.TB_ZZ_MONTH_OLD_PRICE`）。',
+      '',
+      '这张表当前整表无任何数据记录（已分别用精确匹配、模糊匹配、全表地区列表三种方式验证，均为 0 行），属于底层数据缺失状态，并非查询条件问题。',
+      '',
+      '建议换一张有数据的表继续查询。之前检索命中的二手房相关数据源包括：',
+      '',
+      '• 贝壳二手房-在售（`sense_data.TB_ke_com_ershoufang_sale`）',
+      '• 贝壳二手房-成交信息（`sense_data.TB_ke_com_chengjiao_esf`）',
+      '• 中指-二手房销售套数/面积/销售额（`TB_ZZ_MONTH_OLD_CNT/AREA/SUM`）',
+      '• 南京网上房地产（`sense_data.TB_NJWSFDC`）',
+      '',
+      '请问您希望我换哪一张表继续查询南京二手房价格？',
+    ].join('\n')
+
+    vi.mocked(streamAgentChat).mockImplementation(async (_params, onEvent) => {
+      onEvent({ type: 'chunk', text: zeroRowAnswer })
+      onEvent({ type: 'done' })
+    })
+
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    await wrapper.find('textarea').setValue('南京二手房最新价格')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    // 「换表建议」不是澄清：不能把会话挂进 awaiting_clarification，也不出勾选卡片
+    expect(wrapper.find('[data-testid="clarification-card"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('可以改查：')
+    const chips = wrapper.findAll('.rc-chip-btn')
+    expect(chips.map((c) => c.text())).toEqual([
+      '改用「贝壳二手房-在售」继续查询',
+      '改用「贝壳二手房-成交信息」继续查询',
+      '改用「中指-二手房销售套数/面积/销售额」继续查询',
+      '改用「南京网上房地产」继续查询',
+    ])
+
+    // 点胶囊 = 以新一轮提问发出，智能体据此重新选表；不涉及主键回传
+    await chips[0].trigger('click')
+    await flushPromises()
+    expect(vi.mocked(streamAgentChat).mock.calls.at(-1)?.[0].msg).toBe('改用「贝壳二手房-在售」继续查询')
+  })
+
   it('智能体返回 Markdown 候选表表格时，自动渲染成交互表格，勾选后统一确认推进会话', async () => {
     const tableContent = `
 | 编号 | 表名 | 说明 |

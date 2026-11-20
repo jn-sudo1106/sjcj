@@ -428,6 +428,8 @@ export interface ChatMessage {
   }
   insights?: string[]
   suggestions?: string[]
+  /** 追问胶囊类型：table_switch = 零行回答里的「改查」建议，标签显示「可以改查」 */
+  suggestionsKind?: 'followup' | 'table_switch'
   /** 智能体对话建表草稿（确认后走 entrySave 落库），见 utils/aiChat/tableDraft */
   tableDraft?: TableDraftState
   /** 智能体对话建源草稿（确认后按新建采集 / 新增源链路落库），见 utils/aiChat/sourceDraft */
@@ -618,6 +620,21 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       const parsedChartData = extractChartDataFromText(assistantMsg.content)
       if (parsedChartData) {
         assistantMsg.chartData = parsedChartData
+      }
+    }
+
+    // 零行回答里的「建议换表」：恢复成可点击的改查胶囊（没有澄清卡片/业务数据/建表草稿时才认）
+    if (
+      !assistantMsg.clarification &&
+      !assistantMsg.chartData &&
+      !assistantMsg.tableDraft &&
+      !assistantMsg.suggestions?.length &&
+      assistantMsg.content
+    ) {
+      const tableSwitch = extractTableSwitchSuggestions(assistantMsg.content)
+      if (tableSwitch) {
+        assistantMsg.suggestions = tableSwitch.actions
+        assistantMsg.suggestionsKind = 'table_switch'
       }
     }
 
@@ -1073,6 +1090,60 @@ export function extractClarificationFromText(text: string): Clarification | null
   }
 
   return null
+}
+
+/**
+ * 表里没数据、回答里建议「换一张表」时的动作胶囊。
+ *
+ * 与澄清卡片的分工：同名表二选一仍走澄清卡片（要真实 entryTypeId 才能锁定）；
+ * 表已锁定但零行、模型列出一批可改查的表时，本质是让用户发起新一轮提问，
+ * 用追问胶囊更贴合，也不承担「文本猜表名」导致锁错表的风险。
+ * 胶囊文案只是把一句话填进输入框发送，因此这里只取展示名，不造主键。
+ */
+export interface TableSwitchSuggestion {
+  actions: string[]
+}
+
+/** 换表意图：没有这类说法时一律不认，避免把「本次用到的表」误判成建议 */
+const TABLE_SWITCH_INTENT_RE =
+  /(?:建议(?:您)?(?:换|改)|换一?张(?:有数据的)?表|换张表|换表|改查|改用|改换|另一张表|其他(?:的)?表|换个?(?:数据源|来源)|可以(?:换|改)查)/
+
+/** 物理表名特征：schema.table 或带下划线的表名；日期/金额/户型等业务值不会命中 */
+const PHYSICAL_TABLE_TOKEN_RE = /^(?:[A-Za-z0-9_]+\.[A-Za-z0-9_]+|[A-Za-z0-9_]{2,}_[A-Za-z0-9_]+)$/
+
+export function extractTableSwitchSuggestions(text: string): TableSwitchSuggestion | null {
+  if (!text || typeof text !== 'string') return null
+  if (!TABLE_SWITCH_INTENT_RE.test(text)) return null
+
+  const actions: string[] = []
+  const seen = new Set<string>()
+  for (const rawLine of text.split(/\r?\n/)) {
+    const listMatch = /^\s*(?:[-*+•]|\d+[\.、]|\(\d+\)|\d+\))\s+(.+)$/.exec(rawLine)
+    if (!listMatch) continue
+    const lineText = listMatch[1].trim()
+
+    // 只认括注/反引号里的物理表名：展示名保持原样，绝不臆造表名
+    const tokenSource = lineText.replace(/`/g, '')
+    const tokenMatch = /[（(]\s*([A-Za-z0-9_./]+)\s*[)）]/.exec(tokenSource)
+    const token = tokenMatch ? tokenMatch[1].replace(/\/.*$/, '') : ''
+    if (!token || !PHYSICAL_TABLE_TOKEN_RE.test(token)) continue
+
+    const display = lineText
+      .replace(/[（(][^)）]*[)）]/g, '')
+      .replace(/[`*]/g, '')
+      .trim()
+      .replace(/[：:。；;，,\s]+$/, '')
+    if (!display) continue
+
+    const action = `改用「${display}」继续查询`
+    if (seen.has(action)) continue
+    seen.add(action)
+    actions.push(action)
+    if (actions.length >= 4) break
+  }
+
+  if (actions.length < 2) return null
+  return { actions }
 }
 
 /**

@@ -23,6 +23,7 @@ import {
   clarificationOptionKey,
   extractClarificationFromText,
   extractChartDataFromText,
+  extractTableSwitchSuggestions,
   type AiSessionItem,
   type AskErrorCode,
   type ChatMessage,
@@ -261,6 +262,14 @@ function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interr
       const parsedChartData = extractChartDataFromText(msg.content)
       if (parsedChartData) {
         msg.chartData = parsedChartData
+      }
+    }
+    // 零行/换表建议：出可点击的「改查」胶囊（与澄清卡片互补，不占用澄清状态机）
+    if (!msg.clarification && !msg.chartData && !msg.tableDraft && !msg.suggestions?.length && msg.content) {
+      const tableSwitch = extractTableSwitchSuggestions(msg.content)
+      if (tableSwitch) {
+        msg.suggestions = tableSwitch.actions
+        msg.suggestionsKind = 'table_switch'
       }
     }
     const hasBody = Boolean(
@@ -1214,6 +1223,8 @@ async function handleRetry(msg: ChatMessage) {
   msg.clarification = undefined
   msg.chartData = undefined
   msg.tableDraft = undefined
+  msg.suggestions = undefined
+  msg.suggestionsKind = undefined
   msg.sourceDraft = undefined
   msg.question = question
   msg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
@@ -1744,7 +1755,7 @@ onUnmounted(() => {
                     v-if="msg.suggestions && msg.suggestions.length"
                     class="rc-followup-chips"
                   >
-                    <span class="rc-chips-label">智能追问:</span>
+                    <span class="rc-chips-label">{{ msg.suggestionsKind === 'table_switch' ? '可以改查：' : '智能追问:' }}</span>
                     <el-button
                       v-for="(sug, sidx) in msg.suggestions"
                       :key="sidx"
