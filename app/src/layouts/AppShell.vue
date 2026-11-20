@@ -6,15 +6,17 @@
 import AppTopBar from './AppTopBar.vue'
 import AppSidebar from './AppSidebar.vue'
 import AppModuleHead from './AppModuleHead.vue'
+import AiAskFloating from './AiAskFloating.vue'
 // 批量提交作业条（Y4-3）：挂在布局层，切页签/跳路由都不消失
 import LaunchJobBar from '@/components/LaunchJobBar.vue'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useRoute, useRouter } from 'vue-router'
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { syncSiteVisit } from '@/utils/siteRecents'
 import { prefetchRoute } from '@/utils/prefetchRoute'
 import { TABS } from '@/router/tabs'
+import { canAccess } from '@/composables/usePermission'
 
 const ui = useUiStore()
 const auth = useAuthStore()
@@ -24,6 +26,16 @@ const auth = useAuthStore()
 // 放在布局层是因为它对整个应用生命周期只注册一次，且不依赖任何业务页面是否挂载。
 const router = useRouter()
 const route = useRoute()
+const workspace = ref<HTMLElement | null>(null)
+const askFullTarget = ref<HTMLElement | null>(null)
+const isAskPage = computed(() => route.matched.some((record) => record.path === '/ai-chat'))
+const askPermission = computed(() => canAccess('ai-chat') &&
+  canAccess(router.resolve('/ai-chat').meta.permission as string | undefined))
+const showAsk = computed(() => auth.isLoggedIn && auth.info != null && askPermission.value)
+
+watch(() => isAskPage.value && auth.isMenusLoaded && !askPermission.value, (denied) => {
+  if (denied) void router.replace('/overview')
+}, { immediate: true })
 
 // 工作台仅保留纯色内容背景，顶栏、侧栏、面包屑及主区留白均复用平台布局。
 // 其他显式 fullwidth 页面仍可隐藏侧栏/面包屑；下方模板对工作台单独保留。
@@ -85,6 +97,7 @@ onBeforeUnmount(() => {
     <AppTopBar />
 
     <div
+      ref="workspace"
       class="rc-shell"
       :class="{ 'rc-shell--full': isFullWidth && route.path !== '/workbench', 'nav-collapsed': ui.navCollapsed && (!isFullWidth || route.path === '/workbench') }"
     >
@@ -94,16 +107,26 @@ onBeforeUnmount(() => {
         <AppModuleHead v-if="!isFullWidth || route.path === '/workbench'" />
 
         <main class="rc-pane">
+          <!-- 两种展示位置共用一个问数实例，切换时只移动 DOM。 -->
+          <div v-show="isAskPage" ref="askFullTarget" class="rc-ask-full" />
           <router-view v-slot="{ Component }">
             <!-- key 用「登录会话标识」而不是 auth.info?.id：后者首次 fetchInfo 才从 undefined 变真实值，
                  key 一变 KeepAlive 就整体替换，刚挂载的页面被销毁重建（首屏接口白打一遍） -->
-            <KeepAlive :key="auth.cacheKey" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" /></KeepAlive>
+            <KeepAlive :key="auth.cacheKey" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" v-if="!isAskPage" /></KeepAlive>
           </router-view>
         </main>
       </section>
     </div>
 
     <LaunchJobBar />
+    <AiAskFloating
+      v-if="showAsk"
+      :key="`${auth.cacheKey}:${auth.info?.id}`"
+      :full="isAskPage"
+      :full-target="askFullTarget"
+      :workspace="workspace"
+      :user-id="auth.info?.id ?? null"
+    />
   </div>
 </template>
 
@@ -162,6 +185,10 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+
+.rc-ask-full {
+  height: 100%;
 }
 
 /* ---------- 全宽布局（opt-in：route.meta.layout='fullwidth' 或 path='/workbench'） ---------- */

@@ -250,20 +250,24 @@ export function useAskChat(options: UseAskChatOptions) {
     reasoningAcc = ''
     receivedChars = 0
     gotClarification = false
-    controller = new AbortController()
+    const request = new AbortController()
+    controller = request
     setState('preparing')
     armStallTimer()
 
     try {
-      await streamFn({ ...params, signal: controller.signal }, handleEvent)
+      await streamFn({ ...params, signal: request.signal }, (event) => {
+        if (controller === request && !request.signal.aborted) handleEvent(event)
+      })
       // streamAgentChat 正常结束必发 done；兜底处理未走 done 的实现
-      if (isBusy.value) {
-        finalize(receivedChars > 0 || gotClarification ? 'done' : 'done_empty')
+      if (controller === request) {
+        if (request.signal.aborted) finalize('interrupted')
+        else if (isBusy.value) finalize(receivedChars > 0 || gotClarification ? 'done' : 'done_empty')
       }
       return true
     } catch (err) {
-      const aborted =
-        (err as { name?: string })?.name === 'AbortError' || controller?.signal.aborted
+      if (controller !== request) return true
+      const aborted = (err as { name?: string })?.name === 'AbortError' || request.signal.aborted
       if (aborted) {
         finalize('interrupted')
       } else {
@@ -288,7 +292,8 @@ export function useAskChat(options: UseAskChatOptions) {
   }
 
   function reset() {
-    if (isBusy.value) stop()
+    stop()
+    controller = null
     clearTimers()
     chunkBuffer = ''
     error.value = null

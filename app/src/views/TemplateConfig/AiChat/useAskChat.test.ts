@@ -99,6 +99,28 @@ describe('useAskChat · 问数流式状态机', () => {
     expect(chat.isBusy.value).toBe(false)
   })
 
+  it('清理旧流后，迟到的事件不会污染新会话', async () => {
+    const requests: Array<{ notify: (event: AgentChatEvent) => void; finish: () => void }> = []
+    const flushed: string[] = []
+    const chat = useAskChat({
+      onChunkFlush: (text) => flushed.push(text),
+      streamFn: (_params, notify) => new Promise<void>((finish) => { requests.push({ notify, finish }) }),
+    })
+    const old = chat.send({ msg: '旧问题' })
+    chat.reset()
+    const current = chat.send({ msg: '新问题' })
+    requests[0].notify({ type: 'chunk', text: '旧回复' })
+    requests[0].notify({ type: 'done' })
+    requests[0].finish()
+    await old
+    expect(chat.isBusy.value).toBe(true)
+    requests[1].notify({ type: 'chunk', text: '新回复' })
+    requests[1].notify({ type: 'done' })
+    requests[1].finish()
+    await current
+    expect(flushed).toEqual(['新回复'])
+  })
+
   it('忙碌中拒发；同键 3s 去抖拒发，bypassDebounce 可绕过', async () => {
     let release!: () => void
     const calls: string[] = []
