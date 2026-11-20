@@ -3,6 +3,7 @@ import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import {
   extractTableDraftFromText,
+  hasTableDraftBlock,
   isTableDraftPrompt,
   parseTableCreatedMessage,
   stripTableDraftPrompt,
@@ -583,7 +584,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     // 建表草稿：正文 ```table-draft 代码块；后续某条用户消息是「建表结果」回传且物理表名一致即视为已建，
     // 避免刷新后草稿卡又变成可确认、被重复建表（见下方回放循环之后的标记）
     if (isTableDraftPrompt(log.msg || '')) assistantMsg.draftMode = 'table'
-    if (assistantMsg.content && (assistantMsg.draftMode || /```table-draft/i.test(assistantMsg.content))) {
+    if (assistantMsg.content && (assistantMsg.draftMode || hasTableDraftBlock(assistantMsg.content))) {
       const draft = extractTableDraftFromText(assistantMsg.content)
       if (draft) {
         assistantMsg.tableDraft = { draft, status: 'pending' }

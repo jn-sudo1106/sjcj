@@ -191,3 +191,46 @@ describe('isCreateTableIntent', () => {
     }
   })
 })
+
+describe('2806 智能体 ```json + table_draft 写法', () => {
+  const body = `{
+  "table_draft": {
+    "table_name": "TB_NJ_ERSHOUFANG",
+    "table_comment": "南京二手房房源信息表",
+    "primary_key": "fangyuan_id",
+    "dedup_key": ["fangyuan_id"],
+    "source": "南京网上房地产/贝壳等",
+    "fields": [
+      {"name": "fangyuan_id", "type": "varchar(64)", "required": true, "comment": "房源唯一ID（主键，去重）"},
+      {"name": "xiaoqu_name", "type": "varchar(128)", "required": true, "comment": "小区名称"},
+      {"name": "area_sqm", "type": "decimal(10,2)", "required": true, "comment": "建筑面积（平方米）"},
+      {"name": "listing_date", "type": "date", "required": false, "comment": "挂牌时间"},
+      {"name": "crawl_time", "type": "datetime", "required": true, "comment": "抓取/入库时间"}
+    ]
+  }
+}`
+  for (const lang of ['json', '']) {
+    it(`识别 \`\`\`${lang || '（无语言）'} 代码块并归一化`, () => {
+      const text = `设计思路如下。\n\n\`\`\`${lang}\n${body}\n\`\`\`\n\n草稿已就绪，请在卡片上确认后执行建表。`
+      const draft = extractTableDraftFromText(text)!
+      expect(draft).toMatchObject({ name: '南京二手房房源信息表', tableName: 'TB_NJ_ERSHOUFANG', dsKind: 'MYSQL', remark: '数据来源：南京网上房地产/贝壳等' })
+      expect(draft.fields.map((f) => [f.code, f.desc, f.type, f.dedup])).toEqual([
+        ['fangyuan_id', '房源唯一ID（主键，去重）', 'string', true],
+        ['xiaoqu_name', '小区名称', 'string', false],
+        ['area_sqm', '建筑面积（平方米）', 'string', false],
+        ['listing_date', '挂牌时间', 'string', false],
+        ['crawl_time', '抓取/入库时间', 'string', false],
+      ])
+      const stripped = stripTableDraftBlock(text)
+      expect(stripped).not.toContain('table_draft')
+      expect(stripped).toContain('草稿已就绪')
+    })
+  }
+
+  it('流式未闭合的 json 草稿块先藏掉；普通 json 代码块不动', () => {
+    expect(stripTableDraftBlock(`说明\n\n\`\`\`json\n{\n  "table_draft": {\n    "table_name": "TB_X"`)).toBe('说明')
+    const plain = '示例：\n```json\n{"a": 1}\n```'
+    expect(extractTableDraftFromText(plain)).toBeNull()
+    expect(stripTableDraftBlock(plain)).toBe(plain)
+  })
+})

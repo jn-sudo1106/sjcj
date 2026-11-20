@@ -38,6 +38,7 @@ import {
   createTableFromDraft,
   buildTableDraftPrompt,
   extractTableDraftFromText,
+  hasTableDraftBlock,
   isCreateTableIntent,
   formatTableCreatedMessage,
   parseTableCreatedMessage,
@@ -396,7 +397,7 @@ function formatMarkdownContent(msg: ChatMessage): string {
   const hit = markdownContentCache.get(msg.id)
   if (hit && hit.src === msg.content) return hit.out
   // 建表草稿代码块由草稿卡片承载，正文里只留说明文字
-  let out = /```table-draft/i.test(msg.content) ? stripTableDraftBlock(msg.content) : msg.content
+  let out = hasTableDraftBlock(msg.content) ? stripTableDraftBlock(msg.content) : msg.content
   // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由数据卡统一承载图表与表格及导出交互
   if (msg.chartData) {
     out = out

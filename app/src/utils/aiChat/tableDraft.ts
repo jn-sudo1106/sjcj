@@ -84,6 +84,10 @@ export function normalizeTableDraft(raw: unknown): TableDraft | null {
 
   const rawFields = src.fields ?? src.items ?? src.columns
   if (!Array.isArray(rawFields) || rawFields.length === 0) return null
+  // 智能体另一种写法（2806 实测）：字段上不标 dedup，而是给 dedup_key 列表 / primary_key
+  const dedupKeys = new Set(
+    [src.dedup_key ?? src.dedupKey ?? src.primary_key ?? src.primaryKey].flat().map(str).filter(Boolean),
+  )
   const fields: TableDraftField[] = rawFields
     .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
     .map((item) => {
@@ -92,30 +96,47 @@ export function normalizeTableDraft(raw: unknown): TableDraft | null {
         code,
         desc: str(item.desc ?? item.label ?? item.itemName ?? item.comment ?? item.title) || code,
         type: normalizeFieldType(item.type ?? item.dataType),
-        dedup: truthy(item.dedup ?? item.uniqueKey ?? item.unique),
+        dedup: truthy(item.dedup ?? item.uniqueKey ?? item.unique) || dedupKeys.has(code),
       }
     })
   if (!fields.length) return null
 
-  const dsKind = /^(ck|clickhouse)$/i.test(str(src.dsKind ?? src.storage ?? src.db)) ? 'CK' : 'MYSQL'
+  const dsKind = /^(ck|clickhouse)$/i.test(str(src.dsKind ?? src.ds_kind ?? src.storage ?? src.db ?? src.engine)) ? 'CK' : 'MYSQL'
+  const source = str(src.source)
   return {
-    name: str(src.name ?? src.typeName ?? src.label ?? src.title),
+    name: str(src.name ?? src.typeName ?? src.label ?? src.title ?? src.table_comment ?? src.tableComment),
     tableName: str(src.tableName ?? src.physicalTable ?? src.table_name),
     dsKind,
     dedupMode: /^(table|表内(去重)?)$/i.test(str(src.dedupMode ?? src.dedup_mode)) ? 'table' : 'source',
-    remark: str(src.remark ?? src.description ?? src.comment),
+    remark: str(src.remark ?? src.description ?? src.comment) || (source ? `数据来源：${source}` : ''),
     fields,
   }
 }
 
-const DRAFT_FENCE = /```table-draft\s*\n?([\s\S]*?)```/i
+/**
+ * 草稿代码块：约定的 ```table-draft；智能体 skill 也可能用 ```json（或不标语言）包一个带
+ * `table_draft` / `tableDraft` 键的对象（2806 实测），两种都认。
+ */
+const FENCE = /```([\w-]*)[^\n]*\n?([\s\S]*?)```/g
+const DRAFT_KEY = /"(?:table_draft|tableDraft)"\s*:/
 
-/** 从回答正文取 ```table-draft 代码块里的草稿（取最后一个；流式未闭合不算） */
+function isDraftFence(lang: string, body: string): boolean {
+  if (/^table-draft$/i.test(lang)) return true
+  return /^(json|json5|javascript|js)?$/i.test(lang) && DRAFT_KEY.test(body)
+}
+
+/** 正文里是否含草稿代码块（含流式中尚未闭合的） */
+export function hasTableDraftBlock(text: string): boolean {
+  if (!text) return false
+  return /```table-draft/i.test(text) || (/```(json|json5|js|javascript)?\s*\n/i.test(text) && DRAFT_KEY.test(text))
+}
+
+/** 从回答正文取草稿代码块里的草稿（取最后一个；流式未闭合不算） */
 export function extractTableDraftFromText(text: string): TableDraft | null {
-  if (!text || !/```table-draft/i.test(text)) return null
-  const all = [...text.matchAll(new RegExp(DRAFT_FENCE.source, 'gi'))]
+  if (!hasTableDraftBlock(text)) return null
+  const all = [...text.matchAll(FENCE)].filter((m) => isDraftFence(m[1], m[2]))
   for (let i = all.length - 1; i >= 0; i--) {
-    const draft = normalizeTableDraft(parseDraftJson(all[i][1]))
+    const draft = normalizeTableDraft(parseDraftJson(all[i][2]))
     if (draft) return draft
   }
   return null
@@ -173,10 +194,12 @@ export function repairJsonBrackets(raw: string): string {
 /** 渲染正文时去掉草稿代码块（由卡片承载）；流式中未闭合的块也一起藏掉，避免闪 JSON */
 export function stripTableDraftBlock(text: string): string {
   if (!text) return text
-  return text
-    .replace(new RegExp(DRAFT_FENCE.source, 'gi'), '')
-    .replace(/```table-draft[\s\S]*$/i, '')
-    .trim()
+  let out = text.replace(FENCE, (whole, lang: string, body: string) => (isDraftFence(lang, body) ? '' : whole))
+  out = out.replace(/```table-draft[\s\S]*$/i, '')
+  // 流式中未闭合的 json 草稿块（已出现 table_draft 键）也先藏掉
+  const open = out.match(/```(json|json5|js|javascript)?[^\n]*\n(?![\s\S]*```)([\s\S]*)$/i)
+  if (open && DRAFT_KEY.test(open[2])) out = out.slice(0, open.index)
+  return out.trim()
 }
 
 /** SSE 事件载荷里的结构化草稿（后端草稿工具契约，顶层 tableDraft 或 proposal.table） */
