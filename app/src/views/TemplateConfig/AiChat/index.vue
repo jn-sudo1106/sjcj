@@ -45,6 +45,18 @@ import {
   stripTableDraftBlock,
   type TableDraft,
 } from '@/utils/aiChat/tableDraft'
+import {
+  buildSourceDraftPrompt,
+  executeSourceDraft,
+  extractSourceDraftFromText,
+  formatSourceCreatedMessage,
+  hasSourceDraftBlock,
+  isCreateSourceIntent,
+  isSourceCreatedMessage,
+  stripSourceDraftBlock,
+  type SourceDraftForm,
+  type SourceDraftStep,
+} from '@/utils/aiChat/sourceDraft'
 
 // 富渲染器按需加载：首屏 chunk 只留会话侧栏/输入框/消息骨架，
 // marked+dompurify、澄清卡片、图表数据卡在首次出现对应消息时再拉取
@@ -52,6 +64,7 @@ const MarkdownOutput = defineAsyncComponent(() => import('@/components/MarkdownO
 const ClarificationCard = defineAsyncComponent(() => import('./ClarificationCard.vue'))
 const DataViewCard = defineAsyncComponent(() => import('./DataViewCard.vue'))
 const TableDraftCard = defineAsyncComponent(() => import('./TableDraftCard.vue'))
+const SourceDraftCard = defineAsyncComponent(() => import('./SourceDraftCard.vue'))
 
 // 推荐问数场景（2026-11-19 用户要求先隐藏：场景内容未定下来；后端接口 listRecommendedQuestions 与
 // 配置入口保留，确认场景后再放回展示，届时恢复模板、onMounted 加载与本段逻辑）
@@ -129,8 +142,8 @@ const askChat = useAskChat({
   },
   onClarification: (clarification) => {
     if (!activeAssistantMsg) return
-    // 建表模式下智能体检索已有表的结果不是选表澄清，不出勾选卡片
-    if (activeAssistantMsg.draftMode === 'table' || activeAssistantMsg.tableDraft) return
+    // 建表 / 建源意图下智能体检索已有表的结果不是选表澄清，不出勾选卡片
+    if (activeAssistantMsg.draftMode || activeAssistantMsg.tableDraft || activeAssistantMsg.sourceDraft) return
     activeAssistantMsg.clarification = { ...clarification, confirmed: false }
     followScroll()
   },
@@ -232,22 +245,26 @@ function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interr
       const draft = extractTableDraftFromText(msg.content)
       if (draft) msg.tableDraft = { draft, status: 'pending' }
     }
-    if (msg.tableDraft) msg.clarification = undefined
-    if (!msg.clarification && !msg.tableDraft && msg.content) {
+    if (!msg.tableDraft && !msg.sourceDraft && msg.content) {
+      const draft = extractSourceDraftFromText(msg.content)
+      if (draft) msg.sourceDraft = { draft, status: 'pending' }
+    }
+    if (msg.tableDraft || msg.sourceDraft) msg.clarification = undefined
+    if (!msg.clarification && !msg.tableDraft && !msg.sourceDraft && msg.content) {
       const parsedClarification = extractClarificationFromText(msg.content)
       if (parsedClarification) {
         msg.clarification = { ...parsedClarification, confirmed: false }
       }
     }
     // 回复「建表结果」时智能体常复述字段表，那是表结构不是业务数据，不出统计图
-    if (!msg.clarification && !msg.chartData && !msg.tableDraft && msg.content && !parseTableCreatedMessage(msg.question || '')) {
+    if (!msg.clarification && !msg.chartData && !msg.tableDraft && !msg.sourceDraft && msg.content && !parseTableCreatedMessage(msg.question || '') && !isSourceCreatedMessage(msg.question || '')) {
       const parsedChartData = extractChartDataFromText(msg.content)
       if (parsedChartData) {
         msg.chartData = parsedChartData
       }
     }
     const hasBody = Boolean(
-      msg.content.trim() || msg.sql || msg.clarification || msg.chartData || msg.tableDraft,
+      msg.content.trim() || msg.sql || msg.clarification || msg.chartData || msg.tableDraft || msg.sourceDraft,
     )
     msg.status = hasBody ? 'done' : 'empty'
     if (!hasBody) {
@@ -396,8 +413,9 @@ function formatMarkdownContent(msg: ChatMessage): string {
   if (!msg.content) return ''
   const hit = markdownContentCache.get(msg.id)
   if (hit && hit.src === msg.content) return hit.out
-  // 建表草稿代码块由草稿卡片承载，正文里只留说明文字
+  // 建表 / 建源草稿代码块由草稿卡片承载，正文里只留说明文字
   let out = hasTableDraftBlock(msg.content) ? stripTableDraftBlock(msg.content) : msg.content
+  if (hasSourceDraftBlock(out)) out = stripSourceDraftBlock(out)
   // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由数据卡统一承载图表与表格及导出交互
   if (msg.chartData) {
     out = out
@@ -901,6 +919,48 @@ function handleCancelTableDraft(msg: ChatMessage) {
   if (msg.tableDraft && msg.tableDraft.status !== 'created') msg.tableDraft.status = 'cancelled'
 }
 
+// 确认建源草稿：按新建采集 / 新增源链路逐步执行，进度写回卡片；结束后（含部分失败）把结果回传智能体
+async function handleConfirmSourceDraft(msg: ChatMessage, form: SourceDraftForm) {
+  const state = msg.sourceDraft
+  if (!state || state.status !== 'pending') return
+  state.status = 'creating'
+  state.steps = []
+  state.error = undefined
+  const onStep = (step: SourceDraftStep) => {
+    const steps = state.steps ?? (state.steps = [])
+    const i = steps.findIndex((s) => s.key === step.key)
+    if (i >= 0) steps.splice(i, 1, step)
+    else steps.push(step)
+  }
+  let result
+  try {
+    result = await executeSourceDraft(form, onStep)
+  } catch (error) {
+    state.status = 'failed'
+    state.error = error instanceof Error ? error.message : String(error)
+    ElMessage.error(`建源失败：${state.error}`)
+    return
+  }
+  // 一个都没建成（第一步就失败，如参考源流程不可复制、未开新建通道）：回到可编辑，让用户改了再确认
+  const nothingCreated = !result.ok && !result.sources.length && (form.siteMode !== 'new' || !result.siteId)
+  if (nothingCreated) {
+    state.status = 'pending'
+    state.error = result.error
+    ElMessage.warning(result.error || '建源失败')
+    return
+  }
+  state.result = result
+  state.status = result.ok ? 'created' : 'failed'
+  if (result.ok) ElMessage.success(`已创建 ${result.sources.length} 个源`)
+  else ElMessage.warning(result.error || '建源未全部完成')
+  promptText.value = formatSourceCreatedMessage(result)
+  await handleSend()
+}
+
+function handleCancelSourceDraft(msg: ChatMessage) {
+  if (msg.sourceDraft && msg.sourceDraft.status === 'pending') msg.sourceDraft.status = 'cancelled'
+}
+
 // 复制 SQL（统一走 utils/clipboard：http 部署站没有 navigator.clipboard，兜底与手动复制弹窗都在那里）
 async function handleCopySql(code: string) {
   await copyToClipboard(code, 'SQL')
@@ -952,8 +1012,12 @@ async function handleSend(customTitle?: string) {
   list.push(userMsg)
   scrollToBottom()
 
-  // 建表意图：不走下面的本地快捷导出 / 图表转换，发给智能体时自动追加草稿格式要求（智能体路由不稳定，可能误走只读查询）
-  const useTableDraft = isCreateTableIntent(content)
+  // 建表 / 建源意图：不走下面的本地快捷导出 / 图表转换，发给智能体时自动追加草稿格式要求
+  //（智能体路由不稳定，可能误走只读查询）。两者都命中按建表处理（一句话同时建表 + 建源放二期）
+  const draftMode: 'table' | 'source' | undefined = isSourceCreatedMessage(content) ? undefined : isCreateTableIntent(content)
+    ? 'table'
+    : isCreateSourceIntent(content) ? 'source' : undefined
+  const useTableDraft = !!draftMode
 
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
   const lowerContent = content.toLowerCase()
@@ -1067,7 +1131,7 @@ async function handleSend(customTitle?: string) {
     createdAt: '刚刚',
     question: content,
     status: 'streaming',
-    ...(useTableDraft ? { draftMode: 'table' as const } : {}),
+    ...(draftMode ? { draftMode } : {}),
     thinking: {
       completed: false,
       durationMs: 0,
@@ -1102,8 +1166,10 @@ async function beginStream(
 
   const started = await askChat.send(
     {
-      // 建表意图：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
-      msg: msg.draftMode === 'table' ? buildTableDraftPrompt(question) : question,
+      // 建表 / 建源意图：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
+      msg: msg.draftMode === 'table'
+        ? buildTableDraftPrompt(question)
+        : msg.draftMode === 'source' ? buildSourceDraftPrompt(question) : question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
     },
@@ -1148,6 +1214,7 @@ async function handleRetry(msg: ChatMessage) {
   msg.clarification = undefined
   msg.chartData = undefined
   msg.tableDraft = undefined
+  msg.sourceDraft = undefined
   msg.question = question
   msg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
   // 上一轮正文开始时把思考面板收起了（见 onChunkFlush），重试要恢复「思考中自动展开」
@@ -1590,6 +1657,14 @@ onUnmounted(() => {
                     :disabled="isSending"
                     @confirm="(draft: TableDraft) => handleConfirmTableDraft(msg, draft)"
                     @cancel="handleCancelTableDraft(msg)"
+                  />
+                  <!-- 智能体对话建源：草稿确认卡片（回查网站/分类/模板，确认后才真实建源） -->
+                  <SourceDraftCard
+                    v-if="msg.sourceDraft"
+                    :state="msg.sourceDraft"
+                    :disabled="isSending"
+                    @confirm="(form: SourceDraftForm) => handleConfirmSourceDraft(msg, form)"
+                    @cancel="handleCancelSourceDraft(msg)"
                   />
 
                   <!-- 生成的 SQL 卡片 -->

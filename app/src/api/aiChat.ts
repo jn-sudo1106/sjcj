@@ -11,6 +11,14 @@ import {
   type TableDraft,
   type TableDraftState,
 } from '@/utils/aiChat/tableDraft'
+import {
+  extractSourceDraftFromText,
+  hasSourceDraftBlock,
+  isSourceCreatedMessage,
+  isSourceDraftPrompt,
+  stripSourceDraftPrompt,
+  type SourceDraftState,
+} from '@/utils/aiChat/sourceDraft'
 
 export interface AiSessionItem {
   id: string
@@ -422,8 +430,10 @@ export interface ChatMessage {
   suggestions?: string[]
   /** 智能体对话建表草稿（确认后走 entrySave 落库），见 utils/aiChat/tableDraft */
   tableDraft?: TableDraftState
-  /** 本条回答是在「建表模式」下提问的：重试/重新生成时要带上同样的格式要求 */
-  draftMode?: 'table'
+  /** 智能体对话建源草稿（确认后按新建采集 / 新增源链路落库），见 utils/aiChat/sourceDraft */
+  sourceDraft?: SourceDraftState
+  /** 本条回答是在建表 / 建源意图下提问的：发给智能体时追加了对应草稿格式要求 */
+  draftMode?: 'table' | 'source'
 }
 
 export function formatSessionGroupAndDate(dateStr?: string | Date): {
@@ -484,7 +494,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     result.push({
       id: `m-${log.id}-u`,
       role: 'user',
-      content: stripTableDraftPrompt(log.msg || ''),
+      content: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
       createdAt,
     })
 
@@ -495,7 +505,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       content: log.modelMsg || '',
       createdAt,
       interrupted: log.status === 'INTERRUPTED',
-      question: stripTableDraftPrompt(log.msg || ''),
+      question: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
       status:
         log.status === 'INTERRUPTED'
           ? 'interrupted'
@@ -593,8 +603,18 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       }
     }
 
+    // 建源草稿：正文 ```source-draft 代码块；其后的「建源结果」回传视为已建（见 markCreatedSourceDrafts）
+    if (isSourceDraftPrompt(log.msg || '')) assistantMsg.draftMode = 'source'
+    if (!assistantMsg.tableDraft && assistantMsg.content && (assistantMsg.draftMode === 'source' || hasSourceDraftBlock(assistantMsg.content))) {
+      const draft = extractSourceDraftFromText(assistantMsg.content)
+      if (draft) {
+        assistantMsg.sourceDraft = { draft, status: 'pending' }
+        assistantMsg.clarification = undefined
+      }
+    }
+
     // 若未有图表数据，尝试从回答文本表格提取
-    if (!assistantMsg.chartData && !assistantMsg.tableDraft && assistantMsg.content && !parseTableCreatedMessage(log.msg || '')) {
+    if (!assistantMsg.chartData && !assistantMsg.tableDraft && !assistantMsg.sourceDraft && assistantMsg.content && !parseTableCreatedMessage(log.msg || '') && !isSourceCreatedMessage(log.msg || '')) {
       const parsedChartData = extractChartDataFromText(assistantMsg.content)
       if (parsedChartData) {
         assistantMsg.chartData = parsedChartData
@@ -605,7 +625,27 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
   }
 
   markCreatedTableDrafts(result)
+  markCreatedSourceDrafts(result)
   return result
+}
+
+/**
+ * 历史回放：建源草稿之后、下一份建源草稿之前若有「建源结果」回传，视为已确认过（成功或部分失败），
+ * 卡片只展示回传结果、不再可确认，避免刷新后重复建源。
+ */
+export function markCreatedSourceDrafts(messages: ChatMessage[]): void {
+  messages.forEach((msg, index) => {
+    if (msg.role !== 'assistant' || !msg.sourceDraft || msg.sourceDraft.status !== 'pending') return
+    for (let i = index + 1; i < messages.length; i++) {
+      const next = messages[i]
+      if (next.role === 'assistant' && next.sourceDraft) return
+      if (next.role === 'user' && isSourceCreatedMessage(next.content)) {
+        const failed = next.content.includes('未全部完成')
+        msg.sourceDraft = { ...msg.sourceDraft, status: failed ? 'failed' : 'created', resultText: next.content.trim() }
+        return
+      }
+    }
+  })
 }
 
 /** 历史回放：按「建表结果」回传消息把对应草稿标成已建（按物理表名匹配，取其后最近的一条） */

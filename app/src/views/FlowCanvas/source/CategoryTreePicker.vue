@@ -10,11 +10,14 @@ export interface CategorySelection {
   categoryPath: string
 }
 
-const props = defineProps<{
+// Vue 对缺省的 boolean prop 按 false 处理，autoSelectFirst 必须显式给默认值 true
+const props = withDefaults(defineProps<{
   modelValue: CategorySelection
   /** 只展示这个分类下的子树（新建采集传 -2「业务分类」，10-22）；不传 = 分类表根层 */
   rootId?: string
-}>()
+  /** 首次挂载且未选时自动选中第一个顶级分类（新建采集的旧体验）；对话建源分类没匹配上时要用户自己选，传 false */
+  autoSelectFirst?: boolean
+}>(), { rootId: undefined, autoSelectFirst: true })
 const emit = defineEmits<{ 'update:modelValue': [v: CategorySelection] }>()
 
 const categories = ref<SourceCategory[]>([])
@@ -37,7 +40,7 @@ onMounted(async () => {
   categories.value = await sourceApi.sourceCategories(props.rootId)
   const hasNestedNodes = categories.value.some((node) => !!node.children?.length)
   collectKnownLoaded(categories.value, hasNestedNodes)
-  if (!props.modelValue.categoryPath && categories.value.length) {
+  if (props.autoSelectFirst && !props.modelValue.categoryPath && categories.value.length) {
     select(categories.value[0]) // 保留"有默认分类"的旧体验：首次进入自动选中第一个顶级分类
   }
 })
