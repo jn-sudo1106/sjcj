@@ -448,7 +448,8 @@ export async function loadCollections(): Promise<WorkbenchPage<WorkbenchItem>> {
  */
 const RECENT_KINDS: { kind: ResourceKind; contentType: LogContentType; action: LogAction }[] = [
   { kind: 'SITE', contentType: 'SITE', action: 'ENTER' },
-  { kind: 'SOURCE', contentType: 'SOURCE', action: 'ENTER' },
+  // 2026-11-20 186 实测：源的埋点记的是 CLICK（429 条），只取 ENTER 会得到空列表
+  { kind: 'SOURCE', contentType: 'SOURCE', action: 'ENTER,CLICK' as LogAction },
   { kind: 'ENTRY_TYPE', contentType: 'ENTRY_TYPE', action: 'ENTER,CLICK' as LogAction },
 ]
 
