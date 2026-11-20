@@ -292,6 +292,8 @@ export function validateSourceForm(form: SourceDraftForm): string[] {
   const errors: string[] = []
   if (form.siteMode === 'new' && !form.siteName.trim()) errors.push('请填写网站名称')
   if (form.siteMode === 'new' && !form.dirId) errors.push('新建网站需要选择业务分类')
+  // 2026-11-20 用户定：不关联网站时分类同样必选（分类是源的业务目录，不挂网站更要靠它归类）
+  if (form.siteMode === 'none' && !form.dirId) errors.push('不关联网站也需要选择业务分类（源的业务目录）')
   if (form.siteMode === 'existing' && !form.siteId) errors.push('请选择要加入的网站')
   if (form.flowMode === 'template' && !form.templateId) errors.push('请选择流程模板，或改选「暂不建流程」')
   if (form.flowMode === 'copy' && form.siteMode !== 'existing') errors.push('只有加到已有网站时才能复制参考源的流程')

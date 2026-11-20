@@ -66,14 +66,23 @@ describe('SourceDraftCard', () => {
     expect(wrapper.find('[data-testid="source-draft-errors"]').text()).toContain('新建网站需要选择业务分类')
   })
 
-  it('没有网站名 → 不关联网站，分类选填、可直接确认', async () => {
+  it('没有网站名 → 不关联网站，业务分类必选（源的业务目录）', async () => {
     resolveSourceDraft.mockResolvedValue(hints({ matchedCategory: null }))
     const wrapper = mountCard(state({ draft: { ...state().draft, siteName: '', category: '' } }))
     await flushPromises()
     expect(wrapper.text()).toContain('不归属网站')
-    expect(wrapper.text()).toContain('选择业务分类')
+    expect(wrapper.find('[data-testid="source-draft-category"]').exists()).toBe(true)
     await wrapper.find('[data-testid="source-draft-confirm"]').trigger('click')
-    expect((wrapper.emitted('confirm')![0][0] as { siteMode: string }).siteMode).toBe('none')
+    expect(wrapper.emitted('confirm')).toBeUndefined()
+    expect(wrapper.find('[data-testid="source-draft-errors"]').text()).toContain('不关联网站也需要选择业务分类')
+  })
+
+  it('不关联网站且已匹配到分类 → 可直接确认', async () => {
+    resolveSourceDraft.mockResolvedValue(hints())
+    const wrapper = mountCard(state({ draft: { ...state().draft, siteName: '' } }))
+    await flushPromises()
+    await wrapper.find('[data-testid="source-draft-confirm"]').trigger('click')
+    expect(wrapper.emitted('confirm')![0][0]).toMatchObject({ siteMode: 'none', dirId: '9009100' })
   })
 
   it('历史回放已创建：不回查，只展示回传结果，没有确认按钮', async () => {

@@ -1731,7 +1731,7 @@ export async function streamAgentChat(
  */
 export async function listRecommendedQuestions(): Promise<string[]> {
   try {
-    const res = await request<string[] | { data?: string[] } | null>(
+    const res = await request<string[] | { data?: unknown[]; list?: unknown[] } | null>(
       'poc/chat/help/question',
       undefined,
       {
@@ -1739,17 +1739,13 @@ export async function listRecommendedQuestions(): Promise<string[]> {
         httpEndpoint: `${POC_API_PREFIX}/chat/help/question`,
       },
     )
-    if (Array.isArray(res)) {
-      return res.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    }
-    if (res && Array.isArray((res as { data?: unknown[] }).data)) {
-      return (res as { data: unknown[] }).data.filter(
-        (item): item is string => typeof item === 'string' && item.trim().length > 0,
-      )
-    }
-    return []
+    // 186 实测响应是 {code, count: null, data: [...]}：带 count 键的数组 data 会被 client 按分页归一成 {list, total}
+    const items: unknown[] = Array.isArray(res) ? res : (res?.list ?? res?.data ?? [])
+    return Array.isArray(items)
+      ? items.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+      : []
   } catch (error) {
-    console.warn('[listRecommendedQuestions] 获取推荐问句失败，使用默认卡片:', error)
+    console.warn('[listRecommendedQuestions] 获取推荐问句失败，不展示推荐问题:', error)
     return []
   }
 }

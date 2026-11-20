@@ -41,12 +41,13 @@ const resolving = ref(false)
 const hints = ref<SourceDraftHints | null>(null)
 const form = ref<SourceDraftForm | null>(null)
 const touched = ref(false)
-/** 不关联网站时业务分类选填：点了才出现目录树（目录树首次挂载会自动选第一个分类） */
-const pickCategoryForNone = ref(false)
 
 const siteOptions = ref<Array<{ siteId: string; name: string; sourceCount: number }>>([])
 const siteSearching = ref(false)
 const siteSourceOptions = ref<Array<{ sourceId: string; name: string }>>([])
+const siteSourceSelectOptions = computed(() =>
+  siteSourceOptions.value.map((s) => ({ value: s.sourceId, label: `${s.name}（ID ${s.sourceId}）` })),
+)
 
 async function resolve() {
   resolving.value = true
@@ -56,7 +57,6 @@ async function resolve() {
     form.value = initialSourceForm(props.state.draft, h)
     if (h.existingSite) siteOptions.value = [{ ...h.existingSite }]
     siteSourceOptions.value = h.siteSources
-    pickCategoryForNone.value = !!form.value.dirId
   } finally {
     resolving.value = false
   }
@@ -246,18 +246,17 @@ const canvasLink = computed(() => {
 
           <div v-if="form.siteMode !== 'existing'" class="sd-field">
             <span>
-              业务分类{{ form.siteMode === 'none' ? '（选填）' : '' }}
+              业务分类{{ form.siteMode === 'none' ? '（源的业务目录）' : '' }}
               <em v-if="categoryHint" class="sd-tag" :class="categoryHint.ok ? 'ok' : 'warn'">{{ categoryHint.text }}</em>
             </span>
             <CategoryTreePicker
-              v-if="editable && (form.siteMode === 'new' || pickCategoryForNone)"
+              v-if="editable"
               v-model="category"
               :root-id="BIZ_DIR_ROOT_ID"
               :auto-select-first="false"
               data-testid="source-draft-category"
             />
-            <div v-else-if="!editable" class="sd-readonly">{{ form.category || form.categoryPath || '—' }}</div>
-            <el-button v-else link size="small" type="primary" @click="pickCategoryForNone = true">选择业务分类</el-button>
+            <div v-else class="sd-readonly">{{ form.category || form.categoryPath || '—' }}</div>
           </div>
         </div>
       </div>
@@ -279,9 +278,16 @@ const canvasLink = computed(() => {
           </label>
           <label v-else-if="form.flowMode === 'copy'" class="sd-field">
             <span>参考源</span>
-            <el-select v-model="form.templateSourceId" size="small" filterable :disabled="!editable" data-testid="source-draft-template-source" @change="onTemplateSourcePicked">
-              <el-option v-for="s in siteSourceOptions" :key="s.sourceId" :label="`${s.name}（ID ${s.sourceId}）`" :value="s.sourceId" />
-            </el-select>
+            <!-- 虚拟列表：大网站下源上万（186「贝壳找房」12055 个），el-select 全量渲染 option 要卡十几秒 -->
+            <el-select-v2
+              v-model="form.templateSourceId"
+              :options="siteSourceSelectOptions"
+              size="small"
+              filterable
+              :disabled="!editable"
+              data-testid="source-draft-template-source"
+              @change="onTemplateSourcePicked"
+            />
           </label>
           <div class="sd-field sd-wide">
             <div class="sd-readonly">{{ flowModeText }}</div>

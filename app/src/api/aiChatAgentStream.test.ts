@@ -550,6 +550,12 @@ describe('listRecommendedQuestions 推荐问数场景获取', () => {
     expect(list).toEqual(['规则清洗未命中排查'])
   })
 
+  it('client 按分页归一后的 { list, total } 也能取到（186 实测响应带 count: null）', async () => {
+    vi.spyOn(clientModule, 'request').mockResolvedValue({ list: [' 2024年底，考核时点资产得分最高的机构 ', ''], total: 2 } as never)
+    const list = await listRecommendedQuestions()
+    expect(list).toEqual(['2024年底，考核时点资产得分最高的机构'])
+  })
+
   it('请求发生异常时静默降级返回空数组，不向外抛出异常', async () => {
     vi.spyOn(clientModule, 'request').mockRejectedValue(new Error('Network error'))
     const list = await listRecommendedQuestions()

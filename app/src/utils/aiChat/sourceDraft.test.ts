@@ -134,7 +134,8 @@ describe('卡片初始表单与校验', () => {
   it('校验：新建网站必选分类、按模板必选模板、源名不能重复', () => {
     expect(validateSourceForm(form())).toEqual([])
     expect(validateSourceForm(form({ dirId: '' }))).toContain('新建网站需要选择业务分类')
-    expect(validateSourceForm(form({ siteMode: 'none', dirId: '' }))).toEqual([])
+    expect(validateSourceForm(form({ siteMode: 'none', dirId: '' }))).toEqual(['不关联网站也需要选择业务分类（源的业务目录）'])
+    expect(validateSourceForm(form({ siteMode: 'none', dirId: '9009100' }))).toEqual([])
     expect(validateSourceForm(form({ templateId: '' }))).toContain('请选择流程模板，或改选「暂不建流程」')
     expect(validateSourceForm(form({ sources: [{ name: 'A', url: '' }, { name: 'A', url: '' }] }))).toContain('源名称有重复')
     expect(validateSourceForm(form({ flowMode: 'copy' }))).toContain('只有加到已有网站时才能复制参考源的流程')

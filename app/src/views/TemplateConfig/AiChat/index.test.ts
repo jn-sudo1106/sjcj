@@ -34,6 +34,7 @@ vi.mock('@/api/aiChat', async (importOriginal) => {
     ...actual,
     listAiSessions: vi.fn().mockResolvedValue([]),
     deleteAiSession: vi.fn().mockResolvedValue(true),
+    listRecommendedQuestions: vi.fn().mockResolvedValue([]),
     getAiChatHistoryPage: vi.fn().mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 }),
     streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
       onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
@@ -370,7 +371,7 @@ describe('AI 智能问数 · AiChatView', () => {
     vi.useRealTimers()
   })
 
-  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；推荐场景已按 2026-11-19 要求隐藏', async () => {
+  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；页面配置没有推荐问题时不展示', async () => {
     const wrapper = mountView(true)
     await flushPromises()
 
@@ -384,22 +385,29 @@ describe('AI 智能问数 · AiChatView', () => {
     // 应该显示新会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-hero-title').text()).toContain('AI 智能问数助手')
-    // 推荐问数场景按 2026-11-19 要求隐藏（场景内容未定下来）
+    // 页面配置没有启用的推荐问题 → 不展示
     expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
     expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
   })
 
-  it('生产无预置会话时初始进入新建会话页面；推荐场景隐藏', async () => {
+  it('生产无预置会话时初始进入新建会话页面；推荐问题来自页面配置，点击直接提问', async () => {
+    const api = await import('@/api/aiChat')
+    vi.mocked(api.listRecommendedQuestions).mockResolvedValueOnce(['统计最近 7 天各站点采集成功率', '查询两融余额最近的变动趋势'])
     const wrapper = mountView(false)
     await flushPromises()
 
     // 生产无会话时，初始就是新建会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
-    // 推荐问数场景隐藏
-    expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
-    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
+    const cards = wrapper.findAll('.rc-starter-card')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].text()).toBe('统计最近 7 天各站点采集成功率')
+
+    await cards[1].trigger('click')
+    await flushPromises()
+    expect(vi.mocked(api.streamAgentChat).mock.calls.at(-1)?.[0]).toMatchObject({ msg: '查询两融余额最近的变动趋势' })
+    expect(wrapper.text()).toContain('查询两融余额最近的变动趋势')
   })
 
   it('在左侧会话列表中点击不同会话可切换会话内容', async () => {

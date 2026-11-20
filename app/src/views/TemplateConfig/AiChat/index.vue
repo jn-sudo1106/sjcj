@@ -20,6 +20,7 @@ import {
   listAiSessions,
   deleteAiSession,
   getAiChatHistoryPage,
+  listRecommendedQuestions,
   clarificationOptionKey,
   extractClarificationFromText,
   extractChartDataFromText,
@@ -47,12 +48,10 @@ import {
   type TableDraft,
 } from '@/utils/aiChat/tableDraft'
 import {
-  buildSourceDraftPrompt,
   executeSourceDraft,
   extractSourceDraftFromText,
   formatSourceCreatedMessage,
   hasSourceDraftBlock,
-  isCreateSourceIntent,
   isSourceCreatedMessage,
   stripSourceDraftBlock,
   type SourceDraftForm,
@@ -67,9 +66,20 @@ const DataViewCard = defineAsyncComponent(() => import('./DataViewCard.vue'))
 const TableDraftCard = defineAsyncComponent(() => import('./TableDraftCard.vue'))
 const SourceDraftCard = defineAsyncComponent(() => import('./SourceDraftCard.vue'))
 
-// 推荐问数场景（2026-11-19 用户要求先隐藏：场景内容未定下来；后端接口 listRecommendedQuestions 与
-// 配置入口保留，确认场景后再放回展示，届时恢复模板、onMounted 加载与本段逻辑）
-const SHOW_STARTER_PROMPTS = false
+// 推荐问题：与「问数系统配置 → 页面配置」联动（启用的配置内容经 GET /api/poc/chat/help/question 返回）。
+// 2026-11-20 恢复：显隐由页面配置决定，没有启用的配置就不展示，不再在前端写死开关。
+const starterQuestions = ref<string[]>([])
+
+async function loadStarterQuestions() {
+  starterQuestions.value = await listRecommendedQuestions()
+}
+
+/** 点推荐问题直接发问（与手动输入同一条发送链路） */
+function handleSelectStarter(question: string) {
+  if (isSending.value) return
+  promptText.value = question
+  handleSend()
+}
 
 interface Props {
   initialSessions?: AiSessionItem[]
@@ -730,7 +740,7 @@ onMounted(async () => {
   } else {
     activeSessionId.value = 'new'
   }
-
+  void loadStarterQuestions()
 })
 
 // 滚动到底部；force=true 时同时恢复自动跟随并清零未读
@@ -1021,11 +1031,12 @@ async function handleSend(customTitle?: string) {
   list.push(userMsg)
   scrollToBottom()
 
-  // 建表 / 建源意图：不走下面的本地快捷导出 / 图表转换，发给智能体时自动追加草稿格式要求
-  //（智能体路由不稳定，可能误走只读查询）。两者都命中按建表处理（一句话同时建表 + 建源放二期）
+  // 建表意图：不走下面的本地快捷导出 / 图表转换，发给智能体时自动追加草稿格式要求
+  //（智能体路由不稳定，可能误走只读查询）。
+  // 建源不再追加格式要求（2026-11-20 用户定）：交给智能体的 source-draft skill，回答里有草稿块照常出卡片
   const draftMode: 'table' | 'source' | undefined = isSourceCreatedMessage(content) ? undefined : isCreateTableIntent(content)
     ? 'table'
-    : isCreateSourceIntent(content) ? 'source' : undefined
+    : undefined
   const useTableDraft = !!draftMode
 
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
@@ -1180,7 +1191,7 @@ async function beginStream(
       // 建表 / 建源意图：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
       msg: msg.draftMode === 'table'
         ? buildTableDraftPrompt(question)
-        : msg.draftMode === 'source' ? buildSourceDraftPrompt(question) : question,
+        : question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
       user_id: userId,
@@ -1442,7 +1453,7 @@ onUnmounted(() => {
     </aside>
 
     <!-- 2. 中间对话与分析工作台 -->
-    <main class="rc-aichat-main">
+    <main class="rc-aichat-main" :class="{ 'is-welcome': isNewSession }">
       <!-- 顶部控制条 -->
       <header class="rc-aichat-topbar">
         <div class="rc-topbar-left">
@@ -1473,44 +1484,26 @@ onUnmounted(() => {
           </p>
         </div>
 
-        <!-- 推荐快捷问数场景（2026-11-19 用户要求先隐藏，场景定下来后再放回） -->
-        <div v-if="SHOW_STARTER_PROMPTS" class="rc-starters-section"></div>
-
-        <!-- 核心能力特性：压缩为一行图标条，图标用线性 SVG 替代 emoji（原型设计说明 ①②） -->
+        <!-- 核心能力：新会话页输入框居中后压缩成一行小标签 -->
         <div class="rc-features-bar">
-          <div class="rc-feature-item">
-            <span class="rc-feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
-              </svg>
-            </span>
-            <div class="rc-feat-text">
-              <strong>多轮主动澄清</strong>
-              <span>同名表或歧义指标主动唤起候选卡片</span>
-            </div>
-          </div>
-          <div class="rc-feature-item">
-            <span class="rc-feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 3l7 3v5c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3z" /><path d="M9 12l2 2 4-4" />
-              </svg>
-            </span>
-            <div class="rc-feat-text">
-              <strong>安全只读 SQL</strong>
-              <span>严格限制 SELECT 语法，秒级执行</span>
-            </div>
-          </div>
-          <div class="rc-feature-item">
-            <span class="rc-feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 20V10" /><path d="M10 20V4" /><path d="M16 20v-8" /><path d="M22 20H2" />
-              </svg>
-            </span>
-            <div class="rc-feat-text">
-              <strong>图表与明细联动</strong>
-              <span>趋势对比与行级明细报表自由切换</span>
-            </div>
-          </div>
+          <span class="rc-feature-item" title="同名表或歧义指标主动唤起候选卡片">
+            <svg class="rc-feat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+            </svg>
+            多轮主动澄清
+          </span>
+          <span class="rc-feature-item" title="严格限制 SELECT 语法，秒级执行">
+            <svg class="rc-feat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3l7 3v5c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3z" /><path d="M9 12l2 2 4-4" />
+            </svg>
+            安全只读 SQL
+          </span>
+          <span class="rc-feature-item" title="趋势对比与行级明细报表自由切换">
+            <svg class="rc-feat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 20V10" /><path d="M10 20V4" /><path d="M16 20v-8" /><path d="M22 20H2" />
+            </svg>
+            图表与明细联动
+          </span>
         </div>
       </div>
 
@@ -1872,7 +1865,7 @@ onUnmounted(() => {
         </button>
       </transition>
 
-      <!-- 底部输入停靠区 -->
+      <!-- 输入区：对话中停靠底部；新会话页随欢迎内容居中（标题 → 输入框 → 推荐问数场景） -->
       <footer class="rc-aichat-footer">
         <!-- 浮动停止响应按钮：处于流式响应中时居中浮现 -->
         <transition name="el-fade-in-linear">
@@ -1930,6 +1923,29 @@ onUnmounted(() => {
           </div>
         </div>
       </footer>
+
+        <!-- 推荐问题：来自「问数系统配置 → 页面配置」的启用内容，没有就不展示 -->
+        <div v-if="isNewSession && starterQuestions.length" class="rc-starters-section" data-testid="starter-questions">
+          <div class="rc-starters-header">
+            <span class="rc-starters-title">✦ 推荐问数场景（点击一键提问）</span>
+          </div>
+          <div class="rc-starter-grid">
+            <button
+              v-for="q in starterQuestions"
+              :key="q"
+              type="button"
+              class="rc-starter-card"
+              :title="q"
+              :disabled="isSending"
+              @click="handleSelectStarter(q)"
+            >
+              <span class="rc-starter-name">{{ q }}</span>
+              <svg class="rc-starter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7 17L17 7" /><path d="M8 7h9v9" />
+              </svg>
+            </button>
+          </div>
+        </div>
     </main>
   </div>
 </template>
@@ -2133,18 +2149,54 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-/* 新建会话引导页面 */
+/* 新建会话引导页面：只放标题与能力标签，输入框和推荐问数场景是 main 里的兄弟节点 */
 .rc-new-session-view {
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 48px 24px;
+  padding: 24px 24px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   width: 100%;
   box-sizing: border-box;
+}
+
+/* 新会话页：标题 → 输入框 → 推荐问数场景 整体在可视区垂直居中；
+   内容超高时 auto 边距归零，main 自身滚动（对话页仍是 overflow hidden + 对话流内部滚动） */
+.rc-aichat-main.is-welcome {
+  overflow-y: auto;
+  /* 视觉重心略高于正中（底部多留一点），整块不贴底 */
+  padding-bottom: 6vh;
+}
+
+.rc-aichat-main.is-welcome > .rc-new-session-view {
+  margin-top: auto;
+}
+
+.rc-aichat-main.is-welcome > :last-child {
+  margin-bottom: auto;
+}
+
+.rc-aichat-main.is-welcome > .rc-aichat-footer {
+  border-top: none;
+  background: transparent;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.rc-aichat-main.is-welcome > .rc-starters-section {
+  width: 100%;
+  max-width: 956px;
+  /* 下边距保持 auto：与标题区的 margin-top:auto 一起把整块垂直居中，不能写死 */
+  margin: 20px auto auto;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1600px) {
+  .rc-aichat-main.is-welcome > .rc-starters-section {
+    max-width: 1296px;
+  }
 }
 
 /* 空状态内容统一限宽 780（原型设计说明 ②），大屏放宽 */
@@ -2166,7 +2218,7 @@ onUnmounted(() => {
 
 .rc-hero-section {
   text-align: center;
-  margin-bottom: 28px;
+  margin-bottom: 0;
   width: 100%;
   max-width: 780px;
 }
@@ -2218,153 +2270,108 @@ onUnmounted(() => {
 }
 
 .rc-starters-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .rc-starters-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rc-text);
-}
-
-.rc-starters-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--rc-muted);
 }
 
+/* 推荐问数场景：三列卡片（窄屏自动减列），左上问句、右上斜箭头 */
 .rc-starter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
   width: 100%;
-  box-sizing: border-box;
+}
+
+@media (min-width: 900px) {
+  .rc-starter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .rc-starter-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px 12px 16px;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius);
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  border-radius: 12px;
   box-shadow: var(--rc-shadow-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.rc-starter-card:hover {
+.rc-starter-card:hover:not(:disabled),
+.rc-starter-card:focus-visible {
   border-color: var(--rc-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+  outline: none;
 }
 
-.rc-starter-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.rc-starter-badge {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--rc-primary-bg);
-  color: var(--rc-primary);
-  font-weight: 600;
-}
-
-.rc-starter-arrow {
-  font-size: 12px;
-  color: var(--rc-muted);
-  transition: transform 0.2s;
-}
-
-.rc-starter-card:hover .rc-starter-arrow {
-  color: var(--rc-primary);
-  transform: translateX(3px);
+.rc-starter-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .rc-starter-name {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.55;
   color: var(--rc-text);
-  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
 
-.rc-starter-desc {
-  font-size: 12px;
+.rc-starter-arrow {
+  width: 13px;
+  height: 13px;
+  margin-top: 3px;
+  flex-shrink: 0;
   color: var(--rc-muted);
-  line-height: 1.5;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
-/* 能力特性：压缩为一行图标条，去掉白卡边框（原型设计说明 ②） */
+.rc-starter-card:hover:not(:disabled) .rc-starter-arrow,
+.rc-starter-card:focus-visible .rc-starter-arrow {
+  color: var(--rc-primary);
+  transform: translate(1px, -1px);
+}
+
+/* 能力特性：新会话页输入框居中后压缩为标题下一行小标签，说明放到悬停提示 */
 .rc-features-bar {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px 24px;
-  width: 100%;
-  max-width: 780px;
-  box-sizing: border-box;
-  padding: 4px 0 2px;
-  border-top: 1px solid var(--rc-border-soft);
-}
-
-@media (min-width: 1600px) {
-  .rc-features-bar {
-    max-width: 1100px;
-  }
-}
-
-@media (min-width: 1920px) {
-  .rc-features-bar {
-    max-width: min(1100px, 65%);
-  }
+  gap: 6px 20px;
+  margin-top: 14px;
 }
 
 .rc-feature-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 2px 0;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--rc-muted);
+  cursor: default;
 }
 
 .rc-feat-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  color: var(--rc-primary);
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
-}
-
-.rc-feat-icon svg {
-  width: 18px;
-  height: 18px;
-  display: block;
-}
-
-.rc-feat-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.rc-feat-text strong {
-  font-size: 12px;
-  color: var(--rc-text);
-  line-height: 1.3;
-}
-
-.rc-feat-text span {
-  font-size: 11px;
-  color: var(--rc-muted);
+  color: var(--rc-primary);
 }
 
 /* 对话流 */
