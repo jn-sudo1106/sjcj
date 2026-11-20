@@ -24,7 +24,13 @@ vi.mock('vue-router', async () => {
 // 六个子页面全部打成桩：这里验的是「切哪个 key 渲染哪个组件」，不是子页面自己的逻辑
 vi.mock('./sourceCheck/index.vue', async () => {
   const { h } = await import('vue')
-  return { default: { name: 'SourceCheck', setup: () => () => h('div', { class: 'stub-source-check' }) } }
+  return {
+    default: {
+      name: 'SourceCheck',
+      props: ['sourceId', 'siteId', 'sourceName'],
+      setup: (props: { sourceId?: string; siteId?: string }) => () => h('div', { class: 'stub-source-check', 'data-source': props.sourceId ?? '', 'data-site': props.siteId ?? '' }),
+    },
+  }
 })
 vi.mock('./sourceIssues/SourceIssuesView.vue', async () => {
   const { h } = await import('vue')
@@ -64,6 +70,8 @@ function mountMonitor() {
 beforeEach(() => {
   router.replace.mockReset()
   routeQuery.current.tab = undefined
+  delete (routeQuery.current as Record<string, unknown>).sourceId
+  delete (routeQuery.current as Record<string, unknown>).siteId
   routeMeta.current.tabs = undefined
 })
 
@@ -104,6 +112,22 @@ describe('监控中心 · 页内 tab（后端驱动）', () => {
 
     await wrapper.findAll('.ra-tab-link')[0]!.trigger('click')
     expect(router.replace).toHaveBeenLastCalledWith({ path: '/monitor', query: {} })
+  })
+
+  it('带 sourceId 进入时把筛选参数传给数据源监控页（工作台告警跳转依赖）', () => {
+    routeMeta.current.tabs = BACKEND_TABS
+    routeQuery.current.tab = 'sourceCheck'
+    ;(routeQuery.current as Record<string, unknown>).sourceId = '491000001'
+    const wrapper = mountMonitor()
+
+    expect(wrapper.find('.stub-source-check').attributes('data-source')).toBe('491000001')
+  })
+
+  it('不带定位参数时数据源监控页保持全量视图', () => {
+    routeMeta.current.tabs = BACKEND_TABS
+    const wrapper = mountMonitor()
+
+    expect(wrapper.find('.stub-source-check').attributes('data-source')).toBe('')
   })
 
   it('后端 key 带模块前缀（历史脏数据 monitor:sourceIssues）也能匹配到组件', () => {

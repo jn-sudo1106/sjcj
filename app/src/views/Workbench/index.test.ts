@@ -7,9 +7,19 @@ import { ElMessage } from 'element-plus'
 import Workbench from './index.vue'
 import { useAuthStore } from '@/stores/auth'
 import { personalWorkbenchApi } from '@/api/personalWorkbench'
-vi.mock('@/api/personalWorkbench', () => ({ WORKBENCH_TRUNCATED_NOTE: '数据量较大，仅展示最近一部分；完整列表请到对应页面查看', personalWorkbenchApi: { collections: vi.fn(), recents: vi.fn(), resources: vi.fn(), alarms: vi.fn(), removeFavorite: vi.fn() } }))
+import type { WorkbenchAlarm } from '@/api/personalWorkbench'
+vi.mock('@/api/personalWorkbench', () => ({
+  WORKBENCH_TRUNCATED_NOTE: '数据量较大，仅展示最近一部分；完整列表请到对应页面查看',
+  personalWorkbenchApi: { collections: vi.fn(), recents: vi.fn(), resources: vi.fn(), alarms: vi.fn(), removeFavorite: vi.fn() },
+  // 视图只把 404 转成的 WorkbenchUnavailableError 判成「接口未就绪」
+  isWorkbenchUnavailableError: (error: unknown) => (error as { name?: string } | null)?.name === 'WorkbenchUnavailableError',
+}))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn() } }))
 const item = { id: '1', kind: 'SITE' as const, name: '测试网站', subtitle: 'example.com', at: '2026-11-11 10:00:00' }
+const alarm = (id: string, level: WorkbenchAlarm['level'] = 'fail'): WorkbenchAlarm => ({
+  id, sourceId: `10${id}`, name: `源${id}`, description: '采集失败', level, at: '2026-11-20 09:00:00', resolved: level === 'recover',
+})
+const alarmPage = (list: WorkbenchAlarm[], total: number) => ({ list, total })
 async function setup() {
   const pinia = createPinia(); setActivePinia(pinia)
   const auth = useAuthStore(); auth.name = '真实用户'
@@ -23,22 +33,64 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(personalWorkbenchApi.collections).mockResolvedValue({ list: [item], total: 1 })
   vi.mocked(personalWorkbenchApi.recents).mockResolvedValue({ list: [item], total: 1 })
-  const unavailable = Object.assign(new Error('个人归属接口待提供'), { name: 'WorkbenchUnavailableError' })
-  vi.mocked(personalWorkbenchApi.resources).mockRejectedValue(unavailable)
-  vi.mocked(personalWorkbenchApi.alarms).mockRejectedValue(unavailable)
+  vi.mocked(personalWorkbenchApi.resources).mockResolvedValue({ list: [], total: 0 })
+  // scope=open 3 条未恢复，scope=all 7 条（含已恢复）——计数必须来自服务端 count，不能数当前页
+  vi.mocked(personalWorkbenchApi.alarms).mockImplementation((scope: 'open' | 'all' = 'open') =>
+    Promise.resolve(scope === 'open' ? alarmPage([alarm('1'), alarm('2'), alarm('3')], 3) : alarmPage([alarm('1'), alarm('2'), alarm('3'), alarm('4', 'recover')], 7)))
   vi.mocked(personalWorkbenchApi.removeFavorite).mockResolvedValue(undefined)
 })
 describe('PersonalWorkbench', () => {
-  it('matches new module order and real user; unavailable is not zero or demo data', async () => {
+  it('matches new module order and real user; counts come from server totals', async () => {
     const { wrapper } = await setup()
     expect(wrapper.find('h1').text()).toContain('真实用户')
     expect(wrapper.findAll('h3').map(x => x.text())).toEqual(['我的相关告警', '我的收藏', '最近访问'])
-    expect(wrapper.findAll('.num').map(x => x.text())).toEqual(['1', '1', '—'])
+    expect(wrapper.findAll('.num').map(x => x.text())).toEqual(['1', '1', '3'])
     expect(wrapper.text()).not.toContain('我负责的')
     expect(personalWorkbenchApi.resources).not.toHaveBeenCalled()
     expect(wrapper.get('a[href="/overview"]').text()).toContain('返回资产总览')
-    expect(wrapper.text()).toContain('接口未就绪')
     expect(wrapper.text()).not.toContain('沪深行情快照')
+    wrapper.unmount()
+  })
+  it('alert tabs read count per scope and refetch the list on switch', async () => {
+    const { wrapper } = await setup()
+    const tabs = wrapper.findAll('.seg button')
+    expect(tabs.map(x => x.text())).toEqual(['未恢复 (3)', '全部 (7)'])
+    expect(tabs[0].attributes('aria-pressed')).toBe('true')
+    expect(wrapper.findAll('.alert-row')).toHaveLength(3)
+    await tabs[1].trigger('click'); await flushPromises()
+    expect(personalWorkbenchApi.alarms).toHaveBeenCalledWith('all', 20)
+    expect(wrapper.findAll('.alert-row')).toHaveLength(4)
+    expect(wrapper.findAll('.seg button')[1].attributes('aria-pressed')).toBe('true')
+    wrapper.unmount()
+  })
+  it('alert jump keeps the monitor tab and the source filter', async () => {
+    const { wrapper, router } = await setup()
+    await wrapper.get('.alert-name').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/monitor')
+    expect(router.currentRoute.value.query).toMatchObject({ tab: 'sourceCheck', sourceId: '101' })
+    wrapper.unmount()
+  })
+  it('shows a cap note when server has more alarms than the card shows, and pages in the drawer', async () => {
+    vi.mocked(personalWorkbenchApi.alarms).mockImplementation((scope: 'open' | 'all' = 'open', limit = 20, page = 1) => {
+      if (page === 2) return Promise.resolve(alarmPage([alarm('9')], 25))
+      if (scope === 'all') return Promise.resolve(alarmPage([], 5))
+      return Promise.resolve(alarmPage(limit === 1 ? [alarm('1')] : [alarm('1'), alarm('2'), alarm('3')], 25))
+    })
+    const { wrapper } = await setup()
+    expect(wrapper.text()).toContain('仅展示最近 3 条，共 25 条')
+    await wrapper.get('.alert-footer .open').trigger('click'); await flushPromises()
+    expect(wrapper.findAll('aside .alert-row')).toHaveLength(3)
+    const more = wrapper.findAll('.drawer-more button')[0]
+    await more.trigger('click'); await flushPromises()
+    expect(personalWorkbenchApi.alarms).toHaveBeenCalledWith('open', 20, 2)
+    expect(wrapper.findAll('aside .alert-row')).toHaveLength(4)
+    wrapper.unmount()
+  })
+  it('keeps the not-ready state for old backends instead of showing an empty list', async () => {
+    vi.mocked(personalWorkbenchApi.alarms).mockRejectedValue(Object.assign(new Error('我的相关告警接口未就绪（后端未部署该端点）'), { name: 'WorkbenchUnavailableError' }))
+    const { wrapper } = await setup()
+    expect(wrapper.text()).toContain('接口未就绪')
+    expect(wrapper.findAll('.num')[2].text()).toBe('—')
     wrapper.unmount()
   })
   it('toggles common content and favorite shortcut restores it', async () => {

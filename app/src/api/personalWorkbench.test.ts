@@ -36,6 +36,7 @@ import {
   personalWorkbenchApi,
   removeFavorite,
   WORKBENCH_CAPABILITIES,
+  WorkbenchUnavailableError,
 } from './personalWorkbench'
 import type { EntryType } from './types/collect'
 import type { Site, Source } from './types/source'
@@ -422,10 +423,37 @@ describe('loadAlarms', () => {
       at: '2026-11-19 12:10:00',
       resolved: true,
     })
-    expect(requestMock).toHaveBeenCalledWith('workbench/my-alarms', { scope: 'all', limit: 10 }, {
+    expect(requestMock).toHaveBeenCalledWith('workbench/my-alarms', { scope: 'all', limit: 10, page: 1 }, {
       method: 'GET',
       httpParams: { scope: 'all', page: 1, limit: 10 },
     })
+  })
+
+  it('默认只取未恢复；total 只来自服务端 count，不拿当前页长度冒充', async () => {
+    requestMock.mockResolvedValue({
+      list: [{ alarmId: '1', targetId: '101', targetName: '源1', title: '采集失败', level: 'fail' }],
+      total: 37,
+    })
+
+    const result = await loadAlarms()
+    expect(result.total).toBe(37)
+    expect(result.truncated).toBe(true)
+    expect(requestMock).toHaveBeenCalledWith('workbench/my-alarms', { scope: 'open', limit: 20, page: 1 }, {
+      method: 'GET',
+      httpParams: { scope: 'open', page: 1, limit: 20 },
+    })
+  })
+
+  it('翻到最后一页时不再标记 truncated', async () => {
+    requestMock.mockResolvedValue({ list: [{ alarmId: '21', targetId: '101', targetName: '源1', level: 'fail' }], total: 21 })
+    const result = await loadAlarms('all', 20, 2)
+    expect(result.truncated).toBe(false)
+  })
+
+  it('端点 404 时转成「接口未就绪」而不是加载失败', async () => {
+    requestMock.mockRejectedValue(Object.assign(new Error('请求失败 404'), { status: 404 }))
+    await expect(loadAlarms()).rejects.toBeInstanceOf(WorkbenchUnavailableError)
+    await expect(loadResources()).rejects.toThrow('我负责的源接口未就绪')
   })
 
   it('列表非数组时报错', async () => {
