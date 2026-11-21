@@ -29,6 +29,23 @@ const route = useRoute()
 const workspace = ref<HTMLElement | null>(null)
 const askFullTarget = ref<HTMLElement | null>(null)
 const isAskPage = computed(() => route.matched.some((record) => record.path === '/ai-chat'))
+
+// KeepAlive 缓存键（2026-11-21 修 2806「源管理 ⇄ 任务中心点不开」）：下面 <component> 带了 v-if，
+// 编译器会给 v-if 分支自动加 key: 0，KeepAlive 有 key 就按 key 缓存 → 所有页面共用键 0，
+// 第一次进任务中心直接把源管理的缓存实例拿来 activate，报 ctx.deactivate is not a function，路由变了页面不换。
+// 这里按组件类型给稳定键，和 KeepAlive 不带 key 时按 type 缓存的口径一致。
+const viewKeys = new WeakMap<object, string>()
+let viewKeySeq = 0
+function viewKey(component: unknown): string | undefined {
+  const type = (component as { type?: unknown } | null | undefined)?.type
+  if (!type || (typeof type !== 'object' && typeof type !== 'function')) return undefined
+  let key = viewKeys.get(type)
+  if (!key) {
+    key = `view-${++viewKeySeq}`
+    viewKeys.set(type, key)
+  }
+  return key
+}
 const askPermission = computed(() => canAccess('ai-chat') &&
   canAccess(router.resolve('/ai-chat').meta.permission as string | undefined))
 const showAsk = computed(() => auth.isLoggedIn && auth.info != null && askPermission.value)
@@ -112,7 +129,7 @@ onBeforeUnmount(() => {
           <router-view v-slot="{ Component }">
             <!-- key 用「登录会话标识」而不是 auth.info?.id：后者首次 fetchInfo 才从 undefined 变真实值，
                  key 一变 KeepAlive 就整体替换，刚挂载的页面被销毁重建（首屏接口白打一遍） -->
-            <KeepAlive :key="auth.cacheKey" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" v-if="!isAskPage" /></KeepAlive>
+            <KeepAlive :key="auth.cacheKey" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" v-if="!isAskPage" :key="viewKey(Component)" /></KeepAlive>
           </router-view>
         </main>
       </section>

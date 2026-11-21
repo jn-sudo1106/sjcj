@@ -28,6 +28,9 @@ async function mountShell(path = '/overview', authenticated = false) {
       { path: '/workbench', component: { template: '<div class="workbench-stub">工作台内容</div>' } },
       { path: '/workbench-meta', component: { template: '<div class="workbench-stub">工作台内容</div>' }, meta: { layout: 'fullwidth' } },
       { path: '/ai-chat', component: { template: '<div class="duplicate-chat-stub" />' }, meta: { permission: 'ai-chat' } },
+      // KeepAlive include 里的两个页面（名字与真实页面一致），回归 2026-11-21 缓存键撞 0 的问题
+      { path: '/collect', component: { name: 'CollectAssets', data: () => ({ n: 0 }), template: '<div class="collect-stub" @click="n++">源管理{{ n }}</div>' } },
+      { path: '/tasks', component: { name: 'TaskCenter', template: '<div class="tasks-stub">任务中心</div>' } },
     ],
   })
   await router.push(path)
@@ -51,6 +54,28 @@ describe('AppShell', () => {
     expect(wrapper.findComponent({ name: 'AppTopBar' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'AppSidebar' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'AppModuleHead' }).exists()).toBe(true)
+  })
+
+  it('源管理 ⇄ 任务中心来回切换都能换页，缓存的页面状态保留（2026-11-21 v-if 自动 key 0 撞缓存键）', async () => {
+    const wrapper = await mountShell('/collect')
+    const router = wrapper.vm.$router
+    await wrapper.get('.collect-stub').trigger('click')
+    expect(wrapper.get('.collect-stub').text()).toBe('源管理1')
+
+    await router.push('/tasks')
+    await flushPromises()
+    expect(wrapper.find('.collect-stub').exists()).toBe(false)
+    expect(wrapper.get('.tasks-stub').text()).toBe('任务中心')
+
+    await router.push('/collect')
+    await flushPromises()
+    expect(wrapper.find('.tasks-stub').exists()).toBe(false)
+    // KeepAlive 仍然按页面缓存：回来不是新实例
+    expect(wrapper.get('.collect-stub').text()).toBe('源管理1')
+
+    await router.push('/tasks')
+    await flushPromises()
+    expect(wrapper.get('.tasks-stub').text()).toBe('任务中心')
   })
 
   it('router-view 渲染当前路由对应的页面内容', async () => {

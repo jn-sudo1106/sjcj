@@ -2,6 +2,7 @@ import { mockRegistry } from './mock'
 import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { flowRequestPath, type BackendScope } from './flowBackend'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
+import { acquireBackgroundSlot, beginForegroundRequest } from './requestPriority'
 import {
   PRODUCTION_BACKEND_HOSTS,
   CREATE_ALLOWED_BACKEND_HOSTS,
@@ -43,6 +44,11 @@ export interface RequestOptions {
    * 但可以为空（如 source/createJobs 的 `configId=`，不带直接报 not present）。默认空串一律跳过。
    */
   keepEmptyParams?: string[]
+  /**
+   * 请求优先级（见 requestPriority.ts）。`background` 只在没有前台请求在途时发，给逐目录枚举这类
+   * 大批量、用户不在等的请求用，别把浏览器每域 6 条连接占满、挤住用户操作。默认前台。
+   */
+  priority?: 'foreground' | 'background'
   /**
    * 保留后端原始信封（`{success, code, msg, data}` / `Paged{code, count, data}`）不做解包。
    * 默认 `request()` 会把信封拆成 `data`（列表信封再转成 `{list,total}`），适合绝大多数调用方；
@@ -379,6 +385,16 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'flow/version/draft',
   'flow/version/publish',
   'flow/version/abandon',
+  /**
+   * 2026-11-19 用户拍板放开：MCP 服务管理（系统设置 → MCP 服务）的三个写端点。
+   * save 新建/更新共用（带 id 即更新）；status 启停（停用被引用服务需 confirmed=true，UI 有二次确认）；
+   * delete 是后端约定的逻辑删除（工具标 stale 保留审计），UI 侧有二次确认。
+   * 页面写操作仅 admin 可见。probe / probe-all 本就不是 danger，不需要进清单。
+   * 与 source/check 同理：这只是「允许发出去」，217 后端接口尚未实现（2026-11-19 实测 list 404）。
+   */
+  'mcp/server/save',
+  'mcp/server/status',
+  'mcp/server/delete',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
@@ -511,6 +527,7 @@ export async function request<T>(
   params?: RequestParams,
   options: RequestOptions = {},
 ): Promise<T> {
+  let releaseSlot: (() => void) | undefined
   try {
     if (usesMockAdapter(endpoint, options)) {
       await delay(120)
@@ -556,6 +573,8 @@ export async function request<T>(
     // 规则编排 Sprint 4 直连旧 vrule 网关时用这个口径；采集中心同域端点仍走相对 path。
     const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams, options.keepEmptyParams) : resolvedPath
     const requestUrl = options.query ? appendQuery(url, options.query) : url
+    // 后台请求先排队拿槽位，再开始计超时：排队时间不算后端响应时间
+    releaseSlot = options.priority === 'background' ? await acquireBackgroundSlot() : beginForegroundRequest()
     const controller = new AbortController()
     let timeoutExpired = false
     const onExternalAbort = () => controller.abort()
@@ -637,5 +656,7 @@ export async function request<T>(
     return normalizeHttpPayload(httpEndpoint, body, options.keepEnvelope === true) as T
   } catch (e) {
     throw new ApiError(endpoint, e)
+  } finally {
+    releaseSlot?.()
   }
 }

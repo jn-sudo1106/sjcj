@@ -163,11 +163,12 @@ export async function searchDirs(kind: DirKind, keyword: string): Promise<DirNod
 const dirSourcesCache = new Map<string, Promise<string[]>>()
 
 /** 一个业务目录直属的源（不含子目录）。`category/listSources` 返回 `{ sourceIds, sourceGroupIds }` */
-export function bizDirSourceIds(categoryId: string): Promise<string[]> {
+export function bizDirSourceIds(categoryId: string, options: { background?: boolean } = {}): Promise<string[]> {
   const hit = dirSourcesCache.get(categoryId)
   if (hit) return hit
   const task = request<unknown>('category/listSources', { categoryId }, {
     method: 'GET', mode: 'http', httpEndpoint: 'category/listSources', httpParams: { categoryId },
+    ...(options.background ? { priority: 'background' as const } : {}),
   }).then((result) => {
     const rec = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>
     return Array.isArray(rec.sourceIds) ? [...new Set(rec.sourceIds.map(String).filter(Boolean))] : []
@@ -183,7 +184,7 @@ export function bizDirSourceIds(categoryId: string): Promise<string[]> {
 export async function bizScopeSourceIds(categoryIds: string[]): Promise<string[]> {
   const union = new Set<string>()
   for (let i = 0; i < categoryIds.length; i += CONCURRENCY) {
-    const batch = await Promise.all(categoryIds.slice(i, i + CONCURRENCY).map(bizDirSourceIds))
+    const batch = await Promise.all(categoryIds.slice(i, i + CONCURRENCY).map((id) => bizDirSourceIds(id)))
     batch.forEach((ids) => ids.forEach((id) => union.add(id)))
   }
   return [...union]
@@ -205,7 +206,17 @@ interface ScopeTreeRow {
  * 2026-10-30 为数据权限范围选择器加的接口，源管理这边也用它：
  * 拿不到（老环境没这个接口 / 无权限 / 返回格式不认识）返回 null，由调用方退回逐层展开。
  */
-async function readScopeTree(): Promise<ScopeTreeRow[] | null> {
+// 同一时刻在途的 scopeTree 合并成一个（目录树和预期周期首屏会同时要，2026-11-19 在 217 上实测发了两遍）；
+// 不做结果缓存，周期这边仍是每次现读。
+let scopeTreeInflight: Promise<ScopeTreeRow[] | null> | null = null
+function readScopeTree(): Promise<ScopeTreeRow[] | null> {
+  if (!scopeTreeInflight) {
+    scopeTreeInflight = fetchScopeTree().finally(() => { scopeTreeInflight = null })
+  }
+  return scopeTreeInflight
+}
+
+async function fetchScopeTree(): Promise<ScopeTreeRow[] | null> {
   let result: unknown
   try {
     result = await request<unknown>('category/scopeTree', undefined, { method: 'GET', mode: 'http' })
@@ -374,7 +385,8 @@ function startMembership(): Promise<Map<string, string[]>> {
     const map = new Map<string, string[]>()
     for (let i = 0; i < all.length; i += MEMBERSHIP_CONCURRENCY) {
       const ids = all.slice(i, i + MEMBERSHIP_CONCURRENCY)
-      const lists = await Promise.all(ids.map(bizDirSourceIds))
+      // 整树枚举走后台优先级：只在用户操作没有请求在途时发，不再把浏览器连接占满（2026-11-19）
+      const lists = await Promise.all(ids.map((id) => bizDirSourceIds(id, { background: true })))
       // 中途加入 / 移出源会作废重算，这批结果不再往订阅方推（避免旧结果盖新结果）
       if (seq !== membershipSeq) return map
       lists.forEach((sources, k) => {
@@ -745,7 +757,7 @@ export function bizSourceCycles(): Promise<Map<string, number>> {
     const dirs = [...dirCycles.keys()]
     for (let i = 0; i < dirs.length; i += MEMBERSHIP_CONCURRENCY) {
       const batch = dirs.slice(i, i + MEMBERSHIP_CONCURRENCY)
-      const lists = await Promise.all(batch.map((id) => bizDirSourceIds(id).catch(() => [] as string[])))
+      const lists = await Promise.all(batch.map((id) => bizDirSourceIds(id, { background: true }).catch(() => [] as string[])))
       lists.forEach((sourceIds, k) => {
         const hours = dirCycles.get(batch[k]!)!
         for (const sid of sourceIds) {
