@@ -1,6 +1,8 @@
 """Draft directory trees and immutable, multi-repository node code packages."""
 from __future__ import annotations
 
+from .release_records import register, attach_code
+
 import ast
 import hashlib
 import json
@@ -248,7 +250,7 @@ def editor_layout(layout: dict, binding_type: str) -> dict:
 
 def config_runner_layout(layout: dict, db) -> dict:
     runner_ids = {row['runner_id'] for row in db.execute(
-        'SELECT runner_id FROM config_runner_bindings WHERE config_id=?', (layout['configId'],)).fetchall()}
+        "SELECT runner_id FROM directory_runner_bindings WHERE binding_type='config' AND owner_id=?", (layout['configId'],)).fetchall()}
     stored = db.execute('SELECT setting_value FROM settings WHERE setting_key=?',
                         ('config-directory-layout:' + layout['configId'],)).fetchone()
     explicit_targets = stored and 'runnerIds' in json.loads(stored['setting_value'])
@@ -266,7 +268,7 @@ def config_runner_layout(layout: dict, db) -> dict:
 def runner_config_layouts(app, runner_id: str) -> list[dict]:
     with app.store.connect() as db:
         candidates = db.execute(
-            'SELECT config_id FROM config_runner_bindings WHERE runner_id=? '
+            "SELECT owner_id AS config_id FROM directory_runner_bindings WHERE binding_type='config' AND runner_id=? "
             'UNION SELECT a.config_id FROM assignments x JOIN code_assets a ON a.code_id=x.code_id '
             'WHERE x.runner_id=? AND x.enabled=1', (runner_id, runner_id)).fetchall()
         layouts = [config_runner_layout(get_config_layout(app, row['config_id'], db), db) for row in candidates]
@@ -518,17 +520,16 @@ def publish_layout(app, code_id: str, payload: dict) -> dict:
         # can resolve directory packages as well as the earlier single files.
         processor = app.publish_processor({'processorType': 'newslink_nourl'})
         git_url = app.git_url_for(repo, primary['gitCommit'], Path(main_source))
-        db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)', (
+        register(db, app.artifacts, (
             digest, 'script', layout['siteHost'] or layout['queueName'], 'any', primary['gitCommit'], 'published', now(), signature, entry, git_url))
-        db.execute('INSERT OR IGNORE INTO code_versions '
-                   '(digest,code_id,git_commit,git_url,delivery_path,prompt,source_url,published_at,repo_id,source_repo_path,source_git_commit,layout_json) '
-                   'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', (
-            digest, code_id, primary['gitCommit'], git_url, entry, old['prompt'], old['source_url'], now(), primary['repoId'],
-            main_source, primary['gitCommit'], encode(layout)))
+        attach_code(db, digest, code_id=code_id, git_commit=primary['gitCommit'], git_url=git_url,
+                    delivery_path=entry, prompt=old['prompt'], source_url=old['source_url'],
+                    published_at=now(), repo_id=primary['repoId'], source_repo_path=main_source,
+                    source_git_commit=primary['gitCommit'], layout_json=encode(layout))
         # A neutral directory is reusable in either runtime environment. Update
         # only bindings already using this node; never create a new deployment.
         environments = [environment] if environment != 'default' else [row['environment'] for row in db.execute(
-            'SELECT b.environment FROM code_runtime_bindings b JOIN code_versions v ON v.digest=b.digest '
+            'SELECT b.environment FROM code_runtime_bindings b JOIN releases v ON v.digest=b.digest '
             'WHERE v.code_id=? AND b.config_id=? AND b.queue_name=? AND b.site_host=?',
             (code_id, layout['configId'], layout['queueName'], layout['siteHost'])).fetchall()]
         for target_environment in environments:

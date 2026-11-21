@@ -1,5 +1,6 @@
 """Local HTTP and process integration tests; no external DB or MQ required."""
 import json
+import hashlib
 import io
 import base64
 import os
@@ -1140,7 +1141,7 @@ class ManagementIntegrationTest(unittest.TestCase):
         first.enroll(); second.enroll()
         first_id, second_id = first.identity['runnerId'], second.identity['runnerId']
         route = '/api/runner-management/directory-bindings'
-        tables = ('releases', 'code_versions', 'code_runtime_bindings', 'assignments')
+        tables = ('releases', 'code_runtime_bindings', 'assignments')
         with self.app.store.connect() as db:
             before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()] for table in tables}
         with self.assertRaises(HTTPError) as missing:
@@ -1249,7 +1250,7 @@ class ManagementIntegrationTest(unittest.TestCase):
             'scriptDigest': code['scriptDigest'], 'environment': 'test', 'concurrency': 1})
         self.request('/api/runner-management/site-scripts/bind', {'configId': code['configId'],
             'queueName': code['queueName'], 'environment': 'prd', 'scriptDigest': code['scriptDigest']})
-        tables = ('releases', 'code_versions', 'code_runtime_bindings', 'assignments')
+        tables = ('releases', 'code_runtime_bindings', 'assignments')
         with self.app.store.connect() as db:
             before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()]
                       for table in tables}
@@ -1304,7 +1305,7 @@ class ManagementIntegrationTest(unittest.TestCase):
         self.assertNotIn('runnerIds', initial)
         self.assertEqual(self.request(other_route)['codeId'], other['codeId'])
         self.assertEqual(self.request(other_route)['directoryTemplate'], '{configId}')
-        tables = ('releases', 'code_versions', 'code_runtime_bindings', 'assignments')
+        tables = ('releases', 'code_runtime_bindings', 'assignments')
         with self.app.store.connect() as db:
             before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()]
                       for table in tables}
@@ -1351,13 +1352,13 @@ class ManagementIntegrationTest(unittest.TestCase):
         initial = self.request(route)
         with self.app.store.connect() as db:
             for runner_id in (first_id, second_id):
-                db.execute('INSERT INTO config_runner_bindings VALUES (?,?,?)', ('mapped123', runner_id, 'existing'))
-            db.execute('INSERT INTO config_runner_bindings VALUES (?,?,?)', ('other456', first_id, 'existing'))
+                db.execute('INSERT INTO directory_runner_bindings VALUES (?,?,?,?,?)', ('config', hashlib.sha256(b'mapped123').hexdigest(), 'mapped123', runner_id, 'existing'))
+            db.execute('INSERT INTO directory_runner_bindings VALUES (?,?,?,?,?)', ('config', hashlib.sha256(b'other456').hexdigest(), 'other456', first_id, 'existing'))
             db.execute('INSERT INTO settings VALUES (?,?)', ('config-directory-layout:mapped123',
                        json.dumps({**initial, 'runnerIds': [first_id, second_id]})))
         with self.app.store.connect() as db:
             before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()]
-                      for table in ('releases', 'code_versions', 'code_runtime_bindings', 'assignments', 'config_runner_bindings')}
+                      for table in ('releases', 'code_runtime_bindings', 'assignments', 'directory_runner_bindings')}
         self.assertEqual(self.request(route), initial, 'Runner targets cannot affect the editor revision')
         saved = self.request(route, {**initial, 'directoryTemplate': '{configId}/test', 'runnerIds': []})
         self.assertNotIn('runnerIds', saved)
@@ -1394,7 +1395,7 @@ class ManagementIntegrationTest(unittest.TestCase):
         route = '/api/runner-management/directory-layouts/configs/mapped123'
         layout = self.request(route)
         with self.app.store.connect() as db:
-            db.execute('DELETE FROM config_runner_bindings WHERE config_id=?', ('mapped123',))
+            db.execute("DELETE FROM directory_runner_bindings WHERE binding_type='config' AND owner_id=?", ('mapped123',))
             db.execute('INSERT INTO settings VALUES (?,?)', ('config-directory-layout:mapped123',
                        json.dumps({**layout, 'runnerIds': []})))
         self.request(route, {**layout, 'directoryTemplate': '{configId}/custom'})
@@ -1417,7 +1418,7 @@ class ManagementIntegrationTest(unittest.TestCase):
         runner.enroll()
         self.request('/api/runner-management/assignments', {
             'runnerId': runner.identity['runnerId'], 'scriptDigest': code['scriptDigest'], 'environment': 'test', 'concurrency': 1})
-        tables = ('releases', 'code_versions', 'code_runtime_bindings', 'assignments', 'config_runner_bindings')
+        tables = ('releases', 'code_runtime_bindings', 'assignments', 'directory_runner_bindings')
         with self.app.store.connect() as db:
             before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()] for table in tables}
         route = '/api/runner-management/directory-layouts/queues/news_list'
@@ -1482,7 +1483,7 @@ class ManagementIntegrationTest(unittest.TestCase):
         queue_route = '/api/runner-management/directory-layouts/queues/news_list'
         config = self.request(config_route)
         queue = self.request(queue_route)
-        tables = ('releases', 'code_versions', 'code_runtime_bindings', 'assignments')
+        tables = ('releases', 'code_runtime_bindings', 'assignments')
         with self.app.store.connect() as db:
             before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()] for table in tables}
         self.request(route, {'bindingType': 'config', 'ownerId': 'mapped123', 'runnerId': second_id})
@@ -1534,8 +1535,8 @@ class ManagementIntegrationTest(unittest.TestCase):
                 with self.assertRaises(HTTPError) as unauthorized:
                     urlopen(request)
                 self.assertEqual(unauthorized.exception.code, 401)
-            with patch('backend.runner_management.server.urlopen', side_effect=lambda *args, **kwargs:
-                       io.BytesIO(json.dumps({'code': '0', 'data': {'roles': ['viewer']}}).encode())):
+            with patch('backend.runner_management.server._AUTH_OPENER.open', side_effect=lambda *args, **kwargs:
+                       io.BytesIO(json.dumps({'code': '0', 'data': {'userLoginName': 'viewer', 'roles': ['viewer']}}).encode())):
                 with urlopen(Request(self.url + route, headers={'Access-Token': 'test-viewer'})) as response:
                     self.assertEqual(json.load(response), [])
                 for method in ('POST', 'DELETE'):
@@ -2045,16 +2046,17 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         child = self.runner.processes[assignment["assignmentId"]][1]
         self.assertIsNone(child.poll())
         self.assertIsNone(self.runner.processes[assignment["assignmentId"] + ":1"][1].poll())
+        console_path = self.runner.processes[assignment['assignmentId']][2].directory / 'console-0001.log'
         for _ in range(20):
-            if "READY queue=test-queue" in (self.runner.directory / "logs" / f"{assignment['assignmentId']}.log").read_text(errors="replace"):
+            if "READY queue=test-queue" in console_path.read_text(errors="replace"):
                 break
             time.sleep(0.1)
-        self.assertIn("READY queue=test-queue", (self.runner.directory / "logs" / f"{assignment['assignmentId']}.log").read_text(errors="replace"))
+        self.assertIn("READY queue=test-queue", console_path.read_text(errors="replace"))
         runner_rows = self.request("/api/runner-management/runners")
         report = next(row for row in runner_rows if row['runnerId'] == self.runner.identity['runnerId'])
         self.assertTrue(report['lastHeartbeat'])
         self.assertEqual(report['runnerPid'], os.getpid())
-        self.assertEqual(report['workerProcesses'], [
+        self.assertEqual([{key: row[key] for key in ('assignmentId','queue','slot','pid')} for row in report['workerProcesses']], [
             {'assignmentId': assignment['assignmentId'], 'queue': 'test-queue', 'slot': slot,
              'pid': self.runner.processes[assignment['assignmentId'] if slot == 0 else assignment['assignmentId'] + ':1'][1].pid}
             for slot in range(2)
@@ -2103,47 +2105,15 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
             child.terminate()
             child.wait(timeout=5)
 
-    def test_publish_then_adopt_script_preserves_old_binding_until_adoption(self):
-        body = {"configId": "123", "fileName": "www.realcan.cn.py", "code": "def scrape(url):\n    return []\n", "prompt": "test", "url": "https://www.realcan.cn"}
-        published = self.request("/api/runner-management/site-scripts/publish", body)
-        self.assertEqual(self.request("/api/runner-management/configs/123/script-release"), None)
-        bound = self.request("/api/runner-management/configs/123/script-release", {"scriptDigest": published["scriptDigest"]})
-        self.assertEqual(bound["scriptDigest"], published["scriptDigest"])
-        self.assertTrue(bound["gitCommit"])
-
-        code_path = (Path(__file__).parents[1] / "legacy_qinlongclaw" / "link_extractor" / "core" / "managed_script.py")
-        spec = importlib.util.spec_from_file_location("managed_script_test", code_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        enrollment = self.request("/api/runner-management/runners/enrollment-codes", {})
-        runner = Runner(Path(self.tmp.name) / "script-instance", self.url)
-        runner.enroll(enrollment["code"], "127.0.0.1")
-        probe = self.request("/api/runner-management/releases/processors", {"processorType": "probe"})
-        self.request("/api/runner-management/assignments", {
-            "runnerId": runner.identity["runnerId"], "queue": "script-test", "processorType": "probe",
-            "releaseDigest": probe["digest"], "concurrency": 1, "environment": "test",
-        })
-        worker_token = runner.get("/api/runners/me/assignments")[0]["workerToken"]
-        with patch.dict(os.environ, {
-            "RUNNER_WORKER_TOKEN": worker_token, "RUNNER_MANAGEMENT_URL": self.url,
-            "RUNNER_PUBLIC_KEY": runner.identity["publicKey"],
-            "RUNNER_SCRIPT_CACHE": str(Path(self.tmp.name) / "script-cache"),
-            "RUNNER_QUEUE": "script-test", "RUNNER_ENVIRONMENT": "test",
-        }):
-            path = module.resolve({"ConfigId": "123", "ScriptDigest": published["scriptDigest"]})
-            self.assertEqual(path.name, "www.realcan.cn.py")
-            self.assertEqual(path.read_text(), body["code"])
-            worker_root = Path(__file__).parents[1] / "legacy_qinlongclaw"
-            smoke = subprocess.run([
-                sys.executable, "-c",
-                "import sys; sys.path[:0]=[sys.argv[1],sys.argv[1]+'/link_extractor']; "
-                "from core.site_script_loader import run_site_script; "
-                "print(run_site_script(__import__('pathlib').Path(sys.argv[2]),'https://www.realcan.cn'))",
-                str(worker_root), str(path),
-            ], env=os.environ.copy(), capture_output=True, text=True, timeout=15, check=True)
-            self.assertIn("[]", smoke.stdout)
-            with self.assertRaisesRegex(ValueError, "版本.*不一致"):
-                module.resolve({"ConfigId": "123", "ScriptDigest": "sha256:wrong"})
+    def test_published_scripts_cannot_be_adopted_through_retired_config_binding_api(self):
+        published = self.request('/api/runner-management/site-scripts/publish', {
+            'configId': '123', 'fileName': 'www.realcan.cn.py',
+            'code': 'def scrape(url):\n    return []\n', 'url': 'https://www.realcan.cn'})
+        for payload in (None, {'scriptDigest': published['scriptDigest']}):
+            with self.assertRaises(HTTPError) as removed:
+                self.request('/api/runner-management/configs/123/script-release', payload)
+            self.assertEqual(removed.exception.code, 404)
+        self.assertIn(published['scriptDigest'], {row['digest'] for row in self.request('/api/runner-management/releases')})
 
     def test_legacy_site_repo_moves_out_of_runtime_and_repairs_git_urls(self):
         published = self.request("/api/runner-management/site-scripts/publish", {
@@ -2156,7 +2126,7 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         legacy.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(target), str(legacy))
         with self.app.store.connect() as db:
-            for table in ("code_versions", "releases"):
+            for table in ("releases",):
                 db.execute(f"UPDATE {table} SET git_url=? WHERE digest=?", (
                     published["gitUrl"].replace(target.as_uri(), legacy.as_uri()), published["scriptDigest"],
                 ))
@@ -2164,7 +2134,7 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         self.assertFalse(legacy.exists())
         self.assertTrue((target / published["storagePath"]).is_file())
         with migrated.store.connect() as db:
-            for table in ("code_versions", "releases"):
+            for table in ("releases",):
                 row = db.execute(f"SELECT git_url FROM {table} WHERE digest=?", (published["scriptDigest"],)).fetchone()
                 self.assertTrue(row["git_url"].startswith(target.as_uri() + "#"))
 
@@ -2275,8 +2245,8 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         expect_status(409, repos_api, {"name": "非空目录", "path": str(occupied)})
 
         rules_api = "/api/runner-management/settings/code-repo-rules"
-        self.assertEqual(self.request(rules_api, {"rules": [{"configType": "90", "repoId": web["repoId"]}]}),
-                         [{"configType": "90", "repoId": web["repoId"]}])
+        expect_status(404, rules_api, {"rules": [{"configType": "90", "repoId": web["repoId"]}]})
+        self.request(f"{repos_api}/{web['repoId']}", {'configType': '90'})
         classified = publish("123", "90")
         self.assertEqual((classified["repoId"], classified["repoName"]), (web["repoId"], "网页抓取代码"))
         self.assertTrue((web_path / classified["storagePath"]).is_file())
@@ -2285,8 +2255,7 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         self.assertEqual(unclassified["repoId"], default["repoId"])
 
         # 改分类后已有代码不搬动，新版本仍提交到原仓库。
-        self.request(rules_api, {"rules": [{"configType": "90", "repoId": ""}]})
-        self.assertEqual(self.request(rules_api), [])
+        self.request(f"{repos_api}/{web['repoId']}", {'configType': ''})
         second = publish("123", "90", "return [{'title': 'new'}]")
         self.assertEqual(second["repoId"], web["repoId"])
         self.assertEqual(subprocess.run(["git", "-C", str(web_path), "rev-parse", "HEAD"],
@@ -2294,16 +2263,13 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
         self.assertEqual(publish("789", "90")["repoId"], default["repoId"])
 
         repo_api = f"{repos_api}/{web['repoId']}"
-        self.request(rules_api, {"rules": [{"configType": "90", "repoId": web["repoId"]}]})
-        expect_status(409, repo_api, {"status": "DISABLED"})
         expect_status(409, f"{repos_api}/{default['repoId']}", {"status": "DISABLED"})
-        self.request(rules_api, {"rules": [{"configType": "90", "repoId": ""}]})
         self.assertEqual(self.request(repo_api, {"status": "DISABLED"})["status"], "DISABLED")
         expect_status(409, "/api/runner-management/site-scripts/publish", {
             "configId": "123", "queueName": "news_list", "codeType": "site", "siteHost": "www.realcan.cn",
             "configType": "90", "code": "def scrape(url):\n    return [1]\n",
         })
-        expect_status(409, rules_api, {"rules": [{"configType": "90", "repoId": web["repoId"]}]})
+        expect_status(404, rules_api, {"rules": [{"configType": "90", "repoId": web["repoId"]}]})
         expect_status(409, f"{repo_api}/default", {})
 
         self.request(repo_api, {"status": "ACTIVE", "name": "网页代码"})
@@ -2770,7 +2736,7 @@ print(json.dumps(run_site_script(path,'https://example.com/news')))
             "runner_management/runner.py": b"raise SystemExit(3)\n",
         }, {"kind": "runner", "entryModule": "runner_management.runner"})
         with self.app.store.connect() as db:
-            db.execute("INSERT INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)", (
+            db.execute("INSERT INTO releases (digest,kind,name,platform,git_commit,status,published_at,signature,entry,git_url) VALUES (?,?,?,?,?,?,?,?,?,?)", (
                 broken_digest, "runner", "broken", "any", "local", "published", "2026-10-05", broken_signature,
                 "runner_management.runner", "local-source",
             ))

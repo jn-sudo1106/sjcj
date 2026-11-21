@@ -50,7 +50,7 @@ class ScriptFileLinksTest(unittest.TestCase):
         self.assertTrue((Path(repo['path']) / 'default/source.py').is_file())
         self.assertEqual(self.app.artifacts.read(version['scriptDigest']), artifact)
         with self.app.store.connect() as db:
-            raw = db.execute('SELECT source_repo_path FROM code_versions WHERE digest=?', (version['scriptDigest'],)).fetchone()
+            raw = db.execute('SELECT source_repo_path FROM releases WHERE digest=?', (version['scriptDigest'],)).fetchone()
             self.assertEqual(raw['source_repo_path'], 'default/source.py')
 
     def test_unlink_saved_file_removes_current_selection_and_republish_restores_it(self):

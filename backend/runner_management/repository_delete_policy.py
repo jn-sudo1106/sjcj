@@ -12,7 +12,7 @@ def policy(app, db, repo_id):
         if (asset['repo_id'] or default_repo) == repo_id and not links.get(asset['code_id'], {}).get('detached'):
             paths[asset['storage_path']] = '仍有关联的节点代码，请先在“查看引用”中取消对应关联'
     latest = set()
-    for row in db.execute('SELECT * FROM code_versions ORDER BY published_at DESC,digest DESC').fetchall():
+    for row in db.execute("SELECT * FROM releases WHERE code_id<>'' ORDER BY published_at DESC,digest DESC").fetchall():
         if row['code_id'] in latest:
             continue
         latest.add(row['code_id'])

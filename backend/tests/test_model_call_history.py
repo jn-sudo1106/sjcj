@@ -65,7 +65,7 @@ class ModelCallHistoryTest(unittest.TestCase):
         model={'interfaceId':'old-agent','name':'旧智能体','kind':'agent','endpoint':'http://host/agent','model':'hy3'}
         job={'taskId':'completed-task','modelCall':model,'status':'succeeded','startedAt':'2026-11-18T01:00:00Z','finishedAt':'2026-11-18T01:00:02Z','configId':'1401218','message':'已完成'}
         with self.app.store.connect() as db:
-            db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?,?,?,?,?,?,?)',('completed-task','','','1401218','old-agent','succeeded','','2026-11-18T01:00:00Z',0,json.dumps(job)))
+            db.execute("INSERT INTO jobs (job_type,job_id,source_id,flow_id,config_id,executor_id,status,server_id,created_at,lease_until,payload) VALUES ('generation',?,?,?,?,?,?,?,?,?,?)",('completed-task','','','1401218','old-agent','succeeded','','2026-11-18T01:00:00Z',0,json.dumps(job)))
         self.assertEqual(calls.backfill(self.app),1)
         self.assertEqual(calls.backfill(self.app),0)
         row=calls.listing(self.app,'old-agent',{})['items'][0]

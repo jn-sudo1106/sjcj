@@ -23,7 +23,7 @@ class BackgroundResponse:
 def dispatch(app):
     from . import code_servers, database_generation as tasks
     with app.store.connect() as db:
-        if not db.execute("SELECT 1 FROM generation_jobs WHERE status='queued' OR (status='claimed' AND lease_until<?) LIMIT 1", (time.time(),)).fetchone():
+        if not db.execute("SELECT 1 FROM jobs WHERE job_type='generation' AND (status='queued' OR (status='claimed' AND lease_until<?)) LIMIT 1", (time.time(),)).fetchone():
             return
     for server in code_servers.registry(app):
         if server['status'] != 'online' or not server.get('mqCapable'):

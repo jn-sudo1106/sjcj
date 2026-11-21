@@ -12,11 +12,11 @@ def read(app, identifier, path=None):
     from .deployment_mapping import mapping
     if not re.fullmatch(r'[0-9a-f]{32}', identifier): raise ApiError('部署记录 ID 无效')
     with app.store.connect() as db:
-        row = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (identifier,)).fetchone()
+        row = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (identifier,)).fetchone()
         if not row: raise ApiError('部署记录不存在', 404)
         job = json.loads(row['payload'])
         delivery = db.execute('SELECT * FROM directory_deliveries WHERE delivery_id=? AND owner_id=? AND runner_id=?',
-                              (job.get('deliveryId', ''), job.get('deploymentId', ''), job.get('runnerId', ''))).fetchone()
+                              (job.get('deliveryId', ''), job.get('deliveryOwnerId') or job.get('deploymentId', ''), job.get('runnerId', ''))).fetchone()
         if not delivery or delivery['status'] != 'success': raise ApiError('本次尚未部署成功，暂无已确认的部署文件', 409)
         def bundle(digest):
             signature = db.execute('SELECT signature FROM directory_deliveries WHERE artifact_digest=? LIMIT 1', (digest,)).fetchone()

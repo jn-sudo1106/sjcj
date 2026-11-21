@@ -134,8 +134,9 @@ export interface NodeCodeAssignmentInput {
 }
 
 export interface ArtifactRelease {
+  artifactPath?: string
   digest: string
-  kind: 'processor' | 'script' | 'runner'
+  kind: 'processor' | 'script' | 'runner' | 'directory' | 'code-server' | 'code-server-launcher'
   name: string
   platform: string
   gitCommit: string
@@ -158,15 +159,6 @@ export interface RunnerPackageInfo {
   ready: boolean
 }
 
-export interface ScriptBinding {
-  configId: string
-  gitUrl: string
-  gitCommit: string
-  scriptDigest: string
-  publishedAt: string
-  status: string
-}
-
 export interface PublishedScript {
   promptTemplateId?: number
   /** 节点代码发布返回稳定代码 ID 和网站信息；旧发布接口不返回。 */
@@ -187,6 +179,7 @@ export interface PublishedScript {
 }
 
 export interface SiteCodeVersion extends PublishedScript {
+  artifactPath?: string
   associationDetached?: boolean
   codeId: string
   configId: string
@@ -248,6 +241,27 @@ export interface DirectoryRunnerBinding {
   createdAt: string
   layoutRevision?: string
   delivery?: DirectoryDelivery | null
+}
+export interface RuntimeGitVersions {
+  runtimeId: string
+  deployedStatus: 'ok' | 'not_delivered' | 'unknown'
+  deployedError: string
+  deliveryId?: string
+  finishedAt?: string
+  sources: {
+    repoId: string
+    directory: string
+    deployedCommits: string[]
+    remoteCommit: string
+    remoteStatus: 'ok' | 'unconfigured' | 'error' | 'checking'
+    remoteError: string
+    contentStatus?: 'same_commit' | 'same' | 'different' | 'unknown'
+    contentError?: string
+    differentPaths?: string[]
+    comparedFiles?: number
+    checkedAt: string
+    branch: string
+  }[]
 }
 export type DirectoryRunnerBindingInput = Pick<DirectoryRunnerBinding, 'bindingType' | 'ownerId' | 'runnerId'>
 export interface DirectoryDeliveryItem {
@@ -485,12 +499,6 @@ export interface CodeRepository {
   codeCount: number
   createdAt: string
   updatedAt: string
-}
-
-export interface CodeRepoRule {
-  configType: string
-  /** 空串表示删除该类型的分类，回到默认仓库。 */
-  repoId: string
 }
 
 export interface CodeRepositoryInput {
@@ -803,6 +811,7 @@ export const runnerManagementApi = {
   deleteDeploymentConfiguration: (id: string, revision: string) => request<{ ok: true }>(`/deployment-configurations/${encodeURIComponent(id)}?revision=${encodeURIComponent(revision)}`, 'DELETE'),
   ensureNodeDeployment: (input: { sourceNode: DeploymentSourceNode; queueName: string; scriptDigest?: string }) => request<DeploymentConfiguration>('/deployment-configurations/from-node', 'POST', input),
   runtimeConfigurations: () => list<RuntimeConfiguration>('/runtime-configurations'),
+  runtimeGitVersions: (runtimeIds: string[], refresh = false) => request<{ items: RuntimeGitVersions[] }>(`/runtime-configurations/git-versions?${new URLSearchParams([...runtimeIds.map(id => ['runtimeId', id]), ...(refresh ? [['refresh', '1']] : [])])}`),
   runtimeEntry: (id: string) => request<{ files: string[]; entryPoint: string; revision: string; layoutRevision: string }>(`/runtime-configurations/${encodeURIComponent(id)}/entry`),
   saveRuntimeEntry: (id: string, body: { entryPoint: string; revision: string; layoutRevision: string }) => request<RuntimeConfiguration>(`/runtime-configurations/${encodeURIComponent(id)}/entry`, 'POST', body),
   saveRuntimeConfiguration: (input: RuntimeConfigurationInput) => request<RuntimeConfiguration>('/runtime-configurations', 'POST', input),
@@ -856,8 +865,6 @@ export const runnerManagementApi = {
     request<CodeRepositoryFileMetadata>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/metadata?path=${encodeURIComponent(path)}${commit ? '&commit=' + encodeURIComponent(commit) : ''}`),
   deleteCodeRepositoryFile: (repoId: string, path: string) =>
     request<{ repoId: string; path: string; gitCommit: string; pushed: boolean }>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?path=${encodeURIComponent(path)}`, 'DELETE'),
-  codeRepoRules: () => list<CodeRepoRule>('/settings/code-repo-rules'),
-  saveCodeRepoRules: (rules: CodeRepoRule[]) => request<CodeRepoRule[]>('/settings/code-repo-rules', 'POST', { rules }),
   instances: () => list<RunnerInstance>('/runners'),
   enrollmentCode: () => request<EnrollmentCode>('/runners/enrollment-codes', 'POST', {}),
   assignments: () => list<QueueAssignment>('/assignments'),
@@ -886,9 +893,7 @@ export const runnerManagementApi = {
     return { name, blob: await response.blob() }
   },
   setDesiredRunner: (runnerId: string, digest: string) => request<{ runnerId: string; digest: string }>(`/runners/${encodeURIComponent(runnerId)}/desired-runner`, 'POST', { digest }),
-  scriptBinding: (configId: string) => request<ScriptBinding | null>(`/configs/${encodeURIComponent(configId)}/script-release`),
   publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; systemPrompt?: string; userPrompt?: string; promptTemplateId?: number; url: string; queueName?: string; fileNameMode?: 'website' | 'queue'; codeId?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string; repositoryId?: string; directoryId?: string; sourceFilePath?: string; sourceGitCommit?: string; includeConfigId?: boolean }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
-  adoptScript: (configId: string, scriptDigest: string) => request<ScriptBinding>(`/configs/${encodeURIComponent(configId)}/script-release`, 'POST', { scriptDigest }),
   siteCodeVersions: (configId: string, queueName: string) => list<SiteCodeVersion>(`/site-scripts/versions?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}`),
   siteCodeCatalog: () => list<SiteCodeVersion & { environments: ('test' | 'prd')[] }>('/site-scripts/catalog'),
   siteCodeContent: (digest: string) => request<SiteCodeVersion & { code: string }>(`/site-scripts/code?digest=${encodeURIComponent(digest)}`),

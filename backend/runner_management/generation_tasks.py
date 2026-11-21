@@ -96,7 +96,7 @@ def save_config(app, body):
 def records(app):
     from .database_generation import read
     with app.store.connect() as db:
-        rows = db.execute("SELECT task_id FROM generation_jobs WHERE status<>'deleted'").fetchall()
+        rows = db.execute("SELECT job_id AS task_id FROM jobs WHERE job_type='generation' AND status<>'deleted'").fetchall()
     return [read(app, row['task_id']) for row in rows]
 
 

@@ -1,6 +1,8 @@
 """Local management API for signed Runner releases. Python 3.10+."""
 from __future__ import annotations
 
+from .release_records import register, attach_code
+
 import ast
 import base64
 import binascii
@@ -135,6 +137,7 @@ def as_release(row, used_by=0) -> dict:
         "platform": row["platform"], "gitCommit": row["git_commit"],
         "status": row["status"], "publishedAt": row["published_at"],
         "signature": row["signature"], "usedBy": used_by,
+        "artifactPath": optional(row, 'artifact_path') or '',
     }
 
 
@@ -153,16 +156,8 @@ def as_assignment(row) -> dict:
     }
 
 
-def as_binding(row) -> dict:
-    return {
-        "configId": row["config_id"], "gitUrl": row["git_url"],
-        "gitCommit": row["git_commit"], "scriptDigest": row["digest"],
-        "publishedAt": row["published_at"], "status": row["status"],
-    }
-
-
 CODE_VERSION_SELECT = (
-    "SELECT a.*,v.*,v.repo_id AS version_repo_id,r.name AS repo_name,r.local_path AS repo_path FROM code_versions v "
+    "SELECT a.*,v.*,v.repo_id AS version_repo_id,r.name AS repo_name,r.local_path AS repo_path FROM releases v "
     "JOIN code_assets a ON a.code_id=v.code_id LEFT JOIN code_repositories r "
     "ON r.repo_id=COALESCE(NULLIF(v.repo_id,''),a.repo_id) "
 )
@@ -172,7 +167,7 @@ ASSIGNMENT_SELECT = (
     "FROM assignments x LEFT JOIN code_assets a ON a.code_id=x.code_id "
     "LEFT JOIN code_runtime_bindings b ON b.config_id=a.config_id AND b.queue_name=x.queue AND b.site_host=a.site_host "
     "AND b.environment=CASE WHEN x.environment='production' THEN 'prd' ELSE x.environment END "
-    "LEFT JOIN code_versions v ON v.digest=b.digest LEFT JOIN code_repositories r "
+    "LEFT JOIN releases v ON v.digest=b.digest LEFT JOIN code_repositories r "
     "ON r.repo_id=COALESCE(NULLIF(v.repo_id,''),a.repo_id) "
 )
 
@@ -192,6 +187,7 @@ def as_code_version(row) -> dict:
         "directoryId": optional(row, "repository_directory_id") or "",
         "gitUrl": row["git_url"], "gitCommit": row["git_commit"],
         "scriptDigest": row["digest"], "publishedAt": row["published_at"],
+        "artifactPath": optional(row, 'artifact_path') or '',
         "prompt": row["prompt"], "userPrompt": row["prompt"], "systemPrompt": optional(row, 'system_prompt') or '', "promptTemplateId": int(optional(row, 'prompt_template_id') or 0), "url": row["source_url"],
         "sourceRepoPath": optional(row, "source_repo_path") or "",
         "sourceGitCommit": optional(row, "source_git_commit") or "",
@@ -225,6 +221,8 @@ class Application:
         from .model_call_history import recover_interrupted
         recover_interrupted(self)
         self.artifacts = ArtifactStore(data_dir / "artifacts")
+        from .release_records import backfill
+        backfill(self)
         self.default_site_script_repo = Path(os.getenv(
             "RUNNER_SITE_SCRIPT_REPO", str(ROOT.parent / "site-scripts"))).resolve()
         self.ensure_default_repository(site_script_repo)
@@ -257,9 +255,12 @@ class Application:
                 if override and Path(default["local_path"]) != override.resolve():
                     db.execute("UPDATE code_repositories SET local_path=?, updated_at=? WHERE repo_id=?",
                                (str(override.resolve()), now(), repo_id))
-            db.execute("UPDATE code_assets SET repo_id=? WHERE repo_id='' OR repo_id IS NULL", (repo_id,))
-            db.execute("UPDATE code_versions SET repo_id=(SELECT repo_id FROM code_assets "
-                       "WHERE code_assets.code_id=code_versions.code_id) WHERE repo_id='' OR repo_id IS NULL")
+            from .task_artifacts import patch_asset, patch_release
+            for asset in db.execute("SELECT code_id FROM code_assets WHERE repo_id='' OR repo_id IS NULL").fetchall():
+                patch_asset(db, asset['code_id'], repo_id=repo_id)
+            for version in db.execute("SELECT v.digest,a.repo_id FROM releases v JOIN code_assets a ON a.code_id=v.code_id "
+                                      "WHERE v.repo_id='' OR v.repo_id IS NULL").fetchall():
+                patch_release(db, version['digest'], repo_id=version['repo_id'])
 
     def default_repository(self, db=None):
         if db is None:
@@ -304,7 +305,7 @@ class Application:
 
     @staticmethod
     def rewrite_repo_urls(db, old_uri: str, new_uri: str) -> None:
-        for table in ("code_versions", "releases"):
+        for table in ("releases",):
             rows = db.execute(f"SELECT digest, git_url FROM {table} WHERE git_url LIKE ?", (old_uri + "%",)).fetchall()
             for row in rows:
                 if row["git_url"].startswith(old_uri):
@@ -352,7 +353,7 @@ class Application:
             "status": row["status"], "configType": row["config_type"],
             "configTypeName": row["config_type_name"],
             "uploadDirectory": self.repository_upload_directory(db, row),
-            "codeCount": count_of(db.execute("SELECT COUNT(DISTINCT code_id) FROM code_versions WHERE repo_id=?", (row["repo_id"],)).fetchone()),
+            "codeCount": count_of(db.execute("SELECT COUNT(DISTINCT code_id) FROM releases WHERE repo_id=?", (row["repo_id"],)).fetchone()),
             "createdAt": row["created_at"], "updatedAt": row["updated_at"],
         }
 
@@ -943,7 +944,6 @@ class Application:
                 config_type_name = self.repository_type_name(db, config_type, payload.get("configTypeName", ""), headers)
                 db.execute("UPDATE code_repositories SET config_type=?, config_type_name=?, updated_at=? WHERE repo_id=?",
                            (config_type, config_type_name, now(), repo_id))
-                db.execute("DELETE FROM code_repo_rules WHERE repo_id=? AND config_type<>?", (repo_id, config_type))
             if "status" in payload:
                 status = payload["status"]
                 if status not in ("ACTIVE", "DISABLED"):
@@ -951,8 +951,6 @@ class Application:
                 if status == "DISABLED":
                     if repo["is_default"]:
                         raise ApiError("默认仓库不能停用，请先把其他仓库设为默认", 409)
-                    if db.execute("SELECT 1 FROM code_repo_rules WHERE repo_id=?", (repo_id,)).fetchone():
-                        raise ApiError("仍有旧分类规则指向该仓库，请先调整分类", 409)
                 db.execute("UPDATE code_repositories SET status=?, updated_at=? WHERE repo_id=?", (status, now(), repo_id))
         if "remoteUrl" in payload or "branch" in payload:
             self.configure_repository_git(repo_id, payload.get("remoteUrl", repo["remote_url"]),
@@ -970,41 +968,14 @@ class Application:
             db.execute("UPDATE code_repositories SET is_default=1, updated_at=? WHERE repo_id=?", (now(), repo_id))
         return self.repository_result(repo_id)
 
-    def list_repo_rules(self) -> list[dict]:
-        with self.store.connect() as db:
-            rows = db.execute("SELECT * FROM code_repo_rules ORDER BY config_type").fetchall()
-        return [{"configType": row["config_type"], "repoId": row["repo_id"]} for row in rows]
-
-    def save_repo_rules(self, payload: dict) -> list[dict]:
-        """整批保存“配置类型 → 仓库”；repoId 为空表示该类型回到默认仓库。只影响之后新建的代码。"""
-        rules = payload.get("rules")
-        if not isinstance(rules, list) or len(rules) > 500:
-            raise ApiError("分类规则无效")
-        with self.store.connect() as db:
-            for rule in rules:
-                config_type = rule.get("configType") if isinstance(rule, dict) else None
-                repo_id = (rule.get("repoId") or "") if isinstance(rule, dict) else ""
-                if not isinstance(config_type, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", config_type):
-                    raise ApiError("配置类型无效")
-                db.execute("DELETE FROM code_repo_rules WHERE config_type=?", (config_type,))
-                if repo_id:
-                    if self.repository(db, repo_id)["status"] != "ACTIVE":
-                        raise ApiError("不能把配置类型分到已停用的仓库", 409)
-                    db.execute("INSERT INTO code_repo_rules VALUES (?,?,?)", (config_type, repo_id, now()))
-        return self.list_repo_rules()
-
     def resolve_code_repository(self, db, asset, config_type: str):
         """兼容未传仓库 ID 的旧客户端；新代码先选同类型仓库，再回退通用默认仓库。"""
         if asset and asset["repo_id"]:
             repo = self.repository(db, asset["repo_id"])
         else:
-            rule = db.execute("SELECT repo_id FROM code_repo_rules WHERE config_type=?", (config_type,)).fetchone() if config_type else None
-            if rule:
-                repo = self.repository(db, rule["repo_id"])
-            else:
-                repo = (db.execute("SELECT * FROM code_repositories WHERE config_type=? AND status='ACTIVE' "
-                                   "ORDER BY created_at,repo_id LIMIT 1", (config_type,)).fetchone()
-                        if config_type else None) or self.default_repository(db)
+            repo = (db.execute("SELECT * FROM code_repositories WHERE config_type=? AND status='ACTIVE' "
+                               "ORDER BY created_at,repo_id LIMIT 1", (config_type,)).fetchone()
+                    if config_type else None) or self.default_repository(db)
         if repo["status"] != "ACTIVE":
             raise ApiError(f"目标代码仓库「{repo['name']}」已停用，请调整配置类型分类", 409)
         return repo
@@ -1310,7 +1281,7 @@ class Application:
             git_url = self.git_url_for(repo_row, commit, relative)
         digest, signature = self.artifacts.publish({file_name: code.encode("utf-8")}, {"kind": "script", "entry": file_name, "configId": config_id})
         with self.store.connect() as db:
-            db.execute("INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)", (
+            register(db, self.artifacts, (
                 digest, "script", file_name, "any", commit, "published", now(), signature, file_name, git_url,
             ))
         return {"gitUrl": git_url, "gitCommit": commit, "scriptDigest": digest}
@@ -1456,7 +1427,7 @@ class Application:
                     relative = Path(directory['path']) / prefix / f"{code_id}.py"
                 if (name_mode or requested_directory_id) and db.execute(
                         'SELECT 1 FROM code_assets WHERE repo_id=? AND storage_path=? AND code_id<>? '
-                        'UNION ALL SELECT 1 FROM code_versions v JOIN code_assets a ON a.code_id=v.code_id '
+                        'UNION ALL SELECT 1 FROM releases v JOIN code_assets a ON a.code_id=v.code_id '
                         'WHERE COALESCE(NULLIF(v.repo_id,\'\'),a.repo_id)=? AND '
                         'COALESCE(NULLIF(v.repository_storage_path,\'\'),a.storage_path)=? AND a.code_id<>?',
                         (repo_row['repo_id'], relative.as_posix(), code_id, repo_row['repo_id'], relative.as_posix(), code_id)).fetchone():
@@ -1506,28 +1477,29 @@ class Application:
                     artifact_manifest,
                 )
                 if not asset:
-                    db.execute(
-                        "INSERT INTO code_assets (code_id, config_id, queue_name, site_host, storage_path, created_at, repo_id, config_type) "
-                        "VALUES (?,?,?,?,?,?,?,?)",
-                        (code_id, config_id, queue, site_host, relative.as_posix(), now(), repo_row["repo_id"], config_type),
-                    )
+                    from .task_artifacts import save_asset
+                    save_asset(db, dict(code_id=code_id, config_id=config_id, queue_name=queue, site_host=site_host,
+                                        storage_path=relative.as_posix(), created_at=now(), repo_id=repo_row['repo_id'], config_type=config_type))
                 else:
                     # Freeze historical locations before moving the asset's
                     # current save destination; old Git links keep their meaning.
-                    db.execute("UPDATE code_versions SET repository_storage_path=? WHERE code_id=? AND repository_storage_path=''",
-                               (asset['storage_path'], code_id))
-                db.execute('UPDATE code_assets SET storage_path=?,repo_id=?,directory_id=?,config_type=? WHERE code_id=?',
-                           (relative.as_posix(), repo_row['repo_id'], requested_directory_id or '', config_type, code_id))
-                db.execute("INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)", (
+                    from .task_artifacts import patch_release
+                    for version in db.execute("SELECT digest FROM releases WHERE code_id=? AND repository_storage_path=''", (code_id,)).fetchall():
+                        patch_release(db, version['digest'], repository_storage_path=asset['storage_path'])
+                from .task_artifacts import patch_asset
+                patch_asset(db, code_id, storage_path=relative.as_posix(), repo_id=repo_row['repo_id'],
+                            directory_id=requested_directory_id or '', config_type=config_type)
+                register(db, self.artifacts, (
                     digest, "script", site_host or queue, "any", commit, "published", now(),
                     signature, delivery_path, git_url,
                 ))
-                db.execute("INSERT OR IGNORE INTO code_versions "
-                           "(digest,code_id,git_commit,git_url,delivery_path,prompt,source_url,published_at,repo_id,source_repo_path,source_git_commit,repository_directory_id,repository_storage_path,system_prompt,prompt_template_id) "
-                           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-                    digest, code_id, commit, git_url, delivery_path, prompt, source_url, published_at, repo_row["repo_id"],
-                    source_repo_path, source_git_commit, requested_directory_id or '', relative.as_posix(), system_prompt, prompt_template_id,
-                ))
+                attach_code(db, digest, code_id=code_id, git_commit=commit, git_url=git_url,
+                            delivery_path=delivery_path, prompt=prompt, source_url=source_url,
+                            published_at=published_at, repo_id=repo_row['repo_id'],
+                            source_repo_path=source_repo_path, source_git_commit=source_git_commit,
+                            repository_directory_id=requested_directory_id or '',
+                            repository_storage_path=relative.as_posix(), system_prompt=system_prompt,
+                            prompt_template_id=prompt_template_id)
                 from .script_file_links import PREFIX as FILE_LINK_PREFIX
                 db.execute('DELETE FROM settings WHERE setting_key=?', (FILE_LINK_PREFIX + code_id,))
                 row = db.execute(
@@ -1586,7 +1558,9 @@ class Application:
             assignment_id = str(uuid.uuid4())
             db.execute("INSERT INTO assignments (assignment_id,runner_id,queue,processor_type,release_digest,concurrency,enabled,environment,code_id) "
                        "VALUES (?,?,?,?,?,?,?,?,?)", (assignment_id, runner_id, queue, "newslink_nourl", processor_digest, concurrency, 1, environment, code["code_id"]))
-            db.execute("INSERT OR IGNORE INTO config_runner_bindings VALUES (?,?,?)", (code["config_id"], runner_id, now()))
+            from .directory_bindings import owner_key
+            db.execute("INSERT OR IGNORE INTO directory_runner_bindings VALUES (?,?,?,?,?)",
+                       ('config', owner_key(code['config_id']), code['config_id'], runner_id, now()))
             return as_assignment(db.execute(ASSIGNMENT_SELECT + "WHERE x.assignment_id=?", (assignment_id,)).fetchone())
 
     def publish_processor(self, payload: dict) -> dict:
@@ -1611,7 +1585,7 @@ class Application:
             manifest['deploymentSchema'] = 1
         digest, signature = self.artifacts.publish(files, manifest)
         with self.store.connect() as db:
-            db.execute("INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)", (
+            register(db, self.artifacts, (
                 digest, "processor", processor_type, "any", "local", "published", now(), signature, entry, "local-source",
             ))
         return {"digest": digest, "signature": signature}
@@ -1621,7 +1595,7 @@ class Application:
         files = {f"runner_management/{path.name}": path.read_bytes() for path in root.glob("*.py")}
         digest, signature = self.artifacts.publish(files, {"kind": "runner", "entryModule": "runner_management.runner"})
         with self.store.connect() as db:
-            inserted = db.execute("INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)", (
+            inserted = register(db, self.artifacts, (
                 digest, "runner", "native-runner", "any", "local", "published", now(),
                 signature, "runner_management.runner", "local-source",
             ))
@@ -1968,7 +1942,7 @@ class Handler(BaseHTTPRequestHandler):
                     return assignment_contexts(app, db, [{**as_assignment(row), "workerToken": app.worker_token(row)} for row in rows])
             if method == "GET" and path == "/api/runners/me/desired-runner":
                 with app.store.connect() as db:
-                    row = db.execute("SELECT desired_digest FROM runner_upgrades WHERE runner_id=?", (runner["runner_id"],)).fetchone()
+                    row = db.execute("SELECT desired_digest FROM runners WHERE runner_id=?", (runner["runner_id"],)).fetchone()
                 return {"digest": row["desired_digest"] if row else None}
             if method == "GET" and path == "/api/runners/me/status":
                 app.expire_stale_runners()
@@ -2062,16 +2036,11 @@ class Handler(BaseHTTPRequestHandler):
                             "AND a.queue_name=? AND a.site_host IN (?, '') AND p.status='published'",
                             (pinned, config_id, queue, host)).fetchone()
                         if not row:
-                            legacy = db.execute(
-                                "SELECT b.config_id,r.* FROM script_bindings b JOIN releases r ON r.digest=b.script_digest WHERE b.config_id=?",
-                                (config_id,)).fetchone()
-                            if legacy:
-                                return as_binding(legacy)
                             raise ApiError("任务指定的代码版本与节点队列不匹配", 409)
                         return as_code_version(row)
                     row = db.execute(
                         "SELECT a.*,v.* FROM code_runtime_bindings b "
-                        "JOIN code_versions v ON v.digest=b.digest "
+                        "JOIN releases v ON v.digest=b.digest "
                         "JOIN code_assets a ON a.code_id=v.code_id "
                         "WHERE b.environment=? AND b.config_id=? AND b.queue_name=? AND b.site_host=?",
                         (valid_environment(environment), config_id, queue, host),
@@ -2079,20 +2048,15 @@ class Handler(BaseHTTPRequestHandler):
                     if not row:
                         row = db.execute(
                             "SELECT a.*,v.* FROM code_runtime_bindings b "
-                            "JOIN code_versions v ON v.digest=b.digest "
+                            "JOIN releases v ON v.digest=b.digest "
                             "JOIN code_assets a ON a.code_id=v.code_id "
                             "WHERE b.environment=? AND b.config_id=? AND b.queue_name=? AND b.site_host=''",
                             (valid_environment(environment), config_id, queue),
                         ).fetchone()
                     if row:
                         return as_code_version(row)
-                    legacy = db.execute(
-                        "SELECT b.config_id, r.* FROM script_bindings b JOIN releases r "
-                        "ON r.digest=b.script_digest WHERE b.config_id=?", (config_id,),
-                    ).fetchone()
-                    return as_binding(legacy) if legacy else None
-                row = db.execute("SELECT b.config_id, r.* FROM script_bindings b JOIN releases r ON r.digest=b.script_digest WHERE b.config_id=?", (config_id,)).fetchone()
-                return as_binding(row) if row else None
+                    return None
+                return None
         if method == "GET" and path.startswith("/api/artifacts/"):
             digest = path.removeprefix("/api/artifacts/")
             with app.store.connect() as db:
@@ -2106,7 +2070,7 @@ class Handler(BaseHTTPRequestHandler):
                                           (runner['runner_id'], digest)).fetchone()
                     assigned = db.execute("SELECT 1 FROM assignments WHERE runner_id=? AND enabled=1 AND release_digest=?", (runner["runner_id"], digest)).fetchone()
                     has_queue = db.execute("SELECT 1 FROM assignments WHERE runner_id=? AND enabled=1", (runner["runner_id"],)).fetchone()
-                    desired_runner = db.execute("SELECT 1 FROM runner_upgrades WHERE runner_id=? AND desired_digest=?", (runner["runner_id"], digest)).fetchone()
+                    desired_runner = db.execute("SELECT 1 FROM runners WHERE runner_id=? AND desired_digest=?", (runner["runner_id"], digest)).fetchone()
                     allowed = delivery or (release and (assigned or (release["kind"] == "script" and has_queue) or (release["kind"] == "runner" and desired_runner)))
                 else:
                     delivery = None
@@ -2437,6 +2401,9 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'DELETE':
                 from .deployment_configuration import remove_configuration
                 return remove_configuration(app, deployment_route.group(1), (query.get('revision') or [''])[0])
+        if sub == '/runtime-configurations/git-versions' and method == 'GET':
+            from .deployment_git_versions import listing
+            return listing(app, query)
         if sub == '/runtime-configurations':
             from .deployment_configuration import list_runtimes, save_runtime
             if method == 'GET':
@@ -2588,11 +2555,6 @@ class Handler(BaseHTTPRequestHandler):
             if action == "/files":
                 return app.upload_repository_files(repo_id, body)
             return app.update_repository(repo_id, body, self.headers)
-        if sub == "/settings/code-repo-rules":
-            if method == "GET":
-                return app.list_repo_rules()
-            if method == "POST":
-                return app.save_repo_rules(body)
         if method == "GET" and sub == "/runners":
             app.expire_stale_runners()
         if method == "POST" and sub == "/assignments" and "scriptDigest" in body:
@@ -2677,7 +2639,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError("配置 ID 无效")
                 rows = db.execute(
                     "SELECT b.environment,a.*,v.* FROM code_runtime_bindings b "
-                    "JOIN code_versions v ON v.digest=b.digest "
+                    "JOIN releases v ON v.digest=b.digest "
                     "JOIN code_assets a ON a.code_id=v.code_id "
                     "WHERE b.environment=? AND b.config_id=? AND b.queue_name=? ORDER BY b.site_host",
                     (valid_environment(environment), config_id, valid_queue(queue)),
@@ -2719,22 +2681,8 @@ class Handler(BaseHTTPRequestHandler):
                 release = db.execute("SELECT 1 FROM releases WHERE digest=? AND kind='runner' AND status='published'", (digest,)).fetchone()
                 if not release or not db.execute("SELECT 1 FROM runners WHERE runner_id=?", (runner_id,)).fetchone():
                     raise ApiError("Runner 实例或目标版本无效")
-                db.execute("INSERT INTO runner_upgrades VALUES (?,?) ON CONFLICT(runner_id) DO UPDATE SET desired_digest=excluded.desired_digest", (runner_id, digest))
                 db.execute("UPDATE runners SET desired_digest=? WHERE runner_id=?", (digest, runner_id))
                 return {"runnerId": runner_id, "digest": digest}
-            match = re.fullmatch(r"/configs/([A-Za-z0-9_-]+)/script-release", sub)
-            if match:
-                config_id = match.group(1)
-                if method == "GET":
-                    row = db.execute("SELECT b.config_id, r.* FROM script_bindings b JOIN releases r ON r.digest=b.script_digest WHERE b.config_id=?", (config_id,)).fetchone()
-                    return as_binding(row) if row else None
-                if method == "POST":
-                    digest = required_text(body, "scriptDigest", 100)
-                    release = db.execute("SELECT * FROM releases WHERE digest=? AND kind='script' AND status='published'", (digest,)).fetchone()
-                    if not release:
-                        raise ApiError("节点脚本版本无效")
-                    db.execute("INSERT INTO script_bindings VALUES (?,?) ON CONFLICT(config_id) DO UPDATE SET script_digest=excluded.script_digest", (config_id, digest))
-                    return as_binding(db.execute("SELECT b.config_id, r.* FROM script_bindings b JOIN releases r ON r.digest=b.script_digest WHERE b.config_id=?", (config_id,)).fetchone())
         if method == "POST" and sub == "/site-scripts/publish":
             return app.publish_script(body)
         raise ApiError("接口不存在", 404)

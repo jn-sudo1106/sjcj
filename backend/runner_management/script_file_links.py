@@ -80,7 +80,7 @@ def change(app, body):
             row, repo, path, commit = lookup(app, body.get('digest'), target, db)
             if body.get('configId') != row['config_id'] or body.get('queueName') != row['queue_name']:
                 raise ApiError('文件关联与当前配置、队列不匹配', 409)
-            latest = db.execute('SELECT digest FROM code_versions WHERE code_id=? ORDER BY published_at DESC,digest DESC LIMIT 1', (row['code_id'],)).fetchone()
+            latest = db.execute('SELECT digest FROM releases WHERE code_id=? ORDER BY published_at DESC,digest DESC LIMIT 1', (row['code_id'],)).fetchone()
             if latest['digest'] != row['digest']:
                 raise ApiError('当前显示的不是最新代码版本，请刷新后再操作关联', 409)
             link = state(db, row['code_id'])

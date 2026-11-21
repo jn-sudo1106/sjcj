@@ -42,7 +42,7 @@ class PromptEditingTest(unittest.TestCase):
             with self.assertRaises(Exception): prompt_editing.prepare(self.app, {**body, 'variableCatalog': [{'name': 'unsupported', 'description': 'unknown'}]})
             with self.assertRaises(Exception): prompt_editing.prepare(self.app, {**body, 'interfaceId': agent['id']})
         with self.app.store.connect() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) total FROM generation_jobs').fetchone()['total'], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) total FROM jobs WHERE job_type='generation'").fetchone()['total'], 0)
 
     def test_http_stream_relays_chat_reply_and_rejects_agent_or_invalid_messages(self):
         chat, agent = self.models()

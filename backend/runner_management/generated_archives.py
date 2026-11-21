@@ -25,6 +25,8 @@ def store(app, record):
     from .directory_layout import store_layout
     with app.store.connect() as db:
         store_layout(db, PREFIX + record['archiveId'], record)
+        from .task_artifacts import sync_archive as sync_artifacts
+        sync_artifacts(db, record)
         from .source_code_relations import sync_archive
         sync_archive(db, record)
         from .deployment_resources import enqueue_archive
@@ -52,7 +54,7 @@ def state(app, owner, context=None):
         if expected:
             legacy = {row['archive_id'] for row in db.execute('SELECT archive_id FROM source_code_relations WHERE ' + OWNER_WHERE,
                        (expected['sourceId'], expected['flowId'], expected['stepId'], owner)).fetchall()}
-            tasks = db.execute('SELECT task_id,payload FROM generation_jobs WHERE config_id=? AND source_id=? AND flow_id=?',
+            tasks = db.execute("SELECT job_id AS task_id,payload FROM jobs WHERE job_type='generation' AND config_id=? AND source_id=? AND flow_id=?",
                                (owner, expected['sourceId'], expected['flowId'])).fetchall()
             task_ids = {row['task_id'] for row in tasks if str(json.loads(row['payload']).get('stepId', '')) == expected['stepId']}
             items = [item for item in items if (

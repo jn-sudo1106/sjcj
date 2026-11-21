@@ -203,10 +203,10 @@ def check_removed(app, removed):
             lease = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (resource_key(item),)).fetchone()
             if lease and json.loads(lease['setting_value']).get('until', 0) > time.time():
                 raise ApiError('接口或同端口智能体正在使用，请等待任务结束后删除', 409)
-        jobs = db.execute("SELECT task_id,interface_id,payload FROM generation_jobs WHERE status IN ('queued','claimed','running')").fetchall()
+        jobs = db.execute("SELECT job_id AS task_id,executor_id,payload FROM jobs WHERE job_type='generation' AND status IN ('queued','claimed','running')").fetchall()
         for job in jobs:
             actual = json.loads(job['payload']).get('input', {}).get('interfaceId')
-            if job['interface_id'] in ids or actual in ids:
+            if job['executor_id'] in ids or actual in ids:
                 raise ApiError('接口仍被未完成的任务引用，请先处理任务：' + job['task_id'], 409)
         from .generation_tasks import CONFIG_PREFIX
         for row in db.execute('SELECT setting_value FROM settings WHERE setting_key LIKE ?', (CONFIG_PREFIX + '%',)).fetchall():

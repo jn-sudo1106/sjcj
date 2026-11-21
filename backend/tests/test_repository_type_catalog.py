@@ -72,7 +72,7 @@ class RepositoryTypeCatalogTest(unittest.TestCase):
         code = self.request(route + '/site-scripts/publish', payload)
         with self.app.store.connect() as db:
             asset_before = dict(db.execute('SELECT * FROM code_assets WHERE code_id=?', (code['codeId'],)).fetchone())
-            versions_before = [dict(row) for row in db.execute('SELECT * FROM code_versions WHERE code_id=?', (code['codeId'],)).fetchall()]
+            versions_before = [dict(row) for row in db.execute('SELECT * FROM releases WHERE code_id=?', (code['codeId'],)).fetchall()]
         from backend.runner_management.repository_directories import save_directory, get_directory
         update = Request(self.url + route + '/settings/code-repos/' + directory['repoId'] + '/directories/' + directory['directoryId'],
             data=json.dumps({**directory, 'configType': '95'}).encode(),
@@ -84,7 +84,7 @@ class RepositoryTypeCatalogTest(unittest.TestCase):
         self.assertEqual(changed['directoryId'], directory['directoryId'])
         with self.app.store.connect() as db:
             self.assertEqual(dict(db.execute('SELECT * FROM code_assets WHERE code_id=?', (code['codeId'],)).fetchone()), asset_before)
-            self.assertEqual([dict(row) for row in db.execute('SELECT * FROM code_versions WHERE code_id=?', (code['codeId'],)).fetchall()], versions_before)
+            self.assertEqual([dict(row) for row in db.execute('SELECT * FROM releases WHERE code_id=?', (code['codeId'],)).fetchall()], versions_before)
             get_directory(self.app, db, directory['repoId'], directory['directoryId'], '95')
             from backend.runner_management.server import ApiError
             with self.assertRaises(ApiError):

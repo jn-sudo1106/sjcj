@@ -4,18 +4,19 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessageBox } from 'element-plus'
-import { runnerManagementApi, type DeploymentConfiguration, type DirectoryDelivery, type RuntimeConfiguration } from '@/api/runnerManagement'
+import { runnerManagementApi, type DeploymentConfiguration, type DirectoryDelivery, type RuntimeConfiguration, type RuntimeGitVersions } from '@/api/runnerManagement'
 import { useAuthStore } from '@/stores/auth'
 import { flowCenterApi, sourceApi } from '@/api'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { codeRepositories: vi.fn(), runtimeEntry: vi.fn(), saveRuntimeEntry: vi.fn(), runtimeConfigurations: vi.fn(), deploymentConfigurations: vi.fn(), instances: vi.fn(), deleteDeploymentConfiguration: vi.fn(), saveRuntimeConfiguration: vi.fn(), startRuntimeProgram: vi.fn(), stopRuntimeProgram: vi.fn(), removeRuntimeConfiguration: vi.fn(), requestRunnerFiles: vi.fn(), runnerFileResult: vi.fn(), browseCodeRepository: vi.fn(), directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { codeRepositories: vi.fn(), runtimeGitVersions: vi.fn(), runtimeEntry: vi.fn(), saveRuntimeEntry: vi.fn(), runtimeConfigurations: vi.fn(), deploymentConfigurations: vi.fn(), instances: vi.fn(), deleteDeploymentConfiguration: vi.fn(), saveRuntimeConfiguration: vi.fn(), startRuntimeProgram: vi.fn(), stopRuntimeProgram: vi.fn(), removeRuntimeConfiguration: vi.fn(), requestRunnerFiles: vi.fn(), runnerFileResult: vi.fn(), browseCodeRepository: vi.fn(), directoryDeliveryPreview: vi.fn(), deliverDirectoryBinding: vi.fn() } }))
 const configuration: DeploymentConfiguration = { deploymentId: 'a'.repeat(32), name: '新闻生产配置', pathStyle: 'config', codeId: '', configId: '123', queueName: 'news_list', siteHost: '', directoryTemplate: '{configId}/prod', entryPoint: 'main.py', nodes: [], revision: 'layout-v1',
   sourceNode: { flowId: 'flow-88', flowName: '财经新闻采集流程', stepId: 'step-7', nodeName: '网页列表抓取', configId: '123' } }
 const existing: RuntimeConfiguration = { runtimeId: 'runtime-1', deploymentId: configuration.deploymentId, name: configuration.name, runnerId: 'r-1', assignmentId: 'assignment-1', appliedRevision: 'layout-v1', layoutRevision: 'layout-v1', revision: 'runtime-v1', directoryTemplate: configuration.directoryTemplate, entryPoint: 'main.py',
   binding: { bindingType: 'deployment', ownerId: configuration.deploymentId, runnerId: 'r-1', directoryTemplate: configuration.directoryTemplate, entryPoint: 'main.py', createdAt: '', layoutRevision: 'layout-v1' },
   assignment: { assignmentId: 'assignment-1', runnerId: 'r-1', queue: 'news_list', codeId: 'code1', configId: '123', concurrency: 2, environment: 'production', enabled: true, processorType: 'newslink_nourl', releaseDigest: 'sha256:p' } }
 beforeEach(() => {
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockResolvedValue({ items: [] })
   vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 0 } as never)
   vi.mocked(runnerManagementApi.codeRepositories).mockResolvedValue([{ repoId: 'repo1', name: '默认仓库', remoteUrl: 'http://192.168.1.105/root/aigencode.git', branch: 'main', status: 'ACTIVE' }] as never)
   vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ name: '智能采集' } as never)
@@ -595,5 +596,78 @@ it('运行目录无法解析时禁用浏览，不向 Runner 请求占位目录',
   expect(wrapper.get('[data-testid="binding-directory"]').attributes('disabled')).toBeDefined()
   expect(wrapper.find('[data-testid="binding-browse-target"]').exists()).toBe(false)
   expect(runnerManagementApi.requestRunnerFiles).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+
+function mappedGitConfiguration() {
+  vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, nodes: [
+    { id: 'main', parentId: '', name: 'main.py', kind: 'file', repoId: 'repo1', sourcePath: 'links/123/main.py', gitCommit: 'c'.repeat(40) },
+  ] }])
+}
+function gitVersions(runtimeId = 'runtime-1'): RuntimeGitVersions {
+  return { runtimeId, deployedStatus: 'ok', deployedError: '', deliveryId: 'last-success', sources: [{
+    repoId: 'repo1', directory: 'links/123', deployedCommits: ['a'.repeat(40)], remoteCommit: 'b'.repeat(40),
+    remoteStatus: 'ok', remoteError: '', checkedAt: '2026-11-20T00:00:00Z', branch: 'main',
+  }] }
+}
+it('显示该机器成功下发的 Git 版本和远程最新版本，不使用当前映射的提交冒充已下发版本', async () => {
+  mappedGitConfiguration()
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockResolvedValue({ items: [gitVersions()] })
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.get('[data-testid="binding-delivered-git-version"]').text()).toContain('aaaaaaaaaaaa')
+  expect(wrapper.get('[data-testid="binding-remote-git-version"]').text()).toContain('bbbbbbbbbbbb（来源提交不同）')
+  expect(wrapper.get('[data-testid="binding-delivered-git-version"]').attributes('title')).toBe('a'.repeat(40))
+  expect(wrapper.get('[data-testid="binding-git-sources"]').text()).not.toContain('cccccccccccc')
+  wrapper.unmount()
+})
+it('版本查询未完成时列表和操作先展示，独立显示查询状态', async () => {
+  mappedGitConfiguration()
+  let resolve!: (value: { items: RuntimeGitVersions[] }) => void
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockReturnValue(new Promise(done => { resolve = done }))
+  const { wrapper } = await setup(true, 'r-1')
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
+  expect(wrapper.get('[aria-label="刷新机器配置"]').attributes('disabled')).toBeUndefined()
+  expect(wrapper.get('[data-testid="binding-remote-git-version"]').text()).toContain('查询中')
+  resolve({ items: [gitVersions()] }); await flushPromises()
+  expect(wrapper.get('[data-testid="binding-delivered-git-version"]').text()).toContain('aaaaaaaaaaaa')
+  wrapper.unmount()
+})
+it('同一部署配置在不同 Runner 上展示各自下发版本', async () => {
+  mappedGitConfiguration()
+  vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([existing, { ...existing, runtimeId: 'runtime-2', runnerId: 'r-2' }])
+  const other = gitVersions('runtime-2'); other.sources[0]!.deployedCommits = ['d'.repeat(40)]
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockResolvedValue({ items: [gitVersions(), other] })
+  const { wrapper } = await setup()
+  expect(wrapper.findAll('[data-testid="binding-delivered-git-version"]').map(item => item.text())).toEqual([
+    '已下发版本：aaaaaaaaaaaa', '已下发版本：dddddddddddd',
+  ])
+  wrapper.unmount()
+})
+it('增量下发来自多个 Git 提交时展示混合版本', async () => {
+  mappedGitConfiguration()
+  const value = gitVersions(); value.sources[0]!.deployedCommits.push('e'.repeat(40))
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockResolvedValue({ items: [value] })
+  const { wrapper } = await setup()
+  expect(wrapper.get('[data-testid="binding-delivered-git-version"]').text()).toContain('aaaaaaaaaaaa、eeeeeeeeeeee（混合版本）')
+  wrapper.unmount()
+})
+it('混合来源的文件内容与远程一致时不提示版本不同', async () => {
+  mappedGitConfiguration()
+  const value = gitVersions(); value.sources[0]!.deployedCommits.push('b'.repeat(40)); value.sources[0]!.contentStatus = 'same'
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockResolvedValue({ items: [value] })
+  const { wrapper } = await setup()
+  expect(wrapper.get('[data-testid="binding-remote-git-version"]').text()).toBe('远程最新：bbbbbbbbbbbb（已下发文件一致）')
+  expect(wrapper.get('[data-testid="binding-git-sources"]').text()).not.toContain('版本不同')
+  wrapper.unmount()
+})
+it('版本接口失败保留部署列表，手工刷新会请求刷新远程版本', async () => {
+  mappedGitConfiguration()
+  vi.mocked(runnerManagementApi.runtimeGitVersions).mockRejectedValueOnce(new Error('版本查询不可用')).mockResolvedValue({ items: [gitVersions()] })
+  const { wrapper } = await setup()
+  expect(wrapper.findAll('[data-testid="binding-row"]')).toHaveLength(1)
+  expect(wrapper.get('[data-testid="binding-remote-git-version"]').text()).toContain('查询失败')
+  await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.runtimeGitVersions).toHaveBeenLastCalledWith(['runtime-1'], true)
+  expect(wrapper.get('[data-testid="binding-delivered-git-version"]').text()).toContain('aaaaaaaaaaaa')
   wrapper.unmount()
 })

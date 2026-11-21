@@ -55,14 +55,14 @@ def submit(app, task_id, body):
     with tasks.LOCK:
         original = tasks.read(app, task_id)
         with app.store.connect() as db:
-            existing = db.execute('SELECT payload FROM generation_jobs WHERE task_id=?', (identifier,)).fetchone()
+            existing = db.execute("SELECT payload FROM jobs WHERE job_type='generation' AND job_id=?", (identifier,)).fetchone()
         if existing:
             child = json.loads(existing['payload'])
             if child.get('regenerationFingerprint') != fingerprint: raise ApiError('此请求已提交其他内容，请重新打开修正工作区', 409)
             return {'job': tasks.public(child)}
         if original['status'] not in ('succeeded', 'failed'): raise ApiError('请等待原任务执行结束后再重新生成', 409)
         with app.store.connect() as db:
-            if db.execute("SELECT 1 FROM generation_jobs WHERE config_id=? AND status IN ('queued','claimed','running')", (original['configId'],)).fetchone():
+            if db.execute("SELECT 1 FROM jobs WHERE job_type='generation' AND config_id=? AND status IN ('queued','claimed','running')", (original['configId'],)).fetchone():
                 raise ApiError('此配置已有等待或执行中的生成任务，请先查看该任务', 409)
         prepared = prepare(app, task_id)
         generation = copy.deepcopy(prepared['generation'])

@@ -1,4 +1,6 @@
 """CodeServer release/upgrade control using the existing Runner artifact store."""
+from .release_records import register
+
 import ast
 import hashlib
 import hmac
@@ -33,7 +35,7 @@ def publish_launcher(app, activate=True):
     from .server import now
     digest, signature = app.artifacts.publish(launcher_files(), {'kind': 'code-server-launcher', 'entryModule': 'code_generation_server.start'})
     with app.store.connect() as db:
-        db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',
+        register(db, app.artifacts,
                    (digest, 'code-server-launcher', digest[7:19], 'any', 'local-source', 'published', now(), signature, 'code_generation_server.start', 'local-source'))
         if activate:
             store_layout(db, 'code-server-latest-launcher', {'digest': digest})
@@ -81,7 +83,7 @@ def publish(app):
     files['runner_management/artifacts.py'] = (Path(__file__).with_name('artifacts.py')).read_bytes()
     digest, signature = app.artifacts.publish(files, {'kind': 'code-server', 'entryModule': 'code_generation_server.service', 'version': version})
     with app.store.connect() as db:
-        inserted = db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',
+        inserted = register(db, app.artifacts,
                               (digest,'code-server',version,'any','local-source','published',now(),signature,'code_generation_server.service','local-source'))
         store_layout(db, 'code-server-latest-service', {'digest': digest})
     publish_launcher(app)

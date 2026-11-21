@@ -62,7 +62,7 @@ class SourceCodeRelationsTest(unittest.TestCase):
             for task_id, stamp, state in (('task-1', '2026-11-01T00:00:00Z', 'running'), ('task-2', '2026-11-01T00:30:00Z', 'queued')):
                 job = {'taskId': task_id, 'sourceId': '430024910', 'flowId': '21000040', 'stepId': '41895',
                        'configId': '101', 'createdAt': stamp}
-                db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?,?,?,?,?,?,?)',
+                db.execute("INSERT INTO jobs (job_type,job_id,source_id,flow_id,config_id,executor_id,status,server_id,created_at,lease_until,payload) VALUES ('generation',?,?,?,?,?,?,?,?,?,?)",
                            (task_id, job['sourceId'], job['flowId'], job['configId'], 'model', state, '', stamp, 0, json.dumps(job)))
         generated_archives.store(self.app, archive)
         rows = relations.listing(self.app, {'sourceId': '430024910'})['items']
@@ -74,7 +74,7 @@ class SourceCodeRelationsTest(unittest.TestCase):
             relations.note_task(db, {**newer, 'taskId': 'stale', 'createdAt': '2026-11-01T00:10:00Z'})
             # Neither a different node nor a different source sharing this config may overwrite it.
             relations.note_task(db, {**newer, 'taskId': 'other-node', 'stepId': '41896', 'createdAt': '2026-11-01T02:00:00Z'})
-            db.execute('DELETE FROM generation_jobs')
+            db.execute("DELETE FROM jobs WHERE job_type='generation'")
         generated_archives.store(self.app, archive)
         rows = relations.listing(self.app, {'latestTaskId': 'task-3'})['items']
         self.assertEqual(len(rows), 2)
@@ -108,12 +108,12 @@ class SourceCodeRelationsTest(unittest.TestCase):
         job = {'taskId': 'task-1', 'sourceId': '430024910', 'flowId': '21000040', 'stepId': '41895', 'configId': '101',
                'result': {'archive': {'archiveId': archive['archiveId']}}}
         with self.app.store.connect() as db:
-            db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?,?,?,?,?,?,?)',
+            db.execute("INSERT INTO jobs (job_type,job_id,source_id,flow_id,config_id,executor_id,status,server_id,created_at,lease_until,payload) VALUES ('generation',?,?,?,?,?,?,?,?,?,?)",
                        ('task-1', '430024910', '21000040', '101', 'model', 'succeeded', 'server-1', '', 0, json.dumps(job)))
         self.assertEqual(relations.backfill(self.app)['filesProcessed'], 2)
         relations.backfill(self.app)
         with self.app.store.connect() as db:
-            db.execute('DELETE FROM generation_jobs WHERE task_id=?', ('task-1',))
+            db.execute("DELETE FROM jobs WHERE job_type='generation' AND job_id=?", ('task-1',))
         self.assertEqual(relations.listing(self.app, {'taskId': 'task-1'})['total'], 2)
         generated_archives.store(self.app, archive)
         self.assertEqual(relations.listing(self.app, {})['total'], 2)

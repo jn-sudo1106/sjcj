@@ -18,6 +18,7 @@ from backend.runner_management.server import Application, Handler
 from backend.runner_management.runner import Runner
 from backend.runner_management.runtime_logs import LogQueue
 from backend.runner_management.runtime_history import ingest_event, cleanup, insert_record
+from backend.runner_management import log_records
 
 
 class RuntimeHistoryTest(unittest.TestCase):
@@ -29,8 +30,8 @@ class RuntimeHistoryTest(unittest.TestCase):
             insert_record(db, active, {}, 'run', {}, status='running', date=old_date)
             insert_record(db, output, {}, 'run', {}, status='exited', date=old_date)
             insert_record(db, archived, {}, 'run', {}, status='exited', date=old_date)
-            db.execute('INSERT INTO runtime_log_streams VALUES (?,?,?,?,?,?)',
-                       (uuid.uuid4().hex, output, '', 1, 100, recent_date))
+            log_records.insert(db,log_records.migrated_row('stream',{'stream_id':uuid.uuid4().hex,'record_id':output,
+                'runner_id':'','last_seq':1,'byte_count':100,'updated_at':recent_date}))
         result = self.request('/api/runner-management/runtime-operations?kind=run')
         self.assertEqual({row['recordId'] for row in result['items']}, {active, output})
         self.assertEqual(result['total'], 2)
@@ -344,7 +345,7 @@ class RuntimeHistoryTest(unittest.TestCase):
         post = lambda p: self.request('/api/runners/me/log-batches', p, self.runner.identity['token'])
         post(payload)
         with self.app.store.connect() as db:
-            db.execute('UPDATE runtime_log_streams SET updated_at=? WHERE stream_id=?',
+            db.execute("UPDATE logs SET updated_at=? WHERE log_type='stream' AND log_id=?",
                        ((datetime.now(timezone.utc) - timedelta(days=31)).isoformat(), stream_id))
         cleanup(self.app)
         page = self.request('/api/runner-management/log-streams/' + stream_id + '/entries')
@@ -423,7 +424,9 @@ class RuntimeHistoryTest(unittest.TestCase):
         detail = self.request('/api/runner-management/runtime-operations/' + result['deliveryId'])
         self.assertEqual(detail['runtimeId'], self.runtime['runtimeId'])
         self.assertEqual(detail['snapshot']['name'], '日志联调测试')
-        self.assertEqual([e['stage'] for e in detail['events']], ['requested', 'received'])
+        stages = [e['stage'] for e in detail['events']]
+        self.assertEqual([stage for stage in stages if stage != 'created'], ['requested', 'received'])
+        self.assertEqual(stages.count('created'), 1)  # The unified deployment task's creation event.
 
     def test_machine_retry_policy_round_trip_validation_and_old_client_preservation(self):
         self.fixture(concurrency=1)

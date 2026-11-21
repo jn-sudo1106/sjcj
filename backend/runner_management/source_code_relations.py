@@ -36,7 +36,7 @@ def sync_latest(db, context, archive):
     existing = db.execute('SELECT latest_task_id,latest_task_created_at FROM source_code_relations WHERE ' + OWNER_WHERE
                           + ' ORDER BY latest_task_created_at DESC,latest_task_id DESC LIMIT 1', owner).fetchone()
     candidates = [(existing['latest_task_created_at'], existing['latest_task_id'])] if existing else []
-    jobs = db.execute('SELECT task_id,created_at,payload FROM generation_jobs WHERE source_id=? AND flow_id=? AND config_id=?',
+    jobs = db.execute("SELECT job_id AS task_id,created_at,payload FROM jobs WHERE job_type='generation' AND source_id=? AND flow_id=? AND config_id=?",
                       (context['sourceId'], context['flowId'], archive['configId'])).fetchall()
     found_origin = False
     for row in jobs:
@@ -73,7 +73,7 @@ def sync_archive(db, archive):
     """Called in the same transaction as the archive receipt; safe on commit retry."""
     context = archive.get('sourceContext')
     if not context and archive.get('taskId'):
-        job = db.execute('SELECT payload FROM generation_jobs WHERE task_id=?', (archive['taskId'],)).fetchone()
+        job = db.execute("SELECT payload FROM jobs WHERE job_type='generation' AND job_id=?", (archive['taskId'],)).fetchone()
         record = json.loads(job['payload']) if job else {}
         if record.get('configId') == archive.get('configId'):
             context = {name: record.get(name, '') for name in ('sourceId', 'flowId', 'stepId', 'flowVersionId')}
@@ -136,7 +136,7 @@ def backfill(app):
     from .generated_archives import PREFIX
     count, skipped = 0, 0
     with app.store.connect() as db:
-        for row in db.execute('SELECT task_id,payload FROM generation_jobs').fetchall():
+        for row in db.execute("SELECT job_id AS task_id,payload FROM jobs WHERE job_type='generation'").fetchall():
             job = json.loads(row['payload'])
             note_task(db, job)
             archive = (job.get('result') or {}).get('archive') or {}

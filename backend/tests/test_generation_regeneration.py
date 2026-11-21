@@ -120,7 +120,7 @@ class GenerationRegenerationTest(unittest.TestCase):
         body['requestId'] = 'b'*32
         with self.assertRaises(HTTPError) as conflict: self.submit(body)
         self.assertEqual(conflict.exception.code, 409)
-        with self.app.store.connect() as db: self.assertEqual(db.execute('SELECT COUNT(*) n FROM generation_jobs').fetchone()['n'], 2)
+        with self.app.store.connect() as db: self.assertEqual(db.execute("SELECT COUNT(*) n FROM jobs WHERE job_type='generation'").fetchone()['n'], 2)
 
     def test_invalid_disabled_model_rolls_back_node_update_and_active_task_blocks_retry(self):
         service, origin, parent, snapshot, body, calls = self.setup_task()
@@ -141,4 +141,4 @@ class GenerationRegenerationTest(unittest.TestCase):
         with patch('backend.runner_management.source_code_relations.note_task', side_effect=RuntimeError('transaction failure')):
             with self.assertRaises(HTTPError): self.submit(body)
         self.assertEqual(generation_tasks.read_config(self.app, parent['configId']), before)
-        with self.app.store.connect() as db: self.assertEqual(db.execute('SELECT COUNT(*) n FROM generation_jobs').fetchone()['n'], 1)
+        with self.app.store.connect() as db: self.assertEqual(db.execute("SELECT COUNT(*) n FROM jobs WHERE job_type='generation'").fetchone()['n'], 1)

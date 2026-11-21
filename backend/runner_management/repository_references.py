@@ -28,7 +28,7 @@ def references(app, repo_id, path):
         default_repo = app.default_repository(db)['repo_id']
         assets = [dict(row) for row in db.execute('SELECT * FROM code_assets').fetchall()]
         asset_map = {row['code_id']: row for row in assets}
-        versions = [dict(row) for row in db.execute('SELECT * FROM code_versions ORDER BY published_at DESC,digest DESC').fetchall()]
+        versions = [dict(row) for row in db.execute("SELECT * FROM releases WHERE code_id<>'' ORDER BY published_at DESC,digest DESC").fetchall()]
         bindings = {}
         for row in db.execute('SELECT * FROM code_runtime_bindings').fetchall():
             bindings.setdefault(row['digest'], set()).add(row['environment'])

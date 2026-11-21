@@ -8,6 +8,7 @@ import time
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 from .runtime_history import redact, stamp
+from . import log_records
 
 
 def endpoint(value):
@@ -38,9 +39,8 @@ class Call:
                      'taskId': str(body.get('taskId') or ''), 'configId': str(body.get('configId') or ''),
                      'startedAt': stamp(), 'finishedAt': '', 'durationMs': None, 'httpStatus': None, 'message': ''}
         with app.store.connect() as db:
-            self.data['taskRecorded'] = bool(self.data['taskId'] and db.execute('SELECT 1 FROM generation_jobs WHERE task_id=?', (self.data['taskId'],)).fetchone())
-            db.execute('INSERT INTO model_interface_calls VALUES (?,?,?,?,?)',
-                       (self.data['callId'], self.data['interfaceId'], self.data['startedAt'], 'running', json.dumps(self.data,ensure_ascii=False)))
+            self.data['taskRecorded'] = bool(self.data['taskId'] and db.execute("SELECT 1 FROM jobs WHERE job_type='generation' AND job_id=?", (self.data['taskId'],)).fetchone())
+            log_records.insert_call(db,self.data)
 
     def event(self, kind, fields):
         if kind == 'headers':
@@ -62,8 +62,7 @@ class Call:
         if self.data['status'] == 'running': self.data['status'] = 'succeeded'
         self.data.update(finishedAt=stamp(), durationMs=round((time.monotonic()-self.started)*1000))
         with self.app.store.connect() as db:
-            db.execute('UPDATE model_interface_calls SET status=?,payload=? WHERE call_id=?',
-                       (self.data['status'], json.dumps(self.data,ensure_ascii=False), self.data['callId']))
+            log_records.update_call(db,self.data)
 
 
 @contextmanager
@@ -86,31 +85,32 @@ def listing(app, interface_id, query):
     except (ValueError, TypeError): raise ApiError('分页参数无效')
     if page < 1 or not 1 <= size <= 100: raise ApiError('分页参数无效')
     with app.store.connect() as db:
-        total = db.execute('SELECT COUNT(*) total FROM model_interface_calls WHERE interface_id=?', (interface_id,)).fetchone()['total']
-        rows = db.execute('SELECT payload FROM model_interface_calls WHERE interface_id=? ORDER BY started_at DESC,call_id DESC LIMIT ? OFFSET ?',
+        selector=log_records.interface_expression(db)
+        total = db.execute("SELECT COUNT(*) total FROM logs WHERE log_type='model_call' AND "+selector+"=?", (interface_id,)).fetchone()['total']
+        rows = db.execute("SELECT payload FROM logs WHERE log_type='model_call' AND "+selector+"=? ORDER BY occurred_at DESC,log_id DESC LIMIT ? OFFSET ?",
                           (interface_id,size,(page-1)*size)).fetchall()
     return {'interfaceId':interface_id, 'items':[json.loads(row['payload']) for row in rows], 'total':total}
 
 
 def recover_interrupted(app):
     with app.store.connect() as db:
-        rows = db.execute("SELECT call_id,payload FROM model_interface_calls WHERE status='running'").fetchall()
+        rows = db.execute("SELECT log_id AS call_id,payload FROM logs WHERE log_type='model_call' AND status='running'").fetchall()
         for row in rows:
             data=json.loads(row['payload'])
             data.update(status='interrupted', finishedAt=stamp(), message='管理服务已重启，此次调用的最终结果未能确认')
-            db.execute('UPDATE model_interface_calls SET status=?,payload=? WHERE call_id=?', ('interrupted',json.dumps(data,ensure_ascii=False),row['call_id']))
+            log_records.update_call(db,data)
 
 
 def backfill(app):
     """Recover only existing finished generation tasks, never invent old Chat calls."""
     count = 0
     with app.store.connect() as db:
-        jobs = db.execute("SELECT status,payload FROM generation_jobs WHERE status IN ('succeeded','failed')").fetchall()
+        jobs = db.execute("SELECT status,payload FROM jobs WHERE job_type='generation' AND status IN ('succeeded','failed')").fetchall()
         for row in jobs:
             job=json.loads(row['payload']); model=job.get('modelCall') or {}
             if not model.get('interfaceId') or not job.get('startedAt'): continue
             call_id=hashlib.sha256(('generation:'+job['taskId']).encode()).hexdigest()[:32]
-            if db.execute('SELECT 1 FROM model_interface_calls WHERE interface_id=? AND payload LIKE ?',
+            if db.execute("SELECT 1 FROM logs WHERE log_type='model_call' AND "+log_records.interface_expression(db)+"=? AND payload LIKE ?",
                           (model['interfaceId'], '%"taskId": "'+job['taskId']+'"%')).fetchone(): continue
             started,finished=job['startedAt'],job.get('finishedAt') or ''
             try: duration=round((datetime.fromisoformat(finished.replace('Z','+00:00'))-datetime.fromisoformat(started.replace('Z','+00:00'))).total_seconds()*1000)
@@ -119,6 +119,5 @@ def backfill(app):
                   'callId':call_id,'purpose':'generation','status':row['status'],'taskId':job['taskId'],'configId':job.get('configId',''),
                   'startedAt':started,'finishedAt':finished,'durationMs':max(0,duration) if duration is not None else None,
                   'httpStatus':None,'message':message(job.get('message')),'historical':True,'taskRecorded':True}
-            count += db.execute('INSERT OR IGNORE INTO model_interface_calls VALUES (?,?,?,?,?)',
-                                (call_id,model['interfaceId'],started,row['status'],json.dumps(data,ensure_ascii=False))).rowcount
+            count += log_records.insert_call(db,data,ignore=True).rowcount
     return count

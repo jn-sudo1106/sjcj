@@ -4,8 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
-import { runnerManagementApi, type CodeRepository, type DeploymentConfiguration, type DirectoryDelivery, type DirectoryRunnerBinding, type RunnerInstance, type RuntimeConfiguration, type RuntimeConfigurationInput, type RunnerRetryPolicy } from '@/api/runnerManagement'
+import { formatRunnerDateTime, formatRunnerHeartbeat } from '@/utils/format/runnerHeartbeat'
+import { runnerManagementApi, type CodeRepository, type DeploymentConfiguration, type DirectoryDelivery, type DirectoryRunnerBinding, type RunnerInstance, type RuntimeConfiguration, type RuntimeConfigurationInput, type RunnerRetryPolicy, type RuntimeGitVersions } from '@/api/runnerManagement'
 import { flowCenterApi, sourceApi } from '@/api'
 import DirectoryDeliveryDialog from './DirectoryDeliveryDialog.vue'
 import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
@@ -118,6 +118,63 @@ const deliveryBinding = computed<DirectoryRunnerBinding | null>(() => deliveryRo
 const machineStates = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常', unknown: '状态未知' }
 const deliveryStates = { none: '未下发', pending: '等待下发', running: '下发中', success: '已下发', failed: '下发失败' }
 let active = true, initialized = false, request = 0, timer: ReturnType<typeof setTimeout> | undefined
+const gitVersions = ref<Record<string, RuntimeGitVersions>>({}), gitVersionsLoading = ref(false), gitVersionsError = ref('')
+let gitVersionRequest = 0
+const gitVersionScope = computed(() => JSON.stringify(visibleRows.value.filter(row => gitSources.value.get(row.deploymentId)?.length).map(row => [
+  row.runtimeId, row.runnerId, row.deploymentId, directoryPath(row), row.binding?.delivery?.deliveryId, row.binding?.delivery?.status,
+  gitSources.value.get(row.deploymentId)?.map(source => [source.repoId, source.directories]),
+])))
+async function loadGitVersions(refresh = false) {
+  const seq = ++gitVersionRequest
+  const ids = visibleRows.value.filter(row => gitSources.value.get(row.deploymentId)?.length).map(row => row.runtimeId)
+  gitVersions.value = {}; gitVersionsError.value = ''
+  if (!active || !ids.length) { gitVersionsLoading.value = false; return }
+  gitVersionsLoading.value = true
+  try {
+    const result = await runnerManagementApi.runtimeGitVersions(ids, refresh)
+    if (seq === gitVersionRequest && active) gitVersions.value = Object.fromEntries(result.items.map(item => [item.runtimeId, item]))
+  } catch (e) { if (seq === gitVersionRequest && active) gitVersionsError.value = problem(e) }
+  finally { if (seq === gitVersionRequest && active) gitVersionsLoading.value = false }
+}
+watch(gitVersionScope, () => { void loadGitVersions() }, { immediate: true, flush: 'post' })
+function gitVersion(row: RuntimeConfiguration, repoId: string, directory: string) {
+  return gitVersions.value[row.runtimeId]?.sources.find(source => source.repoId === repoId && source.directory === directory)
+}
+function deliveredGitLabel(row: RuntimeConfiguration, repoId: string, directory: string) {
+  if (gitVersionsLoading.value) return '读取中…'
+  if (gitVersionsError.value) return '读取失败'
+  const detail = gitVersions.value[row.runtimeId], source = gitVersion(row, repoId, directory)
+  if (!detail) return '未取得'
+  if (detail.deployedStatus === 'not_delivered') return '尚未下发'
+  if (detail.deployedStatus === 'unknown') return '无法读取'
+  const commits = source?.deployedCommits || []
+  return commits.length ? commits.slice(0, 2).map(commit => commit.slice(0, 12)).join('、') + (commits.length > 2 ? ` 等 ${commits.length} 个` : '') + (commits.length > 1 ? '（混合版本）' : '') : '未记录 Git 版本'
+}
+function remoteGitLabel(row: RuntimeConfiguration, repoId: string, directory: string) {
+  if (gitVersionsLoading.value) return '查询中…'
+  if (gitVersionsError.value) return '查询失败'
+  const source = gitVersion(row, repoId, directory)
+  if (!source) return '未取得'
+  if (source.remoteStatus === 'unconfigured') return '未配置远程'
+  if (source.remoteStatus === 'error') return '查询失败'
+  if (source.remoteStatus === 'checking') return '查询中…'
+  const comparison = source.deployedCommits.length && gitVersions.value[row.runtimeId]?.deployedStatus === 'ok'
+    ? source.contentStatus === 'same' ? '（已下发文件一致）'
+      : source.contentStatus === 'different' ? '（已下发文件有差异）'
+        : source.deployedCommits.length === 1 && source.deployedCommits[0] === source.remoteCommit ? '（提交一致）'
+          : '（来源提交不同）' : ''
+  return source.remoteCommit.slice(0, 12) + comparison
+}
+function deliveredGitTitle(row: RuntimeConfiguration, repoId: string, directory: string) {
+  return gitVersionsError.value || gitVersions.value[row.runtimeId]?.deployedError || gitVersion(row, repoId, directory)?.deployedCommits.join('\n') || ''
+}
+function remoteGitTitle(row: RuntimeConfiguration, repoId: string, directory: string) {
+  const source = gitVersion(row, repoId, directory)
+  return gitVersionsError.value || source?.remoteError || (source ? [source.remoteCommit, `远程分支：${source.branch}`,
+    `查询时间：${formatRunnerDateTime(source.checkedAt)}`, source.contentError,
+    source.differentPaths?.length ? `存在差异的文件：\n${source.differentPaths.join('\n')}` : '',
+    '仅核对已下发文件与远程同路径内容；未下发文件不在该范围内。'].filter(Boolean).join('\n') : '')
+}
 const problem = (e: unknown) => e instanceof Error ? e.message : String(e)
 const inFlight = (row: RuntimeConfiguration) => ['pending', 'running'].includes(row.binding?.delivery?.status || '')
 const machineState = (id: string) => machineMap.value.get(id)?.status || 'unknown'
@@ -254,7 +311,7 @@ function readRows() {
   return Promise.all([runnerManagementApi.runtimeConfigurations(), runnerManagementApi.deploymentConfigurations(), runnerManagementApi.instances(),
     runnerManagementApi.codeRepositories().then(items => ({ items, error: '' }), e => ({ items: [] as CodeRepository[], error: problem(e) }))])
 }
-async function load() {
+async function load(refreshVersions = false) {
   const seq = ++request
   stopPoll(); loading.value = true; error.value = ''
   try {
@@ -263,7 +320,13 @@ async function load() {
     rows.value = items; configurations.value = layouts; runners.value = machines; repositories.value = repos.items; repositoryError.value = repos.error
     void loadFlowNames(layouts, seq); void loadSourceNames(items, seq)
   } catch (e) { if (seq === request) error.value = problem(e) }
-  finally { if (seq === request) loading.value = false; initialized = true; poll() }
+  finally {
+    if (seq === request) {
+      loading.value = false
+      if (refreshVersions) void loadGitVersions(true)
+    }
+    initialized = true; poll()
+  }
 }
 function open(row: RuntimeConfiguration | null = null) {
   editingRow.value = row; editing.value = true; formError.value = ''; stopPoll(); ++request
@@ -347,9 +410,9 @@ function delivered(item: DirectoryDelivery) {
 watch([keyword, machineFilter, deliveryFilter, pageSize], () => { page.value = 1 })
 watch(() => filteredRows.value.length, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize.value))) })
 onMounted(() => { void load() })
-onActivated(() => { active = true; if (initialized && !loading.value && !editing.value) void load() })
-onDeactivated(() => { active = false; browsing.value = null; stopPoll() })
-onUnmounted(() => { active = false; ++request; stopPoll() })
+onActivated(() => { active = true; if (initialized && !loading.value && !editing.value) { void load(); void loadGitVersions() } })
+onDeactivated(() => { active = false; ++gitVersionRequest; browsing.value = null; stopPoll() })
+onUnmounted(() => { active = false; ++request; ++gitVersionRequest; stopPoll() })
 </script>
 
 <template>
@@ -363,7 +426,7 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
     <div class="rb-card">
       <header class="rb-toolbar">
         <div><strong>{{ runnerId ? '当前实例的机器配置' : '机器与流程节点绑定' }}</strong><span>{{ scopedRows.length }} 项配置 · {{ boundMachines.size }} 个实例 · {{ onlineMachines }} 个在线</span></div>
-        <div><el-button :icon="Refresh" circle :disabled="loading || saving || editing || !!controlling" aria-label="刷新机器配置" @click="load" /><el-button v-if="canWrite && runnerId" :disabled="loading || editing || saving || !!controlling" data-testid="binding-manual-deployment" @click="router.replace({ path: '/settings', query: { tab: 'directory-layout', create: '1', returnTab: 'runners', runnerId } })">手工新建</el-button><el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="loading || saving || editing || !!controlling || !!error" data-testid="binding-create" @click="open()">新增绑定</el-button></div>
+        <div><el-button :icon="Refresh" circle :disabled="loading || saving || editing || !!controlling" aria-label="刷新机器配置" @click="load(true)" /><el-button v-if="canWrite && runnerId" :disabled="loading || editing || saving || !!controlling" data-testid="binding-manual-deployment" @click="router.replace({ path: '/settings', query: { tab: 'directory-layout', create: '1', returnTab: 'runners', runnerId } })">手工新建</el-button><el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="loading || saving || editing || !!controlling || !!error" data-testid="binding-create" @click="open()">新增绑定</el-button></div>
       </header>
       <el-alert v-if="error" :title="`机器配置加载失败：${error}`" description="当前信息可能已过期，请刷新重试。" type="error" :closable="false" show-icon class="rb-error" />
       <el-alert v-if="flowNameError" :title="flowNameError" type="warning" :closable="false" show-icon />
@@ -426,7 +489,11 @@ onUnmounted(() => { active = false; ++request; stopPoll() })
                 <small v-if="row.assignment && row.assignment.processorType !== 'deployment-entry' && row.entryPoint" class="rb-inline-error">旧启动方式，请编辑保存后采用所选文件</small>
                 <div class="rb-git-sources" data-testid="binding-git-sources">
                   <div v-for="source in gitSources.get(row.deploymentId) || []" :key="source.repoId" class="rb-git-source">
-                    <RouterLink v-for="directory in source.directories" :key="directory" :to="{ path: '/settings', query: { tab: 'code-repos', repoId: source.repoId, folderPath: directory, returnTo: deploymentReturnPath } }" class="rb-git-directory" data-testid="binding-git-directory">Git 目录：{{ directory || '仓库根目录' }}</RouterLink>
+                    <div v-for="directory in source.directories" :key="directory" class="rb-git-directory-version">
+                      <RouterLink :to="{ path: '/settings', query: { tab: 'code-repos', repoId: source.repoId, folderPath: directory, returnTo: deploymentReturnPath } }" class="rb-git-directory" data-testid="binding-git-directory">Git 目录：{{ directory || '仓库根目录' }}</RouterLink>
+                      <small :title="deliveredGitTitle(row, source.repoId, directory)" data-testid="binding-delivered-git-version">已下发版本：{{ deliveredGitLabel(row, source.repoId, directory) }}</small>
+                      <small :title="remoteGitTitle(row, source.repoId, directory)" data-testid="binding-remote-git-version">远程最新：{{ remoteGitLabel(row, source.repoId, directory) }}</small>
+                    </div>
                   </div>
                   <small v-if="!gitSources.get(row.deploymentId)?.length">未关联 Git 代码</small>
                 </div>

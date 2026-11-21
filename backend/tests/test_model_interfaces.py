@@ -67,13 +67,13 @@ class ModelInterfacesTest(unittest.TestCase):
         current = models.listing(self.app); agent = current['items'][1]
         body = {'items': [item for item in current['items'] if item['id'] != agent['id']], 'revision': current['revision']}
         with self.app.store.connect() as db:
-            db.execute('INSERT INTO generation_jobs (task_id,source_id,flow_id,config_id,interface_id,server_id,status,created_at,lease_until,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            db.execute("INSERT INTO jobs (job_type,job_id,source_id,flow_id,config_id,executor_id,server_id,status,created_at,lease_until,payload) VALUES ('generation',?,?,?,?,?,?,?,?,?,?)",
                        ('1' * 32, '1', '1', '101', agent['id'], '', 'queued', '2026-11-13', 0, json.dumps({'input': {'interfaceId': agent['id']}})))
         with self.assertRaisesRegex(ApiError, '未完成的任务'): models.save(self.app, body)
-        with self.app.store.connect() as db: db.execute("UPDATE generation_jobs SET status='succeeded'")
+        with self.app.store.connect() as db: db.execute("UPDATE jobs SET status='succeeded' WHERE job_type='generation'")
         saved = models.save(self.app, body)
         self.assertNotIn(agent['id'], {item['id'] for item in saved['items']})
-        with self.app.store.connect() as db: self.assertEqual(db.execute('SELECT COUNT(*) total FROM generation_jobs').fetchone()['total'], 1)
+        with self.app.store.connect() as db: self.assertEqual(db.execute("SELECT COUNT(*) total FROM jobs WHERE job_type='generation'").fetchone()['total'], 1)
 
     setUp = baseline.ManagementIntegrationTest.setUp
     tearDown = baseline.ManagementIntegrationTest.tearDown

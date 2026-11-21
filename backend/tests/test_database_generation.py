@@ -149,6 +149,10 @@ class DatabaseGenerationTest(unittest.TestCase):
             tasks.execute(handler, self.app, server, job['taskId'])
         saved = tasks.read(self.app, job['taskId'])
         self.assertEqual(saved['status'], 'succeeded', saved['message'])
+        with self.app.store.connect() as db:
+            execution = db.execute("SELECT executor_id,server_id FROM jobs WHERE job_type='generation' AND job_id=?", (job['taskId'],)).fetchone()
+            self.assertEqual((execution['executor_id'],execution['server_id']),
+                             (saved['input']['interfaceId'],service.identity['serverId']))
         from backend.runner_management.source_code_relations import listing
         relation = listing(self.app, {'taskId': job['taskId']})
         self.assertEqual(relation['total'], 2)
@@ -214,7 +218,7 @@ class DatabaseGenerationTest(unittest.TestCase):
         server = code_servers.read(self.app, service.identity['serverId'])
         tasks.claim(self.app, server)
         with self.app.store.connect() as db:
-            db.execute('UPDATE generation_jobs SET lease_until=0 WHERE task_id=?', (job['taskId'],))
+            db.execute("UPDATE jobs SET lease_until=0 WHERE job_type='generation' AND job_id=?", (job['taskId'],))
         self.assertEqual(tasks.claim(self.app, server)['job']['taskId'], job['taskId'])
         record = tasks.read(self.app, job['taskId']); record['status'] = 'running'; tasks.put(self.app, record)
         tasks.recover(self.app)
@@ -232,7 +236,7 @@ class DatabaseGenerationTest(unittest.TestCase):
             self.assertTrue(result['ok'])
             with self.assertRaises(ApiError): tasks.execute(self.handler(), self.app, server, job['taskId'])
             with self.app.store.connect() as db:
-                self.assertIsNone(db.execute('SELECT status FROM generation_jobs WHERE task_id=?', (job['taskId'],)).fetchone())
+                self.assertIsNone(db.execute("SELECT status FROM jobs WHERE job_type='generation' AND job_id=?", (job['taskId'],)).fetchone())
             self.assertTrue(tasks.remove(self.app, {'taskId': job['taskId']})['ok'])
         self.assertEqual(tasks.paged(self.app, {})['total'], 0)
         self.assertFalse(calls)
@@ -286,7 +290,7 @@ class DatabaseGenerationTest(unittest.TestCase):
         self.assertEqual(self.app.git(origin, 'show', 'main:' + relative).strip(), 'VALUE = 2')
         tasks.remove(self.app, {'taskId': job['taskId']})
         with self.app.store.connect() as db:
-            self.assertIsNone(db.execute('SELECT 1 FROM generation_jobs WHERE task_id=?', (job['taskId'],)).fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM jobs WHERE job_type='generation' AND job_id=?", (job['taskId'],)).fetchone())
         self.assertEqual(self.app.git(origin, 'show', 'main:' + relative).strip(), 'VALUE = 2')
         from backend.runner_management.generated_archives import state
         self.assertEqual(state(self.app, '101')['archive']['archiveId'], archive['archiveId'])

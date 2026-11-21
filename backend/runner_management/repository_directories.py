@@ -127,7 +127,7 @@ def remove_directory(app, repo_id, directory_id, expected_revision):
         if old['isDefault'] or expected_revision != old['revision']:
             raise ApiError('默认目录不能移除' if old['isDefault'] else '目录配置已更新，请刷新', 409)
         if db.execute('SELECT 1 FROM code_assets WHERE directory_id=?', (directory_id,)).fetchone() or db.execute(
-                'SELECT 1 FROM code_versions WHERE repository_directory_id=?', (directory_id,)).fetchone():
+                'SELECT 1 FROM releases WHERE repository_directory_id=?', (directory_id,)).fetchone():
             raise ApiError('目录已有节点代码或历史版本引用，请使用停用', 409)
         db.execute('DELETE FROM settings WHERE setting_key=?', (PREFIX + directory_id,))
         return {'ok': True}
@@ -136,7 +136,7 @@ def remove_directory(app, repo_id, directory_id, expected_revision):
 def managed_paths(db, repo_id, exclude_config_id=None):
     assets = {row['code_id']: dict(row) for row in db.execute('SELECT * FROM code_assets').fetchall()}
     paths = {row['storage_path'] for row in assets.values() if row['repo_id'] == repo_id and row['config_id'] != exclude_config_id}
-    for row in db.execute('SELECT * FROM code_versions WHERE repo_id=?', (repo_id,)).fetchall():
+    for row in db.execute('SELECT * FROM releases WHERE repo_id=?', (repo_id,)).fetchall():
         if exclude_config_id is None or assets.get(row['code_id'], {}).get('config_id') != exclude_config_id:
             paths.update((row['repository_storage_path'], row['source_repo_path']))
     from .generated_archives import records

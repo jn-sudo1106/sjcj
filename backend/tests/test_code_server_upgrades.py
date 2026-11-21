@@ -161,7 +161,7 @@ class CodeServerUpgradeTest(unittest.TestCase):
         broken,signature=self.app.artifacts.publish({'code_generation_server/__init__.py':b'', 'code_generation_server/service.py':b'raise SystemExit(3)\n'},
             {'kind':'code-server','entryModule':'code_generation_server.service'})
         with self.app.store.connect() as db:
-            db.execute('INSERT INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',(broken,'code-server','broken','any','local','published','2026-10-28',signature,'code_generation_server.service','local'))
+            db.execute('INSERT INTO releases (digest,kind,name,platform,git_commit,status,published_at,signature,entry,git_url) VALUES (?,?,?,?,?,?,?,?,?,?)',(broken,'code-server','broken','any','local','published','2026-10-28',signature,'code_generation_server.service','local'))
         self.request('/api/runner-management/code-servers/upgrades',{'serverIds':[server_id],'digest':broken})
         bootstrap.client.get('/api/runners/me/desired-runner')
         with self.assertRaisesRegex(RuntimeError,'已恢复上一版本'):bootstrap.switch(broken)

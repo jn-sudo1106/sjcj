@@ -13,7 +13,7 @@ ACTIVE = set()
 def read(app, task_id):
     from .server import ApiError
     with app.store.connect() as db:
-        row = db.execute('SELECT payload,status,server_id FROM generation_jobs WHERE task_id=?', (task_id,)).fetchone()
+        row = db.execute("SELECT payload,status,server_id FROM jobs WHERE job_type='generation' AND job_id=?", (task_id,)).fetchone()
     if not row or row['status'] == 'deleted': raise ApiError('代码生成任务不存在或已删除', 404)
     record = json.loads(row['payload'])
     record.update(status='queued' if row['status'] == 'claimed' else row['status'], serverId=row['server_id'])
@@ -34,7 +34,7 @@ def public(record):
 def put(app, record):
     # Only the executor writes payload after its atomic claimed -> running transition.
     with app.store.connect() as db:
-        db.execute("UPDATE generation_jobs SET payload=?,status=?,server_id=? WHERE task_id=? AND status<>'deleted'",
+        db.execute("UPDATE jobs SET payload=?,status=?,server_id=? WHERE job_type='generation' AND job_id=? AND status<>'deleted'",
                    (json.dumps(record, ensure_ascii=False), record['status'], record['serverId'], record['taskId']))
 
 
@@ -108,7 +108,7 @@ def create(app, body, *, _task_id=None, _lineage=None, _node_update=None):
             if db.execute('UPDATE settings SET setting_value=? WHERE setting_key=? AND ' + compare,
                           (updated, key, previous)).rowcount != 1:
                 raise ApiError('节点生成配置已修改，请重新打开修正工作区后再提交', 409)
-        db.execute('INSERT INTO generation_jobs (task_id,source_id,flow_id,config_id,interface_id,status,server_id,created_at,lease_until,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        db.execute("INSERT INTO jobs (job_type,job_id,source_id,flow_id,config_id,executor_id,status,server_id,created_at,lease_until,payload) VALUES ('generation',?,?,?,?,?,?,?,?,?,?)",
                    (task_id, source_id, flow_id, owner, data['interfaceId'], 'queued', '', record['createdAt'], 0, json.dumps(record, ensure_ascii=False)))
         from .source_code_relations import note_task
         note_task(db, record)
@@ -132,17 +132,17 @@ def paged(app, query):
     except (ValueError, TypeError): raise ApiError('分页参数无效')
     if page < 1 or not 1 <= size <= 100: raise ApiError('分页参数无效')
     clauses, values = ["status<>'deleted'"], []
-    for key, column in (('sourceId', 'source_id'), ('configId', 'config_id'), ('taskId', 'task_id')):
+    for key, column in (('sourceId', 'source_id'), ('configId', 'config_id'), ('taskId', 'job_id')):
         if query.get(key): clauses.append(column + '=?'); values.append(str(query[key]))
     states = {'L': ('queued', 'claimed', 'running'), 'C': ('succeeded',), 'E': ('failed',)}
     if query.get('state'):
         if query['state'] not in states: raise ApiError('任务状态无效')
         selected = states[query['state']]
         clauses.append('status IN (' + ','.join('?' for _ in selected) + ')'); values.extend(selected)
-    where = ' WHERE ' + ' AND '.join(clauses)
+    where = ' AND ' + ' AND '.join(clauses)
     with app.store.connect() as db:
-        total = db.execute('SELECT COUNT(*) AS total FROM generation_jobs' + where, values).fetchone()['total']
-        rows = db.execute('SELECT task_id FROM generation_jobs' + where + ' ORDER BY created_at DESC,task_id DESC LIMIT ? OFFSET ?',
+        total = db.execute("SELECT COUNT(*) AS total FROM jobs WHERE job_type='generation'" + where, values).fetchone()['total']
+        rows = db.execute("SELECT job_id AS task_id FROM jobs WHERE job_type='generation'" + where + ' ORDER BY created_at DESC,task_id DESC LIMIT ? OFFSET ?',
                           [*values, size, (page - 1) * size]).fetchall()
     result = []
     for row in rows:
@@ -160,8 +160,8 @@ def remove(app, body):
     items = []
     for task_id in dict.fromkeys(ids):
         with LOCK, app.store.connect() as db:
-            changed = db.execute("DELETE FROM generation_jobs WHERE task_id=? AND status<>'running'", (task_id,)).rowcount
-            exists = db.execute("SELECT 1 FROM generation_jobs WHERE task_id=?", (task_id,)).fetchone()
+            changed = db.execute("DELETE FROM jobs WHERE job_type='generation' AND job_id=? AND status<>'running'", (task_id,)).rowcount
+            exists = db.execute("SELECT 1 FROM jobs WHERE job_type='generation' AND job_id=?", (task_id,)).fetchone()
         items.append({'taskId': task_id, 'ok': bool(changed or not exists),
                       'message': '任务记录已从数据库删除，已有代码和 Git 归档保留' if changed or not exists else '任务正在生成，请结束后再删除'})
     count = sum(item['ok'] for item in items)
@@ -175,7 +175,7 @@ def summaries(app, ids):
     if not 1 <= len(ids) <= 100 or any(not re.fullmatch(r'[a-f0-9]{32}', value) for value in ids):
         raise ApiError('请提供 1 至 100 个有效任务 ID')
     with app.store.connect() as db:
-        rows = db.execute("SELECT task_id FROM generation_jobs WHERE status<>'deleted' AND task_id IN ("
+        rows = db.execute("SELECT job_id AS task_id FROM jobs WHERE job_type='generation' AND status<>'deleted' AND job_id IN ("
                           + ','.join('?' for _ in ids) + ')', ids).fetchall()
     items = []
     for row in rows:
@@ -203,7 +203,7 @@ def claim(app, server):
     from .agent_pool import ALL, KINDS, acquire, release
     with LOCK:
         with app.store.connect() as db:
-            expired = db.execute("SELECT task_id,payload FROM generation_jobs WHERE status='claimed' AND lease_until<?", (time.time(),)).fetchall()
+            expired = db.execute("SELECT job_id AS task_id,payload FROM jobs WHERE job_type='generation' AND status='claimed' AND lease_until<?", (time.time(),)).fetchall()
         models = listing(app)['items']
         for old in expired:
             identifier = json.loads(old['payload'])['input']['interfaceId']
@@ -214,11 +214,11 @@ def claim(app, server):
     if not interfaces: return {'job': None}
     server_id, clock = server['serverId'], time.time()
     with app.store.connect() as db:
-        rows = db.execute("SELECT task_id,interface_id FROM generation_jobs WHERE interface_id IN (" + ','.join('?' for _ in [*interfaces, ALL])
+        rows = db.execute("SELECT job_id AS task_id,executor_id FROM jobs WHERE job_type='generation' AND executor_id IN (" + ','.join('?' for _ in [*interfaces, ALL])
                           + ") AND (status='queued' OR (status='claimed' AND lease_until<?)) ORDER BY created_at,task_id LIMIT 20", [*interfaces, ALL, clock]).fetchall()
     for row in rows:
         for item in choices:
-            if not (item['id'] == row['interface_id'] or row['interface_id'] == ALL and item['kind'] in KINDS): continue
+            if not (item['id'] == row['executor_id'] or row['executor_id'] == ALL and item['kind'] in KINDS): continue
             with LOCK:
                 if not acquire(app, item, row['task_id']): continue
                 with app.store.connect() as db:
@@ -227,7 +227,7 @@ def claim(app, server):
                     record['params']['orchestration']['aiGeneration']['interfaceId'] = item['id']
                     from .mq_generation import model_call_info
                     record['modelCall'] = model_call_info(app, record, item)
-                    changed = db.execute("UPDATE generation_jobs SET status='claimed',server_id=?,lease_until=?,payload=? WHERE task_id=? AND (status='queued' OR (status='claimed' AND lease_until<?))",
+                    changed = db.execute("UPDATE jobs SET status='claimed',server_id=?,lease_until=?,payload=? WHERE job_type='generation' AND job_id=? AND (status='queued' OR (status='claimed' AND lease_until<?))",
                                          (server_id, clock + 60, json.dumps(record, ensure_ascii=False), row['task_id'], clock)).rowcount
                 if changed: return {'job': {'taskId': row['task_id']}}
                 release(app, item, row['task_id'])
@@ -245,11 +245,11 @@ def execute(handler, app, server, task_id):
         target, message = target_server(app, record)
         if target != server['serverId']:
             with app.store.connect() as db:
-                db.execute("UPDATE generation_jobs SET status='queued',server_id='',lease_until=0 WHERE task_id=? AND status='claimed' AND server_id=?",
+                db.execute("UPDATE jobs SET status='queued',server_id='',lease_until=0 WHERE job_type='generation' AND job_id=? AND status='claimed' AND server_id=?",
                            (task_id, server['serverId']))
             return {'type': 'done', 'status': 'queued', 'message': message or '等待所选模型机器领取任务', 'result': None}
         with app.store.connect() as db:
-            changed = db.execute("UPDATE generation_jobs SET status='running' WHERE task_id=? AND server_id=? AND status='claimed'",
+            changed = db.execute("UPDATE jobs SET status='running' WHERE job_type='generation' AND job_id=? AND server_id=? AND status='claimed'",
                                  (task_id, server['serverId'])).rowcount
         if not changed: raise ApiError('任务已被执行、删除或领取已失效，请重新领取', 409)
         record.update(status='running', startedAt=now(), message='正在调用模型生成代码', modelCall=model_call_info(app, record)); put(app, record); ACTIVE.add(task_id)
@@ -316,7 +316,7 @@ def archive_text(app, record, result):
 def recover(app):
     from .server import now
     with app.store.connect() as db:
-        rows = db.execute("SELECT task_id FROM generation_jobs WHERE status='running'").fetchall()
+        rows = db.execute("SELECT job_id AS task_id FROM jobs WHERE job_type='generation' AND status='running'").fetchall()
     for row in rows:
         record = read(app, row['task_id'])
         record.update(status='failed', callbackSent=True, finishedAt=now(), message='管理服务重启，结果待核对；请检查仓库后重新创建任务')

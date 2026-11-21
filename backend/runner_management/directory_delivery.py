@@ -29,9 +29,11 @@ def as_delivery(row):
 
 def expire_deliveries(db):
     from .server import now
+    from .delivery_tasks import update
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec='seconds')
-    db.execute("UPDATE directory_deliveries SET status='failed',finished_at=?,error=? "
-               "WHERE status='running' AND started_at<?", (now(), 'Runner 下发超时，请检查实例后重新下发', cutoff))
+    rows = db.execute("SELECT delivery_id FROM directory_deliveries WHERE status='running' AND started_at<?", (cutoff,)).fetchall()
+    for row in rows:
+        update(db, row['delivery_id'], status='failed', expected_status='running', finished_at=now(), error='Runner 下发超时，请检查实例后重新下发')
 
 
 def target_path(layout):
@@ -146,7 +148,7 @@ def file_sources(names, sources):
     return result
 
 
-def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=None):
+def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=None, _parent_job=None):
     from .server import ApiError, GIT_LOCK
     with GIT_LOCK, (nullcontext(_db) if _db is not None else app.store.connect()) as db:
         expire_deliveries(db)
@@ -269,13 +271,17 @@ def request_delivery(app, binding_type, owner_id, runner_id, payload, *, _db=Non
             signature = db.execute('SELECT signature FROM directory_deliveries WHERE artifact_digest=? LIMIT 1', (digest,)).fetchone()['signature']
         else:
             digest, signature = app.artifacts.publish(files, manifest)
+        from .release_records import register_delivery
+        register_delivery(db, app.artifacts, digest, signature, old_manifest if digest == base_digest else manifest)
+        from .deployment_git_versions import remember
+        remember(db, digest, old_manifest.get('sources', []) if digest == base_digest else sources)
         delivery_id = uuid.uuid4().hex
-        db.execute('INSERT INTO directory_deliveries '
-                   '(delivery_id,binding_type,owner_key,owner_id,runner_id,layout_revision,artifact_digest,signature,'
-                   'target_path,status,requested_at,started_at,finished_at,error,installed_path) '
-                   'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                   (delivery_id, binding_type, key[1], owner_id, runner_id, layout['revision'], digest, signature,
-                    root, 'pending', datetime.now(timezone.utc).isoformat(timespec='microseconds'), None, None, '', ''))
+        from .delivery_tasks import create
+        create(db, dict(delivery_id=delivery_id, binding_type=binding_type, owner_key=key[1], owner_id=owner_id,
+                        runner_id=runner_id, layout_revision=layout['revision'], artifact_digest=digest, signature=signature,
+                        target_path=root, status='pending', requested_at=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                        started_at=None, finished_at=None, error='', installed_path=''), parent_job=_parent_job,
+               context={'layout': layout, 'sources': sources, 'files': sorted(files)})
         return {**as_delivery(db.execute('SELECT * FROM directory_deliveries WHERE delivery_id=?', (delivery_id,)).fetchone()),
                 'transferredFileCount': len(files), 'unchangedFileCount': len(retained)}
 
@@ -290,6 +296,7 @@ def pending_deliveries(app, runner_id):
 
 def runner_delivery(app, runner_id, delivery_id, action, payload):
     from .server import ApiError, GIT_LOCK, now
+    from .delivery_tasks import update
     with GIT_LOCK, app.store.connect() as db:
         expire_deliveries(db)
         row = db.execute('SELECT * FROM directory_deliveries WHERE delivery_id=? AND runner_id=?', (delivery_id, runner_id)).fetchone()
@@ -298,7 +305,8 @@ def runner_delivery(app, runner_id, delivery_id, action, payload):
         if action == 'claim':
             if row['status'] != 'pending':
                 raise ApiError('下发任务已被领取或结束', 409)
-            db.execute("UPDATE directory_deliveries SET status='running',started_at=? WHERE delivery_id=? AND status='pending'", (now(), delivery_id))
+            if not update(db, delivery_id, status='running', expected_status='pending', started_at=now()).rowcount:
+                raise ApiError('下发任务已被领取或结束', 409)
         else:
             status = payload.get('status')
             error = payload.get('error', '')
@@ -311,6 +319,9 @@ def runner_delivery(app, runner_id, delivery_id, action, payload):
                 return as_delivery(row)  # Lost acknowledgements are safe to retry.
             if row['status'] != 'running':
                 raise ApiError('下发任务未运行或已经结束', 409)
-            db.execute('UPDATE directory_deliveries SET status=?,finished_at=?,error=?,installed_path=? WHERE delivery_id=?',
-                       (status, now(), error[:1000] if status == 'failed' else '', installed if status == 'success' else '', delivery_id))
+            if not update(db, delivery_id, status=status, expected_status='running', finished_at=now(),
+                          error=error[:1000] if status == 'failed' else '', installed_path=installed if status == 'success' else '').rowcount:
+                current = db.execute('SELECT status FROM directory_deliveries WHERE delivery_id=?', (delivery_id,)).fetchone()
+                if not current or current['status'] != status:
+                    raise ApiError('下发任务未运行或已经结束', 409)
         return as_delivery(db.execute('SELECT * FROM directory_deliveries WHERE delivery_id=?', (delivery_id,)).fetchone())

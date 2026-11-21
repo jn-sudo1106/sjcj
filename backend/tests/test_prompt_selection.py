@@ -29,4 +29,4 @@ class PromptSelectionTest(unittest.TestCase):
             with self.assertRaises(HTTPError):
                 self.publish(promptTemplateId=invalid)
         with self.app.store.connect() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) n FROM code_versions').fetchone()['n'], 3)
+            self.assertEqual(db.execute("SELECT COUNT(*) n FROM releases WHERE code_id<>''").fetchone()['n'], 3)

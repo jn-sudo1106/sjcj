@@ -5,6 +5,8 @@ or binding a projection materializes its independent deployment identifier.
 """
 from __future__ import annotations
 
+from .release_records import register
+
 import ast
 import hashlib
 import io
@@ -49,9 +51,10 @@ def configurations(app, db):
     candidates = set()
     for row in db.execute('SELECT config_id,queue_name FROM code_assets').fetchall():
         candidates.add(('config', row['config_id']))
-    for row in db.execute('SELECT queue_name FROM queue_runner_bindings').fetchall():
-        candidates.add(('queue', row['queue_name']))
-    for row in db.execute('SELECT * FROM settings').fetchall():
+    for row in db.execute("SELECT owner_id FROM directory_runner_bindings WHERE binding_type='queue'").fetchall():
+        candidates.add(('queue', row['owner_id']))
+    for row in db.execute('SELECT setting_key,setting_value FROM settings WHERE setting_key LIKE ? OR setting_key LIKE ? OR setting_key LIKE ?',
+                          ('config-directory-layout:%', 'queue-directory-layout:%', 'directory-layout:%')).fetchall():
         key = row['setting_key']
         if key.startswith('config-directory-layout:'):
             candidates.add(('config', key[len('config-directory-layout:'):]))
@@ -79,24 +82,32 @@ def configurations(app, db):
         item['revision'] = revision(item)
         result[identifier] = item
     for item in result.values():
-        if item.get('registryKey'):
-            continue
-        asset = None
-        if item.get('legacyType'):
-            kind, owner = item['legacyType'], item['legacyOwner']
-            original = (get_config_layout(app, owner, db) if kind == 'config' else
-                        get_queue_layout(app, owner, db) if kind == 'queue' else get_named_layout(app, kind, owner, db))
-            if original.get('codeId'):
-                asset = db.execute('SELECT * FROM code_assets WHERE code_id=?', (original['codeId'],)).fetchone()
-        item['registryKey'] = registry_key(item, asset)
-        item['revision'] = revision(item)
+        ensure_registry_key(app, db, item)
     return result
+
+
+def ensure_registry_key(app, db, item):
+    if item.get('registryKey'):
+        return item
+    asset = None
+    if item.get('legacyType'):
+        kind, owner = item['legacyType'], item['legacyOwner']
+        original = (get_config_layout(app, owner, db) if kind == 'config' else
+                    get_queue_layout(app, owner, db) if kind == 'queue' else get_named_layout(app, kind, owner, db))
+        if original.get('codeId'):
+            asset = db.execute('SELECT * FROM code_assets WHERE code_id=?', (original['codeId'],)).fetchone()
+    item['registryKey'] = registry_key(item, asset)
+    item['revision'] = revision(item)
+    return item
 
 
 def get_configuration(app, identifier, db):
     from .server import ApiError
     if not re.fullmatch('[0-9a-f]{32}', identifier or ''):
         raise ApiError('部署配置 ID 无效')
+    row = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (DEPLOYMENT_PREFIX + identifier,)).fetchone()
+    if row:
+        return ensure_registry_key(app, db, json.loads(row['setting_value']))
     item = configurations(app, db).get(identifier)
     if not item:
         raise ApiError('部署配置不存在，请刷新后重新选择', 404)
@@ -369,10 +380,7 @@ def runtime_source_contexts(db):
     merely happen to share a config ID. Read metadata only; do not load archives.
     """
     result = {}
-    rows = db.execute('SELECT j.job_id,j.source_id,j.flow_id,j.step_id,j.config_id,j.deployment_id,j.runner_id '
-                      'FROM deployment_jobs j JOIN directory_deliveries d ON j.delivery_id=d.delivery_id '
-                      'AND j.deployment_id=d.owner_id AND j.runner_id=d.runner_id '
-                      "WHERE d.binding_type='deployment' ORDER BY d.requested_at,j.created_at,j.job_id").fetchall()
+    rows = db.execute("SELECT j.job_id,j.source_id,j.flow_id,j.step_id,j.config_id,j.executor_id AS deployment_id,j.server_id AS runner_id FROM jobs j JOIN directory_deliveries d ON j.delivery_id=d.delivery_id AND j.executor_id=d.owner_id AND j.server_id=d.runner_id WHERE j.job_type='deployment' AND d.binding_type='deployment' ORDER BY d.requested_at,j.created_at,j.job_id").fetchall()
     for row in rows:
         if not row['source_id']:
             continue
@@ -454,7 +462,7 @@ def runtime_rows(app, db, *, verify=True):
     from .server import ASSIGNMENT_SELECT, as_assignment
     layouts = configurations(app, db)
     assignments = {row['assignment_id']: as_assignment(row) for row in db.execute(ASSIGNMENT_SELECT).fetchall()}
-    bindings = list_bindings(app, db)
+    bindings = list_bindings(app, db, layouts=layouts)
     docs = documents(db)
     source_contexts = runtime_source_contexts(db)
     used_assignments, used_bindings, rows = set(), set(), []
@@ -520,7 +528,7 @@ def runtime_rows(app, db, *, verify=True):
         # Queues already represented by independent runtime documents must not
         # also create an empty legacy row; explicit old directory bindings stay.
         if key[0] == 'config' and related and not matches and not db.execute(
-                'SELECT 1 FROM config_runner_bindings WHERE config_id=? AND runner_id=?', (key[1], key[2])).fetchone():
+                "SELECT 1 FROM directory_runner_bindings WHERE binding_type='config' AND owner_id=? AND runner_id=?", (key[1], key[2])).fetchone():
             continue
         for assignment in matches or [None]:
             if assignment:
@@ -584,7 +592,7 @@ def program_snapshot(app, layout, db):
     if kind == 'executable':
         manifest.update(entryType='executable', platform='win32')
     digest, signature = app.artifacts.publish(files, manifest)
-    db.execute('INSERT OR IGNORE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)',
+    register(db, app.artifacts,
                (digest, 'processor', 'deployment-entry', 'win32' if kind == 'executable' else 'any', primary['gitCommit'],
                 'published', now(), signature, entry, 'deployment:' + layout['deploymentId']))
     return digest
@@ -824,13 +832,11 @@ def remove_runtime(app, runtime_id, expected_revision):
                    and not item['runtimeId'].startswith('legacy-') for item in remaining):
                 continue
             if kind == 'config':
-                db.execute('DELETE FROM config_runner_bindings WHERE config_id=? AND runner_id=?', (owner, runner_id))
+                db.execute('DELETE FROM directory_runner_bindings WHERE binding_type=? AND owner_key=? AND runner_id=?', (kind, owner_key(owner), runner_id))
                 stored = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', ('config-directory-layout:' + owner,)).fetchone()
                 if stored:
                     layout = json.loads(stored['setting_value']); layout['runnerIds'] = [value for value in layout.get('runnerIds', []) if value != runner_id]
                     store_layout(db, 'config-directory-layout:' + owner, layout)
-            elif kind == 'queue':
-                db.execute('DELETE FROM queue_runner_bindings WHERE queue_name=? AND runner_id=?', (owner, runner_id))
             else:
                 db.execute('DELETE FROM directory_runner_bindings WHERE binding_type=? AND owner_key=? AND runner_id=?', (kind, owner_key(owner), runner_id))
         return {'ok': True}

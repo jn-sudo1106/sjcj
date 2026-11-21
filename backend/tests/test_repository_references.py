@@ -17,8 +17,8 @@ class RepositoryReferencesTest(unittest.TestCase):
         first = self.request(route + '/site-scripts/publish', payload)
         second = self.request(route + '/site-scripts/publish', {**payload, 'code': 'def scrape(url):\n    return [1]\n'})
         with self.app.store.connect() as db:
-            db.execute('UPDATE code_versions SET published_at=? WHERE digest=?', ('2020-01-01T00:00:00+00:00', first['scriptDigest']))
-            db.execute('UPDATE code_versions SET published_at=? WHERE digest=?', ('2021-01-01T00:00:00+00:00', second['scriptDigest']))
+            db.execute('UPDATE releases SET published_at=? WHERE digest=?', ('2020-01-01T00:00:00+00:00', first['scriptDigest']))
+            db.execute('UPDATE releases SET published_at=? WHERE digest=?', ('2021-01-01T00:00:00+00:00', second['scriptDigest']))
         return route, first, second
 
     def query(self, repo_id, path):
