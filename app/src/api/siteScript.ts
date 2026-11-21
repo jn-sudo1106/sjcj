@@ -6,6 +6,8 @@ export interface SiteScriptGenerateInput {
   /** 生成代码归属信息；不会将直接调用切换为任务方式。 */
   sourceContext?: { sourceId: string; flowId: string; stepId: string }
   taskContext?: { sourceId: string; flowId: string; stepId: string }
+  /** 数据监控生成（1117 契约 7）：sourceId + 监控 ID，代替流程 / 步骤 / 配置 */
+  monitorContext?: { sourceId: string; monitorId: string; sourceName?: string; monitorName?: string }
   /** 兼容旧调用参数；实际创建数据库任务，不再发送 MQ。 */
   mqContext?: { sourceId: string; flowId: string; stepId: string; dispatchConfigId?: string }
   configId?: string; configType?: string; queueName?: string; repositoryId?: string; directoryId?: string; autoCommit?: boolean; fileName?: string; deferCommit?: boolean
@@ -38,7 +40,7 @@ export type SiteScriptGenerationEvent = { type: 'progress'; message: string } | 
 
 /** 独立站点脚本服务只生成代码文本，不调用旧 XML 配置/规则脚本保存接口。 */
 export async function generateSiteScript(input: SiteScriptGenerateInput, signal?: AbortSignal, onEvent?: (event: SiteScriptGenerationEvent) => void): Promise<SiteScriptGenerateResult> {
-  if (input.taskContext || input.mqContext) return generateThroughTask(input, signal, onEvent)
+  if (input.taskContext || input.mqContext || input.monitorContext) return generateThroughTask(input, signal, onEvent)
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const token = readStoredToken()
   if (token) headers[ACCESS_TOKEN_HEADER] = token
@@ -110,6 +112,14 @@ function validateGenerationResult(payload: Record<string, unknown>): SiteScriptG
 export async function submitSiteScriptTask(input: SiteScriptGenerateInput, signal?: AbortSignal): Promise<{ taskId: string; queue: string }> {
   signal?.throwIfAborted()
   const { runnerManagementApi } = await import('./runnerManagement')
+  if (input.monitorContext) {
+    const monitor = input.monitorContext
+    if (![monitor.sourceId, monitor.monitorId].every(value => /^[1-9]\d*$/.test(value))) throw new Error('请先保存监控，拿到监控 ID 后再生成')
+    const snapshot = { ...input }; delete snapshot.monitorContext
+    signal?.throwIfAborted()
+    const receipt = await runnerManagementApi.createMonitorGenerationTask({ ...monitor, configType: input.configType || '610', generation: snapshot })
+    return { taskId: receipt.job.taskId, queue: '' }
+  }
   const context=input.taskContext || input.mqContext
   if (!context || !input.configId || ![context.sourceId,context.flowId,context.stepId,input.configId].every(value => /^[1-9]\d*$/.test(value))) throw new Error('请先保存源、流程、步骤和配置，再提交代码生成任务')
   const snapshot={...input};delete snapshot.mqContext;delete snapshot.taskContext

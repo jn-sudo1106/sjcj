@@ -903,6 +903,24 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow-center/unclassified', desc: '未归类/结构待核对只读扫描清单（C10）', impl: true },
   { path: 'flow-center/unclassifiedAssign', desc: '单条归集到模板（C10；本期不做批量归集）', danger: true, impl: true },
   { path: 'flow-center/unclassifiedStatus', desc: '单条核对状态（待确认/已确认/忽略）', danger: true, impl: true },
+
+  /* ── MCP 服务管理（系统设置 → MCP 服务；1118 需求原型） ──
+     字段口径参考 wan 项目的 mcp-store：transport/timeoutSeconds/toolCount/usedByCount/
+     lastReachable/lastProbeAt/lastError；详情含脱敏后的 env/headers 与 tools、probeLogs。
+     与 flow-center 组不同：用户明确要求「不用 mock 数据」（2026-11-18），故直接标 live 走真实
+     后端；后端未就绪时页面保留真实接口错误提示（AGENTS.md 功能入口环境约定），不做 mock 兜底。 */
+  { path: 'mcp/server/list', desc: 'MCP 服务列表（不分页；含工具数/被引用数/最近连通测试结果）', live: true },
+  { path: 'mcp/server/detail', desc: 'MCP 服务详情（?id=；含脱敏连接配置、工具清单、连通测试记录）', live: true },
+  { path: 'mcp/server/save', desc: '接入/更新 MCP 服务（body 带 id 即更新；保存后后端 initialize→tools/list 同步工具）', danger: true, live: true },
+  { path: 'mcp/server/delete', desc: '删除 MCP 服务（?id=；逻辑删除，已同步工具标 stale 保留审计）', danger: true, live: true },
+  { path: 'mcp/server/status', desc: '启用/停用 MCP 服务（?id=&enabled=；停用被引用服务需 confirmed=true 二次确认）', danger: true, live: true },
+  { path: 'mcp/server/probe', desc: '连通测试单个 MCP 服务（?id=；成功自动 tools/list 同步工具清单）', live: true },
+  { path: 'mcp/server/probe-all', desc: '批量连通测试全部 MCP 服务', live: true },
+  // 我的工作台扩展接口（2026-11-19，1119-我的工作台与MCP服务_后端接口文档）
+  { path: 'workbench/my-sources', desc: '我负责的源（按当前登录用户负责人过滤）', live: true },
+  { path: 'workbench/my-alarms', desc: '我的相关告警（未恢复/全部告警）', live: true },
+  { path: 'workbench/resolve-items', desc: '批量名称解析（网站/源/表批量反查）', live: true },
+  { path: 'workbench/prefs', desc: '工作台偏好设置', live: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

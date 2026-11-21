@@ -1,6 +1,24 @@
 // AI 智能问数（ChatBI / Agent 交互）API 封装
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
+import {
+  extractTableDraftFromText,
+  hasTableDraftBlock,
+  isTableDraftPrompt,
+  parseTableCreatedMessage,
+  stripTableDraftPrompt,
+  tableDraftFromPayload,
+  type TableDraft,
+  type TableDraftState,
+} from '@/utils/aiChat/tableDraft'
+import {
+  extractSourceDraftFromText,
+  hasSourceDraftBlock,
+  isSourceCreatedMessage,
+  isSourceDraftPrompt,
+  stripSourceDraftPrompt,
+  type SourceDraftState,
+} from '@/utils/aiChat/sourceDraft'
 
 export interface AiSessionItem {
   id: string
@@ -156,6 +174,7 @@ export function extractClarificationFromReasoning(reasoning: string): Clarificat
   if (!reasoning || typeof reasoning !== 'string') return null
 
   let found: Clarification | null = null
+  let foundAt = -1
   TOOL_RESULT_MARKER.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = TOOL_RESULT_MARKER.exec(reasoning)) !== null) {
@@ -168,7 +187,10 @@ export function extractClarificationFromReasoning(reasoning: string): Clarificat
         const payload = JSON.parse(fullJson) as Record<string, unknown>
         const normalized = normalizeClarificationPayload(payload?.clarification)
         // 多轮追问时以最后一轮的澄清为准
-        if (normalized && normalized.options.length > 0) found = normalized
+        if (normalized && normalized.options.length > 0) {
+          found = normalized
+          foundAt = match.index
+        }
       } catch {
         // 不是 JSON：跳过
       }
@@ -208,8 +230,76 @@ export function extractClarificationFromReasoning(reasoning: string): Clarificat
       normalized.question = `命中 ${normalized.options.length} 张候选表，请选择要分析的表（可多选）：`
     }
     found = normalized
+    foundAt = match.index
   }
+
+  // 纯文本的 ask_clarification 结果（编号选项）：多轮时以最后出现的为准
+  const textual = extractTextClarificationFromReasoning(reasoning)
+  if (textual && textual.at > foundAt) found = textual.clarification
   return found
+}
+
+const ASK_CLARIFICATION_TEXT_MARKER = /\[工具结果\]\s*ask_clarification\s*[:：]\s*(?!\{)/g
+const NUMBERED_OPTION = /^\s*(\d{1,2})[.、)）]\s*(.+?)\s*$/
+const OTHER_OPTION = /^其他|^其它|请说明|自定义/
+/** 选项末尾括号里的物理表名：`贝壳二手房成交价（tb_ke_com_chengjiao_esf_detail）` */
+const OPTION_TABLE = /^(.*?)\s*[（(]\s*((?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z][A-Za-z0-9_]*)\s*[)）]\s*$/
+
+/**
+ * 智能体 ask_clarification 工具的结果是给人看的纯文本（2026-11-19 186 实测）：
+ * `[工具结果] ask_clarification: 🤔 系统中有多张…\n\n您想查询哪种…？\n\n1. 贝壳二手房成交价（tb_ke_…）\n…\n4. 其他（请说明）`。
+ * 正文往往只剩一句「需要先确认您要查哪一类」，不解析的话页面上没有可选项。
+ * 选项带物理表名时按选表卡片处理（回传「中文名（表名）」）；「其他（请说明）」并入补充说明输入框。
+ */
+function extractTextClarificationFromReasoning(reasoning: string): { at: number; clarification: Clarification } | null {
+  let result: { at: number; clarification: Clarification } | null = null
+  ASK_CLARIFICATION_TEXT_MARKER.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = ASK_CLARIFICATION_TEXT_MARKER.exec(reasoning)) !== null) {
+    const start = match.index + match[0].length
+    const rest = reasoning.slice(start)
+    const end = rest.search(/\[工具(?:调用|结果)\]/)
+    const segment = end >= 0 ? rest.slice(0, end) : rest
+
+    const questionLines: string[] = []
+    const options: ClarificationOption[] = []
+    for (const line of segment.split(/\r?\n/)) {
+      const numbered = NUMBERED_OPTION.exec(line)
+      if (numbered) {
+        const label = numbered[2].replace(/\*\*/g, '').trim()
+        if (OTHER_OPTION.test(label)) continue
+        const table = OPTION_TABLE.exec(label)
+        const typeName = (table ? table[1] : label).trim() || label
+        options.push({
+          entryTypeId: null,
+          ordinal: Number(numbered[1]),
+          tableName: table ? table[2] : typeName,
+          typeName,
+          hint: null,
+        })
+      } else if (!options.length && line.trim()) {
+        questionLines.push(line.trim())
+      }
+    }
+    if (!options.length) continue
+
+    // 追问取最后一句问句，太长时退回通用文案；去掉行首表情
+    const questionCandidate = [...questionLines].reverse().find((l) => /[？?：:]$/.test(l)) ?? questionLines[questionLines.length - 1] ?? ''
+    const question = questionCandidate.replace(/^[^\p{L}\p{N}"“「(（]+/u, '').trim()
+    const hasTables = options.some((o) => o.tableName !== o.typeName)
+    result = {
+      at: match.index,
+      clarification: {
+        kind: hasTables ? 'table_choice' : 'metric_choice',
+        reason: 'AMBIGUOUS',
+        question: question && question.length <= 160 ? question : '请确认需要分析的表或口径：',
+        allowFreeText: true,
+        maxSelect: Math.min(5, options.length),
+        options,
+      },
+    }
+  }
+  return result
 }
 
 export type ClarificationKind = 'table_choice' | 'metric_choice' | 'free_text'
@@ -338,6 +428,14 @@ export interface ChatMessage {
   }
   insights?: string[]
   suggestions?: string[]
+  /** 追问胶囊类型：table_switch = 零行回答里的「改查」建议，标签显示「可以改查」 */
+  suggestionsKind?: 'followup' | 'table_switch'
+  /** 智能体对话建表草稿（确认后走 entrySave 落库），见 utils/aiChat/tableDraft */
+  tableDraft?: TableDraftState
+  /** 智能体对话建源草稿（确认后按新建采集 / 新增源链路落库），见 utils/aiChat/sourceDraft */
+  sourceDraft?: SourceDraftState
+  /** 本条回答是在建表 / 建源意图下提问的：发给智能体时追加了对应草稿格式要求 */
+  draftMode?: 'table' | 'source'
 }
 
 export function formatSessionGroupAndDate(dateStr?: string | Date): {
@@ -398,7 +496,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     result.push({
       id: `m-${log.id}-u`,
       role: 'user',
-      content: log.msg || '',
+      content: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
       createdAt,
     })
 
@@ -409,7 +507,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       content: log.modelMsg || '',
       createdAt,
       interrupted: log.status === 'INTERRUPTED',
-      question: log.msg || '',
+      question: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
       status:
         log.status === 'INTERRUPTED'
           ? 'interrupted'
@@ -495,23 +593,122 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
       }
     }
 
+    // 建表草稿：正文 ```table-draft 代码块；后续某条用户消息是「建表结果」回传且物理表名一致即视为已建，
+    // 避免刷新后草稿卡又变成可确认、被重复建表（见下方回放循环之后的标记）
+    if (isTableDraftPrompt(log.msg || '')) assistantMsg.draftMode = 'table'
+    if (assistantMsg.content && (assistantMsg.draftMode || hasTableDraftBlock(assistantMsg.content))) {
+      const draft = extractTableDraftFromText(assistantMsg.content)
+      if (draft) {
+        assistantMsg.tableDraft = { draft, status: 'pending' }
+        // 建表回答里出现的表名不是选表候选：不要被当成澄清卡片
+        assistantMsg.clarification = undefined
+      }
+    }
+
+    // 建源草稿：正文 ```source-draft 代码块；其后的「建源结果」回传视为已建（见 markCreatedSourceDrafts）
+    if (isSourceDraftPrompt(log.msg || '')) assistantMsg.draftMode = 'source'
+    if (!assistantMsg.tableDraft && assistantMsg.content && (assistantMsg.draftMode === 'source' || hasSourceDraftBlock(assistantMsg.content))) {
+      const draft = extractSourceDraftFromText(assistantMsg.content)
+      if (draft) {
+        assistantMsg.sourceDraft = { draft, status: 'pending' }
+        assistantMsg.clarification = undefined
+      }
+    }
+
     // 若未有图表数据，尝试从回答文本表格提取
-    if (!assistantMsg.chartData && assistantMsg.content) {
+    if (!assistantMsg.chartData && !assistantMsg.tableDraft && !assistantMsg.sourceDraft && assistantMsg.content && !parseTableCreatedMessage(log.msg || '') && !isSourceCreatedMessage(log.msg || '')) {
       const parsedChartData = extractChartDataFromText(assistantMsg.content)
       if (parsedChartData) {
         assistantMsg.chartData = parsedChartData
       }
     }
 
+    // 零行回答里的「建议换表」：恢复成可点击的改查胶囊（没有澄清卡片/业务数据/建表草稿时才认）
+    if (
+      !assistantMsg.clarification &&
+      !assistantMsg.chartData &&
+      !assistantMsg.tableDraft &&
+      !assistantMsg.suggestions?.length &&
+      assistantMsg.content
+    ) {
+      const tableSwitch = extractTableSwitchSuggestions(assistantMsg.content)
+      if (tableSwitch) {
+        assistantMsg.suggestions = tableSwitch.actions
+        assistantMsg.suggestionsKind = 'table_switch'
+      }
+    }
+
     result.push(assistantMsg)
   }
 
+  markCreatedTableDrafts(result)
+  markCreatedSourceDrafts(result)
   return result
+}
+
+/**
+ * 历史回放：建源草稿之后、下一份建源草稿之前若有「建源结果」回传，视为已确认过（成功或部分失败），
+ * 卡片只展示回传结果、不再可确认，避免刷新后重复建源。
+ */
+export function markCreatedSourceDrafts(messages: ChatMessage[]): void {
+  messages.forEach((msg, index) => {
+    if (msg.role !== 'assistant' || !msg.sourceDraft || msg.sourceDraft.status !== 'pending') return
+    for (let i = index + 1; i < messages.length; i++) {
+      const next = messages[i]
+      if (next.role === 'assistant' && next.sourceDraft) return
+      if (next.role === 'user' && isSourceCreatedMessage(next.content)) {
+        const failed = next.content.includes('未全部完成')
+        msg.sourceDraft = { ...msg.sourceDraft, status: failed ? 'failed' : 'created', resultText: next.content.trim() }
+        return
+      }
+    }
+  })
+}
+
+/** 历史回放：按「建表结果」回传消息把对应草稿标成已建（按物理表名匹配，取其后最近的一条） */
+export function markCreatedTableDrafts(messages: ChatMessage[]): void {
+  messages.forEach((msg, index) => {
+    if (msg.role !== 'assistant' || !msg.tableDraft || msg.tableDraft.status !== 'pending') return
+    // 智能体没给物理表名时由卡片按名称生成、用户还可能改过，正文草稿里没有可比对的表名：
+    // 认它之后、下一份草稿之前的第一条建表结果
+    const draftTableName = msg.tableDraft.draft.tableName.trim().toLowerCase()
+    for (let i = index + 1; i < messages.length; i++) {
+      if (!draftTableName && messages[i].role === 'assistant' && messages[i].tableDraft) return
+      const created = messages[i].role === 'user' ? parseTableCreatedMessage(messages[i].content) : null
+      if (created && (!draftTableName || created.tableName.toLowerCase() === draftTableName)) {
+        // 卡片显示真实落库的名称、物理表名与存储类型（用户可能在卡片里改过，正文草稿是改之前的）
+        const draft = {
+          ...msg.tableDraft.draft,
+          tableName: created.tableName,
+          ...(created.name ? { name: created.name } : {}),
+          ...(created.dsKind ? { dsKind: created.dsKind } : {}),
+        }
+        msg.tableDraft = { ...msg.tableDraft, draft, status: 'created', tableId: created.tableId }
+        return
+      }
+    }
+  })
+}
+
+/**
+ * 列表载荷兼容：后端信封带 count（哪怕是 null）时 client 会归一成 `{ list, total }`，
+ * 否则直接是数组或 `{ data / records }`。2026-11-19 186 后端会话列表开始带 `count: null`，
+ * 只认 data/records 时会话列表整页为空。
+ */
+function pickListPayload<T>(res: unknown): T[] {
+  if (Array.isArray(res)) return res as T[]
+  const obj = res as Record<string, unknown> | null | undefined
+  for (const key of ['list', 'data', 'records'] as const) {
+    if (Array.isArray(obj?.[key])) return obj![key] as T[]
+  }
+  return []
 }
 
 export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> {
   try {
-    const res = await request<BackendChatSession[] | { data?: BackendChatSession[]; records?: BackendChatSession[] }>(
+    const res = await request<
+      BackendChatSession[] | { data?: BackendChatSession[]; records?: BackendChatSession[]; list?: BackendChatSession[] }
+    >(
       'poc/session/list',
       userId ? { userId } : undefined,
       {
@@ -519,13 +716,7 @@ export async function listAiSessions(userId?: number): Promise<AiSessionItem[]> 
         httpEndpoint: `${POC_API_PREFIX}/session/list`,
       },
     )
-    const list: BackendChatSession[] = Array.isArray(res)
-      ? res
-      : Array.isArray((res as any)?.data)
-        ? (res as any).data
-        : Array.isArray((res as any)?.records)
-          ? (res as any).records
-          : []
+    const list = pickListPayload<BackendChatSession>(res)
     return list.map((item) => {
       const { group, updatedAt } = formatSessionGroupAndDate(item.updateTime || item.createTime)
       return {
@@ -579,7 +770,7 @@ export async function getAiChatHistoryPage(
 ): Promise<AiChatHistoryPage> {
   try {
     const res = await request<
-      BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[]; count?: number }
+      BackendChatLog[] | { data?: BackendChatLog[]; records?: BackendChatLog[]; list?: BackendChatLog[]; count?: number; total?: number }
     >(
       'poc/chat-log/history',
       {
@@ -592,14 +783,9 @@ export async function getAiChatHistoryPage(
         httpEndpoint: `${POC_API_PREFIX}/chat-log/history`,
       },
     )
-    const list: BackendChatLog[] = Array.isArray(res)
-      ? res
-      : Array.isArray((res as any)?.data)
-        ? (res as any).data
-        : Array.isArray((res as any)?.records)
-          ? (res as any).records
-          : []
-    const count = !Array.isArray(res) && typeof (res as any)?.count === 'number' ? (res as any).count : list.length
+    const list = pickListPayload<BackendChatLog>(res)
+    const rawTotal = Array.isArray(res) ? undefined : ((res as any)?.count ?? (res as any)?.total)
+    const count = typeof rawTotal === 'number' && rawTotal > 0 ? rawTotal : list.length
     return {
       messages: convertChatLogsToMessages(list),
       total: count,
@@ -637,6 +823,7 @@ export type AgentChatEvent =
   | { type: 'chunk'; text: string }
   | { type: 'reasoning'; reasoning: string }
   | { type: 'clarification'; clarification: Clarification }
+  | { type: 'table_draft'; draft: TableDraft }
   | { type: 'session_assigned'; sessionId: string; threadId: string }
   | { type: 'error'; error: string }
   | { type: 'done' }
@@ -903,6 +1090,60 @@ export function extractClarificationFromText(text: string): Clarification | null
   }
 
   return null
+}
+
+/**
+ * 表里没数据、回答里建议「换一张表」时的动作胶囊。
+ *
+ * 与澄清卡片的分工：同名表二选一仍走澄清卡片（要真实 entryTypeId 才能锁定）；
+ * 表已锁定但零行、模型列出一批可改查的表时，本质是让用户发起新一轮提问，
+ * 用追问胶囊更贴合，也不承担「文本猜表名」导致锁错表的风险。
+ * 胶囊文案只是把一句话填进输入框发送，因此这里只取展示名，不造主键。
+ */
+export interface TableSwitchSuggestion {
+  actions: string[]
+}
+
+/** 换表意图：没有这类说法时一律不认，避免把「本次用到的表」误判成建议 */
+const TABLE_SWITCH_INTENT_RE =
+  /(?:建议(?:您)?(?:换|改)|换一?张(?:有数据的)?表|换张表|换表|改查|改用|改换|另一张表|其他(?:的)?表|换个?(?:数据源|来源)|可以(?:换|改)查)/
+
+/** 物理表名特征：schema.table 或带下划线的表名；日期/金额/户型等业务值不会命中 */
+const PHYSICAL_TABLE_TOKEN_RE = /^(?:[A-Za-z0-9_]+\.[A-Za-z0-9_]+|[A-Za-z0-9_]{2,}_[A-Za-z0-9_]+)$/
+
+export function extractTableSwitchSuggestions(text: string): TableSwitchSuggestion | null {
+  if (!text || typeof text !== 'string') return null
+  if (!TABLE_SWITCH_INTENT_RE.test(text)) return null
+
+  const actions: string[] = []
+  const seen = new Set<string>()
+  for (const rawLine of text.split(/\r?\n/)) {
+    const listMatch = /^\s*(?:[-*+•]|\d+[\.、]|\(\d+\)|\d+\))\s+(.+)$/.exec(rawLine)
+    if (!listMatch) continue
+    const lineText = listMatch[1].trim()
+
+    // 只认括注/反引号里的物理表名：展示名保持原样，绝不臆造表名
+    const tokenSource = lineText.replace(/`/g, '')
+    const tokenMatch = /[（(]\s*([A-Za-z0-9_./]+)\s*[)）]/.exec(tokenSource)
+    const token = tokenMatch ? tokenMatch[1].replace(/\/.*$/, '') : ''
+    if (!token || !PHYSICAL_TABLE_TOKEN_RE.test(token)) continue
+
+    const display = lineText
+      .replace(/[（(][^)）]*[)）]/g, '')
+      .replace(/[`*]/g, '')
+      .trim()
+      .replace(/[：:。；;，,\s]+$/, '')
+    if (!display) continue
+
+    const action = `改用「${display}」继续查询`
+    if (seen.has(action)) continue
+    seen.add(action)
+    actions.push(action)
+    if (actions.length >= 4) break
+  }
+
+  if (actions.length < 2) return null
+  return { actions }
 }
 
 /**
@@ -1382,6 +1623,9 @@ export async function streamAgentChat(
           delta?.clarification ||
           (payload.type === 'clarification' ? (payload.data || payload) : null)
 
+        const structuredDraft = tableDraftFromPayload(payload) ?? tableDraftFromPayload(payload.data)
+        if (structuredDraft) onEvent({ type: 'table_draft', draft: structuredDraft })
+
         if (
           rawClarification &&
           typeof rawClarification === 'object' &&
@@ -1487,7 +1731,7 @@ export async function streamAgentChat(
  */
 export async function listRecommendedQuestions(): Promise<string[]> {
   try {
-    const res = await request<string[] | { data?: string[] } | null>(
+    const res = await request<string[] | { data?: unknown[]; list?: unknown[] } | null>(
       'poc/chat/help/question',
       undefined,
       {
@@ -1495,17 +1739,13 @@ export async function listRecommendedQuestions(): Promise<string[]> {
         httpEndpoint: `${POC_API_PREFIX}/chat/help/question`,
       },
     )
-    if (Array.isArray(res)) {
-      return res.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    }
-    if (res && Array.isArray((res as { data?: unknown[] }).data)) {
-      return (res as { data: unknown[] }).data.filter(
-        (item): item is string => typeof item === 'string' && item.trim().length > 0,
-      )
-    }
-    return []
+    // 186 实测响应是 {code, count: null, data: [...]}：带 count 键的数组 data 会被 client 按分页归一成 {list, total}
+    const items: unknown[] = Array.isArray(res) ? res : (res?.list ?? res?.data ?? [])
+    return Array.isArray(items)
+      ? items.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+      : []
   } catch (error) {
-    console.warn('[listRecommendedQuestions] 获取推荐问句失败，使用默认卡片:', error)
+    console.warn('[listRecommendedQuestions] 获取推荐问句失败，不展示推荐问题:', error)
     return []
   }
 }

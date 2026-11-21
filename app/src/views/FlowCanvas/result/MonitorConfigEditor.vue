@@ -8,7 +8,19 @@ import type { MonitorCheckConf, MonitorKind, MonitorRecordView } from '@/api/typ
 import type { ModelOption, ModelProviderOption } from '@/api/types/rule'
 import { loadMonitorRecord, saveMonitor } from '@/api/monitorCenter'
 import { checkOneManual } from '@/api/monitor'
-import { defaultDescription, defaultSystemPrompt } from '@/utils/monitor/methods'
+import { defaultSystemPrompt } from '@/utils/monitor/methods'
+import type { NodePromptTemplate } from '@/api/nodePrompts'
+import { loadMonitorPromptTemplate, monitorUserPrompt, templateSystemPrompt, type MonitorPromptInput } from './monitor-editor/promptTemplate'
+import {
+  archiveStatusText,
+  defaultMonitorDirectory,
+  defaultMonitorRepo,
+  generateMonitorScriptWithAgent,
+  loadAgentGenerationOptions,
+  loadMonitorDirectories,
+  monitorScriptPath,
+} from './monitor-editor/agentGeneration'
+import type { CodeRepository, CodeRepositoryDirectory, GeneratedCodeArchive, ModelInterface } from '@/api/runnerManagement'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import AiMethodsField from './monitor-editor/AiMethodsField.vue'
 import SourcePickerRemote from './monitor-editor/SourcePickerRemote.vue'
@@ -67,6 +79,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   saved: [record: MonitorRecordView | null]
+  /** 新建监控生成脚本前先存的草稿（拿监控 ID）：容器只刷新列表，不关编辑器 */
+  'draft-saved': [record: MonitorRecordView]
   cancel: []
 }>()
 
@@ -94,6 +108,15 @@ const recordState = ref<MonitorRecordView | null>(props.record ?? null)
 const committedForm = ref<MonitorEditorForm>({ ...emptyForm() })
 const baseline = ref(formSignature(form))
 const descTouched = ref(false)
+/**
+ * 数据监控提示词模板（节点类型 610，1117 前端修改清单 1.1）。取不到（未配置 / Runner 服务不可用）时
+ * 系统提示词与业务描述都退回内置默认，不阻断；界面提示来源。
+ */
+const promptTemplate = ref<NodePromptTemplate | null>(null)
+const promptTemplateError = ref('')
+const promptTemplateLoaded = ref(false)
+/** 系统提示词被手改过就不再跟着模板 / 表单联动覆盖 */
+const systemTouched = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const tableOptions = ref<Array<{ tableId: string; tableName: string; label: string }>>([])
@@ -171,6 +194,74 @@ async function onCopyScript(): Promise<void> {
 }
 
 const generationError = ref('')
+
+/**
+ * 智能体生成（1117 第 2 批）：生成方式 = 智能体时选智能体 / 仓库 / 目录，产物提交 Git。
+ * 选项只在切到智能体模式（或打开的记录本来就是智能体模式）时加载，内置模式不碰 Runner 服务。
+ */
+const agentOptions = ref<ModelInterface[]>([])
+const repoOptions = ref<CodeRepository[]>([])
+const directoryOptions = ref<CodeRepositoryDirectory[]>([])
+const agentOptionsError = ref('')
+const directoryError = ref('')
+const agentOptionsLoading = ref(false)
+const agentOptionsLoaded = ref(false)
+/** 本次智能体生成的归档（提交状态展示用）；保存后以 form.archiveId 为准 */
+const candidateArchive = ref<GeneratedCodeArchive | null>(null)
+let directoryRequest = 0
+
+async function loadAgentOptions(): Promise<void> {
+  if (agentOptionsLoading.value) return
+  agentOptionsLoading.value = true
+  try {
+    const result = await loadAgentGenerationOptions()
+    agentOptions.value = result.agents
+    repoOptions.value = result.repos
+    agentOptionsError.value = [result.agentError && `智能体加载失败：${result.agentError}`, result.repoError && `代码仓库加载失败：${result.repoError}`]
+      .filter(Boolean).join('；')
+    agentOptionsLoaded.value = true
+    const wasClean = formSignature(form) === baseline.value
+    if (!form.agentInterfaceId && result.agents.length) form.agentInterfaceId = result.agents[0]!.id
+    if (!form.repoId || !result.repos.some((repo) => repo.repoId === form.repoId)) form.repoId = defaultMonitorRepo(result.repos) || form.repoId
+    if (wasClean) baseline.value = formSignature(form)
+    await loadDirectories()
+  } finally {
+    agentOptionsLoading.value = false
+  }
+}
+
+async function loadDirectories(): Promise<void> {
+  const request = ++directoryRequest
+  directoryOptions.value = []
+  directoryError.value = ''
+  if (!form.repoId) return
+  try {
+    const rows = await loadMonitorDirectories(form.repoId)
+    if (request !== directoryRequest) return
+    directoryOptions.value = rows
+    const wasClean = formSignature(form) === baseline.value
+    if (!rows.some((row) => row.directoryId === form.directoryId)) form.directoryId = defaultMonitorDirectory(rows)
+    if (wasClean) baseline.value = formSignature(form)
+    if (!rows.length) directoryError.value = '该仓库没有启用的数据监控（610）目录，请先在「系统设置 → 代码仓库」配置'
+  } catch (error) {
+    if (request === directoryRequest) directoryError.value = `仓库目录加载失败：${errorText(error)}`
+  }
+}
+
+function switchGenerationMode(mode: 'builtin' | 'agent'): void {
+  if (form.generationMode === mode) return
+  form.generationMode = mode
+  if (mode === 'agent' && !agentOptionsLoaded.value) void loadAgentOptions()
+}
+
+function onRepoChange(): void {
+  form.directoryId = ''
+  void loadDirectories()
+}
+
+const archiveText = computed(() => archiveStatusText(candidateArchive.value)
+  // 已保存的智能体记录：只有归档 ID（提交详情要等后端按 archiveId 单条查询，契约 4）
+  || (form.generationMode === 'agent' && form.archiveId ? `已归档 ${form.archiveId.slice(0, 8)}` : ''))
 const testing = ref(false)
 const testResult = ref<null | {
   label: string
@@ -392,8 +483,69 @@ function applyRecord(record: MonitorRecordView): void {
   generationError.value = ''
   generatingPreview.value = ''
   syncCommitted()
+  candidateArchive.value = null
   void loadSourceContext()
+  if (form.generationMode === 'agent' && !agentOptionsLoaded.value) void loadAgentOptions()
 }
+
+function promptInput(): MonitorPromptInput {
+  return {
+    sourceId: form.sourceId,
+    sourceName: form.sourceName,
+    tableName: form.tableName,
+    timeColumn: form.timeColumn,
+    methods: [...form.methods],
+    window: descriptionWindow.value,
+    nullPolicy: form.nullPolicy,
+    noDataPolicy: form.noDataPolicy,
+  }
+}
+
+/** 按模板（没有则内置默认）算出的系统提示词 */
+function templateSystemText(): string {
+  return templateSystemPrompt(promptTemplate.value, promptInput()) ?? defaultSystemPrompt()
+}
+
+/** 新建且未手改：系统提示词跟着模板 / 表单联动。编辑已有记录保留它保存过的提示词。 */
+function syncSystemPrompt(): void {
+  if (recordState.value || systemTouched.value || form.kind !== 'ai') return
+  const next = templateSystemText()
+  if (form.systemPrompt === next) return
+  const wasClean = formSignature(form) === baseline.value
+  form.systemPrompt = next
+  // 自动填充不算用户改动，否则新建后什么都没动也会提示「未保存」
+  if (wasClean) baseline.value = formSignature(form)
+}
+
+async function loadPromptTemplate(): Promise<void> {
+  const { template, error } = await loadMonitorPromptTemplate()
+  promptTemplate.value = template
+  promptTemplateError.value = error
+  promptTemplateLoaded.value = true
+  syncSystemPrompt()
+  // 模板晚于表单就绪：业务描述还是自动填的（没手改）就按模板重算一次
+  if (!descTouched.value && form.desc.trim() && form.methods.length) {
+    const wasClean = formSignature(form) === baseline.value
+    form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
+    if (wasClean) baseline.value = formSignature(form)
+  }
+}
+
+function onSystemPromptInput(): void {
+  systemTouched.value = true
+}
+
+function restoreSystemPrompt(): void {
+  form.systemPrompt = templateSystemText()
+  systemTouched.value = false
+}
+
+const promptSourceText = computed(() => {
+  if (!promptTemplateLoaded.value) return '正在读取数据监控提示词模板…'
+  if (promptTemplate.value) return `来自节点提示词模板「${promptTemplate.value.promptName || promptTemplate.value.promptId}」`
+  if (promptTemplateError.value) return `提示词模板读取失败（${promptTemplateError.value}），使用内置默认`
+  return '未配置数据监控（610）提示词模板，使用内置默认'
+})
 
 function initialize(): void {
   const record = props.record
@@ -409,6 +561,8 @@ function initialize(): void {
     void loadSourceContext()
   }
   void loadModels()
+  void loadPromptTemplate()
+  if (form.generationMode === 'agent' && !agentOptionsLoaded.value) void loadAgentOptions()
 }
 
 onMounted(initialize)
@@ -431,15 +585,15 @@ watch(
     if (descTouched.value) return
     if (form.desc.trim()) return
     if (!form.methods.length) return
-    form.desc = defaultDescription({
-      sourceName: form.sourceName,
-      tableName: form.tableName,
-      methods: [...form.methods],
-      window: descriptionWindow.value,
-      nullPolicy: form.nullPolicy,
-      noDataPolicy: form.noDataPolicy,
-    })
+    form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
   },
+  { deep: true },
+)
+
+// 系统提示词里的变量（表名、时间列、检查方法…）随表单联动，仅新建且未手改时
+watch(
+  () => [form.methods.slice(), form.tableName, form.sourceName, form.sourceId, form.timeColumn, descriptionWindow.value],
+  () => syncSystemPrompt(),
   { deep: true },
 )
 
@@ -654,14 +808,7 @@ function fillDescription(): void {
     ElMessage.info('业务描述已有内容，未自动覆盖')
     return
   }
-  form.desc = defaultDescription({
-    sourceName: form.sourceName,
-    tableName: form.tableName,
-    methods: [...form.methods],
-    window: descriptionWindow.value,
-    nullPolicy: form.nullPolicy,
-    noDataPolicy: form.noDataPolicy,
-  })
+  form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
 }
 
 function switchKind(kind: MonitorKind): void {
@@ -671,6 +818,67 @@ function switchKind(kind: MonitorKind): void {
   if (kind === 'rule' && !form.schedule.trim()) form.schedule = DEFAULT_SCHEDULE
   if (kind === 'ai' && !form.methods.length && form.desc.trim()) {
     ElMessage.info('已切换到 AI 检查：还需要勾选监控方法')
+  }
+}
+
+/**
+ * 脚本按监控 ID 命名（1117 契约 3：<仓库目录>/<sourceId>/<监控ID>.py），新建监控还没有 ID。
+ * 生成前先按草稿保存（无脚本 = 草稿，不执行），回读拿到 ID 再继续；用户取消则不生成。
+ */
+const monitorId = computed(() => recordState.value?.id ? String(recordState.value.id) : '')
+const selectedDirectory = computed(() => directoryOptions.value.find((row) => row.directoryId === form.directoryId))
+/** 只在智能体模式有意义；目录取所选的数据监控目录（2806 上是 dataMonitor，不写死 monitor） */
+const targetScriptPath = computed(() =>
+  monitorScriptPath(selectedDirectory.value?.path ?? '', form.sourceId.trim(), monitorId.value))
+const targetPathHint = computed(() => {
+  if (!monitorId.value) return '新建监控生成前先保存草稿，拿到监控 ID 后确定'
+  if (!form.directoryId) return '请先选择仓库目录'
+  return '目录信息加载中…'
+})
+
+async function ensureMonitorId(): Promise<boolean> {
+  if (monitorId.value) return true
+  const invalid = validateForm(form)
+  if (invalid) {
+    activeTab.value = invalid.key === 'methods' || invalid.key === 'overdue' ? 'check' : 'basic'
+    ElMessage.warning(invalid.message)
+    return false
+  }
+  try {
+    await ElMessageBox.confirm(
+      '脚本要按监控 ID 命名，新建监控需要先保存为草稿（没有脚本，不会执行），保存后继续生成。',
+      '先保存草稿',
+      { type: 'info', confirmButtonText: '保存草稿并生成', cancelButtonText: '取消' },
+    )
+  } catch {
+    return false
+  }
+  saving.value = true
+  try {
+    const conf = confFromForm(form, {}, {})
+    const saved = await saveMonitor({
+      record: undefined,
+      sourceId: form.sourceId.trim(),
+      name: form.name.trim(),
+      kind: form.kind,
+      conf,
+      tableName: form.tableName.trim(),
+      schedule: form.schedule.trim(),
+    })
+    const readback = await readbackAfterSave(saved.raw)
+    if (!readback?.id) {
+      ElMessage.warning('草稿已提交，但没回读到监控 ID：请刷新列表后在该草稿上继续生成')
+      return false
+    }
+    applyRecord(readback)
+    emit('draft-saved', readback)
+    ElMessage.success(`已保存草稿（监控 ID ${readback.id}），继续生成脚本`)
+    return true
+  } catch (error) {
+    ElMessage.error(`保存草稿失败：${errorText(error)}`)
+    return false
+  } finally {
+    saving.value = false
   }
 }
 
@@ -690,18 +898,25 @@ async function onGenerate(): Promise<void> {
     ElMessage.warning('请先填写业务描述')
     return
   }
-  if (!form.providerCode || !form.modelCode) {
+  if (form.generationMode === 'agent') {
+    if (!form.agentInterfaceId || !form.repoId || !form.directoryId) {
+      activeTab.value = 'check'
+      ElMessage.warning('请先选择智能体、代码仓库和仓库目录')
+      return
+    }
+  } else if (!form.providerCode || !form.modelCode) {
     activeTab.value = 'check'
     ElMessage.warning('请先选择模型供应商与模型')
     return
   }
+  if (!(await ensureMonitorId())) return
   generating.value = true
   generationError.value = ''
   generatingPreview.value = ''
   generatingThinking.value = ''
   scriptExpanded.value = false
   startElapsedTimer()
-  const previous = { script: candidate.script, scriptPath: candidate.scriptPath }
+  const previous = { script: candidate.script, scriptPath: candidate.scriptPath, archive: candidateArchive.value, archiveId: form.archiveId }
   try {
     // 源结果检查只读本条检查选定的表：不读源流程、不借任何监控节点的 configId/输入表
     const tableId = tableOptions.value.find((table) => table.tableName === form.tableName)?.tableId ?? ''
@@ -710,29 +925,56 @@ async function onGenerate(): Promise<void> {
     if (!form.timeColumn || !fields.includes(form.timeColumn)) {
       throw new Error(`请选择当前表实际存在的入库时间字段（当前：${form.timeColumn || '未选择'}），然后重新生成脚本`)
     }
-    const context = await resolveSourceResultContext({ tableName: form.tableName, tableId })
-    const result = await generateMonitorScript({
-      context,
-      description: form.desc,
-      methods: [...form.methods],
-      // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底；
-      // 再追加主表真实字段与入库时间列，避免模型自己发明列名（实测失败原因之一）
-      systemPrompt: augmentMonitorSystemPrompt(
-        form.systemPrompt.trim() || defaultSystemPrompt(),
-        fields,
-        form.timeColumn,
-      ),
-      providerCode: form.providerCode,
-      modelCode: form.modelCode,
-      onContent: (scriptSoFar) => {
-        generatingPreview.value = scriptSoFar
-        void scrollStreamToEnd()
-      },
-      onThinking: (text) => {
-        generatingThinking.value = appendThinking(generatingThinking.value, text)
-        void scrollStreamToEnd()
-      },
-    })
+    // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底；
+    // 再追加主表真实字段与入库时间列，避免模型自己发明列名（实测失败原因之一）
+    const systemPrompt = augmentMonitorSystemPrompt(
+      form.systemPrompt.trim() || defaultSystemPrompt(),
+      fields,
+      form.timeColumn,
+    )
+    let result: { script: string; scriptPath: string }
+    if (form.generationMode === 'agent') {
+      // 智能体生成：任务方式，产物提交 Git <仓库目录>/<sourceId>/<监控ID>.py（依赖后端监控上下文，契约 7）
+      const agentResult = await generateMonitorScriptWithAgent({
+        sourceId: form.sourceId.trim(),
+        monitorId: monitorId.value,
+        sourceName: form.sourceName,
+        monitorName: form.name.trim(),
+        interfaceId: form.agentInterfaceId,
+        repoId: form.repoId,
+        directoryId: form.directoryId,
+        directoryPath: selectedDirectory.value?.path,
+        systemPrompt,
+        userPrompt: form.desc,
+        onEvent: (event) => {
+          if (event.type === 'chunk') generatingPreview.value += event.text
+          else if (event.type === 'progress') generatingThinking.value = appendThinking(generatingThinking.value, `${event.message}\n`)
+          else return
+          void scrollStreamToEnd()
+        },
+      })
+      candidateArchive.value = agentResult.archive
+      form.archiveId = agentResult.archive?.archiveId ?? ''
+      result = agentResult
+    } else {
+      const context = await resolveSourceResultContext({ tableName: form.tableName, tableId })
+      result = await generateMonitorScript({
+        context,
+        description: form.desc,
+        methods: [...form.methods],
+        systemPrompt,
+        providerCode: form.providerCode,
+        modelCode: form.modelCode,
+        onContent: (scriptSoFar) => {
+          generatingPreview.value = scriptSoFar
+          void scrollStreamToEnd()
+        },
+        onThinking: (text) => {
+          generatingThinking.value = appendThinking(generatingThinking.value, text)
+          void scrollStreamToEnd()
+        },
+      })
+    }
     if (!result.script.trim() && !result.scriptPath.trim()) {
       throw new Error('生成完成但没有返回脚本正文或文件路径')
     }
@@ -746,9 +988,14 @@ async function onGenerate(): Promise<void> {
     // 失败保留原正文：不吃掉已有的生效脚本/上一次候选，也不落库
     candidate.script = previous.script
     candidate.scriptPath = previous.scriptPath
+    candidateArchive.value = previous.archive
+    form.archiveId = previous.archiveId
     pending.value = !!previous.script || !!previous.scriptPath
     if (!pending.value) candidateScope.value = null
     generationError.value = errorText(error)
+    if (form.generationMode === 'agent') {
+      generationError.value += '（智能体生成依赖后端「监控上下文」支持，未上线前可切回「内置接口」生成）'
+    }
     ElMessage.error(`生成脚本失败：${generationError.value}`)
   } finally {
     stopElapsedTimer()
@@ -909,7 +1156,8 @@ async function onSave(): Promise<void> {
     const regenerate = needsRegenerate(form, committedForm.value)
     const regenerateReasonsOf = regenerate ? regenerateReasons(form, committedForm.value) : []
     const conf = confFromForm(form, baseConf, {
-      script: generated ? candidate.script : undefined,
+      // 智能体模式脚本只在 Git（执行从 Git 取），不存正文；内置接口仍按原样存正文
+      script: generated && form.generationMode !== 'agent' ? candidate.script : undefined,
       scriptPath: generated ? candidate.scriptPath : undefined,
     })
     if (form.kind === 'ai') conf.version = savedVersion || undefined
@@ -1120,7 +1368,7 @@ defineExpose({
             <div class="mc-col">
               <section class="mc-pane">
                 <div class="mc-pane-head">
-                  <h4>业务描述 <em>*</em></h4>
+                  <h4>业务描述 <em>*</em><small class="mc-h4-note">（用户提示词）</small></h4>
                   <button type="button" class="mc-mini" data-testid="mc-desc-template" @click="fillDescription">按模板填充</button>
                 </div>
                 <textarea
@@ -1251,7 +1499,59 @@ defineExpose({
                 <p class="mc-hint" data-testid="mc-overdue-hint">
                   按「距上次有新增数据过了多久」判断流：超过更新周期 + 宽限仍没有新增，判为超期异常（窗口内没数据不再一律按「无待检记录」放过）。留空只按上面的「本次无待检记录时」处理，不判超期。
                 </p>
-                <div class="mc-grid">
+                <!-- 1117 第 2 批：生成方式。内置接口 = 现有 data-process（供应商 + 模型，脚本存文件服务）；
+                     智能体 = Runner 智能体 + Git 仓库目录（依赖后端监控上下文，未上线前生成会被后端拒绝）。 -->
+                <div class="mc-field">
+                  <label class="mc-label">生成方式</label>
+                  <div class="mc-segment" role="radiogroup" aria-label="生成方式">
+                    <button
+                      type="button"
+                      role="radio"
+                      class="mc-segment-item"
+                      :class="{ active: form.generationMode === 'agent' }"
+                      :aria-checked="form.generationMode === 'agent'"
+                      data-testid="mc-gen-agent"
+                      @click="switchGenerationMode('agent')"
+                    >智能体 · 提交 Git</button>
+                    <button
+                      type="button"
+                      role="radio"
+                      class="mc-segment-item"
+                      :class="{ active: form.generationMode === 'builtin' }"
+                      :aria-checked="form.generationMode === 'builtin'"
+                      data-testid="mc-gen-builtin"
+                      @click="switchGenerationMode('builtin')"
+                    >内置接口</button>
+                  </div>
+                </div>
+                <template v-if="form.generationMode === 'agent'">
+                  <div class="mc-field">
+                    <label class="mc-label" for="mc-agent">智能体</label>
+                    <select id="mc-agent" v-model="form.agentInterfaceId" class="mc-input" data-testid="mc-agent" :disabled="agentOptionsLoading">
+                      <option value="">{{ agentOptionsLoading ? '加载中…' : '请选择' }}</option>
+                      <option v-for="agent in agentOptions" :key="agent.id" :value="agent.id">{{ agent.name }}{{ agent.model ? ` · ${agent.model}` : '' }}</option>
+                    </select>
+                  </div>
+                  <div class="mc-grid">
+                    <div class="mc-field">
+                      <label class="mc-label" for="mc-repo">代码仓库</label>
+                      <select id="mc-repo" v-model="form.repoId" class="mc-input" data-testid="mc-repo" :disabled="agentOptionsLoading" @change="onRepoChange">
+                        <option value="">请选择</option>
+                        <option v-for="repo in repoOptions" :key="repo.repoId" :value="repo.repoId">{{ repo.name }}{{ repo.configType ? ' · 数据监控' : ' · 通用' }}</option>
+                      </select>
+                    </div>
+                    <div class="mc-field">
+                      <label class="mc-label" for="mc-directory">仓库目录</label>
+                      <select id="mc-directory" v-model="form.directoryId" class="mc-input" data-testid="mc-directory" :disabled="!form.repoId">
+                        <option value="">请选择</option>
+                        <option v-for="row in directoryOptions" :key="row.directoryId" :value="row.directoryId">{{ row.name }}（{{ row.path }}/）</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p v-if="agentOptionsError || directoryError" class="mc-hint mc-hint-error" data-testid="mc-agent-error">{{ [agentOptionsError, directoryError].filter(Boolean).join('；') }}</p>
+                  <p class="mc-hint">默认方式。文件名与子目录固定为 <code>&lt;源ID&gt;/&lt;监控ID&gt;.py</code>，生成后自动提交 Git；后端支持监控上下文之前生成会失败，可临时切到「内置接口」。</p>
+                </template>
+                <div v-else class="mc-grid">
                   <div class="mc-field">
                     <label class="mc-label" for="mc-provider">模型供应商</label>
                     <select id="mc-provider" v-model="form.providerCode" class="mc-input" data-testid="mc-provider" @change="onProviderChange">
@@ -1272,7 +1572,10 @@ defineExpose({
                   </div>
                 </div>
                 <div class="mc-field">
-                  <label class="mc-label" for="mc-system-prompt">系统提示词</label>
+                  <div class="mc-label-row">
+                    <label class="mc-label" for="mc-system-prompt">系统提示词</label>
+                    <button type="button" class="mc-mini" data-testid="mc-system-prompt-restore" @click="restoreSystemPrompt">恢复模板</button>
+                  </div>
                   <textarea
                     id="mc-system-prompt"
                     v-model="form.systemPrompt"
@@ -1280,7 +1583,9 @@ defineExpose({
                     rows="3"
                     placeholder="留空则使用默认提示词"
                     data-testid="mc-system-prompt"
+                    @input="onSystemPromptInput"
                   />
+                  <p class="mc-hint" data-testid="mc-prompt-source">{{ promptSourceText }}</p>
                 </div>
                 <p class="mc-hint">生成与测试不改变生效版本；保存即生效。</p>
               </section>
@@ -1293,6 +1598,11 @@ defineExpose({
               <div class="mc-script-title">
                 <h4>脚本</h4>
                 <p class="mc-hint" data-testid="mc-script-version">{{ versionText }}</p>
+                <!-- 1117 契约 3：脚本按 <仓库目录>/<sourceId>/<监控ID>.py 存 Git；只在智能体模式显示（内置接口存文件服务） -->
+                <p v-if="form.kind === 'ai' && form.generationMode === 'agent'" class="mc-hint mc-target-path" data-testid="mc-target-path" :title="targetScriptPath || undefined">
+                  Git 目标路径：<code v-if="targetScriptPath">{{ targetScriptPath }}</code><template v-else>{{ targetPathHint }}</template>
+                </p>
+                <p v-if="form.kind === 'ai' && archiveText" class="mc-hint" data-testid="mc-archive-status">Git：{{ archiveText }}</p>
               </div>
               <span v-if="hasAnyScript" class="mc-badge" :class="pending ? 'mc-badge-warn' : 'mc-badge-ok'">{{ pending ? '待保存' : '已生效' }}</span>
 
@@ -1732,6 +2042,11 @@ defineExpose({
 .mc-quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .mc-btn, .mc-mini { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-surface); color: var(--rc-text-2); font: inherit; cursor: pointer; white-space: nowrap; }
 .mc-mini { height: 25px; padding: 0 9px; font-size: 11px; }
+.mc-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.mc-label-row .mc-label { margin-bottom: 0; }
+.mc-target-path code { font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-text-2); word-break: break-all; }
+.mc-hint-error { color: var(--rc-danger, #b91c1c); }
+.mc-h4-note { margin-left: 4px; color: var(--rc-faint); font-size: 11px; font-weight: 400; }
 .mc-btn:hover:not(:disabled), .mc-mini:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary); }
 .mc-btn-primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; font-weight: 600; }
 .mc-btn-primary:hover:not(:disabled) { background: var(--rc-primary-ink); color: #fff; }

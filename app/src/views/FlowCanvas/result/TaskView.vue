@@ -24,11 +24,27 @@ import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/
 import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
 import { taskDataId } from './taskIds'
+import { parseTaskResult, TASK_RESULT_STATUS_TEXT } from '@/utils/flow/taskResult'
 import TaskExecutionResourceCell from './TaskExecutionResourceCell.vue'
 import { useTaskExecutions } from './useTaskExecutions'
 
 function taskResultPreview(task: TaskInst): string {
   return task.taskResult?.trim() || (task.state === 'L' ? '执行中，结果尚未返回' : '后端未返回执行结果')
+}
+
+// 1117 会议：执行结果显示「结果状态」，失败且有错误消息时同格展示消息；原文留在悬停提示和详情抽屉里。
+function resultStatusText(task: TaskInst): string {
+  const summary = parseTaskResult(task.taskResult)
+  if (!summary.raw) return task.state === 'L' ? '执行中' : '—'
+  return TASK_RESULT_STATUS_TEXT[summary.status]
+}
+function resultStatusClass(task: TaskInst): string {
+  const { status, raw } = parseTaskResult(task.taskResult)
+  if (!raw) return task.state === 'L' ? 'run' : 'muted'
+  return status === 'success' ? 'ok' : status === 'failed' ? 'err' : 'muted'
+}
+function resultMessage(task: TaskInst): string {
+  return parseTaskResult(task.taskResult).message
 }
 
 // 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
@@ -898,9 +914,10 @@ const nextStepHints = computed(() => {
                   class="tv-result-summary"
                   type="button"
                   data-testid="task-result-summary"
+                  :title="taskResultPreview(task)"
                   :aria-label="`查看任务 ${task.taskId} 的执行结果：${taskResultPreview(task)}`"
                   @click.stop="openDetail(task)"
-                >{{ taskResultPreview(task) }}</button>
+                ><template v-if="task.taskResult?.trim()"><span class="tv-result-status" :class="`is-${resultStatusClass(task)}`" data-testid="task-result-status">{{ resultStatusText(task) }}</span><span v-if="resultMessage(task)" class="tv-result-msg">{{ resultMessage(task) }}</span></template><span v-else class="tv-result-empty">{{ taskResultPreview(task) }}</span></button>
                 <div class="tv-sub">
                   数据 ID
                   <a
@@ -955,7 +972,7 @@ const nextStepHints = computed(() => {
             <col style="width: 180px" />
             <col style="width: 80px" />
             <col style="width: 80px" />
-            <col style="width: 220px" />
+<col style="width: 200px" />
             <col style="width: 170px" />
             <col style="width: 140px" />
             <col style="width: 110px" />
@@ -1050,13 +1067,16 @@ const nextStepHints = computed(() => {
                 </span>
               </td>
               <td class="tv-result-cell" data-testid="task-result-cell">
+                <span class="tv-result-status" :class="`is-${resultStatusClass(task)}`" data-testid="task-result-status" :title="taskResultPreview(task)">{{ resultStatusText(task) }}</span>
                 <button
+                  v-if="resultMessage(task)"
                   class="tv-result-summary"
                   type="button"
                   data-testid="task-result-summary"
+                  :title="taskResultPreview(task)"
                   :aria-label="`查看任务 ${task.taskId} 的执行结果：${taskResultPreview(task)}`"
                   @click="openDetail(task)"
-                >{{ taskResultPreview(task) }}</button>
+                >{{ resultMessage(task) }}</button>
               </td>
               <td><TaskExecutionResourceCell :task-id="task.taskId" :state="task.state" :items="taskExecutions[task.taskId]" :loading="executionsLoading" :error="executionsError" /></td>
               <td class="tv-time">{{ task.createdAt || '—' }}</td>
@@ -1190,8 +1210,15 @@ const nextStepHints = computed(() => {
 }
 .tv-result-summary:hover { text-decoration: underline; }
 .tv-result-summary:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 2px; }
-.tv-result-cell { min-width: 220px; max-width: 220px; }
-.tv-result-cell .tv-result-summary { margin-top: 0; }
+.tv-result-cell { min-width: 200px; max-width: 200px; }
+.tv-result-status { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; line-height: 18px; white-space: nowrap; }
+.tv-result-status.is-ok { color: var(--rc-success, #15803d); background: var(--rc-success-soft, #dcfce7); }
+.tv-result-status.is-err { color: var(--rc-danger, #b91c1c); background: var(--rc-danger-soft, #fee2e2); }
+.tv-result-status.is-run { color: var(--rc-primary); background: var(--rc-primary-soft, #e0e7ff); }
+.tv-result-status.is-muted { color: var(--rc-faint); background: transparent; padding: 0; }
+.tv-result-msg { margin-left: 4px; color: var(--rc-danger, #b91c1c); }
+.tv-result-empty { color: var(--rc-faint); }
+.tv-result-cell .tv-result-summary { margin-top: 2px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }

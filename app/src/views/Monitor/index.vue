@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { Component } from 'vue'
+import { computed, type Component } from 'vue'
+import { useRoute } from 'vue-router'
 import { useDynamicTabs } from '@/composables/useDynamicTabs'
 import SourceCheck from './sourceCheck/index.vue'
 import SourceIssuesView from './sourceIssues/SourceIssuesView.vue'
@@ -34,6 +35,22 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
   fallbackTabs,
   path: '/monitor',
 })
+
+const route = useRoute()
+/**
+ * 带 sourceId/siteId 进入监控中心时，把定位参数透给「数据源监控」页。
+ * 该页组件声明了 sourceId/siteId props 并按源/站过滤，但 <component :is> 不会自动
+ * 把 route.query 传成 props，所以在这里显式绑定（工作台告警行等入口依赖它）。
+ */
+const focusProps = computed(() => {
+  const props: Record<string, string> = {}
+  if (activeTab.value?.key !== 'sourceCheck') return props
+  const sourceId = typeof route.query.sourceId === 'string' ? route.query.sourceId : ''
+  const siteId = typeof route.query.siteId === 'string' ? route.query.siteId : ''
+  if (sourceId) props.sourceId = sourceId
+  else if (siteId) props.siteId = siteId
+  return props
+})
 </script>
 
 <template>
@@ -52,7 +69,7 @@ const { tabs, activeTab, currentComponent, selectTab } = useDynamicTabs({
   </div>
 
   <transition name="fade-slide" mode="out-in">
-    <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" />
+    <component :is="currentComponent" v-if="currentComponent" :key="activeTab?.key" v-bind="focusProps" />
     <el-empty
       v-else
       description="该页签暂未找到对应组件，请检查「菜单配置 → 页内 Tab」里配的组件文件路径"

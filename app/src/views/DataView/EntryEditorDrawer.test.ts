@@ -355,14 +355,16 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect((body().find('select[data-testid="entry-ds-kind"]').element as HTMLSelectElement).value).toBe('MYSQL')
   })
 
-  it('编辑态：数据源类型、读写类型、存储引擎可自由编辑修改并提交保存', async () => {
+  // 1117 后端核对：编辑时改 dsKind 只改标记、不建物理表，所以编辑态数据源类型只读；
+  // 读写类型、存储引擎等存储设置仍可改（默认收起，展开后编辑）。
+  it('编辑态：数据源类型只读，存储设置展开后可改并提交保存', async () => {
     const entry: EntryType = {
       tableId: 't1',
       tableName: 'tb_a',
       name: '表A',
-      dsKind: 'MYSQL',
+      dsKind: 'CK',
       opType: 'wr',
-      storageEngine: 'InnoDB',
+      storageEngine: 'ReplacingMergeTree',
       fields: [
         { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
       ],
@@ -370,24 +372,19 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: 't1' })
     await mountEditor(entry)
     const dsSel = body().find('select[data-testid="entry-ds-kind"]')
+    expect((dsSel.element as HTMLSelectElement).disabled).toBe(true)
+    expect(body().find('[data-testid="entry-ds-kind-hint"]').text()).toContain('同步表')
+
+    // 存储设置默认收起，只显示摘要
+    expect(body().find('select[data-testid="entry-storage-engine"]').exists()).toBe(false)
+    expect(body().find('[data-testid="entry-storage-summary"]').text()).toBe('读写 · ReplacingMergeTree · ORDER BY ENTRY_ID')
+
+    await body().find('[data-testid="entry-storage-toggle"]').trigger('click')
     const opSel = body().find('select[data-testid="entry-op-type"]')
     const engineSel = body().find('select[data-testid="entry-storage-engine"]')
-
-    // 均可编辑（非 disabled）
-    expect((dsSel.element as HTMLSelectElement).disabled).toBe(false)
     expect((opSel.element as HTMLSelectElement).disabled).toBe(false)
     expect((engineSel.element as HTMLSelectElement).disabled).toBe(false)
-
-    // 修改为 CK
-    await dsSel.setValue('CK')
-    await flushPromises()
-
-    const ckEngineSel = body().find('select[data-testid="entry-storage-engine"]')
-    expect((ckEngineSel.element as HTMLSelectElement).value).toBe('ReplacingMergeTree')
-    expect((ckEngineSel.element as HTMLSelectElement).disabled).toBe(false)
-
-    // 修改存储引擎为 MergeTree，读写类型为 r
-    await ckEngineSel.setValue('MergeTree')
+    await engineSel.setValue('MergeTree')
     await opSel.setValue('r')
     await flushPromises()
 
@@ -401,6 +398,18 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
       storageEngine: 'MergeTree',
       sorted: 'ENTRY_ID',
     }))
+  })
+
+  it('新建态：数据源类型可选，选 CK 提示只在 ClickHouse 建表', async () => {
+    await mountEditor(null)
+    const dsSel = body().find('select[data-testid="entry-ds-kind"]')
+    expect((dsSel.element as HTMLSelectElement).disabled).toBe(false)
+    expect(body().find('[data-testid="entry-ds-kind-hint"]').exists()).toBe(false)
+    expect(body().find('[data-testid="entry-storage-summary"]').text()).toBe('读写 · InnoDB')
+    await dsSel.setValue('CK')
+    await flushPromises()
+    expect(body().text()).toContain('保存时在 ClickHouse 建物理表，不建 MySQL 表。')
+    expect(body().find('[data-testid="entry-storage-summary"]').text()).toBe('读写 · ReplacingMergeTree · ORDER BY ENTRY_ID')
   })
 
   it('编辑保存时原样保留已有表的 dsKind、opType、storageEngine', async () => {
@@ -432,6 +441,7 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
 
   it('新建表选择 CK 时读写类型默认为 wr（读写均走 CK 库）', async () => {
     await mountEditor(null)
+    await body().find('[data-testid="entry-storage-toggle"]').trigger('click')
     const dsSel = body().find('select[data-testid="entry-ds-kind"]')
     const opSel = body().find('select[data-testid="entry-op-type"]')
     expect((opSel.element as HTMLSelectElement).value).toBe('wr')

@@ -736,6 +736,12 @@ export const runnerManagementApi = {
     const result = await request<{ list: unknown[]; total: number }>('/code-generation/tasks?' + params)
     return { list: result.list.map(taskInstFromLegacy), total: result.total }
   },
+  /**
+   * 数据监控生成任务（1117 契约 7，**待后端支持**）：监控不是流程节点，没有 flowId / stepId / configId，
+   * 用 sourceId + monitorId 定位，产物落 `monitor/<sourceId>/<monitorId>.py`。
+   * 与节点任务同一个端点；后端未支持前会按缺少流程字段拒绝，调用方把原因透给用户。
+   */
+  createMonitorGenerationTask: (body: { sourceId: string; monitorId: string; configType: string; sourceName?: string; monitorName?: string; generation?: Record<string, unknown> }) => request<{ job: MqCodeJob }>('/code-generation/tasks', 'POST', body),
   createCodeGenerationTask: (body: { sourceId: string; flowId: string; stepId: string; configId: string; sourceName?: string; nodeName?: string; flowVersionId?: string; entryIds?: string[]; generation?: Record<string, unknown> }) => request<{ job: MqCodeJob }>('/code-generation/tasks', 'POST', body),
   prepareCodeRegeneration: (taskId: string) => request<{ taskId: string; generation: Record<string, string>; context: Record<string, string>; continuation?: { mode: 'context'; hasPreviousCode: boolean; turns: { taskId: string; attempt: number; user: string; assistant: string; status: string }[] }; nodePromptRevision: string; canUpdateNode: boolean }>(`/code-generation/tasks/regeneration?taskId=${encodeURIComponent(taskId)}`),
   regenerateCodeTask: (body: { taskId: string; requestId: string; systemPrompt: string; userPrompt: string; correction: string; interfaceId: string; updateNodePrompts: boolean; nodePromptRevision: string }) => request<{ job: MqCodeJob }>('/code-generation/tasks/regeneration', 'POST', body),

@@ -963,7 +963,9 @@ export const LIB_GROUPS: LibGroup[] = [
       // 「数据监控」是源列表的行内菜单项（跳去独立监控中心看某个源的数据），跟这里同名但不是一回事。
       // 编号 2026-09-17 按后端字典订正：610 数据监控 / 620 数据校验（此前误挂 700/800，
       // 而 700 现在是「视频提取音频」）。
-      { template: 'monitor', code: '610', name: '数据监控', desc: '按规则组、表达式监测数据，命中即标记异常', pill: 'p1' as Pill },
+      // 1117 会议：数据监控**不做成流程节点**，在源的监控页 / 监控中心独立管理；添加选单里隐藏，
+      // 定义保留——已有的监控节点照常显示与只读兼容（名称、种子映射都还靠这一条）。
+      { template: 'monitor', code: '610', name: '数据监控', desc: '按规则组、表达式监测数据，命中即标记异常', pill: 'p1' as Pill, hiddenInPicker: true },
       { template: 'data-validation', code: '620', name: '数据校验', desc: '按规则组、表达式校验数据质量', pill: 'p1' as Pill },
     ]
   },

@@ -47,6 +47,18 @@ function meta(overrides: Partial<DataTableMeta> = {}): DataTableMeta {
 }
 
 describe('TableDetailDialog', () => {
+  it('1117：库类型和其余字段一样纯文本（MYSQL / CK），老记录没有 dsKind 按 MYSQL', async () => {
+    mountDialog(meta({ dsKind: 'CK' }))
+    await settle()
+    const kind = document.body.querySelector('[data-testid="table-detail-ds-kind"]')
+    expect(kind?.textContent?.trim()).toBe('CK')
+    expect(kind?.querySelector('[data-testid="storage-kind-tag"]')).toBeNull()
+    document.body.innerHTML = ''
+    mountDialog(meta())
+    await settle()
+    expect(document.body.querySelector('[data-testid="table-detail-ds-kind"]')?.textContent?.trim()).toBe('MYSQL')
+  })
+
   it('字段列表列对齐老平台：排序/ID/编码/展示名/数据库列/类型/校验/列宽/预处理', async () => {
     const wrapper = mountDialog(meta())
     await settle()

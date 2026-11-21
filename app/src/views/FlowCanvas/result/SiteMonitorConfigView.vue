@@ -197,6 +197,7 @@ function onCancel() {
         :record="editing"
         :source-locked="true"
         @saved="onSaved"
+        @draft-saved="(record) => emit('saved', record)"
         @cancel="onCancel"
       />
     </el-dialog>

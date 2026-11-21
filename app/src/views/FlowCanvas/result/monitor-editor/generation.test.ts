@@ -19,6 +19,7 @@ import {
   augmentMonitorSystemPrompt,
   resolveMonitorTableFields,
   resolveSourceResultContext,
+  summarizeExecutionResult,
 } from './generation'
 
 const ENTRY = {
@@ -143,5 +144,20 @@ describe('augmentMonitorSystemPrompt 提示词注入真实列', () => {
     const prompt = augmentMonitorSystemPrompt('基础提示词')
     expect(prompt).toContain('列别名同样必须反引号包裹')
     expect(prompt).toContain('delayed')
+  })
+})
+
+// 1117 前端修改清单 1.5：测试回执里执行端格式（IsSuccess / ErrorMessage）与任务列表同一套解析
+describe('summarizeExecutionResult', () => {
+  it.each([
+    [{ IsSuccess: 'false', StrTaskId: '1', ErrorMessage: '表不存在' }, '执行失败；表不存在'],
+    [{ IsSuccess: 'true', StrTaskId: '1', ErrorMessage: '-' }, '执行成功'],
+    [{ success: false, message: '超时' }, '执行失败；超时'],
+    [{ ok: true }, '执行成功'],
+    [{ message: '只有说明' }, '只有说明'],
+    [{ status: 'ABNORMAL', message: '异常 3 条' }, '异常 3 条'],
+    [null, '执行完成，未返回结构化结果'],
+  ])('%j → %s', (raw, expected) => {
+    expect(summarizeExecutionResult(raw)).toBe(expected)
   })
 })

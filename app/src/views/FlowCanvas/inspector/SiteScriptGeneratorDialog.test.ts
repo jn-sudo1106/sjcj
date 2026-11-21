@@ -1301,3 +1301,29 @@ it('已有版本读取失败时显示错误并允许重新生成', async () => {
   expect((wrapper.get('[data-testid="site-script-generate"]').element as HTMLButtonElement).disabled).toBe(false)
   wrapper.unmount()
 })
+
+// 1117：规则处理节点复用本弹窗；没有节点提示词模板时用调用方给的规则脚本口径，不用网页抓取 scrape(url) 口径
+it('传入兜底提示词时，无模板的默认系统 / 用户提示词与「恢复默认」都用兜底', async () => {
+  const wrapper = await mountDialog({ configType: '600', initialPrompt: '', fallbackSystemPrompt: '规则系统：入口 main', fallbackUserPrompt: '规则用户：入参 a 出参 b' })
+  await flushPromises()
+  expect((wrapper.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe('规则系统：入口 main')
+  expect((wrapper.get('[data-testid="site-script-prompt"]').element as HTMLTextAreaElement).value).toContain('规则用户：入参 a 出参 b')
+  await wrapper.get('[data-testid="site-script-system-prompt"]').setValue('临时改动')
+  await wrapper.get('[data-testid="site-script-reset-system-prompt"]').trigger('click')
+  expect((wrapper.get('[data-testid="site-script-system-prompt"]').element as HTMLTextAreaElement).value).toBe('规则系统：入口 main')
+  wrapper.unmount()
+})
+
+// 1118：Runner 服务不可用时各项同因报错，合并成一条提示，不再逐条铺满面板
+it('同一原因的加载失败合并成一条；不同原因分别显示', async () => {
+  vi.mocked(runnerManagementApi.modelInterfaces).mockRejectedValue(new Error('认证服务不可用'))
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockRejectedValue(new Error('认证服务不可用'))
+  const wrapper = await mountDialog(); await flushPromises()
+  const lines = wrapper.get('[data-testid="site-script-load-errors"]').findAll('p').map(p => p.text())
+  const merged = lines.filter(line => line.endsWith('认证服务不可用'))
+  expect(merged).toHaveLength(1)
+  expect(merged[0]).toContain('目录')
+  expect(merged[0]).toContain('智能体接口')
+  expect(merged[0]).toContain('加载失败：认证服务不可用')
+  wrapper.unmount()
+})

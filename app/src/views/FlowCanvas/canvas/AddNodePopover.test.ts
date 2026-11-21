@@ -16,6 +16,15 @@ describe('AddNodePopover', () => {
     const names = wrapper.findAll('.anp-item-text b').map((item) => item.text())
     expect(names).toEqual(expect.arrayContaining(['网页抓取新版', 'App抓取新版', 'Python抓取新版', '浏览器抓取', '公众号抓取', '网页登录']))
   })
+  // 1117 会议：数据监控不做成流程节点，添加选单里不出现（定义保留给历史节点）
+  it('添加选单不出现「数据监控」，同组的规则处理 / 数据校验照常可选', () => {
+    useDictStore().snatchTypes = ['[610] - 数据监控', '[600] - 规则处理', '[620] - 数据校验']
+    const wrapper = mount(AddNodePopover, { props: { x: 100, y: 100 } })
+    const names = wrapper.findAll('.anp-item-text b').map((item) => item.text())
+    expect(names).not.toContain('数据监控')
+    expect(names).toEqual(expect.arrayContaining(['规则处理', '数据校验']))
+  })
+
   it('英文节点类型码在徽标中显示为数字序号', () => {
     const wrapper = mount(AddNodePopover, {
       props: { x: 100, y: 100 },

@@ -17,7 +17,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isPdfNode, isRuleNode, isScriptlessNode, rendersAsRuleNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isPdfNode, isRuleNode, isScriptlessNode, rendersAsRuleNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, DEFAULT_RULE_SYSTEM_PROMPT, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
 import {
   AUDIO_ORCHESTRATION_DEFAULTS,
@@ -696,8 +696,28 @@ function readRawTextField(value: unknown, keys: string[]): string {
   return ''
 }
 
-function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: string; scriptPath: string; script: string } {
+/**
+ * core_param 里的 describe（PDF抓取保存时 pdfStructuredFor 写在这里）。不能用 readRawTextField：
+ * 它在 JSON 里找不到键时会把整段 JSON 原文当值返回，`{"providerCode":...}` 就成了描述。
+ */
+function readCoreParamDescribe(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim().startsWith('{')) return ''
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return ''
+    return String((parsed as Record<string, unknown>).describe ?? '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: string; scriptPath: string; script: string; systemPrompt: string } {
+  // PDF抓取的描述保存在 core_param.describe（2026-11-17：之前只读 snatchConf，刷新后描述为空，
+  // 再保存一次就用空描述把 core_param 重写、后端原值也被抹掉）。
   const describe = readRawTextField(raw.snatchConf, ['description', 'describe', 'nlDescribe'])
+    || (isPdf.value ? readCoreParamDescribe(raw.coreParam) : '')
+  // PDF抓取的系统提示词随节点保存落 cs_config.prompt（见 nodeConfigPayload promptForConfig），这里读回。
+  const systemPrompt = isPdf.value && typeof raw.prompt === 'string' ? raw.prompt : ''
   const codeRuleValue = raw.codeRule
   const codeRuleText = readRawTextField(codeRuleValue, ['scriptPath', 'codePath', 'codeFileName', 'path'])
   const scriptText = (codeRuleValue && typeof codeRuleValue === 'object' && !Array.isArray(codeRuleValue))
@@ -705,7 +725,7 @@ function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: s
     : ''
   const codeRuleRaw = String(codeRuleValue ?? '').trim()
   const scriptPath = codeRuleText || (/^[^\n]+\.[a-z0-9]+$/i.test(codeRuleRaw) ? codeRuleRaw : '')
-  return { describe, scriptPath, script: scriptText }
+  return { describe, scriptPath, script: scriptText, systemPrompt: systemPrompt.trim() ? systemPrompt : '' }
 }
 
 watch(id, () => {
@@ -871,9 +891,14 @@ watch(
       try {
         const raw = await configApi.configDetailRaw(configId)
         if (configDetailPrefillToken.value === token) return
-        const prefill = raw ? resolveConfigDetailPrefill(raw) : { describe: '', scriptPath: '', script: '' }
+        const prefill = raw ? resolveConfigDetailPrefill(raw) : { describe: '', scriptPath: '', script: '', systemPrompt: '' }
         const next: Partial<RuleOrchestration> = {}
         if (prefill.describe) next.describe = prefill.describe
+        // 已保存的提示词视同用户手改：置位后模板自动拼接不再覆盖它（本轮已手改过的不动）。
+        if (prefill.systemPrompt && !promptTouched.value) {
+          promptTouched.value = true
+          next.systemPrompt = prefill.systemPrompt
+        }
         if (prefill.scriptPath) next.scriptPath = prefill.scriptPath
         if (prefill.script) next.script = prefill.script
         if (Object.keys(next).length) patchAuto(next)
@@ -973,22 +998,29 @@ watch(
       if (!orchCfg.value.outputFields?.length) return
     }
     void (async () => {
-      const applied = await loadPromptTemplateForNode({
-        promptListCategory: promptListCategory.value,
-        promptCategory: promptCategory.value,
-        promptTemplateId: orchCfg.value.promptTemplateId,
-        inputTableName: sourceTableName.value,
-        outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
-        sourceId: isMonitor.value ? promptSourceId.value : '',
-        sourceCron: isMonitor.value ? sourceCron.value : '',
-        inputFields: orchCfg.value.inputFields ?? [],
-        outputFields: orchCfg.value.outputFields ?? [],
-        inputFieldOptions: inputFieldOptions.value,
-        outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
-        providerCode: orchCfg.value.modelProviderCode ?? '',
-        model: orchCfg.value.modelCode ?? '',
-        describe: promptDescribeSeed.value ?? '',
-      })
+      // 模板接口失败（离线 / 后端未部署 / 节点类型没有模板表）不能变成未处理的 Promise 拒绝：
+      // 保留节点当前提示词，文章生成摘要按「模板缺失」处理；用户仍可手填或用兜底提示词生成。
+      let applied: string | null = null
+      try {
+        applied = await loadPromptTemplateForNode({
+          promptListCategory: promptListCategory.value,
+          promptCategory: promptCategory.value,
+          promptTemplateId: orchCfg.value.promptTemplateId,
+          inputTableName: sourceTableName.value,
+          outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
+          sourceId: isMonitor.value ? promptSourceId.value : '',
+          sourceCron: isMonitor.value ? sourceCron.value : '',
+          inputFields: orchCfg.value.inputFields ?? [],
+          outputFields: orchCfg.value.outputFields ?? [],
+          inputFieldOptions: inputFieldOptions.value,
+          outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
+          providerCode: orchCfg.value.modelProviderCode ?? '',
+          model: orchCfg.value.modelCode ?? '',
+          describe: promptDescribeSeed.value ?? '',
+        })
+      } catch {
+        applied = null
+      }
       // 文章生成摘要节点：模板取不到的信号要留给界面（不能靠"提示词非空"判断能不能跑）
       if (isArticleSummary.value) articlePromptMissing.value = !applied
       if (!applied) return
@@ -1390,7 +1422,29 @@ async function onSiteScriptSaved(version: PublishedScript, configId: string, que
     ElMessage.warning(`代码已保存，但部署配置同步失败：${(e as Error)?.message ?? String(e)}；可保存智能体配置重试`)
   }
 }
-const hasSiteScriptMode = computed(() => !props.templateDefaults && !isRule.value && !!cfg.value?.collectCfg && !isScriptless.value)
+/**
+ * 纯规则处理节点（600）：1117 起与网页抓取一样有「智能体」生成（智能体 → 提交 Git）。
+ * 数据监控 / 数据校验 / PDF 等虽然也按规则式渲染（isRule），各有自己的生成链路，不在此列。
+ */
+const isPlainRule = computed(() => isRule.value && isRuleNode(cfg.value) && !isMonitor.value && !isDataValidation.value && !isPdf.value
+  && !isArticleSummary.value && !isArticleTag.value && !isOcr.value && !isAudioText.value && !isVideoAudio.value && !isTranslateNode(cfg.value))
+const hasSiteScriptMode = computed(() => !props.templateDefaults && !isScriptless.value
+  && ((!isRule.value && !!cfg.value?.collectCfg) || isPlainRule.value))
+/** 规则处理：业务规则描述放到两个生成方式上方共用（智能体的用户提示词也按它生成） */
+const sharedRuleDescribe = computed(() => isPlainRule.value && hasSiteScriptMode.value)
+/** 规则处理没有节点提示词模板时的兜底：规则脚本口径（main 入口、入参出参），不用网页抓取的 scrape(url) 口径 */
+const ruleAgentSystemPrompt = computed(() => (isPlainRule.value ? (orchCfg.value.systemPrompt?.trim() || DEFAULT_RULE_SYSTEM_PROMPT) : undefined))
+const ruleAgentUserPrompt = computed(() => {
+  if (!isPlainRule.value) return undefined
+  const inputs = inputFieldOptions.value.filter(f => !orchCfg.value.inputFields?.length || orchCfg.value.inputFields.includes(f.itemCode))
+    .map(f => `${f.itemName}:${f.itemCode}`).join(', ')
+  return [
+    orchCfg.value.describe?.trim() || '按业务规则把输入表数据转换成输出字段。',
+    `输入表：${sourceTableName.value || '—'}`,
+    `入参字段：${inputs || '—'}`,
+    '入口函数为 main，参数为入参字段，返回包含出参字段的 JSON 对象；main 必须是脚本中第一个定义的函数。',
+  ].join('\n')
+})
 const orchestrationMode = ref<'config' | 'ai'>('ai')
 function onOrchestrationTabKeydown(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -1801,9 +1855,28 @@ function onTestScript() {
 </script>
 
 <template>
-  <div v-if="hasSiteScriptMode" class="rc-orchestration-tabs" role="tablist" aria-label="生成方式" data-testid="orchestration-mode-tabs">
-    <button id="orchestration-config-tab" type="button" role="tab" data-mode="config" data-testid="orchestration-config-tab" :class="{ active: orchestrationMode === 'config' }" :aria-selected="orchestrationMode === 'config'" :tabindex="orchestrationMode === 'config' ? 0 : -1" aria-controls="orchestration-config-panel" @click="orchestrationMode = 'config'" @keydown="onOrchestrationTabKeydown">生成配置</button>
-    <button id="orchestration-ai-tab" type="button" role="tab" data-mode="ai" data-testid="orchestration-ai-tab" :class="{ active: orchestrationMode === 'ai' }" :aria-selected="orchestrationMode === 'ai'" :tabindex="orchestrationMode === 'ai' ? 0 : -1" aria-controls="orchestration-ai-panel" @click="orchestrationMode = 'ai'" @keydown="onOrchestrationTabKeydown">智能体</button>
+  <!-- 1117：规则处理节点的业务规则描述放在生成方式上方，两种方式共用 -->
+  <template v-if="sharedRuleDescribe">
+    <div class="ni-section-title ni-section-title-row">
+      <span>设置业务规则</span>
+      <span class="ni-section-actions">
+        <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
+      </span>
+    </div>
+    <div class="rc-field">
+      <textarea
+        class="rc-input rc-textarea"
+        :value="orchCfg.describe"
+        :placeholder="describePlaceholder"
+        data-testid="rule-describe-shared"
+        @input="onDescribeChange"
+      />
+      <div class="rc-help">两种生成方式共用这段描述；智能体的用户提示词按它和入参字段生成。</div>
+    </div>
+  </template>
+  <div v-if="hasSiteScriptMode" class="rc-orchestration-tabs" :class="{ 'is-rule': isPlainRule }" role="tablist" aria-label="生成方式" data-testid="orchestration-mode-tabs">
+    <button id="orchestration-config-tab" type="button" role="tab" data-mode="config" data-testid="orchestration-config-tab" :class="{ active: orchestrationMode === 'config' }" :aria-selected="orchestrationMode === 'config'" :tabindex="orchestrationMode === 'config' ? 0 : -1" aria-controls="orchestration-config-panel" @click="orchestrationMode = 'config'" @keydown="onOrchestrationTabKeydown">{{ isPlainRule ? '内置接口' : '生成配置' }}</button>
+    <button id="orchestration-ai-tab" type="button" role="tab" data-mode="ai" data-testid="orchestration-ai-tab" :class="{ active: orchestrationMode === 'ai' }" :aria-selected="orchestrationMode === 'ai'" :tabindex="orchestrationMode === 'ai' ? 0 : -1" aria-controls="orchestration-ai-panel" @click="orchestrationMode = 'ai'" @keydown="onOrchestrationTabKeydown">{{ isPlainRule ? '智能体 · 提交 Git' : '智能体' }}</button>
   </div>
   <div id="orchestration-config-panel" v-show="!hasSiteScriptMode || orchestrationMode === 'config'" :role="hasSiteScriptMode ? 'tabpanel' : undefined" :aria-labelledby="hasSiteScriptMode ? 'orchestration-config-tab' : undefined" data-testid="orchestration-config-panel">
   <div v-if="isMonitor" class="rc-field rc-monitor-methods-field" data-testid="monitor-methods-field">
@@ -1823,7 +1896,7 @@ function onTestScript() {
   </div>
   <!-- 文章生成摘要没有「抓取配置」这个概念，标题行整块不出现（0921 口径：只留模型与系统提示词）。
        OCR 抓取节点只显「是否保存为文件」+「指定输出文件名」（2026-10-08 恢复/新增），其余编排区块仍不出现。 -->
-  <div v-if="!isOcr && !isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
+  <div v-if="!sharedRuleDescribe && !isOcr && !isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span v-if="!props.templateDefaults && !isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
@@ -2141,7 +2214,8 @@ function onTestScript() {
   </div>
   <!-- 描述输入框：文章生成摘要 / 文章打标签没有「抓取需求描述」这回事，整块不出现（0921 口径）；
        OCR 抓取节点的编排配置整页空白（2026-09-22 口径）。 -->
-  <div v-if="!isOcr && !isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
+  <p v-if="sharedRuleDescribe" class="rc-help rc-legacy-note" data-testid="rule-builtin-note">旧方式：用模型供应商接口生成，脚本存文件服务、不提交 Git；推荐用「智能体 · 提交 Git」。</p>
+  <div v-if="!sharedRuleDescribe && !isOcr && !isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -2358,7 +2432,9 @@ function onTestScript() {
       :key="id"
       v-model:open="siteScriptOpen"
       :initial-url="siteScriptUrl"
-      :initial-prompt="orchCfg.describe"
+      :initial-prompt="ruleAgentUserPrompt ?? orchCfg.describe"
+      :fallback-system-prompt="ruleAgentSystemPrompt"
+      :fallback-user-prompt="ruleAgentUserPrompt"
       :config-id="cfg?.configId"
       :source-id="promptSourceId"
       :flow-id="siteScriptFlowId"

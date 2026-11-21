@@ -2,8 +2,11 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
+import { createPinia, setActivePinia } from 'pinia'
 import AiChatView from './index.vue'
-import { listAiSessions, listRecommendedQuestions, streamAgentChat, getAiChatHistoryPage } from '@/api/aiChat'
+import { useAuthStore } from '@/stores/auth'
+import { listAiSessions, deleteAiSession, streamAgentChat, getAiChatHistoryPage } from '@/api/aiChat'
+import { saveColdMessages, loadColdMessages, dropColdMessages } from '@/utils/chatColdCache'
 import { downloadCsv } from '@/utils/csv'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 
@@ -30,6 +33,7 @@ vi.mock('@/api/aiChat', async (importOriginal) => {
   return {
     ...actual,
     listAiSessions: vi.fn().mockResolvedValue([]),
+    deleteAiSession: vi.fn().mockResolvedValue(true),
     listRecommendedQuestions: vi.fn().mockResolvedValue([]),
     getAiChatHistoryPage: vi.fn().mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 }),
     streamAgentChat: vi.fn().mockImplementation(async (_params, onEvent) => {
@@ -38,6 +42,14 @@ vi.mock('@/api/aiChat', async (importOriginal) => {
     }),
   }
 })
+
+// jsdom 无 IndexedDB：冷缓存默认静默退化（load 返回 null），与生产不可用时行为一致；
+// LRU 用例按需改写 loadColdMessages 的返回值模拟缓存命中/未命中
+vi.mock('@/utils/chatColdCache', () => ({
+  saveColdMessages: vi.fn().mockResolvedValue(undefined),
+  loadColdMessages: vi.fn().mockResolvedValue(null),
+  dropColdMessages: vi.fn().mockResolvedValue(undefined),
+}))
 
 const mockSessions = [
   { id: 's1', title: '排查近期异常任务与成功率', updatedAt: '刚刚', group: 'today' as const },
@@ -160,8 +172,11 @@ describe('AI 智能问数 · AiChatView', () => {
     // clearAllMocks 只清调用记录：显式恢复默认实现，防止上一个用例的
     // mockImplementation（如挂起等待 abort 的流）泄漏到后续用例
     vi.mocked(listAiSessions).mockResolvedValue([])
-    vi.mocked(listRecommendedQuestions).mockResolvedValue([])
+    vi.mocked(deleteAiSession).mockResolvedValue(true)
     vi.mocked(getAiChatHistoryPage).mockResolvedValue({ messages: [], total: 0, pageNo: 1, pageSize: 100 })
+    vi.mocked(loadColdMessages).mockResolvedValue(null)
+    vi.mocked(saveColdMessages).mockResolvedValue(undefined)
+    vi.mocked(dropColdMessages).mockResolvedValue(undefined)
     vi.mocked(streamAgentChat).mockImplementation(async (_params, onEvent) => {
       onEvent({ type: 'chunk', text: '智能体已响应问数请求。' })
       onEvent({ type: 'done' })
@@ -271,10 +286,10 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 切换到「趋势图表」视图
     const chartRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('趋势图表'))
     expect(chartRadio).toBeTruthy()
-    await chartRadio!.find('input').setValue('chart')
+    await chartRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
@@ -283,10 +298,10 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 切换到「占比饼图」视图
     const pieRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('占比饼图'))
     expect(pieRadio).toBeTruthy()
-    await pieRadio!.find('input').setValue('pie')
+    await pieRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
@@ -298,10 +313,10 @@ describe('AI 智能问数 · AiChatView', () => {
 
     // 切换回「明细数据表」视图
     const tableRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('明细数据表'))
     expect(tableRadio).toBeTruthy()
-    await tableRadio!.find('input').setValue('table')
+    await tableRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
@@ -315,9 +330,9 @@ describe('AI 智能问数 · AiChatView', () => {
     await confirmWithTables(wrapper, [101])
 
     const tableRadio = wrapper
-      .findAll('.el-radio-button')
+      .findAll('.rc-segmented-item')
       .find((btn) => btn.text().includes('明细数据表'))
-    await tableRadio!.find('input').setValue('table')
+    await tableRadio!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
@@ -356,7 +371,7 @@ describe('AI 智能问数 · AiChatView', () => {
     vi.useRealTimers()
   })
 
-  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；无后端推荐数据时不展示推荐卡片', async () => {
+  it('点击「新建问数会话」应切换到新的会话页面，展示欢迎语；页面配置没有推荐问题时不展示', async () => {
     const wrapper = mountView(true)
     await flushPromises()
 
@@ -370,71 +385,29 @@ describe('AI 智能问数 · AiChatView', () => {
     // 应该显示新会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-hero-title').text()).toContain('AI 智能问数助手')
-    // 后端无配置时不渲染推荐卡片区域
+    // 页面配置没有启用的推荐问题 → 不展示
     expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
     expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
   })
 
-  it('生产无预置会话且后端配置推荐场景时，展示后端卡片，点击推荐卡片发起真实流式问数', async () => {
-    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
-      '排查近期异常任务与根因',
-      '昨日各站点抓取成功率 TOP 10',
-    ])
+  it('生产无预置会话时初始进入新建会话页面；推荐问题来自页面配置，点击直接提问', async () => {
+    const api = await import('@/api/aiChat')
+    vi.mocked(api.listRecommendedQuestions).mockResolvedValueOnce(['统计最近 7 天各站点采集成功率', '查询两融余额最近的变动趋势'])
     const wrapper = mountView(false)
     await flushPromises()
 
     // 生产无会话时，初始就是新建会话页面
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
     expect(wrapper.find('.rc-chat-thread').exists()).toBe(false)
-
-    const starterCards = wrapper.findAll('.rc-starter-card')
-    expect(starterCards).toHaveLength(2)
-
-    // 点击第二个推荐场景卡片（昨日各站点抓取成功率 TOP 10）
-    await starterCards[1].trigger('click')
-    await flushPromises()
-
-    // 新会话已创建，进入对话流，新会话欢迎页隐藏
-    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
-    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
-    expect(wrapper.text()).toContain('昨日各站点抓取成功率 TOP 10')
-  })
-
-  it('后端未配置推荐问数场景（返回空列表）时，整块推荐问数场景不展示', async () => {
-    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([])
-    const wrapper = mountView(false)
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
-    expect(wrapper.find('.rc-starters-section').exists()).toBe(false)
-    expect(wrapper.findAll('.rc-starter-card')).toHaveLength(0)
-  })
-
-  it('当后端配置推荐问数场景（sys_page_config）时，动态加载并渲染后端配置的卡片', async () => {
-    vi.mocked(listRecommendedQuestions).mockResolvedValueOnce([
-      '近7天抓取异常最多的前5个网站',
-      '统计各业务库的数据同步延时分布',
-    ])
-    const wrapper = mountView(false)
-    await flushPromises()
-
     const cards = wrapper.findAll('.rc-starter-card')
     expect(cards).toHaveLength(2)
-    expect(cards[0].find('.rc-starter-badge').text()).toBe('推荐场景 01')
-    expect(cards[0].find('.rc-starter-name').text()).toBe('近7天抓取异常最多的前5个网站')
-    expect(cards[0].find('.rc-starter-desc').text()).toBe('近7天抓取异常最多的前5个网站')
+    expect(cards[0].text()).toBe('统计最近 7 天各站点采集成功率')
 
-    expect(cards[1].find('.rc-starter-badge').text()).toBe('推荐场景 02')
-    expect(cards[1].find('.rc-starter-name').text()).toBe('统计各业务库的数据同步延时分布')
-
-    // 点击第一个动态推荐卡片能够正常发起流式对话
-    await cards[0].trigger('click')
+    await cards[1].trigger('click')
     await flushPromises()
-
-    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
-    expect(wrapper.find('.rc-chat-thread').exists()).toBe(true)
-    expect(wrapper.text()).toContain('近7天抓取异常最多的前5个网站')
+    expect(vi.mocked(api.streamAgentChat).mock.calls.at(-1)?.[0]).toMatchObject({ msg: '查询两融余额最近的变动趋势' })
+    expect(wrapper.text()).toContain('查询两融余额最近的变动趋势')
   })
 
   it('在左侧会话列表中点击不同会话可切换会话内容', async () => {
@@ -478,6 +451,136 @@ describe('AI 智能问数 · AiChatView', () => {
 
     expect(wrapper.findAll('.rc-session-item')).toHaveLength(0)
     expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+  })
+
+  it('侧栏搜索按标题过滤会话分组，清空关键词后恢复全部', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    expect(wrapper.findAll('.rc-session-item')).toHaveLength(2)
+
+    await wrapper.find('.rc-search-box input').setValue('耗时')
+    const items = wrapper.findAll('.rc-session-item')
+    expect(items).toHaveLength(1)
+    expect(items[0].text()).toContain('各网站抓取平均耗时与并发量')
+    expect(wrapper.findAll('.rc-session-group-title').map((n) => n.text())).toEqual(['近 7 天'])
+
+    await wrapper.find('.rc-search-box input').setValue('')
+    expect(wrapper.findAll('.rc-session-item')).toHaveLength(2)
+  })
+
+  it('删除当前会话后自动切到剩余第一条，并异步通知后端软删除与清理冷缓存', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+
+    // 当前活动会话是 s1，删除它
+    await wrapper.findAll('.rc-session-delete')[0].trigger('click')
+    await flushPromises()
+
+    // 自动切换到 s2 并呈现其内容
+    expect(wrapper.findAll('.rc-session-item')).toHaveLength(1)
+    expect(wrapper.find('.rc-session-item.active').text()).toContain('各网站抓取平均耗时与并发量')
+    expect(wrapper.text()).toContain('统计各网站近 3 天平均抓取耗时与并发量分布情况')
+    expect(deleteAiSession).toHaveBeenCalledWith('s1')
+    expect(dropColdMessages).toHaveBeenCalledWith('s1')
+
+    // 清空时剩余会话也逐个通知后端
+    await wrapper.find('.rc-clear-btn').trigger('click')
+    await flushPromises()
+    expect(deleteAiSession).toHaveBeenCalledWith('s2')
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(true)
+  })
+
+  // SESSION_LRU=3：第 4 个会话被使用时，最久未用的会话消息下沉冷缓存
+  const lruSessionIds = ['s1', 's2', 's3', 's4']
+  const lruSessions = lruSessionIds.map((id, i) => ({
+    id,
+    title: `会话${i + 1}`,
+    updatedAt: '刚刚',
+    group: 'today' as const,
+  }))
+  const lruMessages = Object.fromEntries(
+    lruSessionIds.map((id, i) => [
+      id,
+      [{ id: `${id}-m1`, role: 'user' as const, content: `问题${i + 1}号`, createdAt: '刚刚' }],
+    ]),
+  )
+
+  async function mountAndEvictFirstSession() {
+    const wrapper = mount(AiChatView, {
+      props: { initialSessions: lruSessions, initialMessages: lruMessages },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    const items = wrapper.findAll('.rc-session-item')
+    for (const idx of [1, 2, 3]) {
+      await items[idx].trigger('click')
+      await flushPromises()
+    }
+    return wrapper
+  }
+
+  it('LRU 淘汰最久未用会话的消息写入冷缓存，切回时命中缓存不再请求后端', async () => {
+    const wrapper = await mountAndEvictFirstSession()
+
+    expect(saveColdMessages).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(saveColdMessages).mock.calls[0][0]).toBe('s1')
+
+    vi.mocked(loadColdMessages).mockResolvedValue(lruMessages.s1)
+    await wrapper.findAll('.rc-session-item')[0].trigger('click')
+    await flushPromises()
+
+    expect(loadColdMessages).toHaveBeenCalledWith('s1')
+    expect(getAiChatHistoryPage).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('问题1号')
+  })
+
+  it('冷缓存未命中时回源后端拉取历史', async () => {
+    const wrapper = await mountAndEvictFirstSession()
+    expect(saveColdMessages).toHaveBeenCalledTimes(1)
+
+    vi.mocked(getAiChatHistoryPage).mockResolvedValue({
+      messages: [{ id: 'h1', role: 'user', content: '后端回源消息', createdAt: '刚刚' }],
+      total: 1,
+      pageNo: 1,
+      pageSize: 100,
+    })
+    await wrapper.findAll('.rc-session-item')[0].trigger('click')
+    await flushPromises()
+
+    expect(loadColdMessages).toHaveBeenCalledWith('s1')
+    expect(getAiChatHistoryPage).toHaveBeenCalledWith('s1', 1, 100)
+    expect(wrapper.text()).toContain('后端回源消息')
+  })
+
+  it('会话历史加载失败时静默兜底：会话仍可选中，不 crash 也不进新建页', async () => {
+    vi.mocked(listAiSessions).mockResolvedValue([
+      { id: 's9', title: '失败兜底会话', updatedAt: '刚刚', group: 'today' },
+    ])
+    vi.mocked(getAiChatHistoryPage).mockRejectedValue(new Error('network down'))
+
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    expect(wrapper.find('.rc-session-item.active').text()).toContain('失败兜底会话')
+    expect(wrapper.find('[data-testid="new-session-view"]').exists()).toBe(false)
+  })
+
+  it('问数请求携带登录用户 user_id：后端缺省兜底 userId=1 会把会话挂错属主', async () => {
+    setActivePinia(createPinia())
+    useAuthStore().info = { name: 'leo', id: 156, roles: [], groups: [], avatar: '', introduction: '', group: 1 } as never
+    try {
+      const wrapper = mountView(true)
+      await flushPromises()
+
+      await wrapper.find('textarea').setValue('统计昨日抓取成功率')
+      await wrapper.find('[data-testid="send-btn"]').trigger('click')
+      await flushPromises()
+
+      expect(streamAgentChat).toHaveBeenCalled()
+      expect(vi.mocked(streamAgentChat).mock.calls[0][0].user_id).toBe(156)
+    } finally {
+      setActivePinia(undefined)
+    }
   })
 
   it('智能体问答支持 Markdown 渲染与思考过程折叠展开', async () => {
@@ -710,6 +813,51 @@ describe('AI 智能问数 · AiChatView', () => {
     )
   })
 
+  it('零行回答里建议换表时，渲染「可以改查」胶囊，点击即以新一轮提问发出', async () => {
+    const zeroRowAnswer = [
+      '您再次确认的是同一张表 中指-二手房销售价格（`sense_data.TB_ZZ_MONTH_OLD_PRICE`）。',
+      '',
+      '这张表当前整表无任何数据记录（已分别用精确匹配、模糊匹配、全表地区列表三种方式验证，均为 0 行），属于底层数据缺失状态，并非查询条件问题。',
+      '',
+      '建议换一张有数据的表继续查询。之前检索命中的二手房相关数据源包括：',
+      '',
+      '• 贝壳二手房-在售（`sense_data.TB_ke_com_ershoufang_sale`）',
+      '• 贝壳二手房-成交信息（`sense_data.TB_ke_com_chengjiao_esf`）',
+      '• 中指-二手房销售套数/面积/销售额（`TB_ZZ_MONTH_OLD_CNT/AREA/SUM`）',
+      '• 南京网上房地产（`sense_data.TB_NJWSFDC`）',
+      '',
+      '请问您希望我换哪一张表继续查询南京二手房价格？',
+    ].join('\n')
+
+    vi.mocked(streamAgentChat).mockImplementation(async (_params, onEvent) => {
+      onEvent({ type: 'chunk', text: zeroRowAnswer })
+      onEvent({ type: 'done' })
+    })
+
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    await wrapper.find('textarea').setValue('南京二手房最新价格')
+    await wrapper.find('[data-testid="send-btn"]').trigger('click')
+    await flushPromises()
+
+    // 「换表建议」不是澄清：不能把会话挂进 awaiting_clarification，也不出勾选卡片
+    expect(wrapper.find('[data-testid="clarification-card"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('可以改查：')
+    const chips = wrapper.findAll('.rc-chip-btn')
+    expect(chips.map((c) => c.text())).toEqual([
+      '改用「贝壳二手房-在售」继续查询',
+      '改用「贝壳二手房-成交信息」继续查询',
+      '改用「中指-二手房销售套数/面积/销售额」继续查询',
+      '改用「南京网上房地产」继续查询',
+    ])
+
+    // 点胶囊 = 以新一轮提问发出，智能体据此重新选表；不涉及主键回传
+    await chips[0].trigger('click')
+    await flushPromises()
+    expect(vi.mocked(streamAgentChat).mock.calls.at(-1)?.[0].msg).toBe('改用「贝壳二手房-在售」继续查询')
+  })
+
   it('智能体返回 Markdown 候选表表格时，自动渲染成交互表格，勾选后统一确认推进会话', async () => {
     const tableContent = `
 | 编号 | 表名 | 说明 |
@@ -857,8 +1005,8 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(downloadCsv).toHaveBeenCalled()
 
     // 5. 切换到趋势柱状图视图
-    const radioButtons = wrapper.findAll('.el-radio-button')
-    await radioButtons[0].find('input').trigger('change')
+    const radioButtons = wrapper.findAll('.rc-segmented-item')
+    await radioButtons[0].trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
@@ -927,16 +1075,16 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(downloadXlsx).toHaveBeenCalled()
 
     // 5. 切换到「趋势图表」视图
-    const chartRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('趋势图表'))
+    const chartRadio = wrapper.findAll('.rc-segmented-item').find((btn) => btn.text().includes('趋势图表'))
     expect(chartRadio).toBeTruthy()
-    await chartRadio!.find('input').setValue('chart')
+    await chartRadio!.trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.rc-chart-view').exists()).toBe(true)
 
     // 6. 切换到「占比饼图」视图
-    const pieRadio = wrapper.findAll('.el-radio-button').find((btn) => btn.text().includes('占比饼图'))
+    const pieRadio = wrapper.findAll('.rc-segmented-item').find((btn) => btn.text().includes('占比饼图'))
     expect(pieRadio).toBeTruthy()
-    await pieRadio!.find('input').setValue('pie')
+    await pieRadio!.trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.rc-pie-view').exists()).toBe(true)
   })
@@ -974,8 +1122,8 @@ describe('AI 智能问数 · AiChatView', () => {
     await flushPromises()
 
     // 1. 用户先切换到表格视图
-    const radioButtons = wrapper.findAll('.el-radio-button')
-    await radioButtons[2].find('input').trigger('change')
+    const radioButtons = wrapper.findAll('.rc-segmented-item')
+    await radioButtons[2].trigger('click')
     await flushPromises()
     expect(wrapper.find('.rc-table-view').exists()).toBe(true)
 

@@ -118,6 +118,26 @@ describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () 
     ])
   })
 
+  it('入口节点（已落库、没有配置）报 rootConfigMissing，不再放行到后端', () => {
+    const main = ['start', '8914120', '8914121', 'end']
+    const configs = {
+      '8914120': { title: '采集', kind: 'node', configId: '' },
+      '8914121': { title: 'PDF抓取', kind: 'node', configId: '1910015', outputTable: '6910002' },
+    } as unknown as Record<string, NodeConfig>
+    expect(collectFlowIssues(main, [], configs).map((i) => [i.nodeId, i.reason])).toEqual([['8914120', 'rootConfigMissing']])
+    const snapshots = { '8914120': { stepId: '8914120', name: '采集', isRoot: true } as Step }
+    expect(collectFlowIssues(main, [], configs, snapshots).map((i) => i.reason)).toEqual(['rootConfigMissing'])
+  })
+
+  it('入口节点有配置、或入口是画布虚拟起点时不报', () => {
+    const configs = {
+      '8914121': { title: 'PDF抓取', kind: 'node', configId: '1910015', outputTable: '6910002' },
+      'source:1': { title: '源', kind: 'node', configId: '' },
+    } as unknown as Record<string, NodeConfig>
+    expect(collectFlowIssues(['start', '8914121', 'end'], [], configs)).toEqual([])
+    expect(collectFlowIssues(['start', 'source:1', '8914121', 'end'], [], configs)).toEqual([])
+  })
+
   it('分支链上的节点同样检查', () => {
     const main = ['start', '40597', 'end']
     const branchGroups = [{ ownerId: '40597', branches: [{ chain: ['40599'] }] }] as unknown as FlowBranchGroup[]

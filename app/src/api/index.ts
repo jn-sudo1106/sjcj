@@ -355,6 +355,22 @@ async function createSourceInSite(site: Site, source: Source): Promise<{ ok: boo
   }
 }
 
+/**
+ * 建一个不归属任何网站的源（游离源）：只 snatchSave，不 bindSite（旧平台「新建源」的常态，
+ * 186 上 9 万多个源都没有网站，后台流程/调度不依赖网站）。真实写，调用方先过 isProductionCreateEnabled。
+ */
+async function createUnboundSource(source: Source): Promise<{ ok: boolean; message?: string; sourceId?: string }> {
+  if (!isProductionCreateEnabled()) return { ok: false, message: CREATE_DISABLED_MESSAGE }
+  const noSite = { siteId: '', name: '', category: '', owner: source.owner || 'admin', sourceCount: 0, errorCount: 0 } as Site
+  try {
+    const saved = await legacySnatchSaveRequest(legacySnatchSavePayloadFromSource(noSite, source), { mode: 'http' })
+    if (!saved.ok || !saved.sourceId) return { ok: false, message: saved.message || '保存失败' }
+    return { ok: true, sourceId: saved.sourceId }
+  } catch (error) {
+    return { ok: false, message: (error as Error).message ?? '请求失败' }
+  }
+}
+
 // item/next/nextConfigPaged 本身不带 topic（旧 config.topic，真实队列）和登录语义；2026-08-26
 // 生产实测（源 430016821/430016822/430016516）确认每个 configId 的 topic 各不相同、且有真实业务
 // 含义，此前画布只能回退到节点模板的硬编码默认队列，显示的是假值而非缺值；同批实测另发现登录类
@@ -845,6 +861,9 @@ export const sourceApi = {
    */
   copySource,
   copySourceAndLocate,
+  /** 按名称模糊查源（source/sourcePaged?name=，最多 100 条），调用方自行精确比对 */
+  sourcesByNameLike,
+  createUnboundSource,
   /** 发起抓取；真实执行器的登录配置选择参数待 P0 契约确认，当前只沿用旧 sourceIds 请求。 */
   sendSnatch: (sourceIds: string[]) =>
     assetMockRequest<Ack>('source/sendSnatch', { sourceIds }),

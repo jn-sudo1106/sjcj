@@ -1,17 +1,19 @@
 <script setup lang="ts">
 // AI 智能问数（Agent 交互对话工作台）
 // 位于「问数配置」分组，支持 Text-to-SQL、多轮主动澄清与问答、思考链展示、KPI指标卡片、图表与明细切换
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, defineAsyncComponent, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getActivePinia } from 'pinia'
 import {
   ArrowDown,
-  ArrowRight,
   ChatDotRound,
   Close,
+  Connection,
   CopyDocument,
   Delete,
+  Grid,
   Plus,
+  Promotion,
   RefreshRight,
   Search,
   TrendCharts,
@@ -21,10 +23,11 @@ import {
   listAiSessions,
   deleteAiSession,
   getAiChatHistoryPage,
+  listRecommendedQuestions,
   clarificationOptionKey,
   extractClarificationFromText,
   extractChartDataFromText,
-  listRecommendedQuestions,
+  extractTableSwitchSuggestions,
   type AiSessionItem,
   type AskErrorCode,
   type ChatMessage,
@@ -36,44 +39,70 @@ import { saveColdMessages, loadColdMessages, dropColdMessages } from '@/utils/ch
 import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import { useAskChat, ASK_PHASE_LABELS } from './useAskChat'
+import {
+  createTableFromDraft,
+  buildTableDraftPrompt,
+  extractTableDraftFromText,
+  hasTableDraftBlock,
+  isCreateTableIntent,
+  formatTableCreatedMessage,
+  parseTableCreatedMessage,
+  stripTableDraftBlock,
+  type TableDraft,
+} from '@/utils/aiChat/tableDraft'
+import {
+  executeSourceDraft,
+  extractSourceDraftFromText,
+  formatSourceCreatedMessage,
+  hasSourceDraftBlock,
+  isSourceCreatedMessage,
+  stripSourceDraftBlock,
+  type SourceDraftForm,
+  type SourceDraftStep,
+} from '@/utils/aiChat/sourceDraft'
 
 // 富渲染器按需加载：首屏 chunk 只留会话侧栏/输入框/消息骨架，
 // marked+dompurify、澄清卡片、图表数据卡在首次出现对应消息时再拉取
 const MarkdownOutput = defineAsyncComponent(() => import('@/components/MarkdownOutput.vue'))
 const ClarificationCard = defineAsyncComponent(() => import('./ClarificationCard.vue'))
 const DataViewCard = defineAsyncComponent(() => import('./DataViewCard.vue'))
+const TableDraftCard = defineAsyncComponent(() => import('./TableDraftCard.vue'))
+const SourceDraftCard = defineAsyncComponent(() => import('./SourceDraftCard.vue'))
 
-interface StarterPrompt {
-  tag: string
-  title: string
-  prompt: string
+// 推荐问题：与「问数系统配置 → 页面配置」联动（启用的配置内容经 GET /api/poc/chat/help/question 返回）。
+// 2026-11-20 恢复：显隐由页面配置决定，没有启用的配置就不展示，不再在前端写死开关。
+const starterQuestions = ref<string[]>([])
+
+async function loadStarterQuestions() {
+  starterQuestions.value = await listRecommendedQuestions()
 }
 
-// 推荐问数卡片：纯动态从后端接口（/api/poc/chat/help/question）获取，后端无数据时不展示
-const starterPrompts = ref<StarterPrompt[]>([])
-
-function mapQuestionsToStarters(questions: string[]): StarterPrompt[] {
-  return questions
-    .filter((q) => typeof q === 'string' && q.trim().length > 0)
-    .map((q, idx) => {
-      const trimmed = q.trim()
-      return {
-        tag: `推荐场景 ${String(idx + 1).padStart(2, '0')}`,
-        title: trimmed,
-        prompt: trimmed,
-      }
-    })
+/** 点推荐问题直接发问（与手动输入同一条发送链路） */
+function handleSelectStarter(question: string) {
+  if (isSending.value) return
+  promptText.value = question
+  handleSend()
 }
 
 interface Props {
   initialSessions?: AiSessionItem[]
   initialMessages?: Record<string, ChatMessage[]>
+  compact?: boolean
+  compactVisible?: boolean
+  floatOpenCount?: number
+  cacheOwnerId?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   initialSessions: () => [],
   initialMessages: () => ({}),
+  floatOpenCount: 0,
 })
+const emit = defineEmits<{ openFull: [] }>()
+const loadingSessions = ref(true)
+let disposed = false
+const cacheOwnerId = props.cacheOwnerId
+const coldCacheKey = (sessionId: string) => cacheOwnerId == null ? sessionId : `user:${cacheOwnerId}:${sessionId}`
 
 // 会话列表与当前活动会话（'new' 代表进入新建会话页面）
 const sessions = ref<AiSessionItem[]>([])
@@ -137,7 +166,15 @@ const askChat = useAskChat({
   },
   onClarification: (clarification) => {
     if (!activeAssistantMsg) return
+    // 建表 / 建源意图下智能体检索已有表的结果不是选表澄清，不出勾选卡片
+    if (activeAssistantMsg.draftMode || activeAssistantMsg.tableDraft || activeAssistantMsg.sourceDraft) return
     activeAssistantMsg.clarification = { ...clarification, confirmed: false }
+    followScroll()
+  },
+  onTableDraft: (draft) => {
+    if (!activeAssistantMsg) return
+    activeAssistantMsg.tableDraft = { draft, status: 'pending' }
+    activeAssistantMsg.clarification = undefined
     followScroll()
   },
   onSessionAssigned: (sessionId, threadId) => {
@@ -228,20 +265,38 @@ function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interr
         msg.sql = { code: sqlCode, estimated: true }
       }
     }
-    if (!msg.clarification && msg.content) {
+    if (!msg.tableDraft && msg.content) {
+      const draft = extractTableDraftFromText(msg.content)
+      if (draft) msg.tableDraft = { draft, status: 'pending' }
+    }
+    if (!msg.tableDraft && !msg.sourceDraft && msg.content) {
+      const draft = extractSourceDraftFromText(msg.content)
+      if (draft) msg.sourceDraft = { draft, status: 'pending' }
+    }
+    if (msg.tableDraft || msg.sourceDraft) msg.clarification = undefined
+    if (!msg.clarification && !msg.tableDraft && !msg.sourceDraft && msg.content) {
       const parsedClarification = extractClarificationFromText(msg.content)
       if (parsedClarification) {
         msg.clarification = { ...parsedClarification, confirmed: false }
       }
     }
-    if (!msg.clarification && !msg.chartData && msg.content) {
+    // 回复「建表结果」时智能体常复述字段表，那是表结构不是业务数据，不出统计图
+    if (!msg.clarification && !msg.chartData && !msg.tableDraft && !msg.sourceDraft && msg.content && !parseTableCreatedMessage(msg.question || '') && !isSourceCreatedMessage(msg.question || '')) {
       const parsedChartData = extractChartDataFromText(msg.content)
       if (parsedChartData) {
         msg.chartData = parsedChartData
       }
     }
+    // 零行/换表建议：出可点击的「改查」胶囊（与澄清卡片互补，不占用澄清状态机）
+    if (!msg.clarification && !msg.chartData && !msg.tableDraft && !msg.suggestions?.length && msg.content) {
+      const tableSwitch = extractTableSwitchSuggestions(msg.content)
+      if (tableSwitch) {
+        msg.suggestions = tableSwitch.actions
+        msg.suggestionsKind = 'table_switch'
+      }
+    }
     const hasBody = Boolean(
-      msg.content.trim() || msg.sql || msg.clarification || msg.chartData,
+      msg.content.trim() || msg.sql || msg.clarification || msg.chartData || msg.tableDraft || msg.sourceDraft,
     )
     msg.status = hasBody ? 'done' : 'empty'
     if (!hasBody) {
@@ -390,10 +445,12 @@ function formatMarkdownContent(msg: ChatMessage): string {
   if (!msg.content) return ''
   const hit = markdownContentCache.get(msg.id)
   if (hit && hit.src === msg.content) return hit.out
-  let out = msg.content
+  // 建表 / 建源草稿代码块由草稿卡片承载，正文里只留说明文字
+  let out = hasTableDraftBlock(msg.content) ? stripTableDraftBlock(msg.content) : msg.content
+  if (hasSourceDraftBlock(out)) out = stripSourceDraftBlock(out)
   // 若已解析出业务图表/导出结构 chartData，则从正文中移除冗余的静态 Markdown 表格，由数据卡统一承载图表与表格及导出交互
   if (msg.chartData) {
-    out = msg.content
+    out = out
       .replace(
         /(?:^|\n)\s*\|[^\n]+\|\s*\n\s*\|[\s:\-|]+\|\s*\n(?:(?:\s*\|[^\n]+\|\s*(?:\n|$))+)/g,
         '\n'
@@ -559,7 +616,7 @@ function touchSession(id: string) {
     const evictId = sessionUsageOrder.shift()!
     const msgs = sessionMessages.value[evictId]
     if (msgs && msgs.length > 0 && evictId !== streamSessionId) {
-      void saveColdMessages(evictId, msgs)
+      void saveColdMessages(coldCacheKey(evictId), msgs)
       delete sessionMessages.value[evictId]
       delete historyMeta[evictId]
     }
@@ -574,7 +631,7 @@ function checkMemoryPressure() {
   for (const id of Object.keys(sessionMessages.value)) {
     if (id === activeSessionId.value || id === streamSessionId) continue
     const msgs = sessionMessages.value[id]
-    if (msgs && msgs.length > 0) void saveColdMessages(id, msgs)
+    if (msgs && msgs.length > 0) void saveColdMessages(coldCacheKey(id), msgs)
     delete sessionMessages.value[id]
     delete historyMeta[id]
     const idx = sessionUsageOrder.indexOf(id)
@@ -625,7 +682,8 @@ const earlierSessions = computed(() =>
 async function loadSessionHistoryIfNeeded(id: string) {
   if (!id || id === 'new') return
   if (sessionMessages.value[id]?.length || historyMeta[id]) return
-  const cold = await loadColdMessages(id)
+  const cold = await loadColdMessages(coldCacheKey(id))
+  if (disposed) return
   if (cold && cold.length > 0) {
     sessionMessages.value[id] = cold
     return
@@ -633,9 +691,11 @@ async function loadSessionHistoryIfNeeded(id: string) {
   try {
     const pageSize = 100
     let page = await getAiChatHistoryPage(id, 1, pageSize)
+    if (disposed) return
     if (page.total > pageSize) {
       page = await getAiChatHistoryPage(id, Math.ceil(page.total / pageSize), pageSize)
     }
+    if (disposed) return
     sessionMessages.value[id] = page.messages
     historyMeta[id] = { loadedPageNo: page.pageNo, total: page.total, pageSize }
   } catch (e) {
@@ -685,30 +745,19 @@ onMounted(async () => {
     // 测试环境可能未安装 Pinia：仅在存在活跃 store 时携带用户过滤
     const userId = getActivePinia() ? useAuthStore().info?.id : undefined
     const res = await listAiSessions(userId)
+    if (disposed) return
     sessions.value = [...res]
   }
-  if (sessions.value.length > 0) {
+  if (props.floatOpenCount === 0 && sessions.value.length > 0) {
     activeSessionId.value = sessions.value[0].id
     clarifySessionId.value = sessions.value[0].id
     touchSession(activeSessionId.value)
     await loadSessionHistoryIfNeeded(activeSessionId.value)
     scrollToBottom()
-  } else {
-    activeSessionId.value = 'new'
   }
-
-  // 动态获取后端配置的推荐问数场景（配置于 sys_page_config，对应 /api/poc/chat/help/question），没有则不展示
-  try {
-    const questions = await listRecommendedQuestions()
-    if (questions && questions.length > 0) {
-      starterPrompts.value = mapQuestionsToStarters(questions)
-    } else {
-      starterPrompts.value = []
-    }
-  } catch (err) {
-    console.warn('[AiChat] 加载后端推荐问数场景失败，不展示推荐场景:', err)
-    starterPrompts.value = []
-  }
+  if (disposed) return
+  loadingSessions.value = false
+  void loadStarterQuestions()
 })
 
 // 滚动到底部；force=true 时同时恢复自动跟随并清零未读
@@ -764,7 +813,7 @@ function handleDeleteSession(id: string) {
   delete clone[id]
   sessionMessages.value = clone
   delete historyMeta[id]
-  void dropColdMessages(id)
+  void dropColdMessages(coldCacheKey(id))
   const usageIdx = sessionUsageOrder.indexOf(id)
   if (usageIdx >= 0) sessionUsageOrder.splice(usageIdx, 1)
 
@@ -797,7 +846,7 @@ function handleClearSessions() {
   sessionMessages.value = {}
   for (const key of Object.keys(historyMeta)) delete historyMeta[key]
   sessionUsageOrder.length = 0
-  for (const s of currentList) void dropColdMessages(s.id)
+  for (const s of currentList) void dropColdMessages(coldCacheKey(s.id))
   activeSessionId.value = 'new'
   clarifySessionId.value = 'new'
   ElMessage.info('已清空历史会话')
@@ -805,26 +854,28 @@ function handleClearSessions() {
   Promise.allSettled(currentList.map((s) => deleteAiSession(s.id))).catch(() => {})
 }
 
-// 点击「新建问数会话」按钮 -> 进入全新的会话页面
-function handleNewChat() {
-  if (isSending.value) {
-    handleStop()
-  }
+function resetToNewChat() {
   activeSessionId.value = 'new'
   clarifySessionId.value = 'new'
   promptText.value = ''
   clarifyConfirmed.value = false
   selectedTables.value = []
   extraRevealed.value = 0
+  isFollowingScroll.value = true
+  unreadBelowCount.value = 0
   clarifyCardKey.value += 1
+}
+
+// 点击「新建问数会话」按钮 -> 进入全新的会话页面
+function handleNewChat() {
+  if (isSending.value) handleStop()
+  resetToNewChat()
   ElMessage.info('已进入新会话页面')
 }
 
-// 点击推荐场景卡片快速发起问数
-function handleSelectStarter(starter: StarterPrompt) {
-  promptText.value = starter.prompt
-  handleSend(starter.title)
-}
+watch(() => props.floatOpenCount, () => {
+  if (!isSending.value) resetToNewChat()
+})
 
 // 确认澄清/待确认项：锁定卡片，把用户勾选的项回传给智能体会话推进下一轮分析
 async function handleConfirmClarify(
@@ -882,6 +933,78 @@ async function handleConfirmClarify(
   scrollToBottom()
 }
 
+// ===== 智能体对话建表 =====
+// 由智能体 table-draft skill 识别建表意图并输出草稿，回答里的草稿渲染成确认卡片（输入框不再设开关）
+
+// 确认草稿：真实建表（entrySave → config/entryTypeAddAll），成功后把结果回传智能体
+async function handleConfirmTableDraft(msg: ChatMessage, draft: TableDraft) {
+  const state = msg.tableDraft
+  if (!state || state.status === 'creating' || state.status === 'created') return
+  state.draft = draft
+  state.status = 'creating'
+  state.error = undefined
+  try {
+    const { tableId } = await createTableFromDraft(draft)
+    state.status = 'created'
+    state.tableId = tableId
+    ElMessage.success(`数据表「${draft.name}」已创建，表 ID ${tableId}`)
+  } catch (error) {
+    state.status = 'failed'
+    state.error = error instanceof Error ? error.message : String(error)
+    ElMessage.error(`建表失败：${state.error}`)
+    return
+  }
+  // 结果回传：让智能体知道表已建好、可继续追问；也是刷新后把草稿判为「已创建」的依据
+  promptText.value = formatTableCreatedMessage(draft, state.tableId!)
+  await handleSend()
+}
+
+function handleCancelTableDraft(msg: ChatMessage) {
+  if (msg.tableDraft && msg.tableDraft.status !== 'created') msg.tableDraft.status = 'cancelled'
+}
+
+// 确认建源草稿：按新建采集 / 新增源链路逐步执行，进度写回卡片；结束后（含部分失败）把结果回传智能体
+async function handleConfirmSourceDraft(msg: ChatMessage, form: SourceDraftForm) {
+  const state = msg.sourceDraft
+  if (!state || state.status !== 'pending') return
+  state.status = 'creating'
+  state.steps = []
+  state.error = undefined
+  const onStep = (step: SourceDraftStep) => {
+    const steps = state.steps ?? (state.steps = [])
+    const i = steps.findIndex((s) => s.key === step.key)
+    if (i >= 0) steps.splice(i, 1, step)
+    else steps.push(step)
+  }
+  let result
+  try {
+    result = await executeSourceDraft(form, onStep)
+  } catch (error) {
+    state.status = 'failed'
+    state.error = error instanceof Error ? error.message : String(error)
+    ElMessage.error(`建源失败：${state.error}`)
+    return
+  }
+  // 一个都没建成（第一步就失败，如参考源流程不可复制、未开新建通道）：回到可编辑，让用户改了再确认
+  const nothingCreated = !result.ok && !result.sources.length && (form.siteMode !== 'new' || !result.siteId)
+  if (nothingCreated) {
+    state.status = 'pending'
+    state.error = result.error
+    ElMessage.warning(result.error || '建源失败')
+    return
+  }
+  state.result = result
+  state.status = result.ok ? 'created' : 'failed'
+  if (result.ok) ElMessage.success(`已创建 ${result.sources.length} 个源`)
+  else ElMessage.warning(result.error || '建源未全部完成')
+  promptText.value = formatSourceCreatedMessage(result)
+  await handleSend()
+}
+
+function handleCancelSourceDraft(msg: ChatMessage) {
+  if (msg.sourceDraft && msg.sourceDraft.status === 'pending') msg.sourceDraft.status = 'cancelled'
+}
+
 // 复制 SQL（统一走 utils/clipboard：http 部署站没有 navigator.clipboard，兜底与手动复制弹窗都在那里）
 async function handleCopySql(code: string) {
   await copyToClipboard(code, 'SQL')
@@ -896,7 +1019,24 @@ function handleQuickPrompt(text: string) {
 // 发送消息：经 useAskChat 状态机对接后端 /api/poc/chat/agent SSE 流式接口
 async function handleSend(customTitle?: string) {
   const content = promptText.value.trim()
-  if (!content || isSending.value) return
+  if (!content || isSending.value || loadingSessions.value || disposed) return
+
+  // 建源意图交给智能体识别；建表在发送时追加现有草稿格式要求。
+  const draftMode = !isSourceCreatedMessage(content) && isCreateTableIntent(content) ? 'table' : undefined
+  const lowerContent = content.toLowerCase()
+  const isExportQuery =
+    !draftMode &&
+    currentMessages.value.length > 0 &&
+    (content.includes('导出') || content.includes('下载')) &&
+    (lowerContent.includes('csv') ||
+      lowerContent.includes('excel') ||
+      lowerContent.includes('xlsx') ||
+      content.includes('表格') ||
+      content.includes('数据'))
+  if (isExportQuery && props.compact) {
+    emit('openFull')
+    return
+  }
   promptText.value = ''
 
   let targetSessionId = activeSessionId.value
@@ -934,16 +1074,6 @@ async function handleSend(customTitle?: string) {
   scrollToBottom()
 
   // 快捷导出指令识别（若会话中已有表格且用户指令是导出，支持快捷导出）
-  const lowerContent = content.toLowerCase()
-  const isExportQuery =
-    list.length > 1 &&
-    (content.includes('导出') || content.includes('下载')) &&
-    (lowerContent.includes('csv') ||
-      lowerContent.includes('excel') ||
-      lowerContent.includes('xlsx') ||
-      content.includes('表格') ||
-      content.includes('数据'))
-
   if (isExportQuery) {
     const targetMsg = [...list]
       .reverse()
@@ -985,6 +1115,7 @@ async function handleSend(customTitle?: string) {
 
   // 快捷图表形态转换指令识别（若会话中已有表格且用户指令要求做成图表/饼图/明细表）
   const isChartViewQuery =
+    !draftMode &&
     list.length > 1 &&
     (content.includes('图表') ||
       content.includes('柱状图') ||
@@ -1043,6 +1174,7 @@ async function handleSend(customTitle?: string) {
     createdAt: '刚刚',
     question: content,
     status: 'streaming',
+    ...(draftMode ? { draftMode } : {}),
     thinking: {
       completed: false,
       durationMs: 0,
@@ -1074,12 +1206,18 @@ async function beginStream(
   const currentSessionObj = sessions.value.find((s) => s.id === sessionId)
   const sessionIdParam = /^\d+$/.test(sessionId) ? Number(sessionId) : undefined
   const threadIdParam = currentSessionObj?.uuid || (sessionIdParam ? undefined : sessionId)
+  // 缺 user_id 时后端兜底写 userId=1，会话挂错属主后按登录用户过滤的列表查不到
+  const userId = getActivePinia() ? useAuthStore().info?.id : undefined
 
   const started = await askChat.send(
     {
-      msg: question,
+      // 建表 / 建源意图：界面显示用户原文，发给智能体的消息追加草稿格式要求（历史回放时按标记剥掉）
+      msg: msg.draftMode === 'table'
+        ? buildTableDraftPrompt(question)
+        : question,
       session_id: sessionIdParam,
       thread_id: threadIdParam,
+      user_id: userId,
     },
     opts,
   )
@@ -1121,6 +1259,10 @@ async function handleRetry(msg: ChatMessage) {
   msg.sql = undefined
   msg.clarification = undefined
   msg.chartData = undefined
+  msg.tableDraft = undefined
+  msg.suggestions = undefined
+  msg.suggestionsKind = undefined
+  msg.sourceDraft = undefined
   msg.question = question
   msg.thinking = { completed: false, durationMs: 0, steps: [], text: '' }
   // 上一轮正文开始时把思考面板收起了（见 onChunkFlush），重试要恢复「思考中自动展开」
@@ -1190,14 +1332,24 @@ function handleKeyDown(e: KeyboardEvent) {
     handleStop()
     return
   }
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     handleSend()
   }
 }
 
+watch(() => [props.compact, props.compactVisible] as const, async ([compact, visible], previous) => {
+  if (compact && !visible) return
+  await nextTick()
+  if ((compact && props.compactVisible) || (!compact && previous?.[0])) {
+    textareaRef.value?.focus({ preventScroll: true })
+  }
+  if (isFollowingScroll.value) scrollToBottom()
+}, { flush: 'post', immediate: true })
+
 // 组件卸载时安全终止未完成的流式任务与定时器
 onUnmounted(() => {
+  disposed = true
   if (isSending.value) {
     handleStop()
   }
@@ -1217,9 +1369,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="rc-aichat-workbench">
+  <div class="rc-aichat-workbench" :class="{ 'is-compact': compact }">
     <!-- 1. 左侧会话历史侧栏 -->
-    <aside class="rc-aichat-sidebar">
+    <aside v-show="!compact" class="rc-aichat-sidebar">
       <div class="rc-sidebar-header">
         <el-button
           type="primary"
@@ -1334,12 +1486,13 @@ onUnmounted(() => {
     </aside>
 
     <!-- 2. 中间对话与分析工作台 -->
-    <main class="rc-aichat-main">
+    <main class="rc-aichat-main" :class="{ 'is-welcome': isNewSession }">
       <!-- 顶部控制条 -->
-      <header class="rc-aichat-topbar">
+      <header v-if="!compact || !isNewSession" class="rc-aichat-topbar">
         <div class="rc-topbar-left">
-          <span class="rc-aichat-brand">AI 智能问数</span>
+          <span class="rc-aichat-brand" aria-hidden="true">AI 智能问数</span>
           <el-tag
+            v-if="!compact"
             size="small"
             :type="isNewSession ? 'success' : 'primary'"
             effect="plain"
@@ -1348,69 +1501,40 @@ onUnmounted(() => {
             {{ isNewSession ? '新建问数会话' : 'Agent 工作台' }}
           </el-tag>
           <span v-if="!isNewSession && currentSessionTitle" class="rc-topbar-session-title">
-            / {{ currentSessionTitle }}
+            {{ compact ? currentSessionTitle : `/ ${currentSessionTitle}` }}
           </span>
         </div>
+        <el-button v-if="compact && !isNewSession" link size="small" :icon="Plus" :disabled="isSending || loadingSessions" @click="handleNewChat">
+          新会话
+        </el-button>
       </header>
 
       <!-- A. 新建问数会话页面（静态引导页） -->
       <div v-if="isNewSession" class="rc-new-session-view" data-testid="new-session-view">
         <div class="rc-hero-section">
-          <div class="rc-hero-icon">
-            <el-icon :size="36"><TrendCharts /></el-icon>
+          <div class="rc-hero-icon" aria-hidden="true">
+            <el-icon :size="compact ? 24 : 36"><TrendCharts /></el-icon>
+            <span v-if="compact" class="rc-hero-spark">✦</span>
           </div>
-          <h1 class="rc-hero-title">您好，我是 AI 智能问数助手</h1>
-          <p class="rc-hero-subtitle">
-            支持自然语言直接取数（Text-to-SQL）、多表关联、多轮主动澄清、指标下钻与自动化图表可视化分析
-          </p>
+          <h1 class="rc-hero-title">{{ compact ? 'AI 智能问数助手' : '您好，我是 AI 智能问数助手' }}</h1>
+          <p v-if="compact" class="rc-hero-subtitle">输入你要查的数据，或描述创建需求</p>
+          <p v-else class="rc-hero-subtitle">用自然语言查数据，支持选表澄清、图表和明细。也可以描述采集源或表结构，生成可确认的草稿。</p>
         </div>
 
-        <!-- 推荐快捷问数场景 -->
-        <div class="rc-starters-section" v-if="starterPrompts && starterPrompts.length > 0">
-          <div class="rc-starters-header">
-            <span class="rc-starters-title">💡 推荐问数场景（点击一键提问）</span> 
-          </div>
-          <div class="rc-starter-grid">
-            <div
-              v-for="starter in starterPrompts"
-              :key="starter.title"
-              class="rc-starter-card"
-              @click="handleSelectStarter(starter)"
-            >
-              <div class="rc-starter-head">
-                <span class="rc-starter-badge">{{ starter.tag }}</span>
-                <el-icon class="rc-starter-arrow"><ArrowRight /></el-icon>
-              </div>
-              <div class="rc-starter-name">{{ starter.title }}</div>
-              <div class="rc-starter-desc">{{ starter.prompt }}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 核心能力特性 -->
-        <div class="rc-features-bar">
-          <div class="rc-feature-item">
-            <span class="rc-feat-icon">🎯</span>
-            <div class="rc-feat-text">
-              <strong>多轮主动澄清</strong>
-              <span>同名表或歧义指标主动唤起候选卡片</span>
-            </div>
-          </div>
-          <div class="rc-feature-item">
-            <span class="rc-feat-icon">🛡️</span>
-            <div class="rc-feat-text">
-              <strong>安全只读 SQL</strong>
-              <span>严格限制 SELECT 语法，秒级执行</span>
-            </div>
-          </div>
-          <div class="rc-feature-item">
-            <span class="rc-feat-icon">📊</span>
-            <div class="rc-feat-text">
-              <strong>图表与明细联动</strong>
-              <span>趋势对比与行级明细报表自由切换</span>
-            </div>
-          </div>
-        </div>
+        <ul class="rc-features-bar" aria-label="AI 问数功能">
+          <li class="rc-feature-item">
+            <el-icon class="rc-feat-icon" aria-hidden="true"><TrendCharts /></el-icon>
+            智能问数
+          </li>
+          <li class="rc-feature-item">
+            <el-icon class="rc-feat-icon" aria-hidden="true"><Connection /></el-icon>
+            对话建源
+          </li>
+          <li class="rc-feature-item">
+            <el-icon class="rc-feat-icon" aria-hidden="true"><Grid /></el-icon>
+            对话建表
+          </li>
+        </ul>
       </div>
 
       <!-- B. 已有会话消息交互流容器 -->
@@ -1440,13 +1564,12 @@ onUnmounted(() => {
             'is-clarification': !!msg.clarification,
           }]"
         >
-          <!-- 用户消息 -->
+          <!-- 用户消息：不展示头像，气泡靠右即可（原型设计说明 ①） -->
           <template v-if="msg.role === 'user'">
             <div class="rc-msg-bubble user">
               <p>{{ msg.content }}</p>
               <div class="rc-msg-time">{{ msg.createdAt }}</div>
             </div>
-            <div class="rc-avatar user">我</div>
           </template>
 
           <!-- 智能体消息 -->
@@ -1564,8 +1687,29 @@ onUnmounted(() => {
                     />
                   </div>
 
+                  <!-- 智能体对话建表：草稿确认卡片（确认后才真实建表） -->
+                  <TableDraftCard
+                    v-if="msg.tableDraft && !compact"
+                    :state="msg.tableDraft"
+                    :disabled="isSending"
+                    @confirm="(draft: TableDraft) => handleConfirmTableDraft(msg, draft)"
+                    @cancel="handleCancelTableDraft(msg)"
+                  />
+                  <!-- 智能体对话建源：草稿确认卡片（回查网站/分类/模板，确认后才真实建源） -->
+                  <SourceDraftCard
+                    v-if="msg.sourceDraft && !compact"
+                    :state="msg.sourceDraft"
+                    :disabled="isSending"
+                    @confirm="(form: SourceDraftForm) => handleConfirmSourceDraft(msg, form)"
+                    @cancel="handleCancelSourceDraft(msg)"
+                  />
+                  <div v-if="compact && (msg.tableDraft?.status === 'pending' || msg.sourceDraft?.status === 'pending')" class="rc-compact-result">
+                    <span>{{ msg.tableDraft?.status === 'pending' ? '建表草稿待确认' : '建源草稿待确认' }}</span>
+                    <el-button link type="primary" @click="emit('openFull')">查看草稿</el-button>
+                  </div>
+
                   <!-- 生成的 SQL 卡片 -->
-                  <div v-if="msg.sql" class="rc-sql-card">
+                  <div v-if="msg.sql && !compact" class="rc-sql-card">
                     <div class="rc-sql-head">
                       <div class="rc-sql-badge">
                         <span class="rc-sql-label">SQL QUERY</span>
@@ -1618,13 +1762,17 @@ onUnmounted(() => {
 
                   <!-- 图表/饼图/明细数据卡（按需加载子组件，内含视图切换、分页与导出） -->
                   <DataViewCard
-                    v-if="msg.chartData"
+                    v-if="msg.chartData && !compact"
                     :chart-data="msg.chartData"
                     :kpis="msg.kpis"
                     :view="getMsgDataView(msg)"
                     @update:view="(v: 'chart' | 'pie' | 'table') => setMsgDataView(msg, v)"
                     @export="(fmt: 'excel' | 'csv') => (fmt === 'excel' ? exportTableToExcel(msg) : exportTableToCsv(msg))"
                   />
+                  <div v-else-if="msg.chartData" class="rc-compact-result">
+                    <span>{{ msg.chartData.title || '问数查询结果' }}</span>
+                    <el-button link type="primary" @click="emit('openFull')">查看明细</el-button>
+                  </div>
 
                   <!-- 专家诊断与建议 -->
                   <div v-if="msg.insights && msg.insights.length" class="rc-insight-card">
@@ -1641,7 +1789,7 @@ onUnmounted(() => {
                     v-if="msg.suggestions && msg.suggestions.length"
                     class="rc-followup-chips"
                   >
-                    <span class="rc-chips-label">智能追问:</span>
+                    <span class="rc-chips-label">{{ msg.suggestionsKind === 'table_switch' ? '可以改查：' : '智能追问:' }}</span>
                     <el-button
                       v-for="(sug, sidx) in msg.suggestions"
                       :key="sidx"
@@ -1755,11 +1903,11 @@ onUnmounted(() => {
         </button>
       </transition>
 
-      <!-- 底部输入停靠区 -->
+      <!-- 输入区：对话中停靠底部；新会话页随欢迎内容居中（标题 → 输入框 → 推荐问数场景） -->
       <footer class="rc-aichat-footer">
         <!-- 浮动停止响应按钮：处于流式响应中时居中浮现 -->
         <transition name="el-fade-in-linear">
-          <div v-if="isSending" class="rc-stop-float-bar">
+          <div v-if="isSending && !compact" class="rc-stop-float-bar">
             <button
               type="button"
               class="rc-stop-float-btn"
@@ -1777,14 +1925,16 @@ onUnmounted(() => {
             ref="textareaRef"
             v-model="promptText"
             rows="2"
-            placeholder="向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）..."
+            :placeholder="compact || isNewSession ? '描述你的问题或创建需求…' : '向 AI 智能体提问，支持连续追问与交互澄清（按 Enter 发送，Shift+Enter 换行）...'"
+            aria-label="输入问数问题"
             class="rc-textarea"
             @keydown="handleKeyDown"
           ></textarea>
 
           <div class="rc-input-toolbar">
             <div class="rc-toolbar-left">
-              <span class="rc-input-tip">{{ isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
+              <span v-if="compact && !isSending" class="rc-input-tip"><kbd>Enter</kbd> 发送</span>
+              <span v-if="!compact" class="rc-input-tip">{{ isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
             </div>
 
             <el-button
@@ -1804,15 +1954,39 @@ onUnmounted(() => {
               type="primary"
               size="small"
               class="rc-send-btn"
+              :icon="compact ? Promotion : undefined"
               data-testid="send-btn"
-              :disabled="!promptText.trim()"
-              @click="handleSend"
+              :disabled="!promptText.trim() || loadingSessions"
+              @click="handleSend()"
             >
               发送
             </el-button>
           </div>
         </div>
       </footer>
+
+        <!-- 推荐问题：来自「问数系统配置 → 页面配置」的启用内容，没有就不展示 -->
+        <div v-if="!compact && isNewSession && starterQuestions.length" class="rc-starters-section" data-testid="starter-questions">
+          <div class="rc-starters-header">
+            <span class="rc-starters-title">✦ 推荐问数场景（点击一键提问）</span>
+          </div>
+          <div class="rc-starter-grid">
+            <button
+              v-for="q in starterQuestions"
+              :key="q"
+              type="button"
+              class="rc-starter-card"
+              :title="q"
+              :disabled="isSending"
+              @click="handleSelectStarter(q)"
+            >
+              <span class="rc-starter-name">{{ q }}</span>
+              <svg class="rc-starter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7 17L17 7" /><path d="M8 7h9v9" />
+              </svg>
+            </button>
+          </div>
+        </div>
     </main>
   </div>
 </template>
@@ -1845,10 +2019,20 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--rc-border-soft);
 }
 
+/* 新建会话按钮：品牌渐变（原型设计说明 ①），选中态保留外发光提示 */
 .rc-newchat-btn {
   width: 100%;
   margin-bottom: 10px;
   font-weight: 600;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+  border: none !important;
+  color: #ffffff !important;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.rc-newchat-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
 }
 
 .rc-newchat-btn.is-active {
@@ -1874,13 +2058,26 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-radius: var(--rc-radius-sm);
+  border-radius: 0 var(--rc-radius-sm) var(--rc-radius-sm) 0;
   font-size: 12px;
   color: var(--rc-text-2);
   cursor: pointer;
   transition: all 0.15s ease;
   margin-bottom: 3px;
   position: relative;
+}
+
+/* 选中态左侧 3px 色条（原型设计说明 ④） */
+.rc-session-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
 }
 
 .rc-session-item-main {
@@ -1927,7 +2124,11 @@ onUnmounted(() => {
   background: var(--rc-primary-bg);
   color: var(--rc-primary);
   font-weight: 600;
-  box-shadow: 0 0 0 1px var(--rc-primary);
+  box-shadow: none;
+}
+
+.rc-session-item.active::before {
+  background: var(--rc-primary);
 }
 
 .rc-sidebar-footer {
@@ -1971,10 +2172,9 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+/* 顶栏不再展示品牌大字（原型设计说明 ④），类名保留以兼容测试查询 */
 .rc-aichat-brand {
-  font-weight: 700;
-  font-size: 15px;
-  color: var(--rc-text);
+  display: none;
 }
 
 .rc-topbar-session-title {
@@ -1990,13 +2190,11 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-/* 新建会话引导页面 */
+/* 新建会话引导页面：只放标题与能力标签，输入框和推荐问数场景是 main 里的兄弟节点 */
 .rc-new-session-view {
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 32px 24px;
+  padding: 24px 24px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2004,24 +2202,92 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-.rc-hero-section {
-  text-align: center;
-  margin-bottom: 28px;
-  width: 100%;
-  max-width: 800px;
+/* 新会话页：标题 → 输入框 → 推荐问数场景 整体在可视区垂直居中；
+   内容超高时 auto 边距归零，main 自身滚动（对话页仍是 overflow hidden + 对话流内部滚动） */
+.rc-aichat-main.is-welcome {
+  overflow-y: auto;
+  /* 视觉重心略高于正中（底部多留一点），整块不贴底 */
+  padding-bottom: 6vh;
 }
 
+.rc-aichat-main.is-welcome > .rc-new-session-view {
+  margin-top: auto;
+}
+
+.rc-aichat-main.is-welcome > :last-child {
+  margin-bottom: auto;
+}
+
+.rc-aichat-main.is-welcome > .rc-aichat-footer {
+  border-top: none;
+  background: transparent;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.rc-aichat-main.is-welcome > .rc-starters-section {
+  width: 100%;
+  max-width: 956px;
+  /* 下边距保持 auto：与标题区的 margin-top:auto 一起把整块垂直居中，不能写死 */
+  margin: 20px auto auto;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1600px) {
+  .rc-aichat-main.is-welcome > .rc-starters-section {
+    max-width: 1296px;
+  }
+}
+
+/* 空状态内容统一限宽 780（原型设计说明 ②），大屏放宽 */
+.rc-new-session-view > * {
+  max-width: 780px;
+}
+
+@media (min-width: 1600px) {
+  .rc-new-session-view > * {
+    max-width: 1100px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-new-session-view > * {
+    max-width: min(1100px, 65%);
+  }
+}
+
+.rc-hero-section {
+  text-align: center;
+  margin-bottom: 0;
+  width: 100%;
+  max-width: 780px;
+}
+
+@media (min-width: 1600px) {
+  .rc-hero-section {
+    max-width: 1100px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-hero-section {
+    max-width: min(1100px, 65%);
+  }
+}
+
+/* 品牌渐变统一：hero 与智能体头像同一套渐变（原型设计说明 ①） */
 .rc-hero-icon {
   width: 60px;
   height: 60px;
   border-radius: 18px;
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto 14px;
-  box-shadow: 0 8px 20px -4px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 8px 20px -4px rgba(37, 99, 235, 0.4);
 }
 
 .rc-hero-title {
@@ -2045,126 +2311,110 @@ onUnmounted(() => {
 }
 
 .rc-starters-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .rc-starters-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rc-text);
-}
-
-.rc-starters-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--rc-muted);
 }
 
+/* 推荐问数场景：三列卡片（窄屏自动减列），左上问句、右上斜箭头 */
 .rc-starter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
   width: 100%;
-  box-sizing: border-box;
+}
+
+@media (min-width: 900px) {
+  .rc-starter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .rc-starter-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px 12px 16px;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius);
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  border-radius: 12px;
   box-shadow: var(--rc-shadow-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.rc-starter-card:hover {
+.rc-starter-card:hover:not(:disabled),
+.rc-starter-card:focus-visible {
   border-color: var(--rc-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+  outline: none;
 }
 
-.rc-starter-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.rc-starter-badge {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--rc-primary-bg);
-  color: var(--rc-primary);
-  font-weight: 600;
-}
-
-.rc-starter-arrow {
-  font-size: 12px;
-  color: var(--rc-muted);
-  transition: transform 0.2s;
-}
-
-.rc-starter-card:hover .rc-starter-arrow {
-  color: var(--rc-primary);
-  transform: translateX(3px);
+.rc-starter-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .rc-starter-name {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.55;
   color: var(--rc-text);
-  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
 
-.rc-starter-desc {
-  font-size: 12px;
+.rc-starter-arrow {
+  width: 13px;
+  height: 13px;
+  margin-top: 3px;
+  flex-shrink: 0;
   color: var(--rc-muted);
-  line-height: 1.5;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
+.rc-starter-card:hover:not(:disabled) .rc-starter-arrow,
+.rc-starter-card:focus-visible .rc-starter-arrow {
+  color: var(--rc-primary);
+  transform: translate(1px, -1px);
+}
+
+/* 两种问数视图共用开场页的功能标签。 */
 .rc-features-bar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
-  width: 100%;
-  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 20px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
 .rc-feature-item {
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border-soft);
-  border-radius: var(--rc-radius-sm);
-  padding: 12px 14px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--rc-muted);
+  cursor: default;
 }
 
 .rc-feat-icon {
-  font-size: 20px;
-}
-
-.rc-feat-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.rc-feat-text strong {
-  font-size: 12px;
-  color: var(--rc-text);
-}
-
-.rc-feat-text span {
-  font-size: 11px;
-  color: var(--rc-muted);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--rc-primary);
 }
 
 /* 对话流 */
@@ -2184,6 +2434,27 @@ onUnmounted(() => {
   gap: 18px;
   width: 100%;
   box-sizing: border-box;
+}
+
+/* 对话流内容限宽 860 居中（原型设计说明 ⑤），大屏放宽至 70% / 最大 1200px */
+.rc-chat-thread > * {
+  width: 100%;
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1600px) {
+  .rc-chat-thread > * {
+    max-width: 1200px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-chat-thread > * {
+    max-width: min(1200px, 70%);
+  }
 }
 
 .rc-msg-row {
@@ -2210,13 +2481,13 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+/* 用户消息不展示头像（原型设计说明 ①），保留类名以兼容历史 CSS/测试查询 */
 .rc-avatar.user {
-  background: var(--rc-text);
-  color: #ffffff;
+  display: none;
 }
 
 .rc-avatar.assistant {
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   color: #ffffff;
 }
 
@@ -2233,6 +2504,12 @@ onUnmounted(() => {
   box-shadow: var(--rc-shadow-soft);
   max-width: min(720px, 80%);
   word-break: break-word;
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+/* 卡片 hover 轻微位移（原型设计说明 ⑤） */
+.rc-msg-bubble.user:hover {
+  transform: translateY(-1px);
 }
 
 .rc-msg-time {
@@ -2273,22 +2550,25 @@ onUnmounted(() => {
 }
 
 /* 思考折叠面板 */
+/* 思考折叠面板：降噪为浅色细线条（原型设计说明 ③） */
 .rc-thinking-box {
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--rc-border-soft);
+  border-bottom: 1px solid var(--rc-border-soft);
+  border-radius: 0;
   overflow: hidden;
 }
 
 .rc-thinking-header {
-  padding: 10px 14px;
+  padding: 8px 2px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
   color: var(--rc-text-2);
   cursor: pointer;
-  background: var(--rc-bg);
+  background: transparent;
 }
 
 .rc-thinking-title {
@@ -2336,8 +2616,8 @@ onUnmounted(() => {
 }
 
 .rc-thinking-body {
-  padding: 12px 14px;
-  border-top: 1px solid var(--rc-border-soft);
+  padding: 10px 2px 12px;
+  border-top: none;
   font-size: 12px;
   color: var(--rc-muted);
   line-height: 1.6;
@@ -2412,6 +2692,10 @@ onUnmounted(() => {
 .rc-sql-meta {
   font-size: 11px;
   color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 420px;
 }
 
 .rc-sql-code {
@@ -2456,9 +2740,10 @@ onUnmounted(() => {
 }
 
 .rc-kpi-value {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  font-family: monospace;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
   margin: 4px 0;
   color: var(--rc-text);
 }
@@ -2717,10 +3002,11 @@ onUnmounted(() => {
   color: #d97706;
 }
 
-/* 诊断建议 */
+/* 诊断建议：左侧色条（原型设计说明 ③） */
 .rc-insight-card {
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
+  border-left: 3px solid var(--rc-primary);
   border-radius: var(--rc-radius);
   padding: 14px 16px;
   font-size: 12px;
@@ -2769,10 +3055,11 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+/* 输入卡与对话流同宽（860 内容 + 两侧 24 留白，原型设计说明 ②⑤） */
 .rc-input-box {
   width: 100%;
-  max-width: 100%;
-  margin: 0;
+  max-width: 908px;
+  margin: 0 auto;
   border: 1px solid var(--rc-border);
   border-radius: var(--rc-radius);
   background: var(--rc-surface);
@@ -2782,9 +3069,40 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
+@media (min-width: 1600px) {
+  .rc-input-box {
+    max-width: 1248px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .rc-input-box {
+    max-width: min(1248px, calc(70% + 48px));
+  }
+}
+
 .rc-input-box:focus-within {
   border-color: var(--rc-primary);
   box-shadow: 0 0 0 1px var(--rc-primary);
+}
+
+/* 发送按钮：空内容灰禁用，有内容品牌渐变点亮（原型设计说明 ⑤） */
+.rc-send-btn {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+  border: none !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  transition: opacity 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.rc-send-btn:not(.is-disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+}
+
+.rc-send-btn.is-disabled {
+  background: var(--rc-border-soft) !important;
+  color: var(--rc-muted) !important;
 }
 
 .rc-textarea {
@@ -2988,6 +3306,11 @@ onUnmounted(() => {
   border-top: 1px dashed var(--rc-border-soft);
 }
 
+/* 操作条文字按钮降噪（原型设计说明 ③） */
+.rc-msg-actions .el-button {
+  font-size: 11.5px;
+}
+
 .rc-msg-actions .el-button + .el-button {
   margin-left: 4px;
 }
@@ -3020,5 +3343,97 @@ onUnmounted(() => {
   border-color: var(--rc-primary);
   transform: translateY(-1px);
   box-shadow: 0 8px 22px rgba(37, 99, 235, 0.18);
+}
+
+.is-compact .rc-aichat-topbar {
+  height: 36px;
+  padding: 0 14px;
+}
+
+.is-compact .rc-topbar-left { min-width: 0; }
+.is-compact .rc-topbar-session-title { max-width: none; color: var(--rc-text-2); }
+.is-compact .rc-aichat-main.is-welcome {
+  padding: 0;
+  background: radial-gradient(ellipse 300px 220px at 50% 38%, var(--rc-primary-bg), transparent), var(--rc-surface);
+}
+.is-compact .rc-new-session-view {
+  flex: 0 0 auto;
+  padding: 18px 16px 14px;
+}
+.is-compact .rc-hero-section { margin: 0; max-width: 100%; }
+.is-compact .rc-hero-icon {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, var(--rc-surface), var(--rc-indigo-bg));
+  color: var(--rc-indigo);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rc-indigo) 12%, transparent), var(--rc-shadow);
+}
+.rc-hero-spark {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  color: var(--rc-primary);
+  font-size: 13px;
+}
+.is-compact .rc-hero-title { font-size: 21px; margin: 0 0 5px; }
+.is-compact .rc-hero-subtitle { font-size: 12px; }
+.is-compact .rc-features-bar { gap: 6px 8px; margin-top: 10px; }
+.is-compact .rc-feature-item {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--rc-surface);
+  box-shadow: inset 0 0 0 1px var(--rc-border);
+  color: var(--rc-text-2);
+}
+.is-compact .rc-avatar { display: none; }
+.is-compact .rc-chat-thread { padding: 12px; gap: 12px; }
+.is-compact .rc-aichat-footer { padding: 10px 14px; }
+.is-compact .rc-aichat-main.is-welcome > .rc-aichat-footer {
+  max-width: 500px;
+  margin: 0 auto auto;
+  padding: 0 18px 18px;
+}
+.is-compact .rc-input-box {
+  max-width: none;
+  padding: 10px 10px 8px 12px;
+  border-radius: 13px;
+  box-shadow: var(--rc-shadow);
+}
+.is-compact .rc-input-box:focus-within {
+  border-color: color-mix(in srgb, var(--rc-primary) 54%, var(--rc-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc-primary) 11%, transparent);
+}
+.is-compact .rc-textarea { display: block; padding: 0; }
+.is-compact .rc-textarea::placeholder { color: var(--rc-muted); }
+.is-compact .rc-input-toolbar { border: 0; padding: 0; margin-top: 4px; }
+.is-compact .rc-input-tip { font-size: 11px; }
+.is-compact kbd {
+  font: inherit;
+  margin-right: 2px;
+  padding: 2px 4px;
+  background: var(--rc-bg);
+  border: 1px solid var(--rc-border);
+  border-radius: 4px;
+}
+.is-compact .rc-send-btn { height: 30px; border-radius: 7px; }
+@container ask-float-content (max-height: 265px) {
+  .is-compact .rc-new-session-view { padding-top: 12px; }
+  .is-compact .rc-hero-icon { display: none; }
+}
+.is-compact .rc-msg-actions { flex-wrap: wrap; }
+.is-compact .rc-back-to-bottom { right: 15px; bottom: 107px; }
+.rc-compact-result {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
 }
 </style>

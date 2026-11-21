@@ -3,14 +3,15 @@
  *
  * - 「产出」列和展开行共用一份结果：同一个源只取一次，展开时直接复用列上已取到的。
  * - 结果缓存 2 分钟，与后端 `queryStepDetail` 的 dataCache（expireAfterWrite 120s）一致——再早重取也只会拿到同一份。
- * - 批量取数并发 8（217 重点智库 65 个源实测 3.6 s），同一个源的并发请求合并成一个。
+ * - 批量取数并发 4（217 重点智库 65 个源实测 3.6 s @8 并发）：2026-11-19 从 8 降到 4，给用户操作留出浏览器连接
+ *   （HTTP/1.1 每域只有 6 条，8 并发会把整页其他请求都挤在后面）。同一个源的并发请求合并成一个。
  * - 组件卸载后迟到的响应不再写入（代号守卫，同 FilePreview 的 loadSeq 写法）。
  */
 import { onBeforeUnmount, shallowRef, triggerRef } from 'vue'
 import { sourceApi, type SourceOutputTable } from '@/api'
 
 export const SOURCE_OUTPUT_CACHE_MS = 120_000
-export const SOURCE_OUTPUT_CONCURRENCY = 8
+export const SOURCE_OUTPUT_CONCURRENCY = 4
 
 const cache = new Map<string, { at: number; tables: SourceOutputTable[] }>()
 const inflight = new Map<string, Promise<SourceOutputTable[]>>()

@@ -709,6 +709,11 @@ describe('选表分组与动态表结构适配（E 包 T1b）', () => {
     ])
   })
 
+  it('dataTableFromLegacy：透传 dsKind，源数据视图据此标出库类型', () => {
+    expect(dataTableFromLegacy({ entryTypeId: '2101754', tableName: 'sense_data.tb_x', dsKind: 'CK', items: [] }).dsKind).toBe('CK')
+    expect(dataTableFromLegacy({ entryTypeId: '2102007', tableName: 'sense_data.tb_y', dsKind: 'MYSQL', items: [] }).dsKind).toBe('MYSQL')
+  })
+
   it('dataTableFromLegacy：后端没给 dataCnt 时 rowCount 为 undefined，不兜成 0（0930-04 表结构抽屉显示「—」）', () => {
     const table = dataTableFromLegacy({ entryTypeId: '6200029', tableName: 'sense_data.TB_GZHWZ', items: [] })
     expect(table.rowCount).toBeUndefined()

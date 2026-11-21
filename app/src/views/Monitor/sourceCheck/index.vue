@@ -1160,6 +1160,7 @@ onMounted(() => {
         :record="editingRecord"
         :source-locked="editingLockSource"
         @saved="onEditorSaved"
+        @draft-saved="refresh"
         @cancel="onEditorCancel"
       />
     </el-dialog>

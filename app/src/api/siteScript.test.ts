@@ -123,3 +123,23 @@ describe('generateSiteScript', () => {
     expect(JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string)).toEqual(input)
   })
 })
+
+// 1117 契约 7：数据监控生成用 sourceId + 监控 ID 定位，不走流程 / 步骤 / 配置
+describe('submitSiteScriptTask · 数据监控上下文', () => {
+  it('monitorContext 走监控任务接口，生成快照里不带 monitorContext', async () => {
+    const { runnerManagementApi } = await import('./runnerManagement')
+    const monitor = vi.spyOn(runnerManagementApi, 'createMonitorGenerationTask').mockResolvedValue({ job: { taskId: '601' } as never })
+    const node = vi.spyOn(runnerManagementApi, 'createCodeGenerationTask')
+    const receipt = await submitSiteScriptTask({ monitorContext: { sourceId: '391006829', monitorId: '3101' }, configType: '610', interfaceId: 'all', prompt: '检查', url: '', sampleId: 'www.realcan.cn.py' })
+    expect(receipt).toEqual({ taskId: '601', queue: '' })
+    expect(node).not.toHaveBeenCalled()
+    const body = monitor.mock.calls[0]![0]
+    expect(body).toMatchObject({ sourceId: '391006829', monitorId: '3101', configType: '610' })
+    expect(body.generation).not.toHaveProperty('monitorContext')
+  })
+
+  it('监控还没有数字 ID 时拒绝提交', async () => {
+    await expect(submitSiteScriptTask({ monitorContext: { sourceId: '391006829', monitorId: '' }, prompt: '检查', url: '', sampleId: 'www.realcan.cn.py' }))
+      .rejects.toThrow('请先保存监控')
+  })
+})

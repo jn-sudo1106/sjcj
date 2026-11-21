@@ -112,6 +112,12 @@ watch(outputTables, tables => {
   tableChoice.value = saved && tables.some(t => t.id === saved) ? String(saved) : tables[0]?.id ?? ''
 }, { immediate: true })
 const tableNames = ref<Record<string, string>>({})
+// 1117：输入 / 输出块只留标签，表就看紧跟着的物理表名（点开「表结构详情」，库类型也在那里），
+// 不再并排显示表 ID / 表名称两套名字。悬停标签可看表 ID 与物理表名，和下拉同一次 tableMeta 拿到。
+const tableTitles = ref<Record<string, string>>({})
+function tableTip(id: string) {
+  return [`表 ID：${id}`, tableTitles.value[id]].filter(Boolean).join(' · ')
+}
 let tableNamesRequest = 0
 watch(() => outputTables.value.map(t => t.id), async ids => {
   const request = ++tableNamesRequest
@@ -121,6 +127,11 @@ watch(() => outputTables.value.map(t => t.id), async ids => {
     const table = result.status === 'fulfilled' ? result.value : null
     const label = [...new Set([table?.name?.trim(), table?.tableName?.trim()].filter(Boolean))].join(' · ')
     return [ids[index]!, label]
+  }))
+  tableTitles.value = Object.fromEntries(results.flatMap((result, index) => {
+    const table = result.status === 'fulfilled' ? result.value : null
+    const title = table?.tableName?.trim()
+    return title ? [[ids[index]!, title]] : []
   }))
 }, { immediate: true })
 onBeforeUnmount(() => { tableNamesRequest += 1 })
@@ -2026,7 +2037,7 @@ async function onTestScript() {
           <!-- 输入表===输出表：会议要的"展示看输出/发送用输入"两件事落在同一张表上，
                双 tab 自我矛盾，合并成一个（M3-0C 方案 A）；标签写"输入·输出"明示这张表
                两个身份都占，不是随便挑了一个名字。 -->
-          <span v-if="browseMode === 'step' && sameTable" class="ctx-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v code">{{ inputTableId }}</span></span>
+          <span v-if="browseMode === 'step' && sameTable" class="ctx-piece" data-testid="data-scope-merged" :title="tableTip(inputTableId)"><span class="k">输入·输出</span></span>
           <template v-else-if="browseMode === 'step'">
             <template v-if="inputTableId">
               <button
@@ -2036,8 +2047,8 @@ async function onTestScript() {
                 :class="{ active: scope === 'input' }"
                 data-testid="data-scope-input"
                 @click="onScopeChange('input')"
-              ><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></button>
-              <span v-else class="ctx-piece"><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></span>
+               :title="tableTip(inputTableId)"><span class="k">输入</span></button>
+              <span v-else class="ctx-piece" :title="tableTip(inputTableId)" data-testid="data-input-table"><span class="k">输入</span></span>
             </template>
             <template v-if="outputTableId">
               <span v-if="inputTableId" class="ctx-sep">·</span>
@@ -2048,8 +2059,8 @@ async function onTestScript() {
                 :class="{ active: scope === 'output' }"
                 data-testid="data-scope-output"
                 @click="onScopeChange('output')"
-              ><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></button>
-              <span v-else class="ctx-piece"><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></span>
+               :title="tableTip(outputTableId)"><span class="k">输出</span></button>
+              <span v-else class="ctx-piece" :title="tableTip(outputTableId)" data-testid="data-output-table"><span class="k">输出</span></span>
             </template>
           </template>
           <!-- 「按源抓取 / 按输入数据执行」徽标已删除（2026-08-19）：它当初存在是因为
@@ -2563,7 +2574,9 @@ async function onTestScript() {
 .rv-delete-error summary { cursor: pointer; }
 .rv-delete-error pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 
-.rv-table-context { display: flex; align-items: center; gap: 5px; min-width: 100px; max-width: 190px; flex: 0 1 190px; flex-wrap: nowrap; overflow: hidden; }
+/* 1117：表 ID 后带库类型标签（MYSQL / CK），整块不再参与收缩——以前 190px 封顶 + 先收缩，标签被裁成「M」；
+   挤的时候让 SQL 框（min 260px）让位，再不够整条工具栏本来就能横向滚动。 */
+.rv-table-context { display: flex; align-items: center; gap: 5px; flex: none; flex-wrap: nowrap; }
 .rv-table-context .rv-tablename { min-width: 0; max-width: 105px; }
 .rv-view-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .rv-grid-tools { display: flex; align-items: center; }
@@ -2645,7 +2658,7 @@ async function onTestScript() {
 .ctx-summary::-webkit-scrollbar { height: 5px; }
 .ctx-summary::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
 .ctx-summary > * { flex-shrink: 0; }
-.ctx-summary > .rv-table-context, .ctx-summary > .rv-sql { flex-shrink: 1; }
+.ctx-summary > .rv-sql { flex-shrink: 1; }
 /* SQL 框是这一行唯一可伸缩的元素，负责吸收多余/不足的宽度。必须比上面那条 no-shrink
    规则更具体，否则整行永远超宽、把右端的「查询/清空」挤出可视区——2026-08-15 实测回归，
    跟之前"查看条件被滚没"是同一类错误：nowrap 的行里必须留一个能缩的元素。 */

@@ -543,6 +543,7 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
     rowCount: entry.rowCount,
     state: entry.state,
     keyField: entry.keyField,
+    dsKind: entry.dsKind,
     remark: entry.remark,
     updatedAt: entry.updatedAt,
     recFlag: entry.recFlag,

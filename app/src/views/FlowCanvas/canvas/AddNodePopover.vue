@@ -34,6 +34,7 @@ const groups = computed<LibGroup[]>(() => {
   return LIB_GROUPS.map((group) => ({
     ...group,
     items: group.items
+      .filter((item) => !item.hiddenInPicker)
       .map((item) => {
         // 字典的稳定身份是编号；BROWSER/WECHAT/LOGIN 等独立前端入口保留原名。
         const source = sourceByCode.get(item.code)

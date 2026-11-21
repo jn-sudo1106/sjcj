@@ -7,6 +7,7 @@ import {
   extractChartDataFromText,
   listRecommendedQuestions,
   listAiSessions,
+  getAiChatHistoryPage,
   deleteAiSession,
   getAiChatHistory,
   convertChatLogsToMessages,
@@ -349,6 +350,30 @@ describe('streamAgentChat 智能体问数流式接口对接', () => {
     })
   })
 
+  it('extractClarificationFromReasoning 识别 ask_clarification 纯文本编号选项（186 实测：二手房价格多口径）', () => {
+    const reasoning = `[工具结果] search_tables: {"candidates":[{"entryTypeId":2101750,"tableName":"sense_data.TB_creprice_forsale_supply","typeName":"全国房价行情平台_二手房_供给量"}],"truncated":true}[工具调用] ask_clarification({})[工具结果] ask_clarification: 🤔 系统中有多张二手房相关表，价格口径不同：贝壳（成交价/在售价）、中指（月度销售均价）、全国房价行情平台（供给量）等。
+
+您想查询哪种"二手房价格"？请选择数据源和价格口径：
+
+  1. 贝壳二手房成交价（tb_ke_com_chengjiao_esf_detail）
+  2. 贝壳二手房在售价（TB_ke_com_ershoufang_sale）
+  3. 中指-二手房月度销售均价（TB_ZZ_MONTH_OLD_PRICE）
+  4. 其他（请说明）`
+    const clarification = extractClarificationFromReasoning(reasoning)
+    expect(clarification).toMatchObject({ kind: 'table_choice', allowFreeText: true, question: '您想查询哪种"二手房价格"？请选择数据源和价格口径：' })
+    expect(clarification!.options.map((o) => [o.ordinal, o.typeName, o.tableName, o.entryTypeId])).toEqual([
+      [1, '贝壳二手房成交价', 'tb_ke_com_chengjiao_esf_detail', null],
+      [2, '贝壳二手房在售价', 'TB_ke_com_ershoufang_sale', null],
+      [3, '中指-二手房月度销售均价', 'TB_ZZ_MONTH_OLD_PRICE', null],
+    ])
+
+    // 不带表名的口径选项：按口径选择处理，回传选项原文
+    const metric = extractClarificationFromReasoning('[工具结果] ask_clarification: 请选择统计口径：\n1. 按月\n2. 按季度')
+    expect(metric).toMatchObject({ kind: 'metric_choice', options: [{ typeName: '按月', tableName: '按月' }, { typeName: '按季度' }] })
+    // 只有提问没有选项：不出卡片
+    expect(extractClarificationFromReasoning('[工具结果] ask_clarification: 您想查哪个城市？')).toBeNull()
+  })
+
   it('extractClarificationFromReasoning 对未闭合 JSON、无澄清载荷的工具结果返回 null', () => {
     expect(extractClarificationFromReasoning('')).toBeNull()
     expect(
@@ -525,6 +550,12 @@ describe('listRecommendedQuestions 推荐问数场景获取', () => {
     expect(list).toEqual(['规则清洗未命中排查'])
   })
 
+  it('client 按分页归一后的 { list, total } 也能取到（186 实测响应带 count: null）', async () => {
+    vi.spyOn(clientModule, 'request').mockResolvedValue({ list: [' 2024年底，考核时点资产得分最高的机构 ', ''], total: 2 } as never)
+    const list = await listRecommendedQuestions()
+    expect(list).toEqual(['2024年底，考核时点资产得分最高的机构'])
+  })
+
   it('请求发生异常时静默降级返回空数组，不向外抛出异常', async () => {
     vi.spyOn(clientModule, 'request').mockRejectedValue(new Error('Network error'))
     const list = await listRecommendedQuestions()
@@ -693,6 +724,19 @@ describe('问数会话管理与历史记录持久化对接', () => {
     expect(list[1].id).toBe('2')
     expect(list[1].uuid).toBe('sess_2')
     expect(list[1].group).toBe('earlier')
+  })
+
+  it('后端信封带 count 时 client 归一成 { list, total }，会话列表与历史都能取到', async () => {
+    vi.spyOn(clientModule, 'request').mockResolvedValueOnce({ list: [{ id: 7, name: '建表会话' }], total: 0 } as any)
+    expect((await listAiSessions()).map((s) => s.id)).toEqual(['7'])
+
+    vi.spyOn(clientModule, 'request').mockResolvedValueOnce({
+      list: [{ id: 1, sessionId: 7, msg: '你好', modelMsg: '你好！', status: 'SUCCESS' }],
+      total: 0,
+    } as any)
+    const page = await getAiChatHistoryPage(7)
+    expect(page.total).toBe(1)
+    expect(page.messages.map((m) => m.content)).toEqual(['你好', '你好！'])
   })
 
   it('deleteAiSession 发起后端会话软删除', async () => {

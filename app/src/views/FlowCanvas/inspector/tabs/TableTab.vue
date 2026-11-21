@@ -22,6 +22,7 @@ import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { inputFieldSelection, inputFieldTokens } from '@/utils/flow/inputFieldSelection'
+import StorageKindTag from '@/components/StorageKindTag.vue'
 
 const props = defineProps<{ templateDefaults?: boolean }>()
 const flow = useFlowStore()
@@ -220,10 +221,10 @@ function tableOptionLabel(t: EntryType): string {
  *  预加载的 tables 里查得到就是正常 label，查不到才退化成裸 ID + 后缀说明（跟原来的
  *  「（当前配置）」「（来自源步骤）」兜底文案同一个语义，只是从散落的 <option v-if> 收成一个函数）。 */
 function withCurrentOption(list: EntryType[], currentId: string, fallbackSuffix: string) {
-  const searchOptions = list.map((t) => ({ tableId: t.tableId, label: tableOptionLabel(t) }))
+  const searchOptions = list.map((t) => ({ tableId: t.tableId, label: tableOptionLabel(t), dsKind: t.dsKind }))
   if (!currentId || searchOptions.some((o) => o.tableId === currentId)) return searchOptions
   const known = tables.value.find((t) => t.tableId === currentId)
-  return [{ tableId: currentId, label: known ? tableOptionLabel(known) : `${currentId}（${fallbackSuffix}）` }, ...searchOptions]
+  return [{ tableId: currentId, label: known ? tableOptionLabel(known) : `${currentId}（${fallbackSuffix}）`, dsKind: known?.dsKind }, ...searchOptions]
 }
 const inputTableOptions = computed(() => withCurrentOption(inputTableSearch.results.value, ownInputTableId.value, '当前配置'))
 function onInputTableFilter(keyword: string) {
@@ -484,7 +485,7 @@ async function onTableSaved(tableId: string) {
           @update:model-value="onInputTableId"
           @visible-change="onInputTableVisible"
         >
-          <el-option v-for="t in inputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+          <el-option v-for="t in inputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId"><span class="tt-table-option"><span class="tt-table-option-label">{{ t.label }}</span><StorageKindTag v-if="t.dsKind" :kind="t.dsKind" /></span></el-option>
         </el-select>
         <div v-if="!effectiveInputTableId" class="rc-help">暂无有效输入表；可显式选择输入表，或先配置上游输出表。</div>
       </div>
@@ -557,7 +558,7 @@ async function onTableSaved(tableId: string) {
           @update:model-value="onOutputTableId"
           @visible-change="onOutputTableVisible"
         >
-          <el-option v-for="t in outputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+          <el-option v-for="t in outputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId"><span class="tt-table-option"><span class="tt-table-option-label">{{ t.label }}</span><StorageKindTag v-if="t.dsKind" :kind="t.dsKind" /></span></el-option>
         </el-select>
         <button v-if="!props.templateDefaults" class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
         <button v-if="!props.templateDefaults" class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
@@ -619,7 +620,7 @@ async function onTableSaved(tableId: string) {
           @update:model-value="onFillTableId"
           @visible-change="onFillTableVisible"
         >
-          <el-option v-for="t in fillTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+          <el-option v-for="t in fillTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId"><span class="tt-table-option"><span class="tt-table-option-label">{{ t.label }}</span><StorageKindTag v-if="t.dsKind" :kind="t.dsKind" /></span></el-option>
         </el-select>
         <div class="rc-help">默认写回输入表，可改选其他表；字段值按物理列名同名映射。切回单表即取消本步骤回填。</div>
         <div v-if="!fillTableId" class="rc-help input-field-warning" data-testid="fill-table-missing-hint">
@@ -795,4 +796,6 @@ async function onTableSaved(tableId: string) {
 .rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 .input-field-warning { color: var(--rc-warn); margin-bottom: 8px; }
 .unknown-input-field { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 8px; }
+.tt-table-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.tt-table-option-label { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
 </style>

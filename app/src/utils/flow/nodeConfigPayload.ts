@@ -12,6 +12,7 @@
 import type { Config } from '@/api'
 import { engineCodeOf } from '@/api/translate'
 import {
+  DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT,
   applyFileDownloadType,
   defaultMultiMode,
   isArticleSummaryNode,
@@ -25,6 +26,7 @@ import {
   nodeOutputTable,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
+import { resolveLiveConfigCode } from '@/utils/flow/liveConfigTypes'
 
 /** 去重类型：旧 '' = 源内去重，'ALL' = 表内去重（0824-02 §4） */
 function dedupFromLegacy(dedupType?: string): 'source' | 'table' {
@@ -156,13 +158,15 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
 
 export function configTypeFrom(cfg: NodeConfig): number | undefined {
   const byTemplate = cfg.template ? TEMPLATE_CONFIG_TYPE[cfg.template] : undefined
-  if (byTemplate) return byTemplate
+  // 快照编号可能已被后端的字典迁移改掉（186 的 1105：规则处理 600→910），按实时字典纠偏；
+  // 字典没拉到或老环境还有 600 时行为不变，见 utils/flow/liveConfigTypes.ts。
+  if (byTemplate) return Number(resolveLiveConfigCode(String(byTemplate), cfg.template))
   // 已确认的文件下载不能被首屏或旧快照中的网页展示串覆盖。
   if (cfg.configType === '95') return 95
   // 后端已是 130 的节点（后台直接改的类型、或经「更换」带进来的）没有 template，
   // 内存里的 snatchType 还是 `[90]`——不在这里拦，保存就把 130 写回 90（实测配置 1401083）。
   if (cfg.configType === '130') return 130
-  if (cfg.ruleCfg) return 600
+  if (cfg.ruleCfg) return Number(resolveLiveConfigCode('600', 'rule'))
   const code = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1]
   return code ? Number(code) : undefined
 }
@@ -214,11 +218,15 @@ export interface BuildConfigOptions {
 function promptForConfig(cfg: NodeConfig): string | undefined {
   const orch = isRuleNode(cfg)
     ? cfg.ruleCfg
-    : isArticleSummaryNode(cfg) || isArticleTagNode(cfg) || isTranslateNode(cfg)
+    : isArticleSummaryNode(cfg) || isArticleTagNode(cfg) || isTranslateNode(cfg) || isPdfNode(cfg)
       ? cfg.execCfg
       : undefined
   const prompt = orch?.systemPrompt
-  return prompt?.trim() ? prompt : undefined
+  if (!prompt?.trim()) return undefined
+  // PDF抓取（2026-11-17）：抽取提示词只在前端内存里，刷新即丢、换人看不到。改为随节点保存落 prompt；
+  // 但它的种子默认值是抓取 XML 那段提示词，原样写进去就是上面说的污染，所以默认值不落。
+  if (isPdfNode(cfg) && prompt.trim() === DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT.trim()) return undefined
+  return prompt
 }
 
 /**
@@ -237,7 +245,9 @@ const SCRIPTLESS_CONFIG_TYPES = new Set([150, 700, 710, 720, 730, 800, 802, 911]
 
 function configTypeForSave(cfg: NodeConfig, base: Record<string, unknown>): number | undefined {
   const fromNode = configTypeFrom(cfg)
-  if (fromNode === 600 && !cfg.template && cfg.ruleCfg) {
+  // 「规则处理」在实时字典里可能是 910（186），兜底判断要用同一个解析口径比较。
+  const ruleCode = Number(resolveLiveConfigCode('600', 'rule'))
+  if (fromNode === ruleCode && !cfg.template && cfg.ruleCfg) {
     const baseType = base.configType == null ? undefined : Number(base.configType)
     if (baseType && SCRIPTLESS_CONFIG_TYPES.has(baseType)) return baseType
   }

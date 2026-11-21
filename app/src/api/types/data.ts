@@ -46,6 +46,8 @@ export interface DataTableMeta {
   keyField?: string
   /** 去重方式：'source' 源内去重 / 'table' 表内去重 */
   dedupMode?: 'source' | 'table'
+  /** 库类型（queryEntryType 的 dsKind；老记录未返回按 MYSQL），源数据视图标出输出到哪个库 */
+  dsKind?: 'MYSQL' | 'CK'
   remark?: string
   updatedAt?: string
   /** 旧表详情中的表级规则字段。 */

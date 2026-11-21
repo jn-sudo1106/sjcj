@@ -47,6 +47,7 @@ export const SYNC_PLATFORM_BACKEND_HOSTS = ['124.223.180.186', '115.227.21.133',
  * 它**不在 9999 业务后端上**，是独立进程，真实路径形如 /api/poc/sql-temp/page，
  * 所以调用方传根相对 httpEndpoint（不拼 BASE_URL /api/v1/），dev 代理见 vite.config.ts 的 '/api/poc'。
  * 生产/测试环境要由 Nginx 反代同一个 /api/poc 前缀，否则整域 404。
+ * 2026-11-18：2806 的 POC 后端改到内网 192.168.1.32:9094（根 nginx.conf 的 `# BEGIN poc-api` 段，只给 prod）。
  */
 export const POC_API_PREFIX = '/api/poc'
 

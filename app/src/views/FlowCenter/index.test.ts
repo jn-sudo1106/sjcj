@@ -161,6 +161,13 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
 const rows = (w: Awaited<ReturnType<typeof mountCenter>>) => w.findAll('[data-testid="flow-center-row"]')
 const search = (w: Awaited<ReturnType<typeof mountCenter>>) => w.get('[data-testid="flow-center-search"]')
 
+/** 1117 Q4：标记模板 / 启停收进行内「更多」下拉，菜单项 teleport 到 body，测试直接派发 command。 */
+async function rowMore(w: Awaited<ReturnType<typeof mountCenter>>, command: 'template' | 'enable', index = 0) {
+  const dropdown = w.findAllComponents({ name: 'ElDropdown' }).filter((d) => d.attributes('data-testid') === 'flow-more')[index]!
+  dropdown.vm.$emit('command', command)
+  await flushPromises()
+}
+
 describe('流程中心 · 列表', () => {
   it('列出流程', async () => {
     const w = await mountCenter()
@@ -490,6 +497,10 @@ describe('流程中心 · 自动刷新', () => {
     expect(w.get('.fc-head-actions').findAll('button').map((b) => b.text())).toEqual(['新建模板', '新建流程'])
     expect(w.find('[data-testid="new-instance-from-template"]').exists()).toBe(false)
     expect(w.find('[data-testid="flow-group-create"]').exists()).toBe(false)
+    // 1117 Q3：「从模板新建」快捷弹窗并入「新建流程」表单，不再保留弹窗与状态
+    const setup = (w.vm.$ as unknown as { setupState: Record<string, unknown> }).setupState
+    expect(setup.openTemplateCreate).toBeUndefined()
+    expect(setup.templateForm).toBeUndefined()
   })
 
   it('工具条没有刷新按钮，也没有范围 / 所属模板 / 排序下拉', async () => {
@@ -557,19 +568,34 @@ describe('流程中心 · 操作列', () => {
   const actions = (w: Awaited<ReturnType<typeof mountCenter>>) =>
     rows(w)[0].findAll('.fc-actions button').map((b) => b.attributes('title'))
 
-  it('操作列：编辑 / 复制流程 / 关联到源 / 标记为模板 / 禁用流程 / 删除流程', async () => {
+  // 1117 Q4：标记模板、启停收进「更多」，删除留在外面
+  const moreItems = async (w: Awaited<ReturnType<typeof mountCenter>>) => {
+    const btn = rows(w)[0].get('[data-testid="flow-more-btn"]')
+    await btn.trigger('click')
+    await flushPromises()
+    // 菜单 teleport 到 body；按触发按钮的 aria-controls 定位本行的菜单，避开其它行 / 其它用例残留的菜单
+    const menu = document.getElementById(btn.attributes('aria-controls') ?? '')
+    return [...(menu?.querySelectorAll('[data-testid="flow-toggle-template"], [data-testid="flow-toggle-enable"]') ?? [])].map((el) => el.textContent?.trim())
+  }
+
+  it('操作列：编辑 / 复制流程 / 关联到源 / 更多（标记为模板、禁用流程）/ 删除流程', async () => {
     const w = await mountCenter()
-    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '标记为模板', '禁用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '更多操作', '删除流程'])
+    expect(await moreItems(w)).toEqual(['标记为模板', '禁用流程'])
+    w.unmount()
   })
 
   it('模板行使用「编辑模板」和「取消模板标记」', async () => {
     const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
-    expect(actions(w)).toEqual(['编辑模板', '复制流程', '关联到源', '取消模板标记', '禁用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑模板', '复制流程', '关联到源', '更多操作', '删除流程'])
+    expect(await moreItems(w)).toEqual(['取消模板标记', '禁用流程'])
+    w.unmount()
   })
 
-  it('已禁用的行：按钮变「启用流程」、行带禁用徽标', async () => {
+  it('已禁用的行：更多里变「启用流程」、行带禁用徽标', async () => {
     const w = await mountCenter([{ ...FLOWS[0], disabled: true }])
-    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '标记为模板', '启用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '更多操作', '删除流程'])
+    expect(await moreItems(w)).toEqual(['标记为模板', '启用流程'])
     expect(w.get('[data-testid="flow-disabled-badge"]').text()).toContain('已禁用')
   })
 
@@ -577,7 +603,7 @@ describe('流程中心 · 操作列', () => {
     const w = await mountCenter([{ ...FLOWS[0], disabled: true }])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const enable = vi.spyOn(flowCenterApi, 'changeFlowEnable').mockResolvedValue({ ok: true })
-    await w.get('[data-testid="flow-toggle-enable"]').trigger('click')
+    await rowMore(w, 'enable')
     await flushPromises()
     expect(enable).toHaveBeenCalledWith(['flow-10086'], 0)
   })
@@ -978,7 +1004,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
     const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOWS[0], isTemplate: true })
 
-    await w.get('[data-testid="flow-toggle-template"]').trigger('click')
+    await rowMore(w, 'template')
     await flushPromises()
 
     // 列表行的 definition 是空的（flowPaged 不返回 flowConf），不先取详情就会把画布存空
@@ -995,7 +1021,7 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     const w = await mountCenter()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
     const save = vi.spyOn(flowCenterApi, 'save')
-    await w.get('[data-testid="flow-toggle-template"]').trigger('click')
+    await rowMore(w, 'template')
     await flushPromises()
     expect(save).not.toHaveBeenCalled()
   })
@@ -1007,31 +1033,11 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     const save = vi.spyOn(flowCenterApi, 'save')
     const err = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
 
-    await w.get('[data-testid="flow-toggle-template"]').trigger('click')
+    await rowMore(w, 'template')
     await flushPromises()
 
     expect(save).not.toHaveBeenCalled()
     expect(err).toHaveBeenCalledWith(expect.stringContaining('未做任何修改'))
-  })
-
-  it('「从模板新建」走 copyFlow，不是自己拼 saveFlow（后者只会建出空流程）', async () => {
-    const w = await mountCenter()
-    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ ...FLOWS[0], isTemplate: true }])
-    const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
-    vi.spyOn(flowCenterApi, 'detail').mockImplementation(async id => id === 'flow-10086' ? { ...FLOWS[0], isTemplate: true } : { ...FLOWS[0], id: 'flow-99' })
-    const save = vi.spyOn(flowCenterApi, 'save')
-
-    // 0929 F9：不再手输 ID，走「下拉选择模板」弹窗（openTemplateCreate 拉取模板后直接创建）。
-    // ui.fireAction 依赖注册顺序，直接调 setupState 更稳（同文件既有惯例）。
-    await (w.vm.$ as unknown as { setupState: { openTemplateCreate: () => Promise<void> } }).setupState.openTemplateCreate()
-    await flushPromises()
-    expect(w.find('[data-testid="template-create-pick"]').exists()).toBe(true)
-
-    await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
-    await flushPromises()
-
-    expect(copy).toHaveBeenCalledWith('flow-10086', expect.stringContaining('_copy'))
-    expect(save).not.toHaveBeenCalled()
   })
 
   // 迁自旧平台「更多 → 复制流程」：确认后走 copyFlow（名为原名_copy），新流程直接打开
@@ -1091,19 +1097,6 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     await flushPromises()
 
     expect(copy).not.toHaveBeenCalled()
-  })
-
-  it('一个模板都没有时给出提示，不弹选择框', async () => {
-    const w = await mountCenter()
-    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([])
-    const info = vi.spyOn(ElMessage, 'info').mockImplementation(() => undefined as never)
-
-    // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
-    // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
-    await (w.vm.$ as unknown as { setupState: { openTemplateCreate: () => Promise<void> } }).setupState.openTemplateCreate()
-    await flushPromises()
-
-    expect(info).toHaveBeenCalledWith(expect.stringContaining('还没有流程被标记为模板'))
   })
 })
 
@@ -1401,12 +1394,52 @@ describe('按模板分组展示', () => {
     await flushPromises()
     expect(w.get('[data-testid="flow-group-heading"]').text()).toContain('单节点采集')
     expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: 'single', onlyTemplate: false }))
+    // 模板详情读不回来时，标题下退回分组的文字版结构（1117 二期结构预览）
+    vi.spyOn(flowCenterApi, 'detail').mockRejectedValue(new Error('网络错误'))
     await w.get('[data-testid="flow-template-group-detail"]').trigger('click')
     await flushPromises()
+    expect(w.find('[data-testid="flow-group-structure"]').exists()).toBe(false)
     expect(w.get('[data-testid="flow-group-heading"]').text()).toContain('列表采集 → 详情采集')
     expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: 'detail' }))
     await w.get('[data-testid="flow-template-group-unassigned"]').trigger('click')
     expect(flowCenterApi.paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, templateId: undefined, unassignedTemplate: true }))
+  })
+
+  it('选中模板时标题下按模板定义出只读节点链（1117 二期结构预览），全部流程 / 未归类不出', async () => {
+    vi.spyOn(flowCenterApi, 'templateGroups').mockResolvedValue([
+      { id: 'detail', name: '列表 + 详情', structure: '列表采集 → 详情采集', flowCount: 3, disabled: false },
+      { id: 'unassigned', name: '未归类', structure: '尚未选择流程模板', flowCount: 1, disabled: false },
+    ])
+    const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOWS[0], id: 'detail', isTemplate: true,
+      definition: {
+        structureOnly: true, main: ['start', 'node-1', 'node-2', 'end'], branches: [],
+        configs: {
+          'node-1': { title: '列表采集', sub: '', configType: '90', collect: true },
+          'node-2': { title: '详情采集', sub: '', configType: '90', collect: true },
+          'node-3': { title: '翻译', sub: '', configType: '' },
+        },
+      },
+    } as never)
+    const w = await mountCenter(FLOWS, 4)
+    expect(w.find('[data-testid="flow-group-structure"]').exists()).toBe(false)
+    expect(detail).not.toHaveBeenCalled()
+
+    await w.get('[data-testid="flow-template-group-detail"]').trigger('click')
+    await flushPromises()
+    const chain = w.get('[data-testid="flow-group-structure"]')
+    expect(chain.findAll('.node').map(n => n.text())).toEqual(['列表采集网页抓取', '详情采集网页抓取'])
+    expect(w.get('[data-testid="flow-group-structure-branches"]').text()).toBe('另有 1 个分支节点')
+    expect(detail).toHaveBeenCalledWith('detail')
+
+    // 切走再切回走缓存，不重复读详情
+    await w.get('[data-testid="flow-template-group-unassigned"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="flow-group-structure"]').exists()).toBe(false)
+    await w.get('[data-testid="flow-template-group-detail"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="flow-group-structure"]').exists()).toBe(true)
+    expect(detail).toHaveBeenCalledTimes(1)
   })
   it('没有已归类流程时也不自动跳到未归类，零数量分组仍保留', async () => {
     vi.spyOn(flowCenterApi, 'templateGroups').mockResolvedValue([

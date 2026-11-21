@@ -2242,7 +2242,7 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
   }
   const indepSource: Source = { sourceId: '430024667', name: '独立源', url: '', siteId: '0', state: 'E', configId: '', mainTable: '', owner: '' }
 
-  async function exportRows(props: Record<string, unknown>) {
+  async function exportRows(props: Record<string, unknown>, options: { cyclesRejected?: boolean } = {}) {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [groupSource, indepSource] })
     vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 1, list: [{ siteId: '105', name: '公众号采集-测试' }] as never })
     vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([{ sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 }] as never)
@@ -2254,6 +2254,13 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
       { entryTypeId: '6200023', entryTypeName: '源码表', tableName: 'tb_source_code', dataCount: 12, lastInsertAt: '2026-11-01 10:00:00', steps: [{ stepId: '1', stepName: '下载' }] },
       { entryTypeId: '6200005', entryTypeName: '详情表', tableName: 'tb_csxxdt', dataCount: 5, lastInsertAt: '2026-10-30 04:11:00', steps: [{ stepId: '2', stepName: '解析' }] },
     ] : []))
+    // 导出结论要用目录周期：两个源都在 24h 周期的目录里；options.cyclesRejected 模拟周期取不到
+    if (options.cyclesRejected) {
+      vi.spyOn(sourceDirs, 'bizSourceCycles').mockRejectedValue(new Error('boom'))
+      sourceDirs.resetSourceDirCache()
+    } else {
+      vi.spyOn(sourceDirs, 'bizSourceCycles').mockResolvedValue(new Map([['391000500', 24], ['430024667', 24]]))
+    }
     const download = vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
     const wrapper = mount(SourceOverviewView, {
       props: {
@@ -2274,16 +2281,16 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
     const rows = await exportRows({})
     expect(rows[0]).toEqual([
       '源 ID', '源名称', '业务目录', '原始目录', '所属网站', '来源组', '默认流程', 'URL', '主表',
-      '标签', '数据量', '新入', '详情表', '详情最近入库', '最近任务', '最近成功', '状态', '备注',
+      '标签', '数据量', '新入', '产出', '最近任务', '最近成功', '状态', '备注',
     ])
     expect(rows[1]).toEqual([
       '391000500', '组内源', '财经 / 公告', '新闻', '公众号采集-测试', 'twitter1', '抓取流程 · 14010130',
       'https://a.example.com', '财经主表 · TB_1', '#财经、#重复', '12',
-      '2026-11-01 10:00:00', '详情表（tb_csxxdt）', '2026-10-30 04:11:00', '2026-11-01 08:00:00', '2026-11-01 09:00:00', '正常', '备注 A',
+      '2026-11-01 10:00:00', expect.stringMatching(/^停更 \d+ 天 \d+ 天前$/) as unknown as string, '2026-11-01 08:00:00', '2026-11-01 09:00:00', '正常', '备注 A',
     ])
     // 没关联网站 / 没入组 / 没默认流程 / 没主表 / 没目录 的兜底文案
     expect(rows[2]).toEqual([
-      '430024667', '独立源', '未归类', '—', '未关联', '未分组', '未设置默认流程', '', '', '', '', '', '', '无详情表', '', '', '异常', '',
+      '430024667', '独立源', '未归类', '—', '未关联', '未分组', '未设置默认流程', '', '', '', '', '', '无详情表', '', '', '异常', '',
     ])
   })
 
@@ -2307,6 +2314,17 @@ describe('SourceOverviewView · 导出列与表格同源', () => {
     expect(head).toContain('配置 ID')
     expect(rows[1]?.[head.indexOf('配置 ID')]).toBe('cfg-1')
   })
+
+  it('目录周期取不到时只导出时间，不打「停更」标签（与列表当时一致）', async () => {
+    const rows = await exportRows({}, { cyclesRejected: true })
+    const head = rows[0] ?? []
+    const data = rows[1] ?? []
+    const cell = data[head.indexOf('产出')] ?? ''
+    expect(cell).toMatch(/前$/)
+    expect(cell).not.toContain('停更')
+  })
+
+
 })
 
 // 1114 源产出监控 一期 A（方案 §3.1 / §3.2）：「成功」换「产出」= 详情表最近入库；源 ID 左侧 ▸ 展开按输出表看统计

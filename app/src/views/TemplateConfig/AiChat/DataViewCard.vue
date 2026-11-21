@@ -84,16 +84,25 @@ const pieCenter = computed(() => {
         {{ view === 'pie' ? (chartData.pieTitle || '🥧 数据占比分布') : chartData.title }}
       </span>
       <div class="rc-dataview-actions">
-        <el-radio-group
-          :model-value="view"
-          size="small"
-          @update:model-value="(val: any) => emit('update:view', val)"
-          @change="(val: any) => emit('update:view', val)"
-        >
-          <el-radio-button value="chart">趋势图表</el-radio-button>
-          <el-radio-button value="pie">占比饼图</el-radio-button>
-          <el-radio-button value="table">明细数据表</el-radio-button>
-        </el-radio-group>
+        <!-- 分段控件替代 radio-group，更轻量（原型设计说明 ③） -->
+        <div class="rc-segmented" role="tablist" data-testid="rc-dataview-segmented">
+          <button
+            v-for="opt in [
+              { value: 'chart', label: '趋势图表' },
+              { value: 'pie', label: '占比饼图' },
+              { value: 'table', label: '明细数据表' },
+            ]"
+            :key="opt.value"
+            type="button"
+            class="rc-segmented-item"
+            :class="{ active: view === opt.value }"
+            role="tab"
+            :aria-selected="view === opt.value"
+            @click="emit('update:view', opt.value as 'chart' | 'pie' | 'table')"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -213,6 +222,36 @@ const pieCenter = computed(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+/* 分段控件（原型设计说明 ③） */
+.rc-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--rc-fill, #f1f5f9);
+  border: 1px solid var(--rc-border-soft, #e2e8f0);
+}
+.rc-segmented-item {
+  border: none;
+  background: transparent;
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.rc-segmented-item:hover {
+  color: var(--rc-text-1, #1e293b);
+}
+.rc-segmented-item.active {
+  background: var(--rc-surface, #ffffff);
+  color: var(--rc-primary, #2563eb);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 .rc-chart-view {
   display: flex;

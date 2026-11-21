@@ -1,23 +1,24 @@
 /**
  * 「我的工作台」数据层（个人工作台，不是首页的 `workbench/summary`）。
  *
- * 只读现有 live 端点，不新增后端契约，也不造假数据。能力边界由核查结论决定：
+ * 只读现有 live 端点，不新增后端契约，也不造假数据。能力边界（2026-11-20 与 186 后端
+ * `WorkbenchController` 逐条核对，路由挂在 `/api/v1/workbench` 下）：
  *
- * | 能力 | 现状 | 本层做法 |
+ * | 能力 | 端点 | 本层做法 |
  * |---|---|---|
- * | 我的收藏 | 已实现（`/v1/favorite/*`） | `loadCollections()`：按类拉收藏行（保留真实 `createDt`），再用列表接口按 ID 反查名称 |
- * | 最近访问 | 已实现（`/v1/log-report/recent`） | `loadRecents()`：重查资源实时名称与权限，**不用**埋点里的旧 `contentTitle` |
- * | 我负责的源 | 缺失 | `loadResources()` 抛 `WorkbenchUnavailableError`，不回退全平台数据 |
- * | 我的相关告警 | 缺失 | `loadAlarms()` 抛 `WorkbenchUnavailableError`，不回退全平台数据 |
- * | 工作台偏好 | 缺失 | 不实现（没有端点，前端不落本地假偏好） |
+ * | 我的收藏 | `favorite/*` | `loadCollections()`：按类拉收藏行（保留真实 `createDt`），再用列表接口按 ID 反查名称 |
+ * | 最近访问 | `log-report/recent` | `loadRecents()`：重查资源实时名称与权限，**不用**埋点里的旧 `contentTitle` |
+ * | 我负责的源 | `workbench/my-sources`（W8） | `loadResources()`：后端按 `AUTHOR`=当前账号过滤（`state`/`keyword` 可筛） |
+ * | 我的相关告警 | `workbench/my-alarms`（W9） | `loadAlarms()`：`scope=open|all` 由服务端过滤，`count` 是服务端全量条数 |
+ * | 工作台偏好 | 缺失（W10） | 不实现（没有端点，前端不落本地假偏好） |
  *
- * 为什么 owned resources / alarms 是"不支持"而不是空列表：
- * - 源：`cs_source.AUTHOR` 语义是**负责人**（复制源时会被 `copy.setAuthor(userName)` 覆盖），
- *   不是审计创建人；网站 `CfgSite`、表 `CfgEntryType` 连创建人字段都没有。按负责人筛出来的
- *   "我的源"既不准也不完整，等于把别人的资源算给我，所以宁可显式报不支持。
- * - 告警：`ck_source` 只有 `groupId`，没有 siteId / 级别 / 负责人；`source/check/paged` 只有
- *   `state`（E/C）和 `lastRun`，`monitor/alarmPaged` 目前是 mock 且全仓零调用。按 groupId 聚合
- *   出来的是**全组**告警，不是"我的相关告警"，同样不能拿全局数据冒充个人数据。
+ * 两个口径提醒（都已在真实库上核对，改代码前先看这里）：
+ * - `my-alarms` 的 `count` 是**服务端全量**、`data` 只是一页。视图的「未恢复」必须用
+ *   `scope=open` 的 `count`，不能拿 `scope=all` 的一页数据在客户端过滤——前 20 条若多为
+ *   `recover`，未恢复数会少报甚至为 0。
+ * - `my-sources` 按 `cs_source.AUTHOR` 过滤，而迁移后的存量数据里 `AUTHOR` 基本为空
+ *   （186 上 24 万行里只有 200 多行有值），所以这个模块在负责人字段补数据前会是空列表；
+ *   这是数据口径问题，不要在视图里用「最近访问」或全平台数据替代。
  *
  * 服务端数据权限：`source/sourcePaged`、`config/entryTypePagedView`、`site/sitePaged` 都由后端
  * 按登录会话的组权限过滤（`AuthResEnum` 编译 SQL）。本层的"权限过滤解析器"= 只用这些列表接口
@@ -68,21 +69,21 @@ export interface WorkbenchPage<T = WorkbenchItem> {
 /** 被上限截断时的统一提示文案（视图直接展示，避免各页自己编）。 */
 export const WORKBENCH_TRUNCATED_NOTE = '数据量较大，仅展示最近一部分；完整列表请到对应页面查看'
 
-/** 「我负责的源」列表项（当前不可用，先定类型给视图对齐）。 */
+/** 「我负责的源」列表项（W8 `workbench/my-sources`）。 */
 export interface WorkbenchSource extends WorkbenchItem {
   kind: 'SOURCE'
-  /** 由 `source/check/paged` 的 state 推导：E=异常、C=正常；运行中暂无可靠来源 */
+  /** 后端 `state`：`0`/`C` = 正常，其余 = 异常（运行中暂无可靠来源，保留该值给后续端点） */
   state?: 'ok' | 'error' | 'running'
-  /** 最近一次运行时间（`SourceCheck.lastRun`，真实时间） */
+  /** 最近一次运行/更新时间（后端 `updateDt`，真实时间） */
   lastRun?: string
-  /** 近 7 日异常次数（暂无该端点，占位字段，视图需容忍 undefined） */
-  abnormalCount?: number
+  /** 后端按源当前状态推出的告警级别：`fail` = 检查失败，`error` = 数据异常，`null` = 无告警 */
+  alarmLevel?: 'error' | 'fail' | null
 }
 
 /** 告警级别：执行失败 / 数据异常 / 已恢复（对齐原型三档）。 */
 export type WorkbenchAlarmLevel = 'error' | 'fail' | 'recover'
 
-/** 「我的相关告警」列表项（当前不可用，先定类型给视图对齐）。 */
+/** 「我的相关告警」列表项（W9 `workbench/my-alarms`）。 */
 export interface WorkbenchAlarm {
   id: string
   sourceId: string
@@ -113,12 +114,27 @@ export function isWorkbenchUnavailableError(value: unknown): value is WorkbenchU
   return value instanceof WorkbenchUnavailableError
 }
 
+/**
+ * 端点 404 时转成「接口未就绪」：部署的后端还是旧 jar（没有 W8/W9 的 `WorkbenchController`）
+ * 属于环境问题，不该在页面上显示成「加载失败」，更不能掉进空列表。
+ * 其它错误（网络、500、鉴权）原样抛出，由视图按失败态处理。
+ */
+async function optionalEndpoint<T>(capability: WorkbenchCapability, label: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    const status = (error as { status?: unknown } | null)?.status
+    if (status === 404) throw new WorkbenchUnavailableError(capability, `${label}接口未就绪（后端未部署该端点）`)
+    throw error
+  }
+}
+
 /** 各能力当前是否可用（视图可直接据此渲染入口，避免先请求再 catch）。 */
 export const WORKBENCH_CAPABILITIES = {
   collections: true,
   recents: true,
-  resources: false,
-  alarms: false,
+  resources: true,
+  alarms: true,
 } as const
 
 // ---- 有界请求参数 ----
@@ -336,10 +352,56 @@ function byAtDesc(a: { at?: string }, b: { at?: string }): number {
   return right.localeCompare(left)
 }
 
-/** 三类资源并行反查（各自带截断标记）。 */
+/** 三类资源并行反查（优先使用 W11 批量名称解析端点，异常时平滑降级）。 */
 async function resolveAll(wantedByKind: Record<ResourceKind, Set<string>>): Promise<Record<ResourceKind, ResolveResult>> {
   const kinds: ResourceKind[] = ['SITE', 'SOURCE', 'ENTRY_TYPE']
-  const resolved = {} as Record<ResourceKind, ResolveResult>
+  const resolved = {
+    SITE: { items: new Map<string, WorkbenchItem>(), truncated: false },
+    SOURCE: { items: new Map<string, WorkbenchItem>(), truncated: false },
+    ENTRY_TYPE: { items: new Map<string, WorkbenchItem>(), truncated: false },
+  } as Record<ResourceKind, ResolveResult>
+
+  const allItems: { kind: ResourceKind; id: number }[] = []
+  for (const kind of kinds) {
+    for (const idStr of wantedByKind[kind]) {
+      const num = Number(idStr)
+      if (Number.isFinite(num) && num > 0) allItems.push({ kind, id: num })
+    }
+  }
+
+  if (allItems.length > 0 && allItems.length <= 200) {
+    try {
+      const resp = await request<Array<{
+        kind: ResourceKind
+        id: number | string
+        exists: boolean
+        name?: string
+        subtitle?: string
+        siteId?: number | string
+      }>>('workbench/resolve-items', { items: allItems }, {
+        method: 'POST',
+      })
+      if (Array.isArray(resp)) {
+        for (const item of resp) {
+          if (!item.exists || !item.name) continue
+          const id = String(item.id)
+          const kind = item.kind
+          if (!resolved[kind]) continue
+          resolved[kind].items.set(id, {
+            id,
+            kind,
+            name: item.name,
+            subtitle: item.subtitle,
+            siteId: item.siteId != null ? String(item.siteId) : undefined,
+          })
+        }
+        return resolved
+      }
+    } catch {
+      // 批量接口未响应或在单元测试 mock 场景下，走单类并行反查
+    }
+  }
+
   await Promise.all(
     kinds.map(async (kind) => {
       resolved[kind] = await RESOLVERS[kind](wantedByKind[kind])
@@ -386,7 +448,8 @@ export async function loadCollections(): Promise<WorkbenchPage<WorkbenchItem>> {
  */
 const RECENT_KINDS: { kind: ResourceKind; contentType: LogContentType; action: LogAction }[] = [
   { kind: 'SITE', contentType: 'SITE', action: 'ENTER' },
-  { kind: 'SOURCE', contentType: 'SOURCE', action: 'ENTER' },
+  // 2026-11-20 186 实测：源的埋点记的是 CLICK（429 条），只取 ENTER 会得到空列表
+  { kind: 'SOURCE', contentType: 'SOURCE', action: 'ENTER,CLICK' as LogAction },
   { kind: 'ENTRY_TYPE', contentType: 'ENTRY_TYPE', action: 'ENTER,CLICK' as LogAction },
 ]
 
@@ -443,23 +506,69 @@ export async function loadRecents(limit = DEFAULT_RECENTS): Promise<WorkbenchPag
 }
 
 /**
- * 「我负责的源」：显式不支持。
- *
- * 依据：`cs_source.AUTHOR` 是负责人（复制源会被覆盖），`CfgSite` / `CfgEntryType` 无创建人字段；
- * 也没有按创建人/负责人筛选的列表口径。任何"回退成全平台源列表"的实现都会把别人的资源算给当前用户。
+ * 「我负责的源」（对接 W8 GET /api/v1/workbench/my-sources）。
  */
-export async function loadResources(): Promise<WorkbenchPage<WorkbenchSource>> {
-  throw new WorkbenchUnavailableError('resources', '「我负责的源」暂不支持：后端暂无按负责人/创建人过滤的口径')
+export async function loadResources(params: { page?: number; limit?: number; state?: string; keyword?: string } = {}): Promise<WorkbenchPage<WorkbenchSource>> {
+  const result = await optionalEndpoint('resources', '我负责的源', () => request<{ list?: unknown; total?: number }>('workbench/my-sources', params, {
+    method: 'GET',
+    httpParams: { page: params.page ?? 1, limit: params.limit ?? 20, state: params.state, keyword: params.keyword },
+  }))
+  const rawList = asList<Record<string, unknown>>(result?.list, '我负责的源列表')
+  const list: WorkbenchSource[] = rawList.map((row) => {
+    const id = String(row.sourceId ?? '').trim()
+    const stateVal = String(row.state ?? '')
+    const siteName = typeof row.siteName === 'string' ? row.siteName.trim() : ''
+    const entryTypeName = typeof row.entryTypeName === 'string' ? row.entryTypeName.trim() : ''
+    return {
+      id,
+      kind: 'SOURCE',
+      name: String(row.sourceName ?? id).trim(),
+      subtitle: siteName || entryTypeName || undefined,
+      at: typeof row.updateDt === 'string' ? row.updateDt.trim() : undefined,
+      siteId: row.siteId != null ? String(row.siteId) : undefined,
+      state: stateVal === '0' || stateVal === 'C' ? 'ok' : 'error',
+      alarmLevel: row.alarmLevel === 'error' || row.alarmLevel === 'fail' ? row.alarmLevel : null,
+    }
+  })
+  return {
+    list,
+    total: typeof result?.total === 'number' ? result.total : list.length,
+    truncated: false,
+  }
 }
 
 /**
- * 「我的相关告警」：显式不支持。
+ * 「我的相关告警」（W9 `GET /api/v1/workbench/my-alarms`）。
  *
- * 依据：`ck_source` 只有 groupId（全组维度），没有 siteId / 级别 / 负责人；`source/check` 只有
- * state(E/C) + lastRun；`monitor/alarmPaged` 仍是 mock 且零调用。只能聚出全组告警，不能冒充"我的"。
+ * `scope` 交给服务端过滤：`open` 只返回未恢复（`ck_source.STATE<>'C'`），`all` 含已恢复。
+ * `count` 是服务端全量条数，`data` 只有当前页；`truncated` 表示还有下一页。
  */
-export async function loadAlarms(): Promise<WorkbenchPage<WorkbenchAlarm>> {
-  throw new WorkbenchUnavailableError('alarms', '「我的相关告警」暂不支持：后端暂无个人维度的告警接口')
+export async function loadAlarms(scope: 'open' | 'all' = 'open', limit = 20, page = 1): Promise<WorkbenchPage<WorkbenchAlarm>> {
+  const result = await optionalEndpoint('alarms', '我的相关告警', () => request<{ list?: unknown; total?: number }>('workbench/my-alarms', { scope, limit, page }, {
+    method: 'GET',
+    httpParams: { scope, page, limit },
+  }))
+  const rawList = asList<Record<string, unknown>>(result?.list, '我的相关告警')
+  const list: WorkbenchAlarm[] = rawList.map((row) => {
+    const id = String(row.alarmId ?? '').trim()
+    const sourceId = String(row.targetId ?? '').trim()
+    const level = (row.level as WorkbenchAlarmLevel) || 'fail'
+    return {
+      id,
+      sourceId,
+      name: String(row.targetName ?? sourceId).trim(),
+      description: typeof row.title === 'string' ? row.title.trim() : undefined,
+      level,
+      at: typeof row.occurDt === 'string' ? row.occurDt.trim() : undefined,
+      resolved: level === 'recover',
+    }
+  })
+  const total = typeof result?.total === 'number' ? result.total : undefined
+  return {
+    list,
+    total: total ?? list.length,
+    truncated: total !== undefined && total > (page - 1) * limit + list.length,
+  }
 }
 
 /**

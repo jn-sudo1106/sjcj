@@ -1,7 +1,8 @@
 ﻿<script setup lang="ts">
+import { CK_ENGINE_OPTIONS, MYSQL_ENGINE_OPTIONS, applyDsKindDefaults, storageFromEntry, storagePayload, storageSummary as entryStorageSummary } from '@/utils/data/entryStorage'
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { pinyin } from 'pinyin-pro'
+import { tableNameFromEntryName } from '@/utils/data/entryTableName'
 import { RefreshRight } from '@element-plus/icons-vue'
 import { entryApi, type EntryField, type EntryType } from '../../api'
 import {
@@ -61,14 +62,16 @@ function clearFieldInvalid(index: number, key: 'prop' | 'desc') {
 }
 const isEdit = computed(() => !!props.entry?.tableId)
 const advancedOpen = ref(false)
+// 1117：存储设置（读写类型 / 引擎 / 排序列 / 分区）默认收起，收起时显示一行摘要，默认值一眼可见
+const storageOpen = ref(false)
+const storageSummary = computed(() => entryStorageSummary(form))
 const batchDialog = reactive<{ visible: boolean; text: string }>({ visible: false, text: '' })
 
 // §1.4：新建时按名称拼音首字母自动生成物理表名 TB_{PY}（用户已手改过物理表名后不再覆盖）
 const tableNameTouched = ref(false)
 function onNameInput() {
   if (isEdit.value || tableNameTouched.value) return
-  const letters = pinyin(form.name || '', { pattern: 'first', toneType: 'none', type: 'array' }).join('')
-  form.tableName = letters ? `TB_${letters.toUpperCase()}` : ''
+  form.tableName = tableNameFromEntryName(form.name)
 }
 function onTableNameInput() { tableNameTouched.value = true }
 
@@ -122,16 +125,8 @@ function reset() {
     keyField: entry?.keyField,
     dedupMode: entry?.dedupMode ?? 'source',
     state: entry?.state ?? 'C',
-    // 数据源类型：MYSQL（默认）/ CK；老记录后端未返回时归一 MYSQL（与 legacyAdapters 归一口径一致）
-    dsKind: entry?.dsKind ?? 'MYSQL',
-    // 读写操作类型：新建表（无论选 MySQL 还是 CK）默认为 wr（读写，表示读写均直接面向该库）；编辑已有表时沿用 entry.opType（未配置时历史 CK 回退 r，其余回退 wr）
-    opType: entry ? (entry.opType ?? (entry.dsKind === 'CK' ? 'r' : 'wr')) : 'wr',
-    // 存储引擎：MySQL 默认为 InnoDB，CK 为 ReplacingMergeTree
-    storageEngine: entry?.storageEngine ?? (entry?.dsKind === 'CK' ? 'ReplacingMergeTree' : 'InnoDB'),
-    // CK 排序列：默认 ENTRY_ID
-    sorted: entry?.sorted ?? (entry?.dsKind === 'CK' ? 'ENTRY_ID' : ''),
-    // CK 分区字段/表达式：可选，如 toYYYYMM(UPDATE_DT)
-    partColumn: entry?.partColumn ?? '',
+    // 存储设置（库类型 / 读写类型 / 引擎 / 排序列 / 分区）：默认值与源上「新建数据表」共用，见 utils/data/entryStorage
+    ...storageFromEntry(entry),
     // null/undefined → ''：与 el-option value="" "请选择" 对齐，提交时透传空串 = 未配置（避免 String(null)='null'）
     recFlag: entry?.recFlag == null ? '' : String(entry.recFlag),
     checkFlag: entry?.checkFlag == null ? '' : String(entry.checkFlag),
@@ -140,6 +135,7 @@ function reset() {
   })
   if (!form.fields.length) form.fields.push(blankField(1))
   tableNameTouched.value = isEdit.value
+  storageOpen.value = false
   advancedOpen.value = false
 }
 watch(() => props.modelValue, (open) => { if (open) reset() }, { immediate: true })
@@ -233,18 +229,7 @@ function onItemCodeBlur(field: EntryField) {
 }
 
 function onDsKindChange() {
-  if (form.dsKind === 'CK') {
-    if (!form.storageEngine || form.storageEngine === 'InnoDB' || form.storageEngine === 'MyISAM' || form.storageEngine === 'MEMORY') {
-      form.storageEngine = 'ReplacingMergeTree'
-    }
-    if (!form.sorted) {
-      form.sorted = 'ENTRY_ID'
-    }
-  } else {
-    if (!form.storageEngine || form.storageEngine === 'ReplacingMergeTree' || form.storageEngine === 'MergeTree' || form.storageEngine === 'SummingMergeTree' || form.storageEngine === 'AggregatingMergeTree' || form.storageEngine === 'VersionedCollapsingMergeTree') {
-      form.storageEngine = 'InnoDB'
-    }
-  }
+  applyDsKindDefaults(form)
 }
 
 // 导入字段（0828 D13，原「批量加」）。会上定的交互：**既能粘文本，也能选文件；
@@ -312,24 +297,11 @@ async function submit() {
     return
   }
   try {
-    const isCk = form.dsKind === 'CK'
-    const engineVal = form.storageEngine?.trim() || (isCk ? 'ReplacingMergeTree' : 'InnoDB')
-    const sortedVal = isCk ? (form.sorted?.trim() || 'ENTRY_ID') : form.sorted
-    const partColumnVal = isCk ? (form.partColumn?.trim() || undefined) : undefined
-    const tableConfigJson = JSON.stringify({
-      storageEngine: engineVal,
-      sorted: sortedVal || '',
-      partColumn: partColumnVal || '',
-    })
-
     const result = await entryApi.entrySave({
       ...form,
       name: form.name.trim(),
       tableName: form.tableName.trim(),
-      storageEngine: engineVal,
-      sorted: sortedVal,
-      partColumn: partColumnVal,
-      tableConfig: tableConfigJson,
+      ...storagePayload(form),
       fields: form.fields.map((field, index) => ({ ...field, prop: field.prop.trim(), desc: field.desc.trim(), seq: index + 1 })),
     })
     ElMessage.success(result.message || '处理成功')
@@ -354,12 +326,35 @@ async function submit() {
           <option value="table">表内去重</option>
         </select>
       </div>
+      <!-- 1117 后端核对（186 bee-config.jar）：物理表只在**新建**时按当时的 dsKind 建一次；
+           编辑时改 dsKind 只改标记、不建表，会出现「标记为 CK、CK 里没有表」。所以编辑态只读，
+           MySQL 表转 CK 走表列表的「同步表」（建同步任务后由它回写 dsKind）。 -->
       <div class="rc-field"><label>数据源类型</label>
-        <select v-model="form.dsKind" class="rc-input" data-testid="entry-ds-kind" @change="onDsKindChange">
+        <select
+          v-model="form.dsKind"
+          class="rc-input"
+          data-testid="entry-ds-kind"
+          :disabled="isEdit"
+          :title="isEdit ? '物理表已建在该库，编辑时不能换库' : ''"
+          @change="onDsKindChange"
+        >
           <option value="MYSQL">MYSQL</option>
           <option value="CK">CK</option>
         </select>
+        <div v-if="isEdit" class="ete-hint" data-testid="entry-ds-kind-hint">已有表不能直接换库；MySQL 表转 CK 请用表列表的「同步表」。</div>
+        <div v-else-if="form.dsKind === 'CK'" class="ete-hint">保存时在 ClickHouse 建物理表，不建 MySQL 表。</div>
       </div>
+      <div class="rc-field"><label>存储设置</label>
+        <button
+          type="button"
+          class="ete-storage-toggle"
+          data-testid="entry-storage-toggle"
+          :aria-expanded="storageOpen"
+          :title="storageSummary"
+          @click="storageOpen = !storageOpen"
+        ><span class="ete-storage-summary" data-testid="entry-storage-summary">{{ storageSummary }}</span><span class="ete-storage-arrow">{{ storageOpen ? '收起 ▲' : '展开 ▼' }}</span></button>
+      </div>
+      <template v-if="storageOpen">
       <div class="rc-field"><label title="选择 CK 时默认为读写 (wr)，表示读写均直接面向 CK 库；只读 (r) 表示仅用于查询分析">读写类型</label>
         <select v-model="form.opType" class="rc-input" data-testid="entry-op-type">
           <option value="wr">读写 (wr)</option>
@@ -367,17 +362,8 @@ async function submit() {
         </select>
       </div>
       <div class="rc-field"><label>存储引擎</label>
-        <select v-if="form.dsKind === 'CK'" v-model="form.storageEngine" class="rc-input" data-testid="entry-storage-engine">
-          <option value="ReplacingMergeTree">ReplacingMergeTree（推荐，按版本去重）</option>
-          <option value="MergeTree">MergeTree（基础明细）</option>
-          <option value="SummingMergeTree">SummingMergeTree（数值汇总）</option>
-          <option value="AggregatingMergeTree">AggregatingMergeTree（物化聚合）</option>
-          <option value="VersionedCollapsingMergeTree">VersionedCollapsingMergeTree（折叠树）</option>
-        </select>
-        <select v-else v-model="form.storageEngine" class="rc-input" data-testid="entry-storage-engine">
-          <option value="InnoDB">InnoDB（默认）</option>
-          <option value="MyISAM">MyISAM</option>
-          <option value="MEMORY">MEMORY</option>
+        <select v-model="form.storageEngine" class="rc-input" data-testid="entry-storage-engine">
+          <option v-for="o in form.dsKind === 'CK' ? CK_ENGINE_OPTIONS : MYSQL_ENGINE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
       </div>
       <div v-if="form.dsKind === 'CK'" class="rc-field">
@@ -388,6 +374,7 @@ async function submit() {
         <label title="ClickHouse 表分区表达式（PARTITION BY），可选，例如 toYYYYMM(UPDATE_DT) 或 toYYYYMMDD(CREATE_DT)">分区字段 (PARTITION BY)</label>
         <input v-model="form.partColumn" class="rc-input" data-testid="entry-part-column" placeholder="例如 toYYYYMM(UPDATE_DT)（可选，留空则不分区）" />
       </div>
+      </template>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>
       <div v-if="isEdit" class="rc-field ete-wide" style="margin-top: 4px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
@@ -530,6 +517,12 @@ async function submit() {
 .ete-actions button.danger.is-locked { color: var(--rc-border); cursor: not-allowed; }
 .ete-addrow { width: 100%; height: 34px; border: 0; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
 .ete-addrow:hover { background: var(--rc-primary-bg); }
+.ete-hint { margin-top: 4px; color: var(--rc-faint); font-size: 11px; line-height: 1.5; }
+.ete-storage-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; box-sizing: border-box; border: 1px solid #dbe3ee; border-radius: 6px; padding: 6px 8px; background: #f8fafc; color: var(--rc-text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.ete-storage-toggle:hover { border-color: var(--rc-primary); }
+.ete-storage-toggle:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
+.ete-storage-summary { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+.ete-storage-arrow { flex: none; color: var(--rc-primary-ink); font-size: 11px; }
 .ete-adv-toggle { margin: 12px 0 8px; font-size: 12px; font-weight: 600; color: var(--rc-primary-ink); cursor: pointer; }
 .ete-import-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .ete-import-file { position: relative; overflow: hidden; cursor: pointer; }

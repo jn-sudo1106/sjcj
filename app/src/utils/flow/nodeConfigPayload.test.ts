@@ -355,6 +355,18 @@ describe('prompt（2026-09-18：拼接后的系统提示词随配置保存落 cs
     expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('base 原值')
   })
 
+  it('PDF抓取节点写 execCfg.systemPrompt（2026-11-17：抽取提示词之前从不落库，刷新即丢）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    cfg.execCfg = { ...makeDefaultExecConfig(), systemPrompt: '你是研究报告数据抽取助手' }
+    expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('你是研究报告数据抽取助手')
+  })
+
+  it('PDF抓取节点仍是抓取 XML 默认提示词时不写 prompt，保留 base 原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    cfg.execCfg = makeDefaultExecConfig()
+    expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('base 原值')
+  })
+
   it('提示词为空 / 纯空白时不覆盖 base 原值（拼接尚未完成时不能抹掉后端真值）', () => {
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
     cfg.ruleCfg!.systemPrompt = ''

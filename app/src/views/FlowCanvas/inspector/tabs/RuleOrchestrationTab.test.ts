@@ -108,6 +108,12 @@ function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tab
   // Path B 回灌默认空操作，避免干扰既有用例；覆盖回灌行为的用例再单独 mock
   vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({ mode: 'ref', describe: '' })
   vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('')
+  // 卸载时的自动保存会先取配置原文（baseRecordFor → configDetailRaw）：不桩的话它走真实 XHR，
+  // 失败回调落在下一个用例里，那次 updateConfig 就算到下一个 spy 头上（历史提示词编辑用例踩过）。
+  // 用例自己已经桩了（如 PDF 还原 prompt/describe）就让它的实现生效，别覆盖。
+  if (!vi.isMockFunction(configApi.configDetailRaw)) {
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({} as never)
+  }
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString()
     if (url === '/api/model/providers') {
@@ -1149,7 +1155,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
         prompt: '用户二次编辑后的系统提示词',
       })
       expect(flow.configs['tag-1'].execCfg?.systemPrompt).toBe('用户二次编辑后的系统提示词')
+      // 卸载会触发 fire-and-forget 的自动保存（1012-06）：这里先把微任务排空，
+      // 否则那次 updateConfig 会落到下一个用例刚装好的 spy 上（历史提示词编辑用例踩过）。
       wrapper.unmount()
+      await flushPromises()
     })
 
     it('提示词表里没有这一行时不显示其他配置元素', async () => {
@@ -2970,7 +2979,7 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     expect(wrapper.findComponent(SiteScriptGeneratorDialog).props('initialUrl')).not.toBe('https://chosen.example.com/list')
   })
 
-  it('生成方式 Tab 支持键盘切换，规则节点不显示此切换', async () => {
+  it('生成方式 Tab 支持键盘切换', async () => {
     const { wrapper } = mountOnCollectorNode()
     await flushPromises()
     await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('keydown', { key: 'Home' })
@@ -2978,9 +2987,45 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     expect(wrapper.get('[data-testid="orchestration-ai-tab"]').attributes('aria-selected')).toBe('true')
     await wrapper.get('[data-testid="orchestration-ai-tab"]').trigger('keydown', { key: 'Home' })
     expect(wrapper.get('[data-testid="orchestration-config-tab"]').attributes('aria-selected')).toBe('true')
-    const { wrapper: ruleWrapper } = mountOnRuleNode()
+  })
+
+  // 1117：规则处理节点与网页抓取一样有「生成配置 | 智能体」，默认智能体；没有节点提示词模板时按规则脚本口径兜底
+  it('规则处理节点显示「生成配置 | 智能体」，默认智能体，兜底提示词是规则脚本口径（main 入口）', async () => {
+    const { wrapper } = mountOnRuleNode()
     await flushPromises()
-    expect(ruleWrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="orchestration-ai-tab"]').attributes('aria-selected')).toBe('true')
+    const dialog = wrapper.findComponent(SiteScriptGeneratorDialog)
+    expect(dialog.exists()).toBe(true)
+    expect(String(dialog.props('fallbackSystemPrompt'))).toContain('main')
+    expect(String(dialog.props('fallbackUserPrompt'))).toContain('入参字段')
+    expect(dialog.props('fallbackUserPrompt')).toBe(dialog.props('initialPrompt'))
+    // 原有的设置业务规则 / 生成脚本仍在「生成配置」里
+    await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('click')
+    expect(wrapper.get('[data-testid="orchestration-config-panel"]').isVisible()).toBe(true)
+  })
+
+  it('规则处理节点：业务规则放在生成方式上方共用，Tab 叫「内置接口 / 智能体 · 提交 Git」，内置接口注明旧方式', async () => {
+    const { wrapper } = mountOnRuleNode()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="orchestration-config-tab"]').text()).toBe('内置接口')
+    expect(wrapper.get('[data-testid="orchestration-ai-tab"]').text()).toBe('智能体 · 提交 Git')
+    const shared = wrapper.get('[data-testid="rule-describe-shared"]')
+    const tabs = wrapper.get('[data-testid="orchestration-mode-tabs"]')
+    // 共用描述在 Tab 之前（DOM 顺序），内置接口面板里不再有第二个描述框
+    expect(shared.element.compareDocumentPosition(tabs.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const panel = wrapper.get('[data-testid="orchestration-config-panel"]')
+    expect(panel.findAll('textarea.rc-textarea')).toHaveLength(0)
+    expect(panel.get('[data-testid="rule-builtin-note"]').text()).toContain('不提交 Git')
+    await shared.setValue('把金额转成元')
+    expect(String(wrapper.findComponent(SiteScriptGeneratorDialog).props('initialPrompt'))).toContain('把金额转成元')
+  })
+
+  it('数据监控节点不出现智能体切换（走自己的生成链路）', async () => {
+    mockAssets()
+    const { wrapper } = mountOnMonitorNode()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="orchestration-mode-tabs"]').exists()).toBe(false)
   })
 
   it('文案换成抓取配置措辞，不出现「测试脚本」按钮（本期不做，方案 §3.1 修正 D）', async () => {
@@ -3237,6 +3282,35 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
     // 解析内容排在生成脚本之前（方案 §3.1 的动作区顺序）
     const labels = actionRow.findAll('button').map((b) => b.text())
     expect(labels).toEqual(['上传 PDF', '解析内容', '生成脚本', '测试脚本'])
+    wrapper.unmount()
+  })
+
+  it('刷新后从配置详情还原已保存的抽取提示词（prompt）与描述（core_param.describe）', async () => {
+    // 2026-11-17 186 实测：提示词和描述保存后刷新即丢，节点回落到抓取 XML 默认提示词
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      prompt: '你是研究报告数据抽取助手',
+      coreParam: '{"describe":"从研报 PDF 抽取国际收支数据点","providerCode":"DeepSeek","model":"deepseek-v4-flash"}',
+    })
+    const { flow, wrapper } = mountOnPdfNode()
+    flow.patchExecConfig('pdf-1', { describe: '', systemPrompt: DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT })
+    await flushPromises()
+    await flushPromises()
+
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe('你是研究报告数据抽取助手')
+    expect(flow.configs['pdf-1'].execCfg?.describe).toBe('从研报 PDF 抽取国际收支数据点')
+    wrapper.unmount()
+  })
+
+  it('core_param 没有 describe 时不把整段 JSON 当描述', async () => {
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      coreParam: '{"providerCode":"DeepSeek","model":"deepseek-v4-flash"}',
+    })
+    const { flow, wrapper } = mountOnPdfNode()
+    await flushPromises()
+    await flushPromises()
+
+    expect(flow.configs['pdf-1'].execCfg?.describe).toBe('从 PDF 抽取合同金额与签署日期')
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe('按出参抽取 PDF 正文')
     wrapper.unmount()
   })
 

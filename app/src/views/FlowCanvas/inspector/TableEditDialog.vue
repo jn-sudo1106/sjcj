@@ -2,8 +2,9 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { entryApi, type EntryType, type EntryField } from '@/api'
-import { pinyin } from 'pinyin-pro'
+import { tableNameFromEntryName } from '@/utils/data/entryTableName'
 import { ENTRY_PREPROCESS_PRESETS, ENTRY_CHECK_RULE_PRESETS, entryCheckRuleLabel } from '@/constants/entry'
+import { CK_ENGINE_OPTIONS, MYSQL_ENGINE_OPTIONS, applyDsKindDefaults, storageFromEntry, storagePayload, storageSummary } from '@/utils/data/entryStorage'
 
 const props = defineProps<{ open: boolean; tableId?: string }>()
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [string] }>()
@@ -35,7 +36,14 @@ const form = reactive({
   validate: '',
   validateScript: '',
   fields: [] as FieldVM[],
+  // 存储设置（1117）：与数据中心「数据表编辑」同一套默认值和提交字段，见 utils/data/entryStorage。
+  // 新建可选 MYSQL / CK；编辑态只读库类型，其余原样带回——不带的话保存一次就可能把 CK 表的配置冲掉。
+  ...storageFromEntry(null),
 })
+const storageText = computed(() => storageSummary(form))
+function onDsKindChange() {
+  applyDsKindDefaults(form)
+}
 const loading = ref(false)
 const touched = ref(false)
 const advancedOpen = ref(false)
@@ -56,8 +64,7 @@ const keyField = computed(() => form.fields.filter((f) => f.dedup && f.dbColumn)
 const tableNameTouched = ref(false)
 function onNameInput() {
   if (isEdit.value || tableNameTouched.value) return
-  const letters = pinyin(form.name || '', { pattern: 'first', toneType: 'none', type: 'array' }).join('')
-  form.tableName = letters ? `TB_${letters.toUpperCase()}` : ''
+  form.tableName = tableNameFromEntryName(form.name)
 }
 function onTableNameInput() { tableNameTouched.value = true }
 
@@ -104,8 +111,10 @@ function resetFromTable(t?: EntryType) {
     form.remark = ''
     form.dedupMode = 'source'
     form.fields = []
+    Object.assign(form, storageFromEntry(null))
     return
   }
+  Object.assign(form, storageFromEntry(t))
   form.tableId = t.tableId
   form.name = t.name || ''
   form.tableName = t.tableName
@@ -238,6 +247,7 @@ async function onSave() {
     recFlag: form.recordChange || undefined,
     checkFlag: form.validate || undefined,
     checkRule: form.validateScript || undefined,
+    ...storagePayload(form),
     fields: form.fields.map<EntryField>((f, i) => ({
       prop: f.dbColumn ? `${f.code || f.dbColumn.toLowerCase()}-${f.dbColumn}` : f.code,
       desc: f.desc,
@@ -336,6 +346,21 @@ function submitImport() {
           />
           <div v-if="tableNameError" class="ted-err">{{ tableNameError }}</div>
         </div>
+        <!-- 数据源类型（1117）：新建选 CK 只在 ClickHouse 建物理表；编辑时改类型不会建表，所以只读 -->
+        <div class="ted-field">
+          <label>数据源类型</label>
+          <select
+            v-model="form.dsKind"
+            class="ted-input"
+            data-testid="ted-ds-kind"
+            :disabled="isEdit"
+            :title="isEdit ? '物理表已建在该库，编辑时不能换库；MySQL 表转 CK 请在数据中心用「同步表」' : 'CK 只在 ClickHouse 建物理表，不建 MySQL 表'"
+            @change="onDsKindChange"
+          >
+            <option value="MYSQL">MYSQL</option>
+            <option value="CK">CK</option>
+          </select>
+        </div>
         <!-- 去重列（旧平台顶部表单同款位置）：只读，由字段表的「去重」勾选实时派生 -->
         <div class="ted-field">
           <label>去重列</label>
@@ -359,7 +384,32 @@ function submitImport() {
 
       <!-- 「高级」：本期只做**校验 / 校验脚本**，与采集资产侧同款；字段沿用旧 checkFlag / checkRule。
            记变化（recFlag）本期隐藏，见下方注释。 -->
-      <div class="ted-adv-toggle" @click="advancedOpen = !advancedOpen">高级 {{ advancedOpen ? '▲' : '▼' }}</div>
+      <div class="ted-adv-toggle" data-testid="ted-adv-toggle" @click="advancedOpen = !advancedOpen">高级 {{ advancedOpen ? '▲' : '▼' }}<span class="ted-adv-summary" data-testid="ted-storage-summary">{{ storageText }}</span></div>
+      <div v-if="advancedOpen" class="ted-meta2">
+        <div class="ted-field sm">
+          <label>读写类型</label>
+          <select v-model="form.opType" class="ted-input" data-testid="ted-op-type">
+            <option value="wr">读写 (wr)</option>
+            <option value="r">只读 (r)</option>
+          </select>
+        </div>
+        <div class="ted-field md">
+          <label>存储引擎</label>
+          <select v-model="form.storageEngine" class="ted-input" data-testid="ted-storage-engine">
+            <option v-for="o in form.dsKind === 'CK' ? CK_ENGINE_OPTIONS : MYSQL_ENGINE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+        </div>
+        <template v-if="form.dsKind === 'CK'">
+          <div class="ted-field md">
+            <label title="ClickHouse 物理排序列（ORDER BY），默认 ENTRY_ID">排序列 (ORDER BY)</label>
+            <input v-model="form.sorted" class="ted-input" data-testid="ted-sorted" placeholder="ENTRY_ID" />
+          </div>
+          <div class="ted-field md">
+            <label title="ClickHouse 分区表达式（PARTITION BY），可选">分区 (PARTITION BY)</label>
+            <input v-model="form.partColumn" class="ted-input" data-testid="ted-part-column" placeholder="可选，如 toYYYYMM(UPDATE_DT)" />
+          </div>
+        </template>
+      </div>
       <div v-if="advancedOpen" class="ted-meta2">
         <!-- 「记变化」（recFlag）2026-08-28 拍板隐藏：本期只做校验。
            **只隐藏控件，不动数据**——reset 仍回填、提交仍原样带回，后端已有值不会被这次保存抹掉。
@@ -471,11 +521,13 @@ function submitImport() {
 
 <style scoped>
 .ted { display: flex; flex-direction: column; gap: 14px; }
-.ted-meta { display: grid; grid-template-columns: repeat(4, 1fr) auto; gap: 12px 16px; align-items: end; }
+.ted-meta { display: grid; grid-template-columns: repeat(5, 1fr) auto; gap: 12px 16px; align-items: end; }
 .ted-meta2 { display: flex; gap: 16px; align-items: end; }
 .ted-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ted-field.sm { width: 130px; flex: none; }
 .ted-field.grow { flex: 1; }
+.ted-field.md { width: 220px; flex: none; }
+.ted-adv-summary { margin-left: 8px; color: var(--rc-faint); font-weight: 400; }
 .ted-field label { font-size: 12px; color: var(--rc-text-2); }
 .ted-field .req { color: #ef4444; font-style: normal; margin-right: 2px; }
 .ted-meta-actions { display: flex; gap: 8px; align-items: end; }

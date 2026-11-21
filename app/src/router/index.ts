@@ -43,7 +43,7 @@ const routes: RouteRecordRaw[] = [
       { path: '/sync', component: () => import('../views/DataSync/index.vue') },
       { path: '/sync/create', component: () => import('../views/DataSync/TaskWizard.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
-      { path: '/ai-chat', component: () => import('../views/TemplateConfig/AiChat/index.vue') },
+      { path: '/ai-chat', component: () => import('../views/TemplateConfig/AiChat/index.vue'), meta: { permission: 'ai-chat' } },
       { path: '/base-config', component: () => import('../views/TemplateConfig/BaseConfig/index.vue') },
       { path: '/template-config', component: () => import('../views/TemplateConfig/index.vue') },
       { path: '/system-config', component: () => import('../views/TemplateConfig/SystemConfig/index.vue') },
@@ -106,16 +106,18 @@ export function ensureDynamicRoutes(): string[] {
  * 冷启动预热：已登录用户（刷新页面）在应用挂载时就把会话/菜单/动态路由准备好，
  * 别等第一次点侧栏才做。**不阻塞任何导航**：即使后端慢 10 秒，页面也已经按会话快照渲染出来了。
  */
-export async function warmUpAuth(): Promise<void> {
+/** 返回值：会话是否已向后端确认有效（`fetchInfo` 成功）。本地快照不算——服务端会话可能早已失效。 */
+export async function warmUpAuth(): Promise<boolean> {
   const auth = useAuthStore()
-  if (!auth.isLoggedIn) return
+  if (!auth.isLoggedIn) return false
   try {
     // 有快照也要校准一次：菜单/权限可能在别的会话里被改过（fetchInfo 内部单飞，守卫不会重复请求）
     await auth.fetchInfo()
   } catch {
-    return
+    return false
   }
   ensureDynamicRoutes()
+  return true
 }
 
 /**
@@ -213,6 +215,7 @@ export const authGuard = async (to: { meta: Record<string, unknown>; path: strin
   }
 
   // 菜单权限口子（0924-02）：没权限的入口连地址直达也拦住，回总览
+  if (to.path === '/ai-chat' && !canAccess('ai-chat')) return '/overview'
   if (!canAccess(to.meta.permission as string | undefined)) return '/overview'
   return true
 }

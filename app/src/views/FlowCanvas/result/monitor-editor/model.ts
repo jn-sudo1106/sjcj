@@ -23,6 +23,14 @@ export interface MonitorEditorForm {
   systemPrompt: string
   providerCode: string
   modelCode: string
+  /** 1117：生成方式。builtin = 现有接口（供应商 + 模型）；agent = 智能体 + Git 仓库目录 */
+  generationMode: 'builtin' | 'agent'
+  /** 智能体接口 ID（agent 模式；'all' = 任意空闲智能体） */
+  agentInterfaceId: string
+  repoId: string
+  directoryId: string
+  /** 最近一次智能体生成的归档 ID，随保存写进 conf.archiveId */
+  archiveId: string
   nullPolicy: 'abnormal' | 'allow' | 'skip'
   noDataPolicy: 'no_data' | 'alarm' | 'unknown'
   /** 规则检查：时间口径 C/U/M/T */
@@ -214,6 +222,12 @@ export function emptyForm(): MonitorEditorForm {
     systemPrompt: defaultSystemPrompt(),
     providerCode: '',
     modelCode: '',
+    // 1117：新建监控默认「智能体 · 提交 Git」；已有记录保持它保存时的方式（见 formFromRecord）
+    generationMode: 'agent',
+    agentInterfaceId: '',
+    repoId: '',
+    directoryId: '',
+    archiveId: '',
     nullPolicy: 'abnormal',
     noDataPolicy: 'no_data',
     timeType: 'C',
@@ -336,6 +350,12 @@ export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
     systemPrompt: textOf(conf.systemPrompt ?? orchestration.systemPrompt),
     providerCode: textOf(conf.modelProviderCode ?? orchestration.modelProviderCode),
     modelCode: textOf(conf.modelCode ?? orchestration.modelCode),
+    // 没有 generation 键的旧记录是内置接口生成的，打开仍显示内置接口，不擅自改生成方式
+    generationMode: conf.generation?.mode === 'agent' ? 'agent' : 'builtin',
+    agentInterfaceId: textOf(conf.generation?.interfaceId),
+    repoId: textOf(conf.generation?.repoId),
+    directoryId: textOf(conf.generation?.directoryId),
+    archiveId: textOf(conf.archiveId),
     nullPolicy: (conf.nullPolicy === 'allow' || conf.nullPolicy === 'skip' ? conf.nullPolicy : 'abnormal'),
     noDataPolicy: (conf.noDataPolicy === 'alarm' || conf.noDataPolicy === 'unknown' ? conf.noDataPolicy : 'no_data'),
     timeType: textOf(conf.timeType) || 'C',
@@ -395,6 +415,13 @@ export function confFromForm(
     conf.systemPrompt = form.systemPrompt
     conf.modelProviderCode = form.providerCode
     conf.modelCode = form.modelCode
+    // 生成方式：智能体模式记下智能体与仓库目录；切回内置时只留 mode，旧记录没有这个键就不写
+    if (form.generationMode === 'agent') {
+      conf.generation = { mode: 'agent', interfaceId: form.agentInterfaceId, repoId: form.repoId, directoryId: form.directoryId }
+    } else if (base.generation) {
+      conf.generation = { mode: 'builtin' }
+    }
+    if (form.archiveId) conf.archiveId = form.archiveId
     conf.nullPolicy = form.nullPolicy
     conf.noDataPolicy = form.noDataPolicy
     conf.version = form.version || undefined
@@ -415,6 +442,8 @@ export function confFromForm(
     }
     if (extra.script !== undefined) conf.script = extra.script
     if (extra.scriptPath !== undefined) conf.scriptPath = extra.scriptPath
+    // 智能体生成：脚本以 Git（scriptPath + archiveId）为准，不留正文；也清掉旧的内置接口正文，免得执行端拿到旧脚本
+    if (form.generationMode === 'agent' && extra.scriptPath !== undefined) delete conf.script
   } else {
     conf.timeType = form.timeType || 'C'
     conf.minSize = parseNumberOrKeep(form.minSize)
@@ -487,6 +516,11 @@ export function formSignature(form: MonitorEditorForm): string {
     systemPrompt: form.systemPrompt.trim(),
     providerCode: form.providerCode,
     modelCode: form.modelCode,
+    generationMode: form.generationMode,
+    agentInterfaceId: form.agentInterfaceId,
+    repoId: form.repoId,
+    directoryId: form.directoryId,
+    archiveId: form.archiveId,
     nullPolicy: form.nullPolicy,
     noDataPolicy: form.noDataPolicy,
     timeType: form.timeType,
