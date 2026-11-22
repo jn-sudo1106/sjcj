@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { flowCenterApi, sourceApi, workflowBindingApi, type Source, type Step, type WorkflowBinding } from '@/api'
 import { runnerManagementApi as api, type ModelInterface } from '@/api/runnerManagement'
-import { ALL_AGENTS, agentStatusLabel, isAgentInterface } from '@/utils/agentPool'
+import { ALL_AGENTS, agentStatusLabel, isOnlineAgentInterface } from '@/utils/agentPool'
 import GenerationFlowPicker from './GenerationFlowPicker.vue'
 
 const props = defineProps<{ sources: Source[] }>()
@@ -69,7 +69,7 @@ async function load() {
   try {
     const settings = await api.modelInterfaces()
     if (request !== sequence) return
-    models.value = settings.items.filter(item => item.enabled && isAgentInterface(item))
+    models.value = settings.items.filter(isOnlineAgentInterface)
     for (const selected of props.sources) {
       if (request !== sequence) return
       const group: Group = { source: { ...selected }, flows: [], flowId: '', nodes: [], loading: true, error: '', request: 0 }

@@ -58,7 +58,7 @@ class StorageMergesTest(unittest.TestCase):
                 self.assertFalse({'code_versions', 'generation_jobs', 'deployment_jobs'} & tables)
                 row = db.execute("SELECT * FROM releases WHERE digest='sha256:old'").fetchone()
                 self.assertEqual((row['prompt'], row['repo_id'], row['published_at']), ('prompt','repo','version-date'))
-                self.assertEqual(db.execute('PRAGMA foreign_key_list(code_runtime_bindings)').fetchone()['table'], 'task_artifacts')
+                self.assertEqual(db.execute('PRAGMA foreign_key_list(code_runtime_bindings)').fetchone()['table'], 'artifacts')
                 self.assertEqual(list(db.execute('PRAGMA foreign_key_check')), [])
                 gen = db.execute("SELECT * FROM jobs WHERE job_type='generation'").fetchone()
                 dep = db.execute("SELECT * FROM jobs WHERE job_type='deployment'").fetchone()

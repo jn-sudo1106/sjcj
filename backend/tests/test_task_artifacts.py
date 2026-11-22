@@ -29,24 +29,24 @@ class TaskArtifactsTest(unittest.TestCase):
                                  'sha256': 'a'*64, 'data': 'must-not-persist'}]}
             artifacts.sync_archive(db, record)
             artifacts.sync_archive(db, {**record, 'gitCommit': 'commit-2'})
-            row = db.execute("SELECT * FROM task_artifacts WHERE artifact_type='code'").fetchone()
+            row = db.execute("SELECT * FROM artifacts WHERE artifact_type='code'").fetchone()
             self.assertEqual((row['task_type'], row['task_id']), ('generation', 'task'))
             self.assertEqual(row['machine_path'], r'D:\coder\workspace\1401218\code\sites\example.py')
             self.assertEqual((row['repo_id'], row['git_path'], row['git_commit']), ('repo','links/1401218/sites/example.py','commit-2'))
             self.assertEqual(row['sha256'], 'a'*64)
             self.assertNotIn('data', json.loads(row['payload']))
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM task_artifacts WHERE artifact_type='code'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM artifacts WHERE artifact_type='code'").fetchone()[0], 1)
             db.execute("DELETE FROM jobs WHERE job_type='deployment' AND job_id='task'")
-            self.assertIsNotNone(db.execute('SELECT task_id FROM task_artifacts').fetchone()['task_id'])
+            self.assertIsNotNone(db.execute('SELECT task_id FROM artifacts').fetchone()['task_id'])
             db.execute("DELETE FROM jobs WHERE job_type='generation' AND job_id='task'")
-            row = db.execute('SELECT * FROM task_artifacts').fetchone()
+            row = db.execute('SELECT * FROM artifacts').fetchone()
             self.assertIsNone(row['task_id']); self.assertIsNone(row['task_type'])
             self.assertTrue(row['machine_path']); self.assertTrue(row['git_path'])
 
     def test_unmatched_legacy_task_is_not_fabricated(self):
         with self.store.connect() as db:
             artifacts.sync_archive(db, {'archiveId':'old','taskId':'gone','files':[{'path':'old.py'}]})
-            row = db.execute('SELECT * FROM task_artifacts').fetchone()
+            row = db.execute('SELECT * FROM artifacts').fetchone()
             self.assertIsNone(row['task_id'])
             self.assertEqual(json.loads(row['payload'])['sourceTaskId'], 'gone')
 
@@ -64,7 +64,7 @@ class TaskArtifactsTest(unittest.TestCase):
             for identifier in ('first', 'second'):
                 self.job(db, 'deployment', identifier)
                 artifacts.sync_delivery(db, {'jobId':identifier,'deliveryId':'d','createdAt':'date'})
-            outputs = db.execute("SELECT * FROM task_artifacts WHERE task_type='deployment' ORDER BY task_id").fetchall()
+            outputs = db.execute("SELECT * FROM artifacts WHERE task_type='deployment' ORDER BY task_id").fetchall()
             self.assertEqual([row['task_id'] for row in outputs], ['first', 'second'])
             self.assertEqual({row['sha256'] for row in outputs}, {digest[7:]})
             self.assertEqual(db.execute('SELECT repository_storage_path FROM releases').fetchone()[0], 'old/main.py')
@@ -77,12 +77,12 @@ class TaskArtifactsTest(unittest.TestCase):
             self.store = Store(self.path)
             with self.store.connect() as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                self.assertIn('task_artifacts', tables)
+                self.assertIn('artifacts', tables)
                 self.assertFalse({'releases','code_assets'} & tables)
-                self.assertEqual(len(db.execute('PRAGMA table_info(task_artifacts)').fetchall()), 13)
+                self.assertEqual(len(db.execute('PRAGMA table_info(artifacts)').fetchall()), 13)
                 self.assertEqual(list(db.execute('PRAGMA foreign_key_check')), [])
                 for table in ('assignments', 'code_runtime_bindings'):
-                    self.assertIn('task_artifacts', {row['table'] for row in db.execute('PRAGMA foreign_key_list('+table+')')})
+                    self.assertIn('artifacts', {row['table'] for row in db.execute('PRAGMA foreign_key_list('+table+')')})
 
 
 if __name__ == '__main__':

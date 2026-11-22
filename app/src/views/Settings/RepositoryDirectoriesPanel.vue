@@ -51,7 +51,12 @@ async function save() {
   try {
     const row = await runnerManagementApi.saveCodeRepositoryDirectory(repoId, { ...form, name: form.name.trim(), path: form.path.trim() }, editingId.value === 'new' ? undefined : editingId.value || undefined)
     if (repoId !== props.repo.repoId) return
-    editingId.value = null; await load(); emit('select', row)
+    if (row.pendingPush) {
+      editingId.value = row.directoryId
+      Object.assign(form, { name: row.name, path: row.path, configType: row.configType, configTypeName: row.configTypeName, status: row.status, revision: row.revision })
+      await load(); emit('select', row)
+      error.value = row.message || '目录已修改，推送 Git 失败，请再次保存重试'
+    } else { editingId.value = null; await load(); emit('select', row) }
   } catch (e) { if (repoId === props.repo.repoId) error.value = problem(e) }
   finally { saving.value = false }
 }
@@ -88,7 +93,7 @@ async function setGenerationDefault(row: CodeRepositoryDirectory) {
     <div v-if="editingId" class="rd-editor" data-testid="repo-directory-editor">
       <label>节点类型<el-select v-model="form.configType" data-testid="repo-directory-type" @change="selectType"><el-option value="" label="通用" :disabled="!!repo.configType" /><el-option v-for="type in selectableTypes" :key="type.code" :value="type.code" :label="`[${type.code}] ${type.name}`" /></el-select></label>
       <label>配置名称<el-input v-model="form.name" placeholder="方便节点选择" data-testid="repo-directory-name" /></label>
-      <label>仓库内目录<el-input v-model="form.path" :disabled="editingId !== 'new'" placeholder="例如 网页抓取 / 列表代码" data-testid="repo-directory-path" /></label>
+      <label>仓库内目录<el-input v-model="form.path" placeholder="例如 网页抓取 / 列表代码" data-testid="repo-directory-path" /></label>
       <footer><el-button size="small" :disabled="saving" @click="editingId = null">取消</el-button><el-button type="primary" size="small" :disabled="!form.name.trim() || !form.path.trim()" :loading="saving" data-testid="repo-directory-save" @click="save">保存目录</el-button></footer>
     </div>
     <button class="rd-all" :class="{ selected: !selectedId }" :aria-pressed="!selectedId" type="button" @click="emit('select', null)"><span>全部仓库文件</span><span v-if="!selectedId" class="rd-selected-mark"><el-icon><Check /></el-icon>已选</span></button>

@@ -23,7 +23,7 @@ const dir = (directoryId: string, configType: string, status: CodeRepositoryDire
 
 describe('智能体生成选项', () => {
   it('只给启用的代码生成智能体（首项全选），仓库只留通用 / 610 且启用的', async () => {
-    vi.spyOn(runnerManagementApi, 'modelInterfaces').mockResolvedValue({ items: [agent('a1', 'agent'), agent('chat', 'chat'), agent('off', 'agent', false)], revision: 1 })
+    vi.spyOn(runnerManagementApi, 'modelInterfaces').mockResolvedValue({ items: [agent('a1', 'agent'), agent('chat', 'chat'), agent('off', 'agent', false), { ...agent('offline', 'agent'), runtimeStatus: 'offline' }], revision: 1 })
     vi.spyOn(runnerManagementApi, 'codeRepositories').mockResolvedValue([repo('shared'), repo('mon', '610'), repo('web', '90'), repo('old', '610', 'DISABLED')])
     const options = await loadAgentGenerationOptions()
     expect(options.agents.map((item) => item.id)).toEqual(['all', 'a1'])

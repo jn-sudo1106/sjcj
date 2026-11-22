@@ -46,11 +46,9 @@ describe('nodeInspectorTabs', () => {
     expect(ruleTabs).toEqual(ordinaryTabs)
   })
 
-  // S2-2 门禁：规则节点未绑完表字段时，编排配置 Tab 禁用并带提示文案；
-  // 绑完输入表 + 入参/出参字段后解锁（不依赖 ruleId）。表字段被清掉会重新锁上。
-  it('unbound rule node: orchestration tab disabled; bound without ruleId: enabled', () => {
+  it('规则处理不依赖表字段和 ruleId，均可打开智能体配置', () => {
     const unsaved = nodeInspectorTabs(ruleNodeUnsaved).find(([key]) => key === 'orchestration')!
-    expect(unsaved[2]).toBe('请先在「表配置」完成输入/输出表与字段选择')
+    expect(unsaved[2]).toBeUndefined()
 
     const bound = nodeInspectorTabs(ruleNodeBound).find(([key]) => key === 'orchestration')!
     expect(bound[2]).toBeUndefined()
@@ -59,10 +57,10 @@ describe('nodeInspectorTabs', () => {
     expect(saved[2]).toBeUndefined()
   })
 
-  it('旧步骤规则ID选择占位 -1 且未绑表：编排配置仍禁用', () => {
+  it('规则处理旧规则ID为 -1 且未绑表：智能体配置仍可打开', () => {
     const node = { title: '规则处理', kind: 'node', ruleCfg: { mode: 'new', describe: '', ruleId: '-1' } } as unknown as NodeConfig
     const orchestration = nodeInspectorTabs(node).find(([key]) => key === 'orchestration')!
-    expect(orchestration[2]).toBeTruthy()
+    expect(orchestration[2]).toBeUndefined()
   })
 
   it('旧步骤规则ID选择占位 -1 但已绑表字段：编排配置可用', () => {
@@ -77,13 +75,13 @@ describe('nodeInspectorTabs', () => {
     expect(orchestration[2]).toBeUndefined()
   })
 
-  it('有 configId 但表字段被清掉：编排配置重新禁用', () => {
+  it('规则处理已有 configId 且表字段被清掉：仍可查看和修改智能体配置', () => {
     const node = {
       title: '规则处理', kind: 'node', configId: '1400998',
       ruleCfg: { mode: 'ref', describe: '' },
     } as unknown as NodeConfig
     const orchestration = nodeInspectorTabs(node).find(([key]) => key === 'orchestration')!
-    expect(orchestration[2]).toBeTruthy()
+    expect(orchestration[2]).toBeUndefined()
   })
 
   it('ordinary node never gets the orchestration gate (its content is not built yet, see S3)', () => {

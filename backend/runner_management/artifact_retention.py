@@ -23,11 +23,11 @@ def database_references(db, known):
     reasons = defaultdict(set)
     if isinstance(db, sqlite3.Connection):
         from .store import MYSQL_TABLES
-        tables = [row['name'] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'") if row['name'] in (*MYSQL_TABLES, 'task_artifacts')]
+        tables = [row['name'] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'") if row['name'] in MYSQL_TABLES]
     else:
         tables = [row['TABLE_NAME'] for row in db.execute(
             "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' "
-            "AND (TABLE_NAME LIKE ? OR TABLE_NAME='task_artifacts')", ('ce_runner_%',)).fetchall()]
+            "AND TABLE_NAME LIKE ?", ('ce_runner_%',)).fetchall()]
     for table in tables:
         if not re.fullmatch(r'(?:ce_runner_)?[a-z_]+', table):
             raise ValueError('Unexpected table name')

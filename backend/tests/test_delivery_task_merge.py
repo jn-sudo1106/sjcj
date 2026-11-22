@@ -42,7 +42,7 @@ class DeliveryTaskMergeTest(unittest.TestCase):
             log_records.insert(db,event)
             db.execute("INSERT INTO assignments VALUES('assignment','runner','queue','python',?,1,1,'test','')",(self.digest,))
             self.jobs = [dict(row) for row in db.execute('SELECT * FROM jobs ORDER BY job_type,job_id')]
-            self.old_artifacts = [dict(row) for row in db.execute('SELECT * FROM task_artifacts ORDER BY artifact_id')]
+            self.old_artifacts = [dict(row) for row in db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
 
     def record(self, identifier='new', **changes):
         result = dict(delivery_id=identifier,binding_type='deployment',owner_key=owner_key('owner'),owner_id='owner',
@@ -92,7 +92,7 @@ class DeliveryTaskMergeTest(unittest.TestCase):
                 self.assertEqual(json.loads(other['payload']),json.loads(self.jobs[1]['payload']))
                 self.assertEqual(db.execute("SELECT task_id FROM logs WHERE log_id='event'").fetchone()[0],'generation')
                 for old in self.old_artifacts:
-                    self.assertEqual(dict(db.execute('SELECT * FROM task_artifacts WHERE artifact_id=?',(old['artifact_id'],)).fetchone()),old)
+                    self.assertEqual(dict(db.execute('SELECT * FROM artifacts WHERE artifact_id=?',(old['artifact_id'],)).fetchone()),old)
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM assignments').fetchone()[0],1)
                 self.assertEqual(list(db.execute('PRAGMA foreign_key_check')),[])
                 self.assertEqual(db.execute('PRAGMA foreign_keys').fetchone()[0],1)
@@ -110,7 +110,7 @@ class DeliveryTaskMergeTest(unittest.TestCase):
         self.assertEqual(runner_delivery(app,'runner','generation','finish',payload),first)
         with self.store.connect() as db:
             self.assertEqual(dict(db.execute("SELECT * FROM jobs WHERE job_type='generation'").fetchone()),self.jobs[2])
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM task_artifacts WHERE task_type='deployment' AND task_id='generation'").fetchone()[0],1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM artifacts WHERE task_type='deployment' AND task_id='generation'").fetchone()[0],1)
 
     def test_expiry_only_changes_running_delivery_and_preserves_parent_associations(self):
         with self.store.connect() as db:

@@ -8,6 +8,7 @@ import SourceGenerationTaskPanel from './SourceGenerationTaskPanel.vue'
 beforeEach(() => {
   vi.spyOn(api, 'modelInterfaces').mockResolvedValue({ items: [
     { id: 'agent', name: 'Agent', enabled: true, kind: 'agent', runtimeStatus: 'busy' },
+    { id: 'offline', name: 'Offline Agent', enabled: true, kind: 'agent', runtimeStatus: 'offline' },
     { id: 'chat', name: 'Chat', enabled: true, kind: 'chat' },
   ], revision: 1 } as never)
   vi.spyOn(sourceApi, 'sourceDetail').mockImplementation(async id => ({ sourceId: id, name: `源${id}`, url: 'https://news.example', defaultFlowId: '50' }) as never)
@@ -26,6 +27,7 @@ it('展示源的流程并勾选配置节点，选择全选提交到数据库，�
   expect(w.get('[aria-label="批量生成智能体接口"]').text()).toContain('全选')
   expect(w.get('[aria-label="批量生成智能体接口"]').text()).toContain('忙碌')
   expect(w.get('[aria-label="批量生成智能体接口"]').text()).not.toContain('Chat')
+  expect(w.get('[aria-label="批量生成智能体接口"]').text()).not.toContain('Offline Agent')
   expect(api.createCodeGenerationTask).not.toHaveBeenCalled()
   await w.get('[aria-label="源 7 的流程"]').setValue('60'); await flushPromises()
   expect(w.text()).toContain('配置 102')

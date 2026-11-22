@@ -511,6 +511,8 @@ export interface CodeRepositoryInput {
 }
 
 export interface CodeRepositoryDirectory {
+  pendingPush?: boolean
+  message?: string
   directoryId: string
   repoId: string
   name: string

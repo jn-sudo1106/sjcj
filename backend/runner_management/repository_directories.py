@@ -1,5 +1,6 @@
 """Node-type save destinations within a Git repository."""
 import json
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -8,19 +9,25 @@ from .directory_layout import revision, store_layout
 PREFIX = 'repository-directory:'
 
 
-def list_directories(app, db, repo_id):
+def legacy_default(app, db, repo_id):
+    """Resolve historical default IDs without offering a synthetic directory."""
     repo = app.repository(db, repo_id)
     default = {'directoryId': 'default', 'repoId': repo_id, 'name': '默认目录',
                'configType': repo['config_type'], 'configTypeName': repo['config_type_name'],
                'path': app.repository_upload_directory(db, repo), 'status': 'ACTIVE', 'isDefault': True}
     default['revision'] = revision(default)
+    return default
+
+
+def list_directories(app, db, repo_id):
+    app.repository(db, repo_id)
     rows = [json.loads(row['setting_value']) for row in db.execute(
         'SELECT setting_value FROM settings WHERE setting_key LIKE ?', (PREFIX + '%',)).fetchall()]
     rows = [row for row in rows if row['repoId'] == repo_id]
     for row in rows:
         row['codeCount'] = db.execute('SELECT COUNT(*) AS count FROM code_assets WHERE directory_id=?',
                                      (row['directoryId'],)).fetchone()['count']
-    result = [default, *sorted(rows, key=lambda row: (row['configType'], row['name']))]
+    result = sorted(rows, key=lambda row: (row['configType'], row['name']))
     for item in result:
         selected = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', ('generation-type-default:' + item['configType'],)).fetchone() if item['configType'] else None
         choice = json.loads(selected['setting_value']) if selected else {}
@@ -30,7 +37,8 @@ def list_directories(app, db, repo_id):
 
 def get_directory(app, db, repo_id, directory_id, config_type=None, active=True):
     from .server import ApiError
-    row = next((row for row in list_directories(app, db, repo_id) if row['directoryId'] == directory_id), None)
+    row = legacy_default(app, db, repo_id) if directory_id == 'default' else next(
+        (row for row in list_directories(app, db, repo_id) if row['directoryId'] == directory_id), None)
     if not row:
         raise ApiError('仓库配置目录不存在，请刷新后选择', 404)
     if active and row['status'] != 'ACTIVE':
@@ -75,12 +83,10 @@ def save_directory(app, repo_id, payload, directory_id=None, headers=None):
             raise ApiError('目录名称无效')
         relative = safe_directory(app, repo, payload.get('path') or (old['path'] if old else type_name or 'default'))
         path = relative.as_posix()
-        if old and path != old['path']:
-            raise ApiError('已有目录路径不能直接修改，请新建目录后在节点中切换保存位置', 409)
         # Directory type classifies future save destinations. Existing assets
         # retain their actual node type and immutable version/file references.
         # Reclassifying a folder must not rewrite those business identities.
-        for other in list_directories(app, db, repo_id):
+        for other in [legacy_default(app, db, repo_id), *list_directories(app, db, repo_id)]:
             if other['directoryId'] == directory_id:
                 continue
             if other['path'].casefold() == path.casefold() or other['name'] == name:
@@ -98,8 +104,11 @@ def save_directory(app, repo_id, payload, directory_id=None, headers=None):
         if not (root / '.git').is_dir() or Path(app.git(root, 'rev-parse', '--show-toplevel').strip()).resolve() != root.resolve():
             raise ApiError('服务器目录不是独立 Git 仓库，请先验证仓库', 409)
         target = root / relative
+        renamed = bool(old and path != old['path'])
+        if renamed:
+            from .repository_directory_rename import rename
+            rename(app, db, repo, old, relative)
         if not old:
-            import subprocess
             if subprocess.run(['git', 'diff', '--cached', '--quiet'], cwd=root, capture_output=True, timeout=10).returncode:
                 raise ApiError('仓库已有暂存文件，请先处理后再新建目录', 409)
             target.mkdir(parents=True, exist_ok=True)
@@ -115,6 +124,16 @@ def save_directory(app, repo_id, payload, directory_id=None, headers=None):
         item = {'directoryId': directory_id or uuid.uuid4().hex, 'repoId': repo_id, 'name': name,
                 'configType': config_type, 'configTypeName': type_name, 'path': path, 'status': status,
                 'isDefault': False, 'updatedAt': now()}
+        if repo['remote_url'] and (renamed or old and old.get('pendingPush')):
+            try:
+                app.set_git_origin(root, repo['remote_url'])
+                app.push_git(root, repo['branch'])
+            except (ApiError, OSError, subprocess.TimeoutExpired):
+                # The local commit may already have reached the remote before a
+                # connection error. Keep metadata aligned with the moved files;
+                # saving again retries the push without repeating the rename.
+                item['pendingPush'] = True
+                item['message'] = '目录已在服务器重命名，但推送 Git 失败。请检查仓库连接后再次点击“保存目录”重试推送。'
         item['revision'] = revision(item)
         store_layout(db, PREFIX + item['directoryId'], item)
         return {**item, 'codeCount': old.get('codeCount', 0) if old else 0}

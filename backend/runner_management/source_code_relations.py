@@ -82,6 +82,15 @@ def sync_archive(db, archive):
     context = source_context(context)
     from .generated_archives import public
     files = public(archive).get('files') or []
+    # Old receipts included unchanged files from a shared workspace. Replaying
+    # the corrected change list must remove those associations, not only upsert.
+    if isinstance(archive.get('beforeCodeFiles'), dict):
+        paths = {file.get('path') for file in files}
+        rows = db.execute('SELECT relation_id,file_path FROM source_code_relations WHERE archive_id=? AND repo_id=? AND ' + OWNER_WHERE,
+                          (archive['archiveId'], archive['repoId'], context['sourceId'], context['flowId'], context['stepId'], archive['configId'])).fetchall()
+        for row in rows:
+            if row['file_path'] not in paths:
+                db.execute('DELETE FROM source_code_relations WHERE relation_id=?', (row['relation_id'],))
     count = 0
     for file in files:
         path = file.get('path')

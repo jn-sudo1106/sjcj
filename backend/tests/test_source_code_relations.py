@@ -56,6 +56,27 @@ class SourceCodeRelationsTest(unittest.TestCase):
         generated_archives.store(self.app, self.archive(sourceContext={}))
         self.assertEqual(relations.listing(self.app, {})['total'], 0)
 
+    def test_replay_removes_unchanged_shared_workspace_files_but_keeps_their_owners(self):
+        archive = self.archive(repositoryPrefix='101/sites', codeDirectory='101/code/sites', files=[
+            {'path': 'links/101/sites/current.py', 'relativePath': '101/sites/current.py', 'sha256': 'a'*64},
+            {'path': 'links/101/sites/other.py', 'relativePath': '101/sites/other.py', 'sha256': 'b'*64},
+            {'path': 'links/101/sites/requirements.txt', 'relativePath': '101/sites/requirements.txt', 'sha256': 'c'*64},
+        ])
+        other = {**archive, 'archiveId': 'other-archive', 'sourceContext': {'sourceId': '430024911', 'flowId': '21000040', 'stepId': '41895'},
+                 'files': [archive['files'][1]]}
+        generated_archives.store(self.app, other)
+        generated_archives.store(self.app, archive)  # Reproduce the historical over-broad receipt.
+        archive['beforeCodeFiles'] = {'101/code/sites/other.py': 'b'*64, '101/code/sites/requirements.txt': 'c'*64}
+        for _ in range(2):
+            generated_archives.store(self.app, archive)
+        self.assertEqual({row['filePath'] for row in relations.listing(self.app, {'sourceId': '430024910'})['items']},
+                         {'links/101/sites/current.py', 'links/101/sites/requirements.txt'})
+        self.assertEqual(relations.listing(self.app, {'sourceId': '430024911'})['total'], 1)
+        with self.app.store.connect() as db:
+            rows = db.execute("SELECT git_path FROM artifacts WHERE artifact_type='code'").fetchall()
+        self.assertEqual(sorted(row['git_path'] for row in rows),
+                         ['links/101/sites/current.py', 'links/101/sites/other.py', 'links/101/sites/requirements.txt'])
+
     def test_latest_task_advances_on_submission_and_old_completion_never_replaces_it(self):
         archive = self.archive()
         with self.app.store.connect() as db:

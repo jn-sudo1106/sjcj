@@ -40,6 +40,19 @@ class RepositoryTypeCatalogTest(unittest.TestCase):
         with urlopen(request, timeout=5) as response:
             return json.load(response)
 
+    def test_directory_list_omits_synthetic_default_and_preserves_legacy_references(self):
+        from backend.runner_management.repository_directories import list_directories, get_directory
+        from backend.runner_management.directory_layout import store_layout
+        repo = self.request('/api/runner-management/settings/code-repos')[0]
+        with self.app.store.connect() as db:
+            store_layout(db, 'repository-directory:monitor', {
+                'directoryId': 'monitor', 'repoId': repo['repoId'], 'name': '数据监控', 'path': 'dataMonitor',
+                'configType': '97', 'configTypeName': '数据监控', 'status': 'ACTIVE', 'isDefault': False})
+            self.assertEqual([row['directoryId'] for row in list_directories(self.app, db, repo['repoId'])], ['monitor'])
+            self.assertEqual(get_directory(self.app, db, repo['repoId'], 'default')['path'], 'default')
+        self.assertEqual([row['directoryId'] for row in self.request(
+            '/api/runner-management/settings/code-repos/' + repo['repoId'] + '/directories')], ['monitor'])
+
     def test_type_95_directory_uses_authenticated_business_catalog(self):
         calls = self.upstream({'code': None, 'data': {'list': [{'sourceType': 95, 'typeName': '下载'}]}})
         saved = self.save()

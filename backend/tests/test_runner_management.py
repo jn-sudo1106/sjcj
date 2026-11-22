@@ -455,8 +455,7 @@ class ManagementIntegrationTest(unittest.TestCase):
         first = self.request(directory_route, {'name': '网页列表', 'configType': '90', 'configTypeName': '网页抓取', 'path': '抓取/列表'})
         self.assertTrue((Path(repo['path']) / '抓取/列表/.gitkeep').exists())
         dirs = self.request(directory_route)
-        self.assertEqual(dirs[0]['directoryId'], 'default')
-        self.assertEqual(dirs[1]['directoryId'], first['directoryId'])
+        self.assertEqual([item['directoryId'] for item in dirs], [first['directoryId']])
         payload = {'configId': 'dir-node', 'queueName': 'news_list', 'configType': '90', 'codeType': 'site', 'siteHost': 'example.com',
             'repositoryId': repo['repoId'], 'directoryId': first['directoryId'], 'code': 'def scrape(url):\n    return [{"title":"first"}]\n'}
         saved = self.request(route + '/site-scripts/publish', payload)

@@ -221,7 +221,7 @@ async function loadAgentOptions(): Promise<void> {
       .filter(Boolean).join('；')
     agentOptionsLoaded.value = true
     const wasClean = formSignature(form) === baseline.value
-    if (!form.agentInterfaceId && result.agents.length) form.agentInterfaceId = result.agents[0]!.id
+    if (!form.agentInterfaceId || !result.agents.some(agent => agent.id === form.agentInterfaceId)) form.agentInterfaceId = result.agents[0]?.id || ''
     if (!form.repoId || !result.repos.some((repo) => repo.repoId === form.repoId)) form.repoId = defaultMonitorRepo(result.repos) || form.repoId
     if (wasClean) baseline.value = formSignature(form)
     await loadDirectories()
@@ -899,7 +899,7 @@ async function onGenerate(): Promise<void> {
     return
   }
   if (form.generationMode === 'agent') {
-    if (!form.agentInterfaceId || !form.repoId || !form.directoryId) {
+    if (!form.agentInterfaceId || !agentOptions.value.some(agent => agent.id === form.agentInterfaceId) || !form.repoId || !form.directoryId) {
       activeTab.value = 'check'
       ElMessage.warning('请先选择智能体、代码仓库和仓库目录')
       return

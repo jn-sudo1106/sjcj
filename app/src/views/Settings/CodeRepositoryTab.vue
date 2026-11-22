@@ -321,7 +321,7 @@ watch(filter, () => {
   if (!visible.value.some((repo) => repo.repoId === selectedRepoId.value)) void selectRepo(visible.value[0]?.repoId ?? '')
 })
 function selectDirectory(row: CodeRepositoryDirectory | null) {
-  const changed = selectedDirectory.value?.directoryId !== row?.directoryId
+  const changed = selectedDirectory.value?.directoryId !== row?.directoryId || selectedDirectory.value?.path !== row?.path
   selectedDirectory.value = row
   if (changed) { fileRequestId++; folderPath.value = ''; fileKeyword.value = ''; fileRows.value = []; fileTotal.value = 0; void loadFiles(1) }
 }

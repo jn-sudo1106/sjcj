@@ -227,6 +227,45 @@ it('在仓库下按节点类型新建目录，选择目录浏览并上传到该�
   expect(wrapper.get('[data-testid="code-repo-upload-directory"]').text()).toBe('网页抓取/')
   wrapper.unmount()
 })
+it('已有目录可修改路径，保留目录ID并刷新当前目录内容', async () => {
+  const directory = { directoryId: 'rule-dir', repoId: generic.repoId, name: '规则处理代码', configType: '600', configTypeName: '规则处理', path: 'ruleHandle', status: 'ACTIVE' as const, isDefault: false, revision: 'v1', codeCount: 0 }
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
+  const wrapper = await mountTab()
+  await wrapper.get('[data-testid="repo-directory-rule-dir"] .rd-title').trigger('click'); await flushPromises()
+  const before = vi.mocked(runnerManagementApi.codeRepositoryFiles).mock.calls.length
+  const edit = wrapper.get('[data-testid="repo-directory-rule-dir"]').findAll('button').find(button => button.text() === '编辑')!
+  await edit.trigger('click')
+  const input = wrapper.get('[data-testid="repo-directory-path"]')
+  expect(input.attributes('disabled')).toBeUndefined()
+  await input.setValue('ruleProcess')
+  const renamed = { ...directory, path: 'ruleProcess', revision: 'v2' }
+  vi.mocked(runnerManagementApi.saveCodeRepositoryDirectory).mockResolvedValue(renamed)
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([renamed])
+  await wrapper.get('[data-testid="repo-directory-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveCodeRepositoryDirectory).toHaveBeenCalledWith(generic.repoId, expect.objectContaining({ path: 'ruleProcess', revision: 'v1' }), directory.directoryId)
+  expect(vi.mocked(runnerManagementApi.codeRepositoryFiles).mock.calls.length).toBeGreaterThan(before)
+  expect(wrapper.text()).toContain('上传：ruleProcess/')
+  expect(wrapper.find('[data-testid="repo-directory-editor"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+it('目录重命名推送失败时保留新路径和修订号，再次保存可重试', async () => {
+  const directory = { directoryId: 'rule-dir', repoId: generic.repoId, name: '规则处理代码', configType: '600', configTypeName: '规则处理', path: 'ruleHandle', status: 'ACTIVE' as const, isDefault: false, revision: 'v1', codeCount: 0 }
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
+  const wrapper = await mountTab()
+  await wrapper.get('[data-testid="repo-directory-rule-dir"]').findAll('button').find(button => button.text() === '编辑')!.trigger('click')
+  await wrapper.get('[data-testid="repo-directory-path"]').setValue('ruleProcess')
+  const pending = { ...directory, path: 'ruleProcess', revision: 'v2', pendingPush: true, message: '目录已改名，推送失败，请保存重试' }
+  vi.mocked(runnerManagementApi.saveCodeRepositoryDirectory).mockResolvedValue(pending)
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([pending])
+  await wrapper.get('[data-testid="repo-directory-save"]').trigger('click'); await flushPromises()
+  expect(wrapper.find('[data-testid="repo-directory-editor"]').exists()).toBe(true)
+  expect(wrapper.text()).toContain(pending.message)
+  vi.mocked(runnerManagementApi.saveCodeRepositoryDirectory).mockResolvedValue({ ...pending, pendingPush: false, message: undefined, revision: 'v3' })
+  await wrapper.get('[data-testid="repo-directory-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveCodeRepositoryDirectory).toHaveBeenLastCalledWith(generic.repoId, expect.objectContaining({ path: 'ruleProcess', revision: 'v2' }), directory.directoryId)
+  expect(wrapper.find('[data-testid="repo-directory-editor"]').exists()).toBe(false)
+  wrapper.unmount()
+})
 it('目录查询按节点类型过滤，停用后禁止上传，目录加载失败明确显示', async () => {
   const base = { repoId: generic.repoId, configTypeName: '网页抓取', path: 'web', status: 'DISABLED' as const, isDefault: false, revision: 'v1' }
   vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([{ ...base, directoryId: 'web-dir', name: '网页专用', configType: '90' }, { ...base, directoryId: 'ocr-dir', name: 'OCR 专用', configType: '150', path: 'ocr' }])

@@ -72,6 +72,8 @@ class Store:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
+            from .artifact_table_schema import sqlite_rename
+            sqlite_rename(db)
             db.executescript(SCHEMA + DEPLOYMENT_SCHEMA + LOG_SCHEMA + SOURCE_CODE_SCHEMA)
             relation_columns = {row[1] for row in db.execute('PRAGMA table_info(source_code_relations)')}
             for name in ('latest_task_id', 'latest_task_created_at'):
@@ -129,7 +131,7 @@ class Store:
             db.close()
 
 
-MYSQL_TABLES = ("runners", "enrollment_codes", "releases", "assignments",
+MYSQL_TABLES = ("runners", "enrollment_codes", "releases", "artifacts", "assignments",
                 "code_assets", "code_runtime_bindings", "settings", "jobs", "source_code_relations",
                 "code_repositories", "directory_runner_bindings", "directory_deliveries") + LOG_TABLES
 MYSQL_SCHEMA = """
@@ -226,6 +228,8 @@ class MySqlStore:
         }
         with pymysql.connect(**self.kwargs) as db:
             with db.cursor() as cursor:
+                from .artifact_table_schema import mysql_rename
+                mysql_rename(cursor)
                 for statement in (MYSQL_SCHEMA + MYSQL_DEPLOYMENT_SCHEMA + MYSQL_LOG_SCHEMA + MYSQL_SOURCE_CODE_SCHEMA).split(";"):
                     if statement.strip():
                         cursor.execute(statement)

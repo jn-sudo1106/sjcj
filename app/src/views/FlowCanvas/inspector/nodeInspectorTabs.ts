@@ -11,9 +11,8 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
  *
  * 参数绑定和出参列属于任务配置，采集类节点在任务 Tab 内配置，不再单列参数 Tab。
  *
- * S2-2 门禁：规则节点在「表配置」绑完输入表与入参/出参字段之前，「编排配置」Tab 禁用。
- * 生成脚本使用节点已保存的 configId，不再要求先点中间保存按钮。
- * 非规则节点暂不设门禁：抓取配置内容本身还没建（S3），提前拦反而挡住占位内容。
+ * 规则处理与采集节点均可直接打开智能体配置，按当前节点 configId 读取生成参数。
+ * 表字段校验放在实际执行操作中；监控、数据校验、PDF 保留各自的表绑定要求。
  */
 export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {
   const isRule = !!cfg && isRuleNode(cfg)
@@ -26,9 +25,10 @@ export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boole
     ['task', '任务配置'],
     ...(options.includeAi === false ? [] : [['ai', 'AI 对话'] as NodeInspectorTabItem]),
   ]
-  // S2-2 门禁：规则式节点（含 PDF）在「表配置」绑完输入表与入参/出参字段之前，「编排配置」Tab 禁用。
-  // PDF 的绑定内容在 execCfg，规则节点在 ruleCfg——按存储位取校验对象。
-  if (ruleStyled) {
+  // 普通规则节点已复用采集节点的智能体工作区，配置入口不再被旧脚本的字段校验挡住。
+  // 其他规则式节点仍按自己的绑定内容校验（PDF 在 execCfg，监控/校验在 ruleCfg）。
+  const agentRule = isRule && !isMonitorNode(cfg) && !isDataValidationNode(cfg)
+  if (ruleStyled && !agentRule) {
     const binding = isRule ? cfg?.ruleCfg : cfg?.execCfg
     if (validateTableBinding(binding ?? { inputTableId: '', inputFields: [], outputFields: [] }, { requireOutput: !isMonitorNode(cfg) && !isDataValidationNode(cfg) })) {
       const orchestration = tabs.find((t) => t[0] === 'orchestration')!

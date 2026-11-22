@@ -77,7 +77,7 @@ it('已停用的历史智能体不能发送，避免悄悄更换执行接口', a
   vi.mocked(api.modelInterfaces).mockResolvedValue({ items: [], revision: 1 })
   const w = await setup(); await send(w, '继续修改')
   expect(api.regenerateCodeTask).not.toHaveBeenCalled()
-  expect(w.text()).toContain('原智能体已停用或不存在')
+  expect(w.text()).toContain('原智能体已离线或不可用')
 })
 it('设置中仍可选择提示词模板，保留原任务字段 ID 与队列，节点更新需主动勾选', async () => {
   const fields = '【当前节点输出字段】\n输出表：news\n- 字段名：标题；字段 ID：9001\n【输出字段结束】'

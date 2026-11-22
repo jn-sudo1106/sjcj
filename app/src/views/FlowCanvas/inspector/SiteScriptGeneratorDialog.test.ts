@@ -77,7 +77,7 @@ const stubs = {
   ElDialog: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   ElDrawer: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   ElButton: { props: ['disabled'], template: '<button type="button" :disabled="disabled"><slot /></button>' },
-  ElSelect: { props: ['modelValue', 'disabled'], emits: ['update:modelValue', 'change'],
+  ElSelect: { name: 'ElSelect', props: ['modelValue', 'disabled'], emits: ['update:modelValue', 'change', 'visible-change'],
     template: '<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\', $event.target.value)"><option value="" /><slot /></select>' },
   ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
 }
@@ -406,16 +406,36 @@ it('机器列表暂时读取失败也不阻止任务创建', async () => {
   wrapper.unmount()
 })
 
-it('所选模型关联离线机器时不阻止任务提交', async () => {
+it('离线智能体不出现在选择列表，原选择失效时不能继续提交', async () => {
   const model = (await runnerManagementApi.modelInterfaces()).items[0]!
-  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 0, items: [{ ...model, kind: 'agent', generationServerId: 'server-1' }] })
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 0, items: [{ ...model, kind: 'agent', generationServerId: 'server-1', runtimeStatus: 'offline' }] })
   vi.mocked(runnerManagementApi.codeGenerationServers).mockResolvedValue({ items: [{ serverId: 'server-1', name: 'home171', ipAddress: '192.168.1.171', status: 'offline', endpoint: '', workspace: '', installDirectory: '', osType: '', osVersion: '', version: '', lastHeartbeat: '', mqCapable: true, mqGeneration: { configId: '201001', queue: 'code_mq', name: '代码生成' } }] })
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'example.com.py', code: sampleCode, warnings: [] })
   const wrapper = await mountDialog({ sourceId: '1', flowId: '2', stepId: '3', configId: '1401081' }); await flushPromises()
-  expect(wrapper.get('[data-testid="generation-machine"]').text()).toContain('home171 · 192.168.1.171 · 离线')
+  expect(wrapper.get('[data-testid="site-script-model"]').findAll('option').map(option => option.element.value)).not.toContain(model.id)
+  expect((wrapper.get('[data-testid="site-script-model"]').element as HTMLSelectElement).value).toBe('')
+  expect(wrapper.text()).toContain('请重新选择在线智能体')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
-  expect(submitSiteScriptTask).toHaveBeenCalledWith(expect.objectContaining({ taskContext: expect.objectContaining({ sourceId: '1', flowId: '2', stepId: '3' }) }), expect.any(AbortSignal))
+  expect(submitSiteScriptTask).not.toHaveBeenCalled()
   wrapper.unmount()
+})
+
+it('打开下拉刷新在线状态，不把手动选择模式改回全选，离线后的原选择被清空', async () => {
+  const model = (await runnerManagementApi.modelInterfaces()).items[0]!
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 1, items: [{ ...model, runtimeStatus: 'idle' }] })
+  const w = await mountDialog({}, false)
+  await w.get('[data-testid="site-script-all-agents"] input').setValue(false)
+  const select = w.findAllComponents({ name: 'ElSelect' }).find(component => component.attributes('data-testid') === 'site-script-model')!
+  select.vm.$emit('visible-change', true); await flushPromises()
+  expect((w.get('[data-testid="site-script-all-agents"] input').element as HTMLInputElement).checked).toBe(false)
+  expect(w.get('[data-testid="site-script-model"]').attributes('disabled')).toBeUndefined()
+  await w.get('[data-testid="site-script-model"]').setValue(model.id)
+  vi.mocked(runnerManagementApi.modelInterfaces).mockResolvedValue({ revision: 2, items: [{ ...model, runtimeStatus: 'offline' }] })
+  select.vm.$emit('visible-change', true); await flushPromises()
+  expect((w.get('[data-testid="site-script-model"]').element as HTMLSelectElement).value).toBe('')
+  expect(w.get('[data-testid="site-script-model"]').findAll('option').map(option => option.element.value)).not.toContain(model.id)
+  expect(w.text()).toContain('请重新选择在线智能体')
+  w.unmount()
 })
 
 it('切换模型后任务快照采用所选模型', async () => {
@@ -918,7 +938,6 @@ it('跨仓库匹配当前节点类型目录，多个匹配仓库可选择并保�
   const wrapper = await mountDialog(); await flushPromises()
   expect((wrapper.get('[data-testid="site-script-repository"]').element as HTMLSelectElement).value).toBe(webRepo.repoId)
   expect(wrapper.get('[data-testid="site-script-node-type"]').text()).toContain('[90] 网页抓取')
-  expect(wrapper.get('[data-testid="site-script-destination"]').text()).toBe('网页抓取代码 / 网页列表代码')
   expect(wrapper.get('[data-testid="site-script-repository"]').text()).toContain('第二网页仓库 · 已配置当前节点类型')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click'); await flushPromises()
   await wrapper.get('[data-testid="site-script-repository"]').setValue(alternate.repoId)

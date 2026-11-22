@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import { ALL_AGENTS, isAgentInterface, agentStatusLabel } from '@/utils/agentPool'
+import { ALL_AGENTS, isOnlineAgentInterface, agentStatusLabel } from '@/utils/agentPool'
 import { runnerManagementApi as api, type MqCodeJob, type ModelInterface } from '@/api/runnerManagement'
 import { fillNodePrompt, nodePromptApi, type NodePromptTemplate } from '@/api/nodePrompts'
 import { createGenerationTaskId as newRequestId } from '@/utils/generationWorkspace'
@@ -109,7 +109,7 @@ onMounted(async () => {
   try {
     const [snapshot, settings] = await Promise.all([api.prepareCodeRegeneration(props.job.taskId), api.modelInterfaces()])
     if (!alive) return
-    models.value = settings.items.filter(item => item.enabled && isAgentInterface(item)); adoptSnapshot(snapshot, props.job)
+    models.value = settings.items.filter(isOnlineAgentInterface); adoptSnapshot(snapshot, props.job)
     void loadTemplates(snapshot)
   } catch (e) { if (alive) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (alive) loading.value = false }
@@ -142,7 +142,7 @@ async function submit() {
     <section v-loading="loading" class="regeneration" aria-label="与智能体继续修改代码" data-testid="regeneration-workspace">
       <header class="regeneration-heading"><div><b>智能体：{{ agentLabel }}</b><p v-if="prepared">{{ prepared.context.sourceName || prepared.context.sourceId }} · 流程 {{ prepared.context.flowId }} · {{ prepared.context.nodeName }} · 配置 {{ prepared.context.configId }}</p></div><el-button :disabled="loading || submitting || tracking || rebasing" data-testid="regeneration-settings" @click="settingsOpen = true">生成设置</el-button></header>
       <el-alert v-if="error" :title="error" type="error" :closable="false" data-testid="regeneration-error" />
-      <el-alert v-if="modelMissing && !loading" title="原智能体已停用或不存在，请在生成设置中选择可用智能体" type="warning" :closable="false" />
+      <el-alert v-if="modelMissing && !loading" title="原智能体已离线或不可用，请在生成设置中选择在线智能体" type="warning" :closable="false" />
       <el-alert v-if="pollingError" :title="pollingError" type="warning" :closable="false" />
       <el-button v-if="!loading && !prepared && !rebasing && !tracking" link type="primary" @click="rebase(currentJob)">重新读取生成配置</el-button>
       <div ref="feed" class="generation-chat-feed" role="log" aria-label="代码生成对话" data-testid="generation-chat-feed" @scroll="onScroll">
@@ -165,7 +165,7 @@ async function submit() {
       <PromptTemplatePicker :items="templates" :model-value="selectedTemplateId" :loading="templatesLoading" :disabled="submitting || tracking" test-id="regeneration-prompt-template" @select="selectTemplate" />
       <el-alert v-if="templateError" :title="`提示词模板加载失败：${templateError}`" type="warning" :closable="false" />
       <el-alert v-if="missingTemplateFields" title="原任务没有记录输出字段，请补全字段名和字段 ID" type="warning" :closable="false" />
-      <label>智能体<el-select v-model="interfaceId" aria-label="重新生成智能体接口" :disabled="submitting || tracking" filterable><el-option :value="ALL_AGENTS" label="全选 · 任意空闲智能体" /><el-option v-if="modelMissing" :value="interfaceId" :label="`${interfaceId}（已停用或不存在）`" disabled /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'} · ${agentStatusLabel(model)}`" /></el-select></label>
+      <label>智能体<el-select v-model="interfaceId" aria-label="重新生成智能体接口" :disabled="submitting || tracking" filterable><el-option :value="ALL_AGENTS" label="全选 · 任意空闲智能体" /><el-option v-for="model in models" :key="model.id" :value="model.id" :label="`${model.name} · ${model.model || '默认模型'} · ${agentStatusLabel(model)}`" /></el-select></label>
       <CodeGenerationPromptVariables />
       <nav><el-button :type="promptTab === 'system' ? 'primary' : 'default'" data-testid="regeneration-system-tab" @click="promptTab = 'system'">系统提示词</el-button><el-button :type="promptTab === 'user' ? 'primary' : 'default'" data-testid="regeneration-user-tab" @click="promptTab = 'user'">用户提示词</el-button><el-button link type="primary" @click="promptAiOpen = true">AI 修改当前提示词</el-button></nav>
       <el-input v-show="promptTab === 'system'" v-model="systemPrompt" aria-label="重新生成系统提示词" type="textarea" :rows="12" maxlength="12000" :disabled="submitting || tracking" />

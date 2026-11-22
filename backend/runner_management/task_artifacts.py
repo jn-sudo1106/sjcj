@@ -39,11 +39,11 @@ def save(db, identifier, artifact_type, metadata, *, task_type=None, task_id=Non
     values = (identifier, artifact_type, task_type, task_id, name, machine_path,
               repo_id, git_path, git_commit, sha256, created_at or timestamp(),
               timestamp(), json.dumps(metadata, ensure_ascii=False, separators=(',', ':')))
-    result = db.execute('INSERT OR IGNORE INTO task_artifacts (' + ','.join(FIELDS) +
+    result = db.execute('INSERT OR IGNORE INTO artifacts (' + ','.join(FIELDS) +
                         ') VALUES (' + ','.join('?' for _ in FIELDS) + ')', values)
     if not insert_only:
         # Never delete/reinsert: assignments reference immutable package IDs.
-        db.execute('UPDATE task_artifacts SET ' + ','.join(field + '=?' for field in FIELDS[1:10]) +
+        db.execute('UPDATE artifacts SET ' + ','.join(field + '=?' for field in FIELDS[1:10]) +
                    ',updated_at=?,payload=? WHERE artifact_id=?', (*values[1:10], values[11], values[12], identifier))
     return result
 
@@ -84,12 +84,21 @@ def sync_archive(db, record):
     path_class = PureWindowsPath if '\\' in root or PureWindowsPath(root).drive else PurePosixPath
     prefix = (record.get('repositoryPrefix') or '').strip('/')
     from .generated_archives import changed_files
-    for file in changed_files(record, record.get('files', [])):
+    files = changed_files(record, record.get('files', []))
+    identity_prefix = 'file:' + record['archiveId'] + ':'
+    if isinstance(record.get('beforeCodeFiles'), dict):
+        identities = {identity_prefix + hashlib.sha256(file.get('path', '').encode('utf8')).hexdigest() for file in files}
+        rows = db.execute("SELECT artifact_id FROM artifacts WHERE artifact_type='code' AND artifact_id LIKE ?",
+                          (identity_prefix + '%',)).fetchall()
+        for row in rows:
+            if row['artifact_id'].startswith(identity_prefix) and row['artifact_id'] not in identities:
+                db.execute('DELETE FROM artifacts WHERE artifact_id=?', (row['artifact_id'],))
+    for file in files:
         relative = file.get('sourceRelativePath') or file.get('relativePath', '')
         if not file.get('sourceRelativePath') and prefix:
             relative = relative.removeprefix(prefix + '/')
         path = file.get('path', '')
-        identifier = 'file:' + record['archiveId'] + ':' + hashlib.sha256(path.encode('utf8')).hexdigest()
+        identifier = identity_prefix + hashlib.sha256(path.encode('utf8')).hexdigest()
         metadata = {key: value for key, value in file.items() if key != 'data'}
         metadata.update(archiveId=record['archiveId'], archiveStatus=record.get('status', ''),
                         pushed=bool(record.get('pushed')), sourceTaskId=record.get('taskId', ''))
@@ -106,7 +115,7 @@ def sync_delivery(db, job):
     if not delivery_id:
         return
     row = db.execute('SELECT artifact_digest FROM directory_deliveries WHERE delivery_id=?', (delivery_id,)).fetchone()
-    package = db.execute('SELECT * FROM task_artifacts WHERE artifact_id=?', (row['artifact_digest'],)).fetchone() if row else None
+    package = db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (row['artifact_digest'],)).fetchone() if row else None
     if not package:
         return
     metadata = json.loads(package['payload'])
@@ -143,7 +152,8 @@ def view_columns(fields, mysql=False):
 
 def views(mysql=False):
     prefix = 'ce_runner_' if mysql else ''
+    table = prefix + 'artifacts'
     return [(prefix + 'code_assets', 'SELECT ' + view_columns(ASSET_FIELDS, mysql) +
-             " FROM task_artifacts WHERE artifact_type='code_identity'"),
+             " FROM " + table + " WHERE artifact_type='code_identity'"),
             (prefix + 'releases', 'SELECT ' + view_columns(RELEASE_FIELDS, mysql) +
-             " FROM task_artifacts WHERE artifact_type='package' AND artifact_id LIKE 'sha256:%'")]
+             " FROM " + table + " WHERE artifact_type='package' AND artifact_id LIKE 'sha256:%'")]

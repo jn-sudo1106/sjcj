@@ -71,7 +71,7 @@ class ArtifactRetentionTest(unittest.TestCase):
                        (digest, 'script', 'history', 'any', 'commit', 'published', 'old', signature, 'published.py', 'local'))
         result = inventory(self.app)
         self.assertEqual(result['candidateCount'], 0)
-        self.assertIn('task_artifacts.artifact_id', result['referenceColumns'])
+        self.assertIn('artifacts.artifact_id', result['referenceColumns'])
 
 
 if __name__ == '__main__':

@@ -2990,6 +2990,54 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
   })
 
   // 1117：规则处理节点与网页抓取一样有「生成配置 | 智能体」，默认智能体；没有节点提示词模板时按规则脚本口径兜底
+  it('从采集切换到未选字段的规则处理，智能体配置读取规则节点自己的配置和类型', async () => {
+    const { flow, wrapper } = mountOnCollectorNode(() => {
+      const store = useFlowStore()
+      store.configs['web-1'].configId = '1401218'
+      const rule = cloneConfig(NODE_CONFIGS.rule)
+      rule.configId = '1401281'
+      rule.configType = '600'
+      rule.ruleCfg = { ...rule.ruleCfg!, describe: '清洗标题并归一化日期', inputFields: [], outputFields: [] }
+      rule.taskCfg = { queue: 'rule_process', urlRule: '' }
+      store.configs['rule-2'] = rule
+      vi.spyOn(runnerManagementApi, 'nodeGenerationSettings').mockImplementation(async configId => ({ configId, enabled: false,
+        generation: configId === '1401281' ? {
+          interfaceId: 'all', repositoryId: 'repo-rule', directoryId: 'rule-dir', configType: '600', queueName: 'rule_process',
+          systemPrompt: '规则处理专用系统提示词：使用 main 入口', userPrompt: '当前规则配置的已保存提示词',
+          url: '', fileNameMode: 'queue', destinationMode: 'type',
+        } : null,
+      }))
+      vi.spyOn(runnerManagementApi, 'resolveGenerationDestination').mockResolvedValue({
+        repositoryId: 'repo-rule', directoryId: 'rule-dir', directoryPath: 'rules', repoName: '规则代码',
+        remoteUrl: '', branch: 'main', configType: '600', matchedBy: 'type',
+      })
+    })
+    await flushPromises()
+    vi.mocked(runnerManagementApi.nodeGenerationSettings).mockClear()
+    vi.mocked(runnerManagementApi.resolveGenerationDestination).mockClear()
+    flow.select('rule-2')
+    await flushPromises()
+    const tab = wrapper.findAll('.rc-top-tab').find(button => button.text() === '智能体配置')!
+    expect(tab.attributes('disabled')).toBeUndefined()
+    await tab.trigger('click')
+    await flushPromises()
+    const dialog = wrapper.getComponent(SiteScriptGeneratorDialog)
+    expect(dialog.props('configId')).toBe('1401281')
+    expect(dialog.props('configType')).toBe('600')
+    expect(dialog.props('queueName')).toBe('rule_process')
+    expect(dialog.props('initialPrompt')).toContain('清洗标题并归一化日期')
+    expect(String(dialog.props('fallbackSystemPrompt'))).toContain('main')
+    expect(runnerManagementApi.nodeGenerationSettings).toHaveBeenCalledWith('1401281')
+    expect(runnerManagementApi.nodeGenerationSettings).not.toHaveBeenCalledWith('1401218')
+    expect(runnerManagementApi.resolveGenerationDestination).toHaveBeenCalledWith(expect.objectContaining({ configId: '1401281', configType: '600', queueName: 'rule_process' }))
+    await dialog.get('[data-testid="open-site-script-generator"]').trigger('click')
+    await flushPromises()
+    // 生成工作区由 el-dialog teleport 到 document.body。
+    expect([...document.querySelectorAll<HTMLTextAreaElement>('[data-testid="site-script-system-prompt"]')].at(-1)?.value).toBe('规则处理专用系统提示词：使用 main 入口')
+    expect([...document.querySelectorAll<HTMLTextAreaElement>('[data-testid="site-script-prompt"]')].at(-1)?.value).toContain('当前规则配置的已保存提示词')
+    wrapper.unmount()
+  })
+
   it('规则处理节点显示「生成配置 | 智能体」，默认智能体，兜底提示词是规则脚本口径（main 入口）', async () => {
     const { wrapper } = mountOnRuleNode()
     await flushPromises()

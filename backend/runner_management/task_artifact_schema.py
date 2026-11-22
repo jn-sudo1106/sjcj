@@ -1,7 +1,7 @@
-"""Verified migration of asset/version storage into task_artifacts."""
+"""Verified migration of asset/version storage into ce_runner_artifacts."""
 from . import task_artifacts as records
 
-SQLITE_SCHEMA = '''CREATE TABLE IF NOT EXISTS task_artifacts (
+SQLITE_SCHEMA = '''CREATE TABLE IF NOT EXISTS artifacts (
  artifact_id TEXT PRIMARY KEY, artifact_type TEXT NOT NULL,
  task_type TEXT, task_id TEXT, name TEXT NOT NULL DEFAULT '', machine_path TEXT NOT NULL DEFAULT '',
  repo_id TEXT NOT NULL DEFAULT '', git_path TEXT NOT NULL DEFAULT '', git_commit TEXT NOT NULL DEFAULT '',
@@ -9,7 +9,7 @@ SQLITE_SCHEMA = '''CREATE TABLE IF NOT EXISTS task_artifacts (
  FOREIGN KEY(task_type,task_id) REFERENCES jobs(job_type,job_id) ON DELETE SET NULL,
  CHECK ((task_type IS NULL)=(task_id IS NULL))
 )'''
-MYSQL_SCHEMA = '''CREATE TABLE IF NOT EXISTS task_artifacts (
+MYSQL_SCHEMA = '''CREATE TABLE IF NOT EXISTS ce_runner_artifacts (
  artifact_id VARCHAR(128) PRIMARY KEY, artifact_type VARCHAR(30) NOT NULL,
  task_type VARCHAR(20) NULL, task_id VARCHAR(80) NULL, name VARCHAR(512) NOT NULL DEFAULT '',
  machine_path VARCHAR(2048) NOT NULL DEFAULT '', repo_id VARCHAR(80) NOT NULL DEFAULT '',
@@ -32,7 +32,7 @@ def copy(db, assets, releases):
                                            (releases, records.RELEASE_FIELDS, 'digest', '')):
         import json
         for row in rows:
-            stored = db.execute('SELECT payload FROM task_artifacts WHERE artifact_id=?', (prefix + row[identity],)).fetchone()
+            stored = db.execute('SELECT payload FROM artifacts WHERE artifact_id=?', (prefix + row[identity],)).fetchone()
             metadata = json.loads(stored['payload']) if stored else {}
             if any(metadata.get(name) != row[name] for name in fields):
                 raise ValueError('产出物迁移校验失败：' + prefix + row[identity])
@@ -50,7 +50,7 @@ def sqlite_migrate(db):
             continue
         ddl = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()['sql']
         import re
-        ddl = re.sub(r'(?i)REFERENCES\s+releases\s*\(digest\)', 'REFERENCES task_artifacts(artifact_id)', ddl)
+        ddl = re.sub(r'(?i)REFERENCES\s+releases\s*\(digest\)', 'REFERENCES artifacts(artifact_id)', ddl)
         ddl = re.sub(r'(?i)^CREATE TABLE\s+"?' + table + r'"?', 'CREATE TABLE ' + table + '_artifact_merge', ddl, count=1)
         db.execute(ddl)
         db.execute('INSERT INTO ' + table + '_artifact_merge SELECT * FROM ' + table)
@@ -64,7 +64,7 @@ def sqlite_migrate(db):
         sqlite_compatibility_triggers(db, name, fields)
     for name, columns in (('task_artifact_task', 'task_type,task_id'), ('task_artifact_kind', 'artifact_type'),
                            ('task_artifact_repo', 'repo_id'), ('task_artifact_hash', 'sha256')):
-        db.execute('CREATE INDEX IF NOT EXISTS ' + name + ' ON task_artifacts(' + columns + ')')
+        db.execute('CREATE INDEX IF NOT EXISTS ' + name + ' ON artifacts(' + columns + ')')
     if legacy:
         records.backfill_outputs(db)
 
@@ -86,13 +86,13 @@ def sqlite_compatibility_triggers(db, view, fields):
               "COALESCE(NEW.created_at,'')" if asset else "COALESCE(NEW.published_at,'')",
               "strftime('%Y-%m-%dT%H:%M:%fZ','now')", metadata)
     db.execute('CREATE TRIGGER IF NOT EXISTS ' + view + '_artifact_insert INSTEAD OF INSERT ON ' + view +
-               ' BEGIN INSERT OR IGNORE INTO task_artifacts (' + ','.join(records.FIELDS) + ') VALUES (' + ','.join(values) + '); END')
+               ' BEGIN INSERT OR IGNORE INTO artifacts (' + ','.join(records.FIELDS) + ') VALUES (' + ','.join(values) + '); END')
     assignments = ','.join(field + '=' + value for field, value in zip(records.FIELDS, values)
                            if field not in ('task_type', 'task_id', 'created_at'))
     db.execute('CREATE TRIGGER IF NOT EXISTS ' + view + '_artifact_update INSTEAD OF UPDATE ON ' + view +
-               ' BEGIN UPDATE task_artifacts SET ' + assignments + ' WHERE artifact_id=' + old_identity + '; END')
+               ' BEGIN UPDATE artifacts SET ' + assignments + ' WHERE artifact_id=' + old_identity + '; END')
     db.execute('CREATE TRIGGER IF NOT EXISTS ' + view + '_artifact_delete INSTEAD OF DELETE ON ' + view +
-               ' BEGIN DELETE FROM task_artifacts WHERE artifact_id=' + old_identity + '; END')
+               ' BEGIN DELETE FROM artifacts WHERE artifact_id=' + old_identity + '; END')
 
 
 def mysql_migrate(cursor):
@@ -111,8 +111,8 @@ def mysql_migrate(cursor):
                        'WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME=%s AND REFERENCED_TABLE_NAME IS NOT NULL', (table, field))
         refs = cursor.fetchall()
         if any(target == 'ce_runner_releases' for _, target in refs):
-            if not any(target == 'task_artifacts' for _, target in refs):
-                cursor.execute('ALTER TABLE ' + table + ' ADD FOREIGN KEY (' + field + ') REFERENCES task_artifacts(artifact_id)')
+            if not any(target == 'ce_runner_artifacts' for _, target in refs):
+                cursor.execute('ALTER TABLE ' + table + ' ADD FOREIGN KEY (' + field + ') REFERENCES ce_runner_artifacts(artifact_id)')
             for constraint, target in refs:
                 if target == 'ce_runner_releases':
                     cursor.execute('ALTER TABLE ' + table + ' DROP FOREIGN KEY `' + constraint.replace('`', '``') + '`')

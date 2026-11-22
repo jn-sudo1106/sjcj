@@ -8,7 +8,7 @@
 // 后端未支持前，生成会被后端拒绝；编辑器把后端原因原样显示，并保留「内置接口」作为默认生成方式。
 import { generateSiteScript, type SiteScriptGenerationEvent } from '@/api/siteScript'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type GeneratedCodeArchive, type ModelInterface } from '@/api/runnerManagement'
-import { allAgentsOption, isAgentInterface } from '@/utils/agentPool'
+import { allAgentsOption, isOnlineAgentInterface } from '@/utils/agentPool'
 import { cleanMonitorPython } from './generation'
 import { MONITOR_SOURCE_TYPE } from './promptTemplate'
 
@@ -23,10 +23,10 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** 只给能做代码生成的智能体（agent / gemini-agent）且启用的；首项是「全选 · 任意空闲智能体」 */
+/** 只给在线且启用的代码生成智能体；首项是「全选 · 任意空闲智能体」 */
 export async function loadAgentGenerationOptions(): Promise<AgentGenerationOptions> {
   const [agents, repos] = await Promise.allSettled([runnerManagementApi.modelInterfaces(), runnerManagementApi.codeRepositories()])
-  const agentRows = agents.status === 'fulfilled' ? (agents.value.items ?? []).filter((item) => item.enabled && isAgentInterface(item)) : []
+  const agentRows = agents.status === 'fulfilled' ? (agents.value.items ?? []).filter(isOnlineAgentInterface) : []
   return {
     agents: agentRows.length ? [allAgentsOption, ...agentRows] : [],
     // 通用仓库或数据监控类型仓库；停用的不给选

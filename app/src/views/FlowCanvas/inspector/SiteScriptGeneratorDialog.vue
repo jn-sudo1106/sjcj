@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ALL_AGENTS, allAgentsOption, isAgentInterface, agentStatusLabel } from '@/utils/agentPool'
+import { ALL_AGENTS, allAgentsOption, isOnlineAgentInterface, agentStatusLabel } from '@/utils/agentPool'
 import { RouterLink } from 'vue-router'
 import { DEFAULT_SITE_SCRIPT_SYSTEM_PROMPT, generateSiteScript, submitSiteScriptTask, type SiteScriptGenerateInput, type SiteScriptModelRequest } from '@/api/siteScript'
 import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion, type ModelInterface, type GeneratedCodeArchive, type CodeGenerationServer, type GenerationDestination, type SourceCodeRelation } from '@/api/runnerManagement'
@@ -84,6 +84,8 @@ const allAgentsSelected = computed({
   set: (selected: boolean) => { modelInterfaceId.value = selected ? ALL_AGENTS : ''; modelError.value = '' },
 })
 let modelsRequest = 0
+let modelsReady = false
+let modelsInitialized = false
 const selectedModel = computed(() => modelInterfaceId.value === ALL_AGENTS ? allAgentsOption : modelInterfaces.value.find(row => row.id === modelInterfaceId.value && row.enabled))
 const remoteGeneration = computed(() => modelInterfaceId.value === ALL_AGENTS || !!selectedModel.value?.generationServerId && ['agent', 'gemini-agent'].includes(selectedModel.value.kind))
 const taskContextAvailable = computed(() => !!props.sourceId && !!props.flowId && !!props.stepId)
@@ -214,15 +216,26 @@ function markArchiveSaved() {
 }
 async function loadModels() {
   const request = ++modelsRequest
-  modelsLoading.value = true; modelError.value = ''
+  modelsLoading.value = true; modelError.value = ''; modelsReady = false
   try {
     const result = await runnerManagementApi.modelInterfaces()
     if (request !== modelsRequest) return
-    modelInterfaces.value = result.items.filter(row => row.enabled && isAgentInterface(row))
-    if (!modelInterfaceId.value) modelInterfaceId.value = ALL_AGENTS
-    if (!selectedModel.value) modelError.value = '所选智能体接口已停用或不可用，请选择可用接口'
+    modelInterfaces.value = result.items.filter(isOnlineAgentInterface)
+    modelsReady = true
+    if (!modelInterfaceId.value && !modelsInitialized) modelInterfaceId.value = ALL_AGENTS
+    modelsInitialized = true
+    validateSelectedAgent()
   } catch (e) { if (request === modelsRequest) modelError.value = `智能体接口加载失败：${e instanceof Error ? e.message : String(e)}` }
   finally { if (request === modelsRequest) modelsLoading.value = false }
+}
+function validateSelectedAgent() {
+  if (!modelsReady || !modelInterfaceId.value) return
+  if (selectedModel.value) { modelError.value = ''; return }
+  modelInterfaceId.value = ''
+  modelError.value = '所选智能体已离线或不可用，请重新选择在线智能体'
+}
+function refreshAgentsOnOpen(visible: boolean) {
+  if (visible) void loadModels()
 }
 const promptTextKey = () => JSON.stringify([systemPrompt.value, prompt.value])
 const code = ref('')
@@ -567,6 +580,7 @@ async function initialize() {
     promptSnapshot.value = promptTextKey()
   }
   if (session === sessionId) {
+    validateSelectedAgent()
     taskConfigError.value = taskConfigResult.status === 'rejected' ? `生成配置读取失败：${message(taskConfigResult.reason)}` : ''
     loading.value = false
     taskConfigContext = context
@@ -1063,7 +1077,7 @@ const loadErrorLines = computed(() => {
           <RouterLink class="ssc-link" :to="{ path: '/settings', query: { tab: 'code-servers', view: 'models', ...(selectedModel?.generationServerId ? { serverId: selectedModel.generationServerId } : {}) } }" target="_blank" rel="noopener">配置</RouterLink>
         </span>
       </div>
-      <div class="site-script-model"><el-select v-model="modelInterfaceId" size="small" :disabled="busy || modelsLoading || allAgentsSelected" :placeholder="allAgentsSelected ? '自动分配空闲智能体' : '选择智能体'" data-testid="site-script-model" @change="modelError = ''"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''} · ${agentStatusLabel(item)}`" /></el-select></div>
+      <div class="site-script-model"><el-select v-model="modelInterfaceId" size="small" :loading="modelsLoading" :disabled="busy || allAgentsSelected" :placeholder="allAgentsSelected ? '自动分配空闲智能体' : '选择智能体'" data-testid="site-script-model" @change="modelError = ''" @visible-change="refreshAgentsOnOpen"><el-option v-for="item in modelInterfaces" :key="item.id" :value="item.id" :label="`${item.name}${item.model ? ` · ${item.model}` : ''} · ${agentStatusLabel(item)}`" /></el-select></div>
     </div>
 
     <GenerationReferenceFiles :key="configId" v-model="referenceFiles" :repositories="repositories" :default-repository-id="repositoryId" :disabled="busy" :input-locations="referenceInputLocations" :location-hint="referenceLocationHint" />
@@ -1081,7 +1095,6 @@ const loadErrorLines = computed(() => {
         <RouterLink :to="{ path: '/settings', query: { tab: 'code-repos', repoId: file.repoId, directoryId: file.directoryId || undefined, filePath: file.filePath } }" target="_blank" rel="noopener" class="site-script-repository-link" :title="file.filePath">{{ file.filePath }}</RouterLink>
         <code v-if="file.gitCommit" :title="file.gitCommit">{{ file.gitCommit.slice(0, 10) }}</code>
       </div>
-      <div v-if="selectedRepository && selectedDirectory"><span>保存关联</span><code :title="`${selectedRepository.name} / ${selectedDirectory.name}`" data-testid="site-script-destination">{{ selectedRepository.name }} / {{ selectedDirectory.name }}</code></div>
       <div><span>{{ repositoryFileTarget || currentSourceFile ? '仓库文件' : '仓库位置' }}</span><RouterLink v-if="repositoryLocationTarget" :to="repositoryLocationTarget" target="_blank" rel="noopener" class="site-script-repository-link" title="在新标签页查看仓库代码" data-testid="site-script-open-repository"><code :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ absoluteStoragePath }}</code></RouterLink><code v-else :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ storagePath ? absoluteStoragePath : `${absoluteStoragePath || '请先选择仓库'}${absoluteStoragePath ? ' / 请选择保存目录' : ''}` }}</code></div>
       <div v-if="associatedStoragePath"><span>{{ repositoryFileTarget ? '文件操作' : '已关联文件' }}</span><button v-if="!repositoryFileTarget" type="button" class="site-script-file-link" :disabled="busy" :title="associatedStoragePath" @click="previewAssociatedFile('saved')" data-testid="site-script-associated-file">{{ associatedStoragePath }}</button><el-button v-else link :disabled="busy" data-testid="site-script-preview-saved" @click="previewAssociatedFile('saved')">查看代码</el-button><el-button link :disabled="busy" data-testid="site-script-unlink-saved" @click="changeAssociatedFile('saved', 'unlink')">取消关联</el-button><el-button link type="danger" :disabled="busy" data-testid="site-script-delete-saved" @click="changeAssociatedFile('saved', 'delete')">删除文件</el-button></div>
       <div v-if="sourceFilePath"><span>来源文件</span><button type="button" class="site-script-file-link" :disabled="busy || !savedSourceAssociation" :title="savedSourceAssociation ? sourceFilePath : '保存后可查看关联版本'" @click="previewAssociatedFile('source')" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</button><el-button link :disabled="busy" data-testid="site-script-unlink-source" @click="changeAssociatedFile('source', 'unlink')">取消关联</el-button><el-button v-if="savedSourceAssociation" link type="danger" :disabled="busy" data-testid="site-script-delete-source" @click="changeAssociatedFile('source', 'delete')">删除文件</el-button></div>
