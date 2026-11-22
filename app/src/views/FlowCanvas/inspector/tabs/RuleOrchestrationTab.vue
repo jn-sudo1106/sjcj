@@ -1412,6 +1412,15 @@ async function onGenerateScript(
 
 const workbenchOpen = ref(false)
 const siteScriptOpen = ref(false)
+/**
+ * 规则节点「设置业务规则」标题行的「脚本编辑」两种生成方式共用：按当前方式打开对应工作区。
+ * 2026-11-22：此前一律打开内置接口的「规则脚本工作区」（模型供应商 + 模型），智能体方式下点进去
+ * 看到的还是旧界面（2806 反馈「这个没改吗」）。
+ */
+function openScriptEditor() {
+  if (hasSiteScriptMode.value && orchestrationMode.value === 'ai') siteScriptOpen.value = true
+  else workbenchOpen.value = true
+}
 async function onSiteScriptSaved(version: PublishedScript, configId: string, queueName: string) {
   const node = cfg.value, nodeId = id.value
   if (!node || node.configId !== configId) return
@@ -1860,7 +1869,7 @@ function onTestScript() {
     <div class="ni-section-title ni-section-title-row">
       <span>设置业务规则</span>
       <span class="ni-section-actions">
-        <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
+        <button class="rc-btn" type="button" data-testid="rule-script-edit" @click="openScriptEditor">脚本编辑</button>
       </span>
     </div>
     <div class="rc-field">

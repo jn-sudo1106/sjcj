@@ -192,6 +192,12 @@ function mountOnMonitorNode() {
 }
 
 async function openWorkbench(wrapper: ReturnType<typeof mountOnRuleNode>['wrapper']) {
+  // 2026-11-22：「脚本编辑」按当前生成方式打开；内置接口工作区要先切到「内置接口」
+  const builtinTab = wrapper.find('[data-testid="orchestration-config-tab"]')
+  if (builtinTab.exists()) {
+    await builtinTab.trigger('click')
+    await flushPromises()
+  }
   const scriptBtn = wrapper.findAll('button').find((b) => b.text() === '脚本编辑')
   if (!scriptBtn) throw new Error('脚本编辑按钮不存在')
   await scriptBtn.trigger('click')
@@ -234,6 +240,25 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.text()).not.toContain('数据预览')
     expect(wrapper.find('.dqp').exists()).toBe(false)
     expect(wrapper.text()).toContain('设置业务规则')
+  })
+
+  it('脚本编辑按当前生成方式打开：智能体方式打开智能体生成窗口，内置接口方式打开规则脚本工作区', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+    const edit = wrapper.find('[data-testid="rule-script-edit"]')
+    expect(edit.exists()).toBe(true)
+    expect(wrapper.get('[data-testid="orchestration-ai-tab"]').attributes('aria-selected')).toBe('true')
+    await edit.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(SiteScriptGeneratorDialog).props('open')).toBe(true)
+    expect(wrapper.findComponent(RuleWorkbenchDialog).props('open')).toBe(false)
+
+    wrapper.findComponent(SiteScriptGeneratorDialog).vm.$emit('update:open', false)
+    await wrapper.get('[data-testid="orchestration-config-tab"]').trigger('click')
+    await edit.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(RuleWorkbenchDialog).props('open')).toBe(true)
+    wrapper.unmount()
   })
 
   it('脚本编辑按钮显示在设置业务规则标题行右侧', async () => {
