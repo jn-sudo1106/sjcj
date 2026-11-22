@@ -18,8 +18,9 @@ class BusinessTaskLogsTest(unittest.TestCase):
                 'ipAddress': ip, 'queue': task_topic, 'configId': '1401218', 'installDirectory': 'D:/Runner2'}, status='exited')
             db.execute('INSERT INTO program_runs VALUES (?,?,?,?,?,?,?,?,?,?)',
                        (record, 0, 123, 'newslink.py', 'D:/Runner2', 'python', history.stamp(), None, None, ''))
-            db.execute('INSERT INTO runtime_log_streams VALUES (?,?,?,?,?,?)',
-                       (stream, record, runner, len(messages), 1000, history.stamp()))
+            from backend.runner_management import log_records
+            log_records.insert(db,log_records.migrated_row('stream',{'stream_id':stream,'record_id':record,
+                'runner_id':runner,'last_seq':len(messages),'byte_count':1000,'updated_at':history.stamp()}))
         directory = history.stream_dir(self.app, stream)
         for seq, lines in enumerate(messages, 1):
             (directory / f'{seq:012}.json').write_text(json.dumps({'seq': seq, 'entries': [

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from .runtime_schema import SQLITE_SCHEMA as LOG_SCHEMA, MYSQL_SCHEMA as MYSQL_LOG_SCHEMA, TABLES as LOG_TABLES
 from .source_code_schema import SQLITE_SCHEMA as SOURCE_CODE_SCHEMA, MYSQL_SCHEMA as MYSQL_SOURCE_CODE_SCHEMA
-from .deployment_resource_schema import SQLITE_SCHEMA as DEPLOYMENT_SCHEMA, MYSQL_SCHEMA as MYSQL_DEPLOYMENT_SCHEMA
+from .job_schema import SQLITE_SCHEMA as DEPLOYMENT_SCHEMA, MYSQL_SCHEMA as MYSQL_DEPLOYMENT_SCHEMA
 
 
 SCHEMA = """
@@ -20,14 +20,6 @@ CREATE TABLE IF NOT EXISTS runners (
     runner_pid INTEGER, worker_processes TEXT, os_type TEXT, os_version TEXT, launcher_version TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS runners_location ON runners(ip_address, install_directory);
-CREATE TABLE IF NOT EXISTS config_runner_bindings (
-    config_id TEXT NOT NULL, runner_id TEXT NOT NULL REFERENCES runners(runner_id),
-    created_at TEXT NOT NULL, PRIMARY KEY(config_id, runner_id)
-);
-CREATE TABLE IF NOT EXISTS queue_runner_bindings (
-    queue_name TEXT NOT NULL, runner_id TEXT NOT NULL REFERENCES runners(runner_id),
-    created_at TEXT NOT NULL, PRIMARY KEY(queue_name, runner_id)
-);
 CREATE TABLE IF NOT EXISTS directory_runner_bindings (
     binding_type TEXT NOT NULL, owner_key TEXT NOT NULL, owner_id TEXT NOT NULL,
     runner_id TEXT NOT NULL REFERENCES runners(runner_id), created_at TEXT NOT NULL,
@@ -36,14 +28,6 @@ CREATE TABLE IF NOT EXISTS directory_runner_bindings (
 CREATE TABLE IF NOT EXISTS enrollment_codes (
     code_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL, used_at TEXT
 );
-CREATE TABLE IF NOT EXISTS directory_deliveries (
-    delivery_id TEXT PRIMARY KEY, binding_type TEXT NOT NULL, owner_key TEXT NOT NULL,
-    owner_id TEXT NOT NULL, runner_id TEXT NOT NULL REFERENCES runners(runner_id),
-    layout_revision TEXT NOT NULL, artifact_digest TEXT NOT NULL, signature TEXT NOT NULL,
-    target_path TEXT NOT NULL, status TEXT NOT NULL, requested_at TEXT NOT NULL,
-    started_at TEXT, finished_at TEXT, error TEXT NOT NULL DEFAULT '', installed_path TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS directory_delivery_target ON directory_deliveries(binding_type,owner_key,runner_id,requested_at);
 CREATE TABLE IF NOT EXISTS releases (
     digest TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
     platform TEXT NOT NULL, git_commit TEXT NOT NULL, status TEXT NOT NULL,
@@ -58,47 +42,24 @@ CREATE TABLE IF NOT EXISTS assignments (
     code_id TEXT NOT NULL DEFAULT '',
     UNIQUE(runner_id, queue)
 );
-CREATE TABLE IF NOT EXISTS script_bindings (
-    config_id TEXT PRIMARY KEY, script_digest TEXT NOT NULL REFERENCES releases(digest)
-);
 CREATE TABLE IF NOT EXISTS code_assets (
     code_id TEXT PRIMARY KEY, config_id TEXT NOT NULL, queue_name TEXT NOT NULL,
     site_host TEXT NOT NULL, storage_path TEXT NOT NULL, created_at TEXT NOT NULL,
     UNIQUE(config_id, queue_name, site_host)
 );
-CREATE TABLE IF NOT EXISTS code_versions (
-    digest TEXT PRIMARY KEY REFERENCES releases(digest), code_id TEXT NOT NULL REFERENCES code_assets(code_id),
-    git_commit TEXT NOT NULL, git_url TEXT NOT NULL, delivery_path TEXT NOT NULL,
-    prompt TEXT NOT NULL, system_prompt TEXT NOT NULL DEFAULT '', prompt_template_id INTEGER NOT NULL DEFAULT 0, source_url TEXT NOT NULL, published_at TEXT NOT NULL,
-    source_repo_path TEXT NOT NULL DEFAULT '', source_git_commit TEXT NOT NULL DEFAULT ''
-);
 CREATE TABLE IF NOT EXISTS code_runtime_bindings (
     environment TEXT NOT NULL, config_id TEXT NOT NULL, queue_name TEXT NOT NULL,
-    site_host TEXT NOT NULL, digest TEXT NOT NULL REFERENCES code_versions(digest),
+    site_host TEXT NOT NULL, digest TEXT NOT NULL REFERENCES releases(digest),
     PRIMARY KEY(environment, config_id, queue_name, site_host)
-);
-CREATE TABLE IF NOT EXISTS runner_upgrades (
-    runner_id TEXT PRIMARY KEY REFERENCES runners(runner_id), desired_digest TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (
     setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS generation_jobs (
-    task_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, flow_id TEXT NOT NULL,
-    config_id TEXT NOT NULL, interface_id TEXT NOT NULL, status TEXT NOT NULL, server_id TEXT NOT NULL,
-    created_at TEXT NOT NULL, lease_until REAL NOT NULL DEFAULT 0, payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS generation_jobs_pending ON generation_jobs(status,interface_id,created_at);
-CREATE INDEX IF NOT EXISTS generation_jobs_source ON generation_jobs(source_id,created_at);
 CREATE TABLE IF NOT EXISTS code_repositories (
     repo_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, local_path TEXT NOT NULL UNIQUE,
     remote_url TEXT NOT NULL, branch TEXT NOT NULL, is_default INTEGER NOT NULL,
     status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     config_type TEXT NOT NULL DEFAULT '', config_type_name TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS code_repo_rules (
-    config_type TEXT PRIMARY KEY, repo_id TEXT NOT NULL REFERENCES code_repositories(repo_id),
-    updated_at TEXT NOT NULL
 );
 """
 
@@ -111,7 +72,7 @@ class Store:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
-            db.executescript(SCHEMA + LOG_SCHEMA + SOURCE_CODE_SCHEMA + DEPLOYMENT_SCHEMA)
+            db.executescript(SCHEMA + DEPLOYMENT_SCHEMA + LOG_SCHEMA + SOURCE_CODE_SCHEMA)
             relation_columns = {row[1] for row in db.execute('PRAGMA table_info(source_code_relations)')}
             for name in ('latest_task_id', 'latest_task_created_at'):
                 if name not in relation_columns:
@@ -125,33 +86,32 @@ class Store:
             assignment_columns = {row[1] for row in db.execute("PRAGMA table_info(assignments)")}
             if "code_id" not in assignment_columns:
                 db.execute("ALTER TABLE assignments ADD COLUMN code_id TEXT NOT NULL DEFAULT ''")
+            artifact_store_ready = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='view' AND name='releases'").fetchone())
             asset_columns = {row[1] for row in db.execute("PRAGMA table_info(code_assets)")}
             for name, definition in CODE_ASSET_COLUMNS.items():
-                if name not in asset_columns:
+                if not artifact_store_ready and name not in asset_columns:
                     db.execute(f"ALTER TABLE code_assets ADD COLUMN {name} {definition}")
             repo_columns = {row[1] for row in db.execute("PRAGMA table_info(code_repositories)")}
             if "config_type" not in repo_columns:
                 db.execute("ALTER TABLE code_repositories ADD COLUMN config_type TEXT NOT NULL DEFAULT ''")
-                db.execute("UPDATE code_repositories SET config_type=(SELECT config_type FROM code_repo_rules "
-                           "WHERE code_repo_rules.repo_id=code_repositories.repo_id LIMIT 1) "
-                           "WHERE repo_id IN (SELECT repo_id FROM code_repo_rules) AND is_default=0")
             if "config_type_name" not in repo_columns:
                 db.execute("ALTER TABLE code_repositories ADD COLUMN config_type_name TEXT NOT NULL DEFAULT ''")
-            version_columns = {row[1] for row in db.execute("PRAGMA table_info(code_versions)")}
-            if "repo_id" not in version_columns:
-                db.execute("ALTER TABLE code_versions ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''")
-                db.execute("UPDATE code_versions SET repo_id=(SELECT repo_id FROM code_assets "
-                           "WHERE code_assets.code_id=code_versions.code_id)")
-            for name in ("source_repo_path", "source_git_commit", "system_prompt"):
-                if name not in version_columns:
-                    db.execute(f"ALTER TABLE code_versions ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
-            if "prompt_template_id" not in version_columns:
-                db.execute("ALTER TABLE code_versions ADD COLUMN prompt_template_id INTEGER NOT NULL DEFAULT 0")
-            for name in ("repository_directory_id", "repository_storage_path"):
-                if name not in version_columns:
-                    db.execute(f"ALTER TABLE code_versions ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
-            if "layout_json" not in version_columns:
-                db.execute("ALTER TABLE code_versions ADD COLUMN layout_json TEXT NOT NULL DEFAULT ''")
+            from .release_schema import sqlite_migrate
+            if not artifact_store_ready:
+                sqlite_migrate(db)
+            from .job_schema import sqlite_migrate as migrate_jobs
+            migrate_jobs(db)
+            from .delivery_task_schema import sqlite_migrate as migrate_deliveries
+            deliveries_merged = migrate_deliveries(db, backfill=False)
+            from .log_schema import sqlite_migrate as migrate_logs
+            migrate_logs(db)
+            from .task_artifact_schema import sqlite_migrate as migrate_artifacts
+            migrate_artifacts(db)
+            if deliveries_merged:
+                from .delivery_task_schema import backfill_artifacts
+                backfill_artifacts(db)
+            from .deployment_log_storage import migrate as migrate_deployment_logs
+            migrate_deployment_logs(db)
 
     @contextmanager
     def connect(self):
@@ -169,9 +129,9 @@ class Store:
             db.close()
 
 
-MYSQL_TABLES = ("runners", "enrollment_codes", "releases", "assignments", "script_bindings", "runner_upgrades",
-                "code_assets", "code_versions", "code_runtime_bindings", "settings", "generation_jobs", "source_code_relations", "deployment_jobs",
-                "code_repositories", "code_repo_rules", "config_runner_bindings", "queue_runner_bindings", "directory_runner_bindings", "directory_deliveries") + LOG_TABLES
+MYSQL_TABLES = ("runners", "enrollment_codes", "releases", "assignments",
+                "code_assets", "code_runtime_bindings", "settings", "jobs", "source_code_relations",
+                "code_repositories", "directory_runner_bindings", "directory_deliveries") + LOG_TABLES
 MYSQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ce_runner_runners (
     runner_id VARCHAR(80) PRIMARY KEY, name VARCHAR(100) NOT NULL,
@@ -186,25 +146,6 @@ CREATE TABLE IF NOT EXISTS ce_runner_runners (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_enrollment_codes (
     code_hash CHAR(64) PRIMARY KEY, expires_at VARCHAR(50) NOT NULL, used_at VARCHAR(50)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_directory_deliveries (
-    delivery_id VARCHAR(80) PRIMARY KEY, binding_type VARCHAR(20) NOT NULL, owner_key CHAR(64) NOT NULL,
-    owner_id VARCHAR(400) NOT NULL, runner_id VARCHAR(80) NOT NULL,
-    layout_revision CHAR(64) NOT NULL, artifact_digest VARCHAR(100) NOT NULL, signature VARCHAR(255) NOT NULL,
-    target_path VARCHAR(400) NOT NULL, status VARCHAR(20) NOT NULL, requested_at VARCHAR(50) NOT NULL,
-    started_at VARCHAR(50), finished_at VARCHAR(50), error TEXT NOT NULL, installed_path TEXT NOT NULL,
-    INDEX directory_target (binding_type, owner_key, runner_id),
-    FOREIGN KEY (runner_id) REFERENCES ce_runner_runners(runner_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_config_runner_bindings (
-    config_id VARCHAR(80) NOT NULL, runner_id VARCHAR(80) NOT NULL,
-    created_at VARCHAR(50) NOT NULL, PRIMARY KEY(config_id, runner_id),
-    FOREIGN KEY (runner_id) REFERENCES ce_runner_runners(runner_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_queue_runner_bindings (
-    queue_name VARCHAR(120) NOT NULL, runner_id VARCHAR(80) NOT NULL,
-    created_at VARCHAR(50) NOT NULL, PRIMARY KEY(queue_name, runner_id),
-    FOREIGN KEY (runner_id) REFERENCES ce_runner_runners(runner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_directory_runner_bindings (
     binding_type VARCHAR(20) NOT NULL, owner_key CHAR(64) NOT NULL, owner_id VARCHAR(400) NOT NULL,
@@ -228,44 +169,21 @@ CREATE TABLE IF NOT EXISTS ce_runner_assignments (
     FOREIGN KEY (runner_id) REFERENCES ce_runner_runners(runner_id),
     FOREIGN KEY (release_digest) REFERENCES ce_runner_releases(digest)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_script_bindings (
-    config_id VARCHAR(80) PRIMARY KEY, script_digest VARCHAR(100) NOT NULL,
-    FOREIGN KEY (script_digest) REFERENCES ce_runner_releases(digest)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_runner_upgrades (
-    runner_id VARCHAR(80) PRIMARY KEY, desired_digest VARCHAR(100) NOT NULL,
-    FOREIGN KEY (runner_id) REFERENCES ce_runner_runners(runner_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_code_assets (
     code_id VARCHAR(80) PRIMARY KEY, config_id VARCHAR(80) NOT NULL,
     queue_name VARCHAR(120) NOT NULL, site_host VARCHAR(253) NOT NULL,
     storage_path VARCHAR(512) NOT NULL, created_at VARCHAR(50) NOT NULL,
     UNIQUE KEY asset_identity (config_id, queue_name, site_host)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_code_versions (
-    digest VARCHAR(100) PRIMARY KEY, code_id VARCHAR(80) NOT NULL,
-    git_commit VARCHAR(80) NOT NULL, git_url TEXT NOT NULL,
-    delivery_path VARCHAR(512) NOT NULL, prompt TEXT NOT NULL, system_prompt TEXT NULL, prompt_template_id BIGINT NOT NULL DEFAULT 0,
-    source_url TEXT NOT NULL, published_at VARCHAR(50) NOT NULL,
-    source_repo_path VARCHAR(512) NOT NULL DEFAULT '', source_git_commit VARCHAR(80) NOT NULL DEFAULT '',
-    FOREIGN KEY (digest) REFERENCES ce_runner_releases(digest),
-    FOREIGN KEY (code_id) REFERENCES ce_runner_code_assets(code_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_code_runtime_bindings (
     environment VARCHAR(20) NOT NULL, config_id VARCHAR(80) NOT NULL,
     queue_name VARCHAR(120) NOT NULL, site_host VARCHAR(253) NOT NULL,
     digest VARCHAR(100) NOT NULL,
     PRIMARY KEY (environment, config_id, queue_name, site_host),
-    FOREIGN KEY (digest) REFERENCES ce_runner_code_versions(digest)
+    FOREIGN KEY (digest) REFERENCES ce_runner_releases(digest)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_settings (
     setting_key VARCHAR(100) PRIMARY KEY, setting_value LONGTEXT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_generation_jobs (
-    task_id VARCHAR(80) PRIMARY KEY, source_id VARCHAR(80) NOT NULL, flow_id VARCHAR(80) NOT NULL,
-    config_id VARCHAR(80) NOT NULL, interface_id VARCHAR(80) NOT NULL, status VARCHAR(20) NOT NULL, server_id VARCHAR(80) NOT NULL,
-    created_at VARCHAR(50) NOT NULL, lease_until DOUBLE NOT NULL DEFAULT 0, payload LONGTEXT NOT NULL,
-    INDEX generation_jobs_pending (status,interface_id,created_at), INDEX generation_jobs_source (source_id,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS ce_runner_code_repositories (
     repo_id VARCHAR(80) PRIMARY KEY, name VARCHAR(60) NOT NULL,
@@ -274,11 +192,6 @@ CREATE TABLE IF NOT EXISTS ce_runner_code_repositories (
     status VARCHAR(20) NOT NULL, created_at VARCHAR(50) NOT NULL, updated_at VARCHAR(50) NOT NULL,
     config_type VARCHAR(40) NOT NULL DEFAULT '', config_type_name VARCHAR(200) NOT NULL DEFAULT '',
     UNIQUE KEY repo_name (name), UNIQUE KEY repo_path (local_path)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_code_repo_rules (
-    config_type VARCHAR(40) PRIMARY KEY, repo_id VARCHAR(80) NOT NULL,
-    updated_at VARCHAR(50) NOT NULL,
-    FOREIGN KEY (repo_id) REFERENCES ce_runner_code_repositories(repo_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 MYSQL_CODE_ASSET_COLUMNS = {"repo_id": "VARCHAR(80) NOT NULL DEFAULT ''", "config_type": "VARCHAR(40) NOT NULL DEFAULT ''", "directory_id": "VARCHAR(80) NOT NULL DEFAULT ''"}
@@ -293,10 +206,6 @@ class MySqlConnection:
 
         sql = re.sub(r"\b(?:" + "|".join(MYSQL_TABLES) + r")\b", lambda match: "ce_runner_" + match.group(), sql)
         sql = sql.replace("?", "%s").replace("INSERT OR IGNORE", "INSERT IGNORE")
-        sql = sql.replace("ON CONFLICT(config_id) DO UPDATE SET script_digest=excluded.script_digest",
-                          "ON DUPLICATE KEY UPDATE script_digest=VALUES(script_digest)")
-        sql = sql.replace("ON CONFLICT(runner_id) DO UPDATE SET desired_digest=excluded.desired_digest",
-                          "ON DUPLICATE KEY UPDATE desired_digest=VALUES(desired_digest)")
         cursor = self.connection.cursor(pymysql.cursors.DictCursor)
         cursor.execute(sql, values)
         return cursor
@@ -317,7 +226,7 @@ class MySqlStore:
         }
         with pymysql.connect(**self.kwargs) as db:
             with db.cursor() as cursor:
-                for statement in (MYSQL_SCHEMA + MYSQL_LOG_SCHEMA + MYSQL_SOURCE_CODE_SCHEMA + MYSQL_DEPLOYMENT_SCHEMA).split(";"):
+                for statement in (MYSQL_SCHEMA + MYSQL_DEPLOYMENT_SCHEMA + MYSQL_LOG_SCHEMA + MYSQL_SOURCE_CODE_SCHEMA).split(";"):
                     if statement.strip():
                         cursor.execute(statement)
                 for name, length in (('latest_task_id', 80), ('latest_task_created_at', 50)):
@@ -331,39 +240,34 @@ class MySqlStore:
                 cursor.execute("SHOW COLUMNS FROM ce_runner_assignments LIKE 'code_id'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE ce_runner_assignments ADD COLUMN code_id VARCHAR(80) NOT NULL DEFAULT ''")
+                cursor.execute("SELECT TABLE_TYPE FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ce_runner_releases'")
+                artifact_store_ready = cursor.fetchone()[0] == 'VIEW'
                 for name, definition in MYSQL_CODE_ASSET_COLUMNS.items():
                     cursor.execute("SHOW COLUMNS FROM ce_runner_code_assets LIKE %s", (name,))
-                    if not cursor.fetchone():
+                    if not cursor.fetchone() and not artifact_store_ready:
                         cursor.execute(f"ALTER TABLE ce_runner_code_assets ADD COLUMN {name} {definition}")
                 cursor.execute("SHOW COLUMNS FROM ce_runner_code_repositories LIKE 'config_type'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE ce_runner_code_repositories ADD COLUMN config_type VARCHAR(40) NOT NULL DEFAULT ''")
-                    cursor.execute("UPDATE ce_runner_code_repositories r JOIN ce_runner_code_repo_rules x ON x.repo_id=r.repo_id "
-                                   "SET r.config_type=x.config_type WHERE r.is_default=0")
                 cursor.execute("SHOW COLUMNS FROM ce_runner_code_repositories LIKE 'config_type_name'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE ce_runner_code_repositories ADD COLUMN config_type_name VARCHAR(200) NOT NULL DEFAULT ''")
-                cursor.execute("SHOW COLUMNS FROM ce_runner_code_versions LIKE 'repo_id'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE ce_runner_code_versions ADD COLUMN repo_id VARCHAR(80) NOT NULL DEFAULT ''")
-                    cursor.execute("UPDATE ce_runner_code_versions v JOIN ce_runner_code_assets a ON a.code_id=v.code_id "
-                                   "SET v.repo_id=a.repo_id")
-                for name, definition in (("source_repo_path", "VARCHAR(512) NOT NULL DEFAULT ''"),
-                                         ("source_git_commit", "VARCHAR(80) NOT NULL DEFAULT ''"),
-                                         ("repository_directory_id", "VARCHAR(80) NOT NULL DEFAULT ''"),
-                                         ("repository_storage_path", "VARCHAR(512) NOT NULL DEFAULT ''")):
-                    cursor.execute(f"SHOW COLUMNS FROM ce_runner_code_versions LIKE '{name}'")
-                    if not cursor.fetchone():
-                        cursor.execute(f"ALTER TABLE ce_runner_code_versions ADD COLUMN {name} {definition}")
-                cursor.execute("SHOW COLUMNS FROM ce_runner_code_versions LIKE 'layout_json'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE ce_runner_code_versions ADD COLUMN layout_json LONGTEXT NULL")
-                cursor.execute("SHOW COLUMNS FROM ce_runner_code_versions LIKE 'system_prompt'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE ce_runner_code_versions ADD COLUMN system_prompt TEXT NULL")
-                cursor.execute("SHOW COLUMNS FROM ce_runner_code_versions LIKE 'prompt_template_id'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE ce_runner_code_versions ADD COLUMN prompt_template_id BIGINT NOT NULL DEFAULT 0")
+                from .release_schema import mysql_migrate
+                if not artifact_store_ready:
+                    mysql_migrate(cursor)
+                from .job_schema import mysql_migrate as migrate_jobs
+                migrate_jobs(cursor)
+                from .delivery_task_schema import mysql_migrate as migrate_deliveries
+                deliveries_merged = migrate_deliveries(cursor, backfill=False)
+                from .log_schema import mysql_migrate as migrate_logs
+                migrate_logs(cursor)
+                from .task_artifact_schema import mysql_migrate as migrate_artifacts
+                migrate_artifacts(cursor)
+                if deliveries_merged:
+                    from .delivery_task_schema import backfill_artifacts
+                    backfill_artifacts(MySqlConnection(db))
+                from .deployment_log_storage import migrate as migrate_deployment_logs
+                migrate_deployment_logs(MySqlConnection(db))
                 cursor.execute("SHOW COLUMNS FROM ce_runner_settings LIKE 'setting_value'")
                 setting_column = cursor.fetchone()
                 if setting_column and setting_column[1].lower() != 'longtext':

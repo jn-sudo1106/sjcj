@@ -22,7 +22,7 @@ class DeploymentSourceIdentityTest(unittest.TestCase):
         resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
         first = self.jobs()[0]
         with self.app.store.connect() as db:
-            original = json.loads(db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (first['jobId'],)).fetchone()['payload'])
+            original = json.loads(db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (first['jobId'],)).fetchone()['payload'])
             archive = copy.deepcopy(original['archive'])
             archive.update(archiveId='another-source-archive', taskId='another-source-task')
             archive['sourceContext']['sourceId'] = '999999'

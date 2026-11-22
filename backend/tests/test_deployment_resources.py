@@ -429,7 +429,7 @@ class DeploymentResourcesTest(unittest.TestCase):
     def test_existing_archive_manual_deploy_checks_source_and_does_not_regenerate(self):
         self.fixture(); archive = self.archive()
         with self.app.store.connect() as db:
-            db.execute('DELETE FROM deployment_jobs')
+            db.execute("DELETE FROM jobs WHERE job_type='deployment'")
             # Old receipts can predate sourceContext, while file provenance survives task deletion.
             legacy = {key: value for key, value in archive.items() if key != 'sourceContext'}
             db.execute('UPDATE settings SET setting_value=? WHERE setting_key=?',
@@ -633,7 +633,7 @@ class DeploymentResourcesTest(unittest.TestCase):
         self.assertEqual(job['gitDirectory'], 'default/1401218')
         self.assertEqual((self.runner.directory / 'default/1401218/main.py').read_bytes(), b'VALUE = 1\n')
         with self.app.store.connect() as db:
-            stored = json.loads(db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (job['jobId'],)).fetchone()['payload'])
+            stored = json.loads(db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (job['jobId'],)).fetchone()['payload'])
         self.assertEqual(stored['gitDirectory'], job['gitDirectory'])
         self.assertEqual(stored['repositoryId'], job['repositoryId'])
 

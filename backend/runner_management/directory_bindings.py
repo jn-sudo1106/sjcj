@@ -34,31 +34,31 @@ def as_binding(binding_type: str, owner_id: str, runner_id: str, created_at: str
             'createdAt': created_at, 'layoutRevision': layout['revision'], 'delivery': None}
 
 
-def list_bindings(app, db=None, runner_id: str | None = None) -> list[dict]:
+def list_bindings(app, db=None, runner_id: str | None = None, *, layouts=None) -> list[dict]:
     if db is None:
         with app.store.connect() as connection:
-            return list_bindings(app, connection, runner_id)
+            return list_bindings(app, connection, runner_id, layouts=layouts)
     rows = []
     candidates = db.execute(
-        'SELECT config_id FROM config_runner_bindings '
+        "SELECT owner_id AS config_id FROM directory_runner_bindings WHERE binding_type='config' "
         'UNION SELECT a.config_id FROM assignments x JOIN code_assets a ON a.code_id=x.code_id WHERE x.enabled=1').fetchall()
     for candidate in candidates:
         owner_id = candidate['config_id']
         layout = get_config_layout(app, owner_id, db)
         targets = config_runner_layout(dict(layout), db)['runnerIds']
         dates = {row['runner_id']: row['created_at'] for row in db.execute(
-            'SELECT runner_id,created_at FROM config_runner_bindings WHERE config_id=?', (owner_id,)).fetchall()}
+            "SELECT runner_id,created_at FROM directory_runner_bindings WHERE binding_type='config' AND owner_key=?", (owner_key(owner_id),)).fetchall()}
         rows.extend(as_binding('config', owner_id, target, dates.get(target, ''), layout)
                     for target in targets if runner_id is None or target == runner_id)
-    for row in db.execute('SELECT * FROM queue_runner_bindings').fetchall():
-        if runner_id is not None and row['runner_id'] != runner_id:
-            continue
-        layout = get_queue_layout(app, row['queue_name'], db)
-        rows.append(as_binding('queue', row['queue_name'], row['runner_id'], row['created_at'], layout))
     for row in db.execute('SELECT * FROM directory_runner_bindings').fetchall():
+        if row['binding_type'] == 'config':
+            continue
         if runner_id is not None and row['runner_id'] != runner_id:
             continue
-        layout = owner_layout(app, row['binding_type'], row['owner_id'], db)
+        if layouts is not None and row['binding_type'] == 'deployment' and row['owner_id'] in layouts:
+            layout = layouts[row['owner_id']]
+        else:
+            layout = owner_layout(app, row['binding_type'], row['owner_id'], db)
         rows.append(as_binding(row['binding_type'], row['owner_id'], row['runner_id'], row['created_at'], layout))
     # Listing must stay read-only: expiring deliveries here holds UPDATE locks
     # throughout runtime snapshot verification and blocks concurrent readers.
@@ -85,22 +85,16 @@ def create_binding(app, payload: dict) -> dict:
             raise ApiError('Runner 实例不存在，请刷新后重新选择', 404)
         if binding_type == 'config':
             duplicate = runner_id in config_runner_layout(dict(layout), db)['runnerIds']
-        elif binding_type == 'queue':
-            duplicate = db.execute('SELECT 1 FROM queue_runner_bindings WHERE queue_name=? AND runner_id=?', (owner_id, runner_id)).fetchone()
         else:
             duplicate = db.execute('SELECT 1 FROM directory_runner_bindings WHERE binding_type=? AND owner_key=? AND runner_id=?',
                                    (binding_type, owner_key(owner_id), runner_id)).fetchone()
         if duplicate:
             raise ApiError('此目录视图已绑定该 Runner', 409)
         created = now()
-        if binding_type in ('website', 'custom', 'deployment'):
-            if binding_type != 'deployment' and layout['isNew']:
-                layout = save_named_layout(app, binding_type, owner_id, layout, db)
-            db.execute('INSERT INTO directory_runner_bindings VALUES (?,?,?,?,?)',
-                       (binding_type, owner_key(owner_id), owner_id, runner_id, created))
-        else:
-            table, column = ('config_runner_bindings', 'config_id') if binding_type == 'config' else ('queue_runner_bindings', 'queue_name')
-            db.execute(f'INSERT INTO {table} ({column},runner_id,created_at) VALUES (?,?,?)', (owner_id, runner_id, created))
+        if binding_type in ('website', 'custom') and layout['isNew']:
+            layout = save_named_layout(app, binding_type, owner_id, layout, db)
+        db.execute('INSERT INTO directory_runner_bindings VALUES (?,?,?,?,?)',
+                   (binding_type, owner_key(owner_id), owner_id, runner_id, created))
         return as_binding(binding_type, owner_id, runner_id, created, layout)
 
 
@@ -114,24 +108,20 @@ def remove_binding(app, binding_type: str, owner_id: str, runner_id: str) -> dic
         delivery_key = (binding_type, owner_key(owner_id), runner_id)
         if db.execute("SELECT 1 FROM directory_deliveries WHERE binding_type=? AND owner_key=? AND runner_id=? AND status='running'", delivery_key).fetchone():
             raise ApiError('Runner 正在下发代码，请等待完成后再取消绑定', 409)
-        db.execute("UPDATE directory_deliveries SET status='failed',finished_at=?,error=? "
-                   "WHERE binding_type=? AND owner_key=? AND runner_id=? AND status='pending'",
-                   (now(), '绑定已取消，未下发代码', *delivery_key))
+        from .delivery_tasks import update
+        for delivery in db.execute("SELECT delivery_id FROM directory_deliveries WHERE binding_type=? AND owner_key=? AND runner_id=? AND status='pending'", delivery_key).fetchall():
+            update(db, delivery['delivery_id'], status='failed', expected_status='pending', finished_at=now(), error='绑定已取消，未下发代码')
         if binding_type == 'config':
             targets = set(config_runner_layout(dict(layout), db)['runnerIds'])
             if runner_id not in targets:
                 raise ApiError('绑定关系不存在，请刷新列表', 404)
             targets.remove(runner_id)
-            db.execute('DELETE FROM config_runner_bindings WHERE config_id=? AND runner_id=?', (owner_id, runner_id))
+            db.execute('DELETE FROM directory_runner_bindings WHERE binding_type=? AND owner_key=? AND runner_id=?', delivery_key)
             # Preserve other legacy targets and remember explicit removal without
             # stopping their existing queue assignments or changing editor revision.
             for target in targets:
-                db.execute('INSERT OR IGNORE INTO config_runner_bindings VALUES (?,?,?)', (owner_id, target, now()))
+                db.execute('INSERT OR IGNORE INTO directory_runner_bindings VALUES (?,?,?,?,?)', ('config', owner_key(owner_id), owner_id, target, now()))
             store_layout(db, 'config-directory-layout:' + owner_id, {**layout, 'runnerIds': sorted(targets)})
-        elif binding_type == 'queue':
-            if not db.execute('SELECT 1 FROM queue_runner_bindings WHERE queue_name=? AND runner_id=?', (owner_id, runner_id)).fetchone():
-                raise ApiError('绑定关系不存在，请刷新列表', 404)
-            db.execute('DELETE FROM queue_runner_bindings WHERE queue_name=? AND runner_id=?', (owner_id, runner_id))
         else:
             key = (binding_type, owner_key(owner_id), runner_id)
             if not db.execute('SELECT 1 FROM directory_runner_bindings WHERE binding_type=? AND owner_key=? AND runner_id=?', key).fetchone():

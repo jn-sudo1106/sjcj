@@ -33,13 +33,13 @@ class MultiTargetDeploymentTest(unittest.TestCase):
         initial = self.jobs()
         selected = self.request('/api/runner-management/deployment-configurations/' + initial[0]['deploymentId'])
         with self.app.store.connect() as db:
-            receipts = {row['job_id']: row['payload'] for row in db.execute('SELECT job_id,payload FROM deployment_jobs')}
+            receipts = {row['job_id']: row['payload'] for row in db.execute("SELECT job_id,payload FROM jobs WHERE job_type='deployment'")}
         self.request('/api/runner-management/deployment-configurations/' + selected['deploymentId'] + '/entry', {
             'entryPoint': 'main.py', 'revision': selected['revision']})
         preview = self.choice()
         self.assertEqual(preview['entryPoint'], 'main.py')
         with self.app.store.connect() as db:
-            self.assertEqual(receipts, {row['job_id']: row['payload'] for row in db.execute('SELECT job_id,payload FROM deployment_jobs')})
+            self.assertEqual(receipts, {row['job_id']: row['payload'] for row in db.execute("SELECT job_id,payload FROM jobs WHERE job_type='deployment'")})
         self.archive(identifier='next-version', content=b'VALUE = 2\n', created='2026-11-02T03:00:00Z')
         self.finish()
         jobs = [job for job in self.jobs() if job['archiveId'] == 'next-version']
@@ -66,6 +66,10 @@ class MultiTargetDeploymentTest(unittest.TestCase):
         jobs = self.jobs(); self.assertTrue(all(job['status'] == 'success' for job in jobs), jobs)
         self.assertEqual({job['runnerId'] for job in jobs}, {self.runner.identity['runnerId'], self.other.identity['runnerId']})
         self.assertEqual(len({job['runtimeId'] for job in jobs}), 2)
+        with self.app.store.connect() as db:
+            for job in jobs:
+                execution = db.execute("SELECT executor_id,server_id FROM jobs WHERE job_type='deployment' AND job_id=?", (job['jobId'],)).fetchone()
+                self.assertEqual((execution['executor_id'],execution['server_id']), (job['deploymentId'],job['runnerId']))
         for runner in (self.runner, self.other):
             self.assertEqual((runner.directory / 'test/default/1401218/main.py').read_bytes(), b'VALUE = 1\n')
 

@@ -106,7 +106,7 @@ class AutomaticCodeServerUpdateTest(unittest.TestCase):
         broken, signature = self.app.artifacts.publish({'code_generation_server/__init__.py': b'',
             'code_generation_server/start.py': b'raise SystemExit(3)\n'}, {'kind': 'code-server-launcher', 'entryModule': 'code_generation_server.start'})
         with self.app.store.connect() as db:
-            db.execute('INSERT INTO releases VALUES (?,?,?,?,?,?,?,?,?,?)', (broken, 'code-server-launcher', 'broken', 'any', 'test', 'published', '2026-11-14', signature, 'code_generation_server.start', 'test'))
+            db.execute('INSERT INTO releases (digest,kind,name,platform,git_commit,status,published_at,signature,entry,git_url) VALUES (?,?,?,?,?,?,?,?,?,?)', (broken, 'code-server-launcher', 'broken', 'any', 'test', 'published', '2026-11-14', signature, 'code_generation_server.start', 'test'))
             store_layout(db, 'code-server-latest-launcher', {'digest': broken})
         # Wait for the independent service upgrade before scheduling a launcher switch.
         until = time.monotonic() + 30

@@ -19,6 +19,10 @@ class DeploymentTaskHistoryTest(unittest.TestCase):
     def completed(self):
         self.fixture(); self.archive(); self.save_rules(self.runner)
         resources.dispatch(self.app); self.runner.deliver_pending(); resources.dispatch(self.app)
+        # Runner event upload is asynchronous; historical-fixture edits must
+        # happen after the real events have reached the service.
+        if self.runner.logs.thread:
+            self.runner.logs.thread.join(timeout=5)
         return self.jobs()[0]
 
     def test_completed_task_reads_saved_stages_without_reopening_git_or_artifacts(self):
@@ -27,7 +31,7 @@ class DeploymentTaskHistoryTest(unittest.TestCase):
         with self.app.store.connect() as db:
             from backend.runner_management.runtime_history import add_event
             add_event(db, job['deliveryId'], 'verify', '校验摘要和签名', detail='token=do-not-expose')
-            before = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (job['jobId'],)).fetchone()['payload']
+            before = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (job['jobId'],)).fetchone()['payload']
         with patch.object(self.app.artifacts, 'read', side_effect=AssertionError('must not verify again')), \
              patch.object(self.app, 'git', side_effect=AssertionError('must not read Git again')):
             first = self.request('/api/runner-management/deployment-jobs/' + job['jobId'])
@@ -41,7 +45,7 @@ class DeploymentTaskHistoryTest(unittest.TestCase):
         self.assertTrue(first['finishedAt'])
         self.assertNotIn('executionEvents', job)
         with self.app.store.connect() as db:
-            after = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (job['jobId'],)).fetchone()['payload']
+            after = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (job['jobId'],)).fetchone()['payload']
         self.assertEqual(before, after)
 
     def test_failed_transaction_keeps_the_real_stage_and_retry_keeps_prior_attempt(self):
@@ -66,10 +70,11 @@ class DeploymentTaskHistoryTest(unittest.TestCase):
     def test_historical_tasks_do_not_invent_missing_verification_steps(self):
         job = self.completed()
         with self.app.store.connect() as db:
-            payload = json.loads(db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (job['jobId'],)).fetchone()['payload'])
-            payload.pop('executionEvents')
-            db.execute('DELETE FROM runtime_events WHERE record_id=?', (job['deliveryId'],))
-            db.execute('UPDATE deployment_jobs SET payload=? WHERE job_id=?', (json.dumps(payload), job['jobId']))
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (job['jobId'],)).fetchone()['payload'])
+            payload.pop('executionEvents', None)
+            db.execute("DELETE FROM logs WHERE log_type='event' AND record_id=?", (job['deliveryId'],))
+            db.execute("DELETE FROM logs WHERE log_type='event' AND task_type='deployment' AND task_id=?", (job['jobId'],))
+            db.execute("UPDATE jobs SET payload=? WHERE job_type='deployment' AND job_id=?", (json.dumps(payload), job['jobId']))
         result = self.request('/api/runner-management/deployment-jobs/' + job['jobId'])
         self.assertFalse(result['historyAvailable'])
         self.assertEqual([event['stage'] for event in result['events']], ['created', 'success'])

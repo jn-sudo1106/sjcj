@@ -49,13 +49,7 @@ def automatic(app, body):
             directory = get_directory(app, db, repo['repo_id'], choice['directoryId'], config_type)
             if directory['configType'] != config_type: raise ApiError('默认生成目录的节点类型已变更，请重新设置', 409)
             return describe(repo, directory, config_type, 'type')
-        rule = db.execute('SELECT repo_id FROM code_repo_rules WHERE config_type=?', (config_type,)).fetchone() if config_type else None
-        if rule:
-            repos = [app.repository(db, rule['repo_id'])]
-            if repos[0]['status'] != 'ACTIVE':
-                raise ApiError('该配置类型绑定的代码仓库已停用', 409)
-        else:
-            repos = db.execute('SELECT * FROM code_repositories WHERE status=? ORDER BY is_default DESC,created_at,repo_id', ('ACTIVE',)).fetchall()
+        repos = db.execute('SELECT * FROM code_repositories WHERE status=? ORDER BY is_default DESC,created_at,repo_id', ('ACTIVE',)).fetchall()
         matches = []
         for repo in repos:
             if repo['config_type'] not in ('', config_type): continue
@@ -69,7 +63,7 @@ def automatic(app, body):
             directory = get_directory(app, db, repo['repo_id'], directory['directoryId'], config_type)
             matched_by = 'type'
         else:
-            repo = repos[0] if rule else app.resolve_code_repository(db, None, config_type)
+            repo = app.resolve_code_repository(db, None, config_type)
             directory = get_directory(app, db, repo['repo_id'], 'default', config_type)
             matched_by = 'default'
     return describe(repo, directory, config_type, matched_by)

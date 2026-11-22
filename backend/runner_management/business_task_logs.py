@@ -17,9 +17,9 @@ def executions(app, query):
         raise ApiError('任务查询条件无效')
     marker = re.compile(r'(?:^|\s)(?:(?:INFO|ERROR)\s+)?任务\s+' + re.escape(task_id) + r'(?=\s|[：:])')
     with app.store.connect() as db:
-        rows = db.execute("SELECT o.*,p.pid,p.entry,s.stream_id,s.last_seq FROM runtime_operations o "
+        rows = db.execute("SELECT o.*,p.pid,p.entry,s.log_id AS stream_id,s.seq AS last_seq FROM runtime_operations o "
                           "JOIN program_runs p ON p.run_id=o.record_id "
-                          "JOIN runtime_log_streams s ON s.record_id=o.record_id "
+                          "JOIN logs s ON s.log_type='stream' AND s.record_id=o.record_id "
                           "WHERE o.kind='run' ORDER BY s.updated_at DESC LIMIT 101").fetchall()
     items, used, batches, exhausted = [], 0, 0, False
     truncated = len(rows) > 100

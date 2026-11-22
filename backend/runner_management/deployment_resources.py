@@ -63,7 +63,7 @@ def entry_names(db, result):
     entries = {item['resourceId']: set() for item in result['items']}
     by_id = {(item['resourceId'], item['configType'], env): item for item in result['items'] for env in rule_environments(item['environment'])}
     aliases = {alias: item['resourceId'] for item in result['items'] for alias in item['legacyResourceIds']}
-    for row in db.execute('SELECT payload FROM deployment_jobs').fetchall():
+    for row in db.execute("SELECT payload FROM jobs WHERE job_type='deployment'").fetchall():
         job = json.loads(row['payload'])
         rule = by_id.get((aliases.get(job.get('resourceId'), job.get('resourceId')), job.get('configType'), job.get('environment')))
         if not rule or rule['runnerId'] != job.get('runnerId') or rule['configType'] != job.get('configType') or not supports(rule, job.get('environment')):
@@ -347,16 +347,26 @@ def git_details(archive):
 
 
 def persist(db, job, *, insert=False):
+    from .deployment_log_storage import payload as task_payload, flush
+    from .delivery_tasks import preserve_attempts
+    preserve_attempts(db, job)
     record_stage(job, job['status'], job.get('message') or job['status'], level='error' if job['status'] == 'failed' else 'info')
     job['updatedAt'] = stamp()
     values = tuple(job[key] for key in ('sourceId', 'flowId', 'stepId', 'configId', 'configType', 'environment',
                                       'archiveId', 'taskId', 'gitCommit', 'status', 'runnerId', 'deploymentId', 'deliveryId', 'createdAt', 'updatedAt'))
     if insert:
-        db.execute('INSERT INTO deployment_jobs VALUES (' + ','.join('?' for _ in range(17)) + ')',
-                   (job['jobId'], *values, json.dumps(job, ensure_ascii=False)))
+        db.execute("INSERT INTO jobs (job_type,job_id,source_id,flow_id,step_id,config_id,config_type,environment,"
+                   "archive_id,parent_task_id,git_commit,status,server_id,executor_id,delivery_id,created_at,updated_at,payload) "
+                   "VALUES ('deployment'," + ','.join('?' for _ in range(17)) + ')',
+                   (job['jobId'], *values, json.dumps(task_payload(job), ensure_ascii=False)))
     else:
-        db.execute('UPDATE deployment_jobs SET status=?,runner_id=?,deployment_id=?,delivery_id=?,updated_at=?,payload=? WHERE job_id=?',
-                   (job['status'], job['runnerId'], job['deploymentId'], job['deliveryId'], job['updatedAt'], json.dumps(job, ensure_ascii=False), job['jobId']))
+        db.execute("UPDATE jobs SET status=?,server_id=?,executor_id=?,delivery_id=?,updated_at=?,payload=? WHERE job_type='deployment' AND job_id=?",
+                   (job['status'], job['runnerId'], job['deploymentId'], job['deliveryId'], job['updatedAt'], json.dumps(task_payload(job), ensure_ascii=False), job['jobId']))
+    flush(db, job)
+    from .log_records import link_delivery
+    link_delivery(db,job)
+    from .task_artifacts import sync_delivery
+    sync_delivery(db, job)
 
 
 def enqueue_archive(db, archive, app=None):
@@ -385,7 +395,7 @@ def enqueue_archive(db, archive, app=None):
     if 'resourceIds' in choice and not choice.get('useDefault'):
         ids = choice['resourceIds']
         # Removed targets must not leave older queued automatic deliveries behind.
-        for row in db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?', owner(context)).fetchall():
+        for row in db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?", owner(context)).fetchall():
             old = json.loads(row['payload'])
             if old.get('automatic') and old['status'] in WAITING and canonical_id(db, old.get('targetResourceId')) not in ids:
                 old.update(status='superseded', message='节点部署目标已更新，本次不再部署到此机器'); persist(db, old)
@@ -403,9 +413,9 @@ def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False, tar
         raise ApiError('生成结果缺少固定 Git 提交版本', 422)
     identity = 'ce:generated-deploy:' + archive['archiveId'] + ':' + env + (':' + target_resource_id if target_resource_id else '')
     identifier = uuid.uuid4().hex if rollback else uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
-    existing = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (identifier,)).fetchone()
+    existing = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (identifier,)).fetchone()
     if existing: return json.loads(existing['payload'])
-    origin = db.execute('SELECT created_at FROM generation_jobs WHERE task_id=?', (archive.get('taskId', ''),)).fetchone()
+    origin = db.execute("SELECT created_at FROM jobs WHERE job_type='generation' AND job_id=?", (archive.get('taskId', ''),)).fetchone()
     created = stamp()
     job = {**context, 'jobId': identifier, 'configId': archive['configId'], 'configType': str(archive.get('configType') or ''),
            'environment': env, 'archiveId': archive['archiveId'], 'taskId': archive.get('taskId', ''), 'gitCommit': archive['gitCommit'],
@@ -418,7 +428,7 @@ def enqueue(db, archive, env, *, automatic=False, parent='', rollback=False, tar
     job['repositoryName'] = repository['name'] if repository else ''
     if target_resource_id: job['targetResourceId'] = target_resource_id
     if automatic:
-        others = db.execute("SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?",
+        others = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?",
                             owner(job)).fetchall()
         for row in others:
             old = json.loads(row['payload'])
@@ -441,17 +451,17 @@ def listing(app, query):
     try: page, size = int(query.get('page', 1)), int(query.get('size', 20))
     except (ValueError, TypeError): raise ApiError('分页参数无效')
     if page < 1 or not 1 <= size <= 100: raise ApiError('分页参数无效')
-    where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+    where = ' AND ' + ' AND '.join(clauses) if clauses else ''
     with app.store.connect() as db:
-        total = db.execute('SELECT COUNT(*) n FROM deployment_jobs' + where, values).fetchone()['n']
-        rows = db.execute('SELECT payload FROM deployment_jobs' + where + ' ORDER BY created_at DESC,job_id DESC LIMIT ? OFFSET ?',
+        total = db.execute("SELECT COUNT(*) n FROM jobs WHERE job_type='deployment'" + where, values).fetchone()['n']
+        rows = db.execute("SELECT payload FROM jobs WHERE job_type='deployment'" + where + ' ORDER BY created_at DESC,job_id DESC LIMIT ? OFFSET ?',
                           (*values, size, (page - 1) * size)).fetchall()
         return {'items': [view(json.loads(row['payload'])) for row in rows], 'total': total}
 
 
 def view(job):
     from .deployment_file_summary import for_job
-    return {**git_details(job.get('archive') or {}), **{key: value for key, value in job.items() if key not in ('archive', 'executionEvents', 'deliveryHistory')}, 'fileSummary': for_job(job)}
+    return {**git_details(job.get('archive') or {}), **{key: value for key, value in job.items() if key not in ('archive', 'executionEvents', 'deliveryHistory', 'deliveryAttempts')}, 'fileSummary': for_job(job)}
 
 
 def deploy_existing(app, body):
@@ -467,7 +477,7 @@ def deploy_existing(app, body):
         if not row: raise ApiError('生成归档不存在', 404)
         archive = json.loads(row['setting_value'])
         if not archive.get('sourceContext'):
-            origin = db.execute('SELECT payload FROM generation_jobs WHERE task_id=?', (archive.get('taskId', ''),)).fetchone()
+            origin = db.execute("SELECT payload FROM jobs WHERE job_type='generation' AND job_id=?", (archive.get('taskId', ''),)).fetchone()
             original = json.loads(origin['payload']) if origin else {}
             if original.get('configId') == archive.get('configId'):
                 archive['sourceContext'] = {key: original.get(key, '') for key in ('sourceId', 'flowId', 'stepId', 'flowVersionId')}
@@ -502,7 +512,7 @@ def deploy_existing(app, body):
 
 def manual_enqueue(db, archive, env, parent='', target_resource_id=''):
     """An explicit deployment may move the same code to a newly selected resource."""
-    candidates = db.execute('SELECT payload FROM deployment_jobs WHERE archive_id=? AND environment=? ORDER BY created_at DESC,job_id DESC',
+    candidates = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND archive_id=? AND environment=? ORDER BY created_at DESC,job_id DESC",
                             (archive['archiveId'], env)).fetchall()
     latest = next((row for row in candidates if canonical_id(db, json.loads(row['payload']).get('targetResourceId', '')) == canonical_id(db, target_resource_id)), None)
     if latest:
@@ -520,9 +530,15 @@ def manual_enqueue(db, archive, env, parent='', target_resource_id=''):
 def action(app, identifier, operation):
     from .server import ApiError, GIT_LOCK
     with GIT_LOCK, app.store.connect() as db:
-        row = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (identifier,)).fetchone()
+        row = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (identifier,)).fetchone()
         if not row: raise ApiError('部署记录不存在', 404)
         job = json.loads(row['payload'])
+        if job.get('manualDelivery'):
+            if operation == 'retry':
+                if job['status'] != 'failed': raise ApiError('当前部署状态不能重试', 409)
+                from .delivery_tasks import retry
+                return view(retry(db, job))
+            raise ApiError('请在部署配置中选择版本并重新提交部署任务', 409)
         if operation == 'sync-git':
             return view(sync_git(app, db, job))
         if operation == 'publish':
@@ -531,7 +547,7 @@ def action(app, identifier, operation):
             return view(manual_enqueue(db, job['archive'], 'production', parent=identifier, target_resource_id=job.get('targetResourceId', '')))
         if operation == 'rollback':
             if job['status'] != 'success': raise ApiError('只能重新部署曾经成功的版本', 409)
-            active = db.execute("SELECT payload FROM deployment_jobs WHERE config_id=? AND environment=? AND status IN ('waiting_resource','queued','delivering')",
+            active = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND config_id=? AND environment=? AND status IN ('waiting_resource','queued','delivering')",
                                 (job['configId'], job['environment'])).fetchall()
             if any(owner(json.loads(row['payload'])) == owner(job) and same_target(json.loads(row['payload']), job, db) for row in active):
                 raise ApiError('该节点环境已有部署任务，请等待完成后再回滚', 409)
@@ -540,7 +556,7 @@ def action(app, identifier, operation):
             if job['status'] not in ('failed', 'waiting_resource', 'queued'):
                 raise ApiError('当前部署状态不能重试', 409)
             if job.get('automatic'):
-                others = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?', owner(job)).fetchall()
+                others = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=?", owner(job)).fetchall()
                 if any(other.get('automatic') and same_target(other, job, db) and (other.get('taskCreatedAt', ''), other['taskId']) > (job.get('taskCreatedAt', ''), job['taskId'])
                        for other in (json.loads(row['payload']) for row in others)):
                     raise ApiError('该任务已被更新的生成结果替代，请在历史部署记录中明确选择部署此版本', 409)
@@ -581,7 +597,7 @@ def sync_git(app, db, job):
     excluded = ignored_paths(repo, commit, tree)
     files = [{'path': path} for path in sorted(tree) if path.startswith(prefix) and path not in excluded and not is_python_cache(path)]
     if not files: raise ApiError('仓库对应配置目录没有可部署文件', 409)
-    rows = db.execute('SELECT payload FROM deployment_jobs WHERE source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=? ORDER BY created_at DESC,job_id DESC', owner(job)).fetchall()
+    rows = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND source_id=? AND flow_id=? AND step_id=? AND config_id=? AND environment=? ORDER BY created_at DESC,job_id DESC", owner(job)).fetchall()
     rows = [row for row in rows if same_target(json.loads(row['payload']), job, db)]
     for row in rows:
         previous = json.loads(row['payload'])
@@ -779,7 +795,7 @@ def prepare(app, db, job, rule, runner):
         runtime['assignmentId'] = adopted['assignmentId']
     record_stage(job, 'package', '打包代码并生成签名，检查下发内容和目标目录')
     delivery = request_delivery(app, 'deployment', deployment_id, runner_id,
-                                {'revision': layout['revision'], 'scope': 'all'}, _db=db)
+                                {'revision': layout['revision'], 'scope': 'all'}, _db=db, _parent_job=job)
     record_stage(job, 'packaged', '代码包已准备完成，文件一致性与下发规则检查通过', detail='制品摘要：' + delivery['artifactDigest'])
     if not delivery.get('unchanged'):
         data = {'name': layout['name'], 'configId': job['configId'], 'ipAddress': runner['ip_address'],
@@ -806,14 +822,16 @@ def dispatch(app):
     from .directory_delivery import expire_deliveries
     with GIT_LOCK, app.store.connect() as db:
         expire_deliveries(db)
-        rows = db.execute("SELECT job_id FROM deployment_jobs WHERE status IN ('waiting_resource','queued','delivering') ORDER BY created_at,job_id").fetchall()
+        rows = db.execute("SELECT job_id FROM jobs WHERE job_type='deployment' AND status IN ('waiting_resource','queued','delivering') ORDER BY created_at,job_id").fetchall()
     for row in rows:
         job = None
         # Separate transaction per job; a corrupt/unavailable repository cannot starve other nodes.
         try:
             with GIT_LOCK, app.store.connect() as db:
-                stored = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (row['job_id'],)).fetchone()
+                stored = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (row['job_id'],)).fetchone()
                 job = json.loads(stored['payload'])
+                if job['status'] not in (*WAITING, 'delivering'):
+                    continue  # A Runner acknowledgement may have completed this task after the sweep snapshot.
                 if job['status'] == 'delivering':
                     delivery = db.execute('SELECT status,error,installed_path FROM directory_deliveries WHERE delivery_id=?', (job['deliveryId'],)).fetchone()
                     if delivery and delivery['status'] in ('success', 'failed'):
@@ -833,7 +851,7 @@ def dispatch(app):
                 persist(db, job)
         except Exception as exc:
             with app.store.connect() as db:
-                saved = db.execute('SELECT payload FROM deployment_jobs WHERE job_id=?', (row['job_id'],)).fetchone()
+                saved = db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND job_id=?", (row['job_id'],)).fetchone()
                 failed = json.loads(saved['payload'])
                 if job and job.get('executionEvents'):
                     failed['executionEvents'] = job['executionEvents']

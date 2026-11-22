@@ -61,7 +61,7 @@ class DeploymentDeleteTest(unittest.TestCase):
             self.assertNotIn(identifier, {row['deploymentId'] for row in self.request('/api/runner-management/deployment-configurations')})
         with self.app.store.connect() as db:
             self.assertIsNotNone(db.execute('SELECT 1 FROM code_assets WHERE code_id=?', (code['codeId'],)).fetchone())
-            self.assertIsNotNone(db.execute('SELECT 1 FROM code_versions WHERE digest=?', (code['scriptDigest'],)).fetchone())
+            self.assertIsNotNone(db.execute('SELECT 1 FROM releases WHERE digest=?', (code['scriptDigest'],)).fetchone())
         self.assertTrue(self.request('/api/runner-management/directory-layouts/configs/' + self.source['configId'])['nodes'])
 
     def test_pending_delivery_blocks_delete_but_completed_history_does_not(self):

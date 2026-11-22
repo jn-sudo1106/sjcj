@@ -78,7 +78,7 @@ class SiteScriptPromptPersistenceTest(unittest.TestCase):
     tearDown = baseline.ManagementIntegrationTest.tearDown
     request = baseline.ManagementIntegrationTest.request
 
-    def test_prompts_are_versioned_and_legacy_code_versions_remain_readable(self):
+    def test_prompts_are_versioned_and_legacy_releases_remain_readable(self):
         payload = {'configId': '123', 'queueName': 'news_list', 'codeType': 'default',
                    'fileName': 'news_list.py', 'code': 'def scrape(url):\n    return []\n',
                    'prompt': '旧提示词', 'url': 'https://example.com/list'}

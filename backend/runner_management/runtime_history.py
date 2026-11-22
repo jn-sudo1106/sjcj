@@ -10,6 +10,7 @@ import uuid
 import io
 import zipfile
 from .retry_policy import retry_policy
+from . import log_records
 
 LOCK = threading.RLock()
 ID = re.compile(r'^[0-9a-f]{32}$')
@@ -68,10 +69,15 @@ def insert_record(db, identifier, runtime, kind, data, parent='', status='pendin
                 runtime.get('assignmentId', ''), parent, kind, status, date, date, None, '', json.dumps(data, ensure_ascii=False)))
 
 
-def add_event(db, record_id, stage, message, level='info', detail='', event_id=None, date=None):
-    db.execute('INSERT OR IGNORE INTO runtime_events VALUES (?,?,?,?,?,?,?)',
-               (event_id or uuid.uuid4().hex, record_id, date or stamp(), stage[:50], level,
-                redact(message)[:4000], redact(detail)[:32000]))
+def add_event(db, record_id, stage, message, level='info', detail='', event_id=None, date=None, *, origin='platform'):
+    value=log_records.migrated_row('event',{'event_id':event_id or uuid.uuid4().hex,'record_id':record_id,
+            'occurred_at':date or stamp(),'stage':stage[:50],'level':level,
+            'message':redact(message)[:4000],'detail':redact(detail)[:32000],**log_records.context(db,record_id)})
+    if value['task_type']=='deployment':
+        from .deployment_log_storage import STATES
+        value['status']=('failed' if level=='error' else 'success') if stage=='finished' else STATES.get(stage,'')
+    data=json.loads(value['payload']);data['origin']=origin;value['payload']=log_records.encode(data)
+    log_records.insert(db,value,ignore=True)
 
 
 def complete(db, identifier, status, error=''):
@@ -128,6 +134,8 @@ def control(app, runtime_id, revision, enabled):
 
 
 def assignment_contexts(app, db, assignments):
+    if not assignments:
+        return []
     from .deployment_configuration import runtime_rows
     by_assignment = {row.get('assignmentId'): row for row in runtime_rows(app, db, verify=False) if row.get('assignmentId')}
     output = []
@@ -189,7 +197,7 @@ def delivery_result(app, result, action):
             complete(db, result['deliveryId'], status, result.get('error', ''))
             add_event(db, result['deliveryId'], 'received' if action == 'claim' else 'finished',
                       'Runner 已接收下发任务' if action == 'claim' else result.get('error') or '代码下发完成',
-                      'error' if status == 'failed' else 'info')
+                      'error' if status == 'failed' else 'info', origin='runner')
 
 
 def recover_started_record(app, runner_id, payload):
@@ -231,7 +239,7 @@ def ingest_event(app, runner_id, payload):
     if action == 'started':
         recover_started_record(app, runner_id, payload)
     with LOCK, app.store.connect() as db:
-        old_event = db.execute('SELECT * FROM runtime_events WHERE event_id=?', (event_id,)).fetchone()
+        old_event = db.execute("SELECT record_id FROM logs WHERE log_type='event' AND log_id=?", (event_id,)).fetchone()
         record = db.execute('SELECT * FROM runtime_operations WHERE record_id=?', (identifier,)).fetchone()
         if record and record['runner_id'] != runner_id:
             raise ApiError('不能上报其他机器的日志', 403)
@@ -340,7 +348,7 @@ def ingest_event(app, runner_id, payload):
                 if not live:
                     db.execute("UPDATE runtime_operations SET status='success',finished_at=?,updated_at=? WHERE runtime_id=? AND kind='stop' AND status='pending'", (stamp(), stamp(), record['runtime_id']))
         add_event(db, identifier, str(payload.get('stage') or action), payload.get('message') or action,
-                  'error' if action in ('failed', 'retry-paused') or payload.get('level') == 'error' else 'info', payload.get('detail', ''), event_id, date)
+                  'error' if action in ('failed', 'retry-paused') or payload.get('level') == 'error' else 'info', payload.get('detail', ''), event_id, date, origin='runner')
     return {'ok': True}
 
 
@@ -362,7 +370,7 @@ def policy(app, payload=None):
         saved = db.execute("SELECT setting_value FROM settings WHERE setting_key='runtime-log-policy'").fetchone()
         result = json.loads(saved['setting_value']) if saved else {'directory': str(log_root(app)),
                   'retentionDays': int(os.getenv('RUNNER_LOG_RETENTION_DAYS', '30')), 'quotaMb': int(os.getenv('RUNNER_LOG_QUOTA_MB', '1024'))}
-        existing = bool(db.execute('SELECT 1 FROM runtime_log_streams LIMIT 1').fetchone())
+        existing = bool(db.execute("SELECT 1 FROM logs WHERE log_type='stream' LIMIT 1").fetchone())
         if payload is not None:
             directory = payload.get('directory')
             if not isinstance(directory, str) or not Path(directory).is_absolute():
@@ -413,8 +421,8 @@ def ingest_logs(app, runner_id, payload):
         record = db.execute('SELECT * FROM runtime_operations WHERE record_id=?', (record_id,)).fetchone()
         if not record or record['runner_id'] != runner_id:
             raise ApiError('日志不属于此机器的运行记录', 403)
-        row = db.execute('SELECT * FROM runtime_log_streams WHERE stream_id=?', (stream_id,)).fetchone()
-        if row and (row['runner_id'] != runner_id or row['record_id'] != record_id):
+        row = db.execute(log_records.STREAM_SELECT+' AND log_id=?', (stream_id,)).fetchone()
+        if row and row['record_id'] != record_id:
             raise ApiError('日志流归属冲突', 403)
         previous = row['last_seq'] if row else 0
         if seq <= previous:
@@ -424,16 +432,17 @@ def ingest_logs(app, runner_id, payload):
         directory = stream_dir(app, stream_id)
         # Hard server quota keeps a noisy script from filling the disk.
         quota = policy(app)['quotaMb'] * 1024 * 1024
-        total = db.execute('SELECT SUM(byte_count) AS total FROM runtime_log_streams').fetchone()['total'] or 0
+        total = db.execute("SELECT SUM(byte_count) AS total FROM logs WHERE log_type='stream'").fetchone()['total'] or 0
         if total + len(encoded) > quota:
             raise ApiError('服务器日志容量已满，请清理或扩大日志容量', 507)
         target = directory / f'{seq:012d}.json'
         temporary = target.with_suffix('.tmp')
         temporary.write_bytes(encoded); os.replace(temporary, target)
         if row:
-            db.execute('UPDATE runtime_log_streams SET last_seq=?,byte_count=byte_count+?,updated_at=? WHERE stream_id=?', (seq, len(encoded), stamp(), stream_id))
+            db.execute("UPDATE logs SET seq=?,byte_count=byte_count+?,updated_at=? WHERE log_type='stream' AND log_id=?", (seq, len(encoded), stamp(), stream_id))
         else:
-            db.execute('INSERT INTO runtime_log_streams VALUES (?,?,?,?,?,?)', (stream_id, record_id, runner_id, seq, len(encoded), stamp()))
+            log_records.insert(db,log_records.migrated_row('stream',{'stream_id':stream_id,'record_id':record_id,
+                'runner_id':runner_id,'last_seq':seq,'byte_count':len(encoded),'updated_at':stamp(),**log_records.context(db,record_id)}))
         from .business_task_index import index_batch
         index_batch(db, record, stream_id, seq, cleaned)
     return {'ack': seq}
@@ -505,7 +514,7 @@ def list_records(app, query):
     if since:
         where.append("(requested_at>=? OR updated_at>=? "
                      "OR (kind IN ('run','runner') AND status IN ('checking','running')) "
-                     "OR EXISTS (SELECT 1 FROM runtime_log_streams s WHERE s.record_id=runtime_operations.record_id AND s.updated_at>=?))")
+                     "OR EXISTS (SELECT 1 FROM logs s WHERE s.log_type='stream' AND s.record_id=runtime_operations.record_id AND s.updated_at>=?))")
         args.extend((since, since, since))
     if one('until'):
         where.append('requested_at<=?'); args.append(one('until'))
@@ -533,9 +542,9 @@ def detail(app, identifier):
         if not row:
             raise ApiError('运行记录不存在', 404)
         item = decorate(db, as_record(row))
-        events = db.execute('SELECT * FROM runtime_events WHERE record_id=? ORDER BY occurred_at,event_id', (identifier,)).fetchall()
+        events = log_records.events(db,[identifier])
         item['events'] = [{'eventId': r['event_id'], 'time': r['occurred_at'], 'stage': r['stage'], 'level': r['level'], 'message': r['message'], 'detail': r['detail']} for r in events]
-        item['streams'] = [{'streamId': r['stream_id'], 'lastSeq': r['last_seq'], 'byteCount': r['byte_count'], 'updatedAt': r['updated_at']} for r in db.execute('SELECT * FROM runtime_log_streams WHERE record_id=?', (identifier,)).fetchall()]
+        item['streams'] = [{'streamId': r['stream_id'], 'lastSeq': r['last_seq'], 'byteCount': r['byte_count'], 'updatedAt': r['updated_at']} for r in db.execute(log_records.STREAM_SELECT+' AND record_id=?', (identifier,)).fetchall()]
         run = db.execute('SELECT * FROM program_runs WHERE run_id=?', (identifier,)).fetchone()
         item['run'] = dict(run) if run else None
         item['runs'] = [decorate(db, as_record(r)) for r in db.execute('SELECT * FROM runtime_operations WHERE parent_id=? ORDER BY requested_at', (identifier,)).fetchall()]
@@ -552,7 +561,7 @@ def read_entries(app, identifier, query):
     except ValueError:
         raise ApiError('日志游标无效')
     with app.store.connect() as db:
-        row = db.execute('SELECT * FROM runtime_log_streams WHERE stream_id=?', (identifier,)).fetchone()
+        row = db.execute(log_records.STREAM_SELECT+' AND log_id=?', (identifier,)).fetchone()
         if not row:
             raise ApiError('日志流不存在', 404)
     files = sorted(stream_dir(app, identifier).glob('*.json'))
@@ -583,7 +592,7 @@ def download(app, identifier):
     from .server import ApiError
     check_id(identifier)
     with app.store.connect() as db:
-        stream = db.execute('SELECT last_seq FROM runtime_log_streams WHERE stream_id=?', (identifier,)).fetchone()
+        stream = db.execute(log_records.STREAM_SELECT+' AND log_id=?', (identifier,)).fetchone()
         if not stream:
             raise ApiError('日志流不存在', 404)
     # Bounded downloads; a large log can still be browsed by cursor.
@@ -605,19 +614,18 @@ def download(app, identifier):
 def cleanup(app):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=policy(app)['retentionDays'])).isoformat()
     with LOCK, app.store.connect() as db:
-        rows = db.execute('SELECT stream_id FROM runtime_log_streams WHERE updated_at<? AND byte_count>0', (cutoff,)).fetchall()
+        rows = db.execute(log_records.STREAM_SELECT+' AND updated_at<? AND byte_count>0', (cutoff,)).fetchall()
         for row in rows:
             directory = stream_dir(app, row['stream_id'])
             for p in directory.glob('*.json'):
                 if not p.is_symlink():
                     p.unlink()
-            db.execute('UPDATE runtime_log_streams SET byte_count=0 WHERE stream_id=?', (row['stream_id'],))
+            db.execute("UPDATE logs SET byte_count=0 WHERE log_type='stream' AND log_id=?", (row['stream_id'],))
         old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
         ids = db.execute("SELECT record_id FROM runtime_operations WHERE updated_at<? AND status NOT IN ('pending','running','checking') "
-                         "AND NOT EXISTS (SELECT 1 FROM runtime_log_streams s WHERE s.record_id=runtime_operations.record_id AND s.byte_count>0)", (old,)).fetchall()
+                         "AND NOT EXISTS (SELECT 1 FROM logs s WHERE s.log_type='stream' AND s.record_id=runtime_operations.record_id AND s.byte_count>0)", (old,)).fetchall()
         for row in ids:
-            db.execute('DELETE FROM business_task_executions WHERE record_id=?', (row['record_id'],))
-            db.execute('DELETE FROM runtime_log_streams WHERE record_id=? AND byte_count=0', (row['record_id'],))
-            db.execute('DELETE FROM runtime_events WHERE record_id=?', (row['record_id'],))
+            db.execute("DELETE FROM logs WHERE log_type IN ('collection','event') AND record_id=?", (row['record_id'],))
+            db.execute("DELETE FROM logs WHERE log_type='stream' AND record_id=? AND byte_count=0", (row['record_id'],))
             db.execute('DELETE FROM program_runs WHERE run_id=?', (row['record_id'],))
             db.execute('DELETE FROM runtime_operations WHERE record_id=?', (row['record_id'],))

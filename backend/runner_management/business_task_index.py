@@ -2,6 +2,7 @@
 import json
 import re
 from . import runtime_history as history
+from . import log_records
 
 MARKER = re.compile(r'(?:^|\s)(?:(?:INFO|ERROR)\s+)?任务\s+([A-Za-z0-9_-]{1,128})(?=\s|[：:])')
 TASK_ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
@@ -18,18 +19,21 @@ def index_batch(db, record, stream_id, seq, entries):
             continue
         task_id, message = match.group(1), line['text'][match.end():]
         status = 'failed' if '执行失败' in message else 'completed' if re.match(r'\s*完成[：:]', message) else 'observed'
-        old = db.execute('SELECT seq,line_index,status FROM business_task_executions WHERE task_id=? AND record_id=? AND stream_id=?',
-                         (task_id, record['record_id'], stream_id)).fetchone()
+        identifier=log_records.collection_id(task_id,record['record_id'],stream_id)
+        old = db.execute("SELECT seq,line_index,status FROM logs WHERE log_type='collection' AND log_id=?", (identifier,)).fetchone()
         if old and (old['seq'], old['line_index']) >= (seq, index):
             continue
         if old and status == 'observed' and not re.match(r'\s*·\s*配置\s', message):
             status = old['status']
-        values = (seq, index, line.get('time', ''), status, str(snapshot.get('queue') or '')[:256],
-                  str(snapshot.get('configId') or '')[:20], task_id, record['record_id'], stream_id)
+        value=log_records.migrated_row('collection',{'task_id':task_id,'record_id':record['record_id'],'stream_id':stream_id,
+                'seq':seq,'line_index':index,'occurred_at':line.get('time',''),'status':status,
+                'topic':str(snapshot.get('queue') or '')[:256],'config_id':str(snapshot.get('configId') or '')[:20],
+                '_server_id':record['runner_id'],'_executor_id':record['deployment_id']})
         if old:
-            db.execute('UPDATE business_task_executions SET seq=?,line_index=?,occurred_at=?,status=?,topic=?,config_id=? WHERE task_id=? AND record_id=? AND stream_id=?', values)
+            db.execute("UPDATE logs SET seq=?,line_index=?,occurred_at=?,updated_at=?,status=?,payload=? WHERE log_type='collection' AND log_id=?",
+                       (seq,index,value['occurred_at'],value['updated_at'],status,value['payload'],identifier))
         else:
-            db.execute('INSERT INTO business_task_executions (seq,line_index,occurred_at,status,topic,config_id,task_id,record_id,stream_id) VALUES (?,?,?,?,?,?,?,?,?)', values)
+            log_records.insert(db,value)
         count += 1
     return count
 
@@ -49,18 +53,19 @@ def listing(app, payload):
         requested.setdefault(item['taskId'], set()).add(topic)
     with app.store.connect() as db:
         rows = db.execute('SELECT e.*,o.runner_id,o.runtime_id,o.deployment_id,o.snapshot_json,p.pid,p.entry '
-                          'FROM business_task_executions e JOIN runtime_operations o ON o.record_id=e.record_id '
-                          'JOIN program_runs p ON p.run_id=e.record_id WHERE e.task_id IN (' + ','.join('?' for _ in requested) + ') '
+                          'FROM logs e JOIN runtime_operations o ON o.record_id=e.record_id '
+                          "JOIN program_runs p ON p.run_id=e.record_id WHERE e.log_type='collection' AND e.business_task_id IN (" + ','.join('?' for _ in requested) + ') '
                           'ORDER BY e.occurred_at DESC,e.seq DESC,e.line_index DESC', tuple(requested)).fetchall()
     result = {task_id: [] for task_id in requested}
     for row in rows:
-        topics = requested[row['task_id']]
-        if '' not in topics and row['topic'] and row['topic'] not in topics:
+        topics = requested[row['business_task_id']]
+        metadata=json.loads(row['payload'])
+        if '' not in topics and metadata.get('topic') and metadata['topic'] not in topics:
             continue
         snapshot = json.loads(row['snapshot_json'])
-        result[row['task_id']].append({
+        result[row['business_task_id']].append({
             'recordId': row['record_id'], 'runnerId': row['runner_id'], 'runtimeId': row['runtime_id'],
-            'deploymentId': row['deployment_id'], 'streamId': row['stream_id'], 'pid': row['pid'], 'entry': row['entry'],
+            'deploymentId': row['deployment_id'], 'streamId': metadata.get('streamId',''), 'pid': row['pid'], 'entry': row['entry'],
             'machine': snapshot.get('ipAddress') or snapshot.get('runnerName') or row['runner_id'],
             'runnerName': snapshot.get('runnerName', ''), 'instanceDirectory': snapshot.get('installDirectory', ''),
             'status': row['status'], 'time': row['occurred_at'], 'seq': row['seq'], 'index': row['line_index']})
@@ -70,8 +75,8 @@ def listing(app, payload):
 def backfill(app):
     """Explicit maintenance action, never called by a list request or service startup."""
     with app.store.connect() as db:
-        streams = db.execute("SELECT o.*,s.stream_id,s.last_seq FROM runtime_operations o JOIN runtime_log_streams s "
-                             "ON s.record_id=o.record_id WHERE o.kind='run'").fetchall()
+        streams = db.execute("SELECT o.*,s.log_id AS stream_id,s.seq AS last_seq FROM runtime_operations o JOIN logs s "
+                             "ON s.log_type='stream' AND s.record_id=o.record_id WHERE o.kind='run'").fetchall()
     counts = {'streams': len(streams), 'batches': 0, 'events': 0}
     for record in streams:
         directory = history.stream_dir(app, history.check_id(record['stream_id']))

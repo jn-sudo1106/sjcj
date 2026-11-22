@@ -182,7 +182,7 @@ class GeneratedArchivesTest(unittest.TestCase):
         self.assertTrue(all(row['taskId'] == 'direct-1' and row['configId'] == '101' for row in rows))
         self.assertTrue(all(row['gitCommit'] == result['archive']['gitCommit'] for row in rows))
         with self.app.store.connect() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) AS total FROM generation_jobs').fetchone()['total'], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) AS total FROM jobs WHERE job_type='generation'").fetchone()['total'], 0)
 
     def test_push_retry_does_not_regenerate_and_commit_is_idempotent(self):
         service, repo, origin, payload, calls = self.fixture()

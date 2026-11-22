@@ -55,7 +55,7 @@ class ArtifactStore:
         data = content.getvalue()
         hexdigest = hashlib.sha256(data).hexdigest()
         signature = base64.b64encode(self.private_key.sign(bytes.fromhex(hexdigest))).decode("ascii")
-        path = self.root / f"{hexdigest}.zip"
+        path = self.path('sha256:' + hexdigest)
         if not path.exists():
             path.write_bytes(data)
         return f"sha256:{hexdigest}", signature
@@ -68,13 +68,17 @@ class ArtifactStore:
         info.external_attr = (0o100644 & 0xFFFF) << 16
         return info
 
-    def read(self, digest: str) -> bytes:
+    def path(self, digest: str) -> Path:
         if not digest.startswith("sha256:") or len(digest) != 71:
             raise ValueError("制品摘要无效")
         hex_digest = digest[7:]
         if any(ch not in "0123456789abcdef" for ch in hex_digest):
             raise ValueError("制品摘要无效")
-        data = (self.root / f"{hex_digest}.zip").read_bytes()
+        return self.root / f"{hex_digest}.zip"
+
+    def read(self, digest: str) -> bytes:
+        data = self.path(digest).read_bytes()
+        hex_digest = digest[7:]
         if hashlib.sha256(data).hexdigest() != hex_digest:
             raise ValueError("制品内容与摘要不一致")
         return data

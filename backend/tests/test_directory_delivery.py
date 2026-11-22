@@ -350,9 +350,9 @@ class DirectoryDeliveryTest(unittest.TestCase):
 
     def test_manual_snapshot_and_redelivery_preserve_runtime_and_version_history(self):
         _, view, _, route, shared = self.fixture()
-        tables = ('releases', 'code_versions', 'code_runtime_bindings', 'assignments')
+        tables = ('releases', 'code_runtime_bindings', 'assignments')
         with self.app.store.connect() as db:
-            before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()] for table in tables}
+            before = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table + (" WHERE kind<>'directory'" if table == 'releases' else '')).fetchall()] for table in tables}
         self.assertIsNone(self.latest())
         self.assertEqual(self.runner.get('/api/runners/me/directory-deliveries'), [])
         job = self.request(route, {'revision': view['revision']})
@@ -378,7 +378,10 @@ class DirectoryDeliveryTest(unittest.TestCase):
         self.assertEqual(self.latest()['deliveryId'], repeat['deliveryId'])
         self.assertEqual(len(json.loads((target / 'version.json').read_text(encoding='utf-8'))['versions']), 1)
         with self.app.store.connect() as db:
-            after = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table).fetchall()] for table in tables}
+            after = {table: [dict(row) for row in db.execute('SELECT * FROM ' + table + (" WHERE kind<>'directory'" if table == 'releases' else '')).fetchall()] for table in tables}
+            package = db.execute('SELECT * FROM releases WHERE digest=?', (job['artifactDigest'],)).fetchone()
+            self.assertEqual(package['kind'], 'directory')
+            self.assertEqual(Path(package['artifact_path']).read_bytes(), self.app.artifacts.read(job['artifactDigest']))
         self.assertEqual(before, after)
 
     def test_config_queue_and_website_use_their_own_root_templates(self):

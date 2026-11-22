@@ -1,5 +1,5 @@
 """Append-only operation history; console bodies stay out of the database."""
-TABLES = ('runtime_operations', 'program_runs', 'runtime_events', 'runtime_log_streams', 'business_task_executions', 'model_interface_calls')
+TABLES = ('runtime_operations', 'program_runs', 'logs')
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_operations (
  record_id TEXT PRIMARY KEY, runner_id TEXT NOT NULL, runtime_id TEXT NOT NULL,
@@ -13,26 +13,10 @@ CREATE TABLE IF NOT EXISTS program_runs (
  working_directory TEXT NOT NULL, interpreter TEXT NOT NULL, exit_code INTEGER,
  started_at TEXT, ended_at TEXT, reason TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS runtime_events (
- event_id TEXT PRIMARY KEY, record_id TEXT NOT NULL, occurred_at TEXT NOT NULL,
- stage TEXT NOT NULL, level TEXT NOT NULL, message TEXT NOT NULL, detail TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS runtime_event_record ON runtime_events(record_id, occurred_at);
-CREATE TABLE IF NOT EXISTS runtime_log_streams (
- stream_id TEXT PRIMARY KEY, record_id TEXT NOT NULL, runner_id TEXT NOT NULL,
- last_seq INTEGER NOT NULL, byte_count INTEGER NOT NULL, updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS business_task_executions (
- task_id TEXT NOT NULL, record_id TEXT NOT NULL, stream_id TEXT NOT NULL,
- seq INTEGER NOT NULL, line_index INTEGER NOT NULL, occurred_at TEXT NOT NULL,
- status TEXT NOT NULL, topic TEXT NOT NULL, config_id TEXT NOT NULL,
- PRIMARY KEY(task_id,record_id,stream_id)
-);
-CREATE TABLE IF NOT EXISTS model_interface_calls (
- call_id TEXT PRIMARY KEY, interface_id TEXT NOT NULL, started_at TEXT NOT NULL,
- status TEXT NOT NULL, payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS model_call_interface ON model_interface_calls(interface_id,started_at);
+
+
+
+
 """
 MYSQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ce_runner_runtime_operations (
@@ -47,24 +31,12 @@ CREATE TABLE IF NOT EXISTS ce_runner_program_runs (
  working_directory TEXT NOT NULL, interpreter TEXT NOT NULL, exit_code BIGINT,
  started_at VARCHAR(50), ended_at VARCHAR(50), reason TEXT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_runtime_events (
- event_id CHAR(32) PRIMARY KEY, record_id CHAR(32) NOT NULL, occurred_at VARCHAR(50) NOT NULL,
- stage VARCHAR(50) NOT NULL, level VARCHAR(10) NOT NULL, message TEXT NOT NULL, detail LONGTEXT NOT NULL,
- INDEX event_record (record_id, occurred_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_runtime_log_streams (
- stream_id CHAR(32) PRIMARY KEY, record_id CHAR(32) NOT NULL, runner_id VARCHAR(80) NOT NULL,
- last_seq BIGINT NOT NULL, byte_count BIGINT NOT NULL, updated_at VARCHAR(50) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_business_task_executions (
- task_id VARCHAR(128) NOT NULL, record_id CHAR(32) NOT NULL, stream_id CHAR(32) NOT NULL,
- seq BIGINT NOT NULL, line_index INT NOT NULL, occurred_at VARCHAR(50) NOT NULL,
- status VARCHAR(20) NOT NULL, topic VARCHAR(256) NOT NULL, config_id VARCHAR(20) NOT NULL,
- PRIMARY KEY(task_id,record_id,stream_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS ce_runner_model_interface_calls (
- call_id CHAR(32) PRIMARY KEY, interface_id VARCHAR(100) NOT NULL, started_at VARCHAR(50) NOT NULL,
- status VARCHAR(20) NOT NULL, payload LONGTEXT NOT NULL,
- INDEX model_call_interface (interface_id,started_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
+
 """
+
+from .log_schema import SQLITE_SCHEMA as LOG_SCHEMA, MYSQL_SCHEMA as MYSQL_LOG_SCHEMA
+SQLITE_SCHEMA += LOG_SCHEMA
+MYSQL_SCHEMA += MYSQL_LOG_SCHEMA
