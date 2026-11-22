@@ -34,15 +34,14 @@ watch(() => [sourceId.value, flowId.value, id.value, configId.value, ready.value
   <div data-testid="node-deployment-tab">
     <p v-if="templateDefaults">模板中不指定实际部署机器，请在源的流程节点中配置部署目标。</p>
     <p v-else-if="!ready">请先保存节点配置，并在具体源的流程中选择部署机器。</p>
-    <template v-else>
+    <NodeDeploymentTargets v-else :key="`${sourceId}:${flowId}:${id}:${configId}`" :source-id="sourceId" :flow-id="flowId" :step-id="id" :config-id="configId" :config-type="configType" :queue-name="queue" :archive-id="archive?.archiveId">
       <div class="deployment-code">
         <strong>当前源的生成代码</strong><el-button link :loading="loading" @click="loadArchive">刷新代码</el-button>
         <template v-if="archive"><div>Git 版本：{{ archive.gitCommit.slice(0, 12) }}</div><div v-for="file in archive.files" :key="file.path"><code>{{ file.path }}</code></div></template>
         <p v-else-if="!loading">暂无已归档的生成代码</p>
         <p v-if="error" role="alert">{{ error }}</p>
       </div>
-      <NodeDeploymentTargets :key="`${sourceId}:${flowId}:${id}:${configId}`" :source-id="sourceId" :flow-id="flowId" :step-id="id" :config-id="configId" :config-type="configType" :queue-name="queue" :archive-id="archive?.archiveId" />
-    </template>
+    </NodeDeploymentTargets>
   </div>
 </template>
 

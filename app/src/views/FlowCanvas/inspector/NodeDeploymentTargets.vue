@@ -4,12 +4,22 @@ import { RouterLink } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { prepareDeploymentProcesses } from '@/utils/deploymentProcesses'
-import { runnerManagementApi, type CodeRepository, type DeploymentEnvironment, type DeploymentResourceRule, type NodeDeploymentResource, type NodeDeploymentSettings, type RunnerInstance } from '@/api/runnerManagement'
+import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
+import { runnerManagementApi, type CodeRepository, type DeploymentEnvironment, type DeploymentResourceRule, type GeneratedDeploymentJob, type NodeDeploymentResource, type NodeDeploymentSettings, type RunnerInstance } from '@/api/runnerManagement'
 
 const props = defineProps<{ sourceId: string; flowId: string; stepId: string; configId: string; configType: string; archiveId?: string; queueName?: string }>()
 const auth = useAuthStore(), environment = ref<DeploymentEnvironment>('test')
 const selection = ref<NodeDeploymentResource | null>(null), runners = ref<RunnerInstance[]>([])
 const loading = ref(false), saving = ref(false), busy = ref(false), error = ref('')
+const deployedJobs = ref<GeneratedDeploymentJob[]>([]), deployedLoading = ref(false), deployedError = ref('')
+const deployedResources = computed(() => {
+  const byRunner = new Map<string, GeneratedDeploymentJob>()
+  for (const job of [...deployedJobs.value].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
+    if (job.runnerId && !byRunner.has(job.runnerId)) byRunner.set(job.runnerId, job)
+  }
+  return [...byRunner.values()]
+})
+const deployedResourceName = (job: GeneratedDeploymentJob) => selection.value?.resources.find(item => item.resourceId === (job.resourceId || job.targetResourceId) || item.runnerId === job.runnerId)?.resourceName || job.runnerName || '部署资源'
 const deploymentStatus = ref('')
 const repositories = ref<CodeRepository[]>([]), followGeneration = ref(true)
 const emptySettings = (): NodeDeploymentSettings => ({ repositoryId: '', sourceDirectory: '', deploymentDirectory: '' })
@@ -95,6 +105,7 @@ onActivated(() => { if (stopped) { stopped = false; saving.value = false; busy.v
 async function load(background = false) {
   const seq = ++sequence, scope = context()
   if (!background) loading.value = true
+  void loadDeployed(seq, scope, background)
   try {
     if (!background) await settingsWrites
     if (seq !== sequence || stopped) return
@@ -107,6 +118,25 @@ async function load(background = false) {
   } catch (e) { if (seq === sequence && !stopped) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (seq === sequence) loading.value = false }
 }
+async function loadDeployed(seq: number, scope: ReturnType<typeof context>, background: boolean) {
+  if (!background) deployedLoading.value = true
+  try {
+    const items: GeneratedDeploymentJob[] = []
+    let page = 1, total = 0
+    do {
+      const result = await runnerManagementApi.generatedDeployments({ sourceId: scope.sourceId, flowId: scope.flowId,
+        stepId: scope.stepId, configId: scope.configId, environment: scope.environment, status: 'success', page, size: 100 })
+      if (seq !== sequence || stopped) return
+      items.push(...result.items)
+      total = result.total
+      page++
+      if (!result.items.length) break
+    } while (items.length < total)
+    deployedJobs.value = items
+    deployedError.value = ''
+  } catch (e) { if (seq === sequence && !stopped) deployedError.value = e instanceof Error ? e.message : String(e) }
+  finally { if (seq === sequence) deployedLoading.value = false }
+}
 function poll() {
   clearTimeout(timer)
   timer = setTimeout(async () => { if (!saving.value && !busy.value && !settingsDirty.value) await load(true); if (!stopped) poll() }, 10000)
@@ -114,6 +144,7 @@ function poll() {
 watch(() => [props.sourceId, props.flowId, props.stepId, props.configId, props.configType, props.queueName, props.archiveId, environment.value], () => {
   flushSettings(); revisionState = { revision: '' }; settingsStatus.value = '修改后自动保存'
   sequence++; operation++; selection.value = null; error.value = ''; saving.value = false; busy.value = false
+  deployedJobs.value = []; deployedError.value = ''; deployedLoading.value = false
   resetSettings()
   void load(); poll()
 }, { immediate: true })
@@ -184,6 +215,18 @@ async function deploy() {
       <el-button size="small" :loading="loading" :disabled="saving || busy || settingsDirty" @click="load()">刷新部署信息</el-button>
       <RouterLink :to="{ path: '/settings', query: { tab: 'runners', view: 'resources' } }" target="_blank">管理部署资源</RouterLink>
     </div>
+    <section class="dt-deployed" data-testid="node-deployed-resources">
+      <div class="dt-deployed-head"><strong>已部署资源</strong><small>按成功部署回执显示，不代表机器当前在线</small></div>
+      <p v-if="deployedLoading && !deployedResources.length" role="status">正在查询已部署资源…</p>
+      <el-alert v-if="deployedError" :title="`已部署资源加载失败：${deployedError}`" type="error" :closable="false" show-icon />
+      <div v-for="job in deployedResources" :key="job.runnerId" class="dt-deployed-row" data-testid="deployed-resource-row">
+        <div class="dt-deployed-name"><strong>{{ deployedResourceName(job) }}</strong><span>{{ job.runnerIp || runners.find(item => item.runnerId === job.runnerId)?.ipAddress || job.runnerId }}</span></div>
+        <code :title="job.installedPath || job.targetPath">{{ job.installedPath || job.targetPath || '部署目录未记录' }}</code>
+        <div class="dt-deployed-meta"><span>Git {{ job.gitCommit.slice(0, 12) }}</span><time>{{ formatRunnerDateTime(job.updatedAt) }}</time></div>
+      </div>
+      <p v-if="!deployedLoading && !deployedError && !deployedResources.length">当前节点在{{ environment === 'test' ? '测试' : '生产' }}环境暂无成功部署记录。</p>
+    </section>
+    <slot />
     <p>选择部署资源后自动保存，支持多选。每台机器生成一个独立部署任务，可在任务中心查看结果和重试。</p>
     <label class="dt-default"><input type="checkbox" :checked="useDefault" :disabled="!canEdit || settingsDirty" data-testid="deployment-follow-default" @change="toggleDefault" /> 使用默认部署资源</label>
     <div class="dt-resources">
@@ -200,8 +243,7 @@ async function deploy() {
     </div>
     <p v-if="!loading && !choices.length">当前节点类型和环境没有可用部署资源，请先添加。</p>
     <p v-if="unavailable" role="alert">部分已选部署资源已停用或不适用，请重新选择部署目标。</p>
-    <p v-if="!selectedIds.length">未选择部署机器，生成代码后不会自动下发到指定机器。</p>
-    <p v-else-if="environment === 'test'">生成并提交代码成功后，按已保存的测试目标分别创建部署任务；修改目标不会中断已经执行的任务。</p>
+    <p v-if="environment === 'test' && selectedIds.length">生成并提交代码成功后，按已保存的测试目标分别创建部署任务；修改目标不会中断已经执行的任务。</p>
     <div class="dt-settings">
       <strong>部署任务配置</strong>
       <label class="dt-default"><input type="checkbox" :checked="followGeneration" :disabled="!canEdit" data-testid="deployment-follow-generation" @change="changeFollowGeneration" /> 仅部署本次生成的文件</label>
@@ -269,5 +311,11 @@ p, small { color:var(--el-text-color-secondary); }
 .dt-actual-targets>div { display:grid; gap:3px; }
 .dt-actual-targets code { overflow-wrap:anywhere; white-space:normal; }
 .dt-error, [role=alert] { color:var(--el-color-danger); }
+.dt-deployed { display:grid; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid var(--el-border-color-lighter); }
+.dt-deployed-head, .dt-deployed-name, .dt-deployed-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+.dt-deployed-head small, .dt-deployed-meta { color:var(--el-text-color-secondary); }
+.dt-deployed-row { display:grid; gap:5px; padding:9px 10px; border:1px solid var(--el-border-color-lighter); border-radius:6px; min-width:0; }
+.dt-deployed-name strong { color:var(--el-text-color-primary); }
+.dt-deployed-row code { overflow-wrap:anywhere; white-space:normal; }
 a { color:var(--el-color-primary); }
 </style>
