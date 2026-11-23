@@ -14,6 +14,7 @@ import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
+import { isSourceWithoutFlowError } from '@/utils/source/noFlow'
 import { loadFlowFileTables, mergeFileTableCandidates, pickTableWithFiles } from '@/utils/file/fileTables'
 
 // 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
@@ -47,6 +48,8 @@ const nodeFilterActive = ref(false)
 // 所以轨道按**数据是否解析得出节点**动态开合，而不是写死只读：解析得出就是真筛选器，
 // 解析不出就保持只读，免得点了换高亮、结果纹丝不动。数据侧补齐后无需改代码自动生效。
 const steps = ref<Step[]>([])
+/** 源还没绑定流程：没有任何节点产出文件，不再兜底列出全局 file_resource 表 */
+const noFlow = ref(false)
 /** Step.configId → 画布节点 ID(stepId)；建映射时丢掉没有 configId 的步骤。 */
 const configToNode = computed(() => {
   const map = new Map<string, string>()
@@ -77,12 +80,15 @@ const railNote = computed(() => {
 
 async function loadSteps() {
   const id = sourceId.value
+  noFlow.value = false
   if (!id) { steps.value = []; return }
   try {
     steps.value = await sourceApi.sourceSteps(id)
-  } catch {
-    // 步骤查不到（迁移源在平台里不存在时接口会 500）不阻断文件列表，只是轨道退回只读
+  } catch (e) {
+    // 步骤查不到（迁移源在平台里不存在时接口会 500）不阻断文件列表，只是轨道退回只读；
+    // 「源未绑定有效流程」是新源还没配置，不是迁移源，直接显示空状态
     steps.value = []
+    noFlow.value = isSourceWithoutFlowError(e)
   }
 }
 
@@ -133,7 +139,7 @@ async function loadResourceTable() {
   total.value = 0
   error.value = ''
   listError.value = ''
-  if (!sourceId.value) return
+  if (!sourceId.value || noFlow.value) return
   tableLoading.value = true
   try {
     // 流程节点输出的文件表（表名不带 file_resource 也算，0929 站 124 的 pdf文件表）排前面，
@@ -347,7 +353,8 @@ function openPreview(file: FileResourceRecord) {
              挤到了第二行。 -->
         <div class="fv-tablehead">
           <span class="fv-toolbar-note" data-testid="file-resource-table">
-            <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
+            <span v-if="noFlow" data-testid="file-no-flow">该源还没有绑定流程，暂无文件；在「流程」视图新建流程并运行后再查看</span>
+            <span v-else-if="tableLoading">正在定位 file_resource 文件资源表…</span>
             <span v-else-if="error" class="fv-error">{{ error }}</span>
             <span v-else-if="tableCandidates.length <= 1">数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
           </span>

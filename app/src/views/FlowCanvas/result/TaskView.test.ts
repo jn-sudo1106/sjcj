@@ -384,6 +384,28 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
+  it('源还没绑定流程（步骤接口报「源未绑定有效流程」）：按无节点处理，不弹「加载流程节点失败」', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([{ sourceId: 's1', name: '源一' }] as never)
+    vi.spyOn(sourceApi, 'sourceSteps').mockRejectedValue(new Error('请求异常 [item/next/nextConfigPaged]: 错误信息:运行时异常：源未绑定有效流程，sourceId=s1'))
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+    const warn = vi.spyOn(ElMessage, 'warning')
+
+    const wrapper = shallowMount(TaskView, {
+      props: { siteWide: true, siteId: 'site-zfb' },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+    await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+
+    expect(warn).not.toHaveBeenCalledWith('加载流程节点失败')
+    wrapper.unmount()
+  })
+
   // 节点 ID 是源内的，换了源就不成立；回到「全部源」时节点下拉不再渲染，
   // 旧值若留着就成了看不见也清不掉的隐形筛选。
   it('网站态：从具体源回到全部源时，节点筛选被清掉，不再带进查询', async () => {
