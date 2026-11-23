@@ -10,7 +10,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 FIELDS = ('artifact_id', 'artifact_type', 'task_type', 'task_id', 'name',
           'machine_path', 'repo_id', 'git_path', 'git_commit', 'sha256',
-          'created_at', 'updated_at', 'payload')
+          'created_at', 'updated_at', 'payload', 'source_id', 'flow_id', 'config_id', 'output_files')
 ASSET_FIELDS = ('code_id', 'config_id', 'queue_name', 'site_host', 'storage_path',
                 'created_at', 'repo_id', 'config_type', 'directory_id')
 RELEASE_FIELDS = ('digest', 'kind', 'name', 'platform', 'git_commit', 'status',
@@ -34,17 +34,19 @@ def task_link(db, kind, identifier):
 
 def save(db, identifier, artifact_type, metadata, *, task_type=None, task_id=None,
          machine_path='', repo_id='', git_path='', git_commit='', sha256='',
-         name='', created_at=None, insert_only=False):
+         name='', created_at=None, insert_only=False, source_id='', flow_id='', config_id='', output_files=None):
     task_type, task_id = task_link(db, task_type, task_id)
     values = (identifier, artifact_type, task_type, task_id, name, machine_path,
               repo_id, git_path, git_commit, sha256, created_at or timestamp(),
-              timestamp(), json.dumps(metadata, ensure_ascii=False, separators=(',', ':')))
+              timestamp(), json.dumps(metadata, ensure_ascii=False, separators=(',', ':')),
+              source_id, flow_id, config_id, json.dumps(output_files or [], ensure_ascii=False, separators=(',', ':')))
     result = db.execute('INSERT OR IGNORE INTO artifacts (' + ','.join(FIELDS) +
                         ') VALUES (' + ','.join('?' for _ in FIELDS) + ')', values)
     if not insert_only:
         # Never delete/reinsert: assignments reference immutable package IDs.
-        db.execute('UPDATE artifacts SET ' + ','.join(field + '=?' for field in FIELDS[1:10]) +
-                   ',updated_at=?,payload=? WHERE artifact_id=?', (*values[1:10], values[11], values[12], identifier))
+        changes = [(field, value) for field, value in zip(FIELDS, values) if field not in ('artifact_id', 'created_at')]
+        db.execute('UPDATE artifacts SET ' + ','.join(field + '=?' for field, _ in changes) + ' WHERE artifact_id=?',
+                   (*[value for _, value in changes], identifier))
     return result
 
 
@@ -52,7 +54,7 @@ def save_asset(db, values):
     row = {name: values.get(name, '') for name in ASSET_FIELDS}
     return save(db, 'asset:' + row['code_id'], 'code_identity', row,
                 name=row['site_host'] or row['queue_name'], repo_id=row['repo_id'],
-                git_path=row['storage_path'], created_at=row['created_at'])
+                git_path=row['storage_path'], created_at=row['created_at'], config_id=row['config_id'])
 
 
 def patch_asset(db, code_id, **changes):
@@ -84,6 +86,15 @@ def sync_archive(db, record):
     path_class = PureWindowsPath if '\\' in root or PureWindowsPath(root).drive else PurePosixPath
     prefix = (record.get('repositoryPrefix') or '').strip('/')
     from .generated_archives import changed_files
+    context = record.get('sourceContext') or {}
+    if not context and record.get('taskId'):
+        job = db.execute("SELECT payload FROM jobs WHERE job_type='generation' AND job_id=?", (record['taskId'],)).fetchone()
+        context = json.loads(job['payload']) if job else {}
+    if not context.get('sourceId'):
+        relation = db.execute('SELECT source_id,flow_id,step_id FROM source_code_relations WHERE archive_id=? LIMIT 1',
+                              (record['archiveId'],)).fetchone()
+        if relation:
+            context = dict(sourceId=relation['source_id'], flowId=relation['flow_id'], stepId=relation['step_id'])
     files = changed_files(record, record.get('files', []))
     identity_prefix = 'file:' + record['archiveId'] + ':'
     if isinstance(record.get('beforeCodeFiles'), dict):
@@ -101,36 +112,38 @@ def sync_archive(db, record):
         identifier = identity_prefix + hashlib.sha256(path.encode('utf8')).hexdigest()
         metadata = {key: value for key, value in file.items() if key != 'data'}
         metadata.update(archiveId=record['archiveId'], archiveStatus=record.get('status', ''),
-                        pushed=bool(record.get('pushed')), sourceTaskId=record.get('taskId', ''))
+                        pushed=bool(record.get('pushed')), sourceTaskId=record.get('taskId', ''),
+                        stepId=context.get('stepId', ''), directoryId=record.get('directoryId', ''), serverId=record.get('serverId', ''))
         save(db, identifier, 'code', metadata, task_type='generation', task_id=record.get('taskId'),
              name=PurePosixPath(path or relative).name,
              machine_path=str(path_class(root) / relative) if root and relative else file.get('serverPath', ''),
              repo_id=record.get('repoId', ''), git_path=path, git_commit=record.get('gitCommit', ''),
-             sha256=file.get('sha256', ''), created_at=record.get('createdAt'))
+             sha256=file.get('sha256', ''), created_at=record.get('createdAt'), source_id=context.get('sourceId', ''),
+             flow_id=context.get('flowId', ''), config_id=record.get('configId', ''),
+             output_files=[{'path': relative, 'gitPath': path, 'sha256': file.get('sha256', ''), 'size': file.get('size')}])
 
 
 def sync_delivery(db, job):
-    """A reused package remains an output of each deployment task separately."""
-    delivery_id = job.get('deliveryId', '')
-    if not delivery_id:
-        return
-    row = db.execute('SELECT artifact_digest FROM directory_deliveries WHERE delivery_id=?', (delivery_id,)).fetchone()
-    package = db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (row['artifact_digest'],)).fetchone() if row else None
-    if not package:
-        return
-    metadata = json.loads(package['payload'])
-    metadata.update(packageId=package['artifact_id'], deliveryId=delivery_id)
-    save(db, 'output:' + job['jobId'] + ':' + package['sha256'], 'package', metadata,
-         task_type='deployment', task_id=job['jobId'], name=package['name'],
-         machine_path=package['machine_path'], repo_id=package['repo_id'], git_path=package['git_path'],
-         git_commit=package['git_commit'], sha256=package['sha256'], created_at=job.get('createdAt'))
+    """A successful Runner receipt produces a deployed directory, not a ZIP path."""
+    from .deployment_outputs import record
+    return record(db, job, job.get('deliveryId', ''))
 
 
 def backfill_outputs(db):
+    for row in db.execute("SELECT payload FROM artifacts WHERE artifact_type='code_identity' AND config_id='' ").fetchall():
+        save_asset(db, json.loads(row['payload']))
     for row in db.execute('SELECT setting_value FROM settings WHERE setting_key LIKE ?', ('generated-code-result:%',)).fetchall():
         sync_archive(db, json.loads(row['setting_value']))
-    for row in db.execute("SELECT payload FROM jobs WHERE job_type='deployment' AND delivery_id<>''").fetchall():
-        sync_delivery(db, json.loads(row['payload']))
+    from .deployment_outputs import backfill
+    backfill(db)
+
+
+def ensure_outputs(db):
+    """Commit the completion marker only after all historical outputs are copied."""
+    marker = 'artifact-node-outputs:v1'
+    if not db.execute('SELECT 1 FROM settings WHERE setting_key=?', (marker,)).fetchone():
+        backfill_outputs(db)
+        db.execute('INSERT INTO settings(setting_key,setting_value) VALUES (?,?)', (marker, 'complete'))
 
 
 def view_columns(fields, mysql=False):

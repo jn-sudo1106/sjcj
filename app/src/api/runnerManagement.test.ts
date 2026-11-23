@@ -9,6 +9,21 @@ afterEach(() => {
 })
 
 describe('Runner 管理接口', () => {
+  it('节点生成文件从产出表查询，同时保留智能体路径和 Git 路径', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ status: 200, ok: true, json: async () => ({ total: 1, items: [{
+      artifactId: 'file:archive:hash', archiveId: 'archive', directoryId: 'dir', repositoryId: 'repo',
+      gitPath: 'links/101/site.py', machinePath: 'D:/workspace/101/code/site.py', serverId: 'agent',
+      gitCommit: 'commit', status: 'committed',
+    }] }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    const context = { sourceId: '100', flowId: '200', stepId: '300', configId: '101' }
+    const result = await runnerManagementApi.sourceCodeRelations(context)
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]), 'http://localhost')
+    expect(url.pathname).toBe('/api/runner-management/artifacts')
+    for (const [key, value] of Object.entries(context)) expect(url.searchParams.get(key)).toBe(value)
+    expect(url.searchParams.get('artifactType')).toBe('code')
+    expect(result.items[0]).toMatchObject({ filePath: 'links/101/site.py', serverPath: 'D:/workspace/101/code/site.py', serverId: 'agent' })
+  })
   it.each([
     ['服务包', () => runnerManagementApi.downloadCodeServerPackage('linux')],
     ['升级接入包', () => runnerManagementApi.downloadCodeServerMigrationPackage('linux')],

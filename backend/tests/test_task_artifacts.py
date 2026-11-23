@@ -60,7 +60,7 @@ class TaskArtifactsTest(unittest.TestCase):
             attach_code(db, digest, code_id='code', repo_id='repo', repository_storage_path='old/main.py')
             artifacts.patch_asset(db, 'code', storage_path='new/main.py')
             db.execute("INSERT INTO runners(runner_id,name,ip_address,install_directory,platform,capabilities,token_hash,status) VALUES ('r','r','ip','root','any','[]','hash','online')")
-            db.execute("INSERT INTO directory_deliveries(delivery_id,binding_type,owner_key,owner_id,runner_id,layout_revision,artifact_digest,signature,target_path,status,requested_at) VALUES ('d','deployment','key','owner','r','rev',?,?,'dir','completed','date')", (digest, signature))
+            db.execute("INSERT INTO directory_deliveries(delivery_id,binding_type,owner_key,owner_id,runner_id,layout_revision,artifact_digest,signature,target_path,status,requested_at,installed_path) VALUES ('d','deployment','key','owner','r','rev',?,?,'dir','success','date','D:/Runner/dir')", (digest, signature))
             for identifier in ('first', 'second'):
                 self.job(db, 'deployment', identifier)
                 artifacts.sync_delivery(db, {'jobId':identifier,'deliveryId':'d','createdAt':'date'})
@@ -79,7 +79,7 @@ class TaskArtifactsTest(unittest.TestCase):
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 self.assertIn('artifacts', tables)
                 self.assertFalse({'releases','code_assets'} & tables)
-                self.assertEqual(len(db.execute('PRAGMA table_info(artifacts)').fetchall()), 13)
+                self.assertEqual(len(db.execute('PRAGMA table_info(artifacts)').fetchall()), 17)
                 self.assertEqual(list(db.execute('PRAGMA foreign_key_check')), [])
                 for table in ('assignments', 'code_runtime_bindings'):
                     self.assertIn('artifacts', {row['table'] for row in db.execute('PRAGMA foreign_key_list('+table+')')})

@@ -136,6 +136,9 @@ def update(db, identifier, *, status, expected_status=None, **changes):
                        *((path, expected_status) if expected_status else ())))
     if result.rowcount:
         flush(db, job)
+        if status == 'success':
+            from .deployment_outputs import record
+            record(db, job, identifier)
     return result
 
 

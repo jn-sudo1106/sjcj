@@ -9,7 +9,7 @@ import { runnerManagementApi, type DeploymentResourceRule } from '@/api/runnerMa
 import NodeDeploymentTargets from './NodeDeploymentTargets.vue'
 
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
-  nodeDeploymentResource: vi.fn(), saveNodeDeploymentResource: vi.fn(), instances: vi.fn(), generatedDeployments: vi.fn(),
+  nodeDeploymentResource: vi.fn(), saveNodeDeploymentResource: vi.fn(), instances: vi.fn(), artifacts: vi.fn(), generatedDeployments: vi.fn(),
   runtimeConfigurations: vi.fn(), deployGeneratedArchive: vi.fn(), generatedDeploymentAction: vi.fn(),
   codeRepositories: vi.fn(), previewNodeDeploymentResource: vi.fn(),
 } }))
@@ -32,7 +32,7 @@ beforeEach(() => {
     { runnerId: 'runner1', ipAddress: '192.168.1.201', status: 'online', installDirectory: 'D:/Runner2/instance' },
     { runnerId: 'runner2', ipAddress: '192.168.1.172', status: 'online', installDirectory: 'D:/Runner/instance' },
   ] as never)
-  vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ items: [], total: 0 })
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ items: [], total: 0 })
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([])
   vi.mocked(runnerManagementApi.previewNodeDeploymentResource).mockResolvedValue(choice(['r1']))
 })
@@ -61,25 +61,27 @@ it('节点配置只读取成功部署回执作为资源摘要，不展示任务�
   const w = await setup()
   expect(w.text()).not.toContain('最近部署任务')
   expect(w.find('[data-testid^="deployment-job-"]').exists()).toBe(false)
-  expect(runnerManagementApi.generatedDeployments).toHaveBeenCalledWith(expect.objectContaining({
+  expect(runnerManagementApi.artifacts).toHaveBeenCalledWith(expect.objectContaining({
     sourceId: context.sourceId, flowId: context.flowId, stepId: context.stepId, configId: context.configId,
-    environment: 'test', status: 'success', page: 1, size: 100,
+    environment: 'test', artifactType: 'deployment', status: 'success', page: 1, size: 100,
   }))
   expect(runnerManagementApi.runtimeConfigurations).not.toHaveBeenCalled()
+  expect(runnerManagementApi.generatedDeployments).not.toHaveBeenCalled()
   expect(w.findAll('a').some(item => item.text() === '查看部署任务')).toBe(false)
 })
 it('按机器展示最近一次成功部署的资源、目录和版本，与目标选择无关', async () => {
   vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue(choice(['r1']))
-  vi.mocked(runnerManagementApi.generatedDeployments).mockResolvedValue({ total: 3, items: [
-    { jobId: 'new', runnerId: 'runner1', resourceId: 'r1', runnerIp: '192.168.1.201', installedPath: 'D:/new', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
-    { jobId: 'other', runnerId: 'runner2', resourceId: 'r2', runnerIp: '192.168.1.172', installedPath: 'D:/other', gitCommit: 'b'.repeat(40), updatedAt: '2026-11-21T10:00:00Z', status: 'success' },
-    { jobId: 'old', runnerId: 'runner1', resourceId: 'r1', runnerIp: '192.168.1.201', installedPath: 'D:/old', gitCommit: 'c'.repeat(40), updatedAt: '2026-11-20T10:00:00Z', status: 'success' },
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 3, items: [
+    { artifactId: 'new', serverId: 'runner1', resourceId: 'r1', serverIp: '192.168.1.201', machinePath: 'D:/new', outputFiles: [{ path: 'sites/site.py', sha256: 'f'.repeat(64) }], gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
+    { artifactId: 'other', serverId: 'runner2', resourceId: 'r2', serverIp: '192.168.1.172', machinePath: 'D:/other', gitCommit: 'b'.repeat(40), updatedAt: '2026-11-21T10:00:00Z', status: 'success' },
+    { artifactId: 'old', serverId: 'runner1', resourceId: 'r1', serverIp: '192.168.1.201', machinePath: 'D:/old', gitCommit: 'c'.repeat(40), updatedAt: '2026-11-20T10:00:00Z', status: 'success' },
   ] as never })
   const w = await setup()
   const rows = w.findAll('[data-testid="deployed-resource-row"]')
   expect(rows).toHaveLength(2)
   expect(rows[0].text()).toContain('201 资源')
   expect(rows[0].text()).toContain('D:/new')
+  expect(rows[0].text()).toContain('sites/site.py')
   expect(rows[0].text()).not.toContain('D:/old')
   expect(rows[1].text()).toContain('172 资源')
   expect(rows[1].text()).toContain('D:/other')
@@ -87,19 +89,19 @@ it('按机器展示最近一次成功部署的资源、目录和版本，与目�
   expect(w.find('[data-testid="node-deployed-resources"]').element.compareDocumentPosition(w.find('[data-testid="deployment-resource-select"]').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 it('翻页读取成功回执，避免旧部署资源落在第一页之外时漏显', async () => {
-  const previous = Array.from({ length: 100 }, (_, index) => ({ jobId: `job-${index}`, runnerId: 'runner1',
+  const previous = Array.from({ length: 100 }, (_, index) => ({ artifactId: `job-${index}`, serverId: 'runner1',
     resourceId: 'r1', gitCommit: 'a'.repeat(40), updatedAt: `2026-11-22T10:00:${String(index).padStart(2, '0')}Z`, status: 'success' }))
-  vi.mocked(runnerManagementApi.generatedDeployments)
+  vi.mocked(runnerManagementApi.artifacts)
     .mockResolvedValueOnce({ total: 101, items: previous as never })
-    .mockResolvedValueOnce({ total: 101, items: [{ jobId: 'older-machine', runnerId: 'runner2', resourceId: 'r2',
-      installedPath: 'D:/older-machine', gitCommit: 'b'.repeat(40), updatedAt: '2026-11-20T10:00:00Z', status: 'success' }] as never })
+    .mockResolvedValueOnce({ total: 101, items: [{ artifactId: 'older-machine', serverId: 'runner2', resourceId: 'r2',
+      machinePath: 'D:/older-machine', gitCommit: 'b'.repeat(40), updatedAt: '2026-11-20T10:00:00Z', status: 'success' }] as never })
   const w = await setup()
-  expect(runnerManagementApi.generatedDeployments).toHaveBeenNthCalledWith(2, expect.objectContaining({ page: 2 }))
+  expect(runnerManagementApi.artifacts).toHaveBeenNthCalledWith(2, expect.objectContaining({ page: 2 }))
   expect(w.findAll('[data-testid="deployed-resource-row"]')).toHaveLength(2)
   expect(w.get('[data-testid="node-deployed-resources"]').text()).toContain('D:/older-machine')
 })
 it('成功部署记录查询失败时保留部署目标配置，并单独提示读取失败', async () => {
-  vi.mocked(runnerManagementApi.generatedDeployments).mockRejectedValue(new Error('部署记录接口不可用'))
+  vi.mocked(runnerManagementApi.artifacts).mockRejectedValue(new Error('部署记录接口不可用'))
   const w = await setup()
   expect(w.get('[data-testid="node-deployed-resources"]').text()).toContain('部署记录接口不可用')
   expect(w.find('[data-testid="deploy-selected-machines"]').exists()).toBe(true)
@@ -258,7 +260,141 @@ it('切换 Git 地址或目录后显示各机器的实际部署目录，并忽�
   })
   const panel = w.get('[data-testid="deployment-actual-directories"]')
   expect(panel.text()).toContain('192.168.1.201'); expect(panel.text()).toContain('D:/Runner2/instance/apps/latest')
+  expect(panel.get('.dt-path-code').attributes('title')).toBe('D:/Runner2/instance/apps/latest')
   finishOld({ ...choice(['r1']), targets: [{ resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: 'D:/old' }] }); await flushPromises()
   expect(panel.text()).not.toContain('D:/old')
   expect(runnerManagementApi.saveNodeDeploymentResource).not.toHaveBeenCalled()
+})
+it('对比最新归档与已部署版本显示状态，高级配置默认折叠并支持统一刷新', async () => {
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({ ...choice(['r1']), entryPoint: 'bin/newslink.exe' })
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 1, items: [
+    { artifactId: 'j1', serverId: 'runner1', resourceId: 'r1', serverIp: '192.168.1.201', machinePath: 'D:/Runner2/instance/links/1401218', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
+  ] as never })
+  const w = await setup()
+  await w.setProps({ archiveCommit: 'a'.repeat(40) }); await flushPromises()
+  expect(w.text()).toContain('与已部署一致')
+  await w.setProps({ archiveCommit: 'b'.repeat(40) }); await flushPromises()
+  expect(w.text()).toContain('有新代码待部署')
+
+  const collapseBtn = w.get('.dt-collapse-head')
+  expect(collapseBtn.attributes('aria-expanded')).toBe('false')
+  expect(w.get('.dt-collapse-summary').text()).toContain('入口 bin/newslink.exe')
+  await collapseBtn.trigger('click')
+  expect(collapseBtn.attributes('aria-expanded')).toBe('true')
+
+  await w.get('.dt-toolbar-actions button').trigger('click'); await flushPromises()
+  expect(w.emitted('refresh-archive')).toHaveLength(1)
+})
+it('同版本换目录时汇总与目标均提示目录待更新，且仍提交该目标', async () => {
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({
+    ...choice(['r1']), targets: [{ resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: 'D:\\Runner2\\instance\\links\\1401218\\sites' }],
+  })
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 1, items: [
+    { artifactId: 'j1', serverId: 'runner1', resourceId: 'r1', machinePath: 'D:\\Runner2\\instance\\links\\1401218', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
+  ] as never })
+  vi.mocked(runnerManagementApi.deployGeneratedArchive).mockResolvedValue({ items: [{ jobId: 'job1' }] } as never)
+  const w = await setup(); await w.setProps({ archiveCommit: 'a'.repeat(40) }); await flushPromises()
+  expect(w.get('.dt-pill').text()).toBe('部署目录待更新')
+  const badge = w.get('[data-testid="deployment-actual-directories"] .dt-target-badge')
+  expect(badge.text()).toBe('目录待更新')
+  expect(badge.attributes('title')).toContain('代码版本 aaaaaaaaaaaa 相同')
+  expect(badge.attributes('title')).toContain('目标目录：D:\\Runner2\\instance\\links\\1401218\\sites')
+  expect(w.text()).not.toContain('与已部署一致')
+  await w.get('[data-testid="deploy-selected-machines"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.deployGeneratedArchive).toHaveBeenCalledWith(expect.objectContaining({ resourceIds: ['r1'] }))
+})
+it('汇总只比较所选目标，并将 Runner 内相对目录与 Windows 绝对目录按同一路径判断', async () => {
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({
+    ...choice(['r1']), targets: [{ resourceId: 'r1', runnerId: 'runner1', targetPath: 'links/1401218' }],
+  })
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 2, items: [
+    { artifactId: 'j1', serverId: 'runner1', resourceId: 'r1', machinePath: 'd:\\RUNNER2\\instance\\links\\1401218\\', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
+    { artifactId: 'j2', serverId: 'runner2', resourceId: 'r2', machinePath: 'D:/old', gitCommit: 'b'.repeat(40), updatedAt: '2026-11-22T09:00:00Z', status: 'success' },
+  ] as never })
+  const w = await setup(); await w.setProps({ archiveCommit: 'a'.repeat(40) }); await flushPromises()
+  expect(w.get('.dt-pill').text()).toBe('与已部署一致')
+  expect(w.get('[data-testid="deployment-actual-directories"] .dt-target-badge').text()).toBe('与已部署一致')
+  expect(w.findAll('[data-testid="deployed-resource-row"]')).toHaveLength(2)
+})
+it('切换仅部署生成文件只更新当前方案对比，保存后历史成功回执保持不变且不创建部署任务', async () => {
+  const settings = { repositoryId: 'repo1', sourceDirectory: 'links/1401218/sites', deploymentDirectory: '' }
+  const plan = (deploymentSettings: typeof settings) => {
+    const path = deploymentSettings.repositoryId ? 'links/1401218/sites' : 'links/1401218'
+    return { ...choice(['r1']), gitDirectory: 'links/1401218/sites', deploymentSettings, targetPath: path,
+      targets: [{ resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: `D:/Runner2/instance/${path}` }] }
+  }
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue(plan(settings))
+  vi.mocked(runnerManagementApi.previewNodeDeploymentResource).mockImplementation(async (_scope, settings) => plan(settings))
+  vi.mocked(runnerManagementApi.saveNodeDeploymentResource).mockImplementation(async body => ({ ...plan(body.deploymentSettings!), revision: 'rev2' }))
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 1, items: [
+    { artifactId: 'j1', serverId: 'runner1', resourceId: 'r1', machinePath: 'D:/Runner2/instance/links/1401218', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
+  ] as never })
+  const w = await setup(); await w.setProps({ archiveCommit: 'a'.repeat(40) }); await flushPromises()
+  const receipt = w.get('[data-testid="deployed-resource-row"]').text()
+  expect(receipt).toContain('部署成功')
+  expect(w.get('.dt-pill').text()).toBe('部署目录待更新')
+  vi.useFakeTimers()
+  await w.get('[data-testid="deployment-follow-generation"]').setValue(true)
+  await vi.advanceTimersByTimeAsync(750); await flushPromises()
+  expect(w.get('.dt-pill').text()).toBe('与已部署一致')
+  expect(w.get('[data-testid="deployed-resource-row"]').text()).toBe(receipt)
+  await w.get('[data-testid="deployment-follow-generation"]').setValue(false)
+  await vi.advanceTimersByTimeAsync(750); await flushPromises()
+  expect(w.get('.dt-pill').text()).toBe('部署目录待更新')
+  expect(w.get('[data-testid="deployed-resource-row"]').text()).toBe(receipt)
+  expect(runnerManagementApi.deployGeneratedArchive).not.toHaveBeenCalled()
+})
+it('分级部署确认：同版本重复部署弹窗并默认仅发未更新机器，测试升级不打断，生产覆盖必确认', async () => {
+  vi.mocked(runnerManagementApi.deployGeneratedArchive).mockResolvedValue({ items: [{ jobId: 'job1' }] } as never)
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({
+    ...choice(['r1', 'r2']),
+    targets: [
+      { resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: 'D:/Runner2/instance/links/1401218' },
+      { resourceId: 'r2', runnerId: 'runner2', deploymentDirectory: 'D:/Runner/instance/links/1401218' },
+    ],
+  })
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 1, items: [
+    { artifactId: 'j1', serverId: 'runner1', resourceId: 'r1', serverIp: '192.168.1.201', machinePath: 'D:/Runner2/instance/links/1401218', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z', status: 'success' },
+  ] as never })
+
+  const w = await setup()
+  await w.setProps({ archiveCommit: 'a'.repeat(40) }); await flushPromises()
+  // 目标卡片展示每台机器的状态徽标
+  const actualText = w.get('[data-testid="deployment-actual-directories"]').text()
+  expect(actualText).toContain('与已部署一致')
+  expect(actualText).toContain('首次部署')
+
+  // 1) 同版本混合场景：取消不提交；确认默认跳过已是最新，仅提交未更新机器 r2
+  const confirm = vi.spyOn(ElMessageBox, 'confirm')
+  try {
+    confirm.mockRejectedValueOnce('cancel')
+    await w.get('[data-testid="deploy-selected-machines"]').trigger('click'); await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(runnerManagementApi.deployGeneratedArchive).not.toHaveBeenCalled()
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await w.get('[data-testid="deploy-selected-machines"]').trigger('click'); await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(runnerManagementApi.deployGeneratedArchive).toHaveBeenLastCalledWith(expect.objectContaining({ resourceIds: ['r2'] }))
+
+    // 2) 测试环境正常升级（新 commit）：不额外弹窗，直接提交全部已选机器
+    await w.setProps({ archiveCommit: 'b'.repeat(40) }); await flushPromises()
+    expect(w.get('[data-testid="deployment-actual-directories"]').text()).toContain('待更新')
+    await w.get('[data-testid="deploy-selected-machines"]').trigger('click'); await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(runnerManagementApi.deployGeneratedArchive).toHaveBeenLastCalledWith(expect.objectContaining({ resourceIds: ['r1', 'r2'] }))
+
+    // 3) 生产环境覆盖更新（旧 commit -> 新 commit）：弹窗确认，取消不提交
+    vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({
+      ...choice(['r1']),
+      environment: 'production',
+      resources: [{ ...resources[0], environment: 'production' }],
+      targets: [{ resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: 'D:/Runner2/instance/links/1401218' }],
+    })
+    await w.findAll('input[type="radio"]')[1]!.setValue(true); await flushPromises()
+    confirm.mockRejectedValueOnce('cancel')
+    await w.get('[data-testid="deploy-selected-machines"]').trigger('click'); await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(3)
+    expect(runnerManagementApi.deployGeneratedArchive).toHaveBeenCalledTimes(2)
+  } finally { confirm.mockRestore() }
 })

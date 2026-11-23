@@ -50,6 +50,25 @@ export interface SourceCodeTask {
 export interface SourceCodeRelation {
   relationId: string; archiveId: string; repoId: string; directoryId: string; filePath: string
   gitCommit: string; archiveStatus: string
+  serverPath?: string; serverId?: string
+}
+export interface TaskArtifact {
+  artifactId: string; artifactType: 'code' | 'deployment'; taskType: 'generation' | 'deployment' | null; taskId: string
+  sourceId: string; flowId: string; stepId: string; configId: string; name: string
+  machinePath: string; repositoryId: string; gitPath: string; gitCommit: string; sha256: string
+  outputFiles: { path: string; sha256: string; gitPath?: string; size?: number }[]
+  createdAt: string; updatedAt: string; serverId: string; serverIp: string; serverName: string; instanceDirectory: string
+  environment: string; archiveId: string; directoryId: string; deliveryId: string; deploymentId: string; resourceId: string
+  targetPath: string; completedAt: string; status: string; pushed: boolean; inventoryKnown: boolean
+}
+export interface TaskArtifactQuery {
+  sourceId?: string; flowId?: string; stepId?: string; configId?: string; artifactType?: 'code' | 'deployment'
+  taskId?: string; taskType?: 'generation' | 'deployment'; environment?: string; serverId?: string; status?: string; page?: number; size?: number
+}
+
+function taskArtifacts(query: TaskArtifactQuery) {
+  return request<{ items: TaskArtifact[]; total: number }>('/artifacts?' + new URLSearchParams(
+    Object.entries(query).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)])))
 }
 export interface SourceGenerationSnapshot {
   sourceId: string; name: string; url: string; flowId: string
@@ -757,8 +776,13 @@ export const runnerManagementApi = {
   setGenerationTypeDefault: (repoId: string, directoryId: string) => request<{ ok: true }>(`/settings/code-repos/${encodeURIComponent(repoId)}/directories/${encodeURIComponent(directoryId)}/generation-default`, 'POST', {}),
   saveNodeGenerationSettings: (body: Pick<NodeGenerationSettings, 'configId'> & Partial<Omit<NodeGenerationSettings, 'configId'>>) => request<NodeGenerationSettings>('/site-scripts/task-config', 'POST', body),
   sourceCodeTasks: () => request<SourceCodeTask[]>('/source-code-tasks'),
-  sourceCodeRelations: (context: { sourceId: string; flowId: string; stepId: string; configId: string }) =>
-    request<{ items: SourceCodeRelation[]; total: number }>('/source-code-relations?' + new URLSearchParams({ ...context, archiveStatus: 'committed', size: '20' })),
+  artifacts: taskArtifacts,
+  sourceCodeRelations: async (context: { sourceId: string; flowId: string; stepId: string; configId: string }): Promise<{ items: SourceCodeRelation[]; total: number }> => {
+    const result = await taskArtifacts({ ...context, artifactType: 'code', status: 'committed', size: 20 })
+    return { total: result.total, items: result.items.map(file => ({ relationId: file.artifactId, archiveId: file.archiveId,
+      repoId: file.repositoryId, directoryId: file.directoryId, filePath: file.gitPath, gitCommit: file.gitCommit,
+      archiveStatus: file.status, serverId: file.serverId, serverPath: file.machinePath })) }
+  },
   createSourceCodeTasks: (sources: SourceGenerationSnapshot[]) => request<{ created: SourceCodeTask[]; skipped: { sourceId: string; name: string; reason: string }[] }>('/source-code-tasks', 'POST', { sources }),
   saveGenerationPreference: (configId: string, autoCommit: boolean) => request<{ autoCommit: boolean }>('/site-scripts/generation-settings', 'POST', { configId, autoCommit }),
   commitGeneratedCode: (archiveId: string) => request<GeneratedCodeArchive>(`/site-scripts/generated-results/${encodeURIComponent(archiveId)}/commit`, 'POST', {}),

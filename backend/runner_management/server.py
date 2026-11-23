@@ -2285,6 +2285,9 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/node-deployment-resource' and method in ('GET', 'POST'):
             from .deployment_resources import node_choice
             return node_choice(app, body if method == 'POST' else {key: values[0] for key, values in query.items() if values}, save=method == 'POST')
+        if sub == '/artifacts' and method == 'GET':
+            from .deployment_outputs import listing
+            return listing(app, {key: values[0] for key, values in query.items() if values})
         if sub == '/deployment-jobs' and method == 'GET':
             from .deployment_resources import listing
             return listing(app, {key: values[0] for key, values in query.items() if values})

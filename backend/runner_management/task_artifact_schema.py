@@ -40,6 +40,8 @@ def copy(db, assets, releases):
 
 def sqlite_migrate(db):
     db.execute(SQLITE_SCHEMA)
+    from .artifact_output_schema import sqlite_migrate as migrate_outputs
+    migrate_outputs(db)
     legacy = {row['name'] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('code_assets','releases')")}
     assets = db.execute('SELECT * FROM code_assets').fetchall() if 'code_assets' in legacy else []
     releases = db.execute('SELECT * FROM releases').fetchall() if 'releases' in legacy else []
@@ -65,13 +67,14 @@ def sqlite_migrate(db):
     for name, columns in (('task_artifact_task', 'task_type,task_id'), ('task_artifact_kind', 'artifact_type'),
                            ('task_artifact_repo', 'repo_id'), ('task_artifact_hash', 'sha256')):
         db.execute('CREATE INDEX IF NOT EXISTS ' + name + ' ON artifacts(' + columns + ')')
-    if legacy:
-        records.backfill_outputs(db)
+    records.ensure_outputs(db)
 
 
 def sqlite_compatibility_triggers(db, view, fields):
     """Local legacy SQL clients keep working; production writes use helpers."""
     asset = view == 'code_assets'
+    for suffix in ('insert', 'update', 'delete'):
+        db.execute('DROP TRIGGER IF EXISTS ' + view + '_artifact_' + suffix)
     identity = "'asset:'||NEW.code_id" if asset else 'NEW.digest'
     old_identity = "'asset:'||OLD.code_id" if asset else 'OLD.digest'
     kind = 'code_identity' if asset else 'package'
@@ -84,7 +87,8 @@ def sqlite_compatibility_triggers(db, view, fields):
               "''" if asset else "COALESCE(NEW.git_commit,'')",
               "''" if asset else "replace(NEW.digest,'sha256:','')",
               "COALESCE(NEW.created_at,'')" if asset else "COALESCE(NEW.published_at,'')",
-              "strftime('%Y-%m-%dT%H:%M:%fZ','now')", metadata)
+              "strftime('%Y-%m-%dT%H:%M:%fZ','now')", metadata, "''", "''",
+              "COALESCE(NEW.config_id,'')" if asset else "''", "'[]'")
     db.execute('CREATE TRIGGER IF NOT EXISTS ' + view + '_artifact_insert INSTEAD OF INSERT ON ' + view +
                ' BEGIN INSERT OR IGNORE INTO artifacts (' + ','.join(records.FIELDS) + ') VALUES (' + ','.join(values) + '); END')
     assignments = ','.join(field + '=' + value for field, value in zip(records.FIELDS, values)
@@ -99,6 +103,8 @@ def mysql_migrate(cursor):
     from .store import MySqlConnection
     db = MySqlConnection(cursor.connection)
     cursor.execute(MYSQL_SCHEMA)
+    from .artifact_output_schema import mysql_migrate as migrate_outputs
+    migrate_outputs(cursor)
     cursor.execute("SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() "
                    "AND TABLE_TYPE='BASE TABLE' AND TABLE_NAME IN ('ce_runner_code_assets','ce_runner_releases')")
     legacy = {row[0] for row in cursor.fetchall()}
@@ -120,5 +126,4 @@ def mysql_migrate(cursor):
         cursor.execute('DROP TABLE ' + table)
     for name, query in records.views(mysql=True):
         cursor.execute('CREATE OR REPLACE VIEW ' + name + ' AS ' + query)
-    if legacy:
-        records.backfill_outputs(db)
+    records.ensure_outputs(db)
