@@ -70,7 +70,7 @@ watch(() => props.state.draft, () => {
   if (editable.value) void resolve()
 })
 
-const errors = computed(() => (form.value ? validateSourceForm(form.value) : []))
+const errors = computed(() => (form.value ? validateSourceForm(form.value, hints.value) : []))
 
 const category = computed<CategorySelection>({
   get: () => ({ dirId: form.value?.dirId, category: form.value?.category ?? '', categoryPath: form.value?.categoryPath ?? '' }),

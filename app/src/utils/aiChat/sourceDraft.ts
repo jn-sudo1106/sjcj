@@ -288,9 +288,14 @@ export function initialSourceForm(draft: SourceDraft, hints: SourceDraftHints): 
   }
 }
 
-export function validateSourceForm(form: SourceDraftForm): string[] {
+export function validateSourceForm(form: SourceDraftForm, hints?: Pick<SourceDraftHints, 'existingSite'> | null): string[] {
   const errors: string[] = []
   if (form.siteMode === 'new' && !form.siteName.trim()) errors.push('请填写网站名称')
+  // 网站名不可重复（2026-11-23）：回查到同名网站时不能再新建，改名或改选「加入已有网站」
+  const dup = hints?.existingSite
+  if (form.siteMode === 'new' && dup && form.siteName.trim() && sameName(dup.name, form.siteName)) {
+    errors.push(`已存在同名网站「${dup.name}」（ID ${dup.siteId}），请改名或选择「加入已有网站」`)
+  }
   if (form.siteMode === 'new' && !form.dirId) errors.push('新建网站需要选择业务分类')
   // 2026-11-20 用户定：不关联网站时分类同样必选（分类是源的业务目录，不挂网站更要靠它归类）
   if (form.siteMode === 'none' && !form.dirId) errors.push('不关联网站也需要选择业务分类（源的业务目录）')

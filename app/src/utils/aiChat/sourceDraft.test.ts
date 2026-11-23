@@ -140,6 +140,12 @@ describe('卡片初始表单与校验', () => {
     expect(validateSourceForm(form({ sources: [{ name: 'A', url: '' }, { name: 'A', url: '' }] }))).toContain('源名称有重复')
     expect(validateSourceForm(form({ flowMode: 'copy' }))).toContain('只有加到已有网站时才能复制参考源的流程')
   })
+  it('校验：库中已有同名网站时不能再「新建网站」，改名后放行（1123 网站名不可重复）', () => {
+    const existing = { existingSite: { siteId: '2536', name: '同花顺', sourceCount: 5 } }
+    expect(validateSourceForm(form({ siteName: ' 同花顺 ' }), existing)).toContain('已存在同名网站「同花顺」（ID 2536），请改名或选择「加入已有网站」')
+    expect(validateSourceForm(form({ siteName: '同花顺F10' }), existing)).toEqual([])
+    expect(validateSourceForm(form({ siteName: '同花顺' }), null)).toEqual([])
+  })
 })
 
 describe('执行建源', () => {

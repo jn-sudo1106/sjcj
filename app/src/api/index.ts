@@ -1319,6 +1319,11 @@ async function loadSiteUsedTables(siteId: string): Promise<SiteUsedTablesResult>
 }
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
+/** 同名网站的提示：带上已有网站的 ID，方便用户去找 / 改选「加入已有网站」 */
+export function duplicateSiteNameMessage(name: string, existing: Pick<Site, 'siteId'>[]): string {
+  return `已存在同名网站「${name}」（ID ${existing.map((s) => s.siteId).join('、')}），网站名称不能重复，请改名或选择已有网站`
+}
+
 export const siteApi = {
   sourceScopePaged,
   /** 网站源实际用到的表（主表 ∪ 流程节点的输入/输出表），带每张表的源名单（0924-09） */
@@ -1376,6 +1381,17 @@ export const siteApi = {
     const result = await request<unknown>('site/summary', undefined, { method: 'GET' })
     return siteSummaryFromLegacy(result)
   },
+  /**
+   * 按名称精确查网站（忽略首尾空格、大小写）。网站名不可重复（2026-11-23 用户定）：后端 site/add、
+   * site/update 都不校验同名（186 已出现两个「同花顺」），只能前端在写之前拦。
+   * site/sitePaged 的 name 是模糊匹配，取一页再精确过滤。
+   */
+  sitesNamed: async (name: string): Promise<Site[]> => {
+    const target = name.trim().toLowerCase()
+    if (!target) return []
+    const { list } = await siteApi.sitePaged({ keyword: name.trim(), page: 1, size: 100 })
+    return list.filter((item) => item.name.trim().toLowerCase() === target)
+  },
   siteDetail: async (siteId: string) => {
     const result = await request<unknown>('site/siteDetail', { siteId }, {
       method: 'GET',
@@ -1410,6 +1426,14 @@ export const siteApi = {
     const liveWrite = { mode: 'http' as const }
 
     const siteName = site.name.trim()
+    // 网站名不可重复：后端不校验，建之前先查；查不了就不建，宁可让用户重试也不多造一个同名网站
+    let sameNamed: Site[]
+    try {
+      sameNamed = await siteApi.sitesNamed(siteName)
+    } catch (error) {
+      return { ok: false, message: `无法核对网站名称是否重复，未新建网站：${(error as Error)?.message ?? '网络异常'}` }
+    }
+    if (sameNamed.length) return { ok: false, message: duplicateSiteNameMessage(siteName, sameNamed) }
     const sitePayload: SiteCreateInput = {
       siteName,
       stdSiteName: siteName,
@@ -1497,6 +1521,18 @@ export const siteApi = {
    *  之前塞进 httpParams 的 author 是没有实据的猜测，已删掉，改成只提交 siteId/siteName/categoryId。
    *  categoryId 字段名对齐旧平台 CATEGORY 列配置（dataIndex: 'categoryId'）。 */
   siteUpdate: async (site: Pick<Site, 'siteId' | 'name' | 'dirId' | 'tags'>): Promise<Ack> => {
+    // 改名同样不能撞上别的网站。同名结果里有自己 = 名称没改（历史上已重名的网站仍要能改分类 / 标签），放行
+    if (site.name?.trim()) {
+      let sameNamed: Site[]
+      try {
+        sameNamed = await siteApi.sitesNamed(site.name)
+      } catch (error) {
+        return { ok: false, message: `无法核对网站名称是否重复，未保存：${(error as Error)?.message ?? '网络异常'}` }
+      }
+      const renamed = !sameNamed.some((item) => String(item.siteId) === String(site.siteId))
+      const others = sameNamed.filter((item) => String(item.siteId) !== String(site.siteId))
+      if (renamed && others.length) return { ok: false, message: duplicateSiteNameMessage(site.name.trim(), others) }
+    }
     const result = await request<unknown>('site/updateSite', { site }, {
       method: 'POST',
       httpEndpoint: 'site/update',
