@@ -185,6 +185,15 @@ const canvasLink = computed(() => {
   if (!first) return null
   return { path: '/canvas', query: { ...(r?.siteId ? { siteId: r.siteId } : {}), sourceId: first, view: 'flow' } }
 })
+
+/** 历史回放没有执行结果对象，只有回传文本（formatSourceCreatedMessage）：从中取第一个源 ID / 网站 ID 进画布 */
+const replayCanvasLink = computed(() => {
+  const text = props.state.resultText || ''
+  const sourceId = text.match(/源 ID (\d+)/)?.[1]
+  if (!sourceId) return null
+  const siteId = text.match(/网站 ID (\d+)/)?.[1]
+  return { path: '/canvas', query: { ...(siteId ? { siteId } : {}), sourceId, view: 'flow' } }
+})
 </script>
 
 <template>
@@ -201,7 +210,17 @@ const canvasLink = computed(() => {
     <div v-if="state.draft.remark" class="sd-note"><b>智能体提醒：</b>{{ state.draft.remark }}</div>
 
     <!-- 历史回放：草稿已确认过，只展示回传的结果，不再回查、不可再确认 -->
-    <div v-if="!editable && !state.steps && state.resultText" class="sd-note" data-testid="source-draft-replay">{{ state.resultText }}</div>
+    <template v-if="!editable && !state.steps && state.resultText">
+      <div class="sd-note" data-testid="source-draft-replay">{{ state.resultText }}</div>
+      <div v-if="replayCanvasLink" class="sd-result">
+        <router-link :to="replayCanvasLink" class="sd-canvas-btn" data-testid="source-draft-canvas">
+          进入画布配置采集
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+          </svg>
+        </router-link>
+      </div>
+    </template>
 
     <div v-if="editable && resolving" class="sd-loading">正在回查网站、分类与流程模板…</div>
 
@@ -353,7 +372,13 @@ const canvasLink = computed(() => {
       <span v-else>网站 <b>不关联</b></span>
       <span>源 <b>{{ result.sources.map((s) => s.sourceId).join('、') }}</b></span>
       <span v-if="result.flowIds.length">流程 <b>{{ result.flowIds.map((id) => `#${id}`).join('、') }}</b></span>
-      <router-link v-if="canvasLink" :to="canvasLink" class="sd-link" data-testid="source-draft-canvas">进入画布</router-link>
+      <!-- 建好后的主要下一步：做成主色按钮靠右，不和 ID 文字混在一起 -->
+      <router-link v-if="canvasLink" :to="canvasLink" class="sd-canvas-btn" data-testid="source-draft-canvas">
+        进入画布配置采集
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+        </svg>
+      </router-link>
     </div>
 
     <div v-if="editable" class="sd-actions">
@@ -424,6 +449,18 @@ div.sd-errors { padding-left: 12px; }
 .sd-result { font-size: 12.5px; color: #334155; display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; }
 .sd-link { color: var(--el-color-primary); text-decoration: none; }
 .sd-link:hover { text-decoration: underline; }
+.sd-canvas-btn {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 14px; border-radius: 6px;
+  background: var(--el-color-primary); color: #fff;
+  font-size: 13px; font-weight: 600; text-decoration: none;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.sd-canvas-btn svg { width: 14px; height: 14px; transition: transform 0.2s ease; }
+.sd-canvas-btn:hover { background: var(--el-color-primary-light-3); box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25); }
+.sd-canvas-btn:hover svg { transform: translateX(2px); }
+.sd-canvas-btn:focus-visible { outline: 2px solid var(--el-color-primary-light-5); outline-offset: 2px; }
 .sd-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 720px) {
   .sd-grid { grid-template-columns: 1fr; }
