@@ -156,6 +156,17 @@ describe('SourceTab 加载与初始筛选', () => {
     expect(wBad.findComponent({ name: 'FilterToolbar' }).props('errorOnly')).toBe(false)
   })
 
+  it('?category= 只认数字目录 ID：总览 mock 带来的「/股票类」路径被忽略，不传给真实查询（1123）', async () => {
+    const { wrapper: wOk } = await mountAt({ category: '9009005' })
+    expect(wOk.findComponent({ name: 'FilterToolbar' }).props('categoryFilter')).toEqual(['9009005'])
+    expect(wOk.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory'))
+      .toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: '9009005', includeDescendants: true }] })
+
+    const { wrapper: wBad } = await mountAt({ category: '/股票类' })
+    expect(wBad.findComponent({ name: 'FilterToolbar' }).props('categoryFilter')).toEqual([])
+    expect(JSON.stringify(wBad.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory') ?? null)).not.toContain('股票类')
+  })
+
   // 后端 site/sitePaged?state=ERROR 实测恒返回 0 条，所以异常过滤在前端按 errorCount 做，不发 state
 
 

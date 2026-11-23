@@ -844,7 +844,13 @@ function applyRouteFilters() {
   // 总览「资产类型分布」按分类下钻（DistributionPanel 带来的 ?category=<id>）——此前没接，
   // 下钻过来分类筛选是静默丢的。多选口径下预置成一个勾选项。
   const qc = String(route.query.category ?? '')
-  if (qc) categoryFilter.value = qc.split(',').map((s) => s.trim()).filter(Boolean)
+  if (!qc) return
+  // 分类 ID 只能是数字（site/sourceScopePaged 的 directory.selections[].id 是 Integer）。
+  // 2026-11-23：总览页在 186 还是 mock 数据，全景分支 ID 是「/股票类」这种路径，带过来整页报 JSON 反序列化错误。
+  const parts = qc.split(',').map((s) => s.trim()).filter(Boolean)
+  const ids = parts.filter((s) => /^\d+$/.test(s))
+  if (ids.length < parts.length) ElMessage.warning('链接里的分类不是有效的目录 ID，已忽略该筛选')
+  if (ids.length) categoryFilter.value = ids
 }
 applyRouteFilters()
 onMounted(() => {
