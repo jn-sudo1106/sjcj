@@ -186,4 +186,29 @@ describe('useFlowVersionStore', () => {
       expect(store.history).toBeUndefined()
     })
   })
+
+  describe('没有发布版时兜底读哪个版本（1123）', () => {
+    it('有发布版：不兜底，读运行中的发布版', async () => {
+      vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
+      const store = useFlowVersionStore()
+      await store.load('21000003')
+      expect(store.unpublishedReadVersionId).toBeNull()
+    })
+    it('只有 draftId、草稿行状态对不上 W：读 draftId', async () => {
+      vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, curVer: null, nextVer: 1, publishId: null, draftId: '1056', versions: [row('1056', { state: 'X' })] })
+      const store = useFlowVersionStore()
+      await store.load('21000014')
+      expect(store.unpublishedReadVersionId).toBe('1056')
+    })
+    it('没有发布版也没有 draftId：读版本号最大的未放弃版本；全放弃了返回 null', async () => {
+      vi.spyOn(flowVersionApi, 'overview')
+        .mockResolvedValueOnce({ enabled: true, curVer: null, nextVer: 3, publishId: null, draftId: null, versions: [row('1', { flowVer: 1 }), row('2', { flowVer: 2 }), row('3', { flowVer: 3, isDelete: -1 })] })
+        .mockResolvedValueOnce({ enabled: true, curVer: null, nextVer: 2, publishId: null, draftId: null, versions: [row('1', { isDelete: -1 })] })
+      const store = useFlowVersionStore()
+      await store.load('a')
+      expect(store.unpublishedReadVersionId).toBe('2')
+      await store.load('b')
+      expect(store.unpublishedReadVersionId).toBeNull()
+    })
+  })
 })

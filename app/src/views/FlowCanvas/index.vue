@@ -476,9 +476,17 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     const editingView = normalizeSourceView(route.query.view) === 'flow'
     if (flowId) await flowVersion.load(flowId)
     if (!isCurrent()) return
-    const versionId = editingView || !flowVersion.published ? flowVersion.viewVersionId : null
+    // 2026-11-23：没有发布版时（草稿状态对不上 / 只剩 draftId 等），兜底读最新未放弃版本，别再不带 versionId 读发布版
+    const versionId = editingView || !flowVersion.published ? flowVersion.unpublishedReadVersionId : null
     if (flowId) {
-      steps = await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
+      try {
+        steps = await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
+      } catch (error) {
+        // 流程还没发布、也没有可读的版本：是「流程待完善」的空状态，画布照常打开（空步骤），提示去发布，不整页报错
+        if (!/没有有效发布版本/.test((error as Error)?.message ?? '')) throw error
+        steps = []
+        ElMessage.warning('该源绑定的流程还没有发布版本，请在流程视图完善并发布')
+      }
     } else {
       try {
         steps = await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })

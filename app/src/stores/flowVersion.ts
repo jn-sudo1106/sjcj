@@ -56,6 +56,19 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
   const currentVersionId = computed(() => draft.value?.versionId ?? overview.value?.publishId ?? null)
   /** 画布该读哪个版本的步骤：查看历史读历史；有草稿读草稿；否则 null（读运行中的发布版，接口不带 versionId） */
   const viewVersionId = computed(() => history.value?.versionId ?? (enabled.value && draft.value ? draft.value.versionId : null))
+  /**
+   * 没有发布版时兜底读哪个版本：viewVersionId 优先；否则取 draftId，再否则取版本号最大的未放弃版本。
+   * 没有发布版就不能不带 versionId 读（后端拒「没有有效发布版本，请完善流程并发布」），
+   * 草稿行状态对不上 W（或 overview 里只有 draftId）时也要读得到，不至于整个画布报错。
+   */
+  const unpublishedReadVersionId = computed(() => {
+    if (viewVersionId.value) return viewVersionId.value
+    const ov = overview.value
+    if (!ov || published.value) return null
+    if (ov.draftId && rowOf(ov, ov.draftId)?.isDelete !== -1) return ov.draftId
+    const alive = ov.versions.filter((v) => v.isDelete === 0).sort((a, b) => b.flowVer - a.flowVer)
+    return alive[0]?.versionId ?? null
+  })
   /** 当前流程只读：查看历史版本，或草稿已锁定（发布版可直接改，首次写入自动生成草稿） */
   const readonly = computed(() => !!history.value || (enabled.value && draft.value?.isLock === 1))
 
@@ -156,7 +169,7 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
   }
 
   return {
-    flowId, overview, enabled, published, draft, history, currentVersionId, viewVersionId, readonly,
+    flowId, overview, enabled, published, draft, history, currentVersionId, viewVersionId, unpublishedReadVersionId, readonly,
     load, refresh, ensureDraftRef, withDraft, allowsEmptyOutput, publish, abandon, viewHistory, exitHistory, reset,
   }
 })
