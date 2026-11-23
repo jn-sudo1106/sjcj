@@ -265,7 +265,7 @@ export function generateSyncSql(sourceTable: string, columns: SyncColumnMap[], f
 // 两端各猜一次就会出现「页面显示一个样、建出来的表另一个样」。
 
 export const DATABASE_TYPE_LABELS: Record<number, string> = {
-  1: 'MySQL', 2: 'PostgreSQL', 3: 'Oracle', 4: 'ClickHouse', 5: 'Elasticsearch',
+  1: 'MySQL', 2: 'PostgreSQL', 3: 'Oracle', 4: 'ClickHouse', 5: 'Elasticsearch', 6: 'DuckDB',
 }
 
 /** 有目标端扩展参数的类型：4 ClickHouse、5 Elasticsearch */
