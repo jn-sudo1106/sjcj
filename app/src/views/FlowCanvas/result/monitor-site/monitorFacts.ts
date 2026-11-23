@@ -10,64 +10,6 @@ import { isKnownMethod, methodLabel } from '@/utils/monitor/methods'
 /** 后端尚未提供聚合能力时的统一占位（1110 §7.3 / 降级红线）。 */
 export const COVERAGE_PLACEHOLDER = '—（需服务端聚合）'
 
-export interface SourceFactItem {
-  key: 'source' | 'site' | 'table' | 'checks' | 'last' | 'coverage'
-  label: string
-  value: string
-  title?: string
-}
-
-export interface SourceFactInput {
-  sourceId: string
-  sourceName?: string
-  siteId?: string
-  siteName?: string
-  mainTable?: string
-  summary: MonitorSourceRow
-}
-
-/** 源信息条 6 项（顺序固定：源 / 网站 / 主表 / 检查项 / 最近检查 / 所选日期覆盖）。 */
-export function sourceFacts(input: SourceFactInput): SourceFactItem[] {
-  const { summary } = input
-  const name = input.sourceName || summary.sourceName || ''
-  const siteName = input.siteName || summary.siteName || (input.siteId ? `网站 ${input.siteId}` : '—')
-  return [
-    {
-      key: 'source',
-      label: '源',
-      value: name ? `${name}（${input.sourceId}）` : input.sourceId,
-      title: `${name || input.sourceId} · ${input.sourceId}`,
-    },
-    { key: 'site', label: '网站', value: siteName },
-    {
-      key: 'table',
-      label: '主表',
-      value: input.mainTable ? `${input.mainTable} ／ 子表数 —` : '—',
-      title: '子表数需服务端聚合（当前接口未提供），主表 ID 来自源详情',
-    },
-    {
-      key: 'checks',
-      label: '检查项',
-      value: `${summary.monitorEnabled} 启用 ／ ${summary.monitorTotal} 项`,
-    },
-    {
-      key: 'last',
-      label: '最近检查',
-      // 时间 + 状态：状态取该源最差数据结论（与最差事实同一口径），无记录只写「尚未检查」。
-      value: summary.lastCheckAt ? `${summary.lastCheckAt} ／ ${DATA_TEXT[summary.data]}` : '尚未检查',
-      title: summary.lastCheckAt
-        ? `最近检查 ${summary.lastCheckAt}，该源最差数据结论：${DATA_TEXT[summary.data]}`
-        : '该源尚未完成一次正式检查',
-    },
-    {
-      key: 'coverage',
-      label: '所选日期覆盖',
-      value: COVERAGE_PLACEHOLDER,
-      title: '计划覆盖需服务端按时隙聚合（C07），前端不按当前页数据推算',
-    },
-  ]
-}
-
 /** 网站视图 7 项摘要：顺序与全局源列表一致。 */
 export const SITE_SUMMARY_ITEMS = [
   '有启用检查源',
@@ -138,4 +80,45 @@ export function toneClass(tone: MonitorSourceRow['tone']): string {
 /** 运行记录里通知列：旧接口没有回执，统一「未取得回执」；条数未知「—」不是 0。 */
 export function runCountText(count: string): string {
   return count || '—'
+}
+export type MonitorStatusTone = 'good' | 'bad' | 'warn' | 'unknown' | 'muted'
+
+export interface MonitorStatus {
+  tone: MonitorStatusTone
+  label: string
+  /** 异常/失败时的一句原因（取执行结果文本首行），正常时为空 */
+  reason: string
+  /** 排序权重：越小越靠前（异常 → 执行失败 → 待判断 → 未运行 → 正常） */
+  rank: number
+}
+
+/**
+ * 检查项「状态」列：把执行结果与最近数据结论合成一个状态，正常就一眼看到正常，
+ * 不正常再点「记录」看运行明细（1123 沟通：运行记录只有不正常才会去看）。
+ */
+export function monitorStatus(monitor: MonitorRecordView): MonitorStatus {
+  const reason = statusReason(monitor.message)
+  if (monitor.exec === 'failed' || monitor.exec === 'timeout' || monitor.exec === 'cancelled') {
+    const label = monitor.exec === 'timeout' ? '执行超时' : monitor.exec === 'cancelled' ? '已取消' : '执行失败'
+    return { tone: 'warn', label, reason, rank: 1 }
+  }
+  if (monitor.exec === 'queued' || monitor.exec === 'running') {
+    return { tone: 'unknown', label: '执行中', reason: '', rank: 2 }
+  }
+  if (monitor.data === 'abnormal') return { tone: 'bad', label: '异常', reason, rank: 0 }
+  if (monitor.exec === 'none' || !monitor.lastCheckAt) return { tone: 'muted', label: '未运行', reason: '', rank: 3 }
+  if (monitor.data === 'normal') return { tone: 'good', label: '正常', reason: '', rank: 4 }
+  if (monitor.data === 'no_data') return { tone: 'muted', label: '无待检记录', reason: '', rank: 3 }
+  return { tone: 'unknown', label: '待判断', reason: '', rank: 2 }
+}
+
+/**
+ * 旧执行器的结果文本形如「2026-11-23 10:00:00---[X]:<检查项名>-异常, 数量:0」，
+ * 时间和名称表里已有，原因只取「数量 N」；其他格式去掉时间前缀后取首行。
+ */
+function statusReason(message?: string): string {
+  if (!message) return ''
+  const count = message.match(/数量\s*[:：]\s*(-?\d+)/)
+  if (count) return `数量 ${count[1]}`
+  return firstLine(message.replace(/^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?\s*-*\s*/, ''))
 }

@@ -2,22 +2,21 @@
 // 源内 / 网站监控视图（1110 §3.1「一个源一页」、1110 原型说明 §四·一/§四·二）。
 //
 // 一次只展示一个上下文：
-//   - 传了 sourceId：源内视图——源信息条 + 检查项表 + 最近运行。源来自 props，本页不提供换源；
+//   - 传了 sourceId：源内视图——一张检查项表（每行带最近状态），运行记录点「记录」走右侧抽屉。
+//     源来自 props，本页不提供换源；源名/网站等信息页头已有，不再重复一条信息条（1123 沟通：两张表堆一起）。
 //   - 没传 sourceId：网站视图——切网站由上层负责，这里只按 siteId 列出本站源与监控摘要。
 //
 // 判断（最差事实 / 覆盖 / 未配置）全部走 `utils/monitor/sourceSummary`，本页不自行拼状态；
-// 运行记录列表与详情用 fe-runs 的 RunsDrawer，页内最近 5 行是页面内容而非第二套抽屉。
+// 运行记录列表与详情统一用 fe-runs 的 RunsDrawer（右侧抽屉），页内不再平铺最近运行表。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type Source } from '@/api'
 import { listMonitors, listMonitorsOfSource, setMonitorsEnabled } from '@/api/monitorCenter'
 import type { MonitorRecordView, MonitorSourceRow, MonitorRunView } from '@/api/types/monitorCenter'
 import { summarizeSource, summarizeSources } from '@/utils/monitor/sourceSummary'
-import SourceFactsBar from './monitor-site/SourceFactsBar.vue'
 import SiteSummaryBar from './monitor-site/SiteSummaryBar.vue'
 import { COVERAGE_PLACEHOLDER, checkSummary, dataText, kindText, planText } from './monitor-site/monitorFacts'
 import SiteMonitorConfigView from './SiteMonitorConfigView.vue'
-import SiteMonitorResultView from './SiteMonitorResultView.vue'
 import RunsDrawer from './monitor-runs/RunsDrawer.vue'
 
 const props = defineProps<{
@@ -35,7 +34,6 @@ const monitorsLoading = ref(false)
 const monitorsError = ref('')
 const loadedOnce = ref(false)
 const togglingId = ref('')
-const resultRef = ref<InstanceType<typeof SiteMonitorResultView>>()
 let loadToken = 0
 
 const sourceSummary = computed<MonitorSourceRow>(() =>
@@ -91,7 +89,6 @@ async function onToggle(monitor: MonitorRecordView, enabled: boolean) {
 
 async function onSaved() {
   await loadSourceMode()
-  await resultRef.value?.refresh()
 }
 
 // ---------- 网站视图 ----------
@@ -189,16 +186,6 @@ function openSourceRuns(row: MonitorSourceRow) {
   drawer.value = { open: true, sourceId: row.sourceId, monitorId: '', title: row.sourceName || row.sourceId }
 }
 
-function openRunDetail(run: MonitorRunView) {
-  selectedRun.value = run
-  drawer.value = {
-    open: true,
-    sourceId: props.sourceId ?? '',
-    monitorId: run.monitorId ?? '',
-    title: run.monitorName ?? '',
-  }
-}
-
 function closeDrawer() {
   drawer.value = { ...drawer.value, open: false }
 }
@@ -221,19 +208,10 @@ watch(
 
 <template>
   <main class="smv-shell" :data-mode="isSourceMode ? 'source' : 'site'">
-    <!-- 源内视图：源锁定，信息条 + 检查项 + 最近运行 -->
+    <!-- 源内视图：源锁定，一张检查项表；运行记录走右侧抽屉 -->
     <template v-if="isSourceMode">
       <p v-if="monitorsLoading && !loadedOnce" class="smv-state" data-testid="site-monitor-loading">加载监控检查项…</p>
       <template v-else>
-        <SourceFactsBar
-          v-if="!monitorsError"
-          :source-id="sourceId!"
-          :source-name="source?.name"
-          :site-id="siteId"
-          :site-name="source?.siteName"
-          :main-table="source?.mainTable"
-          :summary="sourceSummary"
-        />
         <SiteMonitorConfigView
           :site-id="siteId"
           :source-id="sourceId!"
@@ -244,15 +222,8 @@ watch(
           @saved="onSaved"
           @toggle="onToggle"
           @runs="openMonitorRuns"
+          @all-runs="openAllRuns"
           @retry="loadSourceMode"
-        />
-        <SiteMonitorResultView
-          v-if="!monitorsError"
-          ref="resultRef"
-          :source-id="sourceId!"
-          :title="sourceName"
-          @all="openAllRuns"
-          @detail="openRunDetail"
         />
       </template>
     </template>

@@ -95,22 +95,53 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('SiteMonitorConfigView · 检查项表', () => {
-  it('渲染检查项 8 列与启用/总数，展示方式、摘要、数据结论、计划', () => {
+  it('一张表 7 列：状态列合并执行与数据结论，头部汇总启用/总数', () => {
     const wrapper = mountView({
-      monitors: [monitor(), monitor({ id: 'm-2', name: '日达标监控', enabled: false, data: 'abnormal' })],
+      monitors: [monitor(), monitor({ id: 'm-2', name: '日达标监控', enabled: false, data: 'abnormal', message: '2026-11-23 10:00:00---[X]:日达标监控-异常, 数量:0' })],
     })
 
-    const head = wrapper.get('[data-testid="site-monitor-checks-table"] thead').text()
-    for (const column of ['名称', '方式', '检查摘要', '启用', '最近数据结论', '计划', '编辑', '运行记录']) {
-      expect(head).toContain(column)
-    }
+    const head = wrapper.get('[data-testid="site-monitor-checks-table"] thead').findAll('th').map((th) => th.text())
+    expect(head).toEqual(['检查项', '方式', '状态', '最近检查', '计划', '启用', '操作'])
     expect(wrapper.get('[data-testid="site-monitor-checks-count"]').text()).toContain('1 启用 ／ 共 2 项')
-    expect(wrapper.text()).toContain('日增量监控')
     expect(wrapper.text()).toContain('AI 检查')
     expect(wrapper.text()).toContain('rowCount')
-    expect(wrapper.text()).toContain('数据正常')
-    expect(wrapper.text()).toContain('数据异常')
     expect(wrapper.text()).toContain('0 0 * * * ?')
+    const statuses = wrapper.findAll('[data-testid="site-monitor-check-status"]').map((n) => n.text())
+    // 异常排在前面
+    expect(statuses).toEqual(['异常', '正常'])
+    expect(wrapper.findAll('[data-testid="site-monitor-check-row"]')[0]!.text()).toContain('数量 0')
+    expect(wrapper.findAll('[data-testid="site-monitor-check-row"]')[0]!.text()).not.toContain('---')
+  })
+
+  it('执行失败标「执行失败」，没跑过标「未运行」', () => {
+    const wrapper = mountView({
+      monitors: [
+        monitor({ id: 'm-1', exec: 'none', data: 'unknown', lastCheckAt: '' }),
+        monitor({ id: 'm-2', exec: 'failed', data: 'unknown', message: '连接超时' }),
+      ],
+    })
+    const statuses = wrapper.findAll('[data-testid="site-monitor-check-status"]').map((n) => n.text())
+    expect(statuses).toEqual(['执行失败', '未运行'])
+    expect(wrapper.text()).toContain('连接超时')
+  })
+
+  it('点「N 项不正常」只看不正常的检查项，再点恢复全部', async () => {
+    const wrapper = mountView({
+      monitors: [monitor(), monitor({ id: 'm-2', data: 'abnormal' })],
+    })
+    const btn = wrapper.get('[data-testid="site-monitor-checks-problems"]')
+    expect(btn.text()).toContain('1 项不正常')
+    await btn.trigger('click')
+    expect(wrapper.findAll('[data-testid="site-monitor-check-row"]')).toHaveLength(1)
+    await btn.trigger('click')
+    expect(wrapper.findAll('[data-testid="site-monitor-check-row"]')).toHaveLength(2)
+  })
+
+  it('全部正常时不出现「不正常」入口；「全部运行记录」交给容器开抽屉', async () => {
+    const wrapper = mountView()
+    expect(wrapper.find('[data-testid="site-monitor-checks-problems"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="site-monitor-all-runs"]').trigger('click')
+    expect(wrapper.emitted('allRuns')).toHaveLength(1)
   })
 
   it('草稿状态在名称旁标「未生效」，不冒充已生效', () => {
@@ -129,7 +160,10 @@ describe('SiteMonitorConfigView · 检查项表', () => {
 
   it('空列表给加监控引导，不显示空表格', () => {
     const wrapper = mountView({ monitors: [] })
-    expect(wrapper.get('[data-testid="site-monitor-checks-empty"]').text()).toContain('＋ 加监控')
+    const empty = wrapper.get('[data-testid="site-monitor-checks-empty"]')
+    expect(empty.text()).toContain('该源还没有配置监控')
+    expect(empty.text()).toContain('＋ 加监控')
+    expect(wrapper.find('[data-testid="site-monitor-all-runs"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="site-monitor-checks-table"]').exists()).toBe(false)
   })
 
@@ -141,10 +175,9 @@ describe('SiteMonitorConfigView · 检查项表', () => {
     expect(wrapper.emitted('retry')).toHaveLength(1)
   })
 
-  it('不提供换源入口：没有源选择组件，并提示源已锁定', () => {
+  it('不提供换源入口：没有源选择组件', () => {
     const wrapper = mountView()
     expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).exists()).toBe(false)
-    expect(wrapper.text()).toContain('当前源锁定')
   })
 })
 
