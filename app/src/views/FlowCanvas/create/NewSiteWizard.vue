@@ -5,7 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { siteApi, type Site, type Source } from '@/api'
-import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
+import { NO_FLOW_TEMPLATE, pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import { createSharedFlow, addSourcesToBizDirNote } from '@/utils/source/createCollect'
 import { useUiStore } from '@/stores/ui'
 import { firstSourceId } from '@/utils/url/workspaceRoute'
@@ -96,17 +96,20 @@ async function onCreateAndEnter() {
   const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: 0 }
   creating.value = true
   try {
-    const templateId = await pickFlowTemplate()
+    // 新建采集允许「暂不建流程」：只建网站和源，进画布后在流程标签栏「＋」再建
+    const templateId = await pickFlowTemplate({ allowNone: true })
     const res = await siteApi.siteCreate(siteForCreate, sources)
     if (!res?.ok) {
       ElMessage.warning(res?.message || '创建失败，请重试')
       return
     }
     const sourceId = res.sourceId || firstSourceId(sources)
-    const flowNote = (await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [], templateId)).note
+    const withFlow = templateId !== NO_FLOW_TEMPLATE
+    const flowNote = withFlow ? (await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [], templateId)).note : ''
     const dirNote = await addSourcesToBizDirNote(site, res.sourceIds ?? [])
     if (flowNote || dirNote) ElMessage.warning([flowNote, dirNote].filter(Boolean).join('；'))
-    else ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，共用流程「${siteForCreate.name.trim()}」），已进入首个源的流程视图`)
+    else if (withFlow) ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，共用流程「${siteForCreate.name.trim()}」），已进入首个源的流程视图`)
+    else ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，暂未建流程），可在流程标签栏点「＋」新建`)
     await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
   } catch (error) {
     if (error === 'cancel' || error === 'close') return

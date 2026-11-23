@@ -11,6 +11,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import NewSiteWizard from './NewSiteWizard.vue'
 import { flowCenterApi, siteApi, workflowBindingApi } from '@/api'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 
 const addSourcesToBizDir = vi.fn(async () => 1)
 vi.mock('@/api/sourceDirs', async (importOriginal) => ({
@@ -136,6 +137,22 @@ describe('NewSiteWizard', () => {
       { sourceId: '9001', workflowId: '14011270', primary: true },
       { sourceId: '9002', workflowId: '14011270', primary: true },
     ])
+    expect(router.currentRoute.value.query.sourceId).toBe('9001')
+  })
+
+  it('选「暂不建流程」时只建网站和源，不建流程也不绑定，照常进入首个源', async () => {
+    vi.mocked(pickFlowTemplate).mockResolvedValueOnce('')
+    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001', '9002'] })
+    const save = vi.spyOn(flowCenterApi, 'save')
+    const bind = vi.spyOn(workflowBindingApi, 'bind')
+    const { wrapper, router } = await mountWizard()
+    await wrapper.get('input.rc-input').setValue('向导测试站')
+    await flushPromises()
+    await wrapper.get('.rc-btn.primary').trigger('click')
+    await flushPromises()
+    expect(pickFlowTemplate).toHaveBeenLastCalledWith({ allowNone: true })
+    expect(save).not.toHaveBeenCalled()
+    expect(bind).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
   })
 
