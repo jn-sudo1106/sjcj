@@ -211,4 +211,24 @@ describe('useFlowVersionStore', () => {
       expect(store.unpublishedReadVersionId).toBeNull()
     })
   })
+
+  describe('abandonDraftOf：放弃指定流程的指定草稿（1123）', () => {
+    it('按传入的流程 ID 放弃，不管画布当前在哪条流程', async () => {
+      vi.spyOn(flowVersionApi, 'overview').mockImplementation(async (id: string) => (id === '15730960' ? withDraft(3) : withDraft(1)))
+      const action = vi.spyOn(flowVersionApi, 'action').mockResolvedValue({ versionId: null })
+      const store = useFlowVersionStore()
+      await store.load('15730962')
+      expect(await store.abandonDraftOf('15730960', '1033')).toBe(true)
+      expect(action).toHaveBeenCalledWith('abandon', { flowId: '15730960', versionId: '1033', ver: 3, expectedPublishId: '748' })
+      expect(store.flowId).toBe('15730962')
+    })
+    it('草稿已经不是这一条（已发布 / 已放弃）时不动', async () => {
+      vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
+      const action = vi.spyOn(flowVersionApi, 'action')
+      const store = useFlowVersionStore()
+      expect(await store.abandonDraftOf('15730960', '1033')).toBe(false)
+      expect(action).not.toHaveBeenCalled()
+    })
+  })
 })
+

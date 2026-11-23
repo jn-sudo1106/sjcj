@@ -143,6 +143,20 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
     await fetchOverview(id)
   }
 
+  /**
+   * 放弃指定流程的指定草稿（2026-11-23）。不看画布当前流程：「复制为本源专用」中途会把新流程绑成主流程、
+   * 画布随之切到复制品，再用 abandon() 就放弃了复制品的草稿（186 流程 15730962 就是这样被放弃的，
+   * 原流程 15730960 的草稿反而留着）。草稿已不是这条（已发布 / 已放弃 / 换了新草稿）时不动，返回 false。
+   */
+  async function abandonDraftOf(id: string, versionId: string): Promise<boolean> {
+    const ov = await fetchOverview(id)
+    const d = draftOf(ov)
+    if (!d || d.versionId !== versionId) return false
+    await flowVersionApi.action('abandon', { flowId: id, versionId: d.versionId, ver: d.ver, expectedPublishId: ov.publishId ?? null })
+    await fetchOverview(id)
+    return true
+  }
+
   /** 发布当前草稿：新任务用草稿版本，已启动的任务继续用原版本 */
   const publish = () => act('publish')
   /** 放弃当前草稿（不占发布版本号）；画布由调用方按发布版重新加载 */
@@ -170,6 +184,6 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
 
   return {
     flowId, overview, enabled, published, draft, history, currentVersionId, viewVersionId, unpublishedReadVersionId, readonly,
-    load, refresh, ensureDraftRef, withDraft, allowsEmptyOutput, publish, abandon, viewHistory, exitHistory, reset,
+    load, refresh, ensureDraftRef, withDraft, allowsEmptyOutput, publish, abandon, abandonDraftOf, viewHistory, exitHistory, reset,
   }
 })

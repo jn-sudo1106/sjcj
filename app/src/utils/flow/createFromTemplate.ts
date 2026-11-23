@@ -4,7 +4,7 @@ import { flowCenterApi, type FlowRecord } from '@/api'
 import { instantiateStructureTemplate } from './flowTemplates'
 import { copyWholeFlow } from './copiedConfigs'
 import { reportDetachResult } from './applyTemplateToSource'
-import { copiedPublishWarning } from './flowPublish'
+import { copiedPublishWarning, copiedRootWarning } from './flowPublish'
 
 /** 「暂不建流程」的取值：只在调用方传 allowNone 时出现 */
 export const NO_FLOW_TEMPLATE = ''
@@ -86,8 +86,9 @@ export async function createFlowFromTemplate(templateId: string, name: string, o
   if (template.definition.structureOnly) {
     return flowCenterApi.save({ name, definition: instantiateStructureTemplate(template.definition), fromTemplateId: templateId })
   }
-  const { flowId, detach, publishError } = await copyWholeFlow(templateId, name, { sourceFlowRef: `模板「${template.name}」`, ...(options.reuseConfigs === undefined ? {} : { reuseConfigs: options.reuseConfigs }) })
+  const { flowId, detach, publishError, rootError } = await copyWholeFlow(templateId, name, { sourceFlowRef: `模板「${template.name}」`, ...(options.reuseConfigs === undefined ? {} : { reuseConfigs: options.reuseConfigs }) })
   reportDetachResult(detach)
+  if (rootError) ElMessage.warning(copiedRootWarning(flowId, rootError))
   if (publishError) ElMessage.warning(copiedPublishWarning(flowId, publishError))
   const created = await flowCenterApi.detail(flowId)
   if (!created) throw new Error(`流程已创建（#${flowId}），请刷新列表查看`)

@@ -19,3 +19,8 @@ export function copyFlowErrorText(message: string | undefined): string {
 export function copiedPublishWarning(flowId: string, reason: string): string {
   return `新流程 #${flowId} 自动发布失败（${reason}），现在只有草稿：定时和手动采集都跑不了，也不能再被复制。请打开这条流程手动发布。`
 }
+
+/** 复制品的流程入口（根节点）配置没带过去的提示：copyFlow 不复制根节点，入口挂配置的流程复制出来是空的 */
+export function copiedRootWarning(flowId: string, reason: string): string {
+  return `流程入口的配置没能带到新流程 #${flowId}（${reason}），请打开这条流程重新选择入口配置`
+}

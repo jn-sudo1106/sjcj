@@ -12,7 +12,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type FlowTemplateGroup, type SourceCategory } from '@/api'
-import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
+import { copiedPublishWarning, copiedRootWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { CopyDocument, Delete, Edit, Link, Lock, MoreFilled, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
@@ -715,7 +715,7 @@ async function copyFlow(t: FlowRecord) {
       return
     }
     const detaching = ElMessage({ message: reuseConfigs ? '正在复制流程…' : '正在复制流程并为节点复制独立配置…', duration: 0 })
-    const { flowId: newId, detach, publishError } = await copyWholeFlow(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」`, reuseConfigs })
+    const { flowId: newId, detach, publishError, rootError } = await copyWholeFlow(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」`, reuseConfigs })
       .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     if (created) replaceFlow(created)
@@ -729,6 +729,7 @@ async function copyFlow(t: FlowRecord) {
     })
     ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}${reuseConfigs ? '（节点复用原配置）' : ''}`)
     reportDetachResult(detach, '原流程')
+    if (rootError) ElMessage.warning(copiedRootWarning(newId, rootError))
     if (publishError) ElMessage.warning(copiedPublishWarning(newId, publishError))
   } catch (e) {
     ElMessage.error(copyFlowErrorText((e as Error)?.message ?? String(e)))
