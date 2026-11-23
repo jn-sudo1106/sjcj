@@ -1739,7 +1739,13 @@ async function fetchRuleOrchestrationStream(
     try {
       detail = (await res.text()).trim()
     } catch { /* ignore */ }
-    throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+    // Spring 默认错误体是 {timestamp,status,error,path}，只取 message/error，免得整段 JSON 糊在提示里
+    let reason = detail.slice(0, 200)
+    try {
+      const parsed = JSON.parse(detail) as { message?: unknown; msg?: unknown; error?: unknown }
+      reason = String(parsed.message || parsed.msg || parsed.error || '') || reason
+    } catch { /* 非 JSON 原样保留 */ }
+    throw new Error(`生成服务返回 HTTP ${res.status}${reason ? `（${reason}）` : ''}，请稍后重试；持续失败请联系规则中心排查`)
   }
   let text = ''
   if (res.body && typeof res.body.getReader === 'function') {
@@ -2327,30 +2333,27 @@ export const ruleApi = {
   },
   // 传整个 ruleCfg：mock 按 inputFields/outputFields 生成多参骨架。
   // 真实：POST /vrule/ai/dashscope/stream（form-urlencoded + 流式文本，见 rule-orchestration 页 Rt）。
-  // 注意：saveMeta 未 live 时拿到的是 orch-* mock id，真实 stream 会 400——此时回退 mock 生成。
+  // 只有该端点本身走 mock 适配（纯 mock 环境、没有后端）时才返回骨架。
+  // 2026-11-23 186 实测：真实 stream 500 时原先静默回退 mock，页面显示假路径
+  // `/rules/generated/orch-draft-<时间戳>.xml` 且无任何报错，用户一保存就把假路径写进节点——
+  // 现在 ruleId 无效或真实 stream 失败一律报错，不造假配置。
   orchestrationGenerate: async (ruleCfg: RuleOrchestration, signal?: AbortSignal) => {
     const endpoint = 'rule/orchestrationGenerate'
-    const useMock = usesMockAdapter(endpoint) || !isVruleNumericRuleId(ruleCfg.ruleId)
-    if (useMock) {
+    if (usesMockAdapter(endpoint)) {
       const result = await request<unknown>(endpoint, { ruleCfg }, { mode: 'mock' })
       if (result && typeof result === 'object' && 'script' in (result as object)) {
         return result as RuleOrchestrationGenerateResult
       }
       return ruleOrchestrationGenerateFromLegacy(result)
     }
+    if (!isVruleNumericRuleId(ruleCfg.ruleId)) {
+      throw new ApiError(endpoint, new Error(`业务规则还没有保存成功（规则 ID「${ruleCfg.ruleId ?? ''}」无效），不能生成配置，请稍后重试`))
+    }
     try {
       return await fetchRuleOrchestrationStream(ruleCfg, signal)
     } catch (e) {
       if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError') || (e as Error)?.name === 'AbortError') {
         throw e instanceof ApiError ? e : new ApiError(endpoint, new Error('已取消生成'))
-      }
-      // 默认 hybrid：真实 stream 挂了（生产 dashscope 4xx/超时）时回退 mock 骨架，避免「生成脚本」死路。
-      if (isMockMode()) {
-        const result = await request<unknown>(endpoint, { ruleCfg }, { mode: 'mock' })
-        if (result && typeof result === 'object' && 'script' in (result as object)) {
-          return result as RuleOrchestrationGenerateResult
-        }
-        return ruleOrchestrationGenerateFromLegacy(result)
       }
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
