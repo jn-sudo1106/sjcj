@@ -140,6 +140,30 @@ describe('网站读取 HTTP 契约', () => {
     expect(result).toEqual({ ok: true, demo: false, message: '网站、源已按顺序保存并完成关联', siteId: '11825', sourceId: '9001', sourceIds: ['9001'] })
   })
 
+  it('site/add 的 data 为空、ID 只在 msg 里时直接取 msg 的 ID，不按名称回查（同名老网站不再挡住建源）', async () => {
+    fetchMock
+      // 真实 bee-config SiteController.add：getSuccessResult().setMsg("新增成功, ID:" + siteId)，data 为空
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '新增成功, ID:2533', data: null }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:491000011' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:491000012' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+    const { siteApi } = await import('./index')
+
+    const result = await siteApi.siteCreate({
+      siteId: 'site-draft', name: '克拉克森', category: '', dirId: '9011533', owner: 'admin', sourceCount: 2, errorCount: 0,
+    }, [
+      { sourceId: 'd1', name: '克拉克森-Clarksons TCE', url: 'https://sin.clarksons.net/Home', configId: '', mainTable: '', owner: 'admin', state: 'C' },
+      { sourceId: 'd2', name: '克拉克森-1Yr VLCC TC', url: 'https://sin.clarksons.net/Home', configId: '', mainTable: '', owner: 'admin', state: 'C' },
+    ])
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]))
+    expect(urls.some((url) => url.includes('site/sitePaged'))).toBe(false)
+    expect(urls[2]).toContain('/api/v1/source/bindSite?sourceId=491000011&siteId=2533')
+    expect(urls[4]).toContain('/api/v1/source/bindSite?sourceId=491000012&siteId=2533')
+    expect(result).toMatchObject({ ok: true, siteId: '2533', sourceIds: ['491000011', '491000012'] })
+  })
+
   it('siteImportSources 对真实网站逐行 snatchSave → bindSite，不再查 mock 夹具', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ code: '0', data: { siteId: 126, siteName: '土地政策', categoryId: 7 } }))

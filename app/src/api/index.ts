@@ -1424,7 +1424,11 @@ export const siteApi = {
 
     const siteAck = ackFromApiResult(result)
     if (!siteAck.ok) return siteAck
+    // 真实 site/add 的 data 为空，新 ID 只在 msg 里：「新增成功, ID:2533」（186 bee-config SiteController.add 反编译核对）。
+    // 不先读 msg 就只能按名称回查，一旦已有同名老网站（如 2021 年的「克拉克森」211）就判为多个同名而中止，
+    // 用户重试一次就多建一个空网站（11-23 实测连建 2528–2533）。
     let siteId = idFromApiResult(result, ['siteId', 'siteID', 'siteid', 'id'])
+      ?? siteAck.message?.match(/\bID\s*[:：]\s*(\d+)/i)?.[1]
     if (!siteId) {
       const matched = (await siteApi.sitePaged({ keyword: siteName, page: 1, size: 20 })).list
         .filter((item) => item.name.trim() === siteName)
