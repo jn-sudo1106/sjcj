@@ -113,6 +113,8 @@ export interface MonitorCheckConf {
   /** 24 个通用方法里选中的那些（AI 检查） */
   methods?: string[]
   desc?: string
+  promptCustom?: boolean
+  promptTemplateId?: number
   systemPrompt?: string
   script?: string
   /**

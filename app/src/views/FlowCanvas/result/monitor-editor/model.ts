@@ -20,6 +20,8 @@ export interface MonitorEditorForm {
   /** AI 检查方法（METHOD_GROUPS 的 code） */
   methods: string[]
   desc: string
+  promptCustom: boolean | undefined
+  promptTemplateId: number | undefined
   systemPrompt: string
   providerCode: string
   modelCode: string
@@ -219,6 +221,8 @@ export function emptyForm(): MonitorEditorForm {
     schedule: '',
     methods: [],
     desc: '',
+    promptCustom: undefined,
+    promptTemplateId: undefined,
     systemPrompt: defaultSystemPrompt(),
     providerCode: '',
     modelCode: '',
@@ -347,6 +351,8 @@ export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
     schedule: textOf(record.schedule ?? conf.cron),
     methods: methods.map((item) => normalizeMethod(item)),
     desc: textOf(conf.desc ?? orchestration.describe),
+    promptCustom: typeof conf.promptCustom === 'boolean' ? conf.promptCustom : undefined,
+    promptTemplateId: conf.promptTemplateId,
     systemPrompt: textOf(conf.systemPrompt ?? orchestration.systemPrompt),
     providerCode: textOf(conf.modelProviderCode ?? orchestration.modelProviderCode),
     modelCode: textOf(conf.modelCode ?? orchestration.modelCode),
@@ -370,7 +376,7 @@ export function formFromRecord(record: MonitorRecordView): MonitorEditorForm {
     channels: channelsOfConf(conf),
     receivers: listOf(conf.receivers).join(', ') || textOf(conf.mailTo),
     version: textOf(conf.version),
-    timeColumn: textOf(conf.timeColumn),
+    timeColumn: textOf(conf.timeColumn || conf.dateColumn),
     windowType: windowForm.windowType,
     windowHours: windowForm.windowHours,
     overdueMinutes: overdue.expectEveryMinutes === undefined ? '' : String(overdue.expectEveryMinutes),
@@ -412,6 +418,8 @@ export function confFromForm(
 
   if (form.kind === 'ai') {
     conf.desc = form.desc
+    conf.promptCustom = form.promptCustom
+    conf.promptTemplateId = form.promptTemplateId
     conf.systemPrompt = form.systemPrompt
     conf.modelProviderCode = form.providerCode
     conf.modelCode = form.modelCode
@@ -425,10 +433,13 @@ export function confFromForm(
     conf.nullPolicy = form.nullPolicy
     conf.noDataPolicy = form.noDataPolicy
     conf.version = form.version || undefined
-    // 不猜列名：空就是不传，让脚本自报「无法自动识别入库时间列」，保存时页面只提示不阻断
+    // 空表示不限制时间；清除旧别名，避免执行器继续按历史时间字段过滤。
     const timeColumn = form.timeColumn.trim()
     if (timeColumn) conf.timeColumn = timeColumn
-    else delete conf.timeColumn
+    else {
+      delete conf.timeColumn
+      delete conf.dateColumn
+    }
     conf.window = windowOfForm(form)
     const overdue = overdueOfForm(form)
     if (overdue) {
@@ -490,6 +501,7 @@ export function regenerateReasons(form: MonitorEditorForm, baseline: MonitorEdit
   if (form.tableName.trim() !== baseline.tableName.trim()) reasons.push('检查表')
   if (form.timeColumn.trim() !== baseline.timeColumn.trim()) reasons.push('入库时间字段')
   if (form.desc.trim() !== baseline.desc.trim()) reasons.push('描述')
+  if (form.systemPrompt.trim() !== baseline.systemPrompt.trim()) reasons.push('系统提示词')
   if (signatureOfMethods(form.methods) !== signatureOfMethods(baseline.methods)) reasons.push('监控方法')
   return reasons
 }
@@ -513,6 +525,8 @@ export function formSignature(form: MonitorEditorForm): string {
     schedule: form.schedule.trim(),
     methods: signatureOfMethods(form.methods),
     desc: form.desc.trim(),
+    promptCustom: form.promptCustom,
+    promptTemplateId: form.promptTemplateId,
     systemPrompt: form.systemPrompt.trim(),
     providerCode: form.providerCode,
     modelCode: form.modelCode,
