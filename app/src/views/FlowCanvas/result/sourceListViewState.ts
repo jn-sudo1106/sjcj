@@ -96,6 +96,8 @@ export function viewStateFilter(state: SourceListViewState): SourceFilter {
     entryTypeId: cond.entryTypeId,
     // 1104 按配置查源（旧平台源列表的「配置」筛选）；后端 SourceCond 认 configId
     configId: cond.configId,
+    // 1124 按队列查源：sourcePaged 的 `topic`（精确等值，后端按 cs_config.TOPIC → 流程归属反查源）
+    topic: cond.topic,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
     state: state.status === 'all' || state.status === 'disabled' ? undefined : state.status,

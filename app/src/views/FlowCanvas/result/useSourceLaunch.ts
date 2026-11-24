@@ -35,6 +35,10 @@ export type SourceFilter = {
   /** 按配置过滤（1104）：`sourcePaged` 的 `configId`（source-api.md §1.1 SourceCond 生效字段，
    *  Long，后端内部反查主配置）。用来查「这份配置被哪些源用」——旧平台源列表的「配置」筛选。 */
   configId?: string
+  /** 按队列过滤（1124）：`sourcePaged` 的 `topic`，**精确等值**（后端 `queryConfigsByTopic(topic, false)`）。
+   *  筛的是「这个队列被哪些流程用过」——cs_config.TOPIC 命中的配置 → cs_item_config 的 FLOW_ID →
+   *  与流程绑定的源，不分首节点；配置超过 500 个的队列会被后端截断。 */
+  topic?: string
   /** 「我的视图」目录（10-15）：`sourcePaged` 的 `viewCategoryId`。只有 sourcePaged 认，其它按条件的接口不认 */
   viewCategoryId?: string
   /** 系统目录（2026-10-21）：`sourcePaged` 的 `categorys`，逗号分隔、只匹配直属，调用方已展开子级 */
@@ -122,6 +126,7 @@ export function describeFilters(query: SourceFilter): string {
   if (query.entryTypeId) parts.push(`主表 #${query.entryTypeId}`)
   // 1104 按配置查：按条件发任务 / 导出的确认弹窗也要看得到，否则少了一条参与筛选的条件也不知道
   if (query.configId) parts.push(`配置 #${query.configId}`)
+  if (query.topic) parts.push(`队列「${query.topic}」`)
   if (query.sourceGroupId) parts.push(`来源组 #${query.sourceGroupId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
   // NULL / NOT NULL 是后端认的空值标记（2026-09-29），照字面写成「URL 含「NULL」」会看不懂

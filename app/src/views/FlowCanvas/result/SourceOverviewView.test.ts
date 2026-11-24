@@ -1461,7 +1461,7 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
-  it('同一字段只能一行：别的行占了的字段置灰；八个字段加满后没有「+」', async () => {
+  it('同一字段只能一行：别的行占了的字段置灰；九个字段加满后没有「+」', async () => {
     const { wrapper } = await mountWithSpy()
     await add(wrapper)
     const secondOptions = fields(wrapper)[1]!.findAll('option')
@@ -1473,8 +1473,10 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await add(wrapper)
     await add(wrapper)
     await add(wrapper)
-    // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），1104 加了「配置 ID」（configId），字段数 8
-    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId'])
+    await add(wrapper)
+    // 1008-04 加了「默认流程 ID」，1022 加了「主表 ID」（entryTypeId），1104 加了「配置 ID」（configId），
+    // 1124 加了「队列」（topic），字段数 9
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId', 'topic'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
   })
 

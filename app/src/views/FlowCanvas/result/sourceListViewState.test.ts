@@ -24,4 +24,13 @@ describe('viewStateFilter', () => {
     const q = viewStateFilter(st({ conditions: [{ field: 'configId', op: 'eq', value: '1400765' }] }))
     expect(q.configId).toBe('1400765')
   })
+
+  // 1124：按队列查源（旧平台源列表搜索条的「队列」输入框）。后端是**精确等值**
+  // （`queryConfigsByTopic(topic, false)`），所以前端只 trim、不加通配，也不做包含匹配。
+  it('队列条件转成 sourcePaged 的 topic（精确值，只 trim）', () => {
+    const q = viewStateFilter(st({ conditions: [{ field: 'topic', op: 'eq', value: '  dev_web_snatch_news  ' }] }))
+    expect(q.topic).toBe('dev_web_snatch_news')
+    // 没填值等于没这行，不能发一个空 topic（后端空串等于不过滤，但也别指望它兜）
+    expect(viewStateFilter(st({ conditions: [{ field: 'topic', op: 'eq', value: '   ' }] })).topic).toBeUndefined()
+  })
 })

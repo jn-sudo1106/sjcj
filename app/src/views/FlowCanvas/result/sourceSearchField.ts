@@ -48,7 +48,7 @@ export function mightBeUrlFragment(text: string): boolean {
  *   flowId=1400330 得 46 条、与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略。
  *   只能手动选，不参与自动识别（纯数字一律按源 ID）。放最后，免得「＋」加行时先加出它来。
  */
-export type SourceCondField = SourceSearchField | 'remark' | 'entryTypeId' | 'flowId' | 'defaultFlowId' | 'configId'
+export type SourceCondField = SourceSearchField | 'remark' | 'entryTypeId' | 'flowId' | 'defaultFlowId' | 'configId' | 'topic'
 export type SourceCondOp = 'eq' | 'like' | 'notEmpty' | 'empty'
 
 export interface SourceCondition {
@@ -98,6 +98,13 @@ export const SOURCE_COND_FIELDS: { value: SourceCondField; label: string; placeh
   // source-api.md §1.1 的 SourceCond 生效字段含 `configId`（Long，后端内部反查主配置），
   // 用来查「这份配置被哪些源用」。只能手动选，不参与自动识别（纯数字一律按源 ID）；放最后。
   { value: 'configId', label: '配置 ID', placeholder: '配置 ID，如 1400765', ops: [{ value: 'eq', label: '等于' }] },
+  // 1124 按队列查源：旧平台源列表搜索条里的「队列」输入框（`SourceSearch.vue:33-35`，之前一直没迁）。
+  // 后端 `InfoSourceController.applyCondFilter` 对 topic 是**精确等值**（`queryConfigsByTopic(topic, false)`）：
+  // cs_config.TOPIC 相等的配置（最多 500 条，CONFIG_ID 倒序）→ cs_item_config 里出现这些配置的 FLOW_ID
+  // → 与这些流程绑定的源。所以它筛的是「队列被哪些流程用过」，不分首节点，也不看源级覆盖。
+  // 坑：配置超过 500 个的队列会被静默截断（dev_web_snatch_zhibiao 748 个配置，580 流程/500 源 → 375/308）；
+  // 队列名只存在于 broker、没写进 cs_config.TOPIC 的也筛不到。只能手动选，不参与自动识别（放最后）。
+  { value: 'topic', label: '队列名', placeholder: '精确匹配，如 dev_web_snatch_news', ops: [{ value: 'eq', label: '等于' }] },
 ]
 
 export function sourceCondFieldOf(field: SourceCondField) {
@@ -109,7 +116,7 @@ export function sourceCondFieldOf(field: SourceCondField) {
  * 自动识别只认源 ID / 名称 / URL（见文件头）：纯数字一律算源 ID，这几个 ID 类字段和备注
  * 一旦插进来就会被自动改掉，静默漏结果；所以它们只从下拉里选，选完 `pinned` 生效。
  */
-export const MANUAL_ONLY_COND_FIELDS: SourceCondField[] = ['remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId']
+export const MANUAL_ONLY_COND_FIELDS: SourceCondField[] = ['remark', 'entryTypeId', 'flowId', 'defaultFlowId', 'configId', 'topic']
 
 /** 字段的默认条件：第一个后端支持的 */
 export function defaultSourceCondOp(field: SourceCondField): SourceCondOp {
