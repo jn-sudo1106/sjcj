@@ -1660,7 +1660,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <!-- 1123 A1：不用模板源时也在这里选流程模板，提交前能看到节点数和写入表，「预览 / 更换」看节点图与表配置 -->
         <template v-if="addDlg.templateMode === 'blank'">
           <label class="ssw-field-label">流程</label>
-          <FlowChoiceSummary v-if="addDlg.blankTemplateId !== null" :flow-id="addDlg.blankTemplateId" prefix="按模板" data-testid="source-blank-flow">
+          <FlowChoiceSummary v-if="addDlg.blankTemplateId !== null" :flow-id="addDlg.blankTemplateId" prefix="按模板" class="ssw-flow-summary" data-testid="source-blank-flow">
             <template #actions>
               <button type="button" class="rc-btn ssw-mini-btn" data-testid="source-blank-flow-change" @click="changeBlankTemplate">预览 / 更换</button>
             </template>
@@ -1677,7 +1677,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             <label><input v-model="addDlg.flowMode" type="radio" value="none" data-testid="source-flow-none" /> 暂不配置流程</label>
           </div>
           <!-- 1123 A1：复制前直接显示模板源默认流程的节点数与写入表，完整节点图 / 表配置点「预览」 -->
-          <FlowChoiceSummary v-if="addDlg.flowMode === 'copy' && templateDefault.flowId && !templateDefault.loading" :flow-id="templateDefault.flowId" prefix="复制" data-testid="source-copy-flow">
+          <FlowChoiceSummary v-if="addDlg.flowMode === 'copy' && templateDefault.flowId && !templateDefault.loading" :flow-id="templateDefault.flowId" prefix="复制" class="ssw-flow-summary" data-testid="source-copy-flow">
             <template #actions>
               <button type="button" class="rc-btn ssw-mini-btn" data-testid="preview-template-flow" @click="previewTemplateFlow">预览节点及表配置</button>
             </template>
@@ -2090,7 +2090,8 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-add-card { box-sizing: border-box; width: min(720px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow-y: auto; background: #fff; border: 1px solid #dbe5f1; border-radius: 18px; padding: 24px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
 .ssw-add-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .ssw-add-title { font-size: 22px; font-weight: 800; color: var(--rc-text); letter-spacing: -0.02em; }
-.ssw-mini-btn { height: 26px; padding: 0 9px; font-size: 12px; }
+.ssw-flow-summary { margin: 4px 0 16px; }
+.ssw-mini-btn { height: 26px; padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--rc-primary-ink); }
 .ssw-field-label { display: block; margin: 0 0 8px; color: var(--rc-text); font-size: 14px; font-weight: 700; }
 .ssw-field-label em { color: #ef4444; font-style: normal; margin-left: 2px; }
 .ssw-field-label span { color: var(--rc-muted); font-weight: 500; }

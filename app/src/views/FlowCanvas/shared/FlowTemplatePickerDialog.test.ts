@@ -36,11 +36,11 @@ describe('FlowTemplatePickerDialog（1123 A1）', () => {
       attachTo: document.body,
     })
     await flushPromises()
-    const items = [...document.querySelectorAll('.ftp-item')]
-    expect(items.at(-1)?.textContent).toContain('暂不配置流程')
+    expect(document.querySelector('[data-testid="flow-template-none"]')?.textContent).toContain('暂不配置流程')
     ;(document.querySelector('[data-testid="flow-template-none"] input') as HTMLInputElement).click()
     await flushPromises()
     expect(document.querySelector('.preview-stub')).toBeNull()
+    expect(document.querySelector('[data-testid="flow-template-placeholder"]')?.textContent).toContain('暂不配置流程')
     ;(document.querySelector('[data-testid="flow-template-confirm"]') as HTMLButtonElement).click()
     expect(w.emitted('pick')).toEqual([['']])
     w.unmount()
@@ -60,7 +60,7 @@ describe('FlowChoiceSummary（1123 A1）', () => {
     await flushPromises()
     expect(w.text()).toContain('境外浏览器下载源码')
     expect(w.text()).toContain('4 个节点')
-    expect(w.findAll('.fcs-table').map(t => t.text())).toEqual(['⊞ sourcecode_file', '⊞ 通用新闻表（TB_CNEWS）'])
+    expect(w.findAll('.fcs-table').map(t => t.text())).toEqual(['sourcecode_file', '通用新闻表（TB_CNEWS）'])
   })
 
   it('previewable 时有「预览节点及表配置」，点开渲染只读预览', async () => {

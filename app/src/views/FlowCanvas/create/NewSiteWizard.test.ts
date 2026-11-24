@@ -47,9 +47,11 @@ describe('NewSiteWizard', () => {
       global: {
         plugins: [pinia, router, ElementPlus],
         stubs: {
-          FlowChoiceSummary: {
-            props: ['flowId', 'prefix'],
-            template: '<div class="flow-stub" :data-flow="flowId"><slot name="actions" /></div>',
+          FlowTemplatePickerPanel: {
+            name: 'FlowTemplatePickerPanel',
+            props: { modelValue: String, templates: Array, allowNone: Boolean },
+            emits: ['update:modelValue'],
+            template: '<div class="flow-stub" :data-flow="modelValue" :data-none="allowNone" />',
           },
           CategoryTreePicker: {
             template: '<div class="cat-stub" />',
@@ -147,21 +149,22 @@ describe('NewSiteWizard', () => {
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
   })
 
-  it('表单里默认选上模板并显示摘要；「预览 / 更换」改成「暂不配置流程」后只建网站和源，不建流程也不绑定', async () => {
-    vi.mocked(pickFlowTemplate).mockResolvedValueOnce('')
+  it('页面内嵌模板面板（不弹窗），默认选上模板；改选「暂不配置流程」后只建网站和源，不建流程也不绑定', async () => {
     vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001', '9002'] })
     const save = vi.spyOn(flowCenterApi, 'save')
     const bind = vi.spyOn(workflowBindingApi, 'bind')
     const { wrapper, router } = await mountWizard()
-    expect(wrapper.get('.flow-stub').attributes('data-flow')).toBe('template-1')
+    const panel = wrapper.getComponent({ name: 'FlowTemplatePickerPanel' })
+    expect(panel.props('modelValue')).toBe('template-1')
+    expect(panel.props('allowNone')).toBe(true)
+    expect(wrapper.get('[data-testid="gate-flow-picked"]').text()).toBe('已选：模板一#template-1')
     await wrapper.get('input.rc-input').setValue('向导测试站')
-    await wrapper.get('[data-testid="gate-flow-change"]').trigger('click')
+    panel.vm.$emit('update:modelValue', '')
     await flushPromises()
-    expect(pickFlowTemplate).toHaveBeenLastCalledWith({ allowNone: true, initialId: 'template-1' })
-    expect(wrapper.get('.flow-stub').attributes('data-flow')).toBe('')
+    expect(wrapper.get('[data-testid="gate-flow-picked"]').text()).toBe('暂不配置流程')
     await wrapper.get('.rc-btn.primary').trigger('click')
     await flushPromises()
-    expect(pickFlowTemplate).toHaveBeenCalledTimes(1)
+    expect(pickFlowTemplate).not.toHaveBeenCalled()
     expect(save).not.toHaveBeenCalled()
     expect(bind).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
