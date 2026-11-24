@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 分类目录树（0711 R1）：替换新建采集闸门里硬编码的分类下拉，改为可搜索 + 展开 + 勾选（单选）的目录树。
 // 数据来自 sourceApi.sourceCategories()（采集资产页左侧目录同源接口），树形结构由后端直接给出（SourceCategory.children）。
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { sourceApi, type SourceCategory } from '@/api'
 
 export interface CategorySelection {
@@ -36,14 +36,79 @@ function collectKnownLoaded(nodes: SourceCategory[], hasNestedNodes: boolean) {
   })
 }
 
+// 选中节点 ID：本组件 select 出来的 categoryPath 就是节点 ID，
+// 但网站默认目录 / 对话建源带进来的是名称路径（/上海发展/新加坡-资讯），只有 dirId 是节点 ID
+const selectedId = computed(() => props.modelValue.dirId || props.modelValue.categoryPath || '')
+function isSelected(node: SourceCategory): boolean {
+  return !!selectedId.value && node.id === selectedId.value
+}
+
+/** 在已加载的树里找节点，返回从根到它的祖先链（不含自身）；找不到返回 null */
+function findAncestors(nodes: SourceCategory[], id: string, trail: SourceCategory[] = []): SourceCategory[] | null {
+  for (const n of nodes) {
+    if (n.id === id) return trail
+    if (n.children?.length) {
+      const hit = findAncestors(n.children, id, [...trail, n])
+      if (hit) return hit
+    }
+  }
+  return null
+}
+
+async function ensureChildrenLoaded(node: SourceCategory) {
+  if (loadedIds.value.has(node.id)) return
+  const children = await sourceApi.sourceCategories(node.id)
+  if (children.length) node.children = children
+  loadedIds.value.add(node.id)
+}
+
+/**
+ * 预选的分类可能在没展开过的子级里（懒加载，子级还没拉）：按名称路径逐级加载并展开到它，
+ * 名称路径对不上（改过名、根不同）时退回全量加载后按 ID 定位；最后把选中行滚进可视区。
+ */
+const treeRef = ref<HTMLElement | null>(null)
+let revealSeq = 0
+async function revealSelected() {
+  const id = selectedId.value
+  if (!id || !categories.value.length) return
+  const seq = ++revealSeq
+  try {
+    let ancestors = findAncestors(categories.value, id)
+    if (!ancestors) {
+      const names = (props.modelValue.categoryPath || '').split('/').map((x) => x.trim()).filter(Boolean)
+      let level = categories.value
+      for (const name of names.slice(0, -1)) {
+        const parent = level.find((n) => n.name === name)
+        if (!parent) break
+        await ensureChildrenLoaded(parent)
+        level = parent.children ?? []
+      }
+      ancestors = findAncestors(categories.value, id)
+    }
+    if (!ancestors) {
+      await loadAllDescendants()
+      ancestors = findAncestors(categories.value, id)
+    }
+    if (seq !== revealSeq || !ancestors) return
+    ancestors.forEach((a) => expanded.value.add(a.id))
+    await nextTick()
+    treeRef.value?.querySelector('.ctp-row.active')?.scrollIntoView?.({ block: 'nearest' })
+  } catch {
+    // 定位失败不影响手动选择：已选分类仍显示在下方
+  }
+}
+
 onMounted(async () => {
   categories.value = await sourceApi.sourceCategories(props.rootId)
   const hasNestedNodes = categories.value.some((node) => !!node.children?.length)
   collectKnownLoaded(categories.value, hasNestedNodes)
-  if (props.autoSelectFirst && !props.modelValue.categoryPath && categories.value.length) {
+  if (props.autoSelectFirst && !selectedId.value && categories.value.length) {
     select(categories.value[0]) // 保留"有默认分类"的旧体验：首次进入自动选中第一个顶级分类
   }
+  void revealSelected()
 })
+// 外部改了选中（切网站带出网站目录）也要展开定位；树内点选的节点本来就可见，find 直接命中
+watch(selectedId, () => { void revealSelected() })
 
 // 搜索只能在已加载的节点里过滤，而子级默认要展开才懒加载——没展开过的分类（如「媒体」）搜不到。
 // 所以第一次输入关键词时把所有未加载的子级一次拉全（按层并发），加载期间显示「正在加载」而不是「无匹配」。
@@ -141,15 +206,15 @@ function select(node: SourceCategory) {
 <template>
   <div class="ctp">
     <input v-model="keyword" class="rc-input ctp-search" placeholder="搜索分类" />
-    <div class="rc-tree ctp-tree">
+    <div ref="treeRef" class="rc-tree ctp-tree">
       <div
         v-for="item in flatNodes"
         :key="item.node.id"
         class="rc-tree-row ctp-row"
-        :class="{ active: item.node.id === modelValue.categoryPath }"
+        :class="{ active: isSelected(item.node) }"
         :style="{ paddingLeft: `${8 + item.depth * 18}px` }"
         role="radio"
-        :aria-checked="item.node.id === modelValue.categoryPath"
+        :aria-checked="isSelected(item.node)"
         tabindex="0"
         @click="select(item.node)"
         @keydown.enter.prevent="select(item.node)"
@@ -164,7 +229,7 @@ function select(node: SourceCategory) {
           <input
             type="radio"
             name="new-collect-category"
-            :checked="item.node.id === modelValue.categoryPath"
+            :checked="isSelected(item.node)"
           />
           <span class="ctp-radio" aria-hidden="true" />
           <span class="ctp-name">{{ item.node.name }}</span>
