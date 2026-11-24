@@ -89,10 +89,10 @@ describe('环境配置页的写入表单', () => {
     expect(save.mock.calls[0]?.[0]).toMatchObject({ appId: 1200, sourceCode: 'master', databaseType: 1, dbSchema: 'gzh_db' })
   })
 
-  it('ClickHouse 与 Elasticsearch 不要求 schema', async () => {
+  it('ClickHouse、Elasticsearch 与 DuckDB 不要求 schema', async () => {
     const vm = await mountTab()
     const save = vi.spyOn(syncApi, 'saveDatabase').mockResolvedValue({})
-    for (const databaseType of [4, 5]) {
+    for (const databaseType of [4, 5, 6]) {
       vm.openDatabase()
       Object.assign(vm.databaseForm, {
         customerId: 5, appId: 1200, name: `目标端${databaseType}`, sourceCode: `sink_${databaseType}`,
@@ -100,8 +100,9 @@ describe('环境配置页的写入表单', () => {
       })
       await vm.submitDatabase()
     }
-    expect(save).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenCalledTimes(3)
     expect(save.mock.calls[1]?.[0]).toMatchObject({ databaseType: 5, dbSchema: '' })
+    expect(save.mock.calls[2]?.[0]).toMatchObject({ databaseType: 6, dbSchema: '' })
   })
 
   it('操作列改为图标热区：客户端给「编辑/重置签名密钥/删除」，数据源给「编辑/删除」', async () => {

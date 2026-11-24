@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   autoEsIndexName, isEsIndexNameValid, isSinkTarget, parseSinkOptions, renderSinkDefaults,
   sanitizeSinkOptions, sinkOptionsProblem, sinkPreviewLines,
+  DATABASE_TYPE_LABELS,
   ES_BULK_MAX_BYTES_DEFAULT, ES_FILE_MAX_BYTES_DEFAULT,
   generateSyncSql, mapEntityCopyColumns, mapSyncColumns, submitSyncColumns, syncApi, WATERMARK_COLUMN,
   type SyncColumnMap, type SyncEsSinkOptions, type SyncSinkDetail, type SyncSinkOptions,
@@ -212,8 +213,9 @@ describe('CK / ES 目标端参数镜像', () => {
     { key: 4, no: 4, sourceColumn: 'UPDATE_DT', targetColumn: 'origin_update_time', targetColumnType: 'varchar' },
   ]
 
-  it('只有 ClickHouse / Elasticsearch 有目标端参数', () => {
-    for (const type of [1, 2, 3]) {
+  it('只有 ClickHouse / Elasticsearch 有目标端参数；DuckDB 类型标签正确', () => {
+    expect(DATABASE_TYPE_LABELS[6]).toBe('DuckDB')
+    for (const type of [1, 2, 3, 6]) {
       expect(isSinkTarget(type)).toBe(false)
       expect(renderSinkDefaults(type, mapped)).toBeNull()
     }

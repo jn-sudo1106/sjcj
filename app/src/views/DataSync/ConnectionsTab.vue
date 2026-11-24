@@ -457,7 +457,7 @@ function removeDatabase(row: SyncDatabase) {
             <el-option v-for="(label, value) in DATABASE_TYPE_LABELS" :key="value" :value="Number(value)" :label="label" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Schema"><el-input v-model="databaseForm.dbSchema" maxlength="20" :placeholder="RELATIONAL_TYPES.includes(databaseForm.databaseType) ? '关系型库必填' : 'ClickHouse / Elasticsearch 留空'" /></el-form-item>
+        <el-form-item label="Schema"><el-input v-model="databaseForm.dbSchema" maxlength="20" :placeholder="RELATIONAL_TYPES.includes(databaseForm.databaseType) ? '关系型库必填' : (databaseForm.databaseType === 6 ? '选填，默认为 main' : 'ClickHouse / Elasticsearch 留空')" /></el-form-item>
         <el-form-item label="环境类型">
           <el-radio-group v-model="databaseForm.type"><el-radio :value="0">数据库</el-radio><el-radio :value="1">文件库</el-radio></el-radio-group>
         </el-form-item>
