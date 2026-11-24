@@ -82,6 +82,8 @@ export interface UseAskChatOptions {
   /** 后端结构化建表草稿（SSE 顶层 tableDraft / proposal.table）；正文代码块由页面在定稿时提取 */
   onTableDraft?: (draft: TableDraft) => void
   onSessionAssigned?: (sessionId: string, threadId: string) => void
+  /** 上游结束原因（finish_reason / connection_closed），空回答时页面据此解释 */
+  onFinishReason?: (reason: string) => void
   onError?: (info: AskErrorInfo) => void
   onFinished?: (info: AskChatFinishInfo) => void
   onStateChange?: (state: AskChatState) => void
@@ -214,6 +216,9 @@ export function useAskChat(options: UseAskChatOptions) {
       case 'table_draft':
         gotClarification = true
         options.onTableDraft?.(event.draft)
+        break
+      case 'finish':
+        options.onFinishReason?.(event.reason)
         break
       case 'error':
         error.value = normalizeAskError(event.error)

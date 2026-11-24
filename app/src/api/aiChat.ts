@@ -393,6 +393,8 @@ export interface ChatMessage {
   question?: string
   /** 导出/图表切换等本地操作回执，与 AI 回答区分，不伪造思考过程 */
   localAction?: boolean
+  /** 上游给的结束原因（OpenAI 兼容 finish_reason；未收到 [DONE] 就断流记为 connection_closed），空回答时据此解释原因 */
+  finishReason?: string
   // 智能体交互与富文本卡片扩展
   clarification?: ClarificationState
   thinking?: {
@@ -613,6 +615,9 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
           if (dataObj.sql) {
             assistantMsg.sql = dataObj.sql
           }
+          // 后端若落了结束原因（finishReason / finish_reason），回放的空回答也能解释原因
+          const savedFinish = dataObj.finishReason ?? dataObj.finish_reason
+          if (typeof savedFinish === 'string' && savedFinish) assistantMsg.finishReason = savedFinish
           // schemaVersion>=2：富卡片直接回放，不再从文本正则重猜
           if (dataObj.schemaVersion >= 2) {
             if (dataObj.chartData) assistantMsg.chartData = dataObj.chartData
@@ -897,7 +902,41 @@ export type AgentChatEvent =
   | { type: 'table_draft'; draft: TableDraft }
   | { type: 'session_assigned'; sessionId: string; threadId: string }
   | { type: 'error'; error: string }
+  /** 上游结束原因：choices[0].finish_reason / 顶层 finish_reason；流没发 [DONE] 就断开时为 connection_closed */
+  | { type: 'finish'; reason: string }
   | { type: 'done' }
+
+/** 数据流没收到 [DONE] 就关闭（网关/后端超时断开、进程异常）时的结束原因 */
+export const FINISH_REASON_CONNECTION_CLOSED = 'connection_closed'
+
+/**
+ * 空回答（思考完成但没有正文）时按结束原因给出说明；没有原因时退回通用提示。
+ * description 末尾附原始 finish_reason，方便对着后端日志排查。
+ */
+export function describeEmptyAnswer(reason?: string): { title: string; description: string } {
+  const r = (reason || '').trim().toLowerCase()
+  let title = '思考分析已完成，但未返回最终回答内容'
+  let description = '上游模型或数据检索接口可能未生成文本回复。您可以展开上方「思考过程」卡片查看详细分析步骤与日志。'
+  if (r === 'length' || r === 'max_tokens' || r === 'model_length') {
+    title = '回答被截断：模型输出长度已用完'
+    description = '查询结果过多，模型还没写出回答就达到了输出上限。可缩小时间范围、只要必要字段或限制条数（如「最多 20 条，只列标题和时间」）后重试。'
+  } else if (r === 'content_filter' || r === 'sensitive') {
+    title = '回答被内容安全策略拦截'
+    description = '上游模型的内容安全策略拦截了本次输出。可调整问题措辞或缩小查询范围后重试。'
+  } else if (r === 'tool_calls' || r === 'function_call' || r === 'tool_use') {
+    title = '智能体停在了工具调用，没有继续生成回答'
+    description = '智能体可能达到了工具调用轮数上限。可展开「思考过程」查看已执行的步骤，缩小问题范围后重试。'
+  } else if (r === 'stop' || r === 'end_turn' || r === 'stop_sequence') {
+    title = '模型已结束，但没有输出回答正文'
+    description = '通常是查询结果过大或上下文过长，模型读完结果后直接结束了。可缩小时间范围或限制返回条数后重试。'
+  } else if (r === FINISH_REASON_CONNECTION_CLOSED) {
+    title = '数据流在返回回答前断开'
+    description = '没有收到正常的结束标记，可能是网关或后端超时断开了连接。可直接重试；反复出现请查看后端日志。'
+  } else if (r) {
+    title = '上游未返回最终回答内容'
+  }
+  return { title, description: reason ? `${description}（结束原因：${reason}）` : description }
+}
 
 /**
  * 从文本或 Markdown 回答中提取待确认项与候选（支持 Markdown Task List 复选框与 JSON 块）。
@@ -1620,6 +1659,13 @@ export async function streamAgentChat(
   const decoder = new TextDecoder()
   let pending = ''
   let completed = false
+  let finishReason = ''
+
+  function noteFinishReason(raw: unknown) {
+    if (typeof raw !== 'string' || !raw.trim() || raw === finishReason) return
+    finishReason = raw.trim()
+    onEvent({ type: 'finish', reason: finishReason })
+  }
 
   const abortListener = () => {
     reader.cancel().catch(() => {})
@@ -1706,6 +1752,8 @@ export async function streamAgentChat(
           if (clarificationObj) emitStructuredClarification(clarificationObj)
         }
 
+        noteFinishReason(choice?.finish_reason ?? payload.finish_reason ?? payload.stop_reason)
+
         // OpenAI 兼容 choices 结构: { choices: [{ delta: { content, reasoning_content } }] }
         if (Array.isArray(payload.choices) && payload.choices.length > 0) {
           const choice = payload.choices[0]
@@ -1785,6 +1833,7 @@ export async function streamAgentChat(
     }
     if (!completed) {
       tryEmitClarificationFromReasoning()
+      if (!finishReason) noteFinishReason(FINISH_REASON_CONNECTION_CLOSED)
       onEvent({ type: 'done' })
     }
   } finally {

@@ -27,6 +27,7 @@ import {
   clarificationOptionKey,
   extractClarificationFromText,
   stripHistorySummary,
+  describeEmptyAnswer,
   extractChartDataFromText,
   extractTableSwitchSuggestions,
   type AiSessionItem,
@@ -200,6 +201,9 @@ const askChat = useAskChat({
     }
     streamSessionId = sessionId
     streamingSessionKey.value = sessionId
+  },
+  onFinishReason: (reason) => {
+    if (activeAssistantMsg) activeAssistantMsg.finishReason = reason
   },
   onError: (info) => {
     if (activeAssistantMsg) {
@@ -1274,6 +1278,7 @@ async function handleRetry(msg: ChatMessage) {
   msg.content = ''
   msg.status = 'streaming'
   msg.errorInfo = undefined
+  msg.finishReason = undefined
   msg.interrupted = false
   msg.sql = undefined
   msg.clarification = undefined
@@ -1701,8 +1706,9 @@ onUnmounted(() => {
                       type="info"
                       :closable="false"
                       show-icon
-                      title="思考分析已完成，但未返回最终回答内容"
-                      description="上游模型或数据检索接口可能未生成文本回复。您可以展开上方「思考过程」卡片查看详细分析步骤与日志。"
+                      :title="describeEmptyAnswer(msg.finishReason).title"
+                      :description="describeEmptyAnswer(msg.finishReason).description"
+                      data-testid="empty-answer-hint"
                     />
                   </div>
 
