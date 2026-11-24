@@ -96,8 +96,9 @@ describe('SourceTab 加载与初始筛选', () => {
     const { wrapper, router } = await mountAt({ tab: 'source', bizDirId: 'd2', directoryReturn: back })
     const list = wrapper.findComponent({ name: 'SourceOverviewView' })
     expect(useUiStore().assetView).toBe('table')
-    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd2', includeDescendants: false }] })
-    expect(wrapper.get('[data-dir="d2"][data-testid="dir-node"]').classes()).toContain('on')
+    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd2', includeDescendants: true }] })
+    // 按目录跳转含子目录：树上是勾选态（不是只看本目录的高亮态）
+    expect((wrapper.get('[data-dir="d2"][data-testid="dir-node"] input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
     expect(router.currentRoute.value.query.bizDirId).toBeUndefined()
     for (const [query] of vi.mocked(sourceApi.sourcePaged).mock.calls) expect(query?.directory).toMatchObject({ mode: 'selected' })
     await list.get('[data-testid="source-overview-state"]').setValue('E')
@@ -108,7 +109,7 @@ describe('SourceTab 加载与初始筛选', () => {
     await router.push({ path: '/collect', query: { tab: 'source', bizDirId: 'd3', directoryReturn: back } })
     await flushPromises()
     await flushPromises()
-    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd3', includeDescendants: false }] })
+    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd3', includeDescendants: true }] })
     const query = vi.mocked(sourceApi.sourcePaged).mock.lastCall?.[0]
     expect(query?.state).toBeUndefined()
     expect(query?.sourceGroupId).toBeUndefined()
@@ -117,12 +118,39 @@ describe('SourceTab 加载与初始筛选', () => {
     useUiStore().setAssetView('card')
   })
 
+  it('网站卡片点目录标签（1123 A4）：打开该网站在这个目录下的第一个源详情，导航按目录；没有命中退回网站第一个源', async () => {
+    sourceDirs.resetSourceDirCache()
+    vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    const { wrapper, router } = await mountAt({ tab: 'source' })
+    const list = wrapper.findComponent({ name: 'SourceOverviewView' })
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValueOnce({ total: 1, list: [{ sourceId: 's9', name: '目录内的源' } as never] })
+    const site = { siteId: '7', name: '同花顺', category: '', owner: '', sourceCount: 3, errorCount: 0 }
+    list.vm.$emit('openSiteDir', site, { id: 'd2', path: '股票数据 / 基本资料' })
+    await flushPromises()
+    expect(paged.mock.calls[0]?.[0]).toMatchObject({ siteIds: '7', directory: { kind: 'biz', mode: 'selected', selections: [{ id: 'd2', includeDescendants: true }] }, page: 1, size: 1 })
+    let route = router.currentRoute.value
+    expect(route.path).toBe('/canvas')
+    expect(route.query).toMatchObject({ siteId: '7', sourceId: 's9', view: 'overview' })
+    expect(useSourceSearchStore().get(route.query.sourceSearch)?.query.directory).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'd2', includeDescendants: true }] })
+
+    await router.push({ path: '/collect', query: { tab: 'source' } })
+    await flushPromises()
+    paged.mockResolvedValueOnce({ total: 0, list: [] })
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValueOnce([{ sourceId: 's1', name: '网站第一个源' } as never])
+    list.vm.$emit('openSiteDir', site, { id: 'd2', path: '股票数据 / 基本资料' })
+    await flushPromises()
+    route = router.currentRoute.value
+    expect(route.query).toMatchObject({ siteId: '7', sourceId: 's1' })
+    wrapper.unmount()
+    sourceDirs.resetSourceDirCache()
+  })
+
   it('目录定位失败保留指定目录范围，不回退成全站查询', async () => {
     vi.spyOn(sourceDirs, 'loadDirChildren').mockResolvedValue([])
     vi.spyOn(sourceDirs, 'loadDirPath').mockRejectedValue(new Error('目录已删除'))
     vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
     const { wrapper, router } = await mountAt({ tab: 'source', bizDirId: 'missing' })
-    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'missing', includeDescendants: false }] })
+    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: 'missing', includeDescendants: true }] })
     expect(ElMessage.error).toHaveBeenCalledWith('目录定位失败：目录已删除')
     expect(router.currentRoute.value.query.bizDirId).toBe('missing')
     for (const [query] of vi.mocked(sourceApi.sourcePaged).mock.calls) expect(query?.directory).toMatchObject({ mode: 'selected' })
@@ -154,6 +182,17 @@ describe('SourceTab 加载与初始筛选', () => {
 
     const { wrapper: wBad } = await mountAt({ state: 'E' })
     expect(wBad.findComponent({ name: 'FilterToolbar' }).props('errorOnly')).toBe(false)
+  })
+
+  it('?category= 只认数字目录 ID：总览 mock 带来的「/股票类」路径被忽略，不传给真实查询（1123）', async () => {
+    const { wrapper: wOk } = await mountAt({ category: '9009005' })
+    expect(wOk.findComponent({ name: 'FilterToolbar' }).props('categoryFilter')).toEqual(['9009005'])
+    expect(wOk.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory'))
+      .toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: '9009005', includeDescendants: true }] })
+
+    const { wrapper: wBad } = await mountAt({ category: '/股票类' })
+    expect(wBad.findComponent({ name: 'FilterToolbar' }).props('categoryFilter')).toEqual([])
+    expect(JSON.stringify(wBad.findComponent({ name: 'SourceOverviewView' }).props('scopeDirectory') ?? null)).not.toContain('股票类')
   })
 
   // 后端 site/sitePaged?state=ERROR 实测恒返回 0 条，所以异常过滤在前端按 errorCount 做，不发 state
@@ -312,25 +351,28 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     wrapper.unmount()
   })
 
-  // 2026-11-11：源 → 所在目录的回路。点「业务目录」列里的路径 = 左栏定位并选中这个目录，
-  // 列表只剩它下面的源，点的那条源就在结果里（不用换页，同点来源组名跳走的口径）。
-  it('点「业务目录」列里的路径：展开左栏并选中这个目录，列表按该目录筛', async () => {
+  // 1123 A3（2026-11-24 用户确认）：点「业务目录」列里的路径 = 打开这个源的详情页，
+  // 详情页左侧导航按该业务目录（含子目录）列源；返回列表时停在这个目录。
+  it('点「业务目录」列里的路径：打开源详情，导航上下文只按该目录（含子目录）查', async () => {
     sourceDirs.resetSourceDirCache()
     vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parent) => (parent === '-2' ? [{ id: '900', name: '股票数据' }] : []))
     vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map([['s1', ['900']]]))
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源' } as never] })
-    const { wrapper, list } = await mountList()
-    await wrapper.get('[data-testid="dir-panel-fold"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="dir-panel-rail"]').exists()).toBe(true)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: 's1', name: '测试源', siteId: '7' } as never] })
+    const { wrapper, router } = await mountList()
     await wrapper.get('[data-testid="biz-dir-900"]').trigger('click')
     await flushPromises()
-    await flushPromises()
-    // 折叠的左栏被展开，业务目录页签选中这个目录（只看本目录，不含子级）
-    expect(wrapper.find('[data-testid="dir-panel-rail"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="dir-kind-biz"]').attributes('aria-selected')).toBe('true')
-    expect(wrapper.get('[data-testid="dir-node"][data-dir="900"]').classes()).toContain('on')
-    expect(list.props('scopeDirectory')).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: '900', includeDescendants: false }] })
+    const route = router.currentRoute.value
+    expect(route.path).toBe('/canvas')
+    expect(route.query).toMatchObject({ siteId: '7', sourceId: 's1', view: 'overview' })
+    const context = useSourceSearchStore().get(route.query.sourceSearch)!
+    expect(context.label).toBe('业务目录')
+    expect(context.query.dirLabel).toBe('业务目录：股票数据（含子级）')
+    expect(context.query.directory).toEqual({ kind: 'biz', mode: 'selected', selections: [{ id: '900', includeDescendants: true }] })
+    expect(context.query.name).toBeUndefined()
+    expect(context.query.siteIds).toBeUndefined()
+    expect(context.listState?.directoryTab).toBe('biz')
+    expect(context.listState?.directoryScope?.dirIds).toEqual(['900'])
+    expect(context.returnTo).toBe('/collect?tab=source')
     wrapper.unmount()
     sourceDirs.resetSourceDirCache()
   })

@@ -9,7 +9,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import SourceWorkflowTabs from './SourceWorkflowTabs.vue'
-import { flowCenterApi, sourceApi, workflowBindingApi, type WorkflowBinding } from '@/api'
+import { flowCenterApi, flowVersionApi, sourceApi, workflowBindingApi, type WorkflowBinding } from '@/api'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { confirmSharedFlowWrite, confirmedSharedFlows, sharedFlowPending } from '@/utils/flow/sharedFlowGuard'
@@ -615,6 +616,33 @@ describe('SourceWorkflowTabs · 共用流程保存提示（10-29）', () => {
     expect(unbind).toHaveBeenCalledWith('100', '11')
     expect(carry).toHaveBeenCalledWith({ 700: '701' })
     expect(router.currentRoute.value.query.flowId).toBe('31')
+  })
+
+  it('发布时选「复制为本源专用」：放弃的是原流程的草稿，即使中途画布已切到复制品（1123，186 流程 15730962 被误放弃）', async () => {
+    vi.spyOn(workflowBindingApi, 'load').mockResolvedValue(loaded([MAIN]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ list: [], total: 5 } as never)
+    const draftOf = (versionId: string, ver: number) => ({ enabled: true, curVer: null, nextVer: 2, publishId: null, draftId: versionId,
+      versions: [{ versionId, flowVer: 1, ver, state: 'W', isLock: 0, isDelete: 0, baseId: null }] })
+    vi.spyOn(flowVersionApi, 'overview').mockImplementation(async (id: string) => (id === '11' ? draftOf('6217', 3) : draftOf('6219', 2)))
+    const action = vi.spyOn(flowVersionApi, 'action').mockResolvedValue({ versionId: null })
+    vi.mocked(copyWholeFlow).mockResolvedValue({ flowId: '31' })
+    // 新流程绑成主流程后画布随之切过去：版本 store 指向复制品
+    vi.spyOn(workflowBindingApi, 'bind').mockImplementation(async () => { await useFlowVersionStore().load('31'); return undefined as never })
+    vi.spyOn(workflowBindingApi, 'unbind').mockResolvedValue(undefined as never)
+    const { wrapper } = await mountTabs(dialogStub)
+    mounted.push(wrapper)
+    document.body.appendChild(wrapper.element)
+    const version = useFlowVersionStore()
+    await version.load('11')
+
+    const asked = confirmSharedFlowWrite('publish')
+    await flushPromises()
+    sharedBtn('shared-flow-copy')!.click()
+    expect(await asked).toBe(false)
+    await flushPromises()
+
+    const abandons = action.mock.calls.filter(([kind]) => kind === 'abandon')
+    expect(abandons).toEqual([['abandon', { flowId: '11', versionId: '6217', ver: 3, expectedPublishId: null }]])
   })
 
   it('取消：不写、不复制，下次保存还会问', async () => {

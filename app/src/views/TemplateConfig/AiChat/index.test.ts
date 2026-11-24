@@ -1466,12 +1466,17 @@ describe('AI 智能问数 · AiChatView', () => {
     expect(wrapper.text()).toContain('本次回答已中断')
   })
 
-  it('对话响应中点击新建会话或切换会话时，自动中断上一次流式会话', async () => {
+  it('对话响应中点击新建会话或切换会话时，不中断上一次流式会话，回答在后台写回原会话', async () => {
     let capturedSignal: AbortSignal | undefined
+    let finish: (() => void) | undefined
 
-    vi.mocked(streamAgentChat).mockImplementation(async (params) => {
+    vi.mocked(streamAgentChat).mockImplementation(async (params, onEvent) => {
       capturedSignal = params.signal
-      return new Promise((_, reject) => {
+      return new Promise<void>((resolve, reject) => {
+        finish = () => {
+          onEvent({ type: 'chunk', text: '后台生成的完整回答' })
+          resolve()
+        }
         params.signal?.addEventListener('abort', () => {
           reject(new DOMException('The user aborted a request.', 'AbortError'))
         })
@@ -1486,16 +1491,25 @@ describe('AI 智能问数 · AiChatView', () => {
     await wrapper.find('[data-testid="send-btn"]').trigger('click')
     await flushPromises()
 
+    // 切到新建会话页：旧流不被 abort
+    await wrapper.find('.rc-newchat-btn').trigger('click')
+    await flushPromises()
     expect(capturedSignal?.aborted).toBe(false)
 
-    // 点击新建问数会话按钮
-    const newChatBtn = wrapper.find('.rc-newchat-btn')
-    await newChatBtn.trigger('click')
+    // 其他会话生成中，在新会话里发送被拦下并提示，不触发第二条流
+    await wrapper.find('textarea').setValue('另一个问题')
+    await wrapper.find('textarea').trigger('keydown', { key: 'Enter' })
     await flushPromises()
+    expect(vi.mocked(streamAgentChat)).toHaveBeenCalledTimes(1)
 
-    // 旧流式请求被成功 abort
-    expect(capturedSignal?.aborted).toBe(true)
-    expect(wrapper.find('[data-testid="stop-btn"]').exists()).toBe(false)
+    // 后台流结束后切回原会话，能看到完整回答且未标中断
+    finish?.()
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    await wrapper.find('.rc-session-item').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('后台生成的完整回答')
+    expect(wrapper.find('[data-testid="interrupted-tag"]').exists()).toBe(false)
   })
 
   it('正确渲染更早 (earlier) 分组的历史会话', async () => {

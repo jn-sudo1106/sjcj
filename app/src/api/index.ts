@@ -1319,6 +1319,11 @@ async function loadSiteUsedTables(siteId: string): Promise<SiteUsedTablesResult>
 }
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
+/** 同名网站的提示：带上已有网站的 ID，方便用户去找 / 改选「加入已有网站」 */
+export function duplicateSiteNameMessage(name: string, existing: Pick<Site, 'siteId'>[]): string {
+  return `已存在同名网站「${name}」（ID ${existing.map((s) => s.siteId).join('、')}），网站名称不能重复，请改名或选择已有网站`
+}
+
 export const siteApi = {
   sourceScopePaged,
   /** 网站源实际用到的表（主表 ∪ 流程节点的输入/输出表），带每张表的源名单（0924-09） */
@@ -1376,6 +1381,17 @@ export const siteApi = {
     const result = await request<unknown>('site/summary', undefined, { method: 'GET' })
     return siteSummaryFromLegacy(result)
   },
+  /**
+   * 按名称精确查网站（忽略首尾空格、大小写）。网站名不可重复（2026-11-23 用户定）：后端 site/add、
+   * site/update 都不校验同名（186 已出现两个「同花顺」），只能前端在写之前拦。
+   * site/sitePaged 的 name 是模糊匹配，取一页再精确过滤。
+   */
+  sitesNamed: async (name: string): Promise<Site[]> => {
+    const target = name.trim().toLowerCase()
+    if (!target) return []
+    const { list } = await siteApi.sitePaged({ keyword: name.trim(), page: 1, size: 100 })
+    return list.filter((item) => item.name.trim().toLowerCase() === target)
+  },
   siteDetail: async (siteId: string) => {
     const result = await request<unknown>('site/siteDetail', { siteId }, {
       method: 'GET',
@@ -1410,6 +1426,14 @@ export const siteApi = {
     const liveWrite = { mode: 'http' as const }
 
     const siteName = site.name.trim()
+    // 网站名不可重复：后端不校验，建之前先查；查不了就不建，宁可让用户重试也不多造一个同名网站
+    let sameNamed: Site[]
+    try {
+      sameNamed = await siteApi.sitesNamed(siteName)
+    } catch (error) {
+      return { ok: false, message: `无法核对网站名称是否重复，未新建网站：${(error as Error)?.message ?? '网络异常'}` }
+    }
+    if (sameNamed.length) return { ok: false, message: duplicateSiteNameMessage(siteName, sameNamed) }
     const sitePayload: SiteCreateInput = {
       siteName,
       stdSiteName: siteName,
@@ -1424,7 +1448,11 @@ export const siteApi = {
 
     const siteAck = ackFromApiResult(result)
     if (!siteAck.ok) return siteAck
+    // 真实 site/add 的 data 为空，新 ID 只在 msg 里：「新增成功, ID:2533」（186 bee-config SiteController.add 反编译核对）。
+    // 不先读 msg 就只能按名称回查，一旦已有同名老网站（如 2021 年的「克拉克森」211）就判为多个同名而中止，
+    // 用户重试一次就多建一个空网站（11-23 实测连建 2528–2533）。
     let siteId = idFromApiResult(result, ['siteId', 'siteID', 'siteid', 'id'])
+      ?? siteAck.message?.match(/\bID\s*[:：]\s*(\d+)/i)?.[1]
     if (!siteId) {
       const matched = (await siteApi.sitePaged({ keyword: siteName, page: 1, size: 20 })).list
         .filter((item) => item.name.trim() === siteName)
@@ -1493,6 +1521,18 @@ export const siteApi = {
    *  之前塞进 httpParams 的 author 是没有实据的猜测，已删掉，改成只提交 siteId/siteName/categoryId。
    *  categoryId 字段名对齐旧平台 CATEGORY 列配置（dataIndex: 'categoryId'）。 */
   siteUpdate: async (site: Pick<Site, 'siteId' | 'name' | 'dirId' | 'tags'>): Promise<Ack> => {
+    // 改名同样不能撞上别的网站。同名结果里有自己 = 名称没改（历史上已重名的网站仍要能改分类 / 标签），放行
+    if (site.name?.trim()) {
+      let sameNamed: Site[]
+      try {
+        sameNamed = await siteApi.sitesNamed(site.name)
+      } catch (error) {
+        return { ok: false, message: `无法核对网站名称是否重复，未保存：${(error as Error)?.message ?? '网络异常'}` }
+      }
+      const renamed = !sameNamed.some((item) => String(item.siteId) === String(site.siteId))
+      const others = sameNamed.filter((item) => String(item.siteId) !== String(site.siteId))
+      if (renamed && others.length) return { ok: false, message: duplicateSiteNameMessage(site.name.trim(), others) }
+    }
     const result = await request<unknown>('site/updateSite', { site }, {
       method: 'POST',
       httpEndpoint: 'site/update',
@@ -1735,7 +1775,13 @@ async function fetchRuleOrchestrationStream(
     try {
       detail = (await res.text()).trim()
     } catch { /* ignore */ }
-    throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+    // Spring 默认错误体是 {timestamp,status,error,path}，只取 message/error，免得整段 JSON 糊在提示里
+    let reason = detail.slice(0, 200)
+    try {
+      const parsed = JSON.parse(detail) as { message?: unknown; msg?: unknown; error?: unknown }
+      reason = String(parsed.message || parsed.msg || parsed.error || '') || reason
+    } catch { /* 非 JSON 原样保留 */ }
+    throw new Error(`生成服务返回 HTTP ${res.status}${reason ? `（${reason}）` : ''}，请稍后重试；持续失败请联系规则中心排查`)
   }
   let text = ''
   if (res.body && typeof res.body.getReader === 'function') {
@@ -2323,30 +2369,27 @@ export const ruleApi = {
   },
   // 传整个 ruleCfg：mock 按 inputFields/outputFields 生成多参骨架。
   // 真实：POST /vrule/ai/dashscope/stream（form-urlencoded + 流式文本，见 rule-orchestration 页 Rt）。
-  // 注意：saveMeta 未 live 时拿到的是 orch-* mock id，真实 stream 会 400——此时回退 mock 生成。
+  // 只有该端点本身走 mock 适配（纯 mock 环境、没有后端）时才返回骨架。
+  // 2026-11-23 186 实测：真实 stream 500 时原先静默回退 mock，页面显示假路径
+  // `/rules/generated/orch-draft-<时间戳>.xml` 且无任何报错，用户一保存就把假路径写进节点——
+  // 现在 ruleId 无效或真实 stream 失败一律报错，不造假配置。
   orchestrationGenerate: async (ruleCfg: RuleOrchestration, signal?: AbortSignal) => {
     const endpoint = 'rule/orchestrationGenerate'
-    const useMock = usesMockAdapter(endpoint) || !isVruleNumericRuleId(ruleCfg.ruleId)
-    if (useMock) {
+    if (usesMockAdapter(endpoint)) {
       const result = await request<unknown>(endpoint, { ruleCfg }, { mode: 'mock' })
       if (result && typeof result === 'object' && 'script' in (result as object)) {
         return result as RuleOrchestrationGenerateResult
       }
       return ruleOrchestrationGenerateFromLegacy(result)
     }
+    if (!isVruleNumericRuleId(ruleCfg.ruleId)) {
+      throw new ApiError(endpoint, new Error(`业务规则还没有保存成功（规则 ID「${ruleCfg.ruleId ?? ''}」无效），不能生成配置，请稍后重试`))
+    }
     try {
       return await fetchRuleOrchestrationStream(ruleCfg, signal)
     } catch (e) {
       if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError') || (e as Error)?.name === 'AbortError') {
         throw e instanceof ApiError ? e : new ApiError(endpoint, new Error('已取消生成'))
-      }
-      // 默认 hybrid：真实 stream 挂了（生产 dashscope 4xx/超时）时回退 mock 骨架，避免「生成脚本」死路。
-      if (isMockMode()) {
-        const result = await request<unknown>(endpoint, { ruleCfg }, { mode: 'mock' })
-        if (result && typeof result === 'object' && 'script' in (result as object)) {
-          return result as RuleOrchestrationGenerateResult
-        }
-        return ruleOrchestrationGenerateFromLegacy(result)
       }
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }

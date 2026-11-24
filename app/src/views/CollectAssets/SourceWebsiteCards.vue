@@ -7,7 +7,7 @@ import SiteCardGrid from './SiteCardGrid.vue'
 import { querySiteCards, type SiteCardResult } from './siteCardQuery'
 
 const props = withDefaults(defineProps<{ query: SourceFilter; scopeEmpty: boolean; emptyText?: string; includeEmptySiteIds?: string[]; active?: boolean; refreshVersion?: number }>(), { active: true })
-const emit = defineEmits<{ editSite: [Site]; deleteSite: [Site]; showSources: [] }>()
+const emit = defineEmits<{ editSite: [Site]; deleteSite: [Site]; showSources: []; openDir: [site: Site, dir: { id: string; path: string }] }>()
 const emptyResult = (): SiteCardResult => ({ sites: [], total: 0, matchedSourceTotal: 0, unbound: 0 })
 const result = ref<SiteCardResult>(emptyResult())
 const loading = ref(false)
@@ -60,7 +60,7 @@ onBeforeUnmount(() => { sequence++; controller?.abort() })
     </div>
     <div class="swc-content">
       <div v-if="error" class="swc-error" role="alert">{{ error }}<button class="rc-btn" type="button" @click="load()">重新加载</button></div>
-      <SiteCardGrid v-else :key="gridVersion" :sites="result.sites" :loading="loading" :source-scope="result.sourceScope" :empty-text="scopeEmpty ? emptyText : '没有匹配的网站，请调整筛选条件'" @favorite-changed="load()" @open-editor="emit('editSite', $event)" @delete-site="emit('deleteSite', $event)" />
+      <SiteCardGrid v-else :key="gridVersion" :sites="result.sites" :loading="loading" :source-scope="result.sourceScope" :empty-text="scopeEmpty ? emptyText : '没有匹配的网站，请调整筛选条件'" @favorite-changed="load()" @open-editor="emit('editSite', $event)" @delete-site="emit('deleteSite', $event)" @open-dir="(site, dir) => emit('openDir', site, dir)" />
     </div>
     <div v-if="!error" class="swc-pager">
       <span>共 {{ result.total }} 个网站</span>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSourceWithoutFlowError } from '@/utils/source/noFlow'
 import { computed, onActivated, onDeactivated, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -274,7 +275,14 @@ async function loadNodeMetadata() {
   }
   try {
     const metadata = await Promise.all(sourceIds.map(async (id) => {
-      const [steps, nodeRuns] = await Promise.all([sourceApi.sourceSteps(id), sourceApi.sourceNodeRuns(id)])
+      // 源还没绑定流程（只建源未建流程）时步骤接口报「源未绑定有效流程」：按没有节点处理，不算加载失败
+      const [steps, nodeRuns] = await Promise.all([
+        sourceApi.sourceSteps(id).catch((e) => {
+          if (isSourceWithoutFlowError(e)) return []
+          throw e
+        }),
+        sourceApi.sourceNodeRuns(id),
+      ])
       return { id, steps, nodeRuns }
     }))
     if (requestId !== metadataRequest) return

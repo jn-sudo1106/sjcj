@@ -202,6 +202,8 @@ export interface CopiedFlow {
   detach?: DetachResult
   /** 自动发布失败的原因；发布成功或流程未启用版本时没有这个字段 */
   publishError?: string
+  /** 根节点配置没能带到新流程的原因（复制品的流程入口为空，需要手工补配置） */
+  rootError?: string
 }
 
 export interface CopyFlowOptions extends Omit<DetachOptions, 'onlyStepIds'> {
@@ -226,10 +228,49 @@ export async function copyWholeFlow(
     ? await flowCenterApi.copy(fromFlowId, newName, { useDraft: true })
     : await flowCenterApi.copy(fromFlowId, newName)
   const copied: CopiedFlow = { flowId }
+  // copyFlow 不复制根节点（后端给新流程自建空根）。根节点自己挂着采集配置的流程（新建采集的
+  // 单节点流程就是这样）复制出来是空的、也发布不了——先把根配置搬过来，再去共享（去共享会连根配置一起复制）。
+  const rootError = await carryRootFromSource(fromFlowId, flowId, !!opts.useDraft)
+  if (rootError) copied.rootError = rootError
   if (!opts.reuseConfigs) copied.detach = await detachCopiedConfigs(flowId, opts)
   const publishError = await publishCopiedDraft(flowId)
   if (publishError) copied.publishError = publishError
   return copied
+}
+
+/**
+ * 把来源流程根节点（isRoot=1）的配置 / 输出表 / 出参列 / 回填 / 名称写到复制品的根节点（2026-11-23）。
+ * 186 实测：流程 15730960 只有一个挂着采集配置的根节点，copyFlow 出来的 15730962 根节点 configId 为空、
+ * 名称变成流程名，整条流程是空的。读来源时与 copyFlow 同口径：useDraft 有草稿读草稿；否则先发布版、没有再草稿。
+ * 来源根节点没配置或复制品根已有配置时不动；失败不抛，返回原因交调用方提示。
+ */
+async function carryRootFromSource(fromFlowId: string, newFlowId: string, useDraft: boolean): Promise<string> {
+  try {
+    const fromOv = await flowVersionApi.overview(fromFlowId).catch(() => null)
+    const fromVersion = fromOv?.enabled
+      ? (useDraft ? fromOv.draftId ?? null : (fromOv.publishId ? null : fromOv.draftId ?? null))
+      : null
+    const fromRoot = (await flowCenterApi.steps(fromFlowId, { withConfigDetails: false, ...(fromVersion ? { versionId: fromVersion } : {}) }))
+      .find((step) => step.isRoot)
+    if (!fromRoot?.configId) return ''
+    const newOv = await flowVersionApi.overview(newFlowId).catch(() => null)
+    const newVersion = newOv?.enabled && !newOv.publishId ? newOv.draftId ?? null : null
+    const newRoot = (await flowCenterApi.steps(newFlowId, { withConfigDetails: false, ...(newVersion ? { versionId: newVersion } : {}) }))
+      .find((step) => step.isRoot)
+    if (!newRoot) return '复制出的流程没有流程入口节点'
+    if (newRoot.configId) return ''
+    const outEntry = fromRoot.outputTable != null && String(fromRoot.outputTable).trim() !== '' ? fromRoot.outputTable : undefined
+    const fill = fromRoot.fillTable || fromRoot.fillColumns?.length ? { fillTable: fromRoot.fillTable, fillColumns: fromRoot.fillColumns } : undefined
+    const versions = useFlowVersionStore()
+    const ack = await versions.withDraft(newFlowId, (ref) => itemApi.rootConfigUpdate(newRoot.stepId, fromRoot.configId!, newFlowId, outEntry, ref, fromRoot.outColumns, fill))
+    if (ack && typeof ack === 'object' && 'ok' in ack && !(ack as { ok?: boolean }).ok) return (ack as { message?: string }).message || '写入流程入口配置失败'
+    if (fromRoot.name?.trim() && fromRoot.name.trim() !== newRoot.name?.trim()) {
+      await versions.withDraft(newFlowId, (ref) => itemApi.rootNameUpdate(newRoot.stepId, fromRoot.name.trim(), newFlowId, ref)).catch(() => undefined)
+    }
+    return ''
+  } catch (error) {
+    return (error as Error)?.message || String(error)
+  }
 }
 
 /**

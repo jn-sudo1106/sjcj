@@ -92,5 +92,7 @@ describe('SourceDraftCard', () => {
     expect(resolveSourceDraft).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="source-draft-replay"]').text()).toContain('源 ID 1')
     expect(wrapper.find('[data-testid="source-draft-confirm"]').exists()).toBe(false)
+    // 回放也能进画布：从回传文本取源 ID
+    expect(wrapper.findComponent(RouterLinkStub).props('to')).toEqual({ path: '/canvas', query: { sourceId: '1', view: 'flow' } })
   })
 })

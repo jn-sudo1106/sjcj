@@ -9,7 +9,7 @@ import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
-import { copiedPublishWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
+import { copiedPublishWarning, copiedRootWarning, copyFlowErrorText } from '@/utils/flow/flowPublish'
 import FlowVersionBar from '../canvas/FlowVersionBar.vue'
 import { useFlowAutosave } from '../canvas/useFlowAutosave'
 import { useFlowVersionStore } from '@/stores/flowVersion'
@@ -443,6 +443,7 @@ async function copyExisting(sourceFlow: FlowRecord, name?: string) {
     }
     if (disposed || sourceId !== props.sourceId) return
     reportDetachResult(copied.detach, `原流程「${sourceFlow.name}」`)
+    if (copied.rootError) ElMessage.warning(copiedRootWarning(copied.flowId, copied.rootError))
     if (copied.publishError) ElMessage.warning(copiedPublishWarning(copied.flowId, copied.publishError))
     ElMessage.success(`已从「${sourceFlow.name}」创建新流程`)
     copyOpen.value = false
@@ -527,6 +528,9 @@ async function askShared(action: SharedFlowAction, carry?: CarryConfigs): Promis
 async function copyForThisSource(row: WorkflowBinding, action: SharedFlowAction, carry?: CarryConfigs) {
   if (adding.value) return
   adding.value = true
+  // 复制前记下原流程和它的草稿：复制中途新流程会绑成主流程、画布切过去，之后 version.flowId / draft 指的是复制品
+  const originFlowId = version.flowId
+  const originDraft = version.draft ? { versionId: version.draft.versionId, flowVer: version.draft.flowVer } : null
   try {
     await flush()
     const copied = await copyWholeFlow(row.workflowId, `${row.workflowName}_副本`, {
@@ -551,16 +555,16 @@ async function copyForThisSource(row: WorkflowBinding, action: SharedFlowAction,
       }
     }
     let lostDraft = ''
-    if (action === 'publish' && version.draft) {
-      const draftNo = version.draft.flowVer
+    if (action === 'publish' && originFlowId && originDraft) {
+      const draftNo = originDraft.flowVer
       try {
-        await version.abandon()
-        lostDraft = `原流程的草稿 v${draftNo} 已放弃，草稿里的修改已带到新流程`
+        if (await version.abandonDraftOf(originFlowId, originDraft.versionId)) lostDraft = `原流程的草稿 v${draftNo} 已放弃，草稿里的修改已带到新流程`
       } catch (error) {
         ElMessage.warning(`原流程的草稿 v${draftNo} 放弃失败：${(error as Error)?.message ?? String(error)}。请回原流程手动放弃，避免被别人发布`)
       }
     }
     reportDetachResult(copied.detach, `原流程「${row.workflowName}」`)
+    if (copied.rootError) ElMessage.warning(copiedRootWarning(copied.flowId, copied.rootError))
     if (copied.publishError) ElMessage.warning(copiedPublishWarning(copied.flowId, copied.publishError))
     ElMessage.success(`已复制为本源专用流程「${row.workflowName}_副本」#${copied.flowId}，其他源照旧使用原流程${lostDraft ? `；${lostDraft}` : ''}`)
     await finishCreate(copied.flowId)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
+import { ElButton, ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
 import { dataApi, fetchDefaultModels, fetchModelProviders, ruleApi, sourceApi } from '@/api'
 import type { EntryType } from '@/api/types/collect'
 import type { EntryTypeGroup } from '@/api/types/data'
@@ -8,9 +8,11 @@ import type { MonitorCheckConf, MonitorKind, MonitorRecordView } from '@/api/typ
 import type { ModelOption, ModelProviderOption } from '@/api/types/rule'
 import { loadMonitorRecord, saveMonitor } from '@/api/monitorCenter'
 import { checkOneManual } from '@/api/monitor'
-import { defaultSystemPrompt } from '@/utils/monitor/methods'
+import { defaultSystemPrompt, methodLabel } from '@/utils/monitor/methods'
+import PromptAiEditor from '@/components/PromptAiEditor.vue'
+import PromptTemplatePicker from '../inspector/PromptTemplatePicker.vue'
 import type { NodePromptTemplate } from '@/api/nodePrompts'
-import { loadMonitorPromptTemplate, monitorUserPrompt, templateSystemPrompt, type MonitorPromptInput } from './monitor-editor/promptTemplate'
+import { loadMonitorPromptTemplate, monitorUserPrompt, prepareMonitorUserPrompt, templateSystemPrompt, type MonitorPromptInput } from './monitor-editor/promptTemplate'
 import {
   archiveStatusText,
   defaultMonitorDirectory,
@@ -38,6 +40,7 @@ import {
   normalizeWindowHours,
   regenerateReasons,
   scheduleIntervalHours,
+  looksLikeTimeColumn,
   timeColumnOptionsOf,
   validateForm,
   versionOf,
@@ -49,6 +52,7 @@ import type { MonitorEditorForm } from './monitor-editor/model'
 import {
   augmentMonitorSystemPrompt,
   generateMonitorScript,
+  resolveMonitorMetadataFields,
   resolveMonitorTableFields,
   resolveSourceResultContext,
   summarizeExecutionResult,
@@ -63,7 +67,7 @@ import {
  * 1. recordState —— 服务端已生效的记录（含生效脚本正文/路径）；
  * 2. candidate —— 页面新生成、尚未保存的候选脚本；
  * 3. form —— 用户正在编辑但未保存的字段。
- * 只有「生成 → 保存」才会把候选写进记录；「生成」本身不落库。
+ * 只有「生成 → 保存」才会发布候选。智能体模式可先保存无脚本的草稿取 ID。
  */
 const props = withDefaults(defineProps<{
   siteId?: string
@@ -107,25 +111,32 @@ const dingtalkSelected = computed(() => form.channels.includes('dingtalk'))
 const recordState = ref<MonitorRecordView | null>(props.record ?? null)
 const committedForm = ref<MonitorEditorForm>({ ...emptyForm() })
 const baseline = ref(formSignature(form))
-const descTouched = ref(false)
-/**
- * 数据监控提示词模板（节点类型 610，1117 前端修改清单 1.1）。取不到（未配置 / Runner 服务不可用）时
- * 系统提示词与业务描述都退回内置默认，不阻断；界面提示来源。
- */
-const promptTemplate = ref<NodePromptTemplate | null>(null)
+const promptTemplates = ref<NodePromptTemplate[]>([])
+const defaultPromptTemplate = ref<NodePromptTemplate | null>(null)
+const promptTemplate = computed(() => form.promptTemplateId
+  ? promptTemplates.value.find(row => row.promptId === form.promptTemplateId) ?? null
+  : defaultPromptTemplate.value)
 const promptTemplateError = ref('')
 const promptTemplateLoaded = ref(false)
-/** 系统提示词被手改过就不再跟着模板 / 表单联动覆盖 */
+const promptTab = ref<'system' | 'user'>('user')
 const systemTouched = ref(false)
+const customPromptScope = ref('')
+const acknowledgedPromptScope = ref('')
+const advancedOpen = ref(false)
+const preflighting = ref(false)
+const draftConfirmationFailed = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const tableOptions = ref<Array<{ tableId: string; tableName: string; label: string }>>([])
-/** 执行环境返回的物理字段，不能用目录中的业务字段别名替代。 */
 const timeColumnFields = ref<string[]>([])
+const metadataTimeFields = ref<Array<{ name: string; label: string; type: string }>>([])
+const timeColumnError = ref('')
+const timeColumnsLoading = ref(false)
+const timeColumnSelected = ref(false)
 const providerOptions = ref<ModelProviderOption[]>([])
 const modelOptions = ref<ModelOption[]>([])
 const saving = ref(false)
-const busy = computed(() => saving.value || generating.value || testing.value)
+const busy = computed(() => saving.value || generating.value || testing.value || preflighting.value)
 let sourceRequest = 0
 let modelRequest = 0
 let timeColumnRequest = 0
@@ -194,6 +205,7 @@ async function onCopyScript(): Promise<void> {
 }
 
 const generationError = ref('')
+const preflightError = ref('')
 
 /**
  * 智能体生成（1117 第 2 批）：生成方式 = 智能体时选智能体 / 仓库 / 目录，产物提交 Git。
@@ -250,6 +262,7 @@ async function loadDirectories(): Promise<void> {
 
 function switchGenerationMode(mode: 'builtin' | 'agent'): void {
   if (form.generationMode === mode) return
+  preflightError.value = ''
   form.generationMode = mode
   if (mode === 'agent' && !agentOptionsLoaded.value) void loadAgentOptions()
 }
@@ -366,11 +379,22 @@ const saveHint = computed(() => {
   return '生成与测试不改变生效版本；保存即生效'
 })
 
-/** 仅展示执行环境真实存在的时间列；旧配置仍保留，但缺失字段需重新选择。 */
-const timeColumnOptions = computed(() => timeColumnFields.value.length
-  ? timeColumnOptionsOf(timeColumnFields.value).filter((field) => timeColumnFields.value.includes(field))
-  : [])
-const timeColumnError = ref('')
+const timeColumnOptions = computed(() => {
+  const physical = timeColumnFields.value
+  const options = metadataTimeFields.value.length
+    ? metadataTimeFields.value.filter(field => !physical.length || physical.includes(field.name))
+      .filter(field => /入库|采集|抓取|创建|发布|时间|日期/.test(field.label)
+      || /date|time/i.test(field.type) || looksLikeTimeColumn(field.name))
+      .sort((a, b) => Number(!/入库|采集|抓取|创建/.test(a.label)) - Number(!/入库|采集|抓取|创建/.test(b.label)))
+      .map(field => ({ value: field.name, label: field.label === field.name ? field.name : `${field.label}（${field.name}）` }))
+    : timeColumnOptionsOf(timeColumnFields.value).filter(field => timeColumnFields.value.includes(field))
+      .map(value => ({ value, label: value }))
+  const current = form.timeColumn.trim()
+  if (current && !options.some(option => option.value === current)) options.unshift({ value: current, label: current })
+  return options
+})
+const selectedTimeLabel = computed(() => timeColumnOptions.value.find(option => option.value === form.timeColumn)?.label
+  || form.timeColumn || '不限时间（全表检查）')
 /** 「上一个周期」的窗口长度 = 当前执行计划间隔（算不出来按 24 小时） */
 const windowPeriodHours = computed(() => scheduleIntervalHours(form.schedule))
 const windowHint = computed(() => {
@@ -382,18 +406,18 @@ const windowHint = computed(() => {
   }
   return '按业务时区 Asia/Shanghai，从当日 00:00 到执行时刻'
 })
-/** 写进业务描述里的窗口口径（要具体，不能留占位符） */
-const descriptionWindow = computed(() => {
-  if (form.windowType === 'hours') return `最近 ${normalizeWindowHours(form.windowHours)} 小时（Asia/Shanghai 业务时区）`
-  if (form.windowType === 'period') return `上一个检查周期（约 ${windowPeriodHours.value} 小时，Asia/Shanghai 业务时区）`
+function windowDescription(input: MonitorEditorForm): string {
+  if (input.windowType === 'hours') return `最近 ${normalizeWindowHours(input.windowHours)} 小时（Asia/Shanghai 业务时区）`
+  if (input.windowType === 'period') return `上一个检查周期（约 ${scheduleIntervalHours(input.schedule)} 小时，Asia/Shanghai 业务时区）`
   return '当日 00:00 至当前（Asia/Shanghai 业务时区）'
-})
+}
+const descriptionWindow = computed(() => form.timeColumn ? windowDescription(form) : '不限时间（全表检查）')
 
 const versionText = computed(() => {
   const current = form.version || versionOf(recordState.value?.conf)
   if (pending.value) return `新生成，尚未保存（候选 ${nextVersionOf(current)}）`
   if (effectiveScript.value || effectivePath.value) return `生效中的脚本 ${current || ''}（只读）`
-  return '草稿 · 未生效，不执行'
+  return recordState.value ? '草稿 · 未生效，不执行' : '未保存 · 尚未生成脚本'
 })
 
 const recordStatusText = computed(() => {
@@ -415,12 +439,16 @@ const needsRegenerateNotice = computed(() => {
 })
 
 /** 生成候选时的检查范围；表/时间列之后被改，就说明候选可能对不上当前范围 */
-const candidateScope = ref<{ tableName: string; timeColumn: string } | null>(null)
+const candidateScope = ref<{ tableName: string; timeColumn: string; mode: MonitorEditorForm['generationMode']; signature: string } | null>(null)
+const scriptInputSignature = computed(() => JSON.stringify([
+  promptScope.value, form.desc, form.systemPrompt, form.providerCode, form.modelCode,
+  form.agentInterfaceId, form.repoId, form.directoryId,
+]))
 
 const candidateStale = computed(() => {
   const scope = candidateScope.value
   if (!pending.value || !scope) return false
-  return scope.tableName !== form.tableName.trim() || scope.timeColumn !== form.timeColumn.trim()
+  return scope.signature !== scriptInputSignature.value
 })
 
 /**
@@ -430,6 +458,10 @@ const candidateStale = computed(() => {
 const candidateStaleNotice = computed(() => {
   const scope = candidateScope.value
   if (!candidateStale.value || !scope) return ''
+  if (scope.mode !== form.generationMode) return '候选脚本的生成方式已变更。请重新生成或切回原生成方式后再保存。'
+  if (scope.tableName === form.tableName.trim() && scope.timeColumn === form.timeColumn.trim()) {
+    return '生成后检查配置已变更。保存前请重新生成，或确认仍使用当前候选脚本。'
+  }
   const now = [form.tableName, form.timeColumn].filter(Boolean).join(' · ') || '未选表'
   return `候选脚本是按「${scope.tableName || '未选表'}」生成的；当前范围已改为「${now}」。保存前请重新生成，或确认仍按旧脚本发布。`
 })
@@ -475,12 +507,18 @@ function applyRecord(record: MonitorRecordView): void {
   recordState.value = record
   const next = formFromRecord(record)
   Object.assign(form, next)
-  descTouched.value = !!next.desc.trim()
+  systemTouched.value = !!next.systemPrompt.trim()
+  timeColumnSelected.value = !!next.timeColumn
+  customPromptScope.value = promptScope.value
+  acknowledgedPromptScope.value = ''
+  if (promptTemplateLoaded.value) classifyStoredPrompt(next)
   candidate.script = ''
   candidate.scriptPath = ''
   candidateScope.value = null
   pending.value = false
   generationError.value = ''
+  preflightError.value = ''
+  draftConfirmationFailed.value = false
   generatingPreview.value = ''
   syncCommitted()
   candidateArchive.value = null
@@ -488,64 +526,122 @@ function applyRecord(record: MonitorRecordView): void {
   if (form.generationMode === 'agent' && !agentOptionsLoaded.value) void loadAgentOptions()
 }
 
-function promptInput(): MonitorPromptInput {
+function promptInput(input: MonitorEditorForm = form): MonitorPromptInput {
   return {
-    sourceId: form.sourceId,
-    sourceName: form.sourceName,
-    tableName: form.tableName,
-    timeColumn: form.timeColumn,
-    methods: [...form.methods],
-    window: descriptionWindow.value,
-    nullPolicy: form.nullPolicy,
-    noDataPolicy: form.noDataPolicy,
+    sourceId: input.sourceId, sourceName: input.sourceName, tableName: input.tableName,
+    timeColumn: input.timeColumn || '不限时间（全表检查）', methods: input.methods,
+    window: input.timeColumn ? windowDescription(input) : '不限时间（全表检查）',
+    nullPolicy: input.nullPolicy, noDataPolicy: input.noDataPolicy,
+    overdue: input.overdueMinutes ? `超期判定：${input.overdueMinutes} 分钟无新增，宽限 ${input.overdueGrace || '0'} 分钟。` : '',
+    generationMode: input.generationMode,
   }
 }
 
-/** 按模板（没有则内置默认）算出的系统提示词 */
-function templateSystemText(): string {
-  return templateSystemPrompt(promptTemplate.value, promptInput()) ?? defaultSystemPrompt()
-}
-
-/** 新建且未手改：系统提示词跟着模板 / 表单联动。编辑已有记录保留它保存过的提示词。 */
-function syncSystemPrompt(): void {
-  if (recordState.value || systemTouched.value || form.kind !== 'ai') return
-  const next = templateSystemText()
-  if (form.systemPrompt === next) return
-  const wasClean = formSignature(form) === baseline.value
-  form.systemPrompt = next
-  // 自动填充不算用户改动，否则新建后什么都没动也会提示「未保存」
-  if (wasClean) baseline.value = formSignature(form)
-}
-
-async function loadPromptTemplate(): Promise<void> {
-  const { template, error } = await loadMonitorPromptTemplate()
-  promptTemplate.value = template
-  promptTemplateError.value = error
-  promptTemplateLoaded.value = true
-  syncSystemPrompt()
-  // 模板晚于表单就绪：业务描述还是自动填的（没手改）就按模板重算一次
-  if (!descTouched.value && form.desc.trim() && form.methods.length) {
-    const wasClean = formSignature(form) === baseline.value
-    form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
-    if (wasClean) baseline.value = formSignature(form)
-  }
-}
-
-function onSystemPromptInput(): void {
-  systemTouched.value = true
-}
-
-function restoreSystemPrompt(): void {
-  form.systemPrompt = templateSystemText()
-  systemTouched.value = false
-}
-
+const promptScope = computed(() => JSON.stringify([
+  form.sourceId, form.tableName, [...form.methods].sort(), form.timeColumn, descriptionWindow.value,
+  form.nullPolicy, form.noDataPolicy, form.overdueMinutes, form.overdueGrace, form.generationMode,
+]))
+const promptScopeChanged = computed(() => form.promptCustom === true && customPromptScope.value !== promptScope.value)
+const promptConflict = computed(() => promptScopeChanged.value && acknowledgedPromptScope.value !== promptScope.value)
+const autoUserPrompt = computed(() => monitorUserPrompt(promptTemplate.value, promptInput()))
+const autoSystemPrompt = computed(() => templateSystemPrompt(promptTemplate.value, promptInput()) ?? defaultSystemPrompt())
+const displayUserPrompt = computed(() => form.desc.replace(
+  /\{\{\s*(?:file_name|code_dir|code_file_path|code_save_requirement|reference_files)\s*\}\}/g,
+  '生成时由平台自动填入',
+))
+const activePrompt = computed(() => promptTab.value === 'user' ? displayUserPrompt.value : form.systemPrompt)
+const selectedPromptId = computed(() => form.promptCustom || systemTouched.value ? 0
+  : form.promptTemplateId ?? promptTemplate.value?.promptId ?? 0)
 const promptSourceText = computed(() => {
   if (!promptTemplateLoaded.value) return '正在读取数据监控提示词模板…'
+  if (form.promptTemplateId && !promptTemplate.value) return promptTemplateError.value
+    ? `提示词模板读取失败（${promptTemplateError.value}），保留已保存的提示词`
+    : '当前引用的提示词模板已停用或不可用，请重新选择'
   if (promptTemplate.value) return `来自节点提示词模板「${promptTemplate.value.promptName || promptTemplate.value.promptId}」`
   if (promptTemplateError.value) return `提示词模板读取失败（${promptTemplateError.value}），使用内置默认`
   return '未配置数据监控（610）提示词模板，使用内置默认'
 })
+
+function classifyStoredPrompt(stored: MonitorEditorForm): void {
+  const input = promptInput(stored)
+  if (stored.systemPrompt.trim() && stored.systemPrompt === form.systemPrompt) {
+    const defaultSystem = templateSystemPrompt(promptTemplate.value, input) ?? defaultSystemPrompt()
+    systemTouched.value = stored.systemPrompt !== defaultSystem
+  }
+  if (!stored.desc.trim() || stored.promptCustom !== undefined || form.promptCustom !== undefined) return
+  const legacy = { ...input, window: windowDescription(stored), timeColumn: stored.timeColumn, overdue: undefined, generationMode: undefined }
+  const matchesDefault = (!stored.promptTemplateId || promptTemplate.value)
+    && [monitorUserPrompt(promptTemplate.value, input), monitorUserPrompt(promptTemplate.value, legacy),
+      monitorUserPrompt(null, legacy)].includes(stored.desc.trim())
+  form.promptCustom = !matchesDefault
+  if (matchesDefault && !form.promptTemplateId) form.promptTemplateId = promptTemplate.value?.promptId
+}
+
+function syncAutoPrompts(): void {
+  if (!promptTemplateLoaded.value || form.kind !== 'ai' || (form.promptTemplateId && !promptTemplate.value)) return
+  const wasClean = formSignature(form) === baseline.value
+  if (!form.promptCustom) form.desc = autoUserPrompt.value
+  if (!systemTouched.value && (!recordState.value || form.systemPrompt)) form.systemPrompt = autoSystemPrompt.value
+  if (wasClean) syncCommitted()
+}
+
+async function loadPromptTemplate(): Promise<void> {
+  const { template, templates, error } = await loadMonitorPromptTemplate()
+  const wasClean = formSignature(form) === baseline.value
+  promptTemplates.value = templates
+  defaultPromptTemplate.value = template
+  promptTemplateError.value = error
+  if (recordState.value) classifyStoredPrompt(formFromRecord(recordState.value))
+  else form.promptTemplateId = template?.promptId
+  promptTemplateLoaded.value = true
+  if (wasClean) baseline.value = formSignature(form)
+  syncAutoPrompts()
+}
+
+function restoreUserPrompt(): void {
+  if (form.promptTemplateId && !promptTemplate.value) form.promptTemplateId = undefined
+  form.promptCustom = false
+  acknowledgedPromptScope.value = ''
+  form.desc = autoUserPrompt.value
+}
+
+function restoreSystemPrompt(): void {
+  if (form.promptTemplateId && !promptTemplate.value) form.promptTemplateId = undefined
+  systemTouched.value = false
+  form.systemPrompt = autoSystemPrompt.value
+}
+
+function applyPromptEdit(value: string): void {
+  if (busy.value) return
+  if (promptTab.value === 'system') {
+    systemTouched.value = true
+    form.systemPrompt = value
+  } else {
+    if (!form.promptCustom) customPromptScope.value = promptScope.value
+    form.promptCustom = true
+    form.desc = value
+  }
+}
+
+async function selectPromptTemplate(id: number): Promise<void> {
+  if (busy.value || id === selectedPromptId.value) return
+  if (!id) {
+    customPromptScope.value = promptScope.value
+    form.promptCustom = true
+    return
+  }
+  if (!promptTemplates.value.some(row => row.promptId === id)) return
+  if (form.promptCustom || systemTouched.value) {
+    try {
+      await ElMessageBox.confirm('切换提示词将替换当前系统和用户提示词，是否继续？', '切换提示词', {
+        confirmButtonText: '切换', cancelButtonText: '保留当前内容', type: 'warning',
+      })
+    } catch { return }
+  }
+  form.promptTemplateId = id
+  restoreUserPrompt()
+  restoreSystemPrompt()
+}
 
 function initialize(): void {
   const record = props.record
@@ -556,6 +652,8 @@ function initialize(): void {
     form.sourceName = ''
     form.name = ''
     form.kind = 'ai'
+    form.methods = ['today_landed', 'daily_count']
+    form.promptCustom = false
     baseline.value = formSignature(form)
     committedForm.value = { ...form, methods: [...form.methods], channels: [...form.channels] }
     void loadSourceContext()
@@ -574,72 +672,60 @@ watch(() => props.record, (record) => {
 watch(() => props.sourceId, (sourceId) => {
   if (recordState.value) return
   if (!sourceId || sourceId === form.sourceId) return
-  form.sourceId = sourceId
+  resetSourceScope(sourceId, '')
   void loadSourceContext()
 })
 
-/** 空表单才用模板填描述；用户改过（descTouched）后任何异步/切换都不覆盖（R09/T01） */
-watch(
-  () => [form.methods.slice(), form.tableName, form.sourceName],
-  () => {
-    if (descTouched.value) return
-    if (form.desc.trim()) return
-    if (!form.methods.length) return
-    form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
-  },
-  { deep: true },
-)
+watch([autoUserPrompt, autoSystemPrompt, () => form.kind], syncAutoPrompts)
 
-// 系统提示词里的变量（表名、时间列、检查方法…）随表单联动，仅新建且未手改时
-watch(
-  () => [form.methods.slice(), form.tableName, form.sourceName, form.sourceId, form.timeColumn, descriptionWindow.value],
-  () => syncSystemPrompt(),
-  { deep: true },
-)
-
-/**
- * 字段清单 → 入库时间字段候选。
- * 只在「当前没选」且真实清单只有一个像时间列的字段时自动选中；多个候选不猜
- * （脚本会自报「无法自动识别入库时间列」，由用户确认，不偷偷填假列名）。
- */
-function applyTimeColumnFields(fields: readonly string[]): void {
-  timeColumnFields.value = fields.map((field) => (field || '').trim()).filter(Boolean)
-  if (form.timeColumn.trim() || !timeColumnFields.value.length) return
-  const candidates = timeColumnOptionsOf(timeColumnFields.value)
-  if (candidates.length === 1) form.timeColumn = candidates[0]!
+function applyTimeColumnFields(autoSelect: boolean): void {
+  if (!autoSelect || timeColumnSelected.value) return
+  const options = timeColumnOptions.value
+  const preferred = ['create_time', 'insert_time', 'crawl_time', 'update_time']
+    .map(name => options.find(option => option.value.toLowerCase() === name))
+    .find(Boolean)
+  form.timeColumn = preferred?.value || options[0]?.value || ''
 }
 
-/** 换表/读源后向执行器查询实际物理字段。 */
-function syncTimeColumnFields(): void {
-  const tableName = form.tableName.trim()
-  if (!tableName) {
-    timeColumnFields.value = []
-    return
-  }
+/** 换表后刷新执行器字段；读取失败时用表目录提供候选。 */
+function syncTimeColumnFields(autoSelect = !recordState.value): void {
   timeColumnFields.value = []
-  void loadTimeColumnFields()
+  metadataTimeFields.value = []
+  if (form.tableName.trim()) void loadTimeColumnFields(autoSelect)
+  else {
+    timeColumnRequest += 1
+    timeColumnsLoading.value = false
+    timeColumnError.value = ''
+  }
 }
 
-async function loadTimeColumnFields(): Promise<void> {
+async function loadTimeColumnFields(autoSelect = false): Promise<void> {
   const request = ++timeColumnRequest
   const tableName = form.tableName.trim()
-  if (!tableName) {
-    timeColumnFields.value = []
-    return
-  }
-  const tableId = tableOptions.value.find((table) => table.tableName === tableName)?.tableId ?? ''
-  timeColumnError.value = ''
+  if (!tableName) return
+  const tableId = tableOptions.value.find(table => table.tableName === tableName)?.tableId
+  timeColumnsLoading.value = true
   try {
-    const fields = await resolveMonitorTableFields({ tableName, tableId })
+    let fields: string[] = []
+    let metadata: typeof metadataTimeFields.value = []
+    let failure = ''
+    try {
+      fields = await resolveMonitorTableFields({ tableName, tableId: tableId ?? '' })
+    } catch (error) {
+      failure = errorText(error)
+    }
+    if (failure || (fields.length && !fields.some(looksLikeTimeColumn))) {
+      metadata = await resolveMonitorMetadataFields({ tableName, tableId }).catch(() => [])
+    }
     if (request !== timeColumnRequest || form.tableName.trim() !== tableName) return
     const wasClean = formSignature(form) === baseline.value
-    applyTimeColumnFields(fields)
-    // 异步带出的唯一候选属于系统补全，不算用户改动（同「唯一关联表」的处理）
+    timeColumnFields.value = fields.map(field => field.trim()).filter(Boolean)
+    metadataTimeFields.value = metadata
+    timeColumnError.value = failure
+    applyTimeColumnFields(autoSelect)
     if (wasClean) baseline.value = formSignature(form)
-  } catch (error) {
-    if (request !== timeColumnRequest) return
-    applyTimeColumnFields([])
-    timeColumnError.value = errorText(error)
+  } finally {
+    if (request === timeColumnRequest) timeColumnsLoading.value = false
   }
 }
 
@@ -736,17 +822,10 @@ function onProviderChange(): void {
 }
 
 function onTableChange(): void {
-  // 候选本身保留（candidateStale 会标出来，保存时再确认）；但按旧表跑出来的试跑结果已无意义
   if (pending.value) testResult.value = null
-  if (!form.tableName) {
-    timeColumnFields.value = []
-    form.timeColumn = ''
-    return
-  }
-  // 换表后旧表的时间列可能不存在：清空再由新表字段重新给候选（唯一候选自动选中）
+  timeColumnSelected.value = false
   form.timeColumn = ''
-  timeColumnFields.value = []
-  syncTimeColumnFields()
+  syncTimeColumnFields(true)
 }
 
 async function confirmDiscard(what: string): Promise<boolean> {
@@ -763,52 +842,26 @@ async function confirmDiscard(what: string): Promise<boolean> {
   }
 }
 
-async function onSourceChanged(sourceId: string): Promise<void> {
-  if (busy.value) return
-  if (sourceId === form.sourceId) return
-  if (!(await confirmDiscard('监控源'))) return
+function resetSourceScope(sourceId: string, name: string): void {
   candidate.script = ''
   candidate.scriptPath = ''
   candidateScope.value = null
   pending.value = false
   testResult.value = null
   generationError.value = ''
-  form.sourceId = sourceId
-  form.sourceName = ''
-  form.tableName = ''
-  form.timeColumn = ''
-  timeColumnFields.value = []
-  await loadSourceContext()
-}
-
-async function onSourcePicked(sourceId: string, name: string): Promise<void> {
-  if (busy.value) return
-  if (sourceId === form.sourceId) return
-  if (!(await confirmDiscard('监控源'))) return
-  candidate.script = ''
-  candidate.scriptPath = ''
-  candidateScope.value = null
-  pending.value = false
-  testResult.value = null
-  generationError.value = ''
+  preflightError.value = ''
   form.sourceId = sourceId
   form.sourceName = name
   form.tableName = ''
   form.timeColumn = ''
-  timeColumnFields.value = []
+  timeColumnSelected.value = false
+  syncTimeColumnFields()
+}
+
+async function onSourcePicked(sourceId: string, name = ''): Promise<void> {
+  if (busy.value || sourceId === form.sourceId || !(await confirmDiscard('监控源'))) return
+  resetSourceScope(sourceId, name)
   await loadSourceContext()
-}
-
-function onDescInput(): void {
-  descTouched.value = true
-}
-
-function fillDescription(): void {
-  if (form.desc.trim() && descTouched.value) {
-    ElMessage.info('业务描述已有内容，未自动覆盖')
-    return
-  }
-  form.desc = monitorUserPrompt(promptTemplate.value, promptInput())
 }
 
 function switchKind(kind: MonitorKind): void {
@@ -816,9 +869,6 @@ function switchKind(kind: MonitorKind): void {
   form.kind = kind
   // 切换只改变本次保存写哪一组字段，不删另一组定义；旧记录切回时仍能看到原来的脚本/规则
   if (kind === 'rule' && !form.schedule.trim()) form.schedule = DEFAULT_SCHEDULE
-  if (kind === 'ai' && !form.methods.length && form.desc.trim()) {
-    ElMessage.info('已切换到 AI 检查：还需要勾选监控方法')
-  }
 }
 
 /**
@@ -831,110 +881,124 @@ const selectedDirectory = computed(() => directoryOptions.value.find((row) => ro
 const targetScriptPath = computed(() =>
   monitorScriptPath(selectedDirectory.value?.path ?? '', form.sourceId.trim(), monitorId.value))
 const targetPathHint = computed(() => {
-  if (!monitorId.value) return '新建监控生成前先保存草稿，拿到监控 ID 后确定'
+  if (!monitorId.value) return '检查通过并保存草稿取得 ID 后确定'
   if (!form.directoryId) return '请先选择仓库目录'
   return '目录信息加载中…'
 })
 
-async function ensureMonitorId(): Promise<boolean> {
-  if (monitorId.value) return true
+async function ensureMonitorId(): Promise<void> {
+  if (monitorId.value) return
+  const saved = await saveMonitor({
+    record: undefined,
+    sourceId: form.sourceId.trim(),
+    name: form.name.trim(),
+    kind: form.kind,
+    conf: confFromForm(form, {}, {}),
+    tableName: form.tableName.trim(),
+    schedule: form.schedule.trim(),
+  })
+  const readback = await readbackAfterSave(saved.raw)
+  if (!readback?.id) {
+    draftConfirmationFailed.value = true
+    throw new Error('草稿已提交，但未回读到监控 ID，请刷新列表后在该草稿上继续生成')
+  }
+  recordState.value = readback
+  syncCommitted()
+  emit('draft-saved', readback)
+}
+
+const generationChecks = computed(() => {
   const invalid = validateForm(form)
-  if (invalid) {
-    activeTab.value = invalid.key === 'methods' || invalid.key === 'overdue' ? 'check' : 'basic'
-    ElMessage.warning(invalid.message)
-    return false
+  const agent = form.generationMode === 'agent'
+  const basicError = !form.sourceId.trim() ? '请先选择被监控源'
+    : !form.name.trim() ? '请填写监控名称'
+      : !form.tableName.trim() ? '请先选择要检查的表' : ''
+  const modeError = agent
+    ? agentOptionsLoading.value ? '正在读取智能体和仓库配置'
+      : agentOptionsError.value || directoryError.value
+        || (!agentOptions.value.some(item => item.id === form.agentInterfaceId)
+          || !repoOptions.value.some(item => item.repoId === form.repoId)
+          || !selectedDirectory.value?.path ? '请选择可用的智能体、仓库和目录' : '')
+    : !form.providerCode || !form.modelCode ? '请选择模型供应商与模型' : ''
+  const promptError = !promptTemplateLoaded.value ? '正在读取提示词模板'
+    : form.promptTemplateId && !promptTemplate.value && !promptTemplateError.value ? '当前引用的提示词模板不可用，请重新选择'
+      : !form.desc.trim() ? '请先设置用户提示词'
+        : promptConflict.value ? '表单与自定义用户提示词可能不一致' : ''
+  const tableError = timeColumnsLoading.value ? '正在读取表字段'
+    : agent && timeColumnError.value ? `执行器不可用：${timeColumnError.value}` : ''
+  return [
+    { key: 'basic', ok: !basicError, text: basicError || '监控源、名称和检查表已填写' },
+    { key: 'methods', ok: !!form.methods.length, text: form.methods.length ? `已选 ${form.methods.length} 个检查方法` : '至少选一个检查方法' },
+    { key: 'scope', ok: !tableError && invalid?.key !== 'overdue', text: tableError || (invalid?.key === 'overdue' ? invalid.message
+      : `时间字段：${selectedTimeLabel.value}${timeColumnError.value && metadataTimeFields.value.length ? ' · 使用表元数据' : ''}`
+        + (!form.timeColumn ? ' · 依赖时间列的检查项可能无法判定' : '')) },
+    { key: 'prompt', ok: !promptError, text: promptError || (form.promptCustom ? '生成时使用自定义用户提示词' : promptSourceText.value) },
+    { key: 'mode', ok: !modeError, text: modeError || (agent ? '智能体和仓库配置已就绪' : '已选内置接口模型，无需先保存草稿') },
+  ]
+})
+const generationBlocked = computed(() => draftConfirmationFailed.value || generationChecks.value.some(check => !check.ok))
+
+async function focusGenerationCheck(key: string): Promise<void> {
+  if (key === 'basic') activeTab.value = 'basic'
+  else if (key === 'scope' || key === 'mode') advancedOpen.value = true
+  else if (key === 'prompt') promptTab.value = 'user'
+  await nextTick()
+  const targets: Record<string, string> = {
+    basic: 'mc-basic-fields', methods: 'mc-methods-pane', scope: 'mc-time-column',
+    mode: 'mc-generation-mode', prompt: 'mc-prompt',
   }
-  try {
-    await ElMessageBox.confirm(
-      '脚本要按监控 ID 命名，新建监控需要先保存为草稿（没有脚本，不会执行），保存后继续生成。',
-      '先保存草稿',
-      { type: 'info', confirmButtonText: '保存草稿并生成', cancelButtonText: '取消' },
-    )
-  } catch {
-    return false
-  }
-  saving.value = true
-  try {
-    const conf = confFromForm(form, {}, {})
-    const saved = await saveMonitor({
-      record: undefined,
-      sourceId: form.sourceId.trim(),
-      name: form.name.trim(),
-      kind: form.kind,
-      conf,
-      tableName: form.tableName.trim(),
-      schedule: form.schedule.trim(),
-    })
-    const readback = await readbackAfterSave(saved.raw)
-    if (!readback?.id) {
-      ElMessage.warning('草稿已提交，但没回读到监控 ID：请刷新列表后在该草稿上继续生成')
-      return false
-    }
-    applyRecord(readback)
-    emit('draft-saved', readback)
-    ElMessage.success(`已保存草稿（监控 ID ${readback.id}），继续生成脚本`)
-    return true
-  } catch (error) {
-    ElMessage.error(`保存草稿失败：${errorText(error)}`)
-    return false
-  } finally {
-    saving.value = false
-  }
+  document.getElementById(targets[key])?.focus()
 }
 
 async function onGenerate(): Promise<void> {
-  if (busy.value) return
-  if (!form.sourceId.trim()) {
-    ElMessage.warning('请先选择被监控源')
-    return
-  }
-  if (!form.methods.length) {
-    activeTab.value = 'check'
-    ElMessage.warning('AI 检查至少选择一个监控方法')
-    return
-  }
-  if (!form.desc.trim()) {
-    activeTab.value = 'check'
-    ElMessage.warning('请先填写业务描述')
-    return
-  }
-  if (form.generationMode === 'agent') {
-    if (!form.agentInterfaceId || !agentOptions.value.some(agent => agent.id === form.agentInterfaceId) || !form.repoId || !form.directoryId) {
-      activeTab.value = 'check'
-      ElMessage.warning('请先选择智能体、代码仓库和仓库目录')
-      return
-    }
-  } else if (!form.providerCode || !form.modelCode) {
-    activeTab.value = 'check'
-    ElMessage.warning('请先选择模型供应商与模型')
-    return
-  }
-  if (!(await ensureMonitorId())) return
-  generating.value = true
+  if (busy.value || generationBlocked.value) return
+  preflighting.value = true
+  preflightError.value = ''
   generationError.value = ''
+  const agent = form.generationMode === 'agent'
+  const tableName = form.tableName
+  const sourceId = form.sourceId
+  const recordId = monitorId.value
+  const tableId = tableOptions.value.find(table => table.tableName === tableName)?.tableId ?? ''
+  let context: Awaited<ReturnType<typeof resolveSourceResultContext>> | undefined
+  let fields: string[] = []
+  let fieldSource: 'runner' | 'metadata' = 'runner'
+  try {
+    if (agent || !timeColumnError.value) await loadTimeColumnFields()
+    if (agent && timeColumnError.value) return
+    if (!agent) context = await resolveSourceResultContext({ tableName, tableId })
+    if (form.tableName !== tableName || form.sourceId !== sourceId || monitorId.value !== recordId) return
+    const actualFields = timeColumnFields.value
+    const metadata = metadataTimeFields.value.map(field => field.name)
+    fields = actualFields.length ? actualFields : metadata
+    fieldSource = actualFields.length ? 'runner' : 'metadata'
+    if (fields.length && form.timeColumn && !fields.includes(form.timeColumn)) {
+      form.timeColumn = ''
+      timeColumnSelected.value = false
+      applyTimeColumnFields(true)
+      await nextTick()
+    }
+    if (generationBlocked.value) return
+    if (agent) await ensureMonitorId()
+  } catch (error) {
+    preflightError.value = errorText(error)
+    return
+  } finally {
+    preflighting.value = false
+  }
+
+  generating.value = true
   generatingPreview.value = ''
   generatingThinking.value = ''
   scriptExpanded.value = false
   startElapsedTimer()
   const previous = { script: candidate.script, scriptPath: candidate.scriptPath, archive: candidateArchive.value, archiveId: form.archiveId }
   try {
-    // 源结果检查只读本条检查选定的表：不读源流程、不借任何监控节点的 configId/输入表
-    const tableId = tableOptions.value.find((table) => table.tableName === form.tableName)?.tableId ?? ''
-    const fields = await resolveMonitorTableFields({ tableName: form.tableName, tableId })
-    applyTimeColumnFields(fields)
-    if (!form.timeColumn || !fields.includes(form.timeColumn)) {
-      throw new Error(`请选择当前表实际存在的入库时间字段（当前：${form.timeColumn || '未选择'}），然后重新生成脚本`)
-    }
-    // data-engine 对空 systemPrompt 直接抛「text cannot be null or empty」，必须兜底；
-    // 再追加主表真实字段与入库时间列，避免模型自己发明列名（实测失败原因之一）
-    const systemPrompt = augmentMonitorSystemPrompt(
-      form.systemPrompt.trim() || defaultSystemPrompt(),
-      fields,
-      form.timeColumn,
-    )
+    const systemPrompt = augmentMonitorSystemPrompt(form.systemPrompt.trim() || autoSystemPrompt.value, fields, form.timeColumn, fieldSource)
+    const userPrompt = prepareMonitorUserPrompt(form.desc, form.generationMode)
+    const scope = { tableName: form.tableName.trim(), timeColumn: form.timeColumn.trim(), mode: form.generationMode, signature: scriptInputSignature.value }
     let result: { script: string; scriptPath: string }
-    if (form.generationMode === 'agent') {
-      // 智能体生成：任务方式，产物提交 Git <仓库目录>/<sourceId>/<监控ID>.py（依赖后端监控上下文，契约 7）
+    if (agent) {
       const agentResult = await generateMonitorScriptWithAgent({
         sourceId: form.sourceId.trim(),
         monitorId: monitorId.value,
@@ -945,7 +1009,7 @@ async function onGenerate(): Promise<void> {
         directoryId: form.directoryId,
         directoryPath: selectedDirectory.value?.path,
         systemPrompt,
-        userPrompt: form.desc,
+        userPrompt,
         onEvent: (event) => {
           if (event.type === 'chunk') generatingPreview.value += event.text
           else if (event.type === 'progress') generatingThinking.value = appendThinking(generatingThinking.value, `${event.message}\n`)
@@ -957,11 +1021,10 @@ async function onGenerate(): Promise<void> {
       form.archiveId = agentResult.archive?.archiveId ?? ''
       result = agentResult
     } else {
-      const context = await resolveSourceResultContext({ tableName: form.tableName, tableId })
       result = await generateMonitorScript({
-        context,
-        description: form.desc,
-        methods: [...form.methods],
+        context: context!,
+        description: userPrompt,
+        methods: promptScopeChanged.value ? [] : [...form.methods],
         systemPrompt,
         providerCode: form.providerCode,
         modelCode: form.modelCode,
@@ -980,7 +1043,7 @@ async function onGenerate(): Promise<void> {
     }
     candidate.script = result.script
     candidate.scriptPath = result.scriptPath
-    candidateScope.value = { tableName: form.tableName.trim(), timeColumn: form.timeColumn.trim() }
+    candidateScope.value = scope
     pending.value = true
     testResult.value = null
     ElMessage.success('脚本已生成（尚未保存）：保存后才会生效，生成不改变当前版本')
@@ -996,7 +1059,6 @@ async function onGenerate(): Promise<void> {
     if (form.generationMode === 'agent') {
       generationError.value += '（智能体生成依赖后端「监控上下文」支持，未上线前可切回「内置接口」生成）'
     }
-    ElMessage.error(`生成脚本失败：${generationError.value}`)
   } finally {
     stopElapsedTimer()
     generating.value = false
@@ -1123,27 +1185,32 @@ async function readbackAfterSave(raw: unknown): Promise<MonitorRecordView | null
 }
 
 async function onSave(): Promise<void> {
-  if (busy.value) return
+  if (busy.value || draftConfirmationFailed.value) return
   const invalid = validateForm(form)
   if (invalid) {
     activeTab.value = invalid.key === 'methods' || invalid.key === 'overdue' ? 'check' : 'basic'
     ElMessage.warning(invalid.message)
     return
   }
+  if (form.kind === 'ai' && promptConflict.value) {
+    activeTab.value = 'check'
+    await focusGenerationCheck('prompt')
+    return
+  }
   saving.value = true
   try {
-    // 不阻断：执行器不传 --time-column 时脚本会自报「无法自动识别入库时间列」并退出，
-    // 比页面偷偷填一个假列名再跑错要好
-    if (form.kind === 'ai' && !form.timeColumn.trim()) {
-      ElMessage.warning('未选择入库时间字段：表里有多个时间列时脚本会自报错，本次仍会保存')
-    }
     const baseConf: MonitorCheckConf = recordState.value?.conf ?? {}
     const generated = pending.value && !!(candidate.script.trim() || candidate.scriptPath.trim())
+    if (form.kind === 'ai' && generated && candidateScope.value && candidateScope.value.mode !== form.generationMode) {
+      activeTab.value = 'check'
+      await focusGenerationCheck('mode')
+      return
+    }
     // 候选是按旧表/旧时间列生成的：脚本列名写死，直接发布会把旧范围套到新表上
     if (generated && candidateStale.value && candidateScope.value) {
       try {
         await ElMessageBox.confirm(
-          `候选脚本是按「${candidateScope.value.tableName || '未选表'}」生成的，当前检查范围是「${[form.tableName, form.timeColumn].filter(Boolean).join(' · ') || '未选表'}」。继续保存会按新范围发布这份旧表脚本，是否仍然保存？`,
+          `${candidateStaleNotice.value} 是否仍然保存？`,
           '候选脚本与当前检查范围不一致',
           { type: 'warning', confirmButtonText: '仍然保存', cancelButtonText: '取消，先重新生成' },
         )
@@ -1225,7 +1292,7 @@ defineExpose({
       <div class="mc-title-line">
         <h3 class="mc-title">{{ isEditing ? '编辑监控' : '新建监控' }}</h3>
         <span class="mc-badge" :class="isEditing && (form.kind === 'rule' || hasAnyScript) ? 'mc-badge-ok' : 'mc-badge-draft'" data-testid="mc-mode">
-          {{ isEditing ? recordStatusText : '草稿 · 未生效' }}
+          {{ isEditing ? recordStatusText : '未保存' }}
         </span>
         <span v-if="isDirty" class="mc-badge mc-badge-warn" data-testid="mc-dirty">有未保存修改</span>
         <span class="mc-head-meta" :title="lockedSourceLabel">
@@ -1261,7 +1328,7 @@ defineExpose({
         <button type="button" class="mc-mini" data-testid="mc-retry" @click="loadSourceContext">重试</button>
       </div>
 
-      <section v-show="activeTab === 'basic'" class="mc-section" data-testid="mc-panel-basic">
+      <section v-show="activeTab === 'basic'" id="mc-basic-fields" tabindex="-1" class="mc-section" data-testid="mc-panel-basic">
         <div class="mc-grid mc-grid-basic">
         <div class="mc-field">
           <label class="mc-label" for="mc-name-input">监控名称 <em>*</em></label>
@@ -1284,7 +1351,7 @@ defineExpose({
             v-else-if="siteId"
             :site-id="siteId"
             :model-value="form.sourceId"
-            @update:model-value="onSourceChanged"
+            @update:model-value="onSourcePicked"
           />
           <SourcePickerRemote
             v-else
@@ -1331,7 +1398,7 @@ defineExpose({
           </div>
         </div>
         <p v-else class="mc-note" data-testid="mc-new-note">
-          勾选检查方法并填写业务描述后生成脚本；不生成直接保存 = 草稿（未生效，不执行）。
+          检查方法会自动填入用户提示词。需要补充规则时，可在「检查方式」里用 AI 修改。
         </p>
       </section>
 
@@ -1366,29 +1433,56 @@ defineExpose({
         <template v-if="form.kind === 'ai'">
           <div class="mc-split">
             <div class="mc-col">
-              <section class="mc-pane">
-                <div class="mc-pane-head">
-                  <h4>业务描述 <em>*</em><small class="mc-h4-note">（用户提示词）</small></h4>
-                  <button type="button" class="mc-mini" data-testid="mc-desc-template" @click="fillDescription">按模板填充</button>
-                </div>
-                <textarea
-                  id="mc-desc-input"
-                  v-model="form.desc"
-                  class="mc-input mc-textarea"
-                  rows="4"
-                  placeholder="说明检查什么、正常标准、异常条件"
-                  data-testid="mc-desc-input"
-                  @input="onDescInput"
-                />
-                <p class="mc-hint">默认描述只在空白表单时填入；修改后切换方法/关联表不会被静默覆盖。</p>
-              </section>
-
-              <section class="mc-pane">
+              <section id="mc-methods-pane" class="mc-pane" tabindex="-1">
                 <AiMethodsField v-model="form.methods" />
               </section>
 
-              <section class="mc-pane">
-                <div class="mc-pane-head"><h4>数据范围与关联</h4></div>
+              <section id="mc-prompt" class="mc-pane" tabindex="-1" aria-label="提示词">
+                <PromptTemplatePicker
+                  :items="promptTemplates" :model-value="selectedPromptId" :loading="!promptTemplateLoaded"
+                  :disabled="busy" test-id="mc-prompt-template" @select="selectPromptTemplate"
+                />
+                <p class="mc-hint" data-testid="mc-prompt-facts">
+                  {{ form.promptCustom ? '当前表单（使用自定义提示词）' : '表单已填入' }}：
+                  {{ form.methods.map(methodLabel).join('、') || '未选检查方法' }} · {{ selectedTimeLabel }}<template v-if="form.timeColumn"> · {{ descriptionWindow }}</template>
+                  · {{ form.nullPolicy === 'abnormal' ? '空值记异常' : form.nullPolicy === 'allow' ? '允许为空' : '空值行跳过' }}
+                </p>
+                <div class="mc-prompt-columns">
+                  <div class="mc-field">
+                    <div class="mc-quick-row" role="group" aria-label="选择提示词类型">
+                      <el-button :type="promptTab === 'system' ? 'primary' : 'default'" data-testid="mc-prompt-tab-system" @click="promptTab = 'system'">系统提示词</el-button>
+                      <el-button :type="promptTab === 'user' ? 'primary' : 'default'" data-testid="mc-prompt-tab-user" @click="promptTab = 'user'">用户提示词</el-button>
+                    </div>
+                    <div v-show="promptTab === 'user'" class="mc-field">
+                      <div class="mc-field-head">
+                        <label class="mc-label" for="mc-desc-input">用户提示词 <span v-if="form.promptCustom" class="mc-faint">· 已自定义</span></label>
+                        <button type="button" class="mc-mini" data-testid="mc-user-prompt-restore" @click="restoreUserPrompt">恢复默认</button>
+                      </div>
+                      <p v-if="promptConflict" class="mc-hint mc-hint-error">表单已变更，当前提示词仍保留原规则。请确认生成使用的提示词，执行范围仍按当前表单。</p>
+                      <textarea id="mc-desc-input" :value="displayUserPrompt" readonly class="mc-input mc-textarea mc-prompt-text" data-testid="mc-desc-input" />
+                    </div>
+                    <div v-show="promptTab === 'system'" class="mc-field">
+                      <div class="mc-field-head">
+                        <label class="mc-label" for="mc-system-prompt">系统提示词 <span v-if="systemTouched" class="mc-faint">· 已自定义</span></label>
+                        <button type="button" class="mc-mini" data-testid="mc-system-prompt-restore" @click="restoreSystemPrompt">恢复默认</button>
+                      </div>
+                      <textarea id="mc-system-prompt" v-model="form.systemPrompt" maxlength="12000" class="mc-input mc-textarea mc-prompt-text"
+                        placeholder="留空则使用默认提示词" data-testid="mc-system-prompt" @input="systemTouched = true" />
+                    </div>
+                    <p class="mc-hint" data-testid="mc-prompt-source">{{ promptSourceText }}</p>
+                  </div>
+                  <PromptAiEditor
+                    v-if="activeTab === 'check'" :key="`${recordState?.id || form.sourceId}:${promptTab}`"
+                    embedded :prompt-type="promptTab" :prompt="activePrompt" :disabled="busy" @apply="applyPromptEdit"
+                  />
+                </div>
+              </section>
+
+              <details class="mc-pane mc-advanced" :open="advancedOpen" @toggle="advancedOpen = ($event.currentTarget as HTMLDetailsElement).open">
+                <summary data-testid="mc-advanced">
+                  <strong>高级选项</strong>
+                  <span class="mc-hint">{{ selectedTimeLabel }}<template v-if="form.timeColumn"> · {{ form.windowType === 'today' ? '当日' : windowHint }}</template> · {{ form.nullPolicy === 'abnormal' ? '空值记异常' : form.nullPolicy === 'allow' ? '允许为空' : '空值行跳过' }} · {{ form.generationMode === 'agent' ? '智能体' : '内置接口' }}</span>
+                </summary>
                 <div class="mc-grid mc-range-grid">
                   <div class="mc-field">
                     <span class="mc-label">主表</span>
@@ -1400,19 +1494,20 @@ defineExpose({
                       id="mc-time-column"
                       v-model="form.timeColumn"
                       class="mc-input"
-                      data-testid="mc-time-column"
+                      data-testid="mc-time-column" @change="timeColumnSelected = true"
                     >
-                      <option value="">请选择</option>
-                      <option v-for="column in timeColumnOptions" :key="column" :value="column">{{ column }}</option>
+                      <option value="">不限时间（全表检查）</option>
+                      <option v-for="column in timeColumnOptions" :key="column.value" :value="column.value">{{ column.label }}</option>
                     </select>
                     <p class="mc-hint">脚本按这一列统计；不确定时选表的入库时间列</p>
-                    <p v-if="timeColumnError" class="mc-hint">{{ timeColumnError }}</p>
+                    <p v-if="timeColumnsLoading" class="mc-hint">正在读取表字段…</p>
+                    <p v-else-if="timeColumnError" class="mc-hint" data-testid="mc-time-fallback">{{ metadataTimeFields.length ? '执行器字段不可用，候选来自表元数据。' : '字段读取失败，可选不限时间。' }} {{ timeColumnError }}</p>
                     <p v-else-if="form.timeColumn && timeColumnFields.length && !timeColumnFields.includes(form.timeColumn)" class="mc-hint">
                       当前表不存在字段 {{ form.timeColumn }}，请重新选择并生成脚本。
                     </p>
                   </div>
                   <div class="mc-field">
-                    <label class="mc-label" for="mc-null-policy">字段值为空时</label>
+                    <label class="mc-label" for="mc-null-policy">被检查字段为空时</label>
                     <select id="mc-null-policy" v-model="form.nullPolicy" class="mc-input" data-testid="mc-null-policy">
                       <option value="abnormal">记为异常</option>
                       <option value="allow">允许为空（不告警）</option>
@@ -1501,7 +1596,7 @@ defineExpose({
                 </p>
                 <!-- 1117 第 2 批：生成方式。内置接口 = 现有 data-process（供应商 + 模型，脚本存文件服务）；
                      智能体 = Runner 智能体 + Git 仓库目录（依赖后端监控上下文，未上线前生成会被后端拒绝）。 -->
-                <div class="mc-field">
+                <div id="mc-generation-mode" class="mc-field" tabindex="-1">
                   <label class="mc-label">生成方式</label>
                   <div class="mc-segment" role="radiogroup" aria-label="生成方式">
                     <button
@@ -1571,24 +1666,7 @@ defineExpose({
                     </select>
                   </div>
                 </div>
-                <div class="mc-field">
-                  <div class="mc-label-row">
-                    <label class="mc-label" for="mc-system-prompt">系统提示词</label>
-                    <button type="button" class="mc-mini" data-testid="mc-system-prompt-restore" @click="restoreSystemPrompt">恢复模板</button>
-                  </div>
-                  <textarea
-                    id="mc-system-prompt"
-                    v-model="form.systemPrompt"
-                    class="mc-input mc-textarea"
-                    rows="3"
-                    placeholder="留空则使用默认提示词"
-                    data-testid="mc-system-prompt"
-                    @input="onSystemPromptInput"
-                  />
-                  <p class="mc-hint" data-testid="mc-prompt-source">{{ promptSourceText }}</p>
-                </div>
-                <p class="mc-hint">生成与测试不改变生效版本；保存即生效。</p>
-              </section>
+              </details>
             </div>
 
             <div class="mc-col mc-col-script">
@@ -1612,7 +1690,7 @@ defineExpose({
               新生成，尚未保存：保存后才会生效，生成不改变当前版本
             </p>
             <p v-else-if="!hasAnyScript" class="mc-hint" data-testid="mc-script-empty">
-              当前是「草稿 · 未生效，不执行」：没有可执行脚本，保存后也不会运行；先生成脚本再保存。
+              还没有可执行脚本。直接保存会成为草稿，草稿不会执行。
             </p>
             <p v-if="needsRegenerateNotice" class="mc-notice mc-notice-warn" data-testid="mc-needs-regenerate">
               {{ needsRegenerateNotice }}
@@ -1685,13 +1763,32 @@ defineExpose({
                 <pre ref="streamRef" class="mc-stream-think-body is-live" data-testid="mc-stream-thinking">{{ generatingThinking || '正在连接模型…' }}</pre>
               </template>
             </div>
-            <p v-if="generationError" class="mc-error" data-testid="mc-generate-error">
+            <ul class="mc-generation-checks" aria-label="生成前检查" data-testid="mc-generation-checks">
+              <li v-for="check in generationChecks" :key="check.key">
+                <span aria-hidden="true" :class="check.ok ? 'mc-check-ok' : 'mc-hint-error'">{{ check.ok ? '✓' : '!' }}</span>
+                {{ check.text }}
+                <template v-if="!check.ok">
+                  <button type="button" class="mc-mini" @click="focusGenerationCheck(check.key)">去查看</button>
+                  <template v-if="check.key === 'prompt' && promptConflict">
+                    <button type="button" class="mc-mini" data-testid="mc-prompt-sync" @click="restoreUserPrompt">按表单重新生成提示词</button>
+                    <button type="button" class="mc-mini" data-testid="mc-prompt-keep" @click="acknowledgedPromptScope = promptScope">继续使用自定义提示词</button>
+                  </template>
+                  <button v-if="check.key === 'scope' && timeColumnError" type="button" class="mc-mini"
+                    @click="loadTimeColumnFields()">重试读取字段</button>
+                  <button v-if="form.generationMode === 'agent' && (check.key === 'mode' || (check.key === 'scope' && timeColumnError))"
+                    type="button" class="mc-mini" @click="switchGenerationMode('builtin'); focusGenerationCheck('mode')">改用内置接口</button>
+                </template>
+              </li>
+              <li v-if="form.generationMode === 'agent' && !monitorId">检查通过后先保存草稿取得监控 ID，草稿不会执行。</li>
+            </ul>
+            <p v-if="preflightError" class="mc-error" role="alert" data-testid="mc-preflight-error">{{ preflightError }}</p>
+            <p v-if="generationError" class="mc-error" role="alert" data-testid="mc-generate-error">
               生成失败：{{ generationError }}（已保留原正文）
             </p>
 
               <div class="mc-script-actions">
-                <button type="button" class="mc-btn" :disabled="generating || saving" data-testid="mc-generate" @click="onGenerate">
-                  {{ generating ? '生成中…' : '生成脚本' }}
+                <button type="button" class="mc-btn" :disabled="busy || generationBlocked" data-testid="mc-generate" @click="onGenerate">
+                  {{ preflighting ? '正在检查…' : generating ? '生成中…' : '生成脚本' }}
                 </button>
                 <button type="button" class="mc-btn" :disabled="testing || !canTest" data-testid="mc-test" @click="onTest">
                   {{ testing ? '测试中…' : '测试脚本' }}
@@ -1901,7 +1998,7 @@ defineExpose({
       </span>
       <div class="mc-foot-actions">
         <button type="button" class="mc-btn" :disabled="busy" data-testid="mc-cancel" @click="onCancel">取消</button>
-        <button type="button" class="mc-btn mc-btn-primary" :disabled="busy" data-testid="mc-save" @click="onSave">
+        <button type="button" class="mc-btn mc-btn-primary" :disabled="busy || draftConfirmationFailed" data-testid="mc-save" @click="onSave">
           {{ saving ? '保存中…' : (saveLabel) }}
         </button>
       </div>
@@ -1980,8 +2077,17 @@ defineExpose({
 .mc-window-segment { align-self: flex-start; flex-wrap: wrap; }
 .mc-window-hours { align-self: flex-start; }
 .mc-window-hours .mc-input { flex: none; width: 96px; }
-.mc-split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-.mc-col-script { position: sticky; top: 0; }
+.mc-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.mc-prompt-columns { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; }
+.mc-prompt-text { min-height: 230px; }
+.mc-advanced { display: block; }
+.mc-advanced[open] > :not(summary) { margin-top: 10px; }
+.mc-advanced summary { cursor: pointer; }
+.mc-advanced summary .mc-hint { margin-left: 8px; }
+.mc-generation-checks { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px 12px; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); }
+.mc-generation-checks li { overflow-wrap: anywhere; }
+.mc-generation-checks button { margin-left: 6px; }
+.mc-check-ok { color: var(--rc-ok); }
 .mc-pane { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #dce5f3; border-radius: 8px; background: var(--rc-surface); }
 .mc-pane-script { padding: 0; border: 0; }
 .mc-card { display: flex; flex-direction: column; padding: 2px 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: var(--rc-surface); min-width: 0; }
@@ -2058,7 +2164,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--rc-primar
 .mc-foot-actions { display: flex; flex: none; gap: 8px; }
 @media (max-width: 760px) {
   .mc-split, .mc-grid { grid-template-columns: minmax(0, 1fr); }
-  .mc-col-script { position: static; }
+  .mc-prompt-columns { grid-template-columns: minmax(0, 1fr); }
   .mc-kindbar { align-items: flex-start; flex-direction: column; }
   .mc-shell { height: calc(100dvh - 32px); }
   .mc-foot-hint { max-width: 55%; }

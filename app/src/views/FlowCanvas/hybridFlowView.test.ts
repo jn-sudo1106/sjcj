@@ -162,6 +162,29 @@ describe('未绑流程的源（2026-10-12）', () => {
       expect(wrapper.text()).not.toContain('加载失败')
     } finally { wrapper.unmount() }
   })
+
+  it('流程没有发布版也没有可读版本：「没有有效发布版本」按空状态打开画布，不整页报流程步骤加载失败', async () => {
+    const source = { sourceId: '491000022', siteId: '2536', name: '同花顺-F10-经营分析-主营构成分析', configId: '1', flowId: '21000099', state: 'C' } as Source
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, curVer: null, nextVer: 1, publishId: null, draftId: null, versions: [] })
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue([])
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([])
+    vi.spyOn(flowCenterApi, 'steps').mockRejectedValue(new Error('请求异常 [item/next/nextConfigPaged]: 错误信息:运行时异常：没有有效发布版本，请完善流程并发布'))
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push({ path: '/canvas', query: { sourceId: source.sourceId, siteId: '2536', view: 'overview' } })
+    await router.isReady()
+    const pinia = createPinia(); setActivePinia(pinia)
+    const wrapper = mount(FlowCanvas, { global: {
+      plugins: [pinia, router], directives: { loading: {} },
+      stubs: { FlowBoard: true, ResultView: true, NodeInspector: true, SiteSourceSwitcher: true, SourceTabsBar: true, SourceSummaryView: true, TaskView: true, FileView: true, SiteDetailView: true, CompareSplit: true, LoginConfigSelectDialog: true, NewSiteWizard: true },
+    } })
+    try {
+      await flushPromises()
+      expect(useFlowStore().sourceCtx?.sourceId).toBe('491000022')
+      expect(wrapper.text()).not.toContain('流程步骤加载失败')
+    } finally { wrapper.unmount() }
+  })
 })
 
 describe('源详情页加载提速（1107）', () => {

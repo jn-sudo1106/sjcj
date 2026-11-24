@@ -393,11 +393,10 @@ export interface ChatMessage {
   question?: string
   /** 导出/图表切换等本地操作回执，与 AI 回答区分，不伪造思考过程 */
   localAction?: boolean
+  /** 上游给的结束原因（OpenAI 兼容 finish_reason；未收到 [DONE] 就断流记为 connection_closed），空回答时据此解释原因 */
+  finishReason?: string
   // 智能体交互与富文本卡片扩展
-  clarification?: Clarification & {
-    confirmed?: boolean
-    selectedEntryTypeIds?: number[]
-  }
+  clarification?: ClarificationState
   thinking?: {
     completed: boolean
     durationMs: number
@@ -484,6 +483,76 @@ export function formatMessageTime(dateStr?: string | Date): string {
   return `${month}-${day} ${hh}:${mm}`
 }
 
+/** 卡片上的澄清状态：确认后记下勾选项与补充条件，确认后的卡片据此回显 */
+export type ClarificationState = Clarification & {
+  confirmed?: boolean
+  selectedEntryTypeIds?: number[]
+  freeText?: string
+}
+
+/**
+ * 后端压缩上下文时拼给模型的「历史对话摘要」：`<摘要>\n[以上为历史对话摘要，以下是最近的对话内容，请直接继续对话]\n<最近内容>`。
+ * 这是给模型看的提示，模型偶尔原样复述进回答、或随消息落库；展示时去掉标记及其前面的摘要。
+ */
+const HISTORY_SUMMARY_MARKER = /\[\s*以上(?:为|是)历史对话摘要[^\]\n]*\]/g
+
+export function stripHistorySummary(text: string): string {
+  if (!text) return text
+  HISTORY_SUMMARY_MARKER.lastIndex = 0
+  let lastEnd = -1
+  let m: RegExpExecArray | null
+  while ((m = HISTORY_SUMMARY_MARKER.exec(text)) !== null) lastEnd = m.index + m[0].length
+  return lastEnd < 0 ? text : text.slice(lastEnd).replace(/^\s+/, '')
+}
+
+/**
+ * 从确认澄清后回传的那条用户消息反推勾选项（与 handleConfirmClarify 拼的文本对应）：
+ * `城市信息动态（sense_data.TB_CSXXDT）`、`已确认选择：A（表名）、B（表名）；补充要求：…`，
+ * 也兼容按提示直接回编号（`2`、`1,2`）。物理表名优先，认不出再按中文名。
+ */
+export function matchClarificationReply(
+  clarification: Clarification,
+  reply: string,
+): { selectedEntryTypeIds: number[]; freeText: string } | null {
+  const text = (reply || '').trim()
+  if (!text || !clarification.options?.length) return null
+  const freeMatch = /补充要求[:：]\s*([\s\S]*)$/.exec(text)
+  const freeText = freeMatch ? freeMatch[1].trim() : ''
+  const body = (freeMatch ? text.slice(0, freeMatch.index) : text).toLowerCase()
+  const keyed = clarification.options.map((option, index) => ({ option, key: clarificationOptionKey(option, index) }))
+
+  let picked: number[] = []
+  if (/^\d+(?:\s*[,，、\s]\s*\d+)*$/.test(body.trim())) {
+    const nums = body.trim().split(/[,，、\s]+/).map(Number)
+    picked = keyed.filter(({ option }, i) => nums.includes(option.ordinal ?? i + 1)).map(({ key }) => key)
+  }
+  if (!picked.length) {
+    picked = keyed
+      .filter(({ option }) => option.tableName && body.includes(option.tableName.toLowerCase()))
+      .map(({ key }) => key)
+  }
+  if (!picked.length) {
+    picked = keyed
+      .filter(({ option }) => option.typeName && body.includes(option.typeName.toLowerCase()))
+      .map(({ key }) => key)
+  }
+  if (!picked.length && !freeText) return null
+  return { selectedEntryTypeIds: picked, freeText }
+}
+
+/** 历史回放：澄清卡片之后紧跟的用户消息就是确认结果，据此标已确认并回显勾选项 */
+export function markConfirmedClarifications(messages: ChatMessage[]): void {
+  messages.forEach((msg, index) => {
+    const clarification = msg.clarification
+    if (msg.role !== 'assistant' || !clarification || clarification.selectedEntryTypeIds?.length) return
+    const next = messages.slice(index + 1).find((m) => m.role === 'user')
+    if (!next) return
+    const matched = matchClarificationReply(clarification, next.content)
+    if (!matched) return
+    msg.clarification = { ...clarification, confirmed: true, ...matched }
+  })
+}
+
 export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[] {
   const result: ChatMessage[] = []
   if (!Array.isArray(logs)) return result
@@ -492,22 +561,25 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     if (!log) continue
     const createdAt = formatMessageTime(log.createTime)
 
-    // 用户提问消息
-    result.push({
-      id: `m-${log.id}-u`,
-      role: 'user',
-      content: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
-      createdAt,
-    })
+    // 用户提问消息（摘要标记只给模型看：去掉后为空就不出空气泡）
+    const userText = stripHistorySummary(stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')))
+    if (userText.trim()) {
+      result.push({
+        id: `m-${log.id}-u`,
+        role: 'user',
+        content: userText,
+        createdAt,
+      })
+    }
 
     // 智能体回复消息
     const assistantMsg: ChatMessage = {
       id: `m-${log.id}-a`,
       role: 'assistant',
-      content: log.modelMsg || '',
+      content: stripHistorySummary(log.modelMsg || ''),
       createdAt,
       interrupted: log.status === 'INTERRUPTED',
-      question: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
+      question: userText,
       status:
         log.status === 'INTERRUPTED'
           ? 'interrupted'
@@ -543,6 +615,9 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
           if (dataObj.sql) {
             assistantMsg.sql = dataObj.sql
           }
+          // 后端若落了结束原因（finishReason / finish_reason），回放的空回答也能解释原因
+          const savedFinish = dataObj.finishReason ?? dataObj.finish_reason
+          if (typeof savedFinish === 'string' && savedFinish) assistantMsg.finishReason = savedFinish
           // schemaVersion>=2：富卡片直接回放，不再从文本正则重猜
           if (dataObj.schemaVersion >= 2) {
             if (dataObj.chartData) assistantMsg.chartData = dataObj.chartData
@@ -643,6 +718,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
 
   markCreatedTableDrafts(result)
   markCreatedSourceDrafts(result)
+  markConfirmedClarifications(result)
   return result
 }
 
@@ -826,7 +902,41 @@ export type AgentChatEvent =
   | { type: 'table_draft'; draft: TableDraft }
   | { type: 'session_assigned'; sessionId: string; threadId: string }
   | { type: 'error'; error: string }
+  /** 上游结束原因：choices[0].finish_reason / 顶层 finish_reason；流没发 [DONE] 就断开时为 connection_closed */
+  | { type: 'finish'; reason: string }
   | { type: 'done' }
+
+/** 数据流没收到 [DONE] 就关闭（网关/后端超时断开、进程异常）时的结束原因 */
+export const FINISH_REASON_CONNECTION_CLOSED = 'connection_closed'
+
+/**
+ * 空回答（思考完成但没有正文）时按结束原因给出说明；没有原因时退回通用提示。
+ * description 末尾附原始 finish_reason，方便对着后端日志排查。
+ */
+export function describeEmptyAnswer(reason?: string): { title: string; description: string } {
+  const r = (reason || '').trim().toLowerCase()
+  let title = '思考分析已完成，但未返回最终回答内容'
+  let description = '上游模型或数据检索接口可能未生成文本回复。您可以展开上方「思考过程」卡片查看详细分析步骤与日志。'
+  if (r === 'length' || r === 'max_tokens' || r === 'model_length') {
+    title = '回答被截断：模型输出长度已用完'
+    description = '查询结果过多，模型还没写出回答就达到了输出上限。可缩小时间范围、只要必要字段或限制条数（如「最多 20 条，只列标题和时间」）后重试。'
+  } else if (r === 'content_filter' || r === 'sensitive') {
+    title = '回答被内容安全策略拦截'
+    description = '上游模型的内容安全策略拦截了本次输出。可调整问题措辞或缩小查询范围后重试。'
+  } else if (r === 'tool_calls' || r === 'function_call' || r === 'tool_use') {
+    title = '智能体停在了工具调用，没有继续生成回答'
+    description = '智能体可能达到了工具调用轮数上限。可展开「思考过程」查看已执行的步骤，缩小问题范围后重试。'
+  } else if (r === 'stop' || r === 'end_turn' || r === 'stop_sequence') {
+    title = '模型已结束，但没有输出回答正文'
+    description = '通常是查询结果过大或上下文过长，模型读完结果后直接结束了。可缩小时间范围或限制返回条数后重试。'
+  } else if (r === FINISH_REASON_CONNECTION_CLOSED) {
+    title = '数据流在返回回答前断开'
+    description = '没有收到正常的结束标记，可能是网关或后端超时断开了连接。可直接重试；反复出现请查看后端日志。'
+  } else if (r) {
+    title = '上游未返回最终回答内容'
+  }
+  return { title, description: reason ? `${description}（结束原因：${reason}）` : description }
+}
 
 /**
  * 从文本或 Markdown 回答中提取待确认项与候选（支持 Markdown Task List 复选框与 JSON 块）。
@@ -1549,6 +1659,13 @@ export async function streamAgentChat(
   const decoder = new TextDecoder()
   let pending = ''
   let completed = false
+  let finishReason = ''
+
+  function noteFinishReason(raw: unknown) {
+    if (typeof raw !== 'string' || !raw.trim() || raw === finishReason) return
+    finishReason = raw.trim()
+    onEvent({ type: 'finish', reason: finishReason })
+  }
 
   const abortListener = () => {
     reader.cancel().catch(() => {})
@@ -1635,6 +1752,8 @@ export async function streamAgentChat(
           if (clarificationObj) emitStructuredClarification(clarificationObj)
         }
 
+        noteFinishReason(choice?.finish_reason ?? payload.finish_reason ?? payload.stop_reason)
+
         // OpenAI 兼容 choices 结构: { choices: [{ delta: { content, reasoning_content } }] }
         if (Array.isArray(payload.choices) && payload.choices.length > 0) {
           const choice = payload.choices[0]
@@ -1714,6 +1833,7 @@ export async function streamAgentChat(
     }
     if (!completed) {
       tryEmitClarificationFromReasoning()
+      if (!finishReason) noteFinishReason(FINISH_REASON_CONNECTION_CLOSED)
       onEvent({ type: 'done' })
     }
   } finally {

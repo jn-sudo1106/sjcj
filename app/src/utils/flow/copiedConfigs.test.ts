@@ -6,6 +6,7 @@ const mockSteps = vi.fn()
 const mockCopyAndLocate = vi.fn()
 const mockStepModify = vi.fn()
 const mockRootConfigUpdate = vi.fn()
+const mockRootNameUpdate = vi.fn()
 const mockConfirm = vi.fn()
 const mockOverview = vi.fn(async (): Promise<Record<string, unknown>> => ({ enabled: false, versions: [], draftId: null as string | null }))
 const mockCopy = vi.fn()
@@ -17,6 +18,7 @@ vi.mock('@/api', () => ({
   itemApi: {
     stepModify: (...args: unknown[]) => mockStepModify(...args),
     rootConfigUpdate: (...args: unknown[]) => mockRootConfigUpdate(...args),
+    rootNameUpdate: (...args: unknown[]) => mockRootNameUpdate(...args),
   },
   // 流程版本（2026-10-10）：按未启用处理，换绑照旧不带版本信息
   flowVersionApi: { overview: (...args: unknown[]) => mockOverview(...(args as [])), action: (...args: unknown[]) => mockAction(...args) },
@@ -340,5 +342,55 @@ describe('copyWholeFlow 复制后自动发布（10-29）', () => {
     mockAction.mockRejectedValue(new Error('内容已变更'))
     const copied = await copyWholeFlow('100', '副本', { reuseConfigs: true })
     expect(copied).toEqual({ flowId: '500', publishError: '内容已变更' })
+  })
+})
+
+describe('copyWholeFlow 把来源根节点的配置带到复制品（1123）', () => {
+  const ov = (draftId: string | null, publishId: string | null = null) => ({
+    enabled: true, publishId, draftId,
+    versions: [
+      ...(draftId ? [{ versionId: draftId, flowVer: 2, ver: 4, state: 'W', isLock: 0, isDelete: 0 }] : []),
+      ...(publishId ? [{ versionId: publishId, flowVer: 1, ver: 1, state: 'C', isLock: 0, isDelete: 0 }] : []),
+    ],
+  })
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockCopy.mockReset().mockResolvedValue('500')
+    mockAction.mockReset().mockResolvedValue({ versionId: '71' })
+    mockRootConfigUpdate.mockReset().mockResolvedValue({ ok: true })
+    mockRootNameUpdate.mockReset().mockResolvedValue({ ok: true })
+    mockOverview.mockReset().mockImplementation(async (...args: unknown[]) => (args[0] === '100' ? ov('61') : ov('71')))
+    mockSteps.mockReset().mockImplementation(async (flowId: string) => flowId === '100'
+      ? [step({ stepId: '8914136', isRoot: true, name: '采集', configId: '1910046', outputTable: '2102185', outColumns: ['a', 'b'], flowId: '100' })]
+      : [step({ stepId: '8914138', isRoot: true, name: '同花顺_副本', configId: undefined, flowId: '500' })])
+  })
+
+  it('根节点挂着采集配置：复制品的空根写入同一配置 / 输出表 / 出参列和名称，再去共享、再发布（186 流程 15730962）', async () => {
+    const copied = await copyWholeFlow('100', '同花顺_副本', { useDraft: true, reuseConfigs: true })
+    expect(mockSteps).toHaveBeenCalledWith('100', { withConfigDetails: false, versionId: '61' })
+    expect(mockRootConfigUpdate).toHaveBeenCalledWith('8914138', '1910046', '500', '2102185', { flowId: '500', versionId: '71', ver: 4 }, ['a', 'b'], undefined)
+    expect(mockRootNameUpdate).toHaveBeenCalledWith('8914138', '采集', '500', { flowId: '500', versionId: '71', ver: 4 })
+    expect(mockRootConfigUpdate.mock.invocationCallOrder[0]).toBeLessThan(mockAction.mock.invocationCallOrder[0])
+    expect(copied.rootError).toBeUndefined()
+  })
+
+  it('不带 useDraft 时来源有发布版就读发布版（不带 versionId）', async () => {
+    mockOverview.mockImplementation(async (...args: unknown[]) => (args[0] === '100' ? ov('61', '60') : ov('71')))
+    await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    expect(mockSteps).toHaveBeenCalledWith('100', { withConfigDetails: false })
+  })
+
+  it('复制品根节点已有配置、或来源根节点没有配置时不动', async () => {
+    mockSteps.mockImplementation(async (flowId: string) => [step({ stepId: flowId === '100' ? '1' : '2', isRoot: true, configId: flowId === '100' ? '1910046' : '1999999' })])
+    await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    mockSteps.mockImplementation(async (flowId: string) => [step({ stepId: flowId, isRoot: true, configId: undefined })])
+    await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    expect(mockRootConfigUpdate).not.toHaveBeenCalled()
+  })
+
+  it('写根配置失败不抛，带回原因', async () => {
+    mockRootConfigUpdate.mockResolvedValue({ ok: false, message: '配置不存在' })
+    const copied = await copyWholeFlow('100', '副本', { reuseConfigs: true })
+    expect(copied.rootError).toBe('配置不存在')
   })
 })

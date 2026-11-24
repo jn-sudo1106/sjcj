@@ -47,6 +47,44 @@ describe('CategoryTreePicker', () => {
     expect(wrapper.text()).toContain('支付宝评论')
   })
 
+  it('预选的子级分类（名称路径 + dirId）会逐级懒加载、展开并勾选上', async () => {
+    const sourceCategories = vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => {
+      if (parentId === 'sh') return [{ id: 'sg-news', name: '新加坡-资讯' }]
+      if (parentId === '-2') return [{ id: 'media', name: '海外社媒' }, { id: 'sh', name: '上海发展' }]
+      return []
+    })
+    const wrapper = mount(CategoryTreePicker, {
+      props: {
+        modelValue: { dirId: 'sg-news', category: '新加坡-资讯', categoryPath: '/上海发展/新加坡-资讯' },
+        rootId: '-2',
+        autoSelectFirst: false,
+      },
+    })
+    await flushPromises()
+
+    expect(sourceCategories).toHaveBeenCalledWith('sh')
+    expect(sourceCategories).not.toHaveBeenCalledWith('media')
+    const active = wrapper.find('.ctp-row.active')
+    expect(active.exists()).toBe(true)
+    expect(active.text()).toContain('新加坡-资讯')
+    expect(active.attributes('aria-checked')).toBe('true')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('名称路径对不上时退回全量加载按 ID 定位', async () => {
+    vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => {
+      if (parentId === 'sh') return [{ id: 'sg-news', name: '新加坡-资讯' }]
+      if (!parentId || parentId === '-2') return [{ id: 'sh', name: '上海发展' }]
+      return []
+    })
+    const wrapper = mount(CategoryTreePicker, {
+      props: { modelValue: { dirId: 'sg-news', category: '新加坡-资讯', categoryPath: '/新加坡-资讯' }, rootId: '-2', autoSelectFirst: false },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.ctp-row.active').text()).toContain('新加坡-资讯')
+  })
+
   it('分类计数缺失时不展示空括号', async () => {
     vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([{ id: 'fund', name: '基金类' }])
     const wrapper = mount(CategoryTreePicker, {

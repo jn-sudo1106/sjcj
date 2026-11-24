@@ -16,6 +16,7 @@ import {
 import { BIZ_DIR_ROOT_ID, searchDirs } from '@/api/sourceDirs'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { addSourcesToBizDirNote, createSharedFlow } from '@/utils/source/createCollect'
+import { mostUsedFlowSource, siteBizDirSelection } from '@/utils/source/createDefaults'
 import { repairJsonBrackets } from './tableDraft'
 
 // ===== 草稿（智能体输出） =====
@@ -156,7 +157,7 @@ export function isSourceDraftPrompt(text: string): boolean {
 // ===== 卡片表单（回查后、用户确认的版本） =====
 
 export type SourceSiteMode = 'new' | 'existing' | 'none'
-/** template：按流程模板新建；copy：复制参考源的默认流程（仅已有网站）；none：暂不建流程 */
+/** template：按流程模板新建；copy：复制参考源的默认流程（仅已有网站）；none：暂不配置流程 */
 export type SourceFlowMode = 'template' | 'copy' | 'none'
 
 export interface SourceDraftForm {
@@ -178,16 +179,21 @@ export interface SourceDraftForm {
   sources: SourceDraftItem[]
 }
 
+export type SiteOption = Pick<Site, 'siteId' | 'name' | 'sourceCount'> & Partial<Pick<Site, 'dirId' | 'category' | 'categoryPath'>>
+export interface SiteSourceOption { sourceId: string; name: string; flowId?: string }
+
 export interface SourceDraftHints {
   /** 按名称回查到的同名网站 */
-  existingSite: Pick<Site, 'siteId' | 'name' | 'sourceCount'> | null
+  existingSite: SiteOption | null
+  /** 同名网站自己的业务目录（1123 Q8：加到已有网站时默认归到这里） */
+  existingSiteDir?: { dirId: string; category: string; categoryPath: string } | null
   /** 智能体给的分类名匹配到的业务目录 */
   matchedCategory: { dirId: string; category: string } | null
   templates: Array<{ id: string; name: string }>
   /** 智能体给的模板名匹配到的模板 */
   matchedTemplateId: string
-  /** 已有网站下的源（参考源候选） */
-  siteSources: Array<{ sourceId: string; name: string }>
+  /** 已有网站下的源（参考源候选，带默认流程 ID） */
+  siteSources: SiteSourceOption[]
   /** 同名源（name → 已存在的源 ID） */
   duplicates: Record<string, string>
   /** 回查失败的说明（不阻断，用户可手动选） */
@@ -208,18 +214,24 @@ async function settle<T>(task: Promise<T>, fallback: T, warnings: string[], labe
 }
 
 /** 已有网站下的源（参考源候选） */
-export async function loadSiteSourceOptions(siteId: string): Promise<Array<{ sourceId: string; name: string }>> {
+export async function loadSiteSourceOptions(siteId: string): Promise<SiteSourceOption[]> {
   if (!siteId) return []
   const rows = await siteApi.siteSources(siteId)
-  return rows.map((s: Source) => ({ sourceId: String(s.sourceId), name: s.name }))
+  return rows.map((s: Source) => ({ sourceId: String(s.sourceId), name: s.name, ...(s.flowId ? { flowId: String(s.flowId) } : {}) }))
+}
+
+/** 默认参考源（1123 A1）：网站最常用流程上的源，没有流程时取第一个 */
+export function defaultReferenceSource(options: readonly SiteSourceOption[]): SiteSourceOption | undefined {
+  const picked = mostUsedFlowSource(options.map(o => ({ sourceId: o.sourceId, name: o.name, flowId: o.flowId } as Source)))
+  return picked ? options.find(o => o.sourceId === picked.sourceId) : undefined
 }
 
 /** 按网站名搜索网站（已有网站下拉用） */
-export async function searchSites(keyword: string): Promise<Array<Pick<Site, 'siteId' | 'name' | 'sourceCount'>>> {
+export async function searchSites(keyword: string): Promise<SiteOption[]> {
   const kw = keyword.trim()
   if (!kw) return []
   const page = await siteApi.sitePaged({ name: kw, page: 1, size: 20 })
-  return page.list.map((s) => ({ siteId: String(s.siteId), name: s.name, sourceCount: s.sourceCount }))
+  return page.list.map((s) => ({ siteId: String(s.siteId), name: s.name, sourceCount: s.sourceCount, dirId: s.dirId, category: s.category, categoryPath: s.categoryPath }))
 }
 
 /** 回查：同名网站、分类、模板、参考源、同名源。任何一项失败只记 warning，不阻断卡片 */
@@ -240,9 +252,12 @@ export async function resolveSourceDraft(draft: SourceDraft): Promise<SourceDraf
     ? templateOptions.find((t) => sameName(t.name, draft.flowTemplate))
       ?? templateOptions.find((t) => t.name.includes(draft.flowTemplate) || draft.flowTemplate.includes(t.name))
     : undefined
-  const siteSources = existingSite
-    ? await settle(loadSiteSourceOptions(existingSite.siteId), [], warnings, '读取网站下的源')
-    : []
+  const [siteSources, existingSiteDir] = existingSite
+    ? await Promise.all([
+      settle(loadSiteSourceOptions(existingSite.siteId), [], warnings, '读取网站下的源'),
+      siteBizDirSelection(existingSite).catch(() => null),
+    ])
+    : [[], null]
   const duplicates: Record<string, string> = {}
   draft.sources.forEach((s, i) => {
     const hit = dupLists[i].find((row) => sameName(row.name, s.name))
@@ -250,6 +265,7 @@ export async function resolveSourceDraft(draft: SourceDraft): Promise<SourceDraf
   })
   return {
     existingSite,
+    existingSiteDir: existingSiteDir?.dirId ? { dirId: existingSiteDir.dirId, category: existingSiteDir.category, categoryPath: existingSiteDir.categoryPath } : null,
     matchedCategory: dir ? { dirId: dir.id, category: dir.name } : null,
     templates: templateOptions,
     matchedTemplateId: tpl?.id ?? '',
@@ -265,20 +281,22 @@ export function initialSourceForm(draft: SourceDraft, hints: SourceDraftHints): 
   const refSource = draft.templateSource
     ? hints.siteSources.find((s) => sameName(s.name, draft.templateSource))
     : undefined
-  const firstSiteSource = hints.siteSources[0]
+  const firstSiteSource = defaultReferenceSource(hints.siteSources)
   const template = hints.templates.find((t) => t.id === hints.matchedTemplateId) ?? hints.templates[0]
-  // 已有网站：有参考源（智能体点名或网站第一个源）就默认复制它的流程，和手动「添加源 → 按模板源」一致
+  // 已有网站：有参考源（智能体点名或网站最常用流程的源）就默认复制它的流程，和手动「添加源 → 按模板源」一致
   const flowMode: SourceFlowMode = siteMode === 'existing' && (refSource || firstSiteSource) && !hints.matchedTemplateId
     ? 'copy'
     : template ? 'template' : 'none'
   const ref = refSource ?? firstSiteSource
+  // 业务目录：智能体给的分类名匹配上就用它；加到已有网站且没匹配上时用网站自己的业务目录（1123 Q8）
+  const siteDir = siteMode === 'existing' && !hints.matchedCategory ? hints.existingSiteDir : null
   return {
     siteMode,
     siteName: siteMode === 'existing' ? hints.existingSite!.name : draft.siteName,
     siteId: siteMode === 'existing' ? hints.existingSite!.siteId : '',
-    dirId: hints.matchedCategory?.dirId ?? '',
-    category: hints.matchedCategory?.category ?? '',
-    categoryPath: hints.matchedCategory?.category ?? '',
+    dirId: siteDir?.dirId ?? hints.matchedCategory?.dirId ?? '',
+    category: siteDir?.category ?? hints.matchedCategory?.category ?? '',
+    categoryPath: siteDir?.categoryPath ?? hints.matchedCategory?.category ?? '',
     flowMode,
     templateId: template?.id ?? '',
     templateName: template?.name ?? '',
@@ -288,14 +306,21 @@ export function initialSourceForm(draft: SourceDraft, hints: SourceDraftHints): 
   }
 }
 
-export function validateSourceForm(form: SourceDraftForm): string[] {
+export function validateSourceForm(form: SourceDraftForm, hints?: Pick<SourceDraftHints, 'existingSite'> | null): string[] {
   const errors: string[] = []
   if (form.siteMode === 'new' && !form.siteName.trim()) errors.push('请填写网站名称')
+  // 网站名不可重复（2026-11-23）：回查到同名网站时不能再新建，改名或改选「加入已有网站」
+  const dup = hints?.existingSite
+  if (form.siteMode === 'new' && dup && form.siteName.trim() && sameName(dup.name, form.siteName)) {
+    errors.push(`已存在同名网站「${dup.name}」（ID ${dup.siteId}），请改名或选择「加入已有网站」`)
+  }
   if (form.siteMode === 'new' && !form.dirId) errors.push('新建网站需要选择业务分类')
   // 2026-11-20 用户定：不关联网站时分类同样必选（分类是源的业务目录，不挂网站更要靠它归类）
   if (form.siteMode === 'none' && !form.dirId) errors.push('不关联网站也需要选择业务分类（源的业务目录）')
   if (form.siteMode === 'existing' && !form.siteId) errors.push('请选择要加入的网站')
-  if (form.flowMode === 'template' && !form.templateId) errors.push('请选择流程模板，或改选「暂不建流程」')
+  // 1123 Q8：加到已有网站同样要选业务目录（默认网站自己的业务目录）
+  if (form.siteMode === 'existing' && !form.dirId) errors.push('加到已有网站也需要选择业务分类（源的业务目录）')
+  if (form.flowMode === 'template' && !form.templateId) errors.push('请选择流程模板，或改选「暂不配置流程」')
   if (form.flowMode === 'copy' && form.siteMode !== 'existing') errors.push('只有加到已有网站时才能复制参考源的流程')
   if (form.flowMode === 'copy' && !form.templateSourceId) errors.push('请选择参考源，或改选其它流程方式')
   if (!form.sources.length) errors.push('至少需要一个源')
@@ -323,7 +348,7 @@ export interface SourceDraftResult {
   siteName?: string
   sources: Array<{ name: string; sourceId: string }>
   flowIds: string[]
-  /** 未建流程（用户选「暂不建流程」） */
+  /** 未建流程（用户选「暂不配置流程」） */
   flowSkipped: boolean
   dirCategory?: string
   /** 失败或部分失败说明 */
@@ -403,7 +428,7 @@ export async function executeSourceDraft(form: SourceDraftForm, onStep: StepFn =
 
     const flowStep = { key: 'flow', label: '建共用流程并绑定', status: 'running' as const }
     if (form.flowMode === 'none') {
-      onStep({ ...flowStep, status: 'skipped', detail: '已选「暂不建流程」，进画布后用流程标签栏「＋」新建' })
+      onStep({ ...flowStep, status: 'skipped', detail: '已选「暂不配置流程」，进画布后用流程标签栏「＋」新建' })
     } else {
       onStep(flowStep)
       const shared = await createSharedFlow(form.siteName.trim(), ids, form.templateId)
@@ -459,10 +484,10 @@ export async function executeSourceDraft(form: SourceDraftForm, onStep: StepFn =
         }
       }
     }
-    if (form.flowMode === 'none') onStep({ key: 'flow', label: '建流程', status: 'skipped', detail: '已选「暂不建流程」，进画布后用流程标签栏「＋」新建' })
+    if (form.flowMode === 'none') onStep({ key: 'flow', label: '建流程', status: 'skipped', detail: '已选「暂不配置流程」，进画布后用流程标签栏「＋」新建' })
   }
 
-  if (form.siteMode !== 'existing' && form.dirId) {
+  if (form.dirId) {
     const dirStep = { key: 'dir', label: `加入业务目录「${form.category}」`, status: 'running' as const }
     onStep(dirStep)
     const note = await addSourcesToBizDirNote({ dirId: form.dirId, category: form.category }, result.sources.map((s) => s.sourceId))

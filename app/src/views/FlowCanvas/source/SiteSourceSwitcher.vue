@@ -13,7 +13,12 @@ import { importProgressText } from './importProgress'
 import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { isUnpublishedFlowError } from '@/utils/flow/flowPublish'
-import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
+import { NO_FLOW_TEMPLATE, availableFlowTemplates, lastFlowTemplateId, pickFlowTemplate, rememberFlowTemplate } from '@/utils/flow/createFromTemplate'
+import FlowChoiceSummary from '../shared/FlowChoiceSummary.vue'
+import CategoryTreePicker, { type CategorySelection } from './CategoryTreePicker.vue'
+import { BIZ_DIR_ROOT_ID } from '@/api/sourceDirs'
+import { addSourcesToBizDirNote } from '@/utils/source/createCollect'
+import { mostUsedFlowSource, siteBizDirSelection } from '@/utils/source/createDefaults'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -567,7 +572,29 @@ const addDlg = reactive({
   /** flowMode=bind：要关联的已有流程和其中的主流程 */
   bindFlowIds: [] as string[],
   mainFlowId: '',
+  /** 不用模板源（空白）时按哪个流程模板建；NO_FLOW_TEMPLATE = 暂不配置流程；null = 还没读到 */
+  blankTemplateId: null as string | null,
+  /** 用户手动改过模板源方式：加载完成后不再自动切到默认模板源 */
+  templateModeTouched: false,
+  /** 业务目录（1123 Q8：必选，默认网站自己的业务目录） */
+  bizDir: { category: '', categoryPath: '' } as CategorySelection,
 })
+async function loadBlankTemplate() {
+  try {
+    const templates = await availableFlowTemplates()
+    const last = lastFlowTemplateId()
+    addDlg.blankTemplateId = templates.find(t => t.id === last)?.id ?? templates[0]?.id ?? NO_FLOW_TEMPLATE
+  } catch {
+    addDlg.blankTemplateId = NO_FLOW_TEMPLATE
+  }
+}
+async function changeBlankTemplate() {
+  try {
+    addDlg.blankTemplateId = await pickFlowTemplate({ allowNone: true, initialId: addDlg.blankTemplateId ?? undefined })
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error((error as Error)?.message ?? String(error))
+  }
+}
 const bindPickerOpen = ref(false)
 const templatePreview = ref<FlowRecord | null>(null)
 function onBindFlowsPicked(flows: FlowRecord[]) {
@@ -594,7 +621,8 @@ async function loadBindFlowOptions() {
   }
 }
 const templateSearch = reactive({ keyword: '', results: [] as Source[], loading: false, open: false })
-const defaultTemplate = computed(() => children.value[0] ?? null)
+/** 默认模板源（1123 A1）：本网站最常用流程（挂的源最多）上的一个源；都没流程时取第一个源 */
+const defaultTemplate = computed(() => mostUsedFlowSource(children.value))
 const selectedTemplate = computed(() => {
   if (addDlg.templateMode === 'default') return defaultTemplate.value
   if (addDlg.templateMode === 'search') return templateSearch.results.find((source) => source.sourceId === addDlg.templateSourceId) ?? null
@@ -629,9 +657,11 @@ watch(() => addDlg.bindFlowIds.join(','), () => {
 const addHint = computed(() => {
   const template = selectedTemplate.value
   if (addDlg.templateMode === 'search' && !template) return '请先搜索并选择模板源。'
-  if (!template) return '创建名称和 URL，并新建一条只有首节点（网页抓取）的空白流程。'
+  if (!template) return addDlg.blankTemplateId === NO_FLOW_TEMPLATE
+    ? '只创建源（名称和 URL），暂不配置流程，之后在流程标签栏「＋」新建。'
+    : '创建源（名称和 URL），并按所选流程模板新建一条流程。'
   const head = `将按「${template.name}」复制源到当前网站`
-  if (addDlg.flowMode === 'none') return `${head}，不关联流程，之后在流程页编排。`
+  if (addDlg.flowMode === 'none') return `${head}，暂不配置流程，之后在流程页编排。`
   if (addDlg.flowMode === 'bind') {
     if (!addDlg.bindFlowIds.length) return '请选择要关联的流程。'
     const ordered = [addDlg.mainFlowId, ...addDlg.bindFlowIds.filter((id) => id !== addDlg.mainFlowId)]
@@ -639,11 +669,12 @@ const addHint = computed(() => {
       + '新源用这些流程的配置，改这些流程会影响挂在上面的其它源。'
   }
   if (templateDefault.loading) return `${head}，正在读取它的默认流程…`
-  if (!templateDefault.flowId) return '模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「不关联流程」。'
+  if (!templateDefault.flowId) return '模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「暂不配置流程」。'
   return `${head}，并把它的默认流程「${flowLabel(templateDefault.flowId)}」复制成新源独立的一份（含配置），改它不影响模板源。`
     + '模板源的其它流程不会带过来；不复制表数据与运行记录。'
 })
 function onTemplateModeChange() {
+  addDlg.templateModeTouched = true
   addDlg.templateSourceId = ''
   templateSearch.keyword = ''
   templateSearch.results = []
@@ -678,6 +709,12 @@ function openAdd(ev: MouseEvent) {
   addDlg.flowMode = 'copy'
   addDlg.bindFlowIds = []
   addDlg.mainFlowId = ''
+  addDlg.blankTemplateId = null
+  addDlg.templateModeTouched = false
+  addDlg.bizDir = { category: '', categoryPath: '' }
+  void siteBizDirSelection(site.value).then((dir) => { if (dir && addDlg.show && !addDlg.bizDir.dirId) addDlg.bizDir = dir })
+  if (isProductionCreateEnabled()) void loadBlankTemplate()
+  else addDlg.blankTemplateId = NO_FLOW_TEMPLATE
   templateSearch.keyword = ''
   templateSearch.results = []
   templateSearch.open = false
@@ -687,6 +724,14 @@ function openAdd(ev: MouseEvent) {
 function closeAdd() {
   addDlg.show = false
 }
+// 网站 / 源列表还没加载完就点了「添加源」：加载完再补默认值（用户没改过的才补）
+watch(() => site.value?.dirId, () => {
+  if (!addDlg.show || addDlg.bizDir.dirId) return
+  void siteBizDirSelection(site.value).then((dir) => { if (dir && addDlg.show && !addDlg.bizDir.dirId) addDlg.bizDir = dir })
+})
+watch(defaultTemplate, (template) => {
+  if (addDlg.show && template && addDlg.templateMode === 'blank' && !addDlg.name && !addDlg.templateModeTouched) addDlg.templateMode = 'default'
+})
 
 // ---- 参数源（0721 会议）：加源弹窗内新增分支，与上面的普通源字段/流程互不干扰 ----
 // 面板本体抽成 ParamSourceEditor（NodeInspector 只读摘要 / 编辑参数源弹窗共用），这里只留创建态需要的胶水。
@@ -718,6 +763,10 @@ async function submitParamSource() {
     ElMessage.warning('存在同组值数不一致的分组，请先调整')
     return
   }
+  if (!addDlg.bizDir.dirId) {
+    ElMessage.warning('请选择业务目录')
+    return
+  }
   const sourceId = `${props.siteId}-${Date.now().toString(36)}`
   const res = await siteApi.sourceAdd(
     props.siteId,
@@ -741,6 +790,8 @@ async function submitParamSource() {
     return
   }
   const addedId = res.sourceId || sourceId
+  const paramDirNote = await addSourcesToBizDirNote(addDlg.bizDir, [addedId])
+  if (paramDirNote) ElMessage.warning(paramDirNote)
   ElMessage.success(`已添加参数源「${name}」：源列表只存 1 条记录，发任务时将展开为 ${(paramEditorRef.value?.totalCount ?? 0).toLocaleString('en-US')} 个 URL`)
   closeAdd()
   await load(true)
@@ -838,6 +889,10 @@ async function submitAdd() {
     ElMessage.warning('请填写源名称')
     return
   }
+  if (!addDlg.bizDir.dirId) {
+    ElMessage.warning('请选择业务目录')
+    return
+  }
   const sourceId = `${props.siteId}-${Date.now().toString(36)}`
   // 0904 I15（Z8）：URL 空了补占位值，不做前端必填。复制源那条路也走它——
   // copySource 同样会经后端的必填校验。
@@ -852,7 +907,7 @@ async function submitAdd() {
     return
   }
   if (selectedTemplate.value && addDlg.flowMode === 'copy' && !templateDefault.loading && !templateDefault.flowId) {
-    ElMessage.warning('模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「不关联流程」')
+    ElMessage.warning('模板源没有默认流程，不能复制流程；请改选「关联已有流程」或「暂不配置流程」')
     return
   }
   if (selectedTemplate.value) {
@@ -860,14 +915,11 @@ async function submitAdd() {
     if (!copiedId) return
     addedId = copiedId
   } else {
-    let templateId = ''
-    if (isProductionCreateEnabled()) {
-      try { templateId = await pickFlowTemplate() }
-      catch (error) {
-        if (error !== 'cancel' && error !== 'close') ElMessage.error((error as Error).message)
-        return
-      }
+    if (addDlg.blankTemplateId === null) {
+      ElMessage.warning('流程模板还在读取，请稍候')
+      return
     }
+    const templateId = addDlg.blankTemplateId
     const res = await siteApi.sourceAdd(
       props.siteId,
       { sourceId, ...target, configId: '', mainTable: '', owner: site.value?.owner || 'admin', state: 'C' },
@@ -880,7 +932,10 @@ async function submitAdd() {
     addedId = res.sourceId || sourceId
     // 2026-10-19：空白画布也默认带一个首节点，和流程标签栏「新建空白流程」同一条路径（createForSource）。
     // 只在真实新建通道里建：mock 源是前端假 ID，拿去建真实流程必然关联失败。流程失败不回滚源，提示去「＋」补建。
-    if (isProductionCreateEnabled()) {
+    if (isProductionCreateEnabled() && templateId === NO_FLOW_TEMPLATE) {
+      ElMessage.success(`已添加源「${target.name}」，暂不配置流程，可在流程标签栏点「＋」新建`)
+    } else if (isProductionCreateEnabled()) {
+      rememberFlowTemplate(templateId)
       try {
         await workflowBindingApi.createForSource({ sourceId: addedId, name: target.name, templateId, primary: true })
         ElMessage.success(`已添加源「${target.name}」，并按模板新建了流程`)
@@ -891,6 +946,9 @@ async function submitAdd() {
       ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
     }
   }
+  // 1123 Q8：新源加入所选业务目录；失败不回滚源，提示去源管理补
+  const dirNote = await addSourcesToBizDirNote(addDlg.bizDir, [addedId])
+  if (dirNote) ElMessage.warning(dirNote)
   closeAdd()
   await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
@@ -935,7 +993,7 @@ async function addFromTemplate(from: Source, target: { name: string; url: string
       await workflowBindingApi.save(copied.sourceId, () => ({ flowIds, defaultFlowId: mode === 'bind' ? addDlg.mainFlowId : null }))
       ElMessage.success(mode === 'bind'
         ? `已添加源「${target.name}」，关联了 ${flowIds.length} 条流程`
-        : `已添加源「${target.name}」，未关联流程`)
+        : `已添加源「${target.name}」，暂不配置流程`)
     } catch (error) {
       ElMessage.warning(`源已添加（#${copied.sourceId}），但${mode === 'bind' ? '关联流程' : '清空流程'}失败`
         + `（${error instanceof Error ? error.message : String(error)}），它现在挂着模板源的默认流程，可在流程页调整`)
@@ -1567,7 +1625,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <input v-model="addDlg.url" class="ssw-add-input" placeholder="请输入源 URL" />
         <label class="ssw-field-label">模板源 <em v-if="addDlg.templateMode === 'search'">*</em></label>
         <select v-model="addDlg.templateMode" class="ssw-add-input" data-testid="source-template-mode" @change="onTemplateModeChange">
-          <option v-if="defaultTemplate" value="default">默认：本网站第一个源（{{ defaultTemplate.name }}）</option>
+          <option v-if="defaultTemplate" value="default">默认：本网站最常用流程的源（{{ defaultTemplate.name }}）</option>
           <option value="search">搜索选择其他源</option>
           <option value="blank">不用模板源（空白画布）</option>
         </select>
@@ -1599,15 +1657,31 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             </button>
           </div>
         </div>
-        <!-- 1016：流程三选一（复制默认流程 / 关联已有流程 / 不关联）；空白模板没有真实建源接口，不提供 -->
+        <!-- 1123 A1：不用模板源时也在这里选流程模板，提交前能看到节点数和写入表，「预览 / 更换」看节点图与表配置 -->
+        <template v-if="addDlg.templateMode === 'blank'">
+          <label class="ssw-field-label">流程</label>
+          <FlowChoiceSummary v-if="addDlg.blankTemplateId !== null" :flow-id="addDlg.blankTemplateId" prefix="按模板" class="ssw-flow-summary" data-testid="source-blank-flow">
+            <template #actions>
+              <button type="button" class="rc-btn ssw-mini-btn" data-testid="source-blank-flow-change" @click="changeBlankTemplate">预览 / 更换</button>
+            </template>
+          </FlowChoiceSummary>
+          <span v-else class="ssw-add-hint">正在读取流程模板…</span>
+          <button v-if="addDlg.blankTemplateId === NO_FLOW_TEMPLATE && isProductionCreateEnabled()" type="button" class="rc-btn ssw-mini-btn" data-testid="source-blank-flow-pick" @click="changeBlankTemplate">选择流程模板</button>
+        </template>
+        <!-- 1016：流程三选一（复制默认流程 / 关联已有流程 / 暂不配置）；1123：「不关联流程」改称「暂不配置流程」，与新建采集 / AI 问数一致 -->
         <template v-if="addDlg.templateMode !== 'blank'">
           <label class="ssw-field-label">流程</label>
           <div class="ssw-flow-mode" role="radiogroup" aria-label="流程" data-testid="source-flow-mode">
             <label><input v-model="addDlg.flowMode" type="radio" value="copy" data-testid="source-flow-copy" /> 复制模板源的默认流程</label>
             <label><input v-model="addDlg.flowMode" type="radio" value="bind" data-testid="source-flow-bind" /> 关联已有流程</label>
-            <label><input v-model="addDlg.flowMode" type="radio" value="none" data-testid="source-flow-none" /> 不关联流程</label>
+            <label><input v-model="addDlg.flowMode" type="radio" value="none" data-testid="source-flow-none" /> 暂不配置流程</label>
           </div>
-          <button v-if="addDlg.flowMode === 'copy'" type="button" class="rc-btn" :disabled="!templateDefault.flowId || templateDefault.loading" data-testid="preview-template-flow" @click="previewTemplateFlow">预览模板默认流程及配置</button>
+          <!-- 1123 A1：复制前直接显示模板源默认流程的节点数与写入表，完整节点图 / 表配置点「预览」 -->
+          <FlowChoiceSummary v-if="addDlg.flowMode === 'copy' && templateDefault.flowId && !templateDefault.loading" :flow-id="templateDefault.flowId" prefix="复制" class="ssw-flow-summary" data-testid="source-copy-flow">
+            <template #actions>
+              <button type="button" class="rc-btn ssw-mini-btn" data-testid="preview-template-flow" @click="previewTemplateFlow">预览节点及表配置</button>
+            </template>
+          </FlowChoiceSummary>
           <template v-if="addDlg.flowMode === 'bind'">
             <button type="button" class="rc-btn" data-testid="preview-bind-flows" @click="bindPickerOpen = true">预览并选择流程</button>
             <el-select
@@ -1633,6 +1707,8 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             </template>
           </template>
         </template>
+        <label class="ssw-field-label">业务目录 <em>*</em></label>
+        <CategoryTreePicker v-model="addDlg.bizDir" :root-id="BIZ_DIR_ROOT_ID" :auto-select-first="false" data-testid="source-biz-dir" />
         <div class="ssw-add-hint">
           <!-- 界面上不出现旧平台的按钮名（「制作源+配置副本」）：用户看的是这个平台。
                实现上走的确实是旧平台那条 copySource?flag=1，记在 submitAdd 的注释里。 -->
@@ -1643,6 +1719,8 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       <template v-else>
         <label class="ssw-field-label">源名称 <em>*</em></label>
         <input v-model="addDlg.name" class="ssw-add-input" placeholder="请输入源名称" />
+        <label class="ssw-field-label">业务目录 <em>*</em></label>
+        <CategoryTreePicker v-model="addDlg.bizDir" :root-id="BIZ_DIR_ROOT_ID" :auto-select-first="false" data-testid="source-biz-dir-param" />
         <ParamSourceEditor ref="paramEditorRef" v-model="paramSrc" />
       </template>
 
@@ -2012,6 +2090,8 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-add-card { box-sizing: border-box; width: min(720px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow-y: auto; background: #fff; border: 1px solid #dbe5f1; border-radius: 18px; padding: 24px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
 .ssw-add-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .ssw-add-title { font-size: 22px; font-weight: 800; color: var(--rc-text); letter-spacing: -0.02em; }
+.ssw-flow-summary { margin: 4px 0 16px; }
+.ssw-mini-btn { height: 26px; padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--rc-primary-ink); }
 .ssw-field-label { display: block; margin: 0 0 8px; color: var(--rc-text); font-size: 14px; font-weight: 700; }
 .ssw-field-label em { color: #ef4444; font-style: normal; margin-left: 2px; }
 .ssw-field-label span { color: var(--rc-muted); font-weight: 500; }

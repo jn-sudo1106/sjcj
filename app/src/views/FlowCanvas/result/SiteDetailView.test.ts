@@ -176,7 +176,7 @@ describe('SiteDetailView', () => {
       props: { siteId: 'site-zfb' },
       global: {
         plugins: [router],
-        stubs: { SourceOverviewView: true, SiteDataView: true, SiteMonitorResultView: true, SiteMonitorConfigView: true },
+        stubs: { SourceOverviewView: true, SiteDataView: true, SiteMonitorConfigView: true },
       },
     })
     await flushPromises()

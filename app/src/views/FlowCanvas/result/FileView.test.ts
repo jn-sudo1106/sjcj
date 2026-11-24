@@ -305,6 +305,25 @@ describe('FileView', () => {
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource-2' }))
   })
 
+  it('源还没绑定流程：显示空状态，不兜底列出全局 file_resource 表、不出表下拉', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, [])
+    vi.spyOn(sourceApi, 'sourceSteps').mockImplementationOnce(async () => { throw new Error('请求异常 [item/next/nextConfigPaged]: 错误信息:运行时异常：源未绑定有效流程，sourceId=391007768') })
+    const tables = vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table, { ...table, tableId: 'file-resource-2' }])
+    const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
+
+    const wrapper = shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="file-no-flow"]').text()).toContain('还没有绑定流程')
+    expect(wrapper.find('select[aria-label="表ID"]').exists()).toBe(false)
+    expect(tables).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
+  })
+
   it('只有一张 file_resource 表时不显示下拉，维持原有的纯文本展示', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!

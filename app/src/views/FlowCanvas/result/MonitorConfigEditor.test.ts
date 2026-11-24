@@ -72,6 +72,8 @@ vi.mock('./monitor-editor/agentGeneration', async (importOriginal) => {
 })
 
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
+import PromptAiEditor from '@/components/PromptAiEditor.vue'
+import PromptTemplatePicker from '../inspector/PromptTemplatePicker.vue'
 import { dataApi, entryApi, ruleApi, sourceApi } from '@/api'
 import { nodePromptApi, type NodePromptTemplate } from '@/api/nodePrompts'
 import { defaultSystemPrompt } from '@/utils/monitor/methods'
@@ -205,6 +207,9 @@ function mountEditor(props: Record<string, unknown> = {}) {
     props: { siteId: '', sourceId: '', record: null, sourceLocked: false, ...props },
     global: {
       stubs: {
+        PromptAiEditor: true,
+        ElSelect: true,
+        ElOption: true,
         SiteSourceSelect: { template: '<div data-testid="mc-site-source-select" />' },
         ElDrawer: { props: ['modelValue', 'title'], template: '<section v-if="modelValue" role="dialog" :aria-label="title"><slot /></section>' },
       },
@@ -223,6 +228,7 @@ beforeEach(() => {
     const group = await dataApi.entryTypesGroup('t1')
     return group.list1[0]?.fields.map((field) => field.prop) ?? []
   })
+  vi.spyOn(nodePromptApi, 'list').mockResolvedValue([])
   vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
   vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps())
   vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(GROUP)
@@ -275,25 +281,40 @@ describe('MonitorConfigEditor 四区结构与默认值', () => {
 
     expect(wrapper.find('[data-testid="mc-kind-ai"]').classes()).toContain('active')
     expect(wrapper.findAll('[data-testid^="mc-method-group-"]')).toHaveLength(8)
-    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    expect(wrapper.find('[data-testid="mc-method-count"]').text()).toContain('已选 2 项')
+    await wrapper.find('[data-testid="mc-method-daily_count"]').setValue(false)
     expect(wrapper.find('[data-testid="mc-method-count"]').text()).toContain('已选 1 项')
     expect(wrapper.find('[data-testid="mc-method-chips"]').text()).toContain('当日正常入库')
   })
 
-  it('默认描述只在空白表单时填入；用户改过后切换方法不覆盖', async () => {
+  it('默认提示词随表单更新，AI 自定义后变更表单需要确认，恢复后重新联动', async () => {
     const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
     await settle()
+    await wrapper.get('[data-testid="mc-name-input"]').setValue('新监控')
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    await wrapper.get('[data-testid="mc-gen-builtin"]').trigger('click')
+    const desc = () => (wrapper.get('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement)
+    expect(desc().readOnly).toBe(true)
+    expect(desc().value).toContain('每日数据量')
+    await wrapper.get('[data-testid="mc-method-daily_count"]').setValue(false)
+    expect(desc().value).not.toContain('每日数据量')
 
-    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    wrapper.getComponent(PromptAiEditor).vm.$emit('apply', '用户通过 AI 补充的检查规则')
+    await wrapper.get('[data-testid="mc-method-daily_count"]').setValue(true)
+    expect(desc().value).toBe('用户通过 AI 补充的检查规则')
+    expect(wrapper.get('[data-testid="mc-generation-checks"]').text()).toContain('可能不一致')
+    expect(wrapper.get('[data-testid="mc-generate"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
     await settle()
-    const firstDesc = (wrapper.find('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement).value
-    expect(firstDesc).toContain('检查')
-
-    await wrapper.find('[data-testid="mc-desc-input"]').setValue('用户写的业务描述')
-    await wrapper.find('[data-testid="mc-method-daily_count"]').setValue(true)
-    await settle()
-    const desc = (wrapper.find('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement).value
-    expect(desc).toBe('用户写的业务描述')
+    expect(vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0]?.[0]).toMatchObject({
+      description: '用户通过 AI 补充的检查规则', checkRule: undefined,
+    })
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="mc-method-daily_count"]').setValue(false)
+    await wrapper.get('[data-testid="mc-user-prompt-restore"]').trigger('click')
+    expect(desc().value).toContain('当日正常入库')
+    expect(desc().value).not.toContain('用户通过 AI')
   })
 
   it('新建时默认带出源的最终落库主表，而不是清单里的第一张表', async () => {
@@ -336,6 +357,8 @@ describe('MonitorConfigEditor 校验反馈', () => {
     expect(ElMessage.warning).toHaveBeenCalledWith('请填写监控名称')
 
     await withSource.find('[data-testid="mc-name-input"]').setValue('新监控')
+    await withSource.get('[data-testid="mc-method-today_landed"]').setValue(false)
+    await withSource.get('[data-testid="mc-method-daily_count"]').setValue(false)
     await withSource.find('[data-testid="mc-save"]').trigger('click')
     expect(ElMessage.warning).toHaveBeenCalledWith('AI 检查至少选择一个监控方法')
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
@@ -449,29 +472,20 @@ describe('MonitorConfigEditor 脚本文件', () => {
 })
 
 describe('MonitorConfigEditor 生成脚本', () => {
-  // 1117 起新建监控生成前先存草稿（拿监控 ID），存完即锁源：候选脚本不可能被带到别的源上。
-  // 原用例「生成后换源清候选」的场景因此不再存在，改为验证锁源。
-  it('新建监控生成后源已锁定（先存草稿），候选脚本不会被带到别的源', async () => {
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3201 } })
-    mocks.loadMonitorRecord.mockResolvedValue(aiRecord({
-      id: '3201', name: '锁源', effectiveVersion: undefined, publishStatus: 'draft',
-      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: '', modelProviderCode: 'deepseek', modelCode: 'deepseek-chat' },
-    }))
+  it('内置接口可给未保存的监控生成和测试，生成不保存草稿也不锁源', async () => {
     const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
     await settle()
-    await wrapper.get('[data-testid="mc-name-input"]').setValue('锁源')
+    await wrapper.get('[data-testid="mc-name-input"]').setValue('内置生成')
     await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
-    // 这条验「先存草稿」流程本身，与生成方式无关；用内置接口免去智能体选项
-    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
-    await wrapper.get('[data-testid="mc-method-dir-toggle"]').trigger('click')
-    await wrapper.get('[data-testid="mc-method-today_landed"]').setValue(true)
+    await wrapper.get('[data-testid="mc-gen-builtin"]').trigger('click')
     await wrapper.get('[data-testid="mc-generate"]').trigger('click')
     await settle()
     expect(wrapper.find('[data-testid="mc-script-pending"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mc-test"]').attributes('disabled')).toBeUndefined()
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    expect(wrapper.emitted('draft-saved')).toBeUndefined()
     await wrapper.get('[data-testid="mc-tab-basic"]').trigger('click')
-    expect(wrapper.find('[data-testid="mc-source-locked"]').exists()).toBe(true)
-    expect(wrapper.findComponent({ name: 'SourcePickerRemote' }).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mc-source-locked"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -538,7 +552,7 @@ describe('MonitorConfigEditor 生成脚本', () => {
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
     await settle()
 
-    expect(wrapper.find('[data-testid="mc-generate-error"]').text()).toContain('缺少可执行上下文')
+    expect(wrapper.get('[data-testid="mc-preflight-error"]').text()).toContain('缺少可执行上下文')
     expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('检查今日落地')
     expect(mocks.saveMonitor).not.toHaveBeenCalled()
   })
@@ -895,6 +909,7 @@ describe('MonitorConfigEditor 保存', () => {
 
     await wrapper.get('[data-testid="mc-overdue-minutes"]').setValue('15')
     await wrapper.get('[data-testid="mc-overdue-grace"]').setValue('0')
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
     await wrapper.get('[data-testid="mc-save"]').trigger('click')
     await settle()
 
@@ -991,7 +1006,8 @@ describe('MonitorConfigEditor 保存', () => {
     const wrapper = mountEditor({ record: aiRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
-    await wrapper.find('[data-testid="mc-desc-input"]').setValue('改过的描述：检查数量与时效')
+    wrapper.getComponent(PromptAiEditor).vm.$emit('apply', '改过的描述：检查数量与时效')
+    await settle()
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
     await settle()
 
@@ -1012,6 +1028,7 @@ describe('MonitorConfigEditor 保存', () => {
     await settle()
     await wrapper.find('[data-testid="mc-table-select"]').setValue('sense_data.TB_FINAL')
     await settle()
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
     await settle()
 
@@ -1036,6 +1053,7 @@ describe('MonitorConfigEditor 保存', () => {
     await settle()
     await wrapper.find('[data-testid="mc-table-select"]').setValue('sense_data.TB_FINAL')
     await settle()
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
     await settle()
 
@@ -1057,6 +1075,7 @@ describe('MonitorConfigEditor 保存', () => {
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
     await wrapper.find('[data-testid="mc-table-select"]').setValue('sense_data.TB_FINAL')
     await settle()
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
     await settle()
 
@@ -1166,6 +1185,22 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     expect(wrapper.find('[data-testid="mc-prompt-source"]').text()).toContain('数据监控默认')
   })
 
+  it('保存位置在智能体模式显示可读说明，内置接口去掉该段，后续章节保留', async () => {
+    vi.mocked(nodePromptApi.list).mockResolvedValue([{
+      ...MONITOR_TEMPLATE,
+      userPromptTemplate: '一、监控需求\n\n{{methods}}\n\n二、保存位置\n\n文件：{{file_name}}\n目录：{{code_dir}}\n\n三、调用接口\n\n返回 JSON',
+    }])
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    const value = () => (wrapper.get('[data-testid="mc-desc-input"]').element as HTMLTextAreaElement).value
+    expect(value()).toContain('<源ID>/<监控ID>.py')
+    expect(value()).not.toContain('{{')
+    await wrapper.get('[data-testid="mc-gen-builtin"]').trigger('click')
+    expect(value()).not.toContain('保存位置')
+    expect(value()).not.toContain('{{')
+    expect(value()).toContain('三、调用接口')
+  })
+
   it('模板读取失败：退回内置默认提示词，提示原因，不阻断', async () => {
     vi.spyOn(nodePromptApi, 'list').mockRejectedValue(new Error('请先登录'))
     const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
@@ -1216,56 +1251,40 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
     expect(wrapper.find('[data-testid="mc-target-path"]').text()).toContain('请先选择仓库目录')
   })
 
-  it('新建监控生成前先存草稿拿 ID：确认后保存（无脚本）再生成，不关编辑器', async () => {
-    const draft = aiRecord({
-      id: '3101',
-      name: '先存草稿',
-      effectiveVersion: undefined,
-      publishStatus: 'draft',
-      conf: { kind: 'ai', methods: ['today_landed'], desc: '检查今日落地', version: '', modelProviderCode: 'deepseek', modelCode: 'deepseek-chat' },
-    })
-    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3101 } })
-    mocks.loadMonitorRecord.mockResolvedValue(draft)
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-
-    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+  it('切换模板先确认，自定义系统和用户提示词一并恢复为所选模板', async () => {
+    const replacement = {
+      ...MONITOR_TEMPLATE, promptId: 74, isDefault: 0,
+      systemPrompt: '新系统提示词：{{table_name}}', userPromptTemplate: '新用户提示词：{{methods}}',
+    }
+    vi.mocked(nodePromptApi.list).mockResolvedValue([MONITOR_TEMPLATE, replacement])
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValueOnce('confirm' as never)
+    const wrapper = mountEditor({ record: aiRecord({ conf: { ...aiRecord().conf, systemPrompt: '旧系统提示词' } }) })
     await settle()
-    await wrapper.find('[data-testid="mc-name-input"]').setValue('先存草稿')
-    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
-    // 这条验「先存草稿」流程本身，与生成方式无关；用内置接口免去智能体选项
-    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
-    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    const picker = wrapper.getComponent(PromptTemplatePicker)
+    const input = (id: string) => (wrapper.get(`[data-testid="${id}"]`).element as HTMLTextAreaElement).value
+    expect(picker.props('modelValue')).toBe(0)
+    picker.vm.$emit('select', 74)
     await settle()
-    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
+    expect(input('mc-desc-input')).toBe(aiRecord().conf.desc)
+    expect(input('mc-system-prompt')).toBe('旧系统提示词')
+    picker.vm.$emit('select', 74)
     await settle()
-
-    expect(confirm).toHaveBeenCalledTimes(1)
-    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
-    const savedConf = mocks.saveMonitor.mock.calls[0][0].conf as MonitorCheckConf
-    expect(savedConf.script).toBeUndefined()
-    expect(wrapper.emitted('draft-saved')?.[0]?.[0]).toMatchObject({ id: '3101' })
-    expect(wrapper.emitted('saved')).toBeUndefined()
-    expect(ruleApi.dataProcessGenerate).toHaveBeenCalledTimes(1)
-    // 内置接口模式不显示 Git 路径
-    expect(wrapper.find('[data-testid="mc-target-path"]').exists()).toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(picker.props('modelValue')).toBe(74)
+    expect(input('mc-desc-input')).toContain('新用户提示词：当日正常入库')
+    expect(input('mc-system-prompt')).toBe('新系统提示词：sense_data.TB_RAW')
   })
 
-  it('新建监控生成时取消「先存草稿」：不保存也不生成', async () => {
-    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
-    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+  it('保留旧自定义提示词原文，保存时写入自定义标记', async () => {
+    const original = '  旧监控自定义原文\n保留换行和空格  '
+    const wrapper = mountEditor({ record: aiRecord({ conf: { ...aiRecord().conf, desc: original } }) })
     await settle()
-    await wrapper.find('[data-testid="mc-name-input"]').setValue('不存')
-    await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
-    // 这条验「先存草稿」流程本身，与生成方式无关；用内置接口免去智能体选项
-    await wrapper.find('[data-testid="mc-gen-builtin"]').trigger('click')
-    await wrapper.find('[data-testid="mc-method-today_landed"]').setValue(true)
+    await wrapper.get('[data-testid="mc-save"]').trigger('click')
     await settle()
-    await wrapper.find('[data-testid="mc-generate"]').trigger('click')
-    await settle()
-
-    expect(mocks.saveMonitor).not.toHaveBeenCalled()
-    expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
+    expect(mocks.saveMonitor.mock.calls[0]?.[0].conf).toMatchObject({ desc: original, promptCustom: true })
   })
+
 })
 
 // 1117 第 2 批：生成方式「智能体 · 提交 Git」的页面字段
@@ -1278,6 +1297,34 @@ describe('MonitorConfigEditor 智能体生成', () => {
       repoError: '',
     })
     mocks.loadDirectories.mockResolvedValue([{ directoryId: 'd-mon', name: '数据监控', path: 'monitor', configType: '610', status: 'ACTIVE' }])
+  })
+
+  it('智能体先通过 Runner 检查再创建草稿，拿到 ID 才发生成请求', async () => {
+    mocks.saveMonitor.mockResolvedValue({ created: true, raw: { id: 3101 } })
+    mocks.loadMonitorRecord.mockResolvedValue(aiRecord({ id: '3101', publishStatus: 'draft', conf: {} }))
+    mocks.generateWithAgent.mockResolvedValue({ script: 'print(1)', scriptPath: 'monitor/source/3101.py', archive: null })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    await wrapper.get('[data-testid="mc-name-input"]').setValue('智能体生成')
+    await wrapper.get('[data-testid="mc-tab-check"]').trigger('click')
+    mocks.resolveTableFields.mockRejectedValueOnce(new Error('Runner 无法读业务库'))
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="mc-generation-checks"]').text()).toContain('Runner 无法读业务库')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
+    expect(mocks.generateWithAgent).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(button => button.text() === '重试读取字段')!.trigger('click')
+    await settle()
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
+    expect(mocks.saveMonitor.mock.calls[0]?.[0].conf.script).toBeUndefined()
+    expect(mocks.generateWithAgent).toHaveBeenCalledWith(expect.objectContaining({ monitorId: '3101' }))
+    expect(mocks.saveMonitor.mock.invocationCallOrder[0]).toBeLessThan(mocks.generateWithAgent.mock.invocationCallOrder[0])
+    expect(wrapper.emitted('draft-saved')?.[0]?.[0]).toMatchObject({ id: '3101' })
+    expect(wrapper.emitted('saved')).toBeUndefined()
   })
 
   it('新建监控默认「智能体 · 提交 Git」，打开即加载选项并带出默认值', async () => {
@@ -1317,6 +1364,7 @@ describe('MonitorConfigEditor 智能体生成', () => {
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
     await wrapper.find('[data-testid="mc-gen-agent"]').trigger('click')
     await settle()
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
     await settle()
 
@@ -1344,10 +1392,11 @@ describe('MonitorConfigEditor 智能体生成', () => {
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
     await wrapper.find('[data-testid="mc-gen-agent"]').trigger('click')
     await settle()
+    await wrapper.get('[data-testid="mc-prompt-keep"]').trigger('click')
     await wrapper.find('[data-testid="mc-generate"]').trigger('click')
     await settle()
 
-    const message = String(vi.mocked(ElMessage.error).mock.calls.at(-1)?.[0])
+    const message = wrapper.get('[data-testid="mc-generate-error"]').text()
     expect(message).toContain('请先保存源、流程、步骤和配置')
     expect(message).toContain('切回「内置接口」')
     expect(wrapper.find('[data-testid="mc-script-body"]').text()).toContain('检查今日落地')
@@ -1412,14 +1461,14 @@ function timeColumnRecord(): MonitorRecordView {
 }
 
 describe('MonitorConfigEditor 入库时间字段', () => {
-  it('旧字段不存在时保留配置并提示，不加入真实字段候选', async () => {
+  it('旧字段不存在时保留选择并提示', async () => {
     const wrapper = mountEditor({ record: timeColumnRecord() })
     await settle()
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
 
-    expect(timeColumnValue(wrapper)).toBe('')
+    expect(timeColumnValue(wrapper)).toBe('CREATE_DT')
     const options = wrapper.findAll('[data-testid="mc-time-column"] option').map((option) => option.text())
-    expect(options).toEqual(['请选择', 'publish_time'])
+    expect(options).toEqual(['不限时间（全表检查）', 'CREATE_DT', 'publish_time'])
     expect(wrapper.text()).toContain('当前表不存在字段 CREATE_DT')
     expect(wrapper.find('[data-testid="mc-time-column"]').element.parentElement?.textContent).toContain(
       '脚本按这一列统计；不确定时选表的入库时间列',
@@ -1438,17 +1487,39 @@ describe('MonitorConfigEditor 入库时间字段', () => {
     expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(false)
   })
 
-  it('多个时间列候选时不猜，留空显示「请选择」且不算未保存改动', async () => {
+  it('多个时间列按优先级默认选择，且不算未保存改动', async () => {
     vi.mocked(dataApi.entryTypesGroup).mockResolvedValue(groupWithFields([
-      { prop: 'CREATE_DT', desc: '入库时间', type: 'date', required: false },
-      { prop: 'UPDATE_DT', desc: '更新时间', type: 'date', required: false },
+      { prop: 'update_time', desc: '更新时间', type: 'date', required: false },
+      { prop: 'create_time', desc: '入库时间', type: 'date', required: false },
       { prop: 'title', desc: '标题', type: 'string', required: false },
     ]))
     const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
     await settle()
 
-    expect(timeColumnValue(wrapper)).toBe('')
+    expect(timeColumnValue(wrapper)).toBe('create_time')
     expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(false)
+  })
+
+  it('Runner 读取失败时使用表元数据的物理列及中文名，内置模式可以不限时间生成', async () => {
+    mocks.resolveTableFields.mockRejectedValue(new Error('Runner 读库失败'))
+    vi.mocked(entryApi.entryDetail).mockResolvedValue({
+      ...TABLE, fields: [{ prop: 'publishDate', columnName: 'K4', desc: '发布时间', type: 'date', required: false }],
+    })
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+    expect(timeColumnValue(wrapper)).toBe('K4')
+    expect(wrapper.get('[data-testid="mc-time-fallback"]').text()).toContain('候选来自表元数据')
+    expect(wrapper.findAll('[data-testid="mc-time-column"] option').map(option => option.text())).toContain('发布时间（K4）')
+    await wrapper.get('[data-testid="mc-name-input"]').setValue('表元数据回退')
+    await wrapper.get('[data-testid="mc-gen-builtin"]').trigger('click')
+    await wrapper.get('[data-testid="mc-time-column"]').setValue('')
+    await wrapper.get('[data-testid="mc-generate"]').trigger('click')
+    await settle()
+    const payload = vi.mocked(ruleApi.dataProcessGenerate).mock.calls[0]?.[0]
+    expect(payload?.systemPrompt).toContain('表元数据登记列：K4')
+    expect(payload?.systemPrompt).toContain('DQ_TIME_COLUMN 可以为空')
+    expect(payload?.description).toContain('不限时间（全表检查）')
+    expect(mocks.saveMonitor).not.toHaveBeenCalled()
   })
 
   it('字段清单拿不到时不提供猜测的候选；草稿仍可保存', async () => {
@@ -1463,13 +1534,12 @@ describe('MonitorConfigEditor 入库时间字段', () => {
     await wrapper.find('[data-testid="mc-tab-check"]').trigger('click')
 
     const options = wrapper.findAll('[data-testid="mc-time-column"] option').map((option) => option.text())
-    expect(options).toEqual(['请选择'])
+    expect(options).toEqual(['不限时间（全表检查）'])
     expect(timeColumnValue(wrapper)).toBe('')
 
     await wrapper.find('[data-testid="mc-save"]').trigger('click')
     await settle()
 
-    expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('入库时间字段'))
     expect(mocks.saveMonitor).toHaveBeenCalledTimes(1)
     const saved = mocks.saveMonitor.mock.calls[0]![0] as { conf: MonitorCheckConf }
     expect(saved.conf.timeColumn).toBeUndefined()

@@ -4,10 +4,10 @@
 // 文本提取的候选 entryTypeId 为 null（拿不到主键不伪造），选择键退回展示序号 ordinal。
 // 数据来源契约见 @/api/aiChat 的 Clarification。
 import { computed, ref, watch } from 'vue'
-import { clarificationOptionKey, type Clarification } from '@/api/aiChat'
+import { clarificationOptionKey, type ClarificationState } from '@/api/aiChat'
 
 const props = withDefaults(defineProps<{
-  clarification: Clarification
+  clarification: ClarificationState
   confirmed?: boolean
   confirmedLabel?: string
 }>(), {
@@ -19,8 +19,9 @@ const emit = defineEmits<{
   (e: 'confirm', payload: { selectedEntryTypeIds: number[]; freeText: string }): void
 }>()
 
-const selectedIds = ref<number[]>([])
-const freeText = ref('')
+// 确认后卡片会按 key 重新挂载、历史回放也是新卡片：从澄清状态回显已选项，不能每次都清空成 0
+const selectedIds = ref<number[]>([...(props.clarification.selectedEntryTypeIds ?? [])])
+const freeText = ref(props.clarification.freeText ?? '')
 
 const keyedOptions = computed(() =>
   props.clarification.options.map((option, index) => ({
@@ -55,9 +56,9 @@ function isRedundantQuestion(q?: string): boolean {
   )
 }
 
-watch(() => props.clarification, () => {
-  selectedIds.value = []
-  freeText.value = ''
+watch(() => props.clarification, (next) => {
+  selectedIds.value = [...(next.selectedEntryTypeIds ?? [])]
+  freeText.value = next.freeText ?? ''
 })
 
 function isSelected(key: number): boolean {

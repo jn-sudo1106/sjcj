@@ -8,6 +8,20 @@ export interface SiteCardSourceScope {
   matches: Record<string, { total: number; list: Source[] }>
   /** The server has already supplied every card's preview and authoritative site total. */
   serverPaged?: boolean
+  /**
+   * 是否真的带了源筛选 / 目录范围（1123 A4）。没有条件时命中数 = 全站数，卡片底部只写「N 个源」，
+   * 不显示「命中 N / 共 N」；缺省按有筛选处理（兼容其它调用方）。
+   */
+  filtered?: boolean
+}
+
+/** 查询里是否有实际生效的条件：非空值，或目录范围不是 none */
+export function hasSourceFilter(query: SourceFilter): boolean {
+  if (query.directory && query.directory.mode !== 'none') return true
+  // 排序与目录文案不是筛选条件
+  const ignored = new Set(['directory', 'field', 'sorted', 'type', 'dirLabel'])
+  return Object.entries(query).some(([key, value]) => !ignored.has(key)
+    && (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== ''))
 }
 export interface SiteCardResult {
   sites: Site[]
@@ -37,5 +51,5 @@ export async function querySiteCards(
   const matches: SiteCardSourceScope['matches'] = {}
   result.list.forEach(row => { matches[row.site.siteId] = { total: row.matchedSourceCount, list: row.sourcePreview } })
   return { sites: result.list.map(row => row.site), total: result.total, matchedSourceTotal: result.matchedSourceTotal,
-    unbound: result.unboundSourceTotal, sourceScope: { query, matches, serverPaged: true } }
+    unbound: result.unboundSourceTotal, sourceScope: { query, matches, serverPaged: true, filtered: hasSourceFilter(query) } }
 }

@@ -2,6 +2,9 @@
 vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
   pickFlowTemplate: vi.fn(async () => 'template-1'),
+  availableFlowTemplates: vi.fn(async () => [{ id: 'template-1', name: '模板一' }]),
+  lastFlowTemplateId: vi.fn(() => ''),
+  rememberFlowTemplate: vi.fn(),
   createFlowFromTemplate: vi.fn(async (_id: string, name: string) => { const { flowCenterApi } = await import('@/api'); return flowCenterApi.save({ name, definition: { main: ['start', 'end'], branches: [], configs: {} }, fromTemplateId: 'template-1' }) }),
 }))
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +14,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import NewSiteWizard from './NewSiteWizard.vue'
 import { flowCenterApi, siteApi, workflowBindingApi } from '@/api'
+import { pickFlowTemplate } from '@/utils/flow/createFromTemplate'
 
 const addSourcesToBizDir = vi.fn(async () => 1)
 vi.mock('@/api/sourceDirs', async (importOriginal) => ({
@@ -43,6 +47,12 @@ describe('NewSiteWizard', () => {
       global: {
         plugins: [pinia, router, ElementPlus],
         stubs: {
+          FlowTemplatePickerPanel: {
+            name: 'FlowTemplatePickerPanel',
+            props: { modelValue: String, templates: Array, allowNone: Boolean },
+            emits: ['update:modelValue'],
+            template: '<div class="flow-stub" :data-flow="modelValue" :data-none="allowNone" />',
+          },
           CategoryTreePicker: {
             template: '<div class="cat-stub" />',
             mounted() {
@@ -136,6 +146,27 @@ describe('NewSiteWizard', () => {
       { sourceId: '9001', workflowId: '14011270', primary: true },
       { sourceId: '9002', workflowId: '14011270', primary: true },
     ])
+    expect(router.currentRoute.value.query.sourceId).toBe('9001')
+  })
+
+  it('页面内嵌模板面板（不弹窗），默认选上模板；改选「暂不配置流程」后只建网站和源，不建流程也不绑定', async () => {
+    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001', '9002'] })
+    const save = vi.spyOn(flowCenterApi, 'save')
+    const bind = vi.spyOn(workflowBindingApi, 'bind')
+    const { wrapper, router } = await mountWizard()
+    const panel = wrapper.getComponent({ name: 'FlowTemplatePickerPanel' })
+    expect(panel.props('modelValue')).toBe('template-1')
+    expect(panel.props('allowNone')).toBe(true)
+    expect(wrapper.get('[data-testid="gate-flow-picked"]').text()).toBe('已选：模板一#template-1')
+    await wrapper.get('input.rc-input').setValue('向导测试站')
+    panel.vm.$emit('update:modelValue', '')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="gate-flow-picked"]').text()).toBe('暂不配置流程')
+    await wrapper.get('.rc-btn.primary').trigger('click')
+    await flushPromises()
+    expect(pickFlowTemplate).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+    expect(bind).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
   })
 

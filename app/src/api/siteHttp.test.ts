@@ -119,6 +119,7 @@ describe('网站读取 HTTP 契约', () => {
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9001' }))
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     const result = await siteApi.siteCreate({
       siteId: 'site-draft', name: '演示网站', category: '新闻', dirId: '7', owner: 'admin', sourceCount: 1, errorCount: 0,
@@ -138,6 +139,84 @@ describe('网站读取 HTTP 契约', () => {
     expect(bindUrl).toContain('/api/v1/source/bindSite?sourceId=9001&siteId=11825')
     expect(bindInit.method).toBe('GET')
     expect(result).toEqual({ ok: true, demo: false, message: '网站、源已按顺序保存并完成关联', siteId: '11825', sourceId: '9001', sourceIds: ['9001'] })
+  })
+
+  it('site/add 的 data 为空、ID 只在 msg 里时直接取 msg 的 ID，不按名称回查（同名老网站不再挡住建源）', async () => {
+    fetchMock
+      // 真实 bee-config SiteController.add：getSuccessResult().setMsg("新增成功, ID:" + siteId)，data 为空
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '新增成功, ID:2533', data: null }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:491000011' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:491000012' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+    const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
+
+    const result = await siteApi.siteCreate({
+      siteId: 'site-draft', name: '克拉克森', category: '', dirId: '9011533', owner: 'admin', sourceCount: 2, errorCount: 0,
+    }, [
+      { sourceId: 'd1', name: '克拉克森-Clarksons TCE', url: 'https://sin.clarksons.net/Home', configId: '', mainTable: '', owner: 'admin', state: 'C' },
+      { sourceId: 'd2', name: '克拉克森-1Yr VLCC TC', url: 'https://sin.clarksons.net/Home', configId: '', mainTable: '', owner: 'admin', state: 'C' },
+    ])
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]))
+    expect(urls.some((url) => url.includes('site/sitePaged'))).toBe(false)
+    expect(urls[2]).toContain('/api/v1/source/bindSite?sourceId=491000011&siteId=2533')
+    expect(urls[4]).toContain('/api/v1/source/bindSite?sourceId=491000012&siteId=2533')
+    expect(result).toMatchObject({ ok: true, siteId: '2533', sourceIds: ['491000011', '491000012'] })
+  })
+
+  describe('网站名不可重复（1123）', () => {
+    const page = (rows: Array<{ siteId: number; siteName: string }>) => jsonResponse({ code: '0', count: rows.length, data: rows })
+
+    it('新建前按名称精确查重：已有同名网站（忽略大小写和首尾空格）就不发 site/add', async () => {
+      fetchMock.mockResolvedValueOnce(page([{ siteId: 2536, siteName: '同花顺 ' }, { siteId: 2600, siteName: '同花顺F10' }]))
+      const { siteApi } = await import('./index')
+      const result = await siteApi.siteCreate({ siteId: 'd', name: ' 同花顺', category: '', dirId: '7', owner: 'admin', sourceCount: 0, errorCount: 0 }, [])
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('已存在同名网站「同花顺」（ID 2536）')
+      const urls = fetchMock.mock.calls.map(([url]) => String(url))
+      expect(urls).toHaveLength(1)
+      expect(urls[0]).toContain('/api/v1/site/sitePaged')
+      expect(urls[0]).toContain(`name=${encodeURIComponent('同花顺')}`)
+    })
+
+    it('只有名称相近的网站时照常新建', async () => {
+      fetchMock
+        .mockResolvedValueOnce(page([{ siteId: 2600, siteName: '同花顺F10' }]))
+        .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '新增成功, ID:2700', data: null }))
+      const { siteApi } = await import('./index')
+      const result = await siteApi.siteCreate({ siteId: 'd', name: '同花顺', category: '', dirId: '7', owner: 'admin', sourceCount: 0, errorCount: 0 }, [])
+      expect(result).toMatchObject({ ok: true, siteId: '2700' })
+    })
+
+    it('查重请求失败时不新建', async () => {
+      fetchMock.mockRejectedValueOnce(new Error('Failed to fetch'))
+      const { siteApi } = await import('./index')
+      const result = await siteApi.siteCreate({ siteId: 'd', name: '同花顺', category: '', dirId: '7', owner: 'admin', sourceCount: 0, errorCount: 0 }, [])
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('无法核对网站名称是否重复')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('改名撞上别的网站时拒绝，不发 site/update', async () => {
+      fetchMock.mockResolvedValueOnce(page([{ siteId: 2536, siteName: '同花顺' }]))
+      const { siteApi } = await import('./index')
+      const ack = await siteApi.siteUpdate({ siteId: '2537', name: '同花顺', dirId: '', tags: undefined })
+      expect(ack.ok).toBe(false)
+      expect(ack.message).toContain('ID 2536')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('名称没改（已重名的历史网站）时仍可保存分类 / 标签', async () => {
+      fetchMock
+        .mockResolvedValueOnce(page([{ siteId: 2536, siteName: '同花顺' }, { siteId: 2537, siteName: '同花顺' }]))
+        .mockResolvedValueOnce(jsonResponse({ code: '0', msg: '更新成功' }))
+      const { siteApi } = await import('./index')
+      const ack = await siteApi.siteUpdate({ siteId: '2537', name: '同花顺', dirId: '', tags: ['甲'] })
+      expect(ack.ok).toBe(true)
+      expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/site/update')
+    })
   })
 
   it('siteImportSources 对真实网站逐行 snatchSave → bindSite，不再查 mock 夹具', async () => {
@@ -194,6 +273,7 @@ describe('网站读取 HTTP 契约', () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     const result = await siteApi.siteCreate({
       siteId: 'site-hybrid-fixture-1', name: '夹具网站', category: '', owner: 'admin', sourceCount: 0, errorCount: 0,
@@ -210,6 +290,7 @@ describe('网站读取 HTTP 契约', () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     const result = await siteApi.siteCreate({
       siteId: 'site-guard-1', name: '不该落 mock 的网站', category: '', owner: 'admin', sourceCount: 0, errorCount: 0,
@@ -230,6 +311,7 @@ describe('网站读取 HTTP 契约', () => {
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9001' }))
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     const result = await siteApi.siteCreate({
       siteId: 'site-draft', name: '混用新建站', category: '新闻', dirId: '7', owner: 'admin', sourceCount: 1, errorCount: 0,
@@ -246,6 +328,7 @@ describe('网站读取 HTTP 契约', () => {
   it('非生产建站目标拒绝发送 site/add', async () => {
     vi.stubEnv('VITE_SITE_CREATE_TARGET', 'test')
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     await expect(siteApi.siteCreate({ siteId: 'draft', name: '不应创建', category: '', owner: 'admin', sourceCount: 0, errorCount: 0 }, [])).resolves.toEqual({
       ok: false, message: '新建网站仅允许生产环境，请设置 VITE_SITE_CREATE_TARGET=production',
@@ -258,6 +341,7 @@ describe('网站读取 HTTP 契约', () => {
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', data: { siteId: 11825 } }))
       .mockResolvedValueOnce(jsonResponse({ ok: false, code: '-1', msg: '源配置校验失败' }))
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     const result = await siteApi.siteCreate({
       siteId: 'site-draft', name: '失败恢复网站', category: '新闻', dirId: '7', owner: 'admin', sourceCount: 1, errorCount: 0,
@@ -275,6 +359,7 @@ describe('网站读取 HTTP 契约', () => {
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9001' }))
       .mockResolvedValueOnce(jsonResponse({ ok: false, code: '-1', msg: '无关联权限' }))
     const { siteApi } = await import('./index')
+    vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
     const result = await siteApi.siteCreate({
       siteId: 'site-draft', name: '关联失败网站', category: '新闻', dirId: '7', owner: 'admin', sourceCount: 1, errorCount: 0,
@@ -329,6 +414,7 @@ describe('网站读取 HTTP 契约', () => {
     it('非空标签一次 site/update 存完，不额外发 batchChangeTags', async () => {
       fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '更新成功' }))
       const { siteApi } = await import('./index')
+      vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
       const ack = await siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: ['甲', '乙'] })
 
@@ -344,6 +430,7 @@ describe('网站读取 HTTP 契约', () => {
     it('空数组改走 batchChangeTags，且 site/update 不再带 tags 参数', async () => {
       fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '操作成功，影响 1 个网站' }))
       const { siteApi } = await import('./index')
+      vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
       const ack = await siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: [] })
 
@@ -364,6 +451,7 @@ describe('网站读取 HTTP 契约', () => {
     it('site/update 失败时不补发清空请求，免得在失败的保存上留半个副作用', async () => {
       fetchMock.mockResolvedValue(jsonResponse({ code: '-1', msg: '网站不存在' }))
       const { siteApi } = await import('./index')
+      vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
       await expect(siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: [] }))
         .rejects.toThrow('网站不存在')
@@ -373,6 +461,7 @@ describe('网站读取 HTTP 契约', () => {
     it('tags 为 undefined 表示本次不动标签：既不带参数也不补发', async () => {
       fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '更新成功' }))
       const { siteApi } = await import('./index')
+      vi.spyOn(siteApi, 'sitesNamed').mockResolvedValue([])
 
       await siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: undefined })
 

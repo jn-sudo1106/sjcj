@@ -18,8 +18,9 @@ function goCollect(state?: string) {
   router.push({ path: '/collect', query: state ? { state } : {} })
 }
 
+// 只带真实目录 ID（数字）：mock 全景的分支 ID 是「/股票类」这种路径，带到源管理会让真实查询报错（2026-11-23）
 function goCollectCategory(category: string) {
-  router.push({ path: '/collect', query: category ? { category } : {} })
+  router.push({ path: '/collect', query: /^\d+$/.test(category) ? { category } : {} })
 }
 </script>
 

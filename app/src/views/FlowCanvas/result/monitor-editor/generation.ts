@@ -77,6 +77,15 @@ async function entryWithFields(tableId: string | undefined, tableName: string): 
   return (await entryOf(exact.tableId)) ?? exact
 }
 
+/** 表目录回退：物理列优先使用 columnName（如 K4），保留业务名称用于选字段。 */
+export async function resolveMonitorMetadataFields(input: GenerationFallback): Promise<Array<{ name: string; label: string; type: string }>> {
+  const entry = await entryWithFields(input.tableId, input.tableName ?? '')
+  return (entry?.fields ?? []).flatMap((field) => {
+    const name = (field.columnName || field.prop || '').trim()
+    return name ? [{ name, label: field.desc || name, type: field.type || '' }] : []
+  })
+}
+
 /** 执行器接口的请求头：本系统登录是 token 制（Access-Token 头），只带 Cookie 会在会话过期后 401。 */
 function runnerHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -119,13 +128,17 @@ export function augmentMonitorSystemPrompt(
   basePrompt: string,
   fields: readonly string[] = [],
   timeColumn = '',
+  fieldSource: 'runner' | 'metadata' = 'runner',
 ): string {
   const columns = [...new Set(fields.map((field) => (field || '').trim()).filter(Boolean))].slice(0, MAX_PROMPT_COLUMNS)
   const extras: string[] = []
   extras.push('执行参数契约：数据库连接只读取 DQ_DB_HOST、DQ_DB_PORT、DQ_DB_USER、DQ_DB_PASSWORD、DQ_DB_NAME 环境变量；不得写死连接地址或凭据。表名读取 DQ_TABLE_NAME，入库时间字段读取 DQ_TIME_COLUMN，源 ID 读取 DQ_SOURCE_ID（物理表有 SOURCE_ID 时必须参数化过滤当前源），检查窗口读取 DQ_START_DATE / DQ_END_DATE；不得把表名、时间字段或窗口写死在 SQL。环境变量缺失时返回 status=ERROR 和 reason，不使用猜测的默认字段。动态标识符必须校验并使用反引号引用；所有 SELECT 列别名同样必须反引号包裹，不得使用 delayed、status、key、rank、groups、window、system 等保留字。兼容执行器传入的 --format json、--table、--time-column 参数。')
-  if (columns.length) extras.push(`该表真实字段：${columns.join(', ')}（只能用这些列名，不要臆造）`)
+  if (columns.length) extras.push(fieldSource === 'runner'
+    ? `该表真实字段：${columns.join(', ')}（只能用这些列名，不要臆造）`
+    : `表元数据登记列：${columns.join(', ')}（运行时先校验，不要臆造列名）`)
   const column = (timeColumn || '').trim()
   if (column) extras.push(`按 ${column} 统计入库时间`)
+  else extras.push('本次配置为不限时间（全表检查）：DQ_TIME_COLUMN 可以为空，不使用时间列或窗口过滤 SQL，不因缺少时间列报错。仍须按契约过滤当前源；依赖时间列的检查项单独说明无法判定，不编造时效结论。')
   const prompt = (basePrompt || '').trim()
   return prompt ? `${prompt}\n\n${extras.join('\n')}` : extras.join('\n')
 }

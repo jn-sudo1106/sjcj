@@ -56,6 +56,19 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
   const currentVersionId = computed(() => draft.value?.versionId ?? overview.value?.publishId ?? null)
   /** 画布该读哪个版本的步骤：查看历史读历史；有草稿读草稿；否则 null（读运行中的发布版，接口不带 versionId） */
   const viewVersionId = computed(() => history.value?.versionId ?? (enabled.value && draft.value ? draft.value.versionId : null))
+  /**
+   * 没有发布版时兜底读哪个版本：viewVersionId 优先；否则取 draftId，再否则取版本号最大的未放弃版本。
+   * 没有发布版就不能不带 versionId 读（后端拒「没有有效发布版本，请完善流程并发布」），
+   * 草稿行状态对不上 W（或 overview 里只有 draftId）时也要读得到，不至于整个画布报错。
+   */
+  const unpublishedReadVersionId = computed(() => {
+    if (viewVersionId.value) return viewVersionId.value
+    const ov = overview.value
+    if (!ov || published.value) return null
+    if (ov.draftId && rowOf(ov, ov.draftId)?.isDelete !== -1) return ov.draftId
+    const alive = ov.versions.filter((v) => v.isDelete === 0).sort((a, b) => b.flowVer - a.flowVer)
+    return alive[0]?.versionId ?? null
+  })
   /** 当前流程只读：查看历史版本，或草稿已锁定（发布版可直接改，首次写入自动生成草稿） */
   const readonly = computed(() => !!history.value || (enabled.value && draft.value?.isLock === 1))
 
@@ -130,6 +143,20 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
     await fetchOverview(id)
   }
 
+  /**
+   * 放弃指定流程的指定草稿（2026-11-23）。不看画布当前流程：「复制为本源专用」中途会把新流程绑成主流程、
+   * 画布随之切到复制品，再用 abandon() 就放弃了复制品的草稿（186 流程 15730962 就是这样被放弃的，
+   * 原流程 15730960 的草稿反而留着）。草稿已不是这条（已发布 / 已放弃 / 换了新草稿）时不动，返回 false。
+   */
+  async function abandonDraftOf(id: string, versionId: string): Promise<boolean> {
+    const ov = await fetchOverview(id)
+    const d = draftOf(ov)
+    if (!d || d.versionId !== versionId) return false
+    await flowVersionApi.action('abandon', { flowId: id, versionId: d.versionId, ver: d.ver, expectedPublishId: ov.publishId ?? null })
+    await fetchOverview(id)
+    return true
+  }
+
   /** 发布当前草稿：新任务用草稿版本，已启动的任务继续用原版本 */
   const publish = () => act('publish')
   /** 放弃当前草稿（不占发布版本号）；画布由调用方按发布版重新加载 */
@@ -156,7 +183,7 @@ export const useFlowVersionStore = defineStore('flowVersion', () => {
   }
 
   return {
-    flowId, overview, enabled, published, draft, history, currentVersionId, viewVersionId, readonly,
-    load, refresh, ensureDraftRef, withDraft, allowsEmptyOutput, publish, abandon, viewHistory, exitHistory, reset,
+    flowId, overview, enabled, published, draft, history, currentVersionId, viewVersionId, unpublishedReadVersionId, readonly,
+    load, refresh, ensureDraftRef, withDraft, allowsEmptyOutput, publish, abandon, abandonDraftOf, viewHistory, exitHistory, reset,
   }
 })

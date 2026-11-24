@@ -745,43 +745,39 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result.scriptPath).toBe('/code01/20260801/abc.py')
   })
 
-  it('orchestrationGenerate：mock 的 orch-* ruleId 不打真实 stream（会 400），回退 mock', async () => {
+  it('orchestrationGenerate：orch-* 等无效 ruleId 不打真实 stream，直接报错而不造 mock 骨架', async () => {
     vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
     vi.stubEnv('VITE_API_MODE', 'http')
     vi.resetModules()
     const { ruleApi } = await import('./index')
 
-    const result = await ruleApi.orchestrationGenerate({
+    await expect(ruleApi.orchestrationGenerate({
       ...sampleCfg,
       mode: 'ref',
       ruleId: 'orch-999',
       describe: '按字段生成',
-    })
-
+    })).rejects.toThrow('业务规则还没有保存成功')
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(result.script).toContain('def main(date, zb_value)')
   })
 
-  it('orchestrationGenerate：hybrid 下真实 stream 失败时回退 mock 骨架', async () => {
+  it('orchestrationGenerate：hybrid 下真实 stream 失败时报错，不回退 mock 骨架（11-23 186 实测假路径问题）', async () => {
     vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
     vi.stubEnv('VITE_API_MODE', 'mock')
     vi.resetModules()
     fetchMock.mockResolvedValue({
       ok: false,
-      status: 400,
-      text: async () => 'ruleId 不存在',
+      status: 500,
+      text: async () => '{"status":500,"error":"Internal Server Error","path":"/vrule/ai/dashscope/stream"}',
     } as Response)
     const { ruleApi } = await import('./index')
 
-    const result = await ruleApi.orchestrationGenerate({
+    await expect(ruleApi.orchestrationGenerate({
       ...sampleCfg,
       mode: 'ref',
       ruleId: '173',
       describe: '按字段生成',
-    })
-
+    })).rejects.toThrow('生成服务返回 HTTP 500（Internal Server Error）')
     expect(fetchMock).toHaveBeenCalled()
-    expect(result.script).toContain('def main(date, zb_value)')
   })
 
   it('orchestrationDetail：POST getComposeById?id=，映射 nlDescribe/codePath', async () => {

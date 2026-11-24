@@ -10,9 +10,8 @@
 - DataGrid.vue: 数据表格（ResultView / CompareResultPane / TableDataDialog / SiteDataView 共用）；「列」打开勾选+顺序弹窗
 - TableDataDialog.vue: 表格数据弹窗（包装 DataGrid）
 - ProcessNodeRail.vue: 进度节点轨（FileView/ResultView/TaskView 共用，result 内部共享）
-- SiteMonitorView.vue: 监控视图容器（0916 起是「监控结果 / 监控配置」两 Tab 的壳，子 Tab 落 URL 的 monitorTab）
-- SiteMonitorResultView.vue: 监控结果（监控列表 + 启停 + 日志，0910 从旧平台 MonitorList 迁入）
-- SiteMonitorConfigView.vue: 监控配置（整屏复用 inspector/tabs/RuleOrchestrationTab —— 监控方法 / 描述 / 模型 / 生成脚本 / 测试脚本 / 告警配置；0917 起不再只有告警面板，且**不跟"源上有没有数据监控节点"绑定**：没有该节点就用本地草稿节点把控件铺出来）
+- SiteMonitorView.vue: 监控视图容器（源内：一张检查项表，每行带合成「状态」；运行记录走右侧 RunsDrawer。网站：本站源摘要表）
+- SiteMonitorConfigView.vue: 检查项表（检查项 / 方式 / 状态 / 最近检查 / 计划 / 启用 / 操作；不正常排前、可只看不正常；编辑走 MonitorConfigEditor 弹窗，记录 emit 给容器开抽屉）
 
 **依赖**：shared/CanvasHeader
 **被依赖**：index.vue 直接引用 SiteDetailView

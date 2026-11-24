@@ -74,21 +74,8 @@ function source(id: string, over: Partial<Source> = {}): Source {
 const ConfigStub = defineComponent({
   name: 'SiteMonitorConfigView',
   props: ['siteId', 'sourceId', 'monitors', 'loading', 'error', 'togglingId'],
-  emits: ['saved', 'toggle', 'runs', 'retry'],
+  emits: ['saved', 'toggle', 'runs', 'allRuns', 'retry'],
   template: '<div data-testid="config-panel" :data-source-id="sourceId" />',
-})
-
-const ResultStub = defineComponent({
-  name: 'SiteMonitorResultView',
-  props: ['sourceId', 'title'],
-  emits: ['all', 'detail'],
-  data: () => ({ refreshCalls: 0 }),
-  methods: {
-    async refresh() {
-      this.refreshCalls += 1
-    },
-  },
-  template: '<div data-testid="result-panel" :data-source-id="sourceId" />',
 })
 
 const RunsDrawerStub = defineComponent({
@@ -101,7 +88,6 @@ const RunsDrawerStub = defineComponent({
 
 const stubs = {
   SiteMonitorConfigView: ConfigStub,
-  SiteMonitorResultView: ResultStub,
   RunsDrawer: RunsDrawerStub,
 }
 
@@ -148,54 +134,23 @@ describe('SiteMonitorView · 源内视图（锁源）', () => {
     expect(wrapper.text()).not.toContain('监控配置')
   })
 
-  it('源信息条固定 6 项：源/网站/主表/检查项/最近检查/所选日期覆盖', async () => {
+  it('源内只有一张检查项表：不再有信息条和最近运行表（1123 两张表合一）', async () => {
     const wrapper = mountSource()
     await flushPromises()
 
-    const facts = wrapper.get('[data-testid="site-monitor-facts"]')
-    const labels = facts.findAll('dt').map((node) => node.text())
-    expect(labels).toEqual(['源', '网站', '主表', '检查项', '最近检查', '所选日期覆盖'])
-    expect(wrapper.get('[data-testid="site-monitor-fact-source"]').text()).toContain('源一（src-1）')
-    expect(wrapper.get('[data-testid="site-monitor-fact-site"]').text()).toContain('测试网站')
-    expect(wrapper.get('[data-testid="site-monitor-fact-table"]').text()).toContain('sense_data.src-1')
-    expect(wrapper.get('[data-testid="site-monitor-fact-checks"]').text()).toContain('1 启用 ／ 1 项')
-    expect(wrapper.get('[data-testid="site-monitor-fact-last"]').text()).toContain('2026-11-11 11:00:46')
-    expect(wrapper.get('[data-testid="site-monitor-fact-coverage"]').text()).toContain('—（需服务端聚合）')
-  })
-
-  it('顶部最差事实直接用 summarizeSource：无检查项 = 未配置检查', async () => {
-    listOfSourceMock.mockResolvedValue([])
-    const wrapper = mountSource()
-    await flushPromises()
-
-    const worst = wrapper.get('[data-testid="site-monitor-worst"]')
-    expect(worst.text()).toContain('未配置检查')
-    expect(worst.attributes('data-tone')).toBe('muted')
-    expect(wrapper.get('[data-testid="site-monitor-fact-checks"]').text()).toContain('0 启用 ／ 0 项')
-    expect(wrapper.get('[data-testid="site-monitor-fact-last"]').text()).toContain('尚未检查')
-  })
-
-  it('最差事实优先取数据异常（启用项中任一异常即整源异常）', async () => {
-    listOfSourceMock.mockResolvedValue([
-      monitor({ id: 'm-1', data: 'normal' }),
-      monitor({ id: 'm-2', data: 'abnormal' }),
-    ])
-    const wrapper = mountSource()
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="site-monitor-worst"]').text()).toContain('数据异常')
-    expect(wrapper.find('[data-testid="result-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="site-monitor-facts"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-monitor-worst"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-monitor-recent-runs"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
   })
 
-  it('检查项表与最近运行都挂在同一页，检查项拿到的是本页加载的数据', async () => {
+  it('检查项表拿到的是本页加载的数据', async () => {
     const wrapper = mountSource()
     await flushPromises()
 
     const panel = wrapper.getComponent(ConfigStub)
     expect(panel.props('sourceId')).toBe('src-1')
     expect((panel.props('monitors') as MonitorRecordView[]).map((m) => m.id)).toEqual(['m-1'])
-    expect(wrapper.getComponent(ResultStub).props('sourceId')).toBe('src-1')
   })
 
   it('启停由容器统一调 API 并重拉，子组件只抛目标状态', async () => {
@@ -209,7 +164,7 @@ describe('SiteMonitorView · 源内视图（锁源）', () => {
     expect(listOfSourceMock).toHaveBeenCalledTimes(2)
   })
 
-  it('保存后重拉检查项并刷新最近运行', async () => {
+  it('保存后重拉检查项', async () => {
     const wrapper = mountSource()
     await flushPromises()
 
@@ -217,10 +172,9 @@ describe('SiteMonitorView · 源内视图（锁源）', () => {
     await flushPromises()
 
     expect(listOfSourceMock).toHaveBeenCalledTimes(2)
-    expect((wrapper.getComponent(ResultStub).vm as unknown as { refreshCalls: number }).refreshCalls).toBe(1)
   })
 
-  it('加载失败给出错误，不把失败当成「未配置」显示在信息条里', async () => {
+  it('加载失败把错误交给检查项表展示', async () => {
     listOfSourceMock.mockRejectedValue(new Error('后端 500'))
     const wrapper = mountSource()
     await flushPromises()
@@ -246,11 +200,11 @@ describe('SiteMonitorView · 运行抽屉（复用 RunsDrawer）', () => {
     expect(drawer.attributes('data-title')).toBe('日达标监控')
   })
 
-  it('「全部记录」按 sourceId 打开抽屉', async () => {
+  it('「全部运行记录」按 sourceId 打开抽屉', async () => {
     const wrapper = mountSource()
     await flushPromises()
 
-    await wrapper.getComponent(ResultStub).vm.$emit('all')
+    await wrapper.getComponent(ConfigStub).vm.$emit('allRuns')
     await flushPromises()
 
     const drawer = wrapper.get('[data-testid="runs-drawer"]')
@@ -258,21 +212,10 @@ describe('SiteMonitorView · 运行抽屉（复用 RunsDrawer）', () => {
     expect(drawer.attributes('data-monitor-id')).toBe('')
   })
 
-  it('最近运行「详情」带 monitorId 打开抽屉', async () => {
-    const wrapper = mountSource()
-    await flushPromises()
-
-    await wrapper.getComponent(ResultStub).vm.$emit('detail', { monitorId: 'm-2', monitorName: '日达标监控' })
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="runs-drawer"]').attributes('data-monitor-id')).toBe('m-2')
-    expect(wrapper.getComponent(RunsDrawerStub).props('initialRun')).toMatchObject({ monitorId: 'm-2', monitorName: '日达标监控' })
-  })
-
   it('抽屉关闭事件把 open 置回 false', async () => {
     const wrapper = mountSource()
     await flushPromises()
-    await wrapper.getComponent(ResultStub).vm.$emit('all')
+    await wrapper.getComponent(ConfigStub).vm.$emit('allRuns')
     await flushPromises()
 
     await wrapper.getComponent(RunsDrawerStub).vm.$emit('close')

@@ -52,7 +52,7 @@ describe('Overview panorama integration', () => {
           AssetFlow: {
             props: ['panorama'],
             emits: ['select'],
-            template: '<button data-test="select-branch" @click="$emit(\'select\', \'/基金类\')">全景</button>',
+            template: '<div><button data-test="select-branch" @click="$emit(\'select\', \'9009005\')">全景</button><button data-test="select-mock-branch" @click="$emit(\'select\', \'/基金类\')">mock</button></div>',
           },
           CountUp: { props: ['value'], template: '<span>{{ value }}</span>' },
           DonutChart: true,
@@ -75,6 +75,14 @@ describe('Overview panorama integration', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/collect')
-    expect(router.currentRoute.value.query.category).toBe('/基金类')
+    expect(router.currentRoute.value.query.category).toBe('9009005')
+
+    // 1123：mock 全景的分支 ID 是路径（/基金类），不能当目录 ID 带进源管理的真实查询
+    await router.push('/overview')
+    await flushPromises()
+    await wrapper.get('[data-test="select-mock-branch"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/collect')
+    expect(router.currentRoute.value.query.category).toBeUndefined()
   })
 })
