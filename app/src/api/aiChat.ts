@@ -394,10 +394,7 @@ export interface ChatMessage {
   /** 导出/图表切换等本地操作回执，与 AI 回答区分，不伪造思考过程 */
   localAction?: boolean
   // 智能体交互与富文本卡片扩展
-  clarification?: Clarification & {
-    confirmed?: boolean
-    selectedEntryTypeIds?: number[]
-  }
+  clarification?: ClarificationState
   thinking?: {
     completed: boolean
     durationMs: number
@@ -484,6 +481,76 @@ export function formatMessageTime(dateStr?: string | Date): string {
   return `${month}-${day} ${hh}:${mm}`
 }
 
+/** 卡片上的澄清状态：确认后记下勾选项与补充条件，确认后的卡片据此回显 */
+export type ClarificationState = Clarification & {
+  confirmed?: boolean
+  selectedEntryTypeIds?: number[]
+  freeText?: string
+}
+
+/**
+ * 后端压缩上下文时拼给模型的「历史对话摘要」：`<摘要>\n[以上为历史对话摘要，以下是最近的对话内容，请直接继续对话]\n<最近内容>`。
+ * 这是给模型看的提示，模型偶尔原样复述进回答、或随消息落库；展示时去掉标记及其前面的摘要。
+ */
+const HISTORY_SUMMARY_MARKER = /\[\s*以上(?:为|是)历史对话摘要[^\]\n]*\]/g
+
+export function stripHistorySummary(text: string): string {
+  if (!text) return text
+  HISTORY_SUMMARY_MARKER.lastIndex = 0
+  let lastEnd = -1
+  let m: RegExpExecArray | null
+  while ((m = HISTORY_SUMMARY_MARKER.exec(text)) !== null) lastEnd = m.index + m[0].length
+  return lastEnd < 0 ? text : text.slice(lastEnd).replace(/^\s+/, '')
+}
+
+/**
+ * 从确认澄清后回传的那条用户消息反推勾选项（与 handleConfirmClarify 拼的文本对应）：
+ * `城市信息动态（sense_data.TB_CSXXDT）`、`已确认选择：A（表名）、B（表名）；补充要求：…`，
+ * 也兼容按提示直接回编号（`2`、`1,2`）。物理表名优先，认不出再按中文名。
+ */
+export function matchClarificationReply(
+  clarification: Clarification,
+  reply: string,
+): { selectedEntryTypeIds: number[]; freeText: string } | null {
+  const text = (reply || '').trim()
+  if (!text || !clarification.options?.length) return null
+  const freeMatch = /补充要求[:：]\s*([\s\S]*)$/.exec(text)
+  const freeText = freeMatch ? freeMatch[1].trim() : ''
+  const body = (freeMatch ? text.slice(0, freeMatch.index) : text).toLowerCase()
+  const keyed = clarification.options.map((option, index) => ({ option, key: clarificationOptionKey(option, index) }))
+
+  let picked: number[] = []
+  if (/^\d+(?:\s*[,，、\s]\s*\d+)*$/.test(body.trim())) {
+    const nums = body.trim().split(/[,，、\s]+/).map(Number)
+    picked = keyed.filter(({ option }, i) => nums.includes(option.ordinal ?? i + 1)).map(({ key }) => key)
+  }
+  if (!picked.length) {
+    picked = keyed
+      .filter(({ option }) => option.tableName && body.includes(option.tableName.toLowerCase()))
+      .map(({ key }) => key)
+  }
+  if (!picked.length) {
+    picked = keyed
+      .filter(({ option }) => option.typeName && body.includes(option.typeName.toLowerCase()))
+      .map(({ key }) => key)
+  }
+  if (!picked.length && !freeText) return null
+  return { selectedEntryTypeIds: picked, freeText }
+}
+
+/** 历史回放：澄清卡片之后紧跟的用户消息就是确认结果，据此标已确认并回显勾选项 */
+export function markConfirmedClarifications(messages: ChatMessage[]): void {
+  messages.forEach((msg, index) => {
+    const clarification = msg.clarification
+    if (msg.role !== 'assistant' || !clarification || clarification.selectedEntryTypeIds?.length) return
+    const next = messages.slice(index + 1).find((m) => m.role === 'user')
+    if (!next) return
+    const matched = matchClarificationReply(clarification, next.content)
+    if (!matched) return
+    msg.clarification = { ...clarification, confirmed: true, ...matched }
+  })
+}
+
 export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[] {
   const result: ChatMessage[] = []
   if (!Array.isArray(logs)) return result
@@ -492,22 +559,25 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
     if (!log) continue
     const createdAt = formatMessageTime(log.createTime)
 
-    // 用户提问消息
-    result.push({
-      id: `m-${log.id}-u`,
-      role: 'user',
-      content: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
-      createdAt,
-    })
+    // 用户提问消息（摘要标记只给模型看：去掉后为空就不出空气泡）
+    const userText = stripHistorySummary(stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')))
+    if (userText.trim()) {
+      result.push({
+        id: `m-${log.id}-u`,
+        role: 'user',
+        content: userText,
+        createdAt,
+      })
+    }
 
     // 智能体回复消息
     const assistantMsg: ChatMessage = {
       id: `m-${log.id}-a`,
       role: 'assistant',
-      content: log.modelMsg || '',
+      content: stripHistorySummary(log.modelMsg || ''),
       createdAt,
       interrupted: log.status === 'INTERRUPTED',
-      question: stripSourceDraftPrompt(stripTableDraftPrompt(log.msg || '')),
+      question: userText,
       status:
         log.status === 'INTERRUPTED'
           ? 'interrupted'
@@ -643,6 +713,7 @@ export function convertChatLogsToMessages(logs: BackendChatLog[]): ChatMessage[]
 
   markCreatedTableDrafts(result)
   markCreatedSourceDrafts(result)
+  markConfirmedClarifications(result)
   return result
 }
 

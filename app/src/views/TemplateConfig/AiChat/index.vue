@@ -26,6 +26,7 @@ import {
   listRecommendedQuestions,
   clarificationOptionKey,
   extractClarificationFromText,
+  stripHistorySummary,
   extractChartDataFromText,
   extractTableSwitchSuggestions,
   type AiSessionItem,
@@ -143,6 +144,8 @@ let scrollRafId: number | null = null
 // ===== 流式状态机（useAskChat）=====
 let activeAssistantMsg: ChatMessage | null = null
 let streamSessionId = ''
+// 流式所属会话的响应式镜像：切到别的会话时流在后台继续，界面据此区分「本会话在生成」还是「其他会话在生成」
+const streamingSessionKey = ref('')
 let streamStartTime = 0
 
 const askChat = useAskChat({
@@ -196,6 +199,7 @@ const askChat = useAskChat({
       activeSessionId.value = sessionId
     }
     streamSessionId = sessionId
+    streamingSessionKey.value = sessionId
   },
   onError: (info) => {
     if (activeAssistantMsg) {
@@ -209,6 +213,13 @@ const askChat = useAskChat({
   },
 })
 const isSending = computed(() => askChat.isBusy.value)
+// 正在生成的流不属于当前查看的会话（用户生成中切走了）
+const isStreamingElsewhere = computed(
+  () => isSending.value && !!streamingSessionKey.value && streamingSessionKey.value !== activeSessionId.value,
+)
+const streamingSessionTitle = computed(
+  () => sessions.value.find((s) => s.id === streamingSessionKey.value)?.title || '另一个会话',
+)
 const askState = askChat.state
 const askPhase = askChat.phase
 
@@ -233,6 +244,8 @@ function finalizeActiveMessage(state: 'done' | 'done_empty' | 'failed' | 'interr
   activeAssistantMsg = null
   stopThinkingTimer()
   if (!msg) return
+  // 模型偶尔把后端拼的「历史对话摘要」提示原样复述进回答：落定时去掉
+  if (msg.content) msg.content = stripHistorySummary(msg.content)
 
   if (msg.thinking) {
     msg.thinking.completed = true
@@ -360,6 +373,8 @@ function handleThreadScroll() {
 }
 
 function followScroll() {
+  // 后台会话的流不拉当前会话的滚动条，也不计未读
+  if (streamSessionId && streamSessionId !== activeSessionId.value) return
   if (isFollowingScroll.value) {
     scrollToBottom()
   } else {
@@ -788,11 +803,9 @@ function handleStop() {
   askChat.stop()
 }
 
-// 切换会话
+// 切换会话：不中断正在生成的流——它在后台继续写回所属会话，切回来即可看到完整回答。
+// 前端一旦 abort，后端 thread 往往还在跑，切回来再追问会撞 409（thread 忙）。
 async function handleSelectSession(id: string) {
-  if (isSending.value) {
-    handleStop()
-  }
   activeSessionId.value = id
   clarifySessionId.value = id
   extraRevealed.value = 0
@@ -868,7 +881,7 @@ function resetToNewChat() {
 
 // 点击「新建问数会话」按钮 -> 进入全新的会话页面
 function handleNewChat() {
-  if (isSending.value) handleStop()
+  // 同切换会话：不打断其他会话正在生成的回答
   resetToNewChat()
   ElMessage.info('已进入新会话页面')
 }
@@ -889,6 +902,7 @@ async function handleConfirmClarify(
     if (targetMsg.clarification.confirmed) return
     targetMsg.clarification.confirmed = true
     targetMsg.clarification.selectedEntryTypeIds = payload.selectedEntryTypeIds
+    targetMsg.clarification.freeText = payload.freeText
   } else {
     clarifyConfirmed.value = true
   }
@@ -1019,6 +1033,10 @@ function handleQuickPrompt(text: string) {
 // 发送消息：经 useAskChat 状态机对接后端 /api/poc/chat/agent SSE 流式接口
 async function handleSend(customTitle?: string) {
   const content = promptText.value.trim()
+  if (content && isStreamingElsewhere.value) {
+    ElMessage.info(`「${streamingSessionTitle.value}」正在生成回答，完成后再发送，或先停止该会话的生成`)
+    return
+  }
   if (!content || isSending.value || loadingSessions.value || disposed) return
 
   // 建源意图交给智能体识别；建表在发送时追加现有草稿格式要求。
@@ -1200,6 +1218,7 @@ async function beginStream(
   const idx = ownerList ? ownerList.indexOf(msg) : -1
   activeAssistantMsg = idx >= 0 ? ownerList![idx] : msg
   streamSessionId = sessionId
+  streamingSessionKey.value = sessionId
   streamStartTime = Date.now()
   startThinkingTimer()
 
@@ -1327,7 +1346,7 @@ const ASK_ERROR_TITLES: Record<AskErrorCode, string> = {
 
 // 快捷键发送与中断：按 Enter 发送，按 Esc 中断
 function handleKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && isSending.value) {
+  if (e.key === 'Escape' && isSending.value && !isStreamingElsewhere.value) {
     e.preventDefault()
     handleStop()
     return
@@ -1934,7 +1953,7 @@ onUnmounted(() => {
           <div class="rc-input-toolbar">
             <div class="rc-toolbar-left">
               <span v-if="compact && !isSending" class="rc-input-tip"><kbd>Enter</kbd> 发送</span>
-              <span v-if="!compact" class="rc-input-tip">{{ isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
+              <span v-if="!compact" class="rc-input-tip">{{ isStreamingElsewhere ? `「${streamingSessionTitle}」正在后台生成回答，完成后可在本会话提问` : isSending ? '正在分析响应中，可按 Esc 或点击「停止响应」中断' : '按 Enter 发送，Shift + Enter 换行' }}</span>
             </div>
 
             <el-button
