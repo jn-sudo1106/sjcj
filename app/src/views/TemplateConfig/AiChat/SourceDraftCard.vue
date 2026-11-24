@@ -6,8 +6,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { isProductionCreateEnabled } from '@/api'
 import CategoryTreePicker, { type CategorySelection } from '@/views/FlowCanvas/source/CategoryTreePicker.vue'
+import FlowChoiceSummary from '@/views/FlowCanvas/shared/FlowChoiceSummary.vue'
+import { siteBizDirSelection } from '@/utils/source/createDefaults'
 import {
   BIZ_DIR_ROOT_ID,
+  defaultReferenceSource,
   initialSourceForm,
   loadSiteSourceOptions,
   resolveSourceDraft,
@@ -18,6 +21,8 @@ import {
   type SourceDraftState,
   type SourceFlowMode,
   type SourceSiteMode,
+  type SiteOption,
+  type SiteSourceOption,
 } from '@/utils/aiChat/sourceDraft'
 
 const props = withDefaults(defineProps<{
@@ -42,9 +47,9 @@ const hints = ref<SourceDraftHints | null>(null)
 const form = ref<SourceDraftForm | null>(null)
 const touched = ref(false)
 
-const siteOptions = ref<Array<{ siteId: string; name: string; sourceCount: number }>>([])
+const siteOptions = ref<SiteOption[]>([])
 const siteSearching = ref(false)
-const siteSourceOptions = ref<Array<{ sourceId: string; name: string }>>([])
+const siteSourceOptions = ref<SiteSourceOption[]>([])
 const siteSourceSelectOptions = computed(() =>
   siteSourceOptions.value.map((s) => ({ value: s.sourceId, label: `${s.name}（ID ${s.sourceId}）` })),
 )
@@ -102,6 +107,10 @@ function setSiteMode(mode: SourceSiteMode) {
     form.value.siteName = hints.value.existingSite.name
   }
   if (mode === 'new' && !form.value.siteName) form.value.siteName = props.state.draft.siteName
+  // 1123 Q8：切到已有网站且还没选目录时，默认网站自己的业务目录
+  if (mode === 'existing' && !form.value.dirId && hints.value?.existingSiteDir && form.value.siteId === hints.value.existingSite?.siteId) {
+    Object.assign(form.value, hints.value.existingSiteDir)
+  }
   if (mode !== 'existing' && form.value.flowMode === 'copy') form.value.flowMode = form.value.templateId ? 'template' : 'none'
 }
 
@@ -128,7 +137,12 @@ async function onSitePicked(siteId: string) {
   } catch {
     siteSourceOptions.value = []
   }
-  const first = siteSourceOptions.value[0]
+  // 默认参考源：网站最常用流程上的源（1123 A1）
+  const first = defaultReferenceSource(siteSourceOptions.value)
+  if (!props.state.draft.category || !hints.value?.matchedCategory) {
+    const dir = await siteBizDirSelection(site).catch(() => null)
+    if (dir?.dirId && form.value.siteId === siteId) Object.assign(form.value, { dirId: dir.dirId, category: dir.category, categoryPath: dir.categoryPath })
+  }
   if (first) {
     form.value.templateSourceId = first.sourceId
     form.value.templateSourceName = first.name
@@ -142,6 +156,9 @@ function onTemplatePicked(id: string) {
   form.value.templateName = hints.value?.templates.find((t) => t.id === id)?.name ?? ''
 }
 
+/** 复制模式下参考源的默认流程（摘要展示用） */
+const referenceFlowId = computed(() => siteSourceOptions.value.find(s => s.sourceId === form.value?.templateSourceId)?.flowId ?? '')
+
 function onTemplateSourcePicked(id: string) {
   if (!form.value) return
   form.value.templateSourceName = siteSourceOptions.value.find((s) => s.sourceId === id)?.name ?? ''
@@ -150,14 +167,14 @@ function onTemplateSourcePicked(id: string) {
 const flowModeOptions = computed<Array<{ value: SourceFlowMode; label: string }>>(() => {
   const opts: Array<{ value: SourceFlowMode; label: string }> = []
   if (form.value?.siteMode === 'existing') opts.push({ value: 'copy', label: '复制参考源的流程' })
-  opts.push({ value: 'template', label: '按流程模板新建' }, { value: 'none', label: '暂不建流程' })
+  opts.push({ value: 'template', label: '按流程模板新建' }, { value: 'none', label: '暂不配置流程' })
   return opts
 })
 
 const flowModeText = computed(() => {
   const f = form.value
   if (!f) return ''
-  if (f.flowMode === 'none') return '不建流程：源建好后进画布为空，用流程标签栏「＋」新建（届时仍要选模板）'
+  if (f.flowMode === 'none') return '暂不配置流程：源建好后进画布为空，用流程标签栏「＋」新建（届时仍要选模板）'
   if (f.flowMode === 'copy') return '每个源复制参考源的默认流程，独立一份、含配置（同网站详情「添加源 → 按模板源」）'
   if (f.siteMode === 'new') return '同批源共用一条流程，名称 = 网站名（同「新建采集」）'
   if (f.siteMode === 'existing') return '每个源各建一条流程（同网站详情「添加源」）'
@@ -263,9 +280,9 @@ const replayCanvasLink = computed(() => {
             <div class="sd-readonly">不归属网站（源列表按「未关联网站」可筛出，之后可用网站「批量导入 → 关联已有源」挂上）</div>
           </div>
 
-          <div v-if="form.siteMode !== 'existing'" class="sd-field">
+          <div class="sd-field">
             <span>
-              业务分类{{ form.siteMode === 'none' ? '（源的业务目录）' : '' }}
+              业务分类{{ form.siteMode !== 'new' ? '（源的业务目录）' : '' }}
               <em v-if="categoryHint" class="sd-tag" :class="categoryHint.ok ? 'ok' : 'warn'">{{ categoryHint.text }}</em>
             </span>
             <CategoryTreePicker
@@ -295,6 +312,9 @@ const replayCanvasLink = computed(() => {
               <el-option v-for="t in hints?.templates ?? []" :key="t.id" :label="t.name" :value="t.id" />
             </el-select>
           </label>
+          <div v-if="form.flowMode === 'template' && form.templateId" class="sd-field sd-wide">
+            <FlowChoiceSummary :flow-id="form.templateId" prefix="按模板" previewable preview-mode="inline" data-testid="source-draft-flow-summary" />
+          </div>
           <label v-else-if="form.flowMode === 'copy'" class="sd-field">
             <span>参考源</span>
             <!-- 虚拟列表：大网站下源上万（186「贝壳找房」12055 个），el-select 全量渲染 option 要卡十几秒 -->
@@ -308,6 +328,9 @@ const replayCanvasLink = computed(() => {
               @change="onTemplateSourcePicked"
             />
           </label>
+          <div v-if="form.flowMode === 'copy' && referenceFlowId" class="sd-field sd-wide">
+            <FlowChoiceSummary :flow-id="referenceFlowId" prefix="复制" previewable preview-mode="inline" data-testid="source-draft-copy-summary" />
+          </div>
           <div class="sd-field sd-wide">
             <div class="sd-readonly">{{ flowModeText }}</div>
           </div>

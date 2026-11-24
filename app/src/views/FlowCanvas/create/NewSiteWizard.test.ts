@@ -2,6 +2,9 @@
 vi.mock('@/utils/flow/createFromTemplate', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/utils/flow/createFromTemplate')>()),
   pickFlowTemplate: vi.fn(async () => 'template-1'),
+  availableFlowTemplates: vi.fn(async () => [{ id: 'template-1', name: '模板一' }]),
+  lastFlowTemplateId: vi.fn(() => ''),
+  rememberFlowTemplate: vi.fn(),
   createFlowFromTemplate: vi.fn(async (_id: string, name: string) => { const { flowCenterApi } = await import('@/api'); return flowCenterApi.save({ name, definition: { main: ['start', 'end'], branches: [], configs: {} }, fromTemplateId: 'template-1' }) }),
 }))
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +47,10 @@ describe('NewSiteWizard', () => {
       global: {
         plugins: [pinia, router, ElementPlus],
         stubs: {
+          FlowChoiceSummary: {
+            props: ['flowId', 'prefix'],
+            template: '<div class="flow-stub" :data-flow="flowId"><slot name="actions" /></div>',
+          },
           CategoryTreePicker: {
             template: '<div class="cat-stub" />',
             mounted() {
@@ -140,17 +147,21 @@ describe('NewSiteWizard', () => {
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
   })
 
-  it('选「暂不建流程」时只建网站和源，不建流程也不绑定，照常进入首个源', async () => {
+  it('表单里默认选上模板并显示摘要；「预览 / 更换」改成「暂不配置流程」后只建网站和源，不建流程也不绑定', async () => {
     vi.mocked(pickFlowTemplate).mockResolvedValueOnce('')
     vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001', '9002'] })
     const save = vi.spyOn(flowCenterApi, 'save')
     const bind = vi.spyOn(workflowBindingApi, 'bind')
     const { wrapper, router } = await mountWizard()
+    expect(wrapper.get('.flow-stub').attributes('data-flow')).toBe('template-1')
     await wrapper.get('input.rc-input').setValue('向导测试站')
+    await wrapper.get('[data-testid="gate-flow-change"]').trigger('click')
     await flushPromises()
+    expect(pickFlowTemplate).toHaveBeenLastCalledWith({ allowNone: true, initialId: 'template-1' })
+    expect(wrapper.get('.flow-stub').attributes('data-flow')).toBe('')
     await wrapper.get('.rc-btn.primary').trigger('click')
     await flushPromises()
-    expect(pickFlowTemplate).toHaveBeenLastCalledWith({ allowNone: true })
+    expect(pickFlowTemplate).toHaveBeenCalledTimes(1)
     expect(save).not.toHaveBeenCalled()
     expect(bind).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.sourceId).toBe('9001')

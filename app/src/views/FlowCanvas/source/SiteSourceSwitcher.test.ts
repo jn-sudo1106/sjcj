@@ -13,6 +13,7 @@ import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 import { flowCenterApi, flowVersionApi, siteApi, sourceApi, sourceGroupApi, paramApi, workflowBindingApi, type Source, type Param } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
+import * as sourceDirs from '@/api/sourceDirs'
 
 const source: Source = {
   sourceId: 'source-a', siteId: 'site-a', name: '原源', url: 'https://example.com',
@@ -37,8 +38,12 @@ const paramSample: Record<string, string[]> = {
 function mockApis() {
   vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([])
   vi.spyOn(siteApi, 'siteDetail').mockResolvedValue({
-    siteId: 'site-a', name: '网站 A', category: '', owner: 'admin', sourceCount: 1, errorCount: 0,
+    siteId: 'site-a', name: '网站 A', category: '新闻', categoryPath: '新闻', dirId: '9001', owner: 'admin', sourceCount: 1, errorCount: 0,
   })
+  // 1123 Q8：添加源默认网站自己的业务目录，加入目录接口
+  vi.spyOn(sourceDirs, 'loadDirPath').mockResolvedValue(['财经资讯', '新闻'])
+  vi.spyOn(sourceDirs, 'addSourcesToBizDir').mockResolvedValue(1)
+  vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ id: 'template-1', name: '模板一', isTemplate: true }] as never)
   vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => siteId === 'site-template' ? [{ ...templateSource }] : [{ ...source }])
   vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([{ ...source }])
   vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [templateSource] })
@@ -82,7 +87,11 @@ async function createWrapper(setup?: () => void) {
   const wrapper = mount(SiteSourceSwitcher, {
     props: { siteId: 'site-a', activeKey: source.sourceId },
     global: {
-      stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' }, 'el-select': elSelectStub, 'el-option': true },
+      stubs: {
+        'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' }, 'el-select': elSelectStub, 'el-option': true,
+        CategoryTreePicker: { name: 'CategoryTreePicker', props: ['modelValue'], template: '<div class="cat-stub">{{ modelValue?.categoryPath }}</div>' },
+        FlowChoiceSummary: { props: ['flowId', 'prefix'], template: '<div class="flow-stub" :data-flow="flowId"><slot name="actions" /></div>' },
+      },
       directives: { loading: {} },
     },
   })
@@ -916,13 +925,13 @@ describe('SiteSourceSwitcher · 按模板源新建：流程三选一（1016）',
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('请选择要关联的流程'))
   })
 
-  it('「不关联流程」：flag=0，再清空流程；清空失败只提示，源照样建好', async () => {
+  it('「暂不配置流程」：flag=0，再清空流程；清空失败只提示，源照样建好', async () => {
     const wrapper = await createWrapper()
     vi.mocked(workflowBindingApi.save).mockRejectedValueOnce(new Error('并发冲突'))
     const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
     await openWithName(wrapper)
     await wrapper.get('[data-testid="source-flow-none"]').setValue(true)
-    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('不关联流程')
+    expect(wrapper.get('[data-testid="source-add-hint"]').text()).toContain('暂不配置流程')
     await submit(wrapper)
     expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ flag: 0 }))
     expect(vi.mocked(workflowBindingApi.save).mock.calls[0][1]({ flowIds: [], bindings: [], ownFlowIds: [], ownBindings: [] }))
@@ -1270,6 +1279,51 @@ describe('SiteSourceSwitcher · 数据表模式', () => {
   })
 })
 
+
+// 1123 A1 / Q8：添加源默认复制本站最常用流程、显示流程摘要；业务目录必选，默认网站自己的业务目录
+describe('SiteSourceSwitcher · 添加源默认值（1123）', () => {
+  it('默认模板源取本站最常用流程的源，复制时显示该流程摘要', async () => {
+    const wrapper = await createWrapper(() => {
+      vi.mocked(siteApi.siteSources).mockResolvedValue([
+        { ...source, flowId: 'flow-1' },
+        { ...source, sourceId: 'source-b', name: '常用流程源', flowId: 'flow-2' },
+        { ...source, sourceId: 'source-c', name: '常用流程源2', flowId: 'flow-2' },
+      ])
+      vi.mocked(siteApi.siteSourcePreview).mockResolvedValue([
+        { ...source, flowId: 'flow-1' },
+        { ...source, sourceId: 'source-b', name: '常用流程源', flowId: 'flow-2' },
+        { ...source, sourceId: 'source-c', name: '常用流程源2', flowId: 'flow-2' },
+      ])
+    })
+    await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-template-mode"]').text()).toContain('本网站最常用流程的源（常用流程源）')
+    expect(wrapper.get('[data-testid="source-copy-flow"]').attributes('data-flow')).toBe('flow-2')
+  })
+
+  it('业务目录默认网站自己的目录，建完加入该目录；清空后拦下不建源', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-biz-dir"]').text()).toBe('/财经资讯/新闻')
+    const inputs = wrapper.findAll('.ssw-add-input')
+    await inputs[0].setValue('目录源')
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+    expect(sourceDirs.addSourcesToBizDir).toHaveBeenCalledWith('9001', ['source-new'])
+
+    vi.mocked(sourceApi.copySourceAndLocate).mockClear()
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
+    wrapper.getComponent({ name: 'CategoryTreePicker' }).vm.$emit('update:modelValue', { category: '', categoryPath: '' })
+    await wrapper.findAll('.ssw-add-input')[0].setValue('没有目录')
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+    expect(warn).toHaveBeenCalledWith('请选择业务目录')
+    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
+  })
+})
 
 describe('SiteSourceSwitcher · 空白模板不提供流程选项', () => {
   it('空白模板没有真实建源接口，不提供绑定流程，也不发绑定请求', async () => {

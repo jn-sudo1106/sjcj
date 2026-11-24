@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // 新建采集闸门原型：单页填写网站 + 首批源，创建后进入画布配流程。
-// 提交时先选择流程模板，再创建网站、源和对应流程。
+// 1123 A1：流程模板在表单里选（默认上次用过的模板），提交前就能看到节点数与写入表，
+// 「预览 / 更换」打开带节点图和表配置的模板选择弹窗；仍可选「暂不配置流程」。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { siteApi, type Site, type Source } from '@/api'
-import { NO_FLOW_TEMPLATE, pickFlowTemplate } from '@/utils/flow/createFromTemplate'
+import { NO_FLOW_TEMPLATE, availableFlowTemplates, lastFlowTemplateId, pickFlowTemplate, rememberFlowTemplate } from '@/utils/flow/createFromTemplate'
+import FlowChoiceSummary from '@/views/FlowCanvas/shared/FlowChoiceSummary.vue'
 import { createSharedFlow, addSourcesToBizDirNote } from '@/utils/source/createCollect'
 import { useUiStore } from '@/stores/ui'
 import { firstSourceId } from '@/utils/url/workspaceRoute'
@@ -42,6 +44,30 @@ const gateSite = ref(blankSiteDraft())
 const gateRows = ref<GateChildRow[]>([blankRow()])
 const firstSourceNameTouched = ref(false)
 const creating = ref(false)
+/** 已选流程模板；NO_FLOW_TEMPLATE = 暂不配置流程。null = 模板还没读到 */
+const templateId = ref<string | null>(null)
+const templateError = ref('')
+
+async function loadDefaultTemplate() {
+  try {
+    const templates = await availableFlowTemplates()
+    const last = lastFlowTemplateId()
+    templateId.value = templates.find(t => t.id === last)?.id ?? templates[0]?.id ?? NO_FLOW_TEMPLATE
+    templateError.value = ''
+  } catch (error) {
+    templateId.value = NO_FLOW_TEMPLATE
+    templateError.value = `流程模板读取失败：${(error as Error)?.message ?? String(error)}，可点「预览 / 更换」重试`
+  }
+}
+
+async function changeTemplate() {
+  try {
+    templateId.value = await pickFlowTemplate({ allowNone: true, initialId: templateId.value ?? undefined })
+    templateError.value = ''
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error((error as Error)?.message ?? String(error))
+  }
+}
 
 const gateCategory = computed<CategorySelection>({
   get: () => ({ dirId: gateSite.value.dirId, category: gateSite.value.category, categoryPath: gateSite.value.categoryPath ?? '' }),
@@ -94,18 +120,23 @@ async function onCreateAndEnter() {
     dirId: '',
   }))
   const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: 0 }
+  if (templateId.value === null) {
+    ElMessage.warning('流程模板还在读取，请稍候')
+    return
+  }
+  const chosenTemplate = templateId.value
   creating.value = true
   try {
-    // 新建采集允许「暂不建流程」：只建网站和源，进画布后在流程标签栏「＋」再建
-    const templateId = await pickFlowTemplate({ allowNone: true })
+    // 允许「暂不配置流程」：只建网站和源，进画布后在流程标签栏「＋」再建
+    if (chosenTemplate !== NO_FLOW_TEMPLATE) rememberFlowTemplate(chosenTemplate)
     const res = await siteApi.siteCreate(siteForCreate, sources)
     if (!res?.ok) {
       ElMessage.warning(res?.message || '创建失败，请重试')
       return
     }
     const sourceId = res.sourceId || firstSourceId(sources)
-    const withFlow = templateId !== NO_FLOW_TEMPLATE
-    const flowNote = withFlow ? (await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [], templateId)).note : ''
+    const withFlow = chosenTemplate !== NO_FLOW_TEMPLATE
+    const flowNote = withFlow ? (await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [], chosenTemplate)).note : ''
     const dirNote = await addSourcesToBizDirNote(site, res.sourceIds ?? [])
     if (flowNote || dirNote) ElMessage.warning([flowNote, dirNote].filter(Boolean).join('；'))
     else if (withFlow) ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，共用流程「${siteForCreate.name.trim()}」），已进入首个源的流程视图`)
@@ -121,6 +152,7 @@ async function onCreateAndEnter() {
 
 onMounted(() => {
   ui.clearActions()
+  void loadDefaultTemplate()
 })
 </script>
 
@@ -128,7 +160,7 @@ onMounted(() => {
   <div class="rc-gate">
     <div class="rc-gate-card">
       <div class="rc-gate-title">新建采集 · 网站基础信息</div>
-      <div class="rc-gate-hint">网站用于归属与管理；源（语言 / 变体）才是真正的采集实体。这一页填完即可创建，流程配置进画布后再做。</div>
+      <div class="rc-gate-hint">网站用于归属与管理；源（语言 / 变体）才是真正的采集实体。这一页填完即可创建，流程按下方模板建好，节点配置进画布后再调。</div>
       <div class="rc-field">
         <label>网站名称</label>
         <input class="rc-input" v-model="gateSite.name" placeholder="必填" />
@@ -151,6 +183,18 @@ onMounted(() => {
       </div>
       <button class="rc-btn" type="button" @click="addGateRow">＋ 添加源</button>
 
+      <div class="rc-field" data-testid="gate-flow">
+        <label>采集流程（这批源共用一条，按模板新建）</label>
+        <FlowChoiceSummary v-if="templateId !== null" :flow-id="templateId" prefix="按模板">
+          <template #actions>
+            <button class="rc-btn sm" type="button" data-testid="gate-flow-change" @click="changeTemplate">预览 / 更换</button>
+          </template>
+        </FlowChoiceSummary>
+        <div v-else class="rc-gate-hint">正在读取流程模板…</div>
+        <button v-if="templateId === NO_FLOW_TEMPLATE" class="rc-btn sm rc-gate-flow-pick" type="button" data-testid="gate-flow-pick" @click="changeTemplate">选择流程模板</button>
+        <div v-if="templateError" class="rc-gate-error">{{ templateError }}</div>
+      </div>
+
       <div class="rc-gate-actions">
         <button class="rc-btn" type="button" @click="onCancelGate">取消</button>
         <button class="rc-btn primary" type="button" :disabled="creating" @click="onCreateAndEnter">
@@ -168,6 +212,9 @@ onMounted(() => {
 .rc-gate-hint { font-size: 11px; color: var(--rc-muted); line-height: 1.6; margin-bottom: 14px; }
 .rc-gate-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rc-border-soft); }
 .rc-gate-rows-title { font-size: 11px; font-weight: 700; color: var(--rc-muted); margin: 14px 0 8px; }
+.rc-btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.rc-gate-flow-pick { margin-top: 6px; }
+.rc-gate-error { margin-top: 4px; color: var(--rc-error); font-size: 11px; }
 .rc-gate-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }

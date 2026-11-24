@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ElMessageBox } from 'element-plus'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { makeStructureTemplate } from './flowTemplates'
-import { createFlowFromTemplate, NO_FLOW_TEMPLATE, pickFlowTemplate } from './createFromTemplate'
-import { mount } from '@vue/test-utils'
-import type { VNode } from 'vue'
+import { createFlowFromTemplate, flowTemplatePickRequest, lastFlowTemplateId, NO_FLOW_TEMPLATE, pickFlowTemplate } from './createFromTemplate'
+import { flushPromises } from '@vue/test-utils'
 
 afterEach(() => vi.restoreAllMocks())
 const template: FlowRecord = { id: '1', name: '采集下载', definition: makeStructureTemplate(['web-list', 'file-download']), isTemplate: true, updatedAt: '' }
@@ -36,39 +34,44 @@ describe('按模板新建流程', () => {
   })
   it('选择模板时取消不会创建任何流程，无候选时明确报错', async () => {
     vi.spyOn(flowCenterApi,'templates').mockResolvedValue([template])
-    vi.spyOn(ElMessageBox,'confirm').mockRejectedValue('cancel')
     const save=vi.spyOn(flowCenterApi,'save')
-    await expect(pickFlowTemplate()).rejects.toBe('cancel')
+    const pending = pickFlowTemplate()
+    await flushPromises()
+    expect(flowTemplatePickRequest.value?.templates.map(t => t.id)).toEqual(['1'])
+    flowTemplatePickRequest.value!.reject('cancel')
+    await expect(pending).rejects.toBe('cancel')
+    expect(flowTemplatePickRequest.value).toBeNull()
     expect(save).not.toHaveBeenCalled()
     await expect(pickFlowTemplate({ excludeId: '1' })).rejects.toThrow('暂无流程模板')
   })
-  it('allowNone 时列表最前是「暂不建流程」，选它返回空串；没有模板也能弹出', async () => {
-    vi.spyOn(flowCenterApi,'templates').mockResolvedValue([template])
-    let content: VNode | undefined
-    vi.spyOn(ElMessageBox,'confirm').mockImplementation(async (message) => {
-      content = message as VNode
-      const view = mount({ render: () => content })
-      const items = view.findAll('label.rc-tpl-item')
-      expect(items.map(i => i.text())).toEqual([expect.stringContaining('暂不建流程'), '采集下载'])
-      // 默认仍选第一个模板
-      expect(items[1]!.classes()).toContain('is-active')
-      await view.get('[data-testid="flow-template-none"] input').trigger('change')
-      return 'confirm' as never
-    })
-    await expect(pickFlowTemplate({ allowNone: true })).resolves.toBe(NO_FLOW_TEMPLATE)
+  it('停用 / 已删的模板不进候选；allowNone 时没有模板也能弹出，选「暂不配置流程」返回空串', async () => {
+    vi.spyOn(flowCenterApi,'templates').mockResolvedValue([template, { ...template, id: '4', disabled: true }, { ...template, id: '5', state: 'D' }])
+    let pending = pickFlowTemplate({ allowNone: true })
+    await flushPromises()
+    expect(flowTemplatePickRequest.value).toMatchObject({ allowNone: true })
+    expect(flowTemplatePickRequest.value!.templates.map(t => t.id)).toEqual(['1'])
+    flowTemplatePickRequest.value!.resolve(NO_FLOW_TEMPLATE)
+    await expect(pending).resolves.toBe(NO_FLOW_TEMPLATE)
 
     vi.spyOn(flowCenterApi,'templates').mockResolvedValue([])
-    vi.spyOn(ElMessageBox,'confirm').mockResolvedValue('confirm' as never)
-    await expect(pickFlowTemplate({ allowNone: true })).resolves.toBe(NO_FLOW_TEMPLATE)
+    pending = pickFlowTemplate({ allowNone: true })
+    await flushPromises()
+    flowTemplatePickRequest.value!.resolve(NO_FLOW_TEMPLATE)
+    await expect(pending).resolves.toBe(NO_FLOW_TEMPLATE)
   })
-  it('不传 allowNone 时没有「暂不建流程」，确认返回所选模板', async () => {
+  it('确认返回所选模板并记住；不给 initialId 时默认上次选过的模板', async () => {
+    localStorage.removeItem('rc-last-flow-template')
     vi.spyOn(flowCenterApi,'templates').mockResolvedValue([template, { ...template, id: '3', name: '列表 → 详情' }])
-    vi.spyOn(ElMessageBox,'confirm').mockImplementation(async (message) => {
-      const view = mount({ render: () => message as VNode })
-      expect(view.find('[data-testid="flow-template-none"]').exists()).toBe(false)
-      await view.get('[data-testid="flow-template-3"] input').trigger('change')
-      return 'confirm' as never
-    })
-    await expect(pickFlowTemplate()).resolves.toBe('3')
+    let pending = pickFlowTemplate()
+    await flushPromises()
+    expect(flowTemplatePickRequest.value?.initialId).toBe('')
+    flowTemplatePickRequest.value!.resolve('3')
+    await expect(pending).resolves.toBe('3')
+    expect(lastFlowTemplateId()).toBe('3')
+    pending = pickFlowTemplate()
+    await flushPromises()
+    expect(flowTemplatePickRequest.value?.initialId).toBe('3')
+    flowTemplatePickRequest.value!.reject('cancel')
+    await expect(pending).rejects.toBe('cancel')
   })
 })

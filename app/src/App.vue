@@ -10,6 +10,7 @@ import { onMounted, watch } from 'vue'
 import { useDictStore } from '@/stores/dict'
 import { useAuthStore } from '@/stores/auth'
 import { warmUpAuth } from '@/router'
+import FlowTemplatePickerHost from '@/views/FlowCanvas/shared/FlowTemplatePickerHost.vue'
 
 const dict = useDictStore()
 const auth = useAuthStore()
@@ -40,4 +41,5 @@ onMounted(async () => {
 
 <template>
   <router-view />
+  <FlowTemplatePickerHost />
 </template>

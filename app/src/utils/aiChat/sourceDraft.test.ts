@@ -131,12 +131,22 @@ describe('卡片初始表单与校验', () => {
       .toMatchObject({ siteMode: 'existing', siteId: '1024', flowMode: 'copy', templateSourceId: '2' })
     expect(initialSourceForm({ ...DRAFT, siteName: '贝壳找房', flowTemplate: '' }, h).templateSourceId).toBe('1')
   })
+  it('1123：没有点名参考源时默认网站最常用流程的源；分类没匹配上时默认网站自己的业务目录', () => {
+    const h = hints({
+      existingSite: { siteId: '1024', name: '贝壳找房', sourceCount: 37 }, matchedTemplateId: '', matchedCategory: null,
+      existingSiteDir: { dirId: '777', category: '二手房', categoryPath: '/房产/二手房' },
+      siteSources: [{ sourceId: '1', name: 'A', flowId: 'f1' }, { sourceId: '2', name: 'B', flowId: 'f2' }, { sourceId: '3', name: 'C', flowId: 'f2' }],
+    })
+    expect(initialSourceForm({ ...DRAFT, siteName: '贝壳找房', flowTemplate: '' }, h))
+      .toMatchObject({ siteMode: 'existing', flowMode: 'copy', templateSourceId: '2', dirId: '777', categoryPath: '/房产/二手房' })
+    expect(validateSourceForm(form({ siteMode: 'existing', siteId: '1024', dirId: '' }))).toContain('加到已有网站也需要选择业务分类（源的业务目录）')
+  })
   it('校验：新建网站必选分类、按模板必选模板、源名不能重复', () => {
     expect(validateSourceForm(form())).toEqual([])
     expect(validateSourceForm(form({ dirId: '' }))).toContain('新建网站需要选择业务分类')
     expect(validateSourceForm(form({ siteMode: 'none', dirId: '' }))).toEqual(['不关联网站也需要选择业务分类（源的业务目录）'])
     expect(validateSourceForm(form({ siteMode: 'none', dirId: '9009100' }))).toEqual([])
-    expect(validateSourceForm(form({ templateId: '' }))).toContain('请选择流程模板，或改选「暂不建流程」')
+    expect(validateSourceForm(form({ templateId: '' }))).toContain('请选择流程模板，或改选「暂不配置流程」')
     expect(validateSourceForm(form({ sources: [{ name: 'A', url: '' }, { name: 'A', url: '' }] }))).toContain('源名称有重复')
     expect(validateSourceForm(form({ flowMode: 'copy' }))).toContain('只有加到已有网站时才能复制参考源的流程')
   })
@@ -168,7 +178,7 @@ describe('执行建源', () => {
     expect(formatSourceCreatedMessage(result)).toBe('【建源结果】已新建网站「南京网上房地产」（网站 ID 9001），创建 2 个源：南京二手房挂牌（源 ID 430101）、南京二手房成交（源 ID 430102），共用流程 #88231，已加入业务目录「房产」。')
   })
 
-  it('已有网站 + 复制参考源：copySource flag=1 → changeSite，不再建流程', async () => {
+  it('已有网站 + 复制参考源：copySource flag=1 → changeSite，不再建流程；同样加入业务目录（1123 Q8）', async () => {
     const copy = vi.spyOn(sourceApi, 'copySourceAndLocate').mockResolvedValue({ ok: true, sourceId: '430103', name: '贝壳南京二手房成交' })
     const change = vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true })
     const createForSource = vi.spyOn(workflowBindingApi, 'createForSource')
@@ -179,7 +189,7 @@ describe('执行建源', () => {
     expect(copy).toHaveBeenCalledWith({ sourceId: '2', name: '贝壳南京二手房成交', url: 'https://nj.ke.com/chengjiao/', flag: 1 })
     expect(change).toHaveBeenCalledWith(['430103'], '1024')
     expect(createForSource).not.toHaveBeenCalled()
-    expect(addSourcesToBizDirNote).not.toHaveBeenCalled()
+    expect(addSourcesToBizDirNote).toHaveBeenCalledWith(expect.objectContaining({ dirId: '9009100' }), ['430103'])
     expect(result.ok).toBe(true)
     expect(formatSourceCreatedMessage(result)).toContain('已在网站「贝壳找房」（网站 ID 1024）下创建 1 个源')
   })
