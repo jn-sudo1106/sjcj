@@ -182,6 +182,8 @@ const emit = defineEmits<{
   openSourceGroup: [sourceGroupId: string]
   editSite: [site: Site]
   deleteSite: [site: Site]
+  /** 网站卡片上点目录标签（1123 A4）：父级打开该网站在这个业务目录下的源详情 */
+  openSiteDir: [site: Site, dir: { id: string; path: string }]
   refreshSites: []
   /**
    * 表格视图的一页列表已经回来（成功、空、失败都会发）：父级据此把「业务目录」这类重查询
@@ -2156,6 +2158,7 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
       :include-empty-site-ids="includeEmptySiteIds"
       @edit-site="emit('editSite', $event)"
       @delete-site="emit('deleteSite', $event)"
+      @open-dir="(site, dir) => emit('openSiteDir', site, dir)"
       @show-sources="ui.setAssetView('table')"
     >
       <template #summary-extra><slot name="summary-extra" :ids="[]" /></template>

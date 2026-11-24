@@ -2,7 +2,7 @@
 // 采集资产卡片视图（0707 优化·Phase3；样式对齐 设计稿/原型设计/采集中心卡片样式.png）：
 // 一张卡 = 一个采集网站，渐变图标瓦片 + 源 chips + 标签 + 底部统计。
 // 源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
-import { onMounted, onUnmounted, reactive, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { siteApi, sourceApi, type Site, type Source } from '../../api'
 import { collectAllUnderQuery } from '@/views/FlowCanvas/result/useSourceLaunch'
@@ -15,7 +15,8 @@ function tileStyle() {
   return { background: tone.bg, color: tone.fg, boxShadow: tone.shadow }
 }
 import { visibleIssueTags } from '@/utils/sourceMark'
-import { Star, StarFilled } from '@element-plus/icons-vue'
+import { FolderOpened, Star, StarFilled } from '@element-plus/icons-vue'
+import { loadDirPath } from '@/api/sourceDirs'
 import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
 import { recordSiteVisit } from '@/utils/siteRecents'
 import { trackClick } from '@/utils/logEvents'
@@ -33,7 +34,7 @@ const props = withDefaults(defineProps<{
 })
 // 编辑网站信息由父组件（SourceTab）统一挂 SiteEditorDialog —— 表格视图走的也是这个事件，
 // 两个视图共用一份弹窗状态，不在卡片里再挂一个（0915-01）。
-const emit = defineEmits<{ 'open-editor': [site: Site]; 'delete-site': [site: Site]; 'favorite-changed': [] }>()
+const emit = defineEmits<{ 'open-editor': [site: Site]; 'delete-site': [site: Site]; 'favorite-changed': []; 'open-dir': [site: Site, dir: { id: string; path: string }] }>()
 const router = useRouter()
 
 /**
@@ -165,6 +166,34 @@ async function ensureCards(list: Site[]) {
 onMounted(() => { void ensureCards(props.sites) })
 watch(() => props.sites, (list) => { void ensureCards(list) })
 
+/**
+ * 网站目录标签（1123 A4，网站的 categoryId 是业务目录）：后端 categoryName 只给叶子名（同花顺 →「基本资料」），看不出上级。
+ * 用 dirId 经 loadDirPath 补齐完整路径（同目录 / 父级有缓存）；补齐前和补齐失败都先显示叶子名。
+ */
+const dirPaths = reactive<Record<string, string[]>>({})
+function ensureDirPaths(list: Site[]) {
+  for (const id of new Set(list.map(site => site.dirId).filter((id): id is string => !!id && id !== '0'))) {
+    if (dirPaths[id]) continue
+    loadDirPath(id).then(path => { if (path.length) dirPaths[id] = path }).catch(() => { /* 保持叶子名 */ })
+  }
+}
+watch(() => props.sites, ensureDirPaths, { immediate: true })
+function dirSegments(site: Site): string[] {
+  const loaded = site.dirId ? dirPaths[site.dirId] : undefined
+  if (loaded?.length) return loaded
+  const raw = site.categoryPath || site.category || ''
+  return raw.split('/').map(part => part.trim()).filter(Boolean)
+}
+/** 卡片上的目录文字：超过两级只留最后两级，前面用「…」，完整路径放 title */
+function dirLabel(site: Site): string {
+  const parts = dirSegments(site)
+  return parts.length > 2 ? `… / ${parts.slice(-2).join(' / ')}` : parts.join(' / ')
+}
+/** 点目录标签（1123 A4，与源列表「业务目录」列同口径）：父级打开这个网站在该目录下的源详情，左侧按目录列源 */
+function openDir(site: Site) {
+  if (site.dirId && site.dirId !== '0') emit('open-dir', site, { id: site.dirId, path: dirSegments(site).join(' / ') })
+}
+
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
 function openSource(s: Source) {
   // 点源 chip 进去也算打开了这个网站（0917-17）
@@ -214,6 +243,8 @@ function formatSiteDataCount(site: Site): string {
   const count = siteDataCount(site)
   return count == null ? '数据 —' : `数据 ${count.toLocaleString()} 条`
 }
+/** 有实际筛选时底部才写「命中 x / 共 y」；无条件时命中数就是全站数，只写「y 个源」（1123 A4） */
+const showHits = computed(() => !!props.sourceScope && props.sourceScope.filtered !== false)
 function visibleSourceCount(site: Site): number {
   return props.sourceScope?.matches[site.siteId]?.total ?? site.sourceCount
 }
@@ -325,7 +356,16 @@ onUnmounted(() => {
         </span>
         <div class="scg-title">
           <div class="scg-name">{{ site.name }}</div>
-          <div class="scg-cat">{{ site.categoryPath?.replace(/^\//, '').replaceAll('/', ' / ') || site.category }}</div>
+          <button
+            v-if="dirSegments(site).length"
+            class="scg-cat"
+            :class="{ static: !site.dirId || site.dirId === '0' }"
+            type="button"
+            data-testid="site-card-dir"
+            :title="`业务目录：${dirSegments(site).join(' / ')}${site.dirId && site.dirId !== '0' ? '\n点击打开源详情，左侧按这个目录列源' : ''}`"
+            @click.stop="openDir(site)"
+          ><el-icon :size="12"><FolderOpened /></el-icon><span class="scg-cat-text">{{ dirLabel(site) }}</span></button>
+          <span v-else class="scg-cat none" data-testid="site-card-dir-none" title="这个网站还没有归入业务目录">未分类</span>
         </div>
       </div>
 
@@ -399,7 +439,7 @@ onUnmounted(() => {
 
       <!-- 底部行：数据量点进数据视图。 -->
       <div class="scg-foot">
-        <span class="scg-foot-count" :title="sourceScope ? '当前筛选命中源数 / 网站全部源数' : undefined"><template v-if="sourceScope">{{ visibleSourceCount(site) }} / </template>{{ site.sourceCount }} 个源</span>
+        <span class="scg-foot-count" data-testid="site-card-count" :title="showHits ? '当前筛选命中源数 / 网站全部源数' : undefined"><template v-if="showHits"><strong class="scg-foot-hit">命中 {{ visibleSourceCount(site) }}</strong> / 共 </template>{{ site.sourceCount }} 个源</span>
         <span class="scg-foot-sep" />
         <button class="scg-foot-link" type="button" title="查看该网站数据视图" @click.stop="openSiteData(site)">
           {{ formatSiteDataCount(site) }}
@@ -518,7 +558,22 @@ onUnmounted(() => {
 /* 右上角那条竖带（⋯ / ☆）占 22px，标题不让位就会被压在底下 */
 .scg-title { flex: 1; min-width: 0; padding-right: 24px; }
 .scg-name { font-size: 14px; font-weight: 700; color: var(--rc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.scg-cat { font-size: 11px; color: var(--rc-faint); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 目录标签（1123 A4）：原来是 11px 浅灰一行字，看不出是目录。改成带文件夹图标的浅底标签。
+   网站的 categoryId 选的是业务目录（SiteEditorDialog），配色与源列表「业务目录」列的紫色标签一致；
+   有 dirId 时可点，按这个业务目录筛。 */
+.scg-cat {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  margin-top: 5px; padding: 1px 7px; height: 20px; box-sizing: border-box;
+  border: 1px solid #ede9fe; border-radius: 10px;
+  background: #f5f3ff; color: #7c3aed;
+  font-size: 12px; line-height: 16px; font-family: inherit; cursor: pointer;
+}
+.scg-cat:hover { border-color: #ddd6fe; background: #ede9fe; }
+.scg-cat.static { cursor: default; }
+.scg-cat.static:hover { border-color: #ede9fe; background: #f5f3ff; }
+.scg-cat.none { border: 1px dashed var(--rc-border); background: transparent; color: var(--rc-faint); cursor: default; }
+.scg-cat .el-icon { flex: none; }
+.scg-cat-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 固定两列（2026-09-18 用户提：「源默认一排两个，紧凑点」）。
    原来是 flex + wrap，chip 宽度随名字长短走——「证券日报网-金融机构…」这种长名字
@@ -571,6 +626,7 @@ onUnmounted(() => {
 /* 底部行钉在卡片底边（margin-top:auto），各卡等高对齐；所有项禁止换行，日期可缩略 */
 .scg-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--rc-border-soft); font-size: 11px; color: var(--rc-faint); min-width: 0; }
 .scg-foot-count { flex: none; color: var(--rc-muted); font-weight: 600; white-space: nowrap; }
+.scg-foot-hit { color: var(--rc-primary-ink); font-weight: 700; }
 .scg-foot-sep { flex: none; width: 1px; height: 12px; background: var(--rc-border-soft); }
 .scg-foot-link { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .scg-foot-link:hover { text-decoration: underline; }

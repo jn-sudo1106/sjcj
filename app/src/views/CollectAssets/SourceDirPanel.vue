@@ -219,11 +219,12 @@ function restore(scope: DirScope, tab: SourceDirectoryTab = scope.kind) {
 }
 
 /**
- * 「业务目录」列点路径进来（2026-11-11）：选中这一个目录（只看本目录、不含子级，与点名称同口径），
+ * 按目录定位（2026-11-11）：默认选中这一个目录（只看本目录、不含子级，与点名称同口径）；
+ * withDescendants=true 时按勾选口径含子目录（1123 A3：从源详情 / 网站源视图按目录跳回列表）。
  * 并把树展开到它、滚到可见位置。深目录的祖先可能还没加载过，先用 loadDirPath 补齐节点再逐层拉子级。
  * 目录在业务目录树里查不到（已被删除、或源挂在别的目录树）时不改当前范围，避免把列表筛成空。
  */
-async function revealDir(id: string, k: DirKind = 'biz') {
+async function revealDir(id: string, k: DirKind = 'biz', withDescendants = false) {
   try {
     await loadDirPath(id)
   } catch {
@@ -244,8 +245,9 @@ async function revealDir(id: string, k: DirKind = 'biz') {
   }
   await ensureKids(k, parent)
   allChecked[k] = false
-  checked[k].clear()
-  focus[k] = id
+  // withDescendants：按「勾选」口径选中（含子目录，1123 A3 按目录跳转）；否则同点名称，只看本目录
+  checked[k] = withDescendants ? new Set([id]) : new Set()
+  focus[k] = withDescendants ? null : id
   await emitScope()
   await nextTick()
   treeRef.value?.querySelector<HTMLElement>(`[data-dir="${id}"]`)?.scrollIntoView?.({ block: 'center' })

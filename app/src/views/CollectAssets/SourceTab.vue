@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SourceDirectoryScope } from '@/api/sourceDirectoryScope'
-import { blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import { blankSourceListViewState, viewStateFilter, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import { computed, nextTick, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -531,14 +531,31 @@ async function loadBizMembership() {
 const bizDirs = (sourceId: string) => (bizOf.get(sourceId) ?? []).map((id) => ({ id, path: dirPath(id).join(' / ') || `#${id}` }))
 const bizNames = (sourceId: string) => bizDirs(sourceId).map((dir) => dir.path)
 /**
- * 点「业务目录」列里的路径（2026-11-11）：左侧切到业务目录、选中这一个目录，列表只剩它下面的源，
- * 点的那条源就在结果里（同点行内来源组名跳走的口径，只是不用换页）。
- * 目录在树里查不到时（已被删除）SourceDirPanel.revealDir 保持原范围，用户能看出点的人没反应。
+ * 点「业务目录」列里的路径（1123 会议 A3，2026-11-24 用户确认）：打开**这个源**的详情页，
+ * 详情页左侧导航按这个业务目录（含子目录）列源，不再是本次列表的搜索结果。
+ *
+ * 复用「搜索上下文」：查询只带这个目录、其它筛选全空；返回列表时按 listState 恢复成
+ * 「业务目录 · 选中这个目录（含子目录）」，和导航里那批源一致。
+ * （此前只在左侧树里定位目录：目录面板收起或树里查不到时看起来点了没反应，且只查本目录不含子目录。）
  */
-function focusBizDir(dirId: string) {
-  dirCollapsed.value = false
-  directoryTab.value = 'biz'
-  void dirPanelRef.value?.revealDir(dirId)
+function openSourceInBizDir(source: Source, dir: { id: string; path: string }) {
+  const directory: SourceDirectoryScope = { kind: 'biz', mode: 'selected', selections: [{ id: dir.id, includeDescendants: true }] }
+  const directoryScope: DirScope = { kind: 'biz', directory, dirIds: [dir.id], labels: [{ id: dir.id, path: dir.path, hasKids: true }] }
+  const viewState = blankSourceListViewState()
+  const contextId = useSourceSearchStore().create({
+    query: { ...viewStateFilter(viewState), directory, dirLabel: `业务目录：${dir.path}（含子级）` },
+    empty: false,
+    viewState,
+    page: 1,
+    scrollTop: 0,
+    scrollLeft: 0,
+    total: 0,
+    label: '业务目录',
+    // 固定回源管理：从收藏 / 最近打开的网站卡片点进来，返回也要落到按目录看的列表
+    returnTo: '/collect?tab=source',
+    listState: { directoryScope, directoryCollapsed: false, directoryTab: 'biz' },
+  })
+  openSourceFromList(source, 'overview', contextId)
 }
 /**
  * 「业务目录」列给导出用的文本（1104）：表格里这一列是 `extra-cell` 槽位渲染的标签，
@@ -564,11 +581,12 @@ const directoryReturn = computed(() => {
 let directoryJumpSeq = 0
 watch([() => route.path, () => route.query.bizDirId, dirPanelRef], async ([path, rawId, panel]) => {
   const seq = ++directoryJumpSeq
+  const kind = 'biz' as const
   if (path !== '/collect' || props.scope !== 'all' || route.query.tab !== 'source' || typeof rawId !== 'string' || !rawId.trim()) return
   const id = rawId.trim()
   ui.setAssetView('table')
   dirCollapsed.value = false
-  directoryTab.value = 'biz'
+  directoryTab.value = kind
   keyword.value = ''
   categoryFilter.value = []
   tagFilter.value = ''
@@ -576,13 +594,14 @@ watch([() => route.path, () => route.query.bizDirId, dirPanelRef], async ([path,
   sourceGroupFilter.value = ''
   directoryJumpViewState.value = blankSourceListViewState()
   // 先固定目录范围，避免异步展开树期间短暂查出全站源。
-  dirScope.value = { kind: 'biz', dirIds: [id], labels: [{ id, path: `#${id}`, hasKids: false }], directory: { kind: 'biz', mode: 'selected', selections: [{ id, includeDescendants: false }] } }
+  // 「按目录看」统一含子目录（1123 A3）：源大多挂在叶子目录，只查本目录常常是空列表
+  dirScope.value = { kind, dirIds: [id], labels: [{ id, path: `#${id}`, hasKids: true }], directory: { kind, mode: 'selected', selections: [{ id, includeDescendants: true }] } }
   if (!panel) return
-  panel.restore(dirScope.value, 'biz')
+  panel.restore(dirScope.value, kind)
   try {
     await loadDirPath(id)
     if (seq !== directoryJumpSeq) return
-    await panel.revealDir(id)
+    await panel.revealDir(id, kind, true)
     if (seq !== directoryJumpSeq) return
     const query = { ...route.query }
     delete query.bizDirId
@@ -712,6 +731,25 @@ async function onBatchDeleteSources(ids: string[]) {
     overviewRef.value?.clearSelection()
     await overviewRef.value?.refresh()
     await refreshAll()
+  }
+}
+/**
+ * 网站卡片上点目录标签（1123 A4，2026-11-24 用户定「跟源列表一样跳源详情」）：
+ * 网站卡片没有「这个源」，取该网站在这个业务目录（含子目录）下的第一个源；网站没有源归在这个目录时
+ * 退回网站第一个源。打开方式与源列表点「业务目录」完全一致（openSourceInBizDir）。
+ */
+async function openSiteDir(site: Site, dir: { id: string; path: string }) {
+  const directory: SourceDirectoryScope = { kind: 'biz', mode: 'selected', selections: [{ id: dir.id, includeDescendants: true }] }
+  try {
+    let source = (await sourceApi.sourcePaged({ siteIds: site.siteId, directory, page: 1, size: 1 })).list[0]
+    if (!source) source = (await siteApi.siteSourcePreview(site.siteId, 1))[0]
+    if (!source) {
+      ElMessage.warning(`网站「${site.name}」还没有源，无法打开源详情`)
+      return
+    }
+    openSourceInBizDir({ ...source, siteId: source.siteId || site.siteId, siteName: source.siteName || site.name }, dir)
+  } catch (error) {
+    ElMessage.error(`打开源详情失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 /** 点来源组名（1008-04）：跳到「我的分组」并选中该组 */
@@ -938,7 +976,7 @@ onUnmounted(() => {
 
     <!-- 卡片视图 -->
     <div v-if="view === 'card' && scope !== 'all'" v-loading="loading && !!sites.length" class="ca-card-body">
-      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" @delete-site="onDeleteSite" />
+      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" @delete-site="onDeleteSite" @open-dir="openSiteDir" />
     </div>
 
     <!-- 源列表视图（0924-06）：一行一个源，复用网站详情的「源视图」，不限网站 -->
@@ -973,6 +1011,7 @@ onUnmounted(() => {
       @open-source-data="(source, context) => openSourceFromList(source, 'data', context)"
       @open-site="openSiteFromList"
       @open-source-group="openSourceGroup"
+      @open-site-dir="openSiteDir"
       @page-loaded="onOverviewPageLoaded"
     >
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
@@ -1019,9 +1058,9 @@ onUnmounted(() => {
             class="ca-biz-tag"
             type="button"
             :title="dir.path"
-            :aria-label="`只看业务目录 ${dir.path} 下的源`"
+            :aria-label="`打开源详情，左侧按业务目录 ${dir.path} 列源`"
             :data-testid="`biz-dir-${dir.id}`"
-            @click.stop="focusBizDir(dir.id)"
+            @click.stop="openSourceInBizDir(source, dir)"
           >{{ dir.path }}</button>
           <span v-if="bizMembershipState === 'loading' && !bizDirs(source.sourceId).length" class="ca-muted" title="正在读取这个源的业务目录归属">…</span>
           <span v-else-if="!bizDirs(source.sourceId).length" class="ca-muted">未归类</span>

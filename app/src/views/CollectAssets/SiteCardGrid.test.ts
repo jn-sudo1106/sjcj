@@ -6,6 +6,7 @@ import SiteCardGrid from './SiteCardGrid.vue'
 import { siteApi, sourceApi, type Site, type Source } from '@/api'
 import { ElPopover } from 'element-plus'
 import type { SiteCardSourceScope } from './siteCardQuery'
+import * as sourceDirs from '@/api/sourceDirs'
 
 const site: Site = {
   siteId: 'site-1', name: '测试网站', category: '新闻', owner: 'tester', sourceCount: 2, errorCount: 0,
@@ -41,7 +42,7 @@ describe('SiteCardGrid 大源量加载', () => {
     })
     expect(preview).not.toHaveBeenCalled()
     expect(all).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('8 / 24 个源')
+    expect(wrapper.get('[data-testid="site-card-count"]').text()).toBe('命中 8 / 共 24 个源')
     expect(wrapper.text()).toContain('数据 999 条')
     wrapper.findComponent(ElPopover).vm.$emit('show')
     await flushPromises()
@@ -231,5 +232,64 @@ describe('SiteCardGrid 卡片操作菜单', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(false)
     wrapper.unmount()
+  })
+})
+
+// 1123 A4：卡片目录不明显 → 带图标的完整路径标签，可点击按系统目录筛；无目录显示「未分类」
+describe('SiteCardGrid 目录标签', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const preview = () => vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+
+  it('有 dirId 时补齐完整路径，点击抛出目录 ID；无查询时底部只显示总数', async () => {
+    preview()
+    vi.spyOn(sourceDirs, 'loadDirPath').mockResolvedValue(['股票数据', '基本资料'])
+    const { wrapper } = await mountGrid([{ ...site, category: '基本资料', categoryPath: '基本资料', dirId: '9011495' }])
+    const tag = wrapper.get('[data-testid="site-card-dir"]')
+    expect(tag.text()).toBe('股票数据 / 基本资料')
+    await tag.trigger('click')
+    expect(wrapper.emitted('open-dir')?.[0]?.[1]).toEqual({ id: '9011495', path: '股票数据 / 基本资料' })
+    expect(wrapper.get('[data-testid="site-card-count"]').text()).toBe('2 个源')
+    wrapper.unmount()
+  })
+
+  it('卡片视图无筛选（filtered=false）时底部只写总数，不显示「命中 N / 共 N」', async () => {
+    preview()
+    const { wrapper } = await mountGrid([site], { query: {}, matches: { [site.siteId]: { total: 2, list: [] } }, serverPaged: true, filtered: false })
+    expect(wrapper.get('[data-testid="site-card-count"]').text()).toBe('2 个源')
+    wrapper.unmount()
+  })
+
+  it('路径补齐失败保留叶子名；超过两级只显示最后两级', async () => {
+    preview()
+    vi.spyOn(sourceDirs, 'loadDirPath').mockImplementation(async id => {
+      if (id === 'bad') throw new Error('目录不存在')
+      return ['行业数据', '化工', '基础化工']
+    })
+    const { wrapper } = await mountGrid([
+      { ...site, siteId: 'a', category: '基本资料', categoryPath: '基本资料', dirId: 'bad' },
+      { ...site, siteId: 'b', category: '基础化工', dirId: 'deep' },
+    ])
+    const tags = wrapper.findAll('[data-testid="site-card-dir"]')
+    expect(tags[0].text()).toBe('基本资料')
+    expect(tags[1].text()).toBe('… / 化工 / 基础化工')
+    expect(tags[1].attributes('title')).toContain('行业数据 / 化工 / 基础化工')
+    wrapper.unmount()
+  })
+
+  it('没有目录的网站显示「未分类」，不可点', async () => {
+    preview()
+    const { wrapper } = await mountGrid([{ ...site, category: '', categoryPath: undefined, dirId: undefined }])
+    expect(wrapper.find('[data-testid="site-card-dir"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="site-card-dir-none"]').text()).toBe('未分类')
+    wrapper.unmount()
+  })
+})
+
+describe('hasSourceFilter', () => {
+  it('空查询与目录 none 视为无筛选；有值或选了目录视为有筛选', async () => {
+    const { hasSourceFilter } = await import('./siteCardQuery')
+    expect(hasSourceFilter({ tags: [], name: '', directory: { kind: 'biz', mode: 'none', selections: [] }, field: 'x', sorted: 1, dirLabel: 'y' })).toBe(false)
+    expect(hasSourceFilter({ name: '资讯' })).toBe(true)
+    expect(hasSourceFilter({ directory: { kind: 'sys', mode: 'selected', selections: [{ id: '1', includeDescendants: true }] } })).toBe(true)
   })
 })
