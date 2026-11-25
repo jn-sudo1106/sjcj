@@ -341,6 +341,36 @@ describe('MonitorConfigEditor 四区结构与默认值', () => {
     expect(select.value).toBe('sense_data.TB_RAW')
     expect(wrapper.find('[data-testid="mc-dirty"]').exists()).toBe(false)
   })
+
+  it('关联表只列被监控源配置的主表和关联子表，不列全库其余表', async () => {
+    const subTable: EntryType = { ...TABLE, tableId: 't2', tableName: 'sense_data.TB_SUB', name: '关联子表' }
+    const otherTable: EntryType = { ...TABLE, tableId: 't3', tableName: 'sense_data.TB_PEER', name: '别源的表' }
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValueOnce({ main: TABLE.tableId, list1: [TABLE], list2: [subTable], list3: [otherTable] })
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValueOnce({ ...SOURCE, mainTable: TABLE.tableId })
+
+    const wrapper = mountEditor({ sourceId: SOURCE.sourceId })
+    await settle()
+
+    const select = wrapper.find('[data-testid="mc-table-select"]').element as HTMLSelectElement
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['', subTable.tableName, TABLE.tableName])
+    // mainTable 实际是 entryTypeId，按表 ID 也能带出源的最终落库主表
+    expect(select.value).toBe(TABLE.tableName)
+    wrapper.unmount()
+  })
+
+  it('编辑已有记录且原表不在源范围内时保留「当前关联表」，不静默清空', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({ main: TABLE.tableId, list1: [TABLE], list2: [], list3: [] })
+
+    const wrapper = mountEditor({ record: aiRecord({ tableName: 'sense_data.TB_HISTORY' }) })
+    await settle()
+
+    const select = wrapper.find('[data-testid="mc-table-select"]').element as HTMLSelectElement
+    expect(select.value).toBe('sense_data.TB_HISTORY')
+    expect(Array.from(select.options).map((option) => option.textContent?.trim())).toEqual([
+      '（未绑定表）', '当前关联表（sense_data.TB_HISTORY）', '原始数据（sense_data.TB_RAW）',
+    ])
+    wrapper.unmount()
+  })
 })
 
 describe('MonitorConfigEditor 校验反馈', () => {

@@ -736,7 +736,10 @@ async function loadTimeColumnFields(autoSelect = false): Promise<void> {
 }
 
 function mergeTableOptions(group: EntryTypeGroup | null): void {
-  const merged: EntryType[] = [...(group?.list2 ?? []), ...(group?.list1 ?? []), ...(group?.list3 ?? [])]
+  // 只列被监控源配置的表：list1 = 源主表、list2 = 关联子表（旧 CheckAdd 口径 [...list2, ...list1]）。
+  // list3 是数据字典里其余全库表（api/index.ts 实测：带 sourceId 也只是把相关表挪进 list1/list2，
+  // 三个列表并集恒为全库表），加监控选中别源的表没有检查意义。
+  const merged: EntryType[] = [...(group?.list2 ?? []), ...(group?.list1 ?? [])]
   const seen = new Set<string>()
   const options: Array<{ tableId: string; tableName: string; label: string }> = []
   for (const table of merged) {
@@ -771,9 +774,10 @@ async function loadSourceContext(): Promise<void> {
     const stillClean = wasClean && formSignature(form) === baseline.value
     if (detail?.name) form.sourceName = detail.name
     mergeTableOptions(group)
-    // 新建时默认带出源的最终落库主表（1113 修订 §4.1.1）；主表不在可选清单里才退回「唯一表」
+    // 新建时默认带出源的最终落库主表（1113 修订 §4.1.1）；主表不在可选清单里才退回「唯一表」。
+    // sourceDetail.mainTable 实际是 entryTypeId（legacyAdapters），也兼容按物理表名返回的实现。
     if (!form.tableName && detail?.mainTable) {
-      const landed = tableOptions.value.find((table) => table.tableName === detail.mainTable)
+      const landed = tableOptions.value.find((table) => table.tableId === detail.mainTable || table.tableName === detail.mainTable)
       if (landed) form.tableName = landed.tableName
     }
     if (!form.tableName && tableOptions.value.length === 1) form.tableName = tableOptions.value[0].tableName
