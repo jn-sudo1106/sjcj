@@ -660,6 +660,9 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
 .dqp-range-sep { color: var(--rc-faint); }
 .dqp-table { flex: 1; min-height: 0; background: #fff; }
 .dqp-table :deep(.el-table .cell) { white-space: nowrap; }
+/* 表头要显示完整字段名：不再 nowrap 截断，放不下就折行（列宽仍按列配置）。
+   业务列名经常带后缀，比如「指标名称-K1」「更新频率-K3」，截成「指标名..」看不出是哪一列。 */
+.dqp-table :deep(.el-table__header-wrapper th.el-table__cell .cell) { white-space: normal; word-break: break-word; line-height: 1.35; }
 .dqp-table :deep(.el-table td.el-table__cell), .dqp-table :deep(.el-table th.el-table__cell) { padding: 8px 0; font-size: 12px; }
 .dqp-table :deep(.el-table td.el-table__cell) { color: #334155; }
 .dqp-table :deep(.el-table__body tr:hover > td) { background: #f8fbff; }
