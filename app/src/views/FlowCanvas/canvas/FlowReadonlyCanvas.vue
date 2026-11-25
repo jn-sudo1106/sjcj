@@ -39,7 +39,8 @@ export interface ReadonlyFlowDef {
   branchGroups: FlowBranchGroup[]
 }
 
-const props = withDefaults(defineProps<{ def: ReadonlyFlowDef; selected?: string }>(), { selected: '' })
+/** urlFromSource：流程级预览（没有源），采集 URL 建源后才有，不按缺 URL 标「待配置」 */
+const props = withDefaults(defineProps<{ def: ReadonlyFlowDef; selected?: string; urlFromSource?: boolean }>(), { selected: '', urlFromSource: false })
 const emit = defineEmits<{ select: [nodeId: string] }>()
 
 const markerPrefix = `rc-ro-arrow-${++readonlyCanvasSeq}`
@@ -91,7 +92,7 @@ function tableChip(cfg: NodeConfig, id: string): { label: string; title: string;
   return { label: inpLabel, title: `输入表 ${inpLabel} · 输出表未显式设置，默认继承输入表`, unset: false }
 }
 function footFor(cfg: NodeConfig) {
-  const { configured, left, missing } = nodeStatusOf(cfg)
+  const { configured, left, missing } = nodeStatusOf(cfg, { urlFromSource: props.urlFromSource })
   const right = cfg.disabled ? '数据在此节点不处理' : cfg.collect ? '源配置' : isDataNode(cfg) ? '待发起抓取' : '待配置'
   return {
     left,

@@ -39,6 +39,27 @@ describe('FlowReadonlyCanvas', () => {
     expect(w.findAll('.rc-flow-node.active')).toHaveLength(1)
   })
 
+  it('urlFromSource：没有源的流程预览里，有输出表的采集节点不因缺 URL 标「待配置」（1123）', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(null as never)
+    const def = seedDef()
+    const collectIds = Object.entries(def.configs).filter(([, cfg]) => cfg.collectCfg).map(([id]) => id)
+    expect(collectIds.length).toBeGreaterThan(0)
+    for (const id of collectIds) {
+      const cfg = def.configs[id]!
+      cfg.collectCfg!.url = ''
+      cfg.configUrl = ''
+      cfg.collectCfg!.outputTable = '900'
+      cfg.disabled = false
+    }
+    const chips = async (urlFromSource: boolean) => {
+      const w = mount(FlowReadonlyCanvas, { props: { def, urlFromSource } })
+      await flushPromises()
+      return w.findAll('[data-testid="flow-readonly-node"] .rc-chip').map((c) => c.text())
+    }
+    expect(await chips(false)).toContain('待配置')
+    expect(await chips(true)).not.toContain('待配置')
+  })
+
   it('布局与工作区画布（flow store 的 layout）一致，且不改全局 store', () => {
     setActivePinia(createPinia())
     const store = useFlowStore()

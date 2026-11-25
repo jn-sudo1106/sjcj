@@ -27,4 +27,14 @@ describe('nodeStatusOf', () => {
     cfg.disabled = true
     expect(nodeStatusOf(cfg).left).toBe('已停止')
   })
+
+  it('流程级预览（urlFromSource）：采集节点缺 URL 不算待配置，缺输出表仍算（1123 新建采集选模板）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.url = ''
+    cfg.configUrl = ''
+    cfg.collectCfg!.outputTable = '900'
+    expect(nodeStatusOf(cfg, { urlFromSource: true })).toMatchObject({ left: '运行', missing: [] })
+    cfg.collectCfg!.outputTable = ''
+    expect(nodeStatusOf(cfg, { urlFromSource: true })).toMatchObject({ left: '待配置', missing: ['输出表'] })
+  })
 })
