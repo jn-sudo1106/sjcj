@@ -2696,7 +2696,8 @@ async function importEntryData(input: EntryDataImportInput): Promise<EntryDataIm
   form.append('file', input.file)
   form.append('entryTypeId', input.tableId)
   form.append('sourceId', input.sourceId)
-  form.append('configId', input.configId)
+  // 后端 uploadData 的 configId 可选：为空时跳过「配置输出实体 == 目标表」校验，按不关联配置导入。
+  if (input.configId) form.append('configId', input.configId)
   const headers: Record<string, string> = {}
   const token = readStoredToken()
   if (token) headers[ACCESS_TOKEN_HEADER] = token
